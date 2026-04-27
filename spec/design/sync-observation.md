@@ -48,7 +48,7 @@ The observation stack has four main pieces:
 | Behavior | Evidence |
 | --- | --- |
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly, including filesystem identity for files and directories when available. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestFullScan_StoresFilesystemIdentityForFilesAndDirectories`, `TestNosyncGuard_PreventsAllSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
-| Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child topology to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
+| Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child runner actions to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 
 ## Remote Observation
@@ -112,7 +112,7 @@ filesystem identity facts used for ordinary local move detection; a unique
 identity match at a new path is a parent shortcut alias move, while ambiguous
 matches become parent-owned recovery state. Parent alias mutations are executed
 by the parent engine by binding item ID; multisync receives only the resulting
-child topology publication.
+child runner actions.
 
 When remote shortcut topology moves or renames an existing binding inside the
 same parent namespace, the parent keeps the previous protected path reserved
@@ -165,7 +165,7 @@ Known managed shortcut aliases also use persisted protected-root target metadata
 as a same-binding fallback when Graph returns a sparse moved/renamed shortcut
 placeholder without `remoteItem` target fields. The parent engine still owns the
 observation and mutation; this fallback only keeps the same shortcut binding
-classified as parent-declared child topology instead of treating an empty
+classified as parent-declared child runner actions instead of treating an empty
 placeholder delta as ordinary content or an unavailable new child.
 
 ## Local Observation

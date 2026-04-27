@@ -3,6 +3,8 @@ package multisync
 import (
 	"context"
 	"fmt"
+
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 type runtimeMountSetPipeline struct {
@@ -34,8 +36,8 @@ func (p runtimeMountSetPipeline) build(ctx context.Context) (*compiledMountSet, 
 		return nil, err
 	}
 
-	parentTopologies := p.orchestrator.parentShortcutTopologiesFor(parents)
-	compiled, err := compileRuntimeMountsForParents(parents, parentTopologies, p.orchestrator.logger)
+	parentPublications := p.orchestrator.latestParentRunnerPublicationsFor(parents)
+	compiled, err := compileRuntimeMountsForParents(parents, parentPublications, p.orchestrator.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +47,7 @@ func (p runtimeMountSetPipeline) build(ctx context.Context) (*compiledMountSet, 
 	return compiled, nil
 }
 
-func (o *Orchestrator) compileRuntimeMountSetFromTopology(
+func (o *Orchestrator) compileRuntimeMountSetFromParentPublications(
 	standaloneMounts []StandaloneMountConfig,
 	initialStartup []MountStartupResult,
 ) (*compiledMountSet, error) {
@@ -53,8 +55,8 @@ func (o *Orchestrator) compileRuntimeMountSetFromTopology(
 	if err != nil {
 		return nil, err
 	}
-	parentTopologies := o.parentShortcutTopologiesFor(parents)
-	compiled, err := compileRuntimeMountsForParents(parents, parentTopologies, o.logger)
+	parentPublications := o.latestParentRunnerPublicationsFor(parents)
+	compiled, err := compileRuntimeMountsForParents(parents, parentPublications, o.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -62,6 +64,17 @@ func (o *Orchestrator) compileRuntimeMountSetFromTopology(
 	compiled.Skipped = append(append([]MountStartupResult(nil), initialStartup...), compiled.Skipped...)
 
 	return compiled, nil
+}
+
+func (o *Orchestrator) compileRuntimeMountSetForParent(parent *mountSpec) (*compiledMountSet, error) {
+	if parent == nil {
+		return nil, fmt.Errorf("compiling parent child runners: parent mount is required")
+	}
+	parentCopy := cloneMountSpec(parent)
+	parentPublications := map[mountID]syncengine.ShortcutChildRunnerPublication{
+		parentCopy.mountID: o.latestParentRunnerPublicationFor(parentCopy.mountID),
+	}
+	return compileRuntimeMountsForParents([]*mountSpec{parentCopy}, parentPublications, o.logger)
 }
 
 func nextStartupSelectionIndex(results []MountStartupResult) int {
@@ -85,4 +98,13 @@ func offsetCompiledSelectionIndexes(compiled *compiledMountSet, offset int) {
 	for i := range compiled.Skipped {
 		compiled.Skipped[i].SelectionIndex += offset
 	}
+}
+
+func cloneMountSpec(mount *mountSpec) *mountSpec {
+	if mount == nil {
+		return nil
+	}
+	cloned := *mount
+	cloned.expectedSyncRootIdentity = cloneChildRootIdentity(mount.expectedSyncRootIdentity)
+	return &cloned
 }

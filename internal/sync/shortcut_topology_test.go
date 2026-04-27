@@ -12,7 +12,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-const shortcutTopologyTestNamespaceID = "personal:owner@example.com"
+const shortcutNamespaceTestID = "personal:owner@example.com"
 
 // Validates: R-2.4.3, R-2.4.8
 func TestShortcutObservationBatch_ShouldApplyCompleteEvenWithoutFacts(t *testing.T) {
@@ -37,9 +37,9 @@ func TestApplyShortcutObservationBatch_ForwardsEmptyCompleteBatch(t *testing.T) 
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
-	var got []ShortcutChildTopologyPublication
-	eng.shortcutChildTopologySink = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
+	var got []ShortcutChildRunnerPublication
+	eng.shortcutChildRunnerSink = func(_ context.Context, publication ShortcutChildRunnerPublication) error {
 		got = append(got, publication)
 		return nil
 	}
@@ -52,7 +52,7 @@ func TestApplyShortcutObservationBatch_ForwardsEmptyCompleteBatch(t *testing.T) 
 	require.NoError(t, err)
 
 	require.NotEmpty(t, got)
-	assert.Equal(t, shortcutTopologyTestNamespaceID, got[len(got)-1].NamespaceID)
+	assert.Equal(t, shortcutNamespaceTestID, got[len(got)-1].NamespaceID)
 	assert.Empty(t, got[len(got)-1].Children)
 }
 
@@ -61,8 +61,8 @@ func TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler(t *testi
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
-	eng.shortcutChildTopologySink = func(ctx context.Context, publication ShortcutChildTopologyPublication) error {
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
+	eng.shortcutChildRunnerSink = func(ctx context.Context, publication ShortcutChildRunnerPublication) error {
 		roots, err := eng.baseline.ListShortcutRoots(ctx)
 		require.NoError(t, err)
 		require.Len(t, roots, 1)
@@ -95,7 +95,7 @@ func TestApplyShortcutObservationBatch_SkipsEmptyIncrementalBatch(t *testing.T) 
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
-	eng.shortcutChildTopologySink = func(_ context.Context, _ ShortcutChildTopologyPublication) error {
+	eng.shortcutChildRunnerSink = func(_ context.Context, _ ShortcutChildRunnerPublication) error {
 		require.FailNow(t, "empty incremental topology batch should not be applied")
 		return nil
 	}
@@ -109,7 +109,7 @@ func TestApplyShortcutObservationBatch_SkipsEmptyIncrementalBatch(t *testing.T) 
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestRunOncePublishesEmptyCompleteChildTopologyBeforeCommittingCursor(t *testing.T) {
+func TestRunOncePublishesEmptyCompleteChildRunnerPublicationBeforeCommittingCursor(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -121,9 +121,9 @@ func TestRunOncePublishesEmptyCompleteChildTopologyBeforeCommittingCursor(t *tes
 		},
 	}
 	eng, _ := newTestEngine(t, mock)
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
-	var got []ShortcutChildTopologyPublication
-	eng.shortcutChildTopologySink = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
+	var got []ShortcutChildRunnerPublication
+	eng.shortcutChildRunnerSink = func(_ context.Context, publication ShortcutChildRunnerPublication) error {
 		got = append(got, publication)
 		return nil
 	}
@@ -132,13 +132,13 @@ func TestRunOncePublishesEmptyCompleteChildTopologyBeforeCommittingCursor(t *tes
 	require.NoError(t, err)
 
 	require.NotEmpty(t, got)
-	assert.Equal(t, shortcutTopologyTestNamespaceID, got[len(got)-1].NamespaceID)
+	assert.Equal(t, shortcutNamespaceTestID, got[len(got)-1].NamespaceID)
 	assert.Empty(t, got[len(got)-1].Children)
 	assert.Equal(t, "cursor-empty-complete", readObservationCursorForTest(t, eng.baseline, t.Context(), eng.driveID.String()))
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestRunOnceChildTopologyPublishFailureDoesNotCommitCursor(t *testing.T) {
+func TestRunOnceChildRunnerPublicationPublishFailureDoesNotCommitCursor(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -150,9 +150,9 @@ func TestRunOnceChildTopologyPublishFailureDoesNotCommitCursor(t *testing.T) {
 		},
 	}
 	eng, _ := newTestEngine(t, mock)
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	applyErr := errors.New("persist topology")
-	eng.shortcutChildTopologySink = func(_ context.Context, _ ShortcutChildTopologyPublication) error {
+	eng.shortcutChildRunnerSink = func(_ context.Context, _ ShortcutChildRunnerPublication) error {
 		return applyErr
 	}
 

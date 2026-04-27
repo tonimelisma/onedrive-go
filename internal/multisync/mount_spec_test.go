@@ -14,31 +14,30 @@ import (
 
 const testMountRemoteRootItemID = "mount-root-id"
 
-func testPublishedShortcutChild() syncengine.ShortcutChildTopology {
+func testPublishedShortcutChild() syncengine.ShortcutChildRunner {
 	const (
 		relativePath  = "Shortcuts/Docs"
 		remoteDriveID = "remote-drive"
 		remoteItemID  = "remote-root"
 	)
-	return syncengine.ShortcutChildTopology{
+	return syncengine.ShortcutChildRunner{
 		BindingItemID:     "binding-child-docs",
 		LocalAlias:        filepath.Base(relativePath),
 		RelativeLocalPath: relativePath,
 		RemoteDriveID:     remoteDriveID,
 		RemoteItemID:      remoteItemID,
 		RunnerAction:      syncengine.ShortcutChildActionRun,
-		ProtectedPaths:    []string{relativePath},
 	}
 }
 
 func testParentTopologies(
 	parent *StandaloneMountConfig,
-	children ...syncengine.ShortcutChildTopology,
-) map[mountID]syncengine.ShortcutChildTopologyPublication {
+	children ...syncengine.ShortcutChildRunner,
+) map[mountID]syncengine.ShortcutChildRunnerPublication {
 	if parent == nil {
 		return nil
 	}
-	return map[mountID]syncengine.ShortcutChildTopologyPublication{
+	return map[mountID]syncengine.ShortcutChildRunnerPublication{
 		mountID(parent.CanonicalID.String()): {
 			NamespaceID: parent.CanonicalID.String(),
 			Children:    children,
@@ -213,7 +212,7 @@ func TestCompileRuntimeMounts_ParentBlockedChildDoesNotSynthesizeParentReservati
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	child := testPublishedShortcutChild()
 	child.RunnerAction = syncengine.ShortcutChildActionSkipParentBlocked
-	child.BlockedDetail = "duplicate_content_root"
+	child.RunnerDetail = "duplicate_content_root"
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
@@ -244,12 +243,11 @@ func TestCompileRuntimeMounts_FinalDrainChildDoesNotSynthesizeParentReservation(
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_ProtectedPathsAreParentOwnedPassThroughOnly(t *testing.T) {
+func TestCompileRuntimeMounts_UsesParentRunnerRelativePathOnly(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	child := testPublishedShortcutChild()
 	child.RelativeLocalPath = "Shortcuts/New Docs"
-	child.ProtectedPaths = []string{"Shortcuts/New Docs", "Shortcuts/Old Docs"}
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
@@ -257,6 +255,7 @@ func TestCompileRuntimeMounts_ProtectedPathsAreParentOwnedPassThroughOnly(t *tes
 	)
 	require.NoError(t, err)
 	require.Len(t, compiled.Mounts, 2)
+	assert.Equal(t, filepath.Join(parent.SyncRoot, "Shortcuts", "New Docs"), compiled.Mounts[1].syncRoot)
 }
 
 // Validates: R-2.8.1
@@ -267,7 +266,7 @@ func TestCompileRuntimeMounts_UnavailableChildDoesNotSynthesizeParentReservation
 	child.RemoteDriveID = ""
 	child.RemoteItemID = ""
 	child.RunnerAction = syncengine.ShortcutChildActionSkipParentBlocked
-	child.BlockedDetail = "shortcut_binding_unavailable"
+	child.RunnerDetail = "shortcut_binding_unavailable"
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
@@ -319,10 +318,10 @@ func TestCompileRuntimeMounts_MissingParentSkipsChild(t *testing.T) {
 
 	compiled, err := compileRuntimeMounts(
 		[]StandaloneMountConfig{parent},
-		map[mountID]syncengine.ShortcutChildTopologyPublication{
+		map[mountID]syncengine.ShortcutChildRunnerPublication{
 			"missing-parent": {
 				NamespaceID: "missing-parent",
-				Children: []syncengine.ShortcutChildTopology{{
+				Children: []syncengine.ShortcutChildRunner{{
 					BindingItemID:     "binding-child-docs",
 					RelativeLocalPath: "Shortcuts/Docs",
 					RemoteDriveID:     "remote-drive",

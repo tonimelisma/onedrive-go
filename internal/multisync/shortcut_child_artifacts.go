@@ -29,16 +29,39 @@ type shortcutChildArtifactScope struct {
 	localRoot string
 }
 
+type shortcutChildArtifactCleanupExecutor struct {
+	logger               *slog.Logger
+	remove               func(string) error
+	pruneCatalogRecord   func(string) error
+	deleteUploadSessions func(string, string) error
+}
+
+func newShortcutChildArtifactCleanupExecutor(logger *slog.Logger) shortcutChildArtifactCleanupExecutor {
+	return shortcutChildArtifactCleanupExecutor{
+		logger:             logger,
+		remove:             localpath.Remove,
+		pruneCatalogRecord: pruneShortcutChildCatalogRecord,
+		deleteUploadSessions: func(childMountID string, localRoot string) error {
+			sessionStore := driveops.NewSessionStore(config.DefaultDataDir(), logger)
+			_, err := sessionStore.DeleteForScope(childMountID, localRoot)
+			if err != nil {
+				return fmt.Errorf("delete upload sessions for child mount %s: %w", childMountID, err)
+			}
+			return nil
+		},
+	}
+}
+
 func shortcutChildArtifactCleanups(
 	parentByID map[mountID]*mountSpec,
-	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
+	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
 ) []shortcutChildArtifactCleanup {
-	if len(topologies) == 0 {
+	if len(publications) == 0 {
 		return nil
 	}
 
 	cleanups := make([]shortcutChildArtifactCleanup, 0)
-	for parentID, publication := range topologies {
+	for parentID, publication := range publications {
 		namespaceID := parentID.String()
 		if publication.NamespaceID != "" {
 			namespaceID = publication.NamespaceID
@@ -80,7 +103,7 @@ func cleanupLocalRoot(parent *mountSpec, relativeLocalPath string) string {
 func (o *Orchestrator) purgeShortcutChildArtifactsForCompiled(
 	ctx context.Context,
 	compiled *compiledMountSet,
-	parentAckers map[mountID]shortcutChildArtifactCleanupAcker,
+	parentAckers map[mountID]syncengine.ShortcutChildAckCapability,
 ) error {
 	if compiled == nil || len(compiled.CleanupChildren) == 0 {
 		return nil
@@ -106,7 +129,7 @@ func (o *Orchestrator) purgeShortcutChildArtifactsForCompiled(
 func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 	ctx context.Context,
 	cleanups []shortcutChildArtifactCleanup,
-	parentAckers map[mountID]shortcutChildArtifactCleanupAcker,
+	parentAckers map[mountID]syncengine.ShortcutChildAckCapability,
 ) error {
 	var errs []error
 	for _, cleanup := range cleanups {
@@ -123,12 +146,19 @@ func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 			errs = append(errs, fmt.Errorf("acknowledging child artifact cleanup for mount %s: %w", cleanup.mountID, err))
 			continue
 		}
-		o.storeParentShortcutTopology(parentID, snapshot)
+		o.receiveParentRunnerPublication(parentID, snapshot)
 	}
 	return errors.Join(errs...)
 }
 
 func purgeShortcutChildArtifacts(ctx context.Context, scope shortcutChildArtifactScope, logger *slog.Logger) error {
+	return newShortcutChildArtifactCleanupExecutor(logger).purge(ctx, scope)
+}
+
+func (e shortcutChildArtifactCleanupExecutor) purge(
+	ctx context.Context,
+	scope shortcutChildArtifactScope,
+) error {
 	childMountID := strings.TrimSpace(scope.mountID)
 	if strings.TrimSpace(childMountID) == "" {
 		return nil
@@ -145,23 +175,22 @@ func purgeShortcutChildArtifacts(ctx context.Context, scope shortcutChildArtifac
 		if path == "" {
 			continue
 		}
-		if err := localpath.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := e.remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, fmt.Errorf("remove child state artifact %s: %w", path, err))
 		}
 	}
-	if err := pruneShortcutChildCatalogRecord(childMountID); err != nil {
+	if err := e.pruneCatalogRecord(childMountID); err != nil {
 		errs = append(errs, err)
 	}
-	sessionStore := driveops.NewSessionStore(config.DefaultDataDir(), logger)
-	if _, err := sessionStore.DeleteForScope(childMountID, scope.localRoot); err != nil {
+	if err := e.deleteUploadSessions(childMountID, scope.localRoot); err != nil {
 		errs = append(errs, fmt.Errorf("delete child upload sessions: %w", err))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("purging managed child mount artifacts: %w", err)
 	}
 
-	if logger != nil {
-		logger.Info("purged shortcut child state artifacts",
+	if e.logger != nil {
+		e.logger.Info("purged shortcut child state artifacts",
 			slog.String("mount_id", childMountID),
 		)
 	}

@@ -43,7 +43,7 @@ func TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots(t *testing.T
 	store := newTestStore(t)
 
 	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
-		NamespaceID: shortcutTopologyTestNamespaceID,
+		NamespaceID: shortcutNamespaceTestID,
 		Kind:        shortcutTopologyObservationComplete,
 		Upserts: []shortcutBindingUpsert{{
 			BindingItemID:     "binding-1",
@@ -61,7 +61,7 @@ func TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots(t *testing.T
 	roots, err := store.ListShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
-	assert.Equal(t, shortcutTopologyTestNamespaceID, roots[0].NamespaceID)
+	assert.Equal(t, shortcutNamespaceTestID, roots[0].NamespaceID)
 	assert.Equal(t, "binding-1", roots[0].BindingItemID)
 	assert.Equal(t, "Shared/Docs", roots[0].RelativeLocalPath)
 	assert.Equal(t, "Docs", roots[0].LocalAlias)
@@ -78,7 +78,7 @@ func TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain(t *testin
 
 	store := newTestStore(t)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -90,7 +90,7 @@ func TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain(t *testin
 	}}))
 
 	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
-		NamespaceID: shortcutTopologyTestNamespaceID,
+		NamespaceID: shortcutNamespaceTestID,
 		Kind:        shortcutTopologyObservationComplete,
 	})
 	require.NoError(t, err)
@@ -109,7 +109,7 @@ func TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot(t *testing.T) {
 
 	store := newTestStore(t)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "old-binding",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -122,7 +122,7 @@ func TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot(t *testing.T) {
 	}}))
 
 	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
-		NamespaceID: shortcutTopologyTestNamespaceID,
+		NamespaceID: shortcutNamespaceTestID,
 		Kind:        shortcutTopologyObservationIncremental,
 		Upserts: []shortcutBindingUpsert{{
 			BindingItemID:     "new-binding",
@@ -156,7 +156,7 @@ func TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner(t *testing
 
 	store := newTestStore(t)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "old-binding",
 		RelativeLocalPath: "Shared/New",
 		LocalAlias:        "New",
@@ -169,7 +169,7 @@ func TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner(t *testing
 	}}))
 
 	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
-		NamespaceID: shortcutTopologyTestNamespaceID,
+		NamespaceID: shortcutNamespaceTestID,
 		Kind:        shortcutTopologyObservationIncremental,
 		Upserts: []shortcutBindingUpsert{{
 			BindingItemID:     "new-binding",
@@ -207,7 +207,7 @@ func TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked(t *testing.T)
 
 	store := newTestStore(t)
 	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
-		NamespaceID: shortcutTopologyTestNamespaceID,
+		NamespaceID: shortcutNamespaceTestID,
 		Kind:        shortcutTopologyObservationComplete,
 		Upserts: []shortcutBindingUpsert{
 			{
@@ -253,7 +253,7 @@ func TestSyncStore_RemoteShortcutRenameKeepsPreviousPathProtected(t *testing.T) 
 
 	store := newTestStore(t)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Old",
 		LocalAlias:        "Old",
@@ -266,7 +266,7 @@ func TestSyncStore_RemoteShortcutRenameKeepsPreviousPathProtected(t *testing.T) 
 	}}))
 
 	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
-		NamespaceID: shortcutTopologyTestNamespaceID,
+		NamespaceID: shortcutNamespaceTestID,
 		Kind:        shortcutTopologyObservationIncremental,
 		Upserts: []shortcutBindingUpsert{{
 			BindingItemID:     "binding-1",
@@ -295,7 +295,7 @@ func TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable(t *testing
 
 	store := newTestStore(t)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -325,7 +325,7 @@ func TestSyncStore_acknowledgeShortcutChildArtifactsPurgedRemovesCleanupPendingR
 
 	store := newTestStore(t)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -352,7 +352,7 @@ func TestSyncStore_RemoteUpsertRestoresCleanupPendingRoot(t *testing.T) {
 
 	store := newTestStore(t)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -363,7 +363,7 @@ func TestSyncStore_RemoteUpsertRestoresCleanupPendingRoot(t *testing.T) {
 	}}))
 
 	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
-		NamespaceID: shortcutTopologyTestNamespaceID,
+		NamespaceID: shortcutNamespaceTestID,
 		Kind:        shortcutTopologyObservationIncremental,
 		Upserts: []shortcutBindingUpsert{{
 			BindingItemID:     "binding-1",
@@ -383,7 +383,7 @@ func TestSyncStore_RemoteUpsertRestoresCleanupPendingRoot(t *testing.T) {
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateActive, roots[0].State)
 	assert.True(t, roots[0].RemoteDriveID.Equal(driveid.New("new-drive")))
-	snapshot, err := store.ShortcutChildTopology(t.Context(), shortcutTopologyTestNamespaceID)
+	snapshot, err := store.ShortcutChildRunner(t.Context(), shortcutNamespaceTestID)
 	require.NoError(t, err)
 	require.Len(t, snapshot.Children, 1)
 	assert.Empty(t, snapshot.CleanupRequests)
@@ -409,7 +409,7 @@ func TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState(t *te
 	}
 	eng, _ := newTestEngine(t, mock)
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -457,7 +457,7 @@ func TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain(t *testing.T) {
 	}
 	eng, _ := newTestEngine(t, mock)
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -488,12 +488,12 @@ func TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot(t *testing.
 	t.Parallel()
 
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(aliasRoot, "uploaded.txt"), []byte("drained"), 0o600))
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -504,7 +504,7 @@ func TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot(t *testing.
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	snapshot, err := eng.AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
+	snapshot, err := eng.ShortcutChildAckCapability().AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
 		BindingItemID: "binding-1",
 	})
 	require.NoError(t, err)
@@ -531,13 +531,13 @@ func TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemote
 		},
 	}
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -564,12 +564,12 @@ func TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemov
 	t.Parallel()
 
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(filepath.Dir(aliasRoot), 0o700))
 	require.NoError(t, os.WriteFile(aliasRoot, []byte("blocking file"), 0o600))
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -580,7 +580,7 @@ func TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemov
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	snapshot, err := eng.AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
+	snapshot, err := eng.ShortcutChildAckCapability().AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
 		BindingItemID: "binding-1",
 	})
 
@@ -611,13 +611,13 @@ func TestEngine_ReconcileMissingLocalAliasDeleteReleasesParentShortcutRoot(t *te
 		},
 	}
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -657,13 +657,13 @@ func TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBefore
 		},
 	}
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -704,14 +704,14 @@ func TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBefore
 		},
 	}
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	renamedRoot := filepath.Join(syncRoot, "Shared", "Renamed")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -755,14 +755,14 @@ func TestEngine_ReconcileMissingAliasDetectsLiveRenameWithoutStaleLocalState(t *
 		},
 	}
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	renamedRoot := filepath.Join(syncRoot, "Shared", "Renamed")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -805,14 +805,14 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 		},
 	}
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	renamedRoot := filepath.Join(syncRoot, "Shared", "Renamed")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -826,8 +826,8 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
 	seedShortcutLocalStateIdentityForTest(t, eng.Engine, "Shared/Renamed")
 
-	var published ShortcutChildTopologyPublication
-	eng.shortcutChildTopologySink = func(_ context.Context, publication ShortcutChildTopologyPublication) error {
+	var published ShortcutChildRunnerPublication
+	eng.shortcutChildRunnerSink = func(_ context.Context, publication ShortcutChildRunnerPublication) error {
 		published = publication
 		return nil
 	}
@@ -835,7 +835,7 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 
 	err = flow.applyShortcutObservationBatch(t.Context(), &remoteObservationBatch{
 		shortcutTopology: shortcutTopologyBatch{
-			NamespaceID: shortcutTopologyTestNamespaceID,
+			NamespaceID: shortcutNamespaceTestID,
 			Kind:        shortcutTopologyObservationIncremental,
 		},
 	})
@@ -868,7 +868,7 @@ func TestEngine_ReconcileShortcutRootLocalStateMovesRemoteRenamedProjection(t *t
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Old"))
 	require.NoError(t, err)
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/New",
 		LocalAlias:        "New",
@@ -907,7 +907,7 @@ func TestEngine_ReconcileShortcutRootLocalStateMovesRemoteMovedProjectionAcrossL
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Old"))
 	require.NoError(t, err)
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Archive/New",
 		LocalAlias:        "New",
@@ -940,12 +940,12 @@ func TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending(t *t
 	t.Parallel()
 
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(aliasRoot, "drained.txt"), []byte("done"), 0o600))
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -973,12 +973,12 @@ func TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeRetur
 	t.Parallel()
 
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(filepath.Dir(aliasRoot), 0o700))
 	require.NoError(t, os.WriteFile(aliasRoot, []byte("blocking file"), 0o600))
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -1002,15 +1002,49 @@ func TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeRetur
 }
 
 // Validates: R-2.4.8
+func TestEngine_ReconcileShortcutRootLocalStateReturnsRepeatedCleanupBlockedError(t *testing.T) {
+	t.Parallel()
+
+	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
+	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
+	require.NoError(t, os.MkdirAll(filepath.Dir(aliasRoot), 0o700))
+	require.NoError(t, os.WriteFile(aliasRoot, []byte("still blocking"), 0o600))
+	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+		NamespaceID:       shortcutNamespaceTestID,
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		LocalAlias:        "Docs",
+		RemoteDriveID:     driveid.New("drive-1"),
+		RemoteItemID:      "target-1",
+		RemoteIsFolder:    true,
+		State:             ShortcutRootStateRemovedCleanupBlocked,
+		BlockedDetail:     "shortcut alias path is not a directory",
+		ProtectedPaths:    []string{"Shared/Docs"},
+	}}))
+
+	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+
+	require.Error(t, err)
+	assert.False(t, changed)
+	assert.Contains(t, err.Error(), "not a directory")
+	roots, listErr := eng.baseline.ListShortcutRoots(t.Context())
+	require.NoError(t, listErr)
+	require.Len(t, roots, 1)
+	assert.Equal(t, ShortcutRootStateRemovedCleanupBlocked, roots[0].State)
+	assert.Equal(t, []string{"Shared/Docs"}, roots[0].ProtectedPaths)
+}
+
+// Validates: R-2.4.8
 func TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterReleasePending(t *testing.T) {
 	t.Parallel()
 
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
-	eng.shortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "old-binding",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",

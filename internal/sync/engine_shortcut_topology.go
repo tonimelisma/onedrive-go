@@ -5,87 +5,112 @@ import (
 	"fmt"
 )
 
-func (e *Engine) SetShortcutChildTopologySink(sink ShortcutChildTopologySink) {
+func (e *Engine) SetShortcutChildRunnerSink(sink ShortcutChildRunnerSink) {
 	if e == nil {
 		return
 	}
-	e.shortcutChildTopologySink = sink
+	e.shortcutChildRunnerSink = sink
 }
 
-func (e *Engine) publishShortcutChildTopology(
+func (e *Engine) publishShortcutChildRunnerPublication(
 	ctx context.Context,
-	publication ShortcutChildTopologyPublication,
+	publication ShortcutChildRunnerPublication,
 ) error {
-	if e == nil || e.shortcutTopologyNamespaceID == "" || e.shortcutChildTopologySink == nil {
+	if e == nil || e.shortcutNamespaceID == "" || e.shortcutChildRunnerSink == nil {
 		return nil
 	}
 	if publication.NamespaceID == "" {
-		publication.NamespaceID = e.shortcutTopologyNamespaceID
+		publication.NamespaceID = e.shortcutNamespaceID
 	}
-	if err := e.shortcutChildTopologySink(ctx, publication); err != nil {
-		return fmt.Errorf("sync: publish shortcut child topology: %w", err)
+	if err := e.shortcutChildRunnerSink(ctx, publication); err != nil {
+		return fmt.Errorf("sync: publish shortcut child runner publication: %w", err)
 	}
 	return nil
 }
 
-func (e *Engine) AcknowledgeChildFinalDrain(
+type shortcutChildAckCapability struct {
+	engine *Engine
+}
+
+func (e *Engine) ShortcutChildAckCapability() ShortcutChildAckCapability {
+	if e == nil {
+		return nil
+	}
+	return shortcutChildAckCapability{engine: e}
+}
+
+func (c shortcutChildAckCapability) AcknowledgeChildFinalDrain(
 	ctx context.Context,
 	ack ShortcutChildDrainAck,
-) (ShortcutChildTopologyPublication, error) {
+) (ShortcutChildRunnerPublication, error) {
+	return c.engine.acknowledgeChildFinalDrain(ctx, ack)
+}
+
+func (c shortcutChildAckCapability) AcknowledgeChildArtifactsPurged(
+	ctx context.Context,
+	ack ShortcutChildArtifactCleanupAck,
+) (ShortcutChildRunnerPublication, error) {
+	return c.engine.acknowledgeChildArtifactsPurged(ctx, ack)
+}
+
+func (e *Engine) acknowledgeChildFinalDrain(
+	ctx context.Context,
+	ack ShortcutChildDrainAck,
+) (ShortcutChildRunnerPublication, error) {
 	if ctx == nil {
-		return ShortcutChildTopologyPublication{}, fmt.Errorf("sync: shortcut child drain ack context is required")
+		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: shortcut child drain ack context is required")
 	}
-	if e == nil || e.baseline == nil || e.shortcutTopologyNamespaceID == "" {
-		return ShortcutChildTopologyPublication{}, nil
+	if e == nil || e.baseline == nil || e.shortcutNamespaceID == "" {
+		return ShortcutChildRunnerPublication{}, nil
 	}
 	if _, err := e.baseline.markShortcutChildFinalDrainReleasePending(ctx, ack); err != nil {
-		return ShortcutChildTopologyPublication{}, fmt.Errorf("sync: mark shortcut child final drain release pending: %w", err)
+		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: mark shortcut child final drain release pending: %w", err)
 	}
 	if err := e.releaseShortcutRootProjectionAfterDrain(ctx, ack); err != nil {
-		return ShortcutChildTopologyPublication{}, err
+		return ShortcutChildRunnerPublication{}, err
 	}
 	if _, err := e.reconcileShortcutRootLocalState(ctx); err != nil {
-		return ShortcutChildTopologyPublication{}, fmt.Errorf("sync: reconcile shortcut roots after child final drain: %w", err)
+		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: reconcile shortcut roots after child final drain: %w", err)
 	}
-	snapshot, err := e.baseline.ShortcutChildTopology(ctx, e.shortcutTopologyNamespaceID)
+	snapshot, err := e.baseline.ShortcutChildRunner(ctx, e.shortcutNamespaceID)
 	if err != nil {
-		return ShortcutChildTopologyPublication{}, fmt.Errorf("sync: read shortcut child topology after final drain: %w", err)
+		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: read shortcut child runner publication after final drain: %w", err)
 	}
-	if e.shortcutChildTopologySink != nil {
+	if e.shortcutChildRunnerSink != nil {
 		roots, rootErr := e.baseline.ListShortcutRoots(ctx)
 		if rootErr != nil {
-			return ShortcutChildTopologyPublication{}, fmt.Errorf("sync: read parent shortcut roots after final drain: %w", rootErr)
+			return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: read parent shortcut roots after final drain: %w", rootErr)
 		}
-		if err := e.shortcutChildTopologySink(ctx, shortcutChildTopologyFromRoots(
-			e.shortcutTopologyNamespaceID,
+		if err := e.shortcutChildRunnerSink(ctx, shortcutChildRunnerPublicationFromRoots(
+			e.shortcutNamespaceID,
 			roots,
 		)); err != nil {
-			return ShortcutChildTopologyPublication{}, fmt.Errorf("sync: publish shortcut child topology after final drain: %w", err)
+			return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: publish shortcut child runner publication after final drain: %w", err)
 		}
 	}
 	return snapshot, nil
 }
 
-func (e *Engine) AcknowledgeChildArtifactsPurged(
+func (e *Engine) acknowledgeChildArtifactsPurged(
 	ctx context.Context,
 	ack ShortcutChildArtifactCleanupAck,
-) (ShortcutChildTopologyPublication, error) {
+) (ShortcutChildRunnerPublication, error) {
 	if ctx == nil {
-		return ShortcutChildTopologyPublication{}, fmt.Errorf("sync: shortcut child artifact cleanup ack context is required")
+		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: shortcut child artifact cleanup ack context is required")
 	}
-	if e == nil || e.baseline == nil || e.shortcutTopologyNamespaceID == "" {
-		return ShortcutChildTopologyPublication{}, nil
+	if e == nil || e.baseline == nil || e.shortcutNamespaceID == "" {
+		return ShortcutChildRunnerPublication{}, nil
 	}
 	if _, err := e.baseline.acknowledgeShortcutChildArtifactsPurged(ctx, ack); err != nil {
-		return ShortcutChildTopologyPublication{}, fmt.Errorf("sync: acknowledge shortcut child artifact cleanup: %w", err)
+		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: acknowledge shortcut child artifact cleanup: %w", err)
 	}
-	snapshot, err := e.baseline.ShortcutChildTopology(ctx, e.shortcutTopologyNamespaceID)
+	snapshot, err := e.baseline.ShortcutChildRunner(ctx, e.shortcutNamespaceID)
 	if err != nil {
-		return ShortcutChildTopologyPublication{}, fmt.Errorf("sync: read shortcut child topology after artifact cleanup: %w", err)
+		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: read shortcut child runner publication after artifact cleanup: %w", err)
 	}
-	if e.shortcutChildTopologySink != nil {
-		if err := e.shortcutChildTopologySink(ctx, snapshot); err != nil {
-			return ShortcutChildTopologyPublication{}, fmt.Errorf("sync: publish shortcut child topology after artifact cleanup: %w", err)
+	if e.shortcutChildRunnerSink != nil {
+		if err := e.shortcutChildRunnerSink(ctx, snapshot); err != nil {
+			return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: publish shortcut child runner publication after artifact cleanup: %w", err)
 		}
 	}
 	return snapshot, nil

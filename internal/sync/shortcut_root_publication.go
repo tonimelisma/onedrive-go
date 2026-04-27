@@ -1,9 +1,9 @@
 package sync
 
-func shortcutChildTopologyFromRoots(namespaceID string, roots []ShortcutRootRecord) ShortcutChildTopologyPublication {
-	snapshot := ShortcutChildTopologyPublication{
+func shortcutChildRunnerPublicationFromRoots(namespaceID string, roots []ShortcutRootRecord) ShortcutChildRunnerPublication {
+	snapshot := ShortcutChildRunnerPublication{
 		NamespaceID: namespaceID,
-		Children:    make([]ShortcutChildTopology, 0, len(roots)),
+		Children:    make([]ShortcutChildRunner, 0, len(roots)),
 	}
 	for i := range roots {
 		root := normalizeShortcutRootRecord(roots[i])
@@ -18,7 +18,7 @@ func shortcutChildTopologyFromRoots(namespaceID string, roots []ShortcutRootReco
 			})
 			continue
 		}
-		child := ShortcutChildTopology{
+		child := ShortcutChildRunner{
 			BindingItemID:     root.BindingItemID,
 			RelativeLocalPath: root.RelativeLocalPath,
 			LocalAlias:        root.LocalAlias,
@@ -26,30 +26,12 @@ func shortcutChildTopologyFromRoots(namespaceID string, roots []ShortcutRootReco
 			RemoteItemID:      root.RemoteItemID,
 			RemoteIsFolder:    root.RemoteIsFolder,
 			RunnerAction:      shortcutChildRunnerActionForRoot(root.State),
-			BlockedDetail:     root.BlockedDetail,
-			ProtectedPaths:    protectedPathsForShortcutRoot(root.RelativeLocalPath, root.ProtectedPaths),
+			RunnerDetail:      root.BlockedDetail,
 			LocalRootIdentity: shortcutRootIdentityFromFileIdentity(root.LocalRootIdentity),
-		}
-		if root.Waiting != nil {
-			waiting := shortcutChildTopologyFromReplacement(*root.Waiting)
-			child.Waiting = &waiting
 		}
 		snapshot.Children = append(snapshot.Children, child)
 	}
 	return snapshot
-}
-
-func shortcutChildTopologyFromReplacement(replacement ShortcutRootReplacement) ShortcutChildTopology {
-	return ShortcutChildTopology{
-		BindingItemID:     replacement.BindingItemID,
-		RelativeLocalPath: replacement.RelativeLocalPath,
-		LocalAlias:        replacement.LocalAlias,
-		RemoteDriveID:     replacement.RemoteDriveID.String(),
-		RemoteItemID:      replacement.RemoteItemID,
-		RemoteIsFolder:    replacement.RemoteIsFolder,
-		RunnerAction:      ShortcutChildActionSkipWaitingReplacement,
-		ProtectedPaths:    []string{replacement.RelativeLocalPath},
-	}
 }
 
 func shortcutChildRunnerActionForRoot(state ShortcutRootState) ShortcutChildRunnerAction {
@@ -60,6 +42,7 @@ func shortcutChildRunnerActionForRoot(state ShortcutRootState) ShortcutChildRunn
 		ShortcutRootStateSamePathReplacementWaiting:
 		return ShortcutChildActionFinalDrain
 	case ShortcutRootStateTargetUnavailable,
+		ShortcutRootStateLocalRootUnavailable,
 		ShortcutRootStateBlockedPath,
 		ShortcutRootStateRenameAmbiguous,
 		ShortcutRootStateAliasMutationBlocked,

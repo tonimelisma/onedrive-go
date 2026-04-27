@@ -24,13 +24,13 @@ type shortcutChildDrainResult struct {
 	Detail        string
 }
 
-func finalDrainMountIDs(topologies map[mountID]syncengine.ShortcutChildTopologyPublication) []string {
-	if len(topologies) == 0 {
+func finalDrainMountIDs(publications map[mountID]syncengine.ShortcutChildRunnerPublication) []string {
+	if len(publications) == 0 {
 		return nil
 	}
 
 	ids := make([]string, 0)
-	children := sortedPublishedShortcutChildren(topologies)
+	children := sortedPublishedShortcutChildren(publications)
 	for i := range children {
 		child := children[i].child
 		if child.RunnerAction == syncengine.ShortcutChildActionFinalDrain {

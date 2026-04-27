@@ -13,7 +13,7 @@ func (e *Engine) refreshProtectedRootsFromStore(ctx context.Context) error {
 	if e == nil || e.baseline == nil {
 		return nil
 	}
-	if e.shortcutTopologyNamespaceID == "" {
+	if e.shortcutNamespaceID == "" {
 		e.protectedRoots = nil
 		return nil
 	}
@@ -21,7 +21,7 @@ func (e *Engine) refreshProtectedRootsFromStore(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	e.protectedRoots = protectedRootsForShortcutRoots(records, e.shortcutTopologyNamespaceID)
+	e.protectedRoots = protectedRootsForShortcutRoots(records, e.shortcutNamespaceID)
 	return nil
 }
 

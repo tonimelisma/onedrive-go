@@ -583,7 +583,7 @@ func shortcutRootStateReason(state syncengine.ShortcutRootState) string {
 	if state == "" || state == syncengine.ShortcutRootStateActive {
 		return ""
 	}
-	return string(state)
+	return syncengine.ShortcutRootStatus(state).StateReason
 }
 
 func shortcutRootStatusGuidance(root *syncengine.ShortcutRootRecord) (string, string, bool) {
@@ -598,7 +598,7 @@ func shortcutRootStatusGuidance(root *syncengine.ShortcutRootRecord) (string, st
 	if root.BlockedDetail != "" {
 		detail = root.BlockedDetail
 	}
-	return detail, action, true
+	return detail, action, metadata.AutoRetry
 }
 
 func shortcutRootReservedPaths(current string, protected []string) []string {

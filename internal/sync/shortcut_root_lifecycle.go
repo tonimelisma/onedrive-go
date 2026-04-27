@@ -45,6 +45,9 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 		releaseCleanupErr = errors.Join(releaseCleanupErr, step.releaseCleanupErr)
 	}
 	if !changed {
+		if releaseCleanupErr != nil {
+			return false, releaseCleanupErr
+		}
 		return false, nil
 	}
 	if err := e.baseline.ReplaceShortcutRoots(ctx, nextRecords); err != nil {
@@ -104,6 +107,7 @@ func (e *Engine) reconcileShortcutRootRecord(
 	case "",
 		ShortcutRootStateActive,
 		ShortcutRootStateTargetUnavailable,
+		ShortcutRootStateLocalRootUnavailable,
 		ShortcutRootStateBlockedPath,
 		ShortcutRootStateRenameAmbiguous,
 		ShortcutRootStateAliasMutationBlocked,
@@ -550,7 +554,7 @@ func blockedShortcutRoot(record ShortcutRootRecord, detail string) ShortcutRootR
 func unavailableShortcutRoot(record ShortcutRootRecord, detail string) ShortcutRootRecord {
 	return plannedShortcutRootTransition(record,
 		shortcutRootEventLocalPathBlocked,
-		ShortcutRootStateBlockedPath,
+		ShortcutRootStateLocalRootUnavailable,
 		detail,
 	)
 }
@@ -584,6 +588,7 @@ func shortcutRootStateAwaitsFinalDrainAck(state ShortcutRootState) bool {
 	case "",
 		ShortcutRootStateActive,
 		ShortcutRootStateTargetUnavailable,
+		ShortcutRootStateLocalRootUnavailable,
 		ShortcutRootStateBlockedPath,
 		ShortcutRootStateRenameAmbiguous,
 		ShortcutRootStateAliasMutationBlocked,
@@ -604,6 +609,7 @@ func shortcutRootStateAwaitsReleaseCleanup(state ShortcutRootState) bool {
 	case "",
 		ShortcutRootStateActive,
 		ShortcutRootStateTargetUnavailable,
+		ShortcutRootStateLocalRootUnavailable,
 		ShortcutRootStateBlockedPath,
 		ShortcutRootStateRenameAmbiguous,
 		ShortcutRootStateAliasMutationBlocked,
@@ -657,17 +663,8 @@ func (e *Engine) finalizeShortcutRootReleaseRecord(
 	if !shortcutRootStateAwaitsReleaseCleanup(record.State) {
 		return []ShortcutRootRecord{record}, false, nil
 	}
-	if err := e.removeShortcutRootProjection(record.RelativeLocalPath); err != nil {
-		next := shortcutRootCleanupBlocked(record, err)
-		return []ShortcutRootRecord{next}, !shortcutRootRecordsEqual(record, next), err
-	}
-	cleanupPending := shortcutRootChildCleanupPending(record)
-	nextRecords := []ShortcutRootRecord{cleanupPending}
-	if record.Waiting != nil {
-		next := shortcutRootRecordFromReplacement(record.NamespaceID, *record.Waiting)
-		nextRecords = append(nextRecords, next)
-	}
-	return nextRecords, true, nil
+	plan := planShortcutRootReleaseCleanup(&record, e.removeShortcutRootProjection(record.RelativeLocalPath))
+	return plan.Records, plan.Changed, plan.Err
 }
 
 func (e *Engine) removeShortcutRootProjection(relativeLocalPath string) error {

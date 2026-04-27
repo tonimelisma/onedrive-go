@@ -66,7 +66,7 @@ sync-health command.
 
 - account identity comes from the validated config+catalog snapshot
 - runtime mount identity comes from configured standalone drives plus
-  parent-declared shortcut child topology
+  parent-declared shortcut child runner actions
 - sync-state snapshots come from store-owned raw authority reads
 - the CLI renders status conditions from the sync-owned stored-condition
   projection, using the sync-owned `ConditionKey` taxonomy and ordering helpers
@@ -115,8 +115,8 @@ shortcut publication facts".
 For `removed_final_drain`, status must make the retry/discard choice explicit:
 the child keeps retrying while its state DB owns dirty content state; the user
 can restore shared-folder access for normal retry, or delete the local shortcut
-directory to discard the dirty local projection and let parent release cleanup purge
-the child state automatically.
+directory to discard the dirty local projection and let parent release cleanup
+purge the child state automatically.
 
 Shortcut child status distinguishes the recovery class rather than collapsing
 all failures into one blocked row: target unavailable, local root unavailable,

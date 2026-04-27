@@ -82,15 +82,15 @@ func (m *SyncStore) acknowledgeShortcutChildArtifactsPurged(
 	return true, nil
 }
 
-func (m *SyncStore) ShortcutChildTopology(ctx context.Context, namespaceID string) (ShortcutChildTopologyPublication, error) {
+func (m *SyncStore) ShortcutChildRunner(ctx context.Context, namespaceID string) (ShortcutChildRunnerPublication, error) {
 	if m == nil {
-		return ShortcutChildTopologyPublication{NamespaceID: namespaceID}, nil
+		return ShortcutChildRunnerPublication{NamespaceID: namespaceID}, nil
 	}
 	records, err := m.ListShortcutRoots(ctx)
 	if err != nil {
-		return ShortcutChildTopologyPublication{}, err
+		return ShortcutChildRunnerPublication{}, err
 	}
-	return shortcutChildTopologyFromRoots(namespaceID, records), nil
+	return shortcutChildRunnerPublicationFromRoots(namespaceID, records), nil
 }
 
 // ListShortcutRoots returns parent-engine-owned shortcut root state.

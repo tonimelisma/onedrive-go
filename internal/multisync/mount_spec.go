@@ -50,30 +50,30 @@ type StandaloneMountSelection struct {
 
 // mountSpec is the control plane's runtime unit.
 type mountSpec struct {
-	mountID                   mountID
-	parentMountID             mountID
-	bindingItemID             string
-	projectionKind            MountProjectionKind
-	selectionIndex            int
-	canonicalID               driveid.CanonicalID
-	driveType                 string
-	rejectSharePointRootForms bool
-	displayName               string
-	syncRoot                  string
-	statePath                 string
-	remoteDriveID             driveid.ID
-	remoteRootItemID          string
-	tokenOwnerCanonical       driveid.CanonicalID
-	accountEmail              string
-	paused                    bool
-	enableWebsocket           bool
-	remoteRootDeltaCapable    bool
-	transferWorkers           int
-	checkWorkers              int
-	minFreeSpace              int64
-	finalDrain                bool
-	expectedSyncRootIdentity  *syncengine.ShortcutRootIdentity
-	shortcutChildTopologySink syncengine.ShortcutChildTopologySink
+	mountID                     mountID
+	parentMountID               mountID
+	bindingItemID               string
+	projectionKind              MountProjectionKind
+	selectionIndex              int
+	canonicalID                 driveid.CanonicalID
+	driveType                   string
+	rejectSharePointRootForms   bool
+	displayName                 string
+	syncRoot                    string
+	statePath                   string
+	remoteDriveID               driveid.ID
+	remoteRootItemID            string
+	tokenOwnerCanonical         driveid.CanonicalID
+	accountEmail                string
+	paused                      bool
+	enableWebsocket             bool
+	remoteRootDeltaCapable      bool
+	transferWorkers             int
+	checkWorkers                int
+	minFreeSpace                int64
+	finalDrain                  bool
+	expectedSyncRootIdentity    *syncengine.ShortcutRootIdentity
+	parentRunnerPublicationSink syncengine.ShortcutChildRunnerSink
 }
 
 type compiledMountSet struct {
@@ -89,14 +89,14 @@ type childMountCandidate struct {
 	localAlias        string
 	relativeLocalPath string
 	runnerAction      syncengine.ShortcutChildRunnerAction
-	blockedDetail     string
+	runnerDetail      string
 	mount             *mountSpec
 	skipErr           error
 }
 
 type unmatchedShortcutChild struct {
 	namespaceID mountID
-	child       syncengine.ShortcutChildTopology
+	child       syncengine.ShortcutChildRunner
 }
 
 func filterMountSpecsByProjection(
@@ -128,22 +128,22 @@ func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, e
 
 func compileRuntimeMounts(
 	standaloneMounts []StandaloneMountConfig,
-	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
+	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
 ) (*compiledMountSet, error) {
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
-	return compileRuntimeMountsForParents(parents, topologies, nil)
+	return compileRuntimeMountsForParents(parents, publications, nil)
 }
 
 func compileRuntimeMountsForParents(
 	parents []*mountSpec,
-	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
+	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
 	logger *slog.Logger,
 ) (*compiledMountSet, error) {
 	parentByID := indexStandaloneMounts(parents)
-	candidatesByParent, unmatchedChildren, err := buildChildMountCandidates(parentByID, normalizeParentShortcutTopologies(topologies))
+	candidatesByParent, unmatchedChildren, err := buildChildMountCandidates(parentByID, publications)
 	if err != nil {
 		return nil, err
 	}
@@ -157,18 +157,9 @@ func compileRuntimeMountsForParents(
 	return &compiledMountSet{
 		Mounts:             finalMounts,
 		Skipped:            skipped,
-		FinalDrainMountIDs: finalDrainMountIDs(topologies),
-		CleanupChildren:    shortcutChildArtifactCleanups(parentByID, topologies),
+		FinalDrainMountIDs: finalDrainMountIDs(publications),
+		CleanupChildren:    shortcutChildArtifactCleanups(parentByID, publications),
 	}, nil
-}
-
-func normalizeParentShortcutTopologies(
-	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
-) map[mountID]syncengine.ShortcutChildTopologyPublication {
-	if topologies == nil {
-		return make(map[mountID]syncengine.ShortcutChildTopologyPublication)
-	}
-	return topologies
 }
 
 func indexStandaloneMounts(parents []*mountSpec) map[mountID]*mountSpec {
@@ -182,11 +173,11 @@ func indexStandaloneMounts(parents []*mountSpec) map[mountID]*mountSpec {
 
 func buildChildMountCandidates(
 	parentByID map[mountID]*mountSpec,
-	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
+	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
 ) (map[mountID][]*childMountCandidate, []unmatchedShortcutChild, error) {
 	candidatesByParent := make(map[mountID][]*childMountCandidate)
 	unmatchedChildren := make([]unmatchedShortcutChild, 0)
-	declaredChildren := sortedPublishedShortcutChildren(topologies)
+	declaredChildren := sortedPublishedShortcutChildren(publications)
 	for i := range declaredChildren {
 		declared := declaredChildren[i]
 		parent := parentByID[declared.namespaceID]
@@ -207,17 +198,17 @@ func buildChildMountCandidates(
 
 type publishedShortcutChild struct {
 	namespaceID mountID
-	child       syncengine.ShortcutChildTopology
+	child       syncengine.ShortcutChildRunner
 }
 
 func sortedPublishedShortcutChildren(
-	topologies map[mountID]syncengine.ShortcutChildTopologyPublication,
+	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
 ) []publishedShortcutChild {
-	if len(topologies) == 0 {
+	if len(publications) == 0 {
 		return nil
 	}
 	children := make([]publishedShortcutChild, 0)
-	for parentID, publication := range topologies {
+	for parentID, publication := range publications {
 		namespaceID := parentID
 		if publication.NamespaceID != "" {
 			namespaceID = mountID(publication.NamespaceID)
@@ -362,9 +353,9 @@ func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
 	}, nil
 }
 
-func buildChildMountCandidate(parent *mountSpec, child *syncengine.ShortcutChildTopology) (*childMountCandidate, error) {
+func buildChildMountCandidate(parent *mountSpec, child *syncengine.ShortcutChildRunner) (*childMountCandidate, error) {
 	if parent == nil || child == nil || child.BindingItemID == "" {
-		return nil, fmt.Errorf("multisync: parent-declared child topology is incomplete")
+		return nil, fmt.Errorf("multisync: parent-declared child runner publication is incomplete")
 	}
 	relativePath := child.RelativeLocalPath
 	if relativePath == "" {
@@ -404,7 +395,7 @@ func buildChildMountCandidate(parent *mountSpec, child *syncengine.ShortcutChild
 		finalDrain:               child.RunnerAction == syncengine.ShortcutChildActionFinalDrain,
 		expectedSyncRootIdentity: cloneChildRootIdentity(child.LocalRootIdentity),
 	}
-	skipErr := shortcutChildRunnerSkipError(childMountID, child.RunnerAction, child.BlockedDetail)
+	skipErr := shortcutChildRunnerSkipError(childMountID, child.RunnerAction, child.RunnerDetail)
 
 	return &childMountCandidate{
 		namespaceID:       parent.mountID,
@@ -412,7 +403,7 @@ func buildChildMountCandidate(parent *mountSpec, child *syncengine.ShortcutChild
 		localAlias:        displayName,
 		relativeLocalPath: relativePath,
 		runnerAction:      child.RunnerAction,
-		blockedDetail:     child.BlockedDetail,
+		runnerDetail:      child.RunnerDetail,
 		mount:             childMount,
 		skipErr:           skipErr,
 	}, nil
@@ -433,8 +424,6 @@ func shortcutChildRunnerSkipError(
 			return fmt.Errorf("child mount %s is blocked by parent shortcut lifecycle: %s", childMountID, blockedDetail)
 		}
 		return fmt.Errorf("child mount %s is blocked by parent shortcut lifecycle", childMountID)
-	case syncengine.ShortcutChildActionSkipWaitingReplacement:
-		return fmt.Errorf("child mount %s is waiting for an older shortcut at the same path to finish final drain", childMountID)
 	case "":
 		return fmt.Errorf("child mount %s is missing a parent-declared runner action", childMountID)
 	default:

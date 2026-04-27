@@ -16,6 +16,7 @@ type ShortcutRootState string
 const (
 	ShortcutRootStateActive                     ShortcutRootState = "active"
 	ShortcutRootStateTargetUnavailable          ShortcutRootState = "target_unavailable"
+	ShortcutRootStateLocalRootUnavailable       ShortcutRootState = "local_root_unavailable"
 	ShortcutRootStateBlockedPath                ShortcutRootState = "blocked_path"
 	ShortcutRootStateRenameAmbiguous            ShortcutRootState = "rename_ambiguous"
 	ShortcutRootStateAliasMutationBlocked       ShortcutRootState = "alias_mutation_blocked"
@@ -101,6 +102,7 @@ func shortcutRootStateKeepsProtectedPaths(state ShortcutRootState) bool {
 	case "",
 		ShortcutRootStateActive,
 		ShortcutRootStateTargetUnavailable,
+		ShortcutRootStateLocalRootUnavailable,
 		ShortcutRootStateBlockedPath,
 		ShortcutRootStateRenameAmbiguous,
 		ShortcutRootStateAliasMutationBlocked,
@@ -366,6 +368,7 @@ func shortcutRootParticipatesInDuplicateTargetCheck(record *ShortcutRootRecord) 
 		return true
 	case "",
 		ShortcutRootStateTargetUnavailable,
+		ShortcutRootStateLocalRootUnavailable,
 		ShortcutRootStateBlockedPath,
 		ShortcutRootStateRenameAmbiguous,
 		ShortcutRootStateAliasMutationBlocked,

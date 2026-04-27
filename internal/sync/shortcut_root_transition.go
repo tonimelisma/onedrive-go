@@ -62,6 +62,24 @@ func shortcutRootTransitionTable() map[ShortcutRootState]map[shortcutRootLifecyc
 				ShortcutRootStateDuplicateTarget,
 			},
 		},
+		ShortcutRootStateLocalRootUnavailable: {
+			shortcutRootEventRemoteUpsert:          {ShortcutRootStateActive},
+			shortcutRootEventRemoteDelete:          {ShortcutRootStateRemovedFinalDrain},
+			shortcutRootEventRemoteUnavailable:     {ShortcutRootStateTargetUnavailable},
+			shortcutRootEventCompleteOmission:      {ShortcutRootStateRemovedFinalDrain},
+			shortcutRootEventProtectedPathConflict: {ShortcutRootStateBlockedPath},
+			shortcutRootEventLocalRootReady:        {ShortcutRootStateActive},
+			shortcutRootEventLocalPathBlocked:      {ShortcutRootStateLocalRootUnavailable},
+			shortcutRootEventAliasMutationSucceeded: {
+				ShortcutRootStateActive,
+				ShortcutRootStateRemovedFinalDrain,
+			},
+			shortcutRootEventAliasMutationFailed:  {ShortcutRootStateAliasMutationBlocked},
+			shortcutRootEventAliasRenameAmbiguous: {ShortcutRootStateRenameAmbiguous},
+			shortcutRootEventDuplicateTargetDetected: {
+				ShortcutRootStateDuplicateTarget,
+			},
+		},
 		ShortcutRootStateBlockedPath: {
 			shortcutRootEventRemoteUpsert:          {ShortcutRootStateActive},
 			shortcutRootEventRemoteDelete:          {ShortcutRootStateRemovedFinalDrain},

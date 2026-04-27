@@ -425,7 +425,7 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncRawShortcutObservationTypes(t *
 }
 
 // Validates: R-2.4.3, R-2.4.8
-func TestRunRepoConsistencyChecksFailsOnMultisyncChildTopologyStateMapping(t *testing.T) {
+func TestRunRepoConsistencyChecksFailsOnMultisyncChildRunnerPublicationStateMapping(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
@@ -446,6 +446,53 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncChildTopologyStateMapping(t *te
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "runner actions")
 	assert.Contains(t, err.Error(), "bad_child_state_mapping.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncStatusOnlyRunnerFields(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_status_fields.go"), []string{
+		"package multisync",
+		"",
+		"import syncengine \"github.com/tonimelisma/onedrive-go/internal/sync\"",
+		"",
+		"func bad(child syncengine.ShortcutChildRunner) bool {",
+		"\treturn len(child.ProtectedPaths) > 0 || child.BlockedDetail != \"\" || child.Waiting != nil",
+		"}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "status-only")
+	assert.Contains(t, err.Error(), "bad_status_fields.go")
+}
+
+// Validates: R-2.4.3, R-2.4.8
+func TestRunRepoConsistencyChecksFailsOnMultisyncDirectLifecycleAckWrappers(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRepoConsistencyFixtures(t, repoRoot)
+
+	writeRepoConsistencyGoSource(t, repoRoot, filepath.Join("internal", "multisync", "bad_direct_lifecycle_acker.go"), []string{
+		"package multisync",
+		"",
+		"type shortcutChildDrainAcker interface{}",
+		"type shortcutChildArtifactCleanupAcker interface{}",
+		"type shortcutChildLifecycleAcker interface{}",
+		"type shortcutParentLifecycleHandle struct{}",
+		"",
+	})
+
+	err := runRepoConsistencyChecks(repoRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "lifecycle")
+	assert.Contains(t, err.Error(), "bad_direct_lifecycle_acker.go")
 }
 
 // Validates: R-2.4.3, R-2.4.8

@@ -237,7 +237,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode SyncMode, pipe *
 	if err != nil {
 		return err
 	}
-	if publishErr := rt.engine.publishShortcutChildTopology(ctx, runtime.ChildPublication); publishErr != nil {
+	if publishErr := rt.engine.publishShortcutChildRunnerPublication(ctx, runtime.ChildPublication); publishErr != nil {
 		return publishErr
 	}
 	if len(runtime.Plan.Actions) == 0 {

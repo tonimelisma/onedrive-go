@@ -21,23 +21,26 @@ type engineRunner interface {
 	Close(ctx context.Context) error
 }
 
-type shortcutChildDrainAcker interface {
-	AcknowledgeChildFinalDrain(
-		context.Context,
-		syncengine.ShortcutChildDrainAck,
-	) (syncengine.ShortcutChildTopologyPublication, error)
+type shortcutChildAckCapabilityProvider interface {
+	ShortcutChildAckCapability() syncengine.ShortcutChildAckCapability
 }
 
-type shortcutChildArtifactCleanupAcker interface {
-	AcknowledgeChildArtifactsPurged(
-		context.Context,
-		syncengine.ShortcutChildArtifactCleanupAck,
-	) (syncengine.ShortcutChildTopologyPublication, error)
-}
-
-type shortcutChildLifecycleAcker interface {
-	shortcutChildDrainAcker
-	shortcutChildArtifactCleanupAcker
+func shortcutParentAckCapabilityForMount(
+	mount *mountSpec,
+	engine engineRunner,
+) syncengine.ShortcutChildAckCapability {
+	if mount == nil || mount.projectionKind != MountProjectionStandalone || engine == nil {
+		return nil
+	}
+	provider, ok := engine.(shortcutChildAckCapabilityProvider)
+	if !ok {
+		return nil
+	}
+	capability := provider.ShortcutChildAckCapability()
+	if capability == nil {
+		return nil
+	}
+	return capability
 }
 
 type engineFactoryRequest struct {
@@ -72,15 +75,18 @@ type OrchestratorConfig struct {
 // Orchestrator manages per-mount sync runners. It is always used, even for a
 // single mount, so one-shot and watch mode share the same top-level lifecycle.
 type Orchestrator struct {
-	cfg              *OrchestratorConfig
-	engineFactory    engineFactoryFunc // injectable for tests
-	logger           *slog.Logger
-	perfRuntime      *perf.Runtime
-	statusMu         gosync.RWMutex
-	controlMounts    []string
-	shortcutMu       gosync.Mutex
-	shortcutChildren map[mountID]syncengine.ShortcutChildTopologyPublication
-	reconcileTicks   func(time.Duration) (<-chan time.Time, func())
+	cfg           *OrchestratorConfig
+	engineFactory engineFactoryFunc // injectable for tests
+	logger        *slog.Logger
+	perfRuntime   *perf.Runtime
+	statusMu      gosync.RWMutex
+	controlMounts []string
+	shortcutMu    gosync.Mutex
+	// latestParentRunnerPublications is an ephemeral exact cache of parent
+	// engine output. It is rebuildable from live parents and never owns
+	// shortcut lifecycle policy.
+	latestParentRunnerPublications map[mountID]syncengine.ShortcutChildRunnerPublication
+	reconcileTicks                 func(time.Duration) (<-chan time.Time, func())
 }
 
 // NewOrchestrator creates an Orchestrator with real Engine factory.
@@ -110,9 +116,9 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 			}
 			return engine, nil
 		},
-		logger:           cfg.Logger,
-		perfRuntime:      perf.NewRuntime(cfg.PerfParent),
-		shortcutChildren: make(map[mountID]syncengine.ShortcutChildTopologyPublication),
+		logger:                         cfg.Logger,
+		perfRuntime:                    perf.NewRuntime(cfg.PerfParent),
+		latestParentRunnerPublications: make(map[mountID]syncengine.ShortcutChildRunnerPublication),
 		reconcileTicks: func(interval time.Duration) (<-chan time.Time, func()) {
 			if interval <= 0 {
 				return nil, func() {}

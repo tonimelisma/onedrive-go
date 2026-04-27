@@ -103,12 +103,12 @@ func TestNewMountEngine_LoadsPersistedShortcutProtectedRoots(t *testing.T) {
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
 
 	mountCfg := testEngineMountConfig(syncDir)
-	mountCfg.ShortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	mountCfg.ShortcutNamespaceID = shortcutNamespaceTestID
 
 	store, err := openEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
@@ -143,12 +143,12 @@ func TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot(t *testing.T) {
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
 
 	mountCfg := testEngineMountConfig(syncDir)
-	mountCfg.ShortcutTopologyNamespaceID = shortcutTopologyTestNamespaceID
+	mountCfg.ShortcutNamespaceID = shortcutNamespaceTestID
 
 	store, err := openEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutTopologyTestNamespaceID,
+		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",

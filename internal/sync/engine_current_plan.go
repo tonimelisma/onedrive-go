@@ -107,7 +107,7 @@ type currentObservation struct {
 	inputs                   currentInputs
 	observedPaths            int
 	pendingRemoteObservation *remoteObservationBatch
-	childPublication         ShortcutChildTopologyPublication
+	childPublication         ShortcutChildRunnerPublication
 }
 
 type localCurrentRefreshStep string
@@ -156,14 +156,14 @@ type builtCurrentPlan struct {
 	Plan                     *ActionPlan
 	Report                   *Report
 	PendingRemoteObservation *remoteObservationBatch
-	ChildPublication         ShortcutChildTopologyPublication
+	ChildPublication         ShortcutChildRunnerPublication
 }
 
 type runtimePlan struct {
 	Plan                     *ActionPlan
 	Report                   *Report
 	PendingRemoteObservation *remoteObservationBatch
-	ChildPublication         ShortcutChildTopologyPublication
+	ChildPublication         ShortcutChildRunnerPublication
 	RetryRows                []RetryWorkRow
 	BlockScopes              []*BlockScope
 }
@@ -242,7 +242,7 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 
 	topology := batch.shortcutTopology
 	if topology.NamespaceID == "" {
-		topology.NamespaceID = flow.engine.shortcutTopologyNamespaceID
+		topology.NamespaceID = flow.engine.shortcutNamespaceID
 	}
 	remoteChanged := topology.shouldApply()
 	if remoteChanged {
@@ -264,10 +264,10 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 	if err != nil {
 		return fmt.Errorf("sync: read parent shortcut root state: %w", err)
 	}
-	if flow.engine.shortcutChildTopologySink == nil {
+	if flow.engine.shortcutChildRunnerSink == nil {
 		return nil
 	}
-	return flow.engine.shortcutChildTopologySink(ctx, shortcutChildTopologyFromRoots(
+	return flow.engine.shortcutChildRunnerSink(ctx, shortcutChildRunnerPublicationFromRoots(
 		topology.NamespaceID,
 		parentRoots,
 	))
@@ -321,7 +321,7 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 	if refreshErr := eng.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
 		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
 	}
-	obs.SetShortcutTopology(eng.shortcutTopologyNamespaceID, eng.protectedRoots)
+	obs.SetShortcutTopology(eng.shortcutNamespaceID, eng.protectedRoots)
 
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, savedToken)
 	if err != nil {
@@ -458,16 +458,16 @@ func (flow *engineFlow) loadCommittedCurrentObservation(
 
 func (flow *engineFlow) currentShortcutChildPublication(
 	ctx context.Context,
-) (ShortcutChildTopologyPublication, error) {
+) (ShortcutChildRunnerPublication, error) {
 	if flow == nil || flow.engine == nil || flow.engine.baseline == nil ||
-		flow.engine.shortcutTopologyNamespaceID == "" {
-		return ShortcutChildTopologyPublication{}, nil
+		flow.engine.shortcutNamespaceID == "" {
+		return ShortcutChildRunnerPublication{}, nil
 	}
 	roots, err := flow.engine.baseline.ListShortcutRoots(ctx)
 	if err != nil {
-		return ShortcutChildTopologyPublication{}, fmt.Errorf("sync: read current shortcut child publication: %w", err)
+		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: read current shortcut child publication: %w", err)
 	}
-	return shortcutChildTopologyFromRoots(flow.engine.shortcutTopologyNamespaceID, roots), nil
+	return shortcutChildRunnerPublicationFromRoots(flow.engine.shortcutNamespaceID, roots), nil
 }
 
 func (flow *engineFlow) loadCurrentInputs(
