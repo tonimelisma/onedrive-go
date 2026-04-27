@@ -47,27 +47,27 @@ type shortcutBindingUnavailable struct {
 	Reason            string
 }
 
-type ShortcutChildTopologySink func(context.Context, ShortcutChildTopologyPublication) error
+type ShortcutChildRunnerSink func(context.Context, ShortcutChildRunnerPublication) error
 
 type ShortcutChildRunnerAction string
 
 const (
-	ShortcutChildActionRun                    ShortcutChildRunnerAction = "run"
-	ShortcutChildActionFinalDrain             ShortcutChildRunnerAction = "final_drain"
-	ShortcutChildActionSkipParentBlocked      ShortcutChildRunnerAction = "skip_parent_blocked"
-	ShortcutChildActionSkipWaitingReplacement ShortcutChildRunnerAction = "skip_waiting_replacement"
+	ShortcutChildActionRun               ShortcutChildRunnerAction = "run"
+	ShortcutChildActionFinalDrain        ShortcutChildRunnerAction = "final_drain"
+	ShortcutChildActionSkipParentBlocked ShortcutChildRunnerAction = "skip_parent_blocked"
 )
 
-// ShortcutChildTopologyPublication is the parent engine's only shortcut
-// lifecycle output to multisync. Raw shortcut observations stay inside
-// internal/sync; multisync only sees the already-persisted child runner view.
-type ShortcutChildTopologyPublication struct {
+// ShortcutChildRunnerPublication is the parent engine's only shortcut
+// runner output to multisync. Raw shortcut observations and parent-visible
+// status facts stay inside internal/sync; multisync only sees executable child
+// runner work plus artifact cleanup requests.
+type ShortcutChildRunnerPublication struct {
 	NamespaceID     string
-	Children        []ShortcutChildTopology
+	Children        []ShortcutChildRunner
 	CleanupRequests []ShortcutChildArtifactCleanupRequest
 }
 
-type ShortcutChildTopology struct {
+type ShortcutChildRunner struct {
 	BindingItemID     string
 	RelativeLocalPath string
 	LocalAlias        string
@@ -75,10 +75,19 @@ type ShortcutChildTopology struct {
 	RemoteItemID      string
 	RemoteIsFolder    bool
 	RunnerAction      ShortcutChildRunnerAction
-	BlockedDetail     string
-	ProtectedPaths    []string
+	RunnerDetail      string
 	LocalRootIdentity *ShortcutRootIdentity
-	Waiting           *ShortcutChildTopology
+}
+
+type ShortcutChildAckCapability interface {
+	AcknowledgeChildFinalDrain(
+		context.Context,
+		ShortcutChildDrainAck,
+	) (ShortcutChildRunnerPublication, error)
+	AcknowledgeChildArtifactsPurged(
+		context.Context,
+		ShortcutChildArtifactCleanupAck,
+	) (ShortcutChildRunnerPublication, error)
 }
 
 // ShortcutRootIdentity is the parent-engine-issued local directory identity

@@ -2,6 +2,7 @@ package multisync
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -37,4 +38,79 @@ func TestPurgeShortcutChildArtifacts_IgnoresExplicitMountID(t *testing.T) {
 	catalog, err := config.LoadCatalog()
 	require.NoError(t, err)
 	assert.Contains(t, catalog.Drives, mountID)
+}
+
+// Validates: R-2.4.8
+func TestShortcutChildArtifactCleanupExecutor_ReturnsStateArtifactRemoveFailure(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	childMountID := config.ChildMountID("personal:parent@example.com", "binding-remove-fail")
+	removeErr := errors.New("state db locked")
+	executor := shortcutChildArtifactCleanupExecutor{
+		logger: slog.New(slog.DiscardHandler),
+		remove: func(string) error {
+			return removeErr
+		},
+		pruneCatalogRecord: func(string) error {
+			return nil
+		},
+		deleteUploadSessions: func(string, string) error {
+			return nil
+		},
+	}
+
+	err := executor.purge(context.Background(), shortcutChildArtifactScope{mountID: childMountID})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "remove child state artifact")
+	assert.Contains(t, err.Error(), "state db locked")
+}
+
+// Validates: R-2.4.8
+func TestShortcutChildArtifactCleanupExecutor_ReturnsCatalogFailure(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	childMountID := config.ChildMountID("personal:parent@example.com", "binding-catalog-fail")
+	executor := shortcutChildArtifactCleanupExecutor{
+		logger: slog.New(slog.DiscardHandler),
+		remove: func(string) error {
+			return nil
+		},
+		pruneCatalogRecord: func(string) error {
+			return errors.New("catalog write denied")
+		},
+		deleteUploadSessions: func(string, string) error {
+			return nil
+		},
+	}
+
+	err := executor.purge(context.Background(), shortcutChildArtifactScope{mountID: childMountID})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "catalog write denied")
+}
+
+// Validates: R-2.4.8
+func TestShortcutChildArtifactCleanupExecutor_ReturnsUploadSessionFailure(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	childMountID := config.ChildMountID("personal:parent@example.com", "binding-session-fail")
+	executor := shortcutChildArtifactCleanupExecutor{
+		logger: slog.New(slog.DiscardHandler),
+		remove: func(string) error {
+			return nil
+		},
+		pruneCatalogRecord: func(string) error {
+			return nil
+		},
+		deleteUploadSessions: func(string, string) error {
+			return errors.New("session store unavailable")
+		},
+	}
+
+	err := executor.purge(context.Background(), shortcutChildArtifactScope{mountID: childMountID})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete child upload sessions")
+	assert.Contains(t, err.Error(), "session store unavailable")
 }

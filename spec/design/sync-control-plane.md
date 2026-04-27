@@ -21,7 +21,7 @@ runtime package that implements it.
 
 ## Ownership Contract
 
-- Owns: Multi-mount sync lifecycle, runtime mount-spec compilation from parent-declared child topology, child runner start/skip/final-drain/stop/purge decisions, reload diffing, control-socket ownership, and per-mount panic/error isolation.
+- Owns: Multi-mount sync lifecycle, runtime mount-spec compilation from parent-declared child runner publications, child runner start/skip/final-drain/stop/purge decisions, reload diffing, control-socket ownership, and per-mount panic/error isolation.
 - Does Not Own: Parent-drive Graph discovery, shortcut placeholder mutation, parent sync-dir shortcut alias filesystem policy, single-mount content observation, planning, execution, retry/trial policy, or sync-store persistence semantics.
 - Source of Truth: The current `config.Holder` snapshot, the CLI-compiled standalone mount configs, plus the runtime mount set and `runners` map owned by the watch-mode orchestrator loop.
 - Allowed Side Effects: Session creation, engine construction/closure, Unix control-socket bind/unlink, per-mount goroutine startup, live perf capture, and control-plane logging.
@@ -37,12 +37,12 @@ runtime package that implements it.
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry` |
-| Parent engines own shortcut-root state and alias mutation while multisync relays parent-declared runner and cleanup work into runner decisions: parent shortcut-root publication is persisted before acknowledgement, persisted roots feed parent-owned observation protection, empty complete batches retire old roots, same-path replacements do not downgrade active owners, clean final-drain acknowledgements become crash-safe parent release cleanup, cleanup-pending roots publish explicit child artifact cleanup requests, and production multisync code cannot call parent Graph discovery, read raw shortcut observation facts, read parent shortcut-root records, synthesize parent protected roots, map child topology states, compare standalone/automatic children by remote content root, or call shortcut alias mutation APIs. | `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot`, `TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemoved`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeReturningError`, `TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBeforeDelete`, `TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBeforeRename`, `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain`, `TestReceiveParentShortcutTopology_StoresPublicationInMemory`, `TestReceiveParentShortcutTopology_EmptyPublicationClearsCachedChildren`, `TestStoreParentShortcutTopology_UsesParentCleanupRequests`, `TestRunOnce_PublishesParentChildTopologyBeforeStartingChildren`, `TestRunWatch_PublishesParentChildTopologyBeforeStartingChildren`, `TestRunWatch_ReconcilesChildRunnersFromLiveParentPublication`, `TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedTopology`, `TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts`, `TestCompileRuntimeMountsFromParentChildTopology_DoesNotClassifyDuplicateAutomaticChildren`, `TestCompileRuntimeMountsFromParentChildTopology_StandaloneContentRootRunsBesideChild`, `TestCompileRuntimeMounts_StandaloneContentRootDoesNotSuppressChild`, `TestCompileRuntimeMounts_ParentBlockedChildDoesNotSynthesizeParentReservation`, `TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSuccess`, `TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved`, `TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile`, `TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs`, `TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable`, `TestBuildChildStatusMount_RendersLifecycleState`, `TestRunRepoConsistencyChecksFailsOnMultisyncGraphImportAlias`, `TestRunRepoConsistencyChecksFailsOnMultisyncShortcutAliasMutation`, `TestRunRepoConsistencyChecksFailsOnMultisyncRawShortcutObservationTypes`, `TestRunRepoConsistencyChecksFailsOnMultisyncChildTopologyStateMapping`, `TestRunRepoConsistencyChecksFailsOnMultisyncRemoteContentRootConflictPolicy`, `TestRunRepoConsistencyChecksFailsOnMultisyncProtectedRootSynthesis`, `TestRunRepoConsistencyChecksFailsOnMultisyncShortcutRootStoreWrite`, `TestRunRepoConsistencyChecksFailsOnMultisyncLocalpathFilesystemAccessOutsideControlSocket` |
+| Parent engines own shortcut-root state and alias mutation while multisync relays parent-declared runner and cleanup work into runner decisions: parent shortcut-root state is persisted before acknowledgement, persisted roots feed parent-owned observation protection, empty complete batches retire old roots, same-path replacements do not downgrade active owners, clean final-drain acknowledgements become crash-safe parent release cleanup, cleanup-pending roots publish explicit child artifact cleanup requests, and production multisync code cannot call parent Graph discovery, read raw shortcut observation facts, read parent shortcut-root records, synthesize parent protected roots, map runner lifecycle states, compare standalone/automatic children by remote content root, or call shortcut alias mutation APIs. | `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot`, `TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemoved`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeReturningError`, `TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBeforeDelete`, `TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBeforeRename`, `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain`, `TestReceiveParentRunnerPublication_StoresPublicationInMemory`, `TestReceiveParentRunnerPublication_EmptyPublicationClearsCachedChildren`, `TestReceiveParentRunnerPublication_UsesParentCleanupRequests`, `TestRunOnce_PublishesParentRunnerPublicationBeforeStartingChildren`, `TestRunWatch_PublishesParentRunnerPublicationBeforeStartingChildren`, `TestRunWatch_ReconcilesChildRunnersFromLiveParentPublication`, `TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedPublication`, `TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts`, `TestCompileRuntimeMountsFromParentRunnerPublication_DoesNotClassifyDuplicateAutomaticChildren`, `TestCompileRuntimeMountsFromParentRunnerPublication_StandaloneContentRootRunsBesideChild`, `TestCompileRuntimeMounts_StandaloneContentRootDoesNotSuppressChild`, `TestCompileRuntimeMounts_ParentBlockedChildDoesNotSynthesizeParentReservation`, `TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSuccess`, `TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved`, `TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile`, `TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs`, `TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable`, `TestBuildChildStatusMount_RendersLifecycleState`, `TestRunRepoConsistencyChecksFailsOnMultisyncGraphImportAlias`, `TestRunRepoConsistencyChecksFailsOnMultisyncShortcutAliasMutation`, `TestRunRepoConsistencyChecksFailsOnMultisyncRawShortcutObservationTypes`, `TestRunRepoConsistencyChecksFailsOnMultisyncChildRunnerPublicationStateMapping`, `TestRunRepoConsistencyChecksFailsOnMultisyncRemoteContentRootConflictPolicy`, `TestRunRepoConsistencyChecksFailsOnMultisyncProtectedRootSynthesis`, `TestRunRepoConsistencyChecksFailsOnMultisyncShortcutRootStoreWrite`, `TestRunRepoConsistencyChecksFailsOnMultisyncLocalpathFilesystemAccessOutsideControlSocket` |
 
 ## Runtime Mount Specs
 
 The control plane compiles runtime `mountSpec` values from two inputs:
-configured standalone parent mounts and parent-declared child topology. The CLI
+configured standalone parent mounts and parent-declared child runner publications. The CLI
 resolves configured drives and compiles them into
 `multisync.StandaloneMountSelection`; valid selections become
 `StandaloneMountConfig` values, while per-drive conversion failures become
@@ -52,17 +52,17 @@ One-shot and watch startup bind the owner control socket before parent engines
 start. On startup, reload, and parent publication events the control plane:
 
 1. consumes the CLI-compiled standalone mount selection
-2. starts selected standalone parent engines with the child topology sink
+2. starts selected standalone parent engines with the child runner publication sink
    attached before the engine begins its normal one-shot or watch bootstrap
 3. caches each exact parent-declared child runner-action snapshot in memory when
    the live parent publishes from its normal current-plan path
-4. reconciles child runners for that parent directly from `run`, `final_drain`,
-   `skip_parent_blocked`, and `skip_waiting_replacement` actions
+4. reconciles child runners for that parent directly from `run`,
+   `final_drain`, and `skip_parent_blocked` actions
 
 There is no separate shortcut-only startup path and no control-plane startup
 publisher. The parent engine derives local protection and child publications
 from the same current truth and current plan that it uses for ordinary work.
-Children are never admitted from cached topology when a parent exits or fails
+Children are never admitted from cached runner publication when a parent exits or fails
 before publishing; multisync stops any existing children for that parent and
 waits for a fresh live parent publication before admitting replacements.
 
@@ -79,8 +79,8 @@ Watch lifecycle is parent-first and child-safe. Reload stops child runners
 before parents and starts parents before children. If a parent runner exits,
 panics, loses its root, is paused/removed by reload, or fails startup,
 multisync immediately cancels all child runners whose `parentMountID` matches
-that parent and forgets cached child topology for that parent. Replacement
-children can start only after the live parent has published fresh topology
+that parent and forgets cached runner publication for that parent. Replacement
+children can start only after the live parent has published fresh runner actions
 through the normal engine path.
 
 `mountSpec` no longer carries `ResolvedDrive`, and `OrchestratorConfig` no
@@ -121,24 +121,25 @@ Shortcut lifecycle state is producer-owned:
 | Same-path replacement arrives before old child finalizes | parent root with `Waiting` replacement | old child drains first, new child starts after parent promotion | shared path remains reserved |
 | Duplicate automatic shortcut to same target in one parent | parent root `duplicate_target` | duplicate child runner skipped by parent action | conflicting child paths |
 | Parent cannot safely move or inspect a renamed shortcut alias root | parent root `blocked_path` or `removed_cleanup_blocked` | child skipped while parent retries or waits for user action | current and reserved paths |
-| Child local root is a file, final symlink, unsafe path, or unavailable path | parent root `blocked_path` | child skipped | child path |
+| Child local root is a file, final symlink, or unsafe path | parent root `blocked_path` | child skipped | child path |
+| Child local root is unavailable while the parent still owns the alias lifecycle | parent root `local_root_unavailable` | child skipped until parent retry or user recovery | child path |
 | Previously materialized child local root is renamed to one same-parent identity match | parent root remains protected while parent alias rename is applied | same child state DB restarts at new path | current path plus same-parent identity protected-root |
-| Previously materialized child local root is missing with no same-parent identity match | parent deletes only the shortcut alias, then emits retiring child topology | child final-drains if runnable, then releases | child path until finalized |
+| Previously materialized child local root is missing with no same-parent identity match | parent deletes only the shortcut alias, then emits a final-drain child runner action | child final-drains if runnable, then releases | child path until finalized |
 | Previously materialized child local root has multiple same-parent identity matches | parent root `rename_ambiguous` | child skipped until user resolves ambiguity | current and candidate paths |
 | Local alias rename/delete cannot mutate the placeholder | parent root `alias_mutation_blocked` | child skipped and retried by parent | current and candidate paths |
 
-Shortcut topology is split by authority. The parent engine is the only runtime
-that calls Graph delta/list/get for the parent drive. It classifies shortcut
-placeholder observations, persists parent-owned `shortcut_roots`, suppresses
-those aliases from normal content planning, mutates shortcut placeholders by
-`binding_item_id`, and publishes child topology to
-`internal/multisync`:
+Shortcut runner publication is split by authority. The parent engine is the
+only runtime that calls Graph delta/list/get for the parent drive. It
+classifies shortcut placeholder observations, persists parent-owned
+`shortcut_roots`, suppresses those aliases from normal content planning,
+mutates shortcut placeholders by `binding_item_id`, and publishes child runner
+actions to `internal/multisync`:
 
 - `run` child roots start or continue child runners
 - `final_drain` child roots tell multisync to run the child once in
   bidirectional full-reconcile mode
-- `skip_parent_blocked` and `skip_waiting_replacement` child roots skip child
-  runners while parent-owned retry/block state remains in the parent sync store
+- `skip_parent_blocked` child roots skip child runners while parent-owned
+  retry/block state remains in the parent sync store
 - cleanup requests tell multisync to purge child-owned artifacts after child
   sync is clean and the parent has released its protected alias path; multisync
   never infers cleanup work from a child disappearing from the parent
@@ -153,13 +154,17 @@ those aliases from normal content planning, mutates shortcut placeholders by
 - all active, conflicted, unavailable, waiting, release-pending, and
   removed-final-drain paths
   remain parent protected paths
-- runnable child topology carries the parent-observed local root identity when
+- runnable child runner publications carry the parent-observed local root identity when
   available; child engines verify that identity before startup and full scans
   so a deleted/recreated or moved projection cannot be mistaken for an empty
   tree to sync
-- successful topology mutation in watch mode publishes a new parent-owned child
-  snapshot through the live parent runner; multisync reconciles child runners
-  without stopping the parent
+- in one-shot mode, each configured parent runs as an ordinary engine and the
+  first fresh runner publication from that parent starts that parent's child
+  work immediately; no parent waits for unrelated parents before its children
+  can run
+- successful runner-publication mutation in watch mode publishes a new
+  parent-owned child snapshot through the live parent runner; multisync
+  reconciles only that parent's child runners without stopping the parent
 
 If the parent sync store cannot durably accept a topology batch, the parent
 engine does not commit its remote observation cursor. The same Graph facts
@@ -205,7 +210,7 @@ acknowledgement, so cleanup retry is durable and parent-owned.
 
 Local alias deletion is explicit and local-only. If the user deletes the local
 shortcut alias while the parent root is active, the parent deletes only the
-shortcut placeholder and emits retiring child topology. This does not delete
+shortcut placeholder and emits a final-drain child runner action. This does not delete
 the shared-folder target and does not mutate configured standalone shared-drive
 catalog records.
 
@@ -216,7 +221,7 @@ own the local observation and shortcut placeholder mutation by
 path with the same stored identity, the parent alias rename is applied and the
 same child mount ID restarts at the new path. If the alias disappears with no
 same-parent identity candidate, the parent deletes only the shortcut alias and
-emits retiring child topology. During all blocked or retiring states, parent
+emits a final-drain child runner action. During all blocked or retiring states, parent
 observation suppresses protected roots so they are not uploaded into the parent
 drive. Cross-parent behavior is unsupported by design: parent engines are
 isolated by account/namespace authority and never compare shortcut roots across
@@ -225,7 +230,8 @@ parents.
 Status is the guided recovery surface for these states. Non-active shortcut
 children expose the protected current path, reserved previous/candidate paths,
 state/reason/detail, concise `recovery_action`, `auto_retry`, and waiting
-replacement state when present.
+replacement state when present from the parent shortcut-root status snapshot,
+not from multisync runner publications.
 
 ## Boundary To The Engine
 
@@ -245,7 +251,7 @@ surface.
 Parent engines rebuild protected child-root paths from parent-owned
 `shortcut_roots`: reserved relative paths, binding IDs, target identity, and
 optional filesystem identity. Multisync receives only the parent-declared child
-runner-action publication derived from those rows. Parent namespace decisions
+runner publications derived from those rows. Parent namespace decisions
 and retry/block state remain in the parent engine.
 
 ## `Orchestrator`

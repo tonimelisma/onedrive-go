@@ -191,17 +191,20 @@ from `engine_runtime_start.go`; and completion plus publication drain should
 read from `engine_runtime_completion.go` plus the trial-specific
 `engine_runtime_completion_trial.go`.
 
-Parent child-admission readiness is part of the normal parent run path. Multisync
-attaches a child topology sink before it starts a selected parent engine, then
-waits for that live parent to publish from the normal current-plan pipeline.
+Parent child-admission readiness is part of the normal parent run path.
+Multisync attaches a child runner publication sink before it starts a selected
+parent engine, then waits for that live parent to publish from the normal
+current-plan pipeline.
 That pipeline performs the same remote observation cadence decision, full local
 observation, current-plan build, retry/block reconciliation, and shortcut-root
 lifecycle publication the parent needs for ordinary work. One-shot publishes
-before committing deferred remote observation progress; watch bootstrap and
-steady-state changes publish through the live parent runner. Child topology is
-therefore derived from fresh parent local and remote truth rather than cached
-control-plane state, and multisync never constructs a temporary startup parent
-engine for shortcut admission.
+before committing deferred remote observation progress; each one-shot parent
+publication starts that parent child work immediately, without waiting for
+unrelated parents to finish. Watch bootstrap and steady-state changes publish
+through the live parent runner and reconcile only that parent child runner set.
+Child runner admission is therefore derived from fresh parent local and remote
+truth rather than cached control-plane state, and multisync never constructs a
+temporary startup parent engine for shortcut admission.
 
 Once one-shot shutdown has started, late worker completions no longer re-enter
 the normal outbox path. The engine runs them through the same shutdown
@@ -410,10 +413,10 @@ those placeholders as shortcut publication facts before remote cursor commit. Th
 parent engine also persists parent-owned `shortcut_roots` state in its sync
 store: binding item ID, alias path, target identity, protected parent-local
 paths, lifecycle state, and same-path replacement waiting state. The
-multi-mount control plane consumes the parent-declared child topology only to
+multi-mount control plane consumes the parent-declared child runner actions only to
 start, drain, skip, or purge child runners.
 
-Managed shortcut child topology also carries the parent-observed local root
+Managed shortcut child runner publications also carry the parent-observed local root
 identity when the parent has materialized the alias directory. Child engines
 verify that identity at construction and before full local scans. If the local
 root disappeared, moved away, or was deleted and recreated at the same path, the
@@ -424,7 +427,7 @@ Shortcut placeholder rename/delete mutations are parent-engine operations by
 binding item ID. The parent engine observes the need for local alias
 rename/delete from its protected-root scan/watch path, applies the Graph
 mutation itself, persists the retry/block state in `shortcut_roots`, and then
-publishes the resulting child topology. Multisync must not rediscover parent
+publishes the resulting child runner actions. Multisync must not rediscover parent
 remote state, call parent-drive alias mutation APIs, or decide parent alias
 lifecycle.
 
@@ -445,7 +448,8 @@ directory is gone, it treats that as user-directed manual discard of the local
 projection. The parent removes the shortcut root, or promotes a same-path
 waiting replacement, without calling the shortcut delete/rename Graph mutation
 path and without interpreting the missing directory as child content deletion.
-Multisync receives the release through topology and purges child-owned state.
+Multisync receives the release through a parent cleanup request publication and
+purges child-owned state.
 
 If a mounted sync root disappears, the engine treats that as mount lifecycle
 (`ErrMountRootUnavailable`) rather than as content deletion below the root.

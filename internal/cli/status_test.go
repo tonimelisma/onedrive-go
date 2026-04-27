@@ -178,6 +178,16 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 			protectsPath: true,
 		},
 		{
+			name:         "local_root_unavailable",
+			state:        syncengine.ShortcutRootStateLocalRootUnavailable,
+			displayState: string(syncengine.ShortcutRootStateLocalRootUnavailable),
+			reason:       string(syncengine.ShortcutRootStateLocalRootUnavailable),
+			detail:       "The shortcut alias local root is unavailable.",
+			action:       "Restore the local shortcut directory or delete it to discard unresolved local state.",
+			autoRetry:    boolPtr(true),
+			protectsPath: true,
+		},
+		{
 			name:         "blocked_path",
 			state:        syncengine.ShortcutRootStateBlockedPath,
 			displayState: string(syncengine.ShortcutRootStateBlockedPath),
@@ -219,7 +229,7 @@ func shortcutStatusRemovalLifecycleCases() []shortcutStatusLifecycleCase {
 			displayState: string(syncengine.ShortcutRootStateRemovedFinalDrain),
 			reason:       string(syncengine.ShortcutRootStateRemovedFinalDrain),
 			detail:       "The shortcut alias was removed; child sync is finishing before release.",
-			action:       "Restore access to the shared folder if final drain is blocked.",
+			action:       "Restore shared-folder access, or delete the local shortcut directory to discard dirty local state.",
 			autoRetry:    boolPtr(true),
 			protectsPath: true,
 		},
@@ -531,8 +541,8 @@ func TestBuildChildStatusMount_FinalDrainGuidesAccessRestore(t *testing.T) {
 	assert.Equal(t, string(syncengine.ShortcutRootStateRemovedFinalDrain), mount.State)
 	assert.Equal(t, string(syncengine.ShortcutRootStateRemovedFinalDrain), mount.StateReason)
 	assert.Contains(t, mount.StateDetail, "child sync is finishing")
-	assert.Contains(t, mount.RecoveryAction, "Restore access")
-	assert.NotContains(t, mount.RecoveryAction, "delete")
+	assert.Contains(t, mount.RecoveryAction, "Restore shared-folder access")
+	assert.Contains(t, mount.RecoveryAction, "delete the local shortcut directory")
 	require.NotNil(t, mount.AutoRetry)
 	assert.True(t, *mount.AutoRetry)
 }
