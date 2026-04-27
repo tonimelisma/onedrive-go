@@ -58,7 +58,7 @@ func TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots(t *testing.T
 	require.NoError(t, err)
 	assert.True(t, changed)
 
-	roots, err := store.ListShortcutRoots(t.Context())
+	roots, err := store.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, shortcutNamespaceTestID, roots[0].NamespaceID)
@@ -77,7 +77,7 @@ func TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain(t *testin
 	t.Parallel()
 
 	store := newTestStore(t)
-	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -96,7 +96,7 @@ func TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain(t *testin
 	require.NoError(t, err)
 	assert.True(t, changed)
 
-	roots, err := store.ListShortcutRoots(t.Context())
+	roots, err := store.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateRemovedFinalDrain, roots[0].State)
@@ -108,7 +108,7 @@ func TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
-	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "old-binding",
 		RelativeLocalPath: "Shared/Docs",
@@ -137,7 +137,7 @@ func TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, changed)
 
-	roots, err := store.ListShortcutRoots(t.Context())
+	roots, err := store.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, "old-binding", roots[0].BindingItemID)
@@ -155,7 +155,7 @@ func TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner(t *testing
 	t.Parallel()
 
 	store := newTestStore(t)
-	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "old-binding",
 		RelativeLocalPath: "Shared/New",
@@ -184,7 +184,7 @@ func TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner(t *testing
 	require.NoError(t, err)
 	assert.True(t, changed)
 
-	roots, err := store.ListShortcutRoots(t.Context())
+	roots, err := store.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 2)
 	byBinding := map[string]ShortcutRootRecord{
@@ -233,7 +233,7 @@ func TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked(t *testing.T)
 	require.NoError(t, err)
 	assert.True(t, changed)
 
-	roots, err := store.ListShortcutRoots(t.Context())
+	roots, err := store.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 2)
 	byBinding := map[string]ShortcutRootRecord{
@@ -252,7 +252,7 @@ func TestSyncStore_RemoteShortcutRenameKeepsPreviousPathProtected(t *testing.T) 
 	t.Parallel()
 
 	store := newTestStore(t)
-	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Old",
@@ -281,7 +281,7 @@ func TestSyncStore_RemoteShortcutRenameKeepsPreviousPathProtected(t *testing.T) 
 	require.NoError(t, err)
 	assert.True(t, changed)
 
-	roots, err := store.ListShortcutRoots(t.Context())
+	roots, err := store.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, "Shared/New", roots[0].RelativeLocalPath)
@@ -294,7 +294,7 @@ func TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable(t *testing
 	t.Parallel()
 
 	store := newTestStore(t)
-	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -312,7 +312,7 @@ func TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable(t *testing
 	require.NoError(t, err)
 	assert.True(t, changed)
 
-	roots, err := store.ListShortcutRoots(t.Context())
+	roots, err := store.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateRemovedReleasePending, roots[0].State)
@@ -324,7 +324,7 @@ func TestSyncStore_acknowledgeShortcutChildArtifactsPurgedRemovesCleanupPendingR
 	t.Parallel()
 
 	store := newTestStore(t)
-	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -341,7 +341,7 @@ func TestSyncStore_acknowledgeShortcutChildArtifactsPurgedRemovesCleanupPendingR
 	require.NoError(t, err)
 	assert.True(t, changed)
 
-	roots, err := store.ListShortcutRoots(t.Context())
+	roots, err := store.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, roots)
 }
@@ -351,7 +351,7 @@ func TestSyncStore_RemoteUpsertRestoresCleanupPendingRoot(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
-	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -378,12 +378,12 @@ func TestSyncStore_RemoteUpsertRestoresCleanupPendingRoot(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, changed)
 
-	roots, err := store.ListShortcutRoots(t.Context())
+	roots, err := store.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateActive, roots[0].State)
 	assert.True(t, roots[0].RemoteDriveID.Equal(driveid.New("new-drive")))
-	snapshot, err := store.ShortcutChildRunner(t.Context(), shortcutNamespaceTestID)
+	snapshot, err := store.ShortcutChildRunner(t.Context(), shortcutNamespaceTestID, t.TempDir())
 	require.NoError(t, err)
 	require.Len(t, snapshot.Children, 1)
 	assert.Empty(t, snapshot.CleanupRequests)
@@ -408,7 +408,7 @@ func TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState(t *te
 		},
 	}
 	eng, _ := newTestEngine(t, mock)
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -431,7 +431,7 @@ func TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState(t *te
 	assert.True(t, moved.driveID.Equal(testThrottleDriveID()))
 	assert.Equal(t, "binding-1", moved.itemID)
 	assert.Equal(t, "Renamed", moved.name)
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, "Shared/Renamed", roots[0].RelativeLocalPath)
@@ -456,7 +456,7 @@ func TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain(t *testing.T) {
 		},
 	}
 	eng, _ := newTestEngine(t, mock)
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -476,7 +476,7 @@ func TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, deleted.driveID.Equal(testThrottleDriveID()))
 	assert.Equal(t, "binding-1", deleted.itemID)
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateRemovedFinalDrain, roots[0].State)
@@ -492,7 +492,7 @@ func TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot(t *testing.
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(aliasRoot, "uploaded.txt"), []byte("drained"), 0o600))
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -513,7 +513,7 @@ func TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot(t *testing.
 	require.Len(t, snapshot.CleanupRequests, 1)
 	assert.Equal(t, "binding-1", snapshot.CleanupRequests[0].BindingItemID)
 	assert.NoDirExists(t, aliasRoot)
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateRemovedChildCleanupPending, roots[0].State)
@@ -536,7 +536,7 @@ func TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemote
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -554,7 +554,7 @@ func TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemote
 
 	require.NoError(t, err)
 	assert.True(t, changed)
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, roots)
 }
@@ -568,7 +568,7 @@ func TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemov
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(filepath.Dir(aliasRoot), 0o700))
 	require.NoError(t, os.WriteFile(aliasRoot, []byte("blocking file"), 0o600))
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -587,7 +587,7 @@ func TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemov
 	require.Error(t, err)
 	assert.Empty(t, snapshot.Children)
 	assert.FileExists(t, aliasRoot)
-	roots, listErr := eng.baseline.ListShortcutRoots(t.Context())
+	roots, listErr := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, listErr)
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateRemovedCleanupBlocked, roots[0].State)
@@ -616,7 +616,7 @@ func TestEngine_ReconcileMissingLocalAliasDeleteReleasesParentShortcutRoot(t *te
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -636,7 +636,7 @@ func TestEngine_ReconcileMissingLocalAliasDeleteReleasesParentShortcutRoot(t *te
 	assert.True(t, changed)
 	assert.True(t, deleted.driveID.Equal(testThrottleDriveID()))
 	assert.Equal(t, "binding-1", deleted.itemID)
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, roots)
 }
@@ -662,7 +662,7 @@ func TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBefore
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -682,7 +682,7 @@ func TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBefore
 	assert.True(t, changed)
 	assert.True(t, deleted.driveID.Equal(testThrottleDriveID()))
 	assert.Equal(t, "binding-1", deleted.itemID)
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, roots)
 }
@@ -710,7 +710,7 @@ func TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBefore
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -731,7 +731,7 @@ func TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBefore
 	assert.True(t, changed)
 	assert.Equal(t, "binding-1", moved.itemID)
 	assert.Equal(t, "Renamed", moved.name)
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, "Shared/Renamed", roots[0].RelativeLocalPath)
@@ -761,7 +761,7 @@ func TestEngine_ReconcileMissingAliasDetectsLiveRenameWithoutStaleLocalState(t *
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -781,7 +781,7 @@ func TestEngine_ReconcileMissingAliasDetectsLiveRenameWithoutStaleLocalState(t *
 	assert.True(t, changed)
 	assert.Equal(t, "binding-1", moved.itemID)
 	assert.Equal(t, "Renamed", moved.name)
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, "Shared/Renamed", roots[0].RelativeLocalPath)
@@ -811,7 +811,7 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -845,7 +845,7 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 	assert.Equal(t, "Renamed", moved.name)
 	require.Len(t, published.Children, 1)
 	assert.Equal(t, "Shared/Renamed", published.Children[0].RelativeLocalPath)
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, "Shared/Renamed", roots[0].RelativeLocalPath)
@@ -867,7 +867,7 @@ func TestEngine_ReconcileShortcutRootLocalStateMovesRemoteRenamedProjection(t *t
 	require.NoError(t, os.WriteFile(filepath.Join(oldPath, "draft.txt"), []byte("content"), 0o600))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Old"))
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/New",
@@ -887,7 +887,7 @@ func TestEngine_ReconcileShortcutRootLocalStateMovesRemoteRenamedProjection(t *t
 	assert.True(t, changed)
 	assert.NoDirExists(t, oldPath)
 	assert.FileExists(t, filepath.Join(syncRoot, "Shared", "New", "draft.txt"))
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateActive, roots[0].State)
@@ -906,7 +906,7 @@ func TestEngine_ReconcileShortcutRootLocalStateMovesRemoteMovedProjectionAcrossL
 	require.NoError(t, os.WriteFile(filepath.Join(oldPath, "draft.txt"), []byte("content"), 0o600))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Old"))
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Archive/New",
@@ -926,7 +926,7 @@ func TestEngine_ReconcileShortcutRootLocalStateMovesRemoteMovedProjectionAcrossL
 	assert.True(t, changed)
 	assert.NoDirExists(t, oldPath)
 	assert.FileExists(t, filepath.Join(syncRoot, "Archive", "New", "draft.txt"))
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateActive, roots[0].State)
@@ -944,7 +944,7 @@ func TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending(t *t
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(aliasRoot, "drained.txt"), []byte("done"), 0o600))
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -961,7 +961,7 @@ func TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending(t *t
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.NoDirExists(t, aliasRoot)
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateRemovedChildCleanupPending, roots[0].State)
@@ -977,7 +977,7 @@ func TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeRetur
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(filepath.Dir(aliasRoot), 0o700))
 	require.NoError(t, os.WriteFile(aliasRoot, []byte("blocking file"), 0o600))
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -993,7 +993,7 @@ func TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeRetur
 
 	require.Error(t, err)
 	assert.False(t, changed)
-	roots, listErr := eng.baseline.ListShortcutRoots(t.Context())
+	roots, listErr := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, listErr)
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateRemovedCleanupBlocked, roots[0].State)
@@ -1010,7 +1010,7 @@ func TestEngine_ReconcileShortcutRootLocalStateReturnsRepeatedCleanupBlockedErro
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(filepath.Dir(aliasRoot), 0o700))
 	require.NoError(t, os.WriteFile(aliasRoot, []byte("still blocking"), 0o600))
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -1028,7 +1028,7 @@ func TestEngine_ReconcileShortcutRootLocalStateReturnsRepeatedCleanupBlockedErro
 	require.Error(t, err)
 	assert.False(t, changed)
 	assert.Contains(t, err.Error(), "not a directory")
-	roots, listErr := eng.baseline.ListShortcutRoots(t.Context())
+	roots, listErr := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, listErr)
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateRemovedCleanupBlocked, roots[0].State)
@@ -1043,7 +1043,7 @@ func TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterRe
 	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "old-binding",
 		RelativeLocalPath: "Shared/Docs",
@@ -1068,7 +1068,7 @@ func TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterRe
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.NoDirExists(t, aliasRoot)
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 2)
 	byBinding := shortcutRootByBindingForTest(roots)

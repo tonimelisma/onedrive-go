@@ -16,7 +16,7 @@ func (m *SyncStore) applyShortcutTopology(ctx context.Context, batch shortcutTop
 	if m == nil || !batch.shouldApply() {
 		return false, nil
 	}
-	current, err := m.ListShortcutRoots(ctx)
+	current, err := m.listShortcutRoots(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -24,7 +24,7 @@ func (m *SyncStore) applyShortcutTopology(ctx context.Context, batch shortcutTop
 	if !plan.Changed {
 		return false, nil
 	}
-	if err := m.ReplaceShortcutRoots(ctx, plan.Records); err != nil {
+	if err := m.replaceShortcutRoots(ctx, plan.Records); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -37,7 +37,7 @@ func (m *SyncStore) markShortcutChildFinalDrainReleasePending(
 	if m == nil || ack.BindingItemID == "" {
 		return false, nil
 	}
-	current, err := m.ListShortcutRoots(ctx)
+	current, err := m.listShortcutRoots(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -45,7 +45,7 @@ func (m *SyncStore) markShortcutChildFinalDrainReleasePending(
 	if !plan.Changed {
 		return false, nil
 	}
-	if err := m.ReplaceShortcutRoots(ctx, plan.Records); err != nil {
+	if err := m.replaceShortcutRoots(ctx, plan.Records); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -58,43 +58,37 @@ func (m *SyncStore) acknowledgeShortcutChildArtifactsPurged(
 	if m == nil || ack.BindingItemID == "" {
 		return false, nil
 	}
-	current, err := m.ListShortcutRoots(ctx)
+	current, err := m.listShortcutRoots(ctx)
 	if err != nil {
 		return false, err
 	}
-	records := make([]ShortcutRootRecord, 0, len(current))
-	changed := false
-	for i := range current {
-		record := normalizeShortcutRootRecord(current[i])
-		if record.BindingItemID == ack.BindingItemID &&
-			record.State == ShortcutRootStateRemovedChildCleanupPending {
-			changed = true
-			continue
-		}
-		records = append(records, record)
-	}
-	if !changed {
+	plan := planShortcutRootArtifactCleanupAck(current, ack)
+	if !plan.Changed {
 		return false, nil
 	}
-	if err := m.ReplaceShortcutRoots(ctx, records); err != nil {
+	if err := m.replaceShortcutRoots(ctx, plan.Records); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func (m *SyncStore) ShortcutChildRunner(ctx context.Context, namespaceID string) (ShortcutChildRunnerPublication, error) {
+func (m *SyncStore) ShortcutChildRunner(
+	ctx context.Context,
+	namespaceID string,
+	parentSyncRoot string,
+) (ShortcutChildRunnerPublication, error) {
 	if m == nil {
 		return ShortcutChildRunnerPublication{NamespaceID: namespaceID}, nil
 	}
-	records, err := m.ListShortcutRoots(ctx)
+	records, err := m.listShortcutRoots(ctx)
 	if err != nil {
 		return ShortcutChildRunnerPublication{}, err
 	}
-	return shortcutChildRunnerPublicationFromRoots(namespaceID, records), nil
+	return shortcutChildRunnerPublicationFromRootsWithParentRoot(namespaceID, parentSyncRoot, records), nil
 }
 
-// ListShortcutRoots returns parent-engine-owned shortcut root state.
-func (m *SyncStore) ListShortcutRoots(ctx context.Context) ([]ShortcutRootRecord, error) {
+// listShortcutRoots returns parent-engine-owned shortcut root state.
+func (m *SyncStore) listShortcutRoots(ctx context.Context) ([]ShortcutRootRecord, error) {
 	return queryShortcutRootRecords(ctx, m.db, "sync: querying shortcut_roots", "sync: iterating shortcut_roots")
 }
 
@@ -133,8 +127,8 @@ func queryShortcutRootRecords(
 	return records, nil
 }
 
-// ReplaceShortcutRoots atomically replaces the parent shortcut-root table.
-func (m *SyncStore) ReplaceShortcutRoots(ctx context.Context, records []ShortcutRootRecord) (err error) {
+// replaceShortcutRoots atomically replaces the parent shortcut-root table.
+func (m *SyncStore) replaceShortcutRoots(ctx context.Context, records []ShortcutRootRecord) (err error) {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sync: beginning shortcut_roots replacement: %w", err)

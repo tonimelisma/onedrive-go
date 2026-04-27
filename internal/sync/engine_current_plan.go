@@ -260,15 +260,16 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 	if refreshErr := flow.engine.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
 		return fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
 	}
-	parentRoots, err := flow.engine.baseline.ListShortcutRoots(ctx)
+	parentRoots, err := flow.engine.baseline.listShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read parent shortcut root state: %w", err)
 	}
 	if flow.engine.shortcutChildRunnerSink == nil {
 		return nil
 	}
-	return flow.engine.shortcutChildRunnerSink(ctx, shortcutChildRunnerPublicationFromRoots(
+	return flow.engine.shortcutChildRunnerSink(ctx, shortcutChildRunnerPublicationFromRootsWithParentRoot(
 		topology.NamespaceID,
+		flow.engine.syncRoot,
 		parentRoots,
 	))
 }
@@ -463,11 +464,15 @@ func (flow *engineFlow) currentShortcutChildPublication(
 		flow.engine.shortcutNamespaceID == "" {
 		return ShortcutChildRunnerPublication{}, nil
 	}
-	roots, err := flow.engine.baseline.ListShortcutRoots(ctx)
+	roots, err := flow.engine.baseline.listShortcutRoots(ctx)
 	if err != nil {
 		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: read current shortcut child publication: %w", err)
 	}
-	return shortcutChildRunnerPublicationFromRoots(flow.engine.shortcutNamespaceID, roots), nil
+	return shortcutChildRunnerPublicationFromRootsWithParentRoot(
+		flow.engine.shortcutNamespaceID,
+		flow.engine.syncRoot,
+		roots,
+	), nil
 }
 
 func (flow *engineFlow) loadCurrentInputs(

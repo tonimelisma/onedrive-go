@@ -107,7 +107,7 @@ func TestNewMountEngine_LoadsPersistedShortcutProtectedRoots(t *testing.T) {
 
 	store, err := openEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
-	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -147,7 +147,7 @@ func TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot(t *testing.T) {
 
 	store, err := openEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
-	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",

@@ -1,6 +1,16 @@
 package sync
 
-func shortcutChildRunnerPublicationFromRoots(namespaceID string, roots []ShortcutRootRecord) ShortcutChildRunnerPublication {
+import (
+	"path/filepath"
+
+	"github.com/tonimelisma/onedrive-go/internal/config"
+)
+
+func shortcutChildRunnerPublicationFromRootsWithParentRoot(
+	namespaceID string,
+	parentSyncRoot string,
+	roots []ShortcutRootRecord,
+) ShortcutChildRunnerPublication {
 	snapshot := ShortcutChildRunnerPublication{
 		NamespaceID: namespaceID,
 		Children:    make([]ShortcutChildRunner, 0, len(roots)),
@@ -10,10 +20,14 @@ func shortcutChildRunnerPublicationFromRoots(namespaceID string, roots []Shortcu
 		if root.NamespaceID != "" && root.NamespaceID != namespaceID {
 			continue
 		}
-		if root.State == ShortcutRootStateRemovedChildCleanupPending {
+		metadata, _ := shortcutRootLifecycleMetadataFor(root.State)
+		if metadata.publishesCleanup {
+			childMountID := config.ChildMountID(namespaceID, root.BindingItemID)
 			snapshot.CleanupRequests = append(snapshot.CleanupRequests, ShortcutChildArtifactCleanupRequest{
 				BindingItemID:     root.BindingItemID,
 				RelativeLocalPath: root.RelativeLocalPath,
+				ChildMountID:      childMountID,
+				LocalRoot:         shortcutChildCleanupLocalRoot(parentSyncRoot, root.RelativeLocalPath),
 				Reason:            ShortcutChildArtifactCleanupParentRemoved,
 			})
 			continue
@@ -34,24 +48,17 @@ func shortcutChildRunnerPublicationFromRoots(namespaceID string, roots []Shortcu
 	return snapshot
 }
 
+func shortcutChildCleanupLocalRoot(parentSyncRoot string, relativeLocalPath string) string {
+	if parentSyncRoot == "" || relativeLocalPath == "" {
+		return ""
+	}
+	return filepath.Join(parentSyncRoot, filepath.FromSlash(relativeLocalPath))
+}
+
 func shortcutChildRunnerActionForRoot(state ShortcutRootState) ShortcutChildRunnerAction {
-	switch state {
-	case "", ShortcutRootStateActive:
-		return ShortcutChildActionRun
-	case ShortcutRootStateRemovedFinalDrain,
-		ShortcutRootStateSamePathReplacementWaiting:
-		return ShortcutChildActionFinalDrain
-	case ShortcutRootStateTargetUnavailable,
-		ShortcutRootStateLocalRootUnavailable,
-		ShortcutRootStateBlockedPath,
-		ShortcutRootStateRenameAmbiguous,
-		ShortcutRootStateAliasMutationBlocked,
-		ShortcutRootStateRemovedReleasePending,
-		ShortcutRootStateRemovedCleanupBlocked,
-		ShortcutRootStateRemovedChildCleanupPending,
-		ShortcutRootStateDuplicateTarget:
-		return ShortcutChildActionSkipParentBlocked
-	default:
+	metadata, ok := shortcutRootLifecycleMetadataFor(state)
+	if !ok || metadata.runnerAction == "" {
 		return ShortcutChildActionSkipParentBlocked
 	}
+	return metadata.runnerAction
 }

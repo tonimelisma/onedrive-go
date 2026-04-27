@@ -60,6 +60,41 @@ func TestShortcutRootStatusMetadataCoversNonActiveStates(t *testing.T) {
 		assert.NotEmpty(t, metadata.Issue)
 		assert.NotEmpty(t, metadata.RecoveryClass)
 		assert.True(t, metadata.AutoRetry)
+		lifecycle, ok := shortcutRootLifecycleMetadataFor(state)
+		require.Truef(t, ok, "missing lifecycle metadata for %s", state)
+		assert.Equal(t, metadata, lifecycle.status)
+		assert.Equal(t, metadata.ProtectsPath, lifecycle.protectsPath)
+		assert.Equal(t, lifecycle.protectsPath, shortcutRootStateKeepsProtectedPaths(state))
+		assert.NotEmpty(t, lifecycle.runnerAction)
+	}
+}
+
+// Validates: R-2.4.8, R-2.4.10
+func TestShortcutRootLifecycleMetadataDrivesRunnerProtectionAndCleanup(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		state            ShortcutRootState
+		protectsPath     bool
+		runnerAction     ShortcutChildRunnerAction
+		publishesCleanup bool
+	}{
+		{ShortcutRootStateActive, true, ShortcutChildActionRun, false},
+		{ShortcutRootStateRemovedFinalDrain, true, ShortcutChildActionFinalDrain, false},
+		{ShortcutRootStateSamePathReplacementWaiting, true, ShortcutChildActionFinalDrain, false},
+		{ShortcutRootStateRemovedChildCleanupPending, false, ShortcutChildActionSkipParentBlocked, true},
+		{ShortcutRootStateDuplicateTarget, true, ShortcutChildActionSkipParentBlocked, false},
+	}
+	for _, tt := range cases {
+		t.Run(string(tt.state), func(t *testing.T) {
+			t.Parallel()
+
+			metadata, ok := shortcutRootLifecycleMetadataFor(tt.state)
+			require.True(t, ok)
+			assert.Equal(t, tt.protectsPath, shortcutRootStateKeepsProtectedPaths(tt.state))
+			assert.Equal(t, tt.runnerAction, shortcutChildRunnerActionForRoot(tt.state))
+			assert.Equal(t, tt.publishesCleanup, metadata.publishesCleanup)
+		})
 	}
 }
 

@@ -153,7 +153,7 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -182,7 +182,7 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 	assert.Equal(t, "Renamed", moved.name)
 	require.Len(t, published.Children, 1)
 	assert.Equal(t, "Shared/Renamed", published.Children[0].RelativeLocalPath)
-	roots, err := eng.baseline.ListShortcutRoots(t.Context())
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, []string{"Shared/Renamed", "Shared/Docs"}, roots[0].ProtectedPaths)

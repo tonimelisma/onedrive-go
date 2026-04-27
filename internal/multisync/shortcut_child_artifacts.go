@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -60,7 +59,6 @@ func (o *Orchestrator) childArtifactCleanupExecutor() shortcutChildArtifactClean
 }
 
 func shortcutChildArtifactCleanups(
-	parentByID map[mountID]*mountSpec,
 	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
 ) []shortcutChildArtifactCleanup {
 	if len(publications) == 0 {
@@ -82,11 +80,15 @@ func shortcutChildArtifactCleanups(
 			if reason == "" {
 				reason = syncengine.ShortcutChildArtifactCleanupParentRemoved
 			}
+			childMountID := request.ChildMountID
+			if childMountID == "" {
+				childMountID = config.ChildMountID(namespaceID, request.BindingItemID)
+			}
 			cleanups = append(cleanups, shortcutChildArtifactCleanup{
-				mountID:       config.ChildMountID(namespaceID, request.BindingItemID),
+				mountID:       childMountID,
 				namespaceID:   namespaceID,
 				bindingItemID: request.BindingItemID,
-				localRoot:     cleanupLocalRoot(parentByID[mountID(namespaceID)], request.RelativeLocalPath),
+				localRoot:     request.LocalRoot,
 				reason:        reason,
 			})
 		}
@@ -100,24 +102,17 @@ func shortcutChildArtifactCleanups(
 	return cleanups
 }
 
-func cleanupLocalRoot(parent *mountSpec, relativeLocalPath string) string {
-	if parent == nil || parent.syncRoot == "" || relativeLocalPath == "" {
-		return ""
-	}
-	return filepath.Join(parent.syncRoot, filepath.FromSlash(relativeLocalPath))
-}
-
-func (o *Orchestrator) purgeShortcutChildArtifactsForCompiled(
+func (o *Orchestrator) purgeShortcutChildArtifactsForDecisions(
 	ctx context.Context,
-	compiled *compiledMountSet,
+	decisions *runnerDecisionSet,
 	parentAckers map[mountID]syncengine.ShortcutChildAckHandle,
 ) error {
-	if compiled == nil || len(compiled.CleanupChildren) == 0 {
+	if decisions == nil || len(decisions.CleanupChildren) == 0 {
 		return nil
 	}
 	var errs []error
-	purged := make([]shortcutChildArtifactCleanup, 0, len(compiled.CleanupChildren))
-	for _, cleanup := range compiled.CleanupChildren {
+	purged := make([]shortcutChildArtifactCleanup, 0, len(decisions.CleanupChildren))
+	for _, cleanup := range decisions.CleanupChildren {
 		scope := shortcutChildArtifactScope{mountID: cleanup.mountID, localRoot: cleanup.localRoot}
 		if err := o.childArtifactCleanupExecutor().purge(ctx, scope); err != nil {
 			errs = append(errs, fmt.Errorf("purging shortcut child mount %s: %w", cleanup.mountID, err))

@@ -57,17 +57,18 @@ func (e *Engine) acknowledgeChildFinalDrain(
 	if _, err := e.reconcileShortcutRootLocalState(ctx); err != nil {
 		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: reconcile shortcut roots after child final drain: %w", err)
 	}
-	snapshot, err := e.baseline.ShortcutChildRunner(ctx, e.shortcutNamespaceID)
+	snapshot, err := e.baseline.ShortcutChildRunner(ctx, e.shortcutNamespaceID, e.syncRoot)
 	if err != nil {
 		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: read shortcut child runner publication after final drain: %w", err)
 	}
 	if e.shortcutChildRunnerSink != nil {
-		roots, rootErr := e.baseline.ListShortcutRoots(ctx)
+		roots, rootErr := e.baseline.listShortcutRoots(ctx)
 		if rootErr != nil {
 			return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: read parent shortcut roots after final drain: %w", rootErr)
 		}
-		if err := e.shortcutChildRunnerSink(ctx, shortcutChildRunnerPublicationFromRoots(
+		if err := e.shortcutChildRunnerSink(ctx, shortcutChildRunnerPublicationFromRootsWithParentRoot(
 			e.shortcutNamespaceID,
+			e.syncRoot,
 			roots,
 		)); err != nil {
 			return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: publish shortcut child runner publication after final drain: %w", err)
@@ -89,7 +90,7 @@ func (e *Engine) acknowledgeChildArtifactsPurged(
 	if _, err := e.baseline.acknowledgeShortcutChildArtifactsPurged(ctx, ack); err != nil {
 		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: acknowledge shortcut child artifact cleanup: %w", err)
 	}
-	snapshot, err := e.baseline.ShortcutChildRunner(ctx, e.shortcutNamespaceID)
+	snapshot, err := e.baseline.ShortcutChildRunner(ctx, e.shortcutNamespaceID, e.syncRoot)
 	if err != nil {
 		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: read shortcut child runner publication after artifact cleanup: %w", err)
 	}

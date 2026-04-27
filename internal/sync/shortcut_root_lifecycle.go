@@ -24,7 +24,7 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 	if e == nil || e.baseline == nil {
 		return false, nil
 	}
-	records, err := e.baseline.ListShortcutRoots(ctx)
+	records, err := e.baseline.listShortcutRoots(ctx)
 	if err != nil {
 		return false, fmt.Errorf("sync: read shortcut roots for local lifecycle: %w", err)
 	}
@@ -50,7 +50,7 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 		}
 		return false, nil
 	}
-	if err := e.baseline.ReplaceShortcutRoots(ctx, nextRecords); err != nil {
+	if err := e.baseline.replaceShortcutRoots(ctx, nextRecords); err != nil {
 		return false, fmt.Errorf("sync: persist shortcut root local lifecycle: %w", err)
 	}
 	if err := e.refreshProtectedRootsFromStore(ctx); err != nil {
@@ -593,7 +593,7 @@ func shortcutRootStateAwaitsReleaseCleanup(state ShortcutRootState) bool {
 }
 
 func (e *Engine) finalizeShortcutRootReleaseByBinding(ctx context.Context, bindingItemID string) error {
-	records, err := e.baseline.ListShortcutRoots(ctx)
+	records, err := e.baseline.listShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read shortcut roots before child drain release: %w", err)
 	}
@@ -614,7 +614,7 @@ func (e *Engine) finalizeShortcutRootReleaseByBinding(ctx context.Context, bindi
 		}
 	}
 	if changed {
-		if err := e.baseline.ReplaceShortcutRoots(ctx, nextRecords); err != nil {
+		if err := e.baseline.replaceShortcutRoots(ctx, nextRecords); err != nil {
 			return fmt.Errorf("sync: persist shortcut root release: %w", err)
 		}
 	}

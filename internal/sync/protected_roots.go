@@ -17,7 +17,7 @@ func (e *Engine) refreshProtectedRootsFromStore(ctx context.Context) error {
 		e.protectedRoots = nil
 		return nil
 	}
-	records, err := e.baseline.ListShortcutRoots(ctx)
+	records, err := e.baseline.listShortcutRoots(ctx)
 	if err != nil {
 		return err
 	}

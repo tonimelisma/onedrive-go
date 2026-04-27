@@ -61,7 +61,7 @@ func (e *Engine) applyShortcutAliasMutation(ctx context.Context, mutation shortc
 }
 
 func (e *Engine) recordShortcutAliasRename(ctx context.Context, mutation shortcutAliasMutation) error {
-	records, err := e.baseline.ListShortcutRoots(ctx)
+	records, err := e.baseline.listShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read shortcut roots after alias rename: %w", err)
 	}
@@ -85,14 +85,14 @@ func (e *Engine) recordShortcutAliasRename(ctx context.Context, mutation shortcu
 	if !changed {
 		return nil
 	}
-	if err := e.baseline.ReplaceShortcutRoots(ctx, records); err != nil {
+	if err := e.baseline.replaceShortcutRoots(ctx, records); err != nil {
 		return fmt.Errorf("sync: persist shortcut roots after alias rename: %w", err)
 	}
 	return nil
 }
 
 func (e *Engine) recordShortcutAliasDelete(ctx context.Context, mutation shortcutAliasMutation) error {
-	records, err := e.baseline.ListShortcutRoots(ctx)
+	records, err := e.baseline.listShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read shortcut roots after alias delete: %w", err)
 	}
@@ -112,7 +112,7 @@ func (e *Engine) recordShortcutAliasDelete(ctx context.Context, mutation shortcu
 	if !changed {
 		return nil
 	}
-	if err := e.baseline.ReplaceShortcutRoots(ctx, records); err != nil {
+	if err := e.baseline.replaceShortcutRoots(ctx, records); err != nil {
 		return fmt.Errorf("sync: persist shortcut roots after alias delete: %w", err)
 	}
 	return nil

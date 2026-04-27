@@ -24,6 +24,7 @@ type oneShotChildRuns struct {
 	parents       map[mountID]*mountSpec
 	parentDone    map[mountID]chan struct{}
 	parentAckers  map[mountID]syncengine.ShortcutChildAckHandle
+	published     map[mountID]bool
 	started       map[mountID]bool
 	startup       []MountStartupResult
 	childReports  []*MountReport
@@ -50,6 +51,7 @@ func newOneShotChildRuns(
 		parents:      parentByID,
 		parentDone:   make(map[mountID]chan struct{}),
 		parentAckers: make(map[mountID]syncengine.ShortcutChildAckHandle),
+		published:    make(map[mountID]bool),
 		started:      make(map[mountID]bool),
 	}
 }
@@ -68,6 +70,9 @@ func (c *oneShotChildRuns) registerParents(work []indexedMountWork) {
 		if _, found := c.parentDone[parentID]; !found {
 			c.parentDone[parentID] = make(chan struct{})
 		}
+		// One-shot children must come from the live parent run, not from
+		// an old publication cached before this parent started.
+		c.orchestrator.forgetParentRunnerPublication(parentID)
 		if !item.work.parentAck.IsZero() {
 			c.parentAckers[parentID] = item.work.parentAck
 		}
@@ -80,24 +85,12 @@ func (c *oneShotChildRuns) notifyParentPublication(ctx context.Context, parentID
 	}
 
 	c.mu.Lock()
-	if c.started[parentID] {
-		c.mu.Unlock()
-		return nil
-	}
-	parent := cloneMountSpec(c.parents[parentID])
-	if parent == nil {
-		c.mu.Unlock()
-		return nil
-	}
-	c.started[parentID] = true
-	c.childRunGroup.Add(1)
+	c.published[parentID] = true
 	c.mu.Unlock()
-
-	go c.runChildrenForParent(ctx, parentID, parent)
 	return nil
 }
 
-func (c *oneShotChildRuns) markParentDone(parentID mountID) {
+func (c *oneShotChildRuns) markParentDone(ctx context.Context, parentID mountID) {
 	if c == nil || parentID == "" {
 		return
 	}
@@ -110,6 +103,28 @@ func (c *oneShotChildRuns) markParentDone(parentID mountID) {
 	if done != nil {
 		close(done)
 	}
+	c.startChildrenForParent(ctx, parentID)
+}
+
+func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID mountID) {
+	if c == nil || parentID == "" {
+		return
+	}
+	c.mu.Lock()
+	if c.started[parentID] || !c.published[parentID] {
+		c.mu.Unlock()
+		return
+	}
+	parent := cloneMountSpec(c.parents[parentID])
+	if parent == nil {
+		c.mu.Unlock()
+		return
+	}
+	c.started[parentID] = true
+	c.childRunGroup.Add(1)
+	c.mu.Unlock()
+
+	go c.runChildrenForParent(ctx, parentID, parent)
 }
 
 func (c *oneShotChildRuns) wait() {
@@ -154,7 +169,7 @@ func (c *oneShotChildRuns) runChildrenForParent(
 	parent *mountSpec,
 ) {
 	defer c.childRunGroup.Done()
-	compiled, err := c.orchestrator.compileRuntimeMountSetForParent(parent)
+	decisions, err := c.orchestrator.buildRunnerDecisionsForParent(parent)
 	if err != nil {
 		c.appendStartup(MountStartupResult{
 			SelectionIndex: parent.selectionIndex,
@@ -166,12 +181,12 @@ func (c *oneShotChildRuns) runChildrenForParent(
 		return
 	}
 
-	childMounts := filterMountSpecsByProjection(compiled.Mounts, MountProjectionChild)
+	childMounts := filterMountSpecsByProjection(decisions.Mounts, MountProjectionChild)
 	childWork, childStartup, childReports := c.orchestrator.prepareRunOnceWork(
 		ctx,
 		c.mode,
 		childMounts,
-		compiled.Skipped,
+		decisions.Skipped,
 		c.opts,
 		nil,
 	)
@@ -182,9 +197,9 @@ func (c *oneShotChildRuns) runChildrenForParent(
 
 	c.waitParentDone(parentID)
 	parentAckers := c.parentAckersFor(parentID)
-	if purgeErr := c.orchestrator.purgeShortcutChildArtifactsForCompiled(
+	if purgeErr := c.orchestrator.purgeShortcutChildArtifactsForDecisions(
 		ctx,
-		compiled,
+		decisions,
 		cloneParentAckHandles(parentAckers),
 	); purgeErr != nil {
 		c.orchestrator.logger.Warn("purging shortcut child state artifacts",
@@ -194,7 +209,7 @@ func (c *oneShotChildRuns) runChildrenForParent(
 	}
 	if finalized, finalizeErr := c.orchestrator.finalizeSuccessfulFinalDrainMounts(
 		ctx,
-		compiled,
+		decisions,
 		childReports,
 		parentAckers,
 	); finalizeErr != nil {

@@ -117,7 +117,7 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsUploadSessionFailure(t *tes
 }
 
 // Validates: R-2.4.8
-func TestOrchestratorPurgeShortcutChildArtifactsForCompiledUsesInjectedExecutor(t *testing.T) {
+func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsUsesInjectedExecutor(t *testing.T) {
 	t.Parallel()
 
 	childMountID := config.ChildMountID("personal:parent@example.com", "binding-cleanup")
@@ -143,7 +143,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForCompiledUsesInjectedExecutor(
 			return nil
 		},
 	}
-	compiled := &compiledMountSet{
+	decisions := &runnerDecisionSet{
 		CleanupChildren: []shortcutChildArtifactCleanup{{
 			mountID:       childMountID,
 			namespaceID:   "personal:parent@example.com",
@@ -160,7 +160,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForCompiledUsesInjectedExecutor(
 		),
 	}
 
-	err := orch.purgeShortcutChildArtifactsForCompiled(context.Background(), compiled, ackers)
+	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers)
 
 	require.NoError(t, err)
 	assert.Len(t, removed, 4)
@@ -171,7 +171,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForCompiledUsesInjectedExecutor(
 }
 
 // Validates: R-2.4.8
-func TestOrchestratorPurgeShortcutChildArtifactsForCompiledReturnsAckFailureAfterCleanup(t *testing.T) {
+func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsReturnsAckFailureAfterCleanup(t *testing.T) {
 	t.Parallel()
 
 	childMountID := config.ChildMountID("personal:parent@example.com", "binding-ack-fail")
@@ -192,7 +192,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForCompiledReturnsAckFailureAfte
 			return nil
 		},
 	}
-	compiled := &compiledMountSet{
+	decisions := &runnerDecisionSet{
 		CleanupChildren: []shortcutChildArtifactCleanup{{
 			mountID:       childMountID,
 			namespaceID:   "personal:parent@example.com",
@@ -207,7 +207,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForCompiledReturnsAckFailureAfte
 		),
 	}
 
-	err := orch.purgeShortcutChildArtifactsForCompiled(context.Background(), compiled, ackers)
+	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parent store temporarily unavailable")
