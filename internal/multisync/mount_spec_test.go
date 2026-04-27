@@ -147,23 +147,23 @@ func TestEngineMountConfigForMount_UsesMountOwnedFields(t *testing.T) {
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_AddsChildProjectionAfterParent(t *testing.T) {
+func TestBuildRunnerDecisions_AddsChildProjectionAfterParent(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	parent.TransferWorkers = 7
 	parent.CheckWorkers = 8
 	parent.MinFreeSpaceBytes = 5 * 1024 * 1024
 
-	compiled, err := compileRuntimeMounts(
+	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, testPublishedShortcutChild()),
 	)
 	require.NoError(t, err)
-	require.Len(t, compiled.Mounts, 2)
-	assert.Empty(t, compiled.Skipped)
+	require.Len(t, decisions.Mounts, 2)
+	assert.Empty(t, decisions.Skipped)
 
-	parentMount := compiled.Mounts[0]
-	childMount := compiled.Mounts[1]
+	parentMount := decisions.Mounts[0]
+	childMount := decisions.Mounts[1]
 
 	assert.Equal(t, MountProjectionStandalone, parentMount.projectionKind)
 	assert.Equal(t, MountProjectionChild, childMount.projectionKind)
@@ -189,77 +189,77 @@ func TestCompileRuntimeMounts_AddsChildProjectionAfterParent(t *testing.T) {
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_ParentPausePausesChildWithoutParentReservationSynthesis(t *testing.T) {
+func TestBuildRunnerDecisions_ParentPausePausesChildWithoutParentReservationSynthesis(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	parent.Paused = true
 
-	compiled, err := compileRuntimeMounts(
+	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, testPublishedShortcutChild()),
 	)
 	require.NoError(t, err)
-	require.Len(t, compiled.Mounts, 2)
-	assert.Empty(t, compiled.Skipped)
+	require.Len(t, decisions.Mounts, 2)
+	assert.Empty(t, decisions.Skipped)
 
-	childMount := compiled.Mounts[1]
+	childMount := decisions.Mounts[1]
 	assert.True(t, childMount.paused)
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_ParentBlockedChildDoesNotSynthesizeParentReservation(t *testing.T) {
+func TestBuildRunnerDecisions_ParentBlockedChildDoesNotSynthesizeParentReservation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	child := testPublishedShortcutChild()
 	child.RunnerAction = syncengine.ShortcutChildActionSkipParentBlocked
 	child.RunnerDetail = "duplicate_content_root"
 
-	compiled, err := compileRuntimeMounts(
+	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, child),
 	)
 	require.NoError(t, err)
-	require.Len(t, compiled.Mounts, 1)
-	require.Len(t, compiled.Skipped, 1)
-	assert.Contains(t, compiled.Skipped[0].Err.Error(), "duplicate_content_root")
+	require.Len(t, decisions.Mounts, 1)
+	require.Len(t, decisions.Skipped, 1)
+	assert.Contains(t, decisions.Skipped[0].Err.Error(), "duplicate_content_root")
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_FinalDrainChildDoesNotSynthesizeParentReservation(t *testing.T) {
+func TestBuildRunnerDecisions_FinalDrainChildDoesNotSynthesizeParentReservation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	child := testPublishedShortcutChild()
 	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
 
-	compiled, err := compileRuntimeMounts(
+	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, child),
 	)
 	require.NoError(t, err)
-	require.Len(t, compiled.Mounts, 2)
-	require.Empty(t, compiled.Skipped)
-	assert.Equal(t, []string{config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")}, compiled.FinalDrainMountIDs)
-	assert.True(t, compiled.Mounts[1].finalDrain)
+	require.Len(t, decisions.Mounts, 2)
+	require.Empty(t, decisions.Skipped)
+	assert.Equal(t, []string{config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")}, decisions.FinalDrainMountIDs)
+	assert.True(t, decisions.Mounts[1].finalDrain)
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_UsesParentRunnerRelativePathOnly(t *testing.T) {
+func TestBuildRunnerDecisions_UsesParentRunnerRelativePathOnly(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	child := testPublishedShortcutChild()
 	child.RelativeLocalPath = "Shortcuts/New Docs"
 
-	compiled, err := compileRuntimeMounts(
+	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, child),
 	)
 	require.NoError(t, err)
-	require.Len(t, compiled.Mounts, 2)
-	assert.Equal(t, filepath.Join(parent.SyncRoot, "Shortcuts", "New Docs"), compiled.Mounts[1].syncRoot)
+	require.Len(t, decisions.Mounts, 2)
+	assert.Equal(t, filepath.Join(parent.SyncRoot, "Shortcuts", "New Docs"), decisions.Mounts[1].syncRoot)
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_UnavailableChildDoesNotSynthesizeParentReservation(t *testing.T) {
+func TestBuildRunnerDecisions_UnavailableChildDoesNotSynthesizeParentReservation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	child := testPublishedShortcutChild()
@@ -268,55 +268,55 @@ func TestCompileRuntimeMounts_UnavailableChildDoesNotSynthesizeParentReservation
 	child.RunnerAction = syncengine.ShortcutChildActionSkipParentBlocked
 	child.RunnerDetail = "shortcut_binding_unavailable"
 
-	compiled, err := compileRuntimeMounts(
+	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, child),
 	)
 	require.NoError(t, err)
-	require.Len(t, compiled.Mounts, 1)
-	require.Len(t, compiled.Skipped, 1)
-	assert.Contains(t, compiled.Skipped[0].Err.Error(), "shortcut_binding_unavailable")
+	require.Len(t, decisions.Mounts, 1)
+	require.Len(t, decisions.Skipped, 1)
+	assert.Contains(t, decisions.Skipped[0].Err.Error(), "shortcut_binding_unavailable")
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_ChildDeltaCapabilityComesFromMountTokenOwner(t *testing.T) {
+func TestBuildRunnerDecisions_ChildDeltaCapabilityComesFromMountTokenOwner(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "business:owner@example.com", "Parent")
 	parent.RemoteRootDeltaCapable = false
 	child := testPublishedShortcutChild()
-	compiled, err := compileRuntimeMounts(
+	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, child),
 	)
 	require.NoError(t, err)
-	require.Len(t, compiled.Mounts, 2)
-	assert.False(t, compiled.Mounts[1].remoteRootDeltaCapable)
-	assert.Equal(t, parent.TokenOwnerCanonical, compiled.Mounts[1].tokenOwnerCanonical)
+	require.Len(t, decisions.Mounts, 2)
+	assert.False(t, decisions.Mounts[1].remoteRootDeltaCapable)
+	assert.Equal(t, parent.TokenOwnerCanonical, decisions.Mounts[1].tokenOwnerCanonical)
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_StandaloneContentRootDoesNotSuppressChild(t *testing.T) {
+func TestBuildRunnerDecisions_StandaloneContentRootDoesNotSuppressChild(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "business:owner@example.com", "Parent")
 	standalone := testStandaloneMount(t, "sharepoint:owner@example.com:site:Docs", "Standalone")
 	standalone.RemoteDriveID = driveid.New("remote-drive")
 	standalone.RemoteRootItemID = "remote-root"
 
-	compiled, err := compileRuntimeMounts(
+	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent, standalone},
 		testParentTopologies(&parent, testPublishedShortcutChild()),
 	)
 	require.NoError(t, err)
-	require.Len(t, compiled.Mounts, 3)
-	assert.Empty(t, compiled.Skipped)
+	require.Len(t, decisions.Mounts, 3)
+	assert.Empty(t, decisions.Skipped)
 }
 
 // Validates: R-2.8.1
-func TestCompileRuntimeMounts_MissingParentSkipsChild(t *testing.T) {
+func TestBuildRunnerDecisions_MissingParentSkipsChild(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 
-	compiled, err := compileRuntimeMounts(
+	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		map[mountID]syncengine.ShortcutChildRunnerPublication{
 			"missing-parent": {
@@ -332,7 +332,7 @@ func TestCompileRuntimeMounts_MissingParentSkipsChild(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	require.Len(t, compiled.Mounts, 1)
-	require.Len(t, compiled.Skipped, 1)
-	assert.Contains(t, compiled.Skipped[0].Err.Error(), "missing parent mount")
+	require.Len(t, decisions.Mounts, 1)
+	require.Len(t, decisions.Skipped, 1)
+	assert.Contains(t, decisions.Skipped[0].Err.Error(), "missing parent mount")
 }

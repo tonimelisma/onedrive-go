@@ -7,18 +7,18 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-type runtimeMountSetPipeline struct {
+type runnerDecisionPipeline struct {
 	orchestrator     *Orchestrator
 	standaloneMounts []StandaloneMountConfig
 	initialStartup   []MountStartupResult
 }
 
-func (o *Orchestrator) buildRuntimeMountSet(
+func (o *Orchestrator) buildRunnerDecisionSet(
 	ctx context.Context,
 	standaloneMounts []StandaloneMountConfig,
 	initialStartup []MountStartupResult,
-) (*compiledMountSet, error) {
-	pipeline := runtimeMountSetPipeline{
+) (*runnerDecisionSet, error) {
+	pipeline := runnerDecisionPipeline{
 		orchestrator:     o,
 		standaloneMounts: standaloneMounts,
 		initialStartup:   initialStartup,
@@ -26,9 +26,9 @@ func (o *Orchestrator) buildRuntimeMountSet(
 	return pipeline.build(ctx)
 }
 
-func (p runtimeMountSetPipeline) build(ctx context.Context) (*compiledMountSet, error) {
+func (p runnerDecisionPipeline) build(ctx context.Context) (*runnerDecisionSet, error) {
 	if ctx == nil {
-		return nil, fmt.Errorf("building runtime mount set: context is required")
+		return nil, fmt.Errorf("building runner decisions: context is required")
 	}
 
 	parents, err := buildStandaloneMountSpecs(p.standaloneMounts)
@@ -37,44 +37,44 @@ func (p runtimeMountSetPipeline) build(ctx context.Context) (*compiledMountSet, 
 	}
 
 	parentPublications := p.orchestrator.latestParentRunnerPublicationsFor(parents)
-	compiled, err := compileRuntimeMountsForParents(parents, parentPublications, p.orchestrator.logger)
+	decisions, err := buildRunnerDecisionsForParents(parents, parentPublications, p.orchestrator.logger)
 	if err != nil {
 		return nil, err
 	}
-	offsetCompiledSelectionIndexes(compiled, nextStartupSelectionIndex(p.initialStartup))
-	compiled.Skipped = append(append([]MountStartupResult(nil), p.initialStartup...), compiled.Skipped...)
+	offsetRunnerDecisionSelectionIndexes(decisions, nextStartupSelectionIndex(p.initialStartup))
+	decisions.Skipped = append(append([]MountStartupResult(nil), p.initialStartup...), decisions.Skipped...)
 
-	return compiled, nil
+	return decisions, nil
 }
 
-func (o *Orchestrator) compileRuntimeMountSetFromParentPublications(
+func (o *Orchestrator) buildRunnerDecisionsFromParentPublications(
 	standaloneMounts []StandaloneMountConfig,
 	initialStartup []MountStartupResult,
-) (*compiledMountSet, error) {
+) (*runnerDecisionSet, error) {
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
 	parentPublications := o.latestParentRunnerPublicationsFor(parents)
-	compiled, err := compileRuntimeMountsForParents(parents, parentPublications, o.logger)
+	decisions, err := buildRunnerDecisionsForParents(parents, parentPublications, o.logger)
 	if err != nil {
 		return nil, err
 	}
-	offsetCompiledSelectionIndexes(compiled, nextStartupSelectionIndex(initialStartup))
-	compiled.Skipped = append(append([]MountStartupResult(nil), initialStartup...), compiled.Skipped...)
+	offsetRunnerDecisionSelectionIndexes(decisions, nextStartupSelectionIndex(initialStartup))
+	decisions.Skipped = append(append([]MountStartupResult(nil), initialStartup...), decisions.Skipped...)
 
-	return compiled, nil
+	return decisions, nil
 }
 
-func (o *Orchestrator) compileRuntimeMountSetForParent(parent *mountSpec) (*compiledMountSet, error) {
+func (o *Orchestrator) buildRunnerDecisionsForParent(parent *mountSpec) (*runnerDecisionSet, error) {
 	if parent == nil {
-		return nil, fmt.Errorf("compiling parent child runners: parent mount is required")
+		return nil, fmt.Errorf("building parent child runner decisions: parent mount is required")
 	}
 	parentCopy := cloneMountSpec(parent)
 	parentPublications := map[mountID]syncengine.ShortcutChildRunnerPublication{
 		parentCopy.mountID: o.latestParentRunnerPublicationFor(parentCopy.mountID),
 	}
-	return compileRuntimeMountsForParents([]*mountSpec{parentCopy}, parentPublications, o.logger)
+	return buildRunnerDecisionsForParents([]*mountSpec{parentCopy}, parentPublications, o.logger)
 }
 
 func nextStartupSelectionIndex(results []MountStartupResult) int {
@@ -88,15 +88,15 @@ func nextStartupSelectionIndex(results []MountStartupResult) int {
 	return next
 }
 
-func offsetCompiledSelectionIndexes(compiled *compiledMountSet, offset int) {
-	if compiled == nil || offset == 0 {
+func offsetRunnerDecisionSelectionIndexes(decisions *runnerDecisionSet, offset int) {
+	if decisions == nil || offset == 0 {
 		return
 	}
-	for i := range compiled.Mounts {
-		compiled.Mounts[i].selectionIndex += offset
+	for i := range decisions.Mounts {
+		decisions.Mounts[i].selectionIndex += offset
 	}
-	for i := range compiled.Skipped {
-		compiled.Skipped[i].SelectionIndex += offset
+	for i := range decisions.Skipped {
+		decisions.Skipped[i].SelectionIndex += offset
 	}
 }
 

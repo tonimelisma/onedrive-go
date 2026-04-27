@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,6 +31,31 @@ func TestShortcutObservationBatch_ShouldApplyCompleteEvenWithoutFacts(t *testing
 	assert.False(t, shortcutTopologyBatch{
 		Kind: shortcutTopologyObservationIncremental,
 	}.shouldApply())
+}
+
+// Validates: R-2.4.8
+func TestShortcutChildRunnerPublicationIncludesExplicitCleanupScope(t *testing.T) {
+	t.Parallel()
+
+	parentRoot := filepath.Join(t.TempDir(), "parent")
+	publication := shortcutChildRunnerPublicationFromRootsWithParentRoot(
+		shortcutNamespaceTestID,
+		parentRoot,
+		[]ShortcutRootRecord{{
+			NamespaceID:       shortcutNamespaceTestID,
+			BindingItemID:     "binding-cleanup",
+			RelativeLocalPath: "Shortcuts/Old",
+			State:             ShortcutRootStateRemovedChildCleanupPending,
+		}},
+	)
+
+	require.Empty(t, publication.Children)
+	require.Len(t, publication.CleanupRequests, 1)
+	cleanup := publication.CleanupRequests[0]
+	assert.Equal(t, "binding-cleanup", cleanup.BindingItemID)
+	assert.Equal(t, "Shortcuts/Old", cleanup.RelativeLocalPath)
+	assert.Equal(t, "personal:owner@example.com|binding:binding-cleanup", cleanup.ChildMountID)
+	assert.Equal(t, filepath.Join(parentRoot, "Shortcuts", "Old"), cleanup.LocalRoot)
 }
 
 // Validates: R-2.4.3, R-2.4.8
@@ -63,7 +89,7 @@ func TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler(t *testi
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	eng.shortcutChildRunnerSink = func(ctx context.Context, publication ShortcutChildRunnerPublication) error {
-		roots, err := eng.baseline.ListShortcutRoots(ctx)
+		roots, err := eng.baseline.listShortcutRoots(ctx)
 		require.NoError(t, err)
 		require.Len(t, roots, 1)
 		assert.Equal(t, "binding-1", roots[0].BindingItemID)

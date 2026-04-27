@@ -243,6 +243,8 @@ func TestReceiveParentRunnerPublication_UsesParentCleanupRequests(t *testing.T) 
 		CleanupRequests: []syncengine.ShortcutChildArtifactCleanupRequest{{
 			BindingItemID:     "binding-old",
 			RelativeLocalPath: "Shortcuts/Old",
+			ChildMountID:      config.ChildMountID(parent.mountID.String(), "binding-old"),
+			LocalRoot:         filepath.Join(parent.syncRoot, "Shortcuts", "Old"),
 			Reason:            syncengine.ShortcutChildArtifactCleanupParentRemoved,
 		}},
 	})
@@ -252,22 +254,24 @@ func TestReceiveParentRunnerPublication_UsesParentCleanupRequests(t *testing.T) 
 	require.Len(t, publication.CleanupRequests, 1)
 	assert.Equal(t, "binding-old", publication.CleanupRequests[0].BindingItemID)
 
-	compiled, err := compileRuntimeMountsForParents(
+	decisions, err := buildRunnerDecisionsForParents(
 		[]*mountSpec{parent},
 		orch.latestParentRunnerPublicationsFor([]*mountSpec{parent}),
 		nil,
 	)
 	require.NoError(t, err)
-	require.Len(t, compiled.Mounts, 1)
-	require.Len(t, compiled.CleanupChildren, 1)
-	assert.Equal(t, config.ChildMountID(parent.mountID.String(), "binding-old"), compiled.CleanupChildren[0].mountID)
-	assert.Equal(t, filepath.Join(parent.syncRoot, "Shortcuts", "Old"), compiled.CleanupChildren[0].localRoot)
+	require.Len(t, decisions.Mounts, 1)
+	require.Len(t, decisions.CleanupChildren, 1)
+	assert.Equal(t, config.ChildMountID(parent.mountID.String(), "binding-old"), decisions.CleanupChildren[0].mountID)
+	assert.Equal(t, filepath.Join(parent.syncRoot, "Shortcuts", "Old"), decisions.CleanupChildren[0].localRoot)
 
 	changed = orch.receiveParentRunnerPublication(parent.mountID, syncengine.ShortcutChildRunnerPublication{
 		NamespaceID: parent.mountID.String(),
 		CleanupRequests: []syncengine.ShortcutChildArtifactCleanupRequest{{
 			BindingItemID:     "binding-old",
 			RelativeLocalPath: "Shortcuts/Old",
+			ChildMountID:      config.ChildMountID(parent.mountID.String(), "binding-old"),
+			LocalRoot:         filepath.Join(parent.syncRoot, "Shortcuts", "Old"),
 			Reason:            syncengine.ShortcutChildArtifactCleanupParentRemoved,
 		}},
 	})
@@ -275,6 +279,37 @@ func TestReceiveParentRunnerPublication_UsesParentCleanupRequests(t *testing.T) 
 	publication = orch.latestParentRunnerPublicationFor(parent.mountID)
 	require.Len(t, publication.CleanupRequests, 1)
 	assert.Equal(t, "binding-old", publication.CleanupRequests[0].BindingItemID)
+}
+
+// Validates: R-2.4.8, R-4.1.4
+func TestParentCleanupRequestUsesExplicitArtifactScope(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	requestedRoot := filepath.Join(t.TempDir(), "published-child-root")
+	requestedMountID := config.ChildMountID(parent.mountID.String(), "binding-cleanup")
+	decisions, err := buildRunnerDecisionsForParents(
+		[]*mountSpec{parent},
+		map[mountID]syncengine.ShortcutChildRunnerPublication{
+			parent.mountID: {
+				NamespaceID: parent.mountID.String(),
+				CleanupRequests: []syncengine.ShortcutChildArtifactCleanupRequest{{
+					BindingItemID:     "binding-cleanup",
+					RelativeLocalPath: "Shortcuts/Old",
+					ChildMountID:      requestedMountID,
+					LocalRoot:         requestedRoot,
+					Reason:            syncengine.ShortcutChildArtifactCleanupParentRemoved,
+				}},
+			},
+		},
+		nil,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, decisions.CleanupChildren, 1)
+	assert.Equal(t, requestedMountID, decisions.CleanupChildren[0].mountID)
+	assert.Equal(t, requestedRoot, decisions.CleanupChildren[0].localRoot)
+	assert.NotEqual(t, filepath.Join(parent.syncRoot, "Shortcuts", "Old"), decisions.CleanupChildren[0].localRoot)
 }
 
 // Validates: R-2.4.8, R-2.8.1, R-4.1.4
@@ -307,7 +342,7 @@ func TestParentWaitingReplacementPublishesOnlyOldFinalDrainChild(t *testing.T) {
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestCompileRuntimeMountsFromParentRunnerPublication_DoesNotClassifyDuplicateAutomaticChildren(t *testing.T) {
+func TestBuildRunnerDecisionsFromParentRunnerPublication_DoesNotClassifyDuplicateAutomaticChildren(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
@@ -322,18 +357,18 @@ func TestCompileRuntimeMountsFromParentRunnerPublication_DoesNotClassifyDuplicat
 		},
 	})
 
-	compiled, err := compileRuntimeMountsForParents(
+	decisions, err := buildRunnerDecisionsForParents(
 		[]*mountSpec{parent},
 		orch.latestParentRunnerPublicationsFor([]*mountSpec{parent}),
 		nil,
 	)
 	require.NoError(t, err)
-	assert.Len(t, compiled.Mounts, 3)
-	assert.Empty(t, compiled.Skipped)
+	assert.Len(t, decisions.Mounts, 3)
+	assert.Empty(t, decisions.Skipped)
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestCompileRuntimeMountsFromParentRunnerPublication_StandaloneContentRootRunsBesideChild(t *testing.T) {
+func TestBuildRunnerDecisionsFromParentRunnerPublication_StandaloneContentRootRunsBesideChild(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
@@ -353,12 +388,12 @@ func TestCompileRuntimeMountsFromParentRunnerPublication_StandaloneContentRootRu
 		},
 	})
 
-	compiled, err := compileRuntimeMountsForParents(
+	decisions, err := buildRunnerDecisionsForParents(
 		[]*mountSpec{parent, standalone},
 		orch.latestParentRunnerPublicationsFor([]*mountSpec{parent, standalone}),
 		nil,
 	)
 	require.NoError(t, err)
-	assert.Len(t, compiled.Mounts, 3)
-	assert.Empty(t, compiled.Skipped)
+	assert.Len(t, decisions.Mounts, 3)
+	assert.Empty(t, decisions.Skipped)
 }

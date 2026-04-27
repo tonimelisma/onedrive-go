@@ -76,14 +76,14 @@ type mountSpec struct {
 	parentRunnerPublicationSink syncengine.ShortcutChildRunnerSink
 }
 
-type compiledMountSet struct {
+type runnerDecisionSet struct {
 	Mounts             []*mountSpec
 	Skipped            []MountStartupResult
 	FinalDrainMountIDs []string
 	CleanupChildren    []shortcutChildArtifactCleanup
 }
 
-type childMountCandidate struct {
+type childRunnerDecision struct {
 	namespaceID       mountID
 	bindingItemID     string
 	localAlias        string
@@ -94,7 +94,7 @@ type childMountCandidate struct {
 	skipErr           error
 }
 
-type unmatchedShortcutChild struct {
+type childWithoutConfiguredParent struct {
 	namespaceID mountID
 	child       syncengine.ShortcutChildRunner
 }
@@ -126,39 +126,39 @@ func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, e
 	return mounts, nil
 }
 
-func compileRuntimeMounts(
+func buildRunnerDecisions(
 	standaloneMounts []StandaloneMountConfig,
 	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
-) (*compiledMountSet, error) {
+) (*runnerDecisionSet, error) {
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
-	return compileRuntimeMountsForParents(parents, publications, nil)
+	return buildRunnerDecisionsForParents(parents, publications, nil)
 }
 
-func compileRuntimeMountsForParents(
+func buildRunnerDecisionsForParents(
 	parents []*mountSpec,
 	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
 	logger *slog.Logger,
-) (*compiledMountSet, error) {
+) (*runnerDecisionSet, error) {
 	parentByID := indexStandaloneMounts(parents)
-	candidatesByParent, unmatchedChildren, err := buildChildMountCandidates(parentByID, publications)
+	childDecisionsByParent, childrenWithoutConfiguredParent, err := buildChildRunnerDecisions(parentByID, publications)
 	if err != nil {
 		return nil, err
 	}
 	finalMounts, skipped := assembleRuntimeMountSet(
 		parents,
-		candidatesByParent,
-		unmatchedChildren,
+		childDecisionsByParent,
+		childrenWithoutConfiguredParent,
 		logger,
 	)
 
-	return &compiledMountSet{
+	return &runnerDecisionSet{
 		Mounts:             finalMounts,
 		Skipped:            skipped,
 		FinalDrainMountIDs: finalDrainMountIDs(publications),
-		CleanupChildren:    shortcutChildArtifactCleanups(parentByID, publications),
+		CleanupChildren:    shortcutChildArtifactCleanups(publications),
 	}, nil
 }
 
@@ -171,29 +171,29 @@ func indexStandaloneMounts(parents []*mountSpec) map[mountID]*mountSpec {
 	return parentByID
 }
 
-func buildChildMountCandidates(
+func buildChildRunnerDecisions(
 	parentByID map[mountID]*mountSpec,
 	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
-) (map[mountID][]*childMountCandidate, []unmatchedShortcutChild, error) {
-	candidatesByParent := make(map[mountID][]*childMountCandidate)
-	unmatchedChildren := make([]unmatchedShortcutChild, 0)
+) (map[mountID][]*childRunnerDecision, []childWithoutConfiguredParent, error) {
+	childDecisionsByParent := make(map[mountID][]*childRunnerDecision)
+	childrenWithoutConfiguredParent := make([]childWithoutConfiguredParent, 0)
 	declaredChildren := sortedPublishedShortcutChildren(publications)
 	for i := range declaredChildren {
 		declared := declaredChildren[i]
 		parent := parentByID[declared.namespaceID]
 		if parent == nil {
-			unmatchedChildren = append(unmatchedChildren, unmatchedShortcutChild(declared))
+			childrenWithoutConfiguredParent = append(childrenWithoutConfiguredParent, childWithoutConfiguredParent(declared))
 			continue
 		}
 
-		candidate, err := buildChildMountCandidate(parent, &declared.child)
+		decision, err := buildChildRunnerDecision(parent, &declared.child)
 		if err != nil {
 			return nil, nil, err
 		}
-		candidatesByParent[parent.mountID] = append(candidatesByParent[parent.mountID], candidate)
+		childDecisionsByParent[parent.mountID] = append(childDecisionsByParent[parent.mountID], decision)
 	}
 
-	return candidatesByParent, unmatchedChildren, nil
+	return childDecisionsByParent, childrenWithoutConfiguredParent, nil
 }
 
 type publishedShortcutChild struct {
@@ -237,19 +237,19 @@ func sortedPublishedShortcutChildren(
 
 func assembleRuntimeMountSet(
 	parents []*mountSpec,
-	candidatesByParent map[mountID][]*childMountCandidate,
-	unmatchedChildren []unmatchedShortcutChild,
+	childDecisionsByParent map[mountID][]*childRunnerDecision,
+	childrenWithoutConfiguredParent []childWithoutConfiguredParent,
 	logger *slog.Logger,
 ) ([]*mountSpec, []MountStartupResult) {
 	finalMounts := make([]*mountSpec, 0, len(parents))
-	skipped := make([]MountStartupResult, 0, len(unmatchedChildren))
+	skipped := make([]MountStartupResult, 0, len(childrenWithoutConfiguredParent))
 	nextIndex := 0
 	for _, parent := range parents {
 		parent.selectionIndex = nextIndex
 		nextIndex++
 		finalMounts = append(finalMounts, parent)
 
-		children := candidatesByParent[parent.mountID]
+		children := childDecisionsByParent[parent.mountID]
 		sort.Slice(children, func(i, j int) bool {
 			if children[i].relativeLocalPath == children[j].relativeLocalPath {
 				return children[i].mount.mountID < children[j].mount.mountID
@@ -258,36 +258,36 @@ func assembleRuntimeMountSet(
 			return children[i].relativeLocalPath < children[j].relativeLocalPath
 		})
 
-		for _, candidate := range children {
-			candidate.mount.selectionIndex = nextIndex
+		for _, decision := range children {
+			decision.mount.selectionIndex = nextIndex
 			nextIndex++
-			if candidate.skipErr != nil {
-				skipped = append(skipped, skippedChildMountResult(candidate, parent.mountID, logger))
+			if decision.skipErr != nil {
+				skipped = append(skipped, skippedChildMountResult(decision, parent.mountID, logger))
 				continue
 			}
 
-			finalMounts = append(finalMounts, candidate.mount)
+			finalMounts = append(finalMounts, decision.mount)
 		}
 	}
 
-	skipped = append(skipped, unmatchedChildStartupResults(unmatchedChildren, nextIndex)...)
+	skipped = append(skipped, childWithoutConfiguredParentStartupResults(childrenWithoutConfiguredParent, nextIndex)...)
 	return finalMounts, skipped
 }
 
-func skippedChildMountResult(candidate *childMountCandidate, parentID mountID, logger *slog.Logger) MountStartupResult {
+func skippedChildMountResult(decision *childRunnerDecision, parentID mountID, logger *slog.Logger) MountStartupResult {
 	if logger != nil {
 		logger.Warn("skipping child mount",
-			"mount_id", candidate.mount.mountID.String(),
+			"mount_id", decision.mount.mountID.String(),
 			"namespace_id", parentID.String(),
-			"relative_local_path", candidate.relativeLocalPath,
-			"error", candidate.skipErr,
+			"relative_local_path", decision.relativeLocalPath,
+			"error", decision.skipErr,
 		)
 	}
 
-	return mountStartupResultForMount(candidate.mount, candidate.skipErr)
+	return mountStartupResultForMount(decision.mount, decision.skipErr)
 }
 
-func unmatchedChildStartupResults(children []unmatchedShortcutChild, startIndex int) []MountStartupResult {
+func childWithoutConfiguredParentStartupResults(children []childWithoutConfiguredParent, startIndex int) []MountStartupResult {
 	results := make([]MountStartupResult, 0, len(children))
 	nextIndex := startIndex
 	for i := range children {
@@ -353,7 +353,7 @@ func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
 	}, nil
 }
 
-func buildChildMountCandidate(parent *mountSpec, child *syncengine.ShortcutChildRunner) (*childMountCandidate, error) {
+func buildChildRunnerDecision(parent *mountSpec, child *syncengine.ShortcutChildRunner) (*childRunnerDecision, error) {
 	if parent == nil || child == nil || child.BindingItemID == "" {
 		return nil, fmt.Errorf("multisync: parent-declared child runner publication is incomplete")
 	}
@@ -397,7 +397,7 @@ func buildChildMountCandidate(parent *mountSpec, child *syncengine.ShortcutChild
 	}
 	skipErr := shortcutChildRunnerSkipError(childMountID, child.RunnerAction, child.RunnerDetail)
 
-	return &childMountCandidate{
+	return &childRunnerDecision{
 		namespaceID:       parent.mountID,
 		bindingItemID:     child.BindingItemID,
 		localAlias:        displayName,
