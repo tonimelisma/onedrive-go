@@ -21,7 +21,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
-const authPreflightTimeout = 30 * time.Second
+// authPreflightTimeout is repo-owned live gate budget, not product runtime
+// behavior. CI evidence shows documented `/me/drives` projection lag can last
+// beyond the ordinary 30-second poll window while the saved login remains
+// valid.
+const authPreflightTimeout = 90 * time.Second
 
 func TestE2E_AuthPreflight_Fast(t *testing.T) {
 	registerLogDump(t)

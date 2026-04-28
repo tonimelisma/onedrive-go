@@ -1071,9 +1071,9 @@ func TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile(t *testin
 	child := testChildRecord(t, mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
 	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
 	childID := child.ChildMountID
-	topology := testParentTopologies(&parent, child)
+	snapshots := testParentProcessSnapshots(&parent, child)
 
-	decisions, err := buildRunnerDecisions([]StandaloneMountConfig{parent}, topology, t.TempDir())
+	decisions, err := buildRunnerDecisions([]StandaloneMountConfig{parent}, snapshots, t.TempDir())
 	require.NoError(t, err)
 	var childMount *mountSpec
 	for i := range decisions.Mounts {
@@ -1418,7 +1418,7 @@ func TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents(t *testing.T)
 }
 
 // Validates: R-2.4.8
-func TestRunOnce_StartsParentChildrenAfterPublishingParentReturns(t *testing.T) {
+func TestRunOnce_StartsParentChildrenAsSoonAsParentPublishes(t *testing.T) {
 	parent := testStandaloneMount(t, "personal:parent-publishing@example.com", "Parent")
 	setupXDGIsolation(t, parent.CanonicalID)
 
@@ -1455,7 +1455,7 @@ func TestRunOnce_StartsParentChildrenAfterPublishingParentReturns(t *testing.T) 
 		case childID:
 			return &mockEngine{
 				runOnceFn: func(context.Context, syncengine.SyncMode, syncengine.RunOptions) (*syncengine.Report, error) {
-					assert.True(t, parentReturned.Load(), "child should start only after publishing parent returns")
+					assert.False(t, parentReturned.Load(), "child should start before publishing parent returns")
 					childStartedOnce.Do(func() { close(childStarted) })
 					return &syncengine.Report{}, nil
 				},
@@ -1472,18 +1472,13 @@ func TestRunOnce_StartsParentChildrenAfterPublishingParentReturns(t *testing.T) 
 
 	select {
 	case <-childStarted:
-		require.FailNow(t, "child started before parent returned")
-	default:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "child did not start before parent returned")
 	}
 	select {
 	case releaseParent <- struct{}{}:
 	default:
 		close(releaseParent)
-	}
-	select {
-	case <-childStarted:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "child did not start after parent returned")
 	}
 
 	var result RunOnceResult
@@ -1550,7 +1545,7 @@ func TestRunOnce_EmptySnapshotDoesNotConsumeOneShotChildStart(t *testing.T) {
 }
 
 // Validates: R-2.4.8
-func TestRunOnce_DelaysFinalDrainStartUntilPublishingParentSafePoint(t *testing.T) {
+func TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	parent := testStandaloneMount(t, "personal:final-drain-safe-point@example.com", "Parent")
@@ -1610,8 +1605,8 @@ func TestRunOnce_DelaysFinalDrainStartUntilPublishingParentSafePoint(t *testing.
 
 	select {
 	case <-childCompleted:
-		require.FailNow(t, "final-drain child started before parent safe point")
-	default:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "final-drain child did not start before parent safe point")
 	}
 	select {
 	case <-acked:
@@ -1630,6 +1625,76 @@ func TestRunOnce_DelaysFinalDrainStartUntilPublishingParentSafePoint(t *testing.
 	case <-time.After(5 * time.Second):
 		require.FailNow(t, "RunOnce did not finish")
 	}
+}
+
+// Validates: R-2.4.8, R-6.3.4
+func TestOneShotChildRuns_ContextCancelBeforeParentSafePointSkipsAck(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	parent := testStandaloneMount(t, "personal:cancel-before-safe-point@example.com", "Parent")
+	child := testChildRecord(t, mountID(parent.CanonicalID.String()), "binding-cancel", "Shortcuts/Docs")
+	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	childID := child.ChildMountID
+
+	cfg := testOrchestratorConfig(t, parent)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+	parentMounts, err := buildStandaloneMountSpecs(cfg.StandaloneMounts)
+	require.NoError(t, err)
+	require.Len(t, parentMounts, 1)
+
+	childCompleted := make(chan struct{})
+	acked := make(chan struct{})
+	var childCompletedOnce sync.Once
+	var ackedOnce sync.Once
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		require.Equal(t, childID, req.Mount.mountID.String())
+		return &mockEngine{
+			runOnceFn: func(context.Context, syncengine.SyncMode, syncengine.RunOptions) (*syncengine.Report, error) {
+				childCompletedOnce.Do(func() { close(childCompleted) })
+				return &syncengine.Report{Succeeded: 1}, nil
+			},
+		}, nil
+	}
+
+	coordinator := newOneShotChildRuns(orch, syncengine.SyncBidirectional, syncengine.RunOptions{}, parentMounts)
+	coordinator.registerParents([]indexedMountWork{{
+		work: mountWork{
+			mount: parentMounts[0],
+			parentAck: mockShortcutChildAckHandle{
+				ackDrainFn: func(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildWorkSnapshot, error) {
+					ackedOnce.Do(func() { close(acked) })
+					return syncengine.ShortcutChildWorkSnapshot{}, nil
+				},
+			},
+		},
+	}})
+	orch.receiveParentChildWorkSnapshot(mountID(parent.CanonicalID.String()), processSnapshot(parent.CanonicalID.String(), child))
+	ctx, cancel := context.WithCancel(t.Context())
+	require.NoError(t, coordinator.notifyParentSnapshot(ctx, mountID(parent.CanonicalID.String())))
+	select {
+	case <-childCompleted:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "child did not start before parent safe point")
+	}
+	cancel()
+	coordinator.wait()
+
+	select {
+	case <-acked:
+		require.FailNow(t, "final-drain ack happened after context cancellation before parent safe point")
+	default:
+	}
+	reports := coordinator.reports()
+	require.Len(t, reports, 2)
+	var safePointErr error
+	for i := range reports {
+		if reports[i].Err != nil {
+			safePointErr = reports[i].Err
+		}
+	}
+	require.Error(t, safePointErr)
+	assert.Contains(t, safePointErr.Error(), "before parent safe point")
 }
 
 // Validates: R-2.4
@@ -1967,14 +2032,14 @@ func TestApplyWatchMountSet_StopsStaleChildBeforeStartingReplacement(t *testing.
 	require.NoError(t, err)
 	child := testPublishedShortcutChild(t)
 	child.Engine.LocalRootIdentity = &syncengine.ShortcutRootIdentity{Device: 1, Inode: 2}
-	oldDecisions, err := buildRunnerDecisionsForParents(parentMounts, testParentTopologies(&parent, child), t.TempDir(), nil)
+	oldDecisions, err := buildRunnerDecisionsForParents(parentMounts, testParentProcessSnapshots(&parent, child), t.TempDir(), nil)
 	require.NoError(t, err)
 
 	nextChild := child
 	nextChild.Engine.LocalRootIdentity = &syncengine.ShortcutRootIdentity{Device: 3, Inode: 4}
 	nextParentMounts, err := buildStandaloneMountSpecs(cfg.StandaloneMounts)
 	require.NoError(t, err)
-	newDecisions, err := buildRunnerDecisionsForParents(nextParentMounts, testParentTopologies(&parent, nextChild), t.TempDir(), nil)
+	newDecisions, err := buildRunnerDecisionsForParents(nextParentMounts, testParentProcessSnapshots(&parent, nextChild), t.TempDir(), nil)
 	require.NoError(t, err)
 
 	var oldChildMount *mountSpec

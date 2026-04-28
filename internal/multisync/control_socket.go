@@ -397,8 +397,9 @@ func (o *Orchestrator) controlStatus(ctx context.Context, mode synccontrol.Owner
 	}
 
 	return synccontrol.StatusResponse{
-		OwnerMode: mode,
-		Mounts:    mounts,
+		OwnerMode:               mode,
+		Mounts:                  mounts,
+		ShortcutCleanupFailures: o.shortcutCleanupDiagnosticSnapshot(),
 	}
 }
 

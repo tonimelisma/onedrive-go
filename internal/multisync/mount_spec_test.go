@@ -35,7 +35,7 @@ func testPublishedShortcutChild(t *testing.T) syncengine.ShortcutChildRunCommand
 	}
 }
 
-func testParentTopologies(
+func testParentProcessSnapshots(
 	parent *StandaloneMountConfig,
 	children ...syncengine.ShortcutChildRunCommand,
 ) map[mountID]syncengine.ShortcutChildWorkSnapshot {
@@ -176,7 +176,7 @@ func TestBuildRunnerDecisions_AddsChildProjectionAfterParent(t *testing.T) {
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
-		testParentTopologies(&parent, testPublishedShortcutChild(t)),
+		testParentProcessSnapshots(&parent, testPublishedShortcutChild(t)),
 		dataDir,
 	)
 	require.NoError(t, err)
@@ -255,7 +255,7 @@ func TestBuildRunnerDecisions_ParentPausePausesChildWithoutParentReservationSynt
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
-		testParentTopologies(&parent, testPublishedShortcutChild(t)),
+		testParentProcessSnapshots(&parent, testPublishedShortcutChild(t)),
 		t.TempDir(),
 	)
 	require.NoError(t, err)
@@ -273,7 +273,7 @@ func TestBuildRunnerDecisions_ParentBlockedSnapshotHasNoChildWork(t *testing.T) 
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
-		testParentTopologies(&parent),
+		testParentProcessSnapshots(&parent),
 		t.TempDir(),
 	)
 	require.NoError(t, err)
@@ -290,7 +290,7 @@ func TestBuildRunnerDecisions_FinalDrainChildDoesNotSynthesizeParentReservation(
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
-		testParentTopologies(&parent, child),
+		testParentProcessSnapshots(&parent, child),
 		t.TempDir(),
 	)
 	require.NoError(t, err)
@@ -308,7 +308,7 @@ func TestBuildRunnerDecisions_UsesParentRunnerRelativePathOnly(t *testing.T) {
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
-		testParentTopologies(&parent, child),
+		testParentProcessSnapshots(&parent, child),
 		t.TempDir(),
 	)
 	require.NoError(t, err)
@@ -326,7 +326,7 @@ func TestBuildRunnerDecisions_MalformedChildDoesNotSynthesizeParentReservation(t
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
-		testParentTopologies(&parent, child),
+		testParentProcessSnapshots(&parent, child),
 		t.TempDir(),
 	)
 	require.Error(t, err)
@@ -342,7 +342,7 @@ func TestBuildRunnerDecisions_ChildDeltaCapabilityComesFromMountTokenOwner(t *te
 	child := testPublishedShortcutChild(t)
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
-		testParentTopologies(&parent, child),
+		testParentProcessSnapshots(&parent, child),
 		t.TempDir(),
 	)
 	require.NoError(t, err)
@@ -361,7 +361,7 @@ func TestBuildRunnerDecisions_StandaloneContentRootDoesNotSuppressChild(t *testi
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent, standalone},
-		testParentTopologies(&parent, testPublishedShortcutChild(t)),
+		testParentProcessSnapshots(&parent, testPublishedShortcutChild(t)),
 		t.TempDir(),
 	)
 	require.NoError(t, err)

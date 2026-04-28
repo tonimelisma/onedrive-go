@@ -41,7 +41,7 @@ Promotion contract:
 | LI-20260408-03 | Serialized `e2e_full` package exceeded the old 30-minute harness timeout | fixed | test harness | 2026-04-08 | no |
 | LI-20260408-02 | `CreateFolder` returned success status with an empty body | mitigated | graph quirk | 2026-04-08 | no |
 | LI-20260408-01 | Immediate post-simple-upload mtime PATCH failed transiently after successful create | mitigated | graph quirk | 2026-04-24 | yes |
-| LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-24 | yes |
+| LI-20260405-06 | Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure | mitigated | graph quirk | 2026-04-28 | yes |
 | LI-20260405-09 | Recently created parent folder lagged child create and child-list routes | mitigated | graph quirk | 2026-04-23 | yes |
 | LI-20260405-08 | Delete-by-ID returned `404 itemNotFound` after successful path lookup | mitigated | graph quirk | 2026-04-07 | yes |
 | LI-20260405-07 | Destination path stayed unreadable after successful mutation | mitigated | graph quirk | 2026-04-22 | yes |
@@ -89,19 +89,21 @@ Promoted docs: [graph-api-quirks.md#pre-authenticated-download-url-401](graph-ap
 ## LI-20260425-01: Fast shortcut fixture preflight saw shared target before delayed root placeholder reappeared
 
 First seen: 2026-04-25
-Last seen: 2026-04-25
+Last seen: 2026-04-28
 Area: fast E2E, shortcut fixture preflight
 Suite / test: local `go run ./cmd/devtool verify default`,
 `TestE2E_FixturePreflight_Fast`
 Classification: graph quirk
 Status: mitigated
 Recurring: yes
-Summary: The writable shortcut fixture's target was still discoverable through
+Summary: The writable shortcut fixture has shown delayed visibility from both
+discovery directions. On April 25, the target was still discoverable through
 `shared --json` and downloadable by shared selector, but parent root
 `ls --json /` omitted the Add-to-OneDrive shortcut placeholder for the full
-poll budget. A later root listing showed the placeholder again with a fresh
-item ID, so the target and credentials were healthy while the Add-to-OneDrive
-root projection was delayed.
+poll budget. On April 28, `shared --json` returned an empty shared list for the
+full standard poll budget, while the same verifier-owned fast preflight passed
+on a narrow rerun. These failures indicate provider visibility lag rather than
+broken credentials when one discovery surface is temporarily empty.
 Evidence:
 - The failed verifier run showed `shared --json` returning
   `Kikkeli Shared Test Folder` with actionable `remoteDriveID` and
@@ -116,13 +118,16 @@ Evidence:
   placeholder materialized in the root with a new item ID and modified time, so
   this response must be treated as indeterminate rather than proof that no
   mutation happened.
-Current handling: Shortcut fixture root-placeholder checks poll the parent
-root listing for the standard live Graph propagation budget before failing.
-The failure remains strict after the poll budget and reports the last root
-names, CLI error, and stdout to distinguish a genuinely broken manual fixture
-from a transient listing omission. If the placeholder does not eventually
-appear, recreating the Add-to-OneDrive shortcut from the OneDrive web UI remains
-the supported fallback.
+- On April 28, `shared --json` returned `last_items=0` for the writable
+  shortcut fixture during the standard 30-second budget, then the targeted fast
+  fixture preflight passed under the same verifier-owned environment.
+Current handling: Shortcut fixture shared-discovery and root-placeholder checks
+poll for the longer shortcut fixture propagation budget before failing. The
+failure remains strict after the poll budget and reports the last shared/root
+visibility evidence to distinguish a genuinely broken manual fixture from a
+transient listing omission. If the placeholder does not eventually appear,
+recreating the Add-to-OneDrive shortcut from the OneDrive web UI remains the
+supported fallback.
 Promoted docs: [graph-api-quirks.md#addtoonedrive-shortcut-visibility-header](graph-api-quirks.md#addtoonedrive-shortcut-visibility-header)
 
 ## LI-20260424-01: Nightly status E2Es decoded deleted drive-shaped status JSON fields
@@ -1051,7 +1056,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 ## LI-20260405-06: Strict auth preflight treated transient `/me` or `/me/drives` glitches as durable failure
 
 First seen: 2026-04-05
-Last seen: 2026-04-24
+Last seen: 2026-04-28
 Area: scheduled/full live verification, auth preflight, drive catalog
 Suite / test: scheduled `e2e_full` `whoami`, local `verify default`
 `TestE2E_AuthPreflight_Fast`, local `verify e2e-full`
@@ -1117,6 +1122,13 @@ Evidence:
   The next cleanup command for that same test account succeeded against
   `GET /me`, confirming the failure was another transient profile endpoint
   outage rather than a durable credential or product regression.
+- PR #661 CI run `25069006652` on April 28, 2026 failed the separate required
+  `e2e` and `integration` jobs for `personal:testitesti18@outlook.com` while
+  the local and CI default verifier jobs passed. The `e2e` job saw 10
+  consecutive `/me/drives = 403 accessDenied` responses over the strict
+  30-second auth-preflight window; the `integration` job exhausted the
+  production 5-attempt `graph.Client.Drives()` quirk retry in
+  `TestIntegration_Drives`.
 - An immediate isolated rerun of the same preflight later passed for that
   account, confirming both the `/me/drives` and `/me` failures were transient.
 Resolution / mitigation: `graph.Client.Drives()` now owns a narrow 5-attempt
@@ -1134,6 +1146,10 @@ side effect does not fail the whole serial sync bucket. Scheduled/manual
 preflight once and only downgrades it when the rerun passes; the verifier
 summary records that classified rerun explicitly so nightly/manual CI can
 distinguish a clean pass from a green-after-rerun pass.
+Required PR live lanes now give the strict auth preflight a longer live-provider
+endpoint budget, and graph integration tests use a test-only drive-discovery
+policy scoped to the integration timeout. Production `graph.Client.Drives()`
+keeps its shorter policy so CLI discovery still degrades promptly for users.
 Promoted docs: [graph-api-quirks.md#strict-auth-preflight-quirks](graph-api-quirks.md#strict-auth-preflight-quirks), [graph-client.md](../design/graph-client.md), [degraded-mode.md](../design/degraded-mode.md), [cli.md](../design/cli.md)
 
 ## LI-20260405-09: Recently created parent folder lagged child create and child-list routes

@@ -350,6 +350,12 @@ func makeCmd(args []string, envOverrides map[string]string) *exec.Cmd {
 // eventual consistency. 30 seconds covers observed propagation delays.
 const pollTimeout = 30 * time.Second
 
+// shortcutFixturePropagationTimeout covers manually-created Add-to-OneDrive
+// shortcut fixtures. Graph can lag longer than ordinary list/stat propagation
+// when surfacing either the shared target search result or the parent root
+// placeholder.
+const shortcutFixturePropagationTimeout = 2 * time.Minute
+
 // remoteWritePropagationTimeout covers slower live-account propagation after
 // successful writes. GitHub-hosted CI has observed newly created folders/files
 // take longer than pollTimeout to become readable via list/stat.

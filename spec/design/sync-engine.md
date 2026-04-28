@@ -66,7 +66,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 | Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
-| Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child work snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroValueReturnsError` |
+| Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child work snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestShortcutRootTransitionMatrixEnumeratesEveryStateAndEvent`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroValueReturnsError` |
 
 ## Construction
 
@@ -193,16 +193,18 @@ read from `engine_runtime_completion.go` plus the trial-specific
 
 Parent child-admission readiness is part of the normal parent run path.
 Multisync attaches a child work snapshot sink before it starts a selected
-parent engine, then waits for that live parent to publish from the normal
+parent engine, then consumes live parent publications from the normal
 current-plan pipeline.
 That pipeline performs the same remote observation cadence decision, full local
 observation, current-plan build, retry/block reconciliation, and shortcut-root
 lifecycle publication the parent needs for ordinary work. One-shot parents
-publish only after the current parent state and protected-root decisions have
-reached the accepted snapshot point and the parent pass has returned;
-multisync admits that parent's children then, without waiting for unrelated
-parents to finish. Watch bootstrap and steady-state changes publish through the
-live parent runner and reconcile only that parent child runner set.
+publish after current parent state and protected-root decisions reach an
+accepted snapshot point; multisync starts that parent's child work immediately
+from that fresh snapshot without waiting for unrelated parents or for the
+publishing parent to return. Only final-drain and artifact-cleanup
+acknowledgements wait for the same live parent's safe acknowledgement point.
+Watch bootstrap and steady-state changes publish through the live parent runner
+and reconcile only that parent child runner set.
 Child runner admission is therefore derived from fresh parent local and remote
 truth rather than cached control-plane state, and multisync never constructs a
 temporary startup parent engine for shortcut admission.
