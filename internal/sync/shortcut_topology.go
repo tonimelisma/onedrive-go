@@ -3,6 +3,7 @@ package sync
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"path"
 	"slices"
 
@@ -73,10 +74,9 @@ type ShortcutChildRunner struct {
 	BindingItemID     string
 	RelativeLocalPath string
 	LocalRoot         string
-	LocalAlias        string
+	DisplayName       string
 	RemoteDriveID     string
 	RemoteItemID      string
-	RemoteIsFolder    bool
 	RunnerAction      ShortcutChildRunnerAction
 	LocalRootIdentity *ShortcutRootIdentity
 }
@@ -109,7 +109,7 @@ func (h ShortcutChildAckHandle) AcknowledgeChildFinalDrain(
 	ack ShortcutChildDrainAck,
 ) (ShortcutChildRunnerPublication, error) {
 	if h.ackFinalDrain == nil {
-		return ShortcutChildRunnerPublication{}, nil
+		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: shortcut child final-drain ack requires live parent")
 	}
 	return h.ackFinalDrain(ctx, ack)
 }
@@ -119,7 +119,7 @@ func (h ShortcutChildAckHandle) AcknowledgeChildArtifactsPurged(
 	ack ShortcutChildArtifactCleanupAck,
 ) (ShortcutChildRunnerPublication, error) {
 	if h.ackArtifactsPurged == nil {
-		return ShortcutChildRunnerPublication{}, nil
+		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: shortcut child artifact cleanup ack requires live parent")
 	}
 	return h.ackArtifactsPurged(ctx, ack)
 }
@@ -262,10 +262,9 @@ type shortcutChildRunnerComparable struct {
 	BindingItemID     string
 	RelativeLocalPath string
 	LocalRoot         string
-	LocalAlias        string
+	DisplayName       string
 	RemoteDriveID     string
 	RemoteItemID      string
-	RemoteIsFolder    bool
 	RunnerAction      ShortcutChildRunnerAction
 }
 
@@ -278,10 +277,9 @@ func shortcutChildRunnerComparableFor(child *ShortcutChildRunner) shortcutChildR
 		BindingItemID:     child.BindingItemID,
 		RelativeLocalPath: child.RelativeLocalPath,
 		LocalRoot:         child.LocalRoot,
-		LocalAlias:        child.LocalAlias,
+		DisplayName:       child.DisplayName,
 		RemoteDriveID:     child.RemoteDriveID,
 		RemoteItemID:      child.RemoteItemID,
-		RemoteIsFolder:    child.RemoteIsFolder,
 		RunnerAction:      child.RunnerAction,
 	}
 }

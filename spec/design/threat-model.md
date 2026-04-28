@@ -6,7 +6,7 @@ Implements: R-6.10.7 [verified]
 
 | Behavior | Evidence |
 | --- | --- |
-| Threat-boundary claims are backed by rooted filesystem, Graph redaction, and repo-consistency enforcement tests. | `internal/fsroot/fsroot_test.go`, `internal/localpath/localpath_test.go`, `internal/graph/client_test.go`, `internal/devtool/verify_repo_checks_test.go` |
+| Threat-boundary claims are backed by rooted filesystem, Graph redaction, and package-level behavior tests. | `internal/fsroot/fsroot_test.go`, `internal/localpath/localpath_test.go`, `internal/graph/client_test.go` |
 | Durable-state and degraded-mode trust assumptions are exercised by sync-store, startup diagnosis, and reset-guidance tests. | `internal/sync/engine_run_once_test.go`, `internal/sync/schema_test.go`, `internal/cli/status_test.go`, `internal/cli/sync_runtime_test.go` |
 
 ## Assets
@@ -60,7 +60,7 @@ Explicit non-goals:
 | Logs | Token or pre-auth URL disclosure | redaction types, structured logging policy, no secret logging |
 | SQLite state | Corruption or split-brain state | WAL mode, single durable authority, transactional writes |
 | Resource exhaustion | unbounded response bodies, runaway pagination, too many events | response-body caps, page/depth guards, debounced buffering, bounded workers |
-| Privileged subprocess / signal / SQL entrypoints | hidden side effects or widened trust boundaries | verifier-enforced allowlist for `exec.CommandContext`, `signal.Notify`, `sql.Open`, and raw `http.Client.Do` |
+| Privileged subprocess / signal / SQL entrypoints | hidden side effects or widened trust boundaries | narrow owner packages, linted runtime imports, and package-level tests |
 
 ## Existing Mitigations
 
@@ -76,11 +76,10 @@ Explicit non-goals:
 | Mitigation | Evidence |
 |------------|----------|
 | Rooted filesystem boundaries and atomic replacement writes | `internal/fsroot/fsroot_test.go` (`TestRoot_AtomicWrite_WritesFileAtomically`, `TestRoot_AtomicWrite_RejectsRootEscape`), `internal/localpath/localpath_test.go` (`TestAtomicWrite`, `TestAtomicWrite_CleansTempOnRenameFailure`) |
-| Graph normalization, redaction, and pre-auth boundary discipline | `internal/graph/client_test.go` (`TestDo_DebugLogsNeverExposeBearerToken`, `TestDoPreAuth_ErrorBodyCappedAt64KiB`, `TestDoOnce_401_RefreshSucceeds`), `internal/devtool/verify_repo_checks_test.go` (`TestRunRepoConsistencyChecksFailsOnHTTPClientDoOutsideApprovedBoundary`) |
+| Graph normalization, redaction, and pre-auth boundary discipline | `internal/graph/client_test.go` (`TestDo_DebugLogsNeverExposeBearerToken`, `TestDoPreAuth_ErrorBodyCappedAt64KiB`, `TestDoOnce_401_RefreshSucceeds`) |
 | Managed token/config file validation and rooted writes | `internal/graph/auth_test.go` (`TestSaveToken_AtomicWrite`, `TestLoadToken_InvalidJSON`), `internal/config/write_test.go` (`TestAtomicWriteFile_WritesFile`) |
 | Observer-side invalid-path and permission containment | `internal/sync/permission_handler_test.go` (`TestPermHandler_HandleLocalPermission_DirectoryLevel`, `TestPermHandler_Handle403_NoPermissionRoot`), `internal/sync/engine_watch_test.go` (`TestRunWatch_AllObserversDead_ReturnsError`) |
 | Durable state authority and crash recovery | `internal/sync/engine_run_once_test.go` (`TestNewEngine_RequiresResetForNonSQLiteStateDB`, `TestNewEngine_RequiresResetForIncompatibleSchemaStateDB`, `TestNewEngine_RequiresResetForUnsupportedStoreGeneration`, `TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta`, `TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/cli/drive_reset_sync_state_test.go` (`TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`) |
-| Privileged API boundaries kept narrow by repo verification | `internal/devtool/verify_repo_checks_test.go` (`TestRunRepoConsistencyChecksFailsOnExecCommandContextOutsideApprovedBoundary`, `TestRunRepoConsistencyChecksFailsOnSQLOpenOutsideApprovedBoundary`, `TestRunRepoConsistencyChecksFailsOnSignalNotifyOutsideApprovedBoundary`) |
 
 ## Residual Risks And Follow-Ups
 

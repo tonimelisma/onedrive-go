@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // Validates: R-2.4.8, R-2.4.10
@@ -200,6 +201,69 @@ func TestPlanMissingMaterializedShortcutRootPrefersHistoricalProjectionMove(t *t
 	assert.Equal(t, shortcutRootMissingAliasMoveProjection, plan.Action)
 	assert.Equal(t, "Shared/Old", plan.FromRelativePath)
 	assert.Equal(t, "Shared/Docs", plan.ToRelativePath)
+}
+
+// Validates: R-2.4.8, R-2.4.10
+func TestPlanShortcutRootMaterializeResultKeepsSideEffectsOutOfDecision(t *testing.T) {
+	t.Parallel()
+
+	activeRecord := ShortcutRootRecord{
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		State:             ShortcutRootStateActive,
+	}
+	unavailableRecord := activeRecord
+	unavailableRecord.State = ShortcutRootStateLocalRootUnavailable
+
+	createFailed := planShortcutRootMaterializeResult(activeRecord, shortcutRootMaterializeResult{
+		CreateErr: synctree.ErrUnsafePath,
+	})
+	assert.Equal(t, ShortcutRootStateBlockedPath, createFailed.Next.State)
+	assert.True(t, createFailed.Keep)
+
+	identityFailed := planShortcutRootMaterializeResult(unavailableRecord, shortcutRootMaterializeResult{
+		IdentityErr: errors.New("permission denied"),
+	})
+	assert.Equal(t, ShortcutRootStateLocalRootUnavailable, identityFailed.Next.State)
+	assert.Contains(t, identityFailed.Next.BlockedDetail, "permission denied")
+
+	created := planShortcutRootMaterializeResult(unavailableRecord, shortcutRootMaterializeResult{
+		Identity: &synctree.FileIdentity{Device: 7, Inode: 8},
+	})
+	assert.Equal(t, ShortcutRootStateActive, created.Next.State)
+	require.NotNil(t, created.Next.LocalRootIdentity)
+	assert.Equal(t, uint64(7), created.Next.LocalRootIdentity.Device)
+}
+
+// Validates: R-2.4.8, R-2.4.10
+func TestPlanShortcutProjectionMoveResultKeepsSideEffectsOutOfDecision(t *testing.T) {
+	t.Parallel()
+
+	activeRecord := ShortcutRootRecord{
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		State:             ShortcutRootStateActive,
+	}
+	unavailableRecord := activeRecord
+	unavailableRecord.State = ShortcutRootStateLocalRootUnavailable
+
+	moveFailed := planShortcutProjectionMoveResult(activeRecord, shortcutRootProjectionMoveResult{
+		MoveErr: errors.New("target exists"),
+	})
+	assert.Equal(t, ShortcutRootStateBlockedPath, moveFailed.Next.State)
+	assert.Contains(t, moveFailed.Next.BlockedDetail, "target exists")
+
+	identityFailed := planShortcutProjectionMoveResult(unavailableRecord, shortcutRootProjectionMoveResult{
+		IdentityErr: errors.New("identity unavailable"),
+	})
+	assert.Equal(t, ShortcutRootStateLocalRootUnavailable, identityFailed.Next.State)
+
+	moved := planShortcutProjectionMoveResult(unavailableRecord, shortcutRootProjectionMoveResult{
+		Identity: &synctree.FileIdentity{Device: 9, Inode: 10},
+	})
+	assert.Equal(t, ShortcutRootStateActive, moved.Next.State)
+	require.NotNil(t, moved.Next.LocalRootIdentity)
+	assert.Equal(t, uint64(9), moved.Next.LocalRootIdentity.Device)
 }
 
 // Validates: R-2.4.8, R-2.4.10

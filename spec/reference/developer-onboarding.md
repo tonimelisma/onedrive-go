@@ -318,7 +318,7 @@ able to scan this table and place every top-level code area.
 | `internal/cli` | Cobra command tree, CLI bootstrap, output formatting, command-family workflows, and final user-facing condition rendering | You are changing any user-facing command or command wiring |
 
 | `internal/config` | TOML config loading, validation, path resolution, drive sections, and account reconciliation helpers | You are changing config semantics or lookup rules |
-| `internal/devtool` | Repo-owned verifier, benchmarks, worktree tooling, and cleanup audit | You are changing developer workflow or repo consistency policy |
+| `internal/devtool` | Repo-owned verifier, benchmarks, worktree tooling, and cleanup audit | You are changing developer workflow policy |
 | `internal/driveid` | Type-safe drive identity types and canonicalization | You are touching drive selectors or canonical drive identity |
 | `internal/driveops` | `SessionRuntime`, authenticated drive sessions, transfer operations, and path-convergence workflows | You are changing runtime reuse, get/put behavior, or local transfer rules |
 | `internal/errclass` | Canonical runtime failure class enum | You are changing cross-boundary failure classification |
@@ -549,15 +549,15 @@ go run ./cmd/devtool verify default
 Other profiles exist for public, e2e, e2e-full, integration, and stress work.
 
 If you are new here, it is worth opening `internal/devtool/verify.go`,
-`verify_docs.go`, `verify_e2e.go`, `verify_repo_checks.go`, and
-`verify_summary.go`. Those files explain a lot about what the repo considers
-architecturally important.
+`verify_e2e.go`, `verify_stress.go`, and `verify_summary.go`. Those files
+explain the repo-owned verification flow without hiding it behind external
+scripts.
 
 ### FAQ
 
 **Why not just run `go test ./...` and call it done?**
 
-Because the repo treats architecture checks, doc consistency, live-test
+Because the repo treats format, lint, build, race+coverage, live-test
 orchestration, and coverage policy as part of the contract. `devtool verify`
 encodes that contract.
 
@@ -577,7 +577,7 @@ The file-family split inside `internal/devtool` is also worth knowing:
 
 | File family | Role |
 | --- | --- |
-| `verify.go`, `verify_docs.go`, `verify_e2e.go`, `verify_repo_checks.go`, `verify_stress.go`, `verify_summary.go` | Verification profile orchestration, docs checks, repo checks, E2E orchestration, stress profiles, summaries |
+| `verify.go`, `verify_e2e.go`, `verify_stress.go`, `verify_summary.go` | Verification profile orchestration, E2E orchestration, stress profiles, summaries |
 | `worktree.go` | Worktree creation and bootstrap rooted at `origin/main`; callers must fetch first |
 | `bench.go`, `bench_live.go` | Benchmark scenarios, result recording, and live benchmark runs against real accounts |
 | `cleanup_audit.go` | Read-only git cleanup classification |

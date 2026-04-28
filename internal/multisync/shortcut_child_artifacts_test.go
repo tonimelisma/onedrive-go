@@ -224,3 +224,37 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsReturnsAckFailureAft
 	assert.Contains(t, err.Error(), "parent store temporarily unavailable")
 	assert.Equal(t, []string{childMountID}, pruned)
 }
+
+// Validates: R-2.4.8
+func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsRequiresLiveParentAck(t *testing.T) {
+	t.Parallel()
+
+	childMountID := config.ChildMountID("personal:parent@example.com", "binding-no-ack")
+	orch := NewOrchestrator(&OrchestratorConfig{
+		Logger: slog.New(slog.DiscardHandler),
+	})
+	orch.artifactCleanup = shortcutChildArtifactCleanupExecutor{
+		logger: orch.logger,
+		remove: func(string) error {
+			return nil
+		},
+		pruneCatalogRecord: func(string) error {
+			return nil
+		},
+		deleteUploadSessions: func(string, string) error {
+			return nil
+		},
+	}
+	decisions := &runnerDecisionSet{
+		CleanupChildren: []shortcutChildArtifactCleanup{{
+			mountID:       childMountID,
+			namespaceID:   "personal:parent@example.com",
+			bindingItemID: "binding-no-ack",
+		}},
+	}
+
+	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parent mount personal:parent@example.com is unavailable for child artifact cleanup acknowledgement")
+}

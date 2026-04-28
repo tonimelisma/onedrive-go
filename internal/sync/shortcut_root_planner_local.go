@@ -51,6 +51,18 @@ type shortcutRootLocalObservationPlan struct {
 	Changed bool
 }
 
+type shortcutRootMaterializeResult struct {
+	Identity    *synctree.FileIdentity
+	CreateErr   error
+	IdentityErr error
+}
+
+type shortcutRootProjectionMoveResult struct {
+	Identity    *synctree.FileIdentity
+	MoveErr     error
+	IdentityErr error
+}
+
 func shortcutRootLocalObservationForPathError(err error) shortcutRootLocalObservation {
 	kind := shortcutRootLocalObservationUnavailable
 	if errors.Is(err, synctree.ErrUnsafePath) ||
@@ -124,6 +136,82 @@ func planShortcutRootPathError(record ShortcutRootRecord, err error) ShortcutRoo
 		return planShortcutRootUnavailable(record, err.Error())
 	}
 	return planShortcutRootUnavailable(record, err.Error())
+}
+
+//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
+func planShortcutRootMaterializeResult(
+	record ShortcutRootRecord,
+	result shortcutRootMaterializeResult,
+) shortcutRootLocalObservationPlan {
+	record = normalizeShortcutRootRecord(record)
+	if result.CreateErr != nil {
+		next := planShortcutRootPathError(record, result.CreateErr)
+		return shortcutRootLocalObservationPlan{
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(record, next),
+		}
+	}
+	if result.IdentityErr != nil {
+		next := planShortcutRootUnavailable(record, result.IdentityErr.Error())
+		return shortcutRootLocalObservationPlan{
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(record, next),
+		}
+	}
+	if result.Identity == nil {
+		next := planShortcutRootUnavailable(record, "shortcut alias local root identity is unavailable")
+		return shortcutRootLocalObservationPlan{
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(record, next),
+		}
+	}
+	next := planShortcutRootMaterialized(record, *result.Identity)
+	return shortcutRootLocalObservationPlan{
+		Next:    next,
+		Keep:    true,
+		Changed: !shortcutRootRecordsEqual(record, next),
+	}
+}
+
+//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
+func planShortcutProjectionMoveResult(
+	record ShortcutRootRecord,
+	result shortcutRootProjectionMoveResult,
+) shortcutRootLocalObservationPlan {
+	record = normalizeShortcutRootRecord(record)
+	if result.MoveErr != nil {
+		next := planShortcutRootBlocked(record, result.MoveErr.Error())
+		return shortcutRootLocalObservationPlan{
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(record, next),
+		}
+	}
+	if result.IdentityErr != nil {
+		next := planShortcutRootUnavailable(record, result.IdentityErr.Error())
+		return shortcutRootLocalObservationPlan{
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(record, next),
+		}
+	}
+	if result.Identity == nil {
+		next := planShortcutRootUnavailable(record, "shortcut alias local root identity is unavailable")
+		return shortcutRootLocalObservationPlan{
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(record, next),
+		}
+	}
+	next := planShortcutProjectionMoveSuccess(record, *result.Identity)
+	return shortcutRootLocalObservationPlan{
+		Next:    next,
+		Keep:    true,
+		Changed: !shortcutRootRecordsEqual(record, next),
+	}
 }
 
 //nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.

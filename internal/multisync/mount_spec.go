@@ -68,29 +68,57 @@ type mountSpec struct {
 	transferWorkers             int
 	checkWorkers                int
 	minFreeSpace                int64
-	child                       *childMountSpec
+	child                       *childMountRuntime
 	parentRunnerPublicationSink syncengine.ShortcutChildRunnerSink
+}
+
+type parentMountSpec struct {
+	mountID                   mountID
+	selectionIndex            int
+	canonicalID               driveid.CanonicalID
+	driveType                 string
+	rejectSharePointRootForms bool
+	displayName               string
+	syncRoot                  string
+	statePath                 string
+	remoteDriveID             driveid.ID
+	remoteRootItemID          string
+	tokenOwnerCanonical       driveid.CanonicalID
+	accountEmail              string
+	paused                    bool
+	enableWebsocket           bool
+	remoteRootDeltaCapable    bool
+	transferWorkers           int
+	checkWorkers              int
+	minFreeSpace              int64
 }
 
 type childMountSpec struct {
 	parentMountID            mountID
+	mountID                  mountID
 	bindingItemID            string
+	displayName              string
+	syncRoot                 string
+	statePath                string
+	remoteDriveID            driveid.ID
+	remoteRootItemID         string
+	tokenOwnerCanonical      driveid.CanonicalID
+	accountEmail             string
+	paused                   bool
+	enableWebsocket          bool
+	remoteRootDeltaCapable   bool
+	transferWorkers          int
+	checkWorkers             int
+	minFreeSpace             int64
 	finalDrain               bool
 	expectedSyncRootIdentity *syncengine.ShortcutRootIdentity
 }
 
-type parentMountSpecInput struct {
-	Config *StandaloneMountConfig
-}
-
-type childMountSpecInput struct {
-	Parent       *mountSpec
-	Child        *syncengine.ShortcutChildRunner
-	ChildMountID string
-	DisplayName  string
-	LocalRoot    string
-	StatePath    string
-	TokenOwner   driveid.CanonicalID
+type childMountRuntime struct {
+	parentMountID            mountID
+	bindingItemID            string
+	finalDrain               bool
+	expectedSyncRootIdentity *syncengine.ShortcutRootIdentity
 }
 
 type runnerDecisionSet struct {
@@ -316,7 +344,7 @@ func childWithoutConfiguredParentStartupResults(children []childWithoutConfigure
 	nextIndex := startIndex
 	for i := range children {
 		child := children[i].child
-		displayName := child.LocalAlias
+		displayName := child.DisplayName
 		if displayName == "" {
 			displayName = path.Base(child.RelativeLocalPath)
 		}
@@ -343,25 +371,27 @@ func childWithoutConfiguredParentStartupResults(children []childWithoutConfigure
 }
 
 func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
-	return buildParentMountSpec(parentMountSpecInput{Config: cfg})
+	spec, err := newParentMountSpec(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return spec.runtimeMountSpec(), nil
 }
 
-func buildParentMountSpec(input parentMountSpecInput) (*mountSpec, error) {
-	cfg := input.Config
+func newParentMountSpec(cfg *StandaloneMountConfig) (parentMountSpec, error) {
 	if cfg == nil || cfg.CanonicalID.IsZero() {
-		return nil, fmt.Errorf("multisync: standalone mount canonical ID is required")
+		return parentMountSpec{}, fmt.Errorf("multisync: standalone mount canonical ID is required")
 	}
 	if cfg.StatePath == "" {
-		return nil, fmt.Errorf("multisync: state path is required for %s", cfg.CanonicalID)
+		return parentMountSpec{}, fmt.Errorf("multisync: state path is required for %s", cfg.CanonicalID)
 	}
 	accountEmail := cfg.AccountEmail
 	if accountEmail == "" {
 		accountEmail = cfg.TokenOwnerCanonical.Email()
 	}
 
-	return &mountSpec{
+	return parentMountSpec{
 		mountID:                   mountID(cfg.CanonicalID.String()),
-		projectionKind:            MountProjectionStandalone,
 		selectionIndex:            cfg.SelectionIndex,
 		canonicalID:               cfg.CanonicalID,
 		driveType:                 cfg.CanonicalID.DriveType(),
@@ -382,6 +412,30 @@ func buildParentMountSpec(input parentMountSpecInput) (*mountSpec, error) {
 	}, nil
 }
 
+func (spec *parentMountSpec) runtimeMountSpec() *mountSpec {
+	return &mountSpec{
+		mountID:                   spec.mountID,
+		projectionKind:            MountProjectionStandalone,
+		selectionIndex:            spec.selectionIndex,
+		canonicalID:               spec.canonicalID,
+		driveType:                 spec.driveType,
+		rejectSharePointRootForms: spec.rejectSharePointRootForms,
+		displayName:               spec.displayName,
+		syncRoot:                  spec.syncRoot,
+		statePath:                 spec.statePath,
+		remoteDriveID:             spec.remoteDriveID,
+		remoteRootItemID:          spec.remoteRootItemID,
+		tokenOwnerCanonical:       spec.tokenOwnerCanonical,
+		accountEmail:              spec.accountEmail,
+		paused:                    spec.paused,
+		enableWebsocket:           spec.enableWebsocket,
+		remoteRootDeltaCapable:    spec.remoteRootDeltaCapable,
+		transferWorkers:           spec.transferWorkers,
+		checkWorkers:              spec.checkWorkers,
+		minFreeSpace:              spec.minFreeSpace,
+	}
+}
+
 func buildChildRunnerDecision(parent *mountSpec, child *syncengine.ShortcutChildRunner) (*childRunnerDecision, error) {
 	if parent == nil || child == nil || child.BindingItemID == "" {
 		return nil, fmt.Errorf("multisync: parent-declared child runner publication is incomplete")
@@ -396,21 +450,14 @@ func buildChildRunnerDecision(parent *mountSpec, child *syncengine.ShortcutChild
 		return nil, fmt.Errorf("multisync: state path is required for child mount %s", childMountID)
 	}
 
-	displayName := child.LocalAlias
+	displayName := child.DisplayName
 	if displayName == "" {
 		displayName = path.Base(relativePath)
 	}
 	tokenOwner := parent.tokenOwnerCanonical
 
-	childMount := buildChildMountSpec(&childMountSpecInput{
-		Parent:       parent,
-		Child:        child,
-		ChildMountID: childMountID,
-		DisplayName:  displayName,
-		LocalRoot:    child.LocalRoot,
-		StatePath:    statePath,
-		TokenOwner:   tokenOwner,
-	})
+	childSpec := newChildMountSpec(parent, child, childMountID, displayName, statePath, tokenOwner)
+	childMount := childSpec.runtimeMountSpec()
 	skipErr := shortcutChildRunnerSkipError(childMountID, child.RunnerAction)
 
 	return &childRunnerDecision{
@@ -444,32 +491,59 @@ func validatePublishedShortcutChildScope(child *syncengine.ShortcutChildRunner) 
 	return childMountID, nil
 }
 
-func buildChildMountSpec(input *childMountSpecInput) *mountSpec {
-	parent := input.Parent
-	child := input.Child
-	tokenOwner := input.TokenOwner
+func newChildMountSpec(
+	parent *mountSpec,
+	child *syncengine.ShortcutChildRunner,
+	childMountID string,
+	displayName string,
+	statePath string,
+	tokenOwner driveid.CanonicalID,
+) childMountSpec {
+	return childMountSpec{
+		parentMountID:            parent.mountID,
+		mountID:                  mountID(childMountID),
+		bindingItemID:            child.BindingItemID,
+		displayName:              displayName,
+		syncRoot:                 child.LocalRoot,
+		statePath:                statePath,
+		remoteDriveID:            driveid.New(child.RemoteDriveID),
+		remoteRootItemID:         child.RemoteItemID,
+		tokenOwnerCanonical:      tokenOwner,
+		accountEmail:             tokenOwner.Email(),
+		paused:                   parent.paused,
+		enableWebsocket:          parent.enableWebsocket,
+		remoteRootDeltaCapable:   config.RemoteRootDeltaCapableForTokenOwner(tokenOwner),
+		transferWorkers:          parent.transferWorkers,
+		checkWorkers:             parent.checkWorkers,
+		minFreeSpace:             parent.minFreeSpace,
+		finalDrain:               child.RunnerAction == syncengine.ShortcutChildActionFinalDrain,
+		expectedSyncRootIdentity: cloneChildRootIdentity(child.LocalRootIdentity),
+	}
+}
+
+func (spec *childMountSpec) runtimeMountSpec() *mountSpec {
 	return &mountSpec{
-		mountID:                mountID(input.ChildMountID),
+		mountID:                spec.mountID,
 		projectionKind:         MountProjectionChild,
 		canonicalID:            driveid.CanonicalID{},
-		displayName:            input.DisplayName,
-		syncRoot:               input.LocalRoot,
-		statePath:              input.StatePath,
-		remoteDriveID:          driveid.New(child.RemoteDriveID),
-		remoteRootItemID:       child.RemoteItemID,
-		tokenOwnerCanonical:    tokenOwner,
-		accountEmail:           tokenOwner.Email(),
-		paused:                 parent.paused,
-		enableWebsocket:        parent.enableWebsocket,
-		remoteRootDeltaCapable: config.RemoteRootDeltaCapableForTokenOwner(tokenOwner),
-		transferWorkers:        parent.transferWorkers,
-		checkWorkers:           parent.checkWorkers,
-		minFreeSpace:           parent.minFreeSpace,
-		child: &childMountSpec{
-			parentMountID:            parent.mountID,
-			bindingItemID:            child.BindingItemID,
-			finalDrain:               child.RunnerAction == syncengine.ShortcutChildActionFinalDrain,
-			expectedSyncRootIdentity: cloneChildRootIdentity(child.LocalRootIdentity),
+		displayName:            spec.displayName,
+		syncRoot:               spec.syncRoot,
+		statePath:              spec.statePath,
+		remoteDriveID:          spec.remoteDriveID,
+		remoteRootItemID:       spec.remoteRootItemID,
+		tokenOwnerCanonical:    spec.tokenOwnerCanonical,
+		accountEmail:           spec.accountEmail,
+		paused:                 spec.paused,
+		enableWebsocket:        spec.enableWebsocket,
+		remoteRootDeltaCapable: spec.remoteRootDeltaCapable,
+		transferWorkers:        spec.transferWorkers,
+		checkWorkers:           spec.checkWorkers,
+		minFreeSpace:           spec.minFreeSpace,
+		child: &childMountRuntime{
+			parentMountID:            spec.parentMountID,
+			bindingItemID:            spec.bindingItemID,
+			finalDrain:               spec.finalDrain,
+			expectedSyncRootIdentity: spec.expectedSyncRootIdentity,
 		},
 	}
 }

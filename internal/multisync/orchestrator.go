@@ -107,8 +107,8 @@ type Orchestrator struct {
 	controlMounts []string
 	shortcutMu    gosync.Mutex
 	// latestParentRunnerPublications is an ephemeral exact cache of parent
-	// engine output. It is rebuildable from live parents and never owns
-	// shortcut lifecycle policy.
+	// engine output. It is rebuildable from live parents, is cleared when the
+	// parent exits or restarts, and never owns shortcut lifecycle policy.
 	latestParentRunnerPublications map[mountID]syncengine.ShortcutChildRunnerPublication
 	reconcileTicks                 func(time.Duration) (<-chan time.Time, func())
 	artifactCleanup                shortcutChildArtifactCleanupExecutor

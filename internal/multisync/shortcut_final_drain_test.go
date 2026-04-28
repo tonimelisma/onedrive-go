@@ -15,10 +15,10 @@ func TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable(t *testing.T) {
 	t.Parallel()
 
 	mounts := []*mountSpec{
-		{mountID: "clean", child: &childMountSpec{bindingItemID: "binding-clean"}},
-		{mountID: "failed", child: &childMountSpec{bindingItemID: "binding-failed"}},
-		{mountID: "missing", child: &childMountSpec{bindingItemID: "binding-missing"}},
-		{mountID: "root-missing", child: &childMountSpec{bindingItemID: "binding-root"}},
+		{mountID: "clean", child: &childMountRuntime{bindingItemID: "binding-clean"}},
+		{mountID: "failed", child: &childMountRuntime{bindingItemID: "binding-failed"}},
+		{mountID: "missing", child: &childMountRuntime{bindingItemID: "binding-missing"}},
+		{mountID: "root-missing", child: &childMountRuntime{bindingItemID: "binding-root"}},
 	}
 	reports := []*MountReport{
 		{
@@ -60,4 +60,29 @@ func TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable(t *testing.T) {
 	require.Len(t, clean, 1)
 	assert.Equal(t, "clean", clean[0].MountID)
 	assert.Equal(t, "binding-clean", clean[0].BindingItemID)
+}
+
+// Validates: R-2.4.8
+func TestAcknowledgeSuccessfulFinalDrainsRequiresLiveParentAck(t *testing.T) {
+	t.Parallel()
+
+	_, err := acknowledgeSuccessfulFinalDrains(
+		t.Context(),
+		[]shortcutChildDrainResult{{
+			MountID:       "child",
+			BindingItemID: "binding-clean",
+			Status:        shortcutChildDrainClean,
+		}},
+		[]*mountSpec{{
+			mountID: "child",
+			child: &childMountRuntime{
+				parentMountID: "parent",
+				bindingItemID: "binding-clean",
+			},
+		}},
+		nil,
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parent mount parent is unavailable for final-drain acknowledgement")
 }

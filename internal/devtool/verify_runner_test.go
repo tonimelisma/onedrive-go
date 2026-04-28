@@ -18,7 +18,6 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRepoConsistencyFixtures(t, repoRoot)
 
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
@@ -98,7 +97,6 @@ func TestRunVerifyPublicRunsExpectedSteps(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRepoConsistencyFixtures(t, repoRoot)
 
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
@@ -443,7 +441,6 @@ func TestRunVerifyWritesSummaryJSONOnSuccess(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRepoConsistencyFixtures(t, repoRoot)
 	summaryPath := filepath.Join(t.TempDir(), "verify-summary.json")
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
@@ -469,7 +466,6 @@ func TestRunVerifyWritesSummaryJSONOnSuccess(t *testing.T) {
 	assert.Equal(t, verifySummaryStatusPass, summary.Status)
 	assert.GreaterOrEqual(t, summary.TotalDurationMS, int64(0))
 	assertVerifySummaryHasStep(t, summary, "format")
-	assertVerifySummaryHasStep(t, summary, "repo consistency")
 	assertVerifySummaryHasStep(t, summary, "e2e-full compile")
 	assert.Empty(t, summary.ClassifiedReruns)
 	assert.Contains(t, stdout.String(), "verify summary")
@@ -755,45 +751,6 @@ func TestRunVerifyStressWritesSlowTestSummaryToStdoutAndJSON(t *testing.T) {
 }
 
 // Validates: R-6.2.1
-func TestRunVerifyFailsOnForbiddenRepoPattern(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := t.TempDir()
-	writeRepoConsistencyFixtures(t, repoRoot)
-	badDir := filepath.Join(repoRoot, "internal", "bad")
-	require.NoError(t, os.MkdirAll(badDir, 0o750))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(badDir, "bad.go"),
-		[]byte(strings.Join([]string{
-			"package bad",
-			"",
-			"func forbiddenPattern() string {",
-			"\treturn \"graph.MustNewClient(nil, nil)\"",
-			"}",
-			"",
-		}, "\n")),
-		0o600,
-	))
-
-	runner := &fakeRunner{
-		outputs: map[string][]byte{
-			"go tool cover -func=" + filepath.Join(repoRoot, "cover.out"): []byte("total:\t(statements)\t76.5%\n"),
-		},
-	}
-
-	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot:          repoRoot,
-		Profile:           VerifyPublic,
-		CoverageThreshold: 76.0,
-		CoverageFile:      filepath.Join(repoRoot, "cover.out"),
-		Stdout:            &bytes.Buffer{},
-		Stderr:            &bytes.Buffer{},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "MustNewClient")
-}
-
-// Validates: R-6.2.1
 func TestParseCoverageTotal(t *testing.T) {
 	t.Parallel()
 
@@ -807,7 +764,6 @@ func TestRunVerifyCoverageThresholdFailure(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRepoConsistencyFixtures(t, repoRoot)
 
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
@@ -834,15 +790,6 @@ func TestResolveVerifyPlanRejectsUnknownProfile(t *testing.T) {
 	_, err := resolveVerifyPlan("weird")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "usage")
-}
-
-func TestRunRepoConsistencyChecksPassesCurrentActiveDocCLIExamples(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := t.TempDir()
-	writeRepoConsistencyFixtures(t, repoRoot)
-
-	require.NoError(t, runRepoConsistencyChecks(repoRoot))
 }
 
 func TestWriteVerifySummaryRoundTripsJSON(t *testing.T) {

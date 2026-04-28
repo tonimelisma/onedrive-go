@@ -37,10 +37,9 @@ func shortcutChildRunnerPublicationFromRootsWithParentRoot(
 			BindingItemID:     root.BindingItemID,
 			RelativeLocalPath: root.RelativeLocalPath,
 			LocalRoot:         shortcutChildLocalRoot(parentSyncRoot, root.RelativeLocalPath),
-			LocalAlias:        root.LocalAlias,
+			DisplayName:       root.LocalAlias,
 			RemoteDriveID:     root.RemoteDriveID.String(),
 			RemoteItemID:      root.RemoteItemID,
-			RemoteIsFolder:    root.RemoteIsFolder,
 			RunnerAction:      shortcutChildRunnerActionForRoot(root.State),
 			LocalRootIdentity: shortcutRootIdentityFromFileIdentity(root.LocalRootIdentity),
 		}
