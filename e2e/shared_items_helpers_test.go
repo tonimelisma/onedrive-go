@@ -25,10 +25,7 @@ import (
 type shortcutChildE2ERecord struct {
 	MountID           string
 	NamespaceID       string
-	BindingItemID     string
 	RelativeLocalPath string
-	RemoteDriveID     string
-	RemoteItemID      string
 	State             syncengine.ShortcutRootState
 	StateReason       string
 }
@@ -387,12 +384,6 @@ func findActiveShortcutChild(
 			record.RelativeLocalPath != relativeLocalPath {
 			continue
 		}
-		if fixture.SharedItem.RemoteDriveID != "" && record.RemoteDriveID != fixture.SharedItem.RemoteDriveID {
-			continue
-		}
-		if fixture.SharedItem.RemoteItemID != "" && record.RemoteItemID != fixture.SharedItem.RemoteItemID {
-			continue
-		}
 		assert.Equal(t, syncengine.ShortcutRootStateActive, record.State)
 		assert.Empty(t, record.StateReason)
 		return record, true
@@ -423,10 +414,7 @@ func shortcutChildRecords(
 		records = append(records, shortcutChildE2ERecord{
 			MountID:           root.MountID,
 			NamespaceID:       parentID.String(),
-			BindingItemID:     root.BindingItemID,
-			RelativeLocalPath: root.RelativeLocalPath,
-			RemoteDriveID:     root.RemoteDriveID,
-			RemoteItemID:      root.RemoteItemID,
+			RelativeLocalPath: root.SortPath,
 			State:             state,
 			StateReason:       stateReason,
 		})

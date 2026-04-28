@@ -1,4 +1,3 @@
-//nolint:gocritic // Planner helpers pass ShortcutRootRecord by value to keep transition decisions immutable.
 package sync
 
 import (
@@ -14,7 +13,7 @@ func planShortcutRootTopology(
 ) shortcutRootTopologyPlan {
 	byBinding := make(map[string]ShortcutRootRecord, len(current))
 	for i := range current {
-		record := normalizeShortcutRootRecord(current[i])
+		record := normalizeShortcutRootRecord(&current[i])
 		if record.BindingItemID == "" {
 			continue
 		}
@@ -31,7 +30,7 @@ func planShortcutRootTopology(
 	records := make([]ShortcutRootRecord, 0, len(byBinding))
 	for bindingID := range byBinding {
 		record := byBinding[bindingID]
-		records = append(records, normalizeShortcutRootRecord(record))
+		records = append(records, normalizeShortcutRootRecord(&record))
 	}
 	slices.SortFunc(records, func(a, b ShortcutRootRecord) int {
 		if a.RelativeLocalPath == b.RelativeLocalPath {
@@ -52,13 +51,13 @@ func applyShortcutRootRemoteDeletes(
 		if !ok {
 			continue
 		}
-		next := plannedShortcutRootTransition(record,
+		next := plannedShortcutRootTransition(&record,
 			shortcutRootEventRemoteDelete,
 			ShortcutRootStateRemovedFinalDrain,
 			"",
 		)
 		next.ProtectedPaths = protectedPathsForShortcutRoot(next.RelativeLocalPath, next.ProtectedPaths)
-		if !shortcutRootRecordsEqual(record, next) {
+		if !shortcutRootRecordsEqual(&record, &next) {
 			byBinding[next.BindingItemID] = next
 			changed = true
 		}
@@ -78,7 +77,7 @@ func applyShortcutRootRemoteUnavailable(
 		if existing, ok := byBinding[fact.BindingItemID]; ok {
 			next.LocalRootIdentity = existing.LocalRootIdentity
 			next.Waiting = cloneShortcutRootReplacement(existing.Waiting)
-			transitioned := plannedShortcutRootTransition(existing,
+			transitioned := plannedShortcutRootTransition(&existing,
 				shortcutRootEventRemoteUnavailable,
 				ShortcutRootStateTargetUnavailable,
 				fact.Reason,
@@ -86,7 +85,7 @@ func applyShortcutRootRemoteUnavailable(
 			next.State = transitioned.State
 			next.BlockedDetail = transitioned.BlockedDetail
 		}
-		changed = upsertShortcutRootRecord(byBinding, next) || changed
+		changed = upsertShortcutRootRecord(byBinding, &next) || changed
 	}
 	return changed
 }
@@ -104,19 +103,19 @@ func applyShortcutRootRemoteUpserts(
 			continue
 		}
 		if _, found := activeProtectedShortcutRootForPath(byBinding, next.RelativeLocalPath, next.BindingItemID); found {
-			next = plannedShortcutRootTransition(next,
+			next = plannedShortcutRootTransition(&next,
 				shortcutRootEventProtectedPathConflict,
 				ShortcutRootStateBlockedPath,
 				"shortcut alias path is protected by another shortcut root",
 			)
 			next.ProtectedPaths = protectedPathsForShortcutRoot(next.RelativeLocalPath, next.ProtectedPaths)
-			changed = upsertShortcutRootRecord(byBinding, next) || changed
+			changed = upsertShortcutRootRecord(byBinding, &next) || changed
 			continue
 		}
 		if existing, ok := byBinding[upserts[i].BindingItemID]; ok {
-			next = planShortcutRootRemoteUpsertForExisting(existing, next)
+			next = planShortcutRootRemoteUpsertForExisting(&existing, &next)
 		}
-		changed = upsertShortcutRootRecord(byBinding, next) || changed
+		changed = upsertShortcutRootRecord(byBinding, &next) || changed
 	}
 	return changed
 }
@@ -141,7 +140,7 @@ func applyShortcutRootSamePathReplacement(
 		RemoteIsFolder:    next.RemoteIsFolder,
 	}
 	owner.Waiting = &waiting
-	owner = plannedShortcutRootTransition(owner,
+	owner = plannedShortcutRootTransition(&owner,
 		shortcutRootEventSamePathReplacement,
 		ShortcutRootStateSamePathReplacementWaiting,
 		owner.BlockedDetail,
@@ -152,24 +151,28 @@ func applyShortcutRootSamePathReplacement(
 }
 
 func planShortcutRootRemoteUpsertForExisting(
-	existing ShortcutRootRecord,
-	next ShortcutRootRecord,
+	existing *ShortcutRootRecord,
+	next *ShortcutRootRecord,
 ) ShortcutRootRecord {
+	if existing == nil || next == nil {
+		return ShortcutRootRecord{}
+	}
+	normalizedNext := normalizeShortcutRootRecord(next)
 	transitioned := plannedShortcutRootTransition(existing,
 		shortcutRootEventRemoteUpsert,
 		ShortcutRootStateActive,
 		"",
 	)
-	next.State = transitioned.State
-	next.BlockedDetail = transitioned.BlockedDetail
-	next.LocalRootIdentity = existing.LocalRootIdentity
-	if existing.RelativeLocalPath != "" && existing.RelativeLocalPath != next.RelativeLocalPath {
-		next.ProtectedPaths = protectedPathsForShortcutRoot(
-			next.RelativeLocalPath,
+	normalizedNext.State = transitioned.State
+	normalizedNext.BlockedDetail = transitioned.BlockedDetail
+	normalizedNext.LocalRootIdentity = existing.LocalRootIdentity
+	if existing.RelativeLocalPath != "" && existing.RelativeLocalPath != normalizedNext.RelativeLocalPath {
+		normalizedNext.ProtectedPaths = protectedPathsForShortcutRoot(
+			normalizedNext.RelativeLocalPath,
 			append(existing.ProtectedPaths, existing.RelativeLocalPath),
 		)
 	}
-	return next
+	return normalizedNext
 }
 
 func applyShortcutRootCompleteOmission(
@@ -186,7 +189,7 @@ func applyShortcutRootCompleteOmission(
 		if _, ok := seen[bindingID]; ok || shortcutRootCompleteOmissionKeepsState(record.State) {
 			continue
 		}
-		record = plannedShortcutRootTransition(record,
+		record = plannedShortcutRootTransition(&record,
 			shortcutRootEventCompleteOmission,
 			ShortcutRootStateRemovedFinalDrain,
 			"",
@@ -245,7 +248,8 @@ type duplicateShortcutTargetKey struct {
 func duplicateShortcutTargetDetails(records map[string]ShortcutRootRecord) map[string]string {
 	byTarget := make(map[duplicateShortcutTargetKey][]ShortcutRootRecord)
 	for bindingID := range records {
-		record := normalizeShortcutRootRecord(records[bindingID])
+		record := records[bindingID]
+		record = normalizeShortcutRootRecord(&record)
 		if !shortcutRootParticipatesInDuplicateTargetCheck(&record) {
 			continue
 		}
@@ -286,16 +290,17 @@ func applyDuplicateShortcutTargetDetails(
 ) bool {
 	changed := false
 	for bindingID := range records {
-		record := normalizeShortcutRootRecord(records[bindingID])
+		record := records[bindingID]
+		record = normalizeShortcutRootRecord(&record)
 		detail, isDuplicate := duplicateBindings[bindingID]
 		switch {
 		case isDuplicate && record.State != ShortcutRootStateDuplicateTarget:
-			next := plannedShortcutRootTransition(record,
+			next := plannedShortcutRootTransition(&record,
 				shortcutRootEventDuplicateTargetDetected,
 				ShortcutRootStateDuplicateTarget,
 				detail,
 			)
-			if !shortcutRootRecordsEqual(record, next) {
+			if !shortcutRootRecordsEqual(&record, &next) {
 				records[bindingID] = next
 				changed = true
 			}
@@ -304,12 +309,12 @@ func applyDuplicateShortcutTargetDetails(
 			records[bindingID] = record
 			changed = true
 		case !isDuplicate && record.State == ShortcutRootStateDuplicateTarget:
-			next := plannedShortcutRootTransition(record,
+			next := plannedShortcutRootTransition(&record,
 				shortcutRootEventDuplicateTargetResolved,
 				ShortcutRootStateActive,
 				"",
 			)
-			if !shortcutRootRecordsEqual(record, next) {
+			if !shortcutRootRecordsEqual(&record, &next) {
 				records[bindingID] = next
 				changed = true
 			}
@@ -322,7 +327,7 @@ func shortcutRootParticipatesInDuplicateTargetCheck(record *ShortcutRootRecord) 
 	if record == nil {
 		return false
 	}
-	normalized := normalizeShortcutRootRecord(*record)
+	normalized := normalizeShortcutRootRecord(record)
 	if normalized.RemoteDriveID.IsZero() || normalized.RemoteItemID == "" {
 		return false
 	}
@@ -347,18 +352,21 @@ func shortcutRootParticipatesInDuplicateTargetCheck(record *ShortcutRootRecord) 
 	}
 }
 
-func upsertShortcutRootRecord(records map[string]ShortcutRootRecord, next ShortcutRootRecord) bool {
-	next = normalizeShortcutRootRecord(next)
-	current, found := records[next.BindingItemID]
-	if found && shortcutRootRecordsEqual(current, next) {
+func upsertShortcutRootRecord(records map[string]ShortcutRootRecord, next *ShortcutRootRecord) bool {
+	if next == nil {
 		return false
 	}
-	records[next.BindingItemID] = next
+	normalized := normalizeShortcutRootRecord(next)
+	current, found := records[normalized.BindingItemID]
+	if found && shortcutRootRecordsEqual(&current, &normalized) {
+		return false
+	}
+	records[normalized.BindingItemID] = normalized
 	return true
 }
 
 func shortcutRootRecordFromUpsert(namespaceID string, fact shortcutBindingUpsert) ShortcutRootRecord {
-	return normalizeShortcutRootRecord(ShortcutRootRecord{
+	record := ShortcutRootRecord{
 		NamespaceID:       namespaceID,
 		BindingItemID:     fact.BindingItemID,
 		RelativeLocalPath: fact.RelativeLocalPath,
@@ -368,11 +376,12 @@ func shortcutRootRecordFromUpsert(namespaceID string, fact shortcutBindingUpsert
 		RemoteIsFolder:    fact.RemoteIsFolder,
 		State:             ShortcutRootStateActive,
 		ProtectedPaths:    []string{fact.RelativeLocalPath},
-	})
+	}
+	return normalizeShortcutRootRecord(&record)
 }
 
 func shortcutRootRecordFromUnavailable(namespaceID string, fact shortcutBindingUnavailable) ShortcutRootRecord {
-	return normalizeShortcutRootRecord(ShortcutRootRecord{
+	record := ShortcutRootRecord{
 		NamespaceID:       namespaceID,
 		BindingItemID:     fact.BindingItemID,
 		RelativeLocalPath: fact.RelativeLocalPath,
@@ -383,7 +392,8 @@ func shortcutRootRecordFromUnavailable(namespaceID string, fact shortcutBindingU
 		State:             ShortcutRootStateTargetUnavailable,
 		ProtectedPaths:    []string{fact.RelativeLocalPath},
 		BlockedDetail:     fact.Reason,
-	})
+	}
+	return normalizeShortcutRootRecord(&record)
 }
 
 func samePathRetiringShortcutRoot(
@@ -419,7 +429,8 @@ func activeProtectedShortcutRootForPath(
 	}
 	normalizedPath := normalizedProtectedRootPath(relativeLocalPath)
 	for bindingID := range records {
-		record := normalizeShortcutRootRecord(records[bindingID])
+		record := records[bindingID]
+		record = normalizeShortcutRootRecord(&record)
 		if bindingID == nextBindingID || !shortcutRootStateKeepsProtectedPaths(record.State) {
 			continue
 		}
@@ -439,7 +450,7 @@ func activeProtectedShortcutRootForPath(
 }
 
 func shortcutRootRecordFromReplacement(namespaceID string, replacement ShortcutRootReplacement) ShortcutRootRecord {
-	return normalizeShortcutRootRecord(ShortcutRootRecord{
+	record := ShortcutRootRecord{
 		NamespaceID:       namespaceID,
 		BindingItemID:     replacement.BindingItemID,
 		RelativeLocalPath: replacement.RelativeLocalPath,
@@ -449,7 +460,8 @@ func shortcutRootRecordFromReplacement(namespaceID string, replacement ShortcutR
 		RemoteIsFolder:    replacement.RemoteIsFolder,
 		State:             ShortcutRootStateActive,
 		ProtectedPaths:    []string{replacement.RelativeLocalPath},
-	})
+	}
+	return normalizeShortcutRootRecord(&record)
 }
 
 func compareString(a, b string) int {

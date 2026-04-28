@@ -1,4 +1,3 @@
-//nolint:gocritic // Lifecycle shell carries planner records by value at observe/execute boundaries.
 package sync
 
 import (
@@ -79,16 +78,16 @@ func (e *Engine) reconcileShortcutRootLocalStateRecord(
 	if record == nil {
 		return shortcutRootLocalReconcileStep{}, nil
 	}
-	normalized := normalizeShortcutRootRecord(*record)
+	normalized := normalizeShortcutRootRecord(record)
 	if shortcutRootStateAwaitsReleaseCleanup(normalized.State) {
-		next, changed, err := e.finalizeShortcutRootReleaseRecord(normalized)
+		next, changed, err := e.finalizeShortcutRootReleaseRecord(&normalized)
 		return shortcutRootLocalReconcileStep{
 			records:           next,
 			changed:           changed,
 			releaseCleanupErr: err,
 		}, nil
 	}
-	next, keep, changed, err := e.reconcileShortcutRootRecord(ctx, *record, localRows)
+	next, keep, changed, err := e.reconcileShortcutRootRecord(ctx, record, localRows)
 	if err != nil {
 		return shortcutRootLocalReconcileStep{}, err
 	}
@@ -101,11 +100,14 @@ func (e *Engine) reconcileShortcutRootLocalStateRecord(
 
 func (e *Engine) reconcileShortcutRootRecord(
 	ctx context.Context,
-	record ShortcutRootRecord,
+	record *ShortcutRootRecord,
 	localRows []LocalStateRow,
 ) (ShortcutRootRecord, bool, bool, error) {
-	record = normalizeShortcutRootRecord(record)
-	switch record.State {
+	if record == nil {
+		return ShortcutRootRecord{}, false, false, nil
+	}
+	normalized := normalizeShortcutRootRecord(record)
+	switch normalized.State {
 	case "",
 		ShortcutRootStateActive,
 		ShortcutRootStateTargetUnavailable,
@@ -116,19 +118,19 @@ func (e *Engine) reconcileShortcutRootRecord(
 		ShortcutRootStateDuplicateTarget:
 	case ShortcutRootStateRemovedFinalDrain,
 		ShortcutRootStateSamePathReplacementWaiting:
-		return e.reconcileRetiringShortcutRootLocalState(record)
+		return e.reconcileRetiringShortcutRootLocalState(&normalized)
 	case ShortcutRootStateRemovedReleasePending,
 		ShortcutRootStateRemovedCleanupBlocked,
 		ShortcutRootStateRemovedChildCleanupPending:
-		return record, true, false, nil
+		return normalized, true, false, nil
 	}
-	observation := e.observeShortcutRootLocalState(&record)
-	plan := planShortcutRootLocalObservation(record, observation)
+	observation := e.observeShortcutRootLocalState(&normalized)
+	plan := planShortcutRootLocalObservation(&normalized, &observation)
 	switch plan.Action {
 	case shortcutRootLocalKeepRecord:
 		return plan.Next, plan.Keep, plan.Changed, nil
 	case shortcutRootLocalMaterializeRoot:
-		return e.materializeShortcutRoot(record, observation.RelativePath)
+		return e.materializeShortcutRoot(&normalized, observation.RelativePath)
 	case shortcutRootLocalDropRecord,
 		shortcutRootLocalMutateAlias,
 		shortcutRootLocalMoveProjection:
@@ -136,13 +138,17 @@ func (e *Engine) reconcileShortcutRootRecord(
 	case shortcutRootLocalNoop:
 	}
 	relativePath := observation.RelativePath
-	return e.reconcileMissingMaterializedShortcutRoot(ctx, record, relativePath, localRows)
+	return e.reconcileMissingMaterializedShortcutRoot(ctx, &normalized, relativePath, localRows)
 }
 
 func (e *Engine) reconcileRetiringShortcutRootLocalState(
-	record ShortcutRootRecord,
+	record *ShortcutRootRecord,
 ) (ShortcutRootRecord, bool, bool, error) {
-	plan := planRetiringShortcutRootLocalObservation(record, e.observeShortcutRootLocalState(&record))
+	if record == nil {
+		return ShortcutRootRecord{}, false, false, nil
+	}
+	observation := e.observeShortcutRootLocalState(record)
+	plan := planRetiringShortcutRootLocalObservation(record, &observation)
 	return plan.Next, plan.Keep, plan.Changed, nil
 }
 
@@ -178,9 +184,12 @@ func (e *Engine) observeShortcutRootLocalState(record *ShortcutRootRecord) short
 }
 
 func (e *Engine) materializeShortcutRoot(
-	record ShortcutRootRecord,
+	record *ShortcutRootRecord,
 	relativePath string,
 ) (ShortcutRootRecord, bool, bool, error) {
+	if record == nil {
+		return ShortcutRootRecord{}, false, false, nil
+	}
 	createErr := e.syncTree.MkdirAllNoFollow(relativePath, shortcutRootDirPerm)
 	if createErr != nil {
 		plan := planShortcutRootMaterializeResult(record, shortcutRootMaterializeResult{CreateErr: createErr})
@@ -197,24 +206,31 @@ func (e *Engine) materializeShortcutRoot(
 
 func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 	ctx context.Context,
-	record ShortcutRootRecord,
+	record *ShortcutRootRecord,
 	relativePath string,
 	localRows []LocalStateRow,
 ) (ShortcutRootRecord, bool, bool, error) {
+	if record == nil || record.LocalRootIdentity == nil {
+		return ShortcutRootRecord{}, false, false, nil
+	}
 	candidates, candidateErr := e.shortcutRootIdentityCandidates(relativePath, *record.LocalRootIdentity, localRows)
-	plan := planMissingMaterializedShortcutRootObservation(record, shortcutRootLocalObservation{
+	observation := shortcutRootLocalObservation{
 		RelativePath: relativePath,
 		Candidates:   candidates,
 		CandidateErr: candidateErr,
-	})
-	return e.executeMissingMaterializedShortcutRootPlan(ctx, record, plan)
+	}
+	plan := planMissingMaterializedShortcutRootObservation(record, &observation)
+	return e.executeMissingMaterializedShortcutRootPlan(ctx, record, &plan)
 }
 
 func (e *Engine) executeMissingMaterializedShortcutRootPlan(
 	ctx context.Context,
-	record ShortcutRootRecord,
-	plan shortcutRootLocalPlan,
+	record *ShortcutRootRecord,
+	plan *shortcutRootLocalPlan,
 ) (ShortcutRootRecord, bool, bool, error) {
+	if record == nil || plan == nil {
+		return ShortcutRootRecord{}, false, false, nil
+	}
 	switch plan.Action {
 	case shortcutRootMissingAliasMoveProjection:
 		return e.moveRemoteRenamedShortcutProjection(record, plan.FromRelativePath, plan.ToRelativePath)
@@ -238,11 +254,11 @@ func (e *Engine) executeMissingMaterializedShortcutRootPlan(
 	case shortcutRootMissingAliasRenameAmbiguous:
 		return plan.Next, plan.Keep, plan.Changed, nil
 	case shortcutRootMissingAliasNoop:
-		return record, true, false, nil
+		return *record, true, false, nil
 	case shortcutRootLocalMaterializeRoot:
-		return record, true, false, nil
+		return *record, true, false, nil
 	default:
-		return record, true, false, nil
+		return *record, true, false, nil
 	}
 }
 
@@ -400,10 +416,13 @@ func previousProtectedProjectionCandidate(record *ShortcutRootRecord, candidates
 }
 
 func (e *Engine) moveRemoteRenamedShortcutProjection(
-	record ShortcutRootRecord,
+	record *ShortcutRootRecord,
 	fromRelativePath string,
 	toRelativePath string,
 ) (ShortcutRootRecord, bool, bool, error) {
+	if record == nil {
+		return ShortcutRootRecord{}, false, false, nil
+	}
 	moveErr := e.moveShortcutRootProjection(fromRelativePath, toRelativePath)
 	if moveErr != nil {
 		plan := planShortcutProjectionMoveResult(record, shortcutRootProjectionMoveResult{MoveErr: moveErr})
@@ -575,12 +594,12 @@ func (e *Engine) finalizeShortcutRootReleaseByBinding(ctx context.Context, bindi
 	nextRecords := make([]ShortcutRootRecord, 0, len(records))
 	var cleanupErr error
 	for i := range records {
-		record := normalizeShortcutRootRecord(records[i])
+		record := normalizeShortcutRootRecord(&records[i])
 		if record.BindingItemID != bindingItemID || !shortcutRootStateAwaitsReleaseCleanup(record.State) {
 			nextRecords = append(nextRecords, record)
 			continue
 		}
-		next, recordChanged, recordErr := e.finalizeShortcutRootReleaseRecord(record)
+		next, recordChanged, recordErr := e.finalizeShortcutRootReleaseRecord(&record)
 		changed = changed || recordChanged
 		nextRecords = append(nextRecords, next...)
 		if recordErr != nil {
@@ -599,13 +618,16 @@ func (e *Engine) finalizeShortcutRootReleaseByBinding(ctx context.Context, bindi
 }
 
 func (e *Engine) finalizeShortcutRootReleaseRecord(
-	record ShortcutRootRecord,
+	record *ShortcutRootRecord,
 ) ([]ShortcutRootRecord, bool, error) {
-	record = normalizeShortcutRootRecord(record)
-	if !shortcutRootStateAwaitsReleaseCleanup(record.State) {
-		return []ShortcutRootRecord{record}, false, nil
+	if record == nil {
+		return nil, false, nil
 	}
-	plan := planShortcutRootReleaseCleanup(&record, e.removeShortcutRootProjection(record.RelativeLocalPath))
+	normalized := normalizeShortcutRootRecord(record)
+	if !shortcutRootStateAwaitsReleaseCleanup(normalized.State) {
+		return []ShortcutRootRecord{normalized}, false, nil
+	}
+	plan := planShortcutRootReleaseCleanup(&normalized, e.removeShortcutRootProjection(normalized.RelativeLocalPath))
 	return plan.Records, plan.Changed, plan.Err
 }
 

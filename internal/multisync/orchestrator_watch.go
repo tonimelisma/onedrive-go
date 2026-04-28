@@ -109,7 +109,7 @@ func (o *Orchestrator) startWatchRuntime(
 		return nil, nil, err
 	}
 
-	decisions, err := o.buildRunnerDecisionSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
+	decisions, err := o.buildRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
 		return nil, control, fmt.Errorf("sync: building mount specs: %w", err)
 	}
@@ -152,14 +152,14 @@ func (o *Orchestrator) startInitialWatchRunners(
 
 	for i := range mounts {
 		mount := mounts[i]
-		if mount.paused {
+		if mount.paused() {
 			o.logger.Info("skipping paused mount",
-				slog.String("mount_id", mount.mountID.String()),
+				slog.String("mount_id", mount.id().String()),
 			)
 			startResults = append(startResults, MountStartupResult{
-				SelectionIndex: mount.selectionIndex,
+				SelectionIndex: mount.selectionIndex(),
 				Identity:       mount.identity(),
-				DisplayName:    mount.displayName,
+				DisplayName:    mount.displayName(),
 				Status:         MountStartupPaused,
 			})
 
@@ -170,7 +170,7 @@ func (o *Orchestrator) startInitialWatchRunners(
 		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents)
 		if err != nil {
 			o.logger.Error("failed to start watch runner",
-				slog.String("mount_id", mount.mountID.String()),
+				slog.String("mount_id", mount.id().String()),
 				slog.String("error", err.Error()),
 			)
 			startResults = append(startResults, mountStartupResultForMount(mount, err))
@@ -179,12 +179,12 @@ func (o *Orchestrator) startInitialWatchRunners(
 		}
 
 		startResults = append(startResults, MountStartupResult{
-			SelectionIndex: mount.selectionIndex,
+			SelectionIndex: mount.selectionIndex(),
 			Identity:       mount.identity(),
-			DisplayName:    mount.displayName,
+			DisplayName:    mount.displayName(),
 			Status:         MountStartupRunnable,
 		})
-		runners[mount.mountID] = wr
+		runners[mount.id()] = wr
 	}
 	o.setControlMountIDs(sortedRunnerMountIDs(runners))
 
@@ -233,7 +233,7 @@ func (o *Orchestrator) startWatchRunner(
 		return nil, fmt.Errorf("session error for mount %s: %w", mount.label(), err)
 	}
 
-	mountCollector := o.registerMountPerfCollector(mount.mountID.String())
+	mountCollector := o.registerMountPerfCollector(mount.id().String())
 	engine, engineErr := o.engineFactory(ctx, engineFactoryRequest{
 		Session:       session,
 		Mount:         mount,
@@ -242,7 +242,7 @@ func (o *Orchestrator) startWatchRunner(
 		PerfCollector: mountCollector,
 	})
 	if engineErr != nil {
-		o.removeMountPerfCollector(mount.mountID.String())
+		o.removeMountPerfCollector(mount.id().String())
 		return nil, fmt.Errorf("engine creation failed for mount %s: %w", mount.label(), engineErr)
 	}
 
@@ -260,19 +260,19 @@ func (o *Orchestrator) startWatchRunner(
 	go func() {
 		defer close(done)
 		defer mountCancel()
-		defer o.removeMountPerfCollector(mount.mountID.String())
+		defer o.removeMountPerfCollector(mount.id().String())
 
 		if mount.isFinalDrainChild() {
 			report, drainErr := engine.RunOnce(mountCtx, syncengine.SyncBidirectional, syncengine.RunOptions{FullReconcile: true})
 			if drainErr != nil && mountCtx.Err() == nil {
 				o.logger.Error("final-drain watch runner exited with error",
-					slog.String("mount_id", mount.mountID.String()),
+					slog.String("mount_id", mount.id().String()),
 					slog.String("error", drainErr.Error()),
 				)
 			}
 			if runnerEvents != nil {
 				select {
-				case runnerEvents <- watchRunnerEvent{mountID: mount.mountID, report: report, err: drainErr}:
+				case runnerEvents <- watchRunnerEvent{mountID: mount.id(), report: report, err: drainErr}:
 				case <-ctx.Done():
 				}
 			}
@@ -282,12 +282,12 @@ func (o *Orchestrator) startWatchRunner(
 		if watchErr := engine.RunWatch(mountCtx, mode, opts); watchErr != nil {
 			if mountCtx.Err() == nil {
 				o.logger.Error("watch runner exited with error",
-					slog.String("mount_id", mount.mountID.String()),
+					slog.String("mount_id", mount.id().String()),
 					slog.String("error", watchErr.Error()),
 				)
 				if runnerEvents != nil {
 					select {
-					case runnerEvents <- watchRunnerEvent{mountID: mount.mountID, err: watchErr}:
+					case runnerEvents <- watchRunnerEvent{mountID: mount.id(), err: watchErr}:
 					case <-ctx.Done():
 					}
 				}
@@ -296,7 +296,7 @@ func (o *Orchestrator) startWatchRunner(
 	}()
 
 	o.logger.Info("watch runner started",
-		slog.String("mount_id", mount.mountID.String()),
+		slog.String("mount_id", mount.id().String()),
 	)
 
 	return wr, nil
@@ -340,7 +340,7 @@ func (o *Orchestrator) reload(
 	o.cfg.InitialStartupResults = newSelection.StartupResults
 	o.cfg.Runtime.FlushTokenCache()
 
-	newMounts, err := o.buildRunnerDecisionSet(ctx, newSelection.Mounts, newSelection.StartupResults)
+	newMounts, err := o.buildRuntimeWorkSet(ctx, newSelection.Mounts, newSelection.StartupResults)
 	if err != nil {
 		o.cfg.Holder.Update(oldCfg)
 		o.cfg.StandaloneMounts = oldMounts
@@ -378,7 +378,7 @@ func (o *Orchestrator) reconcileWatchRunners(
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
 ) {
-	decisions, err := o.buildRunnerDecisionSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
+	decisions, err := o.buildRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
 		o.logger.Warn("shortcut runner reconciliation refresh failed, keeping current runners",
 			slog.String("error", err.Error()),
@@ -421,7 +421,7 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 			)
 		}
 		delete(runners, event.mountID)
-		if wr.mount != nil && wr.mount.projectionKind == MountProjectionStandalone {
+		if wr.mount != nil && wr.mount.projectionKind() == MountProjectionStandalone {
 			o.forgetParentChildWorkSnapshot(event.mountID)
 			o.stopChildWatchRunnersForParent(ctx, runners, event.mountID)
 		}
@@ -452,7 +452,7 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 	wr *watchRunner,
 	event watchRunnerEvent,
 ) {
-	decisions, err := o.buildRunnerDecisionsFromParentSnapshots(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
+	decisions, err := o.buildRuntimeWorkFromParentSnapshots(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
 		o.logger.Warn("compiling mount set after final-drain child completion failed",
 			slog.String("mount_id", event.mountID.String()),
@@ -461,9 +461,9 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 		return
 	}
 	report := &MountReport{
-		SelectionIndex: wr.mount.selectionIndex,
+		SelectionIndex: wr.mount.selectionIndex(),
 		Identity:       wr.mount.identity(),
-		DisplayName:    wr.mount.displayName,
+		DisplayName:    wr.mount.displayName(),
 		Report:         event.report,
 		Err:            event.err,
 	}
@@ -490,7 +490,7 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 func watchParentDrainAckers(runners map[mountID]*watchRunner) map[mountID]shortcutChildAckHandle {
 	ackers := make(map[mountID]shortcutChildAckHandle)
 	for id, runner := range runners {
-		if runner == nil || runner.mount == nil || runner.mount.projectionKind != MountProjectionStandalone {
+		if runner == nil || runner.mount == nil || runner.mount.projectionKind() != MountProjectionStandalone {
 			continue
 		}
 		if shortcutChildAckHandleIsZero(runner.parentAck) {
@@ -506,7 +506,7 @@ func watchParentArtifactCleanupAckers(
 ) map[mountID]shortcutChildAckHandle {
 	ackers := make(map[mountID]shortcutChildAckHandle)
 	for id, runner := range runners {
-		if runner == nil || runner.mount == nil || runner.mount.projectionKind != MountProjectionStandalone {
+		if runner == nil || runner.mount == nil || runner.mount.projectionKind() != MountProjectionStandalone {
 			continue
 		}
 		if shortcutChildAckHandleIsZero(runner.parentAck) {
@@ -545,7 +545,7 @@ func (o *Orchestrator) loadReloadSelection(
 func (o *Orchestrator) applyWatchMountSet(
 	ctx context.Context,
 	runners map[mountID]*watchRunner,
-	decisions *runnerDecisionSet,
+	decisions *runtimeWorkSet,
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
@@ -594,7 +594,7 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 	}
 	var parent *mountSpec
 	for i := range parents {
-		if parents[i] != nil && parents[i].mountID == parentID {
+		if parents[i] != nil && parents[i].id() == parentID {
 			parent = parents[i]
 			break
 		}
@@ -612,7 +612,7 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 	publications := map[mountID]syncengine.ShortcutChildWorkSnapshot{
 		parentID: o.latestParentChildWorkSnapshotFor(parentID),
 	}
-	decisions, err := buildRunnerDecisionsForParents([]*mountSpec{parent}, publications, o.cfg.DataDir, o.logger)
+	decisions, err := buildRuntimeWorkForParents([]*mountSpec{parent}, publications, o.cfg.DataDir, o.logger)
 	if err != nil {
 		o.logger.Warn("parent-scoped shortcut runner reconciliation failed, keeping current runners",
 			slog.String("parent_mount_id", parentID.String()),
@@ -645,7 +645,7 @@ func (o *Orchestrator) applyWatchMountSetForParent(
 	ctx context.Context,
 	runners map[mountID]*watchRunner,
 	parentID mountID,
-	decisions *runnerDecisionSet,
+	decisions *runtimeWorkSet,
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
@@ -675,10 +675,10 @@ func (o *Orchestrator) applyWatchMountSetForParent(
 func runnableMountMap(mounts []*mountSpec) map[mountID]*mountSpec {
 	active := make(map[mountID]*mountSpec)
 	for i := range mounts {
-		if mounts[i].paused {
+		if mounts[i].paused() {
 			continue
 		}
-		active[mounts[i].mountID] = mounts[i]
+		active[mounts[i].id()] = mounts[i]
 	}
 	return active
 }
@@ -727,8 +727,8 @@ func stopOrderForWatchRunners(runners map[mountID]*watchRunner) []mountID {
 	sort.Slice(ids, func(i, j int) bool {
 		left := runners[ids[i]]
 		right := runners[ids[j]]
-		leftChild := left != nil && left.mount != nil && left.mount.projectionKind == MountProjectionChild
-		rightChild := right != nil && right.mount != nil && right.mount.projectionKind == MountProjectionChild
+		leftChild := left != nil && left.mount != nil && left.mount.projectionKind() == MountProjectionChild
+		rightChild := right != nil && right.mount != nil && right.mount.projectionKind() == MountProjectionChild
 		if leftChild != rightChild {
 			return leftChild
 		}
@@ -745,7 +745,7 @@ func (o *Orchestrator) stopChildWatchRunnersForParent(
 	stopped := 0
 	for _, id := range stopOrderForWatchRunners(runners) {
 		wr := runners[id]
-		if wr == nil || wr.mount == nil || wr.mount.projectionKind != MountProjectionChild {
+		if wr == nil || wr.mount == nil || wr.mount.projectionKind() != MountProjectionChild {
 			continue
 		}
 		if wr.mount.childParentMountID() != parentID {
@@ -778,7 +778,7 @@ func (o *Orchestrator) stopInactiveChildWatchRunnersForParent(
 	stopped := 0
 	for _, id := range stopOrderForWatchRunners(runners) {
 		wr := runners[id]
-		if wr == nil || wr.mount == nil || wr.mount.projectionKind != MountProjectionChild {
+		if wr == nil || wr.mount == nil || wr.mount.projectionKind() != MountProjectionChild {
 			continue
 		}
 		if wr.mount.childParentMountID() != parentID {
@@ -839,9 +839,9 @@ func (o *Orchestrator) startReloadWatchRunners(
 		}
 
 		startResults = append(startResults, MountStartupResult{
-			SelectionIndex: mount.selectionIndex,
+			SelectionIndex: mount.selectionIndex(),
 			Identity:       mount.identity(),
-			DisplayName:    mount.displayName,
+			DisplayName:    mount.displayName(),
 			Status:         MountStartupRunnable,
 		})
 		runners[id] = wr
@@ -859,8 +859,8 @@ func sortedRunnableMountIDs(runnable map[mountID]*mountSpec) []mountID {
 	sort.Slice(ids, func(i, j int) bool {
 		left := runnable[ids[i]]
 		right := runnable[ids[j]]
-		leftChild := left != nil && left.projectionKind == MountProjectionChild
-		rightChild := right != nil && right.projectionKind == MountProjectionChild
+		leftChild := left != nil && left.projectionKind() == MountProjectionChild
+		rightChild := right != nil && right.projectionKind() == MountProjectionChild
 		if leftChild != rightChild {
 			return !leftChild
 		}
@@ -884,25 +884,25 @@ func mountSpecCoreEquivalent(current *mountSpec, next *mountSpec) bool {
 }
 
 func mountSpecIdentityEquivalent(current *mountSpec, next *mountSpec) bool {
-	return current.mountID == next.mountID &&
+	return current.id() == next.id() &&
 		current.childParentMountID() == next.childParentMountID() &&
-		current.projectionKind == next.projectionKind &&
+		current.projectionKind() == next.projectionKind() &&
 		current.parentDriveType() == next.parentDriveType() &&
 		current.rejectSharePointRootForms() == next.rejectSharePointRootForms()
 }
 
 func mountSpecRemoteEquivalent(current *mountSpec, next *mountSpec) bool {
-	return current.remoteDriveID == next.remoteDriveID &&
-		current.remoteRootItemID == next.remoteRootItemID &&
-		current.tokenOwnerCanonical == next.tokenOwnerCanonical &&
-		current.accountEmail == next.accountEmail
+	return current.remoteDriveID() == next.remoteDriveID() &&
+		current.remoteRootItemID() == next.remoteRootItemID() &&
+		current.tokenOwnerCanonical() == next.tokenOwnerCanonical() &&
+		current.accountEmail() == next.accountEmail()
 }
 
 func mountSpecRuntimeEquivalent(current *mountSpec, next *mountSpec) bool {
-	return current.syncRoot == next.syncRoot &&
-		current.statePath == next.statePath &&
-		current.enableWebsocket == next.enableWebsocket &&
-		current.remoteRootDeltaCapable == next.remoteRootDeltaCapable &&
+	return current.syncRoot() == next.syncRoot() &&
+		current.statePath() == next.statePath() &&
+		current.enableWebsocket() == next.enableWebsocket() &&
+		current.remoteRootDeltaCapable() == next.remoteRootDeltaCapable() &&
 		childEngineSpecsEquivalent(current, next)
 }
 
@@ -914,9 +914,9 @@ func childEngineSpecsEquivalent(current *mountSpec, next *mountSpec) bool {
 }
 
 func mountSpecTuningEquivalent(current *mountSpec, next *mountSpec) bool {
-	return current.transferWorkers == next.transferWorkers &&
-		current.checkWorkers == next.checkWorkers &&
-		current.minFreeSpace == next.minFreeSpace
+	return current.transferWorkers() == next.transferWorkers() &&
+		current.checkWorkers() == next.checkWorkers() &&
+		current.minFreeSpace() == next.minFreeSpace()
 }
 
 func reconcileWatchInterval(pollInterval time.Duration) time.Duration {
@@ -938,7 +938,7 @@ func mountIDsForSpecs(mounts []*mountSpec) []string {
 		if mounts[i] == nil {
 			continue
 		}
-		ids = append(ids, mounts[i].mountID.String())
+		ids = append(ids, mounts[i].id().String())
 	}
 
 	return ids

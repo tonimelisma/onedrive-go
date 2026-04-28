@@ -46,10 +46,17 @@ type StandaloneMountSelection struct {
 	StartupResults []MountStartupResult
 }
 
-// mountSpec is the control plane's runtime unit.
+// mountSpec is the control plane's runtime unit. It is deliberately a
+// discriminated parent/child shape: common process fields live in the concrete
+// parent or child payload, and child-only lifecycle inputs cannot be attached
+// to a parent runtime mount.
 type mountSpec struct {
+	parent *parentMountRuntime
+	child  *childMountRuntime
+}
+
+type mountRuntimeCommon struct {
 	mountID                mountID
-	projectionKind         MountProjectionKind
 	selectionIndex         int
 	displayName            string
 	syncRoot               string
@@ -64,8 +71,6 @@ type mountSpec struct {
 	transferWorkers        int
 	checkWorkers           int
 	minFreeSpace           int64
-	parent                 *parentMountRuntime
-	child                  *childMountRuntime
 }
 
 type parentMountSpec struct {
@@ -111,6 +116,7 @@ type childMountSpec struct {
 }
 
 type childMountRuntime struct {
+	common        mountRuntimeCommon
 	parentMountID mountID
 	mode          syncengine.ShortcutChildRunMode
 	ackRef        syncengine.ShortcutChildAckRef
@@ -118,13 +124,14 @@ type childMountRuntime struct {
 }
 
 type parentMountRuntime struct {
+	common                    mountRuntimeCommon
 	canonicalID               driveid.CanonicalID
 	driveType                 string
 	rejectSharePointRootForms bool
 	childWorkSink             syncengine.ShortcutChildWorkSink
 }
 
-type runnerDecisionSet struct {
+type runtimeWorkSet struct {
 	Mounts          []*mountSpec
 	Skipped         []MountStartupResult
 	CleanupChildren []shortcutChildArtifactCleanup
@@ -136,7 +143,7 @@ func filterMountSpecsByProjection(
 ) []*mountSpec {
 	filtered := make([]*mountSpec, 0, len(mounts))
 	for _, mount := range mounts {
-		if mount == nil || mount.projectionKind != kind {
+		if mount == nil || mount.projectionKind() != kind {
 			continue
 		}
 		filtered = append(filtered, mount)
@@ -157,24 +164,24 @@ func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, e
 	return mounts, nil
 }
 
-func buildRunnerDecisions(
+func buildRuntimeWork(
 	standaloneMounts []StandaloneMountConfig,
 	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
 	dataDir string,
-) (*runnerDecisionSet, error) {
+) (*runtimeWorkSet, error) {
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
-	return buildRunnerDecisionsForParents(parents, snapshots, dataDir, nil)
+	return buildRuntimeWorkForParents(parents, snapshots, dataDir, nil)
 }
 
-func buildRunnerDecisionsForParents(
+func buildRuntimeWorkForParents(
 	parents []*mountSpec,
 	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
 	dataDir string,
 	logger *slog.Logger,
-) (*runnerDecisionSet, error) {
+) (*runtimeWorkSet, error) {
 	parentByID := indexStandaloneMounts(parents)
 	childrenByParent, skipped, err := buildChildMountSpecs(parentByID, snapshots, dataDir)
 	if err != nil {
@@ -191,7 +198,7 @@ func buildRunnerDecisionsForParents(
 		return nil, err
 	}
 
-	return &runnerDecisionSet{
+	return &runtimeWorkSet{
 		Mounts:          finalMounts,
 		Skipped:         skipped,
 		CleanupChildren: cleanupChildren,
@@ -201,7 +208,7 @@ func buildRunnerDecisionsForParents(
 func indexStandaloneMounts(parents []*mountSpec) map[mountID]*mountSpec {
 	parentByID := make(map[mountID]*mountSpec, len(parents))
 	for i := range parents {
-		parentByID[parents[i].mountID] = parents[i]
+		parentByID[parents[i].id()] = parents[i]
 	}
 
 	return parentByID
@@ -235,7 +242,7 @@ func buildChildMountSpecs(
 		if err != nil {
 			return nil, nil, err
 		}
-		childrenByParent[parent.mountID] = append(childrenByParent[parent.mountID], childMount)
+		childrenByParent[parent.id()] = append(childrenByParent[parent.id()], childMount)
 	}
 
 	return childrenByParent, skipped, nil
@@ -282,17 +289,17 @@ func assembleRuntimeMountSet(
 	finalMounts := make([]*mountSpec, 0, len(parents))
 	nextIndex := 0
 	for _, parent := range parents {
-		parent.selectionIndex = nextIndex
+		parent.setSelectionIndex(nextIndex)
 		nextIndex++
 		finalMounts = append(finalMounts, parent)
 
-		children := childrenByParent[parent.mountID]
+		children := childrenByParent[parent.id()]
 		sort.Slice(children, func(i, j int) bool {
-			return children[i].mountID < children[j].mountID
+			return children[i].id() < children[j].id()
 		})
 
 		for _, child := range children {
-			child.selectionIndex = nextIndex
+			child.setSelectionIndex(nextIndex)
 			nextIndex++
 			finalMounts = append(finalMounts, child)
 		}
@@ -373,8 +380,18 @@ func newParentMountSpec(cfg *StandaloneMountConfig) (parentMountSpec, error) {
 
 func (spec *parentMountSpec) runtimeMountSpec() *mountSpec {
 	return &mountSpec{
+		parent: &parentMountRuntime{
+			common:                    spec.runtimeCommon(),
+			canonicalID:               spec.canonicalID,
+			driveType:                 spec.driveType,
+			rejectSharePointRootForms: spec.rejectSharePointRootForms,
+		},
+	}
+}
+
+func (spec *parentMountSpec) runtimeCommon() mountRuntimeCommon {
+	return mountRuntimeCommon{
 		mountID:                spec.mountID,
-		projectionKind:         MountProjectionStandalone,
 		selectionIndex:         spec.selectionIndex,
 		displayName:            spec.displayName,
 		syncRoot:               spec.syncRoot,
@@ -389,11 +406,6 @@ func (spec *parentMountSpec) runtimeMountSpec() *mountSpec {
 		transferWorkers:        spec.transferWorkers,
 		checkWorkers:           spec.checkWorkers,
 		minFreeSpace:           spec.minFreeSpace,
-		parent: &parentMountRuntime{
-			canonicalID:               spec.canonicalID,
-			driveType:                 spec.driveType,
-			rejectSharePointRootForms: spec.rejectSharePointRootForms,
-		},
 	}
 }
 
@@ -415,36 +427,16 @@ func buildChildMountFromCommand(
 	}
 
 	displayName := command.DisplayName
-	tokenOwner := parent.tokenOwnerCanonical
+	tokenOwner := parent.tokenOwnerCanonical()
 
 	childSpec := newChildMountSpec(parent, command, childMountID, displayName, statePath, tokenOwner)
 	return childSpec.runtimeMountSpec(), nil
 }
 
 func validateChildRunCommand(command *syncengine.ShortcutChildRunCommand) (string, error) {
-	if command == nil {
-		return "", fmt.Errorf("multisync: parent-declared child run command is incomplete")
-	}
-	childMountID := command.ChildMountID
-	if childMountID == "" {
-		return "", fmt.Errorf("multisync: parent-declared child run command is missing a child mount ID")
-	}
-	if !config.IsChildMountID(childMountID) {
-		return "", fmt.Errorf("multisync: parent-declared child run command has invalid child mount ID %s", childMountID)
-	}
-	if command.Engine.LocalRoot == "" {
-		return "", fmt.Errorf("multisync: parent-declared child %s is missing a local root", childMountID)
-	}
-	if command.Engine.RemoteDriveID == "" || command.Engine.RemoteItemID == "" {
-		return "", fmt.Errorf("multisync: parent-declared child %s is missing remote root identity", childMountID)
-	}
-	switch command.Mode {
-	case syncengine.ShortcutChildRunModeNormal, syncengine.ShortcutChildRunModeFinalDrain:
-	default:
-		return "", fmt.Errorf("multisync: parent-declared child %s has unsupported run mode %q", childMountID, command.Mode)
-	}
-	if command.Mode == syncengine.ShortcutChildRunModeFinalDrain && command.AckRef.IsZero() {
-		return "", fmt.Errorf("multisync: parent-declared final-drain child %s is missing an acknowledgement reference", childMountID)
+	childMountID, err := syncengine.ValidateShortcutChildRunCommand(command)
+	if err != nil {
+		return "", fmt.Errorf("multisync: parent-declared child run command: %w", err)
 	}
 	return childMountID, nil
 }
@@ -458,7 +450,7 @@ func newChildMountSpec(
 	tokenOwner driveid.CanonicalID,
 ) childMountSpec {
 	return childMountSpec{
-		parentMountID:          parent.mountID,
+		parentMountID:          parent.id(),
 		mountID:                mountID(childMountID),
 		displayName:            displayName,
 		syncRoot:               command.Engine.LocalRoot,
@@ -467,12 +459,12 @@ func newChildMountSpec(
 		remoteRootItemID:       command.Engine.RemoteItemID,
 		tokenOwnerCanonical:    tokenOwner,
 		accountEmail:           tokenOwner.Email(),
-		paused:                 parent.paused,
-		enableWebsocket:        parent.enableWebsocket,
+		paused:                 parent.paused(),
+		enableWebsocket:        parent.enableWebsocket(),
 		remoteRootDeltaCapable: config.RemoteRootDeltaCapableForTokenOwner(tokenOwner),
-		transferWorkers:        parent.transferWorkers,
-		checkWorkers:           parent.checkWorkers,
-		minFreeSpace:           parent.minFreeSpace,
+		transferWorkers:        parent.transferWorkers(),
+		checkWorkers:           parent.checkWorkers(),
+		minFreeSpace:           parent.minFreeSpace(),
 		mode:                   command.Mode,
 		ackRef:                 command.AckRef,
 		engine:                 command.Engine,
@@ -481,8 +473,19 @@ func newChildMountSpec(
 
 func (spec *childMountSpec) runtimeMountSpec() *mountSpec {
 	return &mountSpec{
+		child: &childMountRuntime{
+			common:        spec.runtimeCommon(),
+			parentMountID: spec.parentMountID,
+			mode:          spec.mode,
+			ackRef:        spec.ackRef,
+			engine:        spec.engine,
+		},
+	}
+}
+
+func (spec *childMountSpec) runtimeCommon() mountRuntimeCommon {
+	return mountRuntimeCommon{
 		mountID:                spec.mountID,
-		projectionKind:         MountProjectionChild,
 		displayName:            spec.displayName,
 		syncRoot:               spec.syncRoot,
 		statePath:              spec.statePath,
@@ -496,12 +499,6 @@ func (spec *childMountSpec) runtimeMountSpec() *mountSpec {
 		transferWorkers:        spec.transferWorkers,
 		checkWorkers:           spec.checkWorkers,
 		minFreeSpace:           spec.minFreeSpace,
-		child: &childMountRuntime{
-			parentMountID: spec.parentMountID,
-			mode:          spec.mode,
-			ackRef:        spec.ackRef,
-			engine:        spec.engine,
-		},
 	}
 }
 
@@ -511,11 +508,154 @@ func (m *mountSpec) identity() MountIdentity {
 	}
 
 	return MountIdentity{
-		MountID:        m.mountID.String(),
+		MountID:        m.id().String(),
 		ParentMountID:  m.childParentMountID().String(),
-		ProjectionKind: m.projectionKind,
+		ProjectionKind: m.projectionKind(),
 		CanonicalID:    m.parentCanonicalID(),
 	}
+}
+
+func (m *mountSpec) common() *mountRuntimeCommon {
+	if m == nil {
+		return nil
+	}
+	switch {
+	case m.parent != nil:
+		return &m.parent.common
+	case m.child != nil:
+		return &m.child.common
+	default:
+		return nil
+	}
+}
+
+func (m *mountSpec) id() mountID {
+	common := m.common()
+	if common == nil {
+		return ""
+	}
+	return common.mountID
+}
+
+func (m *mountSpec) projectionKind() MountProjectionKind {
+	switch {
+	case m != nil && m.parent != nil:
+		return MountProjectionStandalone
+	case m != nil && m.child != nil:
+		return MountProjectionChild
+	default:
+		return ""
+	}
+}
+
+func (m *mountSpec) selectionIndex() int {
+	common := m.common()
+	if common == nil {
+		return 0
+	}
+	return common.selectionIndex
+}
+
+func (m *mountSpec) setSelectionIndex(index int) {
+	common := m.common()
+	if common != nil {
+		common.selectionIndex = index
+	}
+}
+
+func (m *mountSpec) displayName() string {
+	common := m.common()
+	if common == nil {
+		return ""
+	}
+	return common.displayName
+}
+
+func (m *mountSpec) syncRoot() string {
+	common := m.common()
+	if common == nil {
+		return ""
+	}
+	return common.syncRoot
+}
+
+func (m *mountSpec) statePath() string {
+	common := m.common()
+	if common == nil {
+		return ""
+	}
+	return common.statePath
+}
+
+func (m *mountSpec) remoteDriveID() driveid.ID {
+	common := m.common()
+	if common == nil {
+		return driveid.ID{}
+	}
+	return common.remoteDriveID
+}
+
+func (m *mountSpec) remoteRootItemID() string {
+	common := m.common()
+	if common == nil {
+		return ""
+	}
+	return common.remoteRootItemID
+}
+
+func (m *mountSpec) tokenOwnerCanonical() driveid.CanonicalID {
+	common := m.common()
+	if common == nil {
+		return driveid.CanonicalID{}
+	}
+	return common.tokenOwnerCanonical
+}
+
+func (m *mountSpec) accountEmail() string {
+	common := m.common()
+	if common == nil {
+		return ""
+	}
+	return common.accountEmail
+}
+
+func (m *mountSpec) paused() bool {
+	common := m.common()
+	return common != nil && common.paused
+}
+
+func (m *mountSpec) enableWebsocket() bool {
+	common := m.common()
+	return common != nil && common.enableWebsocket
+}
+
+func (m *mountSpec) remoteRootDeltaCapable() bool {
+	common := m.common()
+	return common != nil && common.remoteRootDeltaCapable
+}
+
+func (m *mountSpec) transferWorkers() int {
+	common := m.common()
+	if common == nil {
+		return 0
+	}
+	return common.transferWorkers
+}
+
+func (m *mountSpec) checkWorkers() int {
+	common := m.common()
+	if common == nil {
+		return 0
+	}
+	return common.checkWorkers
+}
+
+func (m *mountSpec) minFreeSpace() int64 {
+	common := m.common()
+	if common == nil {
+		return 0
+	}
+	return common.minFreeSpace
 }
 
 func (m *mountSpec) parentCanonicalID() driveid.CanonicalID {
@@ -568,6 +708,19 @@ func (m *mountSpec) shortcutChildAckRef() syncengine.ShortcutChildAckRef {
 	return m.child.ackRef
 }
 
+func (m *mountSpec) shortcutChildRunCommand() *syncengine.ShortcutChildRunCommand {
+	if m == nil || m.child == nil {
+		return nil
+	}
+	return &syncengine.ShortcutChildRunCommand{
+		ChildMountID: m.id().String(),
+		DisplayName:  m.displayName(),
+		Engine:       cloneShortcutChildEngineSpec(m.child.engine),
+		Mode:         m.child.mode,
+		AckRef:       m.child.ackRef,
+	}
+}
+
 func cloneShortcutChildEngineSpec(spec syncengine.ShortcutChildEngineSpec) syncengine.ShortcutChildEngineSpec {
 	if spec.LocalRootIdentity != nil {
 		identity := *spec.LocalRootIdentity
@@ -583,9 +736,9 @@ func (m *mountSpec) label() string {
 
 func (m *mountSpec) syncSessionConfig() *driveops.MountSessionConfig {
 	return &driveops.MountSessionConfig{
-		TokenOwnerCanonical: m.tokenOwnerCanonical,
-		DriveID:             m.remoteDriveID,
-		RemoteRootItemID:    m.remoteRootItemID,
-		AccountEmail:        m.accountEmail,
+		TokenOwnerCanonical: m.tokenOwnerCanonical(),
+		DriveID:             m.remoteDriveID(),
+		RemoteRootItemID:    m.remoteRootItemID(),
+		AccountEmail:        m.accountEmail(),
 	}
 }

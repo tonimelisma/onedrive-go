@@ -145,7 +145,7 @@ func TestOrchestratorCleanupWithEmptyDataDirFailsLoudly(t *testing.T) {
 	})
 	err := orch.purgeShortcutChildArtifactsForDecisions(
 		context.Background(),
-		&runnerDecisionSet{CleanupChildren: []shortcutChildArtifactCleanup{{
+		&runtimeWorkSet{CleanupChildren: []shortcutChildArtifactCleanup{{
 			mountID:     childMountID,
 			namespaceID: "personal:parent@example.com",
 			ackRef:      testShortcutChildAckRef(t, "binding-empty-data-dir"),
@@ -203,7 +203,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsUsesInjectedExecutor
 			return nil
 		},
 	}
-	decisions := &runnerDecisionSet{
+	decisions := &runtimeWorkSet{
 		CleanupChildren: []shortcutChildArtifactCleanup{{
 			mountID:     childMountID,
 			namespaceID: "personal:parent@example.com",
@@ -255,7 +255,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsReturnsAckFailureAft
 			return nil
 		},
 	}
-	decisions := &runnerDecisionSet{
+	decisions := &runtimeWorkSet{
 		CleanupChildren: []shortcutChildArtifactCleanup{{
 			mountID:     childMountID,
 			namespaceID: "personal:parent@example.com",
@@ -305,7 +305,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsRequiresLiveParentAc
 			return nil
 		},
 	}
-	decisions := &runnerDecisionSet{
+	decisions := &runtimeWorkSet{
 		CleanupChildren: []shortcutChildArtifactCleanup{{
 			mountID:     childMountID,
 			namespaceID: "personal:parent@example.com",
@@ -349,7 +349,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsRecordsMixedCleanupDiagnostics(t
 			return nil
 		},
 	}
-	decisions := &runnerDecisionSet{
+	decisions := &runtimeWorkSet{
 		CleanupChildren: []shortcutChildArtifactCleanup{
 			{
 				mountID:     artifactFailMountID,
@@ -408,7 +408,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsAfterSuccessful
 			return nil
 		},
 	}
-	decisions := &runnerDecisionSet{
+	decisions := &runtimeWorkSet{
 		CleanupChildren: []shortcutChildArtifactCleanup{{
 			mountID:     childMountID,
 			namespaceID: "personal:parent@example.com",
@@ -458,7 +458,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsWhenNoCleanupWo
 	}
 	err := orch.purgeShortcutChildArtifactsForDecisions(
 		context.Background(),
-		&runnerDecisionSet{CleanupChildren: []shortcutChildArtifactCleanup{{
+		&runtimeWorkSet{CleanupChildren: []shortcutChildArtifactCleanup{{
 			mountID:     childMountID,
 			namespaceID: "personal:parent@example.com",
 			ackRef:      testShortcutChildAckRef(t, "binding-no-work-remains"),
@@ -472,7 +472,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsWhenNoCleanupWo
 
 	err = orch.purgeShortcutChildArtifactsForDecisions(
 		context.Background(),
-		&runnerDecisionSet{},
+		&runtimeWorkSet{},
 		nil,
 	)
 

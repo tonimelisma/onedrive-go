@@ -417,7 +417,10 @@ parent engine also persists parent-owned `shortcut_roots` state in its sync
 store: binding item ID, alias path, target identity, protected parent-local
 paths, lifecycle state, and same-path replacement waiting state. The
 multi-mount control plane consumes the parent-declared child work commands only to
-start, drain, skip, or purge child runners.
+start, final-drain, stop, or purge child runners. The child command shape owns
+validation, equality, and lowering into `EngineMountConfig`, so multisync can
+pass execution data through without inspecting shortcut lifecycle, protected
+paths, or status facts.
 
 Managed shortcut child work snapshots also carry the parent-observed local root
 identity when the parent has materialized the alias directory. Child engines

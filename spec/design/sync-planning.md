@@ -19,8 +19,8 @@ Shortcut-root lifecycle planning follows the same functional-core rule inside
 `internal/sync`: remote shortcut topology observations and local alias identity
 facts enter deterministic shortcut-root planner helpers, while Graph,
 filesystem, SQLite, logging, clocks, and goroutines stay in the engine shell.
-The output is parent-owned shortcut-root state plus child process snapshot
-intent; multisync receives only that process intent.
+The output is parent-owned shortcut-root state plus child work snapshot
+intent; multisync receives only that child work intent.
 
 ## Ownership Contract
 

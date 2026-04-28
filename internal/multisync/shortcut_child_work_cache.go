@@ -54,10 +54,10 @@ func (o *Orchestrator) forgetParentChildWorkSnapshot(parentID mountID) {
 func (o *Orchestrator) latestParentChildWorkSnapshotsFor(parents []*mountSpec) map[mountID]syncengine.ShortcutChildWorkSnapshot {
 	snapshots := make(map[mountID]syncengine.ShortcutChildWorkSnapshot)
 	for _, parent := range parents {
-		if parent == nil || parent.projectionKind != MountProjectionStandalone {
+		if parent == nil || parent.projectionKind() != MountProjectionStandalone {
 			continue
 		}
-		snapshots[parent.mountID] = o.latestParentChildWorkSnapshotFor(parent.mountID)
+		snapshots[parent.id()] = o.latestParentChildWorkSnapshotFor(parent.id())
 	}
 	return snapshots
 }

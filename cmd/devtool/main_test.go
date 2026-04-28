@@ -78,40 +78,6 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	assert.True(t, got.ClassifyLiveQuirks)
 }
 
-// Validates: R-6.2.1
-func TestNewShortcutComplianceCmdPassesFormatThrough(t *testing.T) {
-	t.Parallel()
-
-	var got devtool.ShortcutComplianceOptions
-
-	cmd := newShortcutComplianceCmd(
-		func() (string, error) { return testRepoRoot, nil },
-		func(_ context.Context, opts devtool.ShortcutComplianceOptions) error {
-			got = opts
-			return nil
-		},
-	)
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"--format", "json"})
-
-	require.NoError(t, cmd.Execute())
-	assert.Equal(t, testRepoRoot, got.RepoRoot)
-	assert.Equal(t, devtool.ShortcutComplianceFormatJSON, got.Format)
-}
-
-// Validates: R-6.2.1
-func TestDefaultShortcutComplianceWrapsError(t *testing.T) {
-	t.Parallel()
-
-	err := defaultShortcutCompliance(context.Background(), devtool.ShortcutComplianceOptions{
-		RepoRoot: "",
-		Stdout:   io.Discard,
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "run shortcut compliance")
-}
-
 // Validates: R-6.10.14
 func TestNewBenchCmdRequiresScenarioFlag(t *testing.T) {
 	t.Parallel()
@@ -328,7 +294,7 @@ func TestNewRootCmd(t *testing.T) {
 	cmd := newRootCmd()
 	require.NotNil(t, cmd)
 	assert.Equal(t, "devtool", cmd.Use)
-	assert.Len(t, cmd.Commands(), 5)
+	assert.Len(t, cmd.Commands(), 4)
 }
 
 // Validates: R-6.2.1

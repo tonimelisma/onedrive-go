@@ -11,9 +11,9 @@ import (
 )
 
 // oneShotChildRuns owns child runner timing for a single RunOnce call. It is
-// not shortcut policy: parents publish exact process snapshots and children
+// not shortcut policy: parents publish exact child work snapshots and children
 // execute ordinary Engine.RunOnce work. State machine:
-// parent registered -> fresh snapshot accepted -> child process started ->
+// parent registered -> fresh snapshot accepted -> child work started ->
 // parent safe point reached -> final-drain/artifact cleanup acked. If the
 // context is canceled before the safe point, child work exits without acking;
 // parent shortcut_roots plus child artifacts remain the recovery source.
@@ -44,7 +44,7 @@ func newOneShotChildRuns(
 		if parent == nil {
 			continue
 		}
-		parentByID[parent.mountID] = cloneMountSpec(parent)
+		parentByID[parent.id()] = cloneMountSpec(parent)
 	}
 	return &oneShotChildRuns{
 		orchestrator: orchestrator,
@@ -65,10 +65,10 @@ func (c *oneShotChildRuns) registerParents(work []indexedMountWork) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, item := range work {
-		if item.work.mount == nil || item.work.mount.projectionKind != MountProjectionStandalone {
+		if item.work.mount == nil || item.work.mount.projectionKind() != MountProjectionStandalone {
 			continue
 		}
-		parentID := item.work.mount.mountID
+		parentID := item.work.mount.id()
 		// One-shot children must come from the live parent run, not from
 		// an old snapshot cached before this parent started.
 		c.orchestrator.forgetParentChildWorkSnapshot(parentID)
@@ -179,12 +179,12 @@ func (c *oneShotChildRuns) runChildrenForParent(
 	parent *mountSpec,
 ) {
 	defer c.childRunGroup.Done()
-	decisions, err := c.orchestrator.buildRunnerDecisionsForParent(parent)
+	decisions, err := c.orchestrator.buildRuntimeWorkForParent(parent)
 	if err != nil {
 		c.appendStartup(MountStartupResult{
-			SelectionIndex: parent.selectionIndex,
+			SelectionIndex: parent.selectionIndex(),
 			Identity:       parent.identity(),
-			DisplayName:    parent.displayName,
+			DisplayName:    parent.displayName(),
 			Status:         MountStartupFatal,
 			Err:            fmt.Errorf("building child mount specs after parent snapshot: %w", err),
 		})
@@ -211,9 +211,9 @@ func (c *oneShotChildRuns) runChildrenForParent(
 			slog.String("error", err.Error()),
 		)
 		c.appendReports(&MountReport{
-			SelectionIndex: parent.selectionIndex,
+			SelectionIndex: parent.selectionIndex(),
 			Identity:       parent.identity(),
-			DisplayName:    parent.displayName,
+			DisplayName:    parent.displayName(),
 			Err:            fmt.Errorf("shortcut child finalization before parent safe point: %w", err),
 		})
 		return
@@ -230,9 +230,9 @@ func (c *oneShotChildRuns) runChildrenForParent(
 			slog.String("error", purgeErr.Error()),
 		)
 		c.appendReports(&MountReport{
-			SelectionIndex: parent.selectionIndex,
+			SelectionIndex: parent.selectionIndex(),
 			Identity:       parent.identity(),
-			DisplayName:    parent.displayName,
+			DisplayName:    parent.displayName(),
 			Err:            fmt.Errorf("shortcut child artifact cleanup: %w", purgeErr),
 		})
 	}
@@ -247,9 +247,9 @@ func (c *oneShotChildRuns) runChildrenForParent(
 			slog.String("error", finalizeErr.Error()),
 		)
 		c.appendReports(&MountReport{
-			SelectionIndex: parent.selectionIndex,
+			SelectionIndex: parent.selectionIndex(),
 			Identity:       parent.identity(),
-			DisplayName:    parent.displayName,
+			DisplayName:    parent.displayName(),
 			Err:            fmt.Errorf("shortcut child final-drain cleanup: %w", finalizeErr),
 		})
 	} else if finalized {

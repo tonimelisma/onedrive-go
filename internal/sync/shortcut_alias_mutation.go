@@ -70,7 +70,7 @@ func (e *Engine) recordShortcutAliasRename(ctx context.Context, mutation shortcu
 		if records[i].BindingItemID != mutation.BindingItemID {
 			continue
 		}
-		records[i] = planShortcutAliasRenameSuccess(records[i], mutation)
+		records[i] = planShortcutAliasRenameSuccess(&records[i], mutation)
 		changed = true
 		break
 	}
@@ -93,7 +93,7 @@ func (e *Engine) recordShortcutAliasDelete(ctx context.Context, mutation shortcu
 		if records[i].BindingItemID != mutation.BindingItemID {
 			continue
 		}
-		records[i] = planShortcutAliasDeleteSuccess(records[i])
+		records[i] = planShortcutAliasDeleteSuccess(&records[i])
 		changed = true
 		break
 	}

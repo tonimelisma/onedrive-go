@@ -1,4 +1,3 @@
-//nolint:gocritic // Transition helpers pass ShortcutRootRecord by value to keep decisions immutable.
 package sync
 
 import "fmt"
@@ -62,22 +61,26 @@ func normalizeShortcutRootState(state ShortcutRootState) ShortcutRootState {
 }
 
 func shortcutRootWithTransition(
-	record ShortcutRootRecord,
+	record *ShortcutRootRecord,
 	event shortcutRootLifecycleEvent,
 	to ShortcutRootState,
 	detail string,
 ) (ShortcutRootRecord, error) {
-	if err := validateShortcutRootTransition(record.State, event, to); err != nil {
-		return record, err
+	if record == nil {
+		return ShortcutRootRecord{}, fmt.Errorf("sync: shortcut root transition %s requires record", event)
 	}
-	record.State = to
-	record.BlockedDetail = detail
-	record.ProtectedPaths = protectedPathsForShortcutRoot(record.RelativeLocalPath, record.ProtectedPaths)
-	return record, nil
+	next := *record
+	if err := validateShortcutRootTransition(next.State, event, to); err != nil {
+		return next, err
+	}
+	next.State = to
+	next.BlockedDetail = detail
+	next.ProtectedPaths = protectedPathsForShortcutRoot(next.RelativeLocalPath, next.ProtectedPaths)
+	return next, nil
 }
 
 func plannedShortcutRootTransition(
-	record ShortcutRootRecord,
+	record *ShortcutRootRecord,
 	event shortcutRootLifecycleEvent,
 	to ShortcutRootState,
 	detail string,
@@ -86,8 +89,12 @@ func plannedShortcutRootTransition(
 	if err == nil {
 		return next
 	}
-	record.State = normalizeShortcutRootState(record.State)
-	record.BlockedDetail = err.Error()
-	record.ProtectedPaths = protectedPathsForShortcutRoot(record.RelativeLocalPath, record.ProtectedPaths)
-	return record
+	if record == nil {
+		return ShortcutRootRecord{State: ShortcutRootStateBlockedPath, BlockedDetail: err.Error()}
+	}
+	fallback := *record
+	fallback.State = normalizeShortcutRootState(fallback.State)
+	fallback.BlockedDetail = err.Error()
+	fallback.ProtectedPaths = protectedPathsForShortcutRoot(fallback.RelativeLocalPath, fallback.ProtectedPaths)
+	return fallback
 }

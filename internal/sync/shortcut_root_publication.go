@@ -16,7 +16,7 @@ func shortcutChildWorkSnapshotFromRootsWithParentRoot(
 		RunCommands: make([]ShortcutChildRunCommand, 0, len(roots)),
 	}
 	for i := range roots {
-		root := normalizeShortcutRootRecord(roots[i])
+		root := normalizeShortcutRootRecord(&roots[i])
 		if root.NamespaceID != "" && root.NamespaceID != namespaceID {
 			continue
 		}

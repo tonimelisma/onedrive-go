@@ -7,6 +7,8 @@ import (
 	"path"
 	"slices"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -83,11 +85,64 @@ type ShortcutChildEngineSpec struct {
 	LocalRootIdentity *ShortcutRootIdentity
 }
 
+func ValidateShortcutChildRunCommand(command *ShortcutChildRunCommand) (string, error) {
+	if command == nil {
+		return "", fmt.Errorf("sync: shortcut child run command is incomplete")
+	}
+	childMountID := command.ChildMountID
+	if childMountID == "" {
+		return "", fmt.Errorf("sync: shortcut child run command is missing a child mount ID")
+	}
+	if !config.IsChildMountID(childMountID) {
+		return "", fmt.Errorf("sync: shortcut child run command has invalid child mount ID %s", childMountID)
+	}
+	if command.Engine.LocalRoot == "" {
+		return "", fmt.Errorf("sync: shortcut child %s is missing a local root", childMountID)
+	}
+	if command.Engine.RemoteDriveID == "" || command.Engine.RemoteItemID == "" {
+		return "", fmt.Errorf("sync: shortcut child %s is missing remote root identity", childMountID)
+	}
+	switch command.Mode {
+	case ShortcutChildRunModeNormal, ShortcutChildRunModeFinalDrain:
+	default:
+		return "", fmt.Errorf("sync: shortcut child %s has unsupported run mode %q", childMountID, command.Mode)
+	}
+	if command.Mode == ShortcutChildRunModeFinalDrain && command.AckRef.IsZero() {
+		return "", fmt.Errorf("sync: shortcut final-drain child %s is missing an acknowledgement reference", childMountID)
+	}
+	return childMountID, nil
+}
+
+func ApplyShortcutChildRunCommandToEngineMountConfig(
+	command *ShortcutChildRunCommand,
+	cfg *EngineMountConfig,
+) error {
+	if _, err := ValidateShortcutChildRunCommand(command); err != nil {
+		return err
+	}
+	if cfg == nil {
+		return fmt.Errorf("sync: child engine mount config is required")
+	}
+	cfg.SyncRoot = command.Engine.LocalRoot
+	cfg.DriveID = driveid.New(command.Engine.RemoteDriveID)
+	cfg.RemoteRootItemID = command.Engine.RemoteItemID
+	cfg.ExpectedSyncRootIdentity = cloneShortcutRootIdentity(command.Engine.LocalRootIdentity)
+	return nil
+}
+
 func ShortcutChildEngineSpecsEqual(a ShortcutChildEngineSpec, b ShortcutChildEngineSpec) bool {
 	return a.LocalRoot == b.LocalRoot &&
 		a.RemoteDriveID == b.RemoteDriveID &&
 		a.RemoteItemID == b.RemoteItemID &&
 		shortcutRootIdentityPointersEqual(a.LocalRootIdentity, b.LocalRootIdentity)
+}
+
+func cloneShortcutRootIdentity(identity *ShortcutRootIdentity) *ShortcutRootIdentity {
+	if identity == nil {
+		return nil
+	}
+	cloned := *identity
+	return &cloned
 }
 
 type ShortcutChildCleanupCommand struct {

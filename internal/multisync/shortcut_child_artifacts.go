@@ -223,7 +223,7 @@ func shortcutChildArtifactCleanups(
 
 func (o *Orchestrator) purgeShortcutChildArtifactsForDecisions(
 	ctx context.Context,
-	decisions *runnerDecisionSet,
+	decisions *runtimeWorkSet,
 	parentAckers map[mountID]shortcutChildAckHandle,
 ) error {
 	if decisions == nil {
