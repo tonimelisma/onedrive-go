@@ -612,7 +612,7 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 	publications := map[mountID]syncengine.ShortcutChildRunnerPublication{
 		parentID: o.latestParentRunnerPublicationFor(parentID),
 	}
-	decisions, err := buildRunnerDecisionsForParents([]*mountSpec{parent}, publications, o.logger)
+	decisions, err := buildRunnerDecisionsForParents([]*mountSpec{parent}, publications, o.cfg.DataDir, o.logger)
 	if err != nil {
 		o.logger.Warn("parent-scoped shortcut runner reconciliation failed, keeping current runners",
 			slog.String("parent_mount_id", parentID.String()),

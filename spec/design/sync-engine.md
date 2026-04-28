@@ -27,7 +27,7 @@ It does not use a mixed failure table as durable control state.
 Parent namespace engines also persist parent-owned shortcut alias lifecycle in
 `shortcut_roots`. Those rows protect child-root paths from ordinary parent
 content planning, record parent-scoped blockers and retries, and declare child
-topology for the control plane. They are not child content retry state: child
+runner/cleanup publications for the control plane. They are not child content retry state: child
 engines still own `observation_issues`, `retry_work`, and `block_scopes` for the
 shared-folder target content inside the child projection.
 
@@ -435,7 +435,7 @@ lifecycle.
 
 Shortcut-root lifecycle decisions are expressed as deterministic planner
 helpers before the engine shell performs I/O. The planner chooses remote
-topology transitions, alias delete/rename, historical projection move,
+shortcut-observation transitions, alias delete/rename, historical projection move,
 ambiguous-rename, cleanup-blocked, waiting-replacement, duplicate-target, and
 local-root-unavailable state transitions from stored shortcut-root records plus
 observed value outcomes. Local shortcut lifecycle planning uses explicit
@@ -456,10 +456,10 @@ and publishes a child artifact cleanup request carrying the binding ID, child
 mount ID, child local root, and cleanup reason. Multisync purges the
 child-owned artifacts through its injected cleanup executor and acknowledges
 cleanup; it does not derive cleanup scope from the parent namespace. Only then
-does the parent delete the cleanup-pending row. If cleanup is interrupted or blocked, startup
-and later topology refresh retry the release from `removed_release_pending` or
-`removed_cleanup_blocked`; a later complete topology batch is not required to
-release that parent protected-root.
+does the parent delete the cleanup-pending row. If cleanup is interrupted or
+blocked, startup and later parent shortcut refresh retry the release from
+`removed_release_pending` or `removed_cleanup_blocked`; a later complete remote
+observation batch is not required to release that parent protected-root.
 
 If the parent later observes that a retiring or cleanup-blocked shortcut alias
 directory is gone, it treats that as user-directed manual discard of the local

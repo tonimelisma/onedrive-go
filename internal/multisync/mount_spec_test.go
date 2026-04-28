@@ -168,10 +168,12 @@ func TestBuildRunnerDecisions_AddsChildProjectionAfterParent(t *testing.T) {
 	parent.TransferWorkers = 7
 	parent.CheckWorkers = 8
 	parent.MinFreeSpaceBytes = 5 * 1024 * 1024
+	dataDir := testRunnerDecisionDataDir(t)
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, testPublishedShortcutChild()),
+		dataDir,
 	)
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 2)
@@ -188,7 +190,8 @@ func TestBuildRunnerDecisions_AddsChildProjectionAfterParent(t *testing.T) {
 	assert.Empty(t, childMount.driveType)
 	assert.False(t, childMount.rejectSharePointRootForms)
 	assert.Equal(t, filepath.Join(parent.SyncRoot, "Shortcuts", "Docs"), childMount.syncRoot)
-	assert.Equal(t, config.MountStatePath(config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")), childMount.statePath)
+	assert.Equal(t, config.MountStatePathForDataDir(dataDir, config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")), childMount.statePath)
+	assert.NotEqual(t, config.MountStatePath(config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")), childMount.statePath)
 	assert.Equal(t, driveid.MustCanonicalID("personal:owner@example.com"), childMount.tokenOwnerCanonical)
 	assert.Equal(t, "owner@example.com", childMount.accountEmail)
 	assert.Equal(t, 7, childMount.transferWorkers)
@@ -201,6 +204,26 @@ func TestBuildRunnerDecisions_AddsChildProjectionAfterParent(t *testing.T) {
 	assert.Equal(t, "remote-root", engineCfg.RemoteRootItemID)
 	assert.Empty(t, engineCfg.DriveType)
 	assert.False(t, engineCfg.LocalRules.RejectSharePointRootForms)
+}
+
+// Validates: R-2.4.8, R-2.8.1
+func TestBuildRunnerDecisions_ChildStatePathUsesExplicitDataDir(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	dataDir := testRunnerDecisionDataDir(t)
+	childID := config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")
+
+	decisions, err := buildRunnerDecisions(
+		[]StandaloneMountConfig{parent},
+		testParentTopologies(&parent, testPublishedShortcutChild()),
+		dataDir,
+	)
+	require.NoError(t, err)
+	require.Len(t, decisions.Mounts, 2)
+
+	childMount := decisions.Mounts[1]
+	assert.Equal(t, config.MountStatePathForDataDir(dataDir, childID), childMount.statePath)
+	assert.NotEqual(t, config.MountStatePath(childID), childMount.statePath)
 }
 
 // Validates: R-2.8.1
@@ -251,6 +274,7 @@ func TestBuildRunnerDecisions_ParentPausePausesChildWithoutParentReservationSynt
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, testPublishedShortcutChild()),
+		testRunnerDecisionDataDir(t),
 	)
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 2)
@@ -264,12 +288,12 @@ func TestBuildRunnerDecisions_ParentPausePausesChildWithoutParentReservationSynt
 func TestBuildRunnerDecisions_ParentBlockedChildDoesNotSynthesizeParentReservation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
-	child := testPublishedShortcutChild()
-	child.RunnerAction = syncengine.ShortcutChildActionSkipParentBlocked
+	child := skipChildPublication("binding-child-docs", "Shortcuts/Docs")
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, child),
+		testRunnerDecisionDataDir(t),
 	)
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 1)
@@ -287,6 +311,7 @@ func TestBuildRunnerDecisions_FinalDrainChildDoesNotSynthesizeParentReservation(
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, child),
+		testRunnerDecisionDataDir(t),
 	)
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 2)
@@ -305,6 +330,7 @@ func TestBuildRunnerDecisions_UsesParentRunnerRelativePathOnly(t *testing.T) {
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, child),
+		testRunnerDecisionDataDir(t),
 	)
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 2)
@@ -323,6 +349,7 @@ func TestBuildRunnerDecisions_UnavailableChildDoesNotSynthesizeParentReservation
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, child),
+		testRunnerDecisionDataDir(t),
 	)
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 1)
@@ -339,6 +366,7 @@ func TestBuildRunnerDecisions_ChildDeltaCapabilityComesFromMountTokenOwner(t *te
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, child),
+		testRunnerDecisionDataDir(t),
 	)
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 2)
@@ -357,6 +385,7 @@ func TestBuildRunnerDecisions_StandaloneContentRootDoesNotSuppressChild(t *testi
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent, standalone},
 		testParentTopologies(&parent, testPublishedShortcutChild()),
+		testRunnerDecisionDataDir(t),
 	)
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 3)
@@ -382,6 +411,7 @@ func TestBuildRunnerDecisions_MissingParentSkipsChild(t *testing.T) {
 				},
 			),
 		},
+		testRunnerDecisionDataDir(t),
 	)
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 1)

@@ -223,9 +223,10 @@ runnable drives from executing.
 
 For `sync` and `sync --watch`, the CLI/config composition boundary passes the
 managed data directory into `multisync.OrchestratorConfig`. Lower layers use
-that explicit value for child state DB, catalog, transfer scratch, and upload
-session cleanup. `internal/multisync` must not call `config.DefaultDataDir()`
-itself.
+that explicit value for child state DBs, catalog, transfer scratch, and upload
+session cleanup. `internal/multisync` must not call `config.DefaultDataDir()`,
+`config.MountStatePath(...)`, or derive child runner/cleanup paths from ambient
+process state.
 
 One-shot and watch sync both materialize the resolved `sync_dir` before they
 hand a runnable drive to the sync runtime. Config validation is allowed to
