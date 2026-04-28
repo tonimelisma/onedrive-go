@@ -69,14 +69,15 @@ type ShortcutChildRunnerPublication struct {
 }
 
 type ShortcutChildRunner struct {
+	ChildMountID      string
 	BindingItemID     string
 	RelativeLocalPath string
+	LocalRoot         string
 	LocalAlias        string
 	RemoteDriveID     string
 	RemoteItemID      string
 	RemoteIsFolder    bool
 	RunnerAction      ShortcutChildRunnerAction
-	RunnerDetail      string
 	LocalRootIdentity *ShortcutRootIdentity
 }
 
@@ -257,14 +258,15 @@ func shortcutChildRunnerEqual(a *ShortcutChildRunner, b *ShortcutChildRunner) bo
 }
 
 type shortcutChildRunnerComparable struct {
+	ChildMountID      string
 	BindingItemID     string
 	RelativeLocalPath string
+	LocalRoot         string
 	LocalAlias        string
 	RemoteDriveID     string
 	RemoteItemID      string
 	RemoteIsFolder    bool
 	RunnerAction      ShortcutChildRunnerAction
-	RunnerDetail      string
 }
 
 func shortcutChildRunnerComparableFor(child *ShortcutChildRunner) shortcutChildRunnerComparable {
@@ -272,14 +274,15 @@ func shortcutChildRunnerComparableFor(child *ShortcutChildRunner) shortcutChildR
 		return shortcutChildRunnerComparable{}
 	}
 	return shortcutChildRunnerComparable{
+		ChildMountID:      child.ChildMountID,
 		BindingItemID:     child.BindingItemID,
 		RelativeLocalPath: child.RelativeLocalPath,
+		LocalRoot:         child.LocalRoot,
 		LocalAlias:        child.LocalAlias,
 		RemoteDriveID:     child.RemoteDriveID,
 		RemoteItemID:      child.RemoteItemID,
 		RemoteIsFolder:    child.RemoteIsFolder,
 		RunnerAction:      child.RunnerAction,
-		RunnerDetail:      child.RunnerDetail,
 	}
 }
 

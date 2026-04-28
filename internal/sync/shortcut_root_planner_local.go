@@ -30,6 +30,90 @@ type shortcutRootMissingAliasPlan struct {
 	Changed          bool
 }
 
+type shortcutRootLocalObservationKind string
+
+const (
+	shortcutRootLocalObservationBlocked             shortcutRootLocalObservationKind = "blocked"
+	shortcutRootLocalObservationUnavailable         shortcutRootLocalObservationKind = "unavailable"
+	shortcutRootLocalObservationReady               shortcutRootLocalObservationKind = "ready"
+	shortcutRootLocalObservationRetiringPathMissing shortcutRootLocalObservationKind = "retiring_path_missing"
+)
+
+type shortcutRootLocalObservation struct {
+	Kind     shortcutRootLocalObservationKind
+	Detail   string
+	Identity *synctree.FileIdentity
+}
+
+type shortcutRootLocalObservationPlan struct {
+	Next    ShortcutRootRecord
+	Keep    bool
+	Changed bool
+}
+
+func shortcutRootLocalObservationForPathError(err error) shortcutRootLocalObservation {
+	kind := shortcutRootLocalObservationUnavailable
+	if errors.Is(err, synctree.ErrUnsafePath) ||
+		errors.Is(err, syscall.ENOTDIR) {
+		kind = shortcutRootLocalObservationBlocked
+	}
+	return shortcutRootLocalObservation{
+		Kind:   kind,
+		Detail: err.Error(),
+	}
+}
+
+//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
+func planShortcutRootLocalObservation(
+	record ShortcutRootRecord,
+	observation shortcutRootLocalObservation,
+) shortcutRootLocalObservationPlan {
+	record = normalizeShortcutRootRecord(record)
+	switch observation.Kind {
+	case shortcutRootLocalObservationBlocked:
+		next := planShortcutRootBlocked(record, observation.Detail)
+		return shortcutRootLocalObservationPlan{
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(record, next),
+		}
+	case shortcutRootLocalObservationUnavailable:
+		next := planShortcutRootUnavailable(record, observation.Detail)
+		return shortcutRootLocalObservationPlan{
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(record, next),
+		}
+	case shortcutRootLocalObservationReady:
+		if observation.Identity == nil {
+			next := planShortcutRootUnavailable(record, "shortcut alias local root identity is unavailable")
+			return shortcutRootLocalObservationPlan{
+				Next:    next,
+				Keep:    true,
+				Changed: !shortcutRootRecordsEqual(record, next),
+			}
+		}
+		next := planShortcutRootLocalReady(record, *observation.Identity)
+		return shortcutRootLocalObservationPlan{
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(record, next),
+		}
+	case shortcutRootLocalObservationRetiringPathMissing:
+		next, keep := planRetiringShortcutRootMissing(record)
+		return shortcutRootLocalObservationPlan{
+			Next:    next,
+			Keep:    keep,
+			Changed: true,
+		}
+	default:
+		return shortcutRootLocalObservationPlan{
+			Next: record,
+			Keep: true,
+		}
+	}
+}
+
 //nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutRootPathError(record ShortcutRootRecord, err error) ShortcutRootRecord {
 	if errors.Is(err, synctree.ErrUnsafePath) ||

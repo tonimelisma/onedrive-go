@@ -1,6 +1,7 @@
 package multisync
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -24,6 +25,7 @@ func testPublishedShortcutChild() syncengine.ShortcutChildRunner {
 		BindingItemID:     "binding-child-docs",
 		LocalAlias:        filepath.Base(relativePath),
 		RelativeLocalPath: relativePath,
+		LocalRoot:         filepath.Join(os.TempDir(), "parent", filepath.FromSlash(relativePath)),
 		RemoteDriveID:     remoteDriveID,
 		RemoteItemID:      remoteItemID,
 		RunnerAction:      syncengine.ShortcutChildActionRun,
@@ -36,6 +38,10 @@ func testParentTopologies(
 ) map[mountID]syncengine.ShortcutChildRunnerPublication {
 	if parent == nil {
 		return nil
+	}
+	for i := range children {
+		children[i].ChildMountID = config.ChildMountID(parent.CanonicalID.String(), children[i].BindingItemID)
+		children[i].LocalRoot = filepath.Join(parent.SyncRoot, filepath.FromSlash(children[i].RelativeLocalPath))
 	}
 	return map[mountID]syncengine.ShortcutChildRunnerPublication{
 		mountID(parent.CanonicalID.String()): {
@@ -212,7 +218,6 @@ func TestBuildRunnerDecisions_ParentBlockedChildDoesNotSynthesizeParentReservati
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	child := testPublishedShortcutChild()
 	child.RunnerAction = syncengine.ShortcutChildActionSkipParentBlocked
-	child.RunnerDetail = "duplicate_content_root"
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
@@ -221,7 +226,7 @@ func TestBuildRunnerDecisions_ParentBlockedChildDoesNotSynthesizeParentReservati
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 1)
 	require.Len(t, decisions.Skipped, 1)
-	assert.Contains(t, decisions.Skipped[0].Err.Error(), "duplicate_content_root")
+	assert.Contains(t, decisions.Skipped[0].Err.Error(), "blocked by parent shortcut lifecycle")
 }
 
 // Validates: R-2.8.1
@@ -259,6 +264,26 @@ func TestBuildRunnerDecisions_UsesParentRunnerRelativePathOnly(t *testing.T) {
 }
 
 // Validates: R-2.8.1
+func TestBuildChildRunnerDecision_RequiresParentPublishedChildScope(t *testing.T) {
+	t.Parallel()
+
+	parent := testParentMountSpec()
+	child := testChildRecord(parent.mountID, "binding-docs", "Shortcuts/Docs")
+
+	missingMountID := child
+	missingMountID.ChildMountID = ""
+	_, err := buildChildRunnerDecision(parent, &missingMountID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing a child mount ID")
+
+	missingLocalRoot := child
+	missingLocalRoot.LocalRoot = ""
+	_, err = buildChildRunnerDecision(parent, &missingLocalRoot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing a local root")
+}
+
+// Validates: R-2.8.1
 func TestBuildRunnerDecisions_UnavailableChildDoesNotSynthesizeParentReservation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
@@ -266,7 +291,6 @@ func TestBuildRunnerDecisions_UnavailableChildDoesNotSynthesizeParentReservation
 	child.RemoteDriveID = ""
 	child.RemoteItemID = ""
 	child.RunnerAction = syncengine.ShortcutChildActionSkipParentBlocked
-	child.RunnerDetail = "shortcut_binding_unavailable"
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
@@ -275,7 +299,7 @@ func TestBuildRunnerDecisions_UnavailableChildDoesNotSynthesizeParentReservation
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 1)
 	require.Len(t, decisions.Skipped, 1)
-	assert.Contains(t, decisions.Skipped[0].Err.Error(), "shortcut_binding_unavailable")
+	assert.Contains(t, decisions.Skipped[0].Err.Error(), "blocked by parent shortcut lifecycle")
 }
 
 // Validates: R-2.8.1
@@ -322,8 +346,10 @@ func TestBuildRunnerDecisions_MissingParentSkipsChild(t *testing.T) {
 			"missing-parent": {
 				NamespaceID: "missing-parent",
 				Children: []syncengine.ShortcutChildRunner{{
+					ChildMountID:      config.ChildMountID("missing-parent", "binding-child-docs"),
 					BindingItemID:     "binding-child-docs",
 					RelativeLocalPath: "Shortcuts/Docs",
+					LocalRoot:         filepath.Join(t.TempDir(), "Shortcuts", "Docs"),
 					RemoteDriveID:     "remote-drive",
 					RemoteItemID:      "remote-root",
 					RunnerAction:      syncengine.ShortcutChildActionRun,

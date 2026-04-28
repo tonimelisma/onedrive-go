@@ -489,7 +489,7 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncStatusOnlyRunnerFields(t *testi
 		"import syncengine \"github.com/tonimelisma/onedrive-go/internal/sync\"",
 		"",
 		"func bad(child syncengine.ShortcutChildRunner) bool {",
-		"\treturn len(child.ProtectedPaths) > 0 || child.BlockedDetail != \"\" || child.Waiting != nil",
+		"\treturn child.RunnerDetail != \"\"",
 		"}",
 		"",
 	})
@@ -537,7 +537,7 @@ func TestRunRepoConsistencyChecksFailsOnMultisyncSyntheticShortcutAckHandle(t *t
 		"import syncengine \"github.com/tonimelisma/onedrive-go/internal/sync\"",
 		"",
 		"func bad() {",
-		"\t_ = syncengine.NewShortcutChildAckHandle(nil, nil)",
+		"\t_ = syncengine.ShortcutChildAckHandle{}",
 		"}",
 		"",
 	})

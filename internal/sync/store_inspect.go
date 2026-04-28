@@ -72,8 +72,8 @@ func ReadShortcutRootStatusSnapshot(
 	ctx context.Context,
 	dbPath string,
 	logger *slog.Logger,
-) ([]ShortcutRootRecord, error) {
-	return readWithInspector(dbPath, logger, func(inspector *storeInspector) ([]ShortcutRootRecord, error) {
+) ([]ShortcutRootStatusRow, error) {
+	return readWithInspector(dbPath, logger, func(inspector *storeInspector) ([]ShortcutRootStatusRow, error) {
 		return inspector.ReadShortcutRootStatusSnapshot(ctx)
 	})
 }
@@ -109,7 +109,7 @@ func (m *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSna
 
 // ReadShortcutRootStatusSnapshot reads parent-owned shortcut-root lifecycle
 // state from an already-open sync store.
-func (m *SyncStore) ReadShortcutRootStatusSnapshot(ctx context.Context) ([]ShortcutRootRecord, error) {
+func (m *SyncStore) ReadShortcutRootStatusSnapshot(ctx context.Context) ([]ShortcutRootStatusRow, error) {
 	if m == nil {
 		return nil, fmt.Errorf("read shortcut root status snapshot: nil store")
 	}
@@ -256,8 +256,12 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 	return snapshot, nil
 }
 
-func (i *storeInspector) ReadShortcutRootStatusSnapshot(ctx context.Context) ([]ShortcutRootRecord, error) {
-	return queryShortcutRootRecords(ctx, i.db, "read shortcut root status rows", "iterate shortcut root status rows")
+func (i *storeInspector) ReadShortcutRootStatusSnapshot(ctx context.Context) ([]ShortcutRootStatusRow, error) {
+	records, err := queryShortcutRootRecords(ctx, i.db, "read shortcut root status rows", "iterate shortcut root status rows")
+	if err != nil {
+		return nil, err
+	}
+	return shortcutRootStatusRows(records), nil
 }
 
 // ReadPathTruthStatus returns the derived current-truth availability for the
