@@ -230,7 +230,9 @@ func (o *Orchestrator) purgeShortcutChildArtifactsForDecisions(
 		return nil
 	}
 	if len(decisions.CleanupChildren) == 0 {
-		o.clearShortcutCleanupDiagnostics(shortcutChildArtifactCleanupSourcePublished)
+		if decisions.CleanupScopeAllParents {
+			o.clearShortcutCleanupDiagnostics(shortcutChildArtifactCleanupSourcePublished)
+		}
 		return nil
 	}
 	return o.purgeAndAcknowledgeShortcutChildArtifacts(
