@@ -30,6 +30,56 @@ const (
 	shortcutChildArtifactCleanupSourceFinalDrain shortcutChildArtifactCleanupSource = "final_drain"
 )
 
+type shortcutChildArtifactCleanupFailureClass string
+
+const (
+	shortcutChildArtifactCleanupSetupFailure         shortcutChildArtifactCleanupFailureClass = "setup"
+	shortcutChildArtifactCleanupStateArtifactFailure shortcutChildArtifactCleanupFailureClass = "state_artifact"
+	shortcutChildArtifactCleanupCatalogFailure       shortcutChildArtifactCleanupFailureClass = "catalog"
+	shortcutChildArtifactCleanupUploadSessionFailure shortcutChildArtifactCleanupFailureClass = "upload_session"
+	shortcutChildArtifactCleanupParentAckFailure     shortcutChildArtifactCleanupFailureClass = "parent_ack"
+)
+
+type shortcutChildArtifactCleanupError struct {
+	class shortcutChildArtifactCleanupFailureClass
+	op    string
+	err   error
+}
+
+func (e shortcutChildArtifactCleanupError) Error() string {
+	if e.op == "" {
+		return fmt.Sprintf("%s cleanup failure: %v", e.class, e.err)
+	}
+	return fmt.Sprintf("%s cleanup failure: %s: %v", e.class, e.op, e.err)
+}
+
+func (e shortcutChildArtifactCleanupError) Unwrap() error {
+	return e.err
+}
+
+func shortcutChildArtifactCleanupClass(err error) (shortcutChildArtifactCleanupFailureClass, bool) {
+	var cleanupErr shortcutChildArtifactCleanupError
+	if errors.As(err, &cleanupErr) {
+		return cleanupErr.class, true
+	}
+	return "", false
+}
+
+func classifiedShortcutChildCleanupError(
+	class shortcutChildArtifactCleanupFailureClass,
+	op string,
+	err error,
+) error {
+	if err == nil {
+		return nil
+	}
+	return shortcutChildArtifactCleanupError{
+		class: class,
+		op:    op,
+		err:   err,
+	}
+}
+
 type shortcutChildArtifactScope struct {
 	mountID   string
 	localRoot string
@@ -166,14 +216,22 @@ func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 		parentID := mountID(cleanup.namespaceID)
 		acker := parentAckers[parentID]
 		if shortcutChildAckHandleIsZero(acker) {
-			errs = append(errs, fmt.Errorf("parent mount %s is unavailable for child artifact cleanup acknowledgement", parentID))
+			errs = append(errs, classifiedShortcutChildCleanupError(
+				shortcutChildArtifactCleanupParentAckFailure,
+				"acknowledge parent cleanup",
+				fmt.Errorf("parent mount %s is unavailable for child artifact cleanup acknowledgement", parentID),
+			))
 			continue
 		}
 		snapshot, err := acker.AcknowledgeChildArtifactsPurged(ctx, syncengine.ShortcutChildArtifactCleanupAck{
 			BindingItemID: cleanup.bindingItemID,
 		})
 		if err != nil {
-			errs = append(errs, fmt.Errorf("acknowledging child artifact cleanup for mount %s: %w", cleanup.mountID, err))
+			errs = append(errs, classifiedShortcutChildCleanupError(
+				shortcutChildArtifactCleanupParentAckFailure,
+				fmt.Sprintf("acknowledge child artifact cleanup for mount %s", cleanup.mountID),
+				err,
+			))
 			continue
 		}
 		o.receiveParentRunnerPublication(parentID, snapshot)
@@ -190,7 +248,11 @@ func (e shortcutChildArtifactCleanupExecutor) purge(
 		return nil
 	}
 	if ctx != nil && ctx.Err() != nil {
-		return fmt.Errorf("purging shortcut child artifacts: %w", ctx.Err())
+		return classifiedShortcutChildCleanupError(
+			shortcutChildArtifactCleanupSetupFailure,
+			"purge shortcut child artifacts",
+			ctx.Err(),
+		)
 	}
 	if !config.IsChildMountID(childMountID) {
 		return nil
@@ -205,14 +267,26 @@ func (e shortcutChildArtifactCleanupExecutor) purge(
 			continue
 		}
 		if err := e.remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			errs = append(errs, fmt.Errorf("remove child state artifact %s: %w", path, err))
+			errs = append(errs, classifiedShortcutChildCleanupError(
+				shortcutChildArtifactCleanupStateArtifactFailure,
+				fmt.Sprintf("remove child state artifact %s", path),
+				err,
+			))
 		}
 	}
 	if err := e.pruneCatalogRecord(childMountID); err != nil {
-		errs = append(errs, err)
+		errs = append(errs, classifiedShortcutChildCleanupError(
+			shortcutChildArtifactCleanupCatalogFailure,
+			"prune child catalog record",
+			err,
+		))
 	}
 	if err := e.deleteUploadSessions(childMountID, scope.localRoot); err != nil {
-		errs = append(errs, fmt.Errorf("delete child upload sessions: %w", err))
+		errs = append(errs, classifiedShortcutChildCleanupError(
+			shortcutChildArtifactCleanupUploadSessionFailure,
+			"delete child upload sessions",
+			err,
+		))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("purging managed child mount artifacts: %w", err)
@@ -228,10 +302,18 @@ func (e shortcutChildArtifactCleanupExecutor) purge(
 
 func (e shortcutChildArtifactCleanupExecutor) requireConfigured() error {
 	if strings.TrimSpace(e.dataDir) == "" {
-		return fmt.Errorf("purging managed child mount artifacts: cleanup executor data dir is not configured")
+		return classifiedShortcutChildCleanupError(
+			shortcutChildArtifactCleanupSetupFailure,
+			"configure cleanup executor",
+			fmt.Errorf("cleanup executor data dir is not configured"),
+		)
 	}
 	if e.remove == nil || e.pruneCatalogRecord == nil || e.deleteUploadSessions == nil {
-		return fmt.Errorf("purging managed child mount artifacts: cleanup executor is not configured")
+		return classifiedShortcutChildCleanupError(
+			shortcutChildArtifactCleanupSetupFailure,
+			"configure cleanup executor",
+			fmt.Errorf("cleanup executor is not configured"),
+		)
 	}
 	return nil
 }

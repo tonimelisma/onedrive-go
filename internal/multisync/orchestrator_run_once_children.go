@@ -13,8 +13,11 @@ import (
 // oneShotChildRuns owns child runner timing for a single RunOnce call. It is
 // not shortcut policy: parents publish exact runner snapshots, children execute
 // ordinary Engine.RunOnce work, and this coordinator only preserves the
-// ordering rule that final-drain and artifact-cleanup acknowledgements go back
-// to the same live parent after that parent reaches its safe ack point.
+// lifecycle order:
+// parent registered -> fresh publication accepted -> child work started ->
+// parent safe point reached -> final-drain/artifact cleanup acked.
+// Cancellation before the safe point exits without acking, so recovery comes
+// from parent shortcut_roots plus child artifacts instead of this cache.
 type oneShotChildRuns struct {
 	orchestrator *Orchestrator
 	mode         syncengine.SyncMode

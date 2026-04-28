@@ -1071,7 +1071,7 @@ func TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile(t *testin
 	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
 	topology := testParentTopologies(&parent, child)
 
-	decisions, err := buildRunnerDecisions([]StandaloneMountConfig{parent}, topology)
+	decisions, err := buildRunnerDecisions([]StandaloneMountConfig{parent}, topology, testRunnerDecisionDataDir(t))
 	require.NoError(t, err)
 	var childMount *mountSpec
 	for i := range decisions.Mounts {
@@ -1895,6 +1895,7 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 	initialDecisions, err := buildRunnerDecisionsForParents(
 		parentMounts,
 		orch.latestParentRunnerPublicationsFor(parentMounts),
+		cfg.DataDir,
 		nil,
 	)
 	require.NoError(t, err)
@@ -1974,14 +1975,14 @@ func TestApplyWatchMountSet_StopsStaleChildBeforeStartingReplacement(t *testing.
 	require.NoError(t, err)
 	child := testPublishedShortcutChild()
 	child.LocalRootIdentity = &syncengine.ShortcutRootIdentity{Device: 1, Inode: 2}
-	oldDecisions, err := buildRunnerDecisionsForParents(parentMounts, testParentTopologies(&parent, child), nil)
+	oldDecisions, err := buildRunnerDecisionsForParents(parentMounts, testParentTopologies(&parent, child), cfg.DataDir, nil)
 	require.NoError(t, err)
 
 	nextChild := child
 	nextChild.LocalRootIdentity = &syncengine.ShortcutRootIdentity{Device: 3, Inode: 4}
 	nextParentMounts, err := buildStandaloneMountSpecs(cfg.StandaloneMounts)
 	require.NoError(t, err)
-	newDecisions, err := buildRunnerDecisionsForParents(nextParentMounts, testParentTopologies(&parent, nextChild), nil)
+	newDecisions, err := buildRunnerDecisionsForParents(nextParentMounts, testParentTopologies(&parent, nextChild), cfg.DataDir, nil)
 	require.NoError(t, err)
 
 	var oldChildMount *mountSpec

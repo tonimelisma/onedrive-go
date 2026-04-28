@@ -110,6 +110,13 @@ linters:
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
               desc: driveops must not import internal/sync
+        multisync-no-graph:
+          files:
+            - internal/multisync/*.go
+            - "!$test"
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/graph$
+              desc: multisync owns runner lifecycle only and must not call Graph directly
         leaf-internal:
           files:
             - internal/driveid/*.go

@@ -173,21 +173,23 @@ func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, e
 func buildRunnerDecisions(
 	standaloneMounts []StandaloneMountConfig,
 	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
+	dataDir string,
 ) (*runnerDecisionSet, error) {
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
-	return buildRunnerDecisionsForParents(parents, publications, nil)
+	return buildRunnerDecisionsForParents(parents, publications, dataDir, nil)
 }
 
 func buildRunnerDecisionsForParents(
 	parents []*mountSpec,
 	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
+	dataDir string,
 	logger *slog.Logger,
 ) (*runnerDecisionSet, error) {
 	parentByID := indexStandaloneMounts(parents)
-	childDecisionsByParent, childrenWithoutConfiguredParent, err := buildChildRunnerDecisions(parentByID, publications)
+	childDecisionsByParent, childrenWithoutConfiguredParent, err := buildChildRunnerDecisions(parentByID, publications, dataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -223,6 +225,7 @@ func indexStandaloneMounts(parents []*mountSpec) map[mountID]*mountSpec {
 func buildChildRunnerDecisions(
 	parentByID map[mountID]*mountSpec,
 	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
+	dataDir string,
 ) (map[mountID][]*childRunnerDecision, []childWithoutConfiguredParent, error) {
 	childDecisionsByParent := make(map[mountID][]*childRunnerDecision)
 	childrenWithoutConfiguredParent := make([]childWithoutConfiguredParent, 0)
@@ -238,7 +241,7 @@ func buildChildRunnerDecisions(
 			continue
 		}
 
-		decision, err := buildChildRunnerDecision(parent, &declared.child)
+		decision, err := buildChildRunnerDecision(parent, &declared.child, dataDir)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -436,7 +439,7 @@ func (spec *parentMountSpec) runtimeMountSpec() *mountSpec {
 	}
 }
 
-func buildChildRunnerDecision(parent *mountSpec, child *syncengine.ShortcutChildRunner) (*childRunnerDecision, error) {
+func buildChildRunnerDecision(parent *mountSpec, child *syncengine.ShortcutChildRunner, dataDir string) (*childRunnerDecision, error) {
 	if parent == nil || child == nil || child.BindingItemID == "" {
 		return nil, fmt.Errorf("multisync: parent-declared child runner publication is incomplete")
 	}
@@ -445,7 +448,7 @@ func buildChildRunnerDecision(parent *mountSpec, child *syncengine.ShortcutChild
 		return nil, err
 	}
 	relativePath := child.RelativeLocalPath
-	statePath := config.MountStatePath(childMountID)
+	statePath := config.MountStatePathForDataDir(dataDir, childMountID)
 	if statePath == "" {
 		return nil, fmt.Errorf("multisync: state path is required for child mount %s", childMountID)
 	}

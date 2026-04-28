@@ -19,6 +19,9 @@ const (
 	shortcutRootCaseRenameTempInfix = ".shortcut-alias-case-rename"
 )
 
+// This file is the shortcut-root local lifecycle shell. It gathers filesystem
+// and store facts, executes Graph/filesystem effects, and persists planner
+// outputs. Durable shortcut policy decisions stay in shortcut_root_planner_*.
 func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, error) {
 	if e == nil || e.baseline == nil {
 		return false, nil
@@ -210,19 +213,22 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 	case shortcutRootMissingAliasMoveProjection:
 		return e.moveRemoteRenamedShortcutProjection(record, plan.FromRelativePath, plan.ToRelativePath)
 	case shortcutRootMissingAliasDelete:
-		if err := e.applyShortcutAliasMutation(ctx, plan.Mutation); err != nil {
-			return planMissingAliasMutationFailure(record, "", err), true, true, nil
+		result := shortcutRootAliasMutationResult{
+			MutationErr: e.applyShortcutAliasMutation(ctx, plan.Mutation),
 		}
-		return ShortcutRootRecord{}, false, true, nil
+		resultPlan := planMissingAliasDeleteResult(record, result)
+		return shortcutRootLocalActionResult(&resultPlan)
 	case shortcutRootMissingAliasRename:
-		if err := e.applyShortcutAliasMutation(ctx, plan.Mutation); err != nil {
-			return planMissingAliasMutationFailure(record, plan.CandidatePath, err), true, true, nil
+		result := shortcutRootAliasMutationResult{
+			MutationErr: e.applyShortcutAliasMutation(ctx, plan.Mutation),
 		}
-		identity, identityErr := e.syncTree.IdentityNoFollow(filepath.FromSlash(plan.CandidatePath))
-		if identityErr != nil {
-			return planShortcutRootUnavailable(record, identityErr.Error()), true, true, nil
+		if result.MutationErr == nil {
+			identity, identityErr := e.syncTree.IdentityNoFollow(filepath.FromSlash(plan.CandidatePath))
+			result.Identity = &identity
+			result.IdentityErr = identityErr
 		}
-		return planMissingAliasRenameSuccess(record, plan.CandidatePath, identity), true, true, nil
+		resultPlan := planMissingAliasRenameResult(record, plan.CandidatePath, result)
+		return shortcutRootLocalActionResult(&resultPlan)
 	case shortcutRootMissingAliasRenameAmbiguous:
 		return plan.Next, plan.Keep, plan.Changed, nil
 	case shortcutRootMissingAliasNoop:
@@ -408,6 +414,13 @@ func (e *Engine) moveRemoteRenamedShortcutProjection(
 }
 
 func shortcutRootLocalPlanResult(plan *shortcutRootLocalObservationPlan) (ShortcutRootRecord, bool, bool, error) {
+	if plan == nil {
+		return ShortcutRootRecord{}, false, false, nil
+	}
+	return plan.Next, plan.Keep, plan.Changed, nil
+}
+
+func shortcutRootLocalActionResult(plan *shortcutRootLocalPlan) (ShortcutRootRecord, bool, bool, error) {
 	if plan == nil {
 		return ShortcutRootRecord{}, false, false, nil
 	}

@@ -149,7 +149,10 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 		shortcutRootEventCompleteOmission:      {ShortcutRootStateRemovedFinalDrain},
 		shortcutRootEventProtectedPathConflict: {ShortcutRootStateBlockedPath},
 		shortcutRootEventLocalRootReady:        {ShortcutRootStateActive},
-		shortcutRootEventLocalPathBlocked:      {ShortcutRootStateBlockedPath},
+		shortcutRootEventLocalPathBlocked: {
+			ShortcutRootStateBlockedPath,
+			ShortcutRootStateLocalRootUnavailable,
+		},
 		shortcutRootEventAliasMutationSucceeded: {
 			ShortcutRootStateActive,
 			ShortcutRootStateRemovedFinalDrain,
