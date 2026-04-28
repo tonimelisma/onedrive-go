@@ -81,7 +81,7 @@ Graph/OAuth flows, token deletion, and user interaction, but they do not
 hand-edit `CatalogAccount` or `CatalogDrive` records directly for product
 behavior. Automatic shortcut lifecycle is not a config-owned durable fact: the
 parent engine stores parent shortcut-root lifecycle in its sync store and
-multisync compiles child runners from ephemeral parent-declared child process
+multisync compiles child runners from ephemeral parent-declared child work
 snapshots.
 
 The config file itself is durable even when it has zero drive sections. Removing

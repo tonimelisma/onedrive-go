@@ -66,7 +66,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 | Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
-| Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child process snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroValueReturnsError` |
+| Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child work snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroValueReturnsError` |
 
 ## Construction
 
@@ -192,7 +192,7 @@ read from `engine_runtime_completion.go` plus the trial-specific
 `engine_runtime_completion_trial.go`.
 
 Parent child-admission readiness is part of the normal parent run path.
-Multisync attaches a child process snapshot sink before it starts a selected
+Multisync attaches a child work snapshot sink before it starts a selected
 parent engine, then waits for that live parent to publish from the normal
 current-plan pipeline.
 That pipeline performs the same remote observation cadence decision, full local
@@ -414,10 +414,10 @@ those placeholders as shortcut snapshot facts before remote cursor commit. The
 parent engine also persists parent-owned `shortcut_roots` state in its sync
 store: binding item ID, alias path, target identity, protected parent-local
 paths, lifecycle state, and same-path replacement waiting state. The
-multi-mount control plane consumes the parent-declared child process commands only to
+multi-mount control plane consumes the parent-declared child work commands only to
 start, drain, skip, or purge child runners.
 
-Managed shortcut child process snapshots also carry the parent-observed local root
+Managed shortcut child work snapshots also carry the parent-observed local root
 identity when the parent has materialized the alias directory. Child engines
 verify that identity at construction and before full local scans. If the local
 root disappeared, moved away, or was deleted and recreated at the same path, the
@@ -428,7 +428,7 @@ Shortcut placeholder rename/delete mutations are parent-engine operations by
 binding item ID. The parent engine observes the need for local alias
 rename/delete from its protected-root scan/watch path, applies the Graph
 mutation itself, persists the retry/block state in `shortcut_roots`, and then
-publishes the resulting child process commands. Multisync must not rediscover parent
+publishes the resulting child work commands. Multisync must not rediscover parent
 remote state, call parent-drive alias mutation APIs, or decide parent alias
 lifecycle.
 

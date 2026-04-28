@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"path"
-	"path/filepath"
 	"sort"
 	"time"
 
@@ -519,12 +517,6 @@ func buildChildStatusMount(
 		return statusMount{}
 	}
 	root := child.Root
-	displayName := root.LocalAlias
-	if displayName == "" {
-		displayName = path.Base(root.RelativeLocalPath)
-	}
-
-	mountID := config.ChildMountID(child.ParentID.String(), root.BindingItemID)
 	metadata := root.Metadata
 	state := driveState(&parentDrive)
 	statusDetail := root.StateDetail
@@ -533,11 +525,11 @@ func buildChildStatusMount(
 	}
 
 	mount := statusMount{
-		MountID:        mountID,
+		MountID:        root.MountID,
 		NamespaceID:    child.ParentID.String(),
 		ProjectionKind: statusProjectionChild,
-		DisplayName:    displayName,
-		SyncDir:        filepath.Join(parentDrive.SyncDir, filepath.FromSlash(root.RelativeLocalPath)),
+		DisplayName:    root.DisplayName,
+		SyncDir:        root.DisplayLocalRoot,
 		State:          state,
 		StateReason:    metadata.StateReason,
 		IssueClass:     string(metadata.IssueClass),
@@ -547,35 +539,18 @@ func buildChildStatusMount(
 	}
 	mount.WaitingReplacement = root.WaitingReplacementPath
 	if metadata.ProtectsPath {
-		mount.ProtectedCurrentPath = filepath.Join(parentDrive.SyncDir, filepath.FromSlash(root.ProtectedCurrentPath))
-		mount.ProtectedReservedPaths = childProtectedReservedPaths(
-			parentDrive.SyncDir,
-			root.ProtectedReservedPaths,
-		)
+		mount.ProtectedCurrentPath = root.ProtectedCurrentLocalRoot
+		mount.ProtectedReservedPaths = root.ProtectedReservedLocalRoots
 	}
 	if metadata.DisplayState != "" {
 		autoRetry := metadata.AutoRetry
 		mount.AutoRetry = &autoRetry
 	}
 	if syncQ != nil {
-		mount.SyncState = syncQ.QuerySyncState(config.MountStatePath(mountID))
+		mount.SyncState = syncQ.QuerySyncState(config.MountStatePath(root.MountID))
 	}
 
 	return mount
-}
-
-func childProtectedReservedPaths(parentSyncDir string, relativePaths []string) []string {
-	if len(relativePaths) == 0 {
-		return nil
-	}
-	protected := make([]string, 0, len(relativePaths))
-	for _, relativePath := range relativePaths {
-		if relativePath == "" {
-			continue
-		}
-		protected = append(protected, filepath.Join(parentSyncDir, filepath.FromSlash(relativePath)))
-	}
-	return protected
 }
 
 func querySyncState(

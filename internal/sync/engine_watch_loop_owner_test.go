@@ -167,8 +167,8 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 	}}))
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
 
-	var published ShortcutChildProcessSnapshot
-	eng.shortcutChildProcessSink = func(_ context.Context, publication ShortcutChildProcessSnapshot) error {
+	var published ShortcutChildWorkSnapshot
+	eng.shortcutChildWorkSink = func(_ context.Context, publication ShortcutChildWorkSnapshot) error {
 		published = publication
 		return nil
 	}

@@ -233,14 +233,14 @@ func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 	if err != nil {
 		return false, err
 	}
-	if !changed || rt.engine.shortcutChildProcessSink == nil {
+	if !changed || rt.engine.shortcutChildWorkSink == nil {
 		return false, nil
 	}
 	roots, err := rt.engine.baseline.listShortcutRoots(ctx)
 	if err != nil {
 		return false, fmt.Errorf("sync: read shortcut roots after protected root event: %w", err)
 	}
-	return false, rt.engine.shortcutChildProcessSink(ctx, shortcutChildProcessSnapshotFromRootsWithParentRoot(
+	return false, rt.engine.shortcutChildWorkSink(ctx, shortcutChildWorkSnapshotFromRootsWithParentRoot(
 		rt.engine.shortcutNamespaceID,
 		rt.engine.syncRoot,
 		roots,

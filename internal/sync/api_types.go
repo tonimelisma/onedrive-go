@@ -50,7 +50,7 @@ const (
 // ProtectedRootEvent is a narrow parent-engine-internal notification from the
 // local observer to the watch runtime. It never plans child content work; it
 // only wakes the parent shortcut-root lifecycle so parent-owned state can
-// publish updated child process commands promptly.
+// publish updated child work commands promptly.
 type ProtectedRootEvent struct {
 	Type         ProtectedRootEventType
 	Path         string
@@ -169,7 +169,7 @@ type engineInputs struct {
 	LocalFilter              LocalFilterConfig
 	LocalRules               LocalObservationRules
 	ShortcutNamespaceID      string
-	ShortcutChildProcessSink ShortcutChildProcessSink
+	ShortcutChildWorkSink    ShortcutChildWorkSink
 	EnableWebsocket          bool
 	TransferWorkers          int
 	CheckWorkers             int

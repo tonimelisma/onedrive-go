@@ -1,6 +1,6 @@
+//nolint:gocritic // Planner helpers pass ShortcutRootRecord by value to keep transition decisions immutable.
 package sync
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutRootCleanupBlocked(record ShortcutRootRecord, err error) ShortcutRootRecord {
 	detail := ""
 	if err != nil {
@@ -13,7 +13,6 @@ func planShortcutRootCleanupBlocked(record ShortcutRootRecord, err error) Shortc
 	)
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutRootChildCleanupPending(record ShortcutRootRecord) ShortcutRootRecord {
 	record = normalizeShortcutRootRecord(record)
 	record = plannedShortcutRootTransition(record,

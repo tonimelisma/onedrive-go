@@ -166,7 +166,7 @@ func (o *Orchestrator) startInitialWatchRunners(
 			continue
 		}
 
-		o.attachParentChildProcessSink(mount, runnerEvents, nil)
+		o.attachParentChildWorkSink(mount, runnerEvents, nil)
 		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents)
 		if err != nil {
 			o.logger.Error("failed to start watch runner",
@@ -422,7 +422,7 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 		}
 		delete(runners, event.mountID)
 		if wr.mount != nil && wr.mount.projectionKind == MountProjectionStandalone {
-			o.forgetParentChildProcessSnapshot(event.mountID)
+			o.forgetParentChildWorkSnapshot(event.mountID)
 			o.stopChildWatchRunnersForParent(ctx, runners, event.mountID)
 		}
 	}
@@ -601,7 +601,7 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 	}
 	if parent == nil {
 		stopped := o.stopChildWatchRunnersForParent(ctx, runners, parentID)
-		o.forgetParentChildProcessSnapshot(parentID)
+		o.forgetParentChildWorkSnapshot(parentID)
 		o.setControlMountIDs(sortedRunnerMountIDs(runners))
 		o.logger.Info("parent-scoped shortcut runner reconciliation removed missing parent children",
 			slog.String("parent_mount_id", parentID.String()),
@@ -609,8 +609,8 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 		)
 		return
 	}
-	publications := map[mountID]syncengine.ShortcutChildProcessSnapshot{
-		parentID: o.latestParentChildProcessSnapshotFor(parentID),
+	publications := map[mountID]syncengine.ShortcutChildWorkSnapshot{
+		parentID: o.latestParentChildWorkSnapshotFor(parentID),
 	}
 	decisions, err := buildRunnerDecisionsForParents([]*mountSpec{parent}, publications, o.cfg.DataDir, o.logger)
 	if err != nil {
@@ -827,7 +827,7 @@ func (o *Orchestrator) startReloadWatchRunners(
 			continue
 		}
 
-		o.attachParentChildProcessSink(mount, runnerEvents, nil)
+		o.attachParentChildWorkSink(mount, runnerEvents, nil)
 		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents)
 		if err != nil {
 			o.logger.Error("failed to start watch runner during reload",
@@ -887,8 +887,8 @@ func mountSpecIdentityEquivalent(current *mountSpec, next *mountSpec) bool {
 	return current.mountID == next.mountID &&
 		current.childParentMountID() == next.childParentMountID() &&
 		current.projectionKind == next.projectionKind &&
-		current.driveType == next.driveType &&
-		current.rejectSharePointRootForms == next.rejectSharePointRootForms
+		current.parentDriveType() == next.parentDriveType() &&
+		current.rejectSharePointRootForms() == next.rejectSharePointRootForms()
 }
 
 func mountSpecRemoteEquivalent(current *mountSpec, next *mountSpec) bool {

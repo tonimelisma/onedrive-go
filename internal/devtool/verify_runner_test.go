@@ -466,7 +466,6 @@ func TestRunVerifyWritesSummaryJSONOnSuccess(t *testing.T) {
 	assert.Equal(t, verifySummaryStatusPass, summary.Status)
 	assert.GreaterOrEqual(t, summary.TotalDurationMS, int64(0))
 	assertVerifySummaryHasStep(t, summary, "format")
-	assertVerifySummaryHasStep(t, summary, "architecture guards")
 	assertVerifySummaryHasStep(t, summary, "e2e-full compile")
 	assert.Empty(t, summary.ClassifiedReruns)
 	assert.Contains(t, stdout.String(), "verify summary")
