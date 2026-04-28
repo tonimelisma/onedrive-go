@@ -17,19 +17,19 @@ func TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable(t *testing.T) {
 	mounts := []*mountSpec{
 		{mountID: "clean", child: &childMountRuntime{
 			mode:   syncengine.ShortcutChildRunModeFinalDrain,
-			ackRef: syncengine.NewShortcutChildAckRef("binding-clean"),
+			ackRef: testShortcutChildAckRef(t, "binding-clean"),
 		}},
 		{mountID: "failed", child: &childMountRuntime{
 			mode:   syncengine.ShortcutChildRunModeFinalDrain,
-			ackRef: syncengine.NewShortcutChildAckRef("binding-failed"),
+			ackRef: testShortcutChildAckRef(t, "binding-failed"),
 		}},
 		{mountID: "missing", child: &childMountRuntime{
 			mode:   syncengine.ShortcutChildRunModeFinalDrain,
-			ackRef: syncengine.NewShortcutChildAckRef("binding-missing"),
+			ackRef: testShortcutChildAckRef(t, "binding-missing"),
 		}},
 		{mountID: "root-missing", child: &childMountRuntime{
 			mode:   syncengine.ShortcutChildRunModeFinalDrain,
-			ackRef: syncengine.NewShortcutChildAckRef("binding-root"),
+			ackRef: testShortcutChildAckRef(t, "binding-root"),
 		}},
 	}
 	reports := []*MountReport{
@@ -81,7 +81,7 @@ func TestAcknowledgeSuccessfulFinalDrainsRequiresLiveParentAck(t *testing.T) {
 		t.Context(),
 		[]shortcutChildDrainResult{{
 			MountID: "child",
-			AckRef:  syncengine.NewShortcutChildAckRef("binding-clean"),
+			AckRef:  testShortcutChildAckRef(t, "binding-clean"),
 			Status:  shortcutChildDrainClean,
 		}},
 		[]*mountSpec{{
@@ -89,7 +89,7 @@ func TestAcknowledgeSuccessfulFinalDrainsRequiresLiveParentAck(t *testing.T) {
 			child: &childMountRuntime{
 				parentMountID: "parent",
 				mode:          syncengine.ShortcutChildRunModeFinalDrain,
-				ackRef:        syncengine.NewShortcutChildAckRef("binding-clean"),
+				ackRef:        testShortcutChildAckRef(t, "binding-clean"),
 			},
 		}},
 		nil,

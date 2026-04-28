@@ -14,7 +14,9 @@ import (
 
 const testMountRemoteRootItemID = "mount-root-id"
 
-func testPublishedShortcutChild() syncengine.ShortcutChildRunCommand {
+func testPublishedShortcutChild(t *testing.T) syncengine.ShortcutChildRunCommand {
+	t.Helper()
+
 	const (
 		relativePath  = "Shortcuts/Docs"
 		remoteDriveID = "remote-drive"
@@ -29,18 +31,18 @@ func testPublishedShortcutChild() syncengine.ShortcutChildRunCommand {
 			RemoteItemID:  remoteItemID,
 		},
 		Mode:   syncengine.ShortcutChildRunModeNormal,
-		AckRef: syncengine.NewShortcutChildAckRef("binding-child-docs"),
+		AckRef: testShortcutChildAckRef(t, "binding-child-docs"),
 	}
 }
 
 func testParentTopologies(
 	parent *StandaloneMountConfig,
 	children ...syncengine.ShortcutChildRunCommand,
-) map[mountID]syncengine.ShortcutChildProcessSnapshot {
+) map[mountID]syncengine.ShortcutChildWorkSnapshot {
 	if parent == nil {
 		return nil
 	}
-	return map[mountID]syncengine.ShortcutChildProcessSnapshot{
+	return map[mountID]syncengine.ShortcutChildWorkSnapshot{
 		mountID(parent.CanonicalID.String()): processSnapshotForParent(parent, children...),
 	}
 }
@@ -62,9 +64,9 @@ func TestBuildStandaloneMountSpecs_PreservesOrderAndReportingFields(t *testing.T
 	assert.Equal(t, mountID(first.CanonicalID.String()), mounts[0].mountID)
 	assert.Equal(t, 4, mounts[0].selectionIndex)
 	assert.Equal(t, MountProjectionStandalone, mounts[0].projectionKind)
-	assert.Equal(t, first.CanonicalID, mounts[0].canonicalID)
-	assert.Equal(t, first.CanonicalID.DriveType(), mounts[0].driveType)
-	assert.False(t, mounts[0].rejectSharePointRootForms)
+	assert.Equal(t, first.CanonicalID, mounts[0].parentCanonicalID())
+	assert.Equal(t, first.CanonicalID.DriveType(), mounts[0].parentDriveType())
+	assert.False(t, mounts[0].rejectSharePointRootForms())
 	assert.Equal(t, first.DisplayName, mounts[0].displayName)
 	assert.Equal(t, first.SyncRoot, mounts[0].syncRoot)
 	assert.Equal(t, first.StatePath, mounts[0].statePath)
@@ -152,7 +154,7 @@ func TestEngineMountConfigForMount_UsesMountOwnedFields(t *testing.T) {
 	assert.Equal(t, mounts[0].syncRoot, cfg.SyncRoot)
 	assert.Equal(t, dataDir, cfg.DataDir)
 	assert.Equal(t, mounts[0].remoteDriveID, cfg.DriveID)
-	assert.Equal(t, mounts[0].driveType, cfg.DriveType)
+	assert.Equal(t, mounts[0].parentDriveType(), cfg.DriveType)
 	assert.Equal(t, mounts[0].accountEmail, cfg.AccountEmail)
 	assert.Equal(t, mounts[0].remoteRootItemID, cfg.RemoteRootItemID)
 	assert.Equal(t, mounts[0].remoteRootDeltaCapable, cfg.RemoteRootDeltaCapable)
@@ -174,7 +176,7 @@ func TestBuildRunnerDecisions_AddsChildProjectionAfterParent(t *testing.T) {
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
-		testParentTopologies(&parent, testPublishedShortcutChild()),
+		testParentTopologies(&parent, testPublishedShortcutChild(t)),
 		dataDir,
 	)
 	require.NoError(t, err)
@@ -188,9 +190,9 @@ func TestBuildRunnerDecisions_AddsChildProjectionAfterParent(t *testing.T) {
 	assert.Equal(t, MountProjectionChild, childMount.projectionKind)
 	assert.Equal(t, mountID(config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")), childMount.mountID)
 	assert.Equal(t, parentMount.mountID, childMount.childParentMountID())
-	assert.True(t, childMount.canonicalID.IsZero())
-	assert.Empty(t, childMount.driveType)
-	assert.False(t, childMount.rejectSharePointRootForms)
+	assert.True(t, childMount.parentCanonicalID().IsZero())
+	assert.Empty(t, childMount.parentDriveType())
+	assert.False(t, childMount.rejectSharePointRootForms())
 	assert.Equal(t, filepath.Join(parent.SyncRoot, "Shortcuts", "Docs"), childMount.syncRoot)
 	assert.Equal(t, config.MountStatePathForDataDir(dataDir, config.ChildMountID(parent.CanonicalID.String(), "binding-child-docs")), childMount.statePath)
 	assert.Equal(t, driveid.MustCanonicalID("personal:owner@example.com"), childMount.tokenOwnerCanonical)
@@ -218,7 +220,7 @@ func TestChildMountSpecLoweringCarriesChildRuntimeStateOnlyAtRunnerBoundary(t *t
 	parentMount, err := buildStandaloneMountSpec(&parentCfg)
 	require.NoError(t, err)
 
-	child := testPublishedShortcutChild()
+	child := testPublishedShortcutChild(t)
 	child.ChildMountID = config.ChildMountID(parentCfg.CanonicalID.String(), "binding-child-docs")
 	child.Engine.LocalRootIdentity = &syncengine.ShortcutRootIdentity{Device: 7, Inode: 8}
 	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
@@ -234,7 +236,7 @@ func TestChildMountSpecLoweringCarriesChildRuntimeStateOnlyAtRunnerBoundary(t *t
 	mount := spec.runtimeMountSpec()
 
 	assert.Equal(t, MountProjectionChild, mount.projectionKind)
-	assert.True(t, mount.canonicalID.IsZero())
+	assert.True(t, mount.parentCanonicalID().IsZero())
 	assert.Equal(t, mountID(parentCfg.CanonicalID.String()), mount.childParentMountID())
 	assert.True(t, mount.isFinalDrainChild())
 	assert.Equal(t, child.Engine.LocalRoot, mount.syncRoot)
@@ -253,7 +255,7 @@ func TestBuildRunnerDecisions_ParentPausePausesChildWithoutParentReservationSynt
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
-		testParentTopologies(&parent, testPublishedShortcutChild()),
+		testParentTopologies(&parent, testPublishedShortcutChild(t)),
 		t.TempDir(),
 	)
 	require.NoError(t, err)
@@ -265,7 +267,7 @@ func TestBuildRunnerDecisions_ParentPausePausesChildWithoutParentReservationSynt
 }
 
 // Validates: R-2.8.1
-func TestBuildRunnerDecisions_ParentBlockedSnapshotHasNoChildProcess(t *testing.T) {
+func TestBuildRunnerDecisions_ParentBlockedSnapshotHasNoChildWork(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 
@@ -283,7 +285,7 @@ func TestBuildRunnerDecisions_ParentBlockedSnapshotHasNoChildProcess(t *testing.
 func TestBuildRunnerDecisions_FinalDrainChildDoesNotSynthesizeParentReservation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
-	child := testPublishedShortcutChild()
+	child := testPublishedShortcutChild(t)
 	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
 
 	decisions, err := buildRunnerDecisions(
@@ -301,7 +303,7 @@ func TestBuildRunnerDecisions_FinalDrainChildDoesNotSynthesizeParentReservation(
 func TestBuildRunnerDecisions_UsesParentRunnerRelativePathOnly(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
-	child := testPublishedShortcutChild()
+	child := testPublishedShortcutChild(t)
 	child.Engine.LocalRoot = filepath.Join(parent.SyncRoot, "Shortcuts", "New Docs")
 
 	decisions, err := buildRunnerDecisions(
@@ -318,7 +320,7 @@ func TestBuildRunnerDecisions_UsesParentRunnerRelativePathOnly(t *testing.T) {
 func TestBuildRunnerDecisions_MalformedChildDoesNotSynthesizeParentReservation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
-	child := testPublishedShortcutChild()
+	child := testPublishedShortcutChild(t)
 	child.Engine.RemoteDriveID = ""
 	child.Engine.RemoteItemID = ""
 
@@ -337,7 +339,7 @@ func TestBuildRunnerDecisions_ChildDeltaCapabilityComesFromMountTokenOwner(t *te
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "business:owner@example.com", "Parent")
 	parent.RemoteRootDeltaCapable = false
-	child := testPublishedShortcutChild()
+	child := testPublishedShortcutChild(t)
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		testParentTopologies(&parent, child),
@@ -359,7 +361,7 @@ func TestBuildRunnerDecisions_StandaloneContentRootDoesNotSuppressChild(t *testi
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent, standalone},
-		testParentTopologies(&parent, testPublishedShortcutChild()),
+		testParentTopologies(&parent, testPublishedShortcutChild(t)),
 		t.TempDir(),
 	)
 	require.NoError(t, err)
@@ -374,10 +376,10 @@ func TestBuildRunnerDecisions_MissingParentSkipsChild(t *testing.T) {
 
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
-		map[mountID]syncengine.ShortcutChildProcessSnapshot{
+		map[mountID]syncengine.ShortcutChildWorkSnapshot{
 			"missing-parent": processSnapshot(
 				"missing-parent",
-				testChildRecord("missing-parent", "binding-child-docs", "Shortcuts/Docs"),
+				testChildRecord(t, "missing-parent", "binding-child-docs", "Shortcuts/Docs"),
 			),
 		},
 		t.TempDir(),

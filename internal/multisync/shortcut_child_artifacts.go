@@ -120,7 +120,7 @@ func (o *Orchestrator) childArtifactCleanupExecutor() shortcutChildArtifactClean
 }
 
 func shortcutChildArtifactCleanups(
-	snapshots map[mountID]syncengine.ShortcutChildProcessSnapshot,
+	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
 ) ([]shortcutChildArtifactCleanup, error) {
 	if len(snapshots) == 0 {
 		return nil, nil
@@ -132,8 +132,8 @@ func shortcutChildArtifactCleanups(
 		if snapshot.NamespaceID != "" {
 			namespaceID = snapshot.NamespaceID
 		}
-		for i := range snapshot.Cleanups {
-			request := snapshot.Cleanups[i]
+		for i := range snapshot.CleanupCommands {
+			request := snapshot.CleanupCommands[i]
 			if request.AckRef.IsZero() {
 				return nil, fmt.Errorf("parent cleanup request from %s is missing acknowledgement reference", namespaceID)
 			}
@@ -234,7 +234,7 @@ func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 			))
 			continue
 		}
-		o.receiveParentChildProcessSnapshot(parentID, snapshot)
+		o.receiveParentChildWorkSnapshot(parentID, snapshot)
 	}
 	return errors.Join(errs...)
 }

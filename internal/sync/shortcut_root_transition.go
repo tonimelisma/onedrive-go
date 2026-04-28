@@ -1,3 +1,4 @@
+//nolint:gocritic // Transition helpers pass ShortcutRootRecord by value to keep decisions immutable.
 package sync
 
 import "fmt"
@@ -60,7 +61,6 @@ func normalizeShortcutRootState(state ShortcutRootState) ShortcutRootState {
 	return state
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func shortcutRootWithTransition(
 	record ShortcutRootRecord,
 	event shortcutRootLifecycleEvent,
@@ -76,7 +76,6 @@ func shortcutRootWithTransition(
 	return record, nil
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func plannedShortcutRootTransition(
 	record ShortcutRootRecord,
 	event shortcutRootLifecycleEvent,

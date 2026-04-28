@@ -71,10 +71,12 @@ func ReadDriveStatusSnapshot(
 func ReadShortcutRootStatusSnapshot(
 	ctx context.Context,
 	dbPath string,
+	namespaceID string,
+	parentSyncRoot string,
 	logger *slog.Logger,
 ) ([]ShortcutRootStatusView, error) {
 	return readWithInspector(dbPath, logger, func(inspector *storeInspector) ([]ShortcutRootStatusView, error) {
-		return inspector.ReadShortcutRootStatusSnapshot(ctx)
+		return inspector.ReadShortcutRootStatusSnapshot(ctx, namespaceID, parentSyncRoot)
 	})
 }
 
@@ -109,7 +111,11 @@ func (m *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSna
 
 // ReadShortcutRootStatusSnapshot reads parent-owned shortcut-root lifecycle
 // state from an already-open sync store.
-func (m *SyncStore) ReadShortcutRootStatusSnapshot(ctx context.Context) ([]ShortcutRootStatusView, error) {
+func (m *SyncStore) ReadShortcutRootStatusSnapshot(
+	ctx context.Context,
+	namespaceID string,
+	parentSyncRoot string,
+) ([]ShortcutRootStatusView, error) {
 	if m == nil {
 		return nil, fmt.Errorf("read shortcut root status snapshot: nil store")
 	}
@@ -119,7 +125,7 @@ func (m *SyncStore) ReadShortcutRootStatusSnapshot(ctx context.Context) ([]Short
 		logger: m.logger,
 	}
 
-	return inspector.ReadShortcutRootStatusSnapshot(ctx)
+	return inspector.ReadShortcutRootStatusSnapshot(ctx, namespaceID, parentSyncRoot)
 }
 
 // ReadPathTruthStatus derives current truth availability for the requested
@@ -256,12 +262,16 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 	return snapshot, nil
 }
 
-func (i *storeInspector) ReadShortcutRootStatusSnapshot(ctx context.Context) ([]ShortcutRootStatusView, error) {
+func (i *storeInspector) ReadShortcutRootStatusSnapshot(
+	ctx context.Context,
+	namespaceID string,
+	parentSyncRoot string,
+) ([]ShortcutRootStatusView, error) {
 	records, err := queryShortcutRootRecords(ctx, i.db, "read shortcut root status rows", "iterate shortcut root status rows")
 	if err != nil {
 		return nil, err
 	}
-	return ShortcutRootStatusViewsFromRecords(records), nil
+	return shortcutRootStatusViewsFromRecords(records, namespaceID, parentSyncRoot), nil
 }
 
 // ReadPathTruthStatus returns the derived current-truth availability for the
