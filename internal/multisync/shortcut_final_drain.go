@@ -17,53 +17,25 @@ const (
 )
 
 type shortcutChildDrainResult struct {
-	MountID       string
-	BindingItemID string
-	Status        shortcutChildDrainStatus
-	Detail        string
-}
-
-func finalDrainMountIDs(publications map[mountID]syncengine.ShortcutChildRunnerPublication) []string {
-	if len(publications) == 0 {
-		return nil
-	}
-
-	ids := make([]string, 0)
-	children := sortedPublishedShortcutChildren(publications)
-	for i := range children {
-		child := children[i].child
-		if child.RunnerAction == syncengine.ShortcutChildActionFinalDrain {
-			ids = append(ids, child.ChildMountID)
-		}
-	}
-
-	return ids
+	MountID string
+	AckRef  syncengine.ShortcutChildAckRef
+	Status  shortcutChildDrainStatus
+	Detail  string
 }
 
 func classifyShortcutChildDrainResults(
-	finalDrainMountIDs []string,
 	mounts []*mountSpec,
 	reports []*MountReport,
 ) []shortcutChildDrainResult {
-	draining := make(map[string]*mountSpec, len(finalDrainMountIDs))
-	for _, mountID := range finalDrainMountIDs {
-		if mountID == "" {
+	results := make([]shortcutChildDrainResult, 0)
+	for _, mount := range mounts {
+		if mount == nil || !mount.isFinalDrainChild() {
 			continue
 		}
-		for _, mount := range mounts {
-			if mount != nil && mount.mountID.String() == mountID {
-				draining[mountID] = mount
-				break
-			}
-		}
-	}
-	results := make([]shortcutChildDrainResult, 0, len(draining))
-	for mountID, mount := range draining {
+		mountID := mount.mountID.String()
 		result := shortcutChildDrainResult{
 			MountID: mountID,
-		}
-		if mount != nil {
-			result.BindingItemID = mount.childBindingItemID()
+			AckRef:  mount.shortcutChildAckRef(),
 		}
 		report := mountReportForID(reports, mountID)
 		result.Status, result.Detail = classifyShortcutChildDrainReport(report)

@@ -34,7 +34,7 @@ func (m *SyncStore) markShortcutChildFinalDrainReleasePending(
 	ctx context.Context,
 	ack ShortcutChildDrainAck,
 ) (bool, error) {
-	if m == nil || ack.BindingItemID == "" {
+	if m == nil || ack.Ref.IsZero() {
 		return false, nil
 	}
 	current, err := m.listShortcutRoots(ctx)
@@ -55,7 +55,7 @@ func (m *SyncStore) acknowledgeShortcutChildArtifactsPurged(
 	ctx context.Context,
 	ack ShortcutChildArtifactCleanupAck,
 ) (bool, error) {
-	if m == nil || ack.BindingItemID == "" {
+	if m == nil || ack.Ref.IsZero() {
 		return false, nil
 	}
 	current, err := m.listShortcutRoots(ctx)
@@ -72,19 +72,19 @@ func (m *SyncStore) acknowledgeShortcutChildArtifactsPurged(
 	return true, nil
 }
 
-func (m *SyncStore) ShortcutChildRunner(
+func (m *SyncStore) ShortcutChildProcessSnapshot(
 	ctx context.Context,
 	namespaceID string,
 	parentSyncRoot string,
-) (ShortcutChildRunnerPublication, error) {
+) (ShortcutChildProcessSnapshot, error) {
 	if m == nil {
-		return ShortcutChildRunnerPublication{NamespaceID: namespaceID}, nil
+		return ShortcutChildProcessSnapshot{NamespaceID: namespaceID}, nil
 	}
 	records, err := m.listShortcutRoots(ctx)
 	if err != nil {
-		return ShortcutChildRunnerPublication{}, err
+		return ShortcutChildProcessSnapshot{}, err
 	}
-	return shortcutChildRunnerPublicationFromRootsWithParentRoot(namespaceID, parentSyncRoot, records), nil
+	return shortcutChildProcessSnapshotFromRootsWithParentRoot(namespaceID, parentSyncRoot, records), nil
 }
 
 // listShortcutRoots returns parent-engine-owned shortcut root state.

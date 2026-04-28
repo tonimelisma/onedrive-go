@@ -81,8 +81,8 @@ Graph/OAuth flows, token deletion, and user interaction, but they do not
 hand-edit `CatalogAccount` or `CatalogDrive` records directly for product
 behavior. Automatic shortcut lifecycle is not a config-owned durable fact: the
 parent engine stores parent shortcut-root lifecycle in its sync store and
-multisync compiles child runners from ephemeral parent-declared runner-action
-publications.
+multisync compiles child runners from ephemeral parent-declared child process
+snapshots.
 
 The config file itself is durable even when it has zero drive sections. Removing
 the final configured drive or logging out the final configured account leaves
@@ -326,7 +326,7 @@ mount ID.
 
 When multisync releases a managed shortcut child, config provides only the
 stable path and catalog mutation primitives, wired once into multisync's child
-artifact cleanup executor. The parent publication supplies the exact child
+artifact cleanup executor. The parent snapshot supplies the exact child
 mount ID and local-root cleanup scope; multisync must not reconstruct that
 scope from parent namespace facts. The control plane owns deleting child-owned
 artifacts: the `state_mount_*.db` SQLite file family, upload sessions tagged

@@ -167,8 +167,8 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 	}}))
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
 
-	var published ShortcutChildRunnerPublication
-	eng.shortcutChildRunnerSink = func(_ context.Context, publication ShortcutChildRunnerPublication) error {
+	var published ShortcutChildProcessSnapshot
+	eng.shortcutChildProcessSink = func(_ context.Context, publication ShortcutChildProcessSnapshot) error {
 		published = publication
 		return nil
 	}
@@ -180,8 +180,8 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 	assert.False(t, done)
 	assert.Equal(t, "binding-1", moved.itemID)
 	assert.Equal(t, "Renamed", moved.name)
-	require.Len(t, published.RunnerWork.Children, 1)
-	assert.Equal(t, "Shared/Renamed", published.RunnerWork.Children[0].RelativeLocalPath)
+	require.Len(t, published.RunCommands, 1)
+	assert.Equal(t, filepath.Join(syncRoot, "Shared", "Renamed"), published.RunCommands[0].Engine.LocalRoot)
 	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)

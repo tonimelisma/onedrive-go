@@ -64,9 +64,9 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Behavior | Evidence |
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
-| One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
+| One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 | Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
-| Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child runner-action publications reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroValueReturnsError` |
+| Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child process snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroValueReturnsError` |
 
 ## Construction
 
@@ -192,18 +192,17 @@ read from `engine_runtime_completion.go` plus the trial-specific
 `engine_runtime_completion_trial.go`.
 
 Parent child-admission readiness is part of the normal parent run path.
-Multisync attaches a child runner publication sink before it starts a selected
+Multisync attaches a child process snapshot sink before it starts a selected
 parent engine, then waits for that live parent to publish from the normal
 current-plan pipeline.
 That pipeline performs the same remote observation cadence decision, full local
 observation, current-plan build, retry/block reconciliation, and shortcut-root
 lifecycle publication the parent needs for ordinary work. One-shot parents
 publish only after the current parent state and protected-root decisions have
-reached the accepted publication point; multisync admits that parent's children
-as soon as the accepted publication is received, without waiting for that
-parent pass or unrelated parents to finish. Watch bootstrap and steady-state
-changes publish through the live parent runner and reconcile only that parent
-child runner set.
+reached the accepted snapshot point and the parent pass has returned;
+multisync admits that parent's children then, without waiting for unrelated
+parents to finish. Watch bootstrap and steady-state changes publish through the
+live parent runner and reconcile only that parent child runner set.
 Child runner admission is therefore derived from fresh parent local and remote
 truth rather than cached control-plane state, and multisync never constructs a
 temporary startup parent engine for shortcut admission.
@@ -352,7 +351,7 @@ mutation, then reduce the ready frontier through publication drain plus due-
 held release. It does not mix that decision step with worker-queue ownership.
 In code, the top-level effectful boundary is `applyRuntimeCompletionStage`,
 while `reduceReadyFrontierStage` owns the frontier reduction and
-`runPublicationDrainStage` remains the publication-only substage.
+`runSnapshotDrainStage` remains the publication-only substage.
 
 Watch replan failure policy is also explicit. Pre-authority local observation
 failure is recoverable and drops that replan trigger. Once the engine starts
@@ -411,14 +410,14 @@ runtime model.
 Embedded shared-folder links discovered inside another synced drive are still
 suppressed by ordinary drive-root content observation and never become nested
 engine-owned sub-sessions. For parent namespace mounts, the same observer emits
-those placeholders as shortcut publication facts before remote cursor commit. The
+those placeholders as shortcut snapshot facts before remote cursor commit. The
 parent engine also persists parent-owned `shortcut_roots` state in its sync
 store: binding item ID, alias path, target identity, protected parent-local
 paths, lifecycle state, and same-path replacement waiting state. The
-multi-mount control plane consumes the parent-declared child runner actions only to
+multi-mount control plane consumes the parent-declared child process commands only to
 start, drain, skip, or purge child runners.
 
-Managed shortcut child runner publications also carry the parent-observed local root
+Managed shortcut child process snapshots also carry the parent-observed local root
 identity when the parent has materialized the alias directory. Child engines
 verify that identity at construction and before full local scans. If the local
 root disappeared, moved away, or was deleted and recreated at the same path, the
@@ -429,7 +428,7 @@ Shortcut placeholder rename/delete mutations are parent-engine operations by
 binding item ID. The parent engine observes the need for local alias
 rename/delete from its protected-root scan/watch path, applies the Graph
 mutation itself, persists the retry/block state in `shortcut_roots`, and then
-publishes the resulting child runner actions. Multisync must not rediscover parent
+publishes the resulting child process commands. Multisync must not rediscover parent
 remote state, call parent-drive alias mutation APIs, or decide parent alias
 lifecycle.
 
@@ -452,8 +451,9 @@ outside a live parent runner. The parent engine first persists
 `removed_release_pending`, then releases its own protected alias projection or
 promotes a waiting same-path replacement to `active`. After parent release, the
 old binding remains in `removed_child_cleanup_pending` without protected paths
-and publishes a child artifact cleanup request carrying the binding ID, child
-mount ID, child local root, and cleanup reason. Multisync purges the
+and publishes a child artifact cleanup request carrying an opaque
+acknowledgement reference, child mount ID, child local root, and cleanup
+reason. Multisync purges the
 child-owned artifacts through its injected cleanup executor and acknowledges
 cleanup; it does not derive cleanup scope from the parent namespace. Only then
 does the parent delete the cleanup-pending row. If cleanup is interrupted or

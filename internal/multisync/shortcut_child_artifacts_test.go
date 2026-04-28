@@ -145,10 +145,11 @@ func TestOrchestratorCleanupWithEmptyDataDirFailsLoudly(t *testing.T) {
 	err := orch.purgeShortcutChildArtifactsForDecisions(
 		context.Background(),
 		&runnerDecisionSet{CleanupChildren: []shortcutChildArtifactCleanup{{
-			mountID:       childMountID,
-			namespaceID:   "personal:parent@example.com",
-			bindingItemID: "binding-empty-data-dir",
-			localRoot:     filepath.Join(t.TempDir(), "Shortcut"),
+			mountID:     childMountID,
+			namespaceID: "personal:parent@example.com",
+			ackRef:      syncengine.NewShortcutChildAckRef("binding-empty-data-dir"),
+			localRoot:   filepath.Join(t.TempDir(), "Shortcut"),
+			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
 		}}},
 		map[mountID]shortcutChildAckHandle{},
 	)
@@ -203,17 +204,19 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsUsesInjectedExecutor
 	}
 	decisions := &runnerDecisionSet{
 		CleanupChildren: []shortcutChildArtifactCleanup{{
-			mountID:       childMountID,
-			namespaceID:   "personal:parent@example.com",
-			bindingItemID: "binding-cleanup",
-			localRoot:     filepath.Join(t.TempDir(), "Shortcut"),
+			mountID:     childMountID,
+			namespaceID: "personal:parent@example.com",
+			ackRef:      syncengine.NewShortcutChildAckRef("binding-cleanup"),
+			localRoot:   filepath.Join(t.TempDir(), "Shortcut"),
+			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
 		}},
 	}
 	ackers := map[mountID]shortcutChildAckHandle{
 		"personal:parent@example.com": mockShortcutChildAckHandle{
-			ackCleanupFn: func(_ context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error) {
-				acked = append(acked, ack.BindingItemID)
-				return syncengine.ShortcutChildRunnerPublication{}, nil
+			ackCleanupFn: func(_ context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildProcessSnapshot, error) {
+				assert.False(t, ack.Ref.IsZero())
+				acked = append(acked, "ack")
+				return syncengine.ShortcutChildProcessSnapshot{}, nil
 			},
 		},
 	}
@@ -225,7 +228,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsUsesInjectedExecutor
 	assert.Equal(t, []string{childMountID}, pruned)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, childMountID, sessions[0].mountID)
-	assert.Equal(t, []string{"binding-cleanup"}, acked)
+	assert.Equal(t, []string{"ack"}, acked)
 }
 
 // Validates: R-2.4.8
@@ -253,15 +256,16 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsReturnsAckFailureAft
 	}
 	decisions := &runnerDecisionSet{
 		CleanupChildren: []shortcutChildArtifactCleanup{{
-			mountID:       childMountID,
-			namespaceID:   "personal:parent@example.com",
-			bindingItemID: "binding-ack-fail",
+			mountID:     childMountID,
+			namespaceID: "personal:parent@example.com",
+			ackRef:      syncengine.NewShortcutChildAckRef("binding-ack-fail"),
+			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
 		}},
 	}
 	ackers := map[mountID]shortcutChildAckHandle{
 		"personal:parent@example.com": mockShortcutChildAckHandle{
-			ackCleanupFn: func(context.Context, syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error) {
-				return syncengine.ShortcutChildRunnerPublication{}, errors.New("parent store temporarily unavailable")
+			ackCleanupFn: func(context.Context, syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildProcessSnapshot, error) {
+				return syncengine.ShortcutChildProcessSnapshot{}, errors.New("parent store temporarily unavailable")
 			},
 		},
 	}
@@ -297,9 +301,10 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsRequiresLiveParentAc
 	}
 	decisions := &runnerDecisionSet{
 		CleanupChildren: []shortcutChildArtifactCleanup{{
-			mountID:       childMountID,
-			namespaceID:   "personal:parent@example.com",
-			bindingItemID: "binding-no-ack",
+			mountID:     childMountID,
+			namespaceID: "personal:parent@example.com",
+			ackRef:      syncengine.NewShortcutChildAckRef("binding-no-ack"),
+			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
 		}},
 	}
 

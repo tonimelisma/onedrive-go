@@ -71,13 +71,13 @@ func shortcutProductionMultisyncRule() shortcutArchitectureRule {
 
 func shortcutMultisyncTestRule() shortcutArchitectureRule {
 	return shortcutArchitectureRule{
-		Name: "multisync shortcut tests use runner publications",
+		Name: "multisync shortcut tests use child process snapshots",
 		Root: "internal/multisync",
 		FileMatch: func(path string) bool {
 			return strings.HasSuffix(path, "_test.go")
 		},
 		Forbidden: []shortcutArchitecturePattern{
-			{Needle: "syncengine.ShortcutRootRecord", Description: "multisync tests must build runner publications, not parent root records"},
+			{Needle: "syncengine.ShortcutRootRecord", Description: "multisync tests must build child process snapshots, not parent root records"},
 			{Needle: "syncengine.ShortcutRootState", Description: "multisync tests must not construct parent root states"},
 			{Needle: ".ProtectedPaths", Description: "multisync tests must not assert parent protected path internals"},
 			{Needle: ".BlockedDetail", Description: "multisync tests must not assert parent blocked detail internals"},
@@ -128,8 +128,8 @@ func shortcutDeletedConceptRule() shortcutArchitectureRule {
 			return filepath.Base(path) == "AGENTS.md" || filepath.Base(path) == "CLAUDE.md"
 		},
 		Forbidden: []shortcutArchitecturePattern{
-			{Needle: "preflight parent", Description: "use normal parent runner publication terminology"},
-			{Needle: "prepared parent", Description: "use normal parent runner publication terminology"},
+			{Needle: "preflight parent", Description: "use normal parent child-process snapshot terminology"},
+			{Needle: "prepared parent", Description: "use normal parent child-process snapshot terminology"},
 			{Needle: "shortcut bootstrap", Description: "shortcut lifecycle must use normal parent run/bootstrap vocabulary"},
 			{Needle: "publishParentStartupChildTopology", Description: "startup topology publisher was removed"},
 			{Needle: "PublishInitialChildTopology", Description: "startup topology publisher was removed"},

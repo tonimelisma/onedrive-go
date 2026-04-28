@@ -52,7 +52,7 @@ type Engine struct {
 	protectedRoots           []ProtectedRoot
 	localRules               LocalObservationRules
 	shortcutNamespaceID      string
-	shortcutChildRunnerSink  ShortcutChildRunnerSink
+	shortcutChildProcessSink ShortcutChildProcessSink
 	enableWebsocket          bool
 	minFreeSpace             int64 // startup disk-scope revalidation threshold
 	diskAvailableFn          func(string) (uint64, error)
@@ -162,7 +162,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		localFilter:              cfg.LocalFilter,
 		localRules:               cfg.LocalRules,
 		shortcutNamespaceID:      cfg.ShortcutNamespaceID,
-		shortcutChildRunnerSink:  cfg.ShortcutChildRunnerSink,
+		shortcutChildProcessSink: cfg.ShortcutChildProcessSink,
 		enableWebsocket:          cfg.EnableWebsocket,
 		minFreeSpace:             cfg.MinFreeSpace,
 		diskAvailableFn:          driveops.DiskAvailable,

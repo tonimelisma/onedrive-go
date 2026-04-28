@@ -3,7 +3,6 @@ package multisync
 import (
 	"fmt"
 	"log/slog"
-	"path"
 	"sort"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -49,27 +48,27 @@ type StandaloneMountSelection struct {
 
 // mountSpec is the control plane's runtime unit.
 type mountSpec struct {
-	mountID                     mountID
-	projectionKind              MountProjectionKind
-	selectionIndex              int
-	canonicalID                 driveid.CanonicalID
-	driveType                   string
-	rejectSharePointRootForms   bool
-	displayName                 string
-	syncRoot                    string
-	statePath                   string
-	remoteDriveID               driveid.ID
-	remoteRootItemID            string
-	tokenOwnerCanonical         driveid.CanonicalID
-	accountEmail                string
-	paused                      bool
-	enableWebsocket             bool
-	remoteRootDeltaCapable      bool
-	transferWorkers             int
-	checkWorkers                int
-	minFreeSpace                int64
-	child                       *childMountRuntime
-	parentRunnerPublicationSink syncengine.ShortcutChildRunnerSink
+	mountID                   mountID
+	projectionKind            MountProjectionKind
+	selectionIndex            int
+	canonicalID               driveid.CanonicalID
+	driveType                 string
+	rejectSharePointRootForms bool
+	displayName               string
+	syncRoot                  string
+	statePath                 string
+	remoteDriveID             driveid.ID
+	remoteRootItemID          string
+	tokenOwnerCanonical       driveid.CanonicalID
+	accountEmail              string
+	paused                    bool
+	enableWebsocket           bool
+	remoteRootDeltaCapable    bool
+	transferWorkers           int
+	checkWorkers              int
+	minFreeSpace              int64
+	child                     *childMountRuntime
+	parentChildProcessSink    syncengine.ShortcutChildProcessSink
 }
 
 type parentMountSpec struct {
@@ -94,53 +93,37 @@ type parentMountSpec struct {
 }
 
 type childMountSpec struct {
-	parentMountID            mountID
-	mountID                  mountID
-	bindingItemID            string
-	displayName              string
-	syncRoot                 string
-	statePath                string
-	remoteDriveID            driveid.ID
-	remoteRootItemID         string
-	tokenOwnerCanonical      driveid.CanonicalID
-	accountEmail             string
-	paused                   bool
-	enableWebsocket          bool
-	remoteRootDeltaCapable   bool
-	transferWorkers          int
-	checkWorkers             int
-	minFreeSpace             int64
-	finalDrain               bool
-	expectedSyncRootIdentity *syncengine.ShortcutRootIdentity
+	parentMountID          mountID
+	mountID                mountID
+	displayName            string
+	syncRoot               string
+	statePath              string
+	remoteDriveID          driveid.ID
+	remoteRootItemID       string
+	tokenOwnerCanonical    driveid.CanonicalID
+	accountEmail           string
+	paused                 bool
+	enableWebsocket        bool
+	remoteRootDeltaCapable bool
+	transferWorkers        int
+	checkWorkers           int
+	minFreeSpace           int64
+	mode                   syncengine.ShortcutChildRunMode
+	ackRef                 syncengine.ShortcutChildAckRef
+	engine                 syncengine.ShortcutChildEngineSpec
 }
 
 type childMountRuntime struct {
-	parentMountID            mountID
-	bindingItemID            string
-	finalDrain               bool
-	expectedSyncRootIdentity *syncengine.ShortcutRootIdentity
+	parentMountID mountID
+	mode          syncengine.ShortcutChildRunMode
+	ackRef        syncengine.ShortcutChildAckRef
+	engine        syncengine.ShortcutChildEngineSpec
 }
 
 type runnerDecisionSet struct {
-	Mounts             []*mountSpec
-	Skipped            []MountStartupResult
-	FinalDrainMountIDs []string
-	CleanupChildren    []shortcutChildArtifactCleanup
-}
-
-type childRunnerDecision struct {
-	namespaceID       mountID
-	bindingItemID     string
-	localAlias        string
-	relativeLocalPath string
-	runnerAction      syncengine.ShortcutChildRunnerAction
-	mount             *mountSpec
-	skipErr           error
-}
-
-type childWithoutConfiguredParent struct {
-	namespaceID mountID
-	child       syncengine.ShortcutChildRunner
+	Mounts          []*mountSpec
+	Skipped         []MountStartupResult
+	CleanupChildren []shortcutChildArtifactCleanup
 }
 
 func filterMountSpecsByProjection(
@@ -172,44 +155,42 @@ func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, e
 
 func buildRunnerDecisions(
 	standaloneMounts []StandaloneMountConfig,
-	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
+	snapshots map[mountID]syncengine.ShortcutChildProcessSnapshot,
 	dataDir string,
 ) (*runnerDecisionSet, error) {
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
-	return buildRunnerDecisionsForParents(parents, publications, dataDir, nil)
+	return buildRunnerDecisionsForParents(parents, snapshots, dataDir, nil)
 }
 
 func buildRunnerDecisionsForParents(
 	parents []*mountSpec,
-	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
+	snapshots map[mountID]syncengine.ShortcutChildProcessSnapshot,
 	dataDir string,
 	logger *slog.Logger,
 ) (*runnerDecisionSet, error) {
 	parentByID := indexStandaloneMounts(parents)
-	childDecisionsByParent, childrenWithoutConfiguredParent, err := buildChildRunnerDecisions(parentByID, publications, dataDir)
+	childrenByParent, skipped, err := buildChildMountSpecs(parentByID, snapshots, dataDir)
 	if err != nil {
 		return nil, err
 	}
-	finalMounts, skipped := assembleRuntimeMountSet(
+	finalMounts := assembleRuntimeMountSet(
 		parents,
-		childDecisionsByParent,
-		childrenWithoutConfiguredParent,
+		childrenByParent,
 		logger,
 	)
 
-	cleanupChildren, err := shortcutChildArtifactCleanups(publications)
+	cleanupChildren, err := shortcutChildArtifactCleanups(snapshots)
 	if err != nil {
 		return nil, err
 	}
 
 	return &runnerDecisionSet{
-		Mounts:             finalMounts,
-		Skipped:            skipped,
-		FinalDrainMountIDs: finalDrainMountIDs(publications),
-		CleanupChildren:    cleanupChildren,
+		Mounts:          finalMounts,
+		Skipped:         skipped,
+		CleanupChildren: cleanupChildren,
 	}, nil
 }
 
@@ -222,155 +203,126 @@ func indexStandaloneMounts(parents []*mountSpec) map[mountID]*mountSpec {
 	return parentByID
 }
 
-func buildChildRunnerDecisions(
+func buildChildMountSpecs(
 	parentByID map[mountID]*mountSpec,
-	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
+	snapshots map[mountID]syncengine.ShortcutChildProcessSnapshot,
 	dataDir string,
-) (map[mountID][]*childRunnerDecision, []childWithoutConfiguredParent, error) {
-	childDecisionsByParent := make(map[mountID][]*childRunnerDecision)
-	childrenWithoutConfiguredParent := make([]childWithoutConfiguredParent, 0)
-	declaredChildren := sortedPublishedShortcutChildren(publications)
-	for i := range declaredChildren {
-		declared := declaredChildren[i]
-		if _, err := validatePublishedShortcutChildScope(&declared.child); err != nil {
+) (map[mountID][]*mountSpec, []MountStartupResult, error) {
+	childrenByParent := make(map[mountID][]*mountSpec)
+	skipped := make([]MountStartupResult, 0)
+	commands := sortedChildRunCommands(snapshots)
+	for i := range commands {
+		declared := commands[i]
+		childMountID, err := validateChildRunCommand(&declared.command)
+		if err != nil {
 			return nil, nil, err
 		}
 		parent := parentByID[declared.namespaceID]
 		if parent == nil {
-			childrenWithoutConfiguredParent = append(childrenWithoutConfiguredParent, childWithoutConfiguredParent(declared))
+			skipped = append(skipped, childCommandStartupResult(declared.namespaceID, &declared.command, 0, fmt.Errorf(
+				"child mount %s references missing parent mount %s",
+				childMountID,
+				declared.namespaceID,
+			)))
 			continue
 		}
 
-		decision, err := buildChildRunnerDecision(parent, &declared.child, dataDir)
+		childMount, err := buildChildMountFromCommand(parent, &declared.command, dataDir)
 		if err != nil {
 			return nil, nil, err
 		}
-		childDecisionsByParent[parent.mountID] = append(childDecisionsByParent[parent.mountID], decision)
+		childrenByParent[parent.mountID] = append(childrenByParent[parent.mountID], childMount)
 	}
 
-	return childDecisionsByParent, childrenWithoutConfiguredParent, nil
+	return childrenByParent, skipped, nil
 }
 
-type publishedShortcutChild struct {
+type parentChildRunCommand struct {
 	namespaceID mountID
-	child       syncengine.ShortcutChildRunner
+	command     syncengine.ShortcutChildRunCommand
 }
 
-func sortedPublishedShortcutChildren(
-	publications map[mountID]syncengine.ShortcutChildRunnerPublication,
-) []publishedShortcutChild {
-	if len(publications) == 0 {
+func sortedChildRunCommands(
+	snapshots map[mountID]syncengine.ShortcutChildProcessSnapshot,
+) []parentChildRunCommand {
+	if len(snapshots) == 0 {
 		return nil
 	}
-	children := make([]publishedShortcutChild, 0)
-	for parentID, publication := range publications {
+	commands := make([]parentChildRunCommand, 0)
+	for parentID, snapshot := range snapshots {
 		namespaceID := parentID
-		if publication.NamespaceID != "" {
-			namespaceID = mountID(publication.NamespaceID)
+		if snapshot.NamespaceID != "" {
+			namespaceID = mountID(snapshot.NamespaceID)
 		}
-		for i := range publication.RunnerWork.Children {
-			if publication.RunnerWork.Children[i].BindingItemID == "" {
-				continue
-			}
-			children = append(children, publishedShortcutChild{
+		for i := range snapshot.RunCommands {
+			commands = append(commands, parentChildRunCommand{
 				namespaceID: namespaceID,
-				child:       publication.RunnerWork.Children[i],
+				command:     snapshot.RunCommands[i],
 			})
 		}
 	}
-	sort.SliceStable(children, func(i, j int) bool {
-		if children[i].namespaceID == children[j].namespaceID {
-			if children[i].child.RelativeLocalPath == children[j].child.RelativeLocalPath {
-				return children[i].child.BindingItemID < children[j].child.BindingItemID
-			}
-			return children[i].child.RelativeLocalPath < children[j].child.RelativeLocalPath
+	sort.SliceStable(commands, func(i, j int) bool {
+		if commands[i].namespaceID == commands[j].namespaceID {
+			return commands[i].command.ChildMountID < commands[j].command.ChildMountID
 		}
-		return children[i].namespaceID < children[j].namespaceID
+		return commands[i].namespaceID < commands[j].namespaceID
 	})
-	return children
+	return commands
 }
 
 func assembleRuntimeMountSet(
 	parents []*mountSpec,
-	childDecisionsByParent map[mountID][]*childRunnerDecision,
-	childrenWithoutConfiguredParent []childWithoutConfiguredParent,
+	childrenByParent map[mountID][]*mountSpec,
 	logger *slog.Logger,
-) ([]*mountSpec, []MountStartupResult) {
+) []*mountSpec {
 	finalMounts := make([]*mountSpec, 0, len(parents))
-	skipped := make([]MountStartupResult, 0, len(childrenWithoutConfiguredParent))
 	nextIndex := 0
 	for _, parent := range parents {
 		parent.selectionIndex = nextIndex
 		nextIndex++
 		finalMounts = append(finalMounts, parent)
 
-		children := childDecisionsByParent[parent.mountID]
+		children := childrenByParent[parent.mountID]
 		sort.Slice(children, func(i, j int) bool {
-			if children[i].relativeLocalPath == children[j].relativeLocalPath {
-				return children[i].mount.mountID < children[j].mount.mountID
-			}
-
-			return children[i].relativeLocalPath < children[j].relativeLocalPath
+			return children[i].mountID < children[j].mountID
 		})
 
-		for _, decision := range children {
-			decision.mount.selectionIndex = nextIndex
+		for _, child := range children {
+			child.selectionIndex = nextIndex
 			nextIndex++
-			if decision.skipErr != nil {
-				skipped = append(skipped, skippedChildMountResult(decision, parent.mountID, logger))
-				continue
-			}
-
-			finalMounts = append(finalMounts, decision.mount)
+			finalMounts = append(finalMounts, child)
 		}
 	}
 
-	skipped = append(skipped, childWithoutConfiguredParentStartupResults(childrenWithoutConfiguredParent, nextIndex)...)
-	return finalMounts, skipped
-}
-
-func skippedChildMountResult(decision *childRunnerDecision, parentID mountID, logger *slog.Logger) MountStartupResult {
 	if logger != nil {
-		logger.Warn("skipping child mount",
-			"mount_id", decision.mount.mountID.String(),
-			"namespace_id", parentID.String(),
-			"relative_local_path", decision.relativeLocalPath,
-			"error", decision.skipErr,
-		)
+		logger.Debug("assembled runtime mount set", "mounts", len(finalMounts))
 	}
-
-	return mountStartupResultForMount(decision.mount, decision.skipErr)
+	return finalMounts
 }
 
-func childWithoutConfiguredParentStartupResults(children []childWithoutConfiguredParent, startIndex int) []MountStartupResult {
-	results := make([]MountStartupResult, 0, len(children))
-	nextIndex := startIndex
-	for i := range children {
-		child := children[i].child
-		displayName := child.DisplayName
-		if displayName == "" {
-			displayName = path.Base(child.RelativeLocalPath)
-		}
-		childMountID := child.ChildMountID
-		results = append(results, MountStartupResult{
-			SelectionIndex: nextIndex,
-			Identity: MountIdentity{
-				MountID:        childMountID,
-				ParentMountID:  children[i].namespaceID.String(),
-				ProjectionKind: MountProjectionChild,
-			},
-			DisplayName: displayName,
-			Status:      MountStartupFatal,
-			Err: fmt.Errorf(
-				"child mount %s references missing parent mount %s",
-				childMountID,
-				children[i].namespaceID,
-			),
-		})
-		nextIndex++
+func childCommandStartupResult(
+	parentID mountID,
+	command *syncengine.ShortcutChildRunCommand,
+	selectionIndex int,
+	err error,
+) MountStartupResult {
+	childMountID := ""
+	displayName := ""
+	if command != nil {
+		childMountID = command.ChildMountID
+		displayName = command.DisplayName
 	}
-
-	return results
+	return MountStartupResult{
+		SelectionIndex: selectionIndex,
+		Identity: MountIdentity{
+			MountID:        childMountID,
+			ParentMountID:  parentID.String(),
+			ProjectionKind: MountProjectionChild,
+		},
+		DisplayName: displayName,
+		Status:      MountStartupFatal,
+		Err:         err,
+	}
 }
 
 func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
@@ -439,88 +391,85 @@ func (spec *parentMountSpec) runtimeMountSpec() *mountSpec {
 	}
 }
 
-func buildChildRunnerDecision(parent *mountSpec, child *syncengine.ShortcutChildRunner, dataDir string) (*childRunnerDecision, error) {
-	if parent == nil || child == nil || child.BindingItemID == "" {
-		return nil, fmt.Errorf("multisync: parent-declared child runner publication is incomplete")
+func buildChildMountFromCommand(
+	parent *mountSpec,
+	command *syncengine.ShortcutChildRunCommand,
+	dataDir string,
+) (*mountSpec, error) {
+	if parent == nil || command == nil {
+		return nil, fmt.Errorf("multisync: parent-declared child run command is incomplete")
 	}
-	childMountID, err := validatePublishedShortcutChildScope(child)
+	childMountID, err := validateChildRunCommand(command)
 	if err != nil {
 		return nil, err
 	}
-	relativePath := child.RelativeLocalPath
 	statePath := config.MountStatePathForDataDir(dataDir, childMountID)
 	if statePath == "" {
 		return nil, fmt.Errorf("multisync: state path is required for child mount %s", childMountID)
 	}
 
-	displayName := child.DisplayName
-	if displayName == "" {
-		displayName = path.Base(relativePath)
-	}
+	displayName := command.DisplayName
 	tokenOwner := parent.tokenOwnerCanonical
 
-	childSpec := newChildMountSpec(parent, child, childMountID, displayName, statePath, tokenOwner)
-	childMount := childSpec.runtimeMountSpec()
-	skipErr := shortcutChildRunnerSkipError(childMountID, child.RunnerAction)
-
-	return &childRunnerDecision{
-		namespaceID:       parent.mountID,
-		bindingItemID:     child.BindingItemID,
-		localAlias:        displayName,
-		relativeLocalPath: relativePath,
-		runnerAction:      child.RunnerAction,
-		mount:             childMount,
-		skipErr:           skipErr,
-	}, nil
+	childSpec := newChildMountSpec(parent, command, childMountID, displayName, statePath, tokenOwner)
+	return childSpec.runtimeMountSpec(), nil
 }
 
-func validatePublishedShortcutChildScope(child *syncengine.ShortcutChildRunner) (string, error) {
-	if child == nil || child.BindingItemID == "" {
-		return "", fmt.Errorf("multisync: parent-declared child runner publication is incomplete")
+func validateChildRunCommand(command *syncengine.ShortcutChildRunCommand) (string, error) {
+	if command == nil {
+		return "", fmt.Errorf("multisync: parent-declared child run command is incomplete")
 	}
-	childMountID := child.ChildMountID
+	childMountID := command.ChildMountID
 	if childMountID == "" {
-		return "", fmt.Errorf("multisync: parent-declared child %s is missing a child mount ID", child.BindingItemID)
+		return "", fmt.Errorf("multisync: parent-declared child run command is missing a child mount ID")
 	}
 	if !config.IsChildMountID(childMountID) {
-		return "", fmt.Errorf("multisync: parent-declared child %s has invalid child mount ID %s", child.BindingItemID, childMountID)
+		return "", fmt.Errorf("multisync: parent-declared child run command has invalid child mount ID %s", childMountID)
 	}
-	if child.RelativeLocalPath == "" {
-		return "", fmt.Errorf("multisync: parent-declared child %s is missing a local path", child.BindingItemID)
+	if command.Engine.LocalRoot == "" {
+		return "", fmt.Errorf("multisync: parent-declared child %s is missing a local root", childMountID)
 	}
-	if child.LocalRoot == "" {
-		return "", fmt.Errorf("multisync: parent-declared child %s is missing a local root", child.BindingItemID)
+	if command.Engine.RemoteDriveID == "" || command.Engine.RemoteItemID == "" {
+		return "", fmt.Errorf("multisync: parent-declared child %s is missing remote root identity", childMountID)
+	}
+	switch command.Mode {
+	case syncengine.ShortcutChildRunModeNormal, syncengine.ShortcutChildRunModeFinalDrain:
+	default:
+		return "", fmt.Errorf("multisync: parent-declared child %s has unsupported run mode %q", childMountID, command.Mode)
+	}
+	if command.Mode == syncengine.ShortcutChildRunModeFinalDrain && command.AckRef.IsZero() {
+		return "", fmt.Errorf("multisync: parent-declared final-drain child %s is missing an acknowledgement reference", childMountID)
 	}
 	return childMountID, nil
 }
 
 func newChildMountSpec(
 	parent *mountSpec,
-	child *syncengine.ShortcutChildRunner,
+	command *syncengine.ShortcutChildRunCommand,
 	childMountID string,
 	displayName string,
 	statePath string,
 	tokenOwner driveid.CanonicalID,
 ) childMountSpec {
 	return childMountSpec{
-		parentMountID:            parent.mountID,
-		mountID:                  mountID(childMountID),
-		bindingItemID:            child.BindingItemID,
-		displayName:              displayName,
-		syncRoot:                 child.LocalRoot,
-		statePath:                statePath,
-		remoteDriveID:            driveid.New(child.RemoteDriveID),
-		remoteRootItemID:         child.RemoteItemID,
-		tokenOwnerCanonical:      tokenOwner,
-		accountEmail:             tokenOwner.Email(),
-		paused:                   parent.paused,
-		enableWebsocket:          parent.enableWebsocket,
-		remoteRootDeltaCapable:   config.RemoteRootDeltaCapableForTokenOwner(tokenOwner),
-		transferWorkers:          parent.transferWorkers,
-		checkWorkers:             parent.checkWorkers,
-		minFreeSpace:             parent.minFreeSpace,
-		finalDrain:               child.RunnerAction == syncengine.ShortcutChildActionFinalDrain,
-		expectedSyncRootIdentity: cloneChildRootIdentity(child.LocalRootIdentity),
+		parentMountID:          parent.mountID,
+		mountID:                mountID(childMountID),
+		displayName:            displayName,
+		syncRoot:               command.Engine.LocalRoot,
+		statePath:              statePath,
+		remoteDriveID:          driveid.New(command.Engine.RemoteDriveID),
+		remoteRootItemID:       command.Engine.RemoteItemID,
+		tokenOwnerCanonical:    tokenOwner,
+		accountEmail:           tokenOwner.Email(),
+		paused:                 parent.paused,
+		enableWebsocket:        parent.enableWebsocket,
+		remoteRootDeltaCapable: config.RemoteRootDeltaCapableForTokenOwner(tokenOwner),
+		transferWorkers:        parent.transferWorkers,
+		checkWorkers:           parent.checkWorkers,
+		minFreeSpace:           parent.minFreeSpace,
+		mode:                   command.Mode,
+		ackRef:                 command.AckRef,
+		engine:                 command.Engine,
 	}
 }
 
@@ -543,29 +492,11 @@ func (spec *childMountSpec) runtimeMountSpec() *mountSpec {
 		checkWorkers:           spec.checkWorkers,
 		minFreeSpace:           spec.minFreeSpace,
 		child: &childMountRuntime{
-			parentMountID:            spec.parentMountID,
-			bindingItemID:            spec.bindingItemID,
-			finalDrain:               spec.finalDrain,
-			expectedSyncRootIdentity: spec.expectedSyncRootIdentity,
+			parentMountID: spec.parentMountID,
+			mode:          spec.mode,
+			ackRef:        spec.ackRef,
+			engine:        spec.engine,
 		},
-	}
-}
-
-func shortcutChildRunnerSkipError(
-	childMountID string,
-	action syncengine.ShortcutChildRunnerAction,
-) error {
-	switch action {
-	case syncengine.ShortcutChildActionRun:
-		return nil
-	case syncengine.ShortcutChildActionFinalDrain:
-		return nil
-	case syncengine.ShortcutChildActionSkipParentBlocked:
-		return fmt.Errorf("child mount %s is blocked by parent shortcut lifecycle", childMountID)
-	case "":
-		return fmt.Errorf("child mount %s is missing a parent-declared runner action", childMountID)
-	default:
-		return fmt.Errorf("child mount %s has unsupported runner action %q", childMountID, action)
 	}
 }
 
@@ -582,13 +513,6 @@ func (m *mountSpec) identity() MountIdentity {
 	}
 }
 
-func (m *mountSpec) childBindingItemID() string {
-	if m == nil || m.child == nil {
-		return ""
-	}
-	return m.child.bindingItemID
-}
-
 func (m *mountSpec) childParentMountID() mountID {
 	if m == nil || m.child == nil {
 		return ""
@@ -597,14 +521,29 @@ func (m *mountSpec) childParentMountID() mountID {
 }
 
 func (m *mountSpec) isFinalDrainChild() bool {
-	return m != nil && m.child != nil && m.child.finalDrain
+	return m != nil && m.child != nil && m.child.mode == syncengine.ShortcutChildRunModeFinalDrain
 }
 
 func (m *mountSpec) expectedChildRootIdentity() *syncengine.ShortcutRootIdentity {
 	if m == nil || m.child == nil {
 		return nil
 	}
-	return m.child.expectedSyncRootIdentity
+	return m.child.engine.LocalRootIdentity
+}
+
+func (m *mountSpec) shortcutChildAckRef() syncengine.ShortcutChildAckRef {
+	if m == nil || m.child == nil {
+		return syncengine.ShortcutChildAckRef{}
+	}
+	return m.child.ackRef
+}
+
+func cloneShortcutChildEngineSpec(spec syncengine.ShortcutChildEngineSpec) syncengine.ShortcutChildEngineSpec {
+	if spec.LocalRootIdentity != nil {
+		identity := *spec.LocalRootIdentity
+		spec.LocalRootIdentity = &identity
+	}
+	return spec
 }
 
 func (m *mountSpec) label() string {
