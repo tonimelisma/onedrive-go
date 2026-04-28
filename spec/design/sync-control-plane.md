@@ -160,17 +160,18 @@ actions to `internal/multisync`:
 - all active, conflicted, unavailable, waiting, release-pending, and
   removed-final-drain paths
   remain parent protected paths
-- runnable child runner publications carry the parent-observed local root identity when
-  available; child engines verify that identity before startup and full scans
-  so a deleted/recreated or moved projection cannot be mistaken for an empty
-  tree to sync
+- child runner publications carry the stable child mount ID and parent-computed
+  local root as mandatory runner command fields; runnable publications also
+  carry the parent-observed local root identity when available, and child
+  engines verify that identity before startup and full scans so a
+  deleted/recreated or moved projection cannot be mistaken for an empty tree to
+  sync
 - in one-shot mode, each configured parent runs as an ordinary engine and
-  children are admitted from that parent's final accepted runner publication
-  after the parent pass returns; no parent waits for unrelated parents before
-  its children can run, and there is no separate parent-done gate after child
-  admission. The one-shot child-run coordinator only owns report aggregation,
-  artifact cleanup, and live-parent acknowledgement ordering; children still
-  execute ordinary engine `RunOnce` passes
+  children are admitted from that parent's accepted live runner publication
+  without waiting for unrelated parents. There is no separate parent-done gate
+  after child admission. The one-shot child-run coordinator only owns report
+  aggregation, artifact cleanup, and live-parent acknowledgement ordering;
+  children still execute ordinary engine `RunOnce` passes
 - successful runner-publication mutation in watch mode publishes a new
   parent-owned child snapshot through the live parent runner; multisync
   reconciles only that parent's child runners without stopping the parent

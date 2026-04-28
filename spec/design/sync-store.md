@@ -18,11 +18,15 @@ architecture it owns:
 - block-scope persistence
 - observation resume/cadence persistence
 - state-DB diagnosis and explicit reset support
-- read-only raw row access used by `status`
+- read-only status read models used by `status`
 
 It does not own planning policy, execution policy, or a competing history/status
 model. Shortcut status display metadata is sync-owned but derived from
 `ShortcutRootState`; the store persists the state rows, not presentation copy.
+CLI status reads `ShortcutRootStatusRow` values rather than raw
+`shortcut_roots` records so presentation code sees issue/recovery metadata,
+protected paths, and waiting-replacement display fields without depending on
+parent-internal identity or durable row layout.
 
 For parent namespace engines, it also owns parent-local shortcut-root state in
 `shortcut_roots`. Those rows are not child content state: they describe the

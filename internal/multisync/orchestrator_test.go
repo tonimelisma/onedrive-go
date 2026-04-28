@@ -810,10 +810,8 @@ func TestRunOnce_DropsStaleChildSkipAfterParentPublishesRunnableChild(t *testing
 	parent := testStandaloneMount(t, "personal:stale-child-skip@example.com", "Parent")
 	staleChild := testChildRecord(mountID(parent.CanonicalID.String()), "binding-stale", "Shortcuts/Docs")
 	staleChild.RunnerAction = syncengine.ShortcutChildActionSkipParentBlocked
-	staleChild.RunnerDetail = "stale parent blocker"
 	runnableChild := staleChild
 	runnableChild.RunnerAction = syncengine.ShortcutChildActionRun
-	runnableChild.RunnerDetail = ""
 	childID := config.ChildMountID(parent.CanonicalID.String(), runnableChild.BindingItemID)
 
 	cfg := testOrchestratorConfig(t, parent)
@@ -871,10 +869,8 @@ func TestRunOnce_UsesFinalParentPublicationInsteadOfIntermediateSkip(t *testing.
 	parent := testStandaloneMount(t, "personal:intermediate-child-skip@example.com", "Parent")
 	skippedChild := testChildRecord(mountID(parent.CanonicalID.String()), "binding-final", "Shortcuts/Docs")
 	skippedChild.RunnerAction = syncengine.ShortcutChildActionSkipParentBlocked
-	skippedChild.RunnerDetail = "intermediate parent blocker"
 	runnableChild := skippedChild
 	runnableChild.RunnerAction = syncengine.ShortcutChildActionRun
-	runnableChild.RunnerDetail = ""
 	childID := config.ChildMountID(parent.CanonicalID.String(), runnableChild.BindingItemID)
 
 	cfg := testOrchestratorConfig(t, parent)
@@ -1314,8 +1310,10 @@ func TestRunOnce_PublishesParentRunnerPublicationBeforeStartingChildren(t *testi
 					require.NoError(t, req.Mount.parentRunnerPublicationSink(ctx, syncengine.ShortcutChildRunnerPublication{
 						NamespaceID: req.Mount.mountID.String(),
 						Children: []syncengine.ShortcutChildRunner{{
+							ChildMountID:      childID,
 							BindingItemID:     bindingID,
 							RelativeLocalPath: "Shortcuts/Bootstrap",
+							LocalRoot:         filepath.Join(parent.SyncRoot, "Shortcuts", "Bootstrap"),
 							LocalAlias:        "Bootstrap",
 							RemoteDriveID:     "remote-child-drive",
 							RemoteItemID:      "remote-child-root",
@@ -1678,8 +1676,10 @@ func TestRunWatch_PublishesParentRunnerPublicationBeforeStartingChildren(t *test
 					require.NoError(t, req.Mount.parentRunnerPublicationSink(ctx, syncengine.ShortcutChildRunnerPublication{
 						NamespaceID: req.Mount.mountID.String(),
 						Children: []syncengine.ShortcutChildRunner{{
+							ChildMountID:      childID,
 							BindingItemID:     bindingID,
 							RelativeLocalPath: "Shortcuts/WatchBootstrap",
+							LocalRoot:         filepath.Join(parent.SyncRoot, "Shortcuts", "WatchBootstrap"),
 							LocalAlias:        "WatchBootstrap",
 							RemoteDriveID:     "remote-child-drive",
 							RemoteItemID:      "remote-child-root",
@@ -1871,8 +1871,10 @@ func shortcutPublication(namespaceID, bindingItemID, alias string) syncengine.Sh
 	return syncengine.ShortcutChildRunnerPublication{
 		NamespaceID: namespaceID,
 		Children: []syncengine.ShortcutChildRunner{{
+			ChildMountID:      config.ChildMountID(namespaceID, bindingItemID),
 			BindingItemID:     bindingItemID,
 			RelativeLocalPath: "Shortcuts/" + alias,
+			LocalRoot:         filepath.Join(os.TempDir(), "parent", "Shortcuts", alias),
 			LocalAlias:        alias,
 			RemoteDriveID:     "remote-child-drive",
 			RemoteItemID:      "remote-child-" + strings.ToLower(alias),

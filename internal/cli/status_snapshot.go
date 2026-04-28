@@ -251,13 +251,13 @@ func filterSnapshotAccounts(accounts []accountView, selectedAccounts map[string]
 }
 
 func filterShortcutRootSnapshots(
-	roots map[driveid.CanonicalID][]syncengine.ShortcutRootRecord,
+	roots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusRow,
 	drives map[driveid.CanonicalID]config.Drive,
-) map[driveid.CanonicalID][]syncengine.ShortcutRootRecord {
-	filtered := make(map[driveid.CanonicalID][]syncengine.ShortcutRootRecord)
+) map[driveid.CanonicalID][]syncengine.ShortcutRootStatusRow {
+	filtered := make(map[driveid.CanonicalID][]syncengine.ShortcutRootStatusRow)
 	for cid := range drives {
 		if records, ok := roots[cid]; ok {
-			filtered[cid] = append([]syncengine.ShortcutRootRecord(nil), records...)
+			filtered[cid] = append([]syncengine.ShortcutRootStatusRow(nil), records...)
 		}
 	}
 	return filtered
@@ -312,12 +312,12 @@ func buildStatusAccountsWith(
 
 type childMountStatusInput struct {
 	ParentID driveid.CanonicalID
-	Root     syncengine.ShortcutRootRecord
+	Root     syncengine.ShortcutRootStatusRow
 }
 
 func buildStatusAccountsFromViews(
 	cfg *config.Config,
-	shortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootRecord,
+	shortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusRow,
 	views []accountView,
 	syncQ syncStateQuerier,
 ) []statusAccount {
@@ -456,7 +456,7 @@ func driveState(d *config.Drive) string {
 }
 
 func groupChildMountsByParent(
-	shortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootRecord,
+	shortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusRow,
 ) map[driveid.CanonicalID][]childMountStatusInput {
 	grouped := make(map[driveid.CanonicalID][]childMountStatusInput)
 	if shortcutRoots == nil {
@@ -524,8 +524,8 @@ func buildChildStatusMount(
 		displayName = path.Base(root.RelativeLocalPath)
 	}
 
-	mountID := config.ChildMountID(child.ParentID.String(), root.BindingItemID)
-	metadata := syncengine.ShortcutRootStatus(root.State)
+	mountID := root.MountID
+	metadata := root.Metadata
 	state := driveState(&parentDrive)
 	statusDetail := ""
 	if root.State != "" && root.State != syncengine.ShortcutRootStateActive {
@@ -549,8 +549,8 @@ func buildChildStatusMount(
 		RecoveryClass:  string(metadata.RecoveryClass),
 		RecoveryAction: metadata.RecoveryAction,
 	}
-	if root.Waiting != nil {
-		mount.WaitingReplacement = root.Waiting.RelativeLocalPath
+	if root.WaitingReplacement != "" {
+		mount.WaitingReplacement = root.WaitingReplacement
 	}
 	if metadata.ProtectsPath {
 		mount.ProtectedCurrentPath = mount.SyncDir

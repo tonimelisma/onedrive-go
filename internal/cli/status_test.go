@@ -100,17 +100,17 @@ func testShortcutStatusChild(
 		relativePath = "Shortcuts/Docs"
 	)
 	alias := filepath.Base(relativePath)
+	metadata := syncengine.ShortcutRootStatus(state)
 	return childMountStatusInput{
 		ParentID: parentCID,
-		Root: syncengine.ShortcutRootRecord{
+		Root: syncengine.ShortcutRootStatusRow{
 			NamespaceID:       parentCID.String(),
 			BindingItemID:     bindingID,
+			MountID:           config.ChildMountID(parentCID.String(), bindingID),
 			RelativeLocalPath: relativePath,
 			LocalAlias:        alias,
-			RemoteDriveID:     driveid.New("remote-drive"),
-			RemoteItemID:      "remote-root",
-			RemoteIsFolder:    true,
 			State:             state,
+			Metadata:          metadata,
 			ProtectedPaths:    []string{relativePath},
 		},
 	}
@@ -307,14 +307,7 @@ func buildStatusLifecycleMount(
 
 	child := testShortcutStatusChild(parentCID, tc.state)
 	if tc.waitingReplacement != "" {
-		child.Root.Waiting = &syncengine.ShortcutRootReplacement{
-			BindingItemID:     "binding-new",
-			RelativeLocalPath: tc.waitingReplacement,
-			LocalAlias:        "Docs",
-			RemoteDriveID:     driveid.New("remote-drive-new"),
-			RemoteItemID:      "remote-root-new",
-			RemoteIsFolder:    true,
-		}
+		child.Root.WaitingReplacement = tc.waitingReplacement
 	}
 	return buildChildStatusMount(config.Drive{SyncDir: "/tmp/sync-root"}, &child, nil)
 }
