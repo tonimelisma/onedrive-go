@@ -226,7 +226,11 @@ func (o *Orchestrator) purgeShortcutChildArtifactsForDecisions(
 	decisions *runnerDecisionSet,
 	parentAckers map[mountID]shortcutChildAckHandle,
 ) error {
-	if decisions == nil || len(decisions.CleanupChildren) == 0 {
+	if decisions == nil {
+		return nil
+	}
+	if len(decisions.CleanupChildren) == 0 {
+		o.clearShortcutCleanupDiagnostics(shortcutChildArtifactCleanupSourcePublished)
 		return nil
 	}
 	return o.purgeAndAcknowledgeShortcutChildArtifacts(
@@ -261,7 +265,7 @@ func (o *Orchestrator) purgeAndAcknowledgeShortcutChildArtifacts(
 	err := errors.Join(errs...)
 	if err != nil {
 		o.recordShortcutCleanupDiagnostic(source, err)
-	} else if len(cleanups) > 0 {
+	} else {
 		o.clearShortcutCleanupDiagnostics(source)
 	}
 	return err
