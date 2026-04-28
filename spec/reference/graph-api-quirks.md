@@ -561,6 +561,10 @@ Runtime policy:
 - scheduled/manual `devtool verify e2e-full --classify-live-quirks` may rerun
   the strict auth preflight once for this exact known quirk and only downgrade
   it when the rerun passes; required per-PR lanes stay strict
+- required live lanes use a longer repo-owned auth-preflight endpoint budget
+  than ordinary 30-second polls, and graph integration tests use a test-only
+  drive-discovery policy scoped to the integration timeout, so CI can observe
+  recovery without changing the production `graph.Client.Drives()` retry budget
 
 ### Transient 504 `ProfileException` on `/me` During Strict Auth Preflight
 
@@ -824,9 +828,11 @@ Runtime policy: children listings send `Include-Feature=AddToOneDrive`; delta
 requests combine it with `deltashowremoteitemsaliasid` so shortcut placeholders
 remain discoverable without giving the sync engine shortcut ownership.
 Even with that header, live root listings can transiently omit a known manual
-shortcut while shared discovery and direct target traversal still work, so live
-fixture checks poll the parent root before declaring the manual shortcut
-fixture broken.
+shortcut while shared discovery and direct target traversal still work. The
+reverse has also appeared: shortcut placeholders and direct traversal can be
+healthy while shared search/list output is temporarily empty for the target.
+Live fixture checks therefore use a shortcut-specific propagation budget before
+declaring the manual shortcut fixture broken.
 
 Observed fixture repair on April 25, 2026: deleting a personal-account shortcut
 placeholder by item ID removed only the placeholder. Microsoft documents

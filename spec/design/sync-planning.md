@@ -15,6 +15,12 @@ builder.
   filtering, conflict handling, and dependency detection
 
 The executable plan is runtime-owned and is not a durable SQLite authority.
+Shortcut-root lifecycle planning follows the same functional-core rule inside
+`internal/sync`: remote shortcut topology observations and local alias identity
+facts enter deterministic shortcut-root planner helpers, while Graph,
+filesystem, SQLite, logging, clocks, and goroutines stay in the engine shell.
+The output is parent-owned shortcut-root state plus child process snapshot
+intent; multisync receives only that process intent.
 
 ## Ownership Contract
 

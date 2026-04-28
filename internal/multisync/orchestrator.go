@@ -11,6 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 // engineRunner is the interface the Orchestrator uses to run sync passes.
@@ -106,7 +107,10 @@ type Orchestrator struct {
 	perfRuntime   *perf.Runtime
 	statusMu      gosync.RWMutex
 	controlMounts []string
-	shortcutMu    gosync.Mutex
+	// shortcutCleanupDiagnostics is transient executor status for control
+	// clients. Durable recovery remains in parent shortcut_roots.
+	shortcutCleanupDiagnostics []synccontrol.ShortcutCleanupDiagnostic
+	shortcutMu                 gosync.Mutex
 	// latestParentChildWorkSnapshots is an ephemeral exact cache of parent
 	// child-work intent. It is rebuildable from live parents, is cleared when the
 	// parent exits or restarts, and never owns shortcut lifecycle policy.

@@ -154,6 +154,32 @@ func TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges(t *testing.T
 }
 
 // Validates: R-2.4.8, R-2.4.10
+func TestShortcutRootTransitionMatrixEnumeratesEveryStateAndEvent(t *testing.T) {
+	t.Parallel()
+
+	transitions := shortcutRootTransitionTable()
+	for _, state := range allShortcutRootStatesForTest() {
+		metadata, ok := shortcutRootLifecycleMetadataFor(state)
+		require.Truef(t, ok, "missing lifecycle metadata for %s", state)
+		assert.Equal(t, metadata.protectsPath, shortcutRootStateKeepsProtectedPaths(state))
+		assert.Equal(t, metadata.runMode, shortcutChildRunModeForRoot(state))
+
+		for _, event := range allShortcutRootLifecycleEventsForTest() {
+			targets := transitions[state][event]
+			if len(targets) == 0 {
+				err := validateShortcutRootTransition(state, event, state)
+				require.Errorf(t, err, "event %s from %s should not allow implicit self-transition", event, state)
+				continue
+			}
+			for _, target := range targets {
+				require.NoErrorf(t, validateShortcutRootTransition(state, event, target),
+					"event %s from %s to %s", event, state, target)
+			}
+		}
+	}
+}
+
+// Validates: R-2.4.8, R-2.4.10
 func TestPlanMissingMaterializedShortcutRootChoosesAliasEffect(t *testing.T) {
 	t.Parallel()
 
@@ -186,6 +212,46 @@ func TestPlanMissingMaterializedShortcutRootChoosesAliasEffect(t *testing.T) {
 	assert.ElementsMatch(t, []string{"Shared/Docs", "Shared/A", "Shared/B"}, ambiguousPlan.Next.ProtectedPaths)
 }
 
+func allShortcutRootStatesForTest() []ShortcutRootState {
+	return []ShortcutRootState{
+		ShortcutRootStateActive,
+		ShortcutRootStateTargetUnavailable,
+		ShortcutRootStateLocalRootUnavailable,
+		ShortcutRootStateBlockedPath,
+		ShortcutRootStateRenameAmbiguous,
+		ShortcutRootStateAliasMutationBlocked,
+		ShortcutRootStateRemovedFinalDrain,
+		ShortcutRootStateRemovedReleasePending,
+		ShortcutRootStateRemovedCleanupBlocked,
+		ShortcutRootStateRemovedChildCleanupPending,
+		ShortcutRootStateSamePathReplacementWaiting,
+		ShortcutRootStateDuplicateTarget,
+	}
+}
+
+func allShortcutRootLifecycleEventsForTest() []shortcutRootLifecycleEvent {
+	return []shortcutRootLifecycleEvent{
+		shortcutRootEventRemoteUpsert,
+		shortcutRootEventRemoteDelete,
+		shortcutRootEventRemoteUnavailable,
+		shortcutRootEventCompleteOmission,
+		shortcutRootEventSamePathReplacement,
+		shortcutRootEventProtectedPathConflict,
+		shortcutRootEventLocalRootReady,
+		shortcutRootEventLocalPathBlocked,
+		shortcutRootEventAliasMutationSucceeded,
+		shortcutRootEventAliasMutationFailed,
+		shortcutRootEventAliasRenameAmbiguous,
+		shortcutRootEventChildFinalDrainClean,
+		shortcutRootEventProjectionCleanupFailed,
+		shortcutRootEventProjectionCleanupSucceeded,
+		shortcutRootEventWaitingReplacementPromote,
+		shortcutRootEventChildArtifactsPurged,
+		shortcutRootEventDuplicateTargetDetected,
+		shortcutRootEventDuplicateTargetResolved,
+	}
+}
+
 // Validates: R-2.4.8, R-2.4.10
 func TestPlanMissingMaterializedShortcutRootPrefersHistoricalProjectionMove(t *testing.T) {
 	t.Parallel()
@@ -203,6 +269,29 @@ func TestPlanMissingMaterializedShortcutRootPrefersHistoricalProjectionMove(t *t
 	assert.Equal(t, shortcutRootMissingAliasMoveProjection, plan.Action)
 	assert.Equal(t, "Shared/Old", plan.FromRelativePath)
 	assert.Equal(t, "Shared/Docs", plan.ToRelativePath)
+}
+
+// Validates: R-2.4.8, R-2.4.10
+func TestPlanMissingMaterializedShortcutRootCandidatesOwnsCandidateFailure(t *testing.T) {
+	t.Parallel()
+
+	record := ShortcutRootRecord{
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		State:             ShortcutRootStateActive,
+		ProtectedPaths:    []string{"Shared/Docs"},
+	}
+
+	plan := planMissingMaterializedShortcutRootObservation(record, shortcutRootLocalObservation{
+		RelativePath: "Shared/Docs",
+		CandidateErr: errors.New("read alias parent denied"),
+	})
+
+	assert.Equal(t, shortcutRootLocalKeepRecord, plan.Action)
+	assert.True(t, plan.Keep)
+	assert.True(t, plan.Changed)
+	assert.Equal(t, ShortcutRootStateLocalRootUnavailable, plan.Next.State)
+	assert.Contains(t, plan.Next.BlockedDetail, "read alias parent denied")
 }
 
 // Validates: R-2.4.8, R-2.4.10

@@ -31,12 +31,12 @@ func printMountReports(reports []*multisync.MountReport, cc *CLIContext) {
 
 func printRunOnceResult(result multisync.RunOnceResult, cc *CLIContext) {
 	multiDrive := result.Startup.SelectedCount() > 1
-	reportBySelection := make(map[int]*multisync.MountReport, len(result.Reports))
+	reportBySelection := make(map[int][]*multisync.MountReport, len(result.Reports))
 	for _, report := range result.Reports {
 		if report == nil {
 			continue
 		}
-		reportBySelection[report.SelectionIndex] = report
+		reportBySelection[report.SelectionIndex] = append(reportBySelection[report.SelectionIndex], report)
 	}
 
 	for i := range result.Startup.Results {
@@ -54,19 +54,23 @@ func printRunOnceResult(result multisync.RunOnceResult, cc *CLIContext) {
 			continue
 		}
 
-		report := reportBySelection[startup.SelectionIndex]
-		if report == nil {
+		reports := reportBySelection[startup.SelectionIndex]
+		if len(reports) == 0 {
 			cc.Statusf("Error: missing sync report for mount startup result\n")
 			continue
 		}
 
-		if report.Err != nil {
-			cc.Statusf("Error: %s\n", formatMountReportErrorMessage(report))
-			continue
-		}
-
-		if report.Report != nil {
-			printSyncReport(report.Report, cc)
+		for _, report := range reports {
+			if report == nil {
+				continue
+			}
+			if report.Err != nil {
+				cc.Statusf("Error: %s\n", formatMountReportErrorMessage(report))
+				continue
+			}
+			if report.Report != nil {
+				printSyncReport(report.Report, cc)
+			}
 		}
 	}
 }
