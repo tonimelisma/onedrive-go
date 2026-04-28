@@ -470,12 +470,13 @@ func (o *Orchestrator) handleControlCommand(
 	opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
+	childWork *parentChildWorkSnapshots,
 ) bool {
 	switch cmd.kind {
 	case controlCommandStatus:
 		cmd.response <- controlResponse{Body: o.controlStatus(ctx, synccontrol.OwnerModeWatch)}
 	case controlCommandReload:
-		o.reload(ctx, mode, opts, runners, runnerEvents)
+		o.reload(ctx, mode, opts, runners, runnerEvents, childWork)
 		cmd.response <- controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.StatusReloaded}}
 	case controlCommandStop:
 		cmd.response <- controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.StatusStopping}}

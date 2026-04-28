@@ -69,6 +69,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		parentMounts,
 		o.cfg.InitialStartupResults,
 		opts,
+		childCoordinator.cache,
 		childCoordinator.notifyParentSnapshot,
 	)
 	childCoordinator.registerParents(parentWork)
@@ -162,6 +163,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 	mounts []*mountSpec,
 	initialStartup []MountStartupResult,
 	opts syncengine.RunOptions,
+	childWork *parentChildWorkSnapshots,
 	notify parentChildWorkNotify,
 ) ([]indexedMountWork, StartupSelectionSummary, []*MountReport) {
 	work := make([]indexedMountWork, 0, len(mounts))
@@ -180,7 +182,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 			continue
 		}
 
-		o.attachParentChildWorkSink(mount, nil, notify)
+		o.attachParentChildWorkSink(mount, childWork, nil, notify)
 
 		session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 		if err != nil {
@@ -297,6 +299,7 @@ func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 	decisions *runtimeWorkSet,
 	reports []*MountReport,
 	parentAckers map[mountID]shortcutChildAckHandle,
+	childWork *parentChildWorkSnapshots,
 ) (bool, error) {
 	if decisions == nil {
 		return false, nil
@@ -320,6 +323,7 @@ func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 		shortcutChildArtifactCleanupSourceFinalDrain,
 		cleanups,
 		cloneParentAckHandles(parentAckers),
+		childWork,
 	); err != nil {
 		return false, err
 	}

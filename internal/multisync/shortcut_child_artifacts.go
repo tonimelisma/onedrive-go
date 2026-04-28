@@ -225,6 +225,7 @@ func (o *Orchestrator) purgeShortcutChildArtifactsForDecisions(
 	ctx context.Context,
 	decisions *runtimeWorkSet,
 	parentAckers map[mountID]shortcutChildAckHandle,
+	childWork *parentChildWorkSnapshots,
 ) error {
 	if decisions == nil {
 		return nil
@@ -240,6 +241,7 @@ func (o *Orchestrator) purgeShortcutChildArtifactsForDecisions(
 		shortcutChildArtifactCleanupSourcePublished,
 		decisions.CleanupChildren,
 		parentAckers,
+		childWork,
 	)
 }
 
@@ -248,6 +250,7 @@ func (o *Orchestrator) purgeAndAcknowledgeShortcutChildArtifacts(
 	source shortcutChildArtifactCleanupSource,
 	cleanups []shortcutChildArtifactCleanup,
 	parentAckers map[mountID]shortcutChildAckHandle,
+	childWork *parentChildWorkSnapshots,
 ) error {
 	var errs []error
 	purged := make([]shortcutChildArtifactCleanup, 0, len(cleanups))
@@ -260,7 +263,7 @@ func (o *Orchestrator) purgeAndAcknowledgeShortcutChildArtifacts(
 		purged = append(purged, cleanup)
 	}
 	if len(purged) > 0 {
-		if err := o.acknowledgeShortcutChildArtifactCleanups(ctx, purged, parentAckers); err != nil {
+		if err := o.acknowledgeShortcutChildArtifactCleanups(ctx, purged, parentAckers, childWork); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -335,6 +338,7 @@ func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 	ctx context.Context,
 	cleanups []shortcutChildArtifactCleanup,
 	parentAckers map[mountID]shortcutChildAckHandle,
+	childWork *parentChildWorkSnapshots,
 ) error {
 	var errs []error
 	for _, cleanup := range cleanups {
@@ -359,7 +363,7 @@ func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 			))
 			continue
 		}
-		o.receiveParentChildWorkSnapshot(parentID, snapshot)
+		childWork.receive(parentID, snapshot)
 	}
 	return errors.Join(errs...)
 }

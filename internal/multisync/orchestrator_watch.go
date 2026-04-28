@@ -32,6 +32,7 @@ type watchRunnerEvent struct {
 	mountID               mountID
 	report                *syncengine.Report
 	err                   error
+	parentSnapshot        syncengine.ShortcutChildWorkSnapshot
 	parentSnapshotChanged bool
 }
 
@@ -42,7 +43,8 @@ type watchRunnerEvent struct {
 func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error {
 	commands := make(chan controlCommand)
 	runnerEvents := make(chan watchRunnerEvent, watchRunnerEventBuffer)
-	runners, control, err := o.startWatchRuntime(ctx, mode, opts, commands, runnerEvents)
+	childWork := newParentChildWorkSnapshots()
+	runners, control, err := o.startWatchRuntime(ctx, mode, opts, commands, runnerEvents, childWork)
 	if err != nil {
 		if control != nil {
 			o.closeControlSocket(ctx, control)
@@ -75,13 +77,13 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 	for {
 		select {
 		case cmd := <-commands:
-			if o.handleControlCommand(ctx, &cmd, mode, opts, runners, runnerEvents) {
+			if o.handleControlCommand(ctx, &cmd, mode, opts, runners, runnerEvents, childWork) {
 				return nil
 			}
 		case event := <-runnerEvents:
-			o.handleWatchRunnerEvent(ctx, event, mode, opts, runners, runnerEvents)
+			o.handleWatchRunnerEvent(ctx, event, mode, opts, runners, runnerEvents, childWork)
 		case <-reconcileTickCh:
-			o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents)
+			o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
 		case <-ctx.Done():
 			return nil
 		}
@@ -94,6 +96,7 @@ func (o *Orchestrator) startWatchRuntime(
 	opts syncengine.WatchOptions,
 	commands chan controlCommand,
 	runnerEvents chan<- watchRunnerEvent,
+	childWork *parentChildWorkSnapshots,
 ) (map[mountID]*watchRunner, *controlSocketServer, error) {
 	if len(o.cfg.StandaloneMounts) == 0 {
 		if len(o.cfg.InitialStartupResults) > 0 {
@@ -109,7 +112,7 @@ func (o *Orchestrator) startWatchRuntime(
 		return nil, nil, err
 	}
 
-	decisions, err := o.buildRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
+	decisions, err := o.buildStandaloneRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
 		return nil, control, fmt.Errorf("sync: building mount specs: %w", err)
 	}
@@ -127,6 +130,7 @@ func (o *Orchestrator) startWatchRuntime(
 		decisions.Skipped,
 		opts,
 		runnerEvents,
+		childWork,
 	)
 	startSummary := summarizeStartupResults(startResults)
 	if err := validateInitialWatchStart(runners, startSummary); err != nil {
@@ -146,6 +150,7 @@ func (o *Orchestrator) startInitialWatchRunners(
 	initialStartup []MountStartupResult,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
+	childWork *parentChildWorkSnapshots,
 ) (map[mountID]*watchRunner, []MountStartupResult) {
 	runners := make(map[mountID]*watchRunner)
 	startResults := append([]MountStartupResult(nil), initialStartup...)
@@ -166,7 +171,7 @@ func (o *Orchestrator) startInitialWatchRunners(
 			continue
 		}
 
-		o.attachParentChildWorkSink(mount, runnerEvents, nil)
+		o.attachParentChildWorkSink(mount, childWork, runnerEvents, nil)
 		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents)
 		if err != nil {
 			o.logger.Error("failed to start watch runner",
@@ -322,6 +327,7 @@ func (o *Orchestrator) reload(
 	ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
+	childWork *parentChildWorkSnapshots,
 ) {
 	newCfg, newSelection, err := o.loadReloadSelection(ctx)
 	if err != nil {
@@ -340,7 +346,7 @@ func (o *Orchestrator) reload(
 	o.cfg.InitialStartupResults = newSelection.StartupResults
 	o.cfg.Runtime.FlushTokenCache()
 
-	newMounts, err := o.buildRuntimeWorkSet(ctx, newSelection.Mounts, newSelection.StartupResults)
+	newMounts, err := o.buildRuntimeWorkSet(ctx, newSelection.Mounts, newSelection.StartupResults, childWork)
 	if err != nil {
 		o.cfg.Holder.Update(oldCfg)
 		o.cfg.StandaloneMounts = oldMounts
@@ -358,6 +364,7 @@ func (o *Orchestrator) reload(
 		mode,
 		opts,
 		runnerEvents,
+		childWork,
 	)
 	if len(startResults) > 0 {
 		o.emitStartWarning(summarizeStartupResults(startResults))
@@ -377,8 +384,9 @@ func (o *Orchestrator) reconcileWatchRunners(
 	opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
+	childWork *parentChildWorkSnapshots,
 ) {
-	decisions, err := o.buildRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
+	decisions, err := o.buildRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults, childWork)
 	if err != nil {
 		o.logger.Warn("shortcut runner reconciliation refresh failed, keeping current runners",
 			slog.String("error", err.Error()),
@@ -386,7 +394,7 @@ func (o *Orchestrator) reconcileWatchRunners(
 		return
 	}
 
-	stopped, started, startResults := o.applyWatchMountSet(ctx, runners, decisions, mode, opts, runnerEvents)
+	stopped, started, startResults := o.applyWatchMountSet(ctx, runners, decisions, mode, opts, runnerEvents, childWork)
 	if len(startResults) > 0 {
 		o.emitStartWarning(summarizeStartupResults(startResults))
 	}
@@ -405,9 +413,10 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 	opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
+	childWork *parentChildWorkSnapshots,
 ) {
 	if event.parentSnapshotChanged {
-		o.reconcileWatchRunnersForParent(ctx, event.mountID, mode, opts, runners, runnerEvents)
+		o.reconcileWatchRunnersForParent(ctx, event.mountID, event.parentSnapshot, mode, opts, runners, runnerEvents, childWork)
 		return
 	}
 
@@ -422,13 +431,13 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 		}
 		delete(runners, event.mountID)
 		if wr.mount != nil && wr.mount.projectionKind() == MountProjectionStandalone {
-			o.forgetParentChildWorkSnapshot(event.mountID)
+			childWork.forget(event.mountID)
 			o.stopChildWatchRunnersForParent(ctx, runners, event.mountID)
 		}
 	}
 
 	if wr != nil && wr.mount.isFinalDrainChild() {
-		o.handleFinalDrainWatchRunnerEvent(ctx, runners, wr, event)
+		o.handleFinalDrainWatchRunnerEvent(ctx, runners, wr, event, childWork)
 	}
 
 	if event.err != nil && errors.Is(event.err, syncengine.ErrMountRootUnavailable) {
@@ -443,7 +452,7 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 		)
 	}
 
-	o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents)
+	o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
 }
 
 func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
@@ -451,8 +460,9 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 	runners map[mountID]*watchRunner,
 	wr *watchRunner,
 	event watchRunnerEvent,
+	childWork *parentChildWorkSnapshots,
 ) {
-	decisions, err := o.buildRuntimeWorkFromParentSnapshots(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
+	decisions, err := o.buildRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults, childWork)
 	if err != nil {
 		o.logger.Warn("compiling mount set after final-drain child completion failed",
 			slog.String("mount_id", event.mountID.String()),
@@ -472,6 +482,7 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 		decisions,
 		[]*MountReport{report},
 		watchParentDrainAckers(runners),
+		childWork,
 	)
 	if err != nil {
 		o.logger.Warn("finalizing drained shortcut child mount after watch completion failed",
@@ -549,11 +560,15 @@ func (o *Orchestrator) applyWatchMountSet(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
+	childWork *parentChildWorkSnapshots,
 ) (int, int, []MountStartupResult) {
 	runnable := runnableMountMap(decisions.Mounts)
-	stopped := o.stopInactiveWatchRunners(ctx, runners, runnable)
+	restartingParents := parentWatchRunnersNeedingStop(runners, runnable)
+	removeChildRunnablesForParents(runnable, restartingParents)
+	removeCleanupWorkForParents(decisions, restartingParents)
+	stopped := o.stopInactiveWatchRunners(ctx, runners, runnable, childWork, restartingParents)
 	parentArtifactAckers := watchParentArtifactCleanupAckers(runners)
-	if purgeErr := o.purgeShortcutChildArtifactsForDecisions(ctx, decisions, parentArtifactAckers); purgeErr != nil {
+	if purgeErr := o.purgeShortcutChildArtifactsForDecisions(ctx, decisions, parentArtifactAckers, childWork); purgeErr != nil {
 		o.logger.Warn("purging shortcut child state artifacts",
 			slog.String("error", purgeErr.Error()),
 		)
@@ -566,6 +581,7 @@ func (o *Orchestrator) applyWatchMountSet(
 		mode,
 		opts,
 		runnerEvents,
+		childWork,
 	)
 	o.setControlMountIDs(sortedRunnerMountIDs(runners))
 
@@ -575,13 +591,15 @@ func (o *Orchestrator) applyWatchMountSet(
 func (o *Orchestrator) reconcileWatchRunnersForParent(
 	ctx context.Context,
 	parentID mountID,
+	snapshot syncengine.ShortcutChildWorkSnapshot,
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
+	childWork *parentChildWorkSnapshots,
 ) {
 	if parentID == "" {
-		o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents)
+		o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
 		return
 	}
 	parents, err := buildStandaloneMountSpecs(o.cfg.StandaloneMounts)
@@ -601,7 +619,7 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 	}
 	if parent == nil {
 		stopped := o.stopChildWatchRunnersForParent(ctx, runners, parentID)
-		o.forgetParentChildWorkSnapshot(parentID)
+		childWork.forget(parentID)
 		o.setControlMountIDs(sortedRunnerMountIDs(runners))
 		o.logger.Info("parent-scoped shortcut runner reconciliation removed missing parent children",
 			slog.String("parent_mount_id", parentID.String()),
@@ -610,9 +628,9 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 		return
 	}
 	publications := map[mountID]syncengine.ShortcutChildWorkSnapshot{
-		parentID: o.latestParentChildWorkSnapshotFor(parentID),
+		parentID: syncengine.NormalizeShortcutChildWorkSnapshot(parentID.String(), snapshot),
 	}
-	decisions, err := buildRuntimeWorkForParents([]*mountSpec{parent}, publications, o.cfg.DataDir, o.logger)
+	decisions, err := o.buildRuntimeWorkFromParentSnapshots([]*mountSpec{parent}, publications)
 	if err != nil {
 		o.logger.Warn("parent-scoped shortcut runner reconciliation failed, keeping current runners",
 			slog.String("parent_mount_id", parentID.String()),
@@ -628,6 +646,7 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 		mode,
 		opts,
 		runnerEvents,
+		childWork,
 	)
 	if len(startResults) > 0 {
 		o.emitStartWarning(summarizeStartupResults(startResults))
@@ -649,12 +668,13 @@ func (o *Orchestrator) applyWatchMountSetForParent(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
+	childWork *parentChildWorkSnapshots,
 ) (int, int, []MountStartupResult) {
 	childMounts := filterMountSpecsByProjection(decisions.Mounts, MountProjectionChild)
 	runnable := runnableMountMap(childMounts)
 	stopped := o.stopInactiveChildWatchRunnersForParent(ctx, runners, parentID, runnable)
 	parentArtifactAckers := watchParentArtifactCleanupAckers(runners)
-	if purgeErr := o.purgeShortcutChildArtifactsForDecisions(ctx, decisions, parentArtifactAckers); purgeErr != nil {
+	if purgeErr := o.purgeShortcutChildArtifactsForDecisions(ctx, decisions, parentArtifactAckers, childWork); purgeErr != nil {
 		o.logger.Warn("purging shortcut child state artifacts",
 			slog.String("error", purgeErr.Error()),
 		)
@@ -667,6 +687,7 @@ func (o *Orchestrator) applyWatchMountSetForParent(
 		mode,
 		opts,
 		runnerEvents,
+		childWork,
 	)
 	o.setControlMountIDs(sortedRunnerMountIDs(runners))
 	return stopped, started, startResults
@@ -687,11 +708,20 @@ func (o *Orchestrator) stopInactiveWatchRunners(
 	ctx context.Context,
 	runners map[mountID]*watchRunner,
 	runnable map[mountID]*mountSpec,
+	childWork *parentChildWorkSnapshots,
+	restartingParents map[mountID]struct{},
 ) int {
 	stopped := 0
 	for _, id := range stopOrderForWatchRunners(runners) {
 		wr := runners[id]
-		if next, ok := runnable[id]; ok {
+		if wr == nil || wr.mount == nil {
+			continue
+		}
+		parentRestarting := false
+		if wr.mount.projectionKind() == MountProjectionChild {
+			_, parentRestarting = restartingParents[wr.mount.childParentMountID()]
+		}
+		if next, ok := runnable[id]; ok && !parentRestarting {
 			if mountSpecsEquivalentForWatchRestart(wr.mount, next) {
 				wr.mount = next
 				continue
@@ -713,10 +743,64 @@ func (o *Orchestrator) stopInactiveWatchRunners(
 		}
 
 		delete(runners, id)
+		if wr.mount.projectionKind() == MountProjectionStandalone {
+			childWork.forget(id)
+		}
 		stopped++
 	}
 
 	return stopped
+}
+
+func removeChildRunnablesForParents(
+	runnable map[mountID]*mountSpec,
+	parentIDs map[mountID]struct{},
+) {
+	if len(parentIDs) == 0 {
+		return
+	}
+	for id, mount := range runnable {
+		if mount == nil || mount.projectionKind() != MountProjectionChild {
+			continue
+		}
+		if _, ok := parentIDs[mount.childParentMountID()]; ok {
+			delete(runnable, id)
+		}
+	}
+}
+
+func removeCleanupWorkForParents(
+	decisions *runtimeWorkSet,
+	parentIDs map[mountID]struct{},
+) {
+	if decisions == nil || len(parentIDs) == 0 || len(decisions.CleanupChildren) == 0 {
+		return
+	}
+	kept := decisions.CleanupChildren[:0]
+	for _, cleanup := range decisions.CleanupChildren {
+		if _, ok := parentIDs[mountID(cleanup.namespaceID)]; ok {
+			continue
+		}
+		kept = append(kept, cleanup)
+	}
+	decisions.CleanupChildren = kept
+}
+
+func parentWatchRunnersNeedingStop(
+	runners map[mountID]*watchRunner,
+	runnable map[mountID]*mountSpec,
+) map[mountID]struct{} {
+	parents := make(map[mountID]struct{})
+	for id, wr := range runners {
+		if wr == nil || wr.mount == nil || wr.mount.projectionKind() != MountProjectionStandalone {
+			continue
+		}
+		next, ok := runnable[id]
+		if !ok || !mountSpecsEquivalentForWatchRestart(wr.mount, next) {
+			parents[id] = struct{}{}
+		}
+	}
+	return parents
 }
 
 func stopOrderForWatchRunners(runners map[mountID]*watchRunner) []mountID {
@@ -817,6 +901,7 @@ func (o *Orchestrator) startReloadWatchRunners(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
+	childWork *parentChildWorkSnapshots,
 ) (int, []MountStartupResult) {
 	started := 0
 	startResults := append([]MountStartupResult(nil), initialStartup...)
@@ -827,7 +912,7 @@ func (o *Orchestrator) startReloadWatchRunners(
 			continue
 		}
 
-		o.attachParentChildWorkSink(mount, runnerEvents, nil)
+		o.attachParentChildWorkSink(mount, childWork, runnerEvents, nil)
 		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents)
 		if err != nil {
 			o.logger.Error("failed to start watch runner during reload",
