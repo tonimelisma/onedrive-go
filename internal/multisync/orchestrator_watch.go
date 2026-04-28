@@ -416,6 +416,12 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 	childWork *parentChildWorkSnapshots,
 ) {
 	if event.parentSnapshotChanged {
+		if !parentSnapshotEventIsCurrent(event, runners, childWork) {
+			o.logger.Debug("ignoring stale parent child work snapshot event",
+				slog.String("parent_mount_id", event.mountID.String()),
+			)
+			return
+		}
 		o.reconcileWatchRunnersForParent(ctx, event.mountID, event.parentSnapshot, mode, opts, runners, runnerEvents, childWork)
 		return
 	}
@@ -453,6 +459,22 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 	}
 
 	o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
+}
+
+func parentSnapshotEventIsCurrent(
+	event watchRunnerEvent,
+	runners map[mountID]*watchRunner,
+	childWork *parentChildWorkSnapshots,
+) bool {
+	if event.mountID == "" || childWork == nil {
+		return false
+	}
+	wr := runners[event.mountID]
+	if wr == nil || wr.mount == nil || wr.mount.projectionKind() != MountProjectionStandalone {
+		return false
+	}
+	eventSnapshot := syncengine.NormalizeShortcutChildWorkSnapshot(event.mountID.String(), event.parentSnapshot)
+	return syncengine.ShortcutChildWorkSnapshotsEqual(childWork.latestFor(event.mountID), eventSnapshot)
 }
 
 func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
