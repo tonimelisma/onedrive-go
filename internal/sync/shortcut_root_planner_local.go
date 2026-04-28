@@ -9,6 +9,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
+// This file is the deterministic core for local shortcut alias lifecycle
+// decisions. It must not perform filesystem, Graph, SQLite, logging, clock, or
+// goroutine work; engine shell code feeds it observations and effect outcomes.
 type shortcutRootLocalAction string
 
 const (
@@ -64,6 +67,12 @@ type shortcutRootMaterializeResult struct {
 type shortcutRootProjectionMoveResult struct {
 	Identity    *synctree.FileIdentity
 	MoveErr     error
+	IdentityErr error
+}
+
+type shortcutRootAliasMutationResult struct {
+	MutationErr error
+	Identity    *synctree.FileIdentity
 	IdentityErr error
 }
 
@@ -438,6 +447,69 @@ func planMissingAliasMutationFailure(
 		next.ProtectedPaths = appendUniqueProtectedRootPaths(next.ProtectedPaths, candidatePath)
 	}
 	return next
+}
+
+//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
+func planMissingAliasDeleteResult(
+	record ShortcutRootRecord,
+	result shortcutRootAliasMutationResult,
+) shortcutRootLocalPlan {
+	if result.MutationErr != nil {
+		next := planMissingAliasMutationFailure(record, "", result.MutationErr)
+		return shortcutRootLocalPlan{
+			Action:  shortcutRootLocalKeepRecord,
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(record, next),
+		}
+	}
+	return shortcutRootLocalPlan{
+		Action:  shortcutRootLocalDropRecord,
+		Keep:    false,
+		Changed: true,
+	}
+}
+
+//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
+func planMissingAliasRenameResult(
+	record ShortcutRootRecord,
+	candidatePath string,
+	result shortcutRootAliasMutationResult,
+) shortcutRootLocalPlan {
+	if result.MutationErr != nil {
+		next := planMissingAliasMutationFailure(record, candidatePath, result.MutationErr)
+		return shortcutRootLocalPlan{
+			Action:  shortcutRootLocalKeepRecord,
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(record, next),
+		}
+	}
+	if result.IdentityErr != nil {
+		next := planShortcutRootUnavailable(record, result.IdentityErr.Error())
+		return shortcutRootLocalPlan{
+			Action:  shortcutRootLocalKeepRecord,
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(record, next),
+		}
+	}
+	if result.Identity == nil {
+		next := planShortcutRootUnavailable(record, "shortcut alias local root identity is unavailable")
+		return shortcutRootLocalPlan{
+			Action:  shortcutRootLocalKeepRecord,
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(record, next),
+		}
+	}
+	next := planMissingAliasRenameSuccess(record, candidatePath, *result.Identity)
+	return shortcutRootLocalPlan{
+		Action:  shortcutRootLocalKeepRecord,
+		Next:    next,
+		Keep:    true,
+		Changed: !shortcutRootRecordsEqual(record, next),
+	}
 }
 
 //nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.

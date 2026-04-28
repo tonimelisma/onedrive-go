@@ -22,7 +22,7 @@ func (o *Orchestrator) buildRunnerDecisionSet(
 	}
 
 	parentPublications := o.latestParentRunnerPublicationsFor(parents)
-	decisions, err := buildRunnerDecisionsForParents(parents, parentPublications, o.logger)
+	decisions, err := buildRunnerDecisionsForParents(parents, parentPublications, o.cfg.DataDir, o.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +41,7 @@ func (o *Orchestrator) buildRunnerDecisionsFromParentPublications(
 		return nil, err
 	}
 	parentPublications := o.latestParentRunnerPublicationsFor(parents)
-	decisions, err := buildRunnerDecisionsForParents(parents, parentPublications, o.logger)
+	decisions, err := buildRunnerDecisionsForParents(parents, parentPublications, o.cfg.DataDir, o.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func (o *Orchestrator) buildRunnerDecisionsForParent(parent *mountSpec) (*runner
 	parentPublications := map[mountID]syncengine.ShortcutChildRunnerPublication{
 		parentCopy.mountID: o.latestParentRunnerPublicationFor(parentCopy.mountID),
 	}
-	return buildRunnerDecisionsForParents([]*mountSpec{parentCopy}, parentPublications, o.logger)
+	return buildRunnerDecisionsForParents([]*mountSpec{parentCopy}, parentPublications, o.cfg.DataDir, o.logger)
 }
 
 func nextStartupSelectionIndex(results []MountStartupResult) int {

@@ -204,6 +204,50 @@ func TestPlanMissingMaterializedShortcutRootPrefersHistoricalProjectionMove(t *t
 }
 
 // Validates: R-2.4.8, R-2.4.10
+func TestPlanMissingAliasMutationResultsKeepSideEffectsOutOfDecision(t *testing.T) {
+	t.Parallel()
+
+	record := ShortcutRootRecord{
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		LocalAlias:        "Docs",
+		State:             ShortcutRootStateActive,
+		ProtectedPaths:    []string{"Shared/Docs"},
+	}
+
+	deleteFailed := planMissingAliasDeleteResult(record, shortcutRootAliasMutationResult{
+		MutationErr: errors.New("delete denied"),
+	})
+	assert.Equal(t, shortcutRootLocalKeepRecord, deleteFailed.Action)
+	assert.Equal(t, ShortcutRootStateAliasMutationBlocked, deleteFailed.Next.State)
+	assert.Contains(t, deleteFailed.Next.BlockedDetail, "delete denied")
+
+	deleteSucceeded := planMissingAliasDeleteResult(record, shortcutRootAliasMutationResult{})
+	assert.Equal(t, shortcutRootLocalDropRecord, deleteSucceeded.Action)
+	assert.False(t, deleteSucceeded.Keep)
+	assert.True(t, deleteSucceeded.Changed)
+
+	renameFailed := planMissingAliasRenameResult(record, "Shared/Renamed", shortcutRootAliasMutationResult{
+		MutationErr: errors.New("rename denied"),
+	})
+	assert.Equal(t, ShortcutRootStateAliasMutationBlocked, renameFailed.Next.State)
+	assert.Contains(t, renameFailed.Next.ProtectedPaths, "Shared/Renamed")
+
+	renameIdentityFailed := planMissingAliasRenameResult(record, "Shared/Renamed", shortcutRootAliasMutationResult{
+		IdentityErr: errors.New("identity denied"),
+	})
+	assert.Equal(t, ShortcutRootStateLocalRootUnavailable, renameIdentityFailed.Next.State)
+
+	renameSucceeded := planMissingAliasRenameResult(record, "Shared/Renamed", shortcutRootAliasMutationResult{
+		Identity: &synctree.FileIdentity{Device: 11, Inode: 12},
+	})
+	assert.Equal(t, ShortcutRootStateActive, renameSucceeded.Next.State)
+	assert.Equal(t, "Shared/Renamed", renameSucceeded.Next.RelativeLocalPath)
+	require.NotNil(t, renameSucceeded.Next.LocalRootIdentity)
+	assert.Equal(t, uint64(11), renameSucceeded.Next.LocalRootIdentity.Device)
+}
+
+// Validates: R-2.4.8, R-2.4.10
 func TestPlanShortcutRootMaterializeResultKeepsSideEffectsOutOfDecision(t *testing.T) {
 	t.Parallel()
 

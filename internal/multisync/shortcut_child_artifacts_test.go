@@ -61,6 +61,7 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsStateArtifactRemoveFailure(
 	err := executor.purge(context.Background(), shortcutChildArtifactScope{mountID: childMountID})
 
 	require.Error(t, err)
+	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupStateArtifactFailure)
 	assert.Contains(t, err.Error(), "remove child state artifact")
 	assert.Contains(t, err.Error(), "state db locked")
 }
@@ -87,6 +88,7 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsCatalogFailure(t *testing.T
 	err := executor.purge(context.Background(), shortcutChildArtifactScope{mountID: childMountID})
 
 	require.Error(t, err)
+	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupCatalogFailure)
 	assert.Contains(t, err.Error(), "catalog write denied")
 }
 
@@ -112,6 +114,7 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsUploadSessionFailure(t *tes
 	err := executor.purge(context.Background(), shortcutChildArtifactScope{mountID: childMountID})
 
 	require.Error(t, err)
+	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupUploadSessionFailure)
 	assert.Contains(t, err.Error(), "delete child upload sessions")
 	assert.Contains(t, err.Error(), "session store unavailable")
 }
@@ -127,6 +130,7 @@ func TestShortcutChildArtifactCleanupExecutor_RequiresDataDir(t *testing.T) {
 	)
 
 	require.Error(t, err)
+	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupSetupFailure)
 	assert.Contains(t, err.Error(), "cleanup executor data dir is not configured")
 }
 
@@ -150,6 +154,7 @@ func TestOrchestratorCleanupWithEmptyDataDirFailsLoudly(t *testing.T) {
 	)
 
 	require.Error(t, err)
+	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupSetupFailure)
 	assert.Contains(t, err.Error(), "cleanup executor data dir is not configured")
 }
 
@@ -164,6 +169,7 @@ func TestShortcutChildArtifactCleanupExecutor_RequiresInjectedDependencies(t *te
 	)
 
 	require.Error(t, err)
+	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupSetupFailure)
 	assert.Contains(t, err.Error(), "cleanup executor is not configured")
 }
 
@@ -263,6 +269,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsReturnsAckFailureAft
 	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers)
 
 	require.Error(t, err)
+	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupParentAckFailure)
 	assert.Contains(t, err.Error(), "parent store temporarily unavailable")
 	assert.Equal(t, []string{childMountID}, pruned)
 }
@@ -299,5 +306,18 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsRequiresLiveParentAc
 	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, nil)
 
 	require.Error(t, err)
+	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupParentAckFailure)
 	assert.Contains(t, err.Error(), "parent mount personal:parent@example.com is unavailable for child artifact cleanup acknowledgement")
+}
+
+func assertShortcutCleanupClass(
+	t *testing.T,
+	err error,
+	want shortcutChildArtifactCleanupFailureClass,
+) {
+	t.Helper()
+
+	got, ok := shortcutChildArtifactCleanupClass(err)
+	require.True(t, ok, "cleanup error class missing from %v", err)
+	assert.Equal(t, want, got)
 }
