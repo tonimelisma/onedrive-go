@@ -29,8 +29,8 @@ func loadShortcutRootStatusSnapshots(
 	ctx context.Context,
 	cfg *config.Config,
 	logger *slog.Logger,
-) map[driveid.CanonicalID][]syncengine.ShortcutRootStatusRow {
-	roots := make(map[driveid.CanonicalID][]syncengine.ShortcutRootStatusRow)
+) map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView {
+	roots := make(map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView)
 	if cfg == nil {
 		return roots
 	}

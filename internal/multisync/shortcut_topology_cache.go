@@ -39,7 +39,24 @@ func (o *Orchestrator) latestParentRunnerPublicationFor(parentID mountID) syncen
 
 func (o *Orchestrator) parentRunnerPublicationHasOneShotWork(parentID mountID) bool {
 	publication := o.latestParentRunnerPublicationFor(parentID)
-	return len(publication.Children) > 0 || len(publication.CleanupRequests) > 0
+	return len(publication.RunnerWork.Children) > 0 || len(publication.CleanupWork.Requests) > 0
+}
+
+func (o *Orchestrator) parentRunnerPublicationHasImmediateOneShotWork(parentID mountID) bool {
+	publication := o.latestParentRunnerPublicationFor(parentID)
+	if len(publication.CleanupWork.Requests) > 0 {
+		return true
+	}
+	for i := range publication.RunnerWork.Children {
+		child := &publication.RunnerWork.Children[i]
+		switch child.RunnerAction {
+		case syncengine.ShortcutChildActionRun,
+			syncengine.ShortcutChildActionFinalDrain:
+			return true
+		case syncengine.ShortcutChildActionSkipParentBlocked:
+		}
+	}
+	return false
 }
 
 func (o *Orchestrator) forgetParentRunnerPublication(parentID mountID) {

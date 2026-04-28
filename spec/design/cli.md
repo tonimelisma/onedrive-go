@@ -39,6 +39,7 @@ are inserted, updated, pruned, and validated.
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
 | Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_SkipsPausedInvalidDrivesDuringValidation`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestPrintRunOnceResult_MatchesReportsBySelectionIndex` |
+| Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusMount_RendersLifecycleState`, `TestBuildChildStatusMount_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestRunRepoConsistencyChecksFailsOnCLIRawShortcutStatusState` |
 
 ## Command Surface
 
@@ -104,13 +105,15 @@ drive-shaped status fields (`total_drives`, `accounts[].drives`) are not part
 of the current contract. Child lifecycle rows also expose `state`,
 `state_reason`, `state_detail`, `protected_current_path`,
 `protected_reserved_paths`, typed `issue_class`/`recovery_class`,
-`recovery_action`, and `auto_retry` from parent sync-store `shortcut_roots`,
-sync-owned shortcut lifecycle status metadata, and child sync-state snapshots.
-Text and JSON status describe the protected-root state and the next recovery
-step without duplicating engine transition policy or shortcut-state copy tables
-in the CLI. Recovery copy uses the same product vocabulary as the control plane:
-"shortcut alias", "child projection", "reserved path", and "parent engine
-shortcut publication facts".
+`recovery_action`, and `auto_retry` from sync-owned `ShortcutRootStatusView`
+values plus child sync-state snapshots. The CLI does not read raw
+`shortcut_roots` fields such as protected-path bookkeeping, blocker detail, or
+waiting replacement internals; sync owns that projection. Text and JSON status
+describe the protected-root state and the next recovery step without
+duplicating engine transition policy or shortcut-state copy tables in the CLI.
+Recovery copy uses the same product vocabulary as the control plane: "shortcut
+alias", "child projection", "reserved path", and "parent engine shortcut
+publication facts".
 
 For `removed_final_drain`, status must make the retry/discard choice explicit:
 the child keeps retrying while its state DB owns dirty content state; the user
@@ -217,6 +220,12 @@ One-shot sync resolves the full selected drive set, but it validates only
 runnable non-paused drives before startup. Paused drives remain in the startup
 summary as skipped drives; an invalid paused drive must not block unrelated
 runnable drives from executing.
+
+For `sync` and `sync --watch`, the CLI/config composition boundary passes the
+managed data directory into `multisync.OrchestratorConfig`. Lower layers use
+that explicit value for child state DB, catalog, transfer scratch, and upload
+session cleanup. `internal/multisync` must not call `config.DefaultDataDir()`
+itself.
 
 One-shot and watch sync both materialize the resolved `sync_dir` before they
 hand a runnable drive to the sync runtime. Config validation is allowed to

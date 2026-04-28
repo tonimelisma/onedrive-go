@@ -158,6 +158,7 @@ func runSyncOnce(
 		InitialStartupResults:  standaloneSelection.StartupResults,
 		ReloadStandaloneMounts: reloadStandaloneMountsFunc(nil, logger),
 		Runtime:                runtime,
+		DataDir:                config.DefaultDataDir(),
 		Logger:                 logger,
 		ControlSocketPath:      controlSocketPath,
 		PerfParent:             perf.FromContext(ctx),

@@ -45,7 +45,8 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsStateArtifactRemoveFailure(
 	childMountID := config.ChildMountID("personal:parent@example.com", "binding-remove-fail")
 	removeErr := errors.New("state db locked")
 	executor := shortcutChildArtifactCleanupExecutor{
-		logger: slog.New(slog.DiscardHandler),
+		dataDir: t.TempDir(),
+		logger:  slog.New(slog.DiscardHandler),
 		remove: func(string) error {
 			return removeErr
 		},
@@ -70,7 +71,8 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsCatalogFailure(t *testing.T
 
 	childMountID := config.ChildMountID("personal:parent@example.com", "binding-catalog-fail")
 	executor := shortcutChildArtifactCleanupExecutor{
-		logger: slog.New(slog.DiscardHandler),
+		dataDir: t.TempDir(),
+		logger:  slog.New(slog.DiscardHandler),
 		remove: func(string) error {
 			return nil
 		},
@@ -94,7 +96,8 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsUploadSessionFailure(t *tes
 
 	childMountID := config.ChildMountID("personal:parent@example.com", "binding-session-fail")
 	executor := shortcutChildArtifactCleanupExecutor{
-		logger: slog.New(slog.DiscardHandler),
+		dataDir: t.TempDir(),
+		logger:  slog.New(slog.DiscardHandler),
 		remove: func(string) error {
 			return nil
 		},
@@ -114,11 +117,48 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsUploadSessionFailure(t *tes
 }
 
 // Validates: R-2.4.8
-func TestShortcutChildArtifactCleanupExecutor_RequiresInjectedDependencies(t *testing.T) {
+func TestShortcutChildArtifactCleanupExecutor_RequiresDataDir(t *testing.T) {
 	t.Parallel()
 
 	childMountID := config.ChildMountID("personal:parent@example.com", "binding-missing-executor")
 	err := shortcutChildArtifactCleanupExecutor{}.purge(
+		context.Background(),
+		shortcutChildArtifactScope{mountID: childMountID},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cleanup executor data dir is not configured")
+}
+
+// Validates: R-2.4.8
+func TestOrchestratorCleanupWithEmptyDataDirFailsLoudly(t *testing.T) {
+	t.Parallel()
+
+	childMountID := config.ChildMountID("personal:parent@example.com", "binding-empty-data-dir")
+	orch := NewOrchestrator(&OrchestratorConfig{
+		Logger: slog.New(slog.DiscardHandler),
+	})
+	err := orch.purgeShortcutChildArtifactsForDecisions(
+		context.Background(),
+		&runnerDecisionSet{CleanupChildren: []shortcutChildArtifactCleanup{{
+			mountID:       childMountID,
+			namespaceID:   "personal:parent@example.com",
+			bindingItemID: "binding-empty-data-dir",
+			localRoot:     filepath.Join(t.TempDir(), "Shortcut"),
+		}}},
+		map[mountID]shortcutChildAckHandle{},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cleanup executor data dir is not configured")
+}
+
+// Validates: R-2.4.8
+func TestShortcutChildArtifactCleanupExecutor_RequiresInjectedDependencies(t *testing.T) {
+	t.Parallel()
+
+	childMountID := config.ChildMountID("personal:parent@example.com", "binding-missing-executor")
+	err := shortcutChildArtifactCleanupExecutor{dataDir: t.TempDir()}.purge(
 		context.Background(),
 		shortcutChildArtifactScope{mountID: childMountID},
 	)
@@ -140,7 +180,8 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsUsesInjectedExecutor
 		Logger: slog.New(slog.DiscardHandler),
 	})
 	orch.artifactCleanup = shortcutChildArtifactCleanupExecutor{
-		logger: orch.logger,
+		dataDir: t.TempDir(),
+		logger:  orch.logger,
 		remove: func(path string) error {
 			removed = append(removed, path)
 			return nil
@@ -191,7 +232,8 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsReturnsAckFailureAft
 		Logger: slog.New(slog.DiscardHandler),
 	})
 	orch.artifactCleanup = shortcutChildArtifactCleanupExecutor{
-		logger: orch.logger,
+		dataDir: t.TempDir(),
+		logger:  orch.logger,
 		remove: func(string) error {
 			return nil
 		},
@@ -234,7 +276,8 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsRequiresLiveParentAc
 		Logger: slog.New(slog.DiscardHandler),
 	})
 	orch.artifactCleanup = shortcutChildArtifactCleanupExecutor{
-		logger: orch.logger,
+		dataDir: t.TempDir(),
+		logger:  orch.logger,
 		remove: func(string) error {
 			return nil
 		},

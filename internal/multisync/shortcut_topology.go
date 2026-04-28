@@ -71,7 +71,7 @@ func (o *Orchestrator) receiveParentRunnerPublicationFromParent(
 	if changed && o != nil && o.logger != nil {
 		o.logger.Info("received parent runner publication",
 			"namespace_id", parent.mountID.String(),
-			"children", len(publication.Children),
+			"children", len(publication.RunnerWork.Children),
 		)
 	}
 	return changed

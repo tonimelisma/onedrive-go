@@ -64,9 +64,17 @@ const (
 // status facts stay inside internal/sync; multisync only sees executable child
 // runner work plus artifact cleanup requests.
 type ShortcutChildRunnerPublication struct {
-	NamespaceID     string
-	Children        []ShortcutChildRunner
-	CleanupRequests []ShortcutChildArtifactCleanupRequest
+	NamespaceID string
+	RunnerWork  ShortcutChildRunnerWork
+	CleanupWork ShortcutChildArtifactCleanupWork
+}
+
+type ShortcutChildRunnerWork struct {
+	Children []ShortcutChildRunner
+}
+
+type ShortcutChildArtifactCleanupWork struct {
+	Requests []ShortcutChildArtifactCleanupRequest
 }
 
 type ShortcutChildRunner struct {
@@ -185,24 +193,24 @@ func NormalizeShortcutChildRunnerPublication(
 	if publication.NamespaceID == "" {
 		publication.NamespaceID = namespaceID
 	}
-	publication.Children = cloneShortcutChildRunnerPublicationChildren(publication.Children)
-	publication.CleanupRequests = append(
+	publication.RunnerWork.Children = cloneShortcutChildRunnerPublicationChildren(publication.RunnerWork.Children)
+	publication.CleanupWork.Requests = append(
 		[]ShortcutChildArtifactCleanupRequest(nil),
-		publication.CleanupRequests...,
+		publication.CleanupWork.Requests...,
 	)
-	if len(publication.Children) == 0 {
-		publication.Children = nil
+	if len(publication.RunnerWork.Children) == 0 {
+		publication.RunnerWork.Children = nil
 	}
-	if len(publication.CleanupRequests) == 0 {
-		publication.CleanupRequests = nil
+	if len(publication.CleanupWork.Requests) == 0 {
+		publication.CleanupWork.Requests = nil
 	}
-	slices.SortFunc(publication.Children, func(a, b ShortcutChildRunner) int {
+	slices.SortFunc(publication.RunnerWork.Children, func(a, b ShortcutChildRunner) int {
 		if byBinding := cmp.Compare(a.BindingItemID, b.BindingItemID); byBinding != 0 {
 			return byBinding
 		}
 		return cmp.Compare(a.RelativeLocalPath, b.RelativeLocalPath)
 	})
-	slices.SortFunc(publication.CleanupRequests, func(a, b ShortcutChildArtifactCleanupRequest) int {
+	slices.SortFunc(publication.CleanupWork.Requests, func(a, b ShortcutChildArtifactCleanupRequest) int {
 		if byBinding := cmp.Compare(a.BindingItemID, b.BindingItemID); byBinding != 0 {
 			return byBinding
 		}
@@ -219,17 +227,17 @@ func ShortcutChildRunnerPublicationsEqual(
 	b ShortcutChildRunnerPublication,
 ) bool {
 	if a.NamespaceID != b.NamespaceID ||
-		len(a.Children) != len(b.Children) ||
-		len(a.CleanupRequests) != len(b.CleanupRequests) {
+		len(a.RunnerWork.Children) != len(b.RunnerWork.Children) ||
+		len(a.CleanupWork.Requests) != len(b.CleanupWork.Requests) {
 		return false
 	}
-	for i := range a.Children {
-		if !shortcutChildRunnerEqual(&a.Children[i], &b.Children[i]) {
+	for i := range a.RunnerWork.Children {
+		if !shortcutChildRunnerEqual(&a.RunnerWork.Children[i], &b.RunnerWork.Children[i]) {
 			return false
 		}
 	}
-	for i := range a.CleanupRequests {
-		if a.CleanupRequests[i] != b.CleanupRequests[i] {
+	for i := range a.CleanupWork.Requests {
+		if a.CleanupWork.Requests[i] != b.CleanupWork.Requests[i] {
 			return false
 		}
 	}

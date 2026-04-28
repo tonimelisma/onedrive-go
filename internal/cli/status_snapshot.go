@@ -251,13 +251,13 @@ func filterSnapshotAccounts(accounts []accountView, selectedAccounts map[string]
 }
 
 func filterShortcutRootSnapshots(
-	roots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusRow,
+	roots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView,
 	drives map[driveid.CanonicalID]config.Drive,
-) map[driveid.CanonicalID][]syncengine.ShortcutRootStatusRow {
-	filtered := make(map[driveid.CanonicalID][]syncengine.ShortcutRootStatusRow)
+) map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView {
+	filtered := make(map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView)
 	for cid := range drives {
 		if records, ok := roots[cid]; ok {
-			filtered[cid] = append([]syncengine.ShortcutRootStatusRow(nil), records...)
+			filtered[cid] = append([]syncengine.ShortcutRootStatusView(nil), records...)
 		}
 	}
 	return filtered
@@ -312,12 +312,12 @@ func buildStatusAccountsWith(
 
 type childMountStatusInput struct {
 	ParentID driveid.CanonicalID
-	Root     syncengine.ShortcutRootStatusRow
+	Root     syncengine.ShortcutRootStatusView
 }
 
 func buildStatusAccountsFromViews(
 	cfg *config.Config,
-	shortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusRow,
+	shortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView,
 	views []accountView,
 	syncQ syncStateQuerier,
 ) []statusAccount {
@@ -456,7 +456,7 @@ func driveState(d *config.Drive) string {
 }
 
 func groupChildMountsByParent(
-	shortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusRow,
+	shortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView,
 ) map[driveid.CanonicalID][]childMountStatusInput {
 	grouped := make(map[driveid.CanonicalID][]childMountStatusInput)
 	if shortcutRoots == nil {
@@ -524,16 +524,12 @@ func buildChildStatusMount(
 		displayName = path.Base(root.RelativeLocalPath)
 	}
 
-	mountID := root.MountID
+	mountID := config.ChildMountID(child.ParentID.String(), root.BindingItemID)
 	metadata := root.Metadata
 	state := driveState(&parentDrive)
-	statusDetail := ""
-	if root.State != "" && root.State != syncengine.ShortcutRootStateActive {
+	statusDetail := root.StateDetail
+	if metadata.DisplayState != "" {
 		state = metadata.DisplayState
-		statusDetail = metadata.Issue
-		if root.BlockedDetail != "" {
-			statusDetail = root.BlockedDetail
-		}
 	}
 
 	mount := statusMount{
@@ -549,17 +545,15 @@ func buildChildStatusMount(
 		RecoveryClass:  string(metadata.RecoveryClass),
 		RecoveryAction: metadata.RecoveryAction,
 	}
-	if root.WaitingReplacement != "" {
-		mount.WaitingReplacement = root.WaitingReplacement
-	}
+	mount.WaitingReplacement = root.WaitingReplacementPath
 	if metadata.ProtectsPath {
-		mount.ProtectedCurrentPath = mount.SyncDir
+		mount.ProtectedCurrentPath = filepath.Join(parentDrive.SyncDir, filepath.FromSlash(root.ProtectedCurrentPath))
 		mount.ProtectedReservedPaths = childProtectedReservedPaths(
 			parentDrive.SyncDir,
-			shortcutRootReservedPaths(root.RelativeLocalPath, root.ProtectedPaths),
+			root.ProtectedReservedPaths,
 		)
 	}
-	if root.State != "" && root.State != syncengine.ShortcutRootStateActive {
+	if metadata.DisplayState != "" {
 		autoRetry := metadata.AutoRetry
 		mount.AutoRetry = &autoRetry
 	}
@@ -582,17 +576,6 @@ func childProtectedReservedPaths(parentSyncDir string, relativePaths []string) [
 		protected = append(protected, filepath.Join(parentSyncDir, filepath.FromSlash(relativePath)))
 	}
 	return protected
-}
-
-func shortcutRootReservedPaths(current string, protected []string) []string {
-	reserved := make([]string, 0, len(protected))
-	for _, protectedPath := range protected {
-		if protectedPath == "" || protectedPath == current {
-			continue
-		}
-		reserved = append(reserved, protectedPath)
-	}
-	return reserved
 }
 
 func querySyncState(

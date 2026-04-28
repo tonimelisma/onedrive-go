@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/sync/engine*.go, internal/sync/engine_watch*.go, internal/sync/engine_runtime*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/protected_roots.go, internal/sync/shortcut_root_lifecycle.go, internal/sync/shortcut_root_planner*.go, internal/sync/shortcut_root_transition.go, internal/sync/shortcut_root_publication.go, internal/sync/shortcut_root_status*.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
+GOVERNS: internal/sync/engine*.go, internal/sync/engine_watch*.go, internal/sync/engine_runtime*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/protected_roots.go, internal/sync/shortcut_root_lifecycle.go, internal/sync/shortcut_root_transition.go, internal/sync/shortcut_root_publication.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
 Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
 
@@ -66,7 +66,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedPublicationRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 | Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
-| Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child runner-action publications reach multisync. | `TestShortcutRootTransitionTableCoversStates`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename` |
+| Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child runner-action publications reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroValueReturnsError` |
 
 ## Construction
 
@@ -200,9 +200,10 @@ observation, current-plan build, retry/block reconciliation, and shortcut-root
 lifecycle publication the parent needs for ordinary work. One-shot parents
 publish only after the current parent state and protected-root decisions have
 reached the accepted publication point; multisync admits that parent's children
-from the accepted live publication without waiting for unrelated parents to
-finish. Watch bootstrap and steady-state changes publish through the live parent
-runner and reconcile only that parent child runner set.
+as soon as the accepted publication is received, without waiting for that
+parent pass or unrelated parents to finish. Watch bootstrap and steady-state
+changes publish through the live parent runner and reconcile only that parent
+child runner set.
 Child runner admission is therefore derived from fresh parent local and remote
 truth rather than cached control-plane state, and multisync never constructs a
 temporary startup parent engine for shortcut admission.
@@ -417,12 +418,9 @@ paths, lifecycle state, and same-path replacement waiting state. The
 multi-mount control plane consumes the parent-declared child runner actions only to
 start, drain, skip, or purge child runners.
 
-Managed shortcut child runner publications carry the stable child mount ID, the
-parent-computed child local root, and the parent-observed local root identity
-when the parent has materialized the alias directory. Multisync treats the mount
-ID and local root as mandatory command data and rejects incomplete publications
-instead of reconstructing child scope from the parent sync root. Child engines
-verify the identity at construction and before full local scans. If the local
+Managed shortcut child runner publications also carry the parent-observed local root
+identity when the parent has materialized the alias directory. Child engines
+verify that identity at construction and before full local scans. If the local
 root disappeared, moved away, or was deleted and recreated at the same path, the
 engine reports `ErrMountRootUnavailable` instead of producing an empty local
 snapshot that could plan remote deletes.
@@ -440,12 +438,17 @@ helpers before the engine shell performs I/O. The planner chooses remote
 topology transitions, alias delete/rename, historical projection move,
 ambiguous-rename, cleanup-blocked, waiting-replacement, duplicate-target, and
 local-root-unavailable state transitions from stored shortcut-root records plus
-observed value outcomes. The shell performs Graph, filesystem, and SQLite
-effects only, then feeds those outcomes back through the same transition table.
+observed value outcomes. Local shortcut lifecycle planning uses explicit
+observation values and local actions (`noop`, `keepRecord`, `dropRecord`,
+`materializeRoot`, `mutateAlias`, and `moveProjection`) so the shell performs
+Graph, filesystem, and SQLite effects only, then feeds those outcomes back
+through the same transition table.
 
 When a child final drain completes, multisync acknowledges that completion to
 the already-running parent engine through the concrete sync-owned
-`ShortcutChildAckHandle` obtained from that live engine. The parent engine first persists
+`ShortcutChildAckHandle` obtained from that live engine. A zero handle is an
+error, not a no-op, so multisync cannot synthesize an acknowledgement path
+outside a live parent runner. The parent engine first persists
 `removed_release_pending`, then releases its own protected alias projection or
 promotes a waiting same-path replacement to `active`. After parent release, the
 old binding remains in `removed_child_cleanup_pending` without protected paths

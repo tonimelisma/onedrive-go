@@ -95,24 +95,39 @@ func testShortcutStatusChild(
 	parentCID driveid.CanonicalID,
 	state syncengine.ShortcutRootState,
 ) childMountStatusInput {
+	record := testShortcutStatusRecord(parentCID, state)
+	return testShortcutStatusChildFromRecord(parentCID, &record)
+}
+
+func testShortcutStatusRecord(
+	parentCID driveid.CanonicalID,
+	state syncengine.ShortcutRootState,
+) syncengine.ShortcutRootRecord {
 	const (
 		bindingID    = "binding-docs"
 		relativePath = "Shortcuts/Docs"
 	)
 	alias := filepath.Base(relativePath)
-	metadata := syncengine.ShortcutRootStatus(state)
+	return syncengine.ShortcutRootRecord{
+		NamespaceID:       parentCID.String(),
+		BindingItemID:     bindingID,
+		RelativeLocalPath: relativePath,
+		LocalAlias:        alias,
+		RemoteDriveID:     driveid.New("remote-drive"),
+		RemoteItemID:      "remote-root",
+		RemoteIsFolder:    true,
+		State:             state,
+		ProtectedPaths:    []string{relativePath},
+	}
+}
+
+func testShortcutStatusChildFromRecord(
+	parentCID driveid.CanonicalID,
+	record *syncengine.ShortcutRootRecord,
+) childMountStatusInput {
 	return childMountStatusInput{
 		ParentID: parentCID,
-		Root: syncengine.ShortcutRootStatusRow{
-			NamespaceID:       parentCID.String(),
-			BindingItemID:     bindingID,
-			MountID:           config.ChildMountID(parentCID.String(), bindingID),
-			RelativeLocalPath: relativePath,
-			LocalAlias:        alias,
-			State:             state,
-			Metadata:          metadata,
-			ProtectedPaths:    []string{relativePath},
-		},
+		Root:     syncengine.ShortcutRootStatusViewFromRecord(record),
 	}
 }
 
@@ -305,10 +320,18 @@ func buildStatusLifecycleMount(
 ) statusMount {
 	t.Helper()
 
-	child := testShortcutStatusChild(parentCID, tc.state)
+	record := testShortcutStatusRecord(parentCID, tc.state)
 	if tc.waitingReplacement != "" {
-		child.Root.WaitingReplacement = tc.waitingReplacement
+		record.Waiting = &syncengine.ShortcutRootReplacement{
+			BindingItemID:     "binding-new",
+			RelativeLocalPath: tc.waitingReplacement,
+			LocalAlias:        "Docs",
+			RemoteDriveID:     driveid.New("remote-drive-new"),
+			RemoteItemID:      "remote-root-new",
+			RemoteIsFolder:    true,
+		}
 	}
+	child := testShortcutStatusChildFromRecord(parentCID, &record)
 	return buildChildStatusMount(config.Drive{SyncDir: "/tmp/sync-root"}, &child, nil)
 }
 
@@ -389,8 +412,9 @@ func boolPtr(value bool) *bool {
 // Validates: R-2.3.3, R-2.4.8, R-2.10.4
 func TestBuildChildStatusMount_SurfacesProtectedPaths(t *testing.T) {
 	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
-	child := testShortcutStatusChild(parentCID, syncengine.ShortcutRootStateRemovedFinalDrain)
-	child.Root.ProtectedPaths = []string{"Shortcuts/Docs", "Shortcuts/Old Docs"}
+	record := testShortcutStatusRecord(parentCID, syncengine.ShortcutRootStateRemovedFinalDrain)
+	record.ProtectedPaths = []string{"Shortcuts/Docs", "Shortcuts/Old Docs"}
+	child := testShortcutStatusChildFromRecord(parentCID, &record)
 	mount := buildChildStatusMount(
 		config.Drive{SyncDir: "/tmp/sync-root"},
 		&child,
@@ -487,8 +511,9 @@ func TestPrintMountStatus_RendersGuidedShortcutRecovery(t *testing.T) {
 // Validates: R-2.10.1
 func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *testing.T) {
 	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
-	child := testShortcutStatusChild(parentCID, syncengine.ShortcutRootStateBlockedPath)
-	child.Root.BlockedDetail = "shortcut alias path is blocked by a local file"
+	record := testShortcutStatusRecord(parentCID, syncengine.ShortcutRootStateBlockedPath)
+	record.BlockedDetail = "shortcut alias path is blocked by a local file"
+	child := testShortcutStatusChildFromRecord(parentCID, &record)
 	mount := buildChildStatusMount(
 		config.Drive{SyncDir: "/tmp/sync-root"},
 		&child,

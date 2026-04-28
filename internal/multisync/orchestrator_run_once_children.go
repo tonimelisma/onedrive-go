@@ -87,11 +87,11 @@ func (c *oneShotChildRuns) notifyParentPublication(ctx context.Context, parentID
 	c.mu.Lock()
 	c.published[parentID] = true
 	c.mu.Unlock()
-	c.startChildrenForParent(ctx, parentID)
+	c.startChildrenForParent(ctx, parentID, false)
 	return nil
 }
 
-func (c *oneShotChildRuns) markParentDone(parentID mountID) {
+func (c *oneShotChildRuns) markParentDone(ctx context.Context, parentID mountID) {
 	if c == nil || parentID == "" {
 		return
 	}
@@ -104,9 +104,10 @@ func (c *oneShotChildRuns) markParentDone(parentID mountID) {
 	if done != nil {
 		close(done)
 	}
+	c.startChildrenForParent(ctx, parentID, true)
 }
 
-func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID mountID) {
+func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID mountID, includeReportOnly bool) {
 	if c == nil || parentID == "" {
 		return
 	}
@@ -120,7 +121,11 @@ func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID 
 		c.mu.Unlock()
 		return
 	}
-	if !c.orchestrator.parentRunnerPublicationHasOneShotWork(parentID) {
+	hasWork := c.orchestrator.parentRunnerPublicationHasImmediateOneShotWork(parentID)
+	if includeReportOnly {
+		hasWork = c.orchestrator.parentRunnerPublicationHasOneShotWork(parentID)
+	}
+	if !hasWork {
 		c.mu.Unlock()
 		return
 	}
@@ -199,7 +204,15 @@ func (c *oneShotChildRuns) runChildrenForParent(
 	c.orchestrator.closeRunOnceChildEngines(ctx, childWork)
 	c.appendReports(childReports...)
 
-	c.waitParentDone(parentID)
+	if !c.waitParentDone(ctx, parentID) {
+		if c.orchestrator.logger != nil {
+			c.orchestrator.logger.Warn("skip shortcut child finalization after parent safe point wait canceled",
+				slog.String("parent_mount_id", parentID.String()),
+				slog.String("error", ctx.Err().Error()),
+			)
+		}
+		return
+	}
 	parentAckers := c.parentAckersFor(parentID)
 	if purgeErr := c.orchestrator.purgeShortcutChildArtifactsForDecisions(
 		ctx,
@@ -228,12 +241,18 @@ func (c *oneShotChildRuns) runChildrenForParent(
 	}
 }
 
-func (c *oneShotChildRuns) waitParentDone(parentID mountID) {
+func (c *oneShotChildRuns) waitParentDone(ctx context.Context, parentID mountID) bool {
 	c.mu.Lock()
 	done := c.parentDone[parentID]
 	c.mu.Unlock()
-	if done != nil {
-		<-done
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
