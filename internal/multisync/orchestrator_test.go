@@ -496,9 +496,10 @@ func TestBuildRuntimeMountSet_DoesNotInspectParentShortcutAliasRoot(t *testing.T
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
-	seedShortcutChildRunCommand(orch, &parent, &child)
+	childWork := newParentChildWorkSnapshots()
+	seedShortcutChildRunCommand(childWork, &parent, &child)
 
-	decisions, err := orch.buildRuntimeWorkSet(t.Context(), cfg.StandaloneMounts, nil)
+	decisions, err := orch.buildRuntimeWorkSet(t.Context(), cfg.StandaloneMounts, nil, childWork)
 
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 2)
@@ -608,7 +609,6 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 	seedShortcutChildStateArtifactsForTest(t, cfg.DataDir, &parent, &child, true)
 
 	orch := NewOrchestrator(cfg)
-	seedShortcutChildRunCommand(orch, &parent, &child)
 
 	type runCall struct {
 		mountID string
@@ -637,13 +637,11 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 						AckRef:       testShortcutChildAckRefWithContext(ctx, t, "binding-drain"),
 					},
 				)
-				orch.receiveParentChildWorkSnapshot(mountID(parent.CanonicalID.String()), snapshot)
 				return snapshot, nil
 			}
 			ackCleanupFn = func(_ context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildWorkSnapshot, error) {
 				assert.False(t, ack.Ref.IsZero())
 				snapshot := syncengine.ShortcutChildWorkSnapshot{NamespaceID: parent.CanonicalID.String()}
-				orch.receiveParentChildWorkSnapshot(mountID(parent.CanonicalID.String()), snapshot)
 				return snapshot, nil
 			}
 		}
@@ -693,10 +691,6 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 	assert.True(t, childCall.opts.FullReconcile)
 	assert.NoDirExists(t, childRoot)
 	assertShortcutChildArtifactsPurgedForTest(t, cfg.DataDir, &parent, &child, true)
-
-	publication := orch.latestParentChildWorkSnapshotFor(mountID(parent.CanonicalID.String()))
-	assert.Empty(t, publication.RunCommands)
-	assert.Empty(t, publication.CleanupCommands)
 }
 
 // Validates: R-2.4.8
@@ -717,7 +711,6 @@ func TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved(t *testing.T) {
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	seedShortcutChildStateArtifactsForTest(t, cfg.DataDir, &parent, &child, false)
 	orch := NewOrchestrator(cfg)
-	seedShortcutChildRunCommand(orch, &parent, &child)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runOnceFn: func(ctx context.Context, mode syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
@@ -741,9 +734,6 @@ func TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved(t *testing.T) {
 
 	require.Len(t, result.Reports, 2)
 	assert.DirExists(t, childRoot)
-	snapshot := orch.latestParentChildWorkSnapshotFor(mountID(parent.CanonicalID.String()))
-	require.Len(t, snapshot.RunCommands, 1)
-	assert.Equal(t, syncengine.ShortcutChildRunModeFinalDrain, snapshot.RunCommands[0].Mode)
 	assert.FileExists(t, config.MountStatePathForDataDir(cfg.DataDir, childID))
 }
 
@@ -759,15 +749,6 @@ func TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts(t *testin
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	seedShortcutChildStateArtifactsForTest(t, cfg.DataDir, &parent, &child, true)
 	orch := NewOrchestrator(cfg)
-	orch.receiveParentChildWorkSnapshot(mountID(parent.CanonicalID.String()), cleanupRequestSnapshot(
-		parent.CanonicalID.String(),
-		syncengine.ShortcutChildCleanupCommand{
-			ChildMountID: child.ChildMountID,
-			LocalRoot:    child.Engine.LocalRoot,
-			Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
-			AckRef:       testShortcutChildAckRef(t, "binding-discard"),
-		},
-	))
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		assert.Equal(t, MountProjectionStandalone, req.Mount.projectionKind())
 		return &mockEngine{
@@ -789,7 +770,6 @@ func TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts(t *testin
 			ackCleanupFn: func(_ context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildWorkSnapshot, error) {
 				assert.False(t, ack.Ref.IsZero())
 				snapshot := syncengine.ShortcutChildWorkSnapshot{NamespaceID: parent.CanonicalID.String()}
-				orch.receiveParentChildWorkSnapshot(mountID(parent.CanonicalID.String()), snapshot)
 				return snapshot, nil
 			},
 		}, nil
@@ -799,8 +779,6 @@ func TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts(t *testin
 
 	require.Len(t, result.Reports, 1)
 	assertShortcutChildArtifactsPurgedForTest(t, cfg.DataDir, &parent, &child, true)
-	publication := orch.latestParentChildWorkSnapshotFor(mountID(parent.CanonicalID.String()))
-	assert.Empty(t, publication.CleanupCommands)
 }
 
 // Validates: R-2.4.8
@@ -814,9 +792,6 @@ func TestRunOnce_DropsStaleChildSkipAfterParentPublishesRunnableChild(t *testing
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
-	orch.receiveParentChildWorkSnapshot(mountID(parent.CanonicalID.String()), syncengine.ShortcutChildWorkSnapshot{
-		NamespaceID: parent.CanonicalID.String(),
-	})
 
 	var childRan atomic.Bool
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
@@ -898,9 +873,6 @@ func TestRunOnce_UsesFinalParentSnapshotInsteadOfIntermediateSkip(t *testing.T) 
 	assert.True(t, childRan.Load())
 	require.Len(t, result.Reports, 2)
 	assert.Empty(t, result.Startup.SkippedResults())
-	publication := orch.latestParentChildWorkSnapshotFor(mountID(parent.CanonicalID.String()))
-	require.Len(t, publication.RunCommands, 1)
-	assert.Equal(t, syncengine.ShortcutChildRunModeNormal, publication.RunCommands[0].Mode)
 }
 
 // Validates: R-2.4
@@ -996,6 +968,7 @@ func TestPrepareMountWork_ThreadsWebsocketConfig(t *testing.T) {
 		mounts,
 		nil,
 		syncengine.RunOptions{},
+		nil,
 		nil,
 	)
 	require.Len(t, work, 1)
@@ -1147,9 +1120,12 @@ func TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs(t *testi
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
-	seedShortcutChildRunCommand(orch, &parent, &child)
+	childWork := newParentChildWorkSnapshots()
+	seedShortcutChildRunCommand(childWork, &parent, &child)
 
-	decisions, err := orch.buildRuntimeWorkFromParentSnapshots(cfg.StandaloneMounts, cfg.InitialStartupResults)
+	parentMounts, err := buildStandaloneMountSpecs(cfg.StandaloneMounts)
+	require.NoError(t, err)
+	decisions, err := orch.buildRuntimeWorkFromParentSnapshots(parentMounts, childWork.forParents(parentMounts))
 	require.NoError(t, err)
 	var parentMount, childMount *mountSpec
 	for i := range decisions.Mounts {
@@ -1184,10 +1160,10 @@ func TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs(t *testi
 		mountID: childMount.id(),
 		report:  &syncengine.Report{},
 		err:     fmt.Errorf("opening child root: %w", syncengine.ErrMountRootUnavailable),
-	})
+	}, childWork)
 
 	assert.Equal(t, 0, ackCount)
-	publication := orch.latestParentChildWorkSnapshotFor(mountID(parent.CanonicalID.String()))
+	publication := childWork.latestFor(mountID(parent.CanonicalID.String()))
 	require.Len(t, publication.RunCommands, 1)
 	assert.Equal(t, syncengine.ShortcutChildRunModeFinalDrain, publication.RunCommands[0].Mode)
 }
@@ -1330,9 +1306,6 @@ func TestRunOnce_PublishesParentChildWorkSnapshotBeforeStartingChildren(t *testi
 	runMountsMu.Unlock()
 	assert.Contains(t, runMountsSnapshot, mountID(parent.CanonicalID.String()))
 	assert.Contains(t, runMountsSnapshot, mountID(childID))
-	publication := orch.latestParentChildWorkSnapshotFor(mountID(parent.CanonicalID.String()))
-	require.Len(t, publication.RunCommands, 1)
-	assert.Equal(t, childID, publication.RunCommands[0].ChildMountID)
 }
 
 // Validates: R-2.4.8
@@ -1418,7 +1391,7 @@ func TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents(t *testing.T)
 }
 
 // Validates: R-2.4.8
-func TestRunOnce_StartsParentChildrenAsSoonAsParentPublishes(t *testing.T) {
+func TestRunOnce_StartsParentChildrenAfterPublishingParentSafePoint(t *testing.T) {
 	parent := testStandaloneMount(t, "personal:parent-publishing@example.com", "Parent")
 	setupXDGIsolation(t, parent.CanonicalID)
 
@@ -1455,7 +1428,7 @@ func TestRunOnce_StartsParentChildrenAsSoonAsParentPublishes(t *testing.T) {
 		case childID:
 			return &mockEngine{
 				runOnceFn: func(context.Context, syncengine.SyncMode, syncengine.RunOptions) (*syncengine.Report, error) {
-					assert.False(t, parentReturned.Load(), "child should start before publishing parent returns")
+					assert.True(t, parentReturned.Load(), "child should start after publishing parent returns")
 					childStartedOnce.Do(func() { close(childStarted) })
 					return &syncengine.Report{}, nil
 				},
@@ -1472,13 +1445,18 @@ func TestRunOnce_StartsParentChildrenAsSoonAsParentPublishes(t *testing.T) {
 
 	select {
 	case <-childStarted:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "child did not start before parent returned")
+		require.FailNow(t, "child started before parent safe point")
+	default:
 	}
 	select {
 	case releaseParent <- struct{}{}:
 	default:
 		close(releaseParent)
+	}
+	select {
+	case <-childStarted:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "child did not start after parent safe point")
 	}
 
 	var result RunOnceResult
@@ -1605,8 +1583,8 @@ func TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint(t *testing.T)
 
 	select {
 	case <-childCompleted:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "final-drain child did not start before parent safe point")
+		require.FailNow(t, "final-drain child started before parent safe point")
+	default:
 	}
 	select {
 	case <-acked:
@@ -1614,6 +1592,11 @@ func TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint(t *testing.T)
 	default:
 	}
 	close(releaseParent)
+	select {
+	case <-childCompleted:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "final-drain child did not start after parent safe point")
+	}
 	select {
 	case <-acked:
 	case <-time.After(5 * time.Second):
@@ -1669,32 +1652,28 @@ func TestOneShotChildRuns_ContextCancelBeforeParentSafePointSkipsAck(t *testing.
 			},
 		},
 	}})
-	orch.receiveParentChildWorkSnapshot(mountID(parent.CanonicalID.String()), processSnapshot(parent.CanonicalID.String(), child))
 	ctx, cancel := context.WithCancel(t.Context())
-	require.NoError(t, coordinator.notifyParentSnapshot(ctx, mountID(parent.CanonicalID.String())))
-	select {
-	case <-childCompleted:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "child did not start before parent safe point")
-	}
+	require.NoError(t, coordinator.notifyParentSnapshot(
+		ctx,
+		mountID(parent.CanonicalID.String()),
+		processSnapshot(parent.CanonicalID.String(), child),
+	))
 	cancel()
+	coordinator.markParentDone(ctx, mountID(parent.CanonicalID.String()))
 	coordinator.wait()
 
+	select {
+	case <-childCompleted:
+		require.FailNow(t, "child started after cancellation before parent safe point")
+	default:
+	}
 	select {
 	case <-acked:
 		require.FailNow(t, "final-drain ack happened after context cancellation before parent safe point")
 	default:
 	}
 	reports := coordinator.reports()
-	require.Len(t, reports, 2)
-	var safePointErr error
-	for i := range reports {
-		if reports[i].Err != nil {
-			safePointErr = reports[i].Err
-		}
-	}
-	require.Error(t, safePointErr)
-	assert.Contains(t, safePointErr.Error(), "before parent safe point")
+	assert.Empty(t, reports)
 }
 
 // Validates: R-2.4
@@ -1944,14 +1923,15 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 	firstOld := testChildRecord(t, mountID(firstParent.CanonicalID.String()), "binding-old", "Shortcuts/Old")
 	firstNew := testChildRecord(t, mountID(firstParent.CanonicalID.String()), "binding-new", "Shortcuts/New")
 	secondChild := testChildRecord(t, mountID(secondParent.CanonicalID.String()), "binding-keep", "Shortcuts/Keep")
-	orch.receiveParentChildWorkSnapshot(mountID(firstParent.CanonicalID.String()), processSnapshot(firstParent.CanonicalID.String(), firstOld))
-	orch.receiveParentChildWorkSnapshot(mountID(secondParent.CanonicalID.String()), processSnapshot(secondParent.CanonicalID.String(), secondChild))
+	childWork := newParentChildWorkSnapshots()
+	childWork.receive(mountID(firstParent.CanonicalID.String()), processSnapshot(firstParent.CanonicalID.String(), firstOld))
+	childWork.receive(mountID(secondParent.CanonicalID.String()), processSnapshot(secondParent.CanonicalID.String(), secondChild))
 
 	parentMounts, err := buildStandaloneMountSpecs(cfg.StandaloneMounts)
 	require.NoError(t, err)
 	initialDecisions, err := buildRuntimeWorkForParents(
 		parentMounts,
-		orch.latestParentChildWorkSnapshotsFor(parentMounts),
+		childWork.forParents(parentMounts),
 		t.TempDir(),
 		nil,
 	)
@@ -1996,7 +1976,10 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 			done: secondDone,
 		},
 	}
-	orch.receiveParentChildWorkSnapshot(mountID(firstParent.CanonicalID.String()), processSnapshot(firstParent.CanonicalID.String(), firstNew))
+	nextSnapshot, _ := childWork.receive(
+		mountID(firstParent.CanonicalID.String()),
+		processSnapshot(firstParent.CanonicalID.String(), firstNew),
+	)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		require.Equal(t, MountProjectionChild, req.Mount.projectionKind())
 		assert.Equal(t, firstNew.ChildMountID, req.Mount.id().String())
@@ -2007,10 +1990,12 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 	orch.reconcileWatchRunnersForParent(
 		t.Context(),
 		mountID(firstParent.CanonicalID.String()),
+		nextSnapshot,
 		syncengine.SyncBidirectional,
 		syncengine.WatchOptions{},
 		runners,
 		nil,
+		childWork,
 	)
 
 	assert.Equal(t, []string{"stop-first", "start-first"}, events)
@@ -2082,6 +2067,7 @@ func TestApplyWatchMountSet_StopsStaleChildBeforeStartingReplacement(t *testing.
 		syncengine.SyncBidirectional,
 		syncengine.WatchOptions{},
 		nil,
+		newParentChildWorkSnapshots(),
 	)
 
 	assert.Empty(t, summarizeStartupResults(startResults).SkippedResults())
@@ -2091,6 +2077,98 @@ func TestApplyWatchMountSet_StopsStaleChildBeforeStartingReplacement(t *testing.
 
 	cancel()
 	for _, runner := range runners {
+		<-runner.done
+	}
+}
+
+// Validates: R-2.4.8
+func TestApplyWatchMountSet_ParentRestartClearsSnapshotAndDoesNotRestartChild(t *testing.T) {
+	parent := testStandaloneMount(t, "personal:watch-parent-restart@example.com", "WatchRestart")
+	setupXDGIsolation(t, parent.CanonicalID)
+
+	cfg := testOrchestratorConfig(t, parent)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+	child := testChildRecord(t, mountID(parent.CanonicalID.String()), "binding-restart", "Shortcuts/Restart")
+	childWork := newParentChildWorkSnapshots()
+	seedShortcutChildRunCommand(childWork, &parent, &child)
+
+	decisions, err := orch.buildRuntimeWorkSet(t.Context(), cfg.StandaloneMounts, nil, childWork)
+	require.NoError(t, err)
+	var parentMount, childMount *mountSpec
+	for _, mount := range decisions.Mounts {
+		switch mount.projectionKind() {
+		case MountProjectionStandalone:
+			parentMount = mount
+		case MountProjectionChild:
+			childMount = mount
+		}
+	}
+	require.NotNil(t, parentMount)
+	require.NotNil(t, childMount)
+
+	parentRestart := parent
+	parentRestart.EnableWebsocket = !parent.EnableWebsocket
+	nextCfg := testOrchestratorConfig(t, parentRestart)
+	nextDecisions, err := orch.buildRuntimeWorkSet(t.Context(), nextCfg.StandaloneMounts, nil, childWork)
+	require.NoError(t, err)
+
+	events := make([]string, 0, 3)
+	parentDone := make(chan struct{})
+	childDone := make(chan struct{})
+	runners := map[mountID]*watchRunner{
+		parentMount.id(): {
+			mount:  parentMount,
+			engine: &mockEngine{},
+			cancel: func() {
+				events = append(events, "stop-parent")
+				close(parentDone)
+			},
+			done: parentDone,
+		},
+		childMount.id(): {
+			mount:  childMount,
+			engine: &mockEngine{},
+			cancel: func() {
+				events = append(events, "stop-child")
+				close(childDone)
+			},
+			done: childDone,
+		},
+	}
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		require.Equal(t, MountProjectionStandalone, req.Mount.projectionKind())
+		events = append(events, "start-parent")
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}, nil
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stopped, started, startResults := orch.applyWatchMountSet(
+		ctx,
+		runners,
+		nextDecisions,
+		syncengine.SyncBidirectional,
+		syncengine.WatchOptions{},
+		nil,
+		childWork,
+	)
+
+	assert.Empty(t, summarizeStartupResults(startResults).SkippedResults())
+	assert.Equal(t, 2, stopped)
+	assert.Equal(t, 1, started)
+	assert.Equal(t, []string{"stop-child", "stop-parent", "start-parent"}, events)
+	assert.NotContains(t, runners, childMount.id())
+	assert.Empty(t, childWork.latestFor(parentMount.id()).RunCommands)
+
+	cancel()
+	for _, runner := range runners {
+		runner.cancel()
 		<-runner.done
 	}
 }
@@ -2105,8 +2183,9 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot(
 	orch := NewOrchestrator(cfg)
 
 	child := testChildRecord(t, mountID(parent.CanonicalID.String()), "binding-exit", "Shortcuts/Exit")
-	seedShortcutChildRunCommand(orch, &parent, &child)
-	decisions, err := orch.buildRuntimeWorkSet(t.Context(), cfg.StandaloneMounts, cfg.InitialStartupResults)
+	childWork := newParentChildWorkSnapshots()
+	seedShortcutChildRunCommand(childWork, &parent, &child)
+	decisions, err := orch.buildRuntimeWorkSet(t.Context(), cfg.StandaloneMounts, cfg.InitialStartupResults, childWork)
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 2)
 
@@ -2165,11 +2244,12 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot(
 		syncengine.WatchOptions{},
 		runners,
 		make(chan watchRunnerEvent, 4),
+		childWork,
 	)
 
 	require.True(t, childCanceled)
 	assert.NotContains(t, runners, childMount.id())
-	assert.Empty(t, orch.latestParentChildWorkSnapshotFor(parentMount.id()).RunCommands)
+	assert.Empty(t, childWork.latestFor(parentMount.id()).RunCommands)
 	assert.Equal(t, []mountID{parentMount.id()}, restarted)
 
 	cancel()

@@ -1,63 +1,78 @@
 package multisync
 
 import (
+	gosync "sync"
+
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-func (o *Orchestrator) receiveParentChildWorkSnapshot(
-	parentID mountID,
-	snapshot syncengine.ShortcutChildWorkSnapshot,
-) bool {
-	if o == nil || parentID == "" {
-		return false
-	}
-	snapshot = syncengine.NormalizeShortcutChildWorkSnapshot(parentID.String(), snapshot)
-
-	o.shortcutMu.Lock()
-	defer o.shortcutMu.Unlock()
-	if o.latestParentChildWorkSnapshots == nil {
-		o.latestParentChildWorkSnapshots = make(map[mountID]syncengine.ShortcutChildWorkSnapshot)
-	}
-	current, found := o.latestParentChildWorkSnapshots[parentID]
-	if found && syncengine.ShortcutChildWorkSnapshotsEqual(current, snapshot) {
-		return false
-	}
-	o.latestParentChildWorkSnapshots[parentID] = snapshot
-	return true
+// parentChildWorkSnapshots owns exact parent publications for one runtime. It
+// is deliberately not stored on Orchestrator so one-shot and watch runs cannot
+// inherit shortcut child work from an earlier runtime.
+type parentChildWorkSnapshots struct {
+	mu        gosync.Mutex
+	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot
 }
 
-func (o *Orchestrator) latestParentChildWorkSnapshotFor(parentID mountID) syncengine.ShortcutChildWorkSnapshot {
-	if o == nil || parentID == "" {
-		return syncengine.ShortcutChildWorkSnapshot{NamespaceID: parentID.String()}
+func newParentChildWorkSnapshots() *parentChildWorkSnapshots {
+	return &parentChildWorkSnapshots{
+		snapshots: make(map[mountID]syncengine.ShortcutChildWorkSnapshot),
 	}
-	o.shortcutMu.Lock()
-	defer o.shortcutMu.Unlock()
-	snapshot := o.latestParentChildWorkSnapshots[parentID]
+}
+
+func (c *parentChildWorkSnapshots) receive(
+	parentID mountID,
+	snapshot syncengine.ShortcutChildWorkSnapshot,
+) (syncengine.ShortcutChildWorkSnapshot, bool) {
+	snapshot = syncengine.NormalizeShortcutChildWorkSnapshot(parentID.String(), snapshot)
+	if c == nil || parentID == "" {
+		return snapshot, false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.snapshots == nil {
+		c.snapshots = make(map[mountID]syncengine.ShortcutChildWorkSnapshot)
+	}
+	current, found := c.snapshots[parentID]
+	if found && syncengine.ShortcutChildWorkSnapshotsEqual(current, snapshot) {
+		return snapshot, false
+	}
+	c.snapshots[parentID] = snapshot
+	return snapshot, true
+}
+
+func (c *parentChildWorkSnapshots) latestFor(parentID mountID) syncengine.ShortcutChildWorkSnapshot {
+	if c == nil || parentID == "" {
+		return syncengine.NormalizeShortcutChildWorkSnapshot(parentID.String(), syncengine.ShortcutChildWorkSnapshot{})
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	snapshot := c.snapshots[parentID]
 	snapshot.NamespaceID = parentID.String()
 	return syncengine.NormalizeShortcutChildWorkSnapshot(parentID.String(), snapshot)
 }
 
-func (o *Orchestrator) parentChildWorkSnapshotHasWork(parentID mountID) bool {
-	snapshot := o.latestParentChildWorkSnapshotFor(parentID)
+func shortcutChildWorkSnapshotHasWork(snapshot syncengine.ShortcutChildWorkSnapshot) bool {
 	return len(snapshot.RunCommands) > 0 || len(snapshot.CleanupCommands) > 0
 }
 
-func (o *Orchestrator) forgetParentChildWorkSnapshot(parentID mountID) {
-	if o == nil || parentID == "" {
+func (c *parentChildWorkSnapshots) forget(parentID mountID) {
+	if c == nil || parentID == "" {
 		return
 	}
-	o.shortcutMu.Lock()
-	defer o.shortcutMu.Unlock()
-	delete(o.latestParentChildWorkSnapshots, parentID)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.snapshots, parentID)
 }
 
-func (o *Orchestrator) latestParentChildWorkSnapshotsFor(parents []*mountSpec) map[mountID]syncengine.ShortcutChildWorkSnapshot {
+func (c *parentChildWorkSnapshots) forParents(parents []*mountSpec) map[mountID]syncengine.ShortcutChildWorkSnapshot {
 	snapshots := make(map[mountID]syncengine.ShortcutChildWorkSnapshot)
 	for _, parent := range parents {
 		if parent == nil || parent.projectionKind() != MountProjectionStandalone {
 			continue
 		}
-		snapshots[parent.id()] = o.latestParentChildWorkSnapshotFor(parent.id())
+		snapshots[parent.id()] = c.latestFor(parent.id())
 	}
 	return snapshots
 }
