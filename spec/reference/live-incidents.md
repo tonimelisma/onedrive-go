@@ -29,7 +29,7 @@ Promotion contract:
 | LI-20260422-04 | Shared-folder `drive list` exact-selector check assumed one-pass search visibility | fixed | test harness | 2026-04-23 | yes |
 | LI-20260422-05 | Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work | fixed | test harness | 2026-04-22 | yes |
 | LI-20260417-01 | Nightly `e2e_full` preflight duplicated `TestE2E_Status_ConfigTolerance` and stopped before live full-suite coverage | fixed | test bug | 2026-04-22 | yes |
-| LI-20260420-01 | Fast E2E smoke `get` exhausted the documented download-metadata `404` quirk budget | mitigated | graph quirk | 2026-04-20 | yes |
+| LI-20260420-01 | Fast E2E smoke `get` exhausted the documented download-metadata `404` quirk budget | mitigated | graph quirk | 2026-04-28 | yes |
 | LI-20260416-01 | Fast E2E suite preflight assumed local `.testdata` always carried `drive_*.json` | fixed | test harness | 2026-04-16 | no |
 | LI-20260415-01 | Nightly `e2e_full` preflight still referenced deleted sync-control status counters | fixed | test bug | 2026-04-16 | yes |
 | LI-20260413-01 | Directional one-shot sync reported deferred remote drift as `No changes detected` | fixed | product bug | 2026-04-13 | no |
@@ -639,7 +639,7 @@ Promoted docs: [system.md](../design/system.md)
 ## LI-20260420-01: Fast E2E smoke `get` exhausted the documented download-metadata `404` quirk budget
 
 First seen: 2026-04-20
-Last seen: 2026-04-20
+Last seen: 2026-04-28
 Area: fast E2E, CLI `get`, Graph download metadata fetch
 Suite / test: PR CI run `24698383652`, `e2e`, `TestE2E_FileOpsSmokeCRUD`
 Classification: graph quirk
@@ -668,11 +668,20 @@ Evidence:
 - Re-running only the failed `e2e` job in the same PR run succeeded in `2m9s`,
   which matched the established live-provider-flake profile rather than a
   deterministic product regression.
+Follow-up evidence:
+- Local `go run ./cmd/devtool verify default` on April 28, 2026 reproduced the
+  same family in `TestE2E_FileOpsSmokeCRUD`: path lookup succeeded for
+  `/onedrive-go-e2e-smoke-1777392244287330000/smoke.txt`, but the follow-on
+  `GET /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s8191aeadd8f44644a718c2248112ba6d`
+  returned four consecutive `404 itemNotFound` responses and exhausted the
+  then-current four-attempt budget.
 Resolution / mitigation: this increment corrected the stale quirk-reference
-doc to match the actual graph retry policy. The product behavior remains the
-same: `graph.Client.Download()` owns the exact bounded retry for this family,
-transfer callers do not add a second retry loop, and a pure rerun is the right
-response when the provider exhausts that existing narrow budget in live CI.
+doc to match the actual graph retry policy, then the April 28 recurrence showed
+that the four-attempt budget was too tight for the fast smoke lane. The
+download metadata retry remains owned by `graph.Client.Download()` and
+`DownloadRange()` for the exact item-ID `404 itemNotFound` family, but the
+budget is now six attempts with a 4s max delay. Transfer callers do not add a
+second retry loop.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md)
 
 ## LI-20260412-03: Directional conflict E2Es still expected one-way overwrite semantics

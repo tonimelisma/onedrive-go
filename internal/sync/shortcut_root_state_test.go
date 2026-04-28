@@ -307,7 +307,7 @@ func TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable(t *testing
 	}}))
 
 	changed, err := store.markShortcutChildFinalDrainReleasePending(t.Context(), ShortcutChildDrainAck{
-		BindingItemID: "binding-1",
+		Ref: NewShortcutChildAckRef("binding-1"),
 	})
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -336,7 +336,7 @@ func TestSyncStore_acknowledgeShortcutChildArtifactsPurgedRemovesCleanupPendingR
 	}}))
 
 	changed, err := store.acknowledgeShortcutChildArtifactsPurged(t.Context(), ShortcutChildArtifactCleanupAck{
-		BindingItemID: "binding-1",
+		Ref: NewShortcutChildAckRef("binding-1"),
 	})
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -383,10 +383,10 @@ func TestSyncStore_RemoteUpsertRestoresCleanupPendingRoot(t *testing.T) {
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateActive, roots[0].State)
 	assert.True(t, roots[0].RemoteDriveID.Equal(driveid.New("new-drive")))
-	snapshot, err := store.ShortcutChildRunner(t.Context(), shortcutNamespaceTestID, t.TempDir())
+	snapshot, err := store.ShortcutChildProcessSnapshot(t.Context(), shortcutNamespaceTestID, t.TempDir())
 	require.NoError(t, err)
-	require.Len(t, snapshot.RunnerWork.Children, 1)
-	assert.Empty(t, snapshot.CleanupWork.Requests)
+	require.Len(t, snapshot.RunCommands, 1)
+	assert.Empty(t, snapshot.Cleanups)
 }
 
 // Validates: R-2.4.8
@@ -505,13 +505,13 @@ func TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot(t *testing.
 	}}))
 
 	snapshot, err := eng.ShortcutChildAckHandle().AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
-		BindingItemID: "binding-1",
+		Ref: NewShortcutChildAckRef("binding-1"),
 	})
 	require.NoError(t, err)
 
-	assert.Empty(t, snapshot.RunnerWork.Children)
-	require.Len(t, snapshot.CleanupWork.Requests, 1)
-	assert.Equal(t, "binding-1", snapshot.CleanupWork.Requests[0].BindingItemID)
+	assert.Empty(t, snapshot.RunCommands)
+	require.Len(t, snapshot.Cleanups, 1)
+	assert.Equal(t, "personal:owner@example.com|binding:binding-1", snapshot.Cleanups[0].ChildMountID)
 	assert.NoDirExists(t, aliasRoot)
 	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
@@ -581,11 +581,11 @@ func TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemov
 	}}))
 
 	snapshot, err := eng.ShortcutChildAckHandle().AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
-		BindingItemID: "binding-1",
+		Ref: NewShortcutChildAckRef("binding-1"),
 	})
 
 	require.Error(t, err)
-	assert.Empty(t, snapshot.RunnerWork.Children)
+	assert.Empty(t, snapshot.RunCommands)
 	assert.FileExists(t, aliasRoot)
 	roots, listErr := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, listErr)
@@ -826,8 +826,8 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
 	seedShortcutLocalStateIdentityForTest(t, eng.Engine, "Shared/Renamed")
 
-	var published ShortcutChildRunnerPublication
-	eng.shortcutChildRunnerSink = func(_ context.Context, publication ShortcutChildRunnerPublication) error {
+	var published ShortcutChildProcessSnapshot
+	eng.shortcutChildProcessSink = func(_ context.Context, publication ShortcutChildProcessSnapshot) error {
 		published = publication
 		return nil
 	}
@@ -843,8 +843,8 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 	require.NoError(t, err)
 	assert.Equal(t, "binding-1", moved.itemID)
 	assert.Equal(t, "Renamed", moved.name)
-	require.Len(t, published.RunnerWork.Children, 1)
-	assert.Equal(t, "Shared/Renamed", published.RunnerWork.Children[0].RelativeLocalPath)
+	require.Len(t, published.RunCommands, 1)
+	assert.Equal(t, filepath.Join(syncRoot, "Shared", "Renamed"), published.RunCommands[0].Engine.LocalRoot)
 	roots, err := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)

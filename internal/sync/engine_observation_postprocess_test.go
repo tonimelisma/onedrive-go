@@ -66,7 +66,7 @@ func TestHandleRemoteObservationBatch_EmptyCompleteTopologyApplyFailureDoesNotCo
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	applyErr := errors.New("persist topology")
-	eng.shortcutChildRunnerSink = func(_ context.Context, _ ShortcutChildRunnerPublication) error {
+	eng.shortcutChildProcessSink = func(_ context.Context, _ ShortcutChildProcessSnapshot) error {
 		return applyErr
 	}
 

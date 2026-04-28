@@ -11,11 +11,11 @@ import (
 // multisync tests may inject fakes without constructing sync's concrete handle.
 type shortcutChildAckHandle interface {
 	IsZero() bool
-	AcknowledgeChildFinalDrain(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildRunnerPublication, error)
+	AcknowledgeChildFinalDrain(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildProcessSnapshot, error)
 	AcknowledgeChildArtifactsPurged(
 		context.Context,
 		syncengine.ShortcutChildArtifactCleanupAck,
-	) (syncengine.ShortcutChildRunnerPublication, error)
+	) (syncengine.ShortcutChildProcessSnapshot, error)
 }
 
 func shortcutChildAckHandleIsZero(handle shortcutChildAckHandle) bool {

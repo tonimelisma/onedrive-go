@@ -49,44 +49,52 @@ type shortcutBindingUnavailable struct {
 	Reason            string
 }
 
-type ShortcutChildRunnerSink func(context.Context, ShortcutChildRunnerPublication) error
+type ShortcutChildProcessSink func(context.Context, ShortcutChildProcessSnapshot) error
 
-type ShortcutChildRunnerAction string
+type ShortcutChildRunMode string
 
 const (
-	ShortcutChildActionRun               ShortcutChildRunnerAction = "run"
-	ShortcutChildActionFinalDrain        ShortcutChildRunnerAction = "final_drain"
-	ShortcutChildActionSkipParentBlocked ShortcutChildRunnerAction = "skip_parent_blocked"
+	ShortcutChildRunModeNormal     ShortcutChildRunMode = "normal"
+	ShortcutChildRunModeFinalDrain ShortcutChildRunMode = "final_drain"
 )
 
-// ShortcutChildRunnerPublication is the parent engine's only shortcut
-// runner output to multisync. Raw shortcut observations and parent-visible
-// status facts stay inside internal/sync; multisync only sees executable child
-// runner work plus artifact cleanup requests.
-type ShortcutChildRunnerPublication struct {
+// ShortcutChildProcessSnapshot is the parent engine's process-control output
+// to multisync. Raw shortcut observations and parent-visible status facts stay
+// inside internal/sync; multisync sees only child engine commands plus artifact
+// cleanup requests.
+type ShortcutChildProcessSnapshot struct {
 	NamespaceID string
-	RunnerWork  ShortcutChildRunnerWork
-	CleanupWork ShortcutChildArtifactCleanupWork
+	RunCommands []ShortcutChildRunCommand
+	Cleanups    []ShortcutChildCleanupCommand
 }
 
-type ShortcutChildRunnerWork struct {
-	Children []ShortcutChildRunner
+type ShortcutChildRunCommand struct {
+	ChildMountID string
+	DisplayName  string
+	Engine       ShortcutChildEngineSpec
+	Mode         ShortcutChildRunMode
+	AckRef       ShortcutChildAckRef
 }
 
-type ShortcutChildArtifactCleanupWork struct {
-	Requests []ShortcutChildArtifactCleanupRequest
-}
-
-type ShortcutChildRunner struct {
-	ChildMountID      string
-	BindingItemID     string
-	RelativeLocalPath string
+type ShortcutChildEngineSpec struct {
 	LocalRoot         string
-	DisplayName       string
 	RemoteDriveID     string
 	RemoteItemID      string
-	RunnerAction      ShortcutChildRunnerAction
 	LocalRootIdentity *ShortcutRootIdentity
+}
+
+func ShortcutChildEngineSpecsEqual(a ShortcutChildEngineSpec, b ShortcutChildEngineSpec) bool {
+	return a.LocalRoot == b.LocalRoot &&
+		a.RemoteDriveID == b.RemoteDriveID &&
+		a.RemoteItemID == b.RemoteItemID &&
+		shortcutRootIdentityPointersEqual(a.LocalRootIdentity, b.LocalRootIdentity)
+}
+
+type ShortcutChildCleanupCommand struct {
+	ChildMountID string
+	LocalRoot    string
+	Reason       ShortcutChildArtifactCleanupReason
+	AckRef       ShortcutChildAckRef
 }
 
 // ShortcutChildAckHandle is the live-parent acknowledgement capability that
@@ -94,13 +102,13 @@ type ShortcutChildRunner struct {
 // handle instead of an interface so control-plane code can invoke acknowledgements
 // without owning or re-opening parent shortcut lifecycle state.
 type ShortcutChildAckHandle struct {
-	ackFinalDrain      func(context.Context, ShortcutChildDrainAck) (ShortcutChildRunnerPublication, error)
-	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildRunnerPublication, error)
+	ackFinalDrain      func(context.Context, ShortcutChildDrainAck) (ShortcutChildProcessSnapshot, error)
+	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildProcessSnapshot, error)
 }
 
 func newShortcutChildAckHandle(
-	ackFinalDrain func(context.Context, ShortcutChildDrainAck) (ShortcutChildRunnerPublication, error),
-	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildRunnerPublication, error),
+	ackFinalDrain func(context.Context, ShortcutChildDrainAck) (ShortcutChildProcessSnapshot, error),
+	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildProcessSnapshot, error),
 ) ShortcutChildAckHandle {
 	return ShortcutChildAckHandle{
 		ackFinalDrain:      ackFinalDrain,
@@ -115,9 +123,9 @@ func (h ShortcutChildAckHandle) IsZero() bool {
 func (h ShortcutChildAckHandle) AcknowledgeChildFinalDrain(
 	ctx context.Context,
 	ack ShortcutChildDrainAck,
-) (ShortcutChildRunnerPublication, error) {
+) (ShortcutChildProcessSnapshot, error) {
 	if h.ackFinalDrain == nil {
-		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: shortcut child final-drain ack requires live parent")
+		return ShortcutChildProcessSnapshot{}, fmt.Errorf("sync: shortcut child final-drain ack requires live parent")
 	}
 	return h.ackFinalDrain(ctx, ack)
 }
@@ -125,11 +133,26 @@ func (h ShortcutChildAckHandle) AcknowledgeChildFinalDrain(
 func (h ShortcutChildAckHandle) AcknowledgeChildArtifactsPurged(
 	ctx context.Context,
 	ack ShortcutChildArtifactCleanupAck,
-) (ShortcutChildRunnerPublication, error) {
+) (ShortcutChildProcessSnapshot, error) {
 	if h.ackArtifactsPurged == nil {
-		return ShortcutChildRunnerPublication{}, fmt.Errorf("sync: shortcut child artifact cleanup ack requires live parent")
+		return ShortcutChildProcessSnapshot{}, fmt.Errorf("sync: shortcut child artifact cleanup ack requires live parent")
 	}
 	return h.ackArtifactsPurged(ctx, ack)
+}
+
+// ShortcutChildAckRef is the parent-issued opaque token for child completion
+// acknowledgements. Multisync may carry and compare the token, but only sync
+// can read the binding identity behind it.
+type ShortcutChildAckRef struct {
+	bindingItemID string
+}
+
+func NewShortcutChildAckRef(bindingItemID string) ShortcutChildAckRef {
+	return ShortcutChildAckRef{bindingItemID: bindingItemID}
+}
+
+func (r ShortcutChildAckRef) IsZero() bool {
+	return r.bindingItemID == ""
 }
 
 // ShortcutRootIdentity is the parent-engine-issued local directory identity
@@ -170,125 +193,109 @@ const (
 	ShortcutChildArtifactCleanupParentRemoved ShortcutChildArtifactCleanupReason = "parent_removed"
 )
 
-type ShortcutChildArtifactCleanupRequest struct {
-	BindingItemID     string
-	RelativeLocalPath string
-	ChildMountID      string
-	LocalRoot         string
-	Reason            ShortcutChildArtifactCleanupReason
-}
-
 type ShortcutChildDrainAck struct {
-	BindingItemID string
+	Ref ShortcutChildAckRef
 }
 
 type ShortcutChildArtifactCleanupAck struct {
-	BindingItemID string
+	Ref ShortcutChildAckRef
 }
 
-func NormalizeShortcutChildRunnerPublication(
+func NormalizeShortcutChildProcessSnapshot(
 	namespaceID string,
-	publication ShortcutChildRunnerPublication,
-) ShortcutChildRunnerPublication {
-	if publication.NamespaceID == "" {
-		publication.NamespaceID = namespaceID
+	snapshot ShortcutChildProcessSnapshot,
+) ShortcutChildProcessSnapshot {
+	if snapshot.NamespaceID == "" {
+		snapshot.NamespaceID = namespaceID
 	}
-	publication.RunnerWork.Children = cloneShortcutChildRunnerPublicationChildren(publication.RunnerWork.Children)
-	publication.CleanupWork.Requests = append(
-		[]ShortcutChildArtifactCleanupRequest(nil),
-		publication.CleanupWork.Requests...,
-	)
-	if len(publication.RunnerWork.Children) == 0 {
-		publication.RunnerWork.Children = nil
+	snapshot.RunCommands = cloneShortcutChildRunCommands(snapshot.RunCommands)
+	snapshot.Cleanups = append([]ShortcutChildCleanupCommand(nil), snapshot.Cleanups...)
+	if len(snapshot.RunCommands) == 0 {
+		snapshot.RunCommands = nil
 	}
-	if len(publication.CleanupWork.Requests) == 0 {
-		publication.CleanupWork.Requests = nil
+	if len(snapshot.Cleanups) == 0 {
+		snapshot.Cleanups = nil
 	}
-	slices.SortFunc(publication.RunnerWork.Children, func(a, b ShortcutChildRunner) int {
-		if byBinding := cmp.Compare(a.BindingItemID, b.BindingItemID); byBinding != 0 {
-			return byBinding
+	slices.SortFunc(snapshot.RunCommands, func(a, b ShortcutChildRunCommand) int {
+		if byMount := cmp.Compare(a.ChildMountID, b.ChildMountID); byMount != 0 {
+			return byMount
 		}
-		return cmp.Compare(a.RelativeLocalPath, b.RelativeLocalPath)
+		return cmp.Compare(a.DisplayName, b.DisplayName)
 	})
-	slices.SortFunc(publication.CleanupWork.Requests, func(a, b ShortcutChildArtifactCleanupRequest) int {
-		if byBinding := cmp.Compare(a.BindingItemID, b.BindingItemID); byBinding != 0 {
-			return byBinding
-		}
-		if byPath := cmp.Compare(a.RelativeLocalPath, b.RelativeLocalPath); byPath != 0 {
-			return byPath
+	slices.SortFunc(snapshot.Cleanups, func(a, b ShortcutChildCleanupCommand) int {
+		if byMount := cmp.Compare(a.ChildMountID, b.ChildMountID); byMount != 0 {
+			return byMount
 		}
 		return cmp.Compare(a.Reason, b.Reason)
 	})
-	return publication
+	return snapshot
 }
 
-func ShortcutChildRunnerPublicationsEqual(
-	a ShortcutChildRunnerPublication,
-	b ShortcutChildRunnerPublication,
+func ShortcutChildProcessSnapshotsEqual(
+	a ShortcutChildProcessSnapshot,
+	b ShortcutChildProcessSnapshot,
 ) bool {
 	if a.NamespaceID != b.NamespaceID ||
-		len(a.RunnerWork.Children) != len(b.RunnerWork.Children) ||
-		len(a.CleanupWork.Requests) != len(b.CleanupWork.Requests) {
+		len(a.RunCommands) != len(b.RunCommands) ||
+		len(a.Cleanups) != len(b.Cleanups) {
 		return false
 	}
-	for i := range a.RunnerWork.Children {
-		if !shortcutChildRunnerEqual(&a.RunnerWork.Children[i], &b.RunnerWork.Children[i]) {
+	for i := range a.RunCommands {
+		if !shortcutChildRunCommandEqual(&a.RunCommands[i], &b.RunCommands[i]) {
 			return false
 		}
 	}
-	for i := range a.CleanupWork.Requests {
-		if a.CleanupWork.Requests[i] != b.CleanupWork.Requests[i] {
+	for i := range a.Cleanups {
+		if a.Cleanups[i] != b.Cleanups[i] {
 			return false
 		}
 	}
 	return true
 }
 
-func cloneShortcutChildRunnerPublicationChildren(children []ShortcutChildRunner) []ShortcutChildRunner {
-	cloned := append([]ShortcutChildRunner(nil), children...)
+func cloneShortcutChildRunCommands(commands []ShortcutChildRunCommand) []ShortcutChildRunCommand {
+	cloned := append([]ShortcutChildRunCommand(nil), commands...)
 	for i := range cloned {
-		if cloned[i].LocalRootIdentity != nil {
-			identity := *cloned[i].LocalRootIdentity
-			cloned[i].LocalRootIdentity = &identity
+		if cloned[i].Engine.LocalRootIdentity != nil {
+			identity := *cloned[i].Engine.LocalRootIdentity
+			cloned[i].Engine.LocalRootIdentity = &identity
 		}
 	}
 	return cloned
 }
 
-func shortcutChildRunnerEqual(a *ShortcutChildRunner, b *ShortcutChildRunner) bool {
+func shortcutChildRunCommandEqual(a *ShortcutChildRunCommand, b *ShortcutChildRunCommand) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	if shortcutChildRunnerComparableFor(a) != shortcutChildRunnerComparableFor(b) {
+	if shortcutChildRunCommandComparableFor(a) != shortcutChildRunCommandComparableFor(b) {
 		return false
 	}
-	return shortcutRootIdentityPointersEqual(a.LocalRootIdentity, b.LocalRootIdentity)
+	return shortcutRootIdentityPointersEqual(a.Engine.LocalRootIdentity, b.Engine.LocalRootIdentity)
 }
 
-type shortcutChildRunnerComparable struct {
-	ChildMountID      string
-	BindingItemID     string
-	RelativeLocalPath string
-	LocalRoot         string
-	DisplayName       string
-	RemoteDriveID     string
-	RemoteItemID      string
-	RunnerAction      ShortcutChildRunnerAction
+type shortcutChildRunCommandComparable struct {
+	ChildMountID  string
+	DisplayName   string
+	LocalRoot     string
+	RemoteDriveID string
+	RemoteItemID  string
+	Mode          ShortcutChildRunMode
+	AckRef        ShortcutChildAckRef
 }
 
-func shortcutChildRunnerComparableFor(child *ShortcutChildRunner) shortcutChildRunnerComparable {
-	if child == nil {
-		return shortcutChildRunnerComparable{}
+func shortcutChildRunCommandComparableFor(command *ShortcutChildRunCommand) shortcutChildRunCommandComparable {
+	if command == nil {
+		return shortcutChildRunCommandComparable{}
 	}
-	return shortcutChildRunnerComparable{
-		ChildMountID:      child.ChildMountID,
-		BindingItemID:     child.BindingItemID,
-		RelativeLocalPath: child.RelativeLocalPath,
-		LocalRoot:         child.LocalRoot,
-		DisplayName:       child.DisplayName,
-		RemoteDriveID:     child.RemoteDriveID,
-		RemoteItemID:      child.RemoteItemID,
-		RunnerAction:      child.RunnerAction,
+	return shortcutChildRunCommandComparable{
+		ChildMountID:  command.ChildMountID,
+		DisplayName:   command.DisplayName,
+		LocalRoot:     command.Engine.LocalRoot,
+		RemoteDriveID: command.Engine.RemoteDriveID,
+		RemoteItemID:  command.Engine.RemoteItemID,
+		Mode:          command.Mode,
+		AckRef:        command.AckRef,
 	}
 }
 

@@ -2,6 +2,7 @@ package multisync
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,159 +13,217 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
+func testParentProcessRoot() string {
+	return filepath.Join(string(filepath.Separator), "tmp", "parent")
+}
+
+func testParentMountSpec() *mountSpec {
+	return &mountSpec{
+		mountID:             mountID("personal:owner@example.com"),
+		projectionKind:      MountProjectionStandalone,
+		canonicalID:         driveid.MustCanonicalID("personal:owner@example.com"),
+		tokenOwnerCanonical: driveid.MustCanonicalID("personal:owner@example.com"),
+		remoteDriveID:       driveid.New("parent-drive"),
+		syncRoot:            "/tmp/parent",
+	}
+}
+
+func testChildRecord(parentID mountID, bindingID, relativePath string) syncengine.ShortcutChildRunCommand {
+	return syncengine.ShortcutChildRunCommand{
+		ChildMountID: config.ChildMountID(parentID.String(), bindingID),
+		DisplayName:  filepath.Base(filepath.FromSlash(relativePath)),
+		Engine: syncengine.ShortcutChildEngineSpec{
+			LocalRoot:     filepath.Join(testParentProcessRoot(), filepath.FromSlash(relativePath)),
+			RemoteDriveID: "remote-drive",
+			RemoteItemID:  "remote-root",
+		},
+		Mode:   syncengine.ShortcutChildRunModeNormal,
+		AckRef: syncengine.NewShortcutChildAckRef(bindingID),
+	}
+}
+
+func finalDrainChildRecord(parentID mountID, bindingID, relativePath string) syncengine.ShortcutChildRunCommand {
+	child := testChildRecord(parentID, bindingID, relativePath)
+	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	return child
+}
+
+func processSnapshot(namespaceID string, children ...syncengine.ShortcutChildRunCommand) syncengine.ShortcutChildProcessSnapshot {
+	return processSnapshotForRoot(namespaceID, "/tmp/parent", children...)
+}
+
+func processSnapshotForParent(
+	parent *StandaloneMountConfig,
+	children ...syncengine.ShortcutChildRunCommand,
+) syncengine.ShortcutChildProcessSnapshot {
+	namespaceID := ""
+	parentRoot := ""
+	if parent != nil {
+		namespaceID = parent.CanonicalID.String()
+		parentRoot = parent.SyncRoot
+	}
+	return processSnapshotForRoot(namespaceID, parentRoot, children...)
+}
+
+func processSnapshotForRoot(
+	namespaceID string,
+	parentRoot string,
+	children ...syncengine.ShortcutChildRunCommand,
+) syncengine.ShortcutChildProcessSnapshot {
+	for i := range children {
+		if children[i].Engine.LocalRoot != "" && parentRoot != "" {
+			rel, relErr := filepath.Rel(testParentProcessRoot(), children[i].Engine.LocalRoot)
+			if relErr == nil && rel != "." && !filepath.IsAbs(rel) &&
+				rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				children[i].Engine.LocalRoot = filepath.Join(parentRoot, rel)
+			}
+		}
+	}
+	return syncengine.ShortcutChildProcessSnapshot{
+		NamespaceID: namespaceID,
+		RunCommands: children,
+	}
+}
+
+func cleanupRequestSnapshot(
+	namespaceID string,
+	requests ...syncengine.ShortcutChildCleanupCommand,
+) syncengine.ShortcutChildProcessSnapshot {
+	return syncengine.ShortcutChildProcessSnapshot{
+		NamespaceID: namespaceID,
+		Cleanups:    requests,
+	}
+}
+
+func seedShortcutChildRunCommand(
+	orch *Orchestrator,
+	parent *StandaloneMountConfig,
+	child *syncengine.ShortcutChildRunCommand,
+) {
+	if parent == nil || child == nil || child.ChildMountID == "" {
+		return
+	}
+	orch.receiveParentChildProcessSnapshot(
+		mountID(parent.CanonicalID.String()),
+		processSnapshotForParent(parent, *child),
+	)
+}
+
 // Validates: R-2.8.1, R-4.1.4
-func TestReceiveParentRunnerPublication_StoresPublicationInMemory(t *testing.T) {
+func TestReceiveParentChildProcessSnapshot_StoresSnapshotInMemory(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
 
-	changed := orch.receiveParentRunnerPublicationFromParent(parent, runnerPublication(
+	changed := orch.receiveParentChildProcessSnapshotFromParent(parent, processSnapshot(
 		parent.mountID.String(),
-		syncengine.ShortcutChildRunner{
-			BindingItemID:     "binding-1",
-			RelativeLocalPath: "Shared/Docs",
-			DisplayName:       "Docs",
-			RemoteDriveID:     "remote-drive-0001",
-			RemoteItemID:      "remote-root",
-			RunnerAction:      syncengine.ShortcutChildActionRun,
-		},
+		testChildRecord(parent.mountID, "binding-1", "Shared/Docs"),
 	))
 
 	assert.True(t, changed)
-	publication := orch.latestParentRunnerPublicationFor(parent.mountID)
-	require.Len(t, publication.RunnerWork.Children, 1)
-	assert.Equal(t, syncengine.ShortcutChildActionRun, publication.RunnerWork.Children[0].RunnerAction)
-	assert.Equal(t, "Shared/Docs", publication.RunnerWork.Children[0].RelativeLocalPath)
-	assert.Equal(t, "remote-drive-0001", publication.RunnerWork.Children[0].RemoteDriveID)
-	assert.Equal(t, "remote-root", publication.RunnerWork.Children[0].RemoteItemID)
+	publication := orch.latestParentChildProcessSnapshotFor(parent.mountID)
+	require.Len(t, publication.RunCommands, 1)
+	assert.Equal(t, syncengine.ShortcutChildRunModeNormal, publication.RunCommands[0].Mode)
+	assert.Equal(t, filepath.Join(parent.syncRoot, "Shared", "Docs"), publication.RunCommands[0].Engine.LocalRoot)
+	assert.Equal(t, "remote-drive", publication.RunCommands[0].Engine.RemoteDriveID)
+	assert.Equal(t, "remote-root", publication.RunCommands[0].Engine.RemoteItemID)
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestReceiveParentRunnerPublication_EquivalentPublicationIsStable(t *testing.T) {
+func TestReceiveParentChildProcessSnapshot_EquivalentSnapshotIsStable(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
-	first := runnerPublication(
+	first := processSnapshot(
 		parent.mountID.String(),
-		syncengine.ShortcutChildRunner{
-			BindingItemID:     "binding-1",
-			RelativeLocalPath: "Shared/Docs",
-			DisplayName:       "Docs",
-			RemoteDriveID:     "remote-drive-0001",
-			RemoteItemID:      "remote-root",
-			RunnerAction:      syncengine.ShortcutChildActionRun,
-		},
+		testChildRecord(parent.mountID, "binding-1", "Shared/Docs"),
 	)
-	equivalent := runnerPublication(
+	equivalent := processSnapshot(
 		parent.mountID.String(),
-		syncengine.ShortcutChildRunner{
-			BindingItemID:     "binding-1",
-			RelativeLocalPath: "Shared/Docs",
-			DisplayName:       "Docs",
-			RemoteDriveID:     "remote-drive-0001",
-			RemoteItemID:      "remote-root",
-			RunnerAction:      syncengine.ShortcutChildActionRun,
-		},
+		testChildRecord(parent.mountID, "binding-1", "Shared/Docs"),
 	)
 
-	assert.True(t, orch.receiveParentRunnerPublicationFromParent(parent, first))
-	assert.False(t, orch.receiveParentRunnerPublicationFromParent(parent, equivalent))
+	assert.True(t, orch.receiveParentChildProcessSnapshotFromParent(parent, first))
+	assert.False(t, orch.receiveParentChildProcessSnapshotFromParent(parent, equivalent))
 }
 
 // Validates: R-2.4.8, R-2.8.1, R-4.1.4
-func TestReceiveParentRunnerPublication_EmptyPublicationClearsCachedChildren(t *testing.T) {
+func TestReceiveParentChildProcessSnapshot_EmptySnapshotClearsCachedChildren(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
-	orch.receiveParentRunnerPublication(parent.mountID, runnerPublication(
+	orch.receiveParentChildProcessSnapshot(parent.mountID, processSnapshot(
 		parent.mountID.String(),
-		syncengine.ShortcutChildRunner{
-			BindingItemID:     "binding-old",
-			RelativeLocalPath: "Shortcut",
-			DisplayName:       "Shortcut",
-			RemoteDriveID:     "remote-drive",
-			RemoteItemID:      "remote-root",
-			RunnerAction:      syncengine.ShortcutChildActionRun,
-		},
+		testChildRecord(parent.mountID, "binding-old", "Shortcut"),
 	))
 
-	changed := orch.receiveParentRunnerPublicationFromParent(parent, syncengine.ShortcutChildRunnerPublication{
+	changed := orch.receiveParentChildProcessSnapshotFromParent(parent, syncengine.ShortcutChildProcessSnapshot{
 		NamespaceID: parent.mountID.String(),
 	})
 
 	assert.True(t, changed)
-	publication := orch.latestParentRunnerPublicationFor(parent.mountID)
-	assert.Empty(t, publication.RunnerWork.Children)
+	publication := orch.latestParentChildProcessSnapshotFor(parent.mountID)
+	assert.Empty(t, publication.RunCommands)
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestParentRunnerPublicationCache_ClonesPublication(t *testing.T) {
+func TestParentChildProcessSnapshotCache_ClonesSnapshot(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
 	identity := &syncengine.ShortcutRootIdentity{Device: 1, Inode: 2}
-	publication := runnerPublication(
-		parent.mountID.String(),
-		syncengine.ShortcutChildRunner{
-			BindingItemID:     "binding-1",
-			RelativeLocalPath: "Shortcuts/Docs",
-			DisplayName:       "Docs",
-			RemoteDriveID:     "remote-drive",
-			RemoteItemID:      "remote-root",
-			RunnerAction:      syncengine.ShortcutChildActionRun,
-			LocalRootIdentity: identity,
-		},
-	)
+	child := testChildRecord(parent.mountID, "binding-1", "Shortcuts/Docs")
+	child.Engine.LocalRootIdentity = identity
+	publication := processSnapshot(parent.mountID.String(), child)
 
-	changed := orch.receiveParentRunnerPublicationFromParent(parent, publication)
+	changed := orch.receiveParentChildProcessSnapshotFromParent(parent, publication)
 	require.True(t, changed)
 	identity.Device = 99
 
-	cached := orch.latestParentRunnerPublicationFor(parent.mountID)
-	require.Len(t, cached.RunnerWork.Children, 1)
-	require.NotNil(t, cached.RunnerWork.Children[0].LocalRootIdentity)
-	assert.Equal(t, uint64(1), cached.RunnerWork.Children[0].LocalRootIdentity.Device)
+	cached := orch.latestParentChildProcessSnapshotFor(parent.mountID)
+	require.Len(t, cached.RunCommands, 1)
+	require.NotNil(t, cached.RunCommands[0].Engine.LocalRootIdentity)
+	assert.Equal(t, uint64(1), cached.RunCommands[0].Engine.LocalRootIdentity.Device)
 
-	cached.RunnerWork.Children[0].LocalRootIdentity.Device = 42
-	cachedAgain := orch.latestParentRunnerPublicationFor(parent.mountID)
-	require.NotNil(t, cachedAgain.RunnerWork.Children[0].LocalRootIdentity)
-	assert.Equal(t, uint64(1), cachedAgain.RunnerWork.Children[0].LocalRootIdentity.Device)
+	cached.RunCommands[0].Engine.LocalRootIdentity.Device = 42
+	cachedAgain := orch.latestParentChildProcessSnapshotFor(parent.mountID)
+	require.NotNil(t, cachedAgain.RunCommands[0].Engine.LocalRootIdentity)
+	assert.Equal(t, uint64(1), cachedAgain.RunCommands[0].Engine.LocalRootIdentity.Device)
 }
 
 // Validates: R-2.4.8, R-4.1.4
-func TestReceiveParentRunnerPublication_UsesParentCleanupRequests(t *testing.T) {
+func TestReceiveParentChildProcessSnapshot_UsesParentCleanupRequests(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
-	orch.receiveParentRunnerPublication(parent.mountID, syncengine.ShortcutChildRunnerPublication{
+	orch.receiveParentChildProcessSnapshot(parent.mountID, syncengine.ShortcutChildProcessSnapshot{
 		NamespaceID: parent.mountID.String(),
 	})
 
-	changed := orch.receiveParentRunnerPublication(parent.mountID, cleanupRequestPublication(
+	changed := orch.receiveParentChildProcessSnapshot(parent.mountID, cleanupRequestSnapshot(
 		parent.mountID.String(),
-		syncengine.ShortcutChildArtifactCleanupRequest{
-			BindingItemID:     "binding-old",
-			RelativeLocalPath: "Shortcuts/Old",
-			ChildMountID:      config.ChildMountID(parent.mountID.String(), "binding-old"),
-			LocalRoot:         filepath.Join(parent.syncRoot, "Shortcuts", "Old"),
-			Reason:            syncengine.ShortcutChildArtifactCleanupParentRemoved,
+		syncengine.ShortcutChildCleanupCommand{
+			ChildMountID: config.ChildMountID(parent.mountID.String(), "binding-old"),
+			LocalRoot:    filepath.Join(parent.syncRoot, "Shortcuts", "Old"),
+			Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			AckRef:       syncengine.NewShortcutChildAckRef("binding-old"),
 		},
 	))
 
 	assert.True(t, changed)
-	publication := orch.latestParentRunnerPublicationFor(parent.mountID)
-	require.Len(t, publication.CleanupWork.Requests, 1)
-	assert.Equal(t, "binding-old", publication.CleanupWork.Requests[0].BindingItemID)
+	publication := orch.latestParentChildProcessSnapshotFor(parent.mountID)
+	require.Len(t, publication.Cleanups, 1)
+	assert.Equal(t, config.ChildMountID(parent.mountID.String(), "binding-old"), publication.Cleanups[0].ChildMountID)
 
 	decisions, err := buildRunnerDecisionsForParents(
 		[]*mountSpec{parent},
-		orch.latestParentRunnerPublicationsFor([]*mountSpec{parent}),
-		testRunnerDecisionDataDir(t),
+		orch.latestParentChildProcessSnapshotsFor([]*mountSpec{parent}),
+		t.TempDir(),
 		nil,
 	)
 	require.NoError(t, err)
@@ -173,20 +232,19 @@ func TestReceiveParentRunnerPublication_UsesParentCleanupRequests(t *testing.T) 
 	assert.Equal(t, config.ChildMountID(parent.mountID.String(), "binding-old"), decisions.CleanupChildren[0].mountID)
 	assert.Equal(t, filepath.Join(parent.syncRoot, "Shortcuts", "Old"), decisions.CleanupChildren[0].localRoot)
 
-	changed = orch.receiveParentRunnerPublication(parent.mountID, cleanupRequestPublication(
+	changed = orch.receiveParentChildProcessSnapshot(parent.mountID, cleanupRequestSnapshot(
 		parent.mountID.String(),
-		syncengine.ShortcutChildArtifactCleanupRequest{
-			BindingItemID:     "binding-old",
-			RelativeLocalPath: "Shortcuts/Old",
-			ChildMountID:      config.ChildMountID(parent.mountID.String(), "binding-old"),
-			LocalRoot:         filepath.Join(parent.syncRoot, "Shortcuts", "Old"),
-			Reason:            syncengine.ShortcutChildArtifactCleanupParentRemoved,
+		syncengine.ShortcutChildCleanupCommand{
+			ChildMountID: config.ChildMountID(parent.mountID.String(), "binding-old"),
+			LocalRoot:    filepath.Join(parent.syncRoot, "Shortcuts", "Old"),
+			Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			AckRef:       syncengine.NewShortcutChildAckRef("binding-old"),
 		},
 	))
 	assert.False(t, changed)
-	publication = orch.latestParentRunnerPublicationFor(parent.mountID)
-	require.Len(t, publication.CleanupWork.Requests, 1)
-	assert.Equal(t, "binding-old", publication.CleanupWork.Requests[0].BindingItemID)
+	publication = orch.latestParentChildProcessSnapshotFor(parent.mountID)
+	require.Len(t, publication.Cleanups, 1)
+	assert.Equal(t, config.ChildMountID(parent.mountID.String(), "binding-old"), publication.Cleanups[0].ChildMountID)
 }
 
 // Validates: R-2.4.8, R-4.1.4
@@ -198,19 +256,18 @@ func TestParentCleanupRequestUsesExplicitArtifactScope(t *testing.T) {
 	requestedMountID := config.ChildMountID(parent.mountID.String(), "binding-cleanup")
 	decisions, err := buildRunnerDecisionsForParents(
 		[]*mountSpec{parent},
-		map[mountID]syncengine.ShortcutChildRunnerPublication{
-			parent.mountID: cleanupRequestPublication(
+		map[mountID]syncengine.ShortcutChildProcessSnapshot{
+			parent.mountID: cleanupRequestSnapshot(
 				parent.mountID.String(),
-				syncengine.ShortcutChildArtifactCleanupRequest{
-					BindingItemID:     "binding-cleanup",
-					RelativeLocalPath: "Shortcuts/Old",
-					ChildMountID:      requestedMountID,
-					LocalRoot:         requestedRoot,
-					Reason:            syncengine.ShortcutChildArtifactCleanupParentRemoved,
+				syncengine.ShortcutChildCleanupCommand{
+					ChildMountID: requestedMountID,
+					LocalRoot:    requestedRoot,
+					Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
+					AckRef:       syncengine.NewShortcutChildAckRef("binding-cleanup"),
 				},
 			),
 		},
-		testRunnerDecisionDataDir(t),
+		t.TempDir(),
 		nil,
 	)
 
@@ -225,50 +282,57 @@ func TestParentCleanupRequestUsesExplicitArtifactScope(t *testing.T) {
 func TestParentCleanupRequestRequiresExplicitArtifactScope(t *testing.T) {
 	t.Parallel()
 
+	parent := testParentMountSpec()
 	cases := []struct {
 		name    string
-		request syncengine.ShortcutChildArtifactCleanupRequest
+		request syncengine.ShortcutChildCleanupCommand
 		want    string
 	}{
 		{
 			name: "child mount ID",
-			request: syncengine.ShortcutChildArtifactCleanupRequest{
-				BindingItemID: "binding-cleanup",
-				LocalRoot:     filepath.Join(t.TempDir(), "child"),
-				Reason:        syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			request: syncengine.ShortcutChildCleanupCommand{
+				LocalRoot: filepath.Join(t.TempDir(), "child"),
+				Reason:    syncengine.ShortcutChildArtifactCleanupParentRemoved,
+				AckRef:    syncengine.NewShortcutChildAckRef("binding-cleanup"),
 			},
 			want: "missing child mount ID",
 		},
 		{
 			name: "local root",
-			request: syncengine.ShortcutChildArtifactCleanupRequest{
-				BindingItemID: "binding-cleanup",
-				ChildMountID:  config.ChildMountID("personal:owner@example.com", "binding-cleanup"),
-				Reason:        syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			request: syncengine.ShortcutChildCleanupCommand{
+				ChildMountID: config.ChildMountID(parent.mountID.String(), "binding-cleanup"),
+				Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
+				AckRef:       syncengine.NewShortcutChildAckRef("binding-cleanup"),
 			},
 			want: "missing child local root",
 		},
 		{
 			name: "reason",
-			request: syncengine.ShortcutChildArtifactCleanupRequest{
-				BindingItemID: "binding-cleanup",
-				ChildMountID:  config.ChildMountID("personal:owner@example.com", "binding-cleanup"),
-				LocalRoot:     filepath.Join(t.TempDir(), "child"),
+			request: syncengine.ShortcutChildCleanupCommand{
+				ChildMountID: config.ChildMountID(parent.mountID.String(), "binding-cleanup"),
+				LocalRoot:    filepath.Join(t.TempDir(), "child"),
+				AckRef:       syncengine.NewShortcutChildAckRef("binding-cleanup"),
 			},
 			want: "missing cleanup reason",
+		},
+		{
+			name: "ack ref",
+			request: syncengine.ShortcutChildCleanupCommand{
+				ChildMountID: config.ChildMountID(parent.mountID.String(), "binding-cleanup"),
+				LocalRoot:    filepath.Join(t.TempDir(), "child"),
+				Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			},
+			want: "missing acknowledgement reference",
 		},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			parent := testParentMountSpec()
 			_, err := buildRunnerDecisionsForParents(
 				[]*mountSpec{parent},
-				map[mountID]syncengine.ShortcutChildRunnerPublication{
-					parent.mountID: cleanupRequestPublication(parent.mountID.String(), tt.request),
+				map[mountID]syncengine.ShortcutChildProcessSnapshot{
+					parent.mountID: cleanupRequestSnapshot(parent.mountID.String(), tt.request),
 				},
-				testRunnerDecisionDataDir(t),
+				t.TempDir(),
 				nil,
 			)
 
@@ -284,32 +348,32 @@ func TestParentSamePathReplacementPublishesOnlyOldFinalDrainChild(t *testing.T) 
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
-	changed := orch.receiveParentRunnerPublicationFromParent(parent, runnerPublication(
+	changed := orch.receiveParentChildProcessSnapshotFromParent(parent, processSnapshot(
 		parent.mountID.String(),
-		finalDrainChildRecord("binding-old", "Shortcut"),
+		finalDrainChildRecord(parent.mountID, "binding-old", "Shortcut"),
 	))
 
 	assert.True(t, changed)
-	publication := orch.latestParentRunnerPublicationFor(parent.mountID)
-	require.Len(t, publication.RunnerWork.Children, 1)
-	assert.Equal(t, "binding-old", publication.RunnerWork.Children[0].BindingItemID)
-	assert.Equal(t, syncengine.ShortcutChildActionFinalDrain, publication.RunnerWork.Children[0].RunnerAction)
+	publication := orch.latestParentChildProcessSnapshotFor(parent.mountID)
+	require.Len(t, publication.RunCommands, 1)
+	assert.Equal(t, config.ChildMountID(parent.mountID.String(), "binding-old"), publication.RunCommands[0].ChildMountID)
+	assert.Equal(t, syncengine.ShortcutChildRunModeFinalDrain, publication.RunCommands[0].Mode)
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestBuildRunnerDecisionsFromParentRunnerPublication_DoesNotClassifyDuplicateAutomaticChildren(t *testing.T) {
+func TestBuildRunnerDecisionsFromParentChildProcessSnapshot_DoesNotClassifyDuplicateAutomaticChildren(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
 	first := testChildRecord(parent.mountID, "binding-a", "Shortcuts/A")
 	second := testChildRecord(parent.mountID, "binding-b", "Shortcuts/B")
-	orch.receiveParentRunnerPublication(parent.mountID, runnerPublication(parent.mountID.String(), first, second))
+	orch.receiveParentChildProcessSnapshot(parent.mountID, processSnapshot(parent.mountID.String(), first, second))
 
 	decisions, err := buildRunnerDecisionsForParents(
 		[]*mountSpec{parent},
-		orch.latestParentRunnerPublicationsFor([]*mountSpec{parent}),
-		testRunnerDecisionDataDir(t),
+		orch.latestParentChildProcessSnapshotsFor([]*mountSpec{parent}),
+		t.TempDir(),
 		nil,
 	)
 	require.NoError(t, err)
@@ -318,7 +382,7 @@ func TestBuildRunnerDecisionsFromParentRunnerPublication_DoesNotClassifyDuplicat
 }
 
 // Validates: R-2.8.1, R-4.1.4
-func TestBuildRunnerDecisionsFromParentRunnerPublication_StandaloneContentRootRunsBesideChild(t *testing.T) {
+func TestBuildRunnerDecisionsFromParentChildProcessSnapshot_StandaloneContentRootRunsBesideChild(t *testing.T) {
 	t.Parallel()
 
 	parent := testParentMountSpec()
@@ -331,12 +395,12 @@ func TestBuildRunnerDecisionsFromParentRunnerPublication_StandaloneContentRootRu
 	}
 	orch := NewOrchestrator(&OrchestratorConfig{})
 	child := testChildRecord(parent.mountID, "binding-a", "Shortcuts/A")
-	orch.receiveParentRunnerPublication(parent.mountID, runnerPublication(parent.mountID.String(), child))
+	orch.receiveParentChildProcessSnapshot(parent.mountID, processSnapshot(parent.mountID.String(), child))
 
 	decisions, err := buildRunnerDecisionsForParents(
 		[]*mountSpec{parent, standalone},
-		orch.latestParentRunnerPublicationsFor([]*mountSpec{parent, standalone}),
-		testRunnerDecisionDataDir(t),
+		orch.latestParentChildProcessSnapshotsFor([]*mountSpec{parent, standalone}),
+		t.TempDir(),
 		nil,
 	)
 	require.NoError(t, err)

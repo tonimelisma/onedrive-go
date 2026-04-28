@@ -10,7 +10,7 @@ func planShortcutRootDrainReleasePending(
 	changed := false
 	for i := range current {
 		record := normalizeShortcutRootRecord(current[i])
-		if record.BindingItemID != ack.BindingItemID {
+		if record.BindingItemID != ack.Ref.bindingItemID {
 			records = append(records, record)
 			continue
 		}
@@ -43,7 +43,7 @@ func planShortcutRootArtifactCleanupAck(
 	changed := false
 	for i := range current {
 		record := normalizeShortcutRootRecord(current[i])
-		if record.BindingItemID == ack.BindingItemID &&
+		if record.BindingItemID == ack.Ref.bindingItemID &&
 			record.State == ShortcutRootStateRemovedChildCleanupPending {
 			changed = true
 			continue

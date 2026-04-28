@@ -228,8 +228,8 @@ Runtime policy:
 - retry remains narrow: only item-by-ID metadata fetches used to obtain the
   pre-authenticated download URL, only HTTP 404, only Graph code
   `itemNotFound`
-- the current production retry budget is 4 total attempts with 250ms base, 2x
-  multiplier, no jitter, and 2s max
+- the current production retry budget is 6 total attempts with 250ms base, 2x
+  multiplier, no jitter, and 4s max
 - transfer-manager callers and sync workers do not add their own second retry
   loop for this quirk; the graph boundary is the single owner
 

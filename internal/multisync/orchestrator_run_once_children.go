@@ -12,12 +12,8 @@ import (
 
 // oneShotChildRuns owns child runner timing for a single RunOnce call. It is
 // not shortcut policy: parents publish exact runner snapshots, children execute
-// ordinary Engine.RunOnce work, and this coordinator only preserves the
-// lifecycle order:
-// parent registered -> fresh publication accepted -> child work started ->
-// parent safe point reached -> final-drain/artifact cleanup acked.
-// Cancellation before the safe point exits without acking, so recovery comes
-// from parent shortcut_roots plus child artifacts instead of this cache.
+// ordinary Engine.RunOnce work, and this coordinator starts each parent's
+// children only after that parent reaches its safe point.
 type oneShotChildRuns struct {
 	orchestrator *Orchestrator
 	mode         syncengine.SyncMode
@@ -25,7 +21,6 @@ type oneShotChildRuns struct {
 
 	mu            gosync.Mutex
 	parents       map[mountID]*mountSpec
-	parentDone    map[mountID]chan struct{}
 	parentAckers  map[mountID]shortcutChildAckHandle
 	published     map[mountID]bool
 	started       map[mountID]bool
@@ -52,7 +47,6 @@ func newOneShotChildRuns(
 		mode:         mode,
 		opts:         opts,
 		parents:      parentByID,
-		parentDone:   make(map[mountID]chan struct{}),
 		parentAckers: make(map[mountID]shortcutChildAckHandle),
 		published:    make(map[mountID]bool),
 		started:      make(map[mountID]bool),
@@ -70,19 +64,16 @@ func (c *oneShotChildRuns) registerParents(work []indexedMountWork) {
 			continue
 		}
 		parentID := item.work.mount.mountID
-		if _, found := c.parentDone[parentID]; !found {
-			c.parentDone[parentID] = make(chan struct{})
-		}
 		// One-shot children must come from the live parent run, not from
-		// an old publication cached before this parent started.
-		c.orchestrator.forgetParentRunnerPublication(parentID)
+		// an old snapshot cached before this parent started.
+		c.orchestrator.forgetParentChildProcessSnapshot(parentID)
 		if !shortcutChildAckHandleIsZero(item.work.parentAck) {
 			c.parentAckers[parentID] = item.work.parentAck
 		}
 	}
 }
 
-func (c *oneShotChildRuns) notifyParentPublication(ctx context.Context, parentID mountID) error {
+func (c *oneShotChildRuns) notifyParentSnapshot(ctx context.Context, parentID mountID) error {
 	if c == nil || parentID == "" {
 		return nil
 	}
@@ -90,7 +81,6 @@ func (c *oneShotChildRuns) notifyParentPublication(ctx context.Context, parentID
 	c.mu.Lock()
 	c.published[parentID] = true
 	c.mu.Unlock()
-	c.startChildrenForParent(ctx, parentID, false)
 	return nil
 }
 
@@ -98,19 +88,10 @@ func (c *oneShotChildRuns) markParentDone(ctx context.Context, parentID mountID)
 	if c == nil || parentID == "" {
 		return
 	}
-	c.mu.Lock()
-	done := c.parentDone[parentID]
-	if done != nil {
-		delete(c.parentDone, parentID)
-	}
-	c.mu.Unlock()
-	if done != nil {
-		close(done)
-	}
-	c.startChildrenForParent(ctx, parentID, true)
+	c.startChildrenForParent(ctx, parentID)
 }
 
-func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID mountID, includeReportOnly bool) {
+func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID mountID) {
 	if c == nil || parentID == "" {
 		return
 	}
@@ -124,11 +105,7 @@ func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID 
 		c.mu.Unlock()
 		return
 	}
-	hasWork := c.orchestrator.parentRunnerPublicationHasImmediateOneShotWork(parentID)
-	if includeReportOnly {
-		hasWork = c.orchestrator.parentRunnerPublicationHasOneShotWork(parentID)
-	}
-	if !hasWork {
+	if !c.orchestrator.parentChildProcessSnapshotHasWork(parentID) {
 		c.mu.Unlock()
 		return
 	}
@@ -188,7 +165,7 @@ func (c *oneShotChildRuns) runChildrenForParent(
 			Identity:       parent.identity(),
 			DisplayName:    parent.displayName,
 			Status:         MountStartupFatal,
-			Err:            fmt.Errorf("building child mount specs after parent publication: %w", err),
+			Err:            fmt.Errorf("building child mount specs after parent snapshot: %w", err),
 		})
 		return
 	}
@@ -207,15 +184,6 @@ func (c *oneShotChildRuns) runChildrenForParent(
 	c.orchestrator.closeRunOnceChildEngines(ctx, childWork)
 	c.appendReports(childReports...)
 
-	if !c.waitParentDone(ctx, parentID) {
-		if c.orchestrator.logger != nil {
-			c.orchestrator.logger.Warn("skip shortcut child finalization after parent safe point wait canceled",
-				slog.String("parent_mount_id", parentID.String()),
-				slog.String("error", ctx.Err().Error()),
-			)
-		}
-		return
-	}
 	parentAckers := c.parentAckersFor(parentID)
 	if purgeErr := c.orchestrator.purgeShortcutChildArtifactsForDecisions(
 		ctx,
@@ -241,21 +209,6 @@ func (c *oneShotChildRuns) runChildrenForParent(
 		c.orchestrator.logger.Info("finalized drained shortcut child mounts",
 			slog.String("parent_mount_id", parentID.String()),
 		)
-	}
-}
-
-func (c *oneShotChildRuns) waitParentDone(ctx context.Context, parentID mountID) bool {
-	c.mu.Lock()
-	done := c.parentDone[parentID]
-	c.mu.Unlock()
-	if done == nil {
-		return true
-	}
-	select {
-	case <-done:
-		return true
-	case <-ctx.Done():
-		return false
 	}
 }
 

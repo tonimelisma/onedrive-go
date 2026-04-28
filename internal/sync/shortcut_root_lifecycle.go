@@ -511,10 +511,10 @@ func cleanShortcutRootRelativePath(relativeLocalPath string) (string, bool) {
 }
 
 func (e *Engine) releaseShortcutRootProjectionAfterDrain(ctx context.Context, ack ShortcutChildDrainAck) error {
-	if e == nil || e.baseline == nil || ack.BindingItemID == "" {
+	if e == nil || e.baseline == nil || ack.Ref.IsZero() {
 		return nil
 	}
-	return e.finalizeShortcutRootReleaseByBinding(ctx, ack.BindingItemID)
+	return e.finalizeShortcutRootReleaseByBinding(ctx, ack.Ref.bindingItemID)
 }
 
 func shortcutRootStateAwaitsFinalDrainAck(state ShortcutRootState) bool {

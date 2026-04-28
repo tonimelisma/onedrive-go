@@ -6,16 +6,14 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
-func shortcutChildRunnerPublicationFromRootsWithParentRoot(
+func shortcutChildProcessSnapshotFromRootsWithParentRoot(
 	namespaceID string,
 	parentSyncRoot string,
 	roots []ShortcutRootRecord,
-) ShortcutChildRunnerPublication {
-	snapshot := ShortcutChildRunnerPublication{
+) ShortcutChildProcessSnapshot {
+	snapshot := ShortcutChildProcessSnapshot{
 		NamespaceID: namespaceID,
-		RunnerWork: ShortcutChildRunnerWork{
-			Children: make([]ShortcutChildRunner, 0, len(roots)),
-		},
+		RunCommands: make([]ShortcutChildRunCommand, 0, len(roots)),
 	}
 	for i := range roots {
 		root := normalizeShortcutRootRecord(roots[i])
@@ -25,27 +23,30 @@ func shortcutChildRunnerPublicationFromRootsWithParentRoot(
 		metadata, _ := shortcutRootLifecycleMetadataFor(root.State)
 		if metadata.publishesCleanup {
 			childMountID := config.ChildMountID(namespaceID, root.BindingItemID)
-			snapshot.CleanupWork.Requests = append(snapshot.CleanupWork.Requests, ShortcutChildArtifactCleanupRequest{
-				BindingItemID:     root.BindingItemID,
-				RelativeLocalPath: root.RelativeLocalPath,
-				ChildMountID:      childMountID,
-				LocalRoot:         shortcutChildCleanupLocalRoot(parentSyncRoot, root.RelativeLocalPath),
-				Reason:            ShortcutChildArtifactCleanupParentRemoved,
+			snapshot.Cleanups = append(snapshot.Cleanups, ShortcutChildCleanupCommand{
+				ChildMountID: childMountID,
+				LocalRoot:    shortcutChildCleanupLocalRoot(parentSyncRoot, root.RelativeLocalPath),
+				Reason:       ShortcutChildArtifactCleanupParentRemoved,
+				AckRef:       NewShortcutChildAckRef(root.BindingItemID),
 			})
 			continue
 		}
-		child := ShortcutChildRunner{
-			ChildMountID:      config.ChildMountID(namespaceID, root.BindingItemID),
-			BindingItemID:     root.BindingItemID,
-			RelativeLocalPath: root.RelativeLocalPath,
-			LocalRoot:         shortcutChildLocalRoot(parentSyncRoot, root.RelativeLocalPath),
-			DisplayName:       root.LocalAlias,
-			RemoteDriveID:     root.RemoteDriveID.String(),
-			RemoteItemID:      root.RemoteItemID,
-			RunnerAction:      shortcutChildRunnerActionForRoot(root.State),
-			LocalRootIdentity: shortcutRootIdentityFromFileIdentity(root.LocalRootIdentity),
+		if metadata.runMode == "" {
+			continue
 		}
-		snapshot.RunnerWork.Children = append(snapshot.RunnerWork.Children, child)
+		child := ShortcutChildRunCommand{
+			ChildMountID: config.ChildMountID(namespaceID, root.BindingItemID),
+			DisplayName:  root.LocalAlias,
+			Engine: ShortcutChildEngineSpec{
+				LocalRoot:         shortcutChildLocalRoot(parentSyncRoot, root.RelativeLocalPath),
+				RemoteDriveID:     root.RemoteDriveID.String(),
+				RemoteItemID:      root.RemoteItemID,
+				LocalRootIdentity: shortcutRootIdentityFromFileIdentity(root.LocalRootIdentity),
+			},
+			Mode:   metadata.runMode,
+			AckRef: NewShortcutChildAckRef(root.BindingItemID),
+		}
+		snapshot.RunCommands = append(snapshot.RunCommands, child)
 	}
 	return snapshot
 }
@@ -61,10 +62,10 @@ func shortcutChildLocalRoot(parentSyncRoot string, relativeLocalPath string) str
 	return filepath.Join(parentSyncRoot, filepath.FromSlash(relativeLocalPath))
 }
 
-func shortcutChildRunnerActionForRoot(state ShortcutRootState) ShortcutChildRunnerAction {
+func shortcutChildRunModeForRoot(state ShortcutRootState) ShortcutChildRunMode {
 	metadata, ok := shortcutRootLifecycleMetadataFor(state)
-	if !ok || metadata.runnerAction == "" {
-		return ShortcutChildActionSkipParentBlocked
+	if !ok {
+		return ""
 	}
-	return metadata.runnerAction
+	return metadata.runMode
 }

@@ -44,7 +44,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := e.publishShortcutChildRunnerPublication(ctx, runtime.ChildPublication); err != nil {
+	if err := e.publishShortcutChildProcessSnapshot(ctx, runtime.ChildPublication); err != nil {
 		return nil, err
 	}
 

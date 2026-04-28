@@ -17,24 +17,26 @@ func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.En
 	}
 
 	return &syncengine.EngineMountConfig{
-		MountID:                  mount.mountID.String(),
-		DBPath:                   mount.statePath,
-		SyncRoot:                 mount.syncRoot,
-		DataDir:                  dataDir,
-		DriveID:                  mount.remoteDriveID,
-		DriveType:                mount.driveType,
-		AccountEmail:             mount.accountEmail,
-		RemoteRootItemID:         mount.remoteRootItemID,
-		RemoteRootDeltaCapable:   mount.remoteRootDeltaCapable,
-		ExpectedSyncRootIdentity: cloneChildRootIdentity(mount.expectedChildRootIdentity()),
-		EnableWebsocket:          mount.enableWebsocket,
+		MountID:                mount.mountID.String(),
+		DBPath:                 mount.statePath,
+		SyncRoot:               mount.syncRoot,
+		DataDir:                dataDir,
+		DriveID:                mount.remoteDriveID,
+		DriveType:              mount.driveType,
+		AccountEmail:           mount.accountEmail,
+		RemoteRootItemID:       mount.remoteRootItemID,
+		RemoteRootDeltaCapable: mount.remoteRootDeltaCapable,
+		ExpectedSyncRootIdentity: cloneShortcutChildEngineSpec(syncengine.ShortcutChildEngineSpec{
+			LocalRootIdentity: mount.expectedChildRootIdentity(),
+		}).LocalRootIdentity,
+		EnableWebsocket: mount.enableWebsocket,
 		LocalRules: syncengine.LocalObservationRules{
 			RejectSharePointRootForms: mount.rejectSharePointRootForms,
 		},
-		ShortcutNamespaceID:     mount.mountID.String(),
-		ShortcutChildRunnerSink: mount.parentRunnerPublicationSink,
-		TransferWorkers:         mount.transferWorkers,
-		CheckWorkers:            mount.checkWorkers,
-		MinFreeSpace:            mount.minFreeSpace,
+		ShortcutNamespaceID:      mount.mountID.String(),
+		ShortcutChildProcessSink: mount.parentChildProcessSink,
+		TransferWorkers:          mount.transferWorkers,
+		CheckWorkers:             mount.checkWorkers,
+		MinFreeSpace:             mount.minFreeSpace,
 	}, nil
 }

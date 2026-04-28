@@ -79,7 +79,7 @@ func TestBad(t *testing.T) {
 	err := RunShortcutArchitectureChecks(repoRoot)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "multisync tests must build runner publications")
+	assert.Contains(t, err.Error(), "multisync tests must build child process snapshots")
 }
 
 func TestRunShortcutArchitectureChecks_FailsOnCLIStatusRawShortcutRootFields(t *testing.T) {
