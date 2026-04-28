@@ -21,7 +21,7 @@ func (o *Orchestrator) buildRunnerDecisionSet(
 		return nil, err
 	}
 
-	parentSnapshots := o.latestParentChildProcessSnapshotsFor(parents)
+	parentSnapshots := o.latestParentChildWorkSnapshotsFor(parents)
 	decisions, err := buildRunnerDecisionsForParents(parents, parentSnapshots, o.cfg.DataDir, o.logger)
 	if err != nil {
 		return nil, err
@@ -40,7 +40,7 @@ func (o *Orchestrator) buildRunnerDecisionsFromParentSnapshots(
 	if err != nil {
 		return nil, err
 	}
-	parentSnapshots := o.latestParentChildProcessSnapshotsFor(parents)
+	parentSnapshots := o.latestParentChildWorkSnapshotsFor(parents)
 	decisions, err := buildRunnerDecisionsForParents(parents, parentSnapshots, o.cfg.DataDir, o.logger)
 	if err != nil {
 		return nil, err
@@ -56,8 +56,8 @@ func (o *Orchestrator) buildRunnerDecisionsForParent(parent *mountSpec) (*runner
 		return nil, fmt.Errorf("building parent child runner decisions: parent mount is required")
 	}
 	parentCopy := cloneMountSpec(parent)
-	parentSnapshots := map[mountID]syncengine.ShortcutChildProcessSnapshot{
-		parentCopy.mountID: o.latestParentChildProcessSnapshotFor(parentCopy.mountID),
+	parentSnapshots := map[mountID]syncengine.ShortcutChildWorkSnapshot{
+		parentCopy.mountID: o.latestParentChildWorkSnapshotFor(parentCopy.mountID),
 	}
 	return buildRunnerDecisionsForParents([]*mountSpec{parentCopy}, parentSnapshots, o.cfg.DataDir, o.logger)
 }

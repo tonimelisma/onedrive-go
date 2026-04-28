@@ -66,7 +66,7 @@ func (c *oneShotChildRuns) registerParents(work []indexedMountWork) {
 		parentID := item.work.mount.mountID
 		// One-shot children must come from the live parent run, not from
 		// an old snapshot cached before this parent started.
-		c.orchestrator.forgetParentChildProcessSnapshot(parentID)
+		c.orchestrator.forgetParentChildWorkSnapshot(parentID)
 		if !shortcutChildAckHandleIsZero(item.work.parentAck) {
 			c.parentAckers[parentID] = item.work.parentAck
 		}
@@ -105,7 +105,7 @@ func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID 
 		c.mu.Unlock()
 		return
 	}
-	if !c.orchestrator.parentChildProcessSnapshotHasWork(parentID) {
+	if !c.orchestrator.parentChildWorkSnapshotHasWork(parentID) {
 		c.mu.Unlock()
 		return
 	}

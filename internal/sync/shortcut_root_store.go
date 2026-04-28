@@ -72,19 +72,19 @@ func (m *SyncStore) acknowledgeShortcutChildArtifactsPurged(
 	return true, nil
 }
 
-func (m *SyncStore) ShortcutChildProcessSnapshot(
+func (m *SyncStore) ShortcutChildWorkSnapshot(
 	ctx context.Context,
 	namespaceID string,
 	parentSyncRoot string,
-) (ShortcutChildProcessSnapshot, error) {
+) (ShortcutChildWorkSnapshot, error) {
 	if m == nil {
-		return ShortcutChildProcessSnapshot{NamespaceID: namespaceID}, nil
+		return ShortcutChildWorkSnapshot{NamespaceID: namespaceID}, nil
 	}
 	records, err := m.listShortcutRoots(ctx)
 	if err != nil {
-		return ShortcutChildProcessSnapshot{}, err
+		return ShortcutChildWorkSnapshot{}, err
 	}
-	return shortcutChildProcessSnapshotFromRootsWithParentRoot(namespaceID, parentSyncRoot, records), nil
+	return shortcutChildWorkSnapshotFromRootsWithParentRoot(namespaceID, parentSyncRoot, records), nil
 }
 
 // listShortcutRoots returns parent-engine-owned shortcut root state.

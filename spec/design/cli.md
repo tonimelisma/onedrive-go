@@ -67,7 +67,7 @@ sync-health command.
 
 - account identity comes from the validated config+catalog snapshot
 - runtime mount identity comes from configured standalone drives plus
-  parent-declared shortcut child process commands
+  parent-declared shortcut child work commands
 - sync-state snapshots come from store-owned raw authority reads
 - the CLI renders status conditions from the sync-owned stored-condition
   projection, using the sync-owned `ConditionKey` taxonomy and ordering helpers

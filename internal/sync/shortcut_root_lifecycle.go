@@ -1,3 +1,4 @@
+//nolint:gocritic // Lifecycle shell carries planner records by value at observe/execute boundaries.
 package sync
 
 import (
@@ -98,7 +99,6 @@ func (e *Engine) reconcileShortcutRootLocalStateRecord(
 	return step, nil
 }
 
-//nolint:gocritic // ShortcutRootRecord is treated as a value in the planner-style local transition.
 func (e *Engine) reconcileShortcutRootRecord(
 	ctx context.Context,
 	record ShortcutRootRecord,
@@ -139,7 +139,6 @@ func (e *Engine) reconcileShortcutRootRecord(
 	return e.reconcileMissingMaterializedShortcutRoot(ctx, record, relativePath, localRows)
 }
 
-//nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
 func (e *Engine) reconcileRetiringShortcutRootLocalState(
 	record ShortcutRootRecord,
 ) (ShortcutRootRecord, bool, bool, error) {
@@ -178,7 +177,6 @@ func (e *Engine) observeShortcutRootLocalState(record *ShortcutRootRecord) short
 	return observation
 }
 
-//nolint:gocritic // ShortcutRootRecord is treated as a value in the planner-style local transition.
 func (e *Engine) materializeShortcutRoot(
 	record ShortcutRootRecord,
 	relativePath string,
@@ -197,7 +195,6 @@ func (e *Engine) materializeShortcutRoot(
 	return shortcutRootLocalPlanResult(&plan)
 }
 
-//nolint:gocritic // ShortcutRootRecord is treated as a value in the planner-style local transition.
 func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 	ctx context.Context,
 	record ShortcutRootRecord,
@@ -205,10 +202,19 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 	localRows []LocalStateRow,
 ) (ShortcutRootRecord, bool, bool, error) {
 	candidates, candidateErr := e.shortcutRootIdentityCandidates(relativePath, *record.LocalRootIdentity, localRows)
-	if candidateErr != nil {
-		return planShortcutRootUnavailable(record, candidateErr.Error()), true, true, nil
-	}
-	plan := planMissingMaterializedShortcutRoot(record, relativePath, candidates)
+	plan := planMissingMaterializedShortcutRootObservation(record, shortcutRootLocalObservation{
+		RelativePath: relativePath,
+		Candidates:   candidates,
+		CandidateErr: candidateErr,
+	})
+	return e.executeMissingMaterializedShortcutRootPlan(ctx, record, plan)
+}
+
+func (e *Engine) executeMissingMaterializedShortcutRootPlan(
+	ctx context.Context,
+	record ShortcutRootRecord,
+	plan shortcutRootLocalPlan,
+) (ShortcutRootRecord, bool, bool, error) {
 	switch plan.Action {
 	case shortcutRootMissingAliasMoveProjection:
 		return e.moveRemoteRenamedShortcutProjection(record, plan.FromRelativePath, plan.ToRelativePath)
@@ -393,7 +399,6 @@ func previousProtectedProjectionCandidate(record *ShortcutRootRecord, candidates
 	return "", false
 }
 
-//nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
 func (e *Engine) moveRemoteRenamedShortcutProjection(
 	record ShortcutRootRecord,
 	fromRelativePath string,
@@ -593,7 +598,6 @@ func (e *Engine) finalizeShortcutRootReleaseByBinding(ctx context.Context, bindi
 	return nil
 }
 
-//nolint:gocritic // ShortcutRootRecord is a value-shaped lifecycle plan output.
 func (e *Engine) finalizeShortcutRootReleaseRecord(
 	record ShortcutRootRecord,
 ) ([]ShortcutRootRecord, bool, error) {

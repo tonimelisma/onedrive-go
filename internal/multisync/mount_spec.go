@@ -48,27 +48,24 @@ type StandaloneMountSelection struct {
 
 // mountSpec is the control plane's runtime unit.
 type mountSpec struct {
-	mountID                   mountID
-	projectionKind            MountProjectionKind
-	selectionIndex            int
-	canonicalID               driveid.CanonicalID
-	driveType                 string
-	rejectSharePointRootForms bool
-	displayName               string
-	syncRoot                  string
-	statePath                 string
-	remoteDriveID             driveid.ID
-	remoteRootItemID          string
-	tokenOwnerCanonical       driveid.CanonicalID
-	accountEmail              string
-	paused                    bool
-	enableWebsocket           bool
-	remoteRootDeltaCapable    bool
-	transferWorkers           int
-	checkWorkers              int
-	minFreeSpace              int64
-	child                     *childMountRuntime
-	parentChildProcessSink    syncengine.ShortcutChildProcessSink
+	mountID                mountID
+	projectionKind         MountProjectionKind
+	selectionIndex         int
+	displayName            string
+	syncRoot               string
+	statePath              string
+	remoteDriveID          driveid.ID
+	remoteRootItemID       string
+	tokenOwnerCanonical    driveid.CanonicalID
+	accountEmail           string
+	paused                 bool
+	enableWebsocket        bool
+	remoteRootDeltaCapable bool
+	transferWorkers        int
+	checkWorkers           int
+	minFreeSpace           int64
+	parent                 *parentMountRuntime
+	child                  *childMountRuntime
 }
 
 type parentMountSpec struct {
@@ -120,6 +117,13 @@ type childMountRuntime struct {
 	engine        syncengine.ShortcutChildEngineSpec
 }
 
+type parentMountRuntime struct {
+	canonicalID               driveid.CanonicalID
+	driveType                 string
+	rejectSharePointRootForms bool
+	childWorkSink             syncengine.ShortcutChildWorkSink
+}
+
 type runnerDecisionSet struct {
 	Mounts          []*mountSpec
 	Skipped         []MountStartupResult
@@ -155,7 +159,7 @@ func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, e
 
 func buildRunnerDecisions(
 	standaloneMounts []StandaloneMountConfig,
-	snapshots map[mountID]syncengine.ShortcutChildProcessSnapshot,
+	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
 	dataDir string,
 ) (*runnerDecisionSet, error) {
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
@@ -167,7 +171,7 @@ func buildRunnerDecisions(
 
 func buildRunnerDecisionsForParents(
 	parents []*mountSpec,
-	snapshots map[mountID]syncengine.ShortcutChildProcessSnapshot,
+	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
 	dataDir string,
 	logger *slog.Logger,
 ) (*runnerDecisionSet, error) {
@@ -205,7 +209,7 @@ func indexStandaloneMounts(parents []*mountSpec) map[mountID]*mountSpec {
 
 func buildChildMountSpecs(
 	parentByID map[mountID]*mountSpec,
-	snapshots map[mountID]syncengine.ShortcutChildProcessSnapshot,
+	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
 	dataDir string,
 ) (map[mountID][]*mountSpec, []MountStartupResult, error) {
 	childrenByParent := make(map[mountID][]*mountSpec)
@@ -243,7 +247,7 @@ type parentChildRunCommand struct {
 }
 
 func sortedChildRunCommands(
-	snapshots map[mountID]syncengine.ShortcutChildProcessSnapshot,
+	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
 ) []parentChildRunCommand {
 	if len(snapshots) == 0 {
 		return nil
@@ -369,25 +373,27 @@ func newParentMountSpec(cfg *StandaloneMountConfig) (parentMountSpec, error) {
 
 func (spec *parentMountSpec) runtimeMountSpec() *mountSpec {
 	return &mountSpec{
-		mountID:                   spec.mountID,
-		projectionKind:            MountProjectionStandalone,
-		selectionIndex:            spec.selectionIndex,
-		canonicalID:               spec.canonicalID,
-		driveType:                 spec.driveType,
-		rejectSharePointRootForms: spec.rejectSharePointRootForms,
-		displayName:               spec.displayName,
-		syncRoot:                  spec.syncRoot,
-		statePath:                 spec.statePath,
-		remoteDriveID:             spec.remoteDriveID,
-		remoteRootItemID:          spec.remoteRootItemID,
-		tokenOwnerCanonical:       spec.tokenOwnerCanonical,
-		accountEmail:              spec.accountEmail,
-		paused:                    spec.paused,
-		enableWebsocket:           spec.enableWebsocket,
-		remoteRootDeltaCapable:    spec.remoteRootDeltaCapable,
-		transferWorkers:           spec.transferWorkers,
-		checkWorkers:              spec.checkWorkers,
-		minFreeSpace:              spec.minFreeSpace,
+		mountID:                spec.mountID,
+		projectionKind:         MountProjectionStandalone,
+		selectionIndex:         spec.selectionIndex,
+		displayName:            spec.displayName,
+		syncRoot:               spec.syncRoot,
+		statePath:              spec.statePath,
+		remoteDriveID:          spec.remoteDriveID,
+		remoteRootItemID:       spec.remoteRootItemID,
+		tokenOwnerCanonical:    spec.tokenOwnerCanonical,
+		accountEmail:           spec.accountEmail,
+		paused:                 spec.paused,
+		enableWebsocket:        spec.enableWebsocket,
+		remoteRootDeltaCapable: spec.remoteRootDeltaCapable,
+		transferWorkers:        spec.transferWorkers,
+		checkWorkers:           spec.checkWorkers,
+		minFreeSpace:           spec.minFreeSpace,
+		parent: &parentMountRuntime{
+			canonicalID:               spec.canonicalID,
+			driveType:                 spec.driveType,
+			rejectSharePointRootForms: spec.rejectSharePointRootForms,
+		},
 	}
 }
 
@@ -477,7 +483,6 @@ func (spec *childMountSpec) runtimeMountSpec() *mountSpec {
 	return &mountSpec{
 		mountID:                spec.mountID,
 		projectionKind:         MountProjectionChild,
-		canonicalID:            driveid.CanonicalID{},
 		displayName:            spec.displayName,
 		syncRoot:               spec.syncRoot,
 		statePath:              spec.statePath,
@@ -509,8 +514,33 @@ func (m *mountSpec) identity() MountIdentity {
 		MountID:        m.mountID.String(),
 		ParentMountID:  m.childParentMountID().String(),
 		ProjectionKind: m.projectionKind,
-		CanonicalID:    m.canonicalID,
+		CanonicalID:    m.parentCanonicalID(),
 	}
+}
+
+func (m *mountSpec) parentCanonicalID() driveid.CanonicalID {
+	if m == nil || m.parent == nil {
+		return driveid.CanonicalID{}
+	}
+	return m.parent.canonicalID
+}
+
+func (m *mountSpec) parentDriveType() string {
+	if m == nil || m.parent == nil {
+		return ""
+	}
+	return m.parent.driveType
+}
+
+func (m *mountSpec) rejectSharePointRootForms() bool {
+	return m != nil && m.parent != nil && m.parent.rejectSharePointRootForms
+}
+
+func (m *mountSpec) shortcutChildWorkSink() syncengine.ShortcutChildWorkSink {
+	if m == nil || m.parent == nil {
+		return nil
+	}
+	return m.parent.childWorkSink
 }
 
 func (m *mountSpec) childParentMountID() mountID {

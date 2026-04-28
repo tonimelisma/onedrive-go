@@ -6,31 +6,34 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-type parentChildProcessNotify func(context.Context, mountID) error
+type parentChildWorkNotify func(context.Context, mountID) error
 
-func (o *Orchestrator) attachParentChildProcessSink(
+func (o *Orchestrator) attachParentChildWorkSink(
 	mount *mountSpec,
 	watchEvents chan<- watchRunnerEvent,
-	notify parentChildProcessNotify,
+	notify parentChildWorkNotify,
 ) {
 	if mount == nil {
 		return
 	}
-	mount.parentChildProcessSink = o.parentChildProcessSinkForMount(mount, watchEvents, notify)
+	if mount.parent == nil {
+		return
+	}
+	mount.parent.childWorkSink = o.parentChildWorkSinkForMount(mount, watchEvents, notify)
 }
 
-func (o *Orchestrator) parentChildProcessSinkForMount(
+func (o *Orchestrator) parentChildWorkSinkForMount(
 	mount *mountSpec,
 	watchEvents chan<- watchRunnerEvent,
-	notify parentChildProcessNotify,
-) syncengine.ShortcutChildProcessSink {
+	notify parentChildWorkNotify,
+) syncengine.ShortcutChildWorkSink {
 	if o == nil || mount == nil || mount.projectionKind != MountProjectionStandalone {
 		return nil
 	}
 
 	parent := *mount
-	return func(ctx context.Context, snapshot syncengine.ShortcutChildProcessSnapshot) error {
-		changed := o.receiveParentChildProcessSnapshotFromParent(&parent, snapshot)
+	return func(ctx context.Context, snapshot syncengine.ShortcutChildWorkSnapshot) error {
+		changed := o.receiveParentChildWorkSnapshotFromParent(&parent, snapshot)
 		if changed && watchEvents != nil {
 			select {
 			case watchEvents <- watchRunnerEvent{mountID: parent.mountID, parentSnapshotChanged: true}:
@@ -47,9 +50,9 @@ func (o *Orchestrator) parentChildProcessSinkForMount(
 	}
 }
 
-func (o *Orchestrator) receiveParentChildProcessSnapshotFromParent(
+func (o *Orchestrator) receiveParentChildWorkSnapshotFromParent(
 	parent *mountSpec,
-	snapshot syncengine.ShortcutChildProcessSnapshot,
+	snapshot syncengine.ShortcutChildWorkSnapshot,
 ) bool {
 	if parent == nil {
 		return false
@@ -59,7 +62,7 @@ func (o *Orchestrator) receiveParentChildProcessSnapshotFromParent(
 	}
 	if snapshot.NamespaceID != parent.mountID.String() {
 		if o != nil && o.logger != nil {
-			o.logger.Warn("ignoring parent child process snapshot from mismatched namespace",
+			o.logger.Warn("ignoring parent child work snapshot from mismatched namespace",
 				"namespace_id", snapshot.NamespaceID,
 				"parent_id", parent.mountID.String(),
 			)
@@ -67,9 +70,9 @@ func (o *Orchestrator) receiveParentChildProcessSnapshotFromParent(
 		return false
 	}
 
-	changed := o.receiveParentChildProcessSnapshot(parent.mountID, snapshot)
+	changed := o.receiveParentChildWorkSnapshot(parent.mountID, snapshot)
 	if changed && o != nil && o.logger != nil {
-		o.logger.Info("received parent child process snapshot",
+		o.logger.Info("received parent child work snapshot",
 			"namespace_id", parent.mountID.String(),
 			"children", len(snapshot.RunCommands),
 		)

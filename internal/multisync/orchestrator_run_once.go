@@ -162,7 +162,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 	mounts []*mountSpec,
 	initialStartup []MountStartupResult,
 	opts syncengine.RunOptions,
-	notify parentChildProcessNotify,
+	notify parentChildWorkNotify,
 ) ([]indexedMountWork, StartupSelectionSummary, []*MountReport) {
 	work := make([]indexedMountWork, 0, len(mounts))
 	reports := make([]*MountReport, 0, len(mounts))
@@ -180,7 +180,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 			continue
 		}
 
-		o.attachParentChildProcessSink(mount, nil, notify)
+		o.attachParentChildWorkSink(mount, nil, notify)
 
 		session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 		if err != nil {
@@ -378,7 +378,7 @@ func acknowledgeSuccessfulFinalDrains(
 		if err != nil {
 			return nil, fmt.Errorf("acknowledging final drain for child mount %s: %w", result.MountID, err)
 		}
-		publishedCleanups, cleanupErr := shortcutChildArtifactCleanups(map[mountID]syncengine.ShortcutChildProcessSnapshot{
+		publishedCleanups, cleanupErr := shortcutChildArtifactCleanups(map[mountID]syncengine.ShortcutChildWorkSnapshot{
 			parentID: snapshot,
 		})
 		if cleanupErr != nil {

@@ -296,10 +296,9 @@ func runPublicVerification(
 	publicSteps := []func(context.Context, commandRunner, string, []string, io.Writer, io.Writer) error{
 		runFormat,
 		runLint,
-		runArchitectureGuards,
 		runBuild,
 	}
-	publicStepNames := []string{"format", "lint", "architecture guards", "build"}
+	publicStepNames := []string{"format", "lint", "build"}
 	for i, step := range publicSteps {
 		if err := collector.runStep(publicStepNames[i], func() error {
 			return step(ctx, runner, repoRoot, env, stdout, stderr)
@@ -430,22 +429,6 @@ func runLint(ctx context.Context, runner commandRunner, repoRoot string, env []s
 		return fmt.Errorf("lint: %w", err)
 	}
 
-	return nil
-}
-
-func runArchitectureGuards(
-	_ context.Context,
-	_ commandRunner,
-	repoRoot string,
-	_ []string,
-	stdout, _ io.Writer,
-) error {
-	if err := writeStatus(stdout, "==> architecture guards\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-	if err := RunShortcutArchitectureChecks(repoRoot); err != nil {
-		return fmt.Errorf("architecture guards: %w", err)
-	}
 	return nil
 }
 

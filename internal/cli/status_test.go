@@ -125,9 +125,44 @@ func testShortcutStatusChildFromRecord(
 	parentCID driveid.CanonicalID,
 	record *syncengine.ShortcutRootRecord,
 ) childMountStatusInput {
+	metadata := syncengine.ShortcutRootStatus(record.State)
+	parentSyncRoot := filepath.Clean("/tmp/sync-root")
+	statusView := syncengine.ShortcutRootStatusView{
+		BindingItemID:     record.BindingItemID,
+		MountID:           config.ChildMountID(parentCID.String(), record.BindingItemID),
+		RelativeLocalPath: record.RelativeLocalPath,
+		LocalAlias:        record.LocalAlias,
+		DisplayName:       record.LocalAlias,
+		DisplayLocalRoot:  filepath.Join(parentSyncRoot, filepath.FromSlash(record.RelativeLocalPath)),
+		RemoteDriveID:     record.RemoteDriveID.String(),
+		RemoteItemID:      record.RemoteItemID,
+		RemoteIsFolder:    record.RemoteIsFolder,
+		Metadata:          metadata,
+		StateDetail:       metadata.Issue,
+	}
+	if record.BlockedDetail != "" {
+		statusView.StateDetail = record.BlockedDetail
+	}
+	if record.Waiting != nil {
+		statusView.WaitingReplacementPath = record.Waiting.RelativeLocalPath
+	}
+	if metadata.ProtectsPath {
+		statusView.ProtectedCurrentPath = record.RelativeLocalPath
+		statusView.ProtectedCurrentLocalRoot = filepath.Join(parentSyncRoot, filepath.FromSlash(record.RelativeLocalPath))
+		for _, protectedPath := range record.ProtectedPaths {
+			if protectedPath == "" || protectedPath == record.RelativeLocalPath {
+				continue
+			}
+			statusView.ProtectedReservedPaths = append(statusView.ProtectedReservedPaths, protectedPath)
+			statusView.ProtectedReservedLocalRoots = append(
+				statusView.ProtectedReservedLocalRoots,
+				filepath.Join(parentSyncRoot, filepath.FromSlash(protectedPath)),
+			)
+		}
+	}
 	return childMountStatusInput{
 		ParentID: parentCID,
-		Root:     syncengine.ShortcutRootStatusViewFromRecord(record),
+		Root:     statusView,
 	}
 }
 

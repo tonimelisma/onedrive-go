@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
@@ -411,7 +410,7 @@ func shortcutChildRecords(
 
 	parentID := driveid.MustCanonicalID(fixture.ParentDrive)
 	statePath := e2eDriveStatePath(env, parentID)
-	roots, err := syncengine.ReadShortcutRootStatusSnapshot(t.Context(), statePath, nil)
+	roots, err := syncengine.ReadShortcutRootStatusSnapshot(t.Context(), statePath, parentID.String(), "", nil)
 	require.NoError(t, err)
 	records := make([]shortcutChildE2ERecord, 0, len(roots))
 	for i := range roots {
@@ -422,7 +421,7 @@ func shortcutChildRecords(
 		}
 		stateReason := root.Metadata.StateReason
 		records = append(records, shortcutChildE2ERecord{
-			MountID:           config.ChildMountID(parentID.String(), root.BindingItemID),
+			MountID:           root.MountID,
 			NamespaceID:       parentID.String(),
 			BindingItemID:     root.BindingItemID,
 			RelativeLocalPath: root.RelativeLocalPath,

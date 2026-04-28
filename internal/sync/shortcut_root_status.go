@@ -1,5 +1,12 @@
 package sync
 
+import (
+	"path"
+	"path/filepath"
+
+	"github.com/tonimelisma/onedrive-go/internal/config"
+)
+
 type ShortcutRootIssueClass string
 
 const (
@@ -44,29 +51,44 @@ type ShortcutRootStatusMetadata struct {
 }
 
 type ShortcutRootStatusView struct {
-	BindingItemID          string
-	RelativeLocalPath      string
-	LocalAlias             string
-	RemoteDriveID          string
-	RemoteItemID           string
-	RemoteIsFolder         bool
-	Metadata               ShortcutRootStatusMetadata
-	StateDetail            string
-	ProtectedCurrentPath   string
-	ProtectedReservedPaths []string
-	WaitingReplacementPath string
+	BindingItemID               string
+	MountID                     string
+	RelativeLocalPath           string
+	LocalAlias                  string
+	DisplayName                 string
+	DisplayLocalRoot            string
+	RemoteDriveID               string
+	RemoteItemID                string
+	RemoteIsFolder              bool
+	Metadata                    ShortcutRootStatusMetadata
+	StateDetail                 string
+	ProtectedCurrentPath        string
+	ProtectedCurrentLocalRoot   string
+	ProtectedReservedPaths      []string
+	ProtectedReservedLocalRoots []string
+	WaitingReplacementPath      string
 }
 
-func ShortcutRootStatusViewFromRecord(record *ShortcutRootRecord) ShortcutRootStatusView {
+func shortcutRootStatusViewFromRecord(
+	record *ShortcutRootRecord,
+	namespaceID string,
+	parentSyncRoot string,
+) ShortcutRootStatusView {
 	if record == nil {
 		return ShortcutRootStatusView{}
 	}
 	normalized := normalizeShortcutRootRecord(*record)
+	if namespaceID == "" {
+		namespaceID = normalized.NamespaceID
+	}
 	metadata := ShortcutRootStatus(normalized.State)
 	view := ShortcutRootStatusView{
 		BindingItemID:     normalized.BindingItemID,
+		MountID:           config.ChildMountID(namespaceID, normalized.BindingItemID),
 		RelativeLocalPath: normalized.RelativeLocalPath,
 		LocalAlias:        normalized.LocalAlias,
+		DisplayName:       shortcutRootStatusDisplayName(normalized.LocalAlias, normalized.RelativeLocalPath),
+		DisplayLocalRoot:  shortcutRootStatusLocalRoot(parentSyncRoot, normalized.RelativeLocalPath),
 		RemoteDriveID:     normalized.RemoteDriveID.String(),
 		RemoteItemID:      normalized.RemoteItemID,
 		RemoteIsFolder:    normalized.RemoteIsFolder,
@@ -81,20 +103,54 @@ func ShortcutRootStatusViewFromRecord(record *ShortcutRootRecord) ShortcutRootSt
 	}
 	if metadata.ProtectsPath {
 		view.ProtectedCurrentPath = normalized.RelativeLocalPath
+		view.ProtectedCurrentLocalRoot = shortcutRootStatusLocalRoot(parentSyncRoot, normalized.RelativeLocalPath)
 		view.ProtectedReservedPaths = shortcutRootStatusReservedPaths(
 			normalized.RelativeLocalPath,
 			normalized.ProtectedPaths,
 		)
+		view.ProtectedReservedLocalRoots = shortcutRootStatusLocalRoots(parentSyncRoot, view.ProtectedReservedPaths)
 	}
 	return view
 }
 
-func ShortcutRootStatusViewsFromRecords(records []ShortcutRootRecord) []ShortcutRootStatusView {
+func shortcutRootStatusViewsFromRecords(
+	records []ShortcutRootRecord,
+	namespaceID string,
+	parentSyncRoot string,
+) []ShortcutRootStatusView {
 	views := make([]ShortcutRootStatusView, 0, len(records))
 	for i := range records {
-		views = append(views, ShortcutRootStatusViewFromRecord(&records[i]))
+		views = append(views, shortcutRootStatusViewFromRecord(&records[i], namespaceID, parentSyncRoot))
 	}
 	return views
+}
+
+func shortcutRootStatusDisplayName(localAlias string, relativeLocalPath string) string {
+	if localAlias != "" {
+		return localAlias
+	}
+	return path.Base(relativeLocalPath)
+}
+
+func shortcutRootStatusLocalRoot(parentSyncRoot string, relativeLocalPath string) string {
+	if parentSyncRoot == "" || relativeLocalPath == "" {
+		return ""
+	}
+	return filepath.Join(parentSyncRoot, filepath.FromSlash(relativeLocalPath))
+}
+
+func shortcutRootStatusLocalRoots(parentSyncRoot string, relativePaths []string) []string {
+	if parentSyncRoot == "" || len(relativePaths) == 0 {
+		return nil
+	}
+	roots := make([]string, 0, len(relativePaths))
+	for _, relativePath := range relativePaths {
+		root := shortcutRootStatusLocalRoot(parentSyncRoot, relativePath)
+		if root != "" {
+			roots = append(roots, root)
+		}
+	}
+	return roots
 }
 
 func shortcutRootStatusReservedPaths(current string, protected []string) []string {

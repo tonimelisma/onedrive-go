@@ -107,7 +107,7 @@ type currentObservation struct {
 	inputs                   currentInputs
 	observedPaths            int
 	pendingRemoteObservation *remoteObservationBatch
-	childPublication         ShortcutChildProcessSnapshot
+	childPublication         ShortcutChildWorkSnapshot
 }
 
 type localCurrentRefreshStep string
@@ -156,14 +156,14 @@ type builtCurrentPlan struct {
 	Plan                     *ActionPlan
 	Report                   *Report
 	PendingRemoteObservation *remoteObservationBatch
-	ChildPublication         ShortcutChildProcessSnapshot
+	ChildPublication         ShortcutChildWorkSnapshot
 }
 
 type runtimePlan struct {
 	Plan                     *ActionPlan
 	Report                   *Report
 	PendingRemoteObservation *remoteObservationBatch
-	ChildPublication         ShortcutChildProcessSnapshot
+	ChildPublication         ShortcutChildWorkSnapshot
 	RetryRows                []RetryWorkRow
 	BlockScopes              []*BlockScope
 }
@@ -264,10 +264,10 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 	if err != nil {
 		return fmt.Errorf("sync: read parent shortcut root state: %w", err)
 	}
-	if flow.engine.shortcutChildProcessSink == nil {
+	if flow.engine.shortcutChildWorkSink == nil {
 		return nil
 	}
-	return flow.engine.shortcutChildProcessSink(ctx, shortcutChildProcessSnapshotFromRootsWithParentRoot(
+	return flow.engine.shortcutChildWorkSink(ctx, shortcutChildWorkSnapshotFromRootsWithParentRoot(
 		topology.NamespaceID,
 		flow.engine.syncRoot,
 		parentRoots,
@@ -459,16 +459,16 @@ func (flow *engineFlow) loadCommittedCurrentObservation(
 
 func (flow *engineFlow) currentShortcutChildPublication(
 	ctx context.Context,
-) (ShortcutChildProcessSnapshot, error) {
+) (ShortcutChildWorkSnapshot, error) {
 	if flow == nil || flow.engine == nil || flow.engine.baseline == nil ||
 		flow.engine.shortcutNamespaceID == "" {
-		return ShortcutChildProcessSnapshot{}, nil
+		return ShortcutChildWorkSnapshot{}, nil
 	}
 	roots, err := flow.engine.baseline.listShortcutRoots(ctx)
 	if err != nil {
-		return ShortcutChildProcessSnapshot{}, fmt.Errorf("sync: read current shortcut child publication: %w", err)
+		return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: read current shortcut child publication: %w", err)
 	}
-	return shortcutChildProcessSnapshotFromRootsWithParentRoot(
+	return shortcutChildWorkSnapshotFromRootsWithParentRoot(
 		flow.engine.shortcutNamespaceID,
 		flow.engine.syncRoot,
 		roots,

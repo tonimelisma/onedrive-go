@@ -6,12 +6,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
-func shortcutChildProcessSnapshotFromRootsWithParentRoot(
+func shortcutChildWorkSnapshotFromRootsWithParentRoot(
 	namespaceID string,
 	parentSyncRoot string,
 	roots []ShortcutRootRecord,
-) ShortcutChildProcessSnapshot {
-	snapshot := ShortcutChildProcessSnapshot{
+) ShortcutChildWorkSnapshot {
+	snapshot := ShortcutChildWorkSnapshot{
 		NamespaceID: namespaceID,
 		RunCommands: make([]ShortcutChildRunCommand, 0, len(roots)),
 	}
@@ -23,11 +23,11 @@ func shortcutChildProcessSnapshotFromRootsWithParentRoot(
 		metadata, _ := shortcutRootLifecycleMetadataFor(root.State)
 		if metadata.publishesCleanup {
 			childMountID := config.ChildMountID(namespaceID, root.BindingItemID)
-			snapshot.Cleanups = append(snapshot.Cleanups, ShortcutChildCleanupCommand{
+			snapshot.CleanupCommands = append(snapshot.CleanupCommands, ShortcutChildCleanupCommand{
 				ChildMountID: childMountID,
 				LocalRoot:    shortcutChildCleanupLocalRoot(parentSyncRoot, root.RelativeLocalPath),
 				Reason:       ShortcutChildArtifactCleanupParentRemoved,
-				AckRef:       NewShortcutChildAckRef(root.BindingItemID),
+				AckRef:       newShortcutChildAckRef(root.BindingItemID),
 			})
 			continue
 		}
@@ -44,7 +44,7 @@ func shortcutChildProcessSnapshotFromRootsWithParentRoot(
 				LocalRootIdentity: shortcutRootIdentityFromFileIdentity(root.LocalRootIdentity),
 			},
 			Mode:   metadata.runMode,
-			AckRef: NewShortcutChildAckRef(root.BindingItemID),
+			AckRef: newShortcutChildAckRef(root.BindingItemID),
 		}
 		snapshot.RunCommands = append(snapshot.RunCommands, child)
 	}

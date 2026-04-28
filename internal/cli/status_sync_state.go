@@ -34,12 +34,12 @@ func loadShortcutRootStatusSnapshots(
 	if cfg == nil {
 		return roots
 	}
-	for cid := range cfg.Drives {
+	for cid, drive := range cfg.Drives {
 		statePath := config.DriveStatePath(cid)
 		if !managedPathExists(statePath) {
 			continue
 		}
-		records, err := syncengine.ReadShortcutRootStatusSnapshot(ctx, statePath, logger)
+		records, err := syncengine.ReadShortcutRootStatusSnapshot(ctx, statePath, cid.String(), drive.SyncDir, logger)
 		if err != nil {
 			if logger != nil {
 				logger.Debug("skip shortcut root status snapshot",

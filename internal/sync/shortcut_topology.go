@@ -49,7 +49,7 @@ type shortcutBindingUnavailable struct {
 	Reason            string
 }
 
-type ShortcutChildProcessSink func(context.Context, ShortcutChildProcessSnapshot) error
+type ShortcutChildWorkSink func(context.Context, ShortcutChildWorkSnapshot) error
 
 type ShortcutChildRunMode string
 
@@ -58,14 +58,14 @@ const (
 	ShortcutChildRunModeFinalDrain ShortcutChildRunMode = "final_drain"
 )
 
-// ShortcutChildProcessSnapshot is the parent engine's process-control output
+// ShortcutChildWorkSnapshot is the parent engine's child-work output
 // to multisync. Raw shortcut observations and parent-visible status facts stay
 // inside internal/sync; multisync sees only child engine commands plus artifact
 // cleanup requests.
-type ShortcutChildProcessSnapshot struct {
-	NamespaceID string
-	RunCommands []ShortcutChildRunCommand
-	Cleanups    []ShortcutChildCleanupCommand
+type ShortcutChildWorkSnapshot struct {
+	NamespaceID     string
+	RunCommands     []ShortcutChildRunCommand
+	CleanupCommands []ShortcutChildCleanupCommand
 }
 
 type ShortcutChildRunCommand struct {
@@ -102,13 +102,13 @@ type ShortcutChildCleanupCommand struct {
 // handle instead of an interface so control-plane code can invoke acknowledgements
 // without owning or re-opening parent shortcut lifecycle state.
 type ShortcutChildAckHandle struct {
-	ackFinalDrain      func(context.Context, ShortcutChildDrainAck) (ShortcutChildProcessSnapshot, error)
-	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildProcessSnapshot, error)
+	ackFinalDrain      func(context.Context, ShortcutChildDrainAck) (ShortcutChildWorkSnapshot, error)
+	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildWorkSnapshot, error)
 }
 
 func newShortcutChildAckHandle(
-	ackFinalDrain func(context.Context, ShortcutChildDrainAck) (ShortcutChildProcessSnapshot, error),
-	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildProcessSnapshot, error),
+	ackFinalDrain func(context.Context, ShortcutChildDrainAck) (ShortcutChildWorkSnapshot, error),
+	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildWorkSnapshot, error),
 ) ShortcutChildAckHandle {
 	return ShortcutChildAckHandle{
 		ackFinalDrain:      ackFinalDrain,
@@ -123,9 +123,9 @@ func (h ShortcutChildAckHandle) IsZero() bool {
 func (h ShortcutChildAckHandle) AcknowledgeChildFinalDrain(
 	ctx context.Context,
 	ack ShortcutChildDrainAck,
-) (ShortcutChildProcessSnapshot, error) {
+) (ShortcutChildWorkSnapshot, error) {
 	if h.ackFinalDrain == nil {
-		return ShortcutChildProcessSnapshot{}, fmt.Errorf("sync: shortcut child final-drain ack requires live parent")
+		return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: shortcut child final-drain ack requires live parent")
 	}
 	return h.ackFinalDrain(ctx, ack)
 }
@@ -133,9 +133,9 @@ func (h ShortcutChildAckHandle) AcknowledgeChildFinalDrain(
 func (h ShortcutChildAckHandle) AcknowledgeChildArtifactsPurged(
 	ctx context.Context,
 	ack ShortcutChildArtifactCleanupAck,
-) (ShortcutChildProcessSnapshot, error) {
+) (ShortcutChildWorkSnapshot, error) {
 	if h.ackArtifactsPurged == nil {
-		return ShortcutChildProcessSnapshot{}, fmt.Errorf("sync: shortcut child artifact cleanup ack requires live parent")
+		return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: shortcut child artifact cleanup ack requires live parent")
 	}
 	return h.ackArtifactsPurged(ctx, ack)
 }
@@ -147,7 +147,7 @@ type ShortcutChildAckRef struct {
 	bindingItemID string
 }
 
-func NewShortcutChildAckRef(bindingItemID string) ShortcutChildAckRef {
+func newShortcutChildAckRef(bindingItemID string) ShortcutChildAckRef {
 	return ShortcutChildAckRef{bindingItemID: bindingItemID}
 }
 
@@ -156,14 +156,15 @@ func (r ShortcutChildAckRef) IsZero() bool {
 }
 
 // ShortcutRootIdentity is the parent-engine-issued local directory identity
-// token for a managed shortcut root. Control-plane code may compare this value,
-// but only sync opens the filesystem and decides whether it still matches.
+// token for a managed shortcut root. Control-plane code carries this value as
+// child engine input, but only sync opens the filesystem and decides whether it
+// still matches.
 type ShortcutRootIdentity struct {
 	Device uint64
 	Inode  uint64
 }
 
-func SameShortcutRootIdentity(a ShortcutRootIdentity, b ShortcutRootIdentity) bool {
+func sameShortcutRootIdentity(a ShortcutRootIdentity, b ShortcutRootIdentity) bool {
 	return a.Device == b.Device && a.Inode == b.Inode
 }
 
@@ -201,20 +202,20 @@ type ShortcutChildArtifactCleanupAck struct {
 	Ref ShortcutChildAckRef
 }
 
-func NormalizeShortcutChildProcessSnapshot(
+func NormalizeShortcutChildWorkSnapshot(
 	namespaceID string,
-	snapshot ShortcutChildProcessSnapshot,
-) ShortcutChildProcessSnapshot {
+	snapshot ShortcutChildWorkSnapshot,
+) ShortcutChildWorkSnapshot {
 	if snapshot.NamespaceID == "" {
 		snapshot.NamespaceID = namespaceID
 	}
 	snapshot.RunCommands = cloneShortcutChildRunCommands(snapshot.RunCommands)
-	snapshot.Cleanups = append([]ShortcutChildCleanupCommand(nil), snapshot.Cleanups...)
+	snapshot.CleanupCommands = append([]ShortcutChildCleanupCommand(nil), snapshot.CleanupCommands...)
 	if len(snapshot.RunCommands) == 0 {
 		snapshot.RunCommands = nil
 	}
-	if len(snapshot.Cleanups) == 0 {
-		snapshot.Cleanups = nil
+	if len(snapshot.CleanupCommands) == 0 {
+		snapshot.CleanupCommands = nil
 	}
 	slices.SortFunc(snapshot.RunCommands, func(a, b ShortcutChildRunCommand) int {
 		if byMount := cmp.Compare(a.ChildMountID, b.ChildMountID); byMount != 0 {
@@ -222,7 +223,7 @@ func NormalizeShortcutChildProcessSnapshot(
 		}
 		return cmp.Compare(a.DisplayName, b.DisplayName)
 	})
-	slices.SortFunc(snapshot.Cleanups, func(a, b ShortcutChildCleanupCommand) int {
+	slices.SortFunc(snapshot.CleanupCommands, func(a, b ShortcutChildCleanupCommand) int {
 		if byMount := cmp.Compare(a.ChildMountID, b.ChildMountID); byMount != 0 {
 			return byMount
 		}
@@ -231,13 +232,13 @@ func NormalizeShortcutChildProcessSnapshot(
 	return snapshot
 }
 
-func ShortcutChildProcessSnapshotsEqual(
-	a ShortcutChildProcessSnapshot,
-	b ShortcutChildProcessSnapshot,
+func ShortcutChildWorkSnapshotsEqual(
+	a ShortcutChildWorkSnapshot,
+	b ShortcutChildWorkSnapshot,
 ) bool {
 	if a.NamespaceID != b.NamespaceID ||
 		len(a.RunCommands) != len(b.RunCommands) ||
-		len(a.Cleanups) != len(b.Cleanups) {
+		len(a.CleanupCommands) != len(b.CleanupCommands) {
 		return false
 	}
 	for i := range a.RunCommands {
@@ -245,8 +246,8 @@ func ShortcutChildProcessSnapshotsEqual(
 			return false
 		}
 	}
-	for i := range a.Cleanups {
-		if a.Cleanups[i] != b.Cleanups[i] {
+	for i := range a.CleanupCommands {
+		if a.CleanupCommands[i] != b.CleanupCommands[i] {
 			return false
 		}
 	}
@@ -306,7 +307,7 @@ func shortcutRootIdentityPointersEqual(a *ShortcutRootIdentity, b *ShortcutRootI
 	case a == nil || b == nil:
 		return false
 	default:
-		return SameShortcutRootIdentity(*a, *b)
+		return sameShortcutRootIdentity(*a, *b)
 	}
 }
 

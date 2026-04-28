@@ -1,3 +1,4 @@
+//nolint:gocritic // Planner helpers pass ShortcutRootRecord by value to keep transition decisions immutable.
 package sync
 
 import (
@@ -150,7 +151,6 @@ func applyShortcutRootSamePathReplacement(
 	return true
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutRootRemoteUpsertForExisting(
 	existing ShortcutRootRecord,
 	next ShortcutRootRecord,
@@ -347,7 +347,6 @@ func shortcutRootParticipatesInDuplicateTargetCheck(record *ShortcutRootRecord) 
 	}
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func upsertShortcutRootRecord(records map[string]ShortcutRootRecord, next ShortcutRootRecord) bool {
 	next = normalizeShortcutRootRecord(next)
 	current, found := records[next.BindingItemID]

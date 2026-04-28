@@ -22,7 +22,7 @@ func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.En
 		SyncRoot:               mount.syncRoot,
 		DataDir:                dataDir,
 		DriveID:                mount.remoteDriveID,
-		DriveType:              mount.driveType,
+		DriveType:              mount.parentDriveType(),
 		AccountEmail:           mount.accountEmail,
 		RemoteRootItemID:       mount.remoteRootItemID,
 		RemoteRootDeltaCapable: mount.remoteRootDeltaCapable,
@@ -31,12 +31,12 @@ func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.En
 		}).LocalRootIdentity,
 		EnableWebsocket: mount.enableWebsocket,
 		LocalRules: syncengine.LocalObservationRules{
-			RejectSharePointRootForms: mount.rejectSharePointRootForms,
+			RejectSharePointRootForms: mount.rejectSharePointRootForms(),
 		},
-		ShortcutNamespaceID:      mount.mountID.String(),
-		ShortcutChildProcessSink: mount.parentChildProcessSink,
-		TransferWorkers:          mount.transferWorkers,
-		CheckWorkers:             mount.checkWorkers,
-		MinFreeSpace:             mount.minFreeSpace,
+		ShortcutNamespaceID:   mount.mountID.String(),
+		ShortcutChildWorkSink: mount.shortcutChildWorkSink(),
+		TransferWorkers:       mount.transferWorkers,
+		CheckWorkers:          mount.checkWorkers,
+		MinFreeSpace:          mount.minFreeSpace,
 	}, nil
 }

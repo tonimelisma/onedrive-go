@@ -1,3 +1,4 @@
+//nolint:gocritic // Planner helpers pass ShortcutRootRecord by value to keep transition decisions immutable.
 package sync
 
 import (
@@ -76,7 +77,6 @@ type shortcutRootAliasMutationResult struct {
 	IdentityErr error
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutRootLocalObservation(
 	record ShortcutRootRecord,
 	observation shortcutRootLocalObservation,
@@ -147,7 +147,6 @@ func planShortcutRootLocalObservation(
 	}
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planRetiringShortcutRootLocalObservation(
 	record ShortcutRootRecord,
 	observation shortcutRootLocalObservation,
@@ -205,7 +204,22 @@ func planRetiringShortcutRootLocalObservation(
 	}
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
+func planMissingMaterializedShortcutRootObservation(
+	record ShortcutRootRecord,
+	observation shortcutRootLocalObservation,
+) shortcutRootLocalPlan {
+	if observation.CandidateErr != nil {
+		next := planShortcutRootUnavailable(record, observation.CandidateErr.Error())
+		return shortcutRootLocalPlan{
+			Action:  shortcutRootLocalKeepRecord,
+			Next:    next,
+			Keep:    true,
+			Changed: !shortcutRootRecordsEqual(normalizeShortcutRootRecord(record), next),
+		}
+	}
+	return planMissingMaterializedShortcutRoot(record, observation.RelativePath, observation.Candidates)
+}
+
 func planShortcutRootPathError(record ShortcutRootRecord, err error) ShortcutRootRecord {
 	if errors.Is(err, synctree.ErrUnsafePath) ||
 		errors.Is(err, syscall.ENOTDIR) {
@@ -217,7 +231,6 @@ func planShortcutRootPathError(record ShortcutRootRecord, err error) ShortcutRoo
 	return planShortcutRootUnavailable(record, err.Error())
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutRootMaterializeResult(
 	record ShortcutRootRecord,
 	result shortcutRootMaterializeResult,
@@ -255,7 +268,6 @@ func planShortcutRootMaterializeResult(
 	}
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutProjectionMoveResult(
 	record ShortcutRootRecord,
 	result shortcutRootProjectionMoveResult,
@@ -293,7 +305,6 @@ func planShortcutProjectionMoveResult(
 	}
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutRootBlocked(record ShortcutRootRecord, detail string) ShortcutRootRecord {
 	return plannedShortcutRootTransition(record,
 		shortcutRootEventLocalPathBlocked,
@@ -302,7 +313,6 @@ func planShortcutRootBlocked(record ShortcutRootRecord, detail string) ShortcutR
 	)
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutRootUnavailable(record ShortcutRootRecord, detail string) ShortcutRootRecord {
 	return plannedShortcutRootTransition(record,
 		shortcutRootEventLocalPathBlocked,
@@ -311,7 +321,6 @@ func planShortcutRootUnavailable(record ShortcutRootRecord, detail string) Short
 	)
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutRootAliasMutationFailure(record ShortcutRootRecord, err error) ShortcutRootRecord {
 	detail := ""
 	if err != nil {
@@ -324,7 +333,6 @@ func planShortcutRootAliasMutationFailure(record ShortcutRootRecord, err error) 
 	)
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutAliasRenameSuccess(record ShortcutRootRecord, mutation shortcutAliasMutation) ShortcutRootRecord {
 	next := plannedShortcutRootTransition(record,
 		shortcutRootEventAliasMutationSucceeded,
@@ -337,7 +345,6 @@ func planShortcutAliasRenameSuccess(record ShortcutRootRecord, mutation shortcut
 	return next
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutAliasDeleteSuccess(record ShortcutRootRecord) ShortcutRootRecord {
 	return plannedShortcutRootTransition(record,
 		shortcutRootEventAliasMutationSucceeded,
@@ -346,7 +353,6 @@ func planShortcutAliasDeleteSuccess(record ShortcutRootRecord) ShortcutRootRecor
 	)
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutRootLocalReady(record ShortcutRootRecord, identity synctree.FileIdentity) ShortcutRootRecord {
 	next := record
 	next.LocalRootIdentity = &identity
@@ -362,7 +368,6 @@ func planShortcutRootLocalReady(record ShortcutRootRecord, identity synctree.Fil
 	return next
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutRootMaterialized(record ShortcutRootRecord, identity synctree.FileIdentity) ShortcutRootRecord {
 	next := record
 	next = plannedShortcutRootTransition(next,
@@ -375,7 +380,6 @@ func planShortcutRootMaterialized(record ShortcutRootRecord, identity synctree.F
 	return next
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planRetiringShortcutRootMissing(record ShortcutRootRecord) (ShortcutRootRecord, bool) {
 	if record.State == ShortcutRootStateSamePathReplacementWaiting && record.Waiting != nil {
 		return shortcutRootRecordFromReplacement(record.NamespaceID, *record.Waiting), true
@@ -383,7 +387,6 @@ func planRetiringShortcutRootMissing(record ShortcutRootRecord) (ShortcutRootRec
 	return ShortcutRootRecord{}, false
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planMissingMaterializedShortcutRoot(
 	record ShortcutRootRecord,
 	relativePath string,
@@ -436,7 +439,6 @@ func planMissingMaterializedShortcutRoot(
 	}
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planMissingAliasMutationFailure(
 	record ShortcutRootRecord,
 	candidatePath string,
@@ -449,7 +451,6 @@ func planMissingAliasMutationFailure(
 	return next
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planMissingAliasDeleteResult(
 	record ShortcutRootRecord,
 	result shortcutRootAliasMutationResult,
@@ -470,7 +471,6 @@ func planMissingAliasDeleteResult(
 	}
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planMissingAliasRenameResult(
 	record ShortcutRootRecord,
 	candidatePath string,
@@ -512,7 +512,6 @@ func planMissingAliasRenameResult(
 	}
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planMissingAliasRenameSuccess(
 	record ShortcutRootRecord,
 	candidatePath string,
@@ -531,7 +530,6 @@ func planMissingAliasRenameSuccess(
 	return next
 }
 
-//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutProjectionMoveSuccess(
 	record ShortcutRootRecord,
 	identity synctree.FileIdentity,
