@@ -111,7 +111,7 @@ func shortcutRootStatusReservedPaths(current string, protected []string) []strin
 type shortcutRootLifecycleMetadata struct {
 	status           ShortcutRootStatusMetadata
 	protectsPath     bool
-	runnerAction     ShortcutChildRunnerAction
+	runMode          ShortcutChildRunMode
 	publishesCleanup bool
 	transitions      map[shortcutRootLifecycleEvent][]ShortcutRootState
 }
@@ -166,7 +166,7 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 	return map[ShortcutRootState]shortcutRootLifecycleMetadata{
 		ShortcutRootStateActive: {
 			protectsPath: true,
-			runnerAction: ShortcutChildActionRun,
+			runMode:      ShortcutChildRunModeNormal,
 			transitions:  cloneShortcutRootTransitionTargets(baseRecovery),
 		},
 		ShortcutRootStateTargetUnavailable: {
@@ -181,7 +181,6 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				ProtectsPath:   true,
 			},
 			protectsPath: true,
-			runnerAction: ShortcutChildActionSkipParentBlocked,
 			transitions:  shortcutRootTransitions(baseRecovery, nil),
 		},
 		ShortcutRootStateLocalRootUnavailable: {
@@ -196,7 +195,6 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				ProtectsPath:   true,
 			},
 			protectsPath: true,
-			runnerAction: ShortcutChildActionSkipParentBlocked,
 			transitions: shortcutRootTransitions(baseRecovery, map[shortcutRootLifecycleEvent][]ShortcutRootState{
 				shortcutRootEventLocalPathBlocked: {ShortcutRootStateLocalRootUnavailable},
 			}),
@@ -213,7 +211,6 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				ProtectsPath:   true,
 			},
 			protectsPath: true,
-			runnerAction: ShortcutChildActionSkipParentBlocked,
 			transitions:  shortcutRootTransitions(baseRecovery, nil),
 		},
 		ShortcutRootStateRenameAmbiguous: {
@@ -228,7 +225,6 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				ProtectsPath:   true,
 			},
 			protectsPath: true,
-			runnerAction: ShortcutChildActionSkipParentBlocked,
 			transitions: shortcutRootTransitions(baseRecovery, map[shortcutRootLifecycleEvent][]ShortcutRootState{
 				shortcutRootEventRemoteUnavailable:     nil,
 				shortcutRootEventProtectedPathConflict: nil,
@@ -246,7 +242,6 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				ProtectsPath:   true,
 			},
 			protectsPath: true,
-			runnerAction: ShortcutChildActionSkipParentBlocked,
 			transitions: shortcutRootTransitions(baseRecovery, map[shortcutRootLifecycleEvent][]ShortcutRootState{
 				shortcutRootEventRemoteUnavailable:     nil,
 				shortcutRootEventProtectedPathConflict: nil,
@@ -264,7 +259,7 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				ProtectsPath:   true,
 			},
 			protectsPath: true,
-			runnerAction: ShortcutChildActionFinalDrain,
+			runMode:      ShortcutChildRunModeFinalDrain,
 			transitions: map[shortcutRootLifecycleEvent][]ShortcutRootState{
 				shortcutRootEventRemoteUpsert:              {ShortcutRootStateActive},
 				shortcutRootEventSamePathReplacement:       {ShortcutRootStateSamePathReplacementWaiting},
@@ -284,7 +279,6 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				ProtectsPath:  true,
 			},
 			protectsPath: true,
-			runnerAction: ShortcutChildActionSkipParentBlocked,
 			transitions: map[shortcutRootLifecycleEvent][]ShortcutRootState{
 				shortcutRootEventProjectionCleanupFailed:    {ShortcutRootStateRemovedCleanupBlocked},
 				shortcutRootEventProjectionCleanupSucceeded: {ShortcutRootStateRemovedChildCleanupPending},
@@ -303,7 +297,6 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				ProtectsPath:   true,
 			},
 			protectsPath: true,
-			runnerAction: ShortcutChildActionSkipParentBlocked,
 			transitions: map[shortcutRootLifecycleEvent][]ShortcutRootState{
 				shortcutRootEventRemoteUpsert:               {ShortcutRootStateActive},
 				shortcutRootEventSamePathReplacement:        {ShortcutRootStateSamePathReplacementWaiting},
@@ -322,7 +315,6 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				RecoveryClass: ShortcutRootRecoveryWaitForRetry,
 				AutoRetry:     true,
 			},
-			runnerAction:     ShortcutChildActionSkipParentBlocked,
 			publishesCleanup: true,
 			transitions: map[shortcutRootLifecycleEvent][]ShortcutRootState{
 				shortcutRootEventRemoteUpsert:         {ShortcutRootStateActive},
@@ -340,7 +332,7 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				ProtectsPath:  true,
 			},
 			protectsPath: true,
-			runnerAction: ShortcutChildActionFinalDrain,
+			runMode:      ShortcutChildRunModeFinalDrain,
 			transitions: map[shortcutRootLifecycleEvent][]ShortcutRootState{
 				shortcutRootEventRemoteUpsert:              {ShortcutRootStateActive},
 				shortcutRootEventSamePathReplacement:       {ShortcutRootStateSamePathReplacementWaiting},
@@ -361,7 +353,6 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				ProtectsPath:   true,
 			},
 			protectsPath: true,
-			runnerAction: ShortcutChildActionSkipParentBlocked,
 			transitions: map[shortcutRootLifecycleEvent][]ShortcutRootState{
 				shortcutRootEventRemoteUpsert:            {ShortcutRootStateActive},
 				shortcutRootEventRemoteDelete:            {ShortcutRootStateRemovedFinalDrain},

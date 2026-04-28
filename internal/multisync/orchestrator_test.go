@@ -31,6 +31,11 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
+const (
+	testChildRemoteDriveID = "remote-child-drive"
+	testChildRemoteRootID  = "remote-child-root"
+)
+
 // --- helpers ---
 
 // setupXDGIsolation sets XDG_DATA_HOME to a temp dir and creates catalog drive
@@ -360,18 +365,18 @@ func testStandaloneMount(t *testing.T, cidStr, displayName string) StandaloneMou
 	}
 }
 
-func shortcutChildMountIDForTest(parent *StandaloneMountConfig, child *syncengine.ShortcutChildRunner) string {
+func shortcutChildMountIDForTest(parent *StandaloneMountConfig, child *syncengine.ShortcutChildRunCommand) string {
 	if parent == nil || child == nil {
 		return ""
 	}
-	return config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
+	return child.ChildMountID
 }
 
 func seedShortcutChildStateArtifactsForTest(
 	t *testing.T,
 	dataDir string,
 	parent *StandaloneMountConfig,
-	child *syncengine.ShortcutChildRunner,
+	child *syncengine.ShortcutChildRunCommand,
 	includeSidecars bool,
 ) {
 	t.Helper()
@@ -387,16 +392,16 @@ func seedShortcutChildStateArtifactsForTest(
 		require.NoError(t, os.WriteFile(statePath+"-shm", []byte("shm"), 0o600))
 		require.NoError(t, os.WriteFile(statePath+"-journal", []byte("journal"), 0o600))
 	}
-	childRoot := filepath.Join(parent.SyncRoot, filepath.FromSlash(child.RelativeLocalPath))
+	childRoot := child.Engine.LocalRoot
 	sessionStore := driveops.NewSessionStore(dataDir, slog.New(slog.DiscardHandler))
-	require.NoError(t, sessionStore.Save(child.RemoteDriveID, "/queued-upload.bin", &driveops.SessionRecord{
+	require.NoError(t, sessionStore.Save(child.Engine.RemoteDriveID, "/queued-upload.bin", &driveops.SessionRecord{
 		MountID:    childMountID,
 		LocalRoot:  childRoot,
 		SessionURL: "https://example.com/upload",
 		FileHash:   "queued",
 		FileSize:   42,
 	}))
-	require.NoError(t, sessionStore.Save(child.RemoteDriveID, "/root-only-upload.bin", &driveops.SessionRecord{
+	require.NoError(t, sessionStore.Save(child.Engine.RemoteDriveID, "/root-only-upload.bin", &driveops.SessionRecord{
 		MountID:    "legacy-missing-child-mount-tag",
 		LocalRoot:  filepath.Join(childRoot, "nested"),
 		SessionURL: "https://example.com/upload-root-only",
@@ -407,7 +412,7 @@ func seedShortcutChildStateArtifactsForTest(
 		catalog.Drives[childMountID] = config.CatalogDrive{
 			CanonicalID:   childMountID,
 			DisplayName:   "Accidental child catalog record",
-			RemoteDriveID: child.RemoteDriveID,
+			RemoteDriveID: child.Engine.RemoteDriveID,
 		}
 		return nil
 	}))
@@ -417,7 +422,7 @@ func assertShortcutChildArtifactsPurgedForTest(
 	t *testing.T,
 	dataDir string,
 	parent *StandaloneMountConfig,
-	child *syncengine.ShortcutChildRunner,
+	child *syncengine.ShortcutChildRunCommand,
 	includeSidecars bool,
 ) {
 	t.Helper()
@@ -433,10 +438,10 @@ func assertShortcutChildArtifactsPurgedForTest(
 		assert.NoFileExists(t, statePath+"-journal")
 	}
 	sessionStore := driveops.NewSessionStore(dataDir, slog.New(slog.DiscardHandler))
-	_, found, err := sessionStore.Load(child.RemoteDriveID, "/queued-upload.bin")
+	_, found, err := sessionStore.Load(child.Engine.RemoteDriveID, "/queued-upload.bin")
 	require.NoError(t, err)
 	assert.False(t, found)
-	_, found, err = sessionStore.Load(child.RemoteDriveID, "/root-only-upload.bin")
+	_, found, err = sessionStore.Load(child.Engine.RemoteDriveID, "/root-only-upload.bin")
 	require.NoError(t, err)
 	assert.False(t, found)
 	catalog, err := config.LoadCatalogForDataDir(dataDir)
@@ -483,7 +488,7 @@ func TestBuildRuntimeMountSet_DoesNotInspectParentShortcutAliasRoot(t *testing.T
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	parent.RemoteDriveID = driveid.ID{}
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-a", "Shortcuts/A")
-	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
+	childID := child.ChildMountID
 	childRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "A")
 	require.NoError(t, os.MkdirAll(filepath.Dir(childRoot), 0o700))
 	require.NoError(t, os.WriteFile(childRoot, []byte("not a directory"), 0o600))
@@ -491,7 +496,7 @@ func TestBuildRuntimeMountSet_DoesNotInspectParentShortcutAliasRoot(t *testing.T
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
-	seedShortcutChildRunner(orch, &parent, &child)
+	seedShortcutChildRunCommand(orch, &parent, &child)
 
 	decisions, err := orch.buildRunnerDecisionSet(t.Context(), cfg.StandaloneMounts, nil)
 
@@ -591,18 +596,19 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 
 	parent := testStandaloneMount(t, "personal:final-drain@example.com", "Parent")
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
-	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
-	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
+	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	childID := child.ChildMountID
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	childRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Docs")
+	child.Engine.LocalRoot = childRoot
 	require.NoError(t, os.MkdirAll(childRoot, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(childRoot, "local-change.txt"), []byte("pending upload"), 0o600))
 	seedShortcutChildStateArtifactsForTest(t, cfg.DataDir, &parent, &child, true)
 
 	orch := NewOrchestrator(cfg)
-	seedShortcutChildRunner(orch, &parent, &child)
+	seedShortcutChildRunCommand(orch, &parent, &child)
 
 	type runCall struct {
 		mountID string
@@ -612,33 +618,32 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 	var callsMu sync.Mutex
 	calls := make([]runCall, 0, 2)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
-		ackDrainFn := func(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildRunnerPublication, error) {
-			return syncengine.ShortcutChildRunnerPublication{}, nil
+		ackDrainFn := func(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildProcessSnapshot, error) {
+			return syncengine.ShortcutChildProcessSnapshot{}, nil
 		}
-		ackCleanupFn := func(context.Context, syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error) {
-			return syncengine.ShortcutChildRunnerPublication{}, nil
+		ackCleanupFn := func(context.Context, syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildProcessSnapshot, error) {
+			return syncengine.ShortcutChildProcessSnapshot{}, nil
 		}
 		if req.Mount.projectionKind == MountProjectionStandalone {
-			ackDrainFn = func(_ context.Context, ack syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildRunnerPublication, error) {
-				assert.Equal(t, child.BindingItemID, ack.BindingItemID)
+			ackDrainFn = func(_ context.Context, ack syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildProcessSnapshot, error) {
+				assert.False(t, ack.Ref.IsZero())
 				require.NoError(t, os.RemoveAll(childRoot))
-				snapshot := cleanupRequestPublication(
+				snapshot := cleanupRequestSnapshot(
 					parent.CanonicalID.String(),
-					syncengine.ShortcutChildArtifactCleanupRequest{
-						BindingItemID:     child.BindingItemID,
-						RelativeLocalPath: child.RelativeLocalPath,
-						ChildMountID:      childID,
-						LocalRoot:         childRoot,
-						Reason:            syncengine.ShortcutChildArtifactCleanupParentRemoved,
+					syncengine.ShortcutChildCleanupCommand{
+						ChildMountID: childID,
+						LocalRoot:    childRoot,
+						Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
+						AckRef:       syncengine.NewShortcutChildAckRef("binding-drain"),
 					},
 				)
-				orch.receiveParentRunnerPublication(mountID(parent.CanonicalID.String()), snapshot)
+				orch.receiveParentChildProcessSnapshot(mountID(parent.CanonicalID.String()), snapshot)
 				return snapshot, nil
 			}
-			ackCleanupFn = func(_ context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error) {
-				assert.Equal(t, child.BindingItemID, ack.BindingItemID)
-				snapshot := syncengine.ShortcutChildRunnerPublication{NamespaceID: parent.CanonicalID.String()}
-				orch.receiveParentRunnerPublication(mountID(parent.CanonicalID.String()), snapshot)
+			ackCleanupFn = func(_ context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildProcessSnapshot, error) {
+				assert.False(t, ack.Ref.IsZero())
+				snapshot := syncengine.ShortcutChildProcessSnapshot{NamespaceID: parent.CanonicalID.String()}
+				orch.receiveParentChildProcessSnapshot(mountID(parent.CanonicalID.String()), snapshot)
 				return snapshot, nil
 			}
 		}
@@ -647,8 +652,8 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 			ackCleanupFn: ackCleanupFn,
 			runOnceFn: func(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error) {
 				if req.Mount.projectionKind == MountProjectionStandalone {
-					require.NotNil(t, req.Mount.parentRunnerPublicationSink)
-					if err := req.Mount.parentRunnerPublicationSink(ctx, runnerPublication(parent.CanonicalID.String(), child)); err != nil {
+					require.NotNil(t, req.Mount.parentChildProcessSink)
+					if err := req.Mount.parentChildProcessSink(ctx, processSnapshot(parent.CanonicalID.String(), child)); err != nil {
 						return nil, err
 					}
 				}
@@ -689,9 +694,9 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 	assert.NoDirExists(t, childRoot)
 	assertShortcutChildArtifactsPurgedForTest(t, cfg.DataDir, &parent, &child, true)
 
-	publication := orch.latestParentRunnerPublicationFor(mountID(parent.CanonicalID.String()))
-	assert.Empty(t, publication.RunnerWork.Children)
-	assert.Empty(t, publication.CleanupWork.Requests)
+	publication := orch.latestParentChildProcessSnapshotFor(mountID(parent.CanonicalID.String()))
+	assert.Empty(t, publication.RunCommands)
+	assert.Empty(t, publication.Cleanups)
 }
 
 // Validates: R-2.4.8
@@ -700,10 +705,11 @@ func TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved(t *testing.T) {
 
 	parent := testStandaloneMount(t, "personal:final-drain-fail@example.com", "Parent")
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
-	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
-	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
+	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	childID := child.ChildMountID
 
 	childRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Docs")
+	child.Engine.LocalRoot = childRoot
 	require.NoError(t, os.MkdirAll(childRoot, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(childRoot, "local-change.txt"), []byte("pending upload"), 0o600))
 
@@ -711,13 +717,13 @@ func TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved(t *testing.T) {
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	seedShortcutChildStateArtifactsForTest(t, cfg.DataDir, &parent, &child, false)
 	orch := NewOrchestrator(cfg)
-	seedShortcutChildRunner(orch, &parent, &child)
+	seedShortcutChildRunCommand(orch, &parent, &child)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runOnceFn: func(ctx context.Context, mode syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
 				if req.Mount.projectionKind == MountProjectionStandalone {
-					require.NotNil(t, req.Mount.parentRunnerPublicationSink)
-					if err := req.Mount.parentRunnerPublicationSink(ctx, runnerPublication(parent.CanonicalID.String(), child)); err != nil {
+					require.NotNil(t, req.Mount.parentChildProcessSink)
+					if err := req.Mount.parentChildProcessSink(ctx, processSnapshot(parent.CanonicalID.String(), child)); err != nil {
 						return nil, err
 					}
 				}
@@ -735,9 +741,9 @@ func TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved(t *testing.T) {
 
 	require.Len(t, result.Reports, 2)
 	assert.DirExists(t, childRoot)
-	snapshot := orch.latestParentRunnerPublicationFor(mountID(parent.CanonicalID.String()))
-	require.Len(t, snapshot.RunnerWork.Children, 1)
-	assert.Equal(t, syncengine.ShortcutChildActionFinalDrain, snapshot.RunnerWork.Children[0].RunnerAction)
+	snapshot := orch.latestParentChildProcessSnapshotFor(mountID(parent.CanonicalID.String()))
+	require.Len(t, snapshot.RunCommands, 1)
+	assert.Equal(t, syncengine.ShortcutChildRunModeFinalDrain, snapshot.RunCommands[0].Mode)
 	assert.FileExists(t, config.MountStatePathForDataDir(cfg.DataDir, childID))
 }
 
@@ -747,45 +753,43 @@ func TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts(t *testin
 
 	parent := testStandaloneMount(t, "personal:manual-discard@example.com", "Parent")
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-discard", "Shortcuts/Docs")
-	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
+	child.Engine.LocalRoot = filepath.Join(parent.SyncRoot, "Shortcuts", "Docs")
 
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	seedShortcutChildStateArtifactsForTest(t, cfg.DataDir, &parent, &child, true)
 	orch := NewOrchestrator(cfg)
-	orch.receiveParentRunnerPublication(mountID(parent.CanonicalID.String()), cleanupRequestPublication(
+	orch.receiveParentChildProcessSnapshot(mountID(parent.CanonicalID.String()), cleanupRequestSnapshot(
 		parent.CanonicalID.String(),
-		syncengine.ShortcutChildArtifactCleanupRequest{
-			BindingItemID:     child.BindingItemID,
-			RelativeLocalPath: child.RelativeLocalPath,
-			ChildMountID:      config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID),
-			LocalRoot:         filepath.Join(parent.SyncRoot, filepath.FromSlash(child.RelativeLocalPath)),
-			Reason:            syncengine.ShortcutChildArtifactCleanupParentRemoved,
+		syncengine.ShortcutChildCleanupCommand{
+			ChildMountID: child.ChildMountID,
+			LocalRoot:    child.Engine.LocalRoot,
+			Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			AckRef:       syncengine.NewShortcutChildAckRef("binding-discard"),
 		},
 	))
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		assert.Equal(t, MountProjectionStandalone, req.Mount.projectionKind)
 		return &mockEngine{
 			runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
-				if req.Mount.parentRunnerPublicationSink == nil {
-					return nil, errors.New("missing parent runner publication sink")
+				if req.Mount.parentChildProcessSink == nil {
+					return nil, errors.New("missing parent child process sink")
 				}
-				err := req.Mount.parentRunnerPublicationSink(ctx, cleanupRequestPublication(
+				err := req.Mount.parentChildProcessSink(ctx, cleanupRequestSnapshot(
 					parent.CanonicalID.String(),
-					syncengine.ShortcutChildArtifactCleanupRequest{
-						BindingItemID:     child.BindingItemID,
-						RelativeLocalPath: child.RelativeLocalPath,
-						ChildMountID:      config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID),
-						LocalRoot:         filepath.Join(parent.SyncRoot, filepath.FromSlash(child.RelativeLocalPath)),
-						Reason:            syncengine.ShortcutChildArtifactCleanupParentRemoved,
+					syncengine.ShortcutChildCleanupCommand{
+						ChildMountID: child.ChildMountID,
+						LocalRoot:    child.Engine.LocalRoot,
+						Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
+						AckRef:       syncengine.NewShortcutChildAckRef("binding-discard"),
 					},
 				))
 				return &syncengine.Report{}, err
 			},
-			ackCleanupFn: func(_ context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error) {
-				assert.Equal(t, child.BindingItemID, ack.BindingItemID)
-				snapshot := syncengine.ShortcutChildRunnerPublication{NamespaceID: parent.CanonicalID.String()}
-				orch.receiveParentRunnerPublication(mountID(parent.CanonicalID.String()), snapshot)
+			ackCleanupFn: func(_ context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildProcessSnapshot, error) {
+				assert.False(t, ack.Ref.IsZero())
+				snapshot := syncengine.ShortcutChildProcessSnapshot{NamespaceID: parent.CanonicalID.String()}
+				orch.receiveParentChildProcessSnapshot(mountID(parent.CanonicalID.String()), snapshot)
 				return snapshot, nil
 			},
 		}, nil
@@ -795,8 +799,8 @@ func TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts(t *testin
 
 	require.Len(t, result.Reports, 1)
 	assertShortcutChildArtifactsPurgedForTest(t, cfg.DataDir, &parent, &child, true)
-	publication := orch.latestParentRunnerPublicationFor(mountID(parent.CanonicalID.String()))
-	assert.Empty(t, publication.CleanupWork.Requests)
+	publication := orch.latestParentChildProcessSnapshotFor(mountID(parent.CanonicalID.String()))
+	assert.Empty(t, publication.Cleanups)
 }
 
 // Validates: R-2.4.8
@@ -804,16 +808,15 @@ func TestRunOnce_DropsStaleChildSkipAfterParentPublishesRunnableChild(t *testing
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	parent := testStandaloneMount(t, "personal:stale-child-skip@example.com", "Parent")
-	staleChild := testChildRecord(mountID(parent.CanonicalID.String()), "binding-stale", "Shortcuts/Docs")
-	staleChild.RunnerAction = syncengine.ShortcutChildActionSkipParentBlocked
-	runnableChild := staleChild
-	runnableChild.RunnerAction = syncengine.ShortcutChildActionRun
-	childID := config.ChildMountID(parent.CanonicalID.String(), runnableChild.BindingItemID)
+	runnableChild := testChildRecord(mountID(parent.CanonicalID.String()), "binding-stale", "Shortcuts/Docs")
+	childID := runnableChild.ChildMountID
 
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
-	seedShortcutChildRunner(orch, &parent, &staleChild)
+	orch.receiveParentChildProcessSnapshot(mountID(parent.CanonicalID.String()), syncengine.ShortcutChildProcessSnapshot{
+		NamespaceID: parent.CanonicalID.String(),
+	})
 
 	var childRan atomic.Bool
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
@@ -821,10 +824,10 @@ func TestRunOnce_DropsStaleChildSkipAfterParentPublishesRunnableChild(t *testing
 		case MountProjectionStandalone:
 			return &mockEngine{
 				runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
-					if req.Mount.parentRunnerPublicationSink == nil {
-						return nil, errors.New("missing parent runner publication sink")
+					if req.Mount.parentChildProcessSink == nil {
+						return nil, errors.New("missing parent child process sink")
 					}
-					err := req.Mount.parentRunnerPublicationSink(ctx, runnerPublication(parent.CanonicalID.String(), runnableChild))
+					err := req.Mount.parentChildProcessSink(ctx, processSnapshot(parent.CanonicalID.String(), runnableChild))
 					return &syncengine.Report{}, err
 				},
 			}, nil
@@ -856,15 +859,12 @@ func TestRunOnce_DropsStaleChildSkipAfterParentPublishesRunnableChild(t *testing
 }
 
 // Validates: R-2.4.8
-func TestRunOnce_UsesFinalParentPublicationInsteadOfIntermediateSkip(t *testing.T) {
+func TestRunOnce_UsesFinalParentSnapshotInsteadOfIntermediateSkip(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	parent := testStandaloneMount(t, "personal:intermediate-child-skip@example.com", "Parent")
-	skippedChild := testChildRecord(mountID(parent.CanonicalID.String()), "binding-final", "Shortcuts/Docs")
-	skippedChild.RunnerAction = syncengine.ShortcutChildActionSkipParentBlocked
-	runnableChild := skippedChild
-	runnableChild.RunnerAction = syncengine.ShortcutChildActionRun
-	childID := config.ChildMountID(parent.CanonicalID.String(), runnableChild.BindingItemID)
+	runnableChild := testChildRecord(mountID(parent.CanonicalID.String()), "binding-final", "Shortcuts/Docs")
+	childID := runnableChild.ChildMountID
 
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
@@ -876,9 +876,11 @@ func TestRunOnce_UsesFinalParentPublicationInsteadOfIntermediateSkip(t *testing.
 		case MountProjectionStandalone:
 			return &mockEngine{
 				runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
-					require.NotNil(t, req.Mount.parentRunnerPublicationSink)
-					require.NoError(t, req.Mount.parentRunnerPublicationSink(ctx, runnerPublication(parent.CanonicalID.String(), skippedChild)))
-					require.NoError(t, req.Mount.parentRunnerPublicationSink(ctx, runnerPublication(parent.CanonicalID.String(), runnableChild)))
+					require.NotNil(t, req.Mount.parentChildProcessSink)
+					require.NoError(t, req.Mount.parentChildProcessSink(ctx, syncengine.ShortcutChildProcessSnapshot{
+						NamespaceID: parent.CanonicalID.String(),
+					}))
+					require.NoError(t, req.Mount.parentChildProcessSink(ctx, processSnapshot(parent.CanonicalID.String(), runnableChild)))
 					return &syncengine.Report{}, nil
 				},
 			}, nil
@@ -896,9 +898,9 @@ func TestRunOnce_UsesFinalParentPublicationInsteadOfIntermediateSkip(t *testing.
 	assert.True(t, childRan.Load())
 	require.Len(t, result.Reports, 2)
 	assert.Empty(t, result.Startup.SkippedResults())
-	publication := orch.latestParentRunnerPublicationFor(mountID(parent.CanonicalID.String()))
-	require.Len(t, publication.RunnerWork.Children, 1)
-	assert.Equal(t, syncengine.ShortcutChildActionRun, publication.RunnerWork.Children[0].RunnerAction)
+	publication := orch.latestParentChildProcessSnapshotFor(mountID(parent.CanonicalID.String()))
+	require.Len(t, publication.RunCommands, 1)
+	assert.Equal(t, syncengine.ShortcutChildRunModeNormal, publication.RunCommands[0].Mode)
 }
 
 // Validates: R-2.4
@@ -1067,11 +1069,11 @@ func TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile(t *testin
 
 	parent := testStandaloneMount(t, "personal:watch-final-drain@example.com", "Parent")
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
-	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
-	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
+	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	childID := child.ChildMountID
 	topology := testParentTopologies(&parent, child)
 
-	decisions, err := buildRunnerDecisions([]StandaloneMountConfig{parent}, topology, testRunnerDecisionDataDir(t))
+	decisions, err := buildRunnerDecisions([]StandaloneMountConfig{parent}, topology, t.TempDir())
 	require.NoError(t, err)
 	var childMount *mountSpec
 	for i := range decisions.Mounts {
@@ -1139,15 +1141,15 @@ func TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs(t *testi
 
 	parent := testStandaloneMount(t, "personal:watch-final-drain-error@example.com", "Parent")
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
-	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
-	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
+	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	childID := child.ChildMountID
 
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
-	seedShortcutChildRunner(orch, &parent, &child)
+	seedShortcutChildRunCommand(orch, &parent, &child)
 
-	decisions, err := orch.buildRunnerDecisionsFromParentPublications(cfg.StandaloneMounts, cfg.InitialStartupResults)
+	decisions, err := orch.buildRunnerDecisionsFromParentSnapshots(cfg.StandaloneMounts, cfg.InitialStartupResults)
 	require.NoError(t, err)
 	var parentMount, childMount *mountSpec
 	for i := range decisions.Mounts {
@@ -1163,9 +1165,9 @@ func TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs(t *testi
 
 	ackCount := 0
 	parentEngine := &mockEngine{
-		ackDrainFn: func(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildRunnerPublication, error) {
+		ackDrainFn: func(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildProcessSnapshot, error) {
 			ackCount++
-			return syncengine.ShortcutChildRunnerPublication{}, nil
+			return syncengine.ShortcutChildProcessSnapshot{}, nil
 		},
 	}
 	runners := map[mountID]*watchRunner{
@@ -1185,9 +1187,9 @@ func TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs(t *testi
 	})
 
 	assert.Equal(t, 0, ackCount)
-	publication := orch.latestParentRunnerPublicationFor(mountID(parent.CanonicalID.String()))
-	require.Len(t, publication.RunnerWork.Children, 1)
-	assert.Equal(t, syncengine.ShortcutChildActionFinalDrain, publication.RunnerWork.Children[0].RunnerAction)
+	publication := orch.latestParentChildProcessSnapshotFor(mountID(parent.CanonicalID.String()))
+	require.Len(t, publication.RunCommands, 1)
+	assert.Equal(t, syncengine.ShortcutChildRunModeFinalDrain, publication.RunCommands[0].Mode)
 }
 
 // Validates: R-2.4
@@ -1274,7 +1276,7 @@ func TestRunOnce_EngineFactoryError_IsolatesAffectedMount(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestRunOnce_PublishesParentRunnerPublicationBeforeStartingChildren(t *testing.T) {
+func TestRunOnce_PublishesParentChildProcessSnapshotBeforeStartingChildren(t *testing.T) {
 	parent := testStandaloneMount(t, "personal:bootstrap@example.com", "Bootstrap")
 	setupXDGIsolation(t, parent.CanonicalID)
 
@@ -1292,19 +1294,15 @@ func TestRunOnce_PublishesParentRunnerPublicationBeforeStartingChildren(t *testi
 		if req.Mount.projectionKind == MountProjectionStandalone {
 			return &mockEngine{
 				runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
-					require.False(t, startup.Swap(true), "parent runner publication ran more than once")
-					require.NotNil(t, req.Mount.parentRunnerPublicationSink)
-					require.NoError(t, req.Mount.parentRunnerPublicationSink(ctx, runnerPublication(
+					require.False(t, startup.Swap(true), "parent child process sink published more than once")
+					require.NotNil(t, req.Mount.parentChildProcessSink)
+					child := testChildRecord(req.Mount.mountID, bindingID, "Shortcuts/Bootstrap")
+					child.Engine.LocalRoot = filepath.Join(parent.SyncRoot, "Shortcuts", "Bootstrap")
+					child.Engine.RemoteDriveID = testChildRemoteDriveID
+					child.Engine.RemoteItemID = testChildRemoteRootID
+					require.NoError(t, req.Mount.parentChildProcessSink(ctx, processSnapshot(
 						req.Mount.mountID.String(),
-						syncengine.ShortcutChildRunner{
-							BindingItemID:     bindingID,
-							RelativeLocalPath: "Shortcuts/Bootstrap",
-							LocalRoot:         filepath.Join(parent.SyncRoot, "Shortcuts", "Bootstrap"),
-							DisplayName:       "Bootstrap",
-							RemoteDriveID:     "remote-child-drive",
-							RemoteItemID:      "remote-child-root",
-							RunnerAction:      syncengine.ShortcutChildActionRun,
-						},
+						child,
 					)))
 					runMountsMu.Lock()
 					runMounts = append(runMounts, req.Mount.mountID)
@@ -1315,7 +1313,7 @@ func TestRunOnce_PublishesParentRunnerPublicationBeforeStartingChildren(t *testi
 			}, nil
 		}
 
-		require.True(t, startup.Load(), "child engine started before parent publication")
+		require.True(t, startup.Load(), "child engine started before parent snapshot")
 		runMountsMu.Lock()
 		runMounts = append(runMounts, req.Mount.mountID)
 		runMountsMu.Unlock()
@@ -1332,9 +1330,9 @@ func TestRunOnce_PublishesParentRunnerPublicationBeforeStartingChildren(t *testi
 	runMountsMu.Unlock()
 	assert.Contains(t, runMountsSnapshot, mountID(parent.CanonicalID.String()))
 	assert.Contains(t, runMountsSnapshot, mountID(childID))
-	publication := orch.latestParentRunnerPublicationFor(mountID(parent.CanonicalID.String()))
-	require.Len(t, publication.RunnerWork.Children, 1)
-	assert.Equal(t, childID, config.ChildMountID(publication.NamespaceID, publication.RunnerWork.Children[0].BindingItemID))
+	publication := orch.latestParentChildProcessSnapshotFor(mountID(parent.CanonicalID.String()))
+	require.Len(t, publication.RunCommands, 1)
+	assert.Equal(t, childID, publication.RunCommands[0].ChildMountID)
 }
 
 // Validates: R-2.4.8
@@ -1348,7 +1346,7 @@ func TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents(t *testing.T)
 	orch := NewOrchestrator(cfg)
 
 	child := testChildRecord(mountID(parentA.CanonicalID.String()), "binding-a", "Shortcuts/A")
-	childID := config.ChildMountID(parentA.CanonicalID.String(), child.BindingItemID)
+	childID := child.ChildMountID
 	parentBStarted := make(chan struct{})
 	releaseParentB := make(chan struct{})
 	childStarted := make(chan struct{})
@@ -1359,10 +1357,10 @@ func TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents(t *testing.T)
 		case parentA.CanonicalID.String():
 			return &mockEngine{
 				runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
-					if req.Mount.parentRunnerPublicationSink == nil {
-						return nil, errors.New("missing parent runner publication sink")
+					if req.Mount.parentChildProcessSink == nil {
+						return nil, errors.New("missing parent child process sink")
 					}
-					err := req.Mount.parentRunnerPublicationSink(ctx, runnerPublication(parentA.CanonicalID.String(), child))
+					err := req.Mount.parentChildProcessSink(ctx, processSnapshot(parentA.CanonicalID.String(), child))
 					return &syncengine.Report{}, err
 				},
 			}, nil
@@ -1420,7 +1418,7 @@ func TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents(t *testing.T)
 }
 
 // Validates: R-2.4.8
-func TestRunOnce_StartsParentChildrenBeforePublishingParentReturns(t *testing.T) {
+func TestRunOnce_StartsParentChildrenAfterPublishingParentReturns(t *testing.T) {
 	parent := testStandaloneMount(t, "personal:parent-publishing@example.com", "Parent")
 	setupXDGIsolation(t, parent.CanonicalID)
 
@@ -1429,7 +1427,7 @@ func TestRunOnce_StartsParentChildrenBeforePublishingParentReturns(t *testing.T)
 	orch := NewOrchestrator(cfg)
 
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-publish", "Shortcuts/Publish")
-	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
+	childID := child.ChildMountID
 	releaseParent := make(chan struct{})
 	childStarted := make(chan struct{})
 	var parentReturned atomic.Bool
@@ -1439,10 +1437,10 @@ func TestRunOnce_StartsParentChildrenBeforePublishingParentReturns(t *testing.T)
 		case parent.CanonicalID.String():
 			return &mockEngine{
 				runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
-					if req.Mount.parentRunnerPublicationSink == nil {
-						return nil, errors.New("missing parent runner publication sink")
+					if req.Mount.parentChildProcessSink == nil {
+						return nil, errors.New("missing parent child process sink")
 					}
-					if err := req.Mount.parentRunnerPublicationSink(ctx, runnerPublication(parent.CanonicalID.String(), child)); err != nil {
+					if err := req.Mount.parentChildProcessSink(ctx, processSnapshot(parent.CanonicalID.String(), child)); err != nil {
 						return nil, err
 					}
 					select {
@@ -1457,7 +1455,7 @@ func TestRunOnce_StartsParentChildrenBeforePublishingParentReturns(t *testing.T)
 		case childID:
 			return &mockEngine{
 				runOnceFn: func(context.Context, syncengine.SyncMode, syncengine.RunOptions) (*syncengine.Report, error) {
-					assert.False(t, parentReturned.Load(), "child should start before publishing parent returns")
+					assert.True(t, parentReturned.Load(), "child should start only after publishing parent returns")
 					childStartedOnce.Do(func() { close(childStarted) })
 					return &syncengine.Report{}, nil
 				},
@@ -1474,10 +1472,19 @@ func TestRunOnce_StartsParentChildrenBeforePublishingParentReturns(t *testing.T)
 
 	select {
 	case <-childStarted:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "child did not start from parent publication before parent returned")
+		require.FailNow(t, "child started before parent returned")
+	default:
 	}
-	close(releaseParent)
+	select {
+	case releaseParent <- struct{}{}:
+	default:
+		close(releaseParent)
+	}
+	select {
+	case <-childStarted:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "child did not start after parent returned")
+	}
 
 	var result RunOnceResult
 	select {
@@ -1489,7 +1496,7 @@ func TestRunOnce_StartsParentChildrenBeforePublishingParentReturns(t *testing.T)
 }
 
 // Validates: R-2.4.8
-func TestRunOnce_EmptyPublicationDoesNotConsumeOneShotChildStart(t *testing.T) {
+func TestRunOnce_EmptySnapshotDoesNotConsumeOneShotChildStart(t *testing.T) {
 	parent := testStandaloneMount(t, "personal:empty-then-child@example.com", "Parent")
 	setupXDGIsolation(t, parent.CanonicalID)
 
@@ -1498,7 +1505,7 @@ func TestRunOnce_EmptyPublicationDoesNotConsumeOneShotChildStart(t *testing.T) {
 	orch := NewOrchestrator(cfg)
 
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-later", "Shortcuts/Later")
-	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
+	childID := child.ChildMountID
 	childStarted := make(chan struct{})
 	var childStartedOnce sync.Once
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
@@ -1506,15 +1513,15 @@ func TestRunOnce_EmptyPublicationDoesNotConsumeOneShotChildStart(t *testing.T) {
 		case parent.CanonicalID.String():
 			return &mockEngine{
 				runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
-					if req.Mount.parentRunnerPublicationSink == nil {
-						return nil, errors.New("missing parent runner publication sink")
+					if req.Mount.parentChildProcessSink == nil {
+						return nil, errors.New("missing parent child process sink")
 					}
-					if err := req.Mount.parentRunnerPublicationSink(ctx, syncengine.ShortcutChildRunnerPublication{
+					if err := req.Mount.parentChildProcessSink(ctx, syncengine.ShortcutChildProcessSnapshot{
 						NamespaceID: parent.CanonicalID.String(),
 					}); err != nil {
 						return nil, err
 					}
-					if err := req.Mount.parentRunnerPublicationSink(ctx, runnerPublication(parent.CanonicalID.String(), child)); err != nil {
+					if err := req.Mount.parentChildProcessSink(ctx, processSnapshot(parent.CanonicalID.String(), child)); err != nil {
 						return nil, err
 					}
 					return &syncengine.Report{}, nil
@@ -1543,13 +1550,13 @@ func TestRunOnce_EmptyPublicationDoesNotConsumeOneShotChildStart(t *testing.T) {
 }
 
 // Validates: R-2.4.8
-func TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint(t *testing.T) {
+func TestRunOnce_DelaysFinalDrainStartUntilPublishingParentSafePoint(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	parent := testStandaloneMount(t, "personal:final-drain-safe-point@example.com", "Parent")
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-drain-safe", "Shortcuts/Docs")
-	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
-	childID := config.ChildMountID(parent.CanonicalID.String(), child.BindingItemID)
+	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	childID := child.ChildMountID
 
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
@@ -1566,10 +1573,10 @@ func TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint(t *testing.T)
 		case parent.CanonicalID.String():
 			return &mockEngine{
 				runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
-					if req.Mount.parentRunnerPublicationSink == nil {
-						return nil, errors.New("missing parent runner publication sink")
+					if req.Mount.parentChildProcessSink == nil {
+						return nil, errors.New("missing parent child process sink")
 					}
-					if err := req.Mount.parentRunnerPublicationSink(ctx, runnerPublication(parent.CanonicalID.String(), child)); err != nil {
+					if err := req.Mount.parentChildProcessSink(ctx, processSnapshot(parent.CanonicalID.String(), child)); err != nil {
 						return nil, err
 					}
 					select {
@@ -1579,9 +1586,9 @@ func TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint(t *testing.T)
 					}
 					return &syncengine.Report{}, nil
 				},
-				ackDrainFn: func(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildRunnerPublication, error) {
+				ackDrainFn: func(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildProcessSnapshot, error) {
 					ackedOnce.Do(func() { close(acked) })
-					return syncengine.ShortcutChildRunnerPublication{}, nil
+					return syncengine.ShortcutChildProcessSnapshot{}, nil
 				},
 			}, nil
 		case childID:
@@ -1603,8 +1610,8 @@ func TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint(t *testing.T)
 
 	select {
 	case <-childCompleted:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "final-drain child did not complete")
+		require.FailNow(t, "final-drain child started before parent safe point")
+	default:
 	}
 	select {
 	case <-acked:
@@ -1625,29 +1632,8 @@ func TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint(t *testing.T)
 	}
 }
 
-// Validates: R-2.4.8
-func TestOneShotChildRunsWaitParentDoneReturnsOnContextCancel(t *testing.T) {
-	t.Parallel()
-
-	parent := &mountSpec{
-		mountID:        "personal:blocked-parent@example.com",
-		projectionKind: MountProjectionStandalone,
-	}
-	coordinator := newOneShotChildRuns(
-		NewOrchestrator(&OrchestratorConfig{Logger: slog.New(slog.DiscardHandler)}),
-		syncengine.SyncBidirectional,
-		syncengine.RunOptions{},
-		[]*mountSpec{parent},
-	)
-	coordinator.parentDone[parent.mountID] = make(chan struct{})
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	assert.False(t, coordinator.waitParentDone(ctx, parent.mountID))
-}
-
 // Validates: R-2.4
-func TestRunWatch_PublishesParentRunnerPublicationBeforeStartingChildren(t *testing.T) {
+func TestRunWatch_PublishesParentChildProcessSnapshotBeforeStartingChildren(t *testing.T) {
 	parent := testStandaloneMount(t, "personal:watch-bootstrap@example.com", "WatchBootstrap")
 	cfgPath := writeTestConfig(t, parent.CanonicalID)
 	setupXDGIsolation(t, parent.CanonicalID)
@@ -1666,25 +1652,21 @@ func TestRunWatch_PublishesParentRunnerPublicationBeforeStartingChildren(t *test
 			return &mockEngine{
 				runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 					startup = true
-					require.NotNil(t, req.Mount.parentRunnerPublicationSink)
-					require.NoError(t, req.Mount.parentRunnerPublicationSink(ctx, runnerPublication(
+					require.NotNil(t, req.Mount.parentChildProcessSink)
+					child := testChildRecord(req.Mount.mountID, bindingID, "Shortcuts/WatchBootstrap")
+					child.Engine.LocalRoot = filepath.Join(parent.SyncRoot, "Shortcuts", "WatchBootstrap")
+					child.Engine.RemoteDriveID = testChildRemoteDriveID
+					child.Engine.RemoteItemID = testChildRemoteRootID
+					require.NoError(t, req.Mount.parentChildProcessSink(ctx, processSnapshot(
 						req.Mount.mountID.String(),
-						syncengine.ShortcutChildRunner{
-							BindingItemID:     bindingID,
-							RelativeLocalPath: "Shortcuts/WatchBootstrap",
-							LocalRoot:         filepath.Join(parent.SyncRoot, "Shortcuts", "WatchBootstrap"),
-							DisplayName:       "WatchBootstrap",
-							RemoteDriveID:     "remote-child-drive",
-							RemoteItemID:      "remote-child-root",
-							RunnerAction:      syncengine.ShortcutChildActionRun,
-						},
+						child,
 					)))
 					<-ctx.Done()
 					return ctx.Err()
 				},
 			}, nil
 		case MountProjectionChild:
-			require.True(t, startup, "child engine started before parent publication")
+			require.True(t, startup, "child engine started before parent snapshot")
 			assert.Equal(t, mountID(childID), req.Mount.mountID)
 			return &mockEngine{
 				runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
@@ -1724,7 +1706,7 @@ func TestRunWatch_PublishesParentRunnerPublicationBeforeStartingChildren(t *test
 }
 
 // Validates: R-2.4
-func TestRunWatch_ReconcilesChildRunnersFromLiveParentPublication(t *testing.T) {
+func TestRunWatch_ReconcilesChildRunnersFromLiveParentSnapshot(t *testing.T) {
 	parent := testStandaloneMount(t, "personal:watch-live-pub@example.com", "WatchLivePub")
 	cfgPath := writeTestConfig(t, parent.CanonicalID)
 	setupXDGIsolation(t, parent.CanonicalID)
@@ -1733,7 +1715,7 @@ func TestRunWatch_ReconcilesChildRunnersFromLiveParentPublication(t *testing.T) 
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
 
-	harness := newLiveParentPublicationWatchHarness(t, orch, &parent, "binding-first", "binding-second")
+	harness := newLiveParentSnapshotWatchHarness(t, orch, &parent, "binding-first", "binding-second")
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -1751,7 +1733,7 @@ func TestRunWatch_ReconcilesChildRunnersFromLiveParentPublication(t *testing.T) 
 	select {
 	case <-harness.secondStarted:
 	case <-time.After(5 * time.Second):
-		require.Fail(t, "second child did not start from live parent publication")
+		require.Fail(t, "second child did not start from live parent snapshot")
 	}
 	assert.Equal(t, int32(1), harness.parentRunCount.Load())
 	close(harness.parentRelease)
@@ -1765,7 +1747,7 @@ func TestRunWatch_ReconcilesChildRunnersFromLiveParentPublication(t *testing.T) 
 	}
 }
 
-type liveParentPublicationWatchHarness struct {
+type liveParentSnapshotWatchHarness struct {
 	firstStarted   chan struct{}
 	secondStarted  chan struct{}
 	parentStarted  chan struct{}
@@ -1773,19 +1755,19 @@ type liveParentPublicationWatchHarness struct {
 	parentRunCount atomic.Int32
 }
 
-func newLiveParentPublicationWatchHarness(
+func newLiveParentSnapshotWatchHarness(
 	t *testing.T,
 	orch *Orchestrator,
 	parent *StandaloneMountConfig,
 	firstBinding string,
 	secondBinding string,
-) *liveParentPublicationWatchHarness {
+) *liveParentSnapshotWatchHarness {
 	t.Helper()
 
 	require.NotNil(t, parent)
 	firstChildID := config.ChildMountID(parent.CanonicalID.String(), firstBinding)
 	secondChildID := config.ChildMountID(parent.CanonicalID.String(), secondBinding)
-	harness := &liveParentPublicationWatchHarness{
+	harness := &liveParentSnapshotWatchHarness{
 		firstStarted:  make(chan struct{}),
 		secondStarted: make(chan struct{}),
 		parentStarted: make(chan struct{}),
@@ -1796,9 +1778,9 @@ func newLiveParentPublicationWatchHarness(
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		switch req.Mount.projectionKind {
 		case MountProjectionStandalone:
-			return harness.parentPublicationEngine(t, req.Mount, firstBinding, secondBinding), nil
+			return harness.parentSnapshotEngine(t, req.Mount, firstBinding, secondBinding), nil
 		case MountProjectionChild:
-			return harness.childPublicationEngine(t, req.Mount.mountID.String(), firstChildID, secondChildID, &firstStartedOnce, &secondStartedOnce), nil
+			return harness.childSnapshotEngine(t, req.Mount.mountID.String(), firstChildID, secondChildID, &firstStartedOnce, &secondStartedOnce), nil
 		default:
 			require.FailNow(t, "unexpected mount projection")
 		}
@@ -1807,7 +1789,7 @@ func newLiveParentPublicationWatchHarness(
 	return harness
 }
 
-func (h *liveParentPublicationWatchHarness) parentPublicationEngine(
+func (h *liveParentSnapshotWatchHarness) parentSnapshotEngine(
 	t *testing.T,
 	mount *mountSpec,
 	firstBinding string,
@@ -1819,21 +1801,21 @@ func (h *liveParentPublicationWatchHarness) parentPublicationEngine(
 		runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 			h.parentRunCount.Add(1)
 			close(h.parentStarted)
-			require.NotNil(t, mount.parentRunnerPublicationSink)
-			require.NoError(t, mount.parentRunnerPublicationSink(ctx, shortcutPublication(mount.mountID.String(), firstBinding, "First")))
+			require.NotNil(t, mount.parentChildProcessSink)
+			require.NoError(t, mount.parentChildProcessSink(ctx, shortcutSnapshot(mount.mountID.String(), firstBinding, "First")))
 			select {
 			case <-h.firstStarted:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-			require.NoError(t, mount.parentRunnerPublicationSink(ctx, shortcutPublication(mount.mountID.String(), secondBinding, "Second")))
+			require.NoError(t, mount.parentChildProcessSink(ctx, shortcutSnapshot(mount.mountID.String(), secondBinding, "Second")))
 			<-h.parentRelease
 			return nil
 		},
 	}
 }
 
-func (h *liveParentPublicationWatchHarness) childPublicationEngine(
+func (h *liveParentSnapshotWatchHarness) childSnapshotEngine(
 	t *testing.T,
 	childID string,
 	firstChildID string,
@@ -1859,17 +1841,19 @@ func (h *liveParentPublicationWatchHarness) childPublicationEngine(
 	}
 }
 
-func shortcutPublication(namespaceID, bindingItemID, alias string) syncengine.ShortcutChildRunnerPublication {
-	return runnerPublication(
+func shortcutSnapshot(namespaceID, bindingItemID, alias string) syncengine.ShortcutChildProcessSnapshot {
+	return processSnapshot(
 		namespaceID,
-		syncengine.ShortcutChildRunner{
-			BindingItemID:     bindingItemID,
-			RelativeLocalPath: "Shortcuts/" + alias,
-			LocalRoot:         filepath.Join(os.TempDir(), "parent", "Shortcuts", alias),
-			DisplayName:       alias,
-			RemoteDriveID:     "remote-child-drive",
-			RemoteItemID:      "remote-child-" + strings.ToLower(alias),
-			RunnerAction:      syncengine.ShortcutChildActionRun,
+		syncengine.ShortcutChildRunCommand{
+			ChildMountID: config.ChildMountID(namespaceID, bindingItemID),
+			DisplayName:  alias,
+			Engine: syncengine.ShortcutChildEngineSpec{
+				LocalRoot:     filepath.Join(os.TempDir(), "parent", "Shortcuts", alias),
+				RemoteDriveID: testChildRemoteDriveID,
+				RemoteItemID:  "remote-child-" + strings.ToLower(alias),
+			},
+			Mode:   syncengine.ShortcutChildRunModeNormal,
+			AckRef: syncengine.NewShortcutChildAckRef(bindingItemID),
 		},
 	)
 }
@@ -1887,15 +1871,15 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 	firstOld := testChildRecord(mountID(firstParent.CanonicalID.String()), "binding-old", "Shortcuts/Old")
 	firstNew := testChildRecord(mountID(firstParent.CanonicalID.String()), "binding-new", "Shortcuts/New")
 	secondChild := testChildRecord(mountID(secondParent.CanonicalID.String()), "binding-keep", "Shortcuts/Keep")
-	orch.receiveParentRunnerPublication(mountID(firstParent.CanonicalID.String()), runnerPublication(firstParent.CanonicalID.String(), firstOld))
-	orch.receiveParentRunnerPublication(mountID(secondParent.CanonicalID.String()), runnerPublication(secondParent.CanonicalID.String(), secondChild))
+	orch.receiveParentChildProcessSnapshot(mountID(firstParent.CanonicalID.String()), processSnapshot(firstParent.CanonicalID.String(), firstOld))
+	orch.receiveParentChildProcessSnapshot(mountID(secondParent.CanonicalID.String()), processSnapshot(secondParent.CanonicalID.String(), secondChild))
 
 	parentMounts, err := buildStandaloneMountSpecs(cfg.StandaloneMounts)
 	require.NoError(t, err)
 	initialDecisions, err := buildRunnerDecisionsForParents(
 		parentMounts,
-		orch.latestParentRunnerPublicationsFor(parentMounts),
-		cfg.DataDir,
+		orch.latestParentChildProcessSnapshotsFor(parentMounts),
+		t.TempDir(),
 		nil,
 	)
 	require.NoError(t, err)
@@ -1906,10 +1890,10 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 		if mount.projectionKind != MountProjectionChild {
 			continue
 		}
-		switch mount.childBindingItemID() {
-		case firstOld.BindingItemID:
+		switch mount.mountID.String() {
+		case firstOld.ChildMountID:
 			firstOldMount = mount
-		case secondChild.BindingItemID:
+		case secondChild.ChildMountID:
 			secondChildMount = mount
 		}
 	}
@@ -1939,10 +1923,10 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 			done: secondDone,
 		},
 	}
-	orch.receiveParentRunnerPublication(mountID(firstParent.CanonicalID.String()), runnerPublication(firstParent.CanonicalID.String(), firstNew))
+	orch.receiveParentChildProcessSnapshot(mountID(firstParent.CanonicalID.String()), processSnapshot(firstParent.CanonicalID.String(), firstNew))
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		require.Equal(t, MountProjectionChild, req.Mount.projectionKind)
-		assert.Equal(t, firstNew.BindingItemID, req.Mount.childBindingItemID())
+		assert.Equal(t, firstNew.ChildMountID, req.Mount.mountID.String())
 		events = append(events, "start-first")
 		return &mockEngine{}, nil
 	}
@@ -1959,7 +1943,7 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 	assert.Equal(t, []string{"stop-first", "start-first"}, events)
 	assert.Contains(t, runners, secondChildMount.mountID)
 	assert.NotContains(t, runners, firstOldMount.mountID)
-	assert.Contains(t, runners, mountID(config.ChildMountID(firstParent.CanonicalID.String(), firstNew.BindingItemID)))
+	assert.Contains(t, runners, mountID(firstNew.ChildMountID))
 }
 
 // Validates: R-2.4
@@ -1974,15 +1958,15 @@ func TestApplyWatchMountSet_StopsStaleChildBeforeStartingReplacement(t *testing.
 	parentMounts, err := buildStandaloneMountSpecs(cfg.StandaloneMounts)
 	require.NoError(t, err)
 	child := testPublishedShortcutChild()
-	child.LocalRootIdentity = &syncengine.ShortcutRootIdentity{Device: 1, Inode: 2}
-	oldDecisions, err := buildRunnerDecisionsForParents(parentMounts, testParentTopologies(&parent, child), cfg.DataDir, nil)
+	child.Engine.LocalRootIdentity = &syncengine.ShortcutRootIdentity{Device: 1, Inode: 2}
+	oldDecisions, err := buildRunnerDecisionsForParents(parentMounts, testParentTopologies(&parent, child), t.TempDir(), nil)
 	require.NoError(t, err)
 
 	nextChild := child
-	nextChild.LocalRootIdentity = &syncengine.ShortcutRootIdentity{Device: 3, Inode: 4}
+	nextChild.Engine.LocalRootIdentity = &syncengine.ShortcutRootIdentity{Device: 3, Inode: 4}
 	nextParentMounts, err := buildStandaloneMountSpecs(cfg.StandaloneMounts)
 	require.NoError(t, err)
-	newDecisions, err := buildRunnerDecisionsForParents(nextParentMounts, testParentTopologies(&parent, nextChild), cfg.DataDir, nil)
+	newDecisions, err := buildRunnerDecisionsForParents(nextParentMounts, testParentTopologies(&parent, nextChild), t.TempDir(), nil)
 	require.NoError(t, err)
 
 	var oldChildMount *mountSpec
@@ -2039,7 +2023,7 @@ func TestApplyWatchMountSet_StopsStaleChildBeforeStartingReplacement(t *testing.
 }
 
 // Validates: R-2.4
-func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedPublication(t *testing.T) {
+func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot(t *testing.T) {
 	parent := testStandaloneMount(t, "personal:parent-exit@example.com", "ParentExit")
 	setupXDGIsolation(t, parent.CanonicalID)
 
@@ -2048,7 +2032,7 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedPublicati
 	orch := NewOrchestrator(cfg)
 
 	child := testChildRecord(mountID(parent.CanonicalID.String()), "binding-exit", "Shortcuts/Exit")
-	seedShortcutChildRunner(orch, &parent, &child)
+	seedShortcutChildRunCommand(orch, &parent, &child)
 	decisions, err := orch.buildRunnerDecisionSet(t.Context(), cfg.StandaloneMounts, cfg.InitialStartupResults)
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 2)
@@ -2112,7 +2096,7 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedPublicati
 
 	require.True(t, childCanceled)
 	assert.NotContains(t, runners, childMount.mountID)
-	assert.Empty(t, orch.latestParentRunnerPublicationFor(parentMount.mountID).RunnerWork.Children)
+	assert.Empty(t, orch.latestParentChildProcessSnapshotFor(parentMount.mountID).RunCommands)
 	assert.Equal(t, []mountID{parentMount.mountID}, restarted)
 
 	cancel()
@@ -2324,8 +2308,8 @@ type mockEngine struct {
 	closed       bool
 	runOnceFn    func(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error)
 	runWatchFn   func(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error
-	ackDrainFn   func(ctx context.Context, ack syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildRunnerPublication, error)
-	ackCleanupFn func(ctx context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error)
+	ackDrainFn   func(ctx context.Context, ack syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildProcessSnapshot, error)
+	ackCleanupFn func(ctx context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildProcessSnapshot, error)
 }
 
 func (m *mockEngine) RunOnce(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error) {
@@ -2366,8 +2350,8 @@ func (m *mockEngine) ShortcutChildAckHandle() shortcutChildAckHandle {
 }
 
 type mockShortcutChildAckHandle struct {
-	ackDrainFn   func(ctx context.Context, ack syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildRunnerPublication, error)
-	ackCleanupFn func(ctx context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildRunnerPublication, error)
+	ackDrainFn   func(ctx context.Context, ack syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildProcessSnapshot, error)
+	ackCleanupFn func(ctx context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildProcessSnapshot, error)
 }
 
 func (h mockShortcutChildAckHandle) IsZero() bool {
@@ -2377,9 +2361,9 @@ func (h mockShortcutChildAckHandle) IsZero() bool {
 func (h mockShortcutChildAckHandle) AcknowledgeChildFinalDrain(
 	ctx context.Context,
 	ack syncengine.ShortcutChildDrainAck,
-) (syncengine.ShortcutChildRunnerPublication, error) {
+) (syncengine.ShortcutChildProcessSnapshot, error) {
 	if h.ackDrainFn == nil {
-		return syncengine.ShortcutChildRunnerPublication{}, nil
+		return syncengine.ShortcutChildProcessSnapshot{}, nil
 	}
 	return h.ackDrainFn(ctx, ack)
 }
@@ -2387,9 +2371,9 @@ func (h mockShortcutChildAckHandle) AcknowledgeChildFinalDrain(
 func (h mockShortcutChildAckHandle) AcknowledgeChildArtifactsPurged(
 	ctx context.Context,
 	ack syncengine.ShortcutChildArtifactCleanupAck,
-) (syncengine.ShortcutChildRunnerPublication, error) {
+) (syncengine.ShortcutChildProcessSnapshot, error) {
 	if h.ackCleanupFn == nil {
-		return syncengine.ShortcutChildRunnerPublication{}, nil
+		return syncengine.ShortcutChildProcessSnapshot{}, nil
 	}
 	return h.ackCleanupFn(ctx, ack)
 }

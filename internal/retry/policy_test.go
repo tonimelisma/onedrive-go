@@ -103,7 +103,7 @@ func TestNamedPolicies_RequestPathPolicies(t *testing.T) {
 	assert.Equal(t, 5, DriveDiscoveryPolicy().MaxAttempts)
 	assert.Equal(t, 1*time.Second, DriveDiscoveryPolicy().Base)
 	assertPolicyShape(t, RootChildrenPolicy(), 3, 250*time.Millisecond, 1*time.Second, 0.0)
-	assertPolicyShape(t, DownloadMetadataPolicy(), 4, 250*time.Millisecond, 2*time.Second, 0.0)
+	assertPolicyShape(t, DownloadMetadataPolicy(), 6, 250*time.Millisecond, 4*time.Second, 0.0)
 }
 
 // Validates: R-6.8.2

@@ -21,8 +21,8 @@ func (o *Orchestrator) buildRunnerDecisionSet(
 		return nil, err
 	}
 
-	parentPublications := o.latestParentRunnerPublicationsFor(parents)
-	decisions, err := buildRunnerDecisionsForParents(parents, parentPublications, o.cfg.DataDir, o.logger)
+	parentSnapshots := o.latestParentChildProcessSnapshotsFor(parents)
+	decisions, err := buildRunnerDecisionsForParents(parents, parentSnapshots, o.cfg.DataDir, o.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +32,7 @@ func (o *Orchestrator) buildRunnerDecisionSet(
 	return decisions, nil
 }
 
-func (o *Orchestrator) buildRunnerDecisionsFromParentPublications(
+func (o *Orchestrator) buildRunnerDecisionsFromParentSnapshots(
 	standaloneMounts []StandaloneMountConfig,
 	initialStartup []MountStartupResult,
 ) (*runnerDecisionSet, error) {
@@ -40,8 +40,8 @@ func (o *Orchestrator) buildRunnerDecisionsFromParentPublications(
 	if err != nil {
 		return nil, err
 	}
-	parentPublications := o.latestParentRunnerPublicationsFor(parents)
-	decisions, err := buildRunnerDecisionsForParents(parents, parentPublications, o.cfg.DataDir, o.logger)
+	parentSnapshots := o.latestParentChildProcessSnapshotsFor(parents)
+	decisions, err := buildRunnerDecisionsForParents(parents, parentSnapshots, o.cfg.DataDir, o.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -56,10 +56,10 @@ func (o *Orchestrator) buildRunnerDecisionsForParent(parent *mountSpec) (*runner
 		return nil, fmt.Errorf("building parent child runner decisions: parent mount is required")
 	}
 	parentCopy := cloneMountSpec(parent)
-	parentPublications := map[mountID]syncengine.ShortcutChildRunnerPublication{
-		parentCopy.mountID: o.latestParentRunnerPublicationFor(parentCopy.mountID),
+	parentSnapshots := map[mountID]syncengine.ShortcutChildProcessSnapshot{
+		parentCopy.mountID: o.latestParentChildProcessSnapshotFor(parentCopy.mountID),
 	}
-	return buildRunnerDecisionsForParents([]*mountSpec{parentCopy}, parentPublications, o.cfg.DataDir, o.logger)
+	return buildRunnerDecisionsForParents([]*mountSpec{parentCopy}, parentSnapshots, o.cfg.DataDir, o.logger)
 }
 
 func nextStartupSelectionIndex(results []MountStartupResult) int {
@@ -92,7 +92,7 @@ func cloneMountSpec(mount *mountSpec) *mountSpec {
 	cloned := *mount
 	if mount.child != nil {
 		child := *mount.child
-		child.expectedSyncRootIdentity = cloneChildRootIdentity(mount.child.expectedSyncRootIdentity)
+		child.engine = cloneShortcutChildEngineSpec(mount.child.engine)
 		cloned.child = &child
 	}
 	return &cloned

@@ -29,10 +29,10 @@ type watchRunner struct {
 }
 
 type watchRunnerEvent struct {
-	mountID                  mountID
-	report                   *syncengine.Report
-	err                      error
-	parentPublicationChanged bool
+	mountID               mountID
+	report                *syncengine.Report
+	err                   error
+	parentSnapshotChanged bool
 }
 
 // RunWatch runs all configured runnable mounts in watch mode. On control-socket
@@ -166,7 +166,7 @@ func (o *Orchestrator) startInitialWatchRunners(
 			continue
 		}
 
-		o.attachParentRunnerPublicationSink(mount, runnerEvents, nil)
+		o.attachParentChildProcessSink(mount, runnerEvents, nil)
 		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents)
 		if err != nil {
 			o.logger.Error("failed to start watch runner",
@@ -406,7 +406,7 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
 ) {
-	if event.parentPublicationChanged {
+	if event.parentSnapshotChanged {
 		o.reconcileWatchRunnersForParent(ctx, event.mountID, mode, opts, runners, runnerEvents)
 		return
 	}
@@ -422,7 +422,7 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 		}
 		delete(runners, event.mountID)
 		if wr.mount != nil && wr.mount.projectionKind == MountProjectionStandalone {
-			o.forgetParentRunnerPublication(event.mountID)
+			o.forgetParentChildProcessSnapshot(event.mountID)
 			o.stopChildWatchRunnersForParent(ctx, runners, event.mountID)
 		}
 	}
@@ -452,7 +452,7 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 	wr *watchRunner,
 	event watchRunnerEvent,
 ) {
-	decisions, err := o.buildRunnerDecisionsFromParentPublications(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
+	decisions, err := o.buildRunnerDecisionsFromParentSnapshots(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
 		o.logger.Warn("compiling mount set after final-drain child completion failed",
 			slog.String("mount_id", event.mountID.String()),
@@ -601,7 +601,7 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 	}
 	if parent == nil {
 		stopped := o.stopChildWatchRunnersForParent(ctx, runners, parentID)
-		o.forgetParentRunnerPublication(parentID)
+		o.forgetParentChildProcessSnapshot(parentID)
 		o.setControlMountIDs(sortedRunnerMountIDs(runners))
 		o.logger.Info("parent-scoped shortcut runner reconciliation removed missing parent children",
 			slog.String("parent_mount_id", parentID.String()),
@@ -609,8 +609,8 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 		)
 		return
 	}
-	publications := map[mountID]syncengine.ShortcutChildRunnerPublication{
-		parentID: o.latestParentRunnerPublicationFor(parentID),
+	publications := map[mountID]syncengine.ShortcutChildProcessSnapshot{
+		parentID: o.latestParentChildProcessSnapshotFor(parentID),
 	}
 	decisions, err := buildRunnerDecisionsForParents([]*mountSpec{parent}, publications, o.cfg.DataDir, o.logger)
 	if err != nil {
@@ -791,14 +791,14 @@ func (o *Orchestrator) stopInactiveChildWatchRunnersForParent(
 			}
 		}
 
-		o.logger.Info("stopping child watch runner for parent publication change",
+		o.logger.Info("stopping child watch runner for parent snapshot change",
 			slog.String("mount_id", id.String()),
 			slog.String("parent_mount_id", parentID.String()),
 		)
 		wr.cancel()
 		<-wr.done
 		if closeErr := wr.engine.Close(ctx); closeErr != nil {
-			o.logger.Warn("engine close error while stopping child after parent publication",
+			o.logger.Warn("engine close error while stopping child after parent snapshot",
 				slog.String("mount_id", id.String()),
 				slog.String("error", closeErr.Error()),
 			)
@@ -827,7 +827,7 @@ func (o *Orchestrator) startReloadWatchRunners(
 			continue
 		}
 
-		o.attachParentRunnerPublicationSink(mount, runnerEvents, nil)
+		o.attachParentChildProcessSink(mount, runnerEvents, nil)
 		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents)
 		if err != nil {
 			o.logger.Error("failed to start watch runner during reload",
@@ -903,17 +903,14 @@ func mountSpecRuntimeEquivalent(current *mountSpec, next *mountSpec) bool {
 		current.statePath == next.statePath &&
 		current.enableWebsocket == next.enableWebsocket &&
 		current.remoteRootDeltaCapable == next.remoteRootDeltaCapable &&
-		mountRootIdentitiesEqual(current.expectedChildRootIdentity(), next.expectedChildRootIdentity())
+		childEngineSpecsEquivalent(current, next)
 }
 
-func mountRootIdentitiesEqual(
-	current *syncengine.ShortcutRootIdentity,
-	next *syncengine.ShortcutRootIdentity,
-) bool {
-	if current == nil || next == nil {
-		return current == nil && next == nil
+func childEngineSpecsEquivalent(current *mountSpec, next *mountSpec) bool {
+	if current == nil || next == nil || current.child == nil || next.child == nil {
+		return (current == nil || current.child == nil) && (next == nil || next.child == nil)
 	}
-	return syncengine.SameShortcutRootIdentity(*current, *next)
+	return syncengine.ShortcutChildEngineSpecsEqual(current.child.engine, next.child.engine)
 }
 
 func mountSpecTuningEquivalent(current *mountSpec, next *mountSpec) bool {

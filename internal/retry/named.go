@@ -8,7 +8,7 @@ const (
 	transportAttempts            = 5
 	driveDiscoveryAttempts       = 5
 	rootChildrenAttempts         = 3
-	downloadMetadataAttempts     = 4
+	downloadMetadataAttempts     = 6
 	simpleUploadMtimeAttempts    = 8
 	uploadSessionCreateAttempts  = 6
 	copyDestinationAttempts      = 6
@@ -22,7 +22,7 @@ const (
 	rootChildrenBaseDelay        = 250 * time.Millisecond
 	rootChildrenMaxDelay         = 1 * time.Second
 	downloadMetadataBaseDelay    = 250 * time.Millisecond
-	downloadMetadataMaxDelay     = 2 * time.Second
+	downloadMetadataMaxDelay     = 4 * time.Second
 	simpleUploadMtimeBaseDelay   = 250 * time.Millisecond
 	simpleUploadMtimeMaxDelay    = 16 * time.Second
 	uploadSessionCreateBaseDelay = 250 * time.Millisecond
@@ -80,8 +80,8 @@ func RootChildrenPolicy() Policy {
 // DownloadMetadataPolicy is the quick-retry policy for transient item-not-found
 // misfires when download flows fetch item metadata by ID to obtain the
 // pre-authenticated download URL. It stays short because ordinary file downloads
-// should not block for long, but it is slightly longer than root-children
-// because the object often becomes readable within the next second or two.
+// should not block indefinitely, but live Graph evidence shows newly path-visible
+// files can take several seconds before item-ID metadata lookup becomes readable.
 func DownloadMetadataPolicy() Policy {
 	return Policy{
 		MaxAttempts: downloadMetadataAttempts,

@@ -72,7 +72,9 @@ func TestShortcutRootStatusMetadataCoversNonActiveStates(t *testing.T) {
 		assert.Equal(t, metadata, lifecycle.status)
 		assert.Equal(t, metadata.ProtectsPath, lifecycle.protectsPath)
 		assert.Equal(t, lifecycle.protectsPath, shortcutRootStateKeepsProtectedPaths(tt.state))
-		assert.NotEmpty(t, lifecycle.runnerAction)
+		if lifecycle.publishesCleanup {
+			assert.Empty(t, lifecycle.runMode)
+		}
 	}
 }
 
@@ -83,14 +85,14 @@ func TestShortcutRootLifecycleMetadataDrivesRunnerProtectionAndCleanup(t *testin
 	cases := []struct {
 		state            ShortcutRootState
 		protectsPath     bool
-		runnerAction     ShortcutChildRunnerAction
+		runMode          ShortcutChildRunMode
 		publishesCleanup bool
 	}{
-		{ShortcutRootStateActive, true, ShortcutChildActionRun, false},
-		{ShortcutRootStateRemovedFinalDrain, true, ShortcutChildActionFinalDrain, false},
-		{ShortcutRootStateSamePathReplacementWaiting, true, ShortcutChildActionFinalDrain, false},
-		{ShortcutRootStateRemovedChildCleanupPending, false, ShortcutChildActionSkipParentBlocked, true},
-		{ShortcutRootStateDuplicateTarget, true, ShortcutChildActionSkipParentBlocked, false},
+		{ShortcutRootStateActive, true, ShortcutChildRunModeNormal, false},
+		{ShortcutRootStateRemovedFinalDrain, true, ShortcutChildRunModeFinalDrain, false},
+		{ShortcutRootStateSamePathReplacementWaiting, true, ShortcutChildRunModeFinalDrain, false},
+		{ShortcutRootStateRemovedChildCleanupPending, false, "", true},
+		{ShortcutRootStateDuplicateTarget, true, "", false},
 	}
 	for _, tt := range cases {
 		t.Run(string(tt.state), func(t *testing.T) {
@@ -99,7 +101,7 @@ func TestShortcutRootLifecycleMetadataDrivesRunnerProtectionAndCleanup(t *testin
 			metadata, ok := shortcutRootLifecycleMetadataFor(tt.state)
 			require.True(t, ok)
 			assert.Equal(t, tt.protectsPath, shortcutRootStateKeepsProtectedPaths(tt.state))
-			assert.Equal(t, tt.runnerAction, shortcutChildRunnerActionForRoot(tt.state))
+			assert.Equal(t, tt.runMode, shortcutChildRunModeForRoot(tt.state))
 			assert.Equal(t, tt.publishesCleanup, metadata.publishesCleanup)
 		})
 	}
