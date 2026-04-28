@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
-	"path/filepath"
 	"sort"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -80,6 +79,20 @@ type childMountSpec struct {
 	expectedSyncRootIdentity *syncengine.ShortcutRootIdentity
 }
 
+type parentMountSpecInput struct {
+	Config *StandaloneMountConfig
+}
+
+type childMountSpecInput struct {
+	Parent       *mountSpec
+	Child        *syncengine.ShortcutChildRunner
+	ChildMountID string
+	DisplayName  string
+	LocalRoot    string
+	StatePath    string
+	TokenOwner   driveid.CanonicalID
+}
+
 type runnerDecisionSet struct {
 	Mounts             []*mountSpec
 	Skipped            []MountStartupResult
@@ -93,7 +106,6 @@ type childRunnerDecision struct {
 	localAlias        string
 	relativeLocalPath string
 	runnerAction      syncengine.ShortcutChildRunnerAction
-	runnerDetail      string
 	mount             *mountSpec
 	skipErr           error
 }
@@ -189,6 +201,9 @@ func buildChildRunnerDecisions(
 	declaredChildren := sortedPublishedShortcutChildren(publications)
 	for i := range declaredChildren {
 		declared := declaredChildren[i]
+		if _, err := validatePublishedShortcutChildScope(&declared.child); err != nil {
+			return nil, nil, err
+		}
 		parent := parentByID[declared.namespaceID]
 		if parent == nil {
 			childrenWithoutConfiguredParent = append(childrenWithoutConfiguredParent, childWithoutConfiguredParent(declared))
@@ -305,7 +320,7 @@ func childWithoutConfiguredParentStartupResults(children []childWithoutConfigure
 		if displayName == "" {
 			displayName = path.Base(child.RelativeLocalPath)
 		}
-		childMountID := config.ChildMountID(children[i].namespaceID.String(), child.BindingItemID)
+		childMountID := child.ChildMountID
 		results = append(results, MountStartupResult{
 			SelectionIndex: nextIndex,
 			Identity: MountIdentity{
@@ -328,6 +343,11 @@ func childWithoutConfiguredParentStartupResults(children []childWithoutConfigure
 }
 
 func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
+	return buildParentMountSpec(parentMountSpecInput{Config: cfg})
+}
+
+func buildParentMountSpec(input parentMountSpecInput) (*mountSpec, error) {
+	cfg := input.Config
 	if cfg == nil || cfg.CanonicalID.IsZero() {
 		return nil, fmt.Errorf("multisync: standalone mount canonical ID is required")
 	}
@@ -366,11 +386,11 @@ func buildChildRunnerDecision(parent *mountSpec, child *syncengine.ShortcutChild
 	if parent == nil || child == nil || child.BindingItemID == "" {
 		return nil, fmt.Errorf("multisync: parent-declared child runner publication is incomplete")
 	}
-	relativePath := child.RelativeLocalPath
-	if relativePath == "" {
-		return nil, fmt.Errorf("multisync: parent-declared child %s is missing a local path", child.BindingItemID)
+	childMountID, err := validatePublishedShortcutChildScope(child)
+	if err != nil {
+		return nil, err
 	}
-	childMountID := config.ChildMountID(parent.mountID.String(), child.BindingItemID)
+	relativePath := child.RelativeLocalPath
 	statePath := config.MountStatePath(childMountID)
 	if statePath == "" {
 		return nil, fmt.Errorf("multisync: state path is required for child mount %s", childMountID)
@@ -382,13 +402,59 @@ func buildChildRunnerDecision(parent *mountSpec, child *syncengine.ShortcutChild
 	}
 	tokenOwner := parent.tokenOwnerCanonical
 
-	childMount := &mountSpec{
-		mountID:                mountID(childMountID),
+	childMount := buildChildMountSpec(&childMountSpecInput{
+		Parent:       parent,
+		Child:        child,
+		ChildMountID: childMountID,
+		DisplayName:  displayName,
+		LocalRoot:    child.LocalRoot,
+		StatePath:    statePath,
+		TokenOwner:   tokenOwner,
+	})
+	skipErr := shortcutChildRunnerSkipError(childMountID, child.RunnerAction)
+
+	return &childRunnerDecision{
+		namespaceID:       parent.mountID,
+		bindingItemID:     child.BindingItemID,
+		localAlias:        displayName,
+		relativeLocalPath: relativePath,
+		runnerAction:      child.RunnerAction,
+		mount:             childMount,
+		skipErr:           skipErr,
+	}, nil
+}
+
+func validatePublishedShortcutChildScope(child *syncengine.ShortcutChildRunner) (string, error) {
+	if child == nil || child.BindingItemID == "" {
+		return "", fmt.Errorf("multisync: parent-declared child runner publication is incomplete")
+	}
+	childMountID := child.ChildMountID
+	if childMountID == "" {
+		return "", fmt.Errorf("multisync: parent-declared child %s is missing a child mount ID", child.BindingItemID)
+	}
+	if !config.IsChildMountID(childMountID) {
+		return "", fmt.Errorf("multisync: parent-declared child %s has invalid child mount ID %s", child.BindingItemID, childMountID)
+	}
+	if child.RelativeLocalPath == "" {
+		return "", fmt.Errorf("multisync: parent-declared child %s is missing a local path", child.BindingItemID)
+	}
+	if child.LocalRoot == "" {
+		return "", fmt.Errorf("multisync: parent-declared child %s is missing a local root", child.BindingItemID)
+	}
+	return childMountID, nil
+}
+
+func buildChildMountSpec(input *childMountSpecInput) *mountSpec {
+	parent := input.Parent
+	child := input.Child
+	tokenOwner := input.TokenOwner
+	return &mountSpec{
+		mountID:                mountID(input.ChildMountID),
 		projectionKind:         MountProjectionChild,
 		canonicalID:            driveid.CanonicalID{},
-		displayName:            displayName,
-		syncRoot:               filepath.Join(parent.syncRoot, filepath.FromSlash(relativePath)),
-		statePath:              statePath,
+		displayName:            input.DisplayName,
+		syncRoot:               input.LocalRoot,
+		statePath:              input.StatePath,
 		remoteDriveID:          driveid.New(child.RemoteDriveID),
 		remoteRootItemID:       child.RemoteItemID,
 		tokenOwnerCanonical:    tokenOwner,
@@ -406,24 +472,11 @@ func buildChildRunnerDecision(parent *mountSpec, child *syncengine.ShortcutChild
 			expectedSyncRootIdentity: cloneChildRootIdentity(child.LocalRootIdentity),
 		},
 	}
-	skipErr := shortcutChildRunnerSkipError(childMountID, child.RunnerAction, child.RunnerDetail)
-
-	return &childRunnerDecision{
-		namespaceID:       parent.mountID,
-		bindingItemID:     child.BindingItemID,
-		localAlias:        displayName,
-		relativeLocalPath: relativePath,
-		runnerAction:      child.RunnerAction,
-		runnerDetail:      child.RunnerDetail,
-		mount:             childMount,
-		skipErr:           skipErr,
-	}, nil
 }
 
 func shortcutChildRunnerSkipError(
 	childMountID string,
 	action syncengine.ShortcutChildRunnerAction,
-	blockedDetail string,
 ) error {
 	switch action {
 	case syncengine.ShortcutChildActionRun:
@@ -431,9 +484,6 @@ func shortcutChildRunnerSkipError(
 	case syncengine.ShortcutChildActionFinalDrain:
 		return nil
 	case syncengine.ShortcutChildActionSkipParentBlocked:
-		if blockedDetail != "" {
-			return fmt.Errorf("child mount %s is blocked by parent shortcut lifecycle: %s", childMountID, blockedDetail)
-		}
 		return fmt.Errorf("child mount %s is blocked by parent shortcut lifecycle", childMountID)
 	case "":
 		return fmt.Errorf("child mount %s is missing a parent-declared runner action", childMountID)

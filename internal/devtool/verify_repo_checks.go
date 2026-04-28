@@ -228,8 +228,8 @@ func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *as
 	configAliases := importedNamesForPath(file, "github.com/tonimelisma/onedrive-go/internal/config")
 	localpathAliases := importedNamesForPath(file, "github.com/tonimelisma/onedrive-go/internal/localpath")
 	osAliases := importedNamesForPath(file, "os")
+	syncAliases := importedNamesForPath(file, "github.com/tonimelisma/onedrive-go/internal/sync")
 	filesystemAccessAllowed := multisyncFilesystemAccessAllowed(repoRoot, path)
-	cleanupScopeExecutor := path == filepath.Join(repoRoot, "internal", "multisync", "shortcut_child_artifacts.go")
 
 	forbiddenSelectors := forbiddenMultisyncSelectorReasons()
 	forbiddenIdents := forbiddenMultisyncIdentReasons()
@@ -242,55 +242,32 @@ func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *as
 			return false
 		}
 		switch n := node.(type) {
+		case *ast.CompositeLit:
+			if description := forbiddenMultisyncAckHandleConstruction(syncAliases, n); description != "" {
+				match = fmt.Sprintf("shortcut authority violation: %s: %s:%d", description, path, fset.Position(n.Pos()).Line)
+				return false
+			}
 		case *ast.Ident:
 			if description, forbidden := forbiddenIdents[n.Name]; forbidden {
 				match = fmt.Sprintf("shortcut authority violation: %s: %s:%d", description, path, fset.Position(n.Pos()).Line)
 				return false
 			}
 		case *ast.SelectorExpr:
-			if description, forbidden := forbiddenSelectors[n.Sel.Name]; forbidden {
-				match = fmt.Sprintf("shortcut authority violation: %s: %s:%d", description, path, fset.Position(n.Pos()).Line)
-				return false
-			}
-			if description, forbidden := forbiddenIdents[n.Sel.Name]; forbidden {
-				match = fmt.Sprintf("shortcut authority violation: %s: %s:%d", description, path, fset.Position(n.Pos()).Line)
-				return false
-			}
-			x, ok := n.X.(*ast.Ident)
-			if !ok {
-				return true
-			}
-			if cleanupScopeMatch := forbiddenMultisyncCleanupScopeDerivation(
+			if selectorMatch := forbiddenMultisyncSelectorAuthorityMatch(
+				n,
+				forbiddenSelectors,
+				forbiddenIdents,
+				forbiddenLocalpathSelectors,
+				forbiddenOSSelectors,
 				configAliases,
-				cleanupScopeExecutor,
-				x.Name,
-				n.Sel.Name,
+				localpathAliases,
+				osAliases,
+				filesystemAccessAllowed,
 				path,
 				fset.Position(n.Pos()).Line,
-			); cleanupScopeMatch != "" {
-				match = cleanupScopeMatch
+			); selectorMatch != "" {
+				match = selectorMatch
 				return false
-			}
-			if _, imported := localpathAliases[x.Name]; imported && !filesystemAccessAllowed {
-				if _, forbidden := forbiddenLocalpathSelectors[n.Sel.Name]; forbidden {
-					match = fmt.Sprintf(
-						"shortcut authority violation: multisync filesystem access is limited to "+
-							"control-socket and child-artifact cleanup paths: %s:%d",
-						path,
-						fset.Position(n.Pos()).Line,
-					)
-					return false
-				}
-			}
-			if _, imported := osAliases[x.Name]; imported && !filesystemAccessAllowed {
-				if _, forbidden := forbiddenOSSelectors[n.Sel.Name]; forbidden {
-					match = fmt.Sprintf(
-						"shortcut authority violation: multisync parent sync-dir filesystem access is forbidden: %s:%d",
-						path,
-						fset.Position(n.Pos()).Line,
-					)
-					return false
-				}
 			}
 		}
 
@@ -300,22 +277,93 @@ func firstForbiddenMultisyncAuthorityCall(repoRoot string, path string, file *as
 	return match
 }
 
-func forbiddenMultisyncCleanupScopeDerivation(
+func forbiddenMultisyncSelectorAuthorityMatch(
+	selector *ast.SelectorExpr,
+	forbiddenSelectors map[string]string,
+	forbiddenIdents map[string]string,
+	forbiddenLocalpathSelectors map[string]struct{},
+	forbiddenOSSelectors map[string]struct{},
 	configAliases map[string]struct{},
-	cleanupScopeExecutor bool,
+	localpathAliases map[string]struct{},
+	osAliases map[string]struct{},
+	filesystemAccessAllowed bool,
+	path string,
+	line int,
+) string {
+	if description, forbidden := forbiddenSelectors[selector.Sel.Name]; forbidden {
+		return fmt.Sprintf("shortcut authority violation: %s: %s:%d", description, path, line)
+	}
+	if description, forbidden := forbiddenIdents[selector.Sel.Name]; forbidden {
+		return fmt.Sprintf("shortcut authority violation: %s: %s:%d", description, path, line)
+	}
+	x, ok := selector.X.(*ast.Ident)
+	if !ok {
+		return ""
+	}
+	if cleanupScopeMatch := forbiddenMultisyncChildScopeDerivation(
+		configAliases,
+		x.Name,
+		selector.Sel.Name,
+		path,
+		line,
+	); cleanupScopeMatch != "" {
+		return cleanupScopeMatch
+	}
+	if _, imported := localpathAliases[x.Name]; imported && !filesystemAccessAllowed {
+		if _, forbidden := forbiddenLocalpathSelectors[selector.Sel.Name]; forbidden {
+			return fmt.Sprintf(
+				"shortcut authority violation: multisync filesystem access is limited to "+
+					"control-socket and child-artifact cleanup paths: %s:%d",
+				path,
+				line,
+			)
+		}
+	}
+	if _, imported := osAliases[x.Name]; imported && !filesystemAccessAllowed {
+		if _, forbidden := forbiddenOSSelectors[selector.Sel.Name]; forbidden {
+			return fmt.Sprintf(
+				"shortcut authority violation: multisync parent sync-dir filesystem access is forbidden: %s:%d",
+				path,
+				line,
+			)
+		}
+	}
+	return ""
+}
+
+func forbiddenMultisyncAckHandleConstruction(syncAliases map[string]struct{}, literal *ast.CompositeLit) string {
+	if literal == nil {
+		return ""
+	}
+	selector, ok := literal.Type.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "ShortcutChildAckHandle" {
+		return ""
+	}
+	owner, ok := selector.X.(*ast.Ident)
+	if !ok {
+		return ""
+	}
+	if _, imported := syncAliases[owner.Name]; !imported {
+		return ""
+	}
+	return "live parent shortcut ack handles must come from the running parent engine"
+}
+
+func forbiddenMultisyncChildScopeDerivation(
+	configAliases map[string]struct{},
 	selectorOwner string,
 	selectorName string,
 	path string,
 	line int,
 ) string {
-	if !cleanupScopeExecutor || selectorName != "ChildMountID" {
+	if selectorName != "ChildMountID" {
 		return ""
 	}
 	if _, imported := configAliases[selectorOwner]; !imported {
 		return ""
 	}
 	return fmt.Sprintf(
-		"shortcut authority violation: child artifact cleanup scope must come from parent publication: %s:%d",
+		"shortcut authority violation: child runner and artifact cleanup scope must come from parent publication: %s:%d",
 		path,
 		line,
 	)
@@ -341,7 +389,6 @@ func forbiddenMultisyncSelectorReasons() map[string]string {
 		"listShortcutRoots":                         "parent shortcut-root persistence must stay in internal/sync",
 		"replaceShortcutRoots":                      "parent shortcut-root persistence must stay in internal/sync",
 		"markShortcutChildFinalDrainReleasePending": "parent shortcut-root persistence must stay in internal/sync",
-		"NewShortcutChildAckHandle":                 "live parent shortcut ack handles must come from the running parent engine",
 		"AcknowledgeShortcutChildFinalDrain":        "parent shortcut-root persistence must stay in internal/sync",
 		"acknowledgeShortcutChildArtifactsPurged":   "parent shortcut-root persistence must stay in internal/sync",
 		"mergeReleased" + "ShortcutChildren":        "multisync must use explicit parent cleanup requests, not inferred releases",
@@ -378,6 +425,7 @@ func forbiddenMultisyncIdentReasons() map[string]string {
 		"ShortcutChildBlocked":               "multisync must consume parent-declared runner actions, not map child runner states",
 		"ShortcutChildRetiring":              "multisync must consume parent-declared runner actions, not map child runner states",
 		"ShortcutChildWaitingReplacement":    "multisync must consume parent-declared runner actions, not map child runner states",
+		"RunnerDetail":                       "multisync must not consume parent status-only detail from runner publications",
 		"ProtectedPaths":                     "multisync must not branch on parent status-only protected paths",
 		"BlockedDetail":                      "multisync must not branch on parent status-only blocker details",
 		"Waiting":                            "multisync must not branch on parent status-only waiting replacements",

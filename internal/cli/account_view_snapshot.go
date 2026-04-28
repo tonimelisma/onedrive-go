@@ -19,7 +19,7 @@ import (
 type accountViewSnapshot struct {
 	Config        *config.Config
 	Stored        *config.Catalog
-	ShortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootRecord
+	ShortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusRow
 	Accounts      []accountView
 }
 

@@ -425,7 +425,7 @@ func shortcutChildRecords(
 			NamespaceID:       root.NamespaceID,
 			BindingItemID:     root.BindingItemID,
 			RelativeLocalPath: root.RelativeLocalPath,
-			RemoteDriveID:     root.RemoteDriveID.String(),
+			RemoteDriveID:     root.RemoteDriveID,
 			RemoteItemID:      root.RemoteItemID,
 			State:             root.State,
 			StateReason:       stateReason,

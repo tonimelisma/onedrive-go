@@ -1,6 +1,7 @@
 package multisync
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -23,25 +24,13 @@ func testParentMountSpec() *mountSpec {
 	}
 }
 
-func testParentRoot(parent *mountSpec, bindingID, relativePath string) syncengine.ShortcutRootRecord {
-	return syncengine.ShortcutRootRecord{
-		NamespaceID:       parent.mountID.String(),
-		BindingItemID:     bindingID,
-		RelativeLocalPath: relativePath,
-		LocalAlias:        "Shortcut",
-		RemoteDriveID:     driveid.New("remote-drive"),
-		RemoteItemID:      "remote-root",
-		RemoteIsFolder:    true,
-		State:             syncengine.ShortcutRootStateActive,
-		ProtectedPaths:    []string{relativePath},
-	}
-}
-
-func testChildRecord(_ mountID, bindingID, relativePath string) syncengine.ShortcutChildRunner {
+func testPublishedChildForParent(parent *mountSpec, bindingID, relativePath string) syncengine.ShortcutChildRunner {
 	return syncengine.ShortcutChildRunner{
+		ChildMountID:      config.ChildMountID(parent.mountID.String(), bindingID),
 		BindingItemID:     bindingID,
 		RelativeLocalPath: relativePath,
 		LocalAlias:        "Shortcut",
+		LocalRoot:         filepath.Join(parent.syncRoot, filepath.FromSlash(relativePath)),
 		RemoteDriveID:     "remote-drive",
 		RemoteItemID:      "remote-root",
 		RemoteIsFolder:    true,
@@ -49,41 +38,17 @@ func testChildRecord(_ mountID, bindingID, relativePath string) syncengine.Short
 	}
 }
 
-func topologyForTest(root *syncengine.ShortcutRootRecord) syncengine.ShortcutChildRunner {
-	if root == nil {
-		return syncengine.ShortcutChildRunner{}
-	}
+func testChildRecord(parentID mountID, bindingID, relativePath string) syncengine.ShortcutChildRunner {
 	return syncengine.ShortcutChildRunner{
-		BindingItemID:     root.BindingItemID,
-		RelativeLocalPath: root.RelativeLocalPath,
-		LocalAlias:        root.LocalAlias,
-		RemoteDriveID:     root.RemoteDriveID.String(),
-		RemoteItemID:      root.RemoteItemID,
-		RemoteIsFolder:    root.RemoteIsFolder,
-		RunnerAction:      shortcutChildActionForRoot(root.State),
-	}
-}
-
-func shortcutChildActionForRoot(state syncengine.ShortcutRootState) syncengine.ShortcutChildRunnerAction {
-	switch state {
-	case "", syncengine.ShortcutRootStateActive:
-		return syncengine.ShortcutChildActionRun
-	case syncengine.ShortcutRootStateRemovedFinalDrain:
-		return syncengine.ShortcutChildActionFinalDrain
-	case syncengine.ShortcutRootStateSamePathReplacementWaiting:
-		return syncengine.ShortcutChildActionFinalDrain
-	case syncengine.ShortcutRootStateTargetUnavailable,
-		syncengine.ShortcutRootStateLocalRootUnavailable,
-		syncengine.ShortcutRootStateBlockedPath,
-		syncengine.ShortcutRootStateRenameAmbiguous,
-		syncengine.ShortcutRootStateAliasMutationBlocked,
-		syncengine.ShortcutRootStateRemovedReleasePending,
-		syncengine.ShortcutRootStateRemovedCleanupBlocked,
-		syncengine.ShortcutRootStateRemovedChildCleanupPending,
-		syncengine.ShortcutRootStateDuplicateTarget:
-		return syncengine.ShortcutChildActionSkipParentBlocked
-	default:
-		return syncengine.ShortcutChildActionSkipParentBlocked
+		ChildMountID:      config.ChildMountID(parentID.String(), bindingID),
+		BindingItemID:     bindingID,
+		RelativeLocalPath: relativePath,
+		LocalRoot:         filepath.Join(os.TempDir(), "parent", filepath.FromSlash(relativePath)),
+		LocalAlias:        "Shortcut",
+		RemoteDriveID:     "remote-drive",
+		RemoteItemID:      "remote-root",
+		RemoteIsFolder:    true,
+		RunnerAction:      syncengine.ShortcutChildActionRun,
 	}
 }
 
@@ -377,20 +342,12 @@ func TestParentWaitingReplacementPublishesOnlyOldFinalDrainChild(t *testing.T) {
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
-	root := testParentRoot(parent, "binding-old", "Shortcut")
-	root.State = syncengine.ShortcutRootStateSamePathReplacementWaiting
-	root.Waiting = &syncengine.ShortcutRootReplacement{
-		BindingItemID:     "binding-new",
-		RelativeLocalPath: "Shortcut",
-		LocalAlias:        "Shortcut",
-		RemoteDriveID:     driveid.New("remote-next-0001"),
-		RemoteItemID:      "remote-item-next",
-		RemoteIsFolder:    true,
-	}
+	child := testPublishedChildForParent(parent, "binding-old", "Shortcut")
+	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
 
 	changed := orch.receiveParentRunnerPublicationFromParent(parent, syncengine.ShortcutChildRunnerPublication{
 		NamespaceID: parent.mountID.String(),
-		Children:    []syncengine.ShortcutChildRunner{topologyForTest(&root)},
+		Children:    []syncengine.ShortcutChildRunner{child},
 	})
 
 	assert.True(t, changed)
@@ -406,13 +363,13 @@ func TestBuildRunnerDecisionsFromParentRunnerPublication_DoesNotClassifyDuplicat
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
-	first := testParentRoot(parent, "binding-a", "Shortcuts/A")
-	second := testParentRoot(parent, "binding-b", "Shortcuts/B")
+	first := testPublishedChildForParent(parent, "binding-a", "Shortcuts/A")
+	second := testPublishedChildForParent(parent, "binding-b", "Shortcuts/B")
 	orch.receiveParentRunnerPublication(parent.mountID, syncengine.ShortcutChildRunnerPublication{
 		NamespaceID: parent.mountID.String(),
 		Children: []syncengine.ShortcutChildRunner{
-			topologyForTest(&first),
-			topologyForTest(&second),
+			first,
+			second,
 		},
 	})
 
@@ -439,11 +396,11 @@ func TestBuildRunnerDecisionsFromParentRunnerPublication_StandaloneContentRootRu
 		remoteRootItemID:    "remote-root",
 	}
 	orch := NewOrchestrator(&OrchestratorConfig{})
-	root := testParentRoot(parent, "binding-a", "Shortcuts/A")
+	child := testPublishedChildForParent(parent, "binding-a", "Shortcuts/A")
 	orch.receiveParentRunnerPublication(parent.mountID, syncengine.ShortcutChildRunnerPublication{
 		NamespaceID: parent.mountID.String(),
 		Children: []syncengine.ShortcutChildRunner{
-			topologyForTest(&root),
+			child,
 		},
 	})
 

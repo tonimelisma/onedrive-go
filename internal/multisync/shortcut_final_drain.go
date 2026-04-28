@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tonimelisma/onedrive-go/internal/config"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -34,7 +33,7 @@ func finalDrainMountIDs(publications map[mountID]syncengine.ShortcutChildRunnerP
 	for i := range children {
 		child := children[i].child
 		if child.RunnerAction == syncengine.ShortcutChildActionFinalDrain {
-			ids = append(ids, config.ChildMountID(children[i].namespaceID.String(), child.BindingItemID))
+			ids = append(ids, child.ChildMountID)
 		}
 	}
 

@@ -59,19 +59,51 @@ func TestShortcutChildRunnerPublicationIncludesExplicitCleanupScope(t *testing.T
 }
 
 // Validates: R-2.4.8
+func TestShortcutChildRunnerPublicationIncludesExplicitRunnerScope(t *testing.T) {
+	t.Parallel()
+
+	parentRoot := filepath.Join(t.TempDir(), "parent")
+	publication := shortcutChildRunnerPublicationFromRootsWithParentRoot(
+		shortcutNamespaceTestID,
+		parentRoot,
+		[]ShortcutRootRecord{{
+			NamespaceID:       shortcutNamespaceTestID,
+			BindingItemID:     "binding-run",
+			RelativeLocalPath: "Shortcuts/Run",
+			LocalAlias:        "Run",
+			RemoteDriveID:     driveid.New("remote-drive"),
+			RemoteItemID:      "remote-root",
+			RemoteIsFolder:    true,
+			State:             ShortcutRootStateActive,
+		}},
+	)
+
+	require.Len(t, publication.Children, 1)
+	child := publication.Children[0]
+	assert.Equal(t, "binding-run", child.BindingItemID)
+	assert.Equal(t, "personal:owner@example.com|binding:binding-run", child.ChildMountID)
+	assert.Equal(t, filepath.Join(parentRoot, "Shortcuts", "Run"), child.LocalRoot)
+	assert.Equal(t, ShortcutChildActionRun, child.RunnerAction)
+}
+
+// Validates: R-2.4.8
 func TestShortcutChildRunnerPublicationEqualityIsSyncOwned(t *testing.T) {
 	t.Parallel()
 
 	identity := &ShortcutRootIdentity{Device: 1, Inode: 2}
 	first := NormalizeShortcutChildRunnerPublication(shortcutNamespaceTestID, ShortcutChildRunnerPublication{
 		Children: []ShortcutChildRunner{{
+			ChildMountID:      "personal:owner@example.com|binding:binding-b",
 			BindingItemID:     "binding-b",
 			RelativeLocalPath: "B",
+			LocalRoot:         filepath.Join("parent", "B"),
 			RunnerAction:      ShortcutChildActionRun,
 			LocalRootIdentity: identity,
 		}, {
+			ChildMountID:      "personal:owner@example.com|binding:binding-a",
 			BindingItemID:     "binding-a",
 			RelativeLocalPath: "A",
+			LocalRoot:         filepath.Join("parent", "A"),
 			RunnerAction:      ShortcutChildActionFinalDrain,
 		}},
 		CleanupRequests: []ShortcutChildArtifactCleanupRequest{{
@@ -86,12 +118,16 @@ func TestShortcutChildRunnerPublicationEqualityIsSyncOwned(t *testing.T) {
 	second := NormalizeShortcutChildRunnerPublication(shortcutNamespaceTestID, ShortcutChildRunnerPublication{
 		NamespaceID: shortcutNamespaceTestID,
 		Children: []ShortcutChildRunner{{
+			ChildMountID:      "personal:owner@example.com|binding:binding-a",
 			BindingItemID:     "binding-a",
 			RelativeLocalPath: "A",
+			LocalRoot:         filepath.Join("parent", "A"),
 			RunnerAction:      ShortcutChildActionFinalDrain,
 		}, {
+			ChildMountID:      "personal:owner@example.com|binding:binding-b",
 			BindingItemID:     "binding-b",
 			RelativeLocalPath: "B",
+			LocalRoot:         filepath.Join("parent", "B"),
 			RunnerAction:      ShortcutChildActionRun,
 			LocalRootIdentity: &ShortcutRootIdentity{Device: 1, Inode: 2},
 		}},

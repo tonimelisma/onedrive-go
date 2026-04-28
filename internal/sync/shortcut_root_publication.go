@@ -33,14 +33,15 @@ func shortcutChildRunnerPublicationFromRootsWithParentRoot(
 			continue
 		}
 		child := ShortcutChildRunner{
+			ChildMountID:      config.ChildMountID(namespaceID, root.BindingItemID),
 			BindingItemID:     root.BindingItemID,
 			RelativeLocalPath: root.RelativeLocalPath,
+			LocalRoot:         shortcutChildLocalRoot(parentSyncRoot, root.RelativeLocalPath),
 			LocalAlias:        root.LocalAlias,
 			RemoteDriveID:     root.RemoteDriveID.String(),
 			RemoteItemID:      root.RemoteItemID,
 			RemoteIsFolder:    root.RemoteIsFolder,
 			RunnerAction:      shortcutChildRunnerActionForRoot(root.State),
-			RunnerDetail:      root.BlockedDetail,
 			LocalRootIdentity: shortcutRootIdentityFromFileIdentity(root.LocalRootIdentity),
 		}
 		snapshot.Children = append(snapshot.Children, child)
@@ -49,6 +50,10 @@ func shortcutChildRunnerPublicationFromRootsWithParentRoot(
 }
 
 func shortcutChildCleanupLocalRoot(parentSyncRoot string, relativeLocalPath string) string {
+	return shortcutChildLocalRoot(parentSyncRoot, relativeLocalPath)
+}
+
+func shortcutChildLocalRoot(parentSyncRoot string, relativeLocalPath string) string {
 	if parentSyncRoot == "" || relativeLocalPath == "" {
 		return ""
 	}
