@@ -112,6 +112,23 @@ TODO: add live shortcut delete E2E once tests are stable.
 	assert.Contains(t, err.Error(), "live shortcut delete E2E is out of scope")
 }
 
+func TestRunShortcutArchitectureChecks_SkipsVCSDirectoriesBeforeTraversal(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := writeShortcutGuardFixture(t, "spec/design/sync-control-plane.md", `# good
+`)
+	gitDir := filepath.Join(repoRoot, ".git")
+	require.NoError(t, os.MkdirAll(gitDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(gitDir, "packed-refs"), []byte("shortcut bootstrap"), 0o600))
+	require.NoError(t, os.Chmod(gitDir, 0))
+	t.Cleanup(func() {
+		//nolint:gosec // Test cleanup must restore search permission so TempDir removal can delete the fixture.
+		assert.NoError(t, os.Chmod(gitDir, 0o700))
+	})
+
+	require.NoError(t, RunShortcutArchitectureChecks(repoRoot))
+}
+
 func writeShortcutGuardFixture(t *testing.T, rel string, body string) string {
 	t.Helper()
 
