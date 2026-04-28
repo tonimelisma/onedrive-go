@@ -23,12 +23,20 @@ type shortcutChildArtifactCleanup struct {
 	reason        syncengine.ShortcutChildArtifactCleanupReason
 }
 
+type shortcutChildArtifactCleanupSource string
+
+const (
+	shortcutChildArtifactCleanupSourcePublished  shortcutChildArtifactCleanupSource = "published_cleanup"
+	shortcutChildArtifactCleanupSourceFinalDrain shortcutChildArtifactCleanupSource = "final_drain"
+)
+
 type shortcutChildArtifactScope struct {
 	mountID   string
 	localRoot string
 }
 
 type shortcutChildArtifactCleanupExecutor struct {
+	dataDir              string
 	logger               *slog.Logger
 	remove               func(string) error
 	pruneCatalogRecord   func(string) error
@@ -37,9 +45,12 @@ type shortcutChildArtifactCleanupExecutor struct {
 
 func newShortcutChildArtifactCleanupExecutor(logger *slog.Logger, dataDir string) shortcutChildArtifactCleanupExecutor {
 	return shortcutChildArtifactCleanupExecutor{
-		logger:             logger,
-		remove:             localpath.Remove,
-		pruneCatalogRecord: pruneShortcutChildCatalogRecord,
+		dataDir: dataDir,
+		logger:  logger,
+		remove:  localpath.Remove,
+		pruneCatalogRecord: func(childMountID string) error {
+			return pruneShortcutChildCatalogRecord(dataDir, childMountID)
+		},
 		deleteUploadSessions: func(childMountID string, localRoot string) error {
 			sessionStore := driveops.NewSessionStore(dataDir, logger)
 			_, err := sessionStore.DeleteForScope(childMountID, localRoot)
@@ -71,8 +82,8 @@ func shortcutChildArtifactCleanups(
 		if publication.NamespaceID != "" {
 			namespaceID = publication.NamespaceID
 		}
-		for i := range publication.CleanupRequests {
-			request := publication.CleanupRequests[i]
+		for i := range publication.CleanupWork.Requests {
+			request := publication.CleanupWork.Requests[i]
 			if request.BindingItemID == "" {
 				return nil, fmt.Errorf("parent cleanup request from %s is missing binding item ID", namespaceID)
 			}
@@ -113,12 +124,26 @@ func (o *Orchestrator) purgeShortcutChildArtifactsForDecisions(
 	if decisions == nil || len(decisions.CleanupChildren) == 0 {
 		return nil
 	}
+	return o.purgeAndAcknowledgeShortcutChildArtifacts(
+		ctx,
+		shortcutChildArtifactCleanupSourcePublished,
+		decisions.CleanupChildren,
+		parentAckers,
+	)
+}
+
+func (o *Orchestrator) purgeAndAcknowledgeShortcutChildArtifacts(
+	ctx context.Context,
+	source shortcutChildArtifactCleanupSource,
+	cleanups []shortcutChildArtifactCleanup,
+	parentAckers map[mountID]shortcutChildAckHandle,
+) error {
 	var errs []error
-	purged := make([]shortcutChildArtifactCleanup, 0, len(decisions.CleanupChildren))
-	for _, cleanup := range decisions.CleanupChildren {
+	purged := make([]shortcutChildArtifactCleanup, 0, len(cleanups))
+	for _, cleanup := range cleanups {
 		scope := shortcutChildArtifactScope{mountID: cleanup.mountID, localRoot: cleanup.localRoot}
 		if err := o.childArtifactCleanupExecutor().purge(ctx, scope); err != nil {
-			errs = append(errs, fmt.Errorf("purging shortcut child mount %s: %w", cleanup.mountID, err))
+			errs = append(errs, fmt.Errorf("purging %s shortcut child mount %s: %w", source, cleanup.mountID, err))
 			continue
 		}
 		purged = append(purged, cleanup)
@@ -175,7 +200,7 @@ func (e shortcutChildArtifactCleanupExecutor) purge(
 	}
 
 	var errs []error
-	for _, path := range shortcutChildStateArtifactPaths(childMountID) {
+	for _, path := range shortcutChildStateArtifactPaths(e.dataDir, childMountID) {
 		if path == "" {
 			continue
 		}
@@ -202,14 +227,17 @@ func (e shortcutChildArtifactCleanupExecutor) purge(
 }
 
 func (e shortcutChildArtifactCleanupExecutor) requireConfigured() error {
+	if strings.TrimSpace(e.dataDir) == "" {
+		return fmt.Errorf("purging managed child mount artifacts: cleanup executor data dir is not configured")
+	}
 	if e.remove == nil || e.pruneCatalogRecord == nil || e.deleteUploadSessions == nil {
 		return fmt.Errorf("purging managed child mount artifacts: cleanup executor is not configured")
 	}
 	return nil
 }
 
-func shortcutChildStateArtifactPaths(childMountID string) []string {
-	statePath := config.MountStatePath(childMountID)
+func shortcutChildStateArtifactPaths(dataDir string, childMountID string) []string {
+	statePath := config.MountStatePathForDataDir(dataDir, childMountID)
 	if statePath == "" {
 		return nil
 	}
@@ -221,11 +249,11 @@ func shortcutChildStateArtifactPaths(childMountID string) []string {
 	}
 }
 
-func pruneShortcutChildCatalogRecord(childMountID string) error {
+func pruneShortcutChildCatalogRecord(dataDir string, childMountID string) error {
 	if !config.IsChildMountID(childMountID) {
 		return nil
 	}
-	catalogPath := config.CatalogPath()
+	catalogPath := config.CatalogPathForDataDir(dataDir)
 	if catalogPath == "" {
 		return nil
 	}
@@ -236,7 +264,7 @@ func pruneShortcutChildCatalogRecord(childMountID string) error {
 		return fmt.Errorf("stat catalog before child cleanup: %w", err)
 	}
 
-	catalog, err := config.LoadCatalog()
+	catalog, err := config.LoadCatalogForDataDir(dataDir)
 	if err != nil {
 		return fmt.Errorf("load catalog before child cleanup: %w", err)
 	}
@@ -244,7 +272,7 @@ func pruneShortcutChildCatalogRecord(childMountID string) error {
 		return nil
 	}
 
-	if err := config.UpdateCatalog(func(catalog *config.Catalog) error {
+	if err := config.UpdateCatalogForDataDir(dataDir, func(catalog *config.Catalog) error {
 		delete(catalog.Drives, childMountID)
 		return nil
 	}); err != nil {

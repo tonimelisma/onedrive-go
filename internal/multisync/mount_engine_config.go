@@ -3,7 +3,6 @@ package multisync
 import (
 	"fmt"
 
-	"github.com/tonimelisma/onedrive-go/internal/config"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -12,7 +11,7 @@ import (
 // here, including token-owner identity and sync tunables. Parent shortcut-root
 // reservations are rebuilt by parent engines from their own sync stores, not
 // synthesized by multisync.
-func engineMountConfigForMount(mount *mountSpec) (*syncengine.EngineMountConfig, error) {
+func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.EngineMountConfig, error) {
 	if mount == nil {
 		return nil, fmt.Errorf("multisync: mount is required")
 	}
@@ -21,7 +20,7 @@ func engineMountConfigForMount(mount *mountSpec) (*syncengine.EngineMountConfig,
 		MountID:                  mount.mountID.String(),
 		DBPath:                   mount.statePath,
 		SyncRoot:                 mount.syncRoot,
-		DataDir:                  config.DefaultDataDir(),
+		DataDir:                  dataDir,
 		DriveID:                  mount.remoteDriveID,
 		DriveType:                mount.driveType,
 		AccountEmail:             mount.accountEmail,

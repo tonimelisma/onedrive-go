@@ -416,18 +416,19 @@ func shortcutChildRecords(
 	records := make([]shortcutChildE2ERecord, 0, len(roots))
 	for i := range roots {
 		root := roots[i]
-		stateReason := ""
-		if root.State != "" && root.State != syncengine.ShortcutRootStateActive {
-			stateReason = string(root.State)
+		state := syncengine.ShortcutRootState(root.Metadata.DisplayState)
+		if state == "" {
+			state = syncengine.ShortcutRootStateActive
 		}
+		stateReason := root.Metadata.StateReason
 		records = append(records, shortcutChildE2ERecord{
-			MountID:           config.ChildMountID(root.NamespaceID, root.BindingItemID),
-			NamespaceID:       root.NamespaceID,
+			MountID:           config.ChildMountID(parentID.String(), root.BindingItemID),
+			NamespaceID:       parentID.String(),
 			BindingItemID:     root.BindingItemID,
 			RelativeLocalPath: root.RelativeLocalPath,
 			RemoteDriveID:     root.RemoteDriveID,
 			RemoteItemID:      root.RemoteItemID,
-			State:             root.State,
+			State:             state,
 			StateReason:       stateReason,
 		})
 	}

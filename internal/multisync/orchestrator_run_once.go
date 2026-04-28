@@ -2,7 +2,6 @@ package multisync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	gosync "sync"
@@ -119,7 +118,7 @@ func runIndexedParentMountWork(
 			defer wg.Done()
 			reports[indexed.index] = indexed.work.runner.run(ctx, indexed.work.fn)
 			if coordinator != nil && indexed.work.mount != nil {
-				coordinator.markParentDone(indexed.work.mount.mountID)
+				coordinator.markParentDone(ctx, indexed.work.mount.mountID)
 			}
 		}(w)
 	}
@@ -313,10 +312,12 @@ func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 	if err != nil {
 		return false, err
 	}
-	if err := o.purgeShortcutChildArtifactsForCleanups(ctx, cleanups); err != nil {
-		return false, err
-	}
-	if err := o.acknowledgeShortcutChildArtifactCleanups(ctx, cleanups, cloneParentAckHandles(parentAckers)); err != nil {
+	if err := o.purgeAndAcknowledgeShortcutChildArtifacts(
+		ctx,
+		shortcutChildArtifactCleanupSourceFinalDrain,
+		cleanups,
+		cloneParentAckHandles(parentAckers),
+	); err != nil {
 		return false, err
 	}
 	if o.logger != nil {
@@ -387,18 +388,4 @@ func acknowledgeSuccessfulFinalDrains(
 		cleanups = append(cleanups, publishedCleanups...)
 	}
 	return cleanups, nil
-}
-
-func (o *Orchestrator) purgeShortcutChildArtifactsForCleanups(
-	ctx context.Context,
-	cleanups []shortcutChildArtifactCleanup,
-) error {
-	var errs []error
-	for _, cleanup := range cleanups {
-		scope := shortcutChildArtifactScope{mountID: cleanup.mountID, localRoot: cleanup.localRoot}
-		if err := o.childArtifactCleanupExecutor().purge(ctx, scope); err != nil {
-			errs = append(errs, fmt.Errorf("purging final-drain child mount %s: %w", cleanup.mountID, err))
-		}
-	}
-	return errors.Join(errs...)
 }

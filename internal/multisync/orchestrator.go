@@ -89,6 +89,7 @@ type OrchestratorConfig struct {
 	InitialStartupResults  []MountStartupResult
 	ReloadStandaloneMounts func(*config.Config) (StandaloneMountSelection, error)
 	Runtime                *driveops.SessionRuntime // token caching + Session creation
+	DataDir                string
 	Logger                 *slog.Logger
 	ControlSocketPath      string
 	StartWarning           func(StartupWarning)
@@ -121,7 +122,7 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 	return &Orchestrator{
 		cfg: cfg,
 		engineFactory: func(ctx context.Context, req engineFactoryRequest) (engineRunner, error) {
-			mountCfg, err := engineMountConfigForMount(req.Mount)
+			mountCfg, err := engineMountConfigForMount(req.Mount, cfg.DataDir)
 			if err != nil {
 				return nil, fmt.Errorf("engine mount config: %w", err)
 			}
@@ -144,7 +145,7 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 		logger:                         cfg.Logger,
 		perfRuntime:                    perf.NewRuntime(cfg.PerfParent),
 		latestParentRunnerPublications: make(map[mountID]syncengine.ShortcutChildRunnerPublication),
-		artifactCleanup:                newShortcutChildArtifactCleanupExecutor(cfg.Logger, config.DefaultDataDir()),
+		artifactCleanup:                newShortcutChildArtifactCleanupExecutor(cfg.Logger, cfg.DataDir),
 		reconcileTicks: func(interval time.Duration) (<-chan time.Time, func()) {
 			if interval <= 0 {
 				return nil, func() {}

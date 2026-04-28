@@ -9,18 +9,37 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-type shortcutRootMissingAliasAction string
+type shortcutRootLocalAction string
 
 const (
-	shortcutRootMissingAliasNoop            shortcutRootMissingAliasAction = ""
-	shortcutRootMissingAliasDelete          shortcutRootMissingAliasAction = "delete_alias"
-	shortcutRootMissingAliasRename          shortcutRootMissingAliasAction = "rename_alias"
-	shortcutRootMissingAliasMoveProjection  shortcutRootMissingAliasAction = "move_projection"
-	shortcutRootMissingAliasRenameAmbiguous shortcutRootMissingAliasAction = "rename_ambiguous"
+	shortcutRootLocalNoop            shortcutRootLocalAction = "noop"
+	shortcutRootLocalKeepRecord      shortcutRootLocalAction = "keepRecord"
+	shortcutRootLocalDropRecord      shortcutRootLocalAction = "dropRecord"
+	shortcutRootLocalMaterializeRoot shortcutRootLocalAction = "materializeRoot"
+	shortcutRootLocalMutateAlias     shortcutRootLocalAction = "mutateAlias"
+	shortcutRootLocalMoveProjection  shortcutRootLocalAction = "moveProjection"
+
+	shortcutRootMissingAliasNoop            shortcutRootLocalAction = shortcutRootLocalNoop
+	shortcutRootMissingAliasDelete          shortcutRootLocalAction = shortcutRootLocalDropRecord
+	shortcutRootMissingAliasRename          shortcutRootLocalAction = shortcutRootLocalMutateAlias
+	shortcutRootMissingAliasMoveProjection  shortcutRootLocalAction = shortcutRootLocalMoveProjection
+	shortcutRootMissingAliasRenameAmbiguous shortcutRootLocalAction = shortcutRootLocalKeepRecord
 )
 
-type shortcutRootMissingAliasPlan struct {
-	Action           shortcutRootMissingAliasAction
+type shortcutRootLocalObservation struct {
+	RelativePath   string
+	RelativePathOK bool
+	SymlinkErr     error
+	PathState      synctree.PathState
+	PathErr        error
+	Identity       *synctree.FileIdentity
+	IdentityErr    error
+	Candidates     []string
+	CandidateErr   error
+}
+
+type shortcutRootLocalPlan struct {
+	Action           shortcutRootLocalAction
 	Mutation         shortcutAliasMutation
 	FromRelativePath string
 	ToRelativePath   string
@@ -28,21 +47,6 @@ type shortcutRootMissingAliasPlan struct {
 	Next             ShortcutRootRecord
 	Keep             bool
 	Changed          bool
-}
-
-type shortcutRootLocalObservationKind string
-
-const (
-	shortcutRootLocalObservationBlocked             shortcutRootLocalObservationKind = "blocked"
-	shortcutRootLocalObservationUnavailable         shortcutRootLocalObservationKind = "unavailable"
-	shortcutRootLocalObservationReady               shortcutRootLocalObservationKind = "ready"
-	shortcutRootLocalObservationRetiringPathMissing shortcutRootLocalObservationKind = "retiring_path_missing"
-)
-
-type shortcutRootLocalObservation struct {
-	Kind     shortcutRootLocalObservationKind
-	Detail   string
-	Identity *synctree.FileIdentity
 }
 
 type shortcutRootLocalObservationPlan struct {
@@ -63,66 +67,132 @@ type shortcutRootProjectionMoveResult struct {
 	IdentityErr error
 }
 
-func shortcutRootLocalObservationForPathError(err error) shortcutRootLocalObservation {
-	kind := shortcutRootLocalObservationUnavailable
-	if errors.Is(err, synctree.ErrUnsafePath) ||
-		errors.Is(err, syscall.ENOTDIR) {
-		kind = shortcutRootLocalObservationBlocked
-	}
-	return shortcutRootLocalObservation{
-		Kind:   kind,
-		Detail: err.Error(),
-	}
-}
-
 //nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
 func planShortcutRootLocalObservation(
 	record ShortcutRootRecord,
 	observation shortcutRootLocalObservation,
-) shortcutRootLocalObservationPlan {
+) shortcutRootLocalPlan {
 	record = normalizeShortcutRootRecord(record)
-	switch observation.Kind {
-	case shortcutRootLocalObservationBlocked:
-		next := planShortcutRootBlocked(record, observation.Detail)
-		return shortcutRootLocalObservationPlan{
-			Next:    next,
+	if !observation.RelativePathOK {
+		return shortcutRootLocalPlan{
+			Action:  shortcutRootLocalKeepRecord,
+			Next:    planShortcutRootBlocked(record, "shortcut alias path escapes parent sync root"),
 			Keep:    true,
-			Changed: !shortcutRootRecordsEqual(record, next),
+			Changed: true,
 		}
-	case shortcutRootLocalObservationUnavailable:
-		next := planShortcutRootUnavailable(record, observation.Detail)
-		return shortcutRootLocalObservationPlan{
-			Next:    next,
+	}
+	if observation.SymlinkErr != nil {
+		return shortcutRootLocalPlan{
+			Action:  shortcutRootLocalKeepRecord,
+			Next:    planShortcutRootPathError(record, observation.SymlinkErr),
 			Keep:    true,
-			Changed: !shortcutRootRecordsEqual(record, next),
+			Changed: true,
 		}
-	case shortcutRootLocalObservationReady:
-		if observation.Identity == nil {
-			next := planShortcutRootUnavailable(record, "shortcut alias local root identity is unavailable")
-			return shortcutRootLocalObservationPlan{
+	}
+	if observation.PathErr != nil {
+		return shortcutRootLocalPlan{
+			Action:  shortcutRootLocalKeepRecord,
+			Next:    planShortcutRootPathError(record, observation.PathErr),
+			Keep:    true,
+			Changed: true,
+		}
+	}
+	if observation.PathState.Exists {
+		if !observation.PathState.IsDir {
+			return shortcutRootLocalPlan{
+				Action:  shortcutRootLocalKeepRecord,
+				Next:    planShortcutRootBlocked(record, "shortcut alias path is not a directory"),
+				Keep:    true,
+				Changed: true,
+			}
+		}
+		if observation.IdentityErr != nil {
+			return shortcutRootLocalPlan{
+				Action:  shortcutRootLocalKeepRecord,
+				Next:    planShortcutRootUnavailable(record, observation.IdentityErr.Error()),
+				Keep:    true,
+				Changed: true,
+			}
+		}
+		if observation.Identity != nil {
+			next := planShortcutRootLocalReady(record, *observation.Identity)
+			return shortcutRootLocalPlan{
+				Action:  shortcutRootLocalKeepRecord,
 				Next:    next,
 				Keep:    true,
 				Changed: !shortcutRootRecordsEqual(record, next),
 			}
 		}
-		next := planShortcutRootLocalReady(record, *observation.Identity)
-		return shortcutRootLocalObservationPlan{
-			Next:    next,
-			Keep:    true,
-			Changed: !shortcutRootRecordsEqual(record, next),
+	}
+	if record.LocalRootIdentity == nil {
+		return shortcutRootLocalPlan{
+			Action: shortcutRootLocalMaterializeRoot,
+			Next:   record,
+			Keep:   true,
 		}
-	case shortcutRootLocalObservationRetiringPathMissing:
-		next, keep := planRetiringShortcutRootMissing(record)
-		return shortcutRootLocalObservationPlan{
-			Next:    next,
-			Keep:    keep,
+	}
+	return shortcutRootLocalPlan{
+		Action: shortcutRootLocalNoop,
+		Next:   record,
+		Keep:   true,
+	}
+}
+
+//nolint:gocritic // ShortcutRootRecord is an immutable planner value at this boundary.
+func planRetiringShortcutRootLocalObservation(
+	record ShortcutRootRecord,
+	observation shortcutRootLocalObservation,
+) shortcutRootLocalPlan {
+	record = normalizeShortcutRootRecord(record)
+	if !observation.RelativePathOK {
+		return shortcutRootLocalPlan{
+			Action:  shortcutRootLocalKeepRecord,
+			Next:    planShortcutRootBlocked(record, "shortcut alias path escapes parent sync root"),
+			Keep:    true,
 			Changed: true,
 		}
-	default:
-		return shortcutRootLocalObservationPlan{
-			Next: record,
-			Keep: true,
+	}
+	if observation.SymlinkErr != nil {
+		return shortcutRootLocalPlan{
+			Action:  shortcutRootLocalKeepRecord,
+			Next:    planShortcutRootPathError(record, observation.SymlinkErr),
+			Keep:    true,
+			Changed: true,
 		}
+	}
+	if observation.PathErr != nil {
+		return shortcutRootLocalPlan{
+			Action:  shortcutRootLocalKeepRecord,
+			Next:    planShortcutRootPathError(record, observation.PathErr),
+			Keep:    true,
+			Changed: true,
+		}
+	}
+	if observation.PathState.Exists {
+		if !observation.PathState.IsDir {
+			return shortcutRootLocalPlan{
+				Action:  shortcutRootLocalKeepRecord,
+				Next:    planShortcutRootCleanupBlocked(record, errors.New("shortcut alias path is not a directory")),
+				Keep:    true,
+				Changed: true,
+			}
+		}
+		return shortcutRootLocalPlan{
+			Action: shortcutRootLocalKeepRecord,
+			Next:   record,
+			Keep:   true,
+		}
+	}
+	next, keep := planRetiringShortcutRootMissing(record)
+	action := shortcutRootLocalDropRecord
+	if keep {
+		action = shortcutRootLocalKeepRecord
+	}
+	return shortcutRootLocalPlan{
+		Action:  action,
+		Next:    next,
+		Keep:    keep,
+		Changed: true,
 	}
 }
 
@@ -309,10 +379,10 @@ func planMissingMaterializedShortcutRoot(
 	record ShortcutRootRecord,
 	relativePath string,
 	candidates []string,
-) shortcutRootMissingAliasPlan {
+) shortcutRootLocalPlan {
 	record = normalizeShortcutRootRecord(record)
 	if previousPath, ok := previousProtectedProjectionCandidate(&record, candidates); ok {
-		return shortcutRootMissingAliasPlan{
+		return shortcutRootLocalPlan{
 			Action:           shortcutRootMissingAliasMoveProjection,
 			FromRelativePath: previousPath,
 			ToRelativePath:   relativePath,
@@ -321,7 +391,7 @@ func planMissingMaterializedShortcutRoot(
 	}
 	switch len(candidates) {
 	case 0:
-		return shortcutRootMissingAliasPlan{
+		return shortcutRootLocalPlan{
 			Action: shortcutRootMissingAliasDelete,
 			Mutation: shortcutAliasMutation{
 				Kind:          shortcutAliasMutationDelete,
@@ -330,7 +400,7 @@ func planMissingMaterializedShortcutRoot(
 		}
 	case 1:
 		alias := path.Base(candidates[0])
-		return shortcutRootMissingAliasPlan{
+		return shortcutRootLocalPlan{
 			Action:        shortcutRootMissingAliasRename,
 			CandidatePath: candidates[0],
 			Mutation: shortcutAliasMutation{
@@ -348,7 +418,7 @@ func planMissingMaterializedShortcutRoot(
 			"multiple same-parent shortcut alias rename candidates",
 		)
 		next.ProtectedPaths = appendUniqueProtectedRootPaths(next.ProtectedPaths, candidates...)
-		return shortcutRootMissingAliasPlan{
+		return shortcutRootLocalPlan{
 			Action:  shortcutRootMissingAliasRenameAmbiguous,
 			Next:    next,
 			Keep:    true,

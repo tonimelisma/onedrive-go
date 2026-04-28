@@ -95,7 +95,13 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions)
 	rt.startObservers(ctx, pipe.bl, opts)
 
 	// Step 4: Run the watch loop.
-	return rt.runWatchLoop(ctx, pipe)
+	if err := rt.runWatchLoop(ctx, pipe); err != nil {
+		if isWatchShutdownError(ctx, err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func isWatchShutdownError(ctx context.Context, err error) bool {

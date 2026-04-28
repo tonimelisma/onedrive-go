@@ -43,6 +43,71 @@ type ShortcutRootStatusMetadata struct {
 	ProtectsPath   bool
 }
 
+type ShortcutRootStatusView struct {
+	BindingItemID          string
+	RelativeLocalPath      string
+	LocalAlias             string
+	RemoteDriveID          string
+	RemoteItemID           string
+	RemoteIsFolder         bool
+	Metadata               ShortcutRootStatusMetadata
+	StateDetail            string
+	ProtectedCurrentPath   string
+	ProtectedReservedPaths []string
+	WaitingReplacementPath string
+}
+
+func ShortcutRootStatusViewFromRecord(record *ShortcutRootRecord) ShortcutRootStatusView {
+	if record == nil {
+		return ShortcutRootStatusView{}
+	}
+	normalized := normalizeShortcutRootRecord(*record)
+	metadata := ShortcutRootStatus(normalized.State)
+	view := ShortcutRootStatusView{
+		BindingItemID:     normalized.BindingItemID,
+		RelativeLocalPath: normalized.RelativeLocalPath,
+		LocalAlias:        normalized.LocalAlias,
+		RemoteDriveID:     normalized.RemoteDriveID.String(),
+		RemoteItemID:      normalized.RemoteItemID,
+		RemoteIsFolder:    normalized.RemoteIsFolder,
+		Metadata:          metadata,
+		StateDetail:       metadata.Issue,
+	}
+	if normalized.BlockedDetail != "" {
+		view.StateDetail = normalized.BlockedDetail
+	}
+	if normalized.Waiting != nil {
+		view.WaitingReplacementPath = normalized.Waiting.RelativeLocalPath
+	}
+	if metadata.ProtectsPath {
+		view.ProtectedCurrentPath = normalized.RelativeLocalPath
+		view.ProtectedReservedPaths = shortcutRootStatusReservedPaths(
+			normalized.RelativeLocalPath,
+			normalized.ProtectedPaths,
+		)
+	}
+	return view
+}
+
+func ShortcutRootStatusViewsFromRecords(records []ShortcutRootRecord) []ShortcutRootStatusView {
+	views := make([]ShortcutRootStatusView, 0, len(records))
+	for i := range records {
+		views = append(views, ShortcutRootStatusViewFromRecord(&records[i]))
+	}
+	return views
+}
+
+func shortcutRootStatusReservedPaths(current string, protected []string) []string {
+	reserved := make([]string, 0, len(protected))
+	for _, protectedPath := range protected {
+		if protectedPath == "" || protectedPath == current {
+			continue
+		}
+		reserved = append(reserved, protectedPath)
+	}
+	return reserved
+}
+
 type shortcutRootLifecycleMetadata struct {
 	status           ShortcutRootStatusMetadata
 	protectsPath     bool

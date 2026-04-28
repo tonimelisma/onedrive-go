@@ -153,12 +153,6 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 		})
 	}()
 
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "expected websocket wake source to start")
-	}
-
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventWebsocketWakeSourceStarted && event.DriveID == driveID.String()
 	}, "websocket wake source started")
