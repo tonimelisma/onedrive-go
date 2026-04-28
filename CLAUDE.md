@@ -299,7 +299,13 @@ After each increment, run through this entire checklist. If something fails, fix
     git checkout main && git pull --ff-only origin main
     git branch --list <branch-name> && git branch -r --list origin/<branch-name>
     echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r && echo "=== Stashes ===" && git stash list && echo "=== Worktrees ===" && git worktree list && echo "=== Open PRs ===" && gh pr list --state open && echo "=== Status ===" && git status
-    **NEVER delete other worktrees or branches — even if they appear stale.** Instead, report all other worktrees and branches to the human, including their last commit date. Let the human decide what to clean up
+    Include an **Emoji cleanup report** inside this item. The report must cover root checkout status, the current increment worktree/branch/remote branch, other worktrees, other local branches, other remote branches, stashes, open PRs, and anything dirty or untracked. Use one line per finding with path/ref/stash/PR, last activity evidence, unique-work evidence, and action taken:
+    - `✅ CLEAN`: no item exists or the checked item is exactly clean/current, such as local `main` matching `origin/main`.
+    - `🟢 ACTIVE`: other work has clear evidence of active use right now, such as last activity within 15 minutes, a running command/check, a PR updated within 15 minutes, or an explicit human/agent owner. Do not modify or delete it.
+    - `🟡 RECENT/UNKNOWN`: other work was last touched more than 15 minutes ago and no more than 1 hour ago, or ownership/activity is ambiguous. Do not modify or delete it.
+    - `🔴 STALE`: other work was last touched more than 1 hour ago, is merged/closed/superseded, or has no unique tree/diff content compared with `origin/main`. Report it as a human cleanup candidate unless it is the current increment's own merged work being removed by this checklist.
+    Determine "last activity" from the best available evidence: dirty path mtimes for dirty worktrees, branch or remote-ref committer dates for clean refs, stash dates for stashes, and PR `updatedAt`/check activity for PRs. If the evidence conflicts, choose the more conservative color and explain why.
+    **NEVER delete other worktrees, branches, stashes, or dirty files — even if they appear stale.** Instead, include them in the emoji cleanup report, including their last activity evidence and whether they contain unique work not in `origin/main`. Let the human decide what to clean up.
 12. [ ] **Increment report**: Present to the human:
     - **What you changed**: What files did you change, why and how
     - **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up

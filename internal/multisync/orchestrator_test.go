@@ -2005,6 +2005,79 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 }
 
 // Validates: R-2.4
+func TestHandleWatchRunnerEvent_IgnoresStaleParentSnapshotEvents(t *testing.T) {
+	parent := testStandaloneMount(t, "personal:watch-stale-event@example.com", "WatchStaleEvent")
+	setupXDGIsolation(t, parent.CanonicalID)
+
+	cfg := testOrchestratorConfig(t, parent)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	parentID := mountID(parent.CanonicalID.String())
+	staleSnapshot := shortcutSnapshotWithContext(t.Context(), t, parentID.String(), "binding-stale", "Stale")
+	currentSnapshot := shortcutSnapshotWithContext(t.Context(), t, parentID.String(), "binding-current", "Current")
+
+	parentMounts, err := buildStandaloneMountSpecs(cfg.StandaloneMounts)
+	require.NoError(t, err)
+	require.Len(t, parentMounts, 1)
+	parentMount := parentMounts[0]
+
+	tests := []struct {
+		name    string
+		cache   func(*parentChildWorkSnapshots)
+		runners map[mountID]*watchRunner
+	}{
+		{
+			name: "parent runner already gone",
+			cache: func(childWork *parentChildWorkSnapshots) {
+				childWork.receive(parentID, staleSnapshot)
+				childWork.forget(parentID)
+			},
+			runners: map[mountID]*watchRunner{},
+		},
+		{
+			name: "cache has newer publication",
+			cache: func(childWork *parentChildWorkSnapshots) {
+				childWork.receive(parentID, currentSnapshot)
+			},
+			runners: map[mountID]*watchRunner{
+				parentID: {
+					mount:  parentMount,
+					engine: &mockEngine{},
+					cancel: func() {},
+					done:   make(chan struct{}),
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orch := NewOrchestrator(cfg)
+			orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
+				require.FailNow(t, "stale parent snapshot event started child work")
+				return nil, assert.AnError
+			}
+			childWork := newParentChildWorkSnapshots()
+			tt.cache(childWork)
+
+			orch.handleWatchRunnerEvent(
+				t.Context(),
+				watchRunnerEvent{
+					mountID:               parentID,
+					parentSnapshot:        staleSnapshot,
+					parentSnapshotChanged: true,
+				},
+				syncengine.SyncBidirectional,
+				syncengine.WatchOptions{},
+				tt.runners,
+				nil,
+				childWork,
+			)
+
+			assert.NotContains(t, tt.runners, mountID(config.ChildMountID(parentID.String(), "binding-stale")))
+		})
+	}
+}
+
+// Validates: R-2.4
 func TestApplyWatchMountSet_StopsStaleChildBeforeStartingReplacement(t *testing.T) {
 	parent := testStandaloneMount(t, "personal:watch-replace@example.com", "WatchReplace")
 	setupXDGIsolation(t, parent.CanonicalID)
