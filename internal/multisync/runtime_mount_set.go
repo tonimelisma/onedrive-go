@@ -26,6 +26,7 @@ func (o *Orchestrator) buildRuntimeWorkSet(
 	if err != nil {
 		return nil, err
 	}
+	decisions.CleanupScopeAllParents = true
 	offsetRuntimeWorkSelectionIndexes(decisions, nextStartupSelectionIndex(initialStartup))
 	decisions.Skipped = append(append([]MountStartupResult(nil), initialStartup...), decisions.Skipped...)
 
@@ -45,6 +46,7 @@ func (o *Orchestrator) buildRuntimeWorkFromParentSnapshots(
 	if err != nil {
 		return nil, err
 	}
+	decisions.CleanupScopeAllParents = true
 	offsetRuntimeWorkSelectionIndexes(decisions, nextStartupSelectionIndex(initialStartup))
 	decisions.Skipped = append(append([]MountStartupResult(nil), initialStartup...), decisions.Skipped...)
 

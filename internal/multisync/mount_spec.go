@@ -135,6 +135,11 @@ type runtimeWorkSet struct {
 	Mounts          []*mountSpec
 	Skipped         []MountStartupResult
 	CleanupChildren []shortcutChildArtifactCleanup
+	// CleanupScopeAllParents means an empty CleanupChildren set proves no
+	// parent currently requests published child artifact cleanup. Parent-scoped
+	// reconciliations leave it false so they cannot clear another parent's
+	// active cleanup diagnostics.
+	CleanupScopeAllParents bool
 }
 
 func filterMountSpecsByProjection(
@@ -173,7 +178,12 @@ func buildRuntimeWork(
 	if err != nil {
 		return nil, err
 	}
-	return buildRuntimeWorkForParents(parents, snapshots, dataDir, nil)
+	decisions, err := buildRuntimeWorkForParents(parents, snapshots, dataDir, nil)
+	if err != nil {
+		return nil, err
+	}
+	decisions.CleanupScopeAllParents = true
+	return decisions, nil
 }
 
 func buildRuntimeWorkForParents(
