@@ -235,9 +235,10 @@ residue, and upload sessions, then acknowledges artifact cleanup to the same
 live parent engine. The parent deletes the cleanup-pending row only after that
 acknowledgement, so cleanup retry is durable and parent-owned. Cleanup
 diagnostics on the control socket are transient executor status: a failure
-records the source and domain class, and a later successful retry or current
-snapshot with no cleanup work for that source clears the old diagnostic instead
-of leaving stale incidents visible until process restart.
+records the source and domain class, and a later successful retry clears that
+source's old diagnostic. An empty cleanup work set only clears old published
+cleanup diagnostics when it covers every configured parent; parent-scoped watch
+reconciliation must not clear another parent's active cleanup failure.
 
 Local alias deletion is explicit and local-only. If the user deletes the local
 shortcut alias while the parent root is active, the parent deletes only the

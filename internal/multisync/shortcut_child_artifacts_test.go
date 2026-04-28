@@ -472,12 +472,57 @@ func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsWhenNoCleanupWo
 
 	err = orch.purgeShortcutChildArtifactsForDecisions(
 		context.Background(),
-		&runtimeWorkSet{},
+		&runtimeWorkSet{CleanupScopeAllParents: true},
 		nil,
 	)
 
 	require.NoError(t, err)
 	assert.Empty(t, orch.shortcutCleanupDiagnosticSnapshot())
+}
+
+// Validates: R-2.4.8
+func TestOrchestratorPurgeShortcutChildArtifactsKeepsDiagnosticsForParentScopedNoCleanupWork(t *testing.T) {
+	t.Parallel()
+
+	childMountID := config.ChildMountID("personal:parent-a@example.com", "binding-parent-a")
+	orch := NewOrchestrator(&OrchestratorConfig{
+		Logger: slog.New(slog.DiscardHandler),
+	})
+	orch.artifactCleanup = shortcutChildArtifactCleanupExecutor{
+		dataDir: t.TempDir(),
+		logger:  orch.logger,
+		remove: func(string) error {
+			return nil
+		},
+		pruneCatalogRecord: func(string) error {
+			return nil
+		},
+		deleteUploadSessions: func(string, string) error {
+			return nil
+		},
+	}
+	err := orch.purgeShortcutChildArtifactsForDecisions(
+		context.Background(),
+		&runtimeWorkSet{CleanupChildren: []shortcutChildArtifactCleanup{{
+			mountID:     childMountID,
+			namespaceID: "personal:parent-a@example.com",
+			ackRef:      testShortcutChildAckRef(t, "binding-parent-a"),
+			localRoot:   filepath.Join(t.TempDir(), "ParentA"),
+			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
+		}}},
+		nil,
+	)
+	require.Error(t, err)
+	require.NotEmpty(t, orch.shortcutCleanupDiagnosticSnapshot())
+
+	err = orch.purgeShortcutChildArtifactsForDecisions(
+		context.Background(),
+		&runtimeWorkSet{},
+		nil,
+	)
+
+	require.NoError(t, err)
+	assert.NotEmpty(t, orch.shortcutCleanupDiagnosticSnapshot())
 }
 
 func assertShortcutCleanupClass(
