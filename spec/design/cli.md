@@ -112,8 +112,8 @@ waiting replacement internals; sync owns that projection. Text and JSON status
 describe the protected-root state and the next recovery step without
 duplicating engine transition policy or shortcut-state copy tables in the CLI.
 Recovery copy uses the same product vocabulary as the control plane: "shortcut
-alias", "child projection", "reserved path", and "parent engine shortcut
-publication facts".
+alias", "child projection", "reserved path", and "parent engine child work
+snapshots".
 
 For `removed_final_drain`, status must make the retry/discard choice explicit:
 the child keeps retrying while its state DB owns dirty content state; the user

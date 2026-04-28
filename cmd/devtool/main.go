@@ -21,8 +21,6 @@ type benchFunc func(context.Context, devtool.BenchOptions) error
 
 type cleanupAuditFunc func(context.Context, devtool.CleanupAuditOptions) error
 
-type shortcutComplianceFunc func(context.Context, devtool.ShortcutComplianceOptions) error
-
 type worktreeAddFunc func(context.Context, string, string, string) error
 
 type worktreeBootstrapFunc func(string, string) error
@@ -44,7 +42,6 @@ func newRootCmd() *cobra.Command {
 		newVerifyCmd(defaultCWD, defaultVerify),
 		newBenchCmd(defaultCWD, defaultBench),
 		newCleanupAuditCmd(defaultCWD, defaultCleanupAudit),
-		newShortcutComplianceCmd(defaultCWD, defaultShortcutCompliance),
 		newWorktreeCmd(defaultCWD, defaultAddWorktree, defaultBootstrapWorktree),
 	)
 
@@ -187,30 +184,6 @@ func newCleanupAuditCmd(getwd cwdLookup, runCleanupAudit cleanupAuditFunc) *cobr
 	return cmd
 }
 
-func newShortcutComplianceCmd(getwd cwdLookup, runShortcutCompliance shortcutComplianceFunc) *cobra.Command {
-	var format string
-
-	cmd := &cobra.Command{
-		Use:   "shortcut-compliance",
-		Short: "Report shortcut ownership and lifecycle architecture compliance",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			repoRoot, err := getwd()
-			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
-			}
-			return runShortcutCompliance(cmd.Context(), devtool.ShortcutComplianceOptions{
-				RepoRoot: repoRoot,
-				Format:   format,
-				Stdout:   cmd.OutOrStdout(),
-			})
-		},
-	}
-
-	cmd.Flags().StringVar(&format, "format", devtool.ShortcutComplianceFormatMarkdown, "output format: markdown or json")
-
-	return cmd
-}
-
 func newWorktreeAddCmd(getwd cwdLookup, addWorktree worktreeAddFunc) *cobra.Command {
 	var (
 		path   string
@@ -311,14 +284,6 @@ func defaultBench(ctx context.Context, opts devtool.BenchOptions) error {
 func defaultCleanupAudit(ctx context.Context, opts devtool.CleanupAuditOptions) error {
 	if err := devtool.RunCleanupAudit(ctx, devtool.ExecRunner{}, opts); err != nil {
 		return fmt.Errorf("run cleanup audit: %w", err)
-	}
-
-	return nil
-}
-
-func defaultShortcutCompliance(ctx context.Context, opts devtool.ShortcutComplianceOptions) error {
-	if err := devtool.RunShortcutCompliance(ctx, opts); err != nil {
-		return fmt.Errorf("run shortcut compliance: %w", err)
 	}
 
 	return nil

@@ -472,11 +472,11 @@ func groupChildMountsByParent(
 
 	for parentID := range grouped {
 		sort.Slice(grouped[parentID], func(i, j int) bool {
-			if grouped[parentID][i].Root.RelativeLocalPath == grouped[parentID][j].Root.RelativeLocalPath {
-				return grouped[parentID][i].Root.BindingItemID < grouped[parentID][j].Root.BindingItemID
+			if grouped[parentID][i].Root.SortPath == grouped[parentID][j].Root.SortPath {
+				return grouped[parentID][i].Root.MountID < grouped[parentID][j].Root.MountID
 			}
 
-			return grouped[parentID][i].Root.RelativeLocalPath < grouped[parentID][j].Root.RelativeLocalPath
+			return grouped[parentID][i].Root.SortPath < grouped[parentID][j].Root.SortPath
 		})
 	}
 

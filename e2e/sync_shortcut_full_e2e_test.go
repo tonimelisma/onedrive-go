@@ -426,12 +426,6 @@ func findShortcutChildAtPath(
 			record.RelativeLocalPath != relativeLocalPath {
 			continue
 		}
-		if fixture.SharedItem.RemoteDriveID != "" && record.RemoteDriveID != fixture.SharedItem.RemoteDriveID {
-			continue
-		}
-		if fixture.SharedItem.RemoteItemID != "" && record.RemoteItemID != fixture.SharedItem.RemoteItemID {
-			continue
-		}
 		return record, true
 	}
 

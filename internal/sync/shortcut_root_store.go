@@ -156,7 +156,7 @@ func (m *SyncStore) replaceShortcutRoots(ctx context.Context, records []Shortcut
 	defer stmt.Close()
 
 	for i := range records {
-		record := normalizeShortcutRootRecord(records[i])
+		record := normalizeShortcutRootRecord(&records[i])
 		protectedPaths, marshalErr := json.Marshal(record.ProtectedPaths)
 		if marshalErr != nil {
 			return fmt.Errorf("sync: encoding protected paths for shortcut root %s: %w", record.BindingItemID, marshalErr)
@@ -247,7 +247,7 @@ func scanShortcutRootRecord(row shortcutRootScanner) (ShortcutRootRecord, error)
 	if waiting.BindingItemID != "" {
 		record.Waiting = &waiting
 	}
-	return normalizeShortcutRootRecord(record), nil
+	return normalizeShortcutRootRecord(&record), nil
 }
 
 func shortcutRootIdentitySQL(identity *synctree.FileIdentity) (uint64, uint64, bool) {

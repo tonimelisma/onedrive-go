@@ -27,7 +27,7 @@ func (o *Orchestrator) parentChildWorkSinkForMount(
 	watchEvents chan<- watchRunnerEvent,
 	notify parentChildWorkNotify,
 ) syncengine.ShortcutChildWorkSink {
-	if o == nil || mount == nil || mount.projectionKind != MountProjectionStandalone {
+	if o == nil || mount == nil || mount.projectionKind() != MountProjectionStandalone {
 		return nil
 	}
 
@@ -36,13 +36,13 @@ func (o *Orchestrator) parentChildWorkSinkForMount(
 		changed := o.receiveParentChildWorkSnapshotFromParent(&parent, snapshot)
 		if changed && watchEvents != nil {
 			select {
-			case watchEvents <- watchRunnerEvent{mountID: parent.mountID, parentSnapshotChanged: true}:
+			case watchEvents <- watchRunnerEvent{mountID: parent.id(), parentSnapshotChanged: true}:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 		}
 		if notify != nil {
-			if err := notify(ctx, parent.mountID); err != nil {
+			if err := notify(ctx, parent.id()); err != nil {
 				return err
 			}
 		}
@@ -58,22 +58,22 @@ func (o *Orchestrator) receiveParentChildWorkSnapshotFromParent(
 		return false
 	}
 	if snapshot.NamespaceID == "" {
-		snapshot.NamespaceID = parent.mountID.String()
+		snapshot.NamespaceID = parent.id().String()
 	}
-	if snapshot.NamespaceID != parent.mountID.String() {
+	if snapshot.NamespaceID != parent.id().String() {
 		if o != nil && o.logger != nil {
 			o.logger.Warn("ignoring parent child work snapshot from mismatched namespace",
 				"namespace_id", snapshot.NamespaceID,
-				"parent_id", parent.mountID.String(),
+				"parent_id", parent.id().String(),
 			)
 		}
 		return false
 	}
 
-	changed := o.receiveParentChildWorkSnapshot(parent.mountID, snapshot)
+	changed := o.receiveParentChildWorkSnapshot(parent.id(), snapshot)
 	if changed && o != nil && o.logger != nil {
 		o.logger.Info("received parent child work snapshot",
-			"namespace_id", parent.mountID.String(),
+			"namespace_id", parent.id().String(),
 			"children", len(snapshot.RunCommands),
 		)
 	}

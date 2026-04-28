@@ -62,7 +62,7 @@ func (a engineRunnerAdapter) ShortcutChildAckHandle() shortcutChildAckHandle {
 }
 
 func shortcutParentAckHandleForMount(mount *mountSpec, engine engineRunner) shortcutChildAckHandle {
-	if mount == nil || mount.projectionKind != MountProjectionStandalone || engine == nil {
+	if mount == nil || mount.projectionKind() != MountProjectionStandalone || engine == nil {
 		return nil
 	}
 	return engine.ShortcutChildAckHandle()
