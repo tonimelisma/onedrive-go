@@ -265,13 +265,13 @@ func sortedPublishedShortcutChildren(
 		if publication.NamespaceID != "" {
 			namespaceID = mountID(publication.NamespaceID)
 		}
-		for i := range publication.Children {
-			if publication.Children[i].BindingItemID == "" {
+		for i := range publication.RunnerWork.Children {
+			if publication.RunnerWork.Children[i].BindingItemID == "" {
 				continue
 			}
 			children = append(children, publishedShortcutChild{
 				namespaceID: namespaceID,
-				child:       publication.Children[i],
+				child:       publication.RunnerWork.Children[i],
 			})
 		}
 	}

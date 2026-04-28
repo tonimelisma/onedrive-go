@@ -1,7 +1,6 @@
 package multisync
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -25,7 +24,6 @@ func testPublishedShortcutChild() syncengine.ShortcutChildRunner {
 		BindingItemID:     "binding-child-docs",
 		DisplayName:       filepath.Base(relativePath),
 		RelativeLocalPath: relativePath,
-		LocalRoot:         filepath.Join(os.TempDir(), "parent", filepath.FromSlash(relativePath)),
 		RemoteDriveID:     remoteDriveID,
 		RemoteItemID:      remoteItemID,
 		RunnerAction:      syncengine.ShortcutChildActionRun,
@@ -39,15 +37,8 @@ func testParentTopologies(
 	if parent == nil {
 		return nil
 	}
-	for i := range children {
-		children[i].ChildMountID = config.ChildMountID(parent.CanonicalID.String(), children[i].BindingItemID)
-		children[i].LocalRoot = filepath.Join(parent.SyncRoot, filepath.FromSlash(children[i].RelativeLocalPath))
-	}
 	return map[mountID]syncengine.ShortcutChildRunnerPublication{
-		mountID(parent.CanonicalID.String()): {
-			NamespaceID: parent.CanonicalID.String(),
-			Children:    children,
-		},
+		mountID(parent.CanonicalID.String()): runnerPublicationForParent(parent, children...),
 	}
 }
 
@@ -151,12 +142,13 @@ func TestEngineMountConfigForMount_UsesMountOwnedFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mounts, 1)
 
-	cfg, err := engineMountConfigForMount(mounts[0])
+	dataDir := t.TempDir()
+	cfg, err := engineMountConfigForMount(mounts[0], dataDir)
 	require.NoError(t, err)
 
 	assert.Equal(t, mounts[0].statePath, cfg.DBPath)
 	assert.Equal(t, mounts[0].syncRoot, cfg.SyncRoot)
-	assert.Equal(t, config.DefaultDataDir(), cfg.DataDir)
+	assert.Equal(t, dataDir, cfg.DataDir)
 	assert.Equal(t, mounts[0].remoteDriveID, cfg.DriveID)
 	assert.Equal(t, mounts[0].driveType, cfg.DriveType)
 	assert.Equal(t, mounts[0].accountEmail, cfg.AccountEmail)
@@ -203,7 +195,7 @@ func TestBuildRunnerDecisions_AddsChildProjectionAfterParent(t *testing.T) {
 	assert.Equal(t, 8, childMount.checkWorkers)
 	assert.Equal(t, int64(5*1024*1024), childMount.minFreeSpace)
 
-	engineCfg, err := engineMountConfigForMount(childMount)
+	engineCfg, err := engineMountConfigForMount(childMount, t.TempDir())
 	require.NoError(t, err)
 	assert.Equal(t, driveid.New("remote-drive"), engineCfg.DriveID)
 	assert.Equal(t, "remote-root", engineCfg.RemoteRootItemID)
@@ -320,26 +312,6 @@ func TestBuildRunnerDecisions_UsesParentRunnerRelativePathOnly(t *testing.T) {
 }
 
 // Validates: R-2.8.1
-func TestBuildChildRunnerDecision_RequiresParentPublishedChildScope(t *testing.T) {
-	t.Parallel()
-
-	parent := testParentMountSpec()
-	child := testChildRecord(parent.mountID, "binding-docs", "Shortcuts/Docs")
-
-	missingMountID := child
-	missingMountID.ChildMountID = ""
-	_, err := buildChildRunnerDecision(parent, &missingMountID)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing a child mount ID")
-
-	missingLocalRoot := child
-	missingLocalRoot.LocalRoot = ""
-	_, err = buildChildRunnerDecision(parent, &missingLocalRoot)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing a local root")
-}
-
-// Validates: R-2.8.1
 func TestBuildRunnerDecisions_UnavailableChildDoesNotSynthesizeParentReservation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
@@ -399,18 +371,16 @@ func TestBuildRunnerDecisions_MissingParentSkipsChild(t *testing.T) {
 	decisions, err := buildRunnerDecisions(
 		[]StandaloneMountConfig{parent},
 		map[mountID]syncengine.ShortcutChildRunnerPublication{
-			"missing-parent": {
-				NamespaceID: "missing-parent",
-				Children: []syncengine.ShortcutChildRunner{{
-					ChildMountID:      config.ChildMountID("missing-parent", "binding-child-docs"),
+			"missing-parent": runnerPublication(
+				"missing-parent",
+				syncengine.ShortcutChildRunner{
 					BindingItemID:     "binding-child-docs",
 					RelativeLocalPath: "Shortcuts/Docs",
-					LocalRoot:         filepath.Join(t.TempDir(), "Shortcuts", "Docs"),
 					RemoteDriveID:     "remote-drive",
 					RemoteItemID:      "remote-root",
 					RunnerAction:      syncengine.ShortcutChildActionRun,
-				}},
-			},
+				},
+			),
 		},
 	)
 	require.NoError(t, err)

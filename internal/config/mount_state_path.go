@@ -10,7 +10,10 @@ import (
 const stateMountPrefix = "state_mount_"
 
 func MountStatePath(mountID string) string {
-	dataDir := DefaultDataDir()
+	return MountStatePathForDataDir(DefaultDataDir(), mountID)
+}
+
+func MountStatePathForDataDir(dataDir string, mountID string) string {
 	if dataDir == "" || strings.TrimSpace(mountID) == "" {
 		return ""
 	}

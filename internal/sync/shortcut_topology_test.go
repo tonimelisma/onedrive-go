@@ -49,16 +49,15 @@ func TestShortcutChildRunnerPublicationIncludesExplicitCleanupScope(t *testing.T
 		}},
 	)
 
-	require.Empty(t, publication.Children)
-	require.Len(t, publication.CleanupRequests, 1)
-	cleanup := publication.CleanupRequests[0]
+	require.Empty(t, publication.RunnerWork.Children)
+	require.Len(t, publication.CleanupWork.Requests, 1)
+	cleanup := publication.CleanupWork.Requests[0]
 	assert.Equal(t, "binding-cleanup", cleanup.BindingItemID)
 	assert.Equal(t, "Shortcuts/Old", cleanup.RelativeLocalPath)
 	assert.Equal(t, "personal:owner@example.com|binding:binding-cleanup", cleanup.ChildMountID)
 	assert.Equal(t, filepath.Join(parentRoot, "Shortcuts", "Old"), cleanup.LocalRoot)
 }
 
-// Validates: R-2.4.8
 func TestShortcutChildRunnerPublicationIncludesExplicitRunnerScope(t *testing.T) {
 	t.Parallel()
 
@@ -77,8 +76,8 @@ func TestShortcutChildRunnerPublicationIncludesExplicitRunnerScope(t *testing.T)
 		}},
 	)
 
-	require.Len(t, publication.Children, 1)
-	child := publication.Children[0]
+	require.Len(t, publication.RunnerWork.Children, 1)
+	child := publication.RunnerWork.Children[0]
 	assert.Equal(t, "binding-run", child.BindingItemID)
 	assert.Equal(t, "personal:owner@example.com|binding:binding-run", child.ChildMountID)
 	assert.Equal(t, filepath.Join(parentRoot, "Shortcuts", "Run"), child.LocalRoot)
@@ -91,56 +90,56 @@ func TestShortcutChildRunnerPublicationEqualityIsSyncOwned(t *testing.T) {
 
 	identity := &ShortcutRootIdentity{Device: 1, Inode: 2}
 	first := NormalizeShortcutChildRunnerPublication(shortcutNamespaceTestID, ShortcutChildRunnerPublication{
-		Children: []ShortcutChildRunner{{
-			ChildMountID:      "personal:owner@example.com|binding:binding-b",
-			BindingItemID:     "binding-b",
-			RelativeLocalPath: "B",
-			LocalRoot:         filepath.Join("parent", "B"),
-			RunnerAction:      ShortcutChildActionRun,
-			LocalRootIdentity: identity,
-		}, {
-			ChildMountID:      "personal:owner@example.com|binding:binding-a",
-			BindingItemID:     "binding-a",
-			RelativeLocalPath: "A",
-			LocalRoot:         filepath.Join("parent", "A"),
-			RunnerAction:      ShortcutChildActionFinalDrain,
-		}},
-		CleanupRequests: []ShortcutChildArtifactCleanupRequest{{
-			BindingItemID:     "cleanup-b",
-			RelativeLocalPath: "B",
-			ChildMountID:      "personal:owner@example.com|binding:cleanup-b",
-			LocalRoot:         filepath.Join("parent", "B"),
-			Reason:            ShortcutChildArtifactCleanupParentRemoved,
-		}},
+		RunnerWork: ShortcutChildRunnerWork{
+			Children: []ShortcutChildRunner{{
+				BindingItemID:     "binding-b",
+				RelativeLocalPath: "B",
+				RunnerAction:      ShortcutChildActionRun,
+				LocalRootIdentity: identity,
+			}, {
+				BindingItemID:     "binding-a",
+				RelativeLocalPath: "A",
+				RunnerAction:      ShortcutChildActionFinalDrain,
+			}},
+		},
+		CleanupWork: ShortcutChildArtifactCleanupWork{
+			Requests: []ShortcutChildArtifactCleanupRequest{{
+				BindingItemID:     "cleanup-b",
+				RelativeLocalPath: "B",
+				ChildMountID:      "personal:owner@example.com|binding:cleanup-b",
+				LocalRoot:         filepath.Join("parent", "B"),
+				Reason:            ShortcutChildArtifactCleanupParentRemoved,
+			}},
+		},
 	})
 	identity.Device = 99
 	second := NormalizeShortcutChildRunnerPublication(shortcutNamespaceTestID, ShortcutChildRunnerPublication{
 		NamespaceID: shortcutNamespaceTestID,
-		Children: []ShortcutChildRunner{{
-			ChildMountID:      "personal:owner@example.com|binding:binding-a",
-			BindingItemID:     "binding-a",
-			RelativeLocalPath: "A",
-			LocalRoot:         filepath.Join("parent", "A"),
-			RunnerAction:      ShortcutChildActionFinalDrain,
-		}, {
-			ChildMountID:      "personal:owner@example.com|binding:binding-b",
-			BindingItemID:     "binding-b",
-			RelativeLocalPath: "B",
-			LocalRoot:         filepath.Join("parent", "B"),
-			RunnerAction:      ShortcutChildActionRun,
-			LocalRootIdentity: &ShortcutRootIdentity{Device: 1, Inode: 2},
-		}},
-		CleanupRequests: []ShortcutChildArtifactCleanupRequest{{
-			BindingItemID:     "cleanup-b",
-			RelativeLocalPath: "B",
-			ChildMountID:      "personal:owner@example.com|binding:cleanup-b",
-			LocalRoot:         filepath.Join("parent", "B"),
-			Reason:            ShortcutChildArtifactCleanupParentRemoved,
-		}},
+		RunnerWork: ShortcutChildRunnerWork{
+			Children: []ShortcutChildRunner{{
+				BindingItemID:     "binding-a",
+				RelativeLocalPath: "A",
+				RunnerAction:      ShortcutChildActionFinalDrain,
+			}, {
+				BindingItemID:     "binding-b",
+				RelativeLocalPath: "B",
+				RunnerAction:      ShortcutChildActionRun,
+				LocalRootIdentity: &ShortcutRootIdentity{Device: 1, Inode: 2},
+			}},
+		},
+		CleanupWork: ShortcutChildArtifactCleanupWork{
+			Requests: []ShortcutChildArtifactCleanupRequest{{
+				BindingItemID:     "cleanup-b",
+				RelativeLocalPath: "B",
+				ChildMountID:      "personal:owner@example.com|binding:cleanup-b",
+				LocalRoot:         filepath.Join("parent", "B"),
+				Reason:            ShortcutChildArtifactCleanupParentRemoved,
+			}},
+		},
 	})
 
 	assert.True(t, ShortcutChildRunnerPublicationsEqual(first, second))
-	assert.Equal(t, uint64(1), first.Children[1].LocalRootIdentity.Device)
+	assert.Equal(t, uint64(1), first.RunnerWork.Children[1].LocalRootIdentity.Device)
 }
 
 // Validates: R-2.4.8
@@ -183,7 +182,7 @@ func TestApplyShortcutObservationBatch_ForwardsEmptyCompleteBatch(t *testing.T) 
 
 	require.NotEmpty(t, got)
 	assert.Equal(t, shortcutNamespaceTestID, got[len(got)-1].NamespaceID)
-	assert.Empty(t, got[len(got)-1].Children)
+	assert.Empty(t, got[len(got)-1].RunnerWork.Children)
 }
 
 // Validates: R-2.4.3, R-2.4.8
@@ -198,8 +197,8 @@ func TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler(t *testi
 		require.Len(t, roots, 1)
 		assert.Equal(t, "binding-1", roots[0].BindingItemID)
 		assert.Equal(t, ShortcutRootStateActive, roots[0].State)
-		require.Len(t, publication.Children, 1)
-		assert.Equal(t, "binding-1", publication.Children[0].BindingItemID)
+		require.Len(t, publication.RunnerWork.Children, 1)
+		assert.Equal(t, "binding-1", publication.RunnerWork.Children[0].BindingItemID)
 		return nil
 	}
 
@@ -262,7 +261,7 @@ func TestRunOncePublishesEmptyCompleteChildRunnerPublicationBeforeCommittingCurs
 
 	require.NotEmpty(t, got)
 	assert.Equal(t, shortcutNamespaceTestID, got[len(got)-1].NamespaceID)
-	assert.Empty(t, got[len(got)-1].Children)
+	assert.Empty(t, got[len(got)-1].RunnerWork.Children)
 	assert.Equal(t, "cursor-empty-complete", readObservationCursorForTest(t, eng.baseline, t.Context(), eng.driveID.String()))
 }
 

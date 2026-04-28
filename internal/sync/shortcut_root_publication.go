@@ -13,7 +13,9 @@ func shortcutChildRunnerPublicationFromRootsWithParentRoot(
 ) ShortcutChildRunnerPublication {
 	snapshot := ShortcutChildRunnerPublication{
 		NamespaceID: namespaceID,
-		Children:    make([]ShortcutChildRunner, 0, len(roots)),
+		RunnerWork: ShortcutChildRunnerWork{
+			Children: make([]ShortcutChildRunner, 0, len(roots)),
+		},
 	}
 	for i := range roots {
 		root := normalizeShortcutRootRecord(roots[i])
@@ -23,7 +25,7 @@ func shortcutChildRunnerPublicationFromRootsWithParentRoot(
 		metadata, _ := shortcutRootLifecycleMetadataFor(root.State)
 		if metadata.publishesCleanup {
 			childMountID := config.ChildMountID(namespaceID, root.BindingItemID)
-			snapshot.CleanupRequests = append(snapshot.CleanupRequests, ShortcutChildArtifactCleanupRequest{
+			snapshot.CleanupWork.Requests = append(snapshot.CleanupWork.Requests, ShortcutChildArtifactCleanupRequest{
 				BindingItemID:     root.BindingItemID,
 				RelativeLocalPath: root.RelativeLocalPath,
 				ChildMountID:      childMountID,
@@ -43,7 +45,7 @@ func shortcutChildRunnerPublicationFromRootsWithParentRoot(
 			RunnerAction:      shortcutChildRunnerActionForRoot(root.State),
 			LocalRootIdentity: shortcutRootIdentityFromFileIdentity(root.LocalRootIdentity),
 		}
-		snapshot.Children = append(snapshot.Children, child)
+		snapshot.RunnerWork.Children = append(snapshot.RunnerWork.Children, child)
 	}
 	return snapshot
 }

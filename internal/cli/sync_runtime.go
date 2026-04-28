@@ -213,6 +213,7 @@ func runSyncDaemonWithFactory(
 		InitialStartupResults:  standaloneSelection.StartupResults,
 		ReloadStandaloneMounts: reloadStandaloneMountsFunc(selectors, logger),
 		Runtime:                runtime,
+		DataDir:                config.DefaultDataDir(),
 		Logger:                 logger,
 		ControlSocketPath:      controlSocketPath,
 		StartWarning: func(warning multisync.StartupWarning) {

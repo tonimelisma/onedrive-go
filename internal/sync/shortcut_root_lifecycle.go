@@ -119,90 +119,60 @@ func (e *Engine) reconcileShortcutRootRecord(
 		ShortcutRootStateRemovedChildCleanupPending:
 		return record, true, false, nil
 	}
-	relativePath, ok := cleanShortcutRootRelativePath(record.RelativeLocalPath)
-	if !ok {
-		return applyShortcutRootLocalObservationPlan(record, shortcutRootLocalObservation{
-			Kind:   shortcutRootLocalObservationBlocked,
-			Detail: "shortcut alias path escapes parent sync root",
-		}), true, true, nil
-	}
-	if err := e.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
-		return applyShortcutRootLocalObservationPlan(record, shortcutRootLocalObservationForPathError(err)), true, true, nil
-	}
-	state, err := e.syncTree.PathStateNoFollow(relativePath)
-	if err != nil {
-		return applyShortcutRootLocalObservationPlan(record, shortcutRootLocalObservationForPathError(err)), true, true, nil
-	}
-	if state.Exists {
-		if !state.IsDir {
-			return applyShortcutRootLocalObservationPlan(record, shortcutRootLocalObservation{
-				Kind:   shortcutRootLocalObservationBlocked,
-				Detail: "shortcut alias path is not a directory",
-			}), true, true, nil
-		}
-		identity, identityErr := e.syncTree.IdentityNoFollow(relativePath)
-		if identityErr != nil {
-			return shortcutRootIdentityUnavailableResult(record, identityErr)
-		}
-		plan := planShortcutRootLocalObservation(record, shortcutRootLocalObservation{
-			Kind:     shortcutRootLocalObservationReady,
-			Identity: &identity,
-		})
+	observation := e.observeShortcutRootLocalState(&record)
+	plan := planShortcutRootLocalObservation(record, observation)
+	switch plan.Action {
+	case shortcutRootLocalKeepRecord:
 		return plan.Next, plan.Keep, plan.Changed, nil
+	case shortcutRootLocalMaterializeRoot:
+		return e.materializeShortcutRoot(record, observation.RelativePath)
+	case shortcutRootLocalDropRecord,
+		shortcutRootLocalMutateAlias,
+		shortcutRootLocalMoveProjection:
+		return plan.Next, plan.Keep, plan.Changed, nil
+	case shortcutRootLocalNoop:
 	}
-	if record.LocalRootIdentity == nil {
-		return e.materializeShortcutRoot(record, relativePath)
-	}
+	relativePath := observation.RelativePath
 	return e.reconcileMissingMaterializedShortcutRoot(ctx, record, relativePath, localRows)
-}
-
-//nolint:gocritic // ShortcutRootRecord is a value-shaped local planner output.
-func shortcutRootIdentityUnavailableResult(
-	record ShortcutRootRecord,
-	identityErr error,
-) (ShortcutRootRecord, bool, bool, error) {
-	return applyShortcutRootLocalObservationPlan(record, shortcutRootLocalObservation{
-		Kind:   shortcutRootLocalObservationUnavailable,
-		Detail: identityErr.Error(),
-	}), true, true, nil
 }
 
 //nolint:gocritic // ShortcutRootRecord is treated as a value in local transition helpers.
 func (e *Engine) reconcileRetiringShortcutRootLocalState(
 	record ShortcutRootRecord,
 ) (ShortcutRootRecord, bool, bool, error) {
-	relativePath, ok := cleanShortcutRootRelativePath(record.RelativeLocalPath)
-	if !ok {
-		return applyShortcutRootLocalObservationPlan(record, shortcutRootLocalObservation{
-			Kind:   shortcutRootLocalObservationBlocked,
-			Detail: "shortcut alias path escapes parent sync root",
-		}), true, true, nil
-	}
-	if err := e.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
-		return applyShortcutRootLocalObservationPlan(record, shortcutRootLocalObservationForPathError(err)), true, true, nil
-	}
-	state, err := e.syncTree.PathStateNoFollow(relativePath)
-	if err != nil {
-		return applyShortcutRootLocalObservationPlan(record, shortcutRootLocalObservationForPathError(err)), true, true, nil
-	}
-	if state.Exists {
-		if !state.IsDir {
-			return planShortcutRootCleanupBlocked(record, fmt.Errorf("shortcut alias path is not a directory")), true, true, nil
-		}
-		return record, true, false, nil
-	}
-	plan := planShortcutRootLocalObservation(record, shortcutRootLocalObservation{
-		Kind: shortcutRootLocalObservationRetiringPathMissing,
-	})
+	plan := planRetiringShortcutRootLocalObservation(record, e.observeShortcutRootLocalState(&record))
 	return plan.Next, plan.Keep, plan.Changed, nil
 }
 
-//nolint:gocritic // ShortcutRootRecord is a value-shaped local planner output.
-func applyShortcutRootLocalObservationPlan(
-	record ShortcutRootRecord,
-	observation shortcutRootLocalObservation,
-) ShortcutRootRecord {
-	return planShortcutRootLocalObservation(record, observation).Next
+func (e *Engine) observeShortcutRootLocalState(record *ShortcutRootRecord) shortcutRootLocalObservation {
+	relativePath, ok := cleanShortcutRootRelativePath(record.RelativeLocalPath)
+	observation := shortcutRootLocalObservation{
+		RelativePath:   relativePath,
+		RelativePathOK: ok,
+	}
+	if !ok {
+		return observation
+	}
+	if err := e.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
+		observation.SymlinkErr = err
+		return observation
+	}
+	state, err := e.syncTree.PathStateNoFollow(relativePath)
+	if err != nil {
+		observation.PathErr = err
+		return observation
+	}
+	observation.PathState = state
+	if !state.Exists || !state.IsDir {
+		return observation
+	}
+	identity, identityErr := e.syncTree.IdentityNoFollow(relativePath)
+	if identityErr != nil {
+		observation.IdentityErr = identityErr
+		return observation
+	}
+	observation.Identity = &identity
+	return observation
 }
 
 //nolint:gocritic // ShortcutRootRecord is treated as a value in the planner-style local transition.
@@ -256,6 +226,8 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 	case shortcutRootMissingAliasRenameAmbiguous:
 		return plan.Next, plan.Keep, plan.Changed, nil
 	case shortcutRootMissingAliasNoop:
+		return record, true, false, nil
+	case shortcutRootLocalMaterializeRoot:
 		return record, true, false, nil
 	default:
 		return record, true, false, nil
