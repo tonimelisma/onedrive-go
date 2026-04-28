@@ -199,15 +199,16 @@ That pipeline performs the same remote observation cadence decision, full local
 observation, current-plan build, retry/block reconciliation, and shortcut-root
 lifecycle publication the parent needs for ordinary work. One-shot parents
 publish after current parent state and protected-root decisions reach an
-accepted snapshot point; multisync starts that parent's child work immediately
-from that fresh snapshot without waiting for unrelated parents or for the
-publishing parent to return. Only final-drain and artifact-cleanup
-acknowledgements wait for the same live parent's safe acknowledgement point.
-Watch bootstrap and steady-state changes publish through the live parent runner
-and reconcile only that parent child runner set.
+accepted snapshot point; multisync stores that exact published snapshot for
+the active runtime and starts that parent's child work only after that parent
+reaches its one-shot safe point. Parent A's children do not wait for unrelated
+parent B, but no one-shot child starts from a parent snapshot that is merely
+cached from an earlier run. Watch initial startup starts parent runners only;
+watch bootstrap and steady-state changes admit children from live parent
+publications and reconcile only that parent child runner set.
 Child runner admission is therefore derived from fresh parent local and remote
-truth rather than cached control-plane state, and multisync never constructs a
-temporary startup parent engine for shortcut admission.
+truth rather than a long-lived control-plane cache, and multisync never
+constructs a temporary startup parent engine for shortcut admission.
 
 Once one-shot shutdown has started, late worker completions no longer re-enter
 the normal outbox path. The engine runs them through the same shutdown

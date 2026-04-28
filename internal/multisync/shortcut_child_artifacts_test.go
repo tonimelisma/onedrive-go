@@ -153,6 +153,7 @@ func TestOrchestratorCleanupWithEmptyDataDirFailsLoudly(t *testing.T) {
 			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
 		}}},
 		map[mountID]shortcutChildAckHandle{},
+		nil,
 	)
 
 	require.Error(t, err)
@@ -222,7 +223,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsUsesInjectedExecutor
 		},
 	}
 
-	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers)
+	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers, nil)
 
 	require.NoError(t, err)
 	assert.Len(t, removed, 4)
@@ -271,7 +272,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsReturnsAckFailureAft
 		},
 	}
 
-	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers)
+	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers, nil)
 
 	require.Error(t, err)
 	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupParentAckFailure)
@@ -314,7 +315,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsRequiresLiveParentAc
 		}},
 	}
 
-	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, nil)
+	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, nil, nil)
 
 	require.Error(t, err)
 	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupParentAckFailure)
@@ -375,7 +376,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsRecordsMixedCleanupDiagnostics(t
 		},
 	}
 
-	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers)
+	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers, nil)
 
 	require.Error(t, err)
 	diagnostics := orch.shortcutCleanupDiagnosticSnapshot()
@@ -418,7 +419,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsAfterSuccessful
 		}},
 	}
 
-	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, nil)
+	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, nil, nil)
 	require.Error(t, err)
 	require.NotEmpty(t, orch.shortcutCleanupDiagnosticSnapshot())
 
@@ -429,7 +430,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsAfterSuccessful
 			},
 		},
 	}
-	err = orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers)
+	err = orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers, nil)
 
 	require.NoError(t, err)
 	assert.Empty(t, orch.shortcutCleanupDiagnosticSnapshot())
@@ -466,6 +467,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsWhenNoCleanupWo
 			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
 		}}},
 		nil,
+		nil,
 	)
 	require.Error(t, err)
 	require.NotEmpty(t, orch.shortcutCleanupDiagnosticSnapshot())
@@ -473,6 +475,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsWhenNoCleanupWo
 	err = orch.purgeShortcutChildArtifactsForDecisions(
 		context.Background(),
 		&runtimeWorkSet{CleanupScopeAllParents: true},
+		nil,
 		nil,
 	)
 
@@ -511,6 +514,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsKeepsDiagnosticsForParentScopedN
 			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
 		}}},
 		nil,
+		nil,
 	)
 	require.Error(t, err)
 	require.NotEmpty(t, orch.shortcutCleanupDiagnosticSnapshot())
@@ -518,6 +522,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsKeepsDiagnosticsForParentScopedN
 	err = orch.purgeShortcutChildArtifactsForDecisions(
 		context.Background(),
 		&runtimeWorkSet{},
+		nil,
 		nil,
 	)
 

@@ -21,11 +21,11 @@ runtime package that implements it.
 
 ## Ownership Contract
 
-- Owns: Multi-mount sync lifecycle, runtime work from parent-declared child work snapshots, child runner start/final-drain/stop/purge process work, execution-failure skips, explicit child-artifact cleanup from the CLI-supplied data directory, reload diffing, control-socket ownership, and per-mount panic/error isolation.
+- Owns: Multi-mount sync lifecycle, runtime work from exact parent-declared child work snapshots, child runner start/final-drain/stop/purge process work, execution-failure skips, explicit child-artifact cleanup from the CLI-supplied data directory, reload diffing, control-socket ownership, and per-mount panic/error isolation.
 - Does Not Own: Parent-drive Graph discovery, shortcut placeholder mutation, parent sync-dir shortcut alias filesystem policy, single-mount content observation, planning, execution, retry/trial policy, or sync-store persistence semantics.
-- Source of Truth: The current `config.Holder` snapshot, the CLI-compiled standalone mount configs, plus the runtime runner set and `runners` map owned by the watch-mode orchestrator loop.
+- Source of Truth: The current `config.Holder` snapshot, the CLI-compiled standalone mount configs, plus the runtime runner set, run-owned parent child-work snapshot cache, and `runners` map owned by the active one-shot/watch runtime.
 - Allowed Side Effects: Session creation, engine construction/closure, child artifact cleanup scoped by parent snapshot, Unix control-socket bind/unlink, per-mount goroutine startup, live perf capture, and control-plane logging.
-- Mutable Runtime Owner: `RunWatch` owns the live `runners` map. Each `watchRunner` owns one cancel function and one completion channel for exactly one mount.
+- Mutable Runtime Owner: One-shot and watch each own their current parent child-work snapshots. `RunWatch` owns the live `runners` map. Each `watchRunner` owns one cancel function and one completion channel for exactly one mount.
 - Error Boundary: The control plane converts mount startup into structured per-mount startup outcomes, returns one-shot startup classification separately from completed `MountReport` values, and keeps watch-runner failures isolated to the affected mount or log path. Engine-internal errors remain inside the single-mount boundary.
 
 ## Verified By
@@ -37,7 +37,9 @@ runtime package that implements it.
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry` |
-| Parent engines own shortcut-root state and alias mutation while multisync relays parent-declared child work snapshots into runtime work: parent shortcut-root state is persisted before acknowledgement, persisted roots feed parent-owned observation protection, empty complete batches retire old roots, same-path replacements do not downgrade active owners, clean final-drain acknowledgements become crash-safe parent release cleanup, cleanup-pending roots publish explicit child artifact cleanup commands, child state paths and cleanup artifact paths both use the explicit orchestrator `DataDir` instead of ambient config defaults, one-shot starts each parent's children from fresh parent-published child work while final-drain and artifact-cleanup acknowledgements wait for that same parent's safe point, and multisync behavior tests exercise exact snapshot caching, runtime work, final drain, artifact cleanup, cleanup failure diagnostics, and parent-scoped watch reconciliation without making multisync a parent policy owner. | `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot`, `TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemoved`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeReturningError`, `TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBeforeDelete`, `TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBeforeRename`, `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain`, `TestReceiveParentChildWorkSnapshot_StoresSnapshotInMemory`, `TestReceiveParentChildWorkSnapshot_EmptySnapshotClearsCachedChildren`, `TestReceiveParentChildWorkSnapshot_UsesParentCleanupRequests`, `TestRunOnce_PublishesParentChildWorkSnapshotBeforeStartingChildren`, `TestRunOnce_StartsParentChildrenAsSoonAsParentPublishes`, `TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents`, `TestRunOnce_UsesFinalParentSnapshotInsteadOfIntermediateSkip`, `TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint`, `TestRunWatch_PublishesParentChildWorkSnapshotBeforeStartingChildren`, `TestRunWatch_ReconcilesChildRunnersFromLiveParentSnapshot`, `TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot`, `TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts`, `TestOrchestratorCleanupWithEmptyDataDirFailsLoudly`, `TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsWhenNoCleanupWorkRemains`, `TestBuildRuntimeWorkFromParentChildWorkSnapshot_DoesNotClassifyDuplicateAutomaticChildren`, `TestBuildRuntimeWorkFromParentChildWorkSnapshot_StandaloneContentRootRunsBesideChild`, `TestBuildRuntimeWork_StandaloneContentRootDoesNotSuppressChild`, `TestBuildRuntimeWork_ParentBlockedSnapshotHasNoChildWork`, `TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSuccess`, `TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved`, `TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile`, `TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs`, `TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable`, `TestBuildChildStatusMount_RendersLifecycleState`, `TestShortcutRootTransitionMatrixEnumeratesEveryStateAndEvent` |
+| Parent engines own shortcut-root state, alias mutation, protected-root derivation, and durable cleanup retry state before multisync sees child work. | `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeReturningError`, `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain` |
+| Multisync owns runtime-only shortcut child admission from exact parent snapshots: one-shot stores the exact publication and starts that parent's children only after that parent's safe point, while watch initial startup starts parent runners only and admits children from live parent publications. | `TestReceiveParentChildWorkSnapshot_StoresSnapshotInMemory`, `TestReceiveParentChildWorkSnapshot_EmptySnapshotClearsCachedChildren`, `TestRunOnce_PublishesParentChildWorkSnapshotBeforeStartingChildren`, `TestRunOnce_StartsParentChildrenAfterPublishingParentSafePoint`, `TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents`, `TestRunOnce_UsesFinalParentSnapshotInsteadOfIntermediateSkip`, `TestRunWatch_PublishesParentChildWorkSnapshotBeforeStartingChildren`, `TestRunWatch_ReconcilesChildRunnersFromLiveParentSnapshot`, `TestApplyWatchMountSet_ParentRestartClearsSnapshotAndDoesNotRestartChild`, `TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot` |
+| Multisync executes parent-declared final-drain and artifact-cleanup work without becoming the parent lifecycle owner; cleanup paths use explicit orchestrator `DataDir`, parent-scoped cleanup diagnostics remain transient, and runtime work compilation keeps shortcut child commands scoped to the declaring parent. | `TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSuccess`, `TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved`, `TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile`, `TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs`, `TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts`, `TestOrchestratorCleanupWithEmptyDataDirFailsLoudly`, `TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsWhenNoCleanupWorkRemains`, `TestBuildRuntimeWorkFromParentChildWorkSnapshot_DoesNotClassifyDuplicateAutomaticChildren`, `TestBuildRuntimeWorkFromParentChildWorkSnapshot_StandaloneContentRootRunsBesideChild`, `TestBuildRuntimeWork_ParentBlockedSnapshotHasNoChildWork`, `TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable`, `TestBuildChildStatusMount_RendersLifecycleState` |
 
 ## Runtime Mount Specs
 
@@ -49,12 +51,15 @@ resolves configured drives and compiles them into
 `MountStartupResult` values before the orchestrator is constructed.
 
 One-shot and watch startup bind the owner control socket before parent engines
-start. On startup, reload, and parent snapshot events the control plane:
+start. Each run owns its parent child-work snapshot cache; those snapshots are
+discarded with the one-shot/watch runtime instead of living on the
+`Orchestrator`. On startup, reload, and parent snapshot events the control
+plane:
 
 1. consumes the CLI-compiled standalone mount selection
 2. starts selected standalone parent engines with the child work snapshot sink
    attached before the engine begins its normal one-shot or watch bootstrap
-3. caches each exact parent-declared child work snapshot in memory when
+3. caches each exact parent-declared child work snapshot in runtime memory when
    the live parent publishes from its normal current-plan path
 4. reconciles child runners for that parent directly from normal and
    final-drain child work commands plus explicit cleanup commands
@@ -62,15 +67,18 @@ start. On startup, reload, and parent snapshot events the control plane:
 There is no separate shortcut-only startup path and no control-plane startup
 publisher. The parent engine derives local protection and child publications
 from the same current truth and current plan that it uses for ordinary work.
-Children are never admitted from a cached child work snapshot when a parent exits or fails
-before publishing; multisync stops any existing children for that parent and
-waits for a fresh live parent snapshot before admitting replacements.
-In one-shot, each parent's child work starts as soon as that live parent
-publishes a fresh child work snapshot containing runnable, final-drain, or
-cleanup work. Parent A's children do not wait for unrelated parent B, and child
-engines still run ordinary `RunOnce` passes. Final-drain and artifact-cleanup
-acknowledgements remain serialized through the same live parent only after that
-parent reaches its safe acknowledgement point.
+Watch initial startup starts selected standalone parent runners only. Children
+are never admitted from a cached child work snapshot when a watch runtime
+starts, or when a parent exits or fails before publishing; multisync stops any
+existing children for that parent, forgets that runtime's snapshot for the
+parent, and waits for a fresh live parent snapshot before admitting
+replacements. In one-shot, multisync records the latest exact snapshot
+published by each parent and starts that parent's child work only after that
+same parent reaches its one-shot safe point. Parent A's children do not wait
+for unrelated parent B, and child engines still run ordinary `RunOnce` passes.
+Because one-shot child work begins after the parent safe point, final-drain and
+artifact-cleanup acknowledgements can proceed through that same live parent
+without a separate parent-done gate.
 
 Managed child mounts are runtime projections declared by the parent engine, not
 synthetic configured drives and not durable control-plane inventory.
@@ -86,10 +94,11 @@ receives the lowered runtime value only after the kind-specific shape has been
 validated.
 
 Watch lifecycle is parent-first and child-safe. Reload stops child runners
-before parents and starts parents before children. If a parent runner exits,
+before parents and starts parents before children admitted from the run-owned
+snapshot cache. If a parent runner exits,
 panics, loses its root, is paused/removed by reload, or fails startup,
 multisync immediately cancels all child runners whose `parentMountID` matches
-that parent and forgets the cached child work snapshot for that parent.
+that parent and forgets the runtime child work snapshot for that parent.
 Replacement children can start only after the live parent has published fresh
 child work commands through the normal engine path.
 
@@ -181,12 +190,11 @@ commands to `internal/multisync`:
   so a deleted/recreated or moved projection cannot be mistaken for an empty
   tree to sync
 - in one-shot mode, each configured parent runs as an ordinary engine and
-  children are admitted as soon as that parent publishes fresh child
-  work. No parent waits for unrelated parents before its children can run.
-  The one-shot child-run coordinator only owns report aggregation, artifact
-  cleanup, context-aware waiting for the parent safe acknowledgement point, and
-  live-parent acknowledgement ordering; children still execute ordinary engine
-  `RunOnce` passes
+  children are admitted from that parent's latest exact child-work snapshot only
+  after that parent reaches its safe point. No parent waits for unrelated
+  parents before its children can run. The one-shot child-run coordinator only
+  owns report aggregation, artifact cleanup, and live-parent acknowledgement
+  ordering; children still execute ordinary engine `RunOnce` passes
 - successful child work mutation in watch mode publishes a new
   parent-owned child snapshot through the live parent runner; multisync
   reconciles only that parent's child runners without stopping the parent

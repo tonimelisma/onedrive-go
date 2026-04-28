@@ -13,20 +13,21 @@ import (
 // oneShotChildRuns owns child runner timing for a single RunOnce call. It is
 // not shortcut policy: parents publish exact child work snapshots and children
 // execute ordinary Engine.RunOnce work. State machine:
-// parent registered -> fresh snapshot accepted -> child work started ->
-// parent safe point reached -> final-drain/artifact cleanup acked. If the
-// context is canceled before the safe point, child work exits without acking;
-// parent shortcut_roots plus child artifacts remain the recovery source.
+// parent registered -> exact snapshot accepted -> parent safe point reached ->
+// child work started -> final-drain/artifact cleanup acked. If the context is
+// canceled before the safe point, no child work starts; parent shortcut_roots
+// plus child artifacts remain the recovery source.
 type oneShotChildRuns struct {
 	orchestrator *Orchestrator
 	mode         syncengine.SyncMode
 	opts         syncengine.RunOptions
 
 	mu            gosync.Mutex
+	cache         *parentChildWorkSnapshots
 	parents       map[mountID]*mountSpec
 	parentAckers  map[mountID]shortcutChildAckHandle
-	parentDone    map[mountID]chan struct{}
-	published     map[mountID]bool
+	parentDone    map[mountID]bool
+	snapshots     map[mountID]syncengine.ShortcutChildWorkSnapshot
 	started       map[mountID]bool
 	startup       []MountStartupResult
 	childReports  []*MountReport
@@ -50,10 +51,11 @@ func newOneShotChildRuns(
 		orchestrator: orchestrator,
 		mode:         mode,
 		opts:         opts,
+		cache:        newParentChildWorkSnapshots(),
 		parents:      parentByID,
 		parentAckers: make(map[mountID]shortcutChildAckHandle),
-		parentDone:   make(map[mountID]chan struct{}),
-		published:    make(map[mountID]bool),
+		parentDone:   make(map[mountID]bool),
+		snapshots:    make(map[mountID]syncengine.ShortcutChildWorkSnapshot),
 		started:      make(map[mountID]bool),
 	}
 }
@@ -69,25 +71,23 @@ func (c *oneShotChildRuns) registerParents(work []indexedMountWork) {
 			continue
 		}
 		parentID := item.work.mount.id()
-		// One-shot children must come from the live parent run, not from
-		// an old snapshot cached before this parent started.
-		c.orchestrator.forgetParentChildWorkSnapshot(parentID)
-		if _, found := c.parentDone[parentID]; !found {
-			c.parentDone[parentID] = make(chan struct{})
-		}
 		if !shortcutChildAckHandleIsZero(item.work.parentAck) {
 			c.parentAckers[parentID] = item.work.parentAck
 		}
 	}
 }
 
-func (c *oneShotChildRuns) notifyParentSnapshot(ctx context.Context, parentID mountID) error {
+func (c *oneShotChildRuns) notifyParentSnapshot(
+	ctx context.Context,
+	parentID mountID,
+	snapshot syncengine.ShortcutChildWorkSnapshot,
+) error {
 	if c == nil || parentID == "" {
 		return nil
 	}
 
 	c.mu.Lock()
-	c.published[parentID] = true
+	c.snapshots[parentID] = snapshot
 	c.mu.Unlock()
 	c.startChildrenForParent(ctx, parentID)
 	return nil
@@ -98,16 +98,7 @@ func (c *oneShotChildRuns) markParentDone(ctx context.Context, parentID mountID)
 		return
 	}
 	c.mu.Lock()
-	done := c.parentDone[parentID]
-	if done == nil {
-		done = make(chan struct{})
-		c.parentDone[parentID] = done
-	}
-	select {
-	case <-done:
-	default:
-		close(done)
-	}
+	c.parentDone[parentID] = true
 	c.mu.Unlock()
 	c.startChildrenForParent(ctx, parentID)
 }
@@ -116,8 +107,11 @@ func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID 
 	if c == nil || parentID == "" {
 		return
 	}
+	if ctx != nil && ctx.Err() != nil {
+		return
+	}
 	c.mu.Lock()
-	if c.started[parentID] || !c.published[parentID] {
+	if c.started[parentID] || !c.parentDone[parentID] {
 		c.mu.Unlock()
 		return
 	}
@@ -126,7 +120,8 @@ func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID 
 		c.mu.Unlock()
 		return
 	}
-	if !c.orchestrator.parentChildWorkSnapshotHasWork(parentID) {
+	snapshot := c.snapshots[parentID]
+	if !shortcutChildWorkSnapshotHasWork(snapshot) {
 		c.mu.Unlock()
 		return
 	}
@@ -134,7 +129,7 @@ func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID 
 	c.childRunGroup.Add(1)
 	c.mu.Unlock()
 
-	go c.runChildrenForParent(ctx, parentID, parent)
+	go c.runChildrenForParent(ctx, parentID, parent, snapshot)
 }
 
 func (c *oneShotChildRuns) wait() {
@@ -177,9 +172,10 @@ func (c *oneShotChildRuns) runChildrenForParent(
 	ctx context.Context,
 	parentID mountID,
 	parent *mountSpec,
+	snapshot syncengine.ShortcutChildWorkSnapshot,
 ) {
 	defer c.childRunGroup.Done()
-	decisions, err := c.orchestrator.buildRuntimeWorkForParent(parent)
+	decisions, err := c.orchestrator.buildRuntimeWorkForParentSnapshot(parent, snapshot)
 	if err != nil {
 		c.appendStartup(MountStartupResult{
 			SelectionIndex: parent.selectionIndex(),
@@ -199,31 +195,19 @@ func (c *oneShotChildRuns) runChildrenForParent(
 		decisions.Skipped,
 		c.opts,
 		nil,
+		nil,
 	)
 	c.appendStartup(childStartup.Results...)
 	runIndexedMountWork(ctx, childWork, childReports)
 	c.orchestrator.closeRunOnceChildEngines(ctx, childWork)
 	c.appendReports(childReports...)
 
-	if err := c.waitParentDone(ctx, parentID); err != nil {
-		c.orchestrator.logger.Warn("skipping shortcut child acknowledgements before parent safe point",
-			slog.String("parent_mount_id", parentID.String()),
-			slog.String("error", err.Error()),
-		)
-		c.appendReports(&MountReport{
-			SelectionIndex: parent.selectionIndex(),
-			Identity:       parent.identity(),
-			DisplayName:    parent.displayName(),
-			Err:            fmt.Errorf("shortcut child finalization before parent safe point: %w", err),
-		})
-		return
-	}
-
 	parentAckers := c.parentAckersFor(parentID)
 	if purgeErr := c.orchestrator.purgeShortcutChildArtifactsForDecisions(
 		ctx,
 		decisions,
 		cloneParentAckHandles(parentAckers),
+		c.cache,
 	); purgeErr != nil {
 		c.orchestrator.logger.Warn("purging shortcut child state artifacts",
 			slog.String("parent_mount_id", parentID.String()),
@@ -241,6 +225,7 @@ func (c *oneShotChildRuns) runChildrenForParent(
 		decisions,
 		childReports,
 		parentAckers,
+		c.cache,
 	); finalizeErr != nil {
 		c.orchestrator.logger.Warn("finalizing drained shortcut child mounts",
 			slog.String("parent_mount_id", parentID.String()),
@@ -256,24 +241,6 @@ func (c *oneShotChildRuns) runChildrenForParent(
 		c.orchestrator.logger.Info("finalized drained shortcut child mounts",
 			slog.String("parent_mount_id", parentID.String()),
 		)
-	}
-}
-
-func (c *oneShotChildRuns) waitParentDone(ctx context.Context, parentID mountID) error {
-	if c == nil || parentID == "" {
-		return nil
-	}
-	c.mu.Lock()
-	done := c.parentDone[parentID]
-	c.mu.Unlock()
-	if done == nil {
-		return nil
-	}
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("wait parent safe point: %w", ctx.Err())
 	}
 }
 

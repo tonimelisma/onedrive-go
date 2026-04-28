@@ -110,13 +110,8 @@ type Orchestrator struct {
 	// shortcutCleanupDiagnostics is transient executor status for control
 	// clients. Durable recovery remains in parent shortcut_roots.
 	shortcutCleanupDiagnostics []synccontrol.ShortcutCleanupDiagnostic
-	shortcutMu                 gosync.Mutex
-	// latestParentChildWorkSnapshots is an ephemeral exact cache of parent
-	// child-work intent. It is rebuildable from live parents, is cleared when the
-	// parent exits or restarts, and never owns shortcut lifecycle policy.
-	latestParentChildWorkSnapshots map[mountID]syncengine.ShortcutChildWorkSnapshot
-	reconcileTicks                 func(time.Duration) (<-chan time.Time, func())
-	artifactCleanup                shortcutChildArtifactCleanupExecutor
+	reconcileTicks             func(time.Duration) (<-chan time.Time, func())
+	artifactCleanup            shortcutChildArtifactCleanupExecutor
 }
 
 // NewOrchestrator creates an Orchestrator with real Engine factory.
@@ -146,10 +141,9 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 			}
 			return engineRunnerAdapter{engine: engine}, nil
 		},
-		logger:                         cfg.Logger,
-		perfRuntime:                    perf.NewRuntime(cfg.PerfParent),
-		latestParentChildWorkSnapshots: make(map[mountID]syncengine.ShortcutChildWorkSnapshot),
-		artifactCleanup:                newShortcutChildArtifactCleanupExecutor(cfg.Logger, cfg.DataDir),
+		logger:          cfg.Logger,
+		perfRuntime:     perf.NewRuntime(cfg.PerfParent),
+		artifactCleanup: newShortcutChildArtifactCleanupExecutor(cfg.Logger, cfg.DataDir),
 		reconcileTicks: func(interval time.Duration) (<-chan time.Time, func()) {
 			if interval <= 0 {
 				return nil, func() {}

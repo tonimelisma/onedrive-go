@@ -117,14 +117,14 @@ func cleanupRequestSnapshot(
 }
 
 func seedShortcutChildRunCommand(
-	orch *Orchestrator,
+	cache *parentChildWorkSnapshots,
 	parent *StandaloneMountConfig,
 	child *syncengine.ShortcutChildRunCommand,
 ) {
 	if parent == nil || child == nil || child.ChildMountID == "" {
 		return
 	}
-	orch.receiveParentChildWorkSnapshot(
+	cache.receive(
 		mountID(parent.CanonicalID.String()),
 		processSnapshotForParent(parent, *child),
 	)
@@ -136,14 +136,14 @@ func TestReceiveParentChildWorkSnapshot_StoresSnapshotInMemory(t *testing.T) {
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
+	cache := newParentChildWorkSnapshots()
 
-	changed := orch.receiveParentChildWorkSnapshotFromParent(parent, processSnapshot(
+	publication, changed := orch.receiveParentChildWorkSnapshotFromParent(cache, parent, processSnapshot(
 		parent.id().String(),
 		testChildRecord(t, parent.id(), "binding-1", "Shared/Docs"),
 	))
 
 	assert.True(t, changed)
-	publication := orch.latestParentChildWorkSnapshotFor(parent.id())
 	require.Len(t, publication.RunCommands, 1)
 	assert.Equal(t, syncengine.ShortcutChildRunModeNormal, publication.RunCommands[0].Mode)
 	assert.Equal(t, filepath.Join(parent.syncRoot(), "Shared", "Docs"), publication.RunCommands[0].Engine.LocalRoot)
@@ -157,6 +157,7 @@ func TestReceiveParentChildWorkSnapshot_EquivalentSnapshotIsStable(t *testing.T)
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
+	cache := newParentChildWorkSnapshots()
 	first := processSnapshot(
 		parent.id().String(),
 		testChildRecord(t, parent.id(), "binding-1", "Shared/Docs"),
@@ -166,8 +167,10 @@ func TestReceiveParentChildWorkSnapshot_EquivalentSnapshotIsStable(t *testing.T)
 		testChildRecord(t, parent.id(), "binding-1", "Shared/Docs"),
 	)
 
-	assert.True(t, orch.receiveParentChildWorkSnapshotFromParent(parent, first))
-	assert.False(t, orch.receiveParentChildWorkSnapshotFromParent(parent, equivalent))
+	_, changed := orch.receiveParentChildWorkSnapshotFromParent(cache, parent, first)
+	assert.True(t, changed)
+	_, changed = orch.receiveParentChildWorkSnapshotFromParent(cache, parent, equivalent)
+	assert.False(t, changed)
 }
 
 // Validates: R-2.4.8, R-2.8.1, R-4.1.4
@@ -176,17 +179,17 @@ func TestReceiveParentChildWorkSnapshot_EmptySnapshotClearsCachedChildren(t *tes
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
-	orch.receiveParentChildWorkSnapshot(parent.id(), processSnapshot(
+	cache := newParentChildWorkSnapshots()
+	cache.receive(parent.id(), processSnapshot(
 		parent.id().String(),
 		testChildRecord(t, parent.id(), "binding-old", "Shortcut"),
 	))
 
-	changed := orch.receiveParentChildWorkSnapshotFromParent(parent, syncengine.ShortcutChildWorkSnapshot{
+	publication, changed := orch.receiveParentChildWorkSnapshotFromParent(cache, parent, syncengine.ShortcutChildWorkSnapshot{
 		NamespaceID: parent.id().String(),
 	})
 
 	assert.True(t, changed)
-	publication := orch.latestParentChildWorkSnapshotFor(parent.id())
 	assert.Empty(t, publication.RunCommands)
 }
 
@@ -196,22 +199,23 @@ func TestParentChildWorkSnapshotCache_ClonesSnapshot(t *testing.T) {
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
+	cache := newParentChildWorkSnapshots()
 	identity := &syncengine.ShortcutRootIdentity{Device: 1, Inode: 2}
 	child := testChildRecord(t, parent.id(), "binding-1", "Shortcuts/Docs")
 	child.Engine.LocalRootIdentity = identity
 	publication := processSnapshot(parent.id().String(), child)
 
-	changed := orch.receiveParentChildWorkSnapshotFromParent(parent, publication)
+	_, changed := orch.receiveParentChildWorkSnapshotFromParent(cache, parent, publication)
 	require.True(t, changed)
 	identity.Device = 99
 
-	cached := orch.latestParentChildWorkSnapshotFor(parent.id())
+	cached := cache.latestFor(parent.id())
 	require.Len(t, cached.RunCommands, 1)
 	require.NotNil(t, cached.RunCommands[0].Engine.LocalRootIdentity)
 	assert.Equal(t, uint64(1), cached.RunCommands[0].Engine.LocalRootIdentity.Device)
 
 	cached.RunCommands[0].Engine.LocalRootIdentity.Device = 42
-	cachedAgain := orch.latestParentChildWorkSnapshotFor(parent.id())
+	cachedAgain := cache.latestFor(parent.id())
 	require.NotNil(t, cachedAgain.RunCommands[0].Engine.LocalRootIdentity)
 	assert.Equal(t, uint64(1), cachedAgain.RunCommands[0].Engine.LocalRootIdentity.Device)
 }
@@ -221,12 +225,12 @@ func TestReceiveParentChildWorkSnapshot_UsesParentCleanupRequests(t *testing.T) 
 	t.Parallel()
 
 	parent := testParentMountSpec()
-	orch := NewOrchestrator(&OrchestratorConfig{})
-	orch.receiveParentChildWorkSnapshot(parent.id(), syncengine.ShortcutChildWorkSnapshot{
+	cache := newParentChildWorkSnapshots()
+	cache.receive(parent.id(), syncengine.ShortcutChildWorkSnapshot{
 		NamespaceID: parent.id().String(),
 	})
 
-	changed := orch.receiveParentChildWorkSnapshot(parent.id(), cleanupRequestSnapshot(
+	publication, changed := cache.receive(parent.id(), cleanupRequestSnapshot(
 		parent.id().String(),
 		syncengine.ShortcutChildCleanupCommand{
 			ChildMountID: config.ChildMountID(parent.id().String(), "binding-old"),
@@ -237,13 +241,12 @@ func TestReceiveParentChildWorkSnapshot_UsesParentCleanupRequests(t *testing.T) 
 	))
 
 	assert.True(t, changed)
-	publication := orch.latestParentChildWorkSnapshotFor(parent.id())
 	require.Len(t, publication.CleanupCommands, 1)
 	assert.Equal(t, config.ChildMountID(parent.id().String(), "binding-old"), publication.CleanupCommands[0].ChildMountID)
 
 	decisions, err := buildRuntimeWorkForParents(
 		[]*mountSpec{parent},
-		orch.latestParentChildWorkSnapshotsFor([]*mountSpec{parent}),
+		cache.forParents([]*mountSpec{parent}),
 		t.TempDir(),
 		nil,
 	)
@@ -253,7 +256,7 @@ func TestReceiveParentChildWorkSnapshot_UsesParentCleanupRequests(t *testing.T) 
 	assert.Equal(t, config.ChildMountID(parent.id().String(), "binding-old"), decisions.CleanupChildren[0].mountID)
 	assert.Equal(t, filepath.Join(parent.syncRoot(), "Shortcuts", "Old"), decisions.CleanupChildren[0].localRoot)
 
-	changed = orch.receiveParentChildWorkSnapshot(parent.id(), cleanupRequestSnapshot(
+	publication, changed = cache.receive(parent.id(), cleanupRequestSnapshot(
 		parent.id().String(),
 		syncengine.ShortcutChildCleanupCommand{
 			ChildMountID: config.ChildMountID(parent.id().String(), "binding-old"),
@@ -263,7 +266,6 @@ func TestReceiveParentChildWorkSnapshot_UsesParentCleanupRequests(t *testing.T) 
 		},
 	))
 	assert.False(t, changed)
-	publication = orch.latestParentChildWorkSnapshotFor(parent.id())
 	require.Len(t, publication.CleanupCommands, 1)
 	assert.Equal(t, config.ChildMountID(parent.id().String(), "binding-old"), publication.CleanupCommands[0].ChildMountID)
 }
@@ -369,13 +371,13 @@ func TestParentSamePathReplacementPublishesOnlyOldFinalDrainChild(t *testing.T) 
 
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
-	changed := orch.receiveParentChildWorkSnapshotFromParent(parent, processSnapshot(
+	cache := newParentChildWorkSnapshots()
+	publication, changed := orch.receiveParentChildWorkSnapshotFromParent(cache, parent, processSnapshot(
 		parent.id().String(),
 		finalDrainChildRecord(t, parent.id(), "binding-old", "Shortcut"),
 	))
 
 	assert.True(t, changed)
-	publication := orch.latestParentChildWorkSnapshotFor(parent.id())
 	require.Len(t, publication.RunCommands, 1)
 	assert.Equal(t, config.ChildMountID(parent.id().String(), "binding-old"), publication.RunCommands[0].ChildMountID)
 	assert.Equal(t, syncengine.ShortcutChildRunModeFinalDrain, publication.RunCommands[0].Mode)
@@ -386,14 +388,14 @@ func TestBuildRuntimeWorkFromParentChildWorkSnapshot_DoesNotClassifyDuplicateAut
 	t.Parallel()
 
 	parent := testParentMountSpec()
-	orch := NewOrchestrator(&OrchestratorConfig{})
+	cache := newParentChildWorkSnapshots()
 	first := testChildRecord(t, parent.id(), "binding-a", "Shortcuts/A")
 	second := testChildRecord(t, parent.id(), "binding-b", "Shortcuts/B")
-	orch.receiveParentChildWorkSnapshot(parent.id(), processSnapshot(parent.id().String(), first, second))
+	cache.receive(parent.id(), processSnapshot(parent.id().String(), first, second))
 
 	decisions, err := buildRuntimeWorkForParents(
 		[]*mountSpec{parent},
-		orch.latestParentChildWorkSnapshotsFor([]*mountSpec{parent}),
+		cache.forParents([]*mountSpec{parent}),
 		t.TempDir(),
 		nil,
 	)
@@ -417,13 +419,13 @@ func TestBuildRuntimeWorkFromParentChildWorkSnapshot_StandaloneContentRootRunsBe
 			},
 		},
 	}
-	orch := NewOrchestrator(&OrchestratorConfig{})
+	cache := newParentChildWorkSnapshots()
 	child := testChildRecord(t, parent.id(), "binding-a", "Shortcuts/A")
-	orch.receiveParentChildWorkSnapshot(parent.id(), processSnapshot(parent.id().String(), child))
+	cache.receive(parent.id(), processSnapshot(parent.id().String(), child))
 
 	decisions, err := buildRuntimeWorkForParents(
 		[]*mountSpec{parent, standalone},
-		orch.latestParentChildWorkSnapshotsFor([]*mountSpec{parent, standalone}),
+		cache.forParents([]*mountSpec{parent, standalone}),
 		t.TempDir(),
 		nil,
 	)

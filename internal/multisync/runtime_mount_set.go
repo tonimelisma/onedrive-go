@@ -11,6 +11,7 @@ func (o *Orchestrator) buildRuntimeWorkSet(
 	ctx context.Context,
 	standaloneMounts []StandaloneMountConfig,
 	initialStartup []MountStartupResult,
+	childWork *parentChildWorkSnapshots,
 ) (*runtimeWorkSet, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("building runtime work: context is required")
@@ -21,8 +22,8 @@ func (o *Orchestrator) buildRuntimeWorkSet(
 		return nil, err
 	}
 
-	parentSnapshots := o.latestParentChildWorkSnapshotsFor(parents)
-	decisions, err := buildRuntimeWorkForParents(parents, parentSnapshots, o.cfg.DataDir, o.logger)
+	parentSnapshots := childWork.forParents(parents)
+	decisions, err := o.buildRuntimeWorkFromParentSnapshots(parents, parentSnapshots)
 	if err != nil {
 		return nil, err
 	}
@@ -33,35 +34,47 @@ func (o *Orchestrator) buildRuntimeWorkSet(
 	return decisions, nil
 }
 
-func (o *Orchestrator) buildRuntimeWorkFromParentSnapshots(
+func (o *Orchestrator) buildStandaloneRuntimeWorkSet(
+	ctx context.Context,
 	standaloneMounts []StandaloneMountConfig,
 	initialStartup []MountStartupResult,
 ) (*runtimeWorkSet, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("building runtime work: context is required")
+	}
+
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
-	parentSnapshots := o.latestParentChildWorkSnapshotsFor(parents)
-	decisions, err := buildRuntimeWorkForParents(parents, parentSnapshots, o.cfg.DataDir, o.logger)
-	if err != nil {
-		return nil, err
+	decisions := &runtimeWorkSet{
+		Mounts: assembleRuntimeMountSet(parents, nil, o.logger),
 	}
 	decisions.CleanupScopeAllParents = true
 	offsetRuntimeWorkSelectionIndexes(decisions, nextStartupSelectionIndex(initialStartup))
-	decisions.Skipped = append(append([]MountStartupResult(nil), initialStartup...), decisions.Skipped...)
-
+	decisions.Skipped = append([]MountStartupResult(nil), initialStartup...)
 	return decisions, nil
 }
 
-func (o *Orchestrator) buildRuntimeWorkForParent(parent *mountSpec) (*runtimeWorkSet, error) {
+func (o *Orchestrator) buildRuntimeWorkFromParentSnapshots(
+	parents []*mountSpec,
+	parentSnapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
+) (*runtimeWorkSet, error) {
+	return buildRuntimeWorkForParents(parents, parentSnapshots, o.cfg.DataDir, o.logger)
+}
+
+func (o *Orchestrator) buildRuntimeWorkForParentSnapshot(
+	parent *mountSpec,
+	snapshot syncengine.ShortcutChildWorkSnapshot,
+) (*runtimeWorkSet, error) {
 	if parent == nil {
 		return nil, fmt.Errorf("building parent child runtime work: parent mount is required")
 	}
 	parentCopy := cloneMountSpec(parent)
 	parentSnapshots := map[mountID]syncengine.ShortcutChildWorkSnapshot{
-		parentCopy.id(): o.latestParentChildWorkSnapshotFor(parentCopy.id()),
+		parentCopy.id(): syncengine.NormalizeShortcutChildWorkSnapshot(parentCopy.id().String(), snapshot),
 	}
-	return buildRuntimeWorkForParents([]*mountSpec{parentCopy}, parentSnapshots, o.cfg.DataDir, o.logger)
+	return o.buildRuntimeWorkFromParentSnapshots([]*mountSpec{parentCopy}, parentSnapshots)
 }
 
 func nextStartupSelectionIndex(results []MountStartupResult) int {
