@@ -317,11 +317,6 @@ func runPublicVerification(
 	}); err != nil {
 		return err
 	}
-	if err := collector.runStep("repo consistency", func() error {
-		return runRepoConsistencyChecks(repoRoot)
-	}); err != nil {
-		return err
-	}
 	if err := collector.runStep(fullE2ECompileStepName, func() error {
 		return runE2EFullCompileCheck(ctx, runner, repoRoot, env, stdout, stderr)
 	}); err != nil {

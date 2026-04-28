@@ -29,11 +29,10 @@ func testPublishedChildForParent(parent *mountSpec, bindingID, relativePath stri
 		ChildMountID:      config.ChildMountID(parent.mountID.String(), bindingID),
 		BindingItemID:     bindingID,
 		RelativeLocalPath: relativePath,
-		LocalAlias:        "Shortcut",
+		DisplayName:       "Shortcut",
 		LocalRoot:         filepath.Join(parent.syncRoot, filepath.FromSlash(relativePath)),
 		RemoteDriveID:     "remote-drive",
 		RemoteItemID:      "remote-root",
-		RemoteIsFolder:    true,
 		RunnerAction:      syncengine.ShortcutChildActionRun,
 	}
 }
@@ -44,10 +43,9 @@ func testChildRecord(parentID mountID, bindingID, relativePath string) syncengin
 		BindingItemID:     bindingID,
 		RelativeLocalPath: relativePath,
 		LocalRoot:         filepath.Join(os.TempDir(), "parent", filepath.FromSlash(relativePath)),
-		LocalAlias:        "Shortcut",
+		DisplayName:       "Shortcut",
 		RemoteDriveID:     "remote-drive",
 		RemoteItemID:      "remote-root",
-		RemoteIsFolder:    true,
 		RunnerAction:      syncengine.ShortcutChildActionRun,
 	}
 }
@@ -78,10 +76,9 @@ func TestReceiveParentRunnerPublication_StoresPublicationInMemory(t *testing.T) 
 		Children: []syncengine.ShortcutChildRunner{{
 			BindingItemID:     "binding-1",
 			RelativeLocalPath: "Shared/Docs",
-			LocalAlias:        "Docs",
+			DisplayName:       "Docs",
 			RemoteDriveID:     "remote-drive-0001",
 			RemoteItemID:      "remote-root",
-			RemoteIsFolder:    true,
 			RunnerAction:      syncengine.ShortcutChildActionRun,
 		}},
 	})
@@ -106,10 +103,9 @@ func TestReceiveParentRunnerPublication_EquivalentPublicationIsStable(t *testing
 		Children: []syncengine.ShortcutChildRunner{{
 			BindingItemID:     "binding-1",
 			RelativeLocalPath: "Shared/Docs",
-			LocalAlias:        "Docs",
+			DisplayName:       "Docs",
 			RemoteDriveID:     "remote-drive-0001",
 			RemoteItemID:      "remote-root",
-			RemoteIsFolder:    true,
 			RunnerAction:      syncengine.ShortcutChildActionRun,
 		}},
 	}
@@ -119,10 +115,9 @@ func TestReceiveParentRunnerPublication_EquivalentPublicationIsStable(t *testing
 		Children: []syncengine.ShortcutChildRunner{{
 			BindingItemID:     "binding-1",
 			RelativeLocalPath: "Shared/Docs",
-			LocalAlias:        "Docs",
+			DisplayName:       "Docs",
 			RemoteDriveID:     "remote-drive-0001",
 			RemoteItemID:      "remote-root",
-			RemoteIsFolder:    true,
 			RunnerAction:      syncengine.ShortcutChildActionRun,
 		}},
 	}
@@ -142,7 +137,7 @@ func TestReceiveParentRunnerPublication_EmptyPublicationClearsCachedChildren(t *
 		Children: []syncengine.ShortcutChildRunner{{
 			BindingItemID:     "binding-old",
 			RelativeLocalPath: "Shortcut",
-			LocalAlias:        "Shortcut",
+			DisplayName:       "Shortcut",
 			RemoteDriveID:     "remote-drive",
 			RemoteItemID:      "remote-root",
 			RunnerAction:      syncengine.ShortcutChildActionRun,
@@ -170,7 +165,7 @@ func TestParentRunnerPublicationCache_ClonesPublication(t *testing.T) {
 		Children: []syncengine.ShortcutChildRunner{{
 			BindingItemID:     "binding-1",
 			RelativeLocalPath: "Shortcuts/Docs",
-			LocalAlias:        "Docs",
+			DisplayName:       "Docs",
 			RemoteDriveID:     "remote-drive",
 			RemoteItemID:      "remote-root",
 			RunnerAction:      syncengine.ShortcutChildActionRun,
