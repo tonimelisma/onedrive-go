@@ -164,6 +164,9 @@ func runShortcutArchitectureRule(repoRoot string, rule shortcutArchitectureRule)
 			return fmt.Errorf("walk %s: %w", path, walkErr)
 		}
 		if entry.IsDir() {
+			if shouldSkipShortcutArchitectureDir(entry) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		rel, err := filepath.Rel(repoRoot, path)
@@ -182,6 +185,15 @@ func runShortcutArchitectureRule(repoRoot string, rule shortcutArchitectureRule)
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+func shouldSkipShortcutArchitectureDir(entry fs.DirEntry) bool {
+	switch entry.Name() {
+	case ".git", ".hg", ".svn", ".jj":
+		return true
+	default:
+		return false
+	}
 }
 
 func checkShortcutArchitectureFile(rule shortcutArchitectureRule, path string, rel string) error {
