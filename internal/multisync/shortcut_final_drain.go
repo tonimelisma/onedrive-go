@@ -32,7 +32,7 @@ func classifyShortcutChildDrainResults(
 		if mount == nil || !mount.isFinalDrainChild() {
 			continue
 		}
-		mountID := mount.mountID.String()
+		mountID := mount.id().String()
 		result := shortcutChildDrainResult{
 			MountID: mountID,
 			AckRef:  mount.shortcutChildAckRef(),

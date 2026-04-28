@@ -1,7 +1,9 @@
-//nolint:gocritic // Planner helpers pass ShortcutRootRecord by value to keep transition decisions immutable.
 package sync
 
-func planShortcutRootCleanupBlocked(record ShortcutRootRecord, err error) ShortcutRootRecord {
+func planShortcutRootCleanupBlocked(record *ShortcutRootRecord, err error) ShortcutRootRecord {
+	if record == nil {
+		return ShortcutRootRecord{}
+	}
 	detail := ""
 	if err != nil {
 		detail = err.Error()
@@ -13,18 +15,21 @@ func planShortcutRootCleanupBlocked(record ShortcutRootRecord, err error) Shortc
 	)
 }
 
-func planShortcutRootChildCleanupPending(record ShortcutRootRecord) ShortcutRootRecord {
-	record = normalizeShortcutRootRecord(record)
-	record = plannedShortcutRootTransition(record,
+func planShortcutRootChildCleanupPending(record *ShortcutRootRecord) ShortcutRootRecord {
+	if record == nil {
+		return ShortcutRootRecord{}
+	}
+	normalized := normalizeShortcutRootRecord(record)
+	normalized = plannedShortcutRootTransition(&normalized,
 		shortcutRootEventProjectionCleanupSucceeded,
 		ShortcutRootStateRemovedChildCleanupPending,
 		"",
 	)
-	record.BlockedDetail = ""
-	record.ProtectedPaths = nil
-	record.LocalRootIdentity = nil
-	record.Waiting = nil
-	return record
+	normalized.BlockedDetail = ""
+	normalized.ProtectedPaths = nil
+	normalized.LocalRootIdentity = nil
+	normalized.Waiting = nil
+	return normalized
 }
 
 // planShortcutRootReleaseCleanup is the deterministic core for the parent
@@ -37,21 +42,21 @@ func planShortcutRootReleaseCleanup(
 	if record == nil {
 		return shortcutRootReleaseCleanupPlan{}
 	}
-	normalized := normalizeShortcutRootRecord(*record)
+	normalized := normalizeShortcutRootRecord(record)
 	if !shortcutRootStateAwaitsReleaseCleanup(normalized.State) {
 		return shortcutRootReleaseCleanupPlan{
 			Records: []ShortcutRootRecord{normalized},
 		}
 	}
 	if cleanupErr != nil {
-		next := planShortcutRootCleanupBlocked(normalized, cleanupErr)
+		next := planShortcutRootCleanupBlocked(&normalized, cleanupErr)
 		return shortcutRootReleaseCleanupPlan{
 			Records: []ShortcutRootRecord{next},
-			Changed: !shortcutRootRecordsEqual(normalized, next),
+			Changed: !shortcutRootRecordsEqual(&normalized, &next),
 			Err:     cleanupErr,
 		}
 	}
-	cleanupPending := planShortcutRootChildCleanupPending(normalized)
+	cleanupPending := planShortcutRootChildCleanupPending(&normalized)
 	nextRecords := []ShortcutRootRecord{cleanupPending}
 	if normalized.Waiting != nil {
 		nextRecords = append(nextRecords, shortcutRootRecordFromReplacement(normalized.NamespaceID, *normalized.Waiting))

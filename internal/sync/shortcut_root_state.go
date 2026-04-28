@@ -58,7 +58,7 @@ type ShortcutRootReplacement struct {
 func protectedRootsForShortcutRoots(records []ShortcutRootRecord, namespaceID string) []ProtectedRoot {
 	protectedRoots := make([]ProtectedRoot, 0)
 	for i := range records {
-		record := normalizeShortcutRootRecord(records[i])
+		record := normalizeShortcutRootRecord(&records[i])
 		if record.NamespaceID != "" && record.NamespaceID != namespaceID {
 			continue
 		}
@@ -91,25 +91,28 @@ func shortcutRootStateKeepsProtectedPaths(state ShortcutRootState) bool {
 	return ok && metadata.protectsPath
 }
 
-//nolint:gocritic // Return-by-value normalization keeps planner mutations explicit.
-func normalizeShortcutRootRecord(record ShortcutRootRecord) ShortcutRootRecord {
-	if record.LocalAlias == "" && record.RelativeLocalPath != "" {
-		record.LocalAlias = path.Base(record.RelativeLocalPath)
+func normalizeShortcutRootRecord(record *ShortcutRootRecord) ShortcutRootRecord {
+	if record == nil {
+		return ShortcutRootRecord{State: ShortcutRootStateActive}
 	}
-	record.ProtectedPaths = protectedPathsForShortcutRoot(record.RelativeLocalPath, record.ProtectedPaths)
-	if record.State == "" {
-		record.State = ShortcutRootStateActive
+	normalized := *record
+	if normalized.LocalAlias == "" && normalized.RelativeLocalPath != "" {
+		normalized.LocalAlias = path.Base(normalized.RelativeLocalPath)
 	}
-	if record.State == ShortcutRootStateRemovedChildCleanupPending {
-		record.ProtectedPaths = nil
-		record.LocalRootIdentity = nil
-		record.Waiting = nil
-		return record
+	normalized.ProtectedPaths = protectedPathsForShortcutRoot(normalized.RelativeLocalPath, normalized.ProtectedPaths)
+	if normalized.State == "" {
+		normalized.State = ShortcutRootStateActive
 	}
-	if record.Waiting != nil && record.Waiting.BindingItemID == "" {
-		record.Waiting = nil
+	if normalized.State == ShortcutRootStateRemovedChildCleanupPending {
+		normalized.ProtectedPaths = nil
+		normalized.LocalRootIdentity = nil
+		normalized.Waiting = nil
+		return normalized
 	}
-	return record
+	if normalized.Waiting != nil && normalized.Waiting.BindingItemID == "" {
+		normalized.Waiting = nil
+	}
+	return normalized
 }
 
 func protectedPathsForShortcutRoot(relativeLocalPath string, paths []string) []string {
@@ -133,26 +136,28 @@ func protectedPathsForShortcutRoot(relativeLocalPath string, paths []string) []s
 	return result
 }
 
-//nolint:gocritic // Equality compares normalized value snapshots from the planner.
-func shortcutRootRecordsEqual(a, b ShortcutRootRecord) bool {
-	a = normalizeShortcutRootRecord(a)
-	b = normalizeShortcutRootRecord(b)
-	if a.NamespaceID != b.NamespaceID ||
-		a.BindingItemID != b.BindingItemID ||
-		a.RelativeLocalPath != b.RelativeLocalPath ||
-		a.LocalAlias != b.LocalAlias ||
-		a.RemoteDriveID.String() != b.RemoteDriveID.String() ||
-		a.RemoteItemID != b.RemoteItemID ||
-		a.RemoteIsFolder != b.RemoteIsFolder ||
-		a.State != b.State ||
-		a.BlockedDetail != b.BlockedDetail ||
-		!slices.Equal(a.ProtectedPaths, b.ProtectedPaths) {
+func shortcutRootRecordsEqual(a, b *ShortcutRootRecord) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	normalizedA := normalizeShortcutRootRecord(a)
+	normalizedB := normalizeShortcutRootRecord(b)
+	if normalizedA.NamespaceID != normalizedB.NamespaceID ||
+		normalizedA.BindingItemID != normalizedB.BindingItemID ||
+		normalizedA.RelativeLocalPath != normalizedB.RelativeLocalPath ||
+		normalizedA.LocalAlias != normalizedB.LocalAlias ||
+		normalizedA.RemoteDriveID.String() != normalizedB.RemoteDriveID.String() ||
+		normalizedA.RemoteItemID != normalizedB.RemoteItemID ||
+		normalizedA.RemoteIsFolder != normalizedB.RemoteIsFolder ||
+		normalizedA.State != normalizedB.State ||
+		normalizedA.BlockedDetail != normalizedB.BlockedDetail ||
+		!slices.Equal(normalizedA.ProtectedPaths, normalizedB.ProtectedPaths) {
 		return false
 	}
-	if !shortcutRootIdentitiesEqual(a.LocalRootIdentity, b.LocalRootIdentity) {
+	if !shortcutRootIdentitiesEqual(normalizedA.LocalRootIdentity, normalizedB.LocalRootIdentity) {
 		return false
 	}
-	return shortcutRootReplacementsEqual(a.Waiting, b.Waiting)
+	return shortcutRootReplacementsEqual(normalizedA.Waiting, normalizedB.Waiting)
 }
 
 func shortcutRootIdentitiesEqual(a, b *synctree.FileIdentity) bool {

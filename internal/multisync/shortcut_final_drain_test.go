@@ -10,27 +10,30 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
+func testFinalDrainMount(t *testing.T, childID string, bindingID string) *mountSpec {
+	t.Helper()
+
+	return &mountSpec{
+		child: &childMountRuntime{
+			common: mountRuntimeCommon{
+				mountID: mountID(childID),
+			},
+			parentMountID: "parent",
+			mode:          syncengine.ShortcutChildRunModeFinalDrain,
+			ackRef:        testShortcutChildAckRef(t, bindingID),
+		},
+	}
+}
+
 // Validates: R-2.4.8
 func TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable(t *testing.T) {
 	t.Parallel()
 
 	mounts := []*mountSpec{
-		{mountID: "clean", child: &childMountRuntime{
-			mode:   syncengine.ShortcutChildRunModeFinalDrain,
-			ackRef: testShortcutChildAckRef(t, "binding-clean"),
-		}},
-		{mountID: "failed", child: &childMountRuntime{
-			mode:   syncengine.ShortcutChildRunModeFinalDrain,
-			ackRef: testShortcutChildAckRef(t, "binding-failed"),
-		}},
-		{mountID: "missing", child: &childMountRuntime{
-			mode:   syncengine.ShortcutChildRunModeFinalDrain,
-			ackRef: testShortcutChildAckRef(t, "binding-missing"),
-		}},
-		{mountID: "root-missing", child: &childMountRuntime{
-			mode:   syncengine.ShortcutChildRunModeFinalDrain,
-			ackRef: testShortcutChildAckRef(t, "binding-root"),
-		}},
+		testFinalDrainMount(t, "clean", "binding-clean"),
+		testFinalDrainMount(t, "failed", "binding-failed"),
+		testFinalDrainMount(t, "missing", "binding-missing"),
+		testFinalDrainMount(t, "root-missing", "binding-root"),
 	}
 	reports := []*MountReport{
 		{
@@ -84,14 +87,7 @@ func TestAcknowledgeSuccessfulFinalDrainsRequiresLiveParentAck(t *testing.T) {
 			AckRef:  testShortcutChildAckRef(t, "binding-clean"),
 			Status:  shortcutChildDrainClean,
 		}},
-		[]*mountSpec{{
-			mountID: "child",
-			child: &childMountRuntime{
-				parentMountID: "parent",
-				mode:          syncengine.ShortcutChildRunModeFinalDrain,
-				ackRef:        testShortcutChildAckRef(t, "binding-clean"),
-			},
-		}},
+		[]*mountSpec{testFinalDrainMount(t, "child", "binding-clean")},
 		nil,
 	)
 

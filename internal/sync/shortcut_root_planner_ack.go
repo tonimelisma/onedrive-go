@@ -9,7 +9,7 @@ func planShortcutRootDrainReleasePending(
 	records := make([]ShortcutRootRecord, 0, len(current))
 	changed := false
 	for i := range current {
-		record := normalizeShortcutRootRecord(current[i])
+		record := normalizeShortcutRootRecord(&current[i])
 		if record.BindingItemID != ack.Ref.bindingItemID {
 			records = append(records, record)
 			continue
@@ -18,13 +18,13 @@ func planShortcutRootDrainReleasePending(
 			records = append(records, record)
 			continue
 		}
-		next := plannedShortcutRootTransition(record,
+		next := plannedShortcutRootTransition(&record,
 			shortcutRootEventChildFinalDrainClean,
 			ShortcutRootStateRemovedReleasePending,
 			"",
 		)
 		records = append(records, next)
-		changed = changed || !shortcutRootRecordsEqual(record, next)
+		changed = changed || !shortcutRootRecordsEqual(&record, &next)
 	}
 	slices.SortFunc(records, func(a, b ShortcutRootRecord) int {
 		if a.RelativeLocalPath == b.RelativeLocalPath {
@@ -42,7 +42,7 @@ func planShortcutRootArtifactCleanupAck(
 	records := make([]ShortcutRootRecord, 0, len(current))
 	changed := false
 	for i := range current {
-		record := normalizeShortcutRootRecord(current[i])
+		record := normalizeShortcutRootRecord(&current[i])
 		if record.BindingItemID == ack.Ref.bindingItemID &&
 			record.State == ShortcutRootStateRemovedChildCleanupPending {
 			changed = true

@@ -118,7 +118,7 @@ func runIndexedParentMountWork(
 			defer wg.Done()
 			reports[indexed.index] = indexed.work.runner.run(ctx, indexed.work.fn)
 			if coordinator != nil && indexed.work.mount != nil {
-				coordinator.markParentDone(ctx, indexed.work.mount.mountID)
+				coordinator.markParentDone(ctx, indexed.work.mount.id())
 			}
 		}(w)
 	}
@@ -170,11 +170,11 @@ func (o *Orchestrator) prepareRunOnceWork(
 
 	for i := range mounts {
 		mount := mounts[i]
-		if mount.paused {
+		if mount.paused() {
 			startResults = append(startResults, MountStartupResult{
-				SelectionIndex: mount.selectionIndex,
+				SelectionIndex: mount.selectionIndex(),
 				Identity:       mount.identity(),
-				DisplayName:    mount.displayName,
+				DisplayName:    mount.displayName(),
 				Status:         MountStartupPaused,
 			})
 			continue
@@ -197,9 +197,9 @@ func (o *Orchestrator) prepareRunOnceWork(
 			continue
 		}
 		startResults = append(startResults, MountStartupResult{
-			SelectionIndex: mount.selectionIndex,
+			SelectionIndex: mount.selectionIndex(),
 			Identity:       mount.identity(),
-			DisplayName:    mount.displayName,
+			DisplayName:    mount.displayName(),
 			Status:         MountStartupRunnable,
 		})
 		work = append(work, indexedMountWork{index: len(reports), work: w})
@@ -211,9 +211,9 @@ func (o *Orchestrator) prepareRunOnceWork(
 
 func mountStartupResultForMount(mount *mountSpec, err error) MountStartupResult {
 	return MountStartupResult{
-		SelectionIndex: mount.selectionIndex,
+		SelectionIndex: mount.selectionIndex(),
 		Identity:       mount.identity(),
-		DisplayName:    mount.displayName,
+		DisplayName:    mount.displayName(),
 		Status:         classifyMountStartupError(err),
 		Err:            err,
 	}
@@ -228,7 +228,7 @@ func (o *Orchestrator) buildEngineWork(
 	mode syncengine.SyncMode,
 	opts syncengine.RunOptions,
 ) (mountWork, error) {
-	mountCollector := o.registerMountPerfCollector(mount.mountID.String())
+	mountCollector := o.registerMountPerfCollector(mount.id().String())
 	engine, engineErr := o.engineFactory(ctx, engineFactoryRequest{
 		Session:       session,
 		Mount:         mount,
@@ -237,15 +237,15 @@ func (o *Orchestrator) buildEngineWork(
 		PerfCollector: mountCollector,
 	})
 	if engineErr != nil {
-		o.removeMountPerfCollector(mount.mountID.String())
+		o.removeMountPerfCollector(mount.id().String())
 		return mountWork{}, fmt.Errorf("engine creation failed for mount %s: %w", mount.label(), engineErr)
 	}
 
 	return mountWork{
 		runner: &MountRunner{
-			selectionIndex: mount.selectionIndex,
+			selectionIndex: mount.selectionIndex(),
 			identity:       mount.identity(),
-			displayName:    mount.displayName,
+			displayName:    mount.displayName(),
 		},
 		mount:     mount,
 		engine:    engine,
@@ -264,7 +264,7 @@ func (o *Orchestrator) buildEngineWork(
 
 func (o *Orchestrator) closeRunOnceChildEngines(ctx context.Context, work []indexedMountWork) {
 	for _, item := range work {
-		if item.work.mount == nil || item.work.mount.projectionKind != MountProjectionChild {
+		if item.work.mount == nil || item.work.mount.projectionKind() != MountProjectionChild {
 			continue
 		}
 		o.closeRunOnceEngine(ctx, item.work.mount, item.work.engine)
@@ -273,7 +273,7 @@ func (o *Orchestrator) closeRunOnceChildEngines(ctx context.Context, work []inde
 
 func (o *Orchestrator) closeRunOnceParentEngines(ctx context.Context, work []indexedMountWork) {
 	for _, item := range work {
-		if item.work.mount == nil || item.work.mount.projectionKind != MountProjectionStandalone {
+		if item.work.mount == nil || item.work.mount.projectionKind() != MountProjectionStandalone {
 			continue
 		}
 		o.closeRunOnceEngine(ctx, item.work.mount, item.work.engine)
@@ -284,17 +284,17 @@ func (o *Orchestrator) closeRunOnceEngine(ctx context.Context, mount *mountSpec,
 	if mount == nil || engine == nil {
 		return
 	}
-	defer o.removeMountPerfCollector(mount.mountID.String())
+	defer o.removeMountPerfCollector(mount.id().String())
 	if closeErr := engine.Close(ctx); closeErr != nil {
 		o.logger.Warn("engine close error",
-			slog.String("mount_id", mount.mountID.String()),
+			slog.String("mount_id", mount.id().String()),
 			slog.String("error", closeErr.Error()))
 	}
 }
 
 func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 	ctx context.Context,
-	decisions *runnerDecisionSet,
+	decisions *runtimeWorkSet,
 	reports []*MountReport,
 	parentAckers map[mountID]shortcutChildAckHandle,
 ) (bool, error) {
@@ -358,7 +358,7 @@ func acknowledgeSuccessfulFinalDrains(
 	mountByID := make(map[string]*mountSpec, len(mounts))
 	for _, mount := range mounts {
 		if mount != nil {
-			mountByID[mount.mountID.String()] = mount
+			mountByID[mount.id().String()] = mount
 		}
 	}
 	cleanups := make([]shortcutChildArtifactCleanup, 0, len(successful))

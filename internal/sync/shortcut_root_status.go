@@ -51,20 +51,13 @@ type ShortcutRootStatusMetadata struct {
 }
 
 type ShortcutRootStatusView struct {
-	BindingItemID               string
 	MountID                     string
-	RelativeLocalPath           string
-	LocalAlias                  string
+	SortPath                    string
 	DisplayName                 string
 	DisplayLocalRoot            string
-	RemoteDriveID               string
-	RemoteItemID                string
-	RemoteIsFolder              bool
 	Metadata                    ShortcutRootStatusMetadata
 	StateDetail                 string
-	ProtectedCurrentPath        string
 	ProtectedCurrentLocalRoot   string
-	ProtectedReservedPaths      []string
 	ProtectedReservedLocalRoots []string
 	WaitingReplacementPath      string
 }
@@ -77,23 +70,18 @@ func shortcutRootStatusViewFromRecord(
 	if record == nil {
 		return ShortcutRootStatusView{}
 	}
-	normalized := normalizeShortcutRootRecord(*record)
+	normalized := normalizeShortcutRootRecord(record)
 	if namespaceID == "" {
 		namespaceID = normalized.NamespaceID
 	}
 	metadata := ShortcutRootStatus(normalized.State)
 	view := ShortcutRootStatusView{
-		BindingItemID:     normalized.BindingItemID,
-		MountID:           config.ChildMountID(namespaceID, normalized.BindingItemID),
-		RelativeLocalPath: normalized.RelativeLocalPath,
-		LocalAlias:        normalized.LocalAlias,
-		DisplayName:       shortcutRootStatusDisplayName(normalized.LocalAlias, normalized.RelativeLocalPath),
-		DisplayLocalRoot:  shortcutRootStatusLocalRoot(parentSyncRoot, normalized.RelativeLocalPath),
-		RemoteDriveID:     normalized.RemoteDriveID.String(),
-		RemoteItemID:      normalized.RemoteItemID,
-		RemoteIsFolder:    normalized.RemoteIsFolder,
-		Metadata:          metadata,
-		StateDetail:       metadata.Issue,
+		MountID:          config.ChildMountID(namespaceID, normalized.BindingItemID),
+		SortPath:         normalized.RelativeLocalPath,
+		DisplayName:      shortcutRootStatusDisplayName(normalized.LocalAlias, normalized.RelativeLocalPath),
+		DisplayLocalRoot: shortcutRootStatusLocalRoot(parentSyncRoot, normalized.RelativeLocalPath),
+		Metadata:         metadata,
+		StateDetail:      metadata.Issue,
 	}
 	if normalized.BlockedDetail != "" {
 		view.StateDetail = normalized.BlockedDetail
@@ -102,13 +90,12 @@ func shortcutRootStatusViewFromRecord(
 		view.WaitingReplacementPath = normalized.Waiting.RelativeLocalPath
 	}
 	if metadata.ProtectsPath {
-		view.ProtectedCurrentPath = normalized.RelativeLocalPath
 		view.ProtectedCurrentLocalRoot = shortcutRootStatusLocalRoot(parentSyncRoot, normalized.RelativeLocalPath)
-		view.ProtectedReservedPaths = shortcutRootStatusReservedPaths(
+		reservedPaths := shortcutRootStatusReservedPaths(
 			normalized.RelativeLocalPath,
 			normalized.ProtectedPaths,
 		)
-		view.ProtectedReservedLocalRoots = shortcutRootStatusLocalRoots(parentSyncRoot, view.ProtectedReservedPaths)
+		view.ProtectedReservedLocalRoots = shortcutRootStatusLocalRoots(parentSyncRoot, reservedPaths)
 	}
 	return view
 }

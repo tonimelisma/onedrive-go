@@ -7,13 +7,13 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-func (o *Orchestrator) buildRunnerDecisionSet(
+func (o *Orchestrator) buildRuntimeWorkSet(
 	ctx context.Context,
 	standaloneMounts []StandaloneMountConfig,
 	initialStartup []MountStartupResult,
-) (*runnerDecisionSet, error) {
+) (*runtimeWorkSet, error) {
 	if ctx == nil {
-		return nil, fmt.Errorf("building runner decisions: context is required")
+		return nil, fmt.Errorf("building runtime work: context is required")
 	}
 
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
@@ -22,44 +22,44 @@ func (o *Orchestrator) buildRunnerDecisionSet(
 	}
 
 	parentSnapshots := o.latestParentChildWorkSnapshotsFor(parents)
-	decisions, err := buildRunnerDecisionsForParents(parents, parentSnapshots, o.cfg.DataDir, o.logger)
+	decisions, err := buildRuntimeWorkForParents(parents, parentSnapshots, o.cfg.DataDir, o.logger)
 	if err != nil {
 		return nil, err
 	}
-	offsetRunnerDecisionSelectionIndexes(decisions, nextStartupSelectionIndex(initialStartup))
+	offsetRuntimeWorkSelectionIndexes(decisions, nextStartupSelectionIndex(initialStartup))
 	decisions.Skipped = append(append([]MountStartupResult(nil), initialStartup...), decisions.Skipped...)
 
 	return decisions, nil
 }
 
-func (o *Orchestrator) buildRunnerDecisionsFromParentSnapshots(
+func (o *Orchestrator) buildRuntimeWorkFromParentSnapshots(
 	standaloneMounts []StandaloneMountConfig,
 	initialStartup []MountStartupResult,
-) (*runnerDecisionSet, error) {
+) (*runtimeWorkSet, error) {
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
 	if err != nil {
 		return nil, err
 	}
 	parentSnapshots := o.latestParentChildWorkSnapshotsFor(parents)
-	decisions, err := buildRunnerDecisionsForParents(parents, parentSnapshots, o.cfg.DataDir, o.logger)
+	decisions, err := buildRuntimeWorkForParents(parents, parentSnapshots, o.cfg.DataDir, o.logger)
 	if err != nil {
 		return nil, err
 	}
-	offsetRunnerDecisionSelectionIndexes(decisions, nextStartupSelectionIndex(initialStartup))
+	offsetRuntimeWorkSelectionIndexes(decisions, nextStartupSelectionIndex(initialStartup))
 	decisions.Skipped = append(append([]MountStartupResult(nil), initialStartup...), decisions.Skipped...)
 
 	return decisions, nil
 }
 
-func (o *Orchestrator) buildRunnerDecisionsForParent(parent *mountSpec) (*runnerDecisionSet, error) {
+func (o *Orchestrator) buildRuntimeWorkForParent(parent *mountSpec) (*runtimeWorkSet, error) {
 	if parent == nil {
-		return nil, fmt.Errorf("building parent child runner decisions: parent mount is required")
+		return nil, fmt.Errorf("building parent child runtime work: parent mount is required")
 	}
 	parentCopy := cloneMountSpec(parent)
 	parentSnapshots := map[mountID]syncengine.ShortcutChildWorkSnapshot{
-		parentCopy.mountID: o.latestParentChildWorkSnapshotFor(parentCopy.mountID),
+		parentCopy.id(): o.latestParentChildWorkSnapshotFor(parentCopy.id()),
 	}
-	return buildRunnerDecisionsForParents([]*mountSpec{parentCopy}, parentSnapshots, o.cfg.DataDir, o.logger)
+	return buildRuntimeWorkForParents([]*mountSpec{parentCopy}, parentSnapshots, o.cfg.DataDir, o.logger)
 }
 
 func nextStartupSelectionIndex(results []MountStartupResult) int {
@@ -73,12 +73,12 @@ func nextStartupSelectionIndex(results []MountStartupResult) int {
 	return next
 }
 
-func offsetRunnerDecisionSelectionIndexes(decisions *runnerDecisionSet, offset int) {
+func offsetRuntimeWorkSelectionIndexes(decisions *runtimeWorkSet, offset int) {
 	if decisions == nil || offset == 0 {
 		return
 	}
 	for i := range decisions.Mounts {
-		decisions.Mounts[i].selectionIndex += offset
+		decisions.Mounts[i].setSelectionIndex(decisions.Mounts[i].selectionIndex() + offset)
 	}
 	for i := range decisions.Skipped {
 		decisions.Skipped[i].SelectionIndex += offset
@@ -90,6 +90,10 @@ func cloneMountSpec(mount *mountSpec) *mountSpec {
 		return nil
 	}
 	cloned := *mount
+	if mount.parent != nil {
+		parent := *mount.parent
+		cloned.parent = &parent
+	}
 	if mount.child != nil {
 		child := *mount.child
 		child.engine = cloneShortcutChildEngineSpec(mount.child.engine)

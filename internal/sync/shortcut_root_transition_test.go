@@ -195,18 +195,18 @@ func TestPlanMissingMaterializedShortcutRootChoosesAliasEffect(t *testing.T) {
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}
 
-	deletePlan := planMissingMaterializedShortcutRoot(record, "Shared/Docs", nil)
+	deletePlan := planMissingMaterializedShortcutRoot(&record, "Shared/Docs", nil)
 	assert.Equal(t, shortcutRootMissingAliasDelete, deletePlan.Action)
 	assert.Equal(t, shortcutAliasMutationDelete, deletePlan.Mutation.Kind)
 	assert.Equal(t, "binding-1", deletePlan.Mutation.BindingItemID)
 
-	renamePlan := planMissingMaterializedShortcutRoot(record, "Shared/Docs", []string{"Shared/Renamed"})
+	renamePlan := planMissingMaterializedShortcutRoot(&record, "Shared/Docs", []string{"Shared/Renamed"})
 	assert.Equal(t, shortcutRootMissingAliasRename, renamePlan.Action)
 	assert.Equal(t, shortcutAliasMutationRename, renamePlan.Mutation.Kind)
 	assert.Equal(t, "Shared/Renamed", renamePlan.Mutation.RelativeLocalPath)
 	assert.Equal(t, "Renamed", renamePlan.Mutation.LocalAlias)
 
-	ambiguousPlan := planMissingMaterializedShortcutRoot(record, "Shared/Docs", []string{"Shared/A", "Shared/B"})
+	ambiguousPlan := planMissingMaterializedShortcutRoot(&record, "Shared/Docs", []string{"Shared/A", "Shared/B"})
 	assert.Equal(t, shortcutRootMissingAliasRenameAmbiguous, ambiguousPlan.Action)
 	assert.Equal(t, ShortcutRootStateRenameAmbiguous, ambiguousPlan.Next.State)
 	assert.ElementsMatch(t, []string{"Shared/Docs", "Shared/A", "Shared/B"}, ambiguousPlan.Next.ProtectedPaths)
@@ -264,7 +264,7 @@ func TestPlanMissingMaterializedShortcutRootPrefersHistoricalProjectionMove(t *t
 		ProtectedPaths:    []string{"Shared/Docs", "Shared/Old"},
 	}
 
-	plan := planMissingMaterializedShortcutRoot(record, "Shared/Docs", []string{"Shared/Old"})
+	plan := planMissingMaterializedShortcutRoot(&record, "Shared/Docs", []string{"Shared/Old"})
 
 	assert.Equal(t, shortcutRootMissingAliasMoveProjection, plan.Action)
 	assert.Equal(t, "Shared/Old", plan.FromRelativePath)
@@ -282,10 +282,11 @@ func TestPlanMissingMaterializedShortcutRootCandidatesOwnsCandidateFailure(t *te
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}
 
-	plan := planMissingMaterializedShortcutRootObservation(record, shortcutRootLocalObservation{
+	observation := shortcutRootLocalObservation{
 		RelativePath: "Shared/Docs",
 		CandidateErr: errors.New("read alias parent denied"),
-	})
+	}
+	plan := planMissingMaterializedShortcutRootObservation(&record, &observation)
 
 	assert.Equal(t, shortcutRootLocalKeepRecord, plan.Action)
 	assert.True(t, plan.Keep)
@@ -306,30 +307,30 @@ func TestPlanMissingAliasMutationResultsKeepSideEffectsOutOfDecision(t *testing.
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}
 
-	deleteFailed := planMissingAliasDeleteResult(record, shortcutRootAliasMutationResult{
+	deleteFailed := planMissingAliasDeleteResult(&record, shortcutRootAliasMutationResult{
 		MutationErr: errors.New("delete denied"),
 	})
 	assert.Equal(t, shortcutRootLocalKeepRecord, deleteFailed.Action)
 	assert.Equal(t, ShortcutRootStateAliasMutationBlocked, deleteFailed.Next.State)
 	assert.Contains(t, deleteFailed.Next.BlockedDetail, "delete denied")
 
-	deleteSucceeded := planMissingAliasDeleteResult(record, shortcutRootAliasMutationResult{})
+	deleteSucceeded := planMissingAliasDeleteResult(&record, shortcutRootAliasMutationResult{})
 	assert.Equal(t, shortcutRootLocalDropRecord, deleteSucceeded.Action)
 	assert.False(t, deleteSucceeded.Keep)
 	assert.True(t, deleteSucceeded.Changed)
 
-	renameFailed := planMissingAliasRenameResult(record, "Shared/Renamed", shortcutRootAliasMutationResult{
+	renameFailed := planMissingAliasRenameResult(&record, "Shared/Renamed", shortcutRootAliasMutationResult{
 		MutationErr: errors.New("rename denied"),
 	})
 	assert.Equal(t, ShortcutRootStateAliasMutationBlocked, renameFailed.Next.State)
 	assert.Contains(t, renameFailed.Next.ProtectedPaths, "Shared/Renamed")
 
-	renameIdentityFailed := planMissingAliasRenameResult(record, "Shared/Renamed", shortcutRootAliasMutationResult{
+	renameIdentityFailed := planMissingAliasRenameResult(&record, "Shared/Renamed", shortcutRootAliasMutationResult{
 		IdentityErr: errors.New("identity denied"),
 	})
 	assert.Equal(t, ShortcutRootStateLocalRootUnavailable, renameIdentityFailed.Next.State)
 
-	renameSucceeded := planMissingAliasRenameResult(record, "Shared/Renamed", shortcutRootAliasMutationResult{
+	renameSucceeded := planMissingAliasRenameResult(&record, "Shared/Renamed", shortcutRootAliasMutationResult{
 		Identity: &synctree.FileIdentity{Device: 11, Inode: 12},
 	})
 	assert.Equal(t, ShortcutRootStateActive, renameSucceeded.Next.State)
@@ -350,19 +351,19 @@ func TestPlanShortcutRootMaterializeResultKeepsSideEffectsOutOfDecision(t *testi
 	unavailableRecord := activeRecord
 	unavailableRecord.State = ShortcutRootStateLocalRootUnavailable
 
-	createFailed := planShortcutRootMaterializeResult(activeRecord, shortcutRootMaterializeResult{
+	createFailed := planShortcutRootMaterializeResult(&activeRecord, shortcutRootMaterializeResult{
 		CreateErr: synctree.ErrUnsafePath,
 	})
 	assert.Equal(t, ShortcutRootStateBlockedPath, createFailed.Next.State)
 	assert.True(t, createFailed.Keep)
 
-	identityFailed := planShortcutRootMaterializeResult(unavailableRecord, shortcutRootMaterializeResult{
+	identityFailed := planShortcutRootMaterializeResult(&unavailableRecord, shortcutRootMaterializeResult{
 		IdentityErr: errors.New("permission denied"),
 	})
 	assert.Equal(t, ShortcutRootStateLocalRootUnavailable, identityFailed.Next.State)
 	assert.Contains(t, identityFailed.Next.BlockedDetail, "permission denied")
 
-	created := planShortcutRootMaterializeResult(unavailableRecord, shortcutRootMaterializeResult{
+	created := planShortcutRootMaterializeResult(&unavailableRecord, shortcutRootMaterializeResult{
 		Identity: &synctree.FileIdentity{Device: 7, Inode: 8},
 	})
 	assert.Equal(t, ShortcutRootStateActive, created.Next.State)
@@ -382,18 +383,18 @@ func TestPlanShortcutProjectionMoveResultKeepsSideEffectsOutOfDecision(t *testin
 	unavailableRecord := activeRecord
 	unavailableRecord.State = ShortcutRootStateLocalRootUnavailable
 
-	moveFailed := planShortcutProjectionMoveResult(activeRecord, shortcutRootProjectionMoveResult{
+	moveFailed := planShortcutProjectionMoveResult(&activeRecord, shortcutRootProjectionMoveResult{
 		MoveErr: errors.New("target exists"),
 	})
 	assert.Equal(t, ShortcutRootStateBlockedPath, moveFailed.Next.State)
 	assert.Contains(t, moveFailed.Next.BlockedDetail, "target exists")
 
-	identityFailed := planShortcutProjectionMoveResult(unavailableRecord, shortcutRootProjectionMoveResult{
+	identityFailed := planShortcutProjectionMoveResult(&unavailableRecord, shortcutRootProjectionMoveResult{
 		IdentityErr: errors.New("identity unavailable"),
 	})
 	assert.Equal(t, ShortcutRootStateLocalRootUnavailable, identityFailed.Next.State)
 
-	moved := planShortcutProjectionMoveResult(unavailableRecord, shortcutRootProjectionMoveResult{
+	moved := planShortcutProjectionMoveResult(&unavailableRecord, shortcutRootProjectionMoveResult{
 		Identity: &synctree.FileIdentity{Device: 9, Inode: 10},
 	})
 	assert.Equal(t, ShortcutRootStateActive, moved.Next.State)
@@ -412,7 +413,7 @@ func TestPlannedShortcutRootTransitionPreservesStateOnIllegalEdge(t *testing.T) 
 	}
 
 	next := plannedShortcutRootTransition(
-		record,
+		&record,
 		shortcutRootEventLocalRootReady,
 		ShortcutRootStateActive,
 		"",

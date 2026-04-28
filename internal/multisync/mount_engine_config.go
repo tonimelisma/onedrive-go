@@ -16,27 +16,33 @@ func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.En
 		return nil, fmt.Errorf("multisync: mount is required")
 	}
 
-	return &syncengine.EngineMountConfig{
-		MountID:                mount.mountID.String(),
-		DBPath:                 mount.statePath,
-		SyncRoot:               mount.syncRoot,
+	cfg := &syncengine.EngineMountConfig{
+		MountID:                mount.id().String(),
+		DBPath:                 mount.statePath(),
+		SyncRoot:               mount.syncRoot(),
 		DataDir:                dataDir,
-		DriveID:                mount.remoteDriveID,
+		DriveID:                mount.remoteDriveID(),
 		DriveType:              mount.parentDriveType(),
-		AccountEmail:           mount.accountEmail,
-		RemoteRootItemID:       mount.remoteRootItemID,
-		RemoteRootDeltaCapable: mount.remoteRootDeltaCapable,
-		ExpectedSyncRootIdentity: cloneShortcutChildEngineSpec(syncengine.ShortcutChildEngineSpec{
-			LocalRootIdentity: mount.expectedChildRootIdentity(),
-		}).LocalRootIdentity,
-		EnableWebsocket: mount.enableWebsocket,
+		AccountEmail:           mount.accountEmail(),
+		RemoteRootItemID:       mount.remoteRootItemID(),
+		RemoteRootDeltaCapable: mount.remoteRootDeltaCapable(),
+		EnableWebsocket:        mount.enableWebsocket(),
 		LocalRules: syncengine.LocalObservationRules{
 			RejectSharePointRootForms: mount.rejectSharePointRootForms(),
 		},
-		ShortcutNamespaceID:   mount.mountID.String(),
+		ShortcutNamespaceID:   mount.id().String(),
 		ShortcutChildWorkSink: mount.shortcutChildWorkSink(),
-		TransferWorkers:       mount.transferWorkers,
-		CheckWorkers:          mount.checkWorkers,
-		MinFreeSpace:          mount.minFreeSpace,
-	}, nil
+		TransferWorkers:       mount.transferWorkers(),
+		CheckWorkers:          mount.checkWorkers(),
+		MinFreeSpace:          mount.minFreeSpace(),
+	}
+	if mount.projectionKind() == MountProjectionChild {
+		if err := syncengine.ApplyShortcutChildRunCommandToEngineMountConfig(
+			mount.shortcutChildRunCommand(),
+			cfg,
+		); err != nil {
+			return nil, fmt.Errorf("multisync: apply parent-declared child engine input: %w", err)
+		}
+	}
+	return cfg, nil
 }
