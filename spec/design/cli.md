@@ -165,6 +165,9 @@ owners expose the remaining daemon controls above.
 The control-socket protocol is now mount-shaped:
 
 - `GET /v1/status` returns `mounts`, not `drives`
+- `GET /v1/status` may include transient `shortcut_cleanup_failures` from the
+  current owner so debug/status clients can distinguish child artifacts still
+  remaining from artifacts already purged but not acknowledged by the parent
 - `GET /v1/perf` returns per-mount live snapshots keyed by mount ID
 - the CLI status/perf overlay matches those mount IDs against the runtime mount
   rows it renders

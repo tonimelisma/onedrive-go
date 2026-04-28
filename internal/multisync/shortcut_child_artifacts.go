@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 type shortcutChildArtifactCleanup struct {
@@ -33,11 +34,18 @@ const (
 type shortcutChildArtifactCleanupFailureClass string
 
 const (
-	shortcutChildArtifactCleanupSetupFailure         shortcutChildArtifactCleanupFailureClass = "setup"
-	shortcutChildArtifactCleanupStateArtifactFailure shortcutChildArtifactCleanupFailureClass = "state_artifact"
-	shortcutChildArtifactCleanupCatalogFailure       shortcutChildArtifactCleanupFailureClass = "catalog"
-	shortcutChildArtifactCleanupUploadSessionFailure shortcutChildArtifactCleanupFailureClass = "upload_session"
-	shortcutChildArtifactCleanupParentAckFailure     shortcutChildArtifactCleanupFailureClass = "parent_ack"
+	shortcutChildArtifactCleanupSetupFailure           shortcutChildArtifactCleanupFailureClass = "setup"
+	shortcutChildArtifactCleanupStateArtifactFailure   shortcutChildArtifactCleanupFailureClass = "state_artifact"
+	shortcutChildArtifactCleanupCatalogFailure         shortcutChildArtifactCleanupFailureClass = "catalog"
+	shortcutChildArtifactCleanupTransferScratchFailure shortcutChildArtifactCleanupFailureClass = "transfer_scratch"
+	shortcutChildArtifactCleanupUploadSessionFailure   shortcutChildArtifactCleanupFailureClass = "upload_session"
+	shortcutChildArtifactCleanupParentAckFailure       shortcutChildArtifactCleanupFailureClass = "parent_ack"
+)
+
+const (
+	shortcutCleanupDiagnosticArtifactsRemaining = "artifacts_remaining"
+	shortcutCleanupDiagnosticParentAckFailed    = "parent_ack_failed"
+	shortcutCleanupDiagnosticLimit              = 20
 )
 
 type shortcutChildArtifactCleanupError struct {
@@ -63,6 +71,53 @@ func shortcutChildArtifactCleanupClass(err error) (shortcutChildArtifactCleanupF
 		return cleanupErr.class, true
 	}
 	return "", false
+}
+
+func shortcutChildArtifactCleanupClasses(err error) []shortcutChildArtifactCleanupFailureClass {
+	if err == nil {
+		return nil
+	}
+	var classes []shortcutChildArtifactCleanupFailureClass
+	seen := make(map[shortcutChildArtifactCleanupFailureClass]struct{})
+	var walk func(error)
+	walk = func(current error) {
+		if current == nil {
+			return
+		}
+		if typed, ok := any(current).(shortcutChildArtifactCleanupError); ok {
+			if _, ok := seen[typed.class]; !ok {
+				seen[typed.class] = struct{}{}
+				classes = append(classes, typed.class)
+			}
+			return
+		}
+		if typed, ok := any(current).(*shortcutChildArtifactCleanupError); ok {
+			if typed != nil {
+				if _, alreadySeen := seen[typed.class]; !alreadySeen {
+					seen[typed.class] = struct{}{}
+					classes = append(classes, typed.class)
+				}
+			}
+			return
+		}
+		type multiUnwrapper interface {
+			Unwrap() []error
+		}
+		if unwrapped, ok := current.(multiUnwrapper); ok {
+			for _, child := range unwrapped.Unwrap() {
+				walk(child)
+			}
+			return
+		}
+		type singleUnwrapper interface {
+			Unwrap() error
+		}
+		if unwrapped, ok := current.(singleUnwrapper); ok {
+			walk(unwrapped.Unwrap())
+		}
+	}
+	walk(err)
+	return classes
 }
 
 func classifiedShortcutChildCleanupError(
@@ -203,7 +258,71 @@ func (o *Orchestrator) purgeAndAcknowledgeShortcutChildArtifacts(
 			errs = append(errs, err)
 		}
 	}
-	return errors.Join(errs...)
+	err := errors.Join(errs...)
+	if err != nil {
+		o.recordShortcutCleanupDiagnostic(source, err)
+	} else if len(cleanups) > 0 {
+		o.clearShortcutCleanupDiagnostics(source)
+	}
+	return err
+}
+
+func (o *Orchestrator) recordShortcutCleanupDiagnostic(
+	source shortcutChildArtifactCleanupSource,
+	err error,
+) {
+	if o == nil || err == nil {
+		return
+	}
+	classes := shortcutChildArtifactCleanupClasses(err)
+	if len(classes) == 0 {
+		classes = []shortcutChildArtifactCleanupFailureClass{shortcutChildArtifactCleanupSetupFailure}
+	}
+	o.statusMu.Lock()
+	defer o.statusMu.Unlock()
+	for _, class := range classes {
+		phase := shortcutCleanupDiagnosticArtifactsRemaining
+		if class == shortcutChildArtifactCleanupParentAckFailure {
+			phase = shortcutCleanupDiagnosticParentAckFailed
+		}
+		o.shortcutCleanupDiagnostics = append(o.shortcutCleanupDiagnostics, synccontrol.ShortcutCleanupDiagnostic{
+			Source:  string(source),
+			Class:   string(class),
+			Phase:   phase,
+			Message: err.Error(),
+		})
+	}
+	if overflow := len(o.shortcutCleanupDiagnostics) - shortcutCleanupDiagnosticLimit; overflow > 0 {
+		o.shortcutCleanupDiagnostics = append([]synccontrol.ShortcutCleanupDiagnostic(nil), o.shortcutCleanupDiagnostics[overflow:]...)
+	}
+}
+
+func (o *Orchestrator) clearShortcutCleanupDiagnostics(source shortcutChildArtifactCleanupSource) {
+	if o == nil {
+		return
+	}
+	o.statusMu.Lock()
+	defer o.statusMu.Unlock()
+	if len(o.shortcutCleanupDiagnostics) == 0 {
+		return
+	}
+	kept := o.shortcutCleanupDiagnostics[:0]
+	for _, diagnostic := range o.shortcutCleanupDiagnostics {
+		if diagnostic.Source == string(source) {
+			continue
+		}
+		kept = append(kept, diagnostic)
+	}
+	o.shortcutCleanupDiagnostics = kept
+}
+
+func (o *Orchestrator) shortcutCleanupDiagnosticSnapshot() []synccontrol.ShortcutCleanupDiagnostic {
+	if o == nil {
+		return nil
+	}
+	o.statusMu.RLock()
+	defer o.statusMu.RUnlock()
+	return append([]synccontrol.ShortcutCleanupDiagnostic(nil), o.shortcutCleanupDiagnostics...)
 }
 
 func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(

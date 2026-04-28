@@ -70,7 +70,7 @@ func testShortcutChildAckRefWithContext(
 		bindingItemID,
 		"remote-drive",
 		"remote-root",
-		string(syncengine.ShortcutRootStateActive),
+		"active",
 		`["Shortcuts/`+bindingItemID+`"]`,
 	)
 	require.NoError(t, err)

@@ -37,7 +37,7 @@ runtime package that implements it.
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry` |
-| Parent engines own shortcut-root state and alias mutation while multisync relays parent-declared child work snapshots into runner decisions: parent shortcut-root state is persisted before acknowledgement, persisted roots feed parent-owned observation protection, empty complete batches retire old roots, same-path replacements do not downgrade active owners, clean final-drain acknowledgements become crash-safe parent release cleanup, cleanup-pending roots publish explicit child artifact cleanup commands, child state paths and cleanup artifact paths both use the explicit orchestrator `DataDir` instead of ambient config defaults, one-shot starts each parent's children only after that parent reaches its safe point, and multisync behavior tests exercise exact snapshot caching, runner decisions, final drain, artifact cleanup, and parent-scoped watch reconciliation without making multisync a parent policy owner. | `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot`, `TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemoved`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeReturningError`, `TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBeforeDelete`, `TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBeforeRename`, `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain`, `TestReceiveParentChildWorkSnapshot_StoresSnapshotInMemory`, `TestReceiveParentChildWorkSnapshot_EmptySnapshotClearsCachedChildren`, `TestReceiveParentChildWorkSnapshot_UsesParentCleanupRequests`, `TestRunOnce_PublishesParentChildWorkSnapshotBeforeStartingChildren`, `TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents`, `TestRunOnce_UsesFinalParentSnapshotInsteadOfIntermediateSkip`, `TestRunWatch_PublishesParentChildWorkSnapshotBeforeStartingChildren`, `TestRunWatch_ReconcilesChildRunnersFromLiveParentSnapshot`, `TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot`, `TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts`, `TestOrchestratorCleanupWithEmptyDataDirFailsLoudly`, `TestBuildRunnerDecisionsFromParentChildWorkSnapshot_DoesNotClassifyDuplicateAutomaticChildren`, `TestBuildRunnerDecisionsFromParentChildWorkSnapshot_StandaloneContentRootRunsBesideChild`, `TestBuildRunnerDecisions_StandaloneContentRootDoesNotSuppressChild`, `TestBuildRunnerDecisions_ParentBlockedSnapshotHasNoChildWork`, `TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSuccess`, `TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved`, `TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile`, `TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs`, `TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable`, `TestBuildChildStatusMount_RendersLifecycleState` |
+| Parent engines own shortcut-root state and alias mutation while multisync relays parent-declared child work snapshots into runner decisions: parent shortcut-root state is persisted before acknowledgement, persisted roots feed parent-owned observation protection, empty complete batches retire old roots, same-path replacements do not downgrade active owners, clean final-drain acknowledgements become crash-safe parent release cleanup, cleanup-pending roots publish explicit child artifact cleanup commands, child state paths and cleanup artifact paths both use the explicit orchestrator `DataDir` instead of ambient config defaults, one-shot starts each parent's children as soon as that parent publishes fresh child work, final-drain and artifact-cleanup acknowledgements wait for that same parent's safe point, and multisync behavior tests exercise exact snapshot caching, runner decisions, final drain, artifact cleanup, cleanup failure diagnostics, and parent-scoped watch reconciliation without making multisync a parent policy owner. | `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot`, `TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemoved`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeReturningError`, `TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBeforeDelete`, `TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBeforeRename`, `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain`, `TestReceiveParentChildWorkSnapshot_StoresSnapshotInMemory`, `TestReceiveParentChildWorkSnapshot_EmptySnapshotClearsCachedChildren`, `TestReceiveParentChildWorkSnapshot_UsesParentCleanupRequests`, `TestRunOnce_PublishesParentChildWorkSnapshotBeforeStartingChildren`, `TestRunOnce_StartsParentChildrenAsSoonAsParentPublishes`, `TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents`, `TestRunOnce_UsesFinalParentSnapshotInsteadOfIntermediateSkip`, `TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint`, `TestRunWatch_PublishesParentChildWorkSnapshotBeforeStartingChildren`, `TestRunWatch_ReconcilesChildRunnersFromLiveParentSnapshot`, `TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot`, `TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts`, `TestOrchestratorCleanupWithEmptyDataDirFailsLoudly`, `TestBuildRunnerDecisionsFromParentChildWorkSnapshot_DoesNotClassifyDuplicateAutomaticChildren`, `TestBuildRunnerDecisionsFromParentChildWorkSnapshot_StandaloneContentRootRunsBesideChild`, `TestBuildRunnerDecisions_StandaloneContentRootDoesNotSuppressChild`, `TestBuildRunnerDecisions_ParentBlockedSnapshotHasNoChildWork`, `TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSuccess`, `TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved`, `TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile`, `TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs`, `TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable`, `TestBuildChildStatusMount_RendersLifecycleState`, `TestShortcutRootTransitionMatrixEnumeratesEveryStateAndEvent`, `TestRunShortcutComplianceMarkdownAndJSONReportShortcutInvariants` |
 
 ## Runtime Mount Specs
 
@@ -65,10 +65,12 @@ from the same current truth and current plan that it uses for ordinary work.
 Children are never admitted from a cached child work snapshot when a parent exits or fails
 before publishing; multisync stops any existing children for that parent and
 waits for a fresh live parent snapshot before admitting replacements.
-In one-shot, each parent's child work starts after that parent reaches its safe
-point and publishes its final accepted snapshot. Parent A's children do not wait
-for unrelated parent B. Final-drain and artifact-cleanup acknowledgements remain
-serialized through the same live parent.
+In one-shot, each parent's child work starts as soon as that live parent
+publishes a fresh child process snapshot containing runnable, final-drain, or
+cleanup work. Parent A's children do not wait for unrelated parent B, and child
+engines still run ordinary `RunOnce` passes. Final-drain and artifact-cleanup
+acknowledgements remain serialized through the same live parent only after that
+parent reaches its safe acknowledgement point.
 
 Managed child mounts are runtime projections declared by the parent engine, not
 synthetic configured drives and not durable control-plane inventory.
@@ -114,7 +116,7 @@ CLI control surface. A child projection is controlled by the OneDrive shortcut
 itself and by the parent drive's pause state. Explicit standalone shared-folder
 mounts may project the same remote content root as automatic shortcut children
 when their configured local `sync_dir`s do not overlap. Duplicate automatic
-shortcuts inside one parent remain parent-engine topology state.
+shortcuts inside one parent remain parent-engine shortcut lifecycle state.
 
 Shortcut lifecycle state is producer-owned:
 
@@ -155,7 +157,7 @@ commands to `internal/multisync`:
   of deriving scope from parent namespace data
 - work snapshots contain only execution data and cleanup commands, so
   cleanup is an explicit parent-published executor request rather than inferred
-  topology absence
+  process-snapshot absence
 - complete batches mark previously known but absent parent roots
   `removed_final_drain`
 - empty complete batches are applied through the same engine handler path
@@ -171,9 +173,8 @@ commands to `internal/multisync`:
   so a deleted/recreated or moved projection cannot be mistaken for an empty
   tree to sync
 - in one-shot mode, each configured parent runs as an ordinary engine and
-  children are admitted after that parent reaches its safe point and returns
-  with its final accepted child work snapshot. No parent waits for unrelated
-  parents before its children can run.
+  children are admitted as soon as that parent publishes fresh child
+  work. No parent waits for unrelated parents before its children can run.
   The one-shot child-run coordinator only owns report aggregation, artifact
   cleanup, context-aware waiting for the parent safe acknowledgement point, and
   live-parent acknowledgement ordering; children still execute ordinary engine
@@ -217,7 +218,7 @@ produces an opaque acknowledgement to the live parent engine. The parent
 first persists `removed_release_pending`, then idempotently removes/releases
 the alias projection or promotes a waiting replacement. If release cleanup is
 blocked, the parent persists `removed_cleanup_blocked` and retries from that
-durable truth on startup or later topology refresh. When release cleanup
+durable truth on startup or later parent refresh. When release cleanup
 succeeds, the old binding stays in the parent store as
 `removed_child_cleanup_pending`: the alias path is no longer protected and no
 child runner is published, but the parent explicitly publishes a child artifact

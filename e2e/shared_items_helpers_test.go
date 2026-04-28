@@ -255,7 +255,7 @@ func waitForShortcutSharedItem(
 ) (sharedItemE2E, bool) {
 	t.Helper()
 
-	deadline := time.Now().Add(pollTimeout)
+	deadline := time.Now().Add(shortcutFixturePropagationTimeout)
 	var lastListing sharedListE2EOutput
 	var lastErr error
 
@@ -284,7 +284,7 @@ func waitForShortcutSharedItem(
 				fixture.ShortcutName,
 				fixture.ParentEmail,
 				fixture.SharerEmail,
-				pollTimeout,
+				shortcutFixturePropagationTimeout,
 				len(lastListing.Items),
 				lastErr,
 			)
@@ -450,28 +450,7 @@ func requireSharedListContainsShortcutFixture(
 ) {
 	t.Helper()
 
-	listing := sharedListForRecipient(t, cfgPath, env, fixture.ParentEmail)
-	var names []string
-	for i := range listing.Items {
-		names = append(names, listing.Items[i].Name)
-		if listing.Items[i].Name != fixture.ShortcutName || listing.Items[i].Type != "folder" {
-			continue
-		}
-		if fixture.SharerEmail != "" && !strings.EqualFold(listing.Items[i].SharedByEmail, fixture.SharerEmail) {
-			continue
-		}
-
-		return
-	}
-
-	require.Failf(t,
-		"shortcut fixture missing from shared list",
-		"expected folder %q shared_by=%s for %s; shared_list_names=%v",
-		fixture.ShortcutName,
-		fixture.SharerEmail,
-		fixture.ParentEmail,
-		names,
-	)
+	_, _ = waitForShortcutSharedItem(t, cfgPath, env, fixture, true)
 }
 
 func requireRootPlaceholderContainsShortcutFixture(
@@ -494,7 +473,7 @@ func waitForShortcutRootPlaceholder(
 ) {
 	t.Helper()
 
-	deadline := time.Now().Add(pollTimeout)
+	deadline := time.Now().Add(shortcutFixturePropagationTimeout)
 	var lastNames []string
 	var lastStdout string
 	var lastErr error
@@ -520,7 +499,7 @@ func waitForShortcutRootPlaceholder(
 				"expected %q in root of %s within %v; root_names=%v last_err=%v last_stdout=%s",
 				fixture.ShortcutName,
 				fixture.ParentDrive,
-				pollTimeout,
+				shortcutFixturePropagationTimeout,
 				lastNames,
 				lastErr,
 				lastStdout,

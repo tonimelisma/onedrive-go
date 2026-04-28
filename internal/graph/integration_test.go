@@ -29,7 +29,14 @@ const (
 	// per-test budget above that observed tail latency instead of misclassifying
 	// the runner/network jitter as a product regression.
 	integrationTimeout = 90 * time.Second
-	driveEnvVar        = "ONEDRIVE_TEST_DRIVE"
+
+	// Integration discovery keeps polling longer than the product policy so live
+	// CI proves the Graph surface can recover without making CLI discovery wait
+	// this long for ordinary users.
+	integrationDriveDiscoveryAttempts = 10
+	integrationDriveDiscoveryMaxDelay = 10 * time.Second
+
+	driveEnvVar = "ONEDRIVE_TEST_DRIVE"
 )
 
 func TestMain(m *testing.M) {
@@ -99,7 +106,19 @@ func newIntegrationClient(t *testing.T) *Client {
 
 	httpClient := retryHTTPClient(http.DefaultClient, retry.TransportPolicy())
 
-	return MustNewClient(DefaultBaseURL, httpClient, ts, logger, "onedrive-go/test")
+	client := MustNewClient(DefaultBaseURL, httpClient, ts, logger, "onedrive-go/test")
+	client.driveDiscoveryPolicy = integrationDriveDiscoveryPolicy()
+	return client
+}
+
+func integrationDriveDiscoveryPolicy() retry.Policy {
+	return retry.Policy{
+		MaxAttempts: integrationDriveDiscoveryAttempts,
+		Base:        time.Second,
+		Max:         integrationDriveDiscoveryMaxDelay,
+		Multiplier:  2,
+		Jitter:      0.25,
+	}
 }
 
 // driveIDForTest reads drive_id from the managed catalog entry for the test

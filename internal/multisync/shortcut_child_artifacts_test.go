@@ -13,6 +13,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 // Validates: R-2.4.8
@@ -276,6 +277,11 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsReturnsAckFailureAft
 	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupParentAckFailure)
 	assert.Contains(t, err.Error(), "parent store temporarily unavailable")
 	assert.Equal(t, []string{childMountID}, pruned)
+	diagnostics := orch.shortcutCleanupDiagnosticSnapshot()
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, string(shortcutChildArtifactCleanupParentAckFailure), diagnostics[0].Class)
+	assert.Equal(t, shortcutCleanupDiagnosticParentAckFailed, diagnostics[0].Phase)
+	assert.Contains(t, diagnostics[0].Message, "parent store temporarily unavailable")
 }
 
 // Validates: R-2.4.8
@@ -313,6 +319,120 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsRequiresLiveParentAc
 	require.Error(t, err)
 	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupParentAckFailure)
 	assert.Contains(t, err.Error(), "parent mount personal:parent@example.com is unavailable for child artifact cleanup acknowledgement")
+	diagnostics := orch.controlStatus(context.Background(), synccontrol.OwnerModeOneShot).ShortcutCleanupFailures
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, shortcutCleanupDiagnosticParentAckFailed, diagnostics[0].Phase)
+}
+
+// Validates: R-2.4.8
+func TestOrchestratorPurgeShortcutChildArtifactsRecordsMixedCleanupDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	artifactFailMountID := config.ChildMountID("personal:parent@example.com", "binding-artifact-fail")
+	ackFailMountID := config.ChildMountID("personal:parent@example.com", "binding-ack-fail")
+	orch := NewOrchestrator(&OrchestratorConfig{
+		Logger: slog.New(slog.DiscardHandler),
+	})
+	orch.artifactCleanup = shortcutChildArtifactCleanupExecutor{
+		dataDir: t.TempDir(),
+		logger:  orch.logger,
+		remove: func(string) error {
+			return nil
+		},
+		pruneCatalogRecord: func(mountID string) error {
+			if mountID == artifactFailMountID {
+				return errors.New("catalog write denied")
+			}
+			return nil
+		},
+		deleteUploadSessions: func(string, string) error {
+			return nil
+		},
+	}
+	decisions := &runnerDecisionSet{
+		CleanupChildren: []shortcutChildArtifactCleanup{
+			{
+				mountID:     artifactFailMountID,
+				namespaceID: "personal:parent@example.com",
+				ackRef:      testShortcutChildAckRef(t, "binding-artifact-fail"),
+				localRoot:   filepath.Join(t.TempDir(), "ArtifactFail"),
+				reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			},
+			{
+				mountID:     ackFailMountID,
+				namespaceID: "personal:parent@example.com",
+				ackRef:      testShortcutChildAckRef(t, "binding-ack-fail"),
+				localRoot:   filepath.Join(t.TempDir(), "AckFail"),
+				reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			},
+		},
+	}
+	ackers := map[mountID]shortcutChildAckHandle{
+		"personal:parent@example.com": mockShortcutChildAckHandle{
+			ackCleanupFn: func(context.Context, syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildWorkSnapshot, error) {
+				return syncengine.ShortcutChildWorkSnapshot{}, errors.New("parent store temporarily unavailable")
+			},
+		},
+	}
+
+	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers)
+
+	require.Error(t, err)
+	diagnostics := orch.shortcutCleanupDiagnosticSnapshot()
+	require.Len(t, diagnostics, 2)
+	assert.Equal(t, string(shortcutChildArtifactCleanupCatalogFailure), diagnostics[0].Class)
+	assert.Equal(t, shortcutCleanupDiagnosticArtifactsRemaining, diagnostics[0].Phase)
+	assert.Equal(t, string(shortcutChildArtifactCleanupParentAckFailure), diagnostics[1].Class)
+	assert.Equal(t, shortcutCleanupDiagnosticParentAckFailed, diagnostics[1].Phase)
+	assert.Contains(t, diagnostics[1].Message, "parent store temporarily unavailable")
+}
+
+// Validates: R-2.4.8
+func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsAfterSuccessfulRetry(t *testing.T) {
+	t.Parallel()
+
+	childMountID := config.ChildMountID("personal:parent@example.com", "binding-retry-success")
+	orch := NewOrchestrator(&OrchestratorConfig{
+		Logger: slog.New(slog.DiscardHandler),
+	})
+	orch.artifactCleanup = shortcutChildArtifactCleanupExecutor{
+		dataDir: t.TempDir(),
+		logger:  orch.logger,
+		remove: func(string) error {
+			return nil
+		},
+		pruneCatalogRecord: func(string) error {
+			return nil
+		},
+		deleteUploadSessions: func(string, string) error {
+			return nil
+		},
+	}
+	decisions := &runnerDecisionSet{
+		CleanupChildren: []shortcutChildArtifactCleanup{{
+			mountID:     childMountID,
+			namespaceID: "personal:parent@example.com",
+			ackRef:      testShortcutChildAckRef(t, "binding-retry-success"),
+			localRoot:   filepath.Join(t.TempDir(), "RetrySuccess"),
+			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
+		}},
+	}
+
+	err := orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, nil)
+	require.Error(t, err)
+	require.NotEmpty(t, orch.shortcutCleanupDiagnosticSnapshot())
+
+	ackers := map[mountID]shortcutChildAckHandle{
+		"personal:parent@example.com": mockShortcutChildAckHandle{
+			ackCleanupFn: func(context.Context, syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildWorkSnapshot, error) {
+				return syncengine.ShortcutChildWorkSnapshot{}, nil
+			},
+		},
+	}
+	err = orch.purgeShortcutChildArtifactsForDecisions(context.Background(), decisions, ackers)
+
+	require.NoError(t, err)
+	assert.Empty(t, orch.shortcutCleanupDiagnosticSnapshot())
 }
 
 func assertShortcutCleanupClass(

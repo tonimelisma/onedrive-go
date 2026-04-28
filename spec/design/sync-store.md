@@ -44,6 +44,11 @@ paths until either clean child drain is acknowledged or the user deletes the
 local projection directory as manual discard. Manual discard removes the parent
 root row but does not mutate the child target; multisync owns purging the child
 DB and other child artifacts after it sees the release.
+If child artifacts are purged but the live-parent acknowledgement fails, the
+parent cleanup-pending row remains durable retry work. The multisync runtime may
+surface a transient cleanup diagnostic for the current owner, but the next
+source of truth is still the parent `shortcut_roots` row and any remaining child
+artifacts, not a multisync cache.
 
 ## Ownership Contract
 

@@ -104,14 +104,9 @@ func TestDirtyBuffer_FlushDebounced_UsesLastObservationWindow(t *testing.T) {
 	}
 	resetCount := timer.resetCountSnapshot()
 	assert.GreaterOrEqual(t, resetCount, 1)
-	timer.Fire()
 
-	select {
-	case batch := <-out:
-		assert.False(t, batch.FullRefresh)
-	case <-time.After(dirtyBufferTestTimeout):
-		require.Fail(t, "timed out waiting for dirty batch")
-	}
+	batch := fireDirtyDebounceUntilBatch(t, timer, out)
+	assert.False(t, batch.FullRefresh)
 }
 
 // Validates: R-2.1.2
@@ -139,18 +134,30 @@ func TestDirtyBuffer_FlushDebounced_CoalescesMultipleDirtySignalsIntoOneBatch(t 
 	resetCount := timer.resetCountSnapshot()
 	assert.GreaterOrEqual(t, resetCount, 1)
 
-	timer.Fire()
-
-	select {
-	case batch := <-out:
-		assert.True(t, batch.FullRefresh)
-	case <-time.After(dirtyBufferTestTimeout):
-		require.Fail(t, "timed out waiting for debounced dirty batch")
-	}
+	batch := fireDirtyDebounceUntilBatch(t, timer, out)
+	assert.True(t, batch.FullRefresh)
 
 	select {
 	case extra := <-out:
 		require.Failf(t, "expected one coalesced dirty batch", "unexpected extra batch: %#v", extra)
 	default:
+	}
+}
+
+func fireDirtyDebounceUntilBatch(t *testing.T, timer *fakeDirtyDebounceTimer, out <-chan dirtyBatch) dirtyBatch {
+	t.Helper()
+
+	timer.Fire()
+	timeout := time.After(dirtyBufferTestTimeout)
+	for {
+		select {
+		case batch, ok := <-out:
+			require.True(t, ok, "dirty batch channel closed before producing a batch")
+			return batch
+		case <-timer.resetCh:
+			timer.Fire()
+		case <-timeout:
+			require.FailNow(t, "timed out waiting for debounced dirty batch")
+		}
 	}
 }

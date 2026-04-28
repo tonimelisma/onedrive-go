@@ -42,8 +42,16 @@ const (
 )
 
 type StatusResponse struct {
-	OwnerMode OwnerMode `json:"owner_mode"`
-	Mounts    []string  `json:"mounts"`
+	OwnerMode               OwnerMode                   `json:"owner_mode"`
+	Mounts                  []string                    `json:"mounts"`
+	ShortcutCleanupFailures []ShortcutCleanupDiagnostic `json:"shortcut_cleanup_failures,omitempty"`
+}
+
+type ShortcutCleanupDiagnostic struct {
+	Source  string `json:"source"`
+	Class   string `json:"class"`
+	Phase   string `json:"phase"`
+	Message string `json:"message"`
 }
 
 type MutationResponse struct {
