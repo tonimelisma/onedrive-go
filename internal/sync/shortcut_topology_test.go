@@ -73,7 +73,6 @@ func TestShortcutChildRunnerPublicationIncludesExplicitRunnerScope(t *testing.T)
 			LocalAlias:        "Run",
 			RemoteDriveID:     driveid.New("remote-drive"),
 			RemoteItemID:      "remote-root",
-			RemoteIsFolder:    true,
 			State:             ShortcutRootStateActive,
 		}},
 	)
@@ -144,6 +143,25 @@ func TestShortcutChildRunnerPublicationEqualityIsSyncOwned(t *testing.T) {
 	assert.Equal(t, uint64(1), first.Children[1].LocalRootIdentity.Device)
 }
 
+// Validates: R-2.4.8
+func TestShortcutChildAckHandleZeroReturnsExplicitErrors(t *testing.T) {
+	t.Parallel()
+
+	handle := ShortcutChildAckHandle{}
+
+	_, err := handle.AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
+		BindingItemID: "binding-1",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shortcut child final-drain ack requires live parent")
+
+	_, err = handle.AcknowledgeChildArtifactsPurged(t.Context(), ShortcutChildArtifactCleanupAck{
+		BindingItemID: "binding-1",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shortcut child artifact cleanup ack requires live parent")
+}
+
 // Validates: R-2.4.3, R-2.4.8
 func TestApplyShortcutObservationBatch_ForwardsEmptyCompleteBatch(t *testing.T) {
 	t.Parallel()
@@ -194,7 +212,6 @@ func TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler(t *testi
 				LocalAlias:        "Docs",
 				RemoteDriveID:     "drive-1",
 				RemoteItemID:      "target-1",
-				RemoteIsFolder:    true,
 				Complete:          true,
 			}},
 		},

@@ -23,7 +23,7 @@ func testPublishedShortcutChild() syncengine.ShortcutChildRunner {
 	)
 	return syncengine.ShortcutChildRunner{
 		BindingItemID:     "binding-child-docs",
-		LocalAlias:        filepath.Base(relativePath),
+		DisplayName:       filepath.Base(relativePath),
 		RelativeLocalPath: relativePath,
 		LocalRoot:         filepath.Join(os.TempDir(), "parent", filepath.FromSlash(relativePath)),
 		RemoteDriveID:     remoteDriveID,
@@ -105,6 +105,23 @@ func TestBuildStandaloneMountSpecs_PreservesRootedMountFields(t *testing.T) {
 	assert.Equal(t, driveid.New("remote-drive-id"), mounts[0].remoteDriveID)
 	assert.True(t, mounts[0].remoteRootDeltaCapable)
 	assert.True(t, mounts[0].enableWebsocket)
+}
+
+// Validates: R-2.8.1
+func TestParentMountSpecLoweringDoesNotCarryChildRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+
+	spec, err := newParentMountSpec(&parent)
+	require.NoError(t, err)
+
+	mount := spec.runtimeMountSpec()
+	assert.Equal(t, MountProjectionStandalone, mount.projectionKind)
+	assert.Nil(t, mount.child)
+	assert.Empty(t, mount.childBindingItemID())
+	assert.Empty(t, mount.childParentMountID())
+	assert.False(t, mount.isFinalDrainChild())
 }
 
 // Validates: R-2.8.1
@@ -192,6 +209,45 @@ func TestBuildRunnerDecisions_AddsChildProjectionAfterParent(t *testing.T) {
 	assert.Equal(t, "remote-root", engineCfg.RemoteRootItemID)
 	assert.Empty(t, engineCfg.DriveType)
 	assert.False(t, engineCfg.LocalRules.RejectSharePointRootForms)
+}
+
+// Validates: R-2.8.1
+func TestChildMountSpecLoweringCarriesChildRuntimeStateOnlyAtRunnerBoundary(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	parentCfg := testStandaloneMount(t, "personal:owner@example.com", "Parent")
+	parentCfg.EnableWebsocket = true
+	parentCfg.TransferWorkers = 3
+	parentCfg.CheckWorkers = 4
+	parentMount, err := buildStandaloneMountSpec(&parentCfg)
+	require.NoError(t, err)
+
+	child := testPublishedShortcutChild()
+	child.ChildMountID = config.ChildMountID(parentCfg.CanonicalID.String(), child.BindingItemID)
+	child.LocalRootIdentity = &syncengine.ShortcutRootIdentity{Device: 7, Inode: 8}
+	child.RunnerAction = syncengine.ShortcutChildActionFinalDrain
+
+	spec := newChildMountSpec(
+		parentMount,
+		&child,
+		child.ChildMountID,
+		child.DisplayName,
+		config.MountStatePath(child.ChildMountID),
+		parentMount.tokenOwnerCanonical,
+	)
+	mount := spec.runtimeMountSpec()
+
+	assert.Equal(t, MountProjectionChild, mount.projectionKind)
+	assert.True(t, mount.canonicalID.IsZero())
+	assert.Equal(t, mountID(parentCfg.CanonicalID.String()), mount.childParentMountID())
+	assert.Equal(t, child.BindingItemID, mount.childBindingItemID())
+	assert.True(t, mount.isFinalDrainChild())
+	assert.Equal(t, child.LocalRoot, mount.syncRoot)
+	assert.Equal(t, child.RemoteItemID, mount.remoteRootItemID)
+	assert.Equal(t, parentMount.transferWorkers, mount.transferWorkers)
+	assert.Equal(t, parentMount.checkWorkers, mount.checkWorkers)
+	require.NotNil(t, mount.expectedChildRootIdentity())
+	assert.Equal(t, uint64(7), mount.expectedChildRootIdentity().Device)
 }
 
 // Validates: R-2.8.1

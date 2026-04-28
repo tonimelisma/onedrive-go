@@ -210,15 +210,18 @@ func (e *Engine) materializeShortcutRoot(
 	record ShortcutRootRecord,
 	relativePath string,
 ) (ShortcutRootRecord, bool, bool, error) {
-	if err := e.syncTree.MkdirAllNoFollow(relativePath, shortcutRootDirPerm); err != nil {
-		return planShortcutRootPathError(record, err), true, true, nil
+	createErr := e.syncTree.MkdirAllNoFollow(relativePath, shortcutRootDirPerm)
+	if createErr != nil {
+		plan := planShortcutRootMaterializeResult(record, shortcutRootMaterializeResult{CreateErr: createErr})
+		return shortcutRootLocalPlanResult(&plan)
 	}
-	identity, err := e.syncTree.IdentityNoFollow(relativePath)
-	if err != nil {
-		return planShortcutRootUnavailable(record, err.Error()), true, true, nil
+	identity, identityErr := e.syncTree.IdentityNoFollow(relativePath)
+	if identityErr != nil {
+		plan := planShortcutRootMaterializeResult(record, shortcutRootMaterializeResult{IdentityErr: identityErr})
+		return shortcutRootLocalPlanResult(&plan)
 	}
-	next := planShortcutRootMaterialized(record, identity)
-	return next, true, !shortcutRootRecordsEqual(record, next), nil
+	plan := planShortcutRootMaterializeResult(record, shortcutRootMaterializeResult{Identity: &identity})
+	return shortcutRootLocalPlanResult(&plan)
 }
 
 //nolint:gocritic // ShortcutRootRecord is treated as a value in the planner-style local transition.
@@ -418,14 +421,25 @@ func (e *Engine) moveRemoteRenamedShortcutProjection(
 	fromRelativePath string,
 	toRelativePath string,
 ) (ShortcutRootRecord, bool, bool, error) {
-	if err := e.moveShortcutRootProjection(fromRelativePath, toRelativePath); err != nil {
-		return planShortcutRootBlocked(record, err.Error()), true, true, nil
+	moveErr := e.moveShortcutRootProjection(fromRelativePath, toRelativePath)
+	if moveErr != nil {
+		plan := planShortcutProjectionMoveResult(record, shortcutRootProjectionMoveResult{MoveErr: moveErr})
+		return shortcutRootLocalPlanResult(&plan)
 	}
-	identity, err := e.syncTree.IdentityNoFollow(toRelativePath)
-	if err != nil {
-		return planShortcutRootUnavailable(record, err.Error()), true, true, nil
+	identity, identityErr := e.syncTree.IdentityNoFollow(toRelativePath)
+	if identityErr != nil {
+		plan := planShortcutProjectionMoveResult(record, shortcutRootProjectionMoveResult{IdentityErr: identityErr})
+		return shortcutRootLocalPlanResult(&plan)
 	}
-	return planShortcutProjectionMoveSuccess(record, identity), true, true, nil
+	plan := planShortcutProjectionMoveResult(record, shortcutRootProjectionMoveResult{Identity: &identity})
+	return shortcutRootLocalPlanResult(&plan)
+}
+
+func shortcutRootLocalPlanResult(plan *shortcutRootLocalObservationPlan) (ShortcutRootRecord, bool, bool, error) {
+	if plan == nil {
+		return ShortcutRootRecord{}, false, false, nil
+	}
+	return plan.Next, plan.Keep, plan.Changed, nil
 }
 
 func (e *Engine) moveShortcutRootProjection(fromRelativePath string, toRelativePath string) error {
