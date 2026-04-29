@@ -136,7 +136,11 @@ Some responses return item names with URL encoding (e.g., `%20` for spaces, `%E6
 
 ### OneNote Package Items
 
-Items with a `package` facet (`type: "oneNote"`) have no `file` or `folder` facet. Database schemas expecting every item to have a type will fail. The normalization pipeline filters package items.
+Items with a `package` facet (`type: "oneNote"`) have no `file` or `folder`
+facet. Database schemas expecting every item to have a type will fail. Current
+product boundary: Graph normalization keeps package items as provider truth for
+direct file operations. Sync observation filters package items because they are
+not normal file/folder content.
 
 ### Delta Endpoint Consistency Lag
 
@@ -960,7 +964,7 @@ The client treats these as unknown metadata, not as clock values to repair local
 
 ### URL-Encoded Paths
 
-`parentReference.path` (when present in non-delta responses) contains URL-encoded characters (`%20` for spaces). The client decodes it at the Graph boundary and stores the root-relative result on `graph.Item.ParentPath`. Malformed encodings or missing `/root:` markers are ignored rather than propagated as bogus paths.
+`parentReference.path` (when present) contains URL-encoded characters (`%20` for spaces). The client decodes it at the Graph boundary and stores the root-relative result on `graph.Item.ParentPath`. A valid root parent path normalizes to the empty string, so `graph.Item.ParentPathKnown` records whether Graph actually supplied a valid path. Malformed encodings or missing `/root:` markers are ignored rather than propagated as bogus paths.
 
 ## Case Sensitivity
 
@@ -973,7 +977,7 @@ Two files differing only in case cannot coexist in the same OneDrive folder. The
 All delta responses pass through a 5-stage normalization pipeline (`internal/graph/normalize.go`) before the sync engine processes them:
 
 1. Decode URL-encoded names
-2. Filter OneNote packages
+2. Preserve package items for provider-truth callers; sync filters them later
 3. Clear deleted item hashes
 4. Deduplicate (keep last occurrence per item ID)
 5. Reorder deletions before creations (within each parent)

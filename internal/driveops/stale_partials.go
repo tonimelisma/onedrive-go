@@ -14,17 +14,20 @@ import (
 
 // StalePartialCleanupOptions controls which local subtrees stale partial
 // cleanup may touch. SkipDirs entries are rooted slash paths relative to the
-// sync root.
+// sync root. IncludedDirs entries use the same root-relative ancestor/container
+// semantics as sync include filters.
 type StalePartialCleanupOptions struct {
-	SkipDirs []string
+	SkipDirs            []string
+	IncludedDirs        []string
+	IncludeJunkPartials bool
 }
 
-// CleanStalePartials deletes all .partial files found under the sync tree.
-// After a sync run completes, any surviving .partial files are guaranteed
-// garbage: successful downloads rename them away, failed downloads delete
-// them via removePartialIfNotCanceled, and context cancellation aborts the
-// sync before this function runs. The only edge case is rename failure
-// (B-207), where re-downloading on the next run is acceptable.
+// CleanStalePartials deletes onedrive-go-owned partial files found under the
+// sync tree. After a sync run completes, any surviving owned partial files are
+// garbage: successful downloads rename them away, failed downloads delete them
+// via removePartialIfNotCanceled, and context cancellation aborts the sync
+// before this function runs. The only edge case is rename failure (B-207),
+// where re-downloading on the next run is acceptable.
 //
 // Follows the CleanStale pattern: per-file errors are logged and skipped,
 // returns (count, scanError). The caller logs a summary.
@@ -32,8 +35,8 @@ func CleanStalePartials(tree *synctree.Root, logger *slog.Logger) (int, error) {
 	return CleanStalePartialsWithOptions(tree, logger, StalePartialCleanupOptions{})
 }
 
-// CleanStalePartialsWithOptions deletes stale .partial files while leaving
-// skipped local subtrees untouched.
+// CleanStalePartialsWithOptions deletes stale owned partial files while
+// leaving skipped local subtrees untouched.
 func CleanStalePartialsWithOptions(
 	tree *synctree.Root,
 	logger *slog.Logger,
@@ -41,6 +44,7 @@ func CleanStalePartialsWithOptions(
 ) (int, error) {
 	deleted := 0
 	skipDirs := normalizePartialCleanupSkipDirs(opts.SkipDirs)
+	includedDirs := normalizePartialCleanupDirList(opts.IncludedDirs)
 
 	err := tree.WalkDir(func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -53,14 +57,16 @@ func CleanStalePartialsWithOptions(
 		}
 
 		if d.IsDir() {
-			if shouldSkipPartialCleanupDir(tree, path, skipDirs, logger) {
+			if shouldSkipPartialCleanupDir(tree, path, skipDirs, includedDirs, logger) {
 				return filepath.SkipDir
 			}
 
 			return nil
 		}
 
-		if filepath.Ext(path) != ".partial" {
+		name := filepath.Base(path)
+		isJunkPartial := opts.IncludeJunkPartials && strings.HasSuffix(strings.ToLower(name), downloadPartialSuffix)
+		if !IsOwnedTransferArtifactName(name) && !isJunkPartial {
 			return nil
 		}
 
@@ -71,6 +77,9 @@ func CleanStalePartialsWithOptions(
 				slog.String("error", relErr.Error()),
 			)
 
+			return nil
+		}
+		if !partialCleanupPathInIncludedScope(relPath, false, includedDirs) {
 			return nil
 		}
 
@@ -97,14 +106,29 @@ func CleanStalePartialsWithOptions(
 }
 
 func normalizePartialCleanupSkipDirs(skipDirs []string) map[string]struct{} {
-	normalized := make(map[string]struct{}, len(skipDirs))
-	for _, skipDir := range skipDirs {
-		skipDir = path.Clean(strings.TrimPrefix(filepath.ToSlash(skipDir), "/"))
-		if skipDir == "." || skipDir == "" {
+	normalizedList := normalizePartialCleanupDirList(skipDirs)
+	normalized := make(map[string]struct{}, len(normalizedList))
+	for _, skipDir := range normalizedList {
+		normalized[skipDir] = struct{}{}
+	}
+
+	return normalized
+}
+
+func normalizePartialCleanupDirList(dirs []string) []string {
+	normalized := make([]string, 0, len(dirs))
+	seen := make(map[string]struct{}, len(dirs))
+	for _, dir := range dirs {
+		dir = path.Clean(strings.TrimPrefix(filepath.ToSlash(dir), "/"))
+		if dir == "." || dir == "" {
 			continue
 		}
 
-		normalized[skipDir] = struct{}{}
+		if _, ok := seen[dir]; ok {
+			continue
+		}
+		seen[dir] = struct{}{}
+		normalized = append(normalized, dir)
 	}
 
 	return normalized
@@ -114,12 +138,9 @@ func shouldSkipPartialCleanupDir(
 	tree *synctree.Root,
 	dirPath string,
 	skipDirs map[string]struct{},
+	includedDirs []string,
 	logger *slog.Logger,
 ) bool {
-	if len(skipDirs) == 0 {
-		return false
-	}
-
 	relPath, err := tree.Rel(dirPath)
 	if err != nil {
 		logger.Warn("failed to relativize directory for partial cleanup",
@@ -135,6 +156,34 @@ func shouldSkipPartialCleanupDir(
 		return false
 	}
 
-	_, skip := skipDirs[relPath]
-	return skip
+	if _, skip := skipDirs[relPath]; skip {
+		return true
+	}
+
+	return !partialCleanupPathInIncludedScope(relPath, true, includedDirs)
+}
+
+func partialCleanupPathInIncludedScope(relPath string, isDir bool, includedDirs []string) bool {
+	if len(includedDirs) == 0 {
+		return true
+	}
+
+	relPath = path.Clean(filepath.ToSlash(relPath))
+	if relPath == "." || relPath == "" {
+		return isDir
+	}
+
+	for _, includedDir := range includedDirs {
+		if relPath == includedDir {
+			return isDir
+		}
+		if strings.HasPrefix(relPath, includedDir+"/") {
+			return true
+		}
+		if isDir && strings.HasPrefix(includedDir, relPath+"/") {
+			return true
+		}
+	}
+
+	return false
 }

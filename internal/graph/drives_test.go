@@ -1006,8 +1006,8 @@ func TestSearchDriveItems_Pagination(t *testing.T) {
 	assert.Equal(t, 2, page)
 }
 
-// Validates: R-6.7.8, R-6.7.9
-func TestSearchDriveItems_FiltersPackagesAndDecodesNames(t *testing.T) {
+// Validates: R-6.7.8
+func TestSearchDriveItems_DecodesNamesAndKeepsPackages(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -1038,9 +1038,11 @@ func TestSearchDriveItems_FiltersPackagesAndDecodesNames(t *testing.T) {
 	items, err := client.SearchDriveItems(t.Context(), "*")
 	require.NoError(t, err)
 
-	require.Len(t, items, 1)
+	require.Len(t, items, 2)
 	assert.Equal(t, "Shared Notes.txt", items[0].Name)
 	assert.False(t, items[0].IsPackage)
+	assert.Equal(t, "Notebook Two", items[1].Name)
+	assert.True(t, items[1].IsPackage)
 }
 
 func TestSearchDriveItems_Error(t *testing.T) {

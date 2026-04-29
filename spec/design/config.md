@@ -187,6 +187,12 @@ This table is the authoritative config-package view of the current schema.
 | `paused_until` | `string?` | empty | RFC3339 timestamp when present | `sync`, `pause`, `resume`, `status`, `drive list` | Timed pause expiry owned by config resolution. |
 | `display_name` | `string` | derived by `DefaultDisplayName()` when omitted | string | `display`, selector matching | Human-facing label for status and drive selection. |
 | `owner` | `string` | empty | string | `display` | Shared-drive owner label. |
+| `ignored_dirs` | `[]string` | empty | normalized root-relative directory paths; no absolute paths, `..`, root, or globs | `sync` | Excludes exact directory subtrees from local and remote sync visibility. |
+| `included_dirs` | `[]string` | empty | normalized root-relative directory paths; no absolute paths, `..`, root, or globs | `sync` | Empty means whole drive. Non-empty narrows sync to listed directories, descendants, and required ancestor containers. |
+| `ignored_paths` | `[]string` | empty | normalized root-relative slash globs; no absolute paths, `..`, or root pattern | `sync` | Excludes matching files or directories from local and remote sync visibility; a directory match excludes its subtree. |
+| `ignore_dotfiles` | `bool` | `false` | boolean | `sync` | Excludes any path with a component beginning with `.`. |
+| `ignore_junk_files` | `bool` | `false` | boolean | `sync` | Excludes bundled OS/editor/browser junk patterns from local and remote sync visibility. |
+| `follow_symlinks` | `bool` | `false` | boolean | `sync` | When false, local symlinks are ignored. When true, local observation may project symlink target content with cycle and delete-safety rules. |
 
 ## Config File Manipulation
 
@@ -207,8 +213,8 @@ text intact. Email reconciliation uses this instead of re-encoding TOML.
 
 Implements: R-3.4.1 [verified], R-3.4.3 [verified]
 
-Each drive section contains per-drive settings (`sync_dir`, paused state, and
-display metadata). When a drive section omits `sync_dir`,
+Each drive section contains per-drive settings (`sync_dir`, paused state,
+display metadata, and sync visibility filters). When a drive section omits `sync_dir`,
 `buildResolvedDrive` computes the deterministic default local path for that
 canonical ID before command-specific validation runs. Drive resolution
 (`ResolveDrive`) matches by exact canonical ID → exact display_name

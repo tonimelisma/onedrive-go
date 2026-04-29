@@ -215,7 +215,7 @@ func TestCommitObservation_DeleteMissingItemOnlyAdvancesCursor(t *testing.T) {
 }
 
 // Validates: R-2.11
-func TestCommitObservation_IgnoresSymmetricJunkRows(t *testing.T) {
+func TestCommitObservation_PersistsJunkRowsAsRawRemoteTruth(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -230,6 +230,6 @@ func TestCommitObservation_IgnoresSymmetricJunkRows(t *testing.T) {
 		Hash:     "hash-junk",
 	}}, "delta-token-junk", driveID))
 
-	assert.Nil(t, readRemoteStateRow(t, mgr.rawDB(), "item-junk"))
+	require.NotNil(t, readRemoteStateRow(t, mgr.rawDB(), "item-junk"))
 	assert.Equal(t, "delta-token-junk", readObservationCursor(t, mgr.rawDB(), testDriveID))
 }

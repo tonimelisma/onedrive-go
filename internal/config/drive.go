@@ -32,6 +32,7 @@ type ResolvedDrive struct {
 	SafetyConfig
 	SyncConfig
 	LoggingConfig
+	DriveFilterConfig
 }
 
 // StatePath returns the state DB file path for this drive.
@@ -159,6 +160,14 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		SafetyConfig:    cfg.SafetyConfig,
 		SyncConfig:      cfg.SyncConfig,
 		LoggingConfig:   cfg.LoggingConfig,
+		DriveFilterConfig: DriveFilterConfig{
+			IgnoredDirs:     slices.Clone(drive.IgnoredDirs),
+			IncludedDirs:    slices.Clone(drive.IncludedDirs),
+			IgnoredPaths:    slices.Clone(drive.IgnoredPaths),
+			IgnoreDotfiles:  drive.IgnoreDotfiles,
+			IgnoreJunkFiles: drive.IgnoreJunkFiles,
+			FollowSymlinks:  drive.FollowSymlinks,
+		},
 	}
 
 	if canonicalID.IsShared() {

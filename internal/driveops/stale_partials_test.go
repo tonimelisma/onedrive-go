@@ -14,13 +14,15 @@ func TestCleanStalePartials(t *testing.T) {
 
 	dir := t.TempDir()
 
-	// Create a .partial file (should be deleted).
-	partialPath := filepath.Join(dir, "download.partial")
+	// Create an owned partial file (should be deleted).
+	partialPath := filepath.Join(dir, downloadPartialPrefix+"download.txt"+downloadPartialSuffix)
 	require.NoError(t, os.WriteFile(partialPath, []byte("partial"), 0o600))
 
 	// Create a regular file (should be preserved).
 	regularPath := filepath.Join(dir, "document.txt")
 	require.NoError(t, os.WriteFile(regularPath, []byte("content"), 0o600))
+	userPartialPath := filepath.Join(dir, "user.partial")
+	require.NoError(t, os.WriteFile(userPartialPath, []byte("user"), 0o600))
 
 	n, err := CleanStalePartials(mustOpenSyncTree(t, dir), testLogger(t))
 	require.NoError(t, err)
@@ -32,7 +34,8 @@ func TestCleanStalePartials(t *testing.T) {
 
 	// Regular file should still exist.
 	_, statErr = os.Stat(regularPath)
-	assert.NoError(t, statErr, "regular file should be preserved")
+	require.NoError(t, statErr, "regular file should be preserved")
+	assert.FileExists(t, userPartialPath, "arbitrary user .partial file should be preserved by default")
 }
 
 func TestCleanStalePartials_EmptyDir(t *testing.T) {
@@ -54,7 +57,7 @@ func TestCleanStalePartials_NestedDir(t *testing.T) {
 	subDir := filepath.Join(dir, "a", "b")
 	require.NoError(t, os.MkdirAll(subDir, 0o700))
 
-	partialPath := filepath.Join(subDir, "deep.partial")
+	partialPath := filepath.Join(subDir, downloadPartialPrefix+"deep.bin"+downloadPartialSuffix)
 	require.NoError(t, os.WriteFile(partialPath, []byte("nested"), 0o600))
 
 	n, err := CleanStalePartials(mustOpenSyncTree(t, dir), testLogger(t))
@@ -73,8 +76,8 @@ func TestCleanStalePartialsWithOptions_SkipsConfiguredDirs(t *testing.T) {
 
 	childDir := filepath.Join(dir, "Shortcuts", "Docs")
 	require.NoError(t, os.MkdirAll(childDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(childDir, "child.partial"), []byte("child"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "root.partial"), []byte("root"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(childDir, downloadPartialPrefix+"child.txt"+downloadPartialSuffix), []byte("child"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, downloadPartialPrefix+"root.txt"+downloadPartialSuffix), []byte("root"), 0o600))
 
 	n, err := CleanStalePartialsWithOptions(
 		mustOpenSyncTree(t, dir),
@@ -86,8 +89,8 @@ func TestCleanStalePartialsWithOptions_SkipsConfiguredDirs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 
-	assert.NoFileExists(t, filepath.Join(dir, "root.partial"))
-	assert.FileExists(t, filepath.Join(childDir, "child.partial"))
+	assert.NoFileExists(t, filepath.Join(dir, downloadPartialPrefix+"root.txt"+downloadPartialSuffix))
+	assert.FileExists(t, filepath.Join(childDir, downloadPartialPrefix+"child.txt"+downloadPartialSuffix))
 }
 
 func TestCleanStalePartials_MultipleFiles(t *testing.T) {
@@ -96,7 +99,11 @@ func TestCleanStalePartials_MultipleFiles(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create 3 .partial files.
-	for _, name := range []string{"a.partial", "b.partial", "c.partial"} {
+	for _, name := range []string{
+		downloadPartialPrefix + "a.txt" + downloadPartialSuffix,
+		downloadPartialPrefix + "b.txt" + downloadPartialSuffix,
+		downloadPartialPrefix + "c.txt" + downloadPartialSuffix,
+	} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600))
 	}
 
@@ -108,7 +115,11 @@ func TestCleanStalePartials_MultipleFiles(t *testing.T) {
 	assert.Equal(t, 3, n)
 
 	// All partials gone.
-	for _, name := range []string{"a.partial", "b.partial", "c.partial"} {
+	for _, name := range []string{
+		downloadPartialPrefix + "a.txt" + downloadPartialSuffix,
+		downloadPartialPrefix + "b.txt" + downloadPartialSuffix,
+		downloadPartialPrefix + "c.txt" + downloadPartialSuffix,
+	} {
 		_, statErr := os.Stat(filepath.Join(dir, name))
 		assert.True(t, os.IsNotExist(statErr), "%s should have been deleted", name)
 	}
@@ -116,6 +127,23 @@ func TestCleanStalePartials_MultipleFiles(t *testing.T) {
 	// Non-partial preserved.
 	_, statErr := os.Stat(filepath.Join(dir, "keep.txt"))
 	assert.NoError(t, statErr)
+}
+
+func TestCleanStalePartialsWithOptions_DeletesJunkPartialsWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	userPartialPath := filepath.Join(dir, "user.partial")
+	require.NoError(t, os.WriteFile(userPartialPath, []byte("user"), 0o600))
+
+	n, err := CleanStalePartialsWithOptions(
+		mustOpenSyncTree(t, dir),
+		testLogger(t),
+		StalePartialCleanupOptions{IncludeJunkPartials: true},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.NoFileExists(t, userPartialPath)
 }
 
 func TestCleanStalePartials_PermissionError(t *testing.T) {
@@ -130,10 +158,10 @@ func TestCleanStalePartials_PermissionError(t *testing.T) {
 	// Create a restricted subdirectory containing a .partial file.
 	restricted := filepath.Join(dir, "restricted")
 	require.NoError(t, os.MkdirAll(restricted, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(restricted, "hidden.partial"), []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(restricted, downloadPartialPrefix+"hidden.txt"+downloadPartialSuffix), []byte("x"), 0o600))
 
 	// Create an accessible .partial at the top level.
-	topPartial := filepath.Join(dir, "top.partial")
+	topPartial := filepath.Join(dir, downloadPartialPrefix+"top.txt"+downloadPartialSuffix)
 	require.NoError(t, os.WriteFile(topPartial, []byte("y"), 0o600))
 
 	// Remove read+execute permission on the subdirectory.

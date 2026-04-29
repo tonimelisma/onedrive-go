@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"time"
 
@@ -1010,6 +1011,7 @@ func mountSpecRuntimeEquivalent(current *mountSpec, next *mountSpec) bool {
 		current.statePath() == next.statePath() &&
 		current.enableWebsocket() == next.enableWebsocket() &&
 		current.remoteRootDeltaCapable() == next.remoteRootDeltaCapable() &&
+		contentFilterConfigsEquivalent(current.contentFilter(), next.contentFilter()) &&
 		childEngineSpecsEquivalent(current, next)
 }
 
@@ -1017,13 +1019,22 @@ func childEngineSpecsEquivalent(current *mountSpec, next *mountSpec) bool {
 	if current == nil || next == nil || current.child == nil || next.child == nil {
 		return (current == nil || current.child == nil) && (next == nil || next.child == nil)
 	}
-	return syncengine.ShortcutChildEngineSpecsEqual(current.child.engine, next.child.engine)
+	return syncengine.ShortcutChildEngineSpecsEqual(&current.child.engine, &next.child.engine)
 }
 
 func mountSpecTuningEquivalent(current *mountSpec, next *mountSpec) bool {
 	return current.transferWorkers() == next.transferWorkers() &&
 		current.checkWorkers() == next.checkWorkers() &&
 		current.minFreeSpace() == next.minFreeSpace()
+}
+
+func contentFilterConfigsEquivalent(current syncengine.ContentFilterConfig, next syncengine.ContentFilterConfig) bool {
+	return slices.Equal(current.IgnoredDirs, next.IgnoredDirs) &&
+		slices.Equal(current.IncludedDirs, next.IncludedDirs) &&
+		slices.Equal(current.IgnoredPaths, next.IgnoredPaths) &&
+		current.IgnoreDotfiles == next.IgnoreDotfiles &&
+		current.IgnoreJunkFiles == next.IgnoreJunkFiles &&
+		current.FollowSymlinks == next.FollowSymlinks
 }
 
 func reconcileWatchInterval(pollInterval time.Duration) time.Duration {

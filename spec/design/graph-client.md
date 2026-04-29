@@ -103,13 +103,16 @@ All API quirks handled at the graph boundary — downstream code never sees them
 - Single-item item names are URL-decoded across fetch, mutation, share-resolution,
   restore, and upload-completion responses
 - Paginated non-delta item surfaces (`ListChildren`, drive search) URL-decode
-  names and filter package-only OneNote items before
-  callers see them
+  names and keep provider-visible package items. Sync-only package suppression
+  is owned by `internal/sync/item_converter.go`, not by the Graph client.
 - Delta deletion reordering (deletions before creations within each page)
 - Missing field recovery (name, size for deleted items)
 - Timestamp validation that preserves unknown timestamps as zero time instead of fabricating a replacement, including `null`, missing, invalid, and out-of-range wire values
-- `parentReference.path` is never returned in delta — items tracked by ID
-- `parentReference.path` is URL-decoded and normalized to a root-relative `Item.ParentPath` in non-delta responses
+- `parentReference.path` is usually unavailable in delta and sync primarily
+  tracks remote items by ID. When Graph does provide a valid path, it is
+  URL-decoded and normalized to root-relative `Item.ParentPath`; `Item.ParentPathKnown`
+  distinguishes a known root parent from an omitted/invalid path because both
+  normalize to an empty string.
 - `GetItemByPath` post-validates Graph's response against the requested path. Internal path helpers distinguish exact root-relative paths (when `parentReference.path` survived normalization) from best-effort leaf-only fallbacks. When the exact parent path is unavailable the client logs the fallback at Debug and validates only the leaf name before accepting the result.
 - Personal drive discovery is normalized through `/me/drive`: when `/me/drives` returns one or more `driveType == "personal"` entries, the client replaces all of them with the single authoritative primary drive from `GET /me/drive` before returning the list to callers.
 - Exact transient 403 retry on `GET /me/drives` when the Graph code chain contains `accessDenied`, using the named drive-discovery policy (5 total attempts, 1s base, 2x multiplier, ±25% jitter)
@@ -182,7 +185,7 @@ The Graph client does not own websocket runtime state. It performs one synchrono
 
 ## Item Operations (`items.go`)
 
-GetItem, ListChildren, CreateFolder, MoveItem, CopyItem, DeleteItem. All operations use `graph.Item` — the clean type after normalization. For non-delta item fetches, `Item.ParentPath` carries the decoded root-relative `parentReference.path` when Graph provides it so callers never need to parse Graph's absolute `"/drives/{id}/root:..."` representation themselves.
+GetItem, ListChildren, CreateFolder, MoveItem, CopyItem, DeleteItem. All operations use `graph.Item` — the clean type after normalization. `Item.ParentPath` carries the decoded root-relative `parentReference.path` when Graph provides it and `Item.ParentPathKnown` records that the path was valid, so callers never need to parse Graph's absolute `"/drives/{id}/root:..."` representation themselves or guess whether an empty parent path means root or unknown.
 
 `CreateFolder` also owns one narrow ambiguous-success recovery path. If Graph
 returns a success status for `POST .../children` but the body is empty, the

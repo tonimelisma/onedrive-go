@@ -33,6 +33,12 @@ func expectedGlobalSchemaKeys() []string {
 func expectedDriveSchemaKeys() []string {
 	return []string{
 		"display_name",
+		"follow_symlinks",
+		"ignore_dotfiles",
+		"ignore_junk_files",
+		"ignored_dirs",
+		"ignored_paths",
+		"included_dirs",
 		"owner",
 		"paused",
 		"paused_until",

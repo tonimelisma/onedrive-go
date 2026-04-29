@@ -75,6 +75,12 @@ sync_dir = "~/OneDrive"
 display_name = "home"
 paused = false
 owner = "Alice Smith"
+ignored_dirs = ["build"]
+included_dirs = ["Documents"]
+ignored_paths = ["*.tmp"]
+ignore_dotfiles = true
+ignore_junk_files = true
+follow_symlinks = true
 `)
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)

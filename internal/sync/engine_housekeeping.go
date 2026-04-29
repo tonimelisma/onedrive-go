@@ -20,13 +20,15 @@ func (flow *engineFlow) postSyncHousekeeping(ctx context.Context) {
 		flow.engine.sessionStore,
 		flow.engine.logger,
 		driveops.TransferArtifactCleanupOptions{
-			SkipDirs: transferArtifactCleanupSkipDirs(flow.engine.localFilter, flow.engine.protectedRoots),
+			SkipDirs:            transferArtifactCleanupSkipDirs(flow.engine.contentFilter, flow.engine.protectedRoots),
+			IncludedDirs:        flow.engine.contentFilter.IncludedDirs,
+			IncludeJunkPartials: flow.engine.contentFilter.IgnoreJunkFiles,
 		},
 	)
 }
 
-func transferArtifactCleanupSkipDirs(filter LocalFilterConfig, protectedRoots []ProtectedRoot) []string {
-	skipDirs := append([]string(nil), filter.SkipDirs...)
+func transferArtifactCleanupSkipDirs(filter ContentFilterConfig, protectedRoots []ProtectedRoot) []string {
+	skipDirs := append([]string(nil), filter.IgnoredDirs...)
 	for i := range protectedRoots {
 		if protectedRoots[i].Path == "" {
 			continue

@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -535,49 +534,6 @@ func TestRunWatch_DownloadOnly_StartsLocalObserver(t *testing.T) {
 	assert.True(t, recorder.findEvent(func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}), "download-only watch must start a local observer")
-}
-
-// TestRunWatch_AllObserversDead_ReturnsError verifies that RunWatch returns an
-// error (not nil) when all observers exit. Uses upload-only mode with a .nosync
-// guard file so the local observer fails immediately.
-func TestRunWatch_AllObserversDead_ReturnsError(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveID},
-			}, "token-1"), nil
-		},
-	}
-
-	eng, syncRoot := newTestEngine(t, mock)
-
-	// Create .nosync guard file so local observer exits immediately with error.
-	writeLocalFile(t, syncRoot, ".nosync", "")
-
-	done := make(chan error, 1)
-	go func() {
-		done <- eng.RunWatch(t.Context(), SyncUploadOnly, WatchOptions{
-			PollInterval: 1 * time.Hour,
-			Debounce:     10 * time.Millisecond,
-		})
-	}()
-
-	select {
-	case err := <-done:
-		require.Error(t, err, "RunWatch returned nil, want error indicating all observers exited")
-
-		if !errors.Is(err, ErrNosyncGuard) {
-			// Should be the "all observers exited" wrapper, but the observer error
-			// should be logged as a warning. Check it's not a random error.
-			assert.Equal(t, "sync: all observers exited", err.Error())
-		}
-	case <-time.After(10 * time.Second):
-		require.Fail(t, "RunWatch did not return within timeout (should exit when all observers die)")
-	}
 }
 
 // TestRunWatch_WatchLimitExhausted_FallsBackToPolling verifies that when the

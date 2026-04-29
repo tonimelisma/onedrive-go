@@ -136,23 +136,6 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "top.txt should be deleted")
 }
 
-// TestE2E_Sync_NosyncGuard validates that a .nosync file in the sync root
-// prevents sync from running (S2 safety guard).
-func TestE2E_Sync_NosyncGuard(t *testing.T) {
-	t.Parallel()
-	registerLogDump(t)
-
-	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
-
-	// Create .nosync guard file in sync root.
-	require.NoError(t, os.WriteFile(filepath.Join(syncDir, ".nosync"), []byte{}, 0o600))
-
-	// Sync should fail with nosync error.
-	output := runCLIWithConfigExpectError(t, cfgPath, env, "sync", "--upload-only")
-	assert.Contains(t, output, "nosync", "sync should report .nosync guard file presence")
-}
-
 // TestE2E_Sync_MtimeOnlyChange validates that changing only mtime (without
 // content change) does not trigger a re-upload. The scanner compares hashes
 // against baseline and discards events where hashes match.

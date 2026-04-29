@@ -29,11 +29,11 @@ Unified download/upload manager shared by both CLI file operations and the sync 
 
 Implements: R-6.2.3 [verified]
 
-1. Create `.partial` file in target directory
-2. If `.partial` exists with content, resume via HTTP Range request
+1. Create a namespaced `.onedrive-go.<target-name>.partial` file in the target directory
+2. If that owned partial exists with content, resume via HTTP Range request
 3. Stream response body, computing QuickXorHash incrementally
 4. Verify hash and size against API metadata
-5. Atomic rename `.partial` → final path
+5. Atomic rename owned partial → final path
 
 ### Upload
 
@@ -213,7 +213,7 @@ instead of looking like an unexplained integrity bypass.
 
 ## Cleanup
 
-`cleanup.go` removes stale `.partial` files and expired upload sessions on startup. `stale_partials.go` detects orphaned partial files from interrupted downloads. Session files live under the managed-state boundary (`internal/fsroot` via `SessionStore`). Orphaned `.partial` files live in the sync tree and are cleaned through `internal/synctree`. Both rooted boundaries carry unexported injectable ops so cleanup paths can be covered by deterministic create/write/rename/walk/remove failure tests.
+`cleanup.go` removes stale client-owned partial files and expired upload sessions on startup. `stale_partials.go` detects orphaned `.onedrive-go.*.partial` files from interrupted downloads. Arbitrary user-created `*.partial` files are not transfer artifacts; sync housekeeping only treats them as removable junk when `ignore_junk_files` enables junk cleanup. Session files live under the managed-state boundary (`internal/fsroot` via `SessionStore`). Orphaned owned partial files live in the sync tree and are cleaned through `internal/synctree`. Both rooted boundaries carry unexported injectable ops so cleanup paths can be covered by deterministic create/write/rename/walk/remove failure tests.
 
 ## Disk Space Pre-Check
 
@@ -235,11 +235,11 @@ Design properties:
 
 - `Upload()` accepts `io.ReaderAt` (not `io.Reader`): enables retry-safe uploads without re-opening the file. `io.NewSectionReader` creates independent readers for each chunk.
 - Managed session files use `internal/fsroot`.
-- Sync-engine runtime cleanup of `.partial` files under one configured sync root uses `internal/synctree`.
+- Sync-engine runtime cleanup of owned partial files under one configured sync root uses `internal/synctree`.
 - Arbitrary local source/target paths use `internal/localpath`, making the three filesystem trust boundaries explicit instead of routing them through one helper package.
 - `driveops.SessionRuntime` owns the reused Graph HTTP clients together with token-source caching. It chooses target-scoped interactive or sync HTTP profiles by composing the stateless builders in `internal/graphtransport`; callers no longer inject one cache owner into another. Interactive and sync session creation take explicit mount-owned identity instead of a generic resolved-drive wrapper.
 - `driveops.Session` may install a proof hook onto its authenticated Graph clients so successful live file operations can clear stale catalog auth requirements. Pre-authenticated upload and download URLs bypass that hook and do not count as auth proof.
-- Guard `.partial` file cleanup with `ctx.Err() == nil`: a 3.9 GB partial of a 4 GB download should survive Ctrl-C for resume. Only intentional deletions (hash mismatch) should remove partials.
+- Guard owned partial file cleanup with `ctx.Err() == nil`: a 3.9 GB partial of a 4 GB download should survive Ctrl-C for resume. Only intentional deletions (hash mismatch) should remove partials.
 - **Connection-level deadlines** (`internal/graphtransport` transfer profiles): both interactive and sync transfer clients use the shared transfer transport with `ResponseHeaderTimeout: 2m` (detects servers that accept but never respond) and TCP keepalives (30s idle, 10s interval, 3 probes — detects dead connections within ~60s). No `http.Client.Timeout` — transfer duration varies with file size and bandwidth. [verified]
 - Transfer manager resume edge case tests cover corrupt partial file bytes, changed remote content during resume, and oversized partial state. [verified]
 

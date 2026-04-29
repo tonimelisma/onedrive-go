@@ -78,7 +78,7 @@ remote folder move instead of subtree delete/create churn.
 ## `remote_state`
 
 `remote_state` is the durable mirror of what remote observation most recently
-saw. It stores:
+saw for raw manageable provider items. It stores:
 
 - identity: persisted owning `drive_id`, `item_id`
 - materialized path: `path`
@@ -97,6 +97,11 @@ Remote deletion is represented by row absence. If a baseline row exists and the
 corresponding `remote_state` row is missing, later runs rediscover remote delete
 drift from durable state alone.
 
+Product sync filters do not delete `remote_state` rows. Planner loading derives
+filtered remote current-state views from raw `remote_state` so a later config
+change can reveal previously ignored remote truth without a forced remote
+rescan.
+
 ## `local_state`
 
 `local_state` is the durable mirror of the latest admissible local snapshot:
@@ -106,8 +111,10 @@ drift from durable state alone.
 - current filesystem identity: `local_device`, `local_inode`,
   `local_has_identity`
 
-Ignored content does not enter `local_state`. The table stores only current
-local truth that can participate in reconciliation.
+Ignored content does not enter `local_state`. Full local observation replaces
+the table with the latest visible/admissible local truth. Planner loading still
+reapplies the current `ContentFilter` so stale rows from a pre-reload state
+cannot leak into reconciliation.
 
 ## `observation_issues`
 

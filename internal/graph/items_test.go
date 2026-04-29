@@ -183,6 +183,7 @@ func TestGetItem_DecodesParentReferencePath(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "Team Docs/Specs #1", item.ParentPath)
+	assert.True(t, item.ParentPathKnown)
 }
 
 // Validates: R-6.7.23
@@ -205,6 +206,7 @@ func TestGetItem_IgnoresInvalidParentReferencePathEncoding(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Empty(t, item.ParentPath)
+	assert.False(t, item.ParentPathKnown)
 }
 
 // Validates: R-6.7.23
@@ -227,6 +229,7 @@ func TestGetItem_IgnoresParentReferencePathWithoutRootMarker(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Empty(t, item.ParentPath)
+	assert.False(t, item.ParentPathKnown)
 }
 
 // Validates: R-6.7.23
@@ -249,6 +252,7 @@ func TestGetItem_RootParentReferencePathNormalizesToEmptyParentPath(t *testing.T
 	require.NoError(t, err)
 
 	assert.Empty(t, item.ParentPath)
+	assert.True(t, item.ParentPathKnown)
 }
 
 // Validates: R-6.7.16
@@ -524,8 +528,8 @@ func TestListChildren_Empty(t *testing.T) {
 	})
 }
 
-// Validates: R-6.7.8, R-6.7.9
-func TestListChildren_FiltersPackagesAndDecodesNames(t *testing.T) {
+// Validates: R-6.7.8
+func TestListChildren_DecodesNamesAndKeepsPackages(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -543,13 +547,15 @@ func TestListChildren_FiltersPackagesAndDecodesNames(t *testing.T) {
 	items, err := client.ListChildren(t.Context(), driveid.New("d"), "p")
 	require.NoError(t, err)
 
-	assert.Len(t, items, 2)
+	assert.Len(t, items, 3)
 	assert.False(t, items[0].IsFolder)
 	assert.Equal(t, "doc one.pdf", items[0].Name)
 	assert.Equal(t, "application/pdf", items[0].MimeType)
 	assert.True(t, items[1].IsFolder)
 	assert.Equal(t, "Photos & Videos", items[1].Name)
 	assert.Equal(t, 100, items[1].ChildCount)
+	assert.True(t, items[2].IsPackage)
+	assert.Equal(t, "Notebook One", items[2].Name)
 }
 
 func TestListChildren_InvalidNextLink(t *testing.T) {
@@ -1286,6 +1292,15 @@ func TestItemExactRootRelativePath(t *testing.T) {
 			},
 			wantPath: "",
 			wantOK:   false,
+		},
+		{
+			name: "known root parent path is exact",
+			item: &Item{
+				Name:            "notes.txt",
+				ParentPathKnown: true,
+			},
+			wantPath: "notes.txt",
+			wantOK:   true,
 		},
 		{
 			name:     "nil item is not exact",

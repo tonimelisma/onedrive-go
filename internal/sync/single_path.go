@@ -39,7 +39,7 @@ func ObserveSinglePath(
 		base,
 		observeStartNano,
 		hashFunc,
-		LocalFilterConfig{},
+		ContentFilterConfig{},
 		LocalObservationRules{},
 	)
 }
@@ -56,7 +56,7 @@ func ObserveSinglePathWithFilter(
 	base *BaselineEntry,
 	observeStartNano int64,
 	hashFunc func(string) (string, error),
-	filter LocalFilterConfig,
+	filter ContentFilterConfig,
 	rules LocalObservationRules,
 ) (SinglePathObservation, error) {
 	path := nfcNormalize(filepath.ToSlash(relPath))
@@ -92,7 +92,7 @@ func ObserveSinglePathWithFilter(
 func resolveSinglePathWithoutStat(
 	name string,
 	path string,
-	filter LocalFilterConfig,
+	filter ContentFilterConfig,
 	rules LocalObservationRules,
 ) (SinglePathObservation, bool) {
 	if skip := shouldObserveWithFilter(name, path, observedKindUnknown, filter, nil, rules); skip != nil {
@@ -173,7 +173,7 @@ func resolveSinglePathWithInfo(
 	path string,
 	info os.FileInfo,
 	isSymlink bool,
-	filter LocalFilterConfig,
+	filter ContentFilterConfig,
 	rules LocalObservationRules,
 ) (SinglePathObservation, bool) {
 	if info == nil {

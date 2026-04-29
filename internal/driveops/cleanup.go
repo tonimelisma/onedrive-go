@@ -8,13 +8,16 @@ import (
 
 // TransferArtifactCleanupOptions controls local transfer artifact cleanup.
 // SkipDirs entries are rooted slash paths relative to the sync root and are
-// left untouched during partial-file cleanup.
+// left untouched during partial-file cleanup. IncludedDirs narrows cleanup to
+// configured sync-visible containers and their descendants.
 type TransferArtifactCleanupOptions struct {
-	SkipDirs []string
+	SkipDirs            []string
+	IncludedDirs        []string
+	IncludeJunkPartials bool
 }
 
 // CleanTransferArtifacts runs non-critical post-sync housekeeping:
-//   - Deletes orphaned .partial files (always garbage after sync completes)
+//   - Deletes orphaned owned partial files after sync completes
 //   - Cleans expired upload session files from the session store
 //
 // Errors are logged but not propagated — housekeeping should never

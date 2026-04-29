@@ -224,11 +224,11 @@ func addAccountStatusDrives(
 	full *config.Config,
 	account string,
 ) {
-	for cid, drive := range full.Drives {
+	for cid := range full.Drives {
 		if account != "" && cid.Email() != account {
 			continue
 		}
-		filtered.Drives[cid] = drive
+		filtered.Drives[cid] = full.Drives[cid]
 		selectedAccounts[cid.Email()] = struct{}{}
 	}
 }
@@ -340,11 +340,11 @@ func buildStatusAccountsFromViews(
 
 		for _, cid := range driveIDs {
 			d := cfg.Drives[cid]
-			mount := buildConfiguredStatusMount(cid, d, syncQ)
+			mount := buildConfiguredStatusMount(cid, &d, syncQ)
 			children := childrenByParent[cid]
 			for childIndex := range children {
 				mount.ChildMounts = append(mount.ChildMounts, buildChildStatusMount(
-					d,
+					&d,
 					&children[childIndex],
 					syncQ,
 				))
@@ -412,11 +412,11 @@ func buildSingleAccountStatusWith(
 
 	for _, cid := range driveIDs {
 		d := cfg.Drives[cid]
-		mount := buildConfiguredStatusMount(cid, d, syncQ)
+		mount := buildConfiguredStatusMount(cid, &d, syncQ)
 		children := childrenByParent[cid]
 		for childIndex := range children {
 			mount.ChildMounts = append(mount.ChildMounts, buildChildStatusMount(
-				d,
+				&d,
 				&children[childIndex],
 				syncQ,
 			))
@@ -485,9 +485,12 @@ func groupChildMountsByParent(
 
 func buildConfiguredStatusMount(
 	cid driveid.CanonicalID,
-	drive config.Drive,
+	drive *config.Drive,
 	syncQ syncStateQuerier,
 ) statusMount {
+	if drive == nil {
+		return statusMount{}
+	}
 	driveDisplayName := drive.DisplayName
 	if driveDisplayName == "" {
 		driveDisplayName = config.DefaultDisplayName(cid)
@@ -499,7 +502,7 @@ func buildConfiguredStatusMount(
 		CanonicalID:    cid.String(),
 		DisplayName:    driveDisplayName,
 		SyncDir:        drive.SyncDir,
-		State:          driveState(&drive),
+		State:          driveState(drive),
 	}
 	if syncQ != nil {
 		mount.SyncState = syncQ.QuerySyncState(config.DriveStatePath(cid))
@@ -509,7 +512,7 @@ func buildConfiguredStatusMount(
 }
 
 func buildChildStatusMount(
-	parentDrive config.Drive,
+	parentDrive *config.Drive,
 	child *childMountStatusInput,
 	syncQ syncStateQuerier,
 ) statusMount {
@@ -518,7 +521,7 @@ func buildChildStatusMount(
 	}
 	root := child.Root
 	metadata := root.Metadata
-	state := driveState(&parentDrive)
+	state := driveState(parentDrive)
 	statusDetail := root.StateDetail
 	if metadata.DisplayState != "" {
 		state = metadata.DisplayState

@@ -4,12 +4,12 @@ import "strings"
 
 // itemExactRootRelativePath returns the fully reconstructed root-relative path
 // when Graph provided enough information to know the parent path exactly.
-// Root-level items collapse ParentPath to the empty string after normalization,
-// so callers must treat an empty ParentPath as "not exact enough" even though
-// the best-effort leaf may still be correct.
 func itemExactRootRelativePath(item *Item) (string, bool) {
-	if item == nil || item.ParentPath == "" {
+	if item == nil || (item.ParentPath == "" && !item.ParentPathKnown) {
 		return "", false
+	}
+	if item.ParentPath == "" {
+		return item.Name, true
 	}
 
 	return item.ParentPath + "/" + item.Name, true

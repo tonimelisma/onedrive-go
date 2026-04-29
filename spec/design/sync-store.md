@@ -82,6 +82,12 @@ artifacts, not a multisync cache.
 - upserts or deletes `remote_state` rows derived from observation
 - advances `observation_state.cursor`
 
+The store persists the remote observation it is given. It does not own product
+content filtering and does not silently drop configured-junk or ignored-path
+rows. Sync visibility is applied by local observation for `local_state`, by
+planner-visible temp views for `remote_state`, and by remote watch wake
+optimization after raw observation progress has been committed.
+
 Each `remote_state` row persists the true owning remote `drive_id` seen during
 observation. `observation_state.content_drive_id` identifies the remote drive
 for the mounted content root that owns the DB and cursor; it is not the

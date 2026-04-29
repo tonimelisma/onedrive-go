@@ -35,6 +35,7 @@ func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.En
 		TransferWorkers:       mount.transferWorkers(),
 		CheckWorkers:          mount.checkWorkers(),
 		MinFreeSpace:          mount.minFreeSpace(),
+		ContentFilter:         mount.contentFilter(),
 	}
 	if mount.projectionKind() == MountProjectionChild {
 		if err := syncengine.ApplyShortcutChildRunCommandToEngineMountConfig(

@@ -195,7 +195,7 @@ func TestTransferManager_FreshDownload_Success(t *testing.T) {
 	assert.Equal(t, content, got, "file content mismatch")
 
 	// .partial should not exist after successful download.
-	_, statErr := os.Stat(targetPath + ".partial")
+	_, statErr := os.Stat(downloadPartialPath(targetPath))
 	assert.True(t, os.IsNotExist(statErr), "expected .partial to be removed")
 }
 
@@ -217,7 +217,7 @@ func TestTransferManager_FreshDownload_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "network failure")
 
 	// .partial should be cleaned up on non-ctx error.
-	_, statErr := os.Stat(targetPath + ".partial")
+	_, statErr := os.Stat(downloadPartialPath(targetPath))
 	assert.True(t, os.IsNotExist(statErr), "expected .partial to be removed on non-ctx error")
 }
 
@@ -244,7 +244,7 @@ func TestTransferManager_FreshDownload_CtxCancel_PreservesPartial(t *testing.T) 
 	require.Error(t, err)
 
 	// .partial should be preserved on context cancellation.
-	info, statErr := os.Stat(targetPath + ".partial")
+	info, statErr := os.Stat(downloadPartialPath(targetPath))
 	require.NoError(t, statErr, "expected .partial to be preserved")
 
 	assert.NotZero(t, info.Size(), "expected .partial to have data")
@@ -274,7 +274,7 @@ func TestTransferManager_ResumeDownload_Success(t *testing.T) {
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "file.txt")
-	partialPath := targetPath + ".partial"
+	partialPath := downloadPartialPath(targetPath)
 
 	// Pre-create the .partial file with existing data.
 	require.NoError(t, os.WriteFile(partialPath, existingData, 0o600))
@@ -310,7 +310,7 @@ func TestTransferManager_ResumeDownload_CorruptPartial_RetriesFresh(t *testing.T
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "file.txt")
-	partialPath := targetPath + ".partial"
+	partialPath := downloadPartialPath(targetPath)
 	require.NoError(t, os.WriteFile(partialPath, corruptPartial, 0o600))
 
 	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
@@ -347,7 +347,7 @@ func TestTransferManager_ResumeDownload_RemoteChangedDuringResume_RetriesFresh(t
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "changed.txt")
-	partialPath := targetPath + ".partial"
+	partialPath := downloadPartialPath(targetPath)
 	require.NoError(t, os.WriteFile(partialPath, partialData, 0o600))
 
 	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
@@ -394,7 +394,7 @@ func TestTransferManager_ResumeDownload_OversizedPartial_RetriesFresh(t *testing
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "oversized-partial.txt")
-	partialPath := targetPath + ".partial"
+	partialPath := downloadPartialPath(targetPath)
 	require.NoError(t, os.WriteFile(partialPath, oversizedPartial, 0o600))
 
 	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
@@ -456,7 +456,7 @@ func TestTransferManager_ResumeDownload_FallsBackToFreshDownload(t *testing.T) {
 
 			tm := newTestTM(dl, &tmMockUploader{}, nil)
 			targetPath := filepath.Join(t.TempDir(), "file.txt")
-			partialPath := targetPath + ".partial"
+			partialPath := downloadPartialPath(targetPath)
 			require.NoError(t, os.WriteFile(partialPath, tt.partialData, 0o600))
 
 			result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
@@ -1139,7 +1139,7 @@ func TestDownloadToFile_RenameFailure_PreservesPartial(t *testing.T) {
 	assert.Contains(t, err.Error(), "renaming partial")
 
 	// .partial should still exist with correct content.
-	partialPath := targetPath + ".partial"
+	partialPath := downloadPartialPath(targetPath)
 
 	got, readErr := localpath.ReadFile(partialPath)
 	require.NoError(t, readErr, "expected .partial to be preserved")
@@ -1233,7 +1233,7 @@ func TestDownloadToFile_SimpleDownloader_OverwritesPartial(t *testing.T) {
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "file.txt")
-	partialPath := targetPath + ".partial"
+	partialPath := downloadPartialPath(targetPath)
 
 	// Pre-create a .partial file with old content — should be overwritten.
 	require.NoError(t, os.WriteFile(partialPath, []byte("old-partial-data-that-should-go-away"), 0o600))

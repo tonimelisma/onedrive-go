@@ -243,6 +243,12 @@ sync_dir = "~/OneDrive"
 display_name = "home"
 paused = true
 owner = "Alice Smith"
+ignored_dirs = ["node_modules", "build/cache"]
+included_dirs = ["Projects"]
+ignored_paths = ["*.log", "tmp/*"]
+ignore_dotfiles = true
+ignore_junk_files = true
+follow_symlinks = true
 `)
 	cfg, err := Load(path, testLogger(t))
 	require.NoError(t, err)
@@ -253,6 +259,12 @@ owner = "Alice Smith"
 	require.NotNil(t, d.Paused)
 	assert.True(t, *d.Paused)
 	assert.Equal(t, "Alice Smith", d.Owner)
+	assert.Equal(t, []string{"node_modules", "build/cache"}, d.IgnoredDirs)
+	assert.Equal(t, []string{"Projects"}, d.IncludedDirs)
+	assert.Equal(t, []string{"*.log", "tmp/*"}, d.IgnoredPaths)
+	assert.True(t, d.IgnoreDotfiles)
+	assert.True(t, d.IgnoreJunkFiles)
+	assert.True(t, d.FollowSymlinks)
 }
 
 func TestLoad_SharePointDrive(t *testing.T) {
@@ -461,6 +473,12 @@ poll_interval = "10m"
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
 display_name = "home"
+ignored_dirs = ["node_modules"]
+included_dirs = ["Projects"]
+ignored_paths = ["*.tmp"]
+ignore_dotfiles = true
+ignore_junk_files = true
+follow_symlinks = true
 `)
 	resolved, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: path},
@@ -472,6 +490,12 @@ display_name = "home"
 	assert.Equal(t, "home", resolved.DisplayName)
 	assert.Equal(t, "debug", resolved.LogLevel)
 	assert.Equal(t, "10m", resolved.PollInterval)
+	assert.Equal(t, []string{"node_modules"}, resolved.IgnoredDirs)
+	assert.Equal(t, []string{"Projects"}, resolved.IncludedDirs)
+	assert.Equal(t, []string{"*.tmp"}, resolved.IgnoredPaths)
+	assert.True(t, resolved.IgnoreDotfiles)
+	assert.True(t, resolved.IgnoreJunkFiles)
+	assert.True(t, resolved.FollowSymlinks)
 }
 
 // Validates: R-4.3

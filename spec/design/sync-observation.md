@@ -142,6 +142,8 @@ It owns:
   or known shortcut target fields
 - path reconstruction from parent chains
 - move detection against baseline
+- sync-only suppression of Graph package/OneNote items
+- sync-only suppression of Personal Vault content
 - malformed sparse-item rejection
 - mount-root path materialization relative to the engine's configured root
 
@@ -153,13 +155,24 @@ Sparse parent recovery is intentionally layered:
 - first use the delta item directly when it already carries `ParentID`
 - otherwise try one best-effort `GetItem(driveID, itemID)` enrich before
   materializing the path
-- if enrich still leaves the parent missing, fall back to baseline ancestry for
-  path reconstruction when possible
+- if enrich still leaves the parent missing, fall back to exact Graph
+  `parentReference.path` or baseline ancestry for path reconstruction when
+  possible; otherwise fail the batch as `ErrRemoteObservationIncomplete` rather
+  than fabricating a root-level path
 
-Observation does not fail the batch when that enrich step misses or the direct
-read returns an error. The enrich read exists only to reduce sparse-delta blind
-spots before path materialization; durable ancestry still lives in `baseline`,
-not in a second remote-observation store field.
+Observation does not fail merely because the best-effort enrich read returns an
+error. The enrich read exists only to reduce sparse-delta blind spots before
+path materialization; durable ancestry still lives in `baseline`, not in a
+second remote-observation store field. Once materialization still fails after
+those sources are exhausted, the batch is incomplete and the cursor must not
+advance.
+
+Remote observation persists raw manageable `remote_state` rows. Product content
+filters are applied when the engine builds planner-visible local/remote views,
+not by deleting raw remote mirror rows. Delta/watch handling may suppress
+planner wakeups for batches whose emitted events are entirely outside the
+filtered view, but cursor advancement remains tied to successfully committed raw
+observation progress.
 
 Known managed shortcut aliases also use persisted protected-root target metadata
 as a same-binding fallback when Graph returns a sparse moved/renamed shortcut
@@ -170,15 +183,23 @@ placeholder delta as ordinary content or an unavailable new child.
 
 ## Local Observation
 
-`LocalObserver` and `Scanner` observe the whole configured local root. There is
-no user-configured bidirectional narrowing of the synced tree.
+`LocalObserver` and `Scanner` observe the configured local root through the
+drive's compiled `ContentFilter`. The filter is product visibility policy only:
+`included_dirs`, `ignored_dirs`, `ignored_paths`, `ignore_dotfiles`,
+`ignore_junk_files`, and `follow_symlinks`. It is not the owner of provider
+structural exclusions or OneDrive admissibility validation.
 
-`LocalFilterConfig.SkipDirs` is interpreted as a list of root-relative slash
-paths beneath the mount root. A skip entry excludes that exact subtree only; it
-does not exclude every directory elsewhere with the same leaf name. Managed
-shortcut child subtrees are not supplied by the control plane as skip dirs;
-parent engines derive those protected roots from `shortcut_roots` and update
-their own observer/filter state internally.
+Full local observation persists the current visible local snapshot to
+`local_state`. A filter change causes the watch runtime mount to restart; the
+startup/full local observation then rewrites `local_state` under the new
+visibility rules. Local observation also uses the filter early to avoid walking,
+hashing, watching, and reporting issues for ignored or out-of-include paths.
+
+Managed shortcut child subtrees are not configured as ordinary skip dirs.
+Parent engines derive protected roots from `shortcut_roots` and update their
+own observer state internally. Parent shortcut filters are translated into
+child-root-relative `ContentFilter` values when the parent publishes child work
+commands.
 
 Full local scans persist `local_device`, `local_inode`, and
 `local_has_identity` for files and directories on platforms that expose stable
@@ -188,17 +209,20 @@ and keep hash-based file move fallback behavior for files only.
 Built-in local observation policy remains:
 
 - validate OneDrive-invalid names before they become upload work
-- symmetrically ignore junk/temp names before they enter either snapshot surface
-- exclude Personal Vault content
-- support symlink following at the alias path with cycle protection
+- report invalid names, path length, file size, case collisions, read-denied
+  paths, and hash failures as observation issues for visible paths only
+- skip symlinks by default; when `follow_symlinks=true`, observe at the alias
+  path with cycle protection and executor no-follow delete safety
 - keep scanner/watch behavior aligned for hashing and case-collision detection
 
 Ignore invariants:
 
-- ignore policy is symmetric across local and remote observation
-- ignored items never enter `local_state` or `remote_state`
-- if a path is absent from both snapshots, it is just absent from current truth
-- later reconciliation removes baseline rows that are absent from both snapshots
+- product ignore/include policy is symmetric at the planner-visible view
+- ignored local items do not enter `local_state`
+- remote observation persists raw manageable `remote_state`; planner loading
+  filters the remote current-state view before comparison
+- if a baseline path is absent from both filtered current views, reconciliation
+  removes only the baseline row
 
 Observation may emit `SkippedItem`s for invalid or unsupported local content.
 The engine reconciles those findings through one `ObservationFindingsBatch`

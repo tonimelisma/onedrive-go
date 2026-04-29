@@ -169,7 +169,7 @@ func TestDelta_EmptyPage(t *testing.T) {
 	assert.NotEmpty(t, page.DeltaLink)
 }
 
-func TestDelta_NormalizesPackages(t *testing.T) {
+func TestDelta_KeepsPackages(t *testing.T) {
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -189,8 +189,9 @@ func TestDelta_NormalizesPackages(t *testing.T) {
 	page, err := client.Delta(t.Context(), driveid.New("d"), "")
 	require.NoError(t, err)
 
-	assert.Len(t, page.Items, 1)
+	assert.Len(t, page.Items, 2)
 	assert.Equal(t, "file-1", page.Items[0].ID)
+	assert.True(t, page.Items[1].IsPackage)
 }
 
 func TestDelta_InvalidTokenURL(t *testing.T) {
@@ -432,7 +433,7 @@ func TestDeltaFolder_Gone(t *testing.T) {
 	assert.ErrorIs(t, err, ErrGone)
 }
 
-func TestDeltaFolder_NormalizesPackages(t *testing.T) {
+func TestDeltaFolder_KeepsPackages(t *testing.T) {
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -452,8 +453,9 @@ func TestDeltaFolder_NormalizesPackages(t *testing.T) {
 	page, err := client.DeltaFolder(t.Context(), driveid.New("d"), "folder-abc", "")
 	require.NoError(t, err)
 
-	assert.Len(t, page.Items, 1)
+	assert.Len(t, page.Items, 2)
 	assert.Equal(t, "file-1", page.Items[0].ID)
+	assert.True(t, page.Items[1].IsPackage)
 }
 
 func TestDeltaFolderAll_SinglePage(t *testing.T) {

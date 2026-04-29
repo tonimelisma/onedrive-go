@@ -76,7 +76,11 @@ func replaceLocalStateTx(
 }
 
 func listLocalStateRows(ctx context.Context, runner sqlTxRunner) ([]LocalStateRow, error) {
-	rows, err := runner.QueryContext(ctx, sqlListLocalState)
+	return listLocalStateRowsWithQuery(ctx, runner, sqlListLocalState)
+}
+
+func listLocalStateRowsWithQuery(ctx context.Context, runner sqlTxRunner, query string) ([]LocalStateRow, error) {
+	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying local_state: %w", err)
 	}

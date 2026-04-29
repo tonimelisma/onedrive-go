@@ -11,7 +11,6 @@
 //   - shouldObserveWithFilter: unified observation filter (Stage 1: name + path)
 //   - IsOversizedFile:       Stage 2 observation filter (file size > 250GB)
 //   - ValidateOneDriveName:  returns reason + detail for invalid names
-//   - IsAlwaysExcluded:      OneDrive-incompatible name filtering
 //
 // Related files:
 //   - observer_local.go:          LocalObserver struct and Watch() entry point
@@ -25,7 +24,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	slashpath "path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -42,7 +40,6 @@ import (
 
 // Constants for the local scanner.
 const (
-	nosyncFileName         = ".nosync"
 	nanosPerSecond         = 1_000_000_000
 	maxComponentLength     = 255
 	deviceNameWithDigitLen = 4 // COM0-COM9, LPT0-LPT9 have exactly 4 characters
@@ -107,13 +104,6 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 
 	if err := o.validateFullScanRoot(tree, syncRoot); err != nil {
 		return ScanResult{}, err
-	}
-
-	// Guard: abort if .nosync file is present (sync dir may be unmounted).
-	if _, err := tree.Stat(nosyncFileName); err == nil {
-		o.Logger.Warn("nosync guard file detected, aborting scan",
-			slog.String("sync_root", syncRoot))
-		return ScanResult{}, ErrNosyncGuard
 	}
 
 	// Phase 1: Walk — collect observed paths, folder events, hash jobs, and skipped items.
@@ -389,7 +379,7 @@ func (o *LocalObserver) makeWalkFunc(
 		name := nfcNormalize(d.Name())
 
 		if d.Type()&fs.ModeSymlink != 0 {
-			if o.filterConfig.SkipSymlinks {
+			if !NewContentFilter(o.filterConfig).ShouldFollowSymlinks() {
 				o.rememberExcludedSymlink(dbRelPath)
 				observed[dbRelPath] = true
 				o.Logger.Debug("skipping symlink", slog.String("path", dbRelPath))
@@ -1082,15 +1072,16 @@ func (o *LocalObserver) IsOversizedFile(size int64, path string) bool {
 func shouldObserveWithFilter(
 	name, path string,
 	kind observedKind,
-	filter LocalFilterConfig,
+	filter ContentFilterConfig,
 	protectedRoots []ProtectedRoot,
 	rules LocalObservationRules,
 ) *SkippedItem {
-	if IsAlwaysExcluded(name) {
-		return &SkippedItem{} // internal exclusion, not reportable
+	normalizedPath := strings.TrimPrefix(filepath.ToSlash(path), "/")
+	if _, found := protectedRootPathReservation(normalizedPath, protectedRoots); found {
+		return &SkippedItem{}
 	}
 
-	if shouldSkipConfiguredPath(name, path, kind, filter, protectedRoots) {
+	if !NewContentFilter(filter).ShouldObserveLocalPath(path, kind) {
 		return &SkippedItem{}
 	}
 
@@ -1117,91 +1108,9 @@ func dirEntryKind(d fs.DirEntry) observedKind {
 	return observedKindFile
 }
 
-func shouldSkipConfiguredPath(
-	name, path string,
-	kind observedKind,
-	filter LocalFilterConfig,
-	protectedRoots []ProtectedRoot,
-) bool {
-	normalizedPath := strings.TrimPrefix(filepath.ToSlash(path), "/")
-	parts := observedPathParts(normalizedPath)
-	if len(parts) == 0 {
-		return false
-	}
-
-	if filter.SkipDotfiles && hasDotfileComponent(parts) {
-		return true
-	}
-
-	if matchesConfiguredDirPath(normalizedPath, filter.SkipDirs) {
-		return true
-	}
-
-	if _, found := protectedRootPathReservation(normalizedPath, protectedRoots); found {
-		return true
-	}
-
-	if kind == observedKindFile && matchesConfiguredFile(name, normalizedPath, filter.SkipFiles) {
-		return true
-	}
-
-	return false
-}
-
-func observedPathParts(path string) []string {
-	return strings.Split(path, "/")
-}
-
 func hasDotfileComponent(parts []string) bool {
 	for _, part := range parts {
 		if strings.HasPrefix(part, ".") {
-			return true
-		}
-	}
-
-	return false
-}
-
-func matchesConfiguredDirPath(observedPath string, skipDirs []string) bool {
-	if observedPath == "" {
-		return false
-	}
-
-	for _, skipDir := range skipDirs {
-		normalized := strings.TrimPrefix(filepath.ToSlash(skipDir), "/")
-		if normalized == "" {
-			continue
-		}
-
-		cleaned := slashpath.Clean(normalized)
-		if cleaned == "." || cleaned == "" {
-			continue
-		}
-
-		if observedPath == cleaned || strings.HasPrefix(observedPath, cleaned+"/") {
-			return true
-		}
-	}
-
-	return false
-}
-
-func matchesConfiguredFile(name, path string, skipFiles []string) bool {
-	for _, pattern := range skipFiles {
-		normalized := strings.TrimPrefix(filepath.ToSlash(pattern), "/")
-		if normalized == "" {
-			continue
-		}
-
-		if strings.Contains(normalized, "/") {
-			if matched, err := slashpath.Match(normalized, path); err == nil && matched {
-				return true
-			}
-
-			continue
-		}
-
-		if matched, err := slashpath.Match(normalized, name); err == nil && matched {
 			return true
 		}
 	}
@@ -1267,46 +1176,6 @@ func SyncRootExists(syncRoot string) bool {
 
 	info, err := tree.Stat(".")
 	return err == nil && info.IsDir()
-}
-
-// IsAlwaysExcluded returns true for file patterns that must never enter local
-// or remote snapshot state. These are symmetric junk/temp exclusions applied
-// before snapshot persistence on either side.
-//
-// Called on every fsnotify event and every file during FullScan, so we use
-// AsciiLower to avoid the heap allocation that strings.ToLower incurs per call.
-// Suffixes are inlined as explicit checks — no slice allocation, no mutable
-// package-level state, and the compiler inlines the string constants.
-func IsAlwaysExcluded(name string) bool {
-	lower := AsciiLower(name)
-
-	// OS junk and archive detritus.
-	if lower == ".ds_store" || lower == "thumbs.db" || lower == "__macosx" {
-		return true
-	}
-
-	// Extension-based: partial downloads and editor temps.
-	if strings.HasSuffix(lower, ".partial") ||
-		strings.HasSuffix(lower, ".tmp") ||
-		strings.HasSuffix(lower, ".swp") ||
-		strings.HasSuffix(lower, ".crdownload") {
-		return true
-	}
-
-	// Prefix-based: editor backup files (~file) and LibreOffice locks (.~lock).
-	if strings.HasPrefix(name, ".~") {
-		return true
-	}
-
-	if strings.HasPrefix(name, "._") {
-		return true
-	}
-
-	if strings.HasPrefix(name, "~") && !strings.HasPrefix(name, "~$") {
-		return true
-	}
-
-	return false
 }
 
 func validateObservedName(name, path string, rules LocalObservationRules) (reason, detail string) {

@@ -206,6 +206,7 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 
 	dir := t.TempDir()
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(ContentFilterConfig{IgnoreJunkFiles: true})
 
 	events := make(chan ChangeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
@@ -228,19 +229,6 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	<-done
 
 	assert.Equal(t, "valid.txt", ev.Path, "excluded file should be ignored")
-}
-
-func TestWatch_NosyncGuard(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	writeTestFile(t, dir, ".nosync", "")
-
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	events := make(chan ChangeEvent, 10)
-
-	err := obs.Watch(t.Context(), mustOpenSyncTree(t, dir), events)
-	assert.ErrorIs(t, err, ErrNosyncGuard)
 }
 
 func TestLocalWatch_ContextCancellation(t *testing.T) {

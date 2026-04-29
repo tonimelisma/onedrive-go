@@ -86,8 +86,8 @@ func resolvedObservedDirPath(fsPath string) (string, error) {
 	return filepath.Clean(resolved), nil
 }
 
-func shouldSkipObservedSymlink(isSymlink bool, filter LocalFilterConfig) bool {
-	return isSymlink && filter.SkipSymlinks
+func shouldSkipObservedSymlink(isSymlink bool, filter ContentFilterConfig) bool {
+	return isSymlink && !NewContentFilter(filter).ShouldFollowSymlinks()
 }
 
 func (o *LocalObserver) rememberExcludedSymlink(path string) {
@@ -305,7 +305,7 @@ func (o *LocalObserver) walkObservedEntry(
 	entryFsPath := filepath.Join(parentFsPath, entry.Name())
 
 	if entry.Type()&fs.ModeSymlink != 0 {
-		if o.filterConfig.SkipSymlinks {
+		if !NewContentFilter(o.filterConfig).ShouldFollowSymlinks() {
 			o.Logger.Debug("skipping symlink",
 				slog.String("path", entryRelPath))
 			return nil
@@ -549,7 +549,7 @@ func (o *LocalObserver) addObservedChildWatch(
 	childRelPath := joinObservedPath(parentRelPath, childName)
 
 	if entry.Type()&fs.ModeSymlink != 0 {
-		if o.filterConfig.SkipSymlinks {
+		if !NewContentFilter(o.filterConfig).ShouldFollowSymlinks() {
 			o.rememberExcludedSymlink(childRelPath)
 			return nil
 		}

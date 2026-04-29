@@ -110,24 +110,19 @@ func TestDotfileStemExt(t *testing.T) {
 		"Go stdlib: file.txt extension is .txt")
 }
 
-// TestNosyncGuard_PreventsAllSync validates that when a .nosync file
-// is present in the sync root, the observer produces zero events and
-// returns ErrNosyncGuard.
-func TestNosyncGuard_PreventsAllSync(t *testing.T) {
+func TestFullScan_NosyncMarkerDoesNotGuardSync(t *testing.T) {
 	syncRoot := t.TempDir()
 
-	// Create some normal files.
 	writeTestFile(t, syncRoot, "file1.txt", "content1")
 	writeTestFile(t, syncRoot, "file2.txt", "content2")
-
-	// Create the .nosync guard file.
 	writeTestFile(t, syncRoot, ".nosync", "")
 
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
-	require.ErrorIs(t, err, ErrNosyncGuard)
-	assert.Empty(t, result.Events, ".nosync should prevent all events")
+	require.NoError(t, err)
+	assert.Len(t, result.Events, 3)
+	assert.Contains(t, eventPaths(result.Events), ".nosync")
 }
 
 // TestOneDriveInvalidNames_Rejected validates that all OneDrive-invalid
@@ -199,42 +194,8 @@ func TestOneDriveValidNames_Accepted(t *testing.T) {
 	}
 }
 
-// TestAlwaysExcludedSuffixes_DbNotExcluded validates that .db files are NOT
-// excluded (B-308). The sync engine's state DB lives outside the sync
-// directory — .db exclusion only creates false positives for user files.
-func TestAlwaysExcludedSuffixes_DbNotExcluded(t *testing.T) {
-	assert.False(t, IsAlwaysExcluded("data.db-wal"),
-		".db-wal should not be excluded (B-308)")
-	assert.False(t, IsAlwaysExcluded("data.db-shm"),
-		".db-shm should not be excluded (B-308)")
-	assert.False(t, IsAlwaysExcluded("sync.db"),
-		".db should not be excluded (B-308)")
-}
-
-// TestAlwaysExcluded_PrefixPatterns validates that editor backup files
-// (~file) and LibreOffice locks (.~lock) are excluded.
-func TestAlwaysExcluded_PrefixPatterns(t *testing.T) {
-	tests := []struct {
-		name     string
-		excluded bool
-	}{
-		{"~backup.txt", true},
-		{"~$document.docx", false},
-		{".~lock.file", true},
-		{"normal.txt", false},
-		{"file~renamed", false}, // tilde not at start
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.excluded, IsAlwaysExcluded(tt.name),
-				"IsAlwaysExcluded(%q)", tt.name)
-		})
-	}
-}
-
 // TestAsciiLower validates the allocation-free ASCII lowering helper used by
-// IsAlwaysExcluded on every fsnotify event and FullScan entry.
+// bundled junk matching.
 func TestAsciiLower(t *testing.T) {
 	t.Parallel()
 

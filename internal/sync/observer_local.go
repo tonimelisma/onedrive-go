@@ -157,7 +157,7 @@ type LocalObserver struct {
 	Baseline            *Baseline
 	Logger              *slog.Logger
 	checkWorkers        int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
-	filterConfig        LocalFilterConfig
+	filterConfig        ContentFilterConfig
 	protectedRoots      []ProtectedRoot
 	observationRules    LocalObservationRules
 	expectedRootID      *synctree.FileIdentity
@@ -224,15 +224,17 @@ func (o *LocalObserver) SetSkippedChannel(ch chan<- []SkippedItem) {
 	o.skippedCh = ch
 }
 
-// SetFilterConfig installs user-configured local observation filters. The
-// observer copies the slices so later config mutations cannot silently change
-// an already-running watch/scanner.
-func (o *LocalObserver) SetFilterConfig(cfg LocalFilterConfig) {
-	o.filterConfig = LocalFilterConfig{
-		SkipDotfiles: cfg.SkipDotfiles,
-		SkipSymlinks: cfg.SkipSymlinks,
-		SkipDirs:     append([]string(nil), cfg.SkipDirs...),
-		SkipFiles:    append([]string(nil), cfg.SkipFiles...),
+// SetFilterConfig installs per-drive sync content filters. The observer copies
+// slices so later config mutations cannot silently change an already-running
+// watch/scanner.
+func (o *LocalObserver) SetFilterConfig(cfg ContentFilterConfig) {
+	o.filterConfig = ContentFilterConfig{
+		IgnoredDirs:     append([]string(nil), cfg.IgnoredDirs...),
+		IncludedDirs:    append([]string(nil), cfg.IncludedDirs...),
+		IgnoredPaths:    append([]string(nil), cfg.IgnoredPaths...),
+		IgnoreDotfiles:  cfg.IgnoreDotfiles,
+		IgnoreJunkFiles: cfg.IgnoreJunkFiles,
+		FollowSymlinks:  cfg.FollowSymlinks,
 	}
 }
 
@@ -366,7 +368,7 @@ func (o *LocalObserver) EstimateDirCount() int {
 // events to the provided channel. It blocks until the context is canceled,
 // returning nil. A periodic safety scan (every 5 minutes) catches any events
 // that fsnotify may miss (e.g., during brief watcher gaps or platform edge
-// cases). Returns ErrNosyncGuard if the .nosync guard file is present.
+// cases).
 //
 // Channel sizing (B-114): The events channel should be buffered (recommended
 // size: 256). An unbuffered channel blocks on every event. If the channel is
@@ -377,14 +379,6 @@ func (o *LocalObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 	o.Logger.Info("local observer starting watch",
 		slog.String("sync_root", syncRoot),
 	)
-
-	// Guard: abort if .nosync file is present.
-	if _, err := tree.Stat(nosyncFileName); err == nil {
-		o.Logger.Warn("nosync guard file detected, aborting watch",
-			slog.String("sync_root", syncRoot))
-
-		return ErrNosyncGuard
-	}
 
 	watcher, err := o.WatcherFactory()
 	if err != nil {

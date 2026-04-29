@@ -37,6 +37,7 @@ type ExecutorConfig struct {
 	driveID          driveid.ID // mount remote drive context (B-068)
 	remoteRootItemID string     // mounted remote root for mount-root engines; empty = drive root
 	logger           *slog.Logger
+	ignoreJunkFiles  bool
 
 	// transferMgr handles unified download/upload with resume and disk
 	// space pre-checks (R-6.2.6). Disk check is configured via
@@ -89,6 +90,14 @@ func (cfg *ExecutorConfig) SetTransferMgr(mgr *driveops.TransferManager) {
 // Empty keeps the normal owner-drive root semantics.
 func (cfg *ExecutorConfig) SetRemoteRootItemID(itemID string) {
 	cfg.remoteRootItemID = itemID
+}
+
+// SetContentFilter installs executor-relevant cleanup policy from the
+// sync-owned content filter. The executor does not decide visibility; it only
+// needs to know whether ignored junk may be removed when blocking a folder
+// delete.
+func (cfg *ExecutorConfig) SetContentFilter(filter ContentFilterConfig) {
+	cfg.ignoreJunkFiles = filter.IgnoreJunkFiles
 }
 
 // Items returns the item client for direct API access (e.g., for trial

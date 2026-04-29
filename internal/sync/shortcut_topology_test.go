@@ -41,6 +41,7 @@ func TestShortcutChildWorkSnapshotIncludesExplicitCleanupScope(t *testing.T) {
 	publication := shortcutChildWorkSnapshotFromRootsWithParentRoot(
 		shortcutNamespaceTestID,
 		parentRoot,
+		ContentFilterConfig{},
 		[]ShortcutRootRecord{{
 			NamespaceID:       shortcutNamespaceTestID,
 			BindingItemID:     "binding-cleanup",
@@ -65,6 +66,7 @@ func TestShortcutChildWorkSnapshotIncludesExplicitRunnerScope(t *testing.T) {
 	publication := shortcutChildWorkSnapshotFromRootsWithParentRoot(
 		shortcutNamespaceTestID,
 		parentRoot,
+		ContentFilterConfig{},
 		[]ShortcutRootRecord{{
 			NamespaceID:       shortcutNamespaceTestID,
 			BindingItemID:     "binding-run",
@@ -82,6 +84,67 @@ func TestShortcutChildWorkSnapshotIncludesExplicitRunnerScope(t *testing.T) {
 	assert.Equal(t, filepath.Join(parentRoot, "Shortcuts", "Run"), child.Engine.LocalRoot)
 	assert.Equal(t, ShortcutChildRunModeNormal, child.Mode)
 	assert.False(t, child.AckRef.IsZero())
+}
+
+// Validates: R-2.4.8
+func TestShortcutChildWorkSnapshotProjectsParentContentFilter(t *testing.T) {
+	t.Parallel()
+
+	parentRoot := filepath.Join(t.TempDir(), "parent")
+	publication := shortcutChildWorkSnapshotFromRootsWithParentRoot(
+		shortcutNamespaceTestID,
+		parentRoot,
+		ContentFilterConfig{
+			IgnoredDirs:     []string{"Shortcuts/Run/cache"},
+			IncludedDirs:    []string{"Shortcuts/Run/Docs"},
+			IgnoredPaths:    []string{"*.tmp", "Shortcuts/*/Logs", "Other/*.bak"},
+			IgnoreDotfiles:  true,
+			IgnoreJunkFiles: true,
+			FollowSymlinks:  true,
+		},
+		[]ShortcutRootRecord{{
+			NamespaceID:       shortcutNamespaceTestID,
+			BindingItemID:     "binding-run",
+			RelativeLocalPath: "Shortcuts/Run",
+			LocalAlias:        "Run",
+			RemoteDriveID:     driveid.New("remote-drive"),
+			RemoteItemID:      "remote-root",
+			State:             ShortcutRootStateActive,
+		}},
+	)
+
+	require.Len(t, publication.RunCommands, 1)
+	assert.Equal(t, ContentFilterConfig{
+		IgnoredDirs:     []string{"cache"},
+		IncludedDirs:    []string{"Docs"},
+		IgnoredPaths:    []string{"*.tmp", "Logs"},
+		IgnoreDotfiles:  true,
+		IgnoreJunkFiles: true,
+		FollowSymlinks:  true,
+	}, publication.RunCommands[0].Engine.ContentFilter)
+}
+
+// Validates: R-2.4.8
+func TestShortcutChildWorkSnapshotSkipsHiddenAlias(t *testing.T) {
+	t.Parallel()
+
+	parentRoot := filepath.Join(t.TempDir(), "parent")
+	publication := shortcutChildWorkSnapshotFromRootsWithParentRoot(
+		shortcutNamespaceTestID,
+		parentRoot,
+		ContentFilterConfig{IgnoredDirs: []string{"Shortcuts/Run"}},
+		[]ShortcutRootRecord{{
+			NamespaceID:       shortcutNamespaceTestID,
+			BindingItemID:     "binding-run",
+			RelativeLocalPath: "Shortcuts/Run",
+			LocalAlias:        "Run",
+			RemoteDriveID:     driveid.New("remote-drive"),
+			RemoteItemID:      "remote-root",
+			State:             ShortcutRootStateActive,
+		}},
+	)
+
+	assert.Empty(t, publication.RunCommands)
 }
 
 // Validates: R-2.4.8

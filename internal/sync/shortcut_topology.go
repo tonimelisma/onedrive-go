@@ -83,6 +83,7 @@ type ShortcutChildEngineSpec struct {
 	RemoteDriveID     string
 	RemoteItemID      string
 	LocalRootIdentity *ShortcutRootIdentity
+	ContentFilter     ContentFilterConfig
 }
 
 func ValidateShortcutChildRunCommand(command *ShortcutChildRunCommand) (string, error) {
@@ -127,13 +128,18 @@ func ApplyShortcutChildRunCommandToEngineMountConfig(
 	cfg.DriveID = driveid.New(command.Engine.RemoteDriveID)
 	cfg.RemoteRootItemID = command.Engine.RemoteItemID
 	cfg.ExpectedSyncRootIdentity = cloneShortcutRootIdentity(command.Engine.LocalRootIdentity)
+	cfg.ContentFilter = cloneContentFilterConfig(command.Engine.ContentFilter)
 	return nil
 }
 
-func ShortcutChildEngineSpecsEqual(a ShortcutChildEngineSpec, b ShortcutChildEngineSpec) bool {
+func ShortcutChildEngineSpecsEqual(a *ShortcutChildEngineSpec, b *ShortcutChildEngineSpec) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
 	return a.LocalRoot == b.LocalRoot &&
 		a.RemoteDriveID == b.RemoteDriveID &&
 		a.RemoteItemID == b.RemoteItemID &&
+		contentFilterConfigsEqual(a.ContentFilter, b.ContentFilter) &&
 		shortcutRootIdentityPointersEqual(a.LocalRootIdentity, b.LocalRootIdentity)
 }
 
@@ -316,6 +322,7 @@ func cloneShortcutChildRunCommands(commands []ShortcutChildRunCommand) []Shortcu
 			identity := *cloned[i].Engine.LocalRootIdentity
 			cloned[i].Engine.LocalRootIdentity = &identity
 		}
+		cloned[i].Engine.ContentFilter = cloneContentFilterConfig(cloned[i].Engine.ContentFilter)
 	}
 	return cloned
 }
@@ -327,7 +334,8 @@ func shortcutChildRunCommandEqual(a *ShortcutChildRunCommand, b *ShortcutChildRu
 	if shortcutChildRunCommandComparableFor(a) != shortcutChildRunCommandComparableFor(b) {
 		return false
 	}
-	return shortcutRootIdentityPointersEqual(a.Engine.LocalRootIdentity, b.Engine.LocalRootIdentity)
+	return shortcutRootIdentityPointersEqual(a.Engine.LocalRootIdentity, b.Engine.LocalRootIdentity) &&
+		contentFilterConfigsEqual(a.Engine.ContentFilter, b.Engine.ContentFilter)
 }
 
 type shortcutChildRunCommandComparable struct {

@@ -30,6 +30,10 @@ var ErrWatchLimitExhausted = errors.New("sync: inotify watch limit exhausted")
 // resync is required. Returned when the Graph API responds with HTTP 410.
 var ErrDeltaExpired = errors.New("sync: delta token expired (resync required)")
 
+// ErrRemoteObservationIncomplete is returned when remote observation cannot
+// materialize a provider item safely enough to advance the delta cursor.
+var ErrRemoteObservationIncomplete = errors.New("sync: remote observation incomplete")
+
 // ErrMountRootUnavailable is returned when the sync root for a mounted content
 // root is missing or inaccessible. Runtimes treat this as mount lifecycle, not
 // a request to delete remote content below that root.
@@ -42,10 +46,6 @@ var ErrMountRootUnavailable = errors.New("sync: mount root unavailable")
 // ErrSyncRootMissing is returned when the sync root directory does not exist
 // or is not a directory. Callers can match with errors.Is.
 var ErrSyncRootMissing = errors.New("sync: sync root directory does not exist")
-
-// ErrNosyncGuard is returned when a .nosync guard file is present in the
-// sync root, indicating the sync directory may be unmounted or guarded.
-var ErrNosyncGuard = errors.New("sync: .nosync guard file present (sync dir may be unmounted)")
 
 // ErrFileChangedDuringHash is returned when a file's metadata changes between
 // pre-hash stat and post-hash stat, indicating active writing (B-119).
