@@ -185,6 +185,11 @@ type LocalObserver struct {
 	// Set via SetSkippedChannel before Watch.
 	skippedCh chan<- []SkippedItem
 
+	// localBatchCh forwards engine-applied local observation batches. The
+	// observer never writes SQLite directly; the watch runtime owns durable
+	// application of these batches.
+	localBatchCh chan<- localObservationBatch
+
 	// localWatchState owns all watch-loop mutable state. It is embedded so
 	// same-package tests can still reach the existing fields directly while the
 	// runtime contract stays grouped under one owner.
@@ -222,6 +227,10 @@ func NewLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int)
 // scans to the engine. Must be called before Watch. Nil disables forwarding.
 func (o *LocalObserver) SetSkippedChannel(ch chan<- []SkippedItem) {
 	o.skippedCh = ch
+}
+
+func (o *LocalObserver) SetLocalObservationBatchChannel(ch chan<- localObservationBatch) {
+	o.localBatchCh = ch
 }
 
 // SetFilterConfig installs per-drive sync content filters. The observer copies
@@ -300,6 +309,17 @@ func (o *LocalObserver) SetWatcherFactory(fn func() (FsWatcher, error)) {
 // channel is full, the event is dropped and logged at Warn. The safety scan
 // (every 5 minutes) catches any dropped events, providing eventual consistency.
 func (o *LocalObserver) TrySend(ctx context.Context, events chan<- ChangeEvent, ev *ChangeEvent) {
+	if ev != nil {
+		o.TrySendLocalObservationBatch(ctx, localObservationBatchForEvent(ev))
+	}
+	o.TrySendChangeEventOnly(ctx, events, ev)
+}
+
+func (o *LocalObserver) TrySendChangeEventOnly(ctx context.Context, events chan<- ChangeEvent, ev *ChangeEvent) {
+	if events == nil || ev == nil {
+		return
+	}
+
 	select {
 	case events <- *ev:
 		o.recordActivity()
@@ -311,6 +331,41 @@ func (o *LocalObserver) TrySend(ctx context.Context, events chan<- ChangeEvent, 
 			slog.String("type", ev.Type.String()),
 		)
 	}
+}
+
+func (o *LocalObserver) TrySendLocalObservationBatch(ctx context.Context, batch localObservationBatch) {
+	if o.localBatchCh == nil {
+		return
+	}
+
+	select {
+	case o.localBatchCh <- batch:
+		o.recordActivity()
+	case <-ctx.Done():
+	default:
+		o.droppedEvents.Add(1)
+		o.Logger.Warn("local observation batch channel full, marking local truth suspect on maintenance",
+			slog.Bool("full_snapshot", batch.fullSnapshot),
+			slog.Int("rows", len(batch.rows)),
+			slog.Int("deleted_paths", len(batch.deletedPaths)),
+			slog.Int("deleted_prefixes", len(batch.deletedPrefixes)),
+		)
+	}
+}
+
+func (o *LocalObserver) TrySendLocalTruthSuspect(ctx context.Context, reason string) {
+	o.TrySendLocalObservationBatch(ctx, localObservationBatch{
+		markSuspect:    true,
+		recoveryReason: reason,
+	})
+}
+
+func (o *LocalObserver) TrySendFullLocalSnapshot(ctx context.Context, result ScanResult) {
+	o.TrySendLocalObservationBatch(ctx, localObservationBatch{
+		fullSnapshot: true,
+		rows:         buildLocalStateRows(result),
+		dirty:        len(result.Events) > 0 || len(result.Skipped) > 0,
+	})
 }
 
 // DroppedEvents returns the cumulative number of events dropped by TrySend
@@ -331,6 +386,10 @@ func (o *LocalObserver) ResetDroppedEvents() int64 {
 // because the HashRequests channel was full. Safety scans catch these.
 func (o *LocalObserver) DroppedRetries() int64 {
 	return o.droppedRetries.Load()
+}
+
+func (o *LocalObserver) ResetDroppedRetries() int64 {
+	return o.droppedRetries.Swap(0)
 }
 
 // LastActivity returns the time of the most recent event emission.

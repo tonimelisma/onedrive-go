@@ -9,8 +9,40 @@ import (
 
 // handleMaintenanceTick processes a periodic watch summary/maintenance tick.
 func (rt *watchRuntime) handleMaintenanceTick(ctx context.Context) {
+	rt.recoverDroppedLocalObservation(ctx)
 	rt.logWatchSummary(ctx)
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventMaintenanceTickHandled})
+}
+
+func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
+	if rt.localObs == nil {
+		return
+	}
+
+	droppedEvents := rt.localObs.ResetDroppedEvents()
+	droppedRetries := rt.localObs.ResetDroppedRetries()
+	if droppedEvents == 0 && droppedRetries == 0 {
+		return
+	}
+
+	if err := rt.handleWatchLocalObservationBatch(ctx, &localObservationBatch{
+		markSuspect:    true,
+		recoveryReason: LocalTruthRecoveryDroppedEvents,
+	}); err != nil {
+		rt.localObs.droppedEvents.Add(droppedEvents)
+		rt.localObs.droppedRetries.Add(droppedRetries)
+		rt.engine.logger.Warn("mark local truth suspect after dropped observation failed",
+			slog.Int64("dropped_events", droppedEvents),
+			slog.Int64("dropped_hash_requests", droppedRetries),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	rt.engine.logger.Warn("local truth marked suspect after dropped observation",
+		slog.Int64("dropped_events", droppedEvents),
+		slog.Int64("dropped_hash_requests", droppedRetries),
+	)
 }
 
 func (e *Engine) fullRemoteRefreshDelay(ctx context.Context) (time.Duration, error) {

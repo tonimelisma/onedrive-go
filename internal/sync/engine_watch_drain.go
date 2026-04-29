@@ -40,7 +40,7 @@ func (rt *watchRuntime) completeDrainOutbox() {
 
 func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
 	p.replanReady = nil
-	rt.localEvents = nil
+	rt.localBatches = nil
 	rt.remoteBatches = nil
 	rt.skippedItems = nil
 	p.maintenanceC = nil

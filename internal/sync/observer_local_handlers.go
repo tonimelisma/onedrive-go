@@ -83,6 +83,7 @@ func (o *LocalObserver) watchLoop(
 				slog.String("error", watchErr.Error()),
 				slog.Duration("backoff", delay),
 			)
+			o.TrySendLocalTruthSuspect(ctx, LocalTruthRecoveryWatcherError)
 
 			// Exponential backoff prevents tight loop under sustained errors
 			// (e.g., kernel buffer overflow).
@@ -252,6 +253,11 @@ func (o *LocalObserver) handleCreate(
 		Size:   info.Size(),
 		Mtime:  info.ModTime().UnixNano(),
 	}
+	if identity, ok := synctree.IdentityFromFileInfo(info); ok {
+		ev.LocalDevice = identity.Device
+		ev.LocalInode = identity.Inode
+		ev.LocalHasIdentity = true
+	}
 
 	if info.IsDir() {
 		ev.ItemType = ItemTypeFolder
@@ -394,6 +400,11 @@ func (o *LocalObserver) scanNewDirectoryEntry(
 		Hash:     o.stableHashOrEmpty(entryFsPath, entryRelPath),
 		Mtime:    info.ModTime().UnixNano(),
 	}
+	if identity, ok := synctree.IdentityFromFileInfo(info); ok {
+		fileEv.LocalDevice = identity.Device
+		fileEv.LocalInode = identity.Inode
+		fileEv.LocalHasIdentity = true
+	}
 
 	o.TrySend(ctx, events, &fileEv)
 }
@@ -457,6 +468,15 @@ func (o *LocalObserver) scanNewDirectoryChildDir(
 		Path:     entryRelPath,
 		Name:     entryName,
 		ItemType: ItemTypeFolder,
+	}
+	if info, _, err := statObservedPath(entryFsPath); err == nil {
+		dirEv.Size = info.Size()
+		dirEv.Mtime = info.ModTime().UnixNano()
+		if identity, ok := synctree.IdentityFromFileInfo(info); ok {
+			dirEv.LocalDevice = identity.Device
+			dirEv.LocalInode = identity.Inode
+			dirEv.LocalHasIdentity = true
+		}
 	}
 
 	o.TrySend(ctx, events, &dirEv)
@@ -601,6 +621,11 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		Hash:     hash,
 		Mtime:    info.ModTime().UnixNano(),
 	}
+	if identity, ok := synctree.IdentityFromFileInfo(info); ok {
+		ev.LocalDevice = identity.Device
+		ev.LocalInode = identity.Inode
+		ev.LocalHasIdentity = true
+	}
 
 	o.TrySend(ctx, events, &ev)
 }
@@ -691,6 +716,8 @@ func (o *LocalObserver) HandleDelete(
 
 	if existing, ok := o.Baseline.GetByPath(dbRelPath); ok {
 		itemType = existing.ItemType
+	} else if _, ok := o.watchedDirs[filepath.Clean(fsPath)]; ok {
+		itemType = ItemTypeFolder
 	}
 
 	// Remove watch for deleted directories to prevent resource leaks (B-112).
@@ -733,11 +760,14 @@ func (o *LocalObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 	result, err := o.FullScan(ctx, tree)
 	if err != nil {
 		o.Logger.Warn("safety scan failed", slog.String("error", err.Error()))
+		o.TrySendLocalTruthSuspect(ctx, LocalTruthRecoveryFullScanFailed)
 		return
 	}
 
+	o.TrySendFullLocalSnapshot(ctx, result)
+
 	for i := range result.Events {
-		o.TrySend(ctx, events, &result.Events[i])
+		o.TrySendChangeEventOnly(ctx, events, &result.Events[i])
 
 		if ctx.Err() != nil {
 			return
