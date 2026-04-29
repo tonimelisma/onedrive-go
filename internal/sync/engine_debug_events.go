@@ -34,6 +34,18 @@ const (
 	engineDebugEventObservationFindingsReconcileStarted engineDebugEventType = "observation_findings_reconcile_started"
 	engineDebugEventSteadyStateObservationCompleted     engineDebugEventType = "steady_state_observation_completed"
 	engineDebugEventReadyFrontierAppended               engineDebugEventType = "ready_frontier_appended"
+	engineDebugEventPendingReplanSet                    engineDebugEventType = "pending_replan_set"
+	engineDebugEventDispatchPausedForReplan             engineDebugEventType = "dispatch_paused_for_replan"
+	engineDebugEventOldOutboxRetired                    engineDebugEventType = "old_outbox_retired"
+	engineDebugEventWaitingForRunningActions            engineDebugEventType = "waiting_for_running_actions"
+	engineDebugEventRunningActionsDrained               engineDebugEventType = "running_actions_drained"
+	engineDebugEventSteadyStateReplanStarted            engineDebugEventType = "steady_state_replan_started"
+	engineDebugEventLocalTruthRefreshStarted            engineDebugEventType = "local_truth_refresh_started"
+	engineDebugEventLocalTruthRefreshFinished           engineDebugEventType = "local_truth_refresh_finished"
+	engineDebugEventPlanningStarted                     engineDebugEventType = "planning_started"
+	engineDebugEventPlanningFinished                    engineDebugEventType = "planning_finished"
+	engineDebugEventNewPlanInstalled                    engineDebugEventType = "new_plan_installed"
+	engineDebugEventFirstPostReplanDispatch             engineDebugEventType = "first_post_replan_dispatch"
 	engineDebugEventRemoteRefreshStarted                engineDebugEventType = "remote_refresh_started"
 	engineDebugEventRemoteRefreshCommitted              engineDebugEventType = "remote_refresh_committed"
 	engineDebugEventRemoteRefreshApplied                engineDebugEventType = "remote_refresh_applied"
@@ -64,21 +76,28 @@ const (
 )
 
 type engineDebugEvent struct {
-	Type     engineDebugEventType
-	DriveID  string
-	ScopeKey ScopeKey
-	Path     string
-	Observer string
-	Delay    time.Duration
-	Note     string
-	Count    int
-	Error    string
+	At          time.Time
+	Type        engineDebugEventType
+	DriveID     string
+	ScopeKey    ScopeKey
+	Path        string
+	Observer    string
+	Delay       time.Duration
+	Note        string
+	Count       int
+	Outbox      int
+	Running     int
+	IdleWorkers int
+	Error       string
 }
 
 type DebugEvent = engineDebugEvent
 
 //nolint:gocritic // Value semantics are intentional so runtime hooks cannot mutate engine-owned events.
 func (e *Engine) emitDebugEvent(event engineDebugEvent) {
+	if event.At.IsZero() {
+		event.At = e.nowFunc()
+	}
 	if event.DriveID == "" && !e.driveID.IsZero() {
 		event.DriveID = e.driveID.String()
 	}

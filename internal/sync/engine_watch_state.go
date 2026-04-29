@@ -10,6 +10,8 @@ type watchLoopState struct {
 	outbox           []*TrackedAction
 	pendingReplan    dirtyBatch
 	hasPendingReplan bool
+	pendingReplanAt  time.Time
+	postReplanOutbox bool
 
 	// Deduplication: caches the last watch-condition signature and per-scope
 	// shared-folder child-set signatures for watch summaries.
@@ -149,10 +151,16 @@ func (rt *watchRuntime) canPrepareNow() bool {
 }
 
 func (rt *watchRuntime) queuePendingReplan(batch dirtyBatch) {
+	wasPending := rt.loop.hasPendingReplan
 	rt.loop.hasPendingReplan = true
+	if !wasPending {
+		rt.loop.pendingReplanAt = rt.engine.nowFunc()
+		rt.emitRuntimeDebugEvent(engineDebugEventPendingReplanSet, "", 0, time.Time{})
+	}
 	if batch.FullRefresh {
 		rt.loop.pendingReplan.FullRefresh = true
 	}
+	rt.retireOutboxForPendingReplan()
 }
 
 func (rt *watchRuntime) hasPendingReplan() bool {
@@ -167,8 +175,13 @@ func (rt *watchRuntime) takePendingReplan() (dirtyBatch, bool) {
 	batch := rt.loop.pendingReplan
 	rt.loop.pendingReplan = dirtyBatch{}
 	rt.loop.hasPendingReplan = false
+	rt.loop.pendingReplanAt = time.Time{}
 
 	return batch, true
+}
+
+func (rt *watchRuntime) pendingReplanStartedAt() time.Time {
+	return rt.loop.pendingReplanAt
 }
 
 func (rt *watchRuntime) consumeOutboxHead() {
@@ -177,6 +190,71 @@ func (rt *watchRuntime) consumeOutboxHead() {
 	}
 
 	rt.loop.outbox = rt.loop.outbox[1:]
+}
+
+func (rt *watchRuntime) retireOutboxForPendingReplan() {
+	outbox := rt.currentOutbox()
+	if len(outbox) == 0 {
+		if rt.runningCount > 0 {
+			rt.emitRuntimeDebugEvent(engineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
+		}
+		return
+	}
+
+	rt.emitRuntimeDebugEvent(engineDebugEventDispatchPausedForReplan, "", len(outbox), rt.pendingReplanStartedAt())
+	for _, ta := range outbox {
+		rt.markFinished(ta)
+	}
+	rt.replaceOutbox(nil)
+	rt.emitRuntimeDebugEvent(engineDebugEventOldOutboxRetired, "", len(outbox), rt.pendingReplanStartedAt())
+	if rt.runningCount > 0 {
+		rt.emitRuntimeDebugEvent(engineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
+	}
+}
+
+func (rt *watchRuntime) retireReadyFrontierForPendingReplan(ready []*TrackedAction) {
+	if len(ready) == 0 {
+		return
+	}
+	for _, ta := range ready {
+		rt.markFinished(ta)
+	}
+	rt.emitRuntimeDebugEvent(engineDebugEventOldOutboxRetired, "released_ready_frontier", len(ready), rt.pendingReplanStartedAt())
+}
+
+func (rt *watchRuntime) totalWorkers() int {
+	if rt == nil || rt.engine == nil || rt.engine.transferWorkers < 1 {
+		return 0
+	}
+	return rt.engine.transferWorkers
+}
+
+func (rt *watchRuntime) idleWorkers() int {
+	total := rt.totalWorkers()
+	if total <= rt.runningCount {
+		return 0
+	}
+	return total - rt.runningCount
+}
+
+func (rt *watchRuntime) emitRuntimeDebugEvent(
+	eventType engineDebugEventType,
+	note string,
+	count int,
+	start time.Time,
+) {
+	event := engineDebugEvent{
+		Type:        eventType,
+		Note:        note,
+		Count:       count,
+		Outbox:      len(rt.currentOutbox()),
+		Running:     rt.runningCount,
+		IdleWorkers: rt.idleWorkers(),
+	}
+	if !start.IsZero() {
+		event.Delay = rt.engine.since(start)
+	}
+	rt.engine.emitDebugEvent(event)
 }
 
 func (rt *watchRuntime) earliestTrialAt() (time.Time, bool) {

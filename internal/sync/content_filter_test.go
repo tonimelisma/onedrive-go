@@ -19,6 +19,22 @@ func TestContentFilter_IncludedDirsIncludeAncestorsRootsAndDescendants(t *testin
 	assert.False(t, filter.Visible("Notes.txt", ItemTypeFile))
 }
 
+// Validates: R-2.4.11
+func TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths(t *testing.T) {
+	filter := NewContentFilter(ContentFilterConfig{
+		IncludedDirs: []string{"Projects/App"},
+	})
+
+	assert.True(t, filter.ShouldObserveLocalPath("Projects", observedKindUnknown),
+		"unknown watch events for include ancestors must pass pre-stat filtering")
+	assert.True(t, filter.ShouldObserveLocalPath("Projects/App", observedKindUnknown),
+		"unknown watch events for exact include roots must pass pre-stat filtering")
+	assert.True(t, filter.ShouldObserveLocalPath("Projects/App/main.go", observedKindUnknown),
+		"unknown watch events below include roots must still pass as file-capable")
+	assert.False(t, filter.ShouldObserveLocalPath("Projects/Other", observedKindUnknown),
+		"unknown watch events outside included subtrees should stay filtered")
+}
+
 func TestContentFilter_IgnoreWinsOverInclude(t *testing.T) {
 	filter := NewContentFilter(ContentFilterConfig{
 		IncludedDirs: []string{"Projects"},

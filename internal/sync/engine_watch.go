@@ -21,9 +21,11 @@ const (
 	defaultPollInterval = 5 * time.Minute
 	defaultDebounce     = 5 * time.Second
 	watchObservationBuf = 256
-	// watchResultBuf is the buffer size for the action completion channel in watch
-	// mode. Large enough for typical batches without blocking workers.
-	watchResultBuf = 4096
+	watchDispatchBuf    = 0
+	// watchCompletionBuf is the buffer size for the action completion channel in
+	// watch mode. It stays independent from dispatch buffering so workers can
+	// report results without letting old work escape engine-owned outbox control.
+	watchCompletionBuf = 4096
 
 	// maintenanceInterval is how often the watch loop runs summary logging and
 	// maintenance bookkeeping that is independent of action dispatch.
@@ -156,11 +158,12 @@ func (rt *watchRuntime) initWatchInfra(
 	rt.scopeState = NewScopeState(rt.engine.nowFunc, rt.engine.logger)
 	rt.nextActionID = 0
 
-	// dispatchCh feeds admitted actions to workers. Buffer is generous to avoid
-	// backpressure when a batch produces many immediately-ready actions.
-	rt.dispatchCh = make(chan *TrackedAction, watchResultBuf)
+	// dispatchCh feeds admitted actions to workers. Watch mode keeps this
+	// unbuffered so not-yet-started work remains engine-owned until a worker is
+	// actually ready to receive it.
+	rt.dispatchCh = make(chan *TrackedAction, watchDispatchBuf)
 
-	pool := NewWorkerPool(rt.engine.execCfg, rt.dispatchCh, rt.engine.baseline, rt.engine.logger, watchResultBuf)
+	pool := NewWorkerPool(rt.engine.execCfg, rt.dispatchCh, rt.engine.baseline, rt.engine.logger, watchCompletionBuf)
 	pool.Start(ctx, rt.engine.transferWorkers)
 
 	// DirtyBuffer is the watch scheduler boundary. Observation marks coarse

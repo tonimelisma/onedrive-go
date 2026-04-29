@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/worker_result.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go
 
-Implements: R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
+Implements: R-2.3.1 [verified], R-2.8.6 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
 
 ## Overview
 
@@ -37,6 +37,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestConflictCopyPath_Normal` |
 | Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes requeue for replan instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition` |
 | Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork` |
+| Watch-mode pending replan keeps old-runtime work out of dispatch once it is no longer current. | `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction` |
 
 ## Worker And Dependency Model
 
@@ -47,7 +48,11 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 - which dependents become ready after completion
 
 Workers run independent actions concurrently up to the configured worker limit.
-The engine owns the worker pool lifecycle and completion drain.
+The engine owns the worker pool lifecycle and completion drain. In watch mode,
+the worker dispatch channel is intentionally unbuffered so not-yet-started
+actions remain in the engine-owned outbox until a worker is ready to receive
+one. The worker completion channel remains separately buffered so workers can
+report completed actions without reintroducing a hidden dispatch backlog.
 
 The dependency graph is dependency-only. It no longer defines runtime
 quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,
@@ -58,6 +63,12 @@ settle checks instead. When shutdown has already started, the engine still
 processes late worker completions for bookkeeping, but it immediately converts
 any newly-ready frontier back into shutdown completion instead of reopening the
 dispatch path.
+
+When watch mode has a pending replan, newly-ready concrete frontier from the old
+runtime is likewise not reopened into dispatch. The engine retires
+not-yet-dispatched old outbox work and any dependents released by already-running
+old actions without completing those dependency nodes as success. The next
+runtime plan is rebuilt from current truth and durable retry/block state.
 
 When the dependency graph releases `ActionUpdateSynced` or `ActionCleanup`,
 the engine does not spend worker capacity on them. It commits the matching
