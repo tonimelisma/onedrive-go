@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_local_collisions.go, internal/sync/observer_remote.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/item_converter.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/symlink_observation.go, internal/sync/single_path.go
 
-Implements: R-2.1.2 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified]
+Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified]
 
 ## Overview
 
@@ -50,6 +50,7 @@ The observation stack has four main pieces:
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly, including filesystem identity for files and directories when available. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestFullScan_StoresFilesystemIdentityForFilesAndDirectories`, `TestNosyncGuard_PreventsAllSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
 | Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child work commands to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
+| Local watch prefiltering keeps unknown-kind include-root and include-ancestor events observable until stat/type-aware observation can decide the exact item kind. | `TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths` |
 
 ## Remote Observation
 
@@ -273,5 +274,11 @@ issues, and block scopes unchanged during preview.
 - keep one pending coarse dirty signal plus a full-refresh bit
 - flush deterministically on shutdown/final drain
 
-It is not a durable queue, not a semantic event journal, and not a second
-source of truth.
+It is not a durable queue, not a semantic event journal, not a second planning
+input, and not a second source of truth. Local watch prefiltering still has to
+be directory-capable before stat/type resolution: when an fsnotify event arrives
+with unknown kind, content filtering treats the path as visible if either a file
+or a directory at that path could be sync-visible. That preserves timely watch
+behavior for exact included directory roots and include ancestors while the later
+stat/type-aware observation stage performs the authoritative file-vs-directory
+decision.

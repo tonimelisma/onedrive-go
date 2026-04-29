@@ -128,6 +128,138 @@ func TestWatchRuntime_RunNonDrainingWatchStep_ConsumesReplanReady(t *testing.T) 
 	}
 }
 
+// Validates: R-2.8.6
+func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	eng.transferWorkers = 2
+	recorder := attachDebugEventRecorder(eng)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+
+	queued := rt.depGraph.Add(&Action{
+		Type:    ActionDownload,
+		Path:    "old.txt",
+		DriveID: eng.driveID,
+		ItemID:  "old-item",
+	}, 1, nil)
+	require.NotNil(t, queued)
+	rt.markQueued(queued)
+	rt.replaceOutbox([]*TrackedAction{queued})
+
+	rt.queuePendingReplan(dirtyBatch{})
+
+	assert.True(t, rt.hasPendingReplan())
+	assert.True(t, rt.canPrepareNow())
+	assert.Empty(t, rt.currentOutbox())
+	assert.Empty(t, rt.queuedByID)
+	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "retiring old outbox must not complete dependency nodes as success")
+	recorder.requireEventCount(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventOldOutboxRetired && event.Count == 1
+	}, 1, "pending replan should emit retired outbox count")
+	recorder.requireEventCount(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventDispatchPausedForReplan &&
+			!event.At.IsZero() &&
+			event.Count == 1 &&
+			event.Outbox == 1 &&
+			event.Running == 0 &&
+			event.IdleWorkers == 2
+	}, 1, "pending replan should record queue and idle-worker counters before retiring old outbox")
+	recorder.requireEventCount(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventOldOutboxRetired &&
+			!event.At.IsZero() &&
+			event.Delay == 0 &&
+			event.Count == 1 &&
+			event.Outbox == 0 &&
+			event.Running == 0 &&
+			event.IdleWorkers == 2
+	}, 1, "retired outbox instrumentation should record timestamped post-retirement counters")
+}
+
+// Validates: R-2.8.6
+func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	eng.transferWorkers = 2
+	recorder := attachDebugEventRecorder(eng)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	root := rt.depGraph.Add(&Action{
+		Type:    ActionDownload,
+		Path:    "parent.txt",
+		DriveID: eng.driveID,
+		ItemID:  "parent-item",
+	}, 1, nil)
+	require.NotNil(t, root)
+	child := rt.depGraph.Add(&Action{
+		Type:    ActionDownload,
+		Path:    "child.txt",
+		DriveID: eng.driveID,
+		ItemID:  "child-item",
+	}, 2, []int64{1})
+	require.Nil(t, child)
+	rt.markRunning(root)
+	rt.queuePendingReplan(dirtyBatch{})
+
+	err = rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
+		Path:       "parent.txt",
+		ItemID:     "parent-item",
+		DriveID:    eng.driveID,
+		ActionType: ActionDownload,
+		Success:    true,
+		ActionID:   1,
+	})
+
+	require.NoError(t, err)
+	assert.True(t, rt.hasPendingReplan())
+	assert.True(t, rt.canPrepareNow())
+	assert.Empty(t, rt.currentOutbox(), "ready dependents from old graph should not be appended while replan is pending")
+	assert.Empty(t, rt.queuedByID)
+	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "released child should remain uncompleted until replacement runtime is installed")
+	recorder.requireEventCount(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventWaitingForRunningActions &&
+			!event.At.IsZero() &&
+			event.Running == 1 &&
+			event.IdleWorkers == 1
+	}, 1, "pending replan should record that old running work is still draining")
+	recorder.requireEventCount(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventOldOutboxRetired &&
+			event.Note == "released_ready_frontier" &&
+			!event.At.IsZero() &&
+			event.Count == 1 &&
+			event.Outbox == 0 &&
+			event.Running == 0 &&
+			event.IdleWorkers == 2
+	}, 1, "ready dependents released by old running work should be timestamped as retired frontier")
+}
+
+// Validates: R-2.8.6
+func TestWatchRuntime_InitWatchInfraUsesUnbufferedDispatch(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	eng.transferWorkers = 1
+	rt := newWatchRuntime(eng.Engine)
+	ctx, cancel := context.WithCancel(t.Context())
+
+	pipe, err := rt.initWatchInfra(ctx, SyncBidirectional, WatchOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, pipe)
+	defer func() {
+		cancel()
+		pipe.cleanup()
+	}()
+
+	assert.Equal(t, watchDispatchBuf, cap(rt.dispatchCh))
+	assert.Equal(t, 0, cap(rt.dispatchCh), "watch dispatch must stay unbuffered so queued work remains engine-owned")
+	assert.Equal(t, watchCompletionBuf, cap(pipe.completions))
+}
+
 // Validates: R-2.4.8
 func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T) {
 	t.Parallel()
