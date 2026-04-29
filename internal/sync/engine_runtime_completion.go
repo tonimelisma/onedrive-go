@@ -77,6 +77,11 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 	case errclass.ClassShutdown:
 		flow.applyCompletedSubtree(current, r.ActionID, "shutdown action completion")
 		return nil, nil
+	case errclass.ClassSuperseded:
+		if err := flow.applySupersededCompletion(ctx, watch, current, r, "superseded action completion"); err != nil {
+			return nil, flow.failAfterControlStateError(current, err)
+		}
+		return nil, nil
 	case errclass.ClassFatal:
 		flow.applyCompletedSubtree(current, r.ActionID, "fatal action completion")
 		flow.applyFatalAuthEffects(ctx, watch, r, decision.ConditionKey)
@@ -100,6 +105,16 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 	r *ActionCompletion,
 	bl *Baseline,
 ) ([]*TrackedAction, error) {
+	if decision.Class == errclass.ClassSuperseded {
+		if err := flow.applySupersededCompletion(ctx, watch, current, r, "trial superseded action completion"); err != nil {
+			return nil, flow.failAfterControlStateError(current, err)
+		}
+		if err := flow.rearmOrDiscardScope(ctx, watch, trialScopeKey); err != nil {
+			return nil, flow.failAfterControlStateError(nil, err)
+		}
+		return nil, nil
+	}
+
 	switch evaluateScopeTrialOutcome(trialScopeKey, decision) {
 	case scopeTrialOutcomeRelease:
 		dispatched, err := flow.applyTrialReleaseDecision(ctx, watch, current, r, trialScopeKey)
@@ -130,6 +145,29 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 	}
 
 	return nil, nil
+}
+
+func (flow *engineFlow) applySupersededCompletion(
+	ctx context.Context,
+	watch *watchRuntime,
+	current *TrackedAction,
+	r *ActionCompletion,
+	depGraphReason string,
+) error {
+	if err := flow.clearRetryWorkOnSuperseded(ctx, r, current); err != nil {
+		return err
+	}
+
+	actionID := int64(0)
+	if r != nil {
+		actionID = r.ActionID
+	}
+	flow.applyCompletedSubtree(current, actionID, depGraphReason)
+	if watch != nil && watch.dirtyBuf != nil {
+		watch.dirtyBuf.MarkDirty()
+	}
+
+	return nil
 }
 
 func (flow *engineFlow) applyCompletionSuccess(

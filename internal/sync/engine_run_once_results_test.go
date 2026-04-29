@@ -111,6 +111,55 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 	assert.True(t, required)
 }
 
+// Validates: R-2.8.7, R-2.10.5
+func TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOrRetry(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	runner := newOneShotRunner(eng.Engine)
+	runner.depGraph = NewDepGraph(eng.logger)
+	runner.dispatchCh = make(chan *TrackedAction, 1)
+
+	root := runner.depGraph.Add(&Action{
+		Type: ActionUpload,
+		Path: "root.txt",
+	}, 1, nil)
+	require.NotNil(t, root)
+	runner.markRunning(root)
+
+	child := runner.depGraph.Add(&Action{
+		Type: ActionDownload,
+		Path: "child.txt",
+	}, 2, []int64{1})
+	assert.Nil(t, child)
+
+	outbox, err := runner.handleOneShotCompletion(
+		t.Context(),
+		nil,
+		nil,
+		nil,
+		nil,
+		&ActionCompletion{
+			ActionID:   1,
+			Path:       "root.txt",
+			ActionType: ActionUpload,
+			Err:        ErrActionPreconditionChanged,
+			ErrMsg:     "source changed",
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Empty(t, outbox)
+	assert.Equal(t, 0, runner.depGraph.InFlightCount())
+	assert.Equal(t, 0, runner.runningCount)
+	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+
+	succeeded, failed, errs := runner.resultStats()
+	assert.Equal(t, 0, succeeded)
+	assert.Equal(t, 0, failed)
+	assert.Empty(t, errs)
+}
+
 // Validates: R-2.10.5
 func TestEngineFlow_CompleteQueuedDispatchAsShutdown_CompletesQueuedSubtree(t *testing.T) {
 	t.Parallel()

@@ -47,6 +47,12 @@ func commandFailurePresentationForClass(class errclass.Class) commandFailurePres
 			Action:   "rerun the command if you still want the work completed",
 			ExitCode: 1,
 		}
+	case errclass.ClassSuperseded:
+		return commandFailurePresentation{
+			Reason:   "the command work was superseded by newer sync truth",
+			Action:   "rerun the command if you still want the work completed",
+			ExitCode: 1,
+		}
 	case errclass.ClassActionable:
 		return commandFailurePresentation{
 			Reason:   "the command needs user action before it can succeed",
