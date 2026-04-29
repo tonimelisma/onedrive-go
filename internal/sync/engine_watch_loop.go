@@ -126,7 +126,7 @@ func (rt *watchRuntime) runPendingWatchReplan(
 		return true, err
 	}
 	if !applied {
-		rt.reschedulePendingReplan(batch)
+		return true, rt.rescheduleReplanIntent(batch)
 	}
 
 	return true, nil
@@ -440,8 +440,14 @@ func (rt *watchRuntime) handleWatchReplanReady(
 		return nil
 	}
 
-	_, err := rt.runSteadyStateReplan(ctx, p, batch)
-	return err
+	applied, err := rt.runSteadyStateReplan(ctx, p, batch)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		return rt.rescheduleReplanIntent(batch)
+	}
+	return nil
 }
 
 func (rt *watchRuntime) handleWatchActionCompletion(

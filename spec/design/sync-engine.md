@@ -335,10 +335,12 @@ retired instead of appended to the old outbox. Once running work settles, the
 loop rebuilds from current committed truth plus durable `retry_work` /
 `block_scopes`. If local observation fails before that replacement runtime is
 installed, the retired work stays retired and the same dirty/full-refresh intent
-is rescheduled through `DirtyBuffer` instead of being dropped. The idle
-watch-step owner still receives debounced coarse dirty hints directly; an empty
-outbox does not mean steady-state replans can be deferred until some other watch
-event arrives.
+is rescheduled through `DirtyBuffer` instead of being dropped. The same
+reschedule rule applies when an idle runtime consumes a ready dirty signal
+directly and local observation fails before a replacement runtime is installed.
+The idle watch-step owner still receives debounced coarse dirty hints directly;
+an empty outbox does not mean steady-state replans can be deferred until some
+other watch event arrives.
 
 Retry/trial is not an alternate planner. Timer-driven follow-up only
 re-releases exact held actions that are already part of the current runtime.

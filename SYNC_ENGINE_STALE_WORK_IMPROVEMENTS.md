@@ -23,9 +23,10 @@ Implemented in this increment:
    observation can stat them.
 6. A replan signal that is already ready wins before another old outbox action
    can be handed to a worker.
-7. If a pending replan has retired old outbox work but local observation fails
-   before replacement runtime installation, the dirty intent is rescheduled
-   through `DirtyBuffer` instead of leaving the runtime empty.
+7. If a replan reaches local observation but fails before replacement runtime
+   installation, the dirty intent is rescheduled through `DirtyBuffer` instead
+   of being dropped. This applies both to pending replans that already retired
+   old outbox work and to direct idle replans with no old work to retire.
 
 Still follow-up work:
 

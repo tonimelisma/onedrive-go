@@ -210,6 +210,47 @@ func TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal
 }
 
 // Validates: R-2.8.6
+func TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		fullRefresh bool
+	}{
+		{name: "dirty", fullRefresh: false},
+		{name: "full_refresh", fullRefresh: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			eng, syncRoot := newTestEngine(t, &engineMockClient{})
+			setupWatchEngine(t, eng)
+			rt := testWatchRuntime(t, eng)
+			rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+			bl, err := eng.baseline.Load(t.Context())
+			require.NoError(t, err)
+			require.NoError(t, os.RemoveAll(syncRoot))
+
+			err = rt.handleWatchReplanReady(t.Context(), &watchPipeline{
+				runtime: rt,
+				bl:      bl,
+				mode:    SyncBidirectional,
+			}, dirtyBatch{FullRefresh: tc.fullRefresh})
+
+			require.NoError(t, err)
+			assert.False(t, rt.hasPendingReplan())
+			assert.Empty(t, rt.currentOutbox())
+			assert.Empty(t, rt.queuedByID)
+			assert.Equal(t, 0, rt.runningCount)
+			assert.Equal(t, 0, rt.depGraph.InFlightCount())
+			batch := rt.dirtyBuf.FlushImmediate()
+			require.NotNil(t, batch)
+			assert.Equal(t, tc.fullRefresh, batch.FullRefresh)
+		})
+	}
+}
+
+// Validates: R-2.8.6
 func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	t.Parallel()
 
