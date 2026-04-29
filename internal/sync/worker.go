@@ -160,6 +160,11 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 
 	defer cancel()
 
+	if freshnessErr := wp.validateActionFreshness(actionCtx, ta); freshnessErr != nil {
+		wp.sendResult(ctx, ta, nil, freshnessErr)
+		return
+	}
+
 	// Load baseline (cached after first call).
 	bl, loadErr := wp.baseline.Load(actionCtx)
 	if loadErr != nil {
@@ -193,6 +198,22 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 
 	wp.sendResult(ctx, ta, &outcome, outcome.Error)
 	// NO depGraph.Complete() — engine owns completion decisions.
+}
+
+func (wp *WorkerPool) validateActionFreshness(ctx context.Context, ta *TrackedAction) error {
+	if ta == nil {
+		return nil
+	}
+
+	decision, err := evaluateActionFreshnessFromStore(ctx, wp.baseline, &ta.Action)
+	if err != nil {
+		return err
+	}
+	if decision.Fresh {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %s", ErrActionPreconditionChanged, decision.Reason)
 }
 
 // dispatchAction routes a tracked action to the appropriate executor method.

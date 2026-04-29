@@ -1,8 +1,8 @@
 # Sync Execution
 
-GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/worker_result.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go
+GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/worker_result.go, internal/sync/action_freshness.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go
 
-Implements: R-2.3.1 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
+Implements: R-2.3.1 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
 
 ## Overview
 
@@ -36,6 +36,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | --- | --- |
 | Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestConflictCopyPath_Normal` |
 | Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
+| Worker-start validation rejects already-submitted stale actions before executor side effects, while suspect local truth disables local-state-based rejection. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState` |
 | Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork` |
 | Watch-mode replan keeps old-runtime work out of dispatch once it is no longer current and preserves dirty intent across recoverable local-observation failure. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal`, `TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal` |
 
@@ -56,6 +57,22 @@ report completed actions without reintroducing a hidden dispatch backlog.
 When a replan signal is already ready, the watch loop consumes it before
 enabling the dispatch send for the current step, so the old outbox is retired
 instead of racing an idle worker receive.
+
+Before a worker begins executor work, it validates the exact action against
+latest committed truth using the shared action-freshness predicate. A stale
+worker-start action returns `ErrActionPreconditionChanged`, so the engine
+classifies it as superseded instead of ordinary retry. This gate runs before
+hashing, upload-session creation, download writes, delete/move mutation, or
+other executor side effects. It is intentionally not a second planner: it only
+rejects when current truth disproves the exact planned assumptions. Local
+absence or presence can reject only while `local_truth_complete` is true;
+suspect local truth leaves local-state-based rejection to the next full local
+refresh. Remote-state changes can reject when committed remote truth proves a
+path, item identity, hash, or eTag assumption false. Move actions additionally
+check the source/destination peer path that is not represented by the main
+`PathView`, so a changed local source, reappeared remote source, missing local
+move destination, or occupied remote move destination supersedes the old move
+before side effects.
 
 The dependency graph is dependency-only. It no longer defines runtime
 quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,

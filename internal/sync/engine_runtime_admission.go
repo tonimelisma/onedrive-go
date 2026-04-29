@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -30,8 +31,43 @@ func (flow *engineFlow) admitReady(
 	watch *watchRuntime,
 	ready []*TrackedAction,
 ) ([]*TrackedAction, error) {
-	decisions := flow.decideAdmission(flow.engine.nowFunc(), ready)
+	fresh, err := flow.filterFreshReadyActions(ctx, watch, ready)
+	if err != nil {
+		return nil, err
+	}
+
+	decisions := flow.decideAdmission(flow.engine.nowFunc(), fresh)
 	return flow.applyAdmissionDecisions(ctx, watch, decisions)
+}
+
+func (flow *engineFlow) filterFreshReadyActions(
+	ctx context.Context,
+	watch *watchRuntime,
+	ready []*TrackedAction,
+) ([]*TrackedAction, error) {
+	fresh := make([]*TrackedAction, 0, len(ready))
+	for _, ta := range ready {
+		if ta == nil {
+			continue
+		}
+
+		decision, err := evaluateActionFreshnessFromStore(ctx, flow.engine.baseline, &ta.Action)
+		if err != nil {
+			return fresh, err
+		}
+		if decision.Fresh {
+			fresh = append(fresh, ta)
+			continue
+		}
+
+		completionErr := fmt.Errorf("%w: %s", ErrActionPreconditionChanged, decision.Reason)
+		completion := actionCompletionFromTrackedAction(ta, nil, completionErr)
+		if err := flow.applySupersededCompletion(ctx, watch, ta, &completion, "admission stale action"); err != nil {
+			return fresh, err
+		}
+	}
+
+	return fresh, nil
 }
 
 func (flow *engineFlow) decideAdmission(
