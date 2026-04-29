@@ -214,6 +214,41 @@ func TestAddWatchesRecursive_SkipsSymlinksByDefault(t *testing.T) {
 	assert.False(t, tracker.addedPaths[symlinkDir], "symlinked directory should be skipped by default")
 }
 
+// Validates: R-2.4.2, R-2.4.5
+func TestAddWatchesRecursive_RespectsIncludeAndIgnoreDirs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	for _, rel := range []string{
+		"Projects/src",
+		"Projects/build",
+		"Archive",
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, filepath.FromSlash(rel)), 0o700))
+	}
+
+	tracker := &addTrackingWatcher{
+		events:     make(chan fsnotify.Event, 10),
+		errs:       make(chan error, 10),
+		addedPaths: make(map[string]bool),
+	}
+
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(ContentFilterConfig{
+		IncludedDirs: []string{"Projects"},
+		IgnoredDirs:  []string{"Projects/build"},
+	})
+
+	err := obs.AddWatchesRecursive(t.Context(), tracker, mustOpenSyncTree(t, root))
+	require.NoError(t, err)
+
+	assert.True(t, tracker.addedPaths[root], "expected root to be watched")
+	assert.True(t, tracker.addedPaths[filepath.Join(root, "Projects")], "expected included root to be watched")
+	assert.True(t, tracker.addedPaths[filepath.Join(root, "Projects", "src")], "expected included child to be watched")
+	assert.False(t, tracker.addedPaths[filepath.Join(root, "Projects", "build")], "ignored dir should not be watched")
+	assert.False(t, tracker.addedPaths[filepath.Join(root, "Archive")], "out-of-include dir should not be watched")
+}
+
 // addTrackingWatcher implements FsWatcher and records which paths are added.
 type addTrackingWatcher struct {
 	events     chan fsnotify.Event
