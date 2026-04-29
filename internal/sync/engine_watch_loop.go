@@ -114,10 +114,12 @@ func (rt *watchRuntime) runPendingWatchReplan(
 		return false, nil
 	}
 
+	pendingStartedAt := rt.pendingReplanStartedAt()
 	batch, ok := rt.takePendingReplan()
 	if !ok {
 		return false, nil
 	}
+	rt.emitRuntimeDebugEvent(engineDebugEventRunningActionsDrained, "", 0, pendingStartedAt)
 
 	return true, rt.runSteadyStateReplan(ctx, p, batch)
 }
@@ -170,8 +172,13 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 }
 
 func (rt *watchRuntime) handleWatchDispatch(nextAction *TrackedAction) {
+	postReplanDispatch := rt.loop.postReplanOutbox
+	rt.loop.postReplanOutbox = false
 	rt.markRunning(nextAction)
 	rt.consumeOutboxHead()
+	if postReplanDispatch {
+		rt.emitRuntimeDebugEvent(engineDebugEventFirstPostReplanDispatch, "", 0, time.Time{})
+	}
 }
 
 func (rt *watchRuntime) handleWatchReplanSignal(
@@ -324,6 +331,10 @@ func (rt *watchRuntime) handleWatchHeldReleaseSignal(
 }
 
 func (rt *watchRuntime) appendReadyFrontier(ready []*TrackedAction) error {
+	if rt.hasPendingReplan() {
+		rt.retireReadyFrontierForPendingReplan(ready)
+		return nil
+	}
 	nextOutbox := append(rt.currentOutbox(), ready...)
 	rt.replaceOutbox(nextOutbox)
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReadyFrontierAppended})
@@ -388,6 +399,9 @@ func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *TrackedAction, *Trac
 
 	if rt.isDraining() {
 		rt.mustAssertDispatchAdmissionSealed(rt, outbox, "dispatch channel for outbox")
+		return nil, nil
+	}
+	if rt.hasPendingReplan() {
 		return nil, nil
 	}
 

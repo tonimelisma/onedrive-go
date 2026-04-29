@@ -77,8 +77,13 @@ func (f ContentFilter) Visible(path string, itemType ItemType) bool {
 // path kind before the sync ItemType has been built.
 func (f ContentFilter) ShouldObserveLocalPath(path string, kind observedKind) bool {
 	itemType := ItemTypeFile
-	if kind == observedKindDir {
+	switch kind {
+	case observedKindFile:
+		itemType = ItemTypeFile
+	case observedKindDir:
 		itemType = ItemTypeFolder
+	case observedKindUnknown:
+		return f.Visible(path, ItemTypeFile) || f.Visible(path, ItemTypeFolder)
 	}
 
 	return f.Visible(path, itemType)

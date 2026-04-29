@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine*.go, internal/sync/engine_watch*.go, internal/sync/engine_runtime*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/protected_roots.go, internal/sync/shortcut_root_lifecycle.go, internal/sync/shortcut_root_transition.go, internal/sync/shortcut_root_publication.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
-Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
+Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
 
 ## Overview
 
@@ -67,6 +67,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 | Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
 | Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child work snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestShortcutRootTransitionMatrixEnumeratesEveryStateAndEvent`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroValueReturnsError` |
+| Pending watch replans retire old-runtime work that has not started yet, including dependents released by already-running old actions, and leave replacement work to a fresh plan from current truth. | `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction` |
 
 ## Construction
 
@@ -289,6 +290,11 @@ distinct shutdown shell instead of routing bootstrap, idle, and outbox cases
 through overlapping wrappers.
 Engine debug events expose those lifecycle points for tests and diagnostics
 only; they do not own or redirect control flow.
+Watch replan debug events include timestamped pending-replan, old-outbox
+retirement, running-drain, local-observation, planning, new-plan, and
+first-post-replan-dispatch stages. Each event carries outbox, running, and idle
+worker counts so production/debug traces can distinguish workers waiting on
+legitimate replanning from coordinator stalls.
 Refresh timer callbacks and full-refresh goroutines signal through stable
 runtime-owned channels for the lifetime of the watch session. The watch loop
 disables select cases by phase instead of mutating those channel pointers
@@ -314,11 +320,19 @@ has been reached.
 
 Watch runtime replacement is linear: one current runtime graph at a time.
 Dirty observation while work is still queued or running sets a pending replan
-flag instead of appending a second graph into the current runtime. Once the
-runtime reaches the idle boundary, the loop rebuilds from current committed
-truth plus durable `retry_work` / `block_scopes`. The idle watch-step owner
-still receives debounced coarse dirty hints directly; an empty outbox does not
-mean steady-state replans can be deferred until some other watch event arrives.
+flag instead of appending a second graph into the current runtime. Setting that
+flag retires not-yet-dispatched old outbox actions as superseded runtime work:
+the engine removes them from queued state, does not mark them successful, does
+not admit their dependents, and does not create ordinary retry rows for them.
+Already-running or already-submitted worker actions are not automatically
+invalidated by the old plan becoming replaceable; they continue through normal
+completion and executor-side precondition policy. If such a completion releases
+new dependents while a pending replan exists, that newly-ready frontier is also
+retired instead of appended to the old outbox. Once running work settles, the
+loop rebuilds from current committed truth plus durable `retry_work` /
+`block_scopes`. The idle watch-step owner still receives debounced coarse dirty
+hints directly; an empty outbox does not mean steady-state replans can be
+deferred until some other watch event arrives.
 
 Retry/trial is not an alternate planner. Timer-driven follow-up only
 re-releases exact held actions that are already part of the current runtime.

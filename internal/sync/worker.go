@@ -64,8 +64,8 @@ func NewWorkerPool(
 		baseline:   baseline,
 		logger:     logger,
 		// Buffer sizing contract: one-shot mode uses planSize (equal to
-		// the number of actions, so workers never block). Watch mode uses
-		// watchResultBuf (4096) with a drain goroutine reading completions
+		// the number of actions, so workers never block). Watch mode passes
+		// watchCompletionBuf with a drain goroutine reading completions
 		// concurrently, so blocking is unlikely under normal load.
 		completions: make(chan ActionCompletion, planSize),
 	}

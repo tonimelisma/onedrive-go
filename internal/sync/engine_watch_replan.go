@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 )
 
 // runSteadyStateReplan is the single steady-state watch replan entry. Dirty
@@ -30,24 +31,34 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	)
 	rt.engine.collector().RecordWatchBatch(1)
 
+	replanStart := rt.engine.nowFunc()
+	rt.emitRuntimeDebugEvent(engineDebugEventSteadyStateReplanStarted, "", 0, time.Time{})
+
 	observeStart := rt.engine.nowFunc()
+	rt.emitRuntimeDebugEvent(engineDebugEventLocalTruthRefreshStarted, "", 0, replanStart)
 	localResult, err := rt.refreshAndCommitLocalCurrentState(ctx, p.bl)
 	if err != nil {
 		return rt.handleSteadyStateLocalRefreshError(ctx, err)
 	}
+	rt.emitRuntimeDebugEvent(engineDebugEventLocalTruthRefreshFinished, "", len(localResult.Rows), observeStart)
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventSteadyStateObservationCompleted})
 	rt.engine.collector().RecordObserve(len(localResult.Rows), rt.engine.since(observeStart))
 
+	planStart := rt.engine.nowFunc()
+	rt.emitRuntimeDebugEvent(engineDebugEventPlanningStarted, "", 0, replanStart)
 	runtime, err := rt.runSteadyStateCurrentPlan(ctx, p.bl, p.mode)
 	if err != nil {
 		return rt.finishSteadyStateReplanStep(ctx, "build_current_plan", err)
 	}
+	rt.emitRuntimeDebugEvent(engineDebugEventPlanningFinished, "", 0, planStart)
 
 	dispatch, dispatched, err := rt.startRuntimeStage(ctx, runtime, p.bl, rt)
 	if err != nil {
 		return rt.finishSteadyStateReplanStep(ctx, "start_runtime", err)
 	}
 	rt.replaceOutbox(dispatch)
+	rt.loop.postReplanOutbox = len(dispatch) > 0
+	rt.emitRuntimeDebugEvent(engineDebugEventNewPlanInstalled, "", len(dispatch), replanStart)
 	if !dispatched {
 		return nil
 	}
