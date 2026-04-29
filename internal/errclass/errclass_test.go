@@ -19,6 +19,7 @@ func TestClassStringAndValidity(t *testing.T) {
 		{name: "invalid_zero", class: ClassInvalid, want: "invalid", isValid: false},
 		{name: "success", class: ClassSuccess, want: "success", isValid: true},
 		{name: "shutdown", class: ClassShutdown, want: "shutdown", isValid: true},
+		{name: "superseded", class: ClassSuperseded, want: "superseded", isValid: true},
 		{name: "retryable", class: ClassRetryableTransient, want: "retryable transient", isValid: true},
 		{name: "scope_blocking", class: ClassBlockScopeingTransient, want: "scope-blocking transient", isValid: true},
 		{name: "actionable", class: ClassActionable, want: "actionable", isValid: true},

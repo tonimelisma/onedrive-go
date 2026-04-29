@@ -33,7 +33,8 @@ func (flow *engineFlow) applyCompletedSubtree(
 }
 
 // completeSubtree silently completes all transitive dependents without
-// recording failures. Used for shutdown.
+// success, retry, or failure-recording semantics. Used when the current runtime
+// must retire old graph work instead of admitting its dependents.
 func (flow *engineFlow) completeSubtree(ready []*TrackedAction) {
 	seen := make(map[int64]bool)
 	queue := ready

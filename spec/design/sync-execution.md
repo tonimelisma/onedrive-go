@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/worker_result.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go
 
-Implements: R-2.3.1 [verified], R-2.8.6 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
+Implements: R-2.3.1 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
 
 ## Overview
 
@@ -35,7 +35,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Behavior | Evidence |
 | --- | --- |
 | Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestConflictCopyPath_Normal` |
-| Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes requeue for replan instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition` |
+| Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
 | Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork` |
 | Watch-mode replan keeps old-runtime work out of dispatch once it is no longer current and preserves dirty intent across recoverable local-observation failure. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal`, `TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal` |
 
@@ -156,7 +156,8 @@ Local delete keeps the ordinary per-item safety rule:
 
 - if the file still hashes to the baseline hash, delete it
 - if the file changed after planning, do **not** delete newer local content;
-  return a stale-precondition failure so the engine replans from current truth
+  return a stale-precondition/superseded outcome so the engine replans from
+  current truth without retrying that exact old delete
 
 Directory delete also preserves non-disposable local content by refusing to
 remove directories blocked by non-disposable children.
