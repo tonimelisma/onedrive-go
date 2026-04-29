@@ -372,7 +372,7 @@ func TestOneShotRunner_ReleaseIdleDueHeldWork_ClearsShutdownCompletedOutboxOnRed
 
 	outbox, err, handled := runner.releaseIdleDueHeldWork(t.Context(), &Baseline{})
 	require.True(t, handled)
-	require.ErrorContains(t, err, "record retry_work")
+	require.ErrorContains(t, err, "reading observation state for action freshness")
 	assert.Empty(t, outbox, "shutdown-completed releases must not be returned for a second completion pass")
 	assert.Equal(t, 1, runner.depGraph.InFlightCount(), "only the failing publication action should remain unresolved")
 

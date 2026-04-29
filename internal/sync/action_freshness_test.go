@@ -260,3 +260,119 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
 	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
 }
+
+// Validates: R-2.8.9
+func TestActionFreshness_PostRemoteMoveUploadAllowsMoveProducedETagChange(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	remoteDriveID := driveid.New(testDriveID)
+
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  remoteDriveID,
+		ItemID:   "item-file",
+		Path:     "new.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "old-hash",
+		Size:     10,
+		Mtime:    1,
+		ETag:     "etag-after-move",
+	}}, "delta-1", remoteDriveID))
+
+	decision, err := evaluateActionFreshnessFromStore(ctx, store, &Action{
+		Type:    ActionUpload,
+		Path:    "new.txt",
+		ItemID:  "item-file",
+		DriveID: remoteDriveID,
+		View: &PathView{
+			Path: "new.txt",
+			Remote: &RemoteState{
+				DriveID:  remoteDriveID,
+				ItemID:   "item-file",
+				ItemType: ItemTypeFile,
+				Hash:     "old-hash",
+				Size:     10,
+				Mtime:    1,
+				ETag:     "etag-before-move",
+			},
+			Baseline: &BaselineEntry{
+				Path:     "old.txt",
+				DriveID:  remoteDriveID,
+				ItemID:   "item-file",
+				ItemType: ItemTypeFile,
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, decision.Fresh)
+}
+
+// Validates: R-2.8.9
+func TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	remoteDriveID := driveid.New(testDriveID)
+
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  remoteDriveID,
+		ItemID:   "item-file",
+		Path:     "new.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "changed-hash",
+		Size:     10,
+		Mtime:    1,
+		ETag:     "etag-after-move",
+	}}, "delta-1", remoteDriveID))
+
+	decision, err := evaluateActionFreshnessFromStore(ctx, store, &Action{
+		Type:    ActionUpload,
+		Path:    "new.txt",
+		ItemID:  "item-file",
+		DriveID: remoteDriveID,
+		View: &PathView{
+			Path: "new.txt",
+			Remote: &RemoteState{
+				DriveID:  remoteDriveID,
+				ItemID:   "item-file",
+				ItemType: ItemTypeFile,
+				Hash:     "old-hash",
+				Size:     10,
+				Mtime:    1,
+				ETag:     "etag-before-move",
+			},
+			Baseline: &BaselineEntry{
+				Path:     "old.txt",
+				DriveID:  remoteDriveID,
+				ItemID:   "item-file",
+				ItemType: ItemTypeFile,
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, decision.Fresh)
+	assert.Contains(t, decision.Reason, "remote truth changed")
+}
+
+// Validates: R-2.8.9
+func TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	require.NoError(t, store.ReplaceLocalState(ctx, nil))
+
+	decision, err := evaluateActionFreshnessFromStore(ctx, store, &Action{
+		Type: ActionUpload,
+		Path: "upload.txt",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing planner view")
+	assert.False(t, decision.Fresh)
+}
