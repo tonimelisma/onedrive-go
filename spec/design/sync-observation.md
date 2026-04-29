@@ -1,8 +1,8 @@
 # Sync Observation
 
-GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_local_collisions.go, internal/sync/observer_remote.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/item_converter.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/symlink_observation.go, internal/sync/single_path.go
+GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_local_collisions.go, internal/sync/local_observation_batch.go, internal/sync/observer_remote.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/item_converter.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/symlink_observation.go, internal/sync/single_path.go
 
-Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified]
+Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.8.8 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified]
 
 ## Overview
 
@@ -10,22 +10,24 @@ Observation turns local filesystem changes and Graph delta/enumeration results
 into live observation facts. The low-level observers do not write the sync DB
 directly. The engine-owned observation orchestration persists the resulting
 observation batch as one coherent durable set. `observation_state` owns the
-remote cursor plus remote full-refresh cadence; local watch safety-scan cadence
-is rebuildable watch runtime state. Observation produces wake signals, dirty
-path/scope hints,
-observation findings, and direct local-snapshot rows for `local_state`.
+remote cursor, remote full-refresh cadence, and local-truth confidence; local
+watch safety-scan cadence is rebuildable watch runtime state. Observation
+produces wake signals, dirty path/scope hints, observation findings, direct
+local-snapshot rows for `local_state`, and scoped local observation batches
+that the engine applies to `local_state`.
 
-In watch mode, that ownership is explicit: local observers emit only local
-change hints, while remote observers and full-refresh workers emit one
-`remoteObservationBatch` value that the watch loop applies durably. No remote
-observer goroutine commits remote rows or observation cursors directly. Once the
-engine starts applying that batch as durable current truth, failures in remote
-row commits, cursor commits, or observation-findings reconciliation are
-fail-closed for that run/session rather than best-effort warnings.
+In watch mode, that ownership is explicit: local observers emit engine-applied
+`localObservationBatch` values, while remote observers and full-refresh workers
+emit one `remoteObservationBatch` value that the watch loop applies durably. No
+observer goroutine commits state rows or observation cursors directly. Once the
+engine starts applying that batch as durable current truth, failures in local
+row commits, remote row commits, cursor commits, or observation-findings
+reconciliation are fail-closed for that run/session rather than best-effort
+warnings.
 Those observer outputs are runtime-owned too: the watch runtime owns the local
-event stream, remote-batch stream, skipped-item stream, observer error stream,
-refresh channels, and active-observer count, while the pipeline shell keeps
-only the non-runtime dependencies needed by the loop.
+batch stream, remote-batch stream, skipped-item stream, observer error stream,
+refresh channels, and active-observer count, while the pipeline shell keeps only
+the non-runtime dependencies needed by the loop.
 
 The observation stack has four main pieces:
 
@@ -48,6 +50,7 @@ The observation stack has four main pieces:
 | Behavior | Evidence |
 | --- | --- |
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly, including filesystem identity for files and directories when available. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestFullScan_StoresFilesystemIdentityForFilesAndDirectories`, `TestNosyncGuard_PreventsAllSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
+| Watch-mode local observation emits scoped engine-applied batches: exact file rows, directory-prefix deletes, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesExactPath`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
 | Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child work commands to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 | Local watch prefiltering keeps unknown-kind include-root and include-ancestor events observable until stat/type-aware observation can decide the exact item kind. | `TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths` |
@@ -195,6 +198,25 @@ Full local observation persists the current visible local snapshot to
 startup/full local observation then rewrites `local_state` under the new
 visibility rules. Local observation also uses the filter early to avoid walking,
 hashing, watching, and reporting issues for ignored or out-of-include paths.
+
+Watch-mode local observation also maintains `local_state` incrementally from
+re-observed scopes. File create/modify handlers stat and hash the exact file and
+emit an upsert row. File delete/rename-away handlers emit an exact path delete.
+Directory create handlers add watches, scan the new subtree, and emit rows for
+the observed directory tree. Directory delete/rename-away handlers emit a prefix
+delete for the removed directory. Safety scans emit a full local snapshot
+replacement and clear any suspect-local-truth marker after the engine commits
+the replacement.
+
+Raw fsnotify events are not a durable journal. They only choose the observation
+scope. The observer performs normal filesystem reads for that scope, emits a
+batch, and the watch loop applies that batch to SQLite. If the observer drops a
+local observation batch, drops a delayed hash request, sees a watcher error, or
+cannot complete a safety scan, the watch runtime marks
+`observation_state.local_truth_complete=false` with a recovery reason and
+schedules a normal dirty replan/full local refresh. Local-state absence is
+therefore only trustworthy to later stale-work validation when local truth is
+marked complete.
 
 Managed shortcut child subtrees are not configured as ordinary skip dirs.
 Parent engines derive protected roots from `shortcut_roots` and update their

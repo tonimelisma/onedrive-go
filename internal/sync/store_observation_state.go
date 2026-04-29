@@ -13,12 +13,14 @@ const (
 	sqlReadObservationState = `SELECT
 				content_drive_id,
 				cursor,
-				next_full_remote_refresh_at
+				next_full_remote_refresh_at,
+				local_truth_complete,
+				local_truth_recovery_reason
 			FROM observation_state
 			LIMIT 1`
 	sqlEnsureObservationStateRow = `INSERT INTO observation_state
-		(content_drive_id, cursor, next_full_remote_refresh_at)
-		SELECT '', '', 0
+		(content_drive_id, cursor, next_full_remote_refresh_at, local_truth_complete, local_truth_recovery_reason)
+		SELECT '', '', 0, 0, ''
 		WHERE NOT EXISTS (SELECT 1 FROM observation_state)`
 )
 
@@ -27,10 +29,18 @@ const (
 )
 
 type ObservationState struct {
-	ContentDriveID          driveid.ID
-	Cursor                  string
-	NextFullRemoteRefreshAt int64
+	ContentDriveID           driveid.ID
+	Cursor                   string
+	NextFullRemoteRefreshAt  int64
+	LocalTruthComplete       bool
+	LocalTruthRecoveryReason string
 }
+
+const (
+	LocalTruthRecoveryDroppedEvents  = "dropped_local_events"
+	LocalTruthRecoveryWatcherError   = "watcher_error"
+	LocalTruthRecoveryFullScanFailed = "full_local_scan_failed"
+)
 
 func remoteRefreshIntervalForMode(mode remoteObservationMode) time.Duration {
 	switch mode {
@@ -108,15 +118,19 @@ func (m *SyncStore) ReadObservationState(ctx context.Context) (*ObservationState
 	var (
 		contentDriveID string
 		state          ObservationState
+		localComplete  int
 	)
 
 	if err := m.db.QueryRowContext(ctx, sqlReadObservationState).Scan(
 		&contentDriveID,
 		&state.Cursor,
 		&state.NextFullRemoteRefreshAt,
+		&localComplete,
+		&state.LocalTruthRecoveryReason,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
+	state.LocalTruthComplete = localComplete != 0
 
 	if contentDriveID != "" {
 		state.ContentDriveID = driveid.New(contentDriveID)
@@ -271,6 +285,13 @@ func (m *SyncStore) readObservationStateTx(
 	ctx context.Context,
 	tx sqlTxRunner,
 ) (*ObservationState, error) {
+	return readObservationStateFromTx(ctx, tx)
+}
+
+func readObservationStateFromTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+) (*ObservationState, error) {
 	if _, err := tx.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
 		return nil, fmt.Errorf("sync: ensuring observation_state row: %w", err)
 	}
@@ -278,15 +299,19 @@ func (m *SyncStore) readObservationStateTx(
 	var (
 		contentDriveID string
 		state          ObservationState
+		localComplete  int
 	)
 
 	if err := tx.QueryRowContext(ctx, sqlReadObservationState).Scan(
 		&contentDriveID,
 		&state.Cursor,
 		&state.NextFullRemoteRefreshAt,
+		&localComplete,
+		&state.LocalTruthRecoveryReason,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
+	state.LocalTruthComplete = localComplete != 0
 
 	if contentDriveID != "" {
 		state.ContentDriveID = driveid.New(contentDriveID)
@@ -327,23 +352,79 @@ func (m *SyncStore) writeObservationStateTx(
 	tx sqlTxRunner,
 	state *ObservationState,
 ) error {
+	if err := writeObservationStateToTx(ctx, tx, state); err != nil {
+		return err
+	}
+
+	if !state.ContentDriveID.IsZero() {
+		m.rememberContentDriveID(state.ContentDriveID)
+	}
+
+	return nil
+}
+
+func writeObservationStateToTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	state *ObservationState,
+) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM observation_state`); err != nil {
 		return fmt.Errorf("sync: clearing observation_state before write: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO observation_state
-			(content_drive_id, cursor, next_full_remote_refresh_at)
-		VALUES (?, ?, ?)`,
+			(content_drive_id, cursor, next_full_remote_refresh_at, local_truth_complete, local_truth_recovery_reason)
+		VALUES (?, ?, ?, ?, ?)`,
 		state.ContentDriveID.String(),
 		state.Cursor,
 		state.NextFullRemoteRefreshAt,
+		boolInt(state.LocalTruthComplete),
+		state.LocalTruthRecoveryReason,
 	); err != nil {
 		return fmt.Errorf("sync: writing observation_state: %w", err)
 	}
 
-	if !state.ContentDriveID.IsZero() {
-		m.rememberContentDriveID(state.ContentDriveID)
+	return nil
+}
+
+func (m *SyncStore) MarkLocalTruthComplete(ctx context.Context) error {
+	return m.updateObservationState(ctx, func(state *ObservationState) {
+		state.LocalTruthComplete = true
+		state.LocalTruthRecoveryReason = ""
+	})
+}
+
+func (m *SyncStore) MarkLocalTruthSuspect(ctx context.Context, reason string) error {
+	return m.updateObservationState(ctx, func(state *ObservationState) {
+		state.LocalTruthComplete = false
+		state.LocalTruthRecoveryReason = reason
+	})
+}
+
+func (m *SyncStore) updateObservationState(
+	ctx context.Context,
+	update func(*ObservationState),
+) (err error) {
+	tx, err := beginPerfTx(ctx, m.db)
+	if err != nil {
+		return fmt.Errorf("sync: begin observation-state update tx: %w", err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback observation-state update tx")
+	}()
+
+	state, err := m.readObservationStateTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	update(state)
+	if writeErr := m.writeObservationStateTx(ctx, tx, state); writeErr != nil {
+		return writeErr
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("sync: commit observation-state update tx: %w", err)
 	}
 
 	return nil

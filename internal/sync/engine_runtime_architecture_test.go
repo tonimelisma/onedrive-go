@@ -185,7 +185,7 @@ func TestRuntimeArchitecture_ShutdownDrainSealsAdmissionOnCompletionError(t *tes
 		bl:          bl,
 		replanReady: make(chan dirtyBatch),
 	}
-	rt.localEvents = make(chan ChangeEvent)
+	rt.localBatches = make(chan localObservationBatch)
 	rt.remoteBatches = make(chan remoteObservationBatch)
 
 	cancel()
@@ -204,7 +204,7 @@ func TestRuntimeArchitecture_ShutdownDrainSealsAdmissionOnCompletionError(t *tes
 	assert.True(t, rt.isDraining())
 	assert.Empty(t, rt.currentOutbox(), "shutdown drain must stay sealed after suppressed completion bookkeeping errors")
 	assert.Nil(t, p.replanReady)
-	assert.Nil(t, rt.localEvents)
+	assert.Nil(t, rt.localBatches)
 	assert.Nil(t, rt.remoteBatches)
 }
 

@@ -2,8 +2,9 @@
 
 Status: design note. The watch-dispatch/outbox-retirement instrumentation pieces
 are implemented in the merged watch-stale-work increments; the superseded result
-foundation is implemented by the current stale-work roadmap increment. The
-broader latest-truth and executor-precondition groups remain follow-up work.
+foundation and incremental local-truth commit increments are implemented in the
+stale-work roadmap. The broader worker latest-truth validation and
+executor-precondition groups remain follow-up work.
 
 Date: 2026-04-29
 
@@ -31,6 +32,14 @@ Implemented so far:
 8. `ErrActionPreconditionChanged` is classified as `superseded`, not ordinary
    retry. Superseded completions clear exact stale retry rows, retire old
    dependents without success semantics, and schedule watch replan.
+9. Watch-mode local observation now emits engine-applied local observation
+   batches. File create/modify observations upsert exact `local_state` rows,
+   file deletes delete exact rows, directory deletes delete prefixes, and
+   safety scans replace the full local snapshot.
+10. `observation_state` records local truth confidence. Dropped local
+    observation batches, dropped hash requests, watcher errors, and failed
+    safety scans mark local truth suspect and schedule dirty replan through the
+    watch runtime.
 
 Still follow-up work:
 
@@ -38,7 +47,6 @@ Still follow-up work:
    `remote_state`.
 2. Executor-side live precondition checks for every dangerous local/remote side
    effect.
-3. Incremental local-truth commits from re-observed watch scopes.
 
 This note records a design analysis for improving the `onedrive-go` sync engine
 when watch-mode truth changes while older actions are still queued or running.
@@ -53,9 +61,8 @@ The current watch runtime is deliberately linear:
 1. There is one installed runtime plan at a time.
 2. A dirty signal while `outbox` or workers are active becomes a pending replan,
    not a second plan.
-3. Local filesystem events are observed at file/subtree scope, but the watch
-   runtime currently treats them mostly as coarse dirty hints for planning
-   purposes.
+3. Local filesystem events are observed at file/subtree scope and committed to
+   durable `local_state` through engine-applied scoped observation batches.
 4. Remote observer batches can be committed to `remote_state` before the next
    replan.
 5. Workers execute concrete `Action` values from the currently installed plan.
@@ -72,18 +79,19 @@ The key distinction is:
 
 1. A newer dirty hint can exist.
 2. Newer remote truth may exist in `remote_state`.
-3. Newer local facts may have been observed by the local watcher, but newer
-   local truth usually does not exist in `local_state` until replan performs a
-   full local scan and commits it.
+3. Newer local facts observed by the local watcher usually exist in
+   `local_state` before the next replan unless local truth has been marked
+   suspect because observation completeness is uncertain.
 4. A newer `ActionPlan` does not exist until the runtime reaches the idle replan
    boundary.
 
-That local behavior is the biggest asymmetry in the current design. Remote
-deltas are applied incrementally to durable remote truth. Local watch events are
-already handled at a narrower scope than the whole sync root, but the important
-truth update is deferred until the next full local snapshot replacement. For a
-daemon, that is too blunt: a single file write should not require rewalking the
-whole sync root before `local_state` can say what changed.
+Before the incremental-local-truth increment, local behavior was the biggest
+asymmetry in the design. Remote deltas were applied incrementally to durable
+remote truth, while local watch events were reduced to dirty hints and the
+important truth update waited for the next full local snapshot replacement. The
+current implementation closes that gap for ordinary watch observations: a
+single file write re-observes that file and updates `local_state` without
+rewalking the whole sync root.
 
 Workers still cannot ask "am I still in the newer plan?" because no newer plan
 has been built until the replan boundary. The practical improvement path remains
@@ -422,7 +430,9 @@ Worker-start validation for any already-submitted work remains the next piece.
 ### Group D. Incrementally update local truth from re-observed watch scopes
 
 This group is the old idea 9, but with the important clarification that there is
-no separate local event journal.
+no separate local event journal. This group is implemented for ordinary file and
+directory watch observations, safety scans, and the explicit suspect-local-truth
+recovery triggers listed below.
 
 The desired behavior is exactly this:
 
@@ -441,10 +451,12 @@ The current local observer already performs narrow work:
 4. Directory create: add watches and scan that new directory subtree.
 5. Periodic safety scan: walk the full sync root as a backstop.
 
-The problem is that those narrow observations do not become durable
-planner-visible local truth. They are reduced to dirty signals, and the next
-steady-state replan calls `FullScan` and `ReplaceLocalState`, which rebuilds the
-entire `local_state` table.
+Before this increment, those narrow observations did not become durable
+planner-visible local truth. They were reduced to dirty signals, and the next
+steady-state replan called `FullScan` and `ReplaceLocalState`, which rebuilt the
+entire `local_state` table. The watch loop now applies scoped
+`localObservationBatch` values to `local_state` as they arrive and still uses
+full snapshots for startup, safety scans, and suspect-truth recovery.
 
 Concrete update rules:
 
@@ -454,9 +466,9 @@ Concrete update rules:
 3. Directory create: scan that new subtree and upsert the discovered rows.
 4. Directory delete or rename-away: delete all `local_state` rows under that
    path prefix.
-5. Directory modify where the platform does not provide child detail: rescan
-   that directory or mark the subtree for scoped scan, depending on what the
-   event proves.
+5. Directory modify where the platform does not provide child detail: ordinary
+   folder mtime/write noise is ignored, while child events or safety scans carry
+   the concrete re-observed rows.
 6. Rename/move without a reliable paired event: model as delete old path plus
    create new path after observing the new path if present.
 7. Watch overflow, dropped local event channel send, watcher error, root
@@ -475,7 +487,7 @@ Useful store APIs:
 3. `DeleteLocalStatePrefix(ctx, path)` for directory deletion or rename-away.
 4. `ReplaceLocalState(ctx, rows)` retained for startup, safety scan, and
    recovery from suspect truth.
-5. A local truth confidence bit or pending-full-scan marker.
+5. A local truth confidence bit and recovery reason in `observation_state`.
 
 Pros:
 
@@ -694,10 +706,12 @@ local truth commits land.
 2. Add chunk-boundary validation for large uploads after the start-time upload
    precondition exists.
 3. Add scoped local-truth commits for watch-mode file and directory
-   observations.
+   observations. Implemented in the incremental local-truth commit increment.
 4. Add local truth suspect/recovery state for dropped events, watcher errors,
    uncertain recursive changes, root identity changes, and filter/policy
-   changes.
+   changes. Implemented for dropped local observation batches, dropped hash
+   requests, watcher errors, and failed safety scans in the incremental
+   local-truth commit increment.
 5. Add worker-start validation against latest committed `local_state` and
    `remote_state`.
 6. Add a superseded/stale-action result path that does not retry the exact old

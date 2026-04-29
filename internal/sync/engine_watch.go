@@ -214,7 +214,7 @@ func (rt *watchRuntime) initWatchInfra(
 		rt.stopTrialTimer()
 		pool.Stop() // closes completions channel after workers exit
 		rt.observerErrs = nil
-		rt.localEvents = nil
+		rt.localBatches = nil
 		rt.remoteBatches = nil
 		rt.skippedItems = nil
 		rt.activeObservers = 0
@@ -300,13 +300,12 @@ func (rt *watchRuntime) finishBootstrapAfterActions(
 }
 
 // startObservers launches remote and local observer goroutines and stores
-// their channels on the watch runtime. The watch loop owns remote batch
-// application and dirty marking; observers emit only local change hints or
-// loop-applied remote batches.
+// their channels on the watch runtime. The watch loop owns local and remote
+// batch application and dirty marking; observers do not commit SQLite directly.
 func (rt *watchRuntime) startObservers(
 	ctx context.Context, bl *Baseline, opts WatchOptions,
 ) {
-	localEvents := make(chan ChangeEvent, watchObservationBuf)
+	localBatches := make(chan localObservationBatch, watchObservationBuf)
 	protectedRootEvents := make(chan ProtectedRootEvent, watchObservationBuf)
 	remoteBatches := make(chan remoteObservationBatch, watchObservationBuf)
 	errs := make(chan error, 2)
@@ -340,6 +339,7 @@ func (rt *watchRuntime) startObservers(
 		}
 	})
 	localObs.SetSkippedChannel(skippedCh)
+	localObs.SetLocalObservationBatchChannel(localBatches)
 	localObs.safetyScanInterval = localWatchHealthySafetyScanInterval
 	localObs.StartupSafetyScan = true
 
@@ -356,17 +356,17 @@ func (rt *watchRuntime) startObservers(
 	go func() {
 		defer obsWg.Done()
 		defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverLocal})
-		defer close(localEvents)
+		defer close(localBatches)
 		defer close(protectedRootEvents)
 
-		watchErr := localObs.Watch(ctx, rt.engine.syncTree, localEvents)
+		watchErr := localObs.Watch(ctx, rt.engine.syncTree, nil)
 		if errors.Is(watchErr, ErrWatchLimitExhausted) {
 			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
 			rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
 				slog.Duration("scan_interval", localWatchDegradedFullScanInterval),
 			)
 
-			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, localEvents, localWatchDegradedFullScanInterval)
+			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, nil, localWatchDegradedFullScanInterval)
 			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal})
 			errs <- nil // clean exit after context cancel
 
@@ -379,7 +379,7 @@ func (rt *watchRuntime) startObservers(
 	rt.observerErrs = errs
 	rt.activeObservers = count
 	rt.skippedItems = skippedCh
-	rt.localEvents = localEvents
+	rt.localBatches = localBatches
 	rt.protectedRootEvents = protectedRootEvents
 	rt.remoteBatches = remoteBatches
 }
@@ -518,10 +518,12 @@ func (rt *watchRuntime) runPeriodicFullScan(
 				continue
 			}
 
+			obs.TrySendFullLocalSnapshot(ctx, result)
+
 			// Forward events only — skipped items are logged at DEBUG.
 			// The primary scan and safety scan handle persisting observation issues.
 			for i := range result.Events {
-				obs.TrySend(ctx, events, &result.Events[i])
+				obs.TrySendChangeEventOnly(ctx, events, &result.Events[i])
 			}
 
 			if len(result.Skipped) > 0 {
