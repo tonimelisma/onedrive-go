@@ -398,11 +398,12 @@ func TestRunSteadyStateReplan_PrunesStaleDurableRuntimeStateLikeBootstrapCurrent
 	dirtyBaseline, err := dirtyEng.baseline.Load(ctx)
 	require.NoError(t, err)
 	rt := testWatchRuntime(t, dirtyEng)
-	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
+	applied, err := rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   dirtyBaseline,
 		mode: SyncBidirectional,
 	}, dirtyBatch{})
 	require.NoError(t, err)
+	assert.True(t, applied)
 	assert.Empty(t, rt.currentOutbox())
 
 	dirtyRetryRows, err := dirtyEng.baseline.ListRetryWork(ctx)

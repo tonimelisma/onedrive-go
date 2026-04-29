@@ -129,6 +129,87 @@ func TestWatchRuntime_RunNonDrainingWatchStep_ConsumesReplanReady(t *testing.T) 
 }
 
 // Validates: R-2.8.6
+func TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch(t *testing.T) {
+	t.Parallel()
+
+	for attempt := range 32 {
+		eng := newSingleOwnerEngine(t)
+		rt := testWatchRuntime(t, eng)
+		replanReady := make(chan dirtyBatch, 1)
+		replanReady <- dirtyBatch{}
+
+		queued := rt.depGraph.Add(&Action{
+			Type:    ActionDownload,
+			Path:    "old.txt",
+			DriveID: eng.driveID,
+			ItemID:  "old-item",
+		}, int64(attempt+1), nil)
+		require.NotNil(t, queued)
+		rt.markQueued(queued)
+		rt.replaceOutbox([]*TrackedAction{queued})
+
+		done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{
+			runtime:     rt,
+			replanReady: replanReady,
+		}, nil)
+
+		require.NoError(t, err)
+		assert.False(t, done)
+		assert.True(t, rt.hasPendingReplan())
+		assert.Empty(t, rt.currentOutbox())
+		assert.Empty(t, rt.queuedByID)
+		assert.Equal(t, 0, rt.runningCount)
+		select {
+		case dispatched := <-rt.dispatchCh:
+			require.Failf(t, "old work dispatched after ready replan", "action=%+v", dispatched)
+		default:
+		}
+	}
+}
+
+// Validates: R-2.8.6
+func TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal(t *testing.T) {
+	t.Parallel()
+
+	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	queued := rt.depGraph.Add(&Action{
+		Type:    ActionDownload,
+		Path:    "old.txt",
+		DriveID: eng.driveID,
+		ItemID:  "old-item",
+	}, 1, nil)
+	require.NotNil(t, queued)
+	rt.markQueued(queued)
+	rt.replaceOutbox([]*TrackedAction{queued})
+	rt.queuePendingReplan(dirtyBatch{FullRefresh: true})
+	require.Empty(t, rt.currentOutbox())
+	require.Empty(t, rt.queuedByID)
+	require.NoError(t, os.RemoveAll(syncRoot))
+
+	replanned, err := rt.runPendingWatchReplan(t.Context(), &watchPipeline{
+		runtime: rt,
+		bl:      bl,
+		mode:    SyncBidirectional,
+	})
+
+	require.NoError(t, err)
+	assert.True(t, replanned)
+	assert.False(t, rt.hasPendingReplan())
+	assert.Empty(t, rt.currentOutbox())
+	assert.Empty(t, rt.queuedByID)
+	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "retired outbox must stay retired after failed replacement replan")
+	batch := rt.dirtyBuf.FlushImmediate()
+	require.NotNil(t, batch)
+	assert.True(t, batch.FullRefresh)
+}
+
+// Validates: R-2.8.6
 func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	t.Parallel()
 

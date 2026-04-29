@@ -37,7 +37,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestConflictCopyPath_Normal` |
 | Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes requeue for replan instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition` |
 | Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork` |
-| Watch-mode pending replan keeps old-runtime work out of dispatch once it is no longer current. | `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction` |
+| Watch-mode pending replan keeps old-runtime work out of dispatch once it is no longer current. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal` |
 
 ## Worker And Dependency Model
 
@@ -53,6 +53,9 @@ the worker dispatch channel is intentionally unbuffered so not-yet-started
 actions remain in the engine-owned outbox until a worker is ready to receive
 one. The worker completion channel remains separately buffered so workers can
 report completed actions without reintroducing a hidden dispatch backlog.
+When a replan signal is already ready, the watch loop consumes it before
+enabling the dispatch send for the current step, so the old outbox is retired
+instead of racing an idle worker receive.
 
 The dependency graph is dependency-only. It no longer defines runtime
 quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,
@@ -68,7 +71,10 @@ When watch mode has a pending replan, newly-ready concrete frontier from the old
 runtime is likewise not reopened into dispatch. The engine retires
 not-yet-dispatched old outbox work and any dependents released by already-running
 old actions without completing those dependency nodes as success. The next
-runtime plan is rebuilt from current truth and durable retry/block state.
+runtime plan is rebuilt from current truth and durable retry/block state. If
+local observation fails before replacement runtime installation, retired work
+remains retired and the dirty/full-refresh intent is rescheduled for a later
+steady-state replan.
 
 When the dependency graph releases `ActionUpdateSynced` or `ActionCleanup`,
 the engine does not spend worker capacity on them. It commits the matching

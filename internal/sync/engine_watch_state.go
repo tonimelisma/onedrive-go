@@ -203,6 +203,8 @@ func (rt *watchRuntime) retireOutboxForPendingReplan() {
 
 	rt.emitRuntimeDebugEvent(engineDebugEventDispatchPausedForReplan, "", len(outbox), rt.pendingReplanStartedAt())
 	for _, ta := range outbox {
+		// Retired old-runtime nodes stay unresolved; the replacement runtime
+		// rebuilds dependency state from current truth.
 		rt.markFinished(ta)
 	}
 	rt.replaceOutbox(nil)
@@ -220,6 +222,17 @@ func (rt *watchRuntime) retireReadyFrontierForPendingReplan(ready []*TrackedActi
 		rt.markFinished(ta)
 	}
 	rt.emitRuntimeDebugEvent(engineDebugEventOldOutboxRetired, "released_ready_frontier", len(ready), rt.pendingReplanStartedAt())
+}
+
+func (rt *watchRuntime) reschedulePendingReplan(batch dirtyBatch) {
+	if rt.dirtyBuf == nil {
+		return
+	}
+	if batch.FullRefresh {
+		rt.dirtyBuf.MarkFullRefresh()
+		return
+	}
+	rt.dirtyBuf.MarkDirty()
 }
 
 func (rt *watchRuntime) totalWorkers() int {

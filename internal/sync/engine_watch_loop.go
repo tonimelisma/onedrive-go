@@ -121,7 +121,15 @@ func (rt *watchRuntime) runPendingWatchReplan(
 	}
 	rt.emitRuntimeDebugEvent(engineDebugEventRunningActionsDrained, "", 0, pendingStartedAt)
 
-	return true, rt.runSteadyStateReplan(ctx, p, batch)
+	applied, err := rt.runSteadyStateReplan(ctx, p, batch)
+	if err != nil {
+		return true, err
+	}
+	if !applied {
+		rt.reschedulePendingReplan(batch)
+	}
+
+	return true, nil
 }
 
 //nolint:gocyclo // The watch select owns one event fan-in point; splitting cases would obscure ownership.
@@ -130,6 +138,12 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 	p *watchPipeline,
 	logC <-chan time.Time,
 ) (bool, error) {
+	select {
+	case batch, ok := <-p.replanReady:
+		return rt.handleWatchReplanSignal(ctx, p, batch, ok)
+	default:
+	}
+
 	dispatchCh, nextAction := rt.dispatchChannelForOutbox()
 
 	select {
@@ -426,7 +440,8 @@ func (rt *watchRuntime) handleWatchReplanReady(
 		return nil
 	}
 
-	return rt.runSteadyStateReplan(ctx, p, batch)
+	_, err := rt.runSteadyStateReplan(ctx, p, batch)
+	return err
 }
 
 func (rt *watchRuntime) handleWatchActionCompletion(
