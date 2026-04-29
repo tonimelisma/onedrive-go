@@ -92,7 +92,7 @@ func (rt *watchRuntime) handleSteadyStateLocalRefreshError(
 		return false, fmt.Errorf("sync: watch replan local refresh: %w", err)
 	}
 	if step == localCurrentRefreshStepObservation {
-		rt.engine.logger.Error("watch local refresh failed, dropping replan trigger",
+		rt.engine.logger.Error("watch local refresh failed before runtime replacement",
 			slog.String("error", err.Error()),
 		)
 		return false, nil

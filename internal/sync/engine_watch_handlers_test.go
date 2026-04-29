@@ -101,6 +101,7 @@ func TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork(t *testing.T) 
 		Path:    "after.txt",
 		DriveID: driveID,
 		ItemID:  "after-item",
+		View:    &PathView{Path: "after.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, unlocked)
 
@@ -165,6 +166,7 @@ func TestRunPublicationDrainStage_PublicationSuccessClearsRetryWorkAndAdmitsDepe
 		Path:    "after.txt",
 		DriveID: driveID,
 		ItemID:  "after-item",
+		View:    &PathView{Path: "after.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, dependent)
 
@@ -389,7 +391,7 @@ func TestWatchRuntime_HandleWatchHeldRelease_CompletesReleasedConcreteActionsOnR
 	require.NoError(t, eng.baseline.Close(ctx))
 
 	err := rt.handleWatchHeldRelease(ctx, &watchPipeline{bl: &Baseline{}}, false)
-	require.ErrorContains(t, err, "record retry_work")
+	require.ErrorContains(t, err, "reading observation state for action freshness")
 	assert.Empty(t, rt.currentOutbox(), "released frontier should be shutdown-completed when reduction fails")
 	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "only the publication action should remain unresolved on fail-closed termination")
 

@@ -59,7 +59,7 @@ func (flow *engineFlow) reduceReadyFrontierStage(
 
 	dueHeld, err := flow.drainDueHeldWorkNow(ctx, watch)
 	if err != nil {
-		return reduced, err
+		return append(reduced, dueHeld...), err
 	}
 	if len(dueHeld) == 0 {
 		return reduced, nil

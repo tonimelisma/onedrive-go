@@ -35,13 +35,30 @@ func evaluateActionFreshnessFromStore(
 	store *SyncStore,
 	action *Action,
 ) (actionFreshnessDecision, error) {
-	if store == nil || !actionHasPlannerView(action) || actionSkipsFreshnessValidation(action) {
+	select {
+	case <-ctx.Done():
+		// Shutdown completion owns collapsing newly-ready frontier after
+		// cancellation; freshness validation must not reopen store I/O there.
+		return freshAction(), nil
+	default:
+	}
+	if store == nil || action == nil || actionSkipsFreshnessValidation(action) {
 		return freshAction(), nil
 	}
 
 	inputs, err := loadActionFreshnessInputs(ctx, store, action)
 	if err != nil {
 		return actionFreshnessDecision{}, err
+	}
+	if !actionHasPlannerView(action) {
+		if inputs.LocalTruthComplete || inputs.RemoteTruthKnown {
+			return actionFreshnessDecision{}, fmt.Errorf(
+				"sync: validating action freshness: %s %q missing planner view",
+				action.Type,
+				action.Path,
+			)
+		}
+		return freshAction(), nil
 	}
 
 	return evaluateActionFreshness(action, inputs), nil
@@ -147,8 +164,11 @@ func loadRemoteActionFreshnessInputs(
 }
 
 func evaluateActionFreshness(action *Action, inputs actionFreshnessInputs) actionFreshnessDecision {
-	if !actionHasPlannerView(action) || actionSkipsFreshnessValidation(action) {
+	if action == nil || actionSkipsFreshnessValidation(action) {
 		return freshAction()
+	}
+	if !actionHasPlannerView(action) {
+		return staleAction("%s action is missing planner view", action.Path)
 	}
 
 	if stale := evaluateLocalActionFreshness(action, inputs); !stale.Fresh {
@@ -206,7 +226,7 @@ func evaluateRemoteActionFreshness(action *Action, inputs actionFreshnessInputs)
 	if !inputs.RemoteAtViewFound || inputs.RemoteAtView == nil {
 		return staleAction("%s is missing from current remote truth", viewPath)
 	}
-	if !remoteRowMatchesPlanned(inputs.RemoteAtView, planned) {
+	if !remoteRowMatchesPlannedForAction(action, inputs.RemoteAtView, planned) {
 		return staleAction("%s remote truth changed since planning", viewPath)
 	}
 
@@ -272,7 +292,7 @@ func evaluateRemoteIdentityFreshness(action *Action, inputs actionFreshnessInput
 	if inputs.RemoteByID.Path != expectedRemoteIdentityPath(action) {
 		return staleAction("%s remote item %s moved to %s", actionViewPath(action), action.ItemID, inputs.RemoteByID.Path)
 	}
-	if !remoteRowMatchesPlanned(inputs.RemoteByID, action.View.Remote) {
+	if !remoteRowMatchesPlannedForAction(action, inputs.RemoteByID, action.View.Remote) {
 		return staleAction("%s remote item %s changed since planning", actionViewPath(action), action.ItemID)
 	}
 
@@ -306,10 +326,7 @@ func actionNeedsRemoteIdentityFreshness(action *Action) bool {
 }
 
 func actionHasPlannerView(action *Action) bool {
-	// The predicate is only authoritative for planner-built actions. Focused
-	// executor tests and invariant guards sometimes construct partial views; an
-	// empty view path means there is no stable planned truth path to validate.
-	return action != nil && action.View != nil && action.View.Path != ""
+	return action != nil && action.View != nil && actionViewPath(action) != ""
 }
 
 func movePeerPath(action *Action) (string, bool) {
@@ -431,17 +448,98 @@ func remoteRowMatchesPlanned(row *RemoteStateRow, planned *RemoteState) bool {
 	if !remoteIdentityMatchesPlanned(row, planned) {
 		return false
 	}
+
+	return remoteContentMatchesPlanned(row, planned)
+}
+
+func remoteRowMatchesPlannedForAction(action *Action, row *RemoteStateRow, planned *RemoteState) bool {
+	if plannedPostRemoteMoveContentUpload(action) {
+		return remoteRowMatchesPostRemoteMoveUpload(row, planned)
+	}
+
+	return remoteRowMatchesPlanned(row, planned)
+}
+
+func remoteRowMatchesPostRemoteMoveUpload(row *RemoteStateRow, planned *RemoteState) bool {
+	if row == nil || planned == nil {
+		return row == nil && planned == nil
+	}
+	if !remoteIdentityMatchesPlannedExceptETag(row, planned) {
+		return false
+	}
+
+	return remoteContentMatchesPlanned(row, planned)
+}
+
+func plannedPostRemoteMoveContentUpload(action *Action) bool {
+	if !actionUploadHasMovedBaseline(action) {
+		return false
+	}
+
+	return plannedPostMoveRemoteMatchesBaseline(action.View.Remote, action.View.Baseline)
+}
+
+func actionUploadHasMovedBaseline(action *Action) bool {
+	if action == nil || action.Type != ActionUpload || action.View == nil {
+		return false
+	}
+	if action.View.Baseline == nil || action.View.Remote == nil {
+		return false
+	}
+	if action.View.Baseline.Path == "" || action.View.Baseline.Path == actionViewPath(action) {
+		return false
+	}
+
+	return true
+}
+
+func plannedPostMoveRemoteMatchesBaseline(remote *RemoteState, baseline *BaselineEntry) bool {
+	if baseline == nil || remote == nil {
+		return false
+	}
+	if baseline.ItemType != ItemTypeFile || remote.ItemType != ItemTypeFile {
+		return false
+	}
+	if baseline.ItemID != "" && remote.ItemID != "" && baseline.ItemID != remote.ItemID {
+		return false
+	}
+	if !baseline.DriveID.IsZero() && !remote.DriveID.IsZero() &&
+		!baseline.DriveID.Equal(remote.DriveID) {
+		return false
+	}
+
+	return true
+}
+
+func remoteContentMatchesPlanned(row *RemoteStateRow, planned *RemoteState) bool {
 	if planned.ItemType == ItemTypeFolder {
 		return true
 	}
 	if row.Hash != "" || planned.Hash != "" {
 		return row.Hash == planned.Hash && row.Size == planned.Size
 	}
+	if row.Size != planned.Size {
+		return false
+	}
+	if row.Mtime != 0 && planned.Mtime != 0 {
+		return row.Mtime == planned.Mtime
+	}
 
-	return row.Size == planned.Size && row.Mtime == planned.Mtime
+	return true
 }
 
 func remoteIdentityMatchesPlanned(row *RemoteStateRow, planned *RemoteState) bool {
+	if !remoteIdentityMatchesPlannedExceptETag(row, planned) {
+		return false
+	}
+	if planned.ETag != "" && row.ETag != planned.ETag {
+		return false
+	}
+
+	return true
+}
+
+func remoteIdentityMatchesPlannedExceptETag(row *RemoteStateRow, planned *RemoteState) bool {
 	if planned.ItemID != "" && row.ItemID != planned.ItemID {
 		return false
 	}
@@ -449,9 +547,6 @@ func remoteIdentityMatchesPlanned(row *RemoteStateRow, planned *RemoteState) boo
 		return false
 	}
 	if row.ItemType != planned.ItemType {
-		return false
-	}
-	if planned.ETag != "" && row.ETag != planned.ETag {
 		return false
 	}
 

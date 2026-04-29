@@ -31,43 +31,60 @@ func (flow *engineFlow) admitReady(
 	watch *watchRuntime,
 	ready []*TrackedAction,
 ) ([]*TrackedAction, error) {
-	fresh, err := flow.filterFreshReadyActions(ctx, watch, ready)
+	decisions := flow.decideAdmission(flow.engine.nowFunc(), ready)
+	filtered, ownedOnError, err := flow.filterFreshAdmissionDecisions(ctx, watch, decisions)
 	if err != nil {
-		return nil, err
+		return ownedOnError, err
 	}
 
-	decisions := flow.decideAdmission(flow.engine.nowFunc(), fresh)
-	return flow.applyAdmissionDecisions(ctx, watch, decisions)
+	return flow.applyAdmissionDecisions(ctx, watch, filtered)
 }
 
-func (flow *engineFlow) filterFreshReadyActions(
+func (flow *engineFlow) filterFreshAdmissionDecisions(
 	ctx context.Context,
 	watch *watchRuntime,
-	ready []*TrackedAction,
-) ([]*TrackedAction, error) {
-	fresh := make([]*TrackedAction, 0, len(ready))
-	for _, ta := range ready {
+	decisions []admissionDecision,
+) ([]admissionDecision, []*TrackedAction, error) {
+	filtered := make([]admissionDecision, 0, len(decisions))
+	for i := range decisions {
+		decision := decisions[i]
+		ta := decision.Action
 		if ta == nil {
 			continue
 		}
-
-		decision, err := evaluateActionFreshnessFromStore(ctx, flow.engine.baseline, &ta.Action)
-		if err != nil {
-			return fresh, err
-		}
-		if decision.Fresh {
-			fresh = append(fresh, ta)
+		if decision.Kind != admissionDispatchNow {
+			filtered = append(filtered, decision)
 			continue
 		}
 
-		completionErr := fmt.Errorf("%w: %s", ErrActionPreconditionChanged, decision.Reason)
+		freshness, err := evaluateActionFreshnessFromStore(ctx, flow.engine.baseline, &ta.Action)
+		if err != nil {
+			return filtered, append(admissionDispatchActions(filtered), ta), err
+		}
+		if freshness.Fresh {
+			filtered = append(filtered, decisions[i])
+			continue
+		}
+
+		completionErr := fmt.Errorf("%w: %s", ErrActionPreconditionChanged, freshness.Reason)
 		completion := actionCompletionFromTrackedAction(ta, nil, completionErr)
 		if err := flow.applySupersededCompletion(ctx, watch, ta, &completion, "admission stale action"); err != nil {
-			return fresh, err
+			return filtered, admissionDispatchActions(filtered), err
 		}
 	}
 
-	return fresh, nil
+	return filtered, nil, nil
+}
+
+func admissionDispatchActions(decisions []admissionDecision) []*TrackedAction {
+	actions := make([]*TrackedAction, 0, len(decisions))
+	for i := range decisions {
+		if decisions[i].Kind == admissionDispatchNow && decisions[i].Action != nil {
+			actions = append(actions, decisions[i].Action)
+		}
+	}
+
+	return actions
 }
 
 func (flow *engineFlow) decideAdmission(
