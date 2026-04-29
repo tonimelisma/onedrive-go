@@ -13,16 +13,16 @@ import (
 // payload itself.
 //
 // Failure policy is explicit:
-//   - local observation failure is recoverable and drops the batch
+//   - local observation failure is recoverable and reports applied=false
 //   - once the engine depends on authoritative local snapshot or runtime state,
 //     failures are fatal to watch
 func (rt *watchRuntime) runSteadyStateReplan(
 	ctx context.Context,
 	p *watchPipeline,
 	batch dirtyBatch,
-) error {
+) (bool, error) {
 	if p == nil || p.bl == nil {
-		return fmt.Errorf("sync: steady-state replan requires loaded baseline")
+		return false, fmt.Errorf("sync: steady-state replan requires loaded baseline")
 	}
 
 	rt.engine.logger.Info("processing watch steady-state replan",
@@ -48,22 +48,19 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	rt.emitRuntimeDebugEvent(engineDebugEventPlanningStarted, "", 0, replanStart)
 	runtime, err := rt.runSteadyStateCurrentPlan(ctx, p.bl, p.mode)
 	if err != nil {
-		return rt.finishSteadyStateReplanStep(ctx, "build_current_plan", err)
+		return false, rt.finishSteadyStateReplanStep(ctx, "build_current_plan", err)
 	}
 	rt.emitRuntimeDebugEvent(engineDebugEventPlanningFinished, "", 0, planStart)
 
-	dispatch, dispatched, err := rt.startRuntimeStage(ctx, runtime, p.bl, rt)
+	dispatch, _, err := rt.startRuntimeStage(ctx, runtime, p.bl, rt)
 	if err != nil {
-		return rt.finishSteadyStateReplanStep(ctx, "start_runtime", err)
+		return false, rt.finishSteadyStateReplanStep(ctx, "start_runtime", err)
 	}
 	rt.replaceOutbox(dispatch)
 	rt.loop.postReplanOutbox = len(dispatch) > 0
 	rt.emitRuntimeDebugEvent(engineDebugEventNewPlanInstalled, "", len(dispatch), replanStart)
-	if !dispatched {
-		return nil
-	}
 
-	return nil
+	return true, nil
 }
 
 func (rt *watchRuntime) finishSteadyStateReplanStep(
@@ -85,21 +82,21 @@ func (rt *watchRuntime) finishSteadyStateReplanStep(
 func (rt *watchRuntime) handleSteadyStateLocalRefreshError(
 	ctx context.Context,
 	err error,
-) error {
+) (bool, error) {
 	if isWatchShutdownError(ctx, err) {
-		return nil
+		return false, nil
 	}
 
 	step, ok := currentLocalRefreshStep(err)
 	if !ok {
-		return fmt.Errorf("sync: watch replan local refresh: %w", err)
+		return false, fmt.Errorf("sync: watch replan local refresh: %w", err)
 	}
 	if step == localCurrentRefreshStepObservation {
 		rt.engine.logger.Error("watch local refresh failed, dropping replan trigger",
 			slog.String("error", err.Error()),
 		)
-		return nil
+		return false, nil
 	}
 
-	return rt.finishSteadyStateReplanStep(ctx, string(step), err)
+	return false, rt.finishSteadyStateReplanStep(ctx, string(step), err)
 }

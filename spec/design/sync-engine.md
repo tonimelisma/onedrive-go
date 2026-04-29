@@ -67,7 +67,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 | Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
 | Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child work snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestShortcutRootTransitionMatrixEnumeratesEveryStateAndEvent`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroValueReturnsError` |
-| Pending watch replans retire old-runtime work that has not started yet, including dependents released by already-running old actions, and leave replacement work to a fresh plan from current truth. | `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction` |
+| Pending watch replans retire old-runtime work that has not started yet, including dependents released by already-running old actions, and leave replacement work to a fresh plan from current truth. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal` |
 
 ## Construction
 
@@ -323,16 +323,22 @@ Dirty observation while work is still queued or running sets a pending replan
 flag instead of appending a second graph into the current runtime. Setting that
 flag retires not-yet-dispatched old outbox actions as superseded runtime work:
 the engine removes them from queued state, does not mark them successful, does
-not admit their dependents, and does not create ordinary retry rows for them.
+not admit their dependents, and does not create ordinary retry rows for them. A
+replan signal that is already ready is consumed before the watch loop enables
+old-outbox dispatch for that step, so ready replacement pressure wins over
+handing more old work to idle workers.
 Already-running or already-submitted worker actions are not automatically
 invalidated by the old plan becoming replaceable; they continue through normal
 completion and executor-side precondition policy. If such a completion releases
 new dependents while a pending replan exists, that newly-ready frontier is also
 retired instead of appended to the old outbox. Once running work settles, the
 loop rebuilds from current committed truth plus durable `retry_work` /
-`block_scopes`. The idle watch-step owner still receives debounced coarse dirty
-hints directly; an empty outbox does not mean steady-state replans can be
-deferred until some other watch event arrives.
+`block_scopes`. If local observation fails before that replacement runtime is
+installed, the retired work stays retired and the same dirty/full-refresh intent
+is rescheduled through `DirtyBuffer` instead of being dropped. The idle
+watch-step owner still receives debounced coarse dirty hints directly; an empty
+outbox does not mean steady-state replans can be deferred until some other watch
+event arrives.
 
 Retry/trial is not an alternate planner. Timer-driven follow-up only
 re-releases exact held actions that are already part of the current runtime.
