@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +36,24 @@ func seedStaleRetryAndBlockScopeForCurrentPlanTest(t *testing.T, ctx context.Con
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	}))
+}
+
+func localRowsContainPath(rows []LocalStateRow, path string) bool {
+	for i := range rows {
+		if rows[i].Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func remoteRowsContainPath(rows []RemoteStateRow, path string) bool {
+	for i := range rows {
+		if rows[i].Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 // Validates: R-2.1.3, R-2.1.4
@@ -86,6 +105,82 @@ func TestLoadCurrentInputs_FiltersCurrentStateBeforeComparison(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rawRemote, 1)
 	assert.Equal(t, "hidden/file.txt", rawRemote[0].Path)
+}
+
+// Validates: R-2.4.1, R-2.4.2
+func TestFilterLifecycle_LocalSnapshotRefreshAndRemoteRawReprojection(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	var emptyTokenDeltaCalls atomic.Int32
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, token string) (*graph.DeltaPage, error) {
+			if token == "" {
+				emptyTokenDeltaCalls.Add(1)
+			}
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-current"), nil
+		},
+	}
+	eng, syncRoot := newTestEngine(t, mock)
+	ctx := t.Context()
+	clock := newManualClock(time.Date(2026, 4, 29, 9, 0, 0, 0, time.UTC))
+	installManualClock(eng.Engine, clock)
+
+	writeLocalFile(t, syncRoot, "visible/local.txt", "visible local")
+	writeLocalFile(t, syncRoot, "hidden/local.txt", "hidden local")
+	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []LocalStateRow{{
+		Path:     "hidden/stale.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "stale",
+		Size:     5,
+	}}))
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "item-hidden-remote",
+		Path:     "hidden/remote.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "hash-hidden-remote",
+		Size:     20,
+	}}, "", driveID))
+	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "cursor-current"))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, clock.Now(), remoteObservationModeDelta))
+
+	eng.contentFilter = ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+	fullReconcile, err := eng.shouldRunFullRemoteRefresh(ctx, false)
+	require.NoError(t, err)
+	require.False(t, fullReconcile, "filter config changes must not force full remote refresh")
+
+	pending, err := eng.flow.observeAndCommitCurrentState(ctx, bl, fullReconcile)
+	require.NoError(t, err)
+	observation, err := eng.flow.loadCommittedCurrentObservation(ctx, pending)
+	require.NoError(t, err)
+
+	assert.True(t, localRowsContainPath(observation.inputs.localRows, "visible/local.txt"))
+	assert.False(t, localRowsContainPath(observation.inputs.localRows, "hidden/local.txt"))
+	assert.False(t, remoteRowsContainPath(observation.inputs.remoteRows, "hidden/remote.txt"))
+
+	rawLocalRows, err := eng.baseline.ListLocalState(ctx)
+	require.NoError(t, err)
+	assert.True(t, localRowsContainPath(rawLocalRows, "visible/local.txt"))
+	assert.False(t, localRowsContainPath(rawLocalRows, "hidden/stale.txt"))
+	assert.False(t, localRowsContainPath(rawLocalRows, "hidden/local.txt"))
+	rawRemoteRows, err := eng.baseline.ListRemoteState(ctx)
+	require.NoError(t, err)
+	assert.True(t, remoteRowsContainPath(rawRemoteRows, "hidden/remote.txt"))
+
+	eng.contentFilter = ContentFilterConfig{}
+	pending, err = eng.flow.observeAndCommitCurrentState(ctx, bl, false)
+	require.NoError(t, err)
+	observation, err = eng.flow.loadCommittedCurrentObservation(ctx, pending)
+	require.NoError(t, err)
+
+	assert.True(t, localRowsContainPath(observation.inputs.localRows, "hidden/local.txt"))
+	assert.True(t, remoteRowsContainPath(observation.inputs.remoteRows, "hidden/remote.txt"))
+	assert.Zero(t, emptyTokenDeltaCalls.Load(), "filter changes should reuse cursor-based remote observation")
 }
 
 // Validates: R-2.10.5

@@ -128,6 +128,69 @@ func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *te
 	assert.Nil(t, rt.dirtyBuf.FlushImmediate())
 }
 
+// Validates: R-2.4.2
+func TestRemoteEventHasPlannerVisibleEffect_TransitionMatrix(t *testing.T) {
+	t.Parallel()
+
+	filter := ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	tests := []struct {
+		name string
+		path string
+		old  string
+		want bool
+	}{
+		{
+			name: "hidden to hidden does not wake",
+			path: "hidden/new.txt",
+			old:  "hidden/old.txt",
+			want: false,
+		},
+		{
+			name: "visible to hidden wakes",
+			path: "hidden/new.txt",
+			old:  "visible/old.txt",
+			want: true,
+		},
+		{
+			name: "hidden to visible wakes",
+			path: "visible/new.txt",
+			old:  "hidden/old.txt",
+			want: true,
+		},
+		{
+			name: "visible to visible wakes",
+			path: "visible/new.txt",
+			old:  "visible/old.txt",
+			want: true,
+		},
+		{
+			name: "hidden create does not wake",
+			path: "hidden/create.txt",
+			want: false,
+		},
+		{
+			name: "visible delete wakes",
+			path: "visible/delete.txt",
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			event := ChangeEvent{
+				Source:   SourceRemote,
+				Type:     ChangeModify,
+				Path:     tt.path,
+				OldPath:  tt.old,
+				ItemType: ItemTypeFile,
+			}
+			assert.Equal(t, tt.want, remoteEventHasPlannerVisibleEffect(filter, &event))
+		})
+	}
+}
+
 // Validates: R-2.1.2
 func TestHandleRemoteObservationBatch_MountRootWatchCommitsObservedRowsAndPendingCursor(t *testing.T) {
 	t.Parallel()

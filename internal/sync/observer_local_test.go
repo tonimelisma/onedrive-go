@@ -672,6 +672,35 @@ func TestFullScan_JunkIgnoredWhenConfigured(t *testing.T) {
 	assert.Empty(t, result.Skipped, "ignored junk items should not appear in Skipped")
 }
 
+// Validates: R-2.4.2, R-2.4.5, R-2.11.1
+func TestFullScan_IncludedDirsPruneOutOfScopeSubtreesAndIssues(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "Projects/App/ok.txt", "included")
+	writeTestFile(t, dir, "Projects/App/CON", "visible invalid")
+	writeTestFile(t, dir, "Projects/Other/CON", "out of include")
+	writeTestFile(t, dir, "Archive/CON", "out of include")
+
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(ContentFilterConfig{IncludedDirs: []string{"Projects/App"}})
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	require.NoError(t, err, "FullScan")
+
+	paths := eventPaths(result.Events)
+	assert.Contains(t, paths, "Projects")
+	assert.Contains(t, paths, "Projects/App")
+	assert.Contains(t, paths, "Projects/App/ok.txt")
+	assert.NotContains(t, paths, "Projects/Other")
+	assert.NotContains(t, paths, "Projects/Other/CON")
+	assert.NotContains(t, paths, "Archive")
+	assert.NotContains(t, paths, "Archive/CON")
+
+	require.Len(t, result.Skipped, 1)
+	assert.Equal(t, "Projects/App/CON", result.Skipped[0].Path)
+	assert.Equal(t, IssueInvalidFilename, result.Skipped[0].Reason)
+}
+
 func TestFullScan_ContextCanceled(t *testing.T) {
 	t.Parallel()
 

@@ -221,6 +221,9 @@ Ignore invariants:
 - ignored local items do not enter `local_state`
 - remote observation persists raw manageable `remote_state`; planner loading
   filters the remote current-state view before comparison
+- remote delta wake optimization is driven by whether the emitted path or old
+  path is visible under the current `ContentFilter`; hidden-to-hidden changes
+  advance raw observation state without waking planning
 - if a baseline path is absent from both filtered current views, reconciliation
   removes only the baseline row
 

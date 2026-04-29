@@ -220,6 +220,14 @@ func testStandaloneMountsFromConfig(cfg *config.Config) (StandaloneMountSelectio
 			TransferWorkers:        cfg.TransferWorkers,
 			CheckWorkers:           cfg.CheckWorkers,
 			MinFreeSpaceBytes:      minFreeSpace,
+			ContentFilter: syncengine.ContentFilterConfig{
+				IgnoredDirs:     append([]string(nil), drive.IgnoredDirs...),
+				IncludedDirs:    append([]string(nil), drive.IncludedDirs...),
+				IgnoredPaths:    append([]string(nil), drive.IgnoredPaths...),
+				IgnoreDotfiles:  drive.IgnoreDotfiles,
+				IgnoreJunkFiles: drive.IgnoreJunkFiles,
+				FollowSymlinks:  drive.FollowSymlinks,
+			},
 		})
 	}
 
@@ -2966,6 +2974,80 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	}
 }
 
+// Validates: R-2.4.1, R-2.4.2
+func TestOrchestrator_Reload_ContentFilterChangeRestartsOnlyAffectedMount(t *testing.T) {
+	rd1 := testStandaloneMount(t, "personal:filter-reload-a@example.com", "FilterA")
+	rd2 := testStandaloneMount(t, "personal:filter-reload-b@example.com", "FilterB")
+	setupXDGIsolation(t, rd1.CanonicalID, rd2.CanonicalID)
+
+	cfgPath := writeTestConfig(t, rd1.CanonicalID, rd2.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd1, rd2)
+	cfg.ControlSocketPath = shortControlSocketPath(t)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+
+	var mu sync.Mutex
+	started := make(map[string]int)
+	stopped := make(map[string]int)
+
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		mountID := string(req.Mount.id())
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+				mu.Lock()
+				started[mountID]++
+				mu.Unlock()
+
+				<-ctx.Done()
+
+				mu.Lock()
+				stopped[mountID]++
+				mu.Unlock()
+				return ctx.Err()
+			},
+		}, nil
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	}()
+
+	rd1ID := rd1.CanonicalID.String()
+	rd2ID := rd2.CanonicalID.String()
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return started[rd1ID] == 1 && started[rd2ID] == 1
+	}, 5*time.Second, 10*time.Millisecond)
+
+	insertDriveConfigLine(t, cfgPath, rd1.CanonicalID, `ignored_dirs = ["hidden"]`)
+	postControlReload(t, cfg.ControlSocketPath)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return started[rd1ID] == 2 && stopped[rd1ID] == 1
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.Never(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return started[rd2ID] > 1 || stopped[rd2ID] > 0
+	}, 200*time.Millisecond, 10*time.Millisecond, "unchanged filter mount should not restart")
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not stop in time")
+	}
+}
+
 // Validates: R-2.4
 func TestOrchestrator_Reload_RemoveMount(t *testing.T) {
 	rd1 := testStandaloneMount(t, "personal:keep@example.com", "Keep")
@@ -3313,6 +3395,22 @@ func writeTestConfig(t *testing.T, cids ...driveid.CanonicalID) string {
 	}
 
 	return cfgPath
+}
+
+func insertDriveConfigLine(t *testing.T, cfgPath string, cid driveid.CanonicalID, line string) {
+	t.Helper()
+
+	// #nosec G304 -- cfgPath is a test-owned config path from writeTestConfig.
+	data, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	header := fmt.Sprintf("[%q]\n", cid.String())
+	content := string(data)
+	idx := strings.Index(content, header)
+	require.NotEqual(t, -1, idx, "drive section %s not found", cid.String())
+	insertAt := idx + len(header)
+	content = content[:insertAt] + line + "\n" + content[insertAt:]
+	// #nosec G703 -- cfgPath is a test-owned config path from writeTestConfig.
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
 }
 
 // writeTestConfigSingle overwrites a config file with a single drive.

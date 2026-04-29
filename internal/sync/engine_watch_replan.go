@@ -31,7 +31,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	rt.engine.collector().RecordWatchBatch(1)
 
 	observeStart := rt.engine.nowFunc()
-	localResult, err := rt.refreshAndCommitLocalCurrentState(ctx, p.bl, false)
+	localResult, err := rt.refreshAndCommitLocalCurrentState(ctx, p.bl)
 	if err != nil {
 		return rt.handleSteadyStateLocalRefreshError(ctx, err)
 	}
