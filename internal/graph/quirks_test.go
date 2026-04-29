@@ -132,12 +132,12 @@ func TestDecodeURLEncodedNames_UTF8Sequences(t *testing.T) {
 }
 
 // TestNormalizeDeltaItems_PipelineOrder validates that the full normalization
-// pipeline runs in the correct order: decode → filter → clear hashes → dedup → reorder.
+// pipeline runs in the correct order: decode → clear hashes → dedup → reorder.
 func TestNormalizeDeltaItems_PipelineOrder(t *testing.T) {
 	items := []Item{
 		// URL-encoded name that should be decoded first.
 		{ID: "encoded", Name: "my%20doc.txt", ParentID: "root"},
-		// Package that should be filtered out.
+		// Package stays visible to Graph callers; sync filters it later.
 		{ID: "pkg", Name: "Notebook.one", IsPackage: true, ParentID: "root"},
 		// Deleted item with bogus hash that should be cleared.
 		{ID: "deleted", Name: "old.txt", IsDeleted: true, QuickXorHash: "bogus", ParentID: "folder"},
@@ -150,8 +150,8 @@ func TestNormalizeDeltaItems_PipelineOrder(t *testing.T) {
 
 	result := normalizeDeltaItems(items, testNoopLogger())
 
-	// Package filtered, duplicate removed: 4 items remain.
-	require.Len(t, result, 4)
+	// Duplicate removed; package remains provider truth.
+	require.Len(t, result, 5)
 
 	// Verify URL decoding applied.
 	var encodedItem *Item

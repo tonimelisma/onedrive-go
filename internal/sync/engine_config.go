@@ -24,6 +24,7 @@ type EngineMountConfig struct {
 	RemoteRootDeltaCapable   bool
 	ExpectedSyncRootIdentity *ShortcutRootIdentity
 	EnableWebsocket          bool
+	ContentFilter            ContentFilterConfig
 	LocalRules               LocalObservationRules
 	ShortcutNamespaceID      string
 	ShortcutChildWorkSink    ShortcutChildWorkSink
@@ -85,6 +86,7 @@ func NewMountEngine(
 		PermChecker:              session.Meta,
 		Logger:                   logger,
 		EnableWebsocket:          mountCfg.EnableWebsocket,
+		ContentFilter:            mountCfg.ContentFilter,
 		LocalRules:               mountCfg.LocalRules,
 		ShortcutNamespaceID:      mountCfg.ShortcutNamespaceID,
 		ShortcutChildWorkSink:    mountCfg.ShortcutChildWorkSink,

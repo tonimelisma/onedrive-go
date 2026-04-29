@@ -111,7 +111,7 @@ func cloneMountSpec(mount *mountSpec) *mountSpec {
 	}
 	if mount.child != nil {
 		child := *mount.child
-		child.engine = cloneShortcutChildEngineSpec(mount.child.engine)
+		child.engine = cloneShortcutChildEngineSpec(&mount.child.engine)
 		cloned.child = &child
 	}
 	return &cloned

@@ -25,6 +25,97 @@ func TestValidateDrives_ValidDrive(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestValidateDrives_ValidDriveFilterConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{
+		SyncDir: "~/OneDrive",
+		DriveFilterConfig: DriveFilterConfig{
+			IgnoredDirs:     []string{"node_modules", "build/cache"},
+			IncludedDirs:    []string{"Projects"},
+			IgnoredPaths:    []string{"*.log", "tmp/*"},
+			IgnoreDotfiles:  true,
+			IgnoreJunkFiles: true,
+			FollowSymlinks:  true,
+		},
+	}
+
+	err := Validate(cfg)
+	assert.NoError(t, err)
+}
+
+func TestValidateDrives_FilterDirsMustBeNormalizedRootRelativeExactPaths(t *testing.T) {
+	tests := []struct {
+		name  string
+		drive Drive
+		want  string
+	}{
+		{
+			name:  "absolute ignored dir",
+			drive: Drive{DriveFilterConfig: DriveFilterConfig{IgnoredDirs: []string{"/node_modules"}}},
+			want:  "root-relative",
+		},
+		{
+			name:  "parent ignored dir",
+			drive: Drive{DriveFilterConfig: DriveFilterConfig{IgnoredDirs: []string{"../secret"}}},
+			want:  "..",
+		},
+		{
+			name:  "root included dir",
+			drive: Drive{DriveFilterConfig: DriveFilterConfig{IncludedDirs: []string{"."}}},
+			want:  "sync root",
+		},
+		{
+			name:  "glob included dir",
+			drive: Drive{DriveFilterConfig: DriveFilterConfig{IncludedDirs: []string{"Projects/*"}}},
+			want:  "exact",
+		},
+		{
+			name:  "unnormalized ignored dir",
+			drive: Drive{DriveFilterConfig: DriveFilterConfig{IgnoredDirs: []string{"build/../dist"}}},
+			want:  "..",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = tt.drive
+
+			err := Validate(cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestValidateDrives_IgnoredPathsMustBeNormalizedRootRelativeGlobs(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		want    string
+	}{
+		{name: "empty", pattern: "", want: "empty"},
+		{name: "absolute", pattern: "/tmp/*", want: "root-relative"},
+		{name: "root", pattern: ".", want: "sync root"},
+		{name: "parent", pattern: "../secret", want: ".."},
+		{name: "unnormalized", pattern: "a/../b", want: ".."},
+		{name: "invalid glob", pattern: "[", want: "invalid"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{
+				DriveFilterConfig: DriveFilterConfig{IgnoredPaths: []string{tt.pattern}},
+			}
+
+			err := Validate(cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
 func TestValidateDrives_MultipleDrives_Valid(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")] = Drive{SyncDir: "~/OneDrive"}

@@ -243,6 +243,7 @@ func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 	return false, rt.engine.shortcutChildWorkSink(ctx, shortcutChildWorkSnapshotFromRootsWithParentRoot(
 		rt.engine.shortcutNamespaceID,
 		rt.engine.syncRoot,
+		rt.engine.contentFilter,
 		roots,
 	))
 }

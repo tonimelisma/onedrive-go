@@ -221,7 +221,24 @@ func (rt *watchRuntime) markDirtyFromRemoteBatch(batch *remoteObservationBatch) 
 		rt.dirtyBuf.MarkFullRefresh()
 	}
 
-	if len(batch.emitted) > 0 {
+	if rt.remoteBatchHasPlannerVisibleEffects(batch) {
 		rt.dirtyBuf.MarkDirty()
 	}
+}
+
+func (rt *watchRuntime) remoteBatchHasPlannerVisibleEffects(batch *remoteObservationBatch) bool {
+	if rt == nil || rt.engine == nil || batch == nil || len(batch.emitted) == 0 {
+		return false
+	}
+	visibility := NewContentFilter(rt.engine.contentFilter)
+	for i := range batch.emitted {
+		event := batch.emitted[i]
+		if visibility.Visible(event.Path, event.ItemType) {
+			return true
+		}
+		if event.OldPath != "" && visibility.Visible(event.OldPath, event.ItemType) {
+			return true
+		}
+	}
+	return false
 }

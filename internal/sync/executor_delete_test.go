@@ -47,12 +47,12 @@ func TestIsDisposable(t *testing.T) {
 		{"~backup", true},
 		{".~lock.file", true},
 
-		// Invalid OneDrive names.
-		{"desktop.ini", true},   // reserved name
-		{"~$doc.docx", true},    // starts with ~$ (tilde + always excluded prefix)
-		{"CON", true},           // reserved device name
-		{"file.", true},         // trailing dot
-		{" leadingspace", true}, // leading space
+		// Invalid OneDrive names are user-actionable issues, not disposable.
+		{"desktop.ini", false},
+		{"~$doc.docx", false},
+		{"CON", false},
+		{"file.", false},
+		{" leadingspace", false},
 
 		// Normal files — NOT disposable.
 		{"important.txt", false},
@@ -89,10 +89,43 @@ func newDeleteTestExecutor(t *testing.T) (*Executor, string) {
 
 	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
+	cfg.SetContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
 	e := NewExecution(cfg, emptyBaseline())
 
 	return e, syncRoot
+}
+
+func TestDeleteLocalFolder_JunkFileWhenIgnoreJunkDisabled_Fails(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	driveID := driveid.New(synctest.TestDriveID)
+	logger := synctest.TestLogger(t)
+	syncTree, err := synctree.Open(syncRoot)
+	require.NoError(t, err)
+
+	cfg := NewExecutorConfig(
+		&executorMockItemClient{},
+		&executorMockDownloader{},
+		&executorMockUploader{},
+		syncTree,
+		driveID,
+		logger,
+		nil,
+	)
+	cfg.SetTransferMgr(driveops.NewTransferManager(&executorMockDownloader{}, &executorMockUploader{}, nil, logger))
+	e := NewExecution(cfg, emptyBaseline())
+
+	dir := filepath.Join(syncRoot, "folder")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte{0}, 0o600))
+
+	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
+	outcome := e.DeleteLocalFolder(action, dir)
+
+	requireOutcomeFailure(t, &outcome)
+	assert.Contains(t, outcome.Error.Error(), ".DS_Store")
 }
 
 // Validates: R-6.2.4
@@ -150,6 +183,43 @@ func TestExecuteRemoteDelete_DoesNotUsePathConvergenceDelete(t *testing.T) {
 	requireOutcomeSuccess(t, &outcome)
 	assert.Empty(t, pathConvergence.deleteResolvedCalls)
 	assert.Empty(t, pathConvergence.permanentDeletePathCalls)
+}
+
+func TestExecuteLocalDelete_SymlinkAliasDeletesOnlyLink(t *testing.T) {
+	t.Parallel()
+
+	e, syncRoot := newDeleteTestExecutor(t)
+	targetDir := t.TempDir()
+	targetPath := filepath.Join(targetDir, "target.txt")
+	require.NoError(t, os.WriteFile(targetPath, []byte("target"), 0o600))
+	require.NoError(t, os.Symlink(targetPath, filepath.Join(syncRoot, "link.txt")))
+
+	action := &Action{Type: ActionLocalDelete, Path: "link.txt", ItemID: "id-link"}
+	outcome := e.ExecuteLocalDelete(t.Context(), action)
+
+	requireOutcomeSuccess(t, &outcome)
+	_, linkErr := os.Lstat(filepath.Join(syncRoot, "link.txt"))
+	assert.True(t, os.IsNotExist(linkErr))
+	assert.FileExists(t, targetPath)
+}
+
+func TestExecuteLocalDelete_BlocksDescendantUnderSymlinkedDirectory(t *testing.T) {
+	t.Parallel()
+
+	e, syncRoot := newDeleteTestExecutor(t)
+	targetDir := t.TempDir()
+	targetPath := filepath.Join(targetDir, "child.txt")
+	require.NoError(t, os.WriteFile(targetPath, []byte("target"), 0o600))
+	require.NoError(t, os.Symlink(targetDir, filepath.Join(syncRoot, "linkdir")))
+
+	action := &Action{Type: ActionLocalDelete, Path: "linkdir/child.txt", ItemID: "id-child"}
+	outcome := e.ExecuteLocalDelete(t.Context(), action)
+
+	requireOutcomeFailure(t, &outcome)
+	assert.Contains(t, outcome.Error.Error(), "symlink boundary linkdir")
+	assert.FileExists(t, targetPath)
+	_, linkErr := os.Lstat(filepath.Join(syncRoot, "linkdir"))
+	require.NoError(t, linkErr)
 }
 
 func TestDeleteLocalFolder_TmpFilesOnly_Succeeds(t *testing.T) {

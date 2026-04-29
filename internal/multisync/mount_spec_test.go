@@ -55,6 +55,14 @@ func TestBuildStandaloneMountSpecs_PreservesOrderAndReportingFields(t *testing.T
 	second := testStandaloneMount(t, "business:second@example.com", "Second")
 	second.Paused = true
 	first.SelectionIndex = 4
+	first.ContentFilter = syncengine.ContentFilterConfig{
+		IgnoredDirs:     []string{"build"},
+		IncludedDirs:    []string{"Projects"},
+		IgnoredPaths:    []string{"*.tmp"},
+		IgnoreDotfiles:  true,
+		IgnoreJunkFiles: true,
+		FollowSymlinks:  true,
+	}
 	second.SelectionIndex = 9
 
 	mounts, err := buildStandaloneMountSpecs([]StandaloneMountConfig{first, second})
@@ -76,10 +84,27 @@ func TestBuildStandaloneMountSpecs_PreservesOrderAndReportingFields(t *testing.T
 	assert.False(t, mounts[0].paused())
 	assert.Equal(t, first.TransferWorkers, mounts[0].transferWorkers())
 	assert.Equal(t, first.CheckWorkers, mounts[0].checkWorkers())
+	assert.Equal(t, first.ContentFilter, mounts[0].contentFilter())
 
 	assert.Equal(t, mountID(second.CanonicalID.String()), mounts[1].id())
 	assert.Equal(t, 9, mounts[1].selectionIndex())
 	assert.True(t, mounts[1].paused())
+}
+
+// Validates: R-2.8.5
+func TestMountSpecsEquivalentForWatchRestart_ChangesOnContentFilter(t *testing.T) {
+	t.Parallel()
+
+	current := testStandaloneMount(t, "personal:filter-reload@example.com", "Filtered")
+	next := current
+	next.ContentFilter = syncengine.ContentFilterConfig{IgnoredDirs: []string{"node_modules"}}
+
+	currentMounts, err := buildStandaloneMountSpecs([]StandaloneMountConfig{current})
+	require.NoError(t, err)
+	nextMounts, err := buildStandaloneMountSpecs([]StandaloneMountConfig{next})
+	require.NoError(t, err)
+
+	assert.False(t, mountSpecsEquivalentForWatchRestart(currentMounts[0], nextMounts[0]))
 }
 
 // Validates: R-2.8.1

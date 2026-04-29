@@ -48,7 +48,7 @@ type Engine struct {
 	sessionStore             *driveops.SessionStore // for CleanStale() housekeeping
 	transferWorkers          int                    // goroutine count for the worker pool
 	checkWorkers             int                    // goroutine limit for parallel file hashing
-	localFilter              LocalFilterConfig
+	contentFilter            ContentFilterConfig
 	protectedRoots           []ProtectedRoot
 	localRules               LocalObservationRules
 	shortcutNamespaceID      string
@@ -121,6 +121,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		cfg.PathConvergence,
 	)
 	execCfg.SetRemoteRootItemID(cfg.RemoteRootItemID)
+	execCfg.SetContentFilter(cfg.ContentFilter)
 
 	// Construct sessionStore and TransferManager together so the TM is
 	// immutable after creation (no post-hoc field mutation). Disk space
@@ -159,7 +160,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		perfCollector:            cfg.PerfCollector,
 		transferWorkers:          cfg.TransferWorkers,
 		checkWorkers:             cfg.CheckWorkers,
-		localFilter:              cfg.LocalFilter,
+		contentFilter:            cfg.ContentFilter,
 		localRules:               cfg.LocalRules,
 		shortcutNamespaceID:      cfg.ShortcutNamespaceID,
 		shortcutChildWorkSink:    cfg.ShortcutChildWorkSink,

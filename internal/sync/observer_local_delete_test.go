@@ -96,16 +96,14 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 }
 
 // Validates: R-2.4.6
-func TestHandleFsEvent_SkipSymlinksIgnoresTransientSymlinkDelete(t *testing.T) {
+func TestHandleFsEvent_DefaultSymlinkPolicyIgnoresTransientSymlinkDelete(t *testing.T) {
 	t.Parallel()
 
 	syncRoot := t.TempDir()
 	writeTestFile(t, syncRoot, "real.txt", "content")
 
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(LocalFilterConfig{
-		SkipSymlinks: true,
-	})
+	obs.SetFilterConfig(ContentFilterConfig{FollowSymlinks: false})
 
 	watcher := newRecordingFsWatcher()
 	events := make(chan ChangeEvent, 4)
@@ -160,9 +158,7 @@ func TestSkipSymlinkDelete_RemainsIgnoredThroughSafetyScan(t *testing.T) {
 	)
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(LocalFilterConfig{
-		SkipSymlinks: true,
-	})
+	obs.SetFilterConfig(ContentFilterConfig{FollowSymlinks: false})
 
 	watcher := newRecordingFsWatcher()
 	tree := mustOpenSyncTree(t, syncRoot)
@@ -191,7 +187,7 @@ func TestSkipSymlinkDelete_RemainsIgnoredThroughSafetyScan(t *testing.T) {
 }
 
 // Validates: R-2.4.6
-func TestAddWatchesRecursive_FollowsSymlinksByDefault(t *testing.T) {
+func TestAddWatchesRecursive_SkipsSymlinksByDefault(t *testing.T) {
 	root := t.TempDir()
 
 	// Create a real directory and a symlink to it.
@@ -213,11 +209,9 @@ func TestAddWatchesRecursive_FollowsSymlinksByDefault(t *testing.T) {
 	err := obs.AddWatchesRecursive(t.Context(), tracker, mustOpenSyncTree(t, root))
 	require.NoError(t, err)
 
-	// The root, realdir, and symlink alias should all be watched under the
-	// default built-in symlink observation policy.
 	assert.True(t, tracker.addedPaths[root], "expected root to be watched")
 	assert.True(t, tracker.addedPaths[realDir], "expected realdir to be watched")
-	assert.True(t, tracker.addedPaths[symlinkDir], "symlinked directory should be watched by default")
+	assert.False(t, tracker.addedPaths[symlinkDir], "symlinked directory should be skipped by default")
 }
 
 // addTrackingWatcher implements FsWatcher and records which paths are added.

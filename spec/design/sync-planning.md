@@ -9,8 +9,9 @@ Implements: R-2.1.3 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [v
 Planning is now split between SQLite structural diff and a Go actionable-set
 builder.
 
-- SQLite computes deterministic comparison and reconciliation rows from
-  `baseline`, `local_state`, and `remote_state`
+- SQLite computes deterministic comparison and reconciliation rows from raw
+  `baseline` plus planner-visible filtered `local_state` and `remote_state`
+  temp views
 - Go turns those rows into the current executable action set after blocking,
   filtering, conflict handling, and dependency detection
 
@@ -27,7 +28,9 @@ intent; multisync receives only that child work intent.
 - Owns: turning reconciliation rows into the current executable action set,
   including conflict expansion, filtering, deferral, and dependency ordering
 - Does Not Own: observation, execution, retry timing, scope persistence, or remote/local I/O
-- Source of Truth: `baseline`, `local_state`, and `remote_state` through SQLite reconciliation rows, plus engine-owned sync mode and runtime policy.
+- Source of Truth: raw `baseline`, raw current-state tables, and the engine's
+  compiled `ContentFilter`. Planning sees filtered current-state views through
+  SQLite reconciliation rows, plus engine-owned sync mode and runtime policy.
 - Allowed Side Effects: none
 - Mutable Runtime Owner: None. Planning is deterministic value transformation over one input set and owns no long-lived mutable runtime state.
 - Error Boundary: planner errors stop at invalid or unsupported planning states. Transport, filesystem, store, and execution failures stay outside the planner boundary.
@@ -43,16 +46,20 @@ intent; multisync receives only that child work intent.
 ## Inputs
 
 - `baseline`: last known synced common ancestor
-- `local_state`: latest admissible local snapshot
-- `remote_state`: latest admissible remote snapshot
+- `local_state`: latest admissible local snapshot, filtered again when planning
+  so stale rows from a changed filter cannot leak into comparison
+- `remote_state`: latest raw manageable remote snapshot, filtered when planning
+  so disabling a filter can re-present already-observed remote truth
 - `observation_issues`: durable blocked-truth facts for unreadable or
   unsyncable current state
 - `Mode`: bidirectional, download-only, or upload-only
 - runtime safety/policy inputs owned by the engine
 
-Those rows feed `comparison_state` and `reconciliation_state`, including the
-invariant that a baseline row absent from both snapshots becomes
-`baseline_remove`.
+The engine first materializes transaction-local planner-visible current-state
+tables from `local_state` and `remote_state` using the compiled `ContentFilter`.
+Raw `baseline` is not filtered. Those views feed `comparison_state` and
+`reconciliation_state`, including the invariant that a baseline row absent from
+both filtered current snapshots becomes `baseline_remove`.
 
 Before Go emits actions, a shared derivation step computes one per-path
 truth-status value from `observation_issues`, including any read-boundary
@@ -65,17 +72,20 @@ same derivation rather than a second planner-shaped helper.
 
 ## Pipeline
 
-1. Run SQL structural diff and reconciliation over snapshots plus baseline.
-2. Load reconciliation rows into Go.
-3. Derive per-path local/remote truth status from `observation_issues`
+1. Build filtered transaction-local current-state views from `local_state` and
+   `remote_state`; keep `baseline` raw.
+2. Run SQL structural diff and reconciliation over filtered current views plus
+   baseline.
+3. Load reconciliation rows into Go.
+4. Derive per-path local/remote truth status from filtered `observation_issues`
    through `TruthAvailabilityIndex`.
-4. Apply planner-owned suppression and sync-mode safety rules on top of that
+5. Apply planner-owned suppression and sync-mode safety rules on top of that
    derived status.
-5. Emit the current runtime action set, including conflict expansion into
+6. Emit the current runtime action set, including conflict expansion into
    concrete actions.
-6. Expand folder delete cascades so descendants get explicit work.
-7. Bind ordinary actions to the engine's mounted drive/root context.
-8. Build dependency edges and reject dependency cycles.
+7. Expand folder delete cascades so descendants get explicit work.
+8. Bind ordinary actions to the engine's mounted drive/root context.
+9. Build dependency edges and reject dependency cycles.
 
 ## File Decisions
 

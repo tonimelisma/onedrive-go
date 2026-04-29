@@ -36,6 +36,7 @@ type StandaloneMountConfig struct {
 	TransferWorkers        int
 	CheckWorkers           int
 	MinFreeSpaceBytes      int64
+	ContentFilter          syncengine.ContentFilterConfig
 }
 
 // StandaloneMountSelection carries the configured top-level mounts that are
@@ -71,6 +72,7 @@ type mountRuntimeCommon struct {
 	transferWorkers        int
 	checkWorkers           int
 	minFreeSpace           int64
+	contentFilter          syncengine.ContentFilterConfig
 }
 
 type parentMountSpec struct {
@@ -92,6 +94,7 @@ type parentMountSpec struct {
 	transferWorkers           int
 	checkWorkers              int
 	minFreeSpace              int64
+	contentFilter             syncengine.ContentFilterConfig
 }
 
 type childMountSpec struct {
@@ -110,6 +113,7 @@ type childMountSpec struct {
 	transferWorkers        int
 	checkWorkers           int
 	minFreeSpace           int64
+	contentFilter          syncengine.ContentFilterConfig
 	mode                   syncengine.ShortcutChildRunMode
 	ackRef                 syncengine.ShortcutChildAckRef
 	engine                 syncengine.ShortcutChildEngineSpec
@@ -385,6 +389,7 @@ func newParentMountSpec(cfg *StandaloneMountConfig) (parentMountSpec, error) {
 		transferWorkers:           cfg.TransferWorkers,
 		checkWorkers:              cfg.CheckWorkers,
 		minFreeSpace:              cfg.MinFreeSpaceBytes,
+		contentFilter:             cloneContentFilterConfig(cfg.ContentFilter),
 	}, nil
 }
 
@@ -416,6 +421,7 @@ func (spec *parentMountSpec) runtimeCommon() mountRuntimeCommon {
 		transferWorkers:        spec.transferWorkers,
 		checkWorkers:           spec.checkWorkers,
 		minFreeSpace:           spec.minFreeSpace,
+		contentFilter:          cloneContentFilterConfig(spec.contentFilter),
 	}
 }
 
@@ -475,6 +481,7 @@ func newChildMountSpec(
 		transferWorkers:        parent.transferWorkers(),
 		checkWorkers:           parent.checkWorkers(),
 		minFreeSpace:           parent.minFreeSpace(),
+		contentFilter:          cloneContentFilterConfig(command.Engine.ContentFilter),
 		mode:                   command.Mode,
 		ackRef:                 command.AckRef,
 		engine:                 command.Engine,
@@ -509,6 +516,7 @@ func (spec *childMountSpec) runtimeCommon() mountRuntimeCommon {
 		transferWorkers:        spec.transferWorkers,
 		checkWorkers:           spec.checkWorkers,
 		minFreeSpace:           spec.minFreeSpace,
+		contentFilter:          cloneContentFilterConfig(spec.contentFilter),
 	}
 }
 
@@ -668,6 +676,14 @@ func (m *mountSpec) minFreeSpace() int64 {
 	return common.minFreeSpace
 }
 
+func (m *mountSpec) contentFilter() syncengine.ContentFilterConfig {
+	common := m.common()
+	if common == nil {
+		return syncengine.ContentFilterConfig{}
+	}
+	return cloneContentFilterConfig(common.contentFilter)
+}
+
 func (m *mountSpec) parentCanonicalID() driveid.CanonicalID {
 	if m == nil || m.parent == nil {
 		return driveid.CanonicalID{}
@@ -725,18 +741,34 @@ func (m *mountSpec) shortcutChildRunCommand() *syncengine.ShortcutChildRunComman
 	return &syncengine.ShortcutChildRunCommand{
 		ChildMountID: m.id().String(),
 		DisplayName:  m.displayName(),
-		Engine:       cloneShortcutChildEngineSpec(m.child.engine),
+		Engine:       cloneShortcutChildEngineSpec(&m.child.engine),
 		Mode:         m.child.mode,
 		AckRef:       m.child.ackRef,
 	}
 }
 
-func cloneShortcutChildEngineSpec(spec syncengine.ShortcutChildEngineSpec) syncengine.ShortcutChildEngineSpec {
+func cloneShortcutChildEngineSpec(spec *syncengine.ShortcutChildEngineSpec) syncengine.ShortcutChildEngineSpec {
+	if spec == nil {
+		return syncengine.ShortcutChildEngineSpec{}
+	}
+	cloned := *spec
 	if spec.LocalRootIdentity != nil {
 		identity := *spec.LocalRootIdentity
-		spec.LocalRootIdentity = &identity
+		cloned.LocalRootIdentity = &identity
 	}
-	return spec
+	cloned.ContentFilter = cloneContentFilterConfig(spec.ContentFilter)
+	return cloned
+}
+
+func cloneContentFilterConfig(filter syncengine.ContentFilterConfig) syncengine.ContentFilterConfig {
+	return syncengine.ContentFilterConfig{
+		IgnoredDirs:     append([]string(nil), filter.IgnoredDirs...),
+		IncludedDirs:    append([]string(nil), filter.IncludedDirs...),
+		IgnoredPaths:    append([]string(nil), filter.IgnoredPaths...),
+		IgnoreDotfiles:  filter.IgnoreDotfiles,
+		IgnoreJunkFiles: filter.IgnoreJunkFiles,
+		FollowSymlinks:  filter.FollowSymlinks,
+	}
 }
 
 func (m *mountSpec) label() string {

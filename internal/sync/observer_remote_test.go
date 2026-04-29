@@ -37,7 +37,13 @@ func twoPageDeltaPages(firstLinkType, firstLink, secondDeltaLink string) []mockD
 	firstPage := &graph.DeltaPage{
 		Items: []graph.Item{
 			{ID: "root", IsRoot: true, DriveID: driveid.New(synctest.TestDriveID)},
-			{ID: "f1", Name: "a.txt", ParentID: "root", DriveID: driveid.New(synctest.TestDriveID)},
+			{
+				ID:              "f1",
+				Name:            "a.txt",
+				ParentID:        "root",
+				ParentPathKnown: true,
+				DriveID:         driveid.New(synctest.TestDriveID),
+			},
 		},
 	}
 	if firstLinkType == "next" {
@@ -50,7 +56,13 @@ func twoPageDeltaPages(firstLinkType, firstLink, secondDeltaLink string) []mockD
 		{page: firstPage},
 		{page: &graph.DeltaPage{
 			Items: []graph.Item{
-				{ID: "f2", Name: "b.txt", ParentID: "root", DriveID: driveid.New(synctest.TestDriveID)},
+				{
+					ID:              "f2",
+					Name:            "b.txt",
+					ParentID:        "root",
+					ParentPathKnown: true,
+					DriveID:         driveid.New(synctest.TestDriveID),
+				},
 			},
 			DeltaLink: secondDeltaLink,
 		}},
@@ -880,7 +892,8 @@ func TestFullDelta_OrphanedItem(t *testing.T) {
 	t.Parallel()
 
 	// Item whose parent is not in the inflight map or baseline.
-	// Observer should warn and return a partial path (just the item name).
+	// Observer should fail the batch instead of fabricating a root-level path
+	// or advancing the cursor past incomplete provider truth.
 	fetcher := &mockDeltaFetcher{
 		pages: []mockDeltaPage{{
 			page: &graph.DeltaPage{
@@ -893,14 +906,11 @@ func TestFullDelta_OrphanedItem(t *testing.T) {
 	}
 
 	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-	events, _, err := obs.FullDelta(t.Context(), "")
-	require.NoError(t, err, "FullDelta")
+	events, token, err := obs.FullDelta(t.Context(), "")
+	require.ErrorIs(t, err, ErrRemoteObservationIncomplete)
 
-	require.Len(t, events, 1)
-
-	// Orphaned item gets a partial path: just its own name.
-	assert.Equal(t, "orphan.txt", events[0].Path, "partial path for orphan")
-	assert.Equal(t, ChangeCreate, events[0].Type)
+	assert.Empty(t, events)
+	assert.Empty(t, token)
 }
 
 // Validates: R-6.7.3
@@ -2079,11 +2089,10 @@ func TestObserverStats_HashesComputed(t *testing.T) {
 // Remote observer trusts server — no name filtering
 // ---------------------------------------------------------------------------
 
-// TestClassifyItem_RemoteAppliesSymmetricIgnorePolicy validates that the
-// remote observer drops the same junk-file names as local observation while
-// still trusting server-provided names that are not part of the symmetric
-// ignore set.
-func TestClassifyItem_RemoteAppliesSymmetricIgnorePolicy(t *testing.T) {
+// TestClassifyItem_RemoteDoesNotApplyProductJunkFiltering validates that raw
+// remote observation keeps manageable provider rows; sync visibility filtering
+// happens later at the planner view boundary.
+func TestClassifyItem_RemoteDoesNotApplyProductJunkFiltering(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
@@ -2100,13 +2109,13 @@ func TestClassifyItem_RemoteAppliesSymmetricIgnorePolicy(t *testing.T) {
 		isDeleted bool
 		wantEvent bool
 	}{
-		// Symmetric ignore policy removes local/remote junk together.
-		{".tmp file", "data.tmp", false, false},
-		{".partial file", "download.partial", false, false},
-		{"tilde backup", "~backup.txt", false, false},
-		{"dot-tilde lock", ".~lock.file", false, false},
-		{".swp file", "file.swp", false, false},
-		{".crdownload", "file.crdownload", false, false},
+		// Product junk policy is not applied inside raw remote observation.
+		{".tmp file", "data.tmp", false, true},
+		{".partial file", "download.partial", false, true},
+		{"tilde backup", "~backup.txt", false, true},
+		{"dot-tilde lock", ".~lock.file", false, true},
+		{".swp file", "file.swp", false, true},
+		{".crdownload", "file.crdownload", false, true},
 		{"reserved name CON", "CON", false, true},
 		{"trailing dot", "file.", false, true},
 		{"trailing space", "file ", false, true},
@@ -2117,10 +2126,10 @@ func TestClassifyItem_RemoteAppliesSymmetricIgnorePolicy(t *testing.T) {
 		{"db file", "data.db", false, true},
 		{"pdf file", "report.pdf", false, true},
 
-		// Deleted junk items are ignored symmetrically too.
-		{"deleted .tmp", "data.tmp", true, false},
-		{"deleted tilde", "~backup.txt", true, false},
-		{"deleted .partial", "download.partial", true, false},
+		// Deleted junk items are still raw remote facts.
+		{"deleted .tmp", "data.tmp", true, true},
+		{"deleted tilde", "~backup.txt", true, true},
+		{"deleted .partial", "download.partial", true, true},
 	}
 
 	for _, tt := range tests {
@@ -2141,9 +2150,30 @@ func TestClassifyItem_RemoteAppliesSymmetricIgnorePolicy(t *testing.T) {
 				return
 			}
 
-			assert.Nil(t, ev, "remote observer must ignore symmetric junk item %q", tt.itemName)
+			assert.Nil(t, ev, "remote observer unexpectedly produced event for %q", tt.itemName)
 		})
 	}
+}
+
+// Validates: R-2.1.2, R-2.4.7
+func TestClassifyItem_SkipsPackageItemsForSync(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	obs := NewRemoteObserver(nil, emptyBaseline(), driveID, synctest.TestLogger(t))
+	inflight := map[string]InflightParent{
+		"root": {Name: "", IsRoot: true},
+	}
+
+	ev := obs.Converter.ClassifyItem(&graph.Item{
+		ID:        "notebook-1",
+		Name:      "Notebook",
+		ParentID:  "root",
+		DriveID:   driveID,
+		IsPackage: true,
+	}, inflight)
+
+	assert.Nil(t, ev)
 }
 
 // TestWatch_CommitsObservations verifies that Watch commits observations

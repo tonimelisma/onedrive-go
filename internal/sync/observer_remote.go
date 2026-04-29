@@ -150,6 +150,7 @@ func (o *RemoteObserver) FullDeltaWithShortcutTopology(
 	token := savedToken
 	lastProgressLog := time.Now()
 	if o.Converter != nil {
+		o.Converter.resetIncompleteObservation()
 		o.Converter.ShortcutTopology = &topology
 		o.Converter.ProtectedRootBindings = protectedRootByBinding(o.protectedRoots)
 		defer func() {
@@ -163,6 +164,11 @@ func (o *RemoteObserver) FullDeltaWithShortcutTopology(
 			o.stats.errors.Add(1)
 
 			return nil, "", shortcutTopologyBatch{}, err
+		}
+		if o.Converter.observationIncomplete() {
+			o.stats.errors.Add(1)
+
+			return nil, "", shortcutTopologyBatch{}, ErrRemoteObservationIncomplete
 		}
 
 		events = append(events, pageEvents...)

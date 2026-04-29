@@ -115,7 +115,6 @@ func fullE2EParallelMiscTestNames() []string {
 		"TestE2E_Status_FilteredDriveIsSubsetOfAllDrives",
 		"TestE2E_Status_NoDrives",
 		"TestE2E_Sync_QuietMode",
-		"TestE2E_Sync_NosyncGuard",
 		"TestE2E_Sync_MtimeOnlyChange",
 		"TestE2E_Sync_TransferWorkersConfig",
 		"TestE2E_Sync_IncrementalDeltaToken",

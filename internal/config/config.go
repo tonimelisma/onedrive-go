@@ -69,6 +69,19 @@ type Drive struct {
 	PausedUntil *string `toml:"paused_until,omitempty"`
 	DisplayName string  `toml:"display_name,omitempty"`
 	Owner       string  `toml:"owner,omitempty"` // drive owner name; for shared drives: "{Owner}'s {FolderName}"
+	DriveFilterConfig
+}
+
+// DriveFilterConfig controls per-drive sync visibility. These options affect
+// sync observation and planning only; direct file operations continue to show
+// provider truth.
+type DriveFilterConfig struct {
+	IgnoredDirs     []string `toml:"ignored_dirs,omitempty"`
+	IncludedDirs    []string `toml:"included_dirs,omitempty"`
+	IgnoredPaths    []string `toml:"ignored_paths,omitempty"`
+	IgnoreDotfiles  bool     `toml:"ignore_dotfiles,omitempty"`
+	IgnoreJunkFiles bool     `toml:"ignore_junk_files,omitempty"`
+	FollowSymlinks  bool     `toml:"follow_symlinks,omitempty"`
 }
 
 // IsPaused returns whether this drive is currently paused. This is the single

@@ -104,6 +104,31 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCommitsObservedRowsAndCursor(t
 }
 
 // Validates: R-2.1.2
+func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.contentFilter = ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+	ctx := t.Context()
+
+	batch := buildPrimaryWatchBatch(eng.Engine, []ChangeEvent{
+		testRemoteCreateEvent("hidden/remote.txt", "item-hidden", eng.driveID.String()),
+	}, "cursor-hidden")
+	err := rt.handleRemoteObservationBatch(ctx, &batch)
+	require.NoError(t, err)
+
+	remoteRow, found, err := eng.baseline.GetRemoteStateByPath(ctx, "hidden/remote.txt", eng.driveID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "item-hidden", remoteRow.ItemID)
+	assert.Equal(t, "cursor-hidden", readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String()))
+	assert.Nil(t, rt.dirtyBuf.FlushImmediate())
+}
+
+// Validates: R-2.1.2
 func TestHandleRemoteObservationBatch_MountRootWatchCommitsObservedRowsAndPendingCursor(t *testing.T) {
 	t.Parallel()
 

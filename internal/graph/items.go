@@ -177,7 +177,7 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 	if d.ParentReference != nil {
 		item.DriveID = driveid.New(d.ParentReference.DriveID)
 		item.ParentID = d.ParentReference.ID
-		item.ParentPath = decodeParentReferencePath(d.ParentReference.Path, logger)
+		item.ParentPath, item.ParentPathKnown = decodeParentReferencePath(d.ParentReference.Path, logger)
 		item.ParentDriveID = driveid.New(d.ParentReference.DriveID)
 	}
 
@@ -222,9 +222,9 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 // decoded path relative to the drive root. Graph returns an absolute API path
 // prefix ("/drives/{id}/root:") plus URL-encoded segments in non-delta
 // responses. Callers only need the root-relative filesystem portion.
-func decodeParentReferencePath(rawPath string, logger *slog.Logger) string {
+func decodeParentReferencePath(rawPath string, logger *slog.Logger) (string, bool) {
 	if rawPath == "" {
-		return ""
+		return "", false
 	}
 
 	decoded, err := url.PathUnescape(rawPath)
@@ -236,7 +236,7 @@ func decodeParentReferencePath(rawPath string, logger *slog.Logger) string {
 			)
 		}
 
-		return ""
+		return "", false
 	}
 
 	_, rootRelativePath, found := strings.Cut(decoded, "/root:")
@@ -247,10 +247,10 @@ func decodeParentReferencePath(rawPath string, logger *slog.Logger) string {
 			)
 		}
 
-		return ""
+		return "", false
 	}
 
-	return strings.TrimPrefix(rootRelativePath, "/")
+	return strings.TrimPrefix(rootRelativePath, "/"), true
 }
 
 // resolveSharedOwner extracts sharer identity using a four-level fallback chain:
