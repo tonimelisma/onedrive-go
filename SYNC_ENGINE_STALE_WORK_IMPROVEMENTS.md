@@ -3,8 +3,9 @@
 Status: design note. The watch-dispatch/outbox-retirement instrumentation pieces
 are implemented in the merged watch-stale-work increments; the superseded result
 foundation and incremental local-truth commit increments are implemented in the
-stale-work roadmap. The broader worker latest-truth validation and
-executor-precondition groups remain follow-up work.
+stale-work roadmap, and worker/admission latest-truth validation is implemented
+in the worker/admission truth-validation increment. Executor-precondition and
+final observability groups remain follow-up work.
 
 Date: 2026-04-29
 
@@ -40,13 +41,17 @@ Implemented so far:
     observation batches, dropped hash requests, watcher errors, and failed
     safety scans mark local truth suspect and schedule dirty replan through the
     watch runtime.
+11. Worker-start validation rejects already-submitted stale actions, including
+    move source/destination drift, before executor side effects.
+12. Engine admission reuses the same freshness predicate and retires stale
+    ready actions before dispatching them to workers.
 
 Still follow-up work:
 
-1. Worker-start validation against latest committed `local_state` and
-   `remote_state`.
-2. Executor-side live precondition checks for every dangerous local/remote side
+1. Executor-side live precondition checks for every dangerous local/remote side
    effect.
+2. Final observability counters for superseded sources, scoped local commits,
+   and aggregate worker-idle-by-replan-phase timing.
 
 This note records a design analysis for improving the `onedrive-go` sync engine
 when watch-mode truth changes while older actions are still queued or running.
@@ -94,11 +99,12 @@ single file write re-observes that file and updates `local_state` without
 rewalking the whole sync root.
 
 Workers still cannot ask "am I still in the newer plan?" because no newer plan
-has been built until the replan boundary. The practical improvement path remains
-to let workers and the engine reject stale work using exact action
-preconditions, latest committed truth checks, and queue control without making
-workers into a second planner. This increment implements the queue-control
-piece; latest-truth and live-precondition checks remain separate follow-up work.
+has been built until the replan boundary. The practical improvement path is to
+let workers and the engine reject stale work using exact action preconditions,
+latest committed truth checks, and queue control without making workers into a
+second planner. Queue control, worker-start latest-truth checks, and admission
+latest-truth checks are now implemented; live executor preconditions remain
+follow-up work.
 
 ## 2. External Client Patterns
 
@@ -422,10 +428,10 @@ Cons:
 Recommendation:
 
 Use both the policy and the shorter buffer. Do not start with a large
-submitted/running protocol. This increment implements the first part: pending
-replan stops old outbox dispatch, retires the not-yet-dispatched outbox as
-superseded runtime work, and makes the watch dispatch channel unbuffered.
-Worker-start validation for any already-submitted work remains the next piece.
+submitted/running protocol. Pending replan stops old outbox dispatch, retires
+the not-yet-dispatched outbox as superseded runtime work, makes the watch
+dispatch channel unbuffered, and worker-start validation now protects work that
+already escaped into a worker.
 
 ### Group D. Incrementally update local truth from re-observed watch scopes
 
@@ -696,8 +702,8 @@ Recommendation:
 Add observability alongside behavior changes. This increment adds the
 pending-replan lifecycle events with timestamps and aggregate outbox/running/idle
 worker counters. Per-action latest-truth rejection counters and accumulated
-idle-duration buckets should be added when worker-start validation and scoped
-local truth commits land.
+idle-duration buckets remain the final observability follow-up now that
+worker-start validation and scoped local truth commits have landed.
 
 ## 5. Suggested Implementation Order
 
@@ -713,7 +719,8 @@ local truth commits land.
    requests, watcher errors, and failed safety scans in the incremental
    local-truth commit increment.
 5. Add worker-start validation against latest committed `local_state` and
-   `remote_state`.
+   `remote_state`, including move source/destination endpoints. Implemented in
+   the worker/admission truth-validation increment.
 6. Add a superseded/stale-action result path that does not retry the exact old
    action as-is. Implemented in the stale-work superseded-result increment.
 7. Stop dispatching old outbox actions once a pending replan exists and retire
@@ -723,7 +730,8 @@ local truth commits land.
    larger buffer is needed. Implemented as an unbuffered dispatch channel in
    the merged watch-stale-work increments.
 9. Add engine-side admission rejection using the same latest-truth predicates,
-   after the worker-start path proves the predicates are correct.
+   after the worker-start path proves the predicates are correct. Implemented
+   in the worker/admission truth-validation increment.
 10. Add submitted/running state only if the shorter buffer and worker-start gate
    are insufficient for status, cancellation, or throughput.
 11. Add observability for stale-precondition outcomes, superseded outcomes,
@@ -746,11 +754,13 @@ The recommended design is:
    re-observing the affected scope and incrementally committing `local_state`.
 5. Before a worker begins meaningful work, validate the action against latest
    committed `local_state` and `remote_state`; reject it only if that truth
-   disproves the action's assumptions.
+   disproves the action's assumptions. Implemented in the worker/admission
+   truth-validation increment.
 6. Let workers prove live ground-truth preconditions before each dangerous side
    effect.
 7. Return stale-precondition/superseded outcomes when either validation gate
-   fails.
+   fails. Implemented for worker-start and admission validation; executor live
+   preconditions remain follow-up.
 8. Let the next normal replan derive replacement intent from current truth.
 
 That keeps the planner as the owner of sync intent, the runtime as the owner of

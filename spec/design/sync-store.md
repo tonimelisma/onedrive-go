@@ -110,8 +110,10 @@ path bytes are escaped and never broaden the delete.
 complete local mirror. Full local snapshot replacement marks it complete and
 clears `local_truth_recovery_reason`. Dropped local observation batches, dropped
 hash requests, watcher errors, and failed safety scans mark it incomplete with a
-reason so later stale-work checks know that local absence is not proof until a
-full refresh succeeds.
+reason so later stale-work checks know that local absence or presence is not
+proof until a full refresh succeeds. Worker-start and admission freshness checks
+therefore read this store-owned confidence bit before using `local_state` to
+supersede old actions.
 
 Observation-owned durable problems belong to `observation_issues`, not retry
 lanes or `block_scopes`. Read-denied subtree boundaries are represented as
