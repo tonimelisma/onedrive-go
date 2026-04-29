@@ -226,7 +226,7 @@ func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 	if err != nil {
 		return false, fmt.Errorf("sync: load baseline for protected root event: %w", err)
 	}
-	if _, refreshErr := rt.refreshAndCommitLocalCurrentState(ctx, bl, false); refreshErr != nil {
+	if _, refreshErr := rt.refreshAndCommitLocalCurrentState(ctx, bl); refreshErr != nil {
 		return false, fmt.Errorf("sync: refresh local_state for protected root event: %w", refreshErr)
 	}
 	changed, err := rt.engine.reconcileShortcutRootLocalState(ctx)

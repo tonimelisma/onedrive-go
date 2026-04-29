@@ -129,7 +129,6 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 		ctx,
 		bl,
 		false,
-		false,
 	)
 	require.NoError(t, err)
 	assert.Empty(t, events, "should return 0 events (root is skipped)")
@@ -187,7 +186,6 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
 		ctx,
 		bl,
-		false,
 		false,
 	)
 	require.NoError(t, err)
@@ -498,7 +496,6 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
 		ctx,
 		bl,
-		false,
 		true,
 	)
 	require.NoError(t, err)
@@ -565,7 +562,6 @@ func TestObserveAndCommitRemoteTruth_RemoteReadDeniedPersistsObservationFindings
 	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
 		ctx,
 		bl,
-		false,
 		false,
 	)
 	require.NoError(t, err)

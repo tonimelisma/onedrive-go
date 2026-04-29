@@ -17,7 +17,7 @@ func (r *oneShotRunner) runLiveCurrentPlan(
 	opts RunOptions,
 ) (*runtimePlan, error) {
 	observeStart := r.engine.nowFunc()
-	pendingRemoteObservation, err := r.observeAndCommitCurrentState(ctx, bl, false, opts.FullReconcile)
+	pendingRemoteObservation, err := r.observeAndCommitCurrentState(ctx, bl, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 	}
 
 	observeStart := rt.engine.nowFunc()
-	pendingRemoteObservation, err := rt.observeAndCommitCurrentState(ctx, bl, false, fullRefresh)
+	pendingRemoteObservation, err := rt.observeAndCommitCurrentState(ctx, bl, fullRefresh)
 	if err != nil {
 		return nil, fmt.Errorf("sync: bootstrap observation failed: %w", err)
 	}
@@ -179,14 +179,14 @@ type currentInputs struct {
 func (flow *engineFlow) observeAndCommitCurrentState(
 	ctx context.Context,
 	bl *Baseline,
-	dryRun, fullReconcile bool,
+	fullReconcile bool,
 ) (*remoteObservationBatch, error) {
-	_, pendingRemoteObservation, err := flow.observeAndCommitRemoteCurrentState(ctx, bl, dryRun, fullReconcile)
+	_, pendingRemoteObservation, err := flow.observeAndCommitRemoteCurrentState(ctx, bl, fullReconcile)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := flow.refreshAndCommitLocalCurrentState(ctx, bl, dryRun); err != nil {
+	if _, err := flow.refreshAndCommitLocalCurrentState(ctx, bl); err != nil {
 		return nil, err
 	}
 
@@ -196,7 +196,6 @@ func (flow *engineFlow) observeAndCommitCurrentState(
 func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 	ctx context.Context,
 	bl *Baseline,
-	dryRun bool,
 	fullReconcile bool,
 ) ([]ChangeEvent, *remoteObservationBatch, error) {
 	observationBatch, err := flow.executePrimaryRootObservation(ctx, bl, fullReconcile)
@@ -204,32 +203,22 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 		return nil, nil, err
 	}
 
-	// Dry-run previews must never advance remote observation cursors.
-	if dryRun {
-		observationBatch.cursorToken = ""
-		observationBatch.markFullRemoteRefresh = false
+	if err := flow.applyShortcutObservationBatch(ctx, &observationBatch); err != nil {
+		return nil, nil, err
 	}
 
-	if !dryRun {
-		if err := flow.applyShortcutObservationBatch(ctx, &observationBatch); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	if !dryRun && len(observationBatch.observed) > 0 {
+	if len(observationBatch.observed) > 0 {
 		if err := flow.commitObservedItems(ctx, observationBatch.observed, ""); err != nil {
 			return nil, nil, err
 		}
 	}
-	if !dryRun {
-		if err := flow.applyObservationFindingsBatch(
-			ctx,
-			&observationBatch.findings,
-			"failed to reconcile remote observation findings",
-			engineDebugNoteRemoteCurrent,
-		); err != nil {
-			return nil, nil, err
-		}
+	if err := flow.applyObservationFindingsBatch(
+		ctx,
+		&observationBatch.findings,
+		"failed to reconcile remote observation findings",
+		engineDebugNoteRemoteCurrent,
+	); err != nil {
+		return nil, nil, err
 	}
 
 	return observationBatch.emitted, observationBatch.deferredProgress(), nil
@@ -294,13 +283,12 @@ func (flow *engineFlow) refreshLocalCurrentState(
 func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 	ctx context.Context,
 	bl *Baseline,
-	dryRun bool,
 ) (ScanResult, error) {
 	localResult, err := flow.refreshLocalCurrentState(ctx, bl)
 	if err != nil {
 		return ScanResult{}, err
 	}
-	if err := flow.commitCurrentLocalSnapshot(ctx, dryRun, localResult); err != nil {
+	if err := flow.commitCurrentLocalSnapshot(ctx, localResult); err != nil {
 		return ScanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepSnapshotCommit, err)
 	}
 
@@ -372,13 +360,8 @@ func (flow *engineFlow) observeLocal(
 
 func (flow *engineFlow) commitCurrentLocalSnapshot(
 	ctx context.Context,
-	dryRun bool,
 	localResult ScanResult,
 ) error {
-	if dryRun {
-		return nil
-	}
-
 	rows := buildLocalStateRows(localResult)
 	if err := flow.engine.baseline.ReplaceLocalState(ctx, rows); err != nil {
 		return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
