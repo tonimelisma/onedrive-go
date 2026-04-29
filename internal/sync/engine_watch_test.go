@@ -430,11 +430,12 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	}}, ""))
 
 	rt := testWatchRuntime(t, eng)
-	err = rt.runSteadyStateReplan(ctx, &watchPipeline{
+	applied, err := rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
 	}, dirtyBatch{})
 	require.NoError(t, err)
+	assert.True(t, applied)
 	assert.Empty(t, rt.currentOutbox())
 }
 

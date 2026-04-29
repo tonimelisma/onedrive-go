@@ -21,6 +21,11 @@ Implemented in this increment:
    are treated as both file-capable and directory-capable for pre-stat content
    filtering, so included directory roots and ancestors are not dropped before
    observation can stat them.
+6. A replan signal that is already ready wins before another old outbox action
+   can be handed to a worker.
+7. If a pending replan has retired old outbox work but local observation fails
+   before replacement runtime installation, the dirty intent is rescheduled
+   through `DirtyBuffer` instead of leaving the runtime empty.
 
 Still follow-up work:
 
@@ -338,7 +343,9 @@ know a replan is due, so do not launch more work from the old plan."
 
 The simplest version should be:
 
-1. When a pending replan is set, stop dispatching old outbox actions.
+1. When a pending replan is set, stop dispatching old outbox actions. A replan
+   signal that is already ready is consumed before dispatch is enabled for the
+   current watch-loop step.
 2. Retire the not-yet-dispatched outbox actions from the old plan as superseded
    work. Do not mark them successful, do not admit their dependents, and do not
    create ordinary retry rows for them.
@@ -369,6 +376,12 @@ will no longer dispatch. The action objects are not durable truth, so discarding
 not-yet-dispatched actions is correct as long as the engine records a clear
 superseded/retired outcome for debug and does not treat those actions as
 successful.
+
+Once old outbox work has been retired, a recoverable local observation failure
+cannot simply drop the pending batch. The engine must keep the retired work
+retired, but it also must reschedule the same dirty/full-refresh intent through
+`DirtyBuffer` so a later steady-state replan can install the replacement runtime
+from current truth.
 
 The earlier idea of splitting outbox/submitted/running into separate formal
 states is now optional. A short or unbuffered dispatch channel plus a
