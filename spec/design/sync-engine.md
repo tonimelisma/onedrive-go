@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine*.go, internal/sync/engine_watch*.go, internal/sync/engine_runtime*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/protected_roots.go, internal/sync/shortcut_root_lifecycle.go, internal/sync/shortcut_root_transition.go, internal/sync/shortcut_root_publication.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
-Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
+Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
 
 ## Overview
 
@@ -65,6 +65,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
+| Superseded action completions retire exact stale work without success, ordinary retry, blocker mutation, or old-plan dependent admission. | `TestClassifyResult_LocalPersistenceAndScopeRouting`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess`, `TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEmptyScope`, `TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOrRetry` |
 | Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
 | Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child work snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestShortcutRootTransitionMatrixEnumeratesEveryStateAndEvent`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroValueReturnsError` |
 | Pending watch replans retire old-runtime work that has not started yet, including dependents released by already-running old actions, and leave replacement work to a fresh plan from current truth. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal` |
@@ -376,7 +377,12 @@ mutation, then reduce the ready frontier through publication drain plus due-
 held release. It does not mix that decision step with worker-queue ownership.
 In code, the top-level effectful boundary is `applyRuntimeCompletionStage`,
 while `reduceReadyFrontierStage` owns the frontier reduction and
-`runSnapshotDrainStage` remains the publication-only substage.
+`runPublicationDrainStage` remains the publication-only substage. If an action
+completion is classified as `superseded`, that boundary retires the exact action
+and its old dependent subtree without incrementing success or failure counts,
+clears any exact `retry_work` row for the stale action, avoids blocker mutation,
+and marks watch mode dirty so replacement work is produced only by a later plan
+from current truth.
 
 Watch replan failure policy is also explicit. Pre-authority local observation
 failure is recoverable and drops that replan trigger. Once the engine starts
@@ -509,8 +515,8 @@ Conflicts remain engine-owned and immediate:
 - edit/edit and create/create preserve both versions by renaming local to a
   conflict copy and downloading remote to the canonical path
 - edit/delete is planner-expanded into a local-wins upload
-- executor-time local-delete hash mismatch reports a stale precondition so the
-  next replan can emit the correct upload from current truth
+- executor-time local-delete hash mismatch reports a superseded stale
+  precondition so the next replan can emit the correct upload from current truth
 
 There is no durable conflict-request workflow and no CLI `resolve` command.
 

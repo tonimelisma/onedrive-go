@@ -272,7 +272,7 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 	})
 }
 
-// Validates: R-2.10.4, R-6.2.5
+// Validates: R-2.8.7, R-2.10.4, R-6.2.5
 func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 	t.Parallel()
 
@@ -287,11 +287,10 @@ func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 			name: "precondition changed",
 			in:   &ActionCompletion{Err: ErrActionPreconditionChanged},
 			want: ResultDecision{
-				Class:         resultRequeue,
-				ConditionKey:  ConditionUnexpectedCondition,
-				Persistence:   persistRetryWork,
-				TrialHint:     trialHintReclassify,
-				ConditionType: "transient_conflict",
+				Class:        resultSuperseded,
+				ConditionKey: "",
+				Persistence:  persistNone,
+				TrialHint:    trialHintReclassify,
 			},
 		},
 		{
@@ -336,6 +335,7 @@ func TestRuntimeConditionKey_RepresentativeMappings(t *testing.T) {
 	assert.Equal(t, ConditionUnexpectedCondition, ConditionKeyForRuntimeResult(errclass.ClassFatal, "mystery"))
 	assert.Equal(t, ConditionUnexpectedCondition, ConditionKeyForRuntimeResult(errclass.ClassActionable, ""))
 	assert.Equal(t, ConditionKey(""), ConditionKeyForRuntimeResult(errclass.ClassSuccess, ""))
+	assert.Equal(t, ConditionKey(""), ConditionKeyForRuntimeResult(errclass.ClassSuperseded, ""))
 }
 
 // Validates: R-2.10.4

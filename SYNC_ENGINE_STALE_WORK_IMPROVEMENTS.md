@@ -1,12 +1,13 @@
 # Sync Engine Stale Work Improvements
 
 Status: design note. The watch-dispatch/outbox-retirement instrumentation pieces
-are implemented in the `refactor/watch-stale-work` increment; the broader
-latest-truth and executor-precondition groups remain follow-up work.
+are implemented in the merged watch-stale-work increments; the superseded result
+foundation is implemented by the current stale-work roadmap increment. The
+broader latest-truth and executor-precondition groups remain follow-up work.
 
 Date: 2026-04-29
 
-Implemented in this increment:
+Implemented so far:
 
 1. Watch-mode worker dispatch is unbuffered, while worker completion reporting
    stays separately buffered.
@@ -27,6 +28,9 @@ Implemented in this increment:
    installation, the dirty intent is rescheduled through `DirtyBuffer` instead
    of being dropped. This applies both to pending replans that already retired
    old outbox work and to direct idle replans with no old work to retire.
+8. `ErrActionPreconditionChanged` is classified as `superseded`, not ordinary
+   retry. Superseded completions clear exact stale retry rows, retire old
+   dependents without success semantics, and schedule watch replan.
 
 Still follow-up work:
 
@@ -35,7 +39,6 @@ Still follow-up work:
 2. Executor-side live precondition checks for every dangerous local/remote side
    effect.
 3. Incremental local-truth commits from re-observed watch scopes.
-4. First-class stale/superseded action result classification.
 
 This note records a design analysis for improving the `onedrive-go` sync engine
 when watch-mode truth changes while older actions are still queued or running.
@@ -518,7 +521,7 @@ Plain English version:
 6. The right engine-level meaning is: "discard this old action; keep or trigger
    replan; let the planner decide what current truth now requires."
 
-That is what `resultSuperseded` would mean.
+That is what `resultSuperseded` means.
 
 It should be produced by cases like:
 
@@ -573,10 +576,9 @@ Cons:
 
 Recommendation:
 
-Use the existing stale-precondition path initially if that is the fastest safe
-implementation, but shape it toward a first-class `superseded` result once
-pre-start and side-effect gates exist. The important rule is no ordinary retry
-of the exact stale action.
+The stale-precondition path now maps into a first-class `superseded` result.
+Future pre-start and side-effect gates should return the same runtime meaning.
+The important rule is no ordinary retry of the exact stale action.
 
 ### Group F. Observability for stale work and pending replan latency
 
@@ -699,13 +701,13 @@ local truth commits land.
 5. Add worker-start validation against latest committed `local_state` and
    `remote_state`.
 6. Add a superseded/stale-action result path that does not retry the exact old
-   action as-is.
+   action as-is. Implemented in the stale-work superseded-result increment.
 7. Stop dispatching old outbox actions once a pending replan exists and retire
-   the not-yet-dispatched old outbox as superseded work. Implemented in
-   `refactor/watch-stale-work`.
+   the not-yet-dispatched old outbox as superseded work. Implemented in the
+   merged watch-stale-work increments.
 8. Reduce the dispatch channel buffer to zero or one unless measurement proves a
    larger buffer is needed. Implemented as an unbuffered dispatch channel in
-   `refactor/watch-stale-work`.
+   the merged watch-stale-work increments.
 9. Add engine-side admission rejection using the same latest-truth predicates,
    after the worker-start path proves the predicates are correct.
 10. Add submitted/running state only if the shorter buffer and worker-start gate
@@ -721,10 +723,10 @@ The recommended design is:
 1. Keep one installed runtime plan at a time.
 2. Stop launching old outbox work once the engine knows a replan is pending, and
    retire not-yet-dispatched old outbox actions as superseded work. Implemented
-   in `refactor/watch-stale-work`.
+   in the merged watch-stale-work increments.
 3. Keep the dispatch channel short enough that very little work escapes engine
    ownership before pending-replan policy can stop it. Implemented with an
-   unbuffered watch dispatch channel in `refactor/watch-stale-work`.
+   unbuffered watch dispatch channel in the merged watch-stale-work increments.
 4. Let local and remote observers keep durable current truth fresh. Remote
    deltas already mostly do this; local watch events should do it by
    re-observing the affected scope and incrementally committing `local_state`.

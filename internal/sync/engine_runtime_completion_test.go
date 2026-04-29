@@ -169,6 +169,68 @@ func TestEngineFlow_ApplyCompletionSuccess_ClearsRetryWorkAndAdmitsDependents(t 
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 }
 
+// Validates: R-2.8.7, R-2.10.5
+func TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+	flow := testEngineFlow(t, eng)
+
+	row := RetryWorkRow{
+		Path:         "stale.txt",
+		ActionType:   ActionUpload,
+		AttemptCount: 1,
+		NextRetryAt:  eng.nowFunc().UnixNano(),
+	}
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &row))
+	flow.retryRowsByKey[row.WorkKey()] = row
+
+	current := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "stale.txt",
+		DriveID: eng.driveID,
+		ItemID:  "stale-item",
+	}, 1, nil)
+	require.NotNil(t, current)
+	rt.markRunning(current)
+
+	dependent := rt.depGraph.Add(&Action{
+		Type:    ActionDownload,
+		Path:    "dependent.txt",
+		DriveID: eng.driveID,
+		ItemID:  "dependent-item",
+	}, 2, []int64{1})
+	assert.Nil(t, dependent)
+
+	decision := classifyResult(&ActionCompletion{Err: ErrActionPreconditionChanged})
+	ready, err := flow.applyNormalCompletionDecision(t.Context(), rt, &decision, current, &ActionCompletion{
+		ActionID:   current.ID,
+		Path:       "stale.txt",
+		ActionType: ActionUpload,
+		Err:        ErrActionPreconditionChanged,
+		ErrMsg:     "source changed",
+	}, nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, ready)
+	assert.Equal(t, 0, rt.runningCount)
+	assert.Empty(t, rt.runningByID)
+	assert.Equal(t, 0, rt.depGraph.InFlightCount(), "superseded dependents must not become runnable old-plan work")
+	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+
+	succeeded, failed, errs := flow.resultStats()
+	assert.Equal(t, 0, succeeded)
+	assert.Equal(t, 0, failed)
+	assert.Empty(t, errs)
+
+	batch := rt.dirtyBuf.FlushImmediate()
+	require.NotNil(t, batch)
+	assert.False(t, batch.FullRefresh)
+}
+
 // Validates: R-2.10.5
 func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionPersistsDelayedRetryWork(t *testing.T) {
 	t.Parallel()
@@ -604,6 +666,63 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 	assert.Equal(t, eng.nowFunc().Add(time.Minute), blockScopes[trialScopeKey].NextTrialAt,
 		"retained original scope must rearm to the next trial interval instead of staying immediately due")
 	assert.Equal(t, eng.nowFunc().Add(time.Minute), blockScopes[throttleScopeKey].NextTrialAt)
+}
+
+// Validates: R-2.8.7, R-2.10.5
+func TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEmptyScope(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+	flow := testEngineFlow(t, eng)
+	trialScopeKey := SKService()
+
+	setTestBlockScope(t, eng, &BlockScope{
+		Key:           trialScopeKey,
+		TrialInterval: time.Minute,
+		NextTrialAt:   eng.nowFunc(),
+	})
+
+	row := RetryWorkRow{
+		Path:         "trial-stale.txt",
+		ActionType:   ActionUpload,
+		ScopeKey:     trialScopeKey,
+		Blocked:      true,
+		AttemptCount: 1,
+	}
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &row))
+	flow.retryRowsByKey[row.WorkKey()] = row
+
+	current := rt.depGraph.Add(&Action{
+		Type:    ActionUpload,
+		Path:    "trial-stale.txt",
+		DriveID: eng.driveID,
+	}, 1, nil)
+	require.NotNil(t, current)
+	rt.markRunning(current)
+
+	decision := classifyResult(&ActionCompletion{Err: ErrActionPreconditionChanged})
+	ready, err := flow.applyTrialCompletionDecision(t.Context(), rt, trialScopeKey, &decision, current, &ActionCompletion{
+		ActionID:      current.ID,
+		Path:          "trial-stale.txt",
+		ActionType:    ActionUpload,
+		Err:           ErrActionPreconditionChanged,
+		ErrMsg:        "source changed",
+		IsTrial:       true,
+		TrialScopeKey: trialScopeKey,
+	}, nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, ready)
+	assert.Equal(t, 0, rt.depGraph.InFlightCount())
+	assert.Equal(t, 0, rt.runningCount)
+	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+	assert.False(t, isTestBlockScopeed(eng, trialScopeKey), "empty trial scope should be discarded, not extended")
+
+	batch := rt.dirtyBuf.FlushImmediate()
+	require.NotNil(t, batch)
+	assert.False(t, batch.FullRefresh)
 }
 
 func upsertBlockedRetryWorkForTest(t *testing.T, eng *testEngine, path string, scopeKey ScopeKey) {

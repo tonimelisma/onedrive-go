@@ -1,6 +1,6 @@
 # Error Model
 
-Implements: R-6.8.16 [designed]
+Implements: R-6.8.16 [verified]
 
 ## Overview
 
@@ -39,6 +39,7 @@ These projections intentionally answer different questions:
 | --- | --- | --- |
 | `success` | The operation completed and durable/runtime state should advance normally. | Commit success, clear stale durable rows. |
 | `shutdown` | Work stopped because the caller canceled or the process is shutting down. | Stop cleanly; do not invent durable retry or actionable rows just because the process is exiting. |
+| `superseded` | The exact runtime action was valid when planned but is obsolete under current execution preconditions or newer truth. | Retire that exact action and its old dependents without success semantics, clear any exact stale retry row, and replan in watch mode. |
 | `retryable transient` | A specific item failed for a condition expected to clear without human action. | Persist `retry_work` with the next retry time. |
 | `scope-blocking transient` | A wider transient condition makes a whole scope unsafe to keep dispatching. | Persist `block_scopes` plus blocked `retry_work`. |
 | `actionable` | Automatic retry is not appropriate; the user must fix content, permissions, or configuration. | Persist the appropriate durable authority for the owning boundary: observation may write `observation_issues`; execution persists `retry_work`, `block_scopes`, or account-auth state and waits for observation to prove durable current-truth issues. |
@@ -83,6 +84,9 @@ The target durable projection is intentionally small:
   not upsert observation rows directly
 - `success` -> baseline/remote-state commit plus explicit durable cleanup where
   required
+- `superseded` -> no ordinary retry/block row; clear any exact existing
+  `retry_work` row for the stale action and let the next plan decide from
+  current truth
 - `shutdown` and `fatal` -> returned to the caller unless a higher boundary
   intentionally converts them into one of the durable classes above
 
@@ -123,4 +127,4 @@ Permission recovery follows the same ownership split:
 | --- | --- |
 | Shared failure classes | `internal/errclass/errclass_test.go` (`TestClassStringAndValidity`), `internal/config/failure_class_test.go` (`TestClassifyLoadOutcome`), `internal/cli/failure_class_test.go` (`TestClassifyCommandError`, `TestCommandFailurePresentationForClass`) |
 | Shared condition-key normalization, ordering, shared stored-condition projection, and CLI rendering tables | `internal/sync/condition_keys_test.go` (`TestConditionKeyForStoredCondition_RepresentativeMappings`, `TestConditionKeyLess_UsesCanonicalDisplayOrder`, `TestConditionKeyForIssueType_RepresentativeMappings`), `internal/sync/condition_projection_test.go` (`TestProjectStoredConditionGroups_MergesDurableAuthorities`), `internal/cli/status_test.go` (`TestQuerySyncState_PreservesConditionScopeContext`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions`, `TestPrintSyncStateText_WithConditions`), `internal/cli/status_golden_test.go` (`TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`) |
-| Sync result classification foundations | `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_SuccessAndShutdown`, `TestClassifyResult_HTTPPersistenceAndScopeRouting`, `TestClassifyResult_LocalPersistenceAndScopeRouting`), `internal/sync/engine_retry_trial_test.go` (`TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldRetriesNow_DoesNotConsultDurableRetryRowsWithoutHeldRuntimeEntry`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestReleaseDueHeldTrialsNow_SkipsScopesWithoutHeldDependencyReadyCandidates`, `TestReleaseDueHeldTrialsNow_DoesNotConsultDurableBlockedRetryRowsWithoutHeldRuntimeEntry`, `TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow`), `internal/sync/engine_runtime_lifecycle_test.go` (`TestEngineFlow_ApplyTrialReclassification_RehomesDiskScopeRetryWork`), `internal/sync/store_scope_admin_test.go` (`TestPruneBlockScopesWithoutBlockedWork`) |
+| Sync result classification foundations | `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_SuccessAndShutdown`, `TestClassifyResult_HTTPPersistenceAndScopeRouting`, `TestClassifyResult_LocalPersistenceAndScopeRouting`), `internal/sync/engine_runtime_completion_test.go` (`TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess`, `TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEmptyScope`), `internal/sync/engine_run_once_results_test.go` (`TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOrRetry`), `internal/sync/engine_retry_trial_test.go` (`TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldRetriesNow_DoesNotConsultDurableRetryRowsWithoutHeldRuntimeEntry`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestReleaseDueHeldTrialsNow_SkipsScopesWithoutHeldDependencyReadyCandidates`, `TestReleaseDueHeldTrialsNow_DoesNotConsultDurableBlockedRetryRowsWithoutHeldRuntimeEntry`, `TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow`), `internal/sync/engine_runtime_lifecycle_test.go` (`TestEngineFlow_ApplyTrialReclassification_RehomesDiskScopeRetryWork`), `internal/sync/store_scope_admin_test.go` (`TestPruneBlockScopesWithoutBlockedWork`) |

@@ -15,6 +15,7 @@ const (
 	ClassInvalid Class = iota
 	ClassSuccess
 	ClassShutdown
+	ClassSuperseded
 	ClassRetryableTransient
 	ClassBlockScopeingTransient
 	ClassActionable
@@ -34,6 +35,8 @@ func (c Class) String() string {
 		return "success"
 	case ClassShutdown:
 		return "shutdown"
+	case ClassSuperseded:
+		return "superseded"
 	case ClassRetryableTransient:
 		return "retryable transient"
 	case ClassBlockScopeingTransient:

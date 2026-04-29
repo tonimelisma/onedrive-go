@@ -12,6 +12,7 @@ import (
 
 const (
 	resultSuccess    = errclass.ClassSuccess
+	resultSuperseded = errclass.ClassSuperseded
 	resultRequeue    = errclass.ClassRetryableTransient
 	resultBlockScope = errclass.ClassBlockScopeingTransient
 	resultSkip       = errclass.ClassActionable
@@ -159,10 +160,9 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 	switch {
 	case errors.Is(r.Err, ErrActionPreconditionChanged):
 		return withRuntimeSummary(&ResultDecision{
-			Class:         resultRequeue,
-			Persistence:   persistRetryWork,
-			TrialHint:     trialHintReclassify,
-			ConditionType: "transient_conflict",
+			Class:       resultSuperseded,
+			Persistence: persistNone,
+			TrialHint:   trialHintReclassify,
 		})
 	case errors.Is(r.Err, driveops.ErrDiskFull):
 		return withRuntimeSummary(&ResultDecision{

@@ -6,7 +6,10 @@ import (
 	"log/slog"
 )
 
-const retryResolutionSourceActionSuccess = "action_success"
+const (
+	retryResolutionSourceActionSuccess    = "action_success"
+	retryResolutionSourceActionSuperseded = "action_superseded"
+)
 
 // releaseDueHeldTrialsNow releases due held scope trials that are already
 // present in the runtime. It never rebuilds plan structure or revalidates
@@ -81,6 +84,25 @@ func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, actio
 			slog.String("error", clearErr.Error()),
 		)
 	}
+}
+
+func (flow *engineFlow) clearRetryWorkOnSuperseded(ctx context.Context, r *ActionCompletion, current *TrackedAction) error {
+	if current != nil {
+		return flow.resolveRetryWorkAndLogResolution(
+			ctx,
+			retryWorkKeyForAction(&current.Action),
+			retryResolutionSourceActionSuperseded,
+		)
+	}
+	if r == nil {
+		return nil
+	}
+
+	return flow.resolveRetryWorkAndLogResolution(
+		ctx,
+		retryWorkKeyForCompletion(r),
+		retryResolutionSourceActionSuperseded,
+	)
 }
 
 func (flow *engineFlow) resolveRetryWorkAndLogResolution(
