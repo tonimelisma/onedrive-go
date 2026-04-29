@@ -36,7 +36,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | --- | --- |
 | Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestConflictCopyPath_Normal` |
 | Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
-| Worker-start validation rejects already-submitted stale actions before executor side effects, while suspect local truth disables local-state-based rejection. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState` |
+| Worker-start validation rejects already-submitted stale actions before executor side effects, while suspect local truth disables local-state-based rejection. Dependent uploads after planned remote moves tolerate move-produced eTag churn but still reject proven remote content drift, and executable actions without planner truth fail closed. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState`, `TestActionFreshness_PostRemoteMoveUploadAllowsMoveProducedETagChange`, `TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange`, `TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction` |
 | Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork` |
 | Watch-mode replan keeps old-runtime work out of dispatch once it is no longer current and preserves dirty intent across recoverable local-observation failure. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal`, `TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal` |
 
@@ -59,20 +59,29 @@ enabling the dispatch send for the current step, so the old outbox is retired
 instead of racing an idle worker receive.
 
 Before a worker begins executor work, it validates the exact action against
-latest committed truth using the shared action-freshness predicate. A stale
-worker-start action returns `ErrActionPreconditionChanged`, so the engine
-classifies it as superseded instead of ordinary retry. This gate runs before
-hashing, upload-session creation, download writes, delete/move mutation, or
-other executor side effects. It is intentionally not a second planner: it only
-rejects when current truth disproves the exact planned assumptions. Local
-absence or presence can reject only while `local_truth_complete` is true;
+latest committed truth using the shared action-freshness predicate. Admission
+uses the same predicate only for actions that are about to enter the worker
+outbox; retry-held or scope-held actions are checked when they later become
+dispatch candidates. A stale worker-start action returns
+`ErrActionPreconditionChanged`, so the engine classifies it as superseded
+instead of ordinary retry. This gate runs before hashing, upload-session
+creation, download writes, delete/move mutation, or other executor side
+effects. It is intentionally not a second planner: it only rejects when current
+truth disproves the exact planned assumptions. Local absence or presence can
+reject only while `local_truth_complete` is true;
 suspect local truth leaves local-state-based rejection to the next full local
 refresh. Remote-state changes can reject when committed remote truth proves a
-path, item identity, hash, or eTag assumption false. Move actions additionally
-check the source/destination peer path that is not represented by the main
-`PathView`, so a changed local source, reappeared remote source, missing local
-move destination, or occupied remote move destination supersedes the old move
-before side effects.
+path, item identity, hash, or eTag assumption false. A dependent upload after a
+planned remote move is the narrow exception: its planned remote snapshot is the
+pre-move item, so the freshness predicate ignores eTag churn caused by the
+planned move itself while still requiring the current target row to match item
+identity and content facts. Executable actions must carry planner view truth;
+missing planner view data is an internal validation error once committed truth
+is authoritative, not a reason to skip stale work checks. Move actions
+additionally check the source/destination peer path that is not represented by
+the main `PathView`, so a changed local source, reappeared remote source,
+missing local move destination, or occupied remote move destination supersedes
+the old move before side effects.
 
 The dependency graph is dependency-only. It no longer defines runtime
 quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,

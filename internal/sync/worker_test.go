@@ -340,6 +340,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 			DriveID:    driveid.New("0000000000000001"),
 			CreateSide: CreateLocal,
 			View: &PathView{
+				Path: "NewDir",
 				Remote: &RemoteState{
 					ItemID:   "newdir-id",
 					DriveID:  driveid.New("0000000000000001"),
@@ -352,14 +353,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 			Path:    "NewDir/file.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "file-id",
-			View: &PathView{
-				Remote: &RemoteState{
-					ItemID:  "file-id",
-					DriveID: driveid.New("0000000000000001"),
-					Size:    12,
-					Hash:    "testhash",
-				},
-			},
+			View:    &PathView{Path: "NewDir/file.txt"},
 		},
 	}
 

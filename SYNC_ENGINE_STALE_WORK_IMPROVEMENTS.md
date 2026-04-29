@@ -45,6 +45,12 @@ Implemented so far:
     move source/destination drift, before executor side effects.
 12. Engine admission reuses the same freshness predicate and retires stale
     ready actions before dispatching them to workers.
+13. Worker/admission freshness now treats a dependent upload after a planned
+    remote move as fresh when only the remote eTag changed because of that
+    move; item identity and content facts still have to match.
+14. Executable runtime actions must carry planner view truth before freshness
+    validation can run. Missing planner view data is an internal error instead
+    of a silent validation bypass once committed truth is authoritative.
 
 Still follow-up work:
 

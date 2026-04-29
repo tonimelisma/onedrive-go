@@ -598,6 +598,16 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		Path:    blockedPath,
 		DriveID: driveID,
 		ItemID:  "blocked-item",
+		View: &PathView{
+			Path: blockedPath,
+			Remote: &RemoteState{
+				DriveID:  driveID,
+				ItemID:   "blocked-item",
+				ItemType: ItemTypeFile,
+				Hash:     "blocked-hash",
+				Size:     42,
+			},
+		},
 	}, 2, nil)
 	require.NotNil(t, blocked)
 	rt.holdAction(blocked, heldReasonScope, testThrottleScope(), time.Time{})

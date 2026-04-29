@@ -392,16 +392,23 @@ and marks watch mode dirty so replacement work is produced only by a later plan
 from current truth.
 
 Admission uses the same action-freshness predicate as worker-start validation
-before a ready action enters the worker outbox. If committed current truth proves
-the planned action stale, admission applies the superseded completion path
-directly: exact retry state is cleared, the action and its old dependents are
-retired without success semantics, and watch mode is dirtied for a fresh plan.
+before a ready action enters the worker outbox. Retry-held or scope-held work is
+validated when it later becomes a dispatch candidate, not while it is already
+known to be held. If committed current truth proves the planned action stale,
+admission applies the superseded completion path directly: exact retry state is
+cleared, the action and its old dependents are retired without success
+semantics, and watch mode is dirtied for a fresh plan.
 Local truth only participates when `observation_state.local_truth_complete` is
 true; suspect local truth cannot reject a planned action from `local_state`.
 Remote truth participates once the state store has an established remote truth
 authority, and can reject path or item identity changes that prove the planned
-remote assumption false. Move actions validate both endpoints: the main planned
-view path and the opposite source/destination peer needed for the mutation.
+remote assumption false. The shared predicate fails closed if an executable
+runtime action is missing planner view truth once committed truth is
+authoritative. A dependent upload after a planned remote move tolerates eTag
+churn caused by that planned move, but still rejects when current remote truth
+proves the target item identity or content changed.
+Move actions validate both endpoints: the main planned view path and the
+opposite source/destination peer needed for the mutation.
 
 Watch replan failure policy is also explicit. Pre-authority local observation
 failure is recoverable and drops that replan trigger. Once the engine starts
