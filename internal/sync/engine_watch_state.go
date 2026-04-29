@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -224,15 +225,16 @@ func (rt *watchRuntime) retireReadyFrontierForPendingReplan(ready []*TrackedActi
 	rt.emitRuntimeDebugEvent(engineDebugEventOldOutboxRetired, "released_ready_frontier", len(ready), rt.pendingReplanStartedAt())
 }
 
-func (rt *watchRuntime) reschedulePendingReplan(batch dirtyBatch) {
+func (rt *watchRuntime) rescheduleReplanIntent(batch dirtyBatch) error {
 	if rt.dirtyBuf == nil {
-		return
+		return fmt.Errorf("sync: reschedule watch replan: dirty buffer not initialized")
 	}
 	if batch.FullRefresh {
 		rt.dirtyBuf.MarkFullRefresh()
-		return
+		return nil
 	}
 	rt.dirtyBuf.MarkDirty()
+	return nil
 }
 
 func (rt *watchRuntime) totalWorkers() int {
