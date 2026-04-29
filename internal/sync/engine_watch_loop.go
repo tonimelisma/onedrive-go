@@ -154,8 +154,8 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 		return rt.handleWatchReplanSignal(ctx, p, batch, ok)
 	case completion, ok := <-p.completions:
 		return rt.handleWatchCompletionSignal(ctx, p, &completion, ok)
-	case change, ok := <-rt.localEvents:
-		return rt.handleWatchLocalChangeSignal(&change, ok)
+	case batch, ok := <-rt.localBatches:
+		return rt.handleWatchLocalObservationBatchSignal(ctx, &batch, ok)
 	case event, ok := <-rt.protectedRootEvents:
 		return rt.handleWatchProtectedRootEventSignal(ctx, &event, ok)
 	case batch, ok := <-rt.remoteBatches:
@@ -221,14 +221,17 @@ func (rt *watchRuntime) handleWatchCompletionSignal(
 	return false, rt.handleWatchActionCompletion(ctx, p, completion)
 }
 
-func (rt *watchRuntime) handleWatchLocalChangeSignal(change *ChangeEvent, ok bool) (bool, error) {
+func (rt *watchRuntime) handleWatchLocalObservationBatchSignal(
+	ctx context.Context,
+	batch *localObservationBatch,
+	ok bool,
+) (bool, error) {
 	if !ok {
-		rt.localEvents = nil
+		rt.localBatches = nil
 		return false, nil
 	}
 
-	rt.handleWatchLocalChange(change)
-	return false, nil
+	return false, rt.handleWatchLocalObservationBatch(ctx, batch)
 }
 
 func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
@@ -479,15 +482,6 @@ func (rt *watchRuntime) handleWatchCompletionsClosed(
 	return fmt.Errorf("sync: action completions channel closed unexpectedly")
 }
 
-func (rt *watchRuntime) handleWatchLocalChange(change *ChangeEvent) {
-	if change == nil || rt.dirtyBuf == nil {
-		return
-	}
-	if change.Path != "" || change.OldPath != "" {
-		rt.dirtyBuf.MarkDirty()
-	}
-}
-
 func (rt *watchRuntime) handleWatchObserverError(
 	ctx context.Context,
 	p *watchPipeline,
@@ -498,6 +492,7 @@ func (rt *watchRuntime) handleWatchObserverError(
 	}
 
 	rt.logObserverError(observerErr)
+	rt.beginWatchDrainIfCanceled(ctx, p)
 	if err := rt.handleObserverExit(p, ctx.Err() != nil); err != nil {
 		return err
 	}

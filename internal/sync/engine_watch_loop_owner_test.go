@@ -21,7 +21,7 @@ func TestWatchRuntime_BeginWatchDrain_ObserverChannelsStayRuntimeOwned(t *testin
 	eng := newSingleOwnerEngine(t)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.localEvents = make(chan ChangeEvent)
+	rt.localBatches = make(chan localObservationBatch)
 	rt.remoteBatches = make(chan remoteObservationBatch)
 	rt.skippedItems = make(chan []SkippedItem)
 	rt.observerErrs = make(chan error)
@@ -37,7 +37,7 @@ func TestWatchRuntime_BeginWatchDrain_ObserverChannelsStayRuntimeOwned(t *testin
 
 	assert.Nil(t, p.replanReady)
 	assert.Nil(t, p.maintenanceC)
-	assert.Nil(t, rt.localEvents)
+	assert.Nil(t, rt.localBatches)
 	assert.Nil(t, rt.remoteBatches)
 	assert.Nil(t, rt.skippedItems)
 	assert.NotNil(t, rt.observerErrs, "runtime must keep draining observer exits while observers are still active")

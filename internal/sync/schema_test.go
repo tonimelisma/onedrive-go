@@ -37,6 +37,8 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 	assert.ElementsMatch(t, []string{
 		"content_drive_id",
 		"cursor",
+		"local_truth_complete",
+		"local_truth_recovery_reason",
 		"next_full_remote_refresh_at",
 	}, columns)
 

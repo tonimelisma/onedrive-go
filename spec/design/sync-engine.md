@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/engine*.go, internal/sync/engine_watch*.go, internal/sync/engine_runtime*.go, internal/sync/engine_config.go, internal/sync/debug_event_sink.go, internal/sync/engine_debug_events.go, internal/sync/protected_roots.go, internal/sync/shortcut_root_lifecycle.go, internal/sync/shortcut_root_transition.go, internal/sync/shortcut_root_publication.go, internal/sync/permissions.go, internal/sync/permission_handler.go, internal/sync/permission_capability.go, internal/sync/permission_evidence.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/observation_findings.go, internal/cli/sync_flow.go, internal/cli/sync_runtime.go
 
-Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
+Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified]
 
 ## Overview
 
@@ -302,16 +302,22 @@ disables select cases by phase instead of mutating those channel pointers
 mid-shutdown, so asynchronous senders never race the single-owner runtime over
 which signal channel is authoritative.
 
-Local watcher events, remote delta batches, websocket wakes, and full remote
-refresh results are scheduler hints only. After debounce or wake, watch
-mode refreshes current truth, runs SQL comparison/reconciliation, rebuilds the
-current actionable set in Go, reconciles durable retry/blocker state, and then
-admits runnable actions. There is one steady-state replan entry for that work:
-refresh local truth, load the already-committed remote/current state, build the
-current plan, reconcile runtime state, then append the resulting concrete
-worker frontier through the watch-owned frontier helpers. DirtyBuffer emits
-only a coarse dirty/full-refresh scheduler signal, and that signal feeds only
-this steady-state replan path; it does not define a second planning model.
+Local watcher events are scheduler hints plus scoped local-truth updates. The
+local observer re-observes the affected file, directory, or safety-scan
+snapshot and emits a `localObservationBatch`; the watch loop applies that batch
+to `local_state`/`observation_state` before marking the dirty scheduler. Remote
+delta batches and full remote refresh results similarly arrive as loop-applied
+durable observation batches. Websocket wakes remain scheduler hints only. After
+debounce or wake, watch mode refreshes local truth as a recovery/full-snapshot
+step, loads already-committed remote/current state, runs SQL
+comparison/reconciliation, rebuilds the current actionable set in Go,
+reconciles durable retry/blocker state, and then admits runnable actions. There
+is one steady-state replan entry for that work: refresh local truth, load the
+already-committed remote/current state, build the current plan, reconcile
+runtime state, then append the resulting concrete worker frontier through the
+watch-owned frontier helpers. DirtyBuffer emits only a coarse
+dirty/full-refresh scheduler signal, and that signal feeds only this
+steady-state replan path; it does not define a second planning model.
 
 Bootstrap uses that same outer owner after the initial
 observe/build/reconcile/start-runtime handoff. The only bootstrap-specific semantics

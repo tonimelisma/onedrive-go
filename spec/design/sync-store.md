@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/observation_reconcile_policy.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/block_scope_rows.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/shortcut_root_state.go, internal/sync/shortcut_root_store.go, internal/sync/shortcut_alias_mutation.go, internal/sync/condition_projection.go, internal/sync/blocked_retry_projection.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/scope_block.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
 
-Implements: R-2.5 [designed], R-2.7 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
+Implements: R-2.5 [designed], R-2.7 [verified], R-2.8.8 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
 ## Overview
 
@@ -16,7 +16,7 @@ architecture it owns:
 - observation issue persistence
 - retry-work persistence
 - block-scope persistence
-- observation resume/cadence persistence
+- observation resume/cadence and local-truth-confidence persistence
 - state-DB diagnosis and explicit reset support
 - read-only raw row access used by `status`
 
@@ -70,6 +70,7 @@ artifacts, not a multisync cache.
 | The store remains the sole durable owner of schema validation/open semantics and explicit reset flows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
 | Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens; shortcut status leaves the store through sync-owned status views instead of raw shortcut-root rows. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestBuildChildStatusMount_RendersLifecycleState` |
 | Local filesystem identity is persisted as generic truth for files and directories in `local_state` and `baseline`, allowing local move detection without shortcut-specific sibling scans. | `TestReplaceLocalState_PersistsFilesystemIdentity`, `TestCommitMutation_PersistsLocalFilesystemIdentity`, `TestQueryReconciliationState_LocalFolderMoveUsesFilesystemIdentity` |
+| Local watch observation can update durable local truth with scoped upsert/delete/prefix-delete patches, full snapshot replacement clears suspect local truth, and prefix deletion treats SQL wildcards as literal path bytes while preserving path case. | `TestScopedLocalStateMutation_UpsertReadAndDeleteExactPath`, `TestDeleteLocalStatePrefix_DeletesDirectoryAndDescendantsOnly`, `TestDeleteLocalStatePrefix_EscapesSQLWildcards`, `TestReplaceLocalState_MarksLocalTruthComplete` |
 | Parent shortcut-root lifecycle state is stored in the parent sync store, rebuilt into parent-owned observation protection, and applied before the parent publishes child work and cleanup work to multisync. Empty complete remote shortcut observation batches are persisted and retire old roots; child final-drain acknowledgement first persists `removed_release_pending`; release cleanup later moves old roots to `removed_child_cleanup_pending` or promotes waiting replacements; cleanup-blocked release failures are persisted before returning errors; child artifact cleanup acknowledgement deletes cleanup-pending rows; duplicate automatic shortcut targets are parent-owned blocked roots. Cleanup requests are derived from these rows with explicit child mount ID and local-root scope, not reconstructed by multisync. | `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_acknowledgeShortcutChildArtifactsPurgedRemovesCleanupPendingRoot`, `TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeReturningError`, `TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterReleasePending`, `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler` |
 | Shortcut alias mutation is a parent-engine-internal operation by binding item ID and updates parent shortcut-root state. | `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain` |
 
@@ -98,7 +99,19 @@ and execution read the repaired durable truth.
 
 Local observation writes belong to `local_state`. Full scans replace the entire
 `local_state` snapshot in one transaction, including filesystem identity for
-files and directories when the platform provides a device/inode pair.
+files and directories when the platform provides a device/inode pair. Watch-mode
+scoped local observations use store-owned exact helpers instead of an event
+journal: exact path reads, upsert rows, exact path deletes, prefix deletes, and
+atomic mixed patches for one engine-applied batch. Prefix deletes match the
+directory path itself plus descendants below `path/`; SQL wildcard characters in
+path bytes are escaped and never broaden the delete.
+
+`observation_state.local_truth_complete` records whether `local_state` is a
+complete local mirror. Full local snapshot replacement marks it complete and
+clears `local_truth_recovery_reason`. Dropped local observation batches, dropped
+hash requests, watcher errors, and failed safety scans mark it incomplete with a
+reason so later stale-work checks know that local absence is not proof until a
+full refresh succeeds.
 
 Observation-owned durable problems belong to `observation_issues`, not retry
 lanes or `block_scopes`. Read-denied subtree boundaries are represented as
@@ -262,12 +275,13 @@ second copy of parsed metadata in SQLite.
 scope belongs in `block_scopes`. Timed blocked-work scopes persist there;
 observation-owned read boundaries do not.
 
-`observation_state` persists only the restart-safe next full-remote refresh
-deadline, not the runtime mode that produced it. Runtime decides whether the
-current observation path is delta-based or enumerate-only and then stores the
-next due time accordingly. When watch mode shortens that persisted deadline
-after startup, the same watch step must rearm the live timer immediately so
-the process does not keep sleeping on the superseded later deadline.
+`observation_state` persists the restart-safe next full-remote refresh deadline
+and local-truth confidence, not the runtime mode that produced the remote
+deadline. Runtime decides whether the current observation path is delta-based or
+enumerate-only and then stores the next due time accordingly. When watch mode
+shortens that persisted deadline after startup, the same watch step must rearm
+the live timer immediately so the process does not keep sleeping on the
+superseded later deadline.
 
 `retry_work` stores only exact held roots. Dependents blocked behind those
 roots remain dependency state in the current runtime; they are not persisted as
