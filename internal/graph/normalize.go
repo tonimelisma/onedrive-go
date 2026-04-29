@@ -15,19 +15,18 @@ func normalizeSingleItem(item *Item, logger *slog.Logger) {
 }
 
 // normalizeListedItems applies the shared graph boundary normalization used by
-// paginated non-delta list/search/shared responses. These surfaces should
-// expose decoded names and should not leak package-only OneNote items that do
-// not behave like normal files or folders.
+// paginated non-delta list/search/shared responses. These surfaces expose
+// provider truth with decoded names; sync-only package policy lives in the sync
+// observation layer.
 func normalizeListedItems(items []Item, logger *slog.Logger) []Item {
 	items = decodeURLEncodedNames(items, logger)
-	items = filterPackages(items, logger)
 
 	return items
 }
 
 // normalizeDeltaItems applies delta-specific quirk handling to a batch of
 // items. The pipeline runs in a fixed order:
-// 0. Apply the shared non-delta normalization (decode names, filter packages)
+// 0. Apply the shared non-delta normalization (decode names)
 // 1. Clear bogus hashes on deleted items
 // 2. Deduplicate items that appear multiple times (keep last occurrence)
 // 3. Reorder so deletions at a parent are processed before creations
@@ -38,35 +37,6 @@ func normalizeDeltaItems(items []Item, logger *slog.Logger) []Item {
 	items = reorderDeletions(items, logger)
 
 	return items
-}
-
-// filterPackages removes items where IsPackage is true. OneNote packages
-// should be skipped entirely during sync — they are compound objects that
-// cannot be meaningfully synced as files.
-func filterPackages(items []Item, logger *slog.Logger) []Item {
-	result := make([]Item, 0, len(items))
-
-	for i := range items {
-		if items[i].IsPackage {
-			logger.Debug("filtering out package item",
-				slog.String("item_id", items[i].ID),
-				slog.String("name", items[i].Name),
-			)
-
-			continue
-		}
-
-		result = append(result, items[i])
-	}
-
-	if filtered := len(items) - len(result); filtered > 0 {
-		logger.Info("filtered package items from delta batch",
-			slog.Int("filtered_count", filtered),
-			slog.Int("remaining_count", len(result)),
-		)
-	}
-
-	return result
 }
 
 // clearDeletedHashes clears all hash fields on deleted items. The Graph API

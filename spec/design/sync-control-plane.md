@@ -397,9 +397,13 @@ Control-socket reload does four things in order:
 Removed or newly paused mounts are stopped and closed. Newly added or newly
 resumed mounts are started when they are runnable; incompatible-store mounts
 are warned and skipped without bouncing healthy runners. Already-running mounts
-remain running. When a
-timed pause has already expired by reload time, the config keys are cleaned up
-but the running mount is not bounced.
+remain running only when their runtime mount specs are equivalent. Content
+filter fields (`included_dirs`, `ignored_dirs`, `ignored_paths`,
+`ignore_dotfiles`, `ignore_junk_files`, `follow_symlinks`) are part of that
+equivalence check, so a filter config change restarts the affected runner and
+forces fresh startup observation under the new visibility policy. When a timed
+pause has already expired by reload time, the config keys are cleaned up but the
+running mount is not bounced.
 
 ## Runtime Ownership
 

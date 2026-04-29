@@ -183,7 +183,7 @@ func TestBuildChildStatusMount_InheritsParentPause(t *testing.T) {
 	child := testShortcutStatusChild(parentCID, syncengine.ShortcutRootStateActive)
 	paused := true
 	mount := buildChildStatusMount(
-		config.Drive{SyncDir: "/tmp/sync-root", Paused: &paused},
+		&config.Drive{SyncDir: "/tmp/sync-root", Paused: &paused},
 		&child,
 		nil,
 	)
@@ -360,7 +360,7 @@ func buildStatusLifecycleMount(
 		}
 	}
 	child := testShortcutStatusChildFromRecord(parentCID, &record)
-	return buildChildStatusMount(config.Drive{SyncDir: "/tmp/sync-root"}, &child, nil)
+	return buildChildStatusMount(&config.Drive{SyncDir: "/tmp/sync-root"}, &child, nil)
 }
 
 func assertStatusLifecycleMount(t *testing.T, mount *statusMount, tc *shortcutStatusLifecycleCase) {
@@ -444,7 +444,7 @@ func TestBuildChildStatusMount_SurfacesProtectedPaths(t *testing.T) {
 	record.ProtectedPaths = []string{"Shortcuts/Docs", "Shortcuts/Old Docs"}
 	child := testShortcutStatusChildFromRecord(parentCID, &record)
 	mount := buildChildStatusMount(
-		config.Drive{SyncDir: "/tmp/sync-root"},
+		&config.Drive{SyncDir: "/tmp/sync-root"},
 		&child,
 		nil,
 	)
@@ -543,7 +543,7 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	record.BlockedDetail = "shortcut alias path is blocked by a local file"
 	child := testShortcutStatusChildFromRecord(parentCID, &record)
 	mount := buildChildStatusMount(
-		config.Drive{SyncDir: "/tmp/sync-root"},
+		&config.Drive{SyncDir: "/tmp/sync-root"},
 		&child,
 		nil,
 	)
@@ -579,7 +579,7 @@ func TestBuildChildStatusMount_FinalDrainGuidesAccessRestore(t *testing.T) {
 	child := testShortcutStatusChild(parentCID, syncengine.ShortcutRootStateRemovedFinalDrain)
 
 	mount := buildChildStatusMount(
-		config.Drive{SyncDir: "/tmp/sync-root"},
+		&config.Drive{SyncDir: "/tmp/sync-root"},
 		&child,
 		nil,
 	)

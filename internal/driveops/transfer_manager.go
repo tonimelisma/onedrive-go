@@ -32,6 +32,8 @@ const maxSaneRetries = 100
 const (
 	downloadTempDirPerms  = 0o700
 	downloadTempFilePerms = 0o600
+	downloadPartialPrefix = ".onedrive-go."
+	downloadPartialSuffix = ".partial"
 )
 
 const heicMetadataMismatchWarning = "known OneDrive/iOS metadata mismatch, accepting download"
@@ -180,9 +182,10 @@ func NewTransferManager(
 	return tm
 }
 
-// DownloadToFile downloads a remote file to targetPath with .partial safety:
-// write to .partial, optionally resume from existing .partial, verify hash
-// with retry, set mtime, atomic rename to target.
+// DownloadToFile downloads a remote file to targetPath with a namespaced
+// partial file in the target directory: write to partial, optionally resume
+// from existing partial, verify hash with retry, set mtime, atomic rename to
+// target.
 func (tm *TransferManager) DownloadToFile(
 	ctx context.Context, driveID driveid.ID, itemID, targetPath string, opts DownloadOpts,
 ) (*DownloadResult, error) {
@@ -213,7 +216,7 @@ func (tm *TransferManager) DownloadToFile(
 		return nil, fmt.Errorf("creating parent dir for %s: %w", targetPath, err)
 	}
 
-	partialPath := targetPath + ".partial"
+	partialPath := downloadPartialPath(targetPath)
 	remoteHash := opts.RemoteHash
 	hashVerified := remoteHash != "" // no verification possible without a remote hash (B-021)
 	var localHash string
@@ -285,6 +288,21 @@ func (tm *TransferManager) DownloadToFile(
 		EffectiveRemoteHash: remoteHash,
 		HashVerified:        hashVerified,
 	}, nil
+}
+
+func downloadPartialPath(targetPath string) string {
+	return filepath.Join(
+		filepath.Dir(targetPath),
+		downloadPartialPrefix+filepath.Base(targetPath)+downloadPartialSuffix,
+	)
+}
+
+// IsOwnedTransferArtifactName reports whether a local basename belongs to
+// onedrive-go's transfer machinery. It intentionally matches only the
+// namespaced form used by this client, not arbitrary user-created *.partial
+// files.
+func IsOwnedTransferArtifactName(name string) bool {
+	return strings.HasPrefix(name, downloadPartialPrefix) && strings.HasSuffix(name, downloadPartialSuffix)
 }
 
 // downloadWithHashRetry downloads a file and retries on hash mismatch. On

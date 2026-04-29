@@ -25,10 +25,10 @@ import (
 )
 
 // Validates: R-2.4.8, R-2.11.1
-func TestLocalFilterConfigDoesNotCarryProtectedRoots(t *testing.T) {
+func TestContentFilterConfigDoesNotCarryProtectedRoots(t *testing.T) {
 	t.Parallel()
 
-	filterType := reflect.TypeOf(LocalFilterConfig{})
+	filterType := reflect.TypeOf(ContentFilterConfig{})
 	_, hasProtectedRoots := filterType.FieldByName("ProtectedRoots")
 
 	assert.False(t, hasProtectedRoots)
@@ -484,16 +484,18 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 	assert.Equal(t, ChangeModify, result.Events[0].Type)
 }
 
-func TestFullScan_NosyncGuard(t *testing.T) {
+func TestFullScan_NosyncMarkerIsOrdinaryFile(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	writeTestFile(t, dir, ".nosync", "")
 
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	_, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 
-	assert.ErrorIs(t, err, ErrNosyncGuard)
+	require.NoError(t, err)
+	require.Len(t, result.Events, 1)
+	assert.Equal(t, ".nosync", result.Events[0].Path)
 }
 
 func TestFullScan_EmptyDir(t *testing.T) {
@@ -509,7 +511,7 @@ func TestFullScan_EmptyDir(t *testing.T) {
 }
 
 // Validates: R-2.4.6
-func TestFullScan_SymlinkFollowedByDefault(t *testing.T) {
+func TestFullScan_SymlinkSkippedByDefault(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -521,8 +523,26 @@ func TestFullScan_SymlinkFollowedByDefault(t *testing.T) {
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
-	require.Len(t, result.Events, 2, "default symlink policy should follow symlinks")
+	require.Len(t, result.Events, 1, "default symlink policy should skip symlinks")
 	assert.NotNil(t, findEvent(result.Events, "real.txt"))
+	assert.Nil(t, findEvent(result.Events, "link.txt"))
+}
+
+// Validates: R-2.4.6
+func TestFullScan_FollowSymlinksOptIn(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "real.txt", "content")
+
+	require.NoError(t, os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "link.txt")), "Symlink")
+
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(ContentFilterConfig{FollowSymlinks: true})
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	require.NoError(t, err, "FullScan")
+
+	require.Len(t, result.Events, 2)
 
 	linkEvent := findEvent(result.Events, "link.txt")
 	require.NotNil(t, linkEvent)
@@ -531,7 +551,7 @@ func TestFullScan_SymlinkFollowedByDefault(t *testing.T) {
 }
 
 // Validates: R-2.4.6
-func TestFullScan_SymlinkDirectoryFollowedByDefault(t *testing.T) {
+func TestFullScan_FollowSymlinkDirectoryOptIn(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -540,6 +560,7 @@ func TestFullScan_SymlinkDirectoryFollowedByDefault(t *testing.T) {
 	require.NoError(t, os.Symlink(filepath.Join(dir, "real"), filepath.Join(dir, "alias")), "Symlink")
 
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(ContentFilterConfig{FollowSymlinks: true})
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -562,6 +583,7 @@ func TestFullScan_SymlinkDirectoryCycleStopsAtAliasBoundary(t *testing.T) {
 	defer cancel()
 
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(ContentFilterConfig{FollowSymlinks: true})
 	result, err := obs.FullScan(ctx, mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -628,7 +650,7 @@ func TestFullScan_SharePointRootFormsProducesSkippedItem(t *testing.T) {
 }
 
 // Validates: R-2.4
-func TestFullScan_AlwaysExcluded(t *testing.T) {
+func TestFullScan_JunkIgnoredWhenConfigured(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -638,6 +660,7 @@ func TestFullScan_AlwaysExcluded(t *testing.T) {
 	writeTestFile(t, dir, "legit.txt", "keep me")
 
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(ContentFilterConfig{IgnoreJunkFiles: true})
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -645,8 +668,8 @@ func TestFullScan_AlwaysExcluded(t *testing.T) {
 	require.Len(t, result.Events, 1)
 	assert.Equal(t, "legit.txt", result.Events[0].Path)
 
-	// Always-excluded items are internal, not user-actionable — Skipped should be empty.
-	assert.Empty(t, result.Skipped, "always-excluded items should not appear in Skipped")
+	// Ignored junk items are internal, not user-actionable — Skipped should be empty.
+	assert.Empty(t, result.Skipped, "ignored junk items should not appear in Skipped")
 }
 
 func TestFullScan_ContextCanceled(t *testing.T) {
@@ -781,81 +804,6 @@ func TestFullScan_MixedChanges(t *testing.T) {
 	delEv := findEvent(result.Events, "deleted.txt")
 	require.NotNil(t, delEv, "deleted.txt event not found")
 	assert.Equal(t, ChangeDelete, delEv.Type)
-}
-
-// ---------------------------------------------------------------------------
-// Unit tests for helper functions
-// ---------------------------------------------------------------------------
-
-func TestIsAlwaysExcluded(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		// Suffix-based exclusions.
-		{"partial file", "download.partial", true},
-		{"tmp file", "temp.tmp", true},
-		{"swap file", "file.swp", true},
-		{"crdownload", "file.crdownload", true},
-		{"db file", "data.db", false},
-		{"db-wal file", "data.db-wal", false},
-		{"db-shm file", "data.db-shm", false},
-
-		// Case insensitive.
-		{"tmp uppercase", "FILE.TMP", true},
-		{"partial mixed case", "Download.Partial", true},
-		{"db uppercase", "DATA.DB", false},
-		{"ds store", ".DS_Store", true},
-		{"thumbs db", "Thumbs.db", true},
-		{"appledouble", "._file.txt", true},
-		{"macosx dir", "__MACOSX", true},
-
-		// Prefix-based exclusions.
-		{"tilde prefix", "~backup", true},
-		{"dot-tilde prefix", ".~lock.file", true},
-		{"tilde-dollar", "~$Budget.xlsx", false},
-
-		// Not excluded.
-		{"normal txt", "hello.txt", false},
-		{"go file", "main.go", false},
-		{"dotfile", ".gitignore", false},
-		{"csv file", "data.csv", false},
-		{"partial in middle", "my.partial.bak", false},
-		{"db in middle", "data.db.backup", false},
-	}
-
-	for i := range tests {
-		tt := tests[i]
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := IsAlwaysExcluded(tt.in)
-			assert.Equal(t, tt.want, got, "IsAlwaysExcluded(%q)", tt.in)
-		})
-	}
-}
-
-// TestIsAlwaysExcluded_DbFilesNotExcluded validates that .db, .db-wal, and
-// .db-shm files are NOT excluded (B-308). The sync engine's state DB lives
-// outside the sync directory, so these suffixes only cause false positives
-// for legitimate user files.
-func TestIsAlwaysExcluded_DbFilesNotExcluded(t *testing.T) {
-	t.Parallel()
-
-	// .db files should NOT be excluded.
-	assert.False(t, IsAlwaysExcluded("data.db"), ".db should not be excluded")
-	assert.False(t, IsAlwaysExcluded("data.db-wal"), ".db-wal should not be excluded")
-	assert.False(t, IsAlwaysExcluded("data.db-shm"), ".db-shm should not be excluded")
-	assert.False(t, IsAlwaysExcluded("DATA.DB"), "case-insensitive .db should not be excluded")
-
-	// These should still be excluded.
-	assert.True(t, IsAlwaysExcluded("file.partial"), ".partial should still be excluded")
-	assert.True(t, IsAlwaysExcluded("file.tmp"), ".tmp should still be excluded")
-	assert.True(t, IsAlwaysExcluded("file.swp"), ".swp should still be excluded")
-	assert.True(t, IsAlwaysExcluded("file.crdownload"), ".crdownload should still be excluded")
 }
 
 func TestValidateOneDriveName(t *testing.T) {
@@ -1010,17 +958,18 @@ func TestSkipEntry_Nil(t *testing.T) {
 	assert.NoError(t, got)
 }
 
-func TestFullScan_NosyncGuardDir(t *testing.T) {
+func TestFullScan_NosyncMarkerDirIsOrdinaryDirectory(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	// .nosync as a directory should also trigger the guard.
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".nosync"), 0o700), "Mkdir")
 
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	_, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 
-	assert.ErrorIs(t, err, ErrNosyncGuard)
+	require.NoError(t, err)
+	require.Len(t, result.Events, 1)
+	assert.Equal(t, ".nosync", result.Events[0].Path)
 }
 
 // Validates: R-2.4
@@ -1028,11 +977,12 @@ func TestFullScan_ExcludedDirSkipsSubtree(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	// Create an always-excluded directory and a file inside it.
+	// Create a configured junk directory and a file inside it.
 	writeTestFile(t, dir, "~excluded/inner.txt", "hidden")
 	writeTestFile(t, dir, "visible.txt", "shown")
 
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(ContentFilterConfig{IgnoreJunkFiles: true})
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -1382,7 +1332,7 @@ type shouldObserveCase struct {
 	name           string
 	fileName       string
 	path           string
-	filter         LocalFilterConfig
+	filter         ContentFilterConfig
 	protectedRoots []ProtectedRoot
 	rules          LocalObservationRules
 	wantNil        bool
@@ -1434,9 +1384,10 @@ func TestShouldObserve_BasicCases(t *testing.T) {
 			wantNil:  true,
 		},
 		{
-			name:     "always-excluded file (.tmp)",
+			name:     "junk file excluded when configured",
 			fileName: "temp.tmp",
 			path:     "temp.tmp",
+			filter:   ContentFilterConfig{IgnoreJunkFiles: true},
 			wantNil:  false,
 		},
 		{
@@ -1493,7 +1444,7 @@ func TestShouldObserve_BasicCases(t *testing.T) {
 }
 
 // Validates: R-2.11.1, R-2.11.2, R-2.11.3, R-2.11.4
-func TestShouldObserve_PathScopedSkipDirs(t *testing.T) {
+func TestShouldObserve_PathScopedIgnoredDirs(t *testing.T) {
 	t.Parallel()
 
 	runShouldObserveCases(t, []shouldObserveCase{
@@ -1501,8 +1452,8 @@ func TestShouldObserve_PathScopedSkipDirs(t *testing.T) {
 			name:     "skip configured child root path",
 			fileName: "Docs",
 			path:     "Shared/Docs",
-			filter: LocalFilterConfig{
-				SkipDirs: []string{"Shared/Docs"},
+			filter: ContentFilterConfig{
+				IgnoredDirs: []string{"Shared/Docs"},
 			},
 			wantNil: false,
 		},
@@ -1510,8 +1461,8 @@ func TestShouldObserve_PathScopedSkipDirs(t *testing.T) {
 			name:     "skip configured child subtree path",
 			fileName: "file.txt",
 			path:     "Shared/Docs/file.txt",
-			filter: LocalFilterConfig{
-				SkipDirs: []string{"Shared/Docs"},
+			filter: ContentFilterConfig{
+				IgnoredDirs: []string{"Shared/Docs"},
 			},
 			wantNil: false,
 		},
@@ -1519,8 +1470,8 @@ func TestShouldObserve_PathScopedSkipDirs(t *testing.T) {
 			name:     "same leaf outside skipped subtree still observed",
 			fileName: "file.txt",
 			path:     "Other/Docs/file.txt",
-			filter: LocalFilterConfig{
-				SkipDirs: []string{"Shared/Docs"},
+			filter: ContentFilterConfig{
+				IgnoredDirs: []string{"Shared/Docs"},
 			},
 			wantNil: true,
 		},
@@ -1570,7 +1521,7 @@ func TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot(t *testing.T) 
 		ItemID:   "shared-id",
 		ItemType: ItemTypeFolder,
 	}), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(LocalFilterConfig{})
+	obs.SetFilterConfig(ContentFilterConfig{})
 	obs.SetProtectedRoots([]ProtectedRoot{{
 		Path:        "Shared/Docs",
 		MountID:     "child",

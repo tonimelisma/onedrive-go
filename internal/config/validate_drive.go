@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	slashpath "path"
 	"path/filepath"
 	"strings"
 
@@ -35,7 +36,84 @@ func validateDrives(cfg *Config) []error {
 // Empty sync_dir is valid — runtime defaults are computed in buildResolvedDrive().
 // This supports minimal drive sections during initial setup.
 func validateSingleDrive(id driveid.CanonicalID, drive *Drive, syncDirs map[string]string) []error {
-	return checkDriveSyncDirUniqueness(id.String(), drive, syncDirs)
+	errs := checkDriveSyncDirUniqueness(id.String(), drive, syncDirs)
+	errs = append(errs, validateDriveFilterConfig(id.String(), drive.DriveFilterConfig)...)
+
+	return errs
+}
+
+func validateDriveFilterConfig(id string, filter DriveFilterConfig) []error {
+	var errs []error
+
+	errs = append(errs, validateDriveFilterDirList(id, "ignored_dirs", filter.IgnoredDirs)...)
+	errs = append(errs, validateDriveFilterDirList(id, "included_dirs", filter.IncludedDirs)...)
+	errs = append(errs, validateDriveIgnoredPaths(id, filter.IgnoredPaths)...)
+
+	return errs
+}
+
+func validateDriveFilterDirList(id, key string, entries []string) []error {
+	var errs []error
+
+	for _, entry := range entries {
+		normalized := normalizeFilterPath(entry)
+		switch {
+		case normalized == "":
+			errs = append(errs, fmt.Errorf("drive %q %s contains an empty path", id, key))
+		case slashpath.IsAbs(normalized):
+			errs = append(errs, fmt.Errorf("drive %q %s path %q must be root-relative", id, key, entry))
+		case normalized == ".":
+			errs = append(errs, fmt.Errorf("drive %q %s path %q cannot target the sync root", id, key, entry))
+		case hasParentPathComponent(normalized):
+			errs = append(errs, fmt.Errorf("drive %q %s path %q cannot contain '..'", id, key, entry))
+		case strings.ContainsAny(normalized, "*?["):
+			errs = append(errs, fmt.Errorf("drive %q %s path %q must be an exact root-relative directory path", id, key, entry))
+		case slashpath.Clean(normalized) != normalized:
+			errs = append(errs, fmt.Errorf("drive %q %s path %q must be normalized", id, key, entry))
+		}
+	}
+
+	return errs
+}
+
+func validateDriveIgnoredPaths(id string, entries []string) []error {
+	var errs []error
+
+	for _, entry := range entries {
+		normalized := normalizeFilterPath(entry)
+		switch {
+		case normalized == "":
+			errs = append(errs, fmt.Errorf("drive %q ignored_paths contains an empty pattern", id))
+		case slashpath.IsAbs(normalized):
+			errs = append(errs, fmt.Errorf("drive %q ignored_paths pattern %q must be root-relative", id, entry))
+		case normalized == ".":
+			errs = append(errs, fmt.Errorf("drive %q ignored_paths pattern %q cannot target the sync root", id, entry))
+		case hasParentPathComponent(normalized):
+			errs = append(errs, fmt.Errorf("drive %q ignored_paths pattern %q cannot contain '..'", id, entry))
+		case slashpath.Clean(normalized) != normalized:
+			errs = append(errs, fmt.Errorf("drive %q ignored_paths pattern %q must be normalized", id, entry))
+		default:
+			if _, err := slashpath.Match(normalized, normalized); err != nil {
+				errs = append(errs, fmt.Errorf("drive %q ignored_paths pattern %q is invalid: %w", id, entry, err))
+			}
+		}
+	}
+
+	return errs
+}
+
+func normalizeFilterPath(path string) string {
+	return filepath.ToSlash(path)
+}
+
+func hasParentPathComponent(path string) bool {
+	for _, part := range strings.Split(path, "/") {
+		if part == ".." {
+			return true
+		}
+	}
+
+	return false
 }
 
 // checkDriveSyncDirUniqueness ensures no two drives share the same expanded sync_dir.

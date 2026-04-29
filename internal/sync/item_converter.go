@@ -53,6 +53,8 @@ type ItemConverter struct {
 	// EnableVaultFilter enables Personal Vault exclusion (B-271). Only
 	// applicable to the primary drive.
 	EnableVaultFilter bool
+
+	incompleteObservation bool
 }
 
 // NewPrimaryConverter creates an ItemConverter for primary-drive or
@@ -80,6 +82,7 @@ func NewPrimaryConverter(
 // two-pass processing: register all items in inflight, then classify all.
 // Used by mount-root observation where all items arrive in a single batch.
 func (c *ItemConverter) ConvertItems(ctx context.Context, items []graph.Item) []ChangeEvent {
+	c.resetIncompleteObservation()
 	c.enrichSparseParentRefs(ctx, items)
 
 	inflight := make(map[string]InflightParent, len(items))
@@ -99,6 +102,22 @@ func (c *ItemConverter) ConvertItems(ctx context.Context, items []graph.Item) []
 	}
 
 	return events
+}
+
+func (c *ItemConverter) resetIncompleteObservation() {
+	if c != nil {
+		c.incompleteObservation = false
+	}
+}
+
+func (c *ItemConverter) markIncompleteObservation() {
+	if c != nil {
+		c.incompleteObservation = true
+	}
+}
+
+func (c *ItemConverter) observationIncomplete() bool {
+	return c != nil && c.incompleteObservation
 }
 
 func (c *ItemConverter) enrichSparseParentRefs(ctx context.Context, items []graph.Item) {
@@ -266,17 +285,6 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]Infli
 		existing = baselineEntry
 	}
 
-	name := effectiveItemName(item, existing)
-	if IsAlwaysExcluded(name) {
-		c.Logger.Debug("ignoring symmetric snapshot-junk item",
-			slog.String("item_id", item.ID),
-			slog.String("name", name),
-			slog.String("drive_id", itemDriveID.String()),
-		)
-
-		return nil
-	}
-
 	// Non-deleted items need a materializable leaf name. Deleted items may
 	// recover their name from the baseline later in classifyAndConvert.
 	// Delta query updates are allowed to omit unchanged properties, so an
@@ -295,6 +303,17 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]Infli
 	// Skip the mount observation root itself.
 	if c.RemoteRootItemID != "" && item.ID == c.RemoteRootItemID {
 		c.Logger.Debug("skipping mount root item", slog.String("item_id", item.ID))
+
+		return nil
+	}
+
+	// OneNote/package items are valid Graph objects, but they are compound
+	// provider objects rather than normal file/folder content sync can manage.
+	if item.IsPackage {
+		c.Logger.Debug("skipping package item",
+			slog.String("item_id", item.ID),
+			slog.String("name", item.Name),
+		)
 
 		return nil
 	}
@@ -493,6 +512,17 @@ func (c *ItemConverter) classifyAndConvert(
 		ev.Path = c.materializePath(item, inflight, itemDriveID)
 	}
 
+	if ev.Path == "" {
+		c.Logger.Warn("skipping remote item without materialized path",
+			slog.String("item_id", item.ID),
+			slog.String("name", item.Name),
+			slog.String("parent_id", item.ParentID),
+			slog.String("drive_id", itemDriveID.String()),
+		)
+
+		return nil
+	}
+
 	return &ev
 }
 
@@ -524,6 +554,9 @@ func (c *ItemConverter) materializePathWithBaselineFallback(
 
 		return path.Join(parentDir, name)
 	}
+	if graphPath := c.materializePathFromGraphParentPath(item, name); graphPath != "" {
+		return graphPath
+	}
 
 	return c.materializePathFromParts(item.ID, name, item.ParentID, resolveParentDriveID(item, itemDriveID), inflight)
 }
@@ -533,6 +566,10 @@ func (c *ItemConverter) materializePathWithBaselineFallback(
 func (c *ItemConverter) materializePath(
 	item *graph.Item, inflight map[string]InflightParent, itemDriveID driveid.ID,
 ) string {
+	if graphPath := c.materializePathFromGraphParentPath(item, nfcNormalize(item.Name)); graphPath != "" {
+		return graphPath
+	}
+
 	return c.materializePathFromParts(
 		item.ID,
 		nfcNormalize(item.Name),
@@ -540,6 +577,20 @@ func (c *ItemConverter) materializePath(
 		resolveParentDriveID(item, itemDriveID),
 		inflight,
 	)
+}
+
+func (c *ItemConverter) materializePathFromGraphParentPath(item *graph.Item, name string) string {
+	if c == nil || item == nil || name == "" || c.RemoteRootItemID != "" {
+		return ""
+	}
+	if item.ParentPath == "" && !item.ParentPathKnown {
+		return ""
+	}
+	if item.ParentPath == "" {
+		return c.applyPrefix(name)
+	}
+
+	return c.applyPrefix(path.Join(item.ParentPath, name))
 }
 
 func (c *ItemConverter) materializePathFromParts(
@@ -575,6 +626,13 @@ func (c *ItemConverter) materializePathFromParts(
 			continue
 		}
 
+		// Stop at a configured mount root even when Graph did not include that
+		// root row in the current batch. The mount root is the observation
+		// boundary, not a materialized path segment.
+		if c.RemoteRootItemID != "" && parentID == c.RemoteRootItemID {
+			break
+		}
+
 		// Baseline entry found: prepend this item's full stored path.
 		if entry, ok := c.Baseline.GetByID(parentID); ok && entry.Path != "" {
 			slices.Reverse(segments)
@@ -589,8 +647,9 @@ func (c *ItemConverter) materializePathFromParts(
 			slog.String("parent_id", parentID),
 			slog.String("parent_drive_id", parentDriveID.String()),
 		)
+		c.markIncompleteObservation()
 
-		break
+		return ""
 	}
 
 	slices.Reverse(segments)

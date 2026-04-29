@@ -65,42 +65,20 @@ func TestDecodeURLEncodedNames_InvalidEscapeKept(t *testing.T) {
 	assert.Equal(t, "bad%zzname.txt", result[0].Name)
 }
 
-func TestFilterPackages(t *testing.T) {
+func TestNormalizeListedItems_DecodesNamesAndKeepsPackages(t *testing.T) {
 	items := []Item{
-		{ID: "file-1", Name: "doc.txt", IsPackage: false},
-		{ID: "pkg-1", Name: "Notebook.one", IsPackage: true},
-		{ID: "file-2", Name: "photo.jpg", IsPackage: false},
-		{ID: "pkg-2", Name: "Notebook2.one", IsPackage: true},
+		{ID: "file-1", Name: "doc%20one.txt", IsPackage: false},
+		{ID: "pkg-1", Name: "Notebook%20One", IsPackage: true},
 	}
 
-	result := filterPackages(items, testNoopLogger())
+	result := normalizeListedItems(items, testNoopLogger())
 
 	assert.Len(t, result, 2)
 	assert.Equal(t, "file-1", result[0].ID)
-	assert.Equal(t, "file-2", result[1].ID)
-}
-
-// Validates: R-6.7.9
-func TestFilterPackages_AllPackages(t *testing.T) {
-	items := []Item{
-		{ID: "pkg-1", Name: "Notebook1.one", IsPackage: true},
-		{ID: "pkg-2", Name: "Notebook2.one", IsPackage: true},
-	}
-
-	result := filterPackages(items, testNoopLogger())
-
-	assert.Empty(t, result)
-}
-
-func TestFilterPackages_NoPackages(t *testing.T) {
-	items := []Item{
-		{ID: "file-1", Name: "doc.txt"},
-		{ID: "file-2", Name: "photo.jpg"},
-	}
-
-	result := filterPackages(items, testNoopLogger())
-
-	assert.Len(t, result, 2)
+	assert.Equal(t, "doc one.txt", result[0].Name)
+	assert.Equal(t, "pkg-1", result[1].ID)
+	assert.Equal(t, "Notebook One", result[1].Name)
+	assert.True(t, result[1].IsPackage)
 }
 
 func TestClearDeletedHashes(t *testing.T) {
@@ -250,18 +228,22 @@ func TestNormalizeDeltaItems_FullPipeline(t *testing.T) {
 
 	result := normalizeDeltaItems(items, testNoopLogger())
 
-	assert.Len(t, result, 3)
+	assert.Len(t, result, 4)
 
-	assert.Equal(t, "deleted-1", result[0].ID)
-	assert.True(t, result[0].IsDeleted)
-	assert.Empty(t, result[0].QuickXorHash)
+	ids := make(map[string]Item, len(result))
+	for i := range result {
+		ids[result[i].ID] = result[i]
+	}
+	assert.True(t, ids["deleted-1"].IsDeleted)
+	assert.Empty(t, ids["deleted-1"].QuickXorHash)
+	assert.True(t, ids["pkg-1"].IsPackage)
 
-	assert.False(t, result[1].IsDeleted)
-	assert.False(t, result[2].IsDeleted)
-
-	ids := []string{result[1].ID, result[2].ID}
-	assert.Contains(t, ids, "create-1")
-	assert.Contains(t, ids, "dup-1")
+	allIDs := make([]string, 0, len(result))
+	for i := range result {
+		allIDs = append(allIDs, result[i].ID)
+	}
+	assert.Contains(t, allIDs, "create-1")
+	assert.Contains(t, allIDs, "dup-1")
 
 	for _, item := range result {
 		if item.ID == "dup-1" {

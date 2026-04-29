@@ -127,7 +127,7 @@ func TestObserveSinglePath_DirectoryProducesFolderEvent(t *testing.T) {
 }
 
 // Validates: R-2.4.6
-func TestObserveSinglePath_SymlinkFollowedByDefault(t *testing.T) {
+func TestObserveSinglePath_SymlinkSkippedByDefault(t *testing.T) {
 	t.Parallel()
 
 	syncRoot := t.TempDir()
@@ -135,6 +135,30 @@ func TestObserveSinglePath_SymlinkFollowedByDefault(t *testing.T) {
 	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real.txt"), filepath.Join(syncRoot, "link.txt")))
 
 	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), "link.txt", nil, time.Now().UnixNano(), nil)
+	require.NoError(t, err)
+	assert.Nil(t, result.Event)
+	assert.Nil(t, result.Skipped)
+	assert.True(t, result.Resolved)
+}
+
+// Validates: R-2.4.6
+func TestObserveSinglePath_FollowSymlinksOptIn(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "real.txt"), []byte("payload"), 0o600))
+	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real.txt"), filepath.Join(syncRoot, "link.txt")))
+
+	result, err := ObserveSinglePathWithFilter(
+		nil,
+		mustOpenSyncTree(t, syncRoot),
+		"link.txt",
+		nil,
+		time.Now().UnixNano(),
+		nil,
+		ContentFilterConfig{FollowSymlinks: true},
+		LocalObservationRules{},
+	)
 	require.NoError(t, err)
 	require.NotNil(t, result.Event)
 	assert.Equal(t, ItemTypeFile, result.Event.ItemType)
@@ -176,7 +200,7 @@ func TestObserveSinglePathWithFilter_SharePointRootFormsReturnsSkipped(t *testin
 		nil,
 		time.Now().UnixNano(),
 		nil,
-		LocalFilterConfig{},
+		ContentFilterConfig{},
 		LocalObservationRules{RejectSharePointRootForms: true},
 	)
 	require.NoError(t, err)
@@ -268,7 +292,7 @@ func TestObserveSinglePathWithFilter_ObservesIgnoreMarkerFileNormally(t *testing
 		nil,
 		time.Now().UnixNano(),
 		nil,
-		LocalFilterConfig{},
+		ContentFilterConfig{},
 		LocalObservationRules{},
 	)
 	require.NoError(t, err)

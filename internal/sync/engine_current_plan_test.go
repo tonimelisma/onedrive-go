@@ -37,6 +37,57 @@ func seedStaleRetryAndBlockScopeForCurrentPlanTest(t *testing.T, ctx context.Con
 	}))
 }
 
+// Validates: R-2.1.3, R-2.1.4
+func TestLoadCurrentInputs_FiltersCurrentStateBeforeComparison(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.contentFilter = ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	ctx := t.Context()
+
+	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type)
+		VALUES ('item-hidden', 'hidden/file.txt', 'file')`)
+	require.NoError(t, err)
+	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []LocalStateRow{{
+		Path:     "hidden/file.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "local-hidden",
+		Size:     10,
+	}}))
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "item-hidden",
+		Path:     "hidden/file.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "remote-hidden",
+		Size:     10,
+	}}, "", driveID))
+	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
+		Issues: []ObservationIssue{{
+			Path:      "hidden/bad:name.txt",
+			DriveID:   driveID,
+			IssueType: IssueInvalidFilename,
+		}},
+		ManagedIssueTypes: []string{IssueInvalidFilename},
+	}, eng.nowFunc()))
+
+	inputs, err := eng.flow.loadCurrentInputs(ctx, eng.baseline, driveID)
+	require.NoError(t, err)
+
+	assert.Empty(t, inputs.localRows)
+	assert.Empty(t, inputs.remoteRows)
+	assert.Empty(t, inputs.observationIssues)
+	assert.Equal(t, "both_missing", comparisonKindsByPath(inputs.comparisons)["hidden/file.txt"])
+	assert.Equal(t, "baseline_remove", reconciliationKindsByPath(inputs.reconciliations)["hidden/file.txt"])
+
+	rawRemote, err := eng.baseline.ListRemoteState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rawRemote, 1)
+	assert.Equal(t, "hidden/file.txt", rawRemote[0].Path)
+}
+
 // Validates: R-2.10.5
 func TestRunBootstrapCurrentPlan_MatchesOneShotLiveCurrentPlan(t *testing.T) {
 	t.Parallel()

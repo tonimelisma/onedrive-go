@@ -19,8 +19,8 @@ func TestCleanTransferArtifacts_BothPaths(t *testing.T) {
 
 	require.NoError(t, os.MkdirAll(syncRoot, 0o700))
 
-	// Create a .partial file to exercise CleanStalePartials path.
-	partialPath := filepath.Join(syncRoot, "stale.partial")
+	// Create an owned partial file to exercise CleanStalePartials path.
+	partialPath := filepath.Join(syncRoot, downloadPartialPrefix+"stale.txt"+downloadPartialSuffix)
 	require.NoError(t, os.WriteFile(partialPath, []byte("x"), 0o600))
 
 	// Create a session store with an expired session.

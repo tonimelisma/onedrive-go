@@ -69,6 +69,7 @@ func (e *Engine) acknowledgeChildFinalDrain(
 		if err := e.shortcutChildWorkSink(ctx, shortcutChildWorkSnapshotFromRootsWithParentRoot(
 			e.shortcutNamespaceID,
 			e.syncRoot,
+			e.contentFilter,
 			roots,
 		)); err != nil {
 			return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: publish shortcut child work snapshot after final drain: %w", err)

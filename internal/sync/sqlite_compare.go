@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -467,7 +468,16 @@ func queryComparisonStateWithRunner(
 	ctx context.Context,
 	runner sqlTxRunner,
 ) ([]SQLiteComparisonRow, error) {
-	rows, err := runner.QueryContext(ctx, sqlQueryComparisonState)
+	return queryComparisonStateWithRunnerForTables(ctx, runner, "local_state", "remote_state")
+}
+
+func queryComparisonStateWithRunnerForTables(
+	ctx context.Context,
+	runner sqlTxRunner,
+	localStateTable string,
+	remoteStateTable string,
+) ([]SQLiteComparisonRow, error) {
+	rows, err := runner.QueryContext(ctx, sqlQueryForStateTables(sqlQueryComparisonState, localStateTable, remoteStateTable))
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
 	}
@@ -532,7 +542,16 @@ func queryReconciliationStateWithRunner(
 	ctx context.Context,
 	runner sqlTxRunner,
 ) ([]SQLiteReconciliationRow, error) {
-	rows, err := runner.QueryContext(ctx, sqlQueryReconciliationState)
+	return queryReconciliationStateWithRunnerForTables(ctx, runner, "local_state", "remote_state")
+}
+
+func queryReconciliationStateWithRunnerForTables(
+	ctx context.Context,
+	runner sqlTxRunner,
+	localStateTable string,
+	remoteStateTable string,
+) ([]SQLiteReconciliationRow, error) {
+	rows, err := runner.QueryContext(ctx, sqlQueryForStateTables(sqlQueryReconciliationState, localStateTable, remoteStateTable))
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
 	}
@@ -570,4 +589,11 @@ func queryReconciliationStateWithRunner(
 	}
 
 	return results, nil
+}
+
+func sqlQueryForStateTables(query string, localStateTable string, remoteStateTable string) string {
+	return strings.NewReplacer(
+		"local_state", localStateTable,
+		"remote_state", remoteStateTable,
+	).Replace(query)
 }

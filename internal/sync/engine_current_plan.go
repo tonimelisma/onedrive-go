@@ -270,6 +270,7 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 	return flow.engine.shortcutChildWorkSink(ctx, shortcutChildWorkSnapshotFromRootsWithParentRoot(
 		topology.NamespaceID,
 		flow.engine.syncRoot,
+		flow.engine.contentFilter,
 		parentRoots,
 	))
 }
@@ -356,7 +357,7 @@ func (flow *engineFlow) observeLocal(
 	}
 
 	obs := NewLocalObserver(bl, eng.logger, eng.checkWorkers)
-	obs.SetFilterConfig(eng.localFilter)
+	obs.SetFilterConfig(eng.contentFilter)
 	obs.SetProtectedRoots(eng.protectedRoots)
 	obs.SetObservationRules(eng.localRules)
 	obs.SetExpectedRootIdentity(eng.expectedSyncRootIdentity)
@@ -471,6 +472,7 @@ func (flow *engineFlow) currentShortcutChildPublication(
 	return shortcutChildWorkSnapshotFromRootsWithParentRoot(
 		flow.engine.shortcutNamespaceID,
 		flow.engine.syncRoot,
+		flow.engine.contentFilter,
 		roots,
 	), nil
 }
@@ -501,15 +503,7 @@ func (flow *engineFlow) loadCurrentInputsTx(
 	tx sqlTxRunner,
 	defaultDriveID driveid.ID,
 ) (currentInputs, error) {
-	comparisons, err := queryComparisonStateWithRunner(ctx, tx)
-	if err != nil {
-		return currentInputs{}, fmt.Errorf("sync: querying comparison state: %w", err)
-	}
-	reconciliations, err := queryReconciliationStateWithRunner(ctx, tx)
-	if err != nil {
-		return currentInputs{}, fmt.Errorf("sync: querying reconciliation state: %w", err)
-	}
-	localRows, err := listLocalStateRows(ctx, tx)
+	rawLocalRows, err := listLocalStateRows(ctx, tx)
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: listing local_state rows: %w", err)
 	}
@@ -530,10 +524,35 @@ func (flow *engineFlow) loadCurrentInputsTx(
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: listing remote_state rows: %w", err)
 	}
+	localRows := filterLocalStateRowsForPlanning(rawLocalRows, flow.engine.contentFilter)
+	remoteRows = filterRemoteStateRowsForPlanning(remoteRows, flow.engine.contentFilter)
+	err = replacePlannerVisibleStateTx(ctx, tx, localRows, remoteRows)
+	if err != nil {
+		return currentInputs{}, err
+	}
+	comparisons, err := queryComparisonStateWithRunnerForTables(
+		ctx,
+		tx,
+		plannerVisibleLocalStateTable,
+		plannerVisibleRemoteStateTable,
+	)
+	if err != nil {
+		return currentInputs{}, fmt.Errorf("sync: querying comparison state: %w", err)
+	}
+	reconciliations, err := queryReconciliationStateWithRunnerForTables(
+		ctx,
+		tx,
+		plannerVisibleLocalStateTable,
+		plannerVisibleRemoteStateTable,
+	)
+	if err != nil {
+		return currentInputs{}, fmt.Errorf("sync: querying reconciliation state: %w", err)
+	}
 	observationIssues, err := queryObservationIssueRowsWithRunner(ctx, tx)
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: listing observation issues: %w", err)
 	}
+	observationIssues = filterObservationIssueRowsForPlanning(observationIssues, flow.engine.contentFilter)
 	return currentInputs{
 		comparisons:       comparisons,
 		reconciliations:   reconciliations,

@@ -12,17 +12,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// LocalFilterConfig controls local-only observation exclusions. These filters
-// affect what the scanner/watch pipeline turns into change events; they do not
-// rewrite remote observation semantics. SkipDirs entries are rooted relative
-// slash paths beneath the mount root, not basename-only directory names.
-type LocalFilterConfig struct {
-	SkipDotfiles bool
-	SkipSymlinks bool
-	SkipDirs     []string
-	SkipFiles    []string
-}
-
 // ProtectedRoot marks a parent-engine protected subtree inside this
 // mount. The sync engine suppresses normal local content events for these roots
 // and, when it can identify the same directory at a sibling path, wakes the
@@ -166,7 +155,7 @@ type engineInputs struct {
 	RecursiveLister          RecursiveLister
 	PermChecker              PermissionChecker
 	Logger                   *slog.Logger
-	LocalFilter              LocalFilterConfig
+	ContentFilter            ContentFilterConfig
 	LocalRules               LocalObservationRules
 	ShortcutNamespaceID      string
 	ShortcutChildWorkSink    ShortcutChildWorkSink

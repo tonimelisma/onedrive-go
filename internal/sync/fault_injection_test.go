@@ -104,7 +104,7 @@ func TestFault_PartialFileCleanup(t *testing.T) {
 	syncRoot := t.TempDir()
 
 	// Create a .partial file simulating an interrupted download.
-	partialPath := filepath.Join(syncRoot, "doc.txt.partial")
+	partialPath := filepath.Join(syncRoot, ".onedrive-go.doc.txt.partial")
 	require.NoError(t, os.WriteFile(partialPath, []byte("partial data"), 0o600))
 
 	// CleanTransferArtifacts should remove it.

@@ -537,7 +537,7 @@ func TestExecutor_Download_Success(t *testing.T) {
 	assert.Equal(t, execFileContent, string(data))
 
 	// Partial file should not exist.
-	assert.NoFileExists(t, filepath.Join(syncRoot, "greetings.txt.partial"), ".partial file still exists")
+	assert.NoFileExists(t, filepath.Join(syncRoot, ".onedrive-go.greetings.txt.partial"), ".partial file still exists")
 	assert.Equal(t, int64(len(execFileContent)), o.LocalSize)
 	assert.True(t, o.LocalSizeKnown)
 }
@@ -2084,7 +2084,7 @@ func TestExecutor_Download_PartialFileCleanedOnMidStreamError(t *testing.T) {
 	requireOutcomeFailure(t, &o)
 
 	// The .partial file must not remain on disk after the error.
-	partialPath := filepath.Join(syncRoot, "partial-cleanup.txt.partial")
+	partialPath := filepath.Join(syncRoot, ".onedrive-go.partial-cleanup.txt.partial")
 	_, statErr := os.Stat(partialPath)
 	assert.True(t, os.IsNotExist(statErr), ".partial file should be cleaned up on download error, but it still exists")
 
