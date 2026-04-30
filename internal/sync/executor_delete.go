@@ -80,9 +80,11 @@ func (e *Executor) ExecuteLocalDelete(ctx context.Context, action *Action) Actio
 	info, err := e.syncTree.Stat(action.Path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			// Already gone — success.
-			e.logger.Debug("local delete: already absent", slog.String("path", action.Path))
-			return e.DeleteOutcome(action, ActionLocalDelete)
+			return e.failedOutcome(
+				action,
+				ActionLocalDelete,
+				stalePreconditionError("local delete source %s is already absent", action.Path),
+			)
 		}
 
 		return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(err))
@@ -253,17 +255,29 @@ func (e *Executor) DeleteLocalFile(_ context.Context, action *Action, absPath st
 	return e.DeleteOutcome(action, ActionLocalDelete)
 }
 
-// ExecuteRemoteDelete removes an item from OneDrive. 404 is treated as
-// success (item already deleted).
+// ExecuteRemoteDelete removes an item from OneDrive after checking the planned
+// remote item still exists and matches the action preconditions.
 func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) ActionOutcome {
 	driveID := e.resolveDriveID(action)
 
+	if err := e.validateRemoteSourcePrecondition(ctx, driveID, action, "remote delete"); err != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionRemoteDelete,
+			err,
+			action.Path,
+			inferFailureCapabilityFromError(err, PermissionCapabilityUnknown, PermissionCapabilityRemoteRead),
+		)
+	}
+
 	err := e.items.DeleteItem(ctx, driveID, action.ItemID)
 	if err != nil {
-		// 404 means already deleted — success.
 		if errors.Is(err, graph.ErrNotFound) {
-			e.logger.Debug("remote delete: already absent", slog.String("path", action.Path))
-			return e.DeleteOutcome(action, ActionRemoteDelete)
+			return e.failedOutcome(
+				action,
+				ActionRemoteDelete,
+				stalePreconditionError("remote delete item %s disappeared", action.ItemID),
+			)
 		}
 
 		return e.failedOutcomeWithFailure(

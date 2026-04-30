@@ -280,6 +280,16 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Actio
 	}
 
 	driveID := e.resolveDriveID(action)
+	parentPreconditionErr := e.validateRemoteParentPrecondition(ctx, driveID, parentID, action, "folder create")
+	if parentPreconditionErr != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionFolderCreate,
+			parentPreconditionErr,
+			action.Path,
+			inferFailureCapabilityFromError(parentPreconditionErr, PermissionCapabilityUnknown, PermissionCapabilityRemoteRead),
+		)
+	}
 	name := filepath.Base(action.Path)
 
 	item, err := e.items.CreateFolder(ctx, driveID, parentID, name)
@@ -324,6 +334,16 @@ func (e *Executor) ExecuteMove(ctx context.Context, action *Action) ActionOutcom
 
 // ExecuteLocalMove renames a local file/folder.
 func (e *Executor) ExecuteLocalMove(action *Action) ActionOutcome {
+	if err := e.validateLocalMovePrecondition(action); err != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionLocalMove,
+			err,
+			action.OldPath,
+			PermissionCapabilityLocalWrite,
+		)
+	}
+
 	// Ensure parent directory exists.
 	if err := e.syncTree.MkdirAll(filepath.Dir(action.Path), localDirPerms); err != nil {
 		return e.failedOutcomeWithFailure(
@@ -357,6 +377,26 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) Action
 	newParentID, err := e.ResolveParentID(action.Path)
 	if err != nil {
 		return e.failedOutcomeWithFailure(action, ActionRemoteMove, err, action.OldPath, PermissionCapabilityUnknown)
+	}
+	sourcePreconditionErr := e.validateRemoteSourcePrecondition(ctx, driveID, action, "remote move")
+	if sourcePreconditionErr != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionRemoteMove,
+			sourcePreconditionErr,
+			action.OldPath,
+			inferFailureCapabilityFromError(sourcePreconditionErr, PermissionCapabilityUnknown, PermissionCapabilityRemoteRead),
+		)
+	}
+	parentPreconditionErr := e.validateRemoteParentPrecondition(ctx, driveID, newParentID, action, "remote move")
+	if parentPreconditionErr != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionRemoteMove,
+			parentPreconditionErr,
+			action.Path,
+			inferFailureCapabilityFromError(parentPreconditionErr, PermissionCapabilityUnknown, PermissionCapabilityRemoteRead),
+		)
 	}
 
 	newName := filepath.Base(action.Path)

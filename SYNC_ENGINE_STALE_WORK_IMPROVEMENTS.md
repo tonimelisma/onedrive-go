@@ -4,8 +4,9 @@ Status: design note. The watch-dispatch/outbox-retirement instrumentation pieces
 are implemented in the merged watch-stale-work increments; the superseded result
 foundation and incremental local-truth commit increments are implemented in the
 stale-work roadmap, and worker/admission latest-truth validation is implemented
-in the worker/admission truth-validation increment. Executor-precondition and
-final observability groups remain follow-up work.
+in the worker/admission truth-validation increment. Executor live
+preconditions are implemented in the live-preconditions increment. Final
+observability counters and timing remain follow-up work.
 
 Date: 2026-04-29
 
@@ -51,12 +52,15 @@ Implemented so far:
 14. Executable runtime actions must carry planner view truth before freshness
     validation can run. Missing planner view data is an internal error instead
     of a silent validation bypass once committed truth is authoritative.
+15. Executor live preconditions validate local sources/destinations and remote
+    source/parent items immediately before side effects. Not-found or changed
+    planned facts are returned as `ErrActionPreconditionChanged` and therefore
+    classified as superseded; transient live preflight reads remain ordinary
+    failures.
 
 Still follow-up work:
 
-1. Executor-side live precondition checks for every dangerous local/remote side
-   effect.
-2. Final observability counters for superseded sources, scoped local commits,
+1. Final observability counters for superseded sources, scoped local commits,
    and aggregate worker-idle-by-replan-phase timing.
 
 This note records a design analysis for improving the `onedrive-go` sync engine
@@ -106,11 +110,12 @@ rewalking the whole sync root.
 
 Workers still cannot ask "am I still in the newer plan?" because no newer plan
 has been built until the replan boundary. The practical improvement path is to
-let workers and the engine reject stale work using exact action preconditions,
-latest committed truth checks, and queue control without making workers into a
-second planner. Queue control, worker-start latest-truth checks, and admission
-latest-truth checks are now implemented; live executor preconditions remain
-follow-up work.
+let workers, the engine, and the executor reject stale work using exact action
+preconditions, latest committed truth checks, live side-effect checks, and queue
+control without making workers into a second planner. Queue control,
+worker-start latest-truth checks, admission latest-truth checks, and executor
+live preconditions are now implemented; final observability remains follow-up
+work.
 
 ## 2. External Client Patterns
 
@@ -714,9 +719,11 @@ worker-start validation and scoped local truth commits have landed.
 ## 5. Suggested Implementation Order
 
 1. Add live side-effect preconditions for upload, download, local delete, remote
-   delete, remote move, and remote overwrite.
+   delete, remote move, and remote overwrite. Implemented in the executor
+   live-preconditions increment.
 2. Add chunk-boundary validation for large uploads after the start-time upload
-   precondition exists.
+   precondition exists. Implemented in the executor live-preconditions
+   increment through the transfer-manager source validation callback.
 3. Add scoped local-truth commits for watch-mode file and directory
    observations. Implemented in the incremental local-truth commit increment.
 4. Add local truth suspect/recovery state for dropped events, watcher errors,
@@ -762,11 +769,11 @@ The recommended design is:
    committed `local_state` and `remote_state`; reject it only if that truth
    disproves the action's assumptions. Implemented in the worker/admission
    truth-validation increment.
-6. Let workers prove live ground-truth preconditions before each dangerous side
-   effect.
+6. Let executors prove live ground-truth preconditions before each dangerous
+   side effect. Implemented in the executor live-preconditions increment.
 7. Return stale-precondition/superseded outcomes when either validation gate
-   fails. Implemented for worker-start and admission validation; executor live
-   preconditions remain follow-up.
+   fails. Implemented for worker-start, admission, and executor live
+   preconditions.
 8. Let the next normal replan derive replacement intent from current truth.
 
 That keeps the planner as the owner of sync intent, the runtime as the owner of

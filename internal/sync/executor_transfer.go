@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -34,7 +33,33 @@ func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOu
 
 	driveID := e.resolveDriveID(action)
 
-	opts := driveops.DownloadOpts{MaxHashRetries: maxHashRetries}
+	sourcePreconditionErr := e.validateRemoteSourcePrecondition(ctx, driveID, action, "download")
+	if sourcePreconditionErr != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionDownload,
+			sourcePreconditionErr,
+			action.Path,
+			inferFailureCapabilityFromError(sourcePreconditionErr, PermissionCapabilityLocalWrite, PermissionCapabilityRemoteRead),
+		)
+	}
+	targetPreconditionErr := e.validateDownloadTargetPrecondition(action)
+	if targetPreconditionErr != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionDownload,
+			targetPreconditionErr,
+			action.Path,
+			PermissionCapabilityLocalWrite,
+		)
+	}
+
+	opts := driveops.DownloadOpts{
+		MaxHashRetries: maxHashRetries,
+		ValidateTargetBeforeRename: func() error {
+			return e.validateDownloadTargetPrecondition(action)
+		},
+	}
 
 	if action.View != nil && action.View.Remote != nil {
 		opts.RemoteHash = action.View.Remote.Hash
@@ -95,24 +120,31 @@ func (e *Executor) downloadOutcome(
 // ExecuteUpload uploads a local file to OneDrive via TransferManager. Exported
 // for use by the engine's conflict resolution path.
 //
-// A pre-upload eTag freshness check prevents silently overwriting concurrent
-// remote changes. When the remote eTag differs from the baseline, the upload
-// is aborted with a descriptive error. The engine records this as a
-// sync_failure; on the next pass the observer/planner will see both changes
-// and detect a conflict.
+// A pre-upload freshness check prevents silently overwriting concurrent remote
+// changes. When current remote truth no longer matches the planned overwrite,
+// the upload is aborted as superseded so the engine replans from fresh truth.
 func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutcome {
 	driveID := e.resolveDriveID(action)
 
 	// Always validate the baseline eTag before overwriting a known remote item.
 	// Planning is snapshot-based, so execution must defend against remote drift
 	// regardless of whether the current runtime is one-shot or watch.
-	if freshnessErr := e.remoteUploadFreshnessError(ctx, driveID, action); freshnessErr != nil {
+	if freshnessErr := e.validateRemoteUploadPrecondition(ctx, driveID, action); freshnessErr != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionUpload,
 			freshnessErr,
 			action.Path,
 			PermissionCapabilityUnknown,
+		)
+	}
+	if sourceErr := e.validateUploadSourcePrecondition(action); sourceErr != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionUpload,
+			sourceErr,
+			action.Path,
+			PermissionCapabilityLocalRead,
 		)
 	}
 
@@ -133,7 +165,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 	)
 
 	if shouldOverwriteKnownRemoteItem(action) {
-		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, action.ItemID, localPath, driveops.UploadOpts{})
+		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, action.ItemID, localPath, e.uploadOpts(action))
 		if err != nil {
 			return e.failedOutcomeWithFailure(
 				action,
@@ -149,12 +181,22 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 		if err != nil {
 			return e.failedOutcomeWithFailure(action, ActionUpload, err, action.Path, PermissionCapabilityUnknown)
 		}
+		parentPreconditionErr := e.validateRemoteParentPrecondition(ctx, driveID, parentID, action, "upload create")
+		if parentPreconditionErr != nil {
+			return e.failedOutcomeWithFailure(
+				action,
+				ActionUpload,
+				parentPreconditionErr,
+				action.Path,
+				inferFailureCapabilityFromError(parentPreconditionErr, PermissionCapabilityUnknown, PermissionCapabilityRemoteRead),
+			)
+		}
 		if waitErr := e.waitRemoteParentVisible(ctx, action); waitErr != nil {
 			return e.failedOutcomeWithFailure(action, ActionUpload, waitErr, action.Path, PermissionCapabilityUnknown)
 		}
 
 		name := filepath.Base(action.Path)
-		result, err = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, driveops.UploadOpts{})
+		result, err = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, e.uploadOpts(action))
 		if err != nil {
 			return e.failedOutcomeWithFailure(
 				action,
@@ -166,14 +208,24 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 		}
 	}
 
-	// driveops.SelectHash picks the best available hash from the item metadata (B-222).
+	e.confirmRemotePathVisible(ctx, action)
+
+	outcome := e.uploadOutcome(action, driveID, parentID, result)
+	decorateConflictOutcome(action, &outcome)
+	return outcome
+}
+
+func (e *Executor) uploadOutcome(
+	action *Action,
+	driveID driveid.ID,
+	parentID string,
+	result *driveops.UploadResult,
+) ActionOutcome {
 	remoteHash := driveops.SelectHash(result.Item)
 	remoteMtime := int64(0)
 	if !result.Item.ModifiedAt.IsZero() {
 		remoteMtime = result.Item.ModifiedAt.UnixNano()
 	}
-
-	e.confirmRemotePathVisible(ctx, action)
 
 	outcome := ActionOutcome{
 		Action:          ActionUpload,
@@ -199,36 +251,31 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 		outcome.LocalHasIdentity = action.View.Local.LocalHasIdentity
 		outcome.LocalIdentityObserved = true
 	}
-	decorateConflictOutcome(action, &outcome)
 	return outcome
 }
 
-func (e *Executor) remoteUploadFreshnessError(ctx context.Context, driveID driveid.ID, action *Action) error {
-	if action.ItemID == "" ||
-		action.View == nil ||
-		action.View.Baseline == nil ||
-		action.View.Baseline.ETag == "" {
-		return nil
+func (e *Executor) uploadOpts(action *Action) driveops.UploadOpts {
+	return driveops.UploadOpts{
+		ExpectedHash: expectedUploadHash(action),
+		HashMismatchError: func(_ string, expectedHash, actualHash string) error {
+			return stalePreconditionError(
+				"upload source %s changed hash (expected=%s current=%s)",
+				action.Path,
+				expectedHash,
+				actualHash,
+			)
+		},
+		ValidateSourceBeforeRead: func() error {
+			return e.validateUploadSourcePrecondition(action)
+		},
 	}
-	currentETag, ok := e.currentUploadETag(ctx, driveID, action.ItemID)
-	if !ok || currentETag == action.View.Baseline.ETag {
-		return nil
-	}
-	return fmt.Errorf(
-		"remote eTag changed since last sync (baseline=%s current=%s): potential conflict",
-		action.View.Baseline.ETag,
-		currentETag,
-	)
 }
 
-func (e *Executor) currentUploadETag(ctx context.Context, driveID driveid.ID, itemID string) (string, bool) {
-	currentItem, err := e.items.GetItem(ctx, driveID, itemID)
-	if err != nil {
-		// If GetItem fails (transient error, item deleted), proceed with the
-		// upload; the server-side conflict resolution or a 404 will handle it.
-		return "", false
+func (e *Executor) validateRemoteUploadPrecondition(ctx context.Context, driveID driveid.ID, action *Action) error {
+	if !shouldOverwriteKnownRemoteItem(action) {
+		return nil
 	}
-	return currentItem.ETag, true
+	return e.validateRemoteSourcePrecondition(ctx, driveID, action, "upload overwrite")
 }
 
 func shouldOverwriteKnownRemoteItem(action *Action) bool {
