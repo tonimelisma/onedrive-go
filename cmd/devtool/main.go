@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -55,6 +56,14 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 		e2eLogDir          string
 		summaryJSONPath    string
 		classifyLiveQuirks bool
+		dod                bool
+		dodStage           string
+		dodPR              int
+		dodRecentMerged    int
+		dodCommentManifest string
+		dodWorktree        string
+		dodBranch          string
+		dodCITimeout       time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -80,6 +89,14 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 				E2ELogDir:          e2eLogDir,
 				SummaryJSONPath:    summaryJSONPath,
 				ClassifyLiveQuirks: classifyLiveQuirks,
+				DOD:                dod,
+				DODStage:           devtool.DODStage(dodStage),
+				DODPR:              dodPR,
+				DODRecentMerged:    dodRecentMerged,
+				DODCommentManifest: dodCommentManifest,
+				DODWorktree:        dodWorktree,
+				DODBranch:          dodBranch,
+				DODCITimeout:       dodCITimeout,
 				Stdout:             cmd.OutOrStdout(),
 				Stderr:             cmd.ErrOrStderr(),
 			})
@@ -90,6 +107,14 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 	cmd.Flags().StringVar(&coverageFile, "coverage-file", "", "coverage profile path")
 	cmd.Flags().StringVar(&e2eLogDir, "e2e-log-dir", "", "directory for full E2E debug logs")
 	cmd.Flags().StringVar(&summaryJSONPath, "summary-json", "", "write verify summary JSON to this path")
+	cmd.Flags().BoolVar(&dod, "dod", false, "run Definition of Done automation instead of the selected verification profile")
+	cmd.Flags().StringVar(&dodStage, "stage", "", "DoD stage: start, pre-pr, pre-merge, or post-merge")
+	cmd.Flags().IntVar(&dodPR, "pr", 0, "GitHub pull request number for DoD PR stages")
+	cmd.Flags().IntVar(&dodRecentMerged, "recent-merged", devtool.DefaultDODRecentMerged, "merged PR count for DoD review-thread audits")
+	cmd.Flags().StringVar(&dodCommentManifest, "comment-manifest", "", "DoD PR review-thread manifest path")
+	cmd.Flags().StringVar(&dodWorktree, "worktree", "", "increment worktree path for DoD post-merge cleanup")
+	cmd.Flags().StringVar(&dodBranch, "branch", "", "increment branch name for DoD post-merge cleanup")
+	cmd.Flags().DurationVar(&dodCITimeout, "ci-timeout", devtool.DefaultDODCITimeout, "maximum time to wait for DoD CI checks")
 	cmd.Flags().BoolVar(
 		&classifyLiveQuirks,
 		"classify-live-quirks",

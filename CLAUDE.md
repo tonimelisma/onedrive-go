@@ -232,8 +232,9 @@ Work is done in increments. Do not ask permission, do not skip any step.
 1. Search `spec/` for `[planned]` items.
 2. If the work involves a live CI / E2E / integration failure, search `spec/reference/live-incidents.md` first for an existing matching incident before starting a new investigation trail.
 3. Read the governing design doc and requirements file (see Routing Table above).
-4. Evaluate the codebase to determine if any foundational improvements are needed before starting.
-5. If docs and code disagree about package names, file ownership, or boundaries, fix that drift in the same increment before building more work on top of the stale model.
+4. Run `go run ./cmd/devtool verify --dod --stage start` before heavy implementation. This writes/updates the local ignored `.dod-pr-comments.json` manifest from the latest recent merged-PR review threads. If it fails because unresolved threads need manual classification, classify each unresolved thread in the manifest as `fixed`, `already_fixed`, or `non_actionable`; include `what_changed`, `how_fixed`, and evidence for fixed/already-fixed threads, or `reason` for non-actionable threads. Fold every actionable stale comment into the current increment before running expensive verification.
+5. Evaluate the codebase to determine if any foundational improvements are needed before starting.
+6. If docs and code disagree about package names, file ownership, or boundaries, fix that drift in the same increment before building more work on top of the stale model.
 
 ### Step 2: Set up worktree
 
@@ -273,11 +274,14 @@ section named `Review-thread carryover` with the prior PR number, comment
 summary, code/test evidence, and resolution status. If there is no carryover,
 state `none`.
 Every increment must also audit recent merged PRs for unfixed actionable review
-comments or unresolved review threads. Fix any stale actionable comments in the
-current increment, include regression evidence, and comment on the original
-PR thread or PR conversation with the fixing PR/commit evidence. Non-actionable
-noise such as review tool quota notices must be listed as non-actionable in the
-increment report rather than silently ignored.
+comments or unresolved review threads via `go run ./cmd/devtool verify --dod
+--stage start`. The tool never guesses actionability: agents classify unresolved
+threads manually in `.dod-pr-comments.json`. Fix any stale actionable comments
+in the current increment, include regression evidence, and let the DoD tool post
+the original-thread reply with clear what/how/evidence text. Agents must comment
+and resolve every handled thread, always. Non-actionable noise such as review
+tool quota notices must be classified as `non_actionable` with a reason, then
+commented and resolved by the tool rather than silently ignored.
 
 ### Step 7: Definition of Done
 
@@ -293,18 +297,9 @@ After each increment, run through this entire checklist. If something fails, fix
 6. [ ] **Fast E2E**: reported by `go run ./cmd/devtool verify default`
 7. [ ] **Docs updated**: `AGENTS.md`, `CLAUDE.md`, the routing table, governed design docs, and verifier rules all match the current code layout
 8. [ ] **Architecture/docs drift sweep**: no stale references to deleted packages, files, or boundaries remain in repo guidance, design docs, package comments, or error strings unless explicitly marked historical
-9. [ ] **Rebase onto latest main**: Immediately before any `gh pr create`, run `git fetch origin` and `git rebase origin/main` in the worktree branch, then verify with `git merge-base --is-ancestor origin/main HEAD`. Never create a PR from a stale merge base. If that verification fails, do not open the PR. If the rebase changes the branch or you resolve conflicts, restart this checklist at item 1 and only continue once the rebased branch is green.
-10. [ ] **Push, review, CI green, PR comments audited, and PR merged to main**: After item 9 passes, push branch, using `git push --force-with-lease` if the rebase rewrote history, open PR with `gh pr create`, monitor with `gh pr checks <pr_number> --watch`, and wait for CI to reach a terminal state. Fetch currently available review threads with `gh api graphql`, address or explicitly resolve every actionable thread that exists, and do one final thread sweep immediately before merge. Also audit recent merged PRs for unfixed actionable review comments or unresolved review threads, fix any stale actionable items in the current increment, and comment on the original PR threads or conversations with the fixing PR/commit evidence. Do not wait indefinitely for automatic Codex comments that may never arrive; if no automatic review/comments exist when CI is terminal, continue after the final sweep. If a late actionable thread appears after merge, fix it in a follow-up PR and resolve that thread there. Auto-merge may be requested, but it is never DoD evidence by itself. This item is `✅ PASS` only after `gh pr merge --squash --delete-branch` succeeds or an already-queued merge completes, `gh pr view <pr_number> --json state,mergedAt,mergeCommit` reports `state=MERGED`, `mergedAt != null`, `origin/main` contains the merge commit, and the final report lists the current and old-merged-PR comment audit results.
-11. [ ] **Cleanup**: Clean `git status`. From the root repo (not worktree), remove the current worktree after merge. Then force-delete the local branch with `git branch -D` (squash merges create a new commit on main, so Git cannot detect the branch as merged — `git branch -d` will wrongly warn "not fully merged"). Delete or prune the remote branch, prune stale remote-tracking branches, fast-forward local `main`, and verify no local or remote feature branch remains:
-    cd /Users/tonimelisma/Development/onedrive-go
-    rm -f <worktree-path>/.testdata   # remove stale symlink before worktree removal
-    git worktree remove <worktree-path>
-    git branch -D <branch-name>
-    git push origin --delete <branch-name>   # only if GitHub did not delete it during merge
-    git fetch --prune origin
-    git checkout main && git pull --ff-only origin main
-    git branch --list <branch-name> && git branch -r --list origin/<branch-name>
-    echo "=== Branches ===" && git branch && echo "=== Remote ===" && git branch -r && echo "=== Stashes ===" && git stash list && echo "=== Worktrees ===" && git worktree list && echo "=== Open PRs ===" && gh pr list --state open && echo "=== Status ===" && git status
+9. [ ] **Rebase onto latest main**: Immediately before any `gh pr create`, run `git fetch origin` and `git rebase origin/main` in the worktree branch, then run `go run ./cmd/devtool verify --dod --stage pre-pr`. Never create a PR from a stale merge base. If the rebase changes the branch or you resolve conflicts, restart this checklist at item 1 and only continue once the rebased branch is green.
+10. [ ] **Push, review, CI green, PR comments audited, and PR merged to main**: After item 9 passes, push branch, using `git push --force-with-lease` if the rebase rewrote history, open PR with `gh pr create`, and include the review-thread carryover section from `.dod-pr-comments.json`. When CI and review are ready, run `go run ./cmd/devtool verify --dod --stage pre-merge --pr <pr_number>`. This waits for required PR CI, applies classified review-thread replies, resolves handled threads, and verifies no unresolved current or recent merged-PR review threads remain. Do not wait indefinitely for automatic Codex comments that may never arrive; if no automatic review/comments exist when CI is terminal, continue after the final sweep. If a late actionable thread appears after merge, fix it in a follow-up PR and resolve that thread there. Auto-merge may be requested, but it is never DoD evidence by itself. This item is `✅ PASS` only after `go run ./cmd/devtool verify --dod --stage post-merge --pr <pr_number> --worktree <worktree-path> --branch <branch-name>` reports the PR merged to `main`, the root checkout fast-forwarded, configured post-merge CI interpreted cleanly, and cleanup audit run.
+11. [ ] **Cleanup**: `go run ./cmd/devtool verify --dod --stage post-merge --pr <pr_number> --worktree <worktree-path> --branch <branch-name>` owns current-increment cleanup: it handles the known `gh pr merge` multi-worktree `main` checkout quirk by verifying server-side merge state, fetches/prunes, fast-forwards root `main`, removes the increment worktree, deletes the local branch, tolerates an already-deleted remote branch, interprets configured squash-merge push CI skips, and runs cleanup audit.
     Include an **Emoji cleanup report** inside this item. The report must cover root checkout status, the current increment worktree/branch/remote branch, other worktrees, other local branches, other remote branches, stashes, open PRs, and anything dirty or untracked. Use one line per finding with path/ref/stash/PR, last activity evidence, unique-work evidence, and action taken:
     - `✅ CLEAN`: no item exists or the checked item is exactly clean/current, such as local `main` matching `origin/main`.
     - `🟢 ACTIVE`: other work has clear evidence of active use right now, such as last activity within 15 minutes, a running command/check, a PR updated within 15 minutes, or an explicit human/agent owner. Do not modify or delete it.

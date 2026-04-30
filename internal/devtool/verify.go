@@ -68,6 +68,14 @@ type VerifyOptions struct {
 	E2ELogDir          string
 	SummaryJSONPath    string
 	ClassifyLiveQuirks bool
+	DOD                bool
+	DODStage           DODStage
+	DODPR              int
+	DODRecentMerged    int
+	DODCommentManifest string
+	DODWorktree        string
+	DODBranch          string
+	DODCITimeout       time.Duration
 	Stdout             io.Writer
 	Stderr             io.Writer
 }
@@ -150,6 +158,18 @@ type verifyPlan struct {
 }
 
 func RunVerify(ctx context.Context, runner commandRunner, opts *VerifyOptions) (runErr error) {
+	if opts != nil && opts.DOD {
+		if err := RunVerifyDOD(ctx, runner, opts); err != nil {
+			return fmt.Errorf("run dod verify: %w", err)
+		}
+
+		return nil
+	}
+
+	return runVerifyProfile(ctx, runner, opts)
+}
+
+func runVerifyProfile(ctx context.Context, runner commandRunner, opts *VerifyOptions) (runErr error) {
 	if opts == nil {
 		return fmt.Errorf("verify options are required")
 	}
