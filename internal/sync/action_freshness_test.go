@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -319,6 +320,29 @@ func TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState(t 
 
 	require.NoError(t, err)
 	assert.True(t, decision.Fresh)
+}
+
+// Validates: R-2.8.9
+func TestActionFreshness_CanceledContextFailsClosedWithoutStoreRead(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	require.NoError(t, store.Close(t.Context()))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	decision, err := evaluateActionFreshnessFromStore(ctx, store, &Action{
+		Type: ActionUpload,
+		Path: "upload.txt",
+		View: &PathView{
+			Path:  "upload.txt",
+			Local: &LocalState{ItemType: ItemTypeFile, Hash: "planned", Size: 7},
+		},
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, decision.Fresh)
 }
 
 // Validates: R-2.8.9, R-6.6.17

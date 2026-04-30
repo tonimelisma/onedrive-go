@@ -68,7 +68,11 @@ dispatch candidates. A stale worker-start action returns
 `ErrActionPreconditionChanged`, so the engine classifies it as superseded
 instead of ordinary retry. This gate runs before hashing, upload-session
 creation, download writes, delete/move mutation, or other executor side
-effects. It is intentionally not a second planner: it only rejects when current
+effects. Canceled worker/admission freshness checks fail closed before any
+store read or executor side effect; the shutdown-completion path is the only
+caller allowed to bypass canceled-context freshness, and it immediately
+collapses the returned graph frontier instead of dispatching it. The predicate
+is intentionally not a second planner: it only rejects when current
 truth disproves the exact planned assumptions. Local absence or presence can
 reject only while `local_truth_complete` is true;
 suspect local truth leaves local-state-based rejection to the next full local
@@ -126,11 +130,14 @@ can change after dispatch and before the mutation or transfer actually begins.
 `executor_preconditions.go` is that boundary owner.
 
 For uploads, the executor validates that the local source path is still inside
-the sync root, still a regular file, and still matches planned identity,
-size/mtime, and hash facts when those facts are available. The transfer manager
-then reuses the executor-supplied callback before upload reads so a large file
-can abort if it changes mid-session. Expected source-hash mismatches are
-returned as `ErrActionPreconditionChanged`.
+the sync root, resolves to a regular file, and still matches planned identity,
+size/mtime, and hash facts when those facts are available. Symlink aliases
+admitted by local observation are validated against the followed target facts
+that observation persisted, not rejected merely because the alias directory
+entry is a symlink. The transfer manager then reuses the executor-supplied
+callback before upload reads so a large file can abort if it changes
+mid-session. Expected source-hash mismatches are returned as
+`ErrActionPreconditionChanged`.
 
 For downloads, the executor validates the planned destination before transfer
 starts and supplies the same callback for the transfer manager to run
@@ -147,7 +154,12 @@ an unexpectedly occupied destination before `Rename`.
 
 For remote deletes, moves, downloads, overwrite uploads, and remote folder/file
 creates, the executor performs a live `GetItem` preflight for the planned
-source item or parent. A live `itemNotFound` result, changed item identity,
+source item or parent. Parent-based remote creates first wait for the
+already-planned parent path to become visible through the convergence boundary,
+then run the stale parent preflight so transient post-create Graph visibility
+lag is absorbed before stale proof is evaluated. If the visibility wait times
+out because the parent is actually gone, the stale parent preflight result takes
+precedence over the visibility timeout. A live `itemNotFound` result, changed item identity,
 drive, item type, eTag, hash, size, or same-coordinate path where Graph supplies
 that fact is a stale precondition and maps to `ErrActionPreconditionChanged`.
 Remote delete and move also pass the live preflight eTag to Graph as an

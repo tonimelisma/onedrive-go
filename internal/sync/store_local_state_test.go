@@ -214,6 +214,38 @@ func TestDeleteLocalStatePrefix_EscapesSQLWildcards(t *testing.T) {
 }
 
 // Validates: R-2.8.8
+func TestDeleteLocalStatePrefix_UsesCharacterLengthForUnicodePrefix(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+		{Path: "é", ItemType: ItemTypeFolder},
+		{Path: "é/docs", ItemType: ItemTypeFolder},
+		{Path: "é/docs/file.txt", ItemType: ItemTypeFile},
+		{Path: "é/docs/nested", ItemType: ItemTypeFolder},
+		{Path: "é/docs/nested/file.txt", ItemType: ItemTypeFile},
+		{Path: "é/docs2/file.txt", ItemType: ItemTypeFile},
+		{Path: "e/docs/file.txt", ItemType: ItemTypeFile},
+	}))
+
+	require.NoError(t, store.DeleteLocalStatePrefix(ctx, "é/docs"))
+
+	rows, err := store.ListLocalState(ctx)
+	require.NoError(t, err)
+	paths := make([]string, 0, len(rows))
+	for _, row := range rows {
+		paths = append(paths, row.Path)
+	}
+	assert.ElementsMatch(t, []string{
+		"é",
+		"é/docs2/file.txt",
+		"e/docs/file.txt",
+	}, paths)
+}
+
+// Validates: R-2.8.8
 func TestReplaceLocalState_MarksLocalTruthComplete(t *testing.T) {
 	t.Parallel()
 
