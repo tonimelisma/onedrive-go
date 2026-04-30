@@ -28,6 +28,7 @@ type fakeRunner struct {
 	runErrByKey         map[string]error
 	runErrSequenceByKey map[string][]error
 	outputErr           error
+	outputFunc          func(cwd string, env []string, name string, args ...string) ([]byte, error)
 	combinedOutputs     map[string][]byte
 	combinedErr         error
 	combinedErrByKey    map[string]error
@@ -75,6 +76,9 @@ func (f *fakeRunner) Output(
 	})
 	if f.outputErr != nil {
 		return nil, f.outputErr
+	}
+	if f.outputFunc != nil {
+		return f.outputFunc(cwd, env, name, args...)
 	}
 
 	key := name + " " + strings.Join(args, " ")

@@ -401,44 +401,29 @@ func loadGitHubRepo(ctx context.Context, runner commandRunner, repoRoot string) 
 	return githubRepo{Owner: parts[0], Name: parts[1]}, nil
 }
 
-const mergedPRReviewThreadsQuery = `
+const mergedPRListQuery = `
 query($owner:String!, $repo:String!, $recent:Int!) {
   repository(owner:$owner, name:$repo) {
     pullRequests(first:$recent, states:MERGED, orderBy:{field:UPDATED_AT, direction:DESC}) {
       nodes {
         number
-        title
-        url
-        reviewThreads(first:100) {
-          nodes {
-            id
-            isResolved
-            isOutdated
-            path
-            line
-            comments(first:20) {
-              nodes {
-                author { login }
-                body
-                url
-                createdAt
-              }
-            }
-          }
-        }
       }
     }
   }
 }`
 
 const singlePRReviewThreadsQuery = `
-query($owner:String!, $repo:String!, $number:Int!) {
+query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   repository(owner:$owner, name:$repo) {
     pullRequest(number:$number) {
       number
       title
       url
-      reviewThreads(first:100) {
+      reviewThreads(first:100, after:$after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
         nodes {
           id
           isResolved
@@ -466,6 +451,29 @@ func fetchRecentMergedReviewThreads(
 	repo githubRepo,
 	recent int,
 ) ([]DODReviewThread, error) {
+	prNumbers, err := fetchRecentMergedPullRequestNumbers(ctx, runner, repoRoot, repo, recent)
+	if err != nil {
+		return nil, err
+	}
+
+	threads := []DODReviewThread{}
+	for _, prNumber := range prNumbers {
+		prThreads, err := fetchPullRequestReviewThreads(ctx, runner, repoRoot, repo, prNumber)
+		if err != nil {
+			return nil, err
+		}
+		threads = append(threads, prThreads...)
+	}
+	return threads, nil
+}
+
+func fetchRecentMergedPullRequestNumbers(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	repo githubRepo,
+	recent int,
+) ([]int, error) {
 	out, err := runner.Output(
 		ctx,
 		repoRoot,
@@ -474,7 +482,7 @@ func fetchRecentMergedReviewThreads(
 		"api",
 		"graphql",
 		"-f",
-		"query="+mergedPRReviewThreadsQuery,
+		"query="+mergedPRListQuery,
 		"-f",
 		"owner="+repo.Owner,
 		"-f",
@@ -483,15 +491,20 @@ func fetchRecentMergedReviewThreads(
 		"recent="+strconv.Itoa(recent),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("dod fetch merged review threads: %w", err)
+		return nil, fmt.Errorf("dod fetch recent merged PRs: %w", err)
 	}
 
-	var response mergedPRThreadsResponse
+	var response mergedPRListResponse
 	if err := json.Unmarshal(out, &response); err != nil {
-		return nil, fmt.Errorf("decode merged review threads: %w", err)
+		return nil, fmt.Errorf("decode recent merged PRs: %w", err)
 	}
 
-	return reviewThreadsFromMergedResponse(response), nil
+	nodes := response.Data.Repository.PullRequests.Nodes
+	numbers := make([]int, 0, len(nodes))
+	for i := range nodes {
+		numbers = append(numbers, nodes[i].Number)
+	}
+	return numbers, nil
 }
 
 func fetchPullRequestReviewThreads(
@@ -501,42 +514,97 @@ func fetchPullRequestReviewThreads(
 	repo githubRepo,
 	prNumber int,
 ) ([]DODReviewThread, error) {
+	pr, err := fetchPullRequestReviewThreadPages(ctx, runner, repoRoot, repo, prNumber)
+	if err != nil {
+		return nil, err
+	}
+	return reviewThreadsFromPR(pr.Number, pr.Title, pr.URL, pr.ReviewThreads.Nodes), nil
+}
+
+func fetchPullRequestReviewThreadPages(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	repo githubRepo,
+	prNumber int,
+) (graphqlPullRequest, error) {
+	var merged graphqlPullRequest
+	cursor := ""
+	for {
+		page, err := fetchPullRequestReviewThreadPage(ctx, runner, repoRoot, repo, prNumber, cursor)
+		if err != nil {
+			return graphqlPullRequest{}, err
+		}
+		if merged.Number == 0 {
+			merged.Number = page.Number
+			merged.Title = page.Title
+			merged.URL = page.URL
+		}
+		merged.ReviewThreads.Nodes = append(merged.ReviewThreads.Nodes, page.ReviewThreads.Nodes...)
+		pageInfo := page.ReviewThreads.PageInfo
+		if !pageInfo.HasNextPage {
+			return merged, nil
+		}
+		if pageInfo.EndCursor == "" {
+			return graphqlPullRequest{}, fmt.Errorf("dod fetch PR #%d review threads: missing next cursor", prNumber)
+		}
+		cursor = pageInfo.EndCursor
+	}
+}
+
+func fetchPullRequestReviewThreadPage(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	repo githubRepo,
+	prNumber int,
+	cursor string,
+) (graphqlPullRequest, error) {
+	args := []string{
+		"api",
+		"graphql",
+		"-f",
+		"query=" + singlePRReviewThreadsQuery,
+		"-f",
+		"owner=" + repo.Owner,
+		"-f",
+		"repo=" + repo.Name,
+		"-F",
+		"number=" + strconv.Itoa(prNumber),
+	}
+	if cursor != "" {
+		args = append(args, "-f", "after="+cursor)
+	}
 	out, err := runner.Output(
 		ctx,
 		repoRoot,
 		os.Environ(),
 		githubCLI,
-		"api",
-		"graphql",
-		"-f",
-		"query="+singlePRReviewThreadsQuery,
-		"-f",
-		"owner="+repo.Owner,
-		"-f",
-		"repo="+repo.Name,
-		"-F",
-		"number="+strconv.Itoa(prNumber),
+		args...,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("dod fetch PR review threads: %w", err)
+		return graphqlPullRequest{}, fmt.Errorf("dod fetch PR review threads: %w", err)
 	}
 
 	var response singlePRThreadsResponse
 	if err := json.Unmarshal(out, &response); err != nil {
-		return nil, fmt.Errorf("decode PR review threads: %w", err)
+		return graphqlPullRequest{}, fmt.Errorf("decode PR review threads: %w", err)
 	}
-	pr := response.Data.Repository.PullRequest
-	return reviewThreadsFromPR(pr.Number, pr.Title, pr.URL, pr.ReviewThreads.Nodes), nil
+	return response.Data.Repository.PullRequest, nil
 }
 
-type mergedPRThreadsResponse struct {
+type mergedPRListResponse struct {
 	Data struct {
 		Repository struct {
 			PullRequests struct {
-				Nodes []graphqlPullRequest
+				Nodes []graphqlPullRequestSummary
 			}
 		}
 	}
+}
+
+type graphqlPullRequestSummary struct {
+	Number int
 }
 
 type singlePRThreadsResponse struct {
@@ -551,9 +619,17 @@ type graphqlPullRequest struct {
 	Number        int
 	Title         string
 	URL           string
-	ReviewThreads struct {
-		Nodes []graphqlReviewThread
-	}
+	ReviewThreads graphqlReviewThreadConnection
+}
+
+type graphqlReviewThreadConnection struct {
+	PageInfo graphqlPageInfo
+	Nodes    []graphqlReviewThread
+}
+
+type graphqlPageInfo struct {
+	HasNextPage bool
+	EndCursor   string
 }
 
 type graphqlReviewThread struct {
@@ -574,15 +650,6 @@ type graphqlReviewComment struct {
 	Body      string
 	URL       string
 	CreatedAt string
-}
-
-func reviewThreadsFromMergedResponse(response mergedPRThreadsResponse) []DODReviewThread {
-	threads := []DODReviewThread{}
-	for i := range response.Data.Repository.PullRequests.Nodes {
-		pr := response.Data.Repository.PullRequests.Nodes[i]
-		threads = append(threads, reviewThreadsFromPR(pr.Number, pr.Title, pr.URL, pr.ReviewThreads.Nodes)...)
-	}
-	return threads
 }
 
 func reviewThreadsFromPR(prNumber int, prTitle string, prURL string, nodes []graphqlReviewThread) []DODReviewThread {
@@ -936,7 +1003,7 @@ func mergePR(ctx context.Context, runner commandRunner, repoRoot string, prNumbe
 	if err == nil {
 		return requirePRMerged(ctx, runner, repoRoot, prNumber)
 	}
-	if !isMainWorktreeMergeQuirk(string(output), err) {
+	if !isRecoverableMergePRError(string(output), err) {
 		return pullRequestState{}, fmt.Errorf(
 			"dod merge PR #%d: %s: %w",
 			prNumber,
@@ -947,9 +1014,18 @@ func mergePR(ctx context.Context, runner commandRunner, repoRoot string, prNumbe
 	return requirePRMerged(ctx, runner, repoRoot, prNumber)
 }
 
+func isRecoverableMergePRError(output string, err error) bool {
+	return isMainWorktreeMergeQuirk(output, err) || isAlreadyMergedPRMergeOutput(output, err)
+}
+
 func isMainWorktreeMergeQuirk(output string, err error) bool {
 	text := strings.ToLower(output + " " + err.Error())
 	return strings.Contains(text, "main") && strings.Contains(text, "already used by worktree")
+}
+
+func isAlreadyMergedPRMergeOutput(output string, err error) bool {
+	text := strings.ToLower(output + " " + err.Error())
+	return strings.Contains(text, "already merged")
 }
 
 func requirePRMerged(ctx context.Context, runner commandRunner, repoRoot string, prNumber int) (pullRequestState, error) {
@@ -991,7 +1067,7 @@ func cleanupMergedIncrement(
 	if err := removeDODWorktree(ctx, runner, mainRoot, worktreePath, stderr); err != nil {
 		return err
 	}
-	if err := deleteDODIncrementBranches(ctx, runner, mainRoot, branch, stderr); err != nil {
+	if err := deleteDODIncrementBranches(ctx, runner, mainRoot, branch); err != nil {
 		return err
 	}
 	if err := runDODCleanupGit(ctx, runner, mainRoot, stderr, "fetch", "--prune", "origin"); err != nil {
@@ -1020,6 +1096,11 @@ func removeDODWorktree(
 	worktreePath string,
 	stderr io.Writer,
 ) error {
+	if _, err := stat(worktreePath); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("dod cleanup stat worktree: %w", err)
+	}
 	if err := os.Remove(filepath.Join(worktreePath, ".testdata")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("dod cleanup remove worktree .testdata: %w", err)
 	}
@@ -1034,17 +1115,30 @@ func deleteDODIncrementBranches(
 	runner commandRunner,
 	mainRoot string,
 	branch string,
-	stderr io.Writer,
 ) error {
-	if err := runDODCleanupGit(ctx, runner, mainRoot, stderr, "branch", "-D", branch); err != nil &&
-		!isMissingLocalBranchError(err) {
-		return fmt.Errorf("dod cleanup delete local branch: %w", err)
+	if err := deleteDODLocalBranch(ctx, runner, mainRoot, branch); err != nil {
+		return err
 	}
-	if err := runDODCleanupGit(ctx, runner, mainRoot, stderr, "push", "origin", "--delete", branch); err != nil &&
-		!isMissingRemoteBranchError(err) {
-		return fmt.Errorf("dod cleanup delete remote branch: %w", err)
+	if err := deleteDODRemoteBranch(ctx, runner, mainRoot, branch); err != nil {
+		return err
 	}
 	return nil
+}
+
+func deleteDODLocalBranch(ctx context.Context, runner commandRunner, mainRoot string, branch string) error {
+	output, err := runner.CombinedOutput(ctx, mainRoot, os.Environ(), "git", "branch", "-D", branch)
+	if err == nil || isMissingLocalBranchText(string(output), err) {
+		return nil
+	}
+	return fmt.Errorf("dod cleanup delete local branch: %s: %w", strings.TrimSpace(string(output)), err)
+}
+
+func deleteDODRemoteBranch(ctx context.Context, runner commandRunner, mainRoot string, branch string) error {
+	output, err := runner.CombinedOutput(ctx, mainRoot, os.Environ(), "git", "push", "origin", "--delete", branch)
+	if err == nil || isMissingRemoteBranchText(string(output), err) {
+		return nil
+	}
+	return fmt.Errorf("dod cleanup delete remote branch: %s: %w", strings.TrimSpace(string(output)), err)
 }
 
 func runDODCleanupGit(
@@ -1060,14 +1154,15 @@ func runDODCleanupGit(
 	return nil
 }
 
-func isMissingLocalBranchError(err error) bool {
-	text := strings.ToLower(err.Error())
+func isMissingLocalBranchText(output string, err error) bool {
+	text := strings.ToLower(output + " " + err.Error())
 	return strings.Contains(text, "branch") && (strings.Contains(text, "not found") || strings.Contains(text, "not a branch"))
 }
 
-func isMissingRemoteBranchError(err error) bool {
-	text := strings.ToLower(err.Error())
-	return strings.Contains(text, "remote ref does not exist") || strings.Contains(text, "unable to delete")
+func isMissingRemoteBranchText(output string, err error) bool {
+	text := strings.ToLower(output + " " + err.Error())
+	return strings.Contains(text, "remote ref does not exist") ||
+		strings.Contains(text, "remote ref not found")
 }
 
 func waitForPostMergePushCI(
