@@ -94,6 +94,9 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions)
 	if err := rt.engine.refreshProtectedRootsFromStore(ctx); err != nil {
 		return fmt.Errorf("sync: refresh shortcut protected roots before watch observers: %w", err)
 	}
+	// Bootstrap uses loop termination to mean "quiesced"; the observer-backed
+	// loop must always start from steady-state running ownership.
+	rt.enterRunning()
 	rt.startObservers(ctx, pipe.bl, opts)
 
 	// Step 4: Run the watch loop.

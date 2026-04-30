@@ -2068,12 +2068,15 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
 		View: &PathView{
+			Local: &LocalState{
+				ItemType: ItemTypeFile,
+			},
 			Remote: &RemoteState{
 				ItemID: "item1",
 				ETag:   "etag1",
 			},
 		},
-		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
+		ConflictInfo: &ConflictRecord{ConflictType: ConflictEditEdit},
 	}
 
 	copyOutcome := e.ExecuteConflictCopy(t.Context(), copyAction)
@@ -2107,6 +2110,53 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 	}
 
 	assert.True(t, conflictFound, "expected conflict copy with local content")
+}
+
+// Validates: R-2.3.1
+func TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStalePrecondition(t *testing.T) {
+	t.Parallel()
+
+	downloadCalled := false
+	dl := &executorMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			downloadCalled = true
+			return 0, nil
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	writeExecTestFile(t, syncRoot, "exec-conflict-reappears.txt", "original local")
+
+	copyAction := &Action{
+		Type:    ActionConflictCopy,
+		Path:    "exec-conflict-reappears.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View: &PathView{
+			Local:  &LocalState{ItemType: ItemTypeFile},
+			Remote: &RemoteState{ItemID: "item1"},
+		},
+		ConflictInfo: &ConflictRecord{ConflictType: ConflictEditEdit},
+	}
+
+	copyOutcome := e.ExecuteConflictCopy(t.Context(), copyAction)
+	requireOutcomeSuccess(t, &copyOutcome)
+
+	writeExecTestFile(t, syncRoot, "exec-conflict-reappears.txt", "fresh local")
+
+	downloadAction := *copyAction
+	downloadAction.Type = ActionDownload
+	o := e.ExecuteDownload(t.Context(), &downloadAction)
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityLocalWrite, o.FailureCapability)
+	assert.False(t, downloadCalled)
+
+	data, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-conflict-reappears.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "fresh local", string(data))
 }
 
 // Validates: R-2.3.1
@@ -2442,9 +2492,10 @@ func TestExecutor_ConflictDownloadFails_LeavesConflictCopy(t *testing.T) {
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
 		View: &PathView{
+			Local:  &LocalState{ItemType: ItemTypeFile},
 			Remote: &RemoteState{ItemID: "item1"},
 		},
-		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
+		ConflictInfo: &ConflictRecord{ConflictType: ConflictEditEdit},
 	}
 
 	copyOutcome := e.ExecuteConflictCopy(t.Context(), copyAction)

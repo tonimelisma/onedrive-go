@@ -309,12 +309,16 @@ func (e *Executor) validateDownloadTargetPrecondition(action *Action) error {
 	info, err := e.syncTree.Lstat(action.Path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			if action.View == nil || action.View.Local == nil {
+			if action.View == nil || action.View.Local == nil || actionClearsLocalBeforeDownload(action) {
 				return nil
 			}
 			return stalePreconditionError("download target %s disappeared", action.Path)
 		}
 		return normalizeSyncTreePathError(err)
+	}
+
+	if actionClearsLocalBeforeDownload(action) {
+		return stalePreconditionError("download target %s appeared", action.Path)
 	}
 
 	planned := plannedLocalState(action)
@@ -323,6 +327,10 @@ func (e *Executor) validateDownloadTargetPrecondition(action *Action) error {
 	}
 
 	return e.validateExistingDownloadTarget(action, info, planned)
+}
+
+func actionClearsLocalBeforeDownload(action *Action) bool {
+	return action != nil && action.Type == ActionDownload && action.ConflictInfo != nil
 }
 
 func plannedLocalState(action *Action) *LocalState {

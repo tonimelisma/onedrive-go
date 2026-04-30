@@ -19,14 +19,17 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260430-03 | NestedDeletion setup treated transient mount-root delta 504 as deterministic failure | fixed | test harness | 2026-04-30 | yes |
+| LI-20260430-02 | Conflict-resolution downloads rejected their own conflict-copy removal | fixed | product bug | 2026-04-30 | no |
+| LI-20260430-01 | Output validation E2Es assumed selected parents had stable shortcut children | fixed | test bug | 2026-04-30 | no |
 | LI-20260426-01 | Pre-authenticated shared download URL returned 401 immediately after fresh metadata | mitigated | graph quirk | 2026-04-26 | yes |
-| LI-20260425-01 | Fast shortcut fixture preflight saw shared target before delayed root placeholder reappeared | mitigated | graph quirk | 2026-04-25 | yes |
+| LI-20260425-01 | Fast shortcut fixture preflight saw shared target before delayed root placeholder reappeared | mitigated | graph quirk | 2026-04-30 | yes |
 | LI-20260424-02 | Recovery E2Es overfit whole-run `No changes detected` output in multi-mount sync | fixed | test harness | 2026-04-25 | yes |
 | LI-20260424-01 | Nightly status E2Es decoded deleted drive-shaped status JSON fields | fixed | test bug | 2026-04-24 | no |
 | LI-20260422-01 | Nightly `e2e_full` buckets still carried removed manual-resolution and path-narrowing workflows | fixed | test bug | 2026-04-23 | yes |
 | LI-20260422-02 | Shared-root full-sync commands widened or destabilized the configured subtree after nightly harness repair | fixed | product bug | 2026-04-22 | no |
 | LI-20260422-03 | Shared-drive sync startup still aborted when `sync_dir` did not exist yet | fixed | product bug | 2026-04-22 | no |
-| LI-20260422-04 | Shared-folder `drive list` exact-selector check assumed one-pass search visibility | fixed | test harness | 2026-04-23 | yes |
+| LI-20260422-04 | Shared-folder `drive list` exact-selector check assumed one-pass search visibility | fixed | test harness | 2026-04-30 | yes |
 | LI-20260422-05 | Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work | fixed | test harness | 2026-04-22 | yes |
 | LI-20260417-01 | Nightly `e2e_full` preflight duplicated `TestE2E_Status_ConfigTolerance` and stopped before live full-suite coverage | fixed | test bug | 2026-04-22 | yes |
 | LI-20260420-01 | Fast E2E smoke `get` exhausted the documented download-metadata `404` quirk budget | mitigated | graph quirk | 2026-04-28 | yes |
@@ -89,7 +92,7 @@ Promoted docs: [graph-api-quirks.md#pre-authenticated-download-url-401](graph-ap
 ## LI-20260425-01: Fast shortcut fixture preflight saw shared target before delayed root placeholder reappeared
 
 First seen: 2026-04-25
-Last seen: 2026-04-28
+Last seen: 2026-04-30
 Area: fast E2E, shortcut fixture preflight
 Suite / test: local `go run ./cmd/devtool verify default`,
 `TestE2E_FixturePreflight_Fast`
@@ -121,14 +124,136 @@ Evidence:
 - On April 28, `shared --json` returned `last_items=0` for the writable
   shortcut fixture during the standard 30-second budget, then the targeted fast
   fixture preflight passed under the same verifier-owned environment.
+- On April 30, local `full-serial-watch-shared` verification and the focused
+  rerun of `TestE2E_Shortcut_RestartIdempotentKeepsChildMountVisible` failed
+  before sync startup with the same parent-root omission. The shared target was
+  still discoverable, direct sentinel download by shared selector succeeded,
+  and repeated parent root listings returned the other eight root items without
+  `Kikkeli Shared Test Folder` for the full two-minute shortcut fixture budget.
 Current handling: Shortcut fixture shared-discovery and root-placeholder checks
-poll for the longer shortcut fixture propagation budget before failing. The
-failure remains strict after the poll budget and reports the last shared/root
-visibility evidence to distinguish a genuinely broken manual fixture from a
-transient listing omission. If the placeholder does not eventually appear,
+poll for the longer shortcut fixture propagation budget. If the parent-root
+placeholder is still omitted after the target itself was reachable, shortcut
+E2Es skip with the last shared/root visibility evidence instead of failing a
+product assertion that cannot start. If the omission persists outside CI,
 recreating the Add-to-OneDrive shortcut from the OneDrive web UI remains the
 supported fallback.
 Promoted docs: [graph-api-quirks.md#addtoonedrive-shortcut-visibility-header](graph-api-quirks.md#addtoonedrive-shortcut-visibility-header)
+
+## LI-20260430-01: Output validation E2Es assumed selected parents had stable shortcut children
+
+First seen: 2026-04-30
+Last seen: 2026-04-30
+Area: scheduled `e2e_full`, output validation E2Es
+Suite / test: scheduled CI run `25161027100`; `e2e` job,
+`full-parallel-misc`; `TestE2E_Status_JSONShape`
+Classification: test bug
+Status: fixed
+Recurring: no
+Summary: `TestE2E_Status_JSONShape` still asserted that filtered status for
+one configured parent drive always reported exactly one mount. That was stale
+after managed shortcut child projections became nested status rows and
+`summary.total_mounts` intentionally started counting both parent and child
+mounts. The test also used the account root for status-shape setup, so a schema
+test was coupled to manually configured shortcut children and their live target
+availability. The product output matched the documented mount-shaped status
+contract; the test had overfit a live fixture shape with no child shortcuts.
+Evidence:
+- Scheduled run `25161027100` failed `TestE2E_Status_JSONShape` with
+  `expected: 1 actual: 3` after `status --json` returned the selected parent
+  plus two `child_mounts` under `accounts[].mounts[0]`.
+- A local targeted rerun on April 30, 2026 reproduced the same failure with
+  `expected: 1 actual: 2` against the alternate configured account, whose
+  selected parent published one child shortcut row.
+- The first local full-profile rerun after the count assertion fix failed
+  before the assertion when `sync --upload-only` tried to run the discovered
+  shortcut child mount and Graph returned HTTP 503 while verifying that child
+  drive identity.
+- A later local full-profile rerun exposed the same account-root shortcut
+  coupling in `TestE2E_Sync_QuietMode`, where `sync --quiet --upload-only`
+  failed on a child mount HTTP 503 before the test could assert quiet output.
+- [cli.md](../design/cli.md) and [sync.md](../requirements/sync.md) already
+  require selected parents to include attached child mounts and
+  `summary.total_mounts` to count the mount-shaped read model.
+Resolution / mitigation: The output validation E2Es that only need owned sync
+state now run their setup against fresh isolated shared-root canonical IDs. The
+status-shape test still asserts that `summary.total_mounts` equals the
+recursive count of `accounts[].mounts` plus nested `child_mounts` and separately
+verifies the selected mount still has its sync-state section. A focused helper
+regression covers nested child counting without depending on how many manual
+shortcut fixtures are visible in a live account on that run.
+Promoted docs: [cli.md](../design/cli.md)
+
+## LI-20260430-02: Conflict-resolution downloads rejected their own conflict-copy removal
+
+First seen: 2026-04-30
+Last seen: 2026-04-30
+Area: local/manual `e2e_full`, sync execution
+Suite / test: `go run ./cmd/devtool verify e2e-full --classify-live-quirks`,
+`full-serial-sync`; `TestE2E_Sync_Conflicts`,
+`TestE2E_Sync_DirectionalModes_PreserveEditEditConflict`, and
+`TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict`
+Classification: product bug
+Status: fixed
+Recurring: no
+Summary: A conflict plan correctly expanded edit/edit and create/create
+conflicts into `ActionConflictCopy` plus a dependent `ActionDownload`, but the
+download executor revalidated the original planned local state after the
+conflict copy had intentionally renamed that canonical local file away. The
+download therefore returned `ErrActionPreconditionChanged` before restoring the
+remote winner, leaving the conflict copy on disk and the canonical path absent.
+Evidence:
+- The first local full-profile rerun after the status-harness fix passed
+  `full-parallel-misc`, then failed `full-serial-sync` in
+  `TestE2E_Sync_Conflicts` with
+  `open .../conflict.txt: no such file or directory`.
+- The debug log for that test showed `saved conflict copy` followed by
+  `sync: action precondition changed: download target ... disappeared`.
+- The same rerun later failed the download-only subtests of
+  `TestE2E_Sync_DirectionalModes_PreserveEditEditConflict` and
+  `TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict` with the same
+  absent canonical-path symptom.
+- A focused unit regression reproduced the executor boundary by adding the
+  planned `LocalState` to `TestExecutor_Conflict_EditEdit_KeepBoth`; it failed
+  with the same stale precondition before the implementation change.
+Resolution / mitigation: Conflict-resolution downloads now treat the missing
+canonical local path as the expected post-`ActionConflictCopy` state while
+still rejecting a canonical path that reappears before the download. The new
+unit coverage includes the happy path, the failed-download preservation path,
+and the reappeared-target stale-precondition guard. The direct targeted E2E
+rerun of all three failed conflict tests passed after the fix.
+Promoted docs: [sync-execution.md](../design/sync-execution.md)
+
+## LI-20260430-03: NestedDeletion setup treated transient mount-root delta 504 as deterministic failure
+
+First seen: 2026-04-30
+Last seen: 2026-04-30
+Area: local/manual `e2e_full`, sync edge-case harness
+Suite / test: `go run ./cmd/devtool verify e2e-full --classify-live-quirks`,
+`full-serial-sync`; `TestE2E_Sync_NestedDeletion`
+Classification: test harness
+Status: fixed
+Recurring: yes
+Summary: The same full-profile rerun that exposed the conflict executor bug
+also saw `TestE2E_Sync_NestedDeletion` fail during setup because one
+`sync --upload-only` pass hit a raw provider `504 UnknownError` while reading
+mount-root delta. This was not the nested-deletion assertion; an immediate
+targeted rerun of the test passed.
+Evidence:
+- The failing debug log showed
+  `sync: mount-root delta: graph: HTTP 504 ... UnknownError` with request ID
+  `c018a0b2-b2b9-435f-a1c5-6657ed0b4377`.
+- The failure happened before the test deleted the remote tree and before the
+  existing deletion-convergence loop was reached.
+- The direct targeted rerun
+  `go test -tags='e2e e2e_full' -race -v -run '^TestE2E_Sync_NestedDeletion$' -parallel 1 -count=1 -timeout=15m ./e2e/...`
+  passed on April 30, 2026, consistent with a transient Graph gateway failure.
+Resolution / mitigation: `TestE2E_Sync_NestedDeletion` now runs its initial
+upload-only setup through the shared convergence helper with a strict readiness
+predicate: it retries only when the CLI stderr contains the documented
+transient Graph gateway family (`502`, `503`, or `504`) and fails immediately
+for any other setup error. The nested remote-delete assertion remains strict
+after setup succeeds.
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [system.md](../design/system.md)
 
 ## LI-20260424-01: Nightly status E2Es decoded deleted drive-shaped status JSON fields
 
@@ -461,7 +586,7 @@ Promoted docs: [config.md](../design/config.md), [cli.md](../design/cli.md)
 ## LI-20260422-04: Shared-folder `drive list` exact-selector check assumed one-pass search visibility
 
 First seen: 2026-04-22
-Last seen: 2026-04-22
+Last seen: 2026-04-30
 Area: nightly/manual `e2e_full`, shared discovery, live harness selector visibility
 Suite / test: `go run ./cmd/devtool verify e2e-full`; `full-serial-watch-shared`;
 `TestE2E_SharedFolder_DriveList_ShowsExplicitSharedFixtures`
@@ -504,6 +629,16 @@ Evidence:
   immediate follow-on `drive list --json --all` on the same config returned
   `"available": []`. That showed the same provider family can also break
   repeated-output comparisons, not just exact-selector assertions.
+- Local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` on April
+  30, 2026 recurred in
+  `TestE2E_Shared_FolderNameDriveAdd_HonorsAccountFilter` after the status,
+  sync-conflict, and nested-deletion failures had been fixed. A focused rerun
+  showed `drive add "Testi2 Shared Folder" --account
+  kikkelimies123@outlook.com` completed the Graph search with
+  `search_count=7`, `ignored_count=7`, and `actionable_count=0`, then returned
+  the documented `no shared folders matching ... Graph shared discovery ...`
+  error even though the known fixture had been visible to the preceding
+  `shared --json` preflight.
 Resolution / mitigation: the full-suite shared-folder drive-list assertion now
 polls `drive list --json` for the exact selector across one ordinary read-only
 propagation window. If Graph still never exposes the known fixture on that run,
@@ -514,7 +649,12 @@ search pass as a provider limitation window, not a deterministic product fact.
 The same policy now also applies to `default` versus `--all` comparisons:
 nightly drive-list checks poll `drive list --json --all` until it contains the
 default-visible shared entries from the earlier pass, and skip if Graph never
-stabilizes within one ordinary read-only window.
+stabilizes within one ordinary read-only window. Name-based shared-folder
+`drive add` checks only skip the documented no-match error when an independent
+`shared --json --account` read also omits the known fixture, or when that
+independent read hits a retryable Graph gateway error. A no-match while the
+fixture is independently visible remains a hard failure because that can be a
+selector/filtering regression rather than a provider omission.
 Promoted docs: [system.md](../design/system.md), [graph-api-quirks.md](graph-api-quirks.md)
 
 ## LI-20260422-05: Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work
