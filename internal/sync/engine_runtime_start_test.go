@@ -25,6 +25,7 @@ func TestStartRuntimeStage_ReleasesDueHeldTrialImmediately(t *testing.T) {
 			Actions: []Action{{
 				Type: ActionUpload,
 				Path: "held.txt",
+				View: &PathView{Path: "held.txt"},
 			}},
 			Deps: [][]int{nil},
 		},

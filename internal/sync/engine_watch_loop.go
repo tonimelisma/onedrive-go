@@ -115,6 +115,7 @@ func (rt *watchRuntime) runPendingWatchReplan(
 	}
 
 	pendingStartedAt := rt.pendingReplanStartedAt()
+	rt.advancePendingReplanDrainIdleTracking()
 	batch, ok := rt.takePendingReplan()
 	if !ok {
 		return false, nil
@@ -458,7 +459,11 @@ func (rt *watchRuntime) handleWatchActionCompletion(
 	p *watchPipeline,
 	completion *ActionCompletion,
 ) error {
+	hadPendingReplan := rt.hasPendingReplan()
 	ready, err := rt.applyRuntimeCompletionStage(ctx, rt, completion, p.bl)
+	if hadPendingReplan {
+		rt.advancePendingReplanDrainIdleTracking()
+	}
 	if err != nil {
 		rt.completeOutboxAsShutdown(ready)
 		return err

@@ -7,9 +7,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
-// Validates: R-2.8.9
+// Validates: R-2.8.9, R-6.6.17
 func TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution(t *testing.T) {
 	t.Parallel()
 
@@ -29,7 +30,9 @@ func TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution(t *
 		Size:     7,
 	}}))
 
+	collector := perf.NewCollector(nil)
 	pool := NewWorkerPool(nil, nil, store, testLogger(t), 1)
+	pool.perfCollector = collector
 	pool.executeAction(ctx, &TrackedAction{
 		ID: 1,
 		Action: Action{
@@ -44,7 +47,89 @@ func TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution(t *
 
 	completion := <-pool.Completions()
 	assert.False(t, completion.Success)
-	assert.ErrorIs(t, completion.Err, ErrActionPreconditionChanged)
+	require.ErrorIs(t, completion.Err, ErrActionPreconditionChanged)
+	assert.Equal(t, 1, collector.Snapshot().SupersededWorkerStartLocalTruthCount)
+}
+
+// Validates: R-2.8.9, R-6.6.17
+func TestWorkerStartFreshness_RemoteDownloadMismatchRecordsRemoteTruthCounter(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	remoteDriveID := driveid.New(testDriveID)
+
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  remoteDriveID,
+		ItemID:   "remote-1",
+		Path:     "remote.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "changed",
+		Size:     7,
+	}}, "delta-1", remoteDriveID))
+
+	collector := perf.NewCollector(nil)
+	pool := NewWorkerPool(nil, nil, store, testLogger(t), 1)
+	pool.perfCollector = collector
+	pool.executeAction(ctx, &TrackedAction{
+		ID: 1,
+		Action: Action{
+			Type:    ActionDownload,
+			Path:    "remote.txt",
+			ItemID:  "remote-1",
+			DriveID: remoteDriveID,
+			View: &PathView{
+				Path: "remote.txt",
+				Remote: &RemoteState{
+					DriveID:  remoteDriveID,
+					ItemID:   "remote-1",
+					ItemType: ItemTypeFile,
+					Hash:     "planned",
+					Size:     7,
+				},
+			},
+		},
+	})
+
+	completion := <-pool.Completions()
+	assert.False(t, completion.Success)
+	require.ErrorIs(t, completion.Err, ErrActionPreconditionChanged)
+	assert.Equal(t, 1, collector.Snapshot().SupersededWorkerStartRemoteTruthCount)
+}
+
+// Validates: R-2.8.10, R-6.6.17
+func TestWorkerPool_SendResultCountsLivePreconditionSupersededByCapability(t *testing.T) {
+	t.Parallel()
+
+	collector := perf.NewCollector(nil)
+	pool := NewWorkerPool(nil, nil, nil, testLogger(t), 2)
+	pool.perfCollector = collector
+
+	pool.sendResult(t.Context(), &TrackedAction{
+		ID:     1,
+		Action: Action{Type: ActionUpload, Path: "local.txt"},
+	}, &ActionOutcome{
+		Action:            ActionUpload,
+		Path:              "local.txt",
+		Error:             stalePreconditionError("upload source changed"),
+		FailureCapability: PermissionCapabilityLocalRead,
+	}, ErrActionPreconditionChanged)
+	pool.sendResult(t.Context(), &TrackedAction{
+		ID:     2,
+		Action: Action{Type: ActionRemoteDelete, Path: "remote.txt"},
+	}, &ActionOutcome{
+		Action:            ActionRemoteDelete,
+		Path:              "remote.txt",
+		Error:             stalePreconditionError("remote source changed"),
+		FailureCapability: PermissionCapabilityRemoteRead,
+	}, ErrActionPreconditionChanged)
+
+	<-pool.Completions()
+	<-pool.Completions()
+
+	snapshot := collector.Snapshot()
+	assert.Equal(t, 1, snapshot.SupersededLiveLocalPreconditionCount)
+	assert.Equal(t, 1, snapshot.SupersededLiveRemotePreconditionCount)
 }
 
 // Validates: R-2.8.9
@@ -203,11 +288,12 @@ func TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState(t 
 	assert.True(t, decision.Fresh)
 }
 
-// Validates: R-2.8.9
+// Validates: R-2.8.9, R-6.6.17
 func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependents(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
+	eng.perfCollector = perf.NewCollector(nil)
 	rt := testWatchRuntime(t, eng)
 	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
 	flow := testEngineFlow(t, eng)
@@ -259,6 +345,7 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 	assert.Equal(t, 0, flow.depGraph.InFlightCount())
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
 	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
+	assert.Equal(t, 1, eng.collector().Snapshot().SupersededEngineAdmissionCount)
 }
 
 // Validates: R-2.8.9

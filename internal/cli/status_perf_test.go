@@ -176,6 +176,36 @@ func TestStatusPerf_PrintStatusPerfText_UsesActionableCountFallback(t *testing.T
 	assert.Contains(t, rendered, "actions 7, watch batches 8, watch paths 9")
 }
 
+// Validates: R-6.6.17
+func TestStatusPerf_PrintStatusPerfText_IncludesNonzeroStaleWorkCounters(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	state := &syncStateInfo{
+		Perf: &perf.Snapshot{
+			SupersededEngineAdmissionCount:           1,
+			SupersededWorkerStartLocalTruthCount:     2,
+			SupersededLiveRemotePreconditionCount:    3,
+			LocalObservationScopedCommitCount:        4,
+			LocalObservationScopedUpsertCount:        5,
+			LocalObservationExactDeleteCount:         6,
+			LocalObservationPrefixDeleteCount:        7,
+			LocalObservationSuspectWatcherErrorCount: 8,
+			ReplanIdleWaitingDrainMS:                 9,
+			ReplanIdlePlanningMS:                     10,
+		},
+	}
+
+	require.NoError(t, printStatusPerfText(&out, "    ", state))
+	rendered := out.String()
+	assert.Contains(t, rendered, "Stale:")
+	assert.Contains(t, rendered, "admission 1, worker local 2, live remote 3")
+	assert.Contains(t, rendered, "Local obs:")
+	assert.Contains(t, rendered, "commits 4, upserts 5, deletes 6, prefix deletes 7, suspect 8")
+	assert.Contains(t, rendered, "Replan idle:")
+	assert.Contains(t, rendered, "drain 9ms, plan 10ms")
+}
+
 // Validates: R-6.6.15
 func TestStatusPerfOverlayLookupAndPersistentFlags(t *testing.T) {
 	t.Parallel()

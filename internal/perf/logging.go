@@ -144,56 +144,89 @@ func SnapshotAttrs(snapshot *Snapshot) []slog.Attr {
 	attrs := []slog.Attr{
 		slog.Int64("duration_ms", snapshot.DurationMS),
 	}
-	appendIntAttr := func(key string, value int) {
-		if value > 0 {
-			attrs = append(attrs, slog.Int(key, value))
-		}
-	}
-	appendInt64Attr := func(key string, value int64) {
-		if value > 0 {
-			attrs = append(attrs, slog.Int64(key, value))
-		}
-	}
 
 	if snapshot.Result != "" {
 		attrs = append(attrs, slog.String("result", snapshot.Result))
 	}
 
-	appendIntAttr("command_items", snapshot.CommandItems)
-	appendInt64Attr("command_bytes", snapshot.CommandBytes)
-	appendIntAttr("http_requests", snapshot.HTTPRequestCount)
-	appendIntAttr("http_successes", snapshot.HTTPSuccessCount)
-	appendIntAttr("http_client_errors", snapshot.HTTPClientErrorCount)
-	appendIntAttr("http_server_errors", snapshot.HTTPServerErrorCount)
-	appendIntAttr("http_transport_errors", snapshot.HTTPTransportErrors)
-	appendIntAttr("http_retries", snapshot.HTTPRetryCount)
-	appendInt64Attr("http_time_ms", snapshot.HTTPRequestTimeMS)
-	appendInt64Attr("http_retry_backoff_ms", snapshot.HTTPRetryBackoffMS)
-	appendIntAttr("db_transactions", snapshot.DBTransactionCount)
-	appendInt64Attr("db_transaction_time_ms", snapshot.DBTransactionTimeMS)
-	appendIntAttr("downloads", snapshot.DownloadCount)
-	appendInt64Attr("download_bytes", snapshot.DownloadBytes)
-	appendIntAttr("uploads", snapshot.UploadCount)
-	appendInt64Attr("upload_bytes", snapshot.UploadBytes)
-	appendInt64Attr("transfer_time_ms", snapshot.TransferTimeMS)
-	appendIntAttr("observe_runs", snapshot.ObserveRunCount)
-	appendIntAttr("observed_paths", snapshot.ObservedPathCount)
-	appendInt64Attr("observe_time_ms", snapshot.ObserveTimeMS)
-	appendIntAttr("plan_runs", snapshot.PlanRunCount)
-	appendIntAttr("actionable_actions", snapshot.ActionableActionCount)
-	appendInt64Attr("plan_time_ms", snapshot.PlanTimeMS)
-	appendIntAttr("execute_runs", snapshot.ExecuteRunCount)
-	appendIntAttr("execute_actions", snapshot.ExecuteActionCount)
-	appendIntAttr("execute_succeeded", snapshot.ExecuteSucceededCount)
-	appendIntAttr("execute_failed", snapshot.ExecuteFailedCount)
-	appendInt64Attr("execute_time_ms", snapshot.ExecuteTimeMS)
-	appendIntAttr("refresh_runs", snapshot.RefreshRunCount)
-	appendIntAttr("refresh_events", snapshot.RefreshEventCount)
-	appendInt64Attr("refresh_time_ms", snapshot.RefreshTimeMS)
-	appendIntAttr("watch_batches", snapshot.WatchBatchCount)
-	appendIntAttr("watch_paths", snapshot.WatchPathCount)
+	appendCoreSnapshotAttrs(&attrs, snapshot)
+	appendSyncSnapshotAttrs(&attrs, snapshot)
+	appendStaleWorkSnapshotAttrs(&attrs, snapshot)
 
 	return attrs
+}
+
+func appendCoreSnapshotAttrs(attrs *[]slog.Attr, snapshot *Snapshot) {
+	appendIntAttr(attrs, "command_items", snapshot.CommandItems)
+	appendInt64Attr(attrs, "command_bytes", snapshot.CommandBytes)
+	appendIntAttr(attrs, "http_requests", snapshot.HTTPRequestCount)
+	appendIntAttr(attrs, "http_successes", snapshot.HTTPSuccessCount)
+	appendIntAttr(attrs, "http_client_errors", snapshot.HTTPClientErrorCount)
+	appendIntAttr(attrs, "http_server_errors", snapshot.HTTPServerErrorCount)
+	appendIntAttr(attrs, "http_transport_errors", snapshot.HTTPTransportErrors)
+	appendIntAttr(attrs, "http_retries", snapshot.HTTPRetryCount)
+	appendInt64Attr(attrs, "http_time_ms", snapshot.HTTPRequestTimeMS)
+	appendInt64Attr(attrs, "http_retry_backoff_ms", snapshot.HTTPRetryBackoffMS)
+	appendIntAttr(attrs, "db_transactions", snapshot.DBTransactionCount)
+	appendInt64Attr(attrs, "db_transaction_time_ms", snapshot.DBTransactionTimeMS)
+	appendIntAttr(attrs, "downloads", snapshot.DownloadCount)
+	appendInt64Attr(attrs, "download_bytes", snapshot.DownloadBytes)
+	appendIntAttr(attrs, "uploads", snapshot.UploadCount)
+	appendInt64Attr(attrs, "upload_bytes", snapshot.UploadBytes)
+	appendInt64Attr(attrs, "transfer_time_ms", snapshot.TransferTimeMS)
+}
+
+func appendSyncSnapshotAttrs(attrs *[]slog.Attr, snapshot *Snapshot) {
+	appendIntAttr(attrs, "observe_runs", snapshot.ObserveRunCount)
+	appendIntAttr(attrs, "observed_paths", snapshot.ObservedPathCount)
+	appendInt64Attr(attrs, "observe_time_ms", snapshot.ObserveTimeMS)
+	appendIntAttr(attrs, "plan_runs", snapshot.PlanRunCount)
+	appendIntAttr(attrs, "actionable_actions", snapshot.ActionableActionCount)
+	appendInt64Attr(attrs, "plan_time_ms", snapshot.PlanTimeMS)
+	appendIntAttr(attrs, "execute_runs", snapshot.ExecuteRunCount)
+	appendIntAttr(attrs, "execute_actions", snapshot.ExecuteActionCount)
+	appendIntAttr(attrs, "execute_succeeded", snapshot.ExecuteSucceededCount)
+	appendIntAttr(attrs, "execute_failed", snapshot.ExecuteFailedCount)
+	appendInt64Attr(attrs, "execute_time_ms", snapshot.ExecuteTimeMS)
+	appendIntAttr(attrs, "refresh_runs", snapshot.RefreshRunCount)
+	appendIntAttr(attrs, "refresh_events", snapshot.RefreshEventCount)
+	appendInt64Attr(attrs, "refresh_time_ms", snapshot.RefreshTimeMS)
+	appendIntAttr(attrs, "watch_batches", snapshot.WatchBatchCount)
+	appendIntAttr(attrs, "watch_paths", snapshot.WatchPathCount)
+}
+
+func appendStaleWorkSnapshotAttrs(attrs *[]slog.Attr, snapshot *Snapshot) {
+	appendIntAttr(attrs, "superseded_engine_admission", snapshot.SupersededEngineAdmissionCount)
+	appendIntAttr(attrs, "superseded_worker_start_local_truth", snapshot.SupersededWorkerStartLocalTruthCount)
+	appendIntAttr(attrs, "superseded_worker_start_remote_truth", snapshot.SupersededWorkerStartRemoteTruthCount)
+	appendIntAttr(attrs, "superseded_live_local_precondition", snapshot.SupersededLiveLocalPreconditionCount)
+	appendIntAttr(attrs, "superseded_live_remote_precondition", snapshot.SupersededLiveRemotePreconditionCount)
+	appendIntAttr(attrs, "superseded_pending_replan_retirement", snapshot.SupersededPendingReplanRetirementCount)
+	appendIntAttr(attrs, "local_obs_scoped_commits", snapshot.LocalObservationScopedCommitCount)
+	appendIntAttr(attrs, "local_obs_scoped_upserts", snapshot.LocalObservationScopedUpsertCount)
+	appendIntAttr(attrs, "local_obs_exact_deletes", snapshot.LocalObservationExactDeleteCount)
+	appendIntAttr(attrs, "local_obs_prefix_deletes", snapshot.LocalObservationPrefixDeleteCount)
+	appendIntAttr(attrs, "local_obs_full_snapshot_replacements", snapshot.LocalObservationFullSnapshotReplacementCount)
+	appendIntAttr(attrs, "local_obs_suspect_dropped_events", snapshot.LocalObservationSuspectDroppedEventsCount)
+	appendIntAttr(attrs, "local_obs_suspect_watcher_errors", snapshot.LocalObservationSuspectWatcherErrorCount)
+	appendIntAttr(attrs, "local_obs_suspect_full_scan_failed", snapshot.LocalObservationSuspectFullScanFailedCount)
+	appendIntAttr(attrs, "local_obs_suspect_other", snapshot.LocalObservationSuspectOtherCount)
+	appendInt64Attr(attrs, "replan_idle_waiting_drain_ms", snapshot.ReplanIdleWaitingDrainMS)
+	appendInt64Attr(attrs, "replan_idle_local_refresh_ms", snapshot.ReplanIdleLocalRefreshMS)
+	appendInt64Attr(attrs, "replan_idle_planning_ms", snapshot.ReplanIdlePlanningMS)
+	appendInt64Attr(attrs, "replan_idle_runtime_install_ms", snapshot.ReplanIdleRuntimeInstallMS)
+}
+
+func appendIntAttr(attrs *[]slog.Attr, key string, value int) {
+	if value > 0 {
+		*attrs = append(*attrs, slog.Int(key, value))
+	}
+}
+
+func appendInt64Attr(attrs *[]slog.Attr, key string, value int64) {
+	if value > 0 {
+		*attrs = append(*attrs, slog.Int64(key, value))
+	}
 }
 
 func attrsToAny(attrs []slog.Attr) []any {

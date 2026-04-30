@@ -40,7 +40,7 @@ func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOu
 			ActionDownload,
 			sourcePreconditionErr,
 			action.Path,
-			inferFailureCapabilityFromError(sourcePreconditionErr, PermissionCapabilityLocalWrite, PermissionCapabilityRemoteRead),
+			PermissionCapabilityRemoteRead,
 		)
 	}
 	targetPreconditionErr := e.validateDownloadTargetPrecondition(action)
@@ -135,7 +135,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 			ActionUpload,
 			freshnessErr,
 			action.Path,
-			PermissionCapabilityUnknown,
+			PermissionCapabilityRemoteRead,
 		)
 	}
 	if sourceErr := e.validateUploadSourcePrecondition(action); sourceErr != nil {
@@ -188,7 +188,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 				ActionUpload,
 				parentPreconditionErr,
 				action.Path,
-				inferFailureCapabilityFromError(parentPreconditionErr, PermissionCapabilityUnknown, PermissionCapabilityRemoteRead),
+				PermissionCapabilityRemoteRead,
 			)
 		}
 		if waitErr := e.waitRemoteParentVisible(ctx, action); waitErr != nil {
