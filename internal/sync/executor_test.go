@@ -71,6 +71,7 @@ func (m *executorMockUploader) UploadToItem(ctx context.Context, driveID driveid
 type executorPathConvergenceStub struct {
 	waitItem                 *graph.Item
 	waitErr                  error
+	waitFn                   func(remotePath string)
 	waitCalls                []string
 	deleteResolvedCalls      []string
 	permanentDeletePathCalls []string
@@ -78,6 +79,9 @@ type executorPathConvergenceStub struct {
 
 func (s *executorPathConvergenceStub) WaitPathVisible(_ context.Context, remotePath string) (*graph.Item, error) {
 	s.waitCalls = append(s.waitCalls, remotePath)
+	if s.waitFn != nil {
+		s.waitFn(remotePath)
+	}
 	if s.waitErr != nil {
 		return nil, s.waitErr
 	}
@@ -1205,6 +1209,105 @@ func TestExecutor_Upload_CreateByParentWaitsForParentVisibilityBeforeUpload(t *t
 	require.Equal(t, []string{"folder", "folder/exec-small.txt"}, pathConvergence.waitCalls)
 }
 
+// Validates: R-2.8.10, R-2.16.2
+func TestExecutor_Upload_CreateByParentWaitsBeforeParentPrecondition(t *testing.T) {
+	t.Parallel()
+
+	parentWaited := false
+	getItemCalls := 0
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
+			require.Equal(t, driveid.New(synctest.TestDriveID), driveID)
+			require.Equal(t, "parent-id", itemID)
+			getItemCalls++
+			if !parentWaited {
+				return nil, graph.ErrNotFound
+			}
+			return &graph.Item{ID: "parent-id", DriveID: driveID, IsFolder: true}, nil
+		},
+	}
+	pathConvergence := &executorPathConvergenceStub{
+		waitFn: func(remotePath string) {
+			if remotePath == "folder" {
+				parentWaited = true
+			}
+		},
+	}
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			assert.True(t, parentWaited, "parent path convergence should run before parent preflight and upload")
+			assert.Equal(t, "parent-id", parentID)
+			assert.Equal(t, "exec-small.txt", name)
+			return &graph.Item{ID: "uploaded1", ETag: "etag1", QuickXorHash: "abc"}, nil
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, ul, pathConvergence)
+	e := NewExecution(cfg, baselineWith(&BaselineEntry{
+		Path:     "folder",
+		ItemID:   "parent-id",
+		DriveID:  driveid.New(synctest.TestDriveID),
+		ItemType: ItemTypeFolder,
+	}))
+
+	writeExecTestFile(t, syncRoot, "folder/exec-small.txt", "hello")
+
+	action := &Action{
+		Type:    ActionUpload,
+		Path:    "folder/exec-small.txt",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View:    &PathView{Path: "folder/exec-small.txt"},
+	}
+
+	o := e.ExecuteUpload(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.Equal(t, 1, getItemCalls)
+	assert.Equal(t, []string{"folder", "folder/exec-small.txt"}, pathConvergence.waitCalls)
+}
+
+// Validates: R-2.8.7, R-2.8.10
+func TestExecutor_Upload_CreateByParentMissingAfterVisibilityWaitReturnsStalePrecondition(t *testing.T) {
+	t.Parallel()
+
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
+			require.Equal(t, driveid.New(synctest.TestDriveID), driveID)
+			require.Equal(t, "parent-id", itemID)
+			return nil, graph.ErrNotFound
+		},
+	}
+	pathConvergence := &executorPathConvergenceStub{waitErr: driveops.ErrPathNotVisible}
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			require.FailNow(t, "upload should not start when parent preflight proves stale work")
+			return nil, assert.AnError
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, ul, pathConvergence)
+	e := NewExecution(cfg, baselineWith(&BaselineEntry{
+		Path:     "folder",
+		ItemID:   "parent-id",
+		DriveID:  driveid.New(synctest.TestDriveID),
+		ItemType: ItemTypeFolder,
+	}))
+
+	writeExecTestFile(t, syncRoot, "folder/exec-small.txt", "hello")
+
+	action := &Action{
+		Type:    ActionUpload,
+		Path:    "folder/exec-small.txt",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View:    &PathView{Path: "folder/exec-small.txt"},
+	}
+
+	o := e.ExecuteUpload(t.Context(), action)
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityRemoteRead, o.FailureCapability)
+	assert.Equal(t, []string{"folder"}, pathConvergence.waitCalls)
+}
+
 func TestExecutor_Upload_PathConvergenceProbeFailureIsNonFatal(t *testing.T) {
 	t.Parallel()
 
@@ -1474,6 +1577,57 @@ func TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition
 	requireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 	assert.Equal(t, PermissionCapabilityLocalRead, o.FailureCapability)
+}
+
+// Validates: R-2.4.6, R-2.8.10
+func TestExecutor_Upload_SymlinkAliasSourceUsesFollowedTargetPrecondition(t *testing.T) {
+	t.Parallel()
+
+	ul := &executorMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, name string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			assert.Equal(t, "alias.txt", name)
+			assert.Equal(t, int64(len(execHelloWorldContent)), size)
+			buf := make([]byte, size)
+			_, err := content.ReadAt(buf, 0)
+			require.NoError(t, err)
+			assert.Equal(t, execHelloWorldContent, string(buf))
+			return &graph.Item{ID: "uploaded-alias", ETag: "etag1", QuickXorHash: execHelloWorldQuickXorHash}, nil
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
+	e := NewExecution(cfg, emptyBaseline())
+
+	targetPath := writeExecTestFile(t, syncRoot, "target.txt", execHelloWorldContent)
+	aliasPath := filepath.Join(syncRoot, "alias.txt")
+	if err := os.Symlink(targetPath, aliasPath); err != nil {
+		t.Skipf("symlink not available on this filesystem: %v", err)
+	}
+	info, err := os.Stat(aliasPath)
+	require.NoError(t, err)
+	identity, identityOK := synctree.IdentityFromFileInfo(info)
+	require.True(t, identityOK)
+
+	action := &Action{
+		Type:    ActionUpload,
+		Path:    "alias.txt",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View: &PathView{
+			Path: "alias.txt",
+			Local: &LocalState{
+				ItemType:         ItemTypeFile,
+				Hash:             execHelloWorldQuickXorHash,
+				Size:             info.Size(),
+				Mtime:            info.ModTime().UnixNano(),
+				LocalDevice:      identity.Device,
+				LocalInode:       identity.Inode,
+				LocalHasIdentity: true,
+			},
+		},
+	}
+
+	o := e.ExecuteUpload(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
 }
 
 // ---------------------------------------------------------------------------

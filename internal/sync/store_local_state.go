@@ -220,9 +220,9 @@ func deleteLocalStatePrefixTx(ctx context.Context, tx sqlTxRunner, prefix string
 		ctx,
 		`DELETE FROM local_state
 			WHERE path = ? COLLATE BINARY
-			   OR substr(path, 1, ?) = ? COLLATE BINARY`,
+			   OR substr(path, 1, length(?)) = ? COLLATE BINARY`,
 		prefix,
-		len(descendantPrefix),
+		descendantPrefix,
 		descendantPrefix,
 	); err != nil {
 		return fmt.Errorf("sync: deleting local_state prefix for %s: %w", prefix, err)

@@ -10,6 +10,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -228,12 +229,9 @@ func (e *Executor) validateUploadSourcePrecondition(action *Action) error {
 		return nil
 	}
 
-	info, err := e.syncTree.Lstat(action.Path)
+	info, err := e.uploadSourceInfo(action.Path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return stalePreconditionError("upload source %s is missing", action.Path)
-		}
-		return normalizeSyncTreePathError(err)
+		return err
 	}
 	if !info.Mode().IsRegular() {
 		return stalePreconditionError("upload source %s is no longer a regular file", action.Path)
@@ -256,8 +254,8 @@ func (e *Executor) validateUploadSourcePrecondition(action *Action) error {
 		return stalePreconditionError("upload source %s changed mtime", action.Path)
 	}
 	if planned.LocalHasIdentity {
-		identity, identityErr := e.syncTree.IdentityNoFollow(action.Path)
-		if identityErr == nil && !synctree.SameIdentity(identity, synctree.FileIdentity{
+		identity, identityOK := synctree.IdentityFromFileInfo(info)
+		if identityOK && !synctree.SameIdentity(identity, synctree.FileIdentity{
 			Device: planned.LocalDevice,
 			Inode:  planned.LocalInode,
 		}) {
@@ -266,6 +264,33 @@ func (e *Executor) validateUploadSourcePrecondition(action *Action) error {
 	}
 
 	return nil
+}
+
+func (e *Executor) uploadSourceInfo(path string) (os.FileInfo, error) {
+	info, err := e.syncTree.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, stalePreconditionError("upload source %s is missing", path)
+		}
+		return nil, normalizeSyncTreePathError(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return info, nil
+	}
+
+	absPath, err := e.syncTree.Abs(path)
+	if err != nil {
+		return nil, normalizeSyncTreePathError(err)
+	}
+	info, err = localpath.Stat(absPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, stalePreconditionError("upload source %s target is missing", path)
+		}
+		return nil, fmt.Errorf("stating upload source target %s: %w", path, err)
+	}
+
+	return info, nil
 }
 
 func expectedUploadHash(action *Action) string {
