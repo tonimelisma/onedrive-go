@@ -80,10 +80,12 @@ func (e *Executor) ExecuteLocalDelete(ctx context.Context, action *Action) Actio
 	info, err := e.syncTree.Stat(action.Path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return e.failedOutcome(
+			return e.failedOutcomeWithFailure(
 				action,
 				ActionLocalDelete,
 				stalePreconditionError("local delete source %s is already absent", action.Path),
+				action.Path,
+				PermissionCapabilityLocalWrite,
 			)
 		}
 
@@ -231,7 +233,7 @@ func (e *Executor) DeleteLocalFile(_ context.Context, action *Action, absPath st
 			e.logger.Warn("local delete: hash mismatch, keeping local file and requiring replan",
 				slog.String("path", action.Path),
 			)
-			return e.failedOutcome(
+			return e.failedOutcomeWithFailure(
 				action,
 				ActionLocalDelete,
 				fmt.Errorf("%w: local delete hash mismatch for %s (baseline=%s current=%s remote=%s mtime=%d)",
@@ -242,6 +244,8 @@ func (e *Executor) DeleteLocalFile(_ context.Context, action *Action, absPath st
 					baselineRemoteHash,
 					info.ModTime().UnixNano(),
 				),
+				action.Path,
+				PermissionCapabilityLocalWrite,
 			)
 		}
 	}
@@ -273,10 +277,12 @@ func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) Acti
 	err := e.items.DeleteItem(ctx, driveID, action.ItemID)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotFound) {
-			return e.failedOutcome(
+			return e.failedOutcomeWithFailure(
 				action,
 				ActionRemoteDelete,
 				stalePreconditionError("remote delete item %s disappeared", action.ItemID),
+				action.Path,
+				PermissionCapabilityRemoteWrite,
 			)
 		}
 

@@ -1380,7 +1380,7 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "file should have been deleted")
 }
 
-// Validates: R-6.2.4
+// Validates: R-6.2.4, R-2.8.10
 func TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition(t *testing.T) {
 	t.Parallel()
 
@@ -1414,6 +1414,7 @@ func TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition(t *testing.T
 	require.False(t, o.Success)
 	assert.Equal(t, ActionLocalDelete, o.Action)
 	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityLocalWrite, o.FailureCapability)
 
 	contents, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.txt"))
 	require.NoError(t, err)
@@ -1476,6 +1477,7 @@ func TestExecutor_LocalDelete_HashMismatch_DoesNotCreateConflictCopy(t *testing.
 	assert.False(t, uploadCalled, "executor should not invent upload intent for stale local delete")
 }
 
+// Validates: R-2.8.10
 func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {
 	t.Parallel()
 
@@ -1492,6 +1494,7 @@ func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {
 	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityLocalWrite, o.FailureCapability)
 }
 
 func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
@@ -1565,6 +1568,7 @@ func TestExecutor_RemoteDelete_Success(t *testing.T) {
 	requireOutcomeSuccess(t, &o)
 }
 
+// Validates: R-2.8.10
 func TestExecutor_RemoteDelete_ErrorHandling(t *testing.T) {
 	t.Parallel()
 
@@ -1579,11 +1583,13 @@ func TestExecutor_RemoteDelete_ErrorHandling(t *testing.T) {
 		wantFailureCapability PermissionCapability
 	}{
 		{
-			name:      "404AfterPreflightIsSuperseded",
-			path:      "exec-already-deleted.txt",
-			itemID:    "item2",
-			deleteErr: graph.ErrNotFound,
-			wantErrIs: ErrActionPreconditionChanged,
+			name:                  "404AfterPreflightIsSuperseded",
+			path:                  "exec-already-deleted.txt",
+			itemID:                "item2",
+			deleteErr:             graph.ErrNotFound,
+			wantErrIs:             ErrActionPreconditionChanged,
+			wantFailurePath:       "exec-already-deleted.txt",
+			wantFailureCapability: PermissionCapabilityRemoteWrite,
 		},
 		{
 			name:                  "403Skip",
