@@ -1147,6 +1147,93 @@ func TestDownloadToFile_RenameFailure_PreservesPartial(t *testing.T) {
 	assert.Equal(t, content, got, "partial content mismatch")
 }
 
+// Validates: R-2.8.10
+func TestDownloadToFile_TargetPreconditionBeforeRenamePreservesPartial(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("data-to-preserve")
+	expectedHash := tmHashBytes(content)
+	dl := &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(content)
+			return int64(n), err
+		},
+	}
+
+	tm := newTestTM(dl, &tmMockUploader{}, nil)
+	targetPath := filepath.Join(t.TempDir(), "target.txt")
+
+	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+		RemoteHash: expectedHash,
+		ValidateTargetBeforeRename: func() error {
+			return assert.AnError
+		},
+	})
+	require.ErrorIs(t, err, assert.AnError)
+
+	assert.NoFileExists(t, targetPath)
+	got, readErr := localpath.ReadFile(downloadPartialPath(targetPath))
+	require.NoError(t, readErr)
+	assert.Equal(t, content, got)
+}
+
+// Validates: R-2.8.10
+func TestUploadFile_SourcePreconditionRunsBeforeUpload(t *testing.T) {
+	t.Parallel()
+
+	ul := &tmMockUploader{
+		uploadFn: func(context.Context, driveid.ID, string, string, io.ReaderAt, int64, time.Time, graph.ProgressFunc) (*graph.Item, error) {
+			require.FailNow(t, "upload should not run after source precondition failure")
+			return nil, assert.AnError
+		},
+	}
+	tm := newTestTM(&tmSimpleDownloader{}, ul, nil)
+	localPath := filepath.Join(t.TempDir(), "preflight.txt")
+	require.NoError(t, os.WriteFile(localPath, []byte("hello"), 0o600))
+
+	_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "preflight.txt", localPath, UploadOpts{
+		ValidateSourceBeforeRead: func() error {
+			return assert.AnError
+		},
+	})
+	require.ErrorIs(t, err, assert.AnError)
+}
+
+// Validates: R-2.8.10
+func TestUploadFile_SourcePreconditionRunsDuringSessionRead(t *testing.T) {
+	t.Parallel()
+
+	validateCalls := 0
+	ul := &tmMockUploader{
+		createUploadSessionFn: func(context.Context, driveid.ID, string, string, int64, time.Time) (*graph.UploadSession, error) {
+			return &graph.UploadSession{UploadURL: "https://upload.example.com/live-precondition"}, nil
+		},
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, content io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			buf := make([]byte, 1)
+			_, err := content.ReadAt(buf, 0)
+			return nil, fmt.Errorf("reading session content: %w", err)
+		},
+	}
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
+	localPath := filepath.Join(dir, "large.bin")
+	require.NoError(t, os.WriteFile(localPath, make([]byte, graph.SimpleUploadMaxSize+1), 0o600))
+
+	_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "large.bin", localPath, UploadOpts{
+		ValidateSourceBeforeRead: func() error {
+			validateCalls++
+			if validateCalls >= 3 {
+				return assert.AnError
+			}
+			return nil
+		},
+	})
+	require.ErrorIs(t, err, assert.AnError)
+	assert.GreaterOrEqual(t, validateCalls, 3)
+}
+
 // ---------------------------------------------------------------------------
 // B-215: session save failure still completes upload
 // ---------------------------------------------------------------------------

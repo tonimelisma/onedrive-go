@@ -65,16 +65,20 @@ func isHEICMetadataMismatch(targetPath, remoteHash string, hashVerified bool, re
 
 // DownloadOpts configures a single download operation.
 type DownloadOpts struct {
-	RemoteHash     string // expected hash; empty = skip verification
-	RemoteMtime    int64  // nanoseconds; 0 = don't set (not Unix epoch)
-	RemoteSize     int64  // expected size; 0 = don't validate
-	MaxHashRetries int    // 0 = use default (2 retries, meaning 3 total download attempts)
+	RemoteHash                 string // expected hash; empty = skip verification
+	RemoteMtime                int64  // nanoseconds; 0 = don't set (not Unix epoch)
+	RemoteSize                 int64  // expected size; 0 = don't validate
+	MaxHashRetries             int    // 0 = use default (2 retries, meaning 3 total download attempts)
+	ValidateTargetBeforeRename func() error
 }
 
 // UploadOpts configures a single upload operation.
 type UploadOpts struct {
-	Mtime    time.Time
-	Progress graph.ProgressFunc
+	Mtime                    time.Time
+	Progress                 graph.ProgressFunc
+	ExpectedHash             string
+	HashMismatchError        func(localPath, expectedHash, actualHash string) error
+	ValidateSourceBeforeRead func() error
 }
 
 // DownloadResult reports the outcome of a successful download.
@@ -91,6 +95,26 @@ type UploadResult struct {
 	LocalHash string
 	Size      int64
 	Mtime     time.Time
+}
+
+type validatingReaderAt struct {
+	io.ReaderAt
+	Validate func() error
+}
+
+func (r validatingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if r.Validate != nil {
+		if err := r.Validate(); err != nil {
+			return 0, fmt.Errorf("validating upload source before read: %w", err)
+		}
+	}
+
+	n, err := r.ReaderAt.ReadAt(p, off)
+	if err != nil {
+		return n, fmt.Errorf("reading upload source at offset %d: %w", off, err)
+	}
+
+	return n, nil
 }
 
 // TransferManager provides unified download/upload with resume, shared between
@@ -217,30 +241,11 @@ func (tm *TransferManager) DownloadToFile(
 	}
 
 	partialPath := downloadPartialPath(targetPath)
-	remoteHash := opts.RemoteHash
-	hashVerified := remoteHash != "" // no verification possible without a remote hash (B-021)
-	var localHash string
-	var size int64
-
-	// Fast path: no remote hash means no verification — download once, skip retry loop.
-	if remoteHash == "" {
-		var err error
-
-		localHash, size, err = tm.downloadToPartial(ctx, driveID, itemID, partialPath)
-		if err != nil {
-			return nil, err
-		}
-
-		tm.logger.Warn("remote item has no content hash, skipping verification",
-			slog.String("target", targetPath),
-		)
-	} else {
-		var err error
-		localHash, size, remoteHash, hashVerified, err = tm.downloadWithHashRetry(
-			ctx, driveID, itemID, partialPath, targetPath, remoteHash, opts.MaxHashRetries)
-		if err != nil {
-			return nil, err
-		}
+	localHash, size, remoteHash, hashVerified, err := tm.downloadToVerifiedPartial(
+		ctx, driveID, itemID, partialPath, targetPath, opts,
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	// Warn if downloaded size doesn't match expected remote size.
@@ -263,6 +268,10 @@ func (tm *TransferManager) DownloadToFile(
 				slog.String("error", err.Error()),
 			)
 		}
+	}
+
+	if err := validateDownloadTargetBeforeRename(opts); err != nil {
+		return nil, err
 	}
 
 	// Atomic rename: .partial -> target. On failure the .partial file is
@@ -288,6 +297,33 @@ func (tm *TransferManager) DownloadToFile(
 		EffectiveRemoteHash: remoteHash,
 		HashVerified:        hashVerified,
 	}, nil
+}
+
+func (tm *TransferManager) downloadToVerifiedPartial(
+	ctx context.Context,
+	driveID driveid.ID,
+	itemID string,
+	partialPath string,
+	targetPath string,
+	opts DownloadOpts,
+) (localHash string, size int64, remoteHash string, hashVerified bool, err error) {
+	remoteHash = opts.RemoteHash
+	hashVerified = remoteHash != "" // no verification possible without a remote hash (B-021)
+
+	// Fast path: no remote hash means no verification — download once, skip retry loop.
+	if remoteHash == "" {
+		localHash, size, err = tm.downloadToPartial(ctx, driveID, itemID, partialPath)
+		if err != nil {
+			return "", 0, "", false, err
+		}
+
+		tm.logger.Warn("remote item has no content hash, skipping verification",
+			slog.String("target", targetPath),
+		)
+		return localHash, size, remoteHash, hashVerified, nil
+	}
+
+	return tm.downloadWithHashRetry(ctx, driveID, itemID, partialPath, targetPath, remoteHash, opts.MaxHashRetries)
 }
 
 func downloadPartialPath(targetPath string) string {
@@ -528,11 +564,43 @@ func uploadMtime(info os.FileInfo, opts UploadOpts) time.Time {
 	return opts.Mtime
 }
 
+func uploadHashMismatchError(opts UploadOpts, localPath, actualHash string) error {
+	if opts.HashMismatchError != nil {
+		return opts.HashMismatchError(localPath, opts.ExpectedHash, actualHash)
+	}
+
+	return fmt.Errorf("upload source hash changed for %s: expected %s got %s", localPath, opts.ExpectedHash, actualHash)
+}
+
+func validateDownloadTargetBeforeRename(opts DownloadOpts) error {
+	if opts.ValidateTargetBeforeRename == nil {
+		return nil
+	}
+
+	return opts.ValidateTargetBeforeRename()
+}
+
+func validateUploadSourceBeforeRead(opts UploadOpts) error {
+	if opts.ValidateSourceBeforeRead == nil {
+		return nil
+	}
+
+	return opts.ValidateSourceBeforeRead()
+}
+
+func validateUploadExpectedHash(opts UploadOpts, localPath, localHash string) error {
+	if opts.ExpectedHash == "" || localHash == opts.ExpectedHash {
+		return nil
+	}
+
+	return uploadHashMismatchError(opts, localPath, localHash)
+}
+
 func (tm *TransferManager) uploadGraphItem(
 	ctx context.Context,
 	su SessionUploader,
 	hasSessionUploader bool,
-	file *os.File,
+	content io.ReaderAt,
 	driveID driveid.ID,
 	parentID string,
 	name string,
@@ -543,10 +611,10 @@ func (tm *TransferManager) uploadGraphItem(
 	progress graph.ProgressFunc,
 ) (*graph.Item, error) {
 	if size > graph.SimpleUploadMaxSize && tm.sessionStore != nil && hasSessionUploader {
-		return tm.sessionUpload(ctx, su, file, driveID, parentID, name, localPath, localHash, size, mtime, progress)
+		return tm.sessionUpload(ctx, su, content, driveID, parentID, name, localPath, localHash, size, mtime, progress)
 	}
 
-	item, err := tm.uploads.Upload(ctx, driveID, parentID, name, file, size, mtime, progress)
+	item, err := tm.uploads.Upload(ctx, driveID, parentID, name, content, size, mtime, progress)
 	if err != nil {
 		return nil, fmt.Errorf("uploading %s: %w", localPath, err)
 	}
@@ -587,6 +655,9 @@ func (tm *TransferManager) UploadFile(
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", localPath, err)
 	}
+	if validationErr := validateUploadSourceBeforeRead(opts); validationErr != nil {
+		return nil, validationErr
+	}
 
 	size := info.Size()
 	if size > MaxOneDriveFileSize {
@@ -602,6 +673,12 @@ func (tm *TransferManager) UploadFile(
 	localHash, err := tm.hashFunc(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("hashing %s: %w", localPath, err)
+	}
+	if validationErr := validateUploadExpectedHash(opts, localPath, localHash); validationErr != nil {
+		return nil, validationErr
+	}
+	if validationErr := validateUploadSourceBeforeRead(opts); validationErr != nil {
+		return nil, validationErr
 	}
 
 	mtime := uploadMtime(info, opts)
@@ -620,7 +697,7 @@ func (tm *TransferManager) UploadFile(
 		ctx,
 		su,
 		hasSU,
-		f,
+		validatingReaderAt{ReaderAt: f, Validate: opts.ValidateSourceBeforeRead},
 		driveID,
 		parentID,
 		name,
@@ -681,6 +758,9 @@ func (tm *TransferManager) UploadFileToItem(
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", localPath, err)
 	}
+	if validationErr := validateUploadSourceBeforeRead(opts); validationErr != nil {
+		return nil, validationErr
+	}
 
 	size := info.Size()
 	if size > MaxOneDriveFileSize {
@@ -691,6 +771,12 @@ func (tm *TransferManager) UploadFileToItem(
 	localHash, err := tm.hashFunc(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("hashing %s: %w", localPath, err)
+	}
+	if validationErr := validateUploadExpectedHash(opts, localPath, localHash); validationErr != nil {
+		return nil, validationErr
+	}
+	if validationErr := validateUploadSourceBeforeRead(opts); validationErr != nil {
+		return nil, validationErr
 	}
 
 	mtime := opts.Mtime
@@ -704,7 +790,17 @@ func (tm *TransferManager) UploadFileToItem(
 	}
 	defer f.Close()
 
-	item, err := tm.uploadExistingItem(ctx, f, driveID, itemID, localPath, localHash, size, mtime, opts.Progress)
+	item, err := tm.uploadExistingItem(
+		ctx,
+		validatingReaderAt{ReaderAt: f, Validate: opts.ValidateSourceBeforeRead},
+		driveID,
+		itemID,
+		localPath,
+		localHash,
+		size,
+		mtime,
+		opts.Progress,
+	)
 	if err != nil {
 		return nil, err
 	}

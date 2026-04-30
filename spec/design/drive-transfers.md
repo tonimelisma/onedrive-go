@@ -2,7 +2,7 @@
 
 GOVERNS: internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_manager.go, pkg/quickxorhash/quickxorhash.go, get.go, put.go
 
-Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified]
+Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-2.8.10 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified]
 
 ## TransferManager
 
@@ -23,6 +23,7 @@ Unified download/upload manager shared by both CLI file operations and the sync 
 | --- | --- |
 | Downloads use partial-file resume plus hash verification before the final atomic rename. | `internal/driveops/download_test.go`, `internal/driveops/hash_test.go`, `internal/localpath/localpath_test.go` (`TestAtomicWrite`) |
 | Uploads keep simple-upload and upload-session mechanics inside the transfer boundary, and persisted sessions carry mount scope so lifecycle owners can purge child-owned sessions. | `internal/driveops/upload_test.go`, `internal/graph/upload_test.go`, `internal/graph/upload_session_test.go`, `TestSessionStore_DeleteForScope_RemovesMatchingMountOrRoot` |
+| Sync-owned live preconditions can be injected without making `driveops` import sync policy. | `TestDownloadToFile_TargetPreconditionBeforeRenamePreservesPartial`, `TestUploadFile_SourcePreconditionRunsBeforeUpload`, `TestUploadFile_SourcePreconditionRunsDuringSessionRead` |
 | Sync execution reuses the same transfer boundary instead of inventing a second transfer path. | `internal/sync/executor_test.go`, `internal/cli/sync_helpers_test.go` |
 
 ### Download
@@ -35,12 +36,25 @@ Implements: R-6.2.3 [verified]
 4. Verify hash and size against API metadata
 5. Atomic rename owned partial → final path
 
+`DownloadOpts.ValidateTargetBeforeRename` is an optional sync-supplied
+callback. `driveops` calls it after content/hash/mtime preparation and before
+the final rename. The callback owns sync stale-work policy; `driveops` only
+propagates the error and preserves the partial file like any other pre-rename
+failure.
+
 ### Upload
 
 1. Stat the local file and reject anything above the 250 GB OneDrive limit before hashing or opening network transfer state
 2. Files ≤ 4 MiB: simple PUT (single request)
 3. Files > 4 MiB: create resumable upload session, upload in chunks (320 KiB aligned)
 4. Verify server-reported hash matches local file after upload
+
+`UploadOpts.ValidateSourceBeforeRead` is an optional sync-supplied callback.
+`driveops` runs it before upload work begins and through the `io.ReaderAt`
+wrapper used by simple and session uploads. `UploadOpts.ExpectedHash` plus
+`HashMismatchError` let the sync executor turn a source hash mismatch into its
+own stale-precondition error without teaching transfer code about sync result
+classification.
 
 Resumable uploads use a fixed 10 MiB fragment size in the graph boundary.
 The config surface intentionally does not expose a user-tunable chunk-size

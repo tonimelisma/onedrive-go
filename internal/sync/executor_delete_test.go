@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -159,6 +160,17 @@ func TestExecuteRemoteDelete_DoesNotUsePathConvergenceDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			assert.Equal(t, "remote-item-id", itemID)
+			return &graph.Item{
+				ID:       "remote-item-id",
+				ETag:     "etag-1",
+				DriveID:  driveID,
+				ParentID: "parent-id",
+				Name:     "report.txt",
+				Size:     1,
+			}, nil
+		},
 		deleteItemFn: func(_ context.Context, _ driveid.ID, itemID string) error {
 			assert.Equal(t, "remote-item-id", itemID)
 			return nil
@@ -175,7 +187,14 @@ func TestExecuteRemoteDelete_DoesNotUsePathConvergenceDelete(t *testing.T) {
 		Path:   "docs/report.txt",
 		ItemID: "remote-item-id",
 		View: &PathView{
-			Remote: &RemoteState{ETag: "etag-1"},
+			Path: "docs/report.txt",
+			Remote: &RemoteState{
+				DriveID:  driveID,
+				ItemID:   "remote-item-id",
+				ItemType: ItemTypeFile,
+				ETag:     "etag-1",
+				Size:     1,
+			},
 		},
 	}
 
@@ -183,6 +202,131 @@ func TestExecuteRemoteDelete_DoesNotUsePathConvergenceDelete(t *testing.T) {
 	requireOutcomeSuccess(t, &outcome)
 	assert.Empty(t, pathConvergence.deleteResolvedCalls)
 	assert.Empty(t, pathConvergence.permanentDeletePathCalls)
+}
+
+// Validates: R-2.8.10
+func TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNotDelete(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			assert.Equal(t, "remote-item-id", itemID)
+			return nil, graph.ErrNotFound
+		},
+		deleteItemFn: func(context.Context, driveid.ID, string) error {
+			require.FailNow(t, "remote delete should not run after stale preflight")
+			return nil
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteDelete,
+		Path:    "docs/report.txt",
+		ItemID:  "remote-item-id",
+		DriveID: driveID,
+		View: &PathView{
+			Path: "docs/report.txt",
+			Remote: &RemoteState{
+				DriveID:  driveID,
+				ItemID:   "remote-item-id",
+				ItemType: ItemTypeFile,
+				ETag:     "etag-1",
+			},
+		},
+	}
+
+	outcome := e.ExecuteRemoteDelete(t.Context(), action)
+	requireOutcomeFailure(t, &outcome)
+	require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
+}
+
+// Validates: R-2.8.10
+func TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoesNotDelete(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			assert.Equal(t, "remote-item-id", itemID)
+			return &graph.Item{
+				ID:      "remote-item-id",
+				DriveID: driveID,
+				ETag:    "etag-current",
+			}, nil
+		},
+		deleteItemFn: func(context.Context, driveid.ID, string) error {
+			require.FailNow(t, "remote delete should not run after stale preflight")
+			return nil
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteDelete,
+		Path:    "docs/report.txt",
+		ItemID:  "remote-item-id",
+		DriveID: driveID,
+		View: &PathView{
+			Path: "docs/report.txt",
+			Remote: &RemoteState{
+				DriveID:  driveID,
+				ItemID:   "remote-item-id",
+				ItemType: ItemTypeFile,
+				ETag:     "etag-planned",
+			},
+		},
+	}
+
+	outcome := e.ExecuteRemoteDelete(t.Context(), action)
+	requireOutcomeFailure(t, &outcome)
+	require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
+}
+
+// Validates: R-2.8.10
+func TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			assert.Equal(t, "remote-item-id", itemID)
+			return nil, assert.AnError
+		},
+		deleteItemFn: func(context.Context, driveid.ID, string) error {
+			require.FailNow(t, "remote delete should not run after failed preflight")
+			return nil
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteDelete,
+		Path:    "docs/report.txt",
+		ItemID:  "remote-item-id",
+		DriveID: driveID,
+		View: &PathView{
+			Path: "docs/report.txt",
+			Remote: &RemoteState{
+				DriveID:  driveID,
+				ItemID:   "remote-item-id",
+				ItemType: ItemTypeFile,
+				ETag:     "etag-planned",
+			},
+		},
+	}
+
+	outcome := e.ExecuteRemoteDelete(t.Context(), action)
+	requireOutcomeFailure(t, &outcome)
+	require.ErrorIs(t, outcome.Error, assert.AnError)
+	assert.NotErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
 }
 
 func TestExecuteLocalDelete_SymlinkAliasDeletesOnlyLink(t *testing.T) {

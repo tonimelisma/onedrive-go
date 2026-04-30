@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -22,7 +23,20 @@ func (m *testMockItemClient) GetItem(ctx context.Context, driveID driveid.ID, it
 		return m.getItemFn(ctx, driveID, itemID)
 	}
 
-	return nil, fmt.Errorf("GetItem not mocked")
+	return defaultMockGetItem(driveID, itemID), nil
+}
+
+func defaultMockGetItem(driveID driveid.ID, itemID string) *graph.Item {
+	itemIDLower := strings.ToLower(itemID)
+	isFolder := strings.Contains(itemIDLower, "parent") ||
+		strings.Contains(itemIDLower, "folder") ||
+		strings.Contains(itemIDLower, "root")
+
+	return &graph.Item{
+		ID:       itemID,
+		DriveID:  driveID,
+		IsFolder: isFolder,
+	}
 }
 
 func (m *testMockItemClient) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error) {
