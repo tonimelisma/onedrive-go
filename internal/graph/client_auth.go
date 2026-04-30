@@ -26,10 +26,10 @@ func (c *Client) doGetWithHeaders(
 	return c.doRequest(ctx, http.MethodGet, path, nil, extraHeaders)
 }
 
-// doRequest is the shared path for do and doWithHeaders. Makes a single
-// authenticated request via doOnce. If the response is non-2xx, reads the
-// error body and returns a *GraphError. No retry loop — that's the transport's
-// responsibility.
+// doRequest is the shared path for package-internal authenticated requests.
+// Makes a single authenticated request via doOnce. If the response is non-2xx,
+// reads the error body and returns a *GraphError. No retry loop — that's the
+// transport's responsibility.
 func (c *Client) doRequest(
 	ctx context.Context, method, path string, body io.Reader, extraHeaders http.Header,
 ) (*http.Response, error) {

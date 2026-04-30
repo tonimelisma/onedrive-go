@@ -53,7 +53,9 @@ Implemented:
     source/parent items immediately before side effects. Not-found or changed
     planned facts are returned as `ErrActionPreconditionChanged` and therefore
     classified as superseded; transient live preflight reads remain ordinary
-    failures.
+    failures. Local folder moves/deletes validate stable folder identity when
+    the sync tree can supply it, and remote delete/move pass the preflight eTag
+    as `If-Match` so Graph rejects post-preflight races before mutation.
 16. Production perf snapshots, structured perf logs, and `status --perf` now
     expose aggregate stale-work counters by owning boundary, scoped local
     observation counters, suspect-local-truth recovery counts, and

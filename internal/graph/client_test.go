@@ -286,6 +286,7 @@ func TestDo_ErrorClassification(t *testing.T) {
 		{"not found", http.StatusNotFound, ErrNotFound},
 		{"conflict", http.StatusConflict, ErrConflict},
 		{"gone", http.StatusGone, ErrGone},
+		{"precondition failed", http.StatusPreconditionFailed, ErrPreconditionFailed},
 		{"locked", http.StatusLocked, ErrLocked},
 	}
 
@@ -663,6 +664,7 @@ func TestClassifyStatus(t *testing.T) {
 		{http.StatusMethodNotAllowed, ErrMethodNotAllowed},
 		{http.StatusConflict, ErrConflict},
 		{http.StatusGone, ErrGone},
+		{http.StatusPreconditionFailed, ErrPreconditionFailed},
 		{http.StatusTooManyRequests, ErrThrottled},
 		{http.StatusLocked, ErrLocked},
 		{http.StatusInternalServerError, ErrServerError},
