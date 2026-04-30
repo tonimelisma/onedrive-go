@@ -133,7 +133,7 @@ func (m *engineMockClient) GetItem(ctx context.Context, driveID driveid.ID, item
 		return m.getItemFn(ctx, driveID, itemID)
 	}
 
-	return nil, fmt.Errorf("GetItem not mocked")
+	return defaultMockGetItem(driveID, itemID), nil
 }
 
 func (m *engineMockClient) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error) {

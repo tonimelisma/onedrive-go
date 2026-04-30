@@ -1,8 +1,8 @@
 # Sync Execution
 
-GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/worker_result.go, internal/sync/action_freshness.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go
+GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_preconditions.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/worker_result.go, internal/sync/action_freshness.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go
 
-Implements: R-2.3.1 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
+Implements: R-2.3.1 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
 
 ## Overview
 
@@ -37,6 +37,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestConflictCopyPath_Normal` |
 | Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
 | Worker-start validation rejects already-submitted stale actions before executor side effects, while suspect local truth disables local-state-based rejection. Dependent uploads after planned remote moves tolerate move-produced eTag churn but still reject proven remote content drift, and executable actions without planner truth fail closed. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState`, `TestActionFreshness_PostRemoteMoveUploadAllowsMoveProducedETagChange`, `TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange`, `TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction` |
+| Executor live preconditions reject stale work at the side-effect boundary without mutating local or remote state. | `TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure`, `TestExecutor_RemoteMove_StaleSourcePreflightReturnsStalePrecondition`, `TestExecutor_CreateRemoteFolder_MissingParentPreflightReturnsStalePrecondition`, `TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition`, `TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition`, `TestExecutor_Download_MountRootAllowsGraphDriveRootPath`, `TestExecutor_LocalMove_SourceChangedReturnsStalePrecondition` |
 | Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork` |
 | Watch-mode replan keeps old-runtime work out of dispatch once it is no longer current and preserves dirty intent across recoverable local-observation failure. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal`, `TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal` |
 
@@ -103,6 +104,46 @@ remains retired and the dirty/full-refresh intent is rescheduled for a later
 steady-state replan. Idle replans that fail during local observation preserve
 the same dirty/full-refresh intent through that scheduler instead of dropping
 the trigger.
+
+## Executor Live Preconditions
+
+Worker-start and admission freshness checks keep stale work from reaching the
+executor when committed truth already proves the action obsolete. The executor
+still owns the final side-effect boundary, because local files and Graph items
+can change after dispatch and before the mutation or transfer actually begins.
+`executor_preconditions.go` is that boundary owner.
+
+For uploads, the executor validates that the local source path is still inside
+the sync root, still a regular file, and still matches planned identity,
+size/mtime, and hash facts when those facts are available. The transfer manager
+then reuses the executor-supplied callback before upload reads so a large file
+can abort if it changes mid-session. Expected source-hash mismatches are
+returned as `ErrActionPreconditionChanged`.
+
+For downloads, the executor validates the planned destination before transfer
+starts and supplies the same callback for the transfer manager to run
+immediately before the partial file is atomically renamed into place. If the
+plan expected absence and a local file appears, or the plan expected an
+overwrite and the existing file no longer matches, the download is superseded
+and the partial remains available for ordinary transfer recovery.
+
+For local deletes and moves, the executor rejects missing or changed planned
+sources instead of treating them as successful mutation. Local moves also reject
+an unexpectedly occupied destination before `Rename`.
+
+For remote deletes, moves, downloads, overwrite uploads, and remote folder/file
+creates, the executor performs a live `GetItem` preflight for the planned
+source item or parent. A live `itemNotFound` result, changed item identity,
+drive, item type, eTag, hash, size, or same-coordinate path where Graph supplies
+that fact is a stale precondition and maps to `ErrActionPreconditionChanged`.
+Mount-root engines do not use raw `GetItem` parent-reference paths as
+staleness proof because Graph reports those paths relative to the drive root
+while the executor's actions are relative to the mounted item. A transient `GetItem`
+failure is not superseded; it remains an ordinary read failure so retry policy
+can handle it normally. A dependent upload after a planned remote move keeps
+the same eTag exception used by worker-start freshness: move-produced eTag churn
+alone does not make the upload stale when item identity and content facts still
+match.
 
 When the dependency graph releases `ActionUpdateSynced` or `ActionCleanup`,
 the engine does not spend worker capacity on them. It commits the matching

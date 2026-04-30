@@ -441,8 +441,9 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 func TestWorkerPool_ResultChannel(t *testing.T) {
 	t.Parallel()
 
-	cfg, mgr, _ := newWorkerTestSetup(t)
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
 	ctx := t.Context()
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "result-test.txt"), []byte("delete me"), 0o600))
 
 	actions := []Action{
 		{
@@ -662,8 +663,9 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 func TestWorker_NeverCallsComplete(t *testing.T) {
 	t.Parallel()
 
-	cfg, mgr, _ := newWorkerTestSetup(t)
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
 	ctx := t.Context()
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "test-no-complete.txt"), []byte("delete me"), 0o600))
 
 	actions := []Action{
 		{
@@ -868,8 +870,9 @@ func TestExtractRetryAfter_Nil(t *testing.T) {
 func TestEngineOwnsCounters(t *testing.T) {
 	t.Parallel()
 
-	cfg, mgr, _ := newWorkerTestSetup(t)
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
 	ctx := t.Context()
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "ok.txt"), []byte("delete me"), 0o600))
 
 	// 2 actions: one succeeds, one fails.
 	cfg.SetDownloads(&workerMockDownloader{
