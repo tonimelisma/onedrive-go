@@ -29,6 +29,4 @@ type BaselineMutation struct {
 	LocalMtime            int64
 	RemoteMtime           int64
 	ETag                  string
-	ConflictType          string
-	ResolvedBy            string
 }

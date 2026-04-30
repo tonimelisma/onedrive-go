@@ -155,7 +155,6 @@ func logActionPlanSummary(logger *slog.Logger, message string, plan *ActionPlan)
 		slog.Int("uploads", counts[ActionUpload]),
 		slog.Int("local_deletes", counts[ActionLocalDelete]),
 		slog.Int("remote_deletes", counts[ActionRemoteDelete]),
-		slog.Int("conflicts", CountConflicts(plan.Actions)),
 		slog.Int("synced_updates", counts[ActionUpdateSynced]),
 		slog.Int("cleanups", counts[ActionCleanup]),
 		slog.Int("deferred_folder_creates", plan.DeferredByMode.FolderCreates),
@@ -266,17 +265,17 @@ func buildActionsForReconciliation(
 		return []Action{MakeAction(ActionUpdateSynced, view)}, nil
 	case "conflict_edit_edit":
 		return []Action{
-			makeConflictCopyAction(view, ConflictEditEdit),
-			makeConflictResolvedAction(ActionDownload, view, ConflictEditEdit),
+			makeConflictCopyAction(view),
+			makeDownloadAfterConflictCopyAction(view),
 		}, nil
 	case "conflict_edit_delete":
 		return []Action{
-			makeConflictResolvedAction(ActionUpload, view, ConflictEditDelete),
+			makeCreateUploadAction(view),
 		}, nil
 	case "conflict_create_create":
 		return []Action{
-			makeConflictCopyAction(view, ConflictCreateCreate),
-			makeConflictResolvedAction(ActionDownload, view, ConflictCreateCreate),
+			makeConflictCopyAction(view),
+			makeDownloadAfterConflictCopyAction(view),
 		}, nil
 	case strLocalMove:
 		return buildLocalMoveReconciliationActions(rec, cmp, view, views)

@@ -50,14 +50,14 @@ func (c *DeferredCounts) AddAction(action *Action) {
 
 // Action is an instruction for the executor, produced by the planner.
 type Action struct {
-	Type         ActionType
-	DriveID      driveid.ID
-	ItemID       string
-	Path         string           // canonical path (destination for moves)
-	OldPath      string           // source path (moves only)
-	CreateSide   FolderCreateSide // for folder creates
-	View         *PathView        // full three-way context
-	ConflictInfo *ConflictRecord
+	Type                      ActionType
+	DriveID                   driveid.ID
+	ItemID                    string
+	Path                      string           // canonical path (destination for moves)
+	OldPath                   string           // source path (moves only)
+	CreateSide                FolderCreateSide // for folder creates
+	View                      *PathView        // full three-way context
+	RequireMissingLocalTarget bool             // downloads after preserving a local conflict copy
 }
 
 // ThrottleTargetKey returns the narrowest remote boundary that can be blocked
@@ -110,6 +110,4 @@ type ActionOutcome struct {
 	LocalMtime            int64 // local mtime at sync time
 	RemoteMtime           int64 // remote mtime at sync time; zero means unknown
 	ETag                  string
-	ConflictType          string // ConflictEditDelete etc. (conflicts only)
-	ResolvedBy            string // ResolvedByAuto for auto-resolved conflicts, "" otherwise
 }

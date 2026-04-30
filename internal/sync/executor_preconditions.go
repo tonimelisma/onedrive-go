@@ -330,7 +330,7 @@ func (e *Executor) validateDownloadTargetPrecondition(action *Action) error {
 }
 
 func actionClearsLocalBeforeDownload(action *Action) bool {
-	return action != nil && action.Type == ActionDownload && action.ConflictInfo != nil
+	return action != nil && action.Type == ActionDownload && action.RequireMissingLocalTarget
 }
 
 func plannedLocalState(action *Action) *LocalState {

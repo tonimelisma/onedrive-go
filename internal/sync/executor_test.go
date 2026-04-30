@@ -1755,7 +1755,7 @@ func TestExecutor_LocalDelete_HashMismatch_DoesNotCreateConflictCopy(t *testing.
 	assert.Equal(t, "existing conflict", string(existingData))
 
 	_, statErr := os.Stat(filepath.Join(syncRoot, "exec-modified.conflict-20260115-120000-2.txt"))
-	assert.True(t, os.IsNotExist(statErr), "auto-resolve should not create a suffixed conflict copy")
+	assert.True(t, os.IsNotExist(statErr), "stale local delete should not create a suffixed conflict copy")
 	assert.False(t, uploadCalled, "executor should not invent upload intent for stale local delete")
 }
 
@@ -2076,18 +2076,16 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 				ETag:   "etag1",
 			},
 		},
-		ConflictInfo: &ConflictRecord{ConflictType: ConflictEditEdit},
 	}
 
 	copyOutcome := e.ExecuteConflictCopy(t.Context(), copyAction)
 	requireOutcomeSuccess(t, &copyOutcome)
-	assert.Equal(t, "edit_edit", copyOutcome.ConflictType)
 
 	downloadAction := *copyAction
 	downloadAction.Type = ActionDownload
+	downloadAction.RequireMissingLocalTarget = true
 	o := e.ExecuteDownload(t.Context(), &downloadAction)
 	requireOutcomeSuccess(t, &o)
-	assert.Equal(t, "edit_edit", o.ConflictType)
 
 	// Original path should have remote content.
 	data, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-conflict.txt"))
@@ -2138,7 +2136,6 @@ func TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStaleP
 			Local:  &LocalState{ItemType: ItemTypeFile},
 			Remote: &RemoteState{ItemID: "item1"},
 		},
-		ConflictInfo: &ConflictRecord{ConflictType: ConflictEditEdit},
 	}
 
 	copyOutcome := e.ExecuteConflictCopy(t.Context(), copyAction)
@@ -2148,6 +2145,7 @@ func TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStaleP
 
 	downloadAction := *copyAction
 	downloadAction.Type = ActionDownload
+	downloadAction.RequireMissingLocalTarget = true
 	o := e.ExecuteDownload(t.Context(), &downloadAction)
 	requireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
@@ -2187,7 +2185,6 @@ func TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix(t *
 				ETag:   "etag1",
 			},
 		},
-		ConflictInfo: &ConflictRecord{ConflictType: "edit_edit"},
 	}
 
 	copyOutcome := e.ExecuteConflictCopy(t.Context(), copyAction)
@@ -2195,6 +2192,7 @@ func TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix(t *
 
 	downloadAction := *copyAction
 	downloadAction.Type = ActionDownload
+	downloadAction.RequireMissingLocalTarget = true
 	o := e.ExecuteDownload(t.Context(), &downloadAction)
 	requireOutcomeSuccess(t, &o)
 
@@ -2211,7 +2209,7 @@ func TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix(t *
 	assert.Equal(t, "local version", string(suffixedData))
 }
 
-func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
+func TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal(t *testing.T) {
 	t.Parallel()
 
 	var uploadCalled bool
@@ -2249,7 +2247,6 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 	action := &Action{
 		Type:    ActionUpload,
 		Path:    "folder/exec-ed-file.txt",
-		ItemID:  "deleted-item",
 		DriveID: driveid.New(synctest.TestDriveID),
 		View: &PathView{
 			Path: "folder/exec-ed-file.txt",
@@ -2267,20 +2264,14 @@ func TestExecutor_Conflict_EditDelete_AutoResolve(t *testing.T) {
 				ItemType: ItemTypeFile,
 			},
 		},
-		ConflictInfo: &ConflictRecord{
-			ConflictType: "edit_delete",
-			DriveID:      driveid.New(synctest.TestDriveID),
-		},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 
-	assert.True(t, uploadCalled, "expected upload to be called for edit-delete auto-resolve")
-	assert.False(t, uploadToItemCalled, "edit-delete auto-resolve should not overwrite a deleted item ID")
+	assert.True(t, uploadCalled, "expected edit-delete handling to recreate the remote file")
+	assert.False(t, uploadToItemCalled, "edit-delete handling should not overwrite a deleted item ID")
 	assert.Equal(t, ActionUpload, o.Action)
-	assert.Equal(t, "edit_delete", o.ConflictType)
-	assert.Equal(t, "auto", o.ResolvedBy)
 	assert.Equal(t, "new-item", o.ItemID)
 
 	// Local file should still exist with original content (not modified by upload).
@@ -2495,7 +2486,6 @@ func TestExecutor_ConflictDownloadFails_LeavesConflictCopy(t *testing.T) {
 			Local:  &LocalState{ItemType: ItemTypeFile},
 			Remote: &RemoteState{ItemID: "item1"},
 		},
-		ConflictInfo: &ConflictRecord{ConflictType: ConflictEditEdit},
 	}
 
 	copyOutcome := e.ExecuteConflictCopy(t.Context(), copyAction)
@@ -2503,6 +2493,7 @@ func TestExecutor_ConflictDownloadFails_LeavesConflictCopy(t *testing.T) {
 
 	downloadAction := *copyAction
 	downloadAction.Type = ActionDownload
+	downloadAction.RequireMissingLocalTarget = true
 	o := e.ExecuteDownload(t.Context(), &downloadAction)
 	requireOutcomeFailure(t, &o)
 

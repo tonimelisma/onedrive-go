@@ -34,8 +34,8 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 
 | Behavior | Evidence |
 | --- | --- |
-| Edit/edit and create/create conflicts are resolved immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestExecutor_ConflictDownloadFails_LeavesConflictCopy`, `TestConflictCopyPath_Normal` |
-| Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_AutoResolve`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
+| Edit/edit and create/create conflicts are handled immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestExecutor_ConflictDownloadFails_LeavesConflictCopy`, `TestConflictCopyPath_Normal` |
+| Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
 | Worker-start validation rejects already-submitted stale actions before executor side effects, while suspect local truth disables local-state-based rejection. Dependent uploads after planned remote moves tolerate move-produced eTag churn but still reject proven remote content drift, and executable actions without planner truth fail closed. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState`, `TestActionFreshness_PostRemoteMoveUploadAllowsMoveProducedETagChange`, `TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange`, `TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction` |
 | Executor live preconditions reject stale work at the side-effect boundary without mutating local or remote state. | `TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure`, `TestExecutor_RemoteDelete_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_RemoteMove_StaleSourcePreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_CreateRemoteFolder_MissingParentPreflightReturnsStalePrecondition`, `TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition`, `TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition`, `TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStalePrecondition`, `TestExecutor_Download_MountRootAllowsGraphDriveRootPath`, `TestExecutor_LocalMove_SourceChangedReturnsStalePrecondition`, `TestExecutor_LocalMove_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition` |
 | Workers preserve executor failure capability on completions and record worker-start/live-precondition superseded counters by local-vs-remote source. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_RemoteDownloadMismatchRecordsRemoteTruthCounter`, `TestWorkerPool_SendResultCountsLivePreconditionSupersededByCapability`, `TestWorkerPool_SendResultDoesNotGuessLivePreconditionSourceWithoutCapability` |
@@ -263,9 +263,9 @@ remove directories blocked by non-disposable children.
 ## Conflict Execution
 
 The snapshot-based runtime does not execute abstract conflict rows. Conflict
-handling is expanded before execution into concrete work such as
-`ActionConflictCopy`, `ActionDownload`, and conflict-tagged `ActionUpload`.
-There is no durable conflict-request mailbox.
+handling is expanded before execution into concrete work: `ActionConflictCopy`
+plus a dependent `ActionDownload` for keep-both cases, or `ActionUpload` for
+edit/delete. There is no durable conflict-request mailbox.
 
 ### Edit/edit and create/create
 
@@ -274,11 +274,10 @@ The executor preserves both versions:
 1. execute `ActionConflictCopy` to rename the local canonical file to `<stem>.conflict-<timestamp><ext>`
 2. execute the dependent `ActionDownload` back to the canonical path
 
-The dependent download still carries the planner's original local state for
-reporting and ordering, but its executor-side local precondition treats the
-post-copy missing canonical path as the expected state. If the canonical path
-reappears before the dependent download runs or before its final atomic rename,
-that is a stale local-write precondition and the executor returns
+The dependent download carries `RequireMissingLocalTarget`, so executor-side
+local preconditions treat the post-copy missing canonical path as the expected
+state. If the canonical path reappears before the dependent download runs or
+before its final atomic rename, that is a stale local-write precondition and the executor returns
 `ErrActionPreconditionChanged` instead of overwriting the newly appeared file.
 
 If the download fails, the preserved local conflict copy remains on disk and
@@ -287,8 +286,9 @@ an abstract conflict action to roll the pair back.
 
 ### Edit/delete
 
-The planner expands `ConflictEditDelete` into a concrete `ActionUpload`. The
-executor then performs that upload as ordinary concrete work:
+The planner expands local-edit vs remote-delete into a concrete `ActionUpload`
+with no stale item ID. The executor then performs that upload as ordinary
+create-by-parent work:
 
 1. keep the local file in place
 2. upload it to recreate the remote item

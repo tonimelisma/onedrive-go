@@ -4,7 +4,7 @@ Download and upload transfer infrastructure shared by file operations and sync.
 
 ## R-5.1 Parallel Transfers [verified]
 
-- R-5.1.1: The system shall use a flat pool of `transfer_workers` goroutines (default 8, range 4–64) for concurrent file operations (downloads, uploads, deletes, moves, conflict resolution). [verified]
+- R-5.1.1: The system shall use a flat pool of `transfer_workers` goroutines (default 8, range 4–64) for concurrent file operations (downloads, uploads, deletes, moves, and conflict-preservation work). [verified]
 - R-5.1.2: The system shall use a separate pool of `check_workers` goroutines (default 4, range 1–16) for parallel local QuickXorHash computation during filesystem scanning. [verified]
 
 ## R-5.2 Resumable Transfers [verified]

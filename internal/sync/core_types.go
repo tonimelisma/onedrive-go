@@ -412,24 +412,6 @@ type PathView struct {
 	TruthStatus PathTruthStatus
 }
 
-// ConflictRecord holds metadata about a detected conflict.
-type ConflictRecord struct {
-	ID           string
-	DriveID      driveid.ID
-	ItemID       string
-	Path         string
-	Name         string // derived: path.Base(Path), for display convenience (B-071)
-	ConflictType string // ConflictEditEdit, ConflictEditDelete, ConflictCreateCreate
-	DetectedAt   int64
-	LocalHash    string
-	RemoteHash   string
-	LocalMtime   int64
-	RemoteMtime  int64
-	Resolution   string // final outcome for internal bookkeeping
-	ResolvedAt   int64  // 0 if unresolved
-	ResolvedBy   string // ResolvedByAuto or "" if unresolved
-}
-
 // VerifyResult describes the verification status of a single file.
 type VerifyResult struct {
 	Path     string `json:"path"`

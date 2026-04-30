@@ -18,8 +18,7 @@ import (
 const maxHashRetries = 2
 
 // ExecuteDownload downloads a remote file via TransferManager with .partial
-// safety, hash verification with retry, and atomic rename. Exported for use
-// by the engine's conflict resolution path.
+// safety, hash verification with retry, and atomic rename.
 func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOutcome {
 	targetPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
@@ -80,7 +79,6 @@ func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOu
 	}
 
 	outcome := e.downloadOutcome(action, driveID, result.LocalHash, result.EffectiveRemoteHash, result.Size)
-	decorateConflictOutcome(action, &outcome)
 	return outcome
 }
 
@@ -118,8 +116,7 @@ func (e *Executor) downloadOutcome(
 	return o
 }
 
-// ExecuteUpload uploads a local file to OneDrive via TransferManager. Exported
-// for use by the engine's conflict resolution path.
+// ExecuteUpload uploads a local file to OneDrive via TransferManager.
 //
 // A pre-upload freshness check prevents silently overwriting concurrent remote
 // changes. When current remote truth no longer matches the planned overwrite,
@@ -213,7 +210,6 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 	e.confirmRemotePathVisible(ctx, action)
 
 	outcome := e.uploadOutcome(action, driveID, parentID, result)
-	decorateConflictOutcome(action, &outcome)
 	return outcome
 }
 
@@ -298,10 +294,6 @@ func (e *Executor) validateRemoteUploadPrecondition(ctx context.Context, driveID
 
 func shouldOverwriteKnownRemoteItem(action *Action) bool {
 	if action == nil || action.ItemID == "" {
-		return false
-	}
-
-	if action.ConflictInfo != nil && action.ConflictInfo.ConflictType == ConflictEditDelete {
 		return false
 	}
 

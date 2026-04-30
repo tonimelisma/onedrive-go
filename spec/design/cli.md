@@ -142,7 +142,7 @@ The target `status` surface projects the full sync model directly from:
 - optional live perf
 
 There is no second sync-health command. There is no separate history-only
-surface for resolved conflicts, and `status` no longer exposes delete-safety or
+surface for handled conflicts, and `status` no longer exposes delete-safety or
 manual conflict-request sections. It also no longer persists or renders a
 store-owned "last sync / duration / last error" history block.
 
@@ -253,7 +253,7 @@ into suggested `pause` or `drive reset-sync-state` commands.
 
 The CLI no longer owns:
 
-- durable conflict-resolution requests
+- durable conflict requests
 - blocked-delete approvals
 - fallback direct DB writes for sync decisions
 - `resolve` subcommands

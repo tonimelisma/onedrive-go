@@ -198,7 +198,6 @@ func (r *oneShotRunner) dispatchInitialReadyActions(
 // deferred work observed by the planner.
 func buildReportFromCounts(
 	counts map[ActionType]int,
-	conflicts int,
 	deferred DeferredCounts,
 	mode SyncMode,
 	opts RunOptions,
@@ -212,7 +211,6 @@ func buildReportFromCounts(
 		Uploads:        counts[ActionUpload],
 		LocalDeletes:   counts[ActionLocalDelete],
 		RemoteDeletes:  counts[ActionRemoteDelete],
-		Conflicts:      conflicts,
 		SyncedUpdates:  counts[ActionUpdateSynced],
 		Cleanups:       counts[ActionCleanup],
 		DeferredByMode: deferred,
