@@ -91,7 +91,10 @@ their failure capability through `ActionCompletion`, so the worker boundary can
 record local-vs-remote live-precondition superseded counters without parsing
 logs or paths. The worker metric boundary does not infer live-precondition
 source from action type; ambiguous outcomes must be fixed at the executor
-boundary instead of guessed during result reporting.
+boundary instead of guessed during result reporting. Delete-side stale
+preconditions follow that same rule: local delete missing/hash-mismatch races
+carry local-write capability, and remote delete not-found-after-preflight races
+carry remote-write capability.
 
 The dependency graph is dependency-only. It no longer defines runtime
 quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,
