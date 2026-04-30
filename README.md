@@ -43,11 +43,45 @@ New contributors should start with the
 [new developer onboarding guide](spec/reference/developer-onboarding.md) for a
 repo-wide architecture tour and reading order.
 
+Work is done in PR-backed increments from isolated worktrees. Fetch first, then
+start from current `origin/main`:
+
+```bash
+git fetch origin
+go run ./cmd/devtool worktree add --path <path> --branch <branch>
+```
+
 The canonical local verification entrypoint is:
 
 ```bash
 go run ./cmd/devtool verify default
 ```
+
+The Definition of Done is automated through staged verifier runs:
+
+```bash
+go run ./cmd/devtool verify --dod --stage start
+go run ./cmd/devtool verify --dod --stage pre-pr
+go run ./cmd/devtool verify --dod --stage pre-merge --pr <number>
+go run ./cmd/devtool verify --dod --stage post-merge --pr <number> --worktree <path> --branch <branch>
+```
+
+`start` audits unresolved review threads from recent merged PRs and writes the
+ignored `.dod-pr-comments.json` manifest. Agents must manually classify every
+unresolved thread as `fixed`, `already_fixed`, or `non_actionable` before the
+DoD can pass. `fixed` and `already_fixed` require `what_changed`, `how_fixed`,
+and evidence entries; `non_actionable` requires a reason. There is no passing
+deferred state.
+
+`pre-pr` runs the local verification profile, checks the branch is based on
+latest `origin/main`, and rejects undecided PR-comment carryover. `pre-merge`
+waits for PR CI (`verify`, `integration`, and `e2e`; PR `stress` may be
+skipped), posts the manifest's templated replies, resolves handled review
+threads, and requires zero unresolved review threads. `post-merge` performs the
+squash merge, handles already-completed multi-worktree merge/cleanup cases,
+fast-forwards root `main`, removes the increment worktree and branch, validates
+the configured post-merge CI-skip rule when applicable, and runs
+`cleanup-audit`.
 
 Direct package-level commands are still useful during short loops:
 
@@ -56,10 +90,6 @@ go build ./...                    # Build
 go test -race ./...               # Test with race detector
 golangci-lint run                 # Lint
 ```
-
-Use `git fetch origin` before
-`go run ./cmd/devtool worktree add --path <path> --branch <branch>` so the new
-worktree starts from the current `origin/main`.
 
 See [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), and the
 [system architecture doc](spec/design/system.md) for repo workflow and
