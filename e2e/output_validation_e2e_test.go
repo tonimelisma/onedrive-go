@@ -28,10 +28,9 @@ func TestE2E_Status_JSONShape(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeIsolatedSharedRootSyncConfig(t, syncDir)
 
 	testFolder := fmt.Sprintf("e2e-out-statusjson-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Create a file and sync so the per-drive status read model has baseline data.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -41,9 +40,9 @@ func TestE2E_Status_JSONShape(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	status := readStatus(t, cfgPath, env)
-	assert.Equal(t, 1, status.Summary.TotalMounts)
+	assert.Equal(t, countStatusMounts(status), status.Summary.TotalMounts)
 
-	mountStatus := requireStatusMount(t, status, drive)
+	mountStatus := requireStatusMount(t, status, resolveDriveSelection(env, ""))
 	require.NotNil(t, mountStatus.SyncState)
 	assert.Equal(t, 5, mountStatus.SyncState.ExamplesLimit)
 	assert.False(t, mountStatus.SyncState.Verbose)
@@ -104,10 +103,9 @@ func TestE2E_Sync_QuietMode(t *testing.T) {
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
+	cfgPath, env := writeIsolatedSharedRootSyncConfig(t, syncDir)
 
 	testFolder := fmt.Sprintf("e2e-out-quiet-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Create a file.
 	localDir := filepath.Join(syncDir, testFolder)

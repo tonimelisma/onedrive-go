@@ -699,6 +699,9 @@ Runtime policy:
   to confirm what the API exposed
 - if live search itself fails for an authenticated account, callers surface a
   degraded discovery notice instead of silently omitting the account
+- live tests that validate name-based shared-folder `drive add` must treat the
+  documented no-match shared-discovery error as the same best-effort visibility
+  window after first proving the fixture exists by stable remote drive/item ID
 
 This is a documented platform-limit explanation, not evidence that all
 cross-org shares are categorically invisible.
@@ -835,8 +838,10 @@ Even with that header, live root listings can transiently omit a known manual
 shortcut while shared discovery and direct target traversal still work. The
 reverse has also appeared: shortcut placeholders and direct traversal can be
 healthy while shared search/list output is temporarily empty for the target.
-Live fixture checks therefore use a shortcut-specific propagation budget before
-declaring the manual shortcut fixture broken.
+Live fixture checks therefore use a shortcut-specific propagation budget. When
+the shared target remains reachable but the parent root placeholder is still
+omitted after that budget, shortcut E2Es skip because the product behavior
+under test cannot start without the provider-supplied placeholder.
 
 Observed fixture repair on April 25, 2026: deleting a personal-account shortcut
 placeholder by item ID removed only the placeholder. Microsoft documents
