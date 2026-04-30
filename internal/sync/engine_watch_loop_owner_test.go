@@ -97,6 +97,29 @@ func TestWatchRuntime_RunNonDrainingWatchStep_ContextCancelStartsDrain(t *testin
 	assert.True(t, rt.isDraining())
 }
 
+// Validates: R-2.8.3, R-6.10.10
+func TestWatchRuntime_RunNonDrainingWatchStep_CanceledClosedReplanStartsDrain(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	replanReady := make(chan dirtyBatch)
+	close(replanReady)
+
+	done, err := rt.runNonDrainingWatchStep(ctx, &watchPipeline{
+		runtime:     rt,
+		replanReady: replanReady,
+	}, nil)
+
+	require.NoError(t, err)
+	assert.False(t, done)
+	assert.True(t, rt.isDraining())
+}
+
 func TestWatchRuntime_RunNonDrainingWatchStep_ConsumesReplanReady(t *testing.T) {
 	t.Parallel()
 

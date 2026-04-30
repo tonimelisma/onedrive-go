@@ -73,9 +73,16 @@ func (rt *watchRuntime) runWatchLoopStep(
 }
 
 func (rt *watchRuntime) beginWatchDrainIfCanceled(ctx context.Context, p *watchPipeline) {
+	_ = rt.beginWatchDrainIfContextCanceled(ctx, p)
+}
+
+func (rt *watchRuntime) beginWatchDrainIfContextCanceled(ctx context.Context, p *watchPipeline) bool {
 	if ctx.Err() != nil && !rt.isDraining() {
 		rt.beginWatchDrain(ctx, p)
+		return true
 	}
+
+	return ctx.Err() != nil
 }
 
 func (rt *watchRuntime) runBootstrapLoopStep(
@@ -139,8 +146,15 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 	p *watchPipeline,
 	logC <-chan time.Time,
 ) (bool, error) {
+	if rt.beginWatchDrainIfContextCanceled(ctx, p) {
+		return false, nil
+	}
+
 	select {
 	case batch, ok := <-p.replanReady:
+		if rt.beginWatchDrainIfContextCanceled(ctx, p) {
+			return false, nil
+		}
 		return rt.handleWatchReplanSignal(ctx, p, batch, ok)
 	default:
 	}
@@ -152,6 +166,9 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 		rt.handleWatchDispatch(nextAction)
 		return false, nil
 	case batch, ok := <-p.replanReady:
+		if rt.beginWatchDrainIfContextCanceled(ctx, p) {
+			return false, nil
+		}
 		return rt.handleWatchReplanSignal(ctx, p, batch, ok)
 	case completion, ok := <-p.completions:
 		return rt.handleWatchCompletionSignal(ctx, p, &completion, ok)
