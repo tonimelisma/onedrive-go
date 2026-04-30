@@ -104,7 +104,9 @@ scoped local observations use store-owned exact helpers instead of an event
 journal: exact path reads, upsert rows, exact path deletes, prefix deletes, and
 atomic mixed patches for one engine-applied batch. Prefix deletes match the
 directory path itself plus descendants below `path/`; SQL wildcard characters in
-path bytes are escaped and never broaden the delete.
+path bytes are escaped and never broaden the delete, and SQLite prefix matching
+uses TEXT character length so non-ASCII directory names delete the same rows the
+sync path model names.
 
 `observation_state.local_truth_complete` records whether `local_state` is a
 complete local mirror. Full local snapshot replacement marks it complete and

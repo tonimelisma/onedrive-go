@@ -39,6 +39,18 @@ const (
 	actionFreshnessSourceRemoteTruth
 )
 
+type shutdownFreshnessBypassKey struct{}
+
+func contextWithShutdownFreshnessBypass(ctx context.Context) context.Context {
+	return context.WithValue(ctx, shutdownFreshnessBypassKey{}, true)
+}
+
+func shutdownFreshnessBypass(ctx context.Context) bool {
+	value := ctx.Value(shutdownFreshnessBypassKey{})
+	enabled, ok := value.(bool)
+	return ok && enabled
+}
+
 func evaluateActionFreshnessFromStore(
 	ctx context.Context,
 	store *SyncStore,
@@ -47,8 +59,12 @@ func evaluateActionFreshnessFromStore(
 	select {
 	case <-ctx.Done():
 		// Shutdown completion owns collapsing newly-ready frontier after
-		// cancellation; freshness validation must not reopen store I/O there.
-		return freshAction(), nil
+		// cancellation. That collapse does not dispatch side effects; ordinary
+		// worker/admission validation must still fail closed on cancellation.
+		if shutdownFreshnessBypass(ctx) {
+			return freshAction(), nil
+		}
+		return actionFreshnessDecision{}, fmt.Errorf("sync: validating action freshness after cancellation: %w", ctx.Err())
 	default:
 	}
 	if store == nil || action == nil || actionSkipsFreshnessValidation(action) {

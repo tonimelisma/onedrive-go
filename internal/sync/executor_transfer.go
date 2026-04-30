@@ -182,6 +182,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 		if err != nil {
 			return e.failedOutcomeWithFailure(action, ActionUpload, err, action.Path, PermissionCapabilityUnknown)
 		}
+		waitErr := e.waitRemoteParentVisible(ctx, action)
 		parentPreconditionErr := e.validateRemoteParentPrecondition(ctx, driveID, parentID, action, "upload create")
 		if parentPreconditionErr != nil {
 			return e.failedOutcomeWithFailure(
@@ -192,7 +193,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 				PermissionCapabilityRemoteRead,
 			)
 		}
-		if waitErr := e.waitRemoteParentVisible(ctx, action); waitErr != nil {
+		if waitErr != nil {
 			return e.failedOutcomeWithFailure(action, ActionUpload, waitErr, action.Path, PermissionCapabilityUnknown)
 		}
 
