@@ -288,16 +288,44 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 
 	assert.Equal(t, ActionConflictCopy, plan.Actions[0].Type)
 	assert.Equal(t, "conflict.txt", plan.Actions[0].Path)
-	require.NotNil(t, plan.Actions[0].ConflictInfo)
-	assert.Equal(t, ConflictEditEdit, plan.Actions[0].ConflictInfo.ConflictType)
+	assert.False(t, plan.Actions[0].RequireMissingLocalTarget)
 
 	assert.Equal(t, ActionDownload, plan.Actions[1].Type)
 	assert.Equal(t, "conflict.txt", plan.Actions[1].Path)
-	require.NotNil(t, plan.Actions[1].ConflictInfo)
-	assert.Equal(t, ConflictEditEdit, plan.Actions[1].ConflictInfo.ConflictType)
+	assert.True(t, plan.Actions[1].RequireMissingLocalTarget)
 
 	require.Len(t, plan.Deps, 2)
 	assert.Equal(t, []int{0}, plan.Deps[1], "download should wait for the conflict copy")
+}
+
+// Validates: R-2.3.6
+func TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES ('deleted-item', 'edit-delete.txt', 'file', 'old-hash', 'old-hash', 1, 1, 1, 1, 'etag-old')`)
+	require.NoError(t, err)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
+		Path:     "edit-delete.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "local-new",
+		Size:     2,
+		Mtime:    2,
+	}}))
+
+	plan := planCurrentStateForStore(t, store)
+	require.Len(t, plan.Actions, 1)
+
+	action := plan.Actions[0]
+	assert.Equal(t, ActionUpload, action.Type)
+	assert.Equal(t, "edit-delete.txt", action.Path)
+	assert.Empty(t, action.ItemID)
+	assert.False(t, action.DriveID.IsZero())
 }
 
 // Validates: R-2.1.1, R-2.1.3

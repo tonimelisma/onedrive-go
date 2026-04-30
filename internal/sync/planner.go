@@ -65,7 +65,7 @@ func actionAllowedInMode(action *Action, mode SyncMode) bool {
 		}
 		return true
 	case ActionConflictCopy:
-		// Conflict-copy is only safe when the paired remote-resolution download
+		// Conflict-copy is only safe when the paired remote-winner download
 		// can also run. In upload-only mode that download is deferred, so keeping
 		// the rename would mutate local truth into a fake delete/create sequence.
 		return mode != SyncUploadOnly
@@ -149,13 +149,13 @@ func classifyFileLocalPresent(
 			return []Action{MakeAction(ActionUpdateSynced, view)} // EF4: convergent edit
 		}
 		return []Action{
-			makeConflictCopyAction(view, ConflictEditEdit),
-			makeConflictResolvedAction(ActionDownload, view, ConflictEditEdit),
+			makeConflictCopyAction(view),
+			makeDownloadAfterConflictCopyAction(view),
 		} // EF5
 	case !localChanged && remoteDeleted:
 		return []Action{MakeAction(ActionLocalDelete, view)} // EF8
 	case localChanged && remoteDeleted:
-		return []Action{makeConflictResolvedAction(ActionUpload, view, ConflictEditDelete)} // EF9
+		return []Action{makeCreateUploadAction(view)} // EF9
 	}
 
 	return nil
@@ -173,8 +173,8 @@ func classifyFileNoBaseline(view *PathView) []Action {
 			return []Action{MakeAction(ActionUpdateSynced, view)} // EF11: convergent create
 		}
 		return []Action{
-			makeConflictCopyAction(view, ConflictCreateCreate),
-			makeConflictResolvedAction(ActionDownload, view, ConflictCreateCreate),
+			makeConflictCopyAction(view),
+			makeDownloadAfterConflictCopyAction(view),
 		} // EF12
 
 	case hasLocal && !hasRemote:
@@ -486,39 +486,19 @@ func bindMountContext(actions []Action, mount plannerMountContext) {
 	}
 }
 
-func makeConflictRecord(view *PathView, driveID driveid.ID, conflictType string) *ConflictRecord {
-	record := &ConflictRecord{
-		Path:         view.Path,
-		ConflictType: conflictType,
-	}
-
-	if view.Local != nil {
-		record.LocalHash = view.Local.Hash
-		record.LocalMtime = view.Local.Mtime
-	}
-
-	if view.Remote != nil {
-		record.RemoteHash = view.Remote.Hash
-		record.RemoteMtime = view.Remote.Mtime
-		record.ItemID = view.Remote.ItemID
-	}
-
-	record.DriveID = driveID
-
-	return record
+func makeConflictCopyAction(view *PathView) Action {
+	return MakeAction(ActionConflictCopy, view)
 }
 
-func makeConflictCopyAction(view *PathView, conflictType string) Action {
-	action := MakeAction(ActionConflictCopy, view)
-	action.ConflictInfo = makeConflictRecord(view, action.DriveID, conflictType)
-
+func makeDownloadAfterConflictCopyAction(view *PathView) Action {
+	action := MakeAction(ActionDownload, view)
+	action.RequireMissingLocalTarget = true
 	return action
 }
 
-func makeConflictResolvedAction(actionType ActionType, view *PathView, conflictType string) Action {
-	action := MakeAction(actionType, view)
-	action.ConflictInfo = makeConflictRecord(view, action.DriveID, conflictType)
-
+func makeCreateUploadAction(view *PathView) Action {
+	action := MakeAction(ActionUpload, view)
+	action.ItemID = ""
 	return action
 }
 
@@ -921,28 +901,6 @@ func CountByType(actions []Action) map[ActionType]int {
 	}
 
 	return counts
-}
-
-func CountConflicts(actions []Action) int {
-	if len(actions) == 0 {
-		return 0
-	}
-
-	seen := make(map[string]struct{})
-	total := 0
-	for i := range actions {
-		if actions[i].ConflictInfo == nil {
-			continue
-		}
-		key := actions[i].Path + "\x00" + actions[i].ConflictInfo.ConflictType
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		total++
-	}
-
-	return total
 }
 
 // detectDependencyCycle performs a DFS to check for cycles in the dependency

@@ -77,7 +77,6 @@ type (
 		Uploads        int
 		LocalDeletes   int
 		RemoteDeletes  int
-		Conflicts      int
 		SyncedUpdates  int
 		Cleanups       int
 		DeferredByMode DeferredCounts

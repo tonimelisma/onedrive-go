@@ -53,7 +53,6 @@ func (e *Executor) ExecuteConflictCopy(_ context.Context, action *Action) Action
 				OldPath:  action.Path,
 				ParentID: e.resolvedParentIDForOutcome(action, nil),
 			}
-			decorateConflictOutcome(action, &outcome)
 			return outcome
 		}
 
@@ -79,19 +78,7 @@ func (e *Executor) ExecuteConflictCopy(_ context.Context, action *Action) Action
 		DriveID: e.resolveDriveID(action),
 		ItemID:  action.ItemID,
 	}
-	decorateConflictOutcome(action, &outcome)
 	return outcome
-}
-
-func decorateConflictOutcome(action *Action, outcome *ActionOutcome) {
-	if action == nil || action.ConflictInfo == nil || outcome == nil {
-		return
-	}
-
-	outcome.ConflictType = action.ConflictInfo.ConflictType
-	if action.ConflictInfo.ConflictType == ConflictEditDelete && outcome.Action == ActionUpload {
-		outcome.ResolvedBy = ResolvedByAuto
-	}
 }
 
 // uniqueConflictCopyPath returns the first available conflict-copy path for an

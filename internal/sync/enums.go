@@ -42,18 +42,6 @@ const (
 	DirectionDelete   Direction = strDelete
 )
 
-// Conflict type constants.
-const (
-	ConflictEditEdit     = "edit_edit"
-	ConflictEditDelete   = "edit_delete"
-	ConflictCreateCreate = "create_create"
-)
-
-// ResolvedBy constants for conflict resolution attribution.
-const (
-	ResolvedByAuto = "auto"
-)
-
 // ChangeSource identifies the origin of a change event.
 type ChangeSource int
 
