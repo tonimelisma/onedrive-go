@@ -699,9 +699,11 @@ Runtime policy:
   to confirm what the API exposed
 - if live search itself fails for an authenticated account, callers surface a
   degraded discovery notice instead of silently omitting the account
-- live tests that validate name-based shared-folder `drive add` must treat the
-  documented no-match shared-discovery error as the same best-effort visibility
-  window after first proving the fixture exists by stable remote drive/item ID
+- live tests that validate name-based shared-folder `drive add` may only skip
+  a documented no-match result when an independent `shared --json --account`
+  read also omits the known fixture or Graph returns a retryable gateway error;
+  a no-match while the fixture is independently visible is a product/test
+  failure, not a provider omission
 
 This is a documented platform-limit explanation, not evidence that all
 cross-org shares are categorically invisible.

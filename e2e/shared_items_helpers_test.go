@@ -107,6 +107,77 @@ func TestIsSharedFolderNameDiscoveryOmission(t *testing.T) {
 	assert.False(t, isSharedFolderNameDiscoveryOmission(`no shared folders matching "Project" found`))
 }
 
+func sharedFolderFixtureVisibleInListing(listing sharedListE2EOutput, fixture resolvedSharedFolderFixture) bool {
+	for i := range listing.Items {
+		item := listing.Items[i]
+		if item.Type != "folder" {
+			continue
+		}
+		if item.Name != fixture.FolderItem.Name {
+			continue
+		}
+		if item.RemoteDriveID != fixture.FolderItem.RemoteDriveID {
+			continue
+		}
+		if item.RemoteItemID != fixture.FolderItem.RemoteItemID {
+			continue
+		}
+
+		return true
+	}
+
+	return false
+}
+
+func TestSharedFolderFixtureVisibleInListingRequiresNameAndRemoteIdentity(t *testing.T) {
+	t.Parallel()
+
+	fixture := resolvedSharedFolderFixture{
+		FolderItem: sharedItemE2E{
+			Name:          "Project",
+			RemoteDriveID: "drive",
+			RemoteItemID:  "item",
+		},
+	}
+
+	assert.True(t, sharedFolderFixtureVisibleInListing(sharedListE2EOutput{
+		Items: []sharedItemE2E{{
+			Type:          "folder",
+			Name:          "Project",
+			RemoteDriveID: "drive",
+			RemoteItemID:  "item",
+		}},
+	}, fixture))
+	assert.False(t, sharedFolderFixtureVisibleInListing(sharedListE2EOutput{
+		Items: []sharedItemE2E{{
+			Type:          "folder",
+			Name:          "Other",
+			RemoteDriveID: "drive",
+			RemoteItemID:  "item",
+		}},
+	}, fixture))
+	assert.False(t, sharedFolderFixtureVisibleInListing(sharedListE2EOutput{
+		Items: []sharedItemE2E{{
+			Type:          "folder",
+			Name:          "Project",
+			RemoteDriveID: "other-drive",
+			RemoteItemID:  "item",
+		}},
+	}, fixture))
+}
+
+func TestSharedFolderNameProviderOmittedFixtureRequiresIndependentProviderSignal(t *testing.T) {
+	t.Parallel()
+
+	noMatch := `no shared folders matching "Project" found — Graph shared discovery also checks external shares`
+
+	assert.True(t, sharedFolderNameProviderOmittedFixture(noMatch, false, nil, ""))
+	assert.True(t, sharedFolderNameProviderOmittedFixture(noMatch, false, fmt.Errorf("shared failed"), "graph: HTTP 503 Service Unavailable"))
+	assert.False(t, sharedFolderNameProviderOmittedFixture(noMatch, true, nil, ""))
+	assert.False(t, sharedFolderNameProviderOmittedFixture(noMatch, false, fmt.Errorf("decode failed"), "not json"))
+	assert.False(t, sharedFolderNameProviderOmittedFixture("graph: HTTP 503 Service Unavailable", false, nil, ""))
+}
+
 type resolvedSharedFileFixture struct {
 	RecipientDriveID string
 	RecipientEmail   string
@@ -1013,14 +1084,17 @@ func waitForSharedFolderNameDriveAdd(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	recipientEmail string,
-	folderName string,
+	fixture resolvedSharedFolderFixture,
 ) {
 	t.Helper()
 
 	deadline := time.Now().Add(pollTimeout)
 	var lastStdout string
 	var lastStderr string
+	var lastSharedStdout string
+	var lastSharedStderr string
+	var lastSharedErr error
+	lastSharedVisible := true
 
 	for attempt := 0; ; attempt++ {
 		stdout, stderr, err := runCLICore(
@@ -1029,10 +1103,10 @@ func waitForSharedFolderNameDriveAdd(
 			env,
 			"",
 			"--account",
-			recipientEmail,
+			fixture.RecipientEmail,
 			"drive",
 			"add",
-			folderName,
+			fixture.FolderItem.Name,
 		)
 		lastStdout = stdout
 		lastStderr = stderr
@@ -1040,27 +1114,119 @@ func waitForSharedFolderNameDriveAdd(
 		if err == nil {
 			return
 		}
-		if !isRetryableGraphGatewayFailure(stderr) && !isSharedFolderNameDiscoveryOmission(stderr) {
+		if isSharedFolderNameDiscoveryOmission(stderr) {
+			lastSharedVisible, lastSharedStdout, lastSharedStderr, lastSharedErr = sharedFolderNameFixtureVisible(
+				t,
+				cfgPath,
+				env,
+				fixture,
+			)
+			if lastSharedErr != nil {
+				require.Truef(t, isRetryableGraphGatewayFailure(lastSharedStderr),
+					"shared --json preflight should succeed when classifying drive add <shared-folder-name> no-match\nstdout: %s\nstderr: %s",
+					lastSharedStdout,
+					lastSharedStderr,
+				)
+			} else if lastSharedVisible {
+				require.NoErrorf(t, err,
+					"drive add <shared-folder-name> missed fixture that shared --json exposed by exact name and remote identity\nstdout: %s\nstderr: %s\nshared stdout: %s",
+					stdout,
+					stderr,
+					lastSharedStdout,
+				)
+			}
+		} else if !isRetryableGraphGatewayFailure(stderr) {
 			require.NoErrorf(t, err,
-				"drive add <shared-folder-name> should succeed or expose known shared discovery omission\nstdout: %s\nstderr: %s",
+				"drive add <shared-folder-name> should succeed or expose known provider discovery failure\nstdout: %s\nstderr: %s",
 				stdout,
 				stderr,
 			)
 		}
 
 		if time.Now().After(deadline) {
-			t.Skipf(
-				"live shared discovery did not expose folder name %q for account %s within %v; Graph search omitted the known fixture on this run\nlast stdout: %s\nlast stderr: %s",
-				folderName,
-				recipientEmail,
-				pollTimeout,
+			if sharedFolderNameProviderOmittedFixture(lastStderr, lastSharedVisible, lastSharedErr, lastSharedStderr) {
+				t.Skipf(
+					"live shared discovery omitted folder name %q for account %s within %v; independent shared --json did not confirm the known fixture on this run\nlast stdout: %s\nlast stderr: %s\nlast shared err: %v\nlast shared stdout: %s\nlast shared stderr: %s",
+					fixture.FolderItem.Name,
+					fixture.RecipientEmail,
+					pollTimeout,
+					lastStdout,
+					lastStderr,
+					lastSharedErr,
+					lastSharedStdout,
+					lastSharedStderr,
+				)
+			}
+			if isRetryableGraphGatewayFailure(lastStderr) {
+				t.Skipf(
+					"live shared discovery could not add folder name %q for account %s within %v because Graph kept returning retryable gateway failures\nlast stdout: %s\nlast stderr: %s",
+					fixture.FolderItem.Name,
+					fixture.RecipientEmail,
+					pollTimeout,
+					lastStdout,
+					lastStderr,
+				)
+			}
+
+			require.NoErrorf(t, err,
+				"drive add <shared-folder-name> should not time out without a provider-only omission signal\nlast stdout: %s\nlast stderr: %s\nlast shared err: %v\nlast shared stdout: %s\nlast shared stderr: %s",
 				lastStdout,
 				lastStderr,
+				lastSharedErr,
+				lastSharedStdout,
+				lastSharedStderr,
 			)
+			t.FailNow()
 		}
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
+}
+
+func sharedFolderNameProviderOmittedFixture(
+	driveAddStderr string,
+	sharedVisible bool,
+	sharedErr error,
+	sharedStderr string,
+) bool {
+	if !isSharedFolderNameDiscoveryOmission(driveAddStderr) {
+		return false
+	}
+	if sharedErr != nil {
+		return isRetryableGraphGatewayFailure(sharedStderr)
+	}
+
+	return !sharedVisible
+}
+
+func sharedFolderNameFixtureVisible(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	fixture resolvedSharedFolderFixture,
+) (bool, string, string, error) {
+	t.Helper()
+
+	stdout, stderr, err := runCLICore(
+		t,
+		cfgPath,
+		env,
+		"",
+		"--account",
+		fixture.RecipientEmail,
+		"shared",
+		"--json",
+	)
+	if err != nil {
+		return false, stdout, stderr, err
+	}
+
+	var listing sharedListE2EOutput
+	if err := json.Unmarshal([]byte(stdout), &listing); err != nil {
+		return false, stdout, stderr, fmt.Errorf("decode shared --json output: %w", err)
+	}
+
+	return sharedFolderFixtureVisibleInListing(listing, fixture), stdout, stderr, nil
 }
 
 func sharedListForRecipient(t *testing.T, cfgPath string, env map[string]string, recipientEmail string) sharedListE2EOutput {

@@ -650,9 +650,11 @@ The same policy now also applies to `default` versus `--all` comparisons:
 nightly drive-list checks poll `drive list --json --all` until it contains the
 default-visible shared entries from the earlier pass, and skip if Graph never
 stabilizes within one ordinary read-only window. Name-based shared-folder
-`drive add` checks use the same policy for the specific documented no-match
-shared-discovery error after a known fixture preflight, while preserving hard
-failures for non-discovery command errors.
+`drive add` checks only skip the documented no-match error when an independent
+`shared --json --account` read also omits the known fixture, or when that
+independent read hits a retryable Graph gateway error. A no-match while the
+fixture is independently visible remains a hard failure because that can be a
+selector/filtering regression rather than a provider omission.
 Promoted docs: [system.md](../design/system.md), [graph-api-quirks.md](graph-api-quirks.md)
 
 ## LI-20260422-05: Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work
