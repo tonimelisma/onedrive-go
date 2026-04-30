@@ -58,6 +58,38 @@ func TestWatchRuntime_RunWatchLoop_BootstrapPhaseQuiescesAndReturnsToRunning(t *
 	assert.Equal(t, watchRuntimePhaseRunning, rt.phase())
 }
 
+// Validates: R-6.10.10
+func TestWatchRuntime_BeginObserverBackedRunningNormalizesBootstrapPhase(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.enterBootstrap()
+
+	require.NoError(t, rt.beginObserverBackedRunning())
+
+	assert.Equal(t, watchRuntimePhaseRunning, rt.phase())
+}
+
+// Validates: R-6.10.10
+func TestWatchRuntime_BeginObserverBackedRunningRejectsDrainingOrDuplicateObservers(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+
+	rt.enterDraining()
+	require.ErrorContains(t, rt.beginObserverBackedRunning(), "during drain")
+
+	eng = newSingleOwnerEngine(t)
+	setupWatchEngine(t, eng)
+	rt = testWatchRuntime(t, eng)
+	rt.activeObservers = 1
+	require.ErrorContains(t, rt.beginObserverBackedRunning(), "observers are already active")
+}
+
 func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapDispatchUsesSharedHandler(t *testing.T) {
 	t.Parallel()
 
@@ -127,6 +159,29 @@ func TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsBeforeReturn(t *tes
 	eng := newSingleOwnerEngine(t)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	replanReady := make(chan dirtyBatch)
+	close(replanReady)
+
+	err := rt.runWatchLoop(ctx, &watchPipeline{
+		runtime:     rt,
+		replanReady: replanReady,
+	})
+
+	require.NoError(t, err)
+	assert.True(t, rt.isDraining())
+}
+
+// Validates: R-2.8.3, R-6.10.10
+func TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsFromBootstrapPhase(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.enterBootstrap()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
