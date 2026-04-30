@@ -155,7 +155,7 @@ func TestE2E_Shared_FolderNameDriveAdd_HonorsAccountFilter(t *testing.T) {
 		t.Skip("live shared discovery did not expose the writable shared-folder fixture by name on this run")
 	}
 
-	runCLIWithoutDrive(t, cfgPath, env, "--account", folderFixture.RecipientEmail, "drive", "add", folderFixture.FolderItem.Name)
+	waitForSharedFolderNameDriveAdd(t, cfgPath, env, folderFixture)
 
 	stdout, _ = runCLIWithoutDrive(t, cfgPath, env, "drive", "list", "--json")
 	var parsed driveListE2EOutput

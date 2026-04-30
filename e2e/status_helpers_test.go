@@ -161,6 +161,49 @@ func requireStatusMount(
 	return statusMountJSON{}
 }
 
+func countStatusMounts(status statusJSON) int {
+	total := 0
+	for i := range status.Accounts {
+		for j := range status.Accounts[i].Mounts {
+			total += countStatusMount(status.Accounts[i].Mounts[j])
+		}
+	}
+
+	return total
+}
+
+func countStatusMount(mount statusMountJSON) int {
+	total := 1
+	for i := range mount.ChildMounts {
+		total += countStatusMount(mount.ChildMounts[i])
+	}
+
+	return total
+}
+
+func TestCountStatusMountsIncludesNestedChildMounts(t *testing.T) {
+	t.Parallel()
+
+	status := statusJSON{
+		Accounts: []statusAccountJSON{{
+			Mounts: []statusMountJSON{{
+				MountID: "parent",
+				ChildMounts: []statusMountJSON{
+					{MountID: "child-a"},
+					{
+						MountID: "child-b",
+						ChildMounts: []statusMountJSON{{
+							MountID: "grandchild",
+						}},
+					},
+				},
+			}},
+		}},
+	}
+
+	assert.Equal(t, 4, countStatusMounts(status))
+}
+
 func findStatusMountJSON(mount statusMountJSON, canonicalID string) (statusMountJSON, bool) {
 	if mount.CanonicalID == canonicalID || mount.MountID == canonicalID {
 		return mount, true

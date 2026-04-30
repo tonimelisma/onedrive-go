@@ -88,8 +88,22 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a", "b", "mid.txt"), []byte("mid level"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a", "b", "c", "deep.txt"), []byte("deep level"), 0o600))
 
-	// Sync upload.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		transientGraphRetryTimeout,
+		"nested deletion setup should upload local tree despite transient Graph gateway failures",
+		func(result syncAttemptResult) bool {
+			if result.Err == nil {
+				return true
+			}
+			require.Truef(t, isRetryableGraphGatewayFailure(result.Stderr),
+				"unexpected sync setup failure\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+			return false
+		},
+		"--upload-only",
+	)
 
 	// Verify deep file exists remotely.
 	waitForRemoteReadContains(t, cfgPath, env, "", "deep.txt", pollTimeout, "ls", "/"+testFolder+"/a/b/c")
