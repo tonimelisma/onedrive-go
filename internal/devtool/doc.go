@@ -1,2 +1,3 @@
-// Package devtool provides repo-owned verification, benchmarking, worktree, and cleanup helpers.
+// Package devtool provides repo-owned verification, DoD automation,
+// benchmarking, worktree, and cleanup helpers.
 package devtool

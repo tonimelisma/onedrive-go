@@ -35,3 +35,6 @@ e2e/.e2e-logs/
 
 # Local benchmark result/output scratch space
 .artifacts/
+
+# Local DoD review-thread classification manifest
+.dod-pr-comments.json

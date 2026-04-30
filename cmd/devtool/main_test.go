@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -42,6 +43,9 @@ func TestNewVerifyCmdDefaultsToDefaultProfile(t *testing.T) {
 	assert.Equal(t, testRepoRoot, got.RepoRoot)
 	assert.Equal(t, devtool.VerifyDefault, got.Profile)
 	assert.InDelta(t, defaultCoverageThreshold, got.CoverageThreshold, 0.001)
+	assert.False(t, got.DOD)
+	assert.Equal(t, devtool.DefaultDODRecentMerged, got.DODRecentMerged)
+	assert.Equal(t, devtool.DefaultDODCITimeout, got.DODCITimeout)
 }
 
 // Validates: R-6.2.1
@@ -67,6 +71,14 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 		"--e2e-log-dir", "/tmp/e2e",
 		"--summary-json", "/tmp/verify-summary.json",
 		"--classify-live-quirks",
+		"--dod",
+		"--stage", "pre-merge",
+		"--pr", "682",
+		"--recent-merged", "12",
+		"--comment-manifest", "/tmp/dod-comments.json",
+		"--worktree", "/tmp/wt",
+		"--branch", "feat/dod",
+		"--ci-timeout", "45m",
 	})
 
 	require.NoError(t, cmd.Execute())
@@ -76,6 +88,14 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	assert.Equal(t, "/tmp/e2e", got.E2ELogDir)
 	assert.Equal(t, "/tmp/verify-summary.json", got.SummaryJSONPath)
 	assert.True(t, got.ClassifyLiveQuirks)
+	assert.True(t, got.DOD)
+	assert.Equal(t, devtool.DODStagePreMerge, got.DODStage)
+	assert.Equal(t, 682, got.DODPR)
+	assert.Equal(t, 12, got.DODRecentMerged)
+	assert.Equal(t, "/tmp/dod-comments.json", got.DODCommentManifest)
+	assert.Equal(t, "/tmp/wt", got.DODWorktree)
+	assert.Equal(t, "feat/dod", got.DODBranch)
+	assert.Equal(t, 45*time.Minute, got.DODCITimeout)
 }
 
 // Validates: R-6.10.14
