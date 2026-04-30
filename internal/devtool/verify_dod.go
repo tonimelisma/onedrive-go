@@ -120,6 +120,16 @@ type githubRun struct {
 	URL        string
 }
 
+type dodReviewThreadApplySummary struct {
+	CommentedAndResolved int
+	AlreadyResolved      int
+}
+
+type dodReviewThreadGateSummary struct {
+	CurrentPRThreads    int
+	RecentMergedThreads int
+}
+
 func RunVerifyDOD(ctx context.Context, runner commandRunner, opts *VerifyOptions) error {
 	if opts == nil {
 		return fmt.Errorf("dod verify options are required")
@@ -196,13 +206,15 @@ func runDODPreMerge(ctx context.Context, runner commandRunner, opts *VerifyOptio
 	if err := waitForPRCI(ctx, runner, opts.RepoRoot, opts.DODPR, dodCITimeout(opts)); err != nil {
 		return err
 	}
-	if err := applyManifestReviewThreads(ctx, runner, opts, stdout); err != nil {
+	applySummary, err := applyManifestReviewThreads(ctx, runner, opts, stdout)
+	if err != nil {
 		return err
 	}
-	if err := requireNoUnresolvedPRThreads(ctx, runner, opts.RepoRoot, opts.DODPR, dodRecentMerged(opts)); err != nil {
+	gateSummary, err := requireNoUnresolvedPRThreads(ctx, runner, opts.RepoRoot, opts.DODPR, dodRecentMerged(opts))
+	if err != nil {
 		return err
 	}
-	return writeStatus(stdout, "dod pre-merge: PR CI and review-thread gates passed\n")
+	return writeStatus(stdout, formatDODPreMergeSummary(applySummary, gateSummary))
 }
 
 func runDODPostMerge(ctx context.Context, runner commandRunner, opts *VerifyOptions, stdout, stderr io.Writer) error {
@@ -792,19 +804,24 @@ func loadPullRequestState(ctx context.Context, runner commandRunner, repoRoot st
 	return state, nil
 }
 
-func applyManifestReviewThreads(ctx context.Context, runner commandRunner, opts *VerifyOptions, stdout io.Writer) error {
+func applyManifestReviewThreads(
+	ctx context.Context,
+	runner commandRunner,
+	opts *VerifyOptions,
+	stdout io.Writer,
+) (dodReviewThreadApplySummary, error) {
 	repo, err := loadGitHubRepo(ctx, runner, opts.RepoRoot)
 	if err != nil {
-		return err
+		return dodReviewThreadApplySummary{}, err
 	}
 	currentPRThreads, err := fetchPullRequestReviewThreads(ctx, runner, opts.RepoRoot, repo, opts.DODPR)
 	if err != nil {
-		return err
+		return dodReviewThreadApplySummary{}, err
 	}
 	manifestPath := dodManifestPath(opts)
 	manifest, err := loadDODCommentManifest(manifestPath)
 	if err != nil {
-		return err
+		return dodReviewThreadApplySummary{}, err
 	}
 	fetchedThreads := make([]DODReviewThread, 0, len(currentPRThreads)+len(manifest.Threads))
 	fetchedThreads = append(fetchedThreads, currentPRThreads...)
@@ -812,33 +829,59 @@ func applyManifestReviewThreads(ctx context.Context, runner commandRunner, opts 
 	manifest = mergeDODManifest(manifest, repo, dodRecentMerged(opts), fetchedThreads)
 	writeErr := writeDODCommentManifest(manifestPath, manifest)
 	if writeErr != nil {
-		return writeErr
+		return dodReviewThreadApplySummary{}, writeErr
 	}
 	validateErr := validateDODCommentManifest(manifest)
 	if validateErr != nil {
-		return validateErr
+		return dodReviewThreadApplySummary{}, validateErr
 	}
 	commit, err := gitHeadShort(ctx, runner, opts.RepoRoot)
 	if err != nil {
-		return err
+		return dodReviewThreadApplySummary{}, err
 	}
+	summary := dodReviewThreadApplySummary{}
 	for i := range manifest.Threads {
 		thread := &manifest.Threads[i]
 		if thread.IsResolved {
+			summary.AlreadyResolved++
 			continue
 		}
 		body := renderDODThreadReply(thread, opts.DODPR, commit)
 		if _, err := postReviewThreadReply(ctx, runner, opts.RepoRoot, thread.ThreadID, body); err != nil {
-			return err
+			return dodReviewThreadApplySummary{}, err
 		}
 		if err := resolveReviewThread(ctx, runner, opts.RepoRoot, thread.ThreadID); err != nil {
-			return err
+			return dodReviewThreadApplySummary{}, err
 		}
-		if err := writeStatus(stdout, fmt.Sprintf("dod pre-merge: commented and resolved %s\n", thread.ThreadID)); err != nil {
-			return err
+		summary.CommentedAndResolved++
+		if err := writeStatus(stdout, formatDODThreadResolutionStatus(thread)); err != nil {
+			return dodReviewThreadApplySummary{}, err
 		}
 	}
-	return nil
+	return summary, nil
+}
+
+func formatDODThreadResolutionStatus(thread *DODReviewThread) string {
+	return fmt.Sprintf(
+		"dod pre-merge: commented and resolved %s classification=%s evidence=%d\n",
+		thread.ThreadID,
+		thread.Classification,
+		len(nonEmptyStrings(thread.Evidence)),
+	)
+}
+
+func formatDODPreMergeSummary(
+	applySummary dodReviewThreadApplySummary,
+	gateSummary dodReviewThreadGateSummary,
+) string {
+	return fmt.Sprintf(
+		"dod pre-merge: PR CI and review-thread gates passed "+
+			"(commented_resolved=%d, already_resolved=%d, current_pr_threads=%d, recent_merged_threads=%d)\n",
+		applySummary.CommentedAndResolved,
+		applySummary.AlreadyResolved,
+		gateSummary.CurrentPRThreads,
+		gateSummary.RecentMergedThreads,
+	)
 }
 
 func gitHeadShort(ctx context.Context, runner commandRunner, repoRoot string) (string, error) {
@@ -947,18 +990,19 @@ func requireNoUnresolvedPRThreads(
 	repoRoot string,
 	prNumber int,
 	recentMerged int,
-) error {
+) (dodReviewThreadGateSummary, error) {
 	repo, err := loadGitHubRepo(ctx, runner, repoRoot)
 	if err != nil {
-		return err
+		return dodReviewThreadGateSummary{}, err
 	}
 	threads, err := fetchPullRequestReviewThreads(ctx, runner, repoRoot, repo, prNumber)
 	if err != nil {
-		return err
+		return dodReviewThreadGateSummary{}, err
 	}
+	summary := dodReviewThreadGateSummary{CurrentPRThreads: len(threads)}
 	unresolved := unresolvedThreadIDs(threads)
 	if len(unresolved) > 0 {
-		return fmt.Errorf(
+		return dodReviewThreadGateSummary{}, fmt.Errorf(
 			"dod pre-merge unresolved review threads remain on PR #%d: %s",
 			prNumber,
 			strings.Join(unresolved, ", "),
@@ -966,15 +1010,16 @@ func requireNoUnresolvedPRThreads(
 	}
 	recent, err := fetchRecentMergedReviewThreads(ctx, runner, repoRoot, repo, recentMerged)
 	if err != nil {
-		return err
+		return dodReviewThreadGateSummary{}, err
 	}
+	summary.RecentMergedThreads = len(recent)
 	if unresolved = unresolvedThreadIDs(recent); len(unresolved) > 0 {
-		return fmt.Errorf(
+		return dodReviewThreadGateSummary{}, fmt.Errorf(
 			"dod pre-merge unresolved recent merged-PR review threads remain: %s",
 			strings.Join(unresolved, ", "),
 		)
 	}
-	return nil
+	return summary, nil
 }
 
 func unresolvedThreadIDs(threads []DODReviewThread) []string {
@@ -1003,15 +1048,20 @@ func mergePR(ctx context.Context, runner commandRunner, repoRoot string, prNumbe
 	if err == nil {
 		return requirePRMerged(ctx, runner, repoRoot, prNumber)
 	}
+	state, stateErr := requirePRMerged(ctx, runner, repoRoot, prNumber)
+	if stateErr == nil {
+		return state, nil
+	}
 	if !isRecoverableMergePRError(string(output), err) {
 		return pullRequestState{}, fmt.Errorf(
-			"dod merge PR #%d: %s: %w",
+			"dod merge PR #%d: %s: %w (server merge check: %v)",
 			prNumber,
 			strings.TrimSpace(string(output)),
 			err,
+			stateErr.Error(),
 		)
 	}
-	return requirePRMerged(ctx, runner, repoRoot, prNumber)
+	return pullRequestState{}, stateErr
 }
 
 func isRecoverableMergePRError(output string, err error) bool {

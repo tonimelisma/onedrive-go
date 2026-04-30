@@ -64,10 +64,11 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 		dodWorktree        string
 		dodBranch          string
 		dodCITimeout       time.Duration
+		failedTestLog      string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "verify [default|public|e2e|e2e-full|integration|stress]",
+		Use:   "verify [default|public|e2e|e2e-full|integration|stress|failed-test]",
 		Short: "Run repository verification profiles",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -97,6 +98,7 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 				DODWorktree:        dodWorktree,
 				DODBranch:          dodBranch,
 				DODCITimeout:       dodCITimeout,
+				FailedTestLog:      failedTestLog,
 				Stdout:             cmd.OutOrStdout(),
 				Stderr:             cmd.ErrOrStderr(),
 			})
@@ -115,6 +117,7 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 	cmd.Flags().StringVar(&dodWorktree, "worktree", "", "increment worktree path for DoD post-merge cleanup")
 	cmd.Flags().StringVar(&dodBranch, "branch", "", "increment branch name for DoD post-merge cleanup")
 	cmd.Flags().DurationVar(&dodCITimeout, "ci-timeout", devtool.DefaultDODCITimeout, "maximum time to wait for DoD CI checks")
+	cmd.Flags().StringVar(&failedTestLog, "failed-log", "", "CI go-test log to parse for verify failed-test")
 	cmd.Flags().BoolVar(
 		&classifyLiveQuirks,
 		"classify-live-quirks",

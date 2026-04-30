@@ -128,6 +128,17 @@ func (rt *watchRuntime) enterRunning() {
 	rt.loop.phase = watchRuntimePhaseRunning
 }
 
+func (rt *watchRuntime) beginObserverBackedRunning() error {
+	if rt.isDraining() {
+		return fmt.Errorf("sync: start watch observers during drain")
+	}
+	if rt.activeObservers != 0 {
+		return fmt.Errorf("sync: start watch observers while %d observers are already active", rt.activeObservers)
+	}
+	rt.enterRunning()
+	return nil
+}
+
 func (rt *watchRuntime) enterDraining() bool {
 	if rt.loop.phase == watchRuntimePhaseDraining {
 		return false

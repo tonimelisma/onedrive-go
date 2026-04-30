@@ -18,31 +18,30 @@ type statusJSON struct {
 }
 
 type statusSummaryJSON struct {
-	TotalDrives int `json:"total_drives"`
-	TotalMounts int `json:"total_mounts"`
+	TotalMounts    int `json:"total_mounts"`
+	hasTotalMounts bool
 }
 
 func (summary *statusSummaryJSON) UnmarshalJSON(data []byte) error {
-	type rawStatusSummaryJSON statusSummaryJSON
-	var raw rawStatusSummaryJSON
-	if err := json.Unmarshal(data, &raw); err != nil {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
 		return fmt.Errorf("decode status summary: %w", err)
 	}
-
-	*summary = statusSummaryJSON(raw)
-	if summary.TotalDrives == 0 && summary.TotalMounts != 0 {
-		summary.TotalDrives = summary.TotalMounts
+	raw, ok := fields["total_mounts"]
+	if !ok {
+		*summary = statusSummaryJSON{}
+		return nil
 	}
-	if summary.TotalMounts == 0 && summary.TotalDrives != 0 {
-		summary.TotalMounts = summary.TotalDrives
+	if err := json.Unmarshal(raw, &summary.TotalMounts); err != nil {
+		return fmt.Errorf("decode status summary total_mounts: %w", err)
 	}
+	summary.hasTotalMounts = true
 	return nil
 }
 
 type statusAccountJSON struct {
 	Email  string            `json:"email"`
 	Mounts []statusMountJSON `json:"mounts"`
-	Drives []statusMountJSON `json:"drives"`
 }
 
 type statusMountJSON struct {
@@ -95,6 +94,9 @@ func runStatusAllowError(
 	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
 		return statusJSON{}, stdout, stderr, fmt.Errorf("decode status json: %w", err)
 	}
+	if err := validateStatusJSONContract(output); err != nil {
+		return statusJSON{}, stdout, stderr, err
+	}
 
 	return output, stdout, stderr, nil
 }
@@ -118,8 +120,26 @@ func runStatusAllDrivesAllowError(
 	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
 		return statusJSON{}, stdout, stderr, fmt.Errorf("decode status json: %w", err)
 	}
+	if err := validateStatusJSONContract(output); err != nil {
+		return statusJSON{}, stdout, stderr, err
+	}
 
 	return output, stdout, stderr, nil
+}
+
+func validateStatusJSONContract(status statusJSON) error {
+	if !status.Summary.hasTotalMounts {
+		return fmt.Errorf("status json missing summary.total_mounts")
+	}
+	actual := countStatusMounts(status)
+	if status.Summary.TotalMounts != actual {
+		return fmt.Errorf(
+			"status json total_mounts mismatch: summary=%d recursive_mount_rows=%d",
+			status.Summary.TotalMounts,
+			actual,
+		)
+	}
+	return nil
 }
 
 func readStatus(t *testing.T, cfgPath string, env map[string]string, args ...string) statusJSON {
@@ -148,10 +168,8 @@ func requireStatusMount(
 	t.Helper()
 
 	for i := range status.Accounts {
-		driveStatuses := append(status.Accounts[i].Drives, status.Accounts[i].Mounts...)
-		for j := range driveStatuses {
-			driveStatus := driveStatuses[j]
-			if found, ok := findStatusMountJSON(driveStatus, canonicalID); ok {
+		for j := range status.Accounts[i].Mounts {
+			if found, ok := findStatusMountJSON(status.Accounts[i].Mounts[j], canonicalID); ok {
 				return found
 			}
 		}
@@ -202,6 +220,20 @@ func TestCountStatusMountsIncludesNestedChildMounts(t *testing.T) {
 	}
 
 	assert.Equal(t, 4, countStatusMounts(status))
+}
+
+func TestValidateStatusJSONContractRejectsLegacyDriveShape(t *testing.T) {
+	t.Parallel()
+
+	var status statusJSON
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"summary": {"total_drives": 1},
+		"accounts": [{"email": "user@example.com", "drives": [{"mount_id": "legacy"}]}]
+	}`), &status))
+
+	err := validateStatusJSONContract(status)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing summary.total_mounts")
 }
 
 func findStatusMountJSON(mount statusMountJSON, canonicalID string) (statusMountJSON, bool) {

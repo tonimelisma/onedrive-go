@@ -99,12 +99,14 @@ The runtime status read model is now mount-shaped:
   resume, reset, or config surface; the user controls the projection by
   changing the OneDrive shortcut or pausing the parent drive.
 
-The JSON surface follows that same mount boundary: summary counts use
+The JSON surface follows that same mount boundary: summary counts must include
 `summary.total_mounts`, per-account rows use `accounts[].mounts`, and shortcut
-projections are nested under the owning parent row as `child_mounts`. The legacy
-drive-shaped status fields (`total_drives`, `accounts[].drives`) are not part
-of the current contract. Child lifecycle rows also expose `state`,
-`state_reason`, `state_detail`, `protected_current_path`,
+projections are nested under the owning parent row as `child_mounts`.
+`summary.total_mounts` is the recursive count of every displayed parent and
+child mount row. The legacy drive-shaped status fields (`total_drives`,
+`accounts[].drives`) are not part of the current contract and test decoders do
+not map them back into the mount-shaped surface. Child lifecycle rows also
+expose `state`, `state_reason`, `state_detail`, `protected_current_path`,
 `protected_reserved_paths`, typed `issue_class`/`recovery_class`,
 `recovery_action`, and `auto_retry` from sync-owned `ShortcutRootStatusView`
 values plus child sync-state snapshots. The CLI does not read raw

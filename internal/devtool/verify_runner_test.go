@@ -750,6 +750,87 @@ func TestRunVerifyStressWritesSlowTestSummaryToStdoutAndJSON(t *testing.T) {
 	assert.EqualValues(t, 1500, step.SlowTests[0].MaxElapsedMS)
 }
 
+func TestRunVerifyFailedTestRerunsLastJSONFailureOnly(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	logPath := filepath.Join(repoRoot, "ci.log")
+	require.NoError(t, os.WriteFile(logPath, []byte(strings.Join([]string{
+		`{"Action":"fail","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestOld"}`,
+		`2026-04-30T20:00:00Z {"Action":"fail","Package":"github.com/tonimelisma/onedrive-go/e2e","Test":"TestE2E_Status_JSONShape"}`,
+		`{"Action":"fail","Package":"github.com/tonimelisma/onedrive-go/e2e"}`,
+	}, "\n")), 0o600))
+
+	runner := &fakeRunner{}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:      repoRoot,
+		Profile:       VerifyFailedTest,
+		FailedTestLog: logPath,
+		Stdout:        &bytes.Buffer{},
+		Stderr:        &bytes.Buffer{},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, runner.runCommands, 1)
+	assert.Equal(t, "go", runner.runCommands[0].name)
+	assert.Equal(t, []string{
+		"test",
+		"-tags=e2e e2e_full",
+		"-race",
+		"-run=^TestE2E_Status_JSONShape$",
+		"-count=1",
+		"-v",
+		"-parallel",
+		"1",
+		"-timeout=15m",
+		"./e2e/...",
+	}, runner.runCommands[0].args)
+}
+
+func TestRunVerifyFailedTestRerunsLastRawPackageAndSubtest(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	logPath := filepath.Join(repoRoot, "ci.log")
+	require.NoError(t, os.WriteFile(logPath, []byte(
+		"--- FAIL: TestWatchLoop/closed_scheduler (0.00s)\n"+
+			"FAIL\tgithub.com/tonimelisma/onedrive-go/internal/sync\t0.123s",
+	), 0o600))
+
+	runner := &fakeRunner{}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:      repoRoot,
+		Profile:       VerifyFailedTest,
+		FailedTestLog: logPath,
+		Stdout:        &bytes.Buffer{},
+		Stderr:        &bytes.Buffer{},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, runner.runCommands, 1)
+	assert.Equal(t, []string{
+		"test",
+		"-run=^TestWatchLoop$/^closed_scheduler$",
+		"-count=1",
+		"-v",
+		"./internal/sync",
+	}, runner.runCommands[0].args)
+}
+
+func TestRunVerifyFailedTestRequiresLogPath(t *testing.T) {
+	t.Parallel()
+
+	err := RunVerify(context.Background(), &fakeRunner{}, &VerifyOptions{
+		RepoRoot: t.TempDir(),
+		Profile:  VerifyFailedTest,
+		Stdout:   &bytes.Buffer{},
+		Stderr:   &bytes.Buffer{},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--failed-log is required")
+}
+
 // Validates: R-6.2.1
 func TestParseCoverageTotal(t *testing.T) {
 	t.Parallel()
