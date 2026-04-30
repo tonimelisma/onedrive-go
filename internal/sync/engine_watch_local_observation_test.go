@@ -5,13 +5,16 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
-// Validates: R-2.8.8
+// Validates: R-2.8.8, R-6.6.17
 func TestWatchRuntime_LocalObservationBatchUpsertsScopedRows(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
@@ -67,13 +70,17 @@ func TestWatchRuntime_LocalObservationBatchUpsertsScopedRows(t *testing.T) {
 		},
 	}, rows)
 	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
+	snapshot := eng.collector().Snapshot()
+	assert.Equal(t, 1, snapshot.LocalObservationScopedCommitCount)
+	assert.Equal(t, 2, snapshot.LocalObservationScopedUpsertCount)
 }
 
-// Validates: R-2.8.8
+// Validates: R-2.8.8, R-6.6.17
 func TestWatchRuntime_LocalObservationBatchDeletesExactPath(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
@@ -93,13 +100,17 @@ func TestWatchRuntime_LocalObservationBatchDeletesExactPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []LocalStateRow{{Path: "kept.txt", ItemType: ItemTypeFile}}, rows)
 	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
+	snapshot := eng.collector().Snapshot()
+	assert.Equal(t, 1, snapshot.LocalObservationScopedCommitCount)
+	assert.Equal(t, 1, snapshot.LocalObservationExactDeleteCount)
 }
 
-// Validates: R-2.8.8
+// Validates: R-2.8.8, R-6.6.17
 func TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
@@ -122,13 +133,17 @@ func TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, []LocalStateRow{{Path: "dir-sibling.txt", ItemType: ItemTypeFile}}, rows)
 	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
+	snapshot := eng.collector().Snapshot()
+	assert.Equal(t, 1, snapshot.LocalObservationScopedCommitCount)
+	assert.Equal(t, 1, snapshot.LocalObservationPrefixDeleteCount)
 }
 
-// Validates: R-2.8.8
+// Validates: R-2.8.8, R-6.6.17
 func TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
@@ -155,13 +170,15 @@ func TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth(t *tes
 	assert.True(t, state.LocalTruthComplete)
 	assert.Empty(t, state.LocalTruthRecoveryReason)
 	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
+	assert.Equal(t, 1, eng.collector().Snapshot().LocalObservationFullSnapshotReplacementCount)
 }
 
-// Validates: R-2.8.8
+// Validates: R-2.8.8, R-6.6.17
 func TestWatchRuntime_LocalObservationBatchMarksLocalTruthSuspect(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
@@ -180,6 +197,7 @@ func TestWatchRuntime_LocalObservationBatchMarksLocalTruthSuspect(t *testing.T) 
 	assert.False(t, state.LocalTruthComplete)
 	assert.Equal(t, LocalTruthRecoveryDroppedEvents, state.LocalTruthRecoveryReason)
 	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
+	assert.Equal(t, 1, eng.collector().Snapshot().LocalObservationSuspectDroppedEventsCount)
 }
 
 // Validates: R-2.8.8

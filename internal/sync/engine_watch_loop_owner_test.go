@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
 // Validates: R-2.10.10
@@ -250,11 +251,12 @@ func TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal(t 
 	}
 }
 
-// Validates: R-2.8.6
+// Validates: R-2.8.6, R-6.6.17
 func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
+	eng.perfCollector = perf.NewCollector(nil)
 	eng.transferWorkers = 2
 	recorder := attachDebugEventRecorder(eng)
 	setupWatchEngine(t, eng)
@@ -277,6 +279,7 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	assert.Empty(t, rt.currentOutbox())
 	assert.Empty(t, rt.queuedByID)
 	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "retiring old outbox must not complete dependency nodes as success")
+	assert.Equal(t, 1, eng.collector().Snapshot().SupersededPendingReplanRetirementCount)
 	recorder.requireEventCount(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventOldOutboxRetired && event.Count == 1
 	}, 1, "pending replan should emit retired outbox count")
@@ -304,7 +307,10 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
+	eng.perfCollector = perf.NewCollector(nil)
 	eng.transferWorkers = 2
+	now, advance := controllableClock()
+	eng.nowFn = now
 	recorder := attachDebugEventRecorder(eng)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
@@ -323,10 +329,12 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 		Path:    "child.txt",
 		DriveID: eng.driveID,
 		ItemID:  "child-item",
+		View:    &PathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	require.Nil(t, child)
 	rt.markRunning(root)
 	rt.queuePendingReplan(dirtyBatch{})
+	advance(10 * time.Millisecond)
 
 	err = rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
 		Path:       "parent.txt",
@@ -343,6 +351,7 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 	assert.Empty(t, rt.currentOutbox(), "ready dependents from old graph should not be appended while replan is pending")
 	assert.Empty(t, rt.queuedByID)
 	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "released child should remain uncompleted until replacement runtime is installed")
+	assert.Equal(t, int64(10), eng.collector().Snapshot().ReplanIdleWaitingDrainMS)
 	recorder.requireEventCount(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventWaitingForRunningActions &&
 			!event.At.IsZero() &&

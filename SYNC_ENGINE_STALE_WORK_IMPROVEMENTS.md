@@ -1,16 +1,13 @@
 # Sync Engine Stale Work Improvements
 
-Status: design note. The watch-dispatch/outbox-retirement instrumentation pieces
-are implemented in the merged watch-stale-work increments; the superseded result
-foundation and incremental local-truth commit increments are implemented in the
-stale-work roadmap, and worker/admission latest-truth validation is implemented
-in the worker/admission truth-validation increment. Executor live
-preconditions are implemented in the live-preconditions increment. Final
-observability counters and timing remain follow-up work.
+Status: implemented design note. The watch-dispatch/outbox-retirement,
+superseded-result, incremental local-truth, worker/admission validation,
+executor live-precondition, and final stale-work observability increments are
+implemented.
 
 Date: 2026-04-29
 
-Implemented so far:
+Implemented:
 
 1. Watch-mode worker dispatch is unbuffered, while worker completion reporting
    stays separately buffered.
@@ -57,11 +54,11 @@ Implemented so far:
     planned facts are returned as `ErrActionPreconditionChanged` and therefore
     classified as superseded; transient live preflight reads remain ordinary
     failures.
-
-Still follow-up work:
-
-1. Final observability counters for superseded sources, scoped local commits,
-   and aggregate worker-idle-by-replan-phase timing.
+16. Production perf snapshots, structured perf logs, and `status --perf` now
+    expose aggregate stale-work counters by owning boundary, scoped local
+    observation counters, suspect-local-truth recovery counts, and
+    worker-idle-by-replan-phase timing. These surfaces remain path-free and
+    ID-free.
 
 This note records a design analysis for improving the `onedrive-go` sync engine
 when watch-mode truth changes while older actions are still queued or running.
@@ -114,8 +111,9 @@ let workers, the engine, and the executor reject stale work using exact action
 preconditions, latest committed truth checks, live side-effect checks, and queue
 control without making workers into a second planner. Queue control,
 worker-start latest-truth checks, admission latest-truth checks, and executor
-live preconditions are now implemented; final observability remains follow-up
-work.
+live preconditions are now implemented. The observability increment adds the
+path-free aggregate counters and replan-idle timing needed to see how often
+each stale-work boundary fires.
 
 ## 2. External Client Patterns
 
@@ -671,10 +669,12 @@ Useful timestamped lifecycle events:
 12. `first_post_replan_dispatch`: first action from the new plan is handed to a
    worker.
 
-This increment implements events 2 through 8 and 10 through 12 for the
+The implemented runtime emits events 2 through 8 and 10 through 12 for the
 pending-replan path, and reuses the existing remote refresh debug events for
-full-refresh activity. `dirty_signal_observed` and finer remote-batch apply
-events remain follow-up instrumentation.
+full-refresh activity. Production perf counters cover the aggregate stale-work
+and local-observation totals above; `dirty_signal_observed` and finer
+remote-batch apply events remain intentionally outside this increment until a
+specific debugging need appears.
 
 Worker-idle instrumentation should answer a specific question: "were workers
 idle because replanning was legitimately happening, or because the coordinator
@@ -689,10 +689,10 @@ tracing. Keep aggregate counters:
    `installing_plan`
 5. accumulated idle duration per phase
 
-This can be measured at phase transitions using the runtime's existing
-single-owner loop: when phase changes, add `idleWorkers * elapsed` to the
-previous phase bucket. That avoids per-action polling and avoids lots of checks
-inside the worker hot path.
+This is measured at watch-runtime phase transitions using the existing
+single-owner loop. The runtime records worker-idle milliseconds for waiting on
+old running actions, local refresh, planning, and runtime installation without
+per-worker tracing or polling inside the worker hot path.
 
 Pros:
 
@@ -710,11 +710,12 @@ Cons:
 
 Recommendation:
 
-Add observability alongside behavior changes. This increment adds the
-pending-replan lifecycle events with timestamps and aggregate outbox/running/idle
-worker counters. Per-action latest-truth rejection counters and accumulated
-idle-duration buckets remain the final observability follow-up now that
-worker-start validation and scoped local truth commits have landed.
+Add observability alongside behavior changes. The implementation now includes
+pending-replan lifecycle events with timestamps and aggregate
+outbox/running/idle-worker counters, plus production perf counters for
+latest-truth rejection, live-precondition rejection, pending replan retirement,
+scoped local observation commits, suspect-local-truth recovery causes, and
+accumulated replan-idle duration buckets.
 
 ## 5. Suggested Implementation Order
 
@@ -749,6 +750,7 @@ worker-start validation and scoped local truth commits have landed.
    are insufficient for status, cancellation, or throughput.
 11. Add observability for stale-precondition outcomes, superseded outcomes,
    pending replan latency, scoped local commits, and full-scan recovery causes.
+   Implemented in the stale-work observability increment.
 
 ## 6. Design Recommendation
 

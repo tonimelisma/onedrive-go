@@ -13,6 +13,32 @@ const (
 	TransferKindUpload   TransferKind = "upload"
 )
 
+type SupersededSource string
+
+const (
+	SupersededSourceEngineAdmission         SupersededSource = "engine_admission"
+	SupersededSourceWorkerStartLocalTruth   SupersededSource = "worker_start_local_truth"
+	SupersededSourceWorkerStartRemoteTruth  SupersededSource = "worker_start_remote_truth"
+	SupersededSourceLiveLocalPrecondition   SupersededSource = "live_local_precondition"
+	SupersededSourceLiveRemotePrecondition  SupersededSource = "live_remote_precondition"
+	SupersededSourcePendingReplanRetirement SupersededSource = "pending_replan_retirement"
+)
+
+type ReplanIdlePhase string
+
+const (
+	ReplanIdlePhaseWaitingDrain   ReplanIdlePhase = "waiting_drain"
+	ReplanIdlePhaseLocalRefresh   ReplanIdlePhase = "local_refresh"
+	ReplanIdlePhasePlanning       ReplanIdlePhase = "planning"
+	ReplanIdlePhaseRuntimeInstall ReplanIdlePhase = "runtime_install"
+)
+
+const (
+	LocalTruthRecoveryDroppedEvents  = "dropped_local_events"
+	LocalTruthRecoveryWatcherError   = "watcher_error"
+	LocalTruthRecoveryFullScanFailed = "full_local_scan_failed"
+)
+
 type Snapshot struct {
 	StartedAt time.Time `json:"started_at,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
@@ -54,6 +80,28 @@ type Snapshot struct {
 	RefreshTimeMS         int64 `json:"refresh_time_ms,omitempty"`
 	WatchBatchCount       int   `json:"watch_batch_count,omitempty"`
 	WatchPathCount        int   `json:"watch_path_count,omitempty"`
+
+	SupersededEngineAdmissionCount         int `json:"superseded_engine_admission_count,omitempty"`
+	SupersededWorkerStartLocalTruthCount   int `json:"superseded_worker_start_local_truth_count,omitempty"`
+	SupersededWorkerStartRemoteTruthCount  int `json:"superseded_worker_start_remote_truth_count,omitempty"`
+	SupersededLiveLocalPreconditionCount   int `json:"superseded_live_local_precondition_count,omitempty"`
+	SupersededLiveRemotePreconditionCount  int `json:"superseded_live_remote_precondition_count,omitempty"`
+	SupersededPendingReplanRetirementCount int `json:"superseded_pending_replan_retirement_count,omitempty"`
+
+	LocalObservationScopedCommitCount            int `json:"local_observation_scoped_commit_count,omitempty"`
+	LocalObservationScopedUpsertCount            int `json:"local_observation_scoped_upsert_count,omitempty"`
+	LocalObservationExactDeleteCount             int `json:"local_observation_exact_delete_count,omitempty"`
+	LocalObservationPrefixDeleteCount            int `json:"local_observation_prefix_delete_count,omitempty"`
+	LocalObservationFullSnapshotReplacementCount int `json:"local_observation_full_snapshot_replacement_count,omitempty"`
+	LocalObservationSuspectDroppedEventsCount    int `json:"local_observation_suspect_dropped_events_count,omitempty"`
+	LocalObservationSuspectWatcherErrorCount     int `json:"local_observation_suspect_watcher_error_count,omitempty"`
+	LocalObservationSuspectFullScanFailedCount   int `json:"local_observation_suspect_full_scan_failed_count,omitempty"`
+	LocalObservationSuspectOtherCount            int `json:"local_observation_suspect_other_count,omitempty"`
+
+	ReplanIdleWaitingDrainMS   int64 `json:"replan_idle_waiting_drain_ms,omitempty"`
+	ReplanIdleLocalRefreshMS   int64 `json:"replan_idle_local_refresh_ms,omitempty"`
+	ReplanIdlePlanningMS       int64 `json:"replan_idle_planning_ms,omitempty"`
+	ReplanIdleRuntimeInstallMS int64 `json:"replan_idle_runtime_install_ms,omitempty"`
 }
 
 type Collector struct {
@@ -205,6 +253,83 @@ func (c *Collector) RecordWatchBatch(paths int) {
 	c.apply(func(snapshot *Snapshot) {
 		snapshot.WatchBatchCount++
 		snapshot.WatchPathCount += paths
+	})
+}
+
+func (c *Collector) RecordSuperseded(source SupersededSource, count int) {
+	if count <= 0 {
+		return
+	}
+
+	c.apply(func(snapshot *Snapshot) {
+		switch source {
+		case SupersededSourceEngineAdmission:
+			snapshot.SupersededEngineAdmissionCount += count
+		case SupersededSourceWorkerStartLocalTruth:
+			snapshot.SupersededWorkerStartLocalTruthCount += count
+		case SupersededSourceWorkerStartRemoteTruth:
+			snapshot.SupersededWorkerStartRemoteTruthCount += count
+		case SupersededSourceLiveLocalPrecondition:
+			snapshot.SupersededLiveLocalPreconditionCount += count
+		case SupersededSourceLiveRemotePrecondition:
+			snapshot.SupersededLiveRemotePreconditionCount += count
+		case SupersededSourcePendingReplanRetirement:
+			snapshot.SupersededPendingReplanRetirementCount += count
+		}
+	})
+}
+
+func (c *Collector) RecordLocalObservationScopedCommit(upserts, exactDeletes, prefixDeletes int) {
+	c.apply(func(snapshot *Snapshot) {
+		snapshot.LocalObservationScopedCommitCount++
+		snapshot.LocalObservationScopedUpsertCount += upserts
+		snapshot.LocalObservationExactDeleteCount += exactDeletes
+		snapshot.LocalObservationPrefixDeleteCount += prefixDeletes
+	})
+}
+
+func (c *Collector) RecordLocalObservationFullSnapshotReplacement() {
+	c.apply(func(snapshot *Snapshot) {
+		snapshot.LocalObservationFullSnapshotReplacementCount++
+	})
+}
+
+func (c *Collector) RecordLocalObservationSuspect(reason string) {
+	c.apply(func(snapshot *Snapshot) {
+		switch reason {
+		case LocalTruthRecoveryDroppedEvents:
+			snapshot.LocalObservationSuspectDroppedEventsCount++
+		case LocalTruthRecoveryWatcherError:
+			snapshot.LocalObservationSuspectWatcherErrorCount++
+		case LocalTruthRecoveryFullScanFailed:
+			snapshot.LocalObservationSuspectFullScanFailedCount++
+		default:
+			snapshot.LocalObservationSuspectOtherCount++
+		}
+	})
+}
+
+func (c *Collector) RecordReplanWorkerIdle(phase ReplanIdlePhase, idleWorkers int, duration time.Duration) {
+	if idleWorkers <= 0 || duration <= 0 {
+		return
+	}
+
+	workerIdleMS := int64(idleWorkers) * durationMS(duration)
+	if workerIdleMS <= 0 {
+		return
+	}
+
+	c.apply(func(snapshot *Snapshot) {
+		switch phase {
+		case ReplanIdlePhaseWaitingDrain:
+			snapshot.ReplanIdleWaitingDrainMS += workerIdleMS
+		case ReplanIdlePhaseLocalRefresh:
+			snapshot.ReplanIdleLocalRefreshMS += workerIdleMS
+		case ReplanIdlePhasePlanning:
+			snapshot.ReplanIdlePlanningMS += workerIdleMS
+		case ReplanIdlePhaseRuntimeInstall:
+			snapshot.ReplanIdleRuntimeInstallMS += workerIdleMS
+		}
 	})
 }
 

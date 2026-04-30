@@ -148,6 +148,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	}
 
 	pool := NewWorkerPool(r.engine.execCfg, r.dispatchCh, r.engine.baseline, r.engine.logger, len(plan.Actions))
+	pool.perfCollector = r.engine.collector()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	pool.Start(runCtx, r.engine.transferWorkers)

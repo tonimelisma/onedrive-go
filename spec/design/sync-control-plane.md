@@ -2,7 +2,7 @@
 
 GOVERNS: internal/multisync/*.go, internal/synccontrol/*.go, sync.go
 
-Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Overview
 
@@ -369,7 +369,7 @@ lifecycle stays in `internal/multisync`; CLI transport stays in `internal/cli`.
 The socket speaks JSON over HTTP:
 
 - `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed mounts.
-- `GET /v1/perf` returns the owner mode plus the live aggregate and per-mount perf snapshots currently owned by the active sync runtime. This surface is live-only and returns whatever the owner has collected so far; it does not materialize historical perf state from SQLite.
+- `GET /v1/perf` returns the owner mode plus the live aggregate and per-mount perf snapshots currently owned by the active sync runtime. This includes path-free stale-work, local-observation, and replan-idle aggregates. The surface is live-only and returns whatever the owner has collected so far; it does not materialize historical perf state from SQLite.
 - `POST /v1/perf/capture` triggers an explicit local capture bundle from the active owner. The request carries bounded duration plus optional output-dir, trace, and full-detail toggles; the response returns the local artifact paths for the completed bundle.
 - `POST /v1/reload` reloads config in the watch owner.
 - `POST /v1/stop` asks the watch owner to stop cleanly.

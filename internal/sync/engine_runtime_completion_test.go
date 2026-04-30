@@ -153,6 +153,7 @@ func TestEngineFlow_ApplyCompletionSuccess_ClearsRetryWorkAndAdmitsDependents(t 
 		Path:    "next.txt",
 		DriveID: eng.driveID,
 		ItemID:  "next-item",
+		View:    &PathView{Path: "next.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, dependent)
 
@@ -793,6 +794,7 @@ func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmit
 		Path:    "dependent.txt",
 		DriveID: eng.driveID,
 		ItemID:  "dependent-item",
+		View:    &PathView{Path: "dependent.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, dependent)
 

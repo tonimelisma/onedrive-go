@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Validates: R-6.6.14, R-6.6.15
+// Validates: R-6.6.14, R-6.6.15, R-6.6.17
 func TestCollector_RollsUpChildMetricsIntoParent(t *testing.T) {
 	parent := NewCollector(nil)
 	child := NewCollector(parent)
@@ -23,6 +23,16 @@ func TestCollector_RollsUpChildMetricsIntoParent(t *testing.T) {
 	child.RecordExecute(4, 3, 1, 14*time.Millisecond)
 	child.RecordRefresh(5, 15*time.Millisecond)
 	child.RecordWatchBatch(6)
+	child.RecordSuperseded(SupersededSourceEngineAdmission, 2)
+	child.RecordSuperseded(SupersededSourceWorkerStartLocalTruth, 3)
+	child.RecordSuperseded(SupersededSourceWorkerStartRemoteTruth, 4)
+	child.RecordSuperseded(SupersededSourceLiveLocalPrecondition, 5)
+	child.RecordSuperseded(SupersededSourceLiveRemotePrecondition, 6)
+	child.RecordSuperseded(SupersededSourcePendingReplanRetirement, 7)
+	child.RecordLocalObservationScopedCommit(3, 4, 5)
+	child.RecordLocalObservationFullSnapshotReplacement()
+	child.RecordLocalObservationSuspect(LocalTruthRecoveryDroppedEvents)
+	child.RecordReplanWorkerIdle(ReplanIdlePhasePlanning, 2, 9*time.Millisecond)
 	child.SetResult("success")
 
 	parentSnapshot := parent.Snapshot()
@@ -33,6 +43,19 @@ func TestCollector_RollsUpChildMetricsIntoParent(t *testing.T) {
 	assert.Equal(t, int64(128), parentSnapshot.DownloadBytes)
 	assert.Equal(t, 4, parentSnapshot.ExecuteActionCount)
 	assert.Equal(t, 6, parentSnapshot.WatchPathCount)
+	assert.Equal(t, 2, parentSnapshot.SupersededEngineAdmissionCount)
+	assert.Equal(t, 3, parentSnapshot.SupersededWorkerStartLocalTruthCount)
+	assert.Equal(t, 4, parentSnapshot.SupersededWorkerStartRemoteTruthCount)
+	assert.Equal(t, 5, parentSnapshot.SupersededLiveLocalPreconditionCount)
+	assert.Equal(t, 6, parentSnapshot.SupersededLiveRemotePreconditionCount)
+	assert.Equal(t, 7, parentSnapshot.SupersededPendingReplanRetirementCount)
+	assert.Equal(t, 1, parentSnapshot.LocalObservationScopedCommitCount)
+	assert.Equal(t, 3, parentSnapshot.LocalObservationScopedUpsertCount)
+	assert.Equal(t, 4, parentSnapshot.LocalObservationExactDeleteCount)
+	assert.Equal(t, 5, parentSnapshot.LocalObservationPrefixDeleteCount)
+	assert.Equal(t, 1, parentSnapshot.LocalObservationFullSnapshotReplacementCount)
+	assert.Equal(t, 1, parentSnapshot.LocalObservationSuspectDroppedEventsCount)
+	assert.Equal(t, int64(18), parentSnapshot.ReplanIdlePlanningMS)
 	assert.Equal(t, "success", childSnapshot.Result)
 }
 
@@ -75,6 +98,11 @@ func TestCollector_NilAndTransferBranches(t *testing.T) {
 	assert.Equal(t, Snapshot{}, nilCollector.Snapshot())
 	nilCollector.SetResult("ignored")
 	nilCollector.RecordWatchBatch(3)
+	nilCollector.RecordSuperseded(SupersededSourceWorkerStartLocalTruth, 1)
+	nilCollector.RecordLocalObservationScopedCommit(1, 1, 1)
+	nilCollector.RecordLocalObservationFullSnapshotReplacement()
+	nilCollector.RecordLocalObservationSuspect(LocalTruthRecoveryWatcherError)
+	nilCollector.RecordReplanWorkerIdle(ReplanIdlePhaseRuntimeInstall, 1, time.Millisecond)
 
 	collector := NewCollector(nil)
 	collector.RecordHTTPRequest(204, 5*time.Millisecond, nil)

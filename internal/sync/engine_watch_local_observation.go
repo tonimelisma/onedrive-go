@@ -37,6 +37,7 @@ func (rt *watchRuntime) applyLocalObservationBatch(
 		if err := rt.engine.baseline.MarkLocalTruthSuspect(ctx, reason); err != nil {
 			return false, err
 		}
+		rt.engine.collector().RecordLocalObservationSuspect(reason)
 		return true, nil
 	}
 
@@ -49,6 +50,7 @@ func (rt *watchRuntime) applyLocalObservationBatch(
 		if err := rt.engine.baseline.ReplaceLocalState(ctx, batch.rows); err != nil {
 			return false, err
 		}
+		rt.engine.collector().RecordLocalObservationFullSnapshotReplacement()
 		return changed, nil
 	}
 
@@ -68,6 +70,11 @@ func (rt *watchRuntime) applyLocalObservationBatch(
 	); err != nil {
 		return false, err
 	}
+	rt.engine.collector().RecordLocalObservationScopedCommit(
+		len(batch.rows),
+		len(batch.deletedPaths),
+		len(batch.deletedPrefixes),
+	)
 
 	return true, nil
 }

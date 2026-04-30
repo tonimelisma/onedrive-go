@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
 type admissionDecisionKind int
@@ -68,6 +70,7 @@ func (flow *engineFlow) filterFreshAdmissionDecisions(
 
 		completionErr := fmt.Errorf("%w: %s", ErrActionPreconditionChanged, freshness.Reason)
 		completion := actionCompletionFromTrackedAction(ta, nil, completionErr)
+		flow.engine.collector().RecordSuperseded(perf.SupersededSourceEngineAdmission, 1)
 		if err := flow.applySupersededCompletion(ctx, watch, ta, &completion, "admission stale action"); err != nil {
 			return filtered, admissionDispatchActions(filtered), err
 		}

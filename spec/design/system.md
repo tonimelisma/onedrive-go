@@ -1,6 +1,6 @@
 # System Architecture
 
-Implements: R-6.2.1 [verified], R-6.2.2 [verified], R-6.3.1 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified]
+Implements: R-6.2.1 [verified], R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified]
 
 ## Verified By
 
@@ -189,6 +189,10 @@ performance data.
 
 - `internal/perf` owns command/session collectors, aggregate counter rollups,
   live per-drive snapshots, and opt-in capture bundle creation.
+- The perf snapshot includes stale-work counters by owning boundary
+  (admission, worker-start local truth, worker-start remote truth, live local
+  precondition, live remote precondition, and pending replan retirement), local
+  observation commit/recovery counters, and replan-phase worker-idle timing.
 - `internal/perf.Runtime` is the single owner of drive registration and
   capture admission, so perf capture does not route through a second
   extra runtime object just to gate one in-flight bundle.

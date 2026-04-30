@@ -70,6 +70,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.6.14: The system shall emit structured INFO-level performance summaries for CLI commands. Long-running one-shot commands shall emit periodic progress summaries, and watch owners shall emit interval summaries, using stable aggregate fields only. Always-on performance logs shall omit raw paths, account emails, drive IDs, item IDs, and transfer URLs. [verified]
 - R-6.6.15: The system shall expose live sync-owner performance snapshots through `status --perf` and the local control socket. This live performance surface shall be ephemeral only: when no owner is active, the system shall report unavailability instead of fabricating durable history. [verified]
 - R-6.6.16: The system shall support explicit opt-in performance capture from the active sync owner, writing a local bundle with CPU, heap, block, mutex, goroutine, and optional trace artifacts. Full per-mount detail is allowed only in the explicit capture bundle; always-on logs and status surfaces remain redacted aggregates. [verified]
+- R-6.6.17: The live perf snapshot, structured perf logs, and `status --perf` shall expose path-free aggregate stale-work observability: superseded counts by owning boundary, scoped local-observation commit counts, suspect-local-truth recovery counts, and worker-idle duration by replan phase. [verified]
 
 ## R-6.7 Technical Requirements [verified]
 
