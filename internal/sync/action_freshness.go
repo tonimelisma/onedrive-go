@@ -329,7 +329,7 @@ func actionUsesLocalFreshness(action *Action) bool {
 	if !actionHasPlannerView(action) {
 		return false
 	}
-	if action.Type == ActionDownload && action.ConflictInfo != nil {
+	if action.Type == ActionDownload && action.RequireMissingLocalTarget {
 		return false
 	}
 

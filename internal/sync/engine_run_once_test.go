@@ -102,7 +102,7 @@ func TestRunOnce_NoChanges(t *testing.T) {
 
 	total := report.Downloads + report.Uploads + report.LocalDeletes +
 		report.RemoteDeletes + report.FolderCreates + report.Moves +
-		report.Conflicts + report.SyncedUpdates + report.Cleanups
+		report.SyncedUpdates + report.Cleanups
 	assert.Equal(t, 0, total, "expected zero actions")
 	assert.Equal(t, 0, report.Succeeded, "succeeded")
 	assert.Equal(t, 0, report.Failed, "failed")
@@ -161,7 +161,7 @@ func TestRunOnce_DownloadOnly_ObservesLocalScanButSuppressesUploads(t *testing.T
 }
 
 // Validates: R-2.1.3
-func TestRunOnce_DownloadOnly_DefersEditDeleteAutoResolveUpload(t *testing.T) {
+func TestRunOnce_DownloadOnly_DefersEditDeleteRecreateUpload(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -1374,7 +1374,7 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 
 	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
-	assert.Equal(t, 0, report.Downloads, "download-only should not auto-resolve two-sided drift")
+	assert.Equal(t, 0, report.Downloads, "download-only should not handle two-sided drift")
 
 	_, err = os.Stat(filepath.Join(syncRoot, "retry-download.txt"))
 	require.ErrorIs(t, err, os.ErrNotExist)

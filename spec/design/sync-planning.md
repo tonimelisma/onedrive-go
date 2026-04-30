@@ -99,7 +99,7 @@ same derivation rather than a second planner-shaped helper.
 - local changed + remote changed with equal hashes -> `ActionUpdateSynced` (publication-only)
 - local changed + remote changed with different hashes -> `ActionConflictCopy` + dependent `ActionDownload`
 - local unchanged + remote deleted -> `ActionLocalDelete`
-- local changed + remote deleted -> `ActionUpload` with `ConflictEditDelete` metadata
+- local changed + remote deleted -> `ActionUpload` with no stale item ID, so execution recreates the remote file
 
 ### No baseline
 
@@ -153,19 +153,17 @@ writing additional descendant `observation_issues` rows.
 
 ## Conflict Planning
 
-The actionable-set builder detects conflicts, records their type in
-`ConflictInfo`, and expands them into concrete runtime actions as part of the
-current action set.
-
-- `ConflictEditEdit`: both sides changed existing content differently
-- `ConflictCreateCreate`: both sides independently created different content
-- `ConflictEditDelete`: local edit raced with remote delete
+The actionable-set builder detects conflicts and expands them directly into
+concrete runtime actions as part of the current action set. It does not create
+or preserve separate conflict metadata.
 
 Execution applies the already-expanded conflict policy immediately:
 
 - edit/edit and create/create -> preserve both versions by renaming local to a
-  conflict copy and downloading remote to the canonical path
-- edit/delete -> local wins automatically by re-uploading local content
+  conflict copy and downloading remote to the canonical path; the dependent
+  download explicitly requires the canonical local target to be missing after
+  the conflict copy
+- edit/delete -> keep local content in place and upload it as a new remote item
 
 If executor-time precondition revalidation later proves a planned local delete
 went stale, execution reports that stale precondition and returns control to
@@ -215,10 +213,9 @@ reaches execution, ordinary actions are mount-local concrete work.
 
 `download-only` and `upload-only` do not stop observation. They suppress only
 the forbidden action classes and record those counts in `DeferredByMode`.
-Conflict-copy is suppressed together with its paired remote-resolution download
-in `upload-only`; the planner must not rename local truth into a fake
-delete/create sequence when the corresponding remote-resolution action is
-deferred by mode.
+Conflict-copy is suppressed together with its paired remote-winner download in
+`upload-only`; the planner must not rename local truth into a fake delete/create
+sequence when the corresponding download is deferred by mode.
 
 Permission scopes are different: planner is blocked-truth-aware for active read
 scopes and observation-owned unreadable paths so unavailable truth is never

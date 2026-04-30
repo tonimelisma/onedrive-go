@@ -59,8 +59,8 @@ const (
 	sqlDeleteBaseline = `DELETE FROM baseline WHERE path = ?`
 )
 
-// LocalBaselineRefresh is the explicit reconciliation input used by convergence
-// paths such as keep-both conflict resolution.
+// LocalBaselineRefresh is the explicit input for refreshing local baseline
+// identity after convergence paths such as keep-both conflict handling.
 type LocalBaselineRefresh struct {
 	Path             string
 	DriveID          driveid.ID
@@ -607,8 +607,6 @@ func mutationFromActionOutcome(o *ActionOutcome) *BaselineMutation {
 		LocalHasIdentity:      o.LocalHasIdentity,
 		LocalIdentityObserved: o.LocalIdentityObserved,
 		ETag:                  o.ETag,
-		ConflictType:          o.ConflictType,
-		ResolvedBy:            o.ResolvedBy,
 	}
 }
 

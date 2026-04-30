@@ -22,7 +22,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.2.1: (S1) The system shall never delete a remote item based on local absence unless a synced baseline entry exists. [verified]
 - R-6.2.2: (S2) The system shall never process deletions from an incomplete enumeration (partial delta fetch or unmounted volume). [verified]
 - R-6.2.3: (S3) Downloads shall use atomic file writes (client-owned namespaced partial + hash verify + rename). [verified]
-- R-6.2.4: (S4) Local deletions shall verify the file hash against baseline before deleting; on mismatch, a conflict copy is preserved. [verified]
+- R-6.2.4: (S4) Local deletions shall verify the file hash against baseline before deleting; on mismatch, the newer local content is preserved. [verified]
 - R-6.2.5: (S5) Delete safety protection shall prevent mass accidental deletions without manual approval workflows: one-shot and watch mode shall keep using the normal engine path, continue safe non-delete work, and apply ordinary per-item safety checks before deleting local content. [verified]
 - R-6.2.6: (S6) Before each download, the system shall verify available disk space. When below `min_free_space`: set a `disk:local` block scope on all downloads. When above `min_free_space` but below file size plus `min_free_space`: record a per-file failure. [verified]
 - R-6.2.7: (S7) Client-owned transfer partials shall never upload. When `ignore_junk_files` or explicit path filters exclude arbitrary partial or temporary files, the system shall not upload or download them. Transfer-artifact cleanup shall respect configured include/ignore boundaries and protected child roots. [verified]
@@ -39,7 +39,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 
 ## R-6.4 Safety [implemented]
 
-- R-6.4.1: Local deletions triggered by remote absence shall verify the on-disk file hash against baseline before deleting. On mismatch, the system shall preserve the newer local content and auto-resolve through the edit/delete conflict path instead of silently deleting it. [verified]
+- R-6.4.1: Local deletions triggered by remote absence shall verify the on-disk file hash against baseline before deleting. On mismatch, the system shall preserve the newer local content and let the next plan recreate the remote item instead of silently deleting it. [verified]
 - R-6.4.2: The system shall not require manual delete-approval workflows. Deletion safety is per-item and automatic; large delete batches execute through the normal engine path once ordinary per-item safety checks pass. [verified]
 - R-6.4.3: Removed delete-safety configuration keys shall be rejected as unknown configuration rather than silently ignored or mapped to hidden defaults. [verified]
 - R-6.4.4: Remote deletions shall go to the OneDrive recycle bin by default. [verified]

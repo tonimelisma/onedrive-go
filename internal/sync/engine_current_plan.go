@@ -570,7 +570,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	flow.engine.collector().RecordPlan(len(plan.Actions), flow.engine.since(planStart))
 
 	counts := CountByType(plan.Actions)
-	report := buildReportFromCounts(counts, CountConflicts(plan.Actions), plan.DeferredByMode, mode, opts)
+	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
 
 	return &builtCurrentPlan{
 		Plan:                     plan,
