@@ -330,11 +330,33 @@ func requireShortcutSentinelVisible(
 ) {
 	t.Helper()
 
+	require.NoError(t, shortcutSentinelReachable(t, cfgPath, env, fixture))
+}
+
+func shortcutSentinelReachable(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	fixture resolvedShortcutFixture,
+) error {
+	t.Helper()
+
+	if fixture.SharedItem.Selector == "" {
+		return fmt.Errorf("shortcut shared target selector was not resolved")
+	}
+
 	downloadRoot := filepath.Join(t.TempDir(), "shared-target")
-	runCLIWithoutDrive(t, cfgPath, env, "get", fixture.SharedItem.Selector, downloadRoot)
+	stdout, stderr, err := runCLICore(t, cfgPath, env, "", "get", fixture.SharedItem.Selector, downloadRoot)
+	if err != nil {
+		return fmt.Errorf("download shortcut shared target: %w\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
 
 	sentinelPath := filepath.Join(downloadRoot, filepath.FromSlash(strings.TrimPrefix(path.Clean(fixture.SentinelPath), "/")))
-	assert.FileExists(t, sentinelPath)
+	if _, err := os.Stat(sentinelPath); err != nil {
+		return fmt.Errorf("stat shortcut shared target sentinel %s: %w", sentinelPath, err)
+	}
+
+	return nil
 }
 
 func requireActiveShortcutChild(
@@ -479,16 +501,19 @@ func waitForShortcutRootPlaceholder(
 	var lastNames []string
 	var lastStdout string
 	var lastErr error
+	rootListingDecoded := false
 	for attempt := 0; ; attempt++ {
 		stdout, _, err := runCLIWithConfigAllowErrorForDrive(t, cfgPath, env, fixture.ParentDrive, "ls", "--json", "/")
 		lastStdout = stdout
 		lastErr = err
+		rootListingDecoded = false
 		if err == nil {
 			var items []remoteListJSONItem
 			if decodeErr := json.Unmarshal([]byte(stdout), &items); decodeErr != nil {
 				lastErr = decodeErr
 			} else {
 				lastNames = rootListingNames(items)
+				rootListingDecoded = true
 				if stringsContain(lastNames, fixture.ShortcutName) {
 					return
 				}
@@ -496,6 +521,27 @@ func waitForShortcutRootPlaceholder(
 		}
 
 		if time.Now().After(deadline) {
+			pollState := shortcutRootPlaceholderPollState{
+				RootListingDecoded: rootListingDecoded,
+				RootNames:          lastNames,
+				LastStdout:         lastStdout,
+				LastErr:            lastErr,
+			}
+			if !canSkipMissingShortcutRootPlaceholder(pollState, fixture) {
+				require.Failf(t,
+					failureTitle,
+					"root placeholder omission is not skippable because the root listing did not end in a decoded success or the shared target was not resolved; root_listing_decoded=%t shared_target_resolved=%t root_names=%v last_err=%v last_stdout=%s",
+					pollState.RootListingDecoded,
+					fixture.SharedItem.Selector != "",
+					pollState.RootNames,
+					pollState.LastErr,
+					pollState.LastStdout,
+				)
+			}
+			require.NoErrorf(t,
+				shortcutSentinelReachable(t, cfgPath, env, fixture),
+				"shared target must remain reachable before skipping missing shortcut root placeholder",
+			)
 			t.Skipf(
 				"%s: live Graph did not expose Add-to-OneDrive shortcut placeholder %q in root of %s within %v; root_names=%v last_err=%v last_stdout=%s",
 				failureTitle,
@@ -510,6 +556,50 @@ func waitForShortcutRootPlaceholder(
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
+}
+
+type shortcutRootPlaceholderPollState struct {
+	RootListingDecoded bool
+	RootNames          []string
+	LastStdout         string
+	LastErr            error
+}
+
+func canSkipMissingShortcutRootPlaceholder(
+	state shortcutRootPlaceholderPollState,
+	fixture resolvedShortcutFixture,
+) bool {
+	return state.RootListingDecoded && state.LastErr == nil && fixture.SharedItem.Selector != ""
+}
+
+func TestCanSkipMissingShortcutRootPlaceholderRequiresDecodedListingAndSharedTarget(t *testing.T) {
+	t.Parallel()
+
+	fixture := resolvedShortcutFixture{
+		SharedItem: sharedItemE2E{
+			Selector: "shared:user@example.com:drive:item",
+		},
+	}
+
+	assert.True(t, canSkipMissingShortcutRootPlaceholder(
+		shortcutRootPlaceholderPollState{RootListingDecoded: true},
+		fixture,
+	))
+	assert.False(t, canSkipMissingShortcutRootPlaceholder(
+		shortcutRootPlaceholderPollState{
+			RootListingDecoded: true,
+			LastErr:            fmt.Errorf("graph unavailable"),
+		},
+		fixture,
+	))
+	assert.False(t, canSkipMissingShortcutRootPlaceholder(
+		shortcutRootPlaceholderPollState{RootListingDecoded: false},
+		fixture,
+	))
+	assert.False(t, canSkipMissingShortcutRootPlaceholder(
+		shortcutRootPlaceholderPollState{RootListingDecoded: true},
+		resolvedShortcutFixture{},
+	))
 }
 
 func rootListingNames(items []remoteListJSONItem) []string {
