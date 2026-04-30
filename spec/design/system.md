@@ -1,6 +1,6 @@
 # System Architecture
 
-Implements: R-6.2.1 [verified], R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified]
+Implements: R-6.2.1 [verified], R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified], R-6.10.16 [verified]
 
 ## Verified By
 
@@ -222,6 +222,8 @@ Static verification is a first-class architectural constraint, not a best-effort
   not serialize or fail on cross-process artifact collisions.
 - The verifier implementation is split by concrete ownership inside `internal/devtool`: `verify.go` owns profile orchestration and shared runners, `verify_summary.go` owns end-of-run summaries, `verify_e2e.go` owns fast/full live-suite orchestration, and `verify_stress.go` owns stress profiles. This split is structural only; `go run ./cmd/devtool verify ...` remains the single behavior contract and developer entrypoint.
 - Verifier tests mirror that ownership split instead of one monolithic test file: `verify_runner_test.go` covers profile orchestration and summaries, and `verify_test_helpers_test.go` owns the shared fake runner.
+- `go run ./cmd/devtool verify --dod --stage <stage>` layers repo-owned Definition of Done automation onto the same verification entrypoint. The staged flow is explicit: `start` fetches recent merged-PR review threads into a local ignored manifest for manual classification, `pre-pr` runs the selected local verification profile and proves the branch contains `origin/main`, `pre-merge` waits for required PR CI, posts templated evidence-bearing replies for every classified unresolved thread, resolves those threads, and rechecks unresolved thread state, and `post-merge` wraps `gh pr merge`, handles the known multi-worktree `main` checkout quirk by verifying server-side merge state, fast-forwards the root `main`, removes the increment worktree/branch, reruns cleanup audit, and accepts configured squash-merge push CI skips only when the merge commit subject matches the workflow skip rule.
+- DoD PR-comment actionability is intentionally not inferred by tooling. The manifest records GitHub's thread state (`isResolved`, `isOutdated`, path, line, and comments), while the agent or human must label each unresolved thread as `fixed`, `already_fixed`, or `non_actionable` with the required evidence fields. The tool enforces reply clarity and resolution, not semantic judgment.
 - `go run ./cmd/devtool cleanup-audit` is the read-only git-state cleanup classifier. It fetches/prunes `origin`, then classifies local worktrees, local branches, and remote branches as `safe_remove`, `keep_attached`, `keep_dirty`, `keep_unmerged`, or `keep_main` without deleting anything.
 - `go run ./cmd/devtool bench --scenario <name> [--subject <id>] [--runs N]
   [--warmup N] [--json] [--result-json <path>]` is the repo-owned benchmark
