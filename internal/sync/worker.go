@@ -300,17 +300,12 @@ func (wp *WorkerPool) recordLivePreconditionSuperseded(r *ActionCompletion, outc
 		return
 	}
 
-	switch {
-	case r.FailureCapability == PermissionCapabilityLocalRead ||
-		r.FailureCapability == PermissionCapabilityLocalWrite:
+	switch r.FailureCapability {
+	case PermissionCapabilityLocalRead, PermissionCapabilityLocalWrite:
 		wp.collector().RecordSuperseded(perf.SupersededSourceLiveLocalPrecondition, 1)
-	case r.FailureCapability == PermissionCapabilityRemoteRead ||
-		r.FailureCapability == PermissionCapabilityRemoteWrite:
+	case PermissionCapabilityRemoteRead, PermissionCapabilityRemoteWrite:
 		wp.collector().RecordSuperseded(perf.SupersededSourceLiveRemotePrecondition, 1)
-	case effectiveRemotePermissionCapability(r) != PermissionCapabilityUnknown:
-		wp.collector().RecordSuperseded(perf.SupersededSourceLiveRemotePrecondition, 1)
-	case effectiveLocalPermissionCapability(r) != PermissionCapabilityUnknown:
-		wp.collector().RecordSuperseded(perf.SupersededSourceLiveLocalPrecondition, 1)
+	case PermissionCapabilityUnknown:
 	}
 }
 

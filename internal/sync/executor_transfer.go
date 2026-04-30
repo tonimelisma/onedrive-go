@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -74,7 +75,7 @@ func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOu
 			ActionDownload,
 			err,
 			action.Path,
-			inferFailureCapabilityFromError(err, PermissionCapabilityLocalWrite, PermissionCapabilityRemoteRead),
+			downloadTransferFailureCapability(err),
 		)
 	}
 
@@ -172,7 +173,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 				ActionUpload,
 				err,
 				action.Path,
-				inferFailureCapabilityFromError(err, PermissionCapabilityLocalRead, PermissionCapabilityRemoteWrite),
+				uploadTransferFailureCapability(err),
 			)
 		}
 		parentID = e.resolvedParentIDForOutcome(action, result.Item)
@@ -203,7 +204,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 				ActionUpload,
 				err,
 				action.Path,
-				inferFailureCapabilityFromError(err, PermissionCapabilityLocalRead, PermissionCapabilityRemoteWrite),
+				uploadTransferFailureCapability(err),
 			)
 		}
 	}
@@ -213,6 +214,22 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 	outcome := e.uploadOutcome(action, driveID, parentID, result)
 	decorateConflictOutcome(action, &outcome)
 	return outcome
+}
+
+func downloadTransferFailureCapability(err error) PermissionCapability {
+	if errors.Is(err, ErrActionPreconditionChanged) {
+		return PermissionCapabilityLocalWrite
+	}
+
+	return inferFailureCapabilityFromError(err, PermissionCapabilityLocalWrite, PermissionCapabilityRemoteRead)
+}
+
+func uploadTransferFailureCapability(err error) PermissionCapability {
+	if errors.Is(err, ErrActionPreconditionChanged) {
+		return PermissionCapabilityLocalRead
+	}
+
+	return inferFailureCapabilityFromError(err, PermissionCapabilityLocalRead, PermissionCapabilityRemoteWrite)
 }
 
 func (e *Executor) uploadOutcome(

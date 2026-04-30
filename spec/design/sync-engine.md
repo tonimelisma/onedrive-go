@@ -421,11 +421,14 @@ Move actions validate both endpoints: the main planned view path and the
 opposite source/destination peer needed for the mutation.
 
 Watch replan failure policy is also explicit. Pre-authority local observation
-failure is recoverable and drops that replan trigger. Once the engine starts
-depending on authoritative current-truth writes or runtime state, failure is
-fatal to the current watch session: remote observation apply, observation
-findings reconciliation, local snapshot commit, current-plan build from
-committed truth, and runtime startup/admission all fail closed. Shutdown cancellation is the
+failure is recoverable and reports that no replacement runtime was applied; the
+pending-replan and direct-idle callers reschedule the same dirty/full-refresh
+intent through `DirtyBuffer` rather than restoring retired work or dropping the
+trigger. Once the engine starts depending on authoritative current-truth writes
+or runtime state, failure is fatal to the current watch session: remote
+observation apply, observation findings reconciliation, local snapshot commit,
+current-plan build from committed truth, and runtime startup/admission all fail
+closed. Shutdown cancellation is the
 one exception: if context cancellation lands during that steady-state replan
 handoff, the loop clears the best-effort sync-status batch and exits cleanly
 into shutdown instead of surfacing a fatal watch error.
