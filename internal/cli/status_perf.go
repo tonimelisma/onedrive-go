@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
@@ -14,6 +15,7 @@ const (
 	statusPerfUnavailableGeneric    = "live perf unavailable; check logs"
 	statusPerfUnavailableInactive   = "mount is not active in the current sync owner; check logs"
 	statusPerfUnavailableCollecting = "collecting live perf data; check logs"
+	replanIdlePhaseCount            = 4
 )
 
 type statusPerfOverlay struct {
@@ -195,6 +197,24 @@ func printStatusPerfText(w io.Writer, indent string, ss *syncStateInfo) error {
 		{label: "Phases", value: formatDetailedPerfPhases(snapshot)},
 		{label: "Activity", value: formatDetailedPerfActivity(snapshot, actionCount)},
 	}
+	if hasDetailedPerfStaleWork(snapshot) {
+		lines = append(lines, struct {
+			label string
+			value string
+		}{label: "Stale", value: formatDetailedPerfStaleWork(snapshot)})
+	}
+	if hasDetailedPerfLocalObservation(snapshot) {
+		lines = append(lines, struct {
+			label string
+			value string
+		}{label: "Local obs", value: formatDetailedPerfLocalObservation(snapshot)})
+	}
+	if hasDetailedPerfReplanIdle(snapshot) {
+		lines = append(lines, struct {
+			label string
+			value string
+		}{label: "Replan idle", value: formatDetailedPerfReplanIdle(snapshot)})
+	}
 
 	for i := range lines {
 		line := lines[i]
@@ -251,4 +271,90 @@ func formatDetailedPerfActivity(snapshot *perf.Snapshot, actionCount int) string
 		snapshot.WatchBatchCount,
 		snapshot.WatchPathCount,
 	)
+}
+
+func hasDetailedPerfStaleWork(snapshot *perf.Snapshot) bool {
+	return snapshot.SupersededEngineAdmissionCount > 0 ||
+		snapshot.SupersededWorkerStartLocalTruthCount > 0 ||
+		snapshot.SupersededWorkerStartRemoteTruthCount > 0 ||
+		snapshot.SupersededLiveLocalPreconditionCount > 0 ||
+		snapshot.SupersededLiveRemotePreconditionCount > 0 ||
+		snapshot.SupersededPendingReplanRetirementCount > 0
+}
+
+func formatDetailedPerfStaleWork(snapshot *perf.Snapshot) string {
+	return formatPerfCounterList([]perfCounterText{
+		{label: "admission", count: snapshot.SupersededEngineAdmissionCount},
+		{label: "worker local", count: snapshot.SupersededWorkerStartLocalTruthCount},
+		{label: "worker remote", count: snapshot.SupersededWorkerStartRemoteTruthCount},
+		{label: "live local", count: snapshot.SupersededLiveLocalPreconditionCount},
+		{label: "live remote", count: snapshot.SupersededLiveRemotePreconditionCount},
+		{label: "pending retired", count: snapshot.SupersededPendingReplanRetirementCount},
+	})
+}
+
+func hasDetailedPerfLocalObservation(snapshot *perf.Snapshot) bool {
+	return snapshot.LocalObservationScopedCommitCount > 0 ||
+		snapshot.LocalObservationScopedUpsertCount > 0 ||
+		snapshot.LocalObservationExactDeleteCount > 0 ||
+		snapshot.LocalObservationPrefixDeleteCount > 0 ||
+		snapshot.LocalObservationFullSnapshotReplacementCount > 0 ||
+		localObservationSuspectCount(snapshot) > 0
+}
+
+func formatDetailedPerfLocalObservation(snapshot *perf.Snapshot) string {
+	return formatPerfCounterList([]perfCounterText{
+		{label: "commits", count: snapshot.LocalObservationScopedCommitCount},
+		{label: "upserts", count: snapshot.LocalObservationScopedUpsertCount},
+		{label: "deletes", count: snapshot.LocalObservationExactDeleteCount},
+		{label: "prefix deletes", count: snapshot.LocalObservationPrefixDeleteCount},
+		{label: "full snapshots", count: snapshot.LocalObservationFullSnapshotReplacementCount},
+		{label: "suspect", count: localObservationSuspectCount(snapshot)},
+	})
+}
+
+func localObservationSuspectCount(snapshot *perf.Snapshot) int {
+	return snapshot.LocalObservationSuspectDroppedEventsCount +
+		snapshot.LocalObservationSuspectWatcherErrorCount +
+		snapshot.LocalObservationSuspectFullScanFailedCount +
+		snapshot.LocalObservationSuspectOtherCount
+}
+
+func hasDetailedPerfReplanIdle(snapshot *perf.Snapshot) bool {
+	return snapshot.ReplanIdleWaitingDrainMS > 0 ||
+		snapshot.ReplanIdleLocalRefreshMS > 0 ||
+		snapshot.ReplanIdlePlanningMS > 0 ||
+		snapshot.ReplanIdleRuntimeInstallMS > 0
+}
+
+func formatDetailedPerfReplanIdle(snapshot *perf.Snapshot) string {
+	parts := make([]string, 0, replanIdlePhaseCount)
+	appendDuration := func(label string, durationMS int64) {
+		if durationMS > 0 {
+			parts = append(parts, fmt.Sprintf("%s %s", label, formatPerfElapsed(durationMS)))
+		}
+	}
+
+	appendDuration("drain", snapshot.ReplanIdleWaitingDrainMS)
+	appendDuration("local refresh", snapshot.ReplanIdleLocalRefreshMS)
+	appendDuration("plan", snapshot.ReplanIdlePlanningMS)
+	appendDuration("install", snapshot.ReplanIdleRuntimeInstallMS)
+
+	return strings.Join(parts, ", ")
+}
+
+type perfCounterText struct {
+	label string
+	count int
+}
+
+func formatPerfCounterList(counters []perfCounterText) string {
+	parts := make([]string, 0, len(counters))
+	for i := range counters {
+		if counters[i].count > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", counters[i].label, counters[i].count))
+		}
+	}
+
+	return strings.Join(parts, ", ")
 }

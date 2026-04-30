@@ -266,7 +266,7 @@ func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) Acti
 			ActionRemoteDelete,
 			err,
 			action.Path,
-			inferFailureCapabilityFromError(err, PermissionCapabilityUnknown, PermissionCapabilityRemoteRead),
+			PermissionCapabilityRemoteRead,
 		)
 	}
 

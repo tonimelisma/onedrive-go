@@ -4,15 +4,19 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
 type watchLoopState struct {
-	phase            watchRuntimePhase
-	outbox           []*TrackedAction
-	pendingReplan    dirtyBatch
-	hasPendingReplan bool
-	pendingReplanAt  time.Time
-	postReplanOutbox bool
+	phase                         watchRuntimePhase
+	outbox                        []*TrackedAction
+	pendingReplan                 dirtyBatch
+	hasPendingReplan              bool
+	pendingReplanAt               time.Time
+	pendingReplanDrainIdleAt      time.Time
+	pendingReplanDrainIdleWorkers int
+	postReplanOutbox              bool
 
 	// Deduplication: caches the last watch-condition signature and per-scope
 	// shared-folder child-set signatures for watch summaries.
@@ -156,6 +160,7 @@ func (rt *watchRuntime) queuePendingReplan(batch dirtyBatch) {
 	rt.loop.hasPendingReplan = true
 	if !wasPending {
 		rt.loop.pendingReplanAt = rt.engine.nowFunc()
+		rt.startPendingReplanDrainIdleTracking(rt.loop.pendingReplanAt)
 		rt.emitRuntimeDebugEvent(engineDebugEventPendingReplanSet, "", 0, time.Time{})
 	}
 	if batch.FullRefresh {
@@ -177,6 +182,8 @@ func (rt *watchRuntime) takePendingReplan() (dirtyBatch, bool) {
 	rt.loop.pendingReplan = dirtyBatch{}
 	rt.loop.hasPendingReplan = false
 	rt.loop.pendingReplanAt = time.Time{}
+	rt.loop.pendingReplanDrainIdleAt = time.Time{}
+	rt.loop.pendingReplanDrainIdleWorkers = 0
 
 	return batch, true
 }
@@ -209,6 +216,7 @@ func (rt *watchRuntime) retireOutboxForPendingReplan() {
 		rt.markFinished(ta)
 	}
 	rt.replaceOutbox(nil)
+	rt.engine.collector().RecordSuperseded(perf.SupersededSourcePendingReplanRetirement, len(outbox))
 	rt.emitRuntimeDebugEvent(engineDebugEventOldOutboxRetired, "", len(outbox), rt.pendingReplanStartedAt())
 	if rt.runningCount > 0 {
 		rt.emitRuntimeDebugEvent(engineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
@@ -222,7 +230,40 @@ func (rt *watchRuntime) retireReadyFrontierForPendingReplan(ready []*TrackedActi
 	for _, ta := range ready {
 		rt.markFinished(ta)
 	}
+	rt.engine.collector().RecordSuperseded(perf.SupersededSourcePendingReplanRetirement, len(ready))
 	rt.emitRuntimeDebugEvent(engineDebugEventOldOutboxRetired, "released_ready_frontier", len(ready), rt.pendingReplanStartedAt())
+}
+
+func (rt *watchRuntime) recordReplanWorkerIdle(phase perf.ReplanIdlePhase, start time.Time, idleWorkers int) {
+	if rt == nil || rt.engine == nil || start.IsZero() {
+		return
+	}
+
+	rt.engine.collector().RecordReplanWorkerIdle(phase, idleWorkers, rt.engine.since(start))
+}
+
+func (rt *watchRuntime) startPendingReplanDrainIdleTracking(now time.Time) {
+	if rt.runningCount == 0 || now.IsZero() {
+		return
+	}
+
+	rt.loop.pendingReplanDrainIdleAt = now
+	rt.loop.pendingReplanDrainIdleWorkers = rt.idleWorkers()
+}
+
+func (rt *watchRuntime) advancePendingReplanDrainIdleTracking() {
+	if !rt.hasPendingReplan() || rt.loop.pendingReplanDrainIdleAt.IsZero() {
+		return
+	}
+
+	now := rt.engine.nowFunc()
+	rt.engine.collector().RecordReplanWorkerIdle(
+		perf.ReplanIdlePhaseWaitingDrain,
+		rt.loop.pendingReplanDrainIdleWorkers,
+		now.Sub(rt.loop.pendingReplanDrainIdleAt),
+	)
+	rt.loop.pendingReplanDrainIdleAt = now
+	rt.loop.pendingReplanDrainIdleWorkers = rt.idleWorkers()
 }
 
 func (rt *watchRuntime) rescheduleReplanIntent(batch dirtyBatch) error {

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
 // runSteadyStateReplan is the single steady-state watch replan entry. Dirty
@@ -37,6 +39,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	observeStart := rt.engine.nowFunc()
 	rt.emitRuntimeDebugEvent(engineDebugEventLocalTruthRefreshStarted, "", 0, replanStart)
 	localResult, err := rt.refreshAndCommitLocalCurrentState(ctx, p.bl)
+	rt.recordReplanWorkerIdle(perf.ReplanIdlePhaseLocalRefresh, observeStart, rt.totalWorkers())
 	if err != nil {
 		return rt.handleSteadyStateLocalRefreshError(ctx, err)
 	}
@@ -47,12 +50,15 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	planStart := rt.engine.nowFunc()
 	rt.emitRuntimeDebugEvent(engineDebugEventPlanningStarted, "", 0, replanStart)
 	runtime, err := rt.runSteadyStateCurrentPlan(ctx, p.bl, p.mode)
+	rt.recordReplanWorkerIdle(perf.ReplanIdlePhasePlanning, planStart, rt.totalWorkers())
 	if err != nil {
 		return false, rt.finishSteadyStateReplanStep(ctx, "build_current_plan", err)
 	}
 	rt.emitRuntimeDebugEvent(engineDebugEventPlanningFinished, "", 0, planStart)
 
+	installStart := rt.engine.nowFunc()
 	dispatch, _, err := rt.startRuntimeStage(ctx, runtime, p.bl, rt)
+	rt.recordReplanWorkerIdle(perf.ReplanIdlePhaseRuntimeInstall, installStart, rt.totalWorkers())
 	if err != nil {
 		return false, rt.finishSteadyStateReplanStep(ctx, "start_runtime", err)
 	}

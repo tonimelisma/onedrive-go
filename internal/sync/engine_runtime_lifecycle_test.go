@@ -386,6 +386,7 @@ func TestEngineFlow_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenScopeNoL
 		Type:    ActionDownload,
 		Path:    "trial.txt",
 		DriveID: eng.driveID,
+		View:    &PathView{Path: "trial.txt"},
 	}, 1, nil)
 	require.NotNil(t, ready)
 	ready.IsTrial = true
@@ -415,6 +416,7 @@ func TestEngineFlow_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWithout
 		Type:    ActionUpload,
 		Path:    "trial.txt",
 		DriveID: eng.driveID,
+		View:    &PathView{Path: "trial.txt"},
 	}, 1, nil)
 	require.NotNil(t, ready)
 	ready.IsTrial = true

@@ -126,6 +126,52 @@ func TestSnapshotAttrs_UsesActionableActionField(t *testing.T) {
 	assert.Equal(t, int64(25), attrMap["plan_time_ms"])
 }
 
+// Validates: R-6.6.17
+func TestSnapshotAttrs_IncludesStaleWorkAndObservationCounters(t *testing.T) {
+	t.Parallel()
+
+	attrs := SnapshotAttrs(&Snapshot{
+		SupersededEngineAdmissionCount:               1,
+		SupersededWorkerStartLocalTruthCount:         2,
+		SupersededWorkerStartRemoteTruthCount:        3,
+		SupersededLiveLocalPreconditionCount:         4,
+		SupersededLiveRemotePreconditionCount:        5,
+		SupersededPendingReplanRetirementCount:       6,
+		LocalObservationScopedCommitCount:            7,
+		LocalObservationScopedUpsertCount:            8,
+		LocalObservationExactDeleteCount:             9,
+		LocalObservationPrefixDeleteCount:            10,
+		LocalObservationFullSnapshotReplacementCount: 11,
+		LocalObservationSuspectDroppedEventsCount:    12,
+		ReplanIdleWaitingDrainMS:                     13,
+		ReplanIdleLocalRefreshMS:                     14,
+		ReplanIdlePlanningMS:                         15,
+		ReplanIdleRuntimeInstallMS:                   16,
+	})
+
+	attrMap := make(map[string]any, len(attrs))
+	for i := range attrs {
+		attrMap[attrs[i].Key] = attrs[i].Value.Any()
+	}
+
+	assert.Equal(t, int64(1), attrMap["superseded_engine_admission"])
+	assert.Equal(t, int64(2), attrMap["superseded_worker_start_local_truth"])
+	assert.Equal(t, int64(3), attrMap["superseded_worker_start_remote_truth"])
+	assert.Equal(t, int64(4), attrMap["superseded_live_local_precondition"])
+	assert.Equal(t, int64(5), attrMap["superseded_live_remote_precondition"])
+	assert.Equal(t, int64(6), attrMap["superseded_pending_replan_retirement"])
+	assert.Equal(t, int64(7), attrMap["local_obs_scoped_commits"])
+	assert.Equal(t, int64(8), attrMap["local_obs_scoped_upserts"])
+	assert.Equal(t, int64(9), attrMap["local_obs_exact_deletes"])
+	assert.Equal(t, int64(10), attrMap["local_obs_prefix_deletes"])
+	assert.Equal(t, int64(11), attrMap["local_obs_full_snapshot_replacements"])
+	assert.Equal(t, int64(12), attrMap["local_obs_suspect_dropped_events"])
+	assert.Equal(t, int64(13), attrMap["replan_idle_waiting_drain_ms"])
+	assert.Equal(t, int64(14), attrMap["replan_idle_local_refresh_ms"])
+	assert.Equal(t, int64(15), attrMap["replan_idle_planning_ms"])
+	assert.Equal(t, int64(16), attrMap["replan_idle_runtime_install_ms"])
+}
+
 func newTestJSONLogger(buf *lockedBuffer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(buf, nil))
 }

@@ -287,7 +287,7 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Actio
 			ActionFolderCreate,
 			parentPreconditionErr,
 			action.Path,
-			inferFailureCapabilityFromError(parentPreconditionErr, PermissionCapabilityUnknown, PermissionCapabilityRemoteRead),
+			PermissionCapabilityRemoteRead,
 		)
 	}
 	name := filepath.Base(action.Path)
@@ -385,7 +385,7 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) Action
 			ActionRemoteMove,
 			sourcePreconditionErr,
 			action.OldPath,
-			inferFailureCapabilityFromError(sourcePreconditionErr, PermissionCapabilityUnknown, PermissionCapabilityRemoteRead),
+			PermissionCapabilityRemoteRead,
 		)
 	}
 	parentPreconditionErr := e.validateRemoteParentPrecondition(ctx, driveID, newParentID, action, "remote move")
@@ -395,7 +395,7 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) Action
 			ActionRemoteMove,
 			parentPreconditionErr,
 			action.Path,
-			inferFailureCapabilityFromError(parentPreconditionErr, PermissionCapabilityUnknown, PermissionCapabilityRemoteRead),
+			PermissionCapabilityRemoteRead,
 		)
 	}
 

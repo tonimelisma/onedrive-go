@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.11 [verified], R-6.8.16 [verified]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.8.16 [verified]
 
 ## Overview
 
@@ -174,6 +174,9 @@ The control-socket protocol is now mount-shaped:
 - `GET /v1/perf` returns per-mount live snapshots keyed by mount ID
 - the CLI status/perf overlay matches those mount IDs against the runtime mount
   rows it renders
+- `status --perf` renders stale-work, local-observation, and replan-idle
+  aggregate lines only when those counters are nonzero; the text remains
+  path-free and ID-free.
 
 The socket is no longer a sync-decision submission surface because the
 architecture no longer has manual conflict or delete-approval workflows.

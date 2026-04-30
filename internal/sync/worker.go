@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
 var (
@@ -25,10 +26,11 @@ const minWorkers = 4
 // Workers are pure executors — they NEVER call depGraph.Complete(). The engine
 // owns all completion decisions (R-6.8.9).
 type WorkerPool struct {
-	cfg        *ExecutorConfig
-	dispatchCh <-chan *TrackedAction
-	baseline   *SyncStore
-	logger     *slog.Logger
+	cfg           *ExecutorConfig
+	dispatchCh    <-chan *TrackedAction
+	baseline      *SyncStore
+	logger        *slog.Logger
+	perfCollector *perf.Collector
 
 	// completions reports per-action outcomes back to the engine. The engine
 	// reads from this channel, classifies completions, and calls depGraph.Complete.
@@ -59,10 +61,11 @@ func NewWorkerPool(
 	}
 
 	return &WorkerPool{
-		cfg:        cfg,
-		dispatchCh: dispatchCh,
-		baseline:   baseline,
-		logger:     logger,
+		cfg:           cfg,
+		dispatchCh:    dispatchCh,
+		baseline:      baseline,
+		logger:        logger,
+		perfCollector: nil,
 		// Buffer sizing contract: one-shot mode uses planSize (equal to
 		// the number of actions, so workers never block). Watch mode passes
 		// watchCompletionBuf with a drain goroutine reading completions
@@ -213,7 +216,19 @@ func (wp *WorkerPool) validateActionFreshness(ctx context.Context, ta *TrackedAc
 		return nil
 	}
 
+	wp.recordWorkerStartSuperseded(decision)
 	return fmt.Errorf("%w: %s", ErrActionPreconditionChanged, decision.Reason)
+}
+
+func (wp *WorkerPool) recordWorkerStartSuperseded(decision actionFreshnessDecision) {
+	switch decision.Source {
+	case actionFreshnessSourceLocalTruth:
+		wp.collector().RecordSuperseded(perf.SupersededSourceWorkerStartLocalTruth, 1)
+	case actionFreshnessSourceRemoteTruth:
+		wp.collector().RecordSuperseded(perf.SupersededSourceWorkerStartRemoteTruth, 1)
+	case actionFreshnessSourceUnknown:
+		return
+	}
 }
 
 // dispatchAction routes a tracked action to the appropriate executor method.
@@ -272,11 +287,39 @@ func (wp *WorkerPool) Completions() <-chan ActionCompletion {
 // context cancellation on the result-processing loop (resultShutdown classification).
 func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, outcome *ActionOutcome, actionErr error) {
 	r := actionCompletionFromTrackedAction(ta, outcome, actionErr)
+	wp.recordLivePreconditionSuperseded(&r, outcome)
 
 	select {
 	case wp.completions <- r:
 	case <-ctx.Done():
 	}
+}
+
+func (wp *WorkerPool) recordLivePreconditionSuperseded(r *ActionCompletion, outcome *ActionOutcome) {
+	if outcome == nil || r == nil || !errors.Is(r.Err, ErrActionPreconditionChanged) {
+		return
+	}
+
+	switch {
+	case r.FailureCapability == PermissionCapabilityLocalRead ||
+		r.FailureCapability == PermissionCapabilityLocalWrite:
+		wp.collector().RecordSuperseded(perf.SupersededSourceLiveLocalPrecondition, 1)
+	case r.FailureCapability == PermissionCapabilityRemoteRead ||
+		r.FailureCapability == PermissionCapabilityRemoteWrite:
+		wp.collector().RecordSuperseded(perf.SupersededSourceLiveRemotePrecondition, 1)
+	case effectiveRemotePermissionCapability(r) != PermissionCapabilityUnknown:
+		wp.collector().RecordSuperseded(perf.SupersededSourceLiveRemotePrecondition, 1)
+	case effectiveLocalPermissionCapability(r) != PermissionCapabilityUnknown:
+		wp.collector().RecordSuperseded(perf.SupersededSourceLiveLocalPrecondition, 1)
+	}
+}
+
+func (wp *WorkerPool) collector() *perf.Collector {
+	if wp == nil {
+		return nil
+	}
+
+	return wp.perfCollector
 }
 
 func (wp *WorkerPool) closeCompletions() {

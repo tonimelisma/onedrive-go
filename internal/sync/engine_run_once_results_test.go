@@ -73,14 +73,17 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 	runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "root.txt",
+		View: &PathView{Path: "root.txt"},
 	}, 1, nil)
 	runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "child.txt",
+		View: &PathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	runner.depGraph.Add(&Action{
 		Type: ActionDownload,
 		Path: "auth.txt",
+		View: &PathView{Path: "auth.txt"},
 	}, 3, nil)
 
 	results := make(chan ActionCompletion, 2)
@@ -123,6 +126,7 @@ func TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOr
 	root := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "root.txt",
+		View: &PathView{Path: "root.txt"},
 	}, 1, nil)
 	require.NotNil(t, root)
 	runner.markRunning(root)
@@ -178,6 +182,7 @@ func TestEngineFlow_CompleteQueuedDispatchAsShutdown_CompletesQueuedSubtree(t *t
 	child := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "child.txt",
+		View: &PathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
@@ -224,12 +229,14 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterFatalCompletesReleasedReadyA
 	root := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "root.txt",
+		View: &PathView{Path: "root.txt"},
 	}, 1, nil)
 	require.NotNil(t, root)
 
 	child := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "child.txt",
+		View: &PathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
@@ -307,6 +314,7 @@ func TestOneShotRunner_RunResultsLoopIdle_ReleasesDueHeldWorkBeforeBlocking(t *t
 	action := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "retry.txt",
+		View: &PathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, action)
 	runner.holdAction(action, heldReasonRetry, ScopeKey{}, eng.nowFn().Add(-time.Second))
@@ -355,6 +363,7 @@ func TestOneShotRunner_ReleaseIdleDueHeldWork_ClearsShutdownCompletedOutboxOnRed
 	concrete := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "retry.txt",
+		View: &PathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, concrete)
 	runner.holdAction(concrete, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))

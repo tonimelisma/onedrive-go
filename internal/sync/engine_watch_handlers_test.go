@@ -375,6 +375,7 @@ func TestWatchRuntime_HandleWatchHeldRelease_CompletesReleasedConcreteActionsOnR
 	concrete := rt.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "retry.txt",
+		View: &PathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, concrete)
 	rt.holdAction(concrete, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))

@@ -85,6 +85,8 @@ func actionCompletionFromTrackedAction(
 
 	if outcome != nil {
 		r.Success = outcome.Success
+		r.FailurePath = outcome.FailurePath
+		r.FailureCapability = outcome.FailureCapability
 		if outcome.Error != nil {
 			r.ErrMsg = outcome.Error.Error()
 			r.Err = outcome.Error

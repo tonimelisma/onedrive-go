@@ -28,7 +28,16 @@ type actionFreshnessInputs struct {
 type actionFreshnessDecision struct {
 	Fresh  bool
 	Reason string
+	Source actionFreshnessSource
 }
+
+type actionFreshnessSource int
+
+const (
+	actionFreshnessSourceUnknown actionFreshnessSource = iota
+	actionFreshnessSourceLocalTruth
+	actionFreshnessSourceRemoteTruth
+)
 
 func evaluateActionFreshnessFromStore(
 	ctx context.Context,
@@ -45,20 +54,17 @@ func evaluateActionFreshnessFromStore(
 	if store == nil || action == nil || actionSkipsFreshnessValidation(action) {
 		return freshAction(), nil
 	}
+	if !actionHasPlannerView(action) {
+		return actionFreshnessDecision{}, fmt.Errorf(
+			"sync: validating action freshness: %s %q missing planner view",
+			action.Type,
+			action.Path,
+		)
+	}
 
 	inputs, err := loadActionFreshnessInputs(ctx, store, action)
 	if err != nil {
 		return actionFreshnessDecision{}, err
-	}
-	if !actionHasPlannerView(action) {
-		if inputs.LocalTruthComplete || inputs.RemoteTruthKnown {
-			return actionFreshnessDecision{}, fmt.Errorf(
-				"sync: validating action freshness: %s %q missing planner view",
-				action.Type,
-				action.Path,
-			)
-		}
-		return freshAction(), nil
 	}
 
 	return evaluateActionFreshness(action, inputs), nil
@@ -196,15 +202,15 @@ func evaluateLocalActionFreshness(action *Action, inputs actionFreshnessInputs) 
 	viewPath := actionViewPath(action)
 	if planned == nil {
 		if inputs.LocalAtViewFound {
-			return staleAction("%s has current local truth but was absent when planned", viewPath)
+			return staleLocalAction("%s has current local truth but was absent when planned", viewPath)
 		}
 		return freshAction()
 	}
 	if !inputs.LocalAtViewFound || inputs.LocalAtView == nil {
-		return staleAction("%s is missing from current local truth", viewPath)
+		return staleLocalAction("%s is missing from current local truth", viewPath)
 	}
 	if !localRowMatchesPlanned(inputs.LocalAtView, planned) {
-		return staleAction("%s local truth changed since planning", viewPath)
+		return staleLocalAction("%s local truth changed since planning", viewPath)
 	}
 
 	return freshAction()
@@ -219,15 +225,15 @@ func evaluateRemoteActionFreshness(action *Action, inputs actionFreshnessInputs)
 	viewPath := actionViewPath(action)
 	if planned == nil || planned.IsDeleted {
 		if inputs.RemoteAtViewFound {
-			return staleAction("%s has current remote truth but was absent when planned", viewPath)
+			return staleRemoteAction("%s has current remote truth but was absent when planned", viewPath)
 		}
 		return freshAction()
 	}
 	if !inputs.RemoteAtViewFound || inputs.RemoteAtView == nil {
-		return staleAction("%s is missing from current remote truth", viewPath)
+		return staleRemoteAction("%s is missing from current remote truth", viewPath)
 	}
 	if !remoteRowMatchesPlannedForAction(action, inputs.RemoteAtView, planned) {
-		return staleAction("%s remote truth changed since planning", viewPath)
+		return staleRemoteAction("%s remote truth changed since planning", viewPath)
 	}
 
 	return freshAction()
@@ -256,14 +262,14 @@ func evaluateMoveEndpointFreshness(action *Action, inputs actionFreshnessInputs)
 func evaluateLocalMoveEndpointFreshness(action *Action, inputs actionFreshnessInputs) actionFreshnessDecision {
 	if inputs.LocalTruthComplete && action.OldPath != "" {
 		if !inputs.LocalAtMovePeerFound || inputs.LocalAtMovePeer == nil {
-			return staleAction("%s local move source is missing from current local truth", action.OldPath)
+			return staleLocalAction("%s local move source is missing from current local truth", action.OldPath)
 		}
 		if action.View.Baseline != nil && !localRowMatchesBaseline(inputs.LocalAtMovePeer, action.View.Baseline) {
-			return staleAction("%s local move source changed since planning", action.OldPath)
+			return staleLocalAction("%s local move source changed since planning", action.OldPath)
 		}
 	}
 	if inputs.RemoteTruthKnown && action.OldPath != "" && inputs.RemoteAtMovePeerFound {
-		return staleAction("%s remote move source reappeared in current remote truth", action.OldPath)
+		return staleRemoteAction("%s remote move source reappeared in current remote truth", action.OldPath)
 	}
 
 	return freshAction()
@@ -272,11 +278,11 @@ func evaluateLocalMoveEndpointFreshness(action *Action, inputs actionFreshnessIn
 func evaluateRemoteMoveEndpointFreshness(action *Action, inputs actionFreshnessInputs) actionFreshnessDecision {
 	if inputs.LocalTruthComplete && action.Path != "" && action.Path != actionViewPath(action) {
 		if !inputs.LocalAtMovePeerFound || inputs.LocalAtMovePeer == nil {
-			return staleAction("%s local move destination is missing from current local truth", action.Path)
+			return staleLocalAction("%s local move destination is missing from current local truth", action.Path)
 		}
 	}
 	if inputs.RemoteTruthKnown && action.Path != "" && action.Path != actionViewPath(action) && inputs.RemoteAtMovePeerFound {
-		return staleAction("%s remote move destination already exists in current remote truth", action.Path)
+		return staleRemoteAction("%s remote move destination already exists in current remote truth", action.Path)
 	}
 
 	return freshAction()
@@ -287,13 +293,13 @@ func evaluateRemoteIdentityFreshness(action *Action, inputs actionFreshnessInput
 		return freshAction()
 	}
 	if !inputs.RemoteByIDFound || inputs.RemoteByID == nil {
-		return staleAction("%s remote item %s is missing from current remote truth", actionViewPath(action), action.ItemID)
+		return staleRemoteAction("%s remote item %s is missing from current remote truth", actionViewPath(action), action.ItemID)
 	}
 	if inputs.RemoteByID.Path != expectedRemoteIdentityPath(action) {
-		return staleAction("%s remote item %s moved to %s", actionViewPath(action), action.ItemID, inputs.RemoteByID.Path)
+		return staleRemoteAction("%s remote item %s moved to %s", actionViewPath(action), action.ItemID, inputs.RemoteByID.Path)
 	}
 	if !remoteRowMatchesPlannedForAction(action, inputs.RemoteByID, action.View.Remote) {
-		return staleAction("%s remote item %s changed since planning", actionViewPath(action), action.ItemID)
+		return staleRemoteAction("%s remote item %s changed since planning", actionViewPath(action), action.ItemID)
 	}
 
 	return freshAction()
@@ -562,4 +568,16 @@ func staleAction(format string, args ...any) actionFreshnessDecision {
 		Fresh:  false,
 		Reason: fmt.Sprintf(format, args...),
 	}
+}
+
+func staleLocalAction(format string, args ...any) actionFreshnessDecision {
+	decision := staleAction(format, args...)
+	decision.Source = actionFreshnessSourceLocalTruth
+	return decision
+}
+
+func staleRemoteAction(format string, args ...any) actionFreshnessDecision {
+	decision := staleAction(format, args...)
+	decision.Source = actionFreshnessSourceRemoteTruth
+	return decision
 }
