@@ -20,6 +20,7 @@ var (
 	ErrNotFound            = errors.New("graph: not found")
 	ErrConflict            = errors.New("graph: conflict")
 	ErrGone                = errors.New("graph: resource gone")
+	ErrPreconditionFailed  = errors.New("graph: precondition failed")
 	ErrThrottled           = errors.New("graph: throttled")
 	ErrLocked              = errors.New("graph: resource locked")
 	ErrMethodNotAllowed    = errors.New("graph: method not allowed")
@@ -218,6 +219,8 @@ func classifyStatus(code int) error {
 		return ErrConflict
 	case http.StatusGone:
 		return ErrGone
+	case http.StatusPreconditionFailed:
+		return ErrPreconditionFailed
 	case http.StatusTooManyRequests:
 		return ErrThrottled
 	case http.StatusMethodNotAllowed:

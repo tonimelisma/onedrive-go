@@ -185,7 +185,7 @@ The Graph client does not own websocket runtime state. It performs one synchrono
 
 ## Item Operations (`items.go`)
 
-GetItem, ListChildren, CreateFolder, MoveItem, CopyItem, DeleteItem. All operations use `graph.Item` — the clean type after normalization. `Item.ParentPath` carries the decoded root-relative `parentReference.path` when Graph provides it and `Item.ParentPathKnown` records that the path was valid, so callers never need to parse Graph's absolute `"/drives/{id}/root:..."` representation themselves or guess whether an empty parent path means root or unknown.
+GetItem, ListChildren, CreateFolder, MoveItem, CopyItem, DeleteItem. All operations use `graph.Item` — the clean type after normalization. `Item.ParentPath` carries the decoded root-relative `parentReference.path` when Graph provides it and `Item.ParentPathKnown` records that the path was valid, so callers never need to parse Graph's absolute `"/drives/{id}/root:..."` representation themselves or guess whether an empty parent path means root or unknown. `MoveItemIfMatch` and `DeleteItemIfMatch` are the conditional mutation variants used by sync execution after live preflight; they add `If-Match` when the caller supplies an eTag and map HTTP 412 to `ErrPreconditionFailed`.
 
 `CreateFolder` also owns one narrow ambiguous-success recovery path. If Graph
 returns a success status for `POST .../children` but the body is empty, the
@@ -362,7 +362,7 @@ The graph package intentionally keeps runtime ownership narrow:
 - Audit all `slog.*` calls for potential secret leakage (tokens, pre-auth URLs). [verified]
 - Audit all error message strings for embedded secrets — `GraphError.Message` and `RawBody` are redacted before exposure. [verified]
 - Test that captures log output and verifies no tokens or pre-auth URLs appear. [verified]
-- Authenticated request helpers are package-internal (`do` / `doWithHeaders`). External callers use higher-level graph operations instead of raw request dispatch. [verified]
+- Authenticated request helpers are package-internal (`do`, `doGetWithHeaders`, and `doRequest`). External callers use higher-level graph operations instead of raw request dispatch. [verified]
 - Shared-item discovery uses only `GET /me/drive/root/search(q='*')`. Search
   results may omit owner identity or omit some shares entirely, so callers
   enrich actionable hits through `GET /drives/{driveId}/items/{itemId}` and

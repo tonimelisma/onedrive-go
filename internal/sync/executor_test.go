@@ -477,6 +477,41 @@ func TestExecutor_LocalMove_SourceChangedReturnsStalePrecondition(t *testing.T) 
 	assert.NoFileExists(t, filepath.Join(syncRoot, "new-name.txt"))
 }
 
+// Validates: R-2.8.10
+func TestExecutor_LocalMove_FolderIdentityChangedReturnsStalePrecondition(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	oldPath := filepath.Join(syncRoot, "old-folder")
+	newPath := filepath.Join(syncRoot, "new-folder")
+	require.NoError(t, os.MkdirAll(oldPath, 0o700))
+	currentIdentity, err := e.syncTree.IdentityNoFollow("old-folder")
+	require.NoError(t, err)
+
+	action := &Action{
+		Type:    ActionLocalMove,
+		Path:    "new-folder",
+		OldPath: "old-folder",
+		View: &PathView{
+			Baseline: &BaselineEntry{
+				ItemType:         ItemTypeFolder,
+				LocalDevice:      currentIdentity.Device,
+				LocalInode:       currentIdentity.Inode ^ 1,
+				LocalHasIdentity: true,
+			},
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityLocalWrite, o.FailureCapability)
+	assert.DirExists(t, oldPath)
+	assert.NoDirExists(t, newPath)
+}
+
 func TestExecutor_RemoteMove(t *testing.T) {
 	t.Parallel()
 
@@ -552,6 +587,99 @@ func TestExecutor_RemoteMove_StaleSourcePreflightReturnsStalePrecondition(t *tes
 	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+}
+
+// Validates: R-2.8.10
+func TestExecutor_RemoteMove_UsesConditionalETagFromPreflight(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			assert.Equal(t, "item1", itemID)
+			return &graph.Item{
+				ID:      "item1",
+				DriveID: driveID,
+				ETag:    `"etag-current"`,
+			}, nil
+		},
+		moveItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, newParentID, newName, ifMatch string) (*graph.Item, error) {
+			assert.Equal(t, "item1", itemID)
+			assert.Equal(t, graphRootID, newParentID)
+			assert.Equal(t, "renamed.txt", newName)
+			assert.Equal(t, `"etag-current"`, ifMatch)
+			return &graph.Item{ID: "item1", ETag: `"etag-next"`}, nil
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteMove,
+		Path:    "renamed.txt",
+		OldPath: "original.txt",
+		ItemID:  "item1",
+		DriveID: driveID,
+		View: &PathView{
+			Path: "renamed.txt",
+			Remote: &RemoteState{
+				DriveID:  driveID,
+				ItemID:   "item1",
+				ItemType: ItemTypeFile,
+				ETag:     `"etag-current"`,
+			},
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.Equal(t, `"etag-next"`, o.ETag)
+}
+
+// Validates: R-2.8.10
+func TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			assert.Equal(t, "item1", itemID)
+			return &graph.Item{
+				ID:      "item1",
+				DriveID: driveID,
+				ETag:    `"etag-current"`,
+			}, nil
+		},
+		moveItemIfMatchFn: func(context.Context, driveid.ID, string, string, string, string) (*graph.Item, error) {
+			return nil, graph.ErrPreconditionFailed
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteMove,
+		Path:    "renamed.txt",
+		OldPath: "original.txt",
+		ItemID:  "item1",
+		DriveID: driveID,
+		View: &PathView{
+			Path: "renamed.txt",
+			Remote: &RemoteState{
+				DriveID:  driveID,
+				ItemID:   "item1",
+				ItemType: ItemTypeFile,
+				ETag:     `"etag-current"`,
+			},
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityRemoteWrite, o.FailureCapability)
 }
 
 func TestExecutor_RemoteMove_UsesPathConvergence(t *testing.T) {
@@ -1519,6 +1647,39 @@ func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "directory should have been removed")
 }
 
+// Validates: R-2.8.10
+func TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	dirPath := filepath.Join(syncRoot, "exec-folder-recreated")
+	require.NoError(t, os.MkdirAll(dirPath, 0o700))
+	currentIdentity, err := e.syncTree.IdentityNoFollow("exec-folder-recreated")
+	require.NoError(t, err)
+
+	action := &Action{
+		Type:   ActionLocalDelete,
+		Path:   "exec-folder-recreated",
+		ItemID: "item1",
+		View: &PathView{
+			Baseline: &BaselineEntry{
+				ItemType:         ItemTypeFolder,
+				LocalDevice:      currentIdentity.Device,
+				LocalInode:       currentIdentity.Inode ^ 1,
+				LocalHasIdentity: true,
+			},
+		},
+	}
+
+	o := e.ExecuteLocalDelete(t.Context(), action)
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityLocalWrite, o.FailureCapability)
+	assert.DirExists(t, dirPath)
+}
+
 func TestExecutor_LocalDelete_FolderNotEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -1566,6 +1727,94 @@ func TestExecutor_RemoteDelete_Success(t *testing.T) {
 
 	o := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
+}
+
+// Validates: R-2.8.10
+func TestExecutor_RemoteDelete_UsesConditionalETagFromPreflight(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			assert.Equal(t, "item1", itemID)
+			return &graph.Item{
+				ID:      "item1",
+				DriveID: driveID,
+				ETag:    `"etag-current"`,
+			}, nil
+		},
+		deleteItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, ifMatch string) error {
+			assert.Equal(t, "item1", itemID)
+			assert.Equal(t, `"etag-current"`, ifMatch)
+			return nil
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteDelete,
+		Path:    "exec-remote-file.txt",
+		ItemID:  "item1",
+		DriveID: driveID,
+		View: &PathView{
+			Path: "exec-remote-file.txt",
+			Remote: &RemoteState{
+				DriveID:  driveID,
+				ItemID:   "item1",
+				ItemType: ItemTypeFile,
+				ETag:     `"etag-current"`,
+			},
+		},
+	}
+
+	o := e.ExecuteRemoteDelete(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+}
+
+// Validates: R-2.8.10
+func TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			assert.Equal(t, "item1", itemID)
+			return &graph.Item{
+				ID:      "item1",
+				DriveID: driveID,
+				ETag:    `"etag-current"`,
+			}, nil
+		},
+		deleteItemIfMatchFn: func(context.Context, driveid.ID, string, string) error {
+			return graph.ErrPreconditionFailed
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteDelete,
+		Path:    "exec-remote-file.txt",
+		ItemID:  "item1",
+		DriveID: driveID,
+		View: &PathView{
+			Path: "exec-remote-file.txt",
+			Remote: &RemoteState{
+				DriveID:  driveID,
+				ItemID:   "item1",
+				ItemType: ItemTypeFile,
+				ETag:     `"etag-current"`,
+			},
+		},
+	}
+
+	o := e.ExecuteRemoteDelete(t.Context(), action)
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityRemoteWrite, o.FailureCapability)
 }
 
 // Validates: R-2.8.10
