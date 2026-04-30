@@ -94,10 +94,9 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions)
 	if err := rt.engine.refreshProtectedRootsFromStore(ctx); err != nil {
 		return fmt.Errorf("sync: refresh shortcut protected roots before watch observers: %w", err)
 	}
-	// Bootstrap uses loop termination to mean "quiesced"; the observer-backed
-	// loop must always start from steady-state running ownership.
-	rt.enterRunning()
-	rt.startObservers(ctx, pipe.bl, opts)
+	if err := rt.startObservers(ctx, pipe.bl, opts); err != nil {
+		return err
+	}
 
 	// Step 4: Run the watch loop.
 	if err := rt.runWatchLoop(ctx, pipe); err != nil {
@@ -308,7 +307,13 @@ func (rt *watchRuntime) finishBootstrapAfterActions(
 // batch application and dirty marking; observers do not commit SQLite directly.
 func (rt *watchRuntime) startObservers(
 	ctx context.Context, bl *Baseline, opts WatchOptions,
-) {
+) error {
+	// Bootstrap uses loop termination to mean "quiesced"; the observer-backed
+	// loop must always start from steady-state running ownership.
+	if err := rt.beginObserverBackedRunning(); err != nil {
+		return err
+	}
+
 	localBatches := make(chan localObservationBatch, watchObservationBuf)
 	protectedRootEvents := make(chan ProtectedRootEvent, watchObservationBuf)
 	remoteBatches := make(chan remoteObservationBatch, watchObservationBuf)
@@ -386,6 +391,7 @@ func (rt *watchRuntime) startObservers(
 	rt.localBatches = localBatches
 	rt.protectedRootEvents = protectedRootEvents
 	rt.remoteBatches = remoteBatches
+	return nil
 }
 
 func (rt *watchRuntime) startRemoteObserver(

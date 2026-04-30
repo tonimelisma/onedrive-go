@@ -79,6 +79,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 		"--worktree", "/tmp/wt",
 		"--branch", "feat/dod",
 		"--ci-timeout", "45m",
+		"--failed-log", "/tmp/ci.log",
 	})
 
 	require.NoError(t, cmd.Execute())
@@ -96,6 +97,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	assert.Equal(t, "/tmp/wt", got.DODWorktree)
 	assert.Equal(t, "feat/dod", got.DODBranch)
 	assert.Equal(t, 45*time.Minute, got.DODCITimeout)
+	assert.Equal(t, "/tmp/ci.log", got.FailedTestLog)
 }
 
 // Validates: R-6.10.14
@@ -467,7 +469,7 @@ func TestDevtoolBinary_VerifyRejectsUnknownProfile(t *testing.T) {
 
 	_, stderr, err := runBinary(t, t.TempDir(), binPath, "verify", "weird")
 	require.Error(t, err)
-	assert.Contains(t, stderr, "usage: devtool verify [default|public|e2e|e2e-full|integration|stress]")
+	assert.Contains(t, stderr, "usage: devtool verify [default|public|e2e|e2e-full|integration|stress|failed-test]")
 }
 
 // Validates: R-6.2.1

@@ -704,6 +704,10 @@ Runtime policy:
   read also omits the known fixture or Graph returns a retryable gateway error;
   a no-match while the fixture is independently visible is a product/test
   failure, not a provider omission
+- repo-owned live-test skip messages include a stable `provider_skip` reason
+  for this family (`shared_folder_name_omitted` or
+  `shared_discovery_gateway`) so CI summaries distinguish provider omissions
+  from product assertions and ordinary test skips
 
 This is a documented platform-limit explanation, not evidence that all
 cross-org shares are categorically invisible.
@@ -843,7 +847,9 @@ healthy while shared search/list output is temporarily empty for the target.
 Live fixture checks therefore use a shortcut-specific propagation budget. When
 the shared target remains reachable but the parent root placeholder is still
 omitted after that budget, shortcut E2Es skip because the product behavior
-under test cannot start without the provider-supplied placeholder.
+under test cannot start without the provider-supplied placeholder. That skip
+is emitted with `provider_skip=shortcut_root_placeholder_omitted` and the last
+decoded root names so CI evidence names the missing provider surface directly.
 
 Observed fixture repair on April 25, 2026: deleting a personal-account shortcut
 placeholder by item ID removed only the placeholder. Microsoft documents
@@ -894,7 +900,8 @@ later with no auth or config change in between. Runtime policy stays the same:
 exact selector workflows still bootstrap from raw selector/link identity, not
 from discovery, and repo-owned live E2E that validates known shared fixtures
 waits through one ordinary read-only propagation window before treating the
-omission as a provider limitation for that run.
+omission as a provider limitation for that run. Drive-list selector skips use
+`provider_skip=drive_list_shared_selector_omitted`.
 
 ### Search + GetItem Can Still Miss Shared Owner Identity
 

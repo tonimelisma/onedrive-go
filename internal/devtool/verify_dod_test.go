@@ -243,6 +243,31 @@ func TestDODReviewThreadMutationCommands(t *testing.T) {
 }
 
 // Validates: R-6.10.16
+func TestDODPreMergeStatusSummariesIncludeResolutionEvidenceCounts(t *testing.T) {
+	t.Parallel()
+
+	status := formatDODThreadResolutionStatus(&DODReviewThread{
+		ThreadID:       "thread-1",
+		Classification: DODCommentFixed,
+		Evidence:       []string{"go test ./internal/devtool", "", "go run ./cmd/devtool verify public"},
+	})
+
+	assert.Contains(t, status, "commented and resolved thread-1")
+	assert.Contains(t, status, "classification=fixed")
+	assert.Contains(t, status, "evidence=2")
+
+	summary := formatDODPreMergeSummary(
+		dodReviewThreadApplySummary{CommentedAndResolved: 1, AlreadyResolved: 3},
+		dodReviewThreadGateSummary{CurrentPRThreads: 2, RecentMergedThreads: 8},
+	)
+
+	assert.Contains(t, summary, "commented_resolved=1")
+	assert.Contains(t, summary, "already_resolved=3")
+	assert.Contains(t, summary, "current_pr_threads=2")
+	assert.Contains(t, summary, "recent_merged_threads=8")
+}
+
+// Validates: R-6.10.16
 func TestDODPRCIClassification(t *testing.T) {
 	t.Parallel()
 
@@ -302,6 +327,13 @@ func TestDODMergeWrapperTreatsAlreadyMergedPRAsServerSideMerge(t *testing.T) {
 	t.Parallel()
 
 	requireMergedPRAfterMergeError(t, "Pull request #682 was already merged\n")
+}
+
+// Validates: R-6.10.16
+func TestDODMergeWrapperTreatsAttachedBranchDeleteFailureAsServerSideMerge(t *testing.T) {
+	t.Parallel()
+
+	requireMergedPRAfterMergeError(t, "Pull request merged, but local branch fix/dod is checked out at a worktree\n")
 }
 
 func requireMergedPRAfterMergeError(t *testing.T, mergeOutput string) {

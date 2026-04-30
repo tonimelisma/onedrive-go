@@ -58,6 +58,7 @@ const (
 	VerifyE2EFull     VerifyProfile = "e2e-full"
 	VerifyIntegration VerifyProfile = "integration"
 	VerifyStress      VerifyProfile = "stress"
+	VerifyFailedTest  VerifyProfile = "failed-test"
 )
 
 type VerifyOptions struct {
@@ -76,6 +77,7 @@ type VerifyOptions struct {
 	DODWorktree        string
 	DODBranch          string
 	DODCITimeout       time.Duration
+	FailedTestLog      string
 	Stdout             io.Writer
 	Stderr             io.Writer
 }
@@ -155,6 +157,7 @@ type verifyPlan struct {
 	runE2EFull      bool
 	runIntegration  bool
 	runStress       bool
+	runFailedTest   bool
 }
 
 func RunVerify(ctx context.Context, runner commandRunner, opts *VerifyOptions) (runErr error) {
@@ -255,8 +258,12 @@ func resolveVerifyPlan(profile VerifyProfile) (verifyPlan, error) {
 		return verifyPlan{
 			runStress: true,
 		}, nil
+	case VerifyFailedTest:
+		return verifyPlan{
+			runFailedTest: true,
+		}, nil
 	default:
-		return verifyPlan{}, fmt.Errorf("usage: devtool verify [default|public|e2e|e2e-full|integration|stress]")
+		return verifyPlan{}, fmt.Errorf("usage: devtool verify [default|public|e2e|e2e-full|integration|stress|failed-test]")
 	}
 }
 
@@ -394,6 +401,11 @@ func runOptionalVerification(
 	}
 	if plan.runStress {
 		if err := runStress(ctx, runner, opts.RepoRoot, env, collector, stdout, stderr); err != nil {
+			return err
+		}
+	}
+	if plan.runFailedTest {
+		if err := runFailedTestVerification(ctx, runner, opts.RepoRoot, env, collector, stdout, stderr, opts.FailedTestLog); err != nil {
 			return err
 		}
 	}

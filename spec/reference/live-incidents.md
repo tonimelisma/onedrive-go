@@ -134,9 +134,11 @@ Current handling: Shortcut fixture shared-discovery and root-placeholder checks
 poll for the longer shortcut fixture propagation budget. If the parent-root
 placeholder is still omitted after the target itself was reachable, shortcut
 E2Es skip with the last shared/root visibility evidence instead of failing a
-product assertion that cannot start. If the omission persists outside CI,
-recreating the Add-to-OneDrive shortcut from the OneDrive web UI remains the
-supported fallback.
+product assertion that cannot start. The skip message now carries
+`provider_skip=shortcut_root_placeholder_omitted` so summaries distinguish this
+provider surface from ordinary skipped tests. If the omission persists outside
+CI, recreating the Add-to-OneDrive shortcut from the OneDrive web UI remains
+the supported fallback.
 Promoted docs: [graph-api-quirks.md#addtoonedrive-shortcut-visibility-header](graph-api-quirks.md#addtoonedrive-shortcut-visibility-header)
 
 ## LI-20260430-01: Output validation E2Es assumed selected parents had stable shortcut children
@@ -642,18 +644,21 @@ Evidence:
 Resolution / mitigation: the full-suite shared-folder drive-list assertion now
 polls `drive list --json` for the exact selector across one ordinary read-only
 propagation window. If Graph still never exposes the known fixture on that run,
-the test skips with the last live command output instead of failing the nightly
-lane as though the product regressed. The promoted system and Graph quirk docs
-now say explicitly that repo-owned live fixture validation must treat one empty
-search pass as a provider limitation window, not a deterministic product fact.
-The same policy now also applies to `default` versus `--all` comparisons:
-nightly drive-list checks poll `drive list --json --all` until it contains the
-default-visible shared entries from the earlier pass, and skip if Graph never
-stabilizes within one ordinary read-only window. Name-based shared-folder
-`drive add` checks only skip the documented no-match error when an independent
-`shared --json --account` read also omits the known fixture, or when that
-independent read hits a retryable Graph gateway error. A no-match while the
-fixture is independently visible remains a hard failure because that can be a
+the test skips with `provider_skip=drive_list_shared_selector_omitted` and the
+last live command output instead of failing the nightly lane as though the
+product regressed. The promoted system and Graph quirk docs now say explicitly
+that repo-owned live fixture validation must treat one empty search pass as a
+provider limitation window, not a deterministic product fact. The same policy
+now also applies to `default` versus `--all` comparisons: nightly drive-list
+checks poll `drive list --json --all` until it contains the default-visible
+shared entries from the earlier pass, and skip if Graph never stabilizes within
+one ordinary read-only window. Name-based shared-folder `drive add` checks only
+skip the documented no-match error when an independent `shared --json
+--account` read also omits the known fixture, or when that independent read
+hits a retryable Graph gateway error. Those skips use
+`provider_skip=shared_folder_name_omitted` or
+`provider_skip=shared_discovery_gateway`; a no-match while the fixture is
+independently visible remains a hard failure because that can be a
 selector/filtering regression rather than a provider omission.
 Promoted docs: [system.md](../design/system.md), [graph-api-quirks.md](graph-api-quirks.md)
 

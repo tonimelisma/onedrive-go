@@ -67,6 +67,21 @@ type driveListE2EOutput struct {
 	} `json:"available"`
 }
 
+type liveProviderSkipReason string
+
+const (
+	liveProviderSkipNone                    liveProviderSkipReason = ""
+	liveProviderSkipDriveListSharedOmitted  liveProviderSkipReason = "drive_list_shared_selector_omitted"
+	liveProviderSkipSharedFolderNameOmitted liveProviderSkipReason = "shared_folder_name_omitted"
+	liveProviderSkipSharedDiscoveryGateway  liveProviderSkipReason = "shared_discovery_gateway"
+	liveProviderSkipShortcutRootOmitted     liveProviderSkipReason = "shortcut_root_placeholder_omitted"
+)
+
+type liveProviderSkipDecision struct {
+	Skippable bool
+	Reason    liveProviderSkipReason
+}
+
 func driveListAvailableContainsCanonicalID(parsed driveListE2EOutput, canonicalID string) bool {
 	for i := range parsed.Available {
 		if parsed.Available[i].CanonicalID == canonicalID {
@@ -164,6 +179,22 @@ func TestSharedFolderFixtureVisibleInListingRequiresNameAndRemoteIdentity(t *tes
 			RemoteItemID:  "item",
 		}},
 	}, fixture))
+	assert.False(t, sharedFolderFixtureVisibleInListing(sharedListE2EOutput{
+		Items: []sharedItemE2E{{
+			Type:          "folder",
+			Name:          "Project",
+			RemoteDriveID: "drive",
+			RemoteItemID:  "other-item",
+		}},
+	}, fixture))
+	assert.False(t, sharedFolderFixtureVisibleInListing(sharedListE2EOutput{
+		Items: []sharedItemE2E{{
+			Type:          "file",
+			Name:          "Project",
+			RemoteDriveID: "drive",
+			RemoteItemID:  "item",
+		}},
+	}, fixture))
 }
 
 func TestSharedFolderNameProviderOmittedFixtureRequiresIndependentProviderSignal(t *testing.T) {
@@ -171,11 +202,17 @@ func TestSharedFolderNameProviderOmittedFixtureRequiresIndependentProviderSignal
 
 	noMatch := `no shared folders matching "Project" found — Graph shared discovery also checks external shares`
 
-	assert.True(t, sharedFolderNameProviderOmittedFixture(noMatch, false, nil, ""))
-	assert.True(t, sharedFolderNameProviderOmittedFixture(noMatch, false, fmt.Errorf("shared failed"), "graph: HTTP 503 Service Unavailable"))
-	assert.False(t, sharedFolderNameProviderOmittedFixture(noMatch, true, nil, ""))
-	assert.False(t, sharedFolderNameProviderOmittedFixture(noMatch, false, fmt.Errorf("decode failed"), "not json"))
-	assert.False(t, sharedFolderNameProviderOmittedFixture("graph: HTTP 503 Service Unavailable", false, nil, ""))
+	decision := classifySharedFolderNameProviderSkip(noMatch, false, nil, "")
+	assert.True(t, decision.Skippable)
+	assert.Equal(t, liveProviderSkipSharedFolderNameOmitted, decision.Reason)
+
+	decision = classifySharedFolderNameProviderSkip(noMatch, false, fmt.Errorf("shared failed"), "graph: HTTP 503 Service Unavailable")
+	assert.True(t, decision.Skippable)
+	assert.Equal(t, liveProviderSkipSharedDiscoveryGateway, decision.Reason)
+
+	assert.False(t, classifySharedFolderNameProviderSkip(noMatch, true, nil, "").Skippable)
+	assert.False(t, classifySharedFolderNameProviderSkip(noMatch, false, fmt.Errorf("decode failed"), "not json").Skippable)
+	assert.False(t, classifySharedFolderNameProviderSkip("graph: HTTP 503 Service Unavailable", false, nil, "").Skippable)
 }
 
 type resolvedSharedFileFixture struct {
@@ -613,9 +650,11 @@ func waitForShortcutRootPlaceholder(
 				shortcutSentinelReachable(t, cfgPath, env, fixture),
 				"shared target must remain reachable before skipping missing shortcut root placeholder",
 			)
+			decision := classifyShortcutRootPlaceholderProviderSkip(pollState, fixture)
 			t.Skipf(
-				"%s: live Graph did not expose Add-to-OneDrive shortcut placeholder %q in root of %s within %v; root_names=%v last_err=%v last_stdout=%s",
+				"%s: provider_skip=%s live Graph did not expose Add-to-OneDrive shortcut placeholder %q in root of %s within %v; root_names=%v last_err=%v last_stdout=%s",
 				failureTitle,
+				decision.Reason,
 				fixture.ShortcutName,
 				fixture.ParentDrive,
 				shortcutFixturePropagationTimeout,
@@ -640,7 +679,17 @@ func canSkipMissingShortcutRootPlaceholder(
 	state shortcutRootPlaceholderPollState,
 	fixture resolvedShortcutFixture,
 ) bool {
-	return state.RootListingDecoded && state.LastErr == nil && fixture.SharedItem.Selector != ""
+	return classifyShortcutRootPlaceholderProviderSkip(state, fixture).Skippable
+}
+
+func classifyShortcutRootPlaceholderProviderSkip(
+	state shortcutRootPlaceholderPollState,
+	fixture resolvedShortcutFixture,
+) liveProviderSkipDecision {
+	if !state.RootListingDecoded || state.LastErr != nil || fixture.SharedItem.Selector == "" {
+		return liveProviderSkipDecision{Reason: liveProviderSkipNone}
+	}
+	return liveProviderSkipDecision{Skippable: true, Reason: liveProviderSkipShortcutRootOmitted}
 }
 
 func TestCanSkipMissingShortcutRootPlaceholderRequiresDecodedListingAndSharedTarget(t *testing.T) {
@@ -1067,8 +1116,10 @@ func waitForDriveListSharedSelectorVisible(
 		}
 
 		if time.Now().After(deadline) {
+			decision := liveProviderSkipDecision{Skippable: true, Reason: liveProviderSkipDriveListSharedOmitted}
 			t.Skipf(
-				"live drive list shared discovery did not expose selector %q within %v; Graph search omitted the known fixture on this run\nlast stdout: %s\nlast stderr: %s",
+				"provider_skip=%s live drive list shared discovery did not expose selector %q within %v; Graph search omitted the known fixture on this run\nlast stdout: %s\nlast stderr: %s",
+				decision.Reason,
 				selector,
 				pollTimeout,
 				lastStdout,
@@ -1144,9 +1195,10 @@ func waitForSharedFolderNameDriveAdd(
 		}
 
 		if time.Now().After(deadline) {
-			if sharedFolderNameProviderOmittedFixture(lastStderr, lastSharedVisible, lastSharedErr, lastSharedStderr) {
+			if decision := classifySharedFolderNameProviderSkip(lastStderr, lastSharedVisible, lastSharedErr, lastSharedStderr); decision.Skippable {
 				t.Skipf(
-					"live shared discovery omitted folder name %q for account %s within %v; independent shared --json did not confirm the known fixture on this run\nlast stdout: %s\nlast stderr: %s\nlast shared err: %v\nlast shared stdout: %s\nlast shared stderr: %s",
+					"provider_skip=%s live shared discovery omitted folder name %q for account %s within %v; independent shared --json did not confirm the known fixture on this run\nlast stdout: %s\nlast stderr: %s\nlast shared err: %v\nlast shared stdout: %s\nlast shared stderr: %s",
+					decision.Reason,
 					fixture.FolderItem.Name,
 					fixture.RecipientEmail,
 					pollTimeout,
@@ -1189,14 +1241,29 @@ func sharedFolderNameProviderOmittedFixture(
 	sharedErr error,
 	sharedStderr string,
 ) bool {
+	return classifySharedFolderNameProviderSkip(driveAddStderr, sharedVisible, sharedErr, sharedStderr).Skippable
+}
+
+func classifySharedFolderNameProviderSkip(
+	driveAddStderr string,
+	sharedVisible bool,
+	sharedErr error,
+	sharedStderr string,
+) liveProviderSkipDecision {
 	if !isSharedFolderNameDiscoveryOmission(driveAddStderr) {
-		return false
+		return liveProviderSkipDecision{Reason: liveProviderSkipNone}
 	}
 	if sharedErr != nil {
-		return isRetryableGraphGatewayFailure(sharedStderr)
+		if isRetryableGraphGatewayFailure(sharedStderr) {
+			return liveProviderSkipDecision{Skippable: true, Reason: liveProviderSkipSharedDiscoveryGateway}
+		}
+		return liveProviderSkipDecision{Reason: liveProviderSkipNone}
 	}
 
-	return !sharedVisible
+	if sharedVisible {
+		return liveProviderSkipDecision{Reason: liveProviderSkipNone}
+	}
+	return liveProviderSkipDecision{Skippable: true, Reason: liveProviderSkipSharedFolderNameOmitted}
 }
 
 func sharedFolderNameFixtureVisible(
