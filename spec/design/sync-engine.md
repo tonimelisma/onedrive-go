@@ -297,6 +297,10 @@ outer owner for bootstrap, steady-state, and drain; `runNonDrainingWatchStep`
 is the one gated non-draining `select`; and `runDrainStep` remains the only
 distinct shutdown shell instead of routing bootstrap, idle, and outbox cases
 through overlapping wrappers.
+After bootstrap succeeds, `RunWatch` normalizes the runtime phase back to
+steady-state running before starting observers. Bootstrap may use loop
+termination to mean "bootstrap quiesced"; the observer-backed loop may only
+terminate through drain completion or a fatal runtime error.
 Cancellation wins over non-draining intake, including a dirty-buffer
 `replanReady` channel that closes because its context was canceled. The watch
 loop must enter drain and emit `shutdown_started` before it accepts any
