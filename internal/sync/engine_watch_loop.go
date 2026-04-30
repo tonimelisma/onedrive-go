@@ -220,7 +220,11 @@ func (rt *watchRuntime) handleWatchReplanSignal(
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		return true, nil
+		if rt.beginWatchDrainIfContextCanceled(ctx, p) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("sync: dirty scheduler stopped unexpectedly")
 	}
 
 	return false, rt.handleWatchReplanReady(ctx, p, batch)
