@@ -827,6 +827,7 @@ func TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition(t *
 	o := e.ExecuteDownload(t.Context(), action)
 	requireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityLocalWrite, o.FailureCapability)
 
 	data, err := localpath.ReadFile(filepath.Join(syncRoot, "appeared.txt"))
 	require.NoError(t, err)
@@ -1344,6 +1345,7 @@ func TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityLocalRead, o.FailureCapability)
 }
 
 // ---------------------------------------------------------------------------

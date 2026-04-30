@@ -132,6 +132,39 @@ func TestWorkerPool_SendResultCountsLivePreconditionSupersededByCapability(t *te
 	assert.Equal(t, 1, snapshot.SupersededLiveRemotePreconditionCount)
 }
 
+// Validates: R-2.8.10, R-6.6.17
+func TestWorkerPool_SendResultDoesNotGuessLivePreconditionSourceWithoutCapability(t *testing.T) {
+	t.Parallel()
+
+	collector := perf.NewCollector(nil)
+	pool := NewWorkerPool(nil, nil, nil, testLogger(t), 2)
+	pool.perfCollector = collector
+
+	pool.sendResult(t.Context(), &TrackedAction{
+		ID:     1,
+		Action: Action{Type: ActionUpload, Path: "local.txt"},
+	}, &ActionOutcome{
+		Action: ActionUpload,
+		Path:   "local.txt",
+		Error:  stalePreconditionError("upload source changed"),
+	}, ErrActionPreconditionChanged)
+	pool.sendResult(t.Context(), &TrackedAction{
+		ID:     2,
+		Action: Action{Type: ActionDownload, Path: "remote.txt"},
+	}, &ActionOutcome{
+		Action: ActionDownload,
+		Path:   "remote.txt",
+		Error:  stalePreconditionError("download target changed"),
+	}, ErrActionPreconditionChanged)
+
+	<-pool.Completions()
+	<-pool.Completions()
+
+	snapshot := collector.Snapshot()
+	assert.Equal(t, 0, snapshot.SupersededLiveLocalPreconditionCount)
+	assert.Equal(t, 0, snapshot.SupersededLiveRemotePreconditionCount)
+}
+
 // Validates: R-2.8.9
 func TestWorkerStartFreshness_DownloadDestinationAppearedIsSupersededBeforeExecution(t *testing.T) {
 	t.Parallel()
