@@ -149,6 +149,20 @@ var ErrMoveNoChanges = errors.New("graph: MoveItem requires at least one of newP
 
 // MoveItem moves and/or renames an item. At least one of newParentID or newName must be non-empty.
 func (c *Client) MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*Item, error) {
+	return c.MoveItemIfMatch(ctx, driveID, itemID, newParentID, newName, "")
+}
+
+// MoveItemIfMatch moves and/or renames an item, adding If-Match when ifMatch
+// is non-empty so Graph rejects the mutation if the item changed after the
+// caller's live preflight.
+func (c *Client) MoveItemIfMatch(
+	ctx context.Context,
+	driveID driveid.ID,
+	itemID string,
+	newParentID string,
+	newName string,
+	ifMatch string,
+) (*Item, error) {
 	if newParentID == "" && newName == "" {
 		return nil, ErrMoveNoChanges
 	}
@@ -176,7 +190,7 @@ func (c *Client) MoveItem(ctx context.Context, driveID driveid.ID, itemID, newPa
 		return nil, fmt.Errorf("graph: marshaling move request: %w", err)
 	}
 
-	resp, err := c.do(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes))
+	resp, err := c.doRequest(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes), ifMatchHeaders(ifMatch))
 	if err != nil {
 		return nil, err
 	}
@@ -256,18 +270,29 @@ func (c *Client) PermanentDeleteItem(ctx context.Context, driveID driveid.ID, it
 
 // DeleteItem deletes a drive item. Returns nil on success (HTTP 204).
 func (c *Client) DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error {
+	return c.DeleteItemIfMatch(ctx, driveID, itemID, "")
+}
+
+// DeleteItemIfMatch deletes a drive item, adding If-Match when ifMatch is
+// non-empty so Graph rejects the mutation if the item changed after the
+// caller's live preflight.
+func (c *Client) DeleteItemIfMatch(ctx context.Context, driveID driveid.ID, itemID string, ifMatch string) error {
 	c.logger.Info("deleting item",
 		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 	)
 
-	return c.deleteAndDrain(ctx, http.MethodDelete,
-		fmt.Sprintf("/drives/%s/items/%s", driveID, itemID))
+	return c.deleteAndDrainWithHeaders(ctx, http.MethodDelete,
+		fmt.Sprintf("/drives/%s/items/%s", driveID, itemID), ifMatchHeaders(ifMatch))
 }
 
 // deleteAndDrain sends a request and drains the response body to reuse the connection.
 func (c *Client) deleteAndDrain(ctx context.Context, method, path string) error {
-	resp, err := c.do(ctx, method, path, nil)
+	return c.deleteAndDrainWithHeaders(ctx, method, path, nil)
+}
+
+func (c *Client) deleteAndDrainWithHeaders(ctx context.Context, method, path string, headers http.Header) error {
+	resp, err := c.doRequest(ctx, method, path, nil, headers)
 	if err != nil {
 		return err
 	}
@@ -278,4 +303,14 @@ func (c *Client) deleteAndDrain(ctx context.Context, method, path string) error 
 	}
 
 	return nil
+}
+
+func ifMatchHeaders(ifMatch string) http.Header {
+	if ifMatch == "" {
+		return nil
+	}
+
+	headers := make(http.Header)
+	headers.Set("If-Match", ifMatch)
+	return headers
 }

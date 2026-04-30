@@ -378,7 +378,7 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) Action
 	if err != nil {
 		return e.failedOutcomeWithFailure(action, ActionRemoteMove, err, action.OldPath, PermissionCapabilityUnknown)
 	}
-	sourcePreconditionErr := e.validateRemoteSourcePrecondition(ctx, driveID, action, "remote move")
+	sourceETag, sourcePreconditionErr := e.remoteSourcePreconditionETag(ctx, driveID, action, "remote move")
 	if sourcePreconditionErr != nil {
 		return e.failedOutcomeWithFailure(
 			action,
@@ -401,8 +401,18 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) Action
 
 	newName := filepath.Base(action.Path)
 
-	item, err := e.items.MoveItem(ctx, driveID, action.ItemID, newParentID, newName)
+	item, err := e.items.MoveItemIfMatch(ctx, driveID, action.ItemID, newParentID, newName, sourceETag)
 	if err != nil {
+		if errors.Is(err, graph.ErrPreconditionFailed) {
+			return e.failedOutcomeWithFailure(
+				action,
+				ActionRemoteMove,
+				stalePreconditionError("remote move item %s changed before mutation", action.ItemID),
+				action.OldPath,
+				PermissionCapabilityRemoteWrite,
+			)
+		}
+
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionRemoteMove,

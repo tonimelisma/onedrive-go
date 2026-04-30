@@ -106,7 +106,9 @@ type ItemClient interface {
 	ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
 	CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
 	MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
+	MoveItemIfMatch(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName, ifMatch string) (*graph.Item, error)
 	DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
+	DeleteItemIfMatch(ctx context.Context, driveID driveid.ID, itemID, ifMatch string) error
 	PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
 }
 

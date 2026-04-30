@@ -121,7 +121,10 @@ Permission recovery follows the same ownership split:
   "this exact action is obsolete." Worker-start freshness, admission freshness,
   and executor live preconditions may return it; the engine maps it to
   `superseded`, not ordinary retry. Transient failures while trying to read
-  live precondition truth are not wrapped with this sentinel.
+  live precondition truth are not wrapped with this sentinel. Graph conditional
+  mutation mismatches surface first as `graph.ErrPreconditionFailed` from HTTP
+  412; the executor translates that boundary-specific fact into
+  `ErrActionPreconditionChanged` when it proves a post-preflight stale action.
 - Retry/backoff consumes the classified result; it does not classify on its
   own.
 - User-facing messaging consumes the classified result; it does not inspect raw

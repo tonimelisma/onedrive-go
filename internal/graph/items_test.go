@@ -966,6 +966,39 @@ func TestMoveItem_NotFound(t *testing.T) {
 	}, ErrNotFound)
 }
 
+// Validates: R-2.8.10
+func TestMoveItemIfMatch_SendsIfMatchHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method)
+		assert.Equal(t, "/drives/000000000000000d/items/item-1", r.URL.Path)
+		assert.Equal(t, `"etag-current"`, r.Header.Get("If-Match"))
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, `{
+			"id": "item-1",
+			"name": "renamed.txt",
+			"eTag": "\"etag-next\"",
+			"parentReference": {"id": "new-parent", "driveId": "d"}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.MoveItemIfMatch(t.Context(), driveid.New("d"), "item-1", "new-parent", "renamed.txt", `"etag-current"`)
+	require.NoError(t, err)
+	assert.Equal(t, "item-1", item.ID)
+	assert.Equal(t, `"etag-next"`, item.ETag)
+}
+
+// Validates: R-2.8.10
+func TestMoveItemIfMatch_PreconditionFailed(t *testing.T) {
+	assertGraphCallError(t, http.StatusPreconditionFailed, "req-move-412", "preconditionFailed", func(client *Client) error {
+		_, err := client.MoveItemIfMatch(t.Context(), driveid.New("d"), "item-1", "new-parent", "", `"etag-current"`)
+		return err
+	}, ErrPreconditionFailed)
+}
+
 // --- DeleteItem tests ---
 
 // Validates: R-1.4
@@ -986,6 +1019,28 @@ func TestDeleteItem_NotFound(t *testing.T) {
 	assertGraphCallError(t, http.StatusNotFound, "req-del-404", "itemNotFound", func(client *Client) error {
 		return client.DeleteItem(t.Context(), driveid.New("d"), "nonexistent")
 	}, ErrNotFound)
+}
+
+// Validates: R-2.8.10
+func TestDeleteItemIfMatch_SendsIfMatchHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodDelete, r.Method)
+		assert.Equal(t, "/drives/000000000000000d/items/item-to-delete", r.URL.Path)
+		assert.Equal(t, `"etag-current"`, r.Header.Get("If-Match"))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	err := client.DeleteItemIfMatch(t.Context(), driveid.New("d"), "item-to-delete", `"etag-current"`)
+	require.NoError(t, err)
+}
+
+// Validates: R-2.8.10
+func TestDeleteItemIfMatch_PreconditionFailed(t *testing.T) {
+	assertGraphCallError(t, http.StatusPreconditionFailed, "req-del-412", "preconditionFailed", func(client *Client) error {
+		return client.DeleteItemIfMatch(t.Context(), driveid.New("d"), "item-to-delete", `"etag-current"`)
+	}, ErrPreconditionFailed)
 }
 
 // --- toItem edge cases ---

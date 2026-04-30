@@ -157,6 +157,11 @@ func (e *Executor) DeleteLocalFolder(action *Action, absPath string) ActionOutco
 		return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(err))
 	}
 
+	preconditionErr := e.validateLocalDeleteFolderPrecondition(action, relPath)
+	if preconditionErr != nil {
+		return e.failedOutcomeWithFailure(action, ActionLocalDelete, preconditionErr, action.Path, PermissionCapabilityLocalWrite)
+	}
+
 	entries, err := e.syncTree.ReadDir(relPath)
 	if err != nil {
 		return e.failedOutcome(action, ActionLocalDelete, fmt.Errorf("reading dir %s: %w", action.Path, err))
@@ -264,7 +269,8 @@ func (e *Executor) DeleteLocalFile(_ context.Context, action *Action, absPath st
 func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) ActionOutcome {
 	driveID := e.resolveDriveID(action)
 
-	if err := e.validateRemoteSourcePrecondition(ctx, driveID, action, "remote delete"); err != nil {
+	sourceETag, err := e.remoteSourcePreconditionETag(ctx, driveID, action, "remote delete")
+	if err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionRemoteDelete,
@@ -274,13 +280,22 @@ func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) Acti
 		)
 	}
 
-	err := e.items.DeleteItem(ctx, driveID, action.ItemID)
+	err = e.items.DeleteItemIfMatch(ctx, driveID, action.ItemID, sourceETag)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotFound) {
 			return e.failedOutcomeWithFailure(
 				action,
 				ActionRemoteDelete,
 				stalePreconditionError("remote delete item %s disappeared", action.ItemID),
+				action.Path,
+				PermissionCapabilityRemoteWrite,
+			)
+		}
+		if errors.Is(err, graph.ErrPreconditionFailed) {
+			return e.failedOutcomeWithFailure(
+				action,
+				ActionRemoteDelete,
+				stalePreconditionError("remote delete item %s changed before mutation", action.ItemID),
 				action.Path,
 				PermissionCapabilityRemoteWrite,
 			)

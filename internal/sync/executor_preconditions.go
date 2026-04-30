@@ -23,29 +23,39 @@ func (e *Executor) validateRemoteSourcePrecondition(
 	action *Action,
 	op string,
 ) error {
+	_, err := e.remoteSourcePreconditionETag(ctx, driveID, action, op)
+	return err
+}
+
+func (e *Executor) remoteSourcePreconditionETag(
+	ctx context.Context,
+	driveID driveid.ID,
+	action *Action,
+	op string,
+) (string, error) {
 	if action == nil || action.ItemID == "" {
-		return nil
+		return "", nil
 	}
 
 	item, err := e.items.GetItem(ctx, driveID, action.ItemID)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotFound) {
-			return stalePreconditionError("%s remote item %s is missing", op, action.ItemID)
+			return "", stalePreconditionError("%s remote item %s is missing", op, action.ItemID)
 		}
-		return fmt.Errorf("checking remote %s precondition for %s: %w", op, action.Path, err)
+		return "", fmt.Errorf("checking remote %s precondition for %s: %w", op, action.Path, err)
 	}
 
 	row := remoteStateRowFromGraphItem(item)
 	planned := plannedRemoteStateForPrecondition(action)
 	if planned != nil && !remoteRowMatchesLivePreconditionForAction(action, row, planned) {
-		return stalePreconditionError("%s remote item %s changed since planning", op, action.ItemID)
+		return "", stalePreconditionError("%s remote item %s changed since planning", op, action.ItemID)
 	}
 	if expectedPath := e.expectedRemotePreconditionPath(action); expectedPath != "" &&
 		row.Path != "" && row.Path != expectedPath {
-		return stalePreconditionError("%s remote item %s moved to %s", op, action.ItemID, row.Path)
+		return "", stalePreconditionError("%s remote item %s moved to %s", op, action.ItemID, row.Path)
 	}
 
-	return nil
+	return item.ETag, nil
 }
 
 func remoteRowMatchesLivePreconditionForAction(action *Action, row *RemoteStateRow, planned *RemoteState) bool {
@@ -348,6 +358,22 @@ func (e *Executor) validateLocalMovePrecondition(action *Action) error {
 	return e.validateLocalMoveSourceAgainstBaseline(source, info, action.View.Baseline)
 }
 
+func (e *Executor) validateLocalDeleteFolderPrecondition(action *Action, relPath string) error {
+	if action == nil || action.View == nil || action.View.Baseline == nil {
+		return nil
+	}
+
+	info, err := e.syncTree.Lstat(relPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return stalePreconditionError("local delete source %s is already absent", action.Path)
+		}
+		return normalizeSyncTreePathError(err)
+	}
+
+	return e.validateLocalSourceAgainstBaseline("local delete", relPath, info, action.View.Baseline)
+}
+
 func localMoveSourcePath(action *Action) string {
 	if action.OldPath != "" {
 		return action.OldPath
@@ -373,32 +399,41 @@ func (e *Executor) validateLocalMoveSourceAgainstBaseline(
 	info os.FileInfo,
 	baseline *BaselineEntry,
 ) error {
+	return e.validateLocalSourceAgainstBaseline("local move", source, info, baseline)
+}
+
+func (e *Executor) validateLocalSourceAgainstBaseline(
+	op string,
+	source string,
+	info os.FileInfo,
+	baseline *BaselineEntry,
+) error {
 	if info.IsDir() {
 		if baseline.ItemType != ItemTypeFolder {
-			return stalePreconditionError("local move source %s changed type", source)
+			return stalePreconditionError("%s source %s changed type", op, source)
 		}
-		return nil
-	}
-	if baseline.ItemType != ItemTypeFile {
-		return stalePreconditionError("local move source %s changed type", source)
-	}
-	if baseline.LocalSizeKnown && info.Size() != baseline.LocalSize {
-		return stalePreconditionError("local move source %s changed size", source)
-	}
-	if baseline.LocalMtime != 0 && info.ModTime().UnixNano() != baseline.LocalMtime {
-		return stalePreconditionError("local move source %s changed mtime", source)
-	}
-	if baseline.LocalHash != "" {
-		absPath, absErr := e.syncTree.Abs(source)
-		if absErr != nil {
-			return normalizeSyncTreePathError(absErr)
+	} else {
+		if baseline.ItemType != ItemTypeFile {
+			return stalePreconditionError("%s source %s changed type", op, source)
 		}
-		currentHash, hashErr := e.hashFunc(absPath)
-		if hashErr != nil {
-			return fmt.Errorf("hashing local move source %s: %w", source, hashErr)
+		if baseline.LocalSizeKnown && info.Size() != baseline.LocalSize {
+			return stalePreconditionError("%s source %s changed size", op, source)
 		}
-		if currentHash != baseline.LocalHash {
-			return stalePreconditionError("local move source %s changed hash", source)
+		if baseline.LocalMtime != 0 && info.ModTime().UnixNano() != baseline.LocalMtime {
+			return stalePreconditionError("%s source %s changed mtime", op, source)
+		}
+		if baseline.LocalHash != "" {
+			absPath, absErr := e.syncTree.Abs(source)
+			if absErr != nil {
+				return normalizeSyncTreePathError(absErr)
+			}
+			currentHash, hashErr := e.hashFunc(absPath)
+			if hashErr != nil {
+				return fmt.Errorf("hashing %s source %s: %w", op, source, hashErr)
+			}
+			if currentHash != baseline.LocalHash {
+				return stalePreconditionError("%s source %s changed hash", op, source)
+			}
 		}
 	}
 	if baseline.LocalHasIdentity {
@@ -407,7 +442,7 @@ func (e *Executor) validateLocalMoveSourceAgainstBaseline(
 			Device: baseline.LocalDevice,
 			Inode:  baseline.LocalInode,
 		}) {
-			return stalePreconditionError("local move source %s changed identity", source)
+			return stalePreconditionError("%s source %s changed identity", op, source)
 		}
 	}
 
