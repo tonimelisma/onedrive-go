@@ -17,12 +17,11 @@ func TestDODManifestGenerationPreservesManualClassification(t *testing.T) {
 	t.Parallel()
 
 	line := 12
-	var response mergedPRThreadsResponse
+	var response singlePRThreadsResponse
 	require.NoError(t, jsonUnmarshalString(`{
 	  "data": {
 	    "repository": {
-	      "pullRequests": {
-	        "nodes": [{
+	      "pullRequest": {
 	          "number": 677,
 	          "title": "Fix stale work",
 	          "url": "https://github.test/pull/677",
@@ -43,7 +42,6 @@ func TestDODManifestGenerationPreservesManualClassification(t *testing.T) {
 	              }
 	            }]
 	          }
-	        }]
 	      }
 	    }
 	  }
@@ -58,7 +56,9 @@ func TestDODManifestGenerationPreservesManualClassification(t *testing.T) {
 			Evidence:       []string{"go test ./internal/sync"},
 		}},
 	}
-	manifest := mergeDODManifest(existing, githubRepo{Owner: "tonimelisma", Name: "onedrive-go"}, 20, reviewThreadsFromMergedResponse(response))
+	pr := response.Data.Repository.PullRequest
+	fetched := reviewThreadsFromPR(pr.Number, pr.Title, pr.URL, pr.ReviewThreads.Nodes)
+	manifest := mergeDODManifest(existing, githubRepo{Owner: "tonimelisma", Name: "onedrive-go"}, 20, fetched)
 
 	require.Len(t, manifest.Threads, 1)
 	thread := manifest.Threads[0]
@@ -69,6 +69,65 @@ func TestDODManifestGenerationPreservesManualClassification(t *testing.T) {
 	assert.Equal(t, DODCommentFixed, thread.Classification)
 	assert.Equal(t, "Changed stale precondition ordering.", thread.WhatChanged)
 	assert.Equal(t, []string{"go test ./internal/sync"}, thread.Evidence)
+}
+
+// Validates: R-6.10.16
+func TestDODFetchPullRequestReviewThreadsPaginates(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		outputFunc: func(_ string, _ []string, name string, args ...string) ([]byte, error) {
+			require.Equal(t, githubCLI, name)
+			argsText := strings.Join(args, "\n")
+			if strings.Contains(argsText, "after=cursor-1") {
+				return []byte(`{
+				  "data": {
+				    "repository": {
+				      "pullRequest": {
+				        "number": 683,
+				        "title": "DoD automation",
+				        "url": "https://github.test/pull/683",
+				        "reviewThreads": {
+				          "pageInfo": {"hasNextPage": false, "endCursor": ""},
+				          "nodes": [{"id": "thread-2", "isResolved": true}]
+				        }
+				      }
+				    }
+				  }
+				}`), nil
+			}
+			assert.NotContains(t, argsText, "after=")
+			return []byte(`{
+			  "data": {
+			    "repository": {
+			      "pullRequest": {
+			        "number": 683,
+			        "title": "DoD automation",
+			        "url": "https://github.test/pull/683",
+			        "reviewThreads": {
+			          "pageInfo": {"hasNextPage": true, "endCursor": "cursor-1"},
+			          "nodes": [{"id": "thread-1", "isResolved": false}]
+			        }
+			      }
+			    }
+			  }
+			}`), nil
+		},
+	}
+
+	threads, err := fetchPullRequestReviewThreads(
+		context.Background(),
+		runner,
+		testCleanupRepoRoot,
+		githubRepo{Owner: "tonimelisma", Name: "onedrive-go"},
+		683,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, threads, 2)
+	assert.Equal(t, "thread-1", threads[0].ThreadID)
+	assert.Equal(t, "thread-2", threads[1].ThreadID)
+	assert.Len(t, runner.outputCommands, 2)
 }
 
 // Validates: R-6.10.16
@@ -235,9 +294,22 @@ func TestDODPostMergeCIClassificationAcceptsSquashSkip(t *testing.T) {
 func TestDODMergeWrapperTreatsMainWorktreeFailureAsServerSideMerge(t *testing.T) {
 	t.Parallel()
 
+	requireMergedPRAfterMergeError(t, "failed to run git: fatal: 'main' is already used by worktree\n")
+}
+
+// Validates: R-6.10.16
+func TestDODMergeWrapperTreatsAlreadyMergedPRAsServerSideMerge(t *testing.T) {
+	t.Parallel()
+
+	requireMergedPRAfterMergeError(t, "Pull request #682 was already merged\n")
+}
+
+func requireMergedPRAfterMergeError(t *testing.T, mergeOutput string) {
+	t.Helper()
+
 	runner := &fakeRunner{
 		combinedOutputs: map[string][]byte{
-			"gh pr merge 682 --squash --delete-branch": []byte("failed to run git: fatal: 'main' is already used by worktree\n"),
+			"gh pr merge 682 --squash --delete-branch": []byte(mergeOutput),
 		},
 		combinedErrByKey: map[string]error{
 			"gh pr merge 682 --squash --delete-branch": errors.New("exit status 1"),
@@ -272,6 +344,45 @@ func TestDODMergeWrapperFailsWhenServerSideMergeDidNotComplete(t *testing.T) {
 	_, err := mergePR(context.Background(), runner, testCleanupRepoRoot, 682)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "server state is not merged")
+}
+
+// Validates: R-6.10.16
+func TestDODBranchCleanupToleratesAlreadyDeletedBranches(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		combinedOutputs: map[string][]byte{
+			"git branch -D feat/dod":            []byte("error: branch 'feat/dod' not found\n"),
+			"git push origin --delete feat/dod": []byte("error: unable to delete 'feat/dod': remote ref does not exist\n"),
+		},
+		combinedErrByKey: map[string]error{
+			"git branch -D feat/dod":            errors.New("exit status 1"),
+			"git push origin --delete feat/dod": errors.New("exit status 1"),
+		},
+	}
+
+	err := deleteDODIncrementBranches(context.Background(), runner, testCleanupRepoRoot, "feat/dod")
+
+	require.NoError(t, err)
+}
+
+// Validates: R-6.10.16
+func TestDODBranchCleanupRejectsAmbiguousRemoteDeleteFailure(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		combinedOutputs: map[string][]byte{
+			"git push origin --delete feat/dod": []byte("error: unable to delete 'feat/dod': protected branch\n"),
+		},
+		combinedErrByKey: map[string]error{
+			"git push origin --delete feat/dod": errors.New("exit status 1"),
+		},
+	}
+
+	err := deleteDODIncrementBranches(context.Background(), runner, testCleanupRepoRoot, "feat/dod")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "protected branch")
 }
 
 func jsonUnmarshalString(data string, v any) error {
