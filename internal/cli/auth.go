@@ -13,7 +13,8 @@ func newLoginCmd() *cobra.Command {
 		Long: `Authenticate with OneDrive using the device code flow (default) or browser-based
 authorization code flow (--browser).
 
-Discovers your account type (personal/business) and organization automatically.
+Discovers your account type automatically. For work or school accounts, also
+discovers the organization name.
 Creates or updates the config file with the new drive section.
 
 The --browser flag opens your default browser for authentication, which can be
@@ -48,7 +49,8 @@ Otherwise, use --account to specify which account to log out.`,
 }
 
 // runLogin implements the discovery-based login flow per accounts.md section 9:
-// device code auth -> /me -> /me/drive -> /me/organization -> construct canonical ID -> config.
+// device code auth -> /me -> /me/drive -> optional work/school organization ->
+// construct canonical ID -> config.
 func runLogin(cmd *cobra.Command, _ []string) error {
 	useBrowser, err := cmd.Flags().GetBool("browser")
 	if err != nil {

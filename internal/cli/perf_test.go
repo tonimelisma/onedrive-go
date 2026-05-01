@@ -17,7 +17,7 @@ import (
 
 // Validates: R-6.6.16
 func TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	setTestDriveHome(t)
 
 	var captured synccontrol.PerfCaptureRequest
 	expectedOutputDir := filepath.Join(t.TempDir(), "capture-bundle")
@@ -79,7 +79,7 @@ func TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner(t *testing.T) {
 
 // Validates: R-6.6.16
 func TestMainWithWriters_PerfCaptureRejectsInvalidDuration(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	setTestDriveHome(t)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -96,7 +96,7 @@ func TestMainWithWriters_PerfCaptureRejectsInvalidDuration(t *testing.T) {
 
 // Validates: R-6.6.16
 func TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	setTestDriveHome(t)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

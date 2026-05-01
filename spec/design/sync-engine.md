@@ -64,6 +64,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Behavior | Evidence |
 | --- | --- |
 | One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
+| Dry-run one-shot sync builds a preview without executor, durable cursor commits, durable observation-findings writes, or shortcut child publication, while normal engine startup/store/close housekeeping still runs. | `TestRunOnce_DryRun_NoExecution`, `TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly`, `TestLoadDryRunCurrentInputs_LocalObservationFindingsStayScratchOnly`, `TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedSnapshotRetryOnEngineSide`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 | Superseded action completions retire exact stale work without success, ordinary retry, blocker mutation, or old-plan dependent admission. | `TestClassifyResult_LocalPersistenceAndScopeRouting`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess`, `TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEmptyScope`, `TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOrRetry` |
 | Admission validates ready actions against committed current truth before worker dispatch. Remote mismatches retire old-plan work as superseded, do not persist ordinary retry work, do not release dependents, and dirty watch mode for replacement planning. | `TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependents` |
@@ -186,9 +187,15 @@ Within that one-shot flow, the engine now treats current-plan construction as
 an explicit stage sequence: observe current truth, load current inputs, build
 the current plan from that observed state, then either reconcile runtime state
 or keep the dry-run build in memory without touching durable held-work state.
-Live, dry-run, watch bootstrap, and steady-state watch replans all use that
-same current-plan pipeline; they differ only in how they collected the
-observed state and whether a deferred cursor commit is present.
+Dry-run engine construction uses the same state-store open, startup
+normalization, and close housekeeping path as a live one-shot run. Dry-run
+current observation writes the fresh remote snapshot, remote observation
+findings, local snapshot, and local skipped-item findings into a scratch
+planning store only; the live `observation_issues`, local snapshot, and remote
+cursor remain unchanged. Live, dry-run, watch bootstrap, and steady-state watch
+replans all use that same current-plan pipeline; they differ only in how they
+collected the observed state, whether the executor runs, and whether a deferred
+cursor commit is present.
 The top-level coordinators should stay at that stage level rather than
 inlining planner input loads, durable prune/load logic, or runtime-start
 bookkeeping. The same rule applies to the explicit runtime-start,

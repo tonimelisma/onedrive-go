@@ -44,7 +44,18 @@ type syncRunOnceRunner func(
 
 func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions) error {
 	logger := cc.Logger
-	rawCfg, err := loadSyncConfigWithEmailReconcile(ctx, cc, logger)
+	rawCfg, err := loadSyncConfig(cc, logger)
+	if err != nil {
+		return err
+	}
+
+	selectors := cc.Flags.Drive
+	effectiveDryRun, err := resolveSyncDryRun(rawCfg.DryRun, opts.DryRun, opts.Watch)
+	if err != nil {
+		return err
+	}
+
+	rawCfg, err = reconcileLoadedSyncConfig(ctx, cc, rawCfg, logger)
 	if err != nil {
 		return err
 	}
@@ -56,11 +67,6 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 	}
 	logger = cc.Logger
 
-	selectors := cc.Flags.Drive
-	effectiveDryRun, err := resolveSyncDryRun(rawCfg.DryRun, opts.DryRun, opts.Watch)
-	if err != nil {
-		return err
-	}
 	controlSocketPath, err := config.ControlSocketPath()
 	if err != nil {
 		return fmt.Errorf("resolve control socket path: %w", err)
@@ -76,18 +82,6 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 	drives, err := config.ResolveDrives(rawCfg, selectors, true, logger)
 	if err != nil {
 		return fmt.Errorf("resolve drives: %w", err)
-	}
-
-	for _, rd := range drives {
-		if rd.Paused {
-			continue
-		}
-		if syncErr := config.ValidateResolvedForSync(rd); syncErr != nil {
-			return fmt.Errorf("validate drive %s: %w", rd.CanonicalID, syncErr)
-		}
-		if syncErr := ensureResolvedSyncDir(rd); syncErr != nil {
-			return syncErr
-		}
 	}
 
 	if len(drives) == 0 {
@@ -167,8 +161,7 @@ func runSyncOnce(
 	return orch.RunOnce(ctx, mode, opts)
 }
 
-func loadSyncConfigWithEmailReconcile(
-	ctx context.Context,
+func loadSyncConfig(
 	cc *CLIContext,
 	logger *slog.Logger,
 ) (*config.Config, error) {
@@ -177,6 +170,15 @@ func loadSyncConfigWithEmailReconcile(
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
 
+	return rawCfg, nil
+}
+
+func reconcileLoadedSyncConfig(
+	ctx context.Context,
+	cc *CLIContext,
+	rawCfg *config.Config,
+	logger *slog.Logger,
+) (*config.Config, error) {
 	selectedDrives, resolveErr := config.ResolveDrives(rawCfg, cc.Flags.Drive, true, logger)
 	if resolveErr == nil {
 		accountCIDs, accountErr := accountIDsFromResolvedDrives(selectedDrives)
@@ -188,6 +190,7 @@ func loadSyncConfigWithEmailReconcile(
 			return rawCfg, nil
 		}
 
+		var err error
 		rawCfg, err = config.LoadOrDefault(cc.CfgPath, logger)
 		if err != nil {
 			return nil, fmt.Errorf("reload config after email reconciliation: %w", err)

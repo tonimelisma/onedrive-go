@@ -114,7 +114,7 @@ func runDriveRemove(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("reading --purge flag: %w", err)
 	}
 
-	return runDriveRemoveWithContext(mustCLIContext(cmd.Context()), purge)
+	return runDriveRemoveWithContext(cmd.Context(), mustCLIContext(cmd.Context()), purge)
 }
 
 // --- drive search ---

@@ -590,40 +590,23 @@ func loadAndResolve(
 	return resolved, rawCfg, nil
 }
 
-// buildLogger creates an slog.Logger configured by the resolved config and
-// CLI flags. Pass nil for pre-config bootstrap (no config-file log level).
-// Config-file log level provides the baseline; --verbose, --debug, and --quiet
-// override it because CLI flags always win. The flags are mutually exclusive
-// (enforced by Cobra).
+// buildLogger creates an slog.Logger configured by CLI flags for console output.
+// Configured log_level applies only to file logging so ordinary command output
+// stays quiet unless the user asks for verbosity with --verbose or --debug.
 func buildLogger(cfg *config.ResolvedDrive, flags CLIFlags) *slog.Logger {
 	return buildLoggerWithStatusWriter(cfg, flags, nil)
 }
 
 func buildLoggerWithStatusWriter(cfg *config.ResolvedDrive, flags CLIFlags, statusWriter io.Writer) *slog.Logger {
-	level := resolveLogLevelWithStatusWriter(cfg, flags, statusWriter)
+	level := resolveConsoleLogLevel(flags)
 	opts := &slog.HandlerOptions{Level: level}
 
 	return slog.New(buildHandlerWithStatusWriter(statusWriterOrDefault(statusWriter), cfg, opts, statusWriter))
 }
 
-// resolveLogLevel determines the effective slog.Level from config and CLI flags.
-func resolveLogLevel(cfg *config.ResolvedDrive, flags CLIFlags) slog.Level {
-	return resolveLogLevelWithStatusWriter(cfg, flags, nil)
-}
-
-func resolveLogLevelWithStatusWriter(cfg *config.ResolvedDrive, flags CLIFlags, statusWriter io.Writer) slog.Level {
+func resolveConsoleLogLevel(flags CLIFlags) slog.Level {
 	level := slog.LevelWarn
 
-	// Config-based log level (lower priority than CLI flags).
-	if cfg != nil && cfg.LogLevel != "" {
-		if mapped, ok := parseLogLevel(cfg.LogLevel); ok {
-			level = mapped
-		} else {
-			writeWarningf(statusWriter, "warning: unknown log level %q, using warn\n", cfg.LogLevel)
-		}
-	}
-
-	// CLI flags override config (highest priority).
 	if flags.Verbose {
 		level = slog.LevelInfo
 	}
@@ -635,6 +618,21 @@ func resolveLogLevelWithStatusWriter(cfg *config.ResolvedDrive, flags CLIFlags, 
 	if flags.Quiet {
 		level = slog.LevelError
 	}
+
+	return level
+}
+
+func resolveFileLogLevelWithStatusWriter(cfg *config.ResolvedDrive, statusWriter io.Writer) slog.Level {
+	level := slog.LevelInfo
+	if cfg == nil || cfg.LogLevel == "" {
+		return level
+	}
+
+	if mapped, ok := parseLogLevel(cfg.LogLevel); ok {
+		return mapped
+	}
+
+	writeWarningf(statusWriter, "warning: unknown log level %q, using info for file logs\n", cfg.LogLevel)
 
 	return level
 }
@@ -748,9 +746,9 @@ func (m *multiHandler) WithGroup(name string) slog.Handler {
 }
 
 // buildLoggerDual creates an slog.Logger with optional dual output. When
-// cfg.LogFile is set, logs go to both stderr (console format, CLI-driven level)
-// and the file (JSON format, config-driven level). Returns an io.Closer for
-// the log file (nil when no file is used).
+// cfg.LogFile is set, logs go to both stderr (console format, CLI-flag-driven
+// level) and the file (JSON format, config log_level-driven level). Returns an
+// io.Closer for the log file (nil when no file is used).
 func buildLoggerDual(cfg *config.ResolvedDrive, flags CLIFlags) (*slog.Logger, io.Closer) {
 	return buildLoggerDualWithStatusWriter(cfg, flags, nil)
 }
@@ -770,7 +768,7 @@ func buildLoggerDualWithStatusWriter(
 	}
 
 	// Console handler: CLI-flag-driven level, config-driven format.
-	consoleLevel := resolveLogLevelWithStatusWriter(cfg, flags, statusWriter)
+	consoleLevel := resolveConsoleLogLevel(flags)
 	consoleHandler := buildHandlerWithStatusWriter(
 		statusWriterOrDefault(statusWriter),
 		cfg,
@@ -779,7 +777,7 @@ func buildLoggerDualWithStatusWriter(
 	)
 
 	// File handler: config-driven level, always JSON for machine parsing.
-	fileLevel := resolveLogLevelWithStatusWriter(cfg, CLIFlags{}, statusWriter)
+	fileLevel := resolveFileLogLevelWithStatusWriter(cfg, statusWriter)
 	fileHandler := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: fileLevel})
 
 	return slog.New(&multiHandler{handlers: []slog.Handler{consoleHandler, fileHandler}}), f

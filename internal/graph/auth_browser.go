@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 
 	"golang.org/x/oauth2"
 
@@ -173,17 +172,15 @@ func shutdownCallbackServer(ctx context.Context, srv *http.Server, logger *slog.
 	}
 }
 
-// launchBrowser attempts to open the auth URL. If it fails, prints the URL
-// to stderr as a fallback so the user can copy-paste it.
+// launchBrowser attempts to open the auth URL. The openURL callback owns any
+// user-facing fallback because the CLI owns terminal output formatting.
 func launchBrowser(ctx context.Context, authURL string, openURL func(context.Context, string) error, logger *slog.Logger) {
 	logger.Info("opening browser for authorization")
 
 	if openErr := openURL(ctx, authURL); openErr != nil {
-		logger.Warn("failed to open browser, printing URL",
+		logger.Warn("failed to open browser",
 			slog.String("error", openErr.Error()),
 		)
-
-		fmt.Fprintf(os.Stderr, "Open this URL in your browser:\n%s\n", authURL)
 	}
 }
 

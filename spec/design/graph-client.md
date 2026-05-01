@@ -88,7 +88,11 @@ Two OAuth2 flows:
 - **Device code flow** (default): user enters code on microsoft.com
 - **PKCE authorization code flow** (`--browser`): localhost callback with code verifier
 
-Token refresh is automatic. Tokens stored as JSON files via `tokenfile` package (strict JSON — rejects unknown fields). `tokenfile.Load` returns `ErrNotFound` sentinel (never nil,nil).
+Token refresh is automatic for normal token sources. Tokens are stored as JSON
+files via `tokenfile` package (strict JSON — rejects unknown fields).
+`tokenfile.Load` returns `ErrNotFound` sentinel (never nil,nil). Dry-run sync
+uses the same token source as live sync; silent refresh and `OnTokenChange`
+token-file persistence remain part of normal authenticated Graph access.
 The device-code boundary intentionally stays narrow: production calls
 `oauth2.Config.DeviceAuth` and `DeviceAccessToken` directly, while unit tests
 can inject those two calls independently to cover cancel/save/error behavior

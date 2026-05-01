@@ -33,13 +33,13 @@ runtime package that implements it.
 | Behavior | Evidence |
 | --- | --- |
 | `RunWatch` starts the runnable runtime mount set, skips incompatible-store mounts with immediate warnings, and rejects all-paused startup through the same startup-summary model. | `TestOrchestrator_RunWatch_SingleMount`, `TestOrchestrator_RunWatch_MultiMount`, `TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts`, `TestOrchestrator_RunWatch_ReturnsErrorWhenAllMountsPaused` |
-| The Unix control socket is the single live-owner lock for one-shot and watch sync, is acquired before parent engines start, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestRunOnce_BindsControlSocketBeforeEngineStartup`, `TestRunWatch_BindsControlSocketBeforeEngineStartup`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
+| The Unix control socket is the single owner lock for one-shot and watch sync, is acquired before parent engines start, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. Dry-run one-shot sync uses the same owner lock as live one-shot sync. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestRunOnce_BindsControlSocketBeforeEngineStartup`, `TestRunOnce_DryRunBindsControlSocketBeforeEngineStartup`, `TestRunWatch_BindsControlSocketBeforeEngineStartup`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Control-socket reload applies add/remove/pause/expired-pause/filter diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry`, `TestOrchestrator_Reload_ContentFilterChangeRestartsOnlyAffectedMount` |
 | Parent engines own shortcut-root state, alias mutation, protected-root derivation, and durable cleanup retry state before multisync sees child work. | `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeReturningError`, `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain` |
 | Multisync owns runtime-only shortcut child admission from exact parent snapshots: one-shot stores the exact publication and starts that parent's children only after that parent's safe point, while watch initial startup starts parent runners only and admits children from live parent publications that still match the live runner/cache state. | `TestReceiveParentChildWorkSnapshot_StoresSnapshotInMemory`, `TestReceiveParentChildWorkSnapshot_EmptySnapshotClearsCachedChildren`, `TestRunOnce_PublishesParentChildWorkSnapshotBeforeStartingChildren`, `TestRunOnce_StartsParentChildrenAfterPublishingParentSafePoint`, `TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents`, `TestRunOnce_UsesFinalParentSnapshotInsteadOfIntermediateSkip`, `TestRunWatch_PublishesParentChildWorkSnapshotBeforeStartingChildren`, `TestRunWatch_ReconcilesChildRunnersFromLiveParentSnapshot`, `TestApplyWatchMountSet_ParentRestartClearsSnapshotAndDoesNotRestartChild`, `TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot`, `TestHandleWatchRunnerEvent_IgnoresStaleParentSnapshotEvents` |
-| Multisync executes parent-declared final-drain and artifact-cleanup work without becoming the parent lifecycle owner; cleanup paths use explicit orchestrator `DataDir`, parent-scoped cleanup diagnostics remain transient, and runtime work compilation keeps shortcut child commands scoped to the declaring parent. | `TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSuccess`, `TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved`, `TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile`, `TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs`, `TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts`, `TestOrchestratorCleanupWithEmptyDataDirFailsLoudly`, `TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsWhenNoCleanupWorkRemains`, `TestBuildRuntimeWorkFromParentChildWorkSnapshot_DoesNotClassifyDuplicateAutomaticChildren`, `TestBuildRuntimeWorkFromParentChildWorkSnapshot_StandaloneContentRootRunsBesideChild`, `TestBuildRuntimeWork_ParentBlockedSnapshotHasNoChildWork`, `TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable`, `TestBuildChildStatusMount_RendersLifecycleState` |
+| Multisync executes parent-declared final-drain and artifact-cleanup work without becoming the parent lifecycle owner; cleanup paths use explicit orchestrator `DataDir`, parent-scoped cleanup diagnostics remain transient, and runtime work compilation keeps shortcut child commands scoped to the declaring parent. Final-drain one-shot option rewriting may force bidirectional full reconcile, but it must preserve caller options such as dry-run. | `TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSuccess`, `TestBuildEngineWork_FinalDrainChildPreservesDryRunOption`, `TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved`, `TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile`, `TestHandleFinalDrainWatchRunnerEvent_DoesNotAckParentWhenDrainErrs`, `TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts`, `TestOrchestratorCleanupWithEmptyDataDirFailsLoudly`, `TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsWhenNoCleanupWorkRemains`, `TestBuildRuntimeWorkFromParentChildWorkSnapshot_DoesNotClassifyDuplicateAutomaticChildren`, `TestBuildRuntimeWorkFromParentChildWorkSnapshot_StandaloneContentRootRunsBesideChild`, `TestBuildRuntimeWork_ParentBlockedSnapshotHasNoChildWork`, `TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable`, `TestBuildChildStatusMount_RendersLifecycleState` |
 
 ## Runtime Mount Specs
 
@@ -314,7 +314,11 @@ lifecycle model for startup, shutdown, and reload.
 mount, and runs all mounts concurrently. Startup eligibility is classified per
 mount first, including CLI conversion failures, paused standalone parents, and
 managed child mounts skipped because their parent is missing or their content
-root conflicts. Runnable mounts then produce one completed `MountReport` each,
+root conflicts. Paused standalone parents are preserved as paused mount inputs
+without sync-dir structural validation, so stale dormant config cannot turn a
+paused drive into a fatal startup failure for unrelated runnable mounts. When a
+drive is unpaused, normal conversion and engine startup validation apply again.
+Runnable mounts then produce one completed `MountReport` each,
 while startup-ineligible mounts remain startup outcomes instead of synthetic
 completed reports. The control plane never aborts the whole pass because one
 mount failed; partial failure is isolated per mount. Both startup results and
@@ -405,6 +409,12 @@ forces fresh startup observation under the new visibility policy. When a timed
 pause has already expired by reload time, the config keys are cleaned up but the
 running mount is not bounced.
 
+Reload compiles active non-paused mounts without creating sync roots. A newly
+added or resumed drive whose resolved `sync_dir` is missing is still included in
+the new runtime set; its engine startup records `ErrMountRootUnavailable` as a
+per-mount startup failure while the reload continues applying unrelated
+add/remove/pause changes.
+
 ## Runtime Ownership
 
 The control plane has one mutable runtime structure in watch mode: the active
@@ -435,6 +445,8 @@ an `Orchestrator`, and chooses between `RunOnce` and `RunWatch`.
 - `--watch` selects daemon mode
 - `--download-only` and `--upload-only` select sync mode
 - `--dry-run` and `--full` apply only to one-shot mode
+- `--dry-run` binds, probes, and unlinks the control socket like any one-shot
+  sync owner; it only changes plan execution and commit semantics
 - first SIGINT/SIGTERM cancels the shared watch contexts and lets each mount's
   engine seal new admission and follow its normal shutdown path
 - second signal forces exit

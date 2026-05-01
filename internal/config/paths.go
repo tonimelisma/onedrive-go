@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // Platform identifiers.
@@ -95,18 +96,23 @@ func DefaultCacheDir() string {
 	}
 }
 
-// AssertDevSafe panics if a dev build (version=="dev") is running without
-// XDG isolation. Prevents accidental production data access during development.
-// At least one of XDG_DATA_HOME, XDG_CONFIG_HOME, or XDG_CACHE_HOME must be set.
+// AssertDevSafe panics if a dev build (version=="dev") is running without full
+// XDG isolation. Partial isolation is unsafe: setting only one XDG root can still
+// leave config, data, or cache operations falling back to production paths.
 func AssertDevSafe() {
-	if os.Getenv("XDG_DATA_HOME") != "" ||
-		os.Getenv("XDG_CONFIG_HOME") != "" ||
-		os.Getenv("XDG_CACHE_HOME") != "" {
+	var missing []string
+	for _, name := range []string{"XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"} {
+		if os.Getenv(name) == "" {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
 		return
 	}
 
 	panic("DEV BUILD: set XDG_DATA_HOME, XDG_CONFIG_HOME, and XDG_CACHE_HOME " +
 		"to avoid touching production data.\n" +
+		"Missing: " + strings.Join(missing, ", ") + "\n" +
 		"Example: source scripts/dev-env.sh && go run . <command>")
 }
 

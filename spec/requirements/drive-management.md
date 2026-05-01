@@ -27,7 +27,11 @@ The system shall support all four drive types:
 - R-3.3.1: When the user runs `login`, the system shall auto-add the account's
   primary drive to the configuration: `personal:<email>` for consumer Microsoft
   accounts, `business:<email>` for work/school accounts. Re-login shall refresh
-  the token and metadata without duplicating the drive section. [verified]
+  the token and metadata without duplicating the drive section. Login shall
+  validate that the resolved sync directory is absolute, materialize it before
+  reporting success, roll token/catalog/config changes back if materialization
+  fails, and request a control-socket reload when a watch daemon is running.
+  [verified]
 - R-3.3.2: When the user runs `drive list`, the system shall show two drive sections plus account-level warnings when needed. Section 1 ("Configured drives") shall list every drive in config with display name, sync directory (blank if not set), operational state (ready or paused), and auth status. Section 2 ("Available drives") shall list all not-yet-added drives discovered from authenticated accounts — personal and business drives, SharePoint document libraries (business accounts only, capped at 10 sites), and shared folders (all account types). Drives already in config shall not appear in the available section. If account discovery cannot proceed because authentication is required, the command shall surface that as an account-level warning instead of silently omitting the account. If `/me/drives` is temporarily unavailable after exhausting its transient retry budget, the command shall keep the account visible under `accounts_degraded`, fall back to `/me/drive` for the primary personal/business drive when possible, and continue independent shared-folder and SharePoint discovery. [verified]
 - R-3.3.3: Available drives in `drive list` that retain a state database from a
   previous configuration shall be marked as such, indicating they can be
@@ -40,7 +44,10 @@ The system shall support all four drive types:
   the account. This works for any drive type: personal, business, SharePoint,
   or shared — including re-adding a default drive previously removed via
   `drive remove`. If the drive is already configured, the system shall report
-  it as such without creating a duplicate. [verified]
+  it as such without creating a duplicate. Drive add shall materialize the
+  configured sync directory only after validating that the resolved path is
+  absolute, and request a control-socket reload when a watch daemon is running.
+  [verified]
 - R-3.3.6: When a search term without `:` is passed to `drive add`, the system
   shall match against shared folder names using case-insensitive substring
   search across the authenticated shared-discovery account set, honoring
@@ -55,7 +62,9 @@ The system shall support all four drive types:
   `drive add` avoids a full re-sync), and the sync directory is preserved (the
   user's files remain on disk). After removal, the drive appears as "available"
   in `drive list` and can be re-added with `drive add`. Removing the final
-  configured drive leaves `config.toml` in place with zero drive sections.
+  configured drive leaves `config.toml` in place with zero drive sections. When
+  a watch daemon is running, removal requests a control-socket reload so the
+  live runner set drops the drive without restarting the daemon process.
   [verified]
 - R-3.3.8: When `--purge` is passed to `drive remove`, the system shall also
   delete the state database. This works both for configured drives (removing

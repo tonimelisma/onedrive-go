@@ -319,6 +319,7 @@ func TestResolveDrive_EmptyDriveSection_UsesResolvedSyncDirDefault(t *testing.T)
 	require.NotNil(t, rawCfg)
 	assert.Equal(t, driveid.MustCanonicalID("personal:toni@outlook.com"), resolved.CanonicalID)
 	assert.Equal(t, filepath.Join(home, "OneDrive"), resolved.SyncDir)
+	require.NoError(t, os.MkdirAll(resolved.SyncDir, 0o700))
 	assert.NoError(t, ValidateResolvedForSync(resolved))
 }
 

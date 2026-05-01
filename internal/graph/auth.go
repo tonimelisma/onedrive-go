@@ -73,8 +73,7 @@ type callbackResult struct {
 //  6. Returns a TokenSource for use with Client
 //
 // openURL is called with the authorization URL; the CLI uses it to launch the
-// default browser. If openURL returns an error, the URL is printed to stderr
-// so the user can open it manually.
+// default browser and owns any user-facing fallback output if opening fails.
 //
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.

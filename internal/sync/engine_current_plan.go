@@ -264,13 +264,25 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 	))
 }
 
-func (flow *engineFlow) refreshLocalCurrentState(
+func (flow *engineFlow) observeLocalCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 ) (ScanResult, error) {
 	localResult, err := flow.observeLocal(ctx, bl)
 	if err != nil {
 		return ScanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepObservation, err)
+	}
+
+	return localResult, nil
+}
+
+func (flow *engineFlow) refreshLocalCurrentState(
+	ctx context.Context,
+	bl *Baseline,
+) (ScanResult, error) {
+	localResult, err := flow.observeLocalCurrentState(ctx, bl)
+	if err != nil {
+		return ScanResult{}, err
 	}
 
 	if err := flow.reconcileSkippedObservationFindings(ctx, localResult.Skipped); err != nil {
@@ -380,7 +392,7 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 		return nil, err
 	}
 
-	localResult, err := flow.refreshLocalCurrentState(ctx, bl)
+	localResult, err := flow.observeLocalCurrentState(ctx, bl)
 	if err != nil {
 		return nil, err
 	}
@@ -401,6 +413,11 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 	}
 	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &observationBatch.findings, flow.engine.nowFunc()); reconcileErr != nil {
 		return nil, fmt.Errorf("sync: reconciling dry-run remote observation findings in scratch store: %w", reconcileErr)
+	}
+	flow.logSkippedObservationFindings(localResult.Skipped)
+	localFindings := localObservationFindingsBatchFromSkippedItems(flow.engine.driveID, localResult.Skipped)
+	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &localFindings, flow.engine.nowFunc()); reconcileErr != nil {
+		return nil, fmt.Errorf("sync: reconciling dry-run local observation findings in scratch store: %w", reconcileErr)
 	}
 
 	localRows := buildLocalStateRows(localResult)

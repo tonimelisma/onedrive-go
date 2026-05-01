@@ -278,7 +278,7 @@ func TestDriveRemove_PurgePreservesCatalogAccount(t *testing.T) {
 	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
 
-	require.NoError(t, runDriveRemoveWithContext(cc, true))
+	require.NoError(t, runDriveRemoveWithContext(t.Context(), cc, true))
 
 	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)

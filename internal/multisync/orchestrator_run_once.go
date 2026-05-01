@@ -257,7 +257,7 @@ func (o *Orchestrator) buildEngineWork(
 			runOpts := opts
 			if mount.isFinalDrainChild() {
 				runMode = syncengine.SyncBidirectional
-				runOpts = syncengine.RunOptions{FullReconcile: true}
+				runOpts.FullReconcile = true
 			}
 			return engine.RunOnce(c, runMode, runOpts)
 		},

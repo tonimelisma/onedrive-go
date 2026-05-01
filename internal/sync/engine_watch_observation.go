@@ -10,8 +10,18 @@ func (flow *engineFlow) reconcileSkippedObservationFindings(
 	ctx context.Context,
 	skipped []SkippedItem,
 ) error {
-	eng := flow.engine
+	flow.logSkippedObservationFindings(skipped)
+	batch := localObservationFindingsBatchFromSkippedItems(flow.engine.driveID, skipped)
+	return flow.applyObservationFindingsBatch(
+		ctx,
+		&batch,
+		"failed to reconcile local observation findings",
+		engineDebugNoteLocalSkipped,
+	)
+}
 
+func (flow *engineFlow) logSkippedObservationFindings(skipped []SkippedItem) {
+	eng := flow.engine
 	byReason := make(map[string][]SkippedItem)
 	for i := range skipped {
 		byReason[skipped[i].Reason] = append(byReason[skipped[i].Reason], skipped[i])
@@ -53,14 +63,6 @@ func (flow *engineFlow) reconcileSkippedObservationFindings(
 			}
 		}
 	}
-
-	batch := localObservationFindingsBatchFromSkippedItems(eng.driveID, skipped)
-	return flow.applyObservationFindingsBatch(
-		ctx,
-		&batch,
-		"failed to reconcile local observation findings",
-		engineDebugNoteLocalSkipped,
-	)
 }
 
 func (flow *engineFlow) applyObservationFindingsBatch(

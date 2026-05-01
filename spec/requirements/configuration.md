@@ -61,8 +61,11 @@ The system shall resolve settings with a four-layer override chain: defaults →
   `cp`, `stat`) shall require only a selectable drive section and a valid
   token. They shall NOT require `sync_dir` or any sync-related settings.
   [verified]
-- R-4.8.6: The `sync` command shall require `sync_dir` to be set, absolute,
-  and either an existing directory or creatable. All sync-related settings
+- R-4.8.6: The `sync` command shall require `sync_dir` to be set and absolute.
+  Sync shall not create a missing sync root at one-shot startup, watch startup,
+  dry-run startup, or control-socket reload. A missing root is a per-mount
+  engine startup failure (`ErrMountRootUnavailable`); other runnable mounts and
+  reload changes shall still be applied. All other sync-related settings
   (filters, safety thresholds, timing) shall be fully validated before sync
   starts. [verified]
 

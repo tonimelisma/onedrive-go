@@ -554,6 +554,43 @@ func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T
 	assert.Equal(t, SKPermRemoteWrite(""), liveBlockScopes[0].Key)
 }
 
+// Validates: R-2.1.5
+func TestLoadDryRunCurrentInputs_LocalObservationFindingsStayScratchOnly(t *testing.T) {
+	t.Parallel()
+
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems(nil, "token-dry-run-local-findings"), nil
+		},
+	}
+
+	eng, syncRoot := newTestEngine(t, mock)
+	flow := testEngineFlow(t, eng)
+	ctx := t.Context()
+
+	seedObservationIssueForTest(t, eng.baseline, "stale-invalid.txt", IssueInvalidFilename, ScopeKey{})
+	writeLocalFile(t, syncRoot, "CON", "reserved name")
+
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+
+	result, err := flow.loadDryRunCurrentObservation(ctx, bl, false)
+	require.NoError(t, err)
+
+	issuePaths := make([]string, 0, len(result.inputs.observationIssues))
+	for i := range result.inputs.observationIssues {
+		issuePaths = append(issuePaths, result.inputs.observationIssues[i].Path)
+	}
+	assert.Contains(t, issuePaths, "CON")
+	assert.NotContains(t, issuePaths, "stale-invalid.txt")
+
+	liveObservationIssues, err := eng.baseline.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, liveObservationIssues, 1)
+	assert.Equal(t, "stale-invalid.txt", liveObservationIssues[0].Path)
+	assert.Equal(t, IssueInvalidFilename, liveObservationIssues[0].IssueType)
+}
+
 // Validates: R-2.1.1, R-3.3.12
 func TestRunOnce_MountRootUsesScopedDeltaAndToken(t *testing.T) {
 	t.Parallel()

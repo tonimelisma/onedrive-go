@@ -264,21 +264,20 @@ func TestValidateResolvedForSync_SyncDirIsFile(t *testing.T) {
 func TestValidateResolvedForSync_Valid(t *testing.T) {
 	rd := &ResolvedDrive{
 		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
-		SyncDir:     "/tmp/valid-sync-dir",
+		SyncDir:     t.TempDir(),
 	}
 	err := ValidateResolvedForSync(rd)
 	assert.NoError(t, err)
 }
 
 // Validates: R-4.8.6
-func TestValidateResolvedForSync_NonExistentDir_OK(t *testing.T) {
-	// Non-existent paths are valid — sync creates the directory on first run.
+func TestValidateResolvedForSync_NonExistentDirAllowed(t *testing.T) {
 	rd := &ResolvedDrive{
 		CanonicalID: driveid.MustCanonicalID("personal:user@example.com"),
-		SyncDir:     "/nonexistent/path/that/does/not/exist",
+		SyncDir:     filepath.Join(t.TempDir(), "missing-sync-root"),
 	}
 	err := ValidateResolvedForSync(rd)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }
 
 // Validates: R-4.8.6

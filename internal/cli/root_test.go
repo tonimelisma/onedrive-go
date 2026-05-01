@@ -68,8 +68,8 @@ func TestBuildLogger_Debug(t *testing.T) {
 	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
-// Validates: R-6.6.2
-func TestBuildLogger_ConfigDebug(t *testing.T) {
+// Validates: R-4.7.1, R-6.6.2
+func TestBuildLogger_ConfigDebugDoesNotAffectConsole(t *testing.T) {
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "debug"},
 	}
@@ -77,7 +77,9 @@ func TestBuildLogger_ConfigDebug(t *testing.T) {
 
 	logger := buildLogger(cfg, flags)
 
-	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
+	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
+	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
+	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
 func TestBuildLogger_VerboseOverrides(t *testing.T) {
@@ -117,8 +119,7 @@ func TestBuildLogger_DebugOverrides(t *testing.T) {
 	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
-func TestBuildLogger_ConfigInfo(t *testing.T) {
-	// Config log_level = "info" should set Info level.
+func TestBuildLogger_ConfigInfoDoesNotAffectConsole(t *testing.T) {
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "info"},
 	}
@@ -126,7 +127,8 @@ func TestBuildLogger_ConfigInfo(t *testing.T) {
 
 	logger := buildLogger(cfg, flags)
 
-	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
+	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
+	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
 	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
@@ -354,7 +356,7 @@ func TestCLIContextReplaceCommandLogger_SurfacesSwapCloseError(t *testing.T) {
 }
 
 func TestCloseRootCommandLogger_ClosesActiveLoggerAfterCommandError(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	setTestDriveHome(t)
 
 	root := newRootCmdWithWriters(io.Discard, io.Discard)
 	activeCloser := &countingCloser{}
@@ -393,7 +395,7 @@ func TestNewGraphClient_ReturnsConstructionError(t *testing.T) {
 }
 
 func TestNewRootCmd_MutualExclusivity(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir()) // satisfy dev build guard
+	setTestDriveHome(t)
 
 	// Cobra enforces mutual exclusivity during Execute(). Verify that
 	// combining --verbose/--debug/--quiet produces an error.
@@ -419,7 +421,7 @@ func TestNewRootCmd_MutualExclusivity(t *testing.T) {
 }
 
 func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir()) // satisfy dev build guard
+	setTestDriveHome(t)
 
 	cmd := newRootCmd()
 
@@ -449,7 +451,7 @@ func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
 }
 
 func TestNewRootCmd_DriveSubcommandsSkipConfig(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir()) // satisfy dev build guard
+	setTestDriveHome(t)
 
 	cmd := newRootCmd()
 
@@ -581,9 +583,7 @@ func TestLoadAndResolve_MissingFile_NoDrives_Error(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "nonexistent.toml")
 
-	// Override HOME so token discovery finds nothing on disk.
-	t.Setenv("HOME", tmpDir)
-	t.Setenv("XDG_DATA_HOME", tmpDir) // satisfy dev build guard
+	setTestDriveHome(t)
 
 	// No config file and no tokens: matchNoDrives returns "no accounts
 	// configured" because no tokens exist on disk.
@@ -621,7 +621,7 @@ func TestMustCLIContext_Returns(t *testing.T) {
 // --- CLIFlags tests ---
 
 func TestCLIFlags_PopulatedByPersistentPreRunE(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir()) // satisfy dev build guard
+	setTestDriveHome(t)
 
 	// Verify that PersistentPreRunE populates CLIFlags for auth commands.
 	cmd := newRootCmd()
@@ -837,7 +837,7 @@ func TestBuildHandler_JSONFormatWithDebugLevel(t *testing.T) {
 			LogLevel:  "debug",
 		},
 	}
-	level := resolveLogLevel(cfg, CLIFlags{})
+	level := resolveFileLogLevelWithStatusWriter(cfg, nil)
 	opts := &slog.HandlerOptions{Level: level}
 	handler := buildHandler(&buf, cfg, opts)
 
@@ -872,73 +872,54 @@ func TestIsWriterTTY_File(t *testing.T) {
 	assert.False(t, isWriterTTY(f), "regular file should not be a TTY")
 }
 
-func TestBuildLogger_UnknownLogLevel(t *testing.T) {
+func TestResolveFileLogLevel_UnknownLogLevel(t *testing.T) {
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "bogus"},
 	}
-	flags := CLIFlags{}
 
-	// Captures stderr warning for unknown log level.
-	logger := buildLogger(cfg, flags)
+	level := resolveFileLogLevelWithStatusWriter(cfg, nil)
 
-	// Should fall back to warn level.
-	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
-	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
+	assert.Equal(t, slog.LevelInfo, level)
 }
 
-func TestBuildLoggerWithStatusWriter_UnknownLogLevelWarnsToProvidedWriter(t *testing.T) {
+func TestResolveFileLogLevelWithStatusWriter_UnknownLogLevelWarnsToProvidedWriter(t *testing.T) {
 	var statusBuf bytes.Buffer
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "bogus"},
 	}
 
-	logger := buildLoggerWithStatusWriter(cfg, CLIFlags{}, &statusBuf)
+	level := resolveFileLogLevelWithStatusWriter(cfg, &statusBuf)
 
-	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
-	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
+	assert.Equal(t, slog.LevelInfo, level)
 	assert.Contains(t, statusBuf.String(), `unknown log level "bogus"`)
 }
 
 // --- B-296: sync command log_level fix ---
 
-// TestBuildLogger_FromRawConfigLogLevel verifies the pattern used to apply
-// config-file log_level in the sync command. sync uses skipConfigAnnotation
-// for multi-drive resolution, so Phase 2 logger construction is skipped.
-// runSync rebuilds the logger from rawCfg.LoggingConfig after loading config.
-// This test ensures that a ResolvedDrive with only LoggingConfig populated
-// (and all other fields at zero value) correctly applies the log level.
-func TestBuildLogger_FromRawConfigLogLevel(t *testing.T) {
+// TestBuildLogger_RawConfigLogLevelDoesNotAffectConsole verifies that the sync
+// command's raw config logging shim keeps terminal verbosity flag-owned.
+func TestBuildLogger_RawConfigLogLevelDoesNotAffectConsole(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		logLevel  string
-		wantInfo  bool
-		wantDebug bool
+		name     string
+		logLevel string
 	}{
 		{
-			name:      "info level",
-			logLevel:  "info",
-			wantInfo:  true,
-			wantDebug: false,
+			name:     "info level",
+			logLevel: "info",
 		},
 		{
-			name:      "debug level",
-			logLevel:  "debug",
-			wantInfo:  true,
-			wantDebug: true,
+			name:     "debug level",
+			logLevel: "debug",
 		},
 		{
-			name:      "warn level",
-			logLevel:  "warn",
-			wantInfo:  false,
-			wantDebug: false,
+			name:     "warn level",
+			logLevel: "warn",
 		},
 		{
-			name:      "empty level falls back to warn",
-			logLevel:  "",
-			wantInfo:  false,
-			wantDebug: false,
+			name:     "empty level falls back to warn",
+			logLevel: "",
 		},
 	}
 
@@ -953,12 +934,9 @@ func TestBuildLogger_FromRawConfigLogLevel(t *testing.T) {
 			}
 			logger := buildLogger(rd, CLIFlags{})
 
-			assert.Equal(t, tc.wantInfo,
-				logger.Handler().Enabled(t.Context(), slog.LevelInfo),
-				"Info enabled mismatch for log_level=%q", tc.logLevel)
-			assert.Equal(t, tc.wantDebug,
-				logger.Handler().Enabled(t.Context(), slog.LevelDebug),
-				"Debug enabled mismatch for log_level=%q", tc.logLevel)
+			assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
+			assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
+			assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 		})
 	}
 }
@@ -1219,6 +1197,32 @@ func TestBuildLoggerDual_FileGetsJSON(t *testing.T) {
 	var record map[string]any
 	require.NoError(t, json.Unmarshal(data, &record), "file output should be valid JSON: %s", string(data))
 	assert.Equal(t, "json check", record["msg"])
+}
+
+// Validates: R-4.7.1, R-6.6.2
+func TestBuildLoggerDual_InfoLevelGoesToFileNotConsole(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "info.log")
+	cfg := &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{
+			LogFile:  logPath,
+			LogLevel: "info",
+		},
+	}
+	var console bytes.Buffer
+
+	logger, closer := buildLoggerDualWithStatusWriter(cfg, CLIFlags{}, &console)
+	require.NotNil(t, closer)
+
+	logger.Info("file only info")
+	require.NoError(t, closer.Close())
+
+	assert.Empty(t, console.String())
+
+	data, err := localpath.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "file only info")
 }
 
 // Validates: R-6.6.3

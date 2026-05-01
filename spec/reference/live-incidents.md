@@ -556,9 +556,10 @@ bucket still exposed a startup bug in ordinary sync command wiring. A fresh
 `drive add` for a shared drive correctly wrote config and catalog state, but
 the first `sync --download-only` run still handed the selected drive to the
 scanner before the local `sync_dir` existed. The runtime then aborted with
-`sync root directory does not exist`, even though the config contract already
-allowed missing sync roots because sync is supposed to create them on first
-run.
+`sync root directory does not exist`. At the time, the config contract allowed
+missing sync roots and sync startup owned creation; the current contract moves
+that creation to login/drive enrollment and lets engine startup reject missing
+roots per mount.
 Evidence:
 - April 22, 2026 local `go run ./cmd/devtool verify e2e-full` failed the
   `full-serial-watch-shared` bucket in three shared-drive tests with the same
@@ -571,18 +572,18 @@ Evidence:
   treats a missing root directory as `ErrSyncRootMissing`, so once startup
   reached the scanner without creating the directory first the failure was
   deterministic.
-- [`spec/design/config.md`](../design/config.md) already documented the
-  opposite contract: `ValidateResolvedForSync` accepts non-existent sync roots
-  because sync creates them on first run.
-- New focused CLI regressions now cover both startup paths:
-  [`TestRunSyncCommand_CreatesMissingSyncDirBeforeRunOnce`](../../internal/cli/sync_test.go)
+- [`spec/design/config.md`](../design/config.md) documented the historical
+  contract: `ValidateResolvedForSync` accepted non-existent sync roots because
+  sync created them on first run.
+- Current focused CLI regressions cover both startup paths:
+  [`TestRunSyncCommand_PassesMissingSyncDirToRunOnce`](../../internal/cli/sync_test.go)
   and
-  [`TestRunSyncDaemonWithFactory_CreatesMissingSyncDirBeforeOrchestrator`](../../internal/cli/sync_runtime_test.go).
-Resolution / mitigation: one-shot and watch startup now call a shared helper
-that materializes the validated `sync_dir` with `localpath.MkdirAll` before
-handing the drive to run-once or orchestrator setup. The three failing shared
-E2E tests all passed after that fix, and the config/CLI docs now state the
-same ownership explicitly.
+  [`TestRunSyncDaemonWithFactory_PassesMissingSyncDirToOrchestrator`](../../internal/cli/sync_runtime_test.go).
+Resolution / mitigation: the original fix created roots in one-shot/watch
+startup. The May 1, 2026 ownership change supersedes that by materializing
+`sync_dir` during login/drive add and keeping sync startup read-only with
+respect to root creation. Missing roots now surface as per-mount engine startup
+failures instead of all-or-nothing config reload failures.
 Promoted docs: [config.md](../design/config.md), [cli.md](../design/cli.md)
 
 ## LI-20260422-04: Shared-folder `drive list` exact-selector check assumed one-pass search visibility

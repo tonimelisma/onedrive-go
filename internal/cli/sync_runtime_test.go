@@ -188,6 +188,38 @@ func TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields
 }
 
 // Validates: R-2.8.1
+func TestStandaloneMountSelectionFromResolvedDrives_PausedDriveSkipsSyncDirValidation(t *testing.T) {
+	t.Parallel()
+
+	paused := &config.ResolvedDrive{
+		CanonicalID:  driveid.MustCanonicalID("personal:paused@example.com"),
+		DisplayName:  "Paused",
+		SyncDir:      "relative-sync",
+		DriveID:      driveid.New("paused-drive"),
+		Paused:       true,
+		SafetyConfig: config.SafetyConfig{MinFreeSpace: "0"},
+	}
+	runnable := &config.ResolvedDrive{
+		CanonicalID:  driveid.MustCanonicalID("personal:runnable@example.com"),
+		DisplayName:  "Runnable",
+		SyncDir:      t.TempDir(),
+		DriveID:      driveid.New("runnable-drive"),
+		SafetyConfig: config.SafetyConfig{MinFreeSpace: "0"},
+	}
+
+	selection := standaloneMountSelectionFromResolvedDrives([]*config.ResolvedDrive{paused, runnable})
+	require.Len(t, selection.Mounts, 2)
+	assert.Empty(t, selection.StartupResults)
+
+	assert.Equal(t, 0, selection.Mounts[0].SelectionIndex)
+	assert.True(t, selection.Mounts[0].Paused)
+	assert.Equal(t, paused.SyncDir, selection.Mounts[0].SyncRoot)
+	assert.Equal(t, 1, selection.Mounts[1].SelectionIndex)
+	assert.False(t, selection.Mounts[1].Paused)
+	assert.Equal(t, runnable.SyncDir, selection.Mounts[1].SyncRoot)
+}
+
+// Validates: R-2.8.1
 func TestStandaloneMountSelectionFromResolvedDrives_PrefersTokenOwnerAccountEmail(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -276,13 +308,15 @@ func TestReloadStandaloneMountsFunc_UsesWatchSelectors(t *testing.T) {
 
 	firstCID := driveid.MustCanonicalID("personal:first-reload@example.com")
 	secondCID := driveid.MustCanonicalID("personal:second-reload@example.com")
+	firstDir := t.TempDir()
+	secondDir := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.Drives[firstCID] = config.Drive{
-		SyncDir:     filepath.Join(t.TempDir(), "first"),
+		SyncDir:     firstDir,
 		DisplayName: "First",
 	}
 	cfg.Drives[secondCID] = config.Drive{
-		SyncDir:     filepath.Join(t.TempDir(), "second"),
+		SyncDir:     secondDir,
 		DisplayName: "Second",
 	}
 
@@ -293,6 +327,28 @@ func TestReloadStandaloneMountsFunc_UsesWatchSelectors(t *testing.T) {
 	require.Len(t, mounts, 1)
 	assert.Empty(t, selection.StartupResults)
 	assert.Equal(t, secondCID, mounts[0].CanonicalID)
+}
+
+// Validates: R-2.8.1
+func TestReloadStandaloneMountsFunc_AllowsMissingSyncDirForEngineStartup(t *testing.T) {
+	t.Parallel()
+
+	cid := driveid.MustCanonicalID("personal:missing-reload@example.com")
+	syncDir := filepath.Join(t.TempDir(), "missing")
+	cfg := config.DefaultConfig()
+	cfg.Drives[cid] = config.Drive{
+		SyncDir:     syncDir,
+		DisplayName: "Missing",
+	}
+
+	compile := reloadStandaloneMountsFunc(nil, slog.New(slog.DiscardHandler))
+	selection, err := compile(cfg)
+	require.NoError(t, err)
+	require.Len(t, selection.Mounts, 1)
+	assert.Empty(t, selection.StartupResults)
+	assert.Equal(t, syncDir, selection.Mounts[0].SyncRoot)
+	_, statErr := os.Stat(syncDir)
+	assert.True(t, os.IsNotExist(statErr))
 }
 
 // Validates: R-2.1, R-2.10.3
@@ -317,7 +373,7 @@ func TestRunSyncDaemonWithFactory_NoDrivesConfigured(t *testing.T) {
 }
 
 // Validates: R-2.1, R-2.10.3
-func TestRunSyncDaemonWithFactory_RequiresSyncDir(t *testing.T) {
+func TestRunSyncDaemonWithFactory_ReportsInvalidSyncDirThroughStartupResults(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:missing-sync-dir@example.com")
 	holder := config.NewHolder(&config.Config{
 		Drives: map[driveid.CanonicalID]config.Drive{
@@ -325,6 +381,8 @@ func TestRunSyncDaemonWithFactory_RequiresSyncDir(t *testing.T) {
 		},
 	}, "")
 
+	orch := &testSyncDaemonOrchestrator{}
+	factoryCalls := 0
 	err := runSyncDaemonWithFactory(
 		t.Context(),
 		holder,
@@ -334,11 +392,19 @@ func TestRunSyncDaemonWithFactory_RequiresSyncDir(t *testing.T) {
 		slog.New(slog.DiscardHandler),
 		io.Discard,
 		"/tmp/control.sock",
-		nil,
+		func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
+			factoryCalls++
+			assert.Empty(t, cfg.StandaloneMounts)
+			require.Len(t, cfg.InitialStartupResults, 1)
+			assert.Equal(t, multisync.MountStartupFatal, cfg.InitialStartupResults[0].Status)
+			require.Error(t, cfg.InitialStartupResults[0].Err)
+			assert.Contains(t, cfg.InitialStartupResults[0].Err.Error(), "sync_dir must be absolute")
+			return orch
+		},
 	)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "validate drive")
-	assert.Contains(t, err.Error(), "sync_dir must be absolute")
+	require.NoError(t, err)
+	assert.Equal(t, 1, factoryCalls)
+	assert.True(t, orch.called)
 }
 
 // Validates: R-2.1, R-2.10.3
@@ -347,7 +413,7 @@ func TestRunSyncDaemonWithFactory_CallsOrchestrator(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:watch@example.com")
-	syncDir := filepath.Join(t.TempDir(), "sync")
+	syncDir := t.TempDir()
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
 	holder := loadSyncTestHolder(t, cfgPath)
@@ -385,7 +451,7 @@ func TestRunSyncDaemonWithFactory_CallsOrchestrator(t *testing.T) {
 	assert.Equal(t, opts, orch.opts)
 }
 
-func TestRunSyncDaemonWithFactory_CreatesMissingSyncDirBeforeOrchestrator(t *testing.T) {
+func TestRunSyncDaemonWithFactory_PassesMissingSyncDirToOrchestrator(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -405,18 +471,19 @@ func TestRunSyncDaemonWithFactory_CreatesMissingSyncDirBeforeOrchestrator(t *tes
 		slog.New(slog.DiscardHandler),
 		io.Discard,
 		"/tmp/control.sock",
-		func(_ *multisync.OrchestratorConfig) syncDaemonOrchestrator {
+		func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 			called = true
-
-			info, statErr := os.Stat(syncDir)
-			require.NoError(t, statErr)
-			assert.True(t, info.IsDir())
-
+			require.Len(t, cfg.StandaloneMounts, 1)
+			assert.Empty(t, cfg.InitialStartupResults)
+			assert.Equal(t, cid, cfg.StandaloneMounts[0].CanonicalID)
+			assert.Equal(t, syncDir, cfg.StandaloneMounts[0].SyncRoot)
 			return &testSyncDaemonOrchestrator{}
 		},
 	)
 	require.NoError(t, err)
 	assert.True(t, called)
+	_, statErr := os.Stat(syncDir)
+	assert.True(t, os.IsNotExist(statErr))
 }
 
 func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoMountStarts(t *testing.T) {
@@ -424,7 +491,7 @@ func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoMountStarts(t *testi
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:watch@example.com")
-	syncDir := filepath.Join(t.TempDir(), "sync")
+	syncDir := t.TempDir()
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
 	holder := loadSyncTestHolder(t, cfgPath)
@@ -463,7 +530,7 @@ func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:watch@example.com")
-	syncDir := filepath.Join(t.TempDir(), "sync")
+	syncDir := t.TempDir()
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
 	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
 	holder := loadSyncTestHolder(t, cfgPath)
