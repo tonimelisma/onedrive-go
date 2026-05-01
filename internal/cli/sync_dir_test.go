@@ -144,8 +144,9 @@ func TestRollbackLoginSideEffectsRemovesBackfilledSyncDir(t *testing.T) {
 
 	require.NoError(t, rollbackLoginSideEffects(cfgPath, cid, &snapshot))
 
-	data, err := os.ReadFile(cfgPath)
+	data, found, err := readManagedFileIfExists(cfgPath)
 	require.NoError(t, err)
+	require.True(t, found)
 	assert.NotContains(t, string(data), "sync_dir")
 	assert.Contains(t, string(data), cid.String())
 }
