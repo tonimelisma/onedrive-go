@@ -211,6 +211,7 @@ func buildReportFromCounts(
 		Uploads:        counts[ActionUpload],
 		LocalDeletes:   counts[ActionLocalDelete],
 		RemoteDeletes:  counts[ActionRemoteDelete],
+		ConflictCopies: counts[ActionConflictCopy],
 		SyncedUpdates:  counts[ActionUpdateSynced],
 		Cleanups:       counts[ActionCleanup],
 		DeferredByMode: deferred,

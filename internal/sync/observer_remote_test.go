@@ -618,7 +618,7 @@ func TestFullDelta_DriveIDNormalization(t *testing.T) {
 	t.Parallel()
 
 	// 15-char uppercase driveID — should be lowercased + zero-padded.
-	rawDriveID := "ABC123DEF456789"
+	rawDriveID := "ABC123DGH456789"
 
 	fetcher := &mockDeltaFetcher{
 		pages: []mockDeltaPage{{
@@ -638,7 +638,7 @@ func TestFullDelta_DriveIDNormalization(t *testing.T) {
 
 	require.Len(t, events, 1)
 
-	want := driveid.New("0abc123def456789") // lowercased + zero-padded to 16
+	want := driveid.New("0abc123dgh456789") // lowercased + zero-padded to 16
 	assert.True(t, events[0].DriveID.Equal(want), "DriveID = %q, want %q", events[0].DriveID, want)
 
 	// Verify the fetcher was called with the normalized driveID, not the raw one.
@@ -817,8 +817,8 @@ func TestDriveIDNormalization(t *testing.T) {
 	}{
 		{"15-char lowercase", "abc123def456789", "0abc123def456789"},
 		{"16-char lowercase", "abc123def4567890", "abc123def4567890"},
-		{"uppercase", "ABC123DEF4567890", "abc123def4567890"},
-		{"15-char uppercase", "ABC123DEF456789", "0abc123def456789"},
+		{"uppercase", "ABC123DGH4567890", "abc123dgh4567890"},
+		{"15-char uppercase", "ABC123DGH456789", "0abc123dgh456789"},
 		{"already normalized", "0000000000000001", "0000000000000001"},
 		{"empty", "", ""},
 	}

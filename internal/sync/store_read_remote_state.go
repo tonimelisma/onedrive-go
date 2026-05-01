@@ -47,9 +47,8 @@ func queryRemoteStateRowsWithRunner(
 	runner sqlTxRunner,
 	query string,
 	contentDriveID driveid.ID,
-	args ...any,
 ) ([]RemoteStateRow, error) {
-	rows, err := runner.QueryContext(ctx, query, args...)
+	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying remote_state: %w", err)
 	}

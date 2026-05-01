@@ -1,19 +1,20 @@
 # Sync Planning
 
-GOVERNS: internal/sync/planner.go, internal/sync/planner_sqlite.go, internal/sync/planner_truth_overlay.go, internal/sync/truth_status.go, internal/sync/actions.go, internal/sync/api_types.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/core_types.go
+GOVERNS: internal/sync/planner.go, internal/sync/planner_sqlite.go, internal/sync/planner_visibility.go, internal/sync/planner_truth_overlay.go, internal/sync/truth_status.go, internal/sync/actions.go, internal/sync/api_types.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/core_types.go
 
 Implements: R-2.1.3 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified]
 
 ## Overview
 
-Planning is now split between SQLite structural diff and a Go actionable-set
-builder.
+Planning is split between SQLite reconciliation and a Go action builder.
 
 - SQLite computes deterministic comparison and reconciliation rows from raw
-  `baseline` plus planner-visible filtered `local_state` and `remote_state`
-  temp views
-- Go turns those rows into the current executable action set after blocking,
-  filtering, conflict handling, and dependency detection
+  `baseline` plus planner-visible `local_state` and `remote_state` temp tables.
+  Those temp tables are filter-scoped and then pruned for same-side descendants
+  under a baseline folder that is missing on that side.
+- Go turns reconciliation rows into the current executable action set, then
+  applies blocked-truth suppression, parent-folder preservation, sync-mode
+  filtering, and dependency detection.
 
 The executable plan is runtime-owned and is not a durable SQLite authority.
 Shortcut-root lifecycle planning follows the same functional-core rule inside
@@ -25,8 +26,9 @@ intent; multisync receives only that child work intent.
 
 ## Ownership Contract
 
-- Owns: turning reconciliation rows into the current executable action set,
-  including conflict expansion, filtering, deferral, and dependency ordering
+- Owns: preparing planner-visible current truth for SQLite reconciliation and
+  turning reconciliation rows into the current executable action set, including
+  conflict expansion, filtering, deferral, and dependency ordering
 - Does Not Own: observation, execution, retry timing, scope persistence, or remote/local I/O
 - Source of Truth: raw `baseline`, raw current-state tables, and the engine's
   compiled `ContentFilter`. Planning sees filtered current-state views through
@@ -39,8 +41,9 @@ intent; multisync receives only that child work intent.
 
 | Behavior | Evidence |
 | --- | --- |
-| Planner conflict detection remains internal and deterministic for edit/edit, create/create, and edit/delete cases. | `TestClassifyFile_EF5_EditEditConflict`, `TestClassifyFile_EF12_CreateCreateConflict`, `TestClassifyFile_EF9_EditDeleteConflict`, `TestConflictClassificationsRemainConflictsAcrossSyncModes` |
-| Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/planner_test.go`, `internal/sync/planner_edge_test.go`, `internal/sync/planner_cascade_test.go` |
+| Conflict reconciliation rows expand into concrete actions for edit/edit, create/create, and edit/delete cases. | `TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_ExpandsCreateCreateConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID` |
+| Folder-delete descendants are reconciled by SQLite after planner-visible pruning, with parent availability preserved only when descendant work requires it. | `TestReplacePlannerVisibleStateTx_PrunesRemoteDescendantsWhenBaselineFolderMissingRemotely`, `TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMissingLocally`, `TestPlannerPlanCurrentState_RemoteParentDeletePlansDescendantLocalDeleteThroughSQLite`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_LocalParentDeleteCreatesParentForChangedRemoteChild`, `TestPlannerPlanCurrentState_BothParentSidesDeletedCleansUpDescendantsThroughSQLite` |
+| Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/planner_sqlite_test.go`, `internal/sync/planner_dependency_test.go` |
 | Planner no longer depends on manual delete-approval or durable conflict-request state. | `internal/sync/planner_test.go`, `internal/sync/planner_crossdrive_test.go`, `internal/sync/planner_fuzz_test.go` |
 
 ## Inputs
@@ -57,9 +60,11 @@ intent; multisync receives only that child work intent.
 
 The engine first materializes transaction-local planner-visible current-state
 tables from `local_state` and `remote_state` using the compiled `ContentFilter`.
-Raw `baseline` is not filtered. Those views feed `comparison_state` and
-`reconciliation_state`, including the invariant that a baseline row absent from
-both filtered current snapshots becomes `baseline_remove`.
+It then removes same-side descendants below baseline folders that are absent
+from that side's visible current table. Raw `baseline` is not filtered or
+mutated. Those views feed `comparison_state` and `reconciliation_state`,
+including the invariant that a baseline row absent from both planner-visible
+current snapshots becomes `baseline_remove`.
 
 Before Go emits actions, a shared derivation step computes one per-path
 truth-status value from `observation_issues`, including any read-boundary
@@ -74,18 +79,22 @@ same derivation rather than a second planner-shaped helper.
 
 1. Build filtered transaction-local current-state views from `local_state` and
    `remote_state`; keep `baseline` raw.
-2. Run SQL structural diff and reconciliation over filtered current views plus
-   baseline.
-3. Load reconciliation rows into Go.
-4. Derive per-path local/remote truth status from filtered `observation_issues`
+2. Prune planner-visible same-side descendants under any baseline folder that is
+   missing from that side's visible current-state table. Descendant matching uses
+   exact path-prefix checks, not pattern matching.
+3. Run SQL structural diff and reconciliation over planner-visible current views
+   plus baseline.
+4. Load reconciliation rows into Go.
+5. Derive per-path local/remote truth status from filtered `observation_issues`
    through `TruthAvailabilityIndex`.
-5. Apply planner-owned suppression and sync-mode safety rules on top of that
+6. Apply planner-owned suppression and sync-mode safety rules on top of that
    derived status.
-6. Emit the current runtime action set, including conflict expansion into
-   concrete actions.
-7. Expand folder delete cascades so descendants get explicit work.
-8. Bind ordinary actions to the engine's mounted drive/root context.
-9. Build dependency edges and reject dependency cycles.
+7. Emit the current runtime action set from reconciliation rows, including
+   conflict expansion into concrete actions.
+8. Preserve a deleted parent folder only when mode-admitted descendant actions
+   need that parent to exist.
+9. Bind ordinary actions to the engine's mounted drive/root context.
+10. Apply mode filtering, build dependency edges, and reject dependency cycles.
 
 ## File Decisions
 
@@ -153,9 +162,9 @@ writing additional descendant `observation_issues` rows.
 
 ## Conflict Planning
 
-The actionable-set builder detects conflicts and expands them directly into
-concrete runtime actions as part of the current action set. It does not create
-or preserve separate conflict metadata.
+SQLite emits conflict reconciliation rows, and the action builder expands those
+rows directly into concrete runtime actions as part of the current action set.
+It does not create or preserve separate conflict metadata.
 
 Execution applies the already-expanded conflict policy immediately:
 
@@ -172,9 +181,19 @@ concrete edit/delete upload.
 
 ## Folder And Move Semantics
 
-Folder decisions are symmetric with file decisions, but folder deletes also
-trigger descendant cascade expansion because Graph delta only reports the
-deleted parent folder.
+Folder decisions are symmetric with file decisions. When Graph delta reports a
+deleted parent folder without descendant delete rows, planner-visible pruning
+removes the stale same-side descendant rows before SQLite reconciliation. SQLite
+then emits ordinary descendant reconciliation rows: unchanged descendants under
+the deleted parent delete locally, edited descendants recreate remote content,
+and descendants missing on both sides clean up baseline.
+
+After action building, a narrow parent-preservation pass rewrites only the
+deleted parent folder action when descendant work that is admitted in the
+current sync mode needs the folder to exist: local parent deletes become remote
+folder creates, remote parent deletes become local folder creates, and cleanup
+stays cleanup. Deferred descendant work must not preserve a parent that the
+current mode would otherwise delete.
 
 Folder reconciliation is existence/type-based, not metadata-based. Folder
 size, mtime, and ETag churn caused by child mutations must not be treated as

@@ -1502,7 +1502,7 @@ func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
 
 	writeExecTestFile(t, syncRoot, "exec-new-file.txt", "data")
 
-	// New local item has zero DriveID (EF13 scenario).
+	// New local item has zero DriveID until execution binds the mounted drive.
 	action := &Action{
 		Type: ActionUpload,
 		Path: "exec-new-file.txt",
