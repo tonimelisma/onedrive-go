@@ -339,7 +339,7 @@ func (flow *engineFlow) applyFatalAuthEffects(
 
 func isPublicationOnlyActionType(actionType ActionType) bool {
 	switch actionType {
-	case ActionUpdateSynced, ActionCleanup:
+	case ActionBaselineUpdate, ActionCleanup:
 		return true
 	case ActionDownload,
 		ActionUpload,

@@ -10,25 +10,25 @@ import (
 // Unexported: only used within this file for typed constant definitions
 // and String()/Parse* methods.
 const (
-	strRemote       = "remote"
-	strLocal        = "local"
-	strCreate       = "create"
-	strModify       = "modify"
-	strFile         = "file"
-	strFolder       = "folder"
-	strRoot         = "root"
-	strDownload     = "download"
-	strUpload       = "upload"
-	strDelete       = "delete"
-	strLocalDelete  = "local_delete"
-	strRemoteDelete = "remote_delete"
-	strLocalMove    = "local_move"
-	strRemoteMove   = "remote_move"
-	strMove         = "move"
-	strFolderCreate = "folder_create"
-	strConflictCopy = "conflict_copy"
-	strUpdateSynced = "update_synced"
-	strCleanup      = "cleanup"
+	strRemote         = "remote"
+	strLocal          = "local"
+	strCreate         = "create"
+	strModify         = "modify"
+	strFile           = "file"
+	strFolder         = "folder"
+	strRoot           = "root"
+	strDownload       = "download"
+	strUpload         = "upload"
+	strDelete         = "delete"
+	strLocalDelete    = "local_delete"
+	strRemoteDelete   = "remote_delete"
+	strLocalMove      = "local_move"
+	strRemoteMove     = "remote_move"
+	strMove           = "move"
+	strFolderCreate   = "folder_create"
+	strConflictCopy   = "conflict_copy"
+	strBaselineUpdate = "baseline_update"
+	strCleanup        = "cleanup"
 )
 
 // Direction represents the direction of a sync action (upload, download, delete).
@@ -184,7 +184,7 @@ const (
 	ActionRemoteMove
 	ActionFolderCreate
 	ActionConflictCopy
-	ActionUpdateSynced
+	ActionBaselineUpdate
 	ActionCleanup
 )
 
@@ -206,8 +206,8 @@ func (a ActionType) String() string {
 		return strFolderCreate
 	case ActionConflictCopy:
 		return strConflictCopy
-	case ActionUpdateSynced:
-		return strUpdateSynced
+	case ActionBaselineUpdate:
+		return strBaselineUpdate
 	case ActionCleanup:
 		return strCleanup
 	default:
@@ -226,7 +226,7 @@ func (a ActionType) Direction() Direction {
 	case ActionLocalDelete, ActionRemoteDelete:
 		return DirectionDelete
 	case ActionDownload, ActionFolderCreate, ActionConflictCopy,
-		ActionLocalMove, ActionRemoteMove, ActionUpdateSynced, ActionCleanup:
+		ActionLocalMove, ActionRemoteMove, ActionBaselineUpdate, ActionCleanup:
 		return DirectionDownload
 	default:
 		return DirectionDownload
@@ -252,8 +252,8 @@ func ParseActionType(s string) (ActionType, error) {
 		return ActionFolderCreate, nil
 	case strConflictCopy:
 		return ActionConflictCopy, nil
-	case strUpdateSynced:
-		return ActionUpdateSynced, nil
+	case strBaselineUpdate:
+		return ActionBaselineUpdate, nil
 	case strCleanup:
 		return ActionCleanup, nil
 	default:
@@ -283,7 +283,7 @@ func (a ActionType) Value() (driver.Value, error) {
 	switch a {
 	case ActionDownload, ActionUpload, ActionLocalDelete, ActionRemoteDelete,
 		ActionLocalMove, ActionRemoteMove, ActionFolderCreate, ActionConflictCopy,
-		ActionUpdateSynced, ActionCleanup:
+		ActionBaselineUpdate, ActionCleanup:
 		return a.String(), nil
 	default:
 		return nil, fmt.Errorf("sync: invalid ActionType %d", a)

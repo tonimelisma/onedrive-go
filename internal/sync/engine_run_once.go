@@ -203,18 +203,18 @@ func buildReportFromCounts(
 	opts RunOptions,
 ) *Report {
 	return &Report{
-		Mode:           mode,
-		DryRun:         opts.DryRun,
-		FolderCreates:  counts[ActionFolderCreate],
-		Moves:          counts[ActionLocalMove] + counts[ActionRemoteMove],
-		Downloads:      counts[ActionDownload],
-		Uploads:        counts[ActionUpload],
-		LocalDeletes:   counts[ActionLocalDelete],
-		RemoteDeletes:  counts[ActionRemoteDelete],
-		ConflictCopies: counts[ActionConflictCopy],
-		SyncedUpdates:  counts[ActionUpdateSynced],
-		Cleanups:       counts[ActionCleanup],
-		DeferredByMode: deferred,
+		Mode:            mode,
+		DryRun:          opts.DryRun,
+		FolderCreates:   counts[ActionFolderCreate],
+		Moves:           counts[ActionLocalMove] + counts[ActionRemoteMove],
+		Downloads:       counts[ActionDownload],
+		Uploads:         counts[ActionUpload],
+		LocalDeletes:    counts[ActionLocalDelete],
+		RemoteDeletes:   counts[ActionRemoteDelete],
+		ConflictCopies:  counts[ActionConflictCopy],
+		BaselineUpdates: counts[ActionBaselineUpdate],
+		Cleanups:        counts[ActionCleanup],
+		DeferredByMode:  deferred,
 	}
 }
 

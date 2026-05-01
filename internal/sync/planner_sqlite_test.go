@@ -148,7 +148,7 @@ func TestPlannerPlanCurrentState_LocalFolderMoveByIdentityPlansSingleRemoteMove(
 }
 
 // Validates: R-2.1.3, R-2.1.4
-func TestCollapseDescendantRemoteMovesUnderMovedFolders_KeepsDescendantRename(t *testing.T) {
+func TestOmitDescendantRemoteMovesCoveredByFolderMoves_KeepsDescendantRename(t *testing.T) {
 	t.Parallel()
 
 	actions := []Action{
@@ -178,12 +178,13 @@ func TestCollapseDescendantRemoteMovesUnderMovedFolders_KeepsDescendantRename(t 
 		},
 	}
 
-	collapsed := collapseDescendantRemoteMovesUnderMovedFolders(actions)
+	normalized := omitDescendantRemoteMoveActionsCoveredByGraphFolderMoves(actions)
 
-	require.Len(t, collapsed, 2)
-	assert.Equal(t, "Projects", collapsed[0].OldPath)
-	assert.Equal(t, "Projects/old.txt", collapsed[1].OldPath)
-	assert.Equal(t, "Archive/new.txt", collapsed[1].Path)
+	require.Len(t, normalized, 2)
+	assert.Equal(t, "Projects", normalized[0].OldPath)
+	assert.Equal(t, "Projects/old.txt", normalized[1].OldPath)
+	assert.Equal(t, "Archive/new.txt", normalized[1].Path)
+	assert.Len(t, actions, 3, "normalization should not mutate the caller's action slice")
 }
 
 // Validates: R-2.1.3, R-2.1.4
@@ -610,7 +611,7 @@ func TestPlannerPlanCurrentState_UsesRemoteRowDriveOwnershipForDownloadActions(t
 }
 
 // Validates: R-2.1.3, R-2.10.4
-func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteConflictResolutionWithoutConflictCopy(t *testing.T) {
+func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteWinnerDownloadWithoutConflictCopy(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)

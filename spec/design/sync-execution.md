@@ -176,7 +176,7 @@ the same eTag exception used by worker-start freshness: move-produced eTag churn
 alone does not make the upload stale when item identity and content facts still
 match.
 
-When the dependency graph releases `ActionUpdateSynced` or `ActionCleanup`,
+When the dependency graph releases `ActionBaselineUpdate` or `ActionCleanup`,
 the engine does not spend worker capacity on them. It commits the matching
 baseline mutation synchronously, marks that graph node successful, drains any
 further publication-only dependents through the engine-owned publication
@@ -185,7 +185,7 @@ dispatch.
 
 ## Publication-Only Actions
 
-`ActionUpdateSynced` and `ActionCleanup` remain planner-visible action types so
+`ActionBaselineUpdate` and `ActionCleanup` remain planner-visible action types so
 they still participate in dependency ordering, accounting, and reporting.
 
 Execution does not own them because they perform no external side effects:

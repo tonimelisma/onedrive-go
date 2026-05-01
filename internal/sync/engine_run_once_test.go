@@ -102,7 +102,7 @@ func TestRunOnce_NoChanges(t *testing.T) {
 
 	total := report.Downloads + report.Uploads + report.LocalDeletes +
 		report.RemoteDeletes + report.FolderCreates + report.Moves +
-		report.ConflictCopies + report.SyncedUpdates + report.Cleanups
+		report.ConflictCopies + report.BaselineUpdates + report.Cleanups
 	assert.Equal(t, 0, total, "expected zero actions")
 	assert.Equal(t, 0, report.Succeeded, "succeeded")
 	assert.Equal(t, 0, report.Failed, "failed")

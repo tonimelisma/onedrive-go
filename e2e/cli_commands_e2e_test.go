@@ -210,13 +210,12 @@ func TestE2E_Status_NoLegacyHistorySurface(t *testing.T) {
 	assert.Empty(t, current.Conditions)
 
 	output := runCLIWithConfigExpectError(t, cfgPath, env, "status", "--history")
-	assert.Contains(t, output, "unknown flag: --history", "legacy history-only status surface should stay removed")
+	assert.Contains(t, output, "unknown flag: --history", "status should expose the current condition view only")
 }
 
 // Validates: R-2.3.4, R-2.3.10
 // TestE2E_Status_JSON_ConditionDetails validates that per-mount status JSON
-// exposes the current structured condition payload rather than legacy
-// conflict-request rows.
+// exposes the current structured condition payload.
 func TestE2E_Status_JSON_ConditionDetails(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -247,8 +246,8 @@ func TestE2E_Status_JSON_ConditionDetails(t *testing.T) {
 }
 
 // Validates: R-2.3.12
-// TestE2E_CLI_NoResolveCommand validates that the removed manual conflict
-// workflow is not exposed as a CLI command anymore.
+// TestE2E_CLI_NoResolveCommand validates that sync exposes no out-of-band
+// command for replaying planner/executor decisions.
 func TestE2E_CLI_NoResolveCommand(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -267,7 +266,7 @@ func TestE2E_CLI_NoResolveCommand(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	output := runCLIWithConfigExpectError(t, cfgPath, env, "resolve", "local", "nonexistent-id")
-	assert.Contains(t, output, "unknown command \"resolve\"", "legacy manual conflict command should stay removed")
+	assert.Contains(t, output, "unknown command \"resolve\"", "sync decisions should stay inside the engine path")
 }
 
 // TestE2E_InternalBaselineVerification_AfterSync validates that the internal

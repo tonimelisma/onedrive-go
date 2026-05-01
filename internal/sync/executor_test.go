@@ -1705,7 +1705,7 @@ func TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition(t *testing.T
 	entries, err := os.ReadDir(syncRoot)
 	require.NoError(t, err)
 	for _, entry := range entries {
-		assert.NotContains(t, entry.Name(), ".conflict-", "edit-delete auto-resolution should not create a conflict copy")
+		assert.NotContains(t, entry.Name(), ".conflict-", "edit-delete recreate upload should not create a conflict copy")
 	}
 	assert.False(t, uploadCalled, "executor should not invent upload intent for stale local delete")
 }
@@ -2322,7 +2322,7 @@ func TestPublicationMutation_SyncedUpdate(t *testing.T) {
 	t.Parallel()
 
 	action := &Action{
-		Type:    ActionUpdateSynced,
+		Type:    ActionBaselineUpdate,
 		Path:    "exec-converged.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
@@ -2737,7 +2737,7 @@ func TestPublicationMutation_SyncedUpdate_BaselineFallback(t *testing.T) {
 
 	// No Remote, only Baseline with folder type.
 	action := &Action{
-		Type:    ActionUpdateSynced,
+		Type:    ActionBaselineUpdate,
 		Path:    "exec-synced-folder",
 		ItemID:  "folder1",
 		DriveID: driveid.New(synctest.TestDriveID),

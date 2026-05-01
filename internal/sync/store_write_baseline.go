@@ -279,7 +279,7 @@ func publicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*
 	if action == nil {
 		return nil, fmt.Errorf("sync: building publication mutation: nil action")
 	}
-	if action.Type != ActionUpdateSynced && action.Type != ActionCleanup {
+	if action.Type != ActionBaselineUpdate && action.Type != ActionCleanup {
 		return nil, fmt.Errorf("sync: building publication mutation: %s is not publication-only", action.Type.String())
 	}
 
@@ -472,7 +472,7 @@ func classifyBaselineMutation(action ActionType) (baselineMutationKind, error) {
 	switch action {
 	case ActionConflictCopy:
 		return baselineMutationNoop, nil
-	case ActionDownload, ActionUpload, ActionFolderCreate, ActionUpdateSynced:
+	case ActionDownload, ActionUpload, ActionFolderCreate, ActionBaselineUpdate:
 		return baselineMutationUpsert, nil
 	case ActionLocalDelete, ActionRemoteDelete, ActionCleanup:
 		return baselineMutationDelete, nil
@@ -717,7 +717,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 	case ActionDownload,
 		ActionLocalDelete,
 		ActionLocalMove,
-		ActionUpdateSynced,
+		ActionBaselineUpdate,
 		ActionCleanup:
 		return nil
 	}

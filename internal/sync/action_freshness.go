@@ -267,7 +267,7 @@ func evaluateMoveEndpointFreshness(action *Action, inputs actionFreshnessInputs)
 		ActionRemoteDelete,
 		ActionFolderCreate,
 		ActionConflictCopy,
-		ActionUpdateSynced,
+		ActionBaselineUpdate,
 		ActionCleanup:
 		return freshAction()
 	}
@@ -322,7 +322,7 @@ func evaluateRemoteIdentityFreshness(action *Action, inputs actionFreshnessInput
 }
 
 func actionSkipsFreshnessValidation(action *Action) bool {
-	return action.Type == ActionUpdateSynced || action.Type == ActionCleanup
+	return action.Type == ActionBaselineUpdate || action.Type == ActionCleanup
 }
 
 func actionUsesLocalFreshness(action *Action) bool {
@@ -367,7 +367,7 @@ func movePeerPath(action *Action) (string, bool) {
 		ActionRemoteDelete,
 		ActionFolderCreate,
 		ActionConflictCopy,
-		ActionUpdateSynced,
+		ActionBaselineUpdate,
 		ActionCleanup:
 		return "", false
 	}
