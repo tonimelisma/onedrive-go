@@ -21,8 +21,9 @@ func validateResolvedWithIO(rd *ResolvedDrive, io configIO) error {
 
 // ValidateResolvedForSync checks sync-specific constraints on a resolved drive.
 // Unlike ValidateResolved() which checks general resolved-drive invariants,
-// this enforces that sync_dir is set and valid — required only for the sync
-// command, not for file operations like ls/get/put.
+// this enforces that sync_dir is configured and structurally usable by sync.
+// Missing directories are allowed here because engine startup owns runtime root
+// availability and reports that failure per mount.
 func ValidateResolvedForSync(rd *ResolvedDrive) error {
 	return validateResolvedForSyncWithIO(rd, defaultConfigIO())
 }
@@ -77,6 +78,8 @@ func (v resolvedDriveValidator) validateForSync(rd *ResolvedDrive) error {
 	case err == nil && !info.IsDir():
 		return fmt.Errorf("drive %q sync_dir %q exists but is not a directory",
 			rd.CanonicalID.String(), rd.SyncDir)
+	case errors.Is(err, os.ErrNotExist):
+		return nil
 	case err != nil && !errors.Is(err, os.ErrNotExist):
 		return fmt.Errorf("drive %q sync_dir: %w", rd.CanonicalID.String(), err)
 	}

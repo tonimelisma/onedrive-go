@@ -68,6 +68,7 @@ artifacts, not a multisync cache.
 | Behavior | Evidence |
 | --- | --- |
 | The store remains the sole durable owner of schema validation/open semantics and explicit reset flows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
+| Dry-run current-plan scratch stores are temporary SQLite stores seeded from committed truth and removed after preview planning. | `TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp` |
 | Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens; shortcut status leaves the store through sync-owned status views instead of raw shortcut-root rows. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestBuildChildStatusMount_RendersLifecycleState` |
 | Local filesystem identity is persisted as generic truth for files and directories in `local_state` and `baseline`, allowing local move detection without shortcut-specific sibling scans. | `TestReplaceLocalState_PersistsFilesystemIdentity`, `TestCommitMutation_PersistsLocalFilesystemIdentity`, `TestQueryReconciliationState_LocalFolderMoveUsesFilesystemIdentity` |
 | Local watch observation can update durable local truth with scoped upsert/delete/prefix-delete patches, full snapshot replacement clears suspect local truth, and prefix deletion treats SQL wildcards as literal path bytes while preserving path case. | `TestScopedLocalStateMutation_UpsertReadAndDeleteExactPath`, `TestDeleteLocalStatePrefix_DeletesDirectoryAndDescendantsOnly`, `TestDeleteLocalStatePrefix_EscapesSQLWildcards`, `TestReplaceLocalState_MarksLocalTruthComplete` |
@@ -187,7 +188,11 @@ text remain runtime/log concerns instead of durable retry-row columns.
 Current-truth loading, planner-input loading, and dry-run scratch preparation
 for that policy live in `engine_current_plan.go`, while startup/runtime
 reconcile and admission live in `engine_startup.go` and
-`engine_runtime_start.go`.
+`engine_runtime_start.go`. Dry-run scratch preparation uses a temporary
+`SyncStore` seeded from committed truth and removes its temporary directory
+after planning. Dry-run engine startup uses the normal durable sync-store open
+path, so schema creation, observation-state materialization, and close-time WAL
+checkpointing remain normal operational side effects.
 
 The store does not own a mixed failure table, failure-role transitions,
 timer-time stale-row cleanup, or a store-owned grouped condition projection.

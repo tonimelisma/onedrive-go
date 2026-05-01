@@ -198,9 +198,10 @@ func (c *Client) Drive(ctx context.Context, driveID driveid.ID) (*Drive, error) 
 }
 
 // Organization returns the authenticated user's organization.
-// Personal accounts return an empty Organization (the API returns an empty array).
-// Business/education accounts return the first organization's display name,
-// which is used for sync directory naming (e.g., "~/OneDrive - Contoso").
+// Microsoft Graph supports delegated organization reads for work or school
+// accounts, not personal Microsoft accounts. Business/education accounts return
+// the first organization's display name, which is used for sync directory
+// naming (e.g., "~/OneDrive - Contoso").
 func (c *Client) Organization(ctx context.Context) (*Organization, error) {
 	c.logger.Info("fetching user organization")
 

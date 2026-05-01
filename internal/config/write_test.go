@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,6 +119,26 @@ func TestAppendDriveSection_CreatesFileWhenMissing(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 	assert.Equal(t, "~/OneDrive", cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")].SyncDir)
+}
+
+func TestConfigWrites_DoNotUseAmbientLogger(t *testing.T) {
+	var logOutput bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() {
+		slog.SetDefault(previousLogger)
+	})
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
+
+	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
+	require.NoError(t, SetDriveKey(path, cid, "sync_dir", "~/OneDrive Local"))
+	require.NoError(t, DeleteDriveKey(path, cid, "sync_dir"))
+	require.NoError(t, DeleteDriveSection(path, cid))
+
+	assert.Empty(t, logOutput.String())
 }
 
 // Validates: R-4.2.1
@@ -1142,6 +1164,24 @@ func TestEnsureDriveInConfig_ExistingDrive(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, added, "should report not added for existing drive")
 	assert.Equal(t, "~/MyDrive", syncDir, "should return existing sync_dir")
+}
+
+func TestEnsureDriveInConfig_ExistingDriveMissingSyncDirSetsDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	require.NoError(t, os.WriteFile(path, []byte(`["personal:user@example.com"]
+`), 0o600))
+
+	syncDir, added, err := EnsureDriveInConfig(path, cid, testLogger(t))
+	require.NoError(t, err)
+	assert.False(t, added)
+	assert.Equal(t, "~/OneDrive", syncDir)
+
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+	assert.Equal(t, "~/OneDrive", cfg.Drives[cid].SyncDir)
 }
 
 func TestEnsureDriveInConfig_CollisionDetection(t *testing.T) {

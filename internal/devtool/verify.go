@@ -323,9 +323,10 @@ func runPublicVerification(
 	publicSteps := []func(context.Context, commandRunner, string, []string, io.Writer, io.Writer) error{
 		runFormat,
 		runLint,
+		runOutputBoundaries,
 		runBuild,
 	}
-	publicStepNames := []string{"format", "lint", "build"}
+	publicStepNames := []string{"format", "lint", "output boundaries", "build"}
 	for i, step := range publicSteps {
 		if err := collector.runStep(publicStepNames[i], func() error {
 			return step(ctx, runner, repoRoot, env, stdout, stderr)

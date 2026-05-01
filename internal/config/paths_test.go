@@ -181,8 +181,25 @@ func TestAssertDevSafe_PanicsWithoutXDG(t *testing.T) {
 	})
 }
 
-func TestAssertDevSafe_PassesWithXDG(t *testing.T) {
+func TestAssertDevSafe_PanicsWithPartialXDG(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/tmp/test-data")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+
+	panicValue := "DEV BUILD: set XDG_DATA_HOME, XDG_CONFIG_HOME, and XDG_CACHE_HOME " +
+		"to avoid touching production data.\n" +
+		"Missing: XDG_CONFIG_HOME, XDG_CACHE_HOME\n" +
+		"Example: source scripts/dev-env.sh && go run . <command>"
+
+	assert.PanicsWithValue(t, panicValue, func() {
+		AssertDevSafe()
+	})
+}
+
+func TestAssertDevSafe_PassesWithFullXDG(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/tmp/test-data")
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/test-config")
+	t.Setenv("XDG_CACHE_HOME", "/tmp/test-cache")
 
 	assert.NotPanics(t, func() {
 		AssertDevSafe()

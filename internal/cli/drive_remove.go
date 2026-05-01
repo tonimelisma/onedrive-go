@@ -1,13 +1,14 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-func runDriveRemoveWithContext(cc *CLIContext, purge bool) error {
+func runDriveRemoveWithContext(ctx context.Context, cc *CLIContext, purge bool) error {
 	logger := cc.Logger
 
 	driveSelector, driveErr := cc.Flags.SingleDrive()
@@ -53,11 +54,13 @@ func runDriveRemoveWithContext(cc *CLIContext, purge bool) error {
 		if err := config.PruneDriveAfterPurge(config.DefaultDataDir(), cid); err != nil {
 			return fmt.Errorf("pruning catalog drive after purge: %w", err)
 		}
+		notifyDaemonIfRunning(ctx, cc)
 		return nil
 	}
 
 	if err := removeDrive(cc.Output(), cc.CfgPath, cid, cfg.Drives[cid].SyncDir, logger); err != nil {
 		return err
 	}
+	notifyDaemonIfRunning(ctx, cc)
 	return nil
 }

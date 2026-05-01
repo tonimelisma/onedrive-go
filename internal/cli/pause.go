@@ -37,7 +37,14 @@ func runPause(cmd *cobra.Command, args []string) error {
 // notifyDaemon attempts to ask a running sync owner to reload configuration.
 // Non-fatal: if no daemon is running, prints a note instead.
 func notifyDaemon(cc *CLIContext) {
-	ctx := context.Background()
+	notifyDaemonWithOptions(context.Background(), cc, true)
+}
+
+func notifyDaemonIfRunning(ctx context.Context, cc *CLIContext) {
+	notifyDaemonWithOptions(ctx, cc, false)
+}
+
+func notifyDaemonWithOptions(ctx context.Context, cc *CLIContext, reportNoDaemon bool) {
 	probe, err := probeControlOwner(ctx)
 	switch probe.state {
 	case controlOwnerStateWatchOwner:
@@ -45,6 +52,9 @@ func notifyDaemon(cc *CLIContext) {
 		cc.Statusf("Note: control socket unavailable (%v) — changes take effect on next daemon start\n", err)
 		return
 	case controlOwnerStateNoSocket:
+		if !reportNoDaemon {
+			return
+		}
 		cc.Statusf("Note: no running daemon found — changes take effect on next daemon start\n")
 		return
 	case controlOwnerStateOneShotOwner:

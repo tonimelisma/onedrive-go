@@ -555,6 +555,48 @@ func TestRunOnce_OneMount_Success(t *testing.T) {
 	assert.Equal(t, 5, result.Reports[0].Report.Downloads)
 }
 
+// Validates: R-2.1.5
+func TestRunOnce_DryRunBindsControlSocketBeforeEngineStartup(t *testing.T) {
+	rd := testStandaloneMount(t, "personal:dry-run-socket@example.com", "Dry Run")
+	cfg := testOrchestratorConfig(t, rd)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	cfg.ControlSocketPath = shortControlSocketPath(t)
+
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", cfg.ControlSocketPath)
+	require.NoError(t, err)
+
+	acceptDone := make(chan struct{})
+	go func() {
+		defer close(acceptDone)
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			if closeErr := conn.Close(); closeErr != nil {
+				return
+			}
+		}
+	}()
+
+	orch := NewOrchestrator(cfg)
+	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
+		require.Fail(t, "engine factory should not run when control socket is already owned")
+		return nil, assert.AnError
+	}
+
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{DryRun: true})
+
+	require.Len(t, result.Startup.Results, 1)
+	var inUse *ControlSocketInUseError
+	require.ErrorAs(t, result.Startup.Results[0].Err, &inUse)
+	assert.Equal(t, MountStartupFatal, result.Startup.Results[0].Status)
+	assert.Empty(t, result.Reports)
+
+	require.NoError(t, listener.Close())
+	<-acceptDone
+}
+
 // Validates: R-2.4
 func TestRunOnce_TwoMounts_OneFailsOneSucceeds(t *testing.T) {
 	rd1 := testStandaloneMount(t, "personal:fail@example.com", "Failing")
@@ -699,6 +741,43 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 	assert.True(t, childCall.opts.FullReconcile)
 	assert.NoDirExists(t, childRoot)
 	assertShortcutChildArtifactsPurgedForTest(t, cfg.DataDir, &parent, &child, true)
+}
+
+// Validates: R-2.1.5, R-2.4.8
+func TestBuildEngineWork_FinalDrainChildPreservesDryRunOption(t *testing.T) {
+	t.Parallel()
+
+	orch := NewOrchestrator(testOrchestratorConfig(t))
+	mount := testFinalDrainMount(t, "child-dry-run", "binding-dry-run")
+
+	var gotMode syncengine.SyncMode
+	var gotOpts syncengine.RunOptions
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+		return &mockEngine{
+			runOnceFn: func(_ context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error) {
+				gotMode = mode
+				gotOpts = opts
+				return &syncengine.Report{Mode: mode, DryRun: opts.DryRun}, nil
+			},
+		}, nil
+	}
+
+	work, err := orch.buildEngineWork(
+		t.Context(),
+		mount,
+		nil,
+		syncengine.SyncDownloadOnly,
+		syncengine.RunOptions{DryRun: true},
+	)
+	require.NoError(t, err)
+
+	report, err := work.fn(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.Equal(t, syncengine.SyncBidirectional, gotMode)
+	assert.True(t, gotOpts.FullReconcile)
+	assert.True(t, gotOpts.DryRun)
+	assert.True(t, report.DryRun)
 }
 
 // Validates: R-2.4.8

@@ -112,8 +112,7 @@ type Site struct {
 	WebURL      string
 }
 
-// Organization represents a user's organizational membership.
-// Personal accounts have no organization; DisplayName is empty.
+// Organization represents a work or school account's organizational membership.
 type Organization struct {
 	DisplayName string
 }
