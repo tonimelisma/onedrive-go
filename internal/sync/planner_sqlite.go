@@ -8,9 +8,9 @@ import (
 )
 
 // PlanCurrentState builds the current actionable set from SQLite-owned
-// comparison and reconciliation rows plus the current durable snapshots.
-// Unlike the legacy event-shaped planner, this path treats SQLite as the
-// structural diff authority and keeps executable actions as in-memory values.
+// comparison and reconciliation rows plus the current durable snapshots. SQLite
+// owns structural diff authority; Go maps those rows to runtime actions and
+// applies action-level normalization for execution semantics.
 func (p *Planner) PlanCurrentState(
 	comparisons []SQLiteComparisonRow,
 	reconciliations []SQLiteReconciliationRow,
@@ -54,12 +54,8 @@ func (p *Planner) PlanCurrentState(
 		allActions = append(allActions, actions...)
 	}
 
-	allActions = collapseDescendantRemoteMovesUnderMovedFolders(allActions)
-	modeAdmittedActions := filterCurrentActionsForMode(allActions, mode)
-	preserveParentFoldersForDescendantWork(allActions, modeAdmittedActions)
-
-	deferred := deferredCountsForCurrentActions(allActions, mode)
-	admitted := filterCurrentActionsForMode(allActions, mode)
+	normalizedActions := normalizeCurrentPlanActions(allActions, mode)
+	admitted, deferred := partitionCurrentActionsForMode(normalizedActions, mode)
 	bindMountContext(admitted, mount)
 
 	deps := buildDependencies(admitted)
@@ -78,40 +74,51 @@ func (p *Planner) PlanCurrentState(
 	return plan, nil
 }
 
-type remoteFolderMoveBoundary struct {
+// normalizeCurrentPlanActions keeps SQL as structural authority, then applies
+// action-only execution semantics that cannot be represented by a single path's
+// reconciliation row.
+func normalizeCurrentPlanActions(actions []Action, mode SyncMode) []Action {
+	actions = omitDescendantRemoteMoveActionsCoveredByGraphFolderMoves(actions)
+	return preserveParentFoldersForRunnableDescendants(actions, mode)
+}
+
+type graphFolderMoveBoundary struct {
 	oldPrefix string
 	newPrefix string
 }
 
-func collapseDescendantRemoteMovesUnderMovedFolders(actions []Action) []Action {
-	var folderMoves []remoteFolderMoveBoundary
+func omitDescendantRemoteMoveActionsCoveredByGraphFolderMoves(actions []Action) []Action {
+	var folderMoves []graphFolderMoveBoundary
 	for i := range actions {
 		action := actions[i]
 		if action.Type != ActionRemoteMove || resolveItemType(action.View) != ItemTypeFolder || action.OldPath == "" {
 			continue
 		}
-		folderMoves = append(folderMoves, remoteFolderMoveBoundary{
+		folderMoves = append(folderMoves, graphFolderMoveBoundary{
 			oldPrefix: action.OldPath + "/",
 			newPrefix: action.Path + "/",
 		})
 	}
 	if len(folderMoves) == 0 {
-		return actions
+		return append([]Action(nil), actions...)
 	}
 
-	collapsed := actions[:0]
+	normalized := make([]Action, 0, len(actions))
 	for i := range actions {
 		action := actions[i]
-		if descendantRemoteMoveCoveredByFolderMove(action, folderMoves) {
+		if descendantRemoteMoveActionCoveredByGraphFolderMove(action, folderMoves) {
 			continue
 		}
-		collapsed = append(collapsed, action)
+		normalized = append(normalized, action)
 	}
 
-	return collapsed
+	return normalized
 }
 
-func descendantRemoteMoveCoveredByFolderMove(action Action, folderMoves []remoteFolderMoveBoundary) bool {
+// descendantRemoteMoveActionCoveredByGraphFolderMove recognizes Graph's folder
+// move side effect: a folder move sent to Graph already moves unchanged
+// descendants with the same suffix under the new folder path.
+func descendantRemoteMoveActionCoveredByGraphFolderMove(action Action, folderMoves []graphFolderMoveBoundary) bool {
 	if action.Type != ActionRemoteMove || action.OldPath == "" {
 		return false
 	}
@@ -157,7 +164,7 @@ func logActionPlanSummary(logger *slog.Logger, message string, plan *ActionPlan)
 		slog.Int("local_deletes", counts[ActionLocalDelete]),
 		slog.Int("remote_deletes", counts[ActionRemoteDelete]),
 		slog.Int("conflict_copies", counts[ActionConflictCopy]),
-		slog.Int("synced_updates", counts[ActionUpdateSynced]),
+		slog.Int("baseline_updates", counts[ActionBaselineUpdate]),
 		slog.Int("cleanups", counts[ActionCleanup]),
 		slog.Int("deferred_folder_creates", plan.DeferredByMode.FolderCreates),
 		slog.Int("deferred_moves", plan.DeferredByMode.Moves),
@@ -228,7 +235,7 @@ func buildSQLitePathViews(
 	return views, comparisonByPath, nil
 }
 
-//nolint:gocyclo // Reconciliation kind dispatch is the planner's explicit decision table.
+//nolint:gocyclo // One switch maps SQL reconciliation kinds to concrete action constructors.
 func buildActionsForReconciliation(
 	rec *SQLiteReconciliationRow,
 	cmp *SQLiteComparisonRow,
@@ -263,8 +270,8 @@ func buildActionsForReconciliation(
 		return []Action{MakeAction(ActionLocalDelete, view)}, nil
 	case strRemoteDelete:
 		return []Action{MakeAction(ActionRemoteDelete, view)}, nil
-	case strUpdateSynced:
-		return []Action{MakeAction(ActionUpdateSynced, view)}, nil
+	case strBaselineUpdate:
+		return []Action{MakeAction(ActionBaselineUpdate, view)}, nil
 	case "conflict_edit_edit":
 		return []Action{
 			makeConflictCopyAction(view),
@@ -373,34 +380,18 @@ func buildRemoteMoveReconciliationActions(
 	return []Action{action}, nil
 }
 
-func deferredCountsForCurrentActions(actions []Action, mode SyncMode) DeferredCounts {
-	if mode == SyncBidirectional || len(actions) == 0 {
-		return DeferredCounts{}
-	}
-
+func partitionCurrentActionsForMode(actions []Action, mode SyncMode) ([]Action, DeferredCounts) {
+	admitted := make([]Action, 0, len(actions))
 	var deferred DeferredCounts
 	for i := range actions {
-		if !actionAllowedInMode(&actions[i], mode) {
+		if actionAllowedInMode(&actions[i], mode) {
+			admitted = append(admitted, actions[i])
+		} else {
 			deferred.AddAction(&actions[i])
 		}
 	}
 
-	return deferred
-}
-
-func filterCurrentActionsForMode(actions []Action, mode SyncMode) []Action {
-	if mode == SyncBidirectional || len(actions) == 0 {
-		return actions
-	}
-
-	filtered := make([]Action, 0, len(actions))
-	for i := range actions {
-		if actionAllowedInMode(&actions[i], mode) {
-			filtered = append(filtered, actions[i])
-		}
-	}
-
-	return filtered
+	return admitted, deferred
 }
 
 func localStateFromSnapshotRow(row *LocalStateRow) *LocalState {

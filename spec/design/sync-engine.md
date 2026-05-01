@@ -390,7 +390,7 @@ completion does not: the engine owns quiescence and no longer waits on a
 graph-owned completion signal.
 
 Released held work always re-enters the engine-owned publication-drain stage
-before any worker dispatch. Timer-released `ActionUpdateSynced` and
+before any worker dispatch. Timer-released `ActionBaselineUpdate` and
 `ActionCleanup` actions stay engine-side, commit through the store, and unlock
 dependents without ever crossing into the worker pool.
 
@@ -721,7 +721,6 @@ immediately due after the just-finished trial.
 The engine does not own:
 
 - multi-drive orchestration
-- manual resolution workflows
 - a durable action queue
 - a mixed failure-reporting/control table
 

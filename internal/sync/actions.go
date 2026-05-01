@@ -23,8 +23,8 @@ func (c DeferredCounts) Total() int {
 }
 
 // AddAction increments the matching deferred bucket for an action type that
-// can be suppressed by sync direction. Conflict and bookkeeping actions are
-// intentionally ignored.
+// can be suppressed by sync direction. Conflict-copy and publication-only
+// actions are intentionally ignored.
 func (c *DeferredCounts) AddAction(action *Action) {
 	if c == nil || action == nil {
 		return
@@ -43,7 +43,7 @@ func (c *DeferredCounts) AddAction(action *Action) {
 		c.LocalDeletes++
 	case ActionRemoteDelete:
 		c.RemoteDeletes++
-	case ActionConflictCopy, ActionUpdateSynced, ActionCleanup:
+	case ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return
 	}
 }

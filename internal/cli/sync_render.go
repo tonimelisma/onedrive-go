@@ -166,7 +166,7 @@ func reportActionTotal(r *syncengine.Report) int {
 
 	return r.FolderCreates + r.Moves + r.Downloads + r.Uploads +
 		r.LocalDeletes + r.RemoteDeletes + r.ConflictCopies +
-		r.SyncedUpdates + r.Cleanups
+		r.BaselineUpdates + r.Cleanups
 }
 
 // printSyncReport formats and prints the sync report to the CLI status stream.
@@ -195,7 +195,7 @@ func printSyncReport(r *syncengine.Report, cc *CLIContext) {
 		printNonZero(cc, "Local deletes", r.LocalDeletes)
 		printNonZero(cc, "Remote deletes", r.RemoteDeletes)
 		printNonZero(cc, "Conflict copies", r.ConflictCopies)
-		printNonZero(cc, "Synced updates", r.SyncedUpdates)
+		printNonZero(cc, "Baseline updates", r.BaselineUpdates)
 		printNonZero(cc, "Cleanups", r.Cleanups)
 	}
 

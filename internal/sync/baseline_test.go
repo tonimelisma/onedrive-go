@@ -334,7 +334,7 @@ func TestCommit_FolderCreate(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestCommit_UpdateSynced(t *testing.T) {
+func TestCommit_BaselineUpdate(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -367,7 +367,7 @@ func TestCommit_UpdateSynced(t *testing.T) {
 	t2 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
 	mgr.setNowFunc(func() time.Time { return t2 })
 
-	outcomes[0].Action = ActionUpdateSynced
+	outcomes[0].Action = ActionBaselineUpdate
 	outcomes[0].LocalHash = updatedHash
 	outcomes[0].RemoteHash = updatedHash
 

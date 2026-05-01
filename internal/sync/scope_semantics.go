@@ -224,7 +224,7 @@ func localWriteScopeBlocksAction(actionType ActionType) bool {
 		ActionLocalDelete,
 		ActionLocalMove,
 		ActionConflictCopy,
-		ActionUpdateSynced,
+		ActionBaselineUpdate,
 		ActionCleanup,
 		ActionFolderCreate:
 		return true
@@ -247,7 +247,7 @@ func remoteWriteScopeBlocksAction(actionType ActionType) bool {
 		ActionLocalDelete,
 		ActionLocalMove,
 		ActionConflictCopy,
-		ActionUpdateSynced,
+		ActionBaselineUpdate,
 		ActionCleanup:
 		return false
 	}

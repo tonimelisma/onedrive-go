@@ -71,16 +71,16 @@ type (
 		DryRun   bool
 		Duration time.Duration
 
-		FolderCreates  int
-		Moves          int
-		Downloads      int
-		Uploads        int
-		LocalDeletes   int
-		RemoteDeletes  int
-		ConflictCopies int
-		SyncedUpdates  int
-		Cleanups       int
-		DeferredByMode DeferredCounts
+		FolderCreates   int
+		Moves           int
+		Downloads       int
+		Uploads         int
+		LocalDeletes    int
+		RemoteDeletes   int
+		ConflictCopies  int
+		BaselineUpdates int
+		Cleanups        int
+		DeferredByMode  DeferredCounts
 
 		Succeeded int
 		Failed    int

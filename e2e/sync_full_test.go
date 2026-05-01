@@ -257,10 +257,9 @@ func testConcurrentUploads(t *testing.T, opsCfgPath, testFolder string) {
 	}
 }
 
-// TestE2E_Sync_BidirectionalMerge exercises bidirectional merge:
-// EF1 (unchanged), EF3 (local edit→upload), EF13 (new local→upload),
-// EF14 (new remote→download), ED3 (new remote folder), ED5 (new local folder),
-// verify, and idempotent re-sync.
+// TestE2E_Sync_BidirectionalMerge exercises unchanged files, local edits,
+// local creates, remote creates, folder creation, verification, and idempotent
+// re-sync.
 func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	registerLogDump(t)
 
@@ -281,12 +280,12 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	stdout, _ := waitForRemoteReadContains(t, cfgPath, env, "", "readme.txt", pollTimeout, "ls", "/"+testFolder+"/docs")
 	assert.Contains(t, stdout, "notes.txt")
 
-	// Step 4: Create new local folder + file (EF13 + ED5).
+	// Step 4: Create a new local folder and file.
 	localOnlyDir := filepath.Join(syncDir, testFolder, "local-only")
 	require.NoError(t, os.MkdirAll(localOnlyDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localOnlyDir, "stuff.txt"), []byte("local stuff"), 0o600))
 
-	// Step 5: Create new remote folder + file (EF14 + ED3).
+	// Step 5: Create a new remote folder and file.
 	mkdirRemoteFolder(t, cfgPath, env, "/"+testFolder+"/data")
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/data/info.txt", "remote info data")
 
@@ -294,16 +293,16 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Step 7: Assert merge results.
-	// stuff.txt uploaded remotely (EF13 + ED5).
+	// stuff.txt uploaded remotely.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder+"/local-only")
 	assert.Contains(t, stdout, "stuff.txt")
 
-	// info.txt downloaded locally (EF14 + ED3).
+	// info.txt downloaded locally.
 	infoData, err := os.ReadFile(filepath.Join(syncDir, testFolder, "data", "info.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "remote info data", string(infoData))
 
-	// readme.txt unchanged (EF1).
+	// readme.txt unchanged.
 	readmeData, err := os.ReadFile(filepath.Join(syncDir, testFolder, "docs", "readme.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "readme content", string(readmeData))
@@ -318,9 +317,9 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, filepath.Join(syncDir, testFolder), "sync")
 }
 
-// TestE2E_Sync_EditDeleteConflict exercises EF9 (edit-delete conflict)
-// auto-resolve: local edit wins and re-creates the remote item through the
-// normal sync path without surfacing a manual-resolution workflow.
+// TestE2E_Sync_EditDeleteConflict exercises local-edit plus remote-delete:
+// local content stays canonical and recreates the remote item through the
+// normal sync path.
 func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	registerLogDump(t)
 
@@ -357,7 +356,7 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 		cfgPath,
 		env,
 		120*time.Second,
-		"sync should eventually detect and auto-resolve the edit-delete conflict",
+		"sync should eventually recreate the remote item from the local edit",
 		func(result syncAttemptResult) bool {
 			if result.Err != nil {
 				return false
@@ -378,16 +377,16 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	)
 
 	matches := conflictCopiesForPath(t, fragileFile)
-	assert.Empty(t, matches, "edit-delete auto-resolution should not create a conflict copy")
+	assert.Empty(t, matches, "edit-delete recreate upload should not create a conflict copy")
 
 	report, err := verifyBaselineReport(t, cfgPath, env)
 	require.NoError(t, err)
 	assert.Empty(t, report.Mismatches)
 }
 
-// TestE2E_Sync_DeletePropagation exercises: EF6 (local delete→remote delete),
-// EF8 (remote delete→local delete), EF10 (both deleted→cleanup),
-// EF7 (local deleted+remote changed→download), ED6 (remote folder deleted).
+// TestE2E_Sync_DeletePropagation exercises local delete, remote delete,
+// both-sides delete, local-delete plus remote-change download, and remote
+// folder delete propagation.
 func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	registerLogDump(t)
 
@@ -422,21 +421,21 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	assert.Contains(t, stdout, "sub")
 
 	// Step 3: Set up delete scenarios.
-	// EF6: Delete locally only.
+	// Delete locally only.
 	require.NoError(t, os.Remove(filepath.Join(localDir, "del-local.txt")))
 
-	// EF8: Delete remotely only.
+	// Delete remotely only.
 	runCLIWithConfig(t, cfgPath, env, "rm", "/"+testFolder+"/del-remote.txt")
 
-	// EF10: Delete both sides.
+	// Delete both sides.
 	require.NoError(t, os.Remove(filepath.Join(localDir, "del-both.txt")))
 	runCLIWithConfig(t, cfgPath, env, "rm", "/"+testFolder+"/del-both.txt")
 
-	// EF7: Delete locally + modify remotely.
+	// Delete locally and modify remotely.
 	require.NoError(t, os.Remove(filepath.Join(localDir, "redownload.txt")))
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/redownload.txt", "modified version")
 
-	// ED6: Delete remote folder + file.
+	// Delete a remote folder and file.
 	runCLIWithConfig(t, cfgPath, env, "rm", "/"+testFolder+"/sub/nested.txt")
 	runCLIWithConfig(t, cfgPath, env, "rm", "-r", "/"+testFolder+"/sub")
 
@@ -447,13 +446,10 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 
 	// Step 4: Bidirectional sync — retry until delta catches up with ALL
 	// remote deletions (ci_issues.md §17). The retry loop uses normal sync so
-	// delete safety and durable approval state are exercised through the engine
-	// boundary.
-	// Check both del-remote.txt (EF8) and sub/ (ED6) since folder deletions
-	// may propagate later than file deletions.
-	// With cascade expansion (sync-planning.md §Folder Delete Cascade),
-	// once delta reports the folder deletion, all children are deleted in
-	// a single pass.
+	// delete safety is exercised through the engine boundary.
+	// Check both del-remote.txt and sub/ since folder deletions may propagate
+	// later than file deletions. Planner-visible pruning makes descendants
+	// reconcile as ordinary delete rows once delta reports the folder deletion.
 	requireSyncEventuallyConverges(
 		t,
 		cfgPath,
@@ -472,19 +468,19 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	)
 
 	// Step 5: Assert remaining results.
-	// EF6: del-local.txt gone remotely (poll for eventual consistency).
+	// del-local.txt gone remotely (poll for eventual consistency).
 	waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "del-local", "ls", "/"+testFolder)
 
-	// EF10: del-both.txt gone everywhere.
+	// del-both.txt gone everywhere.
 	_, err := os.Stat(filepath.Join(localDir, "del-both.txt"))
 	assert.True(t, os.IsNotExist(err), "del-both.txt should not exist locally")
 
-	// EF7: redownload.txt re-downloaded with modified content.
+	// redownload.txt re-downloaded with modified content.
 	redownloadData, err := os.ReadFile(filepath.Join(localDir, "redownload.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "modified version", string(redownloadData))
 
-	// EF1: keep.txt unchanged.
+	// keep.txt unchanged.
 	keepData, err := os.ReadFile(filepath.Join(localDir, "keep.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "keep me", string(keepData))
@@ -713,9 +709,9 @@ func TestE2E_Sync_DirectionalModes_PreserveEditEditConflict(t *testing.T) {
 			_, stderr := runSyncWithMode(t, cfgPath, env, mode)
 			assert.Contains(t, stderr, mode.stderrMode)
 			if mode.flag == "--upload-only" {
-				// Upload-only defers the remote-resolution download, so the paired
+				// Upload-only defers the remote-winner download, so the paired
 				// conflict-copy rename is suppressed too. Local truth must stay put.
-				assert.NotContains(t, stderr, "Conflicts:")
+				assert.NotContains(t, stderr, "Conflict copies:")
 				assert.Contains(t, stderr, "Deferred by mode:")
 				assert.Contains(t, stderr, "Downloads:")
 				assert.Empty(t, conflictCopiesForPath(t, conflictFile))
@@ -728,7 +724,7 @@ func TestE2E_Sync_DirectionalModes_PreserveEditEditConflict(t *testing.T) {
 				return
 			}
 
-			assert.Contains(t, stderr, "Conflicts:")
+			assert.Contains(t, stderr, "Conflict copies:")
 
 			matches := conflictCopiesForPath(t, conflictFile)
 			require.Len(t, matches, 1, "true directional conflicts must preserve the local version as a conflict copy")
@@ -823,7 +819,7 @@ func TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict(t *testing.T) {
 
 			waitForRemoteReadContains(t, cfgPath, env, "", "fragile.txt", pollTimeout, "ls", "/"+testFolder)
 			assert.Equal(t, "locally modified precious data", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/fragile.txt"))
-			assert.Empty(t, conflictCopiesForPath(t, fragileFile), "edit-delete auto-resolution should not create a conflict copy")
+			assert.Empty(t, conflictCopiesForPath(t, fragileFile), "edit-delete recreate upload should not create a conflict copy")
 		})
 	}
 }
@@ -850,9 +846,9 @@ func TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict(t *testing.T) {
 			_, stderr := runSyncWithMode(t, cfgPath, env, mode)
 			assert.Contains(t, stderr, mode.stderrMode)
 			if mode.flag == "--upload-only" {
-				// Upload-only defers the remote-resolution download, so the local
+				// Upload-only defers the remote-winner download, so the local
 				// canonical file must remain untouched instead of being renamed.
-				assert.NotContains(t, stderr, "Conflicts:")
+				assert.NotContains(t, stderr, "Conflict copies:")
 				assert.Contains(t, stderr, "Deferred by mode:")
 				assert.Contains(t, stderr, "Downloads:")
 				assert.Empty(t, conflictCopiesForPath(t, conflictFile))
@@ -865,7 +861,7 @@ func TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict(t *testing.T) {
 				return
 			}
 
-			assert.Contains(t, stderr, "Conflicts:")
+			assert.Contains(t, stderr, "Conflict copies:")
 
 			matches := conflictCopiesForPath(t, conflictFile)
 			require.Len(t, matches, 1, "create-create conflicts must preserve the local version instead of overwriting it")
@@ -881,8 +877,8 @@ func TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict(t *testing.T) {
 	}
 }
 
-// TestE2E_Sync_NestedFolderHierarchy exercises deep folder creation (ED5, ED3),
-// file operations at multiple depths, and verify across the hierarchy.
+// TestE2E_Sync_NestedFolderHierarchy exercises deep folder creation, file
+// operations at multiple depths, and verify across the hierarchy.
 func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	registerLogDump(t)
 
@@ -909,34 +905,34 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	mkdirRemoteFolder(t, cfgPath, env, "/"+testFolder+"/a/b/c/d")
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/a/b/c/d/deeper.txt", "deeper content")
 
-	// Delete local sibling (EF6).
+	// Delete local sibling.
 	require.NoError(t, os.Remove(filepath.Join(localDir, "a", "sibling.txt")))
 
-	// New local deeper folder (ED5).
+	// New local deeper folder.
 	require.NoError(t, os.MkdirAll(filepath.Join(localDir, "x", "y", "z"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "x", "y", "z", "new-leaf.txt"), []byte("leaf content"), 0o600))
 
-	// Modify local file (EF3).
+	// Modify local file.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "x", "y", "another.txt"), []byte("modified another"), 0o600))
 
 	// Step 4: Bidirectional sync.
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Step 5: Assert results.
-	// Remote deeper.txt downloaded locally (ED3 + EF14).
+	// Remote deeper.txt downloaded locally.
 	deeperData, err := os.ReadFile(filepath.Join(localDir, "a", "b", "c", "d", "deeper.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "deeper content", string(deeperData))
 
-	// sibling.txt removed remotely (EF6).
+	// sibling.txt removed remotely.
 	siblingOut, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder+"/a")
 	assert.NotContains(t, siblingOut, "sibling.txt")
 
-	// new-leaf.txt uploaded remotely (ED5 + EF13).
+	// new-leaf.txt uploaded remotely.
 	leafOut, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder+"/x/y/z")
 	assert.Contains(t, leafOut, "new-leaf.txt")
 
-	// another.txt uploaded with modification (EF3).
+	// another.txt uploaded with modification.
 	remoteAnother := getRemoteFile(t, cfgPath, env, "/"+testFolder+"/x/y/another.txt")
 	assert.Equal(t, "modified another", remoteAnother)
 
@@ -1005,10 +1001,10 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 	assert.Empty(t, report.Mismatches)
 }
 
-// TestE2E_Sync_ConvergentEdit exercises EF4 (convergent edit — same hash
-// both sides) and EF11 (convergent create). The owned subtree should remain
-// converged without conflicts even if unrelated full-suite remote churn
-// causes transfers elsewhere on the shared drive.
+// TestE2E_Sync_ConvergentEdit exercises same-content edit and same-content
+// create convergence. The owned subtree should remain converged without
+// conflict copies even if unrelated full-suite remote churn causes transfers
+// elsewhere on the shared drive.
 func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	registerLogDump(t)
 
@@ -1027,12 +1023,12 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	// sync uses incremental delta, not full enumeration (ci_issues.md §17).
 	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 
-	// Step 2: Modify both sides to the SAME content (EF4).
+	// Step 2: Modify both sides to the same content.
 	newContent := "convergent new content"
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "converge-edit.txt"), []byte(newContent), 0o600))
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/converge-edit.txt", newContent)
 
-	// Step 3: Create new file on both sides with same content (EF11).
+	// Step 3: Create a new file on both sides with the same content.
 	freshContent := "fresh convergent"
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "converge-create.txt"), []byte(freshContent), 0o600))
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/converge-create.txt", freshContent)
@@ -1041,8 +1037,8 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Convergent updates detected (no data transfer needed).
-	assert.Contains(t, stderr, "Synced updates:")
-	assert.NotContains(t, stderr, "Conflicts:")
+	assert.Contains(t, stderr, "Baseline updates:")
+	assert.NotContains(t, stderr, "Conflict copies:")
 
 	editData, err := os.ReadFile(filepath.Join(localDir, "converge-edit.txt"))
 	require.NoError(t, err)
