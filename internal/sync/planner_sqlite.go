@@ -54,8 +54,9 @@ func (p *Planner) PlanCurrentState(
 		allActions = append(allActions, actions...)
 	}
 
-	allActions = expandFolderDeleteCascades(allActions, baseline, views, mode, p.logger)
 	allActions = collapseDescendantRemoteMovesUnderMovedFolders(allActions)
+	modeAdmittedActions := filterCurrentActionsForMode(allActions, mode)
+	preserveParentFoldersForDescendantWork(allActions, modeAdmittedActions)
 
 	deferred := deferredCountsForCurrentActions(allActions, mode)
 	admitted := filterCurrentActionsForMode(allActions, mode)
@@ -155,6 +156,7 @@ func logActionPlanSummary(logger *slog.Logger, message string, plan *ActionPlan)
 		slog.Int("uploads", counts[ActionUpload]),
 		slog.Int("local_deletes", counts[ActionLocalDelete]),
 		slog.Int("remote_deletes", counts[ActionRemoteDelete]),
+		slog.Int("conflict_copies", counts[ActionConflictCopy]),
 		slog.Int("synced_updates", counts[ActionUpdateSynced]),
 		slog.Int("cleanups", counts[ActionCleanup]),
 		slog.Int("deferred_folder_creates", plan.DeferredByMode.FolderCreates),

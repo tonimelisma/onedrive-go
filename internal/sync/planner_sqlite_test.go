@@ -298,6 +298,46 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 	assert.Equal(t, []int{0}, plan.Deps[1], "download should wait for the conflict copy")
 }
 
+// Validates: R-2.1.3, R-2.10.4
+func TestPlannerPlanCurrentState_ExpandsCreateCreateConflictIntoConcreteActions(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
+		Path:     "new-collision.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "local-new",
+		Size:     2,
+		Mtime:    2,
+	}}))
+
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "remote-new",
+		Path:     "new-collision.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "remote-new",
+		Size:     3,
+		Mtime:    3,
+		ETag:     "etag-remote",
+	}}, "", driveID))
+
+	plan := planCurrentStateForStore(t, store)
+	require.Len(t, plan.Actions, 2)
+
+	assert.Equal(t, ActionConflictCopy, plan.Actions[0].Type)
+	assert.Equal(t, "new-collision.txt", plan.Actions[0].Path)
+	assert.False(t, plan.Actions[0].RequireMissingLocalTarget)
+
+	assert.Equal(t, ActionDownload, plan.Actions[1].Type)
+	assert.Equal(t, "new-collision.txt", plan.Actions[1].Path)
+	assert.True(t, plan.Actions[1].RequireMissingLocalTarget)
+	assert.Equal(t, []int{0}, plan.Deps[1], "download should wait for the conflict copy")
+}
+
 // Validates: R-2.3.6
 func TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID(t *testing.T) {
 	t.Parallel()
@@ -326,6 +366,210 @@ func TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID(t *testing
 	assert.Equal(t, "edit-delete.txt", action.Path)
 	assert.Empty(t, action.ItemID)
 	assert.False(t, action.DriveID.IsZero())
+}
+
+// Validates: R-2.1.3, R-2.3.6
+func TestPlannerPlanCurrentState_RemoteParentDeletePlansDescendantLocalDeleteThroughSQLite(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+	seedFolderCascadeBaseline(t, store)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+		{Path: "Projects", ItemType: ItemTypeFolder},
+		{Path: "Projects/file.txt", ItemType: ItemTypeFile, Hash: "old-hash", Size: 1, Mtime: 1},
+	}))
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "file-projects",
+		Path:     "Projects/file.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "old-hash",
+		Size:     1,
+		Mtime:    1,
+		ETag:     "etag-old",
+	}}, "", driveID))
+
+	plan := planCurrentStateForStore(t, store)
+
+	parentIdx := requireActionIndex(t, plan.Actions, "Projects", ActionLocalDelete)
+	childIdx := requireActionIndex(t, plan.Actions, "Projects/file.txt", ActionLocalDelete)
+	assert.Contains(t, plan.Deps[parentIdx], childIdx)
+}
+
+// Validates: R-2.1.3, R-2.3.6
+func TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+	seedFolderCascadeBaseline(t, store)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+		{Path: "Projects", ItemType: ItemTypeFolder},
+		{Path: "Projects/file.txt", ItemType: ItemTypeFile, Hash: "local-new", Size: 2, Mtime: 2},
+	}))
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "file-projects",
+		Path:     "Projects/file.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "old-hash",
+		Size:     1,
+		Mtime:    1,
+		ETag:     "etag-old",
+	}}, "", driveID))
+
+	plan := planCurrentStateForStore(t, store)
+
+	parentIdx := requireActionIndex(t, plan.Actions, "Projects", ActionFolderCreate)
+	uploadIdx := requireActionIndex(t, plan.Actions, "Projects/file.txt", ActionUpload)
+	assert.Equal(t, CreateRemote, plan.Actions[parentIdx].CreateSide)
+	assert.Empty(t, plan.Actions[uploadIdx].ItemID)
+	assert.Contains(t, plan.Deps[uploadIdx], parentIdx)
+}
+
+// Validates: R-2.1.3, R-2.3.6
+func TestPlannerPlanCurrentState_DownloadOnlyKeepsParentDeleteWhenEditedChildUploadDeferred(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+	seedFolderCascadeBaseline(t, store)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+		{Path: "Projects", ItemType: ItemTypeFolder},
+		{Path: "Projects/file.txt", ItemType: ItemTypeFile, Hash: "local-new", Size: 2, Mtime: 2},
+	}))
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "file-projects",
+		Path:     "Projects/file.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "old-hash",
+		Size:     1,
+		Mtime:    1,
+		ETag:     "etag-old",
+	}}, "", driveID))
+
+	plan := planCurrentStateForStoreWithMode(t, store, SyncDownloadOnly)
+
+	requireActionIndex(t, plan.Actions, "Projects", ActionLocalDelete)
+	assertNoAction(t, plan.Actions, "Projects", ActionFolderCreate)
+	assertNoAction(t, plan.Actions, "Projects/file.txt", ActionUpload)
+	assert.Equal(t, 1, plan.DeferredByMode.Uploads)
+}
+
+// Validates: R-2.1.3, R-2.3.6
+func TestPlannerPlanCurrentState_UploadOnlyPreservesRemoteParentForAdmittedEditedChildUpload(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+	seedFolderCascadeBaseline(t, store)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+		{Path: "Projects", ItemType: ItemTypeFolder},
+		{Path: "Projects/file.txt", ItemType: ItemTypeFile, Hash: "local-new", Size: 2, Mtime: 2},
+	}))
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "file-projects",
+		Path:     "Projects/file.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "old-hash",
+		Size:     1,
+		Mtime:    1,
+		ETag:     "etag-old",
+	}}, "", driveID))
+
+	plan := planCurrentStateForStoreWithMode(t, store, SyncUploadOnly)
+
+	parentIdx := requireActionIndex(t, plan.Actions, "Projects", ActionFolderCreate)
+	uploadIdx := requireActionIndex(t, plan.Actions, "Projects/file.txt", ActionUpload)
+	assert.Equal(t, CreateRemote, plan.Actions[parentIdx].CreateSide)
+	assert.Empty(t, plan.Actions[uploadIdx].ItemID)
+	assert.Contains(t, plan.Deps[uploadIdx], parentIdx)
+}
+
+// Validates: R-2.1.3, R-2.3.1
+func TestPlannerPlanCurrentState_LocalParentDeleteCreatesParentForChangedRemoteChild(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+	seedFolderCascadeBaseline(t, store)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
+		Path:     "Projects/file.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "old-hash",
+		Size:     1,
+		Mtime:    1,
+	}}))
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
+		{
+			DriveID:  driveID,
+			ItemID:   "folder-projects",
+			Path:     "Projects",
+			ItemType: ItemTypeFolder,
+		},
+		{
+			DriveID:  driveID,
+			ItemID:   "file-projects",
+			Path:     "Projects/file.txt",
+			ItemType: ItemTypeFile,
+			Hash:     "remote-new",
+			Size:     2,
+			Mtime:    2,
+			ETag:     "etag-new",
+		},
+	}, "", driveID))
+
+	plan := planCurrentStateForStore(t, store)
+
+	parentIdx := requireActionIndex(t, plan.Actions, "Projects", ActionFolderCreate)
+	downloadIdx := requireActionIndex(t, plan.Actions, "Projects/file.txt", ActionDownload)
+	assert.Equal(t, CreateLocal, plan.Actions[parentIdx].CreateSide)
+	assert.Contains(t, plan.Deps[downloadIdx], parentIdx)
+}
+
+// Validates: R-2.1.3, R-2.4.1
+func TestPlannerPlanCurrentState_BothParentSidesDeletedCleansUpDescendantsThroughSQLite(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	seedFolderCascadeBaseline(t, store)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
+		Path:     "Projects/file.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "old-hash",
+		Size:     1,
+		Mtime:    1,
+	}}))
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveid.New(engineTestDriveID),
+		ItemID:   "file-projects",
+		Path:     "Projects/file.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "old-hash",
+		Size:     1,
+		Mtime:    1,
+		ETag:     "etag-old",
+	}}, "", driveid.New(engineTestDriveID)))
+
+	plan := planCurrentStateForStore(t, store)
+
+	requireActionIndex(t, plan.Actions, "Projects", ActionCleanup)
+	requireActionIndex(t, plan.Actions, "Projects/file.txt", ActionCleanup)
 }
 
 // Validates: R-2.1.1, R-2.1.3
@@ -430,30 +674,68 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteConflictResolutionWithout
 func planCurrentStateForStore(t *testing.T, store *SyncStore) *ActionPlan {
 	t.Helper()
 
+	return planCurrentStateForStoreWithMode(t, store, SyncBidirectional)
+}
+
+func planCurrentStateForStoreWithMode(t *testing.T, store *SyncStore, mode SyncMode) *ActionPlan {
+	t.Helper()
+
 	ctx := t.Context()
 	bl, err := store.Load(ctx)
 	require.NoError(t, err)
 
-	comparisons, err := store.QueryComparisonState(ctx)
+	tx, err := beginPerfTx(ctx, store.rawDB())
 	require.NoError(t, err)
-	reconciliations, err := store.QueryReconciliationState(ctx)
+	defer func() { _ = tx.Rollback() }()
+
+	rawLocalRows, err := listLocalStateRows(ctx, tx)
 	require.NoError(t, err)
-	localRows, err := store.ListLocalState(ctx)
+
+	observationState, err := store.readObservationStateTx(ctx, tx)
 	require.NoError(t, err)
-	remoteRows, err := store.ListRemoteState(ctx)
+	contentDriveID := observationState.ContentDriveID
+	if contentDriveID.IsZero() {
+		contentDriveID = driveid.New(engineTestDriveID)
+	}
+
+	rawRemoteRows, err := queryRemoteStateRowsWithRunner(
+		ctx,
+		tx,
+		`SELECT `+sqlSelectRemoteStateCols+` FROM remote_state`,
+		contentDriveID,
+	)
 	require.NoError(t, err)
-	observationIssues, err := store.ListObservationIssues(ctx)
+
+	visibleRows, err := replacePlannerVisibleStateTx(ctx, tx, rawLocalRows, rawRemoteRows, contentDriveID)
 	require.NoError(t, err)
+
+	comparisons, err := queryComparisonStateWithRunnerForTables(
+		ctx,
+		tx,
+		plannerVisibleLocalStateTable,
+		plannerVisibleRemoteStateTable,
+	)
+	require.NoError(t, err)
+	reconciliations, err := queryReconciliationStateWithRunnerForTables(
+		ctx,
+		tx,
+		plannerVisibleLocalStateTable,
+		plannerVisibleRemoteStateTable,
+	)
+	require.NoError(t, err)
+	observationIssues, err := queryObservationIssueRowsWithRunner(ctx, tx)
+	require.NoError(t, err)
+
 	planner := NewPlanner(testLogger(t))
 	plan, err := planner.PlanCurrentState(
 		comparisons,
 		reconciliations,
-		localRows,
-		remoteRows,
+		visibleRows.Local,
+		visibleRows.Remote,
 		observationIssues,
 		bl,
 		plannerMountContext{DriveID: driveid.New(engineTestDriveID)},
-		SyncBidirectional,
+		mode,
 	)
 	require.NoError(t, err)
 
@@ -485,6 +767,48 @@ func planCurrentStateForInputs(
 	require.NoError(t, err)
 
 	return plan
+}
+
+func seedFolderCascadeBaseline(t *testing.T, store *SyncStore) {
+	t.Helper()
+
+	_, err := store.rawDB().ExecContext(t.Context(), `
+		INSERT INTO baseline (
+			item_id, path, item_type, local_hash, remote_hash,
+			local_size, remote_size, local_mtime, remote_mtime, etag
+		)
+		VALUES
+			('folder-projects', 'Projects', 'folder', '', '', NULL, NULL, NULL, NULL, ''),
+			('file-projects', 'Projects/file.txt', 'file', 'old-hash', 'old-hash', 1, 1, 1, 1, 'etag-old')`)
+	require.NoError(t, err)
+}
+
+func requireActionIndex(t *testing.T, actions []Action, path string, actionType ActionType) int {
+	t.Helper()
+
+	for i := range actions {
+		if actions[i].Path == path && actions[i].Type == actionType {
+			return i
+		}
+	}
+
+	require.Failf(t, "missing action", "no %s action for %s in %#v", actionType.String(), path, actions)
+	return -1
+}
+
+func assertNoAction(t *testing.T, actions []Action, path string, actionType ActionType) {
+	t.Helper()
+
+	for i := range actions {
+		assert.Falsef(
+			t,
+			actions[i].Path == path && actions[i].Type == actionType,
+			"unexpected %s action for %s in %#v",
+			actionType.String(),
+			path,
+			actions,
+		)
+	}
 }
 
 func planForUnavailableLocalReadBoundaryDescendant(t *testing.T) *ActionPlan {

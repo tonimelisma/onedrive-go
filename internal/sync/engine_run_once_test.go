@@ -102,7 +102,7 @@ func TestRunOnce_NoChanges(t *testing.T) {
 
 	total := report.Downloads + report.Uploads + report.LocalDeletes +
 		report.RemoteDeletes + report.FolderCreates + report.Moves +
-		report.SyncedUpdates + report.Cleanups
+		report.ConflictCopies + report.SyncedUpdates + report.Cleanups
 	assert.Equal(t, 0, total, "expected zero actions")
 	assert.Equal(t, 0, report.Succeeded, "succeeded")
 	assert.Equal(t, 0, report.Failed, "failed")
@@ -1064,7 +1064,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 }
 
 // TestRunOnce_EmptyPlan_NoPanic verifies that when changes exist but all
-// classify to no-op actions (producing an empty plan), the engine does not
+// reconcile to no-op actions (producing an empty plan), the engine does not
 // deadlock. Regression test for: empty plan left the runtime without any
 // dispatchable work but the execution loop failed to recognize quiescence.
 func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
@@ -1073,8 +1073,7 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	driveID := driveid.New(engineTestDriveID)
 
 	// Seed a baseline entry that matches the delta response exactly.
-	// The planner will see no diff → all changes classify to EF1/ED1 (no-op)
-	// → empty action plan.
+	// The planner will see no diff, so reconciliation emits an empty action plan.
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return deltaPageWithItems([]graph.Item{

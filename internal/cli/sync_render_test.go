@@ -113,3 +113,21 @@ func TestPrintRunOnceResult_RendersDuplicateSelectionReportsWithoutDroppingParen
 	require.NotEqual(t, -1, errorIndex)
 	assert.Less(t, modeIndex, errorIndex)
 }
+
+func TestPrintSyncReport_CountsConflictCopiesAsPlannedWork(t *testing.T) {
+	t.Parallel()
+
+	cc, status := statusCC()
+
+	printSyncReport(&syncengine.Report{
+		Mode:           syncengine.SyncBidirectional,
+		ConflictCopies: 1,
+		Downloads:      1,
+	}, cc)
+
+	output := status.String()
+	assert.Contains(t, output, "Plan:")
+	assert.Contains(t, output, "Conflict copies:")
+	assert.Contains(t, output, "Downloads:")
+	assert.Contains(t, output, "Succeeded:")
+}

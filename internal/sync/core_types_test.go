@@ -118,64 +118,6 @@ func TestActionTypeDirection(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Baseline.DescendantsOf tests
-// ---------------------------------------------------------------------------
-
-func TestBaseline_DescendantsOf_BasicPrefixMatching(t *testing.T) {
-	t.Parallel()
-
-	bl := NewBaselineForTest([]*BaselineEntry{
-		{Path: "docs", ItemType: ItemTypeFolder, ItemID: "d1"},
-		{Path: "docs/readme.txt", ItemType: ItemTypeFile, ItemID: "d2"},
-		{Path: "docs/sub", ItemType: ItemTypeFolder, ItemID: "d3"},
-		{Path: "docs/sub/deep.txt", ItemType: ItemTypeFile, ItemID: "d4"},
-		{Path: "other.txt", ItemType: ItemTypeFile, ItemID: "o1"},
-	})
-
-	descendants := bl.DescendantsOf("docs")
-	assert.Len(t, descendants, 3, "docs has 3 descendants")
-
-	paths := make(map[string]bool)
-	for _, d := range descendants {
-		paths[d.Path] = true
-	}
-
-	assert.True(t, paths["docs/readme.txt"])
-	assert.True(t, paths["docs/sub"])
-	assert.True(t, paths["docs/sub/deep.txt"])
-	assert.False(t, paths["other.txt"])
-	assert.False(t, paths["docs"]) // prefix itself excluded
-}
-
-func TestBaseline_DescendantsOf_PrefixOfAnotherName(t *testing.T) {
-	t.Parallel()
-
-	// "docs" should NOT match "documents/file.txt" — only "docs/" prefix.
-	bl := NewBaselineForTest([]*BaselineEntry{
-		{Path: "docs", ItemType: ItemTypeFolder, ItemID: "d1"},
-		{Path: "documents", ItemType: ItemTypeFolder, ItemID: "doc1"},
-		{Path: "documents/file.txt", ItemType: ItemTypeFile, ItemID: "doc2"},
-		{Path: "docs/real-child.txt", ItemType: ItemTypeFile, ItemID: "d2"},
-	})
-
-	descendants := bl.DescendantsOf("docs")
-	require.Len(t, descendants, 1)
-	assert.Equal(t, "docs/real-child.txt", descendants[0].Path)
-}
-
-func TestBaseline_DescendantsOf_EmptyResults(t *testing.T) {
-	t.Parallel()
-
-	bl := NewBaselineForTest([]*BaselineEntry{
-		{Path: "lonely-folder", ItemType: ItemTypeFolder, ItemID: "l1"},
-		{Path: "other.txt", ItemType: ItemTypeFile, ItemID: "o1"},
-	})
-
-	descendants := bl.DescendantsOf("lonely-folder")
-	assert.Empty(t, descendants)
-}
-
 func TestBaseline_PutGetByIDDeleteAndLen(t *testing.T) {
 	t.Parallel()
 
