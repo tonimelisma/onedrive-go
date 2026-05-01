@@ -238,27 +238,6 @@ func (b *Baseline) ForEachPath(fn func(string, *BaselineEntry)) {
 	}
 }
 
-// DescendantsOf returns all baseline entries whose path is strictly under
-// the given prefix (prefix + "/"). The prefix itself is excluded. Used by
-// the planner's folder delete cascade expansion to synthesize child delete
-// actions when the delta API only reports the parent folder as deleted.
-// Thread-safe: holds a read lock during access.
-func (b *Baseline) DescendantsOf(prefix string) []*BaselineEntry {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	childPrefix := prefix + "/"
-	var descendants []*BaselineEntry
-
-	for p, entry := range b.ByPath {
-		if strings.HasPrefix(p, childPrefix) {
-			descendants = append(descendants, entry)
-		}
-	}
-
-	return descendants
-}
-
 // FindOrphans identifies baseline entries that are not present in the seen
 // set (a full delta enumeration). These represent items deleted remotely but
 // missed by incremental delta — deletions are delivered exactly once in a

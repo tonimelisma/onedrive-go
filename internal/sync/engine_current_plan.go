@@ -509,7 +509,7 @@ func (flow *engineFlow) loadCurrentInputsTx(
 	}
 	localRows := filterLocalStateRowsForPlanning(rawLocalRows, flow.engine.contentFilter)
 	remoteRows = filterRemoteStateRowsForPlanning(remoteRows, flow.engine.contentFilter)
-	err = replacePlannerVisibleStateTx(ctx, tx, localRows, remoteRows)
+	plannerVisibleRows, err := replacePlannerVisibleStateTx(ctx, tx, localRows, remoteRows, contentDriveID)
 	if err != nil {
 		return currentInputs{}, err
 	}
@@ -539,8 +539,8 @@ func (flow *engineFlow) loadCurrentInputsTx(
 	return currentInputs{
 		comparisons:       comparisons,
 		reconciliations:   reconciliations,
-		localRows:         localRows,
-		remoteRows:        remoteRows,
+		localRows:         plannerVisibleRows.Local,
+		remoteRows:        plannerVisibleRows.Remote,
 		observationIssues: observationIssues,
 	}, nil
 }

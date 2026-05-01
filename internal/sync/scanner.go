@@ -603,17 +603,17 @@ func (o *LocalObserver) classifyObservedInfo(
 		return nil
 	}
 
-	return o.classifyFileChange(fsPath, dbRelPath, name, info, existing, currentRows, jobs, scanStartNano)
+	return o.detectFileContentChange(fsPath, dbRelPath, name, info, existing, currentRows, jobs, scanStartNano)
 }
 
-// classifyFileChange compares a file against its baseline entry to detect
+// detectFileContentChange compares a file against its baseline entry to detect
 // content modifications. Uses mtime+size as a fast path — only adds a hash
 // job when metadata suggests a change. This is the industry standard
 // (rsync, rclone, Syncthing, Git all use this pattern). Includes a
 // racily-clean guard: files whose mtime is within 1 second of scan start
 // are always hashed, because they may have been modified in the same clock
 // tick as the last sync (Git's "racily clean" problem).
-func (o *LocalObserver) classifyFileChange(
+func (o *LocalObserver) detectFileContentChange(
 	fsPath, dbRelPath, name string, info fs.FileInfo, base *BaselineEntry,
 	currentRows map[string]LocalStateRow,
 	jobs *[]hashJob, scanStartNano int64,
@@ -741,7 +741,7 @@ type caseGroupKey struct {
 // crossCheckBaseline flags single-event groups that collide with already-synced
 // baseline entries. A new file whose lowercased name matches a baseline entry
 // with different exact casing is a collision (the baseline file produced no event
-// because it was unchanged — fast-path skip in classifyFileChange).
+// because it was unchanged by the fast-path content-change check).
 func crossCheckBaseline(
 	events []ChangeEvent,
 	groups map[caseGroupKey][]int,
