@@ -70,7 +70,7 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 	require.NoError(t, os.WriteFile(conflictFile, []byte("local edit"), 0o600))
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/conflict.txt", "remote edit")
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync")
-	assert.Contains(t, stderr, "Conflicts:")
+	assert.Contains(t, stderr, "Conflict copies:")
 
 	content, err := os.ReadFile(conflictFile)
 	require.NoError(t, err)

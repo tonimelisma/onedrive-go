@@ -52,7 +52,7 @@ func actionAllowedInMode(action *Action, mode SyncMode) bool {
 		// can also run. In upload-only mode that download is deferred, so keeping
 		// the rename would mutate local truth into a fake delete/create sequence.
 		return mode != SyncUploadOnly
-	case ActionUpdateSynced, ActionCleanup:
+	case ActionBaselineUpdate, ActionCleanup:
 		return true
 	default:
 		return true
@@ -172,18 +172,19 @@ func makeFolderCreate(view *PathView, side FolderCreateSide) Action {
 	return a
 }
 
-func preserveParentFoldersForDescendantWork(actions []Action, modeAdmittedActions []Action) {
-	for i := range actions {
-		action := &actions[i]
-		if !isFolderDelete(action) || !subtreeActionRequiresParent(modeAdmittedActions, action.Path) {
+func preserveParentFoldersForRunnableDescendants(actions []Action, mode SyncMode) []Action {
+	preserved := append([]Action(nil), actions...)
+	for i := range preserved {
+		action := &preserved[i]
+		if !isFolderDelete(action) || !runnableSubtreeActionRequiresParent(preserved, action.Path, mode) {
 			continue
 		}
 
 		switch action.Type {
 		case ActionLocalDelete:
-			actions[i] = makeFolderCreate(action.View, CreateRemote)
+			preserved[i] = makeFolderCreate(action.View, CreateRemote)
 		case ActionRemoteDelete:
-			actions[i] = makeFolderCreate(action.View, CreateLocal)
+			preserved[i] = makeFolderCreate(action.View, CreateLocal)
 		case ActionCleanup:
 		case ActionDownload,
 			ActionUpload,
@@ -191,9 +192,11 @@ func preserveParentFoldersForDescendantWork(actions []Action, modeAdmittedAction
 			ActionRemoteMove,
 			ActionFolderCreate,
 			ActionConflictCopy,
-			ActionUpdateSynced:
+			ActionBaselineUpdate:
 		}
 	}
+
+	return preserved
 }
 
 func isFolderDelete(action *Action) bool {
@@ -207,11 +210,15 @@ func isFolderDelete(action *Action) bool {
 	return isDelete && resolveItemType(action.View) == ItemTypeFolder
 }
 
-func subtreeActionRequiresParent(actions []Action, parentPath string) bool {
+func runnableSubtreeActionRequiresParent(actions []Action, parentPath string, mode SyncMode) bool {
 	prefix := parentPath + "/"
 
 	for i := range actions {
-		if strings.HasPrefix(actions[i].Path, prefix) && actionRequiresParentFolder(actions[i].Type) {
+		action := &actions[i]
+		if !strings.HasPrefix(action.Path, prefix) || !actionAllowedInMode(action, mode) {
+			continue
+		}
+		if actionRequiresParentFolder(action.Type) {
 			return true
 		}
 	}

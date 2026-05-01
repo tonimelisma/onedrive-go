@@ -13,8 +13,8 @@ Planning is split between SQLite reconciliation and a Go action builder.
   Those temp tables are filter-scoped and then pruned for same-side descendants
   under a baseline folder that is missing on that side.
 - Go turns reconciliation rows into the current executable action set, then
-  applies blocked-truth suppression, parent-folder preservation, sync-mode
-  filtering, and dependency detection.
+  normalizes action-level execution semantics, partitions work by sync mode,
+  and builds dependencies.
 
 The executable plan is runtime-owned and is not a durable SQLite authority.
 Shortcut-root lifecycle planning follows the same functional-core rule inside
@@ -28,7 +28,8 @@ intent; multisync receives only that child work intent.
 
 - Owns: preparing planner-visible current truth for SQLite reconciliation and
   turning reconciliation rows into the current executable action set, including
-  conflict expansion, filtering, deferral, and dependency ordering
+  conflict expansion, action normalization, filtering, deferral, and dependency
+  ordering
 - Does Not Own: observation, execution, retry timing, scope persistence, or remote/local I/O
 - Source of Truth: raw `baseline`, raw current-state tables, and the engine's
   compiled `ContentFilter`. Planning sees filtered current-state views through
@@ -91,10 +92,14 @@ same derivation rather than a second planner-shaped helper.
    derived status.
 7. Emit the current runtime action set from reconciliation rows, including
    conflict expansion into concrete actions.
-8. Preserve a deleted parent folder only when mode-admitted descendant actions
-   need that parent to exist.
-9. Bind ordinary actions to the engine's mounted drive/root context.
-10. Apply mode filtering, build dependency edges, and reject dependency cycles.
+8. Normalize the action set: omit descendant remote-move actions already covered
+   by a folder move sent to Graph, and preserve a deleted parent folder only
+   when runnable descendant actions in the current sync mode need that parent to
+   exist.
+9. Partition the normalized action set into admitted work and mode-deferred
+   counts.
+10. Bind ordinary actions to the engine's mounted drive/root context, build
+    dependency edges, and reject dependency cycles.
 
 ## File Decisions
 
@@ -105,7 +110,7 @@ same derivation rather than a second planner-shaped helper.
 - local deleted + remote deleted -> `ActionCleanup` (publication-only)
 - local changed + remote unchanged -> `ActionUpload`
 - local unchanged + remote changed -> `ActionDownload`
-- local changed + remote changed with equal hashes -> `ActionUpdateSynced` (publication-only)
+- local changed + remote changed with equal hashes -> `ActionBaselineUpdate` (publication-only)
 - local changed + remote changed with different hashes -> `ActionConflictCopy` + dependent `ActionDownload`
 - local unchanged + remote deleted -> `ActionLocalDelete`
 - local changed + remote deleted -> `ActionUpload` with no stale item ID, so execution recreates the remote file
@@ -114,12 +119,12 @@ same derivation rather than a second planner-shaped helper.
 
 - local only -> `ActionUpload`
 - remote only -> `ActionDownload`
-- local and remote with equal hashes -> `ActionUpdateSynced` (publication-only)
+- local and remote with equal hashes -> `ActionBaselineUpdate` (publication-only)
 - local and remote with different hashes -> `ActionConflictCopy` + dependent `ActionDownload`
 
 ## Publication-Only Planner Actions
 
-`ActionUpdateSynced` and `ActionCleanup` remain real planner action types.
+`ActionBaselineUpdate` and `ActionCleanup` remain real planner action types.
 They stay in the action set so dependency ordering, counts, and reporting can
 see them.
 
@@ -188,12 +193,11 @@ then emits ordinary descendant reconciliation rows: unchanged descendants under
 the deleted parent delete locally, edited descendants recreate remote content,
 and descendants missing on both sides clean up baseline.
 
-After action building, a narrow parent-preservation pass rewrites only the
-deleted parent folder action when descendant work that is admitted in the
-current sync mode needs the folder to exist: local parent deletes become remote
-folder creates, remote parent deletes become local folder creates, and cleanup
-stays cleanup. Deferred descendant work must not preserve a parent that the
-current mode would otherwise delete.
+Action normalization rewrites only the deleted parent folder action when
+descendant work that can run in the current sync mode needs the folder to exist:
+local parent deletes become remote folder creates, remote parent deletes become
+local folder creates, and cleanup stays cleanup. Deferred descendant work must
+not preserve a parent that the current mode would otherwise delete.
 
 Folder reconciliation is existence/type-based, not metadata-based. Folder
 size, mtime, and ETag churn caused by child mutations must not be treated as
@@ -211,6 +215,12 @@ the moved path. Identity mismatch at the same path is treated as replacement
 or delete/create truth, not as a move. Moves that cross drive ownership are
 decomposed into delete + upload because Graph move cannot cross drive
 ownership.
+
+Local folder moves execute as `ActionRemoteMove` work. Graph applies a folder
+move to unchanged descendants, so descendant `ActionRemoteMove` entries whose
+old/new suffixes are exactly covered by the folder move are omitted from the
+executable action set. Descendant renames or content work that are not covered
+by the folder move remain explicit actions.
 
 ## Mount-Local Planning
 

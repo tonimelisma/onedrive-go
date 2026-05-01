@@ -148,7 +148,7 @@ fall back to unique content-hash candidates, but directory moves do not.
 
 That same store boundary also owns publication-only planner actions:
 
-- `ActionUpdateSynced` publishes an upsert for converged current truth
+- `ActionBaselineUpdate` publishes an upsert for converged current truth
 - `ActionCleanup` publishes a delete for baseline rows absent from both current
   snapshots
 
@@ -292,7 +292,7 @@ roots remain dependency state in the current runtime; they are not persisted as
 cascade retry rows.
 
 That exact-root rule includes publication-only actions such as
-`ActionUpdateSynced` and `ActionCleanup`. They may persist in `retry_work`, but
+`ActionBaselineUpdate` and `ActionCleanup`. They may persist in `retry_work`, but
 their retry still re-enters the engine-owned publication-drain stage rather
 than worker dispatch.
 
@@ -348,6 +348,5 @@ The store does not own:
 - retry scheduling policy
 - worker dispatch
 - status rendering policy
-- manual resolution workflows
 
 Those concerns belong to the engine or CLI.

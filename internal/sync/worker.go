@@ -252,7 +252,7 @@ func (wp *WorkerPool) dispatchAction(
 		return exec.ExecuteLocalDelete(ctx, action)
 	case ActionRemoteDelete:
 		return exec.ExecuteRemoteDelete(ctx, action)
-	case ActionUpdateSynced, ActionCleanup:
+	case ActionBaselineUpdate, ActionCleanup:
 		return ActionOutcome{
 			Action:  action.Type,
 			Path:    action.Path,

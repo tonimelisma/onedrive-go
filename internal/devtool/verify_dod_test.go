@@ -141,7 +141,7 @@ func TestDODManifestGenerationRefreshesGitHubFields(t *testing.T) {
 			IsResolved:     false,
 			Classification: DODCommentFixed,
 			WhatChanged:    "Kept the fix.",
-			HowFixed:       "Preserved the manual resolution notes.",
+			HowFixed:       "Preserved the review-thread notes.",
 			Evidence:       []string{"go test ./internal/devtool"},
 		}},
 	}
@@ -158,7 +158,7 @@ func TestDODManifestGenerationRefreshesGitHubFields(t *testing.T) {
 	assert.Equal(t, "new/path.go", thread.Path)
 	assert.True(t, thread.IsResolved)
 	assert.Equal(t, DODCommentFixed, thread.Classification)
-	assert.Equal(t, "Preserved the manual resolution notes.", thread.HowFixed)
+	assert.Equal(t, "Preserved the review-thread notes.", thread.HowFixed)
 }
 
 // Validates: R-6.10.16

@@ -16,7 +16,7 @@ func TestDeferredCountsAddActionAndTotal(t *testing.T) {
 
 	counts.AddAction(nil)
 	counts.AddAction(&Action{Type: ActionCleanup})
-	counts.AddAction(&Action{Type: ActionUpdateSynced})
+	counts.AddAction(&Action{Type: ActionBaselineUpdate})
 	counts.AddAction(&Action{Type: ActionFolderCreate})
 	counts.AddAction(&Action{Type: ActionLocalMove})
 	counts.AddAction(&Action{Type: ActionRemoteMove})
