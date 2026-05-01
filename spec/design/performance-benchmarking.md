@@ -292,7 +292,7 @@ needed to interpret the headline numbers:
 - file count and directory count
 - changed item count and changed byte count
 - total remote enumeration size where relevant
-- transfer count, delete count, and conflict count where relevant
+- transfer, delete, cleanup, and conflict-copy action counts where relevant
 - phase timings and aggregate resource counters
 
 ## Repeatability Controls

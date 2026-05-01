@@ -594,7 +594,9 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 
 // Validates: R-2.8.3, R-6.10.10
 func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
-	t.Parallel()
+	// This test drives the real watch owner cancellation path. Keep it serial so
+	// package-wide race-test parallelism cannot starve shutdown long enough to turn
+	// the debug-event synchronization deadline into scheduler noise.
 
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
@@ -630,7 +632,7 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	}, "local observer started")
 
 	cancel()
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventShutdownStarted
 	}, "shutdown started")
 

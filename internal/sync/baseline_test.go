@@ -630,10 +630,9 @@ func TestLoad_NullableFields(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Conflict query + resolve tests
+// Baseline cache tests
 // ---------------------------------------------------------------------------
 
-// seedConflict inserts a conflict via CommitMutation and returns its UUID.
 // Validates: R-2.2
 func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 	t.Parallel()
