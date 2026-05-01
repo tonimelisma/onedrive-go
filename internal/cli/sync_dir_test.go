@@ -44,7 +44,7 @@ func TestRollbackLoginSideEffectsRemovesNewLoginArtifacts(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:new-login@example.com")
 	tokenPath := config.DriveTokenPath(cid)
-	snapshot, err := captureLoginRollbackSnapshot(cid, tokenPath)
+	snapshot, err := captureLoginRollbackSnapshot(cid, tokenPath, cfgPath)
 	require.NoError(t, err)
 
 	writeAccessTokenFile(t, cid, "new-token")
@@ -58,7 +58,7 @@ func TestRollbackLoginSideEffectsRemovesNewLoginArtifacts(t *testing.T) {
 	))
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, filepath.Join(t.TempDir(), "sync")))
 
-	require.NoError(t, rollbackLoginSideEffects(cfgPath, cid, &snapshot, true))
+	require.NoError(t, rollbackLoginSideEffects(cfgPath, cid, &snapshot))
 
 	_, tokenErr := tokenfile.Load(tokenPath)
 	require.ErrorIs(t, tokenErr, tokenfile.ErrNotFound)
@@ -78,6 +78,8 @@ func TestRollbackLoginSideEffectsRestoresExistingLoginArtifacts(t *testing.T) {
 	setTestDriveHome(t)
 
 	cid := driveid.MustCanonicalID("business:existing@contoso.com")
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, filepath.Join(t.TempDir(), "sync")))
 	writeAccessTokenFile(t, cid, "old-token")
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.UserID = "old-user"
@@ -92,7 +94,7 @@ func TestRollbackLoginSideEffectsRestoresExistingLoginArtifacts(t *testing.T) {
 	})
 
 	tokenPath := config.DriveTokenPath(cid)
-	snapshot, err := captureLoginRollbackSnapshot(cid, tokenPath)
+	snapshot, err := captureLoginRollbackSnapshot(cid, tokenPath, cfgPath)
 	require.NoError(t, err)
 
 	writeAccessTokenFile(t, cid, "new-token")
@@ -105,7 +107,7 @@ func TestRollbackLoginSideEffectsRestoresExistingLoginArtifacts(t *testing.T) {
 		driveid.New("new-drive"),
 	))
 
-	require.NoError(t, rollbackLoginSideEffects(filepath.Join(t.TempDir(), "config.toml"), cid, &snapshot, false))
+	require.NoError(t, rollbackLoginSideEffects(cfgPath, cid, &snapshot))
 
 	token, err := tokenfile.Load(tokenPath)
 	require.NoError(t, err)
@@ -123,4 +125,27 @@ func TestRollbackLoginSideEffectsRestoresExistingLoginArtifacts(t *testing.T) {
 	assert.Equal(t, "Old Drive", drive.DisplayName)
 	assert.Equal(t, loginRollbackOldDriveID, drive.RemoteDriveID)
 	assert.True(t, drive.PrimaryForAccount)
+}
+
+// Validates: R-3.3.1
+func TestRollbackLoginSideEffectsRemovesBackfilledSyncDir(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:backfill@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, filepath.Join(t.TempDir(), "initial")))
+	require.NoError(t, config.DeleteDriveKey(cfgPath, cid, "sync_dir"))
+
+	tokenPath := config.DriveTokenPath(cid)
+	snapshot, err := captureLoginRollbackSnapshot(cid, tokenPath, cfgPath)
+	require.NoError(t, err)
+
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", filepath.Join(t.TempDir(), "backfilled")))
+
+	require.NoError(t, rollbackLoginSideEffects(cfgPath, cid, &snapshot))
+
+	data, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "sync_dir")
+	assert.Contains(t, string(data), cid.String())
 }

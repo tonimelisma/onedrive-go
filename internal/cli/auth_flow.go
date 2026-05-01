@@ -41,7 +41,7 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 		return fmt.Errorf("cannot determine token path for drive %q", canonicalID.String())
 	}
 
-	rollbackSnapshot, err := captureLoginRollbackSnapshot(canonicalID, finalTokenPath)
+	rollbackSnapshot, err := captureLoginRollbackSnapshot(canonicalID, finalTokenPath, cc.CfgPath)
 	if err != nil {
 		cleanupPendingToken(cc, tempPath, "rollback snapshot failure")
 		return fmt.Errorf("snapshot login rollback state: %w", err)
@@ -60,7 +60,7 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 	}
 	if err := materializeDriveSyncDir(syncDir); err != nil {
 		baseErr := fmt.Errorf("creating sync directory: %w", err)
-		if rollbackErr := rollbackLoginSideEffects(cc.CfgPath, canonicalID, &rollbackSnapshot, added); rollbackErr != nil {
+		if rollbackErr := rollbackLoginSideEffects(cc.CfgPath, canonicalID, &rollbackSnapshot); rollbackErr != nil {
 			logger.Warn("login rollback failed",
 				"canonical_id", canonicalID.String(),
 				"error", rollbackErr,
@@ -113,6 +113,9 @@ type loginRollbackSnapshot struct {
 	tokenData []byte
 	hadToken  bool
 
+	hadConfigDrive   bool
+	hadConfigSyncDir bool
+
 	catalogAccount    config.CatalogAccount
 	hadCatalogAccount bool
 	catalogDrive      config.CatalogDrive
@@ -122,6 +125,7 @@ type loginRollbackSnapshot struct {
 func captureLoginRollbackSnapshot(
 	canonicalID driveid.CanonicalID,
 	tokenPath string,
+	cfgPath string,
 ) (loginRollbackSnapshot, error) {
 	snapshot := loginRollbackSnapshot{tokenPath: tokenPath}
 
@@ -132,6 +136,15 @@ func captureLoginRollbackSnapshot(
 		}
 		snapshot.tokenData = tokenData
 		snapshot.hadToken = found
+	}
+
+	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
+	if err != nil {
+		return loginRollbackSnapshot{}, fmt.Errorf("load config rollback snapshot: %w", err)
+	}
+	if drive, found := cfg.Drives[canonicalID]; found {
+		snapshot.hadConfigDrive = true
+		snapshot.hadConfigSyncDir = drive.SyncDir != ""
 	}
 
 	catalog, err := config.LoadCatalog()
@@ -154,16 +167,12 @@ func rollbackLoginSideEffects(
 	cfgPath string,
 	canonicalID driveid.CanonicalID,
 	snapshot *loginRollbackSnapshot,
-	removeDriveConfig bool,
 ) error {
 	var errs []error
 
-	if removeDriveConfig {
-		if err := config.DeleteDriveSection(cfgPath, canonicalID); err != nil {
-			errs = append(errs, fmt.Errorf("remove drive config: %w", err))
-		}
+	if err := restoreLoginConfigSnapshot(cfgPath, canonicalID, snapshot); err != nil {
+		errs = append(errs, fmt.Errorf("restore config: %w", err))
 	}
-
 	if err := restoreLoginCatalogSnapshot(canonicalID, snapshot); err != nil {
 		errs = append(errs, fmt.Errorf("restore catalog: %w", err))
 	}
@@ -172,6 +181,25 @@ func rollbackLoginSideEffects(
 	}
 
 	return errors.Join(errs...)
+}
+
+func restoreLoginConfigSnapshot(
+	cfgPath string,
+	canonicalID driveid.CanonicalID,
+	snapshot *loginRollbackSnapshot,
+) error {
+	switch {
+	case !snapshot.hadConfigDrive:
+		if err := config.DeleteDriveSection(cfgPath, canonicalID); err != nil {
+			return fmt.Errorf("delete added drive section: %w", err)
+		}
+	case !snapshot.hadConfigSyncDir:
+		if err := config.DeleteDriveKey(cfgPath, canonicalID, "sync_dir"); err != nil {
+			return fmt.Errorf("delete backfilled sync_dir: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func restoreLoginCatalogSnapshot(canonicalID driveid.CanonicalID, snapshot *loginRollbackSnapshot) error {
