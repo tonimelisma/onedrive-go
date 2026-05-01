@@ -915,6 +915,102 @@ func TestAddNewDrive_SyncDirCreateFailureRollsBackConfig(t *testing.T) {
 	assert.NotContains(t, cfg.Drives, cid)
 }
 
+// Validates: R-3.3.5
+func TestAddNewDrive_SyncDirCreateFailureRollsBackBackfilledSyncDir(t *testing.T) {
+	setTestDriveHome(t)
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
+	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
+
+	home, homeErr := os.UserHomeDir()
+	require.NoError(t, homeErr)
+	require.NoError(t, os.WriteFile(filepath.Join(home, "OneDrive"), []byte("not a directory"), 0o600))
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`["personal:user@example.com"]
+`), 0o600))
+
+	err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating sync directory")
+
+	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
+	require.NoError(t, loadErr)
+	drive, found := cfg.Drives[cid]
+	require.True(t, found)
+	assert.Empty(t, drive.SyncDir)
+}
+
+// Validates: R-3.3.5
+func TestRestoreDriveAddConfigMutation_AddedSectionSkipsConcurrentEdits(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`["personal:user@example.com"]
+sync_dir = "~/OneDrive"
+display_name = "Concurrent"
+`), 0o600))
+
+	err := restoreDriveAddConfigMutation(cfgPath, cid, config.EnsureDriveInConfigResult{
+		SyncDir: "~/OneDrive",
+		Added:   true,
+	})
+	require.NoError(t, err)
+
+	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
+	require.NoError(t, loadErr)
+	drive, found := cfg.Drives[cid]
+	require.True(t, found)
+	assert.Equal(t, "~/OneDrive", drive.SyncDir)
+	assert.Equal(t, "Concurrent", drive.DisplayName)
+}
+
+// Validates: R-3.3.5
+func TestRestoreDriveAddConfigMutation_BackfillSkipsChangedSyncDir(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`["personal:user@example.com"]
+sync_dir = "~/Concurrent"
+`), 0o600))
+
+	err := restoreDriveAddConfigMutation(cfgPath, cid, config.EnsureDriveInConfigResult{
+		SyncDir:                    "~/OneDrive",
+		BackfilledSyncDir:          true,
+		DriveBeforeSyncDirBackfill: &config.Drive{},
+	})
+	require.NoError(t, err)
+
+	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
+	require.NoError(t, loadErr)
+	drive, found := cfg.Drives[cid]
+	require.True(t, found)
+	assert.Equal(t, "~/Concurrent", drive.SyncDir)
+}
+
+// Validates: R-3.3.5
+func TestRestoreDriveAddConfigMutation_BackfillSkipsConcurrentEditsWithSameSyncDir(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`["personal:user@example.com"]
+sync_dir = "~/OneDrive"
+display_name = "Concurrent"
+`), 0o600))
+
+	err := restoreDriveAddConfigMutation(cfgPath, cid, config.EnsureDriveInConfigResult{
+		SyncDir:                    "~/OneDrive",
+		BackfilledSyncDir:          true,
+		DriveBeforeSyncDirBackfill: &config.Drive{},
+	})
+	require.NoError(t, err)
+
+	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
+	require.NoError(t, loadErr)
+	drive, found := cfg.Drives[cid]
+	require.True(t, found)
+	assert.Equal(t, "~/OneDrive", drive.SyncDir)
+	assert.Equal(t, "Concurrent", drive.DisplayName)
+}
+
 // --- deriveSharedDisplayName ---
 
 // Validates: R-3.6.3
