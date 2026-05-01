@@ -188,6 +188,38 @@ func TestStandaloneMountSelectionFromResolvedDrives_PreservesMountBoundaryFields
 }
 
 // Validates: R-2.8.1
+func TestStandaloneMountSelectionFromResolvedDrives_PausedDriveSkipsSyncDirValidation(t *testing.T) {
+	t.Parallel()
+
+	paused := &config.ResolvedDrive{
+		CanonicalID:  driveid.MustCanonicalID("personal:paused@example.com"),
+		DisplayName:  "Paused",
+		SyncDir:      "relative-sync",
+		DriveID:      driveid.New("paused-drive"),
+		Paused:       true,
+		SafetyConfig: config.SafetyConfig{MinFreeSpace: "0"},
+	}
+	runnable := &config.ResolvedDrive{
+		CanonicalID:  driveid.MustCanonicalID("personal:runnable@example.com"),
+		DisplayName:  "Runnable",
+		SyncDir:      t.TempDir(),
+		DriveID:      driveid.New("runnable-drive"),
+		SafetyConfig: config.SafetyConfig{MinFreeSpace: "0"},
+	}
+
+	selection := standaloneMountSelectionFromResolvedDrives([]*config.ResolvedDrive{paused, runnable})
+	require.Len(t, selection.Mounts, 2)
+	assert.Empty(t, selection.StartupResults)
+
+	assert.Equal(t, 0, selection.Mounts[0].SelectionIndex)
+	assert.True(t, selection.Mounts[0].Paused)
+	assert.Equal(t, paused.SyncDir, selection.Mounts[0].SyncRoot)
+	assert.Equal(t, 1, selection.Mounts[1].SelectionIndex)
+	assert.False(t, selection.Mounts[1].Paused)
+	assert.Equal(t, runnable.SyncDir, selection.Mounts[1].SyncRoot)
+}
+
+// Validates: R-2.8.1
 func TestStandaloneMountSelectionFromResolvedDrives_PrefersTokenOwnerAccountEmail(t *testing.T) {
 	setTestDriveHome(t)
 

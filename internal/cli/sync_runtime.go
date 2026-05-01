@@ -39,8 +39,10 @@ func standaloneMountConfigFromResolvedDrive(
 		return multisync.StandaloneMountConfig{}, fmt.Errorf("resolved drive is required")
 	}
 
-	if err := config.ValidateResolvedForSync(rd); err != nil {
-		return multisync.StandaloneMountConfig{}, fmt.Errorf("validate sync config for %s: %w", rd.CanonicalID, err)
+	if !rd.Paused {
+		if err := config.ValidateResolvedForSync(rd); err != nil {
+			return multisync.StandaloneMountConfig{}, fmt.Errorf("validate sync config for %s: %w", rd.CanonicalID, err)
+		}
 	}
 
 	statePath := rd.StatePath()

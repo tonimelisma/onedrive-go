@@ -314,7 +314,11 @@ lifecycle model for startup, shutdown, and reload.
 mount, and runs all mounts concurrently. Startup eligibility is classified per
 mount first, including CLI conversion failures, paused standalone parents, and
 managed child mounts skipped because their parent is missing or their content
-root conflicts. Runnable mounts then produce one completed `MountReport` each,
+root conflicts. Paused standalone parents are preserved as paused mount inputs
+without sync-dir structural validation, so stale dormant config cannot turn a
+paused drive into a fatal startup failure for unrelated runnable mounts. When a
+drive is unpaused, normal conversion and engine startup validation apply again.
+Runnable mounts then produce one completed `MountReport` each,
 while startup-ineligible mounts remain startup outcomes instead of synthetic
 completed reports. The control plane never aborts the whole pass because one
 mount failed; partial failure is isolated per mount. Both startup results and
