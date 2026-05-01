@@ -886,6 +886,33 @@ func TestAddNewDrive_WithToken(t *testing.T) {
 	assert.Contains(t, string(data), "personal:user@example.com")
 	assert.Contains(t, string(data), "sync_dir")
 	assert.Contains(t, string(data), "OneDrive")
+
+	home, homeErr := os.UserHomeDir()
+	require.NoError(t, homeErr)
+	info, statErr := os.Stat(filepath.Join(home, "OneDrive"))
+	require.NoError(t, statErr)
+	assert.True(t, info.IsDir())
+}
+
+func TestAddNewDrive_SyncDirCreateFailureRollsBackConfig(t *testing.T) {
+	setTestDriveHome(t)
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
+	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
+
+	home, homeErr := os.UserHomeDir()
+	require.NoError(t, homeErr)
+	require.NoError(t, os.WriteFile(filepath.Join(home, "OneDrive"), []byte("not a directory"), 0o600))
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating sync directory")
+
+	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
+	require.NoError(t, loadErr)
+	assert.NotContains(t, cfg.Drives, cid)
 }
 
 // --- deriveSharedDisplayName ---
@@ -1094,6 +1121,34 @@ func TestAddSharedDrive_NoToken(t *testing.T) {
 	assert.Contains(t, err.Error(), "no token file")
 }
 
+// Validates: R-3.3.5
+func TestAddSharedDrive_CreatesSyncDir(t *testing.T) {
+	setTestDriveHome(t)
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+
+	ownerCID := driveid.MustCanonicalID("personal:owner@example.com")
+	sharedCID := driveid.MustCanonicalID("shared:owner@example.com:driveX:itemY")
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_owner@example.com.json")
+	seedCatalogAccount(t, ownerCID, nil)
+
+	err := addSharedDrive(
+		t.Context(),
+		cfgPath,
+		io.Discard,
+		sharedCID,
+		"Shared Folder",
+		testDriveLogger(t),
+		driveops.NewSessionRuntime(nil, "test-agent", testDriveLogger(t)),
+	)
+	require.NoError(t, err)
+
+	home, homeErr := os.UserHomeDir()
+	require.NoError(t, homeErr)
+	info, statErr := os.Stat(filepath.Join(home, "OneDrive-Shared", "Shared Folder"))
+	require.NoError(t, statErr)
+	assert.True(t, info.IsDir())
+}
+
 func TestAddSharedDrive_ConfigWriteFailureRollsBackCatalogRegistration(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -1214,11 +1269,27 @@ func testDriveLogger(t *testing.T) *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
-// setTestDriveHome overrides HOME to a temp dir so DefaultDataDir() is isolated.
+// setTestDriveHome redirects every local root used by config path discovery.
+// Setting HOME alone is not sufficient because XDG roots take precedence on all
+// platforms.
 func setTestDriveHome(t *testing.T) {
 	t.Helper()
 
-	t.Setenv("HOME", t.TempDir())
+	tmpRoot := t.TempDir()
+	paths := []string{
+		filepath.Join(tmpRoot, "home"),
+		filepath.Join(tmpRoot, "data"),
+		filepath.Join(tmpRoot, "config"),
+		filepath.Join(tmpRoot, "cache"),
+	}
+	for _, path := range paths {
+		require.NoError(t, os.MkdirAll(path, 0o750))
+	}
+
+	t.Setenv("HOME", paths[0])
+	t.Setenv("XDG_DATA_HOME", paths[1])
+	t.Setenv("XDG_CONFIG_HOME", paths[2])
+	t.Setenv("XDG_CACHE_HOME", paths[3])
 }
 
 // writeTestTokenFile creates a token file using the canonical tokenfile.Save,

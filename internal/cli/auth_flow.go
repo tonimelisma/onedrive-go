@@ -50,15 +50,29 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 	if err != nil {
 		return fmt.Errorf("configuring drive: %w", err)
 	}
+	if err := materializeDriveSyncDir(syncDir); err != nil {
+		if added {
+			rollbackAddedDriveConfig(cc.CfgPath, canonicalID, logger, "login rollback failed to remove drive config")
+		}
+		return fmt.Errorf("creating sync directory: %w", err)
+	}
 
 	clearLoginAuthRequirement(ctx, email, logger)
 
 	if !added {
 		logger.Info("re-login detected, token and metadata refreshed", "canonical_id", canonicalID.String())
-		return writef(cc.Output(), "Token refreshed for %s.\n", email)
+		if err := writef(cc.Output(), "Token refreshed for %s.\n", email); err != nil {
+			return err
+		}
+		notifyDaemonIfRunning(ctx, cc)
+		return nil
 	}
 
-	return printLoginSuccess(cc.Output(), canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir)
+	if err := printLoginSuccess(cc.Output(), canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir); err != nil {
+		return err
+	}
+	notifyDaemonIfRunning(ctx, cc)
+	return nil
 }
 
 func persistLoginMetadata(
@@ -93,7 +107,14 @@ func authenticateLogin(
 	tempPath string,
 ) (graph.TokenSource, error) {
 	if useBrowser {
-		ts, err := graph.LoginWithBrowser(ctx, tempPath, openBrowser, cc.Logger)
+		ts, err := graph.LoginWithBrowser(ctx, tempPath, func(openCtx context.Context, authURL string) error {
+			openErr := openBrowser(openCtx, authURL)
+			if openErr != nil {
+				writeWarningf(cc.Status(), "Open this URL in your browser:\n%s\n", authURL)
+			}
+
+			return openErr
+		}, cc.Logger)
 		if err != nil {
 			return nil, fmt.Errorf("browser login: %w", err)
 		}

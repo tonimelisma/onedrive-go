@@ -30,7 +30,6 @@ func scratchMainDBPath(t *testing.T, db *sql.DB) string {
 		)
 		require.NoError(t, rows.Scan(&seq, &name, &file))
 		if name == "main" {
-			require.NotEmpty(t, file)
 			return file
 		}
 	}
@@ -116,6 +115,8 @@ func TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp(t *testing.T)
 	require.NotNil(t, cleanup)
 
 	scratchPath := scratchMainDBPath(t, scratch.rawDB())
+	require.NotEmpty(t, scratchPath)
+	scratchDir := filepath.Dir(scratchPath)
 	refreshAt := time.Unix(1700000000, 0).UTC()
 
 	state, err := scratch.ReadObservationState(ctx)
@@ -146,9 +147,7 @@ func TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp(t *testing.T)
 	assert.True(t, entry.RemoteSizeKnown)
 
 	require.NoError(t, cleanup(ctx))
-
-	_, statErr := os.Stat(filepath.Dir(scratchPath))
-	require.Error(t, statErr)
+	_, statErr := os.Stat(scratchDir)
 	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
 

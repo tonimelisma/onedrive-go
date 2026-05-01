@@ -42,6 +42,12 @@ Only two environment variables: `ONEDRIVE_GO_CONFIG` (config path override) and 
 
 Platform-specific paths following XDG (Linux) and Application Support (macOS) conventions. Config and data may share the same directory on macOS.
 
+Dev builds (`version == "dev"`) require full XDG isolation before any command
+bootstrap can proceed: `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, and `XDG_CACHE_HOME`
+must all be set. Partial isolation is rejected because a single missing root can
+fall back to production config, token/state, or cache locations. `scripts/dev-env.sh`
+is the canonical local helper for setting those roots.
+
 `ControlSocketPath()` normally places the Unix control socket under
 `DefaultDataDir()`. Unix socket path length is platform-bounded, so when the
 full data-dir socket path is too long the config layer derives a stable,
@@ -173,16 +179,23 @@ This table is the authoritative config-package view of the current schema.
 | `poll_interval` | `string` | `5m` | duration `>= 30s` | `sync --watch` | Remote observation fallback poll cadence. |
 | `websocket` | `bool` | `false` | boolean | `sync --watch` | Enables Socket.IO remote wakeups where supported. |
 | `dry_run` | `bool` | `false` | boolean | `sync` | Config-owned default for dry-run sync. CLI flag may override. |
-| `log_level` | `string` | `info` | `debug`, `info`, `warn`, `error` | `all CLI` | File-log verbosity. |
-| `log_file` | `string` | `""` (platform default location) | path string | `all CLI` | Empty means standard managed log path. |
-| `log_format` | `string` | `auto` | `auto`, `json`, `text` | `all CLI` | File-log format. |
+| `log_level` | `string` | `info` | `debug`, `info`, `warn`, `error` | `all CLI` | File-log verbosity. Console verbosity is owned by `--verbose`, `--debug`, and `--quiet`. |
+| `log_file` | `string` | `""` | path string | `all CLI` | Empty disables file logging. A non-empty path enables dual-channel logging. |
+| `log_format` | `string` | `auto` | `auto`, `json`, `text` | `all CLI` | Console log format. File logs are structured JSON. |
 | `log_retention_days` | `int` | `30` | `>= 1` | `all CLI` | Log rotation retention window. |
+
+`dry_run = true` is only a config-owned default for one-shot `sync`; it is not
+a global app mode and it does not make watch mode dry-run capable. When the
+effective one-shot value is true, the CLI follows the same bootstrap contract
+as any other one-shot sync: sync-bootstrap reconciliation, token refresh
+persistence, log-file open/create, and control-socket ownership still happen.
+Dry-run changes only the sync execution/commit semantics after setup.
 
 ### Per-Drive Fields
 
 | Key | Type | Default / effective default | Valid range / shape | Command class | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `sync_dir` | `string` | computed by `DefaultSyncDir()` when omitted | absolute or `~/...`; must be existing directory or creatable for `sync` | `sync` | File-operation commands require only the section, not this field. |
+| `sync_dir` | `string` | computed by `DefaultSyncDir()` when omitted | absolute or `~/...`; if present, must be a directory | `sync` | Login and `drive add` materialize the configured path. Sync does not create a missing path; engine startup reports that as a per-mount failure. File-operation commands require only the section, not this field. |
 | `paused` | `bool?` | unset / inherited as not paused | boolean when present | `sync`, `pause`, `resume`, `status`, `drive list` | `Drive.IsPaused()` is the single source of truth. |
 | `paused_until` | `string?` | empty | RFC3339 timestamp when present | `sync`, `pause`, `resume`, `status`, `drive list` | Timed pause expiry owned by config resolution. |
 | `display_name` | `string` | derived by `DefaultDisplayName()` when omitted | string | `display`, selector matching | Human-facing label for status and drive selection. |
@@ -377,7 +390,7 @@ step into the shared failure model: fatal read/parse errors map to `fatal`,
 successful loads with warnings map to `actionable`, and clean loads map to
 `success`.
 
-**Sync-specific validation** (`ValidateResolvedForSync`): enforces that the resolved `sync_dir` is set, absolute, and not a regular file. That validation happens after `buildResolvedDrive` has already applied either the explicit per-drive `sync_dir` or the deterministic runtime default for drives that omit it. Non-existent paths are allowed because sync creates them on first run; other stat failures are fatal. The CLI then materializes the validated directory and compiles selected `ResolvedDrive` values into `multisync.StandaloneMountConfig` before launching one-shot or watch sync. Called only by the `sync` command — file operations do not require an explicit `sync_dir` in config.
+**Sync-specific validation** (`ValidateResolvedForSync`): enforces that the resolved `sync_dir` is set and absolute, and that an existing path is a directory. That validation happens after `buildResolvedDrive` has already applied either the explicit per-drive `sync_dir` or the deterministic runtime default for drives that omit it. Non-existent paths are accepted by validation because engine startup owns root availability and reports a missing root as a per-mount `ErrMountRootUnavailable`. Login and `drive add` own creating sync roots when they enroll or repair drives; one-shot sync, watch startup, dry-run, and reload never create them. The CLI compiles resolved drives into `multisync.StandaloneMountConfig`; malformed per-drive sync settings become mount startup failures instead of aborting the whole selection. File operations do not require an explicit `sync_dir` in config.
 
 ## Config Holder
 
@@ -394,7 +407,7 @@ successful loads with warnings map to `actionable`, and clean loads map to
 
 ## Auto-Creation
 
-`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content. `EnsureDriveInConfig` calls `ResolveAccountNames()` (reads catalog-backed account records only, no token file access). Shared drives bypass `EnsureDriveInConfig` and write config directly via `AppendDriveSection` + `SetDriveKey`.
+`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content, and repair an existing drive section that is missing `sync_dir` by writing the deterministic default. `EnsureDriveInConfig` calls `ResolveAccountNames()` (reads catalog-backed account records only, no token file access). Shared drives bypass `EnsureDriveInConfig` and write config directly via `AppendDriveSection` + `SetDriveKey`; CLI enrollment then materializes the configured sync directory.
 
 Removing a drive or logging out an account deletes the relevant drive sections
 through `DeleteDriveSection()`, but it does not delete `config.toml` itself.

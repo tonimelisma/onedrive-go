@@ -127,6 +127,43 @@ func newSyncTestContext(parent context.Context, cfgPath string, statusWriter io.
 	return context.WithValue(parent, cliContextKey{}, cc)
 }
 
+func installDryRunSuccessRunner(t *testing.T, cc *CLIContext) *bool {
+	t.Helper()
+
+	called := false
+	cc.syncRunOnceRunner = func(
+		_ context.Context,
+		_ *config.Holder,
+		drives []*config.ResolvedDrive,
+		mode syncengine.SyncMode,
+		opts syncengine.RunOptions,
+		_ *slog.Logger,
+		controlSocketPath string,
+	) multisync.RunOnceResult {
+		called = true
+		require.Len(t, drives, 1)
+		assert.Equal(t, syncengine.SyncBidirectional, mode)
+		assert.True(t, opts.DryRun)
+		assert.NotEmpty(t, controlSocketPath)
+		return multisync.RunOnceResult{
+			Startup: multisync.StartupSelectionSummary{
+				Results: []multisync.MountStartupResult{{
+					Identity:    testStandaloneMountIdentity(drives[0].CanonicalID),
+					DisplayName: drives[0].DisplayName,
+					Status:      multisync.MountStartupRunnable,
+				}},
+			},
+			Reports: []*multisync.MountReport{{
+				Identity:    testStandaloneMountIdentity(drives[0].CanonicalID),
+				DisplayName: drives[0].DisplayName,
+				Report:      &syncengine.Report{Mode: mode, DryRun: true},
+			}},
+		}
+	}
+
+	return &called
+}
+
 func TestPrintMountReports_SingleMount_NoHeader(t *testing.T) {
 	t.Parallel()
 
@@ -532,7 +569,94 @@ sync_dir = %q
 	assert.True(t, called)
 }
 
-func TestRunSyncCommand_CreatesMissingSyncDirBeforeRunOnce(t *testing.T) {
+func TestRunSyncCommand_DryRunOpensLogFileAndWarnsOnFailure(t *testing.T) {
+	setTestDriveHome(t)
+
+	parentDir := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(parentDir, []byte("x"), 0o600))
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	syncDir := t.TempDir()
+	configBody := fmt.Sprintf(`
+dry_run = true
+log_file = %q
+
+["personal:test@example.com"]
+sync_dir = %q
+`, filepath.Join(parentDir, "sync.log"), syncDir)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
+
+	var status bytes.Buffer
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: io.Discard,
+		StatusWriter: &status,
+		CfgPath:      cfgPath,
+	}
+	called := installDryRunSuccessRunner(t, cc)
+
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
+	require.NoError(t, err)
+	assert.True(t, *called)
+	assert.Contains(t, status.String(), "cannot open log file")
+}
+
+func TestRunSyncCommand_PassesMissingSyncDirToRunOnce(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	syncDir := filepath.Join(t.TempDir(), "missing", "sync-root")
+	configBody := fmt.Sprintf(`
+["personal:test@example.com"]
+sync_dir = %q
+`, syncDir)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
+
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: io.Discard,
+		StatusWriter: io.Discard,
+		CfgPath:      cfgPath,
+	}
+	called := false
+	var gotDrives []*config.ResolvedDrive
+	cc.syncRunOnceRunner = func(
+		_ context.Context,
+		_ *config.Holder,
+		drives []*config.ResolvedDrive,
+		_ syncengine.SyncMode,
+		_ syncengine.RunOptions,
+		_ *slog.Logger,
+		_ string,
+	) multisync.RunOnceResult {
+		called = true
+		gotDrives = drives
+		require.Len(t, drives, 1)
+		return multisync.RunOnceResult{
+			Startup: multisync.StartupSelectionSummary{
+				Results: []multisync.MountStartupResult{{
+					SelectionIndex: 0,
+					Identity:       testStandaloneMountIdentity(drives[0].CanonicalID),
+					DisplayName:    drives[0].DisplayName,
+					Status:         multisync.MountStartupFatal,
+					Err:            fmt.Errorf("sync: opening sync tree %q: %w", drives[0].SyncDir, syncengine.ErrMountRootUnavailable),
+				}},
+			},
+		}
+	}
+
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mount root unavailable")
+	assert.True(t, called)
+	require.Len(t, gotDrives, 1)
+	assert.Equal(t, syncDir, gotDrives[0].SyncDir)
+
+	_, statErr := os.Stat(syncDir)
+	assert.True(t, os.IsNotExist(statErr), "sync must not create sync_dir during command startup")
+}
+
+func TestRunSyncCommand_DryRunPassesMissingSyncDirWithoutCreatingIt(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -554,40 +678,28 @@ sync_dir = %q
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
-		mode syncengine.SyncMode,
-		_ syncengine.RunOptions,
+		_ syncengine.SyncMode,
+		opts syncengine.RunOptions,
 		_ *slog.Logger,
 		_ string,
 	) multisync.RunOnceResult {
 		called = true
 		require.Len(t, drives, 1)
-		assert.Equal(t, syncengine.SyncBidirectional, mode)
-
-		info, err := os.Stat(syncDir)
-		require.NoError(t, err)
-		assert.True(t, info.IsDir())
-
-		return multisync.RunOnceResult{
-			Startup: multisync.StartupSelectionSummary{
-				Results: []multisync.MountStartupResult{{
-					Identity:    testStandaloneMountIdentity(drives[0].CanonicalID),
-					DisplayName: drives[0].DisplayName,
-					Status:      multisync.MountStartupRunnable,
-				}},
-			},
-			Reports: []*multisync.MountReport{{
-				Identity:    testStandaloneMountIdentity(drives[0].CanonicalID),
-				DisplayName: drives[0].DisplayName,
-				Report: &syncengine.Report{
-					Mode: mode,
-				},
-			}},
-		}
+		assert.Equal(t, syncDir, drives[0].SyncDir)
+		assert.True(t, opts.DryRun)
+		return multisync.RunOnceResult{}
 	}
 
-	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
+	dryRun := true
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{
+		Mode:   syncengine.SyncBidirectional,
+		DryRun: &dryRun,
+	})
 	require.NoError(t, err)
 	assert.True(t, called)
+
+	_, statErr := os.Stat(syncDir)
+	assert.True(t, os.IsNotExist(statErr), "dry-run must not create sync_dir")
 }
 
 func TestRunSyncCommand_CLIFalseOverridesConfigDryRun(t *testing.T) {
@@ -719,6 +831,48 @@ sync_dir = %q
 	assert.False(t, called, "one-shot sync owner must stop before engine startup when the socket path is impossible")
 }
 
+func TestRunSyncCommand_DryRunFailsWhenControlSocketPathCannotBeDerived(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	syncDir := t.TempDir()
+	configBody := fmt.Sprintf(`
+dry_run = true
+
+["personal:test@example.com"]
+sync_dir = %q
+`, syncDir)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
+
+	t.Setenv("XDG_DATA_HOME", filepath.Join(t.TempDir(), strings.Repeat("very-long-control-root-", 8)))
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), strings.Repeat("very-long-runtime-root-", 8)))
+
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: io.Discard,
+		StatusWriter: io.Discard,
+		CfgPath:      cfgPath,
+	}
+	called := false
+	cc.syncRunOnceRunner = func(
+		context.Context,
+		*config.Holder,
+		[]*config.ResolvedDrive,
+		syncengine.SyncMode,
+		syncengine.RunOptions,
+		*slog.Logger,
+		string,
+	) multisync.RunOnceResult {
+		called = true
+		return multisync.RunOnceResult{}
+	}
+
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolve control socket path")
+	assert.False(t, called)
+}
+
 func TestRunSyncCommand_FailsLoudlyWhenControlSocketPathCannotBeDerivedForWatch(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -763,7 +917,7 @@ sync_dir = %q
 	assert.False(t, called, "watch sync owner must stop before daemon startup when the socket path is impossible")
 }
 
-func TestRunSyncCommand_SkipsPausedInvalidDrivesDuringValidation(t *testing.T) {
+func TestRunSyncCommand_PassesPausedInvalidDriveToRunnerAsPaused(t *testing.T) {
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")

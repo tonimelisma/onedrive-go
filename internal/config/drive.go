@@ -345,23 +345,24 @@ func applyDriveOverrides(resolved *ResolvedDrive, drive *Drive, logger *slog.Log
 	_ = logger
 }
 
-// expandTilde replaces a leading "~/" with the user's home directory.
-// If os.UserHomeDir() fails, the path is returned unexpanded and a debug
-// log is emitted. This is safe because ValidateResolved() catches invalid
-// sync_dir paths downstream and will report a clear error to the user.
-func expandTilde(path string) string {
+// ExpandTilde replaces a leading "~/" with the user's home directory. If
+// os.UserHomeDir() fails, the path is returned unexpanded so downstream
+// validation can report the invalid sync_dir clearly.
+func ExpandTilde(path string) string {
 	if !strings.HasPrefix(path, "~/") {
 		return path
 	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		slog.Debug("expandTilde: could not determine home directory", "error", err)
-
 		return path
 	}
 
 	return filepath.Join(home, path[2:])
+}
+
+func expandTilde(path string) string {
+	return ExpandTilde(path)
 }
 
 // DiscoverTokens lists token files in the default data directory and returns

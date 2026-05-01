@@ -174,16 +174,18 @@ func isLoopbackBrowserHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// discoverAccount calls /me, /me/drive, and /me/organization to build the
-// canonical drive ID and extract the organization name. Returns the canonical
-// ID, user profile, org display name, and the primary drive's Graph API ID.
+// discoverAccount calls /me and /me/drive to build the canonical drive ID. Work
+// or school accounts also read /me/organization for display naming; personal
+// Microsoft accounts skip that endpoint because Graph does not support it.
+// Returns the canonical ID, user profile, org display name, and the primary
+// drive's Graph API ID.
 func discoverAccount(
 	ctx context.Context,
 	ts graph.TokenSource,
 	logger *slog.Logger,
 	runtime *driveops.SessionRuntime,
 ) (driveid.CanonicalID, *graph.User, string, driveid.ID, error) {
-	client, err := newGraphClientWithHTTP("", runtime.BootstrapMeta(), ts, logger)
+	client, err := newGraphClientWithHTTP(runtime.GraphBaseURL, runtime.BootstrapMeta(), ts, logger)
 	if err != nil {
 		return driveid.CanonicalID{}, nil, "", driveid.ID{}, err
 	}
@@ -221,15 +223,20 @@ func discoverAccount(
 	primaryDriveID := primary.ID
 	logger.Info("discovered primary drive", "drive_id", primaryDriveID.String())
 
-	// GET /me/organization -> org display name (business only)
+	// GET /me/organization -> org display name. Microsoft Graph documents this
+	// endpoint as unsupported for delegated personal Microsoft accounts.
 	var orgName string
 
-	org, err := client.Organization(ctx)
-	if err != nil {
-		logger.Warn("failed to fetch organization, continuing without org name", "error", err)
-	} else if org.DisplayName != "" {
-		orgName = org.DisplayName
-		logger.Info("discovered organization", "org_name", orgName)
+	if driveType == driveid.DriveTypePersonal {
+		logger.Debug("skipping organization discovery for personal account")
+	} else {
+		org, orgErr := client.Organization(ctx)
+		if orgErr != nil {
+			logger.Warn("failed to fetch organization, continuing without org name", "error", orgErr)
+		} else if org.DisplayName != "" {
+			orgName = org.DisplayName
+			logger.Info("discovered organization", "org_name", orgName)
+		}
 	}
 
 	cid, err := driveid.Construct(driveType, user.Email)

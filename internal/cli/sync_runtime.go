@@ -9,25 +9,10 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
-
-const syncRootDirPerms = 0o700
-
-func ensureResolvedSyncDir(rd *config.ResolvedDrive) error {
-	if rd == nil || rd.SyncDir == "" {
-		return nil
-	}
-
-	if err := localpath.MkdirAll(rd.SyncDir, syncRootDirPerms); err != nil {
-		return fmt.Errorf("create sync_dir for %s: %w", rd.CanonicalID, err)
-	}
-
-	return nil
-}
 
 func standaloneMountSelectionFromResolvedDrives(drives []*config.ResolvedDrive) multisync.StandaloneMountSelection {
 	selection := multisync.StandaloneMountSelection{
@@ -52,6 +37,10 @@ func standaloneMountConfigFromResolvedDrive(
 ) (multisync.StandaloneMountConfig, error) {
 	if rd == nil {
 		return multisync.StandaloneMountConfig{}, fmt.Errorf("resolved drive is required")
+	}
+
+	if err := config.ValidateResolvedForSync(rd); err != nil {
+		return multisync.StandaloneMountConfig{}, fmt.Errorf("validate sync config for %s: %w", rd.CanonicalID, err)
 	}
 
 	statePath := rd.StatePath()
@@ -177,16 +166,6 @@ func runSyncDaemonWithFactory(
 	drives, err := config.ResolveDrives(holder.Config(), selectors, true, logger)
 	if err != nil {
 		return fmt.Errorf("resolve drives: %w", err)
-	}
-
-	// Sync requires sync_dir on every drive (file ops like ls/get don't).
-	for _, rd := range drives {
-		if syncErr := config.ValidateResolvedForSync(rd); syncErr != nil {
-			return fmt.Errorf("validate drive %s: %w", rd.CanonicalID, syncErr)
-		}
-		if syncErr := ensureResolvedSyncDir(rd); syncErr != nil {
-			return syncErr
-		}
 	}
 
 	if len(drives) == 0 {

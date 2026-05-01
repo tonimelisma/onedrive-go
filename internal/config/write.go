@@ -81,12 +81,6 @@ func driveSection(canonicalID, syncDir string) string {
 // does not exist, it is created from the default template first. Used by login
 // and `drive add`. The write is atomic to avoid partial writes on crash.
 func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir string) error {
-	slog.Info("appending drive section to config",
-		"path", path,
-		"canonical_id", canonicalID.String(),
-		"sync_dir", syncDir,
-	)
-
 	data, err := readManagedFile(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -124,7 +118,18 @@ func EnsureDriveInConfig(path string, cid driveid.CanonicalID, logger *slog.Logg
 	}
 
 	if d, exists := cfg.Drives[cid]; exists {
-		return d.SyncDir, false, nil
+		if d.SyncDir != "" {
+			return d.SyncDir, false, nil
+		}
+
+		orgName, displayName := ResolveAccountNames(cid, logger)
+		existingDirs := CollectOtherSyncDirs(cfg, cid, logger)
+		syncDir := DefaultSyncDir(cid, orgName, displayName, existingDirs)
+		if err := SetDriveKey(path, cid, "sync_dir", syncDir); err != nil {
+			return "", false, fmt.Errorf("writing drive sync_dir: %w", err)
+		}
+
+		return syncDir, false, nil
 	}
 
 	// Use the catalog account record for org_name/display_name.
@@ -132,8 +137,6 @@ func EnsureDriveInConfig(path string, cid driveid.CanonicalID, logger *slog.Logg
 
 	existingDirs := CollectOtherSyncDirs(cfg, cid, logger)
 	syncDir := DefaultSyncDir(cid, orgName, displayName, existingDirs)
-
-	logger.Info("adding drive to config", "canonical_id", cid.String(), "sync_dir", syncDir)
 
 	if err := AppendDriveSection(path, cid, syncDir); err != nil {
 		return "", false, fmt.Errorf("writing drive config: %w", err)
@@ -149,13 +152,6 @@ func EnsureDriveInConfig(path string, cid driveid.CanonicalID, logger *slog.Logg
 // Value formatting: booleans ("true"/"false") are written without quotes;
 // all other values are written as quoted strings.
 func SetDriveKey(path string, canonicalID driveid.CanonicalID, key, value string) error {
-	slog.Info("setting drive key in config",
-		"path", path,
-		"canonical_id", canonicalID.String(),
-		"key", key,
-		"value", value,
-	)
-
 	data, err := readManagedFile(path)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
@@ -187,12 +183,6 @@ func SetDriveKey(path string, canonicalID driveid.CanonicalID, key, value string
 // returns nil if the key does not exist in the section. Used by `resume`
 // to clear `paused` and `paused_until` keys.
 func DeleteDriveKey(path string, canonicalID driveid.CanonicalID, key string) error {
-	slog.Info("deleting drive key from config",
-		"path", path,
-		"canonical_id", canonicalID.String(),
-		"key", key,
-	)
-
 	data, err := readManagedFile(path)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
@@ -219,11 +209,6 @@ func DeleteDriveKey(path string, canonicalID driveid.CanonicalID, key string) er
 // header for clean formatting. Used by `drive remove --purge` and
 // `logout --purge`.
 func DeleteDriveSection(path string, canonicalID driveid.CanonicalID) error {
-	slog.Info("deleting drive section from config",
-		"path", path,
-		"canonical_id", canonicalID.String(),
-	)
-
 	data, err := readManagedFile(path)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)

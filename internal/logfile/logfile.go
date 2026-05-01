@@ -64,7 +64,7 @@ func cleanOld(root *fsroot.Root, retentionDays int) {
 		if info.ModTime().Before(cutoff) {
 			removeErr := root.Remove(entry.Name())
 			if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-				fmt.Fprintf(os.Stderr, "warning: removing old log file %s: %v\n", entry.Name(), removeErr)
+				continue
 			}
 		}
 	}

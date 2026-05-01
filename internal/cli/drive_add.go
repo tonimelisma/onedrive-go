@@ -31,7 +31,7 @@ func runDriveAddWithContext(ctx context.Context, cc *CLIContext, args []string) 
 			return fmt.Errorf("parse shared drive identity: %w", err)
 		}
 
-		return addSharedDrive(ctx, cc.CfgPath, cc.Output(), cid, "", logger, cc.runtime())
+		return finishDriveAdd(ctx, cc, addSharedDrive(ctx, cc.CfgPath, cc.Output(), cid, "", logger, cc.runtime()))
 	}
 
 	selector := ""
@@ -58,7 +58,7 @@ func runDriveAddWithContext(ctx context.Context, cc *CLIContext, args []string) 
 				"Run 'onedrive-go drive list' to see valid canonical IDs", selector, err)
 		}
 
-		return addSharedDriveByName(ctx, cc, selector)
+		return finishDriveAdd(ctx, cc, addSharedDriveByName(ctx, cc, selector))
 	}
 
 	if cid.IsShared() {
@@ -79,10 +79,18 @@ func runDriveAddWithContext(ctx context.Context, cc *CLIContext, args []string) 
 			return fmt.Errorf("shared files are direct stat/get/put targets, not drives")
 		}
 
-		return addSharedDrive(ctx, cc.CfgPath, cc.Output(), cid, "", logger, cc.runtime())
+		return finishDriveAdd(ctx, cc, addSharedDrive(ctx, cc.CfgPath, cc.Output(), cid, "", logger, cc.runtime()))
 	}
 
-	return addNewDrive(cc.Output(), cc.CfgPath, cid, logger)
+	return finishDriveAdd(ctx, cc, addNewDrive(cc.Output(), cc.CfgPath, cid, logger))
+}
+
+func finishDriveAdd(ctx context.Context, cc *CLIContext, err error) error {
+	if err != nil {
+		return err
+	}
+	notifyDaemonIfRunning(ctx, cc)
+	return nil
 }
 
 // addNewDrive adds a new drive to the config with a computed default sync_dir.
@@ -102,6 +110,12 @@ func addNewDrive(w io.Writer, cfgPath string, cid driveid.CanonicalID, logger *s
 	syncDir, added, err := config.EnsureDriveInConfig(cfgPath, cid, logger)
 	if err != nil {
 		return fmt.Errorf("adding drive to config: %w", err)
+	}
+	if err := materializeDriveSyncDir(syncDir); err != nil {
+		if added {
+			rollbackAddedDriveConfig(cfgPath, cid, logger, "drive add rollback failed to remove config section")
+		}
+		return fmt.Errorf("creating sync directory: %w", err)
 	}
 
 	if !added {
@@ -196,6 +210,10 @@ func addSharedDrive(
 	if err := config.SetDriveKey(cfgPath, cid, "display_name", displayName); err != nil {
 		rollbackSharedDriveAdd(cfgPath, cid, priorCatalogDrive, hadPriorCatalogDrive, true, logger)
 		return fmt.Errorf("writing display_name to config: %w", err)
+	}
+	if err := materializeDriveSyncDir(syncDir); err != nil {
+		rollbackSharedDriveAdd(cfgPath, cid, priorCatalogDrive, hadPriorCatalogDrive, true, logger)
+		return fmt.Errorf("creating sync directory: %w", err)
 	}
 
 	return writef(w, "Added drive %s (%s) -> %s\n", displayName, cid.String(), syncDir)
