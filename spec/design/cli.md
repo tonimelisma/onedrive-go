@@ -242,11 +242,16 @@ session cleanup. `internal/multisync` must not call `config.DefaultDataDir()`,
 process state.
 
 Login and `drive add` materialize the configured `sync_dir` when they enroll or
-repair a drive. One-shot sync, watch startup, dry-run, and control-socket
-reloads never create a missing root. They compile resolved drives into mount
-configs and let engine startup report a missing root as a per-mount
-`ErrMountRootUnavailable`, so a missing `sync_dir` on one drive does not prevent
-other runnable mounts or reload changes from proceeding.
+repair a drive. The CLI validates the post-tilde `sync_dir` is absolute before
+creating any directory, so stale relative config cannot create directories
+under the caller's current working directory. If login cannot materialize the
+sync root after moving the token and recording catalog metadata, it rolls those
+login side effects back to the pre-login token/catalog/config state before
+returning the failure. One-shot sync, watch startup, dry-run, and
+control-socket reloads never create a missing root. They compile resolved
+drives into mount configs and let engine startup report a missing root as a
+per-mount `ErrMountRootUnavailable`, so a missing `sync_dir` on one drive does
+not prevent other runnable mounts or reload changes from proceeding.
 
 Dry-run one-shot sync resolves the dry-run decision before setup only so watch
 mode can reject an effective dry-run before doing work. Valid dry-run one-shot

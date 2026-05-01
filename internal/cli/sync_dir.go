@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"log/slog"
+	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -17,6 +18,9 @@ func materializeDriveSyncDir(syncDir string) error {
 	}
 
 	expanded := config.ExpandTilde(syncDir)
+	if !filepath.IsAbs(expanded) {
+		return fmt.Errorf("sync_dir %q must be absolute after tilde expansion", syncDir)
+	}
 	if err := localpath.MkdirAll(expanded, syncRootDirPerms); err != nil {
 		return fmt.Errorf("create sync_dir %q: %w", syncDir, err)
 	}

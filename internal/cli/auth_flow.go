@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) error {
@@ -39,6 +41,12 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 		return fmt.Errorf("cannot determine token path for drive %q", canonicalID.String())
 	}
 
+	rollbackSnapshot, err := captureLoginRollbackSnapshot(canonicalID, finalTokenPath)
+	if err != nil {
+		cleanupPendingToken(cc, tempPath, "rollback snapshot failure")
+		return fmt.Errorf("snapshot login rollback state: %w", err)
+	}
+
 	if moveErr := moveToken(tempPath, finalTokenPath); moveErr != nil {
 		return moveErr
 	}
@@ -51,10 +59,16 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 		return fmt.Errorf("configuring drive: %w", err)
 	}
 	if err := materializeDriveSyncDir(syncDir); err != nil {
-		if added {
-			rollbackAddedDriveConfig(cc.CfgPath, canonicalID, logger, "login rollback failed to remove drive config")
+		baseErr := fmt.Errorf("creating sync directory: %w", err)
+		if rollbackErr := rollbackLoginSideEffects(cc.CfgPath, canonicalID, rollbackSnapshot, added); rollbackErr != nil {
+			logger.Warn("login rollback failed",
+				"canonical_id", canonicalID.String(),
+				"error", rollbackErr,
+			)
+			return errors.Join(baseErr, fmt.Errorf("rollback login side effects: %w", rollbackErr))
 		}
-		return fmt.Errorf("creating sync directory: %w", err)
+
+		return baseErr
 	}
 
 	clearLoginAuthRequirement(ctx, email, logger)
@@ -92,6 +106,101 @@ func persistLoginMetadata(
 	); catalogErr != nil {
 		logger.Warn("failed to update catalog after login", "error", catalogErr)
 	}
+}
+
+type loginRollbackSnapshot struct {
+	tokenPath string
+	tokenData []byte
+	hadToken  bool
+
+	catalogAccount    config.CatalogAccount
+	hadCatalogAccount bool
+	catalogDrive      config.CatalogDrive
+	hadCatalogDrive   bool
+}
+
+func captureLoginRollbackSnapshot(
+	canonicalID driveid.CanonicalID,
+	tokenPath string,
+) (loginRollbackSnapshot, error) {
+	snapshot := loginRollbackSnapshot{tokenPath: tokenPath}
+
+	if tokenPath != "" {
+		tokenData, found, err := readManagedFileIfExists(tokenPath)
+		if err != nil {
+			return loginRollbackSnapshot{}, fmt.Errorf("read token rollback snapshot: %w", err)
+		}
+		snapshot.tokenData = tokenData
+		snapshot.hadToken = found
+	}
+
+	catalog, err := config.LoadCatalog()
+	if err != nil {
+		return loginRollbackSnapshot{}, fmt.Errorf("load catalog rollback snapshot: %w", err)
+	}
+	if account, found := catalog.AccountByCanonicalID(canonicalID); found {
+		snapshot.catalogAccount = account
+		snapshot.hadCatalogAccount = true
+	}
+	if drive, found := catalog.DriveByCanonicalID(canonicalID); found {
+		snapshot.catalogDrive = drive
+		snapshot.hadCatalogDrive = true
+	}
+
+	return snapshot, nil
+}
+
+func rollbackLoginSideEffects(
+	cfgPath string,
+	canonicalID driveid.CanonicalID,
+	snapshot loginRollbackSnapshot,
+	removeDriveConfig bool,
+) error {
+	var errs []error
+
+	if removeDriveConfig {
+		if err := config.DeleteDriveSection(cfgPath, canonicalID); err != nil {
+			errs = append(errs, fmt.Errorf("remove drive config: %w", err))
+		}
+	}
+
+	if err := restoreLoginCatalogSnapshot(canonicalID, snapshot); err != nil {
+		errs = append(errs, fmt.Errorf("restore catalog: %w", err))
+	}
+	if err := restoreLoginTokenSnapshot(snapshot); err != nil {
+		errs = append(errs, fmt.Errorf("restore token: %w", err))
+	}
+
+	return errors.Join(errs...)
+}
+
+func restoreLoginCatalogSnapshot(canonicalID driveid.CanonicalID, snapshot loginRollbackSnapshot) error {
+	return config.UpdateCatalog(func(catalog *config.Catalog) error {
+		if snapshot.hadCatalogAccount {
+			catalog.UpsertAccount(&snapshot.catalogAccount)
+		} else {
+			catalog.DeleteAccount(canonicalID)
+		}
+
+		if snapshot.hadCatalogDrive {
+			catalog.UpsertDrive(&snapshot.catalogDrive)
+		} else {
+			catalog.DeleteDrive(canonicalID)
+		}
+
+		return nil
+	})
+}
+
+func restoreLoginTokenSnapshot(snapshot loginRollbackSnapshot) error {
+	if snapshot.tokenPath == "" {
+		return nil
+	}
+	if !snapshot.hadToken {
+		return removePathIfExists(snapshot.tokenPath)
+	}
+
+	return writeManagedFile(snapshot.tokenPath, snapshot.tokenData, tokenfile.FilePerms, tokenfile.DirPerms, ".token-*.tmp")
 }
 
 func clearLoginAuthRequirement(ctx context.Context, email string, logger *slog.Logger) {
