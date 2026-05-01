@@ -572,11 +572,14 @@ Conflicts remain engine-owned and immediate:
 
 - edit/edit and create/create preserve both versions by renaming local to a
   conflict copy and downloading remote to the canonical path
-- edit/delete is planner-expanded into a local-wins upload
+- edit/delete is planner-expanded into a create-by-parent upload that recreates
+  the remote item from the edited local file
 - executor-time local-delete hash mismatch reports a superseded stale
   precondition so the next replan can emit the correct upload from current truth
 
-There is no durable conflict-request workflow and no CLI `resolve` command.
+The engine stores only the baseline and current-truth facts needed for the next
+plan; conflict handling is visible as those concrete actions and executor
+outcomes.
 
 ## Outcome And Scope Lifecycle
 

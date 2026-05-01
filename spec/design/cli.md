@@ -55,7 +55,8 @@ are inserted, updated, pruned, and validated.
 | `perf` | live owner perf view and capture |
 | `recycle-bin` | recycle-bin operations |
 
-There is no `resolve` command family anymore.
+Sync intent is derived from observation snapshots and planner reconciliation,
+then applied by the sync executor through concrete file and remote side effects.
 
 Configured standalone mount-root mounts keep `/` anchored at the configured
 mount root, not the backing drive root. Path-oriented file operations such
@@ -129,8 +130,8 @@ all failures into one blocked row: target unavailable, local root unavailable,
 unsafe/blocked path, cleanup blocked, and retryable final-drain work use
 distinct `state_reason`/`state_detail` values. Retryable final drain and
 cleanup states set `auto_retry=true`; cleanup or purge failures keep the child
-visible until the next reconciliation succeeds, while resolved manual discard
-removes the child row.
+visible until the next reconciliation succeeds. If the user deletes the local
+shortcut projection to discard it, parent release cleanup removes the child row.
 
 The target `status` surface projects the full sync model directly from:
 
@@ -141,10 +142,10 @@ The target `status` surface projects the full sync model directly from:
 - account/auth/degraded overlays
 - optional live perf
 
-There is no second sync-health command. There is no separate history-only
-surface for handled conflicts, and `status` no longer exposes delete-safety or
-manual conflict-request sections. It also no longer persists or renders a
-store-owned "last sync / duration / last error" history block.
+`status` is the single read-only sync-health surface. It renders current
+conditions, mount state, account/auth/degraded overlays, and optional live perf;
+handled sync work is represented by current planning and execution state rather
+than a separate history-only status section.
 
 Minimal-config direct file-operation coverage keeps that contract explicit:
 the full-suite `TestE2E_RoundTrip` status check asserts the current empty
@@ -180,8 +181,9 @@ The control-socket protocol is now mount-shaped:
   aggregate lines only when those counters are nonzero; the text remains
   path-free and ID-free.
 
-The socket is no longer a sync-decision submission surface because the
-architecture no longer has manual conflict or delete-approval workflows.
+The socket is runtime control and read-only observation only. Sync intent comes
+from observation, planner reconciliation, and executor side effects; clients
+cannot submit sync decisions over the socket.
 
 ## Pause / Resume
 
@@ -249,13 +251,9 @@ Generated follow-up commands in startup messages are shell-safe. Canonical IDs
 and other user-controlled values are single-quoted before they are rendered
 into suggested `pause` or `drive reset-sync-state` commands.
 
-## What The CLI No Longer Owns
+## CLI Boundary
 
-The CLI no longer owns:
-
-- durable conflict requests
-- blocked-delete approvals
-- fallback direct DB writes for sync decisions
-- `resolve` subcommands
-
-Manual sync decisions were removed from the current product surface.
+The CLI owns command parsing, configuration mutations, presentation, and control
+requests to a running sync owner. Sync decisions come from sync-owned
+observation, planning, execution, and store transactions; the CLI does not write
+planner decisions or executor outcomes directly.

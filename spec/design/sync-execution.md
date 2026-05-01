@@ -265,7 +265,7 @@ remove directories blocked by non-disposable children.
 The snapshot-based runtime does not execute abstract conflict rows. Conflict
 handling is expanded before execution into concrete work: `ActionConflictCopy`
 plus a dependent `ActionDownload` for keep-both cases, or `ActionUpload` for
-edit/delete. There is no durable conflict-request mailbox.
+edit/delete.
 
 ### Edit/edit and create/create
 
@@ -326,13 +326,8 @@ Scope admission evaluates both the action's current path and, for moves, the
 source `OldPath`. A move whose source subtree is blocked stays blocked even if
 its destination path is outside the blocked subtree.
 
-## What Execution No Longer Owns
+## Execution Boundary
 
-Execution no longer includes:
-
-- delete counters or blocked-delete approval workflows
-- durable conflict request application
-- baseline-only publication work for converged rows or fully removed rows
-- embedded shared-folder runtime machinery inside another drive
-
-Those concepts were removed from the current architecture.
+Execution owns concrete action side effects and reports their outcomes. Planning
+owns reconciliation decisions, baseline-only cleanup, conflict expansion, and
+shared-folder runtime topology before work reaches the executor.
