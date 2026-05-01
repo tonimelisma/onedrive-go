@@ -14,6 +14,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
+const (
+	loginRollbackOldDriveID     = "old-drive"
+	loginRollbackOldDisplayName = "Old User"
+)
+
 // Validates: R-3.3.1, R-3.3.5
 func TestMaterializeDriveSyncDirRejectsRelativePathWithoutCreatingDirectory(t *testing.T) {
 	cwd := t.TempDir()
@@ -53,10 +58,10 @@ func TestRollbackLoginSideEffectsRemovesNewLoginArtifacts(t *testing.T) {
 	))
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, filepath.Join(t.TempDir(), "sync")))
 
-	require.NoError(t, rollbackLoginSideEffects(cfgPath, cid, snapshot, true))
+	require.NoError(t, rollbackLoginSideEffects(cfgPath, cid, &snapshot, true))
 
 	_, tokenErr := tokenfile.Load(tokenPath)
-	assert.ErrorIs(t, tokenErr, tokenfile.ErrNotFound)
+	require.ErrorIs(t, tokenErr, tokenfile.ErrNotFound)
 	_, found := loadCatalogAccount(t, cid)
 	assert.False(t, found)
 	_, found = loadCatalogDrive(t, cid)
@@ -76,13 +81,13 @@ func TestRollbackLoginSideEffectsRestoresExistingLoginArtifacts(t *testing.T) {
 	writeAccessTokenFile(t, cid, "old-token")
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.UserID = "old-user"
-		account.DisplayName = "Old User"
+		account.DisplayName = loginRollbackOldDisplayName
 		account.OrgName = "Old Org"
-		account.PrimaryDriveID = "old-drive"
+		account.PrimaryDriveID = loginRollbackOldDriveID
 	})
 	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
 		drive.DisplayName = "Old Drive"
-		drive.RemoteDriveID = "old-drive"
+		drive.RemoteDriveID = loginRollbackOldDriveID
 		drive.PrimaryForAccount = true
 	})
 
@@ -100,7 +105,7 @@ func TestRollbackLoginSideEffectsRestoresExistingLoginArtifacts(t *testing.T) {
 		driveid.New("new-drive"),
 	))
 
-	require.NoError(t, rollbackLoginSideEffects(filepath.Join(t.TempDir(), "config.toml"), cid, snapshot, false))
+	require.NoError(t, rollbackLoginSideEffects(filepath.Join(t.TempDir(), "config.toml"), cid, &snapshot, false))
 
 	token, err := tokenfile.Load(tokenPath)
 	require.NoError(t, err)
@@ -109,13 +114,13 @@ func TestRollbackLoginSideEffectsRestoresExistingLoginArtifacts(t *testing.T) {
 	account, found := loadCatalogAccount(t, cid)
 	require.True(t, found)
 	assert.Equal(t, "old-user", account.UserID)
-	assert.Equal(t, "Old User", account.DisplayName)
+	assert.Equal(t, loginRollbackOldDisplayName, account.DisplayName)
 	assert.Equal(t, "Old Org", account.OrgName)
-	assert.Equal(t, "old-drive", account.PrimaryDriveID)
+	assert.Equal(t, loginRollbackOldDriveID, account.PrimaryDriveID)
 
 	drive, found := loadCatalogDrive(t, cid)
 	require.True(t, found)
 	assert.Equal(t, "Old Drive", drive.DisplayName)
-	assert.Equal(t, "old-drive", drive.RemoteDriveID)
+	assert.Equal(t, loginRollbackOldDriveID, drive.RemoteDriveID)
 	assert.True(t, drive.PrimaryForAccount)
 }

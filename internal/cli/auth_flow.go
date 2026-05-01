@@ -60,7 +60,7 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 	}
 	if err := materializeDriveSyncDir(syncDir); err != nil {
 		baseErr := fmt.Errorf("creating sync directory: %w", err)
-		if rollbackErr := rollbackLoginSideEffects(cc.CfgPath, canonicalID, rollbackSnapshot, added); rollbackErr != nil {
+		if rollbackErr := rollbackLoginSideEffects(cc.CfgPath, canonicalID, &rollbackSnapshot, added); rollbackErr != nil {
 			logger.Warn("login rollback failed",
 				"canonical_id", canonicalID.String(),
 				"error", rollbackErr,
@@ -153,7 +153,7 @@ func captureLoginRollbackSnapshot(
 func rollbackLoginSideEffects(
 	cfgPath string,
 	canonicalID driveid.CanonicalID,
-	snapshot loginRollbackSnapshot,
+	snapshot *loginRollbackSnapshot,
 	removeDriveConfig bool,
 ) error {
 	var errs []error
@@ -174,8 +174,8 @@ func rollbackLoginSideEffects(
 	return errors.Join(errs...)
 }
 
-func restoreLoginCatalogSnapshot(canonicalID driveid.CanonicalID, snapshot loginRollbackSnapshot) error {
-	return config.UpdateCatalog(func(catalog *config.Catalog) error {
+func restoreLoginCatalogSnapshot(canonicalID driveid.CanonicalID, snapshot *loginRollbackSnapshot) error {
+	if err := config.UpdateCatalog(func(catalog *config.Catalog) error {
 		if snapshot.hadCatalogAccount {
 			catalog.UpsertAccount(&snapshot.catalogAccount)
 		} else {
@@ -189,10 +189,14 @@ func restoreLoginCatalogSnapshot(canonicalID driveid.CanonicalID, snapshot login
 		}
 
 		return nil
-	})
+	}); err != nil {
+		return fmt.Errorf("update catalog: %w", err)
+	}
+
+	return nil
 }
 
-func restoreLoginTokenSnapshot(snapshot loginRollbackSnapshot) error {
+func restoreLoginTokenSnapshot(snapshot *loginRollbackSnapshot) error {
 	if snapshot.tokenPath == "" {
 		return nil
 	}
