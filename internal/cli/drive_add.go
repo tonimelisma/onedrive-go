@@ -107,18 +107,17 @@ func addNewDrive(w io.Writer, cfgPath string, cid driveid.CanonicalID, logger *s
 		return fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
 	}
 
-	syncDir, added, err := config.EnsureDriveInConfig(cfgPath, cid, logger)
+	ensureResult, err := config.EnsureDriveInConfigDetailed(cfgPath, cid, logger)
 	if err != nil {
 		return fmt.Errorf("adding drive to config: %w", err)
 	}
+	syncDir := ensureResult.SyncDir
 	if err := materializeDriveSyncDir(syncDir); err != nil {
-		if added {
-			rollbackAddedDriveConfig(cfgPath, cid, logger, "drive add rollback failed to remove config section")
-		}
+		rollbackDriveAddConfig(cfgPath, cid, ensureResult, logger, "drive add rollback failed to restore config")
 		return fmt.Errorf("creating sync directory: %w", err)
 	}
 
-	if !added {
+	if !ensureResult.Added {
 		return writef(w, "Drive %s is already configured.\n", cid.String())
 	}
 
@@ -128,6 +127,76 @@ func addNewDrive(w io.Writer, cfgPath string, cid driveid.CanonicalID, logger *s
 	}
 
 	return writef(w, "Added drive %s (%s) -> %s\n", driveDisplayName, cid.String(), syncDir)
+}
+
+func rollbackDriveAddConfig(
+	cfgPath string,
+	cid driveid.CanonicalID,
+	ensureResult config.EnsureDriveInConfigResult,
+	logger *slog.Logger,
+	reason string,
+) {
+	if err := restoreDriveAddConfigMutation(cfgPath, cid, ensureResult); err != nil {
+		logger.Warn(reason,
+			"drive", cid.String(),
+			"error", err,
+		)
+	}
+}
+
+func restoreDriveAddConfigMutation(
+	cfgPath string,
+	cid driveid.CanonicalID,
+	ensureResult config.EnsureDriveInConfigResult,
+) error {
+	switch {
+	case ensureResult.Added:
+		if err := deleteDriveAddSectionIfUnchanged(cfgPath, cid, ensureResult.SyncDir); err != nil {
+			return fmt.Errorf("delete added drive section: %w", err)
+		}
+	case ensureResult.BackfilledSyncDir:
+		if err := deleteDriveAddBackfilledSyncDirIfUnchanged(
+			cfgPath,
+			cid,
+			ensureResult.SyncDir,
+			ensureResult.DriveBeforeSyncDirBackfill,
+		); err != nil {
+			return fmt.Errorf("delete backfilled sync_dir: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func deleteDriveAddSectionIfUnchanged(
+	cfgPath string,
+	cid driveid.CanonicalID,
+	syncDir string,
+) error {
+	if _, err := config.DeleteDriveSectionIfDriveEquals(cfgPath, cid, &config.Drive{SyncDir: syncDir}); err != nil {
+		return fmt.Errorf("delete drive section: %w", err)
+	}
+
+	return nil
+}
+
+func deleteDriveAddBackfilledSyncDirIfUnchanged(
+	cfgPath string,
+	cid driveid.CanonicalID,
+	syncDir string,
+	driveBeforeBackfill *config.Drive,
+) error {
+	if driveBeforeBackfill == nil {
+		return nil
+	}
+
+	expected := *driveBeforeBackfill
+	expected.SyncDir = syncDir
+	if _, err := config.DeleteDriveKeyIfDriveEquals(cfgPath, cid, "sync_dir", &expected); err != nil {
+		return fmt.Errorf("delete drive sync_dir key: %w", err)
+	}
+
+	return nil
 }
 
 // listAvailableDrives lists drives that can be added. Shows usage guidance

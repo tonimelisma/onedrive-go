@@ -157,8 +157,15 @@ func newStatusConditionDescriptor(title, reason, action string) statusConditionD
 	}
 }
 
+func unexpectedStatusConditionDescriptor() statusConditionDescriptor {
+	return newStatusConditionDescriptor(
+		"SYNC CONDITION",
+		"An unexpected sync condition needs attention.",
+		"Check logs for details or rerun status after the next sync pass.",
+	)
+}
+
 func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionDescriptor {
-	//nolint:exhaustive // This helper intentionally handles only the remote-family subset and falls back for the rest.
 	switch key {
 	case syncengine.ConditionQuotaExceeded:
 		return newStatusConditionDescriptor(
@@ -190,17 +197,24 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 			"This remote content can no longer be downloaded with your current permissions.",
 			"Restore access to the shared item, or remove the blocked content from this sync scope.",
 		)
+	case syncengine.ConditionAuthenticationRequired,
+		syncengine.ConditionLocalReadDenied,
+		syncengine.ConditionLocalWriteDenied,
+		syncengine.ConditionInvalidFilename,
+		syncengine.ConditionPathTooLong,
+		syncengine.ConditionFileTooLarge,
+		syncengine.ConditionCaseCollision,
+		syncengine.ConditionDiskFull,
+		syncengine.ConditionHashError,
+		syncengine.ConditionFileTooLargeForSpace,
+		syncengine.ConditionUnexpectedCondition:
+		return unexpectedStatusConditionDescriptor()
 	default:
-		return newStatusConditionDescriptor(
-			"SYNC CONDITION",
-			"An unexpected sync condition needs attention.",
-			"Check logs for details or rerun status after the next sync pass.",
-		)
+		return unexpectedStatusConditionDescriptor()
 	}
 }
 
 func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusConditionDescriptor {
-	//nolint:exhaustive // This helper intentionally handles only the filesystem-family subset and falls back for the rest.
 	switch key {
 	case syncengine.ConditionLocalReadDenied:
 		return newStatusConditionDescriptor(
@@ -238,17 +252,23 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 			"Two files differ only in letter case, which OneDrive cannot distinguish.",
 			"Rename one of the conflicting files.",
 		)
+	case syncengine.ConditionAuthenticationRequired,
+		syncengine.ConditionQuotaExceeded,
+		syncengine.ConditionServiceOutage,
+		syncengine.ConditionRateLimited,
+		syncengine.ConditionRemoteWriteDenied,
+		syncengine.ConditionRemoteReadDenied,
+		syncengine.ConditionDiskFull,
+		syncengine.ConditionHashError,
+		syncengine.ConditionFileTooLargeForSpace,
+		syncengine.ConditionUnexpectedCondition:
+		return unexpectedStatusConditionDescriptor()
 	default:
-		return newStatusConditionDescriptor(
-			"SYNC CONDITION",
-			"An unexpected sync condition needs attention.",
-			"Check logs for details or rerun status after the next sync pass.",
-		)
+		return unexpectedStatusConditionDescriptor()
 	}
 }
 
 func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusConditionDescriptor {
-	//nolint:exhaustive // This helper intentionally handles only the local-runtime subset and falls back for the rest.
 	switch key {
 	case syncengine.ConditionDiskFull:
 		return newStatusConditionDescriptor(
@@ -268,12 +288,22 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 			"The file is larger than available local disk space.",
 			"Free up local disk space to fit this file.",
 		)
+	case syncengine.ConditionAuthenticationRequired,
+		syncengine.ConditionQuotaExceeded,
+		syncengine.ConditionServiceOutage,
+		syncengine.ConditionRateLimited,
+		syncengine.ConditionRemoteWriteDenied,
+		syncengine.ConditionRemoteReadDenied,
+		syncengine.ConditionLocalReadDenied,
+		syncengine.ConditionLocalWriteDenied,
+		syncengine.ConditionInvalidFilename,
+		syncengine.ConditionPathTooLong,
+		syncengine.ConditionFileTooLarge,
+		syncengine.ConditionCaseCollision,
+		syncengine.ConditionUnexpectedCondition:
+		return unexpectedStatusConditionDescriptor()
 	default:
-		return newStatusConditionDescriptor(
-			"SYNC CONDITION",
-			"An unexpected sync condition needs attention.",
-			"Check logs for details or rerun status after the next sync pass.",
-		)
+		return unexpectedStatusConditionDescriptor()
 	}
 }
 

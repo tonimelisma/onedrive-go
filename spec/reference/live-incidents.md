@@ -1500,7 +1500,7 @@ Promoted docs: [graph-api-quirks.md#post-mutation-visibility-lag](graph-api-quir
 ## LI-20260405-07: Destination path stayed unreadable after successful mutation
 
 First seen: 2026-04-05
-Last seen: 2026-04-10
+Last seen: 2026-05-01
 Area: `e2e_full`, CLI mutation follow-on path reads
 Suite / test: `verify e2e-full`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`; later `TestE2E_Sync_BidirectionalMerge`, `TestE2E_Resolve_Both_PreservesConflictCopy`, local `verify default` scoped-sync fixture setup, and `TestE2E_RoundTrip/rm_permanent`
 Classification: graph quirk
@@ -1938,6 +1938,14 @@ Evidence:
   newly unblocked scoped subtree. That test is also a scope-transition case,
   so it now uses the existing 3-minute `remoteScopeTransitionTimeout` instead
   of the shorter 90-second generic sync-convergence budget.
+- May 1, 2026 local `go run ./cmd/devtool verify --dod --stage pre-pr`
+  reproduced the same family in `TestE2E_Sync_DownloadOnly`: the convergence
+  loop timed out after repeated `sync --download-only` runs reported `No
+  changes detected` while root delta omitted the freshly created
+  `e2e-sync-dl-...` subtree. An immediate isolated rerun of
+  `go test -tags=e2e -run '^TestE2E_Sync_DownloadOnly$' -count=1 -v ./e2e/...`
+  passed in 35.5 seconds, matching the established intermittent delta-lag
+  profile rather than a deterministic product regression.
 Resolution / mitigation: The fast E2E tests now wait for the real product outcome, the expected local sync result, instead of assuming the first pass after direct REST visibility or scope unblocking must succeed. Delta-sensitive live sync tests now reuse the same eventual-convergence helper pattern, and scheduled/manual `devtool verify e2e-full --classify-live-quirks` may rerun this exact test family once when the known delta-lag family recurs. Those same live waits now emit `timing-summary.json`, so recurring convergence gaps show up as measured windows rather than only as pass/fail noise.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md)
 
