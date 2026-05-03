@@ -973,6 +973,41 @@ func TestFullDelta_SkipsUnrecoverableDeletedItemAbsentFromBaseline(t *testing.T)
 	assert.Equal(t, "delta-link", token)
 }
 
+// Validates: R-6.7.28
+func TestFullDelta_SkipsUntrackedDeletedItemWithKnownParentButEmptyName(t *testing.T) {
+	t.Parallel()
+
+	// A deleted item absent from baseline still needs its own name before the
+	// observer can identify the child path. A known parent proves only where
+	// the item used to live, not which child should be deleted.
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(synctest.TestDriveID)},
+					{ID: "folder", Name: "Projects", ParentID: "root", DriveID: driveid.New(synctest.TestDriveID), IsFolder: true},
+					{
+						ID:        "deleted-child",
+						ParentID:  "folder",
+						DriveID:   driveid.New(synctest.TestDriveID),
+						IsDeleted: true,
+					},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	events, token, err := obs.FullDelta(t.Context(), "saved-token")
+	require.NoError(t, err, "FullDelta")
+
+	require.Len(t, events, 1)
+	assert.Equal(t, ChangeCreate, events[0].Type)
+	assert.Equal(t, "Projects", events[0].Path)
+	assert.Equal(t, "delta-link", token)
+}
+
 func fullDeltaSingleItemEvents(t *testing.T, item *graph.Item) []ChangeEvent {
 	t.Helper()
 
