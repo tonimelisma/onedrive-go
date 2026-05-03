@@ -54,7 +54,7 @@ Promotion contract:
 | LI-20260407-01 | Follow-on `put` lost a freshly visible parent path | fixed | graph quirk | 2026-04-07 | no |
 | LI-20260406-01 | Personal scoped delta not ready after path resolution | fixed | graph quirk | 2026-04-06 | no |
 | LI-20260405-05 | One-shot crash recovery left durable work unreplayed | fixed | product bug | 2026-04-05 | no |
-| LI-20260405-04 | Fast E2E download-only assumed delta visibility too early | closed as test | graph quirk | 2026-04-10 | yes |
+| LI-20260405-04 | Fast E2E download-only assumed delta visibility too early | closed as test | graph quirk | 2026-05-01 | yes |
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
@@ -1897,7 +1897,7 @@ Promoted docs: [sync-store.md](../design/sync-store.md), [sync-engine.md](../des
 ## LI-20260405-04: Fast E2E download-only tests assumed delta visibility too early
 
 First seen: 2026-04-05
-Last seen: 2026-04-10
+Last seen: 2026-05-01
 Area: fast-e2e, download-only sync
 Suite / test: `e2e`, `TestE2E_Sync_DownloadOnly`; later `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile`
 Classification: graph quirk
