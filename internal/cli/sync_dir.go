@@ -2,11 +2,9 @@ package cli
 
 import (
 	"fmt"
-	"log/slog"
 	"path/filepath"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -26,13 +24,4 @@ func materializeDriveSyncDir(syncDir string) error {
 	}
 
 	return nil
-}
-
-func rollbackAddedDriveConfig(cfgPath string, cid driveid.CanonicalID, logger *slog.Logger, reason string) {
-	if err := config.DeleteDriveSection(cfgPath, cid); err != nil {
-		logger.Warn(reason,
-			"drive", cid.String(),
-			"error", err,
-		)
-	}
 }

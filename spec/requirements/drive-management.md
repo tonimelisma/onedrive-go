@@ -46,7 +46,10 @@ The system shall support all four drive types:
   `drive remove`. If the drive is already configured, the system shall report
   it as such without creating a duplicate. Drive add shall materialize the
   configured sync directory only after validating that the resolved path is
-  absolute, and request a control-socket reload when a watch daemon is running.
+  absolute. If that materialization fails, drive add shall roll back config
+  mutations made during the attempt, including backfilled `sync_dir` keys on
+  existing drive sections, and request a control-socket reload when a watch
+  daemon is running.
   [verified]
 - R-3.3.6: When a search term without `:` is passed to `drive add`, the system
   shall match against shared folder names using case-insensitive substring

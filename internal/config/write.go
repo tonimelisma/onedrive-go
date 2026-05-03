@@ -5,10 +5,15 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/fsroot"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // configFilePermissions is the standard permission mode for config files.
@@ -81,6 +86,12 @@ func driveSection(canonicalID, syncDir string) string {
 // does not exist, it is created from the default template first. Used by login
 // and `drive add`. The write is atomic to avoid partial writes on crash.
 func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir string) error {
+	return withConfigMutationLock(path, true, func() error {
+		return appendDriveSectionSnapshot(path, canonicalID, syncDir)
+	})
+}
+
+func appendDriveSectionSnapshot(path string, canonicalID driveid.CanonicalID, syncDir string) error {
 	data, err := readManagedFile(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -112,24 +123,54 @@ func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir st
 // the drive section. Returns the sync directory, whether a new section was added,
 // and any error. Used by both login and `drive add`.
 func EnsureDriveInConfig(path string, cid driveid.CanonicalID, logger *slog.Logger) (string, bool, error) {
+	result, err := EnsureDriveInConfigDetailed(path, cid, logger)
+	if err != nil {
+		return "", false, err
+	}
+
+	return result.SyncDir, result.Added, nil
+}
+
+// EnsureDriveInConfigResult describes the config mutation performed by
+// EnsureDriveInConfigDetailed. Callers that need rollback semantics must use
+// these current-attempt flags rather than a stale pre-write snapshot.
+type EnsureDriveInConfigResult struct {
+	SyncDir                    string
+	Added                      bool
+	BackfilledSyncDir          bool
+	DriveBeforeSyncDirBackfill *Drive
+}
+
+// EnsureDriveInConfigDetailed is the mutation-reporting form of
+// EnsureDriveInConfig. It distinguishes newly added drive sections from existing
+// sections whose missing sync_dir key was backfilled.
+func EnsureDriveInConfigDetailed(path string, cid driveid.CanonicalID, logger *slog.Logger) (EnsureDriveInConfigResult, error) {
 	cfg, err := LoadOrDefault(path, logger)
 	if err != nil {
-		return "", false, fmt.Errorf("loading config: %w", err)
+		return EnsureDriveInConfigResult{}, fmt.Errorf("loading config: %w", err)
 	}
 
 	if d, exists := cfg.Drives[cid]; exists {
 		if d.SyncDir != "" {
-			return d.SyncDir, false, nil
+			return EnsureDriveInConfigResult{SyncDir: d.SyncDir}, nil
 		}
 
 		orgName, displayName := ResolveAccountNames(cid, logger)
 		existingDirs := CollectOtherSyncDirs(cfg, cid, logger)
 		syncDir := DefaultSyncDir(cid, orgName, displayName, existingDirs)
-		if err := SetDriveKey(path, cid, "sync_dir", syncDir); err != nil {
-			return "", false, fmt.Errorf("writing drive sync_dir: %w", err)
+		writtenSyncDir, inserted, driveBeforeBackfill, err := setDriveStringKeyIfMissing(path, cid, "sync_dir", syncDir)
+		if err != nil {
+			return EnsureDriveInConfigResult{}, fmt.Errorf("writing drive sync_dir: %w", err)
+		}
+		if !inserted {
+			return EnsureDriveInConfigResult{SyncDir: writtenSyncDir}, nil
 		}
 
-		return syncDir, false, nil
+		return EnsureDriveInConfigResult{
+			SyncDir:                    syncDir,
+			BackfilledSyncDir:          true,
+			DriveBeforeSyncDirBackfill: driveBeforeBackfill,
+		}, nil
 	}
 
 	// Use the catalog account record for org_name/display_name.
@@ -139,10 +180,13 @@ func EnsureDriveInConfig(path string, cid driveid.CanonicalID, logger *slog.Logg
 	syncDir := DefaultSyncDir(cid, orgName, displayName, existingDirs)
 
 	if err := AppendDriveSection(path, cid, syncDir); err != nil {
-		return "", false, fmt.Errorf("writing drive config: %w", err)
+		return EnsureDriveInConfigResult{}, fmt.Errorf("writing drive config: %w", err)
 	}
 
-	return syncDir, true, nil
+	return EnsureDriveInConfigResult{
+		SyncDir: syncDir,
+		Added:   true,
+	}, nil
 }
 
 // SetDriveKey finds a drive section by canonical ID and sets a key-value pair.
@@ -152,6 +196,12 @@ func EnsureDriveInConfig(path string, cid driveid.CanonicalID, logger *slog.Logg
 // Value formatting: booleans ("true"/"false") are written without quotes;
 // all other values are written as quoted strings.
 func SetDriveKey(path string, canonicalID driveid.CanonicalID, key, value string) error {
+	return withConfigMutationLock(path, false, func() error {
+		return setDriveKeySnapshot(path, canonicalID, key, value)
+	})
+}
+
+func setDriveKeySnapshot(path string, canonicalID driveid.CanonicalID, key, value string) error {
 	data, err := readManagedFile(path)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
@@ -179,29 +229,160 @@ func SetDriveKey(path string, canonicalID driveid.CanonicalID, key, value string
 	return atomicWriteFile(path, []byte(renderLines(lines)))
 }
 
-// DeleteDriveKey removes a single key from a drive section. Idempotent:
-// returns nil if the key does not exist in the section. Used by `resume`
-// to clear `paused` and `paused_until` keys.
-func DeleteDriveKey(path string, canonicalID driveid.CanonicalID, key string) error {
+// setDriveStringKeyIfMissing inserts a string-valued key only when it is still
+// absent at write time. It reports the value now present and whether this call
+// inserted it, letting callers avoid treating concurrent writes as their own.
+func setDriveStringKeyIfMissing(
+	path string,
+	canonicalID driveid.CanonicalID,
+	key string,
+	value string,
+) (string, bool, *Drive, error) {
+	var valueNow string
+	var inserted bool
+	var driveBeforeInsert *Drive
+	if err := withConfigMutationLock(path, false, func() error {
+		var err error
+		valueNow, inserted, driveBeforeInsert, err = setDriveStringKeyIfMissingSnapshot(path, canonicalID, key, value)
+		return err
+	}); err != nil {
+		return "", false, nil, err
+	}
+
+	return valueNow, inserted, driveBeforeInsert, nil
+}
+
+func setDriveStringKeyIfMissingSnapshot(
+	path string,
+	canonicalID driveid.CanonicalID,
+	key string,
+	value string,
+) (string, bool, *Drive, error) {
 	data, err := readManagedFile(path)
 	if err != nil {
-		return fmt.Errorf("reading config file: %w", err)
+		return "", false, nil, fmt.Errorf("reading config file: %w", err)
 	}
 
 	lines := parseLines(string(data))
 
 	headerIdx, found := findSectionByName(lines, canonicalID.String())
 	if !found {
-		return fmt.Errorf("drive section %q not found in config", canonicalID.String())
+		return "", false, nil, fmt.Errorf("drive section %q not found in config", canonicalID.String())
+	}
+
+	driveBeforeInsert, found, err := driveFromConfigSnapshot(path, data, canonicalID)
+	if err != nil {
+		return "", false, nil, err
+	}
+	if !found {
+		return "", false, nil, fmt.Errorf("drive section %q not found in config", canonicalID.String())
 	}
 
 	contentStart, contentEnd := sectionContentRange(lines, headerIdx)
-
 	if idx, keyFound := findKeyInRange(lines, contentStart, contentEnd, key); keyFound {
-		lines = append(lines[:idx], lines[idx+1:]...)
+		existingValue, err := parseTOMLStringValue(lines[idx].value)
+		if err != nil {
+			return "", false, nil, fmt.Errorf("parse existing %s: %w", key, err)
+		}
+
+		return existingValue, false, nil, nil
+	}
+
+	formattedValue := formatTOMLValue(value)
+	newLine := parseLine(renderKeyValueLine(key, formattedValue, ""))
+	lines = append(lines[:headerIdx+1], append([]parsedLine{newLine}, lines[headerIdx+1:]...)...)
+
+	if err := atomicWriteFile(path, []byte(renderLines(lines))); err != nil {
+		return "", false, nil, err
+	}
+
+	return value, true, &driveBeforeInsert, nil
+}
+
+func parseTOMLStringValue(value string) (string, error) {
+	unquoted, err := strconv.Unquote(strings.TrimSpace(value))
+	if err != nil {
+		return "", fmt.Errorf("unquote string value: %w", err)
+	}
+
+	return unquoted, nil
+}
+
+// DeleteDriveKey removes a single key from a drive section. Idempotent:
+// returns nil if the key does not exist in the section. Used by `resume`
+// to clear `paused` and `paused_until` keys.
+func DeleteDriveKey(path string, canonicalID driveid.CanonicalID, key string) error {
+	return withConfigMutationLock(path, false, func() error {
+		return deleteDriveKeySnapshot(path, canonicalID, key)
+	})
+}
+
+func deleteDriveKeySnapshot(path string, canonicalID driveid.CanonicalID, key string) error {
+	data, err := readManagedFile(path)
+	if err != nil {
+		return fmt.Errorf("reading config file: %w", err)
+	}
+
+	lines, sectionFound, _ := deleteDriveKeyFromSnapshot(data, canonicalID, key)
+	if !sectionFound {
+		return fmt.Errorf("drive section %q not found in config", canonicalID.String())
 	}
 
 	return atomicWriteFile(path, []byte(renderLines(lines)))
+}
+
+// DeleteDriveKeyIfDriveEquals removes a single key from a drive section only
+// when the currently loaded drive config equals expected. The equality check
+// and delete run under the config mutation lock and are derived from one
+// file snapshot so callers can use it for rollback without deleting keys from
+// unrelated config edits.
+func DeleteDriveKeyIfDriveEquals(
+	path string,
+	canonicalID driveid.CanonicalID,
+	key string,
+	expected *Drive,
+) (bool, error) {
+	var deleted bool
+	lockErr := withConfigMutationLock(path, false, func() error {
+		deletedNow, err := deleteDriveKeyIfDriveEqualsSnapshot(path, canonicalID, key, expected)
+		deleted = deletedNow
+		return err
+	})
+	if lockErr != nil {
+		return false, lockErr
+	}
+
+	return deleted, nil
+}
+
+func deleteDriveKeyIfDriveEqualsSnapshot(
+	path string,
+	canonicalID driveid.CanonicalID,
+	key string,
+	expected *Drive,
+) (bool, error) {
+	data, err := readManagedFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("reading config file: %w", err)
+	}
+
+	matches, err := driveSnapshotEquals(path, data, canonicalID, expected)
+	if err != nil {
+		return false, err
+	}
+	if !matches {
+		return false, nil
+	}
+
+	lines, sectionFound, keyDeleted := deleteDriveKeyFromSnapshot(data, canonicalID, key)
+	if !sectionFound || !keyDeleted {
+		return false, nil
+	}
+
+	return true, atomicWriteFile(path, []byte(renderLines(lines)))
 }
 
 // DeleteDriveSection removes a drive section (header + all keys) from the
@@ -209,29 +390,74 @@ func DeleteDriveKey(path string, canonicalID driveid.CanonicalID, key string) er
 // header for clean formatting. Used by `drive remove --purge` and
 // `logout --purge`.
 func DeleteDriveSection(path string, canonicalID driveid.CanonicalID) error {
+	return withConfigMutationLock(path, false, func() error {
+		return deleteDriveSectionSnapshot(path, canonicalID)
+	})
+}
+
+func deleteDriveSectionSnapshot(path string, canonicalID driveid.CanonicalID) error {
 	data, err := readManagedFile(path)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
 	}
 
-	lines := parseLines(string(data))
-
-	headerIdx, found := findSectionByName(lines, canonicalID.String())
-	if !found {
+	lines, deleted := deleteDriveSectionFromSnapshot(data, canonicalID)
+	if !deleted {
 		return fmt.Errorf("drive section %q not found in config", canonicalID.String())
 	}
 
-	_, contentEnd := sectionContentRange(lines, headerIdx)
+	return atomicWriteFile(path, []byte(renderLines(lines)))
+}
 
-	// Remove preceding blank lines for clean formatting.
-	blankStart := headerIdx
-	for blankStart > 0 && lines[blankStart-1].kind == lineBlank {
-		blankStart--
+// DeleteDriveSectionIfDriveEquals removes a drive section only when the
+// currently loaded drive config equals expected. The equality check and write
+// run under the config mutation lock and are derived from one file snapshot
+// for rollback-safe compare/delete semantics.
+func DeleteDriveSectionIfDriveEquals(
+	path string,
+	canonicalID driveid.CanonicalID,
+	expected *Drive,
+) (bool, error) {
+	var deleted bool
+	lockErr := withConfigMutationLock(path, false, func() error {
+		deletedNow, err := deleteDriveSectionIfDriveEqualsSnapshot(path, canonicalID, expected)
+		deleted = deletedNow
+		return err
+	})
+	if lockErr != nil {
+		return false, lockErr
 	}
 
-	lines = append(lines[:blankStart], lines[contentEnd:]...)
+	return deleted, nil
+}
 
-	return atomicWriteFile(path, []byte(renderLines(lines)))
+func deleteDriveSectionIfDriveEqualsSnapshot(
+	path string,
+	canonicalID driveid.CanonicalID,
+	expected *Drive,
+) (bool, error) {
+	data, err := readManagedFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("reading config file: %w", err)
+	}
+
+	matches, err := driveSnapshotEquals(path, data, canonicalID, expected)
+	if err != nil {
+		return false, err
+	}
+	if !matches {
+		return false, nil
+	}
+
+	lines, deleted := deleteDriveSectionFromSnapshot(data, canonicalID)
+	if !deleted {
+		return false, nil
+	}
+
+	return true, atomicWriteFile(path, []byte(renderLines(lines)))
 }
 
 // RenameDriveSections renames one or more drive section headers in place while
@@ -244,6 +470,12 @@ func RenameDriveSections(path string, renames map[driveid.CanonicalID]driveid.Ca
 		return nil
 	}
 
+	return withConfigMutationLock(path, false, func() error {
+		return renameDriveSectionsSnapshot(path, renames)
+	})
+}
+
+func renameDriveSectionsSnapshot(path string, renames map[driveid.CanonicalID]driveid.CanonicalID) error {
 	data, err := readManagedFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -405,6 +637,159 @@ func formatTOMLValue(value string) string {
 	}
 
 	return fmt.Sprintf("%q", value)
+}
+
+func driveSnapshotEquals(path string, data []byte, canonicalID driveid.CanonicalID, expected *Drive) (bool, error) {
+	if expected == nil {
+		return false, fmt.Errorf("expected drive is nil")
+	}
+
+	drive, found, err := driveFromConfigSnapshot(path, data, canonicalID)
+	if err != nil {
+		return false, err
+	}
+
+	return found && drivesEqual(&drive, expected), nil
+}
+
+func driveFromConfigSnapshot(path string, data []byte, canonicalID driveid.CanonicalID) (Drive, bool, error) {
+	loader := newConfigLoader(defaultConfigIO())
+	cfg, md, err := loader.decodeBaseConfig(path, data)
+	if err != nil {
+		return Drive{}, false, fmt.Errorf("loading config: %w", err)
+	}
+
+	decodeErr := loader.decoder.decodeStrict(data, cfg)
+	if decodeErr != nil {
+		return Drive{}, false, fmt.Errorf("loading config: parsing config file %s: %w", path, decodeErr)
+	}
+
+	unknownErr := checkUnknownKeys(&md)
+	if unknownErr != nil {
+		return Drive{}, false, fmt.Errorf("loading config: %w", unknownErr)
+	}
+
+	validateErr := Validate(cfg)
+	if validateErr != nil {
+		return Drive{}, false, fmt.Errorf("loading config: config validation failed: %w", validateErr)
+	}
+
+	drive, found := cfg.Drives[canonicalID]
+	return drive, found, nil
+}
+
+func deleteDriveKeyFromSnapshot(
+	data []byte,
+	canonicalID driveid.CanonicalID,
+	key string,
+) ([]parsedLine, bool, bool) {
+	lines := parseLines(string(data))
+
+	headerIdx, found := findSectionByName(lines, canonicalID.String())
+	if !found {
+		return lines, false, false
+	}
+
+	contentStart, contentEnd := sectionContentRange(lines, headerIdx)
+	if idx, keyFound := findKeyInRange(lines, contentStart, contentEnd, key); keyFound {
+		lines = append(lines[:idx], lines[idx+1:]...)
+		return lines, true, true
+	}
+
+	return lines, true, false
+}
+
+func deleteDriveSectionFromSnapshot(
+	data []byte,
+	canonicalID driveid.CanonicalID,
+) ([]parsedLine, bool) {
+	lines := parseLines(string(data))
+
+	headerIdx, found := findSectionByName(lines, canonicalID.String())
+	if !found {
+		return lines, false
+	}
+
+	_, contentEnd := sectionContentRange(lines, headerIdx)
+
+	// Remove preceding blank lines for clean formatting.
+	blankStart := headerIdx
+	for blankStart > 0 && lines[blankStart-1].kind == lineBlank {
+		blankStart--
+	}
+
+	return append(lines[:blankStart], lines[contentEnd:]...), true
+}
+
+func drivesEqual(left *Drive, right *Drive) bool {
+	return left.SyncDir == right.SyncDir &&
+		boolPointersEqual(left.Paused, right.Paused) &&
+		stringPointersEqual(left.PausedUntil, right.PausedUntil) &&
+		left.DisplayName == right.DisplayName &&
+		left.Owner == right.Owner &&
+		slices.Equal(left.IgnoredDirs, right.IgnoredDirs) &&
+		slices.Equal(left.IncludedDirs, right.IncludedDirs) &&
+		slices.Equal(left.IgnoredPaths, right.IgnoredPaths) &&
+		left.IgnoreDotfiles == right.IgnoreDotfiles &&
+		left.IgnoreJunkFiles == right.IgnoreJunkFiles &&
+		left.FollowSymlinks == right.FollowSymlinks
+}
+
+func boolPointersEqual(left *bool, right *bool) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+func stringPointersEqual(left *string, right *string) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+// withConfigMutationLock serializes config read-modify-write entrypoints that
+// participate in this package. Existing-file operations lock the parent
+// directory when it exists, even if config.toml itself is currently missing.
+// If the parent directory is missing, the underlying mutation produces its
+// historical missing-file result instead of creating directories just to lock.
+func withConfigMutationLock(path string, createDir bool, fn func() error) (err error) {
+	root, _, err := fsroot.OpenPath(path)
+	if err != nil {
+		return fmt.Errorf("opening config lock root: %w", err)
+	}
+	if createDir {
+		if mkErr := root.MkdirAll(configDirPermissions); mkErr != nil {
+			return fmt.Errorf("creating config lock directory: %w", mkErr)
+		}
+	}
+
+	lockFile, err := localpath.Open(filepath.Dir(path))
+	if err != nil {
+		if !createDir && errors.Is(err, os.ErrNotExist) {
+			return fn()
+		}
+		return fmt.Errorf("opening config lock directory: %w", err)
+	}
+	defer func() {
+		closeErr := lockFile.Close()
+		if err == nil {
+			err = closeErr
+		}
+	}()
+
+	if flockErr := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); flockErr != nil {
+		return fmt.Errorf("locking config file: %w", flockErr)
+	}
+	defer func() {
+		unlockErr := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		if err == nil {
+			err = unlockErr
+		}
+	}()
+
+	return fn()
 }
 
 // atomicWriteFile writes data to a temporary file in the same directory as
