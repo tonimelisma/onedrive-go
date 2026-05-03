@@ -131,10 +131,12 @@ Evidence:
   and repeated parent root listings returned the other eight root items without
   `Kikkeli Shared Test Folder` for the full two-minute shortcut fixture budget.
 Current handling: Shortcut fixture shared-discovery and root-placeholder checks
-poll for the longer shortcut fixture propagation budget. If the parent-root
-placeholder is still omitted after the target itself was reachable, shortcut
-E2Es skip with the last shared/root visibility evidence instead of failing a
-product assertion that cannot start. The skip message now carries
+poll for the longer shortcut fixture propagation budget unless a decoded
+parent-root listing plus direct sentinel download proves the provider omission
+after the shorter proof window. If the parent-root placeholder is still omitted
+after the target itself was reachable, shortcut E2Es skip with the last
+shared/root visibility evidence instead of failing a product assertion that
+cannot start. The skip message carries
 `provider_skip=shortcut_root_placeholder_omitted` so summaries distinguish this
 provider surface from ordinary skipped tests. If the omission persists outside
 CI, recreating the Add-to-OneDrive shortcut from the OneDrive web UI remains

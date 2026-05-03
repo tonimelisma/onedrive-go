@@ -74,8 +74,19 @@ artifacts, not a multisync cache.
 | Local watch observation can update durable local truth with scoped upsert/delete/prefix-delete patches, full snapshot replacement clears suspect local truth, and prefix deletion treats SQL wildcards as literal path bytes while preserving path case. | `TestScopedLocalStateMutation_UpsertReadAndDeleteExactPath`, `TestDeleteLocalStatePrefix_DeletesDirectoryAndDescendantsOnly`, `TestDeleteLocalStatePrefix_EscapesSQLWildcards`, `TestReplaceLocalState_MarksLocalTruthComplete` |
 | Parent shortcut-root lifecycle state is stored in the parent sync store, rebuilt into parent-owned observation protection, and applied before the parent publishes child work and cleanup work to multisync. Empty complete remote shortcut observation batches are persisted and retire old roots; child final-drain acknowledgement first persists `removed_release_pending`; release cleanup later moves old roots to `removed_child_cleanup_pending` or promotes waiting replacements; cleanup-blocked release failures are persisted before returning errors; child artifact cleanup acknowledgement deletes cleanup-pending rows; duplicate automatic shortcut targets are parent-owned blocked roots. Cleanup requests are derived from these rows with explicit child mount ID and local-root scope, not reconstructed by multisync. | `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_acknowledgeShortcutChildArtifactsPurgedRemovesCleanupPendingRoot`, `TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeReturningError`, `TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterReleasePending`, `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler` |
 | Shortcut alias mutation is a parent-engine-internal operation by binding item ID and updates parent shortcut-root state. | `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain` |
+| Debug invariant checks reject malformed retry/block durable state before runtime handoff. | `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutPath`, `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutTiming`, `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutAttempts`, `TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkWithTiming`, `TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockScope` |
 
 ## Write Responsibilities
+
+### Retry and block state invariants
+
+`retry_work` rows are exact retry obligations. Every row must carry a non-empty
+path, a valid `ActionType`, and a positive attempt count. Delayed retry rows
+must have `next_retry_at`; blocked rows must not have retry timing and must
+reference an existing `block_scopes` row. Every persisted block scope must in
+turn have at least one blocked retry row. These invariants are asserted by the
+engine debug invariant pass so malformed durable state is caught at the store
+ownership boundary instead of becoming silent runtime debt.
 
 ### Observation writes
 

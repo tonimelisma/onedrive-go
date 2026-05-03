@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -913,6 +914,30 @@ func TestAddNewDrive_SyncDirCreateFailureRollsBackConfig(t *testing.T) {
 	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
 	require.NoError(t, loadErr)
 	assert.NotContains(t, cfg.Drives, cid)
+	_, found := loadCatalogDrive(t, cid)
+	assert.False(t, found, "catalog entry should roll back with the config section")
+}
+
+func TestAddNewDrive_CatalogMutationFailureRollsBackConfig(t *testing.T) {
+	setTestDriveHome(t)
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
+	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	ops := defaultDriveAddDurableOps()
+	ops.registerDrive = func(string, driveid.CanonicalID, string) error {
+		return errors.New("catalog unavailable")
+	}
+
+	err := addNewDriveWithOps(io.Discard, cfgPath, cid, testDriveLogger(t), ops)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "updating catalog")
+
+	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
+	require.NoError(t, loadErr)
+	assert.NotContains(t, cfg.Drives, cid)
 }
 
 // Validates: R-3.3.5
@@ -951,11 +976,12 @@ sync_dir = "~/OneDrive"
 display_name = "Concurrent"
 `), 0o600))
 
-	err := restoreDriveAddConfigMutation(cfgPath, cid, config.EnsureDriveInConfigResult{
+	rolledBack, err := restoreDriveAddConfigMutation(cfgPath, cid, config.EnsureDriveInConfigResult{
 		SyncDir: "~/OneDrive",
 		Added:   true,
 	})
 	require.NoError(t, err)
+	assert.False(t, rolledBack)
 
 	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
 	require.NoError(t, loadErr)
@@ -973,12 +999,13 @@ func TestRestoreDriveAddConfigMutation_BackfillSkipsChangedSyncDir(t *testing.T)
 sync_dir = "~/Concurrent"
 `), 0o600))
 
-	err := restoreDriveAddConfigMutation(cfgPath, cid, config.EnsureDriveInConfigResult{
+	rolledBack, err := restoreDriveAddConfigMutation(cfgPath, cid, config.EnsureDriveInConfigResult{
 		SyncDir:                    "~/OneDrive",
 		BackfilledSyncDir:          true,
 		DriveBeforeSyncDirBackfill: &config.Drive{},
 	})
 	require.NoError(t, err)
+	assert.False(t, rolledBack)
 
 	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
 	require.NoError(t, loadErr)
@@ -996,12 +1023,13 @@ sync_dir = "~/OneDrive"
 display_name = "Concurrent"
 `), 0o600))
 
-	err := restoreDriveAddConfigMutation(cfgPath, cid, config.EnsureDriveInConfigResult{
+	rolledBack, err := restoreDriveAddConfigMutation(cfgPath, cid, config.EnsureDriveInConfigResult{
 		SyncDir:                    "~/OneDrive",
 		BackfilledSyncDir:          true,
 		DriveBeforeSyncDirBackfill: &config.Drive{},
 	})
 	require.NoError(t, err)
+	assert.False(t, rolledBack)
 
 	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
 	require.NoError(t, loadErr)
@@ -1329,6 +1357,76 @@ func TestAddSharedDrive_ConfigWriteFailurePreservesPreExistingCatalogDrive(t *te
 	assert.Equal(t, "Existing Shared Folder", drive.DisplayName)
 	assert.Equal(t, ownerCID.String(), drive.OwnerAccountCanonical)
 	assert.Equal(t, "shared-remote-id", drive.RemoteDriveID)
+}
+
+func TestRollbackSharedDriveAdd_RemovesMatchingConfigAndCatalog(t *testing.T) {
+	setTestDriveHome(t)
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+
+	ownerCID := driveid.MustCanonicalID("personal:owner@example.com")
+	sharedCID := driveid.MustCanonicalID("shared:owner@example.com:driveX:itemY")
+	seedCatalogDrive(t, sharedCID, func(drive *config.CatalogDrive) {
+		drive.OwnerAccountCanonical = ownerCID.String()
+		drive.DisplayName = "Shared Folder"
+	})
+
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`["shared:owner@example.com:driveX:itemY"]
+sync_dir = "~/OneDrive-Shared/Shared Folder"
+display_name = "Shared Folder"
+`), 0o600))
+
+	rollbackSharedDriveAdd(
+		cfgPath,
+		sharedCID,
+		nil,
+		false,
+		&config.Drive{SyncDir: "~/OneDrive-Shared/Shared Folder", DisplayName: "Shared Folder"},
+		testDriveLogger(t),
+	)
+
+	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
+	require.NoError(t, loadErr)
+	assert.NotContains(t, cfg.Drives, sharedCID)
+	_, found := loadCatalogDrive(t, sharedCID)
+	assert.False(t, found)
+}
+
+func TestRollbackSharedDriveAdd_PreservesCatalogWhenConfigChangedConcurrently(t *testing.T) {
+	setTestDriveHome(t)
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+
+	ownerCID := driveid.MustCanonicalID("personal:owner@example.com")
+	sharedCID := driveid.MustCanonicalID("shared:owner@example.com:driveX:itemY")
+	seedCatalogDrive(t, sharedCID, func(drive *config.CatalogDrive) {
+		drive.OwnerAccountCanonical = ownerCID.String()
+		drive.DisplayName = "Concurrent Shared Folder"
+	})
+
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`["shared:owner@example.com:driveX:itemY"]
+sync_dir = "~/OneDrive-Shared/Shared Folder"
+display_name = "Concurrent Shared Folder"
+`), 0o600))
+
+	rollbackSharedDriveAdd(
+		cfgPath,
+		sharedCID,
+		nil,
+		false,
+		&config.Drive{SyncDir: "~/OneDrive-Shared/Shared Folder", DisplayName: "Shared Folder"},
+		testDriveLogger(t),
+	)
+
+	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
+	require.NoError(t, loadErr)
+	drive, found := cfg.Drives[sharedCID]
+	require.True(t, found)
+	assert.Equal(t, "~/OneDrive-Shared/Shared Folder", drive.SyncDir)
+	assert.Equal(t, "Concurrent Shared Folder", drive.DisplayName)
+
+	catalogDrive, found := loadCatalogDrive(t, sharedCID)
+	require.True(t, found)
+	assert.Equal(t, "Concurrent Shared Folder", catalogDrive.DisplayName)
+	assert.Equal(t, ownerCID.String(), catalogDrive.OwnerAccountCanonical)
 }
 
 // --- collectExistingDisplayNames ---
