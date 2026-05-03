@@ -8,9 +8,13 @@ A fast, safe, and well-tested OneDrive CLI and sync client written in Go. Unix-s
 
 ## Status
 
-**Active development** — Phases 1-3.5 complete. Working CLI with auth, file ops, and config integration. Phase 4 v2: event-driven sync engine rewrite in progress.
+**Active development** — core CLI file operations, drive management,
+configuration, transfers, and bidirectional sync are implemented. Remaining
+planned and future work is tracked in the
+[requirements index](spec/requirements/index.md).
 
-See the [requirements](spec/requirements/) for the full plan.
+See the [requirements](spec/requirements/) for capability status and the full
+plan.
 
 ## Planned Features
 
