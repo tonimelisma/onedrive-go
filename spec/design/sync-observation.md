@@ -72,10 +72,10 @@ Important properties:
   possible, and missing parent IDs trigger one best-effort item-by-ID enrich
   before baseline fallback
 - deleted-item names may also be recovered from baseline context
-- deleted delta items that are absent from baseline and still have no
-  recoverable path after current-batch parent-chain resolution are skipped
-  without failing the observation batch, because there is no known local path
-  to mutate and no stored truth to preserve
+- deleted delta items that are absent from baseline require a surviving item
+  name plus enough path or parent-chain context before observation may emit a
+  delete; missing-name untracked deletes are skipped even when the parent is
+  known, because the child path cannot be identified safely
 - explicit remote read denial discovered during observation is emitted as an
   observation-owned finding (`remote_read_denied`) plus
   `perm:remote:read:<boundary>`

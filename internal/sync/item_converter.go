@@ -583,13 +583,17 @@ func (c *ItemConverter) materializePath(
 func (c *ItemConverter) materializePathForUntrackedDelete(
 	item *graph.Item, inflight map[string]InflightParent, itemDriveID driveid.ID,
 ) string {
-	if graphPath := c.materializePathFromGraphParentPath(item, nfcNormalize(item.Name)); graphPath != "" {
+	name := nfcNormalize(item.Name)
+	if name == "" {
+		return ""
+	}
+	if graphPath := c.materializePathFromGraphParentPath(item, name); graphPath != "" {
 		return graphPath
 	}
 
 	return c.materializePathFromParts(
 		item.ID,
-		nfcNormalize(item.Name),
+		name,
 		item.ParentID,
 		resolveParentDriveID(item, itemDriveID),
 		inflight,
