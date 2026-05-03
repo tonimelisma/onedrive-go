@@ -2,8 +2,10 @@ package config
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -152,6 +154,78 @@ func TestAppendDriveSection_ConcurrentCreatesPreserveAllSections(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, cfg.Drives, cids[0])
 	assert.Contains(t, cfg.Drives, cids[1])
+}
+
+// Validates: R-4.2.1
+func TestAppendDriveSection_CrossProcessCreatesPreserveAllSections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	cids := []driveid.CanonicalID{
+		driveid.MustCanonicalID("personal:toni@outlook.com"),
+		driveid.MustCanonicalID("business:alice@contoso.com"),
+		driveid.MustCanonicalID("business:bob@contoso.com"),
+		driveid.MustCanonicalID("personal:chris@example.com"),
+		driveid.MustCanonicalID("business:dana@contoso.com"),
+		driveid.MustCanonicalID("personal:erin@example.com"),
+	}
+
+	type worker struct {
+		cmd    *exec.Cmd
+		stdin  io.WriteCloser
+		output *bytes.Buffer
+	}
+
+	workers := make([]worker, 0, len(cids))
+	for _, cid := range cids {
+		//nolint:gosec // Fixed worker subprocess uses the current test binary, a fixed test name, and controlled env.
+		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestAppendDriveSection_CrossProcessWorker$")
+		cmd.Env = append(os.Environ(),
+			"ONEDRIVE_GO_CONFIG_WRITE_WORKER=1",
+			"ONEDRIVE_GO_CONFIG_WRITE_PATH="+path,
+			"ONEDRIVE_GO_CONFIG_WRITE_CID="+cid.String(),
+			"ONEDRIVE_GO_CONFIG_WRITE_SYNC_DIR=~/"+cid.Email(),
+		)
+		output := &bytes.Buffer{}
+		cmd.Stdout = output
+		cmd.Stderr = output
+
+		stdin, err := cmd.StdinPipe()
+		require.NoError(t, err)
+		require.NoError(t, cmd.Start())
+		workers = append(workers, worker{cmd: cmd, stdin: stdin, output: output})
+	}
+
+	for _, worker := range workers {
+		require.NoError(t, worker.stdin.Close())
+	}
+
+	for _, worker := range workers {
+		err := worker.cmd.Wait()
+		require.NoError(t, err, worker.output.String())
+	}
+
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+	for _, cid := range cids {
+		drive, found := cfg.Drives[cid]
+		require.True(t, found, "missing drive section %s", cid.String())
+		assert.Equal(t, "~/"+cid.Email(), drive.SyncDir)
+	}
+}
+
+func TestAppendDriveSection_CrossProcessWorker(t *testing.T) {
+	if os.Getenv("ONEDRIVE_GO_CONFIG_WRITE_WORKER") == "" {
+		return
+	}
+
+	_, err := io.Copy(io.Discard, os.Stdin)
+	require.NoError(t, err)
+
+	cid := driveid.MustCanonicalID(os.Getenv("ONEDRIVE_GO_CONFIG_WRITE_CID"))
+	require.NoError(t, AppendDriveSection(
+		os.Getenv("ONEDRIVE_GO_CONFIG_WRITE_PATH"),
+		cid,
+		os.Getenv("ONEDRIVE_GO_CONFIG_WRITE_SYNC_DIR"),
+	))
 }
 
 func TestConfigWrites_DoNotUseAmbientLogger(t *testing.T) {

@@ -45,6 +45,12 @@ func addMountToSummary(s *statusSummary, mount *statusMount) {
 		s.TotalRemoteDrift += mount.SyncState.RemoteDrift
 		s.TotalRetrying += mount.SyncState.Retrying
 	}
+	if mount.RuntimeOwner != "" && s.RuntimeOwner == "" {
+		s.RuntimeOwner = mount.RuntimeOwner
+	}
+	if mount.RuntimeState == statusRuntimeStateActive {
+		s.RuntimeActiveMounts++
+	}
 
 	for i := range mount.ChildMounts {
 		addMountToSummary(s, &mount.ChildMounts[i])
@@ -220,10 +226,11 @@ func printMountStatus(w io.Writer, mount *statusMount, history bool) error {
 }
 
 func printMountLifecycleStatus(w io.Writer, layout statusMountTextLayout, mount *statusMount) error {
-	if mount.NamespaceID != "" {
-		if err := writef(w, "%sControl:   Parent drive pause/resume and the OneDrive shortcut\n", layout.detailIndent); err != nil {
-			return err
-		}
+	if err := printMountControlStatus(w, layout, mount); err != nil {
+		return err
+	}
+	if err := printMountRuntimeStatus(w, layout, mount); err != nil {
+		return err
 	}
 	if mount.StateReason != "" {
 		if err := writef(w, "%sReason:    %s\n", layout.detailIndent, mount.StateReason); err != nil {
@@ -257,6 +264,22 @@ func printMountLifecycleStatus(w io.Writer, layout statusMountTextLayout, mount 
 		retryText = "yes"
 	}
 	return writef(w, "%sAuto retry: %s\n", layout.detailIndent, retryText)
+}
+
+func printMountControlStatus(w io.Writer, layout statusMountTextLayout, mount *statusMount) error {
+	if mount.NamespaceID == "" {
+		return nil
+	}
+
+	return writef(w, "%sControl:   Parent drive pause/resume and the OneDrive shortcut\n", layout.detailIndent)
+}
+
+func printMountRuntimeStatus(w io.Writer, layout statusMountTextLayout, mount *statusMount) error {
+	if mount.RuntimeOwner == "" || mount.RuntimeState == "" {
+		return nil
+	}
+
+	return writef(w, "%sRuntime:  %s %s\n", layout.detailIndent, mount.RuntimeOwner, mount.RuntimeState)
 }
 
 func printMountProtectionStatus(w io.Writer, layout statusMountTextLayout, mount *statusMount) error {

@@ -197,18 +197,48 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 	}
 
 	for i := range retryWork {
-		if !retryWork[i].Blocked {
-			continue
+		if err := assertPersistedRetryWorkInvariant(&retryWork[i], seenBlocks); err != nil {
+			return err
 		}
-		if retryWork[i].ScopeKey.IsZero() {
-			return fmt.Errorf("blocked retry_work %s is missing scope key", retryWork[i].Path)
-		}
-		if _, ok := seenBlocks[retryWork[i].ScopeKey]; !ok {
-			return fmt.Errorf("blocked retry_work %s references missing block scope %s", retryWork[i].Path, retryWork[i].ScopeKey.String())
-		}
-		if retryWork[i].NextRetryAt != 0 {
-			return fmt.Errorf("blocked retry_work %s must not have retry timing", retryWork[i].Path)
-		}
+	}
+
+	return nil
+}
+
+func assertPersistedRetryWorkInvariant(row *RetryWorkRow, seenBlocks map[ScopeKey]struct{}) error {
+	if row.Path == "" {
+		return fmt.Errorf("retry_work row missing path for action %s", row.ActionType.String())
+	}
+	if _, valueErr := row.ActionType.Value(); valueErr != nil {
+		return fmt.Errorf("retry_work %s has invalid action type: %w", row.Path, valueErr)
+	}
+	if row.AttemptCount <= 0 {
+		return fmt.Errorf("retry_work %s has invalid attempt count %d", row.Path, row.AttemptCount)
+	}
+	if !row.Blocked {
+		return assertDelayedRetryWorkInvariant(row)
+	}
+
+	return assertBlockedRetryWorkInvariant(row, seenBlocks)
+}
+
+func assertDelayedRetryWorkInvariant(row *RetryWorkRow) error {
+	if row.NextRetryAt <= 0 {
+		return fmt.Errorf("retry_work %s is missing retry timing", row.Path)
+	}
+
+	return nil
+}
+
+func assertBlockedRetryWorkInvariant(row *RetryWorkRow, seenBlocks map[ScopeKey]struct{}) error {
+	if row.ScopeKey.IsZero() {
+		return fmt.Errorf("blocked retry_work %s is missing scope key", row.Path)
+	}
+	if _, ok := seenBlocks[row.ScopeKey]; !ok {
+		return fmt.Errorf("blocked retry_work %s references missing block scope %s", row.Path, row.ScopeKey.String())
+	}
+	if row.NextRetryAt != 0 {
+		return fmt.Errorf("blocked retry_work %s must not have retry timing", row.Path)
 	}
 
 	return nil

@@ -35,10 +35,10 @@ are inserted, updated, pruned, and validated.
 
 | Behavior | Evidence |
 | --- | --- |
-| `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors`, `TestBuildChildStatusMount_FinalDrainGuidesAccessRestore`, `TestPrintMountStatus_RendersGuidedShortcutRecovery`, `TestE2E_Status_NoLegacyHistorySurface`, `TestE2E_RoundTrip` |
+| `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors`, `TestBuildChildStatusMount_FinalDrainGuidesAccessRestore`, `TestPrintMountStatus_RendersGuidedShortcutRecovery`, `TestStatusRuntime_SummaryJSONWithActiveOwner`, `TestStatusRuntimeOverlayApplyAndSummary`, `TestPrintMountStatus_ShowsRuntimeState`, `TestE2E_Status_NoLegacyHistorySurface`, `TestE2E_RoundTrip` |
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
-| Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_DryRunOpensLogFileAndWarnsOnFailure`, `TestRunSyncCommand_DryRunFailsWhenControlSocketPathCannotBeDerived`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_PassesMissingSyncDirToRunOnce`, `TestRunSyncCommand_DryRunPassesMissingSyncDirWithoutCreatingIt`, `TestRunSyncCommand_PassesPausedInvalidDriveToRunnerAsPaused`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestPrintRunOnceResult_MatchesReportsBySelectionIndex` |
+| Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestDryRunFlagSurfaceOnlySyncCommand`, `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_DryRunOpensLogFileAndWarnsOnFailure`, `TestRunSyncCommand_DryRunFailsWhenControlSocketPathCannotBeDerived`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_PassesMissingSyncDirToRunOnce`, `TestRunSyncCommand_DryRunPassesMissingSyncDirWithoutCreatingIt`, `TestRunSyncCommand_PassesPausedInvalidDriveToRunnerAsPaused`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestPrintRunOnceResult_MatchesReportsBySelectionIndex` |
 | Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusMount_RendersLifecycleState`, `TestBuildChildStatusMount_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestBuildChildStatusMount_BlockedDetailAppendsInstanceDetail` |
 | Command failure presentation exhaustively maps the shared error classes, while lower layers still own their own domain classification. | `TestClassifyCommandError`, `TestCommandFailurePresentationForClass` |
 
@@ -81,6 +81,9 @@ sync-health command.
   tables keyed directly by sync-owned `ConditionKey`
 - live authenticated account identity and drive catalog overlays come from
   bounded Graph proof/discovery owned by the command
+- live runtime ownership comes from the active control socket when reachable;
+  configured rows remain config/catalog-shaped, and the overlay only marks
+  whether the current one-shot/watch owner reports that exact mount ID
 - live perf comes from the active owner over the control socket when requested
 
 When both `--account` and `--drive` selectors are present, `status` applies
@@ -95,6 +98,9 @@ The runtime status read model is now mount-shaped:
 - managed shortcut child mounts render as child rows immediately under their
   parent drive row
 - child rows carry their own sync-state snapshot and live perf overlay
+- parent and child rows carry `runtime_owner`/`runtime_state` only when an
+  active one-shot/watch owner is reachable; inactive means configured but not
+  reported by that owner, not a durable sync-store state
 - parent rows do not absorb child state or child perf totals
 - child rows are read-only sub-status. There is no child `--mount`, pause,
   resume, reset, or config surface; the user controls the projection by
@@ -254,13 +260,16 @@ per-mount `ErrMountRootUnavailable`, so a missing `sync_dir` on one drive does
 not prevent other runnable mounts or reload changes from proceeding.
 
 Dry-run one-shot sync resolves the dry-run decision before setup only so watch
-mode can reject an effective dry-run before doing work. Valid dry-run one-shot
-sync then follows the same bootstrap as a live one-shot run: sync-bootstrap
-email/config reconciliation, normal OAuth token sources with refresh
-persistence, `log_file` open/create, and control-socket ownership all remain
-active. The command resolves selected drives and delegates preview reporting to
-multisync/engine with `DryRun=true`; lower layers use that flag to suppress
-plan execution and sync-progress commits, not CLI/process setup.
+mode can reject an effective dry-run before doing work. `sync --dry-run` is the
+only command-line dry-run flag surface; config `dry_run=true` is still honored
+for one-shot sync and rejected for watch unless the user explicitly passes
+`sync --watch --dry-run=false`. Valid dry-run one-shot sync then follows the
+same bootstrap as a live one-shot run: sync-bootstrap email/config
+reconciliation, normal OAuth token sources with refresh persistence, `log_file`
+open/create, and control-socket ownership all remain active. The command
+resolves selected drives and delegates preview reporting to multisync/engine
+with `DryRun=true`; lower layers use that flag to suppress plan execution and
+sync-progress commits, not CLI/process setup.
 
 `login`, `drive add`, and `drive remove` ask a running watch owner to reload
 configuration through the control socket after successful config mutation. The

@@ -845,11 +845,15 @@ shortcut while shared discovery and direct target traversal still work. The
 reverse has also appeared: shortcut placeholders and direct traversal can be
 healthy while shared search/list output is temporarily empty for the target.
 Live fixture checks therefore use a shortcut-specific propagation budget. When
-the shared target remains reachable but the parent root placeholder is still
-omitted after that budget, shortcut E2Es skip because the product behavior
-under test cannot start without the provider-supplied placeholder. That skip
-is emitted with `provider_skip=shortcut_root_placeholder_omitted` and the last
-decoded root names so CI evidence names the missing provider surface directly.
+the parent root listing decodes successfully and direct shared-target sentinel
+download succeeds after the shorter provider-omission proof window, the helper
+may classify the omission immediately; otherwise it continues to the full
+shortcut propagation budget. In both cases, if the shared target remains
+reachable but the parent root placeholder is still omitted, shortcut E2Es skip
+because the product behavior under test cannot start without the
+provider-supplied placeholder. That skip is emitted with
+`provider_skip=shortcut_root_placeholder_omitted` and the last decoded root
+names so CI evidence names the missing provider surface directly.
 
 Observed fixture repair on April 25, 2026: deleting a personal-account shortcut
 placeholder by item ID removed only the placeholder. Microsoft documents

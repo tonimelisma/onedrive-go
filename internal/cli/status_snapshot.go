@@ -67,6 +67,8 @@ type statusMount struct {
 	RecoveryAction         string         `json:"recovery_action,omitempty"`
 	AutoRetry              *bool          `json:"auto_retry,omitempty"`
 	WaitingReplacement     string         `json:"waiting_replacement,omitempty"`
+	RuntimeOwner           string         `json:"runtime_owner,omitempty"`
+	RuntimeState           string         `json:"runtime_state,omitempty"`
 	SyncState              *syncStateInfo `json:"sync_state,omitempty"`
 	ChildMounts            []statusMount  `json:"child_mounts,omitempty"`
 }
@@ -86,13 +88,15 @@ type syncStateInfo struct {
 
 // statusSummary aggregates health info across all runtime mounts.
 type statusSummary struct {
-	TotalMounts           int `json:"total_mounts"`
-	Ready                 int `json:"ready"`
-	Paused                int `json:"paused"`
-	AccountsRequiringAuth int `json:"accounts_requiring_auth"`
-	TotalConditions       int `json:"total_conditions"`
-	TotalRemoteDrift      int `json:"total_remote_drift"`
-	TotalRetrying         int `json:"total_retrying"`
+	TotalMounts           int    `json:"total_mounts"`
+	Ready                 int    `json:"ready"`
+	Paused                int    `json:"paused"`
+	AccountsRequiringAuth int    `json:"accounts_requiring_auth"`
+	TotalConditions       int    `json:"total_conditions"`
+	TotalRemoteDrift      int    `json:"total_remote_drift"`
+	TotalRetrying         int    `json:"total_retrying"`
+	RuntimeOwner          string `json:"runtime_owner,omitempty"`
+	RuntimeActiveMounts   int    `json:"runtime_active_mounts,omitempty"`
 }
 
 // statusOutput wraps the full status response for JSON output.
@@ -133,6 +137,7 @@ func runStatusCommand(cc *CLIContext, history bool, showPerf ...bool) error {
 		liveOverlayLoader = loadStatusLiveOverlay
 	}
 	applyStatusLiveOverlay(accounts, liveOverlayLoader(context.Background(), cc, filteredSnapshot.Accounts))
+	applyStatusRuntimeOverlay(accounts, loadStatusRuntimeOverlay(context.Background()))
 	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(context.Background(), perfEnabled))
 	if cc.Flags.JSON {
 		return printStatusJSON(cc.Output(), accounts)

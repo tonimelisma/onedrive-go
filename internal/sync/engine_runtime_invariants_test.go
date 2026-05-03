@@ -44,3 +44,74 @@ func TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockS
 
 	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
 }
+
+// Validates: R-2.10.33
+func TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutPath(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	flow := testEngineFlow(t, eng)
+
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+		ActionType:   ActionUpload,
+		AttemptCount: 1,
+		NextRetryAt:  eng.nowFn().Add(time.Minute).UnixNano(),
+	}))
+
+	err := flow.assertPersistedInvariants(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "retry_work row missing path")
+}
+
+// Validates: R-2.10.33
+func TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutTiming(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	flow := testEngineFlow(t, eng)
+
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+		Path:         "delayed.txt",
+		ActionType:   ActionUpload,
+		AttemptCount: 1,
+	}))
+
+	err := flow.assertPersistedInvariants(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing retry timing")
+}
+
+// Validates: R-2.10.33
+func TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutAttempts(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	flow := testEngineFlow(t, eng)
+
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+		Path:        "delayed.txt",
+		ActionType:  ActionUpload,
+		NextRetryAt: eng.nowFn().Add(time.Minute).UnixNano(),
+	}))
+
+	err := flow.assertPersistedInvariants(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid attempt count")
+}
+
+// Validates: R-2.10.33
+func TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkWithTiming(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	flow := testEngineFlow(t, eng)
+
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+		Path:         "delayed.txt",
+		ActionType:   ActionUpload,
+		AttemptCount: 1,
+		NextRetryAt:  eng.nowFn().Add(time.Minute).UnixNano(),
+	}))
+
+	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
+}
