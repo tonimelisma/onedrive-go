@@ -19,6 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260503-01 | Nightly incremental-delta E2E failed on unrelated unrecoverable delete noise | fixed | product bug | 2026-05-03 | no |
 | LI-20260430-03 | NestedDeletion setup treated transient mount-root delta 504 as deterministic failure | fixed | test harness | 2026-04-30 | yes |
 | LI-20260430-02 | Conflict-resolution downloads rejected their own conflict-copy removal | fixed | product bug | 2026-04-30 | no |
 | LI-20260430-01 | Output validation E2Es assumed selected parents had stable shortcut children | fixed | test bug | 2026-04-30 | no |
@@ -58,6 +59,42 @@ Promotion contract:
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20260503-01: Nightly incremental-delta E2E failed on unrelated unrecoverable delete noise
+
+First seen: 2026-05-03
+Last seen: 2026-05-03
+Area: scheduled `e2e_full`, remote observation, root delta
+Suite / test: scheduled CI run `25276657575`; `e2e` job,
+`full-parallel-misc`, `TestE2E_Sync_IncrementalDeltaToken`
+Classification: product bug
+Status: fixed
+Recurring: no
+Summary: The nightly full E2E lane failed when an incremental upload-only sync
+observed a deleted root-delta item that was not part of the test's isolated
+baseline and whose delta payload carried neither a name nor a recoverable
+parent chain. The observer skipped the delete as unactionable but still marked
+the whole observation batch incomplete, so the sync command returned
+`sync: remote observation incomplete` even though there was no known local path
+or stored remote truth to preserve.
+Evidence:
+- Scheduled CI run `25276657575` on May 3, 2026 passed auth preflight, fast
+  fixture preflight, fast E2E, and full fixture preflight, then failed only the
+  `full-parallel-misc` bucket.
+- The failing log showed `TestE2E_Sync_IncrementalDeltaToken` completing its
+  first upload-only sync successfully, then the second upload-only sync read an
+  incremental root delta page containing a deleted item with empty name,
+  parent ID `F1DA660E69BDEC82!sdda8fb3401414e36b6425c2569f57d6f`, and no
+  matching inflight or baseline parent.
+- The observer logged `skipping remote delete without recoverable path` and
+  then returned `Error: run sync engine once: sync: observing remote delta:
+  sync: remote observation incomplete`.
+Resolution / mitigation: remote observation now treats deleted items that are
+absent from baseline and still have no recoverable path as unactionable delete
+noise: it logs and skips them without marking the delta batch incomplete.
+Orphaned create/modify items still fail closed because advancing the cursor
+would lose materialized provider truth.
+Promoted docs: [sync-observation.md](../design/sync-observation.md)
 
 ## LI-20260426-01: Pre-authenticated shared download URL returned 401 immediately after fresh metadata
 
