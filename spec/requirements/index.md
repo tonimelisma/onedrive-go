@@ -36,3 +36,14 @@ Product vision: a fast, safe, well-tested CLI OneDrive client for Linux and macO
 - `verified` — tests exist and pass that verify this requirement
 - `cancelled` — requirement ID is retained for traceability, but the capability is no longer planned
 - `target` — quantitative goal to be measured (performance benchmarks)
+
+Status promotion rules:
+
+- Promote to `designed` only when a governing design doc names the requirement
+  in `Implements:` and describes the behavior, owner, or constraint.
+- Promote to `implemented` only when production code implements the designed
+  behavior and the governing design doc points to the owning package, file
+  family, or runtime boundary.
+- Promote to `verified` only when checked-in tests, a verifier rule, or
+  live/E2E evidence validates the requirement, and the evidence is named in the
+  governing design doc's `Verified By` table or adjacent evidence text.
