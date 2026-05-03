@@ -941,6 +941,38 @@ func TestFullDelta_DeletedItem_NotInBaseline(t *testing.T) {
 	assert.Equal(t, "ephemeral.txt", events[0].Name)
 }
 
+// Validates: R-6.7.3
+func TestFullDelta_SkipsUnrecoverableDeletedItemAbsentFromBaseline(t *testing.T) {
+	t.Parallel()
+
+	// Unrelated live-drive activity can create and delete an item outside this
+	// isolated store's baseline. If Graph omits both the deleted name and a
+	// recoverable parent chain, there is no local path to mutate; the observer
+	// should skip the delete without failing the whole delta batch.
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{
+						ID:        "deleted-untracked",
+						ParentID:  "unknown-parent",
+						DriveID:   driveid.New(synctest.TestDriveID),
+						IsDeleted: true,
+					},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	events, token, err := obs.FullDelta(t.Context(), "saved-token")
+	require.NoError(t, err, "FullDelta")
+
+	assert.Empty(t, events)
+	assert.Equal(t, "delta-link", token)
+}
+
 func fullDeltaSingleItemEvents(t *testing.T, item *graph.Item) []ChangeEvent {
 	t.Helper()
 

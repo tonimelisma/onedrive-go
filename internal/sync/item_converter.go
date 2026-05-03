@@ -486,7 +486,7 @@ func (c *ItemConverter) classifyAndConvert(
 			// When the item is absent from the baseline but the delta payload still
 			// carries enough name/parent-chain context, materialize the delete path
 			// from the current item instead of emitting an empty-path event.
-			ev.Path = c.materializePath(item, inflight, itemDriveID)
+			ev.Path = c.materializePathForUntrackedDelete(item, inflight, itemDriveID)
 		}
 		if ev.Path == "" {
 			c.Logger.Warn("skipping remote delete without recoverable path",
@@ -558,7 +558,7 @@ func (c *ItemConverter) materializePathWithBaselineFallback(
 		return graphPath
 	}
 
-	return c.materializePathFromParts(item.ID, name, item.ParentID, resolveParentDriveID(item, itemDriveID), inflight)
+	return c.materializePathFromParts(item.ID, name, item.ParentID, resolveParentDriveID(item, itemDriveID), inflight, true)
 }
 
 // materializePath builds the full relative path by walking the parent chain.
@@ -576,6 +576,24 @@ func (c *ItemConverter) materializePath(
 		item.ParentID,
 		resolveParentDriveID(item, itemDriveID),
 		inflight,
+		true,
+	)
+}
+
+func (c *ItemConverter) materializePathForUntrackedDelete(
+	item *graph.Item, inflight map[string]InflightParent, itemDriveID driveid.ID,
+) string {
+	if graphPath := c.materializePathFromGraphParentPath(item, nfcNormalize(item.Name)); graphPath != "" {
+		return graphPath
+	}
+
+	return c.materializePathFromParts(
+		item.ID,
+		nfcNormalize(item.Name),
+		item.ParentID,
+		resolveParentDriveID(item, itemDriveID),
+		inflight,
+		false,
 	)
 }
 
@@ -599,6 +617,7 @@ func (c *ItemConverter) materializePathFromParts(
 	parentID string,
 	parentDriveID driveid.ID,
 	inflight map[string]InflightParent,
+	markIncomplete bool,
 ) string {
 	segments := []string{name}
 
@@ -647,7 +666,9 @@ func (c *ItemConverter) materializePathFromParts(
 			slog.String("parent_id", parentID),
 			slog.String("parent_drive_id", parentDriveID.String()),
 		)
-		c.markIncompleteObservation()
+		if markIncomplete {
+			c.markIncompleteObservation()
+		}
 
 		return ""
 	}
