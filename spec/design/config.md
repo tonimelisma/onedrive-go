@@ -29,6 +29,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 | Child mount state DB path derivation is stable, collision-resistant, and bounded by common basename limits. | `TestMountStatePath_UsesManagedMountPrefix`, `TestMountStatePath_EncodesManagedMountIDWithoutCollisions`, `TestMountStatePath_LongIDUsesBoundedFilename` |
+| Config writes are locked across processes and rollback deletes only the exact drive shape written by the current mutation. | `TestAppendDriveSection_CrossProcessCreatesPreserveAllSections`, `TestRestoreDriveAddConfigMutation_AddedSectionSkipsConcurrentEdits`, `TestRollbackSharedDriveAdd_PreservesCatalogWhenConfigChangedConcurrently` |
 
 Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
 
@@ -139,10 +140,15 @@ account currently has a usable saved login.
 Degraded discovery is intentionally outside this lifecycle model. It is a
 command-local discovery overlay, not a persisted account or drive state.
 
-Shared-drive add is inventory-first. The catalog admits the drive before the
-config section is appended, and later config-write failures must roll that
-catalog admission back so config/catalog ownership never diverges across a
-partial write.
+Drive add is inventory-first once token/account preconditions are satisfied.
+The catalog admits the drive before the sync directory is materialized, and
+later config/materialization failures roll catalog state back only when the
+config section written by this command is still the section being removed.
+Shared-drive add follows the same shape: catalog admission happens before the
+config section is appended, and rollback restores or removes the catalog drive
+only when config deletion succeeded or config was never written. If another
+writer changes the section before rollback, the command preserves catalog state
+to avoid creating config/catalog divergence for that newer owner.
 
 `logout --purge` is intentionally recovery-oriented. When validated config and
 catalog state cannot be loaded together, callers may still fall back to the
@@ -407,7 +413,7 @@ successful loads with warnings map to `actionable`, and clean loads map to
 
 ## Auto-Creation
 
-`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content, and repair an existing drive section that is missing `sync_dir` by writing the deterministic default. Config read-modify-write mutations run under an advisory lock on the config directory when that parent directory exists, while config creation paths create the parent directory before taking the same lock. `EnsureDriveInConfigDetailed` reports whether the current call added a section or actually inserted `sync_dir` at the write boundary; for backfills it also returns the pre-backfill drive state from the same locked write snapshot so CLI rollback can undo only the mutation it performed when the current section is otherwise unchanged. Config owns the rollback-safe conditional deletes: `DeleteDriveKeyIfDriveEquals` and `DeleteDriveSectionIfDriveEquals` compare the decoded drive and render the delete from the same locked file snapshot so rollback does not act on a different parsed section than the one it checked. `EnsureDriveInConfig` calls `ResolveAccountNames()` (reads catalog-backed account records only, no token file access). Shared drives bypass `EnsureDriveInConfig` and write config directly via `AppendDriveSection` + `SetDriveKey`; CLI enrollment then materializes the configured sync directory.
+`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content, and repair an existing drive section that is missing `sync_dir` by writing the deterministic default. Config read-modify-write mutations run under an advisory lock on the config directory when that parent directory exists, while config creation paths create the parent directory before taking the same lock; concurrent processes must preserve all successfully appended sections. `EnsureDriveInConfigDetailed` reports whether the current call added a section or actually inserted `sync_dir` at the write boundary; for backfills it also returns the pre-backfill drive state from the same locked write snapshot so CLI rollback can undo only the mutation it performed when the current section is otherwise unchanged. Config owns the rollback-safe conditional deletes: `DeleteDriveKeyIfDriveEquals` and `DeleteDriveSectionIfDriveEquals` compare the decoded drive and render the delete from the same locked file snapshot so rollback does not act on a different parsed section than the one it checked. `EnsureDriveInConfig` calls `ResolveAccountNames()` (reads catalog-backed account records only, no token file access). Shared drives bypass `EnsureDriveInConfig` and write config directly via `AppendDriveSection` + `SetDriveKey`; CLI enrollment then materializes the configured sync directory.
 
 Removing a drive or logging out an account deletes the relevant drive sections
 through `DeleteDriveSection()`, but it does not delete `config.toml` itself.

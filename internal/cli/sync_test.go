@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -312,6 +313,32 @@ func TestNewSyncCmd_FullWatchMutualExclusivity(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "full")
 	assert.Contains(t, err.Error(), "watch")
+}
+
+// Validates: R-2.1.5
+func TestDryRunFlagSurfaceOnlySyncCommand(t *testing.T) {
+	t.Parallel()
+
+	root := newRootCmd()
+	var commandsWithDryRun []string
+	walkCommandTree(root, func(cmd *cobra.Command) {
+		if cmd.LocalFlags().Lookup("dry-run") != nil || cmd.PersistentFlags().Lookup("dry-run") != nil {
+			commandsWithDryRun = append(commandsWithDryRun, cmd.CommandPath())
+		}
+	})
+
+	assert.Equal(t, []string{"onedrive-go sync"}, commandsWithDryRun)
+}
+
+func walkCommandTree(cmd *cobra.Command, visit func(*cobra.Command)) {
+	if cmd == nil {
+		return
+	}
+
+	visit(cmd)
+	for _, child := range cmd.Commands() {
+		walkCommandTree(child, visit)
+	}
 }
 
 func TestParseDurationOrZero(t *testing.T) {

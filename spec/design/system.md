@@ -284,6 +284,10 @@ Static verification is a first-class architectural constraint, not a best-effort
   restore its original alias and parent path in cleanup, and validate local
   projection/state reuse through sync output and status. They do not depend on
   provider-specific direct traversal through `/shortcut` in the parent drive.
+  If the parent root listing decodes successfully and direct shared-target
+  sentinel download succeeds after the shorter provider-omission proof window,
+  the helper can classify a missing root placeholder immediately instead of
+  spending the full shortcut fixture propagation budget.
   Provider-backed shortcut alias deletion/manual-discard E2E tests are
   intentionally out of scope: Microsoft Graph does not document a reliable
   create/recreate API for these shortcuts, so deleting a manually seeded CI

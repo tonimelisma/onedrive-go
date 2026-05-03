@@ -372,7 +372,7 @@ lifecycle stays in `internal/multisync`; CLI transport stays in `internal/cli`.
 
 The socket speaks JSON over HTTP:
 
-- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed mounts.
+- `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed mounts. CLI `status` treats those mount IDs as a transient runtime overlay: matching rows are active, displayed configured rows that are absent from the owner response are inactive, and the durable config/store read model remains unchanged.
 - `GET /v1/perf` returns the owner mode plus the live aggregate and per-mount perf snapshots currently owned by the active sync runtime. This includes path-free stale-work, local-observation, and replan-idle aggregates. The surface is live-only and returns whatever the owner has collected so far; it does not materialize historical perf state from SQLite.
 - `POST /v1/perf/capture` triggers an explicit local capture bundle from the active owner. The request carries bounded duration plus optional output-dir, trace, and full-detail toggles; the response returns the local artifact paths for the completed bundle.
 - `POST /v1/reload` reloads config in the watch owner.

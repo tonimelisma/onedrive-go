@@ -605,10 +605,12 @@ func waitForShortcutRootPlaceholder(
 ) {
 	t.Helper()
 
-	deadline := time.Now().Add(shortcutFixturePropagationTimeout)
+	startedAt := time.Now()
+	deadline := startedAt.Add(shortcutFixturePropagationTimeout)
 	var lastNames []string
 	var lastStdout string
 	var lastErr error
+	var lastSentinelErr error
 	rootListingDecoded := false
 	for attempt := 0; ; attempt++ {
 		stdout, _, err := runCLIWithConfigAllowErrorForDrive(t, cfgPath, env, fixture.ParentDrive, "ls", "--json", "/")
@@ -628,13 +630,22 @@ func waitForShortcutRootPlaceholder(
 			}
 		}
 
-		if time.Now().After(deadline) {
-			pollState := shortcutRootPlaceholderPollState{
-				RootListingDecoded: rootListingDecoded,
-				RootNames:          lastNames,
-				LastStdout:         lastStdout,
-				LastErr:            lastErr,
+		now := time.Now()
+		pollState := shortcutRootPlaceholderPollState{
+			RootListingDecoded: rootListingDecoded,
+			RootNames:          lastNames,
+			LastStdout:         lastStdout,
+			LastErr:            lastErr,
+		}
+		if canSkipMissingShortcutRootPlaceholder(pollState, fixture) &&
+			shortcutRootPlaceholderProviderProofElapsed(startedAt, now) {
+			lastSentinelErr = shortcutSentinelReachable(t, cfgPath, env, fixture)
+			if lastSentinelErr == nil {
+				skipShortcutRootPlaceholderOmission(t, failureTitle, pollState, fixture, now.Sub(startedAt))
 			}
+		}
+
+		if now.After(deadline) {
 			if !canSkipMissingShortcutRootPlaceholder(pollState, fixture) {
 				require.Failf(t,
 					failureTitle,
@@ -646,26 +657,20 @@ func waitForShortcutRootPlaceholder(
 					pollState.LastStdout,
 				)
 			}
+			lastSentinelErr = shortcutSentinelReachable(t, cfgPath, env, fixture)
 			require.NoErrorf(t,
-				shortcutSentinelReachable(t, cfgPath, env, fixture),
+				lastSentinelErr,
 				"shared target must remain reachable before skipping missing shortcut root placeholder",
 			)
-			decision := classifyShortcutRootPlaceholderProviderSkip(pollState, fixture)
-			t.Skipf(
-				"%s: provider_skip=%s live Graph did not expose Add-to-OneDrive shortcut placeholder %q in root of %s within %v; root_names=%v last_err=%v last_stdout=%s",
-				failureTitle,
-				decision.Reason,
-				fixture.ShortcutName,
-				fixture.ParentDrive,
-				shortcutFixturePropagationTimeout,
-				lastNames,
-				lastErr,
-				lastStdout,
-			)
+			skipShortcutRootPlaceholderOmission(t, failureTitle, pollState, fixture, shortcutFixturePropagationTimeout)
 		}
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
+}
+
+func shortcutRootPlaceholderProviderProofElapsed(startedAt, now time.Time) bool {
+	return !now.Before(startedAt.Add(shortcutFixtureProviderOmissionProofDelay))
 }
 
 type shortcutRootPlaceholderPollState struct {
@@ -690,6 +695,29 @@ func classifyShortcutRootPlaceholderProviderSkip(
 		return liveProviderSkipDecision{Reason: liveProviderSkipNone}
 	}
 	return liveProviderSkipDecision{Skippable: true, Reason: liveProviderSkipShortcutRootOmitted}
+}
+
+func skipShortcutRootPlaceholderOmission(
+	t *testing.T,
+	failureTitle string,
+	pollState shortcutRootPlaceholderPollState,
+	fixture resolvedShortcutFixture,
+	elapsed time.Duration,
+) {
+	t.Helper()
+
+	decision := classifyShortcutRootPlaceholderProviderSkip(pollState, fixture)
+	t.Skipf(
+		"%s: provider_skip=%s live Graph did not expose Add-to-OneDrive shortcut placeholder %q in root of %s within %v; root_names=%v last_err=%v last_stdout=%s",
+		failureTitle,
+		decision.Reason,
+		fixture.ShortcutName,
+		fixture.ParentDrive,
+		elapsed,
+		pollState.RootNames,
+		pollState.LastErr,
+		pollState.LastStdout,
+	)
 }
 
 func TestCanSkipMissingShortcutRootPlaceholderRequiresDecodedListingAndSharedTarget(t *testing.T) {
@@ -719,6 +747,21 @@ func TestCanSkipMissingShortcutRootPlaceholderRequiresDecodedListingAndSharedTar
 	assert.False(t, canSkipMissingShortcutRootPlaceholder(
 		shortcutRootPlaceholderPollState{RootListingDecoded: true},
 		resolvedShortcutFixture{},
+	))
+}
+
+func TestShortcutRootPlaceholderProviderProofElapsed(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+
+	assert.False(t, shortcutRootPlaceholderProviderProofElapsed(
+		startedAt,
+		startedAt.Add(shortcutFixtureProviderOmissionProofDelay-time.Nanosecond),
+	))
+	assert.True(t, shortcutRootPlaceholderProviderProofElapsed(
+		startedAt,
+		startedAt.Add(shortcutFixtureProviderOmissionProofDelay),
 	))
 }
 
