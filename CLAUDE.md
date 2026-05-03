@@ -238,11 +238,14 @@ Work is done in increments. Do not ask permission, do not skip any step.
 
 ### Step 2: Definition of Ready
 
-Before implementation, produce a Definition of Ready report. Do not start code
-edits until every item is `PASS`, or until a failed item is converted into a
-documented assumption with a concrete validation step. If later discovery
-changes the behavior, scope, authority owner, regression plan, verification
-plan, or safety profile, refresh this report before continuing.
+Before implementation, produce and present a Definition of Ready report to the
+human. Do not start code edits until every item is `PASS`, or until a failed
+item is converted into a documented assumption with a concrete validation step.
+Once the report is presented and every item is `PASS` or `ASSUMPTION`, continue
+the increment without waiting for separate approval unless the human explicitly
+pauses or redirects the work. If later discovery changes the behavior, scope,
+authority owner, regression plan, verification plan, or safety profile, refresh
+this report before continuing.
 
 **DoR report format:** List all 12 checklist items in order. Prefix every item
 with `PASS`, `FAIL`, or `ASSUMPTION`. Include the evidence, file path, command,
@@ -259,7 +262,7 @@ design-doc section, or explicit assumption that supports the status.
 9. [ ] **Secret and credential safety**: state whether token files, `.env`, CI secrets, live account names, or credential-bearing logs are involved; if so, state the redaction/avoidance plan.
 10. [ ] **Live provider and destructive operations**: state whether the increment can mutate live OneDrive/SharePoint state, reset local state, alter release artifacts, rewrite git history, or upgrade dependencies; if so, name the exact operation, why it is necessary, and the rollback or recovery plan.
 11. [ ] **Review carryover**: summarize the `go run ./cmd/devtool verify --dod --stage start` result and how any actionable stale review threads are folded into this increment.
-12. [ ] **Unknowns and assumptions**: list open questions, assumptions, and how each one will be resolved or validated.
+12. [ ] **Unknowns and assumptions**: list each unknown in this format: `Question:`, `Current assumption:`, `Validation step:`, and `Owner document/code path affected if assumption is wrong:`.
 
 ### Step 3: Set up worktree
 
@@ -282,6 +285,7 @@ Mandatory, not optional:
 - **Requirements**: if you completed a feature, update status (`implemented` → `verified` once tests pass). Mirror status in the design doc `Implements:` line.
 - **Reference**: if you discovered a new API quirk, update the relevant reference doc upstream.
 - **Live incidents ledger**: if the increment investigates or fixes a live CI / E2E / integration failure, add or update the matching entry in `spec/reference/live-incidents.md` in the same increment. Reuse the existing entry when the incident is clearly recurring instead of creating duplicates.
+- **README/public status**: if the increment changes product capability status, phase/status language, supported platforms, setup commands, verification entrypoints, or contributor workflow, update `README.md` in the same increment. `README.md` status must summarize `spec/requirements/index.md`; it must not introduce a separate phase or roadmap model.
 - **Refactor hygiene**: package/file renames, deletions, merges, and boundary moves must update in the same increment: `AGENTS.md`, `CLAUDE.md`, routing tables, `GOVERNS:` lists, verifier rules, package comments, error-message prefixes, test names, and design-doc references. Do not leave basic naming cleanup for a follow-up increment.
 - **Deleted-name sweep**: after boundary refactors, grep for deleted package, file, and concept names and remove or justify every remaining reference. Historical references must be explicitly labeled as historical.
 
@@ -310,9 +314,13 @@ commented and resolved by the tool rather than silently ignored.
 
 ### Step 8: Definition of Done
 
-After each increment, run through this entire checklist. If something fails, fix and re-run from the top. If you rebase, resolve conflicts, or otherwise rewrite branch history, re-run the checklist from item 1 on the rebased branch before creating the PR. **When complete, present this checklist to the human with pass/fail status for each item.**
+After each increment, run through the entire DoD checklist. If something fails,
+fix and re-run from the top. If you rebase, resolve conflicts, or otherwise
+rewrite branch history, re-run the checklist from item 1 on the rebased branch
+before creating the PR. **When complete, present the numbered DoD checklist and
+the numbered Final Increment Report to the human.**
 
-**DoD report format:** List all 12 checklist items in order. Prefix every item with a status emoji and text: `✅ PASS` when complete, `❌ FAIL` when failed, blocked, skipped, or not run. Do not collapse items together; include the command, PR, CI, or cleanup evidence that proves each status.
+**DoD checklist format:** List checklist items 1-11 in order. Prefix every item with a status emoji and text: `✅ PASS` when complete, `❌ FAIL` when failed, blocked, skipped, or not run. Do not collapse items together; include the command, PR, CI, cleanup, or review evidence that proves each status.
 
 1. [ ] **Format**: reported by `go run ./cmd/devtool verify default`
 2. [ ] **Lint**: reported by `go run ./cmd/devtool verify default`
@@ -320,23 +328,29 @@ After each increment, run through this entire checklist. If something fails, fix
 4. [ ] **Unit tests**: reported by `go run ./cmd/devtool verify default`
 5. [ ] **Coverage**: reported by `go run ./cmd/devtool verify default`
 6. [ ] **Fast E2E**: reported by `go run ./cmd/devtool verify default`
-7. [ ] **Docs updated**: `AGENTS.md`, `CLAUDE.md`, the routing table, governed design docs, and verifier rules all match the current code layout
+7. [ ] **Docs updated**: `README.md`, `AGENTS.md`, `CLAUDE.md`, the routing table, governed design docs, and verifier rules all match the current code layout and capability status
 8. [ ] **Architecture/docs drift sweep**: no stale references to deleted packages, files, or boundaries remain in repo guidance, design docs, package comments, or error strings unless explicitly marked historical
 9. [ ] **Rebase onto latest main**: Immediately before any `gh pr create`, run `git fetch origin` and `git rebase origin/main` in the worktree branch, then run `go run ./cmd/devtool verify --dod --stage pre-pr`. Never create a PR from a stale merge base. If the rebase changes the branch or you resolve conflicts, restart this checklist at item 1 and only continue once the rebased branch is green.
 10. [ ] **Push, review, CI green, PR comments audited, and PR merged to main**: After item 9 passes, push branch, using `git push --force-with-lease` if the rebase rewrote history, open PR with `gh pr create`, and include the review-thread carryover section from `.dod-pr-comments.json`. When CI and review are ready, run `go run ./cmd/devtool verify --dod --stage pre-merge --pr <pr_number>`. This waits for required PR CI, applies classified review-thread replies, resolves handled threads, and verifies no unresolved current or recent merged-PR review threads remain. Do not wait indefinitely for automatic Codex comments that may never arrive; if no automatic review/comments exist when CI is terminal, continue after the final sweep. If a late actionable thread appears after merge, fix it in a follow-up PR and resolve that thread there. Auto-merge may be requested, but it is never DoD evidence by itself. This item is `✅ PASS` only after `go run ./cmd/devtool verify --dod --stage post-merge --pr <pr_number> --worktree <worktree-path> --branch <branch-name>` reports the PR merged to `main`, the root checkout fast-forwarded, configured post-merge CI interpreted cleanly, and cleanup audit run.
 11. [ ] **Cleanup**: `go run ./cmd/devtool verify --dod --stage post-merge --pr <pr_number> --worktree <worktree-path> --branch <branch-name>` owns current-increment cleanup: it handles the known `gh pr merge` multi-worktree `main` checkout quirk by verifying server-side merge state, fetches/prunes, fast-forwards root `main`, removes the increment worktree, deletes the local branch, tolerates an already-deleted remote branch, interprets configured squash-merge push CI skips, and runs cleanup audit.
-    Include an **Emoji cleanup report** inside this item. The report must cover root checkout status, the current increment worktree/branch/remote branch, other worktrees, other local branches, other remote branches, stashes, open PRs, and anything dirty or untracked. Use one line per finding with path/ref/stash/PR, last activity evidence, unique-work evidence, and action taken:
+    Include **Emoji cleanup evidence** inside this item. The evidence must cover root checkout status, the current increment worktree/branch/remote branch, other worktrees, other local branches, other remote branches, stashes, open PRs, and anything dirty or untracked. Use one line per finding with path/ref/stash/PR, last activity evidence, unique-work evidence, and action taken:
     - `✅ CLEAN`: no item exists or the checked item is exactly clean/current, such as local `main` matching `origin/main`.
     - `🟢 ACTIVE`: other work has clear evidence of active use right now, such as last activity within 15 minutes, a running command/check, a PR updated within 15 minutes, or an explicit human/agent owner. Do not modify or delete it.
     - `🟡 RECENT/UNKNOWN`: other work was last touched more than 15 minutes ago and no more than 1 hour ago, or ownership/activity is ambiguous. Do not modify or delete it.
     - `🔴 STALE`: other work was last touched more than 1 hour ago, is merged/closed/superseded, or has no unique tree/diff content compared with `origin/main`. Report it as a human cleanup candidate unless it is the current increment's own merged work being removed by this checklist.
     Determine "last activity" from the best available evidence: dirty path mtimes for dirty worktrees, branch or remote-ref committer dates for clean refs, stash dates for stashes, and PR `updatedAt`/check activity for PRs. If the evidence conflicts, choose the more conservative color and explain why.
-    **NEVER delete other worktrees, branches, stashes, or dirty files — even if they appear stale.** Instead, include them in the emoji cleanup report, including their last activity evidence and whether they contain unique work not in `origin/main`. Let the human decide what to clean up.
-12. [ ] **Increment report**: Present to the human:
-    - **What you changed**: What files did you change, why and how
-    - **Definition of Ready**: The original DoR result, assumptions made, and any DoR refreshes caused by changed scope, authority owner, regression plan, verification plan, or safety profile
-    - **PR comment audit**: Current PR review-thread status, old merged PR comment/thread sweep scope, stale actionable comments fixed, original PR comments posted with evidence, and non-actionable comments left alone
-    - **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up
-    - **Live incidents**: Which `spec/reference/live-incidents.md` entries were added or updated in this increment, or explicitly say `none`
-    - **Top-up recommendations**: Any remaining codebase improvements you'd make. Don't be coy. Engineering effort is free, and this is mission-critical software. Ensure even small issues are brought up, and don't be coy to suggest more ambitious refactoring.
-    - **Unfixed items**: Anything you were unable to address in this increment
+    **NEVER delete other worktrees, branches, stashes, or dirty files — even if they appear stale.** Instead, include them in the emoji cleanup evidence, including their last activity evidence and whether they contain unique work not in `origin/main`. Let the human decide what to clean up.
+
+### Final Increment Report
+
+After the DoD checklist passes, present one numbered final increment report to
+the human. This report is not a checklist item. It is the narrative handoff for
+the completed increment.
+
+1. **What you changed**: What files did you change, why and how
+2. **Definition of Ready**: The original DoR result, assumptions made, and any DoR refreshes caused by changed scope, authority owner, regression plan, verification plan, or safety profile
+3. **PR comment audit**: Current PR review-thread status, old merged PR comment/thread sweep scope, stale actionable comments fixed, original PR comments posted with evidence, and non-actionable comments left alone
+4. **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up
+5. **Live incidents**: Which `spec/reference/live-incidents.md` entries were added or updated in this increment, or explicitly say `none`
+6. **Top-up recommendations**: Any remaining codebase improvements you'd make. Don't be coy. Engineering effort is free, and this is mission-critical software. Ensure even small issues are brought up, and don't be coy to suggest more ambitious refactoring.
+7. **Unfixed items**: Anything you were unable to address in this increment
