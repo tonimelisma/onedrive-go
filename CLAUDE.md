@@ -236,7 +236,32 @@ Work is done in increments. Do not ask permission, do not skip any step.
 5. Evaluate the codebase to determine if any foundational improvements are needed before starting.
 6. If docs and code disagree about package names, file ownership, or boundaries, fix that drift in the same increment before building more work on top of the stale model.
 
-### Step 2: Set up worktree
+### Step 2: Definition of Ready
+
+Before implementation, produce a Definition of Ready report. Do not start code
+edits until every item is `PASS`, or until a failed item is converted into a
+documented assumption with a concrete validation step. If later discovery
+changes the behavior, scope, authority owner, regression plan, verification
+plan, or safety profile, refresh this report before continuing.
+
+**DoR report format:** List all 12 checklist items in order. Prefix every item
+with `PASS`, `FAIL`, or `ASSUMPTION`. Include the evidence, file path, command,
+design-doc section, or explicit assumption that supports the status.
+
+1. [ ] **Task intent**: state the increment as one product-visible behavior, repo-maintenance outcome, or investigation result.
+2. [ ] **Non-goals**: state what is intentionally out of scope for this increment.
+3. [ ] **Governing docs**: identify the requirements, design docs, and reference docs read for the touched area.
+4. [ ] **Authority owner**: name the owner of truth, mutation, side effects, durable state, runtime lifecycle, and user-facing output for the change.
+5. [ ] **Code scope**: name the expected packages/files and any areas that must not be touched.
+6. [ ] **Regression plan**: name the failing test, new test, or existing verification surface that will prove the behavior.
+7. [ ] **Verification plan**: name the focused test commands, race/stress/E2E needs, and verifier profile required before PR.
+8. [ ] **Data safety**: state how the increment avoids unintended local deletes, remote deletes, overwrites, state DB corruption, and stale-truth mutation.
+9. [ ] **Secret and credential safety**: state whether token files, `.env`, CI secrets, live account names, or credential-bearing logs are involved; if so, state the redaction/avoidance plan.
+10. [ ] **Live provider and destructive operations**: state whether the increment can mutate live OneDrive/SharePoint state, reset local state, alter release artifacts, rewrite git history, or upgrade dependencies; if so, name the exact operation, why it is necessary, and the rollback or recovery plan.
+11. [ ] **Review carryover**: summarize the `go run ./cmd/devtool verify --dod --stage start` result and how any actionable stale review threads are folded into this increment.
+12. [ ] **Unknowns and assumptions**: list open questions, assumptions, and how each one will be resolved or validated.
+
+### Step 3: Set up worktree
 
 1. `git fetch origin` before creating the worktree so new work starts from the current `origin/main`, not a stale local `main`
 2. Create the worktree from `origin/main` with `go run ./cmd/devtool worktree add --path <path> --branch <branch>`
@@ -245,12 +270,12 @@ Work is done in increments. Do not ask permission, do not skip any step.
 
 `.worktreeinclude` lists local adjuncts to apply into new worktrees. Plain entries are copied as files; entries prefixed with `@` are symlinked instead of copied. Use `go run ./cmd/devtool worktree bootstrap --path <path>` to repair an existing worktree if needed.
 
-### Step 3: Develop with TDD
+### Step 4: Develop with TDD
 
 All development follows strict red/green/refactor TDD
 Mandatory regression tests for every bug fix.
 
-### Step 4: Update docs
+### Step 5: Update docs
 
 Mandatory, not optional:
 - **Design doc**: update the module doc(s) you touched. New behavior → new spec section. Changed behavior → updated spec. New constraint discovered → constraints section.
@@ -260,13 +285,13 @@ Mandatory, not optional:
 - **Refactor hygiene**: package/file renames, deletions, merges, and boundary moves must update in the same increment: `AGENTS.md`, `CLAUDE.md`, routing tables, `GOVERNS:` lists, verifier rules, package comments, error-message prefixes, test names, and design-doc references. Do not leave basic naming cleanup for a follow-up increment.
 - **Deleted-name sweep**: after boundary refactors, grep for deleted package, file, and concept names and remove or justify every remaining reference. Historical references must be explicitly labeled as historical.
 
-### Step 5: Self-verify
+### Step 6: Self-verify
 
 Re-read the governing design doc. Produce a compliance report listing each spec item, whether it was implemented in full, partially, or not at all, and how it was implemented.
 If the increment moved, deleted, or collapsed a boundary, run an architecture-drift sweep and verify that docs, verifier rules, comments, package docs, and user-facing/internal error text use the current package and file names.
 If you deleted a package or file, prove there are no stale references left outside intentionally labeled historical notes.
 
-### Step 6: Code review checklist
+### Step 7: Code review checklist
 
 Self-review every change against coding standards proceeding to the Definition of Done. After opening a PR, review all human and automation feedback. This repo currently runs Codex PR reviews; Codex does not provide a required approval, but unresolved Codex review threads still block merge because `main` requires conversation resolution.
 When a PR carries review-thread follow-up from prior work, include a PR body
@@ -283,7 +308,7 @@ and resolve every handled thread, always. Non-actionable noise such as review
 tool quota notices must be classified as `non_actionable` with a reason, then
 commented and resolved by the tool rather than silently ignored.
 
-### Step 7: Definition of Done
+### Step 8: Definition of Done
 
 After each increment, run through this entire checklist. If something fails, fix and re-run from the top. If you rebase, resolve conflicts, or otherwise rewrite branch history, re-run the checklist from item 1 on the rebased branch before creating the PR. **When complete, present this checklist to the human with pass/fail status for each item.**
 
@@ -309,6 +334,7 @@ After each increment, run through this entire checklist. If something fails, fix
     **NEVER delete other worktrees, branches, stashes, or dirty files — even if they appear stale.** Instead, include them in the emoji cleanup report, including their last activity evidence and whether they contain unique work not in `origin/main`. Let the human decide what to clean up.
 12. [ ] **Increment report**: Present to the human:
     - **What you changed**: What files did you change, why and how
+    - **Definition of Ready**: The original DoR result, assumptions made, and any DoR refreshes caused by changed scope, authority owner, regression plan, verification plan, or safety profile
     - **PR comment audit**: Current PR review-thread status, old merged PR comment/thread sweep scope, stale actionable comments fixed, original PR comments posted with evidence, and non-actionable comments left alone
     - **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up
     - **Live incidents**: Which `spec/reference/live-incidents.md` entries were added or updated in this increment, or explicitly say `none`
