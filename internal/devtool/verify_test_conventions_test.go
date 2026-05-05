@@ -63,6 +63,31 @@ func TestSleepy(t *testing.T) {
 }
 
 // Validates: R-6.10.17
+func TestRunTestConventionsRejectsAliasedDirectSleep(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	require.NoError(t, writeFile(
+		filepath.Join(repoRoot, "sleepy_test.go"),
+		[]byte(`package sample
+
+import (
+	"testing"
+	tm "time"
+)
+
+func TestSleepy(t *testing.T) {
+	tm.Sleep(tm.Second)
+}
+`),
+	))
+
+	err := runTestConventions(context.Background(), &fakeRunner{}, repoRoot, nil, &bytes.Buffer{}, &bytes.Buffer{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sleepy_test.go:9: direct tm.Sleep")
+}
+
+// Validates: R-6.10.17
 func TestRunTestConventionsAllowsCentralizedLiveE2ESleepHelper(t *testing.T) {
 	t.Parallel()
 
