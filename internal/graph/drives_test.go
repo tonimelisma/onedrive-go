@@ -133,7 +133,8 @@ func TestDrives_Success(t *testing.T) {
 				}
 			}`)
 		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+			assert.Failf(t, "unexpected path", "%s", r.URL.Path)
+			http.Error(w, "unexpected path", http.StatusNotFound)
 		}
 	}))
 	defer srv.Close()
@@ -210,7 +211,8 @@ func TestDrives_NormalizesPersonalPhantomDrives(t *testing.T) {
 				}
 			}`)
 		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+			assert.Failf(t, "unexpected path", "%s", r.URL.Path)
+			http.Error(w, "unexpected path", http.StatusNotFound)
 		}
 	}))
 	defer srv.Close()
@@ -254,9 +256,11 @@ func TestDrives_NoPersonalDriveSkipsPrimaryLookup(t *testing.T) {
 			}`)
 		case testMeDrivePath:
 			primaryCalls++
-			t.Fatalf("unexpected primary drive lookup")
+			assert.Fail(t, "unexpected primary drive lookup")
+			http.Error(w, "unexpected primary drive lookup", http.StatusInternalServerError)
 		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+			assert.Failf(t, "unexpected path", "%s", r.URL.Path)
+			http.Error(w, "unexpected path", http.StatusNotFound)
 		}
 	}))
 	defer srv.Close()
@@ -297,7 +301,8 @@ func TestDrives_PersonalNormalizationPropagatesPrimaryDriveError(t *testing.T) {
 				}
 			}`)
 		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+			assert.Failf(t, "unexpected path", "%s", r.URL.Path)
+			http.Error(w, "unexpected path", http.StatusNotFound)
 		}
 	}))
 	defer srv.Close()
@@ -732,7 +737,8 @@ func TestDrives_Transient403_Recovers(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			writeTestResponse(t, w, `{"id": "drive-1", "name": "OneDrive", "driveType": "personal"}`)
 		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+			assert.Failf(t, "unexpected path", "%s", r.URL.Path)
+			http.Error(w, "unexpected path", http.StatusNotFound)
 		}
 	}))
 	defer srv.Close()
@@ -845,7 +851,8 @@ func TestToDrive_OwnerEmail(t *testing.T) {
 				}
 			}`)
 		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+			assert.Failf(t, "unexpected path", "%s", r.URL.Path)
+			http.Error(w, "unexpected path", http.StatusNotFound)
 		}
 	}))
 	defer srv.Close()

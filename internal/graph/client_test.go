@@ -63,6 +63,8 @@ func (failingToken) Token() (string, error) {
 	return "", errors.New("token error")
 }
 
+const retryBodyFixture = `{"name":"test-folder","folder":{}}`
+
 // testRetryPolicy is a fast retry policy for tests.
 func testRetryPolicy() retry.Policy {
 	return retry.Policy{
@@ -758,9 +760,8 @@ func TestDoWithHeaders_RetriesWithHeaders(t *testing.T) {
 	assert.Equal(t, int32(2), calls.Load())
 }
 
-func TestDo_RetryWithBody(t *testing.T) {
-	// Verify that POST/PATCH bodies are fully readable on retry attempts.
-	expectedBody := `{"name":"test-folder","folder":{}}`
+func TestDo_RetryWithReplayableBody(t *testing.T) {
+	// Verify that replayable mutation bodies are fully readable on retry attempts.
 
 	var calls atomic.Int32
 
@@ -769,7 +770,7 @@ func TestDo_RetryWithBody(t *testing.T) {
 		if !assert.NoError(t, readErr) {
 			return
 		}
-		assert.Equal(t, expectedBody, string(body))
+		assert.JSONEq(t, retryBodyFixture, string(body))
 
 		n := calls.Add(1)
 		if n <= 1 {
@@ -785,15 +786,42 @@ func TestDo_RetryWithBody(t *testing.T) {
 	client := newTestClient(t, srv.URL)
 	resp, err := client.do(
 		t.Context(),
-		http.MethodPost,
-		"/create",
-		bytes.NewReader([]byte(expectedBody)),
+		http.MethodPut,
+		"/content",
+		bytes.NewReader([]byte(retryBodyFixture)),
 	)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, int32(2), calls.Load())
+}
+
+func TestDo_PostDoesNotUseGenericTransportRetry(t *testing.T) {
+	var calls atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, readErr := io.ReadAll(r.Body)
+		if !assert.NoError(t, readErr) {
+			return
+		}
+		assert.JSONEq(t, retryBodyFixture, string(body))
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeClientTestBody(t, w, `{"error":{"code":"serviceUnavailable","message":"try later"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	resp, err := client.do(
+		t.Context(),
+		http.MethodPost,
+		"/create",
+		bytes.NewReader([]byte(retryBodyFixture)),
+	)
+	closeClientTestResponse(t, resp)
+	require.ErrorIs(t, err, ErrServerError)
+	assert.Equal(t, int32(1), calls.Load())
 }
 
 // TestIsRetryable was deleted: isRetryable moved to retry/transport.go.

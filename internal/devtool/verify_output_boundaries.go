@@ -20,6 +20,12 @@ type outputBoundaryViolation struct {
 	Message string
 }
 
+const (
+	verifyGitDir      = ".git"
+	verifyTestdataDir = ".testdata"
+	verifyVendorDir   = "vendor"
+)
+
 func runOutputBoundaries(
 	_ context.Context,
 	_ commandRunner,
@@ -117,7 +123,7 @@ func findOutputBoundaryViolations(repoRoot string) ([]outputBoundaryViolation, e
 
 func shouldSkipOutputBoundaryDir(name string) bool {
 	switch name {
-	case ".git", ".testdata", "vendor":
+	case verifyGitDir, verifyTestdataDir, verifyVendorDir:
 		return true
 	default:
 		return false

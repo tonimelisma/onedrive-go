@@ -1220,9 +1220,7 @@ func TestWatch_TopologyApplyFailureDoesNotAdvanceCursor(t *testing.T) {
 	batches := make(chan remoteObservationBatch, 1)
 	go func() {
 		batch := <-batches
-		if !batch.shortcutTopology.shouldApply() {
-			t.Errorf("expected applicable topology in watch batch")
-		}
+		assert.True(t, batch.shortcutTopology.shouldApply(), "expected applicable topology in watch batch")
 		batch.finishApplied(applyErr)
 	}()
 
@@ -1256,9 +1254,7 @@ func TestWatch_EmptyCompleteTopologyApplyFailureDoesNotAdvanceCursor(t *testing.
 	batches := make(chan remoteObservationBatch, 1)
 	go func() {
 		batch := <-batches
-		if !batch.shortcutTopology.shouldApply() {
-			t.Errorf("expected empty complete topology batch to be emitted")
-		}
+		assert.True(t, batch.shortcutTopology.shouldApply(), "expected empty complete topology batch to be emitted")
 		batch.finishApplied(applyErr)
 	}()
 

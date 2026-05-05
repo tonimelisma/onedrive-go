@@ -757,6 +757,30 @@ func (r *Root) Remove(rel string) error {
 	return nil
 }
 
+// RemoveEmptyDirNoFollow removes rel only if it is an empty directory within
+// the rooted sync tree. The explicit empty check gives callers a clear contract;
+// the final rmdir-style Remove remains the race guard if a child appears after
+// the check.
+func (r *Root) RemoveEmptyDirNoFollow(rel string) error {
+	empty, err := r.DirEmptyNoFollow(rel)
+	if err != nil {
+		return err
+	}
+	if !empty {
+		return fmt.Errorf("removing empty directory %s: directory is not empty", rel)
+	}
+
+	path, err := r.Abs(rel)
+	if err != nil {
+		return err
+	}
+	if err := r.ops.remove(path); err != nil {
+		return fmt.Errorf("removing empty directory %s: %w", rel, err)
+	}
+
+	return nil
+}
+
 func (r *Root) RemoveAll(rel string) error {
 	path, err := r.Abs(rel)
 	if err != nil {
