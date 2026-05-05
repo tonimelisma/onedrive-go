@@ -192,6 +192,74 @@ func TestRetryTransport_400NoRetry(t *testing.T) {
 }
 
 // Validates: R-6.8.8
+func TestRetryTransport_UnsafeMethodsDoNotRetryGenericTransientStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+	}{
+		{name: "Post", method: http.MethodPost},
+		{name: "Patch", method: http.MethodPatch},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var attempts atomic.Int32
+			inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				attempts.Add(1)
+
+				return makeResponse(http.StatusServiceUnavailable, nil), nil
+			})
+			rt := &retry.RetryTransport{
+				Inner:  inner,
+				Policy: testPolicy(),
+				Logger: slog.Default(),
+				Sleep:  noopSleep,
+			}
+
+			req, err := http.NewRequestWithContext(t.Context(), tt.method, "http://example.com/mutate", http.NoBody)
+			require.NoError(t, err)
+
+			resp, err := rt.RoundTrip(req)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+			assert.Equal(t, int32(1), attempts.Load())
+			require.NoError(t, resp.Body.Close())
+		})
+	}
+}
+
+// Validates: R-6.8.8
+func TestRetryTransport_UnsafeMethodsDoNotRetryGenericNetworkError(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		attempts.Add(1)
+
+		return nil, io.ErrUnexpectedEOF
+	})
+
+	rt := &retry.RetryTransport{
+		Inner:  inner,
+		Policy: testPolicy(),
+		Logger: slog.Default(),
+		Sleep:  noopSleep,
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://example.com/mutate", http.NoBody)
+	require.NoError(t, err)
+
+	resp, err := rt.RoundTrip(req)
+	closeTestResponse(t, resp)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	assert.Equal(t, int32(1), attempts.Load())
+}
+
+// Validates: R-6.8.8
 func TestRetryTransport_BodyRewind(t *testing.T) {
 	t.Parallel()
 

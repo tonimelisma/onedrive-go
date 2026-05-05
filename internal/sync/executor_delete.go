@@ -146,11 +146,10 @@ func (e *Executor) DeleteLocalSymlink(action *Action, relPath string) ActionOutc
 	return e.DeleteOutcome(action, ActionLocalDelete)
 }
 
-// DeleteLocalFolder removes an empty local directory.
-// NOTE: There is an inherent TOCTOU race between ReadDir and Remove — a file
-// could be created between the two calls. This is acceptable because the DAG
-// guarantees child deletes complete before parent folder deletes, and new
-// creations would be caught in the next sync pass.
+// DeleteLocalFolder removes an empty local directory. ReadDir is only the
+// planner-facing blocker check: the final rooted RemoveEmptyDirNoFollow call
+// rechecks emptiness, and the underlying rmdir fails closed if a child appears
+// after that recheck.
 func (e *Executor) DeleteLocalFolder(action *Action, absPath string) ActionOutcome {
 	relPath, err := e.syncTree.Rel(absPath)
 	if err != nil {
@@ -200,7 +199,7 @@ func (e *Executor) DeleteLocalFolder(action *Action, absPath string) ActionOutco
 		}
 	}
 
-	if err := e.syncTree.Remove(relPath); err != nil {
+	if err := e.syncTree.RemoveEmptyDirNoFollow(relPath); err != nil {
 		return e.failedOutcome(
 			action,
 			ActionLocalDelete,

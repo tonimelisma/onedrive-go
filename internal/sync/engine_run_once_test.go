@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,6 +53,47 @@ func newRunOnceBidirectionalMock(driveID driveid.ID) *engineMockClient {
 			}, nil
 		},
 	}
+}
+
+func installDryRunContentMutationGuards(t *testing.T, mock *engineMockClient) *atomic.Int32 {
+	t.Helper()
+
+	var mutationCalls atomic.Int32
+	fail := func(name string) {
+		mutationCalls.Add(1)
+		assert.Failf(t, "dry-run content mutator called", "%s", name)
+	}
+
+	mock.createFolderFn = func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
+		fail("CreateFolder")
+		return nil, fmt.Errorf("dry-run content mutator called: CreateFolder")
+	}
+	mock.moveItemIfMatchFn = func(_ context.Context, _ driveid.ID, _, _, _, _ string) (*graph.Item, error) {
+		fail("MoveItemIfMatch")
+		return nil, fmt.Errorf("dry-run content mutator called: MoveItemIfMatch")
+	}
+	mock.deleteItemIfMatchFn = func(_ context.Context, _ driveid.ID, _, _ string) error {
+		fail("DeleteItemIfMatch")
+		return nil
+	}
+	mock.permanentDeleteFn = func(_ context.Context, _ driveid.ID, _ string) error {
+		fail("PermanentDeleteItem")
+		return nil
+	}
+	mock.downloadFn = func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+		fail("Download")
+		return 0, nil
+	}
+	mock.uploadFn = func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+		fail("Upload")
+		return nil, fmt.Errorf("dry-run content mutator called: Upload")
+	}
+	mock.uploadToItemFn = func(_ context.Context, _ driveid.ID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+		fail("UploadToItem")
+		return nil, fmt.Errorf("dry-run content mutator called: UploadToItem")
+	}
+
+	return &mutationCalls
 }
 
 func TestNewEngine_ZeroDriveID_ReturnsError(t *testing.T) {
@@ -389,7 +431,6 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
-	executorCalled := false
 
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
@@ -401,11 +442,8 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 				},
 			}, "token-1"), nil
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
-			executorCalled = true
-			return 0, nil
-		},
 	}
+	mutationCalls := installDryRunContentMutationGuards(t, mock)
 
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
@@ -415,7 +453,7 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 
 	assert.True(t, report.DryRun, "report.DryRun")
 	assert.GreaterOrEqual(t, report.Downloads, 1, "plan should be computed")
-	assert.False(t, executorCalled, "executor should not be called during dry-run")
+	assert.Equal(t, int32(0), mutationCalls.Load(), "dry-run should not invoke content mutators")
 	assert.Equal(t, 0, report.Succeeded, "succeeded")
 	assert.Equal(t, 0, report.Failed, "failed")
 
@@ -665,7 +703,6 @@ func TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
-	executorCalled := false
 	folderDeltaCalls := 0
 
 	mock := &engineMockClient{
@@ -684,11 +721,8 @@ func TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken(t *testing.T) {
 				QuickXorHash: "hash1",
 			}}, "scoped-token-dry-run", nil
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
-			executorCalled = true
-			return 0, nil
-		},
 	}
+	mutationCalls := installDryRunContentMutationGuards(t, mock)
 
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
@@ -721,7 +755,7 @@ func TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, report.DryRun)
 	assert.Equal(t, 1, folderDeltaCalls)
-	assert.False(t, executorCalled)
+	assert.Equal(t, int32(0), mutationCalls.Load(), "dry-run should not invoke content mutators")
 
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)

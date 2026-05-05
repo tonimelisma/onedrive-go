@@ -592,7 +592,8 @@ func TestMountSession_ResolveItem_MountRootRelativePath(t *testing.T) {
 		case "/drives/abcdef0123456789/items/folder-id/children":
 			writeTestResponsef(t, w, `{"value":[{"id":"file-id","name":"report.docx"}]}`)
 		default:
-			t.Fatalf("unexpected path %s", r.URL.Path)
+			assert.Failf(t, "unexpected path", "%s", r.URL.Path)
+			http.Error(w, "unexpected path", http.StatusNotFound)
 		}
 	}))
 	mountSession := NewMountSession(s, mountedRemoteRootItemID)

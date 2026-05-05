@@ -73,6 +73,7 @@ type engineMockClient struct {
 	moveItemIfMatchFn   func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName, ifMatch string) (*graph.Item, error)
 	deleteItemFn        func(ctx context.Context, driveID driveid.ID, itemID string) error
 	deleteItemIfMatchFn func(ctx context.Context, driveID driveid.ID, itemID, ifMatch string) error
+	permanentDeleteFn   func(ctx context.Context, driveID driveid.ID, itemID string) error
 
 	// Downloader
 	downloadFn func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
@@ -213,7 +214,11 @@ func (m *engineMockClient) DeleteItemIfMatch(ctx context.Context, driveID drivei
 	return nil
 }
 
-func (m *engineMockClient) PermanentDeleteItem(_ context.Context, _ driveid.ID, _ string) error {
+func (m *engineMockClient) PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error {
+	if m.permanentDeleteFn != nil {
+		return m.permanentDeleteFn(ctx, driveID, itemID)
+	}
+
 	return nil
 }
 

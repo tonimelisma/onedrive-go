@@ -290,7 +290,10 @@ func Symlink(src, dst string) error {
 	return nil
 }
 
-func WriteFile(path string, data []byte, perm os.FileMode) error {
+// WriteDisposableFile writes data directly to a disposable artifact path. It is
+// intentionally non-atomic; durable config, token, state, or user-content writes
+// must use an owner-specific atomic writer instead.
+func WriteDisposableFile(path string, data []byte, perm os.FileMode) error {
 	abs, err := absolutePath(path)
 	if err != nil {
 		return err

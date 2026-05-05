@@ -66,7 +66,7 @@ func startCLIControlSocketWithStatusHandler(
 
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			t.Errorf("test control server: %v", err)
+			assert.NoError(t, err, "test control server")
 		}
 	}()
 
@@ -95,8 +95,9 @@ func TestNotifyDaemon_ReportsAmbiguousProbeFailureClearly(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, err := w.Write([]byte("{"))
 		assert.NoError(t, err)
-	}, func(http.ResponseWriter, *http.Request) {
-		t.Fatal("daemon notification should stop before mutating when the owner probe is ambiguous")
+	}, func(w http.ResponseWriter, _ *http.Request) {
+		assert.Fail(t, "daemon notification should stop before mutating when the owner probe is ambiguous")
+		w.WriteHeader(http.StatusInternalServerError)
 	})
 
 	var status bytes.Buffer

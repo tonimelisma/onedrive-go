@@ -22,7 +22,7 @@ Unified download/upload manager shared by both CLI file operations and the sync 
 | Behavior | Evidence |
 | --- | --- |
 | Downloads use partial-file resume plus hash verification before the final atomic rename. | `internal/driveops/download_test.go`, `internal/driveops/hash_test.go`, `internal/localpath/localpath_test.go` (`TestAtomicWrite`) |
-| Uploads keep simple-upload and upload-session mechanics inside the transfer boundary, and persisted sessions carry mount scope so lifecycle owners can purge child-owned sessions. | `internal/driveops/upload_test.go`, `internal/graph/upload_test.go`, `internal/graph/upload_session_test.go`, `TestSessionStore_DeleteForScope_RemovesMatchingMountOrRoot` |
+| Uploads keep simple-upload and upload-session mechanics inside the transfer boundary, and persisted sessions carry mount scope so lifecycle owners can purge child-owned sessions and resume after restart. | `internal/driveops/upload_test.go`, `internal/graph/upload_test.go`, `internal/graph/upload_session_test.go`, `TestSessionStore_DeleteForScope_RemovesMatchingMountOrRoot`, `TestSessionStore_ReopenPreservesUploadSession` |
 | Sync-owned live preconditions can be injected without making `driveops` import sync policy. | `TestDownloadToFile_TargetPreconditionBeforeRenamePreservesPartial`, `TestUploadFile_SourcePreconditionRunsBeforeUpload`, `TestUploadFile_SourcePreconditionRunsDuringSessionRead` |
 | Sync execution reuses the same transfer boundary instead of inventing a second transfer path. | `internal/sync/executor_test.go`, `internal/cli/sync_helpers_test.go` |
 

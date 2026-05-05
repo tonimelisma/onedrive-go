@@ -84,6 +84,10 @@ func TestEngineFlow_ProcessNormalDecision_FatalTerminatesWithFatalResultError(t 
 
 	require.EqualError(t, err, "sync: unauthorized action completion for auth.txt")
 	assert.Empty(t, ready)
+	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+	blockScopes, blockErr := eng.baseline.ListBlockScopes(t.Context())
+	require.NoError(t, blockErr)
+	assert.Empty(t, blockScopes)
 }
 
 // Validates: R-2.10.5

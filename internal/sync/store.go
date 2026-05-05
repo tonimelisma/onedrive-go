@@ -5,7 +5,7 @@
 //   - SyncStore:    struct definition (db, baseline, logger, nowFunc)
 //   - NewSyncStore: open database, apply canonical schema, return ready store
 //   - Close:        WAL checkpoint + close database
-//   - Checkpoint:   WAL checkpoint + optional pruning
+//   - Checkpoint:   WAL checkpoint
 //   - nullString:   empty string → SQL NULL
 //   - nullOptionalInt64: zero → SQL NULL for optional fields like mtimes
 //   - nullKnownInt64:   preserve zero for known values like file sizes
@@ -111,8 +111,7 @@ func openSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, ensu
 // after `sync`) see all committed data when they open a new connection to the
 // same database file.
 func (m *SyncStore) Close(ctx context.Context) error {
-	// WAL checkpoint only (no pruning) on close.
-	if err := m.Checkpoint(ctx, 0); err != nil {
+	if err := m.Checkpoint(ctx); err != nil {
 		m.logger.Warn("checkpoint failed on close", slog.String("error", err.Error()))
 	}
 
@@ -123,17 +122,13 @@ func (m *SyncStore) Close(ctx context.Context) error {
 	return nil
 }
 
-// Checkpoint performs WAL checkpoint and optionally prunes stale observation
-// issues. Called after initial sync, every 30 minutes, and on shutdown.
-// Pass retention=0 to skip pruning (WAL checkpoint only).
-func (m *SyncStore) Checkpoint(ctx context.Context, retention time.Duration) error {
+// Checkpoint performs a WAL checkpoint only. Semantic sync-state cleanup is
+// owned by the store operations that understand that state, not by generic
+// database housekeeping.
+func (m *SyncStore) Checkpoint(ctx context.Context) error {
 	if _, err := m.db.ExecContext(ctx,
 		"PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		m.logger.Warn("WAL checkpoint failed", slog.String("error", err.Error()))
-	}
-
-	if retention <= 0 {
-		return nil
 	}
 
 	return nil

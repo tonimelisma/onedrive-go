@@ -205,12 +205,7 @@ func (c *Client) deltaAllPages(
 			continue
 		}
 
-		// Neither link present — unexpected, but treat as complete with empty token.
-		warnArgs := attrsToArgs(logAttrs)
-		warnArgs = append(warnArgs, slog.Int("page", page))
-		c.logger.Warn("delta response has neither nextLink nor deltaLink", warnArgs...)
-
-		return allItems, "", nil
+		return nil, "", fmt.Errorf("graph: delta page %d has neither nextLink nor deltaLink", page)
 	}
 }
 

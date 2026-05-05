@@ -136,7 +136,7 @@ func TestSymlinkTargetsBehaveLikeOrdinaryPaths(t *testing.T) {
 	assert.Equal(t, "through-link", string(data))
 }
 
-func TestWriteFileAndRemoveAll(t *testing.T) {
+func TestWriteDisposableFileAndRemoveAll(t *testing.T) {
 	t.Parallel()
 
 	base := t.TempDir()
@@ -144,7 +144,7 @@ func TestWriteFileAndRemoveAll(t *testing.T) {
 	targetFile := filepath.Join(targetDir, "file.txt")
 
 	require.NoError(t, MkdirAll(targetDir, 0o700))
-	require.NoError(t, WriteFile(targetFile, []byte("written"), 0o600))
+	require.NoError(t, WriteDisposableFile(targetFile, []byte("written"), 0o600))
 
 	data, err := ReadFile(targetFile)
 	require.NoError(t, err)

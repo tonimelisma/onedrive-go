@@ -290,6 +290,26 @@ func TestDeltaAll_GoneError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrGone)
 }
 
+func TestDeltaAll_MissingContinuationLinkReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, `{
+			"value": [
+				{"id":"item-1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"}}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, token, err := client.DeltaAll(t.Context(), driveid.New("d"), "")
+	require.Error(t, err)
+	assert.Nil(t, items)
+	assert.Empty(t, token)
+	assert.Contains(t, err.Error(), "neither nextLink nor deltaLink")
+}
+
 func TestDeltaAll_MaxPages(t *testing.T) {
 	var srv *httptest.Server
 
@@ -522,6 +542,26 @@ func TestDeltaFolderAll_MultiPage(t *testing.T) {
 	assert.Equal(t, "item-2", items[1].ID)
 	assert.Contains(t, token, "token=alldone")
 	assert.Equal(t, 2, callCount)
+}
+
+func TestDeltaFolderAll_MissingContinuationLinkReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, `{
+			"value": [
+				{"id":"item-1","name":"file1.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	items, token, err := client.DeltaFolderAll(t.Context(), driveid.New("d"), "folder-abc", "")
+	require.Error(t, err)
+	assert.Nil(t, items)
+	assert.Empty(t, token)
+	assert.Contains(t, err.Error(), "neither nextLink nor deltaLink")
 }
 
 func TestDeltaFolderAll_MaxPages(t *testing.T) {

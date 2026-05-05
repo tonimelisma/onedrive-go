@@ -1853,6 +1853,34 @@ func TestExecutor_LocalDelete_FolderNotEmpty(t *testing.T) {
 	requireOutcomeFailure(t, &o)
 }
 
+// Validates: R-2.8.10, R-6.2.4
+func TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	outside := t.TempDir()
+	outsideFile := writeExecTestFile(t, outside, "target/file.txt", "outside data")
+	aliasPath := filepath.Join(syncRoot, "alias")
+	if err := os.Symlink(filepath.Join(outside, "target"), aliasPath); err != nil {
+		t.Skipf("symlink not available on this filesystem: %v", err)
+	}
+
+	action := &Action{
+		Type:   ActionLocalDelete,
+		Path:   "alias/file.txt",
+		ItemID: "item1",
+		View:   &PathView{},
+	}
+
+	o := e.ExecuteLocalDelete(t.Context(), action)
+	requireOutcomeFailure(t, &o)
+	assert.Contains(t, o.Error.Error(), "refusing to delete alias/file.txt through symlink boundary alias")
+	assert.FileExists(t, outsideFile)
+	assert.FileExists(t, filepath.Join(syncRoot, "alias", "file.txt"))
+}
+
 // ---------------------------------------------------------------------------
 // Remote delete tests
 // ---------------------------------------------------------------------------
@@ -1969,6 +1997,99 @@ func TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition(t *te
 	requireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 	assert.Equal(t, PermissionCapabilityRemoteWrite, o.FailureCapability)
+}
+
+// Validates: R-2.8.10, R-6.2.4
+func TestExecutor_RemoteDelete_WrongDrivePreflightReturnsStalePrecondition(t *testing.T) {
+	t.Parallel()
+
+	plannedDriveID := driveid.New(synctest.TestDriveID)
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			assert.Equal(t, "item1", itemID)
+			return &graph.Item{
+				ID:      "item1",
+				DriveID: driveid.New("other-drive"),
+				ETag:    `"etag-current"`,
+			}, nil
+		},
+		deleteItemIfMatchFn: func(context.Context, driveid.ID, string, string) error {
+			require.FailNow(t, "remote delete should not run after wrong-drive preflight")
+			return assert.AnError
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteDelete,
+		Path:    "exec-remote-file.txt",
+		ItemID:  "item1",
+		DriveID: plannedDriveID,
+		View: &PathView{
+			Path: "exec-remote-file.txt",
+			Remote: &RemoteState{
+				DriveID:  plannedDriveID,
+				ItemID:   "item1",
+				ItemType: ItemTypeFile,
+				ETag:     `"etag-current"`,
+			},
+		},
+	}
+
+	o := e.ExecuteRemoteDelete(t.Context(), action)
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityRemoteRead, o.FailureCapability)
+}
+
+// Validates: R-2.8.10, R-6.2.4
+func TestExecutor_RemoteDelete_StalePathPreflightReturnsStalePrecondition(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			assert.Equal(t, "item1", itemID)
+			return &graph.Item{
+				ID:              "item1",
+				DriveID:         driveID,
+				Name:            "file.txt",
+				ParentPath:      "Moved",
+				ParentPathKnown: true,
+				ETag:            `"etag-current"`,
+			}, nil
+		},
+		deleteItemIfMatchFn: func(context.Context, driveid.ID, string, string) error {
+			require.FailNow(t, "remote delete should not run after stale-path preflight")
+			return assert.AnError
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := NewExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteDelete,
+		Path:    "Docs/file.txt",
+		ItemID:  "item1",
+		DriveID: driveID,
+		View: &PathView{
+			Path: "Docs/file.txt",
+			Remote: &RemoteState{
+				DriveID:  driveID,
+				ItemID:   "item1",
+				ItemType: ItemTypeFile,
+				ETag:     `"etag-current"`,
+			},
+		},
+	}
+
+	o := e.ExecuteRemoteDelete(t.Context(), action)
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityRemoteRead, o.FailureCapability)
 }
 
 // Validates: R-2.8.10

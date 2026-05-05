@@ -192,10 +192,13 @@ normalization, and close housekeeping path as a live one-shot run. Dry-run
 current observation writes the fresh remote snapshot, remote observation
 findings, local snapshot, and local skipped-item findings into a scratch
 planning store only; the live `observation_issues`, local snapshot, and remote
-cursor remain unchanged. Live, dry-run, watch bootstrap, and steady-state watch
+cursor remain unchanged. Dry-run also suppresses all executor-owned local
+sync-tree mutators and remote Graph content mutators; the allowed side effects
+are operational setup/housekeeping and scratch planning artifacts, not local or
+remote content mutation. Live, dry-run, watch bootstrap, and steady-state watch
 replans all use that same current-plan pipeline; they differ only in how they
-collected the observed state, whether the executor runs, and whether a deferred
-cursor commit is present.
+collected the observed state, whether the executor runs, and whether a
+deferred cursor commit is present.
 The top-level coordinators should stay at that stage level rather than
 inlining planner input loads, durable prune/load logic, or runtime-start
 bookkeeping. The same rule applies to the explicit runtime-start,
@@ -722,6 +725,11 @@ discarded only after its prior `scope_key` no longer owns any blocked
 `retry_work`. If blocked work remains under the old scope, the engine rearms that
 retained scope's next trial interval in the same transition so it does not stay
 immediately due after the just-finished trial.
+
+Fatal authentication failures are not retry-owned. A `401` action completion
+marks the account auth requirement and stops the runtime; it must not create
+`retry_work`, activate `block_scopes`, or leave a timed trial path behind. The
+catalog auth requirement is the durable restart fact for that class of failure.
 
 ## What The Engine Does Not Own
 

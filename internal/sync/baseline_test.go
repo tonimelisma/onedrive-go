@@ -115,10 +115,8 @@ func TestCheckpoint_DoesNotPruneRemoteMirrorRows(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	retention := 24 * time.Hour // 1 day retention
-
 	// Checkpoint no longer treats remote_state as a lifecycle queue, so mirror
-	// rows are never pruned by age.
+	// rows are never pruned by database housekeeping.
 	_, err := mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
@@ -132,7 +130,7 @@ func TestCheckpoint_DoesNotPruneRemoteMirrorRows(t *testing.T) {
 		"new-item", "/new.txt", "file")
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.Checkpoint(ctx, retention))
+	require.NoError(t, mgr.Checkpoint(ctx))
 
 	var count int
 	err = mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
@@ -149,10 +147,9 @@ func TestCheckpoint_PreservesObservationIssuesAndRetryWork(t *testing.T) {
 
 	now := time.Now()
 	oldTime := now.Add(-48 * time.Hour).UnixNano()
-	retention := 24 * time.Hour
 
 	// Observation issues are durable truth-status inputs and are no longer
-	// checkpoint-pruned by timestamp.
+	// checkpoint-pruned by generic database housekeeping.
 	_, err := mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO observation_issues (path, issue_type, scope_key)
 		 VALUES (?, ?, ?)`,
@@ -175,7 +172,7 @@ func TestCheckpoint_PreservesObservationIssuesAndRetryWork(t *testing.T) {
 		"/pending-issue.txt", "", "upload", "", 0, 1, oldTime)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.Checkpoint(ctx, retention))
+	require.NoError(t, mgr.Checkpoint(ctx))
 
 	var count int
 	err = mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_issues`).Scan(&count)
@@ -188,7 +185,7 @@ func TestCheckpoint_PreservesObservationIssuesAndRetryWork(t *testing.T) {
 }
 
 // Validates: R-2.2
-func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
+func TestCheckpoint_PreservesRemoteMirrorRows(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -201,13 +198,152 @@ func TestCheckpoint_ZeroRetentionSkipsPruning(t *testing.T) {
 		"item1", "/old.txt", "file")
 	require.NoError(t, err)
 
-	// Zero retention = WAL checkpoint only, no pruning.
-	require.NoError(t, mgr.Checkpoint(ctx, 0))
+	require.NoError(t, mgr.Checkpoint(ctx))
 
 	var count int
 	err = mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
 	require.NoError(t, err)
-	assert.Equal(t, 1, count, "zero retention should not prune the remote mirror")
+	assert.Equal(t, 1, count, "checkpoint should not prune the remote mirror")
+}
+
+// Validates: R-2.5.2, R-2.5.6, R-6.5.1
+func TestSyncStore_ReopenPreservesDurableRecoveryTruth(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	scopeKey := SKPermRemoteWrite("Shared/Docs")
+
+	mgr, err := NewSyncStore(ctx, dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	seedDurableRecoveryTruth(t, ctx, mgr, driveID, scopeKey, now)
+	require.NoError(t, mgr.Close(ctx))
+
+	reopened, err := NewSyncStore(ctx, dbPath, newTestLogger(t))
+	require.NoError(t, err)
+	defer reopened.Close(ctx)
+	assertDurableRecoveryTruth(t, ctx, reopened, scopeKey)
+}
+
+func seedDurableRecoveryTruth(
+	t *testing.T,
+	ctx context.Context,
+	mgr *SyncStore,
+	driveID driveid.ID,
+	scopeKey ScopeKey,
+	now time.Time,
+) {
+	t.Helper()
+	require.NoError(t, mgr.CommitMutation(ctx, &BaselineMutation{
+		Action:          ActionDownload,
+		Success:         true,
+		Path:            "docs/report.txt",
+		DriveID:         driveID,
+		ItemID:          "remote-report",
+		ParentID:        "remote-parent",
+		ItemType:        ItemTypeFile,
+		LocalHash:       "local-hash",
+		RemoteHash:      "remote-hash",
+		LocalSize:       12,
+		LocalSizeKnown:  true,
+		RemoteSize:      12,
+		RemoteSizeKnown: true,
+		LocalMtime:      now.UnixNano(),
+		RemoteMtime:     now.UnixNano(),
+		ETag:            "etag-report",
+	}))
+	require.NoError(t, mgr.ReplaceLocalState(ctx, []LocalStateRow{{
+		Path:             "docs/report.txt",
+		ItemType:         ItemTypeFile,
+		Hash:             "local-hash",
+		Size:             12,
+		Mtime:            now.UnixNano(),
+		LocalDevice:      42,
+		LocalInode:       99,
+		LocalHasIdentity: true,
+	}}))
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+		DriveID:  driveID,
+		ItemID:   "remote-report",
+		Path:     "docs/report.txt",
+		ItemType: ItemTypeFile,
+		Hash:     "remote-hash",
+		Size:     12,
+		Mtime:    now.UnixNano(),
+		ETag:     "etag-report",
+	}}, "delta-token-after-report", driveID))
+	require.NoError(t, mgr.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
+		Issues: []ObservationIssue{{
+			Path:      "invalid:name.txt",
+			DriveID:   driveID,
+			IssueType: IssueInvalidFilename,
+		}},
+		ManagedIssueTypes: []string{IssueInvalidFilename},
+	}, now))
+	require.NoError(t, mgr.UpsertRetryWork(ctx, &RetryWorkRow{
+		Path:         "retry-later.txt",
+		ActionType:   ActionUpload,
+		AttemptCount: 2,
+		NextRetryAt:  now.Add(time.Minute).UnixNano(),
+	}))
+	require.NoError(t, mgr.UpsertBlockScope(ctx, &BlockScope{
+		Key:           scopeKey,
+		TrialInterval: time.Minute,
+		NextTrialAt:   now.Add(time.Minute),
+	}))
+	_, err := mgr.RecordBlockedRetryWork(ctx, RetryWorkKey{
+		Path:       "Shared/Docs/blocked.txt",
+		ActionType: ActionUpload,
+	}, scopeKey)
+	require.NoError(t, err)
+}
+
+func assertDurableRecoveryTruth(t *testing.T, ctx context.Context, store *SyncStore, scopeKey ScopeKey) {
+	t.Helper()
+
+	baseline, err := store.Load(ctx)
+	require.NoError(t, err)
+	entry, found := baseline.GetByPath("docs/report.txt")
+	require.True(t, found)
+	assert.Equal(t, "remote-report", entry.ItemID)
+	assert.Equal(t, "etag-report", entry.ETag)
+
+	localRows, err := store.ListLocalState(ctx)
+	require.NoError(t, err)
+	require.Len(t, localRows, 1)
+	assert.Equal(t, "docs/report.txt", localRows[0].Path)
+	assert.True(t, localRows[0].LocalHasIdentity)
+
+	remoteRows, err := store.ListRemoteState(ctx)
+	require.NoError(t, err)
+	require.Len(t, remoteRows, 1)
+	assert.Equal(t, "remote-report", remoteRows[0].ItemID)
+
+	state, err := store.ReadObservationState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "delta-token-after-report", state.Cursor)
+	assert.True(t, state.LocalTruthComplete)
+
+	issues, err := store.ListObservationIssues(ctx)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, IssueInvalidFilename, issues[0].IssueType)
+
+	retryRows, err := store.ListRetryWork(ctx)
+	require.NoError(t, err)
+	require.Len(t, retryRows, 2)
+
+	blockedRows, err := store.ListBlockedRetryWork(ctx)
+	require.NoError(t, err)
+	require.Len(t, blockedRows, 1)
+	assert.Equal(t, scopeKey, blockedRows[0].ScopeKey)
+
+	blockScopes, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	require.Len(t, blockScopes, 1)
+	assert.Equal(t, scopeKey, blockScopes[0].Key)
 }
 
 // Validates: R-2.2

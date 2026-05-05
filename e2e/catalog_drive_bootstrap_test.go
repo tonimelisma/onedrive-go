@@ -57,7 +57,7 @@ func TestEnsureCatalogDriveRecords_SkipsExistingRecord(t *testing.T) {
 		t.Context(),
 		[]string{cid.String()},
 		func(context.Context, string) (*config.CatalogDrive, error) {
-			t.Fatal("fetcher should not be called when catalog drive record already exists")
+			require.FailNow(t, "fetcher should not be called when catalog drive record already exists")
 			return nil, errUnexpectedFetch
 		},
 	)
@@ -78,7 +78,7 @@ func TestEnsureCatalogDriveRecords_RejectsSharePointWithoutRecord(t *testing.T) 
 		t.Context(),
 		[]string{"sharepoint:user@example.com:site:library"},
 		func(context.Context, string) (*config.CatalogDrive, error) {
-			t.Fatal("fetcher should not be called for SharePoint catalog-drive bootstrap")
+			require.FailNow(t, "fetcher should not be called for SharePoint catalog-drive bootstrap")
 			return nil, errUnexpectedFetch
 		},
 	)
