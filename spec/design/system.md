@@ -238,7 +238,7 @@ Static verification is a first-class architectural constraint, not a best-effort
   [--warmup N] [--json] [--result-json <path>]` is the repo-owned benchmark
   runner entrypoint. The delivered slices measure the
   `startup-empty-config` controlled scenario and the manual
-  `sync-partial-local-catchup-100m` live representative scenario against the
+  `sync-bidirectional-catchup-100m` live representative scenario against the
   built `onedrive-go` binary, emit a subject-aware JSON result bundle, and keep
   release report publication in the dedicated benchmarking design.
 - Observation coordination is intentionally single-root. `internal/sync/engine_primary_root.go`
@@ -330,7 +330,7 @@ Static verification is a first-class architectural constraint, not a best-effort
 ## Planned Improvements
 
 - Resource consumption guarantees documented per component. [planned]
-- Representative benchmark scenarios, reporting, and publication policy are defined in [performance-benchmarking.md](performance-benchmarking.md). The repo-owned `devtool bench` runner, the `startup-empty-config` harness-validation scenario, and the manual `sync-partial-local-catchup-100m` live representative scenario are implemented; release artifact promotion and published benchmark reports remain planned. [planned]
+- Representative benchmark scenarios, reporting, and publication policy are defined in [performance-benchmarking.md](performance-benchmarking.md). The repo-owned `devtool bench` runner, the `startup-empty-config` harness-validation scenario, and the manual `sync-bidirectional-catchup-100m` live representative scenario are implemented; fixture-slot preparation, release artifact promotion, and published benchmark reports remain planned. [planned]
 - Production ignored-return audit complete: invariant-bearing results such as `DepGraph.Complete` and dispatch admission booleans are handled explicitly, baseline/account metadata lookups now use explicit helpers or `found` checks, and the remaining ignored returns are limited to explicit value-only helper drops plus documented impossible-error builder writes. [verified]
 - Bare `assert.NoError` audit complete: remaining sites are intentional cleanup, test-plumbing, or pure error-contract assertions, while weak CLI happy-path tests now assert rendered text, JSON shape, and preserved config/state. [verified]
 - Write-path `Close` audit complete: sync-store close failures now propagate on internal baseline verification helpers and explicit sync-state reset flows, while read-only inspector close paths remain best-effort debug logged by design. [verified]
