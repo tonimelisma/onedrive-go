@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -69,6 +70,7 @@ type rootOps struct {
 	openRoot  func(dir string) (rootHandle, error)
 	mkdirAll  func(path string, perm os.FileMode) error
 	remove    func(path string) error
+	rmdir     func(path string) error
 	removeAll func(path string) error
 	rename    func(oldpath, newpath string) error
 	chtimes   func(path string, atime time.Time, mtime time.Time) error
@@ -89,6 +91,7 @@ func defaultRootOps() rootOps {
 		},
 		mkdirAll:  os.MkdirAll,
 		remove:    os.Remove,
+		rmdir:     syscall.Rmdir,
 		removeAll: os.RemoveAll,
 		rename:    os.Rename,
 		chtimes:   os.Chtimes,
@@ -752,6 +755,30 @@ func (r *Root) Remove(rel string) error {
 
 	if err := r.ops.remove(path); err != nil {
 		return fmt.Errorf("removing %s: %w", path, err)
+	}
+
+	return nil
+}
+
+// RemoveEmptyDirNoFollow removes rel only if it is an empty directory within
+// the rooted sync tree. The explicit empty check gives callers a clear contract;
+// the final rmdir syscall is the race guard if the directory gains a child or
+// is swapped for a non-directory after the check.
+func (r *Root) RemoveEmptyDirNoFollow(rel string) error {
+	empty, err := r.DirEmptyNoFollow(rel)
+	if err != nil {
+		return err
+	}
+	if !empty {
+		return fmt.Errorf("removing empty directory %s: directory is not empty", rel)
+	}
+
+	path, err := r.Abs(rel)
+	if err != nil {
+		return err
+	}
+	if err := r.ops.rmdir(path); err != nil {
+		return fmt.Errorf("removing empty directory %s: %w", rel, err)
 	}
 
 	return nil

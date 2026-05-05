@@ -14,7 +14,8 @@ import (
 )
 
 // RetryTransport is an http.RoundTripper that wraps an inner transport with
-// automatic retry on transient failures (network errors, 429, 5xx). It handles
+// automatic retry on transient failures (network errors, 429, 5xx) for HTTP
+// methods that are safe to replay at the transport boundary. It handles
 // exponential backoff, Retry-After headers, optional shared 429 throttle
 // coordination, and seekable body rewinding between attempts.
 //
@@ -110,6 +111,9 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 	if req.Context().Err() != nil {
 		return false, fmt.Errorf("retry: request canceled: %w", req.Context().Err())
 	}
+	if !retryableRequestMethod(req.Method) {
+		return false, err
+	}
 
 	logTarget := requestLogTarget(req)
 	if attempt < rt.Policy.MaxAttempts {
@@ -157,6 +161,9 @@ func (rt *RetryTransport) handleResponse(
 	if !isRetryable(resp.StatusCode) {
 		return true, resp, nil
 	}
+	if !retryableRequestMethod(req.Method) {
+		return true, resp, nil
+	}
 
 	// Retryable but exhausted — terminal failure (R-6.6.8).
 	if attempt >= rt.Policy.MaxAttempts {
@@ -201,6 +208,20 @@ func (rt *RetryTransport) handleResponse(
 	}
 
 	return false, nil, nil
+}
+
+func retryableRequestMethod(method string) bool {
+	switch method {
+	case http.MethodGet,
+		http.MethodHead,
+		http.MethodOptions,
+		http.MethodTrace,
+		http.MethodPut,
+		http.MethodDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 func drainAndCloseBody(body io.ReadCloser) error {

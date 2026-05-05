@@ -4,26 +4,31 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/tonimelisma/onedrive-go)](https://goreportcard.com/report/github.com/tonimelisma/onedrive-go)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A fast, safe, and well-tested OneDrive CLI and sync client written in Go. Unix-style file operations (`ls`, `get`, `put`) plus robust bidirectional sync with conflict tracking.
+A Go OneDrive CLI and sync client. It provides Unix-style file operations
+(`ls`, `get`, `put`) plus bidirectional sync with conflict tracking.
 
 ## Status
 
-**Active development** — core CLI file operations, drive management,
-configuration, transfers, and bidirectional sync are implemented. Remaining
-planned and future work is tracked in the
-[requirements index](spec/requirements/index.md).
+**Active development** — capability claims use the repo requirement statuses:
+`verified`, `implemented`, `designed`, `planned`, and `future`. A release claim
+must not exceed the proof recorded in requirements, CI, live E2E artifacts, or
+benchmark artifacts for that release SHA.
 
-See the [requirements](spec/requirements/) for capability status and the full
-plan.
+See the [requirements](spec/requirements/) for the source-of-truth capability
+status and the full plan.
 
-## Planned Features
+## Capability Status
 
-- **CLI file operations**: `ls`, `get`, `put`, `rm`, `mkdir` — familiar Unix-style commands
-- **Bidirectional sync**: Delta-based with three-way merge and conflict detection
-- **Multi-account**: Single config, multiple drives
-- **Safety first**: Big-delete protection, dry-run mode, recycle bin support
-- **Graph API quirk handling**: All 12+ known Microsoft Graph API quirks handled
-- **SharePoint/OneDrive Business**: Full support including shared libraries
+| Capability | Status | Claim boundary |
+| --- | --- | --- |
+| CLI file operations (`ls`, `get`, `put`, `rm`, `mkdir`, `stat`, `mv`, `cp`) | `verified` | Covered by requirements and test evidence for normal command behavior. |
+| Configuration, drive identity, and multi-drive selection | `verified` | Config/catalog/token ownership is requirements-backed; live account coverage remains credential-gated. |
+| Bidirectional sync | `verified` | One-shot, watch, conflict preservation, retry/blocker state, and shortcut lifecycle are implemented with repo test evidence. |
+| `sync --dry-run` | `verified` | No local sync-tree content mutation and no remote OneDrive content mutation; operational side effects such as logs, sockets, token refresh, config reconciliation, state open/checkpoint, and scratch planning DBs may still occur. |
+| Microsoft Graph quirks | `verified` per documented quirk | Only quirks documented in `spec/reference/graph-api-quirks.md` with tests or live evidence are launch claims. Unknown provider behavior remains unclaimed. |
+| OneDrive Business, SharePoint, and shared libraries | `implemented` / `verified` per requirement | Covered behavior is tracked in requirements and live suites; do not claim full support without a green live release lane on the release SHA. |
+| Performance numbers | `planned` | Public "fast" claims require repo-owned benchmark artifacts with machine/date/methodology context. |
+| Native packages and container images | `future` | Not a launch claim. |
 
 ## Platforms
 
@@ -98,6 +103,20 @@ golangci-lint run                 # Lint
 See [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), and the
 [system architecture doc](spec/design/system.md) for repo workflow and
 architecture details.
+
+## Release Readiness
+
+A release is not ready until these proof gates are current for the release SHA:
+
+- `go run ./cmd/devtool verify default` passes cleanly.
+- Scheduled or manual live E2E is green for the release SHA; broader
+  SharePoint/shared-library claims require matching live coverage.
+- Any public performance claim has a repo-owned benchmark artifact with
+  scenario, machine, date, method, and subject-under-test context.
+- Side-effect expectations are current, especially dry-run and destructive
+  command behavior.
+- README and spec language use only `verified`, `implemented`, `designed`,
+  `planned`, or `future` claims and contain no launch-blocking stale promises.
 
 ## License
 

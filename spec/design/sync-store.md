@@ -68,6 +68,7 @@ artifacts, not a multisync cache.
 | Behavior | Evidence |
 | --- | --- |
 | The store remains the sole durable owner of schema validation/open semantics and explicit reset flows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
+| Baseline, local observation truth, remote mirror truth, observation cursor/confidence, observation issues, retry work, and block scopes survive close/reopen as one restart authority. | `TestSyncStore_ReopenPreservesDurableRecoveryTruth` |
 | Dry-run current-plan scratch stores are temporary SQLite stores seeded from committed truth and removed after preview planning. | `TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp` |
 | Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens; shortcut status leaves the store through sync-owned status views instead of raw shortcut-root rows. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestBuildChildStatusMount_RendersLifecycleState` |
 | Local filesystem identity is persisted as generic truth for files and directories in `local_state` and `baseline`, allowing local move detection without shortcut-specific sibling scans. | `TestReplaceLocalState_PersistsFilesystemIdentity`, `TestCommitMutation_PersistsLocalFilesystemIdentity`, `TestQueryReconciliationState_LocalFolderMoveUsesFilesystemIdentity` |
@@ -203,7 +204,9 @@ reconcile and admission live in `engine_startup.go` and
 `SyncStore` seeded from committed truth and removes its temporary directory
 after planning. Dry-run engine startup uses the normal durable sync-store open
 path, so schema creation, observation-state materialization, and close-time WAL
-checkpointing remain normal operational side effects.
+checkpointing remain normal operational side effects. Generic checkpointing is
+WAL-only; semantic cleanup for observation issues, retry work, or block scopes
+belongs to the reconciliation helpers that own those rows.
 
 The store does not own a mixed failure table, failure-role transitions,
 timer-time stale-row cleanup, or a store-owned grouped condition projection.

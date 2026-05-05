@@ -103,7 +103,7 @@ func captureBundle(
 	if err != nil {
 		return CaptureResult{}, fmt.Errorf("encode capture manifest: %w", err)
 	}
-	if err := localpath.WriteFile(result.ManifestPath, data, captureFilePerm); err != nil {
+	if err := localpath.WriteDisposableFile(result.ManifestPath, data, captureFilePerm); err != nil {
 		return CaptureResult{}, fmt.Errorf("write capture manifest: %w", err)
 	}
 

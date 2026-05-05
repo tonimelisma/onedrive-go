@@ -72,6 +72,38 @@ func TestSessionStore_SaveLoadDelete(t *testing.T) {
 	require.Nil(t, rec)
 }
 
+// Validates: R-5.2, R-6.5.2
+func TestSessionStore_ReopenPreservesUploadSession(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	driveID := testSessionDriveID
+	localPath := "/docs/restart.bin"
+	now := time.Now().UTC().Truncate(time.Second)
+
+	store := NewSessionStore(dir, testLogger(t))
+	require.NoError(t, store.Save(driveID, localPath, &SessionRecord{
+		SessionURL: "https://example.com/upload/restart",
+		FileHash:   "restart-hash",
+		FileSize:   4096,
+		CreatedAt:  now,
+		MountID:    "personal:user@example.com",
+		LocalRoot:  "/sync/root",
+	}))
+
+	reopened := NewSessionStore(dir, testLogger(t))
+	rec, found, err := reopened.Load(driveID, localPath)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, rec)
+	assert.Equal(t, "https://example.com/upload/restart", rec.SessionURL)
+	assert.Equal(t, "restart-hash", rec.FileHash)
+	assert.Equal(t, int64(4096), rec.FileSize)
+	assert.Equal(t, "personal:user@example.com", rec.MountID)
+	assert.Equal(t, "/sync/root", rec.LocalRoot)
+	assert.True(t, rec.CreatedAt.Equal(now))
+}
+
 // Validates: R-5.2
 func TestSessionStore_DeleteForScope_RemovesMatchingMountOrRoot(t *testing.T) {
 	t.Parallel()
