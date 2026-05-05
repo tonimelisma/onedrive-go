@@ -260,11 +260,10 @@ Local delete keeps the ordinary per-item safety rule:
 Directory delete also preserves non-disposable local content by refusing to
 remove directories blocked by non-disposable children. Folder removal uses the
 rooted `synctree.RemoveEmptyDirNoFollow` helper for the final delete: it
-rechecks the directory after disposable cleanup, then relies on the underlying
-empty-directory remove to fail closed if a child appears between the recheck
-and the removal attempt. A concurrent creation therefore leaves the folder and
-new child in place for the next observation pass instead of deleting content
-from a stale plan.
+rechecks the directory after disposable cleanup, then uses an `rmdir` syscall
+instead of generic file removal. A concurrent child creation or same-path
+replacement therefore fails closed and leaves the new content in place for the
+next observation pass instead of deleting content from a stale plan.
 
 ## Conflict Execution
 

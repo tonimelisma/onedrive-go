@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -250,11 +251,11 @@ func TestRoot_RemoveEmptyDirNoFollow_ConcurrentChildCreationFailsClosed(t *testi
 	child := filepath.Join(target, "new-child.txt")
 	require.NoError(t, os.Mkdir(target, 0o700))
 
-	root.ops.remove = func(path string) error {
+	root.ops.rmdir = func(path string) error {
 		require.Equal(t, target, path)
 		require.NoError(t, os.WriteFile(child, []byte("new content"), 0o600))
 
-		return os.Remove(path)
+		return syscall.Rmdir(path)
 	}
 
 	err = root.RemoveEmptyDirNoFollow("raced")
@@ -262,6 +263,29 @@ func TestRoot_RemoveEmptyDirNoFollow_ConcurrentChildCreationFailsClosed(t *testi
 	assert.Contains(t, err.Error(), "removing empty directory")
 	assert.DirExists(t, target)
 	assert.FileExists(t, child)
+}
+
+// Validates: R-2.8.10, R-6.2.4
+func TestRoot_RemoveEmptyDirNoFollow_TargetReplacementFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	target := filepath.Join(dir, "raced")
+	require.NoError(t, os.Mkdir(target, 0o700))
+
+	root.ops.rmdir = func(path string) error {
+		require.Equal(t, target, path)
+		require.NoError(t, os.Remove(path))
+		require.NoError(t, os.WriteFile(path, []byte("new content"), 0o600))
+
+		return syscall.Rmdir(path)
+	}
+
+	err = root.RemoveEmptyDirNoFollow("raced")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "removing empty directory")
+	assert.FileExists(t, target)
 }
 
 // Validates: R-2.10, R-6.2
