@@ -127,8 +127,8 @@ func testConventionSelectorMessage(rel string, importPath string, receiver strin
 		return "direct t." + selector + " bypasses the testify assertion convention; use assert or require", true
 	}
 
-	if importPath == timePackageName && receiver == timePackageName && selector == "Sleep" && rel != allowedDirectSleepTestFile {
-		return "direct time.Sleep in tests hides synchronization contracts; use explicit synchronization " +
+	if importPath == timePackageName && selector == "Sleep" && rel != allowedDirectSleepTestFile {
+		return "direct " + receiver + ".Sleep in tests hides synchronization contracts; use explicit synchronization " +
 			"or the centralized live E2E sleep helper", true
 	}
 

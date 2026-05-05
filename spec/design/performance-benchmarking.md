@@ -50,7 +50,7 @@ The implementation should stay deliberately small:
 | The repo already has a machine-readable timing-summary foundation for live E2E timing windows rather than only human log output. | `TestE2ETimingRecorderWritesEventsAndAggregatedSummary`, `TestE2ETimingRecorderLoadsExistingEventsAcrossProcesses` |
 | The verifier already owns machine-readable run summaries instead of forcing downstream tooling to scrape console text. | `TestRunVerifyWritesSummaryJSONOnSuccess`, `TestRunVerifyWritesSummaryJSONOnFailure` |
 | Repo-owned benchmarking now has a subject-aware `devtool bench` entrypoint with named scenarios, JSON result bundles, and deterministic summary aggregation. | `TestNewBenchCmdRequiresScenarioFlag`, `TestNewBenchCmdDefaultsSubjectToOnedriveGo`, `TestNewBenchCmdPassesFlagsThrough`, `TestRunBenchRequiresRepoRootAndScenario`, `TestLookupBenchRegistriesAreSortedAndIncludeBuiltins`, `TestRunBenchStartupEmptyConfigSucceeds` |
-| The benchmark runner now owns one canonical live representative catch-up scenario with a checked-in deterministic fixture contract, stable denominator math, and fixture-failure reporting that stays inside benchmark results. | `TestLoadBenchLiveFixturePlanIsDeterministicAndSized`, `TestLoadBenchLiveFixturePlanMutationSelectionIsStable`, `TestPrepareBenchScenarioUsesPreparedRunnerAndCleanup`, `TestLiveCatchupScenarioMissingPrerequisitesReturnsFixtureFailure` |
+| The benchmark runner now owns one canonical live bidirectional catch-up scenario with a checked-in deterministic fixture contract, stable denominator math, scoped live config, and no-commit dry-run delta readiness checks. | `TestLoadSyncBidirectionalCatchup100MFixturePlanIsDeterministicAndSized`, `TestSyncBidirectionalCatchupMutationSelectionIsDisjoint`, `TestCreateBenchBidirectionalRuntimeWritesScopedIncludedDirs`, `TestWaitForBenchRemoteDeltaReadyRequiresExpectedRemotePlanAndStableCursor`, `TestWaitForBenchRemoteDeltaReadyFailsIfDryRunAdvancesCursor`, `TestRunBidirectionalSampleCommandOrderAndPerfSummary` |
 
 ## Objectives
 
@@ -184,20 +184,21 @@ Initial benchmark families:
 - `watch-idle-30m`
 - `sync-noop-reconcile-large`
 - `sync-initial-10k-small-files`
-- `sync-partial-local-catchup-100m`
+- `sync-bidirectional-catchup-100m`
 - `sync-local-burst-1k-edits`
 - `sync-remote-burst-1k-edits`
 - `sync-large-files-10x1gb`
 
 The first harness-validation scenario is `startup-empty-config`. The first
-representative sync scenario is `sync-partial-local-catchup-100m`. It is a
-real OneDrive-backed benchmark-owned fixture rooted at
-`/benchmarks/sync-partial-local-catchup-100m`, generated from a checked-in
+representative sync scenario is `sync-bidirectional-catchup-100m`. It is a
+real OneDrive-backed benchmark-owned fixture generated from a checked-in
 synthetic manifest that totals exactly 100 MiB across roughly 2.6K files. The
-measured phase is intentionally a catch-up run, not an initial sync: the
-scenario seeds remote state once per invocation, establishes a fresh local
-baseline before each sample, applies deterministic local deletes and
-truncations, and then measures the repairing `sync --download-only` pass.
+measured phase is intentionally a bidirectional catch-up run, not an initial
+sync and not a one-way repair pass. Each sample establishes an unmeasured clean
+baseline, mutates a disjoint remote subset out of band, proves the remote
+mutations are visible to the delta/planning path without advancing the
+measured state cursor, mutates a disjoint local subset, and then measures a
+normal bidirectional `sync`.
 
 ## Scenario Contract
 
@@ -483,38 +484,56 @@ performance summary log line captured on stderr. Skip-config commands such as
 must not assume that a configured `log_file` will exist for every scenario.
 
 The implemented v1 representative sync scenario is
-`sync-partial-local-catchup-100m`:
+`sync-bidirectional-catchup-100m`:
 
 - class: `live`
 - config profile: `default-safe`
 - defaults: `runs=3`, `warmup=0`
-- command under test: `onedrive-go sync --download-only`
+- command under test: `onedrive-go sync`
 
-The scenario keeps a benchmark-owned remote tree under
-`/benchmarks/sync-partial-local-catchup-100m` and binds the benchmark drive's
-`sync_dir` directly to that dedicated local root. The checked-in manifest defines four file
-bands totaling exactly 100 MiB:
+The scenario uses benchmark-owned remote fixture slots under
+`/benchmarks/work/sync-bidirectional-catchup-100m-v1/<slot>` and narrows the
+benchmark drive with `included_dirs` to that exact subtree. The checked-in
+manifest defines four file bands totaling exactly 100 MiB:
 
 - `documents`: 1600 files × 256 B
 - `metadata`: 900 files × 4 KiB
 - `assets`: 160 files × 256 KiB
 - `media`: 8 files × 7 MiB
 
-Each measured sample follows the same three-stage contract:
+Each measured sample follows the same contract:
 
-1. run an unmeasured `sync --download-only` to establish a fresh local
-   baseline and sync database
-2. delete and truncate a deterministic subset of local files
-3. measure a second `sync --download-only` until process exit, then verify the
-   local tree matches the manifest exactly
+1. create a fresh local runtime and materialize the canonical fixture under the
+   scoped included directory
+2. run an unmeasured dry-run sanity probe to ensure the ready remote slot is
+   visible through the sync planning path without requiring uploads, downloads,
+   deletes, or conflicts
+3. run an unmeasured bidirectional sync to establish a clean baseline and
+   persist the observation cursor
+4. apply deterministic remote deletes, truncations, and creates through direct
+   file-operation commands owned by the benchmark fixture controller
+5. poll `sync --dry-run` until the expected remote-side downloads and local
+   deletes appear in the plan, verifying after every probe that the persisted
+   observation cursor still equals the post-baseline cursor
+6. apply deterministic local deletes, truncations, and creates on disjoint
+   paths
+7. measure a normal bidirectional `sync` until process exit, then verify the
+   local tree matches the expected merged fixture exactly
 
-Remote fixture setup is owned by scenario preparation, not by the measured
-sample window. The runner resets the benchmark-owned remote scope, uploads the
-canonical seed tree with `sync --upload-only`, waits for the scope to become
-visible, and only then starts per-sample baseline and measured phases. Missing
-live credentials, missing `.testdata`, missing allowlist entries, remote-reset
-failures, and seed failures surface as `fixture_failed` benchmark outcomes
-instead of opaque setup crashes.
+The dry-run delta-readiness probe is deliberate. Graph path endpoints and the
+delta endpoint are not the same consistency surface; a direct `stat` or parent
+`ls` proving that a file exists is not proof that the next incremental sync
+will observe the same mutation. The benchmark therefore uses the product's own
+dry-run observation/planning path as the readiness proof, and treats any cursor
+advance during the probe as a fixture failure because it would consume the
+change before the measured sync.
+
+Remote fixture preparation is intentionally separate from the measured sample
+window. The benchmark consumes a ready working slot. Slot-pool automation and
+release-artifact promotion are planned follow-up surfaces; the delivered
+scenario already records the fixture ID, fixture version, selected slot,
+remote scope path, included directory, and per-sample baseline/mutation/delta
+setup timings in the machine-readable result bundle.
 
 The remote-scope visibility probe treats the parent `ls` output as a set of
 exact entry names, not substring evidence. Sibling entries such as
@@ -577,18 +596,30 @@ This work is intentionally staged.
 - define the scenario contract shape, denominator fields, and sample-size policy
 - implement the harness-validation scenario `startup-empty-config`
 
-### Increment 3: Canonical Live Catch-Up Benchmark [delivered]
+### Increment 3: Canonical Live Bidirectional Catch-Up Benchmark [delivered]
 
-- implement `sync-partial-local-catchup-100m`
+- implement `sync-bidirectional-catchup-100m`
 - keep one benchmark harness and one artifact format instead of parallel
   benchmark subsystems
-- add scenario-level prepare/cleanup support so live fixture setup happens once
-  per invocation
+- add a deterministic 100 MiB fixture manifest with disjoint local and remote
+  mutation sets
+- scope the live benchmark with `included_dirs` so it never observes or mutates
+  the rest of the configured drive
+- establish an unmeasured bidirectional baseline, prove remote delta readiness
+  with no-commit dry-run probes, then measure a bidirectional catch-up pass
 - keep the scenario manual-only and outside default verification
 - reuse existing `internal/perf` summaries for explanation metrics while the
   benchmark runner records external proof metrics
 
-### Increment 4: Reporting Surface And Simple README Update
+### Increment 4: Fixture Prepare And Ready Slot Pool
+
+- add `devtool bench prepare --scenario sync-bidirectional-catchup-100m`
+- maintain benchmark-owned golden and working remote fixture slots
+- validate ready slots through the sync planning path instead of path
+  visibility alone
+- mark consumed slots dirty and replenish them outside measured sample windows
+
+### Increment 5: Reporting Surface And Simple README Update
 
 - add generated Markdown report output
 - add `spec/reference/performance-benchmarks.md`
@@ -596,7 +627,7 @@ This work is intentionally staged.
 - include a representative-results table that cites machine, date, scenario,
   config profile, and run count
 
-### Increment 5: Live And Comparative Runs
+### Increment 6: Live And Comparative Runs
 
 - add scheduled/manual live representative benchmark lanes
 - add documented cross-app comparison methodology and initial comparison runs

@@ -32,7 +32,7 @@ func TestLookupBenchRegistriesAreSortedAndIncludeBuiltins(t *testing.T) {
 	assert.Equal(t, []string{DefaultBenchSubjectID}, BenchSubjectIDs())
 	assert.Equal(t, []string{
 		startupEmptyConfigScenarioID,
-		syncPartialLocalCatchup100MID,
+		syncBidirectionalCatchup100MID,
 	}, BenchScenarioIDs())
 
 	subject, err := LookupBenchSubject(DefaultBenchSubjectID)
@@ -46,11 +46,11 @@ func TestLookupBenchRegistriesAreSortedAndIncludeBuiltins(t *testing.T) {
 	assert.Equal(t, startupEmptyConfigDefaultRuns, scenario.DefaultRuns)
 	assert.Equal(t, startupEmptyConfigDefaultWarmups, scenario.DefaultWarmup)
 
-	liveScenario, err := LookupBenchScenario(syncPartialLocalCatchup100MID)
+	liveScenario, err := LookupBenchScenario(syncBidirectionalCatchup100MID)
 	require.NoError(t, err)
-	assert.Equal(t, syncPartialLocalCatchup100MID, liveScenario.ID)
-	assert.Equal(t, syncPartialLocalCatchup100MRuns, liveScenario.DefaultRuns)
-	assert.Equal(t, syncPartialLocalCatchup100MWarm, liveScenario.DefaultWarmup)
+	assert.Equal(t, syncBidirectionalCatchup100MID, liveScenario.ID)
+	assert.Equal(t, syncBidirectionalCatchup100MRuns, liveScenario.DefaultRuns)
+	assert.Equal(t, syncBidirectionalCatchup100MWarm, liveScenario.DefaultWarmup)
 	assert.Equal(t, "live", liveScenario.Class)
 	assert.Equal(t, "default-safe", liveScenario.ConfigProfile)
 	assert.Positive(t, liveScenario.Denominators.FileCount)
@@ -58,7 +58,14 @@ func TestLookupBenchRegistriesAreSortedAndIncludeBuiltins(t *testing.T) {
 	assert.Positive(t, liveScenario.Denominators.ChangedItemCount)
 	assert.Positive(t, liveScenario.Denominators.ChangedByteCount)
 	assert.Positive(t, liveScenario.Denominators.ExpectedTransfers)
-	assert.Zero(t, liveScenario.Denominators.ExpectedDeletes)
+	assert.Positive(t, liveScenario.Denominators.ExpectedDeletes)
+	assert.Positive(t, liveScenario.Denominators.LocalChangedItemCount)
+	assert.Positive(t, liveScenario.Denominators.RemoteChangedItemCount)
+	assert.Positive(t, liveScenario.Denominators.ExpectedUploads)
+	assert.Positive(t, liveScenario.Denominators.ExpectedDownloads)
+	assert.Positive(t, liveScenario.Denominators.ExpectedLocalDeletes)
+	assert.Positive(t, liveScenario.Denominators.ExpectedRemoteDeletes)
+	assert.Zero(t, liveScenario.Denominators.ExpectedConflicts)
 }
 
 // Validates: R-6.10.14
@@ -72,7 +79,7 @@ func TestLookupBenchSubjectAndScenarioRejectUnknownIDs(t *testing.T) {
 	_, err = LookupBenchScenario("unknown")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), startupEmptyConfigScenarioID)
-	assert.Contains(t, err.Error(), syncPartialLocalCatchup100MID)
+	assert.Contains(t, err.Error(), syncBidirectionalCatchup100MID)
 }
 
 // Validates: R-6.10.14
@@ -179,6 +186,8 @@ func TestRunBenchStartupEmptyConfigSucceeds(t *testing.T) {
 	assert.Zero(t, result.Scenario.Denominators.ChangedByteCount)
 	assert.Zero(t, result.Scenario.Denominators.ExpectedTransfers)
 	assert.Zero(t, result.Scenario.Denominators.ExpectedDeletes)
+	assert.Zero(t, result.Scenario.Denominators.ExpectedUploads)
+	assert.Zero(t, result.Scenario.Denominators.ExpectedDownloads)
 }
 
 func repoRootFromBenchTest(t *testing.T) string {

@@ -99,7 +99,7 @@ func TestPrepareBenchScenarioUsesPreparedRunnerAndCleanup(t *testing.T) {
 	cleanupCalled := false
 	definition := benchScenarioDefinition{
 		Spec: BenchScenarioSpec{ID: "prepared"},
-		Prepare: func(context.Context, string, preparedBenchSubject) (preparedBenchScenario, error) {
+		Prepare: func(context.Context, benchScenarioPrepareRequest) (preparedBenchScenario, error) {
 			return preparedBenchScenario{
 				run: func(_ context.Context, _ preparedBenchSubject, phase benchSamplePhase, iteration int) benchSample {
 					return benchSample{
@@ -116,7 +116,7 @@ func TestPrepareBenchScenarioUsesPreparedRunnerAndCleanup(t *testing.T) {
 		},
 	}
 
-	prepared, err := prepareBenchScenario(t.Context(), &definition, t.TempDir(), preparedBenchSubject{})
+	prepared, err := prepareBenchScenario(t.Context(), &definition, t.TempDir(), preparedBenchSubject{}, "")
 	require.NoError(t, err)
 
 	samples := collectBenchSamples(t.Context(), prepared.run, preparedBenchSubject{}, 0, 1, nil)
@@ -140,7 +140,7 @@ func TestLiveCatchupScenarioMissingPrerequisitesReturnsFixtureFailure(t *testing
 		measure: func(context.Context, benchCommandSpec) (benchMeasuredProcess, error) {
 			return benchMeasuredProcess{}, nil
 		},
-	})
+	}, "")
 	require.NoError(t, err)
 
 	sample := prepared.run(t.Context(), preparedBenchSubject{}, benchSamplePhaseMeasured, 1)
