@@ -136,6 +136,7 @@ func newBenchCmd(getwd cwdLookup, runBench benchFunc) *cobra.Command {
 		warmup         int
 		jsonOutput     bool
 		resultJSONPath string
+		fixtureSlot    string
 	)
 
 	cmd := &cobra.Command{
@@ -155,6 +156,7 @@ func newBenchCmd(getwd cwdLookup, runBench benchFunc) *cobra.Command {
 				Warmup:         warmup,
 				JSON:           jsonOutput,
 				ResultJSONPath: resultJSONPath,
+				FixtureSlot:    fixtureSlot,
 				Stdout:         cmd.OutOrStdout(),
 				Stderr:         cmd.ErrOrStderr(),
 			})
@@ -167,6 +169,7 @@ func newBenchCmd(getwd cwdLookup, runBench benchFunc) *cobra.Command {
 	cmd.Flags().IntVar(&warmup, "warmup", -1, "override warmup count (-1 uses the scenario default)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "emit the benchmark result bundle as JSON")
 	cmd.Flags().StringVar(&resultJSONPath, "result-json", "", "write benchmark result bundle JSON to this path")
+	cmd.Flags().StringVar(&fixtureSlot, "fixture-slot", "", "live benchmark fixture slot ID")
 	requireFlag(cmd, "scenario")
 
 	return cmd
@@ -301,6 +304,7 @@ func defaultVerify(ctx context.Context, opts *devtool.VerifyOptions) error {
 	return nil
 }
 
+//nolint:gocritic // BenchOptions is the Cobra boundary value and is copied once into devtool.
 func defaultBench(ctx context.Context, opts devtool.BenchOptions) error {
 	if err := devtool.RunBench(ctx, opts); err != nil {
 		return fmt.Errorf("run bench: %w", err)

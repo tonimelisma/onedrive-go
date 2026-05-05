@@ -20,7 +20,7 @@ import (
 const (
 	DefaultBenchSubjectID = "onedrive-go"
 
-	benchSchemaVersion = 1
+	benchSchemaVersion = 2
 
 	benchResultFilePerm = 0o600
 	benchResultDirPerm  = 0o700
@@ -31,6 +31,10 @@ const (
 	startupEmptyConfigScenarioID     = "startup-empty-config"
 	startupEmptyConfigDefaultRuns    = 15
 	startupEmptyConfigDefaultWarmups = 3
+	syncBidirectionalCatchup100MID   = "sync-bidirectional-catchup-100m"
+	syncBidirectionalCatchup100MRuns = 3
+	syncBidirectionalCatchup100MWarm = 0
+	benchDefaultFixtureSlot          = "slot-00"
 	syncPartialLocalCatchup100MID    = "sync-partial-local-catchup-100m"
 	syncPartialLocalCatchup100MRuns  = 3
 	syncPartialLocalCatchup100MWarm  = 0
@@ -47,6 +51,7 @@ type BenchOptions struct {
 	Warmup         int
 	JSON           bool
 	ResultJSONPath string
+	FixtureSlot    string
 	Stdout         io.Writer
 	Stderr         io.Writer
 }
@@ -66,12 +71,21 @@ type BenchScenarioSpec struct {
 }
 
 type BenchDenominator struct {
-	FileCount         int   `json:"file_count"`
-	DirectoryCount    int   `json:"directory_count"`
-	ChangedItemCount  int   `json:"changed_item_count"`
-	ChangedByteCount  int64 `json:"changed_byte_count"`
-	ExpectedTransfers int   `json:"expected_transfers"`
-	ExpectedDeletes   int   `json:"expected_deletes"`
+	FileCount              int   `json:"file_count"`
+	DirectoryCount         int   `json:"directory_count"`
+	ChangedItemCount       int   `json:"changed_item_count"`
+	ChangedByteCount       int64 `json:"changed_byte_count"`
+	ExpectedTransfers      int   `json:"expected_transfers"`
+	ExpectedDeletes        int   `json:"expected_deletes"`
+	LocalChangedItemCount  int   `json:"local_changed_item_count,omitempty"`
+	LocalChangedByteCount  int64 `json:"local_changed_byte_count,omitempty"`
+	RemoteChangedItemCount int   `json:"remote_changed_item_count,omitempty"`
+	RemoteChangedByteCount int64 `json:"remote_changed_byte_count,omitempty"`
+	ExpectedUploads        int   `json:"expected_uploads,omitempty"`
+	ExpectedDownloads      int   `json:"expected_downloads,omitempty"`
+	ExpectedLocalDeletes   int   `json:"expected_local_deletes,omitempty"`
+	ExpectedRemoteDeletes  int   `json:"expected_remote_deletes,omitempty"`
+	ExpectedConflicts      int   `json:"expected_conflicts,omitempty"`
 }
 
 type BenchSampleStatus string
@@ -95,6 +109,7 @@ type benchResult struct {
 	ResultVersion int                `json:"result_version"`
 	Subject       benchResultSubject `json:"subject"`
 	Scenario      BenchScenarioSpec  `json:"scenario"`
+	Setup         *benchResultSetup  `json:"setup,omitempty"`
 	Environment   benchEnvironment   `json:"environment"`
 	Run           benchRun           `json:"run"`
 	Samples       []benchSample      `json:"samples"`
@@ -127,10 +142,21 @@ type benchRun struct {
 	Status          BenchSampleStatus `json:"status"`
 }
 
+type benchResultSetup struct {
+	FixtureID           string `json:"fixture_id,omitempty"`
+	FixtureVersion      int    `json:"fixture_version,omitempty"`
+	FixtureSlot         string `json:"fixture_slot,omitempty"`
+	RemoteScopePath     string `json:"remote_scope_path,omitempty"`
+	IncludedDir         string `json:"included_dir,omitempty"`
+	FixtureControllerID string `json:"fixture_controller_id,omitempty"`
+	PoolStatusBeforeRun string `json:"pool_status_before_run,omitempty"`
+}
+
 type benchSample struct {
 	Iteration       int               `json:"iteration"`
 	Phase           benchSamplePhase  `json:"phase"`
 	Status          BenchSampleStatus `json:"status"`
+	Setup           *benchSampleSetup `json:"setup,omitempty"`
 	ElapsedMicros   int64             `json:"elapsed_micros"`
 	ExitCode        int               `json:"exit_code"`
 	UserCPUMicros   int64             `json:"user_cpu_micros"`
@@ -140,6 +166,13 @@ type benchSample struct {
 	StderrBytes     int64             `json:"stderr_bytes"`
 	FailureExcerpt  string            `json:"failure_excerpt,omitempty"`
 	PerfSummary     *benchPerfSummary `json:"perf_summary,omitempty"`
+}
+
+type benchSampleSetup struct {
+	BaselineElapsedMicros       int64 `json:"baseline_elapsed_micros,omitempty"`
+	RemoteMutationElapsedMicros int64 `json:"remote_mutation_elapsed_micros,omitempty"`
+	DeltaReadyWaitMicros        int64 `json:"delta_ready_wait_micros,omitempty"`
+	DeltaProbeAttempts          int   `json:"delta_probe_attempts,omitempty"`
 }
 
 type benchSummary struct {
@@ -165,7 +198,13 @@ type benchSampleRunner func(context.Context, preparedBenchSubject, benchSamplePh
 type benchScenarioDefinition struct {
 	Spec    BenchScenarioSpec
 	Run     benchSampleRunner
-	Prepare func(context.Context, string, preparedBenchSubject) (preparedBenchScenario, error)
+	Prepare func(context.Context, benchScenarioPrepareRequest) (preparedBenchScenario, error)
+}
+
+type benchScenarioPrepareRequest struct {
+	RepoRoot    string
+	Subject     preparedBenchSubject
+	FixtureSlot string
 }
 
 type benchSubjectDefinition struct {
@@ -190,6 +229,7 @@ type preparedBenchSubject struct {
 type preparedBenchScenario struct {
 	run     benchSampleRunner
 	cleanup func() error
+	setup   *benchResultSetup
 }
 
 type benchCommandSpec struct {
@@ -263,6 +303,7 @@ type startupDriveListJSONOutput struct {
 	AccountsDegraded      []json.RawMessage `json:"accounts_degraded,omitempty"`
 }
 
+//nolint:gocritic // BenchOptions is a CLI boundary value; copying keeps callers simple and immutable.
 func RunBench(ctx context.Context, opts BenchOptions) error {
 	return runBench(ctx, ExecRunner{}, opts)
 }
@@ -283,7 +324,7 @@ func LookupBenchSubject(id string) (BenchSubjectSpec, error) {
 func BenchScenarioIDs() []string {
 	return []string{
 		startupEmptyConfigScenarioID,
-		syncPartialLocalCatchup100MID,
+		syncBidirectionalCatchup100MID,
 	}
 }
 
@@ -296,6 +337,7 @@ func LookupBenchScenario(id string) (BenchScenarioSpec, error) {
 	return def.Spec, nil
 }
 
+//nolint:gocritic // BenchOptions is a CLI boundary value; copying keeps the internal runner side-effect free.
 func runBench(ctx context.Context, runner commandRunner, opts BenchOptions) error {
 	stdout := opts.Stdout
 	if stdout == nil {
@@ -317,7 +359,7 @@ func runBench(ctx context.Context, runner commandRunner, opts BenchOptions) erro
 	}
 	defer warnBenchCleanup(stderr, "subject", preparedSubject.cleanup)
 
-	preparedScenario, err := prepareBenchScenario(ctx, &invocation.scenarioDef, opts.RepoRoot, preparedSubject)
+	preparedScenario, err := prepareBenchScenario(ctx, &invocation.scenarioDef, opts.RepoRoot, preparedSubject, opts.FixtureSlot)
 	if err != nil {
 		return fmt.Errorf("bench: prepare scenario %s: %w", invocation.scenarioDef.Spec.ID, err)
 	}
@@ -328,6 +370,7 @@ func runBench(ctx context.Context, runner commandRunner, opts BenchOptions) erro
 		ResultVersion: benchSchemaVersion,
 		Subject:       preparedSubject.metadata,
 		Scenario:      invocation.scenarioDef.Spec,
+		Setup:         preparedScenario.setup,
 		Environment:   collectBenchEnvironment(),
 		Run: benchRun{
 			StartedAt:       startedAt,
@@ -356,6 +399,7 @@ func runBench(ctx context.Context, runner commandRunner, opts BenchOptions) erro
 	return emitBenchResult(stdout, opts, &result)
 }
 
+//nolint:gocritic // BenchOptions is a CLI boundary value; copying keeps resolution pure.
 func resolveBenchInvocation(opts BenchOptions) (benchInvocation, error) {
 	if err := validateBenchOptions(opts); err != nil {
 		return benchInvocation{}, err
@@ -393,6 +437,7 @@ func resolveBenchInvocation(opts BenchOptions) (benchInvocation, error) {
 	}, nil
 }
 
+//nolint:gocritic // BenchOptions is a CLI boundary value; validation does not retain it.
 func validateBenchOptions(opts BenchOptions) error {
 	if opts.RepoRoot == "" {
 		return fmt.Errorf("bench: missing repo root")
@@ -415,6 +460,7 @@ func prepareBenchScenario(
 	def *benchScenarioDefinition,
 	repoRoot string,
 	subject preparedBenchSubject,
+	fixtureSlot string,
 ) (preparedBenchScenario, error) {
 	if def == nil {
 		return preparedBenchScenario{}, fmt.Errorf("scenario definition is nil")
@@ -425,7 +471,11 @@ func prepareBenchScenario(
 		}, nil
 	}
 
-	prepared, err := def.Prepare(ctx, repoRoot, subject)
+	prepared, err := def.Prepare(ctx, benchScenarioPrepareRequest{
+		RepoRoot:    repoRoot,
+		Subject:     subject,
+		FixtureSlot: fixtureSlot,
+	})
 	if err != nil {
 		return preparedBenchScenario{}, err
 	}
@@ -478,6 +528,7 @@ func collectBenchSamples(
 	return samples
 }
 
+//nolint:gocritic // BenchOptions is a CLI boundary value; emission only reads output flags.
 func emitBenchResult(stdout io.Writer, opts BenchOptions, result *benchResult) error {
 	resultJSON, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -540,8 +591,8 @@ func lookupBenchScenarioDefinition(id string) (benchScenarioDefinition, error) {
 			},
 			Run: runStartupEmptyConfigSample,
 		}, nil
-	case syncPartialLocalCatchup100MID:
-		return lookupSyncPartialLocalCatchup100MScenario()
+	case syncBidirectionalCatchup100MID:
+		return lookupSyncBidirectionalCatchup100MScenario()
 	default:
 		return benchScenarioDefinition{}, fmt.Errorf(
 			"unknown bench scenario %q (known: %s)",
@@ -919,7 +970,8 @@ func summarizeBenchSamples(samples []benchSample) benchSummary {
 	userCPUValues := make([]int64, 0, len(samples))
 	systemCPUValues := make([]int64, 0, len(samples))
 
-	for _, sample := range samples {
+	for i := range samples {
+		sample := &samples[i]
 		switch sample.Phase {
 		case benchSamplePhaseWarmup:
 			summary.WarmupCount++
@@ -970,6 +1022,7 @@ func summarizeMetric(values []int64) benchMetricStats {
 	}
 }
 
+//nolint:gocritic // Samples are immutable result records; copy/return keeps failure helpers simple.
 func sampleWithMeasuredProcess(sample benchSample, process benchMeasuredProcess) benchSample {
 	sample.ElapsedMicros = process.ElapsedMicros
 	sample.ExitCode = process.ExitCode
@@ -981,24 +1034,28 @@ func sampleWithMeasuredProcess(sample benchSample, process benchMeasuredProcess)
 	return sample
 }
 
+//nolint:gocritic // Samples are immutable result records; copy/return keeps classification side effects explicit.
 func benchFixtureFailureSample(sample benchSample, err error) benchSample {
 	sample.Status = BenchSampleFixtureFailed
 	sample.FailureExcerpt = failureExcerpt(err, nil, nil)
 	return sample
 }
 
+//nolint:gocritic // Samples are immutable result records; copy/return keeps classification side effects explicit.
 func benchSubjectFailureSample(sample benchSample, err error, stdout, stderr []byte) benchSample {
 	sample.Status = BenchSampleSubjectFailed
 	sample.FailureExcerpt = failureExcerpt(err, stdout, stderr)
 	return sample
 }
 
+//nolint:gocritic // Samples are immutable result records; copy/return keeps classification side effects explicit.
 func benchInvalidSample(sample benchSample, err error) benchSample {
 	sample.Status = BenchSampleInvalid
 	sample.FailureExcerpt = failureExcerpt(err, nil, nil)
 	return sample
 }
 
+//nolint:gocritic // Samples are immutable result records; copy/return keeps classification side effects explicit.
 func benchAbortedSample(sample benchSample, err error) benchSample {
 	sample.Status = BenchSampleAborted
 	sample.FailureExcerpt = failureExcerpt(err, nil, nil)
@@ -1093,9 +1150,9 @@ func writeBenchSummaryText(w io.Writer, result *benchResult) error {
 }
 
 func firstBenchFailure(samples []benchSample) string {
-	for _, sample := range samples {
-		if sample.Status != BenchSampleSuccess {
-			return sample.FailureExcerpt
+	for i := range samples {
+		if samples[i].Status != BenchSampleSuccess {
+			return samples[i].FailureExcerpt
 		}
 	}
 

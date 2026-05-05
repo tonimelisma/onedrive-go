@@ -161,6 +161,7 @@ func TestNewBenchCmdPassesFlagsThrough(t *testing.T) {
 		"--warmup", "2",
 		"--json",
 		"--result-json", "/tmp/bench-result.json",
+		"--fixture-slot", "slot-03",
 	})
 
 	require.NoError(t, cmd.Execute())
@@ -171,6 +172,7 @@ func TestNewBenchCmdPassesFlagsThrough(t *testing.T) {
 	assert.Equal(t, 2, got.Warmup)
 	assert.True(t, got.JSON)
 	assert.Equal(t, "/tmp/bench-result.json", got.ResultJSONPath)
+	assert.Equal(t, "slot-03", got.FixtureSlot)
 }
 
 // Validates: R-6.10.11

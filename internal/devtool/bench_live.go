@@ -113,18 +113,14 @@ func lookupSyncPartialLocalCatchup100MScenario() (benchScenarioDefinition, error
 			DefaultWarmup: syncPartialLocalCatchup100MWarm,
 			Denominators:  fixture.Denominators,
 		},
-		Prepare: func(
-			_ context.Context,
-			repoRoot string,
-			_ preparedBenchSubject,
-		) (preparedBenchScenario, error) {
+		Prepare: func(_ context.Context, req benchScenarioPrepareRequest) (preparedBenchScenario, error) {
 			workRoot, err := mkdirTemp(os.TempDir(), "onedrive-go-bench-live-*")
 			if err != nil {
 				return preparedBenchScenario{}, fmt.Errorf("create live benchmark work root: %w", err)
 			}
 
 			state := &benchLiveScenarioState{
-				repoRoot: repoRoot,
+				repoRoot: req.RepoRoot,
 				fixture:  fixture,
 				workRoot: workRoot,
 			}
@@ -391,6 +387,7 @@ func (s *benchLiveScenarioState) runSample(
 	return finalizeBenchLiveSampleRuntime(runtime.rootDir, measuredSample)
 }
 
+//nolint:gocritic // Samples are immutable result records; cleanup may return a reclassified copy.
 func finalizeBenchLiveSampleRuntime(runtimeRoot string, sample benchSample) benchSample {
 	if cleanupErr := removeAll(runtimeRoot); cleanupErr != nil && sample.Status == BenchSampleSuccess {
 		return benchFixtureFailureSample(sample, fmt.Errorf("cleanup sample runtime: %w", cleanupErr))
@@ -404,7 +401,7 @@ func (s *benchLiveScenarioState) prepareMeasuredCatchup(
 	subject preparedBenchSubject,
 	runtime benchLiveCommandRuntime,
 	scopeRoot string,
-	sample benchSample,
+	sample benchSample, //nolint:gocritic // Legacy private scenario keeps value-style sample classification.
 ) (benchSample, bool) {
 	baseline, baselineErr := subject.measure(ctx, runtime.commandSpec("sync", "--download-only"))
 	if baselineErr != nil {
@@ -429,7 +426,7 @@ func (s *benchLiveScenarioState) measureCatchupSample(
 	subject preparedBenchSubject,
 	runtime benchLiveCommandRuntime,
 	scopeRoot string,
-	sample benchSample,
+	sample benchSample, //nolint:gocritic // Legacy private scenario keeps value-style sample classification.
 ) benchSample {
 	process, measureErr := subject.measure(ctx, runtime.commandSpec("sync", "--download-only"))
 	measuredSample := sampleWithMeasuredProcess(sample, process)
@@ -451,6 +448,7 @@ func (s *benchLiveScenarioState) measureCatchupSample(
 	return measuredSample
 }
 
+//nolint:gocritic // Samples are immutable result records; copy/return keeps process classification explicit.
 func classifyBenchProcessFailure(
 	ctx context.Context,
 	sample benchSample,

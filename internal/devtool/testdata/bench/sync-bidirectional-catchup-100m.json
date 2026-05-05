@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "scenario_id": "sync-bidirectional-catchup-100m",
+  "fixture_id": "sync-bidirectional-catchup-100m-v1",
+  "golden_remote_scope_path": "/benchmarks/golden/sync-bidirectional-catchup-100m-v1",
+  "work_remote_scope_path_template": "/benchmarks/work/sync-bidirectional-catchup-100m-v1/{slot}",
+  "groups": [
+    {
+      "name": "documents",
+      "file_count": 1600,
+      "size_bytes": 256,
+      "top_level_dirs": 8,
+      "leaf_dirs_per_top": 5,
+      "extension": "txt"
+    },
+    {
+      "name": "metadata",
+      "file_count": 900,
+      "size_bytes": 4096,
+      "top_level_dirs": 5,
+      "leaf_dirs_per_top": 6,
+      "extension": "json"
+    },
+    {
+      "name": "assets",
+      "file_count": 160,
+      "size_bytes": 262144,
+      "top_level_dirs": 4,
+      "leaf_dirs_per_top": 4,
+      "extension": "bin"
+    },
+    {
+      "name": "media",
+      "file_count": 8,
+      "size_bytes": 7352320,
+      "top_level_dirs": 2,
+      "leaf_dirs_per_top": 2,
+      "extension": "dat"
+    }
+  ],
+  "remote_mutation": {
+    "delete_selector": {
+      "modulus": 29,
+      "remainder": 3,
+      "limit": 16
+    },
+    "modify_selector": {
+      "modulus": 31,
+      "remainder": 5,
+      "limit": 64,
+      "truncate_to_bytes": 0
+    },
+    "create_group": {
+      "directory": "remote-created",
+      "file_count": 16,
+      "size_bytes": 2048,
+      "extension": "bin"
+    }
+  },
+  "local_mutation": {
+    "delete_selector": {
+      "modulus": 37,
+      "remainder": 7,
+      "limit": 16
+    },
+    "modify_selector": {
+      "modulus": 37,
+      "remainder": 11,
+      "limit": 64,
+      "truncate_to_bytes": 0
+    },
+    "create_group": {
+      "directory": "local-created",
+      "file_count": 16,
+      "size_bytes": 2048,
+      "extension": "bin"
+    }
+  }
+}
