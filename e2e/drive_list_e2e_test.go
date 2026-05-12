@@ -276,11 +276,13 @@ func TestE2E_Status_ConfigTolerance(t *testing.T) {
 	stdout, _, err := runCLICore(t, cfgPath, env, "", "status")
 	require.NoError(t, err, "status should succeed despite unknown config key\nstdout: %s", stdout)
 
-	// Status output should contain account/auth information.
+	// Status output should contain account and configured-drive information.
 	assert.Contains(t, stdout, "Account:",
 		"status should show account header despite unknown config key")
-	assert.Contains(t, stdout, "Auth:",
-		"status should show auth state despite unknown config key")
+	assert.Contains(t, stdout, "Folder:",
+		"status should show configured drive folder despite unknown config key")
+	assert.NotContains(t, stdout, "Auth:",
+		"healthy status should not show auth state despite unknown config key")
 }
 
 // Validates: R-4.8.4
@@ -317,41 +319,45 @@ func TestE2E_Status_LiveOverlay_ConfigTolerance(t *testing.T) {
 
 	var result struct {
 		Accounts []struct {
-			Email       string `json:"email"`
-			AuthState   string `json:"auth_state"`
-			UserID      string `json:"user_id"`
-			DisplayName string `json:"display_name"`
-			LiveDrives  []struct {
-				DriveType string `json:"drive_type"`
-			} `json:"live_drives"`
+			Email          string `json:"email"`
+			DisplayName    string `json:"display_name"`
+			SignInRequired *struct {
+				Reason string `json:"reason"`
+				Action string `json:"action"`
+			} `json:"sign_in_required,omitempty"`
+			Drives []struct {
+				Kind string `json:"kind"`
+				Name string `json:"name"`
+			} `json:"drives"`
 		} `json:"accounts"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
 
 	var configuredAccount *struct {
-		Email       string `json:"email"`
-		AuthState   string `json:"auth_state"`
-		UserID      string `json:"user_id"`
-		DisplayName string `json:"display_name"`
-		LiveDrives  []struct {
-			DriveType string `json:"drive_type"`
-		} `json:"live_drives"`
+		Email          string `json:"email"`
+		DisplayName    string `json:"display_name"`
+		SignInRequired *struct {
+			Reason string `json:"reason"`
+			Action string `json:"action"`
+		} `json:"sign_in_required,omitempty"`
+		Drives []struct {
+			Kind string `json:"kind"`
+			Name string `json:"name"`
+		} `json:"drives"`
 	}
 	for i := range result.Accounts {
 		account := &result.Accounts[i]
-		if account.Email == strings.SplitN(drive, ":", 2)[1] && account.AuthState == "ready" {
+		if account.Email == strings.SplitN(drive, ":", 2)[1] && account.SignInRequired == nil {
 			configuredAccount = account
 			break
 		}
 	}
 
 	require.NotNil(t, configuredAccount, "status should still include the configured ready account despite unknown config key")
-	assert.NotEmpty(t, configuredAccount.UserID,
-		"status should preserve live user identity despite unknown config key")
 	assert.NotEmpty(t, configuredAccount.DisplayName,
 		"status should preserve live display name despite unknown config key")
-	assert.NotEmpty(t, configuredAccount.LiveDrives,
-		"status should preserve live drive catalog despite unknown config key")
+	assert.NotEmpty(t, configuredAccount.Drives,
+		"status should preserve configured drives despite unknown config key")
 }
 
 // Validates: R-6.7.11
@@ -372,11 +378,14 @@ func TestE2E_Status_PersonalAccountShowsSinglePersonalLiveDrive(t *testing.T) {
 
 	var result struct {
 		Accounts []struct {
-			Email      string `json:"email"`
-			AuthState  string `json:"auth_state"`
-			LiveDrives []struct {
-				DriveType string `json:"drive_type"`
-			} `json:"live_drives"`
+			Email          string `json:"email"`
+			SignInRequired *struct {
+				Reason string `json:"reason"`
+				Action string `json:"action"`
+			} `json:"sign_in_required,omitempty"`
+			Drives []struct {
+				Kind string `json:"kind"`
+			} `json:"drives"`
 		} `json:"accounts"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
@@ -384,16 +393,16 @@ func TestE2E_Status_PersonalAccountShowsSinglePersonalLiveDrive(t *testing.T) {
 	personalCount := 0
 	readyPersonalAccountFound := false
 	for _, account := range result.Accounts {
-		if account.AuthState == "ready" && account.Email == strings.SplitN(drive, ":", 2)[1] {
+		if account.SignInRequired == nil && account.Email == strings.SplitN(drive, ":", 2)[1] {
 			readyPersonalAccountFound = true
 		}
-		for _, driveInfo := range account.LiveDrives {
-			if driveInfo.DriveType == "personal" {
+		for _, driveInfo := range account.Drives {
+			if driveInfo.Kind == "personal_onedrive" {
 				personalCount++
 			}
 		}
 	}
 
 	assert.True(t, readyPersonalAccountFound, "status should still include the configured ready personal account")
-	assert.Equal(t, 1, personalCount, "status should show exactly one personal live drive for Personal accounts")
+	assert.Equal(t, 1, personalCount, "status should show exactly one configured personal OneDrive for Personal accounts")
 }

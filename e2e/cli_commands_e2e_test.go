@@ -22,8 +22,8 @@ import (
 // live OneDrive account.
 // ---------------------------------------------------------------------------
 
-// TestE2E_Status_AfterSync validates that status shows token state and last
-// sync information after a successful sync.
+// TestE2E_Status_AfterSync validates that status shows the configured drive
+// and sync information after a successful sync.
 func TestE2E_Status_AfterSync(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -43,12 +43,13 @@ func TestE2E_Status_AfterSync(t *testing.T) {
 
 	// Check status output.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status")
-	assert.Contains(t, stdout, "Auth:", "status should show auth state")
-	assert.Contains(t, stdout, "ready", "status should show ready state after sync")
+	assert.Contains(t, stdout, "Folder:", "status should show the configured drive folder")
+	assert.NotContains(t, stdout, "Auth:", "healthy status should not show auth state")
+	assert.NotContains(t, stdout, "No active conditions.", "healthy status should not print empty issue sections")
 }
 
 // TestE2E_Status_JSON validates that status --json exposes the unified
-// summary-plus-per-mount schema.
+// account/drive schema.
 func TestE2E_Status_JSON(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -57,15 +58,15 @@ func TestE2E_Status_JSON(t *testing.T) {
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	status := readStatus(t, cfgPath, env)
-	assert.Equal(t, 1, status.Summary.TotalMounts)
-	mountStatus := requireStatusMount(t, status, drive)
-	require.NotNil(t, mountStatus.SyncState)
-	assert.Equal(t, 5, mountStatus.SyncState.ExamplesLimit)
-	assert.False(t, mountStatus.SyncState.Verbose)
+	assert.Equal(t, 1, status.Summary.TotalDrives)
+	driveStatus := requireStatusDriveByIdentity(t, status, drive)
+	require.NotNil(t, driveStatus.SyncState)
+	assert.Equal(t, 5, driveStatus.SyncState.ExamplesLimit)
+	assert.False(t, driveStatus.SyncState.Verbose)
 }
 
 // TestE2E_Status_PausedDrive validates that pausing a drive changes its
-// status to "paused" and resuming changes it back to "ready".
+// status to "paused" and resuming changes it back to "up_to_date".
 func TestE2E_Status_PausedDrive(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -84,8 +85,9 @@ func TestE2E_Status_PausedDrive(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "resume")
 
 	// Check status shows "ready".
-	stdout, _ = runCLIWithConfig(t, cfgPath, env, "status")
-	assert.Contains(t, stdout, "ready", "status should show ready state after resume")
+	status := readStatus(t, cfgPath, env)
+	driveStatus := requireStatusDrive(t, status, drive)
+	assert.Equal(t, "up_to_date", driveStatus.State)
 }
 
 // TestE2E_Pause_WithDuration validates that pausing with a duration shows
@@ -163,14 +165,14 @@ func TestE2E_Resume_AllDrives(t *testing.T) {
 }
 
 // Validates: R-2.3.3
-func TestE2E_Status_PerDrive_NoConditionsOrRetries(t *testing.T) {
+func TestE2E_Status_PerDrive_NoIssuesOrRetries(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
-	testFolder := fmt.Sprintf("e2e-cli-noconditions-%d", time.Now().UnixNano())
+	testFolder := fmt.Sprintf("e2e-cli-noissues-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Create a file and sync to establish state DB.
@@ -181,8 +183,8 @@ func TestE2E_Status_PerDrive_NoConditionsOrRetries(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
-	assert.Empty(t, status.Conditions)
-	assert.Zero(t, status.ConditionCount)
+	assert.Empty(t, status.Issues)
+	assert.Zero(t, status.IssueCount)
 	assert.Zero(t, status.Retrying)
 }
 
@@ -206,17 +208,17 @@ func TestE2E_Status_NoLegacyHistorySurface(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	current := readStatusSyncState(t, cfgPath, env)
-	assert.Zero(t, current.ConditionCount, "clean status should show no durable conditions")
-	assert.Empty(t, current.Conditions)
+	assert.Zero(t, current.IssueCount, "clean status should show no durable issues")
+	assert.Empty(t, current.Issues)
 
 	output := runCLIWithConfigExpectError(t, cfgPath, env, "status", "--history")
-	assert.Contains(t, output, "unknown flag: --history", "status should expose the current condition view only")
+	assert.Contains(t, output, "unknown flag: --history", "status should expose the current issue view only")
 }
 
 // Validates: R-2.3.4, R-2.3.10
-// TestE2E_Status_JSON_ConditionDetails validates that per-mount status JSON
-// exposes the current structured condition payload.
-func TestE2E_Status_JSON_ConditionDetails(t *testing.T) {
+// TestE2E_Status_JSON_IssueDetails validates that status JSON exposes the
+// current structured issue payload.
+func TestE2E_Status_JSON_IssueDetails(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -233,16 +235,15 @@ func TestE2E_Status_JSON_ConditionDetails(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
-	require.Len(t, status.Conditions, 1, "status should surface one invalid-filename condition for the reserved name")
-	assert.Equal(t, 1, status.ConditionCount)
+	require.Len(t, status.Issues, 1, "status should surface one invalid-filename issue for the reserved name")
+	assert.Equal(t, 1, status.IssueCount)
 
-	condition := status.Conditions[0]
-	assert.Equal(t, "invalid_filename", condition.ConditionKey)
-	assert.Equal(t, "invalid_filename", condition.ConditionType)
-	assert.Equal(t, 1, condition.Count)
-	assert.NotEmpty(t, condition.Reason)
-	assert.NotEmpty(t, condition.Action)
-	assert.Contains(t, strings.Join(condition.Paths, "\n"), filepath.ToSlash(filepath.Join(testFolder, "desktop.ini")))
+	issue := status.Issues[0]
+	assert.Equal(t, "invalid_filename", issue.Type)
+	assert.Equal(t, 1, issue.Count)
+	assert.NotEmpty(t, issue.Reason)
+	assert.NotEmpty(t, issue.Action)
+	assert.Contains(t, strings.Join(issue.Paths, "\n"), filepath.ToSlash(filepath.Join(testFolder, "desktop.ini")))
 }
 
 // Validates: R-2.3.12
@@ -729,17 +730,17 @@ func buildDeepPath(t *testing.T, syncDir, testFolder string) (string, string) {
 }
 
 // Validates: R-2.3.3, R-2.3.11
-// TestE2E_Status_ConditionLifecycle triggers a real sync condition (path too long),
+// TestE2E_Status_IssueLifecycle triggers a real sync issue (path too long),
 // fixes the underlying local state, and validates that per-drive status follows
 // durable store truth without any manual clear/retry command.
-func TestE2E_Status_ConditionLifecycle(t *testing.T) {
+func TestE2E_Status_IssueLifecycle(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
-	testFolder := fmt.Sprintf("e2e-conditions-readonly-%d", time.Now().UnixNano())
+	testFolder := fmt.Sprintf("e2e-issues-readonly-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Create a file whose total relative path exceeds 400 chars.
@@ -749,9 +750,9 @@ func TestE2E_Status_ConditionLifecycle(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
-	require.Len(t, status.Conditions, 1)
-	assert.Equal(t, "PATH TOO LONG", status.Conditions[0].Title)
-	assert.Contains(t, strings.Join(status.Conditions[0].Paths, "\n"), testFolder)
+	require.Len(t, status.Issues, 1)
+	assert.Equal(t, "Path too long", status.Issues[0].Title)
+	assert.Contains(t, strings.Join(status.Issues[0].Paths, "\n"), testFolder)
 
 	// Fix the underlying problem by removing the long path and creating
 	// a valid replacement that can sync normally.
@@ -762,7 +763,7 @@ func TestE2E_Status_ConditionLifecycle(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	status = readStatusSyncState(t, cfgPath, env)
-	assert.Empty(t, status.Conditions, "status should be clean after the next sync")
+	assert.Empty(t, status.Issues, "status should be clean after the next sync")
 
 	listing, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder)
 	assert.Contains(t, listing, "fixed.txt", "replacement file should sync after the condition clears")

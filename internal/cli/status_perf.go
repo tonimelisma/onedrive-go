@@ -83,19 +83,33 @@ func applyStatusPerfOverlay(accounts []statusAccount, overlay statusPerfOverlay)
 
 	for i := range accounts {
 		for j := range accounts[i].Mounts {
-			applyStatusPerfOverlayToMount(&accounts[i].Mounts[j], overlay)
+			applyStatusPerfOverlayToDrive(&accounts[i].Mounts[j], overlay)
+		}
+		for j := range accounts[i].Drives {
+			applyStatusPerfOverlayToDrive(&accounts[i].Drives[j], overlay)
 		}
 	}
 }
 
-func applyStatusPerfOverlayToMount(mount *statusMount, overlay statusPerfOverlay) {
-	if mount == nil {
+func applyStatusPerfOverlayToDrive(drive *statusDrive, overlay statusPerfOverlay) {
+	if drive == nil {
 		return
 	}
 
-	mount.SyncState = overlaySyncState(mount.MountID, mount.SyncState, overlay)
-	for i := range mount.ChildMounts {
-		applyStatusPerfOverlayToMount(&mount.ChildMounts[i], overlay)
+	internalID := drive.InternalID
+	if internalID == "" {
+		internalID = drive.MountID
+	}
+	if internalID == "" {
+		internalID = drive.CanonicalID
+	}
+	drive.SyncState = overlaySyncState(internalID, drive.SyncState, overlay)
+	finalizeStatusDriveState(drive)
+	for i := range drive.ChildMounts {
+		applyStatusPerfOverlayToDrive(&drive.ChildMounts[i], overlay)
+	}
+	for i := range drive.SharedFolders {
+		applyStatusPerfOverlayToDrive(&drive.SharedFolders[i], overlay)
 	}
 }
 

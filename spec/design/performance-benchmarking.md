@@ -505,19 +505,22 @@ Each measured sample follows the same contract:
 
 1. create a fresh local runtime and materialize the canonical fixture under the
    scoped included directory
-2. run an unmeasured dry-run sanity probe to ensure the ready remote slot is
+2. reset the selected work slot by deleting it, copying the benchmark-owned
+   golden remote fixture into the same slot path, and waiting for the reset slot
+   to become path-visible
+3. run an unmeasured dry-run sanity probe to ensure the ready remote slot is
    visible through the sync planning path without requiring uploads, downloads,
    deletes, or conflicts
-3. run an unmeasured bidirectional sync to establish a clean baseline and
+4. run an unmeasured bidirectional sync to establish a clean baseline and
    persist the observation cursor
-4. apply deterministic remote deletes, truncations, and creates through direct
+5. apply deterministic remote deletes, truncations, and creates through direct
    file-operation commands owned by the benchmark fixture controller
-5. poll `sync --dry-run` until the expected remote-side downloads and local
+6. poll `sync --dry-run` until the expected remote-side downloads and local
    deletes appear in the plan, verifying after every probe that the persisted
    observation cursor still equals the post-baseline cursor
-6. apply deterministic local deletes, truncations, and creates on disjoint
+7. apply deterministic local deletes, truncations, and creates on disjoint
    paths
-7. measure a normal bidirectional `sync` until process exit, then verify the
+8. measure a normal bidirectional `sync` until process exit, then verify the
    local tree matches the expected merged fixture exactly
 
 The dry-run delta-readiness probe is deliberate. Graph path endpoints and the

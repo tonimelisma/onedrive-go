@@ -21,14 +21,12 @@ func goldenStatusAccounts() []statusAccount {
 			AuthState:   authStateReady,
 			DisplayName: "Alice Example",
 			OrgName:     "Contoso",
-			Mounts: []statusMount{
+			Drives: []statusDrive{
 				{
-					MountID:        "personal:alice@example.com",
-					ProjectionKind: statusProjectionStandalone,
-					CanonicalID:    "personal:alice@example.com",
-					DisplayName:    "Alice Personal",
-					SyncDir:        "/Users/alice/OneDrive",
-					State:          driveStateReady,
+					Kind:   statusDriveKindPersonalOneDrive,
+					Name:   "Alice Example's personal OneDrive",
+					Folder: "/Users/alice/OneDrive",
+					State:  driveStateReady,
 					SyncState: &syncStateInfo{
 						FileCount:      42,
 						ConditionCount: 3,
@@ -73,19 +71,19 @@ func goldenStatusAccounts() []statusAccount {
 			},
 		},
 		{
-			Email:      "bob@example.com",
-			DriveType:  "business",
-			AuthState:  authStateAuthenticationNeeded,
-			AuthReason: string(authReasonInvalidSavedLogin),
-			AuthAction: authAction(authReasonInvalidSavedLogin),
-			Mounts: []statusMount{
+			Email:       "bob@example.com",
+			DisplayName: "Bob Example",
+			OrgName:     "Example Corp",
+			DriveType:   "business",
+			AuthState:   authStateAuthenticationNeeded,
+			AuthReason:  string(authReasonInvalidSavedLogin),
+			AuthAction:  authAction(authReasonInvalidSavedLogin),
+			Drives: []statusDrive{
 				{
-					MountID:        "business:bob@example.com",
-					ProjectionKind: statusProjectionStandalone,
-					CanonicalID:    "business:bob@example.com",
-					DisplayName:    "Bob Work",
-					SyncDir:        "/Users/bob/WorkDrive",
-					State:          driveStatePaused,
+					Kind:   statusDriveKindBusinessOneDrive,
+					Name:   "OneDrive - Example Corp",
+					Folder: "/Users/bob/WorkDrive",
+					State:  driveStatePaused,
 				},
 			},
 		},

@@ -22,7 +22,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // TestE2E_Status_JSONShape validates that status --json emits one top-level
-// summary plus nested per-mount sync-state sections.
+// summary plus account-nested drive sync-state sections.
 func TestE2E_Status_JSONShape(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -40,12 +40,12 @@ func TestE2E_Status_JSONShape(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	status := readStatus(t, cfgPath, env)
-	assert.Equal(t, countStatusMounts(status), status.Summary.TotalMounts)
+	assert.Equal(t, countStatusDrives(status), status.Summary.TotalDrives)
 
-	mountStatus := requireStatusMount(t, status, resolveDriveSelection(env, ""))
-	require.NotNil(t, mountStatus.SyncState)
-	assert.Equal(t, 5, mountStatus.SyncState.ExamplesLimit)
-	assert.False(t, mountStatus.SyncState.Verbose)
+	driveStatus := requireStatusDriveByIdentity(t, status, resolveDriveSelection(env, ""))
+	require.NotNil(t, driveStatus.SyncState)
+	assert.Equal(t, 5, driveStatus.SyncState.ExamplesLimit)
+	assert.False(t, driveStatus.SyncState.Verbose)
 }
 
 func TestE2E_Status_FilteredDriveIsSubsetOfAllDrives(t *testing.T) {
@@ -58,19 +58,11 @@ func TestE2E_Status_FilteredDriveIsSubsetOfAllDrives(t *testing.T) {
 	cfgPath, env := writeMultiDriveConfig(t, syncDir1, syncDir2)
 
 	statusAll := readStatusAllDrives(t, cfgPath, env)
-	assert.Equal(t, 2, statusAll.Summary.TotalMounts)
-	requireStatusMount(t, statusAll, drive)
-	requireStatusMount(t, statusAll, drive2)
+	assert.Equal(t, 2, statusAll.Summary.TotalDrives)
 
 	statusFiltered := readStatus(t, cfgPath, env)
-	assert.Equal(t, 1, statusFiltered.Summary.TotalMounts)
-	requireStatusMount(t, statusFiltered, drive)
-
-	for i := range statusFiltered.Accounts {
-		for j := range statusFiltered.Accounts[i].Mounts {
-			assert.NotEqual(t, drive2, statusFiltered.Accounts[i].Mounts[j].CanonicalID)
-		}
-	}
+	assert.Equal(t, 1, statusFiltered.Summary.TotalDrives)
+	requireStatusDriveByIdentity(t, statusFiltered, drive)
 }
 
 // TestE2E_Status_NoDrives validates that status with no configured drives

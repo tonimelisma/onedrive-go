@@ -113,7 +113,7 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 	case syncengine.ConditionAuthenticationRequired:
 		presentation := authstate.UnauthorizedIssuePresentation()
 		return newStatusConditionDescriptor(
-			"AUTHENTICATION REQUIRED",
+			"Sign-in required",
 			presentation.Reason,
 			presentation.Action,
 		)
@@ -136,14 +136,14 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 		return describeLocalRuntimeStatusCondition(key)
 	case syncengine.ConditionUnexpectedCondition:
 		return newStatusConditionDescriptor(
-			"SYNC CONDITION",
-			"An unexpected sync condition needs attention.",
+			"Sync issue",
+			"An unexpected sync issue needs attention.",
 			"Check logs for details or rerun status after the next sync pass.",
 		)
 	default:
 		return newStatusConditionDescriptor(
-			"SYNC CONDITION",
-			"An unexpected sync condition needs attention.",
+			"Sync issue",
+			"An unexpected sync issue needs attention.",
 			"Check logs for details or rerun status after the next sync pass.",
 		)
 	}
@@ -159,8 +159,8 @@ func newStatusConditionDescriptor(title, reason, action string) statusConditionD
 
 func unexpectedStatusConditionDescriptor() statusConditionDescriptor {
 	return newStatusConditionDescriptor(
-		"SYNC CONDITION",
-		"An unexpected sync condition needs attention.",
+		"Sync issue",
+		"An unexpected sync issue needs attention.",
 		"Check logs for details or rerun status after the next sync pass.",
 	)
 }
@@ -169,31 +169,31 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 	switch key {
 	case syncengine.ConditionQuotaExceeded:
 		return newStatusConditionDescriptor(
-			"QUOTA EXCEEDED",
+			"Storage full",
 			"The OneDrive storage quota for this sync scope is full.",
 			"Free up space in the owning drive, or ask the shared-folder owner to do so.",
 		)
 	case syncengine.ConditionServiceOutage:
 		return newStatusConditionDescriptor(
-			"SERVICE OUTAGE",
+			"Service outage",
 			"OneDrive service is temporarily unavailable.",
 			"Wait for the service to recover (automatic retry in progress).",
 		)
 	case syncengine.ConditionRateLimited:
 		return newStatusConditionDescriptor(
-			"RATE LIMITED",
+			"Rate limited",
 			"OneDrive asked this remote location to slow down.",
 			"Wait for the retry window to expire (automatic retry in progress).",
 		)
 	case syncengine.ConditionRemoteWriteDenied:
 		return newStatusConditionDescriptor(
-			"SHARED FOLDER WRITES BLOCKED",
+			"Shared folder writes blocked",
 			"This shared folder is read-only for your current write attempts. Downloads continue normally.",
 			"Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.",
 		)
 	case syncengine.ConditionRemoteReadDenied:
 		return newStatusConditionDescriptor(
-			"REMOTE READ BLOCKED",
+			"Remote read blocked",
 			"This remote content can no longer be downloaded with your current permissions.",
 			"Restore access to the shared item, or remove the blocked content from this sync scope.",
 		)
@@ -218,37 +218,37 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 	switch key {
 	case syncengine.ConditionLocalReadDenied:
 		return newStatusConditionDescriptor(
-			"LOCAL READ BLOCKED",
+			"Local read blocked",
 			"The local source file or directory can no longer be read.",
 			"Restore local read access so uploads and conflict recovery can read the source content.",
 		)
 	case syncengine.ConditionLocalWriteDenied:
 		return newStatusConditionDescriptor(
-			"LOCAL WRITE BLOCKED",
+			"Local write blocked",
 			"The local destination path can no longer be created, renamed, or updated.",
 			"Restore local write access so downloads and local filesystem updates can complete.",
 		)
 	case syncengine.ConditionInvalidFilename:
 		return newStatusConditionDescriptor(
-			"INVALID FILENAME",
+			"Invalid filename",
 			"The filename contains characters not allowed by OneDrive.",
 			"Rename the file to remove invalid characters.",
 		)
 	case syncengine.ConditionPathTooLong:
 		return newStatusConditionDescriptor(
-			"PATH TOO LONG",
+			"Path too long",
 			"The full path exceeds OneDrive's 400-character limit.",
 			"Shorten the path by renaming files or folders.",
 		)
 	case syncengine.ConditionFileTooLarge:
 		return newStatusConditionDescriptor(
-			"FILE TOO LARGE",
+			"File too large",
 			"The file exceeds the maximum upload size.",
 			"Reduce the file size or move it out of the sync dir.",
 		)
 	case syncengine.ConditionCaseCollision:
 		return newStatusConditionDescriptor(
-			"CASE COLLISION",
+			"Case collision",
 			"Two files differ only in letter case, which OneDrive cannot distinguish.",
 			"Rename one of the conflicting files.",
 		)
@@ -272,19 +272,19 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 	switch key {
 	case syncengine.ConditionDiskFull:
 		return newStatusConditionDescriptor(
-			"DISK FULL",
+			"Disk full",
 			"Local disk space is insufficient for downloads.",
 			"Free up local disk space.",
 		)
 	case syncengine.ConditionHashError:
 		return newStatusConditionDescriptor(
-			"HASH ERROR",
+			"Hash error",
 			"File hashing failed unexpectedly.",
 			"Check file integrity and retry.",
 		)
 	case syncengine.ConditionFileTooLargeForSpace:
 		return newStatusConditionDescriptor(
-			"FILE TOO LARGE FOR SPACE",
+			"File too large for available space",
 			"The file is larger than available local disk space.",
 			"Free up local disk space to fit this file.",
 		)

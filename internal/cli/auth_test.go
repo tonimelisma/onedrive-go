@@ -19,7 +19,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -221,63 +220,6 @@ func TestFindTokenFallback_ExistingToken(t *testing.T) {
 			assert.Equal(t, tt.tokenID, got)
 		})
 	}
-}
-
-type fakeLiveDriveCatalogClient struct {
-	drives     []graph.Drive
-	drivesErr  error
-	primary    *graph.Drive
-	primaryErr error
-}
-
-func (f fakeLiveDriveCatalogClient) Drives(context.Context) ([]graph.Drive, error) {
-	return f.drives, f.drivesErr
-}
-
-func (f fakeLiveDriveCatalogClient) PrimaryDrive(context.Context) (*graph.Drive, error) {
-	return f.primary, f.primaryErr
-}
-
-func TestDiscoverLiveDriveCatalog_DegradesToPrimaryDrive(t *testing.T) {
-	result := discoverLiveDriveCatalog(
-		t.Context(),
-		fakeLiveDriveCatalogClient{
-			drivesErr: graph.ErrForbidden,
-			primary: &graph.Drive{
-				ID:        driveid.New("drive-primary"),
-				Name:      "OneDrive",
-				DriveType: driveid.DriveTypePersonal,
-			},
-		},
-		"user@example.com",
-		"Test User",
-		driveid.DriveTypePersonal,
-		slog.Default(),
-	)
-	assert.Equal(t, accountAuthHealth{}, result.AuthHealth)
-	require.Len(t, result.LiveDrives, 1)
-	assert.Equal(t, "OneDrive", result.LiveDrives[0].Name)
-	require.NotNil(t, result.Degraded)
-	assert.Equal(t, "user@example.com", result.Degraded.Email)
-	assert.Equal(t, driveCatalogUnavailableReason, result.Degraded.Reason)
-}
-
-func TestDiscoverLiveDriveCatalog_DegradesWithoutPrimaryDrive(t *testing.T) {
-	result := discoverLiveDriveCatalog(
-		t.Context(),
-		fakeLiveDriveCatalogClient{
-			drivesErr:  graph.ErrForbidden,
-			primaryErr: graph.ErrForbidden,
-		},
-		"user@example.com",
-		"Test User",
-		driveid.DriveTypeBusiness,
-		slog.Default(),
-	)
-	assert.Equal(t, accountAuthHealth{}, result.AuthHealth)
-	assert.Empty(t, result.LiveDrives)
-	require.NotNil(t, result.Degraded)
-	assert.Equal(t, driveid.DriveTypeBusiness, result.Degraded.DriveType)
 }
 
 func TestPrintLoginSuccess_DoesNotPanic(t *testing.T) {
@@ -610,7 +552,6 @@ func TestPurgeOrphanedFiles(t *testing.T) {
 func TestRunStatusCommand_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedProof(t *testing.T) {
 	setTestDriveHome(t)
 
-	const graphDrivesPath = "/me/drives"
 	const primaryDrivePath = "/me/drive"
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -630,8 +571,6 @@ func TestRunStatusCommand_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedPr
 				"mail": "user@example.com",
 				"userPrincipalName": "user@example.com"
 			}`)
-		case graphDrivesPath:
-			writeTestResponse(t, w, `{"value":[{"id":"drive-123","name":"OneDrive","driveType":"personal","quota":{"used":1,"total":2}}]}`)
 		case primaryDrivePath:
 			writeTestResponse(t, w, `{"id":"drive-123","name":"OneDrive","driveType":"personal","quota":{"used":1,"total":2}}`)
 		default:
@@ -652,4 +591,6 @@ func TestRunStatusCommand_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedPr
 
 	require.NoError(t, runStatusCommand(cc, false))
 	assert.False(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
+	assert.NotContains(t, out.String(), "Sign-in required")
+	assert.Contains(t, out.String(), "Storage: 1 B of 2 B used")
 }

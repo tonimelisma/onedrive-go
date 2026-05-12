@@ -66,65 +66,71 @@ as `mkdir` therefore walk and mutate only inside that configured subtree.
 ## Status And Read-Only Sync State
 
 `status` is intentionally read-only and account-centric. It is the only
-sync-health command.
+sync-health command. The public presentation is account -> configured drives ->
+shared folders. Internal runtime concepts such as mount IDs and stored
+condition keys remain private implementation details.
 
-- account identity comes from the validated config+catalog snapshot
-- runtime mount identity comes from configured standalone drives plus
-  parent-declared shortcut child work commands
+- account identity comes from the validated config+catalog snapshot, enriched
+  by `/me` when authentication succeeds
+- configured drive rows come only from config/catalog; status never enumerates
+  unconfigured Microsoft Graph drives into the output
+- shared folder shortcuts discovered by a parent engine render as nested
+  `Shared folders` under that configured parent drive
 - sync-state snapshots come from store-owned raw authority reads
-- the CLI renders status conditions from the sync-owned stored-condition
-  projection, using the sync-owned `ConditionKey` taxonomy and ordering helpers
-- one CLI-owned presentation boundary shapes status-condition titles, reasons,
-  actions, scope-kind labels, ordering, truncation, and JSON output
+- the CLI translates sync-owned stored condition groups into public `Issues:`
+  sections and JSON `issues`, with user-facing titles, reasons, actions,
+  scope labels, ordering, and path sampling
 - `status_sync_state.go` only assembles the high-level sync-state payload;
-  `status_condition_descriptors.go` owns the condition presentation and JSON
-  shaping surface itself, including typed scope-kind labels and descriptor
-  tables keyed directly by sync-owned `ConditionKey`
-- live authenticated account identity and drive catalog overlays come from
-  bounded Graph proof/discovery owned by the command
+  `status_condition_descriptors.go` owns the public issue presentation while
+  still keying descriptors from sync-owned `ConditionKey` values
+- live account overlay fetches `/me` only for account display/sign-in proof, and
+  fetches storage only for configured drives (`/me/drive` for the configured
+  primary personal/business drive, or a narrow drive-by-ID lookup for a
+  configured non-primary drive that already has a known remote drive ID)
 - live runtime ownership comes from the active control socket when reachable;
-  configured rows remain config/catalog-shaped, and the overlay only marks
-  whether the current one-shot/watch owner reports that exact mount ID
+  it may contribute summary/runtime perf facts but does not expose mount IDs in
+  public status JSON
 - live perf comes from the active owner over the control socket when requested
 
 When both `--account` and `--drive` selectors are present, `status` applies
 them as an intersection. `--drive` still selects configured standalone parent
-drives, but each selected parent row automatically includes its attached child
-mount rows. The CLI does not widen the result to the union of independently
+drives, but each selected parent row automatically includes its attached shared
+folder shortcut rows. The CLI does not widen the result to the union of independently
 matched accounts and configured drives.
 
-The runtime status read model is now mount-shaped:
+The JSON surface follows the user model:
 
-- standalone configured drives render as standalone mount rows
-- managed shortcut child mounts render as child rows immediately under their
-  parent drive row
-- child rows carry their own sync-state snapshot and live perf overlay
-- parent and child rows carry `runtime_owner`/`runtime_state` only when an
-  active one-shot/watch owner is reachable; inactive means configured but not
-  reported by that owner, not a durable sync-store state
-- parent rows do not absorb child state or child perf totals
-- child rows are read-only sub-status. There is no child `--mount`, pause,
-  resume, reset, or config surface; the user controls the projection by
-  changing the OneDrive shortcut or pausing the parent drive.
+- `summary.total_drives` counts configured top-level drive rows
+- `summary.total_shared_folders` is present only when nested shared folders are
+  displayed
+- accounts use `accounts[].drives`
+- shortcut projections use `shared_folders`
+- sync-state issue groups use `issues`
+- healthy account auth omits auth fields; `sign_in_required` appears only when
+  the user needs to sign in
+- public JSON omits `mount_id`, `namespace_id`, `canonical_id`,
+  `projection_kind`, `drive_id`, `user_id`, `auth_state: ready`, and
+  `live_drives`
 
-The JSON surface follows that same mount boundary: summary counts must include
-`summary.total_mounts`, per-account rows use `accounts[].mounts`, and shortcut
-projections are nested under the owning parent row as `child_mounts`.
-`summary.total_mounts` is the recursive count of every displayed parent and
-child mount row. The legacy drive-shaped status fields (`total_drives`,
-`accounts[].drives`) are not part of the current contract and test decoders do
-not map them back into the mount-shaped surface. Child lifecycle rows also
-expose `state`, `state_reason`, `state_detail`, `protected_current_path`,
-`protected_reserved_paths`, typed `issue_class`/`recovery_class`,
-`recovery_action`, and `auto_retry` from sync-owned `ShortcutRootStatusView`
-values plus child sync-state snapshots. The CLI does not read raw
-`shortcut_roots` fields such as protected-path bookkeeping, blocker detail, or
-waiting replacement internals; sync owns that projection. Text and JSON status
-describe the protected-root state and the next recovery step without
-duplicating engine transition policy or shortcut-state copy tables in the CLI.
-Recovery copy uses the same product vocabulary as the control plane: "shortcut
-alias", "child projection", "reserved path", and "parent engine child work
-snapshots".
+Drive rows expose `kind`, `name`, `folder`, `state`, optional `storage`,
+optional lifecycle fields, optional `sync_state`, and optional
+`shared_folders`. User-facing states are `up_to_date`, `syncing`, `pending`,
+`paused`, `issues`, and `unavailable`. Text output uses `Folder`, `Storage`,
+`Files`, `Remote changes`, `Retrying`, and `Issues` labels. It never prints an
+empty healthy issue section, never prints "No active conditions", and never
+prints a healthy `Auth: ready` line.
+
+Child lifecycle rows expose `state`, `state_reason`, `state_detail`,
+`protected_current_path`, `protected_reserved_paths`, typed
+`issue_class`/`recovery_class`, `recovery_action`, and `auto_retry` from
+sync-owned `ShortcutRootStatusView` values plus child sync-state snapshots. The
+CLI does not read raw `shortcut_roots` fields such as protected-path
+bookkeeping, blocker detail, or waiting replacement internals; sync owns that
+projection. Text and JSON status describe the protected-root state and the next
+recovery step without duplicating engine transition policy or shortcut-state
+copy tables in the CLI. Recovery copy uses the same product vocabulary as the
+control plane: "shortcut alias", "child projection", "reserved path", and
+"parent engine child work snapshots".
 
 For `removed_final_drain`, status must make the retry/discard choice explicit:
 the child keeps retrying while its state DB owns dirty content state; the user
@@ -150,13 +156,13 @@ The target `status` surface projects the full sync model directly from:
 - optional live perf
 
 `status` is the single read-only sync-health surface. It renders current
-conditions, mount state, account/auth/degraded overlays, and optional live perf;
-handled sync work is represented by current planning and execution state rather
-than a separate history-only status section.
+issues, drive/shared-folder state, sign-in-required overlays, and optional live
+perf; handled sync work is represented by current planning and execution state
+rather than a separate history-only status section.
 
 Minimal-config direct file-operation coverage keeps that contract explicit:
-the full-suite `TestE2E_RoundTrip` status check asserts the current empty
-snapshot surface (`No active conditions.`) and rejects any reintroduced
+the full-suite `TestE2E_RoundTrip` status check asserts that healthy output
+omits auth/debug lines and empty issue sections, and rejects any reintroduced
 `Last sync:` history line.
 
 ## Control Socket
