@@ -91,8 +91,8 @@ func printStatusJSON(w io.Writer, accounts []statusAccount) error {
 func printStatusText(w io.Writer, accounts []statusAccount, history bool) error {
 	accounts = normalizeStatusAccounts(accounts)
 	summary := computeSummary(accounts)
-	if shouldPrintStatusSummary(summary, len(accounts)) {
-		if err := printSummaryText(w, summary); err != nil {
+	if shouldPrintStatusSummary(&summary, len(accounts)) {
+		if err := printSummaryText(w, &summary); err != nil {
 			return err
 		}
 		if err := writeln(w); err != nil {
@@ -152,7 +152,7 @@ func normalizeStatusDrives(drives []statusDrive) {
 			if drives[i].NamespaceID != "" || drives[i].ProjectionKind == statusProjectionChild {
 				drives[i].Kind = statusDriveKindSharedFolder
 			} else {
-				drives[i].Kind = "drive"
+				drives[i].Kind = statusDriveKindGeneric
 			}
 		}
 		if len(drives[i].SharedFolders) == 0 && len(drives[i].ChildMounts) > 0 {
@@ -165,7 +165,10 @@ func normalizeStatusDrives(drives []statusDrive) {
 	}
 }
 
-func shouldPrintStatusSummary(summary statusSummary, accountCount int) bool {
+func shouldPrintStatusSummary(summary *statusSummary, accountCount int) bool {
+	if summary == nil {
+		return false
+	}
 	if accountCount > 1 || summary.TotalDrives > 1 || summary.TotalSharedFolders > 0 {
 		return true
 	}
@@ -255,26 +258,17 @@ func printDriveStatus(w io.Writer, drive *statusDrive, history bool, depth int) 
 	}
 
 	layout := statusDriveTextLayoutFor(depth)
-	folder := drive.Folder
-	if folder == "" {
-		folder = syncDirNotSet
-	}
-
 	if err := writef(w, "%s%s\n", layout.headingIndent, statusDriveLabel(drive)); err != nil {
 		return err
 	}
-	if err := writef(w, "%sFolder: %s\n", layout.detailIndent, folder); err != nil {
+	if err := printDriveFolder(w, layout, drive); err != nil {
 		return err
 	}
-	if drive.Storage != nil {
-		if err := writef(w, "%sStorage: %s\n", layout.detailIndent, formatStatusStorage(drive.Storage)); err != nil {
-			return err
-		}
+	if err := printDriveStorage(w, layout, drive); err != nil {
+		return err
 	}
-	if drive.State != driveStateReady {
-		if err := writef(w, "%sStatus: %s\n", layout.detailIndent, statusDriveStateLabel(drive.State)); err != nil {
-			return err
-		}
+	if err := printDriveState(w, layout, drive); err != nil {
+		return err
 	}
 	if err := printDriveLifecycleStatus(w, layout, drive); err != nil {
 		return err
@@ -284,14 +278,46 @@ func printDriveStatus(w io.Writer, drive *statusDrive, history bool, depth int) 
 			return err
 		}
 	}
-	if len(drive.SharedFolders) == 0 {
+	return printSharedFolderStatuses(w, layout, drive.SharedFolders, history, depth)
+}
+
+func printDriveFolder(w io.Writer, layout statusDriveTextLayout, drive *statusDrive) error {
+	folder := drive.Folder
+	if folder == "" {
+		folder = syncDirNotSet
+	}
+	return writef(w, "%sFolder: %s\n", layout.detailIndent, folder)
+}
+
+func printDriveStorage(w io.Writer, layout statusDriveTextLayout, drive *statusDrive) error {
+	if drive.Storage == nil {
+		return nil
+	}
+	return writef(w, "%sStorage: %s\n", layout.detailIndent, formatStatusStorage(drive.Storage))
+}
+
+func printDriveState(w io.Writer, layout statusDriveTextLayout, drive *statusDrive) error {
+	if drive.State == driveStateReady {
+		return nil
+	}
+	return writef(w, "%sStatus: %s\n", layout.detailIndent, statusDriveStateLabel(drive.State))
+}
+
+func printSharedFolderStatuses(
+	w io.Writer,
+	layout statusDriveTextLayout,
+	sharedFolders []statusDrive,
+	history bool,
+	depth int,
+) error {
+	if len(sharedFolders) == 0 {
 		return nil
 	}
 	if err := writef(w, "%sShared folders:\n", layout.detailIndent); err != nil {
 		return err
 	}
-	for i := range drive.SharedFolders {
-		if err := printDriveStatus(w, &drive.SharedFolders[i], history, depth+1); err != nil {
+	for i := range sharedFolders {
+		if err := printDriveStatus(w, &sharedFolders[i], history, depth+1); err != nil {
 			return err
 		}
 	}
@@ -382,7 +408,7 @@ func statusDriveLabel(drive *statusDrive) string {
 
 func statusFallbackDriveName(drive *statusDrive) string {
 	if drive == nil {
-		return "OneDrive"
+		return statusDriveNameOneDrive
 	}
 	identity := drive.CanonicalID
 	if identity == "" {
@@ -398,18 +424,18 @@ func statusFallbackDriveName(drive *statusDrive) string {
 	case drive.Kind == statusDriveKindSharedFolder ||
 		drive.ProjectionKind == statusProjectionChild ||
 		strings.HasPrefix(identity, "shared:"):
-		return "Shared folder"
+		return statusDriveNameSharedFolder
 	}
-	return "OneDrive"
+	return statusDriveNameOneDrive
 }
 
-func printMountStatus(w io.Writer, mount *statusMount, history bool) error {
+func printMountStatus(w io.Writer, mount *statusMount) error {
 	if mount == nil {
 		return nil
 	}
 	drives := []statusDrive{*mount}
 	normalizeStatusDrives(drives)
-	return printDriveStatus(w, &drives[0], history, 0)
+	return printDriveStatus(w, &drives[0], false, 0)
 }
 
 func statusMountLabel(mount *statusMount) string {
@@ -473,15 +499,11 @@ func printSyncStateStoreLines(w io.Writer, _ string, ss *syncStateInfo) error {
 	return nil
 }
 
-func writeOptionalStatusCountLine(w io.Writer, count int, format string) error {
-	if count <= 0 {
+func printSummaryText(w io.Writer, s *statusSummary) error {
+	if s == nil {
 		return nil
 	}
 
-	return writef(w, format, count)
-}
-
-func printSummaryText(w io.Writer, s statusSummary) error {
 	var parts []string
 
 	if s.Ready > 0 {

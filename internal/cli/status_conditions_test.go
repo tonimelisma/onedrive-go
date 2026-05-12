@@ -334,7 +334,7 @@ func TestPrintDriveStatus_WithoutSyncStateUsesSyncDirFallback(t *testing.T) {
 	require.NoError(t, printMountStatus(&buf, &statusMount{
 		CanonicalID: "personal:blank@example.com",
 		State:       driveStatePaused,
-	}, false))
+	}))
 
 	assert.Equal(t, ""+
 		"  Personal OneDrive\n"+

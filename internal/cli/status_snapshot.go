@@ -31,6 +31,9 @@ const (
 	statusDriveKindBusinessOneDrive = "business_onedrive"
 	statusDriveKindSharePoint       = "sharepoint_library"
 	statusDriveKindSharedFolder     = "shared_folder"
+	statusDriveKindGeneric          = "drive"
+	statusDriveNameOneDrive         = "OneDrive"
+	statusDriveNameSharedFolder     = "Shared folder"
 )
 
 const (
@@ -523,7 +526,7 @@ func statusDriveKind(cid driveid.CanonicalID) string {
 	case cid.IsShared():
 		return statusDriveKindSharedFolder
 	default:
-		return "drive"
+		return statusDriveKindGeneric
 	}
 }
 
@@ -548,7 +551,7 @@ func statusConfiguredDriveName(cid driveid.CanonicalID, drive *config.Drive, acc
 		if drive != nil && drive.DisplayName != "" {
 			return drive.DisplayName
 		}
-		return "Shared folder"
+		return statusDriveNameSharedFolder
 	default:
 		if drive != nil && drive.DisplayName != "" {
 			return drive.DisplayName
@@ -710,9 +713,8 @@ func buildChildStatusDrive(
 func buildChildStatusMount(
 	parentDrive *config.Drive,
 	child *childMountStatusInput,
-	syncQ syncStateQuerier,
 ) statusMount {
-	return buildChildStatusDrive(parentDrive, child, syncQ)
+	return buildChildStatusDrive(parentDrive, child, nil)
 }
 
 func querySyncState(

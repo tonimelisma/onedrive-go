@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,6 +19,47 @@ const benchTestSyncCommand = "sync"
 
 func (r benchStaticCursorReader) readObservationCursor(context.Context, *benchBidirectionalRuntime) (string, error) {
 	return r.cursor, nil
+}
+
+// Validates: R-6.10.14
+func TestResetRemoteSlotForBaselineCopiesGoldenEverySample(t *testing.T) {
+	t.Parallel()
+
+	state := &benchBidirectionalScenarioState{
+		fixture: benchBidirectionalFixturePlan{
+			Manifest: benchBidirectionalFixtureManifest{
+				GoldenRemoteScopePath: "/benchmarks/golden/test-fixture",
+			},
+		},
+		fixtureSlot: "slot-00",
+	}
+	runtime := &benchBidirectionalRuntime{
+		configPath:      "config.toml",
+		driveID:         "personal:user@example.com",
+		remoteScopePath: "/benchmarks/work/test/slot-00",
+	}
+
+	calls := make([]string, 0, 8)
+	subject := preparedBenchSubject{
+		measure: func(_ context.Context, spec benchCommandSpec) (benchMeasuredProcess, error) {
+			calls = append(calls, strings.Join(spec.Arg[4:], " "))
+			return benchMeasuredProcess{}, nil
+		},
+	}
+
+	require.NoError(t, state.resetRemoteSlotForBaseline(t.Context(), subject, runtime))
+	require.NoError(t, state.resetRemoteSlotForBaseline(t.Context(), subject, runtime))
+
+	assert.Equal(t, []string{
+		"stat --json /benchmarks/golden/test-fixture",
+		"rm -r /benchmarks/work/test/slot-00",
+		"cp /benchmarks/golden/test-fixture /benchmarks/work/test/slot-00",
+		"stat --json /benchmarks/work/test/slot-00",
+		"stat --json /benchmarks/golden/test-fixture",
+		"rm -r /benchmarks/work/test/slot-00",
+		"cp /benchmarks/golden/test-fixture /benchmarks/work/test/slot-00",
+		"stat --json /benchmarks/work/test/slot-00",
+	}, calls)
 }
 
 // Validates: R-6.10.14
@@ -214,8 +256,9 @@ func TestRunBidirectionalSampleCommandOrderAndPerfSummary(t *testing.T) {
 
 	fixture := benchBidirectionalFixturePlan{
 		Manifest: benchBidirectionalFixtureManifest{
-			Version:   1,
-			FixtureID: "test-fixture",
+			Version:               1,
+			FixtureID:             "test-fixture",
+			GoldenRemoteScopePath: "/benchmarks/golden/test-fixture",
 		},
 		RemoteScopePath:       "/benchmarks/work/test/slot-00",
 		ScopeRootRelativePath: "benchmarks/work/test/slot-00",
@@ -253,44 +296,7 @@ func TestRunBidirectionalSampleCommandOrderAndPerfSummary(t *testing.T) {
 		cursorReader: benchStaticCursorReader{cursor: "cursor-a"},
 	}
 
-	calls := make([]string, 0, 10)
-	syncRuns := 0
-	subject := preparedBenchSubject{
-		measure: func(_ context.Context, spec benchCommandSpec) (benchMeasuredProcess, error) {
-			calls = append(calls, fmt.Sprint(spec.Arg))
-			scopeRoot := filepath.Join(spec.CWD, "sync-root", filepath.FromSlash(fixture.ScopeRootRelativePath))
-			logPath := filepath.Join(spec.CWD, "bench.log")
-
-			switch {
-			case len(spec.Arg) >= 5 && spec.Arg[4] == "stat":
-				return benchMeasuredProcess{}, nil
-			case len(spec.Arg) >= 5 && spec.Arg[4] == benchTestSyncCommand && len(spec.Arg) == 6 && spec.Arg[5] == "--dry-run":
-				if len(calls) < 4 {
-					return benchMeasuredProcess{Stdout: []byte("Plan:\n  Baseline updates: 4\n")}, nil
-				}
-
-				return benchMeasuredProcess{Stdout: []byte("Plan:\n  Downloads: 2\n  Local deletes: 1\n")}, nil
-			case len(spec.Arg) >= 5 && spec.Arg[4] == benchTestSyncCommand:
-				syncRuns++
-				if syncRuns == 2 {
-					require.NoError(t, removeAll(scopeRoot))
-					require.NoError(t, materializeBenchLiveFixture(scopeRoot, fixture.ExpectedFiles))
-					require.NoError(t, writeBenchLivePerfLog(logPath, &benchPerfSummary{
-						DurationMS:    42,
-						Result:        "success",
-						DownloadCount: 2,
-						UploadCount:   2,
-					}))
-				}
-
-				return benchMeasuredProcess{ElapsedMicros: 1234, PeakRSSBytes: 4096}, nil
-			case len(spec.Arg) >= 5 && (spec.Arg[4] == "rm" || spec.Arg[4] == "mkdir" || spec.Arg[4] == "put"):
-				return benchMeasuredProcess{}, nil
-			default:
-				return benchMeasuredProcess{}, nil
-			}
-		},
-	}
+	subject, script := newScriptedBidirectionalSampleSubject(t, &fixture)
 
 	sample := state.runSample(t.Context(), subject, benchSamplePhaseMeasured, 1)
 	assert.Equal(t, BenchSampleSuccess, sample.Status)
@@ -298,7 +304,89 @@ func TestRunBidirectionalSampleCommandOrderAndPerfSummary(t *testing.T) {
 	require.NotNil(t, sample.Setup)
 	assert.EqualValues(t, 42, sample.PerfSummary.DurationMS)
 	assert.Equal(t, 1, sample.Setup.DeltaProbeAttempts)
-	assert.Contains(t, calls[0], "stat")
-	assert.Contains(t, calls[1], "sync --dry-run")
-	assert.Contains(t, calls[2], "sync]")
+	assert.Contains(t, script.calls[0], "stat --json /benchmarks/golden/test-fixture")
+	assert.Contains(t, script.calls[1], "rm -r /benchmarks/work/test/slot-00")
+	assert.Contains(t, script.calls[2], "cp /benchmarks/golden/test-fixture /benchmarks/work/test/slot-00")
+	assert.Contains(t, script.calls[5], "sync --dry-run")
+	assert.Contains(t, script.calls[6], "sync]")
+}
+
+type scriptedBidirectionalSampleSubject struct {
+	t        *testing.T
+	fixture  *benchBidirectionalFixturePlan
+	calls    []string
+	syncRuns int
+	dryRuns  int
+}
+
+func newScriptedBidirectionalSampleSubject(
+	t *testing.T,
+	fixture *benchBidirectionalFixturePlan,
+) (preparedBenchSubject, *scriptedBidirectionalSampleSubject) {
+	t.Helper()
+
+	script := &scriptedBidirectionalSampleSubject{
+		t:       t,
+		fixture: fixture,
+		calls:   make([]string, 0, 10),
+	}
+
+	return preparedBenchSubject{measure: script.measure}, script
+}
+
+func (s *scriptedBidirectionalSampleSubject) measure(
+	_ context.Context,
+	spec benchCommandSpec,
+) (benchMeasuredProcess, error) {
+	s.calls = append(s.calls, fmt.Sprint(spec.Arg))
+	switch benchCommandName(spec) {
+	case benchTestSyncCommand:
+		return s.measureSync(spec)
+	case "stat", "rm", "mkdir", "put", "cp":
+		return benchMeasuredProcess{}, nil
+	default:
+		return benchMeasuredProcess{}, nil
+	}
+}
+
+func (s *scriptedBidirectionalSampleSubject) measureSync(spec benchCommandSpec) (benchMeasuredProcess, error) {
+	if isBenchDryRunCommand(spec) {
+		return s.measureDryRun(), nil
+	}
+
+	s.syncRuns++
+	if s.syncRuns == 2 {
+		scopeRoot := filepath.Join(spec.CWD, "sync-root", filepath.FromSlash(s.fixture.ScopeRootRelativePath))
+		logPath := filepath.Join(spec.CWD, "bench.log")
+		require.NoError(s.t, removeAll(scopeRoot))
+		require.NoError(s.t, materializeBenchLiveFixture(scopeRoot, s.fixture.ExpectedFiles))
+		require.NoError(s.t, writeBenchLivePerfLog(logPath, &benchPerfSummary{
+			DurationMS:    42,
+			Result:        "success",
+			DownloadCount: 2,
+			UploadCount:   2,
+		}))
+	}
+
+	return benchMeasuredProcess{ElapsedMicros: 1234, PeakRSSBytes: 4096}, nil
+}
+
+func (s *scriptedBidirectionalSampleSubject) measureDryRun() benchMeasuredProcess {
+	s.dryRuns++
+	if s.dryRuns == 1 {
+		return benchMeasuredProcess{Stdout: []byte("Plan:\n  Baseline updates: 4\n")}
+	}
+
+	return benchMeasuredProcess{Stdout: []byte("Plan:\n  Downloads: 2\n  Local deletes: 1\n")}
+}
+
+func benchCommandName(spec benchCommandSpec) string {
+	if len(spec.Arg) < 5 {
+		return ""
+	}
+	return spec.Arg[4]
+}
+
+func isBenchDryRunCommand(spec benchCommandSpec) bool {
+	return len(spec.Arg) == 6 && spec.Arg[5] == "--dry-run"
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
@@ -33,7 +34,7 @@ func loadStatusLiveOverlay(
 	overlays := make(map[string]statusAccountLiveOverlay, len(snapshot.Accounts))
 
 	for i := range snapshot.Accounts {
-		entry := snapshot.Accounts[i]
+		entry := &snapshot.Accounts[i]
 		if entry.SavedLoginReason != "" || entry.RepresentativeTokenID.IsZero() {
 			continue
 		}
@@ -81,9 +82,13 @@ func statusConfiguredDriveOverlay(
 	ctx context.Context,
 	client configuredStatusDriveClient,
 	snapshot accountViewSnapshot,
-	entry accountView,
+	entry *accountView,
 	logger *slog.Logger,
 ) (statusAccountLiveOverlay, bool) {
+	if entry == nil {
+		return statusAccountLiveOverlay{}, false
+	}
+
 	user, err := client.Me(ctx)
 	if err != nil {
 		if errors.Is(err, graph.ErrUnauthorized) {
@@ -105,7 +110,7 @@ func statusConfiguredDriveOverlay(
 	}
 
 	for _, cid := range entry.ConfiguredDriveIDs {
-		drive, err := fetchConfiguredStatusDrive(ctx, client, snapshot.Stored, cid)
+		drive, found, err := fetchConfiguredStatusDrive(ctx, client, snapshot.Stored, cid)
 		if err != nil {
 			if errors.Is(err, graph.ErrUnauthorized) {
 				if markErr := config.MarkAccountAuthRequired(config.DefaultDataDir(), entry.Email, authstate.ReasonSyncAuthRejected); markErr != nil {
@@ -121,7 +126,7 @@ func statusConfiguredDriveOverlay(
 			)
 			continue
 		}
-		if drive != nil {
+		if found {
 			overlay.Storage[cid.String()] = statusStorageFromGraphDrive(*drive)
 		}
 	}
@@ -134,20 +139,28 @@ func fetchConfiguredStatusDrive(
 	client configuredStatusDriveClient,
 	stored *config.Catalog,
 	cid driveid.CanonicalID,
-) (*graph.Drive, error) {
+) (*graph.Drive, bool, error) {
 	if cid.IsPersonal() || cid.IsBusiness() {
-		return client.PrimaryDrive(ctx)
+		drive, err := client.PrimaryDrive(ctx)
+		if err != nil {
+			return nil, false, fmt.Errorf("fetch primary drive: %w", err)
+		}
+		return drive, drive != nil, nil
 	}
 	if stored == nil {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	record, found := stored.DriveByCanonicalID(cid)
 	if !found || record.RemoteDriveID == "" {
-		return nil, nil
+		return nil, false, nil
 	}
 
-	return client.Drive(ctx, driveid.New(record.RemoteDriveID))
+	drive, err := client.Drive(ctx, driveid.New(record.RemoteDriveID))
+	if err != nil {
+		return nil, false, fmt.Errorf("fetch configured drive: %w", err)
+	}
+	return drive, drive != nil, nil
 }
 
 func statusStorageFromGraphDrive(drive graph.Drive) statusStorage {

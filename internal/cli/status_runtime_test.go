@@ -98,7 +98,7 @@ func TestPrintMountStatus_ShowsRuntimeState(t *testing.T) {
 		State:        driveStateReady,
 		RuntimeOwner: "watch",
 		RuntimeState: statusRuntimeStateActive,
-	}, false)
+	})
 
 	require.NoError(t, err)
 	assert.NotContains(t, out.String(), "Runtime:")

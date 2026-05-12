@@ -185,7 +185,6 @@ func TestBuildChildStatusMount_InheritsParentPause(t *testing.T) {
 	mount := buildChildStatusMount(
 		&config.Drive{SyncDir: "/tmp/sync-root", Paused: &paused},
 		&child,
-		nil,
 	)
 
 	assert.Equal(t, driveStatePaused, mount.State)
@@ -360,7 +359,7 @@ func buildStatusLifecycleMount(
 		}
 	}
 	child := testShortcutStatusChildFromRecord(parentCID, &record)
-	return buildChildStatusMount(&config.Drive{SyncDir: "/tmp/sync-root"}, &child, nil)
+	return buildChildStatusMount(&config.Drive{SyncDir: "/tmp/sync-root"}, &child)
 }
 
 func assertStatusLifecycleMount(t *testing.T, mount *statusMount, tc *shortcutStatusLifecycleCase) {
@@ -390,7 +389,7 @@ func assertStatusLifecycleText(t *testing.T, mount *statusMount, tc *shortcutSta
 	t.Helper()
 
 	var text bytes.Buffer
-	require.NoError(t, printMountStatus(&text, mount, false))
+	require.NoError(t, printMountStatus(&text, mount))
 	rendered := text.String()
 	assert.NotContains(t, rendered, "onedrive-go ")
 	assert.NotContains(t, rendered, "Run ")
@@ -446,7 +445,6 @@ func TestBuildChildStatusMount_SurfacesProtectedPaths(t *testing.T) {
 	mount := buildChildStatusMount(
 		&config.Drive{SyncDir: "/tmp/sync-root"},
 		&child,
-		nil,
 	)
 
 	assert.Equal(t, "/tmp/sync-root/Shortcuts/Docs", mount.ProtectedCurrentPath)
@@ -499,7 +497,7 @@ func TestPrintMountStatus_RendersChildLifecycleReasonAndNextAction(t *testing.T)
 		State:          string(syncengine.ShortcutRootStateTargetUnavailable),
 		StateReason:    string(syncengine.ShortcutRootStateTargetUnavailable),
 		StateDetail:    "The shortcut target is unavailable.",
-	}, false)
+	})
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -526,7 +524,7 @@ func TestPrintMountStatus_RendersGuidedShortcutRecovery(t *testing.T) {
 		ProtectedCurrentPath:   "/tmp/sync-root/Shortcuts/Docs",
 		ProtectedReservedPaths: []string{"/tmp/sync-root/Shortcuts/Old Docs"},
 		AutoRetry:              &autoRetry,
-	}, false)
+	})
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -545,7 +543,6 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	mount := buildChildStatusMount(
 		&config.Drive{SyncDir: "/tmp/sync-root"},
 		&child,
-		nil,
 	)
 
 	assert.Equal(t, config.ChildMountID(parentCID.String(), "binding-docs"), mount.MountID)
@@ -581,7 +578,6 @@ func TestBuildChildStatusMount_FinalDrainGuidesAccessRestore(t *testing.T) {
 	mount := buildChildStatusMount(
 		&config.Drive{SyncDir: "/tmp/sync-root"},
 		&child,
-		nil,
 	)
 
 	assert.Equal(t, string(syncengine.ShortcutRootStateRemovedFinalDrain), mount.State)
@@ -1753,7 +1749,7 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printSummaryText(&buf, s))
+	require.NoError(t, printSummaryText(&buf, &s))
 
 	output := buf.String()
 	assert.Contains(t, output, "4 drives")
@@ -1775,7 +1771,7 @@ func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printSummaryText(&buf, s))
+	require.NoError(t, printSummaryText(&buf, &s))
 
 	output := buf.String()
 	assert.Contains(t, output, "2 drives")
@@ -1853,7 +1849,7 @@ func TestPrintSyncStateText_WithConditions(t *testing.T) {
 
 func requireSingleStatusDriveJSON(
 	t *testing.T,
-	decoded statusOutput,
+	decoded *statusOutput,
 	canonicalID string,
 ) (statusMount, *syncStateInfo) {
 	t.Helper()
@@ -1865,10 +1861,11 @@ func requireSingleStatusDriveJSON(
 
 func findStatusDriveJSON(
 	t *testing.T,
-	decoded statusOutput,
+	decoded *statusOutput,
 	canonicalID string,
 ) (statusMount, *syncStateInfo) {
 	t.Helper()
+	require.NotNil(t, decoded)
 
 	var (
 		foundDrive statusMount
@@ -1940,7 +1937,7 @@ func TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState(t *testing.
 
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
-	_, syncState := requireSingleStatusDriveJSON(t, decoded, cid.String())
+	_, syncState := requireSingleStatusDriveJSON(t, &decoded, cid.String())
 	require.NotNil(t, syncState)
 	assert.Zero(t, syncState.FileCount)
 }
