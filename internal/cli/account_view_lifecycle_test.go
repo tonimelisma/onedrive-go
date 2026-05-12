@@ -2,8 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +13,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 const (
@@ -89,52 +86,11 @@ func TestLoadAccountViewSnapshot_UsesValidatedStateInvariantErrors(t *testing.T)
 	assert.Contains(t, err.Error(), "has no catalog entry")
 }
 
-// Validates: R-3.1.5
-func TestDiscoverLiveDriveCatalog_DegradedDiscoveryDoesNotPersistAccountAuthRequirement(t *testing.T) {
-	setTestDriveHome(t)
-
-	cid := driveid.MustCanonicalID("personal:degraded@example.com")
-	result := discoverLiveDriveCatalog(
-		t.Context(),
-		fakeStatusLiveDriveCatalogClient{
-			drivesErr: errors.New("try later"),
-			primary: &graph.Drive{
-				ID:         driveid.New("drive-1"),
-				Name:       "Primary",
-				DriveType:  driveid.DriveTypePersonal,
-				QuotaUsed:  1,
-				QuotaTotal: 2,
-			},
-		},
-		cid.Email(),
-		"Degraded User",
-		cid.DriveType(),
-		testDriveLogger(t),
-	)
-	require.NotNil(t, result.Degraded)
-	require.Len(t, result.LiveDrives, 1)
-	assert.Equal(t, "Primary", result.LiveDrives[0].Name)
-	assert.False(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
-}
-
 func writeInvalidTokenFile(path string) error {
 	if err := os.WriteFile(path, []byte("{invalid"), 0o600); err != nil {
 		return fmt.Errorf("write invalid token file: %w", err)
 	}
 	return nil
-}
-
-type fakeStatusLiveDriveCatalogClient struct {
-	drivesErr error
-	primary   *graph.Drive
-}
-
-func (f fakeStatusLiveDriveCatalogClient) Drives(context.Context) ([]graph.Drive, error) {
-	return nil, f.drivesErr
-}
-
-func (f fakeStatusLiveDriveCatalogClient) PrimaryDrive(context.Context) (*graph.Drive, error) {
-	return f.primary, nil
 }
 
 func readyAccountLifecycleCase() accountViewLifecycleCase {

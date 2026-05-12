@@ -9,12 +9,12 @@ import (
 func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show sync status and mount health",
-		Long: `Display the status of all configured accounts and runtime mounts.
+		Short: "Show account, drive, and shared folder status",
+		Long: `Display the status of configured accounts, drives, and shared folders.
 
-Status always shows the same per-mount sync-health contract for every displayed
-mount. Use --drive to filter which configured parent drive set is shown, and
---verbose to expand sampled path and row lists.`,
+Status groups configured drives under their accounts. Shared folder shortcuts
+appear below the drive that owns the shortcut. Use --drive to filter configured
+drives, and --verbose to expand sampled path and row lists.`,
 		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runStatus,
 	}
@@ -30,5 +30,5 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("read --perf flag: %w", err)
 	}
 
-	return runStatusCommand(mustCLIContext(cmd.Context()), showPerf)
+	return runStatusCommand(mustCLIContext(cmd.Context()), false, showPerf)
 }

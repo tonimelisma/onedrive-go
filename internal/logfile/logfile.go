@@ -38,6 +38,10 @@ func Open(path string, retentionDays int) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open log file: %w", err)
 	}
+	if chmodErr := file.Chmod(filePerm); chmodErr != nil {
+		closeErr := file.Close()
+		return nil, errors.Join(fmt.Errorf("set log file permissions: %w", chmodErr), closeErr)
+	}
 
 	return file, nil
 }

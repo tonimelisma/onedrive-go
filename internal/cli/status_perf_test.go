@@ -66,12 +66,12 @@ func TestStatusPerf_SummaryJSON_WithLivePerf(t *testing.T) {
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
 	require.Len(t, decoded.Accounts, 1)
-	require.Len(t, decoded.Accounts[0].Mounts, 1)
-	require.NotNil(t, decoded.Accounts[0].Mounts[0].SyncState)
-	require.NotNil(t, decoded.Accounts[0].Mounts[0].SyncState.Perf)
-	assert.Equal(t, int64(4200), decoded.Accounts[0].Mounts[0].SyncState.Perf.DurationMS)
-	assert.Equal(t, 4, decoded.Accounts[0].Mounts[0].SyncState.Perf.HTTPRequestCount)
-	assert.Empty(t, decoded.Accounts[0].Mounts[0].SyncState.PerfUnavailableReason)
+	require.Len(t, decoded.Accounts[0].Drives, 1)
+	require.NotNil(t, decoded.Accounts[0].Drives[0].SyncState)
+	require.NotNil(t, decoded.Accounts[0].Drives[0].SyncState.Perf)
+	assert.Equal(t, int64(4200), decoded.Accounts[0].Drives[0].SyncState.Perf.DurationMS)
+	assert.Equal(t, 4, decoded.Accounts[0].Drives[0].SyncState.Perf.HTTPRequestCount)
+	assert.Empty(t, decoded.Accounts[0].Drives[0].SyncState.PerfUnavailableReason)
 }
 
 // Validates: R-6.6.15
@@ -128,10 +128,10 @@ func TestStatusPerf_FilteredJSON_WithPerfUnavailableFromActiveOwner(t *testing.T
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
 	require.Len(t, decoded.Accounts, 1)
-	require.Len(t, decoded.Accounts[0].Mounts, 1)
-	require.NotNil(t, decoded.Accounts[0].Mounts[0].SyncState)
-	assert.Nil(t, decoded.Accounts[0].Mounts[0].SyncState.Perf)
-	assert.Equal(t, statusPerfUnavailableGeneric, decoded.Accounts[0].Mounts[0].SyncState.PerfUnavailableReason)
+	require.Len(t, decoded.Accounts[0].Drives, 1)
+	require.NotNil(t, decoded.Accounts[0].Drives[0].SyncState)
+	assert.Nil(t, decoded.Accounts[0].Drives[0].SyncState.Perf)
+	assert.Equal(t, statusPerfUnavailableGeneric, decoded.Accounts[0].Drives[0].SyncState.PerfUnavailableReason)
 }
 
 // Validates: R-6.6.15

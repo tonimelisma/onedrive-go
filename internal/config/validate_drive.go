@@ -124,13 +124,7 @@ func checkDriveSyncDirUniqueness(id string, drive *Drive, seen map[string]string
 		return nil
 	}
 
-	expanded := expandTilde(drive.SyncDir)
-
-	// Resolve symlinks so two paths pointing to the same directory are caught.
-	// If the path doesn't exist yet (valid — user may create it later), fall back to lexical.
-	if resolved, err := filepath.EvalSymlinks(expanded); err == nil {
-		expanded = resolved
-	}
+	expanded := canonicalSyncDirPath(drive.SyncDir)
 
 	if other, exists := seen[expanded]; exists {
 		return []error{fmt.Errorf(
@@ -140,6 +134,38 @@ func checkDriveSyncDirUniqueness(id string, drive *Drive, seen map[string]string
 	seen[expanded] = id
 
 	return nil
+}
+
+func canonicalSyncDirPath(syncDir string) string {
+	expanded := filepath.Clean(expandTilde(syncDir))
+	if !filepath.IsAbs(expanded) {
+		return expanded
+	}
+
+	if resolved, err := filepath.EvalSymlinks(expanded); err == nil {
+		return filepath.Clean(resolved)
+	}
+
+	return canonicalPathThroughExistingParent(expanded)
+}
+
+func canonicalPathThroughExistingParent(path string) string {
+	probe := path
+	missingParts := make([]string, 0)
+	for {
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return path
+		}
+
+		missingParts = append([]string{filepath.Base(probe)}, missingParts...)
+		if resolvedParent, err := filepath.EvalSymlinks(parent); err == nil {
+			parts := append([]string{resolvedParent}, missingParts...)
+			return filepath.Clean(filepath.Join(parts...))
+		}
+
+		probe = parent
+	}
 }
 
 // checkSyncDirOverlap detects ancestor/descendant relationships between sync

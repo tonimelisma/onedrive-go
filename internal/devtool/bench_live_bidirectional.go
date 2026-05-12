@@ -487,6 +487,10 @@ func (s *benchBidirectionalScenarioState) prepareBidirectionalCatchup(
 		return benchFixtureFailureSample(sample, fmt.Errorf("materialize baseline fixture: %w", err)), false
 	}
 
+	if err := s.resetRemoteSlotForBaseline(ctx, subject, runtime); err != nil {
+		return benchFixtureFailureSample(sample, err), false
+	}
+
 	if err := s.ensureRemoteSlotReadyForBaseline(ctx, subject, runtime); err != nil {
 		return benchFixtureFailureSample(sample, err), false
 	}
@@ -555,6 +559,43 @@ func (s *benchBidirectionalScenarioState) measureBidirectionalCatchup(
 	}
 
 	return measuredSample
+}
+
+func (s *benchBidirectionalScenarioState) resetRemoteSlotForBaseline(
+	ctx context.Context,
+	subject preparedBenchSubject,
+	runtime *benchBidirectionalRuntime,
+) error {
+	goldenRemoteScopePath := s.fixture.Manifest.GoldenRemoteScopePath
+	if strings.TrimSpace(goldenRemoteScopePath) == "" {
+		return fmt.Errorf("remote fixture slot %s has no golden fixture path", s.fixtureSlot)
+	}
+
+	liveRuntime := runtime.asLiveRuntime()
+	if err := waitForBenchRemoteScopeVisible(ctx, subject, liveRuntime, goldenRemoteScopePath); err != nil {
+		return fmt.Errorf("golden remote fixture %s is not visible: %w", goldenRemoteScopePath, err)
+	}
+
+	if err := resetBenchRemoteScope(ctx, subject, liveRuntime, runtime.remoteScopePath); err != nil {
+		return fmt.Errorf("reset remote fixture slot %s: %w", s.fixtureSlot, err)
+	}
+
+	process, err := subject.measure(ctx, runtime.commandSpec("cp", goldenRemoteScopePath, runtime.remoteScopePath))
+	if err != nil {
+		return fmt.Errorf(
+			"seed remote fixture slot %s from %s: %w: %s",
+			s.fixtureSlot,
+			goldenRemoteScopePath,
+			err,
+			failureExcerpt(err, process.Stdout, process.Stderr),
+		)
+	}
+
+	if err := waitForBenchRemoteScopeVisible(ctx, subject, liveRuntime, runtime.remoteScopePath); err != nil {
+		return fmt.Errorf("reset remote fixture slot %s visibility: %w", s.fixtureSlot, err)
+	}
+
+	return nil
 }
 
 func (s *benchBidirectionalScenarioState) ensureRemoteSlotReadyForBaseline(

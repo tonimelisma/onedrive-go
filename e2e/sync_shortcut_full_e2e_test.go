@@ -114,9 +114,9 @@ func TestE2E_Shortcut_RenameReusesChildMountState(t *testing.T) {
 
 	status := readStatusAllDrives(t, cfgPath, env)
 	parent := requireStatusDrive(t, status, fixture.ParentDrive)
-	child, ok := findStatusMountJSON(parent, secondRecord.MountID)
+	child, ok := findStatusSharedFolderJSON(parent, secondRecord.MountID)
 	require.True(t, ok)
-	assert.Equal(t, secondRecord.MountID, child.MountID)
+	assert.Contains(t, child.Folder, newName)
 }
 
 // Validates: R-2.8.1
@@ -157,9 +157,9 @@ func TestE2E_Shortcut_MoveReusesChildMountState(t *testing.T) {
 
 	status := readStatusAllDrives(t, cfgPath, env)
 	parent := requireStatusDrive(t, status, fixture.ParentDrive)
-	child, ok := findStatusMountJSON(parent, secondRecord.MountID)
+	child, ok := findStatusSharedFolderJSON(parent, secondRecord.MountID)
 	require.True(t, ok)
-	assert.Equal(t, secondRecord.MountID, child.MountID)
+	assert.Contains(t, child.Folder, filepath.FromSlash(movedRelativePath))
 }
 
 // Validates: R-2.8.1
@@ -209,7 +209,7 @@ func TestE2E_Shortcut_ReadOnlyBlockedUploadStatus(t *testing.T) {
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	statusOut, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "status")
-	assert.Contains(t, statusOut, "SHARED FOLDER WRITES BLOCKED")
+	assert.Contains(t, statusOut, "Shared folder writes blocked")
 	assert.Contains(t, statusOut, "Downloads continue normally.")
 	assert.Contains(t, statusOut, blockedName)
 }

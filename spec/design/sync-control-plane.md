@@ -125,11 +125,11 @@ to the orchestrator invocation and makes tests inject the directory they use.
 
 Runtime reporting is mount-identified. Standalone mounts keep their configured
 canonical drive ID inside `MountIdentity`, but managed child mounts report by
-stable `MountID` and do not synthesize `shared:` canonical drive IDs. CLI
-status output follows the same boundary: child rows expose `mount_id` and omit
-`canonical_id`, while standalone rows retain `canonical_id`. JSON nests child
-rows below their parent mount in `child_mounts`, and text output indents child
-rows beneath the parent drive so the control surface remains parent-owned.
+stable `MountID` and do not synthesize `shared:` canonical drive IDs. The
+control socket keeps this mount-shaped internal contract. CLI `status`
+translates it at the presentation boundary into account -> drive -> shared
+folder output: public JSON nests child projections under `shared_folders` and
+does not expose `mount_id`, `canonical_id`, or namespace IDs.
 
 Managed child token owner and sync tunables are inherited from the selected
 standalone namespace mount. There is no child pause, resume, reset, config, or

@@ -5,7 +5,7 @@ import "context"
 func noStatusLiveOverlay(
 	_ context.Context,
 	_ *CLIContext,
-	_ []accountView,
+	_ accountViewSnapshot,
 ) map[string]statusAccountLiveOverlay {
 	return nil
 }

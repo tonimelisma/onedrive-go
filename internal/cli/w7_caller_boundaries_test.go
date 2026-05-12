@@ -149,9 +149,9 @@ func TestRunStatusCommand_AuthRequiredOnlyJSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
 	require.Len(t, decoded.Accounts, 1)
 	assert.Equal(t, "orphan@example.com", decoded.Accounts[0].Email)
-	assert.Equal(t, authStateAuthenticationNeeded, decoded.Accounts[0].AuthState)
-	assert.Equal(t, string(authReasonMissingLogin), decoded.Accounts[0].AuthReason)
-	assert.Empty(t, decoded.Accounts[0].Mounts)
+	require.NotNil(t, decoded.Accounts[0].SignInRequired)
+	assert.Equal(t, authAction(authReasonMissingLogin), decoded.Accounts[0].SignInRequired.Action)
+	assert.Empty(t, decoded.Accounts[0].Drives)
 }
 
 // Validates: R-3.5.1, R-3.1.5

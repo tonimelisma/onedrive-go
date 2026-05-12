@@ -24,12 +24,15 @@ type w7LiveAuthRequirement struct {
 
 type w7LiveStatusOutput struct {
 	Accounts []struct {
-		Email      string `json:"email"`
-		DriveType  string `json:"drive_type"`
-		AuthState  string `json:"auth_state"`
-		LiveDrives []struct {
-			DriveType string `json:"drive_type"`
-		} `json:"live_drives"`
+		Email          string `json:"email"`
+		SignInRequired *struct {
+			Reason string `json:"reason"`
+			Action string `json:"action"`
+		} `json:"sign_in_required,omitempty"`
+		Drives []struct {
+			Name  string `json:"name"`
+			State string `json:"state"`
+		} `json:"drives"`
 	} `json:"accounts"`
 }
 
@@ -78,22 +81,25 @@ func TestE2E_Logout_PreservesOfflineAccountCatalog(t *testing.T) {
 	var beforeLogout w7LiveStatusOutput
 	require.NoError(t, json.Unmarshal([]byte(stdout), &beforeLogout))
 	var configuredBeforeLogout *struct {
-		Email      string `json:"email"`
-		DriveType  string `json:"drive_type"`
-		AuthState  string `json:"auth_state"`
-		LiveDrives []struct {
-			DriveType string `json:"drive_type"`
-		} `json:"live_drives"`
+		Email          string `json:"email"`
+		SignInRequired *struct {
+			Reason string `json:"reason"`
+			Action string `json:"action"`
+		} `json:"sign_in_required,omitempty"`
+		Drives []struct {
+			Name  string `json:"name"`
+			State string `json:"state"`
+		} `json:"drives"`
 	}
 	for i := range beforeLogout.Accounts {
 		account := &beforeLogout.Accounts[i]
-		if account.Email == email && account.AuthState == "ready" {
+		if account.Email == email && account.SignInRequired == nil {
 			configuredBeforeLogout = account
 			break
 		}
 	}
 	require.NotNil(t, configuredBeforeLogout, "pre-logout status should still include the configured ready account")
-	assert.NotEmpty(t, configuredBeforeLogout.LiveDrives, "pre-logout status should list the live drive catalog")
+	assert.NotEmpty(t, configuredBeforeLogout.Drives, "pre-logout status should list the configured drive")
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, "", "logout")
 	require.NoErrorf(t, err, "logout should succeed\nstdout: %s\nstderr: %s", stdout, stderr)
@@ -125,9 +131,9 @@ func TestE2E_Logout_PreservesOfflineAccountCatalog(t *testing.T) {
 		}
 
 		loggedOutAccountFound = true
-		assert.Equal(t, strings.SplitN(drive, ":", 2)[0], account.DriveType)
-		assert.Equal(t, "authentication_required", account.AuthState)
-		assert.Empty(t, account.LiveDrives)
+		require.NotNil(t, account.SignInRequired)
+		assert.Contains(t, account.SignInRequired.Action, "login")
+		assert.Empty(t, account.Drives)
 	}
 	assert.True(t, loggedOutAccountFound, "status should retain the logged-out account in the offline catalog view")
 

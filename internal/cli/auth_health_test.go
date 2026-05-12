@@ -145,8 +145,8 @@ func TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline(t *testing.T) {
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
 	require.Len(t, decoded.Accounts, 1)
-	assert.Equal(t, authStateAuthenticationNeeded, decoded.Accounts[0].AuthState)
-	assert.Equal(t, string(authReasonSyncAuthRejected), decoded.Accounts[0].AuthReason)
+	require.NotNil(t, decoded.Accounts[0].SignInRequired)
+	assert.Contains(t, decoded.Accounts[0].SignInRequired.Reason, "rejected by OneDrive")
 	assert.Equal(t, 1, decoded.Summary.AccountsRequiringAuth)
 }
 

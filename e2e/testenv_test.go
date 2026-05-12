@@ -333,9 +333,10 @@ func TestIsolation_BinaryResolvesTemp(t *testing.T) {
 	assert.NotContains(t, stderr, realHomeDir,
 		"binary stderr should not contain real home dir")
 
-	// The binary should have found the account auth state (proves data dir
+	// The binary should have found the account and drive (proves data dir
 	// resolution went to temp, not production).
-	assert.Contains(t, stdout, "Auth:", "status should show auth info")
+	assert.Contains(t, stdout, "Account:", "status should show account info")
+	assert.Contains(t, stdout, "Folder:", "status should show configured drive info")
 	assert.NotContains(t, stdout, "No accounts configured",
 		"binary should find the test account via isolated config")
 }

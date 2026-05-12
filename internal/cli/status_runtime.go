@@ -48,24 +48,38 @@ func applyStatusRuntimeOverlay(accounts []statusAccount, overlay statusRuntimeOv
 
 	for i := range accounts {
 		for j := range accounts[i].Mounts {
-			applyStatusRuntimeOverlayToMount(&accounts[i].Mounts[j], overlay)
+			applyStatusRuntimeOverlayToDrive(&accounts[i].Mounts[j], overlay)
+		}
+		for j := range accounts[i].Drives {
+			applyStatusRuntimeOverlayToDrive(&accounts[i].Drives[j], overlay)
 		}
 	}
 }
 
-func applyStatusRuntimeOverlayToMount(mount *statusMount, overlay statusRuntimeOverlay) {
-	if mount == nil {
+func applyStatusRuntimeOverlayToDrive(drive *statusDrive, overlay statusRuntimeOverlay) {
+	if drive == nil {
 		return
 	}
 
-	mount.RuntimeOwner = string(overlay.ownerMode)
-	if _, ok := overlay.activeMounts[mount.MountID]; ok {
-		mount.RuntimeState = statusRuntimeStateActive
-	} else {
-		mount.RuntimeState = statusRuntimeStateInactive
+	drive.RuntimeOwner = string(overlay.ownerMode)
+	internalID := drive.InternalID
+	if internalID == "" {
+		internalID = drive.MountID
 	}
+	if internalID == "" {
+		internalID = drive.CanonicalID
+	}
+	if _, ok := overlay.activeMounts[internalID]; ok {
+		drive.RuntimeState = statusRuntimeStateActive
+	} else {
+		drive.RuntimeState = statusRuntimeStateInactive
+	}
+	finalizeStatusDriveState(drive)
 
-	for i := range mount.ChildMounts {
-		applyStatusRuntimeOverlayToMount(&mount.ChildMounts[i], overlay)
+	for i := range drive.ChildMounts {
+		applyStatusRuntimeOverlayToDrive(&drive.ChildMounts[i], overlay)
+	}
+	for i := range drive.SharedFolders {
+		applyStatusRuntimeOverlayToDrive(&drive.SharedFolders[i], overlay)
 	}
 }
