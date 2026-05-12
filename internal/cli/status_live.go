@@ -7,39 +7,33 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 type statusAccountLiveOverlay struct {
-	UserID      string
 	DisplayName string
 	AuthHealth  accountAuthHealth
-	Degraded    *accountDegradedNotice
-	LiveDrives  []statusLiveDrive
+	Storage     map[string]statusStorage
 }
 
-type liveDriveCatalogClient interface {
-	Drives(context.Context) ([]graph.Drive, error)
+type configuredStatusDriveClient interface {
+	Me(context.Context) (*graph.User, error)
 	PrimaryDrive(context.Context) (*graph.Drive, error)
-}
-
-type liveDriveCatalogResult struct {
-	AuthHealth accountAuthHealth
-	Degraded   *accountDegradedNotice
-	LiveDrives []statusLiveDrive
+	Drive(context.Context, driveid.ID) (*graph.Drive, error)
 }
 
 func loadStatusLiveOverlay(
 	ctx context.Context,
 	cc *CLIContext,
-	accounts []accountView,
+	snapshot accountViewSnapshot,
 ) map[string]statusAccountLiveOverlay {
 	logger := cc.Logger
 	recorder := newAuthProofRecorder(logger)
-	overlays := make(map[string]statusAccountLiveOverlay, len(accounts))
+	overlays := make(map[string]statusAccountLiveOverlay, len(snapshot.Accounts))
 
-	for i := range accounts {
-		entry := accounts[i]
+	for i := range snapshot.Accounts {
+		entry := snapshot.Accounts[i]
 		if entry.SavedLoginReason != "" || entry.RepresentativeTokenID.IsZero() {
 			continue
 		}
@@ -51,16 +45,7 @@ func loadStatusLiveOverlay(
 
 		ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 		if err != nil {
-			switch {
-			case errors.Is(err, graph.ErrNotLoggedIn):
-				overlays[entry.Email] = statusAccountLiveOverlay{
-					AuthHealth: authstate.RequiredHealth(authReasonMissingLogin),
-				}
-			default:
-				overlays[entry.Email] = statusAccountLiveOverlay{
-					AuthHealth: authstate.RequiredHealth(authReasonInvalidSavedLogin),
-				}
-			}
+			overlays[entry.Email] = statusLiveAuthOverlay(err)
 			continue
 		}
 
@@ -71,104 +56,110 @@ func loadStatusLiveOverlay(
 		}
 		attachAccountAuthProof(client, recorder, entry.Email, "status")
 
-		user, err := client.Me(ctx)
-		if err != nil {
-			if errors.Is(err, graph.ErrUnauthorized) {
-				overlays[entry.Email] = statusAccountLiveOverlay{
-					AuthHealth: authstate.RequiredHealth(authReasonSyncAuthRejected),
-				}
-				if markErr := config.MarkAccountAuthRequired(config.DefaultDataDir(), entry.Email, authstate.ReasonSyncAuthRejected); markErr != nil {
-					logger.Warn("status: persisting account auth requirement", "account", entry.Email, "error", markErr)
-				}
-			} else {
-				logger.Warn("status: live account probe failed", "account", entry.Email, "error", err)
-			}
-			continue
+		overlay, ok := statusConfiguredDriveOverlay(ctx, client, snapshot, entry, logger)
+		if ok {
+			overlays[entry.Email] = overlay
 		}
-
-		if _, err := cc.reconcileGraphUser(entry.RepresentativeTokenID, user); err != nil {
-			logger.Debug("status: reconcile graph user", "account", entry.Email, "error", err)
-		}
-
-		overlay := statusAccountLiveOverlay{
-			UserID:      user.ID,
-			DisplayName: user.DisplayName,
-		}
-
-		liveDrives := discoverLiveDriveCatalog(ctx, client, entry.Email, user.DisplayName, entry.DriveType, logger)
-		overlay.LiveDrives = liveDrives.LiveDrives
-		overlay.Degraded = liveDrives.Degraded
-		overlay.AuthHealth = liveDrives.AuthHealth
-
-		if overlay.AuthHealth.Reason == authReasonSyncAuthRejected {
-			if markErr := config.MarkAccountAuthRequired(config.DefaultDataDir(), entry.Email, authstate.ReasonSyncAuthRejected); markErr != nil {
-				logger.Warn("status: persisting account auth requirement after drive discovery unauthorized", "account", entry.Email, "error", markErr)
-			}
-		}
-
-		overlays[entry.Email] = overlay
 	}
 
 	return overlays
 }
 
-func statusLiveDrives(drives []graph.Drive) []statusLiveDrive {
-	if len(drives) == 0 {
-		return nil
+func statusLiveAuthOverlay(err error) statusAccountLiveOverlay {
+	if errors.Is(err, graph.ErrNotLoggedIn) {
+		return statusAccountLiveOverlay{
+			AuthHealth: authstate.RequiredHealth(authReasonMissingLogin),
+		}
 	}
 
-	result := make([]statusLiveDrive, 0, len(drives))
-	for i := range drives {
-		result = append(result, statusLiveDrive{
-			ID:         drives[i].ID.String(),
-			Name:       drives[i].Name,
-			DriveType:  drives[i].DriveType,
-			QuotaUsed:  drives[i].QuotaUsed,
-			QuotaTotal: drives[i].QuotaTotal,
-		})
+	return statusAccountLiveOverlay{
+		AuthHealth: authstate.RequiredHealth(authReasonInvalidSavedLogin),
 	}
-
-	return result
 }
 
-func discoverLiveDriveCatalog(
+func statusConfiguredDriveOverlay(
 	ctx context.Context,
-	client liveDriveCatalogClient,
-	email string,
-	displayName string,
-	driveType string,
+	client configuredStatusDriveClient,
+	snapshot accountViewSnapshot,
+	entry accountView,
 	logger *slog.Logger,
-) liveDriveCatalogResult {
-	drives, err := client.Drives(ctx)
-	if err == nil {
-		return liveDriveCatalogResult{LiveDrives: statusLiveDrives(drives)}
+) (statusAccountLiveOverlay, bool) {
+	user, err := client.Me(ctx)
+	if err != nil {
+		if errors.Is(err, graph.ErrUnauthorized) {
+			if markErr := config.MarkAccountAuthRequired(config.DefaultDataDir(), entry.Email, authstate.ReasonSyncAuthRejected); markErr != nil {
+				logger.Warn("status: persisting account auth requirement", "account", entry.Email, "error", markErr)
+			}
+			return statusAccountLiveOverlay{
+				AuthHealth: authstate.RequiredHealth(authReasonSyncAuthRejected),
+			}, true
+		}
+		logger.Warn("status: live account probe failed", "account", entry.Email, "error", err)
+		return statusAccountLiveOverlay{}, false
 	}
 
-	if errors.Is(err, graph.ErrUnauthorized) {
-		return liveDriveCatalogResult{AuthHealth: authstate.RequiredHealth(authReasonSyncAuthRejected)}
+	overlay := statusAccountLiveOverlay{
+		DisplayName: user.DisplayName,
+		AuthHealth:  authstate.ReadyHealth(),
+		Storage:     make(map[string]statusStorage),
 	}
 
-	logger.Warn("degrading status live drive discovery after /me/drives failure",
-		degradedDiscoveryLogAttrs(email, graphMeDrivesEndpoint, err)...,
-	)
-
-	notice := driveCatalogDegradedNotice(email, displayName, driveType)
-	result := liveDriveCatalogResult{Degraded: &notice}
-	primary, primaryErr := client.PrimaryDrive(ctx)
-	if primaryErr == nil && primary != nil {
-		result.LiveDrives = statusLiveDrives([]graph.Drive{*primary})
-		result.Degraded.DriveType = primary.DriveType
-		return result
+	for _, cid := range entry.ConfiguredDriveIDs {
+		drive, err := fetchConfiguredStatusDrive(ctx, client, snapshot.Stored, cid)
+		if err != nil {
+			if errors.Is(err, graph.ErrUnauthorized) {
+				if markErr := config.MarkAccountAuthRequired(config.DefaultDataDir(), entry.Email, authstate.ReasonSyncAuthRejected); markErr != nil {
+					logger.Warn("status: persisting account auth requirement after configured drive probe", "account", entry.Email, "error", markErr)
+				}
+				overlay.AuthHealth = authstate.RequiredHealth(authReasonSyncAuthRejected)
+				return overlay, true
+			}
+			logger.Debug("status: configured drive live storage unavailable",
+				"account", entry.Email,
+				"drive", cid.String(),
+				"error", err,
+			)
+			continue
+		}
+		if drive != nil {
+			overlay.Storage[cid.String()] = statusStorageFromGraphDrive(*drive)
+		}
 	}
 
-	if primaryErr != nil {
-		logger.Warn("status: primary drive fallback unavailable after /me/drives failure",
-			"account", email,
-			"error", primaryErr,
-		)
+	return overlay, true
+}
+
+func fetchConfiguredStatusDrive(
+	ctx context.Context,
+	client configuredStatusDriveClient,
+	stored *config.Catalog,
+	cid driveid.CanonicalID,
+) (*graph.Drive, error) {
+	if cid.IsPersonal() || cid.IsBusiness() {
+		return client.PrimaryDrive(ctx)
+	}
+	if stored == nil {
+		return nil, nil
 	}
 
-	return result
+	record, found := stored.DriveByCanonicalID(cid)
+	if !found || record.RemoteDriveID == "" {
+		return nil, nil
+	}
+
+	return client.Drive(ctx, driveid.New(record.RemoteDriveID))
+}
+
+func statusStorageFromGraphDrive(drive graph.Drive) statusStorage {
+	storage := statusStorage{
+		UsedBytes:  drive.QuotaUsed,
+		TotalBytes: drive.QuotaTotal,
+		Used:       formatSize(drive.QuotaUsed),
+	}
+	if drive.QuotaTotal > 0 {
+		storage.Total = formatSize(drive.QuotaTotal)
+	}
+	return storage
 }
 
 func applyStatusLiveOverlay(accounts []statusAccount, overlays map[string]statusAccountLiveOverlay) {
@@ -177,9 +168,6 @@ func applyStatusLiveOverlay(accounts []statusAccount, overlays map[string]status
 		if !found {
 			continue
 		}
-		if overlay.UserID != "" {
-			accounts[i].UserID = overlay.UserID
-		}
 		if overlay.DisplayName != "" {
 			accounts[i].DisplayName = overlay.DisplayName
 		}
@@ -187,11 +175,23 @@ func applyStatusLiveOverlay(accounts []statusAccount, overlays map[string]status
 			accounts[i].AuthState = overlay.AuthHealth.State
 			accounts[i].AuthReason = string(overlay.AuthHealth.Reason)
 			accounts[i].AuthAction = overlay.AuthHealth.Action
+			accounts[i].SignInRequired = nil
+			if accounts[i].AuthState == authStateAuthenticationNeeded {
+				setAccountSignInRequired(&accounts[i])
+			}
 		}
-		if overlay.Degraded != nil {
-			accounts[i].DegradedReason = overlay.Degraded.Reason
-			accounts[i].DegradedAction = overlay.Degraded.Action
+		if len(overlay.Storage) > 0 {
+			applyStatusStorageOverlay(accounts[i].Drives, overlay.Storage)
 		}
-		accounts[i].LiveDrives = overlay.LiveDrives
+	}
+}
+
+func applyStatusStorageOverlay(drives []statusDrive, storage map[string]statusStorage) {
+	for i := range drives {
+		if value, ok := storage[drives[i].InternalID]; ok {
+			valueCopy := value
+			drives[i].Storage = &valueCopy
+		}
+		applyStatusStorageOverlay(drives[i].SharedFolders, storage)
 	}
 }

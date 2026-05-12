@@ -38,12 +38,19 @@ func TestE2E_RoundTrip(t *testing.T) {
 
 		var out struct {
 			Accounts []struct {
-				LiveDrives []map[string]interface{} `json:"live_drives"`
+				Drives []struct {
+					Name    string                 `json:"name"`
+					Folder  string                 `json:"folder"`
+					State   string                 `json:"state"`
+					Storage map[string]interface{} `json:"storage"`
+				} `json:"drives"`
 			} `json:"accounts"`
 		}
 		require.NoError(t, json.Unmarshal([]byte(stdout), &out))
 		require.NotEmpty(t, out.Accounts)
-		assert.NotEmpty(t, out.Accounts[0].LiveDrives)
+		require.NotEmpty(t, out.Accounts[0].Drives)
+		assert.NotEmpty(t, out.Accounts[0].Drives[0].Name)
+		assert.NotEmpty(t, out.Accounts[0].Drives[0].Folder)
 	})
 
 	t.Run("ls_root", func(t *testing.T) {
@@ -138,9 +145,9 @@ func TestE2E_RoundTrip(t *testing.T) {
 		stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
 			t, cfgPath, nil, drive, transientGraphRetryTimeout, "status",
 		)
-		assert.Contains(t, stdout, drive, "status should show the configured drive section")
-		assert.Contains(t, stdout, "Auth:", "status should show auth state")
-		assertEmptyStatusSnapshotText(t, stdout)
+		assert.Contains(t, stdout, "Folder:", "status should show the configured drive folder")
+		assert.NotContains(t, stdout, "Auth:", "healthy status should not show auth state")
+		assert.NotContains(t, stdout, "No active conditions.", "healthy status should not print empty issue sections")
 	})
 }
 

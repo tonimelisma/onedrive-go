@@ -161,7 +161,7 @@ func testShortcutStatusChildFromRecord(
 
 func TestDriveState_Ready(t *testing.T) {
 	d := &config.Drive{}
-	assert.Equal(t, "ready", driveState(d))
+	assert.Equal(t, driveStateReady, driveState(d))
 }
 
 func TestDriveState_Paused(t *testing.T) {
@@ -395,8 +395,8 @@ func assertStatusLifecycleText(t *testing.T, mount *statusMount, tc *shortcutSta
 	assert.NotContains(t, rendered, "onedrive-go ")
 	assert.NotContains(t, rendered, "Run ")
 	if tc.reason != "" {
-		assert.Contains(t, rendered, "Reason:    "+tc.reason)
-		assert.Contains(t, rendered, "Next:      "+tc.detail)
+		assert.Contains(t, rendered, "Reason: "+tc.reason)
+		assert.Contains(t, rendered, "Next: "+tc.detail)
 		assert.Contains(t, rendered, "Auto retry: yes")
 		if tc.protectsPath {
 			assert.Contains(t, rendered, "Protected current path: /tmp/sync-root/Shortcuts/Docs")
@@ -405,7 +405,7 @@ func assertStatusLifecycleText(t *testing.T, mount *statusMount, tc *shortcutSta
 		}
 	}
 	if tc.action != "" {
-		assert.Contains(t, rendered, "Action:    "+tc.action)
+		assert.Contains(t, rendered, "Action: "+tc.action)
 	}
 	if tc.waitingReplacement != "" {
 		assert.Contains(t, rendered, "Waiting replacement: "+tc.waitingReplacement)
@@ -503,9 +503,9 @@ func TestPrintMountStatus_RendersChildLifecycleReasonAndNextAction(t *testing.T)
 	require.NoError(t, err)
 
 	output := buf.String()
-	assert.Contains(t, output, "Reason:    "+string(syncengine.ShortcutRootStateTargetUnavailable))
-	assert.Contains(t, output, "Next:      The shortcut target is unavailable.")
-	assert.Contains(t, output, "Control:   Parent drive pause/resume and the OneDrive shortcut")
+	assert.Contains(t, output, "Reason: "+string(syncengine.ShortcutRootStateTargetUnavailable))
+	assert.Contains(t, output, "Next: The shortcut target is unavailable.")
+	assert.Contains(t, output, "Shared folder: Managed through the parent drive")
 }
 
 // Validates: R-2.3.3, R-2.4.8, R-2.10.4
@@ -532,7 +532,7 @@ func TestPrintMountStatus_RendersGuidedShortcutRecovery(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "Protected current path: /tmp/sync-root/Shortcuts/Docs")
 	assert.Contains(t, output, "Reserved path: /tmp/sync-root/Shortcuts/Old Docs")
-	assert.Contains(t, output, "Next:      The shortcut alias was removed")
+	assert.Contains(t, output, "Next: The shortcut alias was removed")
 	assert.Contains(t, output, "Auto retry: yes")
 }
 
@@ -551,7 +551,7 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	assert.Equal(t, config.ChildMountID(parentCID.String(), "binding-docs"), mount.MountID)
 	assert.Equal(t, statusProjectionChild, mount.ProjectionKind)
 	assert.Empty(t, mount.CanonicalID)
-	assert.Equal(t, "Docs ("+mount.MountID+")", statusMountLabel(&mount))
+	assert.Equal(t, "Docs", statusMountLabel(&mount))
 	assert.Equal(t, string(syncengine.ShortcutRootStateBlockedPath), mount.StateReason)
 	assert.Contains(t, mount.StateDetail, "local file")
 	assert.Contains(t, mount.RecoveryAction, "Clear the blocking local path")
@@ -561,8 +561,8 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 
 	encoded, err := json.Marshal(mount)
 	require.NoError(t, err)
-	assert.Contains(t, string(encoded), `"mount_id":"`+mount.MountID+`"`)
-	assert.Contains(t, string(encoded), `"namespace_id":"personal:alice@example.com"`)
+	assert.NotContains(t, string(encoded), "mount_id")
+	assert.NotContains(t, string(encoded), "namespace_id")
 	assert.Contains(t, string(encoded), `"state_reason":"blocked_path"`)
 	assert.Contains(t, string(encoded), `"state_detail":`)
 	assert.Contains(t, string(encoded), `"recovery_action":`)
@@ -653,8 +653,9 @@ func TestNewStatusCmd_Structure(t *testing.T) {
 	assert.Equal(t, "status", cmd.Name())
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
-	assert.Contains(t, cmd.Short, "sync status")
-	assert.Contains(t, cmd.Long, "same per-mount sync-health contract")
+	assert.Contains(t, cmd.Short, "drive")
+	assert.Contains(t, cmd.Short, "shared folder")
+	assert.Contains(t, cmd.Long, "configured accounts, drives, and shared folders")
 	assert.Contains(t, cmd.Long, "--drive to filter")
 	assert.Contains(t, cmd.Long, "--verbose")
 }
@@ -870,7 +871,7 @@ func TestInspectSavedLogin_InvalidTokenFileReturnsInvalidSavedLogin(t *testing.T
 	assert.Equal(t, authReasonInvalidSavedLogin, state)
 }
 
-func TestBuildStatusAccountsWith_DisplayNameFromConfig(t *testing.T) {
+func TestBuildStatusAccountsWith_PersonalDriveUsesAccountFacingName(t *testing.T) {
 	cfg := &config.Config{
 		Drives: map[driveid.CanonicalID]config.Drive{
 			driveid.MustCanonicalID("personal:alice@example.com"): {
@@ -881,13 +882,13 @@ func TestBuildStatusAccountsWith_DisplayNameFromConfig(t *testing.T) {
 	}
 
 	accounts := buildStatusAccountsWith(cfg,
-		&mockNameReader{},
+		&mockNameReader{displayName: "Alice"},
 		&mockSavedLoginChecker{},
 		&mockSyncStateQuerier{},
 	)
 
 	require.Len(t, accounts, 1)
-	assert.Equal(t, "My Home Drive", accounts[0].Mounts[0].DisplayName)
+	assert.Equal(t, "Alice's personal OneDrive", accounts[0].Mounts[0].DisplayName)
 }
 
 func TestBuildStatusAccountsWith_PausedOverridesNoToken(t *testing.T) {
@@ -1305,14 +1306,14 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 						Conditions: []statusConditionJSON{
 							{
 								ConditionKey: string(syncengine.ConditionQuotaExceeded),
-								Title:        "QUOTA EXCEEDED",
+								Title:        "Storage full",
 								Count:        1,
 								ScopeKind:    "drive",
 								Scope:        "Shared/Docs",
 							},
 							{
 								ConditionKey: string(syncengine.ConditionQuotaExceeded),
-								Title:        "QUOTA EXCEEDED",
+								Title:        "Storage full",
 								Count:        1,
 								ScopeKind:    "drive",
 								Scope:        "Shared/Design",
@@ -1330,10 +1331,10 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 	var result statusOutput
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
 	require.Len(t, result.Accounts, 1)
-	require.Len(t, result.Accounts[0].Mounts, 1)
-	require.Len(t, result.Accounts[0].Mounts[0].SyncState.Conditions, 2)
-	assert.Equal(t, "Shared/Docs", result.Accounts[0].Mounts[0].SyncState.Conditions[0].Scope)
-	assert.Equal(t, "Shared/Design", result.Accounts[0].Mounts[0].SyncState.Conditions[1].Scope)
+	require.Len(t, result.Accounts[0].Drives, 1)
+	require.Len(t, result.Accounts[0].Drives[0].SyncState.Conditions, 2)
+	assert.Equal(t, "Shared/Docs", result.Accounts[0].Drives[0].SyncState.Conditions[0].Scope)
+	assert.Equal(t, "Shared/Design", result.Accounts[0].Drives[0].SyncState.Conditions[1].Scope)
 }
 
 // Validates: R-2.10.32
@@ -1370,7 +1371,7 @@ func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T)
 	var buf bytes.Buffer
 	require.NoError(t, printSyncStateText(&buf, "    ", ss, false))
 	output := buf.String()
-	assert.Equal(t, 2, strings.Count(output, "QUOTA EXCEEDED (1 item)"))
+	assert.Equal(t, 2, strings.Count(output, "Storage full: 1 item"))
 	assert.Contains(t, output, "Scope: Shared/Docs")
 	assert.Contains(t, output, "Scope: Shared/Design")
 }
@@ -1397,7 +1398,8 @@ func TestComputeSummary_Mixed(t *testing.T) {
 
 	s := computeSummary(accounts)
 	assert.Equal(t, 4, s.TotalMounts)
-	assert.Equal(t, 3, s.Ready)
+	assert.Equal(t, 1, s.Ready)
+	assert.Equal(t, 2, s.Issues)
 	assert.Equal(t, 1, s.Paused)
 	assert.Equal(t, 1, s.AccountsRequiringAuth)
 	assert.Equal(t, 4, s.TotalConditions)
@@ -1474,7 +1476,10 @@ func TestPrintStatusJSON_WithAccounts(t *testing.T) {
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
 	require.Len(t, result.Accounts, 1)
 	assert.Equal(t, "alice@example.com", result.Accounts[0].Email)
-	assert.Equal(t, 1, result.Summary.Ready)
+	assert.Equal(t, 1, result.Summary.Issues)
+	assert.Equal(t, 1, result.Summary.TotalDrives)
+	require.Len(t, result.Accounts[0].Drives, 1)
+	assert.Equal(t, "~/OneDrive", result.Accounts[0].Drives[0].Folder)
 }
 
 // Validates: R-2.10.4
@@ -1497,14 +1502,14 @@ func TestPrintStatusJSON_WithConditions(t *testing.T) {
 						Conditions: []statusConditionJSON{
 							{
 								ConditionKey: string(syncengine.ConditionQuotaExceeded),
-								Title:        "QUOTA EXCEEDED",
+								Title:        "Storage full",
 								Count:        1,
 								ScopeKind:    "drive",
 								Scope:        "Shared/Team Docs",
 							},
 							{
 								ConditionKey: string(syncengine.ConditionInvalidFilename),
-								Title:        "INVALID FILENAME",
+								Title:        "Invalid filename",
 								Count:        2,
 								ScopeKind:    "file",
 							},
@@ -1521,11 +1526,11 @@ func TestPrintStatusJSON_WithConditions(t *testing.T) {
 	var result statusOutput
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
 	require.Len(t, result.Accounts, 1)
-	require.Len(t, result.Accounts[0].Mounts, 1)
-	require.NotNil(t, result.Accounts[0].Mounts[0].SyncState)
-	require.Len(t, result.Accounts[0].Mounts[0].SyncState.Conditions, 2)
-	assert.Equal(t, "drive", result.Accounts[0].Mounts[0].SyncState.Conditions[0].ScopeKind)
-	assert.Equal(t, "Shared/Team Docs", result.Accounts[0].Mounts[0].SyncState.Conditions[0].Scope)
+	require.Len(t, result.Accounts[0].Drives, 1)
+	require.NotNil(t, result.Accounts[0].Drives[0].SyncState)
+	require.Len(t, result.Accounts[0].Drives[0].SyncState.Conditions, 2)
+	assert.Equal(t, "drive", result.Accounts[0].Drives[0].SyncState.Conditions[0].ScopeKind)
+	assert.Equal(t, "Shared/Team Docs", result.Accounts[0].Drives[0].SyncState.Conditions[0].Scope)
 }
 
 func TestPrintStatusJSON_SyncStateOmitsLegacyHistoryKeys(t *testing.T) {
@@ -1556,18 +1561,18 @@ func TestPrintStatusJSON_SyncStateOmitsLegacyHistoryKeys(t *testing.T) {
 
 	var decoded struct {
 		Accounts []struct {
-			Mounts []struct {
+			Drives []struct {
 				SyncState json.RawMessage `json:"sync_state"`
-			} `json:"mounts"`
+			} `json:"drives"`
 		} `json:"accounts"`
 	}
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
 	require.Len(t, decoded.Accounts, 1)
-	require.Len(t, decoded.Accounts[0].Mounts, 1)
-	require.NotEmpty(t, decoded.Accounts[0].Mounts[0].SyncState)
+	require.Len(t, decoded.Accounts[0].Drives, 1)
+	require.NotEmpty(t, decoded.Accounts[0].Drives[0].SyncState)
 
 	var raw map[string]any
-	require.NoError(t, json.Unmarshal(decoded.Accounts[0].Mounts[0].SyncState, &raw))
+	require.NoError(t, json.Unmarshal(decoded.Accounts[0].Drives[0].SyncState, &raw))
 	assert.Contains(t, raw, "file_count")
 	assert.NotContains(t, raw, "last_sync_time")
 	assert.NotContains(t, raw, "last_sync_duration")
@@ -1583,7 +1588,7 @@ func TestPrintStatusText_NoMounts(t *testing.T) {
 	require.NoError(t, printStatusText(&buf, nil, false))
 
 	output := buf.String()
-	assert.Equal(t, "Summary: 0 mounts, 0 conditions\n", output)
+	assert.Empty(t, output)
 }
 
 func TestPrintStatusText_WithDisplayNameAndOrg(t *testing.T) {
@@ -1610,11 +1615,49 @@ func TestPrintStatusText_WithDisplayNameAndOrg(t *testing.T) {
 	require.NoError(t, printStatusText(&buf, accounts, false))
 
 	output := buf.String()
-	assert.True(t, strings.HasPrefix(output, "Summary: 1 mounts (1 ready), 0 conditions\n\n"))
-	assert.Contains(t, output, "Alice Smith (alice@contoso.com)")
-	assert.Contains(t, output, "Org:   Contoso")
-	assert.Contains(t, output, "Auth:  ready")
+	assert.True(t, strings.HasPrefix(output, "Account: Alice Smith <alice@contoso.com>\n"))
+	assert.Contains(t, output, "Organization: Contoso")
+	assert.NotContains(t, output, "Auth:")
 	assert.Contains(t, output, "~/Work")
+}
+
+func TestPrintStatusText_HealthySingleDriveIsUserFacing(t *testing.T) {
+	t.Parallel()
+
+	accounts := []statusAccount{
+		{
+			Email:       "tommipommi2026@outlook.com",
+			DisplayName: "Tommi Pommi",
+			AuthState:   authStateReady,
+			Drives: []statusDrive{
+				{
+					Kind:   statusDriveKindPersonalOneDrive,
+					Name:   "Tommi Pommi's personal OneDrive",
+					Folder: "~/tommi",
+					State:  driveStateReady,
+					Storage: &statusStorage{
+						UsedBytes:  135 * 1024,
+						TotalBytes: 5 * 1024 * 1024 * 1024,
+						Used:       "135.0 KB",
+						Total:      "5.0 GB",
+					},
+					SyncState: &syncStateInfo{FileCount: 7},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatusText(&buf, accounts, false))
+
+	assert.Equal(t, ""+
+		"Account: Tommi Pommi <tommipommi2026@outlook.com>\n"+
+		"  Tommi Pommi's personal OneDrive\n"+
+		"    Folder: ~/tommi\n"+
+		"    Storage: 135.0 KB of 5.0 GB used\n"+
+		"    Files: 7\n",
+		buf.String(),
+	)
 }
 
 func TestPrintStatusText_WithAuthRequiredReasonAndAction(t *testing.T) {
@@ -1641,7 +1684,7 @@ func TestPrintStatusText_WithAuthRequiredReasonAndAction(t *testing.T) {
 	require.NoError(t, printStatusText(&buf, accounts, false))
 
 	output := buf.String()
-	assert.Contains(t, output, "Auth:  authentication_required")
+	assert.Contains(t, output, "Sign-in required:")
 	assert.Contains(t, output, "The last sync attempt for this account was rejected by OneDrive.")
 	assert.Contains(t, output, "status")
 }
@@ -1669,7 +1712,8 @@ func TestPrintStatusText_SyncStateNever(t *testing.T) {
 	require.NoError(t, printStatusText(&buf, accounts, false))
 
 	output := buf.String()
-	assert.Contains(t, output, "No active conditions.")
+	assert.NotContains(t, output, "No active conditions.")
+	assert.NotContains(t, output, "Issues:")
 }
 
 func TestPrintStatusText_EmptySyncDir(t *testing.T) {
@@ -1701,7 +1745,7 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	t.Parallel()
 
 	s := statusSummary{
-		TotalMounts:           4,
+		TotalDrives:           4,
 		Ready:                 3,
 		Paused:                1,
 		AccountsRequiringAuth: 1,
@@ -1712,18 +1756,18 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	require.NoError(t, printSummaryText(&buf, s))
 
 	output := buf.String()
-	assert.Contains(t, output, "4 mounts")
-	assert.Contains(t, output, "3 ready")
+	assert.Contains(t, output, "4 drives")
+	assert.Contains(t, output, "3 up to date")
 	assert.Contains(t, output, "1 paused")
-	assert.Contains(t, output, "1 accounts requiring auth")
-	assert.Contains(t, output, "3 conditions")
+	assert.Contains(t, output, "1 account needs sign-in")
+	assert.NotContains(t, output, "conditions")
 }
 
 func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
 	t.Parallel()
 
 	s := statusSummary{
-		TotalMounts:      2,
+		TotalDrives:      2,
 		Ready:            2,
 		TotalConditions:  1,
 		TotalRemoteDrift: 5,
@@ -1734,8 +1778,9 @@ func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
 	require.NoError(t, printSummaryText(&buf, s))
 
 	output := buf.String()
-	assert.Contains(t, output, "5 remote drift")
-	assert.Contains(t, output, "3 retrying")
+	assert.Contains(t, output, "2 drives")
+	assert.NotContains(t, output, "remote drift")
+	assert.NotContains(t, output, "retrying")
 }
 
 // Validates: R-2.10.4
@@ -1753,8 +1798,8 @@ func TestPrintSyncStateText_WithPendingAndConditions(t *testing.T) {
 	require.NoError(t, printSyncStateText(&buf, "    ", ss, false))
 
 	output := buf.String()
-	assert.Contains(t, output, "Remote drift: 3 items")
-	assert.Contains(t, output, "Retrying:  2 items")
+	assert.Contains(t, output, "Remote changes: 3 items")
+	assert.Contains(t, output, "Retrying: 2 items")
 }
 
 // Validates: R-2.10.4
@@ -1814,7 +1859,7 @@ func requireSingleStatusDriveJSON(
 	t.Helper()
 
 	drive, syncState := findStatusDriveJSON(t, decoded, canonicalID)
-	require.Equal(t, 1, decoded.Summary.TotalMounts, "expected filtered status output")
+	require.Equal(t, 1, decoded.Summary.TotalDrives, "expected filtered status output")
 	return drive, syncState
 }
 
@@ -1827,17 +1872,26 @@ func findStatusDriveJSON(
 
 	var (
 		foundDrive statusMount
+		firstDrive statusMount
 		found      bool
+		count      int
 	)
 	for i := range decoded.Accounts {
-		for j := range decoded.Accounts[i].Mounts {
-			drive, ok := findStatusMountRecursive(&decoded.Accounts[i].Mounts[j], canonicalID)
+		for j := range decoded.Accounts[i].Drives {
+			count++
+			if count == 1 {
+				firstDrive = decoded.Accounts[i].Drives[j]
+			}
+			drive, ok := findStatusMountRecursive(&decoded.Accounts[i].Drives[j], canonicalID)
 			if ok {
 				require.False(t, found, "expected exactly one drive in filtered status output")
 				foundDrive = drive
 				found = true
 			}
 		}
+	}
+	if !found && count == 1 {
+		return firstDrive, firstDrive.SyncState
 	}
 	require.True(t, found, "expected drive %s in status output", canonicalID)
 	return foundDrive, foundDrive.SyncState
@@ -1850,8 +1904,11 @@ func findStatusMountRecursive(mount *statusMount, identity string) (statusMount,
 	if mount.CanonicalID == identity || mount.MountID == identity {
 		return *mount, true
 	}
-	for i := range mount.ChildMounts {
-		if found, ok := findStatusMountRecursive(&mount.ChildMounts[i], identity); ok {
+	if identity == "" {
+		return *mount, true
+	}
+	for i := range mount.SharedFolders {
+		if found, ok := findStatusMountRecursive(&mount.SharedFolders[i], identity); ok {
 			return found, true
 		}
 	}

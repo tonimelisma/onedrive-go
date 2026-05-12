@@ -83,16 +83,16 @@ func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 	assert.Equal(t, 1, info.ExamplesLimit)
 	assert.False(t, info.Verbose)
 
-	assert.Equal(t, "SHARED FOLDER WRITES BLOCKED", info.Conditions[0].Title)
+	assert.Equal(t, "Shared folder writes blocked", info.Conditions[0].Title)
 	assert.Equal(t, "Shared/A", info.Conditions[0].Scope)
 	assert.Equal(t, statusScopeDirectory, info.Conditions[0].ScopeKind)
 	assert.Equal(t, []string{"Shared/A/a.txt"}, info.Conditions[0].Paths)
 
-	assert.Equal(t, "SHARED FOLDER WRITES BLOCKED", info.Conditions[1].Title)
+	assert.Equal(t, "Shared folder writes blocked", info.Conditions[1].Title)
 	assert.Equal(t, "Shared/B", info.Conditions[1].Scope)
 	assert.Equal(t, []string{"Shared/B/a.txt"}, info.Conditions[1].Paths)
 
-	assert.Equal(t, "INVALID FILENAME", info.Conditions[2].Title)
+	assert.Equal(t, "Invalid filename", info.Conditions[2].Title)
 	assert.Equal(t, []string{"/y.txt"}, info.Conditions[2].Paths)
 }
 
@@ -119,12 +119,12 @@ func TestBuildStatusConditionJSON_UsesCliOwnedPresentationBoundary(t *testing.T)
 	}, false, 2)
 
 	require.Len(t, groups, 2)
-	assert.Equal(t, "SHARED FOLDER WRITES BLOCKED", groups[0].Title)
+	assert.Equal(t, "Shared folder writes blocked", groups[0].Title)
 	assert.Equal(t, "Shared/Docs", groups[0].Scope)
 	assert.Equal(t, statusScopeDirectory, groups[0].ScopeKind)
 	assert.Equal(t, []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt"}, groups[0].Paths)
 
-	assert.Equal(t, "INVALID FILENAME", groups[1].Title)
+	assert.Equal(t, "Invalid filename", groups[1].Title)
 	assert.Empty(t, groups[1].Scope)
 	assert.Empty(t, groups[1].ScopeKind)
 	assert.Equal(t, []string{"/bad:name.txt"}, groups[1].Paths)
@@ -142,7 +142,7 @@ func TestBuildSyncStateInfo_NilSnapshotUsesDefaults(t *testing.T) {
 
 	var buf bytes.Buffer
 	require.NoError(t, printSyncStateText(&buf, "    ", &info, false))
-	assert.Contains(t, buf.String(), "No active conditions.")
+	assert.Empty(t, buf.String())
 }
 
 func TestStatusScopeKindFromScopeKey_CoversKinds(t *testing.T) {
@@ -174,18 +174,18 @@ func TestSortStatusConditions_OrdersByCountThenConditionKeyThenScope(t *testing.
 	t.Parallel()
 
 	groups := []statusConditionJSON{
-		{ConditionKey: string(syncengine.ConditionInvalidFilename), Title: "INVALID FILENAME", Count: 1, Scope: "z"},
-		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "SHARED FOLDER WRITES BLOCKED", Count: 2, Scope: "z"},
-		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "SHARED FOLDER WRITES BLOCKED", Count: 2, Scope: "a"},
-		{ConditionKey: string(syncengine.ConditionAuthenticationRequired), Title: "AUTHENTICATION REQUIRED", Count: 2, Scope: ""},
+		{ConditionKey: string(syncengine.ConditionInvalidFilename), Title: "Invalid filename", Count: 1, Scope: "z"},
+		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "Shared folder writes blocked", Count: 2, Scope: "z"},
+		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "Shared folder writes blocked", Count: 2, Scope: "a"},
+		{ConditionKey: string(syncengine.ConditionAuthenticationRequired), Title: "Sign-in required", Count: 2, Scope: ""},
 	}
 
 	sortStatusConditions(groups)
 	assert.Equal(t, []statusConditionJSON{
-		{ConditionKey: string(syncengine.ConditionAuthenticationRequired), Title: "AUTHENTICATION REQUIRED", Count: 2, Scope: ""},
-		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "SHARED FOLDER WRITES BLOCKED", Count: 2, Scope: "a"},
-		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "SHARED FOLDER WRITES BLOCKED", Count: 2, Scope: "z"},
-		{ConditionKey: string(syncengine.ConditionInvalidFilename), Title: "INVALID FILENAME", Count: 1, Scope: "z"},
+		{ConditionKey: string(syncengine.ConditionAuthenticationRequired), Title: "Sign-in required", Count: 2, Scope: ""},
+		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "Shared folder writes blocked", Count: 2, Scope: "a"},
+		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "Shared folder writes blocked", Count: 2, Scope: "z"},
+		{ConditionKey: string(syncengine.ConditionInvalidFilename), Title: "Invalid filename", Count: 1, Scope: "z"},
 	}, groups)
 }
 
@@ -231,7 +231,7 @@ func TestPrintConditionSection_NoActiveConditions(t *testing.T) {
 
 	var buf bytes.Buffer
 	require.NoError(t, printConditionSection(&buf, "    ", "      ", nil))
-	assert.Equal(t, "    No active conditions.\n", buf.String())
+	assert.Empty(t, buf.String())
 }
 
 func TestPrintConditionSection_RendersScopePathsAndNext(t *testing.T) {
@@ -240,7 +240,7 @@ func TestPrintConditionSection_RendersScopePathsAndNext(t *testing.T) {
 	var buf bytes.Buffer
 	err := printConditionSection(&buf, "    ", "      ", []statusConditionJSON{
 		{
-			Title:  "RATE LIMITED",
+			Title:  "Rate limited",
 			Reason: "OneDrive asked this remote location to slow down.",
 			Action: "Wait for the retry window to expire (automatic retry in progress).",
 			Scope:  "Drive A",
@@ -251,14 +251,15 @@ func TestPrintConditionSection_RendersScopePathsAndNext(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, ""+
-		"    RATE LIMITED (3 items)\n"+
-		"      OneDrive asked this remote location to slow down. Wait for the retry window to expire (automatic retry in progress).\n"+
+		"    Rate limited: 3 items\n"+
+		"      OneDrive asked this remote location to slow down.\n"+
+		"      Action: Wait for the retry window to expire (automatic retry in progress).\n"+
 		"      Scope: Drive A\n"+
 		"\n"+
 		"      a\n"+
 		"      b\n"+
 		"      ... and 1 more (use --verbose to see all)\n"+
-		"      Next: Wait for the retry window to expire (automatic retry in progress).\n",
+		"",
 		buf.String(),
 	)
 }
@@ -270,7 +271,7 @@ func TestPrintDriveSyncSections_WritesHeadingAndConditions(t *testing.T) {
 	err := printMountSyncSections(&buf, "    ", &syncStateInfo{
 		Conditions: []statusConditionJSON{
 			{
-				Title:  "INVALID FILENAME",
+				Title:  "Invalid filename",
 				Reason: "The filename contains characters not allowed by OneDrive.",
 				Action: "Rename the file to remove invalid characters.",
 				Count:  1,
@@ -282,12 +283,12 @@ func TestPrintDriveSyncSections_WritesHeadingAndConditions(t *testing.T) {
 
 	assert.Equal(t, ""+
 		"\n"+
-		"    CONDITIONS\n"+
-		"    INVALID FILENAME (1 item)\n"+
-		"      The filename contains characters not allowed by OneDrive. Rename the file to remove invalid characters.\n"+
+		"    Issues:\n"+
+		"      Invalid filename: 1 item\n"+
+		"        The filename contains characters not allowed by OneDrive.\n"+
+		"        Action: Rename the file to remove invalid characters.\n"+
 		"\n"+
-		"      /bad:name.txt\n"+
-		"      Next: Rename the file to remove invalid characters.\n",
+		"        /bad:name.txt\n",
 		buf.String(),
 	)
 }
@@ -297,7 +298,7 @@ func TestPrintDriveSyncSections_NoConditionsUsesEmptyStateMessage(t *testing.T) 
 
 	var buf bytes.Buffer
 	require.NoError(t, printMountSyncSections(&buf, "    ", &syncStateInfo{}, true))
-	assert.Equal(t, "\n    CONDITIONS\n    No active conditions.\n", buf.String())
+	assert.Empty(t, buf.String())
 }
 
 func TestPrintConditionPaths_NoEllipsisAndNoPaths(t *testing.T) {
@@ -323,7 +324,7 @@ func TestPrintAccountStatus_NilAndLeadingBlank(t *testing.T) {
 		DriveType: "personal",
 		AuthState: authStateReady,
 	}, true, false))
-	assert.Equal(t, "\nAccount: blank@example.com [personal]\n  Auth:  ready\n", buf.String())
+	assert.Equal(t, "\nAccount: blank@example.com\n", buf.String())
 }
 
 func TestPrintDriveStatus_WithoutSyncStateUsesSyncDirFallback(t *testing.T) {
@@ -336,30 +337,11 @@ func TestPrintDriveStatus_WithoutSyncStateUsesSyncDirFallback(t *testing.T) {
 	}, false))
 
 	assert.Equal(t, ""+
-		"  personal:blank@example.com\n"+
-		"    Sync dir:  (not set)\n"+
-		"    State:     paused\n",
+		"  Personal OneDrive\n"+
+		"    Folder: (not set)\n"+
+		"    Status: Paused\n",
 		buf.String(),
 	)
-}
-
-func TestPrintStatusLiveDrives_RendersEntries(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	require.NoError(t, printStatusLiveDrives(&buf, []statusLiveDrive{
-		{ID: "drive-1", Name: "Docs", DriveType: "business", QuotaUsed: 1024, QuotaTotal: 2048},
-		{ID: "drive-2", Name: "Photos", DriveType: "personal", QuotaUsed: 0, QuotaTotal: 0},
-	}))
-
-	output := buf.String()
-	assert.Contains(t, output, "  Live drives:")
-	assert.Contains(t, output, "    Docs (business)")
-	assert.Contains(t, output, "      ID: drive-1")
-	assert.Contains(t, output, "      Quota: 1.0 KB / 2.0 KB")
-	assert.Contains(t, output, "    Photos (personal)")
-	assert.Contains(t, output, "      ID: drive-2")
-	assert.Contains(t, output, "      Quota: 0 B / 0 B")
 }
 
 func TestPrintSyncStateText_PerfOnlyOutput(t *testing.T) {
@@ -401,9 +383,6 @@ func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
 		OrgName:        "Contoso",
 		DegradedReason: driveCatalogUnavailableReason,
 		DegradedAction: degradedAction(driveCatalogUnavailableReason),
-		LiveDrives: []statusLiveDrive{
-			{ID: "drive-1", Name: "Work Files", DriveType: "business", QuotaUsed: 1024, QuotaTotal: 2048},
-		},
 		Mounts: []statusMount{
 			{
 				CanonicalID: "business:alice@example.com",
@@ -417,7 +396,7 @@ func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
 					Retrying:       1,
 					Conditions: []statusConditionJSON{
 						{
-							Title:  "INVALID FILENAME",
+							Title:  "Invalid filename",
 							Reason: "The filename contains characters not allowed by OneDrive.",
 							Action: "Rename the file to remove invalid characters.",
 							Count:  1,
@@ -431,24 +410,19 @@ func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
 	require.NoError(t, err)
 
 	output := buf.String()
-	assert.Contains(t, output, "Account: Alice Example (alice@example.com) [business]")
-	assert.Contains(t, output, "  User ID: user-123")
-	assert.Contains(t, output, "  Org:   Contoso")
-	assert.Contains(t, output, "  Auth:  authentication_required")
-	assert.Contains(t, output, "  Reason: The saved login for this account is invalid or unreadable.")
+	assert.Contains(t, output, "Account: Alice Example <alice@example.com>")
+	assert.Contains(t, output, "  Organization: Contoso")
+	assert.Contains(t, output, "  Sign-in required: The saved login for this account is invalid or unreadable.")
 	assert.Contains(t, output, "  Action: Run 'onedrive-go login' to sign in.")
-	assert.Contains(t, output, "  Live discovery: Couldn't finish loading live drive information for this account.")
-	assert.Contains(t, output, "  Live action: "+degradedAction(driveCatalogUnavailableReason))
-	assert.Contains(t, output, "  Live drives:")
-	assert.Contains(t, output, "    Work Files (business)")
-	assert.Contains(t, output, "      ID: drive-1")
-	assert.Contains(t, output, "      Quota: 1.0 KB / 2.0 KB")
-	assert.Contains(t, output, "  Documents (business:alice@example.com)")
-	assert.Contains(t, output, "    Sync dir:  (not set)")
-	assert.Contains(t, output, "    Files:     7")
-	assert.Contains(t, output, "    Remote drift: 2 items")
-	assert.Contains(t, output, "    Conditions: 1")
-	assert.Contains(t, output, "    Retrying:  1 items")
+	assert.Contains(t, output, "  Documents")
+	assert.Contains(t, output, "    Folder: (not set)")
+	assert.Contains(t, output, "    Files: 7")
+	assert.Contains(t, output, "    Remote changes: 2 items")
+	assert.Contains(t, output, "    Retrying: 1 item")
+	assert.Contains(t, output, "    Issues:")
+	assert.NotContains(t, output, "User ID")
+	assert.NotContains(t, output, "Live drives")
+	assert.NotContains(t, output, "Quota")
 }
 
 func TestPrintStatusNextLine_EmptyHintProducesNoOutput(t *testing.T) {
@@ -464,7 +438,7 @@ func TestPrintStatusText_NoAccountsPrintsSummaryOnly(t *testing.T) {
 
 	var buf bytes.Buffer
 	require.NoError(t, printStatusText(&buf, nil, false))
-	assert.Equal(t, "Summary: 0 mounts, 0 conditions\n", buf.String())
+	assert.Empty(t, buf.String())
 }
 
 func TestPrintStatusText_RendersMultiAccountSummary(t *testing.T) {
@@ -507,16 +481,15 @@ func TestPrintStatusText_RendersMultiAccountSummary(t *testing.T) {
 	}, false))
 
 	output := buf.String()
-	assert.Contains(t, output, "Summary: 2 mounts (1 ready, 1 paused, 1 accounts requiring auth), 2 conditions, 1 remote drift, 1 retrying")
-	assert.Contains(t, output, "Account: ready@example.com [personal]")
-	assert.Contains(t, output, "  personal:ready@example.com")
-	assert.Contains(t, output, "    Sync dir:  /sync/ready")
-	assert.Contains(t, output, "Account: needs-auth@example.com [business]")
-	assert.Contains(t, output, "  Auth:  authentication_required")
-	assert.Contains(t, output, "  Reason: No saved login was found for this account.")
+	assert.Contains(t, output, "Status: 2 drives: 1 paused, 1 with issues, 1 account needs sign-in")
+	assert.Contains(t, output, "Account: ready@example.com")
+	assert.Contains(t, output, "  Personal OneDrive")
+	assert.Contains(t, output, "    Folder: /sync/ready")
+	assert.Contains(t, output, "Account: needs-auth@example.com")
+	assert.Contains(t, output, "  Sign-in required: No saved login was found for this account.")
 	assert.Contains(t, output, "  Action: Run 'onedrive-go login' to sign in.")
-	assert.Contains(t, output, "  business:needs-auth@example.com")
-	assert.Contains(t, output, "    State:     paused")
+	assert.Contains(t, output, "  Work OneDrive")
+	assert.Contains(t, output, "    Status: Paused")
 	parts := bytes.Split([]byte(output), []byte("Account: "))
 	require.GreaterOrEqual(t, len(parts), 3)
 }
@@ -534,42 +507,42 @@ func descriptorAuthAndRemoteCases(authPresentation authstate.Presentation) []des
 		{
 			name:       "authentication required",
 			key:        syncengine.ConditionAuthenticationRequired,
-			wantTitle:  "AUTHENTICATION REQUIRED",
+			wantTitle:  "Sign-in required",
 			wantReason: authPresentation.Reason,
 			wantAction: authPresentation.Action,
 		},
 		{
 			name:       "quota exceeded",
 			key:        syncengine.ConditionQuotaExceeded,
-			wantTitle:  "QUOTA EXCEEDED",
+			wantTitle:  "Storage full",
 			wantReason: "The OneDrive storage quota for this sync scope is full.",
 			wantAction: "Free up space in the owning drive, or ask the shared-folder owner to do so.",
 		},
 		{
 			name:       "service outage",
 			key:        syncengine.ConditionServiceOutage,
-			wantTitle:  "SERVICE OUTAGE",
+			wantTitle:  "Service outage",
 			wantReason: "OneDrive service is temporarily unavailable.",
 			wantAction: "Wait for the service to recover (automatic retry in progress).",
 		},
 		{
 			name:       "rate limited",
 			key:        syncengine.ConditionRateLimited,
-			wantTitle:  "RATE LIMITED",
+			wantTitle:  "Rate limited",
 			wantReason: "OneDrive asked this remote location to slow down.",
 			wantAction: "Wait for the retry window to expire (automatic retry in progress).",
 		},
 		{
 			name:       "remote write denied",
 			key:        syncengine.ConditionRemoteWriteDenied,
-			wantTitle:  "SHARED FOLDER WRITES BLOCKED",
+			wantTitle:  "Shared folder writes blocked",
 			wantReason: "This shared folder is read-only for your current write attempts. Downloads continue normally.",
 			wantAction: "Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.",
 		},
 		{
 			name:       "remote read denied",
 			key:        syncengine.ConditionRemoteReadDenied,
-			wantTitle:  "REMOTE READ BLOCKED",
+			wantTitle:  "Remote read blocked",
 			wantReason: "This remote content can no longer be downloaded with your current permissions.",
 			wantAction: "Restore access to the shared item, or remove the blocked content from this sync scope.",
 		},
@@ -581,42 +554,42 @@ func descriptorFilesystemCases() []descriptorCase {
 		{
 			name:       "local read denied",
 			key:        syncengine.ConditionLocalReadDenied,
-			wantTitle:  "LOCAL READ BLOCKED",
+			wantTitle:  "Local read blocked",
 			wantReason: "The local source file or directory can no longer be read.",
 			wantAction: "Restore local read access so uploads and conflict recovery can read the source content.",
 		},
 		{
 			name:       "local write denied",
 			key:        syncengine.ConditionLocalWriteDenied,
-			wantTitle:  "LOCAL WRITE BLOCKED",
+			wantTitle:  "Local write blocked",
 			wantReason: "The local destination path can no longer be created, renamed, or updated.",
 			wantAction: "Restore local write access so downloads and local filesystem updates can complete.",
 		},
 		{
 			name:       "invalid filename",
 			key:        syncengine.ConditionInvalidFilename,
-			wantTitle:  "INVALID FILENAME",
+			wantTitle:  "Invalid filename",
 			wantReason: "The filename contains characters not allowed by OneDrive.",
 			wantAction: "Rename the file to remove invalid characters.",
 		},
 		{
 			name:       "path too long",
 			key:        syncengine.ConditionPathTooLong,
-			wantTitle:  "PATH TOO LONG",
+			wantTitle:  "Path too long",
 			wantReason: "The full path exceeds OneDrive's 400-character limit.",
 			wantAction: "Shorten the path by renaming files or folders.",
 		},
 		{
 			name:       "file too large",
 			key:        syncengine.ConditionFileTooLarge,
-			wantTitle:  "FILE TOO LARGE",
+			wantTitle:  "File too large",
 			wantReason: "The file exceeds the maximum upload size.",
 			wantAction: "Reduce the file size or move it out of the sync dir.",
 		},
 		{
 			name:       "case collision",
 			key:        syncengine.ConditionCaseCollision,
-			wantTitle:  "CASE COLLISION",
+			wantTitle:  "Case collision",
 			wantReason: "Two files differ only in letter case, which OneDrive cannot distinguish.",
 			wantAction: "Rename one of the conflicting files.",
 		},
@@ -628,21 +601,21 @@ func descriptorLocalRuntimeCases() []descriptorCase {
 		{
 			name:       "disk full",
 			key:        syncengine.ConditionDiskFull,
-			wantTitle:  "DISK FULL",
+			wantTitle:  "Disk full",
 			wantReason: "Local disk space is insufficient for downloads.",
 			wantAction: "Free up local disk space.",
 		},
 		{
 			name:       "hash error",
 			key:        syncengine.ConditionHashError,
-			wantTitle:  "HASH ERROR",
+			wantTitle:  "Hash error",
 			wantReason: "File hashing failed unexpectedly.",
 			wantAction: "Check file integrity and retry.",
 		},
 		{
 			name:       "file too large for space",
 			key:        syncengine.ConditionFileTooLargeForSpace,
-			wantTitle:  "FILE TOO LARGE FOR SPACE",
+			wantTitle:  "File too large for available space",
 			wantReason: "The file is larger than available local disk space.",
 			wantAction: "Free up local disk space to fit this file.",
 		},
@@ -653,8 +626,8 @@ func descriptorFallbackCase() descriptorCase {
 	return descriptorCase{
 		name:       "unexpected fallback",
 		key:        syncengine.ConditionKey("custom_condition"),
-		wantTitle:  "SYNC CONDITION",
-		wantReason: "An unexpected sync condition needs attention.",
+		wantTitle:  "Sync issue",
+		wantReason: "An unexpected sync issue needs attention.",
 		wantAction: "Check logs for details or rerun status after the next sync pass.",
 	}
 }

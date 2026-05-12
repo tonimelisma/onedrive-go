@@ -5,6 +5,7 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,8 +19,9 @@ type statusJSON struct {
 }
 
 type statusSummaryJSON struct {
-	TotalMounts    int `json:"total_mounts"`
-	hasTotalMounts bool
+	TotalDrives        int `json:"total_drives"`
+	TotalSharedFolders int `json:"total_shared_folders,omitempty"`
+	hasTotalDrives     bool
 }
 
 func (summary *statusSummaryJSON) UnmarshalJSON(data []byte) error {
@@ -27,52 +29,59 @@ func (summary *statusSummaryJSON) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return fmt.Errorf("decode status summary: %w", err)
 	}
-	raw, ok := fields["total_mounts"]
+	raw, ok := fields["total_drives"]
 	if !ok {
 		*summary = statusSummaryJSON{}
 		return nil
 	}
-	if err := json.Unmarshal(raw, &summary.TotalMounts); err != nil {
-		return fmt.Errorf("decode status summary total_mounts: %w", err)
+	if err := json.Unmarshal(raw, &summary.TotalDrives); err != nil {
+		return fmt.Errorf("decode status summary total_drives: %w", err)
 	}
-	summary.hasTotalMounts = true
+	summary.hasTotalDrives = true
+	if raw, ok := fields["total_shared_folders"]; ok {
+		if err := json.Unmarshal(raw, &summary.TotalSharedFolders); err != nil {
+			return fmt.Errorf("decode status summary total_shared_folders: %w", err)
+		}
+	}
 	return nil
 }
 
 type statusAccountJSON struct {
 	Email  string            `json:"email"`
-	Mounts []statusMountJSON `json:"mounts"`
+	Drives []statusDriveJSON `json:"drives"`
 }
 
-type statusMountJSON struct {
-	CanonicalID string               `json:"canonical_id"`
-	MountID     string               `json:"mount_id"`
-	ChildMounts []statusMountJSON    `json:"child_mounts,omitempty"`
-	SyncState   *statusSyncStateJSON `json:"sync_state,omitempty"`
+type statusDriveJSON struct {
+	Kind          string               `json:"kind"`
+	Name          string               `json:"name"`
+	Folder        string               `json:"folder"`
+	State         string               `json:"state"`
+	SharedFolders []statusDriveJSON    `json:"shared_folders,omitempty"`
+	SyncState     *statusSyncStateJSON `json:"sync_state,omitempty"`
+	Storage       map[string]any       `json:"storage,omitempty"`
 }
 
 type statusSyncStateJSON struct {
-	FileCount             int                   `json:"file_count"`
-	ConditionCount        int                   `json:"condition_count"`
-	RemoteDrift           int                   `json:"remote_drift"`
-	Retrying              int                   `json:"retrying"`
-	Conditions            []statusConditionJSON `json:"conditions"`
-	ExamplesLimit         int                   `json:"examples_limit"`
-	Verbose               bool                  `json:"verbose"`
-	Perf                  map[string]any        `json:"perf,omitempty"`
-	PerfUnavailableReason string                `json:"perf_unavailable_reason,omitempty"`
+	FileCount             int               `json:"file_count"`
+	IssueCount            int               `json:"issue_count"`
+	RemoteDrift           int               `json:"remote_changes"`
+	Retrying              int               `json:"retrying"`
+	Issues                []statusIssueJSON `json:"issues"`
+	ExamplesLimit         int               `json:"examples_limit"`
+	Verbose               bool              `json:"verbose"`
+	Perf                  map[string]any    `json:"perf,omitempty"`
+	PerfUnavailableReason string            `json:"perf_unavailable_reason,omitempty"`
 }
 
-type statusConditionJSON struct {
-	ConditionKey  string   `json:"condition_key"`
-	ConditionType string   `json:"condition_type"`
-	Title         string   `json:"title"`
-	Reason        string   `json:"reason"`
-	Action        string   `json:"action"`
-	ScopeKind     string   `json:"scope_kind"`
-	Scope         string   `json:"scope"`
-	Count         int      `json:"count"`
-	Paths         []string `json:"paths"`
+type statusIssueJSON struct {
+	Type      string   `json:"type"`
+	Title     string   `json:"title"`
+	Reason    string   `json:"reason"`
+	Action    string   `json:"action"`
+	ScopeKind string   `json:"scope_kind"`
+	Scope     string   `json:"scope"`
+	Count     int      `json:"count"`
+	Paths     []string `json:"paths"`
 }
 
 func runStatusAllowError(
@@ -128,15 +137,23 @@ func runStatusAllDrivesAllowError(
 }
 
 func validateStatusJSONContract(status statusJSON) error {
-	if !status.Summary.hasTotalMounts {
-		return fmt.Errorf("status json missing summary.total_mounts")
+	if !status.Summary.hasTotalDrives {
+		return fmt.Errorf("status json missing summary.total_drives")
 	}
-	actual := countStatusMounts(status)
-	if status.Summary.TotalMounts != actual {
+	actualDrives := countStatusDrives(status)
+	if status.Summary.TotalDrives != actualDrives {
 		return fmt.Errorf(
-			"status json total_mounts mismatch: summary=%d recursive_mount_rows=%d",
-			status.Summary.TotalMounts,
-			actual,
+			"status json total_drives mismatch: summary=%d top_level_drives=%d",
+			status.Summary.TotalDrives,
+			actualDrives,
+		)
+	}
+	actualSharedFolders := countStatusSharedFolders(status)
+	if status.Summary.TotalSharedFolders != actualSharedFolders {
+		return fmt.Errorf(
+			"status json total_shared_folders mismatch: summary=%d recursive_shared_folders=%d",
+			status.Summary.TotalSharedFolders,
+			actualSharedFolders,
 		)
 	}
 	return nil
@@ -160,58 +177,64 @@ func readStatusAllDrives(t *testing.T, cfgPath string, env map[string]string, ar
 	return output
 }
 
-func requireStatusMount(
+func requireStatusDriveByIdentity(
 	t *testing.T,
 	status statusJSON,
 	canonicalID string,
-) statusMountJSON {
+) statusDriveJSON {
 	t.Helper()
 
-	for i := range status.Accounts {
-		for j := range status.Accounts[i].Mounts {
-			if found, ok := findStatusMountJSON(status.Accounts[i].Mounts[j], canonicalID); ok {
-				return found
-			}
-		}
+	drive, ok := findStatusDriveJSON(status, canonicalID)
+	if ok {
+		return drive
 	}
 
-	require.FailNowf(t, "missing status mount", "canonical_id=%s", canonicalID)
-	return statusMountJSON{}
+	require.FailNowf(t, "missing status drive", "drive=%s", canonicalID)
+	return statusDriveJSON{}
 }
 
-func countStatusMounts(status statusJSON) int {
+func countStatusDrives(status statusJSON) int {
 	total := 0
 	for i := range status.Accounts {
-		for j := range status.Accounts[i].Mounts {
-			total += countStatusMount(status.Accounts[i].Mounts[j])
+		total += len(status.Accounts[i].Drives)
+	}
+
+	return total
+}
+
+func countStatusSharedFolders(status statusJSON) int {
+	total := 0
+	for i := range status.Accounts {
+		for j := range status.Accounts[i].Drives {
+			total += countStatusDriveSharedFolders(status.Accounts[i].Drives[j])
 		}
 	}
 
 	return total
 }
 
-func countStatusMount(mount statusMountJSON) int {
-	total := 1
-	for i := range mount.ChildMounts {
-		total += countStatusMount(mount.ChildMounts[i])
+func countStatusDriveSharedFolders(drive statusDriveJSON) int {
+	total := len(drive.SharedFolders)
+	for i := range drive.SharedFolders {
+		total += countStatusDriveSharedFolders(drive.SharedFolders[i])
 	}
 
 	return total
 }
 
-func TestCountStatusMountsIncludesNestedChildMounts(t *testing.T) {
+func TestCountStatusSharedFoldersIncludesNestedSharedFolders(t *testing.T) {
 	t.Parallel()
 
 	status := statusJSON{
 		Accounts: []statusAccountJSON{{
-			Mounts: []statusMountJSON{{
-				MountID: "parent",
-				ChildMounts: []statusMountJSON{
-					{MountID: "child-a"},
+			Drives: []statusDriveJSON{{
+				Name: "parent",
+				SharedFolders: []statusDriveJSON{
+					{Name: "child-a"},
 					{
-						MountID: "child-b",
-						ChildMounts: []statusMountJSON{{
-							MountID: "grandchild",
+						Name: "child-b",
+						SharedFolders: []statusDriveJSON{{
+							Name: "grandchild",
 						}},
 					},
 				},
@@ -219,53 +242,102 @@ func TestCountStatusMountsIncludesNestedChildMounts(t *testing.T) {
 		}},
 	}
 
-	assert.Equal(t, 4, countStatusMounts(status))
+	assert.Equal(t, 1, countStatusDrives(status))
+	assert.Equal(t, 3, countStatusSharedFolders(status))
 }
 
-func TestValidateStatusJSONContractRejectsLegacyDriveShape(t *testing.T) {
+func TestValidateStatusJSONContractRejectsLegacyMountShape(t *testing.T) {
 	t.Parallel()
 
 	var status statusJSON
 	require.NoError(t, json.Unmarshal([]byte(`{
-		"summary": {"total_drives": 1},
-		"accounts": [{"email": "user@example.com", "drives": [{"mount_id": "legacy"}]}]
+		"summary": {"total_mounts": 1},
+		"accounts": [{"email": "user@example.com", "mounts": [{"mount_id": "legacy"}]}]
 	}`), &status))
 
 	err := validateStatusJSONContract(status)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing summary.total_mounts")
+	assert.Contains(t, err.Error(), "missing summary.total_drives")
 }
 
-func findStatusMountJSON(mount statusMountJSON, canonicalID string) (statusMountJSON, bool) {
-	if mount.CanonicalID == canonicalID || mount.MountID == canonicalID {
-		return mount, true
-	}
-	for i := range mount.ChildMounts {
-		if found, ok := findStatusMountJSON(mount.ChildMounts[i], canonicalID); ok {
-			return found, true
+func findStatusDriveJSON(status statusJSON, identity string) (statusDriveJSON, bool) {
+	var candidates []statusDriveJSON
+	email := statusIdentityEmail(identity)
+	for i := range status.Accounts {
+		if email != "" && status.Accounts[i].Email != email {
+			continue
+		}
+		for j := range status.Accounts[i].Drives {
+			candidates = append(candidates, status.Accounts[i].Drives[j])
 		}
 	}
 
-	return statusMountJSON{}, false
+	if len(candidates) == 1 && !isStatusChildIdentity(identity) {
+		return candidates[0], true
+	}
+	if isStatusChildIdentity(identity) {
+		var shared []statusDriveJSON
+		for i := range candidates {
+			collectStatusSharedFolders(candidates[i], &shared)
+		}
+		if len(shared) == 1 {
+			return shared[0], true
+		}
+	}
+
+	return statusDriveJSON{}, false
+}
+
+func findStatusSharedFolderJSON(drive statusDriveJSON, identity string) (statusDriveJSON, bool) {
+	if !isStatusChildIdentity(identity) {
+		return drive, true
+	}
+	var shared []statusDriveJSON
+	collectStatusSharedFolders(drive, &shared)
+	if len(shared) == 1 {
+		return shared[0], true
+	}
+	return statusDriveJSON{}, false
+}
+
+func collectStatusSharedFolders(drive statusDriveJSON, out *[]statusDriveJSON) {
+	for i := range drive.SharedFolders {
+		*out = append(*out, drive.SharedFolders[i])
+		collectStatusSharedFolders(drive.SharedFolders[i], out)
+	}
+}
+
+func statusIdentityEmail(identity string) string {
+	parts := strings.Split(identity, ":")
+	switch {
+	case len(parts) >= 2 && (parts[0] == "personal" || parts[0] == "business" || parts[0] == "shared"):
+		return parts[1]
+	default:
+		return ""
+	}
+}
+
+func isStatusChildIdentity(identity string) bool {
+	return strings.Contains(identity, "|binding:")
 }
 
 func requireStatusDrive(
 	t *testing.T,
 	status statusJSON,
 	canonicalID string,
-) statusMountJSON {
+) statusDriveJSON {
 	t.Helper()
 
-	return requireStatusMount(t, status, canonicalID)
+	return requireStatusDriveByIdentity(t, status, canonicalID)
 }
 
 func readStatusSyncState(t *testing.T, cfgPath string, env map[string]string, args ...string) statusSyncStateJSON {
 	t.Helper()
 
-	return readStatusSyncStateForMount(t, cfgPath, env, resolveDriveSelection(env, ""), args...)
+	return readStatusSyncStateForDrive(t, cfgPath, env, resolveDriveSelection(env, ""), args...)
 }
 
-func readStatusSyncStateForMount(
+func readStatusSyncStateForDrive(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
@@ -275,9 +347,9 @@ func readStatusSyncStateForMount(
 	t.Helper()
 
 	status := readStatus(t, cfgPath, env, args...)
-	mountStatus := requireStatusMount(t, status, canonicalID)
-	require.NotNil(t, mountStatus.SyncState, "expected sync_state for %s", canonicalID)
-	return *mountStatus.SyncState
+	driveStatus := requireStatusDriveByIdentity(t, status, canonicalID)
+	require.NotNil(t, driveStatus.SyncState, "expected sync_state for %s", canonicalID)
+	return *driveStatus.SyncState
 }
 
 func pollStatusSyncState(
@@ -288,10 +360,10 @@ func pollStatusSyncState(
 	ready func(statusSyncStateJSON) bool,
 	args ...string,
 ) statusSyncStateJSON {
-	return pollStatusSyncStateForMount(t, cfgPath, env, resolveDriveSelection(env, ""), timeout, ready, args...)
+	return pollStatusSyncStateForDrive(t, cfgPath, env, resolveDriveSelection(env, ""), timeout, ready, args...)
 }
 
-func pollStatusSyncStateForMount(
+func pollStatusSyncStateForDrive(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
@@ -314,9 +386,9 @@ func pollStatusSyncStateForMount(
 		lastStderr = stderr
 		lastErr = err
 		if err == nil {
-			mountStatus := requireStatusMount(t, status, canonicalID)
-			if mountStatus.SyncState != nil {
-				lastStatus = *mountStatus.SyncState
+			driveStatus := requireStatusDriveByIdentity(t, status, canonicalID)
+			if driveStatus.SyncState != nil {
+				lastStatus = *driveStatus.SyncState
 				if ready(lastStatus) {
 					return lastStatus
 				}
@@ -339,11 +411,4 @@ func pollStatusSyncStateForMount(
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
-}
-
-func assertEmptyStatusSnapshotText(t *testing.T, output string) {
-	t.Helper()
-
-	assert.Contains(t, output, "No active conditions.", "status should collapse an unsynced drive to an empty sync snapshot")
-	assert.NotContains(t, output, "Last sync:", "status should not reintroduce the removed legacy history block")
 }

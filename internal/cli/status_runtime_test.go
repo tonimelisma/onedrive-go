@@ -46,12 +46,11 @@ func TestStatusRuntime_SummaryJSONWithActiveOwner(t *testing.T) {
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
 	require.Len(t, decoded.Accounts, 1)
-	require.Len(t, decoded.Accounts[0].Mounts, 1)
-	mount := decoded.Accounts[0].Mounts[0]
-	assert.Equal(t, "watch", mount.RuntimeOwner)
-	assert.Equal(t, statusRuntimeStateActive, mount.RuntimeState)
+	require.Len(t, decoded.Accounts[0].Drives, 1)
+	drive := decoded.Accounts[0].Drives[0]
+	assert.Equal(t, driveStateReady, drive.State)
 	assert.Equal(t, "watch", decoded.Summary.RuntimeOwner)
-	assert.Equal(t, 1, decoded.Summary.RuntimeActiveMounts)
+	assert.Equal(t, 1, decoded.Summary.RuntimeActiveDrives)
 }
 
 // Validates: R-2.3.3
@@ -102,5 +101,5 @@ func TestPrintMountStatus_ShowsRuntimeState(t *testing.T) {
 	}, false)
 
 	require.NoError(t, err)
-	assert.Contains(t, out.String(), "Runtime:  watch active")
+	assert.NotContains(t, out.String(), "Runtime:")
 }

@@ -2,28 +2,23 @@
   "accounts": [
     {
       "email": "alice@example.com",
-      "drive_type": "personal",
-      "auth_state": "ready",
       "display_name": "Alice Example",
       "org_name": "Contoso",
-      "mounts": [
+      "drives": [
         {
-          "mount_id": "personal:alice@example.com",
-          "projection_kind": "standalone",
-          "canonical_id": "personal:alice@example.com",
-          "display_name": "Alice Personal",
-          "sync_dir": "/Users/alice/OneDrive",
-          "state": "ready",
+          "kind": "personal_onedrive",
+          "name": "Alice Example's personal OneDrive",
+          "folder": "/Users/alice/OneDrive",
+          "state": "issues",
           "sync_state": {
             "file_count": 42,
-            "condition_count": 3,
-            "remote_drift": 2,
+            "issue_count": 3,
+            "remote_changes": 2,
             "retrying": 1,
-            "conditions": [
+            "issues": [
               {
-                "condition_key": "invalid_filename",
-                "condition_type": "invalid_filename",
-                "title": "INVALID FILENAME",
+                "type": "invalid_filename",
+                "title": "Invalid filename",
                 "reason": "The filename contains characters not allowed by OneDrive.",
                 "action": "Rename the file to remove invalid characters.",
                 "count": 1,
@@ -32,20 +27,17 @@
                 ]
               },
               {
-                "condition_key": "authentication_required",
-                "condition_type": "unauthorized",
-                "title": "AUTHENTICATION REQUIRED",
+                "type": "unauthorized",
+                "title": "Sign-in required",
                 "reason": "The last sync attempt for this account was rejected by OneDrive.",
                 "action": "Run 'onedrive-go status' to re-check access, or 'onedrive-go login' to sign in again.",
                 "scope_kind": "account",
                 "scope": "your OneDrive account authorization",
-                "count": 1,
-                "paths": null
+                "count": 1
               },
               {
-                "condition_key": "remote_write_denied",
-                "condition_type": "remote_write_denied",
-                "title": "SHARED FOLDER WRITES BLOCKED",
+                "type": "remote_write_denied",
+                "title": "Shared folder writes blocked",
                 "reason": "This shared folder is read-only for your current write attempts. Downloads continue normally.",
                 "action": "Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.",
                 "scope_kind": "directory",
@@ -56,37 +48,36 @@
                 ]
               }
             ],
-            "examples_limit": 5,
-            "verbose": false
+            "examples_limit": 5
           }
         }
       ]
     },
     {
       "email": "bob@example.com",
-      "drive_type": "business",
-      "auth_state": "authentication_required",
-      "auth_reason": "invalid_saved_login",
-      "auth_action": "Run 'onedrive-go login' to sign in.",
-      "mounts": [
+      "display_name": "Bob Example",
+      "org_name": "Example Corp",
+      "sign_in_required": {
+        "reason": "The saved login for this account is invalid or unreadable.",
+        "action": "Run 'onedrive-go login' to sign in."
+      },
+      "drives": [
         {
-          "mount_id": "business:bob@example.com",
-          "projection_kind": "standalone",
-          "canonical_id": "business:bob@example.com",
-          "display_name": "Bob Work",
-          "sync_dir": "/Users/bob/WorkDrive",
+          "kind": "business_onedrive",
+          "name": "OneDrive - Example Corp",
+          "folder": "/Users/bob/WorkDrive",
           "state": "paused"
         }
       ]
     }
   ],
   "summary": {
-    "total_mounts": 2,
-    "ready": 1,
+    "total_drives": 2,
     "paused": 1,
-    "accounts_requiring_auth": 1,
-    "total_conditions": 3,
-    "total_remote_drift": 2,
+    "with_issues": 1,
+    "accounts_requiring_sign_in": 1,
+    "total_issues": 3,
+    "total_remote_changes": 2,
     "total_retrying": 1
   }
 }
