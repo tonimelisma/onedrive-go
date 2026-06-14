@@ -109,8 +109,8 @@ architecture details.
 A release is not ready until these proof gates are current for the release SHA:
 
 - `go run ./cmd/devtool verify default` passes cleanly.
-- Scheduled or manual live E2E is green for the release SHA; broader
-  SharePoint/shared-library claims require matching live coverage.
+- Manual live E2E is green for the release SHA; broader SharePoint/shared-library
+  claims require matching live coverage.
 - Any public performance claim has a repo-owned benchmark artifact with
   scenario, machine, date, method, and subject-under-test context.
 - Side-effect expectations are current, especially dry-run and destructive
