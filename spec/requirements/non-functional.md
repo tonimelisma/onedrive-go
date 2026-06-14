@@ -142,7 +142,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.10.5: Architecture-boundary violations shall fail static verification, with code-shape rules enforced by linting and repo-level invariants enforced by `cmd/devtool verify`. [verified]
 - R-6.10.6: Every governed module design doc shall include an ownership contract that states what the module owns, what it does not own, its source of truth, allowed side effects, mutable runtime owner, and error boundary. [verified]
 - R-6.10.7: The architecture shall include verified threat-model and degraded-mode design docs, and `system.md` shall link to them as required cross-cutting references. [verified]
-- R-6.10.8: The repository shall provide a non-default stress verification profile for runtime-critical packages, and CI shall expose it as a scheduled and manually triggered lane. [verified]
+- R-6.10.8: The repository shall provide a non-default stress verification profile for runtime-critical packages, and CI shall expose it as a manually triggered lane. [verified]
 - R-6.10.9: The degraded-mode matrix shall map each stable degraded-mode ID to exact named tests, and repo verification shall enforce the required evidence-table structure in the design docs. [verified]
 - R-6.10.10: Watch-mode lifecycle-critical timing shall be owned by engine-injectable timer and sleep boundaries, and shutdown/wakeup races shall be covered by deterministic tests instead of wall-clock polling. [verified]
 - R-6.10.11: Repository tooling shall provide a read-only cleanup audit that classifies local worktrees, local branches, and remote branches as safe-to-remove or keep reasons without deleting anything. [verified]
