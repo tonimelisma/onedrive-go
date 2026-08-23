@@ -35,30 +35,6 @@ func TestLocalObservationFindingsBatchFromSkippedItems_UnreadableDirectoryCreate
 }
 
 // Validates: R-2.1.2, R-2.10.4
-func TestSinglePathObservationFindingsBatch_UnreadableDescendantKeepsBoundaryIssueDerived(t *testing.T) {
-	t.Parallel()
-
-	batch, ok := singlePathObservationFindingsBatch(
-		driveid.New(testDriveID),
-		"Private/sub/file.txt",
-		&singlePathObservation{
-			Skipped: &skippedItem{
-				Path:               "Private",
-				Reason:             issueLocalReadDenied,
-				Detail:             "directory not accessible",
-				BlocksReadBoundary: true,
-			},
-		},
-	)
-	require.True(t, ok)
-
-	require.Len(t, batch.Issues, 1)
-	assert.Equal(t, "Private", batch.Issues[0].Path, "single-path observation should persist the denied boundary, not the descendant")
-	assert.Equal(t, sKPermLocalRead("Private"), batch.Issues[0].ScopeKey)
-	assert.ElementsMatch(t, []string{"Private/sub/file.txt", "Private"}, batch.ManagedPaths)
-}
-
-// Validates: R-2.1.2, R-2.10.4
 func TestRootRemoteReadDeniedObservationFindingsBatch_CreatesBoundaryIssue(t *testing.T) {
 	t.Parallel()
 

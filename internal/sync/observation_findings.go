@@ -44,41 +44,6 @@ func localObservationFindingsBatchFromSkippedItems(
 	return batch
 }
 
-func singlePathObservationFindingsBatch(
-	driveID driveid.ID,
-	managedPath string,
-	observation *singlePathObservation,
-) (ObservationFindingsBatch, bool) {
-	if managedPath == "" {
-		return ObservationFindingsBatch{}, false
-	}
-
-	batch := newLocalObservationFindingsBatch()
-	appendManagedObservationPath(&batch, managedPath)
-
-	if observation == nil || observation.Skipped == nil {
-		return batch, true
-	}
-	if observation.Skipped.Path != "" && observation.Skipped.Path != managedPath {
-		appendManagedObservationPath(&batch, observation.Skipped.Path)
-	}
-
-	appendSkippedObservationFinding(&batch, driveID, observation.Skipped)
-	return batch, true
-}
-
-func appendManagedObservationPath(batch *ObservationFindingsBatch, path string) {
-	if batch == nil || path == "" {
-		return
-	}
-	for i := range batch.ManagedPaths {
-		if batch.ManagedPaths[i] == path {
-			return
-		}
-	}
-	batch.ManagedPaths = append(batch.ManagedPaths, path)
-}
-
 func appendSkippedObservationFinding(
 	batch *ObservationFindingsBatch,
 	driveID driveid.ID,

@@ -807,3 +807,12 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 		slog.Int("baseline_entries", o.Baseline.Len()),
 	)
 }
+
+// infoKind classifies a stat result for the observation filter.
+func infoKind(info os.FileInfo) observedKind {
+	if info.IsDir() {
+		return observedKindDir
+	}
+
+	return observedKindFile
+}

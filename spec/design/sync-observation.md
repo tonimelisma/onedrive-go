@@ -1,6 +1,6 @@
 # Sync Observation
 
-GOVERNS: internal/sync/buffer.go, internal/sync/content_filter.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/issue_types.go, internal/sync/item_converter.go, internal/sync/local_hash_reuse.go, internal/sync/local_observation_batch.go, internal/sync/observed_items.go, internal/sync/observer_local.go, internal/sync/observer_local_collisions.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/scanner.go, internal/sync/single_path.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/symlink_observation.go
+GOVERNS: internal/sync/buffer.go, internal/sync/content_filter.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/issue_types.go, internal/sync/item_converter.go, internal/sync/local_hash_reuse.go, internal/sync/local_observation_batch.go, internal/sync/observed_items.go, internal/sync/observer_local.go, internal/sync/observer_local_collisions.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/scanner.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/symlink_observation.go
 
 Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.8.8 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified]
 
@@ -264,8 +264,8 @@ Observation may emit `skippedItem`s for invalid or unsupported local content.
 The engine reconciles those findings through one `ObservationFindingsBatch`
 boundary, and `observation_findings.go` is the single constructor path for
 those batches. Whole-drive scans replace the managed family set for those
-findings; single-path observation uses the same batch shape but manages only
-the exact observed path set it proved.
+findings, which is the only batch shape in use now that path-scoped
+single-path observation has been removed.
 
 Observation-owned read-denied subtree boundaries stay boundary-scoped. The
 durable batch records one boundary issue tagged with the matching read
@@ -280,28 +280,15 @@ Observation-owned local read findings use these rules:
   `perm:dir:read:<boundary>`
 - invalid or unsyncable local content -> observation issue only
 
-**Open discrepancy (not yet resolved).** The single-path observation family in
-`single_path.go` — and `singlePathObservationFindingsBatch` in
-`observation_findings.go` — currently has **no production caller**. It is
-reachable only from its own tests, which is why the `unused` linter does not
-report it. The prose below, and the corresponding statements in
-[sync-store.md](sync-store.md) and [data-model.md](data-model.md), describe it
-as the mechanism retry and trial flows use to rebuild local truth for one path.
-That wiring does not exist in the tree.
-
-Two readings, and the difference is behavioral rather than cosmetic: either
-retry/trial work is meant to re-observe a single path through this family and
-does not, in which case retried work can act on stale local truth and skip the
-configured content filters and drive-type validation this family applies; or
-the capability was superseded and both the code and these spec claims should
-go. Resolving it requires deciding which, so it is recorded here rather than
-settled by deleting code that may be intended-but-unwired. [planned]
-
-Single-path observation used by retry/trial flows follows the same ownership
-rule. It may update `observation_issues` and their boundary `ScopeKey` tags
-because it is still observation, not worker-result persistence. It must never
-reconcile a one-path observation result as if it were a whole-drive managed
-set; path-scoped reconciliation clears only the exact observed path set.
+Single-path observation was removed. Retry and trial flows once rebuilt local
+truth for one path through an `observeSinglePathWithFilter` family, wired from
+`engine_retry_trial.go`. The linear-runtime refactor replaced that model: the
+runtime now replans from committed observation in the store and matches
+`retry_work` rows against the resulting action set, while staleness is caught
+at the side-effect boundary by executor live preconditions. The single-path
+family survived that change with no production caller and stayed alive only
+because its own tests referenced it, which is why `unused` never reported it.
+It is deleted; replanning from committed truth is the single owner.
 
 `Scanner.FullScan()` now also returns direct `localStateRow` values for every
 admissible currently observed local path. `local_state` persistence therefore

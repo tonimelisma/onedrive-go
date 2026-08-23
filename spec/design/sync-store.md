@@ -145,8 +145,13 @@ Observation-owned reconciliation supports two scopes of authority:
 
 - whole-observation batches replace the managed observation issue types they
   own
-- single-path observation batches manage only the exact observed path set they
-  proved
+- exact-path batches manage only the observed path set they proved. The store
+  honors this mode and is tested for it directly, but no current caller sets
+  `ManagedPaths`: its only consumer was single-path observation, removed when
+  the linear runtime replaced per-path retry reconstruction with replanning
+  from committed truth. The mode is kept as a store primitive rather than
+  removed, because dropping a durable reconciliation semantic is a decision
+  about persisted state, not cleanup of an unused helper
 
 ### Mutation writes
 
@@ -177,7 +182,8 @@ Supporting outcome mutations should stay separate by owner:
 
 - observation-findings reconciliation that replaces the current
   observation-owned issue set in one transaction, either as a full managed
-  issue-type set or as an exact-path reconciliation for single-path observation
+  issue-type set or as an exact-path reconciliation (see the note above on
+  `ManagedPaths` having no current caller)
 - exact retry-work upsert/delete helpers
 - retry-work rearm helpers that reschedule exact held work without inventing
   new planning or observation authority
