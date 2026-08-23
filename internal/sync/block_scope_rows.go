@@ -28,11 +28,11 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 		return nil, fmt.Errorf("scan block scope row: %w", err)
 	}
 
-	key := ParseScopeKey(wireKey)
+	key := parseScopeKey(wireKey)
 	if key.IsZero() {
 		return &BlockScope{Key: ScopeKey{}}, nil
 	}
-	if DescribeScopeKey(key).IsZero() {
+	if describeScopeKey(key).IsZero() {
 		return nil, fmt.Errorf("scan block scope row: unknown scope key %q", wireKey)
 	}
 	if !key.PersistsInBlockScopes() {

@@ -11,45 +11,28 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// SinglePathObservation rebuilds local truth for one path without invoking a
+// singlePathObservation rebuilds local truth for one path without invoking a
 // full scan or watch pipeline. Used by engine-owned retry/trial work to keep
 // single-path reconstruction aligned with normal local observation semantics.
-type SinglePathObservation struct {
-	Event    *ChangeEvent
-	Skipped  *SkippedItem
+type singlePathObservation struct {
+	Event    *changeEvent
+	Skipped  *skippedItem
 	Resolved bool
 }
 
-// ObserveSinglePath rebuilds the current local state for a single sync path.
-// It mirrors the parts of normal local observation that matter for retry/trial
-// reconstruction: observation filters, oversized-file rejection, baseline hash
-// reuse, and "emit with empty hash" behavior when hashing fails.
-func ObserveSinglePath(
-	logger *slog.Logger,
-	syncTree *synctree.Root,
-	relPath string,
-	base *BaselineEntry,
-	observeStartNano int64,
-	hashFunc func(string) (string, error),
-) (SinglePathObservation, error) {
-	return ObserveSinglePathWithFilter(
-		logger,
-		syncTree,
-		relPath,
-		base,
-		observeStartNano,
-		hashFunc,
-		ContentFilterConfig{},
-		LocalObservationRules{},
-	)
-}
-
-// ObserveSinglePathWithFilter applies the same single-path reconstruction as
-// ObserveSinglePath, but with explicit local filter configuration and
+// observeSinglePathWithFilter rebuilds the current local state for a single
+// sync path with explicit local filter configuration and
 // platform-derived observation rules from the engine. Retry/trial work uses
 // this so configured exclusions and drive-type-specific validation stay
 // aligned with full-scan and watch semantics.
-func ObserveSinglePathWithFilter(
+//
+// production caller; see the single-path wiring discrepancy recorded in
+// spec/design/sync-observation.md. Do not drop the parameter: it is threaded
+// into observeSinglePathHash and will carry a real logger once the retry/trial
+// path is wired.
+//
+//nolint:unparam // logger is only ever nil today because this family has no
+func observeSinglePathWithFilter(
 	logger *slog.Logger,
 	syncTree *synctree.Root,
 	relPath string,
@@ -58,7 +41,7 @@ func ObserveSinglePathWithFilter(
 	hashFunc func(string) (string, error),
 	filter ContentFilterConfig,
 	rules LocalObservationRules,
-) (SinglePathObservation, error) {
+) (singlePathObservation, error) {
 	path := nfcNormalize(filepath.ToSlash(relPath))
 	name := nfcNormalize(filepath.Base(path))
 
@@ -69,11 +52,11 @@ func ObserveSinglePathWithFilter(
 	absPath, info, isSymlink, err := statSingleObservedPath(syncTree, path)
 	if err != nil {
 		if errors.Is(err, os.ErrPermission) {
-			return SinglePathObservation{
+			return singlePathObservation{
 				Skipped: singlePathPermissionDeniedSkippedItem(syncTree, path, absPath),
 			}, nil
 		}
-		return SinglePathObservation{}, err
+		return singlePathObservation{}, err
 	}
 
 	if observation, resolved := resolveSinglePathWithInfo(name, path, info, isSymlink, filter, rules); resolved {
@@ -94,16 +77,16 @@ func resolveSinglePathWithoutStat(
 	path string,
 	filter ContentFilterConfig,
 	rules LocalObservationRules,
-) (SinglePathObservation, bool) {
+) (singlePathObservation, bool) {
 	if skip := shouldObserveWithFilter(name, path, observedKindUnknown, filter, nil, rules); skip != nil {
 		if skip.Reason == "" {
-			return SinglePathObservation{Resolved: true}, true
+			return singlePathObservation{Resolved: true}, true
 		}
 
-		return SinglePathObservation{Skipped: skip}, true
+		return singlePathObservation{Skipped: skip}, true
 	}
 
-	return SinglePathObservation{}, false
+	return singlePathObservation{}, false
 }
 
 func statSingleObservedPath(syncTree *synctree.Root, path string) (string, os.FileInfo, bool, error) {
@@ -131,15 +114,15 @@ func singlePathPermissionDeniedSkippedItem(
 	syncTree *synctree.Root,
 	path string,
 	absPath string,
-) *SkippedItem {
+) *skippedItem {
 	if syncTree != nil && absPath != "" {
 		parentDir := filepath.Dir(absPath)
 		if !isDirAccessible(syncTree, parentDir) {
 			boundary := deepestDeniedObservedBoundary(syncTree, parentDir)
 			if relBoundary, err := syncTree.Rel(boundary); err == nil {
-				return &SkippedItem{
+				return &skippedItem{
 					Path:               nfcNormalize(filepath.ToSlash(relBoundary)),
-					Reason:             IssueLocalReadDenied,
+					Reason:             issueLocalReadDenied,
 					Detail:             "directory not accessible (check filesystem permissions)",
 					BlocksReadBoundary: true,
 				}
@@ -147,9 +130,9 @@ func singlePathPermissionDeniedSkippedItem(
 		}
 	}
 
-	return &SkippedItem{
+	return &skippedItem{
 		Path:   path,
-		Reason: IssueLocalReadDenied,
+		Reason: issueLocalReadDenied,
 		Detail: "file not accessible (check filesystem permissions)",
 	}
 }
@@ -175,30 +158,30 @@ func resolveSinglePathWithInfo(
 	isSymlink bool,
 	filter ContentFilterConfig,
 	rules LocalObservationRules,
-) (SinglePathObservation, bool) {
+) (singlePathObservation, bool) {
 	if info == nil {
-		return SinglePathObservation{Resolved: true}, true
+		return singlePathObservation{Resolved: true}, true
 	}
 
 	if shouldSkipObservedSymlink(isSymlink, filter) {
-		return SinglePathObservation{Resolved: true}, true
+		return singlePathObservation{Resolved: true}, true
 	}
 
 	if skip := shouldObserveWithFilter(name, path, infoKind(info), filter, nil, rules); skip != nil {
 		if skip.Reason == "" {
-			return SinglePathObservation{Resolved: true}, true
+			return singlePathObservation{Resolved: true}, true
 		}
 
-		return SinglePathObservation{Skipped: skip}, true
+		return singlePathObservation{Skipped: skip}, true
 	}
 
-	if info.IsDir() || info.Size() <= MaxOneDriveFileSize {
-		return SinglePathObservation{}, false
+	if info.IsDir() || info.Size() <= maxOneDriveFileSize {
+		return singlePathObservation{}, false
 	}
 
-	return SinglePathObservation{Skipped: &SkippedItem{
+	return singlePathObservation{Skipped: &skippedItem{
 		Path:     path,
-		Reason:   IssueFileTooLarge,
+		Reason:   issueFileTooLarge,
 		Detail:   fmt.Sprintf("file size %d bytes exceeds 250 GB limit", info.Size()),
 		FileSize: info.Size(),
 	}}, true
@@ -218,9 +201,9 @@ func singlePathEvent(
 	itemType ItemType,
 	info os.FileInfo,
 	hash string,
-) SinglePathObservation {
-	return SinglePathObservation{
-		Event: &ChangeEvent{
+) singlePathObservation {
+	return singlePathObservation{
+		Event: &changeEvent{
 			Source:   SourceLocal,
 			Type:     ChangeModify,
 			Path:     path,
@@ -250,7 +233,7 @@ func observeSinglePathHash(
 	observeStartNano int64,
 	hashFunc func(string) (string, error),
 ) string {
-	if CanReuseBaselineHash(info, base, observeStartNano) {
+	if canReuseBaselineHash(info, base, observeStartNano) {
 		return base.LocalHash
 	}
 
@@ -264,7 +247,7 @@ func observeSinglePathHash(
 	}
 
 	if logger != nil {
-		if errors.Is(err, ErrFileChangedDuringHash) {
+		if errors.Is(err, errFileChangedDuringHash) {
 			logger.Debug("file metadata still settling, emitting with empty hash",
 				slog.String("path", path))
 		} else {

@@ -21,11 +21,11 @@ func TestStartRuntimeStage_ReleasesDueHeldTrialImmediately(t *testing.T) {
 
 	scopeKey := SKService()
 	runtime := &runtimePlan{
-		Plan: &ActionPlan{
+		Plan: &actionPlan{
 			Actions: []Action{{
 				Type: ActionUpload,
 				Path: "held.txt",
-				View: &PathView{Path: "held.txt"},
+				View: &pathView{Path: "held.txt"},
 			}},
 			Deps: [][]int{nil},
 		},

@@ -48,7 +48,7 @@ func TestRefreshLocalBaseline_PreservesRemoteMetadataAndLeavesMirrorTruthUntouch
 	refreshTime := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
 	setStoreTestNow(mgr, refreshTime)
 
-	require.NoError(t, mgr.RefreshLocalBaseline(ctx, LocalBaselineRefresh{
+	require.NoError(t, mgr.RefreshLocalBaseline(ctx, localBaselineRefresh{
 		Path:           "file.txt",
 		DriveID:        driveid.New("d1"),
 		ItemID:         "item-1",
@@ -94,7 +94,7 @@ func TestRefreshLocalBaseline_CreatesUnknownRemoteFieldsForLocalOnlyEntry(t *tes
 	now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	setStoreTestNow(mgr, now)
 
-	require.NoError(t, mgr.RefreshLocalBaseline(ctx, LocalBaselineRefresh{
+	require.NoError(t, mgr.RefreshLocalBaseline(ctx, localBaselineRefresh{
 		Path:           "copy.conflict-1.txt",
 		DriveID:        driveid.New("d1"),
 		ItemID:         "conflict-copy-placeholder",

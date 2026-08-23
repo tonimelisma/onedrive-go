@@ -212,7 +212,7 @@ func scanObservationIssueRow(
 	}
 
 	row.DriveID = contentDriveID
-	row.ScopeKey = ParseScopeKey(scopeKey)
+	row.ScopeKey = parseScopeKey(scopeKey)
 	return nil
 }
 

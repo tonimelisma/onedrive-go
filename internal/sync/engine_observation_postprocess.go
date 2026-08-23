@@ -234,7 +234,7 @@ func (rt *watchRuntime) remoteBatchHasPlannerVisibleEffects(batch *remoteObserva
 	return remoteEventsHavePlannerVisibleEffects(rt.engine.contentFilter, batch.emitted)
 }
 
-func remoteEventsHavePlannerVisibleEffects(filter ContentFilterConfig, events []ChangeEvent) bool {
+func remoteEventsHavePlannerVisibleEffects(filter ContentFilterConfig, events []changeEvent) bool {
 	for i := range events {
 		if remoteEventHasPlannerVisibleEffect(filter, &events[i]) {
 			return true
@@ -243,8 +243,8 @@ func remoteEventsHavePlannerVisibleEffects(filter ContentFilterConfig, events []
 	return false
 }
 
-func remoteEventHasPlannerVisibleEffect(filter ContentFilterConfig, event *ChangeEvent) bool {
-	visibility := NewContentFilter(filter)
+func remoteEventHasPlannerVisibleEffect(filter ContentFilterConfig, event *changeEvent) bool {
+	visibility := newContentFilter(filter)
 	if visibility.Visible(event.Path, event.ItemType) {
 		return true
 	}

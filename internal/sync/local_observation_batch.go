@@ -4,7 +4,7 @@ package sync
 // Local observers build it from re-observed filesystem facts; the watch loop
 // owns durable application to local_state and dirty scheduling.
 type localObservationBatch struct {
-	rows            []LocalStateRow
+	rows            []localStateRow
 	deletedPaths    []string
 	deletedPrefixes []string
 	fullSnapshot    bool
@@ -13,7 +13,7 @@ type localObservationBatch struct {
 	dirty           bool
 }
 
-func localObservationBatchForEvent(event *ChangeEvent) localObservationBatch {
+func localObservationBatchForEvent(event *changeEvent) localObservationBatch {
 	if event == nil {
 		return localObservationBatch{}
 	}
@@ -34,7 +34,7 @@ func localObservationBatchForEvent(event *ChangeEvent) localObservationBatch {
 		if event.Path != "" && !event.IsDeleted {
 			batch.rows = append(batch.rows, localStateRowFromEvent(event))
 		}
-	case ChangeCreate, ChangeModify:
+	case changeCreate, ChangeModify:
 		if event.Path != "" && !event.IsDeleted {
 			batch.rows = append(batch.rows, localStateRowFromEvent(event))
 		}
@@ -43,8 +43,8 @@ func localObservationBatchForEvent(event *ChangeEvent) localObservationBatch {
 	return batch
 }
 
-func localStateRowFromEvent(event *ChangeEvent) LocalStateRow {
-	return LocalStateRow{
+func localStateRowFromEvent(event *changeEvent) localStateRow {
+	return localStateRow{
 		Path:             event.Path,
 		ItemType:         event.ItemType,
 		Hash:             event.Hash,

@@ -143,14 +143,14 @@ func TestWatch_StartupSafetyScanCatchesChangeDuringWatchSetup(t *testing.T) {
 
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 	obs.StartupSafetyScan = true
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
-	var observed ChangeEvent
+	var observed changeEvent
 	select {
 	case observed = <-events:
 	case err := <-done:
@@ -161,7 +161,7 @@ func TestWatch_StartupSafetyScanCatchesChangeDuringWatchSetup(t *testing.T) {
 
 	cancel()
 	require.NoError(t, <-done)
-	assert.Equal(t, ChangeCreate, observed.Type)
+	assert.Equal(t, changeCreate, observed.Type)
 	assert.Equal(t, "during-setup.txt", observed.Path)
 }
 
@@ -177,14 +177,14 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: existingHash,
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan ChangeEvent, 10)
+	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	events := make(chan changeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Modify the file.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "existing.txt"), []byte("modified"), 0o600))
 
-	var ev ChangeEvent
+	var ev changeEvent
 	select {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
@@ -205,10 +205,10 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.SetFilterConfig(ContentFilterConfig{IgnoreJunkFiles: true})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create an excluded file — should not produce an event.
@@ -217,7 +217,7 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	// Then create a valid file — should produce an event.
 	writeTestFile(t, dir, "valid.txt", "keep")
 
-	var ev ChangeEvent
+	var ev changeEvent
 	select {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
@@ -235,9 +235,9 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 	cancel()
 
@@ -267,23 +267,23 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	tickCh := make(chan time.Time, 1)
 
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline: emptyBaseline(),
 		Logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]syncTimer),
-			HashRequests:  make(chan HashRequest, HashRequestBufSize),
+			HashRequests:  make(chan hashRequest, hashRequestBufSize),
 		},
 		SleepFunc: recorder.sleep,
 		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return tickCh, func() {}
 		},
-		WatcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (fsWatcher, error) {
 			return mockWatcher, nil
 		},
 	}
 
-	events := make(chan ChangeEvent, 50)
+	events := make(chan changeEvent, 50)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -342,24 +342,24 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	recorder := newSleepRecorder()
 	mockWatcher := newMockFsWatcher()
 
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline: emptyBaseline(),
 		Logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]syncTimer),
-			HashRequests:  make(chan HashRequest, HashRequestBufSize),
+			HashRequests:  make(chan hashRequest, hashRequestBufSize),
 		},
 		SleepFunc: recorder.sleep,
 		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			// Never-firing ticker: no safety scan means backoff keeps escalating.
 			return make(chan time.Time), func() {}
 		},
-		WatcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (fsWatcher, error) {
 			return mockWatcher, nil
 		},
 	}
 
-	events := make(chan ChangeEvent, 50)
+	events := make(chan changeEvent, 50)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -409,7 +409,7 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -426,7 +426,7 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 
 	select {
 	case ev := <-events:
-		require.Equal(t, ChangeCreate, ev.Type, "combined Chmod|Create should be handled as Create")
+		require.Equal(t, changeCreate, ev.Type, "combined Chmod|Create should be handled as Create")
 		require.Equal(t, "combo.txt", ev.Path)
 		require.Equal(t, SourceLocal, ev.Source)
 	case <-time.After(5 * time.Second):
@@ -451,7 +451,7 @@ func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -506,24 +506,24 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	})
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline: baseline,
 		Logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]syncTimer),
-			HashRequests:  make(chan HashRequest, HashRequestBufSize),
+			HashRequests:  make(chan hashRequest, hashRequestBufSize),
 		},
 		AfterFunc: realAfterFunc,
 		SleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
 		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		WatcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (fsWatcher, error) {
 			return mockWatcher, nil
 		},
 	}
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -545,7 +545,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	}
 
 	// Collect both events.
-	var collected []ChangeEvent
+	var collected []changeEvent
 	timeout := time.After(5 * time.Second)
 
 	for len(collected) < 2 {
@@ -561,9 +561,9 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	<-done
 
 	// Find the Create and Delete events (order may vary).
-	var createEv, deleteEv *ChangeEvent
+	var createEv, deleteEv *changeEvent
 	for i := range collected {
-		if collected[i].Type == ChangeCreate {
+		if collected[i].Type == changeCreate {
 			createEv = &collected[i]
 			continue
 		}

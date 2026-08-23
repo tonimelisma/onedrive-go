@@ -18,8 +18,8 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork(t *testing
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	runner := newOneShotRunner(eng.Engine)
-	runner.depGraph = NewDepGraph(eng.logger)
-	runner.dispatchCh = make(chan *TrackedAction, 16)
+	runner.depGraph = newDepGraph(eng.logger)
+	runner.dispatchCh = make(chan *trackedAction, 16)
 
 	for _, actionID := range []int64{1, 2, 3} {
 		runner.depGraph.Add(&Action{
@@ -28,8 +28,8 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork(t *testing
 		}, actionID, nil)
 	}
 
-	results := make(chan ActionCompletion, 3)
-	results <- ActionCompletion{
+	results := make(chan actionCompletion, 3)
+	results <- actionCompletion{
 		ActionID:   1,
 		Path:       "a.txt",
 		ActionType: ActionUpload,
@@ -37,7 +37,7 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork(t *testing
 		Err:        graph.ErrServerError,
 		ErrMsg:     "fail-1",
 	}
-	results <- ActionCompletion{
+	results <- actionCompletion{
 		ActionID:   2,
 		Path:       "b.txt",
 		ActionType: ActionUpload,
@@ -45,7 +45,7 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork(t *testing
 		Err:        graph.ErrServerError,
 		ErrMsg:     "fail-2",
 	}
-	results <- ActionCompletion{
+	results <- actionCompletion{
 		ActionID:   3,
 		Path:       "c.txt",
 		ActionType: ActionDownload,
@@ -67,33 +67,33 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	runner := newOneShotRunner(eng.Engine)
-	runner.depGraph = NewDepGraph(eng.logger)
-	runner.dispatchCh = make(chan *TrackedAction)
+	runner.depGraph = newDepGraph(eng.logger)
+	runner.dispatchCh = make(chan *trackedAction)
 
 	runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "root.txt",
-		View: &PathView{Path: "root.txt"},
+		View: &pathView{Path: "root.txt"},
 	}, 1, nil)
 	runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "child.txt",
-		View: &PathView{Path: "child.txt"},
+		View: &pathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	runner.depGraph.Add(&Action{
 		Type: ActionDownload,
 		Path: "auth.txt",
-		View: &PathView{Path: "auth.txt"},
+		View: &pathView{Path: "auth.txt"},
 	}, 3, nil)
 
-	results := make(chan ActionCompletion, 2)
-	results <- ActionCompletion{
+	results := make(chan actionCompletion, 2)
+	results <- actionCompletion{
 		ActionID:   1,
 		Path:       "root.txt",
 		ActionType: ActionUpload,
 		Success:    true,
 	}
-	results <- ActionCompletion{
+	results <- actionCompletion{
 		ActionID:   3,
 		Path:       "auth.txt",
 		ActionType: ActionDownload,
@@ -120,13 +120,13 @@ func TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOr
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	runner := newOneShotRunner(eng.Engine)
-	runner.depGraph = NewDepGraph(eng.logger)
-	runner.dispatchCh = make(chan *TrackedAction, 1)
+	runner.depGraph = newDepGraph(eng.logger)
+	runner.dispatchCh = make(chan *trackedAction, 1)
 
 	root := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "root.txt",
-		View: &PathView{Path: "root.txt"},
+		View: &pathView{Path: "root.txt"},
 	}, 1, nil)
 	require.NotNil(t, root)
 	runner.markRunning(root)
@@ -143,11 +143,11 @@ func TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOr
 		nil,
 		nil,
 		nil,
-		&ActionCompletion{
+		&actionCompletion{
 			ActionID:   1,
 			Path:       "root.txt",
 			ActionType: ActionUpload,
-			Err:        ErrActionPreconditionChanged,
+			Err:        errActionPreconditionChanged,
 			ErrMsg:     "source changed",
 		},
 	)
@@ -170,8 +170,8 @@ func TestEngineFlow_CompleteQueuedDispatchAsShutdown_CompletesQueuedSubtree(t *t
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.depGraph = NewDepGraph(eng.logger)
-	runner.dispatchCh = make(chan *TrackedAction, 1)
+	runner.depGraph = newDepGraph(eng.logger)
+	runner.dispatchCh = make(chan *trackedAction, 1)
 
 	root := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
@@ -182,7 +182,7 @@ func TestEngineFlow_CompleteQueuedDispatchAsShutdown_CompletesQueuedSubtree(t *t
 	child := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "child.txt",
-		View: &PathView{Path: "child.txt"},
+		View: &pathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
@@ -198,7 +198,7 @@ func TestEngineFlow_CompleteOutboxAsShutdown_CompletesTrackedActions(t *testing.
 
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
-	flow.depGraph = NewDepGraph(eng.logger)
+	flow.depGraph = newDepGraph(eng.logger)
 
 	root := flow.depGraph.Add(&Action{
 		Type: ActionUpload,
@@ -212,7 +212,7 @@ func TestEngineFlow_CompleteOutboxAsShutdown_CompletesTrackedActions(t *testing.
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
-	flow.completeOutboxAsShutdown([]*TrackedAction{root})
+	flow.completeOutboxAsShutdown([]*trackedAction{root})
 
 	assert.Equal(t, 0, flow.depGraph.InFlightCount())
 }
@@ -223,20 +223,20 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterFatalCompletesReleasedReadyA
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.depGraph = NewDepGraph(eng.logger)
-	runner.dispatchCh = make(chan *TrackedAction, 1)
+	runner.depGraph = newDepGraph(eng.logger)
+	runner.dispatchCh = make(chan *trackedAction, 1)
 
 	root := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "root.txt",
-		View: &PathView{Path: "root.txt"},
+		View: &pathView{Path: "root.txt"},
 	}, 1, nil)
 	require.NotNil(t, root)
 
 	child := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "child.txt",
-		View: &PathView{Path: "child.txt"},
+		View: &pathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
@@ -246,7 +246,7 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterFatalCompletesReleasedReadyA
 		nil,
 		nil,
 		assert.AnError,
-		&ActionCompletion{
+		&actionCompletion{
 			ActionID:   1,
 			Path:       "root.txt",
 			ActionType: ActionUpload,
@@ -265,8 +265,8 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReady
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.depGraph = NewDepGraph(eng.logger)
-	runner.dispatchCh = make(chan *TrackedAction, 1)
+	runner.depGraph = newDepGraph(eng.logger)
+	runner.dispatchCh = make(chan *trackedAction, 1)
 
 	root := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
@@ -289,7 +289,7 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReady
 		nil,
 		nil,
 		nil,
-		&ActionCompletion{
+		&actionCompletion{
 			ActionID:   1,
 			Path:       "root.txt",
 			ActionType: ActionUpload,
@@ -308,25 +308,25 @@ func TestOneShotRunner_RunResultsLoopIdle_ReleasesDueHeldWorkBeforeBlocking(t *t
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.depGraph = NewDepGraph(eng.logger)
-	runner.dispatchCh = make(chan *TrackedAction, 1)
+	runner.depGraph = newDepGraph(eng.logger)
+	runner.dispatchCh = make(chan *trackedAction, 1)
 
 	action := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "retry.txt",
-		View: &PathView{Path: "retry.txt"},
+		View: &pathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, action)
 	runner.holdAction(action, heldReasonRetry, ScopeKey{}, eng.nowFn().Add(-time.Second))
 
 	ctx, cancel := context.WithCancel(t.Context())
-	results := make(chan ActionCompletion, 1)
+	results := make(chan actionCompletion, 1)
 	done := make(chan error, 1)
 
 	go func() {
 		defer close(results)
 		dispatched := <-runner.dispatchCh
-		results <- ActionCompletion{
+		results <- actionCompletion{
 			ActionID:   dispatched.ID,
 			Path:       dispatched.Action.Path,
 			ActionType: dispatched.Action.Type,
@@ -356,14 +356,14 @@ func TestOneShotRunner_ReleaseIdleDueHeldWork_ClearsShutdownCompletedOutboxOnRed
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.depGraph = NewDepGraph(eng.logger)
-	runner.dispatchCh = make(chan *TrackedAction, 1)
+	runner.depGraph = newDepGraph(eng.logger)
+	runner.dispatchCh = make(chan *trackedAction, 1)
 	now := eng.nowFunc()
 
 	concrete := runner.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "retry.txt",
-		View: &PathView{Path: "retry.txt"},
+		View: &pathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, concrete)
 	runner.holdAction(concrete, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))

@@ -71,7 +71,7 @@ func (t *fakeDirtyDebounceTimer) resetCountSnapshot() int {
 func TestDirtyBuffer_FlushImmediate_CoalescesDirtySignalAndPreservesFullRefresh(t *testing.T) {
 	t.Parallel()
 
-	buf := NewDirtyBuffer(synctest.TestLogger(t))
+	buf := newDirtyBuffer(synctest.TestLogger(t))
 	buf.MarkDirty()
 	buf.MarkDirty()
 	buf.MarkDirty()
@@ -90,7 +90,7 @@ func TestDirtyBuffer_FlushDebounced_UsesLastObservationWindow(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	buf := NewDirtyBuffer(synctest.TestLogger(t))
+	buf := newDirtyBuffer(synctest.TestLogger(t))
 	timer := newFakeDirtyDebounceTimer()
 	buf.newTimer = func(time.Duration) debounceTimer { return timer }
 	out := buf.FlushDebounced(ctx, time.Second)
@@ -116,7 +116,7 @@ func TestDirtyBuffer_FlushDebounced_CoalescesMultipleDirtySignalsIntoOneBatch(t 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	buf := NewDirtyBuffer(synctest.TestLogger(t))
+	buf := newDirtyBuffer(synctest.TestLogger(t))
 	timer := newFakeDirtyDebounceTimer()
 	buf.newTimer = func(time.Duration) debounceTimer { return timer }
 	out := buf.FlushDebounced(ctx, time.Second)

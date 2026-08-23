@@ -21,9 +21,9 @@ const inotifyCapacityThreshold = 0.8
 // percentMultiplier converts a fraction (0.0–1.0) to a percentage (0–100).
 const percentMultiplier = 100.0
 
-// ReadInotifyLimit reads the current inotify max_user_watches from procfs.
+// readInotifyLimit reads the current inotify max_user_watches from procfs.
 // Returns 0 if procfs is unavailable (e.g., container without /proc mounted).
-func ReadInotifyLimit() (int, error) {
+func readInotifyLimit() (int, error) {
 	data, err := localpath.ReadFile("/proc/sys/fs/inotify/max_user_watches")
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -41,14 +41,14 @@ func ReadInotifyLimit() (int, error) {
 	return limit, nil
 }
 
-// CheckInotifyCapacity warns if the estimated directory count exceeds 80% of
+// checkInotifyCapacity warns if the estimated directory count exceeds 80% of
 // the inotify max_user_watches limit and points operators at the sysctl knob
 // they need to raise before watch startup becomes fragile.
-func CheckInotifyCapacity(estimatedDirs int, logger *slog.Logger) {
+func checkInotifyCapacity(estimatedDirs int, logger *slog.Logger) {
 	// Read the current procfs value directly instead of caching it in global
 	// process state. This path runs at observer startup and the extra read is
 	// negligible compared with the clarity of having no package-level state.
-	limit, err := ReadInotifyLimit()
+	limit, err := readInotifyLimit()
 	if err != nil {
 		logger.Warn("failed to read inotify watch limit",
 			slog.String("error", err.Error()))
@@ -71,8 +71,8 @@ func CheckInotifyCapacity(estimatedDirs int, logger *slog.Logger) {
 	}
 }
 
-// IsWatchLimitError returns true if the error is caused by exhaustion of the
+// isWatchLimitError returns true if the error is caused by exhaustion of the
 // inotify watch limit (ENOSPC on Linux).
-func IsWatchLimitError(err error) bool {
+func isWatchLimitError(err error) bool {
 	return errors.Is(err, syscall.ENOSPC)
 }

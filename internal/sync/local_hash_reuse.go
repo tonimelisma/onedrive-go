@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// CanReuseBaselineHash reports whether a caller can safely trust the cached
+// canReuseBaselineHash reports whether a caller can safely trust the cached
 // baseline hash for a local file instead of re-reading the file contents.
 //
 // The contract intentionally matches the scanner's fast path:
@@ -16,7 +16,7 @@ import (
 // This keeps the engine's retry/reobserve paths aligned with the main local
 // scanner so we do not hash aggressively in one path while trusting metadata
 // in another.
-func CanReuseBaselineHash(info fs.FileInfo, base *BaselineEntry, observeStartNano int64) bool {
+func canReuseBaselineHash(info fs.FileInfo, base *BaselineEntry, observeStartNano int64) bool {
 	if info == nil || base == nil || info.IsDir() || base.ItemType != ItemTypeFile || base.LocalHash == "" {
 		return false
 	}

@@ -26,11 +26,11 @@ const graphRootID = "root"
 // the sync root. Group/world execute keeps traversal semantics for normal dirs.
 const localDirPerms = 0o755
 
-// ExecutorConfig holds the immutable configuration for creating per-call
+// executorConfig holds the immutable configuration for creating per-call
 // Executor instances. Separated from mutable state to prevent temporal
 // coupling and enable thread safety.
-type ExecutorConfig struct {
-	items            ItemClient
+type executorConfig struct {
+	items            itemClient
 	downloads        driveops.Downloader
 	uploads          driveops.Uploader
 	syncTree         *synctree.Root
@@ -50,21 +50,21 @@ type ExecutorConfig struct {
 	pathConvergence driveops.PathConvergence
 }
 
-// Executor executes individual actions against the Graph API and local
+// executor executes individual actions against the Graph API and local
 // filesystem, producing Outcomes. Created per-action via NewExecution.
 // Thread-safe: all mutable state is per-call, no shared mutation.
-type Executor struct {
-	*ExecutorConfig
+type executor struct {
+	*executorConfig
 	baseline *Baseline
 }
 
-// NewExecutorConfig creates an immutable executor configuration bound to a
+// newExecutorConfig creates an immutable executor configuration bound to a
 // specific drive and sync root. Use NewExecution to create per-call executors.
-func NewExecutorConfig(
-	items ItemClient, downloads driveops.Downloader, uploads driveops.Uploader,
+func newExecutorConfig(
+	items itemClient, downloads driveops.Downloader, uploads driveops.Uploader,
 	syncTree *synctree.Root, driveID driveid.ID, logger *slog.Logger, pathConvergence driveops.PathConvergence,
-) *ExecutorConfig {
-	cfg := &ExecutorConfig{
+) *executorConfig {
+	cfg := &executorConfig{
 		items:           items,
 		downloads:       downloads,
 		uploads:         uploads,
@@ -82,13 +82,13 @@ func NewExecutorConfig(
 // SetTransferMgr sets the transfer manager for unified download/upload with
 // resume and disk space pre-checks. Must be called before any Executor is
 // created from this config.
-func (cfg *ExecutorConfig) SetTransferMgr(mgr *driveops.TransferManager) {
+func (cfg *executorConfig) SetTransferMgr(mgr *driveops.TransferManager) {
 	cfg.transferMgr = mgr
 }
 
 // SetRemoteRootItemID sets the mounted remote root item for mount-root engines.
 // Empty keeps the normal owner-drive root semantics.
-func (cfg *ExecutorConfig) SetRemoteRootItemID(itemID string) {
+func (cfg *executorConfig) SetRemoteRootItemID(itemID string) {
 	cfg.remoteRootItemID = itemID
 }
 
@@ -96,17 +96,17 @@ func (cfg *ExecutorConfig) SetRemoteRootItemID(itemID string) {
 // sync-owned content filter. The executor does not decide visibility; it only
 // needs to know whether ignored junk may be removed when blocking a folder
 // delete.
-func (cfg *ExecutorConfig) SetContentFilter(filter ContentFilterConfig) {
+func (cfg *executorConfig) SetContentFilter(filter ContentFilterConfig) {
 	cfg.ignoreJunkFiles = filter.IgnoreJunkFiles
 }
 
 // Items returns the item client for direct API access (e.g., for trial
 // observation in the engine's reobserve path).
-func (cfg *ExecutorConfig) Items() ItemClient {
+func (cfg *executorConfig) Items() itemClient {
 	return cfg.items
 }
 
-func (e *Executor) confirmRemotePathVisible(ctx context.Context, action *Action) {
+func (e *executor) confirmRemotePathVisible(ctx context.Context, action *Action) {
 	pathConvergence, remotePath, ok := e.pathConvergenceForAction(action)
 	if !ok {
 		return
@@ -129,7 +129,7 @@ func (e *Executor) confirmRemotePathVisible(ctx context.Context, action *Action)
 	)
 }
 
-func (e *Executor) pathConvergenceForAction(action *Action) (driveops.PathConvergence, string, bool) {
+func (e *executor) pathConvergenceForAction(action *Action) (driveops.PathConvergence, string, bool) {
 	if action == nil {
 		return nil, "", false
 	}
@@ -137,7 +137,7 @@ func (e *Executor) pathConvergenceForAction(action *Action) (driveops.PathConver
 	return e.pathConvergenceForPath(action, action.Path)
 }
 
-func (e *Executor) pathConvergenceForPath(action *Action, actionPath string) (driveops.PathConvergence, string, bool) {
+func (e *executor) pathConvergenceForPath(action *Action, actionPath string) (driveops.PathConvergence, string, bool) {
 	if e.pathConvergence == nil || action == nil {
 		return nil, "", false
 	}
@@ -154,7 +154,7 @@ func (e *Executor) pathConvergenceForPath(action *Action, actionPath string) (dr
 // known parent path becomes readable through the shared convergence boundary.
 // This keeps sync from spending a freshly created parent item ID on child
 // create/upload routes before Graph has converged the parent path.
-func (e *Executor) waitRemoteParentVisible(ctx context.Context, action *Action) error {
+func (e *executor) waitRemoteParentVisible(ctx context.Context, action *Action) error {
 	if action == nil {
 		return nil
 	}
@@ -178,46 +178,46 @@ func (e *Executor) waitRemoteParentVisible(ctx context.Context, action *Action) 
 
 // SetNowFunc overrides the time source. Used in tests to produce deterministic
 // timestamps without mocking the real clock.
-func (cfg *ExecutorConfig) SetNowFunc(fn func() time.Time) {
+func (cfg *executorConfig) SetNowFunc(fn func() time.Time) {
 	cfg.nowFunc = fn
 }
 
 // Downloads returns the configured downloader. Used by tests that need to
 // replace the downloader mid-test and rebuild the TransferManager.
-func (cfg *ExecutorConfig) Downloads() driveops.Downloader {
+func (cfg *executorConfig) Downloads() driveops.Downloader {
 	return cfg.downloads
 }
 
 // SetDownloads replaces the downloader. Used in tests to inject a mock that
 // simulates download failures after the initial ExecutorConfig is constructed.
-func (cfg *ExecutorConfig) SetDownloads(dl driveops.Downloader) {
+func (cfg *executorConfig) SetDownloads(dl driveops.Downloader) {
 	cfg.downloads = dl
 }
 
 // Uploads returns the configured uploader. Used by tests that need to
 // replace the uploader mid-test and rebuild the TransferManager.
-func (cfg *ExecutorConfig) Uploads() driveops.Uploader {
+func (cfg *executorConfig) Uploads() driveops.Uploader {
 	return cfg.uploads
 }
 
 // SetUploads replaces the uploader. Used in tests to inject a mock that
 // simulates upload failures after the initial ExecutorConfig is constructed.
-func (cfg *ExecutorConfig) SetUploads(ul driveops.Uploader) {
+func (cfg *executorConfig) SetUploads(ul driveops.Uploader) {
 	cfg.uploads = ul
 }
 
-// NewExecution creates an ephemeral Executor for a single action execution.
+// newExecution creates an ephemeral Executor for a single action execution.
 // Baseline is used for parent ID resolution (thread-safe via locked accessors).
-func NewExecution(cfg *ExecutorConfig, bl *Baseline) *Executor {
-	return &Executor{
-		ExecutorConfig: cfg,
+func newExecution(cfg *executorConfig, bl *Baseline) *executor {
+	return &executor{
+		executorConfig: cfg,
 		baseline:       bl,
 	}
 }
 
 // ExecuteFolderCreate dispatches to local or remote folder creation.
-func (e *Executor) ExecuteFolderCreate(ctx context.Context, action *Action) ActionOutcome {
-	if action.CreateSide == CreateLocal {
+func (e *executor) ExecuteFolderCreate(ctx context.Context, action *Action) actionOutcome {
+	if action.CreateSide == createLocal {
 		return e.createLocalFolder(action)
 	}
 
@@ -225,14 +225,14 @@ func (e *Executor) ExecuteFolderCreate(ctx context.Context, action *Action) Acti
 }
 
 // createLocalFolder creates a directory on the local filesystem.
-func (e *Executor) createLocalFolder(action *Action) ActionOutcome {
+func (e *executor) createLocalFolder(action *Action) actionOutcome {
 	if err := e.validateNoSymlinkBoundary(action.Path, "create folder"); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionFolderCreate,
 			err,
 			action.Path,
-			PermissionCapabilityLocalWrite,
+			permissionCapabilityLocalWrite,
 		)
 	}
 
@@ -242,7 +242,7 @@ func (e *Executor) createLocalFolder(action *Action) ActionOutcome {
 			ActionFolderCreate,
 			fmt.Errorf("creating local folder %s: %w", action.Path, normalizeSyncTreePathError(err)),
 			action.Path,
-			PermissionCapabilityLocalWrite,
+			permissionCapabilityLocalWrite,
 		)
 	}
 
@@ -259,7 +259,7 @@ func (e *Executor) createLocalFolder(action *Action) ActionOutcome {
 	return e.folderOutcome(action)
 }
 
-func (e *Executor) resolvedParentIDForOutcome(action *Action, item *graph.Item) string {
+func (e *executor) resolvedParentIDForOutcome(action *Action, item *graph.Item) string {
 	if item != nil && item.ParentID != "" {
 		return item.ParentID
 	}
@@ -279,14 +279,14 @@ func (e *Executor) resolvedParentIDForOutcome(action *Action, item *graph.Item) 
 // createRemoteFolder creates a folder on OneDrive. The DAG guarantees parent
 // folder creates complete before children, so ResolveParentID finds the parent
 // in the baseline (committed by CommitMutation before depGraph.Complete).
-func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) ActionOutcome {
+func (e *executor) createRemoteFolder(ctx context.Context, action *Action) actionOutcome {
 	parentID, err := e.ResolveParentID(action.Path)
 	if err != nil {
-		return e.failedOutcomeWithFailure(action, ActionFolderCreate, err, action.Path, PermissionCapabilityUnknown)
+		return e.failedOutcomeWithFailure(action, ActionFolderCreate, err, action.Path, permissionCapabilityUnknown)
 	}
 
 	if waitErr := e.waitRemoteParentVisible(ctx, action); waitErr != nil {
-		return e.failedOutcomeWithFailure(action, ActionFolderCreate, waitErr, action.Path, PermissionCapabilityUnknown)
+		return e.failedOutcomeWithFailure(action, ActionFolderCreate, waitErr, action.Path, permissionCapabilityUnknown)
 	}
 
 	driveID := e.resolveDriveID(action)
@@ -297,7 +297,7 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Actio
 			ActionFolderCreate,
 			parentPreconditionErr,
 			action.Path,
-			PermissionCapabilityRemoteRead,
+			permissionCapabilityRemoteRead,
 		)
 	}
 	name := filepath.Base(action.Path)
@@ -309,7 +309,7 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Actio
 			ActionFolderCreate,
 			fmt.Errorf("creating remote folder %s: %w", action.Path, err),
 			action.Path,
-			inferFailureCapabilityFromError(err, PermissionCapabilityUnknown, PermissionCapabilityRemoteWrite),
+			inferFailureCapabilityFromError(err, permissionCapabilityUnknown, permissionCapabilityRemoteWrite),
 		)
 	}
 
@@ -320,7 +320,7 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Actio
 
 	e.confirmRemotePathVisible(ctx, action)
 
-	return ActionOutcome{
+	return actionOutcome{
 		Action:     ActionFolderCreate,
 		Success:    true,
 		Path:       action.Path,
@@ -334,7 +334,7 @@ func (e *Executor) createRemoteFolder(ctx context.Context, action *Action) Actio
 }
 
 // ExecuteMove dispatches to local or remote move.
-func (e *Executor) ExecuteMove(ctx context.Context, action *Action) ActionOutcome {
+func (e *executor) ExecuteMove(ctx context.Context, action *Action) actionOutcome {
 	if action.Type == ActionLocalMove {
 		return e.ExecuteLocalMove(action)
 	}
@@ -343,7 +343,7 @@ func (e *Executor) ExecuteMove(ctx context.Context, action *Action) ActionOutcom
 }
 
 // ExecuteLocalMove renames a local file/folder.
-func (e *Executor) ExecuteLocalMove(action *Action) ActionOutcome {
+func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 	// Both endpoints matter: an unchecked destination would still create
 	// parent directories outside the sync root, and rename replaces whatever
 	// sits at the destination.
@@ -354,7 +354,7 @@ func (e *Executor) ExecuteLocalMove(action *Action) ActionOutcome {
 				ActionLocalMove,
 				err,
 				endpoint,
-				PermissionCapabilityLocalWrite,
+				permissionCapabilityLocalWrite,
 			)
 		}
 	}
@@ -365,7 +365,7 @@ func (e *Executor) ExecuteLocalMove(action *Action) ActionOutcome {
 			ActionLocalMove,
 			err,
 			action.OldPath,
-			PermissionCapabilityLocalWrite,
+			permissionCapabilityLocalWrite,
 		)
 	}
 
@@ -376,7 +376,7 @@ func (e *Executor) ExecuteLocalMove(action *Action) ActionOutcome {
 			ActionLocalMove,
 			fmt.Errorf("creating parent for move target %s: %w", action.Path, normalizeSyncTreePathError(err)),
 			action.Path,
-			PermissionCapabilityLocalWrite,
+			permissionCapabilityLocalWrite,
 		)
 	}
 
@@ -386,7 +386,7 @@ func (e *Executor) ExecuteLocalMove(action *Action) ActionOutcome {
 			ActionLocalMove,
 			fmt.Errorf("renaming %s -> %s: %w", action.OldPath, action.Path, normalizeSyncTreePathError(err)),
 			action.OldPath,
-			PermissionCapabilityLocalWrite,
+			permissionCapabilityLocalWrite,
 		)
 	}
 
@@ -396,12 +396,12 @@ func (e *Executor) ExecuteLocalMove(action *Action) ActionOutcome {
 }
 
 // ExecuteRemoteMove renames/moves an item on OneDrive.
-func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) ActionOutcome {
+func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) actionOutcome {
 	driveID := e.resolveDriveID(action)
 
 	newParentID, err := e.ResolveParentID(action.Path)
 	if err != nil {
-		return e.failedOutcomeWithFailure(action, ActionRemoteMove, err, action.OldPath, PermissionCapabilityUnknown)
+		return e.failedOutcomeWithFailure(action, ActionRemoteMove, err, action.OldPath, permissionCapabilityUnknown)
 	}
 	sourceETag, sourcePreconditionErr := e.remoteSourcePreconditionETag(ctx, driveID, action, "remote move")
 	if sourcePreconditionErr != nil {
@@ -410,7 +410,7 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) Action
 			ActionRemoteMove,
 			sourcePreconditionErr,
 			action.OldPath,
-			PermissionCapabilityRemoteRead,
+			permissionCapabilityRemoteRead,
 		)
 	}
 	parentPreconditionErr := e.validateRemoteParentPrecondition(ctx, driveID, newParentID, action, "remote move")
@@ -420,7 +420,7 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) Action
 			ActionRemoteMove,
 			parentPreconditionErr,
 			action.Path,
-			PermissionCapabilityRemoteRead,
+			permissionCapabilityRemoteRead,
 		)
 	}
 
@@ -434,7 +434,7 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) Action
 				ActionRemoteMove,
 				stalePreconditionError("remote move item %s changed before mutation", action.ItemID),
 				action.OldPath,
-				PermissionCapabilityRemoteWrite,
+				permissionCapabilityRemoteWrite,
 			)
 		}
 
@@ -443,7 +443,7 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) Action
 			ActionRemoteMove,
 			fmt.Errorf("moving %s -> %s: %w", action.OldPath, action.Path, err),
 			action.OldPath,
-			inferFailureCapabilityFromError(err, PermissionCapabilityUnknown, PermissionCapabilityRemoteWrite),
+			inferFailureCapabilityFromError(err, permissionCapabilityUnknown, permissionCapabilityRemoteWrite),
 		)
 	}
 
@@ -466,13 +466,13 @@ func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *Action) Action
 // Helpers
 // ---------------------------------------------------------------------------
 
-// ContainedPath joins syncRoot and relPath, returning the absolute path only
+// containedPath joins syncRoot and relPath, returning the absolute path only
 // if the result stays within syncRoot. Uses filepath.IsLocal (Go 1.20+) to
 // reject traversal sequences, absolute paths, and empty strings. Additionally
 // resolves symlinks to detect TOCTOU escape via symlinked path components.
-func ContainedPath(syncRoot, relPath string) (string, error) {
+func containedPath(syncRoot, relPath string) (string, error) {
 	if !filepath.IsLocal(relPath) {
-		return "", fmt.Errorf("%w: %q", ErrPathEscapesSyncRoot, relPath)
+		return "", fmt.Errorf("%w: %q", errPathEscapesSyncRoot, relPath)
 	}
 
 	absPath := filepath.Join(syncRoot, relPath)
@@ -499,7 +499,7 @@ func ContainedPath(syncRoot, relPath string) (string, error) {
 	if resolvedParent != resolvedRoot &&
 		!strings.HasPrefix(resolvedParent, resolvedRoot+string(filepath.Separator)) {
 		return "", fmt.Errorf("%w: symlink resolves to %q outside root %q",
-			ErrPathEscapesSyncRoot, resolvedParent, resolvedRoot)
+			errPathEscapesSyncRoot, resolvedParent, resolvedRoot)
 	}
 
 	return absPath, nil
@@ -511,7 +511,7 @@ func normalizeSyncTreePathError(err error) error {
 	}
 
 	if strings.Contains(err.Error(), "escapes root") || strings.Contains(err.Error(), "must not be absolute") {
-		return errors.Join(ErrPathEscapesSyncRoot, err)
+		return errors.Join(errPathEscapesSyncRoot, err)
 	}
 
 	return err
@@ -533,7 +533,7 @@ func resolveParentForContainment(parentDir string) (string, bool, error) {
 // ResolveParentID determines the remote parent ID for a given relative path.
 // Checks baseline (which includes items committed by earlier DAG actions),
 // then falls back to "root" for top-level items.
-func (e *Executor) ResolveParentID(relPath string) (string, error) {
+func (e *executor) ResolveParentID(relPath string) (string, error) {
 	parentDir := filepath.Dir(relPath)
 
 	// Top-level item: parent is root.
@@ -559,7 +559,7 @@ func (e *Executor) ResolveParentID(relPath string) (string, error) {
 // resolveDriveID returns the action's DriveID when present. Brand-new local
 // items can still arrive with a zero action DriveID, so inherit the parent
 // folder's baseline drive before falling back to the executor's content drive.
-func (e *Executor) resolveDriveID(action *Action) driveid.ID {
+func (e *executor) resolveDriveID(action *Action) driveid.ID {
 	if !action.DriveID.IsZero() {
 		return action.DriveID
 	}
@@ -577,14 +577,14 @@ func (e *Executor) resolveDriveID(action *Action) driveid.ID {
 }
 
 // failedOutcome builds an ActionOutcome for a failed action.
-func (e *Executor) failedOutcome(action *Action, actionType ActionType, err error) ActionOutcome {
+func (e *executor) failedOutcome(action *Action, actionType actionType, err error) actionOutcome {
 	e.logger.Warn("action failed",
 		slog.String("action", actionType.String()),
 		slog.String("path", action.Path),
 		slog.String("error", err.Error()),
 	)
 
-	return ActionOutcome{
+	return actionOutcome{
 		Action:  actionType,
 		Success: false,
 		Error:   err,
@@ -594,13 +594,13 @@ func (e *Executor) failedOutcome(action *Action, actionType ActionType, err erro
 	}
 }
 
-func (e *Executor) failedOutcomeWithFailure(
+func (e *executor) failedOutcomeWithFailure(
 	action *Action,
-	actionType ActionType,
+	actionType actionType,
 	err error,
 	failurePath string,
-	failureCapability PermissionCapability,
-) ActionOutcome {
+	failureCapability permissionCapability,
+) actionOutcome {
 	outcome := e.failedOutcome(action, actionType, err)
 	if failurePath != "" {
 		outcome.FailurePath = failurePath
@@ -612,24 +612,24 @@ func (e *Executor) failedOutcomeWithFailure(
 
 func inferFailureCapabilityFromError(
 	err error,
-	localCapability PermissionCapability,
-	remoteCapability PermissionCapability,
-) PermissionCapability {
+	localCapability permissionCapability,
+	remoteCapability permissionCapability,
+) permissionCapability {
 	switch {
 	case errors.Is(err, os.ErrPermission):
 		return localCapability
 	case errors.Is(err, graph.ErrForbidden):
 		return remoteCapability
-	case ExtractHTTPStatus(err) == http.StatusForbidden:
+	case extractHTTPStatus(err) == http.StatusForbidden:
 		return remoteCapability
 	default:
-		return PermissionCapabilityUnknown
+		return permissionCapabilityUnknown
 	}
 }
 
 // folderOutcome builds a successful ActionOutcome for a local folder create.
-func (e *Executor) folderOutcome(action *Action) ActionOutcome {
-	o := ActionOutcome{
+func (e *executor) folderOutcome(action *Action) actionOutcome {
+	o := actionOutcome{
 		Action:   ActionFolderCreate,
 		Success:  true,
 		Path:     action.Path,
@@ -648,8 +648,8 @@ func (e *Executor) folderOutcome(action *Action) ActionOutcome {
 }
 
 // moveOutcome builds a successful ActionOutcome for a move action.
-func (e *Executor) moveOutcome(action *Action) ActionOutcome {
-	o := ActionOutcome{
+func (e *executor) moveOutcome(action *Action) actionOutcome {
+	o := actionOutcome{
 		Action:   action.Type,
 		Success:  true,
 		Path:     action.Path,
@@ -686,7 +686,7 @@ func (e *Executor) moveOutcome(action *Action) ActionOutcome {
 	return o
 }
 
-func fillOutcomeFromBaseline(o *ActionOutcome, baseline *BaselineEntry) {
+func fillOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {
 	if baseline == nil {
 		return
 	}

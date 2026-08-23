@@ -280,6 +280,23 @@ Observation-owned local read findings use these rules:
   `perm:dir:read:<boundary>`
 - invalid or unsyncable local content -> observation issue only
 
+**Open discrepancy (not yet resolved).** The single-path observation family in
+`single_path.go` — and `singlePathObservationFindingsBatch` in
+`observation_findings.go` — currently has **no production caller**. It is
+reachable only from its own tests, which is why the `unused` linter does not
+report it. The prose below, and the corresponding statements in
+[sync-store.md](sync-store.md) and [data-model.md](data-model.md), describe it
+as the mechanism retry and trial flows use to rebuild local truth for one path.
+That wiring does not exist in the tree.
+
+Two readings, and the difference is behavioral rather than cosmetic: either
+retry/trial work is meant to re-observe a single path through this family and
+does not, in which case retried work can act on stale local truth and skip the
+configured content filters and drive-type validation this family applies; or
+the capability was superseded and both the code and these spec claims should
+go. Resolving it requires deciding which, so it is recorded here rather than
+settled by deleting code that may be intended-but-unwired. [planned]
+
 Single-path observation used by retry/trial flows follows the same ownership
 rule. It may update `observation_issues` and their boundary `ScopeKey` tags
 because it is still observation, not worker-result persistence. It must never

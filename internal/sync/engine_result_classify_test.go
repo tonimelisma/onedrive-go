@@ -22,28 +22,28 @@ func TestIssueTypeForHTTPResult_RepresentativeMappings(t *testing.T) {
 	driveID := driveid.New("drive-http")
 	testCases := []struct {
 		name   string
-		result *ActionCompletion
+		result *actionCompletion
 		want   string
 		ok     bool
 	}{
 		{name: "nil", result: nil, want: "", ok: false},
-		{name: "unauthorized", result: &ActionCompletion{HTTPStatus: http.StatusUnauthorized}, want: IssueUnauthorized, ok: true},
-		{name: "rate limited", result: &ActionCompletion{HTTPStatus: http.StatusTooManyRequests}, want: IssueRateLimited, ok: true},
-		{name: "quota exceeded", result: &ActionCompletion{HTTPStatus: http.StatusInsufficientStorage}, want: IssueQuotaExceeded, ok: true},
+		{name: "unauthorized", result: &actionCompletion{HTTPStatus: http.StatusUnauthorized}, want: IssueUnauthorized, ok: true},
+		{name: "rate limited", result: &actionCompletion{HTTPStatus: http.StatusTooManyRequests}, want: issueRateLimited, ok: true},
+		{name: "quota exceeded", result: &actionCompletion{HTTPStatus: http.StatusInsufficientStorage}, want: IssueQuotaExceeded, ok: true},
 		{
 			name: "forbidden remote read",
-			result: &ActionCompletion{
+			result: &actionCompletion{
 				HTTPStatus: http.StatusForbidden,
 				ActionType: ActionDownload,
 				Path:       "blocked.txt",
 				DriveID:    driveID,
 			},
-			want: IssueRemoteReadDenied,
+			want: issueRemoteReadDenied,
 			ok:   true,
 		},
 		{
 			name: "forbidden remote write",
-			result: &ActionCompletion{
+			result: &actionCompletion{
 				HTTPStatus: http.StatusForbidden,
 				ActionType: ActionUpload,
 				Path:       "blocked.txt",
@@ -52,12 +52,12 @@ func TestIssueTypeForHTTPResult_RepresentativeMappings(t *testing.T) {
 			want: IssueRemoteWriteDenied,
 			ok:   true,
 		},
-		{name: "service outage", result: &ActionCompletion{HTTPStatus: http.StatusBadGateway}, want: IssueServiceOutage, ok: true},
-		{name: "request timeout", result: &ActionCompletion{HTTPStatus: http.StatusRequestTimeout}, want: "request_timeout", ok: true},
-		{name: "precondition failed", result: &ActionCompletion{HTTPStatus: http.StatusPreconditionFailed}, want: "transient_conflict", ok: true},
-		{name: "not found", result: &ActionCompletion{HTTPStatus: http.StatusNotFound}, want: "transient_not_found", ok: true},
-		{name: "locked", result: &ActionCompletion{HTTPStatus: http.StatusLocked}, want: "resource_locked", ok: true},
-		{name: "unmapped", result: &ActionCompletion{HTTPStatus: http.StatusTeapot}, want: "", ok: false},
+		{name: "service outage", result: &actionCompletion{HTTPStatus: http.StatusBadGateway}, want: issueServiceOutage, ok: true},
+		{name: "request timeout", result: &actionCompletion{HTTPStatus: http.StatusRequestTimeout}, want: "request_timeout", ok: true},
+		{name: "precondition failed", result: &actionCompletion{HTTPStatus: http.StatusPreconditionFailed}, want: "transient_conflict", ok: true},
+		{name: "not found", result: &actionCompletion{HTTPStatus: http.StatusNotFound}, want: "transient_not_found", ok: true},
+		{name: "locked", result: &actionCompletion{HTTPStatus: http.StatusLocked}, want: "resource_locked", ok: true},
+		{name: "unmapped", result: &actionCompletion{HTTPStatus: http.StatusTeapot}, want: "", ok: false},
 	}
 
 	for _, tc := range testCases {
@@ -78,37 +78,37 @@ func TestIssueTypeForFilesystemResult_RepresentativeMappings(t *testing.T) {
 	driveID := driveid.New("drive-fs")
 	testCases := []struct {
 		name   string
-		result *ActionCompletion
+		result *actionCompletion
 		want   string
 		ok     bool
 	}{
 		{name: "nil", result: nil, want: "", ok: false},
-		{name: "disk full", result: &ActionCompletion{Err: driveops.ErrDiskFull}, want: IssueDiskFull, ok: true},
-		{name: "file too large for space", result: &ActionCompletion{Err: driveops.ErrFileTooLargeForSpace}, want: IssueFileTooLargeForSpace, ok: true},
-		{name: "onedrive limit", result: &ActionCompletion{Err: driveops.ErrFileExceedsOneDriveLimit}, want: IssueFileTooLarge, ok: true},
+		{name: "disk full", result: &actionCompletion{Err: driveops.ErrDiskFull}, want: issueDiskFull, ok: true},
+		{name: "file too large for space", result: &actionCompletion{Err: driveops.ErrFileTooLargeForSpace}, want: issueFileTooLargeForSpace, ok: true},
+		{name: "onedrive limit", result: &actionCompletion{Err: driveops.ErrFileExceedsOneDriveLimit}, want: issueFileTooLarge, ok: true},
 		{
 			name: "local read denied",
-			result: &ActionCompletion{
+			result: &actionCompletion{
 				Err:        os.ErrPermission,
 				ActionType: ActionUpload,
 				Path:       "blocked.txt",
 				DriveID:    driveID,
 			},
-			want: IssueLocalReadDenied,
+			want: issueLocalReadDenied,
 			ok:   true,
 		},
 		{
 			name: "local write denied",
-			result: &ActionCompletion{
+			result: &actionCompletion{
 				Err:        os.ErrPermission,
 				ActionType: ActionDownload,
 				Path:       "blocked.txt",
 				DriveID:    driveID,
 			},
-			want: IssueLocalWriteDenied,
+			want: issueLocalWriteDenied,
 			ok:   true,
 		},
-		{name: "unmapped", result: &ActionCompletion{Err: errors.New("no mapping")}, want: "", ok: false},
+		{name: "unmapped", result: &actionCompletion{Err: errors.New("no mapping")}, want: "", ok: false},
 	}
 
 	for _, tc := range testCases {
@@ -126,8 +126,8 @@ func assertClassifyResultCases(
 	t *testing.T,
 	testCases []struct {
 		name string
-		in   *ActionCompletion
-		want ResultDecision
+		in   *actionCompletion
+		want resultDecision
 	},
 ) {
 	t.Helper()
@@ -149,13 +149,13 @@ func TestClassifyResult_SuccessAndShutdown(t *testing.T) {
 
 	assertClassifyResultCases(t, []struct {
 		name string
-		in   *ActionCompletion
-		want ResultDecision
+		in   *actionCompletion
+		want resultDecision
 	}{
 		{
 			name: "success",
-			in:   &ActionCompletion{Success: true},
-			want: ResultDecision{
+			in:   &actionCompletion{Success: true},
+			want: resultDecision{
 				Class:         resultSuccess,
 				ConditionKey:  "",
 				Persistence:   persistNone,
@@ -165,8 +165,8 @@ func TestClassifyResult_SuccessAndShutdown(t *testing.T) {
 		},
 		{
 			name: "shutdown",
-			in:   &ActionCompletion{Err: context.Canceled},
-			want: ResultDecision{
+			in:   &actionCompletion{Err: context.Canceled},
+			want: resultDecision{
 				Class:        resultShutdown,
 				ConditionKey: "",
 				TrialHint:    trialHintShutdown,
@@ -183,13 +183,13 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 
 	assertClassifyResultCases(t, []struct {
 		name string
-		in   *ActionCompletion
-		want ResultDecision
+		in   *actionCompletion
+		want resultDecision
 	}{
 		{
 			name: "unauthorized",
-			in:   &ActionCompletion{HTTPStatus: http.StatusUnauthorized},
-			want: ResultDecision{
+			in:   &actionCompletion{HTTPStatus: http.StatusUnauthorized},
+			want: resultDecision{
 				Class:         resultFatal,
 				ConditionKey:  ConditionAuthenticationRequired,
 				Persistence:   persistNone,
@@ -199,29 +199,29 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 		},
 		{
 			name: "forbidden download",
-			in: &ActionCompletion{
+			in: &actionCompletion{
 				HTTPStatus: http.StatusForbidden,
 				ActionType: ActionDownload,
 				Path:       "blocked.txt",
 				DriveID:    driveID,
 			},
-			want: ResultDecision{
+			want: resultDecision{
 				Class:         resultSkip,
 				ConditionKey:  ConditionRemoteReadDenied,
 				Persistence:   persistRetryWork,
 				TrialHint:     trialHintReclassify,
-				ConditionType: IssueRemoteReadDenied,
+				ConditionType: issueRemoteReadDenied,
 			},
 		},
 		{
 			name: "target throttle",
-			in: &ActionCompletion{
+			in: &actionCompletion{
 				HTTPStatus: http.StatusTooManyRequests,
 				ActionType: ActionUpload,
 				Path:       "retry.txt",
 				DriveID:    driveID,
 			},
-			want: ResultDecision{
+			want: resultDecision{
 				Class:             resultBlockScope,
 				ConditionKey:      ConditionRateLimited,
 				ScopeKey:          SKThrottleDrive(driveID),
@@ -229,18 +229,18 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 				Persistence:       persistRetryWork,
 				RunScopeDetection: true,
 				TrialHint:         trialHintExtendOnMatchingScope,
-				ConditionType:     IssueRateLimited,
+				ConditionType:     issueRateLimited,
 			},
 		},
 		{
 			name: "quota exceeded",
-			in: &ActionCompletion{
+			in: &actionCompletion{
 				HTTPStatus: http.StatusInsufficientStorage,
 				ActionType: ActionUpload,
 				Path:       "quota.txt",
 				DriveID:    driveID,
 			},
-			want: ResultDecision{
+			want: resultDecision{
 				Class:             resultBlockScope,
 				ConditionKey:      ConditionQuotaExceeded,
 				ScopeKey:          SKQuotaOwn(),
@@ -253,20 +253,20 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 		},
 		{
 			name: "service outage",
-			in: &ActionCompletion{
+			in: &actionCompletion{
 				HTTPStatus: http.StatusBadGateway,
 				ActionType: ActionUpload,
 				Path:       "service.txt",
 				DriveID:    driveID,
 			},
-			want: ResultDecision{
+			want: resultDecision{
 				Class:             resultRequeue,
 				ConditionKey:      ConditionServiceOutage,
 				ScopeEvidence:     SKService(),
 				Persistence:       persistRetryWork,
 				RunScopeDetection: true,
 				TrialHint:         trialHintExtendOnMatchingScope,
-				ConditionType:     IssueServiceOutage,
+				ConditionType:     issueServiceOutage,
 			},
 		},
 	})
@@ -280,13 +280,13 @@ func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 
 	assertClassifyResultCases(t, []struct {
 		name string
-		in   *ActionCompletion
-		want ResultDecision
+		in   *actionCompletion
+		want resultDecision
 	}{
 		{
 			name: "precondition changed",
-			in:   &ActionCompletion{Err: ErrActionPreconditionChanged},
-			want: ResultDecision{
+			in:   &actionCompletion{Err: errActionPreconditionChanged},
+			want: resultDecision{
 				Class:        resultSuperseded,
 				ConditionKey: "",
 				Persistence:  persistNone,
@@ -295,31 +295,31 @@ func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 		},
 		{
 			name: "disk full",
-			in:   &ActionCompletion{Err: driveops.ErrDiskFull},
-			want: ResultDecision{
+			in:   &actionCompletion{Err: driveops.ErrDiskFull},
+			want: resultDecision{
 				Class:         resultBlockScope,
 				ConditionKey:  ConditionDiskFull,
 				ScopeKey:      SKDiskLocal(),
 				ScopeEvidence: SKDiskLocal(),
 				Persistence:   persistRetryWork,
 				TrialHint:     trialHintExtendOnMatchingScope,
-				ConditionType: IssueDiskFull,
+				ConditionType: issueDiskFull,
 			},
 		},
 		{
 			name: "permission denied upload",
-			in: &ActionCompletion{
+			in: &actionCompletion{
 				Err:        os.ErrPermission,
 				ActionType: ActionUpload,
 				Path:       "local.txt",
 				DriveID:    driveID,
 			},
-			want: ResultDecision{
+			want: resultDecision{
 				Class:         resultSkip,
 				ConditionKey:  ConditionLocalReadDenied,
 				Persistence:   persistRetryWork,
 				TrialHint:     trialHintReclassify,
-				ConditionType: IssueLocalReadDenied,
+				ConditionType: issueLocalReadDenied,
 			},
 		},
 	})
@@ -329,13 +329,13 @@ func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 func TestRuntimeConditionKey_RepresentativeMappings(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, ConditionInvalidFilename, ConditionKeyForRuntimeResult(resultSkip, IssueInvalidFilename))
-	assert.Equal(t, ConditionRateLimited, ConditionKeyForRuntimeResult(resultBlockScope, IssueRateLimited))
-	assert.Equal(t, ConditionRemoteWriteDenied, ConditionKeyForRuntimeResult(resultSkip, IssueRemoteWriteDenied))
-	assert.Equal(t, ConditionUnexpectedCondition, ConditionKeyForRuntimeResult(errclass.ClassFatal, "mystery"))
-	assert.Equal(t, ConditionUnexpectedCondition, ConditionKeyForRuntimeResult(errclass.ClassActionable, ""))
-	assert.Equal(t, ConditionKey(""), ConditionKeyForRuntimeResult(errclass.ClassSuccess, ""))
-	assert.Equal(t, ConditionKey(""), ConditionKeyForRuntimeResult(errclass.ClassSuperseded, ""))
+	assert.Equal(t, ConditionInvalidFilename, conditionKeyForRuntimeResult(resultSkip, IssueInvalidFilename))
+	assert.Equal(t, ConditionRateLimited, conditionKeyForRuntimeResult(resultBlockScope, issueRateLimited))
+	assert.Equal(t, ConditionRemoteWriteDenied, conditionKeyForRuntimeResult(resultSkip, IssueRemoteWriteDenied))
+	assert.Equal(t, ConditionUnexpectedCondition, conditionKeyForRuntimeResult(errclass.ClassFatal, "mystery"))
+	assert.Equal(t, ConditionUnexpectedCondition, conditionKeyForRuntimeResult(errclass.ClassActionable, ""))
+	assert.Equal(t, ConditionKey(""), conditionKeyForRuntimeResult(errclass.ClassSuccess, ""))
+	assert.Equal(t, ConditionKey(""), conditionKeyForRuntimeResult(errclass.ClassSuperseded, ""))
 }
 
 // Validates: R-2.10.4
@@ -343,59 +343,59 @@ func TestPermissionCapabilityFallbacks(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New("drive-cap")
-	assert.Equal(t, PermissionCapabilityUnknown, effectiveRemotePermissionCapability(nil))
-	assert.Equal(t, PermissionCapabilityUnknown, effectiveLocalPermissionCapability(nil))
+	assert.Equal(t, permissionCapabilityUnknown, effectiveRemotePermissionCapability(nil))
+	assert.Equal(t, permissionCapabilityUnknown, effectiveLocalPermissionCapability(nil))
 
 	require.Equal(t,
-		PermissionCapabilityRemoteRead,
-		effectiveRemotePermissionCapability(&ActionCompletion{
+		permissionCapabilityRemoteRead,
+		effectiveRemotePermissionCapability(&actionCompletion{
 			ActionType: ActionDownload,
 			Path:       "download.txt",
 			DriveID:    driveID,
 		}),
 	)
 	require.Equal(t,
-		PermissionCapabilityRemoteWrite,
-		effectiveRemotePermissionCapability(&ActionCompletion{
+		permissionCapabilityRemoteWrite,
+		effectiveRemotePermissionCapability(&actionCompletion{
 			ActionType: ActionUpload,
 			Path:       "upload.txt",
 			DriveID:    driveID,
 		}),
 	)
 	require.Equal(t,
-		PermissionCapabilityLocalRead,
-		effectiveLocalPermissionCapability(&ActionCompletion{
+		permissionCapabilityLocalRead,
+		effectiveLocalPermissionCapability(&actionCompletion{
 			ActionType: ActionUpload,
 			Path:       "upload.txt",
 			DriveID:    driveID,
 		}),
 	)
 	require.Equal(t,
-		PermissionCapabilityLocalWrite,
-		effectiveLocalPermissionCapability(&ActionCompletion{
+		permissionCapabilityLocalWrite,
+		effectiveLocalPermissionCapability(&actionCompletion{
 			ActionType: ActionDownload,
 			Path:       "download.txt",
 			DriveID:    driveID,
 		}),
 	)
 
-	assert.Equal(t, IssueRemoteWriteDenied, issueTypeForForbiddenResult(&ActionCompletion{
-		FailureCapability: PermissionCapabilityRemoteWrite,
+	assert.Equal(t, IssueRemoteWriteDenied, issueTypeForForbiddenResult(&actionCompletion{
+		FailureCapability: permissionCapabilityRemoteWrite,
 	}))
-	assert.Equal(t, IssueLocalWriteDenied, issueTypeForLocalPermissionResult(&ActionCompletion{
-		FailureCapability: PermissionCapabilityUnknown,
+	assert.Equal(t, issueLocalWriteDenied, issueTypeForLocalPermissionResult(&actionCompletion{
+		FailureCapability: permissionCapabilityUnknown,
 		ActionType:        ActionDownload,
 		Path:              "download.txt",
 		DriveID:           driveID,
 	}))
-	assert.Equal(t, SKThrottleDrive(driveID), deriveScopeKey(&ActionCompletion{
+	assert.Equal(t, SKThrottleDrive(driveID), deriveScopeKey(&actionCompletion{
 		HTTPStatus: http.StatusTooManyRequests,
 		DriveID:    driveID,
 	}))
-	assert.Equal(t, SKService(), deriveScopeKey(&ActionCompletion{
+	assert.Equal(t, SKService(), deriveScopeKey(&actionCompletion{
 		HTTPStatus: http.StatusServiceUnavailable,
 	}))
-	assert.Equal(t, ScopeKey{}, deriveScopeKey(&ActionCompletion{HTTPStatus: http.StatusForbidden}))
-	assert.Equal(t, "drive:"+driveID.String(), (&ActionCompletion{DriveID: driveID}).ThrottleTargetKey())
-	assert.Empty(t, (&ActionCompletion{}).ThrottleTargetKey())
+	assert.Equal(t, ScopeKey{}, deriveScopeKey(&actionCompletion{HTTPStatus: http.StatusForbidden}))
+	assert.Equal(t, "drive:"+driveID.String(), (&actionCompletion{DriveID: driveID}).ThrottleTargetKey())
+	assert.Empty(t, (&actionCompletion{}).ThrottleTargetKey())
 }

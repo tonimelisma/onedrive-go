@@ -38,19 +38,19 @@ const (
 	serviceWindowDuration  = 30 * time.Second
 )
 
-// ScopeState maintains sliding windows for scope escalation detection and
+// scopeState maintains sliding windows for scope escalation detection and
 // records successes that reset windows. Thread-safety is provided by the
 // engine-owned result loop — all calls come from applyRuntimeCompletionStage on one
 // goroutine.
-type ScopeState struct {
+type scopeState struct {
 	windows map[ScopeKey]*slidingWindow
 	nowFunc func() time.Time
 	logger  *slog.Logger
 }
 
-// NewScopeState creates a ScopeState with the given clock and logger.
-func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
-	return &ScopeState{
+// newScopeState creates a ScopeState with the given clock and logger.
+func newScopeState(nowFunc func() time.Time, logger *slog.Logger) *scopeState {
+	return &scopeState{
 		windows: make(map[ScopeKey]*slidingWindow),
 		nowFunc: nowFunc,
 		logger:  logger,
@@ -65,45 +65,45 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 //   - 503 with Retry-After → immediate service block (server signal)
 //   - 507 → sliding window quota:own (3 unique paths / 10s)
 //   - 5xx (no Retry-After) → sliding window service (5 unique paths / 30s)
-func (ss *ScopeState) UpdateScope(r *ActionCompletion) ScopeUpdateResult {
+func (ss *scopeState) UpdateScope(r *actionCompletion) scopeUpdateResult {
 	switch {
 	case r.HTTPStatus == http.StatusTooManyRequests:
 		// Immediate block — server signal, single response triggers (R-2.10.26).
-		scopeKey := ScopeKeyForResult(r.HTTPStatus, r.DriveID)
+		scopeKey := scopeKeyForResult(r.HTTPStatus, r.DriveID)
 		if scopeKey.IsZero() {
-			return ScopeUpdateResult{}
+			return scopeUpdateResult{}
 		}
-		return ScopeUpdateResult{
+		return scopeUpdateResult{
 			Block:         true,
 			ScopeKey:      scopeKey,
-			ConditionType: IssueRateLimited,
+			ConditionType: issueRateLimited,
 			RetryAfter:    r.RetryAfter,
 		}
 
 	case r.HTTPStatus == http.StatusServiceUnavailable && r.RetryAfter > 0:
 		// Immediate block — 503 with Retry-After is a server signal (R-2.10.3).
-		return ScopeUpdateResult{
+		return scopeUpdateResult{
 			Block:         true,
 			ScopeKey:      SKService(),
-			ConditionType: IssueServiceOutage,
+			ConditionType: issueServiceOutage,
 			RetryAfter:    r.RetryAfter,
 		}
 
 	case r.HTTPStatus == http.StatusInsufficientStorage:
 		// Quota failure — a drive-scoped quota block suppresses uploads until the
 		// backing drive has space again.
-		sk := ScopeKeyForResult(r.HTTPStatus, r.DriveID)
+		sk := scopeKeyForResult(r.HTTPStatus, r.DriveID)
 		return ss.checkWindow(sk, r.Path, quotaWindowThreshold, quotaWindowDuration, IssueQuotaExceeded)
 
 	case r.HTTPStatus >= http.StatusInternalServerError:
 		// Service error — feed into service sliding window (R-2.10.28, R-2.10.29).
-		sk := ScopeKeyForResult(r.HTTPStatus, r.DriveID)
+		sk := scopeKeyForResult(r.HTTPStatus, r.DriveID)
 		return ss.checkWindow(sk, r.Path,
 			serviceWindowThreshold, serviceWindowDuration,
-			IssueServiceOutage)
+			issueServiceOutage)
 
 	default:
-		return ScopeUpdateResult{}
+		return scopeUpdateResult{}
 	}
 }
 
@@ -116,17 +116,17 @@ func (ss *ScopeState) UpdateScope(r *ActionCompletion) ScopeUpdateResult {
 // owned by the trial admission path via ScopeAdmissionDecision.ClearScopeKey,
 // which knows which specific blocked scope a trial was admitted against. Doing
 // it in both places would give two owners for one transition.
-func (ss *ScopeState) RecordSuccess() {
+func (ss *scopeState) RecordSuccess() {
 	delete(ss.windows, SKQuotaOwn())
 	delete(ss.windows, SKService())
 }
 
 // checkWindow adds a failure to the named sliding window and returns a
 // ScopeUpdateResult indicating whether the threshold was crossed.
-func (ss *ScopeState) checkWindow(
+func (ss *scopeState) checkWindow(
 	sk ScopeKey, path string, threshold int, window time.Duration,
 	conditionType string,
-) ScopeUpdateResult {
+) scopeUpdateResult {
 	now := ss.nowFunc()
 
 	w, ok := ss.windows[sk]
@@ -146,14 +146,14 @@ func (ss *ScopeState) checkWindow(
 		)
 		// Reset window after triggering to avoid re-triggering on next failure.
 		delete(ss.windows, sk)
-		return ScopeUpdateResult{
+		return scopeUpdateResult{
 			Block:         true,
 			ScopeKey:      sk,
 			ConditionType: conditionType,
 		}
 	}
 
-	return ScopeUpdateResult{}
+	return scopeUpdateResult{}
 }
 
 // slidingWindow tracks unique failed paths within a time window for

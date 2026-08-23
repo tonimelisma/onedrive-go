@@ -87,10 +87,10 @@ func resolvedObservedDirPath(fsPath string) (string, error) {
 }
 
 func shouldSkipObservedSymlink(isSymlink bool, filter ContentFilterConfig) bool {
-	return isSymlink && !NewContentFilter(filter).ShouldFollowSymlinks()
+	return isSymlink && !newContentFilter(filter).ShouldFollowSymlinks()
 }
 
-func (o *LocalObserver) rememberExcludedSymlink(path string) {
+func (o *localObserver) rememberExcludedSymlink(path string) {
 	if path == "" || path == "." {
 		return
 	}
@@ -102,7 +102,7 @@ func (o *LocalObserver) rememberExcludedSymlink(path string) {
 	o.excludedSymlinkPaths[path] = struct{}{}
 }
 
-func (o *LocalObserver) forgetExcludedSymlink(path string) {
+func (o *localObserver) forgetExcludedSymlink(path string) {
 	if o.excludedSymlinkPaths == nil {
 		return
 	}
@@ -110,7 +110,7 @@ func (o *LocalObserver) forgetExcludedSymlink(path string) {
 	delete(o.excludedSymlinkPaths, path)
 }
 
-func (o *LocalObserver) hasExcludedSymlinkAncestor(path string) bool {
+func (o *localObserver) hasExcludedSymlinkAncestor(path string) bool {
 	if o.excludedSymlinkPaths == nil {
 		return false
 	}
@@ -131,7 +131,7 @@ func (o *LocalObserver) hasExcludedSymlinkAncestor(path string) bool {
 	return false
 }
 
-func (o *LocalObserver) nextObservedDirStack(
+func (o *localObserver) nextObservedDirStack(
 	dirStack map[string]struct{},
 	fsPath string,
 	dbRelPath string,
@@ -155,15 +155,15 @@ func (o *LocalObserver) nextObservedDirStack(
 	return nextStack, false, nil
 }
 
-func (o *LocalObserver) walkFollowedDirectory(
+func (o *localObserver) walkFollowedDirectory(
 	ctx context.Context,
 	fsPath string,
 	dbRelPath string,
 	observed map[string]bool,
-	currentRows map[string]LocalStateRow,
-	events *[]ChangeEvent,
+	currentRows map[string]localStateRow,
+	events *[]changeEvent,
 	jobs *[]hashJob,
-	skipped *[]SkippedItem,
+	skipped *[]skippedItem,
 	scanStartNano int64,
 	dirStack map[string]struct{},
 ) error {
@@ -199,15 +199,15 @@ func (o *LocalObserver) walkFollowedDirectory(
 	)
 }
 
-func (o *LocalObserver) walkObservedDirectory(
+func (o *localObserver) walkObservedDirectory(
 	ctx context.Context,
 	fsPath string,
 	dbRelPath string,
 	observed map[string]bool,
-	currentRows map[string]LocalStateRow,
-	events *[]ChangeEvent,
+	currentRows map[string]localStateRow,
+	events *[]changeEvent,
 	jobs *[]hashJob,
-	skipped *[]SkippedItem,
+	skipped *[]skippedItem,
 	scanStartNano int64,
 	dirStack map[string]struct{},
 ) error {
@@ -239,15 +239,15 @@ func (o *LocalObserver) walkObservedDirectory(
 	)
 }
 
-func (o *LocalObserver) walkObservedEntries(
+func (o *localObserver) walkObservedEntries(
 	ctx context.Context,
 	fsPath string,
 	dbRelPath string,
 	observed map[string]bool,
-	currentRows map[string]LocalStateRow,
-	events *[]ChangeEvent,
+	currentRows map[string]localStateRow,
+	events *[]changeEvent,
 	jobs *[]hashJob,
-	skipped *[]SkippedItem,
+	skipped *[]skippedItem,
 	scanStartNano int64,
 	dirStack map[string]struct{},
 	stage string,
@@ -286,16 +286,16 @@ func (o *LocalObserver) walkObservedEntries(
 	return nil
 }
 
-func (o *LocalObserver) walkObservedEntry(
+func (o *localObserver) walkObservedEntry(
 	ctx context.Context,
 	parentFsPath string,
 	parentRelPath string,
 	entry os.DirEntry,
 	observed map[string]bool,
-	currentRows map[string]LocalStateRow,
-	events *[]ChangeEvent,
+	currentRows map[string]localStateRow,
+	events *[]changeEvent,
 	jobs *[]hashJob,
-	skipped *[]SkippedItem,
+	skipped *[]skippedItem,
 	scanStartNano int64,
 	dirStack map[string]struct{},
 	stage string,
@@ -305,7 +305,7 @@ func (o *LocalObserver) walkObservedEntry(
 	entryFsPath := filepath.Join(parentFsPath, entry.Name())
 
 	if entry.Type()&fs.ModeSymlink != 0 {
-		if !NewContentFilter(o.filterConfig).ShouldFollowSymlinks() {
+		if !newContentFilter(o.filterConfig).ShouldFollowSymlinks() {
 			o.Logger.Debug("skipping symlink",
 				slog.String("path", entryRelPath))
 			return nil
@@ -401,9 +401,9 @@ func (s *watchAddSession) record(path string) {
 	s.added = append(s.added, path)
 }
 
-func (o *LocalObserver) addObservedDirWatches(
+func (o *localObserver) addObservedDirWatches(
 	ctx context.Context,
-	watcher FsWatcher,
+	watcher fsWatcher,
 	fsPath string,
 	dbRelPath string,
 	counts *watchSetupCounts,
@@ -466,8 +466,8 @@ func (o *LocalObserver) addObservedDirWatches(
 	return o.addObservedDirChildrenWatches(ctx, watcher, fsPath, dbRelPath, counts, nextStack, session)
 }
 
-func (o *LocalObserver) addObservedWatch(
-	watcher FsWatcher,
+func (o *localObserver) addObservedWatch(
+	watcher fsWatcher,
 	fsPath string,
 	counts *watchSetupCounts,
 	session *watchAddSession,
@@ -488,13 +488,13 @@ func (o *LocalObserver) addObservedWatch(
 		return nil
 	}
 
-	if IsWatchLimitError(addErr) {
+	if isWatchLimitError(addErr) {
 		o.Logger.Error("inotify watch limit exhausted",
 			slog.String("path", fsPath),
 			slog.Int("watches_added", counts.watched),
 		)
 
-		return ErrWatchLimitExhausted
+		return errWatchLimitExhausted
 	}
 
 	counts.failed++
@@ -504,9 +504,9 @@ func (o *LocalObserver) addObservedWatch(
 	return nil
 }
 
-func (o *LocalObserver) addObservedDirChildrenWatches(
+func (o *localObserver) addObservedDirChildrenWatches(
 	ctx context.Context,
-	watcher FsWatcher,
+	watcher fsWatcher,
 	fsPath string,
 	dbRelPath string,
 	counts *watchSetupCounts,
@@ -534,9 +534,9 @@ func (o *LocalObserver) addObservedDirChildrenWatches(
 	return nil
 }
 
-func (o *LocalObserver) addObservedChildWatch(
+func (o *localObserver) addObservedChildWatch(
 	ctx context.Context,
-	watcher FsWatcher,
+	watcher fsWatcher,
 	parentFsPath string,
 	parentRelPath string,
 	entry os.DirEntry,
@@ -549,7 +549,7 @@ func (o *LocalObserver) addObservedChildWatch(
 	childRelPath := joinObservedPath(parentRelPath, childName)
 
 	if entry.Type()&fs.ModeSymlink != 0 {
-		if !NewContentFilter(o.filterConfig).ShouldFollowSymlinks() {
+		if !newContentFilter(o.filterConfig).ShouldFollowSymlinks() {
 			o.rememberExcludedSymlink(childRelPath)
 			return nil
 		}
@@ -570,16 +570,16 @@ func (o *LocalObserver) addObservedChildWatch(
 	return o.addObservedDirWatches(ctx, watcher, childFsPath, childRelPath, counts, dirStack, session)
 }
 
-func (o *LocalObserver) processSymlinkPath(
+func (o *localObserver) processSymlinkPath(
 	ctx context.Context,
 	fsPath string,
 	dbRelPath string,
 	name string,
 	observed map[string]bool,
-	currentRows map[string]LocalStateRow,
-	events *[]ChangeEvent,
+	currentRows map[string]localStateRow,
+	events *[]changeEvent,
 	jobs *[]hashJob,
-	skipped *[]SkippedItem,
+	skipped *[]skippedItem,
 	scanStartNano int64,
 	dirStack map[string]struct{},
 ) error {

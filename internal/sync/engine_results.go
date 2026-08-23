@@ -93,7 +93,7 @@ func (rt *watchRuntime) retryTimerChan() <-chan struct{} {
 // recordError increments the failed counter, preserves the raw error for the
 // final SyncReport, and records the classified transient-failure shape needed
 // for end-of-pass WARN aggregation.
-func (f *engineFlow) recordError(decision *ResultDecision, r *ActionCompletion) {
+func (f *engineFlow) recordError(decision *resultDecision, r *actionCompletion) {
 	f.failed++
 	if r == nil {
 		return

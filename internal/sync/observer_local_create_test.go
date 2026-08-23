@@ -21,13 +21,13 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 	writeTestFile(t, dir, "new-file.txt", "hello watch")
 
-	var ev ChangeEvent
+	var ev changeEvent
 	select {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
@@ -38,7 +38,7 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 	cancel()
 	<-done
 
-	assert.Equal(t, ChangeCreate, ev.Type)
+	assert.Equal(t, changeCreate, ev.Type)
 	assert.Equal(t, "new-file.txt", ev.Path)
 	assert.Equal(t, SourceLocal, ev.Source)
 }
@@ -48,9 +48,9 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan ChangeEvent, 20)
+	events := make(chan changeEvent, 20)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create a subdirectory and a file inside it.
@@ -93,9 +93,9 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan ChangeEvent, 30)
+	events := make(chan changeEvent, 30)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create a directory with a file already inside it using os.MkdirAll +
@@ -117,7 +117,7 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	for !foundPreExisting {
 		select {
 		case ev := <-events:
-			if ev.Path == "pre-populated/already-here.txt" && ev.Type == ChangeCreate {
+			if ev.Path == "pre-populated/already-here.txt" && ev.Type == changeCreate {
 				foundPreExisting = true
 			}
 		case <-timeout:
@@ -142,9 +142,9 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan ChangeEvent, 50)
+	events := make(chan changeEvent, 50)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create a 3-level nested directory structure with a file at the bottom.
@@ -169,7 +169,7 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	for !foundFile || len(foundDirs) < len(wantDirs) {
 		select {
 		case ev := <-events:
-			if ev.Type == ChangeCreate {
+			if ev.Type == changeCreate {
 				if ev.ItemType == ItemTypeFolder && wantDirs[ev.Path] {
 					foundDirs[ev.Path] = true
 				}
@@ -196,14 +196,14 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	}
 }
 
-func waitForLocalCreateEvent(t *testing.T, events <-chan ChangeEvent, wantPath string) {
+func waitForLocalCreateEvent(t *testing.T, events <-chan changeEvent, wantPath string) {
 	t.Helper()
 
 	timeout := time.After(5 * time.Second)
 	for {
 		select {
 		case ev := <-events:
-			if ev.Path == wantPath && ev.Type == ChangeCreate {
+			if ev.Path == wantPath && ev.Type == changeCreate {
 				return
 			}
 		case <-timeout:
@@ -227,9 +227,9 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Create an unreadable file after the watch loop is live.
@@ -244,7 +244,7 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 		assert.NoError(t, os.Chmod(path, 0o600))
 	})
 
-	var ev ChangeEvent
+	var ev changeEvent
 
 	select {
 	case ev = <-events:
@@ -256,7 +256,7 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 	cancel()
 	<-done
 
-	require.Equal(t, ChangeCreate, ev.Type)
+	require.Equal(t, changeCreate, ev.Type)
 	require.Equal(t, "unreadable.txt", ev.Path)
 	require.Equal(t, SourceLocal, ev.Source)
 	require.Empty(t, ev.Hash, "hash should be empty when computation fails")

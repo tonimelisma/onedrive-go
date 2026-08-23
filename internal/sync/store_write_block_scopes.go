@@ -22,7 +22,7 @@ func validateBlockScope(block *BlockScope) error {
 	if block.Key.IsZero() {
 		return fmt.Errorf("sync: upserting block scope: missing scope key")
 	}
-	if DescribeScopeKey(block.Key).IsZero() {
+	if describeScopeKey(block.Key).IsZero() {
 		return fmt.Errorf("sync: upserting block scope %s: unknown scope key", block.Key.String())
 	}
 	if !block.Key.PersistsInBlockScopes() {

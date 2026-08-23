@@ -374,7 +374,7 @@ func scanRetryWorkRow(scanner retryWorkScanner, row *RetryWorkRow) error {
 		return fmt.Errorf("sync: scanning retry_work row: %w", err)
 	}
 
-	row.ScopeKey = ParseScopeKey(scopeKey)
+	row.ScopeKey = parseScopeKey(scopeKey)
 	return nil
 }
 

@@ -19,7 +19,7 @@ const maxHashRetries = 2
 
 // ExecuteDownload downloads a remote file via TransferManager with .partial
 // safety, hash verification with retry, and atomic rename.
-func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOutcome {
+func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOutcome {
 	// Checked before Abs: the absolute path below leaves the rooted boundary
 	// and is executed by driveops through the deliberately uncontained
 	// localpath helpers, so this is the only layer that can refuse it.
@@ -29,7 +29,7 @@ func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOu
 			ActionDownload,
 			err,
 			action.Path,
-			PermissionCapabilityLocalWrite,
+			permissionCapabilityLocalWrite,
 		)
 	}
 
@@ -40,7 +40,7 @@ func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOu
 			ActionDownload,
 			normalizeSyncTreePathError(err),
 			action.Path,
-			PermissionCapabilityUnknown,
+			permissionCapabilityUnknown,
 		)
 	}
 
@@ -53,7 +53,7 @@ func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOu
 			ActionDownload,
 			sourcePreconditionErr,
 			action.Path,
-			PermissionCapabilityRemoteRead,
+			permissionCapabilityRemoteRead,
 		)
 	}
 	targetPreconditionErr := e.validateDownloadTargetPrecondition(action)
@@ -63,7 +63,7 @@ func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOu
 			ActionDownload,
 			targetPreconditionErr,
 			action.Path,
-			PermissionCapabilityLocalWrite,
+			permissionCapabilityLocalWrite,
 		)
 	}
 
@@ -96,10 +96,10 @@ func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOu
 }
 
 // downloadOutcome builds a successful ActionOutcome after download.
-func (e *Executor) downloadOutcome(
+func (e *executor) downloadOutcome(
 	action *Action, driveID driveid.ID, localHash, remoteHash string, size int64,
-) ActionOutcome {
-	o := ActionOutcome{
+) actionOutcome {
+	o := actionOutcome{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            action.Path,
@@ -134,7 +134,7 @@ func (e *Executor) downloadOutcome(
 // A pre-upload freshness check prevents silently overwriting concurrent remote
 // changes. When current remote truth no longer matches the planned overwrite,
 // the upload is aborted as superseded so the engine replans from fresh truth.
-func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutcome {
+func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutcome {
 	driveID := e.resolveDriveID(action)
 
 	// Always validate the baseline eTag before overwriting a known remote item.
@@ -146,7 +146,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 			ActionUpload,
 			freshnessErr,
 			action.Path,
-			PermissionCapabilityRemoteRead,
+			permissionCapabilityRemoteRead,
 		)
 	}
 	if sourceErr := e.validateUploadSourcePrecondition(action); sourceErr != nil {
@@ -155,7 +155,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 			ActionUpload,
 			sourceErr,
 			action.Path,
-			PermissionCapabilityLocalRead,
+			permissionCapabilityLocalRead,
 		)
 	}
 
@@ -166,7 +166,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 			ActionUpload,
 			normalizeSyncTreePathError(err),
 			action.Path,
-			PermissionCapabilityUnknown,
+			permissionCapabilityUnknown,
 		)
 	}
 
@@ -190,7 +190,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 	} else {
 		parentID, err = e.ResolveParentID(action.Path)
 		if err != nil {
-			return e.failedOutcomeWithFailure(action, ActionUpload, err, action.Path, PermissionCapabilityUnknown)
+			return e.failedOutcomeWithFailure(action, ActionUpload, err, action.Path, permissionCapabilityUnknown)
 		}
 		waitErr := e.waitRemoteParentVisible(ctx, action)
 		parentPreconditionErr := e.validateRemoteParentPrecondition(ctx, driveID, parentID, action, "upload create")
@@ -200,11 +200,11 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 				ActionUpload,
 				parentPreconditionErr,
 				action.Path,
-				PermissionCapabilityRemoteRead,
+				permissionCapabilityRemoteRead,
 			)
 		}
 		if waitErr != nil {
-			return e.failedOutcomeWithFailure(action, ActionUpload, waitErr, action.Path, PermissionCapabilityUnknown)
+			return e.failedOutcomeWithFailure(action, ActionUpload, waitErr, action.Path, permissionCapabilityUnknown)
 		}
 
 		name := filepath.Base(action.Path)
@@ -226,35 +226,35 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 	return outcome
 }
 
-func downloadTransferFailureCapability(err error) PermissionCapability {
-	if errors.Is(err, ErrActionPreconditionChanged) {
-		return PermissionCapabilityLocalWrite
+func downloadTransferFailureCapability(err error) permissionCapability {
+	if errors.Is(err, errActionPreconditionChanged) {
+		return permissionCapabilityLocalWrite
 	}
 
-	return inferFailureCapabilityFromError(err, PermissionCapabilityLocalWrite, PermissionCapabilityRemoteRead)
+	return inferFailureCapabilityFromError(err, permissionCapabilityLocalWrite, permissionCapabilityRemoteRead)
 }
 
-func uploadTransferFailureCapability(err error) PermissionCapability {
-	if errors.Is(err, ErrActionPreconditionChanged) {
-		return PermissionCapabilityLocalRead
+func uploadTransferFailureCapability(err error) permissionCapability {
+	if errors.Is(err, errActionPreconditionChanged) {
+		return permissionCapabilityLocalRead
 	}
 
-	return inferFailureCapabilityFromError(err, PermissionCapabilityLocalRead, PermissionCapabilityRemoteWrite)
+	return inferFailureCapabilityFromError(err, permissionCapabilityLocalRead, permissionCapabilityRemoteWrite)
 }
 
-func (e *Executor) uploadOutcome(
+func (e *executor) uploadOutcome(
 	action *Action,
 	driveID driveid.ID,
 	parentID string,
 	result *driveops.UploadResult,
-) ActionOutcome {
+) actionOutcome {
 	remoteHash := driveops.SelectHash(result.Item)
 	remoteMtime := int64(0)
 	if !result.Item.ModifiedAt.IsZero() {
 		remoteMtime = result.Item.ModifiedAt.UnixNano()
 	}
 
-	outcome := ActionOutcome{
+	outcome := actionOutcome{
 		Action:          ActionUpload,
 		Success:         true,
 		Path:            action.Path,
@@ -281,7 +281,7 @@ func (e *Executor) uploadOutcome(
 	return outcome
 }
 
-func (e *Executor) uploadOpts(action *Action) driveops.UploadOpts {
+func (e *executor) uploadOpts(action *Action) driveops.UploadOpts {
 	return driveops.UploadOpts{
 		ExpectedHash: expectedUploadHash(action),
 		HashMismatchError: func(_ string, expectedHash, actualHash string) error {
@@ -298,7 +298,7 @@ func (e *Executor) uploadOpts(action *Action) driveops.UploadOpts {
 	}
 }
 
-func (e *Executor) validateRemoteUploadPrecondition(ctx context.Context, driveID driveid.ID, action *Action) error {
+func (e *executor) validateRemoteUploadPrecondition(ctx context.Context, driveID driveid.ID, action *Action) error {
 	if !shouldOverwriteKnownRemoteItem(action) {
 		return nil
 	}

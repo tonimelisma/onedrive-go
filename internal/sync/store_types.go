@@ -1,8 +1,6 @@
 package sync
 
 import (
-	"time"
-
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
@@ -44,9 +42,9 @@ type RetryWorkFailure struct {
 	ScopeKey ScopeKey
 }
 
-// ObservedItem represents a single item from a delta API response, ready
+// observedItem represents a single item from a delta API response, ready
 // for CommitObservation to process against existing remote_state.
-type ObservedItem struct {
+type observedItem struct {
 	DriveID   driveid.ID
 	ItemID    string
 	Path      string
@@ -58,8 +56,8 @@ type ObservedItem struct {
 	IsDeleted bool
 }
 
-// RemoteStateRow represents a row from the remote_state table.
-type RemoteStateRow struct {
+// remoteStateRow represents a row from the remote_state table.
+type remoteStateRow struct {
 	DriveID  driveid.ID
 	ItemID   string
 	Path     string
@@ -70,8 +68,8 @@ type RemoteStateRow struct {
 	ETag     string
 }
 
-// LocalStateRow represents a row from the local_state table.
-type LocalStateRow struct {
+// localStateRow represents a row from the local_state table.
+type localStateRow struct {
 	Path             string
 	ItemType         ItemType
 	Hash             string
@@ -86,19 +84,11 @@ type LocalStateRow struct {
 type RetryWorkRow struct {
 	Path         string
 	OldPath      string
-	ActionType   ActionType
+	ActionType   actionType
 	ScopeKey     ScopeKey
 	Blocked      bool
 	AttemptCount int
 	NextRetryAt  int64
-}
-
-// PendingRetryGroup aggregates transient failures by scope_key, with the
-// earliest next_retry_at per group.
-type PendingRetryGroup struct {
-	ScopeKey     ScopeKey
-	Count        int
-	EarliestNext time.Time
 }
 
 // RetryWorkKey identifies semantic work that may be retried across replans.
@@ -107,5 +97,5 @@ type PendingRetryGroup struct {
 type RetryWorkKey struct {
 	Path       string
 	OldPath    string
-	ActionType ActionType
+	ActionType actionType
 }

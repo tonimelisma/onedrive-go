@@ -80,7 +80,7 @@ func (rt *watchRuntime) drainLoopDone(p *watchPipeline) bool {
 func (rt *watchRuntime) handleDrainingCompletion(
 	ctx context.Context,
 	p *watchPipeline,
-	completion *ActionCompletion,
+	completion *actionCompletion,
 	ok bool,
 ) (bool, error) {
 	if !ok {

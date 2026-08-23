@@ -3,7 +3,7 @@ package sync
 // retryWorkKey constructs the exact semantic identity for one retryable unit
 // of work. All retry-state persistence and runtime reconciliation flows must
 // derive identity through this helper family so OldPath-aware work stays exact.
-func retryWorkKey(path string, oldPath string, actionType ActionType) RetryWorkKey {
+func retryWorkKey(path string, oldPath string, actionType actionType) RetryWorkKey {
 	return RetryWorkKey{
 		Path:       path,
 		OldPath:    oldPath,
@@ -19,7 +19,7 @@ func retryWorkKeyForAction(action *Action) RetryWorkKey {
 	return retryWorkKey(action.Path, action.OldPath, action.Type)
 }
 
-func retryWorkKeyForCompletion(completion *ActionCompletion) RetryWorkKey {
+func retryWorkKeyForCompletion(completion *actionCompletion) RetryWorkKey {
 	if completion == nil {
 		return RetryWorkKey{}
 	}

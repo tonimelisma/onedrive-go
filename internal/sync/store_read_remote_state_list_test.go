@@ -17,7 +17,7 @@ func TestSyncStore_ListRemoteStateAndRejectMismatchedDriveLookup(t *testing.T) {
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
+	require.NoError(t, store.CommitObservation(ctx, []observedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "item-b",
@@ -57,7 +57,7 @@ func TestSyncStore_ListRemoteState_PreservesPerRowDriveOwnership(t *testing.T) {
 	contentDriveID := driveid.New("mount-drive")
 	sharedDriveID := driveid.New("shared-drive")
 
-	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
+	require.NoError(t, store.CommitObservation(ctx, []observedItem{
 		{
 			DriveID:  contentDriveID,
 			ItemID:   "item-configured",
@@ -78,7 +78,7 @@ func TestSyncStore_ListRemoteState_PreservesPerRowDriveOwnership(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 
-	byPath := make(map[string]RemoteStateRow, len(rows))
+	byPath := make(map[string]remoteStateRow, len(rows))
 	for i := range rows {
 		byPath[rows[i].Path] = rows[i]
 	}
@@ -96,7 +96,7 @@ func TestSyncStore_GetRemoteStateByPath_RejectsMismatchedDriveWhenStateAlreadyCo
 	contentDriveID := driveid.New("mount-drive")
 	attemptedDriveID := driveid.New("attempted-drive")
 
-	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
 		DriveID:  contentDriveID,
 		ItemID:   "item-a",
 		Path:     "docs/a.txt",
@@ -120,7 +120,7 @@ func TestSyncStore_CommitObservation_UpdatesPerRowDriveOwnershipWithoutOtherMeta
 	contentDriveID := driveid.New("mount-drive")
 	sharedDriveID := driveid.New("shared-drive")
 
-	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
 		ItemID:   "item-shared",
 		Path:     "Shared/shared.txt",
 		ItemType: ItemTypeFile,
@@ -130,7 +130,7 @@ func TestSyncStore_CommitObservation_UpdatesPerRowDriveOwnershipWithoutOtherMeta
 		ETag:     "etag-shared",
 	}}, "delta-1", contentDriveID))
 
-	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
 		DriveID:  sharedDriveID,
 		ItemID:   "item-shared",
 		Path:     "Shared/shared.txt",

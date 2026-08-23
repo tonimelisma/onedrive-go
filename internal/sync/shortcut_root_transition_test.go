@@ -42,21 +42,21 @@ func TestShortcutRootStatusMetadataCoversNonActiveStates(t *testing.T) {
 
 	cases := []struct {
 		state        ShortcutRootState
-		issue        ShortcutRootIssueClass
-		recovery     ShortcutRootRecoveryClass
+		issue        shortcutRootIssueClass
+		recovery     shortcutRootRecoveryClass
 		protectsPath bool
 	}{
-		{ShortcutRootStateTargetUnavailable, ShortcutRootIssueTargetUnavailable, ShortcutRootRecoveryRestoreTargetOrRemoveAlias, true},
-		{ShortcutRootStateLocalRootUnavailable, ShortcutRootIssueLocalRootUnavailable, ShortcutRootRecoveryRestoreLocalRootOrDiscard, true},
-		{ShortcutRootStateBlockedPath, ShortcutRootIssueBlockedPath, ShortcutRootRecoveryClearBlockedPath, true},
-		{ShortcutRootStateRenameAmbiguous, ShortcutRootIssueRenameAmbiguous, ShortcutRootRecoveryDisambiguateAliasRename, true},
-		{ShortcutRootStateAliasMutationBlocked, ShortcutRootIssueAliasMutationBlocked, ShortcutRootRecoveryFixAliasMutation, true},
-		{ShortcutRootStateRemovedFinalDrain, ShortcutRootIssueRemovedFinalDrain, ShortcutRootRecoveryRestoreTargetOrDiscard, true},
-		{ShortcutRootStateRemovedReleasePending, ShortcutRootIssueRemovedReleasePending, ShortcutRootRecoveryWaitForRetry, true},
-		{ShortcutRootStateRemovedCleanupBlocked, ShortcutRootIssueRemovedCleanupBlocked, ShortcutRootRecoveryClearBlockedPath, true},
-		{ShortcutRootStateRemovedChildCleanupPending, ShortcutRootIssueRemovedChildCleanupPending, ShortcutRootRecoveryWaitForRetry, false},
-		{ShortcutRootStateSamePathReplacementWaiting, ShortcutRootIssueSamePathReplacementWaiting, ShortcutRootRecoveryWaitForRetry, true},
-		{ShortcutRootStateDuplicateTarget, ShortcutRootIssueDuplicateTarget, ShortcutRootRecoveryRemoveDuplicateAlias, true},
+		{ShortcutRootStateTargetUnavailable, shortcutRootIssueTargetUnavailable, shortcutRootRecoveryRestoreTargetOrRemoveAlias, true},
+		{ShortcutRootStateLocalRootUnavailable, shortcutRootIssueLocalRootUnavailable, shortcutRootRecoveryRestoreLocalRootOrDiscard, true},
+		{ShortcutRootStateBlockedPath, shortcutRootIssueBlockedPath, shortcutRootRecoveryClearBlockedPath, true},
+		{ShortcutRootStateRenameAmbiguous, shortcutRootIssueRenameAmbiguous, shortcutRootRecoveryDisambiguateAliasRename, true},
+		{ShortcutRootStateAliasMutationBlocked, shortcutRootIssueAliasMutationBlocked, shortcutRootRecoveryFixAliasMutation, true},
+		{ShortcutRootStateRemovedFinalDrain, shortcutRootIssueRemovedFinalDrain, shortcutRootRecoveryRestoreTargetOrDiscard, true},
+		{ShortcutRootStateRemovedReleasePending, shortcutRootIssueRemovedReleasePending, shortcutRootRecoveryWaitForRetry, true},
+		{ShortcutRootStateRemovedCleanupBlocked, shortcutRootIssueRemovedCleanupBlocked, shortcutRootRecoveryClearBlockedPath, true},
+		{ShortcutRootStateRemovedChildCleanupPending, shortcutRootIssueRemovedChildCleanupPending, shortcutRootRecoveryWaitForRetry, false},
+		{ShortcutRootStateSamePathReplacementWaiting, shortcutRootIssueSamePathReplacementWaiting, shortcutRootRecoveryWaitForRetry, true},
+		{ShortcutRootStateDuplicateTarget, shortcutRootIssueDuplicateTarget, shortcutRootRecoveryRemoveDuplicateAlias, true},
 	}
 	for _, tt := range cases {
 		metadata := ShortcutRootStatus(tt.state)

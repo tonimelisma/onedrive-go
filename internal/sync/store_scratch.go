@@ -27,9 +27,9 @@ const (
 )
 
 type scratchPlanningSeed struct {
-	observationState *ObservationState
+	observationState *observationState
 	baselineEntries  []BaselineEntry
-	remoteRows       []RemoteStateRow
+	remoteRows       []remoteStateRow
 }
 
 // createScratchPlanningStore opens a temporary SyncStore and seeds it with the
@@ -198,18 +198,18 @@ func insertScratchBaselineEntries(
 	return nil
 }
 
-func listScratchRemoteStateRows(ctx context.Context, runner sqlTxRunner) ([]RemoteStateRow, error) {
+func listScratchRemoteStateRows(ctx context.Context, runner sqlTxRunner) ([]remoteStateRow, error) {
 	rows, err := runner.QueryContext(ctx, sqlListScratchRemoteState)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying scratch remote_state seed rows: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
-	var result []RemoteStateRow
+	var result []remoteStateRow
 	for rows.Next() {
 		var (
 			rawDriveID string
-			row        RemoteStateRow
+			row        remoteStateRow
 			hash       sql.NullString
 			size       sql.NullInt64
 			mtime      sql.NullInt64
@@ -252,7 +252,7 @@ func listScratchRemoteStateRows(ctx context.Context, runner sqlTxRunner) ([]Remo
 func insertScratchRemoteStateRows(
 	ctx context.Context,
 	tx sqlTxRunner,
-	rows []RemoteStateRow,
+	rows []remoteStateRow,
 ) error {
 	for i := range rows {
 		row := rows[i]

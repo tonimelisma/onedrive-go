@@ -301,12 +301,12 @@ func TestNewEngine_PropagatesPathConvergence(t *testing.T) {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	executor := NewExecution(eng.execCfg, emptyBaseline())
+	executor := newExecution(eng.execCfg, emptyBaseline())
 	outcome := executor.ExecuteFolderCreate(t.Context(), &Action{
 		Type:       ActionFolderCreate,
 		Path:       "photos",
 		CreateSide: CreateRemote,
-		View:       &PathView{Path: "photos"},
+		View:       &pathView{Path: "photos"},
 	})
 	require.True(t, outcome.Success, "expected remote folder create to succeed: %v", outcome.Error)
 	assert.Equal(t, []string{"photos"}, pathConvergence.waitCalls)

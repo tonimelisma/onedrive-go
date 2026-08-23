@@ -15,10 +15,10 @@ func TestScope_429FallbackInterval(t *testing.T) {
 	t.Parallel()
 
 	clock, _ := controllableClock()
-	ss := NewScopeState(clock, discardLogger())
+	ss := newScopeState(clock, discardLogger())
 
 	// 429 without Retry-After should use the defaultInitialTrialInterval fallback.
-	r := ActionCompletion{
+	r := actionCompletion{
 		Path:       "/file-a.txt",
 		HTTPStatus: 429,
 		DriveID:    driveid.New("0000000000000001"),
@@ -63,9 +63,9 @@ func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clock, _ := controllableClock()
-			ss := NewScopeState(clock, discardLogger())
+			ss := newScopeState(clock, discardLogger())
 
-			result := ss.UpdateScope(&ActionCompletion{
+			result := ss.UpdateScope(&actionCompletion{
 				Path:       tt.path,
 				HTTPStatus: tt.status,
 				RetryAfter: tt.retryAfter,
@@ -85,11 +85,11 @@ func TestScope_503WithoutRetryAfter(t *testing.T) {
 	t.Parallel()
 
 	clock, _ := controllableClock()
-	ss := NewScopeState(clock, discardLogger())
+	ss := newScopeState(clock, discardLogger())
 
 	// A 503 without Retry-After should feed the service sliding window,
 	// not trigger an immediate block (it falls into the >= 500 case).
-	r := ActionCompletion{
+	r := actionCompletion{
 		Path:       "/doc.docx",
 		HTTPStatus: 503,
 	}
@@ -103,12 +103,12 @@ func TestScope_507OwnDrive(t *testing.T) {
 	t.Parallel()
 
 	clock, advance := controllableClock()
-	ss := NewScopeState(clock, discardLogger())
+	ss := newScopeState(clock, discardLogger())
 
 	// Three unique paths within the quota window should trigger quota:own.
 	paths := []string{"/a.txt", "/b.txt", "/c.txt"}
 	for i, p := range paths {
-		r := ActionCompletion{
+		r := actionCompletion{
 			Path:       p,
 			HTTPStatus: 507,
 		}
@@ -130,12 +130,12 @@ func TestScope_5xxSlidingWindow(t *testing.T) {
 	t.Parallel()
 
 	clock, advance := controllableClock()
-	ss := NewScopeState(clock, discardLogger())
+	ss := newScopeState(clock, discardLogger())
 
 	// Five unique paths with 5xx within 30s must trigger a service block.
 	paths := []string{"/a.txt", "/b.txt", "/c.txt", "/d.txt", "/e.txt"}
 	for i, p := range paths {
-		r := ActionCompletion{
+		r := actionCompletion{
 			Path:       p,
 			HTTPStatus: 500,
 		}
@@ -157,13 +157,13 @@ func TestScope_5xxWindowExpiry(t *testing.T) {
 	t.Parallel()
 
 	clock, advance := controllableClock()
-	ss := NewScopeState(clock, discardLogger())
+	ss := newScopeState(clock, discardLogger())
 
 	// Feed four failures then wait for the window to expire. The fifth
 	// failure after expiry must NOT trigger a block because the earlier
 	// entries have aged out.
 	for _, p := range []string{"/a.txt", "/b.txt", "/c.txt", "/d.txt"} {
-		r := ActionCompletion{Path: p, HTTPStatus: 500}
+		r := actionCompletion{Path: p, HTTPStatus: 500}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
@@ -172,7 +172,7 @@ func TestScope_5xxWindowExpiry(t *testing.T) {
 	// Advance past the 30s window so the first entries expire.
 	advance(30 * time.Second)
 
-	r := ActionCompletion{Path: "/e.txt", HTTPStatus: 500}
+	r := actionCompletion{Path: "/e.txt", HTTPStatus: 500}
 	result := ss.UpdateScope(&r)
 	assert.False(t, result.Block, "entries from before the window should have expired")
 }
@@ -182,11 +182,11 @@ func TestScope_SuccessResetsWindow(t *testing.T) {
 	t.Parallel()
 
 	clock, advance := controllableClock()
-	ss := NewScopeState(clock, discardLogger())
+	ss := newScopeState(clock, discardLogger())
 
 	// Accumulate two 507 failures on own drive.
 	for _, p := range []string{"/a.txt", "/b.txt"} {
-		r := ActionCompletion{Path: p, HTTPStatus: 507}
+		r := actionCompletion{Path: p, HTTPStatus: 507}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
@@ -199,14 +199,14 @@ func TestScope_SuccessResetsWindow(t *testing.T) {
 	// The next failure (3rd unique path overall but 1st after reset)
 	// must NOT trigger.
 	for i, p := range []string{"/c.txt", "/d.txt"} {
-		r := ActionCompletion{Path: p, HTTPStatus: 507}
+		r := actionCompletion{Path: p, HTTPStatus: 507}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block, "after reset, path %d should not trigger", i)
 		advance(1 * time.Second)
 	}
 
 	// Third unique path after reset should trigger.
-	r := ActionCompletion{Path: "/e.txt", HTTPStatus: 507}
+	r := actionCompletion{Path: "/e.txt", HTTPStatus: 507}
 	result := ss.UpdateScope(&r)
 	require.True(t, result.Block, "third unique path after reset should trigger quota:own")
 	assert.Equal(t, SKQuotaOwn(), result.ScopeKey)
@@ -220,11 +220,11 @@ func TestScope_SameFileDoesNotEscalate(t *testing.T) {
 	t.Parallel()
 
 	clock, advance := controllableClock()
-	ss := NewScopeState(clock, discardLogger())
+	ss := newScopeState(clock, discardLogger())
 
 	// Feed 10 failures on the same path — should never trigger.
 	for i := range 10 {
-		r := ActionCompletion{
+		r := actionCompletion{
 			Path:       "/same-file.txt",
 			HTTPStatus: 507,
 		}
@@ -241,7 +241,7 @@ func TestScope_NonScopeStatusReturnsEmpty(t *testing.T) {
 	t.Parallel()
 
 	clock, _ := controllableClock()
-	ss := NewScopeState(clock, discardLogger())
+	ss := newScopeState(clock, discardLogger())
 
 	cases := []struct {
 		name   string
@@ -257,7 +257,7 @@ func TestScope_NonScopeStatusReturnsEmpty(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := ActionCompletion{Path: "/file.txt", HTTPStatus: tc.status}
+			r := actionCompletion{Path: "/file.txt", HTTPStatus: tc.status}
 			result := ss.UpdateScope(&r)
 			assert.False(t, result.Block, "status %d should not trigger a block scope", tc.status)
 			assert.Empty(t, result.ScopeKey)
@@ -273,11 +273,11 @@ func TestScope_SuccessResetsServiceWindow(t *testing.T) {
 	t.Parallel()
 
 	clock, advance := controllableClock()
-	ss := NewScopeState(clock, discardLogger())
+	ss := newScopeState(clock, discardLogger())
 
 	// Four 5xx failures — one short of triggering.
 	for _, p := range []string{"/a.txt", "/b.txt", "/c.txt", "/d.txt"} {
-		r := ActionCompletion{Path: p, HTTPStatus: 500}
+		r := actionCompletion{Path: p, HTTPStatus: 500}
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
@@ -288,7 +288,7 @@ func TestScope_SuccessResetsServiceWindow(t *testing.T) {
 
 	// Now we need five fresh unique paths to trigger again.
 	// The next failure (5th overall but 1st after reset) must not trigger.
-	r := ActionCompletion{Path: "/e.txt", HTTPStatus: 500}
+	r := actionCompletion{Path: "/e.txt", HTTPStatus: 500}
 	result := ss.UpdateScope(&r)
 	assert.False(t, result.Block, "first failure after service window reset should not trigger")
 }
@@ -319,7 +319,7 @@ func TestScopeKey_StringRoundTrip(t *testing.T) {
 		assert.Equal(t, tt.wire, tt.key.String(), "%s String()", tt.name)
 
 		// ParseScopeKey round-trips back to the original key.
-		parsed := ParseScopeKey(tt.wire)
+		parsed := parseScopeKey(tt.wire)
 		assert.Equal(t, tt.key, parsed, "%s ParseScopeKey round-trip", tt.name)
 	}
 }
@@ -329,10 +329,10 @@ func TestParseScopeKey_Unknown(t *testing.T) {
 	t.Parallel()
 
 	// Unknown wire format produces zero-value ScopeKey.
-	sk := ParseScopeKey("unknown:format")
+	sk := parseScopeKey("unknown:format")
 	assert.True(t, sk.IsZero(), "unknown format should produce zero ScopeKey")
 
-	sk = ParseScopeKey("")
+	sk = parseScopeKey("")
 	assert.True(t, sk.IsZero(), "empty string should produce zero ScopeKey")
 }
 
@@ -362,7 +362,7 @@ func TestScopeKey_IsPermDir(t *testing.T) {
 	t.Parallel()
 
 	assert.True(t, SKPermLocalWrite("Documents").IsPermDir())
-	assert.True(t, SKPermLocalRead("Documents").IsPermDir())
+	assert.True(t, sKPermLocalRead("Documents").IsPermDir())
 	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsPermDir())
 	assert.False(t, SKQuotaOwn().IsPermDir())
 }
@@ -372,7 +372,7 @@ func TestScopeKey_IsPermRemote(t *testing.T) {
 	t.Parallel()
 
 	assert.True(t, SKPermRemoteWrite("Shared/TeamDocs").IsPermRemote())
-	assert.True(t, SKPermRemoteRead("Shared/TeamDocs").IsPermRemote())
+	assert.True(t, sKPermRemoteRead("Shared/TeamDocs").IsPermRemote())
 	assert.False(t, SKPermLocalWrite("Documents").IsPermRemote())
 	assert.False(t, SKThrottleDrive(driveid.New("0000000000000001")).IsPermRemote())
 }
@@ -382,7 +382,7 @@ func TestScopeKey_DirPath(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, "Documents/Private", SKPermLocalWrite("Documents/Private").DirPath())
-	assert.Equal(t, "Documents/Private", SKPermLocalRead("Documents/Private").DirPath())
+	assert.Equal(t, "Documents/Private", sKPermLocalRead("Documents/Private").DirPath())
 
 	// DirPath on non-PermDir should panic.
 	assert.Panics(t, func() { SKThrottleDrive(driveid.New("0000000000000001")).DirPath() })
@@ -393,7 +393,7 @@ func TestScopeKey_RemotePath(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, "Shared/TeamDocs", SKPermRemoteWrite("Shared/TeamDocs").RemotePath())
-	assert.Equal(t, "Shared/TeamDocs", SKPermRemoteRead("Shared/TeamDocs").RemotePath())
+	assert.Equal(t, "Shared/TeamDocs", sKPermRemoteRead("Shared/TeamDocs").RemotePath())
 	assert.Panics(t, func() { SKThrottleDrive(driveid.New("0000000000000001")).RemotePath() })
 }
 
@@ -405,14 +405,14 @@ func TestScopeKey_IssueType(t *testing.T) {
 		key  ScopeKey
 		want string
 	}{
-		{SKThrottleDrive(driveid.New("0000000000000001")), IssueRateLimited},
-		{SKService(), IssueServiceOutage},
+		{SKThrottleDrive(driveid.New("0000000000000001")), issueRateLimited},
+		{SKService(), issueServiceOutage},
 		{SKQuotaOwn(), IssueQuotaExceeded},
-		{SKPermLocalRead("x"), IssueLocalReadDenied},
-		{SKPermLocalWrite("x"), IssueLocalWriteDenied},
-		{SKPermRemoteRead("Shared/TeamDocs"), IssueRemoteReadDenied},
+		{sKPermLocalRead("x"), issueLocalReadDenied},
+		{SKPermLocalWrite("x"), issueLocalWriteDenied},
+		{sKPermRemoteRead("Shared/TeamDocs"), issueRemoteReadDenied},
 		{SKPermRemoteWrite("Shared/TeamDocs"), IssueRemoteWriteDenied},
-		{SKDiskLocal(), IssueDiskFull},
+		{SKDiskLocal(), issueDiskFull},
 		{ScopeKey{}, ""}, // zero value
 	}
 
@@ -430,9 +430,9 @@ func TestScopeKey_Humanize(t *testing.T) {
 	assert.Equal(t, "this drive storage", SKQuotaOwn().Humanize())
 	assert.Equal(t, "local disk", SKDiskLocal().Humanize())
 	assert.Equal(t, "Documents/Private", SKPermLocalWrite("Documents/Private").Humanize())
-	assert.Equal(t, "Documents/Private", SKPermLocalRead("Documents/Private").Humanize())
+	assert.Equal(t, "Documents/Private", sKPermLocalRead("Documents/Private").Humanize())
 	assert.Equal(t, "Shared/TeamDocs", SKPermRemoteWrite("Shared/TeamDocs").Humanize())
-	assert.Equal(t, "Shared/TeamDocs", SKPermRemoteRead("Shared/TeamDocs").Humanize())
+	assert.Equal(t, "Shared/TeamDocs", sKPermRemoteRead("Shared/TeamDocs").Humanize())
 }
 
 // Validates: R-2.10
@@ -444,7 +444,7 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 		key            ScopeKey
 		path           string
 		throttleTarget string
-		actionType     ActionType
+		actionType     actionType
 		want           bool
 	}{
 		// Global scopes block everything.
@@ -461,9 +461,9 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 		{"quota passes download", SKQuotaOwn(), "/a.txt", "", ActionDownload, false},
 
 		// Observation-owned read boundaries do not participate in runtime scope admission.
-		{"perm local read boundary does not block exact dir", SKPermLocalRead("Private"), "Private", "", ActionUpload, false},
-		{"perm local read boundary does not block subpath", SKPermLocalRead("Private"), "Private/secret.txt", "", ActionDownload, false},
-		{"perm local read boundary passes outside", SKPermLocalRead("Private"), "Public/readme.txt", "", ActionUpload, false},
+		{"perm local read boundary does not block exact dir", sKPermLocalRead("Private"), "Private", "", ActionUpload, false},
+		{"perm local read boundary does not block subpath", sKPermLocalRead("Private"), "Private/secret.txt", "", ActionDownload, false},
+		{"perm local read boundary passes outside", sKPermLocalRead("Private"), "Public/readme.txt", "", ActionUpload, false},
 
 		// Local write blocks local mutations only.
 		{"perm local write blocks download", SKPermLocalWrite("Private"), "Private", "", ActionDownload, true},
@@ -480,9 +480,9 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 		{"perm remote write passes outside", SKPermRemoteWrite("Shared/TeamDocs"), "Shared/Other/file.txt", "", ActionUpload, false},
 
 		// Observation-owned remote read boundaries do not participate in runtime scope admission.
-		{"perm remote read boundary does not block upload", SKPermRemoteRead("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionUpload, false},
-		{"perm remote read boundary does not block download", SKPermRemoteRead("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionDownload, false},
-		{"perm remote read boundary passes outside", SKPermRemoteRead("Shared/TeamDocs"), "Shared/Other/file.txt", "", ActionUpload, false},
+		{"perm remote read boundary does not block upload", sKPermRemoteRead("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionUpload, false},
+		{"perm remote read boundary does not block download", sKPermRemoteRead("Shared/TeamDocs"), "Shared/TeamDocs/file.txt", "", ActionDownload, false},
+		{"perm remote read boundary passes outside", sKPermRemoteRead("Shared/TeamDocs"), "Shared/Other/file.txt", "", ActionUpload, false},
 	}
 
 	for _, tt := range tests {
@@ -495,12 +495,12 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 func TestScopeKeyForResult(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, SKThrottleDrive(driveid.New("0000000000000001")), ScopeKeyForResult(429, driveid.New("0000000000000001")))
-	assert.True(t, ScopeKeyForResult(429, driveid.ID{}).IsZero(), "429 without a drive id should be zero")
-	assert.Equal(t, SKService(), ScopeKeyForResult(503, driveid.ID{}))
-	assert.Equal(t, SKService(), ScopeKeyForResult(500, driveid.ID{}))
-	assert.Equal(t, SKService(), ScopeKeyForResult(502, driveid.ID{}))
-	assert.Equal(t, SKQuotaOwn(), ScopeKeyForResult(507, driveid.ID{}))
-	assert.True(t, ScopeKeyForResult(404, driveid.ID{}).IsZero(), "non-scope status should be zero")
-	assert.True(t, ScopeKeyForResult(200, driveid.ID{}).IsZero(), "success status should be zero")
+	assert.Equal(t, SKThrottleDrive(driveid.New("0000000000000001")), scopeKeyForResult(429, driveid.New("0000000000000001")))
+	assert.True(t, scopeKeyForResult(429, driveid.ID{}).IsZero(), "429 without a drive id should be zero")
+	assert.Equal(t, SKService(), scopeKeyForResult(503, driveid.ID{}))
+	assert.Equal(t, SKService(), scopeKeyForResult(500, driveid.ID{}))
+	assert.Equal(t, SKService(), scopeKeyForResult(502, driveid.ID{}))
+	assert.Equal(t, SKQuotaOwn(), scopeKeyForResult(507, driveid.ID{}))
+	assert.True(t, scopeKeyForResult(404, driveid.ID{}).IsZero(), "non-scope status should be zero")
+	assert.True(t, scopeKeyForResult(200, driveid.ID{}).IsZero(), "success status should be zero")
 }

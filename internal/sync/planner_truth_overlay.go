@@ -1,5 +1,5 @@
 package sync
 
-func plannerSuppressesUnavailableTruth(status *PathTruthStatus) bool {
+func plannerSuppressesUnavailableTruth(status *pathTruthStatus) bool {
 	return status.SuppressesStructuralActions()
 }

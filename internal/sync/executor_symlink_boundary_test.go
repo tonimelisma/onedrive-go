@@ -14,7 +14,7 @@ import (
 // path beneath "alias/" is lexically inside the sync tree but physically
 // outside it.
 type symlinkBoundaryFixture struct {
-	exec     *Executor
+	exec     *executor
 	syncRoot string
 	outside  string
 }
@@ -23,7 +23,7 @@ func newSymlinkBoundaryFixture(t *testing.T) symlinkBoundaryFixture {
 	t.Helper()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	exec := NewExecution(cfg, emptyBaseline())
+	exec := newExecution(cfg, emptyBaseline())
 
 	outside := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(outside, "target"), 0o700))
@@ -65,7 +65,7 @@ func TestExecutor_Download_SymlinkedAncestorIsBlocked(t *testing.T) {
 		Type:   ActionDownload,
 		Path:   "alias/victim.txt",
 		ItemID: "item1",
-		View:   &PathView{},
+		View:   &pathView{},
 	}
 
 	o := f.exec.ExecuteDownload(t.Context(), action)
@@ -86,7 +86,7 @@ func TestExecutor_LocalMove_SymlinkedAncestorSourceIsBlocked(t *testing.T) {
 		OldPath: "alias/src.txt",
 		Path:    "moved.txt",
 		ItemID:  "item1",
-		View:    &PathView{},
+		View:    &pathView{},
 	}
 
 	o := f.exec.ExecuteLocalMove(action)
@@ -108,7 +108,7 @@ func TestExecutor_LocalMove_SymlinkedAncestorDestinationIsBlocked(t *testing.T) 
 		OldPath: "src.txt",
 		Path:    "alias/victim.txt",
 		ItemID:  "item1",
-		View:    &PathView{},
+		View:    &pathView{},
 	}
 
 	o := f.exec.ExecuteLocalMove(action)
@@ -129,7 +129,7 @@ func TestExecutor_ConflictCopy_SymlinkedAncestorIsBlocked(t *testing.T) {
 		Type:   ActionConflictCopy,
 		Path:   "alias/doc.txt",
 		ItemID: "item1",
-		View:   &PathView{},
+		View:   &pathView{},
 	}
 
 	o := f.exec.ExecuteConflictCopy(t.Context(), action)
@@ -146,10 +146,10 @@ func TestExecutor_CreateLocalFolder_SymlinkedAncestorIsBlocked(t *testing.T) {
 
 	action := &Action{
 		Type:       ActionFolderCreate,
-		CreateSide: CreateLocal,
+		CreateSide: createLocal,
 		Path:       "alias/newdir",
 		ItemID:     "item1",
-		View:       &PathView{},
+		View:       &pathView{},
 	}
 
 	o := f.exec.ExecuteFolderCreate(t.Context(), action)
@@ -171,7 +171,7 @@ func TestExecutor_LocalDelete_AliasItselfStillRemovesOnlyTheSymlink(t *testing.T
 		Type:   ActionLocalDelete,
 		Path:   "alias",
 		ItemID: "item1",
-		View:   &PathView{},
+		View:   &pathView{},
 	}
 
 	o := f.exec.ExecuteLocalDelete(t.Context(), action)
@@ -194,7 +194,7 @@ func TestExecutor_LocalMove_WithoutSymlinkBoundarySucceeds(t *testing.T) {
 		OldPath: "plain/src.txt",
 		Path:    "plain/dst.txt",
 		ItemID:  "item1",
-		View:    &PathView{},
+		View:    &pathView{},
 	}
 
 	o := f.exec.ExecuteLocalMove(action)

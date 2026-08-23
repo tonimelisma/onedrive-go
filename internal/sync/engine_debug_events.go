@@ -6,8 +6,6 @@ import (
 
 type engineDebugEventType string
 
-type DebugEventType = engineDebugEventType
-
 const (
 	engineDebugEventScopeActivated                      engineDebugEventType = "scope_activated"
 	engineDebugEventScopeReleased                       engineDebugEventType = "scope_released"

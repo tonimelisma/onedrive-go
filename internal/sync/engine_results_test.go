@@ -23,10 +23,10 @@ func TestEngineFlow_LogFailureSummary_AggregatesRetryWorkWarnings(t *testing.T) 
 	flow := testEngineFlow(t, eng)
 
 	for i := range 11 {
-		flow.recordError(&ResultDecision{
+		flow.recordError(&resultDecision{
 			Persistence:   persistRetryWork,
-			ConditionType: IssueServiceOutage,
-		}, &ActionCompletion{
+			ConditionType: issueServiceOutage,
+		}, &actionCompletion{
 			Path:   fmt.Sprintf("retry-%02d.txt", i),
 			Err:    errors.New("boom"),
 			ErrMsg: "boom",
@@ -61,7 +61,7 @@ func TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue(t *testing.T)
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	now := eng.nowFn()
-	rt.holdAction(&TrackedAction{
+	rt.holdAction(&trackedAction{
 		Action: Action{
 			Path: "due.txt",
 			Type: ActionUpload,
@@ -88,7 +88,7 @@ func TestWatchRuntime_ArmRetryTimer_FiresAfterDelay(t *testing.T) {
 	rt := testWatchRuntime(t, eng)
 	now := clock.Now()
 
-	rt.holdAction(&TrackedAction{
+	rt.holdAction(&trackedAction{
 		Action: Action{
 			Path: "later.txt",
 			Type: ActionUpload,

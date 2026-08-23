@@ -26,7 +26,7 @@ const (
 // current admissible observation result for the drive.
 func (m *SyncStore) ReplaceLocalState(
 	ctx context.Context,
-	rows []LocalStateRow,
+	rows []localStateRow,
 ) (err error) {
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
@@ -51,13 +51,13 @@ func (m *SyncStore) ReplaceLocalState(
 }
 
 // ListLocalState returns the durable local snapshot rows in path order.
-func (m *SyncStore) ListLocalState(ctx context.Context) ([]LocalStateRow, error) {
+func (m *SyncStore) ListLocalState(ctx context.Context) ([]localStateRow, error) {
 	return listLocalStateRows(ctx, m.db)
 }
 
 // GetLocalStateByPath returns the durable local_state row for path, or nil
 // when the path is absent from the committed local snapshot.
-func (m *SyncStore) GetLocalStateByPath(ctx context.Context, path string) (*LocalStateRow, bool, error) {
+func (m *SyncStore) GetLocalStateByPath(ctx context.Context, path string) (*localStateRow, bool, error) {
 	row, err := scanLocalStateRow(ctx, m.db, sqlSelectLocalStateByPath, path)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -72,7 +72,7 @@ func (m *SyncStore) GetLocalStateByPath(ctx context.Context, path string) (*Loca
 // UpsertLocalStateRows applies scoped local observations without changing the
 // store's local-truth confidence. Confidence changes are owned by full snapshot
 // replacement or explicit suspect markers.
-func (m *SyncStore) UpsertLocalStateRows(ctx context.Context, rows []LocalStateRow) (err error) {
+func (m *SyncStore) UpsertLocalStateRows(ctx context.Context, rows []localStateRow) (err error) {
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning local_state upsert transaction: %w", err)
@@ -134,7 +134,7 @@ func (m *SyncStore) DeleteLocalStatePrefix(ctx context.Context, prefix string) (
 
 func (m *SyncStore) applyLocalStatePatch(
 	ctx context.Context,
-	rows []LocalStateRow,
+	rows []localStateRow,
 	deletedPaths []string,
 	deletedPrefixes []string,
 ) (err error) {
@@ -170,7 +170,7 @@ func (m *SyncStore) applyLocalStatePatch(
 func replaceLocalStateTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	rows []LocalStateRow,
+	rows []localStateRow,
 ) error {
 	if _, err := tx.ExecContext(ctx, sqlDeleteLocalState); err != nil {
 		return fmt.Errorf("sync: deleting local_state rows: %w", err)
@@ -179,7 +179,7 @@ func replaceLocalStateTx(
 	return upsertLocalStateRowsTx(ctx, tx, rows)
 }
 
-func upsertLocalStateRowsTx(ctx context.Context, tx sqlTxRunner, rows []LocalStateRow) error {
+func upsertLocalStateRowsTx(ctx context.Context, tx sqlTxRunner, rows []localStateRow) error {
 	for i := range rows {
 		if err := upsertLocalStateRowTx(ctx, tx, rows[i]); err != nil {
 			return err
@@ -189,7 +189,7 @@ func upsertLocalStateRowsTx(ctx context.Context, tx sqlTxRunner, rows []LocalSta
 	return nil
 }
 
-func upsertLocalStateRowTx(ctx context.Context, tx sqlTxRunner, row LocalStateRow) error {
+func upsertLocalStateRowTx(ctx context.Context, tx sqlTxRunner, row localStateRow) error {
 	if _, err := tx.ExecContext(ctx, sqlInsertLocalState,
 		row.Path,
 		row.ItemType,
@@ -241,21 +241,21 @@ func markLocalTruthCompleteTx(ctx context.Context, tx sqlTxRunner) error {
 	return writeObservationStateToTx(ctx, tx, state)
 }
 
-func listLocalStateRows(ctx context.Context, runner sqlTxRunner) ([]LocalStateRow, error) {
+func listLocalStateRows(ctx context.Context, runner sqlTxRunner) ([]localStateRow, error) {
 	return listLocalStateRowsWithQuery(ctx, runner, sqlListLocalState)
 }
 
-func listLocalStateRowsWithQuery(ctx context.Context, runner sqlTxRunner, query string) ([]LocalStateRow, error) {
+func listLocalStateRowsWithQuery(ctx context.Context, runner sqlTxRunner, query string) ([]localStateRow, error) {
 	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying local_state: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
-	var result []LocalStateRow
+	var result []localStateRow
 	for rows.Next() {
 		var (
-			row              LocalStateRow
+			row              localStateRow
 			hash             sql.NullString
 			size             sql.NullInt64
 			mtime            sql.NullInt64
@@ -299,9 +299,9 @@ func scanLocalStateRow(
 	runner sqlTxRunner,
 	query string,
 	args ...any,
-) (*LocalStateRow, error) {
+) (*localStateRow, error) {
 	var (
-		row              LocalStateRow
+		row              localStateRow
 		hash             sql.NullString
 		size             sql.NullInt64
 		mtime            sql.NullInt64
@@ -337,8 +337,8 @@ func scanLocalStateRow(
 	return &row, nil
 }
 
-func buildLocalStateRows(result ScanResult) []LocalStateRow {
-	rows := make([]LocalStateRow, len(result.Rows))
+func buildLocalStateRows(result scanResult) []localStateRow {
+	rows := make([]localStateRow, len(result.Rows))
 	copy(rows, result.Rows)
 	return rows
 }

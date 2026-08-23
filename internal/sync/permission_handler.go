@@ -8,12 +8,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// PermissionHandler owns permission probing and revalidation. It gathers
+// permissionHandler owns permission probing and revalidation. It gathers
 // evidence only; the engine-owned runtime handlers turn that evidence into
 // durable retry/scope mutations.
-type PermissionHandler struct {
+type permissionHandler struct {
 	store            *SyncStore
-	permChecker      PermissionChecker
+	permChecker      permissionChecker
 	syncTree         *synctree.Root
 	driveID          driveid.ID
 	accountEmail     string

@@ -19,7 +19,7 @@ func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
 	flow.runningCount = 0
 	flow.nextHeldOrder = 0
 
-	activeScopes := make([]ActiveScope, 0, len(runtime.BlockScopes))
+	activeScopes := make([]activeScope, 0, len(runtime.BlockScopes))
 	for i := range runtime.BlockScopes {
 		if runtime.BlockScopes[i] == nil {
 			continue
@@ -28,18 +28,18 @@ func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
 	}
 	flow.replaceActiveScopes(activeScopes)
 	if flow.scopeState == nil {
-		flow.scopeState = NewScopeState(flow.engine.nowFunc, flow.engine.logger)
+		flow.scopeState = newScopeState(flow.engine.nowFunc, flow.engine.logger)
 	}
 }
 
-func (flow *engineFlow) markQueued(ta *TrackedAction) {
+func (flow *engineFlow) markQueued(ta *trackedAction) {
 	if ta == nil {
 		return
 	}
 	flow.queuedByID[ta.ID] = struct{}{}
 }
 
-func (flow *engineFlow) markRunning(ta *TrackedAction) {
+func (flow *engineFlow) markRunning(ta *trackedAction) {
 	if ta == nil {
 		return
 	}
@@ -51,7 +51,7 @@ func (flow *engineFlow) markRunning(ta *TrackedAction) {
 	flow.runningCount++
 }
 
-func (flow *engineFlow) markFinished(ta *TrackedAction) {
+func (flow *engineFlow) markFinished(ta *trackedAction) {
 	if ta == nil {
 		return
 	}
@@ -64,7 +64,7 @@ func (flow *engineFlow) markFinished(ta *TrackedAction) {
 	delete(flow.queuedByID, ta.ID)
 }
 
-func (flow *engineFlow) holdAction(ta *TrackedAction, reason heldReason, scopeKey ScopeKey, nextRetry time.Time) {
+func (flow *engineFlow) holdAction(ta *trackedAction, reason heldReason, scopeKey ScopeKey, nextRetry time.Time) {
 	if ta == nil {
 		return
 	}
@@ -85,7 +85,7 @@ func (flow *engineFlow) holdAction(ta *TrackedAction, reason heldReason, scopeKe
 	}
 }
 
-func (flow *engineFlow) releaseHeldAction(key RetryWorkKey) *TrackedAction {
+func (flow *engineFlow) releaseHeldAction(key RetryWorkKey) *trackedAction {
 	held, ok := flow.heldByKey[key]
 	if !ok || held == nil {
 		return nil
@@ -199,7 +199,7 @@ func (flow *engineFlow) releaseHeldScope(scopeKey ScopeKey) {
 	delete(flow.heldScopeOrder, scopeKey)
 }
 
-func (flow *engineFlow) replaceActiveScopes(blocks []ActiveScope) {
+func (flow *engineFlow) replaceActiveScopes(blocks []activeScope) {
 	flow.activeScopesMu.Lock()
 	defer flow.activeScopesMu.Unlock()
 
@@ -207,46 +207,46 @@ func (flow *engineFlow) replaceActiveScopes(blocks []ActiveScope) {
 	flow.activeScopes = append(flow.activeScopes, blocks...)
 }
 
-func (flow *engineFlow) upsertActiveScope(block *ActiveScope) {
+func (flow *engineFlow) upsertActiveScope(block *activeScope) {
 	flow.activeScopesMu.Lock()
 	defer flow.activeScopesMu.Unlock()
 
-	flow.activeScopes = UpsertScope(flow.activeScopes, block)
+	flow.activeScopes = upsertScope(flow.activeScopes, block)
 }
 
 func (flow *engineFlow) removeActiveScope(key ScopeKey) {
 	flow.activeScopesMu.Lock()
 	defer flow.activeScopesMu.Unlock()
 
-	flow.activeScopes = RemoveScope(flow.activeScopes, key)
+	flow.activeScopes = removeScope(flow.activeScopes, key)
 }
 
-func (flow *engineFlow) lookupActiveScope(key ScopeKey) (ActiveScope, bool) {
+func (flow *engineFlow) lookupActiveScope(key ScopeKey) (activeScope, bool) {
 	flow.activeScopesMu.RLock()
 	defer flow.activeScopesMu.RUnlock()
 
-	return LookupScope(flow.activeScopes, key)
+	return lookupScope(flow.activeScopes, key)
 }
 
 func (flow *engineFlow) hasActiveScope(key ScopeKey) bool {
 	flow.activeScopesMu.RLock()
 	defer flow.activeScopesMu.RUnlock()
 
-	return HasScope(flow.activeScopes, key)
+	return hasScope(flow.activeScopes, key)
 }
 
-func (flow *engineFlow) findBlockingScope(ta *TrackedAction) ScopeKey {
+func (flow *engineFlow) findBlockingScope(ta *trackedAction) ScopeKey {
 	flow.activeScopesMu.RLock()
 	defer flow.activeScopesMu.RUnlock()
 
-	return FindBlockingScope(flow.activeScopes, ta)
+	return findBlockingScope(flow.activeScopes, ta)
 }
 
-func (flow *engineFlow) snapshotActiveScopes() []ActiveScope {
+func (flow *engineFlow) snapshotActiveScopes() []activeScope {
 	flow.activeScopesMu.RLock()
 	defer flow.activeScopesMu.RUnlock()
 
-	blocks := make([]ActiveScope, len(flow.activeScopes))
+	blocks := make([]activeScope, len(flow.activeScopes))
 	copy(blocks, flow.activeScopes)
 
 	return blocks

@@ -25,7 +25,7 @@ func TestWatchConditionCounts_SortsAndAggregatesProjectedGroups(t *testing.T) {
 	assert.Equal(t, []watchConditionCount{
 		{Key: ConditionServiceOutage, Count: 3},
 		{Key: ConditionDiskFull, Count: 4},
-	}, watchConditionCounts([]StoredConditionGroup{
+	}, watchConditionCounts([]storedConditionGroup{
 		{ConditionKey: "", Count: 5},
 		{ConditionKey: ConditionServiceOutage, Count: 0},
 		{ConditionKey: ConditionServiceOutage, Count: 1},
@@ -42,7 +42,7 @@ func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 		RetryingItems: 4,
 		ObservationIssues: []ObservationIssueRow{
 			{IssueType: IssueInvalidFilename},
-			{IssueType: IssueRemoteReadDenied, ScopeKey: SKPermRemoteRead("Shared/Docs")},
+			{IssueType: issueRemoteReadDenied, ScopeKey: sKPermRemoteRead("Shared/Docs")},
 		},
 		BlockScopes: []*BlockScope{
 			{

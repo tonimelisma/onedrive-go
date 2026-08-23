@@ -122,10 +122,10 @@ type watchPipeline struct {
 	runtime      *watchRuntime
 	bl           *Baseline
 	replanReady  <-chan dirtyBatch
-	completions  <-chan ActionCompletion
+	completions  <-chan actionCompletion
 	maintenanceC <-chan time.Time
 	mode         SyncMode
-	pool         *WorkerPool // for bootstrapSync to access Completions()
+	pool         *workerPool // for bootstrapSync to access Completions()
 	cleanup      func()
 }
 
@@ -151,28 +151,28 @@ func (rt *watchRuntime) initWatchInfra(
 ) (*watchPipeline, error) {
 	// DepGraph tracks action dependencies. Active scope state is loaded from
 	// the persisted block_scopes table into watch-owned runtime state.
-	depGraph := NewDepGraph(rt.engine.logger)
+	depGraph := newDepGraph(rt.engine.logger)
 	rt.depGraph = depGraph
 	if err := rt.loadActiveScopes(ctx, rt); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
 
-	rt.scopeState = NewScopeState(rt.engine.nowFunc, rt.engine.logger)
+	rt.scopeState = newScopeState(rt.engine.nowFunc, rt.engine.logger)
 	rt.nextActionID = 0
 
 	// dispatchCh feeds admitted actions to workers. Watch mode keeps this
 	// unbuffered so not-yet-started work remains engine-owned until a worker is
 	// actually ready to receive it.
-	rt.dispatchCh = make(chan *TrackedAction, watchDispatchBuf)
+	rt.dispatchCh = make(chan *trackedAction, watchDispatchBuf)
 
-	pool := NewWorkerPool(rt.engine.execCfg, rt.dispatchCh, rt.engine.baseline, rt.engine.logger, watchCompletionBuf)
+	pool := newWorkerPool(rt.engine.execCfg, rt.dispatchCh, rt.engine.baseline, rt.engine.logger, watchCompletionBuf)
 	pool.perfCollector = rt.engine.collector()
 	pool.Start(ctx, rt.engine.transferWorkers)
 
 	// DirtyBuffer is the watch scheduler boundary. Observation marks coarse
 	// dirty/full-refresh signals only; snapshot refresh and planning happen
 	// after debounce.
-	dirtyBuf := NewDirtyBuffer(rt.engine.logger)
+	dirtyBuf := newDirtyBuffer(rt.engine.logger)
 	rt.dirtyBuf = dirtyBuf
 	replanReady := dirtyBuf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
 
@@ -315,7 +315,7 @@ func (rt *watchRuntime) startObservers(
 	}
 
 	localBatches := make(chan localObservationBatch, watchObservationBuf)
-	protectedRootEvents := make(chan ProtectedRootEvent, watchObservationBuf)
+	protectedRootEvents := make(chan protectedRootEvent, watchObservationBuf)
 	remoteBatches := make(chan remoteObservationBatch, watchObservationBuf)
 	errs := make(chan error, 2)
 
@@ -330,14 +330,14 @@ func (rt *watchRuntime) startObservers(
 
 	// Channel for forwarding SkippedItems from safety scans to the engine.
 	// Buffered(2) — at most 2 safety scans could overlap before draining.
-	skippedCh := make(chan []SkippedItem, 2)
+	skippedCh := make(chan []skippedItem, 2)
 
-	localObs := NewLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
+	localObs := newLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
 	localObs.SetFilterConfig(rt.engine.contentFilter)
 	localObs.SetProtectedRoots(rt.engine.protectedRoots)
 	localObs.SetObservationRules(rt.engine.localRules)
 	localObs.SetExpectedRootIdentity(rt.engine.expectedSyncRootIdentity)
-	localObs.SetProtectedRootEventSink(func(event ProtectedRootEvent) {
+	localObs.SetProtectedRootEventSink(func(event protectedRootEvent) {
 		select {
 		case protectedRootEvents <- event:
 		default:
@@ -369,7 +369,7 @@ func (rt *watchRuntime) startObservers(
 		defer close(protectedRootEvents)
 
 		watchErr := localObs.Watch(ctx, rt.engine.syncTree, nil)
-		if errors.Is(watchErr, ErrWatchLimitExhausted) {
+		if errors.Is(watchErr, errWatchLimitExhausted) {
 			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
 			rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
 				slog.Duration("scan_interval", localWatchDegradedFullScanInterval),
@@ -423,7 +423,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 	wakeSource := rt.engine.socketIOWakeSourceFactory(
 		rt.engine.socketIOFetcher,
 		rt.engine.driveID,
-		SocketIOWakeSourceOptions{
+		socketIOWakeSourceOptions{
 			Logger:        rt.engine.logger,
 			LifecycleHook: rt.emitSocketIOLifecycleEvent,
 		},
@@ -453,7 +453,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 	return wakeCh
 }
 
-func (rt *watchRuntime) emitSocketIOLifecycleEvent(event SocketIOLifecycleEvent) {
+func (rt *watchRuntime) emitSocketIOLifecycleEvent(event socketIOLifecycleEvent) {
 	debugEvent := engineDebugEvent{
 		DriveID: event.DriveID,
 		Note:    event.Note,
@@ -462,26 +462,26 @@ func (rt *watchRuntime) emitSocketIOLifecycleEvent(event SocketIOLifecycleEvent)
 	}
 
 	switch event.Type {
-	case SocketIOLifecycleEventStarted:
+	case socketIOLifecycleEventStarted:
 		debugEvent.Type = engineDebugEventWebsocketWakeSourceStarted
-	case SocketIOLifecycleEventEndpointFetchFail:
+	case socketIOLifecycleEventEndpointFetchFail:
 		debugEvent.Type = engineDebugEventWebsocketEndpointFetchFail
-	case SocketIOLifecycleEventConnectFail:
+	case socketIOLifecycleEventConnectFail:
 		debugEvent.Type = engineDebugEventWebsocketConnectFail
-	case SocketIOLifecycleEventConnected:
+	case socketIOLifecycleEventConnected:
 		debugEvent.Type = engineDebugEventWebsocketConnected
 		if event.SID != "" {
 			debugEvent.Note = "sid=" + event.SID
 		}
-	case SocketIOLifecycleEventRefreshRequested:
+	case socketIOLifecycleEventRefreshRequested:
 		debugEvent.Type = engineDebugEventWebsocketRefreshRequested
-	case SocketIOLifecycleEventConnectionDropped:
+	case socketIOLifecycleEventConnectionDropped:
 		debugEvent.Type = engineDebugEventWebsocketConnectionDropped
-	case SocketIOLifecycleEventNotificationWake:
+	case socketIOLifecycleEventNotificationWake:
 		debugEvent.Type = engineDebugEventWebsocketNotificationWake
-	case SocketIOLifecycleEventWakeCoalesced:
+	case socketIOLifecycleEventWakeCoalesced:
 		debugEvent.Type = engineDebugEventWebsocketWakeCoalesced
-	case SocketIOLifecycleEventStopped:
+	case socketIOLifecycleEventStopped:
 		debugEvent.Type = engineDebugEventWebsocketWakeSourceStopped
 	default:
 		return
@@ -494,8 +494,8 @@ func (rt *watchRuntime) emitSocketIOLifecycleEvent(event SocketIOLifecycleEvent)
 // inotify watch limits are exhausted. Blocks until the context is canceled.
 // Each scan's events are forwarded to the events channel via trySend.
 func (rt *watchRuntime) runPeriodicFullScan(
-	ctx context.Context, obs *LocalObserver, tree *synctree.Root,
-	events chan<- ChangeEvent, interval time.Duration,
+	ctx context.Context, obs *localObserver, tree *synctree.Root,
+	events chan<- changeEvent, interval time.Duration,
 ) {
 	ticker := rt.engine.newTicker(interval)
 	defer stopTicker(ticker)

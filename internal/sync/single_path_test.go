@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 func TestObserveSinglePath_HashFailureEmitsEventWithEmptyHash(t *testing.T) {
@@ -19,7 +21,7 @@ func TestObserveSinglePath_HashFailureEmitsEventWithEmptyHash(t *testing.T) {
 	relPath := "hash-failure.txt"
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, relPath), []byte("payload"), 0o600))
 
-	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, nil, time.Now().UnixNano(), func(string) (string, error) {
+	result, err := observeSinglePath(mustOpenSyncTree(t, syncRoot), relPath, nil, time.Now().UnixNano(), func(string) (string, error) {
 		return "", errors.New("boom")
 	})
 	require.NoError(t, err)
@@ -32,7 +34,7 @@ func TestObserveSinglePath_HashFailureEmitsEventWithEmptyHash(t *testing.T) {
 func TestObserveSinglePath_MissingPathResolves(t *testing.T) {
 	t.Parallel()
 
-	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, t.TempDir()), "missing.txt", nil, time.Now().UnixNano(), nil)
+	result, err := observeSinglePath(mustOpenSyncTree(t, t.TempDir()), "missing.txt", nil, time.Now().UnixNano(), nil)
 	require.NoError(t, err)
 	assert.Nil(t, result.Event)
 	assert.Nil(t, result.Skipped)
@@ -55,11 +57,11 @@ func TestObserveSinglePath_ReusesBaselineHashWhenMetadataMatches(t *testing.T) {
 	info, err := os.Stat(absPath)
 	require.NoError(t, err)
 
-	actualHash, err := ComputeStableHash(absPath)
+	actualHash, err := computeStableHash(absPath)
 	require.NoError(t, err)
 	require.NotEqual(t, "cached-hash", actualHash)
 
-	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, &BaselineEntry{
+	result, err := observeSinglePath(mustOpenSyncTree(t, syncRoot), relPath, &BaselineEntry{
 		Path:           relPath,
 		ItemType:       ItemTypeFile,
 		LocalSize:      info.Size(),
@@ -92,7 +94,7 @@ func TestObserveSinglePath_ReusesBaselineHashWhenSameSecondMtimeDiffersByFractio
 	info, err := os.Stat(absPath)
 	require.NoError(t, err)
 
-	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, &BaselineEntry{
+	result, err := observeSinglePath(mustOpenSyncTree(t, syncRoot), relPath, &BaselineEntry{
 		Path:           relPath,
 		ItemType:       ItemTypeFile,
 		LocalSize:      info.Size(),
@@ -116,7 +118,7 @@ func TestObserveSinglePath_DirectoryProducesFolderEvent(t *testing.T) {
 	relPath := "docs"
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, relPath), 0o700))
 
-	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, nil, time.Now().UnixNano(), nil)
+	result, err := observeSinglePath(mustOpenSyncTree(t, syncRoot), relPath, nil, time.Now().UnixNano(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, result.Event)
 	assert.Equal(t, ItemTypeFolder, result.Event.ItemType)
@@ -134,7 +136,7 @@ func TestObserveSinglePath_SymlinkSkippedByDefault(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "real.txt"), []byte("payload"), 0o600))
 	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real.txt"), filepath.Join(syncRoot, "link.txt")))
 
-	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), "link.txt", nil, time.Now().UnixNano(), nil)
+	result, err := observeSinglePath(mustOpenSyncTree(t, syncRoot), "link.txt", nil, time.Now().UnixNano(), nil)
 	require.NoError(t, err)
 	assert.Nil(t, result.Event)
 	assert.Nil(t, result.Skipped)
@@ -149,7 +151,7 @@ func TestObserveSinglePath_FollowSymlinksOptIn(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "real.txt"), []byte("payload"), 0o600))
 	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "real.txt"), filepath.Join(syncRoot, "link.txt")))
 
-	result, err := ObserveSinglePathWithFilter(
+	result, err := observeSinglePathWithFilter(
 		nil,
 		mustOpenSyncTree(t, syncRoot),
 		"link.txt",
@@ -173,7 +175,7 @@ func TestObserveSinglePath_UnexpectedStatErrorReturnsWrappedError(t *testing.T) 
 	blocker := filepath.Join(syncRoot, "blocker")
 	require.NoError(t, os.WriteFile(blocker, []byte("not-a-directory"), 0o600))
 
-	_, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), "blocker/child.txt", nil, time.Now().UnixNano(), nil)
+	_, err := observeSinglePath(mustOpenSyncTree(t, syncRoot), "blocker/child.txt", nil, time.Now().UnixNano(), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "observe single path blocker/child.txt: stat:")
 }
@@ -181,7 +183,7 @@ func TestObserveSinglePath_UnexpectedStatErrorReturnsWrappedError(t *testing.T) 
 func TestObserveSinglePath_InvalidNameReturnsSkipped(t *testing.T) {
 	t.Parallel()
 
-	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, t.TempDir()), "bad?.txt", nil, time.Now().UnixNano(), nil)
+	result, err := observeSinglePath(mustOpenSyncTree(t, t.TempDir()), "bad?.txt", nil, time.Now().UnixNano(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, result.Skipped)
 	assert.Nil(t, result.Event)
@@ -193,7 +195,7 @@ func TestObserveSinglePath_InvalidNameReturnsSkipped(t *testing.T) {
 func TestObserveSinglePathWithFilter_SharePointRootFormsReturnsSkipped(t *testing.T) {
 	t.Parallel()
 
-	result, err := ObserveSinglePathWithFilter(
+	result, err := observeSinglePathWithFilter(
 		nil,
 		mustOpenSyncTree(t, t.TempDir()),
 		"forms",
@@ -214,17 +216,17 @@ func TestObserveSinglePath_PathTooLongReturnsSkipped(t *testing.T) {
 	t.Parallel()
 
 	segments := []string{"file.txt"}
-	for len(strings.Join(segments, "/")) <= MaxOneDrivePathLength {
+	for len(strings.Join(segments, "/")) <= maxOneDrivePathLength {
 		segments = append([]string{"segment"}, segments...)
 	}
 	relPath := strings.Join(segments, "/")
 
-	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, t.TempDir()), relPath, nil, time.Now().UnixNano(), nil)
+	result, err := observeSinglePath(mustOpenSyncTree(t, t.TempDir()), relPath, nil, time.Now().UnixNano(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, result.Skipped)
 	assert.Nil(t, result.Event)
 	assert.False(t, result.Resolved)
-	assert.Equal(t, IssuePathTooLong, result.Skipped.Reason)
+	assert.Equal(t, issuePathTooLong, result.Skipped.Reason)
 }
 
 func TestObserveSinglePath_OversizedFileReturnsSkipped(t *testing.T) {
@@ -234,16 +236,16 @@ func TestObserveSinglePath_OversizedFileReturnsSkipped(t *testing.T) {
 	file, err := os.CreateTemp(syncRoot, "oversized-*.bin")
 	require.NoError(t, err)
 	defer file.Close()
-	require.NoError(t, file.Truncate(MaxOneDriveFileSize+1))
+	require.NoError(t, file.Truncate(maxOneDriveFileSize+1))
 	relPath := filepath.Base(file.Name())
 
-	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), relPath, nil, time.Now().UnixNano(), nil)
+	result, err := observeSinglePath(mustOpenSyncTree(t, syncRoot), relPath, nil, time.Now().UnixNano(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, result.Skipped)
 	assert.Nil(t, result.Event)
 	assert.False(t, result.Resolved)
-	assert.Equal(t, IssueFileTooLarge, result.Skipped.Reason)
-	assert.Equal(t, int64(MaxOneDriveFileSize+1), result.Skipped.FileSize)
+	assert.Equal(t, issueFileTooLarge, result.Skipped.Reason)
+	assert.Equal(t, int64(maxOneDriveFileSize+1), result.Skipped.FileSize)
 }
 
 func TestObserveSinglePath_UnreadableSubtreeReturnsBoundaryScopedSkip(t *testing.T) {
@@ -258,20 +260,20 @@ func TestObserveSinglePath_UnreadableSubtreeReturnsBoundaryScopedSkip(t *testing
 		assert.NoError(t, os.Chmod(filepath.Join(syncRoot, "Private"), 0o700))
 	})
 
-	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, syncRoot), "Private/file.txt", nil, time.Now().UnixNano(), nil)
+	result, err := observeSinglePath(mustOpenSyncTree(t, syncRoot), "Private/file.txt", nil, time.Now().UnixNano(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, result.Skipped)
 	assert.Nil(t, result.Event)
 	assert.False(t, result.Resolved)
 	assert.Equal(t, "Private", result.Skipped.Path)
-	assert.Equal(t, IssueLocalReadDenied, result.Skipped.Reason)
+	assert.Equal(t, issueLocalReadDenied, result.Skipped.Reason)
 	assert.True(t, result.Skipped.BlocksReadBoundary)
 }
 
 func TestObserveSinglePath_InternalExclusionResolves(t *testing.T) {
 	t.Parallel()
 
-	result, err := ObserveSinglePath(nil, mustOpenSyncTree(t, t.TempDir()), "file.tmp", nil, time.Now().UnixNano(), nil)
+	result, err := observeSinglePath(mustOpenSyncTree(t, t.TempDir()), "file.tmp", nil, time.Now().UnixNano(), nil)
 	require.NoError(t, err)
 	assert.Nil(t, result.Event)
 	assert.Nil(t, result.Skipped)
@@ -285,7 +287,7 @@ func TestObserveSinglePathWithFilter_ObservesIgnoreMarkerFileNormally(t *testing
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "docs"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "docs", ".odignore"), []byte("marker"), 0o600))
 
-	result, err := ObserveSinglePathWithFilter(
+	result, err := observeSinglePathWithFilter(
 		nil,
 		mustOpenSyncTree(t, syncRoot),
 		"docs/.odignore",
@@ -301,4 +303,27 @@ func TestObserveSinglePathWithFilter_ObservesIgnoreMarkerFileNormally(t *testing
 	assert.Equal(t, ItemTypeFile, result.Event.ItemType)
 	assert.Nil(t, result.Skipped)
 	assert.False(t, result.Resolved)
+}
+
+// observeSinglePath is the unfiltered form used by these tests. Production
+// callers always supply explicit filter configuration and observation rules
+// through observeSinglePathWithFilter, so the convenience form lives here
+// rather than in the production file.
+func observeSinglePath(
+	syncTree *synctree.Root,
+	relPath string,
+	base *BaselineEntry,
+	observeStartNano int64,
+	hashFunc func(string) (string, error),
+) (singlePathObservation, error) {
+	return observeSinglePathWithFilter(
+		nil,
+		syncTree,
+		relPath,
+		base,
+		observeStartNano,
+		hashFunc,
+		ContentFilterConfig{},
+		LocalObservationRules{},
+	)
 }

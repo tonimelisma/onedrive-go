@@ -126,16 +126,16 @@ func TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities(t *te
 	require.NoError(t, store.UpsertBlockScope(ctx, testBlockScope(SKPermRemoteWrite("Private"), time.Minute, time.Unix(61, 0))))
 
 	dbPath := syncStorePathForStoreScopeTest(t, store)
-	statuses, err := ReadPathTruthStatus(ctx, dbPath, testLogger(t), []string{
+	statuses, err := readPathTruthStatus(ctx, dbPath, testLogger(t), []string{
 		"bad:name.txt",
 		"Private/sub/file.txt",
 	})
 	require.NoError(t, err)
 	require.Len(t, statuses, 2)
 
-	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, statuses["bad:name.txt"].Local.Availability)
+	assert.Equal(t, truthAvailabilityBlockedObservationIssue, statuses["bad:name.txt"].Local.Availability)
 	assert.Equal(t, IssueInvalidFilename, statuses["bad:name.txt"].Local.IssueType)
-	assert.Equal(t, TruthAvailabilityAvailable, statuses["Private/sub/file.txt"].Local.Availability)
+	assert.Equal(t, truthAvailabilityAvailable, statuses["Private/sub/file.txt"].Local.Availability)
 	assert.True(t, statuses["Private/sub/file.txt"].Local.ScopeKey.IsZero())
 }
 
@@ -146,25 +146,25 @@ func TestReadPathTruthStatus_DerivesReadBoundaryDescendantsFromObservationIssues
 	store := newTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
-	scopeKey := SKPermLocalRead("Private")
+	scopeKey := sKPermLocalRead("Private")
 
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:      "Private",
 		DriveID:   driveID,
-		IssueType: IssueLocalReadDenied,
+		IssueType: issueLocalReadDenied,
 		ScopeKey:  scopeKey,
 	})
 
 	dbPath := syncStorePathForStoreScopeTest(t, store)
-	statuses, err := ReadPathTruthStatus(ctx, dbPath, testLogger(t), []string{
+	statuses, err := readPathTruthStatus(ctx, dbPath, testLogger(t), []string{
 		"Private/sub/file.txt",
 	})
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
 
-	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, statuses["Private/sub/file.txt"].Local.Availability)
-	assert.Equal(t, PathTruthSourceObservationIssue, statuses["Private/sub/file.txt"].Local.Source)
-	assert.Equal(t, IssueLocalReadDenied, statuses["Private/sub/file.txt"].Local.IssueType)
+	assert.Equal(t, truthAvailabilityBlockedObservationIssue, statuses["Private/sub/file.txt"].Local.Availability)
+	assert.Equal(t, pathTruthSourceObservationIssue, statuses["Private/sub/file.txt"].Local.Source)
+	assert.Equal(t, issueLocalReadDenied, statuses["Private/sub/file.txt"].Local.IssueType)
 	assert.Equal(t, scopeKey, statuses["Private/sub/file.txt"].Local.ScopeKey)
 }
 

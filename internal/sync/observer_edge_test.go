@@ -42,7 +42,7 @@ func TestRacilyClean_SameSecondDetection(t *testing.T) {
 		LocalMtime:     info.ModTime().UnixNano(),
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
 
 	// Immediately scan — the file's mtime is within 1 second of now.
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
@@ -83,7 +83,7 @@ func TestMtimeChangeWithoutContentChange(t *testing.T) {
 		LocalMtime:     info.ModTime().UnixNano() - 2*int64(time.Second), // 2 seconds earlier
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
@@ -117,7 +117,7 @@ func TestFullScan_NosyncMarkerDoesNotGuardSync(t *testing.T) {
 	writeTestFile(t, syncRoot, "file2.txt", "content2")
 	writeTestFile(t, syncRoot, ".nosync", "")
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
@@ -160,7 +160,7 @@ func TestOneDriveInvalidNames_Rejected(t *testing.T) {
 
 	for _, tt := range invalidNames {
 		t.Run(tt.name+"_"+tt.reason, func(t *testing.T) {
-			reason, _ := ValidateOneDriveName(tt.name)
+			reason, _ := validateOneDriveName(tt.name)
 			assert.NotEmpty(t, reason,
 				"%q should be rejected (%s)", tt.name, tt.reason)
 		})
@@ -187,7 +187,7 @@ func TestOneDriveValidNames_Accepted(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Note: NUL.txt would actually be valid since we only check
 			// the exact name "nul", not names starting with "nul".
-			reason, _ := ValidateOneDriveName(name)
+			reason, _ := validateOneDriveName(name)
 			assert.Empty(t, reason,
 				"%q should be accepted", name)
 		})
@@ -217,7 +217,7 @@ func TestAsciiLower(t *testing.T) {
 		t.Run(tt.input, func(t *testing.T) {
 			t.Parallel()
 
-			got := AsciiLower(tt.input)
+			got := asciiLower(tt.input)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -226,18 +226,18 @@ func TestAsciiLower(t *testing.T) {
 // TestValidateOneDriveName_MaxLength validates the 255-byte limit.
 func TestValidateOneDriveName_MaxLength(t *testing.T) {
 	validName := strings.Repeat("a", 255)
-	reason, _ := ValidateOneDriveName(validName)
+	reason, _ := validateOneDriveName(validName)
 	assert.Empty(t, reason, "255 bytes should be valid")
 
 	// 256 bytes is invalid.
 	invalidName := validName + "b"
-	reason, _ = ValidateOneDriveName(invalidName)
+	reason, _ = validateOneDriveName(invalidName)
 	assert.NotEmpty(t, reason, "256 bytes should be invalid")
 }
 
 // TestValidateOneDriveName_Empty validates that empty names are rejected.
 func TestValidateOneDriveName_Empty(t *testing.T) {
-	reason, _ := ValidateOneDriveName("")
+	reason, _ := validateOneDriveName("")
 	assert.NotEmpty(t, reason, "empty name should be invalid")
 }
 
@@ -246,14 +246,14 @@ func TestValidateOneDriveName_Empty(t *testing.T) {
 func TestIsOversizedFile(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	// Exactly at the limit — should NOT be oversized.
-	assert.False(t, obs.IsOversizedFile(MaxOneDriveFileSize, "exactly-250gb.bin"),
+	assert.False(t, obs.IsOversizedFile(maxOneDriveFileSize, "exactly-250gb.bin"),
 		"file exactly at MaxOneDriveFileSize should not be oversized")
 
 	// One byte over the limit — should be oversized.
-	assert.True(t, obs.IsOversizedFile(MaxOneDriveFileSize+1, "over-250gb.bin"),
+	assert.True(t, obs.IsOversizedFile(maxOneDriveFileSize+1, "over-250gb.bin"),
 		"file one byte over MaxOneDriveFileSize should be oversized")
 
 	// Zero-length file — should NOT be oversized.

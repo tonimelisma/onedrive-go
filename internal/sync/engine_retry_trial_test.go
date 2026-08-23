@@ -17,7 +17,7 @@ func TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly(t *testing.T) {
 	ta := rt.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "retry.txt",
-		View: &PathView{Path: "retry.txt"},
+		View: &pathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, ta)
 
@@ -72,12 +72,12 @@ func TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial(t *testi
 	first := rt.depGraph.Add(&Action{
 		Type: ActionUpload,
 		Path: "first.txt",
-		View: &PathView{Path: "first.txt"},
+		View: &pathView{Path: "first.txt"},
 	}, 1, nil)
 	second := rt.depGraph.Add(&Action{
 		Type: ActionDownload,
 		Path: "second.txt",
-		View: &PathView{Path: "second.txt"},
+		View: &pathView{Path: "second.txt"},
 	}, 2, nil)
 	require.NotNil(t, first)
 	require.NotNil(t, second)
@@ -157,7 +157,7 @@ func TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow(t *testing.T) {
 		NextRetryAt:  now,
 	}))
 
-	flow.clearRetryWorkOnSuccess(t.Context(), &ActionCompletion{
+	flow.clearRetryWorkOnSuccess(t.Context(), &actionCompletion{
 		Path:       "done.txt",
 		ActionType: ActionUpload,
 	})

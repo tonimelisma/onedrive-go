@@ -6,10 +6,10 @@ func (r *oneShotRunner) runResultsLoopWithInitialOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	completions <-chan ActionCompletion,
-	initialOutbox []*TrackedAction,
+	completions <-chan actionCompletion,
+	initialOutbox []*trackedAction,
 ) error {
-	outbox := append([]*TrackedAction(nil), initialOutbox...)
+	outbox := append([]*trackedAction(nil), initialOutbox...)
 	var fatalErr error
 
 	for {
@@ -50,10 +50,10 @@ func (r *oneShotRunner) pollImmediateCompletion(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	completions <-chan ActionCompletion,
-	outbox []*TrackedAction,
+	completions <-chan actionCompletion,
+	outbox []*trackedAction,
 	fatalErr error,
-) ([]*TrackedAction, error, bool) {
+) ([]*trackedAction, error, bool) {
 	if len(outbox) != 0 || r.runningCount != 0 {
 		return nil, fatalErr, false
 	}
@@ -70,7 +70,7 @@ func (r *oneShotRunner) pollImmediateCompletion(
 	}
 }
 
-func (r *oneShotRunner) finishResultsLoopIfSettled(outbox []*TrackedAction, fatalErr error) (bool, error) {
+func (r *oneShotRunner) finishResultsLoopIfSettled(outbox []*trackedAction, fatalErr error) (bool, error) {
 	switch {
 	case fatalErr == nil && len(outbox) == 0 && r.runningCount == 0 && !r.hasDueHeldWork(r.engine.nowFunc()):
 		return true, nil
@@ -85,9 +85,9 @@ func (r *oneShotRunner) runResultsLoopIdle(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	completions <-chan ActionCompletion,
+	completions <-chan actionCompletion,
 	fatalErr error,
-) ([]*TrackedAction, error, bool) {
+) ([]*trackedAction, error, bool) {
 	if nextOutbox, nextFatal, handled := r.releaseIdleDueHeldWork(ctx, bl); handled {
 		return nextOutbox, nextFatal, false
 	}
@@ -107,7 +107,7 @@ func (r *oneShotRunner) runResultsLoopIdle(
 func (r *oneShotRunner) releaseIdleDueHeldWork(
 	ctx context.Context,
 	bl *Baseline,
-) ([]*TrackedAction, error, bool) {
+) ([]*trackedAction, error, bool) {
 	if r.runningCount != 0 || !r.hasDueHeldWork(r.engine.nowFunc()) {
 		return nil, nil, false
 	}
@@ -125,10 +125,10 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	completions <-chan ActionCompletion,
-	outbox []*TrackedAction,
+	completions <-chan actionCompletion,
+	outbox []*trackedAction,
 	fatalErr error,
-) ([]*TrackedAction, error, bool) {
+) ([]*trackedAction, error, bool) {
 	select {
 	case r.dispatchCh <- outbox[0]:
 		r.markRunning(outbox[0])
@@ -148,10 +148,10 @@ func (r *oneShotRunner) handleOneShotCompletion(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	outbox []*TrackedAction,
+	outbox []*trackedAction,
 	fatalErr error,
-	completion *ActionCompletion,
-) ([]*TrackedAction, error) {
+	completion *actionCompletion,
+) ([]*trackedAction, error) {
 	if fatalErr != nil || ctx.Err() != nil {
 		if err := r.processShutdownCompletion(ctx, completion, bl); err != nil {
 			r.logSuppressedShutdownCompletionError(completion, err)

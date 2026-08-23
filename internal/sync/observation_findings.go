@@ -10,11 +10,11 @@ import (
 func localObservationManagedIssueTypes() []string {
 	return []string{
 		IssueInvalidFilename,
-		IssuePathTooLong,
-		IssueFileTooLarge,
-		IssueCaseCollision,
-		IssueLocalReadDenied,
-		IssueHashPanic,
+		issuePathTooLong,
+		issueFileTooLarge,
+		issueCaseCollision,
+		issueLocalReadDenied,
+		issueHashPanic,
 	}
 }
 
@@ -26,13 +26,13 @@ func newLocalObservationFindingsBatch() ObservationFindingsBatch {
 
 func newRemoteObservationFindingsBatch() ObservationFindingsBatch {
 	return ObservationFindingsBatch{
-		ManagedIssueTypes: []string{IssueRemoteReadDenied},
+		ManagedIssueTypes: []string{issueRemoteReadDenied},
 	}
 }
 
 func localObservationFindingsBatchFromSkippedItems(
 	driveID driveid.ID,
-	skipped []SkippedItem,
+	skipped []skippedItem,
 ) ObservationFindingsBatch {
 	batch := newLocalObservationFindingsBatch()
 	batch.Issues = make([]ObservationIssue, 0, len(skipped))
@@ -47,7 +47,7 @@ func localObservationFindingsBatchFromSkippedItems(
 func singlePathObservationFindingsBatch(
 	driveID driveid.ID,
 	managedPath string,
-	observation *SinglePathObservation,
+	observation *singlePathObservation,
 ) (ObservationFindingsBatch, bool) {
 	if managedPath == "" {
 		return ObservationFindingsBatch{}, false
@@ -82,7 +82,7 @@ func appendManagedObservationPath(batch *ObservationFindingsBatch, path string) 
 func appendSkippedObservationFinding(
 	batch *ObservationFindingsBatch,
 	driveID driveid.ID,
-	item *SkippedItem,
+	item *skippedItem,
 ) {
 	if batch == nil || item == nil || item.Reason == "" || item.Path == "" {
 		return
@@ -93,8 +93,8 @@ func appendSkippedObservationFinding(
 		DriveID:   driveID,
 		IssueType: item.Reason,
 	}
-	if item.Reason == IssueLocalReadDenied && item.BlocksReadBoundary {
-		issue.ScopeKey = SKPermLocalRead(item.Path)
+	if item.Reason == issueLocalReadDenied && item.BlocksReadBoundary {
+		issue.ScopeKey = sKPermLocalRead(item.Path)
 	}
 
 	batch.Issues = append(batch.Issues, issue)
@@ -103,7 +103,7 @@ func appendSkippedObservationFinding(
 func rootRemoteReadDeniedObservationFindingsBatch(
 	driveID driveid.ID,
 ) ObservationFindingsBatch {
-	return remoteReadDeniedObservationBatch(driveID, "/", SKPermRemoteRead(""))
+	return remoteReadDeniedObservationBatch(driveID, "/", sKPermRemoteRead(""))
 }
 
 func remoteReadDeniedObservationBatch(
@@ -115,7 +115,7 @@ func remoteReadDeniedObservationBatch(
 	batch.Issues = []ObservationIssue{{
 		Path:      path,
 		DriveID:   driveID,
-		IssueType: IssueRemoteReadDenied,
+		IssueType: issueRemoteReadDenied,
 		ScopeKey:  scopeKey,
 	}}
 	return batch

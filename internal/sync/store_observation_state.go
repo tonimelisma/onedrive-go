@@ -28,7 +28,7 @@ const (
 	remoteRefreshEnumerateInterval = time.Hour
 )
 
-type ObservationState struct {
+type observationState struct {
 	ContentDriveID           driveid.ID
 	Cursor                   string
 	NextFullRemoteRefreshAt  int64
@@ -37,9 +37,9 @@ type ObservationState struct {
 }
 
 const (
-	LocalTruthRecoveryDroppedEvents  = "dropped_local_events"
-	LocalTruthRecoveryWatcherError   = "watcher_error"
-	LocalTruthRecoveryFullScanFailed = "full_local_scan_failed"
+	localTruthRecoveryDroppedEvents  = "dropped_local_events"
+	localTruthRecoveryWatcherError   = "watcher_error"
+	localTruthRecoveryFullScanFailed = "full_local_scan_failed"
 )
 
 func remoteRefreshIntervalForMode(mode remoteObservationMode) time.Duration {
@@ -53,7 +53,7 @@ func remoteRefreshIntervalForMode(mode remoteObservationMode) time.Duration {
 	}
 }
 
-func applyRemoteRefreshSchedule(state *ObservationState, at time.Time, mode remoteObservationMode) {
+func applyRemoteRefreshSchedule(state *observationState, at time.Time, mode remoteObservationMode) {
 	state.NextFullRemoteRefreshAt = at.Add(remoteRefreshIntervalForMode(mode)).UnixNano()
 }
 
@@ -110,14 +110,14 @@ func ensureMatchingContentDriveID(expected, actual driveid.ID) error {
 	return fmt.Errorf("sync: state DB content drive mismatch: stored %s, attempted %s", actual, expected)
 }
 
-func (m *SyncStore) ReadObservationState(ctx context.Context) (*ObservationState, error) {
+func (m *SyncStore) ReadObservationState(ctx context.Context) (*observationState, error) {
 	if _, err := m.db.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
 		return nil, fmt.Errorf("sync: ensuring observation_state row: %w", err)
 	}
 
 	var (
 		contentDriveID string
-		state          ObservationState
+		state          observationState
 		localComplete  int
 	)
 
@@ -194,7 +194,7 @@ func (m *SyncStore) MarkFullRemoteRefresh(
 		"sync: beginning full remote refresh transaction",
 		"sync: rollback full remote refresh transaction",
 		"sync: committing full remote refresh transaction",
-		func(state *ObservationState) {
+		func(state *observationState) {
 			applyRemoteRefreshSchedule(state, at, mode)
 		},
 	)
@@ -217,7 +217,7 @@ func (m *SyncStore) ClampFullRemoteRefreshDeadline(
 		"sync: beginning full remote refresh clamp transaction",
 		"sync: rollback full remote refresh clamp transaction",
 		"sync: committing full remote refresh clamp transaction",
-		func(state *ObservationState) {
+		func(state *observationState) {
 			if state.NextFullRemoteRefreshAt == 0 || state.NextFullRemoteRefreshAt > deadline {
 				state.NextFullRemoteRefreshAt = deadline
 				changed = true
@@ -233,7 +233,7 @@ func (m *SyncStore) markObservationRefresh(
 	beginMessage string,
 	rollbackMessage string,
 	commitMessage string,
-	update func(*ObservationState),
+	update func(*observationState),
 ) (err error) {
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
@@ -284,21 +284,21 @@ func (m *SyncStore) rememberContentDriveID(id driveid.ID) {
 func (m *SyncStore) readObservationStateTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-) (*ObservationState, error) {
+) (*observationState, error) {
 	return readObservationStateFromTx(ctx, tx)
 }
 
 func readObservationStateFromTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-) (*ObservationState, error) {
+) (*observationState, error) {
 	if _, err := tx.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
 		return nil, fmt.Errorf("sync: ensuring observation_state row: %w", err)
 	}
 
 	var (
 		contentDriveID string
-		state          ObservationState
+		state          observationState
 		localComplete  int
 	)
 
@@ -324,7 +324,7 @@ func (m *SyncStore) ensureContentDriveIDTx(
 	ctx context.Context,
 	tx sqlTxRunner,
 	driveID driveid.ID,
-	state *ObservationState,
+	state *observationState,
 ) error {
 	if driveID.IsZero() {
 		return nil
@@ -350,7 +350,7 @@ func (m *SyncStore) ensureContentDriveIDTx(
 func (m *SyncStore) writeObservationStateTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	state *ObservationState,
+	state *observationState,
 ) error {
 	if err := writeObservationStateToTx(ctx, tx, state); err != nil {
 		return err
@@ -366,7 +366,7 @@ func (m *SyncStore) writeObservationStateTx(
 func writeObservationStateToTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	state *ObservationState,
+	state *observationState,
 ) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM observation_state`); err != nil {
 		return fmt.Errorf("sync: clearing observation_state before write: %w", err)
@@ -389,14 +389,14 @@ func writeObservationStateToTx(
 }
 
 func (m *SyncStore) MarkLocalTruthComplete(ctx context.Context) error {
-	return m.updateObservationState(ctx, func(state *ObservationState) {
+	return m.updateObservationState(ctx, func(state *observationState) {
 		state.LocalTruthComplete = true
 		state.LocalTruthRecoveryReason = ""
 	})
 }
 
 func (m *SyncStore) MarkLocalTruthSuspect(ctx context.Context, reason string) error {
-	return m.updateObservationState(ctx, func(state *ObservationState) {
+	return m.updateObservationState(ctx, func(state *observationState) {
 		state.LocalTruthComplete = false
 		state.LocalTruthRecoveryReason = reason
 	})
@@ -404,7 +404,7 @@ func (m *SyncStore) MarkLocalTruthSuspect(ctx context.Context, reason string) er
 
 func (m *SyncStore) updateObservationState(
 	ctx context.Context,
-	update func(*ObservationState),
+	update func(*observationState),
 ) (err error) {
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
@@ -430,7 +430,7 @@ func (m *SyncStore) updateObservationState(
 	return nil
 }
 
-func (m *SyncStore) replaceObservationState(ctx context.Context, state *ObservationState) (err error) {
+func (m *SyncStore) replaceObservationState(ctx context.Context, state *observationState) (err error) {
 	tx, err := beginPerfTx(ctx, m.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin observation-state replace tx: %w", err)

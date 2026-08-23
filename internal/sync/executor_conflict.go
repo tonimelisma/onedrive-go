@@ -15,14 +15,14 @@ import (
 // unique conflict-copy path. It performs no baseline or remote mutation; the
 // current-state planner schedules any follow-up download/upload action
 // separately.
-func (e *Executor) ExecuteConflictCopy(_ context.Context, action *Action) ActionOutcome {
+func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) actionOutcome {
 	if err := e.validateNoSymlinkBoundary(action.Path, "conflict-copy"); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionConflictCopy,
 			err,
 			action.Path,
-			PermissionCapabilityLocalWrite,
+			permissionCapabilityLocalWrite,
 		)
 	}
 
@@ -33,13 +33,13 @@ func (e *Executor) ExecuteConflictCopy(_ context.Context, action *Action) Action
 			ActionConflictCopy,
 			normalizeSyncTreePathError(err),
 			action.Path,
-			PermissionCapabilityLocalWrite,
+			permissionCapabilityLocalWrite,
 		)
 	}
 
 	conflictPath, err := e.uniqueConflictCopyPath(absPath)
 	if err != nil {
-		return e.failedOutcomeWithFailure(action, ActionConflictCopy, err, action.Path, PermissionCapabilityLocalWrite)
+		return e.failedOutcomeWithFailure(action, ActionConflictCopy, err, action.Path, permissionCapabilityLocalWrite)
 	}
 	conflictRel, err := e.syncTree.Rel(conflictPath)
 	if err != nil {
@@ -48,13 +48,13 @@ func (e *Executor) ExecuteConflictCopy(_ context.Context, action *Action) Action
 			ActionConflictCopy,
 			normalizeSyncTreePathError(err),
 			action.Path,
-			PermissionCapabilityLocalWrite,
+			permissionCapabilityLocalWrite,
 		)
 	}
 
 	if err := e.syncTree.Rename(action.Path, conflictRel); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			outcome := ActionOutcome{
+			outcome := actionOutcome{
 				Action:   ActionConflictCopy,
 				Success:  true,
 				Path:     action.Path,
@@ -71,7 +71,7 @@ func (e *Executor) ExecuteConflictCopy(_ context.Context, action *Action) Action
 			ActionConflictCopy,
 			fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(conflictPath), normalizeSyncTreePathError(err)),
 			action.Path,
-			PermissionCapabilityLocalWrite,
+			permissionCapabilityLocalWrite,
 		)
 	}
 
@@ -80,7 +80,7 @@ func (e *Executor) ExecuteConflictCopy(_ context.Context, action *Action) Action
 		slog.String("conflict_copy", filepath.Base(conflictPath)),
 	)
 
-	outcome := ActionOutcome{
+	outcome := actionOutcome{
 		Action:  ActionConflictCopy,
 		Success: true,
 		Path:    action.Path,
@@ -95,8 +95,8 @@ func (e *Executor) ExecuteConflictCopy(_ context.Context, action *Action) Action
 // on-disk file. Executor-owned uniqueness is intentional: readability comes
 // from the timestamped base name, but actual collision prevention depends on
 // the current sync-root filesystem state.
-func (e *Executor) uniqueConflictCopyPath(absPath string) (string, error) {
-	basePath := ConflictCopyPath(absPath, e.nowFunc())
+func (e *executor) uniqueConflictCopyPath(absPath string) (string, error) {
+	basePath := conflictCopyPath(absPath, e.nowFunc())
 	available, err := e.conflictCopyPathAvailable(basePath)
 	if err != nil {
 		return "", err
@@ -121,7 +121,7 @@ func (e *Executor) uniqueConflictCopyPath(absPath string) (string, error) {
 	}
 }
 
-func (e *Executor) conflictCopyPathAvailable(absPath string) (bool, error) {
+func (e *executor) conflictCopyPathAvailable(absPath string) (bool, error) {
 	relPath, err := e.syncTree.Rel(absPath)
 	if err != nil {
 		return false, fmt.Errorf("relativizing conflict copy path %s: %w", filepath.Base(absPath), normalizeSyncTreePathError(err))
@@ -138,10 +138,10 @@ func (e *Executor) conflictCopyPathAvailable(absPath string) (bool, error) {
 	return false, fmt.Errorf("stating conflict copy path %s: %w", filepath.Base(absPath), normalizeSyncTreePathError(err))
 }
 
-// ConflictCopyPath generates a timestamped conflict copy path.
+// conflictCopyPath generates a timestamped conflict copy path.
 // "file.txt" -> "file.conflict-20260101-120000.txt"
 // ".bashrc"  -> ".bashrc.conflict-20260101-120000" (dotfile: no separate ext)
-func ConflictCopyPath(absPath string, now time.Time) string {
+func conflictCopyPath(absPath string, now time.Time) string {
 	dir := filepath.Dir(absPath)
 	name := filepath.Base(absPath)
 	stem, ext := ConflictStemExt(name)
