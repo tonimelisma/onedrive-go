@@ -64,7 +64,7 @@ Promotion contract:
 ## LI-20260823-01: Graph returned `serviceReadOnly` on `/me/drives` for every test account
 
 First seen: 2026-08-23
-Last seen: 2026-08-23
+Last seen: 2026-08-23 (ongoing at time of writing, ~1 hour)
 Area: live `integration` and `e2e` CI jobs, Graph drive discovery
 Suite / test: CI run `32622492185` on PR #704; `integration` job
 (`TestIntegration_Drives`, `TestIntegration_Drives_PersonalAccountFiltersPhantomDrives`)
@@ -93,7 +93,16 @@ Evidence:
   `personal_testitesti18@outlook.com` with 43 occurrences of the same
   `serviceReadOnly` / `Database Is Read Only` pair.
 - `verify (ubuntu-latest)` and `verify (macos-latest)` on the same commit were
-  unaffected; the macOS leg passed fully.
+  unaffected; both legs passed fully.
+- The failure is scoped to one endpoint, which is the strongest evidence that
+  it is provider-side rather than credential or account state. In the same job,
+  `GET /me` returned `200` and `GET /drives/{driveID}/items/root` returned
+  `200`, while `GET /me/drives` returned `403 serviceReadOnly` on all twenty
+  attempts. Authentication works and the drive itself is readable; only drive
+  enumeration is unavailable.
+- Reproduced across four CI runs over roughly one hour (`32622492185`,
+  `32622862051`, `32623668929` and its reruns), affecting both test accounts
+  identically each time.
 Resolution / mitigation: none applied. `serviceReadOnly` with
 `Database Is Read Only` is a Microsoft-side read-only window, not a client
 condition, and it resolved without repo action. Recorded so a recurrence is
