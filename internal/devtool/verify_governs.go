@@ -22,9 +22,10 @@ import (
 // requirement's status. Neither is compiler-checked, so both drift silently as
 // files are added, renamed, and removed. This check makes them fail loudly.
 const (
-	specDesignDir  = "spec/design"
-	governsPrefix  = "GOVERNS:"
-	governsRootDoc = "spec/requirements/index.md"
+	specDesignDir   = "spec/design"
+	governsPrefix   = "GOVERNS:"
+	governsRootDoc  = "spec/requirements/index.md"
+	routingTableDoc = "CLAUDE.md"
 )
 
 // governedRoots returns the directories whose production Go files must each be
@@ -128,6 +129,13 @@ func findGovernsViolations(repoRoot string) ([]governsViolation, error) {
 	}
 
 	violations = append(violations, citationViolations...)
+
+	routingViolations, err := findDeadRoutingTablePaths(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	violations = append(violations, routingViolations...)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].Path != violations[j].Path {
@@ -332,6 +340,54 @@ func findMissingCitedTests(repoRoot string) ([]governsViolation, error) {
 			violations = append(violations, governsViolation{
 				Path:    repoRelative(repoRoot, doc),
 				Message: fmt.Sprintf("cites test %s, which does not exist", name),
+			})
+		}
+	}
+
+	return violations, nil
+}
+
+// routingPathPattern matches the backticked file and directory references in
+// CLAUDE.md's routing table.
+var routingPathPattern = regexp.MustCompile("`([A-Za-z0-9_./*-]+\\.(?:go|md)|[A-Za-z0-9_/*-]+/)`")
+
+// findDeadRoutingTablePaths reports routing-table entries that point at
+// nothing. CLAUDE.md is the first thing a contributor or agent reads to decide
+// which design doc governs the code they are about to touch, so a reference
+// that no longer resolves sends them to the wrong place — or nowhere.
+func findDeadRoutingTablePaths(repoRoot string) ([]governsViolation, error) {
+	routingDoc := filepath.Join(repoRoot, routingTableDoc)
+
+	data, err := readFile(routingDoc)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf("read %s: %w", routingTableDoc, err)
+	}
+
+	seen := make(map[string]bool)
+
+	var violations []governsViolation
+
+	for _, match := range routingPathPattern.FindAllStringSubmatch(string(data), -1) {
+		reference := match[1]
+		if seen[reference] {
+			continue
+		}
+
+		seen[reference] = true
+
+		matches, globErr := filepath.Glob(filepath.Join(repoRoot, filepath.FromSlash(reference)))
+		if globErr != nil {
+			return nil, fmt.Errorf("expand routing reference %q: %w", reference, globErr)
+		}
+
+		if len(matches) == 0 {
+			violations = append(violations, governsViolation{
+				Path:    routingTableDoc,
+				Message: fmt.Sprintf("routing table references %q, which matches no file", reference),
 			})
 		}
 	}

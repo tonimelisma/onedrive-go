@@ -17,7 +17,7 @@ type ObservationIssue struct {
 // ObservationFindingsBatch is one coherent observation-owned durable batch.
 // The batch replaces the current observation-owned issue set for its managed
 // issue families. Full observation passes manage whole issue families;
-// single-path observation may instead manage exact paths without touching
+// an exact-path batch may instead manage specific paths without touching
 // unrelated durable findings.
 type ObservationFindingsBatch struct {
 	Issues            []ObservationIssue

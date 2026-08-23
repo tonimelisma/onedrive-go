@@ -435,7 +435,7 @@ content-root owner.
 | File family | Role |
 | --- | --- |
 | `observer_local*.go`, `observer_remote.go`, `scanner.go`, `item_converter.go`, `socketio*.go`, `buffer.go`, `local_hash_reuse.go`, `observed_items.go` | Observation: remote and local change capture plus dedupe/buffering |
-| `planner*.go`, `single_path.go`, `actions.go` | Pure planning: turn observed change plus baseline into deterministic actions |
+| `planner*.go`, `actions.go` | Pure planning: turn observed change plus baseline into deterministic actions |
 | `executor*.go`, `worker*.go`, `worker_result.go`, `dep_graph.go`, `active_scopes.go` | Execution: worker dispatch, dependency ordering, scope admission, and conflict-safe file application |
 | `engine.go`, `engine_config.go`, `engine_startup.go`, `engine_current_plan.go`, `engine_run_once*.go`, `engine_watch*.go`, `engine_runtime_start.go` | Runtime orchestration: startup normalization, shared current-truth observe/load/build/reconcile stages, one-shot results, runtime admission/publication drain, shared watch-loop ownership across bootstrap/running/drain, and steady-state replan flow |
 | `engine_primary_root*.go`, `engine_mount_root.go`, `engine_observation_postprocess.go`, `observed_items.go` | Engine-owned primary-root and mount-root observation: root selection, mount-root fallback, postprocessing, and remote observation projection |

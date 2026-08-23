@@ -21,7 +21,7 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | `internal/synctree/` | `spec/design/system.md` | `spec/design/sync-engine.md`, `spec/design/sync-observation.md`, `spec/design/drive-transfers.md` |
 | `internal/logfile/` | `spec/design/cli.md` | `spec/requirements/configuration.md` |
 | `internal/sync/observer*.go`, `internal/sync/scanner*.go`, `internal/sync/socketio*.go`, `internal/sync/item_converter*.go`, `internal/sync/local_hash_reuse.go` | `spec/design/sync-observation.md` | `spec/reference/onedrive-sync-behavior.md` |
-| `internal/sync/planner*.go`, `internal/sync/single_path*.go`, `internal/sync/truth_status.go` | `spec/design/sync-planning.md` | `spec/reference/onedrive-sync-behavior.md` |
+| `internal/sync/planner*.go`, `internal/sync/truth_status.go` | `spec/design/sync-planning.md` | `spec/reference/onedrive-sync-behavior.md` |
 | `internal/sync/executor*.go`, `internal/sync/worker*.go`, `internal/sync/action_freshness.go`, `internal/sync/dep_graph*.go`, `internal/sync/active_scopes*.go` | `spec/design/sync-execution.md` | |
 | `internal/sync/engine.go`, `internal/sync/engine_config.go`, `internal/sync/engine_run_once*.go`, `internal/sync/engine_current_*.go`, `internal/sync/engine_runtime_*.go`, `internal/sync/engine_watch_*.go`, `internal/sync/shortcut_topology.go`, `internal/sync/shortcut_root_lifecycle.go`, `internal/sync/shortcut_root_planner*.go`, `internal/sync/shortcut_root_transition.go`, `internal/sync/shortcut_root_publication.go`, `internal/sync/shortcut_root_status*.go`, `internal/sync/protected_roots.go`, `internal/sync/shortcut_alias_mutation.go`, `internal/sync/permissions.go`, `internal/sync/permission_*.go`, `internal/cli/sync_flow.go`, `internal/cli/sync_runtime.go`, `internal/cli/sync_render.go` | `spec/design/sync-engine.md` | |
 | `internal/multisync/`, `internal/cli/sync.go` | `spec/design/sync-control-plane.md` | `spec/design/sync-engine.md`, `spec/design/config.md` |
@@ -38,8 +38,9 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | R-6 Non-Functional | `spec/requirements/non-functional.md` | `spec/design/system.md`, `spec/design/retry.md` |
 
 Every production `.go` file under `internal/`, `pkg/`, and `cmd/` must be named
-by exactly one design doc's `GOVERNS:` line, and every `` `TestXxx` `` cited as
-evidence in a design doc must exist. Both are enforced by
+by exactly one design doc's `GOVERNS:` line, every `` `TestXxx` `` cited as
+evidence in a design doc must exist, and every path referenced in the routing
+table above must resolve. All three are enforced by
 `go run ./cmd/devtool verify public`; when two docs claim the same file, the
 more specific pattern wins.
 

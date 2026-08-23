@@ -38,7 +38,7 @@ The observation stack has four main pieces:
 
 ## Ownership Contract
 
-- Owns: local and remote change capture, path normalization, sparse-item recovery, skipped-item reporting, single-path observation, and dirty buffering
+- Owns: local and remote change capture, path normalization, sparse-item recovery, skipped-item reporting, and dirty buffering
 - Does Not Own: planning, retry policy, scope persistence, or user-facing issue interpretation
 - Source of Truth: live filesystem state, Graph responses, and read-only baseline context supplied by the engine
 - Allowed Side Effects: rooted filesystem reads, hashing, Graph observation calls, watch registration, and event emission

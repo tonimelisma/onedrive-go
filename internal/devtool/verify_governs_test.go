@@ -185,3 +185,54 @@ func TestSpecGoverns_AcceptsCitationOfExistingTest(t *testing.T) {
 
 	require.NoError(t, f.run(t))
 }
+
+func (f governsFixture) writeRoutingTable(t *testing.T, body string) {
+	t.Helper()
+
+	require.NoError(t, writeFile(filepath.Join(f.root, "CLAUDE.md"), []byte(body)))
+}
+
+// Validates: R-6.2.1
+//
+// CLAUDE.md's routing table is the first thing a contributor reads to find the
+// governing doc for the code they are about to touch, so a reference that no
+// longer resolves sends them nowhere.
+func TestSpecGoverns_RejectsDeadRoutingTableReference(t *testing.T) {
+	t.Parallel()
+
+	f := newGovernsFixture(t)
+	f.writeGo(t, "internal/thing/thing.go", "package thing\n")
+	f.writeDoc(t, "thing.md", "# Thing\n\nGOVERNS: internal/thing/*.go\n")
+	f.writeRoutingTable(t, "| `internal/thing/thing.go` | `spec/design/thing.md` |\n"+
+		"| `internal/thing/gone.go` | `spec/design/thing.md` |\n")
+
+	err := f.run(t)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `routing table references "internal/thing/gone.go", which matches no file`)
+	assert.NotContains(t, err.Error(), "thing.go\", which matches no file")
+}
+
+// Validates: R-6.2.1
+func TestSpecGoverns_AcceptsResolvableRoutingTable(t *testing.T) {
+	t.Parallel()
+
+	f := newGovernsFixture(t)
+	f.writeGo(t, "internal/thing/thing.go", "package thing\n")
+	f.writeDoc(t, "thing.md", "# Thing\n\nGOVERNS: internal/thing/*.go\n")
+	f.writeRoutingTable(t, "| `internal/thing/*.go` | `spec/design/thing.md` |\n")
+
+	require.NoError(t, f.run(t))
+}
+
+// Validates: R-6.2.1
+//
+// A repo without a routing table is not a defect for this check.
+func TestSpecGoverns_MissingRoutingTableIsNotAViolation(t *testing.T) {
+	t.Parallel()
+
+	f := newGovernsFixture(t)
+	f.writeGo(t, "internal/thing/thing.go", "package thing\n")
+	f.writeDoc(t, "thing.md", "# Thing\n\nGOVERNS: internal/thing/*.go\n")
+
+	require.NoError(t, f.run(t))
+}
