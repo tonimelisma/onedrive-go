@@ -1,6 +1,6 @@
 # Drive Identity
 
-GOVERNS: internal/driveid/canonical.go, internal/driveid/id.go, internal/driveid/itemkey.go, internal/cli/drive.go, internal/cli/drive_*.go, purge.go
+GOVERNS: internal/cli/drive.go, internal/cli/drive_*.go, internal/cli/purge.go, internal/driveid/canonical.go, internal/driveid/id.go, internal/driveid/itemkey.go
 
 Implements: R-3.2 [verified], R-3.5 [verified], R-3.7 [verified], R-3.3.12 [verified], R-3.3.13 [verified], R-6.7.2 [verified], R-3.6.4 [verified], R-3.6.5 [verified], R-6.10.6 [verified]
 

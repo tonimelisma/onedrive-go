@@ -37,6 +37,12 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | R-5 Transfers | `spec/requirements/transfers.md` | `spec/design/drive-transfers.md` |
 | R-6 Non-Functional | `spec/requirements/non-functional.md` | `spec/design/system.md`, `spec/design/retry.md` |
 
+Every production `.go` file under `internal/`, `pkg/`, and `cmd/` must be named
+by exactly one design doc's `GOVERNS:` line, and every `` `TestXxx` `` cited as
+evidence in a design doc must exist. Both are enforced by
+`go run ./cmd/devtool verify public`; when two docs claim the same file, the
+more specific pattern wins.
+
 Planned work: search `spec/` for `[planned]`. Reference docs: `spec/reference/`.
 New contributors should start with `spec/reference/developer-onboarding.md`.
 

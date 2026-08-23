@@ -1,6 +1,6 @@
 # Sync Control Plane
 
-GOVERNS: internal/multisync/*.go, internal/synccontrol/*.go, sync.go
+GOVERNS: internal/cli/sync.go, internal/multisync/*.go, internal/synccontrol/*.go
 
 Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 

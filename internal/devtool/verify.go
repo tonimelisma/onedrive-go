@@ -326,9 +326,18 @@ func runPublicVerification(
 		runOutputBoundaries,
 		runTestConventions,
 		runReadmeStatus,
+		runSpecGoverns,
 		runBuild,
 	}
-	publicStepNames := []string{"format", "lint", "output boundaries", "test conventions", "README status", "build"}
+	publicStepNames := []string{
+		"format",
+		"lint",
+		"output boundaries",
+		"test conventions",
+		"README status",
+		"spec governs",
+		"build",
+	}
 	for i, step := range publicSteps {
 		if err := collector.runStep(publicStepNames[i], func() error {
 			return step(ctx, runner, repoRoot, env, stdout, stderr)
