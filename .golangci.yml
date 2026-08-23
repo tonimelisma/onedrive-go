@@ -96,6 +96,7 @@ linters:
             - github.com/coder/websocket
             - golang.org/x/sync
             - github.com/mattn/go-isatty
+            - golang.org/x/sys
         graph-no-config:
           files:
             - internal/graph/*.go

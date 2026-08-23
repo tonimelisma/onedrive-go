@@ -52,7 +52,7 @@ Explicit non-goals:
 
 | Surface | Primary Risk | Current Guard |
 |--------|--------------|---------------|
-| Path reconstruction and rename/delete targets | Path traversal or escape from sync root | `synctree`/`localpath`/`fsroot` rooted boundaries plus path validation |
+| Path reconstruction and rename/delete targets | Path traversal or escape from sync root | `synctree` resolves every operation, including mutations, through an open `os.Root` descriptor and never accepts an absolute mutation path; `fsroot` does the same for managed state. `localpath` is deliberately uncontained and treats each supplied path as the trust boundary, so sync-owned callers must assert the symlink-ancestor policy before handing it a path |
 | Graph payloads | Missing fields, malformed names, unexpected enum/status combinations | Graph normalization, bounded reads, nil/shape validation |
 | Token persistence | Secret leakage or silent corruption | `tokenfile` validation plus managed-root writes |
 | Pre-auth URLs | Secret leakage or SSRF-like misuse | redaction, host/scheme validation, one raw dispatch boundary |
@@ -65,6 +65,8 @@ Explicit non-goals:
 ## Existing Mitigations
 
 - Explicit filesystem trust boundaries are documented in [system.md](system.md) and enforced in code by `fsroot`, `synctree`, and `localpath`.
+- Lexical path validation alone is not containment. `filepath.Clean` rejects a literal `..` but says nothing about a symlinked ancestor, so `synctree` treats a lexically joined absolute path as unsafe for any mutation and routes every side effect through a rooted descriptor instead.
+- Error classification is treated as part of the boundary: a helper that reclassifies a containment failure as "not found" disarms every caller that branches on absence, so `synctree` refuses to normalize an escape into `os.ErrNotExist`.
 - Graph error bodies are size-capped and Graph quirks are normalized at the boundary; see [graph-client.md](graph-client.md).
 - Token files are validated on read and write, and managed-state I/O stays rooted; see [graph-client.md](graph-client.md) and [config.md](config.md).
 - Local observation filters invalid uploads before they become actions, while remote observation remains server-trusting to avoid silent data loss; see [sync-observation.md](sync-observation.md).

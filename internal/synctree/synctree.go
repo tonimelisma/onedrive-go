@@ -14,16 +14,25 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 )
 
+// rootHandle is the contained filesystem surface every sync-tree operation
+// runs through. Every method resolves names against an open root descriptor,
+// so a name whose components leave the root fails instead of following the
+// escape. Mutating operations are part of this interface precisely because
+// they are the ones that destroy data when containment is skipped.
 type rootHandle interface {
 	Open(name string) (*os.File, error)
 	OpenFile(name string, flag int, perm os.FileMode) (*os.File, error)
 	Stat(name string) (os.FileInfo, error)
 	Lstat(name string) (os.FileInfo, error)
 	Mkdir(name string, perm os.FileMode) error
+	MkdirAll(name string, perm os.FileMode) error
+	Remove(name string) error
+	RemoveAll(name string) error
+	Rename(oldname, newname string) error
+	Chtimes(name string, atime time.Time, mtime time.Time) error
 	FS() fs.FS
 	Close() error
 }
@@ -57,6 +66,35 @@ func (h *osRootHandle) Mkdir(name string, perm os.FileMode) error {
 	return h.root.Mkdir(name, perm)
 }
 
+func (h *osRootHandle) MkdirAll(name string, perm os.FileMode) error {
+	//nolint:wrapcheck // caller adds rooted path context after containment checks.
+	return h.root.MkdirAll(name, perm)
+}
+
+func (h *osRootHandle) Remove(name string) error {
+	//nolint:wrapcheck // caller adds rooted path context after containment checks.
+	return h.root.Remove(name)
+}
+
+func (h *osRootHandle) RemoveAll(name string) error {
+	//nolint:wrapcheck // caller adds rooted path context after containment checks.
+	return h.root.RemoveAll(name)
+}
+
+func (h *osRootHandle) Rename(oldname, newname string) error {
+	//nolint:wrapcheck // caller adds rooted path context after containment checks.
+	return h.root.Rename(oldname, newname)
+}
+
+// Chtimes carries the os.Root caveat documented upstream: on Unix a
+// regular-file-to-symlink swap racing this call may apply to the link rather
+// than its target. That is strictly narrower than the unrooted os.Chtimes it
+// replaces, and the sync tree has no stronger primitive available.
+func (h *osRootHandle) Chtimes(name string, atime time.Time, mtime time.Time) error {
+	//nolint:wrapcheck // caller adds rooted path context after containment checks.
+	return h.root.Chtimes(name, atime, mtime)
+}
+
 func (h *osRootHandle) FS() fs.FS {
 	return h.root.FS()
 }
@@ -66,16 +104,24 @@ func (h *osRootHandle) Close() error {
 	return h.root.Close()
 }
 
+// rootOps is the injection seam for failure testing. Every mutating hook
+// receives an open rootHandle plus a rooted-relative name rather than an
+// absolute path: an absolute path carries no containment, so accepting one
+// here would let a future call site reintroduce the escape this boundary
+// exists to prevent.
+//
+// lstatAbs is the single deliberate exception. It answers questions about the
+// sync root directory itself, which by definition sits outside any root
+// handle, and must never be used for paths beneath the root.
 type rootOps struct {
 	openRoot  func(dir string) (rootHandle, error)
-	mkdirAll  func(path string, perm os.FileMode) error
-	remove    func(path string) error
-	rmdir     func(path string) error
-	removeAll func(path string) error
-	rename    func(oldpath, newpath string) error
-	chtimes   func(path string, atime time.Time, mtime time.Time) error
-	lstat     func(path string) (os.FileInfo, error)
-	glob      func(pattern string) ([]string, error)
+	mkdirAll  func(root rootHandle, name string, perm os.FileMode) error
+	remove    func(root rootHandle, name string) error
+	rmdir     func(root rootHandle, name string) error
+	removeAll func(root rootHandle, name string) error
+	rename    func(root rootHandle, oldname, newname string) error
+	chtimes   func(root rootHandle, name string, atime time.Time, mtime time.Time) error
+	lstatAbs  func(path string) (os.FileInfo, error)
 }
 
 func defaultRootOps() rootOps {
@@ -89,14 +135,27 @@ func defaultRootOps() rootOps {
 
 			return &osRootHandle{root: root}, nil
 		},
-		mkdirAll:  os.MkdirAll,
-		remove:    os.Remove,
-		rmdir:     syscall.Rmdir,
-		removeAll: os.RemoveAll,
-		rename:    os.Rename,
-		chtimes:   os.Chtimes,
-		lstat:     os.Lstat,
-		glob:      filepath.Glob,
+		mkdirAll: func(root rootHandle, name string, perm os.FileMode) error {
+			return root.MkdirAll(name, perm)
+		},
+		remove: func(root rootHandle, name string) error {
+			return root.Remove(name)
+		},
+		// rmdir keeps rmdir(2) semantics (directories only, fails on a
+		// non-empty directory) so the final removal stays the race guard that
+		// RemoveEmptyDirNoFollow documents. It is a separate hook from remove
+		// so failure-injection tests can target that exact syscall.
+		rmdir: removeEmptyDirRooted,
+		removeAll: func(root rootHandle, name string) error {
+			return root.RemoveAll(name)
+		},
+		rename: func(root rootHandle, oldname, newname string) error {
+			return root.Rename(oldname, newname)
+		},
+		chtimes: func(root rootHandle, name string, atime time.Time, mtime time.Time) error {
+			return root.Chtimes(name, atime, mtime)
+		},
+		lstatAbs: os.Lstat,
 	}
 }
 
@@ -338,6 +397,52 @@ func (r *Root) statWithRoot(
 	}
 
 	return info, nil
+}
+
+// mutateWithRoot runs a mutating operation against a freshly opened root
+// handle. It mirrors openWithRoot/statWithRoot so every sync-tree side effect
+// resolves its name inside the root rather than against a lexically joined
+// absolute path.
+func (r *Root) mutateWithRoot(
+	rel string,
+	errorFormat string,
+	mutate func(root rootHandle, clean string) error,
+) error {
+	clean, err := cleanRelative(rel)
+	if err != nil {
+		return err
+	}
+
+	root, err := r.ops.openRoot(r.dir)
+	if err != nil {
+		return fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+	}
+
+	mutateErr := mutate(root, clean)
+	closeErr := root.Close()
+	if mutateErr != nil {
+		if closeErr != nil {
+			return errors.Join(mutateErr, closeErr)
+		}
+
+		return fmt.Errorf(errorFormat+": %w", r.absForMessage(clean), r.normalizeNotExist(r.absForMessage(clean), mutateErr))
+	}
+
+	if closeErr != nil {
+		return fmt.Errorf("closing sync root %s: %w", r.dir, closeErr)
+	}
+
+	return nil
+}
+
+// absForMessage renders a rooted-relative name as an absolute path for error
+// text only. It is never used to perform filesystem work.
+func (r *Root) absForMessage(clean string) string {
+	if clean == "." {
+		return r.dir
+	}
+
+	return filepath.Join(r.dir, clean)
 }
 
 func (r *Root) StatAbs(abs string) (os.FileInfo, error) {
@@ -664,17 +769,14 @@ func (r *Root) removeTreeNoFollow(rel string) error {
 	}
 }
 
+// MkdirAll creates rel and any missing parents inside the sync root.
+// Components that resolve outside the root fail closed. Symlinks that stay
+// inside the root are ordinary content and are followed; callers that must
+// reject in-root symlinks too want MkdirAllNoFollow.
 func (r *Root) MkdirAll(rel string, perm os.FileMode) error {
-	path, err := r.Abs(rel)
-	if err != nil {
-		return err
-	}
-
-	if err := r.ops.mkdirAll(path, perm); err != nil {
-		return fmt.Errorf("creating directory %s: %w", path, err)
-	}
-
-	return nil
+	return r.mutateWithRoot(rel, "creating directory %s", func(root rootHandle, clean string) error {
+		return root.MkdirAll(clean, perm)
+	})
 }
 
 func (r *Root) ValidateNoSymlinkAncestors(rel string) error {
@@ -747,22 +849,17 @@ func (r *Root) MkdirAllNoFollow(rel string, perm os.FileMode) error {
 	return nil
 }
 
+// Remove deletes a single entry inside the sync root. Paths that resolve
+// outside the root fail closed.
 func (r *Root) Remove(rel string) error {
-	path, err := r.Abs(rel)
-	if err != nil {
-		return err
-	}
-
-	if err := r.ops.remove(path); err != nil {
-		return fmt.Errorf("removing %s: %w", path, err)
-	}
-
-	return nil
+	return r.mutateWithRoot(rel, "removing %s", func(root rootHandle, clean string) error {
+		return r.ops.remove(root, clean)
+	})
 }
 
 // RemoveEmptyDirNoFollow removes rel only if it is an empty directory within
 // the rooted sync tree. The explicit empty check gives callers a clear contract;
-// the final rmdir syscall is the race guard if the directory gains a child or
+// the final rooted removal is the race guard if the directory gains a child or
 // is swapped for a non-directory after the check.
 func (r *Root) RemoveEmptyDirNoFollow(rel string) error {
 	empty, err := r.DirEmptyNoFollow(rel)
@@ -773,28 +870,22 @@ func (r *Root) RemoveEmptyDirNoFollow(rel string) error {
 		return fmt.Errorf("removing empty directory %s: directory is not empty", rel)
 	}
 
-	path, err := r.Abs(rel)
-	if err != nil {
+	if err := r.mutateWithRoot(rel, "removing empty directory %s", func(root rootHandle, clean string) error {
+		return r.ops.rmdir(root, clean)
+	}); err != nil {
 		return err
-	}
-	if err := r.ops.rmdir(path); err != nil {
-		return fmt.Errorf("removing empty directory %s: %w", rel, err)
 	}
 
 	return nil
 }
 
+// RemoveAll deletes rel and its descendants inside the sync root. Paths that
+// resolve outside the root fail closed. Callers that must also refuse in-root
+// symlinks want RemoveTreeNoFollow.
 func (r *Root) RemoveAll(rel string) error {
-	path, err := r.Abs(rel)
-	if err != nil {
-		return err
-	}
-
-	if err := r.ops.removeAll(path); err != nil {
-		return fmt.Errorf("removing tree %s: %w", path, err)
-	}
-
-	return nil
+	return r.mutateWithRoot(rel, "removing tree %s", func(root rootHandle, clean string) error {
+		return r.ops.removeAll(root, clean)
+	})
 }
 
 func (r *Root) RemoveAbs(abs string) error {
@@ -806,18 +897,44 @@ func (r *Root) RemoveAbs(abs string) error {
 	return r.Remove(rel)
 }
 
+// Rename moves srcRel to dstRel inside the sync root. Either path resolving
+// outside the root fails closed, which matters more here than elsewhere:
+// rename silently replaces its destination, so an escaping rename destroys
+// data the sync tree never owned.
 func (r *Root) Rename(srcRel, dstRel string) error {
-	srcPath, err := r.Abs(srcRel)
+	srcClean, err := cleanRelative(srcRel)
 	if err != nil {
 		return err
 	}
-	dstPath, err := r.Abs(dstRel)
+	dstClean, err := cleanRelative(dstRel)
 	if err != nil {
 		return err
 	}
 
-	if err := r.ops.rename(srcPath, dstPath); err != nil {
-		return fmt.Errorf("renaming %s to %s: %w", srcPath, dstPath, err)
+	root, err := r.ops.openRoot(r.dir)
+	if err != nil {
+		return fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+	}
+
+	renameErr := r.ops.rename(root, srcClean, dstClean)
+	closeErr := root.Close()
+	if renameErr != nil {
+		if closeErr != nil {
+			return errors.Join(renameErr, closeErr)
+		}
+
+		srcPath := r.absForMessage(srcClean)
+
+		return fmt.Errorf(
+			"renaming %s to %s: %w",
+			srcPath,
+			r.absForMessage(dstClean),
+			r.normalizeNotExist(srcPath, renameErr),
+		)
+	}
+
+	if closeErr != nil {
+		return fmt.Errorf("closing sync root %s: %w", r.dir, closeErr)
 	}
 
 	return nil
@@ -880,17 +997,12 @@ func (r *Root) RenameWithTemporarySibling(srcRel, dstRel, tempStem string, attem
 	return nil
 }
 
+// Chtimes sets access and modification times inside the sync root. See the
+// osRootHandle.Chtimes note for the upstream Unix symlink-swap caveat.
 func (r *Root) Chtimes(rel string, atime time.Time, mtime time.Time) error {
-	path, err := r.Abs(rel)
-	if err != nil {
-		return err
-	}
-
-	if err := r.ops.chtimes(path, atime, mtime); err != nil {
-		return fmt.Errorf("setting times on %s: %w", path, err)
-	}
-
-	return nil
+	return r.mutateWithRoot(rel, "setting times on %s", func(root rootHandle, clean string) error {
+		return r.ops.chtimes(root, clean, atime, mtime)
+	})
 }
 
 // WalkDir walks the sync tree and calls fn with absolute paths rooted under r.
@@ -915,44 +1027,23 @@ func (r *Root) WalkDir(fn fs.WalkDirFunc) error {
 	return nil
 }
 
-// Glob matches a relative glob pattern within the sync root and returns rooted
-// relative match paths.
-func (r *Root) Glob(pattern string) ([]string, error) {
-	if pattern == "" {
-		return nil, fmt.Errorf("glob pattern is empty")
-	}
-
-	dirPattern := filepath.Dir(pattern)
-	basePattern := filepath.Base(pattern)
-
-	dirPath, err := r.Abs(dirPattern)
-	if err != nil {
-		return nil, err
-	}
-
-	matches, err := r.ops.glob(filepath.Join(dirPath, basePattern))
-	if err != nil {
-		return nil, fmt.Errorf("globbing %s: %w", filepath.Join(dirPath, basePattern), err)
-	}
-
-	relMatches := make([]string, 0, len(matches))
-	for _, match := range matches {
-		rel, relErr := r.Rel(match)
-		if relErr != nil {
-			return nil, relErr
-		}
-		relMatches = append(relMatches, rel)
-	}
-
-	return relMatches, nil
-}
-
 func (r *Root) normalizeNotExist(path string, original error) error {
 	if original == nil {
 		return nil
 	}
 
-	if _, statErr := r.ops.lstat(path); errors.Is(statErr, os.ErrNotExist) {
+	// Only a positive ErrUnsafePath determination overrides the original
+	// error. If the ancestor walk itself fails for an unrelated reason, the
+	// caller's error is the more useful one and must not be masked.
+	if path != r.dir {
+		if rel, relErr := r.relativeFromAbs(path); relErr == nil {
+			if ancestorErr := r.ValidateNoSymlinkAncestors(rel); errors.Is(ancestorErr, ErrUnsafePath) {
+				return ancestorErr
+			}
+		}
+	}
+
+	if _, statErr := r.ops.lstatAbs(path); errors.Is(statErr, os.ErrNotExist) {
 		return os.ErrNotExist
 	}
 
@@ -960,7 +1051,7 @@ func (r *Root) normalizeNotExist(path string, original error) error {
 }
 
 func (r *Root) validateRootDirectoryNoFollow() error {
-	info, err := r.ops.lstat(r.dir)
+	info, err := r.ops.lstatAbs(r.dir)
 	if err != nil {
 		return fmt.Errorf("checking sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
