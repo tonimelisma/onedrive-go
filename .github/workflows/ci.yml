@@ -55,6 +55,17 @@ jobs:
           version: v2.11.3
           install-only: true
 
+      # Vulnerability scanning runs on one leg only: the module graph is
+      # platform-independent and the check is about dependencies, not the
+      # host. It fails the build on a vulnerability this code actually
+      # reaches, which is the signal worth blocking on.
+      - name: govulncheck
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
       # The coverage gate is a single authoritative number, so only the Linux
       # leg enforces it. The macOS leg runs the same suite without the gate,
       # which is what catches darwin-only build and behavior breakage.
