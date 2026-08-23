@@ -346,13 +346,25 @@ Static verification is a first-class architectural constraint, not a best-effort
 
 ## Planned Improvements
 
-- Split `internal/sync` by authority boundary. At 32k LOC across 134 production files it owns unrelated reasons to change, which this doc's own guidance calls a god package. The filename families already name the seams: `engine*` (37), `store*` (14), `shortcut*` (13). [planned]
+- Split `internal/sync` by authority boundary. At 32k LOC across ~130 production files it owns unrelated reasons to change, which this doc's own guidance calls a god package. **The blocker is measured, not suspected, and it is the same at every granularity tried.** [planned]
 
-  The obvious first cut — extracting the store — does **not** work as a straight file move, and the analysis is recorded here so the next attempt does not rediscover it. The store files declare the row types (`localStateRow`, `remoteStateRow`, `RetryWorkRow`, `ObservationIssueRow` in `store_types.go`) that the rest of the package references 133 times, while the store's own method signatures need `Action`, `ScopeKey`, `ItemType`, `RetryWorkKey`, `DirLowerKey`, `ContentFilterConfig`, `ObservationFindingsBatch`, `ShortcutRootRecord`, and `ShortcutRootState` back from it. That is a genuine import cycle.
+  Candidate slices and their coupling to the rest of the package, counted as distinct top-level symbols crossing each direction:
 
-  Breaking it needs three packages, not two: a domain package holding the shared vocabulary, a store package depending only on it, and the engine depending on both. Two further constraints make this a dedicated increment rather than a file move: 14 test files reach into store internals (`rawDB()`, direct `m.db` access) from `package sync` and must be re-homed, and cross-package tests will need explicit seams — which pushes back against the export-surface reduction and so must be designed, not improvised.
+  | Candidate slice | Files | LOC | needs from rest | rest needs from it |
+  | --- | --- | --- | --- | --- |
+  | `planner*` | 4 | 1,025 | 66 | 12 |
+  | `executor*` + `worker*` | 10 | 3,362 | 65 | 22 |
+  | `shortcut*` | 13 | 3,672 | 42 | 27 |
+  | `scope*` | 5 | 925 | 38 | 29 |
+  | `store*` | 15 | 3,911 | 76 | 38 |
+  | `observer*` + `scanner*` | 13 | 5,771 | 100 | 47 |
+  | `engine*` | 38 | 8,605 | 213 | 39 |
 
-  Extracting `shortcut*` first is also not free: `shortcut_root_lifecycle.go` and `shortcut_alias_mutation.go` carry 22 `*Engine` methods that cannot move without the engine. The 11 remaining shortcut files are receiver-free and are the most promising starting point.
+  Every slice is bidirectionally coupled, so none is a leaf and none can be extracted as a file move. The inbound direction is usually a legitimate interface — what the rest needs from `planner*`, for example, is `planner`, `newPlanner`, `plannerMountContext`, and the `plannerVisible*` helpers, which is exactly the surface a planner package would export. The outbound direction is the problem: each slice consumes a large shared vocabulary (`Action`, `ScopeKey`, `ItemType`, `BaselineEntry`, `pathView`, the `*Row` types) that lives at the centre of the package.
+
+  So the prerequisite for **any** split is extracting that vocabulary into its own package, giving `syncdomain` <- `syncstore`/`syncplanner`/... <- `sync`. That is a design decision rather than a refactor, and it has a real cost: a vocabulary package risks being the "fake intermediate boundary" this doc warns against. It is defensible only if the domain types keep their invariant-preserving behavior and the package owns the sync domain model rather than acting as a DTO bag. Two further constraints: 14 test files reach into store internals (`rawDB()`, direct `m.db`) from `package sync` and must be re-homed, and cross-package tests will need explicit seams, which pushes back against the export-surface reduction already done.
+
+  Concretely: `store_types.go` declares row types the rest of the package references 133 times, while the store's own method signatures need ten domain types back. That specific pair is a hard import cycle today.
 
 - Resource consumption guarantees documented per component. [planned]
 - Representative benchmark scenarios, reporting, and publication policy are defined in [performance-benchmarking.md](performance-benchmarking.md). The repo-owned `devtool bench` runner, the `startup-empty-config` harness-validation scenario, and the manual `sync-bidirectional-catchup-100m` live representative scenario are implemented; fixture-slot preparation, release artifact promotion, and published benchmark reports remain planned. [planned]
