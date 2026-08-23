@@ -100,10 +100,19 @@ Evidence:
   `200`, while `GET /me/drives` returned `403 serviceReadOnly` on all twenty
   attempts. Authentication works and the drive itself is readable; only drive
   enumeration is unavailable.
-- Reproduced across four CI runs over roughly one hour (`32622492185`,
-  `32622862051`, `32623668929` and its reruns), affecting both test accounts
-  identically each time.
-Resolution / mitigation: none applied. `serviceReadOnly` with
+- Reproduced across thirteen CI runs over roughly two and a half hours
+  (`32622492185`, `32622862051`, `32623668929`, `32624226459` and ten
+  scripted reruns of the failed jobs), affecting both test accounts
+  identically every time. Both `verify` legs passed on every one of those
+  runs, so the failure never touched anything but the live lane.
+Resolution / mitigation: none applied, and none should be. The repo
+deliberately keeps required per-PR verification strict:
+`--classify-live-quirks` is scoped to manual `e2e-full` runs, and repeated
+failures stay red rather than being reclassified. The product itself already
+degrades correctly here -- `discoverAccessibleDrives` falls back to
+`/me/drive` when `/me/drives` fails and reports the account as degraded --
+but the integration tests call `Drives()` directly and assert success, which
+is the right assertion for a test whose job is to prove the endpoint works. `serviceReadOnly` with
 `Database Is Read Only` is a Microsoft-side read-only window, not a client
 condition, and it resolved without repo action. Recorded so a recurrence is
 recognized rather than re-investigated.
