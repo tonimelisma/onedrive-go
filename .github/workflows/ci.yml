@@ -12,9 +12,10 @@ concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Least privilege by default. id-token: write is granted per-job to the two
+# live-API jobs that federate with Azure; verify and stress never need it.
 permissions:
   contents: read
-  id-token: write # OIDC federation with Azure (integration + e2e jobs)
 
 jobs:
   # --- Always-run jobs (including fork PRs) ---
@@ -23,8 +24,16 @@ jobs:
   # so push-to-main CI is effectively always skipped. Manual dispatch
   # still triggers all jobs.
 
+  # README lists Linux and macOS as primary platforms, and the tree carries
+  # darwin-only sources (synctree stat identity, the non-Linux watcher path).
+  # Both legs run so neither platform can break unobserved.
   verify:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     if: github.event_name != 'push' || !contains(github.event.head_commit.message, '(#')
     steps:
       - uses: actions/checkout@v6.0.2
@@ -46,13 +55,17 @@ jobs:
           version: v2.11.3
           install-only: true
 
+      # The coverage gate is a single authoritative number, so only the Linux
+      # leg enforces it. The macOS leg runs the same suite without the gate,
+      # which is what catches darwin-only build and behavior breakage.
       - name: Verify
         env:
-          COVERAGE_THRESHOLD: "76.0"
+          COVERAGE_THRESHOLD: ${{ matrix.os == 'ubuntu-latest' && '76.0' || '-1' }}
         run: go run ./cmd/devtool verify public --coverage-threshold "${COVERAGE_THRESHOLD}"
 
   stress:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     if: github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6.0.2
@@ -82,6 +95,10 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write # OIDC federation with Azure
     if: >-
       vars.AZURE_CLIENT_ID != ''
       && (github.event_name != 'push' || !contains(github.event.head_commit.message, '(#'))
@@ -184,6 +201,10 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write # OIDC federation with Azure
     if: >-
       vars.AZURE_CLIENT_ID != ''
       && (github.event_name != 'push' || !contains(github.event.head_commit.message, '(#'))

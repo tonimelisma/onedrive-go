@@ -23,14 +23,25 @@ func IdentityFromFileInfo(info fs.FileInfo) (FileIdentity, bool) {
 		return FileIdentity{}, false
 	}
 	identity := FileIdentity{
-		Device: statDeviceID(stat),
-		Inode:  stat.Ino,
+		Device: statFieldToUint64(stat.Dev),
+		Inode:  statFieldToUint64(stat.Ino),
 	}
 	if identity.Device == 0 && identity.Inode == 0 {
 		return FileIdentity{}, false
 	}
 
 	return identity, true
+}
+
+// statFieldToUint64 normalizes a syscall.Stat_t numeric field to uint64.
+//
+// The signedness and width of Dev and Ino vary by platform (Dev is int32 on
+// darwin and the OpenBSDs, uint64 on linux and freebsd), which previously
+// forced one build-tagged file per platform purely to keep the conversion
+// necessary on every target. Doing it in a generic function keeps a single
+// implementation that compiles everywhere and stays honest for `unconvert`.
+func statFieldToUint64[T ~int16 | ~uint16 | ~int32 | ~uint32 | ~int64 | ~uint64](value T) uint64 {
+	return uint64(value)
 }
 
 func SameIdentity(a FileIdentity, b FileIdentity) bool {
