@@ -19,6 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260823-01 | Graph returned `serviceReadOnly` on `/me/drives` for every test account | observed | provider outage | 2026-08-23 | no |
 | LI-20260503-01 | Nightly incremental-delta E2E failed on unrelated unrecoverable delete noise | fixed | product bug | 2026-05-03 | no |
 | LI-20260430-03 | NestedDeletion setup treated transient mount-root delta 504 as deterministic failure | fixed | test harness | 2026-04-30 | yes |
 | LI-20260430-02 | Conflict-resolution downloads rejected their own conflict-copy removal | fixed | product bug | 2026-04-30 | no |
@@ -59,6 +60,50 @@ Promotion contract:
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20260823-01: Graph returned `serviceReadOnly` on `/me/drives` for every test account
+
+First seen: 2026-08-23
+Last seen: 2026-08-23
+Area: live `integration` and `e2e` CI jobs, Graph drive discovery
+Suite / test: CI run `32622492185` on PR #704; `integration` job
+(`TestIntegration_Drives`, `TestIntegration_Drives_PersonalAccountFiltersPhantomDrives`)
+and `e2e` job (`TestE2E_AuthPreflight_Fast` for both accounts)
+Classification: provider outage
+Status: observed
+Recurring: no
+Summary: Every live job failed at drive discovery. `GET /me/drives` returned
+`HTTP 403` with Graph code `serviceReadOnly` and the message
+`Database Is Read Only`, for both test accounts, on freshly issued Key Vault
+tokens. The existing `drives-token-propagation` quirk retry treated it as a
+propagation delay and exhausted all ten attempts, because the retry family
+matches on 403 regardless of Graph code. No repo change is implicated: the
+failing call is plain drive discovery, the tokens were valid, and the same
+commit passed both `verify` legs including the full unit suite.
+Evidence:
+- `integration` job `97152688410`: ten consecutive attempts, all
+  `StatusCode:403 GraphCode:serviceReadOnly`, ending
+  `graph: drives-token-propagation retry exhausted after 10 attempts:
+  graph: HTTP 403 ...: Database Is Read Only`.
+- Token log line immediately before the failure reads
+  `expiry=2026-08-23T07:17:30.886Z expired=false`, so this is not credential
+  expiry.
+- `e2e` job `97152688313`: `TestE2E_AuthPreflight_Fast` failed for
+  `personal_kikkelimies123@outlook.com` and
+  `personal_testitesti18@outlook.com` with 43 occurrences of the same
+  `serviceReadOnly` / `Database Is Read Only` pair.
+- `verify (ubuntu-latest)` and `verify (macos-latest)` on the same commit were
+  unaffected; the macOS leg passed fully.
+Resolution / mitigation: none applied. `serviceReadOnly` with
+`Database Is Read Only` is a Microsoft-side read-only window, not a client
+condition, and it resolved without repo action. Recorded so a recurrence is
+recognized rather than re-investigated.
+Follow-up: if this recurs, the `drives-token-propagation` quirk family is the
+wrong home for it. That family exists for post-token propagation lag and
+retries on bare 403; `serviceReadOnly` is a distinct provider state that ten
+fast retries cannot clear, so it warrants either its own longer-backoff family
+or an explicit non-retryable classification with a clearer operator message
+rather than `retry exhausted`. [planned]
 
 ## LI-20260503-01: Nightly incremental-delta E2E failed on unrelated unrecoverable delete noise
 

@@ -2,6 +2,13 @@ module github.com/tonimelisma/onedrive-go
 
 go 1.25.0
 
+// The go directive is the language floor (os.Root gained its mutating methods
+// in 1.25). The toolchain directive is separate and must track a patched
+// release: CI resolves go-version-file from this file, and pinning the floor
+// alone built against the unpatched 1.25.0 standard library, which govulncheck
+// correctly rejected with 29 stdlib advisories.
+toolchain go1.26.6
+
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/coder/websocket v1.8.14
