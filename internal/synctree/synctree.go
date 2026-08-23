@@ -709,7 +709,7 @@ func (r *Root) hashRegularFile(rel string) ([sha256.Size]byte, error) {
 	if err != nil {
 		return [sha256.Size]byte{}, err
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck // the file is opened read-only for hashing; there is nothing buffered to flush
 
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
@@ -796,7 +796,7 @@ func (r *Root) ValidateNoSymlinkAncestors(rel string) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer root.Close() //nolint:errcheck // rooted handle release; mutation errors are reported by the operation itself
 
 	current := ""
 	for _, component := range strings.Split(parent, string(filepath.Separator)) {
@@ -829,7 +829,7 @@ func (r *Root) MkdirAllNoFollow(rel string, perm os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer root.Close() //nolint:errcheck // rooted handle release; mutation errors are reported by the operation itself
 
 	if clean == "." {
 		return nil
@@ -1011,7 +1011,7 @@ func (r *Root) WalkDir(fn fs.WalkDirFunc) error {
 	if err != nil {
 		return fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
-	defer root.Close()
+	defer root.Close() //nolint:errcheck // rooted handle release; mutation errors are reported by the operation itself
 
 	if err := fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, walkErr error) error {
 		absPath := r.dir

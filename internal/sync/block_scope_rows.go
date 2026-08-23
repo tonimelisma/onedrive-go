@@ -56,7 +56,7 @@ func queryBlockScopeRowsWithRunner(ctx context.Context, runner sqlTxRunner) ([]*
 	if err != nil {
 		return nil, fmt.Errorf("query block scope rows: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	var result []*BlockScope
 	for rows.Next() {

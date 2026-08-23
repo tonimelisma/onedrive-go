@@ -34,7 +34,7 @@ func (s *SocketIOWakeSource) connect(
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if resp != nil && resp.Body != nil {
-		defer resp.Body.Close()
+		defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 	}
 	if err != nil {
 		return nil, time.Time{}, "", err

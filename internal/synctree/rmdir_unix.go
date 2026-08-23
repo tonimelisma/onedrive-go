@@ -29,7 +29,7 @@ func removeEmptyDirRooted(root rootHandle, name string) error {
 	if err != nil {
 		return fmt.Errorf("opening parent directory %s: %w", parent, err)
 	}
-	defer dir.Close()
+	defer dir.Close() //nolint:errcheck // read-only directory handle held only to supply a descriptor
 
 	conn, err := dir.SyscallConn()
 	if err != nil {

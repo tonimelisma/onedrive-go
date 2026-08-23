@@ -193,7 +193,7 @@ func TestScope_SuccessResetsWindow(t *testing.T) {
 	}
 
 	// Record a success — this must reset the quota:own window.
-	ss.RecordSuccess(&ActionCompletion{Path: "/ok.txt"})
+	ss.RecordSuccess()
 
 	// Now three more unique failures are needed to trigger the block.
 	// The next failure (3rd unique path overall but 1st after reset)
@@ -284,7 +284,7 @@ func TestScope_SuccessResetsServiceWindow(t *testing.T) {
 	}
 
 	// Success resets the service window.
-	ss.RecordSuccess(&ActionCompletion{Path: "/ok.txt"})
+	ss.RecordSuccess()
 
 	// Now we need five fresh unique paths to trigger again.
 	// The next failure (5th overall but 1st after reset) must not trigger.

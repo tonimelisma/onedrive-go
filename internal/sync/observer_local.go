@@ -443,7 +443,7 @@ func (o *LocalObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 	if err != nil {
 		return fmt.Errorf("sync: creating filesystem watcher: %w", err)
 	}
-	defer watcher.Close()
+	defer watcher.Close() //nolint:errcheck // watcher shutdown releases OS resources and reports nothing a caller can act on
 
 	defer o.cancelPendingTimers()
 

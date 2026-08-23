@@ -1781,3 +1781,23 @@ func TestCommitMutation_PersistsLocalFilesystemIdentity(t *testing.T) {
 	assert.Equal(t, uint64(900), entry.LocalInode)
 	assert.True(t, entry.LocalHasIdentity)
 }
+
+// Validates: R-2.2, R-6.2.4
+//
+// A failed WAL checkpoint must reach the caller. Cross-process readers such as
+// `status` open their own connection and rely on the checkpoint having
+// happened, so silently swallowing the failure would let them read stale data
+// with no signal.
+func TestSyncStore_CheckpointReportsFailure(t *testing.T) {
+	t.Parallel()
+
+	mgr, err := NewSyncStore(t.Context(), filepath.Join(t.TempDir(), "test.db"), newTestLogger(t))
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Checkpoint(t.Context()))
+	require.NoError(t, mgr.Close(t.Context()))
+
+	err = mgr.Checkpoint(t.Context())
+	require.Error(t, err, "checkpointing a closed store must not report success")
+	assert.Contains(t, err.Error(), "checkpoint sync store WAL")
+}

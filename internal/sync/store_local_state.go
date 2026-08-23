@@ -250,7 +250,7 @@ func listLocalStateRowsWithQuery(ctx context.Context, runner sqlTxRunner, query 
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying local_state: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	var result []LocalStateRow
 	for rows.Next() {

@@ -194,7 +194,7 @@ func (flow *engineFlow) applyTrackedActionSuccess(
 		flow.clearRetryWorkOnSuccess(ctx, r)
 	}
 	if flow.scopeState != nil && r != nil {
-		flow.scopeState.RecordSuccess(r)
+		flow.scopeState.RecordSuccess()
 	}
 
 	actionID := int64(0)

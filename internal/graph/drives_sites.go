@@ -22,7 +22,7 @@ func (c *Client) SearchSites(ctx context.Context, query string, limit int) ([]Si
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var slr sitesListResponse
 	if err := json.NewDecoder(resp.Body).Decode(&slr); err != nil {
@@ -50,7 +50,7 @@ func (c *Client) SiteDrives(ctx context.Context, siteID string) ([]Drive, error)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var dlr drivesListResponse
 	if err := json.NewDecoder(resp.Body).Decode(&dlr); err != nil {

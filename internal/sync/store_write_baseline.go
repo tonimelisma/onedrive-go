@@ -108,7 +108,7 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading baseline: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	b := &Baseline{
 		ByPath:     make(map[string]*BaselineEntry),
@@ -746,7 +746,7 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("sync: querying baseline for consistency check: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	dbEntries := make(map[string]*BaselineEntry)
 

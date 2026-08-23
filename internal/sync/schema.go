@@ -331,7 +331,7 @@ func listUserTables(ctx context.Context, db *sql.DB) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query sqlite_master tables: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	var tables []string
 	for rows.Next() {
@@ -353,7 +353,7 @@ func listTableColumns(ctx context.Context, db *sql.DB, tableName string) ([]stri
 	if err != nil {
 		return nil, fmt.Errorf("query table info for %s: %w", tableName, err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	return scanTableColumns(rows, tableName)
 }

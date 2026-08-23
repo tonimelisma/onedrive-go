@@ -107,13 +107,17 @@ func (ss *ScopeState) UpdateScope(r *ActionCompletion) ScopeUpdateResult {
 	}
 }
 
-// RecordSuccess resets the sliding window for scopes relevant to the
-// successful action. Per §7.3.1: "A success from any path in the scope
-// shall reset the unique-path failure counter."
-func (ss *ScopeState) RecordSuccess(r *ActionCompletion) {
-	// Success resets all potentially-relevant windows for this action's scope.
+// RecordSuccess resets the two global failure windows that any success
+// disproves: own-quota and service availability. Per §7.3.1, "A success from
+// any path in the scope shall reset the unique-path failure counter."
+//
+// It deliberately takes no action argument. Per-drive and per-path scopes
+// (throttle, local/remote permission) are not cleared here — clearing those is
+// owned by the trial admission path via ScopeAdmissionDecision.ClearScopeKey,
+// which knows which specific blocked scope a trial was admitted against. Doing
+// it in both places would give two owners for one transition.
+func (ss *ScopeState) RecordSuccess() {
 	delete(ss.windows, SKQuotaOwn())
-	// Also reset service window — a successful request proves the service is up.
 	delete(ss.windows, SKService())
 }
 

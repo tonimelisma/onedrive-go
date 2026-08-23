@@ -203,7 +203,7 @@ func listScratchRemoteStateRows(ctx context.Context, runner sqlTxRunner) ([]Remo
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying scratch remote_state seed rows: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	var result []RemoteStateRow
 	for rows.Next() {

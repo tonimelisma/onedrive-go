@@ -57,7 +57,7 @@ func (c *Client) CreateUploadSession(
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	return c.parseUploadSessionResponse(resp)
 }
@@ -93,7 +93,7 @@ func (c *Client) CreateUploadSessionForItem(
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	return c.parseUploadSessionResponse(resp)
 }
@@ -121,7 +121,7 @@ func (c *Client) CancelUploadSession(ctx context.Context, session *UploadSession
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	// Drain body to reuse connection.
 	if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
@@ -167,7 +167,7 @@ func (c *Client) QueryUploadSession(
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	// doPreAuth guarantees 2xx here. QueryUploadSession expects exactly 200.
 	// Other 2xx codes are unexpected but not worth failing on.

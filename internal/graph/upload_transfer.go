@@ -36,7 +36,7 @@ func (c *Client) SimpleUpload(
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var dir driveItemResponse
 	if decErr := json.NewDecoder(resp.Body).Decode(&dir); decErr != nil {
@@ -67,7 +67,7 @@ func (c *Client) SimpleUploadToItem(
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var dir driveItemResponse
 	if decErr := json.NewDecoder(resp.Body).Decode(&dir); decErr != nil {
@@ -123,7 +123,7 @@ func (c *Client) UploadChunk(
 	if err != nil {
 		return nil, false, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	return c.handleChunkResponse(resp)
 }

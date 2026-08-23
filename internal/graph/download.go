@@ -191,7 +191,7 @@ func (c *Client) downloadFromURLWithRange(
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	n, copyErr := io.Copy(w, resp.Body)
 	if copyErr != nil {
@@ -225,7 +225,7 @@ func (c *Client) downloadFromURL(ctx context.Context, downloadURL string, w io.W
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	n, copyErr := io.Copy(w, resp.Body)
 	if copyErr != nil {

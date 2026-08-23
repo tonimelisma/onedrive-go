@@ -481,7 +481,7 @@ func queryComparisonStateWithRunnerForTables(
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	var results []SQLiteComparisonRow
 	for rows.Next() {
@@ -555,7 +555,7 @@ func queryReconciliationStateWithRunnerForTables(
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	var results []SQLiteReconciliationRow
 	for rows.Next() {
