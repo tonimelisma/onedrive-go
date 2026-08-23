@@ -374,7 +374,7 @@ retired instead of appended to the old outbox. Once running work settles, the
 loop rebuilds from current committed truth plus durable `retry_work` /
 `block_scopes`. If local observation fails before that replacement runtime is
 installed, the retired work stays retired and the same dirty/full-refresh intent
-is rescheduled through `DirtyBuffer` instead of being dropped. The same
+is rescheduled through `dirtyBuffer` instead of being dropped. The same
 reschedule rule applies when an idle runtime consumes a ready dirty signal
 directly and local observation fails before a replacement runtime is installed.
 The idle watch-step owner still receives debounced coarse dirty hints directly;
@@ -395,7 +395,7 @@ The engine holds dependency-ready exact work in memory, keyed by exact
 `RetryWorkKey` and grouped by `ScopeKey` for blocked scopes. Timer ticks do
 not rebuild subset plans, do not compute dependency closure, and do not
 revalidate stale rows. Stale-row cleanup belongs only to normal
-current-plan build/runtime-state reconcile. Dependency tracking stays inside `DepGraph`, but runtime
+current-plan build/runtime-state reconcile. Dependency tracking stays inside `depGraph`, but runtime
 completion does not: the engine owns quiescence and no longer waits on a
 graph-owned completion signal.
 
@@ -452,7 +452,7 @@ opposite source/destination peer needed for the mutation.
 Watch replan failure policy is also explicit. Pre-authority local observation
 failure is recoverable and reports that no replacement runtime was applied; the
 pending-replan and direct-idle callers reschedule the same dirty/full-refresh
-intent through `DirtyBuffer` rather than restoring retired work or dropping the
+intent through `dirtyBuffer` rather than restoring retired work or dropping the
 trigger. Once the engine starts depending on authoritative current-truth writes
 or runtime state, failure is fatal to the current watch session: remote
 observation apply, observation findings reconciliation, local snapshot commit,
@@ -547,7 +547,7 @@ through the same transition table.
 
 When a child final drain completes, multisync acknowledges that completion to
 the already-running parent engine through the concrete sync-owned
-`ShortcutChildAckHandle` obtained from that live engine. A zero handle is an
+`shortcutChildAckHandle` obtained from that live engine. A zero handle is an
 error, not a no-op, so multisync cannot synthesize an acknowledgement path
 outside a live parent runner. The parent engine first persists
 `removed_release_pending`, then releases its own protected alias projection or
@@ -617,7 +617,7 @@ The engine classifies results into:
 
 ### Runtime admission model
 
-`DepGraph` remains dependency-only. The engine still performs final scope
+`depGraph` remains dependency-only. The engine still performs final scope
 admission after dependency readiness:
 
 - build the graph from current actions
@@ -705,7 +705,7 @@ runtime state:
 - held retry release emits exact held actions whose `next_retry_at` is due
 - held trial release emits one deterministic held blocked candidate for each
   due scope
-- neither held-release path rebuilds an `ActionPlan`, refreshes current
+- neither held-release path rebuilds an `actionPlan`, refreshes current
   truth, or walks a second dependency closure
 
 Scope lifecycle is owned only by `block_scopes` plus blocked/unblocked

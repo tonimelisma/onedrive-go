@@ -8,7 +8,7 @@ Implements: R-2.3.1 [verified], R-2.4.6 [implemented], R-2.8.6 [verified], R-2.8
 
 Execution takes a runtime plan, dispatches concrete side-effecting
 work through a dependency graph, runs workers, and reports one
-`ActionCompletion` per finished action. That runtime-plan handoff is
+`actionCompletion` per finished action. That runtime-plan handoff is
 assembled on the engine side by the shared pipeline in
 `engine_current_plan.go`, then admitted through `engine_runtime_start.go`
 before execution begins. Publication-only planner actions are not executor
@@ -23,7 +23,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 
 - Owns: dispatch, dependency satisfaction, worker execution, conflict-copy creation, and success outcomes
 - Does Not Own: planning, retry scheduling, scope activation policy, or store schema
-- Source of Truth: planner-produced `ActionPlan` plus the rooted capabilities injected into the executor
+- Source of Truth: planner-produced `actionPlan` plus the rooted capabilities injected into the executor
 - Allowed Side Effects: sync-root filesystem mutation, Graph transfer calls, and store success commits through the engine
 - Mutable Runtime Owner: workers own only action execution. The engine owns
   runtime quiescence, held-work timing, admission, and dependency completion
@@ -45,7 +45,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 
 ## Worker And Dependency Model
 
-`DepGraph` is the execution-time dependency graph. It tracks:
+`depGraph` is the execution-time dependency graph. It tracks:
 
 - which actions are in flight
 - which dependencies remain unsatisfied
@@ -66,7 +66,7 @@ latest committed truth using the shared action-freshness predicate. Admission
 uses the same predicate only for actions that are about to enter the worker
 outbox; retry-held or scope-held actions are checked when they later become
 dispatch candidates. A stale worker-start action returns
-`ErrActionPreconditionChanged`, so the engine classifies it as superseded
+`errActionPreconditionChanged`, so the engine classifies it as superseded
 instead of ordinary retry. This gate runs before hashing, upload-session
 creation, download writes, delete/move mutation, or other executor side
 effects. Canceled worker/admission freshness checks fail closed before any
@@ -86,13 +86,13 @@ identity and content facts. Executable actions must carry planner view truth;
 missing planner view data is an internal validation error once committed truth
 is authoritative, not a reason to skip stale work checks. Move actions
 additionally check the source/destination peer path that is not represented by
-the main `PathView`, so a changed local source, reappeared remote source,
+the main `pathView`, so a changed local source, reappeared remote source,
 missing local move destination, or occupied remote move destination supersedes
 the old move before side effects.
 
 Worker-start rejections record aggregate perf counters by truth authority
 (`local_state` or `remote_state`). Executor live-precondition rejections carry
-their failure capability through `ActionCompletion`, so the worker boundary can
+their failure capability through `actionCompletion`, so the worker boundary can
 record local-vs-remote live-precondition superseded counters without parsing
 logs or paths. The worker metric boundary does not infer live-precondition
 source from action type; ambiguous outcomes must be fixed at the executor
@@ -104,7 +104,7 @@ carry remote-write capability.
 The dependency graph is dependency-only. It no longer defines runtime
 quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,
 so the engine decides when the current runtime is quiescent based on outbox,
-running work, and due held entries. `DepGraph` therefore does not expose a
+running work, and due held entries. `depGraph` therefore does not expose a
 runtime-completion channel; callers use dependency release plus engine-owned
 settle checks instead. When shutdown has already started, the engine still
 processes late worker completions for bookkeeping, but it immediately converts
@@ -138,7 +138,7 @@ that observation persisted, not rejected merely because the alias directory
 entry is a symlink. The transfer manager then reuses the executor-supplied
 callback before upload reads so a large file can abort if it changes
 mid-session. Expected source-hash mismatches are returned as
-`ErrActionPreconditionChanged`.
+`errActionPreconditionChanged`.
 
 For downloads, the executor validates the planned destination before transfer
 starts and supplies the same callback for the transfer manager to run
@@ -162,7 +162,7 @@ lag is absorbed before stale proof is evaluated. If the visibility wait times
 out because the parent is actually gone, the stale parent preflight result takes
 precedence over the visibility timeout. A live `itemNotFound` result, changed item identity,
 drive, item type, eTag, hash, size, or same-coordinate path where Graph supplies
-that fact is a stale precondition and maps to `ErrActionPreconditionChanged`.
+that fact is a stale precondition and maps to `errActionPreconditionChanged`.
 Remote delete and move also pass the live preflight eTag to Graph as an
 `If-Match` condition when one is available. If Graph returns 412 after the
 explicit preflight, the executor treats that as a post-preflight stale
@@ -284,7 +284,7 @@ The dependent download carries `RequireMissingLocalTarget`, so executor-side
 local preconditions treat the post-copy missing canonical path as the expected
 state. If the canonical path reappears before the dependent download runs or
 before its final atomic rename, that is a stale local-write precondition and the executor returns
-`ErrActionPreconditionChanged` instead of overwriting the newly appeared file.
+`errActionPreconditionChanged` instead of overwriting the newly appeared file.
 
 If the download fails, the preserved local conflict copy remains on disk and
 the canonical path stays pending for retry/replan. Execution does not recreate
@@ -307,8 +307,8 @@ upload from a stale local delete.
 For engines rooted below the remote drive root, execution uses the engine's own
 mount context:
 
-- `ExecutorConfig.driveID`
-- `ExecutorConfig.remoteRootItemID`
+- `executorConfig.driveID`
+- `executorConfig.remoteRootItemID`
 - `Action.DriveID`
 
 Path convergence checks after successful remote mutation are resolved relative

@@ -216,7 +216,7 @@ boundary, and feeds those value outcomes through planner helpers. Multisync
 consumes only the resulting child work snapshot: start normal child
 commands, run final-drain commands to final drain, purge explicit cleanup
 commands, acknowledge clean drain through the live parent
-`ShortcutChildAckHandle`, then stop and forget child runtime state after the
+`shortcutChildAckHandle`, then stop and forget child runtime state after the
 parent release succeeds.
 
 Runtime mount-set construction does not inspect or mutate parent shortcut alias

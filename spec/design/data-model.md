@@ -113,7 +113,7 @@ rescan.
 
 Ignored content does not enter `local_state`. Full local observation replaces
 the table with the latest visible/admissible local truth. Planner loading still
-reapplies the current `ContentFilter` so stale rows from a pre-reload state
+reapplies the current `contentFilter` so stale rows from a pre-reload state
 cannot leak into reconciliation.
 
 ## `observation_issues`
@@ -183,7 +183,7 @@ The target persisted scope families are:
 
 `scope_key` remains the durable identity referenced by `retry_work`. Runtime
 and read-side code recover scope semantics from that key via
-`DescribeScopeKey`; SQLite does not persist a second copy of parsed scope
+`describeScopeKey`; SQLite does not persist a second copy of parsed scope
 metadata.
 
 Read-denied subtree boundaries continue to use `perm:*:read:*` keys, but only

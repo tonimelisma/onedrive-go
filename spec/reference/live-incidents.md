@@ -240,7 +240,7 @@ Summary: A conflict plan correctly expanded edit/edit and create/create
 conflicts into `ActionConflictCopy` plus a dependent `ActionDownload`, but the
 download executor revalidated the original planned local state after the
 conflict copy had intentionally renamed that canonical local file away. The
-download therefore returned `ErrActionPreconditionChanged` before restoring the
+download therefore returned `errActionPreconditionChanged` before restoring the
 remote winner, leaving the conflict copy on disk and the canonical path absent.
 Evidence:
 - The first local full-profile rerun after the status-harness fix passed
@@ -254,7 +254,7 @@ Evidence:
   `TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict` with the same
   absent canonical-path symptom.
 - A focused unit regression reproduced the executor boundary by adding the
-  planned `LocalState` to `TestExecutor_Conflict_EditEdit_KeepBoth`; it failed
+  planned `localState` to `TestExecutor_Conflict_EditEdit_KeepBoth`; it failed
   with the same stale precondition before the implementation change.
 Resolution / mitigation: Conflict-resolution downloads now treat the missing
 canonical local path as the expected post-`ActionConflictCopy` state while
@@ -608,7 +608,7 @@ Evidence:
   any shared-folder write or watch assertion, which isolated the bug to sync
   startup rather than the shared fixture logic.
 - [`internal/sync/scanner.go`](../../internal/sync/scanner.go) intentionally
-  treats a missing root directory as `ErrSyncRootMissing`, so once startup
+  treats a missing root directory as `errSyncRootMissing`, so once startup
   reached the scanner without creating the directory first the failure was
   deterministic.
 - [`spec/design/config.md`](../design/config.md) documented the historical

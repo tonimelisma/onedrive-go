@@ -82,7 +82,7 @@ artifacts, not a multisync cache.
 ### Retry and block state invariants
 
 `retry_work` rows are exact retry obligations. Every row must carry a non-empty
-path, a valid `ActionType`, and a positive attempt count. Delayed retry rows
+path, a valid `actionType`, and a positive attempt count. Delayed retry rows
 must have `next_retry_at`; blocked rows must not have retry timing and must
 reference an existing `block_scopes` row. Every persisted block scope must in
 turn have at least one blocked retry row. These invariants are asserted by the
@@ -225,7 +225,7 @@ it.
 
 Derived truth inspection stays read-only and authority-based. Observation-owned
 boundary issues tagged with read-scope keys suppress descendant truth through
-`ReadPathTruthStatus`; timed `block_scopes` for write blockers do not change
+`readPathTruthStatus`; timed `block_scopes` for write blockers do not change
 truth availability on their own.
 
 ### Admin writes
@@ -289,7 +289,7 @@ still-blocked scope may delete the blocked work under it.
 - `next_trial_at`
 
 `scope_key` remains the durable identity used by `retry_work`, while in-memory
-scope semantics are reconstructed from `DescribeScopeKey` during read/write
+scope semantics are reconstructed from `describeScopeKey` during read/write
 validation. The shared raw block-scope read path therefore validates the
 durable key once and returns a canonical `BlockScope` shape without storing a
 second copy of parsed metadata in SQLite.
@@ -322,7 +322,7 @@ blocked descendants from those boundary facts.
 `store_inspect.go` now owns two read-side shapes:
 
 - `DriveStatusSnapshot` for raw durable authorities used by `status` and watch
-- `ReadPathTruthStatus` for derived truth availability over requested paths,
+- `readPathTruthStatus` for derived truth availability over requested paths,
   built from `observation_issues` plus boundary-tagged `ScopeKey` facts without
   materializing fake durable descendant rows
 
