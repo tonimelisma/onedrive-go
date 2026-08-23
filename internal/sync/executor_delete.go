@@ -8,7 +8,6 @@ import (
 	"os"
 	slashpath "path"
 	"path/filepath"
-	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -102,34 +101,6 @@ func (e *Executor) ExecuteLocalDelete(ctx context.Context, action *Action) Actio
 	}
 
 	return e.DeleteLocalFile(ctx, action, absPath, info)
-}
-
-func (e *Executor) symlinkBoundaryForPath(relPath string) (string, bool, error) {
-	clean := slashpath.Clean(filepath.ToSlash(relPath))
-	if clean == "." || clean == "" {
-		return "", false, nil
-	}
-
-	current := ""
-	for _, part := range strings.Split(clean, "/") {
-		if part == "" || part == "." {
-			continue
-		}
-		current = slashpath.Join(current, part)
-		info, err := e.syncTree.Lstat(current)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return "", false, nil
-			}
-
-			return "", false, fmt.Errorf("lstat %s: %w", current, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return current, true, nil
-		}
-	}
-
-	return "", false, nil
 }
 
 func (e *Executor) DeleteLocalSymlink(action *Action, relPath string) ActionOutcome {

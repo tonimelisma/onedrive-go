@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	slashpath "path"
+	"path/filepath"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -480,4 +482,68 @@ func (e *Executor) validateLocalSourceAgainstBaseline(
 	}
 
 	return nil
+}
+
+// symlinkBoundaryForPath reports the first ancestor component of relPath that
+// is a symbolic link, walking one component at a time so every Lstat resolves
+// against a fully real prefix.
+//
+// An absent component means nothing beneath it exists yet, so there is no
+// boundary to cross and the walk stops cleanly.
+func (e *Executor) symlinkBoundaryForPath(relPath string) (string, bool, error) {
+	clean := slashpath.Clean(filepath.ToSlash(relPath))
+	if clean == "." || clean == "" {
+		return "", false, nil
+	}
+
+	current := ""
+
+	for _, part := range strings.Split(clean, "/") {
+		if part == "" || part == "." {
+			continue
+		}
+
+		current = slashpath.Join(current, part)
+
+		info, err := e.syncTree.Lstat(current)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return "", false, nil
+			}
+
+			return "", false, fmt.Errorf("lstat %s: %w", current, err)
+		}
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			return current, true, nil
+		}
+	}
+
+	return "", false, nil
+}
+
+// validateNoSymlinkBoundary refuses a local mutation whose target sits beneath
+// a symlinked ancestor.
+//
+// R-2.4.6: when follow_symlinks is enabled the sync tree observes content
+// through an alias, but the alias is the only thing it may mutate. Writing
+// through it would modify — and, for rename, silently replace — content the
+// sync tree never owned. synctree fails such calls closed on its own; this
+// check exists so the refusal is a stated policy with an actionable message
+// and a durable blocked-scope classification, rather than a rooted-descriptor
+// error leaking through.
+//
+// Deletes do not route through here: ExecuteLocalDelete has to special-case
+// the alias itself, which it removes without following.
+func (e *Executor) validateNoSymlinkBoundary(relPath string, verb string) error {
+	boundary, ok, err := e.symlinkBoundaryForPath(relPath)
+	if err != nil {
+		return normalizeSyncTreePathError(err)
+	}
+
+	if !ok {
+		return nil
+	}
+
+	return fmt.Errorf("refusing to %s %s through symlink boundary %s", verb, relPath, boundary)
 }

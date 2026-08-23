@@ -20,6 +20,19 @@ const maxHashRetries = 2
 // ExecuteDownload downloads a remote file via TransferManager with .partial
 // safety, hash verification with retry, and atomic rename.
 func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOutcome {
+	// Checked before Abs: the absolute path below leaves the rooted boundary
+	// and is executed by driveops through the deliberately uncontained
+	// localpath helpers, so this is the only layer that can refuse it.
+	if err := e.validateNoSymlinkBoundary(action.Path, "download"); err != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionDownload,
+			err,
+			action.Path,
+			PermissionCapabilityLocalWrite,
+		)
+	}
+
 	targetPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
 		return e.failedOutcomeWithFailure(

@@ -226,6 +226,16 @@ func (e *Executor) ExecuteFolderCreate(ctx context.Context, action *Action) Acti
 
 // createLocalFolder creates a directory on the local filesystem.
 func (e *Executor) createLocalFolder(action *Action) ActionOutcome {
+	if err := e.validateNoSymlinkBoundary(action.Path, "create folder"); err != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionFolderCreate,
+			err,
+			action.Path,
+			PermissionCapabilityLocalWrite,
+		)
+	}
+
 	if err := e.syncTree.MkdirAll(action.Path, localDirPerms); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
@@ -334,6 +344,21 @@ func (e *Executor) ExecuteMove(ctx context.Context, action *Action) ActionOutcom
 
 // ExecuteLocalMove renames a local file/folder.
 func (e *Executor) ExecuteLocalMove(action *Action) ActionOutcome {
+	// Both endpoints matter: an unchecked destination would still create
+	// parent directories outside the sync root, and rename replaces whatever
+	// sits at the destination.
+	for _, endpoint := range []string{action.OldPath, action.Path} {
+		if err := e.validateNoSymlinkBoundary(endpoint, "move"); err != nil {
+			return e.failedOutcomeWithFailure(
+				action,
+				ActionLocalMove,
+				err,
+				endpoint,
+				PermissionCapabilityLocalWrite,
+			)
+		}
+	}
+
 	if err := e.validateLocalMovePrecondition(action); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,

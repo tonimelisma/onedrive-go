@@ -16,6 +16,16 @@ import (
 // current-state planner schedules any follow-up download/upload action
 // separately.
 func (e *Executor) ExecuteConflictCopy(_ context.Context, action *Action) ActionOutcome {
+	if err := e.validateNoSymlinkBoundary(action.Path, "conflict-copy"); err != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionConflictCopy,
+			err,
+			action.Path,
+			PermissionCapabilityLocalWrite,
+		)
+	}
+
 	absPath, err := e.syncTree.Abs(action.Path)
 	if err != nil {
 		return e.failedOutcomeWithFailure(
