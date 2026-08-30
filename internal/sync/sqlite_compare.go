@@ -112,6 +112,14 @@ comparison_state AS (
 			WHEN l.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(l.item_type, '') <> COALESCE(r.item_type, '') THEN 0
 			WHEN COALESCE(l.item_type, '') = 'folder' THEN 1
+			-- Equality must be proven, never assumed. A missing hash on either
+			-- side makes matching sizes meaningless: two different files of the
+			-- same length would compare equal. Both halves are reachable --
+			-- the scanner stores an empty hash when hashing fails, and
+			-- driveops.SelectHash returns "" when Graph supplies no hash at all
+			-- (B-021) -- and the result was a baseline update recording an
+			-- agreement that never existed.
+			WHEN COALESCE(l.hash, '') = '' OR COALESCE(r.hash, '') = '' THEN 0
 			WHEN COALESCE(l.hash, '') <> COALESCE(r.hash, '') THEN 0
 			WHEN COALESCE(l.size, 0) <> COALESCE(r.size, 0) THEN 0
 			ELSE 1
@@ -134,7 +142,10 @@ comparison_state AS (
 				AND (
 					COALESCE(l.item_type, '') = 'folder'
 					OR (
-						COALESCE(l.hash, '') = COALESCE(r.hash, '')
+						-- See current_equal: a hash-less side cannot prove the
+						-- two copies converged, so equal_again must not fire.
+						COALESCE(l.hash, '') <> ''
+						AND COALESCE(l.hash, '') = COALESCE(r.hash, '')
 						AND COALESCE(l.size, 0) = COALESCE(r.size, 0)
 					)
 				)
@@ -176,7 +187,10 @@ comparison_state AS (
 				AND (
 					COALESCE(l.item_type, '') = 'folder'
 					OR (
-						COALESCE(l.hash, '') = COALESCE(r.hash, '')
+						-- See current_equal: a hash-less side cannot prove the
+						-- two copies converged, so equal_again must not fire.
+						COALESCE(l.hash, '') <> ''
+						AND COALESCE(l.hash, '') = COALESCE(r.hash, '')
 						AND COALESCE(l.size, 0) = COALESCE(r.size, 0)
 					)
 				)
@@ -329,6 +343,14 @@ comparison_flags AS (
 			WHEN l.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(l.item_type, '') <> COALESCE(r.item_type, '') THEN 0
 			WHEN COALESCE(l.item_type, '') = 'folder' THEN 1
+			-- Equality must be proven, never assumed. A missing hash on either
+			-- side makes matching sizes meaningless: two different files of the
+			-- same length would compare equal. Both halves are reachable --
+			-- the scanner stores an empty hash when hashing fails, and
+			-- driveops.SelectHash returns "" when Graph supplies no hash at all
+			-- (B-021) -- and the result was a baseline update recording an
+			-- agreement that never existed.
+			WHEN COALESCE(l.hash, '') = '' OR COALESCE(r.hash, '') = '' THEN 0
 			WHEN COALESCE(l.hash, '') <> COALESCE(r.hash, '') THEN 0
 			WHEN COALESCE(l.size, 0) <> COALESCE(r.size, 0) THEN 0
 			ELSE 1
