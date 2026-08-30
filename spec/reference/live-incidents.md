@@ -19,7 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
-| LI-20260823-01 | Graph returned `serviceReadOnly` on `/me/drives` for every test account | observed | provider outage | 2026-08-23 | no |
+| LI-20260823-01 | Graph returned `serviceReadOnly` on `/me/drives` for every test account | mitigated | provider outage | 2026-08-23 | no |
 | LI-20260503-01 | Nightly incremental-delta E2E failed on unrelated unrecoverable delete noise | fixed | product bug | 2026-05-03 | no |
 | LI-20260430-03 | NestedDeletion setup treated transient mount-root delta 504 as deterministic failure | fixed | test harness | 2026-04-30 | yes |
 | LI-20260430-02 | Conflict-resolution downloads rejected their own conflict-copy removal | fixed | product bug | 2026-04-30 | no |
@@ -70,7 +70,7 @@ Suite / test: CI run `32622492185` on PR #704; `integration` job
 (`TestIntegration_Drives`, `TestIntegration_Drives_PersonalAccountFiltersPhantomDrives`)
 and `e2e` job (`TestE2E_AuthPreflight_Fast` for both accounts)
 Classification: provider outage
-Status: observed
+Status: mitigated
 Recurring: no
 Summary: Every live job failed at drive discovery. `GET /me/drives` returned
 `HTTP 403` with Graph code `serviceReadOnly` and the message
@@ -105,23 +105,34 @@ Evidence:
   scripted reruns of the failed jobs), affecting both test accounts
   identically every time. Both `verify` legs passed on every one of those
   runs, so the failure never touched anything but the live lane.
-Resolution / mitigation: none applied, and none should be. The repo
-deliberately keeps required per-PR verification strict:
-`--classify-live-quirks` is scoped to manual `e2e-full` runs, and repeated
-failures stay red rather than being reclassified. The product itself already
-degrades correctly here -- `discoverAccessibleDrives` falls back to
-`/me/drive` when `/me/drives` fails and reports the account as degraded --
-but the integration tests call `Drives()` directly and assert success, which
-is the right assertion for a test whose job is to prove the endpoint works. `serviceReadOnly` with
-`Database Is Read Only` is a Microsoft-side read-only window, not a client
-condition, and it resolved without repo action. Recorded so a recurrence is
-recognized rather than re-investigated.
-Follow-up: if this recurs, the `drives-token-propagation` quirk family is the
-wrong home for it. That family exists for post-token propagation lag and
-retries on bare 403; `serviceReadOnly` is a distinct provider state that ten
-fast retries cannot clear, so it warrants either its own longer-backoff family
-or an explicit non-retryable classification with a clearer operator message
-rather than `retry exhausted`. [planned]
+Resolution / mitigation: the outage itself is Microsoft-side and cleared on
+its own, but it exposed two client-side defects that are fixed.
+
+First, misclassification. The `drives-token-propagation` quirk family matches
+on `accessDenied`, which is the *outer* code here; `serviceReadOnly` is the
+inner one. A read-only window was therefore retried as if it were post-login
+projection lag, burning the full ten-attempt budget -- roughly 70-90 seconds
+per call -- on a condition that had been refusing for hours, and then
+reporting `retry exhausted`, which describes the client's behavior rather
+than the provider's state. `serviceReadOnly` is now excluded from that family
+and carries its own `graph.ErrProviderReadOnly` sentinel.
+
+Second, a false assertion. A red required check asserts that the change under
+test is broken. That was untrue: `GET /me` and `GET /drives/{id}/items/root`
+both returned `200` throughout, so authentication and the drive were fine and
+only the service was refusing. The live lanes now skip on this one explicit
+signal, reporting that the suite could not run. The skip is deliberately
+narrow -- ordinary `accessDenied` and every other failure stay red -- and is
+recorded in [system.md](../design/system.md) as the single documented
+exception to strict per-PR live verification.
+
+Note that the product already degraded correctly during the outage:
+`discoverAccessibleDrives` falls back to `/me/drive` and reports the account
+as degraded. Only the tests, which assert `Drives()` succeeds, had no way to
+distinguish "this endpoint is broken" from "this endpoint is unavailable".
+
+Follow-up: none outstanding. The retry-family and live-lane fixes described
+above were implemented in this increment.
 
 ## LI-20260503-01: Nightly incremental-delta E2E failed on unrelated unrecoverable delete noise
 

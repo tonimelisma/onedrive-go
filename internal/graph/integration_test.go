@@ -226,6 +226,7 @@ func TestIntegration_Drives(t *testing.T) {
 	defer cancel()
 
 	drives, err := client.Drives(ctx)
+	skipOnProviderReadOnly(t, err)
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, drives, "should have at least one drive")
@@ -250,6 +251,7 @@ func TestIntegration_Drives_PersonalAccountFiltersPhantomDrives(t *testing.T) {
 	defer cancel()
 
 	drives, err := client.Drives(ctx)
+	skipOnProviderReadOnly(t, err)
 	require.NoError(t, err)
 
 	personalCount := 0
@@ -334,4 +336,19 @@ func TestIntegration_CreateAndDeleteFolder(t *testing.T) {
 	// Verify it's gone. Graph API may return 404 or 400 for deleted items.
 	_, err = client.GetItem(ctx, driveID, folder.ID)
 	require.Error(t, err, "GetItem should fail after deletion")
+}
+
+// skipOnProviderReadOnly stops an integration test when Microsoft reports a
+// backend read-only window.
+//
+// Failing would assert that the code under test is broken, which is untrue:
+// the provider is refusing to serve a read unrelated to the change. The skip
+// is narrow -- only the explicit serviceReadOnly signal qualifies, and every
+// other error stays a failure. See LI-20260823-01.
+func skipOnProviderReadOnly(t *testing.T, err error) {
+	t.Helper()
+
+	if err != nil && IsProviderUnavailable(err) {
+		t.Skipf("provider read-only window; the suite could not run: %v", err)
+	}
 }

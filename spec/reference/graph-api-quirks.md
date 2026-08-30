@@ -1007,3 +1007,30 @@ The `/drives/{id}/special/recyclebin/children` endpoint only works on Business/S
 Similarly, `permanentDelete` (used by `recycle-bin empty`) returns **HTTP 405** on Personal accounts — the code already handles this by falling back to regular `DELETE` (`recycle_bin.go`).
 
 **Impact**: `recycle-bin list` and `recycle-bin restore` are Business-only. E2E tests skip on Personal accounts.
+
+### Backend Read-Only Windows Masquerade As accessDenied
+
+`GET /me/drives` can return `403` with outer code `accessDenied` and message
+`Database Is Read Only`, while the inner code is `serviceReadOnly`. The outer
+code is indistinguishable from an ordinary permission failure, and from the
+token-propagation lag that the same endpoint legitimately exhibits after a
+fresh login.
+
+The inner code is the only reliable signal, so classification must use the
+most specific code rather than the outer one:
+
+- `graph.MostSpecificErrorCode(body)` returns the innermost code, falling back
+  to the outer code.
+- `graph.IsProviderUnavailable(err)` / `errors.Is(err, graph.ErrProviderReadOnly)`
+  identify the condition on a returned error.
+
+Two behaviors depend on the distinction. The `drives-token-propagation` retry
+family excludes `serviceReadOnly`, because projection lag clears in seconds
+while a read-only window has been observed lasting hours, so retrying only
+delays a decided failure. And live suites treat it as an untestable
+environment rather than a failure, because the service refusing a read says
+nothing about the change under test.
+
+Observed 2026-08-23 across both test accounts for roughly two and a half
+hours, with `GET /me` and `GET /drives/{id}/items/root` both returning `200`
+throughout. See `LI-20260823-01`.

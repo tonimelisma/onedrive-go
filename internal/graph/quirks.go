@@ -97,6 +97,15 @@ func isTransientDrivesDiscoveryError(err error) (*GraphError, bool) {
 		return nil, false
 	}
 
+	// A backend read-only window also surfaces as accessDenied, with
+	// serviceReadOnly as the inner code. It is not token-propagation lag: it
+	// lasts for as long as the service says so, so spending the whole retry
+	// budget on it only delays a failure that was already decided. Observed
+	// running for hours (LI-20260823-01).
+	if graphErr.HasCode(graphCodeServiceReadOnly) {
+		return nil, false
+	}
+
 	return graphErr, true
 }
 

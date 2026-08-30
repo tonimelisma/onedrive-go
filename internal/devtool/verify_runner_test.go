@@ -30,7 +30,9 @@ const (
 const (
 	cmdUnitTests        = cmdBuildFirstPlatform + supportedPlatformCount
 	cmdE2EFullCompile   = cmdUnitTests + 1
-	cmdE2EAuthPreflight = cmdE2EFullCompile + 1
+	cmdTaggedVetE2E     = cmdE2EFullCompile + 1
+	cmdTaggedVetInteg   = cmdTaggedVetE2E + 1
+	cmdE2EAuthPreflight = cmdTaggedVetInteg + 1
 	cmdE2EFastPreflight = cmdE2EAuthPreflight + 1
 	cmdE2ESuite         = cmdE2EFastPreflight + 1
 
@@ -130,7 +132,8 @@ func TestRunE2EFullCompileCheck_UsesUniqueArtifactPath(t *testing.T) {
 		&bytes.Buffer{},
 	)
 	require.NoError(t, err)
-	require.Len(t, runner.runCommands, 1)
+	// compile, then one tagged vet per build-tagged source set
+	require.Len(t, runner.runCommands, 1+taggedVetTargetCount)
 
 	args := runner.runCommands[0].args
 	require.Len(t, args, 7)
@@ -186,9 +189,11 @@ func TestRunVerifyPublicRunsExpectedSteps(t *testing.T) {
 		"go build ./... GOOS=freebsd",
 		"go test -race",
 		"go test -c",
+		"go vet -tags=e2e e2e_full",
+		"go vet -tags=integration",
 	}, gotSequence)
 
-	e2eCompile := runner.runCommands[len(runner.runCommands)-1]
+	e2eCompile := runner.runCommands[cmdE2EFullCompile]
 	assert.Equal(t, "-race", e2eCompile.args[2])
 	assert.Equal(t, "-tags=e2e e2e_full", e2eCompile.args[3])
 	assert.Equal(t, "-o", e2eCompile.args[4])
