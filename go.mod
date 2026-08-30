@@ -12,7 +12,7 @@ toolchain go1.26.6
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/coder/websocket v1.8.14
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20
 	github.com/spf13/cobra v1.10.2
