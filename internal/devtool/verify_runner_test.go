@@ -753,29 +753,20 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.runCommands, 2)
+	// The watch-ordering step is intentionally absent: it targeted
+	// TestWatchOrderingStress_, which no test in the repo has ever defined, so
+	// it reported success while running nothing.
+	require.Len(t, runner.runCommands, 1)
 	require.Len(t, runner.combinedCommands, 1)
 
 	assert.Equal(t, "go", runner.runCommands[0].name)
-	assert.Equal(t, []string{
-		"test",
-		"-tags=stress",
-		"-race",
-		"-count=50",
-		"-timeout=20m",
-		"-run",
-		"TestWatchOrderingStress_",
-		"./internal/sync",
-	}, runner.runCommands[0].args)
-
-	assert.Equal(t, "go", runner.runCommands[1].name)
 	assert.Equal(t, []string{
 		"test",
 		"-race",
 		"-count=50",
 		"-timeout=20m",
 		"./internal/multisync",
-	}, runner.runCommands[1].args)
+	}, runner.runCommands[0].args)
 
 	assert.Equal(t, "go", runner.combinedCommands[0].name)
 	assert.Equal(t, []string{

@@ -25,7 +25,6 @@ const (
 	fullE2EFixturePreflight          = "TestE2E_FixturePreflight_Full"
 	fullE2EPackageTimeout            = "60m"
 	fastE2EPackageTimeout            = "10m"
-	stressWatchOrderingTimeout       = "20m"
 	stressMultisyncTimeout           = "20m"
 	stressSyncTimeout                = "30m"
 	stressSlowTestLimit              = 5

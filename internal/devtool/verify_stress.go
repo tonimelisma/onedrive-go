@@ -43,23 +43,6 @@ func runStress(
 ) error {
 	stressCommands := []stressCommandSpec{
 		{
-			stepName: "watch-ordering stress",
-			statusLine: fmt.Sprintf(
-				"==> go test -tags=stress -race -count=50 -timeout=%s "+
-					"-run TestWatchOrderingStress_ ./internal/sync\n",
-				stressWatchOrderingTimeout,
-			),
-			args: []string{
-				"test",
-				"-tags=stress",
-				"-race",
-				"-count=50",
-				"-timeout=" + stressWatchOrderingTimeout,
-				"-run", "TestWatchOrderingStress_",
-				"./internal/sync",
-			},
-		},
-		{
 			stepName: "multisync race x50",
 			statusLine: fmt.Sprintf(
 				"==> go test -race -count=50 -timeout=%s ./internal/multisync\n",
