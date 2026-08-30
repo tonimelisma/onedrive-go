@@ -21,13 +21,13 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 
 - R-6.2.1: (S1) The system shall never delete a remote item based on local absence unless a synced baseline entry exists. [verified]
 - R-6.2.2: (S2) The system shall never process deletions from an incomplete enumeration (partial delta fetch or unmounted volume). [verified]
-- R-6.2.3: (S3) Downloads shall use atomic file writes (client-owned namespaced partial + hash verify + rename). [verified]
-- R-6.2.4: (S4) Local deletions shall verify the file hash against baseline before deleting; on mismatch, the newer local content is preserved. [verified]
+- R-6.2.3: (S3) Downloads shall use atomic file writes (client-owned namespaced partial + hash verify + rename). [verified]- R-6.2.4: (S4) Local deletions shall verify the file hash against baseline before deleting; on mismatch, the newer local content is preserved. [verified]
 - R-6.2.5: (S5) Delete safety protection shall prevent mass accidental deletions through the normal engine path: one-shot and watch mode shall continue safe non-delete work and apply ordinary per-item safety checks before deleting local content. [verified]
 - R-6.2.6: (S6) Before each download, the system shall verify available disk space. When below `min_free_space`: set a `disk:local` block scope on all downloads. When above `min_free_space` but below file size plus `min_free_space`: record a per-file failure. [verified]
 - R-6.2.7: (S7) Client-owned transfer partials shall never upload. When `ignore_junk_files` or explicit path filters exclude arbitrary partial or temporary files, the system shall not upload or download them. Transfer-artifact cleanup shall respect configured include/ignore boundaries and protected child roots. [verified]
 - R-6.2.8: File operations (ls, get, put, rm, mkdir, stat, mv, cp) shall work independently of sync state — no sync database involved. [verified]
 - R-6.2.10: When a transfer connection stalls without context cancellation, the system shall enforce a per-transfer timeout or connection-level deadline to prevent indefinite hangs. [verified]
+- R-6.2.11: (S9) The system shall never conclude that a local and a remote copy hold the same content without comparing content hashes from both sides. When either side has no hash, equal size shall not be treated as evidence of equality, and the paths shall be reconciled rather than recorded as agreeing. [verified]
 
 ## R-6.3 Process Model [verified]
 
