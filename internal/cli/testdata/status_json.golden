@@ -6,6 +6,7 @@
       "org_name": "Contoso",
       "drives": [
         {
+          "mount_ref": "q31wKagXD6nLz97REEdOvz_t-vIVwB4fHKzpgYrgfwo",
           "kind": "personal_onedrive",
           "name": "Alice Example's personal OneDrive",
           "folder": "/Users/alice/OneDrive",
@@ -63,6 +64,7 @@
       },
       "drives": [
         {
+          "mount_ref": "LvTKHaNBJ68u22RjrqKGiGfmOTdTqFQawZcsHrdSNz0",
           "kind": "business_onedrive",
           "name": "OneDrive - Example Corp",
           "folder": "/Users/bob/WorkDrive",

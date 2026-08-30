@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
+
 	"github.com/stretchr/testify/require"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
@@ -23,10 +25,14 @@ func goldenStatusAccounts() []statusAccount {
 			OrgName:     "Contoso",
 			Drives: []statusDrive{
 				{
-					Kind:   statusDriveKindPersonalOneDrive,
-					Name:   "Alice Example's personal OneDrive",
-					Folder: "/Users/alice/OneDrive",
-					State:  driveStateReady,
+					// A realistic MountID so the golden shows a real mount_ref
+					// digest rather than an empty string.
+					MountID:  "personal:alice@example.com",
+					MountRef: config.MountRef("personal:alice@example.com"),
+					Kind:     statusDriveKindPersonalOneDrive,
+					Name:     "Alice Example's personal OneDrive",
+					Folder:   "/Users/alice/OneDrive",
+					State:    driveStateReady,
 					SyncState: &syncStateInfo{
 						FileCount:      42,
 						ConditionCount: 3,
@@ -80,10 +86,12 @@ func goldenStatusAccounts() []statusAccount {
 			AuthAction:  authAction(authReasonInvalidSavedLogin),
 			Drives: []statusDrive{
 				{
-					Kind:   statusDriveKindBusinessOneDrive,
-					Name:   "OneDrive - Example Corp",
-					Folder: "/Users/bob/WorkDrive",
-					State:  driveStatePaused,
+					MountID:  "business:bob@example.com",
+					MountRef: config.MountRef("business:bob@example.com"),
+					Kind:     statusDriveKindBusinessOneDrive,
+					Name:     "OneDrive - Example Corp",
+					Folder:   "/Users/bob/WorkDrive",
+					State:    driveStatePaused,
 				},
 			},
 		},
