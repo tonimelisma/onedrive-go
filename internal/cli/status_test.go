@@ -1967,3 +1967,39 @@ func createTestStateDB(t *testing.T, dbPath string) {
 	require.NoError(t, err)
 	require.NoError(t, store.Close(t.Context()))
 }
+
+// Validates: R-3.5.1, R-4.1
+//
+// A drive that relies on the default sync_dir has an empty sync_dir in config.
+// Reporting that raw value told the user their files sync nowhere, which is
+// what TestE2E_RoundTrip/status_json caught.
+func TestBuildConfiguredStatusDrive_ReportsDefaultSyncDirWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	cfg := config.DefaultConfig()
+	cfg.Drives = map[driveid.CanonicalID]config.Drive{cid: {}}
+
+	drive := cfg.Drives[cid]
+	got := buildConfiguredStatusDrive(cfg, cid, &drive, &statusAccount{}, nil)
+
+	assert.NotEmpty(t, got.Folder, "status must report the effective sync dir, not the raw configured value")
+	assert.Equal(t,
+		config.EffectiveSyncDir(cfg, cid, "", slog.New(slog.DiscardHandler)),
+		got.Folder,
+	)
+}
+
+// Validates: R-3.5.1, R-4.1
+func TestBuildConfiguredStatusDrive_PrefersConfiguredSyncDir(t *testing.T) {
+	t.Parallel()
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	cfg := config.DefaultConfig()
+	cfg.Drives = map[driveid.CanonicalID]config.Drive{cid: {SyncDir: "/explicit/path"}}
+
+	drive := cfg.Drives[cid]
+	got := buildConfiguredStatusDrive(cfg, cid, &drive, &statusAccount{}, nil)
+
+	assert.Equal(t, "/explicit/path", got.Folder)
+}

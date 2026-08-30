@@ -384,7 +384,7 @@ func buildStatusAccountsFromViews(
 
 		for _, cid := range driveIDs {
 			d := cfg.Drives[cid]
-			drive := buildConfiguredStatusDrive(cid, &d, &acct, syncQ)
+			drive := buildConfiguredStatusDrive(cfg, cid, &d, &acct, syncQ)
 			children := childrenByParent[cid]
 			for childIndex := range children {
 				childDrive := buildChildStatusDrive(
@@ -460,7 +460,7 @@ func buildSingleAccountStatusWith(
 
 	for _, cid := range driveIDs {
 		d := cfg.Drives[cid]
-		drive := buildConfiguredStatusDrive(cid, &d, &acct, syncQ)
+		drive := buildConfiguredStatusDrive(cfg, cid, &d, &acct, syncQ)
 		children := childrenByParent[cid]
 		for childIndex := range children {
 			childDrive := buildChildStatusDrive(
@@ -631,6 +631,7 @@ func groupChildMountsByParent(
 }
 
 func buildConfiguredStatusDrive(
+	cfg *config.Config,
 	cid driveid.CanonicalID,
 	drive *config.Drive,
 	acct *statusAccount,
@@ -644,7 +645,7 @@ func buildConfiguredStatusDrive(
 		InternalID:     cid.String(),
 		Kind:           statusDriveKind(cid),
 		Name:           statusConfiguredDriveName(cid, drive, acct),
-		Folder:         drive.SyncDir,
+		Folder:         config.EffectiveSyncDir(cfg, cid, drive.SyncDir, slog.New(slog.DiscardHandler)),
 		State:          driveState(drive),
 		MountID:        cid.String(),
 		ProjectionKind: statusProjectionStandalone,

@@ -77,7 +77,7 @@ func TestE2E_DriveList_JSON(t *testing.T) {
 
 	entry := result.Configured[0]
 	assert.NotEmpty(t, entry.CanonicalID, "canonical_id should be set")
-	assert.Equal(t, "ready", entry.State, "state should be ready")
+	assert.Equal(t, "up_to_date", entry.State, "state should be up to date")
 	assert.Equal(t, "configured", entry.Source, "source should be configured")
 	assert.Equal(t, syncDir, entry.SyncDir, "sync_dir should match")
 
