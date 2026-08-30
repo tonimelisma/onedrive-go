@@ -175,7 +175,23 @@ func writeClientTestBody(t *testing.T, w http.ResponseWriter, body string) {
 	t.Helper()
 
 	_, err := w.Write([]byte(body))
-	require.NoError(t, err)
+	// assert, not require: this runs on the httptest server goroutine, and
+	// require calls t.FailNow, which the testing package documents as safe
+	// only from the goroutine running the test.
+	assert.NoError(t, err)
+}
+
+// writeTruncatedClientTestBody writes a body the client is expected to stop
+// reading partway through, without asserting the write completed.
+//
+// The 64 KiB error-body cap works by reading only maxErrBodySize and closing,
+// so the server's remaining write legitimately fails with a connection reset
+// or broken pipe. Asserting on it makes the test fail whenever the client wins
+// that race -- which is the behavior under test succeeding, not a fault. It
+// flaked exactly this way on the macOS CI leg.
+func writeTruncatedClientTestBody(w http.ResponseWriter, body string) {
+	//nolint:errcheck // the write is expected to fail once the client hangs up; that is the behavior under test
+	w.Write([]byte(body))
 }
 
 func TestDo_Success(t *testing.T) {
@@ -921,7 +937,7 @@ func TestDo_ErrorBodyCappedAt64KiB(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		writeClientTestBody(t, w, bigBody)
+		writeTruncatedClientTestBody(w, bigBody)
 	}))
 	defer srv.Close()
 
@@ -943,7 +959,7 @@ func TestDoPreAuth_ErrorBodyCappedAt64KiB(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		writeClientTestBody(t, w, bigBody)
+		writeTruncatedClientTestBody(w, bigBody)
 	}))
 	defer srv.Close()
 
