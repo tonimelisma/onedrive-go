@@ -27,7 +27,7 @@ jobs:
   # README lists Linux and macOS as primary platforms, and the tree carries
   # darwin-only sources (synctree stat identity, the non-Linux watcher path).
   # Both legs run so neither platform can break unobserved.
-  verify:
+  verify-matrix:
     strategy:
       fail-fast: false
       matrix:
@@ -73,6 +73,30 @@ jobs:
         env:
           COVERAGE_THRESHOLD: ${{ matrix.os == 'ubuntu-latest' && '76.0' || '-1' }}
         run: go run ./cmd/devtool verify public --coverage-threshold "${COVERAGE_THRESHOLD}"
+
+  # Branch protection requires a check literally named "verify". Pointing it at
+  # a matrix job does not work: the legs report as "verify (ubuntu-latest)" and
+  # "verify (macos-latest)", so the required name never appears and every PR
+  # stays blocked forever. This aggregate keeps the required name stable and
+  # independent of how many legs the matrix grows.
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: verify-matrix
+    if: always()
+    steps:
+      - name: Require every verify leg to succeed
+        env:
+          MATRIX_RESULT: ${{ needs.verify-matrix.result }}
+        run: |
+          set -euo pipefail
+          echo "verify-matrix result: ${MATRIX_RESULT}"
+          # "skipped" means the matrix's own if: condition declined the run
+          # (a squash-merge push to main), which is not a failure.
+          case "${MATRIX_RESULT}" in
+            success|skipped) exit 0 ;;
+            *) echo "::error::verify matrix did not succeed"; exit 1 ;;
+          esac
 
   stress:
     runs-on: ubuntu-latest
