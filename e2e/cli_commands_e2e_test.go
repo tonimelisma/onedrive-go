@@ -77,9 +77,15 @@ func TestE2E_Status_PausedDrive(t *testing.T) {
 	// Pause the drive.
 	runCLIWithConfig(t, cfgPath, env, "pause")
 
-	// Check status shows "paused".
+	// Assert the paused state structurally. The text renderer capitalizes the
+	// label ("Status: Paused"), so matching lowercase prose silently rots the
+	// moment the presentation changes -- which is exactly what happened here.
+	pausedDrive := requireStatusDrive(t, readStatus(t, cfgPath, env), drive)
+	assert.Equal(t, "paused", pausedDrive.State)
+
+	// The human surface still has to say so, so pin the rendered label too.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status")
-	assert.Contains(t, stdout, "paused", "status should show paused state")
+	assert.Contains(t, stdout, "Status: Paused", "status text should show the paused state")
 
 	// Resume the drive.
 	runCLIWithConfig(t, cfgPath, env, "resume")
@@ -124,9 +130,12 @@ func TestE2E_Pause_IndefiniteAndResume(t *testing.T) {
 	_, stderr = runCLIWithConfig(t, cfgPath, env, "resume")
 	assert.Contains(t, stderr, "resumed", "resume should confirm drive is resumed")
 
-	// Status should show ready.
-	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status")
-	assert.Contains(t, stdout, "ready", "status should show ready after resume")
+	// Status should report the drive healthy again. This must be asserted
+	// structurally: the text renderer signals "up to date" by omitting the
+	// Status line entirely (printDriveState returns early for that state), so
+	// there is no healthy-state string for text matching to find.
+	resumedDrive := requireStatusDrive(t, readStatus(t, cfgPath, env), drive)
+	assert.Equal(t, "up_to_date", resumedDrive.State)
 }
 
 // TestE2E_Resume_NotPaused validates that resuming a non-paused drive gives

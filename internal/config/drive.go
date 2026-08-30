@@ -205,16 +205,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	}
 
 	// Compute runtime default sync_dir when the drive has none configured.
-	if resolved.SyncDir == "" {
-		orgName, displayName := ResolveAccountNames(canonicalID, logger)
-		otherDirs := CollectOtherSyncDirs(cfg, canonicalID, logger)
-		resolved.SyncDir = expandTilde(DefaultSyncDir(canonicalID, orgName, displayName, otherDirs))
-		logger.Debug("using default sync_dir",
-			"sync_dir", resolved.SyncDir,
-			"canonical_id", canonicalID.String(),
-			"org_name", orgName,
-		)
-	}
+	resolved.SyncDir = EffectiveSyncDir(cfg, canonicalID, resolved.SyncDir, logger)
 
 	// Auto-derive display_name when the user hasn't configured one explicitly.
 	if resolved.DisplayName == "" {
@@ -315,6 +306,37 @@ func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 // ResolveAccountNames returns org_name and display_name for a drive's parent
 // account using the catalog account record. Returns empty strings if the
 // account record is unavailable.
+// EffectiveSyncDir returns the directory a drive will actually sync into:
+// configuredSyncDir when the user set one, otherwise the computed runtime
+// default.
+//
+// Read surfaces must use this rather than the raw configured value. A drive
+// that relies on the default has an empty sync_dir in config, so reporting the
+// raw field tells the user their files go nowhere -- `status` did exactly that
+// until it was caught by TestE2E_RoundTrip/status_json.
+func EffectiveSyncDir(
+	cfg *Config,
+	canonicalID driveid.CanonicalID,
+	configuredSyncDir string,
+	logger *slog.Logger,
+) string {
+	if configuredSyncDir != "" {
+		return configuredSyncDir
+	}
+
+	orgName, displayName := ResolveAccountNames(canonicalID, logger)
+	otherDirs := CollectOtherSyncDirs(cfg, canonicalID, logger)
+	syncDir := expandTilde(DefaultSyncDir(canonicalID, orgName, displayName, otherDirs))
+
+	logger.Debug("using default sync_dir",
+		"sync_dir", syncDir,
+		"canonical_id", canonicalID.String(),
+		"org_name", orgName,
+	)
+
+	return syncDir
+}
+
 func ResolveAccountNames(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
 	acctCID := accountCIDForDrive(cid)
 	if acctCID.IsZero() {

@@ -288,6 +288,46 @@ func findStatusDriveJSON(status statusJSON, identity string) (statusDriveJSON, b
 	return statusDriveJSON{}, false
 }
 
+// requireStatusSharedFolderAtFolder finds a shared-folder (shortcut child) row
+// by its local folder, which is the only stable identifier status --json
+// exposes for children today.
+//
+// The identity-based lookup below can only resolve a child when the account has
+// exactly one, because status omits mount identity from its JSON. That holds in
+// the fast lane but not in the full battery, where the writable and read-only
+// shortcut fixtures are both projected.
+func requireStatusSharedFolderAtFolder(
+	t *testing.T,
+	status statusJSON,
+	folder string,
+) statusDriveJSON {
+	t.Helper()
+
+	var shared []statusDriveJSON
+
+	for i := range status.Accounts {
+		for j := range status.Accounts[i].Drives {
+			collectStatusSharedFolders(status.Accounts[i].Drives[j], &shared)
+		}
+	}
+
+	for i := range shared {
+		if shared[i].Folder == folder {
+			return shared[i]
+		}
+	}
+
+	found := make([]string, 0, len(shared))
+	for i := range shared {
+		found = append(found, shared[i].Folder)
+	}
+
+	require.Failf(t, "missing shared folder status row",
+		"folder=%s found=%v", folder, found)
+
+	return statusDriveJSON{}
+}
+
 func findStatusSharedFolderJSON(drive statusDriveJSON, identity string) (statusDriveJSON, bool) {
 	if !isStatusChildIdentity(identity) {
 		return drive, true

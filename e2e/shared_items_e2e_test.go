@@ -204,7 +204,9 @@ func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing
 	assert.Contains(t, stderr, "Mode: upload-only")
 
 	statusOut, _ := runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "status")
-	assert.Contains(t, statusOut, "SHARED FOLDER WRITES BLOCKED")
+	// The rendered title is sentence case ("Shared folder writes blocked"); the
+	// uppercase form predates the status redesign and matched nothing.
+	assert.Contains(t, statusOut, "Shared folder writes blocked")
 	assert.Contains(t, statusOut, "Downloads continue normally.")
 	assert.Contains(t, statusOut, "blocked-from-recipient.txt")
 
