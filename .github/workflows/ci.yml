@@ -117,7 +117,7 @@ jobs:
 
       - name: Upload stress summaries
         if: always()
-        uses: actions/upload-artifact@v7.0.0
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: stress-summaries
           path: ${{ runner.temp }}/stress-verify-summary.json
@@ -339,7 +339,7 @@ jobs:
 
       - name: Upload E2E summaries
         if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
-        uses: actions/upload-artifact@v7.0.0
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: e2e-summaries
           path: |
@@ -351,7 +351,7 @@ jobs:
 
       - name: Upload E2E debug logs
         if: failure()
-        uses: actions/upload-artifact@v7.0.0
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: e2e-debug-logs
           path: /tmp/e2e-debug-logs/
