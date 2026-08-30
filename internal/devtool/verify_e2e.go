@@ -586,7 +586,7 @@ func runE2EPreflightAuth(
 			"-v",
 			"./e2e/...",
 		}
-		if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", authArgs...); err != nil {
+		if err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "fast e2e auth preflight", authArgs...); err != nil {
 			if !classifyLiveQuirks {
 				return fmt.Errorf("fast e2e auth preflight: %w", err)
 			}
@@ -640,13 +640,14 @@ func runE2EPreflightFast(
 		if err := writeStatus(stdout, "==> go test -tags=e2e fixture preflight\n"); err != nil {
 			return fmt.Errorf("write status: %w", err)
 		}
-		if err := runner.Run(
+		if err := runGoTestMatching(
 			ctx,
+			runner,
 			repoRoot,
 			env,
 			stdout,
 			stderr,
-			"go",
+			"fast e2e fixture preflight",
 			"test",
 			"-tags=e2e",
 			"-run="+fastE2EPreflightPattern,
@@ -927,13 +928,14 @@ func runE2EPreflightFull(
 		if err := writeStatus(stdout, "==> go test -tags='e2e e2e_full' fixture preflight\n"); err != nil {
 			return fmt.Errorf("write status: %w", err)
 		}
-		if err := runner.Run(
+		if err := runGoTestMatching(
 			ctx,
+			runner,
 			repoRoot,
 			env,
 			stdout,
 			stderr,
-			"go",
+			"full e2e fixture preflight",
 			"test",
 			"-tags=e2e e2e_full",
 			"-run="+fullE2EPreflightPattern,
