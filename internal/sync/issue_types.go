@@ -9,22 +9,22 @@ package sync
 const (
 	// Scanner-detectable (observation-time).
 	IssueInvalidFilename = "invalid_filename"
-	IssuePathTooLong     = "path_too_long"
-	IssueFileTooLarge    = "file_too_large"
+	issuePathTooLong     = "path_too_long"
+	issueFileTooLarge    = "file_too_large"
 
 	// Scanner-detectable (hash phase).
-	IssueHashPanic = "hash_panic"
+	issueHashPanic = "hash_panic"
 
 	// Runtime (execution-time).
 	IssueUnauthorized         = "unauthorized"
 	IssueRemoteWriteDenied    = "remote_write_denied"
-	IssueRemoteReadDenied     = "remote_read_denied"
+	issueRemoteReadDenied     = "remote_read_denied"
 	IssueQuotaExceeded        = "quota_exceeded"
-	IssueRateLimited          = "rate_limited"
-	IssueLocalReadDenied      = "local_read_denied"
-	IssueLocalWriteDenied     = "local_permission_denied"
-	IssueCaseCollision        = "case_collision"
-	IssueDiskFull             = "disk_full"
-	IssueServiceOutage        = "service_outage"
-	IssueFileTooLargeForSpace = "file_too_large_for_space"
+	issueRateLimited          = "rate_limited"
+	issueLocalReadDenied      = "local_read_denied"
+	issueLocalWriteDenied     = "local_permission_denied"
+	issueCaseCollision        = "case_collision"
+	issueDiskFull             = "disk_full"
+	issueServiceOutage        = "service_outage"
+	issueFileTooLargeForSpace = "file_too_large_for_space"
 )

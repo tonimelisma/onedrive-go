@@ -27,7 +27,7 @@ func (c *Client) SocketIOEndpoint(ctx context.Context, driveID driveid.ID) (*Soc
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var decoded socketIOEndpointResponse
 	if decodeErr := json.NewDecoder(resp.Body).Decode(&decoded); decodeErr != nil {

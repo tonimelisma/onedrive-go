@@ -23,10 +23,10 @@ import (
 func TestChangeEventsToObservedItems_RemoteOnly(t *testing.T) {
 	t.Parallel()
 
-	events := []ChangeEvent{
-		{Source: SourceRemote, ItemID: "r1", Path: "remote.txt", DriveID: driveid.New(testDriveID)},
+	events := []changeEvent{
+		{Source: sourceRemote, ItemID: "r1", Path: "remote.txt", DriveID: driveid.New(testDriveID)},
 		{Source: SourceLocal, Path: "local.txt"},
-		{Source: SourceRemote, ItemID: "r2", Path: "remote2.txt", DriveID: driveid.New(testDriveID)},
+		{Source: sourceRemote, ItemID: "r2", Path: "remote2.txt", DriveID: driveid.New(testDriveID)},
 	}
 
 	items := projectObservedItems(slog.Default(), events)
@@ -39,9 +39,9 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
-	events := []ChangeEvent{
+	events := []changeEvent{
 		{
-			Source:    SourceRemote,
+			Source:    sourceRemote,
 			ItemID:    "item1",
 			ParentID:  "parent1",
 			DriveID:   driveID,
@@ -54,7 +54,7 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 			IsDeleted: false,
 		},
 		{
-			Source:    SourceRemote,
+			Source:    sourceRemote,
 			ItemID:    "item2",
 			DriveID:   driveID,
 			Path:      "docs/folder",
@@ -225,7 +225,7 @@ func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 	assert.Equal(t, "b.txt", orphans[0].Path)
 	assert.Equal(t, "id-b", orphans[0].ItemID)
 	assert.Equal(t, ChangeDelete, orphans[0].Type)
-	assert.Equal(t, SourceRemote, orphans[0].Source)
+	assert.Equal(t, sourceRemote, orphans[0].Source)
 	assert.True(t, orphans[0].IsDeleted)
 }
 
@@ -351,7 +351,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 			assert.Equal(t, "file2.txt", ev.Path, "orphan should be file2.txt")
 			assert.Equal(t, "f2", ev.ItemID)
 			assert.True(t, ev.IsDeleted)
-		case ChangeCreate, ChangeMove:
+		case changeCreate, ChangeMove:
 			// Not expected in this test.
 		}
 	}
@@ -368,10 +368,10 @@ func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
-	events := []ChangeEvent{
-		{Source: SourceRemote, ItemID: "valid-1", Path: "a.txt", DriveID: driveID},
-		{Source: SourceRemote, ItemID: "", Path: "bad.txt", DriveID: driveID},
-		{Source: SourceRemote, ItemID: "valid-2", Path: "b.txt", DriveID: driveID},
+	events := []changeEvent{
+		{Source: sourceRemote, ItemID: "valid-1", Path: "a.txt", DriveID: driveID},
+		{Source: sourceRemote, ItemID: "", Path: "bad.txt", DriveID: driveID},
+		{Source: sourceRemote, ItemID: "valid-2", Path: "b.txt", DriveID: driveID},
 	}
 
 	items := projectObservedItems(slog.Default(), events)
@@ -510,7 +510,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 			deletes++
 			assert.Equal(t, "file2.txt", ev.Path)
 			assert.True(t, ev.IsDeleted)
-		case ChangeCreate, ChangeMove:
+		case changeCreate, ChangeMove:
 			// not expected
 		}
 	}
@@ -572,8 +572,8 @@ func TestObserveAndCommitRemoteTruth_RemoteReadDeniedPersistsObservationFindings
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "/", issues[0].Path)
-	assert.Equal(t, IssueRemoteReadDenied, issues[0].IssueType)
-	assert.Equal(t, SKPermRemoteRead(""), issues[0].ScopeKey)
+	assert.Equal(t, issueRemoteReadDenied, issues[0].IssueType)
+	assert.Equal(t, sKPermRemoteRead(""), issues[0].ScopeKey)
 
 	scopes, err := e.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
@@ -647,7 +647,7 @@ func TestRunFullRemoteRefreshAsync_NoChanges(t *testing.T) {
 	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 
 	ready := setupWatchEngine(t, e)
-	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).dirtyBuf = newDirtyBuffer(e.logger)
 
 	// Full reconciliation always hands observed changes back through the watch
 	// dirty scheduler, even when the later planner pass reduces them to a no-op. The
@@ -683,7 +683,7 @@ func TestRunFullRemoteRefreshAsync_DeltaError(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).dirtyBuf = newDirtyBuffer(e.logger)
 
 	// Should not panic — error is logged and function returns.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
@@ -715,7 +715,7 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).dirtyBuf = newDirtyBuffer(e.logger)
 
 	// Call should return immediately — goroutine is blocked in deltaFn.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
@@ -748,7 +748,7 @@ func TestRunFullRemoteRefreshAsync_SkipsIfRunning(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).dirtyBuf = newDirtyBuffer(e.logger)
 
 	// Pre-set refreshActive — simulates a full remote refresh already in progress.
 	testWatchRuntime(t, e).refreshActive = true
@@ -825,7 +825,7 @@ func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).dirtyBuf = newDirtyBuffer(e.logger)
 
 	// Baseline is empty — delta returns a new file and the watch loop gets
 	// a coarse dirty signal back from the remote refresh.
@@ -844,11 +844,11 @@ func TestWatchDirtyScheduling_PathFanoutStillProducesOneCoarseDirtySignal(t *tes
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	require.NoError(t, rt.handleWatchLocalObservationBatch(t.Context(), &localObservationBatch{dirty: true}))
 	rt.markDirtyFromRemoteBatch(&remoteObservationBatch{
-		emitted: []ChangeEvent{
+		emitted: []changeEvent{
 			{Path: "alpha.txt"},
 			{OldPath: "beta.txt"},
 			{Path: "gamma.txt", OldPath: "delta.txt"},
@@ -889,7 +889,7 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	refreshC := make(chan time.Time, 1)
 	rt.refreshCh = refreshC
@@ -980,7 +980,7 @@ func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).dirtyBuf = NewDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).dirtyBuf = newDirtyBuffer(e.logger)
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForRefreshDone(t, ctx, e)

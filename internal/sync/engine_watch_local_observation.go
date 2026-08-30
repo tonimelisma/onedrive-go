@@ -32,7 +32,7 @@ func (rt *watchRuntime) applyLocalObservationBatch(
 	if batch.markSuspect {
 		reason := batch.recoveryReason
 		if reason == "" {
-			reason = LocalTruthRecoveryWatcherError
+			reason = localTruthRecoveryWatcherError
 		}
 		if err := rt.engine.baseline.MarkLocalTruthSuspect(ctx, reason); err != nil {
 			return false, err
@@ -79,18 +79,18 @@ func (rt *watchRuntime) applyLocalObservationBatch(
 	return true, nil
 }
 
-func sameLocalStateRows(a []LocalStateRow, b []LocalStateRow) bool {
+func sameLocalStateRows(a []localStateRow, b []localStateRow) bool {
 	if len(a) != len(b) {
 		return false
 	}
 
-	left := append([]LocalStateRow(nil), a...)
-	right := append([]LocalStateRow(nil), b...)
+	left := append([]localStateRow(nil), a...)
+	right := append([]localStateRow(nil), b...)
 	slices.SortFunc(left, compareLocalStateRowsByPath)
 	slices.SortFunc(right, compareLocalStateRowsByPath)
 	return slices.Equal(left, right)
 }
 
-func compareLocalStateRowsByPath(a LocalStateRow, b LocalStateRow) int {
+func compareLocalStateRowsByPath(a localStateRow, b localStateRow) int {
 	return strings.Compare(a.Path, b.Path)
 }

@@ -2,11 +2,11 @@ package sync
 
 import "sort"
 
-// StoredConditionGroup is the raw cross-authority condition projection built
+// storedConditionGroup is the raw cross-authority condition projection built
 // from the durable sync authorities. It intentionally stays machine-oriented so
 // watch logging, status rendering, and future debug reads can share one
 // grouping pass without taking on each other's presentation policy.
-type StoredConditionGroup struct {
+type storedConditionGroup struct {
 	ConditionKey  ConditionKey
 	ConditionType string
 	ScopeKey      ScopeKey
@@ -21,21 +21,21 @@ type storedConditionGroupKey struct {
 
 // ProjectStoredConditionGroups collapses durable observation issues,
 // block scopes, and blocked retry rows into one raw grouped view.
-func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []StoredConditionGroup {
+func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []storedConditionGroup {
 	if snapshot == nil {
 		return nil
 	}
 
-	blockedByScope := GroupBlockedRetryWork(snapshot.BlockedRetryWork)
+	blockedByScope := groupBlockedRetryWork(snapshot.BlockedRetryWork)
 	groupIndex := make(map[storedConditionGroupKey]int)
-	groups := make([]StoredConditionGroup, 0, len(snapshot.ObservationIssues)+len(snapshot.BlockScopes))
+	groups := make([]storedConditionGroup, 0, len(snapshot.ObservationIssues)+len(snapshot.BlockScopes))
 
 	for i := range snapshot.ObservationIssues {
 		issue := snapshot.ObservationIssues[i]
 		group := ensureStoredConditionGroup(
 			&groups,
 			groupIndex,
-			ConditionKeyForStoredCondition(issue.IssueType, issue.ScopeKey),
+			conditionKeyForStoredCondition(issue.IssueType, issue.ScopeKey),
 			issue.IssueType,
 			issue.ScopeKey,
 		)
@@ -56,7 +56,7 @@ func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []StoredConditi
 
 		projection := blockedByScope[block.Key]
 		groupKey := storedConditionGroupKey{
-			conditionKey: ConditionKeyForStoredCondition(block.Key.ConditionType(), block.Key),
+			conditionKey: conditionKeyForStoredCondition(block.Key.ConditionType(), block.Key),
 			scopeKey:     block.Key.String(),
 		}
 		existingCount := 0
@@ -92,12 +92,12 @@ func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []StoredConditi
 }
 
 func ensureStoredConditionGroup(
-	groups *[]StoredConditionGroup,
+	groups *[]storedConditionGroup,
 	groupIndex map[storedConditionGroupKey]int,
 	conditionKey ConditionKey,
 	conditionType string,
 	scopeKey ScopeKey,
-) *StoredConditionGroup {
+) *storedConditionGroup {
 	if conditionKey == "" {
 		return nil
 	}
@@ -110,7 +110,7 @@ func ensureStoredConditionGroup(
 		return &(*groups)[idx]
 	}
 
-	*groups = append(*groups, StoredConditionGroup{
+	*groups = append(*groups, storedConditionGroup{
 		ConditionKey:  conditionKey,
 		ConditionType: conditionType,
 		ScopeKey:      scopeKey,
@@ -120,7 +120,7 @@ func ensureStoredConditionGroup(
 	return &(*groups)[len(*groups)-1]
 }
 
-func finalizeStoredConditionGroups(groups []StoredConditionGroup) {
+func finalizeStoredConditionGroups(groups []storedConditionGroup) {
 	for i := range groups {
 		sort.Strings(groups[i].Paths)
 		groups[i].Paths = sortedUniqueStrings(groups[i].Paths)

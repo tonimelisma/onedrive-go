@@ -29,11 +29,11 @@ func newBootstrapWatchPipelineForTest(
 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
+	rt.scopeState = newScopeState(eng.nowFunc, eng.logger)
 	bl, err := rt.runStartupStage(ctx, rt)
 	require.NoError(t, err)
 
-	pool := NewWorkerPool(eng.execCfg, rt.dispatchCh, eng.baseline, eng.logger, 1024)
+	pool := newWorkerPool(eng.execCfg, rt.dispatchCh, eng.baseline, eng.logger, 1024)
 	pool.Start(ctx, workers)
 	t.Cleanup(pool.Stop)
 
@@ -72,7 +72,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 	eng, syncRoot := newTestEngine(t, mock)
 	writeLocalFile(t, syncRoot, "local.txt", "bootstrap upload")
 	recorder := attachDebugEventRecorder(eng)
-	eng.localWatcherFactory = func() (FsWatcher, error) {
+	eng.localWatcherFactory = func() (fsWatcher, error) {
 		return newEnospcWatcher(1 << 20), nil
 	}
 
@@ -482,7 +482,7 @@ func TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T
 
 	writeLocalFile(t, syncRoot, "gone.txt", "delete me")
 	deleteHash := hashContentQuickXor(t, "delete me")
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
+	seedBaseline(t, eng.baseline, ctx, []actionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "gone.txt",
@@ -537,7 +537,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 	}, 99, nil)
 	require.NotNil(t, ta)
 
-	results <- ActionCompletion{
+	results <- actionCompletion{
 		ActionID:      99,
 		Path:          "trial.txt",
 		ActionType:    ActionDownload,
@@ -577,7 +577,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []observedItem{{
 		DriveID:  driveID,
 		ItemID:   "blocked-item",
 		Path:     "blocked.txt",
@@ -598,9 +598,9 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		Path:    blockedPath,
 		DriveID: driveID,
 		ItemID:  "blocked-item",
-		View: &PathView{
+		View: &pathView{
 			Path: blockedPath,
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				DriveID:  driveID,
 				ItemID:   "blocked-item",
 				ItemType: ItemTypeFile,
@@ -620,7 +620,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	}, 1, nil)
 	require.NotNil(t, ta)
 
-	results <- ActionCompletion{
+	results <- actionCompletion{
 		ActionID:      1,
 		Path:          "trial.txt",
 		ActionType:    ActionUpload,
@@ -655,7 +655,7 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
 		Path:      "docs/file.txt",
 		DriveID:   eng.driveID,
-		IssueType: IssueLocalReadDenied,
+		IssueType: issueLocalReadDenied,
 	})
 
 	retryRow := testRetryWorkRow("docs/file.txt", "", ActionUpload)
@@ -711,7 +711,7 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	rt.dispatchCh <- parent
 	readReady(t, rt.dispatchCh)
 
-	results <- ActionCompletion{
+	results <- actionCompletion{
 		ActionID:   1,
 		Path:       "parent.txt",
 		ActionType: ActionUpload,
@@ -773,7 +773,7 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	rt.runFullRemoteRefreshAsync(ctx, bl)
 	waitForRefreshDone(t, t.Context(), eng)

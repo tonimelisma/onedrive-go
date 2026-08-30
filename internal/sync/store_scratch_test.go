@@ -45,7 +45,7 @@ func seedScratchPlanningSource(t *testing.T, store *SyncStore, driveID driveid.I
 
 	ctx := t.Context()
 
-	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
+	require.NoError(t, store.CommitObservation(ctx, []observedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "remote-1",

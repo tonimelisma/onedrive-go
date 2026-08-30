@@ -99,7 +99,7 @@ func TestSyncStore_UpsertBlockScope_RejectsReadBoundaryScopes(t *testing.T) {
 	now := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
 
 	err := store.UpsertBlockScope(ctx, testBlockScope(
-		SKPermRemoteRead("Shared/TeamDocs"),
+		sKPermRemoteRead("Shared/TeamDocs"),
 		time.Second,
 		now.Add(time.Second),
 	))
@@ -196,7 +196,7 @@ func TestSyncStore_ListBlockScopes_RejectsReadBoundaryScopes(t *testing.T) {
 		ctx,
 		`INSERT INTO block_scopes (scope_key, trial_interval, next_trial_at)
 		VALUES (?, ?, ?)`,
-		SKPermRemoteRead("Shared/Readonly").String(),
+		sKPermRemoteRead("Shared/Readonly").String(),
 		int64(time.Second),
 		now.Add(time.Second).UnixNano(),
 	)

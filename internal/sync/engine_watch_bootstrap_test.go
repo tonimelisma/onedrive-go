@@ -101,7 +101,7 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 
 	err = rt.handleWatchActionCompletion(ctx, &watchPipeline{
 		bl: bl,
-	}, &ActionCompletion{
+	}, &actionCompletion{
 		Path:       "sync.txt",
 		ItemID:     "sync-item",
 		DriveID:    eng.driveID,

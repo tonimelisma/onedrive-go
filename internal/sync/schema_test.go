@@ -71,7 +71,7 @@ func TestNewSyncStore_RejectsNonCanonicalSchema(t *testing.T) {
 	store, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
 	require.Error(t, err)
 	require.Nil(t, store)
-	require.ErrorIs(t, err, ErrIncompatibleSchema)
+	require.ErrorIs(t, err, errIncompatibleSchema)
 	assert.Contains(t, err.Error(), "current schema")
 }
 

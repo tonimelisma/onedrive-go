@@ -45,7 +45,7 @@ func buildWatchRemoteBlockedGroups(snapshot *DriveStatusSnapshot) []watchRemoteB
 		return nil
 	}
 
-	blockedByScope := GroupBlockedRetryWork(snapshot.BlockedRetryWork)
+	blockedByScope := groupBlockedRetryWork(snapshot.BlockedRetryWork)
 	var remoteGroups []watchRemoteBlockedGroup
 
 	for i := range snapshot.BlockScopes {
@@ -67,7 +67,7 @@ func buildWatchRemoteBlockedGroups(snapshot *DriveStatusSnapshot) []watchRemoteB
 	return remoteGroups
 }
 
-func watchConditionCounts(groups []StoredConditionGroup) []watchConditionCount {
+func watchConditionCounts(groups []storedConditionGroup) []watchConditionCount {
 	if len(groups) == 0 {
 		return nil
 	}

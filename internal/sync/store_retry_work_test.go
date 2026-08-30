@@ -169,7 +169,7 @@ func TestRecordRetryWorkFailure_RejectsInvalidInput(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing path")
 
 	err = func() error {
-		_, recordErr := store.RecordRetryWorkFailure(ctx, testRetryWorkFailure("bad-action.txt", "", ActionType(-1)), func(int) time.Duration { return time.Minute })
+		_, recordErr := store.RecordRetryWorkFailure(ctx, testRetryWorkFailure("bad-action.txt", "", actionType(-1)), func(int) time.Duration { return time.Minute })
 		return recordErr
 	}()
 	require.Error(t, err)

@@ -11,12 +11,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow {
+func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *remoteStateRow {
 	t.Helper()
 
 	var (
 		rawDriveID string
-		row        RemoteStateRow
+		row        remoteStateRow
 		hash       sql.NullString
 		size       sql.NullInt64
 		mtime      sql.NullInt64
@@ -74,7 +74,7 @@ func TestCommitObservation_NewItemCreatesMirrorRowAndToken(t *testing.T) {
 	ctx := context.Background()
 	driveID := driveid.New(testDriveID)
 
-	err := mgr.CommitObservation(ctx, []ObservedItem{{
+	err := mgr.CommitObservation(ctx, []observedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
 		Path:     "hello.txt",
@@ -103,7 +103,7 @@ func TestCommitObservation_DeleteRemovesMirrorRow(t *testing.T) {
 	ctx := context.Background()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
 		Path:     "hello.txt",
@@ -111,7 +111,7 @@ func TestCommitObservation_DeleteRemovesMirrorRow(t *testing.T) {
 		Hash:     "hash1",
 	}}, "delta-token-1", driveID))
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
 		DriveID:   driveID,
 		ItemID:    "item1",
 		Path:      "hello.txt",
@@ -132,7 +132,7 @@ func TestCommitObservation_PreservesObservedDriveIDPerRemoteStateRow(t *testing.
 	contentDriveID := driveid.New(testDriveID)
 	sharedDriveID := driveid.New("shared-drive-id")
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
 		DriveID:  sharedDriveID,
 		ItemID:   "shared-item",
 		Path:     "Shared/inside.txt",
@@ -166,7 +166,7 @@ func TestCommitObservation_UnchangedItemDoesNotRewriteStateOrCursor(t *testing.T
 	ctx := context.Background()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
 		Path:     "same.txt",
@@ -177,7 +177,7 @@ func TestCommitObservation_UnchangedItemDoesNotRewriteStateOrCursor(t *testing.T
 		ETag:     "etag1",
 	}}, "delta-token-1", driveID))
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
 		Path:     "same.txt",
@@ -202,7 +202,7 @@ func TestCommitObservation_DeleteMissingItemOnlyAdvancesCursor(t *testing.T) {
 	ctx := context.Background()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
 		DriveID:   driveID,
 		ItemID:    "missing-item",
 		Path:      "gone.txt",
@@ -222,7 +222,7 @@ func TestCommitObservation_PersistsJunkRowsAsRawRemoteTruth(t *testing.T) {
 	ctx := context.Background()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-junk",
 		Path:     ".DS_Store",

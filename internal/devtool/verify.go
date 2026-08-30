@@ -326,9 +326,18 @@ func runPublicVerification(
 		runOutputBoundaries,
 		runTestConventions,
 		runReadmeStatus,
+		runSpecGoverns,
 		runBuild,
 	}
-	publicStepNames := []string{"format", "lint", "output boundaries", "test conventions", "README status", "build"}
+	publicStepNames := []string{
+		"format",
+		"lint",
+		"output boundaries",
+		"test conventions",
+		"README status",
+		"spec governs",
+		"build",
+	}
 	for i, step := range publicSteps {
 		if err := collector.runStep(publicStepNames[i], func() error {
 			return step(ctx, runner, repoRoot, env, stdout, stderr)
@@ -467,12 +476,45 @@ func runLint(ctx context.Context, runner commandRunner, repoRoot string, env []s
 	return nil
 }
 
+// supportedPlatformCount is the number of GOOS values README.md claims support
+// for. It is a constant so callers can size things against it; the array
+// return type below makes the two impossible to drift apart.
+const supportedPlatformCount = 3
+
+// supportedPlatforms returns the GOOS values README.md claims support for.
+// Every one is cross-compiled on every verify run so a platform claim cannot
+// rot into a build failure that only a user discovers.
+func supportedPlatforms() [supportedPlatformCount]string {
+	return [supportedPlatformCount]string{"linux", "darwin", "freebsd"}
+}
+
 func runBuild(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
 	if err := writeStatus(stdout, "==> go build\n"); err != nil {
 		return fmt.Errorf("write status: %w", err)
 	}
 	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", "build", "./..."); err != nil {
 		return fmt.Errorf("build: %w", err)
+	}
+
+	return runCrossPlatformBuild(ctx, runner, repoRoot, env, stdout, stderr)
+}
+
+func runCrossPlatformBuild(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	stdout, stderr io.Writer,
+) error {
+	for _, goos := range supportedPlatforms() {
+		if err := writeStatus(stdout, "==> go build GOOS="+goos+"\n"); err != nil {
+			return fmt.Errorf("write status: %w", err)
+		}
+
+		platformEnv := append(append([]string{}, env...), "GOOS="+goos, "GOARCH=amd64")
+		if err := runner.Run(ctx, repoRoot, platformEnv, stdout, stderr, "go", "build", "./..."); err != nil {
+			return fmt.Errorf("build GOOS=%s: %w", goos, err)
+		}
 	}
 
 	return nil
@@ -531,6 +573,14 @@ func runCoverageGate(
 	coverageTotal, err := parseCoverageTotal(string(report))
 	if err != nil {
 		return err
+	}
+
+	// A negative threshold reports coverage without gating on it. The gate is
+	// a single authoritative number owned by one platform; secondary
+	// platforms compile a different file set (build-tagged sources) and would
+	// legitimately land on a different percentage.
+	if coverageThreshold < 0 {
+		return writeStatus(stdout, fmt.Sprintf("coverage gate disabled (total %.1f%%)\n", coverageTotal))
 	}
 
 	if coverageTotal < coverageThreshold {

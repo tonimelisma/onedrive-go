@@ -105,7 +105,12 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().Float64Var(&coverageThreshold, "coverage-threshold", defaultCoverageThreshold, "minimum total coverage percentage")
+	cmd.Flags().Float64Var(
+		&coverageThreshold,
+		"coverage-threshold",
+		defaultCoverageThreshold,
+		"minimum total coverage percentage; negative reports coverage without gating",
+	)
 	cmd.Flags().StringVar(&coverageFile, "coverage-file", "", "coverage profile path")
 	cmd.Flags().StringVar(&e2eLogDir, "e2e-log-dir", "", "directory for full E2E debug logs")
 	cmd.Flags().StringVar(&summaryJSONPath, "summary-json", "", "write verify summary JSON to this path")

@@ -24,7 +24,7 @@ func (flow *engineFlow) observeMountRootRemote(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-) ([]ChangeEvent, string, remoteObservationMode, error) {
+) ([]changeEvent, string, remoteObservationMode, error) {
 	eng := flow.engine
 	if !eng.hasRemoteMountRoot() {
 		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: mount-root observation requires a remote root item ID")
@@ -93,9 +93,9 @@ func convertMountRootItems(
 	remoteDriveID driveid.ID,
 	bl *Baseline,
 	logger *slog.Logger,
-	itemClient ItemClient,
-) []ChangeEvent {
-	converter := NewPrimaryConverter(bl, remoteDriveID, logger, nil, itemClient)
+	itemClient itemClient,
+) []changeEvent {
+	converter := newPrimaryConverter(bl, remoteDriveID, logger, nil, itemClient)
 	converter.RemoteRootItemID = remoteRootItemID
 	return converter.ConvertItems(ctx, items)
 }
@@ -104,7 +104,7 @@ func shouldFallbackMountRootDelta(err error) bool {
 	return errors.Is(err, graph.ErrMethodNotAllowed) || errors.Is(err, graph.ErrNotFound)
 }
 
-func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Baseline) []ChangeEvent {
+func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Baseline) []changeEvent {
 	seen := make(map[string]struct{}, len(items))
 	for i := range items {
 		seen[items[i].ID] = struct{}{}
@@ -115,7 +115,7 @@ func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Ba
 
 func (flow *engineFlow) commitObservedItems(
 	ctx context.Context,
-	observed []ObservedItem,
+	observed []observedItem,
 	token string,
 ) error {
 	eng := flow.engine
@@ -243,7 +243,7 @@ func (rt *watchRuntime) sleepMountRootWatch(
 	delay time.Duration,
 	label string,
 ) (bool, error) {
-	sleepErr := TimeSleep(ctx, delay)
+	sleepErr := timeSleep(ctx, delay)
 	if sleepErr == nil {
 		return false, nil
 	}

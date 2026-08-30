@@ -19,7 +19,7 @@ func ResetStateDB(ctx context.Context, dbPath string, logger *slog.Logger) error
 		)
 	}
 
-	if err := RemoveStateDBFiles(dbPath); err != nil {
+	if err := removeStateDBFiles(dbPath); err != nil {
 		return err
 	}
 
@@ -34,8 +34,8 @@ func ResetStateDB(ctx context.Context, dbPath string, logger *slog.Logger) error
 	return nil
 }
 
-// RemoveStateDBFiles deletes the SQLite DB family rooted at dbPath.
-func RemoveStateDBFiles(dbPath string) error {
+// removeStateDBFiles deletes the SQLite DB family rooted at dbPath.
+func removeStateDBFiles(dbPath string) error {
 	for _, candidate := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
 		if err := localpath.Remove(candidate); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove state DB file %s: %w", candidate, err)

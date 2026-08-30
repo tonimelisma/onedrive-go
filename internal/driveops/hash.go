@@ -40,7 +40,7 @@ func ComputeQuickXorHash(fsPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("opening %s for hashing: %w", fsPath, err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // the file is opened read-only for hashing; there is nothing buffered to flush
 
 	h := quickxorhash.New()
 	if _, err := io.Copy(h, f); err != nil {

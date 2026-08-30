@@ -32,10 +32,10 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 	// Create a local file so the upload has something to read.
 	writeExecTestFile(t, syncRoot, "file.txt", "content")
 
-	dg := NewDepGraph(testLogger(t))
-	dispatchCh := make(chan *TrackedAction, 4)
+	dg := newDepGraph(testLogger(t))
+	dispatchCh := make(chan *trackedAction, 4)
 	mgr := newTestManager(t)
-	pool := NewWorkerPool(cfg, dispatchCh, mgr, testLogger(t), 10)
+	pool := newWorkerPool(cfg, dispatchCh, mgr, testLogger(t), 10)
 
 	ctx, cancel := context.WithCancel(t.Context())
 
@@ -45,7 +45,7 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 		Type:   ActionUpload,
 		Path:   "file.txt",
 		ItemID: "item-1",
-		View:   &PathView{Remote: &RemoteState{ItemID: "parent"}},
+		View:   &pathView{Remote: &remoteState{ItemID: "parent"}},
 	}
 	ta := dg.Add(action, 0, nil)
 	if ta != nil {
@@ -73,7 +73,7 @@ func TestFault_BaselineCommitError(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a baseline entry.
-	require.NoError(t, mgr.CommitMutation(ctx, mutationFromActionOutcome(&ActionOutcome{
+	require.NoError(t, mgr.CommitMutation(ctx, mutationFromActionOutcome(&actionOutcome{
 		Action: ActionDownload, Success: true, Path: "file.txt",
 		DriveID: driveid.New(engineTestDriveID), ItemID: "item-1",
 		ParentID: "root", ItemType: ItemTypeFile, RemoteHash: "hash1",
@@ -87,7 +87,7 @@ func TestFault_BaselineCommitError(t *testing.T) {
 	require.NoError(t, mgr.Close(t.Context()))
 
 	// CommitMutation should return an error, not panic.
-	err = mgr.CommitMutation(ctx, mutationFromActionOutcome(&ActionOutcome{
+	err = mgr.CommitMutation(ctx, mutationFromActionOutcome(&actionOutcome{
 		Action: ActionDownload, Success: true, Path: "file2.txt",
 		DriveID: driveid.New(engineTestDriveID), ItemID: "item-2",
 		ParentID: "root", ItemType: ItemTypeFile,

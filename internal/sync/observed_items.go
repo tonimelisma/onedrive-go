@@ -5,22 +5,22 @@ import (
 )
 
 type remoteObservationResult struct {
-	observed []ObservedItem
-	emitted  []ChangeEvent
+	observed []observedItem
+	emitted  []changeEvent
 }
 
 func projectRemoteObservations(
 	logger *slog.Logger,
-	events []ChangeEvent,
+	events []changeEvent,
 ) remoteObservationResult {
 	result := remoteObservationResult{
-		observed: make([]ObservedItem, 0, len(events)),
-		emitted:  make([]ChangeEvent, 0, len(events)),
+		observed: make([]observedItem, 0, len(events)),
+		emitted:  make([]changeEvent, 0, len(events)),
 	}
 
 	for i := range events {
 		ev := events[i]
-		if ev.Source != SourceRemote {
+		if ev.Source != sourceRemote {
 			result.emitted = append(result.emitted, ev)
 			continue
 		}
@@ -35,15 +35,15 @@ func projectRemoteObservations(
 // projectObservedItems converts remote ChangeEvents into ObservedItems for
 // CommitObservation. It keeps malformed payload filtering at the observation
 // projection boundary.
-func projectObservedItems(logger *slog.Logger, events []ChangeEvent) []ObservedItem {
+func projectObservedItems(logger *slog.Logger, events []changeEvent) []observedItem {
 	return projectRemoteObservations(logger, events).observed
 }
 
 func appendObservedEvent(
 	logger *slog.Logger,
-	items []ObservedItem,
-	ev *ChangeEvent,
-) []ObservedItem {
+	items []observedItem,
+	ev *changeEvent,
+) []observedItem {
 	if ev.ItemID == "" {
 		if logger != nil {
 			logger.Warn("projectObservedItems: skipping event with empty ItemID",
@@ -54,7 +54,7 @@ func appendObservedEvent(
 		return items
 	}
 
-	return append(items, ObservedItem{
+	return append(items, observedItem{
 		DriveID:   ev.DriveID,
 		ItemID:    ev.ItemID,
 		Path:      ev.Path,

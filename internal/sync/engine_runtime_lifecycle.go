@@ -20,7 +20,7 @@ func (flow *engineFlow) loadActiveScopes(ctx context.Context, watch *watchRuntim
 		return fmt.Errorf("sync: listing active scopes: %w", err)
 	}
 
-	activeScopes := make([]ActiveScope, 0, len(blocks))
+	activeScopes := make([]activeScope, 0, len(blocks))
 	for i := range blocks {
 		activeScopes = append(activeScopes, activeScopeFromBlockScopeRow(blocks[i]))
 	}
@@ -69,7 +69,7 @@ func (flow *engineFlow) dropStartupScopeRow(ctx context.Context, key ScopeKey, n
 	return nil
 }
 
-func (flow *engineFlow) activateScope(ctx context.Context, watch *watchRuntime, block *ActiveScope) error {
+func (flow *engineFlow) activateScope(ctx context.Context, watch *watchRuntime, block *activeScope) error {
 	if block == nil {
 		return fmt.Errorf("sync: activating scope: missing block")
 	}
@@ -192,7 +192,7 @@ func (flow *engineFlow) rearmOrDiscardScope(ctx context.Context, watch *watchRun
 // windows. If a threshold is crossed, creates a block scope. Called directly
 // from the normal applyRuntimeCompletionStage switch — never called for trial
 // results because a live scope already owns the blocker lifecycle.
-func (flow *engineFlow) feedScopeDetection(ctx context.Context, watch *watchRuntime, r *ActionCompletion) error {
+func (flow *engineFlow) feedScopeDetection(ctx context.Context, watch *watchRuntime, r *actionCompletion) error {
 	if flow.scopeState == nil {
 		return nil
 	}
@@ -211,11 +211,11 @@ func (flow *engineFlow) feedScopeDetection(ctx context.Context, watch *watchRunt
 
 // applyBlockScope persists and activates a new block scope using the same
 // timing policy as trial extension and rearm.
-func (flow *engineFlow) applyBlockScope(ctx context.Context, watch *watchRuntime, sr ScopeUpdateResult) error {
+func (flow *engineFlow) applyBlockScope(ctx context.Context, watch *watchRuntime, sr scopeUpdateResult) error {
 	now := flow.engine.nowFunc()
 	interval := computeTrialInterval(sr.RetryAfter)
 
-	block := &ActiveScope{
+	block := &activeScope{
 		Key:           sr.ScopeKey,
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
@@ -251,7 +251,7 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 
 	now := flow.engine.nowFunc()
 	interval := computeTrialInterval(retryAfter)
-	block := &ActiveScope{
+	block := &activeScope{
 		Key:           to,
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
@@ -407,7 +407,7 @@ func (flow *engineFlow) recordBlockedRetryWork(ctx context.Context, action *Acti
 }
 
 func (flow *engineFlow) holdActionFromPersistedRetryState(
-	current *TrackedAction,
+	current *trackedAction,
 	work RetryWorkKey,
 ) error {
 	if current == nil {
@@ -434,8 +434,8 @@ func (flow *engineFlow) holdActionFromPersistedRetryState(
 func (flow *engineFlow) holdActionUnderScope(
 	ctx context.Context,
 	watch *watchRuntime,
-	current *TrackedAction,
-	r *ActionCompletion,
+	current *trackedAction,
+	r *actionCompletion,
 	scopeKey ScopeKey,
 ) error {
 	if current == nil {
@@ -454,7 +454,7 @@ func (flow *engineFlow) holdActionUnderScope(
 
 func (flow *engineFlow) rehomeBlockedRetryWork(
 	ctx context.Context,
-	r *ActionCompletion,
+	r *actionCompletion,
 	scopeKey ScopeKey,
 ) error {
 	return flow.persistBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), scopeKey)
@@ -463,9 +463,9 @@ func (flow *engineFlow) rehomeBlockedRetryWork(
 func (flow *engineFlow) drainDueHeldWorkNow(
 	ctx context.Context,
 	watch *watchRuntime,
-) ([]*TrackedAction, error) {
+) ([]*trackedAction, error) {
 	now := flow.engine.nowFunc()
-	var ready []*TrackedAction
+	var ready []*trackedAction
 
 	for _, key := range flow.dueRetryKeys(now) {
 		if ta := flow.releaseHeldAction(key); ta != nil {

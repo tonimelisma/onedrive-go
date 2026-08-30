@@ -64,7 +64,7 @@ func projectShortcutChildContentFilter(parentFilter ContentFilterConfig, aliasPa
 		return cloneContentFilterConfig(parentFilter), true
 	}
 
-	if !NewContentFilter(parentFilter).Visible(aliasPath, ItemTypeFolder) {
+	if !newContentFilter(parentFilter).Visible(aliasPath, ItemTypeFolder) {
 		return ContentFilterConfig{}, false
 	}
 

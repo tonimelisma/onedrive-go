@@ -252,7 +252,7 @@ func (c *Client) ListItemPermissions(ctx context.Context, driveID driveid.ID, it
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var lpr listPermissionsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&lpr); err != nil {
@@ -295,7 +295,7 @@ func (c *Client) RestoreItem(
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var dir driveItemResponse
 	if err := json.NewDecoder(resp.Body).Decode(&dir); err != nil {

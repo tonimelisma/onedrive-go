@@ -8,10 +8,10 @@ import (
 
 // handleLocalPermission probes the local filesystem after os.ErrPermission and
 // returns a file-level retry row or a boundary-scoped local permission block.
-func (ph *PermissionHandler) handleLocalPermission(
+func (ph *permissionHandler) handleLocalPermission(
 	_ context.Context,
-	r *ActionCompletion,
-) PermissionEvidence {
+	r *actionCompletion,
+) permissionEvidence {
 	issueType := localPermissionIssueType(r)
 
 	if !isDirAccessible(ph.syncTree, ".") {
@@ -77,15 +77,15 @@ func (ph *PermissionHandler) handleLocalPermission(
 	)
 }
 
-func (ph *PermissionHandler) localFilePermissionEvidence(
+func (ph *permissionHandler) localFilePermissionEvidence(
 	path string,
-	actionType ActionType,
+	actionType actionType,
 	issueType string,
 	errMsg string,
-) PermissionEvidence {
+) permissionEvidence {
 	_ = actionType
 
-	return PermissionEvidence{
+	return permissionEvidence{
 		Kind:        permissionEvidenceFileDenied,
 		TriggerPath: path,
 		IssueType:   issueType,
@@ -93,15 +93,15 @@ func (ph *PermissionHandler) localFilePermissionEvidence(
 	}
 }
 
-func (ph *PermissionHandler) localDirectoryPermissionEvidence(
+func (ph *permissionHandler) localDirectoryPermissionEvidence(
 	boundaryPath string,
 	triggerPath string,
-	actionType ActionType,
+	actionType actionType,
 	issueType string,
-) PermissionEvidence {
+) permissionEvidence {
 	_ = actionType
 
-	return PermissionEvidence{
+	return permissionEvidence{
 		Kind:         permissionEvidenceBoundaryDenied,
 		BoundaryPath: boundaryPath,
 		TriggerPath:  triggerPath,
@@ -110,7 +110,7 @@ func (ph *PermissionHandler) localDirectoryPermissionEvidence(
 	}
 }
 
-func (ph *PermissionHandler) deepestDeniedBoundary(parentDir string) string {
+func (ph *permissionHandler) deepestDeniedBoundary(parentDir string) string {
 	boundary := parentDir
 	for {
 		parent := filepath.Dir(boundary)
@@ -124,12 +124,12 @@ func (ph *PermissionHandler) deepestDeniedBoundary(parentDir string) string {
 	}
 }
 
-func localPermissionIssueType(r *ActionCompletion) string {
+func localPermissionIssueType(r *actionCompletion) string {
 	if r == nil {
-		return IssueLocalReadDenied
+		return issueLocalReadDenied
 	}
-	if r.FailureCapability == PermissionCapabilityLocalWrite {
-		return IssueLocalWriteDenied
+	if r.FailureCapability == permissionCapabilityLocalWrite {
+		return issueLocalWriteDenied
 	}
-	return IssueLocalReadDenied
+	return issueLocalReadDenied
 }

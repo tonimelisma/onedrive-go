@@ -1,3 +1,5 @@
+//go:build unix
+
 // Package driveops handles OneDrive transfer and local filesystem operations.
 package driveops
 
@@ -5,6 +7,14 @@ import (
 	"fmt"
 	"syscall"
 )
+
+// statfsFieldToUint64 normalizes a syscall.Statfs_t numeric field to uint64.
+// Bavail and Bsize differ in signedness across Unix platforms (uint64/int64 on
+// linux and darwin, int64 on freebsd), so the conversion is necessary on every
+// target rather than redundant on some.
+func statfsFieldToUint64[T ~int32 | ~uint32 | ~int64 | ~uint64](value T) uint64 {
+	return uint64(value)
+}
 
 // DiskAvailable returns the number of bytes available to unprivileged users
 // on the filesystem containing path. Uses statfs(2) which is supported on
@@ -17,5 +27,5 @@ func DiskAvailable(path string) (uint64, error) {
 	}
 	// f_bavail = blocks available to unprivileged users
 	// f_bsize = fundamental block size
-	return stat.Bavail * uint64(stat.Bsize), nil
+	return statfsFieldToUint64(stat.Bavail) * statfsFieldToUint64(stat.Bsize), nil
 }

@@ -21,15 +21,15 @@ type ContentFilterConfig struct {
 	FollowSymlinks  bool
 }
 
-// ContentFilter answers whether a root-relative path belongs to the current
+// contentFilter answers whether a root-relative path belongs to the current
 // sync-visible content set.
-type ContentFilter struct {
+type contentFilter struct {
 	config ContentFilterConfig
 }
 
-// NewContentFilter compiles a content filter from already-validated config.
-func NewContentFilter(config ContentFilterConfig) ContentFilter {
-	return ContentFilter{config: config}
+// newContentFilter compiles a content filter from already-validated config.
+func newContentFilter(config ContentFilterConfig) contentFilter {
+	return contentFilter{config: config}
 }
 
 func cloneContentFilterConfig(config ContentFilterConfig) ContentFilterConfig {
@@ -54,7 +54,7 @@ func contentFilterConfigsEqual(a ContentFilterConfig, b ContentFilterConfig) boo
 
 // Visible reports whether path should be present in planner-visible current
 // sync truth for the given item type.
-func (f ContentFilter) Visible(path string, itemType ItemType) bool {
+func (f contentFilter) Visible(path string, itemType ItemType) bool {
 	normalized := normalizeContentFilterPath(path)
 	if normalized == "" || normalized == "." {
 		return true
@@ -75,27 +75,27 @@ func (f ContentFilter) Visible(path string, itemType ItemType) bool {
 // ShouldObserveLocalPath reports whether local observation should descend into
 // or emit the path. It uses observedKind because local observation can know the
 // path kind before the sync ItemType has been built.
-func (f ContentFilter) ShouldObserveLocalPath(path string, kind observedKind) bool {
-	itemType := ItemTypeFile
+func (f contentFilter) ShouldObserveLocalPath(path string, kind observedKind) bool {
+	resolvedType := ItemTypeFile
 	switch kind {
 	case observedKindFile:
-		itemType = ItemTypeFile
+		resolvedType = ItemTypeFile
 	case observedKindDir:
-		itemType = ItemTypeFolder
+		resolvedType = ItemTypeFolder
 	case observedKindUnknown:
 		return f.Visible(path, ItemTypeFile) || f.Visible(path, ItemTypeFolder)
 	}
 
-	return f.Visible(path, itemType)
+	return f.Visible(path, resolvedType)
 }
 
 // ShouldFollowSymlinks reports whether local observation may follow symlink
 // targets. OneDrive has no symlink item type, so this is local-only policy.
-func (f ContentFilter) ShouldFollowSymlinks() bool {
+func (f contentFilter) ShouldFollowSymlinks() bool {
 	return f.config.FollowSymlinks
 }
 
-func (f ContentFilter) inIncludedScope(path string, isDir bool) bool {
+func (f contentFilter) inIncludedScope(path string, isDir bool) bool {
 	if len(f.config.IncludedDirs) == 0 {
 		return true
 	}
@@ -122,7 +122,7 @@ func (f ContentFilter) inIncludedScope(path string, isDir bool) bool {
 	return false
 }
 
-func (f ContentFilter) isIgnored(path string) bool {
+func (f contentFilter) isIgnored(path string) bool {
 	if matchesExactSubtree(path, f.config.IgnoredDirs) {
 		return true
 	}
@@ -228,7 +228,7 @@ func hasJunkComponent(parts []string) bool {
 }
 
 func isBundledJunkName(name string) bool {
-	lower := AsciiLower(name)
+	lower := asciiLower(name)
 
 	if lower == ".ds_store" || lower == "thumbs.db" || lower == "__macosx" {
 		return true

@@ -11,16 +11,16 @@ import (
 // comparison and reconciliation rows plus the current durable snapshots. SQLite
 // owns structural diff authority; Go maps those rows to runtime actions and
 // applies action-level normalization for execution semantics.
-func (p *Planner) PlanCurrentState(
-	comparisons []SQLiteComparisonRow,
-	reconciliations []SQLiteReconciliationRow,
-	localRows []LocalStateRow,
-	remoteRows []RemoteStateRow,
+func (p *planner) PlanCurrentState(
+	comparisons []sQLiteComparisonRow,
+	reconciliations []sQLiteReconciliationRow,
+	localRows []localStateRow,
+	remoteRows []remoteStateRow,
 	observationIssues []ObservationIssueRow,
 	baseline *Baseline,
 	mount plannerMountContext,
 	mode SyncMode,
-) (*ActionPlan, error) {
+) (*actionPlan, error) {
 	p.logger.Info("planning current actionable set from sqlite reconciliation",
 		slog.Int("comparison_rows", len(comparisons)),
 		slog.Int("reconciliation_rows", len(reconciliations)),
@@ -30,7 +30,7 @@ func (p *Planner) PlanCurrentState(
 	)
 
 	truthPaths := comparisonPaths(comparisons)
-	truthIndex := NewTruthAvailabilityIndex(observationIssues)
+	truthIndex := newTruthAvailabilityIndex(observationIssues)
 	truthStatusByPath := truthIndex.StatusByPath(truthPaths)
 
 	views, comparisonByPath, err := buildSQLitePathViews(comparisons, localRows, remoteRows, baseline, truthStatusByPath)
@@ -63,7 +63,7 @@ func (p *Planner) PlanCurrentState(
 		return nil, err
 	}
 
-	plan := &ActionPlan{
+	plan := &actionPlan{
 		Actions:        admitted,
 		Deps:           deps,
 		DeferredByMode: deferred,
@@ -136,7 +136,7 @@ func descendantRemoteMoveActionCoveredByGraphFolderMove(action Action, folderMov
 	return false
 }
 
-func comparisonPaths(rows []SQLiteComparisonRow) []string {
+func comparisonPaths(rows []sQLiteComparisonRow) []string {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -149,12 +149,12 @@ func comparisonPaths(rows []SQLiteComparisonRow) []string {
 	return paths
 }
 
-func logActionPlanSummary(logger *slog.Logger, message string, plan *ActionPlan) {
+func logActionPlanSummary(logger *slog.Logger, message string, plan *actionPlan) {
 	if logger == nil || plan == nil {
 		return
 	}
 
-	counts := CountByType(plan.Actions)
+	counts := countByType(plan.Actions)
 	logger.Info(message,
 		slog.Int("total_actions", len(plan.Actions)),
 		slog.Int("folder_creates", counts[ActionFolderCreate]),
@@ -176,24 +176,24 @@ func logActionPlanSummary(logger *slog.Logger, message string, plan *ActionPlan)
 }
 
 func buildSQLitePathViews(
-	comparisons []SQLiteComparisonRow,
-	localRows []LocalStateRow,
-	remoteRows []RemoteStateRow,
+	comparisons []sQLiteComparisonRow,
+	localRows []localStateRow,
+	remoteRows []remoteStateRow,
 	baseline *Baseline,
-	truthStatusByPath map[string]PathTruthStatus,
-) (map[string]*PathView, map[string]*SQLiteComparisonRow, error) {
-	localByPath := make(map[string]LocalStateRow, len(localRows))
+	truthStatusByPath map[string]pathTruthStatus,
+) (map[string]*pathView, map[string]*sQLiteComparisonRow, error) {
+	localByPath := make(map[string]localStateRow, len(localRows))
 	for i := range localRows {
 		localByPath[localRows[i].Path] = localRows[i]
 	}
 
-	remoteByPath := make(map[string]RemoteStateRow, len(remoteRows))
+	remoteByPath := make(map[string]remoteStateRow, len(remoteRows))
 	for i := range remoteRows {
 		remoteByPath[remoteRows[i].Path] = remoteRows[i]
 	}
 
-	views := make(map[string]*PathView, len(comparisons))
-	comparisonByPath := make(map[string]*SQLiteComparisonRow, len(comparisons))
+	views := make(map[string]*pathView, len(comparisons))
+	comparisonByPath := make(map[string]*sQLiteComparisonRow, len(comparisons))
 
 	for i := range comparisons {
 		row := comparisons[i]
@@ -204,7 +204,7 @@ func buildSQLitePathViews(
 			return nil, nil, fmt.Errorf("sync: missing truth status for comparison path %q", row.Path)
 		}
 
-		view := &PathView{
+		view := &pathView{
 			Path:        row.Path,
 			TruthStatus: truthStatus,
 		}
@@ -237,9 +237,9 @@ func buildSQLitePathViews(
 
 //nolint:gocyclo // One switch maps SQL reconciliation kinds to concrete action constructors.
 func buildActionsForReconciliation(
-	rec *SQLiteReconciliationRow,
-	cmp *SQLiteComparisonRow,
-	views map[string]*PathView,
+	rec *sQLiteReconciliationRow,
+	cmp *sQLiteComparisonRow,
+	views map[string]*pathView,
 ) ([]Action, error) {
 	if rec == nil || cmp == nil {
 		return nil, fmt.Errorf("sync: reconciliation row requires comparison context")
@@ -257,21 +257,21 @@ func buildActionsForReconciliation(
 	case "noop":
 		return nil, nil
 	case "baseline_remove":
-		return []Action{MakeAction(ActionCleanup, view)}, nil
+		return []Action{makeAction(ActionCleanup, view)}, nil
 	case "folder_create_local":
-		return []Action{makeFolderCreate(view, CreateLocal)}, nil
+		return []Action{makeFolderCreate(view, createLocal)}, nil
 	case "folder_create_remote":
 		return []Action{makeFolderCreate(view, CreateRemote)}, nil
 	case "upload":
-		return []Action{MakeAction(ActionUpload, view)}, nil
+		return []Action{makeAction(ActionUpload, view)}, nil
 	case "download":
-		return []Action{MakeAction(ActionDownload, view)}, nil
+		return []Action{makeAction(ActionDownload, view)}, nil
 	case strLocalDelete:
-		return []Action{MakeAction(ActionLocalDelete, view)}, nil
+		return []Action{makeAction(ActionLocalDelete, view)}, nil
 	case strRemoteDelete:
-		return []Action{MakeAction(ActionRemoteDelete, view)}, nil
+		return []Action{makeAction(ActionRemoteDelete, view)}, nil
 	case strBaselineUpdate:
-		return []Action{MakeAction(ActionBaselineUpdate, view)}, nil
+		return []Action{makeAction(ActionBaselineUpdate, view)}, nil
 	case "conflict_edit_edit":
 		return []Action{
 			makeConflictCopyAction(view),
@@ -296,10 +296,10 @@ func buildActionsForReconciliation(
 }
 
 func buildLocalMoveReconciliationActions(
-	rec *SQLiteReconciliationRow,
-	cmp *SQLiteComparisonRow,
-	view *PathView,
-	views map[string]*PathView,
+	rec *sQLiteReconciliationRow,
+	cmp *sQLiteComparisonRow,
+	view *pathView,
+	views map[string]*pathView,
 ) ([]Action, error) {
 	if cmp.ComparisonKind != "local_move_source" {
 		return nil, nil
@@ -308,7 +308,7 @@ func buildLocalMoveReconciliationActions(
 		return nil, fmt.Errorf("sync: local_move source %q missing target path", rec.Path)
 	}
 
-	action := MakeAction(ActionRemoteMove, view)
+	action := makeAction(ActionRemoteMove, view)
 	action.OldPath = rec.Path
 	action.Path = rec.LocalMoveTarget
 
@@ -322,8 +322,8 @@ func buildLocalMoveReconciliationActions(
 
 func localMoveContentUpdateAfterMove(
 	targetPath string,
-	sourceView *PathView,
-	views map[string]*PathView,
+	sourceView *pathView,
+	views map[string]*pathView,
 ) *Action {
 	if sourceView == nil || sourceView.Baseline == nil || sourceView.Baseline.ItemType != ItemTypeFile {
 		return nil
@@ -339,13 +339,13 @@ func localMoveContentUpdateAfterMove(
 	updateView := *targetView
 	updateView.Baseline = sourceView.Baseline
 	updateView.Remote = sourceView.Remote
-	action := MakeAction(ActionUpload, &updateView)
+	action := makeAction(ActionUpload, &updateView)
 	action.Path = targetPath
 
 	return &action
 }
 
-func localFileDiffersFromBaseline(local *LocalState, baseline *BaselineEntry) bool {
+func localFileDiffersFromBaseline(local *localState, baseline *BaselineEntry) bool {
 	if local == nil || baseline == nil {
 		return false
 	}
@@ -363,9 +363,9 @@ func localFileDiffersFromBaseline(local *LocalState, baseline *BaselineEntry) bo
 }
 
 func buildRemoteMoveReconciliationActions(
-	rec *SQLiteReconciliationRow,
-	cmp *SQLiteComparisonRow,
-	view *PathView,
+	rec *sQLiteReconciliationRow,
+	cmp *sQLiteComparisonRow,
+	view *pathView,
 ) ([]Action, error) {
 	if cmp.ComparisonKind != "remote_move_dest" {
 		return nil, nil
@@ -374,7 +374,7 @@ func buildRemoteMoveReconciliationActions(
 		return nil, fmt.Errorf("sync: remote_move destination %q missing source path", rec.Path)
 	}
 
-	action := MakeAction(ActionLocalMove, view)
+	action := makeAction(ActionLocalMove, view)
 	action.OldPath = rec.RemoteMoveSource
 
 	return []Action{action}, nil
@@ -394,12 +394,12 @@ func partitionCurrentActionsForMode(actions []Action, mode SyncMode) ([]Action, 
 	return admitted, deferred
 }
 
-func localStateFromSnapshotRow(row *LocalStateRow) *LocalState {
+func localStateFromSnapshotRow(row *localStateRow) *localState {
 	if row == nil {
 		return nil
 	}
 
-	return &LocalState{
+	return &localState{
 		Name:             path.Base(row.Path),
 		ItemType:         row.ItemType,
 		Size:             row.Size,
@@ -411,12 +411,12 @@ func localStateFromSnapshotRow(row *LocalStateRow) *LocalState {
 	}
 }
 
-func remoteStateFromSnapshotRow(row *RemoteStateRow) *RemoteState {
+func remoteStateFromSnapshotRow(row *remoteStateRow) *remoteState {
 	if row == nil {
 		return nil
 	}
 
-	return &RemoteState{
+	return &remoteState{
 		ItemID:    row.ItemID,
 		DriveID:   row.DriveID,
 		Name:      path.Base(row.Path),

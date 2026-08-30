@@ -17,7 +17,7 @@ type socketIOReadResult struct {
 	err    error
 }
 
-func (s *SocketIOWakeSource) connect(
+func (s *socketIOWakeSource) connect(
 	ctx context.Context,
 	endpoint *graph.SocketIOEndpoint,
 ) (*socketIOConn, time.Time, string, error) {
@@ -34,7 +34,7 @@ func (s *SocketIOWakeSource) connect(
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if resp != nil && resp.Body != nil {
-		defer resp.Body.Close()
+		defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 	}
 	if err != nil {
 		return nil, time.Time{}, "", err
@@ -54,7 +54,7 @@ func (s *SocketIOWakeSource) connect(
 	return &socketIOConn{conn: conn}, refreshAt, sid, nil
 }
 
-func (s *SocketIOWakeSource) completeHandshake(ctx context.Context, conn *websocket.Conn) (string, error) {
+func (s *socketIOWakeSource) completeHandshake(ctx context.Context, conn *websocket.Conn) (string, error) {
 	handshakeCtx, cancel := context.WithTimeout(ctx, s.handshakeTimeout)
 	defer cancel()
 
@@ -72,7 +72,7 @@ func (s *SocketIOWakeSource) completeHandshake(ctx context.Context, conn *websoc
 	return open.SID, nil
 }
 
-func (s *SocketIOWakeSource) runConnection(
+func (s *socketIOWakeSource) runConnection(
 	ctx context.Context,
 	conn *socketIOConn,
 	endpointID string,
@@ -118,14 +118,14 @@ func (s *SocketIOWakeSource) runConnection(
 				return err
 			}
 			if action.notificationWake {
-				s.emitLifecycleEvent(SocketIOLifecycleEvent{
-					Type:       SocketIOLifecycleEventNotificationWake,
+				s.emitLifecycleEvent(socketIOLifecycleEvent{
+					Type:       socketIOLifecycleEventNotificationWake,
 					EndpointID: endpointID,
 				})
 			}
 			if action.wakeCoalesced {
-				s.emitLifecycleEvent(SocketIOLifecycleEvent{
-					Type:       SocketIOLifecycleEventWakeCoalesced,
+				s.emitLifecycleEvent(socketIOLifecycleEvent{
+					Type:       socketIOLifecycleEventWakeCoalesced,
 					EndpointID: endpointID,
 				})
 			}
@@ -133,7 +133,7 @@ func (s *SocketIOWakeSource) runConnection(
 	}
 }
 
-func (s *SocketIOWakeSource) readPackets(ctx context.Context, conn *websocket.Conn, out chan<- socketIOReadResult) {
+func (s *socketIOWakeSource) readPackets(ctx context.Context, conn *websocket.Conn, out chan<- socketIOReadResult) {
 	for {
 		typ, payload, err := conn.Read(ctx)
 		if err != nil {

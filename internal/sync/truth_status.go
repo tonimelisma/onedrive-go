@@ -1,15 +1,15 @@
 package sync
 
-// TruthAvailabilityIndex is the raw derived view over observation issues used
+// truthAvailabilityIndex is the raw derived view over observation issues used
 // to answer current-truth availability questions for one observation snapshot.
-type TruthAvailabilityIndex struct {
+type truthAvailabilityIndex struct {
 	observationByPath    map[string]ObservationIssueRow
 	localReadBoundaries  []ObservationIssueRow
 	remoteReadBoundaries []ObservationIssueRow
 }
 
-func NewTruthAvailabilityIndex(observationIssues []ObservationIssueRow) TruthAvailabilityIndex {
-	return TruthAvailabilityIndex{
+func newTruthAvailabilityIndex(observationIssues []ObservationIssueRow) truthAvailabilityIndex {
+	return truthAvailabilityIndex{
 		observationByPath:    truthBlockingObservationByPath(observationIssues),
 		localReadBoundaries:  truthReadBoundaryIssues(observationIssues, true),
 		remoteReadBoundaries: truthReadBoundaryIssues(observationIssues, false),
@@ -17,17 +17,17 @@ func NewTruthAvailabilityIndex(observationIssues []ObservationIssueRow) TruthAva
 }
 
 // StatusForPath returns the raw local/remote truth availability for one path.
-func (index TruthAvailabilityIndex) StatusForPath(path string) PathTruthStatus {
+func (index truthAvailabilityIndex) StatusForPath(path string) pathTruthStatus {
 	return pathTruthStatusForPath(path, index.observationByPath, index.localReadBoundaries, index.remoteReadBoundaries)
 }
 
 // StatusByPath returns the raw local/remote truth availability for a path set.
-func (index TruthAvailabilityIndex) StatusByPath(paths []string) map[string]PathTruthStatus {
+func (index truthAvailabilityIndex) StatusByPath(paths []string) map[string]pathTruthStatus {
 	if len(paths) == 0 {
 		return nil
 	}
 
-	statusByPath := make(map[string]PathTruthStatus, len(paths))
+	statusByPath := make(map[string]pathTruthStatus, len(paths))
 	for i := range paths {
 		statusByPath[paths[i]] = index.StatusForPath(paths[i])
 	}
@@ -52,28 +52,28 @@ func pathTruthStatusForPath(
 	observationByPath map[string]ObservationIssueRow,
 	localReadBoundaries []ObservationIssueRow,
 	remoteReadBoundaries []ObservationIssueRow,
-) PathTruthStatus {
+) pathTruthStatus {
 	observationIssue, hasObservationIssue := observationByPath[path]
 	localBoundary, hasLocalBoundary := mostSpecificObservationReadBoundary(path, localReadBoundaries)
 	remoteBoundary, hasRemoteBoundary := mostSpecificObservationReadBoundary(path, remoteReadBoundaries)
 
-	status := PathTruthStatus{
+	status := pathTruthStatus{
 		Local:  availablePathTruthSideStatus(),
 		Remote: availablePathTruthSideStatus(),
 	}
 
 	switch {
 	case hasLocalBoundary:
-		status.Local = PathTruthSideStatus{
-			Availability: TruthAvailabilityBlockedObservationIssue,
-			Source:       PathTruthSourceObservationIssue,
+		status.Local = pathTruthSideStatus{
+			Availability: truthAvailabilityBlockedObservationIssue,
+			Source:       pathTruthSourceObservationIssue,
 			IssueType:    localBoundary.IssueType,
 			ScopeKey:     localBoundary.ScopeKey,
 		}
 	case hasObservationIssue && observationIssueBlocksLocalTruth(observationIssue.IssueType):
-		status.Local = PathTruthSideStatus{
-			Availability: TruthAvailabilityBlockedObservationIssue,
-			Source:       PathTruthSourceObservationIssue,
+		status.Local = pathTruthSideStatus{
+			Availability: truthAvailabilityBlockedObservationIssue,
+			Source:       pathTruthSourceObservationIssue,
 			IssueType:    observationIssue.IssueType,
 			ScopeKey:     observationIssue.ScopeKey,
 		}
@@ -81,16 +81,16 @@ func pathTruthStatusForPath(
 
 	switch {
 	case hasRemoteBoundary:
-		status.Remote = PathTruthSideStatus{
-			Availability: TruthAvailabilityBlockedObservationIssue,
-			Source:       PathTruthSourceObservationIssue,
+		status.Remote = pathTruthSideStatus{
+			Availability: truthAvailabilityBlockedObservationIssue,
+			Source:       pathTruthSourceObservationIssue,
 			IssueType:    remoteBoundary.IssueType,
 			ScopeKey:     remoteBoundary.ScopeKey,
 		}
 	case hasObservationIssue && observationIssueBlocksRemoteTruth(observationIssue.IssueType):
-		status.Remote = PathTruthSideStatus{
-			Availability: TruthAvailabilityBlockedObservationIssue,
-			Source:       PathTruthSourceObservationIssue,
+		status.Remote = pathTruthSideStatus{
+			Availability: truthAvailabilityBlockedObservationIssue,
+			Source:       pathTruthSourceObservationIssue,
 			IssueType:    observationIssue.IssueType,
 			ScopeKey:     observationIssue.ScopeKey,
 		}
@@ -99,9 +99,9 @@ func pathTruthStatusForPath(
 	return status
 }
 
-func availablePathTruthSideStatus() PathTruthSideStatus {
-	return PathTruthSideStatus{
-		Availability: TruthAvailabilityAvailable,
+func availablePathTruthSideStatus() pathTruthSideStatus {
+	return pathTruthSideStatus{
+		Availability: truthAvailabilityAvailable,
 	}
 }
 
@@ -112,11 +112,11 @@ func observationIssueBlocksTruth(issueType string) bool {
 func observationIssueBlocksLocalTruth(issueType string) bool {
 	switch issueType {
 	case IssueInvalidFilename,
-		IssuePathTooLong,
-		IssueFileTooLarge,
-		IssueCaseCollision,
-		IssueHashPanic,
-		IssueLocalReadDenied:
+		issuePathTooLong,
+		issueFileTooLarge,
+		issueCaseCollision,
+		issueHashPanic,
+		issueLocalReadDenied:
 		return true
 	default:
 		return false
@@ -124,7 +124,7 @@ func observationIssueBlocksLocalTruth(issueType string) bool {
 }
 
 func observationIssueBlocksRemoteTruth(issueType string) bool {
-	return issueType == IssueRemoteReadDenied
+	return issueType == issueRemoteReadDenied
 }
 
 func truthReadBoundaryIssues(observationIssues []ObservationIssueRow, local bool) []ObservationIssueRow {

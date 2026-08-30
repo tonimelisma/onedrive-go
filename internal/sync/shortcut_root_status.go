@@ -7,44 +7,44 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
-type ShortcutRootIssueClass string
+type shortcutRootIssueClass string
 
 const (
-	ShortcutRootIssueNone                       ShortcutRootIssueClass = ""
-	ShortcutRootIssueTargetUnavailable          ShortcutRootIssueClass = "target_unavailable"
-	ShortcutRootIssueLocalRootUnavailable       ShortcutRootIssueClass = "local_root_unavailable"
-	ShortcutRootIssueBlockedPath                ShortcutRootIssueClass = "blocked_path"
-	ShortcutRootIssueRenameAmbiguous            ShortcutRootIssueClass = "rename_ambiguous"
-	ShortcutRootIssueAliasMutationBlocked       ShortcutRootIssueClass = "alias_mutation_blocked"
-	ShortcutRootIssueRemovedFinalDrain          ShortcutRootIssueClass = "removed_final_drain"
-	ShortcutRootIssueRemovedReleasePending      ShortcutRootIssueClass = "removed_release_pending"
-	ShortcutRootIssueRemovedCleanupBlocked      ShortcutRootIssueClass = "removed_cleanup_blocked"
-	ShortcutRootIssueRemovedChildCleanupPending ShortcutRootIssueClass = "removed_child_cleanup_pending"
-	ShortcutRootIssueSamePathReplacementWaiting ShortcutRootIssueClass = "same_path_replacement_waiting"
-	ShortcutRootIssueDuplicateTarget            ShortcutRootIssueClass = "duplicate_target"
-	ShortcutRootIssueParentRecovery             ShortcutRootIssueClass = "parent_recovery"
+	shortcutRootIssueNone                       shortcutRootIssueClass = ""
+	shortcutRootIssueTargetUnavailable          shortcutRootIssueClass = "target_unavailable"
+	shortcutRootIssueLocalRootUnavailable       shortcutRootIssueClass = "local_root_unavailable"
+	shortcutRootIssueBlockedPath                shortcutRootIssueClass = "blocked_path"
+	shortcutRootIssueRenameAmbiguous            shortcutRootIssueClass = "rename_ambiguous"
+	shortcutRootIssueAliasMutationBlocked       shortcutRootIssueClass = "alias_mutation_blocked"
+	shortcutRootIssueRemovedFinalDrain          shortcutRootIssueClass = "removed_final_drain"
+	shortcutRootIssueRemovedReleasePending      shortcutRootIssueClass = "removed_release_pending"
+	shortcutRootIssueRemovedCleanupBlocked      shortcutRootIssueClass = "removed_cleanup_blocked"
+	shortcutRootIssueRemovedChildCleanupPending shortcutRootIssueClass = "removed_child_cleanup_pending"
+	shortcutRootIssueSamePathReplacementWaiting shortcutRootIssueClass = "same_path_replacement_waiting"
+	shortcutRootIssueDuplicateTarget            shortcutRootIssueClass = "duplicate_target"
+	shortcutRootIssueParentRecovery             shortcutRootIssueClass = "parent_recovery"
 )
 
-type ShortcutRootRecoveryClass string
+type shortcutRootRecoveryClass string
 
 const (
-	ShortcutRootRecoveryNone                       ShortcutRootRecoveryClass = ""
-	ShortcutRootRecoveryRestoreTargetOrRemoveAlias ShortcutRootRecoveryClass = "restore_target_or_remove_alias"
-	ShortcutRootRecoveryRestoreLocalRootOrDiscard  ShortcutRootRecoveryClass = "restore_local_root_or_discard"
-	ShortcutRootRecoveryClearBlockedPath           ShortcutRootRecoveryClass = "clear_blocked_path"
-	ShortcutRootRecoveryDisambiguateAliasRename    ShortcutRootRecoveryClass = "disambiguate_alias_rename"
-	ShortcutRootRecoveryFixAliasMutation           ShortcutRootRecoveryClass = "fix_alias_mutation"
-	ShortcutRootRecoveryRestoreTargetOrDiscard     ShortcutRootRecoveryClass = "restore_target_or_discard"
-	ShortcutRootRecoveryWaitForRetry               ShortcutRootRecoveryClass = "wait_for_retry"
-	ShortcutRootRecoveryRemoveDuplicateAlias       ShortcutRootRecoveryClass = "remove_duplicate_alias"
+	shortcutRootRecoveryNone                       shortcutRootRecoveryClass = ""
+	shortcutRootRecoveryRestoreTargetOrRemoveAlias shortcutRootRecoveryClass = "restore_target_or_remove_alias"
+	shortcutRootRecoveryRestoreLocalRootOrDiscard  shortcutRootRecoveryClass = "restore_local_root_or_discard"
+	shortcutRootRecoveryClearBlockedPath           shortcutRootRecoveryClass = "clear_blocked_path"
+	shortcutRootRecoveryDisambiguateAliasRename    shortcutRootRecoveryClass = "disambiguate_alias_rename"
+	shortcutRootRecoveryFixAliasMutation           shortcutRootRecoveryClass = "fix_alias_mutation"
+	shortcutRootRecoveryRestoreTargetOrDiscard     shortcutRootRecoveryClass = "restore_target_or_discard"
+	shortcutRootRecoveryWaitForRetry               shortcutRootRecoveryClass = "wait_for_retry"
+	shortcutRootRecoveryRemoveDuplicateAlias       shortcutRootRecoveryClass = "remove_duplicate_alias"
 )
 
-type ShortcutRootStatusMetadata struct {
+type shortcutRootStatusMetadata struct {
 	DisplayState   string
 	StateReason    string
-	IssueClass     ShortcutRootIssueClass
+	IssueClass     shortcutRootIssueClass
 	Issue          string
-	RecoveryClass  ShortcutRootRecoveryClass
+	RecoveryClass  shortcutRootRecoveryClass
 	RecoveryAction string
 	AutoRetry      bool
 	ProtectsPath   bool
@@ -55,7 +55,7 @@ type ShortcutRootStatusView struct {
 	SortPath                    string
 	DisplayName                 string
 	DisplayLocalRoot            string
-	Metadata                    ShortcutRootStatusMetadata
+	Metadata                    shortcutRootStatusMetadata
 	StateDetail                 string
 	ProtectedCurrentLocalRoot   string
 	ProtectedReservedLocalRoots []string
@@ -152,26 +152,26 @@ func shortcutRootStatusReservedPaths(current string, protected []string) []strin
 }
 
 type shortcutRootLifecycleMetadata struct {
-	status           ShortcutRootStatusMetadata
+	status           shortcutRootStatusMetadata
 	protectsPath     bool
 	runMode          ShortcutChildRunMode
 	publishesCleanup bool
 	transitions      map[shortcutRootLifecycleEvent][]ShortcutRootState
 }
 
-func ShortcutRootStatus(state ShortcutRootState) ShortcutRootStatusMetadata {
+func ShortcutRootStatus(state ShortcutRootState) shortcutRootStatusMetadata {
 	if state == "" || state == ShortcutRootStateActive {
-		return ShortcutRootStatusMetadata{}
+		return shortcutRootStatusMetadata{}
 	}
 	if entry, ok := shortcutRootLifecycleMetadataFor(state); ok {
 		return entry.status
 	}
-	return ShortcutRootStatusMetadata{
+	return shortcutRootStatusMetadata{
 		DisplayState:  string(state),
 		StateReason:   string(state),
-		IssueClass:    ShortcutRootIssueParentRecovery,
+		IssueClass:    shortcutRootIssueParentRecovery,
 		Issue:         "The shortcut alias is waiting for parent-engine recovery.",
-		RecoveryClass: ShortcutRootRecoveryWaitForRetry,
+		RecoveryClass: shortcutRootRecoveryWaitForRetry,
 		AutoRetry:     true,
 		ProtectsPath:  true,
 	}
@@ -213,12 +213,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 			transitions:  cloneShortcutRootTransitionTargets(baseRecovery),
 		},
 		ShortcutRootStateTargetUnavailable: {
-			status: ShortcutRootStatusMetadata{
+			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateTargetUnavailable),
 				StateReason:    string(ShortcutRootStateTargetUnavailable),
-				IssueClass:     ShortcutRootIssueTargetUnavailable,
+				IssueClass:     shortcutRootIssueTargetUnavailable,
 				Issue:          "The shortcut target is unavailable.",
-				RecoveryClass:  ShortcutRootRecoveryRestoreTargetOrRemoveAlias,
+				RecoveryClass:  shortcutRootRecoveryRestoreTargetOrRemoveAlias,
 				RecoveryAction: "Restore target access or remove the shortcut alias.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
@@ -227,12 +227,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 			transitions:  shortcutRootTransitions(baseRecovery, nil),
 		},
 		ShortcutRootStateLocalRootUnavailable: {
-			status: ShortcutRootStatusMetadata{
+			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateLocalRootUnavailable),
 				StateReason:    string(ShortcutRootStateLocalRootUnavailable),
-				IssueClass:     ShortcutRootIssueLocalRootUnavailable,
+				IssueClass:     shortcutRootIssueLocalRootUnavailable,
 				Issue:          "The shortcut alias local root is unavailable.",
-				RecoveryClass:  ShortcutRootRecoveryRestoreLocalRootOrDiscard,
+				RecoveryClass:  shortcutRootRecoveryRestoreLocalRootOrDiscard,
 				RecoveryAction: "Restore the local shortcut directory or delete it to discard unresolved local state.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
@@ -243,12 +243,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 			}),
 		},
 		ShortcutRootStateBlockedPath: {
-			status: ShortcutRootStatusMetadata{
+			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateBlockedPath),
 				StateReason:    string(ShortcutRootStateBlockedPath),
-				IssueClass:     ShortcutRootIssueBlockedPath,
+				IssueClass:     shortcutRootIssueBlockedPath,
 				Issue:          "The shortcut alias path is blocked.",
-				RecoveryClass:  ShortcutRootRecoveryClearBlockedPath,
+				RecoveryClass:  shortcutRootRecoveryClearBlockedPath,
 				RecoveryAction: "Clear the blocking local path.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
@@ -257,12 +257,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 			transitions:  shortcutRootTransitions(baseRecovery, nil),
 		},
 		ShortcutRootStateRenameAmbiguous: {
-			status: ShortcutRootStatusMetadata{
+			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateRenameAmbiguous),
 				StateReason:    string(ShortcutRootStateRenameAmbiguous),
-				IssueClass:     ShortcutRootIssueRenameAmbiguous,
+				IssueClass:     shortcutRootIssueRenameAmbiguous,
 				Issue:          "Multiple same-folder shortcut alias rename candidates were found.",
-				RecoveryClass:  ShortcutRootRecoveryDisambiguateAliasRename,
+				RecoveryClass:  shortcutRootRecoveryDisambiguateAliasRename,
 				RecoveryAction: "Keep exactly one renamed shortcut alias or restore the original name.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
@@ -274,12 +274,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 			}),
 		},
 		ShortcutRootStateAliasMutationBlocked: {
-			status: ShortcutRootStatusMetadata{
+			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateAliasMutationBlocked),
 				StateReason:    string(ShortcutRootStateAliasMutationBlocked),
-				IssueClass:     ShortcutRootIssueAliasMutationBlocked,
+				IssueClass:     shortcutRootIssueAliasMutationBlocked,
 				Issue:          "The parent engine cannot update the shortcut alias in OneDrive.",
-				RecoveryClass:  ShortcutRootRecoveryFixAliasMutation,
+				RecoveryClass:  shortcutRootRecoveryFixAliasMutation,
 				RecoveryAction: "Fix account, network, or permission access, or restore the local alias.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
@@ -291,12 +291,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 			}),
 		},
 		ShortcutRootStateRemovedFinalDrain: {
-			status: ShortcutRootStatusMetadata{
+			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateRemovedFinalDrain),
 				StateReason:    string(ShortcutRootStateRemovedFinalDrain),
-				IssueClass:     ShortcutRootIssueRemovedFinalDrain,
+				IssueClass:     shortcutRootIssueRemovedFinalDrain,
 				Issue:          "The shortcut alias was removed; child sync is finishing before release.",
-				RecoveryClass:  ShortcutRootRecoveryRestoreTargetOrDiscard,
+				RecoveryClass:  shortcutRootRecoveryRestoreTargetOrDiscard,
 				RecoveryAction: "Restore shared-folder access, or delete the local shortcut directory to discard dirty local state.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
@@ -312,12 +312,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 			},
 		},
 		ShortcutRootStateRemovedReleasePending: {
-			status: ShortcutRootStatusMetadata{
+			status: shortcutRootStatusMetadata{
 				DisplayState:  string(ShortcutRootStateRemovedReleasePending),
 				StateReason:   string(ShortcutRootStateRemovedReleasePending),
-				IssueClass:    ShortcutRootIssueRemovedReleasePending,
+				IssueClass:    shortcutRootIssueRemovedReleasePending,
 				Issue:         "Child sync finished; the parent engine is releasing the protected shortcut alias path.",
-				RecoveryClass: ShortcutRootRecoveryWaitForRetry,
+				RecoveryClass: shortcutRootRecoveryWaitForRetry,
 				AutoRetry:     true,
 				ProtectsPath:  true,
 			},
@@ -329,12 +329,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 			},
 		},
 		ShortcutRootStateRemovedCleanupBlocked: {
-			status: ShortcutRootStatusMetadata{
+			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateRemovedCleanupBlocked),
 				StateReason:    string(ShortcutRootStateRemovedCleanupBlocked),
-				IssueClass:     ShortcutRootIssueRemovedCleanupBlocked,
+				IssueClass:     shortcutRootIssueRemovedCleanupBlocked,
 				Issue:          "The parent engine cannot release the protected shortcut alias path.",
-				RecoveryClass:  ShortcutRootRecoveryClearBlockedPath,
+				RecoveryClass:  shortcutRootRecoveryClearBlockedPath,
 				RecoveryAction: "Clear the local filesystem blocker.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
@@ -350,12 +350,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 			},
 		},
 		ShortcutRootStateRemovedChildCleanupPending: {
-			status: ShortcutRootStatusMetadata{
+			status: shortcutRootStatusMetadata{
 				DisplayState:  string(ShortcutRootStateRemovedChildCleanupPending),
 				StateReason:   string(ShortcutRootStateRemovedChildCleanupPending),
-				IssueClass:    ShortcutRootIssueRemovedChildCleanupPending,
+				IssueClass:    shortcutRootIssueRemovedChildCleanupPending,
 				Issue:         "The shortcut alias was released; child cleanup is finishing.",
-				RecoveryClass: ShortcutRootRecoveryWaitForRetry,
+				RecoveryClass: shortcutRootRecoveryWaitForRetry,
 				AutoRetry:     true,
 			},
 			publishesCleanup: true,
@@ -365,12 +365,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 			},
 		},
 		ShortcutRootStateSamePathReplacementWaiting: {
-			status: ShortcutRootStatusMetadata{
+			status: shortcutRootStatusMetadata{
 				DisplayState:  string(ShortcutRootStateSamePathReplacementWaiting),
 				StateReason:   string(ShortcutRootStateSamePathReplacementWaiting),
-				IssueClass:    ShortcutRootIssueSamePathReplacementWaiting,
+				IssueClass:    shortcutRootIssueSamePathReplacementWaiting,
 				Issue:         "A new shortcut is waiting for the old child sync to finish.",
-				RecoveryClass: ShortcutRootRecoveryWaitForRetry,
+				RecoveryClass: shortcutRootRecoveryWaitForRetry,
 				AutoRetry:     true,
 				ProtectsPath:  true,
 			},
@@ -385,12 +385,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 			},
 		},
 		ShortcutRootStateDuplicateTarget: {
-			status: ShortcutRootStatusMetadata{
+			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateDuplicateTarget),
 				StateReason:    string(ShortcutRootStateDuplicateTarget),
-				IssueClass:     ShortcutRootIssueDuplicateTarget,
+				IssueClass:     shortcutRootIssueDuplicateTarget,
 				Issue:          "Another shortcut alias in this parent already projects the same target.",
-				RecoveryClass:  ShortcutRootRecoveryRemoveDuplicateAlias,
+				RecoveryClass:  shortcutRootRecoveryRemoveDuplicateAlias,
 				RecoveryAction: "Remove or rename the duplicate shortcut alias.",
 				AutoRetry:      true,
 				ProtectsPath:   true,

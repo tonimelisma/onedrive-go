@@ -6,21 +6,21 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// ActionCompletion reports the terminal outcome of one planned action. The
+// actionCompletion reports the terminal outcome of one planned action. The
 // engine reads these from the completions channel, classifies them, and calls
 // depGraph.Complete. Failed items become retry_work, block_scopes, or other
 // engine-owned durable control state through the persistence flow.
-type ActionCompletion struct {
+type actionCompletion struct {
 	Path              string
 	OldPath           string
 	ItemID            string
 	DriveID           driveid.ID
-	ActionType        ActionType
+	ActionType        actionType
 	Success           bool
 	ErrMsg            string
 	HTTPStatus        int // from graph.GraphError, 0 if not a Graph API error
 	FailurePath       string
-	FailureCapability PermissionCapability
+	FailureCapability permissionCapability
 
 	// Err is the full error for classification (context.Canceled, os.ErrPermission, etc.).
 	// The engine uses errors.Is to distinguish shutdown from genuine failures.
@@ -44,7 +44,7 @@ type ActionCompletion struct {
 
 // ThrottleTargetKey returns the narrowest remote boundary that can be blocked
 // after a 429 for this action completion.
-func (r *ActionCompletion) ThrottleTargetKey() string {
+func (r *actionCompletion) ThrottleTargetKey() string {
 	if r == nil {
 		return ""
 	}
@@ -59,16 +59,16 @@ func (r *ActionCompletion) ThrottleTargetKey() string {
 // use this helper so classification/persistence sees one consistent exact
 // action identity.
 func actionCompletionFromTrackedAction(
-	ta *TrackedAction,
-	outcome *ActionOutcome,
+	ta *trackedAction,
+	outcome *actionOutcome,
 	actionErr error,
-) ActionCompletion {
+) actionCompletion {
 	driveID := ta.Action.DriveID
 	if outcome != nil && !outcome.DriveID.IsZero() {
 		driveID = outcome.DriveID
 	}
 
-	r := ActionCompletion{
+	r := actionCompletion{
 		Path:          ta.Action.Path,
 		OldPath:       ta.Action.OldPath,
 		ItemID:        ta.Action.ItemID,
@@ -76,8 +76,8 @@ func actionCompletionFromTrackedAction(
 		ActionType:    ta.Action.Type,
 		Err:           actionErr,
 		ErrMsg:        "",
-		HTTPStatus:    ExtractHTTPStatus(actionErr),
-		RetryAfter:    ExtractRetryAfter(actionErr),
+		HTTPStatus:    extractHTTPStatus(actionErr),
+		RetryAfter:    extractRetryAfter(actionErr),
 		IsTrial:       ta.IsTrial,
 		TrialScopeKey: ta.TrialScopeKey,
 		ActionID:      ta.ID,
@@ -90,8 +90,8 @@ func actionCompletionFromTrackedAction(
 		if outcome.Error != nil {
 			r.ErrMsg = outcome.Error.Error()
 			r.Err = outcome.Error
-			r.HTTPStatus = ExtractHTTPStatus(outcome.Error)
-			r.RetryAfter = ExtractRetryAfter(outcome.Error)
+			r.HTTPStatus = extractHTTPStatus(outcome.Error)
+			r.RetryAfter = extractRetryAfter(outcome.Error)
 		}
 	} else if actionErr != nil {
 		r.ErrMsg = actionErr.Error()

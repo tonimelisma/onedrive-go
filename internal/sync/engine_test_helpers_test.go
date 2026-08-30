@@ -43,16 +43,16 @@ func newSingleOwnerEngine(t *testing.T) *testEngine {
 
 // Compile-time interface satisfaction checks.
 var (
-	_ DeltaFetcher            = (*engineMockClient)(nil)
-	_ SocketIOEndpointFetcher = (*engineMockClient)(nil)
-	_ ItemClient              = (*engineMockClient)(nil)
+	_ deltaFetcher            = (*engineMockClient)(nil)
+	_ socketIOEndpointFetcher = (*engineMockClient)(nil)
+	_ itemClient              = (*engineMockClient)(nil)
 	_ driveops.Downloader     = (*engineMockClient)(nil)
 	_ driveops.Uploader       = (*engineMockClient)(nil)
 	_ driveops.ItemUploader   = (*engineMockClient)(nil)
-	_ FolderDeltaFetcher      = (*engineMockClient)(nil)
-	_ RecursiveLister         = (*engineMockClient)(nil)
-	_ PermissionChecker       = (*engineMockClient)(nil)
-	_ DriveVerifier           = (*engineMockClient)(nil)
+	_ folderDeltaFetcher      = (*engineMockClient)(nil)
+	_ recursiveLister         = (*engineMockClient)(nil)
+	_ permissionChecker       = (*engineMockClient)(nil)
+	_ driveVerifier           = (*engineMockClient)(nil)
 )
 
 type engineMockClient struct {
@@ -452,13 +452,13 @@ func newDownloadDeltaMock(driveID driveid.ID, item *graph.Item, token string, co
 // setupWatchEngine initializes an engine with DepGraph + dispatchCh + watchRuntime
 // for processBatch tests. Returns the dispatchCh for reading dispatched actions.
 // Replaces the old two-call pattern of setupWatchEngine + newTestWatchState.
-func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *TrackedAction {
+func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *trackedAction {
 	t.Helper()
 
 	rt := newWatchRuntime(eng.Engine)
-	rt.depGraph = NewDepGraph(eng.logger)
-	rt.dispatchCh = make(chan *TrackedAction, 1024)
-	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
+	rt.depGraph = newDepGraph(eng.logger)
+	rt.dispatchCh = make(chan *trackedAction, 1024)
+	rt.scopeState = newScopeState(eng.nowFunc, eng.logger)
 	eng.runtime = rt
 	eng.flow = rt.engineFlow
 
@@ -995,7 +995,7 @@ func hashContentQuickXor(t *testing.T, content string) string {
 
 // seedBaseline commits outcomes and an optional delta token to the baseline,
 // using per-outcome CommitMutation inputs (the old batch Commit was removed).
-func seedBaseline(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []ActionOutcome, deltaToken string) {
+func seedBaseline(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []actionOutcome, deltaToken string) {
 	t.Helper()
 
 	for i := range outcomes {

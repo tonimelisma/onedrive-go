@@ -40,8 +40,8 @@ import (
 // guaranteed priority ordering. This is intentional — the safety scan
 // (every 5 minutes) provides eventual consistency for any events missed
 // or dropped by fsnotify, regardless of select scheduling order.
-func (o *LocalObserver) watchLoop(
-	ctx context.Context, watcher FsWatcher, tree *synctree.Root, events chan<- ChangeEvent,
+func (o *localObserver) watchLoop(
+	ctx context.Context, watcher fsWatcher, tree *synctree.Root, events chan<- changeEvent,
 ) error {
 	syncRoot := tree.Path()
 	interval := o.safetyScanInterval
@@ -83,7 +83,7 @@ func (o *LocalObserver) watchLoop(
 				slog.String("error", watchErr.Error()),
 				slog.Duration("backoff", delay),
 			)
-			o.TrySendLocalTruthSuspect(ctx, LocalTruthRecoveryWatcherError)
+			o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryWatcherError)
 
 			// Exponential backoff prevents tight loop under sustained errors
 			// (e.g., kernel buffer overflow).
@@ -93,20 +93,20 @@ func (o *LocalObserver) watchLoop(
 
 			// After watcher error, check if sync root still exists (B-113).
 			// A deleted root means the watcher is watching nothing.
-			if !SyncRootExists(syncRoot) {
+			if !syncRootExists(syncRoot) {
 				o.Logger.Error("sync root deleted, stopping watch",
 					slog.String("sync_root", syncRoot))
 
-				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, ErrSyncRootDeleted)
+				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
 			}
 
 		case <-tickCh:
 			// Check if sync root still exists before running safety scan (B-113).
-			if !SyncRootExists(syncRoot) {
+			if !syncRootExists(syncRoot) {
 				o.Logger.Error("sync root deleted, stopping watch",
 					slog.String("sync_root", syncRoot))
 
-				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, ErrSyncRootDeleted)
+				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
 			}
 
 			o.runSafetyScan(ctx, tree, events)
@@ -117,9 +117,9 @@ func (o *LocalObserver) watchLoop(
 
 // HandleFsEvent processes a single fsnotify event and sends the appropriate
 // ChangeEvent to the output channel.
-func (o *LocalObserver) HandleFsEvent(
-	ctx context.Context, fsEvent fsnotify.Event, watcher FsWatcher,
-	tree *synctree.Root, events chan<- ChangeEvent,
+func (o *localObserver) HandleFsEvent(
+	ctx context.Context, fsEvent fsnotify.Event, watcher fsWatcher,
+	tree *synctree.Root, events chan<- changeEvent,
 ) {
 	// Ignore chmod events — mode changes are not synced.
 	if fsEvent.Has(fsnotify.Chmod) && !fsEvent.Has(fsnotify.Create) && !fsEvent.Has(fsnotify.Write) {
@@ -142,14 +142,14 @@ func (o *LocalObserver) HandleFsEvent(
 	dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
 	name := nfcNormalize(filepath.Base(fsEvent.Name))
 
-	if protectedRoot, ok := protectedRootPathReservation(dbRelPath, o.protectedRoots); ok {
-		if protectedRoot.Path == dbRelPath {
-			o.reportProtectedRootEvent(ProtectedRootEvent{
-				Type:         ProtectedRootEventPathReserved,
+	if reservation, ok := protectedRootPathReservation(dbRelPath, o.protectedRoots); ok {
+		if reservation.Path == dbRelPath {
+			o.reportProtectedRootEvent(protectedRootEvent{
+				Type:         protectedRootEventPathReserved,
 				Path:         dbRelPath,
-				ReservedPath: protectedRoot.Path,
-				MountID:      protectedRoot.MountID,
-				BindingID:    protectedRoot.BindingID,
+				ReservedPath: reservation.Path,
+				MountID:      reservation.MountID,
+				BindingID:    reservation.BindingID,
 			})
 		}
 		return
@@ -192,10 +192,10 @@ func (o *LocalObserver) HandleFsEvent(
 }
 
 // handleCreate processes a Create event: stat, hash (files), add watch (dirs).
-func (o *LocalObserver) handleCreate(
+func (o *localObserver) handleCreate(
 	ctx context.Context, tree *synctree.Root,
 	fsPath, dbRelPath, name string,
-	watcher FsWatcher, events chan<- ChangeEvent,
+	watcher fsWatcher, events chan<- changeEvent,
 ) {
 	info, isSymlink, err := statObservedPath(fsPath)
 	if err != nil {
@@ -214,8 +214,8 @@ func (o *LocalObserver) handleCreate(
 	o.forgetExcludedSymlink(dbRelPath)
 
 	if protectedRoot, ok := protectedRootIdentityReservation(dbRelPath, info, o.protectedRoots); ok {
-		o.reportProtectedRootEvent(ProtectedRootEvent{
-			Type:         ProtectedRootEventIdentityMatch,
+		o.reportProtectedRootEvent(protectedRootEvent{
+			Type:         protectedRootEventIdentityMatch,
 			Path:         dbRelPath,
 			ReservedPath: protectedRoot.Path,
 			MountID:      protectedRoot.MountID,
@@ -245,9 +245,9 @@ func (o *LocalObserver) handleCreate(
 		return
 	}
 
-	ev := ChangeEvent{
+	ev := changeEvent{
 		Source: SourceLocal,
-		Type:   ChangeCreate,
+		Type:   changeCreate,
 		Path:   dbRelPath,
 		Name:   name,
 		Size:   info.Size(),
@@ -297,10 +297,10 @@ func (o *LocalObserver) handleCreate(
 // handling in handleCreate and scanNewDirectory. Both callers emit events
 // with empty hashes on failure because Create events and directory scans
 // have no guaranteed follow-up event (B-203).
-func (o *LocalObserver) stableHashOrEmpty(fsPath, dbRelPath string) string {
-	hash, err := ComputeStableHash(fsPath)
+func (o *localObserver) stableHashOrEmpty(fsPath, dbRelPath string) string {
+	hash, err := computeStableHash(fsPath)
 	if err != nil {
-		if errors.Is(err, ErrFileChangedDuringHash) {
+		if errors.Is(err, errFileChangedDuringHash) {
 			o.Logger.Debug("file metadata still settling, emitting with empty hash",
 				slog.String("path", dbRelPath))
 		} else {
@@ -317,9 +317,9 @@ func (o *LocalObserver) stableHashOrEmpty(fsPath, dbRelPath string) string {
 // scanNewDirectory walks a newly-created directory and emits ChangeCreate
 // events for any files already present. This catches files created between
 // the directory's creation and the fsnotify watch registration.
-func (o *LocalObserver) scanNewDirectory(
+func (o *localObserver) scanNewDirectory(
 	ctx context.Context, tree *synctree.Root, dirPath, dirRelPath string,
-	watcher FsWatcher, events chan<- ChangeEvent,
+	watcher fsWatcher, events chan<- changeEvent,
 ) {
 	entries, err := localpath.ReadDir(dirPath)
 	if err != nil {
@@ -341,14 +341,14 @@ func (o *LocalObserver) scanNewDirectory(
 	}
 }
 
-func (o *LocalObserver) scanNewDirectoryEntry(
+func (o *localObserver) scanNewDirectoryEntry(
 	ctx context.Context,
 	tree *synctree.Root,
 	dirPath string,
 	dirRelPath string,
 	entry os.DirEntry,
-	watcher FsWatcher,
-	events chan<- ChangeEvent,
+	watcher fsWatcher,
+	events chan<- changeEvent,
 ) {
 	entryName := nfcNormalize(entry.Name())
 	entryRelPath := dirRelPath + "/" + entryName
@@ -364,8 +364,8 @@ func (o *LocalObserver) scanNewDirectoryEntry(
 	}
 
 	if protectedRoot, ok := protectedRootIdentityReservation(entryRelPath, info, o.protectedRoots); ok {
-		o.reportProtectedRootEvent(ProtectedRootEvent{
-			Type:         ProtectedRootEventIdentityMatch,
+		o.reportProtectedRootEvent(protectedRootEvent{
+			Type:         protectedRootEventIdentityMatch,
 			Path:         entryRelPath,
 			ReservedPath: protectedRoot.Path,
 			MountID:      protectedRoot.MountID,
@@ -390,9 +390,9 @@ func (o *LocalObserver) scanNewDirectoryEntry(
 		return
 	}
 
-	fileEv := ChangeEvent{
+	fileEv := changeEvent{
 		Source:   SourceLocal,
-		Type:     ChangeCreate,
+		Type:     changeCreate,
 		Path:     entryRelPath,
 		Name:     entryName,
 		ItemType: ItemTypeFile,
@@ -409,7 +409,7 @@ func (o *LocalObserver) scanNewDirectoryEntry(
 	o.TrySend(ctx, events, &fileEv)
 }
 
-func (o *LocalObserver) scanNewDirectoryEntryInfo(
+func (o *localObserver) scanNewDirectoryEntryInfo(
 	entry os.DirEntry,
 	entryFsPath string,
 	entryRelPath string,
@@ -443,14 +443,14 @@ func (o *LocalObserver) scanNewDirectoryEntryInfo(
 	return info, dirEntryKind(entry), true
 }
 
-func (o *LocalObserver) scanNewDirectoryChildDir(
+func (o *localObserver) scanNewDirectoryChildDir(
 	ctx context.Context,
 	tree *synctree.Root,
 	entryFsPath string,
 	entryRelPath string,
 	entryName string,
-	watcher FsWatcher,
-	events chan<- ChangeEvent,
+	watcher fsWatcher,
+	events chan<- changeEvent,
 ) {
 	if addErr := watcher.Add(entryFsPath); addErr != nil {
 		o.Logger.Warn("failed to add watch on nested directory",
@@ -462,9 +462,9 @@ func (o *LocalObserver) scanNewDirectoryChildDir(
 		o.watchedDirs[filepath.Clean(entryFsPath)] = struct{}{}
 	}
 
-	dirEv := ChangeEvent{
+	dirEv := changeEvent{
 		Source:   SourceLocal,
-		Type:     ChangeCreate,
+		Type:     changeCreate,
 		Path:     entryRelPath,
 		Name:     entryName,
 		ItemType: ItemTypeFolder,
@@ -495,7 +495,7 @@ func (o *LocalObserver) scanNewDirectoryChildDir(
 // may re-emit an event for something already being processed. This is safe:
 // the watch loop turns that event into a fresh steady-state replan instead of
 // trying to mutate the currently running graph in place.
-func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name string) {
+func (o *localObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name string) {
 	info, isSymlink, err := statObservedPath(fsPath)
 	if err != nil {
 		o.Logger.Debug("stat failed for modified path",
@@ -526,7 +526,7 @@ func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 
 	// Schedule deferred hash after cooldown. Timer callback sends to
 	// hashRequests channel (non-blocking); watchLoop picks it up via select.
-	req := HashRequest{
+	req := hashRequest{
 		FsPath:    fsPath,
 		DbRelPath: dbRelPath,
 		Name:      name,
@@ -546,7 +546,7 @@ func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 // HashAndEmit is called from the watchLoop when a write coalesce timer fires.
 // It hashes the file and emits a ChangeModify event if the content differs
 // from the baseline. Runs in the watchLoop goroutine (same thread as handleWrite).
-func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, req HashRequest, events chan<- ChangeEvent) {
+func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, req hashRequest, events chan<- changeEvent) {
 	req = o.prepareDeferredHashRequest(req)
 
 	info, isSymlink, err := statObservedPath(req.FsPath)
@@ -586,7 +586,7 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		return
 	}
 
-	hash, err := ComputeStableHash(req.FsPath)
+	hash, err := computeStableHash(req.FsPath)
 	if err != nil {
 		if o.retryDeferredHashOnChange(req, err) {
 			return
@@ -594,11 +594,11 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 
 		// Distinguish retry exhaustion from generic hash failures for
 		// observability — helps diagnose continuously-written files.
-		if errors.Is(err, ErrFileChangedDuringHash) {
+		if errors.Is(err, errFileChangedDuringHash) {
 			o.Logger.Warn("hash retries exhausted, emitting with empty hash",
 				slog.String("path", req.DbRelPath),
 				slog.Int("retries", req.Retries),
-				slog.Int("max_retries", MaxCoalesceRetries),
+				slog.Int("max_retries", maxCoalesceRetries),
 			)
 		} else {
 			o.Logger.Warn("hash failed for deferred write, emitting with empty hash",
@@ -611,7 +611,7 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		}
 	}
 
-	ev := ChangeEvent{
+	ev := changeEvent{
 		Source:   SourceLocal,
 		Type:     ChangeModify,
 		Path:     req.DbRelPath,
@@ -630,14 +630,14 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	o.TrySend(ctx, events, &ev)
 }
 
-func (o *LocalObserver) prepareDeferredHashRequest(req HashRequest) HashRequest {
+func (o *localObserver) prepareDeferredHashRequest(req hashRequest) hashRequest {
 	delete(o.PendingTimers, req.DbRelPath)
 
 	return req
 }
 
-func (o *LocalObserver) retryDeferredHashOnChange(req HashRequest, err error) bool {
-	if !errors.Is(err, ErrFileChangedDuringHash) || req.Retries >= MaxCoalesceRetries {
+func (o *localObserver) retryDeferredHashOnChange(req hashRequest, err error) bool {
+	if !errors.Is(err, errFileChangedDuringHash) || req.Retries >= maxCoalesceRetries {
 		return false
 	}
 
@@ -674,9 +674,9 @@ func (o *LocalObserver) retryDeferredHashOnChange(req HashRequest, err error) bo
 // from syncRoot + dbRelPath. On macOS HFS+, fsnotify delivers NFD-encoded
 // paths while dbRelPath is NFC-normalized. Using the original fsPath for
 // watcher.Remove() ensures the removal matches the path registered by fsnotify.
-func (o *LocalObserver) HandleDelete(
-	ctx context.Context, watcher FsWatcher, tree *synctree.Root, fsPath, dbRelPath, name string,
-	events chan<- ChangeEvent,
+func (o *localObserver) HandleDelete(
+	ctx context.Context, watcher fsWatcher, tree *synctree.Root, fsPath, dbRelPath, name string,
+	events chan<- changeEvent,
 ) {
 	// Clean up write coalesce timer for deleted path (B-107).
 	o.cancelPendingTimer(dbRelPath)
@@ -712,12 +712,12 @@ func (o *LocalObserver) HandleDelete(
 		}
 	}
 
-	itemType := ItemTypeFile
+	resolvedType := ItemTypeFile
 
 	if existing, ok := o.Baseline.GetByPath(dbRelPath); ok {
-		itemType = existing.ItemType
+		resolvedType = existing.ItemType
 	} else if _, ok := o.watchedDirs[filepath.Clean(fsPath)]; ok {
-		itemType = ItemTypeFolder
+		resolvedType = ItemTypeFolder
 	}
 
 	// Remove watch for deleted directories to prevent resource leaks (B-112).
@@ -725,7 +725,7 @@ func (o *LocalObserver) HandleDelete(
 	// if the watch was already removed (Remove returns a benign error).
 	// Uses fsPath directly instead of reconstructing from syncRoot + dbRelPath
 	// to avoid NFC/NFD mismatch on macOS HFS+ (B-312).
-	if itemType == ItemTypeFolder {
+	if resolvedType == ItemTypeFolder {
 		if rmErr := watcher.Remove(fsPath); rmErr != nil {
 			o.Logger.Debug("watch removal for deleted directory",
 				slog.String("path", dbRelPath),
@@ -736,12 +736,12 @@ func (o *LocalObserver) HandleDelete(
 		delete(o.watchedDirs, filepath.Clean(fsPath))
 	}
 
-	ev := ChangeEvent{
+	ev := changeEvent{
 		Source:    SourceLocal,
 		Type:      ChangeDelete,
 		Path:      dbRelPath,
 		Name:      name,
-		ItemType:  itemType,
+		ItemType:  resolvedType,
 		IsDeleted: true,
 	}
 
@@ -752,7 +752,7 @@ func (o *LocalObserver) HandleDelete(
 // detected changes to the events channel. This catches events that fsnotify
 // may have missed. Skipped items are logged at DEBUG — the engine's primary
 // scan handles observation-issue persistence.
-func (o *LocalObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, events chan<- ChangeEvent) {
+func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, events chan<- changeEvent) {
 	o.Logger.Debug("running safety scan")
 
 	start := time.Now()
@@ -760,7 +760,7 @@ func (o *LocalObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 	result, err := o.FullScan(ctx, tree)
 	if err != nil {
 		o.Logger.Warn("safety scan failed", slog.String("error", err.Error()))
-		o.TrySendLocalTruthSuspect(ctx, LocalTruthRecoveryFullScanFailed)
+		o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryFullScanFailed)
 		return
 	}
 
@@ -806,4 +806,13 @@ func (o *LocalObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 		slog.Int("skipped", len(result.Skipped)),
 		slog.Int("baseline_entries", o.Baseline.Len()),
 	)
+}
+
+// infoKind classifies a stat result for the observation filter.
+func infoKind(info os.FileInfo) observedKind {
+	if info.IsDir() {
+		return observedKindDir
+	}
+
+	return observedKindFile
 }

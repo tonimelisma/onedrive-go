@@ -94,7 +94,7 @@ func computeTrialInterval(retryAfter time.Duration) time.Duration {
 
 func evaluateScopeTrialOutcome(
 	trialScopeKey ScopeKey,
-	decision *ResultDecision,
+	decision *resultDecision,
 ) scopeTrialOutcome {
 	switch decision.TrialHint {
 	case trialHintRelease:
@@ -117,7 +117,7 @@ func evaluateScopeTrialOutcome(
 
 func trialScopeStillMatches(
 	trialScopeKey ScopeKey,
-	decision *ResultDecision,
+	decision *resultDecision,
 ) bool {
 	return !decision.ScopeEvidence.IsZero() && decision.ScopeEvidence == trialScopeKey
 }

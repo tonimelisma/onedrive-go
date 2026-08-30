@@ -49,14 +49,14 @@ func TestEvaluateScopeTrialOutcome_UsesSharedLifecyclePolicy(t *testing.T) {
 
 	trialScopeKey := SKService()
 
-	assert.Equal(t, scopeTrialOutcomeRelease, evaluateScopeTrialOutcome(trialScopeKey, &ResultDecision{
+	assert.Equal(t, scopeTrialOutcomeRelease, evaluateScopeTrialOutcome(trialScopeKey, &resultDecision{
 		TrialHint: trialHintRelease,
 	}))
-	assert.Equal(t, scopeTrialOutcomeExtend, evaluateScopeTrialOutcome(trialScopeKey, &ResultDecision{
+	assert.Equal(t, scopeTrialOutcomeExtend, evaluateScopeTrialOutcome(trialScopeKey, &resultDecision{
 		TrialHint:     trialHintExtendOnMatchingScope,
 		ScopeEvidence: trialScopeKey,
 	}))
-	assert.Equal(t, scopeTrialOutcomeRearmOrDiscard, evaluateScopeTrialOutcome(trialScopeKey, &ResultDecision{
+	assert.Equal(t, scopeTrialOutcomeRearmOrDiscard, evaluateScopeTrialOutcome(trialScopeKey, &resultDecision{
 		TrialHint:     trialHintExtendOnMatchingScope,
 		ScopeEvidence: SKQuotaOwn(),
 	}))

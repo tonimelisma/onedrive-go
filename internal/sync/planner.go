@@ -9,10 +9,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// Planner is a pure decision engine that transforms SQLite-owned comparison
+// planner is a pure decision engine that transforms SQLite-owned comparison
 // and reconciliation rows plus baseline state into an ordered ActionPlan. It
 // performs no I/O.
-type Planner struct {
+type planner struct {
 	logger *slog.Logger
 }
 
@@ -20,9 +20,9 @@ type plannerMountContext struct {
 	DriveID driveid.ID
 }
 
-// NewPlanner creates a Planner with the given logger.
-func NewPlanner(logger *slog.Logger) *Planner {
-	return &Planner{logger: logger}
+// newPlanner creates a Planner with the given logger.
+func newPlanner(logger *slog.Logger) *planner {
+	return &planner{logger: logger}
 }
 
 func actionAllowedInMode(action *Action, mode SyncMode) bool {
@@ -40,7 +40,7 @@ func actionAllowedInMode(action *Action, mode SyncMode) bool {
 	case ActionRemoteMove:
 		return mode != SyncDownloadOnly
 	case ActionFolderCreate:
-		if action.CreateSide == CreateLocal {
+		if action.CreateSide == createLocal {
 			return mode != SyncUploadOnly
 		}
 		if action.CreateSide == CreateRemote {
@@ -68,7 +68,7 @@ func actionAllowedInMode(action *Action, mode SyncMode) bool {
 // fall through to Baseline which has the correct type from when the item
 // was alive. This ensures folder deletes are correctly identified for
 // dependency ordering in buildDependencies/addChildDeleteDeps.
-func resolveItemType(view *PathView) ItemType {
+func resolveItemType(view *pathView) ItemType {
 	if view == nil {
 		return ItemTypeFile
 	}
@@ -99,7 +99,7 @@ func resolveItemType(view *PathView) ItemType {
 	return ItemTypeFile
 }
 
-// MakeAction constructs an Action with type, path, and IDs populated from
+// makeAction constructs an Action with type, path, and IDs populated from
 // the PathView.
 //
 // DriveID propagation contract:
@@ -109,7 +109,7 @@ func resolveItemType(view *PathView) ItemType {
 //   - Empty DriveID for brand-new local work — planner fills this from the
 //     mounted engine drive before execution.
 //   - Empty ItemID for new items — assigned by the API on creation.
-func MakeAction(actionType ActionType, view *PathView) Action {
+func makeAction(actionType actionType, view *pathView) Action {
 	a := Action{
 		Type: actionType,
 		Path: view.Path,
@@ -147,26 +147,26 @@ func bindMountContext(actions []Action, mount plannerMountContext) {
 	}
 }
 
-func makeConflictCopyAction(view *PathView) Action {
-	return MakeAction(ActionConflictCopy, view)
+func makeConflictCopyAction(view *pathView) Action {
+	return makeAction(ActionConflictCopy, view)
 }
 
-func makeDownloadAfterConflictCopyAction(view *PathView) Action {
-	action := MakeAction(ActionDownload, view)
+func makeDownloadAfterConflictCopyAction(view *pathView) Action {
+	action := makeAction(ActionDownload, view)
 	action.RequireMissingLocalTarget = true
 	return action
 }
 
-func makeCreateUploadAction(view *PathView) Action {
-	action := MakeAction(ActionUpload, view)
+func makeCreateUploadAction(view *pathView) Action {
+	action := makeAction(ActionUpload, view)
 	action.ItemID = ""
 	return action
 }
 
 // makeFolderCreate constructs an ActionFolderCreate action with the
 // specified creation side (local or remote).
-func makeFolderCreate(view *PathView, side FolderCreateSide) Action {
-	a := MakeAction(ActionFolderCreate, view)
+func makeFolderCreate(view *pathView, side folderCreateSide) Action {
+	a := makeAction(ActionFolderCreate, view)
 	a.CreateSide = side
 
 	return a
@@ -184,7 +184,7 @@ func preserveParentFoldersForRunnableDescendants(actions []Action, mode SyncMode
 		case ActionLocalDelete:
 			preserved[i] = makeFolderCreate(action.View, CreateRemote)
 		case ActionRemoteDelete:
-			preserved[i] = makeFolderCreate(action.View, CreateLocal)
+			preserved[i] = makeFolderCreate(action.View, createLocal)
 		case ActionCleanup:
 		case ActionDownload,
 			ActionUpload,
@@ -226,7 +226,7 @@ func runnableSubtreeActionRequiresParent(actions []Action, parentPath string, mo
 	return false
 }
 
-func actionRequiresParentFolder(actionType ActionType) bool {
+func actionRequiresParentFolder(actionType actionType) bool {
 	return actionType != ActionLocalDelete &&
 		actionType != ActionCleanup &&
 		actionType != ActionRemoteDelete
@@ -345,10 +345,10 @@ func addRemoteMoveDeps(deps []int, idx int, a *Action, actions []Action) []int {
 	return deps
 }
 
-// CountByType counts actions grouped by ActionType. Exported for use by the
+// countByType counts actions grouped by ActionType. Exported for use by the
 // sync engine when building pass reports from plan counts.
-func CountByType(actions []Action) map[ActionType]int {
-	counts := make(map[ActionType]int)
+func countByType(actions []Action) map[actionType]int {
+	counts := make(map[actionType]int)
 	for i := range actions {
 		counts[actions[i].Type]++
 	}
@@ -391,7 +391,7 @@ func detectDependencyCycle(deps [][]int) error {
 	for i := range deps {
 		if color[i] == white {
 			if dfs(i) {
-				return ErrDependencyCycle
+				return errDependencyCycle
 			}
 		}
 	}

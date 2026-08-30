@@ -10,7 +10,7 @@ import (
 func TestGroupBlockedRetryWork_GroupsAndNormalizesPaths(t *testing.T) {
 	t.Parallel()
 
-	grouped := GroupBlockedRetryWork([]RetryWorkRow{
+	grouped := groupBlockedRetryWork([]RetryWorkRow{
 		{ScopeKey: SKPermRemoteWrite("Shared/Docs"), Path: "Shared/Docs/b.txt", Blocked: true},
 		{ScopeKey: SKPermRemoteWrite("Shared/Docs"), Path: "Shared/Docs/a.txt", Blocked: true},
 		{ScopeKey: SKPermRemoteWrite("Shared/Docs"), Path: "Shared/Docs/a.txt", Blocked: true},
@@ -18,7 +18,7 @@ func TestGroupBlockedRetryWork_GroupsAndNormalizesPaths(t *testing.T) {
 		{ScopeKey: ScopeKey{}, Path: "ignored.txt", Blocked: true},
 	})
 
-	assert.Equal(t, map[ScopeKey]BlockedRetryGroup{
+	assert.Equal(t, map[ScopeKey]blockedRetryGroup{
 		SKPermRemoteWrite("Shared/Docs"): {
 			Count: 3,
 			Paths: []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt"},

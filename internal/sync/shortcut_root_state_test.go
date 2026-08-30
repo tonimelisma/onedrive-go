@@ -19,7 +19,7 @@ func seedShortcutLocalStateIdentityForTest(t *testing.T, eng *Engine, relativePa
 
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.FromSlash(relativePath))
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []LocalStateRow{{
+	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []localStateRow{{
 		Path:             relativePath,
 		ItemType:         ItemTypeFolder,
 		LocalDevice:      identity.Device,

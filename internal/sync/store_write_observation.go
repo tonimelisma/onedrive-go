@@ -35,13 +35,13 @@ const (
 
 // CommitObservation atomically persists observed remote mirror state and may
 // also advance the primary observation cursor in the same transaction.
-func (m *SyncStore) CommitObservation(ctx context.Context, events []ObservedItem, newToken string, driveID driveid.ID) error {
+func (m *SyncStore) CommitObservation(ctx context.Context, events []observedItem, newToken string, driveID driveid.ID) error {
 	return m.commitObservation(ctx, events, newToken, driveID)
 }
 
 func (m *SyncStore) commitObservation(
 	ctx context.Context,
-	events []ObservedItem,
+	events []observedItem,
 	newToken string,
 	driveID driveid.ID,
 ) (err error) {
@@ -73,7 +73,7 @@ func (m *SyncStore) commitObservation(
 func (m *SyncStore) commitObservationTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	events []ObservedItem,
+	events []observedItem,
 	newToken string,
 	driveID driveid.ID,
 ) error {
@@ -106,7 +106,7 @@ func (m *SyncStore) commitObservationTx(
 	return nil
 }
 
-func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, item *ObservedItem) error {
+func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, item *observedItem) error {
 	existing := m.scanRemoteStateRow(ctx, tx, item.DriveID.String(), item.ItemID)
 
 	if existing == nil {
@@ -131,7 +131,7 @@ func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 func deleteObservedRemoteState(
 	ctx context.Context,
 	tx sqlTxRunner,
-	item *ObservedItem,
+	item *observedItem,
 	existingPath string,
 ) error {
 	if _, err := tx.ExecContext(ctx,
@@ -145,8 +145,8 @@ func deleteObservedRemoteState(
 }
 
 func observedRemoteStateUpdate(
-	existing *RemoteStateRow,
-	item *ObservedItem,
+	existing *remoteStateRow,
+	item *observedItem,
 ) bool {
 	pathChanged := item.Path != "" && item.Path != existing.Path
 	driveChanged := !item.DriveID.IsZero() && item.DriveID != existing.DriveID
@@ -159,7 +159,7 @@ func observedRemoteStateUpdate(
 		item.ETag != existing.ETag
 }
 
-func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driveID, itemID string) *RemoteStateRow {
+func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driveID, itemID string) *remoteStateRow {
 	contentDriveID := driveid.New(driveID)
 	row, err := scanRemoteStateRowWithQuerier(
 		contentDriveID,
@@ -174,7 +174,7 @@ func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driv
 	return row
 }
 
-func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *ObservedItem) error {
+func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *observedItem) error {
 	_, err := tx.ExecContext(ctx, sqlInsertRemoteState,
 		item.DriveID.String(),
 		item.ItemID, item.Path,
@@ -192,7 +192,7 @@ func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item 
 func (m *SyncStore) updateRemoteStateFromObs(
 	ctx context.Context,
 	tx sqlTxRunner,
-	item *ObservedItem,
+	item *observedItem,
 ) error {
 	_, err := tx.ExecContext(ctx, sqlUpdateRemoteState,
 		item.DriveID.String(),

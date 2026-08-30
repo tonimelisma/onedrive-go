@@ -59,9 +59,9 @@ const (
 	sqlDeleteBaseline = `DELETE FROM baseline WHERE path = ?`
 )
 
-// LocalBaselineRefresh is the explicit input for refreshing local baseline
+// localBaselineRefresh is the explicit input for refreshing local baseline
 // identity after convergence paths such as keep-both conflict handling.
-type LocalBaselineRefresh struct {
+type localBaselineRefresh struct {
 	Path             string
 	DriveID          driveid.ID
 	ItemID           string
@@ -108,7 +108,7 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading baseline: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	b := &Baseline{
 		ByPath:     make(map[string]*BaselineEntry),
@@ -125,7 +125,7 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 		b.ByPath[entry.Path] = entry
 		b.ByID[entry.ItemID] = entry
 
-		dlk := DirLowerKeyFromPath(entry.Path)
+		dlk := dirLowerKeyFromPath(entry.Path)
 		b.ByDirLower[dlk] = append(b.ByDirLower[dlk], entry)
 	}
 
@@ -385,7 +385,7 @@ func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 // RefreshLocalBaseline updates the local-side comparison tuple for one path
 // while preserving any existing remote-side metadata. If a matching
 // remote_state row exists, it is marked synced in the same transaction.
-func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBaselineRefresh) (err error) {
+func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh localBaselineRefresh) (err error) {
 	if m.baseline == nil {
 		if _, loadErr := m.Load(ctx); loadErr != nil {
 			return fmt.Errorf("sync: loading baseline before refresh local baseline: %w", loadErr)
@@ -468,7 +468,7 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh LocalBasel
 	return nil
 }
 
-func classifyBaselineMutation(action ActionType) (baselineMutationKind, error) {
+func classifyBaselineMutation(action actionType) (baselineMutationKind, error) {
 	switch action {
 	case ActionConflictCopy:
 		return baselineMutationNoop, nil
@@ -577,7 +577,7 @@ func mutationToEntry(o *BaselineMutation) *BaselineEntry {
 	}
 }
 
-func mutationFromActionOutcome(o *ActionOutcome) *BaselineMutation {
+func mutationFromActionOutcome(o *actionOutcome) *BaselineMutation {
 	if o == nil {
 		return nil
 	}
@@ -746,7 +746,7 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("sync: querying baseline for consistency check: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	dbEntries := make(map[string]*BaselineEntry)
 

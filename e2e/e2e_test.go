@@ -490,6 +490,4 @@ func requireSyncEventuallyConverges(
 
 		sleepForLiveTestPropagation(5 * time.Second)
 	}
-
-	return last
 }

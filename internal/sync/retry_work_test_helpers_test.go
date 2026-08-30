@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func testRetryWorkKey(path string, oldPath string, actionType ActionType) RetryWorkKey {
+func testRetryWorkKey(path string, oldPath string, actionType actionType) RetryWorkKey {
 	return RetryWorkKey{
 		Path:       path,
 		OldPath:    oldPath,
@@ -15,13 +15,13 @@ func testRetryWorkKey(path string, oldPath string, actionType ActionType) RetryW
 	}
 }
 
-func testRetryWorkFailure(path string, oldPath string, actionType ActionType) *RetryWorkFailure {
+func testRetryWorkFailure(path string, oldPath string, actionType actionType) *RetryWorkFailure {
 	return &RetryWorkFailure{
 		Work: testRetryWorkKey(path, oldPath, actionType),
 	}
 }
 
-func testRetryWorkRow(path string, oldPath string, actionType ActionType) RetryWorkRow {
+func testRetryWorkRow(path string, oldPath string, actionType actionType) RetryWorkRow {
 	return RetryWorkRow{
 		Path:       path,
 		OldPath:    oldPath,

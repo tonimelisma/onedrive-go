@@ -30,23 +30,23 @@ type watchStepResult struct {
 	woke bool
 }
 
-// RemoteWatchBatchHandler lets the engine translate a raw remote poll into one
+// remoteWatchBatchHandler lets the engine translate a raw remote poll into one
 // loop-owned remote observation batch. The observer does not commit durable
 // state itself; it blocks until the watch loop applies the batch.
-type RemoteWatchBatchHandler func(
+type remoteWatchBatchHandler func(
 	ctx context.Context,
-	events []ChangeEvent,
+	events []changeEvent,
 	newToken string,
 	topology shortcutTopologyBatch,
 ) (remoteObservationBatch, error)
 
-// RemoteObserver transforms Graph API delta responses into []ChangeEvent.
+// remoteObserver transforms Graph API delta responses into []ChangeEvent.
 // It handles pagination, path materialization, change classification, and
 // normalization (NFC, driveID zero-padding). Delegates item conversion to
 // an embedded ItemConverter configured for primary drive observation.
-type RemoteObserver struct {
-	fetcher             DeltaFetcher
-	Converter           *ItemConverter
+type remoteObserver struct {
+	fetcher             deltaFetcher
+	Converter           *itemConverter
 	logger              *slog.Logger
 	driveID             driveid.ID
 	shortcutNamespaceID string
@@ -63,43 +63,43 @@ type RemoteObserver struct {
 	lastActivityNano atomic.Int64
 
 	// stats tracks observer-level metrics (B-127).
-	stats ObserverCounters
+	stats observerCounters
 }
 
-// ObserverCounters holds atomic counters for observer metrics (B-127).
-type ObserverCounters struct {
+// observerCounters holds atomic counters for observer metrics (B-127).
+type observerCounters struct {
 	eventsEmitted  atomic.Int64
 	pollsCompleted atomic.Int64
 	errors         atomic.Int64
 	hashesComputed atomic.Int64 // items with non-empty content hash (B-282)
 }
 
-// ObserverStats is a snapshot of observer metrics returned by Stats() (B-127).
-type ObserverStats struct {
+// observerStats is a snapshot of observer metrics returned by Stats() (B-127).
+type observerStats struct {
 	EventsEmitted  int64
 	PollsCompleted int64
 	Errors         int64
 	HashesComputed int64 // items processed with a content hash (B-282)
 }
 
-// NewRemoteObserver creates a RemoteObserver for the given drive. The
+// newRemoteObserver creates a RemoteObserver for the given drive. The
 // baseline must be a loaded Baseline (from SyncStore.Load); it is
 // read-only during observation. The caller must pass a normalized driveid.ID.
-func NewRemoteObserver(
-	fetcher DeltaFetcher, baseline *Baseline, driveID driveid.ID, logger *slog.Logger,
-) *RemoteObserver {
-	obs := &RemoteObserver{
+func newRemoteObserver(
+	fetcher deltaFetcher, baseline *Baseline, driveID driveid.ID, logger *slog.Logger,
+) *remoteObserver {
+	obs := &remoteObserver{
 		fetcher:   fetcher,
 		logger:    logger,
 		driveID:   driveID,
-		SleepFunc: TimeSleep,
+		SleepFunc: timeSleep,
 	}
-	obs.Converter = NewPrimaryConverter(baseline, driveID, logger, &obs.stats, nil)
+	obs.Converter = newPrimaryConverter(baseline, driveID, logger, &obs.stats, nil)
 
 	return obs
 }
 
-func (o *RemoteObserver) SetItemClient(items ItemClient) {
+func (o *remoteObserver) SetItemClient(items itemClient) {
 	if o == nil || o.Converter == nil {
 		return
 	}
@@ -107,7 +107,7 @@ func (o *RemoteObserver) SetItemClient(items ItemClient) {
 	o.Converter.Items = items
 }
 
-func (o *RemoteObserver) SetShortcutTopology(
+func (o *remoteObserver) SetShortcutTopology(
 	namespaceID string,
 	protectedRoots []ProtectedRoot,
 ) {
@@ -124,21 +124,21 @@ func (o *RemoteObserver) SetShortcutTopology(
 
 // FullDelta fetches all delta pages and returns the accumulated change events
 // plus the new delta token (DeltaLink URL) for the next sync pass.
-func (o *RemoteObserver) FullDelta(ctx context.Context, savedToken string) ([]ChangeEvent, string, error) {
+func (o *remoteObserver) FullDelta(ctx context.Context, savedToken string) ([]changeEvent, string, error) {
 	events, token, _, err := o.FullDeltaWithShortcutTopology(ctx, savedToken)
 	return events, token, err
 }
 
-func (o *RemoteObserver) FullDeltaWithShortcutTopology(
+func (o *remoteObserver) FullDeltaWithShortcutTopology(
 	ctx context.Context,
 	savedToken string,
-) ([]ChangeEvent, string, shortcutTopologyBatch, error) {
+) ([]changeEvent, string, shortcutTopologyBatch, error) {
 	o.logger.Info("remote observer starting delta enumeration",
 		slog.String("drive_id", o.driveID.String()),
 		slog.Bool("has_token", savedToken != ""),
 	)
 
-	var events []ChangeEvent
+	var events []changeEvent
 	topology := shortcutTopologyBatch{
 		NamespaceID: o.shortcutNamespaceID,
 		Kind:        shortcutTopologyObservationIncremental,
@@ -146,7 +146,7 @@ func (o *RemoteObserver) FullDeltaWithShortcutTopology(
 	if savedToken == "" {
 		topology.Kind = shortcutTopologyObservationComplete
 	}
-	inflight := make(map[string]InflightParent)
+	inflight := make(map[string]inflightParent)
 	token := savedToken
 	lastProgressLog := time.Now()
 	if o.Converter != nil {
@@ -168,7 +168,7 @@ func (o *RemoteObserver) FullDeltaWithShortcutTopology(
 		if o.Converter.observationIncomplete() {
 			o.stats.errors.Add(1)
 
-			return nil, "", shortcutTopologyBatch{}, ErrRemoteObservationIncomplete
+			return nil, "", shortcutTopologyBatch{}, errRemoteObservationIncomplete
 		}
 
 		events = append(events, pageEvents...)
@@ -212,13 +212,13 @@ func (o *RemoteObserver) FullDeltaWithShortcutTopology(
 // On ErrDeltaExpired (410), it resets the token and retries with a full
 // resync. The delta token is tracked internally — use CurrentDeltaToken() to
 // read the latest value.
-func (o *RemoteObserver) Watch(
+func (o *remoteObserver) Watch(
 	ctx context.Context,
 	savedToken string,
 	batches chan<- remoteObservationBatch,
 	interval time.Duration,
 	wakeCh <-chan struct{},
-	handleBatch RemoteWatchBatchHandler,
+	handleBatch remoteWatchBatchHandler,
 ) error {
 	if interval < MinPollInterval {
 		o.logger.Warn("poll interval below minimum, clamping",
@@ -268,23 +268,23 @@ func (o *RemoteObserver) Watch(
 	}
 }
 
-func (o *RemoteObserver) handleWatchBatch(
+func (o *remoteObserver) handleWatchBatch(
 	ctx context.Context,
 	batches chan<- remoteObservationBatch,
-	polledEvents []ChangeEvent,
+	polledEvents []changeEvent,
 	newToken string,
 	topology shortcutTopologyBatch,
 	interval time.Duration,
 	bo *retry.Backoff,
 	wakeCh <-chan struct{},
-	handleBatch RemoteWatchBatchHandler,
+	handleBatch remoteWatchBatchHandler,
 ) watchStepResult {
 	if len(polledEvents) == 0 && !topology.shouldApply() {
 		return o.handleZeroEventPoll(ctx, interval, bo, wakeCh)
 	}
 
 	batch := remoteObservationBatch{
-		emitted: append([]ChangeEvent(nil), polledEvents...),
+		emitted: append([]changeEvent(nil), polledEvents...),
 	}
 	if handleBatch != nil {
 		var handleErr error
@@ -310,7 +310,7 @@ func (o *RemoteObserver) handleWatchBatch(
 	return o.sleepWatch(ctx, interval, "interval", wakeCh)
 }
 
-func (o *RemoteObserver) handleWatchPollError(
+func (o *remoteObserver) handleWatchPollError(
 	ctx context.Context,
 	bo *retry.Backoff,
 	err error,
@@ -320,7 +320,7 @@ func (o *RemoteObserver) handleWatchPollError(
 		return watchStepResult{stop: true}
 	}
 
-	if errors.Is(err, ErrDeltaExpired) {
+	if errors.Is(err, errDeltaExpired) {
 		o.logger.Warn("delta token expired during watch, resetting for full resync")
 		o.setDeltaToken("")
 		bo.Reset()
@@ -346,7 +346,7 @@ func (o *RemoteObserver) handleWatchPollError(
 	return watchStepResult{}
 }
 
-func (o *RemoteObserver) handleZeroEventPoll(
+func (o *remoteObserver) handleZeroEventPoll(
 	ctx context.Context,
 	interval time.Duration,
 	bo *retry.Backoff,
@@ -362,7 +362,7 @@ func (o *RemoteObserver) handleZeroEventPoll(
 	return o.sleepWatch(ctx, interval, "zero-event", wakeCh)
 }
 
-func (o *RemoteObserver) emitWatchBatch(
+func (o *remoteObserver) emitWatchBatch(
 	ctx context.Context,
 	batches chan<- remoteObservationBatch,
 	batch *remoteObservationBatch,
@@ -380,7 +380,7 @@ func (o *RemoteObserver) emitWatchBatch(
 	return batch.waitApplied(ctx)
 }
 
-func (o *RemoteObserver) sleepWatch(
+func (o *remoteObserver) sleepWatch(
 	ctx context.Context,
 	delay time.Duration,
 	phase string,
@@ -407,7 +407,7 @@ func (o *RemoteObserver) sleepWatch(
 	}
 }
 
-func (o *RemoteObserver) sleepForWatch(ctx context.Context, delay time.Duration, phase string) watchStepResult {
+func (o *remoteObserver) sleepForWatch(ctx context.Context, delay time.Duration, phase string) watchStepResult {
 	if sleepErr := o.SleepFunc(ctx, delay); sleepErr != nil {
 		if watchShouldStop(ctx, sleepErr) {
 			return watchStepResult{stop: true}
@@ -447,7 +447,7 @@ func watchShouldStop(ctx context.Context, err error) bool {
 
 // CurrentDeltaToken returns the latest delta token observed by Watch().
 // Thread-safe — can be called from any goroutine while Watch() is running.
-func (o *RemoteObserver) CurrentDeltaToken() string {
+func (o *remoteObserver) CurrentDeltaToken() string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
@@ -457,7 +457,7 @@ func (o *RemoteObserver) CurrentDeltaToken() string {
 // LastActivity returns the time of the most recent successful poll.
 // Returns zero time if no poll has completed. Thread-safe — can be called
 // from any goroutine while Watch() is running (B-125).
-func (o *RemoteObserver) LastActivity() time.Time {
+func (o *remoteObserver) LastActivity() time.Time {
 	nano := o.lastActivityNano.Load()
 	if nano == 0 {
 		return time.Time{}
@@ -467,13 +467,13 @@ func (o *RemoteObserver) LastActivity() time.Time {
 }
 
 // recordActivity updates the liveness timestamp to now.
-func (o *RemoteObserver) recordActivity() {
+func (o *remoteObserver) recordActivity() {
 	o.lastActivityNano.Store(time.Now().UnixNano())
 }
 
 // Stats returns a snapshot of observer metrics. Thread-safe (B-127).
-func (o *RemoteObserver) Stats() ObserverStats {
-	return ObserverStats{
+func (o *remoteObserver) Stats() observerStats {
+	return observerStats{
 		EventsEmitted:  o.stats.eventsEmitted.Load(),
 		PollsCompleted: o.stats.pollsCompleted.Load(),
 		Errors:         o.stats.errors.Load(),
@@ -482,17 +482,17 @@ func (o *RemoteObserver) Stats() ObserverStats {
 }
 
 // setDeltaToken updates the internal delta token under the mutex.
-func (o *RemoteObserver) setDeltaToken(token string) {
+func (o *remoteObserver) setDeltaToken(token string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
 	o.deltaToken = token
 }
 
-// TimeSleep waits for the given duration or until the context is canceled.
+// timeSleep waits for the given duration or until the context is canceled.
 // Shared by RemoteObserver, LocalObserver, and ExecutorConfig as the default
 // sleep implementation. Each injects it via their sleepFunc field for testability.
-func TimeSleep(ctx context.Context, d time.Duration) error {
+func timeSleep(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 
@@ -512,13 +512,13 @@ func TimeSleep(ctx context.Context, d time.Duration) error {
 // child ordering within a delta page. Pass 1 registers ALL items in the
 // inflight map so that pass 2 can correctly classify vault descendants even
 // when the child appears before its vault parent in the response.
-func (o *RemoteObserver) fetchPage(
-	ctx context.Context, token string, page int, inflight map[string]InflightParent,
-) ([]ChangeEvent, string, bool, error) {
+func (o *remoteObserver) fetchPage(
+	ctx context.Context, token string, page int, inflight map[string]inflightParent,
+) ([]changeEvent, string, bool, error) {
 	dp, err := o.fetcher.Delta(ctx, o.driveID, token)
 	if err != nil {
 		if errors.Is(err, graph.ErrGone) {
-			return nil, "", false, ErrDeltaExpired
+			return nil, "", false, errDeltaExpired
 		}
 
 		return nil, "", false, fmt.Errorf("sync: fetching delta page %d: %w", page, err)
@@ -533,7 +533,7 @@ func (o *RemoteObserver) fetchPage(
 	}
 
 	// Pass 2: classify and emit events (inflight map is fully populated).
-	var events []ChangeEvent
+	var events []changeEvent
 
 	for i := range dp.Items {
 		if ev := o.Converter.ClassifyItem(&dp.Items[i], inflight); ev != nil {
@@ -556,8 +556,8 @@ func (o *RemoteObserver) fetchPage(
 // Pure helper functions
 // ---------------------------------------------------------------------------
 
-// ClassifyItemType determines the ItemType from graph.Item flags.
-func ClassifyItemType(item *graph.Item) ItemType {
+// classifyItemType determines the ItemType from graph.Item flags.
+func classifyItemType(item *graph.Item) ItemType {
 	switch {
 	case item.IsRoot:
 		return ItemTypeRoot
@@ -568,9 +568,9 @@ func ClassifyItemType(item *graph.Item) ItemType {
 	}
 }
 
-// ToUnixNano converts a time.Time to Unix nanoseconds. Returns 0 for
+// toUnixNano converts a time.Time to Unix nanoseconds. Returns 0 for
 // the zero time value.
-func ToUnixNano(t time.Time) int64 {
+func toUnixNano(t time.Time) int64 {
 	if t.IsZero() {
 		return 0
 	}

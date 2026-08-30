@@ -66,7 +66,7 @@ func TestIsDisposable(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.want, IsDisposable(tt.name), "IsDisposable(%q)", tt.name)
+			assert.Equal(t, tt.want, isDisposable(tt.name), "IsDisposable(%q)", tt.name)
 		})
 	}
 }
@@ -75,7 +75,7 @@ func TestIsDisposable(t *testing.T) {
 // DeleteLocalFolder with disposable files tests
 // ---------------------------------------------------------------------------
 
-func newDeleteTestExecutor(t *testing.T) (*Executor, string) {
+func newDeleteTestExecutor(t *testing.T) (*executor, string) {
 	t.Helper()
 
 	syncRoot := t.TempDir()
@@ -88,11 +88,11 @@ func newDeleteTestExecutor(t *testing.T) (*Executor, string) {
 	dl := &executorMockDownloader{}
 	ul := &executorMockUploader{}
 
-	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
+	cfg := newExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	return e, syncRoot
 }
@@ -106,7 +106,7 @@ func TestDeleteLocalFolder_JunkFileWhenIgnoreJunkDisabled_Fails(t *testing.T) {
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 
-	cfg := NewExecutorConfig(
+	cfg := newExecutorConfig(
 		&executorMockItemClient{},
 		&executorMockDownloader{},
 		&executorMockUploader{},
@@ -116,7 +116,7 @@ func TestDeleteLocalFolder_JunkFileWhenIgnoreJunkDisabled_Fails(t *testing.T) {
 		nil,
 	)
 	cfg.SetTransferMgr(driveops.NewTransferManager(&executorMockDownloader{}, &executorMockUploader{}, nil, logger))
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	dir := filepath.Join(syncRoot, "folder")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
@@ -178,17 +178,17 @@ func TestExecuteRemoteDelete_DoesNotUsePathConvergenceDelete(t *testing.T) {
 	}
 	pathConvergence := &executorPathConvergenceStub{}
 
-	cfg := NewExecutorConfig(items, &executorMockDownloader{}, &executorMockUploader{}, syncTree, driveID, logger, pathConvergence)
+	cfg := newExecutorConfig(items, &executorMockDownloader{}, &executorMockUploader{}, syncTree, driveID, logger, pathConvergence)
 	cfg.SetTransferMgr(driveops.NewTransferManager(&executorMockDownloader{}, &executorMockUploader{}, nil, logger))
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:   ActionRemoteDelete,
 		Path:   "docs/report.txt",
 		ItemID: "remote-item-id",
-		View: &PathView{
+		View: &pathView{
 			Path: "docs/report.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				DriveID:  driveID,
 				ItemID:   "remote-item-id",
 				ItemType: ItemTypeFile,
@@ -221,16 +221,16 @@ func TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNot
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
 		Path:    "docs/report.txt",
 		ItemID:  "remote-item-id",
 		DriveID: driveID,
-		View: &PathView{
+		View: &pathView{
 			Path: "docs/report.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				DriveID:  driveID,
 				ItemID:   "remote-item-id",
 				ItemType: ItemTypeFile,
@@ -241,7 +241,7 @@ func TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNot
 
 	outcome := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeFailure(t, &outcome)
-	require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
+	require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
 }
 
 // Validates: R-2.8.10
@@ -265,16 +265,16 @@ func TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoe
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
 		Path:    "docs/report.txt",
 		ItemID:  "remote-item-id",
 		DriveID: driveID,
-		View: &PathView{
+		View: &pathView{
 			Path: "docs/report.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				DriveID:  driveID,
 				ItemID:   "remote-item-id",
 				ItemType: ItemTypeFile,
@@ -285,7 +285,7 @@ func TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoe
 
 	outcome := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeFailure(t, &outcome)
-	require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
+	require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
 }
 
 // Validates: R-2.8.10
@@ -305,16 +305,16 @@ func TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure(t *testi
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
 		Path:    "docs/report.txt",
 		ItemID:  "remote-item-id",
 		DriveID: driveID,
-		View: &PathView{
+		View: &pathView{
 			Path: "docs/report.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				DriveID:  driveID,
 				ItemID:   "remote-item-id",
 				ItemType: ItemTypeFile,
@@ -326,7 +326,7 @@ func TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure(t *testi
 	outcome := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeFailure(t, &outcome)
 	require.ErrorIs(t, outcome.Error, assert.AnError)
-	assert.NotErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
+	assert.NotErrorIs(t, outcome.Error, errActionPreconditionChanged)
 }
 
 func TestExecuteLocalDelete_SymlinkAliasDeletesOnlyLink(t *testing.T) {
@@ -489,11 +489,11 @@ func TestFindNonDisposable(t *testing.T) {
 	// All disposable.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte{0}, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "._foo"), []byte{0}, 0o600))
-	assert.Empty(t, FindNonDisposable(tree, ""))
+	assert.Empty(t, findNonDisposable(tree, "", isDisposable))
 
 	// Add a non-disposable file.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "real.txt"), []byte("data"), 0o600))
-	assert.Equal(t, "real.txt", FindNonDisposable(tree, ""))
+	assert.Equal(t, "real.txt", findNonDisposable(tree, "", isDisposable))
 }
 
 func TestDeleteLocalFolder_EmptyDir_Succeeds(t *testing.T) {

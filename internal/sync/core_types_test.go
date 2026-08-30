@@ -46,7 +46,7 @@ func TestParseItemType(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got, err := ParseItemType(tt.input)
+		got, err := parseItemType(tt.input)
 		require.NoError(t, err, "ParseItemType(%q)", tt.input)
 		assert.Equal(t, tt.want, got, "ParseItemType(%q)", tt.input)
 	}
@@ -55,7 +55,7 @@ func TestParseItemType(t *testing.T) {
 func TestParseItemType_Error(t *testing.T) {
 	t.Parallel()
 
-	_, err := ParseItemType("unknown")
+	_, err := parseItemType("unknown")
 	require.Error(t, err, "ParseItemType(\"unknown\") expected error")
 }
 
@@ -66,9 +66,9 @@ func TestEnumStrings_NonEmpty(t *testing.T) {
 		name string
 		str  string
 	}{
-		{"SourceRemote", SourceRemote.String()},
+		{"SourceRemote", sourceRemote.String()},
 		{"SourceLocal", SourceLocal.String()},
-		{"ChangeCreate", ChangeCreate.String()},
+		{"ChangeCreate", changeCreate.String()},
 		{"ChangeModify", ChangeModify.String()},
 		{"ChangeDelete", ChangeDelete.String()},
 		{"ChangeMove", ChangeMove.String()},
@@ -85,7 +85,7 @@ func TestEnumStrings_NonEmpty(t *testing.T) {
 		{"ActionConflictCopy", ActionConflictCopy.String()},
 		{"ActionBaselineUpdate", ActionBaselineUpdate.String()},
 		{"ActionCleanup", ActionCleanup.String()},
-		{"CreateLocal", CreateLocal.String()},
+		{"CreateLocal", createLocal.String()},
 		{"CreateRemote", CreateRemote.String()},
 	}
 
@@ -98,19 +98,19 @@ func TestActionTypeDirection(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		action ActionType
-		want   Direction
+		action actionType
+		want   direction
 	}{
-		{action: ActionDownload, want: DirectionDownload},
-		{action: ActionUpload, want: DirectionUpload},
-		{action: ActionLocalDelete, want: DirectionDelete},
-		{action: ActionRemoteDelete, want: DirectionDelete},
-		{action: ActionLocalMove, want: DirectionDownload},
-		{action: ActionRemoteMove, want: DirectionDownload},
-		{action: ActionFolderCreate, want: DirectionDownload},
-		{action: ActionConflictCopy, want: DirectionDownload},
-		{action: ActionBaselineUpdate, want: DirectionDownload},
-		{action: ActionCleanup, want: DirectionDownload},
+		{action: ActionDownload, want: directionDownload},
+		{action: ActionUpload, want: directionUpload},
+		{action: ActionLocalDelete, want: directionDelete},
+		{action: ActionRemoteDelete, want: directionDelete},
+		{action: ActionLocalMove, want: directionDownload},
+		{action: ActionRemoteMove, want: directionDownload},
+		{action: ActionFolderCreate, want: directionDownload},
+		{action: ActionConflictCopy, want: directionDownload},
+		{action: ActionBaselineUpdate, want: directionDownload},
+		{action: ActionCleanup, want: directionDownload},
 	}
 
 	for _, tt := range tests {

@@ -380,6 +380,43 @@ func runE2EFullCompileCheck(
 		return fmt.Errorf("full e2e compile: %w", err)
 	}
 
+	return runTaggedVet(ctx, runner, repoRoot, env, stdout, stderr)
+}
+
+// taggedVetTargetCount is the number of build-tagged source sets vetted. It is
+// a constant so callers can size against it without the array-length pitfall
+// where len(f()) never calls f.
+const taggedVetTargetCount = 2
+
+// taggedVetTargets are the build-tagged source sets that a plain `go vet ./...`
+// never sees. Compiling them proves they build; it does not run the analyzers,
+// so vet findings in live-test code could only surface on a live run -- the
+// slowest and least available lane there is.
+func taggedVetTargets() [taggedVetTargetCount][2]string {
+	return [taggedVetTargetCount][2]string{
+		{"-tags=e2e e2e_full", "./e2e"},
+		{"-tags=integration", "./internal/graph"},
+	}
+}
+
+func runTaggedVet(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	stdout, stderr io.Writer,
+) error {
+	for _, target := range taggedVetTargets() {
+		tag, pkg := target[0], target[1]
+		if err := writeStatus(stdout, "==> go vet "+tag+" "+pkg+"\n"); err != nil {
+			return fmt.Errorf("write status: %w", err)
+		}
+
+		if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", "vet", tag, pkg); err != nil {
+			return fmt.Errorf("vet %s %s: %w", tag, pkg, err)
+		}
+	}
+
 	return nil
 }
 

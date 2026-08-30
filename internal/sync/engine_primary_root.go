@@ -20,8 +20,8 @@ const (
 type remoteObservationBatch struct {
 	source                remoteObservationBatchSource
 	observationMode       remoteObservationMode
-	observed              []ObservedItem
-	emitted               []ChangeEvent
+	observed              []observedItem
+	emitted               []changeEvent
 	cursorToken           string
 	markFullRemoteRefresh bool
 	findings              ObservationFindingsBatch
@@ -64,7 +64,7 @@ func (batch *remoteObservationBatch) deferredProgress() *remoteObservationBatch 
 func buildRemoteObservationBatch(
 	engine *Engine,
 	mode remoteObservationMode,
-	events []ChangeEvent,
+	events []changeEvent,
 	token string,
 	markFullRemoteRefresh bool,
 	findings ObservationFindingsBatch,
@@ -74,7 +74,7 @@ func buildRemoteObservationBatch(
 	return remoteObservationBatch{
 		observationMode:       mode,
 		observed:              projected.observed,
-		emitted:               append([]ChangeEvent(nil), projected.emitted...),
+		emitted:               append([]changeEvent(nil), projected.emitted...),
 		cursorToken:           primaryObservationCursorToken(token, markFullRemoteRefresh, len(projected.emitted), mode),
 		markFullRemoteRefresh: markFullRemoteRefresh,
 		findings:              findings,
@@ -100,7 +100,7 @@ func primaryObservationCursorToken(
 
 func buildPrimaryWatchBatch(
 	engine *Engine,
-	primaryEvents []ChangeEvent,
+	primaryEvents []changeEvent,
 	newToken string,
 ) remoteObservationBatch {
 	batch := buildRemoteObservationBatch(

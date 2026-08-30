@@ -7,7 +7,7 @@ import (
 )
 
 func TestContentFilter_IncludedDirsIncludeAncestorsRootsAndDescendants(t *testing.T) {
-	filter := NewContentFilter(ContentFilterConfig{
+	filter := newContentFilter(ContentFilterConfig{
 		IncludedDirs: []string{"Projects/App"},
 	})
 
@@ -21,7 +21,7 @@ func TestContentFilter_IncludedDirsIncludeAncestorsRootsAndDescendants(t *testin
 
 // Validates: R-2.4.11
 func TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths(t *testing.T) {
-	filter := NewContentFilter(ContentFilterConfig{
+	filter := newContentFilter(ContentFilterConfig{
 		IncludedDirs: []string{"Projects/App"},
 	})
 
@@ -36,7 +36,7 @@ func TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths(t *
 }
 
 func TestContentFilter_IgnoreWinsOverInclude(t *testing.T) {
-	filter := NewContentFilter(ContentFilterConfig{
+	filter := newContentFilter(ContentFilterConfig{
 		IncludedDirs: []string{"Projects"},
 		IgnoredDirs:  []string{"Projects/build"},
 	})
@@ -47,7 +47,7 @@ func TestContentFilter_IgnoreWinsOverInclude(t *testing.T) {
 }
 
 func TestContentFilter_IgnoredPathsCoverFilesAndDirectories(t *testing.T) {
-	filter := NewContentFilter(ContentFilterConfig{
+	filter := newContentFilter(ContentFilterConfig{
 		IgnoredPaths: []string{"*.log", "tmp/*", "Cache"},
 	})
 
@@ -60,7 +60,7 @@ func TestContentFilter_IgnoredPathsCoverFilesAndDirectories(t *testing.T) {
 }
 
 func TestContentFilter_DotfilesAreBidirectionalOptIn(t *testing.T) {
-	filter := NewContentFilter(ContentFilterConfig{IgnoreDotfiles: true})
+	filter := newContentFilter(ContentFilterConfig{IgnoreDotfiles: true})
 
 	assert.False(t, filter.Visible(".env", ItemTypeFile))
 	assert.False(t, filter.Visible("src/.cache/data", ItemTypeFile))
@@ -68,7 +68,7 @@ func TestContentFilter_DotfilesAreBidirectionalOptIn(t *testing.T) {
 }
 
 func TestContentFilter_JunkFilesAreBidirectionalOptIn(t *testing.T) {
-	filter := NewContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
+	filter := newContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
 
 	assert.False(t, filter.Visible(".DS_Store", ItemTypeFile))
 	assert.False(t, filter.Visible("Thumbs.db", ItemTypeFile))
@@ -84,7 +84,7 @@ func TestContentFilter_JunkFilesAreBidirectionalOptIn(t *testing.T) {
 }
 
 func TestContentFilter_JunkFilesDefaultVisible(t *testing.T) {
-	filter := NewContentFilter(ContentFilterConfig{})
+	filter := newContentFilter(ContentFilterConfig{})
 
 	assert.True(t, filter.Visible(".DS_Store", ItemTypeFile))
 	assert.True(t, filter.Visible("Thumbs.db", ItemTypeFile))

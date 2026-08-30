@@ -113,7 +113,7 @@ rescan.
 
 Ignored content does not enter `local_state`. Full local observation replaces
 the table with the latest visible/admissible local truth. Planner loading still
-reapplies the current `ContentFilter` so stale rows from a pre-reload state
+reapplies the current `contentFilter` so stale rows from a pre-reload state
 cannot leak into reconciliation.
 
 ## `observation_issues`
@@ -136,9 +136,10 @@ responsible for proving and persisting that current-truth problem.
 
 Observation-owned issue rows are reconciled through one observation-batch
 mutation shape. Full observation passes replace their managed current set by
-issue type. Single-path observation uses the same mutation input but scopes
-reconciliation to the exact managed paths so one retry/trial probe cannot clear
-unrelated durable observation rows.
+issue type. The same mutation input also supports scoping reconciliation to an
+exact managed path set, so a narrow probe cannot clear unrelated durable
+observation rows; that mode currently has no caller (see
+[sync-store.md](sync-store.md)).
 
 Read-denied subtree boundaries are carried by `ScopeKey` on the corresponding
 issue row instead of a second durable scope table. Derived truth reads use that
@@ -183,7 +184,7 @@ The target persisted scope families are:
 
 `scope_key` remains the durable identity referenced by `retry_work`. Runtime
 and read-side code recover scope semantics from that key via
-`DescribeScopeKey`; SQLite does not persist a second copy of parsed scope
+`describeScopeKey`; SQLite does not persist a second copy of parsed scope
 metadata.
 
 Read-denied subtree boundaries continue to use `perm:*:read:*` keys, but only
