@@ -43,8 +43,8 @@ func SKThrottleDrive(targetDriveID driveid.ID) ScopeKey {
 	return ScopeKey{Kind: ScopeThrottleTarget, Param: throttleDriveParam(targetDriveID)}
 }
 
-// SKPermLocalRead returns the scope key for a local read-denied directory.
-func SKPermLocalRead(dirPath string) ScopeKey {
+// sKPermLocalRead returns the scope key for a local read-denied directory.
+func sKPermLocalRead(dirPath string) ScopeKey {
 	return ScopeKey{Kind: ScopePermDirRead, Param: dirPath}
 }
 
@@ -53,8 +53,8 @@ func SKPermLocalWrite(dirPath string) ScopeKey {
 	return ScopeKey{Kind: ScopePermDirWrite, Param: dirPath}
 }
 
-// SKPermRemoteRead returns the scope key for a remote read-denied boundary.
-func SKPermRemoteRead(boundaryPath string) ScopeKey {
+// sKPermRemoteRead returns the scope key for a remote read-denied boundary.
+func sKPermRemoteRead(boundaryPath string) ScopeKey {
 	return ScopeKey{Kind: ScopePermRemoteRead, Param: boundaryPath}
 }
 
@@ -71,14 +71,14 @@ func (sk ScopeKey) IsZero() bool {
 // Wire-format strings for scope keys stored in SQLite scope_key columns.
 // Used by String() and ParseScopeKey() — the only serialization boundary.
 const (
-	WireThrottleTarget  = "throttle:target:"
-	WireService         = "service"
-	WireQuotaOwn        = "quota:own"
-	WirePermDirRead     = "perm:dir:read:"
-	WirePermDirWrite    = "perm:dir:write:"
-	WirePermRemoteRead  = "perm:remote:read:"
-	WirePermRemoteWrite = "perm:remote:write:"
-	WireDiskLocal       = "disk:local"
+	wireThrottleTarget  = "throttle:target:"
+	wireService         = "service"
+	wireQuotaOwn        = "quota:own"
+	wirePermDirRead     = "perm:dir:read:"
+	wirePermDirWrite    = "perm:dir:write:"
+	wirePermRemoteRead  = "perm:remote:read:"
+	wirePermRemoteWrite = "perm:remote:write:"
+	wireDiskLocal       = "disk:local"
 )
 
 // String serializes to the wire format stored in SQLite scope_key columns.
@@ -86,46 +86,46 @@ const (
 func (sk ScopeKey) String() string {
 	switch sk.Kind {
 	case ScopeThrottleTarget:
-		return WireThrottleTarget + sk.Param
+		return wireThrottleTarget + sk.Param
 	case ScopeService:
-		return WireService
+		return wireService
 	case ScopeQuotaOwn:
-		return WireQuotaOwn
+		return wireQuotaOwn
 	case ScopePermDirRead:
-		return WirePermDirRead + sk.Param
+		return wirePermDirRead + sk.Param
 	case ScopePermDirWrite:
-		return WirePermDirWrite + sk.Param
+		return wirePermDirWrite + sk.Param
 	case ScopePermRemoteRead:
-		return WirePermRemoteRead + sk.Param
+		return wirePermRemoteRead + sk.Param
 	case ScopePermRemoteWrite:
-		return WirePermRemoteWrite + sk.Param
+		return wirePermRemoteWrite + sk.Param
 	case ScopeDiskLocal:
-		return WireDiskLocal
+		return wireDiskLocal
 	default:
 		return ""
 	}
 }
 
-// ParseScopeKey deserializes a wire-format string into a ScopeKey.
+// parseScopeKey deserializes a wire-format string into a ScopeKey.
 // Returns the zero-value ScopeKey for unknown formats.
-func ParseScopeKey(s string) ScopeKey {
+func parseScopeKey(s string) ScopeKey {
 	switch {
-	case strings.HasPrefix(s, WireThrottleTarget):
-		return ScopeKey{Kind: ScopeThrottleTarget, Param: strings.TrimPrefix(s, WireThrottleTarget)}
-	case s == WireService:
+	case strings.HasPrefix(s, wireThrottleTarget):
+		return ScopeKey{Kind: ScopeThrottleTarget, Param: strings.TrimPrefix(s, wireThrottleTarget)}
+	case s == wireService:
 		return SKService()
-	case s == WireQuotaOwn:
+	case s == wireQuotaOwn:
 		return SKQuotaOwn()
-	case s == WireDiskLocal:
+	case s == wireDiskLocal:
 		return SKDiskLocal()
-	case strings.HasPrefix(s, WirePermDirRead):
-		return SKPermLocalRead(strings.TrimPrefix(s, WirePermDirRead))
-	case strings.HasPrefix(s, WirePermDirWrite):
-		return SKPermLocalWrite(strings.TrimPrefix(s, WirePermDirWrite))
-	case strings.HasPrefix(s, WirePermRemoteRead):
-		return SKPermRemoteRead(strings.TrimPrefix(s, WirePermRemoteRead))
-	case strings.HasPrefix(s, WirePermRemoteWrite):
-		return SKPermRemoteWrite(strings.TrimPrefix(s, WirePermRemoteWrite))
+	case strings.HasPrefix(s, wirePermDirRead):
+		return sKPermLocalRead(strings.TrimPrefix(s, wirePermDirRead))
+	case strings.HasPrefix(s, wirePermDirWrite):
+		return SKPermLocalWrite(strings.TrimPrefix(s, wirePermDirWrite))
+	case strings.HasPrefix(s, wirePermRemoteRead):
+		return sKPermRemoteRead(strings.TrimPrefix(s, wirePermRemoteRead))
+	case strings.HasPrefix(s, wirePermRemoteWrite):
+		return SKPermRemoteWrite(strings.TrimPrefix(s, wirePermRemoteWrite))
 	default:
 		return ScopeKey{}
 	}
@@ -172,14 +172,14 @@ func (sk ScopeKey) IsPermRemoteWrite() bool {
 // remain family-asserting helpers for callers that need to prove the scope
 // family before proceeding. Non-path scopes return the empty string.
 func (sk ScopeKey) CoveredPath() string {
-	return DescribeScopeKey(sk).ScopePath()
+	return describeScopeKey(sk).ScopePath()
 }
 
 // DirPath returns the directory path for a local directory permission scope key.
 // Panics if called on a non-local-permission key (defensive — caller bug).
 func (sk ScopeKey) DirPath() string {
-	descriptor := DescribeScopeKey(sk)
-	if descriptor.Family != ScopeFamilyPermDir {
+	descriptor := describeScopeKey(sk)
+	if descriptor.Family != scopeFamilyPermDir {
 		panic("ScopeKey.DirPath() called on non-local-permission key")
 	}
 	return sk.CoveredPath()
@@ -189,8 +189,8 @@ func (sk ScopeKey) DirPath() string {
 // remote write block scope key.
 // Panics if called on a non-remote-permission key (defensive — caller bug).
 func (sk ScopeKey) RemotePath() string {
-	descriptor := DescribeScopeKey(sk)
-	if descriptor.Family != ScopeFamilyPermRemote {
+	descriptor := describeScopeKey(sk)
+	if descriptor.Family != scopeFamilyPermRemote {
 		panic("ScopeKey.RemotePath() called on non-remote-permission key")
 	}
 	return sk.CoveredPath()
@@ -199,7 +199,7 @@ func (sk ScopeKey) RemotePath() string {
 // PersistsInBlockScopes reports whether this scope is a timed blocked-work
 // scope that belongs in block_scopes.
 func (sk ScopeKey) PersistsInBlockScopes() bool {
-	return DescribeScopeKey(sk).PersistsInBlockScopes()
+	return describeScopeKey(sk).PersistsInBlockScopes()
 }
 
 // IsThrottleTarget returns true for target-scoped throttle keys.
@@ -224,14 +224,14 @@ func (sk ScopeKey) ThrottleTargetKey() string {
 // ConditionType returns the condition_type constant for this scope key's kind.
 // Used to derive a stable default condition type from a scope key.
 func (sk ScopeKey) ConditionType() string {
-	return DescribeScopeKey(sk).DefaultConditionType
+	return describeScopeKey(sk).DefaultConditionType
 }
 
 // Humanize translates a scope key to a user-friendly description (R-2.10.22).
 // For directory- and subtree-scoped blocks, returns the stored local path. For
 // global scopes, returns a plain English description.
 func (sk ScopeKey) Humanize() string {
-	return DescribeScopeKey(sk).Humanize()
+	return describeScopeKey(sk).Humanize()
 }
 
 // BlocksAction returns true if this scope key blocks the given action.
@@ -239,9 +239,9 @@ func (sk ScopeKey) Humanize() string {
 func (sk ScopeKey) BlocksAction(
 	path string,
 	throttleTargetKey string,
-	actionType ActionType,
+	actionType actionType,
 ) bool {
-	return DescribeScopeKey(sk).BlocksAction(path, throttleTargetKey, actionType)
+	return describeScopeKey(sk).BlocksAction(path, throttleTargetKey, actionType)
 }
 
 func scopePathMatches(path, boundary string) bool {
@@ -252,10 +252,10 @@ func scopePathMatches(path, boundary string) bool {
 	return path == boundary || strings.HasPrefix(path, boundary+"/")
 }
 
-// ScopeKeyForResult maps one action completion target and HTTP status code to a
+// scopeKeyForResult maps one action completion target and HTTP status code to a
 // ScopeKey. Returns the zero-value for non-scope statuses. This is the single
 // source of truth for HTTP status → scope key classification.
-func ScopeKeyForResult(httpStatus int, targetDriveID driveid.ID) ScopeKey {
+func scopeKeyForResult(httpStatus int, targetDriveID driveid.ID) ScopeKey {
 	switch {
 	case httpStatus == http.StatusTooManyRequests:
 		if targetDriveID.IsZero() {

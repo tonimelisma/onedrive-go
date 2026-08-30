@@ -26,15 +26,15 @@ type driveIdentityProof struct {
 // internal/multisync.
 type Engine struct {
 	baseline                 *SyncStore
-	planner                  *Planner
-	execCfg                  *ExecutorConfig
-	fetcher                  DeltaFetcher
-	socketIOFetcher          SocketIOEndpointFetcher
-	itemsClient              ItemClient
-	driveVerifier            DriveVerifier      // optional (B-074)
-	folderDelta              FolderDeltaFetcher // optional: mount-root delta observation
-	recursiveLister          RecursiveLister    // optional: mount-root recursive enumeration fallback
-	permHandler              *PermissionHandler // encapsulates all permission logic (6.4c)
+	planner                  *planner
+	execCfg                  *executorConfig
+	fetcher                  deltaFetcher
+	socketIOFetcher          socketIOEndpointFetcher
+	itemsClient              itemClient
+	driveVerifier            driveVerifier      // optional (B-074)
+	folderDelta              folderDeltaFetcher // optional: mount-root delta observation
+	recursiveLister          recursiveLister    // optional: mount-root recursive enumeration fallback
+	permHandler              *permissionHandler // encapsulates all permission logic (6.4c)
 	dataDir                  string
 	syncRoot                 string
 	syncTree                 *synctree.Root
@@ -69,14 +69,14 @@ type Engine struct {
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
 	// inotify watch limit exhaustion (ENOSPC).
-	localWatcherFactory func() (FsWatcher, error)
+	localWatcherFactory func() (fsWatcher, error)
 
 	// socketIOWakeSourceFactory is a test seam for watch-mode websocket
 	// wakeups. Production uses NewSocketIOWakeSourceWithOptions.
 	socketIOWakeSourceFactory func(
-		SocketIOEndpointFetcher,
+		socketIOEndpointFetcher,
 		driveid.ID,
-		SocketIOWakeSourceOptions,
+		socketIOWakeSourceOptions,
 	) socketIOWakeSourceRunner
 
 	afterFunc func(time.Duration, func()) syncTimer
@@ -96,7 +96,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
 	}
 
-	if !SyncRootExists(cfg.SyncRoot) {
+	if !syncRootExists(cfg.SyncRoot) {
 		return nil, fmt.Errorf("sync: opening sync tree %q: %w", cfg.SyncRoot, ErrMountRootUnavailable)
 	}
 
@@ -111,7 +111,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		return nil, fmt.Errorf("sync: opening sync tree: %w", err)
 	}
 
-	execCfg := NewExecutorConfig(
+	execCfg := newExecutorConfig(
 		cfg.Items,
 		cfg.Downloads,
 		cfg.Uploads,
@@ -139,7 +139,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 
 	e := &Engine{
 		baseline:                 bm,
-		planner:                  NewPlanner(cfg.Logger),
+		planner:                  newPlanner(cfg.Logger),
 		execCfg:                  execCfg,
 		fetcher:                  cfg.Fetcher,
 		socketIOFetcher:          cfg.SocketIOFetcher,
@@ -173,11 +173,11 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		sleepFn:                  realSleep,
 		jitterFn:                 realJitter,
 		socketIOWakeSourceFactory: func(
-			fetcher SocketIOEndpointFetcher,
+			fetcher socketIOEndpointFetcher,
 			driveID driveid.ID,
-			opts SocketIOWakeSourceOptions,
+			opts socketIOWakeSourceOptions,
 		) socketIOWakeSourceRunner {
-			return NewSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
+			return newSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
 		},
 	}
 
@@ -195,8 +195,8 @@ func newEnginePermissionHandler(
 	engine *Engine,
 	cfg *engineInputs,
 	syncTree *synctree.Root,
-) *PermissionHandler {
-	return &PermissionHandler{
+) *permissionHandler {
+	return &permissionHandler{
 		store:            engine.baseline,
 		permChecker:      cfg.PermChecker,
 		syncTree:         syncTree,

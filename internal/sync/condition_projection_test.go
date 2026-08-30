@@ -29,14 +29,14 @@ func TestProjectStoredConditionGroups_MergesDurableAuthorities(t *testing.T) {
 	})
 
 	require.Len(t, groups, 2)
-	assert.Equal(t, StoredConditionGroup{
+	assert.Equal(t, storedConditionGroup{
 		ConditionKey:  ConditionRemoteWriteDenied,
 		ConditionType: IssueRemoteWriteDenied,
 		ScopeKey:      SKPermRemoteWrite("Shared/Docs"),
 		Count:         4,
 		Paths:         []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt", "Shared/Docs/c.txt"},
 	}, groups[0])
-	assert.Equal(t, StoredConditionGroup{
+	assert.Equal(t, storedConditionGroup{
 		ConditionKey:  ConditionInvalidFilename,
 		ConditionType: IssueInvalidFilename,
 		Count:         1,
@@ -67,7 +67,7 @@ func TestProjectStoredConditionGroups_DoesNotDoubleCountObservationBackedScope(t
 	})
 
 	require.Len(t, groups, 1)
-	assert.Equal(t, StoredConditionGroup{
+	assert.Equal(t, storedConditionGroup{
 		ConditionKey:  ConditionRemoteWriteDenied,
 		ConditionType: IssueRemoteWriteDenied,
 		ScopeKey:      SKPermRemoteWrite("Shared/Docs"),

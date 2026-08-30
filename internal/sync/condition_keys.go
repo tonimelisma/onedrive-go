@@ -25,20 +25,20 @@ const (
 	ConditionUnexpectedCondition    ConditionKey = "unexpected_condition"
 )
 
-// ConditionKeyForStoredCondition maps one durable sync-condition record
+// conditionKeyForStoredCondition maps one durable sync-condition record
 // (observation issue, retry_work row, or block scope) into the shared
 // condition family consumed by logs, watch summaries, and CLI status.
-func ConditionKeyForStoredCondition(conditionType string, scopeKey ScopeKey) ConditionKey {
+func conditionKeyForStoredCondition(conditionType string, scopeKey ScopeKey) ConditionKey {
 	return conditionKeyForIssueTypeOrScope(
 		conditionType,
 		scopeKey,
-		DescribeScopeKey(scopeKey).DefaultConditionType,
+		describeScopeKey(scopeKey).DefaultConditionType,
 	)
 }
 
-// ConditionKeyForRuntimeResult maps one execution-time classified result into
+// conditionKeyForRuntimeResult maps one execution-time classified result into
 // the shared condition family used by logs, watch summaries, and status.
-func ConditionKeyForRuntimeResult(class errclass.Class, conditionType string) ConditionKey {
+func conditionKeyForRuntimeResult(class errclass.Class, conditionType string) ConditionKey {
 	if key, ok := conditionKeyForIssueType(conditionType); ok {
 		return key
 	}
@@ -128,19 +128,19 @@ func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
 	}{
 		{issueType: IssueUnauthorized, key: ConditionAuthenticationRequired},
 		{issueType: IssueQuotaExceeded, key: ConditionQuotaExceeded},
-		{issueType: IssueServiceOutage, key: ConditionServiceOutage},
-		{issueType: IssueRateLimited, key: ConditionRateLimited},
+		{issueType: issueServiceOutage, key: ConditionServiceOutage},
+		{issueType: issueRateLimited, key: ConditionRateLimited},
 		{issueType: IssueRemoteWriteDenied, key: ConditionRemoteWriteDenied},
-		{issueType: IssueRemoteReadDenied, key: ConditionRemoteReadDenied},
-		{issueType: IssueLocalReadDenied, key: ConditionLocalReadDenied},
-		{issueType: IssueLocalWriteDenied, key: ConditionLocalWriteDenied},
+		{issueType: issueRemoteReadDenied, key: ConditionRemoteReadDenied},
+		{issueType: issueLocalReadDenied, key: ConditionLocalReadDenied},
+		{issueType: issueLocalWriteDenied, key: ConditionLocalWriteDenied},
 		{issueType: IssueInvalidFilename, key: ConditionInvalidFilename},
-		{issueType: IssuePathTooLong, key: ConditionPathTooLong},
-		{issueType: IssueFileTooLarge, key: ConditionFileTooLarge},
-		{issueType: IssueCaseCollision, key: ConditionCaseCollision},
-		{issueType: IssueDiskFull, key: ConditionDiskFull},
-		{issueType: IssueHashPanic, key: ConditionHashError},
-		{issueType: IssueFileTooLargeForSpace, key: ConditionFileTooLargeForSpace},
+		{issueType: issuePathTooLong, key: ConditionPathTooLong},
+		{issueType: issueFileTooLarge, key: ConditionFileTooLarge},
+		{issueType: issueCaseCollision, key: ConditionCaseCollision},
+		{issueType: issueDiskFull, key: ConditionDiskFull},
+		{issueType: issueHashPanic, key: ConditionHashError},
+		{issueType: issueFileTooLargeForSpace, key: ConditionFileTooLargeForSpace},
 	} {
 		if mapping.issueType == issueType {
 			return mapping.key, true

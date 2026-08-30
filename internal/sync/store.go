@@ -125,10 +125,13 @@ func (m *SyncStore) Close(ctx context.Context) error {
 // Checkpoint performs a WAL checkpoint only. Semantic sync-state cleanup is
 // owned by the store operations that understand that state, not by generic
 // database housekeeping.
+//
+// A failed checkpoint is returned rather than only logged: cross-process
+// readers such as `status` open their own connection and depend on the
+// checkpoint having happened, so the caller decides how much that matters.
 func (m *SyncStore) Checkpoint(ctx context.Context) error {
-	if _, err := m.db.ExecContext(ctx,
-		"PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-		m.logger.Warn("WAL checkpoint failed", slog.String("error", err.Error()))
+	if _, err := m.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return fmt.Errorf("checkpoint sync store WAL: %w", err)
 	}
 
 	return nil

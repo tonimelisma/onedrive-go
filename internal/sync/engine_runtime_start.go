@@ -11,7 +11,7 @@ func (flow *engineFlow) startRuntimeStage(
 	runtime *runtimePlan,
 	bl *Baseline,
 	watch *watchRuntime,
-) ([]*TrackedAction, bool, error) {
+) ([]*trackedAction, bool, error) {
 	if runtime == nil || runtime.Plan == nil {
 		return nil, false, nil
 	}
@@ -22,7 +22,7 @@ func (flow *engineFlow) startRuntimeStage(
 	}
 
 	flow.initializeRuntimeState(runtime)
-	flow.depGraph = NewDepGraph(flow.engine.logger)
+	flow.depGraph = newDepGraph(flow.engine.logger)
 
 	if len(plan.Actions) == 0 {
 		return nil, false, nil
@@ -50,8 +50,8 @@ func (flow *engineFlow) reduceReadyFrontierStage(
 	ctx context.Context,
 	watch *watchRuntime,
 	bl *Baseline,
-	ready []*TrackedAction,
-) ([]*TrackedAction, error) {
+	ready []*trackedAction,
+) ([]*trackedAction, error) {
 	reduced, err := flow.runPublicationDrainStage(ctx, watch, bl, ready)
 	if err != nil {
 		return reduced, err
@@ -69,13 +69,13 @@ func (flow *engineFlow) reduceReadyFrontierStage(
 	return append(reduced, released...), err
 }
 
-func (flow *engineFlow) registerPlanActions(plan *ActionPlan) []*TrackedAction {
+func (flow *engineFlow) registerPlanActions(plan *actionPlan) []*trackedAction {
 	if flow.depGraph == nil || plan == nil || len(plan.Actions) == 0 {
 		return nil
 	}
 
 	actionIDs := flow.allocatePlanActionIDs(len(plan.Actions))
-	initialReady := make([]*TrackedAction, 0, len(plan.Actions))
+	initialReady := make([]*trackedAction, 0, len(plan.Actions))
 
 	for i := range plan.Actions {
 		flow.depGraph.Register(&plan.Actions[i], actionIDs[i])

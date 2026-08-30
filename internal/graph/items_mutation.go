@@ -42,7 +42,7 @@ func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID,
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -194,7 +194,7 @@ func (c *Client) MoveItemIfMatch(
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var dir driveItemResponse
 	if err := json.NewDecoder(resp.Body).Decode(&dir); err != nil {
@@ -242,7 +242,7 @@ func (c *Client) UpdateFileSystemInfo(
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var dir driveItemResponse
 	if err := json.NewDecoder(resp.Body).Decode(&dir); err != nil {
@@ -296,7 +296,7 @@ func (c *Client) deleteAndDrainWithHeaders(ctx context.Context, method, path str
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	if _, copyErr := io.Copy(io.Discard, resp.Body); copyErr != nil {
 		return fmt.Errorf("graph: draining response body: %w", copyErr)

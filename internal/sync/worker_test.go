@@ -57,7 +57,7 @@ func (m *workerMockUploader) Upload(ctx context.Context, driveID driveid.ID, par
 // ---------------------------------------------------------------------------
 
 func newWorkerTestSetup(t *testing.T) (
-	*ExecutorConfig, *SyncStore, string,
+	*executorConfig, *SyncStore, string,
 ) {
 	t.Helper()
 
@@ -85,7 +85,7 @@ func newWorkerTestSetup(t *testing.T) (
 	}
 	ul := &workerMockUploader{}
 
-	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
+	cfg := newExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 	return cfg, mgr, syncRoot
@@ -95,8 +95,8 @@ func newWorkerTestSetup(t *testing.T) (
 // dispatchable actions to dispatchCh; drainAndComplete calls dg.Complete and
 // sends newly-dispatchable dependents to dispatchCh.
 type testDepGraphHelper struct {
-	dg         *DepGraph
-	dispatchCh chan *TrackedAction
+	dg         *depGraph
+	dispatchCh chan *trackedAction
 	settledCh  chan struct{}
 	settleOnce sync.Once
 }
@@ -104,8 +104,8 @@ type testDepGraphHelper struct {
 func newTestDepGraphHelper(t *testing.T) *testDepGraphHelper {
 	t.Helper()
 	return &testDepGraphHelper{
-		dg:         NewDepGraph(synctest.TestLogger(t)),
-		dispatchCh: make(chan *TrackedAction, 64),
+		dg:         newDepGraph(synctest.TestLogger(t)),
+		dispatchCh: make(chan *trackedAction, 64),
 		settledCh:  make(chan struct{}),
 	}
 }
@@ -119,14 +119,14 @@ func (h *testDepGraphHelper) Add(action *Action, id int64, deps []int64) {
 }
 
 // Dispatch returns the dispatch channel for WorkerPool.
-func (h *testDepGraphHelper) Dispatch() <-chan *TrackedAction { return h.dispatchCh }
+func (h *testDepGraphHelper) Dispatch() <-chan *trackedAction { return h.dispatchCh }
 
 // CompleteCh returns a helper-owned channel that closes once the synthetic
 // test graph has no in-flight nodes left. Production runtime quiescence is
 // engine-owned; worker tests only need a narrow settle signal.
 func (h *testDepGraphHelper) CompleteCh() <-chan struct{} { return h.settledCh }
 
-func (h *testDepGraphHelper) Complete(id int64) ([]*TrackedAction, bool) {
+func (h *testDepGraphHelper) Complete(id int64) ([]*trackedAction, bool) {
 	ready, ok := h.dg.Complete(id)
 	if ok && h.dg.InFlightCount() == 0 {
 		h.settleOnce.Do(func() { close(h.settledCh) })
@@ -138,8 +138,8 @@ func (h *testDepGraphHelper) Complete(id int64) ([]*TrackedAction, bool) {
 // drainAndComplete drains the action completion channel, calls dg.Complete
 // for each completion, and sends newly-ready dependents to dispatchCh. Returns
 // the collected completions. This simulates the engine's drain goroutine.
-func (h *testDepGraphHelper) drainAndComplete(completions <-chan ActionCompletion) []ActionCompletion {
-	var collected []ActionCompletion
+func (h *testDepGraphHelper) drainAndComplete(completions <-chan actionCompletion) []actionCompletion {
+	var collected []actionCompletion
 	for r := range completions {
 		collected = append(collected, r)
 		ready, _ := h.Complete(r.ActionID)
@@ -153,13 +153,13 @@ func (h *testDepGraphHelper) drainAndComplete(completions <-chan ActionCompletio
 // runPoolWithDrain starts the pool, drains completions in a goroutine (calling
 // Complete on each), waits for all actions to finish, then stops the pool
 // and returns the collected completions.
-func runPoolWithDrain(ctx context.Context, pool *WorkerPool, dgh *testDepGraphHelper) []ActionCompletion {
+func runPoolWithDrain(ctx context.Context, pool *workerPool, dgh *testDepGraphHelper) []actionCompletion {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	pool.Start(ctx, 4)
 
-	var results []ActionCompletion
+	var results []actionCompletion
 	done := make(chan struct{})
 	go func() {
 		results = dgh.drainAndComplete(pool.Completions())
@@ -174,7 +174,7 @@ func runPoolWithDrain(ctx context.Context, pool *WorkerPool, dgh *testDepGraphHe
 }
 
 // countResults counts succeeded and failed completions.
-func countResults(results []ActionCompletion) (succeeded, failed int) {
+func countResults(results []actionCompletion) (succeeded, failed int) {
 	for i := range results {
 		r := &results[i]
 		if r.Success {
@@ -186,7 +186,7 @@ func countResults(results []ActionCompletion) (succeeded, failed int) {
 	return succeeded, failed
 }
 
-func requireCompletionsChannelClosed(t *testing.T, pool *WorkerPool, reason string) {
+func requireCompletionsChannelClosed(t *testing.T, pool *workerPool, reason string) {
 	t.Helper()
 
 	select {
@@ -201,8 +201,8 @@ func TestWorkerPool_ClosedDispatchChannelClosesCompletions(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	dispatchCh := make(chan *TrackedAction)
-	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
+	dispatchCh := make(chan *trackedAction)
+	pool := newWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
 
 	pool.Start(t.Context(), 1)
 	close(dispatchCh)
@@ -215,9 +215,9 @@ func TestWorkerPool_ContextCancellationClosesCompletions(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	dispatchCh := make(chan *TrackedAction)
+	dispatchCh := make(chan *trackedAction)
 	ctx, cancel := context.WithCancel(t.Context())
-	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
+	pool := newWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
 
 	pool.Start(ctx, 1)
 	cancel()
@@ -230,8 +230,8 @@ func TestWorkerPool_StopIsIdempotentAfterCompletionsClose(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	dispatchCh := make(chan *TrackedAction)
-	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
+	dispatchCh := make(chan *trackedAction)
+	pool := newWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
 
 	pool.Start(t.Context(), 1)
 	close(dispatchCh)
@@ -251,16 +251,16 @@ func TestWorkerPool_SendResultDropsWhenContextCancellationWins(t *testing.T) {
 	t.Parallel()
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	dispatchCh := make(chan *TrackedAction)
-	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
+	dispatchCh := make(chan *trackedAction)
+	pool := newWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
 
 	// Saturate the completions buffer so sendResult cannot complete before shutdown.
-	pool.completions <- ActionCompletion{Path: "buffered.txt", ActionID: 1}
+	pool.completions <- actionCompletion{Path: "buffered.txt", ActionID: 1}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	pool.sendResult(ctx, &TrackedAction{
+	pool.sendResult(ctx, &trackedAction{
 		ID: 2,
 		Action: Action{
 			Type: ActionUpload,
@@ -291,9 +291,9 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 			Path:       "Documents",
 			DriveID:    driveid.New("0000000000000001"),
 			ItemID:     "folder-doc",
-			CreateSide: CreateLocal,
-			View: &PathView{
-				Remote: &RemoteState{
+			CreateSide: createLocal,
+			View: &pathView{
+				Remote: &remoteState{
 					ItemID:   "folder-doc",
 					DriveID:  driveid.New("0000000000000001"),
 					ItemType: ItemTypeFolder,
@@ -305,7 +305,7 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -338,10 +338,10 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 			Type:       ActionFolderCreate,
 			Path:       "NewDir",
 			DriveID:    driveid.New("0000000000000001"),
-			CreateSide: CreateLocal,
-			View: &PathView{
+			CreateSide: createLocal,
+			View: &pathView{
 				Path: "NewDir",
-				Remote: &RemoteState{
+				Remote: &remoteState{
 					ItemID:   "newdir-id",
 					DriveID:  driveid.New("0000000000000001"),
 					ItemType: ItemTypeFolder,
@@ -353,7 +353,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 			Path:    "NewDir/file.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "file-id",
-			View:    &PathView{Path: "NewDir/file.txt"},
+			View:    &pathView{Path: "NewDir/file.txt"},
 		},
 	}
 
@@ -361,7 +361,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	dgh.Add(&actions[0], 0, nil)
 	dgh.Add(&actions[1], 1, []int64{0})
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -386,8 +386,8 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 			Path:    "slow.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "slow-id",
-			View: &PathView{
-				Remote: &RemoteState{
+			View: &pathView{
+				Remote: &remoteState{
 					ItemID:  "slow-id",
 					DriveID: driveid.New("0000000000000001"),
 					Size:    100,
@@ -413,7 +413,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	})
 	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	select {
@@ -451,14 +451,14 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 			Path:    "result-test.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "del-id",
-			View:    &PathView{},
+			View:    &pathView{},
 		},
 	}
 
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 42, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	// Verify result for the action.
@@ -495,8 +495,8 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 			Path:    "fail-me.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "fail-id",
-			View: &PathView{
-				Remote: &RemoteState{
+			View: &pathView{
+				Remote: &remoteState{
 					ItemID:  "fail-id",
 					DriveID: driveid.New("0000000000000001"),
 					Size:    10,
@@ -509,7 +509,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -560,9 +560,9 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 			Type:       ActionFolderCreate,
 			Path:       "Uploads",
 			DriveID:    driveid.New("0000000000000001"),
-			CreateSide: CreateLocal,
-			View: &PathView{
-				Remote: &RemoteState{
+			CreateSide: createLocal,
+			View: &pathView{
+				Remote: &remoteState{
 					ItemID:   "uploads-folder-id",
 					DriveID:  driveid.New("0000000000000001"),
 					ItemType: ItemTypeFolder,
@@ -573,7 +573,7 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 			Type:    ActionUpload,
 			Path:    "Uploads/doc.txt",
 			DriveID: driveid.New("0000000000000001"),
-			View:    &PathView{Path: "Uploads/doc.txt"},
+			View:    &pathView{Path: "Uploads/doc.txt"},
 		},
 	}
 
@@ -586,7 +586,7 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	dgh.Add(&actions[0], 0, nil)
 	dgh.Add(&actions[1], 1, []int64{0})
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -623,8 +623,8 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 			Path:    "panic-me.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "panic-id",
-			View: &PathView{
-				Remote: &RemoteState{
+			View: &pathView{
+				Remote: &remoteState{
 					ItemID:  "panic-id",
 					DriveID: driveid.New("0000000000000001"),
 					Size:    10,
@@ -636,7 +636,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	results := runPoolWithDrain(ctx, pool, dgh)
 
 	// If we got here, the panic was recovered — the process didn't crash.
@@ -673,18 +673,18 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 			Path:    "test-no-complete.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "del-id",
-			View:    &PathView{},
+			View:    &pathView{},
 		},
 	}
 
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
 	// Read one completion from the channel — worker must send a completion.
-	var result ActionCompletion
+	var result actionCompletion
 	select {
 	case r := <-pool.Completions():
 		result = r
@@ -736,17 +736,17 @@ func TestActionCompletion_PopulatesFromAction(t *testing.T) {
 			Path:    "shared-action.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "del-id",
-			View:    &PathView{},
+			View:    &pathView{},
 		},
 	}
 
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 77, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
-	var result ActionCompletion
+	var result actionCompletion
 	select {
 	case r := <-pool.Completions():
 		result = r
@@ -790,8 +790,8 @@ func TestActionCompletion_HTTPStatusAndRetryAfter(t *testing.T) {
 			Path:    "throttled.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "throttled-id",
-			View: &PathView{
-				Remote: &RemoteState{
+			View: &pathView{
+				Remote: &remoteState{
 					ItemID:  "throttled-id",
 					DriveID: driveid.New("0000000000000001"),
 					Size:    10,
@@ -803,10 +803,10 @@ func TestActionCompletion_HTTPStatusAndRetryAfter(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 	pool.Start(ctx, 4)
 
-	var result ActionCompletion
+	var result actionCompletion
 	select {
 	case r := <-pool.Completions():
 		result = r
@@ -827,7 +827,7 @@ func TestExtractHTTPStatus_GraphError(t *testing.T) {
 	t.Parallel()
 
 	ge := &graph.GraphError{StatusCode: 404, Message: "not found"}
-	assert.Equal(t, 404, ExtractHTTPStatus(ge))
+	assert.Equal(t, 404, extractHTTPStatus(ge))
 }
 
 func TestExtractHTTPStatus_WrappedGraphError(t *testing.T) {
@@ -835,32 +835,32 @@ func TestExtractHTTPStatus_WrappedGraphError(t *testing.T) {
 
 	ge := &graph.GraphError{StatusCode: 429, Message: "throttled"}
 	wrapped := fmt.Errorf("download failed: %w", ge)
-	assert.Equal(t, 429, ExtractHTTPStatus(wrapped))
+	assert.Equal(t, 429, extractHTTPStatus(wrapped))
 }
 
 func TestExtractHTTPStatus_NonGraphError(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, 0, ExtractHTTPStatus(fmt.Errorf("network timeout")))
+	assert.Equal(t, 0, extractHTTPStatus(fmt.Errorf("network timeout")))
 }
 
 func TestExtractHTTPStatus_Nil(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, 0, ExtractHTTPStatus(nil))
+	assert.Equal(t, 0, extractHTTPStatus(nil))
 }
 
 func TestExtractRetryAfter_GraphError(t *testing.T) {
 	t.Parallel()
 
 	ge := &graph.GraphError{StatusCode: 429, RetryAfter: 30 * time.Second}
-	assert.Equal(t, 30*time.Second, ExtractRetryAfter(ge))
+	assert.Equal(t, 30*time.Second, extractRetryAfter(ge))
 }
 
 func TestExtractRetryAfter_Nil(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, time.Duration(0), ExtractRetryAfter(nil))
+	assert.Equal(t, time.Duration(0), extractRetryAfter(nil))
 }
 
 // ---------------------------------------------------------------------------
@@ -892,15 +892,15 @@ func TestEngineOwnsCounters(t *testing.T) {
 			Path:    "ok.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "ok-id",
-			View:    &PathView{},
+			View:    &pathView{},
 		},
 		{
 			Type:    ActionDownload,
 			Path:    "fail.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "fail-id",
-			View: &PathView{
-				Remote: &RemoteState{
+			View: &pathView{
+				Remote: &remoteState{
 					ItemID:  "fail-id",
 					DriveID: driveid.New("0000000000000001"),
 					Size:    10,
@@ -913,7 +913,7 @@ func TestEngineOwnsCounters(t *testing.T) {
 	dgh.Add(&actions[0], 0, nil)
 	dgh.Add(&actions[1], 1, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
 
 	// Simulate engine-owned counters.
 	var succeeded, failed atomic.Int32
@@ -946,5 +946,5 @@ func TestExtractRetryAfter_Wrapped(t *testing.T) {
 
 	ge := &graph.GraphError{StatusCode: 503, RetryAfter: 120 * time.Second}
 	wrapped := fmt.Errorf("request failed: %w", ge)
-	assert.Equal(t, 120*time.Second, ExtractRetryAfter(wrapped))
+	assert.Equal(t, 120*time.Second, extractRetryAfter(wrapped))
 }

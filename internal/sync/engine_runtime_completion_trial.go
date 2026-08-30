@@ -10,10 +10,10 @@ import (
 func (flow *engineFlow) applyTrialReleaseDecision(
 	ctx context.Context,
 	watch *watchRuntime,
-	current *TrackedAction,
-	r *ActionCompletion,
+	current *trackedAction,
+	r *actionCompletion,
 	trialScopeKey ScopeKey,
-) ([]*TrackedAction, error) {
+) ([]*trackedAction, error) {
 	if err := flow.releaseScope(ctx, watch, trialScopeKey); err != nil {
 		return nil, err
 	}
@@ -25,8 +25,8 @@ func (flow *engineFlow) applyTrialReleaseDecision(
 func (flow *engineFlow) applyTrialExtendDecision(
 	ctx context.Context,
 	watch *watchRuntime,
-	current *TrackedAction,
-	r *ActionCompletion,
+	current *trackedAction,
+	r *actionCompletion,
 	trialScopeKey ScopeKey,
 ) error {
 	flow.markFinished(current)
@@ -43,9 +43,9 @@ func (flow *engineFlow) applyTrialExtendDecision(
 func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 	ctx context.Context,
 	watch *watchRuntime,
-	current *TrackedAction,
-	decision *ResultDecision,
-	r *ActionCompletion,
+	current *trackedAction,
+	decision *resultDecision,
+	r *actionCompletion,
 	bl *Baseline,
 	trialScopeKey ScopeKey,
 ) error {
@@ -92,9 +92,9 @@ func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 
 func (flow *engineFlow) applyTrialRetryFallback(
 	ctx context.Context,
-	current *TrackedAction,
-	decision *ResultDecision,
-	r *ActionCompletion,
+	current *trackedAction,
+	decision *resultDecision,
+	r *actionCompletion,
 ) (bool, error) {
 	if decision.Persistence != persistRetryWork {
 		return false, fmt.Errorf("trial retry fallback for %s: missing retry_work persistence", r.Path)
@@ -107,7 +107,7 @@ func (flow *engineFlow) applyTrialRetryFallback(
 	return persisted, nil
 }
 
-func shouldTransitionTrialFallbackScope(decision *ResultDecision) bool {
+func shouldTransitionTrialFallbackScope(decision *resultDecision) bool {
 	return decision != nil &&
 		decision.Class == errclass.ClassBlockScopeingTransient &&
 		!decision.ScopeKey.IsZero()
@@ -116,8 +116,8 @@ func shouldTransitionTrialFallbackScope(decision *ResultDecision) bool {
 func (flow *engineFlow) applyTrialReclassification(
 	ctx context.Context,
 	watch *watchRuntime,
-	decision *ResultDecision,
-	r *ActionCompletion,
+	decision *resultDecision,
+	r *actionCompletion,
 	bl *Baseline,
 ) (bool, error) {
 	if handled, err := flow.applyTrialPermissionReclassification(ctx, watch, r, bl); handled {
@@ -128,7 +128,7 @@ func (flow *engineFlow) applyTrialReclassification(
 		if err := flow.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey); err != nil {
 			return false, err
 		}
-		return true, flow.applyBlockScope(ctx, watch, ScopeUpdateResult{
+		return true, flow.applyBlockScope(ctx, watch, scopeUpdateResult{
 			Block:         true,
 			ScopeKey:      decision.ScopeKey,
 			ConditionType: decision.ScopeKey.ConditionType(),

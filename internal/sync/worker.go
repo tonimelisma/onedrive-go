@@ -20,14 +20,14 @@ var (
 // minWorkers is the floor for total worker count.
 const minWorkers = 4
 
-// WorkerPool spawns goroutines that pull TrackedActions from the dispatch
+// workerPool spawns goroutines that pull TrackedActions from the dispatch
 // channel, execute them, persist success outcomes, and send completions back
 // to the engine.
 // Workers are pure executors — they NEVER call depGraph.Complete(). The engine
 // owns all completion decisions (R-6.8.9).
-type WorkerPool struct {
-	cfg           *ExecutorConfig
-	dispatchCh    <-chan *TrackedAction
+type workerPool struct {
+	cfg           *executorConfig
+	dispatchCh    <-chan *trackedAction
 	baseline      *SyncStore
 	logger        *slog.Logger
 	perfCollector *perf.Collector
@@ -36,31 +36,31 @@ type WorkerPool struct {
 	// reads from this channel, classifies completions, and calls depGraph.Complete.
 	// Failed items are persisted through the engine-owned retry/block-scope
 	// authorities; observation-owned issues are written by observation passes.
-	completions chan ActionCompletion
+	completions chan actionCompletion
 
 	cancel    context.CancelFunc
 	wg        stdsync.WaitGroup
 	closeOnce stdsync.Once
 }
 
-// NewWorkerPool creates a pool without starting any workers. planSize
+// newWorkerPool creates a pool without starting any workers. planSize
 // determines the result channel buffer (use the number of actions in the
 // plan for one-shot mode, or a generous buffer for watch mode).
 //
 // dispatchCh provides actions ready for execution. Workers exit only when the
 // owning context is canceled or the dispatch channel is closed.
-func NewWorkerPool(
-	cfg *ExecutorConfig,
-	dispatchCh <-chan *TrackedAction,
+func newWorkerPool(
+	cfg *executorConfig,
+	dispatchCh <-chan *trackedAction,
 	baseline *SyncStore,
 	logger *slog.Logger,
 	planSize int,
-) *WorkerPool {
+) *workerPool {
 	if planSize < 1 {
 		planSize = 1
 	}
 
-	return &WorkerPool{
+	return &workerPool{
 		cfg:           cfg,
 		dispatchCh:    dispatchCh,
 		baseline:      baseline,
@@ -70,14 +70,14 @@ func NewWorkerPool(
 		// the number of actions, so workers never block). Watch mode passes
 		// watchCompletionBuf with a drain goroutine reading completions
 		// concurrently, so blocking is unlikely under normal load.
-		completions: make(chan ActionCompletion, planSize),
+		completions: make(chan actionCompletion, planSize),
 	}
 }
 
 // Start spawns a flat pool of goroutines, all reading from the single dispatch
 // channel. total is the desired concurrency (typically cfg.TransferWorkers).
 // Minimum 4 workers.
-func (wp *WorkerPool) Start(ctx context.Context, total int) {
+func (wp *workerPool) Start(ctx context.Context, total int) {
 	if total < minWorkers {
 		total = minWorkers
 	}
@@ -102,7 +102,7 @@ func (wp *WorkerPool) Start(ctx context.Context, total int) {
 
 // Stop cancels all in-flight work, waits for goroutines to exit, and closes
 // the completions channel so the engine-owned completion loop can terminate.
-func (wp *WorkerPool) Stop() {
+func (wp *workerPool) Stop() {
 	if wp.cancel != nil {
 		wp.cancel()
 	}
@@ -113,7 +113,7 @@ func (wp *WorkerPool) Stop() {
 
 // worker is the main loop for a single goroutine. It reads from dispatchCh
 // until the context is canceled or all actions are complete.
-func (wp *WorkerPool) worker(ctx context.Context) {
+func (wp *workerPool) worker(ctx context.Context) {
 	defer wp.wg.Done()
 
 	for {
@@ -136,7 +136,7 @@ func (wp *WorkerPool) worker(ctx context.Context) {
 // safeExecuteAction wraps executeAction with panic recovery so a single
 // action panic doesn't crash the entire program. The engine receives the
 // panic as a failed ActionCompletion and decides how to handle it.
-func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) {
+func (wp *workerPool) safeExecuteAction(ctx context.Context, ta *trackedAction) {
 	defer func() {
 		if r := recover(); r != nil {
 			wp.logger.Error("worker: panic in action execution",
@@ -156,7 +156,7 @@ func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) 
 // executeAction runs a single tracked action: execute, persist success
 // outcomes, and send the result to the engine. Workers are pure executors —
 // they NEVER call depGraph.Complete().
-func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
+func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 	// Per-action cancellable context.
 	actionCtx, cancel := context.WithCancel(ctx)
 	ta.Cancel = cancel
@@ -179,7 +179,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	}
 
 	// Execute the action.
-	exec := NewExecution(wp.cfg, bl)
+	exec := newExecution(wp.cfg, bl)
 	outcome := wp.dispatchAction(actionCtx, exec, ta)
 
 	// Persist success outcomes immediately via the store-owned mutation input.
@@ -203,7 +203,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	// NO depGraph.Complete() — engine owns completion decisions.
 }
 
-func (wp *WorkerPool) validateActionFreshness(ctx context.Context, ta *TrackedAction) error {
+func (wp *workerPool) validateActionFreshness(ctx context.Context, ta *trackedAction) error {
 	if ta == nil {
 		return nil
 	}
@@ -217,10 +217,10 @@ func (wp *WorkerPool) validateActionFreshness(ctx context.Context, ta *TrackedAc
 	}
 
 	wp.recordWorkerStartSuperseded(decision)
-	return fmt.Errorf("%w: %s", ErrActionPreconditionChanged, decision.Reason)
+	return fmt.Errorf("%w: %s", errActionPreconditionChanged, decision.Reason)
 }
 
-func (wp *WorkerPool) recordWorkerStartSuperseded(decision actionFreshnessDecision) {
+func (wp *workerPool) recordWorkerStartSuperseded(decision actionFreshnessDecision) {
 	switch decision.Source {
 	case actionFreshnessSourceLocalTruth:
 		wp.collector().RecordSuperseded(perf.SupersededSourceWorkerStartLocalTruth, 1)
@@ -232,9 +232,9 @@ func (wp *WorkerPool) recordWorkerStartSuperseded(decision actionFreshnessDecisi
 }
 
 // dispatchAction routes a tracked action to the appropriate executor method.
-func (wp *WorkerPool) dispatchAction(
-	ctx context.Context, exec *Executor, ta *TrackedAction,
-) ActionOutcome {
+func (wp *workerPool) dispatchAction(
+	ctx context.Context, exec *executor, ta *trackedAction,
+) actionOutcome {
 	action := &ta.Action
 
 	switch action.Type {
@@ -253,14 +253,14 @@ func (wp *WorkerPool) dispatchAction(
 	case ActionRemoteDelete:
 		return exec.ExecuteRemoteDelete(ctx, action)
 	case ActionBaselineUpdate, ActionCleanup:
-		return ActionOutcome{
+		return actionOutcome{
 			Action:  action.Type,
 			Path:    action.Path,
 			Success: false,
 			Error:   errPublicationOnlyActionType,
 		}
 	default:
-		return ActionOutcome{
+		return actionOutcome{
 			Action:  action.Type,
 			Path:    action.Path,
 			Success: false,
@@ -273,7 +273,7 @@ func (wp *WorkerPool) dispatchAction(
 // engine reads from this channel, classifies each completion, and calls
 // depGraph.Complete. Failed items become retry_work, block scopes, or other
 // engine-owned durable control state for held release and scope lifecycle.
-func (wp *WorkerPool) Completions() <-chan ActionCompletion {
+func (wp *workerPool) Completions() <-chan actionCompletion {
 	return wp.completions
 }
 
@@ -285,7 +285,7 @@ func (wp *WorkerPool) Completions() <-chan ActionCompletion {
 // If the context is canceled before the completion is sent (engine shutdown),
 // the ActionCompletion is silently dropped. The engine handles shutdown via
 // context cancellation on the result-processing loop (resultShutdown classification).
-func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, outcome *ActionOutcome, actionErr error) {
+func (wp *workerPool) sendResult(ctx context.Context, ta *trackedAction, outcome *actionOutcome, actionErr error) {
 	r := actionCompletionFromTrackedAction(ta, outcome, actionErr)
 	wp.recordLivePreconditionSuperseded(&r, outcome)
 
@@ -295,21 +295,21 @@ func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, outcome
 	}
 }
 
-func (wp *WorkerPool) recordLivePreconditionSuperseded(r *ActionCompletion, outcome *ActionOutcome) {
-	if outcome == nil || r == nil || !errors.Is(r.Err, ErrActionPreconditionChanged) {
+func (wp *workerPool) recordLivePreconditionSuperseded(r *actionCompletion, outcome *actionOutcome) {
+	if outcome == nil || r == nil || !errors.Is(r.Err, errActionPreconditionChanged) {
 		return
 	}
 
 	switch r.FailureCapability {
-	case PermissionCapabilityLocalRead, PermissionCapabilityLocalWrite:
+	case permissionCapabilityLocalRead, permissionCapabilityLocalWrite:
 		wp.collector().RecordSuperseded(perf.SupersededSourceLiveLocalPrecondition, 1)
-	case PermissionCapabilityRemoteRead, PermissionCapabilityRemoteWrite:
+	case permissionCapabilityRemoteRead, permissionCapabilityRemoteWrite:
 		wp.collector().RecordSuperseded(perf.SupersededSourceLiveRemotePrecondition, 1)
-	case PermissionCapabilityUnknown:
+	case permissionCapabilityUnknown:
 	}
 }
 
-func (wp *WorkerPool) collector() *perf.Collector {
+func (wp *workerPool) collector() *perf.Collector {
 	if wp == nil {
 		return nil
 	}
@@ -317,15 +317,15 @@ func (wp *WorkerPool) collector() *perf.Collector {
 	return wp.perfCollector
 }
 
-func (wp *WorkerPool) closeCompletions() {
+func (wp *workerPool) closeCompletions() {
 	wp.closeOnce.Do(func() {
 		close(wp.completions)
 	})
 }
 
-// ExtractHTTPStatus unwraps a graph.GraphError from err and returns its
+// extractHTTPStatus unwraps a graph.GraphError from err and returns its
 // StatusCode. Returns 0 if err is nil or not a GraphError.
-func ExtractHTTPStatus(err error) int {
+func extractHTTPStatus(err error) int {
 	if err == nil {
 		return 0
 	}
@@ -338,9 +338,9 @@ func ExtractHTTPStatus(err error) int {
 	return 0
 }
 
-// ExtractRetryAfter unwraps a graph.GraphError from err and returns its
+// extractRetryAfter unwraps a graph.GraphError from err and returns its
 // RetryAfter duration. Returns 0 if err is nil or not a GraphError.
-func ExtractRetryAfter(err error) time.Duration {
+func extractRetryAfter(err error) time.Duration {
 	if err == nil {
 		return 0
 	}

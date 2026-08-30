@@ -13,20 +13,20 @@ func TestConditionKeyForStoredCondition_RepresentativeMappings(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, ConditionInvalidFilename,
-		ConditionKeyForStoredCondition(IssueInvalidFilename, ScopeKey{}))
+		conditionKeyForStoredCondition(IssueInvalidFilename, ScopeKey{}))
 	assert.Equal(t, ConditionRemoteWriteDenied,
-		ConditionKeyForStoredCondition(IssueRemoteWriteDenied, ScopeKey{}))
+		conditionKeyForStoredCondition(IssueRemoteWriteDenied, ScopeKey{}))
 	assert.Equal(t, ConditionServiceOutage,
-		ConditionKeyForStoredCondition("", SKService()))
+		conditionKeyForStoredCondition("", SKService()))
 	assert.Equal(t, ConditionQuotaExceeded,
-		ConditionKeyForStoredCondition("custom_issue", SKQuotaOwn()))
+		conditionKeyForStoredCondition("custom_issue", SKQuotaOwn()))
 	assert.Equal(t, ConditionUnexpectedCondition,
-		ConditionKeyForStoredCondition("custom_issue", ScopeKey{Kind: ScopeKeyKind(99)}))
+		conditionKeyForStoredCondition("custom_issue", ScopeKey{Kind: ScopeKeyKind(99)}))
 	assert.Equal(t, ConditionRateLimited,
-		ConditionKeyForStoredCondition("", SKThrottleDrive(driveid.New("0000000000000001"))))
+		conditionKeyForStoredCondition("", SKThrottleDrive(driveid.New("0000000000000001"))))
 	assert.Equal(t, ConditionQuotaExceeded,
-		ConditionKeyForStoredCondition("custom_issue", SKQuotaOwn()))
-	assert.Empty(t, ConditionKeyForStoredCondition("", ScopeKey{}))
+		conditionKeyForStoredCondition("custom_issue", SKQuotaOwn()))
+	assert.Empty(t, conditionKeyForStoredCondition("", ScopeKey{}))
 }
 
 // Validates: R-2.10.47, R-6.8.16
@@ -46,15 +46,15 @@ func TestConditionKeyForIssueType_RepresentativeMappings(t *testing.T) {
 
 	assert.Equal(t, ConditionAuthenticationRequired, mustConditionKeyForIssueType(t, IssueUnauthorized))
 	assert.Equal(t, ConditionQuotaExceeded, mustConditionKeyForIssueType(t, IssueQuotaExceeded))
-	assert.Equal(t, ConditionRemoteReadDenied, mustConditionKeyForIssueType(t, IssueRemoteReadDenied))
-	assert.Equal(t, ConditionLocalReadDenied, mustConditionKeyForIssueType(t, IssueLocalReadDenied))
-	assert.Equal(t, ConditionLocalWriteDenied, mustConditionKeyForIssueType(t, IssueLocalWriteDenied))
+	assert.Equal(t, ConditionRemoteReadDenied, mustConditionKeyForIssueType(t, issueRemoteReadDenied))
+	assert.Equal(t, ConditionLocalReadDenied, mustConditionKeyForIssueType(t, issueLocalReadDenied))
+	assert.Equal(t, ConditionLocalWriteDenied, mustConditionKeyForIssueType(t, issueLocalWriteDenied))
 	assert.Equal(t, ConditionInvalidFilename, mustConditionKeyForIssueType(t, IssueInvalidFilename))
-	assert.Equal(t, ConditionPathTooLong, mustConditionKeyForIssueType(t, IssuePathTooLong))
-	assert.Equal(t, ConditionFileTooLarge, mustConditionKeyForIssueType(t, IssueFileTooLarge))
-	assert.Equal(t, ConditionCaseCollision, mustConditionKeyForIssueType(t, IssueCaseCollision))
-	assert.Equal(t, ConditionDiskFull, mustConditionKeyForIssueType(t, IssueDiskFull))
-	assert.Equal(t, ConditionFileTooLargeForSpace, mustConditionKeyForIssueType(t, IssueFileTooLargeForSpace))
+	assert.Equal(t, ConditionPathTooLong, mustConditionKeyForIssueType(t, issuePathTooLong))
+	assert.Equal(t, ConditionFileTooLarge, mustConditionKeyForIssueType(t, issueFileTooLarge))
+	assert.Equal(t, ConditionCaseCollision, mustConditionKeyForIssueType(t, issueCaseCollision))
+	assert.Equal(t, ConditionDiskFull, mustConditionKeyForIssueType(t, issueDiskFull))
+	assert.Equal(t, ConditionFileTooLargeForSpace, mustConditionKeyForIssueType(t, issueFileTooLargeForSpace))
 
 	key, ok := conditionKeyForIssueType("custom_issue")
 	assert.False(t, ok)

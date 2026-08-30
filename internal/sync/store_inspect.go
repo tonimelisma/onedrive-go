@@ -80,16 +80,16 @@ func ReadShortcutRootStatusSnapshot(
 	})
 }
 
-// ReadPathTruthStatus opens a read-only inspector, derives current truth
+// readPathTruthStatus opens a read-only inspector, derives current truth
 // availability for the requested paths from durable observation issues and
 // read-boundary issue scope keys, and closes the inspector before returning.
-func ReadPathTruthStatus(
+func readPathTruthStatus(
 	ctx context.Context,
 	dbPath string,
 	logger *slog.Logger,
 	paths []string,
-) (map[string]PathTruthStatus, error) {
-	return readWithInspector(dbPath, logger, func(inspector *storeInspector) (map[string]PathTruthStatus, error) {
+) (map[string]pathTruthStatus, error) {
+	return readWithInspector(dbPath, logger, func(inspector *storeInspector) (map[string]pathTruthStatus, error) {
 		return inspector.ReadPathTruthStatus(ctx, paths)
 	})
 }
@@ -133,7 +133,7 @@ func (m *SyncStore) ReadShortcutRootStatusSnapshot(
 func (m *SyncStore) ReadPathTruthStatus(
 	ctx context.Context,
 	paths []string,
-) (map[string]PathTruthStatus, error) {
+) (map[string]pathTruthStatus, error) {
 	if m == nil {
 		return nil, fmt.Errorf("read path truth status: nil store")
 	}
@@ -279,16 +279,16 @@ func (i *storeInspector) ReadShortcutRootStatusSnapshot(
 func (i *storeInspector) ReadPathTruthStatus(
 	ctx context.Context,
 	paths []string,
-) (map[string]PathTruthStatus, error) {
+) (map[string]pathTruthStatus, error) {
 	if len(paths) == 0 {
-		return map[string]PathTruthStatus{}, nil
+		return map[string]pathTruthStatus{}, nil
 	}
 
 	observationIssues, err := queryObservationIssueRowsWithRunner(ctx, i.db)
 	if err != nil {
 		return nil, fmt.Errorf("read path truth status observation issues: %w", err)
 	}
-	return NewTruthAvailabilityIndex(observationIssues).StatusByPath(paths), nil
+	return newTruthAvailabilityIndex(observationIssues).StatusByPath(paths), nil
 }
 
 func (i *storeInspector) readCount(ctx context.Context, query string) (int, error) {

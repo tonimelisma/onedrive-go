@@ -1,0 +1,28 @@
+# Dependency freshness. Both ecosystems matter here: Go modules carry the
+# runtime attack surface, and every GitHub Action is pinned to an exact
+# version, which is good hygiene but guarantees silent staleness without
+# something to propose the bumps.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      golang-x:
+        patterns:
+          - golang.org/x/*
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+      include: scope

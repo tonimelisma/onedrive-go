@@ -69,16 +69,16 @@ const (
 )
 
 type plannerVisibleRows struct {
-	Local  []LocalStateRow
-	Remote []RemoteStateRow
+	Local  []localStateRow
+	Remote []remoteStateRow
 }
 
-func filterLocalStateRowsForPlanning(rows []LocalStateRow, filter ContentFilterConfig) []LocalStateRow {
+func filterLocalStateRowsForPlanning(rows []localStateRow, filter ContentFilterConfig) []localStateRow {
 	if len(rows) == 0 {
 		return nil
 	}
-	visibility := NewContentFilter(filter)
-	filtered := make([]LocalStateRow, 0, len(rows))
+	visibility := newContentFilter(filter)
+	filtered := make([]localStateRow, 0, len(rows))
 	for i := range rows {
 		if visibility.Visible(rows[i].Path, rows[i].ItemType) {
 			filtered = append(filtered, rows[i])
@@ -87,12 +87,12 @@ func filterLocalStateRowsForPlanning(rows []LocalStateRow, filter ContentFilterC
 	return filtered
 }
 
-func filterRemoteStateRowsForPlanning(rows []RemoteStateRow, filter ContentFilterConfig) []RemoteStateRow {
+func filterRemoteStateRowsForPlanning(rows []remoteStateRow, filter ContentFilterConfig) []remoteStateRow {
 	if len(rows) == 0 {
 		return nil
 	}
-	visibility := NewContentFilter(filter)
-	filtered := make([]RemoteStateRow, 0, len(rows))
+	visibility := newContentFilter(filter)
+	filtered := make([]remoteStateRow, 0, len(rows))
 	for i := range rows {
 		if visibility.Visible(rows[i].Path, rows[i].ItemType) {
 			filtered = append(filtered, rows[i])
@@ -105,7 +105,7 @@ func filterObservationIssueRowsForPlanning(rows []ObservationIssueRow, filter Co
 	if len(rows) == 0 {
 		return nil
 	}
-	visibility := NewContentFilter(filter)
+	visibility := newContentFilter(filter)
 	filtered := make([]ObservationIssueRow, 0, len(rows))
 	for i := range rows {
 		if visibility.Visible(rows[i].Path, ItemTypeFile) || visibility.Visible(rows[i].Path, ItemTypeFolder) {
@@ -118,8 +118,8 @@ func filterObservationIssueRowsForPlanning(rows []ObservationIssueRow, filter Co
 func replacePlannerVisibleStateTx(
 	ctx context.Context,
 	tx sqlTxRunner,
-	localRows []LocalStateRow,
-	remoteRows []RemoteStateRow,
+	localRows []localStateRow,
+	remoteRows []remoteStateRow,
 	contentDriveID driveid.ID,
 ) (plannerVisibleRows, error) {
 	for _, query := range []string{

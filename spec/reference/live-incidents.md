@@ -19,6 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260823-01 | Graph returned `serviceReadOnly` on `/me/drives` for every test account | mitigated | provider outage | 2026-08-23 | no |
 | LI-20260503-01 | Nightly incremental-delta E2E failed on unrelated unrecoverable delete noise | fixed | product bug | 2026-05-03 | no |
 | LI-20260430-03 | NestedDeletion setup treated transient mount-root delta 504 as deterministic failure | fixed | test harness | 2026-04-30 | yes |
 | LI-20260430-02 | Conflict-resolution downloads rejected their own conflict-copy removal | fixed | product bug | 2026-04-30 | no |
@@ -59,6 +60,79 @@ Promotion contract:
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20260823-01: Graph returned `serviceReadOnly` on `/me/drives` for every test account
+
+First seen: 2026-08-23
+Last seen: 2026-08-23 (ongoing at time of writing, ~1 hour)
+Area: live `integration` and `e2e` CI jobs, Graph drive discovery
+Suite / test: CI run `32622492185` on PR #704; `integration` job
+(`TestIntegration_Drives`, `TestIntegration_Drives_PersonalAccountFiltersPhantomDrives`)
+and `e2e` job (`TestE2E_AuthPreflight_Fast` for both accounts)
+Classification: provider outage
+Status: mitigated
+Recurring: no
+Summary: Every live job failed at drive discovery. `GET /me/drives` returned
+`HTTP 403` with Graph code `serviceReadOnly` and the message
+`Database Is Read Only`, for both test accounts, on freshly issued Key Vault
+tokens. The existing `drives-token-propagation` quirk retry treated it as a
+propagation delay and exhausted all ten attempts, because the retry family
+matches on 403 regardless of Graph code. No repo change is implicated: the
+failing call is plain drive discovery, the tokens were valid, and the same
+commit passed both `verify` legs including the full unit suite.
+Evidence:
+- `integration` job `97152688410`: ten consecutive attempts, all
+  `StatusCode:403 GraphCode:serviceReadOnly`, ending
+  `graph: drives-token-propagation retry exhausted after 10 attempts:
+  graph: HTTP 403 ...: Database Is Read Only`.
+- Token log line immediately before the failure reads
+  `expiry=2026-08-23T07:17:30.886Z expired=false`, so this is not credential
+  expiry.
+- `e2e` job `97152688313`: `TestE2E_AuthPreflight_Fast` failed for
+  `personal_kikkelimies123@outlook.com` and
+  `personal_testitesti18@outlook.com` with 43 occurrences of the same
+  `serviceReadOnly` / `Database Is Read Only` pair.
+- `verify (ubuntu-latest)` and `verify (macos-latest)` on the same commit were
+  unaffected; both legs passed fully.
+- The failure is scoped to one endpoint, which is the strongest evidence that
+  it is provider-side rather than credential or account state. In the same job,
+  `GET /me` returned `200` and `GET /drives/{driveID}/items/root` returned
+  `200`, while `GET /me/drives` returned `403 serviceReadOnly` on all twenty
+  attempts. Authentication works and the drive itself is readable; only drive
+  enumeration is unavailable.
+- Reproduced across thirteen CI runs over roughly two and a half hours
+  (`32622492185`, `32622862051`, `32623668929`, `32624226459` and ten
+  scripted reruns of the failed jobs), affecting both test accounts
+  identically every time. Both `verify` legs passed on every one of those
+  runs, so the failure never touched anything but the live lane.
+Resolution / mitigation: the outage itself is Microsoft-side and cleared on
+its own, but it exposed two client-side defects that are fixed.
+
+First, misclassification. The `drives-token-propagation` quirk family matches
+on `accessDenied`, which is the *outer* code here; `serviceReadOnly` is the
+inner one. A read-only window was therefore retried as if it were post-login
+projection lag, burning the full ten-attempt budget -- roughly 70-90 seconds
+per call -- on a condition that had been refusing for hours, and then
+reporting `retry exhausted`, which describes the client's behavior rather
+than the provider's state. `serviceReadOnly` is now excluded from that family
+and carries its own `graph.ErrProviderReadOnly` sentinel.
+
+Second, a false assertion. A red required check asserts that the change under
+test is broken. That was untrue: `GET /me` and `GET /drives/{id}/items/root`
+both returned `200` throughout, so authentication and the drive were fine and
+only the service was refusing. The live lanes now skip on this one explicit
+signal, reporting that the suite could not run. The skip is deliberately
+narrow -- ordinary `accessDenied` and every other failure stay red -- and is
+recorded in [system.md](../design/system.md) as the single documented
+exception to strict per-PR live verification.
+
+Note that the product already degraded correctly during the outage:
+`discoverAccessibleDrives` falls back to `/me/drive` and reports the account
+as degraded. Only the tests, which assert `Drives()` succeeds, had no way to
+distinguish "this endpoint is broken" from "this endpoint is unavailable".
+
+Follow-up: none outstanding. The retry-family and live-lane fixes described
+above were implemented in this increment.
 
 ## LI-20260503-01: Nightly incremental-delta E2E failed on unrelated unrecoverable delete noise
 
@@ -240,7 +314,7 @@ Summary: A conflict plan correctly expanded edit/edit and create/create
 conflicts into `ActionConflictCopy` plus a dependent `ActionDownload`, but the
 download executor revalidated the original planned local state after the
 conflict copy had intentionally renamed that canonical local file away. The
-download therefore returned `ErrActionPreconditionChanged` before restoring the
+download therefore returned `errActionPreconditionChanged` before restoring the
 remote winner, leaving the conflict copy on disk and the canonical path absent.
 Evidence:
 - The first local full-profile rerun after the status-harness fix passed
@@ -254,7 +328,7 @@ Evidence:
   `TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict` with the same
   absent canonical-path symptom.
 - A focused unit regression reproduced the executor boundary by adding the
-  planned `LocalState` to `TestExecutor_Conflict_EditEdit_KeepBoth`; it failed
+  planned `localState` to `TestExecutor_Conflict_EditEdit_KeepBoth`; it failed
   with the same stale precondition before the implementation change.
 Resolution / mitigation: Conflict-resolution downloads now treat the missing
 canonical local path as the expected post-`ActionConflictCopy` state while
@@ -608,7 +682,7 @@ Evidence:
   any shared-folder write or watch assertion, which isolated the bug to sync
   startup rather than the shared fixture logic.
 - [`internal/sync/scanner.go`](../../internal/sync/scanner.go) intentionally
-  treats a missing root directory as `ErrSyncRootMissing`, so once startup
+  treats a missing root directory as `errSyncRootMissing`, so once startup
   reached the scanner without creating the directory first the failure was
   deterministic.
 - [`spec/design/config.md`](../design/config.md) documented the historical

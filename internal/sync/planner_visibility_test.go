@@ -22,7 +22,7 @@ func TestReplacePlannerVisibleStateTx_PrunesRemoteDescendantsWhenBaselineFolderM
 			('file-docs', 'docs/file.txt', 'file', 'hash', 'hash')`)
 	require.NoError(t, err)
 
-	visible := plannerVisibleRowsForTest(t, store, nil, []RemoteStateRow{
+	visible := plannerVisibleRowsForTest(t, store, nil, []remoteStateRow{
 		{
 			DriveID:  driveid.New(engineTestDriveID),
 			ItemID:   "file-docs",
@@ -55,7 +55,7 @@ func TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMi
 			('file-docs', 'docs/file.txt', 'file', 'hash', 'hash')`)
 	require.NoError(t, err)
 
-	visible := plannerVisibleRowsForTest(t, store, []LocalStateRow{
+	visible := plannerVisibleRowsForTest(t, store, []localStateRow{
 		{
 			Path:     "docs/file.txt",
 			ItemType: ItemTypeFile,
@@ -74,8 +74,8 @@ func TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMi
 func plannerVisibleRowsForTest(
 	t *testing.T,
 	store *SyncStore,
-	localRows []LocalStateRow,
-	remoteRows []RemoteStateRow,
+	localRows []localStateRow,
+	remoteRows []remoteStateRow,
 ) plannerVisibleRows {
 	t.Helper()
 
@@ -96,7 +96,7 @@ func plannerVisibleRowsForTest(
 	return visible
 }
 
-func localStatePaths(rows []LocalStateRow) []string {
+func localStatePaths(rows []localStateRow) []string {
 	paths := make([]string, 0, len(rows))
 	for i := range rows {
 		paths = append(paths, rows[i].Path)
@@ -104,7 +104,7 @@ func localStatePaths(rows []LocalStateRow) []string {
 	return paths
 }
 
-func remoteStatePaths(rows []RemoteStateRow) []string {
+func remoteStatePaths(rows []remoteStateRow) []string {
 	paths := make([]string, 0, len(rows))
 	for i := range rows {
 		paths = append(paths, rows[i].Path)

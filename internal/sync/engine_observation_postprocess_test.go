@@ -13,10 +13,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-func testRemoteCreateEvent(path string, itemID string, driveID string) ChangeEvent {
-	return ChangeEvent{
-		Source:   SourceRemote,
-		Type:     ChangeCreate,
+func testRemoteCreateEvent(path string, itemID string, driveID string) changeEvent {
+	return changeEvent{
+		Source:   sourceRemote,
+		Type:     changeCreate,
 		Path:     path,
 		ItemID:   itemID,
 		ParentID: "root",
@@ -32,7 +32,7 @@ func testRemoteCreateEvent(path string, itemID string, driveID string) ChangeEve
 func testMountRootWatchBatch(
 	engine *Engine,
 	mode remoteObservationMode,
-	events []ChangeEvent,
+	events []changeEvent,
 	cursorToken string,
 	findings ObservationFindingsBatch,
 ) remoteObservationBatch {
@@ -90,7 +90,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCommitsObservedRowsAndCursor(t
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, []ChangeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, []changeEvent{
 		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -111,10 +111,10 @@ func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *te
 	eng.contentFilter = ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.dirtyBuf = newDirtyBuffer(eng.logger)
 	ctx := t.Context()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, []ChangeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, []changeEvent{
 		testRemoteCreateEvent("hidden/remote.txt", "item-hidden", eng.driveID.String()),
 	}, "cursor-hidden")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -179,8 +179,8 @@ func TestRemoteEventHasPlannerVisibleEffect_TransitionMatrix(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			event := ChangeEvent{
-				Source:   SourceRemote,
+			event := changeEvent{
+				Source:   sourceRemote,
 				Type:     ChangeModify,
 				Path:     tt.path,
 				OldPath:  tt.old,
@@ -204,7 +204,7 @@ func TestHandleRemoteObservationBatch_MountRootWatchCommitsObservedRowsAndPendin
 	batch := testMountRootWatchBatch(
 		eng.Engine,
 		remoteObservationModeDelta,
-		[]ChangeEvent{
+		[]changeEvent{
 			testRemoteCreateEvent("shared-watch.txt", "item-shared", eng.driveID.String()),
 		},
 		pendingCursor,
@@ -286,8 +286,8 @@ func TestHandleRemoteObservationBatch_MountRootReconcilesRemoteReadDeniedFinding
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "/", issues[0].Path)
-	assert.Equal(t, IssueRemoteReadDenied, issues[0].IssueType)
-	assert.Equal(t, SKPermRemoteRead(""), issues[0].ScopeKey)
+	assert.Equal(t, issueRemoteReadDenied, issues[0].IssueType)
+	assert.Equal(t, sKPermRemoteRead(""), issues[0].ScopeKey)
 
 	scopes, err := eng.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
@@ -306,7 +306,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchClearsRemoteReadDeniedFindings
 	findings := rootRemoteReadDeniedObservationFindingsBatch(eng.driveID)
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &findings, eng.nowFunc()))
 
-	batch := buildPrimaryWatchBatch(eng.Engine, []ChangeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, []changeEvent{
 		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -332,7 +332,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCanceledContextReturnsCommitEr
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, []ChangeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, []changeEvent{
 		testRemoteCreateEvent("primary-canceled.txt", "item-canceled", eng.driveID.String()),
 	}, "cursor-canceled")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -370,7 +370,7 @@ func TestReconcileSkippedObservationFindings_ReturnsErrorOnFailure(t *testing.T)
 	ctx := t.Context()
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	err := rt.reconcileSkippedObservationFindings(ctx, []SkippedItem{{
+	err := rt.reconcileSkippedObservationFindings(ctx, []skippedItem{{
 		Path:   "blocked.txt",
 		Reason: IssueInvalidFilename,
 		Detail: "invalid",
@@ -385,7 +385,7 @@ func TestHandleRemoteObservationBatch_FullRefreshApplyFailureMarksDirtyForRetry(
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	ctx := t.Context()
 	require.NoError(t, eng.baseline.Close(ctx))
@@ -428,7 +428,7 @@ func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationR
 		ItemType: ItemTypeFile,
 	}))
 
-	serviceScope := &ActiveScope{
+	serviceScope := &activeScope{
 		Key:           SKService(),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),

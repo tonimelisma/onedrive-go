@@ -22,7 +22,7 @@ type watchObserverTestOptions struct {
 	SafetyTickFunc        func(time.Duration) (<-chan time.Time, func())
 }
 
-func newWatchTestObserver(t *testing.T, watcher FsWatcher, opts watchObserverTestOptions) *LocalObserver {
+func newWatchTestObserver(t *testing.T, watcher fsWatcher, opts watchObserverTestOptions) *localObserver {
 	t.Helper()
 
 	baseline := opts.Baseline
@@ -30,12 +30,12 @@ func newWatchTestObserver(t *testing.T, watcher FsWatcher, opts watchObserverTes
 		baseline = emptyBaseline()
 	}
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
 	obs.SleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
 	obs.SafetyTickFunc = func(time.Duration) (<-chan time.Time, func()) {
 		return make(chan time.Time), func() {}
 	}
-	obs.WatcherFactory = func() (FsWatcher, error) {
+	obs.WatcherFactory = func() (fsWatcher, error) {
 		return watcher, nil
 	}
 
@@ -69,10 +69,10 @@ func newWatchTestObserver(t *testing.T, watcher FsWatcher, opts watchObserverTes
 
 func startMockWatch(
 	t *testing.T,
-	obs *LocalObserver,
+	obs *localObserver,
 	watcher *mockFsWatcher,
 	dir string,
-	events chan ChangeEvent,
+	events chan changeEvent,
 ) (context.CancelFunc, <-chan error) {
 	t.Helper()
 

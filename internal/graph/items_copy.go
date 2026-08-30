@@ -66,7 +66,7 @@ func (c *Client) CopyItem(
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	if _, drainErr := io.Copy(io.Discard, resp.Body); drainErr != nil {
 		return nil, fmt.Errorf("graph: draining copy response: %w", drainErr)
@@ -102,7 +102,7 @@ func (c *Client) PollCopyStatus(ctx context.Context, monitorURL string) (*CopySt
 	if err != nil {
 		return nil, fmt.Errorf("graph: polling copy status: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var status CopyStatus
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {

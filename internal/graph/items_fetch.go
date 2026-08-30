@@ -18,7 +18,7 @@ func (c *Client) fetchItem(ctx context.Context, apiPath string) (*Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var dir driveItemResponse
 	if err := json.NewDecoder(resp.Body).Decode(&dir); err != nil {
@@ -218,7 +218,7 @@ func (c *Client) listChildrenPage(ctx context.Context, path string, page int) ([
 		if err != nil {
 			return childrenPage{}, err
 		}
-		defer resp.Body.Close()
+		defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 		var lcr listChildrenResponse
 		if decErr := json.NewDecoder(resp.Body).Decode(&lcr); decErr != nil {

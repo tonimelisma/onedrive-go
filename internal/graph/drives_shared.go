@@ -42,7 +42,7 @@ func (c *Client) fetchItemPage(ctx context.Context, path, label string) ([]Item,
 	if err != nil {
 		return nil, "", err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var page struct {
 		Value    []driveItemResponse `json:"value"`

@@ -254,7 +254,7 @@ func seedDurableRecoveryTruth(
 		RemoteMtime:     now.UnixNano(),
 		ETag:            "etag-report",
 	}))
-	require.NoError(t, mgr.ReplaceLocalState(ctx, []LocalStateRow{{
+	require.NoError(t, mgr.ReplaceLocalState(ctx, []localStateRow{{
 		Path:             "docs/report.txt",
 		ItemType:         ItemTypeFile,
 		Hash:             "local-hash",
@@ -264,7 +264,7 @@ func seedDurableRecoveryTruth(
 		LocalInode:       99,
 		LocalHasIdentity: true,
 	}}))
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
 		DriveID:  driveID,
 		ItemID:   "remote-report",
 		Path:     "docs/report.txt",
@@ -521,7 +521,7 @@ func TestCommit_DeleteLikeActionsRemoveBaseline(t *testing.T) {
 	cases := []struct {
 		name         string
 		path         string
-		deleteAction ActionType
+		deleteAction actionType
 	}{
 		{name: "LocalDelete", path: "delete-me.txt", deleteAction: ActionLocalDelete},
 		{name: "RemoteDelete", path: "remote-del.txt", deleteAction: ActionRemoteDelete},
@@ -1060,7 +1060,7 @@ func TestNewSyncStore_RejectsUnversionedExistingStateDB(t *testing.T) {
 	mgr, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
 	require.Error(t, err)
 	require.Nil(t, mgr)
-	require.ErrorIs(t, err, ErrIncompatibleSchema)
+	require.ErrorIs(t, err, errIncompatibleSchema)
 	assert.Contains(t, err.Error(), "current schema")
 }
 
@@ -1158,7 +1158,7 @@ func TestCommitMutation_UnknownAction_ReturnsErrorAndSkipsDBWrite(t *testing.T) 
 	ctx := t.Context()
 
 	err := mgr.CommitMutation(ctx, &BaselineMutation{
-		Action:   ActionType(999),
+		Action:   actionType(999),
 		Success:  true,
 		Path:     "unknown.txt",
 		DriveID:  driveid.New("d"),
@@ -1205,7 +1205,7 @@ func TestUpdateBaselineCache_UnknownActionReloadsFromDB(t *testing.T) {
 	require.False(t, ok, "test setup should corrupt the cache before reload")
 
 	err := mgr.updateBaselineCache(ctx, &BaselineMutation{
-		Action: ActionType(999),
+		Action: actionType(999),
 		Path:   "ignored.txt",
 	})
 	require.NoError(t, err)
@@ -1780,4 +1780,24 @@ func TestCommitMutation_PersistsLocalFilesystemIdentity(t *testing.T) {
 	assert.Equal(t, uint64(700), entry.LocalDevice)
 	assert.Equal(t, uint64(900), entry.LocalInode)
 	assert.True(t, entry.LocalHasIdentity)
+}
+
+// Validates: R-2.2, R-6.2.4
+//
+// A failed WAL checkpoint must reach the caller. Cross-process readers such as
+// `status` open their own connection and rely on the checkpoint having
+// happened, so silently swallowing the failure would let them read stale data
+// with no signal.
+func TestSyncStore_CheckpointReportsFailure(t *testing.T) {
+	t.Parallel()
+
+	mgr, err := NewSyncStore(t.Context(), filepath.Join(t.TempDir(), "test.db"), newTestLogger(t))
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Checkpoint(t.Context()))
+	require.NoError(t, mgr.Close(t.Context()))
+
+	err = mgr.Checkpoint(t.Context())
+	require.Error(t, err, "checkpointing a closed store must not report success")
+	assert.Contains(t, err.Error(), "checkpoint sync store WAL")
 }

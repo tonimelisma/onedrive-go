@@ -136,10 +136,10 @@ type storeCompatibilityMetadata struct {
 	SchemaGeneration int
 }
 
-// ErrIncompatibleSchema marks a state DB that cannot be trusted under the
+// errIncompatibleSchema marks a state DB that cannot be trusted under the
 // current canonical schema. The state is rebuildable, so incompatible stores
 // fail loudly instead of being guessed at or partially imported.
-var ErrIncompatibleSchema = errors.New("sync: incompatible sync store schema")
+var errIncompatibleSchema = errors.New("sync: incompatible sync store schema")
 
 func canonicalSyncStoreColumns() map[string][]string {
 	return map[string][]string{
@@ -245,7 +245,7 @@ func validateCanonicalSchema(ctx context.Context, db *sql.DB, actualTables []str
 	if !slices.Equal(expectedTables, actualTables) {
 		return fmt.Errorf(
 			"%w: sync store tables do not match the current schema; found %v, expected %v",
-			ErrIncompatibleSchema,
+			errIncompatibleSchema,
 			actualTables,
 			expectedTables,
 		)
@@ -263,7 +263,7 @@ func validateCanonicalSchema(ctx context.Context, db *sql.DB, actualTables []str
 		if !slices.Equal(expectedColumns, actualColumns) {
 			return fmt.Errorf(
 				"%w: sync store table %s does not match the current schema; found columns %v, expected %v",
-				ErrIncompatibleSchema,
+				errIncompatibleSchema,
 				tableName,
 				actualColumns,
 				expectedColumns,
@@ -297,7 +297,7 @@ func validateStoreGeneration(ctx context.Context, db *sql.DB) error {
 	if metadata.SchemaGeneration != currentSyncStoreGeneration {
 		return fmt.Errorf(
 			"%w: sync store generation %d is unsupported; expected %d",
-			ErrIncompatibleSchema,
+			errIncompatibleSchema,
 			metadata.SchemaGeneration,
 			currentSyncStoreGeneration,
 		)
@@ -313,7 +313,7 @@ func readStoreCompatibilityMetadata(ctx context.Context, db *sql.DB) (storeCompa
 	).Scan(&metadata.SchemaGeneration)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return storeCompatibilityMetadata{}, fmt.Errorf("%w: sync store generation marker is missing", ErrIncompatibleSchema)
+			return storeCompatibilityMetadata{}, fmt.Errorf("%w: sync store generation marker is missing", errIncompatibleSchema)
 		}
 		return storeCompatibilityMetadata{}, fmt.Errorf("sync: inspect store compatibility metadata: %w", err)
 	}
@@ -331,7 +331,7 @@ func listUserTables(ctx context.Context, db *sql.DB) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query sqlite_master tables: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	var tables []string
 	for rows.Next() {
@@ -353,7 +353,7 @@ func listTableColumns(ctx context.Context, db *sql.DB, tableName string) ([]stri
 	if err != nil {
 		return nil, fmt.Errorf("query table info for %s: %w", tableName, err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	return scanTableColumns(rows, tableName)
 }

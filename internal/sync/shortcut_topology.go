@@ -158,11 +158,11 @@ type ShortcutChildCleanupCommand struct {
 	AckRef       ShortcutChildAckRef
 }
 
-// ShortcutChildAckHandle is the live-parent acknowledgement capability that
+// shortcutChildAckHandle is the live-parent acknowledgement capability that
 // multisync receives from a running parent engine. It is intentionally a value
 // handle instead of an interface so control-plane code can invoke acknowledgements
 // without owning or re-opening parent shortcut lifecycle state.
-type ShortcutChildAckHandle struct {
+type shortcutChildAckHandle struct {
 	ackFinalDrain      func(context.Context, ShortcutChildDrainAck) (ShortcutChildWorkSnapshot, error)
 	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildWorkSnapshot, error)
 }
@@ -170,18 +170,18 @@ type ShortcutChildAckHandle struct {
 func newShortcutChildAckHandle(
 	ackFinalDrain func(context.Context, ShortcutChildDrainAck) (ShortcutChildWorkSnapshot, error),
 	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildWorkSnapshot, error),
-) ShortcutChildAckHandle {
-	return ShortcutChildAckHandle{
+) shortcutChildAckHandle {
+	return shortcutChildAckHandle{
 		ackFinalDrain:      ackFinalDrain,
 		ackArtifactsPurged: ackArtifactsPurged,
 	}
 }
 
-func (h ShortcutChildAckHandle) IsZero() bool {
+func (h shortcutChildAckHandle) IsZero() bool {
 	return h.ackFinalDrain == nil && h.ackArtifactsPurged == nil
 }
 
-func (h ShortcutChildAckHandle) AcknowledgeChildFinalDrain(
+func (h shortcutChildAckHandle) AcknowledgeChildFinalDrain(
 	ctx context.Context,
 	ack ShortcutChildDrainAck,
 ) (ShortcutChildWorkSnapshot, error) {
@@ -191,7 +191,7 @@ func (h ShortcutChildAckHandle) AcknowledgeChildFinalDrain(
 	return h.ackFinalDrain(ctx, ack)
 }
 
-func (h ShortcutChildAckHandle) AcknowledgeChildArtifactsPurged(
+func (h shortcutChildAckHandle) AcknowledgeChildArtifactsPurged(
 	ctx context.Context,
 	ack ShortcutChildArtifactCleanupAck,
 ) (ShortcutChildWorkSnapshot, error) {

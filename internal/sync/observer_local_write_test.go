@@ -39,8 +39,8 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: existingHash,
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan ChangeEvent, 10)
+	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	events := make(chan changeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Make file write-only (stat succeeds, hash computation fails).
@@ -51,7 +51,7 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	// which succeeds with 0o200 permissions.
 	require.NoError(t, os.WriteFile(filePath, []byte("modified"), 0o200))
 
-	var ev ChangeEvent
+	var ev changeEvent
 
 	select {
 	case ev = <-events:
@@ -96,7 +96,7 @@ func TestHandleWrite_CoalescesRapidWrites(t *testing.T) {
 		WriteCoalesceCooldown: 100 * time.Millisecond,
 	})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 
@@ -169,7 +169,7 @@ func TestHandleWrite_EmitsAfterCooldownExpires(t *testing.T) {
 		WriteCoalesceCooldown: 50 * time.Millisecond,
 	})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 
@@ -228,7 +228,7 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 		WriteCoalesceCooldown: 50 * time.Millisecond,
 	})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 
@@ -251,7 +251,7 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 	clock.Advance(50 * time.Millisecond)
 
 	// Collect both events.
-	collected := make(map[string]ChangeEvent)
+	collected := make(map[string]changeEvent)
 	timeout := time.After(5 * time.Second)
 
 	for len(collected) < 2 {
@@ -296,7 +296,7 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 		WriteCoalesceCooldown: 200 * time.Millisecond,
 	})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 
@@ -371,7 +371,7 @@ func TestCancelPendingTimers(t *testing.T) {
 		WriteCoalesceCooldown: 5 * time.Second, // very long — timers should NOT fire
 	})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 
 	// Send Write events for two paths (creates timers with 5s cooldown).
@@ -427,28 +427,28 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: "old-hash",
 	})
 
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline:              baseline,
 		Logger:                synctest.TestLogger(t),
 		WriteCoalesceCooldown: 100 * time.Millisecond,
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]syncTimer),
-			HashRequests:  make(chan HashRequest, 10),
+			HashRequests:  make(chan hashRequest, 10),
 		},
 		AfterFunc: realAfterFunc,
 	}
 
-	events := make(chan ChangeEvent, 5)
+	events := make(chan changeEvent, 5)
 	ctx := t.Context()
 
 	// Call hashAndEmit with retries at the cap. Even though the file is
 	// stable (no errFileChangedDuringHash), this verifies the code path
 	// works correctly at the retry boundary.
-	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), HashRequest{
+	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), hashRequest{
 		FsPath:    filePath,
 		DbRelPath: "exhausted.txt",
 		Name:      "exhausted.txt",
-		Retries:   MaxCoalesceRetries,
+		Retries:   maxCoalesceRetries,
 	}, events)
 
 	select {
@@ -478,21 +478,21 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: hash,
 	})
 
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline:              baseline,
 		Logger:                synctest.TestLogger(t),
 		WriteCoalesceCooldown: 100 * time.Millisecond,
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]syncTimer),
-			HashRequests:  make(chan HashRequest, 10),
+			HashRequests:  make(chan hashRequest, 10),
 		},
 		AfterFunc: realAfterFunc,
 	}
 
-	events := make(chan ChangeEvent, 5)
+	events := make(chan changeEvent, 5)
 	ctx := t.Context()
 
-	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), HashRequest{
+	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), hashRequest{
 		FsPath:    filePath,
 		DbRelPath: "noop.txt",
 		Name:      "noop.txt",
@@ -540,7 +540,7 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 		WriteCoalesceCooldown: 50 * time.Millisecond,
 	})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 
@@ -579,7 +579,7 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 	writeTestFile(t, dir, "existing.txt", "content")
 
 	mockWatcher := newMockFsWatcher()
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline: emptyBaseline(),
 		Logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
@@ -590,7 +590,7 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 				},
 			},
 			PendingTimers: make(map[string]syncTimer),
-			HashRequests:  make(chan HashRequest, HashRequestBufSize),
+			HashRequests:  make(chan hashRequest, hashRequestBufSize),
 		},
 		// Pre-populate dirNameCache with a different-cased entry.
 		// This simulates a collision without requiring a case-sensitive FS.
@@ -602,12 +602,12 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
 			return make(chan time.Time), func() {}
 		},
-		WatcherFactory: func() (FsWatcher, error) {
+		WatcherFactory: func() (fsWatcher, error) {
 			return mockWatcher, nil
 		},
 	}
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 

@@ -1,6 +1,6 @@
 # Performance Benchmarking
 
-GOVERNS: cmd/devtool/main.go, internal/devtool/bench*.go, benchmarks/results/*.json, benchmarks/reports/*.md, spec/reference/performance-benchmarks.md, README.md (Representative Performance section)
+GOVERNS: README.md (Representative Performance section), cmd/devtool/main.go, internal/devtool/bench*.go
 
 Implements: R-6.1.6 [planned], R-6.1.7 [planned], R-6.1.8 [planned], R-6.1.9 [planned], R-6.1.10 [planned], R-6.10.6 [verified], R-6.10.14 [verified], R-6.10.15 [planned]
 

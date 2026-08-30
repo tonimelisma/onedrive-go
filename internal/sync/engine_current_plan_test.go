@@ -38,7 +38,7 @@ func seedStaleRetryAndBlockScopeForCurrentPlanTest(t *testing.T, ctx context.Con
 	}))
 }
 
-func localRowsContainPath(rows []LocalStateRow, path string) bool {
+func localRowsContainPath(rows []localStateRow, path string) bool {
 	for i := range rows {
 		if rows[i].Path == path {
 			return true
@@ -47,7 +47,7 @@ func localRowsContainPath(rows []LocalStateRow, path string) bool {
 	return false
 }
 
-func remoteRowsContainPath(rows []RemoteStateRow, path string) bool {
+func remoteRowsContainPath(rows []remoteStateRow, path string) bool {
 	for i := range rows {
 		if rows[i].Path == path {
 			return true
@@ -69,13 +69,13 @@ func TestLoadCurrentInputs_FiltersCurrentStateBeforeComparison(t *testing.T) {
 		INSERT INTO baseline (item_id, path, item_type)
 		VALUES ('item-hidden', 'hidden/file.txt', 'file')`)
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []LocalStateRow{{
+	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []localStateRow{{
 		Path:     "hidden/file.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "local-hidden",
 		Size:     10,
 	}}))
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []observedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-hidden",
 		Path:     "hidden/file.txt",
@@ -130,13 +130,13 @@ func TestFilterLifecycle_LocalSnapshotRefreshAndRemoteRawReprojection(t *testing
 
 	writeLocalFile(t, syncRoot, "visible/local.txt", "visible local")
 	writeLocalFile(t, syncRoot, "hidden/local.txt", "hidden local")
-	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []LocalStateRow{{
+	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []localStateRow{{
 		Path:     "hidden/stale.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "stale",
 		Size:     5,
 	}}))
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []observedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-hidden-remote",
 		Path:     "hidden/remote.txt",
@@ -346,7 +346,7 @@ func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing
 
 	err = rt.bootstrapSync(ctx, SyncDownloadOnly, &watchPipeline{
 		bl:          bl,
-		completions: make(chan ActionCompletion),
+		completions: make(chan actionCompletion),
 	})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "failed to reconcile remote observation findings")
@@ -360,7 +360,7 @@ func TestBootstrapSync_RequiresStartupBaseline(t *testing.T) {
 	setupWatchEngine(t, eng)
 
 	err := testWatchRuntime(t, eng).bootstrapSync(t.Context(), SyncDownloadOnly, &watchPipeline{
-		completions: make(chan ActionCompletion),
+		completions: make(chan actionCompletion),
 	})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "bootstrap requires startup baseline")

@@ -2,18 +2,18 @@ package sync
 
 import "sort"
 
-// BlockedRetryGroup is the raw durable projection of blocked retry_work rows
+// blockedRetryGroup is the raw durable projection of blocked retry_work rows
 // for one scope. It is intentionally machine-oriented so watch/status can
 // share one grouping pass while keeping phrasing and rendering separate.
-type BlockedRetryGroup struct {
+type blockedRetryGroup struct {
 	Count int
 	Paths []string
 }
 
-// GroupBlockedRetryWork groups blocked retry_work rows by scope key, keeping a
+// groupBlockedRetryWork groups blocked retry_work rows by scope key, keeping a
 // stable path list for downstream watch/status projections.
-func GroupBlockedRetryWork(rows []RetryWorkRow) map[ScopeKey]BlockedRetryGroup {
-	grouped := make(map[ScopeKey]BlockedRetryGroup)
+func groupBlockedRetryWork(rows []RetryWorkRow) map[ScopeKey]blockedRetryGroup {
+	grouped := make(map[ScopeKey]blockedRetryGroup)
 	for i := range rows {
 		scopeKey := rows[i].ScopeKey
 		if scopeKey.IsZero() {

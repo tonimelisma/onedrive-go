@@ -2,11 +2,11 @@ package sync
 
 import "context"
 
-// TrackedAction pairs an Action with an ID and a per-action cancel function.
+// trackedAction pairs an Action with an ID and a per-action cancel function.
 // Workers pull TrackedActions from the ready channel. The ID is a sequential
 // counter (assigned by the engine) used as a unique key for the graph's
 // internal maps.
-type TrackedAction struct {
+type trackedAction struct {
 	Action Action
 	ID     int64
 	Cancel context.CancelFunc

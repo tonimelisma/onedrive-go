@@ -11,12 +11,12 @@ import (
 type engineFlow struct {
 	engine *Engine
 
-	depGraph   *DepGraph
-	dispatchCh chan *TrackedAction
+	depGraph   *depGraph
+	dispatchCh chan *trackedAction
 
 	activeScopesMu sync.RWMutex
-	activeScopes   []ActiveScope
-	scopeState     *ScopeState
+	activeScopes   []activeScope
+	scopeState     *scopeState
 	nextActionID   int64
 
 	retryRowsByKey map[RetryWorkKey]RetryWorkRow
@@ -43,7 +43,7 @@ const (
 )
 
 type heldAction struct {
-	Tracked   *TrackedAction
+	Tracked   *trackedAction
 	Reason    heldReason
 	ScopeKey  ScopeKey
 	NextRetry time.Time

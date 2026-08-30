@@ -10,7 +10,7 @@ import (
 
 type watchLoopState struct {
 	phase                         watchRuntimePhase
-	outbox                        []*TrackedAction
+	outbox                        []*trackedAction
 	pendingReplan                 dirtyBatch
 	hasPendingReplan              bool
 	pendingReplanAt               time.Time
@@ -44,21 +44,21 @@ type watchResources struct {
 	// Dirty debounce buffer. Local and remote observers mark coarse replan or
 	// full-refresh requests here; the watch loop refreshes snapshots and replans
 	// from SQLite current truth after the debounce window closes.
-	dirtyBuf *DirtyBuffer
+	dirtyBuf *dirtyBuffer
 
 	// Observer lifecycle is runtime-owned. startObservers populates these fields
 	// directly; the watch loop nils channels as sources close and tracks how many
 	// observer goroutines still own the shared error stream.
 	observerErrs        <-chan error
 	localBatches        <-chan localObservationBatch
-	protectedRootEvents <-chan ProtectedRootEvent
+	protectedRootEvents <-chan protectedRootEvent
 	remoteBatches       <-chan remoteObservationBatch
-	skippedItems        <-chan []SkippedItem
+	skippedItems        <-chan []skippedItem
 	activeObservers     int
 
 	// Observer references — set in startObservers, nil'd on shutdown.
-	remoteObs *RemoteObserver
-	localObs  *LocalObserver
+	remoteObs *remoteObserver
+	localObs  *localObserver
 
 	// Socket.IO wake source lifecycle, when enabled for full-drive watch.
 	socketIOWakeStop chan struct{}
@@ -149,11 +149,11 @@ func (rt *watchRuntime) enterDraining() bool {
 	return true
 }
 
-func (rt *watchRuntime) currentOutbox() []*TrackedAction {
+func (rt *watchRuntime) currentOutbox() []*trackedAction {
 	return rt.loop.outbox
 }
 
-func (rt *watchRuntime) replaceOutbox(outbox []*TrackedAction) {
+func (rt *watchRuntime) replaceOutbox(outbox []*trackedAction) {
 	if len(outbox) == 0 {
 		rt.loop.outbox = nil
 		return
@@ -234,7 +234,7 @@ func (rt *watchRuntime) retireOutboxForPendingReplan() {
 	}
 }
 
-func (rt *watchRuntime) retireReadyFrontierForPendingReplan(ready []*TrackedAction) {
+func (rt *watchRuntime) retireReadyFrontierForPendingReplan(ready []*trackedAction) {
 	if len(ready) == 0 {
 		return
 	}

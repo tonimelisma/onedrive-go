@@ -32,7 +32,7 @@ intent; multisync receives only that child work intent.
   ordering
 - Does Not Own: observation, execution, retry timing, scope persistence, or remote/local I/O
 - Source of Truth: raw `baseline`, raw current-state tables, and the engine's
-  compiled `ContentFilter`. Planning sees filtered current-state views through
+  compiled `contentFilter`. Planning sees filtered current-state views through
   SQLite reconciliation rows, plus engine-owned sync mode and runtime policy.
 - Allowed Side Effects: none
 - Mutable Runtime Owner: None. Planning is deterministic value transformation over one input set and owns no long-lived mutable runtime state.
@@ -60,7 +60,7 @@ intent; multisync receives only that child work intent.
 - runtime safety/policy inputs owned by the engine
 
 The engine first materializes transaction-local planner-visible current-state
-tables from `local_state` and `remote_state` using the compiled `ContentFilter`.
+tables from `local_state` and `remote_state` using the compiled `contentFilter`.
 It then removes same-side descendants below baseline folders that are absent
 from that side's visible current table. Raw `baseline` is not filtered or
 mutated. Those views feed `comparison_state` and `reconciliation_state`,
@@ -72,7 +72,7 @@ truth-status value from `observation_issues`, including any read-boundary
 `ScopeKey` tags. Planner then applies its own suppression policy so unreadable
 or unobservable paths stay unavailable instead of being misread as deletions.
 
-`TruthAvailabilityIndex` is the one raw derived read model for that question.
+`truthAvailabilityIndex` is the one raw derived read model for that question.
 Planner uses it directly, and read-only inspection of specific paths uses the
 same derivation rather than a second planner-shaped helper.
 
@@ -87,7 +87,7 @@ same derivation rather than a second planner-shaped helper.
    plus baseline.
 4. Load reconciliation rows into Go.
 5. Derive per-path local/remote truth status from filtered `observation_issues`
-   through `TruthAvailabilityIndex`.
+   through `truthAvailabilityIndex`.
 6. Apply planner-owned suppression and sync-mode safety rules on top of that
    derived status.
 7. Emit the current runtime action set from reconciliation rows, including
@@ -155,7 +155,7 @@ structural absence:
 
 The planner therefore keeps structural reconciliation raw, then attaches an
 explicit local/remote truth-status value to each path view before action
-emission. `TruthAvailabilityIndex` is the reusable derived view over durable
+emission. `truthAvailabilityIndex` is the reusable derived view over durable
 authorities; planner suppression is the separate policy layer that blocks
 action emission when observation issues prove the path is currently
 unavailable.
@@ -231,7 +231,7 @@ receives engine-owned mount context:
 - `RemoteRootItemID`
 
 Ordinary sync actions are bound directly to that mounted subtree. When
-`MakeAction(...)` leaves `Action.DriveID` empty for brand-new local work, the
+`makeAction(...)` leaves `Action.DriveID` empty for brand-new local work, the
 planner fills it from the mount context before runtime admission. Ordinary
 actions do not carry separate target-drive or target-root override fields.
 

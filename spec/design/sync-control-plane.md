@@ -1,6 +1,6 @@
 # Sync Control Plane
 
-GOVERNS: internal/multisync/*.go, internal/synccontrol/*.go, sync.go
+GOVERNS: internal/cli/sync.go, internal/multisync/*.go, internal/synccontrol/*.go
 
 Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -216,7 +216,7 @@ boundary, and feeds those value outcomes through planner helpers. Multisync
 consumes only the resulting child work snapshot: start normal child
 commands, run final-drain commands to final drain, purge explicit cleanup
 commands, acknowledge clean drain through the live parent
-`ShortcutChildAckHandle`, then stop and forget child runtime state after the
+`shortcutChildAckHandle`, then stop and forget child runtime state after the
 parent release succeeds.
 
 Runtime mount-set construction does not inspect or mutate parent shortcut alias

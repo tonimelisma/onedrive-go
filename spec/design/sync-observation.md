@@ -1,6 +1,6 @@
 # Sync Observation
 
-GOVERNS: internal/sync/observer_local.go, internal/sync/observer_local_handlers.go, internal/sync/observer_local_collisions.go, internal/sync/local_observation_batch.go, internal/sync/observer_remote.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/item_converter.go, internal/sync/scanner.go, internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/symlink_observation.go, internal/sync/single_path.go
+GOVERNS: internal/sync/buffer.go, internal/sync/content_filter.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/issue_types.go, internal/sync/item_converter.go, internal/sync/local_hash_reuse.go, internal/sync/local_observation_batch.go, internal/sync/observed_items.go, internal/sync/observer_local.go, internal/sync/observer_local_collisions.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/scanner.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/symlink_observation.go
 
 Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.8.8 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified]
 
@@ -31,25 +31,25 @@ the non-runtime dependencies needed by the loop.
 
 The observation stack has four main pieces:
 
-- `RemoteObserver`: Graph delta/enumeration and wake-driven watch polling
-- `LocalObserver`: fsnotify-driven watch observation
+- `remoteObserver`: Graph delta/enumeration and wake-driven watch polling
+- `localObserver`: fsnotify-driven watch observation
 - `Scanner`: full local walk for one-shot bootstrap and rebuild cases
-- `DirtyBuffer`: debounce/coalescing before snapshot refresh and replanning
+- `dirtyBuffer`: debounce/coalescing before snapshot refresh and replanning
 
 ## Ownership Contract
 
-- Owns: local and remote change capture, path normalization, sparse-item recovery, skipped-item reporting, single-path observation, and dirty buffering
+- Owns: local and remote change capture, path normalization, sparse-item recovery, skipped-item reporting, and dirty buffering
 - Does Not Own: planning, retry policy, scope persistence, or user-facing issue interpretation
 - Source of Truth: live filesystem state, Graph responses, and read-only baseline context supplied by the engine
 - Allowed Side Effects: rooted filesystem reads, hashing, Graph observation calls, watch registration, and event emission
-- Mutable Runtime Owner: `RemoteObserver`, `LocalObserver`, `Scanner`, and `DirtyBuffer` each own only their own invocation- or run-scoped mutable state, watches, and goroutines. The engine owns lifecycle and composition across those pieces.
+- Mutable Runtime Owner: `remoteObserver`, `localObserver`, `Scanner`, and `dirtyBuffer` each own only their own invocation- or run-scoped mutable state, watches, and goroutines. The engine owns lifecycle and composition across those pieces.
 - Error Boundary: observation surfaces filesystem, watch, and Graph observation failures as observation results and control signals; once the engine starts durably applying an observation batch, observation-finding reconciliation is fail-closed and execution paths do not invent observation-owned durable rows.
 
 ## Verified By
 
 | Behavior | Evidence |
 | --- | --- |
-| Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly, including filesystem identity for files and directories when available. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestFullScan_StoresFilesystemIdentityForFilesAndDirectories`, `TestNosyncGuard_PreventsAllSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
+| Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly, including filesystem identity for files and directories when available. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestFullScan_StoresFilesystemIdentityForFilesAndDirectories`, `TestFullScan_NosyncMarkerDoesNotGuardSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
 | Watch-mode local observation emits scoped engine-applied batches: exact file rows, directory-prefix deletes, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesExactPath`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
 | Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child work commands to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
@@ -57,7 +57,7 @@ The observation stack has four main pieces:
 
 ## Remote Observation
 
-`RemoteObserver` supports:
+`remoteObserver` supports:
 
 - one-shot `FullDelta`
 - watch-mode polling
@@ -165,7 +165,7 @@ Sparse parent recovery is intentionally layered:
   materializing the path
 - if enrich still leaves the parent missing, fall back to exact Graph
   `parentReference.path` or baseline ancestry for path reconstruction when
-  possible; otherwise fail the batch as `ErrRemoteObservationIncomplete` rather
+  possible; otherwise fail the batch as `errRemoteObservationIncomplete` rather
   than fabricating a root-level path
 
 Observation does not fail merely because the best-effort enrich read returns an
@@ -191,8 +191,8 @@ placeholder delta as ordinary content or an unavailable new child.
 
 ## Local Observation
 
-`LocalObserver` and `Scanner` observe the configured local root through the
-drive's compiled `ContentFilter`. The filter is product visibility policy only:
+`localObserver` and `Scanner` observe the configured local root through the
+drive's compiled `contentFilter`. The filter is product visibility policy only:
 `included_dirs`, `ignored_dirs`, `ignored_paths`, `ignore_dotfiles`,
 `ignore_junk_files`, and `follow_symlinks`. It is not the owner of provider
 structural exclusions or OneDrive admissibility validation.
@@ -231,7 +231,7 @@ facts, item IDs, or drive IDs.
 Managed shortcut child subtrees are not configured as ordinary skip dirs.
 Parent engines derive protected roots from `shortcut_roots` and update their
 own observer state internally. Parent shortcut filters are translated into
-child-root-relative `ContentFilter` values when the parent publishes child work
+child-root-relative `contentFilter` values when the parent publishes child work
 commands.
 
 Full local scans persist `local_device`, `local_inode`, and
@@ -255,17 +255,17 @@ Ignore invariants:
 - remote observation persists raw manageable `remote_state`; planner loading
   filters the remote current-state view before comparison
 - remote delta wake optimization is driven by whether the emitted path or old
-  path is visible under the current `ContentFilter`; hidden-to-hidden changes
+  path is visible under the current `contentFilter`; hidden-to-hidden changes
   advance raw observation state without waking planning
 - if a baseline path is absent from both filtered current views, reconciliation
   removes only the baseline row
 
-Observation may emit `SkippedItem`s for invalid or unsupported local content.
+Observation may emit `skippedItem`s for invalid or unsupported local content.
 The engine reconciles those findings through one `ObservationFindingsBatch`
 boundary, and `observation_findings.go` is the single constructor path for
 those batches. Whole-drive scans replace the managed family set for those
-findings; single-path observation uses the same batch shape but manages only
-the exact observed path set it proved.
+findings, which is the only batch shape in use now that path-scoped
+single-path observation has been removed.
 
 Observation-owned read-denied subtree boundaries stay boundary-scoped. The
 durable batch records one boundary issue tagged with the matching read
@@ -280,18 +280,22 @@ Observation-owned local read findings use these rules:
   `perm:dir:read:<boundary>`
 - invalid or unsyncable local content -> observation issue only
 
-Single-path observation used by retry/trial flows follows the same ownership
-rule. It may update `observation_issues` and their boundary `ScopeKey` tags
-because it is still observation, not worker-result persistence. It must never
-reconcile a one-path observation result as if it were a whole-drive managed
-set; path-scoped reconciliation clears only the exact observed path set.
+Single-path observation was removed. Retry and trial flows once rebuilt local
+truth for one path through an `observeSinglePathWithFilter` family, wired from
+`engine_retry_trial.go`. The linear-runtime refactor replaced that model: the
+runtime now replans from committed observation in the store and matches
+`retry_work` rows against the resulting action set, while staleness is caught
+at the side-effect boundary by executor live preconditions. The single-path
+family survived that change with no production caller and stayed alive only
+because its own tests referenced it, which is why `unused` never reported it.
+It is deleted; replanning from committed truth is the single owner.
 
-`Scanner.FullScan()` now also returns direct `LocalStateRow` values for every
+`Scanner.FullScan()` now also returns direct `localStateRow` values for every
 admissible currently observed local path. `local_state` persistence therefore
 comes from current disk truth, not by replaying local change events against
 baseline.
 
-Dry-run uses those same direct `LocalStateRow` values, but commits them only to
+Dry-run uses those same direct `localStateRow` values, but commits them only to
 an isolated scratch store before SQLite comparison/reconciliation. Observation
 findings discovered during preview also reconcile only into that scratch store.
 The durable runtime store keeps its prior committed snapshots, observation
@@ -299,7 +303,7 @@ issues, and block scopes unchanged during preview.
 
 ## Dirty Buffer
 
-`DirtyBuffer` owns short-lived replan scheduling only:
+`dirtyBuffer` owns short-lived replan scheduling only:
 
 - debounce bursts of local or remote dirty signals
 - wait 5 seconds from the last local or remote observation before triggering replanning by default

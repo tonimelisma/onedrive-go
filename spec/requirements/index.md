@@ -6,6 +6,7 @@ Product vision: a fast, safe, well-tested CLI OneDrive client for Linux and macO
 
 - **Linux** (primary): x86_64, ARM64. inotify for filesystem monitoring.
 - **macOS** (primary): x86_64, ARM64 (Apple Silicon). FSEvents for filesystem monitoring.
+- **FreeBSD** (best-effort): cross-compiled on every CI run so the claim cannot rot, but not otherwise tested.
 - **Windows**: Explicit non-goal (Microsoft ships a native client).
 
 ## Non-Goals

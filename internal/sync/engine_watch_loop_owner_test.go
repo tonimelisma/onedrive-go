@@ -24,7 +24,7 @@ func TestWatchRuntime_BeginWatchDrain_ObserverChannelsStayRuntimeOwned(t *testin
 	rt := testWatchRuntime(t, eng)
 	rt.localBatches = make(chan localObservationBatch)
 	rt.remoteBatches = make(chan remoteObservationBatch)
-	rt.skippedItems = make(chan []SkippedItem)
+	rt.skippedItems = make(chan []skippedItem)
 	rt.observerErrs = make(chan error)
 	rt.activeObservers = 1
 
@@ -104,7 +104,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapDispatchUsesSharedHandler
 		ItemID:  "bootstrap-item",
 	}, 1, nil)
 	require.NotNil(t, action)
-	rt.replaceOutbox([]*TrackedAction{action})
+	rt.replaceOutbox([]*trackedAction{action})
 	rt.enterBootstrap()
 
 	done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{runtime: rt}, nil)
@@ -267,7 +267,7 @@ func TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch(
 		}, int64(attempt+1), nil)
 		require.NotNil(t, queued)
 		rt.markQueued(queued)
-		rt.replaceOutbox([]*TrackedAction{queued})
+		rt.replaceOutbox([]*trackedAction{queued})
 
 		done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{
 			runtime:     rt,
@@ -295,7 +295,7 @@ func TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.dirtyBuf = newDirtyBuffer(eng.logger)
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
@@ -307,7 +307,7 @@ func TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal
 	}, 1, nil)
 	require.NotNil(t, queued)
 	rt.markQueued(queued)
-	rt.replaceOutbox([]*TrackedAction{queued})
+	rt.replaceOutbox([]*trackedAction{queued})
 	rt.queuePendingReplan(dirtyBatch{FullRefresh: true})
 	require.Empty(t, rt.currentOutbox())
 	require.Empty(t, rt.queuedByID)
@@ -347,7 +347,7 @@ func TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal(t 
 			eng, syncRoot := newTestEngine(t, &engineMockClient{})
 			setupWatchEngine(t, eng)
 			rt := testWatchRuntime(t, eng)
-			rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+			rt.dirtyBuf = newDirtyBuffer(eng.logger)
 			bl, err := eng.baseline.Load(t.Context())
 			require.NoError(t, err)
 			require.NoError(t, os.RemoveAll(syncRoot))
@@ -390,7 +390,7 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	}, 1, nil)
 	require.NotNil(t, queued)
 	rt.markQueued(queued)
-	rt.replaceOutbox([]*TrackedAction{queued})
+	rt.replaceOutbox([]*trackedAction{queued})
 
 	rt.queuePendingReplan(dirtyBatch{})
 
@@ -449,14 +449,14 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 		Path:    "child.txt",
 		DriveID: eng.driveID,
 		ItemID:  "child-item",
-		View:    &PathView{Path: "child.txt"},
+		View:    &pathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	require.Nil(t, child)
 	rt.markRunning(root)
 	rt.queuePendingReplan(dirtyBatch{})
 	advance(10 * time.Millisecond)
 
-	err = rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
+	err = rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &actionCompletion{
 		Path:       "parent.txt",
 		ItemID:     "parent-item",
 		DriveID:    eng.driveID,
@@ -557,7 +557,7 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 	}
 	rt := testWatchRuntime(t, eng)
 
-	done, err := rt.handleWatchProtectedRootEventSignal(t.Context(), &ProtectedRootEvent{}, true)
+	done, err := rt.handleWatchProtectedRootEventSignal(t.Context(), &protectedRootEvent{}, true)
 
 	require.NoError(t, err)
 	assert.False(t, done)

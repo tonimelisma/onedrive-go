@@ -111,7 +111,7 @@ func queryShortcutRootRecords(
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", queryContext, err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	records := make([]ShortcutRootRecord, 0)
 	for rows.Next() {
@@ -153,7 +153,7 @@ func (m *SyncStore) replaceShortcutRoots(ctx context.Context, records []Shortcut
 	if err != nil {
 		return fmt.Errorf("sync: preparing shortcut_roots upsert: %w", err)
 	}
-	defer stmt.Close()
+	defer stmt.Close() //nolint:errcheck // statement handle release; the write itself is checked at Exec
 
 	for i := range records {
 		record := normalizeShortcutRootRecord(&records[i])

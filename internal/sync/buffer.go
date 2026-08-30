@@ -55,10 +55,10 @@ type dirtyBatch struct {
 	FullRefresh bool
 }
 
-// DirtyBuffer coalesces dirty observations into debounced replan signals for
+// dirtyBuffer coalesces dirty observations into debounced replan signals for
 // the snapshot-first runtime. It deliberately does not preserve path subsets or
 // event history because the runtime always replans from committed current truth.
-type DirtyBuffer struct {
+type dirtyBuffer struct {
 	mu          sync.Mutex // guards dirty, fullRefresh, and notify
 	dirty       bool
 	fullRefresh bool
@@ -67,14 +67,14 @@ type DirtyBuffer struct {
 	newTimer    func(time.Duration) debounceTimer
 }
 
-func NewDirtyBuffer(logger *slog.Logger) *DirtyBuffer {
-	return &DirtyBuffer{
+func newDirtyBuffer(logger *slog.Logger) *dirtyBuffer {
+	return &dirtyBuffer{
 		logger:   logger,
 		newTimer: newRealDebounceTimer,
 	}
 }
 
-func (b *DirtyBuffer) MarkDirty() {
+func (b *dirtyBuffer) MarkDirty() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -82,7 +82,7 @@ func (b *DirtyBuffer) MarkDirty() {
 	b.signalNewLocked()
 }
 
-func (b *DirtyBuffer) MarkFullRefresh() {
+func (b *dirtyBuffer) MarkFullRefresh() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -90,7 +90,7 @@ func (b *DirtyBuffer) MarkFullRefresh() {
 	b.signalNewLocked()
 }
 
-func (b *DirtyBuffer) FlushImmediate() *dirtyBatch {
+func (b *dirtyBuffer) FlushImmediate() *dirtyBatch {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -107,7 +107,7 @@ func (b *DirtyBuffer) FlushImmediate() *dirtyBatch {
 	return batch
 }
 
-func (b *DirtyBuffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-chan dirtyBatch {
+func (b *dirtyBuffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-chan dirtyBatch {
 	out := make(chan dirtyBatch, 1)
 
 	b.mu.Lock()
@@ -124,7 +124,7 @@ func (b *DirtyBuffer) FlushDebounced(ctx context.Context, debounce time.Duration
 	return out
 }
 
-func (b *DirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- dirtyBatch) {
+func (b *dirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- dirtyBatch) {
 	defer close(out)
 
 	timer := b.newTimer(debounce)
@@ -176,7 +176,7 @@ func (b *DirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, 
 	}
 }
 
-func (b *DirtyBuffer) signalNewLocked() {
+func (b *dirtyBuffer) signalNewLocked() {
 	if b.notify == nil {
 		return
 	}

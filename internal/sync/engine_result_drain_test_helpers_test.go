@@ -10,15 +10,15 @@ import (
 
 // startDrainLoop creates a real engine with DepGraph, watch-mode scope state,
 // dispatchCh, dirty scheduler, and retry/trial timers.
-func startDrainLoop(t *testing.T) (chan ActionCompletion, context.CancelFunc, *testEngine) {
+func startDrainLoop(t *testing.T) (chan actionCompletion, context.CancelFunc, *testEngine) {
 	t.Helper()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	rt.scopeState = NewScopeState(eng.nowFunc, eng.logger)
-	rt.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.scopeState = newScopeState(eng.nowFunc, eng.logger)
+	rt.dirtyBuf = newDirtyBuffer(eng.logger)
 
-	results := make(chan ActionCompletion, 16)
+	results := make(chan actionCompletion, 16)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	bl, err := eng.baseline.Load(ctx)
@@ -42,9 +42,9 @@ func runResultDrainLoopForTest(
 	ctx context.Context,
 	rt *watchRuntime,
 	bl *Baseline,
-	results <-chan ActionCompletion,
+	results <-chan actionCompletion,
 ) {
-	var outbox []*TrackedAction
+	var outbox []*trackedAction
 
 	for {
 		if len(outbox) == 0 {
@@ -68,8 +68,8 @@ func runResultDrainLoopIdleForTest(
 	ctx context.Context,
 	rt *watchRuntime,
 	bl *Baseline,
-	results <-chan ActionCompletion,
-) ([]*TrackedAction, bool) {
+	results <-chan actionCompletion,
+) ([]*trackedAction, bool) {
 	select {
 	case workerResult, ok := <-results:
 		if !ok {
@@ -93,9 +93,9 @@ func runResultDrainLoopWithOutboxForTest(
 	ctx context.Context,
 	rt *watchRuntime,
 	bl *Baseline,
-	results <-chan ActionCompletion,
-	outbox []*TrackedAction,
-) ([]*TrackedAction, bool) {
+	results <-chan actionCompletion,
+	outbox []*trackedAction,
+) ([]*trackedAction, bool) {
 	select {
 	case rt.dispatchCh <- outbox[0]:
 		return outbox[1:], false
@@ -121,9 +121,9 @@ func appendDrainOutcome(
 	rt *watchRuntime,
 	ctx context.Context,
 	bl *Baseline,
-	outbox []*TrackedAction,
-	workerResult *ActionCompletion,
-) ([]*TrackedAction, bool) {
+	outbox []*trackedAction,
+	workerResult *actionCompletion,
+) ([]*trackedAction, bool) {
 	ready, completionErr := rt.applyRuntimeCompletionStage(ctx, rt, workerResult, bl)
 	if completionErr != nil {
 		return outbox, true
@@ -140,7 +140,7 @@ func mustNoDrainLoopError(err error) {
 
 // readReadyAction reads one TrackedAction from the ready channel with a
 // race-detector-friendly timeout.
-func readReadyAction(t *testing.T, ready <-chan *TrackedAction) *TrackedAction {
+func readReadyAction(t *testing.T, ready <-chan *trackedAction) *trackedAction {
 	t.Helper()
 
 	select {
@@ -153,7 +153,7 @@ func readReadyAction(t *testing.T, ready <-chan *TrackedAction) *TrackedAction {
 	return nil
 }
 
-func readReady(t *testing.T, ready <-chan *TrackedAction) {
+func readReady(t *testing.T, ready <-chan *trackedAction) {
 	t.Helper()
 	_ = readReadyAction(t, ready)
 }

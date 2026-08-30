@@ -17,7 +17,7 @@ const (
 func (rt *watchRuntime) releaseDueHeldTrialsNow(
 	ctx context.Context,
 	bl *Baseline,
-) ([]*TrackedAction, error) {
+) ([]*trackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed(rt, "releaseDueHeldTrialsNow", "release due held trials")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialHeldReleaseStarted})
 
@@ -39,7 +39,7 @@ func (rt *watchRuntime) releaseDueHeldTrialsNow(
 func (rt *watchRuntime) releaseDueHeldRetriesNow(
 	ctx context.Context,
 	bl *Baseline,
-) ([]*TrackedAction, error) {
+) ([]*trackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed(rt, "releaseDueHeldRetriesNow", "release due held retries")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryHeldReleaseStarted})
 
@@ -58,7 +58,7 @@ func (rt *watchRuntime) releaseDueHeldRetriesNow(
 // clearRetryWorkOnSuccess removes the retry_work row for a successfully
 // completed action. The engine owns retry_work and observation-issue lifecycle;
 // CommitMutation handles only baseline and remote_state updates.
-func (flow *engineFlow) clearRetryWorkOnSuccess(ctx context.Context, r *ActionCompletion) {
+func (flow *engineFlow) clearRetryWorkOnSuccess(ctx context.Context, r *actionCompletion) {
 	if r == nil {
 		return
 	}
@@ -86,7 +86,7 @@ func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, actio
 	}
 }
 
-func (flow *engineFlow) clearRetryWorkOnSuperseded(ctx context.Context, r *ActionCompletion, current *TrackedAction) error {
+func (flow *engineFlow) clearRetryWorkOnSuperseded(ctx context.Context, r *actionCompletion, current *trackedAction) error {
 	if current != nil {
 		return flow.resolveRetryWorkAndLogResolution(
 			ctx,

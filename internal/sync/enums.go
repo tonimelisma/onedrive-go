@@ -31,30 +31,30 @@ const (
 	strCleanup        = "cleanup"
 )
 
-// Direction represents the direction of a sync action (upload, download, delete).
-// Stored as TEXT in SQLite — type Direction string serializes identically to
+// direction represents the direction of a sync action (upload, download, delete).
+// Stored as TEXT in SQLite — type direction string serializes identically to
 // raw strings, so no compatibility rewrite is needed.
-type Direction string
+type direction string
 
 const (
-	DirectionDownload Direction = strDownload
-	DirectionUpload   Direction = strUpload
-	DirectionDelete   Direction = strDelete
+	directionDownload direction = strDownload
+	directionUpload   direction = strUpload
+	directionDelete   direction = strDelete
 )
 
-// ChangeSource identifies the origin of a change event.
-type ChangeSource int
+// changeSource identifies the origin of a change event.
+type changeSource int
 
 const (
-	// SourceRemote indicates the change was observed from the Graph API.
-	SourceRemote ChangeSource = iota
+	// sourceRemote indicates the change was observed from the Graph API.
+	sourceRemote changeSource = iota
 	// SourceLocal indicates the change was observed from the local filesystem.
 	SourceLocal
 )
 
-func (s ChangeSource) String() string {
+func (s changeSource) String() string {
 	switch s {
-	case SourceRemote:
+	case sourceRemote:
 		return strRemote
 	case SourceLocal:
 		return strLocal
@@ -63,19 +63,19 @@ func (s ChangeSource) String() string {
 	}
 }
 
-// ChangeType classifies what kind of change occurred.
-type ChangeType int
+// changeType classifies what kind of change occurred.
+type changeType int
 
 const (
-	ChangeCreate ChangeType = iota
+	changeCreate changeType = iota
 	ChangeModify
 	ChangeDelete
 	ChangeMove
 )
 
-func (t ChangeType) String() string {
+func (t changeType) String() string {
 	switch t {
-	case ChangeCreate:
+	case changeCreate:
 		return strCreate
 	case ChangeModify:
 		return strModify
@@ -120,7 +120,7 @@ func (t *ItemType) Scan(src any) error {
 		return fmt.Errorf("sync: ItemType.Scan: expected string, got %T", src)
 	}
 
-	parsed, err := ParseItemType(s)
+	parsed, err := parseItemType(s)
 	if err != nil {
 		return err
 	}
@@ -136,8 +136,8 @@ func (t ItemType) Value() (driver.Value, error) {
 	return t.String(), nil
 }
 
-// ParseItemType converts a database TEXT value to ItemType.
-func ParseItemType(s string) (ItemType, error) {
+// parseItemType converts a database TEXT value to ItemType.
+func parseItemType(s string) (ItemType, error) {
 	switch s {
 	case strFile:
 		return ItemTypeFile, nil
@@ -172,11 +172,11 @@ func (m SyncMode) String() string {
 	}
 }
 
-// ActionType classifies what the executor should do for a given action.
-type ActionType int
+// actionType classifies what the executor should do for a given action.
+type actionType int
 
 const (
-	ActionDownload ActionType = iota
+	ActionDownload actionType = iota
 	ActionUpload
 	ActionLocalDelete
 	ActionRemoteDelete
@@ -188,7 +188,7 @@ const (
 	ActionCleanup
 )
 
-func (a ActionType) String() string {
+func (a actionType) String() string {
 	switch a {
 	case ActionDownload:
 		return strDownload
@@ -219,22 +219,22 @@ func (a ActionType) String() string {
 // persistence and display. Retry/trial rebuild logic must branch on ActionType
 // directly, but retry_work still keeps Direction for coarse summaries and
 // query filtering.
-func (a ActionType) Direction() Direction {
+func (a actionType) Direction() direction {
 	switch a {
 	case ActionUpload:
-		return DirectionUpload
+		return directionUpload
 	case ActionLocalDelete, ActionRemoteDelete:
-		return DirectionDelete
+		return directionDelete
 	case ActionDownload, ActionFolderCreate, ActionConflictCopy,
 		ActionLocalMove, ActionRemoteMove, ActionBaselineUpdate, ActionCleanup:
-		return DirectionDownload
+		return directionDownload
 	default:
-		return DirectionDownload
+		return directionDownload
 	}
 }
 
-// ParseActionType converts the SQLite wire value back into an ActionType.
-func ParseActionType(s string) (ActionType, error) {
+// parseActionType converts the SQLite wire value back into an ActionType.
+func parseActionType(s string) (actionType, error) {
 	switch s {
 	case strDownload:
 		return ActionDownload, nil
@@ -262,13 +262,13 @@ func ParseActionType(s string) (ActionType, error) {
 }
 
 // Scan implements sql.Scanner for ActionType TEXT columns.
-func (a *ActionType) Scan(src any) error {
+func (a *actionType) Scan(src any) error {
 	s, ok := src.(string)
 	if !ok {
 		return fmt.Errorf("sync: ActionType.Scan: expected string, got %T", src)
 	}
 
-	parsed, err := ParseActionType(s)
+	parsed, err := parseActionType(s)
 	if err != nil {
 		return err
 	}
@@ -279,7 +279,7 @@ func (a *ActionType) Scan(src any) error {
 }
 
 // Value implements driver.Valuer for ActionType TEXT columns.
-func (a ActionType) Value() (driver.Value, error) {
+func (a actionType) Value() (driver.Value, error) {
 	switch a {
 	case ActionDownload, ActionUpload, ActionLocalDelete, ActionRemoteDelete,
 		ActionLocalMove, ActionRemoteMove, ActionFolderCreate, ActionConflictCopy,
@@ -290,17 +290,17 @@ func (a ActionType) Value() (driver.Value, error) {
 	}
 }
 
-// FolderCreateSide specifies where a new folder should be created.
-type FolderCreateSide int
+// folderCreateSide specifies where a new folder should be created.
+type folderCreateSide int
 
 const (
-	CreateLocal FolderCreateSide = iota
+	createLocal folderCreateSide = iota
 	CreateRemote
 )
 
-func (s FolderCreateSide) String() string {
+func (s folderCreateSide) String() string {
 	switch s {
-	case CreateLocal:
+	case createLocal:
 		return strLocal
 	case CreateRemote:
 		return strRemote

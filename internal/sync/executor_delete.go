@@ -8,31 +8,23 @@ import (
 	"os"
 	slashpath "path"
 	"path/filepath"
-	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// IsDisposable returns true for bundled junk names that are safe to remove
+// isDisposable returns true for bundled junk names that are safe to remove
 // when configured junk filtering makes them non-content. Invalid OneDrive
 // names are user-actionable observation issues, not disposable trash.
-func IsDisposable(name string) bool {
+func isDisposable(name string) bool {
 	return isBundledJunkName(name)
 }
 
-// FindNonDisposable recursively checks a directory for non-disposable files.
-// Returns the relative path to the first non-disposable file found, or ""
-// if all contents are disposable.
-func FindNonDisposable(tree *synctree.Root, dirPath string) string {
-	return findNonDisposable(tree, dirPath, IsDisposable)
+func (e *executor) isDisposable(name string) bool {
+	return e.ignoreJunkFiles && isDisposable(name)
 }
 
-func (e *Executor) isDisposable(name string) bool {
-	return e.ignoreJunkFiles && IsDisposable(name)
-}
-
-func (e *Executor) findNonDisposable(dirPath string) string {
+func (e *executor) findNonDisposable(dirPath string) string {
 	return findNonDisposable(e.syncTree, dirPath, e.isDisposable)
 }
 
@@ -64,7 +56,7 @@ func findNonDisposable(tree *synctree.Root, dirPath string, isDisposable func(st
 // ExecuteLocalDelete removes a local file or folder with S4 safety:
 // for files, verifies hash before delete; mismatch keeps the local file and
 // recreates the remote copy instead of deleting newer content.
-func (e *Executor) ExecuteLocalDelete(ctx context.Context, action *Action) ActionOutcome {
+func (e *executor) ExecuteLocalDelete(ctx context.Context, action *Action) actionOutcome {
 	if boundary, ok, err := e.symlinkBoundaryForPath(action.Path); err != nil {
 		return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(err))
 	} else if ok {
@@ -85,7 +77,7 @@ func (e *Executor) ExecuteLocalDelete(ctx context.Context, action *Action) Actio
 				ActionLocalDelete,
 				stalePreconditionError("local delete source %s is already absent", action.Path),
 				action.Path,
-				PermissionCapabilityLocalWrite,
+				permissionCapabilityLocalWrite,
 			)
 		}
 
@@ -104,35 +96,7 @@ func (e *Executor) ExecuteLocalDelete(ctx context.Context, action *Action) Actio
 	return e.DeleteLocalFile(ctx, action, absPath, info)
 }
 
-func (e *Executor) symlinkBoundaryForPath(relPath string) (string, bool, error) {
-	clean := slashpath.Clean(filepath.ToSlash(relPath))
-	if clean == "." || clean == "" {
-		return "", false, nil
-	}
-
-	current := ""
-	for _, part := range strings.Split(clean, "/") {
-		if part == "" || part == "." {
-			continue
-		}
-		current = slashpath.Join(current, part)
-		info, err := e.syncTree.Lstat(current)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return "", false, nil
-			}
-
-			return "", false, fmt.Errorf("lstat %s: %w", current, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return current, true, nil
-		}
-	}
-
-	return "", false, nil
-}
-
-func (e *Executor) DeleteLocalSymlink(action *Action, relPath string) ActionOutcome {
+func (e *executor) DeleteLocalSymlink(action *Action, relPath string) actionOutcome {
 	if err := e.syncTree.Remove(relPath); err != nil {
 		return e.failedOutcome(
 			action,
@@ -150,7 +114,7 @@ func (e *Executor) DeleteLocalSymlink(action *Action, relPath string) ActionOutc
 // planner-facing blocker check: the final rooted RemoveEmptyDirNoFollow call
 // rechecks emptiness, and the underlying rmdir fails closed if a child appears
 // after that recheck.
-func (e *Executor) DeleteLocalFolder(action *Action, absPath string) ActionOutcome {
+func (e *executor) DeleteLocalFolder(action *Action, absPath string) actionOutcome {
 	relPath, err := e.syncTree.Rel(absPath)
 	if err != nil {
 		return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(err))
@@ -158,7 +122,7 @@ func (e *Executor) DeleteLocalFolder(action *Action, absPath string) ActionOutco
 
 	preconditionErr := e.validateLocalDeleteFolderPrecondition(action, relPath)
 	if preconditionErr != nil {
-		return e.failedOutcomeWithFailure(action, ActionLocalDelete, preconditionErr, action.Path, PermissionCapabilityLocalWrite)
+		return e.failedOutcomeWithFailure(action, ActionLocalDelete, preconditionErr, action.Path, permissionCapabilityLocalWrite)
 	}
 
 	entries, err := e.syncTree.ReadDir(relPath)
@@ -216,7 +180,7 @@ func (e *Executor) DeleteLocalFolder(action *Action, absPath string) ActionOutco
 // Hash mismatch means the file changed after planning; the executor keeps the
 // local file in place and returns a stale-precondition failure so the engine
 // replans from current truth.
-func (e *Executor) DeleteLocalFile(_ context.Context, action *Action, absPath string, info os.FileInfo) ActionOutcome {
+func (e *executor) DeleteLocalFile(_ context.Context, action *Action, absPath string, info os.FileInfo) actionOutcome {
 	baselineHash := ""
 	baselineRemoteHash := ""
 
@@ -241,7 +205,7 @@ func (e *Executor) DeleteLocalFile(_ context.Context, action *Action, absPath st
 				action,
 				ActionLocalDelete,
 				fmt.Errorf("%w: local delete hash mismatch for %s (baseline=%s current=%s remote=%s mtime=%d)",
-					ErrActionPreconditionChanged,
+					errActionPreconditionChanged,
 					action.Path,
 					baselineHash,
 					currentHash,
@@ -249,7 +213,7 @@ func (e *Executor) DeleteLocalFile(_ context.Context, action *Action, absPath st
 					info.ModTime().UnixNano(),
 				),
 				action.Path,
-				PermissionCapabilityLocalWrite,
+				permissionCapabilityLocalWrite,
 			)
 		}
 	}
@@ -265,7 +229,7 @@ func (e *Executor) DeleteLocalFile(_ context.Context, action *Action, absPath st
 
 // ExecuteRemoteDelete removes an item from OneDrive after checking the planned
 // remote item still exists and matches the action preconditions.
-func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) ActionOutcome {
+func (e *executor) ExecuteRemoteDelete(ctx context.Context, action *Action) actionOutcome {
 	driveID := e.resolveDriveID(action)
 
 	sourceETag, err := e.remoteSourcePreconditionETag(ctx, driveID, action, "remote delete")
@@ -275,7 +239,7 @@ func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) Acti
 			ActionRemoteDelete,
 			err,
 			action.Path,
-			PermissionCapabilityRemoteRead,
+			permissionCapabilityRemoteRead,
 		)
 	}
 
@@ -287,7 +251,7 @@ func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) Acti
 				ActionRemoteDelete,
 				stalePreconditionError("remote delete item %s disappeared", action.ItemID),
 				action.Path,
-				PermissionCapabilityRemoteWrite,
+				permissionCapabilityRemoteWrite,
 			)
 		}
 		if errors.Is(err, graph.ErrPreconditionFailed) {
@@ -296,7 +260,7 @@ func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) Acti
 				ActionRemoteDelete,
 				stalePreconditionError("remote delete item %s changed before mutation", action.ItemID),
 				action.Path,
-				PermissionCapabilityRemoteWrite,
+				permissionCapabilityRemoteWrite,
 			)
 		}
 
@@ -305,7 +269,7 @@ func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) Acti
 			ActionRemoteDelete,
 			fmt.Errorf("deleting remote %s: %w", action.Path, err),
 			action.Path,
-			inferFailureCapabilityFromError(err, PermissionCapabilityUnknown, PermissionCapabilityRemoteWrite),
+			inferFailureCapabilityFromError(err, permissionCapabilityUnknown, permissionCapabilityRemoteWrite),
 		)
 	}
 
@@ -315,8 +279,8 @@ func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) Acti
 }
 
 // DeleteOutcome builds a successful ActionOutcome for a delete action.
-func (e *Executor) DeleteOutcome(action *Action, actionType ActionType) ActionOutcome {
-	return ActionOutcome{
+func (e *executor) DeleteOutcome(action *Action, actionType actionType) actionOutcome {
+	return actionOutcome{
 		Action:   actionType,
 		Success:  true,
 		Path:     action.Path,

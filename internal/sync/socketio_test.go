@@ -169,12 +169,12 @@ func TestSocketIOWakeSource_NotificationTriggersWake(t *testing.T) {
 		}},
 	}
 
-	var lifecycleEvents []SocketIOLifecycleEvent
+	var lifecycleEvents []socketIOLifecycleEvent
 	var lifecycleMu sync.Mutex
-	source := NewSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
+	source := newSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), socketIOWakeSourceOptions{
 		Logger:     synctest.TestLogger(t),
 		BackoffMax: 10 * time.Millisecond,
-		LifecycleHook: func(event SocketIOLifecycleEvent) {
+		LifecycleHook: func(event socketIOLifecycleEvent) {
 			lifecycleMu.Lock()
 			defer lifecycleMu.Unlock()
 			lifecycleEvents = append(lifecycleEvents, event)
@@ -200,8 +200,8 @@ func TestSocketIOWakeSource_NotificationTriggersWake(t *testing.T) {
 	close(holdConn)
 	require.NoError(t, <-done)
 	assert.Equal(t, 1, fetcher.CallCount())
-	assert.True(t, containsLifecycleEvent(lifecycleEvents, SocketIOLifecycleEventConnected))
-	assert.True(t, containsLifecycleEvent(lifecycleEvents, SocketIOLifecycleEventNotificationWake))
+	assert.True(t, containsLifecycleEvent(lifecycleEvents, socketIOLifecycleEventConnected))
+	assert.True(t, containsLifecycleEvent(lifecycleEvents, socketIOLifecycleEventNotificationWake))
 }
 
 // Validates: R-2.8.5
@@ -246,7 +246,7 @@ func TestSocketIOWakeSource_ReconnectsAfterDisconnect(t *testing.T) {
 		},
 	}
 
-	source := NewSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
+	source := newSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), socketIOWakeSourceOptions{
 		Logger:     synctest.TestLogger(t),
 		BackoffMax: 10 * time.Millisecond,
 	})
@@ -332,7 +332,7 @@ func TestSocketIOWakeSource_RefreshesEndpointBeforeExpiry(t *testing.T) {
 		},
 	}
 
-	source := NewSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
+	source := newSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), socketIOWakeSourceOptions{
 		Logger:          synctest.TestLogger(t),
 		RefreshLeadTime: refreshLeadTime,
 		BackoffMax:      10 * time.Millisecond,
@@ -366,22 +366,22 @@ func TestSocketIOWakeSource_EndpointFetchFailureEmitsLifecycleEvent(t *testing.T
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	var events []SocketIOLifecycleEvent
-	source := NewSocketIOWakeSourceWithOptions(&mockSocketIOEndpointFetcher{}, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
+	var events []socketIOLifecycleEvent
+	source := newSocketIOWakeSourceWithOptions(&mockSocketIOEndpointFetcher{}, driveid.New(synctest.TestDriveID), socketIOWakeSourceOptions{
 		Logger: synctest.TestLogger(t),
 		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			cancel()
 			return context.Canceled
 		},
-		LifecycleHook: func(event SocketIOLifecycleEvent) {
+		LifecycleHook: func(event socketIOLifecycleEvent) {
 			events = append(events, event)
 		},
 	})
 
 	err := source.Run(ctx, make(chan struct{}, 1))
 	require.NoError(t, err)
-	assert.True(t, containsLifecycleEvent(events, SocketIOLifecycleEventEndpointFetchFail))
-	assert.True(t, containsLifecycleEvent(events, SocketIOLifecycleEventStopped))
+	assert.True(t, containsLifecycleEvent(events, socketIOLifecycleEventEndpointFetchFail))
+	assert.True(t, containsLifecycleEvent(events, socketIOLifecycleEventStopped))
 }
 
 func TestSocketIOWakeSource_ConnectFailureEmitsLifecycleEvent(t *testing.T) {
@@ -397,8 +397,8 @@ func TestSocketIOWakeSource_ConnectFailureEmitsLifecycleEvent(t *testing.T) {
 		}},
 	}
 
-	var events []SocketIOLifecycleEvent
-	source := NewSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
+	var events []socketIOLifecycleEvent
+	source := newSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), socketIOWakeSourceOptions{
 		Logger: synctest.TestLogger(t),
 		DialFunc: func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error) {
 			return nil, nil, errors.New("dial failed")
@@ -407,15 +407,15 @@ func TestSocketIOWakeSource_ConnectFailureEmitsLifecycleEvent(t *testing.T) {
 			cancel()
 			return context.Canceled
 		},
-		LifecycleHook: func(event SocketIOLifecycleEvent) {
+		LifecycleHook: func(event socketIOLifecycleEvent) {
 			events = append(events, event)
 		},
 	})
 
 	err := source.Run(ctx, make(chan struct{}, 1))
 	require.NoError(t, err)
-	assert.True(t, containsLifecycleEvent(events, SocketIOLifecycleEventConnectFail))
-	assert.True(t, containsLifecycleEvent(events, SocketIOLifecycleEventStopped))
+	assert.True(t, containsLifecycleEvent(events, socketIOLifecycleEventConnectFail))
+	assert.True(t, containsLifecycleEvent(events, socketIOLifecycleEventStopped))
 }
 
 func TestSocketIOWakeSource_PingPongHandling(t *testing.T) {
@@ -451,7 +451,7 @@ func TestSocketIOWakeSource_PingPongHandling(t *testing.T) {
 		}},
 	}
 
-	source := NewSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
+	source := newSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), socketIOWakeSourceOptions{
 		Logger: synctest.TestLogger(t),
 	})
 
@@ -473,7 +473,7 @@ func TestSocketIOWakeSource_PingPongHandling(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
-func containsLifecycleEvent(events []SocketIOLifecycleEvent, target SocketIOLifecycleEventType) bool {
+func containsLifecycleEvent(events []socketIOLifecycleEvent, target socketIOLifecycleEventType) bool {
 	for _, event := range events {
 		if event.Type == target {
 			return true

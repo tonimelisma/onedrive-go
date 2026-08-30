@@ -37,10 +37,10 @@ const (
 	trialHintFatal
 )
 
-// ResultDecision is the single classification output consumed by result
+// resultDecision is the single classification output consumed by result
 // routing. The decision is behavior-complete so downstream code does not
 // re-derive policy from raw HTTP/local error facts.
-type ResultDecision struct {
+type resultDecision struct {
 	Class             errclass.Class
 	ConditionKey      ConditionKey
 	ScopeKey          ScopeKey
@@ -55,9 +55,9 @@ type ResultDecision struct {
 // classifyResult is a pure function that maps a ActionCompletion to a
 // single ResultDecision. No side effects — classification is separate from
 // routing.
-func classifyResult(r *ActionCompletion) ResultDecision {
+func classifyResult(r *actionCompletion) resultDecision {
 	if r.Success {
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:         resultSuccess,
 			RecordSuccess: true,
 			TrialHint:     trialHintRelease,
@@ -65,7 +65,7 @@ func classifyResult(r *ActionCompletion) ResultDecision {
 	}
 
 	if errors.Is(r.Err, context.Canceled) || errors.Is(r.Err, context.DeadlineExceeded) {
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:     resultShutdown,
 			TrialHint: trialHintShutdown,
 		})
@@ -78,29 +78,29 @@ func classifyResult(r *ActionCompletion) ResultDecision {
 	return classifyLocalResult(r)
 }
 
-func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
+func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {
 	scopeEvidence := deriveScopeKey(r)
 	conditionType := issueTypeForResult(r)
 
 	switch {
 	case r.HTTPStatus == 0:
-		return ResultDecision{}, false
+		return resultDecision{}, false
 	case r.HTTPStatus == http.StatusUnauthorized:
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:         resultFatal,
 			Persistence:   persistNone,
 			TrialHint:     trialHintFatal,
 			ConditionType: conditionType,
 		}), true
 	case r.HTTPStatus == http.StatusForbidden:
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:         resultSkip,
 			Persistence:   persistRetryWork,
 			TrialHint:     trialHintReclassify,
 			ConditionType: conditionType,
 		}), true
 	case r.HTTPStatus == http.StatusTooManyRequests:
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:             resultBlockScope,
 			ScopeKey:          scopeEvidence,
 			ScopeEvidence:     scopeEvidence,
@@ -110,7 +110,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 			ConditionType:     conditionType,
 		}), true
 	case r.HTTPStatus == http.StatusInsufficientStorage:
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:             resultBlockScope,
 			ScopeKey:          scopeEvidence,
 			ScopeEvidence:     scopeEvidence,
@@ -120,7 +120,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 			ConditionType:     conditionType,
 		}), true
 	case r.HTTPStatus >= http.StatusInternalServerError:
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:             resultRequeue,
 			ScopeEvidence:     scopeEvidence,
 			Persistence:       persistRetryWork,
@@ -129,7 +129,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 			ConditionType:     conditionType,
 		}), true
 	case isRetryableHTTPStatus(r.HTTPStatus):
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:             resultRequeue,
 			ScopeEvidence:     scopeEvidence,
 			Persistence:       persistRetryWork,
@@ -138,7 +138,7 @@ func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
 			ConditionType:     conditionType,
 		}), true
 	default:
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:         resultSkip,
 			Persistence:   persistRetryWork,
 			TrialHint:     trialHintReclassify,
@@ -154,18 +154,18 @@ func isRetryableHTTPStatus(status int) bool {
 		status == http.StatusLocked
 }
 
-func classifyLocalResult(r *ActionCompletion) ResultDecision {
+func classifyLocalResult(r *actionCompletion) resultDecision {
 	conditionType := issueTypeForResult(r)
 
 	switch {
-	case errors.Is(r.Err, ErrActionPreconditionChanged):
-		return withRuntimeSummary(&ResultDecision{
+	case errors.Is(r.Err, errActionPreconditionChanged):
+		return withRuntimeSummary(&resultDecision{
 			Class:       resultSuperseded,
 			Persistence: persistNone,
 			TrialHint:   trialHintReclassify,
 		})
 	case errors.Is(r.Err, driveops.ErrDiskFull):
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:         resultBlockScope,
 			ScopeKey:      SKDiskLocal(),
 			ScopeEvidence: SKDiskLocal(),
@@ -174,28 +174,28 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 			ConditionType: conditionType,
 		})
 	case errors.Is(r.Err, driveops.ErrFileTooLargeForSpace):
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:         resultSkip,
 			Persistence:   persistRetryWork,
 			TrialHint:     trialHintReclassify,
 			ConditionType: conditionType,
 		})
 	case errors.Is(r.Err, driveops.ErrFileExceedsOneDriveLimit):
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:         resultSkip,
 			Persistence:   persistRetryWork,
 			TrialHint:     trialHintReclassify,
 			ConditionType: conditionType,
 		})
 	case errors.Is(r.Err, os.ErrPermission):
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:         resultSkip,
 			Persistence:   persistRetryWork,
 			TrialHint:     trialHintReclassify,
 			ConditionType: conditionType,
 		})
 	default:
-		return withRuntimeSummary(&ResultDecision{
+		return withRuntimeSummary(&resultDecision{
 			Class:         resultSkip,
 			Persistence:   persistRetryWork,
 			TrialHint:     trialHintReclassify,
@@ -204,19 +204,19 @@ func classifyLocalResult(r *ActionCompletion) ResultDecision {
 	}
 }
 
-func withRuntimeSummary(decision *ResultDecision) ResultDecision {
-	decision.ConditionKey = ConditionKeyForRuntimeResult(decision.Class, decision.ConditionType)
+func withRuntimeSummary(decision *resultDecision) resultDecision {
+	decision.ConditionKey = conditionKeyForRuntimeResult(decision.Class, decision.ConditionType)
 	return *decision
 }
 
 // deriveScopeKey maps an action completion to its typed scope key. Delegates to
 // ScopeKeyForResult — single source of truth for HTTP status → scope
 // key mapping. Returns the zero-value ScopeKey for non-scope statuses.
-func deriveScopeKey(r *ActionCompletion) ScopeKey {
-	return ScopeKeyForResult(r.HTTPStatus, r.DriveID)
+func deriveScopeKey(r *actionCompletion) ScopeKey {
+	return scopeKeyForResult(r.HTTPStatus, r.DriveID)
 }
 
-func issueTypeForResult(r *ActionCompletion) string {
+func issueTypeForResult(r *actionCompletion) string {
 	if issueType, ok := issueTypeForHTTPResult(r); ok {
 		return issueType
 	}
@@ -227,7 +227,7 @@ func issueTypeForResult(r *ActionCompletion) string {
 	return ""
 }
 
-func issueTypeForHTTPResult(r *ActionCompletion) (string, bool) {
+func issueTypeForHTTPResult(r *actionCompletion) (string, bool) {
 	if r == nil {
 		return "", false
 	}
@@ -236,13 +236,13 @@ func issueTypeForHTTPResult(r *ActionCompletion) (string, bool) {
 	case httpStatus == http.StatusUnauthorized:
 		return IssueUnauthorized, true
 	case httpStatus == http.StatusTooManyRequests:
-		return IssueRateLimited, true
+		return issueRateLimited, true
 	case httpStatus == http.StatusInsufficientStorage:
 		return IssueQuotaExceeded, true
 	case httpStatus == http.StatusForbidden:
 		return issueTypeForForbiddenResult(r), true
 	case httpStatus >= http.StatusInternalServerError:
-		return IssueServiceOutage, true
+		return issueServiceOutage, true
 	case httpStatus == http.StatusRequestTimeout:
 		return "request_timeout", true
 	case httpStatus == http.StatusPreconditionFailed:
@@ -256,32 +256,32 @@ func issueTypeForHTTPResult(r *ActionCompletion) (string, bool) {
 	}
 }
 
-func issueTypeForForbiddenResult(r *ActionCompletion) string {
+func issueTypeForForbiddenResult(r *actionCompletion) string {
 	switch effectiveRemotePermissionCapability(r) {
-	case PermissionCapabilityRemoteRead:
-		return IssueRemoteReadDenied
-	case PermissionCapabilityUnknown,
-		PermissionCapabilityLocalRead,
-		PermissionCapabilityLocalWrite,
-		PermissionCapabilityRemoteWrite:
+	case permissionCapabilityRemoteRead:
+		return issueRemoteReadDenied
+	case permissionCapabilityUnknown,
+		permissionCapabilityLocalRead,
+		permissionCapabilityLocalWrite,
+		permissionCapabilityRemoteWrite:
 		return IssueRemoteWriteDenied
 	default:
 		return IssueRemoteWriteDenied
 	}
 }
 
-func issueTypeForFilesystemResult(r *ActionCompletion) (string, bool) {
+func issueTypeForFilesystemResult(r *actionCompletion) (string, bool) {
 	if r == nil {
 		return "", false
 	}
 
 	switch err := r.Err; {
 	case errors.Is(err, driveops.ErrDiskFull):
-		return IssueDiskFull, true
+		return issueDiskFull, true
 	case errors.Is(err, driveops.ErrFileTooLargeForSpace):
-		return IssueFileTooLargeForSpace, true
+		return issueFileTooLargeForSpace, true
 	case errors.Is(err, driveops.ErrFileExceedsOneDriveLimit):
-		return IssueFileTooLarge, true
+		return issueFileTooLarge, true
 	case errors.Is(err, os.ErrPermission):
 		return issueTypeForLocalPermissionResult(r), true
 	default:
@@ -289,67 +289,67 @@ func issueTypeForFilesystemResult(r *ActionCompletion) (string, bool) {
 	}
 }
 
-func issueTypeForLocalPermissionResult(r *ActionCompletion) string {
+func issueTypeForLocalPermissionResult(r *actionCompletion) string {
 	switch effectiveLocalPermissionCapability(r) {
-	case PermissionCapabilityLocalRead:
-		return IssueLocalReadDenied
-	case PermissionCapabilityUnknown,
-		PermissionCapabilityLocalWrite,
-		PermissionCapabilityRemoteRead,
-		PermissionCapabilityRemoteWrite:
-		return IssueLocalWriteDenied
+	case permissionCapabilityLocalRead:
+		return issueLocalReadDenied
+	case permissionCapabilityUnknown,
+		permissionCapabilityLocalWrite,
+		permissionCapabilityRemoteRead,
+		permissionCapabilityRemoteWrite:
+		return issueLocalWriteDenied
 	default:
-		return IssueLocalWriteDenied
+		return issueLocalWriteDenied
 	}
 }
 
-func effectiveRemotePermissionCapability(r *ActionCompletion) PermissionCapability {
+func effectiveRemotePermissionCapability(r *actionCompletion) permissionCapability {
 	if r == nil {
-		return PermissionCapabilityUnknown
+		return permissionCapabilityUnknown
 	}
-	if r.FailureCapability == PermissionCapabilityRemoteRead || r.FailureCapability == PermissionCapabilityRemoteWrite {
+	if r.FailureCapability == permissionCapabilityRemoteRead || r.FailureCapability == permissionCapabilityRemoteWrite {
 		return r.FailureCapability
 	}
 	if !hasPermissionActionContext(r) {
-		return PermissionCapabilityUnknown
+		return permissionCapabilityUnknown
 	}
 
 	switch r.ActionType {
 	case ActionDownload:
-		return PermissionCapabilityRemoteRead
+		return permissionCapabilityRemoteRead
 	case ActionUpload, ActionRemoteDelete, ActionRemoteMove, ActionFolderCreate:
-		return PermissionCapabilityRemoteWrite
+		return permissionCapabilityRemoteWrite
 	case ActionConflictCopy, ActionLocalDelete, ActionLocalMove, ActionBaselineUpdate, ActionCleanup:
-		return PermissionCapabilityUnknown
+		return permissionCapabilityUnknown
 	default:
-		return PermissionCapabilityUnknown
+		return permissionCapabilityUnknown
 	}
 }
 
-func effectiveLocalPermissionCapability(r *ActionCompletion) PermissionCapability {
+func effectiveLocalPermissionCapability(r *actionCompletion) permissionCapability {
 	if r == nil {
-		return PermissionCapabilityUnknown
+		return permissionCapabilityUnknown
 	}
-	if r.FailureCapability == PermissionCapabilityLocalRead || r.FailureCapability == PermissionCapabilityLocalWrite {
+	if r.FailureCapability == permissionCapabilityLocalRead || r.FailureCapability == permissionCapabilityLocalWrite {
 		return r.FailureCapability
 	}
 	if !hasPermissionActionContext(r) {
-		return PermissionCapabilityUnknown
+		return permissionCapabilityUnknown
 	}
 
 	switch r.ActionType {
 	case ActionUpload:
-		return PermissionCapabilityLocalRead
+		return permissionCapabilityLocalRead
 	case ActionDownload, ActionLocalDelete, ActionLocalMove, ActionFolderCreate, ActionConflictCopy, ActionCleanup:
-		return PermissionCapabilityLocalWrite
+		return permissionCapabilityLocalWrite
 	case ActionRemoteDelete, ActionRemoteMove, ActionBaselineUpdate:
-		return PermissionCapabilityUnknown
+		return permissionCapabilityUnknown
 	default:
-		return PermissionCapabilityUnknown
+		return permissionCapabilityUnknown
 	}
 }
 
-func hasPermissionActionContext(r *ActionCompletion) bool {
+func hasPermissionActionContext(r *actionCompletion) bool {
 	if r == nil {
 		return false
 	}

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 type authPreflightAttempt struct {
@@ -20,6 +22,10 @@ func (attempt authPreflightAttempt) succeeded() bool {
 	return attempt.StatusCode == http.StatusOK && attempt.Err == ""
 }
 
+// authPreflightProviderReadOnlyReason marks a Microsoft-side read-only window.
+// The live suite treats it as "could not test", not "the change is broken".
+const authPreflightProviderReadOnlyReason = "provider_read_only"
+
 type authPreflightRetryDecision struct {
 	Retry  bool
 	Reason string
@@ -30,6 +36,17 @@ func classifyAuthPreflightAttempt(path string, attempt authPreflightAttempt) aut
 		return authPreflightRetryDecision{
 			Retry:  false,
 			Reason: "success",
+		}
+	}
+
+	// A backend read-only window is not lag and not a credential problem: the
+	// service is answering and refusing. Polling it for the full timeout only
+	// converts a known outcome into a slow one. Checked before the per-path
+	// rules because it can appear on any endpoint.
+	if graph.IsProviderReadOnlyCode(attempt.Code) {
+		return authPreflightRetryDecision{
+			Retry:  false,
+			Reason: authPreflightProviderReadOnlyReason,
 		}
 	}
 

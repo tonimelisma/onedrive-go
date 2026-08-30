@@ -14,7 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-func newTestPermHandler(t *testing.T, checker PermissionChecker) (*PermissionHandler, string) {
+func newTestPermHandler(t *testing.T, checker permissionChecker) (*permissionHandler, string) {
 	t.Helper()
 
 	syncRoot := filepath.Join(t.TempDir(), "sync")
@@ -22,7 +22,7 @@ func newTestPermHandler(t *testing.T, checker PermissionChecker) (*PermissionHan
 
 	store := newTestStore(t)
 
-	return &PermissionHandler{
+	return &permissionHandler{
 		store:       store,
 		permChecker: checker,
 		syncTree:    mustOpenSyncTree(t, syncRoot),
@@ -91,7 +91,7 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 	ph, syncRoot := newTestPermHandler(t, nil)
 
 	require.NoError(t, os.Chmod(syncRoot, 0o000))
-	r := &ActionCompletion{
+	r := &actionCompletion{
 		Path:       "file.txt",
 		ActionType: ActionDownload,
 		ErrMsg:     "permission denied",
@@ -101,7 +101,7 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 
 	require.NotEqual(t, permissionEvidenceNone, decision.Kind)
 	assert.Equal(t, permissionEvidenceFileDenied, decision.Kind)
-	assert.Equal(t, IssueLocalReadDenied, decision.IssueType)
+	assert.Equal(t, issueLocalReadDenied, decision.IssueType)
 }
 
 func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
@@ -112,7 +112,7 @@ func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 	subDir := filepath.Join(syncRoot, "blocked")
 	require.NoError(t, os.MkdirAll(subDir, 0o750))
 	require.NoError(t, os.Chmod(subDir, 0o000))
-	r := &ActionCompletion{
+	r := &actionCompletion{
 		Path:       "blocked/file.txt",
 		ActionType: ActionDownload,
 		ErrMsg:     "permission denied",
@@ -122,7 +122,7 @@ func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 
 	require.NotEqual(t, permissionEvidenceNone, decision.Kind)
 	assert.Equal(t, permissionEvidenceBoundaryDenied, decision.Kind)
-	assert.Equal(t, IssueLocalReadDenied, decision.IssueType)
+	assert.Equal(t, issueLocalReadDenied, decision.IssueType)
 	assert.Equal(t, "blocked", decision.BoundaryPath)
 }
 
@@ -134,7 +134,7 @@ func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
 	subDir := filepath.Join(syncRoot, "accessible")
 	require.NoError(t, os.MkdirAll(subDir, 0o750))
 
-	r := &ActionCompletion{
+	r := &actionCompletion{
 		Path:       "accessible/file.txt",
 		ActionType: ActionDownload,
 		ErrMsg:     "permission denied",

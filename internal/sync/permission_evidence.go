@@ -1,19 +1,19 @@
 package sync
 
-type PermissionEvidenceKind int
+type permissionEvidenceKind int
 
 const (
-	permissionEvidenceNone PermissionEvidenceKind = iota
+	permissionEvidenceNone permissionEvidenceKind = iota
 	permissionEvidenceFileDenied
 	permissionEvidenceBoundaryDenied
 	permissionEvidenceKnownActiveBoundary
 )
 
-// PermissionEvidence is the pure probe-layer result for one permission check.
+// permissionEvidence is the pure probe-layer result for one permission check.
 // It carries only observed facts; the engine-owned runtime permission handlers
 // decide persistence, blocking, and logging from this evidence.
-type PermissionEvidence struct {
-	Kind         PermissionEvidenceKind
+type permissionEvidence struct {
+	Kind         permissionEvidenceKind
 	TriggerPath  string
 	BoundaryPath string
 	IssueType    string

@@ -18,7 +18,7 @@ func (c *Client) Me(ctx context.Context) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var ur userResponse
 	if err := json.NewDecoder(resp.Body).Decode(&ur); err != nil {
@@ -61,7 +61,7 @@ func (c *Client) drivesList(ctx context.Context) ([]Drive, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var dlr drivesListResponse
 	if err := json.NewDecoder(resp.Body).Decode(&dlr); err != nil {
@@ -149,7 +149,7 @@ func (c *Client) PrimaryDrive(ctx context.Context) (*Drive, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var dr driveResponse
 	if err := json.NewDecoder(resp.Body).Decode(&dr); err != nil {
@@ -179,7 +179,7 @@ func (c *Client) Drive(ctx context.Context, driveID driveid.ID) (*Drive, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var dr driveResponse
 	if err := json.NewDecoder(resp.Body).Decode(&dr); err != nil {
@@ -209,7 +209,7 @@ func (c *Client) Organization(ctx context.Context) (*Organization, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var orgResp orgResponse
 	if err := json.NewDecoder(resp.Body).Decode(&orgResp); err != nil {

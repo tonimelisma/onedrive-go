@@ -81,7 +81,7 @@ func TestSyncStore_ReconcileObservationFindings_ReplacesManagedIssueSet(t *testi
 	now := time.Date(2026, 4, 19, 10, 0, 0, 0, time.UTC)
 
 	seedObservationIssueForTest(t, store, "old-invalid.txt", IssueInvalidFilename, ScopeKey{})
-	seedObservationIssueForTest(t, store, "old-private", IssueLocalReadDenied, SKPermLocalRead("old-private"))
+	seedObservationIssueForTest(t, store, "old-private", issueLocalReadDenied, sKPermLocalRead("old-private"))
 
 	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
 		Issues: []ObservationIssue{
@@ -93,11 +93,11 @@ func TestSyncStore_ReconcileObservationFindings_ReplacesManagedIssueSet(t *testi
 			{
 				Path:      "Private",
 				DriveID:   driveid.New(testDriveID),
-				IssueType: IssueLocalReadDenied,
-				ScopeKey:  SKPermLocalRead("Private"),
+				IssueType: issueLocalReadDenied,
+				ScopeKey:  sKPermLocalRead("Private"),
 			},
 		},
-		ManagedIssueTypes: []string{IssueInvalidFilename, IssueLocalReadDenied},
+		ManagedIssueTypes: []string{IssueInvalidFilename, issueLocalReadDenied},
 	}, now))
 
 	rows, err := store.ListObservationIssues(ctx)
@@ -118,9 +118,9 @@ func TestSyncStore_ReconcileObservationFindings_FileReadDeniedDoesNotCreateReadB
 		Issues: []ObservationIssue{{
 			Path:      "Private/file.txt",
 			DriveID:   driveid.New(testDriveID),
-			IssueType: IssueLocalReadDenied,
+			IssueType: issueLocalReadDenied,
 		}},
-		ManagedIssueTypes: []string{IssueLocalReadDenied},
+		ManagedIssueTypes: []string{issueLocalReadDenied},
 	}, now))
 
 	blocks, err := store.ListBlockScopes(ctx)
@@ -141,17 +141,17 @@ func TestSyncStore_ReconcileObservationFindings_OnlyClearsManagedFamilies(t *tes
 	ctx := t.Context()
 	now := time.Date(2026, 4, 19, 10, 15, 0, 0, time.UTC)
 
-	seedObservationIssueForTest(t, store, "Private", IssueLocalReadDenied, SKPermLocalRead("Private"))
-	seedObservationIssueForTest(t, store, "/", IssueRemoteReadDenied, SKPermRemoteRead(""))
+	seedObservationIssueForTest(t, store, "Private", issueLocalReadDenied, sKPermLocalRead("Private"))
+	seedObservationIssueForTest(t, store, "/", issueRemoteReadDenied, sKPermRemoteRead(""))
 
 	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
 		Issues: []ObservationIssue{{
 			Path:      "/",
 			DriveID:   driveid.New(testDriveID),
-			IssueType: IssueRemoteReadDenied,
-			ScopeKey:  SKPermRemoteRead(""),
+			IssueType: issueRemoteReadDenied,
+			ScopeKey:  sKPermRemoteRead(""),
 		}},
-		ManagedIssueTypes: []string{IssueRemoteReadDenied},
+		ManagedIssueTypes: []string{issueRemoteReadDenied},
 	}, now))
 
 	rows, err := store.ListObservationIssues(ctx)
@@ -168,11 +168,11 @@ func TestSyncStore_ReconcileObservationFindings_ManagedPathsOnlyTouchTargetedPat
 	ctx := t.Context()
 	now := time.Date(2026, 4, 19, 10, 20, 0, 0, time.UTC)
 
-	seedObservationIssueForTest(t, store, "Private/file.txt", IssueLocalReadDenied, ScopeKey{})
-	seedObservationIssueForTest(t, store, "Other/file.txt", IssueLocalReadDenied, ScopeKey{})
+	seedObservationIssueForTest(t, store, "Private/file.txt", issueLocalReadDenied, ScopeKey{})
+	seedObservationIssueForTest(t, store, "Other/file.txt", issueLocalReadDenied, ScopeKey{})
 
 	require.NoError(t, store.ReconcileObservationFindings(ctx, &ObservationFindingsBatch{
-		ManagedIssueTypes: []string{IssueLocalReadDenied},
+		ManagedIssueTypes: []string{issueLocalReadDenied},
 		ManagedPaths:      []string{"Private/file.txt"},
 	}, now))
 
@@ -180,5 +180,5 @@ func TestSyncStore_ReconcileObservationFindings_ManagedPathsOnlyTouchTargetedPat
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "Other/file.txt", rows[0].Path)
-	assert.Equal(t, IssueLocalReadDenied, rows[0].IssueType)
+	assert.Equal(t, issueLocalReadDenied, rows[0].IssueType)
 }

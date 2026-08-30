@@ -9,17 +9,17 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
-type StateStoreIncompatibleReason string
+type stateStoreIncompatibleReason string
 
 const (
-	StateStoreIncompatibleReasonOpenFailed         StateStoreIncompatibleReason = "open_failed"
-	StateStoreIncompatibleReasonIncompatibleSchema StateStoreIncompatibleReason = "incompatible_schema"
+	stateStoreIncompatibleReasonOpenFailed         stateStoreIncompatibleReason = "open_failed"
+	StateStoreIncompatibleReasonIncompatibleSchema stateStoreIncompatibleReason = "incompatible_schema"
 )
 
-var ErrStateStoreIncompatible = errors.New("sync: incompatible sync state DB")
+var errStateStoreIncompatible = errors.New("sync: incompatible sync state DB")
 
 type StateStoreIncompatibleError struct {
-	Reason StateStoreIncompatibleReason
+	Reason stateStoreIncompatibleReason
 	Cause  error
 }
 
@@ -44,16 +44,16 @@ func (e *StateStoreIncompatibleError) Unwrap() error {
 }
 
 func (e *StateStoreIncompatibleError) Is(target error) bool {
-	return target == ErrStateStoreIncompatible
+	return target == errStateStoreIncompatible
 }
 
 func IsStateStoreIncompatible(err error) bool {
-	return errors.Is(err, ErrStateStoreIncompatible)
+	return errors.Is(err, errStateStoreIncompatible)
 }
 
-func (r StateStoreIncompatibleReason) Description() string {
+func (r stateStoreIncompatibleReason) Description() string {
 	switch r {
-	case StateStoreIncompatibleReasonOpenFailed:
+	case stateStoreIncompatibleReasonOpenFailed:
 		return "existing sync state DB could not be opened"
 	case StateStoreIncompatibleReasonIncompatibleSchema:
 		return "existing sync state DB uses an unsupported store generation or schema"
@@ -75,8 +75,8 @@ func openEngineSyncStore(ctx context.Context, dbPath string, logger *slog.Logger
 		return nil, err
 	}
 
-	reason := StateStoreIncompatibleReasonOpenFailed
-	if errors.Is(err, ErrIncompatibleSchema) {
+	reason := stateStoreIncompatibleReasonOpenFailed
+	if errors.Is(err, errIncompatibleSchema) {
 		reason = StateStoreIncompatibleReasonIncompatibleSchema
 	}
 

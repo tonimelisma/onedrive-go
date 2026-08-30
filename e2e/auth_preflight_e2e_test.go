@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -56,7 +55,33 @@ func assertLiveAuthPreflight(t *testing.T, driveID string) {
 	started = time.Now()
 	drivesAttempts, err := waitForAuthPreflightEndpoint(t.Context(), httpClient, ts, "/me/drives")
 	recordAuthPreflightDecisionEvent(t, driveID, "/me/drives", drivesAttempts, err)
+	skipOnProviderReadOnly(t, driveID, "/me/drives", drivesAttempts)
 	require.NoErrorf(t, err, "%s", formatAuthPreflightFailure(driveID, "/me/drives", time.Since(started), drivesAttempts))
+}
+
+// skipOnProviderReadOnly stops the live lane when Microsoft reports a backend
+// read-only window.
+//
+// Failing here would assert something untrue: that the change under test is
+// broken. The provider refused to serve a read that has nothing to do with the
+// diff, so the honest result is that the suite could not run. The skip is
+// deliberately narrow -- only the explicit serviceReadOnly signal qualifies,
+// and every other failure stays red.
+func skipOnProviderReadOnly(t *testing.T, driveID string, path string, attempts []authPreflightAttempt) {
+	t.Helper()
+
+	for i := range attempts {
+		if !graph.IsProviderReadOnlyCode(attempts[i].Code) {
+			continue
+		}
+
+		t.Skipf(
+			"provider read-only window: %s returned %s for %s (request-id %s). "+
+				"Authentication and the drive itself are unaffected; this is a Microsoft-side "+
+				"read-only state that no client retry clears. See LI-20260823-01.",
+			path, attempts[i].Code, driveID, attempts[i].RequestID,
+		)
+	}
 }
 
 func waitForAuthPreflightEndpoint(
@@ -134,15 +159,8 @@ func runAuthPreflightAttempt(
 }
 
 func authPreflightGraphCode(body []byte) string {
-	var payload struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
-	}
-
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return ""
-	}
-
-	return payload.Error.Code
+	// Reuse the client's parser rather than a second local one: the inner code
+	// is what distinguishes a provider read-only window from an ordinary
+	// permission failure, and two parsers would drift.
+	return graph.MostSpecificErrorCode(body)
 }

@@ -10,8 +10,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-func makeTrackedAction(actionType ActionType, path string) *TrackedAction {
-	return &TrackedAction{
+func makeTrackedAction(actionType actionType, path string) *trackedAction {
+	return &trackedAction{
 		Action: Action{
 			Type:    actionType,
 			Path:    path,
@@ -26,12 +26,12 @@ func makeTrackedAction(actionType ActionType, path string) *TrackedAction {
 func TestFindBlockingScope_TargetThrottlePriorityWins(t *testing.T) {
 	t.Parallel()
 
-	blocks := []ActiveScope{
+	blocks := []activeScope{
 		{Key: SKService()},
 		{Key: SKThrottleDrive(driveid.New("d"))},
 	}
 
-	got := FindBlockingScope(blocks, makeTrackedAction(ActionUpload, "file.txt"))
+	got := findBlockingScope(blocks, makeTrackedAction(ActionUpload, "file.txt"))
 	assert.Equal(t, SKThrottleDrive(driveid.New("d")), got)
 }
 
@@ -39,7 +39,7 @@ func TestFindBlockingScope_TargetThrottlePriorityWins(t *testing.T) {
 func TestFindBlockingScope_PermDirPrefixMatch(t *testing.T) {
 	t.Parallel()
 
-	blocks := []ActiveScope{
+	blocks := []activeScope{
 		{Key: SKPermLocalWrite("Private")},
 	}
 
@@ -55,7 +55,7 @@ func TestFindBlockingScope_PermDirPrefixMatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := FindBlockingScope(blocks, makeTrackedAction(ActionDownload, tt.path))
+			got := findBlockingScope(blocks, makeTrackedAction(ActionDownload, tt.path))
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -66,13 +66,13 @@ func TestFindBlockingScope_PermRemote_IsRecursiveDownloadOnly(t *testing.T) {
 	t.Parallel()
 
 	scopeKey := SKPermRemoteWrite("Shared/TeamDocs")
-	blocks := []ActiveScope{
+	blocks := []activeScope{
 		{Key: scopeKey},
 	}
 
 	tests := []struct {
 		name string
-		ta   *TrackedAction
+		ta   *trackedAction
 		want ScopeKey
 	}{
 		{
@@ -99,7 +99,7 @@ func TestFindBlockingScope_PermRemote_IsRecursiveDownloadOnly(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, FindBlockingScope(blocks, tt.ta))
+			assert.Equal(t, tt.want, findBlockingScope(blocks, tt.ta))
 		})
 	}
 }
@@ -108,16 +108,16 @@ func TestFindBlockingScope_PermRemote_IsRecursiveDownloadOnly(t *testing.T) {
 func TestFindBlockingScope_QuotaRouting(t *testing.T) {
 	t.Parallel()
 
-	blocks := []ActiveScope{
+	blocks := []activeScope{
 		{Key: SKQuotaOwn()},
 	}
 
 	assert.Equal(t,
 		SKQuotaOwn(),
-		FindBlockingScope(blocks, makeTrackedAction(ActionUpload, "own.txt")),
+		findBlockingScope(blocks, makeTrackedAction(ActionUpload, "own.txt")),
 	)
 	assert.True(t,
-		FindBlockingScope(blocks, makeTrackedAction(ActionDownload, "own.txt")).IsZero(),
+		findBlockingScope(blocks, makeTrackedAction(ActionDownload, "own.txt")).IsZero(),
 	)
 }
 
@@ -127,12 +127,12 @@ func TestFindBlockingScope_PrefersMoreSpecificPermissionBoundary(t *testing.T) {
 
 	parent := SKPermRemoteWrite("Shared")
 	child := SKPermRemoteWrite("Shared/TeamDocs")
-	blocks := []ActiveScope{
+	blocks := []activeScope{
 		{Key: parent},
 		{Key: child},
 	}
 
-	got := FindBlockingScope(blocks, makeTrackedAction(ActionUpload, "Shared/TeamDocs/file.txt"))
+	got := findBlockingScope(blocks, makeTrackedAction(ActionUpload, "Shared/TeamDocs/file.txt"))
 	assert.Equal(t, child, got, "nested permission scopes should pick the most specific matching boundary")
 }
 
@@ -144,7 +144,7 @@ func TestFindBlockingScope_MoveSourceInsideBlockedSubtreeBlocksMove(t *testing.T
 	action := makeTrackedAction(ActionRemoteMove, "Shared/Allowed/destination.txt")
 	action.Action.OldPath = "Shared/Blocked/source.txt"
 
-	got := FindBlockingScope([]ActiveScope{{Key: scopeKey}}, action)
+	got := findBlockingScope([]activeScope{{Key: scopeKey}}, action)
 	assert.Equal(t, scopeKey, got)
 }
 
@@ -152,22 +152,22 @@ func TestFindBlockingScope_MoveSourceInsideBlockedSubtreeBlocksMove(t *testing.T
 func TestUpsertScope_ReplaceAndRemove(t *testing.T) {
 	t.Parallel()
 
-	blocks := []ActiveScope{
+	blocks := []activeScope{
 		{Key: SKService()},
 	}
 
-	updated := UpsertScope(blocks, &ActiveScope{
+	updated := upsertScope(blocks, &activeScope{
 		Key:           SKService(),
 		TrialInterval: 30 * time.Second,
 	})
 
 	require.Len(t, updated, 1)
-	got, ok := LookupScope(updated, SKService())
+	got, ok := lookupScope(updated, SKService())
 	require.True(t, ok)
 	assert.Equal(t, 30*time.Second, got.TrialInterval)
 
-	removed := RemoveScope(updated, SKService())
-	assert.False(t, HasScope(removed, SKService()))
+	removed := removeScope(updated, SKService())
+	assert.False(t, hasScope(removed, SKService()))
 }
 
 // Validates: R-2.10.5
@@ -175,7 +175,7 @@ func TestExtendScopeTrial(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now().UTC()
-	blocks := []ActiveScope{
+	blocks := []activeScope{
 		{
 			Key:           SKThrottleDrive(driveid.New("d")),
 			NextTrialAt:   now.Add(10 * time.Second),
@@ -184,10 +184,10 @@ func TestExtendScopeTrial(t *testing.T) {
 	}
 
 	nextAt := now.Add(30 * time.Second)
-	updated, ok := ExtendScopeTrial(blocks, SKThrottleDrive(driveid.New("d")), nextAt, 20*time.Second)
+	updated, ok := extendScopeTrial(blocks, SKThrottleDrive(driveid.New("d")), nextAt, 20*time.Second)
 	require.True(t, ok)
 
-	got, ok := LookupScope(updated, SKThrottleDrive(driveid.New("d")))
+	got, ok := lookupScope(updated, SKThrottleDrive(driveid.New("d")))
 	require.True(t, ok)
 	assert.Equal(t, nextAt, got.NextTrialAt)
 	assert.Equal(t, 20*time.Second, got.TrialInterval)
@@ -198,16 +198,16 @@ func TestDueTrialsAndEarliestTrialAt(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now().UTC()
-	blocks := []ActiveScope{
+	blocks := []activeScope{
 		{Key: SKThrottleDrive(driveid.New("d")), NextTrialAt: now.Add(-time.Second)},
 		{Key: SKService(), NextTrialAt: now.Add(2 * time.Minute)},
 		{Key: SKQuotaOwn()},
 	}
 
-	due := DueTrials(blocks, now)
+	due := dueTrials(blocks, now)
 	assert.Equal(t, []ScopeKey{SKThrottleDrive(driveid.New("d"))}, due)
 
-	earliest, ok := EarliestTrialAt(blocks)
+	earliest, ok := earliestTrialAt(blocks)
 	require.True(t, ok)
 	assert.Equal(t, now.Add(-time.Second), earliest)
 }
@@ -216,14 +216,14 @@ func TestDueTrialsAndEarliestTrialAt(t *testing.T) {
 func TestScopeKeys(t *testing.T) {
 	t.Parallel()
 
-	blocks := []ActiveScope{
+	blocks := []activeScope{
 		{Key: SKService()},
 		{Key: SKThrottleDrive(driveid.New("d"))},
 	}
 
 	assert.Equal(t,
 		[]ScopeKey{SKService(), SKThrottleDrive(driveid.New("d"))},
-		ScopeKeys(blocks),
+		scopeKeys(blocks),
 	)
 }
 
@@ -231,12 +231,12 @@ func TestScopeKeys(t *testing.T) {
 func TestFindBlockingScope_DiskLocal_DownloadsOnly(t *testing.T) {
 	t.Parallel()
 
-	blocks := []ActiveScope{
+	blocks := []activeScope{
 		{Key: SKDiskLocal()},
 	}
 
 	tests := []struct {
-		actionType  ActionType
+		actionType  actionType
 		wantBlocked bool
 	}{
 		{actionType: ActionDownload, wantBlocked: true},
@@ -247,7 +247,7 @@ func TestFindBlockingScope_DiskLocal_DownloadsOnly(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.actionType.String(), func(t *testing.T) {
-			got := FindBlockingScope(blocks, makeTrackedAction(tt.actionType, "file.txt"))
+			got := findBlockingScope(blocks, makeTrackedAction(tt.actionType, "file.txt"))
 			if tt.wantBlocked {
 				assert.Equal(t, SKDiskLocal(), got)
 			} else {

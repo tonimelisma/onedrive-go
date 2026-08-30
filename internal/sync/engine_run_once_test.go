@@ -220,7 +220,7 @@ func TestRunOnce_DownloadOnly_DefersEditDeleteRecreateUpload(t *testing.T) {
 
 	writeLocalFile(t, syncRoot, "edit-delete.txt", "baseline content")
 	baselineHash := hashContentQuickXor(t, "baseline content")
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
+	seedBaseline(t, eng.baseline, ctx, []actionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "edit-delete.txt",
@@ -326,7 +326,7 @@ func TestLoadCurrentInputsStageTx_ReadsSnapshotWritesFromProvidedTransaction(t *
 		require.NoError(t, tx.Rollback())
 	}()
 
-	require.NoError(t, replaceLocalStateTx(ctx, tx, []LocalStateRow{{
+	require.NoError(t, replaceLocalStateTx(ctx, tx, []localStateRow{{
 		Path:     "tx-only.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash",
@@ -376,7 +376,7 @@ func TestReconcileRuntimeState_PrunesRetryAndScopeState(t *testing.T) {
 		AttemptCount: 1,
 	}))
 
-	err := flow.reconcileRuntimeState(ctx, &ActionPlan{
+	err := flow.reconcileRuntimeState(ctx, &actionPlan{
 		Actions: []Action{{
 			Type: ActionUpload,
 			Path: "keep.txt",
@@ -417,7 +417,7 @@ func TestRunOnce_PersistsLocalSnapshotAndConvergedSQLiteReconciliation(t *testin
 	require.NoError(t, err)
 	require.Len(t, reconciliationRows, 2)
 
-	byPath := make(map[string]SQLiteReconciliationRow, len(reconciliationRows))
+	byPath := make(map[string]sQLiteReconciliationRow, len(reconciliationRows))
 	for _, row := range reconciliationRows {
 		byPath[row.Path] = row
 	}
@@ -488,7 +488,7 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []LocalStateRow{{
+	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []localStateRow{{
 		Path:     "stale-local.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "stale-local-hash",
@@ -565,8 +565,8 @@ func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T
 	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
 		Path:      "/",
 		DriveID:   driveID,
-		IssueType: IssueRemoteReadDenied,
-		ScopeKey:  SKPermRemoteRead(""),
+		IssueType: issueRemoteReadDenied,
+		ScopeKey:  sKPermRemoteRead(""),
 	})
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKPermRemoteWrite(""),
@@ -583,7 +583,7 @@ func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T
 	liveObservationIssues, err := eng.baseline.ListObservationIssues(ctx)
 	require.NoError(t, err)
 	require.Len(t, liveObservationIssues, 1)
-	assert.Equal(t, IssueRemoteReadDenied, liveObservationIssues[0].IssueType)
+	assert.Equal(t, issueRemoteReadDenied, liveObservationIssues[0].IssueType)
 	assert.Equal(t, "/", liveObservationIssues[0].Path)
 
 	liveBlockScopes, err := eng.baseline.ListBlockScopes(ctx)
@@ -1017,7 +1017,7 @@ func TestNewEngine_RequiresResetForNonSQLiteStateDB(t *testing.T) {
 	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o600))
 
 	resetErr := requireIncompatibleStoreEngineError(t, dbPath)
-	assert.Equal(t, StateStoreIncompatibleReasonOpenFailed, resetErr.Reason)
+	assert.Equal(t, stateStoreIncompatibleReasonOpenFailed, resetErr.Reason)
 }
 
 // Validates: R-2.5.5, R-2.5.6
@@ -1113,7 +1113,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a stale delta token.
-	seedOutcomes := []ActionOutcome{{
+	seedOutcomes := []actionOutcome{{
 		Action:  ActionDownload,
 		Success: true,
 		Path:    "seed.txt",
@@ -1161,7 +1161,7 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed baseline so the file appears as already synced with matching hash.
-	seedOutcomes := []ActionOutcome{{
+	seedOutcomes := []actionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "unchanged.txt",
@@ -1327,7 +1327,7 @@ func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t 
 
 	editHash := hashContentQuickXor(t, "original remote edit")
 	deleteHash := hashContentQuickXor(t, "original remote delete")
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{
+	seedBaseline(t, eng.baseline, ctx, []actionOutcome{
 		{
 			Action:          ActionDownload,
 			Success:         true,
@@ -1413,7 +1413,7 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 
 	writeLocalFile(t, syncRoot, "retry-download.txt", "recovered-download")
 	downloadHash := hashContentQuickXor(t, "recovered-download")
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
+	seedBaseline(t, eng.baseline, ctx, []actionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "retry-download.txt",
@@ -1474,7 +1474,7 @@ func TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T) {
 
 	writeLocalFile(t, syncRoot, "retry-delete.txt", "delete me")
 	deleteHash := hashContentQuickXor(t, "delete me")
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
+	seedBaseline(t, eng.baseline, ctx, []actionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "retry-delete.txt",

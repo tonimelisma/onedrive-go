@@ -32,13 +32,13 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 		ItemType: ItemTypeFile,
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan ChangeEvent, 10)
+	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	events := make(chan changeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	require.NoError(t, os.Remove(filepath.Join(dir, "doomed.txt")))
 
-	var ev ChangeEvent
+	var ev changeEvent
 	select {
 	case ev = <-events:
 	case <-time.After(5 * time.Second):
@@ -70,14 +70,14 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan ChangeEvent, 10)
+	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	events := make(chan changeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
 
 	// Delete the subdirectory.
 	require.NoError(t, os.Remove(subDir))
 
-	var ev ChangeEvent
+	var ev changeEvent
 
 	select {
 	case ev = <-events:
@@ -102,11 +102,11 @@ func TestHandleFsEvent_DefaultSymlinkPolicyIgnoresTransientSymlinkDelete(t *test
 	syncRoot := t.TempDir()
 	writeTestFile(t, syncRoot, "real.txt", "content")
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.SetFilterConfig(ContentFilterConfig{FollowSymlinks: false})
 
 	watcher := newRecordingFsWatcher()
-	events := make(chan ChangeEvent, 4)
+	events := make(chan changeEvent, 4)
 	tree := mustOpenSyncTree(t, syncRoot)
 	linkPath := filepath.Join(syncRoot, "link.txt")
 
@@ -157,7 +157,7 @@ func TestSkipSymlinkDelete_RemainsIgnoredThroughSafetyScan(t *testing.T) {
 		},
 	)
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
 	obs.SetFilterConfig(ContentFilterConfig{FollowSymlinks: false})
 
 	watcher := newRecordingFsWatcher()
@@ -166,7 +166,7 @@ func TestSkipSymlinkDelete_RemainsIgnoredThroughSafetyScan(t *testing.T) {
 
 	require.NoError(t, os.Remove(linkPath))
 
-	events := make(chan ChangeEvent, 4)
+	events := make(chan changeEvent, 4)
 	obs.HandleFsEvent(
 		t.Context(),
 		fsnotify.Event{Name: linkPath, Op: fsnotify.Remove},
@@ -204,7 +204,7 @@ func TestAddWatchesRecursive_SkipsSymlinksByDefault(t *testing.T) {
 		addedPaths: make(map[string]bool),
 	}
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	err := obs.AddWatchesRecursive(t.Context(), tracker, mustOpenSyncTree(t, root))
 	require.NoError(t, err)
@@ -233,7 +233,7 @@ func TestAddWatchesRecursive_RespectsIncludeAndIgnoreDirs(t *testing.T) {
 		addedPaths: make(map[string]bool),
 	}
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.SetFilterConfig(ContentFilterConfig{
 		IncludedDirs: []string{"Projects"},
 		IgnoredDirs:  []string{"Projects/build"},
@@ -366,11 +366,11 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 				ItemType: tt.baseType,
 			})
 
-			obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+			obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
 			obs.PendingTimers = make(map[string]syncTimer)
-			obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
+			obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
-			events := make(chan ChangeEvent, 10)
+			events := make(chan changeEvent, 10)
 			name := filepath.Base(tt.dbRelPath)
 
 			obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), tt.fsPath, tt.dbRelPath, name, events)
@@ -411,11 +411,11 @@ func TestHandleDelete_EmitsDeleteEvent(t *testing.T) {
 				ItemType: tt.baseType,
 			})
 
-			obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+			obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
 			obs.PendingTimers = make(map[string]syncTimer)
-			obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
+			obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
-			events := make(chan ChangeEvent, 10)
+			events := make(chan changeEvent, 10)
 			obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/target", "target", "target", events)
 
 			select {
@@ -439,14 +439,14 @@ func TestHandleDelete_CancelsCoalesceTimer(t *testing.T) {
 	t.Parallel()
 
 	watcher := newRecordingFsWatcher()
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.PendingTimers = make(map[string]syncTimer)
-	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
+	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
 	// Set up a pending timer for "file.txt".
 	obs.PendingTimers["file.txt"] = realAfterFunc(time.Hour, func() {})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/file.txt", "file.txt", "file.txt", events)
 
 	assert.Empty(t, obs.PendingTimers, "handleDelete should cancel pending timer")
@@ -471,11 +471,11 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
 	obs.PendingTimers = make(map[string]syncTimer)
-	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
+	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 
 	fsEvent := fsnotify.Event{
 		Name: dirPath,
@@ -502,8 +502,8 @@ func TestHandleFsEvent_SyncRootLifecycleEventDoesNotEmitContentDelete(t *testing
 		ItemID:   "child-id",
 		ItemType: ItemTypeFile,
 	})
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan ChangeEvent, 10)
+	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	events := make(chan changeEvent, 10)
 
 	obs.HandleFsEvent(t.Context(), fsnotify.Event{
 		Name: syncRoot,

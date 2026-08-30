@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/sync/store.go, internal/sync/store_types.go, internal/sync/store_inspect.go, internal/sync/store_read_remote_state.go, internal/sync/store_local_state.go, internal/sync/store_observation_state.go, internal/sync/store_observation_issues.go, internal/sync/observation_reconcile_policy.go, internal/sync/store_retry_work.go, internal/sync/store_scratch.go, internal/sync/schema.go, internal/sync/tx.go, internal/sync/store_write_baseline.go, internal/sync/store_write_observation.go, internal/sync/store_write_block_scopes.go, internal/sync/block_scope_rows.go, internal/sync/store_scope_admin.go, internal/sync/store_compatibility.go, internal/sync/store_reset.go, internal/sync/shortcut_root_state.go, internal/sync/shortcut_root_store.go, internal/sync/shortcut_alias_mutation.go, internal/sync/condition_projection.go, internal/sync/blocked_retry_projection.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/scope_block.go, internal/syncverify/verify.go, internal/cli/status.go, internal/cli/status_snapshot.go
+GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/baseline_orphans.go, internal/sync/block_scope_rows.go, internal/sync/blocked_retry_projection.go, internal/sync/condition_keys.go, internal/sync/condition_projection.go, internal/sync/observation_reconcile_policy.go, internal/sync/retry_work_key.go, internal/sync/schema.go, internal/sync/scope_block.go, internal/sync/scope_key.go, internal/sync/scope_lifecycle_policy.go, internal/sync/scope_semantics.go, internal/sync/shortcut_alias_mutation.go, internal/sync/shortcut_root_state.go, internal/sync/shortcut_root_store.go, internal/sync/sqlite_compare.go, internal/sync/store.go, internal/sync/store_compatibility.go, internal/sync/store_inspect.go, internal/sync/store_local_state.go, internal/sync/store_observation_issues.go, internal/sync/store_observation_state.go, internal/sync/store_read_remote_state.go, internal/sync/store_reset.go, internal/sync/store_retry_work.go, internal/sync/store_scope_admin.go, internal/sync/store_scratch.go, internal/sync/store_types.go, internal/sync/store_write_baseline.go, internal/sync/store_write_block_scopes.go, internal/sync/store_write_observation.go, internal/sync/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go
 
 Implements: R-2.5 [designed], R-2.7 [verified], R-2.8.8 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -82,7 +82,7 @@ artifacts, not a multisync cache.
 ### Retry and block state invariants
 
 `retry_work` rows are exact retry obligations. Every row must carry a non-empty
-path, a valid `ActionType`, and a positive attempt count. Delayed retry rows
+path, a valid `actionType`, and a positive attempt count. Delayed retry rows
 must have `next_retry_at`; blocked rows must not have retry timing and must
 reference an existing `block_scopes` row. Every persisted block scope must in
 turn have at least one blocked retry row. These invariants are asserted by the
@@ -145,8 +145,13 @@ Observation-owned reconciliation supports two scopes of authority:
 
 - whole-observation batches replace the managed observation issue types they
   own
-- single-path observation batches manage only the exact observed path set they
-  proved
+- exact-path batches manage only the observed path set they proved. The store
+  honors this mode and is tested for it directly, but no current caller sets
+  `ManagedPaths`: its only consumer was single-path observation, removed when
+  the linear runtime replaced per-path retry reconstruction with replanning
+  from committed truth. The mode is kept as a store primitive rather than
+  removed, because dropping a durable reconciliation semantic is a decision
+  about persisted state, not cleanup of an unused helper
 
 ### Mutation writes
 
@@ -177,7 +182,8 @@ Supporting outcome mutations should stay separate by owner:
 
 - observation-findings reconciliation that replaces the current
   observation-owned issue set in one transaction, either as a full managed
-  issue-type set or as an exact-path reconciliation for single-path observation
+  issue-type set or as an exact-path reconciliation (see the note above on
+  `ManagedPaths` having no current caller)
 - exact retry-work upsert/delete helpers
 - retry-work rearm helpers that reschedule exact held work without inventing
   new planning or observation authority
@@ -225,7 +231,7 @@ it.
 
 Derived truth inspection stays read-only and authority-based. Observation-owned
 boundary issues tagged with read-scope keys suppress descendant truth through
-`ReadPathTruthStatus`; timed `block_scopes` for write blockers do not change
+`readPathTruthStatus`; timed `block_scopes` for write blockers do not change
 truth availability on their own.
 
 ### Admin writes
@@ -289,7 +295,7 @@ still-blocked scope may delete the blocked work under it.
 - `next_trial_at`
 
 `scope_key` remains the durable identity used by `retry_work`, while in-memory
-scope semantics are reconstructed from `DescribeScopeKey` during read/write
+scope semantics are reconstructed from `describeScopeKey` during read/write
 validation. The shared raw block-scope read path therefore validates the
 durable key once and returns a canonical `BlockScope` shape without storing a
 second copy of parsed metadata in SQLite.
@@ -322,7 +328,7 @@ blocked descendants from those boundary facts.
 `store_inspect.go` now owns two read-side shapes:
 
 - `DriveStatusSnapshot` for raw durable authorities used by `status` and watch
-- `ReadPathTruthStatus` for derived truth availability over requested paths,
+- `readPathTruthStatus` for derived truth availability over requested paths,
   built from `observation_issues` plus boundary-tagged `ScopeKey` facts without
   materializing fake durable descendant rows
 

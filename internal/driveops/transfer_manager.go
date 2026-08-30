@@ -687,7 +687,7 @@ func (tm *TransferManager) UploadFile(
 	if err != nil {
 		return nil, fmt.Errorf("opening %s for upload: %w", localPath, err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // the file is opened read-only for upload; there is nothing buffered to flush
 
 	progress := opts.Progress
 
@@ -788,7 +788,7 @@ func (tm *TransferManager) UploadFileToItem(
 	if err != nil {
 		return nil, fmt.Errorf("opening %s for upload: %w", localPath, err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // the file is opened read-only for upload; there is nothing buffered to flush
 
 	item, err := tm.uploadExistingItem(
 		ctx,

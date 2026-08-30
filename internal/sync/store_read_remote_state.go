@@ -30,7 +30,7 @@ const (
 )
 
 // ListRemoteState returns the current remote mirror rows.
-func (m *SyncStore) ListRemoteState(ctx context.Context) ([]RemoteStateRow, error) {
+func (m *SyncStore) ListRemoteState(ctx context.Context) ([]remoteStateRow, error) {
 	contentDriveID, err := m.contentDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
 		return nil, fmt.Errorf("sync: reading content drive for remote_state: %w", err)
@@ -47,19 +47,19 @@ func queryRemoteStateRowsWithRunner(
 	runner sqlTxRunner,
 	query string,
 	contentDriveID driveid.ID,
-) ([]RemoteStateRow, error) {
+) ([]remoteStateRow, error) {
 	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying remote_state: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
-	var result []RemoteStateRow
+	var result []remoteStateRow
 
 	for rows.Next() {
 		var (
 			rawDriveID string
-			row        RemoteStateRow
+			row        remoteStateRow
 			hash       sql.NullString
 			size       sql.NullInt64
 			mtime      sql.NullInt64
@@ -100,7 +100,7 @@ func (m *SyncStore) getRemoteStateRow(
 	query string,
 	arg string,
 	contextLabel string,
-) (*RemoteStateRow, bool, error) {
+) (*remoteStateRow, bool, error) {
 	contentDriveID, err := m.contentDriveIDForRead(ctx, driveID)
 	if err != nil {
 		return nil, false, fmt.Errorf("sync: reading content drive for %s: %w", contextLabel, err)
@@ -130,7 +130,7 @@ func (m *SyncStore) GetRemoteStateByPath(
 	ctx context.Context,
 	path string,
 	driveID driveid.ID,
-) (*RemoteStateRow, bool, error) {
+) (*remoteStateRow, bool, error) {
 	return m.getRemoteStateRow(ctx, driveID, sqlGetRemoteStateByPath, path, "GetRemoteStateByPath")
 }
 
@@ -139,17 +139,17 @@ func (m *SyncStore) GetRemoteStateByID(
 	ctx context.Context,
 	driveID driveid.ID,
 	itemID string,
-) (*RemoteStateRow, bool, error) {
+) (*remoteStateRow, bool, error) {
 	return m.getRemoteStateRow(ctx, driveID, sqlGetRemoteStateByID, itemID, "GetRemoteStateByID")
 }
 
 func scanRemoteStateRowWithQuerier(
 	fallbackDriveID driveid.ID,
 	scan func(dest ...any) error,
-) (*RemoteStateRow, error) {
+) (*remoteStateRow, error) {
 	var (
 		rawDriveID string
-		row        RemoteStateRow
+		row        remoteStateRow
 		hash       sql.NullString
 		size       sql.NullInt64
 		mtime      sql.NullInt64

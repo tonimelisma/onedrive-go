@@ -61,7 +61,7 @@ func TestHasCaseCollisionCached_Detected(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "File.txt"), []byte("a"), 0o600))
 
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline: emptyBaseline(),
 	}
 
@@ -83,7 +83,7 @@ func TestHasCaseCollisionCached_NoCollision(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("a"), 0o600))
 
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline: emptyBaseline(),
 	}
 
@@ -98,7 +98,7 @@ func TestHasCaseCollisionCached_ExactMatch_NotCollision(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "same.txt"), []byte("a"), 0o600))
 
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline: emptyBaseline(),
 	}
 
@@ -110,7 +110,7 @@ func TestHasCaseCollisionCached_ExactMatch_NotCollision(t *testing.T) {
 func TestHasCaseCollisionCached_UnreadableDir_FailOpen(t *testing.T) {
 	t.Parallel()
 
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline: emptyBaseline(),
 	}
 
@@ -125,7 +125,7 @@ func TestHasCaseCollisionCached_EmptyDir(t *testing.T) {
 
 	dir := t.TempDir()
 
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline: emptyBaseline(),
 	}
 
@@ -146,7 +146,7 @@ func TestHasCaseCollisionCached_BaselineCollision(t *testing.T) {
 
 	// Baseline has "File.txt" — no file on disk.
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline: bl,
 	}
 
@@ -163,7 +163,7 @@ func TestHasCaseCollisionCached_BaselineExactMatch(t *testing.T) {
 	dir := t.TempDir()
 
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline: bl,
 	}
 
@@ -179,7 +179,7 @@ func TestHasCaseCollisionCached_BaselineSkipsRecentDelete(t *testing.T) {
 	dir := t.TempDir()
 
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
-	obs := &LocalObserver{
+	obs := &localObserver{
 		Baseline: bl,
 		localWatchState: localWatchState{
 			RecentLocalDeletes: map[string]struct{}{"File.txt": {}},
@@ -208,7 +208,7 @@ func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 	mockWatcher.events <- fsnotify.Event{
@@ -246,7 +246,7 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 	mockWatcher.events <- fsnotify.Event{
@@ -255,7 +255,7 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 	}
 
 	// Collect events within a window.
-	var received []ChangeEvent
+	var received []changeEvent
 	timeout := time.After(500 * time.Millisecond)
 	for {
 		select {
@@ -313,7 +313,7 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 		CollisionPeers: make(map[string]map[string]struct{}),
 	})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 	mockWatcher.events <- fsnotify.Event{
@@ -357,7 +357,7 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 		CollisionPeers: make(map[string]map[string]struct{}),
 	})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 
@@ -404,7 +404,7 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 		CollisionPeers: make(map[string]map[string]struct{}),
 	})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 
@@ -416,7 +416,7 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 
 	// Collect events. At most 1 subdirectory should be emitted (the other
 	// should be suppressed by collision check).
-	var received []ChangeEvent
+	var received []changeEvent
 	timeout := time.After(500 * time.Millisecond)
 	for {
 		select {
@@ -468,7 +468,7 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 		CollisionPeers: make(map[string]map[string]struct{}),
 	})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 
@@ -497,7 +497,7 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 
 	// Expect two events: ChangeCreate for "File.txt" (survivor re-emitted)
 	// and ChangeDelete for "file.txt".
-	var received []ChangeEvent
+	var received []changeEvent
 	timeout := time.After(1 * time.Second)
 
 	for len(received) < 2 {
@@ -512,7 +512,7 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 	// Verify we got both events.
 	var hasCreate, hasDelete bool
 	for _, ev := range received {
-		if ev.Type == ChangeCreate && ev.Name == "File.txt" {
+		if ev.Type == changeCreate && ev.Name == "File.txt" {
 			hasCreate = true
 		}
 		if ev.Type == ChangeDelete && ev.Name == "file.txt" {
@@ -549,7 +549,7 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 		CollisionPeers: make(map[string]map[string]struct{}),
 	})
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 
@@ -582,7 +582,7 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 
 	// Expect only ChangeDelete for "file.txt". The re-emitted peers
 	// (File.txt and FILE.txt) still collide → suppressed again.
-	var received []ChangeEvent
+	var received []changeEvent
 	timeout := time.After(1 * time.Second)
 
 	for {
@@ -598,7 +598,7 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 
 	// Only the delete should come through; re-emitted creates are suppressed.
 	for _, ev := range received {
-		if ev.Type == ChangeCreate {
+		if ev.Type == changeCreate {
 			assert.FailNow(t, "expected no create events (survivors still collide)", "got %+v", ev)
 		}
 	}
@@ -645,7 +645,7 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 		"a.txt": {"a.txt", "A.txt"},
 	}
 
-	events := make(chan ChangeEvent, 10)
+	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	defer cancel()
 

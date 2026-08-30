@@ -8,7 +8,7 @@ import (
 
 func (flow *engineFlow) reconcileSkippedObservationFindings(
 	ctx context.Context,
-	skipped []SkippedItem,
+	skipped []skippedItem,
 ) error {
 	flow.logSkippedObservationFindings(skipped)
 	batch := localObservationFindingsBatchFromSkippedItems(flow.engine.driveID, skipped)
@@ -20,9 +20,9 @@ func (flow *engineFlow) reconcileSkippedObservationFindings(
 	)
 }
 
-func (flow *engineFlow) logSkippedObservationFindings(skipped []SkippedItem) {
+func (flow *engineFlow) logSkippedObservationFindings(skipped []skippedItem) {
 	eng := flow.engine
-	byReason := make(map[string][]SkippedItem)
+	byReason := make(map[string][]skippedItem)
 	for i := range skipped {
 		byReason[skipped[i].Reason] = append(byReason[skipped[i].Reason], skipped[i])
 	}

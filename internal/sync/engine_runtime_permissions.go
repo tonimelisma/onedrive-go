@@ -12,20 +12,20 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-func shouldHandleRemote403Permission(r *ActionCompletion) bool {
+func shouldHandleRemote403Permission(r *actionCompletion) bool {
 	return r != nil && r.HTTPStatus == http.StatusForbidden && remoteWriteScopeBlocksAction(r.ActionType)
 }
 
-func shouldHandleLocalPermission(r *ActionCompletion) bool {
+func shouldHandleLocalPermission(r *actionCompletion) bool {
 	return r != nil && errors.Is(r.Err, os.ErrPermission)
 }
 
 func (flow *engineFlow) maybeHandlePermissionFailure(
 	ctx context.Context,
 	watch *watchRuntime,
-	decision *ResultDecision,
-	current *TrackedAction,
-	r *ActionCompletion,
+	decision *resultDecision,
+	current *trackedAction,
+	r *actionCompletion,
 	bl *Baseline,
 ) (bool, error) {
 	switch {
@@ -41,9 +41,9 @@ func (flow *engineFlow) maybeHandlePermissionFailure(
 func (flow *engineFlow) handleRemote403PermissionFailure(
 	ctx context.Context,
 	watch *watchRuntime,
-	decision *ResultDecision,
-	current *TrackedAction,
-	r *ActionCompletion,
+	decision *resultDecision,
+	current *trackedAction,
+	r *actionCompletion,
 	bl *Baseline,
 ) (bool, error) {
 	if bl == nil || flow.engine.permHandler.permChecker == nil {
@@ -69,9 +69,9 @@ func (flow *engineFlow) handleRemote403PermissionFailure(
 func (flow *engineFlow) handleLocalPermissionFailure(
 	ctx context.Context,
 	watch *watchRuntime,
-	decision *ResultDecision,
-	current *TrackedAction,
-	r *ActionCompletion,
+	decision *resultDecision,
+	current *trackedAction,
+	r *actionCompletion,
 ) (bool, error) {
 	evidence := flow.engine.permHandler.handleLocalPermission(ctx, r)
 	if evidence.Kind == permissionEvidenceNone {
@@ -92,9 +92,9 @@ func (flow *engineFlow) handleLocalPermissionFailure(
 func (flow *engineFlow) applyPermissionFailureEvidence(
 	ctx context.Context,
 	watch *watchRuntime,
-	current *TrackedAction,
-	r *ActionCompletion,
-	evidence PermissionEvidence,
+	current *trackedAction,
+	r *actionCompletion,
+	evidence permissionEvidence,
 	remote bool,
 ) error {
 	work := retryWorkKeyForCompletion(r)
@@ -117,7 +117,7 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 		}
 		if scopeKey.PersistsInBlockScopes() {
-			if err := flow.applyBlockScope(ctx, watch, ScopeUpdateResult{
+			if err := flow.applyBlockScope(ctx, watch, scopeUpdateResult{
 				Block:         true,
 				ScopeKey:      scopeKey,
 				ConditionType: scopeKey.ConditionType(),
@@ -146,7 +146,7 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 func (flow *engineFlow) applyTrialPermissionReclassification(
 	ctx context.Context,
 	watch *watchRuntime,
-	r *ActionCompletion,
+	r *actionCompletion,
 	bl *Baseline,
 ) (bool, error) {
 	evidence, handled := flow.permissionEvidenceForCompletion(ctx, r, bl)
@@ -174,19 +174,19 @@ func (flow *engineFlow) applyTrialPermissionReclassification(
 
 func (flow *engineFlow) permissionEvidenceForCompletion(
 	ctx context.Context,
-	r *ActionCompletion,
+	r *actionCompletion,
 	bl *Baseline,
-) (PermissionEvidence, bool) {
+) (permissionEvidence, bool) {
 	switch {
 	case shouldHandleRemote403Permission(r):
 		if bl == nil || flow.engine.permHandler.permChecker == nil {
-			return PermissionEvidence{}, false
+			return permissionEvidence{}, false
 		}
 		return flow.engine.permHandler.handle403(ctx, bl, r.Path, r.ActionType), true
 	case shouldHandleLocalPermission(r):
 		return flow.engine.permHandler.handleLocalPermission(ctx, r), true
 	default:
-		return PermissionEvidence{}, false
+		return permissionEvidence{}, false
 	}
 }
 
@@ -195,7 +195,7 @@ func (flow *engineFlow) applyTrialPermissionEvidence(
 	watch *watchRuntime,
 	work RetryWorkKey,
 	trialScopeKey ScopeKey,
-	evidence PermissionEvidence,
+	evidence permissionEvidence,
 ) error {
 	switch evidence.Kind {
 	case permissionEvidenceNone:
@@ -218,7 +218,7 @@ func (flow *engineFlow) applyTrialPermissionEvidence(
 			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 		}
 		if scopeKey.PersistsInBlockScopes() {
-			if err := flow.applyBlockScope(ctx, watch, ScopeUpdateResult{
+			if err := flow.applyBlockScope(ctx, watch, scopeUpdateResult{
 				Block:         true,
 				ScopeKey:      scopeKey,
 				ConditionType: scopeKey.ConditionType(),
@@ -233,11 +233,11 @@ func (flow *engineFlow) applyTrialPermissionEvidence(
 	return nil
 }
 
-func scopeKeyForPermissionEvidence(evidence PermissionEvidence) ScopeKey {
+func scopeKeyForPermissionEvidence(evidence permissionEvidence) ScopeKey {
 	switch evidence.IssueType {
-	case IssueLocalReadDenied:
-		return SKPermLocalRead(evidence.BoundaryPath)
-	case IssueLocalWriteDenied:
+	case issueLocalReadDenied:
+		return sKPermLocalRead(evidence.BoundaryPath)
+	case issueLocalWriteDenied:
 		return SKPermLocalWrite(evidence.BoundaryPath)
 	case IssueRemoteWriteDenied:
 		return SKPermRemoteWrite(evidence.BoundaryPath)
@@ -248,11 +248,11 @@ func scopeKeyForPermissionEvidence(evidence PermissionEvidence) ScopeKey {
 
 func (flow *engineFlow) logRemotePermissionBoundary(
 	scopeKey ScopeKey,
-	evidence PermissionEvidence,
+	evidence permissionEvidence,
 ) {
 	fields := append(flow.summaryLogFields(
 		errclass.ClassActionable,
-		ConditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),
+		conditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),
 		evidence.TriggerPath,
 		scopeKey,
 	),
@@ -264,11 +264,11 @@ func (flow *engineFlow) logRemotePermissionBoundary(
 
 func (flow *engineFlow) logLocalPermissionBoundary(
 	scopeKey ScopeKey,
-	evidence PermissionEvidence,
+	evidence permissionEvidence,
 ) {
 	fields := append(flow.summaryLogFields(
 		errclass.ClassActionable,
-		ConditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),
+		conditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),
 		evidence.TriggerPath,
 		scopeKey,
 	),
@@ -297,7 +297,7 @@ func (flow *engineFlow) recordPermissionRetryWork(
 	flow.retryRowsByKey[row.WorkKey()] = *row
 	fields := append(flow.summaryLogFields(
 		errclass.ClassActionable,
-		ConditionKeyForStoredCondition(conditionType, scopeKey),
+		conditionKeyForStoredCondition(conditionType, scopeKey),
 		work.Path,
 		scopeKey,
 	),
@@ -322,7 +322,7 @@ func (flow *engineFlow) recordPermissionBlockedRetry(
 	flow.retryRowsByKey[row.WorkKey()] = *row
 	fields := append(flow.summaryLogFields(
 		errclass.ClassBlockScopeingTransient,
-		ConditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),
+		conditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),
 		work.Path,
 		scopeKey,
 	),

@@ -12,10 +12,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-// InflightParent tracks a non-root item seen in the current delta batch,
+// inflightParent tracks a non-root item seen in the current delta batch,
 // allowing children later in the same batch to materialize paths before
 // the baseline is updated.
-type InflightParent struct {
+type inflightParent struct {
 	Name          string
 	ParentID      string
 	ParentDriveID driveid.ID // drive containing this item's parent
@@ -23,7 +23,7 @@ type InflightParent struct {
 	IsVault       bool // true for Personal Vault folder (B-271)
 }
 
-// ItemConverter converts []graph.Item into []ChangeEvent with full path
+// itemConverter converts []graph.Item into []ChangeEvent with full path
 // materialization, NFC normalization, move detection, and deleted-item name
 // recovery. Drive-root and mount-root observation both use this single
 // conversion pipeline, shaped by path-prefix and root-item fields.
@@ -31,12 +31,12 @@ type InflightParent struct {
 // Design: the inflight map is a parameter, not a field. RemoteObserver
 // accumulates inflight across delta pages; mount-root callers populate it once per
 // batch. Same methods, different lifetime.
-type ItemConverter struct {
+type itemConverter struct {
 	Baseline              *Baseline
 	DriveID               driveid.ID
 	Logger                *slog.Logger
-	Stats                 *ObserverCounters // nil-safe: primary observer provides this
-	Items                 ItemClient        // nil-safe: sparse parent enrich is best-effort
+	Stats                 *observerCounters // nil-safe: primary observer provides this
+	Items                 itemClient        // nil-safe: sparse parent enrich is best-effort
 	ShortcutTopology      *shortcutTopologyBatch
 	ProtectedRootBindings map[string]ProtectedRoot
 
@@ -57,18 +57,18 @@ type ItemConverter struct {
 	incompleteObservation bool
 }
 
-// NewPrimaryConverter creates an ItemConverter for primary-drive or
+// newPrimaryConverter creates an ItemConverter for primary-drive or
 // mount-root observation. Embedded shared-folder items are ignored here;
 // shared content syncs through explicit standalone mounts or managed child
 // mounts.
-func NewPrimaryConverter(
+func newPrimaryConverter(
 	baseline *Baseline,
 	driveID driveid.ID,
 	logger *slog.Logger,
-	stats *ObserverCounters,
-	items ItemClient,
-) *ItemConverter {
-	return &ItemConverter{
+	stats *observerCounters,
+	items itemClient,
+) *itemConverter {
+	return &itemConverter{
 		Baseline:          baseline,
 		DriveID:           driveID,
 		Logger:            logger,
@@ -81,11 +81,11 @@ func NewPrimaryConverter(
 // ConvertItems converts a batch of graph.Items into ChangeEvents using
 // two-pass processing: register all items in inflight, then classify all.
 // Used by mount-root observation where all items arrive in a single batch.
-func (c *ItemConverter) ConvertItems(ctx context.Context, items []graph.Item) []ChangeEvent {
+func (c *itemConverter) ConvertItems(ctx context.Context, items []graph.Item) []changeEvent {
 	c.resetIncompleteObservation()
 	c.enrichSparseParentRefs(ctx, items)
 
-	inflight := make(map[string]InflightParent, len(items))
+	inflight := make(map[string]inflightParent, len(items))
 
 	// Pass 1: register all items so parent-chain walks see every item.
 	for i := range items {
@@ -93,7 +93,7 @@ func (c *ItemConverter) ConvertItems(ctx context.Context, items []graph.Item) []
 	}
 
 	// Pass 2: classify and emit events.
-	var events []ChangeEvent
+	var events []changeEvent
 
 	for i := range items {
 		if ev := c.ClassifyItem(&items[i], inflight); ev != nil {
@@ -104,23 +104,23 @@ func (c *ItemConverter) ConvertItems(ctx context.Context, items []graph.Item) []
 	return events
 }
 
-func (c *ItemConverter) resetIncompleteObservation() {
+func (c *itemConverter) resetIncompleteObservation() {
 	if c != nil {
 		c.incompleteObservation = false
 	}
 }
 
-func (c *ItemConverter) markIncompleteObservation() {
+func (c *itemConverter) markIncompleteObservation() {
 	if c != nil {
 		c.incompleteObservation = true
 	}
 }
 
-func (c *ItemConverter) observationIncomplete() bool {
+func (c *itemConverter) observationIncomplete() bool {
 	return c != nil && c.incompleteObservation
 }
 
-func (c *ItemConverter) enrichSparseParentRefs(ctx context.Context, items []graph.Item) {
+func (c *itemConverter) enrichSparseParentRefs(ctx context.Context, items []graph.Item) {
 	if c == nil || c.Items == nil || len(items) == 0 {
 		return
 	}
@@ -163,7 +163,7 @@ func (c *ItemConverter) enrichSparseParentRefs(ctx context.Context, items []grap
 	}
 }
 
-func (c *ItemConverter) shouldEnrichSparseRemoteItem(item *graph.Item) bool {
+func (c *itemConverter) shouldEnrichSparseRemoteItem(item *graph.Item) bool {
 	if c == nil || c.Items == nil || item == nil {
 		return false
 	}
@@ -182,11 +182,11 @@ func (c *ItemConverter) shouldEnrichSparseRemoteItem(item *graph.Item) bool {
 	return item.ParentID == "" && (!found || existing.ParentID == "")
 }
 
-func (c *ItemConverter) shouldEnrichSparseShortcut(item *graph.Item) bool {
+func (c *itemConverter) shouldEnrichSparseShortcut(item *graph.Item) bool {
 	if c == nil || item == nil || c.ProtectedRootBindings == nil {
 		return false
 	}
-	protectedRoot, known := c.ProtectedRootBindings[item.ID]
+	binding, known := c.ProtectedRootBindings[item.ID]
 	if !known {
 		return false
 	}
@@ -194,7 +194,7 @@ func (c *ItemConverter) shouldEnrichSparseShortcut(item *graph.Item) bool {
 		item.ParentID == "" ||
 		item.RemoteDriveID == "" ||
 		item.RemoteItemID == "" ||
-		(!item.RemoteIsFolder && protectedRoot.RemoteIsFolder)
+		(!item.RemoteIsFolder && binding.RemoteIsFolder)
 }
 
 func mergeSparseRemoteItem(dst *graph.Item, enriched *graph.Item) {
@@ -230,7 +230,7 @@ func mergeSparseRemoteItem(dst *graph.Item, enriched *graph.Item) {
 // registerInflight adds an item to the inflight parent map without
 // classification. Called in pass 1 to ensure the full page/batch is
 // registered before any vault/classification checks (B-281).
-func (c *ItemConverter) registerInflight(item *graph.Item, inflight map[string]InflightParent) {
+func (c *itemConverter) registerInflight(item *graph.Item, inflight map[string]inflightParent) {
 	itemDriveID := c.resolveItemDriveID(item)
 	var existing *BaselineEntry
 	if baselineEntry, found := c.Baseline.GetByID(item.ID); found {
@@ -245,7 +245,7 @@ func (c *ItemConverter) registerInflight(item *graph.Item, inflight map[string]I
 		parentDriveID = itemDriveID
 	}
 
-	inflight[item.ID] = InflightParent{
+	inflight[item.ID] = inflightParent{
 		Name:          name,
 		ParentID:      parentID,
 		ParentDriveID: parentDriveID,
@@ -257,7 +257,7 @@ func (c *ItemConverter) registerInflight(item *graph.Item, inflight map[string]I
 // ClassifyItem converts a single graph.Item into a ChangeEvent. Returns nil
 // for items that should be skipped (root, vault descendants, mount root,
 // embedded shared-folder items).
-func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]InflightParent) *ChangeEvent {
+func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]inflightParent) *changeEvent {
 	itemDriveID := c.resolveItemDriveID(item)
 
 	// Skip root items for both full-drive and mount-root observation.
@@ -340,7 +340,7 @@ func (c *ItemConverter) ClassifyItem(item *graph.Item, inflight map[string]Infli
 	return c.classifyAndConvert(item, inflight, itemDriveID, existing)
 }
 
-func (c *ItemConverter) isShortcutTopologyItem(item *graph.Item) bool {
+func (c *itemConverter) isShortcutTopologyItem(item *graph.Item) bool {
 	if item == nil {
 		return false
 	}
@@ -354,9 +354,9 @@ func (c *ItemConverter) isShortcutTopologyItem(item *graph.Item) bool {
 	return known
 }
 
-func (c *ItemConverter) emitShortcutTopologyFact(
+func (c *itemConverter) emitShortcutTopologyFact(
 	item *graph.Item,
-	inflight map[string]InflightParent,
+	inflight map[string]inflightParent,
 	itemDriveID driveid.ID,
 	existing *BaselineEntry,
 ) {
@@ -414,17 +414,17 @@ type shortcutTopologyItemFact struct {
 	HasEvidence       bool
 }
 
-func (c *ItemConverter) shortcutTopologyFact(
+func (c *itemConverter) shortcutTopologyFact(
 	item *graph.Item,
-	inflight map[string]InflightParent,
+	inflight map[string]inflightParent,
 	itemDriveID driveid.ID,
 	existing *BaselineEntry,
 ) shortcutTopologyItemFact {
-	protectedRoot, known := c.ProtectedRootBindings[item.ID]
+	binding, known := c.ProtectedRootBindings[item.ID]
 	name := effectiveItemName(item, existing)
 	relPath := c.materializePathWithBaselineFallback(item, inflight, itemDriveID, existing, name)
 	if relPath == "" && known {
-		relPath = protectedRoot.Path
+		relPath = binding.Path
 	}
 	if name == "" && relPath != "" {
 		name = protectedRootPrimaryName(relPath)
@@ -433,9 +433,9 @@ func (c *ItemConverter) shortcutTopologyFact(
 	return shortcutTopologyItemFact{
 		RelativeLocalPath: relPath,
 		LocalAlias:        name,
-		RemoteDriveID:     protectedRoot.RemoteDriveID.String(),
-		RemoteItemID:      protectedRoot.RemoteItemID,
-		RemoteIsFolder:    protectedRoot.RemoteIsFolder,
+		RemoteDriveID:     binding.RemoteDriveID.String(),
+		RemoteItemID:      binding.RemoteItemID,
+		RemoteIsFolder:    binding.RemoteIsFolder,
 		HasEvidence: known ||
 			item.RemoteDriveID != "" ||
 			item.RemoteItemID != "" ||
@@ -446,9 +446,9 @@ func (c *ItemConverter) shortcutTopologyFact(
 
 // classifyAndConvert classifies the change type and builds a ChangeEvent.
 // Handles NFC normalization, move detection, and deleted-item name recovery.
-func (c *ItemConverter) classifyAndConvert(
-	item *graph.Item, inflight map[string]InflightParent, itemDriveID driveid.ID, existing *BaselineEntry,
-) *ChangeEvent {
+func (c *itemConverter) classifyAndConvert(
+	item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID, existing *BaselineEntry,
+) *changeEvent {
 	name := effectiveItemName(item, existing)
 
 	hash := driveops.SelectHash(item)
@@ -456,16 +456,16 @@ func (c *ItemConverter) classifyAndConvert(
 		c.Stats.hashesComputed.Add(1)
 	}
 
-	ev := ChangeEvent{
-		Source:    SourceRemote,
+	ev := changeEvent{
+		Source:    sourceRemote,
 		ItemID:    item.ID,
 		ParentID:  item.ParentID,
 		DriveID:   itemDriveID,
-		ItemType:  ClassifyItemType(item),
+		ItemType:  classifyItemType(item),
 		Name:      name,
 		Size:      item.Size,
 		Hash:      hash,
-		Mtime:     ToUnixNano(item.ModifiedAt),
+		Mtime:     toUnixNano(item.ModifiedAt),
 		ETag:      item.ETag,
 		CTag:      item.CTag,
 		IsDeleted: item.IsDeleted,
@@ -508,7 +508,7 @@ func (c *ItemConverter) classifyAndConvert(
 		}
 
 	default:
-		ev.Type = ChangeCreate
+		ev.Type = changeCreate
 		ev.Path = c.materializePath(item, inflight, itemDriveID)
 	}
 
@@ -535,9 +535,9 @@ func effectiveItemName(item *graph.Item, existing *BaselineEntry) string {
 	return path.Base(existing.Path)
 }
 
-func (c *ItemConverter) materializePathWithBaselineFallback(
+func (c *itemConverter) materializePathWithBaselineFallback(
 	item *graph.Item,
-	inflight map[string]InflightParent,
+	inflight map[string]inflightParent,
 	itemDriveID driveid.ID,
 	existing *BaselineEntry,
 	name string,
@@ -563,8 +563,8 @@ func (c *ItemConverter) materializePathWithBaselineFallback(
 
 // materializePath builds the full relative path by walking the parent chain.
 // Checks inflight first, then baseline. Applies PathPrefix after resolution.
-func (c *ItemConverter) materializePath(
-	item *graph.Item, inflight map[string]InflightParent, itemDriveID driveid.ID,
+func (c *itemConverter) materializePath(
+	item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID,
 ) string {
 	if graphPath := c.materializePathFromGraphParentPath(item, nfcNormalize(item.Name)); graphPath != "" {
 		return graphPath
@@ -580,8 +580,8 @@ func (c *ItemConverter) materializePath(
 	)
 }
 
-func (c *ItemConverter) materializePathForUntrackedDelete(
-	item *graph.Item, inflight map[string]InflightParent, itemDriveID driveid.ID,
+func (c *itemConverter) materializePathForUntrackedDelete(
+	item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID,
 ) string {
 	name := nfcNormalize(item.Name)
 	if name == "" {
@@ -601,7 +601,7 @@ func (c *ItemConverter) materializePathForUntrackedDelete(
 	)
 }
 
-func (c *ItemConverter) materializePathFromGraphParentPath(item *graph.Item, name string) string {
+func (c *itemConverter) materializePathFromGraphParentPath(item *graph.Item, name string) string {
 	if c == nil || item == nil || name == "" || c.RemoteRootItemID != "" {
 		return ""
 	}
@@ -615,12 +615,12 @@ func (c *ItemConverter) materializePathFromGraphParentPath(item *graph.Item, nam
 	return c.applyPrefix(path.Join(item.ParentPath, name))
 }
 
-func (c *ItemConverter) materializePathFromParts(
+func (c *itemConverter) materializePathFromParts(
 	itemID string,
 	name string,
 	parentID string,
 	parentDriveID driveid.ID,
-	inflight map[string]InflightParent,
+	inflight map[string]inflightParent,
 	markIncomplete bool,
 ) string {
 	segments := []string{name}
@@ -685,7 +685,7 @@ func (c *ItemConverter) materializePathFromParts(
 
 // applyPrefix prepends the mount local root prefix to a relative path.
 // Returns the path unchanged when no prefix is configured.
-func (c *ItemConverter) applyPrefix(relPath string) string {
+func (c *itemConverter) applyPrefix(relPath string) string {
 	if c.PathPrefix == "" {
 		return relPath
 	}
@@ -693,8 +693,8 @@ func (c *ItemConverter) applyPrefix(relPath string) string {
 	return path.Join(c.PathPrefix, relPath)
 }
 
-func (c *ItemConverter) shouldSkipVaultItem(
-	item *graph.Item, inflight map[string]InflightParent,
+func (c *itemConverter) shouldSkipVaultItem(
+	item *graph.Item, inflight map[string]inflightParent,
 ) bool {
 	if !c.EnableVaultFilter {
 		return false
@@ -715,8 +715,8 @@ func (c *ItemConverter) shouldSkipVaultItem(
 
 // isDescendantOfVault walks the parent chain in the inflight map to check
 // whether any ancestor is a vault folder (B-271).
-func (c *ItemConverter) isDescendantOfVault(
-	item *graph.Item, inflight map[string]InflightParent,
+func (c *itemConverter) isDescendantOfVault(
+	item *graph.Item, inflight map[string]inflightParent,
 ) bool {
 	parentID := item.ParentID
 
@@ -746,7 +746,7 @@ func (c *ItemConverter) isDescendantOfVault(
 
 // resolveItemDriveID returns the normalized driveID for an item, falling
 // back to the converter's driveID when the item's DriveID is empty.
-func (c *ItemConverter) resolveItemDriveID(item *graph.Item) driveid.ID {
+func (c *itemConverter) resolveItemDriveID(item *graph.Item) driveid.ID {
 	return resolveItemDriveIDWithFallback(item, c.DriveID)
 }
 

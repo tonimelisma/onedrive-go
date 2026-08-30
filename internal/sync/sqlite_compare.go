@@ -430,7 +430,7 @@ FROM reconciliation_state
 ORDER BY path`
 )
 
-type SQLiteComparisonRow struct {
+type sQLiteComparisonRow struct {
 	Path                    string
 	BaselineItemID          string
 	RemoteItemID            string
@@ -449,7 +449,7 @@ type SQLiteComparisonRow struct {
 	ComparisonKind          string
 }
 
-type SQLiteReconciliationRow struct {
+type sQLiteReconciliationRow struct {
 	Path               string
 	ItemType           ItemType
 	ComparisonKind     string
@@ -460,14 +460,14 @@ type SQLiteReconciliationRow struct {
 	RemoteMoveSource   string
 }
 
-func (m *SyncStore) QueryComparisonState(ctx context.Context) ([]SQLiteComparisonRow, error) {
+func (m *SyncStore) QueryComparisonState(ctx context.Context) ([]sQLiteComparisonRow, error) {
 	return queryComparisonStateWithRunner(ctx, m.db)
 }
 
 func queryComparisonStateWithRunner(
 	ctx context.Context,
 	runner sqlTxRunner,
-) ([]SQLiteComparisonRow, error) {
+) ([]sQLiteComparisonRow, error) {
 	return queryComparisonStateWithRunnerForTables(ctx, runner, "local_state", "remote_state")
 }
 
@@ -476,17 +476,17 @@ func queryComparisonStateWithRunnerForTables(
 	runner sqlTxRunner,
 	localStateTable string,
 	remoteStateTable string,
-) ([]SQLiteComparisonRow, error) {
+) ([]sQLiteComparisonRow, error) {
 	rows, err := runner.QueryContext(ctx, sqlQueryForStateTables(sqlQueryComparisonState, localStateTable, remoteStateTable))
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
-	var results []SQLiteComparisonRow
+	var results []sQLiteComparisonRow
 	for rows.Next() {
 		var (
-			row                                        SQLiteComparisonRow
+			row                                        sQLiteComparisonRow
 			itemType                                   sql.NullString
 			baselinePresent, localPresent              int
 			remotePresent, localChanged, remoteChanged int
@@ -513,7 +513,7 @@ func queryComparisonStateWithRunnerForTables(
 			return nil, fmt.Errorf("sync: scanning comparison state row: %w", err)
 		}
 		if itemType.Valid {
-			parsed, err := ParseItemType(itemType.String)
+			parsed, err := parseItemType(itemType.String)
 			if err != nil {
 				return nil, fmt.Errorf("sync: parsing comparison state item type %q: %w", itemType.String, err)
 			}
@@ -534,14 +534,14 @@ func queryComparisonStateWithRunnerForTables(
 	return results, nil
 }
 
-func (m *SyncStore) QueryReconciliationState(ctx context.Context) ([]SQLiteReconciliationRow, error) {
+func (m *SyncStore) QueryReconciliationState(ctx context.Context) ([]sQLiteReconciliationRow, error) {
 	return queryReconciliationStateWithRunner(ctx, m.db)
 }
 
 func queryReconciliationStateWithRunner(
 	ctx context.Context,
 	runner sqlTxRunner,
-) ([]SQLiteReconciliationRow, error) {
+) ([]sQLiteReconciliationRow, error) {
 	return queryReconciliationStateWithRunnerForTables(ctx, runner, "local_state", "remote_state")
 }
 
@@ -550,17 +550,17 @@ func queryReconciliationStateWithRunnerForTables(
 	runner sqlTxRunner,
 	localStateTable string,
 	remoteStateTable string,
-) ([]SQLiteReconciliationRow, error) {
+) ([]sQLiteReconciliationRow, error) {
 	rows, err := runner.QueryContext(ctx, sqlQueryForStateTables(sqlQueryReconciliationState, localStateTable, remoteStateTable))
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
-	var results []SQLiteReconciliationRow
+	var results []sQLiteReconciliationRow
 	for rows.Next() {
 		var (
-			row      SQLiteReconciliationRow
+			row      sQLiteReconciliationRow
 			itemType sql.NullString
 		)
 		if err := rows.Scan(
@@ -576,7 +576,7 @@ func queryReconciliationStateWithRunnerForTables(
 			return nil, fmt.Errorf("sync: scanning reconciliation state row: %w", err)
 		}
 		if itemType.Valid {
-			parsed, err := ParseItemType(itemType.String)
+			parsed, err := parseItemType(itemType.String)
 			if err != nil {
 				return nil, fmt.Errorf("sync: parsing reconciliation state item type %q: %w", itemType.String, err)
 			}

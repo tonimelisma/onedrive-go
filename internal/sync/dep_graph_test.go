@@ -20,7 +20,7 @@ import (
 func TestDepGraph_Add_NoDeps(t *testing.T) {
 	t.Parallel()
 
-	dg := NewDepGraph(synctest.TestLogger(t))
+	dg := newDepGraph(synctest.TestLogger(t))
 
 	ta := dg.Add(&Action{
 		Type: ActionFolderCreate, Path: "dir",
@@ -39,7 +39,7 @@ func TestDepGraph_Add_NoDeps(t *testing.T) {
 func TestDepGraph_Add_WithDeps(t *testing.T) {
 	t.Parallel()
 
-	dg := NewDepGraph(synctest.TestLogger(t))
+	dg := newDepGraph(synctest.TestLogger(t))
 
 	// Action 1: no deps — should be returned as ready.
 	ta1 := dg.Add(&Action{
@@ -64,7 +64,7 @@ func TestDepGraph_Add_WithDeps(t *testing.T) {
 func TestDepGraph_Complete_ReturnsDependents(t *testing.T) {
 	t.Parallel()
 
-	dg := NewDepGraph(synctest.TestLogger(t))
+	dg := newDepGraph(synctest.TestLogger(t))
 
 	// Action 1: no deps.
 	dg.Add(&Action{
@@ -105,7 +105,7 @@ func TestDepGraph_Complete_ReturnsDependents(t *testing.T) {
 func TestDepGraph_Complete_DeletesFromActions(t *testing.T) {
 	t.Parallel()
 
-	dg := NewDepGraph(synctest.TestLogger(t))
+	dg := newDepGraph(synctest.TestLogger(t))
 
 	dg.Add(&Action{
 		Type: ActionFolderCreate, Path: "dir",
@@ -139,7 +139,7 @@ func TestDepGraph_Complete_DeletesFromActions(t *testing.T) {
 func TestDepGraph_Complete_UnknownID(t *testing.T) {
 	t.Parallel()
 
-	dg := NewDepGraph(synctest.TestLogger(t))
+	dg := newDepGraph(synctest.TestLogger(t))
 
 	// Add one real action.
 	dg.Add(&Action{
@@ -157,7 +157,7 @@ func TestDepGraph_Complete_UnknownID(t *testing.T) {
 func TestDepGraph_Complete_UnknownID_NoPanic(t *testing.T) {
 	t.Parallel()
 
-	dg := NewDepGraph(synctest.TestLogger(t))
+	dg := newDepGraph(synctest.TestLogger(t))
 
 	// Should not panic on unknown ID with zero tracked actions.
 	ready, ok := dg.Complete(999)
@@ -173,7 +173,7 @@ func TestDepGraph_Complete_UnknownID_NoPanic(t *testing.T) {
 func TestDepGraph_ConcurrentComplete(t *testing.T) {
 	t.Parallel()
 
-	dg := NewDepGraph(synctest.TestLogger(t))
+	dg := newDepGraph(synctest.TestLogger(t))
 
 	// Fan-out: action 0 has no deps; actions 1-49 depend on action 0.
 	dg.Add(&Action{
@@ -197,7 +197,7 @@ func TestDepGraph_ConcurrentComplete(t *testing.T) {
 	var wg stdsync.WaitGroup
 	for _, ta := range ready {
 		wg.Add(1)
-		go func(ta *TrackedAction) {
+		go func(ta *trackedAction) {
 			defer wg.Done()
 			dg.Complete(ta.ID)
 		}(ta)
@@ -215,7 +215,7 @@ func TestDepGraph_ConcurrentComplete(t *testing.T) {
 func TestDepGraph_ConcurrentAddAndComplete(t *testing.T) {
 	t.Parallel()
 
-	dg := NewDepGraph(synctest.TestLogger(t))
+	dg := newDepGraph(synctest.TestLogger(t))
 
 	// Root action with no deps.
 	dg.Add(&Action{
@@ -236,7 +236,7 @@ func TestDepGraph_ConcurrentAddAndComplete(t *testing.T) {
 	var wg stdsync.WaitGroup
 	wg.Add(2)
 
-	var readyFromComplete []*TrackedAction
+	var readyFromComplete []*trackedAction
 
 	go func() {
 		defer wg.Done()
@@ -268,7 +268,7 @@ func TestDepGraph_ConcurrentAddAndComplete(t *testing.T) {
 func TestDepGraph_SkipCompletedDeps(t *testing.T) {
 	t.Parallel()
 
-	dg := NewDepGraph(synctest.TestLogger(t))
+	dg := newDepGraph(synctest.TestLogger(t))
 
 	// Action 2 depends on action 1, but action 1 is not in the graph
 	// (simulating it was already completed before graph was populated).
@@ -290,7 +290,7 @@ func TestDepGraph_SkipCompletedDeps(t *testing.T) {
 func TestDepGraph_InFlightCount(t *testing.T) {
 	t.Parallel()
 
-	dg := NewDepGraph(synctest.TestLogger(t))
+	dg := newDepGraph(synctest.TestLogger(t))
 
 	assert.Equal(t, 0, dg.InFlightCount())
 
@@ -323,7 +323,7 @@ func TestDepGraph_InFlightCount(t *testing.T) {
 func TestDepGraph_ConcurrentMultiAdd(t *testing.T) {
 	t.Parallel()
 
-	dg := NewDepGraph(synctest.TestLogger(t))
+	dg := newDepGraph(synctest.TestLogger(t))
 
 	// 10 goroutines each add 50 independent actions (unique IDs).
 	var wg stdsync.WaitGroup
@@ -360,7 +360,7 @@ func TestDepGraph_ConcurrentMultiAdd(t *testing.T) {
 func TestDepGraph_D10_CompletedDepSatisfiedForNewAction(t *testing.T) {
 	t.Parallel()
 
-	dg := NewDepGraph(synctest.TestLogger(t))
+	dg := newDepGraph(synctest.TestLogger(t))
 
 	// Add and complete action 1.
 	dg.Add(&Action{

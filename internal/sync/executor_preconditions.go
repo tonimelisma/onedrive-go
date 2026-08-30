@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	slashpath "path"
+	"path/filepath"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -15,10 +17,10 @@ import (
 )
 
 func stalePreconditionError(format string, args ...any) error {
-	return fmt.Errorf("%w: %s", ErrActionPreconditionChanged, fmt.Sprintf(format, args...))
+	return fmt.Errorf("%w: %s", errActionPreconditionChanged, fmt.Sprintf(format, args...))
 }
 
-func (e *Executor) validateRemoteSourcePrecondition(
+func (e *executor) validateRemoteSourcePrecondition(
 	ctx context.Context,
 	driveID driveid.ID,
 	action *Action,
@@ -28,7 +30,7 @@ func (e *Executor) validateRemoteSourcePrecondition(
 	return err
 }
 
-func (e *Executor) remoteSourcePreconditionETag(
+func (e *executor) remoteSourcePreconditionETag(
 	ctx context.Context,
 	driveID driveid.ID,
 	action *Action,
@@ -59,7 +61,7 @@ func (e *Executor) remoteSourcePreconditionETag(
 	return item.ETag, nil
 }
 
-func remoteRowMatchesLivePreconditionForAction(action *Action, row *RemoteStateRow, planned *RemoteState) bool {
+func remoteRowMatchesLivePreconditionForAction(action *Action, row *remoteStateRow, planned *remoteState) bool {
 	if plannedPostRemoteMoveContentUpload(action) {
 		return remoteRowMatchesPostRemoteMoveLivePrecondition(row, planned)
 	}
@@ -67,11 +69,11 @@ func remoteRowMatchesLivePreconditionForAction(action *Action, row *RemoteStateR
 	return remoteRowMatchesLivePrecondition(row, planned, true)
 }
 
-func remoteRowMatchesPostRemoteMoveLivePrecondition(row *RemoteStateRow, planned *RemoteState) bool {
+func remoteRowMatchesPostRemoteMoveLivePrecondition(row *remoteStateRow, planned *remoteState) bool {
 	return remoteRowMatchesLivePrecondition(row, planned, false)
 }
 
-func remoteRowMatchesLivePrecondition(row *RemoteStateRow, planned *RemoteState, compareETag bool) bool {
+func remoteRowMatchesLivePrecondition(row *remoteStateRow, planned *remoteState, compareETag bool) bool {
 	if row == nil || planned == nil {
 		return row == nil && planned == nil
 	}
@@ -85,7 +87,7 @@ func remoteRowMatchesLivePrecondition(row *RemoteStateRow, planned *RemoteState,
 	return remoteLiveContentMatches(row, planned)
 }
 
-func remoteLiveIdentityMatches(row *RemoteStateRow, planned *RemoteState, compareETag bool) bool {
+func remoteLiveIdentityMatches(row *remoteStateRow, planned *remoteState, compareETag bool) bool {
 	if planned.ItemID != "" && row.ItemID != planned.ItemID {
 		return false
 	}
@@ -102,7 +104,7 @@ func remoteLiveIdentityMatches(row *RemoteStateRow, planned *RemoteState, compar
 	return true
 }
 
-func remoteLiveContentMatches(row *RemoteStateRow, planned *RemoteState) bool {
+func remoteLiveContentMatches(row *remoteStateRow, planned *remoteState) bool {
 	if row.Hash != "" && planned.Hash != "" {
 		if row.Hash != planned.Hash {
 			return false
@@ -122,7 +124,7 @@ func remoteLiveContentMatches(row *RemoteStateRow, planned *RemoteState) bool {
 	return true
 }
 
-func (e *Executor) validateRemoteParentPrecondition(
+func (e *executor) validateRemoteParentPrecondition(
 	ctx context.Context,
 	driveID driveid.ID,
 	parentID string,
@@ -149,7 +151,7 @@ func (e *Executor) validateRemoteParentPrecondition(
 	return nil
 }
 
-func remoteStateRowFromGraphItem(item *graph.Item) *RemoteStateRow {
+func remoteStateRowFromGraphItem(item *graph.Item) *remoteStateRow {
 	if item == nil {
 		return nil
 	}
@@ -162,9 +164,9 @@ func remoteStateRowFromGraphItem(item *graph.Item) *RemoteStateRow {
 		}
 	}
 
-	itemType := ItemTypeFile
+	resolvedType := ItemTypeFile
 	if item.IsFolder || item.IsRoot {
-		itemType = ItemTypeFolder
+		resolvedType = ItemTypeFolder
 	}
 
 	mtime := int64(0)
@@ -172,11 +174,11 @@ func remoteStateRowFromGraphItem(item *graph.Item) *RemoteStateRow {
 		mtime = item.ModifiedAt.UnixNano()
 	}
 
-	return &RemoteStateRow{
+	return &remoteStateRow{
 		DriveID:  item.DriveID,
 		ItemID:   item.ID,
 		Path:     path,
-		ItemType: itemType,
+		ItemType: resolvedType,
 		Hash:     driveops.SelectHash(item),
 		Size:     item.Size,
 		Mtime:    mtime,
@@ -184,7 +186,7 @@ func remoteStateRowFromGraphItem(item *graph.Item) *RemoteStateRow {
 	}
 }
 
-func plannedRemoteStateForPrecondition(action *Action) *RemoteState {
+func plannedRemoteStateForPrecondition(action *Action) *remoteState {
 	if action == nil || action.View == nil {
 		return nil
 	}
@@ -196,7 +198,7 @@ func plannedRemoteStateForPrecondition(action *Action) *RemoteState {
 	}
 
 	baseline := action.View.Baseline
-	return &RemoteState{
+	return &remoteState{
 		DriveID:  baseline.DriveID,
 		ItemID:   baseline.ItemID,
 		ItemType: baseline.ItemType,
@@ -207,7 +209,7 @@ func plannedRemoteStateForPrecondition(action *Action) *RemoteState {
 	}
 }
 
-func (e *Executor) expectedRemotePreconditionPath(action *Action) string {
+func (e *executor) expectedRemotePreconditionPath(action *Action) string {
 	// Graph reports GetItem parentReference paths relative to the drive root.
 	// Mount-root engines plan actions relative to the mounted item, so that path
 	// is a different coordinate system unless observation rematerializes it.
@@ -224,7 +226,7 @@ func (e *Executor) expectedRemotePreconditionPath(action *Action) string {
 	return actionViewPath(action)
 }
 
-func (e *Executor) validateUploadSourcePrecondition(action *Action) error {
+func (e *executor) validateUploadSourcePrecondition(action *Action) error {
 	if action == nil {
 		return nil
 	}
@@ -237,7 +239,7 @@ func (e *Executor) validateUploadSourcePrecondition(action *Action) error {
 		return stalePreconditionError("upload source %s is no longer a regular file", action.Path)
 	}
 
-	planned := (*LocalState)(nil)
+	planned := (*localState)(nil)
 	if action.View != nil {
 		planned = action.View.Local
 	}
@@ -266,7 +268,7 @@ func (e *Executor) validateUploadSourcePrecondition(action *Action) error {
 	return nil
 }
 
-func (e *Executor) uploadSourceInfo(path string) (os.FileInfo, error) {
+func (e *executor) uploadSourceInfo(path string) (os.FileInfo, error) {
 	info, err := e.syncTree.Lstat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -301,7 +303,7 @@ func expectedUploadHash(action *Action) string {
 	return action.View.Local.Hash
 }
 
-func (e *Executor) validateDownloadTargetPrecondition(action *Action) error {
+func (e *executor) validateDownloadTargetPrecondition(action *Action) error {
 	if action == nil {
 		return nil
 	}
@@ -333,7 +335,7 @@ func actionClearsLocalBeforeDownload(action *Action) bool {
 	return action != nil && action.Type == ActionDownload && action.RequireMissingLocalTarget
 }
 
-func plannedLocalState(action *Action) *LocalState {
+func plannedLocalState(action *Action) *localState {
 	if action == nil || action.View == nil {
 		return nil
 	}
@@ -341,7 +343,7 @@ func plannedLocalState(action *Action) *LocalState {
 	return action.View.Local
 }
 
-func (e *Executor) validateExistingDownloadTarget(action *Action, info os.FileInfo, planned *LocalState) error {
+func (e *executor) validateExistingDownloadTarget(action *Action, info os.FileInfo, planned *localState) error {
 	if info.IsDir() || planned.ItemType != ItemTypeFile {
 		return stalePreconditionError("download target %s changed type", action.Path)
 	}
@@ -368,7 +370,7 @@ func (e *Executor) validateExistingDownloadTarget(action *Action, info os.FileIn
 	return nil
 }
 
-func (e *Executor) validateLocalMovePrecondition(action *Action) error {
+func (e *executor) validateLocalMovePrecondition(action *Action) error {
 	if action == nil {
 		return nil
 	}
@@ -391,7 +393,7 @@ func (e *Executor) validateLocalMovePrecondition(action *Action) error {
 	return e.validateLocalMoveSourceAgainstBaseline(source, info, action.View.Baseline)
 }
 
-func (e *Executor) validateLocalDeleteFolderPrecondition(action *Action, relPath string) error {
+func (e *executor) validateLocalDeleteFolderPrecondition(action *Action, relPath string) error {
 	if action == nil || action.View == nil || action.View.Baseline == nil {
 		return nil
 	}
@@ -415,7 +417,7 @@ func localMoveSourcePath(action *Action) string {
 	return action.Path
 }
 
-func (e *Executor) validateLocalMoveDestinationAbsent(action *Action) error {
+func (e *executor) validateLocalMoveDestinationAbsent(action *Action) error {
 	_, destErr := e.syncTree.Lstat(action.Path)
 	if destErr == nil {
 		return stalePreconditionError("local move destination %s already exists", action.Path)
@@ -427,7 +429,7 @@ func (e *Executor) validateLocalMoveDestinationAbsent(action *Action) error {
 	return nil
 }
 
-func (e *Executor) validateLocalMoveSourceAgainstBaseline(
+func (e *executor) validateLocalMoveSourceAgainstBaseline(
 	source string,
 	info os.FileInfo,
 	baseline *BaselineEntry,
@@ -435,7 +437,7 @@ func (e *Executor) validateLocalMoveSourceAgainstBaseline(
 	return e.validateLocalSourceAgainstBaseline("local move", source, info, baseline)
 }
 
-func (e *Executor) validateLocalSourceAgainstBaseline(
+func (e *executor) validateLocalSourceAgainstBaseline(
 	op string,
 	source string,
 	info os.FileInfo,
@@ -480,4 +482,68 @@ func (e *Executor) validateLocalSourceAgainstBaseline(
 	}
 
 	return nil
+}
+
+// symlinkBoundaryForPath reports the first ancestor component of relPath that
+// is a symbolic link, walking one component at a time so every Lstat resolves
+// against a fully real prefix.
+//
+// An absent component means nothing beneath it exists yet, so there is no
+// boundary to cross and the walk stops cleanly.
+func (e *executor) symlinkBoundaryForPath(relPath string) (string, bool, error) {
+	clean := slashpath.Clean(filepath.ToSlash(relPath))
+	if clean == "." || clean == "" {
+		return "", false, nil
+	}
+
+	current := ""
+
+	for _, part := range strings.Split(clean, "/") {
+		if part == "" || part == "." {
+			continue
+		}
+
+		current = slashpath.Join(current, part)
+
+		info, err := e.syncTree.Lstat(current)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return "", false, nil
+			}
+
+			return "", false, fmt.Errorf("lstat %s: %w", current, err)
+		}
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			return current, true, nil
+		}
+	}
+
+	return "", false, nil
+}
+
+// validateNoSymlinkBoundary refuses a local mutation whose target sits beneath
+// a symlinked ancestor.
+//
+// R-2.4.6: when follow_symlinks is enabled the sync tree observes content
+// through an alias, but the alias is the only thing it may mutate. Writing
+// through it would modify — and, for rename, silently replace — content the
+// sync tree never owned. synctree fails such calls closed on its own; this
+// check exists so the refusal is a stated policy with an actionable message
+// and a durable blocked-scope classification, rather than a rooted-descriptor
+// error leaking through.
+//
+// Deletes do not route through here: ExecuteLocalDelete has to special-case
+// the alias itself, which it removes without following.
+func (e *executor) validateNoSymlinkBoundary(relPath string, verb string) error {
+	boundary, ok, err := e.symlinkBoundaryForPath(relPath)
+	if err != nil {
+		return normalizeSyncTreePathError(err)
+	}
+
+	if !ok {
+		return nil
+	}
+
+	return fmt.Errorf("refusing to %s %s through symlink boundary %s", verb, relPath, boundary)
 }

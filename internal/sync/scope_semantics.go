@@ -1,33 +1,33 @@
 package sync
 
-type ScopeFamily string
+type scopeFamily string
 
 const (
-	ScopeFamilyUnknown        ScopeFamily = ""
-	ScopeFamilyThrottleTarget ScopeFamily = "throttle_target"
-	ScopeFamilyService        ScopeFamily = "service"
-	ScopeFamilyQuotaOwn       ScopeFamily = "quota_own"
-	ScopeFamilyPermDir        ScopeFamily = "perm_dir"
-	ScopeFamilyPermRemote     ScopeFamily = "perm_remote"
-	ScopeFamilyDiskLocal      ScopeFamily = "disk_local"
+	scopeFamilyUnknown        scopeFamily = ""
+	scopeFamilyThrottleTarget scopeFamily = "throttle_target"
+	scopeFamilyService        scopeFamily = "service"
+	scopeFamilyQuotaOwn       scopeFamily = "quota_own"
+	scopeFamilyPermDir        scopeFamily = "perm_dir"
+	scopeFamilyPermRemote     scopeFamily = "perm_remote"
+	scopeFamilyDiskLocal      scopeFamily = "disk_local"
 )
 
-type ScopeAccess string
+type scopeAccess string
 
 const (
-	ScopeAccessUnknown ScopeAccess = ""
-	ScopeAccessNone    ScopeAccess = "none"
-	ScopeAccessRead    ScopeAccess = "read"
-	ScopeAccessWrite   ScopeAccess = "write"
+	scopeAccessUnknown scopeAccess = ""
+	scopeAccessNone    scopeAccess = "none"
+	scopeAccessRead    scopeAccess = "read"
+	scopeAccessWrite   scopeAccess = "write"
 )
 
-type ScopeSubjectKind string
+type scopeSubjectKind string
 
 const (
-	ScopeSubjectKindUnknown ScopeSubjectKind = ""
-	ScopeSubjectKindNone    ScopeSubjectKind = "none"
-	ScopeSubjectKindDrive   ScopeSubjectKind = "drive"
-	ScopeSubjectKindPath    ScopeSubjectKind = "path"
+	scopeSubjectKindUnknown scopeSubjectKind = ""
+	scopeSubjectKindNone    scopeSubjectKind = "none"
+	scopeSubjectKindDrive   scopeSubjectKind = "drive"
+	scopeSubjectKindPath    scopeSubjectKind = "path"
 )
 
 const scopePriorityMax = 99
@@ -41,109 +41,109 @@ const (
 	scopePriorityPermRemote     = 5
 )
 
-type ScopeDescriptor struct {
+type scopeDescriptor struct {
 	Key                  ScopeKey
-	Family               ScopeFamily
-	Access               ScopeAccess
-	SubjectKind          ScopeSubjectKind
+	Family               scopeFamily
+	Access               scopeAccess
+	SubjectKind          scopeSubjectKind
 	SubjectValue         string
 	DefaultConditionType string
 	Priority             int
 }
 
-func DescribeScopeKey(key ScopeKey) ScopeDescriptor {
+func describeScopeKey(key ScopeKey) scopeDescriptor {
 	switch key.Kind {
 	case ScopeThrottleTarget:
-		return ScopeDescriptor{
+		return scopeDescriptor{
 			Key:                  key,
-			Family:               ScopeFamilyThrottleTarget,
-			Access:               ScopeAccessNone,
-			SubjectKind:          ScopeSubjectKindDrive,
+			Family:               scopeFamilyThrottleTarget,
+			Access:               scopeAccessNone,
+			SubjectKind:          scopeSubjectKindDrive,
 			SubjectValue:         key.Param,
-			DefaultConditionType: IssueRateLimited,
+			DefaultConditionType: issueRateLimited,
 			Priority:             scopePriorityThrottleTarget,
 		}
 	case ScopeService:
-		return ScopeDescriptor{
+		return scopeDescriptor{
 			Key:                  key,
-			Family:               ScopeFamilyService,
-			Access:               ScopeAccessNone,
-			SubjectKind:          ScopeSubjectKindNone,
-			DefaultConditionType: IssueServiceOutage,
+			Family:               scopeFamilyService,
+			Access:               scopeAccessNone,
+			SubjectKind:          scopeSubjectKindNone,
+			DefaultConditionType: issueServiceOutage,
 			Priority:             scopePriorityService,
 		}
 	case ScopeDiskLocal:
-		return ScopeDescriptor{
+		return scopeDescriptor{
 			Key:                  key,
-			Family:               ScopeFamilyDiskLocal,
-			Access:               ScopeAccessNone,
-			SubjectKind:          ScopeSubjectKindNone,
-			DefaultConditionType: IssueDiskFull,
+			Family:               scopeFamilyDiskLocal,
+			Access:               scopeAccessNone,
+			SubjectKind:          scopeSubjectKindNone,
+			DefaultConditionType: issueDiskFull,
 			Priority:             scopePriorityDiskLocal,
 		}
 	case ScopeQuotaOwn:
-		return ScopeDescriptor{
+		return scopeDescriptor{
 			Key:                  key,
-			Family:               ScopeFamilyQuotaOwn,
-			Access:               ScopeAccessNone,
-			SubjectKind:          ScopeSubjectKindNone,
+			Family:               scopeFamilyQuotaOwn,
+			Access:               scopeAccessNone,
+			SubjectKind:          scopeSubjectKindNone,
 			DefaultConditionType: IssueQuotaExceeded,
 			Priority:             scopePriorityQuotaOwn,
 		}
 	case ScopePermDirRead:
-		return ScopeDescriptor{
+		return scopeDescriptor{
 			Key:                  key,
-			Family:               ScopeFamilyPermDir,
-			Access:               ScopeAccessRead,
-			SubjectKind:          ScopeSubjectKindPath,
+			Family:               scopeFamilyPermDir,
+			Access:               scopeAccessRead,
+			SubjectKind:          scopeSubjectKindPath,
 			SubjectValue:         key.Param,
-			DefaultConditionType: IssueLocalReadDenied,
+			DefaultConditionType: issueLocalReadDenied,
 			Priority:             scopePriorityPermDir,
 		}
 	case ScopePermDirWrite:
-		return ScopeDescriptor{
+		return scopeDescriptor{
 			Key:                  key,
-			Family:               ScopeFamilyPermDir,
-			Access:               ScopeAccessWrite,
-			SubjectKind:          ScopeSubjectKindPath,
+			Family:               scopeFamilyPermDir,
+			Access:               scopeAccessWrite,
+			SubjectKind:          scopeSubjectKindPath,
 			SubjectValue:         key.Param,
-			DefaultConditionType: IssueLocalWriteDenied,
+			DefaultConditionType: issueLocalWriteDenied,
 			Priority:             scopePriorityPermDir,
 		}
 	case ScopePermRemoteRead:
-		return ScopeDescriptor{
+		return scopeDescriptor{
 			Key:                  key,
-			Family:               ScopeFamilyPermRemote,
-			Access:               ScopeAccessRead,
-			SubjectKind:          ScopeSubjectKindPath,
+			Family:               scopeFamilyPermRemote,
+			Access:               scopeAccessRead,
+			SubjectKind:          scopeSubjectKindPath,
 			SubjectValue:         key.Param,
-			DefaultConditionType: IssueRemoteReadDenied,
+			DefaultConditionType: issueRemoteReadDenied,
 			Priority:             scopePriorityPermRemote,
 		}
 	case ScopePermRemoteWrite:
-		return ScopeDescriptor{
+		return scopeDescriptor{
 			Key:                  key,
-			Family:               ScopeFamilyPermRemote,
-			Access:               ScopeAccessWrite,
-			SubjectKind:          ScopeSubjectKindPath,
+			Family:               scopeFamilyPermRemote,
+			Access:               scopeAccessWrite,
+			SubjectKind:          scopeSubjectKindPath,
 			SubjectValue:         key.Param,
 			DefaultConditionType: IssueRemoteWriteDenied,
 			Priority:             scopePriorityPermRemote,
 		}
 	default:
-		return ScopeDescriptor{
+		return scopeDescriptor{
 			Key:      key,
 			Priority: scopePriorityMax,
 		}
 	}
 }
 
-func (d ScopeDescriptor) IsZero() bool {
-	return d.Family == ScopeFamilyUnknown
+func (d scopeDescriptor) IsZero() bool {
+	return d.Family == scopeFamilyUnknown
 }
 
-func (d ScopeDescriptor) ScopePath() string {
-	if d.SubjectKind != ScopeSubjectKindPath {
+func (d scopeDescriptor) ScopePath() string {
+	if d.SubjectKind != scopeSubjectKindPath {
 		return ""
 	}
 
@@ -153,63 +153,63 @@ func (d ScopeDescriptor) ScopePath() string {
 // PersistsInBlockScopes reports whether this scope is a timed blocked-work
 // scope that belongs in block_scopes. Read-denied subtree boundaries remain
 // observation-owned facts carried on observation_issues via ScopeKey.
-func (d ScopeDescriptor) PersistsInBlockScopes() bool {
+func (d scopeDescriptor) PersistsInBlockScopes() bool {
 	if d.IsZero() {
 		return false
 	}
 
-	if d.Family == ScopeFamilyPermDir || d.Family == ScopeFamilyPermRemote {
-		return d.Access != ScopeAccessRead
+	if d.Family == scopeFamilyPermDir || d.Family == scopeFamilyPermRemote {
+		return d.Access != scopeAccessRead
 	}
 
 	return true
 }
 
-func (d ScopeDescriptor) Humanize() string {
+func (d scopeDescriptor) Humanize() string {
 	switch d.Family {
-	case ScopeFamilyUnknown:
+	case scopeFamilyUnknown:
 		return d.Key.String()
-	case ScopeFamilyThrottleTarget:
+	case scopeFamilyThrottleTarget:
 		return "this drive (rate limited)"
-	case ScopeFamilyService:
+	case scopeFamilyService:
 		return "OneDrive service"
-	case ScopeFamilyQuotaOwn:
+	case scopeFamilyQuotaOwn:
 		return "this drive storage"
-	case ScopeFamilyPermDir, ScopeFamilyPermRemote:
+	case scopeFamilyPermDir, scopeFamilyPermRemote:
 		if d.SubjectValue == "" {
 			return "/"
 		}
 		return d.SubjectValue
-	case ScopeFamilyDiskLocal:
+	case scopeFamilyDiskLocal:
 		return "local disk"
 	default:
 		return d.Key.String()
 	}
 }
 
-func (d ScopeDescriptor) BlocksAction(
+func (d scopeDescriptor) BlocksAction(
 	path string,
 	throttleTargetKey string,
-	actionType ActionType,
+	actionType actionType,
 ) bool {
 	switch d.Family {
-	case ScopeFamilyUnknown:
+	case scopeFamilyUnknown:
 		return false
-	case ScopeFamilyService:
+	case scopeFamilyService:
 		return true
-	case ScopeFamilyThrottleTarget:
+	case scopeFamilyThrottleTarget:
 		return throttleTargetKey != "" && throttleTargetKey == d.SubjectValue
-	case ScopeFamilyDiskLocal:
+	case scopeFamilyDiskLocal:
 		return actionType == ActionDownload
-	case ScopeFamilyQuotaOwn:
+	case scopeFamilyQuotaOwn:
 		return actionType == ActionUpload
-	case ScopeFamilyPermDir:
-		if d.Access == ScopeAccessRead {
+	case scopeFamilyPermDir:
+		if d.Access == scopeAccessRead {
 			return false
 		}
 		return scopePathMatches(path, d.SubjectValue) && localWriteScopeBlocksAction(actionType)
-	case ScopeFamilyPermRemote:
-		if d.Access == ScopeAccessRead {
+	case scopeFamilyPermRemote:
+		if d.Access == scopeAccessRead {
 			return false
 		}
 		return scopePathMatches(path, d.SubjectValue) && remoteWriteScopeBlocksAction(actionType)
@@ -218,7 +218,7 @@ func (d ScopeDescriptor) BlocksAction(
 	}
 }
 
-func localWriteScopeBlocksAction(actionType ActionType) bool {
+func localWriteScopeBlocksAction(actionType actionType) bool {
 	switch actionType {
 	case ActionDownload,
 		ActionLocalDelete,
@@ -236,7 +236,7 @@ func localWriteScopeBlocksAction(actionType ActionType) bool {
 	return false
 }
 
-func remoteWriteScopeBlocksAction(actionType ActionType) bool {
+func remoteWriteScopeBlocksAction(actionType actionType) bool {
 	switch actionType {
 	case ActionUpload,
 		ActionRemoteDelete,

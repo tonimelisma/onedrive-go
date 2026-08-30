@@ -14,7 +14,7 @@ import (
 func (rt *watchRuntime) runWatchUntilQuiescent(
 	ctx context.Context,
 	p *watchPipeline,
-	initialOutbox []*TrackedAction,
+	initialOutbox []*trackedAction,
 ) error {
 	ticker := rt.engine.newTicker(quiescenceLogInterval)
 	defer stopTicker(ticker)
@@ -203,7 +203,7 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 	}
 }
 
-func (rt *watchRuntime) handleWatchDispatch(nextAction *TrackedAction) {
+func (rt *watchRuntime) handleWatchDispatch(nextAction *trackedAction) {
 	postReplanDispatch := rt.loop.postReplanOutbox
 	rt.loop.postReplanOutbox = false
 	rt.markRunning(nextAction)
@@ -233,7 +233,7 @@ func (rt *watchRuntime) handleWatchReplanSignal(
 func (rt *watchRuntime) handleWatchCompletionSignal(
 	ctx context.Context,
 	p *watchPipeline,
-	completion *ActionCompletion,
+	completion *actionCompletion,
 	ok bool,
 ) (bool, error) {
 	if !ok {
@@ -258,7 +258,7 @@ func (rt *watchRuntime) handleWatchLocalObservationBatchSignal(
 
 func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 	ctx context.Context,
-	event *ProtectedRootEvent,
+	event *protectedRootEvent,
 	ok bool,
 ) (bool, error) {
 	if !ok {
@@ -309,7 +309,7 @@ func (rt *watchRuntime) handleWatchRemoteBatchSignal(
 
 func (rt *watchRuntime) handleWatchSkippedSignal(
 	ctx context.Context,
-	skipped []SkippedItem,
+	skipped []skippedItem,
 	ok bool,
 ) (bool, error) {
 	if !ok {
@@ -369,7 +369,7 @@ func (rt *watchRuntime) handleWatchHeldReleaseSignal(
 	return rt.handleWatchHeldRelease(ctx, p, trial)
 }
 
-func (rt *watchRuntime) appendReadyFrontier(ready []*TrackedAction) error {
+func (rt *watchRuntime) appendReadyFrontier(ready []*trackedAction) error {
 	if rt.hasPendingReplan() {
 		rt.retireReadyFrontierForPendingReplan(ready)
 		return nil
@@ -386,7 +386,7 @@ func (rt *watchRuntime) releaseHeldFrontier(
 	trial bool,
 ) error {
 	var (
-		released []*TrackedAction
+		released []*trackedAction
 		err      error
 	)
 	if trial {
@@ -429,7 +429,7 @@ func (rt *watchRuntime) logObserverError(obsErr error) {
 	)
 }
 
-func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *TrackedAction, *TrackedAction) {
+func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *trackedAction, *trackedAction) {
 	outbox := rt.currentOutbox()
 	nextAction := firstOutbox(outbox)
 	if nextAction == nil {
@@ -447,7 +447,7 @@ func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *TrackedAction, *Trac
 	return rt.dispatchCh, nextAction
 }
 
-func firstOutbox(outbox []*TrackedAction) *TrackedAction {
+func firstOutbox(outbox []*trackedAction) *trackedAction {
 	if len(outbox) == 0 {
 		return nil
 	}
@@ -478,7 +478,7 @@ func (rt *watchRuntime) handleWatchReplanReady(
 func (rt *watchRuntime) handleWatchActionCompletion(
 	ctx context.Context,
 	p *watchPipeline,
-	completion *ActionCompletion,
+	completion *actionCompletion,
 ) error {
 	hadPendingReplan := rt.hasPendingReplan()
 	ready, err := rt.applyRuntimeCompletionStage(ctx, rt, completion, p.bl)

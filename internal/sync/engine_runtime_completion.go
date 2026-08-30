@@ -12,7 +12,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-func (flow *engineFlow) failAfterControlStateError(current *TrackedAction, err error) error {
+func (flow *engineFlow) failAfterControlStateError(current *trackedAction, err error) error {
 	flow.markFinished(current)
 	return err
 }
@@ -23,9 +23,9 @@ func (flow *engineFlow) failAfterControlStateError(current *TrackedAction, err e
 func (flow *engineFlow) applyRuntimeCompletionStage(
 	ctx context.Context,
 	watch *watchRuntime,
-	r *ActionCompletion,
+	r *actionCompletion,
 	bl *Baseline,
-) ([]*TrackedAction, error) {
+) ([]*trackedAction, error) {
 	if r == nil {
 		return nil, nil
 	}
@@ -34,7 +34,7 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 	current := flow.trackedActionForCompletion(r)
 
 	var (
-		dispatched []*TrackedAction
+		dispatched []*trackedAction
 		err        error
 	)
 	if r.IsTrial && !r.TrialScopeKey.IsZero() {
@@ -52,11 +52,11 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 func (flow *engineFlow) applyNormalCompletionDecision(
 	ctx context.Context,
 	watch *watchRuntime,
-	decision *ResultDecision,
-	current *TrackedAction,
-	r *ActionCompletion,
+	decision *resultDecision,
+	current *trackedAction,
+	r *actionCompletion,
 	bl *Baseline,
-) ([]*TrackedAction, error) {
+) ([]*trackedAction, error) {
 	if handled, err := flow.maybeHandlePermissionFailure(ctx, watch, decision, current, r, bl); handled {
 		return nil, err
 	}
@@ -100,11 +100,11 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 	ctx context.Context,
 	watch *watchRuntime,
 	trialScopeKey ScopeKey,
-	decision *ResultDecision,
-	current *TrackedAction,
-	r *ActionCompletion,
+	decision *resultDecision,
+	current *trackedAction,
+	r *actionCompletion,
 	bl *Baseline,
-) ([]*TrackedAction, error) {
+) ([]*trackedAction, error) {
 	if decision.Class == errclass.ClassSuperseded {
 		if err := flow.applySupersededCompletion(ctx, watch, current, r, "trial superseded action completion"); err != nil {
 			return nil, flow.failAfterControlStateError(current, err)
@@ -150,8 +150,8 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 func (flow *engineFlow) applySupersededCompletion(
 	ctx context.Context,
 	watch *watchRuntime,
-	current *TrackedAction,
-	r *ActionCompletion,
+	current *trackedAction,
+	r *actionCompletion,
 	depGraphReason string,
 ) error {
 	if err := flow.clearRetryWorkOnSuperseded(ctx, r, current); err != nil {
@@ -173,19 +173,19 @@ func (flow *engineFlow) applySupersededCompletion(
 func (flow *engineFlow) applyCompletionSuccess(
 	ctx context.Context,
 	watch *watchRuntime,
-	current *TrackedAction,
-	r *ActionCompletion,
-) ([]*TrackedAction, error) {
+	current *trackedAction,
+	r *actionCompletion,
+) ([]*trackedAction, error) {
 	return flow.applyTrackedActionSuccess(ctx, watch, current, r, "successful action completion")
 }
 
 func (flow *engineFlow) applyTrackedActionSuccess(
 	ctx context.Context,
 	watch *watchRuntime,
-	current *TrackedAction,
-	r *ActionCompletion,
+	current *trackedAction,
+	r *actionCompletion,
 	depGraphReason string,
-) ([]*TrackedAction, error) {
+) ([]*trackedAction, error) {
 	flow.markFinished(current)
 	flow.succeeded++
 	if current != nil {
@@ -194,7 +194,7 @@ func (flow *engineFlow) applyTrackedActionSuccess(
 		flow.clearRetryWorkOnSuccess(ctx, r)
 	}
 	if flow.scopeState != nil && r != nil {
-		flow.scopeState.RecordSuccess(r)
+		flow.scopeState.RecordSuccess()
 	}
 
 	actionID := int64(0)
@@ -217,9 +217,9 @@ func (flow *engineFlow) applyTrackedActionSuccess(
 func (flow *engineFlow) applyOrdinaryFailureEffects(
 	ctx context.Context,
 	watch *watchRuntime,
-	current *TrackedAction,
-	decision *ResultDecision,
-	r *ActionCompletion,
+	current *trackedAction,
+	decision *resultDecision,
+	r *actionCompletion,
 ) error {
 	persisted, err := flow.persistAndHoldFailure(ctx, current, decision, r)
 	if err != nil {
@@ -236,9 +236,9 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 
 func (flow *engineFlow) persistAndHoldFailure(
 	ctx context.Context,
-	current *TrackedAction,
-	decision *ResultDecision,
-	r *ActionCompletion,
+	current *trackedAction,
+	decision *resultDecision,
+	r *actionCompletion,
 ) (bool, error) {
 	if decision.Persistence != persistRetryWork {
 		return false, nil
@@ -256,8 +256,8 @@ func (flow *engineFlow) persistAndHoldFailure(
 func (flow *engineFlow) applyPersistedFailureScopeEffects(
 	ctx context.Context,
 	watch *watchRuntime,
-	decision *ResultDecision,
-	r *ActionCompletion,
+	decision *resultDecision,
+	r *actionCompletion,
 	persisted bool,
 ) error {
 	if !persisted {
@@ -270,7 +270,7 @@ func (flow *engineFlow) applyPersistedFailureScopeEffects(
 		return nil
 	}
 
-	return flow.applyBlockScope(ctx, watch, ScopeUpdateResult{
+	return flow.applyBlockScope(ctx, watch, scopeUpdateResult{
 		Block:         true,
 		ScopeKey:      decision.ScopeKey,
 		ConditionType: decision.ScopeKey.ConditionType(),
@@ -279,7 +279,7 @@ func (flow *engineFlow) applyPersistedFailureScopeEffects(
 
 func (flow *engineFlow) armFailureTimers(
 	watch *watchRuntime,
-	decision *ResultDecision,
+	decision *resultDecision,
 	persisted bool,
 ) {
 	if watch == nil {
@@ -293,7 +293,7 @@ func (flow *engineFlow) armFailureTimers(
 	}
 }
 
-func fatalResultError(r *ActionCompletion) error {
+func fatalResultError(r *actionCompletion) error {
 	if r.Err != nil {
 		return fmt.Errorf("sync: unauthorized action completion for %s: %w", r.Path, r.Err)
 	}
@@ -304,7 +304,7 @@ func fatalResultError(r *ActionCompletion) error {
 func (flow *engineFlow) applyFatalAuthEffects(
 	ctx context.Context,
 	watch *watchRuntime,
-	r *ActionCompletion,
+	r *actionCompletion,
 	conditionKey ConditionKey,
 ) {
 	logFields := flow.summaryLogFields(
@@ -337,7 +337,7 @@ func (flow *engineFlow) applyFatalAuthEffects(
 	_ = watch
 }
 
-func isPublicationOnlyActionType(actionType ActionType) bool {
+func isPublicationOnlyActionType(actionType actionType) bool {
 	switch actionType {
 	case ActionBaselineUpdate, ActionCleanup:
 		return true
@@ -355,7 +355,7 @@ func isPublicationOnlyActionType(actionType ActionType) bool {
 	panic(fmt.Sprintf("unknown action type %d", actionType))
 }
 
-func (flow *engineFlow) applyPublicationMutation(ctx context.Context, ta *TrackedAction) error {
+func (flow *engineFlow) applyPublicationMutation(ctx context.Context, ta *trackedAction) error {
 	mutation, err := publicationMutationFromAction(&ta.Action, flow.engine.driveID)
 	if err == nil {
 		err = flow.engine.baseline.CommitMutation(ctx, mutation)
@@ -363,9 +363,9 @@ func (flow *engineFlow) applyPublicationMutation(ctx context.Context, ta *Tracke
 	return err
 }
 
-func partitionPublicationFrontier(ready []*TrackedAction) ([]*TrackedAction, []*TrackedAction) {
-	concrete := make([]*TrackedAction, 0, len(ready))
-	publication := make([]*TrackedAction, 0, len(ready))
+func partitionPublicationFrontier(ready []*trackedAction) ([]*trackedAction, []*trackedAction) {
+	concrete := make([]*trackedAction, 0, len(ready))
+	publication := make([]*trackedAction, 0, len(ready))
 
 	for _, ta := range ready {
 		if ta == nil {
@@ -385,9 +385,9 @@ func (flow *engineFlow) failPublicationDrainAction(
 	ctx context.Context,
 	watch *watchRuntime,
 	bl *Baseline,
-	current *TrackedAction,
+	current *trackedAction,
 	cause error,
-) ([]*TrackedAction, error) {
+) ([]*trackedAction, error) {
 	completion := actionCompletionFromTrackedAction(current, nil, cause)
 	return flow.applyRuntimeCompletionStage(ctx, watch, &completion, bl)
 }
@@ -396,8 +396,8 @@ func (flow *engineFlow) applyPublicationDrainAction(
 	ctx context.Context,
 	watch *watchRuntime,
 	bl *Baseline,
-	current *TrackedAction,
-) ([]*TrackedAction, error) {
+	current *trackedAction,
+) ([]*trackedAction, error) {
 	if err := flow.applyPublicationMutation(ctx, current); err != nil {
 		return flow.failPublicationDrainAction(ctx, watch, bl, current, err)
 	}
@@ -408,8 +408,8 @@ func (flow *engineFlow) applyPublicationDrainAction(
 func (flow *engineFlow) completePublicationDrainAction(
 	ctx context.Context,
 	watch *watchRuntime,
-	current *TrackedAction,
-) ([]*TrackedAction, error) {
+	current *trackedAction,
+) ([]*trackedAction, error) {
 	if current == nil {
 		return nil, nil
 	}
@@ -427,10 +427,10 @@ func (flow *engineFlow) runPublicationDrainStage(
 	ctx context.Context,
 	watch *watchRuntime,
 	bl *Baseline,
-	ready []*TrackedAction,
-) ([]*TrackedAction, error) {
+	ready []*trackedAction,
+) ([]*trackedAction, error) {
 	concrete, publication := partitionPublicationFrontier(ready)
-	queue := append([]*TrackedAction(nil), publication...)
+	queue := append([]*trackedAction(nil), publication...)
 
 	for len(queue) > 0 {
 		current := queue[0]
@@ -451,8 +451,8 @@ func (flow *engineFlow) runPublicationDrainStage(
 
 func (flow *engineFlow) recordRetryWork(
 	ctx context.Context,
-	decision *ResultDecision,
-	r *ActionCompletion,
+	decision *resultDecision,
+	r *actionCompletion,
 	delayFn func(int) time.Duration,
 ) error {
 	scopeKey := decision.ScopeEvidence
@@ -515,8 +515,8 @@ func (flow *engineFlow) retryWorkShouldBeBlocked(
 
 func (flow *engineFlow) applyResultPersistence(
 	ctx context.Context,
-	decision *ResultDecision,
-	r *ActionCompletion,
+	decision *resultDecision,
+	r *actionCompletion,
 ) error {
 	switch decision.Persistence {
 	case persistNone:

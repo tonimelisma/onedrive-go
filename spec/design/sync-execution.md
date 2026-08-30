@@ -1,14 +1,14 @@
 # Sync Execution
 
-GOVERNS: internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_preconditions.go, internal/sync/executor_transfer.go, internal/sync/worker.go, internal/sync/worker_result.go, internal/sync/action_freshness.go, internal/sync/dep_graph.go, internal/sync/active_scopes.go, internal/sync/scope.go
+GOVERNS: internal/sync/action_freshness.go, internal/sync/active_scopes.go, internal/sync/dep_graph.go, internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_preconditions.go, internal/sync/executor_transfer.go, internal/sync/scope.go, internal/sync/tracked_action.go, internal/sync/worker.go, internal/sync/worker_result.go
 
-Implements: R-2.3.1 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
+Implements: R-2.3.1 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
 
 ## Overview
 
 Execution takes a runtime plan, dispatches concrete side-effecting
 work through a dependency graph, runs workers, and reports one
-`ActionCompletion` per finished action. That runtime-plan handoff is
+`actionCompletion` per finished action. That runtime-plan handoff is
 assembled on the engine side by the shared pipeline in
 `engine_current_plan.go`, then admitted through `engine_runtime_start.go`
 before execution begins. Publication-only planner actions are not executor
@@ -23,7 +23,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 
 - Owns: dispatch, dependency satisfaction, worker execution, conflict-copy creation, and success outcomes
 - Does Not Own: planning, retry scheduling, scope activation policy, or store schema
-- Source of Truth: planner-produced `ActionPlan` plus the rooted capabilities injected into the executor
+- Source of Truth: planner-produced `actionPlan` plus the rooted capabilities injected into the executor
 - Allowed Side Effects: sync-root filesystem mutation, Graph transfer calls, and store success commits through the engine
 - Mutable Runtime Owner: workers own only action execution. The engine owns
   runtime quiescence, held-work timing, admission, and dependency completion
@@ -37,6 +37,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Edit/edit and create/create conflicts are handled immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestExecutor_ConflictDownloadFails_LeavesConflictCopy`, `TestConflictCopyPath_Normal` |
 | Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
 | Worker-start validation rejects already-submitted stale actions before executor side effects, while suspect local truth disables local-state-based rejection. Dependent uploads after planned remote moves tolerate move-produced eTag churn but still reject proven remote content drift, and executable actions without planner truth fail closed. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState`, `TestActionFreshness_PostRemoteMoveUploadAllowsMoveProducedETagChange`, `TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange`, `TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction` |
+| Local mutation is refused beneath a symlinked ancestor, at every mutating action, with the target content outside the sync root left byte-identical. | `TestExecutor_Download_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorSourceIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorDestinationIsBlocked`, `TestExecutor_ConflictCopy_SymlinkedAncestorIsBlocked`, `TestExecutor_CreateLocalFolder_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition`, `TestExecutor_LocalDelete_AliasItselfStillRemovesOnlyTheSymlink`, `TestExecutor_LocalMove_WithoutSymlinkBoundarySucceeds` |
 | Executor live preconditions reject stale work at the side-effect boundary without mutating local or remote state. | `TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure`, `TestExecutor_RemoteDelete_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_RemoteDelete_WrongDrivePreflightReturnsStalePrecondition`, `TestExecutor_RemoteDelete_StalePathPreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_StaleSourcePreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_CreateRemoteFolder_MissingParentPreflightReturnsStalePrecondition`, `TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition`, `TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition`, `TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStalePrecondition`, `TestExecutor_Download_MountRootAllowsGraphDriveRootPath`, `TestExecutor_LocalMove_SourceChangedReturnsStalePrecondition`, `TestExecutor_LocalMove_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition` |
 | Workers preserve executor failure capability on completions and record worker-start/live-precondition superseded counters by local-vs-remote source. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_RemoteDownloadMismatchRecordsRemoteTruthCounter`, `TestWorkerPool_SendResultCountsLivePreconditionSupersededByCapability`, `TestWorkerPool_SendResultDoesNotGuessLivePreconditionSourceWithoutCapability` |
 | Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork` |
@@ -44,7 +45,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 
 ## Worker And Dependency Model
 
-`DepGraph` is the execution-time dependency graph. It tracks:
+`depGraph` is the execution-time dependency graph. It tracks:
 
 - which actions are in flight
 - which dependencies remain unsatisfied
@@ -65,7 +66,7 @@ latest committed truth using the shared action-freshness predicate. Admission
 uses the same predicate only for actions that are about to enter the worker
 outbox; retry-held or scope-held actions are checked when they later become
 dispatch candidates. A stale worker-start action returns
-`ErrActionPreconditionChanged`, so the engine classifies it as superseded
+`errActionPreconditionChanged`, so the engine classifies it as superseded
 instead of ordinary retry. This gate runs before hashing, upload-session
 creation, download writes, delete/move mutation, or other executor side
 effects. Canceled worker/admission freshness checks fail closed before any
@@ -85,13 +86,13 @@ identity and content facts. Executable actions must carry planner view truth;
 missing planner view data is an internal validation error once committed truth
 is authoritative, not a reason to skip stale work checks. Move actions
 additionally check the source/destination peer path that is not represented by
-the main `PathView`, so a changed local source, reappeared remote source,
+the main `pathView`, so a changed local source, reappeared remote source,
 missing local move destination, or occupied remote move destination supersedes
 the old move before side effects.
 
 Worker-start rejections record aggregate perf counters by truth authority
 (`local_state` or `remote_state`). Executor live-precondition rejections carry
-their failure capability through `ActionCompletion`, so the worker boundary can
+their failure capability through `actionCompletion`, so the worker boundary can
 record local-vs-remote live-precondition superseded counters without parsing
 logs or paths. The worker metric boundary does not infer live-precondition
 source from action type; ambiguous outcomes must be fixed at the executor
@@ -103,7 +104,7 @@ carry remote-write capability.
 The dependency graph is dependency-only. It no longer defines runtime
 quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,
 so the engine decides when the current runtime is quiescent based on outbox,
-running work, and due held entries. `DepGraph` therefore does not expose a
+running work, and due held entries. `depGraph` therefore does not expose a
 runtime-completion channel; callers use dependency release plus engine-owned
 settle checks instead. When shutdown has already started, the engine still
 processes late worker completions for bookkeeping, but it immediately converts
@@ -137,7 +138,7 @@ that observation persisted, not rejected merely because the alias directory
 entry is a symlink. The transfer manager then reuses the executor-supplied
 callback before upload reads so a large file can abort if it changes
 mid-session. Expected source-hash mismatches are returned as
-`ErrActionPreconditionChanged`.
+`errActionPreconditionChanged`.
 
 For downloads, the executor validates the planned destination before transfer
 starts and supplies the same callback for the transfer manager to run
@@ -161,7 +162,7 @@ lag is absorbed before stale proof is evaluated. If the visibility wait times
 out because the parent is actually gone, the stale parent preflight result takes
 precedence over the visibility timeout. A live `itemNotFound` result, changed item identity,
 drive, item type, eTag, hash, size, or same-coordinate path where Graph supplies
-that fact is a stale precondition and maps to `ErrActionPreconditionChanged`.
+that fact is a stale precondition and maps to `errActionPreconditionChanged`.
 Remote delete and move also pass the live preflight eTag to Graph as an
 `If-Match` condition when one is available. If Graph returns 412 after the
 explicit preflight, the executor treats that as a post-preflight stale
@@ -283,7 +284,7 @@ The dependent download carries `RequireMissingLocalTarget`, so executor-side
 local preconditions treat the post-copy missing canonical path as the expected
 state. If the canonical path reappears before the dependent download runs or
 before its final atomic rename, that is a stale local-write precondition and the executor returns
-`ErrActionPreconditionChanged` instead of overwriting the newly appeared file.
+`errActionPreconditionChanged` instead of overwriting the newly appeared file.
 
 If the download fails, the preserved local conflict copy remains on disk and
 the canonical path stays pending for retry/replan. Execution does not recreate
@@ -306,8 +307,8 @@ upload from a stale local delete.
 For engines rooted below the remote drive root, execution uses the engine's own
 mount context:
 
-- `ExecutorConfig.driveID`
-- `ExecutorConfig.remoteRootItemID`
+- `executorConfig.driveID`
+- `executorConfig.remoteRootItemID`
 - `Action.DriveID`
 
 Path convergence checks after successful remote mutation are resolved relative
@@ -336,3 +337,37 @@ its destination path is outside the blocked subtree.
 Execution owns concrete action side effects and reports their outcomes. Planning
 owns reconciliation decisions, baseline-only cleanup, conflict expansion, and
 shared-folder runtime topology before work reaches the executor.
+
+## Symlink Boundary Policy
+
+`follow_symlinks=true` lets observation walk through a symlinked directory and
+record content at the alias path. The executor treats that alias as a
+**read boundary, not a write boundary** (R-2.4.6).
+
+Every mutating local action asserts `validateNoSymlinkBoundary` before acting.
+The check walks the target path one component at a time and refuses the action
+if any ancestor is a symbolic link, reporting
+`refusing to <verb> <path> through symlink boundary <ancestor>` and classifying
+the failure as `PermissionCapabilityLocalWrite` so it lands in the durable
+blocked-scope projection and is explained by `status` rather than retried as a
+transient error.
+
+Covered actions: download, local move (both endpoints), conflict copy, local
+folder create, and local delete. Local delete reaches the policy through
+`ExecuteLocalDelete`, which special-cases the alias itself — deleting the alias
+removes only the symlink and never target content.
+
+Two deliberate exclusions:
+
+- **Upload is not blocked.** Uploading reads through the alias, and observing
+  plus uploading target content is the entire purpose of the setting.
+- **Reads are not blocked** for the same reason.
+
+This policy is redundant with `synctree`, which already fails such calls closed
+at the rooted descriptor, and that redundancy is intentional in exactly one
+direction. Download is the case that needs it: `ExecuteDownload` resolves an
+absolute path and hands it to `driveops`, which writes through the deliberately
+uncontained `localpath` helpers, so the executor is the only layer that can
+refuse it. For the remaining actions the executor check converts a
+rooted-descriptor error into a stated policy with an actionable message and a
+durable classification.

@@ -40,7 +40,7 @@ func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, watch *wat
 
 func (flow *engineFlow) mustAssertDispatchAdmissionSealed(
 	watch *watchRuntime,
-	outbox []*TrackedAction,
+	outbox []*trackedAction,
 	stage string,
 ) {
 	if !flow.invariantChecksEnabled() {
@@ -131,7 +131,7 @@ func (flow *engineFlow) assertWatchRuntimeInvariants(watch *watchRuntime) error 
 
 func (flow *engineFlow) assertDispatchAdmissionSealed(
 	watch *watchRuntime,
-	outbox []*TrackedAction,
+	outbox []*trackedAction,
 ) error {
 	if watch == nil || !watch.isDraining() || len(outbox) == 0 {
 		return nil

@@ -13,6 +13,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Command positions in the default verify profile. Named so that inserting a
+// step is a one-line change here rather than a silent renumbering that shifts
+// every downstream assertion onto the wrong command.
+const (
+	cmdFormatGofumpt      = 0
+	cmdFormatGoimports    = 1
+	cmdLint               = 2
+	cmdBuild              = 3
+	cmdBuildFirstPlatform = 4
+)
+
+// The cross-platform builds occupy supportedPlatformCount slots starting at
+// cmdBuildFirstPlatform, so everything after them is expressed relative to
+// that run rather than hardcoded.
+const (
+	cmdUnitTests        = cmdBuildFirstPlatform + supportedPlatformCount
+	cmdE2EFullCompile   = cmdUnitTests + 1
+	cmdTaggedVetE2E     = cmdE2EFullCompile + 1
+	cmdTaggedVetInteg   = cmdTaggedVetE2E + 1
+	cmdE2EAuthPreflight = cmdTaggedVetInteg + 1
+	cmdE2EFastPreflight = cmdE2EAuthPreflight + 1
+	cmdE2ESuite         = cmdE2EFastPreflight + 1
+
+	verifyDefaultCommandCount = cmdE2ESuite + 1
+)
+
 // Validates: R-6.2.1, R-6.2.2
 func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	t.Parallel()
@@ -39,33 +65,55 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.runCommands, 9)
-	assert.Equal(t, "gofumpt", runner.runCommands[0].name)
-	assert.Equal(t, []string{"-w", "."}, runner.runCommands[0].args)
-	assert.Equal(t, "goimports", runner.runCommands[1].name)
-	assert.Equal(t, "golangci-lint", runner.runCommands[2].name)
-	assert.Equal(t, "go", runner.runCommands[3].name)
-	assert.Equal(t, []string{"build", "./..."}, runner.runCommands[3].args)
-	assert.Equal(t, []string{"test", "-race", "-coverprofile=" + filepath.Join(repoRoot, "cover.out"), "./..."}, runner.runCommands[4].args)
-	assert.Equal(t, "test", runner.runCommands[5].args[0])
-	assert.Equal(t, "-c", runner.runCommands[5].args[1])
-	assert.Equal(t, "-race", runner.runCommands[5].args[2])
-	assert.Equal(t, "-tags=e2e e2e_full", runner.runCommands[5].args[3])
-	assert.Equal(t, "-o", runner.runCommands[5].args[4])
-	assert.Contains(t, filepath.Base(runner.runCommands[5].args[5]), strings.TrimSuffix(fullE2ECompileArtifactName, ".test"))
-	assert.Equal(t, "./e2e", runner.runCommands[5].args[6])
-	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + authE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[6].args)
-	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + fastE2EPreflightPattern, "-count=1", "-v", "./e2e/..."}, runner.runCommands[7].args)
-	assert.Equal(t, []string{"test", "-tags=e2e", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.runCommands[8].args)
-	assertCommandHasEnvVar(t, runner.runCommands[6], e2eRunAuthPreflightEnvVar+"=1")
-	assertCommandLacksEnvVar(t, runner.runCommands[6], e2eRunFastFixturePreflightEnvVar+"=1")
-	assertCommandLacksSkipSuiteScrubEnvVar(t, runner.runCommands[6])
-	assertCommandHasEnvVar(t, runner.runCommands[7], e2eRunFastFixturePreflightEnvVar+"=1")
-	assertCommandLacksEnvVar(t, runner.runCommands[7], e2eRunAuthPreflightEnvVar+"=1")
-	assertCommandHasEnvVar(t, runner.runCommands[7], e2eSkipSuiteScrubEnvVar+"=1")
-	assertCommandHasEnvVar(t, runner.runCommands[8], e2eSkipSuiteScrubEnvVar+"=1")
-	assertCommandLacksEnvVar(t, runner.runCommands[8], e2eRunAuthPreflightEnvVar+"=1")
-	assertCommandLacksEnvVar(t, runner.runCommands[8], e2eRunFastFixturePreflightEnvVar+"=1")
+	require.Len(t, runner.runCommands, verifyDefaultCommandCount)
+	assert.Equal(t, "gofumpt", runner.runCommands[cmdFormatGofumpt].name)
+	assert.Equal(t, []string{"-w", "."}, runner.runCommands[cmdFormatGofumpt].args)
+	assert.Equal(t, "goimports", runner.runCommands[cmdFormatGoimports].name)
+	assert.Equal(t, "golangci-lint", runner.runCommands[cmdLint].name)
+	assert.Equal(t, "go", runner.runCommands[cmdBuild].name)
+	assert.Equal(t, []string{"build", "./..."}, runner.runCommands[cmdBuild].args)
+
+	for i, goos := range supportedPlatforms() {
+		command := runner.runCommands[cmdBuildFirstPlatform+i]
+		assert.Equal(t, []string{"build", "./..."}, command.args)
+		assertCommandHasEnvVar(t, command, "GOOS="+goos)
+	}
+
+	assert.Equal(t,
+		[]string{"test", "-race", "-coverprofile=" + filepath.Join(repoRoot, "cover.out"), "./..."},
+		runner.runCommands[cmdUnitTests].args,
+	)
+	assert.Equal(t, "test", runner.runCommands[cmdE2EFullCompile].args[0])
+	assert.Equal(t, "-c", runner.runCommands[cmdE2EFullCompile].args[1])
+	assert.Equal(t, "-race", runner.runCommands[cmdE2EFullCompile].args[2])
+	assert.Equal(t, "-tags=e2e e2e_full", runner.runCommands[cmdE2EFullCompile].args[3])
+	assert.Equal(t, "-o", runner.runCommands[cmdE2EFullCompile].args[4])
+	assert.Contains(t,
+		filepath.Base(runner.runCommands[cmdE2EFullCompile].args[5]),
+		strings.TrimSuffix(fullE2ECompileArtifactName, ".test"),
+	)
+	assert.Equal(t, "./e2e", runner.runCommands[cmdE2EFullCompile].args[6])
+	assert.Equal(t,
+		[]string{"test", "-tags=e2e", "-run=" + authE2EPreflightPattern, "-count=1", "-v", "./e2e/..."},
+		runner.runCommands[cmdE2EAuthPreflight].args,
+	)
+	assert.Equal(t,
+		[]string{"test", "-tags=e2e", "-run=" + fastE2EPreflightPattern, "-count=1", "-v", "./e2e/..."},
+		runner.runCommands[cmdE2EFastPreflight].args,
+	)
+	assert.Equal(t,
+		[]string{"test", "-tags=e2e", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."},
+		runner.runCommands[cmdE2ESuite].args,
+	)
+	assertCommandHasEnvVar(t, runner.runCommands[cmdE2EAuthPreflight], e2eRunAuthPreflightEnvVar+"=1")
+	assertCommandLacksEnvVar(t, runner.runCommands[cmdE2EAuthPreflight], e2eRunFastFixturePreflightEnvVar+"=1")
+	assertCommandLacksSkipSuiteScrubEnvVar(t, runner.runCommands[cmdE2EAuthPreflight])
+	assertCommandHasEnvVar(t, runner.runCommands[cmdE2EFastPreflight], e2eRunFastFixturePreflightEnvVar+"=1")
+	assertCommandLacksEnvVar(t, runner.runCommands[cmdE2EFastPreflight], e2eRunAuthPreflightEnvVar+"=1")
+	assertCommandHasEnvVar(t, runner.runCommands[cmdE2EFastPreflight], e2eSkipSuiteScrubEnvVar+"=1")
+	assertCommandHasEnvVar(t, runner.runCommands[cmdE2ESuite], e2eSkipSuiteScrubEnvVar+"=1")
+	assertCommandLacksEnvVar(t, runner.runCommands[cmdE2ESuite], e2eRunAuthPreflightEnvVar+"=1")
+	assertCommandLacksEnvVar(t, runner.runCommands[cmdE2ESuite], e2eRunFastFixturePreflightEnvVar+"=1")
 	require.Len(t, runner.outputCommands, 1)
 	assert.Contains(t, stdout.String(), "==> coverage")
 }
@@ -84,7 +132,8 @@ func TestRunE2EFullCompileCheck_UsesUniqueArtifactPath(t *testing.T) {
 		&bytes.Buffer{},
 	)
 	require.NoError(t, err)
-	require.Len(t, runner.runCommands, 1)
+	// compile, then one tagged vet per build-tagged source set
+	require.Len(t, runner.runCommands, 1+taggedVetTargetCount)
 
 	args := runner.runCommands[0].args
 	require.Len(t, args, 7)
@@ -116,14 +165,40 @@ func TestRunVerifyPublicRunsExpectedSteps(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.runCommands, 6)
-	assert.Equal(t, "test", runner.runCommands[5].args[0])
-	assert.Equal(t, "-c", runner.runCommands[5].args[1])
-	assert.Equal(t, "-race", runner.runCommands[5].args[2])
-	assert.Equal(t, "-tags=e2e e2e_full", runner.runCommands[5].args[3])
-	assert.Equal(t, "-o", runner.runCommands[5].args[4])
-	assert.Contains(t, filepath.Base(runner.runCommands[5].args[5]), strings.TrimSuffix(fullE2ECompileArtifactName, ".test"))
-	assert.Equal(t, "./e2e", runner.runCommands[5].args[6])
+	// Assert the whole sequence rather than one index, so a step added in the
+	// middle shows up as a sequence change instead of silently shifting an
+	// index-based assertion onto the wrong command.
+	gotSequence := make([]string, 0, len(runner.runCommands))
+	for _, command := range runner.runCommands {
+		goos := ""
+		for _, entry := range command.env {
+			if strings.HasPrefix(entry, "GOOS=") {
+				goos = " " + entry
+			}
+		}
+		gotSequence = append(gotSequence, command.name+" "+strings.Join(command.args[:2], " ")+goos)
+	}
+
+	assert.Equal(t, []string{
+		"gofumpt -w .",
+		"goimports -local github.com/tonimelisma/onedrive-go",
+		"golangci-lint run --allow-parallel-runners",
+		"go build ./...",
+		"go build ./... GOOS=linux",
+		"go build ./... GOOS=darwin",
+		"go build ./... GOOS=freebsd",
+		"go test -race",
+		"go test -c",
+		"go vet -tags=e2e e2e_full",
+		"go vet -tags=integration",
+	}, gotSequence)
+
+	e2eCompile := runner.runCommands[cmdE2EFullCompile]
+	assert.Equal(t, "-race", e2eCompile.args[2])
+	assert.Equal(t, "-tags=e2e e2e_full", e2eCompile.args[3])
+	assert.Equal(t, "-o", e2eCompile.args[4])
+	assert.Contains(t, filepath.Base(e2eCompile.args[5]), strings.TrimSuffix(fullE2ECompileArtifactName, ".test"))
+	assert.Equal(t, "./e2e", e2eCompile.args[6])
 }
 
 func TestRunVerifyE2EFullRunsPreflightsBeforeSuites(t *testing.T) {
@@ -866,6 +941,35 @@ func TestRunVerifyCoverageThresholdFailure(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "coverage gate failed")
+}
+
+// Validates: R-6.2.1
+//
+// A negative threshold reports coverage without gating, so a secondary
+// platform leg can run the same suite without owning the coverage number.
+func TestRunVerifyNegativeCoverageThresholdReportsWithoutGating(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRequirementsBackedReadme(t, repoRoot)
+
+	runner := &fakeRunner{
+		outputs: map[string][]byte{
+			"go tool cover -func=" + filepath.Join(repoRoot, "cover.out"): []byte("total:\t(statements)\t12.3%\n"),
+		},
+	}
+
+	stdout := &bytes.Buffer{}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:          repoRoot,
+		Profile:           VerifyPublic,
+		CoverageThreshold: -1,
+		CoverageFile:      filepath.Join(repoRoot, "cover.out"),
+		Stdout:            stdout,
+		Stderr:            &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "coverage gate disabled (total 12.3%)")
 }
 
 // Validates: R-6.2.1

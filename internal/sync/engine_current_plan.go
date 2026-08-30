@@ -153,14 +153,14 @@ func currentLocalRefreshStep(err error) (localCurrentRefreshStep, bool) {
 }
 
 type builtCurrentPlan struct {
-	Plan                     *ActionPlan
+	Plan                     *actionPlan
 	Report                   *Report
 	PendingRemoteObservation *remoteObservationBatch
 	ChildPublication         ShortcutChildWorkSnapshot
 }
 
 type runtimePlan struct {
-	Plan                     *ActionPlan
+	Plan                     *actionPlan
 	Report                   *Report
 	PendingRemoteObservation *remoteObservationBatch
 	ChildPublication         ShortcutChildWorkSnapshot
@@ -169,10 +169,10 @@ type runtimePlan struct {
 }
 
 type currentInputs struct {
-	comparisons       []SQLiteComparisonRow
-	reconciliations   []SQLiteReconciliationRow
-	localRows         []LocalStateRow
-	remoteRows        []RemoteStateRow
+	comparisons       []sQLiteComparisonRow
+	reconciliations   []sQLiteReconciliationRow
+	localRows         []localStateRow
+	remoteRows        []remoteStateRow
 	observationIssues []ObservationIssueRow
 }
 
@@ -197,7 +197,7 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-) ([]ChangeEvent, *remoteObservationBatch, error) {
+) ([]changeEvent, *remoteObservationBatch, error) {
 	observationBatch, err := flow.executePrimaryRootObservation(ctx, bl, fullReconcile)
 	if err != nil {
 		return nil, nil, err
@@ -267,10 +267,10 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 func (flow *engineFlow) observeLocalCurrentState(
 	ctx context.Context,
 	bl *Baseline,
-) (ScanResult, error) {
+) (scanResult, error) {
 	localResult, err := flow.observeLocal(ctx, bl)
 	if err != nil {
-		return ScanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepObservation, err)
+		return scanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepObservation, err)
 	}
 
 	return localResult, nil
@@ -279,14 +279,14 @@ func (flow *engineFlow) observeLocalCurrentState(
 func (flow *engineFlow) refreshLocalCurrentState(
 	ctx context.Context,
 	bl *Baseline,
-) (ScanResult, error) {
+) (scanResult, error) {
 	localResult, err := flow.observeLocalCurrentState(ctx, bl)
 	if err != nil {
-		return ScanResult{}, err
+		return scanResult{}, err
 	}
 
 	if err := flow.reconcileSkippedObservationFindings(ctx, localResult.Skipped); err != nil {
-		return ScanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepFindingsReconcile, err)
+		return scanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepFindingsReconcile, err)
 	}
 
 	return localResult, nil
@@ -295,13 +295,13 @@ func (flow *engineFlow) refreshLocalCurrentState(
 func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 	ctx context.Context,
 	bl *Baseline,
-) (ScanResult, error) {
+) (scanResult, error) {
 	localResult, err := flow.refreshLocalCurrentState(ctx, bl)
 	if err != nil {
-		return ScanResult{}, err
+		return scanResult{}, err
 	}
 	if err := flow.commitCurrentLocalSnapshot(ctx, localResult); err != nil {
-		return ScanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepSnapshotCommit, err)
+		return scanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepSnapshotCommit, err)
 	}
 
 	return localResult, nil
@@ -310,7 +310,7 @@ func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 func (flow *engineFlow) observeRemoteWithShortcutTopology(
 	ctx context.Context,
 	bl *Baseline,
-) ([]ChangeEvent, string, shortcutTopologyBatch, error) {
+) ([]changeEvent, string, shortcutTopologyBatch, error) {
 	eng := flow.engine
 	state, err := eng.baseline.ReadObservationState(ctx)
 	if err != nil {
@@ -318,7 +318,7 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 	}
 	savedToken := state.Cursor
 
-	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
+	obs := newRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 	obs.SetItemClient(eng.itemsClient)
 	if refreshErr := eng.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
 		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
@@ -327,7 +327,7 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, savedToken)
 	if err != nil {
-		if !errors.Is(err, ErrDeltaExpired) {
+		if !errors.Is(err, errDeltaExpired) {
 			return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: observing remote delta: %w", err)
 		}
 
@@ -350,13 +350,13 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 func (flow *engineFlow) observeLocal(
 	ctx context.Context,
 	bl *Baseline,
-) (ScanResult, error) {
+) (scanResult, error) {
 	eng := flow.engine
 	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
-		return ScanResult{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
+		return scanResult{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
 
-	obs := NewLocalObserver(bl, eng.logger, eng.checkWorkers)
+	obs := newLocalObserver(bl, eng.logger, eng.checkWorkers)
 	obs.SetFilterConfig(eng.contentFilter)
 	obs.SetProtectedRoots(eng.protectedRoots)
 	obs.SetObservationRules(eng.localRules)
@@ -364,7 +364,7 @@ func (flow *engineFlow) observeLocal(
 
 	result, err := obs.FullScan(ctx, eng.syncTree)
 	if err != nil {
-		return ScanResult{}, fmt.Errorf("sync: local scan: %w", err)
+		return scanResult{}, fmt.Errorf("sync: local scan: %w", err)
 	}
 
 	return result, nil
@@ -372,7 +372,7 @@ func (flow *engineFlow) observeLocal(
 
 func (flow *engineFlow) commitCurrentLocalSnapshot(
 	ctx context.Context,
-	localResult ScanResult,
+	localResult scanResult,
 ) error {
 	rows := buildLocalStateRows(localResult)
 	if err := flow.engine.baseline.ReplaceLocalState(ctx, rows); err != nil {
@@ -586,7 +586,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	}
 	flow.engine.collector().RecordPlan(len(plan.Actions), flow.engine.since(planStart))
 
-	counts := CountByType(plan.Actions)
+	counts := countByType(plan.Actions)
 	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
 
 	return &builtCurrentPlan{
@@ -641,7 +641,7 @@ func (flow *engineFlow) keepBuiltCurrentPlan(build *builtCurrentPlan) *runtimePl
 	}
 }
 
-func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *ActionPlan) error {
+func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *actionPlan) error {
 	if err := flow.engine.baseline.PruneRetryWorkToCurrentActions(ctx, retryWorkKeysForActions(plan.Actions)); err != nil {
 		return fmt.Errorf("sync: pruning retry_work to current actions: %w", err)
 	}
@@ -671,7 +671,7 @@ func (e *Engine) buildCurrentActionPlanFromInputs(
 	inputs *currentInputs,
 	bl *Baseline,
 	mode SyncMode,
-) (*ActionPlan, error) {
+) (*actionPlan, error) {
 	return e.planner.PlanCurrentState(
 		inputs.comparisons,
 		inputs.reconciliations,

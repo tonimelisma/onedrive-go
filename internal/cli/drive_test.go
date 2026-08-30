@@ -304,6 +304,31 @@ func TestDiscoverAccessibleDrives_DegradesToPrimaryDrive(t *testing.T) {
 	assert.Equal(t, driveCatalogUnavailableReason, degraded[0].Reason)
 }
 
+// Validates: R-3.5.1, R-6.9
+//
+// When /me/drives fails and the /me/drive fallback fails too, discovery has
+// nothing live to show. It must still report the account as degraded rather
+// than returning silently empty, which would read as "this account has no
+// drives".
+func TestDiscoverAccessibleDrives_DegradesWithoutPrimaryDrive(t *testing.T) {
+	entries, authRequired, degraded := discoverAccessibleDrives(
+		t.Context(),
+		fakeAccessibleDriveClient{
+			drivesErr:  graph.ErrForbidden,
+			primaryErr: graph.ErrForbidden,
+		},
+		config.DefaultConfig(),
+		nil,
+		driveid.MustCanonicalID("personal:user@example.com"),
+		testDriveLogger(t),
+	)
+	require.Empty(t, authRequired)
+	assert.Empty(t, entries, "no live drive is discoverable when both endpoints fail")
+	require.Len(t, degraded, 1)
+	assert.Equal(t, driveCatalogUnavailableReason, degraded[0].Reason)
+	assert.Equal(t, "user@example.com", degraded[0].Email)
+}
+
 func TestDiscoverAccessibleDrives_UnauthorizedReturnsAuthRequired(t *testing.T) {
 	entries, authRequired, degraded := discoverAccessibleDrives(
 		t.Context(),

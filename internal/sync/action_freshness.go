@@ -11,17 +11,17 @@ type actionFreshnessInputs struct {
 	LocalTruthComplete bool
 	RemoteTruthKnown   bool
 
-	LocalAtView          *LocalStateRow
+	LocalAtView          *localStateRow
 	LocalAtViewFound     bool
-	LocalAtMovePeer      *LocalStateRow
+	LocalAtMovePeer      *localStateRow
 	LocalAtMovePeerFound bool
 
-	RemoteAtView          *RemoteStateRow
+	RemoteAtView          *remoteStateRow
 	RemoteAtViewFound     bool
-	RemoteAtMovePeer      *RemoteStateRow
+	RemoteAtMovePeer      *remoteStateRow
 	RemoteAtMovePeerFound bool
 
-	RemoteByID      *RemoteStateRow
+	RemoteByID      *remoteStateRow
 	RemoteByIDFound bool
 }
 
@@ -405,7 +405,7 @@ func expectedRemoteIdentityPath(action *Action) string {
 	return actionViewPath(action)
 }
 
-func localRowMatchesPlanned(row *LocalStateRow, planned *LocalState) bool {
+func localRowMatchesPlanned(row *localStateRow, planned *localState) bool {
 	if row == nil || planned == nil {
 		return row == nil && planned == nil
 	}
@@ -426,7 +426,7 @@ func localRowMatchesPlanned(row *LocalStateRow, planned *LocalState) bool {
 	return row.Size == planned.Size && row.Mtime == planned.Mtime
 }
 
-func localRowMatchesBaseline(row *LocalStateRow, baseline *BaselineEntry) bool {
+func localRowMatchesBaseline(row *localStateRow, baseline *BaselineEntry) bool {
 	if row == nil || baseline == nil {
 		return row == nil && baseline == nil
 	}
@@ -443,7 +443,7 @@ func localRowMatchesBaseline(row *LocalStateRow, baseline *BaselineEntry) bool {
 	return localFileRowMatchesBaseline(row, baseline)
 }
 
-func localRowIdentityMatchesBaseline(row *LocalStateRow, baseline *BaselineEntry) bool {
+func localRowIdentityMatchesBaseline(row *localStateRow, baseline *BaselineEntry) bool {
 	if !baseline.LocalHasIdentity || !row.LocalHasIdentity {
 		return true
 	}
@@ -451,7 +451,7 @@ func localRowIdentityMatchesBaseline(row *LocalStateRow, baseline *BaselineEntry
 	return row.LocalDevice == baseline.LocalDevice && row.LocalInode == baseline.LocalInode
 }
 
-func localFileRowMatchesBaseline(row *LocalStateRow, baseline *BaselineEntry) bool {
+func localFileRowMatchesBaseline(row *localStateRow, baseline *BaselineEntry) bool {
 	if row.Hash != "" || baseline.LocalHash != "" {
 		return row.Hash == baseline.LocalHash &&
 			(!baseline.LocalSizeKnown || row.Size == baseline.LocalSize)
@@ -463,7 +463,7 @@ func localFileRowMatchesBaseline(row *LocalStateRow, baseline *BaselineEntry) bo
 	return row.Mtime != 0 && row.Mtime == baseline.LocalMtime
 }
 
-func remoteRowMatchesPlanned(row *RemoteStateRow, planned *RemoteState) bool {
+func remoteRowMatchesPlanned(row *remoteStateRow, planned *remoteState) bool {
 	if row == nil || planned == nil {
 		return row == nil && planned == nil
 	}
@@ -474,7 +474,7 @@ func remoteRowMatchesPlanned(row *RemoteStateRow, planned *RemoteState) bool {
 	return remoteContentMatchesPlanned(row, planned)
 }
 
-func remoteRowMatchesPlannedForAction(action *Action, row *RemoteStateRow, planned *RemoteState) bool {
+func remoteRowMatchesPlannedForAction(action *Action, row *remoteStateRow, planned *remoteState) bool {
 	if plannedPostRemoteMoveContentUpload(action) {
 		return remoteRowMatchesPostRemoteMoveUpload(row, planned)
 	}
@@ -482,7 +482,7 @@ func remoteRowMatchesPlannedForAction(action *Action, row *RemoteStateRow, plann
 	return remoteRowMatchesPlanned(row, planned)
 }
 
-func remoteRowMatchesPostRemoteMoveUpload(row *RemoteStateRow, planned *RemoteState) bool {
+func remoteRowMatchesPostRemoteMoveUpload(row *remoteStateRow, planned *remoteState) bool {
 	if row == nil || planned == nil {
 		return row == nil && planned == nil
 	}
@@ -515,7 +515,7 @@ func actionUploadHasMovedBaseline(action *Action) bool {
 	return true
 }
 
-func plannedPostMoveRemoteMatchesBaseline(remote *RemoteState, baseline *BaselineEntry) bool {
+func plannedPostMoveRemoteMatchesBaseline(remote *remoteState, baseline *BaselineEntry) bool {
 	if baseline == nil || remote == nil {
 		return false
 	}
@@ -533,7 +533,7 @@ func plannedPostMoveRemoteMatchesBaseline(remote *RemoteState, baseline *Baselin
 	return true
 }
 
-func remoteContentMatchesPlanned(row *RemoteStateRow, planned *RemoteState) bool {
+func remoteContentMatchesPlanned(row *remoteStateRow, planned *remoteState) bool {
 	if planned.ItemType == ItemTypeFolder {
 		return true
 	}
@@ -550,7 +550,7 @@ func remoteContentMatchesPlanned(row *RemoteStateRow, planned *RemoteState) bool
 	return true
 }
 
-func remoteIdentityMatchesPlanned(row *RemoteStateRow, planned *RemoteState) bool {
+func remoteIdentityMatchesPlanned(row *remoteStateRow, planned *remoteState) bool {
 	if !remoteIdentityMatchesPlannedExceptETag(row, planned) {
 		return false
 	}
@@ -561,7 +561,7 @@ func remoteIdentityMatchesPlanned(row *RemoteStateRow, planned *RemoteState) boo
 	return true
 }
 
-func remoteIdentityMatchesPlannedExceptETag(row *RemoteStateRow, planned *RemoteState) bool {
+func remoteIdentityMatchesPlannedExceptETag(row *remoteStateRow, planned *remoteState) bool {
 	if planned.ItemID != "" && row.ItemID != planned.ItemID {
 		return false
 	}

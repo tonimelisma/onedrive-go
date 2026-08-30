@@ -28,27 +28,27 @@ type ProtectedRoot struct {
 	HasIdentity    bool
 }
 
-// ProtectedRootEventType identifies the lifecycle fact the local observer found.
-type ProtectedRootEventType string
+// protectedRootEventType identifies the lifecycle fact the local observer found.
+type protectedRootEventType string
 
 const (
-	ProtectedRootEventPathReserved  ProtectedRootEventType = "path_reserved"
-	ProtectedRootEventIdentityMatch ProtectedRootEventType = "identity_match"
+	protectedRootEventPathReserved  protectedRootEventType = "path_reserved"
+	protectedRootEventIdentityMatch protectedRootEventType = "identity_match"
 )
 
-// ProtectedRootEvent is a narrow parent-engine-internal notification from the
+// protectedRootEvent is a narrow parent-engine-internal notification from the
 // local observer to the watch runtime. It never plans child content work; it
 // only wakes the parent shortcut-root lifecycle so parent-owned state can
 // publish updated child work commands promptly.
-type ProtectedRootEvent struct {
-	Type         ProtectedRootEventType
+type protectedRootEvent struct {
+	Type         protectedRootEventType
 	Path         string
 	ReservedPath string
 	MountID      string
 	BindingID    string
 }
 
-type ProtectedRootEventSink func(ProtectedRootEvent)
+type protectedRootEventSink func(protectedRootEvent)
 
 // LocalObservationRules controls platform-derived local validation semantics.
 // These are not user-configured exclusions; they encode rules that depend on
@@ -88,19 +88,19 @@ type (
 	}
 )
 
-// DeltaFetcher fetches a page of delta changes from the Graph API.
-type DeltaFetcher interface {
+// deltaFetcher fetches a page of delta changes from the Graph API.
+type deltaFetcher interface {
 	Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error)
 }
 
-// SocketIOEndpointFetcher fetches the outbound Socket.IO websocket endpoint
+// socketIOEndpointFetcher fetches the outbound Socket.IO websocket endpoint
 // used for near-real-time remote wakeups in watch mode.
-type SocketIOEndpointFetcher interface {
+type socketIOEndpointFetcher interface {
 	SocketIOEndpoint(ctx context.Context, driveID driveid.ID) (*graph.SocketIOEndpoint, error)
 }
 
-// ItemClient provides CRUD operations on drive items.
-type ItemClient interface {
+// itemClient provides CRUD operations on drive items.
+type itemClient interface {
 	GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
 	GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
 	ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
@@ -112,26 +112,26 @@ type ItemClient interface {
 	PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
 }
 
-// DriveVerifier verifies that a content drive ID is reachable and matches
+// driveVerifier verifies that a content drive ID is reachable and matches
 // the remote API.
-type DriveVerifier interface {
+type driveVerifier interface {
 	Drive(ctx context.Context, driveID driveid.ID) (*graph.Drive, error)
 }
 
-// FolderDeltaFetcher provides mount-root delta enumeration for engines
+// folderDeltaFetcher provides mount-root delta enumeration for engines
 // rooted below the remote drive root.
-type FolderDeltaFetcher interface {
+type folderDeltaFetcher interface {
 	DeltaFolderAll(ctx context.Context, driveID driveid.ID, folderID, token string) ([]graph.Item, string, error)
 }
 
-// RecursiveLister provides recursive children enumeration for mount-root
+// recursiveLister provides recursive children enumeration for mount-root
 // observation when mount-root delta is not supported.
-type RecursiveLister interface {
+type recursiveLister interface {
 	ListChildrenRecursive(ctx context.Context, driveID driveid.ID, folderID string) ([]graph.Item, error)
 }
 
-// PermissionChecker provides permission queries on drive items.
-type PermissionChecker interface {
+// permissionChecker provides permission queries on drive items.
+type permissionChecker interface {
 	ListItemPermissions(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Permission, error)
 }
 
@@ -146,16 +146,16 @@ type engineInputs struct {
 	RemoteRootItemID         string
 	RemoteRootDeltaCapable   bool
 	ExpectedSyncRootIdentity *synctree.FileIdentity
-	Fetcher                  DeltaFetcher
-	SocketIOFetcher          SocketIOEndpointFetcher
-	Items                    ItemClient
+	Fetcher                  deltaFetcher
+	SocketIOFetcher          socketIOEndpointFetcher
+	Items                    itemClient
 	Downloads                driveops.Downloader
 	Uploads                  driveops.Uploader
 	PathConvergence          driveops.PathConvergence
-	DriveVerifier            DriveVerifier
-	FolderDelta              FolderDeltaFetcher
-	RecursiveLister          RecursiveLister
-	PermChecker              PermissionChecker
+	DriveVerifier            driveVerifier
+	FolderDelta              folderDeltaFetcher
+	RecursiveLister          recursiveLister
+	PermChecker              permissionChecker
 	Logger                   *slog.Logger
 	ContentFilter            ContentFilterConfig
 	LocalRules               LocalObservationRules

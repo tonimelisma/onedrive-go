@@ -48,7 +48,7 @@ func TestCanReuseBaselineHash_MetadataMatchOutsideRacilyCleanWindow(t *testing.T
 			info, err := os.Stat(path)
 			require.NoError(t, err)
 
-			assert.Equal(t, tt.wantReuse, CanReuseBaselineHash(info, &BaselineEntry{
+			assert.Equal(t, tt.wantReuse, canReuseBaselineHash(info, &BaselineEntry{
 				Path:           tt.path,
 				DriveID:        driveid.New("d"),
 				ItemID:         "i1",
@@ -78,7 +78,7 @@ func TestCanReuseBaselineHash_SameSecondSubsecondDifferenceStillMatches(t *testi
 	require.NoError(t, err)
 
 	baselineTime := fileTime.Add(700 * time.Millisecond)
-	assert.True(t, CanReuseBaselineHash(info, &BaselineEntry{
+	assert.True(t, canReuseBaselineHash(info, &BaselineEntry{
 		Path:           "same-second.txt",
 		DriveID:        driveid.New("d"),
 		ItemID:         "i1",
@@ -104,7 +104,7 @@ func TestCanReuseBaselineHash_MetadataMismatchRequiresHash(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 
-	assert.False(t, CanReuseBaselineHash(info, &BaselineEntry{
+	assert.False(t, canReuseBaselineHash(info, &BaselineEntry{
 		Path:           "changed.txt",
 		DriveID:        driveid.New("d"),
 		ItemID:         "i1",

@@ -207,7 +207,7 @@ func TestShortcutChildWorkSnapshotEqualityIsSyncOwned(t *testing.T) {
 func TestShortcutChildAckHandleZeroReturnsExplicitErrors(t *testing.T) {
 	t.Parallel()
 
-	handle := ShortcutChildAckHandle{}
+	handle := shortcutChildAckHandle{}
 
 	_, err := handle.AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
 		Ref: newShortcutChildAckRef("binding-1"),

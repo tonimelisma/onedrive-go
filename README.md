@@ -32,9 +32,12 @@ status and the full plan.
 
 ## Platforms
 
-- Linux (primary)
-- macOS (primary)
-- FreeBSD (best-effort)
+- Linux (primary) — full CI: build, lint, unit tests, coverage gate, live E2E
+- macOS (primary) — full CI: build, lint, unit tests
+- FreeBSD (best-effort) — cross-compiled on every CI run; not otherwise tested
+
+Every platform listed here is compiled on every CI run, so this list cannot
+drift ahead of what actually builds.
 
 ## Building from Source
 

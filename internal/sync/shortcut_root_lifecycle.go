@@ -73,7 +73,7 @@ type shortcutRootLocalReconcileStep struct {
 func (e *Engine) reconcileShortcutRootLocalStateRecord(
 	ctx context.Context,
 	record *ShortcutRootRecord,
-	localRows []LocalStateRow,
+	localRows []localStateRow,
 ) (shortcutRootLocalReconcileStep, error) {
 	if record == nil {
 		return shortcutRootLocalReconcileStep{}, nil
@@ -101,7 +101,7 @@ func (e *Engine) reconcileShortcutRootLocalStateRecord(
 func (e *Engine) reconcileShortcutRootRecord(
 	ctx context.Context,
 	record *ShortcutRootRecord,
-	localRows []LocalStateRow,
+	localRows []localStateRow,
 ) (ShortcutRootRecord, bool, bool, error) {
 	if record == nil {
 		return ShortcutRootRecord{}, false, false, nil
@@ -208,7 +208,7 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 	ctx context.Context,
 	record *ShortcutRootRecord,
 	relativePath string,
-	localRows []LocalStateRow,
+	localRows []localStateRow,
 ) (ShortcutRootRecord, bool, bool, error) {
 	if record == nil || record.LocalRootIdentity == nil {
 		return ShortcutRootRecord{}, false, false, nil
@@ -265,7 +265,7 @@ func (e *Engine) executeMissingMaterializedShortcutRootPlan(
 func (e *Engine) shortcutRootIdentityCandidates(
 	relativePath string,
 	identity synctree.FileIdentity,
-	localRows []LocalStateRow,
+	localRows []localStateRow,
 ) ([]string, error) {
 	candidates := shortcutRootIdentityCandidatesFromLocalState(relativePath, identity, localRows)
 	liveCandidates, err := e.shortcutRootIdentityCandidatesFromFilesystem(relativePath, identity)
@@ -279,7 +279,7 @@ func (e *Engine) shortcutRootIdentityCandidates(
 func shortcutRootIdentityCandidatesFromLocalState(
 	relativePath string,
 	identity synctree.FileIdentity,
-	localRows []LocalStateRow,
+	localRows []localStateRow,
 ) []string {
 	normalizedCurrent := filepath.ToSlash(relativePath)
 	candidates := make([]string, 0)

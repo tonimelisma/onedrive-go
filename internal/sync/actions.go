@@ -50,13 +50,13 @@ func (c *DeferredCounts) AddAction(action *Action) {
 
 // Action is an instruction for the executor, produced by the planner.
 type Action struct {
-	Type                      ActionType
+	Type                      actionType
 	DriveID                   driveid.ID
 	ItemID                    string
 	Path                      string           // canonical path (destination for moves)
 	OldPath                   string           // source path (moves only)
-	CreateSide                FolderCreateSide // for folder creates
-	View                      *PathView        // full three-way context
+	CreateSide                folderCreateSide // for folder creates
+	View                      *pathView        // full three-way context
 	RequireMissingLocalTarget bool             // downloads after preserving a local conflict copy
 }
 
@@ -74,19 +74,19 @@ func (a *Action) ThrottleTargetKey() string {
 	return throttleDriveParam(a.DriveID)
 }
 
-// ActionPlan contains a flat list of actions with explicit dependency edges.
+// actionPlan contains a flat list of actions with explicit dependency edges.
 // The Deps adjacency list encodes ordering constraints (parent-before-child,
 // children-before-parent-delete, move-target-parent).
-type ActionPlan struct {
+type actionPlan struct {
 	Actions        []Action       // flat list of all executable actions
 	Deps           [][]int        // Deps[i] = indices that action i depends on
 	DeferredByMode DeferredCounts // planner-observed work suppressed by direction
 }
 
-// ActionOutcome is the result of executing a single action. Self-contained —
+// actionOutcome is the result of executing a single action. Self-contained —
 // has everything the SyncStore needs to update the database.
-type ActionOutcome struct {
-	Action                ActionType
+type actionOutcome struct {
+	Action                actionType
 	Success               bool
 	Error                 error
 	Path                  string
@@ -96,7 +96,7 @@ type ActionOutcome struct {
 	ItemID                string // from API response after upload
 	ParentID              string
 	ItemType              ItemType
-	FailureCapability     PermissionCapability
+	FailureCapability     permissionCapability
 	LocalHash             string
 	RemoteHash            string
 	LocalSize             int64

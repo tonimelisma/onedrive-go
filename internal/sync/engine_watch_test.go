@@ -115,17 +115,17 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 	eng.enableWebsocket = true
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, opts SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ socketIOEndpointFetcher, _ driveid.ID, opts socketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{
 			started: started,
 			runFn: func(ctx context.Context, _ chan<- struct{}) error {
 				require.NotNil(t, opts.LifecycleHook)
-				opts.LifecycleHook(SocketIOLifecycleEvent{
-					Type:    SocketIOLifecycleEventStarted,
+				opts.LifecycleHook(socketIOLifecycleEvent{
+					Type:    socketIOLifecycleEventStarted,
 					DriveID: driveID.String(),
 				})
-				opts.LifecycleHook(SocketIOLifecycleEvent{
-					Type:    SocketIOLifecycleEventConnected,
+				opts.LifecycleHook(socketIOLifecycleEvent{
+					Type:    socketIOLifecycleEventConnected,
 					DriveID: driveID.String(),
 					SID:     "sid-1",
 				})
@@ -134,8 +134,8 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 				default:
 				}
 				<-ctx.Done()
-				opts.LifecycleHook(SocketIOLifecycleEvent{
-					Type:    SocketIOLifecycleEventStopped,
+				opts.LifecycleHook(socketIOLifecycleEvent{
+					Type:    socketIOLifecycleEventStopped,
 					DriveID: driveID.String(),
 				})
 				return nil
@@ -184,7 +184,7 @@ func TestRunWatch_WebsocketDisabledKeepsPollingOnly(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ socketIOEndpointFetcher, _ driveid.ID, _ socketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{started: started}
 	}
 
@@ -233,7 +233,7 @@ func TestRunWatch_MountRootKeepsPollingOnly(t *testing.T) {
 	eng.remoteRootItemID = "mount-root-root"
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ socketIOEndpointFetcher, _ driveid.ID, _ socketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{started: started}
 	}
 
@@ -399,7 +399,7 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	contentHash := hashContentQuickXor(t, content)
 
 	// Seed baseline with a synced file.
-	seedOutcomes := []ActionOutcome{{
+	seedOutcomes := []actionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "already-synced.txt",
@@ -420,7 +420,7 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	require.NoError(t, err, "Load")
 
 	setupWatchEngine(t, eng)
-	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []ObservedItem{{
+	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []observedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-as",
 		Path:     "already-synced.txt",
@@ -561,7 +561,7 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 
 	// Inject a watcher factory that returns ENOSPC after the first Add (root).
 	watcher := newEnospcWatcher(1)
-	eng.localWatcherFactory = func() (FsWatcher, error) {
+	eng.localWatcherFactory = func() (fsWatcher, error) {
 		return watcher, nil
 	}
 
@@ -742,7 +742,7 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
 	installManualClock(eng.Engine, clock)
 	watcher := newSignalingWatcher()
-	eng.localWatcherFactory = func() (FsWatcher, error) {
+	eng.localWatcherFactory = func() (fsWatcher, error) {
 		return watcher, nil
 	}
 	refreshTimerCreated := installAfterFuncCreatedSignal(eng, 15*time.Minute)
@@ -845,7 +845,7 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	}
 
 	watcher := newEnospcWatcher(1)
-	eng.localWatcherFactory = func() (FsWatcher, error) {
+	eng.localWatcherFactory = func() (fsWatcher, error) {
 		return watcher, nil
 	}
 	degradedInterval := localWatchDegradedFullScanInterval
@@ -895,7 +895,7 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 
 	// Create a plan with mismatched Actions and Deps.
-	plan := &ActionPlan{
+	plan := &actionPlan{
 		Actions: []Action{
 			{Type: ActionDownload, Path: "file.txt"},
 			{Type: ActionDownload, Path: "file2.txt"},
@@ -957,8 +957,8 @@ func TestEngine_Close_CleansStaleAndIsIdempotent(t *testing.T) {
 	// only; watch observers now belong to the runtime and are cleaned up by the
 	// watch coordinator, not by Engine.Close.
 	setupWatchEngine(t, testEng)
-	testWatchRuntime(t, testEng).remoteObs = &RemoteObserver{}
-	testWatchRuntime(t, testEng).localObs = &LocalObserver{}
+	testWatchRuntime(t, testEng).remoteObs = &remoteObserver{}
+	testWatchRuntime(t, testEng).localObs = &localObserver{}
 
 	// First Close should succeed.
 	require.NoError(t, eng.Close(t.Context()))

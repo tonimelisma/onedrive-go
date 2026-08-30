@@ -286,7 +286,7 @@ func (m *SyncStore) ListRetryWork(ctx context.Context) ([]RetryWorkRow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying retry_work: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	return scanRetryWorkRows(rows)
 }
@@ -299,7 +299,7 @@ func queryBlockedRetryWorkRowsWithRunner(
 	if err != nil {
 		return nil, fmt.Errorf("query blocked retry_work rows: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	return scanRetryWorkRows(rows)
 }
@@ -309,7 +309,7 @@ func (m *SyncStore) ListBlockedRetryWork(ctx context.Context) ([]RetryWorkRow, e
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying blocked retry_work rows: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	return scanRetryWorkRows(rows)
 }
@@ -374,7 +374,7 @@ func scanRetryWorkRow(scanner retryWorkScanner, row *RetryWorkRow) error {
 		return fmt.Errorf("sync: scanning retry_work row: %w", err)
 	}
 
-	row.ScopeKey = ParseScopeKey(scopeKey)
+	row.ScopeKey = parseScopeKey(scopeKey)
 	return nil
 }
 

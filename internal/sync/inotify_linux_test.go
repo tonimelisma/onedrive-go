@@ -17,7 +17,7 @@ import (
 func TestReadInotifyLimit_ReadsRealProc(t *testing.T) {
 	t.Parallel()
 
-	limit, err := ReadInotifyLimit()
+	limit, err := readInotifyLimit()
 	require.NoError(t, err)
 	assert.Positive(t, limit, "Linux should have a positive inotify limit")
 }
@@ -30,7 +30,7 @@ func TestCheckInotifyCapacity_WarnsAboveThreshold(t *testing.T) {
 
 	// Simulate 90% usage: if limit is 100, use 90 dirs.
 	// We can't control the real limit, so use a very high number to guarantee warning.
-	CheckInotifyCapacity(999_999_999, logger)
+	checkInotifyCapacity(999_999_999, logger)
 
 	assert.Contains(t, buf.String(), "inotify watch usage near limit")
 	assert.Contains(t, buf.String(), "max_user_watches")
@@ -43,7 +43,7 @@ func TestCheckInotifyCapacity_SilentBelowThreshold(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	// Use 1 directory — well below any threshold.
-	CheckInotifyCapacity(1, logger)
+	checkInotifyCapacity(1, logger)
 
 	assert.Empty(t, buf.String(), "should not warn at low usage")
 }
@@ -51,14 +51,14 @@ func TestCheckInotifyCapacity_SilentBelowThreshold(t *testing.T) {
 func TestIsWatchLimitError_ENOSPC(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, IsWatchLimitError(syscall.ENOSPC))
-	assert.True(t, IsWatchLimitError(fmt.Errorf("wrapped: %w", syscall.ENOSPC)))
+	assert.True(t, isWatchLimitError(syscall.ENOSPC))
+	assert.True(t, isWatchLimitError(fmt.Errorf("wrapped: %w", syscall.ENOSPC)))
 }
 
 func TestIsWatchLimitError_OtherErrors(t *testing.T) {
 	t.Parallel()
 
-	assert.False(t, IsWatchLimitError(nil))
-	assert.False(t, IsWatchLimitError(errors.New("permission denied")))
-	assert.False(t, IsWatchLimitError(syscall.EPERM))
+	assert.False(t, isWatchLimitError(nil))
+	assert.False(t, isWatchLimitError(errors.New("permission denied")))
+	assert.False(t, isWatchLimitError(syscall.EPERM))
 }

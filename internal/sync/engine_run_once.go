@@ -138,7 +138,7 @@ func (r *oneShotRunner) executePreparedPlan(
 
 	// Reset engine counters for this pass.
 	r.resetResultStats()
-	r.dispatchCh = make(chan *TrackedAction, len(plan.Actions))
+	r.dispatchCh = make(chan *trackedAction, len(plan.Actions))
 	initialOutbox, done, err := r.dispatchInitialReadyActions(ctx, bl, runtime, report)
 	if err != nil {
 		return err
@@ -147,7 +147,7 @@ func (r *oneShotRunner) executePreparedPlan(
 		return nil
 	}
 
-	pool := NewWorkerPool(r.engine.execCfg, r.dispatchCh, r.engine.baseline, r.engine.logger, len(plan.Actions))
+	pool := newWorkerPool(r.engine.execCfg, r.dispatchCh, r.engine.baseline, r.engine.logger, len(plan.Actions))
 	pool.perfCollector = r.engine.collector()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -177,7 +177,7 @@ func (r *oneShotRunner) dispatchInitialReadyActions(
 	bl *Baseline,
 	runtime *runtimePlan,
 	report *Report,
-) ([]*TrackedAction, bool, error) {
+) ([]*trackedAction, bool, error) {
 	initialOutbox, dispatched, err := r.startRuntimeStage(ctx, runtime, bl, nil)
 	if err != nil {
 		report.Succeeded, report.Failed, report.Errors = r.resultStats()
@@ -197,7 +197,7 @@ func (r *oneShotRunner) dispatchInitialReadyActions(
 // buildReportFromCounts populates a Report with plan counts and directionally
 // deferred work observed by the planner.
 func buildReportFromCounts(
-	counts map[ActionType]int,
+	counts map[actionType]int,
 	deferred DeferredCounts,
 	mode SyncMode,
 	opts RunOptions,
@@ -270,7 +270,7 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 // but not in the full enumeration = deleted remotely but missed by incremental
 // delta. Returns all events (creates/modifies from the full enumeration +
 // synthesized deletes for orphans) and the new delta token.
-func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]ChangeEvent, string, error) {
+func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]changeEvent, string, error) {
 	events, token, _, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl)
 	return events, token, err
 }
@@ -278,9 +278,9 @@ func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]
 func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	ctx context.Context,
 	bl *Baseline,
-) ([]ChangeEvent, string, shortcutTopologyBatch, error) {
+) ([]changeEvent, string, shortcutTopologyBatch, error) {
 	eng := flow.engine
-	obs := NewRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
+	obs := newRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 	obs.SetItemClient(eng.itemsClient)
 	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
 		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)

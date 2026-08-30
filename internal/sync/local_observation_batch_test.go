@@ -13,9 +13,9 @@ import (
 func TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow(t *testing.T) {
 	t.Parallel()
 
-	batch := localObservationBatchForEvent(&ChangeEvent{
+	batch := localObservationBatchForEvent(&changeEvent{
 		Source:           SourceLocal,
-		Type:             ChangeCreate,
+		Type:             changeCreate,
 		Path:             "new.txt",
 		ItemType:         ItemTypeFile,
 		Hash:             "hash",
@@ -27,7 +27,7 @@ func TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow(t *testing.T) {
 	})
 
 	assert.True(t, batch.dirty)
-	assert.Equal(t, []LocalStateRow{{
+	assert.Equal(t, []localStateRow{{
 		Path:             "new.txt",
 		ItemType:         ItemTypeFile,
 		Hash:             "hash",
@@ -45,7 +45,7 @@ func TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow(t *testing.T) {
 func TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix(t *testing.T) {
 	t.Parallel()
 
-	batch := localObservationBatchForEvent(&ChangeEvent{
+	batch := localObservationBatchForEvent(&changeEvent{
 		Source:    SourceLocal,
 		Type:      ChangeDelete,
 		Path:      "gone",
@@ -67,7 +67,7 @@ func TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "fresh.txt"), []byte("fresh"), 0o600))
 
 	baseline := NewBaselineForTest(nil)
-	obs := NewLocalObserver(baseline, testLogger(t), 1)
+	obs := newLocalObserver(baseline, testLogger(t), 1)
 	batches := make(chan localObservationBatch, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 

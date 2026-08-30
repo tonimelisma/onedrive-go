@@ -108,7 +108,7 @@ func TestFullDelta_NewFiles(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, token, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -118,11 +118,11 @@ func TestFullDelta_NewFiles(t *testing.T) {
 
 	// First file.
 	e := events[0]
-	assert.Equal(t, ChangeCreate, e.Type)
+	assert.Equal(t, changeCreate, e.Type)
 	assert.Equal(t, "hello.txt", e.Path)
 	assert.Equal(t, "qxh1", e.Hash)
 	assert.Equal(t, int64(100), e.Size)
-	assert.Equal(t, SourceRemote, e.Source)
+	assert.Equal(t, sourceRemote, e.Source)
 
 	// Second file.
 	assert.Equal(t, "world.txt", events[1].Name)
@@ -152,13 +152,13 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "prev-token")
 	require.NoError(t, err, "FullDelta")
 
 	// Root and folder produce events too (folder is classified).
 	// Find the file event.
-	var fileEvent *ChangeEvent
+	var fileEvent *changeEvent
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
@@ -192,7 +192,7 @@ func TestFullDelta_DeletedFile(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
@@ -227,7 +227,7 @@ func TestFullDelta_ModifiedFile_SparseFieldsRecoveredFromBaseline(t *testing.T) 
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "prev-token")
 	require.NoError(t, err, "FullDelta")
 
@@ -269,11 +269,11 @@ func TestFullDelta_MovedFile(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
-	var moveEvent *ChangeEvent
+	var moveEvent *changeEvent
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			moveEvent = &events[i]
@@ -318,7 +318,7 @@ func TestFullDelta_MovedFile_SparseNameRecoveredFromBaseline(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
@@ -363,11 +363,11 @@ func TestFullDelta_DescendantFollowsSparseRenamedParentWithOmittedParentReferenc
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
-	var fileEvent *ChangeEvent
+	var fileEvent *changeEvent
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
@@ -390,7 +390,7 @@ func TestFullDelta_MultiPage(t *testing.T) {
 		pages: twoPageDeltaPages("next", "next-page-url", "final-delta-link"),
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, token, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -411,7 +411,7 @@ func TestFullDelta_EmptyDelta(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, token, err := obs.FullDelta(t.Context(), "prev-token")
 	require.NoError(t, err, "FullDelta")
 
@@ -429,10 +429,10 @@ func TestFullDelta_DeltaExpired(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	_, _, err := obs.FullDelta(t.Context(), "expired-token")
 
-	assert.ErrorIs(t, err, ErrDeltaExpired)
+	assert.ErrorIs(t, err, errDeltaExpired)
 }
 
 func TestFullDelta_FetchError(t *testing.T) {
@@ -445,7 +445,7 @@ func TestFullDelta_FetchError(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	_, _, err := obs.FullDelta(t.Context(), "token")
 
 	require.Error(t, err, "expected error")
@@ -466,7 +466,7 @@ func TestFullDelta_SkipsRootItem(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -500,12 +500,12 @@ func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 		},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
 	// Find file event.
-	var fileEvent *ChangeEvent
+	var fileEvent *changeEvent
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
@@ -537,7 +537,7 @@ func TestFullDelta_PathMaterialization_Baseline(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
@@ -568,11 +568,11 @@ func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
-	var fileEvent *ChangeEvent
+	var fileEvent *changeEvent
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
@@ -605,7 +605,7 @@ func TestFullDelta_DeletedItem_MissingName(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
@@ -632,7 +632,7 @@ func TestFullDelta_DriveIDNormalization(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(rawDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(rawDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -666,7 +666,7 @@ func TestFullDelta_NFCNormalization(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -701,7 +701,7 @@ func TestFullDelta_HashSelection(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -729,7 +729,7 @@ func TestFullDelta_TimestampConversion(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -752,7 +752,7 @@ func TestFullDelta_ZeroTimestampRemainsUnknown(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -775,7 +775,7 @@ func TestFullDelta_FolderEvent(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -796,7 +796,7 @@ func TestFullDelta_ContextCanceled(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	_, _, err := obs.FullDelta(ctx, "token")
 
 	require.Error(t, err, "expected error")
@@ -851,7 +851,7 @@ func TestClassifyItemType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := ClassifyItemType(&tt.item)
+			got := classifyItemType(&tt.item)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -884,8 +884,8 @@ func TestToUnixNano(t *testing.T) {
 	t.Parallel()
 
 	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	assert.Equal(t, ts.UnixNano(), ToUnixNano(ts))
-	assert.Equal(t, int64(0), ToUnixNano(time.Time{}))
+	assert.Equal(t, ts.UnixNano(), toUnixNano(ts))
+	assert.Equal(t, int64(0), toUnixNano(time.Time{}))
 }
 
 func TestFullDelta_OrphanedItem(t *testing.T) {
@@ -905,9 +905,9 @@ func TestFullDelta_OrphanedItem(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, token, err := obs.FullDelta(t.Context(), "")
-	require.ErrorIs(t, err, ErrRemoteObservationIncomplete)
+	require.ErrorIs(t, err, errRemoteObservationIncomplete)
 
 	assert.Empty(t, events)
 	assert.Empty(t, token)
@@ -931,7 +931,7 @@ func TestFullDelta_DeletedItem_NotInBaseline(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
@@ -965,7 +965,7 @@ func TestFullDelta_SkipsUnrecoverableDeletedItemAbsentFromBaseline(t *testing.T)
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, token, err := obs.FullDelta(t.Context(), "saved-token")
 	require.NoError(t, err, "FullDelta")
 
@@ -998,17 +998,17 @@ func TestFullDelta_SkipsUntrackedDeletedItemWithKnownParentButEmptyName(t *testi
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, token, err := obs.FullDelta(t.Context(), "saved-token")
 	require.NoError(t, err, "FullDelta")
 
 	require.Len(t, events, 1)
-	assert.Equal(t, ChangeCreate, events[0].Type)
+	assert.Equal(t, changeCreate, events[0].Type)
 	assert.Equal(t, "Projects", events[0].Path)
 	assert.Equal(t, "delta-link", token)
 }
 
-func fullDeltaSingleItemEvents(t *testing.T, item *graph.Item) []ChangeEvent {
+func fullDeltaSingleItemEvents(t *testing.T, item *graph.Item) []changeEvent {
 	t.Helper()
 
 	fetcher := &mockDeltaFetcher{
@@ -1023,7 +1023,7 @@ func fullDeltaSingleItemEvents(t *testing.T, item *graph.Item) []ChangeEvent {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -1099,7 +1099,7 @@ func TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent(t 
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetShortcutTopology("personal:owner@example.com", nil)
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(t.Context(), "")
 	require.NoError(t, err)
@@ -1158,7 +1158,7 @@ func TestFullDeltaWithShortcutTopology_EnrichesSparseKnownShortcutMove(t *testin
 		},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetItemClient(itemClient)
 	obs.SetShortcutTopology("personal:owner@example.com", []ProtectedRoot{{
 		Path:           "Docs",
@@ -1212,7 +1212,7 @@ func TestWatch_TopologyApplyFailureDoesNotAdvanceCursor(t *testing.T) {
 	}
 
 	applyErr := errors.New("persist topology")
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetShortcutTopology("personal:owner@example.com", nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -1246,7 +1246,7 @@ func TestWatch_EmptyCompleteTopologyApplyFailureDoesNotAdvanceCursor(t *testing.
 	}
 
 	applyErr := errors.New("persist topology")
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetShortcutTopology("personal:owner@example.com", nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -1276,8 +1276,8 @@ func startTestRemoteBatchDrain(
 	ctx context.Context,
 	batches <-chan remoteObservationBatch,
 	apply func(remoteObservationBatch) error,
-) <-chan ChangeEvent {
-	events := make(chan ChangeEvent, 32)
+) <-chan changeEvent {
+	events := make(chan changeEvent, 32)
 
 	go func() {
 		defer close(events)
@@ -1311,10 +1311,10 @@ func startTestRemoteBatchDrain(
 	return events
 }
 
-func testPrimaryWatchBatchHandler(driveID driveid.ID) RemoteWatchBatchHandler {
+func testPrimaryWatchBatchHandler(driveID driveid.ID) remoteWatchBatchHandler {
 	return func(
 		_ context.Context,
-		events []ChangeEvent,
+		events []changeEvent,
 		newToken string,
 		topology shortcutTopologyBatch,
 	) (remoteObservationBatch, error) {
@@ -1323,7 +1323,7 @@ func testPrimaryWatchBatchHandler(driveID driveid.ID) RemoteWatchBatchHandler {
 			source:           remoteObservationBatchPrimaryWatch,
 			observationMode:  remoteObservationModeDelta,
 			observed:         projected.observed,
-			emitted:          append([]ChangeEvent(nil), projected.emitted...),
+			emitted:          append([]changeEvent(nil), projected.emitted...),
 			cursorToken:      newToken,
 			shortcutTopology: topology,
 			applyAck:         make(chan error, 1),
@@ -1408,7 +1408,7 @@ func TestWatch_PollsAtInterval(t *testing.T) {
 		pages: twoPageDeltaPages("delta", "token-1", "token-2"),
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	obs.SleepFunc = noopSleep
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -1456,7 +1456,7 @@ func TestWatch_WakeSignalTriggersImmediatePoll(t *testing.T) {
 		}},
 	})
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	wakeCh := make(chan struct{}, 1)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -1505,7 +1505,7 @@ func TestWatch_WakeSignalsCoalesce(t *testing.T) {
 		}},
 	})
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	wakeCh := make(chan struct{}, 1)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -1552,7 +1552,7 @@ func TestWatch_BackoffOnError(t *testing.T) {
 
 	var sleepDurations []time.Duration
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	obs.SleepFunc = func(_ context.Context, d time.Duration) error {
 		sleepDurations = append(sleepDurations, d)
 		return nil
@@ -1592,7 +1592,7 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 		}},
 	})
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	store := newTestStore(t)
 	wakeCh := make(chan struct{}, 1)
 
@@ -1648,7 +1648,7 @@ func TestWatch_DeltaExpiredResets(t *testing.T) {
 		},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	obs.SleepFunc = noopSleep
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -1678,7 +1678,7 @@ func TestWatch_ContextCancellation(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	pollStarted := make(chan struct{})
 	obs.SleepFunc = func(ctx context.Context, _ time.Duration) error {
 		select {
@@ -1741,7 +1741,7 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 		},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	obs.SleepFunc = noopSleep
 
 	// Before Watch starts, token is empty.
@@ -1782,7 +1782,7 @@ func TestWatch_IntervalClamping(t *testing.T) {
 		},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 
 	// Track what interval the sleep function actually receives.
 	var actualSleepDuration time.Duration
@@ -1829,11 +1829,11 @@ func TestFullDelta_RenameInPlace(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
-	var renameEvent *ChangeEvent
+	var renameEvent *changeEvent
 	for i := range events {
 		if events[i].ItemID == "f1" {
 			renameEvent = &events[i]
@@ -1909,7 +1909,7 @@ func TestRemoteObserver_LastActivity(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 
 	// Before any poll, LastActivity should be zero.
 	assert.True(t, obs.LastActivity().IsZero(), "LastActivity before poll should be zero")
@@ -1944,7 +1944,7 @@ func TestRemoteObserver_Stats(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 
 	_, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
@@ -1995,7 +1995,7 @@ func TestFullDelta_CrossDriveItems(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, baseline, primaryDrive, synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, baseline, primaryDrive, synctest.TestLogger(t))
 
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
@@ -2011,7 +2011,7 @@ func TestFullDelta_CrossDriveItems(t *testing.T) {
 	assert.Equal(t, "shared-folder/shared-doc.txt", ev.Path)
 
 	// Since the item is new (not in baseline), it should be a Create.
-	assert.Equal(t, ChangeCreate, ev.Type)
+	assert.Equal(t, changeCreate, ev.Type)
 }
 
 // Validates: R-2.4.7
@@ -2050,7 +2050,7 @@ func TestFullDelta_PersonalVaultExcluded(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
@@ -2099,7 +2099,7 @@ func TestFullDelta_VaultChildBeforeParent(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
@@ -2139,7 +2139,7 @@ func TestObserverStats_HashesComputed(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 
 	_, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
@@ -2160,9 +2160,9 @@ func TestClassifyItem_RemoteDoesNotApplyProductJunkFiltering(t *testing.T) {
 
 	driveID := driveid.New(synctest.TestDriveID)
 	bl := emptyBaseline()
-	obs := NewRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
 
-	inflight := map[string]InflightParent{
+	inflight := map[string]inflightParent{
 		"root": {Name: "", IsRoot: true},
 	}
 
@@ -2223,8 +2223,8 @@ func TestClassifyItem_SkipsPackageItemsForSync(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
-	obs := NewRemoteObserver(nil, emptyBaseline(), driveID, synctest.TestLogger(t))
-	inflight := map[string]InflightParent{
+	obs := newRemoteObserver(nil, emptyBaseline(), driveID, synctest.TestLogger(t))
+	inflight := map[string]inflightParent{
 		"root": {Name: "", IsRoot: true},
 	}
 
@@ -2258,7 +2258,7 @@ func TestWatch_CommitsObservations(t *testing.T) {
 		},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	store := newTestStore(t)
 	obs.SleepFunc = noopSleep
 
@@ -2323,7 +2323,7 @@ func TestWatch_BatchHandlerError_ReturnsError(t *testing.T) {
 		},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -2331,7 +2331,7 @@ func TestWatch_BatchHandlerError_ReturnsError(t *testing.T) {
 	_ = startTestRemoteBatchDrain(ctx, batches, nil)
 	err := obs.Watch(ctx, "", batches, time.Millisecond, nil, func(
 		context.Context,
-		[]ChangeEvent,
+		[]changeEvent,
 		string,
 		shortcutTopologyBatch,
 	) (remoteObservationBatch, error) {
@@ -2359,7 +2359,7 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 		},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	store := newTestStore(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	obs.SleepFunc = func(ctx context.Context, _ time.Duration) error {
@@ -2399,9 +2399,9 @@ func TestClassifyItem_RegularFileNoRemoteDriveID(t *testing.T) {
 
 	driveID := driveid.New(synctest.TestDriveID)
 	bl := emptyBaseline()
-	obs := NewRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
 
-	inflight := map[string]InflightParent{
+	inflight := map[string]inflightParent{
 		"root": {Name: "", IsRoot: true},
 	}
 
@@ -2417,16 +2417,16 @@ func TestClassifyItem_RegularFileNoRemoteDriveID(t *testing.T) {
 	ev := obs.Converter.ClassifyItem(item, inflight)
 	require.NotNil(t, ev, "regular file should produce an event")
 
-	assert.Equal(t, ChangeCreate, ev.Type, "regular file without RemoteDriveID should be ChangeCreate")
+	assert.Equal(t, changeCreate, ev.Type, "regular file without RemoteDriveID should be ChangeCreate")
 }
 
 func TestClassifyItem_EmbeddedSharedPlaceholdersIgnored(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
-	obs := NewRemoteObserver(nil, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(nil, emptyBaseline(), driveID, synctest.TestLogger(t))
 
-	inflight := map[string]InflightParent{
+	inflight := map[string]inflightParent{
 		"root": {Name: "", IsRoot: true},
 	}
 
@@ -2495,7 +2495,7 @@ func TestFullDelta_EmbeddedSharedLinksIgnored(t *testing.T) {
 		}},
 	}
 
-	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err)
 

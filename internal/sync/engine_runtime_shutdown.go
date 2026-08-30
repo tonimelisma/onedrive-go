@@ -10,7 +10,7 @@ import (
 // newly-ready frontier back into shutdown completion instead of dispatch.
 func (flow *engineFlow) processShutdownCompletion(
 	ctx context.Context,
-	completion *ActionCompletion,
+	completion *actionCompletion,
 	bl *Baseline,
 ) error {
 	ctx = contextWithShutdownFreshnessBypass(ctx)
@@ -19,13 +19,13 @@ func (flow *engineFlow) processShutdownCompletion(
 	return err
 }
 
-func (f *engineFlow) completeOutboxAsShutdown(outbox []*TrackedAction) {
+func (f *engineFlow) completeOutboxAsShutdown(outbox []*trackedAction) {
 	for _, ta := range outbox {
 		f.completeTrackedActionAsShutdown(ta)
 	}
 }
 
-func (f *engineFlow) completeTrackedActionAsShutdown(ta *TrackedAction) {
+func (f *engineFlow) completeTrackedActionAsShutdown(ta *trackedAction) {
 	if ta == nil {
 		return
 	}
@@ -36,7 +36,7 @@ func (f *engineFlow) completeTrackedActionAsShutdown(ta *TrackedAction) {
 }
 
 func (flow *engineFlow) logSuppressedShutdownCompletionError(
-	completion *ActionCompletion,
+	completion *actionCompletion,
 	err error,
 ) {
 	if completion == nil || err == nil {

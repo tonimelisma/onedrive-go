@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func comparisonKindsByPath(rows []SQLiteComparisonRow) map[string]string {
+func comparisonKindsByPath(rows []sQLiteComparisonRow) map[string]string {
 	out := make(map[string]string, len(rows))
 	for i := range rows {
 		out[rows[i].Path] = rows[i].ComparisonKind
@@ -16,7 +16,7 @@ func comparisonKindsByPath(rows []SQLiteComparisonRow) map[string]string {
 	return out
 }
 
-func reconciliationKindsByPath(rows []SQLiteReconciliationRow) map[string]string {
+func reconciliationKindsByPath(rows []sQLiteReconciliationRow) map[string]string {
 	out := make(map[string]string, len(rows))
 	for i := range rows {
 		out[rows[i].Path] = rows[i].ReconciliationKind
@@ -236,7 +236,7 @@ func TestQueryReconciliationState_LocalFileMoveIdentityBeatsAmbiguousHash(t *tes
 	comparisonRows, err := store.QueryComparisonState(ctx)
 	require.NoError(t, err)
 
-	var source SQLiteComparisonRow
+	var source sQLiteComparisonRow
 	for i := range comparisonRows {
 		if comparisonRows[i].Path == "old.txt" {
 			source = comparisonRows[i]

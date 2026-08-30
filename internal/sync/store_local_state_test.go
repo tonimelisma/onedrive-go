@@ -14,7 +14,7 @@ func TestReplaceLocalState_ReplacesWholeSnapshot(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
 		{
 			Path:     "alpha.txt",
 			ItemType: ItemTypeFile,
@@ -28,7 +28,7 @@ func TestReplaceLocalState_ReplacesWholeSnapshot(t *testing.T) {
 		},
 	}))
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
 		{
 			Path:     "beta.txt",
 			ItemType: ItemTypeFile,
@@ -52,7 +52,7 @@ func TestReplaceLocalState_PersistsFilesystemIdentity(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
 		{
 			Path:             "folder",
 			ItemType:         ItemTypeFolder,
@@ -75,14 +75,14 @@ func TestReplaceLocalState_PersistsFilesystemIdentity(t *testing.T) {
 	rows, err := store.ListLocalState(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
-	assert.Equal(t, LocalStateRow{
+	assert.Equal(t, localStateRow{
 		Path:             "folder",
 		ItemType:         ItemTypeFolder,
 		LocalDevice:      101,
 		LocalInode:       202,
 		LocalHasIdentity: true,
 	}, rows[0])
-	assert.Equal(t, LocalStateRow{
+	assert.Equal(t, localStateRow{
 		Path:             "folder/file.txt",
 		ItemType:         ItemTypeFile,
 		Hash:             "hash-a",
@@ -101,14 +101,14 @@ func TestScopedLocalStateMutation_UpsertReadAndDeleteExactPath(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
 		Path:     "kept.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "old",
 		Size:     1,
 	}}))
 
-	require.NoError(t, store.UpsertLocalStateRows(ctx, []LocalStateRow{
+	require.NoError(t, store.UpsertLocalStateRows(ctx, []localStateRow{
 		{
 			Path:             "kept.txt",
 			ItemType:         ItemTypeFile,
@@ -131,7 +131,7 @@ func TestScopedLocalStateMutation_UpsertReadAndDeleteExactPath(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.NotNil(t, kept)
-	assert.Equal(t, LocalStateRow{
+	assert.Equal(t, localStateRow{
 		Path:             "kept.txt",
 		ItemType:         ItemTypeFile,
 		Hash:             "new",
@@ -161,7 +161,7 @@ func TestDeleteLocalStatePrefix_DeletesDirectoryAndDescendantsOnly(t *testing.T)
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
 		{Path: "docs", ItemType: ItemTypeFolder},
 		{Path: "docs/a.txt", ItemType: ItemTypeFile},
 		{Path: "docs/nested", ItemType: ItemTypeFolder},
@@ -176,7 +176,7 @@ func TestDeleteLocalStatePrefix_DeletesDirectoryAndDescendantsOnly(t *testing.T)
 
 	rows, err := store.ListLocalState(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, []LocalStateRow{
+	assert.Equal(t, []localStateRow{
 		{Path: "Docs", ItemType: ItemTypeFolder},
 		{Path: "Docs/a.txt", ItemType: ItemTypeFile},
 		{Path: "docs sibling.txt", ItemType: ItemTypeFile},
@@ -191,7 +191,7 @@ func TestDeleteLocalStatePrefix_EscapesSQLWildcards(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
 		{Path: `100%_done`, ItemType: ItemTypeFolder},
 		{Path: `100%_done/file.txt`, ItemType: ItemTypeFile},
 		{Path: `100xxdone/file.txt`, ItemType: ItemTypeFile},
@@ -206,7 +206,7 @@ func TestDeleteLocalStatePrefix_EscapesSQLWildcards(t *testing.T) {
 
 	rows, err := store.ListLocalState(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, []LocalStateRow{
+	assert.Equal(t, []localStateRow{
 		{Path: `100%_done_else/file.txt`, ItemType: ItemTypeFile},
 		{Path: `100xxdone/file.txt`, ItemType: ItemTypeFile},
 		{Path: `slashXfolder/file.txt`, ItemType: ItemTypeFile},
@@ -220,7 +220,7 @@ func TestDeleteLocalStatePrefix_UsesCharacterLengthForUnicodePrefix(t *testing.T
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
 		{Path: "é", ItemType: ItemTypeFolder},
 		{Path: "é/docs", ItemType: ItemTypeFolder},
 		{Path: "é/docs/file.txt", ItemType: ItemTypeFile},
@@ -252,12 +252,12 @@ func TestReplaceLocalState_MarksLocalTruthComplete(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.MarkLocalTruthSuspect(ctx, LocalTruthRecoveryDroppedEvents))
+	require.NoError(t, store.MarkLocalTruthSuspect(ctx, localTruthRecoveryDroppedEvents))
 	state := readObservationStateForTest(t, store, ctx)
 	assert.False(t, state.LocalTruthComplete)
-	assert.Equal(t, LocalTruthRecoveryDroppedEvents, state.LocalTruthRecoveryReason)
+	assert.Equal(t, localTruthRecoveryDroppedEvents, state.LocalTruthRecoveryReason)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
 		Path:     "fresh.txt",
 		ItemType: ItemTypeFile,
 	}}))
@@ -271,8 +271,8 @@ func TestReplaceLocalState_MarksLocalTruthComplete(t *testing.T) {
 func TestBuildLocalStateRows_UsesDirectSnapshotRows(t *testing.T) {
 	t.Parallel()
 
-	rows := buildLocalStateRows(ScanResult{
-		Rows: []LocalStateRow{
+	rows := buildLocalStateRows(scanResult{
+		Rows: []localStateRow{
 			{
 				Path:     "folder",
 				ItemType: ItemTypeFolder,
@@ -306,8 +306,8 @@ func TestBuildLocalStateRows_UsesDirectSnapshotRows(t *testing.T) {
 	assert.Equal(t, expectedLocalStateRows(), rows)
 }
 
-func expectedLocalStateRows() []LocalStateRow {
-	return []LocalStateRow{
+func expectedLocalStateRows() []localStateRow {
+	return []localStateRow{
 		{
 			Path:     "folder",
 			ItemType: ItemTypeFolder,

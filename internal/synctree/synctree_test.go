@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 
@@ -97,20 +96,6 @@ func TestRoot_WalkDirUsesAbsolutePaths(t *testing.T) {
 	assert.Contains(t, walked, dir)
 	assert.Contains(t, walked, filepath.Join(dir, "nested"))
 	assert.Contains(t, walked, filepath.Join(dir, "nested", "file.txt"))
-}
-
-// Validates: R-2.10, R-6.2
-func TestRoot_GlobReturnsRelativeMatches(t *testing.T) {
-	dir := t.TempDir()
-	root, err := Open(dir)
-	require.NoError(t, err)
-
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "keep.conflict-1.txt"), []byte("one"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "keep.conflict-2.txt"), []byte("two"), 0o600))
-
-	matches, err := root.Glob("keep.conflict-*.txt")
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"keep.conflict-1.txt", "keep.conflict-2.txt"}, matches)
 }
 
 // Validates: R-2.10, R-6.2
@@ -251,11 +236,13 @@ func TestRoot_RemoveEmptyDirNoFollow_ConcurrentChildCreationFailsClosed(t *testi
 	child := filepath.Join(target, "new-child.txt")
 	require.NoError(t, os.Mkdir(target, 0o700))
 
-	root.ops.rmdir = func(path string) error {
-		require.Equal(t, target, path)
+	// Simulate a child appearing after the emptiness check, immediately
+	// before the rooted rmdir runs.
+	root.ops.rmdir = func(handle rootHandle, name string) error {
+		require.Equal(t, "raced", name)
 		require.NoError(t, os.WriteFile(child, []byte("new content"), 0o600))
 
-		return syscall.Rmdir(path)
+		return removeEmptyDirRooted(handle, name)
 	}
 
 	err = root.RemoveEmptyDirNoFollow("raced")
@@ -274,12 +261,14 @@ func TestRoot_RemoveEmptyDirNoFollow_TargetReplacementFailsClosed(t *testing.T) 
 	target := filepath.Join(dir, "raced")
 	require.NoError(t, os.Mkdir(target, 0o700))
 
-	root.ops.rmdir = func(path string) error {
-		require.Equal(t, target, path)
-		require.NoError(t, os.Remove(path))
-		require.NoError(t, os.WriteFile(path, []byte("new content"), 0o600))
+	// Simulate the directory being swapped for a regular file after the
+	// emptiness check. The rooted rmdir must refuse it rather than unlink it.
+	root.ops.rmdir = func(handle rootHandle, name string) error {
+		require.Equal(t, "raced", name)
+		require.NoError(t, os.Remove(target))
+		require.NoError(t, os.WriteFile(target, []byte("new content"), 0o600))
 
-		return syscall.Rmdir(path)
+		return removeEmptyDirRooted(handle, name)
 	}
 
 	err = root.RemoveEmptyDirNoFollow("raced")
@@ -412,6 +401,31 @@ func (h openRejectingRootHandle) Stat(name string) (os.FileInfo, error) {
 func (h openRejectingRootHandle) Lstat(name string) (os.FileInfo, error) {
 	//nolint:wrapcheck // test helper delegates all non-Open behavior.
 	return h.root.Lstat(name)
+}
+
+func (h openRejectingRootHandle) MkdirAll(name string, perm os.FileMode) error {
+	//nolint:wrapcheck // test helper delegates all non-Open behavior.
+	return h.root.MkdirAll(name, perm)
+}
+
+func (h openRejectingRootHandle) Remove(name string) error {
+	//nolint:wrapcheck // test helper delegates all non-Open behavior.
+	return h.root.Remove(name)
+}
+
+func (h openRejectingRootHandle) RemoveAll(name string) error {
+	//nolint:wrapcheck // test helper delegates all non-Open behavior.
+	return h.root.RemoveAll(name)
+}
+
+func (h openRejectingRootHandle) Rename(oldname, newname string) error {
+	//nolint:wrapcheck // test helper delegates all non-Open behavior.
+	return h.root.Rename(oldname, newname)
+}
+
+func (h openRejectingRootHandle) Chtimes(name string, atime time.Time, mtime time.Time) error {
+	//nolint:wrapcheck // test helper delegates all non-Open behavior.
+	return h.root.Chtimes(name, atime, mtime)
 }
 
 func (h openRejectingRootHandle) Mkdir(name string, perm os.FileMode) error {
@@ -596,7 +610,7 @@ func TestRoot_ReadDir_FailureInjection(t *testing.T) {
 	require.NoError(t, err)
 
 	readDirErr := errors.New("readdir failed")
-	root.ops.lstat = nonNormalizingLstat
+	root.ops.lstatAbs = nonNormalizingLstat
 	root.ops.openRoot = func(dir string) (rootHandle, error) {
 		return &fakeRootHandle{fsys: errorFS{err: readDirErr}}, nil
 	}
@@ -635,8 +649,12 @@ func TestRoot_Remove_FailureInjection(t *testing.T) {
 	root, err := Open(t.TempDir())
 	require.NoError(t, err)
 
+	// The target must exist: a genuinely absent path normalizes to
+	// os.ErrNotExist, which callers branch on for already-deleted entries.
+	require.NoError(t, os.WriteFile(filepath.Join(root.Path(), "file.txt"), []byte("data"), 0o600))
+
 	removeErr := errors.New("remove failed")
-	root.ops.remove = func(path string) error {
+	root.ops.remove = func(_ rootHandle, _ string) error {
 		return removeErr
 	}
 
@@ -653,8 +671,12 @@ func TestRoot_Rename_FailureInjection(t *testing.T) {
 	root, err := Open(t.TempDir())
 	require.NoError(t, err)
 
+	// The source must exist: a genuinely absent source normalizes to
+	// os.ErrNotExist, which is the contract ExecuteConflictCopy relies on.
+	require.NoError(t, os.WriteFile(filepath.Join(root.Path(), "old.txt"), []byte("data"), 0o600))
+
 	renameErr := errors.New("rename failed")
-	root.ops.rename = func(oldpath, newpath string) error {
+	root.ops.rename = func(_ rootHandle, _, _ string) error {
 		return renameErr
 	}
 
@@ -670,6 +692,9 @@ type fakeRootHandle struct {
 	statErr     error
 	lstatErr    error
 	mkdirErr    error
+	removeErr   error
+	renameErr   error
+	chtimesErr  error
 	closeErr    error
 	fsys        fs.FS
 }
@@ -714,6 +739,46 @@ func (h *fakeRootHandle) Mkdir(name string, perm os.FileMode) error {
 	return errUnexpectedFakeRootCall
 }
 
+func (h *fakeRootHandle) MkdirAll(name string, perm os.FileMode) error {
+	if h.mkdirErr != nil {
+		return h.mkdirErr
+	}
+
+	return errUnexpectedFakeRootCall
+}
+
+func (h *fakeRootHandle) Remove(name string) error {
+	if h.removeErr != nil {
+		return h.removeErr
+	}
+
+	return errUnexpectedFakeRootCall
+}
+
+func (h *fakeRootHandle) RemoveAll(name string) error {
+	if h.removeErr != nil {
+		return h.removeErr
+	}
+
+	return errUnexpectedFakeRootCall
+}
+
+func (h *fakeRootHandle) Rename(oldname, newname string) error {
+	if h.renameErr != nil {
+		return h.renameErr
+	}
+
+	return errUnexpectedFakeRootCall
+}
+
+func (h *fakeRootHandle) Chtimes(name string, atime time.Time, mtime time.Time) error {
+	if h.chtimesErr != nil {
+		return h.chtimesErr
+	}
+
+	return errUnexpectedFakeRootCall
+}
+
 func (h *fakeRootHandle) FS() fs.FS {
 	return h.fsys
 }
@@ -744,7 +809,7 @@ func runRootHandleErrorCase(
 	root, err := Open(t.TempDir())
 	require.NoError(t, err)
 
-	root.ops.lstat = nonNormalizingLstat
+	root.ops.lstatAbs = nonNormalizingLstat
 	configure(root, targetErr)
 
 	err = run(root)

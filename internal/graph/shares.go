@@ -25,7 +25,7 @@ func (c *Client) ResolveShareURL(ctx context.Context, rawURL string) (*Item, err
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
 	var dir driveItemResponse
 	if err := json.NewDecoder(resp.Body).Decode(&dir); err != nil {

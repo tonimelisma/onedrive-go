@@ -17,12 +17,12 @@ import (
 func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	events := make(chan ChangeEvent, 1)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	events := make(chan changeEvent, 1)
 	ctx := t.Context()
 
-	ev := ChangeEvent{
-		Source: SourceLocal, Type: ChangeCreate, Path: "test.txt",
+	ev := changeEvent{
+		Source: SourceLocal, Type: changeCreate, Path: "test.txt",
 		ItemType: ItemTypeFile,
 	}
 
@@ -41,20 +41,20 @@ func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	events := make(chan ChangeEvent, 1)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	events := make(chan changeEvent, 1)
 	ctx := t.Context()
 
 	// Fill the channel.
-	first := ChangeEvent{
-		Source: SourceLocal, Type: ChangeCreate, Path: "first.txt",
+	first := changeEvent{
+		Source: SourceLocal, Type: changeCreate, Path: "first.txt",
 		ItemType: ItemTypeFile,
 	}
 	events <- first
 
 	// This should be dropped (channel full).
-	second := ChangeEvent{
-		Source: SourceLocal, Type: ChangeCreate, Path: "second.txt",
+	second := changeEvent{
+		Source: SourceLocal, Type: changeCreate, Path: "second.txt",
 		ItemType: ItemTypeFile,
 	}
 
@@ -75,16 +75,16 @@ func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 func TestTrySend_ContextCanceled_NoDrop(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	events := make(chan ChangeEvent, 1)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	events := make(chan changeEvent, 1)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	// Fill the channel so default branch would fire, but ctx is canceled.
-	events <- ChangeEvent{Path: "fill.txt"}
+	events <- changeEvent{Path: "fill.txt"}
 
-	ev := ChangeEvent{
-		Source: SourceLocal, Type: ChangeCreate, Path: "test.txt",
+	ev := changeEvent{
+		Source: SourceLocal, Type: changeCreate, Path: "test.txt",
 		ItemType: ItemTypeFile,
 	}
 

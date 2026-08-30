@@ -28,9 +28,9 @@ func (e *Engine) publishShortcutChildWorkSnapshot(
 	return nil
 }
 
-func (e *Engine) ShortcutChildAckHandle() ShortcutChildAckHandle {
+func (e *Engine) ShortcutChildAckHandle() shortcutChildAckHandle {
 	if e == nil {
-		return ShortcutChildAckHandle{}
+		return shortcutChildAckHandle{}
 	}
 	return newShortcutChildAckHandle(
 		e.acknowledgeChildFinalDrain,

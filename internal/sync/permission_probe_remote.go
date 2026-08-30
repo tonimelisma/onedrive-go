@@ -16,7 +16,7 @@ import (
 // ActiveRemoteBlockedBoundaries returns all persisted remote permission
 // boundaries currently blocking write admission under read-only subtrees.
 // Runtime blocking derives directly from persisted block_scopes.
-func (ph *PermissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) []string {
+func (ph *permissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) []string {
 	blocks, err := ph.store.ListBlockScopes(ctx)
 	if err != nil {
 		ph.logger.Warn("ActiveRemoteBlockedBoundaries: failed to list block scopes",
@@ -51,14 +51,14 @@ func (ph *PermissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) 
 // handle403 is called when a worker reports an HTTP 403 on a remote write.
 // It probes Graph permissions to distinguish real write denial from a
 // transient 403 and returns a decision for the engine-owned apply layer.
-func (ph *PermissionHandler) handle403(
+func (ph *permissionHandler) handle403(
 	ctx context.Context,
 	bl *Baseline,
 	failedPath string,
-	actionType ActionType,
-) PermissionEvidence {
+	actionType actionType,
+) permissionEvidence {
 	if ph.permChecker == nil {
-		return PermissionEvidence{}
+		return permissionEvidence{}
 	}
 
 	if boundary, ok := ph.activeRemoteBoundary(ctx, failedPath); ok {
@@ -67,7 +67,7 @@ func (ph *PermissionHandler) handle403(
 			slog.String("boundary", boundary),
 		)
 
-		return PermissionEvidence{
+		return permissionEvidence{
 			Kind:         permissionEvidenceKnownActiveBoundary,
 			BoundaryPath: boundary,
 			TriggerPath:  failedPath,
@@ -76,7 +76,7 @@ func (ph *PermissionHandler) handle403(
 	}
 
 	if ph.remoteRootItemID == "" {
-		return PermissionEvidence{}
+		return permissionEvidence{}
 	}
 
 	remoteDriveID := ph.driveID
@@ -106,13 +106,13 @@ func (ph *PermissionHandler) handle403(
 			slog.String("path", failedPath),
 		)
 
-		return PermissionEvidence{}
+		return permissionEvidence{}
 	case graph.PermissionWriteAccessInconclusive:
 		ph.logger.Warn("handle403: permission evidence inconclusive, not suppressing",
 			slog.String("path", failedPath),
 		)
 
-		return PermissionEvidence{}
+		return permissionEvidence{}
 	case graph.PermissionWriteAccessReadOnly:
 	}
 
@@ -131,12 +131,12 @@ func (ph *PermissionHandler) handle403(
 // remote write-denial probing. If the target folder is not found, treat the
 // boundary as unreadable for writes; otherwise fall back to generic failure
 // handling by returning an unmatched decision.
-func (ph *PermissionHandler) handlePermissionCheckError(
+func (ph *permissionHandler) handlePermissionCheckError(
 	err error,
 	failedPath string,
 	parentFolder string,
-	actionType ActionType,
-) PermissionEvidence {
+	actionType actionType,
+) permissionEvidence {
 	if errors.Is(err, graph.ErrNotFound) {
 		ph.logger.Warn("handle403: folder not found, recording as permission denied",
 			slog.String("path", parentFolder),
@@ -156,10 +156,10 @@ func (ph *PermissionHandler) handlePermissionCheckError(
 		slog.String("error", err.Error()),
 	)
 
-	return PermissionEvidence{}
+	return permissionEvidence{}
 }
 
-func (ph *PermissionHandler) activeRemoteBoundary(ctx context.Context, failedPath string) (string, bool) {
+func (ph *permissionHandler) activeRemoteBoundary(ctx context.Context, failedPath string) (string, bool) {
 	for _, boundary := range ph.ActiveRemoteBlockedBoundaries(ctx) {
 		if remoteBoundaryContainsPath(failedPath, boundary) {
 			return boundary, true
@@ -169,16 +169,16 @@ func (ph *PermissionHandler) activeRemoteBoundary(ctx context.Context, failedPat
 	return "", false
 }
 
-func (ph *PermissionHandler) remoteBoundaryEvidence(
+func (ph *permissionHandler) remoteBoundaryEvidence(
 	boundary string,
 	errMsg string,
 	httpStatus int,
 	failedPath string,
-	actionType ActionType,
-) PermissionEvidence {
+	actionType actionType,
+) permissionEvidence {
 	_ = actionType
 
-	return PermissionEvidence{
+	return permissionEvidence{
 		Kind:         permissionEvidenceBoundaryDenied,
 		BoundaryPath: boundary,
 		TriggerPath:  failedPath,
@@ -188,7 +188,7 @@ func (ph *PermissionHandler) remoteBoundaryEvidence(
 	}
 }
 
-func (ph *PermissionHandler) walkPermissionBoundary(
+func (ph *permissionHandler) walkPermissionBoundary(
 	ctx context.Context,
 	bl *Baseline,
 	startFolder string,

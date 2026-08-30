@@ -89,7 +89,7 @@ func queryObservationIssueRowsWithRunner(
 	if err != nil {
 		return nil, fmt.Errorf("query observation issues: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	return scanObservationIssueRows(rows, contentDriveID)
 }
@@ -105,7 +105,7 @@ func (m *SyncStore) ListObservationIssues(ctx context.Context) ([]ObservationIss
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing observation issues: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	return scanObservationIssueRows(rows, contentDriveID)
 }
@@ -147,7 +147,7 @@ func (m *SyncStore) upsertObservationIssuesTx(
 	if err != nil {
 		return fmt.Errorf("sync: prepare observation issue upsert: %w", err)
 	}
-	defer stmt.Close()
+	defer stmt.Close() //nolint:errcheck // statement handle release; the write itself is checked at Exec
 
 	for i := range issues {
 		issue := &issues[i]
@@ -181,7 +181,7 @@ func deleteObservationIssuesTx(
 	if err != nil {
 		return fmt.Errorf("sync: prepare observation issue delete: %w", err)
 	}
-	defer stmt.Close()
+	defer stmt.Close() //nolint:errcheck // statement handle release; the write itself is checked at Exec
 
 	for i := range deletes {
 		deletePlan := deletes[i]
@@ -212,7 +212,7 @@ func scanObservationIssueRow(
 	}
 
 	row.DriveID = contentDriveID
-	row.ScopeKey = ParseScopeKey(scopeKey)
+	row.ScopeKey = parseScopeKey(scopeKey)
 	return nil
 }
 

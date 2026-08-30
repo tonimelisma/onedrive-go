@@ -21,7 +21,7 @@ import (
 func TestEstimateDirCount_Empty(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	// +1 for root even with empty baseline.
 	assert.Equal(t, 1, obs.EstimateDirCount())
 }
@@ -35,7 +35,7 @@ func TestEstimateDirCount_WithFolders(t *testing.T) {
 		{Path: "file.txt", ItemType: ItemTypeFile},
 	})
 
-	obs := NewLocalObserver(bl, synctest.TestLogger(t), 0)
+	obs := newLocalObserver(bl, synctest.TestLogger(t), 0)
 	// 2 folders + 1 for root = 3.
 	assert.Equal(t, 3, obs.EstimateDirCount())
 }
@@ -54,11 +54,11 @@ func TestAddWatchesRecursive_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 
 	watcher := newEnospcWatcher(1) // fail after first successful Add (root)
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrWatchLimitExhausted,
+	assert.ErrorIs(t, err, errWatchLimitExhausted,
 		"expected ErrWatchLimitExhausted, got: %v", err)
 }
 
@@ -71,11 +71,11 @@ func TestAddWatchesRecursive_ENOSPCRollsBackAddedWatches(t *testing.T) {
 
 	watcher := newEnospcWatcher(2) // root + a succeed, a/b fails
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
 
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrWatchLimitExhausted)
+	require.ErrorIs(t, err, errWatchLimitExhausted)
 	assert.Equal(t, []string{
 		filepath.Join(root, "a"),
 		root,
@@ -96,7 +96,7 @@ func TestAddWatchesRecursive_NonENOSPC_ContinuesNormally(t *testing.T) {
 		failAfter: 1,
 	}
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
 
 	// Non-ENOSPC errors should NOT return ErrWatchLimitExhausted.
@@ -150,16 +150,16 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 
 	watcher := newEnospcWatcher(1)
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.WatcherFactory = func() (FsWatcher, error) { return watcher, nil }
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.WatcherFactory = func() (fsWatcher, error) { return watcher, nil }
 
-	events := make(chan ChangeEvent, 256)
+	events := make(chan changeEvent, 256)
 	ctx := t.Context()
 
 	err := obs.Watch(ctx, mustOpenSyncTree(t, root), events)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrWatchLimitExhausted,
+	assert.ErrorIs(t, err, errWatchLimitExhausted,
 		"Watch should return ErrWatchLimitExhausted, got: %v", err)
 }
 
@@ -170,13 +170,13 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 func TestFullScan_NonexistentSyncRoot_ReturnsError(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	nonexistent := filepath.Join(t.TempDir(), "does-not-exist")
 
 	_, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, nonexistent))
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrSyncRootMissing,
+	assert.ErrorIs(t, err, errSyncRootMissing,
 		"FullScan should return ErrSyncRootMissing, got: %v", err)
 }
 
@@ -189,7 +189,7 @@ func TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable(t 
 	require.NoError(t, err)
 	identity.Inode++
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.SetExpectedRootIdentity(&identity)
 
 	_, err = obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))

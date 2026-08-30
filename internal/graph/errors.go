@@ -27,7 +27,22 @@ var (
 	ErrRangeNotSatisfiable = errors.New("graph: range not satisfiable")
 	ErrServerError         = errors.New("graph: server error")
 	ErrNotLoggedIn         = errors.New("graph: not logged in")
+
+	// ErrProviderReadOnly marks a Microsoft-side read-only window: the service
+	// answers, authentication is valid, and the account is fine, but the
+	// backing store will not serve the request. It is reported as an outer
+	// accessDenied with an inner serviceReadOnly, which is indistinguishable
+	// from an ordinary permission failure unless the inner code is inspected.
+	//
+	// It is deliberately separate from ErrForbidden. Forbidden means "this
+	// identity may not do that" and is a stable answer; a read-only window is a
+	// temporary property of the service that no client action changes.
+	ErrProviderReadOnly = errors.New("graph: provider is in a read-only window")
 )
+
+// graphCodeServiceReadOnly is the inner Graph code for a backend read-only
+// window.
+const graphCodeServiceReadOnly = "serviceReadOnly"
 
 // GraphError wraps a sentinel error with HTTP status code, request ID,
 // and the API error message body for debugging.
@@ -120,6 +135,26 @@ func (e *GraphError) Unwrap() error {
 	return e.Err
 }
 
+// Is recognizes ErrProviderReadOnly from the inner Graph code so callers can
+// branch on provider unavailability without string-matching codes themselves.
+// Returning false for other targets lets Unwrap continue to the transport
+// sentinel.
+func (e *GraphError) Is(target error) bool {
+	if errors.Is(target, ErrProviderReadOnly) {
+		return e.HasCode(graphCodeServiceReadOnly)
+	}
+
+	return false
+}
+
+// IsProviderUnavailable reports whether err is a provider-side condition that
+// no client retry or configuration change can clear. Callers use it to
+// distinguish "we could not test/serve because the provider is down" from "the
+// request was wrong".
+func IsProviderUnavailable(err error) bool {
+	return errors.Is(err, ErrProviderReadOnly)
+}
+
 func (e *GraphError) MostSpecificCode() string {
 	for i := len(e.InnerCodes) - 1; i >= 0; i-- {
 		if e.InnerCodes[i] != "" {
@@ -153,6 +188,28 @@ type graphErrorNode struct {
 	Message         string          `json:"message"`
 	InnerError      json.RawMessage `json:"innerError"`
 	InnerErrorLower json.RawMessage `json:"innererror"`
+}
+
+// MostSpecificErrorCode returns the innermost Graph error code in a raw error
+// response body, falling back to the outer code. Callers outside the client --
+// live test preflights in particular -- need the same view of a response the
+// client has, and the distinction matters: a backend read-only window is an
+// outer accessDenied whose inner code is the only thing that identifies it.
+func MostSpecificErrorCode(body []byte) string {
+	code, _, innerCodes := parseGraphErrorBody(body)
+	for i := len(innerCodes) - 1; i >= 0; i-- {
+		if innerCodes[i] != "" {
+			return innerCodes[i]
+		}
+	}
+
+	return code
+}
+
+// IsProviderReadOnlyCode reports whether a Graph error code identifies a
+// backend read-only window.
+func IsProviderReadOnlyCode(code string) bool {
+	return strings.EqualFold(code, graphCodeServiceReadOnly)
 }
 
 func parseGraphErrorBody(body []byte) (code, message string, innerCodes []string) {

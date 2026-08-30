@@ -8,10 +8,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// SkippedItem records a local filesystem entry that was rejected at
+// skippedItem records a local filesystem entry that was rejected at
 // observation time. The scanner collects these alongside events so the
 // engine can persist them as durable observation issues.
-type SkippedItem struct {
+type skippedItem struct {
 	Path               string // NFC-normalized, relative to sync root
 	Reason             string // issue type constant (IssueInvalidFilename, etc.)
 	Detail             string // human-readable explanation
@@ -19,18 +19,18 @@ type SkippedItem struct {
 	BlocksReadBoundary bool   // true when observation proved an unreadable subtree boundary
 }
 
-// ScanResult is the return type of FullScan. Rows are the direct current local
+// scanResult is the return type of FullScan. Rows are the direct current local
 // snapshot that local_state persists. Events remain observation-local signals
 // for watch dirtiness and diagnostics; they are not planner input. Skipped are
 // user-actionable rejections (invalid names, path too long, file too large)
 // that the engine should record.
-type ScanResult struct {
-	Events  []ChangeEvent
-	Rows    []LocalStateRow
-	Skipped []SkippedItem
+type scanResult struct {
+	Events  []changeEvent
+	Rows    []localStateRow
+	Skipped []skippedItem
 }
 
-// ChangeEvent is an immutable observation fact produced by observers. The
+// changeEvent is an immutable observation fact produced by observers. The
 // runtime uses these facts to mark coarse dirty/full-refresh signals and to describe local or
 // remote observation results, but they are not the durable sync truth and are
 // never stored in the database.
@@ -44,9 +44,9 @@ type ScanResult struct {
 //	  filesystem identity when available, and IsDeleted. Never sets: ItemID,
 //	  ParentID, DriveID, ETag, CTag.
 //	  For ChangeDelete: Hash is empty; Size/Mtime from baseline entry.
-type ChangeEvent struct {
-	Source           ChangeSource
-	Type             ChangeType
+type changeEvent struct {
+	Source           changeSource
+	Type             changeType
 	Path             string     // NFC-normalized, relative to sync root
 	OldPath          string     // for moves only
 	ItemID           string     // server-assigned (remote only; empty for local)
@@ -95,8 +95,8 @@ type DirLowerKey struct {
 	LowName string
 }
 
-// DirLowerKeyFromPath computes the case-insensitive grouping key for a path.
-func DirLowerKeyFromPath(path string) DirLowerKey {
+// dirLowerKeyFromPath computes the case-insensitive grouping key for a path.
+func dirLowerKeyFromPath(path string) DirLowerKey {
 	return DirLowerKey{
 		Dir:     filepath.Dir(path),
 		LowName: strings.ToLower(filepath.Base(path)),
@@ -172,7 +172,7 @@ func (b *Baseline) Put(entry *BaselineEntry) {
 	b.ByID[entry.ItemID] = entry
 
 	// Maintain ByDirLower index: update existing entry or append new one.
-	dlk := DirLowerKeyFromPath(entry.Path)
+	dlk := dirLowerKeyFromPath(entry.Path)
 	found := false
 
 	for i, e := range b.ByDirLower[dlk] {
@@ -202,7 +202,7 @@ func (b *Baseline) Delete(path string) {
 	delete(b.ByPath, path)
 
 	// Maintain ByDirLower index: remove the entry for this exact path.
-	dlk := DirLowerKeyFromPath(path)
+	dlk := dirLowerKeyFromPath(path)
 	entries := b.ByDirLower[dlk]
 
 	for i, e := range entries {
@@ -249,8 +249,8 @@ func (b *Baseline) ForEachPath(fn func(string, *BaselineEntry)) {
 //
 // Returns synthesized ChangeDelete events for each orphan, which can be fed
 // through the normal planner + executor pipeline.
-func (b *Baseline) FindOrphans(seen map[string]struct{}, driveID driveid.ID, pathPrefix string) []ChangeEvent {
-	var orphans []ChangeEvent
+func (b *Baseline) FindOrphans(seen map[string]struct{}, driveID driveid.ID, pathPrefix string) []changeEvent {
+	var orphans []changeEvent
 
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -268,8 +268,8 @@ func (b *Baseline) FindOrphans(seen map[string]struct{}, driveID driveid.ID, pat
 			continue
 		}
 
-		orphans = append(orphans, ChangeEvent{
-			Source:    SourceRemote,
+		orphans = append(orphans, changeEvent{
+			Source:    sourceRemote,
 			Type:      ChangeDelete,
 			Path:      entry.Path,
 			ItemID:    entry.ItemID,
@@ -295,16 +295,16 @@ func NewBaselineForTest(entries []*BaselineEntry) *Baseline {
 		bl.ByPath[e.Path] = e
 		bl.ByID[e.ItemID] = e
 
-		dlk := DirLowerKeyFromPath(e.Path)
+		dlk := dirLowerKeyFromPath(e.Path)
 		bl.ByDirLower[dlk] = append(bl.ByDirLower[dlk], e)
 	}
 
 	return bl
 }
 
-// RemoteState captures the current state of a path as observed from
+// remoteState captures the current state of a path as observed from
 // the Graph API delta response.
-type RemoteState struct {
+type remoteState struct {
 	ItemID    string
 	DriveID   driveid.ID // normalized (lowercase, zero-padded to 16 chars)
 	Name      string
@@ -317,9 +317,9 @@ type RemoteState struct {
 	IsDeleted bool
 }
 
-// LocalState captures the current state of a path as observed from
+// localState captures the current state of a path as observed from
 // the local filesystem.
-type LocalState struct {
+type localState struct {
 	Name             string
 	ItemType         ItemType
 	Size             int64
@@ -330,48 +330,48 @@ type LocalState struct {
 	LocalHasIdentity bool
 }
 
-// TruthAvailability records whether one side of current path truth is safe for
+// truthAvailability records whether one side of current path truth is safe for
 // the planner to interpret structurally.
-type TruthAvailability string
+type truthAvailability string
 
 const (
-	TruthAvailabilityAvailable               TruthAvailability = "available"
-	TruthAvailabilityBlockedObservationIssue TruthAvailability = "blocked_observation_issue"
+	truthAvailabilityAvailable               truthAvailability = "available"
+	truthAvailabilityBlockedObservationIssue truthAvailability = "blocked_observation_issue"
 )
 
-// PathTruthSource captures which durable authority proved that one side of
+// pathTruthSource captures which durable authority proved that one side of
 // truth is currently unavailable to the planner.
-type PathTruthSource string
+type pathTruthSource string
 
 const (
-	PathTruthSourceNone             PathTruthSource = ""
-	PathTruthSourceObservationIssue PathTruthSource = "observation_issue"
+	pathTruthSourceNone             pathTruthSource = ""
+	pathTruthSourceObservationIssue pathTruthSource = "observation_issue"
 )
 
-// PathTruthSideStatus is the raw current-truth availability status for one
+// pathTruthSideStatus is the raw current-truth availability status for one
 // side of a path. The zero value is intentionally healthy so callers can use
 // it as a derived read-side value without manual initialization.
-type PathTruthSideStatus struct {
-	Availability TruthAvailability
-	Source       PathTruthSource
+type pathTruthSideStatus struct {
+	Availability truthAvailability
+	Source       pathTruthSource
 	IssueType    string
 	ScopeKey     ScopeKey
 }
 
-func (s PathTruthSideStatus) IsAvailable() bool {
-	return s.Availability == "" || s.Availability == TruthAvailabilityAvailable
+func (s pathTruthSideStatus) IsAvailable() bool {
+	return s.Availability == "" || s.Availability == truthAvailabilityAvailable
 }
 
-// PathTruthStatus carries the raw current-truth availability status for both
+// pathTruthStatus carries the raw current-truth availability status for both
 // the local and remote side of one path. Planner attaches it after SQLite
 // computes structural diff so structural absence stays distinct from
 // unavailable truth, but the type itself is not planner-owned policy.
-type PathTruthStatus struct {
-	Local  PathTruthSideStatus
-	Remote PathTruthSideStatus
+type pathTruthStatus struct {
+	Local  pathTruthSideStatus
+	Remote pathTruthSideStatus
 }
 
-func (s *PathTruthStatus) SuppressesStructuralActions() bool {
+func (s *pathTruthStatus) SuppressesStructuralActions() bool {
 	if s == nil {
 		return false
 	}
@@ -379,29 +379,14 @@ func (s *PathTruthStatus) SuppressesStructuralActions() bool {
 	return !s.Local.IsAvailable() || !s.Remote.IsAvailable()
 }
 
-// PathView is a unified three-way view of a single path built from the
+// pathView is a unified three-way view of a single path built from the
 // authoritative snapshots plus baseline. It is the in-memory planning view the
 // current actionable-set builder reasons over after SQLite computes structural
 // diff and reconciliation outcomes.
-type PathView struct {
+type pathView struct {
 	Path        string
-	Remote      *RemoteState   // nil = absent from current remote snapshot
-	Local       *LocalState    // nil = absent from current local snapshot
+	Remote      *remoteState   // nil = absent from current remote snapshot
+	Local       *localState    // nil = absent from current local snapshot
 	Baseline    *BaselineEntry // nil = never synced
-	TruthStatus PathTruthStatus
-}
-
-// VerifyResult describes the verification status of a single file.
-type VerifyResult struct {
-	Path     string `json:"path"`
-	Status   string `json:"status"` // "ok", "missing", "hash_mismatch", "size_mismatch"
-	Expected string `json:"expected,omitempty"`
-	Actual   string `json:"actual,omitempty"`
-}
-
-// VerifyReport summarizes a full-tree hash verification of local files
-// against the baseline database.
-type VerifyReport struct {
-	Verified   int            `json:"verified"`
-	Mismatches []VerifyResult `json:"mismatches"`
+	TruthStatus pathTruthStatus
 }

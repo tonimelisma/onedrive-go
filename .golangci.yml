@@ -96,6 +96,7 @@ linters:
             - github.com/coder/websocket
             - golang.org/x/sync
             - github.com/mattn/go-isatty
+            - golang.org/x/sys
         graph-no-config:
           files:
             - internal/graph/*.go
@@ -258,8 +259,15 @@ linters:
       - linters:
           - lll
         path: _test\.go
-      # Defer close patterns are standard in Go HTTP clients
-      - linters:
+      # Reader-side defer-close in tests only. CLAUDE.md requires checking
+      # Close() on anything written to, because Close flushes buffers and a
+      # dropped error there is silent data loss. Production code carries a
+      # justified //nolint:errcheck at each reader-side close instead of a
+      # blanket rule, so a new write-close is caught by default. Tests are not
+      # the data-integrity boundary and would otherwise need the same
+      # annotation on every fixture teardown.
+      - path: _test\.go
+        linters:
           - errcheck
         source: "defer "
       - path: _test\.go

@@ -53,7 +53,7 @@ Each boundary owns exactly one translation step:
 - `config`: normalize parse, validation, and discovery outcomes into fatal load
   errors or lenient warnings
 - `sync`: normalize action completions, observer sentinels, and permission
-  checks into `ResultDecision`, retry scheduling, scope decisions, and durable
+  checks into `resultDecision`, retry scheduling, scope decisions, and durable
   authority writes
 - `cli`: map fatal/actionable/transient outcomes into exit behavior and
   reason/action text
@@ -70,7 +70,7 @@ entry points:
   `ConditionKey` values until the status-surface naming sweep lands
 - `internal/config/failure_class.go`: classify config load results
 - `internal/sync/executor_preconditions.go`: translate stale live local/remote
-  side-effect checks into `ErrActionPreconditionChanged`
+  side-effect checks into `errActionPreconditionChanged`
 - `internal/sync/engine_result_classify.go`: classify each action completion
 - `internal/cli/failure_class.go`: classify command-returned errors into exit
   behavior and reason/action text
@@ -117,14 +117,14 @@ Permission recovery follows the same ownership split:
 - Errors cross one classification boundary before being wrapped with local
   context.
 - The boundary that understands the invariant owns the classification.
-- `ErrActionPreconditionChanged` is the sync executor/worker signal for
+- `errActionPreconditionChanged` is the sync executor/worker signal for
   "this exact action is obsolete." Worker-start freshness, admission freshness,
   and executor live preconditions may return it; the engine maps it to
   `superseded`, not ordinary retry. Transient failures while trying to read
   live precondition truth are not wrapped with this sentinel. Graph conditional
   mutation mismatches surface first as `graph.ErrPreconditionFailed` from HTTP
   412; the executor translates that boundary-specific fact into
-  `ErrActionPreconditionChanged` when it proves a post-preflight stale action.
+  `errActionPreconditionChanged` when it proves a post-preflight stale action.
 - Retry/backoff consumes the classified result; it does not classify on its
   own.
 - User-facing messaging consumes the classified result; it does not inspect raw

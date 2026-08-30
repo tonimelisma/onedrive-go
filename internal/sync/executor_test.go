@@ -106,7 +106,7 @@ func (s *executorPathConvergenceStub) PermanentDeleteResolvedPath(_ context.Cont
 // Test helpers
 // ---------------------------------------------------------------------------
 
-func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, dl *executorMockDownloader, ul *executorMockUploader) (*ExecutorConfig, string) {
+func newTestExecutorConfig(t *testing.T, items *executorMockItemClient, dl *executorMockDownloader, ul *executorMockUploader) (*executorConfig, string) {
 	t.Helper()
 
 	return newTestExecutorConfigWithPathConvergence(t, items, dl, ul, nil)
@@ -118,7 +118,7 @@ func newTestExecutorConfigWithPathConvergence(
 	dl *executorMockDownloader,
 	ul *executorMockUploader,
 	pathConvergence driveops.PathConvergence,
-) (*ExecutorConfig, string) {
+) (*executorConfig, string) {
 	t.Helper()
 
 	syncRoot := t.TempDir()
@@ -127,7 +127,7 @@ func newTestExecutorConfigWithPathConvergence(
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 
-	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, pathConvergence)
+	cfg := newExecutorConfig(items, dl, ul, syncTree, driveID, logger, pathConvergence)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
 
@@ -144,13 +144,13 @@ func writeExecTestFile(t *testing.T, dir, relPath, content string) string {
 	return absPath
 }
 
-func requireOutcomeSuccess(t *testing.T, o *ActionOutcome) {
+func requireOutcomeSuccess(t *testing.T, o *actionOutcome) {
 	t.Helper()
 
 	require.True(t, o.Success, "expected success but got error: %v", o.Error)
 }
 
-func requireOutcomeFailure(t *testing.T, o *ActionOutcome) {
+func requireOutcomeFailure(t *testing.T, o *actionOutcome) {
 	t.Helper()
 
 	require.False(t, o.Success, "expected failure but got success")
@@ -172,14 +172,14 @@ func TestExecutor_CreateLocalFolder(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:       ActionFolderCreate,
 		Path:       "docs/notes",
-		CreateSide: CreateLocal,
-		View: &PathView{
-			Remote: &RemoteState{
+		CreateSide: createLocal,
+		View: &pathView{
+			Remote: &remoteState{
 				ItemID: "folder1",
 				Mtime:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano(),
 			},
@@ -207,13 +207,13 @@ func TestExecutor_CreateRemoteFolder(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:       ActionFolderCreate,
 		Path:       "photos",
 		CreateSide: CreateRemote,
-		View:       &PathView{Path: "photos"},
+		View:       &pathView{Path: "photos"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
@@ -233,7 +233,7 @@ func TestExecutor_CreateRemoteFolder_UsesPathConvergence(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
+	e := newExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "shared",
 		ItemID:   "shared-parent-id",
 		DriveID:  driveid.New("00000000000000ff"),
@@ -244,7 +244,7 @@ func TestExecutor_CreateRemoteFolder_UsesPathConvergence(t *testing.T) {
 		Type:       ActionFolderCreate,
 		Path:       "photos",
 		CreateSide: CreateRemote,
-		View:       &PathView{Path: "photos"},
+		View:       &pathView{Path: "photos"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
@@ -264,13 +264,13 @@ func TestExecutor_CreateRemoteFolder_PathConvergenceWarningIsNonFatal(t *testing
 	pathConvergence := &executorPathConvergenceStub{waitErr: driveops.ErrPathNotVisible}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:       ActionFolderCreate,
 		Path:       "photos",
 		CreateSide: CreateRemote,
-		View:       &PathView{Path: "photos"},
+		View:       &pathView{Path: "photos"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
@@ -292,7 +292,7 @@ func TestExecutor_CreateRemoteFolder_WaitsForParentVisibilityBeforeCreate(t *tes
 	}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
+	e := newExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "parent",
 		ItemID:   "parent-id",
 		DriveID:  driveid.New(synctest.TestDriveID),
@@ -303,7 +303,7 @@ func TestExecutor_CreateRemoteFolder_WaitsForParentVisibilityBeforeCreate(t *tes
 		Type:       ActionFolderCreate,
 		Path:       "parent/child",
 		CreateSide: CreateRemote,
-		View:       &PathView{Path: "parent/child"},
+		View:       &pathView{Path: "parent/child"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
@@ -328,7 +328,7 @@ func TestExecutor_CreateRemoteFolder_MissingParentPreflightReturnsStalePrecondit
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
+	e := newExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "parent",
 		ItemID:   "parent-id",
 		DriveID:  driveID,
@@ -340,12 +340,12 @@ func TestExecutor_CreateRemoteFolder_MissingParentPreflightReturnsStalePrecondit
 		Path:       "parent/child",
 		CreateSide: CreateRemote,
 		DriveID:    driveID,
-		View:       &PathView{Path: "parent/child"},
+		View:       &pathView{Path: "parent/child"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
 }
 
 func TestExecutor_CreateRemoteFolder_MountRootUsesMountLocalPathConvergence(t *testing.T) {
@@ -366,14 +366,14 @@ func TestExecutor_CreateRemoteFolder_MountRootUsesMountLocalPathConvergence(t *t
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
 	cfg.SetRemoteRootItemID(sharedParent)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:       ActionFolderCreate,
 		Path:       "photos",
 		CreateSide: CreateRemote,
 		DriveID:    driveid.New("00000000000000ff"),
-		View:       &PathView{Path: "photos"},
+		View:       &pathView{Path: "photos"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
@@ -392,19 +392,19 @@ func TestExecutor_CreateRemoteFolder_Error(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:       ActionFolderCreate,
 		Path:       "restricted",
 		CreateSide: CreateRemote,
-		View:       &PathView{Path: "restricted"},
+		View:       &pathView{Path: "restricted"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeFailure(t, &o)
 	assert.Equal(t, action.Path, o.FailurePath)
-	assert.Equal(t, PermissionCapabilityRemoteWrite, o.FailureCapability)
+	assert.Equal(t, permissionCapabilityRemoteWrite, o.FailureCapability)
 }
 
 // ---------------------------------------------------------------------------
@@ -415,7 +415,7 @@ func TestExecutor_LocalMove(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "old-name.txt", "content")
 
@@ -423,7 +423,7 @@ func TestExecutor_LocalMove(t *testing.T) {
 		Type:    ActionLocalMove,
 		Path:    "new-name.txt",
 		OldPath: "old-name.txt",
-		View:    &PathView{Path: "new-name.txt"},
+		View:    &pathView{Path: "new-name.txt"},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
@@ -437,18 +437,18 @@ func TestExecutor_LocalMove_SourceMissing(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionLocalMove,
 		Path:    "target.txt",
 		OldPath: "nonexistent.txt",
-		View:    &PathView{Path: "target.txt"},
+		View:    &pathView{Path: "target.txt"},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
 }
 
 // Validates: R-2.8.10
@@ -456,7 +456,7 @@ func TestExecutor_LocalMove_SourceChangedReturnsStalePrecondition(t *testing.T) 
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "old-name.txt", "new content")
 
@@ -464,7 +464,7 @@ func TestExecutor_LocalMove_SourceChangedReturnsStalePrecondition(t *testing.T) 
 		Type:    ActionLocalMove,
 		Path:    "new-name.txt",
 		OldPath: "old-name.txt",
-		View: &PathView{
+		View: &pathView{
 			Path: "new-name.txt",
 			Baseline: &BaselineEntry{
 				Path:      "old-name.txt",
@@ -476,7 +476,7 @@ func TestExecutor_LocalMove_SourceChangedReturnsStalePrecondition(t *testing.T) 
 
 	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
 	assert.FileExists(t, filepath.Join(syncRoot, "old-name.txt"))
 	assert.NoFileExists(t, filepath.Join(syncRoot, "new-name.txt"))
 }
@@ -486,7 +486,7 @@ func TestExecutor_LocalMove_FolderIdentityChangedReturnsStalePrecondition(t *tes
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	oldPath := filepath.Join(syncRoot, "old-folder")
 	newPath := filepath.Join(syncRoot, "new-folder")
@@ -498,7 +498,7 @@ func TestExecutor_LocalMove_FolderIdentityChangedReturnsStalePrecondition(t *tes
 		Type:    ActionLocalMove,
 		Path:    "new-folder",
 		OldPath: "old-folder",
-		View: &PathView{
+		View: &pathView{
 			Baseline: &BaselineEntry{
 				ItemType:         ItemTypeFolder,
 				LocalDevice:      currentIdentity.Device,
@@ -510,8 +510,8 @@ func TestExecutor_LocalMove_FolderIdentityChangedReturnsStalePrecondition(t *tes
 
 	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
-	assert.Equal(t, PermissionCapabilityLocalWrite, o.FailureCapability)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	assert.Equal(t, permissionCapabilityLocalWrite, o.FailureCapability)
 	assert.DirExists(t, oldPath)
 	assert.NoDirExists(t, newPath)
 }
@@ -530,7 +530,7 @@ func TestExecutor_RemoteMove(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteMove,
@@ -538,7 +538,7 @@ func TestExecutor_RemoteMove(t *testing.T) {
 		OldPath: "original.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Path: "renamed.txt"},
+		View:    &pathView{Path: "renamed.txt"},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
@@ -569,7 +569,7 @@ func TestExecutor_RemoteMove_StaleSourcePreflightReturnsStalePrecondition(t *tes
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteMove,
@@ -577,9 +577,9 @@ func TestExecutor_RemoteMove_StaleSourcePreflightReturnsStalePrecondition(t *tes
 		OldPath: "original.txt",
 		ItemID:  "item1",
 		DriveID: driveID,
-		View: &PathView{
+		View: &pathView{
 			Path: "renamed.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				DriveID:  driveID,
 				ItemID:   "item1",
 				ItemType: ItemTypeFile,
@@ -590,7 +590,7 @@ func TestExecutor_RemoteMove_StaleSourcePreflightReturnsStalePrecondition(t *tes
 
 	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
 }
 
 // Validates: R-2.8.10
@@ -617,7 +617,7 @@ func TestExecutor_RemoteMove_UsesConditionalETagFromPreflight(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteMove,
@@ -625,9 +625,9 @@ func TestExecutor_RemoteMove_UsesConditionalETagFromPreflight(t *testing.T) {
 		OldPath: "original.txt",
 		ItemID:  "item1",
 		DriveID: driveID,
-		View: &PathView{
+		View: &pathView{
 			Path: "renamed.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				DriveID:  driveID,
 				ItemID:   "item1",
 				ItemType: ItemTypeFile,
@@ -661,7 +661,7 @@ func TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition(t *test
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteMove,
@@ -669,9 +669,9 @@ func TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition(t *test
 		OldPath: "original.txt",
 		ItemID:  "item1",
 		DriveID: driveID,
-		View: &PathView{
+		View: &pathView{
 			Path: "renamed.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				DriveID:  driveID,
 				ItemID:   "item1",
 				ItemType: ItemTypeFile,
@@ -682,8 +682,8 @@ func TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition(t *test
 
 	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
-	assert.Equal(t, PermissionCapabilityRemoteWrite, o.FailureCapability)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	assert.Equal(t, permissionCapabilityRemoteWrite, o.FailureCapability)
 }
 
 func TestExecutor_RemoteMove_UsesPathConvergence(t *testing.T) {
@@ -697,14 +697,14 @@ func TestExecutor_RemoteMove_UsesPathConvergence(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, &executorMockUploader{}, pathConvergence)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 	action := &Action{
 		Type:    ActionRemoteMove,
 		Path:    "renamed.txt",
 		OldPath: "original.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Path: "renamed.txt"},
+		View:    &pathView{Path: "renamed.txt"},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
@@ -729,11 +729,11 @@ func TestExecutor_RemoteMove_MountRootUsesMountLocalPathConvergence(t *testing.T
 		OldPath: "original.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New("00000000000000ff"),
-		View:    &PathView{Path: "renamed.txt"},
+		View:    &pathView{Path: "renamed.txt"},
 	}
 
 	cfg.SetRemoteRootItemID("mount-root-id")
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
@@ -758,15 +758,15 @@ func TestExecutor_Download_Success(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionDownload,
 		Path:    "greetings.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
-			Remote: &RemoteState{
+		View: &pathView{
+			Remote: &remoteState{
 				ItemID: "item1",
 				ETag:   "etag1",
 				Mtime:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano(),
@@ -814,16 +814,16 @@ func TestExecutor_Download_MountRootAllowsGraphDriveRootPath(t *testing.T) {
 
 	cfg, syncRoot := newTestExecutorConfig(t, items, dl, &executorMockUploader{})
 	cfg.SetRemoteRootItemID("mount-root-id")
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionDownload,
 		Path:    "shortcut-sentinel.txt",
 		ItemID:  "item1",
 		DriveID: driveID,
-		View: &PathView{
+		View: &pathView{
 			Path: "shortcut-sentinel.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				DriveID:  driveID,
 				ItemID:   "item1",
 				ItemType: ItemTypeFile,
@@ -847,20 +847,20 @@ func TestExecutor_Download_APIError(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionDownload,
 		Path:    "exec-forbidden.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Remote: &RemoteState{}},
+		View:    &pathView{Remote: &remoteState{}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
 	requireOutcomeFailure(t, &o)
 	assert.Equal(t, action.Path, o.FailurePath)
-	assert.Equal(t, PermissionCapabilityRemoteRead, o.FailureCapability)
+	assert.Equal(t, permissionCapabilityRemoteRead, o.FailureCapability)
 }
 
 func TestExecutor_Download_ParentDirCreated(t *testing.T) {
@@ -874,14 +874,14 @@ func TestExecutor_Download_ParentDirCreated(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionDownload,
 		Path:    "deep/nested/dir/exec-dl.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Remote: &RemoteState{Mtime: 1}},
+		View:    &pathView{Remote: &remoteState{Mtime: 1}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
@@ -900,14 +900,14 @@ func TestExecutor_Download_ZeroByte(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionDownload,
 		Path:    "exec-empty.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Remote: &RemoteState{}},
+		View:    &pathView{Remote: &remoteState{}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
@@ -943,23 +943,23 @@ func TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition(t *
 
 	cfg, root := newTestExecutorConfig(t, items, dl, &executorMockUploader{})
 	syncRoot = root
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionDownload,
 		Path:    "appeared.txt",
 		ItemID:  "item1",
 		DriveID: driveID,
-		View: &PathView{
+		View: &pathView{
 			Path:   "appeared.txt",
-			Remote: &RemoteState{DriveID: driveID, ItemID: "item1", ItemType: ItemTypeFile},
+			Remote: &remoteState{DriveID: driveID, ItemID: "item1", ItemType: ItemTypeFile},
 		},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
-	assert.Equal(t, PermissionCapabilityLocalWrite, o.FailureCapability)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	assert.Equal(t, permissionCapabilityLocalWrite, o.FailureCapability)
 
 	data, err := localpath.ReadFile(filepath.Join(syncRoot, "appeared.txt"))
 	require.NoError(t, err)
@@ -992,7 +992,7 @@ func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	correctHash := execHelloWorldQuickXorHash // QuickXorHash of hello world.
 	action := &Action{
@@ -1000,7 +1000,7 @@ func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 		Path:    "hash-retry.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Remote: &RemoteState{Hash: correctHash, Mtime: 1}},
+		View:    &pathView{Remote: &remoteState{Hash: correctHash, Mtime: 1}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
@@ -1031,14 +1031,14 @@ func TestExecutor_Download_HashMismatch_Accepted(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionDownload,
 		Path:    "hash-accept.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Remote: &RemoteState{Hash: "stale-remote-hash", Mtime: 1}},
+		View:    &pathView{Remote: &remoteState{Hash: "stale-remote-hash", Mtime: 1}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
@@ -1066,7 +1066,7 @@ func TestExecutor_Download_HashMatch_NoRetry(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	correctHash := execHelloWorldQuickXorHash
 	action := &Action{
@@ -1074,7 +1074,7 @@ func TestExecutor_Download_HashMatch_NoRetry(t *testing.T) {
 		Path:    "hash-ok.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Remote: &RemoteState{Hash: correctHash, Mtime: 1}},
+		View:    &pathView{Remote: &remoteState{Hash: correctHash, Mtime: 1}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
@@ -1102,7 +1102,7 @@ func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
 
@@ -1110,7 +1110,7 @@ func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 		Type:    ActionUpload,
 		Path:    "exec-small.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Path: "exec-small.txt"},
+		View:    &pathView{Path: "exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1130,7 +1130,7 @@ func TestExecutor_Upload_APIError(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
 
@@ -1138,13 +1138,13 @@ func TestExecutor_Upload_APIError(t *testing.T) {
 		Type:    ActionUpload,
 		Path:    "exec-small.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Path: "exec-small.txt"},
+		View:    &pathView{Path: "exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeFailure(t, &o)
 	assert.Equal(t, action.Path, o.FailurePath)
-	assert.Equal(t, PermissionCapabilityRemoteWrite, o.FailureCapability)
+	assert.Equal(t, permissionCapabilityRemoteWrite, o.FailureCapability)
 }
 
 func TestExecutor_Upload_UsesPathConvergence(t *testing.T) {
@@ -1158,7 +1158,7 @@ func TestExecutor_Upload_UsesPathConvergence(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
 
@@ -1166,7 +1166,7 @@ func TestExecutor_Upload_UsesPathConvergence(t *testing.T) {
 		Type:    ActionUpload,
 		Path:    "exec-small.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Path: "exec-small.txt"},
+		View:    &pathView{Path: "exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1188,7 +1188,7 @@ func TestExecutor_Upload_CreateByParentWaitsForParentVisibilityBeforeUpload(t *t
 	}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
+	e := newExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "folder",
 		ItemID:   "parent-id",
 		DriveID:  driveid.New(synctest.TestDriveID),
@@ -1201,7 +1201,7 @@ func TestExecutor_Upload_CreateByParentWaitsForParentVisibilityBeforeUpload(t *t
 		Type:    ActionUpload,
 		Path:    "folder/exec-small.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Path: "folder/exec-small.txt"},
+		View:    &pathView{Path: "folder/exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1243,7 +1243,7 @@ func TestExecutor_Upload_CreateByParentWaitsBeforeParentPrecondition(t *testing.
 	}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, ul, pathConvergence)
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
+	e := newExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "folder",
 		ItemID:   "parent-id",
 		DriveID:  driveid.New(synctest.TestDriveID),
@@ -1256,7 +1256,7 @@ func TestExecutor_Upload_CreateByParentWaitsBeforeParentPrecondition(t *testing.
 		Type:    ActionUpload,
 		Path:    "folder/exec-small.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Path: "folder/exec-small.txt"},
+		View:    &pathView{Path: "folder/exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1285,7 +1285,7 @@ func TestExecutor_Upload_CreateByParentMissingAfterVisibilityWaitReturnsStalePre
 	}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, items, &executorMockDownloader{}, ul, pathConvergence)
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
+	e := newExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "folder",
 		ItemID:   "parent-id",
 		DriveID:  driveid.New(synctest.TestDriveID),
@@ -1298,13 +1298,13 @@ func TestExecutor_Upload_CreateByParentMissingAfterVisibilityWaitReturnsStalePre
 		Type:    ActionUpload,
 		Path:    "folder/exec-small.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Path: "folder/exec-small.txt"},
+		View:    &pathView{Path: "folder/exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
-	assert.Equal(t, PermissionCapabilityRemoteRead, o.FailureCapability)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	assert.Equal(t, permissionCapabilityRemoteRead, o.FailureCapability)
 	assert.Equal(t, []string{"folder"}, pathConvergence.waitCalls)
 }
 
@@ -1319,7 +1319,7 @@ func TestExecutor_Upload_PathConvergenceProbeFailureIsNonFatal(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{waitErr: fmt.Errorf("metadata probe failed")}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
 
@@ -1327,7 +1327,7 @@ func TestExecutor_Upload_PathConvergenceProbeFailureIsNonFatal(t *testing.T) {
 		Type:    ActionUpload,
 		Path:    "exec-small.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Path: "exec-small.txt"},
+		View:    &pathView{Path: "exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1353,7 +1353,7 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
 	cfg.SetRemoteRootItemID(sharedParent)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
 
@@ -1361,7 +1361,7 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 		Type:    ActionUpload,
 		Path:    "exec-small.txt",
 		DriveID: driveid.New("00000000000000ff"),
-		View:    &PathView{Path: "exec-small.txt"},
+		View:    &pathView{Path: "exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1385,7 +1385,7 @@ func TestExecutor_Upload_MountRootUsesMountLocalPathConvergence(t *testing.T) {
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
 	cfg.SetRemoteRootItemID(sharedParent)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
 
@@ -1393,7 +1393,7 @@ func TestExecutor_Upload_MountRootUsesMountLocalPathConvergence(t *testing.T) {
 		Type:    ActionUpload,
 		Path:    "exec-small.txt",
 		DriveID: driveid.New("00000000000000ff"),
-		View:    &PathView{Path: "exec-small.txt"},
+		View:    &pathView{Path: "exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1414,7 +1414,7 @@ func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
+	e := newExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "exec-existing-dir",
 		ItemID:   "baseline-folder-id",
 		DriveID:  driveid.New(synctest.TestDriveID),
@@ -1426,7 +1426,7 @@ func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {
 	action := &Action{
 		Type: ActionUpload,
 		Path: "exec-existing-dir/exec-doc.txt",
-		View: &PathView{Path: "exec-existing-dir/exec-doc.txt"},
+		View: &pathView{Path: "exec-existing-dir/exec-doc.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1456,7 +1456,7 @@ func TestExecutor_Upload_KnownItemUsesItemOverwrite(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
+	e := newExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "known.txt",
 		ItemID:   "known-item-id",
 		ParentID: "baseline-parent",
@@ -1471,7 +1471,7 @@ func TestExecutor_Upload_KnownItemUsesItemOverwrite(t *testing.T) {
 		Path:    "known.txt",
 		ItemID:  "known-item-id",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
+		View: &pathView{
 			Path: "known.txt",
 			Baseline: &BaselineEntry{
 				ParentID: "baseline-parent",
@@ -1498,7 +1498,7 @@ func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-new-file.txt", "data")
 
@@ -1506,7 +1506,7 @@ func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
 	action := &Action{
 		Type: ActionUpload,
 		Path: "exec-new-file.txt",
-		View: &PathView{Path: "exec-new-file.txt"},
+		View: &pathView{Path: "exec-new-file.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1527,7 +1527,7 @@ func TestExecutor_Upload_LargeFileSuccess(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	// Create a file > 4 MiB to exercise Upload for large files.
 	bigContent := strings.Repeat("x", 5*1024*1024) // 5 MiB
@@ -1536,7 +1536,7 @@ func TestExecutor_Upload_LargeFileSuccess(t *testing.T) {
 	action := &Action{
 		Type: ActionUpload,
 		Path: "exec-big-file.bin",
-		View: &PathView{Path: "exec-big-file.bin"},
+		View: &pathView{Path: "exec-big-file.bin"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -1557,16 +1557,16 @@ func TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "changed-before-upload.txt", "local drift")
 
 	action := &Action{
 		Type: ActionUpload,
 		Path: "changed-before-upload.txt",
-		View: &PathView{
+		View: &pathView{
 			Path: "changed-before-upload.txt",
-			Local: &LocalState{
+			Local: &localState{
 				ItemType: ItemTypeFile,
 				Hash:     execHelloWorldQuickXorHash,
 			},
@@ -1575,8 +1575,8 @@ func TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
-	assert.Equal(t, PermissionCapabilityLocalRead, o.FailureCapability)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	assert.Equal(t, permissionCapabilityLocalRead, o.FailureCapability)
 }
 
 // Validates: R-2.4.6, R-2.8.10
@@ -1596,7 +1596,7 @@ func TestExecutor_Upload_SymlinkAliasSourceUsesFollowedTargetPrecondition(t *tes
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	targetPath := writeExecTestFile(t, syncRoot, "target.txt", execHelloWorldContent)
 	aliasPath := filepath.Join(syncRoot, "alias.txt")
@@ -1612,9 +1612,9 @@ func TestExecutor_Upload_SymlinkAliasSourceUsesFollowedTargetPrecondition(t *tes
 		Type:    ActionUpload,
 		Path:    "alias.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
+		View: &pathView{
 			Path: "alias.txt",
-			Local: &LocalState{
+			Local: &localState{
 				ItemType:         ItemTypeFile,
 				Hash:             execHelloWorldQuickXorHash,
 				Size:             info.Size(),
@@ -1639,7 +1639,7 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	absPath := writeExecTestFile(t, syncRoot, "exec-delete-me.txt", "content")
 
@@ -1650,7 +1650,7 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 		Type:   ActionLocalDelete,
 		Path:   "exec-delete-me.txt",
 		ItemID: "item1",
-		View: &PathView{
+		View: &pathView{
 			Baseline: &BaselineEntry{LocalHash: hash},
 		},
 	}
@@ -1676,7 +1676,7 @@ func TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition(t *testing.T
 		},
 	}
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, uploader)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-modified.txt", "new content")
 
@@ -1684,7 +1684,7 @@ func TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition(t *testing.T
 		Type:   ActionLocalDelete,
 		Path:   "exec-modified.txt",
 		ItemID: "item1",
-		View: &PathView{
+		View: &pathView{
 			Baseline: &BaselineEntry{
 				LocalHash:  "old-hash-that-wont-match",
 				RemoteHash: "baseline-remote-hash",
@@ -1695,8 +1695,8 @@ func TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition(t *testing.T
 	o := e.ExecuteLocalDelete(t.Context(), action)
 	require.False(t, o.Success)
 	assert.Equal(t, ActionLocalDelete, o.Action)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
-	assert.Equal(t, PermissionCapabilityLocalWrite, o.FailureCapability)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	assert.Equal(t, permissionCapabilityLocalWrite, o.FailureCapability)
 
 	contents, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.txt"))
 	require.NoError(t, err)
@@ -1724,7 +1724,7 @@ func TestExecutor_LocalDelete_HashMismatch_DoesNotCreateConflictCopy(t *testing.
 		},
 	}
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, uploader)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-modified.txt", "new content")
 	writeExecTestFile(t, syncRoot, "exec-modified.conflict-20260115-120000.txt", "existing conflict")
@@ -1733,7 +1733,7 @@ func TestExecutor_LocalDelete_HashMismatch_DoesNotCreateConflictCopy(t *testing.
 		Type:   ActionLocalDelete,
 		Path:   "exec-modified.txt",
 		ItemID: "item1",
-		View: &PathView{
+		View: &pathView{
 			Baseline: &BaselineEntry{
 				LocalHash:  "old-hash-that-wont-match",
 				RemoteHash: "baseline-remote-hash",
@@ -1744,7 +1744,7 @@ func TestExecutor_LocalDelete_HashMismatch_DoesNotCreateConflictCopy(t *testing.
 	o := e.ExecuteLocalDelete(t.Context(), action)
 	require.False(t, o.Success)
 	assert.Equal(t, ActionLocalDelete, o.Action)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
 
 	currentData, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-modified.txt"))
 	require.NoError(t, err)
@@ -1764,26 +1764,26 @@ func TestExecutor_LocalDelete_AlreadyGone(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:   ActionLocalDelete,
 		Path:   "exec-already-gone.txt",
 		ItemID: "item1",
-		View:   &PathView{},
+		View:   &pathView{},
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
-	assert.Equal(t, PermissionCapabilityLocalWrite, o.FailureCapability)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	assert.Equal(t, permissionCapabilityLocalWrite, o.FailureCapability)
 }
 
 func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "exec-empty-dir"), 0o700))
 
@@ -1791,7 +1791,7 @@ func TestExecutor_LocalDelete_FolderEmpty(t *testing.T) {
 		Type:   ActionLocalDelete,
 		Path:   "exec-empty-dir",
 		ItemID: "item1",
-		View:   &PathView{},
+		View:   &pathView{},
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
@@ -1806,7 +1806,7 @@ func TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition(t *t
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	dirPath := filepath.Join(syncRoot, "exec-folder-recreated")
 	require.NoError(t, os.MkdirAll(dirPath, 0o700))
@@ -1817,7 +1817,7 @@ func TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition(t *t
 		Type:   ActionLocalDelete,
 		Path:   "exec-folder-recreated",
 		ItemID: "item1",
-		View: &PathView{
+		View: &pathView{
 			Baseline: &BaselineEntry{
 				ItemType:         ItemTypeFolder,
 				LocalDevice:      currentIdentity.Device,
@@ -1829,8 +1829,8 @@ func TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition(t *t
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
-	assert.Equal(t, PermissionCapabilityLocalWrite, o.FailureCapability)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	assert.Equal(t, permissionCapabilityLocalWrite, o.FailureCapability)
 	assert.DirExists(t, dirPath)
 }
 
@@ -1838,7 +1838,7 @@ func TestExecutor_LocalDelete_FolderNotEmpty(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-non-empty-dir/child.txt", "data")
 
@@ -1846,7 +1846,7 @@ func TestExecutor_LocalDelete_FolderNotEmpty(t *testing.T) {
 		Type:   ActionLocalDelete,
 		Path:   "exec-non-empty-dir",
 		ItemID: "item1",
-		View:   &PathView{},
+		View:   &pathView{},
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
@@ -1858,7 +1858,7 @@ func TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition(t *testi
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	outside := t.TempDir()
 	outsideFile := writeExecTestFile(t, outside, "target/file.txt", "outside data")
@@ -1871,7 +1871,7 @@ func TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition(t *testi
 		Type:   ActionLocalDelete,
 		Path:   "alias/file.txt",
 		ItemID: "item1",
-		View:   &PathView{},
+		View:   &pathView{},
 	}
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
@@ -1897,14 +1897,14 @@ func TestExecutor_RemoteDelete_Success(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
 		Path:    "exec-remote-file.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{},
+		View:    &pathView{},
 	}
 
 	o := e.ExecuteRemoteDelete(t.Context(), action)
@@ -1933,16 +1933,16 @@ func TestExecutor_RemoteDelete_UsesConditionalETagFromPreflight(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
 		Path:    "exec-remote-file.txt",
 		ItemID:  "item1",
 		DriveID: driveID,
-		View: &PathView{
+		View: &pathView{
 			Path: "exec-remote-file.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				DriveID:  driveID,
 				ItemID:   "item1",
 				ItemType: ItemTypeFile,
@@ -1975,16 +1975,16 @@ func TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition(t *te
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
 		Path:    "exec-remote-file.txt",
 		ItemID:  "item1",
 		DriveID: driveID,
-		View: &PathView{
+		View: &pathView{
 			Path: "exec-remote-file.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				DriveID:  driveID,
 				ItemID:   "item1",
 				ItemType: ItemTypeFile,
@@ -1995,8 +1995,8 @@ func TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition(t *te
 
 	o := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
-	assert.Equal(t, PermissionCapabilityRemoteWrite, o.FailureCapability)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	assert.Equal(t, permissionCapabilityRemoteWrite, o.FailureCapability)
 }
 
 // Validates: R-2.8.10, R-6.2.4
@@ -2020,16 +2020,16 @@ func TestExecutor_RemoteDelete_WrongDrivePreflightReturnsStalePrecondition(t *te
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
 		Path:    "exec-remote-file.txt",
 		ItemID:  "item1",
 		DriveID: plannedDriveID,
-		View: &PathView{
+		View: &pathView{
 			Path: "exec-remote-file.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				DriveID:  plannedDriveID,
 				ItemID:   "item1",
 				ItemType: ItemTypeFile,
@@ -2040,8 +2040,8 @@ func TestExecutor_RemoteDelete_WrongDrivePreflightReturnsStalePrecondition(t *te
 
 	o := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
-	assert.Equal(t, PermissionCapabilityRemoteRead, o.FailureCapability)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	assert.Equal(t, permissionCapabilityRemoteRead, o.FailureCapability)
 }
 
 // Validates: R-2.8.10, R-6.2.4
@@ -2068,16 +2068,16 @@ func TestExecutor_RemoteDelete_StalePathPreflightReturnsStalePrecondition(t *tes
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
 		Path:    "Docs/file.txt",
 		ItemID:  "item1",
 		DriveID: driveID,
-		View: &PathView{
+		View: &pathView{
 			Path: "Docs/file.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				DriveID:  driveID,
 				ItemID:   "item1",
 				ItemType: ItemTypeFile,
@@ -2088,8 +2088,8 @@ func TestExecutor_RemoteDelete_StalePathPreflightReturnsStalePrecondition(t *tes
 
 	o := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
-	assert.Equal(t, PermissionCapabilityRemoteRead, o.FailureCapability)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	assert.Equal(t, permissionCapabilityRemoteRead, o.FailureCapability)
 }
 
 // Validates: R-2.8.10
@@ -2104,16 +2104,16 @@ func TestExecutor_RemoteDelete_ErrorHandling(t *testing.T) {
 		wantOK                bool
 		wantErrIs             error
 		wantFailurePath       string
-		wantFailureCapability PermissionCapability
+		wantFailureCapability permissionCapability
 	}{
 		{
 			name:                  "404AfterPreflightIsSuperseded",
 			path:                  "exec-already-deleted.txt",
 			itemID:                "item2",
 			deleteErr:             graph.ErrNotFound,
-			wantErrIs:             ErrActionPreconditionChanged,
+			wantErrIs:             errActionPreconditionChanged,
 			wantFailurePath:       "exec-already-deleted.txt",
-			wantFailureCapability: PermissionCapabilityRemoteWrite,
+			wantFailureCapability: permissionCapabilityRemoteWrite,
 		},
 		{
 			name:                  "403Skip",
@@ -2122,7 +2122,7 @@ func TestExecutor_RemoteDelete_ErrorHandling(t *testing.T) {
 			deleteErr:             graph.ErrForbidden,
 			wantErrIs:             graph.ErrForbidden,
 			wantFailurePath:       "exec-forbidden-del.txt",
-			wantFailureCapability: PermissionCapabilityRemoteWrite,
+			wantFailureCapability: permissionCapabilityRemoteWrite,
 		},
 	}
 
@@ -2137,14 +2137,14 @@ func TestExecutor_RemoteDelete_ErrorHandling(t *testing.T) {
 			}
 
 			cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-			e := NewExecution(cfg, emptyBaseline())
+			e := newExecution(cfg, emptyBaseline())
 
 			action := &Action{
 				Type:    ActionRemoteDelete,
 				Path:    tt.path,
 				ItemID:  tt.itemID,
 				DriveID: driveid.New(synctest.TestDriveID),
-				View:    &PathView{},
+				View:    &pathView{},
 			}
 
 			o := e.ExecuteRemoteDelete(t.Context(), action)
@@ -2179,7 +2179,7 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-conflict.txt", "local version")
 
@@ -2188,11 +2188,11 @@ func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 		Path:    "exec-conflict.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
-			Local: &LocalState{
+		View: &pathView{
+			Local: &localState{
 				ItemType: ItemTypeFile,
 			},
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				ItemID: "item1",
 				ETag:   "etag1",
 			},
@@ -2244,7 +2244,7 @@ func TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStaleP
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-conflict-reappears.txt", "original local")
 
@@ -2253,9 +2253,9 @@ func TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStaleP
 		Path:    "exec-conflict-reappears.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
-			Local:  &LocalState{ItemType: ItemTypeFile},
-			Remote: &RemoteState{ItemID: "item1"},
+		View: &pathView{
+			Local:  &localState{ItemType: ItemTypeFile},
+			Remote: &remoteState{ItemID: "item1"},
 		},
 	}
 
@@ -2269,8 +2269,8 @@ func TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStaleP
 	downloadAction.RequireMissingLocalTarget = true
 	o := e.ExecuteDownload(t.Context(), &downloadAction)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
-	assert.Equal(t, PermissionCapabilityLocalWrite, o.FailureCapability)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	assert.Equal(t, permissionCapabilityLocalWrite, o.FailureCapability)
 	assert.False(t, downloadCalled)
 
 	data, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-conflict-reappears.txt"))
@@ -2290,7 +2290,7 @@ func TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix(t *
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-conflict.txt", "local version")
 	writeExecTestFile(t, syncRoot, "exec-conflict.conflict-20260115-120000.txt", "existing conflict")
@@ -2300,8 +2300,8 @@ func TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix(t *
 		Path:    "exec-conflict.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
-			Remote: &RemoteState{
+		View: &pathView{
+			Remote: &remoteState{
 				ItemID: "item1",
 				ETag:   "etag1",
 			},
@@ -2359,7 +2359,7 @@ func TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal(t *testing.T) {
 		ItemID:   "parent-folder",
 		ItemType: ItemTypeFolder,
 	})
-	e := NewExecution(cfg, baseline)
+	e := newExecution(cfg, baseline)
 
 	// Local file exists with modified content (edit-delete: local modified,
 	// remote deleted).
@@ -2369,9 +2369,9 @@ func TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal(t *testing.T) {
 		Type:    ActionUpload,
 		Path:    "folder/exec-ed-file.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
+		View: &pathView{
 			Path: "folder/exec-ed-file.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				ItemID:    "deleted-item",
 				DriveID:   driveid.New(synctest.TestDriveID),
 				ItemType:  ItemTypeFile,
@@ -2409,7 +2409,7 @@ func TestConflictCopyPath_Normal(t *testing.T) {
 	t.Parallel()
 
 	ts := time.Date(2026, 1, 15, 12, 30, 45, 0, time.UTC)
-	result := ConflictCopyPath("/sync/root/exec-file.txt", ts)
+	result := conflictCopyPath("/sync/root/exec-file.txt", ts)
 	expected := "/sync/root/exec-file.conflict-20260115-123045.txt"
 
 	assert.Equal(t, expected, result)
@@ -2419,7 +2419,7 @@ func TestConflictCopyPath_Dotfile(t *testing.T) {
 	t.Parallel()
 
 	ts := time.Date(2026, 1, 15, 12, 30, 45, 0, time.UTC)
-	result := ConflictCopyPath("/sync/root/.bashrc", ts)
+	result := conflictCopyPath("/sync/root/.bashrc", ts)
 	expected := "/sync/root/.bashrc.conflict-20260115-123045"
 
 	assert.Equal(t, expected, result)
@@ -2429,7 +2429,7 @@ func TestConflictCopyPath_MultiDot(t *testing.T) {
 	t.Parallel()
 
 	ts := time.Date(2026, 1, 15, 12, 30, 45, 0, time.UTC)
-	result := ConflictCopyPath("/sync/root/archive.tar.gz", ts)
+	result := conflictCopyPath("/sync/root/archive.tar.gz", ts)
 	expected := "/sync/root/archive.tar.conflict-20260115-123045.gz"
 
 	assert.Equal(t, expected, result)
@@ -2447,15 +2447,15 @@ func TestPublicationMutation_SyncedUpdate(t *testing.T) {
 		Path:    "exec-converged.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
-			Remote: &RemoteState{
+		View: &pathView{
+			Remote: &remoteState{
 				ItemID:   "item1",
 				Hash:     "hash1",
 				Size:     1024,
 				ETag:     "etag1",
 				ItemType: ItemTypeFile,
 			},
-			Local: &LocalState{
+			Local: &localState{
 				Hash:  "hash1",
 				Mtime: 1234567890,
 			},
@@ -2503,7 +2503,7 @@ func TestExecutor_ResolveParentID_Baseline(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, baselineWith(&BaselineEntry{
+	e := newExecution(cfg, baselineWith(&BaselineEntry{
 		Path:     "exec-existing-folder",
 		ItemID:   "folder-id-from-baseline",
 		DriveID:  driveid.New(synctest.TestDriveID),
@@ -2543,7 +2543,7 @@ func TestExecutor_ResolveParentID_MountRoot(t *testing.T) {
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	cfg.SetRemoteRootItemID("mount-root-id")
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	id, err := e.ResolveParentID("exec-file.txt")
 	require.NoError(t, err)
@@ -2593,7 +2593,7 @@ func TestExecutor_ConflictDownloadFails_LeavesConflictCopy(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	originalContent := "precious local data"
 	writeExecTestFile(t, syncRoot, "exec-restore.txt", originalContent)
@@ -2603,9 +2603,9 @@ func TestExecutor_ConflictDownloadFails_LeavesConflictCopy(t *testing.T) {
 		Path:    "exec-restore.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
-			Local:  &LocalState{ItemType: ItemTypeFile},
-			Remote: &RemoteState{ItemID: "item1"},
+		View: &pathView{
+			Local:  &localState{ItemType: ItemTypeFile},
+			Remote: &remoteState{ItemID: "item1"},
 		},
 	}
 
@@ -2649,7 +2649,7 @@ func TestExecutor_RemoteMove_Error(t *testing.T) {
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteMove,
@@ -2657,7 +2657,7 @@ func TestExecutor_RemoteMove_Error(t *testing.T) {
 		OldPath: "original.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Path: "renamed.txt"},
+		View:    &pathView{Path: "renamed.txt"},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
@@ -2665,7 +2665,7 @@ func TestExecutor_RemoteMove_Error(t *testing.T) {
 
 	require.ErrorIs(t, o.Error, graph.ErrForbidden)
 	assert.Equal(t, action.OldPath, o.FailurePath)
-	assert.Equal(t, PermissionCapabilityRemoteWrite, o.FailureCapability)
+	assert.Equal(t, permissionCapabilityRemoteWrite, o.FailureCapability)
 }
 
 func TestInferFailureCapabilityFromError(t *testing.T) {
@@ -2674,30 +2674,30 @@ func TestInferFailureCapabilityFromError(t *testing.T) {
 	tests := []struct {
 		name             string
 		err              error
-		localCapability  PermissionCapability
-		remoteCapability PermissionCapability
-		want             PermissionCapability
+		localCapability  permissionCapability
+		remoteCapability permissionCapability
+		want             permissionCapability
 	}{
 		{
 			name:             "wrapped local permission",
 			err:              fmt.Errorf("opening local file: %w", os.ErrPermission),
-			localCapability:  PermissionCapabilityLocalRead,
-			remoteCapability: PermissionCapabilityRemoteWrite,
-			want:             PermissionCapabilityLocalRead,
+			localCapability:  permissionCapabilityLocalRead,
+			remoteCapability: permissionCapabilityRemoteWrite,
+			want:             permissionCapabilityLocalRead,
 		},
 		{
 			name:             "wrapped remote forbidden",
 			err:              fmt.Errorf("uploading remote file: %w", graph.ErrForbidden),
-			localCapability:  PermissionCapabilityLocalRead,
-			remoteCapability: PermissionCapabilityRemoteWrite,
-			want:             PermissionCapabilityRemoteWrite,
+			localCapability:  permissionCapabilityLocalRead,
+			remoteCapability: permissionCapabilityRemoteWrite,
+			want:             permissionCapabilityRemoteWrite,
 		},
 		{
 			name:             "non permission error",
 			err:              fmt.Errorf("something else"),
-			localCapability:  PermissionCapabilityLocalRead,
-			remoteCapability: PermissionCapabilityRemoteWrite,
-			want:             PermissionCapabilityUnknown,
+			localCapability:  permissionCapabilityLocalRead,
+			remoteCapability: permissionCapabilityRemoteWrite,
+			want:             permissionCapabilityUnknown,
 		},
 	}
 
@@ -2716,7 +2716,7 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-src.txt", "content")
 
@@ -2726,15 +2726,15 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 		OldPath: "exec-src.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
+		View: &pathView{
 			Path: "exec-dst.txt",
-			Remote: &RemoteState{
+			Remote: &remoteState{
 				Hash:     "remotehash",
 				Size:     42,
 				ETag:     "etag-move",
 				ItemType: ItemTypeFile,
 			},
-			Local: &LocalState{
+			Local: &localState{
 				Hash:  "localhash",
 				Mtime: 9876543210,
 			},
@@ -2767,7 +2767,7 @@ func TestExecutor_Upload_LargeFileSizePassedToUploader(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	// 25 MiB file — Uploader receives the exact size.
 	expectedSize := int64(25 * 1024 * 1024)
@@ -2777,7 +2777,7 @@ func TestExecutor_Upload_LargeFileSizePassedToUploader(t *testing.T) {
 	action := &Action{
 		Type: ActionUpload,
 		Path: "exec-multi-chunk.bin",
-		View: &PathView{Path: "exec-multi-chunk.bin"},
+		View: &pathView{Path: "exec-multi-chunk.bin"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -2793,7 +2793,7 @@ func TestTimeSleep_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	err := TimeSleep(ctx, 10*time.Second)
+	err := timeSleep(ctx, 10*time.Second)
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -2801,7 +2801,7 @@ func TestTimeSleep_ContextCanceled(t *testing.T) {
 func TestTimeSleep_Completes(t *testing.T) {
 	t.Parallel()
 
-	err := TimeSleep(t.Context(), 1*time.Millisecond)
+	err := timeSleep(t.Context(), 1*time.Millisecond)
 	assert.NoError(t, err)
 }
 
@@ -2815,14 +2815,14 @@ func TestExecutor_DeleteOutcome_FolderType(t *testing.T) {
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{
 		deleteItemFn: func(_ context.Context, _ driveid.ID, _ string) error { return nil },
 	}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
 		Path:    "exec-folder-del",
 		ItemID:  "folder1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
+		View: &pathView{
 			Baseline: &BaselineEntry{ItemType: ItemTypeFolder},
 		},
 	}
@@ -2841,7 +2841,7 @@ func TestPublicationMutation_Cleanup_FolderType(t *testing.T) {
 		Path:    "exec-cleanup-folder",
 		ItemID:  "folder1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
+		View: &pathView{
 			Baseline: &BaselineEntry{ItemType: ItemTypeFolder},
 		},
 	}
@@ -2862,9 +2862,9 @@ func TestPublicationMutation_SyncedUpdate_BaselineFallback(t *testing.T) {
 		Path:    "exec-synced-folder",
 		ItemID:  "folder1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
+		View: &pathView{
 			Baseline: &BaselineEntry{ItemType: ItemTypeFolder},
-			Local:    &LocalState{Hash: "lh", Mtime: 123},
+			Local:    &localState{Hash: "lh", Mtime: 123},
 		},
 	}
 
@@ -2900,14 +2900,14 @@ func TestExecutor_Download_PartialFileCleanedOnMidStreamError(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionDownload,
 		Path:    "partial-cleanup.txt",
 		ItemID:  "item-partial",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Remote: &RemoteState{}},
+		View:    &pathView{Remote: &remoteState{}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
@@ -2943,7 +2943,7 @@ func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	// Write a file and set a specific mtime.
 	writeExecTestFile(t, syncRoot, "mtime-test.txt", "mtime content")
@@ -2956,7 +2956,7 @@ func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
 	action := &Action{
 		Type: ActionUpload,
 		Path: "mtime-test.txt",
-		View: &PathView{Path: "mtime-test.txt"},
+		View: &pathView{Path: "mtime-test.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
@@ -2992,7 +2992,7 @@ func TestContainedPath_ValidPaths(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := ContainedPath(root, tt.relPath)
+			got, err := containedPath(root, tt.relPath)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
@@ -3019,9 +3019,9 @@ func TestContainedPath_TraversalAttempts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := ContainedPath(root, tt.relPath)
+			_, err := containedPath(root, tt.relPath)
 			require.Error(t, err)
-			assert.ErrorIs(t, err, ErrPathEscapesSyncRoot)
+			assert.ErrorIs(t, err, errPathEscapesSyncRoot)
 		})
 	}
 }
@@ -3030,17 +3030,17 @@ func TestCreateLocalFolder_TraversalBlocked(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:       ActionFolderCreate,
 		Path:       "../escape",
-		CreateSide: CreateLocal,
+		CreateSide: createLocal,
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	assert.ErrorIs(t, o.Error, ErrPathEscapesSyncRoot)
+	assert.ErrorIs(t, o.Error, errPathEscapesSyncRoot)
 }
 
 // ---------------------------------------------------------------------------
@@ -3056,9 +3056,9 @@ func TestContainedPath_SymlinkEscape(t *testing.T) {
 	// Create a symlink inside root that points outside root.
 	require.NoError(t, os.Symlink(outside, filepath.Join(root, "escape")))
 
-	_, err := ContainedPath(root, "escape/secret.txt")
+	_, err := containedPath(root, "escape/secret.txt")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrPathEscapesSyncRoot)
+	assert.ErrorIs(t, err, errPathEscapesSyncRoot)
 }
 
 func TestContainedPath_SymlinkWithinRoot(t *testing.T) {
@@ -3071,7 +3071,7 @@ func TestContainedPath_SymlinkWithinRoot(t *testing.T) {
 	require.NoError(t, os.MkdirAll(target, 0o700))
 	require.NoError(t, os.Symlink(target, filepath.Join(root, "link")))
 
-	got, err := ContainedPath(root, "link/file.txt")
+	got, err := containedPath(root, "link/file.txt")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(root, "link", "file.txt"), got)
 }
@@ -3083,7 +3083,7 @@ func TestContainedPath_NonexistentPath_StillAllowed(t *testing.T) {
 
 	// Path doesn't exist on disk — EvalSymlinks will fail, so
 	// ContainedPath should fall back to lexical-only (still safe).
-	got, err := ContainedPath(root, "does/not/exist.txt")
+	got, err := containedPath(root, "does/not/exist.txt")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(root, "does", "not", "exist.txt"), got)
 }
@@ -3093,7 +3093,7 @@ func TestContainedPath_MissingSyncRootReturnsError(t *testing.T) {
 
 	root := filepath.Join(t.TempDir(), "missing-root")
 
-	_, err := ContainedPath(root, "file.txt")
+	_, err := containedPath(root, "file.txt")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "evaluating sync root symlinks")
 }
@@ -3121,7 +3121,7 @@ func TestExecutor_Upload_ETagMismatch(t *testing.T) {
 
 	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
 
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "conflict.txt", "local content")
 
 	action := &Action{
@@ -3129,7 +3129,7 @@ func TestExecutor_Upload_ETagMismatch(t *testing.T) {
 		Path:    "conflict.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
+		View: &pathView{
 			Path: "conflict.txt",
 			Baseline: &BaselineEntry{
 				ETag: "etag-baseline",
@@ -3139,7 +3139,7 @@ func TestExecutor_Upload_ETagMismatch(t *testing.T) {
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
 	assert.Contains(t, o.Error.Error(), "upload overwrite remote item item1 changed since planning")
 }
 
@@ -3162,7 +3162,7 @@ func TestExecutor_Upload_AlwaysChecksFreshnessWhenBaselineETagKnown(t *testing.T
 
 	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
 
-	e := NewExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "normal.txt", "content")
 
 	action := &Action{
@@ -3170,7 +3170,7 @@ func TestExecutor_Upload_AlwaysChecksFreshnessWhenBaselineETagKnown(t *testing.T
 		Path:    "normal.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &PathView{
+		View: &pathView{
 			Path: "normal.txt",
 			Baseline: &BaselineEntry{
 				ETag: "etag-baseline",
