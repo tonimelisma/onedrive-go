@@ -84,8 +84,7 @@ Optimize first for a codebase that is easy to reason about, easy to test, and ex
 
 These rules are the project-specific version of Pike/Hoare/KISS/Brooks. The short version: do not speculate, do not get clever early, and do not add coordination state without proof.
 
-- **Measure before optimizing.** Do not add caches, batching, special-case fast paths, or algorithmic complexity because they seem faster. In this codebase, bottlenecks are often Graph latency, filesystem I/O, or transactional boundaries — not the place intuition points first.
-- **Optimization needs evidence.** Performance work starts with profiles, benchmarks, or traces that show one part of the system dominating the rest. If the cost is not measured, it is not a justified optimization target.
+- **Measure before optimizing.** Do not add caches, batching, special-case fast paths, or algorithmic complexity without profiles, benchmarks, or traces showing that part dominates. In this codebase, bottlenecks are often Graph latency, filesystem I/O, or transactional boundaries — not the place intuition points first.
 - **Prefer simple algorithms while `n` is small.** Most sync decisions are per-path, per-folder, per-scope, or per-batch, and those sets are usually small. A direct linear scan over a small set is often the right choice until measured data proves otherwise.
 - **Prefer simple data structures over clever machinery.** Fancy algorithms and layered caches bring invalidation bugs, ownership confusion, and duplicate state. If a simpler structure is fast enough, it is the better design.
 - **Data model first, algorithm second.** Get the ownership boundaries, persisted state, and in-memory projections right first. When the data structures are correct, the right algorithm is usually obvious. If an optimization requires a second source of truth, it is probably the wrong optimization.
@@ -112,7 +111,7 @@ Project-specific consequences:
 - Comments and error prefixes must name the current package or concept, not the package or boundary that used to own the code before a refactor.
 - Functions do one thing, with side effects explicit in their name, signature, or owning type
 - Return concrete types by default. Define small interfaces in the consuming package at I/O, policy, or coordination seams
-- No package-level mutable state
+- No package-level mutable state; no goroutines in `init()` or at package scope
 - No magic numbers — use named constants near their usage
 - Always use named fields in struct literals — positional initialization breaks silently when fields are added
 - Unexported by default. Export only what other packages need. The exported API is a contract.
@@ -139,7 +138,6 @@ Project-specific consequences:
 - **Context is the cancellation backbone.** Every function that does I/O or could block takes `context.Context` as its first parameter. Respect cancellation: check `ctx.Err()` before expensive operations, and select on `ctx.Done()` in loops.
 - **Channel direction:** Always declare channel direction in function signatures (`chan<-`, `<-chan`). The sender closes, never the receiver.
 - **Mutex scope:** A mutex protects data, not code. Comment what fields it guards. Keep critical sections small — no I/O under a lock, no channel operations under a lock. Prefer `sync.Mutex` over `sync.RWMutex` unless profiling shows read contention.
-- **No goroutine in `init()` or package-level scope.** Goroutines start from explicit method calls, never implicitly.
 - **Worker pools have bounded concurrency.** Use semaphores (`chan struct{}`) or `errgroup.SetLimit()`. Never let fan-out scale with input size.
 
 ### Resource Lifecycle
