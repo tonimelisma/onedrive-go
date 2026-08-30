@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
 type statusJSON struct {
@@ -52,6 +54,7 @@ type statusAccountJSON struct {
 }
 
 type statusDriveJSON struct {
+	MountRef      string               `json:"mount_ref"`
 	Kind          string               `json:"kind"`
 	Name          string               `json:"name"`
 	Folder        string               `json:"folder"`
@@ -275,68 +278,44 @@ func findStatusDriveJSON(status statusJSON, identity string) (statusDriveJSON, b
 	if len(candidates) == 1 && !isStatusChildIdentity(identity) {
 		return candidates[0], true
 	}
+	// Children are matched by mount_ref, the stable opaque identity status JSON
+	// publishes (R-3.1.6). This replaces an "if there is exactly one shared
+	// folder it must be the right one" heuristic that broke as soon as an
+	// account had two shortcut children.
 	if isStatusChildIdentity(identity) {
+		ref := config.MountRef(identity)
+
 		var shared []statusDriveJSON
 		for i := range candidates {
 			collectStatusSharedFolders(candidates[i], &shared)
 		}
-		if len(shared) == 1 {
-			return shared[0], true
+
+		for i := range shared {
+			if shared[i].MountRef == ref {
+				return shared[i], true
+			}
 		}
 	}
 
 	return statusDriveJSON{}, false
 }
 
-// requireStatusSharedFolderAtFolder finds a shared-folder (shortcut child) row
-// by its local folder, which is the only stable identifier status --json
-// exposes for children today.
-//
-// The identity-based lookup below can only resolve a child when the account has
-// exactly one, because status omits mount identity from its JSON. That holds in
-// the fast lane but not in the full battery, where the writable and read-only
-// shortcut fixtures are both projected.
-func requireStatusSharedFolderAtFolder(
-	t *testing.T,
-	status statusJSON,
-	folder string,
-) statusDriveJSON {
-	t.Helper()
-
-	var shared []statusDriveJSON
-
-	for i := range status.Accounts {
-		for j := range status.Accounts[i].Drives {
-			collectStatusSharedFolders(status.Accounts[i].Drives[j], &shared)
-		}
-	}
-
-	for i := range shared {
-		if shared[i].Folder == folder {
-			return shared[i]
-		}
-	}
-
-	found := make([]string, 0, len(shared))
-	for i := range shared {
-		found = append(found, shared[i].Folder)
-	}
-
-	require.Failf(t, "missing shared folder status row",
-		"folder=%s found=%v", folder, found)
-
-	return statusDriveJSON{}
-}
-
 func findStatusSharedFolderJSON(drive statusDriveJSON, identity string) (statusDriveJSON, bool) {
 	if !isStatusChildIdentity(identity) {
 		return drive, true
 	}
+
+	ref := config.MountRef(identity)
+
 	var shared []statusDriveJSON
 	collectStatusSharedFolders(drive, &shared)
-	if len(shared) == 1 {
-		return shared[0], true
+
+	for i := range shared {
+		if shared[i].MountRef == ref {
+			return shared[i], true
+		}
 	}
+
 	return statusDriveJSON{}, false
 }
 
@@ -348,7 +327,16 @@ func collectStatusSharedFolders(drive statusDriveJSON, out *[]statusDriveJSON) {
 }
 
 func statusIdentityEmail(identity string) string {
-	parts := strings.Split(identity, ":")
+	// A child identity is "<parent canonical>|binding:<remote item id>". Split
+	// on ":" without trimming that suffix first and the email comes back as
+	// "user@example.com|binding", which matches no account, leaving the
+	// candidate set empty before any lookup runs.
+	base := identity
+	if index := strings.Index(base, statusChildIdentityMarker); index >= 0 {
+		base = base[:index]
+	}
+
+	parts := strings.Split(base, ":")
 	switch {
 	case len(parts) >= 2 && (parts[0] == "personal" || parts[0] == "business" || parts[0] == "shared"):
 		return parts[1]
@@ -357,8 +345,12 @@ func statusIdentityEmail(identity string) string {
 	}
 }
 
+// statusChildIdentityMarker separates a parent canonical ID from the shortcut
+// binding that makes a child mount identity.
+const statusChildIdentityMarker = "|binding:"
+
 func isStatusChildIdentity(identity string) bool {
-	return strings.Contains(identity, "|binding:")
+	return strings.Contains(identity, statusChildIdentityMarker)
 }
 
 func requireStatusDrive(

@@ -35,7 +35,7 @@ func TestE2E_Shortcut_ReadOnlyDownloadOnlyProjectsChildMount(t *testing.T) {
 
 	status := readStatusAllDrives(t, cfgPath, env)
 	requireStatusDrive(t, status, fixture.ParentDrive)
-	requireStatusSharedFolderAtFolder(t, status, filepath.Join(syncDir, record.RelativeLocalPath))
+	requireStatusDrive(t, status, record.MountID)
 }
 
 // Validates: R-2.8.1, R-3.6.1

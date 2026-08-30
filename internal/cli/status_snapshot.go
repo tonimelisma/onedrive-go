@@ -76,8 +76,14 @@ type statusStorage struct {
 // statusDrive holds status information for one configured drive or shared
 // folder shortcut. InternalID and NamespaceID are private runtime lookup keys.
 type statusDrive struct {
-	InternalID             string         `json:"-"`
-	NamespaceID            string         `json:"-"`
+	InternalID  string `json:"-"`
+	NamespaceID string `json:"-"`
+	// MountRef is the only identity published in status JSON. R-3.1.6 keeps
+	// canonical, mount, namespace and remote drive IDs out of the public
+	// surface because they carry the account email and, for shortcut children,
+	// the remote drive and item IDs. The ref is an opaque digest: stable across
+	// runs so a consumer can follow one mount, and revealing none of that.
+	MountRef               string         `json:"mount_ref"`
 	Kind                   string         `json:"kind"`
 	Name                   string         `json:"name"`
 	Folder                 string         `json:"folder"`
@@ -648,6 +654,7 @@ func buildConfiguredStatusDrive(
 		Folder:         config.EffectiveSyncDir(cfg, cid, drive.SyncDir, slog.New(slog.DiscardHandler)),
 		State:          driveState(drive),
 		MountID:        cid.String(),
+		MountRef:       config.MountRef(cid.String()),
 		ProjectionKind: statusProjectionStandalone,
 		CanonicalID:    cid.String(),
 		DisplayName:    statusConfiguredDriveName(cid, drive, acct),
@@ -690,6 +697,7 @@ func buildChildStatusDrive(
 		RecoveryClass:  string(metadata.RecoveryClass),
 		RecoveryAction: metadata.RecoveryAction,
 		MountID:        root.MountID,
+		MountRef:       config.MountRef(root.MountID),
 		ProjectionKind: statusProjectionChild,
 		DisplayName:    root.DisplayName,
 		SyncDir:        root.DisplayLocalRoot,

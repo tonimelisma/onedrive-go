@@ -67,3 +67,45 @@ func TestChildMountID_UsesParentAndBinding(t *testing.T) {
 	assert.Empty(t, ChildMountID("", "shortcut-item"))
 	assert.Empty(t, ChildMountID("parent", ""))
 }
+
+// Validates: R-2.2, R-4.1
+//
+// The mount-ref digest names a child mount's state database on disk. Changing
+// how the input is derived would rename existing state files and orphan their
+// contents, so the exact bytes hashed are pinned here.
+func TestMountRef_MatchesStateFileDigest(t *testing.T) {
+	t.Parallel()
+
+	const mountID = "personal:user@example.com|binding:ABC!s123"
+
+	ref := MountRef(mountID)
+	require.NotEmpty(t, ref)
+
+	path := MountStatePathForDataDir("/data", mountID)
+	assert.Equal(t, "/data/state_mount_"+ref+".db", path,
+		"the state file name must remain the mount ref digest")
+}
+
+// Validates: R-4.1
+func TestMountRef_IsStableUniqueAndOpaque(t *testing.T) {
+	t.Parallel()
+
+	const mountID = "personal:user@example.com|binding:ABC!s123"
+
+	ref := MountRef(mountID)
+	assert.Equal(t, ref, MountRef(mountID), "ref must be stable across calls")
+	assert.NotEqual(t, ref, MountRef(mountID+"x"), "distinct mounts must not collide")
+
+	// The point of the ref is that it reveals none of its inputs.
+	assert.NotContains(t, ref, "user@example.com")
+	assert.NotContains(t, ref, "ABC!s123")
+	assert.NotContains(t, ref, "personal:")
+}
+
+// Validates: R-4.1
+func TestMountRef_EmptyForBlankMountID(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, MountRef(""))
+	assert.Empty(t, MountRef("   "))
+}

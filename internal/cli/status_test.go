@@ -2003,3 +2003,64 @@ func TestBuildConfiguredStatusDrive_PrefersConfiguredSyncDir(t *testing.T) {
 
 	assert.Equal(t, "/explicit/path", got.Folder)
 }
+
+// Validates: R-3.1.6
+//
+// mount_ref is the only identity status JSON publishes. It must identify a
+// mount stably while revealing none of the things R-3.1.6 keeps private: the
+// account email, the canonical/mount ID, and for shortcut children the remote
+// drive and item IDs.
+func TestStatusJSON_MountRefIsOpaqueAndDoesNotLeakIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	const (
+		email        = "alice@example.com"
+		parentMount  = "personal:" + email
+		remoteItemID = "F1DA660E69BDEC82!s7407aa71fc804d818f125b99de2ab146"
+	)
+
+	childMount := config.ChildMountID(parentMount, remoteItemID)
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatusJSON(&buf, []statusAccount{{
+		Email: email,
+		Drives: []statusDrive{{
+			MountID:  parentMount,
+			MountRef: config.MountRef(parentMount),
+			Kind:     statusDriveKindPersonalOneDrive,
+			Name:     "personal",
+			State:    driveStateReady,
+			SharedFolders: []statusDrive{{
+				MountID:  childMount,
+				MountRef: config.MountRef(childMount),
+				Kind:     statusDriveKindSharedFolder,
+				Name:     "shared",
+				State:    driveStateReady,
+			}},
+		}},
+	}}))
+
+	out := buf.String()
+
+	assert.Contains(t, out, config.MountRef(parentMount))
+	assert.Contains(t, out, config.MountRef(childMount))
+
+	// The email is legitimately published at the account level, so only the
+	// identifier forms R-3.1.6 names are checked here.
+	assert.NotContains(t, out, parentMount, "canonical/mount ID must not appear")
+	assert.NotContains(t, out, childMount, "child mount ID must not appear")
+	assert.NotContains(t, out, remoteItemID, "remote item ID must not appear")
+	assert.NotContains(t, out, "binding:", "mount binding must not appear")
+}
+
+// Validates: R-3.1.6
+func TestStatusJSON_MountRefDistinguishesSiblingChildren(t *testing.T) {
+	t.Parallel()
+
+	parent := "personal:alice@example.com"
+	first := config.ChildMountID(parent, "DRIVE!s1")
+	second := config.ChildMountID(parent, "DRIVE!s2")
+
+	assert.NotEqual(t, config.MountRef(first), config.MountRef(second),
+		"two shortcut children under one parent must be distinguishable")
+}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,18 +21,19 @@ func normalizeGoldenText(s string) string {
 	return strings.ReplaceAll(s, "\r\n", "\n")
 }
 
-const (
-	updateGoldenFlagName = "update"
-)
+// updateGolden registers the -update flag CLAUDE.md documents for refreshing
+// golden files.
+//
+// It has to be a real registered flag: the testing package parses flags before
+// any test runs and rejects unknown ones, so scanning os.Args by hand meant
+// `go test -update` failed with "flag provided but not defined" and the
+// documented workflow never worked.
+//
+//nolint:gochecknoglobals // flag registration is package-level by definition.
+var updateGolden = flag.Bool("update", false, "rewrite golden files from current output")
 
 func updateGoldenEnabled() bool {
-	for _, arg := range os.Args[1:] {
-		if arg == "-"+updateGoldenFlagName {
-			return true
-		}
-	}
-
-	return false
+	return *updateGolden
 }
 
 func assertGoldenFile(t *testing.T, name string, actual []byte) {
