@@ -68,35 +68,50 @@ func TestOpen_Permissions(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
 }
 
-func TestOpen_CleansOldFiles(t *testing.T) {
+// Validates: R-4.7.3
+//
+// log_file is an arbitrary path the user chooses and has no default, so the
+// directory it lands in is very likely shared. Retention must delete this
+// program's own logs and nothing else: a neighboring file it never created
+// is not its to remove, however old.
+func TestOpen_CleansOwnOldLogsOnly(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
+	stale := time.Now().Add(-8 * 24 * time.Hour)
 
-	// Create an old log file (8 days ago).
-	oldPath := filepath.Join(dir, "old.log")
-	require.NoError(t, os.WriteFile(oldPath, []byte("old"), 0o600))
-	oldTime := time.Now().Add(-8 * 24 * time.Hour)
-	require.NoError(t, os.Chtimes(oldPath, oldTime, oldTime))
+	write := func(name string) string {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
+		require.NoError(t, os.Chtimes(path, stale, stale))
 
-	// Create a recent log file (1 day ago).
-	recentPath := filepath.Join(dir, "recent.log")
-	require.NoError(t, os.WriteFile(recentPath, []byte("recent"), 0o600))
-	recentTime := time.Now().Add(-1 * 24 * time.Hour)
-	require.NoError(t, os.Chtimes(recentPath, recentTime, recentTime))
+		return path
+	}
 
-	// Open a new log file with 7-day retention.
-	logPath := filepath.Join(dir, "current.log")
-	f, err := Open(logPath, 7)
+	ownCurrent := write("current.log")
+	ownRotation := write("current.log.1")
+	ownDated := write("current-2026-01-01.log")
+	foreign := write("backup.log")
+	foreignPrefixed := write("current-other-app.txt")
+
+	f, err := Open(filepath.Join(dir, "current.log"), 7)
 	require.NoError(t, err)
 	defer f.Close()
 
-	// Old file should be deleted, recent file should remain.
-	_, oldErr := os.Stat(oldPath)
-	assert.True(t, os.IsNotExist(oldErr), "old log file should be deleted")
+	// Reopening recreates the current log, so it exists but was emptied.
+	info, err := os.Stat(ownCurrent)
+	require.NoError(t, err)
+	assert.Zero(t, info.Size(), "the stale current log is cleared by retention")
 
-	_, recentErr := os.Stat(recentPath)
-	assert.NoError(t, recentErr, "recent log file should remain")
+	for _, path := range []string{ownRotation, ownDated} {
+		_, statErr := os.Stat(path)
+		assert.True(t, os.IsNotExist(statErr), "own rotation %s should be deleted", path)
+	}
+
+	for _, path := range []string{foreign, foreignPrefixed} {
+		_, statErr := os.Stat(path)
+		assert.NoError(t, statErr, "%s belongs to something else and must survive", path)
+	}
 }
 
 func TestOpen_RetentionLeavesNonExpiredFiles(t *testing.T) {

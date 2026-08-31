@@ -15,6 +15,9 @@ import (
 const (
 	dirPerm  = 0o755
 	filePerm = 0o644
+
+	// logExt is the suffix a rotated log keeps.
+	logExt = ".log"
 )
 
 // Open creates or opens a log file at the given path in append mode.
@@ -31,7 +34,7 @@ func Open(path string, retentionDays int) (*os.File, error) {
 	}
 
 	if retentionDays > 0 {
-		cleanOld(root, retentionDays)
+		cleanOwnOldLogs(root, name, retentionDays)
 	}
 
 	file, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_APPEND, filePerm)
@@ -46,8 +49,15 @@ func Open(path string, retentionDays int) (*os.File, error) {
 	return file, nil
 }
 
-// cleanOld deletes *.log files in dir that are older than retentionDays.
-func cleanOld(root *fsroot.Root, retentionDays int) {
+// cleanOwnOldLogs deletes this log file and its rotations when they are older
+// than retentionDays.
+//
+// Scoping matters here. log_file is an arbitrary path the user chooses and has
+// no default, so the directory it lands in is very likely shared -- a home
+// logs directory, or a system one. Deleting every *.log there would destroy
+// files this program never created and knows nothing about, which is not
+// retention but collateral damage.
+func cleanOwnOldLogs(root *fsroot.Root, logName string, retentionDays int) {
 	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
 
 	entries, err := root.ReadDir("")
@@ -56,7 +66,7 @@ func cleanOld(root *fsroot.Root, retentionDays int) {
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".log") {
+		if entry.IsDir() || !ownedLogName(logName, entry.Name()) {
 			continue
 		}
 
@@ -72,4 +82,25 @@ func cleanOld(root *fsroot.Root, retentionDays int) {
 			}
 		}
 	}
+}
+
+// ownedLogName reports whether candidate is the configured log file or one of
+// its rotations. A rotation carries the configured name as a prefix followed
+// by a separator, so "onedrive.log" owns "onedrive.log.1" and
+// "onedrive-2026-01-01.log" but never a neighboring "backup.log".
+func ownedLogName(logName, candidate string) bool {
+	if candidate == logName {
+		return true
+	}
+
+	if strings.HasPrefix(candidate, logName+".") {
+		return true
+	}
+
+	base := strings.TrimSuffix(logName, logExt)
+	if base == logName {
+		return false
+	}
+
+	return strings.HasPrefix(candidate, base+"-") && strings.HasSuffix(candidate, logExt)
 }

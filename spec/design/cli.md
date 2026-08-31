@@ -44,6 +44,19 @@ are inserted, updated, pruned, and validated.
 | Command failure presentation exhaustively maps the shared error classes, while lower layers still own their own domain classification. | `TestClassifyCommandError`, `TestCommandFailurePresentationForClass` |
 | Command-level side-effect contracts are tested at the CLI boundary: read-only commands do not mutate managed state, and mutating commands fail selector/path validation before remote mutation. | `TestRunLs_DoesNotMutateManagedState`, `TestRunRm_RequiresExplicitPathBeforeGraphMutation` |
 
+## Log Retention Deletes Only Its Own Logs
+
+`log_file` is an arbitrary path the user chooses, and it has no default, so the
+directory it lands in is very likely shared -- a home logs directory, or a
+system one. Retention therefore deletes only the configured log file and its
+rotations, matched by name.
+
+Deleting every `*.log` in that directory, which is what retention used to do,
+removes files this program never created and knows nothing about. That is not
+retention; the fact that it happens quietly, on a best-effort path that ignores
+its own errors, makes it worse. Nothing else in the product deletes outside
+what it owns, and a log directory is not owned merely by being written to.
+
 ## Account Names Are Untrusted Input
 
 Account names reach the CLI from the config file and the catalog, both of which
