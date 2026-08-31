@@ -24,6 +24,26 @@ Every driveId from any API response must be lowercased and zero-padded to 16 cha
 
 Delta responses include QuickXorHash, SHA1, or SHA256 hashes on items marked as deleted. These hashes are stale (from the item's last live state) or entirely bogus. The normalization pipeline clears all hashes on deleted items.
 
+### Remote Hashes Are Not Guaranteed To Share The Local Algorithm
+
+`driveops.SelectHash` picks the first populated hash in the order quickXor,
+sha256, sha1. Locally scanned files are *always* hashed with QuickXorHash, so a
+remote hash is only comparable with a local one when Graph supplied quickXor.
+
+Observed behavior: both live test accounts are OneDrive Personal, and delta
+responses carry quickXorHash there (28-character base64), so the fallback arms
+are not exercised in practice. The hazard is latent, not active.
+
+If a drive ever supplies only sha256/sha1, the effect is confined to the
+`current_equal` comparison, which compares a local hash against a remote one.
+That comparison requires equality to be *proven*, so a cross-algorithm pair can
+only ever produce "not equal" -- extra transfer or conflict work, never a
+false claim of agreement. Remote-versus-remote change detection is unaffected
+because both sides come from the same source and therefore the same algorithm.
+
+The durable fix is to record the algorithm alongside the digest so equality is
+only asserted between like algorithms. [planned]
+
 ### Files Without Any Hash
 
 Some Business/SharePoint files have no hash values at all. Microsoft confirmed this is a known issue: for enumeration/delta scenarios, hash generation may be "too expensive" for certain files. Zero-byte files consistently have no hash.

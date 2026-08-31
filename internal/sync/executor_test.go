@@ -1485,7 +1485,7 @@ func TestExecutor_Upload_KnownItemUsesItemOverwrite(t *testing.T) {
 	assert.Equal(t, "parent-from-item", o.ParentID)
 }
 
-func TestExecutor_Upload_B068_ZeroDriveIDFilled(t *testing.T) {
+func TestExecutor_Upload_ZeroDriveIDIsFilled(t *testing.T) {
 	t.Parallel()
 
 	var capturedDriveID driveid.ID

@@ -45,18 +45,22 @@ type scanResult struct {
 //	  ParentID, DriveID, ETag, CTag.
 //	  For ChangeDelete: Hash is empty; Size/Mtime from baseline entry.
 type changeEvent struct {
-	Source           changeSource
-	Type             changeType
-	Path             string     // NFC-normalized, relative to sync root
-	OldPath          string     // for moves only
-	ItemID           string     // server-assigned (remote only; empty for local)
-	ParentID         string     // server parent ID (remote only)
-	DriveID          driveid.ID // normalized (lowercase, zero-padded to 16 chars)
-	ItemType         ItemType
-	Name             string // URL-decoded, NFC-normalized
-	Size             int64
-	Hash             string // QuickXorHash (base64); empty for folders
-	Mtime            int64  // Unix nanoseconds
+	Source   changeSource
+	Type     changeType
+	Path     string     // NFC-normalized, relative to sync root
+	OldPath  string     // for moves only
+	ItemID   string     // server-assigned (remote only; empty for local)
+	ParentID string     // server parent ID (remote only)
+	DriveID  driveid.ID // normalized (lowercase, zero-padded to 16 chars)
+	ItemType ItemType
+	Name     string // URL-decoded, NFC-normalized
+	Size     int64
+	// Hash is a QuickXorHash (base64) for locally scanned rows. Remote rows
+	// carry whatever driveops.SelectHash picked, which prefers quickXor but
+	// falls back to sha256/sha1, so a remote hash is not guaranteed to be
+	// comparable with a local one. Empty for folders.
+	Hash             string
+	Mtime            int64 // Unix nanoseconds
 	LocalDevice      uint64
 	LocalInode       uint64
 	LocalHasIdentity bool

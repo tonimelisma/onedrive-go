@@ -21,9 +21,10 @@ type outputBoundaryViolation struct {
 }
 
 const (
-	verifyGitDir      = ".git"
-	verifyTestdataDir = ".testdata"
-	verifyVendorDir   = "vendor"
+	verifyGitDir       = ".git"
+	verifyTestdataDir  = ".testdata"
+	verifyWorktreesDir = ".worktrees"
+	verifyVendorDir    = "vendor"
 )
 
 func runOutputBoundaries(

@@ -115,7 +115,7 @@ func findTestConventionViolations(repoRoot string) ([]testConventionViolation, e
 
 func shouldSkipTestConventionDir(name string) bool {
 	switch name {
-	case verifyGitDir, verifyTestdataDir, ".worktrees", verifyVendorDir:
+	case verifyGitDir, verifyTestdataDir, verifyWorktreesDir, verifyVendorDir:
 		return true
 	default:
 		return false
