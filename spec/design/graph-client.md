@@ -273,6 +273,25 @@ shared-folder mounts. Direct
 `UpdateFileSystemInfo` calls outside the immediate simple-upload finalization
 path remain strict.
 
+## Paged Listings
+
+Every paged listing follows `@odata.nextLink` to completion, and every page
+loop is bounded.
+
+Both halves were incomplete. `/me/drives` and `/sites/{id}/drives` decoded a
+single page and stopped -- and the response type did not even declare the
+continuation field, so dropping it was undetectable. That failure is silent in
+the worst way: the caller receives a short list that looks complete, and a
+drive simply does not exist as far as the rest of the program is concerned.
+
+The bound matters for the opposite reason. Delta already refused to follow more
+than a fixed number of pages because a circular continuation would otherwise
+loop until the process died; the plain listings had no such guard. They share
+one now.
+
+Not every listing is paged. `SearchSites` takes a caller-supplied limit and
+passes it as `$top`, so its truncation is requested rather than accidental.
+
 ## Response Body Bounds
 
 Every response body this package buffers whole is capped. Error bodies use

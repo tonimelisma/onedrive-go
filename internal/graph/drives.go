@@ -57,7 +57,8 @@ type quotaFacet struct {
 
 // drivesListResponse wraps the value array from GET /me/drives.
 type drivesListResponse struct {
-	Value []driveResponse `json:"value"`
+	Value    []driveResponse `json:"value"`
+	NextLink string          `json:"@odata.nextLink"`
 }
 
 // toDrive normalizes a Graph API drive response into our Drive type.

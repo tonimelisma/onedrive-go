@@ -19,6 +19,8 @@ func (c *Client) SearchDriveItems(ctx context.Context, query string) ([]Item, er
 	var items []Item
 	path := fmt.Sprintf("/me/drive/root/search(q='%s')", url.QueryEscape(query))
 
+	pageNumber := 1
+
 	for path != "" {
 		page, nextPath, err := c.fetchItemPage(ctx, path, "search")
 		if err != nil {
@@ -27,6 +29,11 @@ func (c *Client) SearchDriveItems(ctx context.Context, query string) ([]Item, er
 
 		items = append(items, page...)
 		path = nextPath
+		pageNumber++
+
+		if pageNumber > defaultMaxListPages {
+			return nil, fmt.Errorf("graph: drive item search exceeded %d pages", defaultMaxListPages)
+		}
 	}
 
 	c.logger.Info("search returned items", slog.Int("count", len(items)))
