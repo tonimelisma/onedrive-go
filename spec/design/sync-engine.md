@@ -72,7 +72,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Executor live preconditions use the same superseded completion path as worker-start and admission stale-work checks. | `TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition`, `TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition` |
 | Watch runtime and admission record aggregate stale-work perf counters without exposing paths or IDs. | `TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependents`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestSnapshotAttrs_IncludesStaleWorkAndObservationCounters` |
 | Watch shutdown enters drain before accepting cancellation-closed intake channels as terminal, and non-canceled scheduler closure is fatal instead of a clean stop, so retry and trial timers stop at the observable shutdown boundary. | `TestWatchRuntime_RunNonDrainingWatchStep_CanceledClosedReplanStartsDrain`, `TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsBeforeReturn`, `TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsFromBootstrapPhase`, `TestWatchRuntime_RunNonDrainingWatchStep_ClosedReplanWithoutCancelErrors`, `TestRunWatch_ShutdownStopsRetryAndTrialTimers` |
-| The observer-backed watch loop starts through an explicit phase boundary after bootstrap quiescence, so a stale bootstrap phase cannot make steady-state watch exit cleanly without observer intake. | `TestWatchRuntime_BeginObserverBackedRunningNormalizesBootstrapPhase`, `TestWatchRuntime_BeginObserverBackedRunningRejectsDrainingOrDuplicateObservers`, `TestWatchRuntime_RunWatchLoop_BootstrapPhaseQuiescesAndReturnsToRunning` |
+| The observer-backed watch loop starts through an explicit phase boundary after bootstrap quiescence, so a stale bootstrap phase cannot make steady-state watch exit cleanly without observer intake. | `TestWatchRuntime_BeginObserverBackedRunningNormalizesBootstrapPhase`, `TestWatchRuntime_BeginObserverBackedRunningRejectsDrainingOrDuplicateObservers`, `TestWatchRuntime_RunWatchLoop_BootstrapPhaseQuiescesAndReturnsToRunning`, `TestRunWatchLoop_SteadyStateCompletionWithoutDrainingIsAnError`, `TestRunWatchUntilQuiescent_BootstrapCompletionStaysClean`, `TestStartObservers_RefusalDuringDrainClassifiesAsShutdown` |
 | Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
 | Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child work snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestShortcutRootTransitionMatrixEnumeratesEveryStateAndEvent`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroReturnsExplicitErrors` |
 | Pending watch replans retire old-runtime work that has not started yet, including dependents released by already-running old actions, and leave replacement work to a fresh plan from current truth. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal` |
@@ -590,6 +590,29 @@ Conflicts remain engine-owned and immediate:
 The engine stores only the baseline and current-truth facts needed for the next
 plan; conflict handling is visible as those concrete actions and executor
 outcomes.
+
+### Loop Completion Is Phase-Checked, Not Assumed
+
+Bootstrap and steady state share `runWatchLoop`, but they may not end for the
+same reasons. Bootstrap ends at quiescence; steady state may only end by
+draining. The phase boundary in `beginObserverBackedRunning` is what keeps a
+stale bootstrap phase from ending steady-state watch early, and the loop now
+also checks the rule it depends on: a steady-state loop that reports
+completion in any phase other than draining returns an error naming the phase
+and the context state.
+
+The distinction matters because the two outcomes are indistinguishable to the
+caller. Returning `nil` says "the shutdown you asked for finished"; but a loop
+that stops while its context is still live has stopped observing a mount the
+caller still believes is synced. That is silent staleness, and it is the one
+failure mode watch mode cannot report through its own health output, because
+the runtime that would report it is the one that stopped.
+
+Observer startup is classified the same way. Cancellation can land between
+bootstrap draining and observer startup, and the runtime then refuses to start
+observers into a drain. That refusal is not a context error, so it is matched
+by sentinel through `isWatchObserverStartupStopped` rather than by string, and
+only a refusal that coincides with a done context reads as a clean stop.
 
 ## Outcome And Scope Lifecycle
 
