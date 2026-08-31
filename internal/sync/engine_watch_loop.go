@@ -33,12 +33,20 @@ func (rt *watchRuntime) runWatchLoop(
 	p *watchPipeline,
 	bootstrapLogC ...<-chan time.Time,
 ) error {
-	if len(bootstrapLogC) == 0 {
+	// Bootstrap and steady state share this loop but end for different
+	// reasons. Bootstrap finishes when work due now has quiesced; steady
+	// state may only finish by draining. A steady-state loop that reports
+	// completion in any other phase has stopped watching while its caller
+	// still believes the mount is live, which is silent data staleness
+	// rather than a clean shutdown, so it is reported instead of returning
+	// the nil that hides it.
+	isBootstrapLoop := len(bootstrapLogC) > 0
+	if !isBootstrapLoop {
 		rt.replaceOutbox(nil)
 	}
 
 	var logC <-chan time.Time
-	if len(bootstrapLogC) > 0 {
+	if isBootstrapLoop {
 		logC = bootstrapLogC[0]
 	}
 
@@ -48,6 +56,16 @@ func (rt *watchRuntime) runWatchLoop(
 			return err
 		}
 		if done {
+			if phase := rt.phase(); !isBootstrapLoop && phase != watchRuntimePhaseDraining {
+				// Deliberately reports the context as a bool rather than
+				// wrapping ctx.Err(): wrapping would make this error satisfy
+				// isWatchShutdownError, and RunWatch would translate the very
+				// report of a missing drain into the clean shutdown it denies.
+				return fmt.Errorf(
+					"sync: watch loop completed in phase %q without draining (context done: %t)",
+					phase, ctx.Err() != nil)
+			}
+
 			return nil
 		}
 	}

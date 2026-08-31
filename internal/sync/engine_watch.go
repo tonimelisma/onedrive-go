@@ -95,6 +95,10 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions)
 		return fmt.Errorf("sync: refresh shortcut protected roots before watch observers: %w", err)
 	}
 	if err := rt.startObservers(ctx, pipe.bl, opts); err != nil {
+		if isWatchObserverStartupStopped(ctx, err) {
+			return nil
+		}
+
 		return err
 	}
 
@@ -106,6 +110,24 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions)
 		return err
 	}
 	return nil
+}
+
+// errWatchObserversDuringDrain reports a refusal to start watch observers
+// after a drain has begun. Callers branch on it to tell an ordinary startup
+// failure apart from a shutdown that overtook observer startup.
+var errWatchObserversDuringDrain = errors.New("sync: start watch observers during drain")
+
+// isWatchObserverStartupStopped reports whether a failure to start observers
+// describes the stop the caller asked for. Cancellation can land between
+// bootstrap draining and observer startup; the runtime then refuses to start
+// observers, and with the context already done that refusal is the shutdown
+// completing rather than a watch-mode failure.
+func isWatchObserverStartupStopped(ctx context.Context, err error) bool {
+	if isWatchShutdownError(ctx, err) {
+		return true
+	}
+
+	return ctx.Err() != nil && errors.Is(err, errWatchObserversDuringDrain)
 }
 
 func isWatchShutdownError(ctx context.Context, err error) bool {
