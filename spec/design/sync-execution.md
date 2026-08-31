@@ -118,6 +118,26 @@ evidence is not evidence of sameness, and a destructive action may not run on
 it. Each refusal is a superseded precondition, so the path is replanned rather
 than stranded, and a row that later hashes cleanly deletes normally.
 
+Local move checks that its destination is absent and then renames, which is
+the same check-then-act shape the conflict copy no longer uses. The asymmetry
+is deliberate, and worth stating so it does not read as an oversight.
+
+A conflict-copy collision is reachable by design: the destination name carries
+a one-second timestamp, so two copies resolved in the same second are handed
+the same name by construction, and no amount of care in the planner prevents
+it. A local move destination is chosen by the planner, verified absent, and
+serialized against other actions on that path by the dependency graph. What
+remains is the window between the check and the rename, which only something
+outside this program can fill.
+
+Closing that window atomically needs `RENAME_NOREPLACE` on Linux and
+`RENAME_EXCL` on macOS, with no equivalent on FreeBSD, which the build
+supports. The exclusive-create reservation used for conflict copies does not
+substitute here, because a local move can move a directory and a rename cannot
+replace a placeholder file with one. Rather than carry a three-way platform
+split and a type-dependent code path for a race the planner already narrows,
+the check stands and the residual risk is recorded here.
+
 A conflict copy claims its destination instead of finding a free one. The
 readable part of the name is the timestamp, but uniqueness cannot come from
 statting candidates and then renaming onto the winner: rename silently
