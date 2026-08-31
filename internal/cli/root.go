@@ -730,19 +730,30 @@ func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return false
 }
 
-// Handle dispatches the record to each handler that accepts its level.
+// Handle dispatches the record to every handler that accepts its level.
+//
+// One handler failing must not deprive the others of the record. The console
+// and file handlers exist precisely because they fail independently: a
+// terminal that goes away when output is piped into a command that exits
+// early, or a log file on a full disk. Returning at the first error would let
+// a broken console silently stop file logging, which is the half most worth
+// keeping.
 //
 //nolint:gocritic // slog.Handler interface requires value receiver for Record
 func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	var errs []error
+
 	for _, h := range m.handlers {
-		if h.Enabled(ctx, r.Level) {
-			if err := h.Handle(ctx, r); err != nil {
-				return fmt.Errorf("handle log record: %w", err)
-			}
+		if !h.Enabled(ctx, r.Level) {
+			continue
+		}
+
+		if err := h.Handle(ctx, r); err != nil {
+			errs = append(errs, fmt.Errorf("handle log record: %w", err))
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // WithAttrs returns a new multiHandler where each inner handler has the attrs.
