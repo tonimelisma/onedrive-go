@@ -17,7 +17,7 @@ const (
 	ClassShutdown
 	ClassSuperseded
 	ClassRetryableTransient
-	ClassBlockScopeingTransient
+	ClassScopeBlockingTransient
 	ClassActionable
 	ClassFatal
 )
@@ -39,7 +39,7 @@ func (c Class) String() string {
 		return "superseded"
 	case ClassRetryableTransient:
 		return "retryable transient"
-	case ClassBlockScopeingTransient:
+	case ClassScopeBlockingTransient:
 		return "scope-blocking transient"
 	case ClassActionable:
 		return "actionable"

@@ -559,7 +559,7 @@ func TestEngineFlow_ProcessTrialDecision_FallbackActivatesReclassifiedBlockedSco
 	require.NotNil(t, current)
 
 	ready, err := flow.applyTrialCompletionDecision(t.Context(), rt, trialScopeKey, &resultDecision{
-		Class:             errclass.ClassBlockScopeingTransient,
+		Class:             errclass.ClassScopeBlockingTransient,
 		ConditionKey:      ConditionRateLimited,
 		ConditionType:     issueRateLimited,
 		ScopeKey:          throttleScopeKey,
@@ -628,7 +628,7 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 	require.NotNil(t, current)
 
 	ready, err := flow.applyTrialCompletionDecision(t.Context(), rt, trialScopeKey, &resultDecision{
-		Class:             errclass.ClassBlockScopeingTransient,
+		Class:             errclass.ClassScopeBlockingTransient,
 		ConditionKey:      ConditionRateLimited,
 		ConditionType:     issueRateLimited,
 		ScopeKey:          throttleScopeKey,

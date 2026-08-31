@@ -87,7 +87,7 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 		flow.applyFatalAuthEffects(ctx, watch, r, decision.ConditionKey)
 		flow.recordError(decision, r)
 		return nil, fatalResultError(r)
-	case errclass.ClassRetryableTransient, errclass.ClassBlockScopeingTransient, errclass.ClassActionable:
+	case errclass.ClassRetryableTransient, errclass.ClassScopeBlockingTransient, errclass.ClassActionable:
 		if err := flow.applyOrdinaryFailureEffects(ctx, watch, current, decision, r); err != nil {
 			return nil, flow.failAfterControlStateError(current, err)
 		}
@@ -266,7 +266,7 @@ func (flow *engineFlow) applyPersistedFailureScopeEffects(
 	if decision.RunScopeDetection {
 		return flow.feedScopeDetection(ctx, watch, r)
 	}
-	if decision.Class != errclass.ClassBlockScopeingTransient || decision.ScopeKey.IsZero() {
+	if decision.Class != errclass.ClassScopeBlockingTransient || decision.ScopeKey.IsZero() {
 		return nil
 	}
 
@@ -285,7 +285,7 @@ func (flow *engineFlow) armFailureTimers(
 	if watch == nil {
 		return
 	}
-	if decision.Class == errclass.ClassBlockScopeingTransient {
+	if decision.Class == errclass.ClassScopeBlockingTransient {
 		watch.armTrialTimer()
 	}
 	if persisted {
@@ -503,7 +503,7 @@ func (flow *engineFlow) retryWorkShouldBeBlocked(
 	if scopeKey.IsZero() {
 		return false
 	}
-	if class == errclass.ClassBlockScopeingTransient {
+	if class == errclass.ClassScopeBlockingTransient {
 		return true
 	}
 	if class != errclass.ClassRetryableTransient {

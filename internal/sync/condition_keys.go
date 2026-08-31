@@ -44,7 +44,7 @@ func conditionKeyForRuntimeResult(class errclass.Class, conditionType string) Co
 	}
 
 	if class == errclass.ClassRetryableTransient ||
-		class == errclass.ClassBlockScopeingTransient ||
+		class == errclass.ClassScopeBlockingTransient ||
 		class == errclass.ClassActionable ||
 		class == errclass.ClassFatal {
 		return ConditionUnexpectedCondition
