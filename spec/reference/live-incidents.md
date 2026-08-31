@@ -19,6 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20260830-01 | Watch shutdown test intermittently saw watch mode stop before it began draining | instrumented | under investigation | 2026-08-30 | yes |
 | LI-20260823-01 | Graph returned `serviceReadOnly` on `/me/drives` for every test account | mitigated | provider outage | 2026-08-23 | no |
 | LI-20260503-01 | Nightly incremental-delta E2E failed on unrelated unrecoverable delete noise | fixed | product bug | 2026-05-03 | no |
 | LI-20260430-03 | NestedDeletion setup treated transient mount-root delta 504 as deterministic failure | fixed | test harness | 2026-04-30 | yes |
@@ -60,6 +61,64 @@ Promotion contract:
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20260830-01: Watch shutdown test intermittently saw watch mode stop before it began draining
+
+First seen: 2026-08-30
+Last seen: 2026-08-30
+Area: `internal/sync` watch runtime lifecycle
+Suite / test: `go test -race -count=50 ./internal/sync`,
+`TestRunWatch_ShutdownStopsRetryAndTrialTimers`
+Classification: under investigation
+Status: instrumented
+Recurring: yes
+Summary: Roughly one run in twenty-five, the test failed with
+`timed out waiting for debug event: shutdown started`. The reported symptom
+was misleading in two ways, and both were fixed; the underlying race is not
+yet explained.
+
+Evidence:
+- Reproduced 2 failures in 48 runs under `-race -count=50`. Two later probe
+  runs (50 and 60 iterations) reproduced nothing, so the window is narrow
+  enough that added work in the loop hides it.
+- `beginWatchDrain` emits `ShutdownStarted` and logs
+  `graceful shutdown: sealing new work admission` together under one
+  `enterDraining()` guard. Neither appears in a failing run, so the drain
+  genuinely never ran rather than the event being missed.
+- Log timestamps show `watch mode stopped` roughly one millisecond after the
+  observers started, and before the test called `cancel()`. `RunWatch`
+  therefore returned on its own with a live context; the test then waited the
+  full ten seconds for a shutdown that could no longer happen.
+- `runWatchLoopStep` calls `beginWatchDrainIfCanceled` at the top of every
+  iteration, so a loop that iterated even once after cancellation would have
+  drained. It did not, and the select cannot be the blocking point because
+  `<-ctx.Done()` is one of its cases.
+- Within the steady-state loop the only paths that report completion are
+  bootstrap quiescence and `drainLoopDone`. Every closed-channel handler
+  returns "not done" and nils its channel, and no signal handler reports
+  completion. Elimination points at a stale bootstrap phase, which is the
+  exact condition `beginObserverBackedRunning` exists to prevent, but no
+  probe has yet caught the phase in the act.
+
+Handling:
+- The steady-state loop now checks the rule it depended on: completing in any
+  phase other than draining returns an error naming the phase and the context
+  state, instead of the `nil` that made the stop silent.
+- `startObservers` refusing to start observers into a drain is now a sentinel
+  (`errWatchObserversDuringDrain`) and is classified through
+  `isWatchObserverStartupStopped`, so a cancellation landing between bootstrap
+  and observer startup reads as a clean stop. Previously that stage was the
+  only one in `RunWatch` whose error bypassed shutdown classification.
+- The test waited only on the debug event, so an early `RunWatch` return sat
+  unread in a buffered channel and surfaced as a timeout that said nothing.
+  `waitUntilSeenOrExit` now races the run's result against the event and
+  reports the run's own error.
+
+Open: the trigger is still unknown. 60 runs passed after these changes against
+a prior rate of 2 in 48, which is consistent with a fix but well short of
+proving one, and none of the three changes prevents an early exit -- they make
+the next occurrence name its own cause. Reopen this entry with the reported
+phase when it recurs.
 
 ## LI-20260823-01: Graph returned `serviceReadOnly` on `/me/drives` for every test account
 

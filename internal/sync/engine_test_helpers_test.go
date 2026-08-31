@@ -581,6 +581,47 @@ func (r *debugEventRecorder) waitForEvent(
 	}
 }
 
+// waitUntilSeenOrExit waits for a debug event while also watching the run's
+// result channel. When the run returns first, the awaited event can never
+// arrive, so the run's own error is reported instead of letting the wait
+// expire into a timeout that says nothing about why.
+func (r *debugEventRecorder) waitUntilSeenOrExit(
+	t *testing.T,
+	done <-chan error,
+	match func(engineDebugEvent) bool,
+	description string,
+) {
+	t.Helper()
+
+	if r.findEvent(match) {
+		return
+	}
+
+	timer := time.NewTimer(debugEventTimeout)
+	defer timer.Stop()
+
+	for {
+		select {
+		case event := <-r.events:
+			if match(event) {
+				return
+			}
+			if r.findEvent(match) {
+				return
+			}
+		case err := <-done:
+			if r.findEvent(match) {
+				return
+			}
+
+			require.FailNow(t, "run returned before debug event",
+				"%s: run returned %v", description, err)
+		case <-timer.C:
+			require.FailNow(t, "timed out waiting for debug event", description)
+		}
+	}
+}
+
 func (r *debugEventRecorder) waitUntilSeen(
 	t *testing.T,
 	match func(engineDebugEvent) bool,
