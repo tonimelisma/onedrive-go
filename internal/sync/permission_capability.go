@@ -17,7 +17,3 @@ const (
 func (c permissionCapability) IsLocal() bool {
 	return c == permissionCapabilityLocalRead || c == permissionCapabilityLocalWrite
 }
-
-func (c permissionCapability) IsRemote() bool {
-	return c == permissionCapabilityRemoteRead || c == permissionCapabilityRemoteWrite
-}

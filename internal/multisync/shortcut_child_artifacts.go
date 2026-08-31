@@ -34,12 +34,11 @@ const (
 type shortcutChildArtifactCleanupFailureClass string
 
 const (
-	shortcutChildArtifactCleanupSetupFailure           shortcutChildArtifactCleanupFailureClass = "setup"
-	shortcutChildArtifactCleanupStateArtifactFailure   shortcutChildArtifactCleanupFailureClass = "state_artifact"
-	shortcutChildArtifactCleanupCatalogFailure         shortcutChildArtifactCleanupFailureClass = "catalog"
-	shortcutChildArtifactCleanupTransferScratchFailure shortcutChildArtifactCleanupFailureClass = "transfer_scratch"
-	shortcutChildArtifactCleanupUploadSessionFailure   shortcutChildArtifactCleanupFailureClass = "upload_session"
-	shortcutChildArtifactCleanupParentAckFailure       shortcutChildArtifactCleanupFailureClass = "parent_ack"
+	shortcutChildArtifactCleanupSetupFailure         shortcutChildArtifactCleanupFailureClass = "setup"
+	shortcutChildArtifactCleanupStateArtifactFailure shortcutChildArtifactCleanupFailureClass = "state_artifact"
+	shortcutChildArtifactCleanupCatalogFailure       shortcutChildArtifactCleanupFailureClass = "catalog"
+	shortcutChildArtifactCleanupUploadSessionFailure shortcutChildArtifactCleanupFailureClass = "upload_session"
+	shortcutChildArtifactCleanupParentAckFailure     shortcutChildArtifactCleanupFailureClass = "parent_ack"
 )
 
 const (

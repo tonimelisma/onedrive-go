@@ -8,7 +8,6 @@ import (
 )
 
 const (
-	statusScopeAccount   = "account"
 	statusScopeDrive     = "drive"
 	statusScopeDirectory = "directory"
 	statusScopeService   = "service"
