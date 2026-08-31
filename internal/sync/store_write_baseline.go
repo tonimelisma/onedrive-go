@@ -765,8 +765,15 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 
 	mismatches := 0
 
-	// Check for entries in cache not in DB, or with different values.
-	for p, cached := range m.baseline.ByPath {
+	// Read through the baseline's own accessors rather than ranging its maps.
+	// Those maps are mutex-guarded, and this check exists to run against a
+	// live cache, so touching them directly is a race with the very mutations
+	// it is meant to audit.
+	//
+	// The callback must not call back into the baseline: ForEachPath holds the
+	// read lock for its duration, and a nested acquire can deadlock against a
+	// writer that queued in between. It only consults the local dbEntries map.
+	m.baseline.ForEachPath(func(p string, cached *BaselineEntry) {
 		dbEntry, ok := dbEntries[p]
 		if !ok {
 			m.logger.Warn("cache consistency: entry in cache not in DB",
@@ -775,7 +782,7 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 
 			mismatches++
 
-			continue
+			return
 		}
 
 		if !baselineEntriesEqual(cached, dbEntry) {
@@ -785,11 +792,11 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 
 			mismatches++
 		}
-	}
+	})
 
 	// Check for entries in DB not in cache.
 	for p := range dbEntries {
-		if _, ok := m.baseline.ByPath[p]; !ok {
+		if _, ok := m.baseline.GetByPath(p); !ok {
 			m.logger.Warn("cache consistency: entry in DB not in cache",
 				slog.String("path", p),
 			)
