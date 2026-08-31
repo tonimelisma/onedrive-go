@@ -505,12 +505,18 @@ func containedPath(syncRoot, relPath string) (string, error) {
 	return absPath, nil
 }
 
+// normalizeSyncTreePathError adds the sync-domain escape sentinel to a
+// containment failure from the sync tree.
+//
+// This used to match on the message text. That is fragile across a package
+// boundary -- rewording the sync tree's error silently stops the mapping --
+// and it could only ever recognize the two phrasings it knew about.
 func normalizeSyncTreePathError(err error) error {
 	if err == nil {
 		return nil
 	}
 
-	if strings.Contains(err.Error(), "escapes root") || strings.Contains(err.Error(), "must not be absolute") {
+	if errors.Is(err, synctree.ErrUnsafePath) {
 		return errors.Join(errPathEscapesSyncRoot, err)
 	}
 

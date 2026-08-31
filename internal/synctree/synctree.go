@@ -215,17 +215,21 @@ func (r *Root) Path() string {
 	return r.dir
 }
 
+// cleanRelative rejects paths that would leave the tree. Both refusals wrap
+// ErrUnsafePath: containment failures are the definition of an unsafe path,
+// and callers classify on that sentinel to tell a permanent path problem from
+// a transient one.
 func cleanRelative(path string) (string, error) {
 	if path == "" {
 		return ".", nil
 	}
 	if filepath.IsAbs(path) {
-		return "", fmt.Errorf("relative path %q must not be absolute", path)
+		return "", fmt.Errorf("%w: relative path %q must not be absolute", ErrUnsafePath, path)
 	}
 
 	clean := filepath.Clean(path)
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("relative path %q escapes root", path)
+		return "", fmt.Errorf("%w: relative path %q escapes root", ErrUnsafePath, path)
 	}
 	if clean == "." {
 		return ".", nil
