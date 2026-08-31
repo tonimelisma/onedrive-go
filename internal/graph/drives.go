@@ -18,7 +18,6 @@ type userResponse struct {
 // toUser normalizes a Graph API user response into our User type.
 // Email resolution: prefer `mail` (authoritative for Business accounts),
 // fall back to `userPrincipalName` when mail is empty (Personal accounts).
-// See B-280 for the rationale behind this fallback chain.
 func (u *userResponse) toUser() User {
 	email := u.Mail
 	if email == "" {
