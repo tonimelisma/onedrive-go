@@ -397,3 +397,59 @@ func (f *fakeTempFile) Sync() error {
 func (f *fakeTempFile) Close() error {
 	return f.closeErr
 }
+
+// Validates: R-6.5.4
+//
+// Syncing the temp file makes its contents durable, but the rename that gives
+// those contents their final name is a directory update. Until the directory
+// itself is synced, a crash can leave the target missing or still holding its
+// previous contents even though the new bytes reached the disk -- the one
+// outcome an atomic write exists to rule out.
+func TestAtomicWriteSyncsTargetDirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	var synced []string
+
+	realSync := root.ops.syncDir
+	root.ops.syncDir = func(path string) error {
+		synced = append(synced, path)
+
+		return realSync(path)
+	}
+
+	require.NoError(t, root.AtomicWrite("nested/state.json", []byte("{}"), 0o600, 0o700, ".state-*.tmp"))
+
+	require.Len(t, synced, 1, "the directory holding the renamed file must be synced")
+	assert.Equal(t, filepath.Join(dir, "nested"), synced[0],
+		"the sync must target the directory the rename landed in, not the managed root")
+}
+
+// Validates: R-6.5.4
+//
+// A write whose durability cannot be established must say so. The rename has
+// already happened, so the contents are visible, but reporting success would
+// claim a guarantee the filesystem refused to give.
+func TestAtomicWriteReportsDirectorySyncFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	root.ops.syncDir = func(string) error {
+		return errors.New("no space left on device")
+	}
+
+	err = root.AtomicWrite("state.json", []byte("{}"), 0o600, 0o700, ".state-*.tmp")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no space left on device")
+
+	// The bytes are still in place: only the durability guarantee failed.
+	data, readErr := root.ReadFile("state.json")
+	require.NoError(t, readErr)
+	assert.Equal(t, "{}", string(data))
+}
