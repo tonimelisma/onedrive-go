@@ -24,7 +24,6 @@ import (
 const (
 	specDesignDir   = "spec/design"
 	governsPrefix   = "GOVERNS:"
-	governsRootDoc  = "spec/requirements/index.md"
 	routingTableDoc = "CLAUDE.md"
 )
 

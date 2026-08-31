@@ -11,7 +11,6 @@ const (
 	engineDebugEventScopeReleased                       engineDebugEventType = "scope_released"
 	engineDebugEventScopeDiscarded                      engineDebugEventType = "scope_discarded"
 	engineDebugEventRetryKicked                         engineDebugEventType = "retry_kicked"
-	engineDebugEventTrialDispatched                     engineDebugEventType = "trial_dispatched"
 	engineDebugEventStartupScopeNormalized              engineDebugEventType = "startup_scope_normalized"
 	engineDebugEventBootstrapQuiesced                   engineDebugEventType = "bootstrap_quiesced"
 	engineDebugEventObserverStarted                     engineDebugEventType = "observer_started"

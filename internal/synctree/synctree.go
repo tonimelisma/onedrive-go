@@ -460,15 +460,6 @@ func (r *Root) Lstat(rel string) (os.FileInfo, error) {
 	})
 }
 
-func (r *Root) LstatAbs(abs string) (os.FileInfo, error) {
-	rel, err := r.Rel(abs)
-	if err != nil {
-		return nil, err
-	}
-
-	return r.Lstat(rel)
-}
-
 func (r *Root) PathStateNoFollow(rel string) (PathState, error) {
 	info, err := r.Lstat(rel)
 	if err != nil {
