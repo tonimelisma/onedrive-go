@@ -19,6 +19,13 @@ const (
 	// malicious or buggy servers returning enormous error responses (B-314).
 	maxErrBodySize = 64 * 1024
 
+	// maxItemResponseSize caps a success-path driveItem body. Every other
+	// response in this package is either streamed or already bounded; this one
+	// is buffered whole to tell an empty success body apart from a real item,
+	// so it needs its own ceiling. A driveItem is a few KB, so no legitimate
+	// response approaches this.
+	maxItemResponseSize = 1024 * 1024
+
 	// maxDeltaPages is the upper bound on pages fetched by DeltaAll/DeltaFolderAll.
 	// A buggy API or circular NextLinks could loop forever without this guard.
 	defaultMaxDeltaPages = 10000

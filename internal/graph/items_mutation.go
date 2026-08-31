@@ -44,9 +44,15 @@ func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID,
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
-	body, err := io.ReadAll(resp.Body)
+	// Reads one byte past the cap so an oversized body is reported rather than
+	// silently truncated into a confusing JSON syntax error.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxItemResponseSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("graph: reading create folder response: %w", err)
+	}
+
+	if len(body) > maxItemResponseSize {
+		return nil, fmt.Errorf("graph: create folder response exceeds %d bytes", maxItemResponseSize)
 	}
 
 	if len(bytes.TrimSpace(body)) == 0 {

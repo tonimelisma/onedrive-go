@@ -273,6 +273,20 @@ shared-folder mounts. Direct
 `UpdateFileSystemInfo` calls outside the immediate simple-upload finalization
 path remain strict.
 
+## Response Body Bounds
+
+Every response body this package buffers whole is capped. Error bodies use
+`maxErrBodySize`; the create-folder success body uses `maxItemResponseSize`.
+
+That last one is the only success path that buffers rather than streams, and
+it does so for a reason: Graph sometimes returns an empty body on a successful
+create, which is indistinguishable from a real item to a streaming decoder, so
+the bytes are read first and an empty body triggers a follow-up read of the
+created folder. Buffering is what makes the cap necessary -- without it the
+server chooses how much memory the client spends. An oversized body is
+reported as an error rather than truncated, because a truncated JSON document
+fails as a confusing syntax error that hides the real cause.
+
 ## Error Handling (`errors.go`)
 
 Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `ErrConflict` (409). Error response bodies are read with a 64 KiB cap (`io.LimitReader`) to prevent unbounded memory allocation from malformed responses. HTTP 423 (Locked) from SharePoint co-authoring is classified as skip, not retryable — locks persist for hours; watch mode retries on the next safety scan.
