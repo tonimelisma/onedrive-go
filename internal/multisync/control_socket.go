@@ -22,11 +22,18 @@ import (
 )
 
 const (
-	controlSocketDirPerm  = 0o700
-	controlSocketFilePerm = 0o600
-	controlDialTimeout    = 200 * time.Millisecond
-	controlCloseTimeout   = time.Second
-	controlHeaderTimeout  = 5 * time.Second
+	controlSocketDirPerm = 0o700
+
+	// controlSocketDirOtherWrite is group or other write permission, which is
+	// what lets another user replace entries in the directory.
+	controlSocketDirOtherWrite = 0o022
+	controlSocketFilePerm      = 0o600
+	controlDialTimeout         = 200 * time.Millisecond
+	controlCloseTimeout        = time.Second
+	controlHeaderTimeout       = 5 * time.Second
+
+	// maxControlRequestBytes bounds a control request body.
+	maxControlRequestBytes = 64 * 1024
 )
 
 type controlCommandKind int
@@ -74,8 +81,12 @@ func startControlSocketServer(
 	if path == "" {
 		return nil, fmt.Errorf("control socket path is empty")
 	}
-	if err := localpath.MkdirAll(filepath.Dir(path), controlSocketDirPerm); err != nil {
+	socketDir := filepath.Dir(path)
+	if err := localpath.MkdirAll(socketDir, controlSocketDirPerm); err != nil {
 		return nil, fmt.Errorf("create control socket directory: %w", err)
+	}
+	if err := assertControlSocketDirSafe(socketDir); err != nil {
+		return nil, err
 	}
 
 	listener, err := listenControlSocket(ctx, path)
@@ -125,6 +136,53 @@ func startControlSocketServer(
 	}()
 
 	return control, nil
+}
+
+// assertControlSocketDirSafe refuses to serve from a directory another user
+// could hijack the socket in.
+//
+// The socket file itself is 0600, so other users cannot connect to it. The
+// attack that permission does not stop is replacement: anyone who can create
+// entries in the directory can unlink our socket and bind their own, and the
+// CLI then talks to them. So the property that matters is who may write to the
+// directory, not who may read it.
+//
+// That distinction matters because MkdirAll only applies its mode to
+// directories it creates. The socket path falls back to a name under the
+// system temp directory when the data-directory path would exceed the Unix
+// socket length limit, and that name is a predictable hash, so a local user
+// can create it first and own it.
+//
+// Safe means the directory is ours or the system's, and is either closed to
+// other writers or sticky. The sticky bit is what makes a shared temp
+// directory safe: others may create their own entries there but cannot remove
+// ours. An attacker-owned directory is refused even when sticky, because its
+// owner can always remove what it contains.
+func assertControlSocketDirSafe(dir string) error {
+	info, err := localpath.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("stat control socket directory: %w", err)
+	}
+
+	mode := info.Mode()
+	if mode.Perm()&controlSocketDirOtherWrite != 0 && mode&os.ModeSticky == 0 {
+		return fmt.Errorf(
+			"control socket directory %s is writable by other users without the sticky bit (mode %#o); "+
+				"another user could replace the socket", dir, mode.Perm())
+	}
+
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+
+	if owner := stat.Uid; owner != uint32(os.Getuid()) && owner != 0 {
+		return fmt.Errorf(
+			"control socket directory %s is owned by uid %d, not this user or root; "+
+				"its owner could replace the socket", dir, owner)
+	}
+
+	return nil
 }
 
 func listenControlSocket(ctx context.Context, path string) (net.Listener, error) {
@@ -297,7 +355,10 @@ func (o *Orchestrator) handlePerfCaptureRequest(
 	mode synccontrol.OwnerMode,
 ) {
 	var request synccontrol.PerfCaptureRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	// Bounded because the daemon is long-lived and this body is decoded whole.
+	// A PerfCaptureRequest is a handful of fields, so the ceiling is far above
+	// anything legitimate.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlRequestBytes)).Decode(&request); err != nil {
 		writeJSON(w, http.StatusBadRequest, synccontrol.MutationResponse{
 			Status:  synccontrol.StatusError,
 			Code:    synccontrol.ErrorInvalidRequest,
