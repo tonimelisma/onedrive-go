@@ -451,7 +451,7 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 			Path:    "result-test.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "del-id",
-			View:    &pathView{},
+			View:    &pathView{Baseline: syncedBaselineFor(t, filepath.Join(syncRoot, "result-test.txt"))},
 		},
 	}
 
@@ -673,7 +673,7 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 			Path:    "test-no-complete.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "del-id",
-			View:    &pathView{},
+			View:    &pathView{Baseline: syncedBaselineFor(t, filepath.Join(syncRoot, "test-no-complete.txt"))},
 		},
 	}
 
@@ -892,7 +892,7 @@ func TestEngineOwnsCounters(t *testing.T) {
 			Path:    "ok.txt",
 			DriveID: driveid.New("0000000000000001"),
 			ItemID:  "ok-id",
-			View:    &pathView{},
+			View:    &pathView{Baseline: syncedBaselineFor(t, filepath.Join(syncRoot, "ok.txt"))},
 		},
 		{
 			Type:    ActionDownload,
@@ -947,4 +947,25 @@ func TestExtractRetryAfter_Wrapped(t *testing.T) {
 	ge := &graph.GraphError{StatusCode: 503, RetryAfter: 120 * time.Second}
 	wrapped := fmt.Errorf("request failed: %w", ge)
 	assert.Equal(t, 120*time.Second, extractRetryAfter(wrapped))
+}
+
+// syncedBaselineFor describes a file on disk as it was at its last sync, so
+// local-delete fixtures carry the baseline evidence S4 requires before
+// deleting. Fixtures that omit it are asking the executor to delete content
+// it cannot verify, which the planner never does in production.
+func syncedBaselineFor(t *testing.T, absPath string) *BaselineEntry {
+	t.Helper()
+
+	hash, err := driveops.ComputeQuickXorHash(absPath)
+	require.NoError(t, err)
+
+	info, err := os.Stat(absPath)
+	require.NoError(t, err)
+
+	return &BaselineEntry{
+		LocalHash:      hash,
+		LocalSize:      info.Size(),
+		LocalSizeKnown: true,
+		LocalMtime:     info.ModTime().UnixNano(),
+	}
 }

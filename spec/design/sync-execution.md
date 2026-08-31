@@ -35,7 +35,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Behavior | Evidence |
 | --- | --- |
 | Edit/edit and create/create conflicts are handled immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestExecutor_ConflictDownloadFails_LeavesConflictCopy`, `TestConflictCopyPath_Normal` |
-| Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
+| Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestExecutor_LocalDelete_NoBaselineHashAndChangedFile_PreservesLocalContent`, `TestExecutor_LocalDelete_NoBaselineHashAndUnchangedFile_Deletes`, `TestExecutor_LocalDelete_NoBaselineEvidence_PreservesLocalContent`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
 | Worker-start validation rejects already-submitted stale actions before executor side effects, while suspect local truth disables local-state-based rejection. Dependent uploads after planned remote moves tolerate move-produced eTag churn but still reject proven remote content drift, and executable actions without planner truth fail closed. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState`, `TestActionFreshness_PostRemoteMoveUploadAllowsMoveProducedETagChange`, `TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange`, `TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction` |
 | Local mutation is refused beneath a symlinked ancestor, at every mutating action, with the target content outside the sync root left byte-identical. | `TestExecutor_Download_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorSourceIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorDestinationIsBlocked`, `TestExecutor_ConflictCopy_SymlinkedAncestorIsBlocked`, `TestExecutor_CreateLocalFolder_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition`, `TestExecutor_LocalDelete_AliasItselfStillRemovesOnlyTheSymlink`, `TestExecutor_LocalMove_WithoutSymlinkBoundarySucceeds` |
 | Executor live preconditions reject stale work at the side-effect boundary without mutating local or remote state. | `TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure`, `TestExecutor_RemoteDelete_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_RemoteDelete_WrongDrivePreflightReturnsStalePrecondition`, `TestExecutor_RemoteDelete_StalePathPreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_StaleSourcePreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_CreateRemoteFolder_MissingParentPreflightReturnsStalePrecondition`, `TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition`, `TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition`, `TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStalePrecondition`, `TestExecutor_Download_MountRootAllowsGraphDriveRootPath`, `TestExecutor_LocalMove_SourceChangedReturnsStalePrecondition`, `TestExecutor_LocalMove_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition` |
@@ -100,6 +100,23 @@ boundary instead of guessed during result reporting. Delete-side stale
 preconditions follow that same rule: local delete missing/hash-mismatch races
 carry local-write capability, and remote delete not-found-after-preflight races
 carry remote-write capability.
+
+Local delete verifies before it destroys, and the verification has to hold
+when the baseline carries no hash. The scanner records an empty hash when
+hashing a file fails, so an unhashed baseline row is a normal state rather
+than a corrupt one. Deleting on that row without a check would remove local
+content without ever asking whether the user changed it since -- the exact
+loss S4 exists to prevent, reached through the gap in S4's own precondition.
+
+The executor therefore verifies in three tiers: by hash when the baseline
+records one; otherwise by the baseline's recorded size and mtime; and when the
+baseline records neither, it refuses. Size and mtime are too weak to prove two
+files equal, which is why planning never uses them that way, but they are
+sound in this direction: any difference is proof the file changed. The refusal
+on no evidence is the same rule stated for the empty case -- absence of
+evidence is not evidence of sameness, and a destructive action may not run on
+it. Each refusal is a superseded precondition, so the path is replanned rather
+than stranded, and a row that later hashes cleanly deletes normally.
 
 The dependency graph is dependency-only. It no longer defines runtime
 quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,

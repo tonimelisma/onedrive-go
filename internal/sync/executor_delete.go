@@ -189,7 +189,41 @@ func (e *executor) DeleteLocalFile(_ context.Context, action *Action, absPath st
 		baselineRemoteHash = action.View.Baseline.RemoteHash
 	}
 
-	// S4 safety: verify hash before delete.
+	// S4 safety: verify before delete. A baseline row can carry no local hash
+	// -- the scanner records an empty hash when hashing a file fails -- and
+	// skipping the check there would delete local content without ever asking
+	// whether the user changed it, which is the destructive half of the case
+	// S4 exists to prevent. Without a hash the baseline's size and mtime are
+	// the only evidence left. They are too weak to prove two files equal, but
+	// they are sound as a guard: any difference is proof the file changed, and
+	// a destructive action may not run on no evidence at all.
+	if baselineHash == "" {
+		var baselineEntry *BaselineEntry
+		if action.View != nil {
+			baselineEntry = action.View.Baseline
+		}
+
+		if !localDeleteUnchangedWithoutHash(baselineEntry, info) {
+			e.logger.Warn("local delete: no baseline hash and local file is unverified, keeping local file and requiring replan",
+				slog.String("path", action.Path),
+			)
+
+			return e.failedOutcomeWithFailure(
+				action,
+				ActionLocalDelete,
+				fmt.Errorf("%w: local delete unverifiable for %s (no baseline hash; remote=%s size=%d mtime=%d)",
+					errActionPreconditionChanged,
+					action.Path,
+					baselineRemoteHash,
+					info.Size(),
+					info.ModTime().UnixNano(),
+				),
+				action.Path,
+				permissionCapabilityLocalWrite,
+			)
+		}
+	}
+
 	if baselineHash != "" {
 		currentHash, err := e.hashFunc(absPath)
 		if err != nil {
@@ -288,4 +322,16 @@ func (e *executor) DeleteOutcome(action *Action, actionType actionType) actionOu
 		ItemID:   action.ItemID,
 		ItemType: actionItemType(action),
 	}
+}
+
+// localDeleteUnchangedWithoutHash reports whether the baseline holds positive
+// evidence that the file on disk is still the one that was synced, for rows
+// that carry no local hash. Absence of evidence is not evidence of sameness,
+// so an unknown size answers false rather than defaulting to deletable.
+func localDeleteUnchangedWithoutHash(entry *BaselineEntry, info os.FileInfo) bool {
+	if entry == nil || info == nil || !entry.LocalSizeKnown {
+		return false
+	}
+
+	return entry.LocalSize == info.Size() && entry.LocalMtime == info.ModTime().UnixNano()
 }
