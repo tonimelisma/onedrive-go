@@ -44,6 +44,20 @@ are inserted, updated, pruned, and validated.
 | Command failure presentation exhaustively maps the shared error classes, while lower layers still own their own domain classification. | `TestClassifyCommandError`, `TestCommandFailurePresentationForClass` |
 | Command-level side-effect contracts are tested at the CLI boundary: read-only commands do not mutate managed state, and mutating commands fail selector/path validation before remote mutation. | `TestRunLs_DoesNotMutateManagedState`, `TestRunRm_RequiresExplicitPathBeforeGraphMutation` |
 
+## Account Names Are Untrusted Input
+
+Account names reach the CLI from the config file and the catalog, both of which
+the user can edit by hand. Building a canonical ID from one with a `Must`
+constructor treated a hand-edited name as a programmer error: an empty account,
+or one containing a colon, panicked `status` and the auth health check with a
+stack trace instead of reporting a problem.
+
+Token fallback now constructs the canonical ID through the checked constructor
+and degrades to the zero value, which every caller already treats as "no login
+for this account" -- `DriveTokenPath` returns an empty path and
+`ResolveAccountNames` returns empty names. The degraded answer is the correct
+one: a name that cannot form a canonical ID cannot have a token on disk.
+
 ## Signal Handling
 
 Signal handling is installed once, at the process entry point, so every command

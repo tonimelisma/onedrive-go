@@ -45,8 +45,19 @@ const (
 // and returns whichever one has a token file on disk. Falls back to
 // "personal:" if neither exists, since personal is the most common case.
 // Logs the probe results so --debug reveals which token path was selected.
+//
+// Account names arrive from the config file and the catalog, both of which the
+// user can edit, so a name that cannot form a canonical ID is bad input rather
+// than a programmer error. It yields the zero value, which every caller
+// already treats as "no login for this account".
 func findTokenFallback(account string, logger *slog.Logger) driveid.CanonicalID {
-	personalID := driveid.MustCanonicalID("personal:" + account)
+	personalID, err := driveid.Construct(driveid.DriveTypePersonal, account)
+	if err != nil {
+		logger.Debug("token fallback: account has no valid canonical ID",
+			"account", account, "error", err)
+
+		return driveid.CanonicalID{}
+	}
 
 	personalPath := config.DriveTokenPath(personalID)
 	if personalPath != "" {
@@ -57,7 +68,13 @@ func findTokenFallback(account string, logger *slog.Logger) driveid.CanonicalID 
 		}
 	}
 
-	businessID := driveid.MustCanonicalID("business:" + account)
+	businessID, err := driveid.Construct(driveid.DriveTypeBusiness, account)
+	if err != nil {
+		logger.Debug("token fallback: account has no valid business canonical ID",
+			"account", account, "error", err)
+
+		return driveid.CanonicalID{}
+	}
 
 	businessPath := config.DriveTokenPath(businessID)
 	if businessPath != "" {
