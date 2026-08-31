@@ -21,6 +21,8 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 			defer obsWg.Done()
 			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
 			defer close(batches)
+			defer recoverObserverPanic(rt.engine.logger, observerNameRemote, errs)
+
 			errs <- rt.watchMountRootRemote(ctx, bl, batches, pollInterval)
 		}()
 		return
@@ -47,6 +49,8 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		defer obsWg.Done()
 		defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
 		defer close(batches)
+		defer recoverObserverPanic(rt.engine.logger, observerNameRemote, errs)
+
 		errs <- remoteObs.Watch(
 			ctx,
 			savedToken,

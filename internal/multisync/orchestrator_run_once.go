@@ -248,6 +248,7 @@ func (o *Orchestrator) buildEngineWork(
 			selectionIndex: mount.selectionIndex(),
 			identity:       mount.identity(),
 			displayName:    mount.displayName(),
+			logger:         o.logger,
 		},
 		mount:     mount,
 		engine:    engine,

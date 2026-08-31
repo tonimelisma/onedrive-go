@@ -384,11 +384,33 @@ func (rt *watchRuntime) startObservers(
 	count++
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverLocal})
 
+	rt.startLocalObserver(ctx, &obsWg, localObs, localBatches, protectedRootEvents, errs)
+
+	rt.observerErrs = errs
+	rt.activeObservers = count
+	rt.skippedItems = skippedCh
+	rt.localBatches = localBatches
+	rt.protectedRootEvents = protectedRootEvents
+	rt.remoteBatches = remoteBatches
+	return nil
+}
+
+// startLocalObserver owns the local observer goroutine, mirroring
+// startRemoteObserver so both observers are launched through one shape.
+func (rt *watchRuntime) startLocalObserver(
+	ctx context.Context,
+	obsWg *stdsync.WaitGroup,
+	localObs *localObserver,
+	localBatches chan<- localObservationBatch,
+	protectedRootEvents chan<- protectedRootEvent,
+	errs chan<- error,
+) {
 	go func() {
 		defer obsWg.Done()
 		defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverLocal})
 		defer close(localBatches)
 		defer close(protectedRootEvents)
+		defer recoverObserverPanic(rt.engine.logger, observerNameLocal, errs)
 
 		watchErr := localObs.Watch(ctx, rt.engine.syncTree, nil)
 		if errors.Is(watchErr, errWatchLimitExhausted) {
@@ -406,14 +428,6 @@ func (rt *watchRuntime) startObservers(
 
 		errs <- watchErr
 	}()
-
-	rt.observerErrs = errs
-	rt.activeObservers = count
-	rt.skippedItems = skippedCh
-	rt.localBatches = localBatches
-	rt.protectedRootEvents = protectedRootEvents
-	rt.remoteBatches = remoteBatches
-	return nil
 }
 
 func (rt *watchRuntime) startRemoteObserver(
