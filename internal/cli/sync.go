@@ -41,12 +41,9 @@ func runSync(cmd *cobra.Command, _ []string) error {
 
 	mode := syncModeFromFlags(cmd)
 	cc := mustCLIContext(cmd.Context())
-	logger := cc.Logger
-
-	// Wrap the command context with signal handling: first SIGINT/SIGTERM
-	// triggers graceful shutdown (context cancel → drain in-flight actions),
-	// second signal force-exits. Applies to both one-shot and watch modes.
-	ctx := shutdownContext(cmd.Context(), logger)
+	// Signal handling is installed once for every command at the process
+	// entry point, so the command context already cancels on SIGINT/SIGTERM.
+	ctx := cmd.Context()
 
 	dryRunValue, dryRunSet, err := syncDryRunOverride(cmd)
 	if err != nil {
