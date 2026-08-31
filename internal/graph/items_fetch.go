@@ -60,6 +60,10 @@ func (c *Client) fetchAllChildren(
 		items = append(items, pageItems...)
 		apiPath = nextPath
 		page++
+
+		if page > defaultMaxListPages {
+			return nil, fmt.Errorf("graph: %s exceeded %d pages", entryMsg, defaultMaxListPages)
+		}
 	}
 
 	args = append(args, slog.Int("total_items", len(items)))

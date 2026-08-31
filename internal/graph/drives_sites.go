@@ -46,20 +46,9 @@ func (c *Client) SiteDrives(ctx context.Context, siteID string) ([]Drive, error)
 
 	path := fmt.Sprintf("/sites/%s/drives?$select=id,name,driveType,quota", siteID)
 
-	resp, err := c.do(ctx, http.MethodGet, path, nil)
+	drives, err := c.fetchAllDrives(ctx, path, "site drives")
 	if err != nil {
 		return nil, err
-	}
-	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
-
-	var dlr drivesListResponse
-	if err := json.NewDecoder(resp.Body).Decode(&dlr); err != nil {
-		return nil, fmt.Errorf("graph: decoding site drives response: %w", err)
-	}
-
-	drives := make([]Drive, 0, len(dlr.Value))
-	for i := range dlr.Value {
-		drives = append(drives, dlr.Value[i].toDrive())
 	}
 
 	c.logger.Debug("listed site drives", slog.String("site_id", siteID), slog.Int("count", len(drives)))

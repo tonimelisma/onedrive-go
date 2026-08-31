@@ -57,20 +57,9 @@ func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
 
 // drivesList performs a single GET /me/drives call without retry.
 func (c *Client) drivesList(ctx context.Context) ([]Drive, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/me/drives", nil)
+	drives, err := c.fetchAllDrives(ctx, "/me/drives", "drives")
 	if err != nil {
 		return nil, err
-	}
-	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
-
-	var dlr drivesListResponse
-	if err := json.NewDecoder(resp.Body).Decode(&dlr); err != nil {
-		return nil, fmt.Errorf("graph: decoding drives response: %w", err)
-	}
-
-	drives := make([]Drive, 0, len(dlr.Value))
-	for i := range dlr.Value {
-		drives = append(drives, dlr.Value[i].toDrive())
 	}
 
 	c.logger.Info("listed drives",
@@ -78,6 +67,52 @@ func (c *Client) drivesList(ctx context.Context) ([]Drive, error) {
 	)
 
 	return drives, nil
+}
+
+// fetchAllDrives follows @odata.nextLink to the end of a drive listing.
+//
+// Dropping the continuation here is invisible rather than loud: the caller
+// receives a short list that looks complete, so a drive simply does not exist
+// as far as the rest of the program is concerned. The response type did not
+// even carry the field, so nothing could have noticed.
+func (c *Client) fetchAllDrives(ctx context.Context, apiPath string, subject string) ([]Drive, error) {
+	var drives []Drive
+
+	for page := 1; apiPath != ""; page++ {
+		if page > defaultMaxListPages {
+			return nil, fmt.Errorf("graph: listing %s exceeded %d pages", subject, defaultMaxListPages)
+		}
+
+		dlr, err := c.fetchDrivesPage(ctx, apiPath, subject)
+		if err != nil {
+			return nil, err
+		}
+
+		for i := range dlr.Value {
+			drives = append(drives, dlr.Value[i].toDrive())
+		}
+
+		apiPath = dlr.NextLink
+	}
+
+	return drives, nil
+}
+
+func (c *Client) fetchDrivesPage(
+	ctx context.Context, apiPath string, subject string,
+) (*drivesListResponse, error) {
+	resp, err := c.do(ctx, http.MethodGet, apiPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
+
+	var dlr drivesListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&dlr); err != nil {
+		return nil, fmt.Errorf("graph: decoding %s response: %w", subject, err)
+	}
+
+	return &dlr, nil
 }
 
 // normalizeDrives applies Graph discovery quirks after a successful /me/drives
