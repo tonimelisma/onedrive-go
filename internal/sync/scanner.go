@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	stdsync "sync"
@@ -251,6 +252,7 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 					o.Logger.Error("hash phase: panic in worker",
 						slog.String("path", job.dbRelPath),
 						slog.Any("panic", r),
+						slog.String("stack", string(debug.Stack())),
 					)
 
 					mu.Lock()
