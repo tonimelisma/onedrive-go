@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+// conflictCopyReservationPerm is the mode of the placeholder that claims a
+// conflict-copy name. The rename replaces it immediately, so it only has to
+// be private while it exists.
+const conflictCopyReservationPerm = 0o600
+
 // ExecuteConflictCopy preserves the local canonical file by renaming it to a
 // unique conflict-copy path. It performs no baseline or remote mutation; the
 // current-state planner schedules any follow-up download/upload action
@@ -37,22 +42,14 @@ func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) action
 		)
 	}
 
-	conflictPath, err := e.uniqueConflictCopyPath(absPath)
+	conflictPath, conflictRel, err := e.reserveUniqueConflictCopyPath(absPath)
 	if err != nil {
 		return e.failedOutcomeWithFailure(action, ActionConflictCopy, err, action.Path, permissionCapabilityLocalWrite)
 	}
-	conflictRel, err := e.syncTree.Rel(conflictPath)
-	if err != nil {
-		return e.failedOutcomeWithFailure(
-			action,
-			ActionConflictCopy,
-			normalizeSyncTreePathError(err),
-			action.Path,
-			permissionCapabilityLocalWrite,
-		)
-	}
 
 	if err := e.syncTree.Rename(action.Path, conflictRel); err != nil {
+		e.releaseConflictCopyReservation(conflictRel)
+
 		if errors.Is(err, os.ErrNotExist) {
 			outcome := actionOutcome{
 				Action:   ActionConflictCopy,
@@ -91,18 +88,28 @@ func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) action
 	return outcome
 }
 
-// uniqueConflictCopyPath returns the first available conflict-copy path for an
-// on-disk file. Executor-owned uniqueness is intentional: readability comes
-// from the timestamped base name, but actual collision prevention depends on
-// the current sync-root filesystem state.
-func (e *executor) uniqueConflictCopyPath(absPath string) (string, error) {
+// reserveUniqueConflictCopyPath claims a conflict-copy destination and
+// returns it as both an absolute and a sync-root-relative path.
+//
+// The name is claimed by creating it exclusively rather than by finding a path
+// that does not exist yet. Stat-then-rename is a check-then-act: rename
+// silently replaces whatever sits at the destination, so anything that
+// appeared in the gap -- a second conflict copy in the same second, another
+// mount over the same tree, the user -- was destroyed by the very operation
+// whose purpose is to preserve a file. An exclusive create makes the claim
+// atomic against every other creator of that name.
+//
+// The caller owns the reservation and must release it if the rename does not
+// happen.
+func (e *executor) reserveUniqueConflictCopyPath(absPath string) (string, string, error) {
 	basePath := conflictCopyPath(absPath, e.nowFunc())
-	available, err := e.conflictCopyPathAvailable(basePath)
+
+	rel, reserved, err := e.reserveConflictCopyPath(basePath)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if available {
-		return basePath, nil
+	if reserved {
+		return basePath, rel, nil
 	}
 
 	dir := filepath.Dir(basePath)
@@ -111,31 +118,51 @@ func (e *executor) uniqueConflictCopyPath(absPath string) (string, error) {
 
 	for ordinal := 2; ; ordinal++ {
 		candidate := filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, ordinal, ext))
-		available, candidateErr := e.conflictCopyPathAvailable(candidate)
-		if candidateErr != nil {
-			return "", candidateErr
+
+		rel, reserved, err := e.reserveConflictCopyPath(candidate)
+		if err != nil {
+			return "", "", err
 		}
-		if available {
-			return candidate, nil
+		if reserved {
+			return candidate, rel, nil
 		}
 	}
 }
 
-func (e *executor) conflictCopyPathAvailable(absPath string) (bool, error) {
+// releaseConflictCopyReservation drops a claim that will not be used. The
+// reservation is an empty placeholder, so leaving one behind would look like a
+// truncated conflict copy to the user.
+func (e *executor) releaseConflictCopyReservation(rel string) {
+	if err := e.syncTree.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
+		e.logger.Warn("removing unused conflict copy reservation",
+			slog.String("conflict_copy", filepath.Base(rel)),
+			slog.String("error", err.Error()),
+		)
+	}
+}
+
+func (e *executor) reserveConflictCopyPath(absPath string) (string, bool, error) {
 	relPath, err := e.syncTree.Rel(absPath)
 	if err != nil {
-		return false, fmt.Errorf("relativizing conflict copy path %s: %w", filepath.Base(absPath), normalizeSyncTreePathError(err))
+		return "", false, fmt.Errorf("relativizing conflict copy path %s: %w", filepath.Base(absPath), normalizeSyncTreePathError(err))
 	}
 
-	_, err = e.syncTree.Stat(relPath)
-	if err == nil {
-		return false, nil
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return true, nil
+	f, err := e.syncTree.OpenFile(relPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, conflictCopyReservationPerm)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return relPath, false, nil
+		}
+
+		return "", false, fmt.Errorf("reserving conflict copy path %s: %w", filepath.Base(absPath), normalizeSyncTreePathError(err))
 	}
 
-	return false, fmt.Errorf("stating conflict copy path %s: %w", filepath.Base(absPath), normalizeSyncTreePathError(err))
+	if closeErr := f.Close(); closeErr != nil {
+		e.releaseConflictCopyReservation(relPath)
+
+		return "", false, fmt.Errorf("closing conflict copy reservation %s: %w", filepath.Base(absPath), closeErr)
+	}
+
+	return relPath, true, nil
 }
 
 // conflictCopyPath generates a timestamped conflict copy path.
