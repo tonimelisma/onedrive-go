@@ -53,6 +53,10 @@ func (rt *watchRuntime) runWatchLoop(
 	for {
 		done, err := rt.runWatchLoopStep(ctx, p, logC)
 		if err != nil {
+			if rt.drainAfterCanceledStepError(ctx, p, err) {
+				continue
+			}
+
 			return err
 		}
 		if done {
@@ -69,6 +73,35 @@ func (rt *watchRuntime) runWatchLoop(
 			return nil
 		}
 	}
+}
+
+// drainAfterCanceledStepError converts a step that failed because the caller
+// canceled into a drain, reporting whether the loop should continue.
+//
+// Each step begins by draining if the context is already done, so a
+// cancellation that lands between steps is handled. One that lands *inside* a
+// step is not: the handler's own I/O fails with the context error, the step
+// returns it, and returning that error leaves through a path that never
+// drained. RunWatch then classifies the cancellation as a clean stop and
+// returns nil, so the shutdown looks complete while the retry and trial timers
+// it was supposed to stop are still armed.
+//
+// Draining and continuing hands the loop to the drain step, which is the
+// observable shutdown boundary the design already promises for
+// cancellation-closed intake. A second failure while draining is returned
+// rather than converted, so this cannot spin.
+func (rt *watchRuntime) drainAfterCanceledStepError(
+	ctx context.Context,
+	p *watchPipeline,
+	err error,
+) bool {
+	if err == nil || ctx.Err() == nil || rt.isDraining() {
+		return false
+	}
+
+	rt.beginWatchDrain(ctx, p)
+
+	return true
 }
 
 func (rt *watchRuntime) runWatchLoopStep(

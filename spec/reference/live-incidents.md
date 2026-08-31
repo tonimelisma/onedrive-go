@@ -19,7 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
-| LI-20260830-01 | Watch shutdown test intermittently saw watch mode stop before it began draining | instrumented | under investigation | 2026-08-30 | yes |
+| LI-20260830-01 | Watch shutdown test intermittently saw watch mode stop before it began draining | fixed | product bug | 2026-08-31 | yes |
 | LI-20260823-01 | Graph returned `serviceReadOnly` on `/me/drives` for every test account | mitigated | provider outage | 2026-08-23 | no |
 | LI-20260503-01 | Nightly incremental-delta E2E failed on unrelated unrecoverable delete noise | fixed | product bug | 2026-05-03 | no |
 | LI-20260430-03 | NestedDeletion setup treated transient mount-root delta 504 as deterministic failure | fixed | test harness | 2026-04-30 | yes |
@@ -114,11 +114,29 @@ Handling:
   `waitUntilSeenOrExit` now races the run's result against the event and
   reports the run's own error.
 
-Open: the trigger is still unknown. 60 runs passed after these changes against
-a prior rate of 2 in 48, which is consistent with a fix but well short of
-proving one, and none of the three changes prevents an early exit -- they make
-the next occurrence name its own cause. Reopen this entry with the reported
-phase when it recurs.
+Root cause (2026-08-31): a loop step that fails *because* the caller canceled.
+
+Each step begins by draining when the context is already done, so a
+cancellation landing between steps was always handled. One landing inside a
+step was not: the handler's own I/O fails with the context error, the step
+returns it, and the loop returned that error without ever draining. RunWatch
+then classifies the cancellation as a clean stop and returns nil, so shutdown
+looks complete while the retry and trial timers it was supposed to stop are
+still armed -- which is exactly what the test asserts.
+
+The diagnostics added while this was open are what named it. The failure
+stopped reading as an anonymous ten-second timeout and became
+`run returned before debug event: shutdown started: run returned <nil>`, which
+rules out every error path and leaves only a nil return that skipped the drain.
+
+Fix: a step failure under cancellation begins the drain and continues, handing
+the loop to the drain step rather than returning. A second failure while
+draining is still returned, so the loop cannot spin.
+
+Timing note: the window is one step wide, which is why the reproduction rate
+was roughly one run in twenty-five and why probes that added work to the loop
+hid it entirely.
+
 
 ## LI-20260823-01: Graph returned `serviceReadOnly` on `/me/drives` for every test account
 
