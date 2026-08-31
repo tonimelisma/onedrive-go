@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -231,4 +233,62 @@ func TestPrintGetFolderJSON(t *testing.T) {
 	assert.Equal(t, 2, decoded.FoldersCreated)
 	assert.Equal(t, int64(300), decoded.TotalSize)
 	assert.Len(t, decoded.Errors, 1)
+}
+
+// buildFolderOnlyTree fills the child cache with a wide, shallow folder tree
+// containing no files, so a recursive download performs directory descent and
+// nothing else.
+func buildFolderOnlyTree(state *downloadState, root string, folders int) {
+	children := make([]graph.Item, 0, folders)
+	for i := range folders {
+		name := fmt.Sprintf("dir-%d", i)
+		children = append(children, graph.Item{Name: name, ID: name, IsFolder: true})
+		state.childCache[joinRemotePath(root, name)] = nil
+	}
+
+	state.childCache[root] = children
+}
+
+// Validates: R-6.7.1
+//
+// Directory descent used to spawn a goroutine per subdirectory, so the
+// goroutine count scaled with the number of directories in the tree. The
+// shared semaphore never covered that path, only file transfers, despite the
+// comment claiming it bounded the whole tree.
+//
+// Descent is now inline, which is observable two ways: the walk is complete
+// when downloadRecursive returns, without waiting on the WaitGroup, and it
+// leaves no goroutines behind.
+func TestDownloadRecursive_DirectoryDescentDoesNotFanOutGoroutines(t *testing.T) {
+	t.Parallel()
+
+	const folders = 200
+
+	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+
+	state := &downloadState{
+		childCache: make(map[string][]graph.Item),
+		sem:        make(chan struct{}, 1),
+	}
+	buildFolderOnlyTree(state, "testdir", folders)
+
+	cc := &CLIContext{Flags: CLIFlags{Quiet: true}}
+	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, nil, cc.Logger)
+
+	before := runtime.NumGoroutine()
+	downloadRecursive(t.Context(), cc, session, tm, state, "testdir", t.TempDir())
+	after := runtime.NumGoroutine()
+
+	state.mu.Lock()
+	created := state.result.FoldersCreated
+	errs := state.result.Errors
+	state.mu.Unlock()
+
+	assert.Empty(t, errs)
+	assert.Equal(t, folders+1, created,
+		"the directory walk must be complete when downloadRecursive returns")
+	assert.LessOrEqual(t, after, before,
+		"directory descent must not leave goroutines running")
 }
