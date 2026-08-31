@@ -4,6 +4,19 @@ GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/
 
 Implements: R-2.5 [designed], R-2.7 [verified], R-2.8.8 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
+## Verification Counts Only What It Compared
+
+Baseline verification reports files it could not check separately from files it
+checked and found intact. A baseline entry can carry no local hash --
+SharePoint-enriched files populate only `remote_hash`, and the scanner records
+an empty hash when hashing fails -- and those used to be counted as verified.
+
+That answers "is my data intact" with evidence that does not exist, and it is
+the same mistake as treating equal sizes as proof of equal content: absence of
+a comparison is not a passing comparison. The count a user reads now means what
+it says, and the unchecked files are named so the gap is visible rather than
+absorbed.
+
 ## Overview
 
 `SyncStore` is the sole durable owner of per-mount sync state. In the target
