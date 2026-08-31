@@ -106,6 +106,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.27: When classifying errors, the engine shall handle empty `DriveID` (local-only operations like `os.ErrPermission`) by skipping remote scope routing. Only remote API errors shall require drive-aware scope routing. [verified]
 - R-6.7.28: The system shall skip malformed remote delta items that lack the identity or materialization data required to produce a safe `changeEvent`. Non-root items with empty `id`, non-deleted items with empty `name`, and delete entries whose path cannot be recovered from the baseline or from a surviving delta name plus parent/path context shall be warned and skipped instead of emitting empty-ID, empty-path, or parent-path delete events. Unknown-parent non-delete entries shall make the remote observation batch incomplete so the cursor does not advance past provider truth that could not be materialized safely. [verified]
 - R-6.7.29: The system shall treat sparse non-delete delta items as partial updates. When Graph omits unchanged `name` or `parentReference`, remote observation shall recover the missing path fields from exact Graph parent paths or the baseline instead of re-rooting the item. [verified]
+- R-6.7.30: The system shall bound every API response body it buffers in memory, so a malformed or hostile response cannot dictate client memory use. An oversized body shall be reported as an error rather than silently truncated. [verified]
 
 ## R-6.8 Network Resilience [verified]
 
