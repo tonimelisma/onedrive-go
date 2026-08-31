@@ -13,6 +13,7 @@ type Session struct {
 	kind      string
 	collector *Collector
 
+	// mu guards logger, stopCh, and doneCh across Start and Stop.
 	mu     sync.Mutex
 	logger *slog.Logger
 	stopCh chan struct{}

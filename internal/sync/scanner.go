@@ -231,6 +231,8 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 		hashFn = driveops.ComputeQuickXorHash
 	}
 
+	// mu guards the three result slices below. The walk fans out to workers
+	// bounded by g.SetLimit, and each appends its own findings.
 	var mu stdsync.Mutex
 	var events []changeEvent
 	var rows []localStateRow
