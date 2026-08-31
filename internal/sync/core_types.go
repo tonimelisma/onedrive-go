@@ -114,6 +114,8 @@ func dirLowerKeyFromPath(path string) DirLowerKey {
 // the locked accessor methods (GetByPath, GetByID, GetCaseVariants, Put,
 // Delete, Len, ForEachPath) which hold mu during access.
 type Baseline struct {
+	// mu guards the three indexes below, which are always mutated together so
+	// a lookup never sees a path present in one index and absent from another.
 	mu         sync.RWMutex
 	ByPath     map[string]*BaselineEntry
 	ByID       map[string]*BaselineEntry        // keyed by item_id within this per-mount DB

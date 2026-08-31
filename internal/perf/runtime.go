@@ -7,9 +7,11 @@ import (
 
 type Runtime struct {
 	collector *Collector
+	// captureMu guards capturing, which admits one profile capture at a time.
 	captureMu sync.Mutex
 	capturing bool
 
+	// mu guards mounts, which per-mount collectors register into.
 	mu     sync.RWMutex
 	mounts map[string]*Collector
 }

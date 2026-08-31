@@ -10,6 +10,8 @@ import (
 // is deliberately not stored on Orchestrator so one-shot and watch runs cannot
 // inherit shortcut child work from an earlier runtime.
 type parentChildWorkSnapshots struct {
+	// mu guards snapshots, which parent mounts publish into while child
+	// mounts read.
 	mu        gosync.Mutex
 	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot
 }

@@ -327,6 +327,7 @@ func runPublicVerification(
 		runReadmeStatus,
 		runSpecGoverns,
 		runRetiredBacklogIDs,
+		runMutexDocs,
 		runBuild,
 	}
 	publicStepNames := []string{
@@ -337,6 +338,7 @@ func runPublicVerification(
 		"README status",
 		"spec governs",
 		"retired backlog ids",
+		"mutex ownership docs",
 		"build",
 	}
 	for i, step := range publicSteps {

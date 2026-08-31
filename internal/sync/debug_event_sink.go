@@ -13,6 +13,8 @@ import (
 const debugEventFilePerm = 0o600
 
 type debugEventFileSink struct {
+	// mu guards file, serializing appends from every goroutine that emits a
+	// debug event.
 	mu     stdsync.Mutex
 	file   *os.File
 	logger *slog.Logger

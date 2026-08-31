@@ -105,6 +105,8 @@ type Orchestrator struct {
 	engineFactory engineFactoryFunc // injectable for tests
 	logger        *slog.Logger
 	perfRuntime   *perf.Runtime
+	// statusMu guards controlMounts and shortcutCleanupDiagnostics, which the
+	// control socket reads while a run mutates them.
 	statusMu      gosync.RWMutex
 	controlMounts []string
 	// shortcutCleanupDiagnostics is transient executor status for control

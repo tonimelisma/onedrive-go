@@ -108,6 +108,7 @@ type Collector struct {
 	parent *Collector
 	nowFn  func() time.Time
 
+	// mu guards state, which every recording call site updates.
 	mu    sync.Mutex
 	state Snapshot
 }

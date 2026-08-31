@@ -24,6 +24,8 @@ type trackedNode struct {
 // to channels, run active-scope admission, etc.). This separation keeps
 // dependency tracking independent from scope admission.
 type depGraph struct {
+	// mu guards actions. The engine adds and completes nodes while workers
+	// report outcomes.
 	mu      stdsync.Mutex
 	actions map[int64]*trackedNode
 	logger  *slog.Logger

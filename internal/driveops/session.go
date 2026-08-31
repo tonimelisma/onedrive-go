@@ -109,6 +109,9 @@ type SessionRuntime struct {
 	// for test injection; defaults to graph.TokenSourceFromPath.
 	TokenSourceFn func(ctx context.Context, tokenPath string, logger *slog.Logger) (graph.TokenSource, error)
 
+	// mu guards the lazily built caches below: tokenCache, bootstrapMeta,
+	// interactiveMeta, interactiveTransfer, and syncClients. Sessions for
+	// different mounts build them concurrently.
 	mu                  gosync.Mutex
 	tokenCache          map[string]graph.TokenSource
 	bootstrapMeta       *http.Client
