@@ -107,7 +107,7 @@ func startCallbackServer(
 
 	go func() {
 		if serveErr := srv.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			resultCh <- callbackResult{err: fmt.Errorf("graph: callback server error: %w", serveErr)}
+			deliverCallbackResult(resultCh, callbackResult{err: fmt.Errorf("graph: callback server error: %w", serveErr)})
 		}
 	}()
 
@@ -116,6 +116,22 @@ func startCallbackServer(
 
 // registerCallbackHandler adds the callback route to the mux.
 // Must be called before the browser redirects back.
+// deliverCallbackResult reports the first outcome of the OAuth callback and
+// drops any later one.
+//
+// The handler is registered on a mux, so nothing stops it running more than
+// once: a browser refresh, a duplicate request, or the user reopening the
+// redirect URL all call it again. Only the first outcome can be acted on --
+// the waiter has already returned by then -- and a blocking send on the
+// one-slot channel would park that handler goroutine for the life of the
+// process, keeping the callback server from shutting down cleanly.
+func deliverCallbackResult(resultCh chan<- callbackResult, result callbackResult) {
+	select {
+	case resultCh <- result:
+	default:
+	}
+}
+
 func registerCallbackHandler(mux *http.ServeMux, state string, resultCh chan<- callbackResult) {
 	mux.HandleFunc("GET "+callbackPath, func(w http.ResponseWriter, r *http.Request) {
 		handleOAuthCallback(w, r, state, resultCh)
@@ -127,7 +143,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request, state string, r
 	// Validate state to prevent CSRF.
 	if r.URL.Query().Get("state") != state {
 		http.Error(w, "Invalid state parameter", http.StatusBadRequest)
-		resultCh <- callbackResult{err: fmt.Errorf("graph: OAuth2 state mismatch (possible CSRF)")}
+		deliverCallbackResult(resultCh, callbackResult{err: fmt.Errorf("graph: OAuth2 state mismatch (possible CSRF)")})
 
 		return
 	}
@@ -136,7 +152,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request, state string, r
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
 		desc := r.URL.Query().Get("error_description")
 		http.Error(w, "Authorization failed: "+errParam, http.StatusBadRequest)
-		resultCh <- callbackResult{err: fmt.Errorf("graph: authorization failed: %s: %s", errParam, desc)}
+		deliverCallbackResult(resultCh, callbackResult{err: fmt.Errorf("graph: authorization failed: %s: %s", errParam, desc)})
 
 		return
 	}
@@ -144,7 +160,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request, state string, r
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		http.Error(w, "Missing authorization code", http.StatusBadRequest)
-		resultCh <- callbackResult{err: fmt.Errorf("graph: callback missing authorization code")}
+		deliverCallbackResult(resultCh, callbackResult{err: fmt.Errorf("graph: callback missing authorization code")})
 
 		return
 	}
@@ -152,11 +168,11 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request, state string, r
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if _, err := io.WriteString(w, "<html><body><h1>Authentication successful</h1>"+
 		"<p>You can close this window and return to the terminal.</p></body></html>"); err != nil {
-		resultCh <- callbackResult{err: fmt.Errorf("graph: writing callback success page: %w", err)}
+		deliverCallbackResult(resultCh, callbackResult{err: fmt.Errorf("graph: writing callback success page: %w", err)})
 
 		return
 	}
-	resultCh <- callbackResult{code: code}
+	deliverCallbackResult(resultCh, callbackResult{code: code})
 }
 
 // shutdownCallbackServer gracefully shuts down the callback HTTP server.
