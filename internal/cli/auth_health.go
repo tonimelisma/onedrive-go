@@ -53,11 +53,11 @@ func newAuthProofRecorder(logger *slog.Logger) *authProofRecorder {
 
 func (r *authProofRecorder) Hook(email, proofSource string) func(context.Context) {
 	return func(ctx context.Context) {
-		r.recordSuccess(ctx, email, proofSource)
+		r.recordSuccess(email, proofSource)
 	}
 }
 
-func (r *authProofRecorder) recordSuccess(ctx context.Context, email, proofSource string) {
+func (r *authProofRecorder) recordSuccess(email, proofSource string) {
 	if email == "" {
 		return
 	}
@@ -70,7 +70,7 @@ func (r *authProofRecorder) recordSuccess(ctx context.Context, email, proofSourc
 	r.cleared[email] = true
 	r.mu.Unlock()
 
-	clearedCount, err := clearAccountAuthRequirementWithCount(ctx, email, config.AuthClearSourceCLIProof, r.logger)
+	clearedCount, err := clearAccountAuthRequirementWithCount(email, config.AuthClearSourceCLIProof, r.logger)
 	if err != nil {
 		// Auth-scope normalization is best-effort maintenance. Successful direct
 		// API commands must not surface stale auth proof cleanup failures to end
@@ -151,8 +151,7 @@ func inspectSavedLogin(
 	return authReasonInvalidSavedLogin
 }
 
-func hasPersistedAccountAuthRequirement(ctx context.Context, account string, logger *slog.Logger) bool {
-	_ = ctx
+func hasPersistedAccountAuthRequirement(account string, logger *slog.Logger) bool {
 	required, err := config.LoadHasPersistedAccountAuthRequirement(config.DefaultDataDir(), account)
 	if err != nil {
 		logger.Debug("loading catalog for auth projection", "account", account, "error", err)
@@ -162,23 +161,21 @@ func hasPersistedAccountAuthRequirement(ctx context.Context, account string, log
 	return required
 }
 
-func clearAccountAuthRequirement(ctx context.Context, email string, logger *slog.Logger) error {
-	_, err := clearAccountAuthRequirementWithCount(ctx, email, config.AuthClearSourceCLIProof, logger)
+func clearAccountAuthRequirement(email string, logger *slog.Logger) error {
+	_, err := clearAccountAuthRequirementWithCount(email, config.AuthClearSourceCLIProof, logger)
 	return err
 }
 
 func clearAccountAuthRequirementForSource(
-	ctx context.Context,
 	email string,
 	source config.AuthClearSource,
 	logger *slog.Logger,
 ) error {
-	_, err := clearAccountAuthRequirementWithCount(ctx, email, source, logger)
+	_, err := clearAccountAuthRequirementWithCount(email, source, logger)
 	return err
 }
 
 func clearAccountAuthRequirementWithCount(
-	ctx context.Context,
 	email string,
 	source config.AuthClearSource,
 	logger *slog.Logger,
@@ -187,7 +184,6 @@ func clearAccountAuthRequirementWithCount(
 		return 0, nil
 	}
 
-	_ = ctx
 	required, err := config.LoadHasPersistedAccountAuthRequirement(config.DefaultDataDir(), email)
 	if err != nil {
 		return 0, fmt.Errorf("loading catalog: %w", err)
@@ -196,7 +192,7 @@ func clearAccountAuthRequirementWithCount(
 		return 0, nil
 	}
 
-	if err := config.ClearAccountAuthRequirement(config.DefaultDataDir(), email, source); err != nil {
+	if err := config.ClearAccountAuthRequirement(config.DefaultDataDir(), email); err != nil {
 		return 0, fmt.Errorf("clearing auth requirement: %w", err)
 	}
 

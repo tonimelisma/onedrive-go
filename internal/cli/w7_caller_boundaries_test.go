@@ -115,7 +115,7 @@ func TestLogoutCommand_PreservesOfflineState(t *testing.T) {
 
 	_, syncDirErr := os.Stat(syncDir)
 	require.NoError(t, syncDirErr, "plain logout must leave sync directories untouched")
-	assert.False(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
+	assert.False(t, hasPersistedAccountAuthRequirement(cid.Email(), testDriveLogger(t)))
 
 	assert.Contains(t, out.String(), "Token removed for alice@contoso.com.")
 	assert.Contains(t, out.String(), "State databases kept.")

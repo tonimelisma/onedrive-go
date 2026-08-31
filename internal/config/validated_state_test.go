@@ -119,7 +119,7 @@ func TestMarkAndClearAccountAuthRequirement(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, authstate.ReasonSyncAuthRejected, account.AuthRequirementReason)
 
-	require.NoError(t, ClearAccountAuthRequirement(DefaultDataDir(), cid.Email(), AuthClearSourceCLIProof))
+	require.NoError(t, ClearAccountAuthRequirement(DefaultDataDir(), cid.Email()))
 
 	stored, err = LoadCatalog()
 	require.NoError(t, err)

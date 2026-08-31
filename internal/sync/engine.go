@@ -345,7 +345,6 @@ func (e *Engine) hasPersistedAccountAuthRequirement() (bool, error) {
 }
 
 func (e *Engine) normalizePersistedAccountAuthRequirement(
-	ctx context.Context,
 	required bool,
 	proof driveIdentityProof,
 	proofErr error,
@@ -362,19 +361,15 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 	if proofErr != nil {
 		return proofErr
 	}
-	if err := config.ClearAccountAuthRequirement(
-		e.dataDir,
-		e.permHandler.accountEmail,
-		config.AuthClearSourceSyncStartupProof,
-	); err != nil {
+	if err := config.ClearAccountAuthRequirement(e.dataDir, e.permHandler.accountEmail); err != nil {
 		return fmt.Errorf("sync: clearing catalog auth requirement: %w", err)
 	}
 
 	e.logger.Info("released catalog auth requirement after successful startup proof",
 		slog.String("account", e.permHandler.accountEmail),
+		slog.String("source", string(config.AuthClearSourceSyncStartupProof)),
 	)
 
-	_ = ctx
 	return nil
 }
 

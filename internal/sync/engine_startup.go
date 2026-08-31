@@ -27,7 +27,7 @@ func (flow *engineFlow) runStartupStage(
 	if normalizeErr != nil {
 		return nil, fmt.Errorf("sync: normalizing persisted scopes: %w", normalizeErr)
 	}
-	authNormalizeErr := eng.normalizePersistedAccountAuthRequirement(ctx, hasAccountAuthRequirement, proof, proofErr)
+	authNormalizeErr := eng.normalizePersistedAccountAuthRequirement(hasAccountAuthRequirement, proof, proofErr)
 	if authNormalizeErr != nil {
 		return nil, authNormalizeErr
 	}
