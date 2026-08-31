@@ -53,6 +53,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.5.1: The sync state store shall provide durable, transactional writes that survive process kill. [verified]
 - R-6.5.2: Every sync operation shall be atomic — incomplete operations shall not corrupt state. [verified]
 - R-6.5.3: On startup, the system shall rebuild runnable state from durable snapshots, `retry_work`, `block_scopes`, and `observation_state` rather than relying on persisted in-flight action flags. [designed]
+- R-6.5.4: Atomic managed-file writes shall fsync the directory the rename landed in, so the renamed entry is durable and not only the file contents. A write whose durability cannot be established shall report an error rather than claim success. [verified]
 
 ## R-6.6 Observability [verified]
 

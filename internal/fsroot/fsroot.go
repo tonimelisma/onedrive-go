@@ -64,6 +64,7 @@ type rootOps struct {
 	rename     func(oldpath, newpath string) error
 	createTemp func(dir, pattern string) (tempFile, error)
 	lstat      func(path string) (os.FileInfo, error)
+	syncDir    func(path string) error
 }
 
 func defaultRootOps() rootOps {
@@ -83,8 +84,36 @@ func defaultRootOps() rootOps {
 		createTemp: func(dir, pattern string) (tempFile, error) {
 			return os.CreateTemp(dir, pattern)
 		},
-		lstat: os.Lstat,
+		lstat:   os.Lstat,
+		syncDir: syncDirectory,
 	}
+}
+
+// syncDirectory flushes a directory's own entries to stable storage.
+//
+// Syncing the temp file makes its contents durable, but the rename that gives
+// those contents their final name is a directory update, and that update is
+// not durable until the directory itself is synced. Without this, a crash
+// right after AtomicWrite can leave the target missing or still holding its
+// previous contents even though the new bytes reached the disk -- the one
+// outcome an atomic write exists to rule out.
+func syncDirectory(path string) error {
+	dir, err := os.Open(path) //nolint:gosec // path is already contained by pathFor
+	if err != nil {
+		return fmt.Errorf("opening directory %s to sync: %w", path, err)
+	}
+
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+
+	if syncErr != nil {
+		return fmt.Errorf("syncing directory %s: %w", path, syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("closing directory %s after sync: %w", path, closeErr)
+	}
+
+	return nil
 }
 
 // Root is a capability for managed files rooted under one trusted directory.
@@ -430,6 +459,14 @@ func (r *Root) AtomicWrite(
 
 	if renameErr := r.Rename(tempName, cleanName); renameErr != nil {
 		return renameErr
+	}
+
+	// The rename has already happened, so the new contents are visible. This
+	// only makes that visibility survive a crash, and a failure here means the
+	// write is not yet durable, which the caller has to be told. Rewriting the
+	// same bytes is harmless, so reporting it is safe to retry.
+	if syncErr := r.ops.syncDir(dirPath); syncErr != nil {
+		return syncErr
 	}
 
 	err = nil
