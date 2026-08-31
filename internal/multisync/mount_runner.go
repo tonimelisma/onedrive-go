@@ -3,6 +3,8 @@ package multisync
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -14,6 +16,11 @@ type MountRunner struct {
 	selectionIndex int
 	identity       MountIdentity
 	displayName    string
+
+	// logger records the panic stack. The recovered value alone names what
+	// failed but not where, and the goroutine that could answer that is gone
+	// by the time the report is read.
+	logger *slog.Logger
 }
 
 // run executes the provided sync function with panic recovery. The control
@@ -28,10 +35,21 @@ func (dr *MountRunner) run(ctx context.Context, fn func(context.Context) (*synce
 	}
 
 	defer func() {
-		if r := recover(); r != nil {
-			result.Report = nil
-			result.Err = fmt.Errorf("panic in mount %s: %v", dr.identity.Label(), r)
+		r := recover()
+		if r == nil {
+			return
 		}
+
+		if dr.logger != nil {
+			dr.logger.Error("panic in mount sync",
+				slog.String("mount", dr.identity.Label()),
+				slog.Any("panic", r),
+				slog.String("stack", string(debug.Stack())),
+			)
+		}
+
+		result.Report = nil
+		result.Err = fmt.Errorf("panic in mount %s: %v", dr.identity.Label(), r)
 	}()
 
 	report, err := fn(ctx)

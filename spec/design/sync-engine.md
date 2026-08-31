@@ -73,6 +73,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Watch runtime and admission record aggregate stale-work perf counters without exposing paths or IDs. | `TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependents`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestSnapshotAttrs_IncludesStaleWorkAndObservationCounters` |
 | Watch shutdown enters drain before accepting cancellation-closed intake channels as terminal, and non-canceled scheduler closure is fatal instead of a clean stop, so retry and trial timers stop at the observable shutdown boundary. | `TestWatchRuntime_RunNonDrainingWatchStep_CanceledClosedReplanStartsDrain`, `TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsBeforeReturn`, `TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsFromBootstrapPhase`, `TestWatchRuntime_RunNonDrainingWatchStep_ClosedReplanWithoutCancelErrors`, `TestRunWatch_ShutdownStopsRetryAndTrialTimers` |
 | The observer-backed watch loop starts through an explicit phase boundary after bootstrap quiescence, so a stale bootstrap phase cannot make steady-state watch exit cleanly without observer intake. | `TestWatchRuntime_BeginObserverBackedRunningNormalizesBootstrapPhase`, `TestWatchRuntime_BeginObserverBackedRunningRejectsDrainingOrDuplicateObservers`, `TestWatchRuntime_RunWatchLoop_BootstrapPhaseQuiescesAndReturnsToRunning`, `TestRunWatchLoop_SteadyStateCompletionWithoutDrainingIsAnError`, `TestRunWatchUntilQuiescent_BootstrapCompletionStaysClean`, `TestStartObservers_RefusalDuringDrainClassifiesAsShutdown` |
+| A panic inside a watch observer fails its mount instead of terminating the process, and is reported with its stack so the failure stays diagnosable after the goroutine is gone. | `TestRecoverObserverPanic_DeliversPanicAsObserverError`, `TestRecoverObserverPanic_CleanExitReportsNothing`, `TestRecoverObserverPanic_FullChannelDoesNotBlock`, `TestRunWatch_LocalObserverPanicFailsMountInsteadOfCrashing` |
 | Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
 | Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child work snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestShortcutRootTransitionMatrixEnumeratesEveryStateAndEvent`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroReturnsExplicitErrors` |
 | Pending watch replans retire old-runtime work that has not started yet, including dependents released by already-running old actions, and leave replacement work to a fresh plan from current truth. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal` |
@@ -590,6 +591,32 @@ Conflicts remain engine-owned and immediate:
 The engine stores only the baseline and current-truth facts needed for the next
 plan; conflict handling is visible as those concrete actions and executor
 outcomes.
+
+### Observer Panics Fail One Mount, Not The Process
+
+Watch observers run for the lifetime of a mount, in goroutines the runtime
+owns. A panic in one of them used to terminate the whole process, so a bug
+reachable from one account's data took down every other mount with it --
+including mounts that shared nothing with the failing one.
+
+Each observer goroutine now recovers at its boundary and delivers the panic as
+an observer error. That is deliberately classified as a *fatal* observer error
+rather than an ordinary exit. The runtime tolerates a single observer stopping
+because the conditions it was built for -- watch-limit exhaustion, transient
+remote failure -- leave the mount degraded but coherent, and the local observer
+has a documented periodic-full-scan fallback. A panic leaves undefined state
+instead, with no fallback: continuing would run the mount half-blind while its
+status still read healthy. Failing the mount is recoverable, and multisync's
+`MountRunner` already isolates a mount failure. Silently observing nothing is
+not recoverable, because the component that would report the gap is the one
+that stopped.
+
+The recovery is registered as the goroutine's last defer so it runs first while
+unwinding, delivering the error before the observer's channels close rather
+than racing a closed-channel exit. Both this path and `MountRunner`'s existing
+recovery log the panic stack: the recovered value names what failed but not
+where, and the goroutine that could answer that is gone by the time anyone
+reads the report.
 
 ### Loop Completion Is Phase-Checked, Not Assumed
 
