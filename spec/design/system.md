@@ -354,6 +354,15 @@ Static verification is a first-class architectural constraint, not a best-effort
   failed CI on a branch that had just verified clean. `devtool verify` now
   reads the pin out of the workflow, so the two cannot drift apart through a
   second copy of the number, and refuses to lint against a different version.
+- Path containment failures carry `synctree.ErrUnsafePath`. They are the
+  definition of an unsafe path, and callers classify on that sentinel to tell a
+  permanent path problem from a transient one: shortcut-root planning treats it
+  as blocked and needing the user, and everything else as unavailable and worth
+  retrying. Without the sentinel a path that escapes the root read as merely
+  unavailable and was retried forever instead of surfacing. The executor's
+  translation to its own escape sentinel matched on message text before this,
+  which is fragile across a package boundary and could only recognize the two
+  phrasings it happened to know.
 - Requirement traceability is checked in both directions, and the reverse
   direction is the one that matters. Forward: a `Validates:` or `Implements:`
   reference must resolve to a declared requirement, so a renamed requirement
