@@ -345,6 +345,15 @@ Static verification is a first-class architectural constraint, not a best-effort
   out. A directory sync that fails is reported rather than swallowed: the
   contents are already visible, but success would claim a guarantee the
   filesystem refused, and rewriting the same bytes is safe to retry.
+- Requirement traceability is checked in both directions, and the reverse
+  direction is the one that matters. Forward: a `Validates:` or `Implements:`
+  reference must resolve to a declared requirement, so a renamed requirement
+  cannot leave citations pointing at nothing. Reverse: a requirement marked
+  `[verified]` must have evidence -- a test citing it, or a design doc
+  implementing it or its group. A verified status with neither is a claim about
+  behavior nobody demonstrated, and unlike a dangling citation it reads as
+  proof. The rule found five such claims, two of which described a status
+  projection with no test touching it at all.
 - Every mutex states what it guards, and `devtool verify` fails when one does
   not. Which data a mutex protects is never inferable from the declaration:
   field order suggests an answer that is frequently wrong. The rule was written

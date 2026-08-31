@@ -2167,7 +2167,7 @@ func TestExecutor_RemoteDelete_ErrorHandling(t *testing.T) {
 // Conflict tests
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.3.1
+// Validates: R-2.3.1, R-2.3.5
 func TestExecutor_Conflict_EditEdit_KeepBoth(t *testing.T) {
 	t.Parallel()
 

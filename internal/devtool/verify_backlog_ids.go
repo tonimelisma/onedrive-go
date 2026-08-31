@@ -38,11 +38,6 @@ var (
 	registryIDPattern = regexp.MustCompile("`(B-\\d{3})`")
 )
 
-type backlogIDViolation struct {
-	Location string
-	Detail   string
-}
-
 func runRetiredBacklogIDs(
 	_ context.Context,
 	_ commandRunner,
@@ -50,30 +45,12 @@ func runRetiredBacklogIDs(
 	_ []string,
 	stdout, _ io.Writer,
 ) error {
-	if err := writeStatus(stdout, "==> retired backlog ids\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-
-	violations, err := findBacklogIDViolations(repoRoot)
-	if err != nil {
-		return err
-	}
-
-	if len(violations) == 0 {
-		return nil
-	}
-
-	var b strings.Builder
-	for _, v := range violations {
-		fmt.Fprintf(&b, "  %s: %s\n", v.Location, v.Detail)
-	}
-
-	return fmt.Errorf(
-		"retired backlog id check failed (see %s):\n%s",
-		retiredBacklogRegistryPath, b.String())
+	return runViolationCheck(stdout, "retired backlog ids",
+		"retired backlog id check failed (see "+retiredBacklogRegistryPath+")",
+		func() ([]checkViolation, error) { return findBacklogIDViolations(repoRoot) })
 }
 
-func findBacklogIDViolations(repoRoot string) ([]backlogIDViolation, error) {
+func findBacklogIDViolations(repoRoot string) ([]checkViolation, error) {
 	registered, err := readRetiredBacklogRegistry(repoRoot)
 	if err != nil {
 		return nil, err
@@ -93,7 +70,7 @@ func findBacklogIDViolations(repoRoot string) ([]backlogIDViolation, error) {
 	sort.Strings(deadEntries)
 
 	for _, id := range deadEntries {
-		violations = append(violations, backlogIDViolation{
+		violations = append(violations, checkViolation{
 			Location: retiredBacklogRegistryPath,
 			Detail: fmt.Sprintf(
 				"%s is registered but no longer cited in Go code; remove the registry row",
@@ -130,10 +107,10 @@ func readRetiredBacklogRegistry(repoRoot string) (map[string]bool, error) {
 func collectBacklogIDCitations(
 	repoRoot string,
 	registered map[string]bool,
-) (map[string]bool, []backlogIDViolation, error) {
+) (map[string]bool, []checkViolation, error) {
 	cited := make(map[string]bool)
 
-	var violations []backlogIDViolation
+	var violations []checkViolation
 
 	err := filepath.WalkDir(repoRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -184,14 +161,14 @@ func scanFileForBacklogIDs(
 	path string,
 	registered map[string]bool,
 	cited map[string]bool,
-) ([]backlogIDViolation, error) {
+) ([]checkViolation, error) {
 	f, err := os.Open(path) //nolint:gosec // repo-relative verifier input
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close() //nolint:errcheck // read-only scan
 
-	var violations []backlogIDViolation
+	var violations []checkViolation
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, backlogScanInitialBufBytes), backlogScanMaxLineBytes)
@@ -204,7 +181,7 @@ func scanFileForBacklogIDs(
 			cited[id] = true
 
 			if !registered[id] {
-				violations = append(violations, backlogIDViolation{
+				violations = append(violations, checkViolation{
 					Location: location,
 					Detail: fmt.Sprintf(
 						"%s is not listed in the retired backlog registry; "+
@@ -214,7 +191,7 @@ func scanFileForBacklogIDs(
 		}
 
 		for _, ident := range backlogIdentifierPattern.FindAllString(line, -1) {
-			violations = append(violations, backlogIDViolation{
+			violations = append(violations, checkViolation{
 				Location: location,
 				Detail: fmt.Sprintf(
 					"identifier embeds retired backlog id %q; name it for the behavior instead",

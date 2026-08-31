@@ -328,6 +328,7 @@ func runPublicVerification(
 		runSpecGoverns,
 		runRetiredBacklogIDs,
 		runMutexDocs,
+		runRequirementTraceability,
 		runBuild,
 	}
 	publicStepNames := []string{
@@ -339,6 +340,7 @@ func runPublicVerification(
 		"spec governs",
 		"retired backlog ids",
 		"mutex ownership docs",
+		"requirement traceability",
 		"build",
 	}
 	for i, step := range publicSteps {
