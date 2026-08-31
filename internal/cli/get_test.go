@@ -6,7 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"runtime"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -256,9 +257,15 @@ func buildFolderOnlyTree(state *downloadState, root string, folders int) {
 // shared semaphore never covered that path, only file transfers, despite the
 // comment claiming it bounded the whole tree.
 //
-// Descent is now inline, which is observable two ways: the walk is complete
-// when downloadRecursive returns, without waiting on the WaitGroup, and it
-// leaves no goroutines behind.
+// Descent is now inline, and the observable consequence is that the whole walk
+// has finished when downloadRecursive returns, without anyone waiting on the
+// WaitGroup: every directory is counted and every local directory exists.
+// Spawned descent cannot offer that, because the work is still queued when the
+// call returns.
+//
+// This deliberately does not sample runtime.NumGoroutine. That counter is
+// process-global, so parallel tests move it between two samples and the
+// assertion fails for reasons that have nothing to do with this code.
 func TestDownloadRecursive_DirectoryDescentDoesNotFanOutGoroutines(t *testing.T) {
 	t.Parallel()
 
@@ -277,9 +284,9 @@ func TestDownloadRecursive_DirectoryDescentDoesNotFanOutGoroutines(t *testing.T)
 	cc := &CLIContext{Flags: CLIFlags{Quiet: true}}
 	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, nil, cc.Logger)
 
-	before := runtime.NumGoroutine()
-	downloadRecursive(t.Context(), cc, session, tm, state, "testdir", t.TempDir())
-	after := runtime.NumGoroutine()
+	localRoot := t.TempDir()
+
+	downloadRecursive(t.Context(), cc, session, tm, state, "testdir", localRoot)
 
 	state.mu.Lock()
 	created := state.result.FoldersCreated
@@ -289,6 +296,11 @@ func TestDownloadRecursive_DirectoryDescentDoesNotFanOutGoroutines(t *testing.T)
 	assert.Empty(t, errs)
 	assert.Equal(t, folders+1, created,
 		"the directory walk must be complete when downloadRecursive returns")
-	assert.LessOrEqual(t, after, before,
-		"directory descent must not leave goroutines running")
+
+	for i := range folders {
+		dir := filepath.Join(localRoot, fmt.Sprintf("dir-%d", i))
+		info, statErr := os.Stat(dir)
+		require.NoError(t, statErr, "every directory must exist before downloadRecursive returns")
+		assert.True(t, info.IsDir())
+	}
 }
