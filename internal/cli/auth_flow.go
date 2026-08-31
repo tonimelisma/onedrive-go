@@ -71,7 +71,7 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 		return baseErr
 	}
 
-	clearLoginAuthRequirement(ctx, email, logger)
+	clearLoginAuthRequirement(email, logger)
 
 	if !added {
 		logger.Info("re-login detected, token and metadata refreshed", "canonical_id", canonicalID.String())
@@ -235,8 +235,8 @@ func restoreLoginTokenSnapshot(snapshot *loginRollbackSnapshot) error {
 	return writeManagedFile(snapshot.tokenPath, snapshot.tokenData, tokenfile.FilePerms, tokenfile.DirPerms, ".token-*.tmp")
 }
 
-func clearLoginAuthRequirement(ctx context.Context, email string, logger *slog.Logger) {
-	if clearErr := clearAccountAuthRequirementForSource(ctx, email, config.AuthClearSourceLogin, logger); clearErr != nil {
+func clearLoginAuthRequirement(email string, logger *slog.Logger) {
+	if clearErr := clearAccountAuthRequirementForSource(email, config.AuthClearSourceLogin, logger); clearErr != nil {
 		logger.Warn("clearing stale account auth requirement after login", "account", email, "error", clearErr)
 	}
 }

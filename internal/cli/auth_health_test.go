@@ -63,10 +63,10 @@ func TestClearAccountAuthScopes_ClearsPersistedAuthScope(t *testing.T) {
 	}
 
 	logger := testDriveLogger(t)
-	require.True(t, hasPersistedAccountAuthRequirement(t.Context(), "user@example.com", logger))
+	require.True(t, hasPersistedAccountAuthRequirement("user@example.com", logger))
 
-	require.NoError(t, clearAccountAuthRequirement(t.Context(), "user@example.com", logger))
-	assert.False(t, hasPersistedAccountAuthRequirement(t.Context(), "user@example.com", logger))
+	require.NoError(t, clearAccountAuthRequirement("user@example.com", logger))
+	assert.False(t, hasPersistedAccountAuthRequirement("user@example.com", logger))
 }
 
 // Validates: R-2.10.47
@@ -95,7 +95,7 @@ func TestAttachAccountAuthProof_ClearsOnAuthenticatedSuccess(t *testing.T) {
 
 	_, err := client.Me(t.Context())
 	require.NoError(t, err)
-	assert.False(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
+	assert.False(t, hasPersistedAccountAuthRequirement(cid.Email(), testDriveLogger(t)))
 }
 
 // Validates: R-2.10.47
@@ -118,7 +118,7 @@ func TestAttachAccountAuthProof_DoesNotClearOnUnauthorized(t *testing.T) {
 
 	_, err := client.Me(t.Context())
 	require.ErrorIs(t, err, graph.ErrUnauthorized)
-	assert.True(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
+	assert.True(t, hasPersistedAccountAuthRequirement(cid.Email(), testDriveLogger(t)))
 }
 
 // Validates: R-2.10.45, R-2.10.47
@@ -170,7 +170,7 @@ func TestStatusCommand_DoesNotClearPersistedAuthScope(t *testing.T) {
 	}
 
 	require.NoError(t, runStatusCommand(cc, false))
-	assert.True(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
+	assert.True(t, hasPersistedAccountAuthRequirement(cid.Email(), testDriveLogger(t)))
 }
 
 // Validates: R-2.10.45
