@@ -109,7 +109,7 @@ func (flow *engineFlow) applyTrialRetryFallback(
 
 func shouldTransitionTrialFallbackScope(decision *resultDecision) bool {
 	return decision != nil &&
-		decision.Class == errclass.ClassBlockScopeingTransient &&
+		decision.Class == errclass.ClassScopeBlockingTransient &&
 		!decision.ScopeKey.IsZero()
 }
 
@@ -124,7 +124,7 @@ func (flow *engineFlow) applyTrialReclassification(
 		return true, err
 	}
 
-	if decision.Class == errclass.ClassBlockScopeingTransient && decision.ScopeKey == SKDiskLocal() {
+	if decision.Class == errclass.ClassScopeBlockingTransient && decision.ScopeKey == SKDiskLocal() {
 		if err := flow.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey); err != nil {
 			return false, err
 		}
