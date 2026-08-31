@@ -157,7 +157,11 @@ func printGetFolderJSON(w io.Writer, out getFolderJSONOutput) error {
 
 // downloadState holds mutable state shared across the recursive download.
 type downloadState struct {
-	mu          sync.Mutex // guards result, done, total, childCache, and countErrors across recursive workers
+	// mu guards result, done, total, and countErrors against the concurrent
+	// file-download goroutines. childCache needs no lock: the counting pass
+	// fills it before any download starts, and the directory walk that reads
+	// it runs inline on a single goroutine.
+	mu          sync.Mutex
 	wg          sync.WaitGroup
 	sem         chan struct{} // shared semaphore bounding total concurrency
 	result      getFolderJSONOutput
@@ -268,24 +272,26 @@ func downloadRecursive(
 	state.result.FoldersCreated++
 	state.mu.Unlock()
 
-	// Process all children concurrently with a shared semaphore that bounds
-	// total goroutines across the entire tree (not per directory).
-	// This is safe because:
-	// - Directory listings are cached (no redundant API calls)
-	// - MkdirAll is idempotent (concurrent dir creation is safe)
-	// - State mutations are mutex-protected
+	// File downloads run concurrently under a shared semaphore that bounds
+	// total in-flight transfers across the whole tree. Directory descent is
+	// deliberately not concurrent: a goroutine per subdirectory made the
+	// goroutine count scale with the number of directories in the tree, which
+	// is exactly the unbounded fan-out the semaphore exists to prevent, and
+	// the semaphore never covered it.
+	//
+	// Nothing is lost by walking directories inline. Listings were already
+	// fetched by the counting pass and are served from childCache, so descent
+	// performs no network I/O -- only MkdirAll and a map lookup. Transfers
+	// still start as soon as each directory is reached and still overlap with
+	// each other.
 	for i := range children {
 		if children[i].IsFolder {
 			child := children[i]
-			childLocal := filepath.Join(localPath, child.Name)
-			childRemote := joinRemotePath(remotePath, child.Name)
 
-			state.wg.Add(1)
-
-			go func() {
-				defer state.wg.Done()
-				downloadRecursive(ctx, cc, session, tm, state, childRemote, childLocal)
-			}()
+			downloadRecursive(ctx, cc, session, tm, state,
+				joinRemotePath(remotePath, child.Name),
+				filepath.Join(localPath, child.Name),
+			)
 
 			continue
 		}

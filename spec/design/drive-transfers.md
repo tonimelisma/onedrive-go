@@ -245,6 +245,28 @@ Design properties:
 - **Error sentinels** (`errors.go`): `ErrDiskFull` and `ErrFileTooLargeForSpace` are in the `driveops` package. The sync engine matches them via `errors.Is` in `classifyResult` and `issueTypeForHTTPStatus`.
 - **DiskAvailable** (`disk_unix.go`): exported function using `syscall.Statfs` — `f_bavail * f_bsize` (blocks available to unprivileged users). Build-tagged `darwin || linux`.
 
+## Recursive Download Concurrency
+
+`get -r` bounds concurrency at exactly one place: a shared semaphore over file
+transfers, sized for the whole tree rather than per directory.
+
+Directory descent is deliberately not concurrent. Spawning a goroutine per
+subdirectory made the goroutine count scale with the number of directories in
+the tree -- the unbounded fan-out the semaphore exists to prevent, on the one
+path the semaphore never covered. A 200-directory tree left 202 goroutines
+live.
+
+Walking directories inline costs nothing here. The counting pass has already
+fetched every listing into `childCache`, so descent performs no network I/O at
+all -- only `MkdirAll` and a map lookup. Transfers still begin as soon as each
+directory is reached and still overlap with one another, so the concurrency
+that matters is unchanged; only the bookkeeping that was never bounded is
+removed.
+
+This also removes the last concurrent reader of `childCache`: the counting
+pass fills it before any download starts, and the inline walk reads it from a
+single goroutine.
+
 ## Design Constraints
 
 - `Upload()` accepts `io.ReaderAt` (not `io.Reader`): enables retry-safe uploads without re-opening the file. `io.NewSectionReader` creates independent readers for each chunk.
