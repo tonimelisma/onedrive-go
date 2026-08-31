@@ -388,13 +388,6 @@ func writeObservationStateToTx(
 	return nil
 }
 
-func (m *SyncStore) MarkLocalTruthComplete(ctx context.Context) error {
-	return m.updateObservationState(ctx, func(state *observationState) {
-		state.LocalTruthComplete = true
-		state.LocalTruthRecoveryReason = ""
-	})
-}
-
 func (m *SyncStore) MarkLocalTruthSuspect(ctx context.Context, reason string) error {
 	return m.updateObservationState(ctx, func(state *observationState) {
 		state.LocalTruthComplete = false

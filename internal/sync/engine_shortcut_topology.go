@@ -5,13 +5,6 @@ import (
 	"fmt"
 )
 
-func (e *Engine) SetShortcutChildWorkSink(sink ShortcutChildWorkSink) {
-	if e == nil {
-		return
-	}
-	e.shortcutChildWorkSink = sink
-}
-
 func (e *Engine) publishShortcutChildWorkSnapshot(
 	ctx context.Context,
 	publication ShortcutChildWorkSnapshot,

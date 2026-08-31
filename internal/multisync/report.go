@@ -92,17 +92,6 @@ func (s StartupSelectionSummary) SelectedCount() int {
 	return len(s.Results)
 }
 
-func (s StartupSelectionSummary) RunnableCount() int {
-	count := 0
-	for i := range s.Results {
-		if s.Results[i].Status == MountStartupRunnable {
-			count++
-		}
-	}
-
-	return count
-}
-
 func (s StartupSelectionSummary) PausedCount() int {
 	count := 0
 	for i := range s.Results {
