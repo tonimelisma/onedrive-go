@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Validates: R-2.5.6
+// Validates: R-2.5.6, R-2.3.2
 func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 	t.Parallel()
 

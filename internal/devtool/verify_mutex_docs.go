@@ -15,11 +15,6 @@ import (
 // or a local variable, under any import alias for the sync package.
 var mutexDeclPattern = regexp.MustCompile(`\b(?:[A-Za-z_][A-Za-z0-9_]*\.)?(?:RW)?Mutex\b`)
 
-type mutexDocViolation struct {
-	Location string
-	Detail   string
-}
-
 // runMutexDocs enforces that every mutex says what it guards.
 //
 // A mutex protects data, not code, and which data is never inferable from the
@@ -33,30 +28,13 @@ func runMutexDocs(
 	_ []string,
 	stdout, _ io.Writer,
 ) error {
-	if err := writeStatus(stdout, "==> mutex ownership docs\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-
-	violations, err := findMutexDocViolations(repoRoot)
-	if err != nil {
-		return err
-	}
-
-	if len(violations) == 0 {
-		return nil
-	}
-
-	var b strings.Builder
-	for _, v := range violations {
-		fmt.Fprintf(&b, "  %s: %s\n", v.Location, v.Detail)
-	}
-
-	return fmt.Errorf(
-		"mutex ownership doc check failed; state what each mutex guards:\n%s", b.String())
+	return runViolationCheck(stdout, "mutex ownership docs",
+		"mutex ownership doc check failed; state what each mutex guards",
+		func() ([]checkViolation, error) { return findMutexDocViolations(repoRoot) })
 }
 
-func findMutexDocViolations(repoRoot string) ([]mutexDocViolation, error) {
-	var violations []mutexDocViolation
+func findMutexDocViolations(repoRoot string) ([]checkViolation, error) {
+	var violations []checkViolation
 
 	err := filepath.WalkDir(repoRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -105,7 +83,7 @@ func skipMutexScanDir(name string) bool {
 	return name == verifyGitDir || name == verifyWorktreesDir || name == verifyNodeModulesDir
 }
 
-func scanFileForUndocumentedMutexes(repoRoot string, path string) ([]mutexDocViolation, error) {
+func scanFileForUndocumentedMutexes(repoRoot string, path string) ([]checkViolation, error) {
 	f, err := os.Open(path) //nolint:gosec // repo-relative verifier input
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
@@ -113,7 +91,7 @@ func scanFileForUndocumentedMutexes(repoRoot string, path string) ([]mutexDocVio
 	defer f.Close() //nolint:errcheck // read-only scan
 
 	var (
-		violations []mutexDocViolation
+		violations []checkViolation
 		previous   string
 	)
 
@@ -125,7 +103,7 @@ func scanFileForUndocumentedMutexes(repoRoot string, path string) ([]mutexDocVio
 		trimmed := strings.TrimSpace(line)
 
 		if isMutexDeclaration(trimmed) && !mutexIsDocumented(line, previous) {
-			violations = append(violations, mutexDocViolation{
+			violations = append(violations, checkViolation{
 				Location: fmt.Sprintf("%s:%d", repoRelative(repoRoot, path), lineNo),
 				Detail:   fmt.Sprintf("%q does not say what it guards", trimmed),
 			})

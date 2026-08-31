@@ -2132,7 +2132,7 @@ func TestUpload_ZeroByte_UsesSimple(t *testing.T) {
 	assert.Equal(t, int64(0), item.Size)
 }
 
-// Validates: R-5.6.8
+// Validates: R-5.6.8, R-2.16.1
 func TestUpload_NoPostUploadMetadataQuery(t *testing.T) {
 	// After upload completion, the system must NOT re-query file metadata.
 	// Server-side processing (virus scan, indexing) can temporarily show incorrect
