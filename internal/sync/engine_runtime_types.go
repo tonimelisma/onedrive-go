@@ -14,6 +14,9 @@ type engineFlow struct {
 	depGraph   *depGraph
 	dispatchCh chan *trackedAction
 
+	// activeScopesMu guards activeScopes and nothing else. The fields that
+	// follow it are owned by the single runtime goroutine; only the scope
+	// slice is read concurrently, by admission checks and status snapshots.
 	activeScopesMu sync.RWMutex
 	activeScopes   []activeScope
 	scopeState     *scopeState

@@ -176,7 +176,7 @@ func isBacklogRuleOwnFile(name string) bool {
 }
 
 func skipBacklogScanDir(name string) bool {
-	return name == verifyGitDir || name == verifyWorktreesDir || name == "node_modules"
+	return name == verifyGitDir || name == verifyWorktreesDir || name == verifyNodeModulesDir
 }
 
 func scanFileForBacklogIDs(

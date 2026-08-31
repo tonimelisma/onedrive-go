@@ -9,6 +9,8 @@ import (
 // ThrottleGate coordinates shared Retry-After deadlines across multiple retry
 // transports that intentionally belong to the same caller scope.
 type ThrottleGate struct {
+	// mu guards deadline, which several transports in one caller scope read
+	// and extend concurrently.
 	mu       sync.Mutex
 	deadline time.Time
 }

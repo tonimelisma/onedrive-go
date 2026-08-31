@@ -22,6 +22,9 @@ type oneShotChildRuns struct {
 	mode         syncengine.SyncMode
 	opts         syncengine.RunOptions
 
+	// mu guards every field below it: cache, parents, parentAckers,
+	// parentDone, snapshots, started, startup, and childReports. Parent and
+	// child mount goroutines all write here as they finish.
 	mu            gosync.Mutex
 	cache         *parentChildWorkSnapshots
 	parents       map[mountID]*mountSpec

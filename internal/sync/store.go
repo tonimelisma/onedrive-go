@@ -48,6 +48,7 @@ type SyncStore struct {
 	logger     *slog.Logger
 	nowFunc    func() time.Time // injectable for deterministic tests
 
+	// contentDriveMu guards cachedContentDriveID only.
 	contentDriveMu       stdsync.RWMutex
 	cachedContentDriveID driveid.ID
 }
