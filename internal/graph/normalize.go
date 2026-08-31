@@ -108,41 +108,82 @@ func deduplicateItems(items []Item, logger *slog.Logger) []Item {
 	return kept
 }
 
-// reorderDeletions sorts items so that deletions come before non-deletions
-// when they share the same ParentID. This prevents "item already exists"
-// errors when processing a rename-then-recreate at the same parent.
-// Uses stable sort to preserve relative order of items with different parents.
+// reorderDeletions moves deletions ahead of non-deletions among items that
+// share a parent, so a rename-then-recreate at the same parent does not fail
+// with "item already exists".
+//
+// This is a per-parent partition rather than a sort. Expressing it as a sort
+// requires a comparator that returns "equal" for items with different parents,
+// which is not a valid ordering: a delete and a create at parent P compare as
+// ordered, yet each compares equal to an unrelated item at parent Q, so
+// transitivity fails. A stable sort given that comparator quietly does nothing
+// whenever an item from another parent sits between the two, which in a delta
+// batch spanning folders is the normal case rather than the exception.
+//
+// Items keep their slots: each parent's items are rewritten into the exact
+// positions they already occupied, so the relative order of everything else is
+// untouched.
 func reorderDeletions(items []Item, logger *slog.Logger) []Item {
 	if len(items) == 0 {
 		return items
 	}
 
+	slotsByParent := make(map[string][]int, len(items))
+	for i := range items {
+		slotsByParent[items[i].ParentID] = append(slotsByParent[items[i].ParentID], i)
+	}
+
 	reordered := false
 
-	slices.SortStableFunc(items, func(a, b Item) int {
-		// Only reorder items that share a parent.
-		if a.ParentID != b.ParentID {
-			return 0
-		}
-
-		// Deletions sort before non-deletions at the same parent.
-		switch {
-		case a.IsDeleted && !b.IsDeleted:
+	for _, slots := range slotsByParent {
+		if partitionDeletionsFirst(items, slots) {
 			reordered = true
-			return -1
-		case !a.IsDeleted && b.IsDeleted:
-			reordered = true
-			return 1
-		default:
-			return 0
 		}
-	})
+	}
 
 	if reordered {
 		logger.Debug("reordered deletions before creations in delta batch")
 	}
 
 	return items
+}
+
+// partitionDeletionsFirst rewrites the given slots so deleted items come
+// first, preserving the original relative order within each group. It reports
+// whether anything moved.
+func partitionDeletionsFirst(items []Item, slots []int) bool {
+	if len(slots) < 2 {
+		return false
+	}
+
+	ordered := make([]Item, 0, len(slots))
+	for _, slot := range slots {
+		if items[slot].IsDeleted {
+			ordered = append(ordered, items[slot])
+		}
+	}
+
+	if len(ordered) == 0 || len(ordered) == len(slots) {
+		return false
+	}
+
+	for _, slot := range slots {
+		if !items[slot].IsDeleted {
+			ordered = append(ordered, items[slot])
+		}
+	}
+
+	moved := false
+
+	for i, slot := range slots {
+		if items[slot].ID != ordered[i].ID {
+			moved = true
+		}
+
+		items[slot] = ordered[i]
+	}
+
+	return moved
 }
 
 func decodeURLEncodedName(itemID, name string, logger *slog.Logger) string {
