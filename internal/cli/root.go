@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -477,11 +478,30 @@ func closeRootCommandLogger(cmd *cobra.Command) error {
 	return cc.closeCommandLogger()
 }
 
+// newSignalLogger reports signal handling before the command logger exists.
+// It writes to the status stream so an interrupt is visible to the user
+// without polluting command output.
+func newSignalLogger(statusWriter io.Writer) *slog.Logger {
+	if statusWriter == nil {
+		statusWriter = os.Stderr
+	}
+
+	return slog.New(slog.NewTextHandler(statusWriter, &slog.HandlerOptions{Level: slog.LevelInfo}))
+}
+
 func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 	cmd := newRootCmdWithWriters(outputWriter, statusWriter)
 	cmd.SetArgs(args)
 
-	err := cmd.Execute()
+	// Every command is interruptible, not just sync. Without this a signal
+	// killed the process outright and nothing deferred ran, so interrupting a
+	// transfer left its temporary state behind with no chance to clean up.
+	// The signal logger writes to the status stream because the configured
+	// command logger does not exist until the command starts.
+	ctx, cancel := shutdownContext(context.Background(), newSignalLogger(statusWriter))
+	defer cancel()
+
+	err := cmd.ExecuteContext(ctx)
 	completeRootCommandPerf(cmd, err)
 	closeErr := closeRootCommandLogger(cmd)
 	if closeErr != nil {

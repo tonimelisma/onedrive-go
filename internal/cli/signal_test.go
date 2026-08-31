@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -30,7 +31,8 @@ func TestShutdownContext_FirstSignalCancels(t *testing.T) {
 	defer cancel()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	ctx := shutdownContext(parent, logger)
+	ctx, stop := shutdownContext(parent, logger)
+	defer stop()
 
 	// Send SIGINT to ourselves.
 	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGINT), "failed to send SIGINT")
@@ -170,7 +172,8 @@ func TestShutdownContext_ParentCancelStopsGoroutine(t *testing.T) {
 
 	parent, cancel := context.WithCancel(t.Context())
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	ctx := shutdownContext(parent, logger)
+	ctx, stop := shutdownContext(parent, logger)
+	defer stop()
 
 	// Cancel parent — derived context should also cancel.
 	cancel()
@@ -185,7 +188,8 @@ func TestShutdownContext_ParentCancelStopsGoroutine(t *testing.T) {
 
 func runShutdownContextSecondSignalHelper() {
 	logger := slog.New(slog.DiscardHandler)
-	ctx := shutdownContext(context.Background(), logger)
+	ctx, stop := shutdownContext(context.Background(), logger)
+	defer stop()
 
 	mustWriteHelperLine("ready")
 	<-ctx.Done()
@@ -218,7 +222,12 @@ func runSyncWatchFirstSignalHelper() {
 	}
 
 	cmd := newSyncCmd()
-	cmd.SetContext(context.WithValue(context.Background(), cliContextKey{}, cc))
+	// Mirror the real entry point, which installs signal handling once for
+	// every command rather than inside runSync.
+	signalCtx, stopSignals := shutdownContext(context.Background(), slog.New(slog.DiscardHandler))
+	defer stopSignals()
+
+	cmd.SetContext(context.WithValue(signalCtx, cliContextKey{}, cc))
 	if err := cmd.Flags().Set("watch", "true"); err != nil {
 		panic(err)
 	}
@@ -289,7 +298,12 @@ sync_dir = %q
 	}
 
 	cmd := newSyncCmd()
-	cmd.SetContext(context.WithValue(context.Background(), cliContextKey{}, cc))
+	// Mirror the real entry point, which installs signal handling once for
+	// every command rather than inside runSync.
+	signalCtx, stopSignals := shutdownContext(context.Background(), slog.New(slog.DiscardHandler))
+	defer stopSignals()
+
+	cmd.SetContext(context.WithValue(signalCtx, cliContextKey{}, cc))
 	if err := cmd.Flags().Set("watch", "true"); err != nil {
 		panic(err)
 	}
@@ -302,4 +316,27 @@ func mustWriteHelperLine(line string) {
 	if _, err := fmt.Fprintln(os.Stdout, line); err != nil {
 		panic(err)
 	}
+}
+
+// Validates: R-6.3.6
+//
+// Signal handling is installed once per command invocation rather than once
+// per process, so the returned cancel has to release the goroutine and
+// unregister the handler. Without that, every invocation in a long-lived
+// process -- a test binary running the CLI repeatedly, most obviously --
+// would strand a goroutine and leave another handler registered.
+func TestShutdownContext_CancelReleasesSignalGoroutine(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+
+	before := runtime.NumGoroutine()
+
+	for range 50 {
+		_, stop := shutdownContext(context.Background(), logger)
+		stop()
+	}
+
+	require.Eventually(t, func() bool {
+		return runtime.NumGoroutine() <= before+2
+	}, 5*time.Second, 10*time.Millisecond,
+		"signal goroutines should unwind after cancel")
 }

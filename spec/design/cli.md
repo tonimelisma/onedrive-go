@@ -44,6 +44,27 @@ are inserted, updated, pruned, and validated.
 | Command failure presentation exhaustively maps the shared error classes, while lower layers still own their own domain classification. | `TestClassifyCommandError`, `TestCommandFailurePresentationForClass` |
 | Command-level side-effect contracts are tested at the CLI boundary: read-only commands do not mutate managed state, and mutating commands fail selector/path validation before remote mutation. | `TestRunLs_DoesNotMutateManagedState`, `TestRunRm_RequiresExplicitPathBeforeGraphMutation` |
 
+## Signal Handling
+
+Signal handling is installed once, at the process entry point, so every command
+is interruptible rather than only `sync`. The first SIGINT/SIGTERM cancels the
+command context and the command unwinds through its own cleanup; the second is
+the escape hatch for a stuck process.
+
+Previously only `sync` installed a handler, so a signal during any other
+command killed the process outright and nothing deferred ran. Interrupting a
+transfer left its temporary state on disk with no opportunity to clean up, and
+recovery depended entirely on the next run noticing.
+
+The handler is per invocation, not per process, so the context's cancel must be
+called when the command finishes: it stops the signal goroutine and unregisters
+the handler. A test binary that runs the CLI repeatedly is the case that makes
+this matter.
+
+The signal logger writes to the status stream because the configured command
+logger does not exist yet when the handler is installed -- log configuration is
+resolved from flags after the command starts.
+
 ## Command Surface
 
 | Command family | Purpose |
