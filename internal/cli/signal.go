@@ -9,11 +9,16 @@ import (
 )
 
 // shutdownContext returns a context that cancels on the first SIGINT/SIGTERM
-// and force-exits on the second. The first signal is cooperative: the watch
-// engine seals new admission, lets already-admitted work follow the normal
-// shutdown path, and exits cleanly when the runtime settles. The second signal
-// remains the escape hatch for a stuck process.
-func shutdownContext(parent context.Context, logger *slog.Logger) context.Context {
+// and force-exits on the second. The first signal is cooperative: work in
+// flight follows its normal shutdown path -- the watch engine seals new
+// admission and exits when the runtime settles, and shorter commands unwind
+// through their own cleanup. The second signal remains the escape hatch for a
+// stuck process.
+//
+// The returned cancel must be called when the caller is done. It stops the
+// signal goroutine and unregisters the handler, which matters because this is
+// installed once per command invocation rather than once per process.
+func shutdownContext(parent context.Context, logger *slog.Logger) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
 
 	sigCh := make(chan os.Signal, 1)
@@ -44,5 +49,5 @@ func shutdownContext(parent context.Context, logger *slog.Logger) context.Contex
 		}
 	}()
 
-	return ctx
+	return ctx, cancel
 }
