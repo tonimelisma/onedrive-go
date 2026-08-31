@@ -345,6 +345,15 @@ Static verification is a first-class architectural constraint, not a best-effort
   out. A directory sync that fails is reported rather than swallowed: the
   contents are already visible, but success would claim a guarantee the
   filesystem refused, and rewriting the same bytes is safe to retry.
+- The lint version is checked, not just pinned. CI installs a pinned
+  golangci-lint, but nothing compared that pin against the version a developer
+  runs locally, and a different version is a different lint policy rather than
+  a cosmetic difference. Local verification then passes on rules CI does not
+  have, or misses rules it does, and the disagreement only surfaces after a
+  push -- which is exactly how a `noctx` rule absent from an older local build
+  failed CI on a branch that had just verified clean. `devtool verify` now
+  reads the pin out of the workflow, so the two cannot drift apart through a
+  second copy of the number, and refuses to lint against a different version.
 - Requirement traceability is checked in both directions, and the reverse
   direction is the one that matters. Forward: a `Validates:` or `Implements:`
   reference must resolve to a declared requirement, so a renamed requirement

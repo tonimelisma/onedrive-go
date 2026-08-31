@@ -474,6 +474,9 @@ func runLint(ctx context.Context, runner commandRunner, repoRoot string, env []s
 	if err := writeStatus(stdout, "==> golangci-lint\n"); err != nil {
 		return fmt.Errorf("write status: %w", err)
 	}
+	if err := assertLintVersionMatchesCI(ctx, runner, repoRoot); err != nil {
+		return err
+	}
 	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "golangci-lint", "run", "--allow-parallel-runners"); err != nil {
 		return fmt.Errorf("lint: %w", err)
 	}
