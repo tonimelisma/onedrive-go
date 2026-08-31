@@ -24,6 +24,21 @@ Every driveId from any API response must be lowercased and zero-padded to 16 cha
 
 Delta responses include QuickXorHash, SHA1, or SHA256 hashes on items marked as deleted. These hashes are stale (from the item's last live state) or entirely bogus. The normalization pipeline clears all hashes on deleted items.
 
+### Deletion Ordering Within A Delta Batch
+
+A delta batch can contain a deletion and a creation at the same parent, from a
+rename-then-recreate. The deletion has to be processed first or the creation
+fails with "item already exists", so normalization moves same-parent deletions
+ahead of their siblings.
+
+This is a per-parent partition, not a sort. A sort needs a comparator that
+calls items with different parents equal, and that is not a valid ordering: a
+delete and a create at parent P are ordered with respect to each other, yet
+each compares equal to an unrelated item at parent Q, so transitivity fails.
+A stable sort given such a comparator silently does nothing whenever another
+parent's item sits between the two -- which, in a batch spanning folders, is
+the normal case rather than the exception.
+
 ### Remote Hashes Are Not Guaranteed To Share The Local Algorithm
 
 `driveops.SelectHash` picks the first populated hash in the order quickXor,
