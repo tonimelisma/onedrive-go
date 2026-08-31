@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	stdsync "sync" // used by WaitGroup
 	"time"
 
@@ -139,10 +140,14 @@ func (wp *workerPool) worker(ctx context.Context) {
 func (wp *workerPool) safeExecuteAction(ctx context.Context, ta *trackedAction) {
 	defer func() {
 		if r := recover(); r != nil {
+			// The stack is captured here because the goroutine that could
+			// answer "where" is unwound by the time anyone reads the failed
+			// completion, and the recovered value names only "what".
 			wp.logger.Error("worker: panic in action execution",
 				slog.Int64("id", ta.ID),
 				slog.String("path", ta.Action.Path),
 				slog.Any("panic", r),
+				slog.String("stack", string(debug.Stack())),
 			)
 			panicErr := fmt.Errorf("panic: %v", r)
 			wp.sendResult(ctx, ta, nil, panicErr)
