@@ -321,7 +321,12 @@ func TestVerifyBaseline_CanceledContextReturnsWrappedCancellation(t *testing.T) 
 }
 
 // Validates: R-2.7
-func TestVerifyBaseline_EmptyLocalHashSkipsHashCheck(t *testing.T) {
+// Validates: R-2.7
+//
+// A baseline entry with no local hash cannot be checked, and reporting it as
+// verified answers "is my data intact" with evidence that does not exist. It
+// is still not hashed, because there is nothing to compare the result against.
+func TestVerifyBaseline_EmptyLocalHashIsReportedUnverifiable(t *testing.T) {
 	t.Parallel()
 
 	bl := syncengine.NewBaselineForTest([]*syncengine.BaselineEntry{{
@@ -345,8 +350,11 @@ func TestVerifyBaseline_EmptyLocalHashSkipsHashCheck(t *testing.T) {
 		newTestLogger(),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 1, report.Verified)
-	assert.Empty(t, report.Mismatches)
+	assert.Zero(t, report.Verified, "nothing was compared, so nothing is verified")
+	assert.Empty(t, report.Mismatches, "an unchecked file is not a mismatch")
+	require.Len(t, report.Unverifiable, 1)
+	assert.Equal(t, "sharepoint.docx", report.Unverifiable[0].Path)
+	assert.Equal(t, VerifyUnverifiable, report.Unverifiable[0].Status)
 	assert.False(t, hashCalled, "verify should skip hashing when the baseline has no local hash")
 }
 

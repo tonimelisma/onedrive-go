@@ -29,6 +29,10 @@ const (
 	VerifyMissing      = "missing"
 	VerifyHashMismatch = "hash_mismatch"
 	VerifySizeMismatch = "size_mismatch"
+
+	// VerifyUnverifiable marks a baseline entry that carries no local hash to
+	// compare against, so its content was never checked.
+	VerifyUnverifiable = "unverifiable"
 )
 
 // VerifyBaseline performs a full-tree hash verification of local files against
@@ -71,9 +75,12 @@ func verifyBaselineWithHasher(
 		}
 
 		result := verifyEntry(tree, relPath, entry, computeHash, logger)
-		if result.Status == VerifyOK {
+		switch result.Status {
+		case VerifyOK:
 			report.Verified++
-		} else {
+		case VerifyUnverifiable:
+			report.Unverifiable = append(report.Unverifiable, result)
+		default:
 			report.Mismatches = append(report.Mismatches, result)
 		}
 	})
@@ -84,6 +91,9 @@ func verifyBaselineWithHasher(
 
 	sort.Slice(report.Mismatches, func(i, j int) bool {
 		return report.Mismatches[i].Path < report.Mismatches[j].Path
+	})
+	sort.Slice(report.Unverifiable, func(i, j int) bool {
+		return report.Unverifiable[i].Path < report.Unverifiable[j].Path
 	})
 
 	return report, nil
@@ -127,10 +137,12 @@ func verifyEntry(
 		}
 	}
 
-	// Skip hash check if baseline has no local hash (e.g., SharePoint-enriched
-	// files where only remote_hash is populated).
+	// A baseline entry can carry no local hash: SharePoint-enriched files
+	// populate only remote_hash, and the scanner records an empty hash when
+	// hashing fails. There is nothing to compare against, so the file is
+	// reported as unchecked rather than counted among the verified.
 	if entry.LocalHash == "" {
-		return Result{Path: entry.Path, Status: VerifyOK}
+		return Result{Path: entry.Path, Status: VerifyUnverifiable}
 	}
 
 	absPath, err := tree.Abs(relPath)
