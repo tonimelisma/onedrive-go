@@ -4,6 +4,22 @@ GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/
 
 Implements: R-3.7 [verified], R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.1 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-4.9.4 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
+## Clearing The Account Auth Requirement Has One Owner
+
+`ClearAccountAuthRequirement` is the single writer of that field's cleared
+state. It used to accept an `AuthClearSource` and ignore it, which advertised
+a boundary the catalog does not have: the catalog records whether a
+requirement stands, never how it ended. The parameter is gone, and callers name
+the reason in their own logging instead, so the log is where the source lives
+and the signature no longer implies otherwise.
+
+`ApplyPlainLogout` was a verbatim copy of that function under a different name,
+giving one durable field two writers. Logout now calls the shared path, which
+also means a logout-driven clear is logged with its source like every other
+clear; previously it was the one clear that happened silently. That is what
+`AuthClearSourceLogout` was for -- it existed but nothing used it, which was
+the visible end of this duplication.
+
 ## Overview
 
 TOML configuration with flat global settings and per-drive sections. Drive sections are identified by `:` in the section name (e.g., `["personal:user@example.com"]`).

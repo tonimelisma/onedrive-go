@@ -2460,5 +2460,5 @@ func TestDriveList_ClearsPersistedAuthScopeAfterSuccessfulDiscovery(t *testing.T
 	}
 
 	require.NoError(t, runDriveListWithContext(t.Context(), cc, false))
-	assert.False(t, hasPersistedAccountAuthRequirement(t.Context(), cid.Email(), testDriveLogger(t)))
+	assert.False(t, hasPersistedAccountAuthRequirement(cid.Email(), testDriveLogger(t)))
 }

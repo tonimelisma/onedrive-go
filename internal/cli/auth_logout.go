@@ -173,7 +173,9 @@ func executePlainLogout(
 		return err
 	}
 
-	if err := config.ApplyPlainLogout(config.DefaultDataDir(), account); err != nil {
+	// Clearing the persisted auth requirement has one owner, so logout goes
+	// through the same path as every other clear and is logged with its source.
+	if err := clearAccountAuthRequirementForSource(account, config.AuthClearSourceLogout, logger); err != nil {
 		return fmt.Errorf("updating catalog after logout: %w", err)
 	}
 

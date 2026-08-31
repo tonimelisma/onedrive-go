@@ -7,7 +7,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
@@ -128,24 +127,6 @@ func RegisterSharedDrive(dataDir string, cid, ownerCID driveid.CanonicalID, disp
 		}
 
 		catalog.UpsertDrive(&drive)
-		return nil
-	})
-}
-
-// ApplyPlainLogout clears any persisted account-auth requirement while keeping
-// retained inventory knowledge intact for future re-login.
-func ApplyPlainLogout(dataDir, email string) error {
-	if email == "" {
-		return nil
-	}
-
-	return UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
-		account, found := catalog.AccountByEmail(email)
-		if !found {
-			return nil
-		}
-		account.AuthRequirementReason = authstate.Reason("")
-		catalog.UpsertAccount(&account)
 		return nil
 	})
 }

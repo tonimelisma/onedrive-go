@@ -92,7 +92,7 @@ func TestRegisterSharedDrive_UpsertsSharedOwnership(t *testing.T) {
 }
 
 // Validates: R-3.1.5, R-2.10.45
-func TestApplyPlainLogout_ClearsAuthRequirementAndPreservesInventory(t *testing.T) {
+func TestClearAccountAuthRequirement_ClearsAuthRequirementAndPreservesInventory(t *testing.T) {
 	setConfigTestHome(t)
 
 	accountCID := driveid.MustCanonicalID("personal:user@example.com")
@@ -106,7 +106,7 @@ func TestApplyPlainLogout_ClearsAuthRequirementAndPreservesInventory(t *testing.
 		drive.RetainedStatePresent = true
 	})
 
-	require.NoError(t, ApplyPlainLogout(DefaultDataDir(), accountCID.Email()))
+	require.NoError(t, ClearAccountAuthRequirement(DefaultDataDir(), accountCID.Email()))
 
 	account, found := loadCatalogAccount(t, accountCID)
 	require.True(t, found)
