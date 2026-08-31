@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -110,41 +112,95 @@ func resumeSingleDriveWithNow(cc *CLIContext, now func() time.Time, cfg *config.
 	return nil
 }
 
+// resumeAllDrivesWithNow resumes every paused drive.
+//
+// One drive failing must not strand the rest. "Resume all" is a bulk request,
+// and returning at the first failure leaves an arbitrary subset still paused
+// with nothing saying which -- the drives the loop had not reached yet look
+// exactly like the ones that resumed. Every drive is attempted and the
+// failures are reported together.
 func resumeAllDrivesWithNow(cc *CLIContext, now func() time.Time, cfg *config.Config) error {
 	if len(cfg.Drives) == 0 {
 		return fmt.Errorf("no drives configured")
 	}
 
 	resumed := 0
-	for cid := range cfg.Drives {
-		d := cfg.Drives[cid]
-		if !d.IsPaused(now()) {
-			if d.Paused != nil && *d.Paused {
-				if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
-					return fmt.Errorf("clearing expired pause for %s: %w", cid.String(), err)
-				}
 
-				cc.Statusf("Drive %s: expired timed pause cleared\n", cid.String())
-				resumed++
-			}
+	var errs []error
+
+	// Sorted rather than map order: this prints a line per drive, and a bulk
+	// command that reports its drives in a different order every run is hard
+	// to read and harder to diff. It also makes a partial failure reproducible
+	// instead of depending on map iteration.
+	for _, cid := range sortedDriveCanonicalIDs(cfg.Drives) {
+		drive := cfg.Drives[cid]
+
+		cleared, err := resumeOneDrive(cc, now, cid, &drive)
+		if err != nil {
+			errs = append(errs, err)
 
 			continue
 		}
 
-		if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
-			return fmt.Errorf("resuming %s: %w", cid.String(), err)
+		if cleared {
+			resumed++
 		}
+	}
 
-		cc.Statusf("Drive %s resumed\n", cid.String())
-		resumed++
+	if resumed > 0 {
+		notifyDaemon(cc)
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 
 	if resumed == 0 {
 		cc.Statusf("No paused drives found\n")
-		return nil
 	}
 
-	notifyDaemon(cc)
-
 	return nil
+}
+
+// sortedDriveCanonicalIDs returns the configured drives in a stable order.
+func sortedDriveCanonicalIDs(drives map[driveid.CanonicalID]config.Drive) []driveid.CanonicalID {
+	ids := make([]driveid.CanonicalID, 0, len(drives))
+	for cid := range drives {
+		ids = append(ids, cid)
+	}
+
+	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
+
+	return ids
+}
+
+// resumeOneDrive clears any pause on a single drive, reporting whether it
+// cleared one.
+func resumeOneDrive(
+	cc *CLIContext,
+	now func() time.Time,
+	cid driveid.CanonicalID,
+	drive *config.Drive,
+) (bool, error) {
+	if !drive.IsPaused(now()) {
+		if drive.Paused == nil || !*drive.Paused {
+			return false, nil
+		}
+
+		if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
+			return false, fmt.Errorf("clearing expired pause for %s: %w", cid.String(), err)
+		}
+
+		cc.Statusf("Drive %s: expired timed pause cleared\n", cid.String())
+
+		return true, nil
+	}
+
+	if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
+		return false, fmt.Errorf("resuming %s: %w", cid.String(), err)
+	}
+
+	cc.Statusf("Drive %s resumed\n", cid.String())
+
+	return true, nil
 }
