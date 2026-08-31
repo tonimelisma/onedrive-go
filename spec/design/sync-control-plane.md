@@ -4,6 +4,36 @@ GOVERNS: internal/cli/sync.go, internal/multisync/*.go, internal/synccontrol/*.g
 
 Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
+## Control Socket Exposure
+
+The control socket can stop sync and make the daemon write profile output, so
+reaching it is equivalent to controlling the runtime.
+
+The socket file is created 0600, which is what stops another user connecting to
+it. The attack that permission does not stop is replacement: anyone who can
+create entries in the socket's directory can unlink it and bind their own, and
+the CLI then talks to them. So the directory property that matters is who may
+*write* there, not who may read.
+
+That distinction is load-bearing. `MkdirAll` only applies its mode to
+directories it creates, and the socket path falls back to a name under the
+system temp directory when the data-directory path would exceed the Unix socket
+length limit -- a name derived from a predictable hash, so a local user can
+create it first and own it. Startup therefore checks the directory rather than
+trusting the mode it asked for.
+
+A directory is acceptable when it belongs to this user or to root, and is
+either closed to other writers or sticky. The sticky bit is what makes a shared
+temp directory safe: others may create their own entries but cannot remove
+ours. An attacker-owned directory is refused even when sticky, because its
+owner can always remove what it contains. Refusing on group or other *read*
+access instead would reject both the system temp directory and a conventional
+0755 data directory, neither of which lets anyone replace the socket.
+
+Request bodies are bounded. The daemon is long-lived and decodes the perf
+capture request whole, so an unbounded body is a way for anything that can
+reach the socket to spend the daemon's memory.
+
 ## Overview
 
 The control plane owns multi-mount sync lifecycle. It sits above the
