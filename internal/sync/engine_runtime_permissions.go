@@ -321,7 +321,7 @@ func (flow *engineFlow) recordPermissionBlockedRetry(
 	}
 	flow.retryRowsByKey[row.WorkKey()] = *row
 	fields := append(flow.summaryLogFields(
-		errclass.ClassBlockScopeingTransient,
+		errclass.ClassScopeBlockingTransient,
 		conditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),
 		work.Path,
 		scopeKey,

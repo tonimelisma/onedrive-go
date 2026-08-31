@@ -177,7 +177,7 @@ func TestEngineFlow_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t *test
 	flow := testEngineFlow(t, eng)
 
 	handled, err := flow.applyTrialReclassification(t.Context(), rt, &resultDecision{
-		Class:    errclass.ClassBlockScopeingTransient,
+		Class:    errclass.ClassScopeBlockingTransient,
 		ScopeKey: SKDiskLocal(),
 	}, &actionCompletion{
 		Path:       "disk.txt",

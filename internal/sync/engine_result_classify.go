@@ -14,7 +14,7 @@ const (
 	resultSuccess    = errclass.ClassSuccess
 	resultSuperseded = errclass.ClassSuperseded
 	resultRequeue    = errclass.ClassRetryableTransient
-	resultBlockScope = errclass.ClassBlockScopeingTransient
+	resultBlockScope = errclass.ClassScopeBlockingTransient
 	resultSkip       = errclass.ClassActionable
 	resultShutdown   = errclass.ClassShutdown
 	resultFatal      = errclass.ClassFatal
