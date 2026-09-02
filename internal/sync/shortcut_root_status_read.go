@@ -27,18 +27,18 @@ func ReadShortcutRootStatusSnapshot(
 
 // ReadShortcutRootStatusSnapshot reads parent-owned shortcut-root lifecycle
 // state from an already-open sync store.
-func (m *SyncStore) ReadShortcutRootStatusSnapshot(
+func (s *SyncStore) ReadShortcutRootStatusSnapshot(
 	ctx context.Context,
 	namespaceID string,
 	parentSyncRoot string,
 ) ([]ShortcutRootStatusView, error) {
-	if m == nil {
+	if s == nil {
 		return nil, fmt.Errorf("read shortcut root status snapshot: nil store")
 	}
 
 	inspector := &storeInspector{
-		db:     m.db,
-		logger: m.logger,
+		db:     s.db,
+		logger: s.logger,
 	}
 
 	return inspector.ReadShortcutRootStatusSnapshot(ctx, namespaceID, parentSyncRoot)

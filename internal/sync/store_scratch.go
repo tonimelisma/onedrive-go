@@ -35,7 +35,7 @@ type scratchPlanningSeed struct {
 // createScratchPlanningStore opens a temporary SyncStore and seeds it with the
 // committed baseline, remote mirror, and observation state needed for dry-run
 // planning. The caller owns the returned cleanup function.
-func (m *SyncStore) createScratchPlanningStore(
+func (s *SyncStore) createScratchPlanningStore(
 	ctx context.Context,
 	baseline *Baseline,
 ) (_ *SyncStore, cleanup func(context.Context) error, err error) {
@@ -43,7 +43,7 @@ func (m *SyncStore) createScratchPlanningStore(
 		return nil, nil, fmt.Errorf("sync: scratch planning store requires baseline")
 	}
 
-	seed, err := m.readScratchPlanningSeed(ctx, baseline)
+	seed, err := s.readScratchPlanningSeed(ctx, baseline)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -54,7 +54,7 @@ func (m *SyncStore) createScratchPlanningStore(
 	}
 
 	scratchPath := filepath.Join(scratchDir, "scratch.db")
-	scratch, err := NewSyncStore(ctx, scratchPath, m.logger)
+	scratch, err := NewSyncStore(ctx, scratchPath, s.logger)
 	if err != nil {
 		if removeErr := localpath.RemoveAll(scratchDir); removeErr != nil {
 			err = errors.Join(err, fmt.Errorf("remove scratch planning directory: %w", removeErr))
@@ -95,11 +95,11 @@ func (m *SyncStore) createScratchPlanningStore(
 	return scratch, cleanup, nil
 }
 
-func (m *SyncStore) readScratchPlanningSeed(
+func (s *SyncStore) readScratchPlanningSeed(
 	ctx context.Context,
 	baseline *Baseline,
 ) (seed scratchPlanningSeed, err error) {
-	tx, err := beginPerfTx(ctx, m.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return scratchPlanningSeed{}, fmt.Errorf("sync: beginning scratch planning seed read transaction: %w", err)
 	}
@@ -107,7 +107,7 @@ func (m *SyncStore) readScratchPlanningSeed(
 		err = finalizeTxRollback(err, tx, "sync: rollback scratch planning seed read transaction")
 	}()
 
-	observationState, err := m.readObservationStateTx(ctx, tx)
+	observationState, err := s.readObservationStateTx(ctx, tx)
 	if err != nil {
 		return scratchPlanningSeed{}, fmt.Errorf("sync: reading scratch planning observation state: %w", err)
 	}
@@ -124,8 +124,8 @@ func (m *SyncStore) readScratchPlanningSeed(
 	}, nil
 }
 
-func (m *SyncStore) applyScratchPlanningSeed(ctx context.Context, seed scratchPlanningSeed) (err error) {
-	tx, err := beginPerfTx(ctx, m.db)
+func (s *SyncStore) applyScratchPlanningSeed(ctx context.Context, seed scratchPlanningSeed) (err error) {
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning scratch planning seed transaction: %w", err)
 	}
@@ -133,7 +133,7 @@ func (m *SyncStore) applyScratchPlanningSeed(ctx context.Context, seed scratchPl
 		err = finalizeTxRollback(err, tx, "sync: rollback scratch planning seed transaction")
 	}()
 
-	if err := m.writeObservationStateTx(ctx, tx, seed.observationState); err != nil {
+	if err := s.writeObservationStateTx(ctx, tx, seed.observationState); err != nil {
 		return fmt.Errorf("sync: writing scratch planning observation state: %w", err)
 	}
 

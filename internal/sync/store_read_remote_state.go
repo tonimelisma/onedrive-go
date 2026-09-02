@@ -30,13 +30,13 @@ const (
 )
 
 // ListRemoteState returns the current remote mirror rows.
-func (m *SyncStore) ListRemoteState(ctx context.Context) ([]remoteStateRow, error) {
-	contentDriveID, err := m.contentDriveIDForRead(ctx, driveid.ID{})
+func (s *SyncStore) ListRemoteState(ctx context.Context) ([]remoteStateRow, error) {
+	contentDriveID, err := s.contentDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
 		return nil, fmt.Errorf("sync: reading content drive for remote_state: %w", err)
 	}
 
-	return queryRemoteStateRowsWithRunner(ctx, m.db,
+	return queryRemoteStateRowsWithRunner(ctx, s.db,
 		`SELECT `+sqlSelectRemoteStateCols+` FROM remote_state`,
 		contentDriveID,
 	)
@@ -94,14 +94,14 @@ func queryRemoteStateRowsWithRunner(
 	return result, nil
 }
 
-func (m *SyncStore) getRemoteStateRow(
+func (s *SyncStore) getRemoteStateRow(
 	ctx context.Context,
 	driveID driveid.ID,
 	query string,
 	arg string,
 	contextLabel string,
 ) (*remoteStateRow, bool, error) {
-	contentDriveID, err := m.contentDriveIDForRead(ctx, driveID)
+	contentDriveID, err := s.contentDriveIDForRead(ctx, driveID)
 	if err != nil {
 		return nil, false, fmt.Errorf("sync: reading content drive for %s: %w", contextLabel, err)
 	}
@@ -112,7 +112,7 @@ func (m *SyncStore) getRemoteStateRow(
 	row, err := scanRemoteStateRowWithQuerier(
 		contentDriveID,
 		func(dest ...any) error {
-			return m.db.QueryRowContext(ctx, query, arg).Scan(dest...)
+			return s.db.QueryRowContext(ctx, query, arg).Scan(dest...)
 		},
 	)
 	if err != nil {
@@ -126,21 +126,21 @@ func (m *SyncStore) getRemoteStateRow(
 }
 
 // GetRemoteStateByPath looks up the current remote_state row for a path.
-func (m *SyncStore) GetRemoteStateByPath(
+func (s *SyncStore) GetRemoteStateByPath(
 	ctx context.Context,
 	path string,
 	driveID driveid.ID,
 ) (*remoteStateRow, bool, error) {
-	return m.getRemoteStateRow(ctx, driveID, sqlGetRemoteStateByPath, path, "GetRemoteStateByPath")
+	return s.getRemoteStateRow(ctx, driveID, sqlGetRemoteStateByPath, path, "GetRemoteStateByPath")
 }
 
 // GetRemoteStateByID looks up the exact remote_state row for an item ID.
-func (m *SyncStore) GetRemoteStateByID(
+func (s *SyncStore) GetRemoteStateByID(
 	ctx context.Context,
 	driveID driveid.ID,
 	itemID string,
 ) (*remoteStateRow, bool, error) {
-	return m.getRemoteStateRow(ctx, driveID, sqlGetRemoteStateByID, itemID, "GetRemoteStateByID")
+	return s.getRemoteStateRow(ctx, driveID, sqlGetRemoteStateByID, itemID, "GetRemoteStateByID")
 }
 
 func scanRemoteStateRowWithQuerier(

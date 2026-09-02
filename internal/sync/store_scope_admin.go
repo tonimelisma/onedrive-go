@@ -11,7 +11,7 @@ import (
 //
 // In one transaction it deletes the persisted block scope and marks blocked
 // retry work ready immediately. observation_issues remain observation-owned.
-func (m *SyncStore) ReleaseScope(
+func (s *SyncStore) ReleaseScope(
 	ctx context.Context,
 	scopeKey ScopeKey,
 	now time.Time,
@@ -19,7 +19,7 @@ func (m *SyncStore) ReleaseScope(
 	wire := scopeKey.String()
 	nowNano := now.UnixNano()
 
-	tx, err := beginPerfTx(ctx, m.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin release-scope tx for %s: %w", wire, err)
 	}
@@ -50,14 +50,14 @@ func (m *SyncStore) ReleaseScope(
 // This is used when the blocked subtree itself disappears, for example when a
 // mount root disappears. Discarding differs from release: blocked retry
 // work is deleted instead of made retryable.
-func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err error) {
+func (s *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err error) {
 	if scopeKey.IsZero() {
 		return fmt.Errorf("sync: discard scope: missing scope key")
 	}
 
 	wire := scopeKey.String()
 
-	tx, err := beginPerfTx(ctx, m.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin discard-scope tx for %s: %w", wire, err)
 	}
@@ -82,8 +82,8 @@ func (m *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err er
 	return nil
 }
 
-func (m *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) error {
-	blocks, err := m.ListBlockScopes(ctx)
+func (s *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) error {
+	blocks, err := s.ListBlockScopes(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: listing block scopes for pruning: %w", err)
 	}
@@ -94,7 +94,7 @@ func (m *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) erro
 			continue
 		}
 
-		hasBlockedRetryWork, keepErr := m.scopeHasBlockedRetryWork(ctx, block.Key)
+		hasBlockedRetryWork, keepErr := s.scopeHasBlockedRetryWork(ctx, block.Key)
 		if keepErr != nil {
 			return keepErr
 		}
@@ -102,7 +102,7 @@ func (m *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) erro
 			continue
 		}
 
-		if err := m.deleteBlockScopeOnly(ctx, block.Key); err != nil {
+		if err := s.deleteBlockScopeOnly(ctx, block.Key); err != nil {
 			return fmt.Errorf("sync: pruning block scope %s without blocked work: %w", block.Key.String(), err)
 		}
 	}
@@ -110,10 +110,10 @@ func (m *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) erro
 	return nil
 }
 
-func (m *SyncStore) deleteBlockScopeOnly(ctx context.Context, scopeKey ScopeKey) (err error) {
+func (s *SyncStore) deleteBlockScopeOnly(ctx context.Context, scopeKey ScopeKey) (err error) {
 	wire := scopeKey.String()
 
-	tx, err := beginPerfTx(ctx, m.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin delete-scope tx for %s: %w", wire, err)
 	}
@@ -134,8 +134,8 @@ func (m *SyncStore) deleteBlockScopeOnly(ctx context.Context, scopeKey ScopeKey)
 	return nil
 }
 
-func (m *SyncStore) scopeHasBlockedRetryWork(ctx context.Context, scopeKey ScopeKey) (bool, error) {
-	rows, err := m.ListBlockedRetryWork(ctx)
+func (s *SyncStore) scopeHasBlockedRetryWork(ctx context.Context, scopeKey ScopeKey) (bool, error) {
+	rows, err := s.ListBlockedRetryWork(ctx)
 	if err != nil {
 		return false, fmt.Errorf("sync: listing blocked retry work for scope pruning: %w", err)
 	}

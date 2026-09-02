@@ -82,14 +82,14 @@ func readPathTruthStatus(
 
 // ReadDriveStatusSnapshot reads the raw per-mount authority snapshot from an
 // already-open sync store.
-func (m *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSnapshot, error) {
-	if m == nil {
+func (s *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSnapshot, error) {
+	if s == nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status snapshot: nil store")
 	}
 
 	inspector := &storeInspector{
-		db:     m.db,
-		logger: m.logger,
+		db:     s.db,
+		logger: s.logger,
 	}
 
 	return inspector.ReadDriveStatusSnapshot(ctx)
@@ -97,17 +97,17 @@ func (m *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSna
 
 // ReadPathTruthStatus derives current truth availability for the requested
 // paths from an already-open sync store.
-func (m *SyncStore) ReadPathTruthStatus(
+func (s *SyncStore) ReadPathTruthStatus(
 	ctx context.Context,
 	paths []string,
 ) (map[string]pathTruthStatus, error) {
-	if m == nil {
+	if s == nil {
 		return nil, fmt.Errorf("read path truth status: nil store")
 	}
 
 	inspector := &storeInspector{
-		db:     m.db,
-		logger: m.logger,
+		db:     s.db,
+		logger: s.logger,
 	}
 
 	return inspector.ReadPathTruthStatus(ctx, paths)
