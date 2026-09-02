@@ -125,7 +125,7 @@ func (c *Client) dispatchRequest(req *http.Request) (*http.Response, error) {
 }
 
 func (c *Client) validatedUploadURL(raw UploadURL) (string, error) {
-	validate := c.uploadURLValidator
+	validate := c.validators.uploadURL
 	if validate == nil {
 		validate = validateUploadURL
 	}
@@ -139,7 +139,7 @@ func (c *Client) validatedUploadURL(raw UploadURL) (string, error) {
 }
 
 func (c *Client) validatedCopyMonitorURL(raw string) (string, error) {
-	validate := c.copyMonitorValidator
+	validate := c.validators.copyMonitor
 	if validate == nil {
 		validate = validateCopyMonitorURL
 	}

@@ -318,7 +318,7 @@ func TestCreateUploadSession_RetriesTransientNotFound(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	client.uploadSessionCreatePolicy = testRetryPolicy()
+	client.policies.uploadSessionCreate = testRetryPolicy()
 
 	session, err := client.CreateUploadSession(
 		t.Context(), driveid.New("d"), "parent", "retry-file.bin", 10485760, time.Time{},
@@ -1234,7 +1234,7 @@ func TestUpload_SimpleNotFoundThenSessionNotFoundRetriesSimpleUpload(t *testing.
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	client.uploadSessionCreatePolicy = testRetryPolicy()
+	client.policies.uploadSessionCreate = testRetryPolicy()
 
 	item, err := client.Upload(
 		t.Context(), driveid.New("d"), "fresh-parent", "fresh.txt",
@@ -1292,14 +1292,14 @@ func TestUpload_SimpleRetryUsesLongerPostSessionBudget(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	client.uploadSessionCreatePolicy = retry.Policy{
+	client.policies.uploadSessionCreate = retry.Policy{
 		MaxAttempts: 2,
 		Base:        1 * time.Millisecond,
 		Max:         1 * time.Millisecond,
 		Multiplier:  2.0,
 		Jitter:      0.0,
 	}
-	client.simpleUploadCreatePolicy = retry.Policy{
+	client.policies.simpleUploadCreate = retry.Policy{
 		MaxAttempts: 3,
 		Base:        1 * time.Millisecond,
 		Max:         1 * time.Millisecond,
@@ -1444,7 +1444,7 @@ func TestUpload_SimpleMtimePatchTransientRetries(t *testing.T) {
 			defer srv.Close()
 
 			client := newTestClient(t, srv.URL)
-			client.simpleUploadMtimePolicy = testRetryPolicy()
+			client.policies.simpleUploadMtime = testRetryPolicy()
 
 			item, err := client.Upload(
 				t.Context(), driveid.New("d"), "parent", tt.fileName,
@@ -1514,9 +1514,9 @@ func TestUpload_SimpleMtimePatchTransientNotFoundRetriesAcrossLongerLag(t *testi
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	client.simpleUploadMtimePolicy = retry.SimpleUploadMtimePatchPolicy()
-	client.simpleUploadMtimePolicy.Base = 1 * time.Millisecond
-	client.simpleUploadMtimePolicy.Max = 8 * time.Millisecond
+	client.policies.simpleUploadMtime = retry.SimpleUploadMtimePatchPolicy()
+	client.policies.simpleUploadMtime.Base = 1 * time.Millisecond
+	client.policies.simpleUploadMtime.Max = 8 * time.Millisecond
 
 	item, err := client.Upload(
 		t.Context(), driveid.New("d"), "parent", "retry-longer.txt",

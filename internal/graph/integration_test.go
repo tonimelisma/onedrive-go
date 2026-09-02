@@ -107,7 +107,7 @@ func newIntegrationClient(t *testing.T) *Client {
 	httpClient := retryHTTPClient(http.DefaultClient, retry.TransportPolicy())
 
 	client := MustNewClient(DefaultBaseURL, httpClient, ts, logger, "onedrive-go/test")
-	client.driveDiscoveryPolicy = integrationDriveDiscoveryPolicy()
+	client.policies.driveDiscovery = integrationDriveDiscoveryPolicy()
 	return client
 }
 

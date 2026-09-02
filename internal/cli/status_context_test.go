@@ -46,7 +46,7 @@ func TestStatusCommand_LiveOverlayRunsUnderCommandContext(t *testing.T) {
 	cc := newCommandContext(&out, cfgPath)
 
 	var overlayCtx context.Context
-	cc.statusLiveOverlayLoader = func(
+	cc.seams.statusLiveOverlay = func(
 		loaderCtx context.Context,
 		_ *CLIContext,
 		_ accountViewSnapshot,
@@ -78,7 +78,7 @@ func TestStatusCommand_CanceledContextSkipsLiveOverlayWork(t *testing.T) {
 	cc := newCommandContext(&out, cfgPath)
 
 	overlayCalled := false
-	cc.statusLiveOverlayLoader = func(
+	cc.seams.statusLiveOverlay = func(
 		loaderCtx context.Context,
 		_ *CLIContext,
 		_ accountViewSnapshot,

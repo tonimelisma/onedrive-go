@@ -22,7 +22,7 @@ func TestCancelUploadSession_DoesNotInvokeAuthenticatedSuccessHook(t *testing.T)
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	client.uploadURLValidator = func(*url.URL) error { return nil }
+	client.validators.uploadURL = func(*url.URL) error { return nil }
 	client.SetAuthenticatedSuccessHook(func(_ context.Context) {
 		hookCalls++
 	})

@@ -177,7 +177,7 @@ func runStatusCommand(ctx context.Context, cc *CLIContext, history bool, showPer
 	}
 
 	accounts := statusAccounts(ctx, cc, filteredSnapshot, history)
-	liveOverlayLoader := cc.statusLiveOverlayLoader
+	liveOverlayLoader := cc.seams.statusLiveOverlay
 	if liveOverlayLoader == nil {
 		liveOverlayLoader = loadStatusLiveOverlay
 	}

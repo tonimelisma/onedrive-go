@@ -109,10 +109,10 @@ func runSyncWatch(
 	statusWriter io.Writer,
 	controlSocketPath string,
 ) error {
-	if cc != nil && cc.syncWatchRunner != nil {
-		return cc.syncWatchRunner(ctx, holder, selectors, mode, opts, logger, statusWriter, controlSocketPath)
+	if cc != nil && cc.seams.syncWatch != nil {
+		return cc.seams.syncWatch(ctx, holder, selectors, mode, opts, logger, statusWriter, controlSocketPath)
 	}
-	if cc != nil && cc.syncDaemonOrchestratorFactory != nil {
+	if cc != nil && cc.seams.syncDaemonOrchestrator != nil {
 		return runSyncDaemonWithFactory(
 			ctx,
 			holder,
@@ -122,7 +122,7 @@ func runSyncWatch(
 			logger,
 			statusWriter,
 			controlSocketPath,
-			cc.syncDaemonOrchestratorFactory,
+			cc.seams.syncDaemonOrchestrator,
 		)
 	}
 
@@ -139,8 +139,8 @@ func runSyncOnce(
 	logger *slog.Logger,
 	controlSocketPath string,
 ) multisync.RunOnceResult {
-	if cc != nil && cc.syncRunOnceRunner != nil {
-		return cc.syncRunOnceRunner(ctx, holder, drives, mode, opts, logger, controlSocketPath)
+	if cc != nil && cc.seams.syncRunOnce != nil {
+		return cc.seams.syncRunOnce(ctx, holder, drives, mode, opts, logger, controlSocketPath)
 	}
 
 	runtime := driveops.NewSessionRuntime(holder, "onedrive-go/"+version, logger)

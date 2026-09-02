@@ -64,7 +64,7 @@ func (c *Client) validatedSocketIONotificationURL(raw SocketIONotificationURL) (
 		return "", fmt.Errorf("graph: parsing socket.io notification URL: invalid URL")
 	}
 
-	if err := c.socketIOValidator(parsed); err != nil {
+	if err := c.validators.socketIO(parsed); err != nil {
 		return "", err
 	}
 

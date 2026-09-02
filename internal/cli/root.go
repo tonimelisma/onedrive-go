@@ -121,27 +121,39 @@ func (f CLIFlags) SingleDrive() (string, error) {
 //   - Phase 2 (data commands): Cfg + Runtime populated after config resolution.
 //
 // Auth commands get CLIContext with Flags + Logger + CfgPath + Env but nil Cfg/Runtime.
+// cliSeams are the injection points command tests use to drive real command
+// flows without a live account or a running daemon.
+//
+// They are grouped rather than listed among the command context because the
+// two are read very differently: every field on CLIContext proper is something
+// a command legitimately consults, and every field in here exists so a test can
+// stand in for a subsystem. Interleaved, the distinction was carried only by a
+// trailing comment on each line.
+type cliSeams struct {
+	syncWatch              syncWatchRunner
+	syncRunOnce            syncRunOnceRunner
+	syncDaemonOrchestrator syncDaemonOrchestratorFactory
+	statusLiveOverlay      func(context.Context, *CLIContext, accountViewSnapshot) map[string]statusAccountLiveOverlay
+}
+
 type CLIContext struct {
-	Flags                         CLIFlags
-	Logger                        *slog.Logger
-	OutputWriter                  io.Writer                     // destination for primary command output (default: os.Stdout)
-	StatusWriter                  io.Writer                     // destination for Statusf output (default: os.Stderr)
-	CfgPath                       string                        // resolved config file path (always set)
-	Env                           config.EnvOverrides           // env overrides (always set in Phase 1)
-	GraphBaseURL                  string                        // internal test seam for live Graph command coverage
-	SharedTarget                  *sharedTarget                 // nil for ordinary drive/path commands
-	Cfg                           *config.ResolvedDrive         // nil for auth/account commands
-	Runtime                       *driveops.SessionRuntime      // nil for auth/account commands until Phase 2 swaps in a holder-backed runtime
-	PerfSession                   *perf.Session                 // command-scoped performance collector/logging session
-	syncWatchRunner               syncWatchRunner               // test-only seam for sync --watch command coverage
-	syncRunOnceRunner             syncRunOnceRunner             // test-only seam for one-shot sync command coverage
-	syncDaemonOrchestratorFactory syncDaemonOrchestratorFactory // test-only seam below syncWatchRunner for real daemon-path coverage
-	statusLiveOverlayLoader       func(context.Context, *CLIContext, accountViewSnapshot) map[string]statusAccountLiveOverlay
-	logCloser                     io.Closer  // log file closer; nil when no log file is configured
-	statusMu                      sync.Mutex // guards statusErr for concurrent progress callbacks
-	statusErr                     error
-	reconcileMu                   sync.Mutex // guards reconcileNotices and selector mutation
-	reconcileNotices              map[string]struct{}
+	Flags            CLIFlags
+	Logger           *slog.Logger
+	OutputWriter     io.Writer                // destination for primary command output (default: os.Stdout)
+	StatusWriter     io.Writer                // destination for Statusf output (default: os.Stderr)
+	CfgPath          string                   // resolved config file path (always set)
+	Env              config.EnvOverrides      // env overrides (always set in Phase 1)
+	GraphBaseURL     string                   // Graph API base; overridden by live command coverage
+	SharedTarget     *sharedTarget            // nil for ordinary drive/path commands
+	Cfg              *config.ResolvedDrive    // nil for auth/account commands
+	Runtime          *driveops.SessionRuntime // nil for auth/account commands until Phase 2 swaps in a holder-backed runtime
+	PerfSession      *perf.Session            // command-scoped performance collector/logging session
+	seams            cliSeams                 // test injection points; see cliSeams
+	logCloser        io.Closer                // log file closer; nil when no log file is configured
+	statusMu         sync.Mutex               // guards statusErr for concurrent progress callbacks
+	statusErr        error
+	reconcileMu      sync.Mutex // guards reconcileNotices and selector mutation
+	reconcileNotices map[string]struct{}
 }
 
 func (cc *CLIContext) replaceCommandLogger(logger *slog.Logger, closer io.Closer) error {
