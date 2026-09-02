@@ -90,12 +90,3 @@ type RetryWorkRow struct {
 	AttemptCount int
 	NextRetryAt  int64
 }
-
-// RetryWorkKey identifies semantic work that may be retried across replans.
-// It intentionally stays smaller than a runtime action because retry_work
-// persists only delayed obligations, not the executable action set.
-type RetryWorkKey struct {
-	Path       string
-	OldPath    string
-	ActionType actionType
-}

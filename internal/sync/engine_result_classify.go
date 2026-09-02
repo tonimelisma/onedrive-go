@@ -20,38 +20,6 @@ const (
 	resultFatal      = errclass.ClassFatal
 )
 
-type resultPersistenceMode int
-
-const (
-	persistNone resultPersistenceMode = iota
-	persistRetryWork
-)
-
-type trialHint int
-
-const (
-	trialHintRelease trialHint = iota
-	trialHintExtendOnMatchingScope
-	trialHintReclassify
-	trialHintShutdown
-	trialHintFatal
-)
-
-// resultDecision is the single classification output consumed by result
-// routing. The decision is behavior-complete so downstream code does not
-// re-derive policy from raw HTTP/local error facts.
-type resultDecision struct {
-	Class             errclass.Class
-	ConditionKey      ConditionKey
-	ScopeKey          ScopeKey
-	ScopeEvidence     ScopeKey
-	Persistence       resultPersistenceMode
-	RunScopeDetection bool
-	RecordSuccess     bool
-	TrialHint         trialHint
-	ConditionType     string
-}
-
 // classifyResult is a pure function that maps a ActionCompletion to a
 // single ResultDecision. No side effects — classification is separate from
 // routing.
