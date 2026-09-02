@@ -231,20 +231,6 @@ func openSyncTreeWithExpectedIdentity(
 	return syncTree, nil
 }
 
-func validateExpectedSyncRootIdentity(root *synctree.Root, expected *synctree.FileIdentity) error {
-	if root == nil || expected == nil {
-		return nil
-	}
-	actual, err := root.IdentityNoFollow("")
-	if err != nil {
-		return fmt.Errorf("sync: verifying mount root identity: %w: %w", ErrMountRootUnavailable, err)
-	}
-	if !synctree.SameIdentity(actual, *expected) {
-		return fmt.Errorf("sync: verifying mount root identity: %w", ErrMountRootUnavailable)
-	}
-	return nil
-}
-
 func (e *Engine) collector() *perf.Collector {
 	if e == nil {
 		return nil

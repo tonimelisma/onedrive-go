@@ -2,35 +2,6 @@ package sync
 
 import "context"
 
-type remoteObservationMode string
-
-const (
-	remoteObservationModeDelta     remoteObservationMode = "delta"
-	remoteObservationModeEnumerate remoteObservationMode = "enumerate"
-)
-
-type remoteObservationBatchSource string
-
-const (
-	remoteObservationBatchPrimaryWatch remoteObservationBatchSource = "primary_watch"
-	remoteObservationBatchMountRoot    remoteObservationBatchSource = "mount_root_watch"
-	remoteObservationBatchFullRefresh  remoteObservationBatchSource = "full_refresh"
-)
-
-type remoteObservationBatch struct {
-	source                remoteObservationBatchSource
-	observationMode       remoteObservationMode
-	observed              []observedItem
-	emitted               []changeEvent
-	cursorToken           string
-	markFullRemoteRefresh bool
-	findings              ObservationFindingsBatch
-	shortcutTopology      shortcutTopologyBatch
-	armFullRefreshTimer   bool
-	markFullRefreshIfIdle bool
-	applyAck              chan error
-}
-
 func (batch *remoteObservationBatch) hasObservationFindings() bool {
 	if batch == nil {
 		return false
