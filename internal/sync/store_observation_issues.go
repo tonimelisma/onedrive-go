@@ -11,7 +11,7 @@ import (
 
 const sqlSelectObservationIssueCols = `path, issue_type, scope_key`
 
-func (m *SyncStore) ReconcileObservationFindings(
+func (s *SyncStore) ReconcileObservationFindings(
 	ctx context.Context,
 	batch *ObservationFindingsBatch,
 	_ time.Time,
@@ -20,7 +20,7 @@ func (m *SyncStore) ReconcileObservationFindings(
 		return nil
 	}
 
-	tx, err := beginPerfTx(ctx, m.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin observation findings reconcile: %w", err)
 	}
@@ -34,7 +34,7 @@ func (m *SyncStore) ReconcileObservationFindings(
 	}
 	plan := buildObservationReconcilePlan(batch, state)
 
-	if applyErr := m.applyObservationFindingsReconcilePlanTx(ctx, tx, plan); applyErr != nil {
+	if applyErr := s.applyObservationFindingsReconcilePlanTx(ctx, tx, plan); applyErr != nil {
 		return applyErr
 	}
 
@@ -45,12 +45,12 @@ func (m *SyncStore) ReconcileObservationFindings(
 	return nil
 }
 
-func (m *SyncStore) applyObservationFindingsReconcilePlanTx(
+func (s *SyncStore) applyObservationFindingsReconcilePlanTx(
 	ctx context.Context,
 	tx sqlTxRunner,
 	plan observationReconcilePlan,
 ) error {
-	if err := m.upsertObservationIssuesTx(ctx, tx, plan.issueUpserts); err != nil {
+	if err := s.upsertObservationIssuesTx(ctx, tx, plan.issueUpserts); err != nil {
 		return err
 	}
 	if err := deleteObservationIssuesTx(ctx, tx, plan.issueDeletes); err != nil {
@@ -94,13 +94,13 @@ func queryObservationIssueRowsWithRunner(
 	return scanObservationIssueRows(rows, contentDriveID)
 }
 
-func (m *SyncStore) ListObservationIssues(ctx context.Context) ([]ObservationIssueRow, error) {
-	contentDriveID, err := m.contentDriveIDForRead(ctx, driveid.ID{})
+func (s *SyncStore) ListObservationIssues(ctx context.Context) ([]ObservationIssueRow, error) {
+	contentDriveID, err := s.contentDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
 		return nil, fmt.Errorf("sync: reading content drive for observation issues: %w", err)
 	}
 
-	rows, err := m.db.QueryContext(ctx,
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+sqlSelectObservationIssueCols+` FROM observation_issues ORDER BY path`)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing observation issues: %w", err)
@@ -114,12 +114,12 @@ type observationIssueScanner interface {
 	Scan(dest ...any) error
 }
 
-func (m *SyncStore) upsertObservationIssuesTx(
+func (s *SyncStore) upsertObservationIssuesTx(
 	ctx context.Context,
 	tx sqlTxRunner,
 	issues []ObservationIssue,
 ) error {
-	state, err := m.readObservationStateTx(ctx, tx)
+	state, err := s.readObservationStateTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func (m *SyncStore) upsertObservationIssuesTx(
 		if issues[i].DriveID.IsZero() {
 			continue
 		}
-		if ensureErr := m.ensureContentDriveIDTx(ctx, tx, issues[i].DriveID, state); ensureErr != nil {
+		if ensureErr := s.ensureContentDriveIDTx(ctx, tx, issues[i].DriveID, state); ensureErr != nil {
 			return ensureErr
 		}
 		break

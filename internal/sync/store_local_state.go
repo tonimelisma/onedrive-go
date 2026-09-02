@@ -24,11 +24,11 @@ const (
 
 // ReplaceLocalState atomically replaces the durable local snapshot with the
 // current admissible observation result for the drive.
-func (m *SyncStore) ReplaceLocalState(
+func (s *SyncStore) ReplaceLocalState(
 	ctx context.Context,
 	rows []localStateRow,
 ) (err error) {
-	tx, err := beginPerfTx(ctx, m.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning local_state transaction: %w", err)
 	}
@@ -51,14 +51,14 @@ func (m *SyncStore) ReplaceLocalState(
 }
 
 // ListLocalState returns the durable local snapshot rows in path order.
-func (m *SyncStore) ListLocalState(ctx context.Context) ([]localStateRow, error) {
-	return listLocalStateRows(ctx, m.db)
+func (s *SyncStore) ListLocalState(ctx context.Context) ([]localStateRow, error) {
+	return listLocalStateRows(ctx, s.db)
 }
 
 // GetLocalStateByPath returns the durable local_state row for path, or nil
 // when the path is absent from the committed local snapshot.
-func (m *SyncStore) GetLocalStateByPath(ctx context.Context, path string) (*localStateRow, bool, error) {
-	row, err := scanLocalStateRow(ctx, m.db, sqlSelectLocalStateByPath, path)
+func (s *SyncStore) GetLocalStateByPath(ctx context.Context, path string) (*localStateRow, bool, error) {
+	row, err := scanLocalStateRow(ctx, s.db, sqlSelectLocalStateByPath, path)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, false, nil
@@ -72,8 +72,8 @@ func (m *SyncStore) GetLocalStateByPath(ctx context.Context, path string) (*loca
 // UpsertLocalStateRows applies scoped local observations without changing the
 // store's local-truth confidence. Confidence changes are owned by full snapshot
 // replacement or explicit suspect markers.
-func (m *SyncStore) UpsertLocalStateRows(ctx context.Context, rows []localStateRow) (err error) {
-	tx, err := beginPerfTx(ctx, m.db)
+func (s *SyncStore) UpsertLocalStateRows(ctx context.Context, rows []localStateRow) (err error) {
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning local_state upsert transaction: %w", err)
 	}
@@ -92,8 +92,8 @@ func (m *SyncStore) UpsertLocalStateRows(ctx context.Context, rows []localStateR
 	return nil
 }
 
-func (m *SyncStore) DeleteLocalStatePath(ctx context.Context, path string) (err error) {
-	tx, err := beginPerfTx(ctx, m.db)
+func (s *SyncStore) DeleteLocalStatePath(ctx context.Context, path string) (err error) {
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning local_state delete transaction: %w", err)
 	}
@@ -112,8 +112,8 @@ func (m *SyncStore) DeleteLocalStatePath(ctx context.Context, path string) (err 
 	return nil
 }
 
-func (m *SyncStore) DeleteLocalStatePrefix(ctx context.Context, prefix string) (err error) {
-	tx, err := beginPerfTx(ctx, m.db)
+func (s *SyncStore) DeleteLocalStatePrefix(ctx context.Context, prefix string) (err error) {
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning local_state prefix delete transaction: %w", err)
 	}
@@ -132,13 +132,13 @@ func (m *SyncStore) DeleteLocalStatePrefix(ctx context.Context, prefix string) (
 	return nil
 }
 
-func (m *SyncStore) applyLocalStatePatch(
+func (s *SyncStore) applyLocalStatePatch(
 	ctx context.Context,
 	rows []localStateRow,
 	deletedPaths []string,
 	deletedPrefixes []string,
 ) (err error) {
-	tx, err := beginPerfTx(ctx, m.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning local_state patch transaction: %w", err)
 	}

@@ -111,12 +111,12 @@ func openSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, ensu
 // The explicit checkpoint ensures cross-process readers (for example `status`
 // after `sync`) see all committed data when they open a new connection to the
 // same database file.
-func (m *SyncStore) Close(ctx context.Context) error {
-	if err := m.Checkpoint(ctx); err != nil {
-		m.logger.Warn("checkpoint failed on close", slog.String("error", err.Error()))
+func (s *SyncStore) Close(ctx context.Context) error {
+	if err := s.Checkpoint(ctx); err != nil {
+		s.logger.Warn("checkpoint failed on close", slog.String("error", err.Error()))
 	}
 
-	if err := m.db.Close(); err != nil {
+	if err := s.db.Close(); err != nil {
 		return fmt.Errorf("close sync store database: %w", err)
 	}
 
@@ -130,8 +130,8 @@ func (m *SyncStore) Close(ctx context.Context) error {
 // A failed checkpoint is returned rather than only logged: cross-process
 // readers such as `status` open their own connection and depend on the
 // checkpoint having happened, so the caller decides how much that matters.
-func (m *SyncStore) Checkpoint(ctx context.Context) error {
-	if _, err := m.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+func (s *SyncStore) Checkpoint(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		return fmt.Errorf("checkpoint sync store WAL: %w", err)
 	}
 
@@ -140,25 +140,25 @@ func (m *SyncStore) Checkpoint(ctx context.Context) error {
 
 // rawDB exposes the underlying SQLite handle for same-package tests and store
 // internals that need assertions below the typed API surface.
-func (m *SyncStore) rawDB() *sql.DB {
-	return m.db
+func (s *SyncStore) rawDB() *sql.DB {
+	return s.db
 }
 
 // setNowFunc overrides the time source used for syncedAt timestamps in Commit.
 // Used in tests to produce deterministic timestamps without mocking the real
 // clock. Must be called before Commit.
-func (m *SyncStore) setNowFunc(fn func() time.Time) {
-	m.nowFunc = fn
+func (s *SyncStore) setNowFunc(fn func() time.Time) {
+	s.nowFunc = fn
 }
 
 // cachedBaseline returns the in-memory baseline cache populated by the most recent
 // Load or Commit call. Returns nil before the first Load/Commit. Used by
 // tests to inspect baseline state without a round-trip through Load().
-func (m *SyncStore) cachedBaseline() *Baseline {
-	m.baselineMu.Lock()
-	defer m.baselineMu.Unlock()
+func (s *SyncStore) cachedBaseline() *Baseline {
+	s.baselineMu.Lock()
+	defer s.baselineMu.Unlock()
 
-	return m.baseline
+	return s.baseline
 }
 
 // ---------------------------------------------------------------------------

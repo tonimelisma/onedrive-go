@@ -482,8 +482,8 @@ type sQLiteReconciliationRow struct {
 	RemoteMoveSource   string
 }
 
-func (m *SyncStore) QueryComparisonState(ctx context.Context) ([]sQLiteComparisonRow, error) {
-	return queryComparisonStateWithRunner(ctx, m.db)
+func (s *SyncStore) QueryComparisonState(ctx context.Context) ([]sQLiteComparisonRow, error) {
+	return queryComparisonStateWithRunner(ctx, s.db)
 }
 
 func queryComparisonStateWithRunner(
@@ -556,8 +556,8 @@ func queryComparisonStateWithRunnerForTables(
 	return results, nil
 }
 
-func (m *SyncStore) QueryReconciliationState(ctx context.Context) ([]sQLiteReconciliationRow, error) {
-	return queryReconciliationStateWithRunner(ctx, m.db)
+func (s *SyncStore) QueryReconciliationState(ctx context.Context) ([]sQLiteReconciliationRow, error) {
+	return queryReconciliationStateWithRunner(ctx, s.db)
 }
 
 func queryReconciliationStateWithRunner(
