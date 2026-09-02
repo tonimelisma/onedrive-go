@@ -19,7 +19,7 @@ const fallbackFailureSummaryIssueType = "transient_failure"
 // the timer. If the retry timer channel is already signaled (non-blocking send
 // to buffered(1) channel), the next owning loop iteration processes it.
 func (rt *watchRuntime) armRetryTimer() {
-	earliest, ok := rt.earliestHeldRetryAt()
+	earliest, ok := rt.retries.earliestHeldRetryAt()
 	if !ok {
 		rt.resetRetryTimer(nil)
 		return
@@ -44,27 +44,6 @@ func (rt *watchRuntime) armRetryTimer() {
 func (rt *watchRuntime) armHeldTimers() {
 	rt.armRetryTimer()
 	rt.armTrialTimer()
-}
-
-func (flow *engineFlow) earliestHeldRetryAt() (time.Time, bool) {
-	var earliest time.Time
-	found := false
-
-	for _, held := range flow.heldByKey {
-		if held == nil || held.Reason != heldReasonRetry || held.NextRetry.IsZero() {
-			continue
-		}
-		if !found || held.NextRetry.Before(earliest) {
-			earliest = held.NextRetry
-			found = true
-		}
-	}
-
-	return earliest, found
-}
-
-func (rt *watchRuntime) earliestHeldRetryAt() (time.Time, bool) {
-	return rt.engineFlow.earliestHeldRetryAt()
 }
 
 func (rt *watchRuntime) stopRetryTimer() {
@@ -94,13 +73,13 @@ func (rt *watchRuntime) retryTimerChan() <-chan struct{} {
 // final SyncReport, and records the classified transient-failure shape needed
 // for end-of-pass WARN aggregation.
 func (f *engineFlow) recordError(decision *resultDecision, r *actionCompletion) {
-	f.failed++
+	f.results.failed++
 	if r == nil {
 		return
 	}
 
 	if r.Err != nil {
-		f.syncErrors = append(f.syncErrors, r.Err)
+		f.results.errors = append(f.results.errors, r.Err)
 	}
 
 	if decision == nil || decision.Persistence != persistRetryWork {
@@ -120,7 +99,7 @@ func (f *engineFlow) recordError(decision *resultDecision, r *actionCompletion) 
 		conditionType = fallbackFailureSummaryIssueType
 	}
 
-	f.summaries = append(f.summaries, failureSummaryEntry{
+	f.results.summaries = append(f.results.summaries, failureSummaryEntry{
 		issueType: conditionType,
 		path:      r.Path,
 		errMsg:    errMsg,
@@ -132,8 +111,8 @@ func (f *engineFlow) recordError(decision *resultDecision, r *actionCompletion) 
 // scanner-time aggregation rule: >10 items produce one WARN summary plus
 // per-item DEBUG detail, otherwise each item gets its own WARN.
 func (f *engineFlow) logFailureSummary() {
-	summaries := f.summaries
-	f.summaries = nil
+	summaries := f.results.summaries
+	f.results.summaries = nil
 
 	if len(summaries) == 0 {
 		return
@@ -215,17 +194,17 @@ func (e *Engine) since(start time.Time) time.Duration {
 
 // resultStats returns the engine-owned counters and error list.
 func (f *engineFlow) resultStats() (succeeded, failed int, errs []error) {
-	errs = make([]error, len(f.syncErrors))
-	copy(errs, f.syncErrors)
-	return f.succeeded, f.failed, errs
+	errs = make([]error, len(f.results.errors))
+	copy(errs, f.results.errors)
+	return f.results.succeeded, f.results.failed, errs
 }
 
 // resetResultStats resets the engine-owned counters for a new pass.
 func (f *engineFlow) resetResultStats() {
-	f.succeeded = 0
-	f.failed = 0
-	f.syncErrors = nil
-	f.summaries = nil
+	f.results.succeeded = 0
+	f.results.failed = 0
+	f.results.errors = nil
+	f.results.summaries = nil
 }
 
 // armTrialTimer sets (or resets) the trial timer to fire at the earliest

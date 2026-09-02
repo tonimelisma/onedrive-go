@@ -173,20 +173,20 @@ func (rt *watchRuntime) initWatchInfra(
 	// DepGraph tracks action dependencies. Active scope state is loaded from
 	// the persisted block_scopes table into watch-owned runtime state.
 	depGraph := newDepGraph(rt.deps.logger)
-	rt.depGraph = depGraph
+	rt.sched.graph = depGraph
 	if err := rt.loadActiveScopes(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
 
-	rt.scopeState = newScopeState(rt.engine.nowFunc, rt.deps.logger)
-	rt.nextActionID = 0
+	rt.scopes.state = newScopeState(rt.engine.nowFunc, rt.deps.logger)
+	rt.sched.nextActionID = 0
 
 	// dispatchCh feeds admitted actions to workers. Watch mode keeps this
 	// unbuffered so not-yet-started work remains engine-owned until a worker is
 	// actually ready to receive it.
-	rt.dispatchCh = make(chan *trackedAction, watchDispatchBuf)
+	rt.sched.dispatchCh = make(chan *trackedAction, watchDispatchBuf)
 
-	pool := newWorkerPool(rt.engine.execCfg, rt.dispatchCh, rt.deps.store, rt.deps.logger, watchCompletionBuf)
+	pool := newWorkerPool(rt.engine.execCfg, rt.sched.dispatchCh, rt.deps.store, rt.deps.logger, watchCompletionBuf)
 	pool.perfCollector = rt.engine.collector()
 	pool.Start(ctx, rt.engine.transferWorkers)
 

@@ -54,7 +54,7 @@ func (r *oneShotRunner) pollImmediateCompletion(
 	outbox []*trackedAction,
 	fatalErr error,
 ) ([]*trackedAction, error, bool) {
-	if len(outbox) != 0 || r.runningCount != 0 {
+	if len(outbox) != 0 || r.sched.runningCount != 0 {
 		return nil, fatalErr, false
 	}
 
@@ -72,9 +72,9 @@ func (r *oneShotRunner) pollImmediateCompletion(
 
 func (r *oneShotRunner) finishResultsLoopIfSettled(outbox []*trackedAction, fatalErr error) (bool, error) {
 	switch {
-	case fatalErr == nil && len(outbox) == 0 && r.runningCount == 0 && !r.hasDueHeldWork(r.deps.now()):
+	case fatalErr == nil && len(outbox) == 0 && r.sched.runningCount == 0 && !r.hasDueHeldWork(r.deps.now()):
 		return true, nil
-	case fatalErr != nil && len(outbox) == 0 && r.runningCount == 0:
+	case fatalErr != nil && len(outbox) == 0 && r.sched.runningCount == 0:
 		return true, fatalErr
 	default:
 		return false, nil
@@ -100,7 +100,7 @@ func (r *oneShotRunner) runResultsLoopIdle(
 		nextOutbox, nextFatal := r.handleOneShotCompletion(ctx, cancel, bl, nil, fatalErr, &completion)
 		return nextOutbox, nextFatal, false
 	case <-resultsLoopCtxDone(ctx, fatalErr):
-		return nil, fatalErr, r.runningCount == 0
+		return nil, fatalErr, r.sched.runningCount == 0
 	}
 }
 
@@ -108,7 +108,7 @@ func (r *oneShotRunner) releaseIdleDueHeldWork(
 	ctx context.Context,
 	bl *Baseline,
 ) ([]*trackedAction, error, bool) {
-	if r.runningCount != 0 || !r.hasDueHeldWork(r.deps.now()) {
+	if r.sched.runningCount != 0 || !r.hasDueHeldWork(r.deps.now()) {
 		return nil, nil, false
 	}
 
@@ -130,8 +130,8 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 	fatalErr error,
 ) ([]*trackedAction, error, bool) {
 	select {
-	case r.dispatchCh <- outbox[0]:
-		r.markRunning(outbox[0])
+	case r.sched.dispatchCh <- outbox[0]:
+		r.sched.markRunning(outbox[0])
 		return outbox[1:], fatalErr, false
 	case completion, ok := <-completions:
 		if !ok {
@@ -182,7 +182,7 @@ func (r *oneShotRunner) handleOneShotCompletion(
 func (r *oneShotRunner) completeQueuedDispatchAsShutdown() {
 	for {
 		select {
-		case ta := <-r.dispatchCh:
+		case ta := <-r.sched.dispatchCh:
 			r.completeTrackedActionAsShutdown(ta)
 		default:
 			return

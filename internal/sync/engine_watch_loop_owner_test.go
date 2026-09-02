@@ -97,7 +97,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapDispatchUsesSharedHandler
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	action := rt.depGraph.Add(&Action{
+	action := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "bootstrap.txt",
 		DriveID: eng.driveID,
@@ -110,7 +110,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapDispatchUsesSharedHandler
 	done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{runtime: rt}, nil)
 	require.NoError(t, err)
 	assert.False(t, done)
-	assert.Equal(t, 1, rt.runningCount)
+	assert.Equal(t, 1, rt.sched.runningCount)
 	assert.Empty(t, rt.currentOutbox())
 }
 
@@ -259,14 +259,14 @@ func TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch(
 		replanReady := make(chan dirtyBatch, 1)
 		replanReady <- dirtyBatch{}
 
-		queued := rt.depGraph.Add(&Action{
+		queued := rt.sched.graph.Add(&Action{
 			Type:    ActionDownload,
 			Path:    "old.txt",
 			DriveID: eng.driveID,
 			ItemID:  "old-item",
 		}, int64(attempt+1), nil)
 		require.NotNil(t, queued)
-		rt.markQueued(queued)
+		rt.sched.markQueued(queued)
 		rt.replaceOutbox([]*trackedAction{queued})
 
 		done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{
@@ -278,10 +278,10 @@ func TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch(
 		assert.False(t, done)
 		assert.True(t, rt.hasPendingReplan())
 		assert.Empty(t, rt.currentOutbox())
-		assert.Empty(t, rt.queuedByID)
-		assert.Equal(t, 0, rt.runningCount)
+		assert.Empty(t, rt.sched.queuedByID)
+		assert.Equal(t, 0, rt.sched.runningCount)
 		select {
-		case dispatched := <-rt.dispatchCh:
+		case dispatched := <-rt.sched.dispatchCh:
 			require.Failf(t, "old work dispatched after ready replan", "action=%+v", dispatched)
 		default:
 		}
@@ -299,18 +299,18 @@ func TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	queued := rt.depGraph.Add(&Action{
+	queued := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "old.txt",
 		DriveID: eng.driveID,
 		ItemID:  "old-item",
 	}, 1, nil)
 	require.NotNil(t, queued)
-	rt.markQueued(queued)
+	rt.sched.markQueued(queued)
 	rt.replaceOutbox([]*trackedAction{queued})
 	rt.queuePendingReplan(dirtyBatch{FullRefresh: true})
 	require.Empty(t, rt.currentOutbox())
-	require.Empty(t, rt.queuedByID)
+	require.Empty(t, rt.sched.queuedByID)
 	require.NoError(t, os.RemoveAll(syncRoot))
 
 	replanned, err := rt.runPendingWatchReplan(t.Context(), &watchPipeline{
@@ -323,8 +323,8 @@ func TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal
 	assert.True(t, replanned)
 	assert.False(t, rt.hasPendingReplan())
 	assert.Empty(t, rt.currentOutbox())
-	assert.Empty(t, rt.queuedByID)
-	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "retired outbox must stay retired after failed replacement replan")
+	assert.Empty(t, rt.sched.queuedByID)
+	assert.Equal(t, 1, rt.sched.graph.InFlightCount(), "retired outbox must stay retired after failed replacement replan")
 	batch := rt.resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
 	assert.True(t, batch.FullRefresh)
@@ -361,9 +361,9 @@ func TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal(t 
 			require.NoError(t, err)
 			assert.False(t, rt.hasPendingReplan())
 			assert.Empty(t, rt.currentOutbox())
-			assert.Empty(t, rt.queuedByID)
-			assert.Equal(t, 0, rt.runningCount)
-			assert.Equal(t, 0, rt.depGraph.InFlightCount())
+			assert.Empty(t, rt.sched.queuedByID)
+			assert.Equal(t, 0, rt.sched.runningCount)
+			assert.Equal(t, 0, rt.sched.graph.InFlightCount())
 			batch := rt.resources.dirtyBuf.FlushImmediate()
 			require.NotNil(t, batch)
 			assert.Equal(t, tc.fullRefresh, batch.FullRefresh)
@@ -382,14 +382,14 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	queued := rt.depGraph.Add(&Action{
+	queued := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "old.txt",
 		DriveID: eng.driveID,
 		ItemID:  "old-item",
 	}, 1, nil)
 	require.NotNil(t, queued)
-	rt.markQueued(queued)
+	rt.sched.markQueued(queued)
 	rt.replaceOutbox([]*trackedAction{queued})
 
 	rt.queuePendingReplan(dirtyBatch{})
@@ -397,8 +397,8 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	assert.True(t, rt.hasPendingReplan())
 	assert.True(t, rt.canPrepareNow())
 	assert.Empty(t, rt.currentOutbox())
-	assert.Empty(t, rt.queuedByID)
-	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "retiring old outbox must not complete dependency nodes as success")
+	assert.Empty(t, rt.sched.queuedByID)
+	assert.Equal(t, 1, rt.sched.graph.InFlightCount(), "retiring old outbox must not complete dependency nodes as success")
 	assert.Equal(t, 1, eng.collector().Snapshot().SupersededPendingReplanRetirementCount)
 	recorder.requireEventCount(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventOldOutboxRetired && event.Count == 1
@@ -438,14 +438,14 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	root := rt.depGraph.Add(&Action{
+	root := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "parent.txt",
 		DriveID: eng.driveID,
 		ItemID:  "parent-item",
 	}, 1, nil)
 	require.NotNil(t, root)
-	child := rt.depGraph.Add(&Action{
+	child := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "child.txt",
 		DriveID: eng.driveID,
@@ -453,7 +453,7 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 		View:    &pathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	require.Nil(t, child)
-	rt.markRunning(root)
+	rt.sched.markRunning(root)
 	rt.queuePendingReplan(dirtyBatch{})
 	advance(10 * time.Millisecond)
 
@@ -470,8 +470,8 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 	assert.True(t, rt.hasPendingReplan())
 	assert.True(t, rt.canPrepareNow())
 	assert.Empty(t, rt.currentOutbox(), "ready dependents from old graph should not be appended while replan is pending")
-	assert.Empty(t, rt.queuedByID)
-	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "released child should remain uncompleted until replacement runtime is installed")
+	assert.Empty(t, rt.sched.queuedByID)
+	assert.Equal(t, 1, rt.sched.graph.InFlightCount(), "released child should remain uncompleted until replacement runtime is installed")
 	assert.Equal(t, int64(10), eng.collector().Snapshot().ReplanIdleWaitingDrainMS)
 	recorder.requireEventCount(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventWaitingForRunningActions &&
@@ -507,8 +507,8 @@ func TestWatchRuntime_InitWatchInfraUsesUnbufferedDispatch(t *testing.T) {
 		pipe.cleanup()
 	}()
 
-	assert.Equal(t, watchDispatchBuf, cap(rt.dispatchCh))
-	assert.Equal(t, 0, cap(rt.dispatchCh), "watch dispatch must stay unbuffered so queued work remains engine-owned")
+	assert.Equal(t, watchDispatchBuf, cap(rt.sched.dispatchCh))
+	assert.Equal(t, 0, cap(rt.sched.dispatchCh), "watch dispatch must stay unbuffered so queued work remains engine-owned")
 	assert.Equal(t, watchCompletionBuf, cap(pipe.completions))
 }
 

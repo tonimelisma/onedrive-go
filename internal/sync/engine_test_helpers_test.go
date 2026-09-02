@@ -456,13 +456,13 @@ func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *trackedAction {
 	t.Helper()
 
 	rt := newWatchRuntime(eng.Engine)
-	rt.depGraph = newDepGraph(eng.logger)
-	rt.dispatchCh = make(chan *trackedAction, 1024)
-	rt.scopeState = newScopeState(eng.nowFunc, eng.logger)
+	rt.sched.graph = newDepGraph(eng.logger)
+	rt.sched.dispatchCh = make(chan *trackedAction, 1024)
+	rt.scopes.state = newScopeState(eng.nowFunc, eng.logger)
 	eng.runtime = rt
 	eng.flow = rt.engineFlow
 
-	return rt.dispatchCh
+	return rt.sched.dispatchCh
 }
 
 // newTestWatchState initializes watch state on an engine for testing.
@@ -488,7 +488,7 @@ func setTestBlockScope(t *testing.T, eng *testEngine, block *BlockScope) {
 	require.NoError(t, eng.baseline.UpsertBlockScope(context.Background(), block))
 	if eng.runtime != nil {
 		active := activeScopeFromBlockScopeRow(block)
-		eng.runtime.upsertActiveScope(&active)
+		eng.runtime.scopes.upsertActiveScope(&active)
 	}
 }
 
@@ -983,7 +983,7 @@ func runFullRemoteRefreshAsyncForTest(t *testing.T, eng *testEngine, ctx context
 
 func isTestBlockScopeed(eng *testEngine, key ScopeKey) bool {
 	if eng.runtime != nil {
-		if eng.runtime.hasActiveScope(key) {
+		if eng.runtime.scopes.hasActiveScope(key) {
 			return true
 		}
 	}
@@ -1002,7 +1002,7 @@ func isTestBlockScopeed(eng *testEngine, key ScopeKey) bool {
 
 func getTestBlockScope(eng *testEngine, key ScopeKey) (BlockScope, bool) {
 	if eng.runtime != nil {
-		if block, ok := eng.runtime.lookupActiveScope(key); ok {
+		if block, ok := eng.runtime.scopes.lookupActiveScope(key); ok {
 			row, err := blockScopeRowFromActiveScope(block)
 			if err != nil {
 				panic(fmt.Sprintf("blockScopeRowFromActiveScope: %v", err))

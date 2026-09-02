@@ -138,7 +138,7 @@ func (r *oneShotRunner) executePreparedPlan(
 
 	// Reset engine counters for this pass.
 	r.resetResultStats()
-	r.dispatchCh = make(chan *trackedAction, len(plan.Actions))
+	r.sched.dispatchCh = make(chan *trackedAction, len(plan.Actions))
 	initialOutbox, done, err := r.dispatchInitialReadyActions(ctx, bl, runtime, report)
 	if err != nil {
 		return err
@@ -147,7 +147,7 @@ func (r *oneShotRunner) executePreparedPlan(
 		return nil
 	}
 
-	pool := newWorkerPool(r.engine.execCfg, r.dispatchCh, r.deps.store, r.deps.logger, len(plan.Actions))
+	pool := newWorkerPool(r.engine.execCfg, r.sched.dispatchCh, r.deps.store, r.deps.logger, len(plan.Actions))
 	pool.perfCollector = r.engine.collector()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

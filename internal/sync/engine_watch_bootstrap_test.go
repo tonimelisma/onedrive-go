@@ -39,7 +39,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedP
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &row))
 	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
 
-	publication := rt.depGraph.Add(&Action{
+	publication := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
@@ -54,7 +54,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedP
 	require.NoError(t, err)
 	assert.False(t, done)
 	assert.Empty(t, rt.currentOutbox(), "bootstrap retry release must re-enter publication drain before worker dispatch")
-	assert.Empty(t, rt.heldByKey)
+	assert.Empty(t, rt.retries.heldByKey)
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
 
 	_, found := bl.GetByPath("cleanup.txt")
@@ -82,7 +82,7 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	root := rt.depGraph.Add(&Action{
+	root := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "sync.txt",
 		DriveID: eng.driveID,
@@ -90,7 +90,7 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	dependent := rt.depGraph.Add(&Action{
+	dependent := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
@@ -111,7 +111,7 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 	})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox(), "bootstrap completion should drain publication-only dependents on the engine side")
-	assert.Equal(t, 0, rt.depGraph.InFlightCount())
+	assert.Equal(t, 0, rt.sched.graph.InFlightCount())
 
 	_, found := bl.GetByPath("cleanup.txt")
 	assert.False(t, found, "cleanup publication should commit immediately during bootstrap completion")

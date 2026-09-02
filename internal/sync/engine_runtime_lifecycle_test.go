@@ -22,14 +22,14 @@ func TestEngineFlow_RecordBlockedRetryWork_PersistsOnlyExactBlockedRoot(t *testi
 	scopeKey := SKQuotaOwn()
 	flow := testEngineFlow(t, eng)
 
-	root := rt.depGraph.Add(&Action{
+	root := rt.sched.graph.Add(&Action{
 		Type:    ActionFolderCreate,
 		Path:    "dir",
 		DriveID: driveid.New("drive1"),
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	child := rt.depGraph.Add(&Action{
+	child := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "dir/file.txt",
 		DriveID: driveid.New("drive1"),
@@ -43,7 +43,7 @@ func TestEngineFlow_RecordBlockedRetryWork_PersistsOnlyExactBlockedRoot(t *testi
 	assert.Equal(t, "dir", retryRows[0].Path)
 	assert.Equal(t, scopeKey, retryRows[0].ScopeKey)
 	assert.True(t, retryRows[0].Blocked)
-	assert.Equal(t, 2, rt.depGraph.InFlightCount(), "root and dependent both remain in the graph until the exact blocked root is released")
+	assert.Equal(t, 2, rt.sched.graph.InFlightCount(), "root and dependent both remain in the graph until the exact blocked root is released")
 }
 
 // Validates: R-2.10.5
@@ -123,7 +123,7 @@ func persistBlockedRetryViaAdmission(scopeKey ScopeKey) func(*testing.T, *testEn
 func persistBlockedRetryViaHeldScope(scopeKey ScopeKey) func(*testing.T, *testEngine, *engineFlow, *watchRuntime) {
 	return func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime) {
 		t.Helper()
-		current := rt.depGraph.Add(&Action{
+		current := rt.sched.graph.Add(&Action{
 			Type:    ActionUpload,
 			Path:    "Shared/Docs/file.txt",
 			OldPath: "Shared/Docs/old.txt",
@@ -273,8 +273,8 @@ func TestEngineFlow_LoadActiveScopes_PopulatesRuntimeLifecycleWorkingSet(t *test
 
 	require.NoError(t, rt.loadActiveScopes(t.Context()))
 
-	assert.True(t, rt.hasActiveScope(scopeKey))
-	activeScopes := rt.snapshotActiveScopes()
+	assert.True(t, rt.scopes.hasActiveScope(scopeKey))
+	activeScopes := rt.scopes.snapshotActiveScopes()
 	require.Len(t, activeScopes, 1)
 	assert.Equal(t, scopeKey, activeScopes[0].Key)
 }
@@ -347,7 +347,7 @@ func TestEngineFlow_AdmitReady_BlocksNormalActionUnderActiveScope(t *testing.T) 
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	})
 
-	ready := rt.depGraph.Add(&Action{
+	ready := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "blocked.txt",
 		DriveID: eng.driveID,
@@ -358,7 +358,7 @@ func TestEngineFlow_AdmitReady_BlocksNormalActionUnderActiveScope(t *testing.T) 
 	require.NoError(t, err)
 
 	assert.Empty(t, dispatched)
-	assert.Equal(t, 1, rt.depGraph.InFlightCount())
+	assert.Equal(t, 1, rt.sched.graph.InFlightCount())
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -379,7 +379,7 @@ func TestEngineFlow_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenScopeNoL
 	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("trial.txt", "", ActionDownload), scopeKey)
 	require.NoError(t, err)
 
-	ready := rt.depGraph.Add(&Action{
+	ready := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "trial.txt",
 		DriveID: eng.driveID,
@@ -409,7 +409,7 @@ func TestEngineFlow_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWithout
 	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("trial.txt", "", ActionUpload), scopeKey)
 	require.NoError(t, err)
 
-	ready := rt.depGraph.Add(&Action{
+	ready := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "trial.txt",
 		DriveID: eng.driveID,
@@ -447,7 +447,7 @@ func TestEngineFlow_AdmitReady_FailsClosedWhenBlockedRetryWorkPersistenceFails(t
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	})
 
-	ready := rt.depGraph.Add(&Action{
+	ready := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "blocked.txt",
 		DriveID: eng.driveID,
@@ -460,6 +460,6 @@ func TestEngineFlow_AdmitReady_FailsClosedWhenBlockedRetryWorkPersistenceFails(t
 	require.Error(t, err)
 	require.ErrorContains(t, err, "blocked retry_work")
 	assert.Empty(t, dispatched)
-	assert.Empty(t, rt.heldByKey, "admission must not create in-memory held work when the blocked retry row was not durably recorded")
-	assert.Equal(t, 1, rt.depGraph.InFlightCount())
+	assert.Empty(t, rt.retries.heldByKey, "admission must not create in-memory held work when the blocked retry row was not durably recorded")
+	assert.Equal(t, 1, rt.sched.graph.InFlightCount())
 }

@@ -37,7 +37,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 					ActionID:   1,
 				})
 				require.NoError(t, err)
-				assert.Equal(t, 0, rt.depGraph.InFlightCount())
+				assert.Equal(t, 0, rt.sched.graph.InFlightCount())
 			},
 		},
 		{
@@ -55,7 +55,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 					ActionID:   1,
 				})
 				require.NoError(t, err)
-				assert.Equal(t, 0, rt.depGraph.InFlightCount())
+				assert.Equal(t, 0, rt.sched.graph.InFlightCount())
 			},
 		},
 		{
@@ -65,7 +65,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 				seedDueRetryPublication(t, rt)
 				err := rt.handleWatchHeldRelease(t.Context(), &watchPipeline{bl: bl}, false)
 				require.NoError(t, err)
-				assert.Empty(t, rt.heldByKey)
+				assert.Empty(t, rt.retries.heldByKey)
 				assert.Empty(t, listRetryWorkForTest(t, rt.engine.baseline, t.Context()))
 			},
 		},
@@ -76,7 +76,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 				seedDueTrialPublication(t, eng, rt)
 				err := rt.handleWatchHeldRelease(t.Context(), &watchPipeline{bl: bl}, true)
 				require.NoError(t, err)
-				assert.Empty(t, rt.heldByKey)
+				assert.Empty(t, rt.retries.heldByKey)
 			},
 		},
 	}
@@ -104,7 +104,7 @@ func TestRuntimeArchitecture_ShutdownDrainDoesNotRoutePublicationWorkToWorkers(t
 	rt := testWatchRuntime(t, eng)
 	bl := seedPublicationBaseline(t, eng)
 
-	publication := rt.depGraph.Add(&Action{
+	publication := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: rt.engine.driveID,
@@ -118,7 +118,7 @@ func TestRuntimeArchitecture_ShutdownDrainDoesNotRoutePublicationWorkToWorkers(t
 
 	assert.True(t, rt.isDraining())
 	assert.Empty(t, rt.currentOutbox())
-	assert.Equal(t, 0, rt.depGraph.InFlightCount())
+	assert.Equal(t, 0, rt.sched.graph.InFlightCount())
 
 	_, found := bl.GetByPath("cleanup.txt")
 	assert.True(t, found, "shutdown drain should discard publication work instead of committing it through workers")
@@ -174,7 +174,7 @@ func TestRuntimeArchitecture_ShutdownDrainSealsAdmissionOnCompletionError(t *tes
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	current := rt.depGraph.Add(&Action{
+	current := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "drain.txt",
 		DriveID: eng.driveID,
@@ -310,7 +310,7 @@ func seedPublicationBaseline(t *testing.T, eng *testEngine) *Baseline {
 func addPublicationDependencyPair(t *testing.T, rt *watchRuntime) {
 	t.Helper()
 
-	root := rt.depGraph.Add(&Action{
+	root := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "sync.txt",
 		DriveID: rt.engine.driveID,
@@ -318,7 +318,7 @@ func addPublicationDependencyPair(t *testing.T, rt *watchRuntime) {
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	dependent := rt.depGraph.Add(&Action{
+	dependent := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: rt.engine.driveID,
@@ -340,7 +340,7 @@ func seedDueRetryPublication(t *testing.T, rt *watchRuntime) {
 	require.NoError(t, rt.engine.baseline.UpsertRetryWork(t.Context(), &row))
 	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
 
-	publication := rt.depGraph.Add(&Action{
+	publication := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: rt.engine.driveID,
@@ -361,7 +361,7 @@ func seedDueTrialPublication(t *testing.T, eng *testEngine, rt *watchRuntime) {
 		TrialInterval: 10 * time.Second,
 	})
 
-	publication := rt.depGraph.Add(&Action{
+	publication := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: rt.engine.driveID,

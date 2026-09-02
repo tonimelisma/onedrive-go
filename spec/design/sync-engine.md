@@ -172,6 +172,35 @@ Permission timing follows the engine-owned runtime decision, not the probe:
   path; trial reclassification reuses that same fallback instead of treating
   inconclusive permission probes as fatal runtime errors
 
+## Run State Is Split By Authority
+
+`engineFlow`'s mutable state lives in four owners, each answering one question
+about a run:
+
+- `actionScheduler` -- which actions exist, which are queued, which are running
+- `retryLedger` -- the durable retry rows for this run, what is held, and in
+  what order it releases
+- `scopeLedger` -- the active shared blockers
+- `runResults` -- what the run will report when it finishes
+
+This does not change the concurrency model. One goroutine still owns all four,
+and `scopeLedger.mu` still guards only the slice that admission checks and
+status snapshots read concurrently. What changes is that the compiler now shows
+which owner a method touches, so "this decision is about scheduling" or "this
+decision is about retry timing" is visible in the code rather than inferred
+from field names on a struct that carried several dozen of them.
+
+Methods that touch exactly one owner moved onto it -- `markRunning` is
+scheduler state, `snapshotActiveScopes` is scope state. Methods that span
+owners stayed on `engineFlow`, because spanning owners is what they are for:
+holding an action moves it out of the scheduler and into the retry ledger, and
+releasing due trials reads the scope ledger to decide which held keys are
+eligible.
+
+`engineFlow` is still large. Splitting the state was the part that could be
+done without changing behavior; splitting the coordination is a separate
+question about what the runtime does, not about where its fields live.
+
 ## Watch State Is Grouped And Qualified
 
 `watchRuntime` holds its mutable state in three named fields: `loop` (phase,

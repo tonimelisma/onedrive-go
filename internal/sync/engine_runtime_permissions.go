@@ -95,7 +95,7 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 	case permissionEvidenceNone:
 		return fmt.Errorf("apply permission failure for %s: missing permission evidence", work.Path)
 	case permissionEvidenceKnownActiveBoundary:
-		if blocking := flow.findBlockingScope(current); !blocking.IsZero() {
+		if blocking := flow.scopes.findBlockingScope(current); !blocking.IsZero() {
 			return flow.holdActionUnderScope(ctx, current, r, blocking)
 		}
 		return nil
@@ -282,7 +282,7 @@ func (flow *engineFlow) recordPermissionRetryWork(
 	if row == nil {
 		return fmt.Errorf("missing persisted row")
 	}
-	flow.retryRowsByKey[row.WorkKey()] = *row
+	flow.retries.rowsByKey[row.WorkKey()] = *row
 	fields := append(flow.summaryLogFields(
 		errclass.ClassActionable,
 		conditionKeyForStoredCondition(conditionType, scopeKey),
@@ -307,7 +307,7 @@ func (flow *engineFlow) recordPermissionBlockedRetry(
 	if row == nil {
 		return fmt.Errorf("missing persisted row")
 	}
-	flow.retryRowsByKey[row.WorkKey()] = *row
+	flow.retries.rowsByKey[row.WorkKey()] = *row
 	fields := append(flow.summaryLogFields(
 		errclass.ClassScopeBlockingTransient,
 		conditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),

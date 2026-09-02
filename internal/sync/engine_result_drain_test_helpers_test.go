@@ -15,7 +15,7 @@ func startDrainLoop(t *testing.T) (chan actionCompletion, context.CancelFunc, *t
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	rt.scopeState = newScopeState(eng.nowFunc, eng.logger)
+	rt.scopes.state = newScopeState(eng.nowFunc, eng.logger)
 	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	results := make(chan actionCompletion, 16)
@@ -97,7 +97,7 @@ func runResultDrainLoopWithOutboxForTest(
 	outbox []*trackedAction,
 ) ([]*trackedAction, bool) {
 	select {
-	case rt.dispatchCh <- outbox[0]:
+	case rt.sched.dispatchCh <- outbox[0]:
 		return outbox[1:], false
 	case workerResult, ok := <-results:
 		if !ok {

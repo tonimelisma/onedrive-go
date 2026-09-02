@@ -21,7 +21,7 @@ func (flow *engineFlow) startRuntimeStage(
 	}
 
 	flow.initializeRuntimeState(runtime)
-	flow.depGraph = newDepGraph(flow.deps.logger)
+	flow.sched.graph = newDepGraph(flow.deps.logger)
 
 	if len(plan.Actions) == 0 {
 		return nil, false, nil
@@ -38,7 +38,7 @@ func (flow *engineFlow) startRuntimeStage(
 		return nil, false, err
 	}
 
-	return outbox, flow.depGraph.InFlightCount() > 0, nil
+	return outbox, flow.sched.graph.InFlightCount() > 0, nil
 }
 
 // reduceReadyFrontierStage owns the runtime handoff from "actions now ready"
@@ -68,15 +68,15 @@ func (flow *engineFlow) reduceReadyFrontierStage(
 }
 
 func (flow *engineFlow) registerPlanActions(plan *actionPlan) []*trackedAction {
-	if flow.depGraph == nil || plan == nil || len(plan.Actions) == 0 {
+	if flow.sched.graph == nil || plan == nil || len(plan.Actions) == 0 {
 		return nil
 	}
 
-	actionIDs := flow.allocatePlanActionIDs(len(plan.Actions))
+	actionIDs := flow.sched.allocatePlanActionIDs(len(plan.Actions))
 	initialReady := make([]*trackedAction, 0, len(plan.Actions))
 
 	for i := range plan.Actions {
-		flow.depGraph.Register(&plan.Actions[i], actionIDs[i])
+		flow.sched.graph.Register(&plan.Actions[i], actionIDs[i])
 	}
 
 	for i := range plan.Actions {
@@ -85,7 +85,7 @@ func (flow *engineFlow) registerPlanActions(plan *actionPlan) []*trackedAction {
 			depIDs = append(depIDs, actionIDs[depIdx])
 		}
 
-		if ta := flow.depGraph.WireDeps(actionIDs[i], depIDs); ta != nil {
+		if ta := flow.sched.graph.WireDeps(actionIDs[i], depIDs); ta != nil {
 			initialReady = append(initialReady, ta)
 		}
 	}
@@ -95,16 +95,4 @@ func (flow *engineFlow) registerPlanActions(plan *actionPlan) []*trackedAction {
 	)
 
 	return initialReady
-}
-
-func (flow *engineFlow) allocatePlanActionIDs(count int) []int64 {
-	actionIDs := make([]int64, count)
-	baseID := flow.nextActionID
-	flow.nextActionID += int64(count)
-
-	for i := 0; i < count; i++ {
-		actionIDs[i] = baseID + int64(i)
-	}
-
-	return actionIDs
 }

@@ -100,7 +100,7 @@ func (flow *engineFlow) decideAdmission(
 		}
 
 		decision := flow.newAdmissionDecision(ta)
-		flow.applyPersistedRetryAdmission(now, ta, &decision)
+		flow.retries.applyPersistedRetryAdmission(now, ta, &decision)
 		flow.applyActiveScopeAdmission(ta, &decision)
 		decisions = append(decisions, decision)
 	}
@@ -123,34 +123,6 @@ func (flow *engineFlow) newAdmissionDecision(ta *trackedAction) admissionDecisio
 	return decision
 }
 
-func (flow *engineFlow) applyPersistedRetryAdmission(
-	now time.Time,
-	ta *trackedAction,
-	decision *admissionDecision,
-) {
-	if ta == nil || decision == nil {
-		return
-	}
-
-	row, ok := flow.retryRowsByKey[decision.RetryWorkKey]
-	if !ok || (!decision.ClearScopeKey.IsZero() && row.ScopeKey == decision.ClearScopeKey) {
-		return
-	}
-
-	switch {
-	case row.Blocked && !row.ScopeKey.IsZero() &&
-		(!ta.IsTrial || ta.TrialScopeKey.IsZero() || row.ScopeKey != ta.TrialScopeKey):
-		decision.Kind = admissionHoldScope
-		decision.ScopeKey = row.ScopeKey
-	case row.NextRetryAt > 0:
-		nextRetryAt := time.Unix(0, row.NextRetryAt)
-		if nextRetryAt.After(now) {
-			decision.Kind = admissionHoldRetry
-			decision.NextRetryAt = nextRetryAt
-		}
-	}
-}
-
 func (flow *engineFlow) applyActiveScopeAdmission(
 	ta *trackedAction,
 	decision *admissionDecision,
@@ -159,7 +131,7 @@ func (flow *engineFlow) applyActiveScopeAdmission(
 		return
 	}
 
-	scopeKey := flow.findBlockingScope(ta)
+	scopeKey := flow.scopes.findBlockingScope(ta)
 	if scopeKey.IsZero() {
 		return
 	}
@@ -190,7 +162,7 @@ func (flow *engineFlow) applyAdmissionDecisions(
 
 		switch decision.Kind {
 		case admissionDispatchNow:
-			flow.markQueued(ta)
+			flow.sched.markQueued(ta)
 			dispatch = append(dispatch, ta)
 		case admissionHoldRetry:
 			flow.holdAction(ta, heldReasonRetry, ScopeKey{}, decision.NextRetryAt)
@@ -218,8 +190,8 @@ func (flow *engineFlow) applyAdmissionScopeClear(
 	if err := flow.clearBlockedRetryWorkForScope(ctx, decision.RetryWorkKey, decision.ClearScopeKey); err != nil {
 		return err
 	}
-	if row, ok := flow.retryRowsByKey[decision.RetryWorkKey]; ok && row.Blocked && row.ScopeKey == decision.ClearScopeKey {
-		delete(flow.retryRowsByKey, decision.RetryWorkKey)
+	if row, ok := flow.retries.rowsByKey[decision.RetryWorkKey]; ok && row.Blocked && row.ScopeKey == decision.ClearScopeKey {
+		delete(flow.retries.rowsByKey, decision.RetryWorkKey)
 	}
 
 	return nil
@@ -234,7 +206,7 @@ func (flow *engineFlow) persistHeldScopeDecision(
 		return nil
 	}
 
-	row, ok := flow.retryRowsByKey[decision.RetryWorkKey]
+	row, ok := flow.retries.rowsByKey[decision.RetryWorkKey]
 	if ok && row.Blocked && row.ScopeKey == decision.ScopeKey {
 		return nil
 	}

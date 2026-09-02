@@ -13,7 +13,7 @@ func (rt *watchRuntime) beginWatchDrain(
 		rt.stopDrainTimers()
 		rt.deps.emit(engineDebugEvent{Type: engineDebugEventShutdownStarted})
 		rt.deps.logger.Info("graceful shutdown: sealing new work admission",
-			slog.Int("in_flight", rt.depGraph.InFlightCount()),
+			slog.Int("in_flight", rt.sched.graph.InFlightCount()),
 		)
 	}
 
