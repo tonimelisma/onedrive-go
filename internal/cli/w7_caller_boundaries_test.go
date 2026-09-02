@@ -93,7 +93,7 @@ func TestLogoutCommand_PreservesOfflineState(t *testing.T) {
 	var out bytes.Buffer
 	cc := newCommandContext(&out, cfgPath)
 
-	require.NoError(t, runLogoutWithContext(cc, false))
+	require.NoError(t, runLogoutWithContext(t.Context(), cc, false))
 
 	cfg, err := config.LoadOrDefault(cfgPath, testDriveLogger(t))
 	require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestRunStatusCommand_AuthRequiredOnlyJSON(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, runStatusCommand(cc, false))
+	require.NoError(t, runStatusCommand(t.Context(), cc, false))
 
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -180,7 +180,7 @@ func TestRunStatusCommand_InvalidDriveSelectorReturnsMatchError(t *testing.T) {
 		},
 	}
 
-	err := runStatusCommand(cc, false)
+	err := runStatusCommand(t.Context(), cc, false)
 	require.Error(t, err)
 	assert.EqualError(t, err, `resolving status drive selectors: resolving selector "missing": no drive matching "missing"`)
 }

@@ -414,7 +414,7 @@ func TestResolveLogoutAccount_PurgeAutoSelectsSingleKnownAccountWithoutSavedLogi
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
 
-	email, err := resolveLogoutAccount(cfg, true, logger)
+	email, err := resolveLogoutAccount(t.Context(), cfg, true, logger)
 	require.NoError(t, err)
 	assert.Equal(t, "alice@outlook.com", email)
 }
@@ -434,7 +434,7 @@ func TestResolveLogoutAccount_PlainLogoutRequiresUsableSavedLogin(t *testing.T) 
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
 
-	_, err := resolveLogoutAccount(cfg, false, logger)
+	_, err := resolveLogoutAccount(t.Context(), cfg, false, logger)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no accounts with saved logins are available for plain logout")
 	assert.Contains(t, err.Error(), "alice@outlook.com")
@@ -450,7 +450,7 @@ func TestResolveLogoutAccount_AutoSelectsSingleKnownAccountWithUsableSavedLogin(
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
 
-	email, err := resolveLogoutAccount(cfg, false, logger)
+	email, err := resolveLogoutAccount(t.Context(), cfg, false, logger)
 	require.NoError(t, err)
 	assert.Equal(t, "alice@outlook.com", email)
 }
@@ -466,7 +466,7 @@ func TestResolveLogoutAccount_MultipleUsableSavedLoginsRequireAccount(t *testing
 	cfg := config.DefaultConfig()
 	logger := slog.Default()
 
-	_, err := resolveLogoutAccount(cfg, false, logger)
+	_, err := resolveLogoutAccount(t.Context(), cfg, false, logger)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "multiple accounts with saved logins")
 	assert.Contains(t, err.Error(), "alice@outlook.com")
@@ -589,7 +589,7 @@ func TestRunStatusCommand_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedPr
 		GraphBaseURL: srv.URL,
 	}
 
-	require.NoError(t, runStatusCommand(cc, false))
+	require.NoError(t, runStatusCommand(t.Context(), cc, false))
 	assert.False(t, hasPersistedAccountAuthRequirement(cid.Email(), testDriveLogger(t)))
 	assert.NotContains(t, out.String(), "Sign-in required")
 	assert.Contains(t, out.String(), "Storage: 1 B of 2 B used")

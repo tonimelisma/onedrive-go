@@ -68,5 +68,7 @@ func runLogout(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("reading --purge flag: %w", err)
 	}
 
-	return runLogoutWithContext(mustCLIContext(cmd.Context()), purge)
+	ctx := cmd.Context()
+
+	return runLogoutWithContext(ctx, mustCLIContext(ctx), purge)
 }

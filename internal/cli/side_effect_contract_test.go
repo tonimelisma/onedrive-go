@@ -29,7 +29,7 @@ func TestStatusCommand_NoAccountsDoesNotMutateManagedState(t *testing.T) {
 	var out bytes.Buffer
 	cc := newCommandContext(&out, cfgPath)
 
-	require.NoError(t, runStatusCommand(cc, false))
+	require.NoError(t, runStatusCommand(t.Context(), cc, false))
 	assert.Contains(t, out.String(), "No accounts configured")
 	assert.Equal(t, before, snapshotSideEffectRoots(t, append(cliManagedStateRoots(), cfgDir)))
 }

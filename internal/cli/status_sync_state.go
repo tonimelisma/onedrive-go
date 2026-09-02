@@ -10,6 +10,7 @@ import (
 )
 
 func readDriveStatusSnapshot(
+	ctx context.Context,
 	statePath string,
 	logger *slog.Logger,
 ) syncengine.DriveStatusSnapshot {
@@ -17,7 +18,7 @@ func readDriveStatusSnapshot(
 		return syncengine.DriveStatusSnapshot{}
 	}
 
-	snapshot, err := syncengine.ReadDriveStatusSnapshot(context.Background(), statePath, logger)
+	snapshot, err := syncengine.ReadDriveStatusSnapshot(ctx, statePath, logger)
 	if err != nil {
 		return syncengine.DriveStatusSnapshot{}
 	}

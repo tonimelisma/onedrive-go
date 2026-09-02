@@ -150,10 +150,10 @@ type statusOutput struct {
 	Summary  statusSummary   `json:"summary"`
 }
 
-func runStatusCommand(cc *CLIContext, history bool, showPerf ...bool) error {
+func runStatusCommand(ctx context.Context, cc *CLIContext, history bool, showPerf ...bool) error {
 	logger := cc.Logger
 	perfEnabled := len(showPerf) > 0 && showPerf[0]
-	snapshot, err := loadAccountViewSnapshot(context.Background(), cc)
+	snapshot, err := loadAccountViewSnapshot(ctx, cc)
 	if err != nil {
 		return err
 	}
@@ -176,14 +176,14 @@ func runStatusCommand(cc *CLIContext, history bool, showPerf ...bool) error {
 		return writeln(cc.Output(), "No accounts configured. Run 'onedrive-go login' to get started.")
 	}
 
-	accounts := statusAccounts(cc, filteredSnapshot, history)
+	accounts := statusAccounts(ctx, cc, filteredSnapshot, history)
 	liveOverlayLoader := cc.statusLiveOverlayLoader
 	if liveOverlayLoader == nil {
 		liveOverlayLoader = loadStatusLiveOverlay
 	}
-	applyStatusLiveOverlay(accounts, liveOverlayLoader(context.Background(), cc, filteredSnapshot))
-	applyStatusRuntimeOverlay(accounts, loadStatusRuntimeOverlay(context.Background()))
-	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(context.Background(), perfEnabled))
+	applyStatusLiveOverlay(accounts, liveOverlayLoader(ctx, cc, filteredSnapshot))
+	applyStatusRuntimeOverlay(accounts, loadStatusRuntimeOverlay(ctx))
+	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(ctx, perfEnabled))
 	if cc.Flags.JSON {
 		return printStatusJSON(cc.Output(), accounts)
 	}
@@ -320,7 +320,7 @@ type accountNameReader interface {
 // syncStateQuerier abstracts querying per-mount sync state from state DBs.
 // Enables testing without real SQLite databases on disk.
 type syncStateQuerier interface {
-	QuerySyncState(statePath string) *syncStateInfo
+	QuerySyncState(ctx context.Context, statePath string) *syncStateInfo
 }
 
 // liveSyncStateQuerier queries per-mount sync state from real state DBs.
@@ -331,12 +331,13 @@ type liveSyncStateQuerier struct {
 	examplesLimit int
 }
 
-func (q *liveSyncStateQuerier) QuerySyncState(statePath string) *syncStateInfo {
-	return querySyncStateWithOptions(statePath, q.logger, q.history, q.verbose, q.examplesLimit)
+func (q *liveSyncStateQuerier) QuerySyncState(ctx context.Context, statePath string) *syncStateInfo {
+	return querySyncStateWithOptions(ctx, statePath, q.logger, q.history, q.verbose, q.examplesLimit)
 }
 
 // buildStatusAccountsWith is the testable core of buildStatusAccounts.
 func buildStatusAccountsWith(
+	ctx context.Context,
 	cfg *config.Config,
 	names accountNameReader,
 	checker accountAuthChecker,
@@ -351,7 +352,7 @@ func buildStatusAccountsWith(
 			return driveIDs[i].String() < driveIDs[j].String()
 		})
 
-		acct := buildSingleAccountStatusWith(cfg, email, driveIDs, nil, names, checker, syncQ)
+		acct := buildSingleAccountStatusWith(ctx, cfg, email, driveIDs, nil, names, checker, syncQ)
 		accounts = append(accounts, acct)
 	}
 
@@ -364,6 +365,7 @@ type childMountStatusInput struct {
 }
 
 func buildStatusAccountsFromViews(
+	ctx context.Context,
 	cfg *config.Config,
 	shortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView,
 	views []accountView,
@@ -390,10 +392,11 @@ func buildStatusAccountsFromViews(
 
 		for _, cid := range driveIDs {
 			d := cfg.Drives[cid]
-			drive := buildConfiguredStatusDrive(cfg, cid, &d, &acct, syncQ)
+			drive := buildConfiguredStatusDrive(ctx, cfg, cid, &d, &acct, syncQ)
 			children := childrenByParent[cid]
 			for childIndex := range children {
 				childDrive := buildChildStatusDrive(
+					ctx,
 					&d,
 					&children[childIndex],
 					syncQ,
@@ -432,6 +435,7 @@ func groupDrivesByAccount(cfg *config.Config) (map[string][]driveid.CanonicalID,
 }
 
 func buildSingleAccountStatusWith(
+	ctx context.Context,
 	cfg *config.Config,
 	email string,
 	driveIDs []driveid.CanonicalID,
@@ -458,7 +462,7 @@ func buildSingleAccountStatusWith(
 
 	acct.DisplayName, acct.OrgName = names.ReadAccountNames(email, driveIDs)
 
-	authHealth := checker.CheckAccountAuth(context.Background(), email, driveIDs)
+	authHealth := checker.CheckAccountAuth(ctx, email, driveIDs)
 	acct.AuthState = authHealth.State
 	acct.AuthReason = string(authHealth.Reason)
 	acct.AuthAction = authHealth.Action
@@ -466,10 +470,11 @@ func buildSingleAccountStatusWith(
 
 	for _, cid := range driveIDs {
 		d := cfg.Drives[cid]
-		drive := buildConfiguredStatusDrive(cfg, cid, &d, &acct, syncQ)
+		drive := buildConfiguredStatusDrive(ctx, cfg, cid, &d, &acct, syncQ)
 		children := childrenByParent[cid]
 		for childIndex := range children {
 			childDrive := buildChildStatusDrive(
+				ctx,
 				&d,
 				&children[childIndex],
 				syncQ,
@@ -637,6 +642,7 @@ func groupChildMountsByParent(
 }
 
 func buildConfiguredStatusDrive(
+	ctx context.Context,
 	cfg *config.Config,
 	cid driveid.CanonicalID,
 	drive *config.Drive,
@@ -661,7 +667,7 @@ func buildConfiguredStatusDrive(
 		SyncDir:        drive.SyncDir,
 	}
 	if syncQ != nil {
-		status.SyncState = syncQ.QuerySyncState(config.DriveStatePath(cid))
+		status.SyncState = syncQ.QuerySyncState(ctx, config.DriveStatePath(cid))
 	}
 	finalizeStatusDriveState(&status)
 
@@ -669,6 +675,7 @@ func buildConfiguredStatusDrive(
 }
 
 func buildChildStatusDrive(
+	ctx context.Context,
 	parentDrive *config.Drive,
 	child *childMountStatusInput,
 	syncQ syncStateQuerier,
@@ -712,7 +719,7 @@ func buildChildStatusDrive(
 		status.AutoRetry = &autoRetry
 	}
 	if syncQ != nil {
-		status.SyncState = syncQ.QuerySyncState(config.MountStatePath(root.MountID))
+		status.SyncState = syncQ.QuerySyncState(ctx, config.MountStatePath(root.MountID))
 	}
 	finalizeStatusDriveState(&status)
 
@@ -720,20 +727,23 @@ func buildChildStatusDrive(
 }
 
 func buildChildStatusMount(
+	ctx context.Context,
 	parentDrive *config.Drive,
 	child *childMountStatusInput,
 ) statusMount {
-	return buildChildStatusDrive(parentDrive, child, nil)
+	return buildChildStatusDrive(ctx, parentDrive, child, nil)
 }
 
 func querySyncState(
+	ctx context.Context,
 	statePath string,
 	logger *slog.Logger,
 ) *syncStateInfo {
-	return querySyncStateWithOptions(statePath, logger, false, false, defaultVisiblePaths)
+	return querySyncStateWithOptions(ctx, statePath, logger, false, false, defaultVisiblePaths)
 }
 
 func querySyncStateWithOptions(
+	ctx context.Context,
 	statePath string,
 	logger *slog.Logger,
 	history bool,
@@ -741,7 +751,7 @@ func querySyncStateWithOptions(
 	examplesLimit int,
 ) *syncStateInfo {
 	_ = history
-	snapshot := readDriveStatusSnapshot(statePath, logger)
+	snapshot := readDriveStatusSnapshot(ctx, statePath, logger)
 	info := buildSyncStateInfo(&snapshot, verbose, examplesLimit)
 	return &info
 }
