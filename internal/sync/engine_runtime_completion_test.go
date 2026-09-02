@@ -115,7 +115,7 @@ func TestEngineFlow_ProcessNormalDecision_RetryableTransientScopeEvidenceStaysUn
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
-	assert.False(t, rt.hasActiveScope(SKService()))
+	assert.False(t, rt.scopes.hasActiveScope(SKService()))
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -144,7 +144,7 @@ func TestEngineFlow_ApplyCompletionSuccess_ClearsRetryWorkAndAdmitsDependents(t 
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &row))
 	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
 
-	current := rt.depGraph.Add(&Action{
+	current := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "sync.txt",
 		DriveID: eng.driveID,
@@ -152,7 +152,7 @@ func TestEngineFlow_ApplyCompletionSuccess_ClearsRetryWorkAndAdmitsDependents(t 
 	}, 1, nil)
 	require.NotNil(t, current)
 
-	dependent := rt.depGraph.Add(&Action{
+	dependent := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "next.txt",
 		DriveID: eng.driveID,
@@ -170,7 +170,7 @@ func TestEngineFlow_ApplyCompletionSuccess_ClearsRetryWorkAndAdmitsDependents(t 
 	require.NoError(t, err)
 	require.Len(t, dispatched, 1)
 	assert.Equal(t, int64(2), dispatched[0].ID)
-	assert.Equal(t, 1, flow.succeeded)
+	assert.Equal(t, 1, flow.results.succeeded)
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 }
 
@@ -191,18 +191,18 @@ func TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOr
 		NextRetryAt:  eng.nowFunc().UnixNano(),
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &row))
-	flow.retryRowsByKey[row.WorkKey()] = row
+	flow.retries.rowsByKey[row.WorkKey()] = row
 
-	current := rt.depGraph.Add(&Action{
+	current := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "stale.txt",
 		DriveID: eng.driveID,
 		ItemID:  "stale-item",
 	}, 1, nil)
 	require.NotNil(t, current)
-	rt.markRunning(current)
+	rt.sched.markRunning(current)
 
-	dependent := rt.depGraph.Add(&Action{
+	dependent := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "dependent.txt",
 		DriveID: eng.driveID,
@@ -221,9 +221,9 @@ func TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOr
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
-	assert.Equal(t, 0, rt.runningCount)
-	assert.Empty(t, rt.runningByID)
-	assert.Equal(t, 0, rt.depGraph.InFlightCount(), "superseded dependents must not become runnable old-plan work")
+	assert.Equal(t, 0, rt.sched.runningCount)
+	assert.Empty(t, rt.sched.runningByID)
+	assert.Equal(t, 0, rt.sched.graph.InFlightCount(), "superseded dependents must not become runnable old-plan work")
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 
 	succeeded, failed, errs := flow.resultStats()
@@ -311,7 +311,7 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionArmsRetryTimer
 	}
 	decision := classifyResult(r)
 
-	current := rt.depGraph.Add(&Action{
+	current := rt.sched.graph.Add(&Action{
 		Path: "accessible/file.txt",
 		Type: ActionDownload,
 	}, 1, nil)
@@ -485,9 +485,9 @@ func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionEvidenceFallsBackToR
 		AttemptCount: 1,
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blockedRow))
-	flow.retryRowsByKey[blockedRow.WorkKey()] = *blockedRow
+	flow.retries.rowsByKey[blockedRow.WorkKey()] = *blockedRow
 
-	current := rt.depGraph.Add(&Action{
+	current := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "file.txt",
 		DriveID: driveid.New(engineTestDriveID),
@@ -551,7 +551,7 @@ func TestEngineFlow_ProcessTrialDecision_FallbackActivatesReclassifiedBlockedSco
 		AttemptCount: 1,
 	}))
 
-	current := rt.depGraph.Add(&Action{
+	current := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "file.txt",
 		DriveID: eng.driveID,
@@ -581,9 +581,9 @@ func TestEngineFlow_ProcessTrialDecision_FallbackActivatesReclassifiedBlockedSco
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
-	assert.True(t, rt.hasActiveScope(throttleScopeKey),
+	assert.True(t, rt.scopes.hasActiveScope(throttleScopeKey),
 		"trial retry fallback should activate the newly classified blocked scope")
-	assert.False(t, rt.hasActiveScope(trialScopeKey),
+	assert.False(t, rt.scopes.hasActiveScope(trialScopeKey),
 		"the old trial scope should be discarded once its blocked work is reclassified")
 	assert.True(t, rt.hasTrialTimer(), "new blocked scope should arm the watch trial timer")
 
@@ -612,7 +612,7 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 	upsertBlockedRetryWorkForTest(t, eng, "file.txt", trialScopeKey)
 	upsertBlockedRetryWorkForTest(t, eng, "other.txt", trialScopeKey)
 
-	other := rt.depGraph.Add(&Action{
+	other := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "other.txt",
 		DriveID: eng.driveID,
@@ -620,7 +620,7 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 	require.NotNil(t, other)
 	rt.holdAction(other, heldReasonScope, trialScopeKey, time.Time{})
 
-	current := rt.depGraph.Add(&Action{
+	current := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "file.txt",
 		DriveID: eng.driveID,
@@ -650,11 +650,11 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
-	assert.True(t, rt.hasActiveScope(throttleScopeKey),
+	assert.True(t, rt.scopes.hasActiveScope(throttleScopeKey),
 		"trial retry fallback should activate the newly classified blocked scope")
-	assert.True(t, rt.hasActiveScope(trialScopeKey),
+	assert.True(t, rt.scopes.hasActiveScope(trialScopeKey),
 		"the original scope must stay active while unrelated blocked work still remains under it")
-	assert.Contains(t, rt.heldByKey, retryWorkKeyForAction(&other.Action),
+	assert.Contains(t, rt.retries.heldByKey, retryWorkKeyForAction(&other.Action),
 		"existing blocked work under the original scope must remain held in the runtime")
 
 	rowsByPath := retryRowsByPathForTest(t, eng)
@@ -697,15 +697,15 @@ func TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEm
 		AttemptCount: 1,
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &row))
-	flow.retryRowsByKey[row.WorkKey()] = row
+	flow.retries.rowsByKey[row.WorkKey()] = row
 
-	current := rt.depGraph.Add(&Action{
+	current := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "trial-stale.txt",
 		DriveID: eng.driveID,
 	}, 1, nil)
 	require.NotNil(t, current)
-	rt.markRunning(current)
+	rt.sched.markRunning(current)
 
 	decision := classifyResult(&actionCompletion{Err: errActionPreconditionChanged})
 	ready, err := flow.applyTrialCompletionDecision(t.Context(), trialScopeKey, &decision, current, &actionCompletion{
@@ -720,8 +720,8 @@ func TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEm
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
-	assert.Equal(t, 0, rt.depGraph.InFlightCount())
-	assert.Equal(t, 0, rt.runningCount)
+	assert.Equal(t, 0, rt.sched.graph.InFlightCount())
+	assert.Equal(t, 0, rt.sched.runningCount)
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 	assert.False(t, isTestBlockScopeed(eng, trialScopeKey), "empty trial scope should be discarded, not extended")
 
@@ -785,7 +785,7 @@ func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmit
 		TrialInterval: time.Minute,
 	})
 
-	current := rt.depGraph.Add(&Action{
+	current := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "trial.txt",
 		DriveID: eng.driveID,
@@ -793,7 +793,7 @@ func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmit
 	}, 1, nil)
 	require.NotNil(t, current)
 
-	dependent := rt.depGraph.Add(&Action{
+	dependent := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "dependent.txt",
 		DriveID: eng.driveID,
@@ -816,7 +816,7 @@ func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmit
 	require.Len(t, ready, 1)
 	assert.Equal(t, int64(2), ready[0].ID)
 	assert.Equal(t, "dependent.txt", ready[0].Action.Path)
-	assert.False(t, rt.hasActiveScope(scopeKey))
+	assert.False(t, rt.scopes.hasActiveScope(scopeKey))
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 }
 
@@ -865,12 +865,12 @@ func TestEngineFlow_ProcessActionCompletion_RetryPersistenceFailureTerminatesAnd
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	current := flow.depGraph.Add(&Action{
+	current := flow.sched.graph.Add(&Action{
 		Type: ActionUpload,
 		Path: "retry.txt",
 	}, 1, nil)
 	require.NotNil(t, current)
-	flow.markRunning(current)
+	flow.sched.markRunning(current)
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
@@ -884,7 +884,7 @@ func TestEngineFlow_ProcessActionCompletion_RetryPersistenceFailureTerminatesAnd
 
 	require.ErrorContains(t, err, "record retry_work")
 	assert.Empty(t, ready)
-	assert.Zero(t, flow.runningCount, "control-state persistence failure must still finish the completed action bookkeeping")
-	assert.Empty(t, flow.runningByID)
-	assert.Equal(t, 1, flow.depGraph.InFlightCount(), "the unresolved action must remain in the graph when the runtime fails closed")
+	assert.Zero(t, flow.sched.runningCount, "control-state persistence failure must still finish the completed action bookkeeping")
+	assert.Empty(t, flow.sched.runningByID)
+	assert.Equal(t, 1, flow.sched.graph.InFlightCount(), "the unresolved action must remain in the graph when the runtime fails closed")
 }

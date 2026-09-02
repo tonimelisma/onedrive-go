@@ -13,7 +13,7 @@ import (
 )
 
 func (flow *engineFlow) failAfterControlStateError(current *trackedAction, err error) error {
-	flow.markFinished(current)
+	flow.sched.markFinished(current)
 	return err
 }
 
@@ -30,7 +30,7 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 	}
 
 	decision := classifyResult(r)
-	current := flow.trackedActionForCompletion(r)
+	current := flow.sched.trackedActionForCompletion(r)
 
 	var (
 		dispatched []*trackedAction
@@ -64,7 +64,7 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 		if err := flow.applyResultPersistence(ctx, decision, r); err != nil {
 			return nil, flow.failAfterControlStateError(current, err)
 		}
-		flow.markFinished(current)
+		flow.sched.markFinished(current)
 		return nil, fmt.Errorf("classify action completion: invalid failure class")
 	case errclass.ClassSuccess:
 		dispatched, err := flow.applyCompletionSuccess(ctx, current, r)
@@ -178,15 +178,15 @@ func (flow *engineFlow) applyTrackedActionSuccess(
 	r *actionCompletion,
 	depGraphReason string,
 ) ([]*trackedAction, error) {
-	flow.markFinished(current)
-	flow.succeeded++
+	flow.sched.markFinished(current)
+	flow.results.succeeded++
 	if current != nil {
 		flow.clearRetryWorkOnActionSuccess(ctx, &current.Action)
 	} else {
 		flow.clearRetryWorkOnSuccess(ctx, r)
 	}
-	if flow.scopeState != nil && r != nil {
-		flow.scopeState.RecordSuccess()
+	if flow.scopes.state != nil && r != nil {
+		flow.scopes.state.RecordSuccess()
 	}
 
 	actionID := int64(0)
@@ -469,7 +469,7 @@ func (flow *engineFlow) recordRetryWork(
 	if row == nil {
 		return fmt.Errorf("record retry_work for %s: missing persisted row", r.Path)
 	}
-	flow.retryRowsByKey[row.WorkKey()] = *row
+	flow.retries.rowsByKey[row.WorkKey()] = *row
 	fields = append(fields, slog.Int("attempt_count", row.AttemptCount))
 	flow.deps.logger.Debug("retry_work recorded", fields...)
 
@@ -490,7 +490,7 @@ func (flow *engineFlow) retryWorkShouldBeBlocked(
 		return false
 	}
 
-	return flow.hasActiveScope(scopeKey)
+	return flow.scopes.hasActiveScope(scopeKey)
 }
 
 func (flow *engineFlow) applyResultPersistence(

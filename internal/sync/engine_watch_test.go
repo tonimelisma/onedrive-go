@@ -464,7 +464,7 @@ func TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare(t *t
 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.runningCount = 1
+	rt.sched.runningCount = 1
 
 	err = rt.handleWatchReplanReady(ctx, &watchPipeline{
 		bl:   bl,

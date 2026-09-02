@@ -118,8 +118,8 @@ func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 		return nil
 	}
 
-	delete(flow.retryRowsByKey, work)
-	flow.releaseHeldAction(work)
+	delete(flow.retries.rowsByKey, work)
+	flow.retries.releaseHeldAction(work)
 
 	flow.deps.logger.Info("retry_work resolved",
 		slog.String("path", row.Path),

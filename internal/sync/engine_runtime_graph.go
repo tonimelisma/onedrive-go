@@ -6,11 +6,11 @@ import (
 )
 
 func (flow *engineFlow) completeDepGraphAction(actionID int64, reason string) []*trackedAction {
-	if flow.depGraph == nil {
+	if flow.sched.graph == nil {
 		panic(fmt.Sprintf("dep_graph: complete action %d during %s with nil graph", actionID, reason))
 	}
 
-	ready, ok := flow.depGraph.Complete(actionID)
+	ready, ok := flow.sched.graph.Complete(actionID)
 	if !ok {
 		panic(fmt.Sprintf("dep_graph: complete unknown action ID %d during %s", actionID, reason))
 	}
@@ -23,7 +23,7 @@ func (flow *engineFlow) applyCompletedSubtree(
 	actionID int64,
 	reason string,
 ) {
-	flow.markFinished(current)
+	flow.sched.markFinished(current)
 	if current == nil {
 		return
 	}
@@ -51,19 +51,6 @@ func (flow *engineFlow) completeSubtree(ready []*trackedAction) {
 		next := flow.completeDepGraphAction(current.ID, "completeSubtree")
 		queue = append(queue, next...)
 	}
-}
-
-func (flow *engineFlow) trackedActionForCompletion(r *actionCompletion) *trackedAction {
-	if r == nil || flow.depGraph == nil {
-		return nil
-	}
-
-	ta, ok := flow.depGraph.Get(r.ActionID)
-	if !ok {
-		return nil
-	}
-
-	return ta
 }
 
 func (flow *engineFlow) admitReadyAfterSuccessfulAction(
