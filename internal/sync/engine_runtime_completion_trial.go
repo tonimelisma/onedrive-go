@@ -9,22 +9,20 @@ import (
 
 func (flow *engineFlow) applyTrialReleaseDecision(
 	ctx context.Context,
-	watch *watchRuntime,
 	current *trackedAction,
 	r *actionCompletion,
 	trialScopeKey ScopeKey,
 ) ([]*trackedAction, error) {
-	if err := flow.releaseScope(ctx, watch, trialScopeKey); err != nil {
+	if err := flow.releaseScope(ctx, trialScopeKey); err != nil {
 		return nil, err
 	}
 	flow.releaseHeldScope(trialScopeKey)
 
-	return flow.applyCompletionSuccess(ctx, watch, current, r)
+	return flow.applyCompletionSuccess(ctx, current, r)
 }
 
 func (flow *engineFlow) applyTrialExtendDecision(
 	ctx context.Context,
-	watch *watchRuntime,
 	current *trackedAction,
 	r *actionCompletion,
 	trialScopeKey ScopeKey,
@@ -33,16 +31,15 @@ func (flow *engineFlow) applyTrialExtendDecision(
 	if err := flow.rehomeBlockedRetryWork(ctx, r, trialScopeKey); err != nil {
 		return err
 	}
-	if err := flow.holdActionUnderScope(ctx, watch, current, r, trialScopeKey); err != nil {
+	if err := flow.holdActionUnderScope(ctx, current, r, trialScopeKey); err != nil {
 		return err
 	}
 
-	return flow.extendScopeTrial(ctx, watch, trialScopeKey, r.RetryAfter)
+	return flow.extendScopeTrial(ctx, trialScopeKey, r.RetryAfter)
 }
 
 func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 	ctx context.Context,
-	watch *watchRuntime,
 	current *trackedAction,
 	decision *resultDecision,
 	r *actionCompletion,
@@ -50,7 +47,7 @@ func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 	trialScopeKey ScopeKey,
 ) error {
 	flow.markFinished(current)
-	reclassified, err := flow.applyTrialReclassification(ctx, watch, decision, r, bl)
+	reclassified, err := flow.applyTrialReclassification(ctx, decision, r, bl)
 	if err != nil {
 		return err
 	}
@@ -66,7 +63,6 @@ func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 		if shouldTransitionTrialFallbackScope(decision) {
 			if err := flow.transitionTrialScopeToPersistedBlock(
 				ctx,
-				watch,
 				trialScopeKey,
 				decision.ScopeKey,
 				decision.ConditionType,
@@ -74,20 +70,20 @@ func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 			); err != nil {
 				return err
 			}
-			flow.armFailureTimers(watch, decision, persisted)
+			flow.armFailureTimers(decision, persisted)
 			return nil
 		}
-		if err := flow.rearmOrDiscardScope(ctx, watch, trialScopeKey); err != nil {
+		if err := flow.rearmOrDiscardScope(ctx, trialScopeKey); err != nil {
 			return err
 		}
-		if err := flow.applyPersistedFailureScopeEffects(ctx, watch, decision, r, persisted); err != nil {
+		if err := flow.applyPersistedFailureScopeEffects(ctx, decision, r, persisted); err != nil {
 			return err
 		}
-		flow.armFailureTimers(watch, decision, persisted)
+		flow.armFailureTimers(decision, persisted)
 		return nil
 	}
 
-	return flow.rearmOrDiscardScope(ctx, watch, trialScopeKey)
+	return flow.rearmOrDiscardScope(ctx, trialScopeKey)
 }
 
 func (flow *engineFlow) applyTrialRetryFallback(
@@ -115,12 +111,11 @@ func shouldTransitionTrialFallbackScope(decision *resultDecision) bool {
 
 func (flow *engineFlow) applyTrialReclassification(
 	ctx context.Context,
-	watch *watchRuntime,
 	decision *resultDecision,
 	r *actionCompletion,
 	bl *Baseline,
 ) (bool, error) {
-	if handled, err := flow.applyTrialPermissionReclassification(ctx, watch, r, bl); handled {
+	if handled, err := flow.applyTrialPermissionReclassification(ctx, r, bl); handled {
 		return true, err
 	}
 
@@ -128,7 +123,7 @@ func (flow *engineFlow) applyTrialReclassification(
 		if err := flow.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey); err != nil {
 			return false, err
 		}
-		return true, flow.applyBlockScope(ctx, watch, scopeUpdateResult{
+		return true, flow.applyBlockScope(ctx, scopeUpdateResult{
 			Block:         true,
 			ScopeKey:      decision.ScopeKey,
 			ConditionType: decision.ScopeKey.ConditionType(),
