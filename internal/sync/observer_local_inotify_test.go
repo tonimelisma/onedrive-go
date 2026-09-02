@@ -151,7 +151,7 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	watcher := newEnospcWatcher(1)
 
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.WatcherFactory = func() (fsWatcher, error) { return watcher, nil }
+	obs.watcherFactory = func() (fsWatcher, error) { return watcher, nil }
 
 	events := make(chan changeEvent, 256)
 	ctx := t.Context()

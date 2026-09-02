@@ -16,7 +16,7 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 	p *watchPipeline,
 	initialOutbox []*trackedAction,
 ) error {
-	ticker := rt.engine.newTicker(quiescenceLogInterval)
+	ticker := rt.engine.clock.NewTicker(quiescenceLogInterval)
 	defer stopTicker(ticker)
 
 	rt.enterBootstrap()

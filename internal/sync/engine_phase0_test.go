@@ -660,7 +660,7 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 
 	retryRow := testRetryWorkRow("docs/file.txt", "", ActionUpload)
 	retryRow.AttemptCount = 3
-	retryRow.NextRetryAt = eng.nowFn().Add(time.Minute).UnixNano()
+	retryRow.NextRetryAt = eng.nowFunc().Add(time.Minute).UnixNano()
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &retryRow))
 
 	bl, err := eng.baseline.Load(ctx)

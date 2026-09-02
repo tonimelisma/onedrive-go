@@ -49,8 +49,9 @@ func (o *localObserver) watchLoop(
 		interval = safetyScanInterval
 	}
 
-	tickCh, tickStop := o.SafetyTickFunc(interval)
-	defer tickStop()
+	ticker := o.clock.NewTicker(interval)
+	defer stopTicker(ticker)
+	tickCh := tickerChan(ticker)
 
 	errBackoff := retry.NewBackoff(retry.WatchLocalPolicy())
 
@@ -79,7 +80,7 @@ func (o *localObserver) watchLoop(
 			}
 
 			delay := errBackoff.Next()
-			o.Logger.Warn("filesystem watcher error",
+			o.logger.Warn("filesystem watcher error",
 				slog.String("error", watchErr.Error()),
 				slog.Duration("backoff", delay),
 			)
@@ -87,14 +88,14 @@ func (o *localObserver) watchLoop(
 
 			// Exponential backoff prevents tight loop under sustained errors
 			// (e.g., kernel buffer overflow).
-			if sleepErr := o.SleepFunc(ctx, delay); sleepErr != nil {
+			if sleepErr := o.clock.Sleep(ctx, delay); sleepErr != nil {
 				return nil
 			}
 
 			// After watcher error, check if sync root still exists (B-113).
 			// A deleted root means the watcher is watching nothing.
 			if !syncRootExists(syncRoot) {
-				o.Logger.Error("sync root deleted, stopping watch",
+				o.logger.Error("sync root deleted, stopping watch",
 					slog.String("sync_root", syncRoot))
 
 				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
@@ -103,7 +104,7 @@ func (o *localObserver) watchLoop(
 		case <-tickCh:
 			// Check if sync root still exists before running safety scan (B-113).
 			if !syncRootExists(syncRoot) {
-				o.Logger.Error("sync root deleted, stopping watch",
+				o.logger.Error("sync root deleted, stopping watch",
 					slog.String("sync_root", syncRoot))
 
 				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
@@ -128,13 +129,13 @@ func (o *localObserver) HandleFsEvent(
 
 	relPath, err := tree.Rel(fsEvent.Name)
 	if err != nil {
-		o.Logger.Warn("failed to compute relative path",
+		o.logger.Warn("failed to compute relative path",
 			slog.String("path", fsEvent.Name), slog.String("error", err.Error()))
 
 		return
 	}
 	if relPath == "." {
-		o.Logger.Debug("watch: ignoring sync root lifecycle event",
+		o.logger.Debug("watch: ignoring sync root lifecycle event",
 			slog.String("path", fsEvent.Name))
 		return
 	}
@@ -167,7 +168,7 @@ func (o *localObserver) HandleFsEvent(
 		o.observationRules,
 	); skip != nil {
 		if skip.Reason != "" {
-			o.Logger.Debug("watch: skipping file",
+			o.logger.Debug("watch: skipping file",
 				slog.String("path", dbRelPath),
 				slog.String("reason", skip.Reason))
 		}
@@ -200,7 +201,7 @@ func (o *localObserver) handleCreate(
 	info, isSymlink, err := statObservedPath(fsPath)
 	if err != nil {
 		// File may have been removed immediately after creation.
-		o.Logger.Debug("stat failed for created path",
+		o.logger.Debug("stat failed for created path",
 			slog.String("path", dbRelPath), slog.String("error", err.Error()))
 
 		return
@@ -238,7 +239,7 @@ func (o *localObserver) handleCreate(
 		peerRelPath := o.buildPeerRelPath(dbRelPath, collidingName)
 		o.AddCollisionPeer(dbRelPath, peerRelPath)
 
-		o.Logger.Debug("case collision detected in watch mode, skipping event",
+		o.logger.Debug("case collision detected in watch mode, skipping event",
 			slog.String("path", dbRelPath),
 			slog.String("collides_with", collidingName))
 
@@ -263,7 +264,7 @@ func (o *localObserver) handleCreate(
 		ev.ItemType = ItemTypeFolder
 
 		if addErr := watcher.Add(fsPath); addErr != nil {
-			o.Logger.Warn("failed to add watch on new directory",
+			o.logger.Warn("failed to add watch on new directory",
 				slog.String("path", dbRelPath), slog.String("error", addErr.Error()))
 		} else {
 			if o.watchedDirs == nil {
@@ -301,10 +302,10 @@ func (o *localObserver) stableHashOrEmpty(fsPath, dbRelPath string) string {
 	hash, err := computeStableHash(fsPath)
 	if err != nil {
 		if errors.Is(err, errFileChangedDuringHash) {
-			o.Logger.Debug("file metadata still settling, emitting with empty hash",
+			o.logger.Debug("file metadata still settling, emitting with empty hash",
 				slog.String("path", dbRelPath))
 		} else {
-			o.Logger.Warn("hash failed, emitting event with empty hash",
+			o.logger.Warn("hash failed, emitting event with empty hash",
 				slog.String("path", dbRelPath), slog.String("error", err.Error()))
 		}
 
@@ -323,7 +324,7 @@ func (o *localObserver) scanNewDirectory(
 ) {
 	entries, err := localpath.ReadDir(dirPath)
 	if err != nil {
-		o.Logger.Debug("scan new directory failed",
+		o.logger.Debug("scan new directory failed",
 			slog.String("path", dirRelPath), slog.String("error", err.Error()))
 
 		return
@@ -375,7 +376,7 @@ func (o *localObserver) scanNewDirectoryEntry(
 	}
 
 	if collidingName, hasCollision := o.HasCaseCollisionCached(tree, dirPath, entryName, dirRelPath); hasCollision {
-		o.Logger.Debug("case collision detected in directory scan, skipping",
+		o.logger.Debug("case collision detected in directory scan, skipping",
 			slog.String("path", entryRelPath),
 			slog.String("collides_with", collidingName))
 		return
@@ -417,7 +418,7 @@ func (o *localObserver) scanNewDirectoryEntryInfo(
 	if entry.Type()&fs.ModeSymlink != 0 {
 		info, isSymlink, err := statObservedPath(entryFsPath)
 		if err != nil {
-			o.Logger.Debug("stat failed during directory scan",
+			o.logger.Debug("stat failed during directory scan",
 				slog.String("path", entryRelPath), slog.String("error", err.Error()))
 			return nil, observedKindUnknown, false
 		}
@@ -435,7 +436,7 @@ func (o *localObserver) scanNewDirectoryEntryInfo(
 
 	info, err := entry.Info()
 	if err != nil {
-		o.Logger.Debug("stat failed during directory scan",
+		o.logger.Debug("stat failed during directory scan",
 			slog.String("path", entryRelPath), slog.String("error", err.Error()))
 		return nil, observedKindUnknown, false
 	}
@@ -453,7 +454,7 @@ func (o *localObserver) scanNewDirectoryChildDir(
 	events chan<- changeEvent,
 ) {
 	if addErr := watcher.Add(entryFsPath); addErr != nil {
-		o.Logger.Warn("failed to add watch on nested directory",
+		o.logger.Warn("failed to add watch on nested directory",
 			slog.String("path", entryRelPath), slog.String("error", addErr.Error()))
 	} else {
 		if o.watchedDirs == nil {
@@ -498,7 +499,7 @@ func (o *localObserver) scanNewDirectoryChildDir(
 func (o *localObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name string) {
 	info, isSymlink, err := statObservedPath(fsPath)
 	if err != nil {
-		o.Logger.Debug("stat failed for modified path",
+		o.logger.Debug("stat failed for modified path",
 			slog.String("path", dbRelPath), slog.String("error", err.Error()))
 
 		return
@@ -516,7 +517,7 @@ func (o *localObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 		return
 	}
 
-	cooldown := o.WriteCoalesceCooldown
+	cooldown := o.writeCoalesceCooldown
 	if cooldown == 0 {
 		cooldown = defaultWriteCoalesceCooldown
 	}
@@ -531,12 +532,12 @@ func (o *localObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 		DbRelPath: dbRelPath,
 		Name:      name,
 	}
-	timer := o.AfterFunc(cooldown, func() {
+	timer := o.clock.AfterFunc(cooldown, func() {
 		select {
 		case o.HashRequests <- req:
 		default:
 			o.droppedRetries.Add(1)
-			o.Logger.Debug("hash request dropped, channel full (safety scan will catch up)",
+			o.logger.Debug("hash request dropped, channel full (safety scan will catch up)",
 				slog.String("path", dbRelPath))
 		}
 	})
@@ -551,7 +552,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 
 	info, isSymlink, err := statObservedPath(req.FsPath)
 	if err != nil {
-		o.Logger.Debug("stat failed for deferred hash",
+		o.logger.Debug("stat failed for deferred hash",
 			slog.String("path", req.DbRelPath), slog.String("error", err.Error()))
 
 		return
@@ -579,7 +580,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	if collidingName, hasCollision := o.HasCaseCollisionCached(
 		tree, filepath.Dir(req.FsPath), filepath.Base(req.FsPath), filepath.Dir(req.DbRelPath),
 	); hasCollision {
-		o.Logger.Debug("case collision detected for modified file, skipping event",
+		o.logger.Debug("case collision detected for modified file, skipping event",
 			slog.String("path", req.DbRelPath),
 			slog.String("collides_with", collidingName))
 
@@ -595,18 +596,18 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		// Distinguish retry exhaustion from generic hash failures for
 		// observability — helps diagnose continuously-written files.
 		if errors.Is(err, errFileChangedDuringHash) {
-			o.Logger.Warn("hash retries exhausted, emitting with empty hash",
+			o.logger.Warn("hash retries exhausted, emitting with empty hash",
 				slog.String("path", req.DbRelPath),
 				slog.Int("retries", req.Retries),
 				slog.Int("max_retries", maxCoalesceRetries),
 			)
 		} else {
-			o.Logger.Warn("hash failed for deferred write, emitting with empty hash",
+			o.logger.Warn("hash failed for deferred write, emitting with empty hash",
 				slog.String("path", req.DbRelPath), slog.String("error", err.Error()))
 		}
 	} else {
 		// Check baseline — if hash matches, the write was a no-op.
-		if existing, ok := o.Baseline.GetByPath(req.DbRelPath); ok && existing.LocalHash == hash {
+		if existing, ok := o.baseline.GetByPath(req.DbRelPath); ok && existing.LocalHash == hash {
 			return
 		}
 	}
@@ -641,23 +642,23 @@ func (o *localObserver) retryDeferredHashOnChange(req hashRequest, err error) bo
 		return false
 	}
 
-	o.Logger.Debug("file changed during deferred hash, re-scheduling",
+	o.logger.Debug("file changed during deferred hash, re-scheduling",
 		slog.String("path", req.DbRelPath),
 		slog.Int("retry", req.Retries+1))
 
-	cooldown := o.WriteCoalesceCooldown
+	cooldown := o.writeCoalesceCooldown
 	if cooldown == 0 {
 		cooldown = defaultWriteCoalesceCooldown
 	}
 
 	retryReq := req
 	retryReq.Retries++
-	timer := o.AfterFunc(cooldown, func() {
+	timer := o.clock.AfterFunc(cooldown, func() {
 		select {
 		case o.HashRequests <- retryReq:
 		default:
 			o.droppedRetries.Add(1)
-			o.Logger.Debug("hash retry dropped, channel full (safety scan will catch up)",
+			o.logger.Debug("hash retry dropped, channel full (safety scan will catch up)",
 				slog.String("path", req.DbRelPath),
 				slog.Int("retry", retryReq.Retries))
 		}
@@ -685,7 +686,7 @@ func (o *localObserver) HandleDelete(
 	o.removeDirNameCache(filepath.Dir(fsPath), name)
 
 	if o.hasExcludedSymlinkAncestor(dbRelPath) {
-		if _, ok := o.Baseline.GetByPath(dbRelPath); !ok {
+		if _, ok := o.baseline.GetByPath(dbRelPath); !ok {
 			o.forgetExcludedSymlink(dbRelPath)
 		}
 
@@ -714,7 +715,7 @@ func (o *localObserver) HandleDelete(
 
 	resolvedType := ItemTypeFile
 
-	if existing, ok := o.Baseline.GetByPath(dbRelPath); ok {
+	if existing, ok := o.baseline.GetByPath(dbRelPath); ok {
 		resolvedType = existing.ItemType
 	} else if _, ok := o.watchedDirs[filepath.Clean(fsPath)]; ok {
 		resolvedType = ItemTypeFolder
@@ -727,7 +728,7 @@ func (o *localObserver) HandleDelete(
 	// to avoid NFC/NFD mismatch on macOS HFS+ (B-312).
 	if resolvedType == ItemTypeFolder {
 		if rmErr := watcher.Remove(fsPath); rmErr != nil {
-			o.Logger.Debug("watch removal for deleted directory",
+			o.logger.Debug("watch removal for deleted directory",
 				slog.String("path", dbRelPath),
 				slog.String("error", rmErr.Error()),
 			)
@@ -753,13 +754,13 @@ func (o *localObserver) HandleDelete(
 // may have missed. Skipped items are logged at DEBUG — the engine's primary
 // scan handles observation-issue persistence.
 func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, events chan<- changeEvent) {
-	o.Logger.Debug("running safety scan")
+	o.logger.Debug("running safety scan")
 
 	start := time.Now()
 
 	result, err := o.FullScan(ctx, tree)
 	if err != nil {
-		o.Logger.Warn("safety scan failed", slog.String("error", err.Error()))
+		o.logger.Warn("safety scan failed", slog.String("error", err.Error()))
 		o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryFullScanFailed)
 		return
 	}
@@ -780,11 +781,11 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 			select {
 			case o.skippedCh <- result.Skipped:
 			default:
-				o.Logger.Debug("skipped items channel full, will catch on next scan",
+				o.logger.Debug("skipped items channel full, will catch on next scan",
 					slog.Int("count", len(result.Skipped)))
 			}
 		} else {
-			o.Logger.Debug("safety scan: skipped items",
+			o.logger.Debug("safety scan: skipped items",
 				slog.Int("count", len(result.Skipped)))
 		}
 	}
@@ -794,17 +795,17 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 	o.DirNameCache = make(map[string]map[string][]string)
 	o.CollisionPeers = make(map[string]map[string]struct{})
 	o.RecentLocalDeletes = make(map[string]struct{})
-	if o.AfterSafetyScan != nil {
-		o.AfterSafetyScan()
+	if o.afterSafetyScan != nil {
+		o.afterSafetyScan()
 	}
 
 	// Log timing and resource counts for operational visibility (B-101).
 	elapsed := time.Since(start)
-	o.Logger.Info("safety scan complete",
+	o.logger.Info("safety scan complete",
 		slog.Duration("elapsed", elapsed),
 		slog.Int("events", len(result.Events)),
 		slog.Int("skipped", len(result.Skipped)),
-		slog.Int("baseline_entries", o.Baseline.Len()),
+		slog.Int("baseline_entries", o.baseline.Len()),
 	)
 }
 

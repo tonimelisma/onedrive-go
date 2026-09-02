@@ -428,14 +428,14 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 	})
 
 	obs := &localObserver{
-		Baseline:              baseline,
-		Logger:                synctest.TestLogger(t),
-		WriteCoalesceCooldown: 100 * time.Millisecond,
+		baseline:              baseline,
+		logger:                synctest.TestLogger(t),
+		writeCoalesceCooldown: 100 * time.Millisecond,
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan hashRequest, 10),
 		},
-		AfterFunc: realAfterFunc,
+		clock: &observerTestClock{syncClock: realClock{}, afterFunc: realAfterFunc},
 	}
 
 	events := make(chan changeEvent, 5)
@@ -479,14 +479,14 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 	})
 
 	obs := &localObserver{
-		Baseline:              baseline,
-		Logger:                synctest.TestLogger(t),
-		WriteCoalesceCooldown: 100 * time.Millisecond,
+		baseline:              baseline,
+		logger:                synctest.TestLogger(t),
+		writeCoalesceCooldown: 100 * time.Millisecond,
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan hashRequest, 10),
 		},
-		AfterFunc: realAfterFunc,
+		clock: &observerTestClock{syncClock: realClock{}, afterFunc: realAfterFunc},
 	}
 
 	events := make(chan changeEvent, 5)
@@ -580,8 +580,8 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &localObserver{
-		Baseline: emptyBaseline(),
-		Logger:   synctest.TestLogger(t),
+		baseline: emptyBaseline(),
+		logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
 			CollisionPeers: make(map[string]map[string]struct{}),
 			DirNameCache: map[string]map[string][]string{
@@ -594,15 +594,16 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 		},
 		// Pre-populate dirNameCache with a different-cased entry.
 		// This simulates a collision without requiring a case-sensitive FS.
-		WriteCoalesceCooldown: 50 * time.Millisecond,
-		AfterFunc:             realAfterFunc,
-		SleepFunc: func(_ context.Context, _ time.Duration) error {
-			return nil
+		writeCoalesceCooldown: 50 * time.Millisecond,
+		clock: &observerTestClock{
+			syncClock: realClock{},
+			afterFunc: realAfterFunc,
+			sleep: func(_ context.Context, _ time.Duration) error {
+				return nil
+			},
+			tickCh: make(chan time.Time),
 		},
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
-		},
-		WatcherFactory: func() (fsWatcher, error) {
+		watcherFactory: func() (fsWatcher, error) {
 			return mockWatcher, nil
 		},
 	}

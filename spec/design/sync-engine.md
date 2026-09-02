@@ -78,6 +78,28 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child work snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestShortcutRootTransitionMatrixEnumeratesEveryStateAndEvent`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroReturnsExplicitErrors` |
 | Pending watch replans retire old-runtime work that has not started yet, including dependents released by already-running old actions, and leave replacement work to a fresh plan from current truth. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal` |
 
+## The Engine Clock Is One Capability
+
+Every time-dependent decision in the runtime -- `Now`, delayed callbacks,
+tickers, sleeps, and retry jitter -- goes through a single `syncClock` value on
+the engine. The local and remote observers hold the same capability for their
+safety-scan ticks, retry sleeps, and write-coalesce timers.
+
+These were five independently injectable function fields (`nowFn`, `afterFunc`,
+`newTicker`, `sleepFn`, `jitterFn`) plus three more on the local observer. Each
+was individually reasonable and the set was not: a test could replace `nowFn`
+while leaving a real ticker, and that pair describes a state production can
+never reach -- a clock that has jumped an hour while the tickers pacing the
+runtime have not moved. Assertions made under that mix prove nothing about
+production behavior.
+
+One interface makes the incoherent combination unrepresentable rather than
+merely discouraged, which is the same "make illegal states unrepresentable"
+rule the rest of the codebase applies to domain types, applied to the test
+surface. Tests that need to observe rather than replace behavior wrap the clock
+(`observingClock`, `observerTestClock`) so the underlying clock still supplies
+the semantics.
+
 ## Construction
 
 `newEngine()` wires one mounted content root into a runtime:

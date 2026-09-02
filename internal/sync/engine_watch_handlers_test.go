@@ -128,7 +128,7 @@ func TestRunPublicationDrainStage_PublicationSuccessClearsRetryWorkAndAdmitsDepe
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
-	now := eng.nowFn()
+	now := eng.nowFunc()
 	driveID := driveid.New(engineTestDriveID)
 
 	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{

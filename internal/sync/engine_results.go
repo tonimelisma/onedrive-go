@@ -35,7 +35,7 @@ func (rt *watchRuntime) armRetryTimer() {
 		Type:  engineDebugEventRetryTimerArmed,
 		Delay: delay,
 	})
-	rt.resetRetryTimer(rt.engine.afterFunc(delay, func() {
+	rt.resetRetryTimer(rt.engine.clock.AfterFunc(delay, func() {
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryTimerFired})
 		rt.kickRetryHeldReleaseNow()
 	}))
@@ -199,14 +199,14 @@ func (f *engineFlow) logFailureSummary() {
 	}
 }
 
-// nowFunc returns the current time from the engine's injectable clock.
-// Always set by NewEngine; tests overwrite with a controllable clock.
+// nowFunc returns the current time from the engine's clock capability.
+// Always set by newEngine; tests install a manual clock.
 func (e *Engine) nowFunc() time.Time {
-	if e == nil || e.nowFn == nil {
+	if e == nil || e.clock == nil {
 		panic("sync: engine clock is not initialized")
 	}
 
-	return e.nowFn()
+	return e.clock.Now()
 }
 
 func (e *Engine) since(start time.Time) time.Duration {
@@ -254,7 +254,7 @@ func (rt *watchRuntime) armTrialTimer() {
 		Type:  engineDebugEventTrialTimerArmed,
 		Delay: delay,
 	})
-	rt.resetTrialTimer(rt.engine.afterFunc(delay, func() {
+	rt.resetTrialTimer(rt.engine.clock.AfterFunc(delay, func() {
 		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialTimerFired})
 		select {
 		case rt.trialCh <- struct{}{}:

@@ -60,7 +60,7 @@ func TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue(t *testing.T)
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	now := eng.nowFn()
+	now := eng.nowFunc()
 	rt.holdAction(&trackedAction{
 		Action: Action{
 			Path: "due.txt",
@@ -83,7 +83,7 @@ func TestWatchRuntime_ArmRetryTimer_FiresAfterDelay(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
-	clock := newManualClock(eng.nowFn())
+	clock := newManualClock(eng.nowFunc())
 	installManualClock(eng.Engine, clock)
 	rt := testWatchRuntime(t, eng)
 	now := clock.Now()

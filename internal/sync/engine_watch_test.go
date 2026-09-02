@@ -673,14 +673,10 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 func installTickerCreatedSignal(eng *testEngine, interval time.Duration) <-chan struct{} {
 	tickerCreated := make(chan struct{})
 	var tickerCreatedOnce atomic.Bool
-	origNewTicker := eng.newTicker
-	eng.newTicker = func(nextInterval time.Duration) syncTicker {
-		ticker := origNewTicker(nextInterval)
+	observeEngineClock(eng.Engine).onNewTicker = func(nextInterval time.Duration) {
 		if nextInterval == interval && tickerCreatedOnce.CompareAndSwap(false, true) {
 			close(tickerCreated)
 		}
-
-		return ticker
 	}
 
 	return tickerCreated
@@ -689,14 +685,10 @@ func installTickerCreatedSignal(eng *testEngine, interval time.Duration) <-chan 
 func installAfterFuncCreatedSignal(eng *testEngine, delay time.Duration) <-chan struct{} {
 	timerCreated := make(chan struct{})
 	var timerCreatedOnce atomic.Bool
-	origAfterFunc := eng.afterFunc
-	eng.afterFunc = func(nextDelay time.Duration, fn func()) syncTimer {
-		timer := origAfterFunc(nextDelay, fn)
+	observeEngineClock(eng.Engine).onAfterFunc = func(nextDelay time.Duration) {
 		if nextDelay == delay && timerCreatedOnce.CompareAndSwap(false, true) {
 			close(timerCreated)
 		}
-
-		return timer
 	}
 
 	return timerCreated
@@ -836,12 +828,10 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 
 	sleepStarted := make(chan struct{})
 	var sleepStartedOnce atomic.Bool
-	origSleep := eng.sleepFn
-	eng.sleepFn = func(ctx context.Context, delay time.Duration) error {
+	observeEngineClock(eng.Engine).onSleep = func(time.Duration) {
 		if sleepStartedOnce.CompareAndSwap(false, true) {
 			close(sleepStarted)
 		}
-		return origSleep(ctx, delay)
 	}
 
 	watcher := newEnospcWatcher(1)

@@ -18,7 +18,7 @@ func TestEngineFlow_AssertPersistedInvariants_RejectsOrphanBlockScope(t *testing
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           SKService(),
 		TrialInterval: time.Minute,
-		NextTrialAt:   eng.nowFn().Add(time.Minute),
+		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	}))
 
 	err := flow.assertPersistedInvariants(t.Context())
@@ -37,7 +37,7 @@ func TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockS
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
 		TrialInterval: time.Minute,
-		NextTrialAt:   eng.nowFn().Add(time.Minute),
+		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	}))
 	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("Shared/Docs/file.txt", "", ActionUpload), scopeKey)
 	require.NoError(t, err)
@@ -55,7 +55,7 @@ func TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutPath(t *tes
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
 		ActionType:   ActionUpload,
 		AttemptCount: 1,
-		NextRetryAt:  eng.nowFn().Add(time.Minute).UnixNano(),
+		NextRetryAt:  eng.nowFunc().Add(time.Minute).UnixNano(),
 	}))
 
 	err := flow.assertPersistedInvariants(t.Context())
@@ -91,7 +91,7 @@ func TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutAttempts(t 
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
 		Path:        "delayed.txt",
 		ActionType:  ActionUpload,
-		NextRetryAt: eng.nowFn().Add(time.Minute).UnixNano(),
+		NextRetryAt: eng.nowFunc().Add(time.Minute).UnixNano(),
 	}))
 
 	err := flow.assertPersistedInvariants(t.Context())
@@ -110,7 +110,7 @@ func TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkWithTiming(t
 		Path:         "delayed.txt",
 		ActionType:   ActionUpload,
 		AttemptCount: 1,
-		NextRetryAt:  eng.nowFn().Add(time.Minute).UnixNano(),
+		NextRetryAt:  eng.nowFunc().Add(time.Minute).UnixNano(),
 	}))
 
 	require.NoError(t, flow.assertPersistedInvariants(t.Context()))

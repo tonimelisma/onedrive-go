@@ -98,9 +98,9 @@ func (o *localObserver) resolveCheckWorkers() int {
 //  3. Deletion detection (sequential): compare observed vs baseline.
 func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scanResult, error) {
 	syncRoot := tree.Path()
-	o.Logger.Info("local observer starting full scan",
+	o.logger.Info("local observer starting full scan",
 		slog.String("sync_root", syncRoot),
-		slog.Int("baseline_entries", o.Baseline.Len()),
+		slog.Int("baseline_entries", o.baseline.Len()),
 	)
 
 	if err := o.validateFullScanRoot(tree, syncRoot); err != nil {
@@ -115,7 +115,7 @@ func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scan
 	observed := make(map[string]bool)
 	currentRows := make(map[string]localStateRow)
 	scanStartNano := time.Now().UnixNano()
-	dirStack := rootObservedDirStack(syncRoot, o.Logger)
+	dirStack := rootObservedDirStack(syncRoot, o.logger)
 
 	walkFn := o.makeWalkFunc(
 		ctx,
@@ -138,7 +138,7 @@ func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scan
 	}
 
 	if n := skippedEntries.Load(); n > 0 {
-		o.Logger.Warn("full scan: skipped entries due to walk errors",
+		o.logger.Warn("full scan: skipped entries due to walk errors",
 			slog.Int64("count", n),
 			slog.String("sync_root", syncRoot))
 	}
@@ -163,20 +163,20 @@ func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scan
 	// (set in Phase 1) to prevent Phase 3 from generating spurious ChangeDelete
 	// events for files that exist locally but were excluded from events (R-2.12.1).
 	var caseSkipped []skippedItem
-	events, caseSkipped = detectCaseCollisions(events, o.Baseline)
+	events, caseSkipped = detectCaseCollisions(events, o.baseline)
 	skipped = append(skipped, caseSkipped...)
 
 	// Phase 3: Deletion detection.
 	deletions := o.detectDeletions(observed)
 	events = append(events, deletions...)
 
-	o.Logger.Debug("deletion detection complete",
+	o.logger.Debug("deletion detection complete",
 		slog.Int("deletions", len(deletions)),
-		slog.Int("baseline_entries", o.Baseline.Len()),
+		slog.Int("baseline_entries", o.baseline.Len()),
 		slog.Int("observed", len(observed)),
 	)
 
-	o.Logger.Info("local observer completed full scan",
+	o.logger.Info("local observer completed full scan",
 		slog.Int("events", len(events)),
 		slog.Int("observed", len(observed)),
 		slog.Int("hashed", len(jobs)),
@@ -199,12 +199,12 @@ func (o *localObserver) validateFullScanRoot(tree *synctree.Root, syncRoot strin
 	// WalkDir silently succeeds with zero events (walkFn's SkipEntry returns
 	// filepath.SkipDir for the root error, so WalkDir returns nil).
 	if !syncRootExists(syncRoot) {
-		o.Logger.Warn("sync root missing, aborting scan",
+		o.logger.Warn("sync root missing, aborting scan",
 			slog.String("sync_root", syncRoot))
 		return errSyncRootMissing
 	}
 	if err := validateExpectedSyncRootIdentity(tree, o.expectedRootID); err != nil {
-		o.Logger.Warn("sync root identity changed, aborting scan",
+		o.logger.Warn("sync root identity changed, aborting scan",
 			slog.String("sync_root", syncRoot),
 			slog.String("error", err.Error()))
 		return err
@@ -222,12 +222,12 @@ func (o *localObserver) validateFullScanRoot(tree *synctree.Root, syncRoot strin
 func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]changeEvent, []localStateRow, []skippedItem, error) {
 	workers := o.resolveCheckWorkers()
 
-	o.Logger.Debug("starting parallel hash phase",
+	o.logger.Debug("starting parallel hash phase",
 		slog.Int("jobs", len(jobs)),
 		slog.Int("workers", workers),
 	)
 
-	hashFn := o.HashFunc
+	hashFn := o.hashFunc
 	if hashFn == nil {
 		hashFn = driveops.ComputeQuickXorHash
 	}
@@ -249,7 +249,7 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 			// SkippedItem so the rest of the scan completes normally.
 			defer func() {
 				if r := recover(); r != nil {
-					o.Logger.Error("hash phase: panic in worker",
+					o.logger.Error("hash phase: panic in worker",
 						slog.String("path", job.dbRelPath),
 						slog.Any("panic", r),
 						slog.String("stack", string(debug.Stack())),
@@ -271,13 +271,13 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 
 			hash, err := hashFn(job.fsPath)
 			if err != nil {
-				o.Logger.Warn("hash computation failed, emitting event with empty hash",
+				o.logger.Warn("hash computation failed, emitting event with empty hash",
 					slog.String("path", job.dbRelPath), slog.String("error", err.Error()))
 			}
 
 			// For modifies: check if hash matches baseline (no real change).
 			if !job.isNew && hash != "" {
-				if existing, found := o.Baseline.GetByPath(job.dbRelPath); found && hash == existing.LocalHash {
+				if existing, found := o.baseline.GetByPath(job.dbRelPath); found && hash == existing.LocalHash {
 					mu.Lock()
 					rows = append(rows, localStateRow{
 						Path:             job.dbRelPath,
@@ -349,7 +349,7 @@ func (o *localObserver) makeWalkFunc(
 
 	return func(fsPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			o.Logger.Warn("walk error", slog.String("path", fsPath), slog.String("error", walkErr.Error()))
+			o.logger.Warn("walk error", slog.String("path", fsPath), slog.String("error", walkErr.Error()))
 			if errors.Is(walkErr, os.ErrPermission) {
 				if relPath, err := tree.Rel(fsPath); err == nil {
 					*skipped = append(*skipped, skippedItem{
@@ -386,7 +386,7 @@ func (o *localObserver) makeWalkFunc(
 			if !newContentFilter(o.filterConfig).ShouldFollowSymlinks() {
 				o.rememberExcludedSymlink(dbRelPath)
 				observed[dbRelPath] = true
-				o.Logger.Debug("skipping symlink", slog.String("path", dbRelPath))
+				o.logger.Debug("skipping symlink", slog.String("path", dbRelPath))
 				return skipEntry(d)
 			}
 
@@ -418,11 +418,11 @@ func (o *localObserver) makeWalkFunc(
 		); skipItem != nil {
 			if skipItem.Reason != "" {
 				*skipped = append(*skipped, *skipItem)
-				o.Logger.Debug("skipping invalid entry",
+				o.logger.Debug("skipping invalid entry",
 					slog.String("path", dbRelPath),
 					slog.String("reason", skipItem.Reason))
 			} else {
-				o.Logger.Debug("skipping excluded file", slog.String("name", name))
+				o.logger.Debug("skipping excluded file", slog.String("name", name))
 			}
 
 			return skipEntry(d)
@@ -451,7 +451,7 @@ func (o *localObserver) processEntry(
 			})
 		}
 		// File disappeared between readdir and stat — skip and continue.
-		o.Logger.Warn("stat failed (file may have disappeared)",
+		o.logger.Warn("stat failed (file may have disappeared)",
 			slog.String("path", dbRelPath), slog.String("error", err.Error()))
 		return nil
 	}
@@ -506,7 +506,7 @@ func (o *localObserver) processObservedInfo(
 				LocalHasIdentity: true,
 			}
 		}
-		o.Logger.Debug("skipping protected root identity match",
+		o.logger.Debug("skipping protected root identity match",
 			slog.String("path", dbRelPath),
 			slog.String("reserved_path", protectedRoot.Path))
 		return nil
@@ -565,7 +565,7 @@ func (o *localObserver) classifyObservedInfo(
 	scanStartNano int64,
 ) error {
 	var existing *BaselineEntry
-	if baselineEntry, found := o.Baseline.GetByPath(dbRelPath); found {
+	if baselineEntry, found := o.baseline.GetByPath(dbRelPath); found {
 		existing = baselineEntry
 	}
 
@@ -627,7 +627,7 @@ func (o *localObserver) detectFileContentChange(
 	observedRow := currentRows[dbRelPath]
 
 	if canReuseBaselineHash(info, base, scanStartNano) {
-		o.Logger.Debug("fast path: mtime+size match, skipping hash",
+		o.logger.Debug("fast path: mtime+size match, skipping hash",
 			slog.String("path", dbRelPath))
 		currentRows[dbRelPath] = localStateRow{
 			Path:             dbRelPath,
@@ -644,7 +644,7 @@ func (o *localObserver) detectFileContentChange(
 	}
 
 	if base.LocalSizeKnown && currentSize == base.LocalSize && sameOneDriveComparableMtime(currentMtime, base.LocalMtime) {
-		o.Logger.Debug("racily clean file, forcing hash check",
+		o.logger.Debug("racily clean file, forcing hash check",
 			slog.String("path", dbRelPath))
 	}
 
@@ -932,7 +932,7 @@ func appendMultiGroupCollisions(
 func (o *localObserver) detectDeletions(observed map[string]bool) []changeEvent {
 	var events []changeEvent
 
-	o.Baseline.ForEachPath(func(path string, entry *BaselineEntry) {
+	o.baseline.ForEachPath(func(path string, entry *BaselineEntry) {
 		if path == "" {
 			return
 		}
@@ -1065,7 +1065,7 @@ func trustedStat(path string) (os.FileInfo, error) {
 // observation filter — requires a stat result, so it runs after stat.
 func (o *localObserver) IsOversizedFile(size int64, path string) bool {
 	if size > maxOneDriveFileSize {
-		o.Logger.Debug("skipping oversized file",
+		o.logger.Debug("skipping oversized file",
 			slog.String("path", path),
 			slog.Int64("size", size))
 		return true

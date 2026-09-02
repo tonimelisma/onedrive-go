@@ -39,7 +39,7 @@ func TestStartRuntimeStage_ReleasesDueHeldTrialImmediately(t *testing.T) {
 		BlockScopes: []*BlockScope{{
 			Key:           scopeKey,
 			TrialInterval: 10 * time.Second,
-			NextTrialAt:   eng.nowFn().Add(-time.Second),
+			NextTrialAt:   eng.nowFunc().Add(-time.Second),
 		}},
 	}
 

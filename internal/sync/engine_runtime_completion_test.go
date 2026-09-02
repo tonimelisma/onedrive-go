@@ -133,7 +133,7 @@ func TestEngineFlow_ApplyCompletionSuccess_ClearsRetryWorkAndAdmitsDependents(t 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
-	now := eng.nowFn()
+	now := eng.nowFunc()
 
 	row := RetryWorkRow{
 		Path:         "sync.txt",

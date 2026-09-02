@@ -249,7 +249,7 @@ func TestEngineFlow_NormalizePersistedScopes_DiscardsEmptyScopeWithoutBlockedWor
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           SKDiskLocal(),
 		TrialInterval: time.Minute,
-		NextTrialAt:   eng.nowFn().Add(time.Minute),
+		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	}))
 
 	require.NoError(t, flow.normalizePersistedScopes(t.Context(), nil))
@@ -266,7 +266,7 @@ func TestEngineFlow_LoadActiveScopes_PopulatesRuntimeLifecycleWorkingSet(t *test
 	rt := testWatchRuntime(t, eng)
 	flow := rt.engineFlow
 	scopeKey := SKQuotaOwn()
-	now := eng.nowFn()
+	now := eng.nowFunc()
 
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
@@ -289,7 +289,7 @@ func TestEngineFlow_NormalizePersistedScopes_RemovesStaleScopeAndPreservesReadyR
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 	scopeKey := SKDiskLocal()
-	now := eng.nowFn()
+	now := eng.nowFunc()
 
 	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           scopeKey,
@@ -347,7 +347,7 @@ func TestEngineFlow_AdmitReady_BlocksNormalActionUnderActiveScope(t *testing.T) 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
 		TrialInterval: time.Minute,
-		NextTrialAt:   eng.nowFn().Add(time.Minute),
+		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	})
 
 	ready := rt.depGraph.Add(&Action{
@@ -447,7 +447,7 @@ func TestEngineFlow_AdmitReady_FailsClosedWhenBlockedRetryWorkPersistenceFails(t
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
 		TrialInterval: time.Minute,
-		NextTrialAt:   eng.nowFn().Add(time.Minute),
+		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	})
 
 	ready := rt.depGraph.Add(&Action{

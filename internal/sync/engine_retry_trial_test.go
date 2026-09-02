@@ -21,7 +21,7 @@ func TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly(t *testing.T) {
 	}, 1, nil)
 	require.NotNil(t, ta)
 
-	rt.holdAction(ta, heldReasonRetry, ScopeKey{}, eng.nowFn().Add(-time.Second))
+	rt.holdAction(ta, heldReasonRetry, ScopeKey{}, eng.nowFunc().Add(-time.Second))
 
 	outbox, err := rt.releaseDueHeldRetriesNow(t.Context(), nil)
 	require.NoError(t, err)
@@ -37,7 +37,7 @@ func TestReleaseDueHeldRetriesNow_DoesNotConsultDurableRetryRowsWithoutHeldRunti
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	now := eng.nowFn()
+	now := eng.nowFunc()
 
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
 		Path:         "retry.txt",
@@ -65,7 +65,7 @@ func TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial(t *testi
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		NextTrialAt:   eng.nowFn().Add(-time.Second),
+		NextTrialAt:   eng.nowFunc().Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	})
 
@@ -106,7 +106,7 @@ func TestReleaseDueHeldTrialsNow_SkipsScopesWithoutHeldDependencyReadyCandidates
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		NextTrialAt:   eng.nowFn().Add(-time.Second),
+		NextTrialAt:   eng.nowFunc().Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	})
 
@@ -126,7 +126,7 @@ func TestReleaseDueHeldTrialsNow_DoesNotConsultDurableBlockedRetryRowsWithoutHel
 
 	setTestBlockScope(t, eng, &BlockScope{
 		Key:           scopeKey,
-		NextTrialAt:   eng.nowFn().Add(-time.Second),
+		NextTrialAt:   eng.nowFunc().Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	})
 	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("blocked.txt", "", ActionUpload), scopeKey)

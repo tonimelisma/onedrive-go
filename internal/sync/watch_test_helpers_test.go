@@ -19,7 +19,7 @@ type watchObserverTestOptions struct {
 	HashFunc              func(path string) (string, error)
 	AfterFunc             func(time.Duration, func()) syncTimer
 	AfterSafetyScan       func()
-	SafetyTickFunc        func(time.Duration) (<-chan time.Time, func())
+	TickCh                <-chan time.Time
 }
 
 func newWatchTestObserver(t *testing.T, watcher fsWatcher, opts watchObserverTestOptions) *localObserver {
@@ -31,16 +31,21 @@ func newWatchTestObserver(t *testing.T, watcher fsWatcher, opts watchObserverTes
 	}
 
 	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.SleepFunc = func(_ context.Context, _ time.Duration) error { return nil }
-	obs.SafetyTickFunc = func(time.Duration) (<-chan time.Time, func()) {
-		return make(chan time.Time), func() {}
-	}
-	obs.WatcherFactory = func() (fsWatcher, error) {
+
+	// One clock value, not a set of independently overridable function fields:
+	// a never-firing tick and an instant sleep by default, with the real clock
+	// behind anything the test does not pin.
+	clock := newObserverTestClock()
+	clock.sleep = func(context.Context, time.Duration) error { return nil }
+	clock.tickCh = make(chan time.Time)
+	obs.clock = clock
+
+	obs.watcherFactory = func() (fsWatcher, error) {
 		return watcher, nil
 	}
 
 	if opts.WriteCoalesceCooldown != 0 {
-		obs.WriteCoalesceCooldown = opts.WriteCoalesceCooldown
+		obs.writeCoalesceCooldown = opts.WriteCoalesceCooldown
 	}
 	if opts.CollisionPeers != nil {
 		obs.CollisionPeers = opts.CollisionPeers
@@ -52,16 +57,16 @@ func newWatchTestObserver(t *testing.T, watcher fsWatcher, opts watchObserverTes
 		obs.RecentLocalDeletes = opts.RecentLocalDeletes
 	}
 	if opts.HashFunc != nil {
-		obs.HashFunc = opts.HashFunc
+		obs.hashFunc = opts.HashFunc
 	}
 	if opts.AfterFunc != nil {
-		obs.AfterFunc = opts.AfterFunc
+		clock.afterFunc = opts.AfterFunc
 	}
 	if opts.AfterSafetyScan != nil {
-		obs.AfterSafetyScan = opts.AfterSafetyScan
+		obs.afterSafetyScan = opts.AfterSafetyScan
 	}
-	if opts.SafetyTickFunc != nil {
-		obs.SafetyTickFunc = opts.SafetyTickFunc
+	if opts.TickCh != nil {
+		clock.tickCh = opts.TickCh
 	}
 
 	return obs

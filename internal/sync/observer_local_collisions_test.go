@@ -62,7 +62,7 @@ func TestHasCaseCollisionCached_Detected(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "File.txt"), []byte("a"), 0o600))
 
 	obs := &localObserver{
-		Baseline: emptyBaseline(),
+		baseline: emptyBaseline(),
 	}
 
 	// On case-sensitive FS, "file.txt" differs from "File.txt" → collision.
@@ -84,7 +84,7 @@ func TestHasCaseCollisionCached_NoCollision(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("a"), 0o600))
 
 	obs := &localObserver{
-		Baseline: emptyBaseline(),
+		baseline: emptyBaseline(),
 	}
 
 	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "newfile.txt", ".")
@@ -99,7 +99,7 @@ func TestHasCaseCollisionCached_ExactMatch_NotCollision(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "same.txt"), []byte("a"), 0o600))
 
 	obs := &localObserver{
-		Baseline: emptyBaseline(),
+		baseline: emptyBaseline(),
 	}
 
 	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "same.txt", ".")
@@ -111,7 +111,7 @@ func TestHasCaseCollisionCached_UnreadableDir_FailOpen(t *testing.T) {
 	t.Parallel()
 
 	obs := &localObserver{
-		Baseline: emptyBaseline(),
+		baseline: emptyBaseline(),
 	}
 
 	// Non-existent directory → ReadDir fails → returns false (fail-open).
@@ -126,7 +126,7 @@ func TestHasCaseCollisionCached_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
 
 	obs := &localObserver{
-		Baseline: emptyBaseline(),
+		baseline: emptyBaseline(),
 	}
 
 	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "anything.txt", ".")
@@ -147,7 +147,7 @@ func TestHasCaseCollisionCached_BaselineCollision(t *testing.T) {
 	// Baseline has "File.txt" — no file on disk.
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
 	obs := &localObserver{
-		Baseline: bl,
+		baseline: bl,
 	}
 
 	collidingName, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "file.txt", ".")
@@ -164,7 +164,7 @@ func TestHasCaseCollisionCached_BaselineExactMatch(t *testing.T) {
 
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
 	obs := &localObserver{
-		Baseline: bl,
+		baseline: bl,
 	}
 
 	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "File.txt", ".")
@@ -180,7 +180,7 @@ func TestHasCaseCollisionCached_BaselineSkipsRecentDelete(t *testing.T) {
 
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
 	obs := &localObserver{
-		Baseline: bl,
+		baseline: bl,
 		localWatchState: localWatchState{
 			RecentLocalDeletes: map[string]struct{}{"File.txt": {}},
 		},
@@ -627,9 +627,7 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		CollisionPeers: make(map[string]map[string]struct{}),
 		DirNameCache:   make(map[string]map[string][]string),
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return safetyTickCh, func() {}
-		},
+		TickCh:         safetyTickCh,
 		AfterSafetyScan: func() {
 			select {
 			case <-safetyScanComplete:
