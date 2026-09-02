@@ -41,7 +41,7 @@ func assertDownloadError(t *testing.T, srv *httptest.Server, itemID string, want
 	t.Cleanup(srv.Close)
 
 	client := newTestClient(t, srv.URL)
-	client.downloadMetadataPolicy = testRetryPolicy()
+	client.policies.downloadMetadata = testRetryPolicy()
 	var buf bytes.Buffer
 	_, err := client.Download(t.Context(), driveid.New("d"), itemID, &buf)
 	require.Error(t, err)
@@ -140,7 +140,7 @@ func TestDownload_RetriesTransientMetadataNotFound(t *testing.T) {
 	defer graphSrv.Close()
 
 	client := newTestClient(t, graphSrv.URL)
-	client.downloadMetadataPolicy = testRetryPolicy()
+	client.policies.downloadMetadata = testRetryPolicy()
 
 	var buf bytes.Buffer
 	n, err := client.Download(t.Context(), driveid.New("d"), "item-retry-metadata", &buf)

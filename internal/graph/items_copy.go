@@ -58,7 +58,7 @@ func (c *Client) CopyItem(
 
 	resp, err := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 		name:   "copy-destination-transient-404",
-		policy: c.copyDestinationPolicy,
+		policy: c.policies.copyDestination,
 		match:  isTransientCopyDestinationError,
 	}, func() (*http.Response, error) {
 		return c.do(ctx, http.MethodPost, apiPath, bytes.NewReader(bodyBytes))

@@ -43,7 +43,7 @@ func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
 
 	return doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 		name:   "drives-token-propagation",
-		policy: c.driveDiscoveryPolicy,
+		policy: c.policies.driveDiscovery,
 		match:  isTransientDrivesDiscoveryError,
 	}, func() ([]Drive, error) {
 		drives, err := c.drivesList(ctx)

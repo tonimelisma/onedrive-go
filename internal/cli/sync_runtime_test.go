@@ -50,7 +50,7 @@ func TestRunSyncWatch_UsesInjectedRunner(t *testing.T) {
 	holder := config.NewHolder(&config.Config{}, "")
 	expectedOpts := syncengine.WatchOptions{PollInterval: 2}
 	called := false
-	cc.syncWatchRunner = func(
+	cc.seams.syncWatch = func(
 		ctx context.Context,
 		gotHolder *config.Holder,
 		selectors []string,
@@ -103,7 +103,7 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 		},
 		Reports: []*multisync.MountReport{{Identity: testStandaloneMountIdentity(drive.CanonicalID)}},
 	}
-	cc.syncRunOnceRunner = func(
+	cc.seams.syncRunOnce = func(
 		ctx context.Context,
 		gotHolder *config.Holder,
 		drives []*config.ResolvedDrive,
