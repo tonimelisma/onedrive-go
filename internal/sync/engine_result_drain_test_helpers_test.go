@@ -16,7 +16,7 @@ func startDrainLoop(t *testing.T) (chan actionCompletion, context.CancelFunc, *t
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	rt.scopeState = newScopeState(eng.nowFunc, eng.logger)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	results := make(chan actionCompletion, 16)
 

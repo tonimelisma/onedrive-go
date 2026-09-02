@@ -15,12 +15,12 @@ func (rt *watchRuntime) handleMaintenanceTick(ctx context.Context) {
 }
 
 func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
-	if rt.localObs == nil {
+	if rt.resources.localObs == nil {
 		return
 	}
 
-	droppedEvents := rt.localObs.ResetDroppedEvents()
-	droppedRetries := rt.localObs.ResetDroppedRetries()
+	droppedEvents := rt.resources.localObs.ResetDroppedEvents()
+	droppedRetries := rt.resources.localObs.ResetDroppedRetries()
 	if droppedEvents == 0 && droppedRetries == 0 {
 		return
 	}
@@ -29,8 +29,8 @@ func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
 		markSuspect:    true,
 		recoveryReason: localTruthRecoveryDroppedEvents,
 	}); err != nil {
-		rt.localObs.droppedEvents.Add(droppedEvents)
-		rt.localObs.droppedRetries.Add(droppedRetries)
+		rt.resources.localObs.droppedEvents.Add(droppedEvents)
+		rt.resources.localObs.droppedRetries.Add(droppedRetries)
 		rt.deps.logger.Warn("mark local truth suspect after dropped observation failed",
 			slog.Int64("dropped_events", droppedEvents),
 			slog.Int64("dropped_hash_requests", droppedRetries),
@@ -92,7 +92,7 @@ func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
 
 	rt.resetRefreshTimer(rt.deps.clock.AfterFunc(delay, func() {
 		select {
-		case rt.refreshCh <- rt.deps.now():
+		case rt.resources.refreshCh <- rt.deps.now():
 		default:
 		}
 	}))
@@ -110,11 +110,11 @@ func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
 // while refresh work runs. The goroutine sends one loop-owned remote batch back
 // to the watch loop; the loop owns durable apply and dirty marking.
 func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl *Baseline) {
-	if rt.refreshActive {
+	if rt.resources.refreshActive {
 		rt.deps.logger.Info("full remote refresh skipped — previous still running")
 		return
 	}
-	rt.refreshActive = true
+	rt.resources.refreshActive = true
 	rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshStarted})
 
 	go func() {
@@ -169,10 +169,10 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 
 func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result *remoteObservationBatch) {
 	select {
-	case rt.refreshResults <- *result:
+	case rt.resources.refreshResults <- *result:
 	case <-ctx.Done():
 		select {
-		case rt.refreshResults <- *result:
+		case rt.resources.refreshResults <- *result:
 		default:
 		}
 	}
@@ -186,6 +186,6 @@ func (rt *watchRuntime) applyRemoteRefreshResult(
 }
 
 func (rt *watchRuntime) dropRemoteRefreshResultOnShutdown() {
-	rt.refreshActive = false
+	rt.resources.refreshActive = false
 	rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshDroppedOnShutdown})
 }

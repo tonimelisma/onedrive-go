@@ -352,7 +352,7 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 	eng := newSingleOwnerEngine(t)
 	eng.perfCollector = perf.NewCollector(nil)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 	remoteDriveID := driveid.New(testDriveID)
@@ -401,7 +401,7 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 	assert.Empty(t, outbox)
 	assert.Equal(t, 0, flow.depGraph.InFlightCount())
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
-	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
+	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
 	assert.Equal(t, 1, eng.collector().Snapshot().SupersededEngineAdmissionCount)
 }
 

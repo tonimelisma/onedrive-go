@@ -40,15 +40,15 @@ func (rt *watchRuntime) completeDrainOutbox() {
 
 func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
 	p.replanReady = nil
-	rt.localBatches = nil
-	rt.remoteBatches = nil
-	rt.skippedItems = nil
+	rt.resources.localBatches = nil
+	rt.resources.remoteBatches = nil
+	rt.resources.skippedItems = nil
 	p.maintenanceC = nil
 }
 
 func (rt *watchRuntime) refreshDrainCompletionSources() {
-	if rt.activeObservers == 0 {
-		rt.observerErrs = nil
+	if rt.resources.activeObservers == 0 {
+		rt.resources.observerErrs = nil
 	}
 }
 
@@ -66,15 +66,15 @@ func (rt *watchRuntime) runDrainStep(
 	select {
 	case completion, ok := <-p.completions:
 		return rt.handleDrainingCompletion(ctx, p, &completion, ok)
-	case _, ok := <-rt.refreshResults:
+	case _, ok := <-rt.resources.refreshResults:
 		return rt.handleDrainingRefreshResult(ctx, p, ok)
-	case obsErr, ok := <-rt.observerErrs:
+	case obsErr, ok := <-rt.resources.observerErrs:
 		return rt.handleDrainingObserverError(p, obsErr, ok)
 	}
 }
 
 func (rt *watchRuntime) drainLoopDone(p *watchPipeline) bool {
-	return p.completions == nil && !rt.refreshActive && rt.activeObservers == 0
+	return p.completions == nil && !rt.resources.refreshActive && rt.resources.activeObservers == 0
 }
 
 func (rt *watchRuntime) handleDrainingCompletion(
@@ -105,7 +105,7 @@ func (rt *watchRuntime) handleDrainingRefreshResult(
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		rt.refreshActive = false
+		rt.resources.refreshActive = false
 		return rt.drainLoopDone(p), nil
 	}
 
@@ -122,7 +122,7 @@ func (rt *watchRuntime) handleDrainingObserverError(
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		rt.observerErrs = nil
+		rt.resources.observerErrs = nil
 		return rt.drainLoopDone(p), nil
 	}
 
@@ -130,8 +130,8 @@ func (rt *watchRuntime) handleDrainingObserverError(
 	if err := rt.handleObserverExit(p, true); err != nil {
 		return false, err
 	}
-	if rt.activeObservers == 0 {
-		rt.observerErrs = nil
+	if rt.resources.activeObservers == 0 {
+		rt.resources.observerErrs = nil
 	}
 
 	return rt.drainLoopDone(p), nil

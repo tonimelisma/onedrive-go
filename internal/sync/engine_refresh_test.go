@@ -590,16 +590,16 @@ func waitForRefreshDone(t *testing.T, ctx context.Context, eng *testEngine) {
 	t.Helper()
 
 	rt := testWatchRuntime(t, eng)
-	require.NotNil(t, rt.refreshResults)
+	require.NotNil(t, rt.resources.refreshResults)
 
 	select {
-	case result := <-rt.refreshResults:
+	case result := <-rt.resources.refreshResults:
 		require.NoError(t, rt.applyRemoteRefreshResult(ctx, &result))
 	case <-time.After(10 * time.Second):
 		require.Fail(t, "refresh result was not delivered within 10s")
 	}
 
-	assert.False(t, rt.refreshActive, "refreshActive should be false after applying refresh result")
+	assert.False(t, rt.resources.refreshActive, "refreshActive should be false after applying refresh result")
 }
 
 // Validates: R-2.1.6
@@ -647,7 +647,7 @@ func TestRunFullRemoteRefreshAsync_NoChanges(t *testing.T) {
 	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 
 	ready := setupWatchEngine(t, e)
-	testWatchRuntime(t, e).dirtyBuf = newDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = newDirtyBuffer(e.logger)
 
 	// Full reconciliation always hands observed changes back through the watch
 	// dirty scheduler, even when the later planner pass reduces them to a no-op. The
@@ -661,7 +661,7 @@ func TestRunFullRemoteRefreshAsync_NoChanges(t *testing.T) {
 	default:
 	}
 
-	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
+	batch := testWatchRuntime(t, e).resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch, "remote refresh should mark dirty work for the watch loop")
 	assert.False(t, batch.FullRefresh)
 }
@@ -683,13 +683,13 @@ func TestRunFullRemoteRefreshAsync_DeltaError(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).dirtyBuf = newDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = newDirtyBuffer(e.logger)
 
 	// Should not panic — error is logged and function returns.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForRefreshDone(t, t.Context(), e)
 
-	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
+	batch := testWatchRuntime(t, e).resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
 	assert.True(t, batch.FullRefresh)
 }
@@ -715,13 +715,13 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).dirtyBuf = newDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = newDirtyBuffer(e.logger)
 
 	// Call should return immediately — goroutine is blocked in deltaFn.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 
 	// refreshActive should be true while delta is blocked.
-	assert.True(t, testWatchRuntime(t, e).refreshActive, "refreshActive should be true while goroutine runs")
+	assert.True(t, testWatchRuntime(t, e).resources.refreshActive, "refreshActive should be true while goroutine runs")
 
 	// Unblock delta and wait for completion.
 	close(unblock)
@@ -748,17 +748,17 @@ func TestRunFullRemoteRefreshAsync_SkipsIfRunning(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).dirtyBuf = newDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = newDirtyBuffer(e.logger)
 
 	// Pre-set refreshActive — simulates a full remote refresh already in progress.
-	testWatchRuntime(t, e).refreshActive = true
+	testWatchRuntime(t, e).resources.refreshActive = true
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 
 	// deltaFn should not have been invoked.
 	assert.False(t, deltaCalled, "deltaFn should not be called when full remote refresh is already running")
 
-	testWatchRuntime(t, e).refreshActive = false
+	testWatchRuntime(t, e).resources.refreshActive = false
 }
 
 func TestWatchPipelineCleanup_KeepsRefreshResultChannelUsable(t *testing.T) {
@@ -825,14 +825,14 @@ func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).dirtyBuf = newDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = newDirtyBuffer(e.logger)
 
 	// Baseline is empty — delta returns a new file and the watch loop gets
 	// a coarse dirty signal back from the remote refresh.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForRefreshDone(t, t.Context(), e)
 
-	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
+	batch := testWatchRuntime(t, e).resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch, "dirty scheduler should contain a coarse dirty signal from reconciliation")
 	assert.False(t, batch.FullRefresh)
 }
@@ -844,7 +844,7 @@ func TestWatchDirtyScheduling_PathFanoutStillProducesOneCoarseDirtySignal(t *tes
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	require.NoError(t, rt.handleWatchLocalObservationBatch(t.Context(), &localObservationBatch{dirty: true}))
 	rt.markDirtyFromRemoteBatch(&remoteObservationBatch{
@@ -855,10 +855,10 @@ func TestWatchDirtyScheduling_PathFanoutStillProducesOneCoarseDirtySignal(t *tes
 		},
 	})
 
-	batch := rt.dirtyBuf.FlushImmediate()
+	batch := rt.resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
 	assert.False(t, batch.FullRefresh)
-	assert.Nil(t, rt.dirtyBuf.FlushImmediate())
+	assert.Nil(t, rt.resources.dirtyBuf.FlushImmediate())
 }
 
 // Validates: R-2.8.4
@@ -889,10 +889,10 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	refreshC := make(chan time.Time, 1)
-	rt.refreshCh = refreshC
+	rt.resources.refreshCh = refreshC
 	done := make(chan error, 1)
 	go func() {
 		done <- rt.runWatchLoop(ctx, &watchPipeline{
@@ -908,7 +908,7 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 		return event.Type == engineDebugEventRemoteRefreshApplied
 	}, "watch loop applied periodic full remote refresh result")
 
-	batch := rt.dirtyBuf.FlushImmediate()
+	batch := rt.resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
 	assert.False(t, batch.FullRefresh)
 
@@ -980,7 +980,7 @@ func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).dirtyBuf = newDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = newDirtyBuffer(e.logger)
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForRefreshDone(t, ctx, e)
@@ -992,7 +992,7 @@ func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	assert.Equal(t, "shutdown-tok", savedToken,
 		"delta token should be saved — CommitObservation must have succeeded")
 
-	batch := testWatchRuntime(t, e).dirtyBuf.FlushImmediate()
+	batch := testWatchRuntime(t, e).resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch, "shutdown-aware early exit should request a fresh replan")
 	assert.True(t, batch.FullRefresh)
 }
@@ -1023,7 +1023,7 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 	setupWatchEngine(t, e)
 
 	// Pre-set refreshActive — simulates a full remote refresh already in progress.
-	testWatchRuntime(t, e).refreshActive = true
+	testWatchRuntime(t, e).resources.refreshActive = true
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 
@@ -1033,7 +1033,7 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 	assert.Contains(t, logOutput, "full remote refresh skipped",
 		"skip message should be logged at Info level (not Debug)")
 
-	testWatchRuntime(t, e).refreshActive = false
+	testWatchRuntime(t, e).resources.refreshActive = false
 }
 
 func TestRunFullRemoteRefreshAsync_DurationInCompletionLog(t *testing.T) {

@@ -223,23 +223,23 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 		return rt.handleWatchReplanSignal(ctx, p, batch, ok)
 	case completion, ok := <-p.completions:
 		return rt.handleWatchCompletionSignal(ctx, p, &completion, ok)
-	case batch, ok := <-rt.localBatches:
+	case batch, ok := <-rt.resources.localBatches:
 		return rt.handleWatchLocalObservationBatchSignal(ctx, &batch, ok)
-	case event, ok := <-rt.protectedRootEvents:
+	case event, ok := <-rt.resources.protectedRootEvents:
 		return rt.handleWatchProtectedRootEventSignal(ctx, &event, ok)
-	case batch, ok := <-rt.remoteBatches:
+	case batch, ok := <-rt.resources.remoteBatches:
 		return rt.handleWatchRemoteBatchSignal(ctx, &batch, ok)
-	case skipped, ok := <-rt.skippedItems:
+	case skipped, ok := <-rt.resources.skippedItems:
 		return rt.handleWatchSkippedSignal(ctx, skipped, ok)
-	case <-rt.refreshCh:
+	case <-rt.resources.refreshCh:
 		rt.runFullRemoteRefreshAsync(ctx, p.bl)
 		return false, nil
-	case result, ok := <-rt.refreshResults:
+	case result, ok := <-rt.resources.refreshResults:
 		return rt.handleWatchRefreshResultSignal(ctx, &result, ok)
 	case <-p.maintenanceC:
 		rt.handleMaintenanceTick(ctx)
 		return false, nil
-	case observerErr, ok := <-rt.observerErrs:
+	case observerErr, ok := <-rt.resources.observerErrs:
 		return rt.handleWatchObserverErrorSignal(ctx, p, observerErr, ok)
 	case <-rt.trialTimerChan():
 		return false, rt.handleWatchHeldReleaseSignal(ctx, p, true)
@@ -300,7 +300,7 @@ func (rt *watchRuntime) handleWatchLocalObservationBatchSignal(
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		rt.localBatches = nil
+		rt.resources.localBatches = nil
 		return false, nil
 	}
 
@@ -313,7 +313,7 @@ func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		rt.protectedRootEvents = nil
+		rt.resources.protectedRootEvents = nil
 		return false, nil
 	}
 	if event == nil {
@@ -351,7 +351,7 @@ func (rt *watchRuntime) handleWatchRemoteBatchSignal(
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		rt.remoteBatches = nil
+		rt.resources.remoteBatches = nil
 		return false, nil
 	}
 
@@ -364,7 +364,7 @@ func (rt *watchRuntime) handleWatchSkippedSignal(
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		rt.skippedItems = nil
+		rt.resources.skippedItems = nil
 		return false, nil
 	}
 
@@ -387,7 +387,7 @@ func (rt *watchRuntime) handleWatchRefreshResultSignal(
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		rt.refreshResults = nil
+		rt.resources.refreshResults = nil
 		return false, nil
 	}
 
@@ -401,7 +401,7 @@ func (rt *watchRuntime) handleWatchObserverErrorSignal(
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		rt.observerErrs = nil
+		rt.resources.observerErrs = nil
 		return false, nil
 	}
 
@@ -456,8 +456,8 @@ func (rt *watchRuntime) releaseHeldFrontier(
 func (rt *watchRuntime) handleObserverExit(_ *watchPipeline, shuttingDown bool) error {
 	rt.mustAssertObserverExitPhase(shuttingDown, "handle observer exit")
 
-	rt.activeObservers--
-	if rt.activeObservers > 0 {
+	rt.resources.activeObservers--
+	if rt.resources.activeObservers > 0 {
 		return nil
 	}
 
@@ -573,8 +573,8 @@ func (rt *watchRuntime) handleWatchObserverError(
 	if err := rt.handleObserverExit(p, ctx.Err() != nil); err != nil {
 		return err
 	}
-	if rt.activeObservers == 0 {
-		rt.observerErrs = nil
+	if rt.resources.activeObservers == 0 {
+		rt.resources.observerErrs = nil
 	}
 
 	return nil

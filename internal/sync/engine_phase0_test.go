@@ -773,7 +773,7 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	rt.runFullRemoteRefreshAsync(ctx, bl)
 	waitForRefreshDone(t, t.Context(), eng)
@@ -784,7 +784,7 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 	default:
 	}
 
-	batch := rt.dirtyBuf.FlushImmediate()
+	batch := rt.resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
 	assert.False(t, batch.FullRefresh)
 }
