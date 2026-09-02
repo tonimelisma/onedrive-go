@@ -1,6 +1,6 @@
 # Sync Planning
 
-GOVERNS: internal/sync/planner.go, internal/sync/planner_sqlite.go, internal/sync/planner_visibility.go, internal/sync/planner_truth_overlay.go, internal/sync/truth_status.go, internal/sync/actions.go, internal/sync/api_types.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/core_types.go
+GOVERNS: internal/sync/planner.go, internal/sync/planner_actions.go, internal/sync/planner_truth_overlay.go, internal/sync/truth_status.go, internal/sync/actions.go, internal/sync/api_types.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/core_types.go
 
 Implements: R-2.1.3 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified]
 
@@ -17,6 +17,21 @@ Planning is split between SQLite reconciliation and a Go action builder.
   and builds dependencies.
 
 The executable plan is runtime-owned and is not a durable SQLite authority.
+
+### File Names Follow Ownership, Not History
+
+`planner_actions.go` was called `planner_sqlite.go` and contains no SQL at all:
+its functions build, normalize, and partition the action set from
+reconciliation rows already loaded into Go. The SQL half of planning lives in
+`sqlite_compare.go` and in the store-owned planner-visible projection.
+
+That mattered beyond tidiness. `spec/design/system.md` measures cross-family
+coupling to decide whether `internal/sync` can be split, and it slices by
+filename prefix. A planning file named for SQL is scored as store coupling, and
+a store file named for planning is scored as planning coupling, so the measured
+tangle was partly an artifact of the names. Filing this file by its name rather
+than its content produced a phantom store-to-planning edge of 16 symbols; the
+real number is 1.
 Shortcut-root lifecycle planning follows the same functional-core rule inside
 `internal/sync`: remote shortcut topology observations and local alias identity
 facts enter deterministic shortcut-root planner helpers, while Graph,
@@ -45,8 +60,8 @@ intent; multisync receives only that child work intent.
 | Local/remote equality is never inferred from size alone: a missing hash on either side forces reconciliation instead of a baseline update recording unproven agreement. | `TestPlanCurrentState_HashlessSameSizeIsNotTreatedAsEqual`, `TestPlanCurrentState_HashOnOneSideOnlyIsNotTreatedAsEqual`, `TestPlanCurrentState_MatchingHashesStillCompareEqual` |
 | Conflict reconciliation rows expand into concrete actions for edit/edit, create/create, and edit/delete cases. | `TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_ExpandsCreateCreateConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID` |
 | Folder-delete descendants are reconciled by SQLite after planner-visible pruning, with parent availability preserved only when descendant work requires it. | `TestReplacePlannerVisibleStateTx_PrunesRemoteDescendantsWhenBaselineFolderMissingRemotely`, `TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMissingLocally`, `TestPlannerPlanCurrentState_RemoteParentDeletePlansDescendantLocalDeleteThroughSQLite`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_LocalParentDeleteCreatesParentForChangedRemoteChild`, `TestPlannerPlanCurrentState_BothParentSidesDeletedCleansUpDescendantsThroughSQLite` |
-| Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/planner_sqlite_test.go`, `internal/sync/planner_dependency_test.go` |
-| Planner decisions stay row-driven and action-shaped across conflict and folder-parent preservation cases. | `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_DownloadOnlyKeepsParentDeleteWhenEditedChildUploadDeferred`, `internal/sync/planner_visibility_test.go` |
+| Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/planner_actions_test.go`, `internal/sync/planner_dependency_test.go` |
+| Planner decisions stay row-driven and action-shaped across conflict and folder-parent preservation cases. | `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_DownloadOnlyKeepsParentDeleteWhenEditedChildUploadDeferred`, `internal/sync/store_planner_visible_test.go` |
 
 ## Inputs
 
