@@ -84,7 +84,7 @@ func (c *Client) readCreatedFolderAfterEmptySuccessBody(
 
 	var lastErr error
 
-	for attempt := range c.createFolderReadbackPolicy.MaxAttempts {
+	for attempt := range c.policies.createFolderReadback.MaxAttempts {
 		children, err := c.ListChildren(ctx, driveID, parentID)
 		if err == nil {
 			if item, ok := findCreatedFolder(children, name); ok {
@@ -96,17 +96,17 @@ func (c *Client) readCreatedFolderAfterEmptySuccessBody(
 			lastErr = err
 		}
 
-		if attempt >= c.createFolderReadbackPolicy.MaxAttempts-1 {
+		if attempt >= c.policies.createFolderReadback.MaxAttempts-1 {
 			break
 		}
 
-		backoff := c.createFolderReadbackPolicy.Delay(attempt)
+		backoff := c.policies.createFolderReadback.Delay(attempt)
 		c.logger.Debug("waiting to confirm created folder after empty success body",
 			slog.String("drive_id", driveID.String()),
 			slog.String("parent_id", parentID),
 			slog.String("name", name),
 			slog.Int("attempt", attempt+1),
-			slog.Int("max_attempts", c.createFolderReadbackPolicy.MaxAttempts),
+			slog.Int("max_attempts", c.policies.createFolderReadback.MaxAttempts),
 			slog.Duration("backoff", backoff),
 		)
 

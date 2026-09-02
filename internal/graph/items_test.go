@@ -789,7 +789,7 @@ func TestCreateFolder_EmptySuccessBodyReadsBackCreatedFolder(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	client.createFolderReadbackPolicy = testRetryPolicy()
+	client.policies.createFolderReadback = testRetryPolicy()
 
 	item, err := client.CreateFolder(t.Context(), driveid.New("d"), "parent", "New Folder")
 	require.NoError(t, err)
@@ -822,7 +822,7 @@ func TestCreateFolder_EmptySuccessBodyReadbackFailure(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	client.createFolderReadbackPolicy = testRetryPolicy()
+	client.policies.createFolderReadback = testRetryPolicy()
 
 	item, err := client.CreateFolder(t.Context(), driveid.New("d"), "parent", "Missing Folder")
 	require.Error(t, err)
@@ -1982,7 +1982,7 @@ func TestCopyItem_TransientDestinationVisibilityRetry(t *testing.T) {
 	defer srv.Close()
 
 	client := newNoRetryTestClient(t, srv.URL)
-	client.copyDestinationPolicy = testRetryPolicy()
+	client.policies.copyDestination = testRetryPolicy()
 
 	result, err := client.CopyItem(t.Context(), driveid.New("d"), "item-to-copy", "dest-folder-id", "copy-of-file.txt")
 	require.NoError(t, err)

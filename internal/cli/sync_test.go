@@ -132,7 +132,7 @@ func installDryRunSuccessRunner(t *testing.T, cc *CLIContext) *bool {
 	t.Helper()
 
 	called := false
-	cc.syncRunOnceRunner = func(
+	cc.seams.syncRunOnce = func(
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
@@ -555,7 +555,7 @@ sync_dir = %q
 		CfgPath:      cfgPath,
 	}
 	called := false
-	cc.syncRunOnceRunner = func(
+	cc.seams.syncRunOnce = func(
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
@@ -647,7 +647,7 @@ sync_dir = %q
 	}
 	called := false
 	var gotDrives []*config.ResolvedDrive
-	cc.syncRunOnceRunner = func(
+	cc.seams.syncRunOnce = func(
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
@@ -701,7 +701,7 @@ sync_dir = %q
 		CfgPath:      cfgPath,
 	}
 	called := false
-	cc.syncRunOnceRunner = func(
+	cc.seams.syncRunOnce = func(
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
@@ -749,7 +749,7 @@ sync_dir = %q
 		CfgPath:      cfgPath,
 	}
 	override := false
-	cc.syncRunOnceRunner = func(
+	cc.seams.syncRunOnce = func(
 		_ context.Context,
 		_ *config.Holder,
 		_ []*config.ResolvedDrive,
@@ -795,7 +795,7 @@ sync_dir = %q
 		OutputWriter: io.Discard,
 		StatusWriter: io.Discard,
 		CfgPath:      cfgPath,
-		syncWatchRunner: func(
+		seams: cliSeams{syncWatch: func(
 			context.Context,
 			*config.Holder,
 			[]string,
@@ -807,7 +807,7 @@ sync_dir = %q
 		) error {
 			require.FailNow(t, "watch runner should not be called when effective dry run is true")
 			return nil
-		},
+		}},
 	}
 
 	err := runSyncCommand(t.Context(), cc, syncCommandOptions{
@@ -839,7 +839,7 @@ sync_dir = %q
 		CfgPath:      cfgPath,
 	}
 	called := false
-	cc.syncRunOnceRunner = func(
+	cc.seams.syncRunOnce = func(
 		context.Context,
 		*config.Holder,
 		[]*config.ResolvedDrive,
@@ -881,7 +881,7 @@ sync_dir = %q
 		CfgPath:      cfgPath,
 	}
 	called := false
-	cc.syncRunOnceRunner = func(
+	cc.seams.syncRunOnce = func(
 		context.Context,
 		*config.Holder,
 		[]*config.ResolvedDrive,
@@ -921,7 +921,7 @@ sync_dir = %q
 		CfgPath:      cfgPath,
 	}
 	called := false
-	cc.syncWatchRunner = func(
+	cc.seams.syncWatch = func(
 		context.Context,
 		*config.Holder,
 		[]string,
@@ -967,7 +967,7 @@ paused = true
 		CfgPath:      cfgPath,
 	}
 	called := false
-	cc.syncRunOnceRunner = func(
+	cc.seams.syncRunOnce = func(
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,

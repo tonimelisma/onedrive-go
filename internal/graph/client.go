@@ -56,28 +56,43 @@ type TokenSource interface {
 // layer and preserves caller control (CLI: RetryTransport, sync: raw
 // transport, single attempt, engine records failure for the engine retry
 // sweep).
+// retryPolicies is the per-call-site retry configuration. It is one value
+// rather than eight fields because the eight are configured together and read
+// together: as separate fields, a caller could set three and silently inherit
+// defaults for the rest, and nothing in the type said they were a set.
+type retryPolicies struct {
+	driveDiscovery       retry.Policy
+	rootChildren         retry.Policy
+	downloadMetadata     retry.Policy
+	createFolderReadback retry.Policy
+	simpleUploadMtime    retry.Policy
+	uploadSessionCreate  retry.Policy
+	copyDestination      retry.Policy
+	simpleUploadCreate   retry.Policy
+}
+
+// urlValidators guard the server-supplied URLs the client will follow. They are
+// grouped for the same reason as the policies: they are one safety decision,
+// not three independent knobs.
+type urlValidators struct {
+	uploadURL   func(*url.URL) error
+	copyMonitor func(*url.URL) error
+	socketIO    func(*url.URL) error
+}
+
 type Client struct {
-	baseURL                    string
-	httpClient                 *http.Client
-	token                      TokenSource
-	logger                     *slog.Logger
-	userAgent                  string
-	authSuccessHook            func(context.Context)
-	deltaPreferHeader          http.Header
-	childrenPreferHeader       http.Header
-	maxDeltaPages              int
-	maxRecursionDepth          int
-	driveDiscoveryPolicy       retry.Policy
-	rootChildrenPolicy         retry.Policy
-	downloadMetadataPolicy     retry.Policy
-	createFolderReadbackPolicy retry.Policy
-	simpleUploadMtimePolicy    retry.Policy
-	uploadSessionCreatePolicy  retry.Policy
-	copyDestinationPolicy      retry.Policy
-	simpleUploadCreatePolicy   retry.Policy
-	uploadURLValidator         func(*url.URL) error
-	copyMonitorValidator       func(*url.URL) error
-	socketIOValidator          func(*url.URL) error
+	baseURL              string
+	httpClient           *http.Client
+	token                TokenSource
+	logger               *slog.Logger
+	userAgent            string
+	authSuccessHook      func(context.Context)
+	deltaPreferHeader    http.Header
+	childrenPreferHeader http.Header
+	maxDeltaPages        int
+	maxRecursionDepth    int
+	policies             retryPolicies
+	validators           urlValidators
 }
 
 // SetAuthenticatedSuccessHook installs a best-effort callback that runs after

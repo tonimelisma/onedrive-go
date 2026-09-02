@@ -264,7 +264,7 @@ func (c *Client) listChildrenPage(ctx context.Context, path string, page int) ([
 
 	result, err := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 		name:   "root-children-transient-404",
-		policy: c.rootChildrenPolicy,
+		policy: c.policies.rootChildren,
 		match:  isTransientRootChildrenError,
 	}, op)
 	if err != nil {

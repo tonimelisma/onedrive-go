@@ -49,7 +49,7 @@ func (c *Client) CreateUploadSession(
 
 	resp, err := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 		name:   "upload-session-create-transient-404",
-		policy: c.uploadSessionCreatePolicy,
+		policy: c.policies.uploadSessionCreate,
 		match:  isTransientUploadSessionCreateError,
 	}, func() (*http.Response, error) {
 		return c.do(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes))

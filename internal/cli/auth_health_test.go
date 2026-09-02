@@ -133,11 +133,11 @@ func TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline(t *testing.T) {
 
 	var out bytes.Buffer
 	cc := &CLIContext{
-		Logger:                  testDriveLogger(t),
-		OutputWriter:            &out,
-		CfgPath:                 cfgPath,
-		Flags:                   CLIFlags{JSON: true},
-		statusLiveOverlayLoader: noStatusLiveOverlay,
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		CfgPath:      cfgPath,
+		Flags:        CLIFlags{JSON: true},
+		seams:        cliSeams{statusLiveOverlay: noStatusLiveOverlay},
 	}
 
 	require.NoError(t, runStatusCommand(t.Context(), cc, false))
@@ -162,11 +162,11 @@ func TestStatusCommand_DoesNotClearPersistedAuthScope(t *testing.T) {
 
 	var out bytes.Buffer
 	cc := &CLIContext{
-		Logger:                  testDriveLogger(t),
-		OutputWriter:            &out,
-		StatusWriter:            &out,
-		CfgPath:                 cfgPath,
-		statusLiveOverlayLoader: noStatusLiveOverlay,
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		CfgPath:      cfgPath,
+		seams:        cliSeams{statusLiveOverlay: noStatusLiveOverlay},
 	}
 
 	require.NoError(t, runStatusCommand(t.Context(), cc, false))

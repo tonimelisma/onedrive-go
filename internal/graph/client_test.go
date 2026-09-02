@@ -100,17 +100,17 @@ func newTestClient(t *testing.T, url string) *Client {
 	t.Helper()
 
 	client := MustNewClient(normalizeTestBaseURL(url), retryHTTPClient(http.DefaultClient, testRetryPolicy()), staticToken("test-token"), slog.Default(), "test-agent")
-	client.driveDiscoveryPolicy = testRetryPolicy()
-	client.rootChildrenPolicy = testRetryPolicy()
-	client.downloadMetadataPolicy = testRetryPolicy()
-	client.createFolderReadbackPolicy = testRetryPolicy()
-	client.simpleUploadMtimePolicy = testRetryPolicy()
-	client.uploadSessionCreatePolicy = testRetryPolicy()
-	client.copyDestinationPolicy = testRetryPolicy()
-	client.simpleUploadCreatePolicy = testRetryPolicy()
-	client.uploadURLValidator = allowTestUploadURL
-	client.copyMonitorValidator = allowTestCopyMonitorURL
-	client.socketIOValidator = allowTestSocketIONotificationURL
+	client.policies.driveDiscovery = testRetryPolicy()
+	client.policies.rootChildren = testRetryPolicy()
+	client.policies.downloadMetadata = testRetryPolicy()
+	client.policies.createFolderReadback = testRetryPolicy()
+	client.policies.simpleUploadMtime = testRetryPolicy()
+	client.policies.uploadSessionCreate = testRetryPolicy()
+	client.policies.copyDestination = testRetryPolicy()
+	client.policies.simpleUploadCreate = testRetryPolicy()
+	client.validators.uploadURL = allowTestUploadURL
+	client.validators.copyMonitor = allowTestCopyMonitorURL
+	client.validators.socketIO = allowTestSocketIONotificationURL
 
 	return client
 }
@@ -120,9 +120,9 @@ func newNoRetryTestClient(t *testing.T, url string) *Client {
 	t.Helper()
 
 	client := MustNewClient(normalizeTestBaseURL(url), http.DefaultClient, staticToken("test-token"), slog.Default(), "test-agent")
-	client.uploadURLValidator = allowTestUploadURL
-	client.copyMonitorValidator = allowTestCopyMonitorURL
-	client.socketIOValidator = allowTestSocketIONotificationURL
+	client.validators.uploadURL = allowTestUploadURL
+	client.validators.copyMonitor = allowTestCopyMonitorURL
+	client.validators.socketIO = allowTestSocketIONotificationURL
 
 	return client
 }
@@ -256,7 +256,7 @@ func TestValidatedUploadURL(t *testing.T) {
 			return client.validatedUploadURL(UploadURL(raw))
 		},
 		func(client *Client, validator func(*url.URL) error) {
-			client.uploadURLValidator = validator
+			client.validators.uploadURL = validator
 		},
 		"https://contoso.sharepoint.com/upload",
 		"https://example.com/upload",
@@ -274,7 +274,7 @@ func TestValidatedCopyMonitorURL(t *testing.T) {
 			return client.validatedCopyMonitorURL(raw)
 		},
 		func(client *Client, validator func(*url.URL) error) {
-			client.copyMonitorValidator = validator
+			client.validators.copyMonitor = validator
 		},
 		"https://graph.microsoft.com/v1.0/operations/copy",
 		"https://example.com/v1.0/operations/copy",

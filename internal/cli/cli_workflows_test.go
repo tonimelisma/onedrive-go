@@ -28,11 +28,11 @@ const (
 
 func newCommandContext(output *bytes.Buffer, cfgPath string) *CLIContext {
 	return &CLIContext{
-		Logger:                  slog.New(slog.DiscardHandler),
-		OutputWriter:            output,
-		StatusWriter:            output,
-		CfgPath:                 cfgPath,
-		statusLiveOverlayLoader: noStatusLiveOverlay,
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: output,
+		StatusWriter: output,
+		CfgPath:      cfgPath,
+		seams:        cliSeams{statusLiveOverlay: noStatusLiveOverlay},
 	}
 }
 

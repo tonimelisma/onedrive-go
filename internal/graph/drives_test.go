@@ -140,7 +140,7 @@ func TestDrives_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	client.driveDiscoveryPolicy = testRetryPolicy()
+	client.policies.driveDiscovery = testRetryPolicy()
 	drives, err := client.Drives(t.Context())
 	require.NoError(t, err)
 
@@ -764,7 +764,7 @@ func TestDrives_Permanent403_ExhaustsRetries(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	client.driveDiscoveryPolicy = testRetryPolicy()
+	client.policies.driveDiscovery = testRetryPolicy()
 	_, err := client.Drives(t.Context())
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrForbidden)
@@ -808,7 +808,7 @@ func TestDrives_NonRetryableErrorsDoNotRetry(t *testing.T) {
 			defer srv.Close()
 
 			client := newTestClient(t, srv.URL)
-			client.driveDiscoveryPolicy = testRetryPolicy()
+			client.policies.driveDiscovery = testRetryPolicy()
 			_, err := client.Drives(t.Context())
 			require.Error(t, err)
 			require.ErrorIs(t, err, tt.wantErr)

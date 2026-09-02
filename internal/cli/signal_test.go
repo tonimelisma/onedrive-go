@@ -204,7 +204,7 @@ func runSyncWatchFirstSignalHelper() {
 		OutputWriter: io.Discard,
 		StatusWriter: io.Discard,
 		CfgPath:      filepath.Join(os.TempDir(), "onedrive-go-sync-watch-helper.toml"),
-		syncWatchRunner: func(
+		seams: cliSeams{syncWatch: func(
 			ctx context.Context,
 			_ *config.Holder,
 			_ []string,
@@ -218,7 +218,7 @@ func runSyncWatchFirstSignalHelper() {
 			<-ctx.Done()
 			mustWriteHelperLine("watch-canceled")
 			return nil
-		},
+		}},
 	}
 
 	cmd := newSyncCmd()
@@ -292,8 +292,10 @@ sync_dir = %q
 		OutputWriter: io.Discard,
 		StatusWriter: io.Discard,
 		CfgPath:      cfgPath,
-		syncDaemonOrchestratorFactory: func(_ *multisync.OrchestratorConfig) syncDaemonOrchestrator {
-			return &fakeSyncDaemonOrchestrator{}
+		seams: cliSeams{
+			syncDaemonOrchestrator: func(_ *multisync.OrchestratorConfig) syncDaemonOrchestrator {
+				return &fakeSyncDaemonOrchestrator{}
+			},
 		},
 	}
 

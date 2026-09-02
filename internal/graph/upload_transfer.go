@@ -302,7 +302,7 @@ func (c *Client) finalizeSimpleUpload(
 	if !mtime.IsZero() {
 		patched, patchErr := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 			name:   "simple-upload-mtime-transient-404",
-			policy: c.simpleUploadMtimePolicy,
+			policy: c.policies.simpleUploadMtime,
 			match:  isTransientSimpleUploadMtimeError,
 		}, func() (*Item, error) {
 			return c.UpdateFileSystemInfo(ctx, driveID, item.ID, mtime)
@@ -368,7 +368,7 @@ func (c *Client) simpleUploadCreateByParent(
 
 	item, retryErr := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 		name:   "simple-upload-create-transient-404",
-		policy: c.simpleUploadCreatePolicy,
+		policy: c.policies.simpleUploadCreate,
 		match:  isTransientSimpleUploadCreateError,
 	}, func() (*Item, error) {
 		return c.SimpleUpload(ctx, driveID, parentID, name, io.NewSectionReader(content, 0, size), size)
