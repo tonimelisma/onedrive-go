@@ -8,25 +8,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-// shortcutAliasMutationKind identifies a parent-owned mutation of a OneDrive
-// shortcut placeholder inside the parent engine's namespace.
-type shortcutAliasMutationKind string
-
-const (
-	shortcutAliasMutationRename shortcutAliasMutationKind = "rename"
-	shortcutAliasMutationDelete shortcutAliasMutationKind = "delete"
-)
-
-// shortcutAliasMutation is intentionally scoped to one shortcut placeholder by
-// binding item ID. It is not a discovery API and cannot address content inside
-// the child target.
-type shortcutAliasMutation struct {
-	Kind              shortcutAliasMutationKind
-	BindingItemID     string
-	RelativeLocalPath string
-	LocalAlias        string
-}
-
 // applyShortcutAliasMutation mutates a shortcut placeholder in the parent
 // drive namespace. The parent engine owns the Graph mutation and parent
 // shortcut-root state; multisync is never a caller.

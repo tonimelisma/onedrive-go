@@ -393,6 +393,12 @@ Static verification is a first-class architectural constraint, not a best-effort
 - Append-only log file creation in `internal/logfile` is the single documented exception to atomic replace-style writes. It is allowed because the log is an append-only operational artifact, not an authoritative config/state file.
 - `fsroot.Root` and `synctree.Root` carry unexported injectable ops so managed-state and sync-runtime I/O failure paths can be tested deterministically without package-level test hooks.
 
+- Family layering inside `internal/sync` is machine-checked. Each sync design doc declares a `LAYER:` rank beside its `GOVERNS:` line, and `devtool verify` fails when a file owned by a ranked doc reads a package-scope symbol owned by a higher-ranked doc. The compiler cannot help here -- every sync family compiles into one package, so a reference from the store up into the engine is as legal to it as any other -- but the families are real, each doc already declares which files it owns, and the direction between them is a design decision worth keeping true.
+
+  The declared order is `sync-domain` (0), `sync-store` (1), `sync-planning` and `sync-observation` (2), `sync-execution` (3), `sync-engine` (4). Same-rank references are permitted because two families can be genuinely mutually recursive without either sitting above the other.
+
+  `sync-shortcut` is deliberately unranked. Its shell is written as `*Engine` methods that call Graph and mutate the filesystem, so the family still reads seven engine-owned symbols; ranking it requires inverting that dependency behind an interface the shortcut family declares. A doc without a `LAYER:` line is not checked in either direction, which makes the set of unranked families the remaining work -- visible in the docs, and only shrinking. That is a more honest instrument than an allowlist of individual exceptions, which grows quietly.
+
 ## Planned Improvements
 
 - Split `internal/sync` by authority boundary. At 32k LOC across ~130 production files it owns unrelated reasons to change, which this doc's own guidance calls a god package. **The blocker is measured, not suspected, and it is the same at every granularity tried.** [planned]

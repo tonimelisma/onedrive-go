@@ -2,6 +2,8 @@
 
 GOVERNS: internal/sync/action_freshness.go, internal/sync/active_scopes.go, internal/sync/dep_graph.go, internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_preconditions.go, internal/sync/executor_transfer.go, internal/sync/scope.go, internal/sync/worker.go
 
+LAYER: 3
+
 Implements: R-2.3.1 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
 
 ## Overview

@@ -256,10 +256,3 @@ func shortcutRootIdentitySQL(identity *synctree.FileIdentity) (uint64, uint64, b
 	}
 	return identity.Device, identity.Inode, true
 }
-
-func boolInt(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
-}
