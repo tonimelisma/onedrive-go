@@ -39,6 +39,17 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
+// scanResult is the return type of FullScan. Rows are the direct current local
+// snapshot that local_state persists. Events remain observation-local signals
+// for watch dirtiness and diagnostics; they are not planner input. Skipped are
+// user-actionable rejections (invalid names, path too long, file too large)
+// that the engine should record.
+type scanResult struct {
+	Events  []changeEvent
+	Rows    []localStateRow
+	Skipped []skippedItem
+}
+
 // Constants for the local scanner.
 const (
 	nanosPerSecond         = 1_000_000_000
@@ -54,14 +65,6 @@ const (
 // defaultCheckWorkers is the default parallel hash goroutine limit when
 // checkWorkers is zero (not configured).
 const defaultCheckWorkers = 4
-
-type observedKind uint8
-
-const (
-	observedKindUnknown observedKind = iota
-	observedKindFile
-	observedKindDir
-)
 
 // hashJob describes a file that needs hashing during FullScan phase 2.
 type hashJob struct {
@@ -1112,16 +1115,6 @@ func dirEntryKind(d fs.DirEntry) observedKind {
 	return observedKindFile
 }
 
-func hasDotfileComponent(parts []string) bool {
-	for _, part := range parts {
-		if strings.HasPrefix(part, ".") {
-			return true
-		}
-	}
-
-	return false
-}
-
 // validateOneDriveName checks whether a filename is valid for OneDrive.
 // Returns ("", "") for valid names. For invalid names, returns the issue
 // type constant and a human-readable detail string.
@@ -1198,33 +1191,6 @@ func isSharePointRootForms(name, path string) bool {
 	return path == name && strings.EqualFold(name, "forms")
 }
 
-// asciiLower returns s with ASCII uppercase letters converted to lowercase.
-// Unlike strings.ToLower, this avoids heap allocation when s is already
-// lowercase (the common case for filenames). Non-ASCII bytes are passed through
-// unchanged, which is correct for file extension matching.
-func asciiLower(s string) string {
-	for i := range len(s) {
-		if s[i] >= 'A' && s[i] <= 'Z' {
-			// Found an uppercase letter — allocate and convert.
-			buf := make([]byte, len(s))
-			copy(buf, s[:i])
-
-			for j := i; j < len(s); j++ {
-				if s[j] >= 'A' && s[j] <= 'Z' {
-					buf[j] = s[j] + ('a' - 'A')
-				} else {
-					buf[j] = s[j]
-				}
-			}
-
-			return string(buf)
-		}
-	}
-
-	// No uppercase letters found — return the original string (zero alloc).
-	return s
-}
-
 // isReservedDeviceName returns true for Windows reserved device names
 // (case-insensitive): CON, PRN, AUX, NUL, COM0-COM9, LPT0-LPT9.
 func isReservedDeviceName(lower string) bool {
@@ -1282,4 +1248,14 @@ func skipEntry(d fs.DirEntry) error {
 	}
 
 	return nil
+}
+
+// buildLocalStateRows converts an observation scan into the rows local_state
+// persists. It belongs to observation rather than the store: observation is
+// what produces the snapshot, and putting the conversion in the store made the
+// store's file family depend on an observation type.
+func buildLocalStateRows(result scanResult) []localStateRow {
+	rows := make([]localStateRow, len(result.Rows))
+	copy(rows, result.Rows)
+	return rows
 }
