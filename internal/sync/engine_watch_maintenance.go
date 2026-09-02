@@ -90,7 +90,7 @@ func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
 		return fmt.Errorf("sync: reading observation state for remote refresh timer: %w", err)
 	}
 
-	rt.resetRefreshTimer(rt.engine.afterFunc(delay, func() {
+	rt.resetRefreshTimer(rt.engine.clock.AfterFunc(delay, func() {
 		select {
 		case rt.refreshCh <- rt.engine.nowFunc():
 		default:

@@ -317,7 +317,7 @@ func TestOneShotRunner_RunResultsLoopIdle_ReleasesDueHeldWorkBeforeBlocking(t *t
 		View: &pathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, action)
-	runner.holdAction(action, heldReasonRetry, ScopeKey{}, eng.nowFn().Add(-time.Second))
+	runner.holdAction(action, heldReasonRetry, ScopeKey{}, eng.nowFunc().Add(-time.Second))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	results := make(chan actionCompletion, 1)

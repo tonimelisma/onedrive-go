@@ -429,8 +429,9 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 	eng := newSingleOwnerEngine(t)
 	eng.perfCollector = perf.NewCollector(nil)
 	eng.transferWorkers = 2
-	now, advance := controllableClock()
-	eng.nowFn = now
+	clock := newManualClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	advance := clock.Advance
+	installManualClock(eng.Engine, clock)
 	recorder := attachDebugEventRecorder(eng)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)

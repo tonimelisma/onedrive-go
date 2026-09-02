@@ -36,6 +36,13 @@ The observation stack has four main pieces:
 - `Scanner`: full local walk for one-shot bootstrap and rebuild cases
 - `dirtyBuffer`: debounce/coalescing before snapshot refresh and replanning
 
+## Observer Time Is Engine Clock Time
+
+`localObserver` and `remoteObserver` hold the engine's `syncClock` rather than
+separate sleep, tick, and timer function fields. Observer fields are also
+unexported: the type is unexported, so exported fields on it conveyed nothing
+except that the type had once been public.
+
 ## Ownership Contract
 
 - Owns: local and remote change capture, path normalization, sparse-item recovery, skipped-item reporting, and dirty buffering

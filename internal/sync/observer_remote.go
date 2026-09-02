@@ -51,7 +51,7 @@ type remoteObserver struct {
 	driveID             driveid.ID
 	shortcutNamespaceID string
 	protectedRoots      []ProtectedRoot
-	SleepFunc           func(ctx context.Context, d time.Duration) error
+	clock               syncClock
 
 	// mu protects deltaToken for concurrent reads via CurrentDeltaToken().
 	// The watch loop is the only writer; helper calls may read concurrently.
@@ -89,10 +89,10 @@ func newRemoteObserver(
 	fetcher deltaFetcher, baseline *Baseline, driveID driveid.ID, logger *slog.Logger,
 ) *remoteObserver {
 	obs := &remoteObserver{
-		fetcher:   fetcher,
-		logger:    logger,
-		driveID:   driveID,
-		SleepFunc: timeSleep,
+		fetcher: fetcher,
+		logger:  logger,
+		driveID: driveID,
+		clock:   realClock{},
 	}
 	obs.Converter = newPrimaryConverter(baseline, driveID, logger, &obs.stats, nil)
 
@@ -408,7 +408,7 @@ func (o *remoteObserver) sleepWatch(
 }
 
 func (o *remoteObserver) sleepForWatch(ctx context.Context, delay time.Duration, phase string) watchStepResult {
-	if sleepErr := o.SleepFunc(ctx, delay); sleepErr != nil {
+	if sleepErr := o.clock.Sleep(ctx, delay); sleepErr != nil {
 		if watchShouldStop(ctx, sleepErr) {
 			return watchStepResult{stop: true}
 		}

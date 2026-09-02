@@ -142,7 +142,7 @@ func TestWatch_StartupSafetyScanCatchesChangeDuringWatchSetup(t *testing.T) {
 	}
 
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
-	obs.StartupSafetyScan = true
+	obs.startupSafetyScan = true
 	events := make(chan changeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -268,17 +268,18 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	tickCh := make(chan time.Time, 1)
 
 	obs := &localObserver{
-		Baseline: emptyBaseline(),
-		Logger:   synctest.TestLogger(t),
+		baseline: emptyBaseline(),
+		logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan hashRequest, hashRequestBufSize),
 		},
-		SleepFunc: recorder.sleep,
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return tickCh, func() {}
+		clock: &observerTestClock{
+			syncClock: realClock{},
+			sleep:     recorder.sleep,
+			tickCh:    tickCh,
 		},
-		WatcherFactory: func() (fsWatcher, error) {
+		watcherFactory: func() (fsWatcher, error) {
 			return mockWatcher, nil
 		},
 	}
@@ -343,18 +344,18 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 
 	obs := &localObserver{
-		Baseline: emptyBaseline(),
-		Logger:   synctest.TestLogger(t),
+		baseline: emptyBaseline(),
+		logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan hashRequest, hashRequestBufSize),
 		},
-		SleepFunc: recorder.sleep,
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			// Never-firing ticker: no safety scan means backoff keeps escalating.
-			return make(chan time.Time), func() {}
+		clock: &observerTestClock{
+			syncClock: realClock{},
+			sleep:     recorder.sleep,
+			tickCh:    make(chan time.Time),
 		},
-		WatcherFactory: func() (fsWatcher, error) {
+		watcherFactory: func() (fsWatcher, error) {
 			return mockWatcher, nil
 		},
 	}
@@ -507,18 +508,19 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	obs := &localObserver{
-		Baseline: baseline,
-		Logger:   synctest.TestLogger(t),
+		baseline: baseline,
+		logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan hashRequest, hashRequestBufSize),
 		},
-		AfterFunc: realAfterFunc,
-		SleepFunc: func(_ context.Context, _ time.Duration) error { return nil },
-		SafetyTickFunc: func(time.Duration) (<-chan time.Time, func()) {
-			return make(chan time.Time), func() {}
+		clock: &observerTestClock{
+			syncClock: realClock{},
+			afterFunc: realAfterFunc,
+			sleep:     func(_ context.Context, _ time.Duration) error { return nil },
+			tickCh:    make(chan time.Time),
 		},
-		WatcherFactory: func() (fsWatcher, error) {
+		watcherFactory: func() (fsWatcher, error) {
 			return mockWatcher, nil
 		},
 	}

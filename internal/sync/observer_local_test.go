@@ -377,7 +377,7 @@ func TestFullScan_SameSecondSubsecondDifferenceSkipsFalseModify(t *testing.T) {
 	})
 
 	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.HashFunc = func(string) (string, error) {
+	obs.hashFunc = func(string) (string, error) {
 		return "", errors.New("hash function should not run for same-second timestamp drift")
 	}
 
@@ -1692,7 +1692,7 @@ func TestHashPhase_PanicRecovery(t *testing.T) {
 
 			obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 1)
 			// Inject a hash function that panics for the target path.
-			obs.HashFunc = func(path string) (string, error) {
+			obs.hashFunc = func(path string) (string, error) {
 				if filepath.Base(path) == tt.panicPath {
 					panic("simulated hash panic for " + tt.panicPath)
 				}
@@ -1737,7 +1737,7 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 	writeTestFile(t, dir, badFileName, "bad content")
 
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.HashFunc = func(path string) (string, error) {
+	obs.hashFunc = func(path string) (string, error) {
 		if filepath.Base(path) == badFileName {
 			panic("corrupted file")
 		}

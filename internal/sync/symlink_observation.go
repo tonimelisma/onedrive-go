@@ -143,7 +143,7 @@ func (o *localObserver) nextObservedDirStack(
 	}
 
 	if _, cycle := dirStack[resolvedDir]; cycle {
-		o.Logger.Debug(cycleLog,
+		o.logger.Debug(cycleLog,
 			slog.String("path", dbRelPath),
 			slog.String("target", resolvedDir))
 		return nil, true, nil
@@ -174,7 +174,7 @@ func (o *localObserver) walkFollowedDirectory(
 		"skipping symlinked directory cycle",
 	)
 	if err != nil {
-		o.Logger.Debug("skipping symlinked directory with unresolved target",
+		o.logger.Debug("skipping symlinked directory with unresolved target",
 			slog.String("path", dbRelPath),
 			slog.String("error", err.Error()))
 		return nil
@@ -218,7 +218,7 @@ func (o *localObserver) walkObservedDirectory(
 		"skipping observed directory cycle",
 	)
 	if err != nil {
-		o.Logger.Warn("resolve observed directory failed",
+		o.logger.Warn("resolve observed directory failed",
 			slog.String("path", dbRelPath),
 			slog.String("error", err.Error()))
 		return nil
@@ -254,7 +254,7 @@ func (o *localObserver) walkObservedEntries(
 ) error {
 	entries, err := localpath.ReadDir(fsPath)
 	if err != nil {
-		o.Logger.Warn("read dir failed "+stage,
+		o.logger.Warn("read dir failed "+stage,
 			slog.String("path", dbRelPath),
 			slog.String("error", err.Error()))
 		return nil
@@ -306,7 +306,7 @@ func (o *localObserver) walkObservedEntry(
 
 	if entry.Type()&fs.ModeSymlink != 0 {
 		if !newContentFilter(o.filterConfig).ShouldFollowSymlinks() {
-			o.Logger.Debug("skipping symlink",
+			o.logger.Debug("skipping symlink",
 				slog.String("path", entryRelPath))
 			return nil
 		}
@@ -344,7 +344,7 @@ func (o *localObserver) walkObservedEntry(
 
 	info, err := entry.Info()
 	if err != nil {
-		o.Logger.Warn("stat failed "+stage,
+		o.logger.Warn("stat failed "+stage,
 			slog.String("path", entryRelPath),
 			slog.String("error", err.Error()))
 		return nil
@@ -416,7 +416,7 @@ func (o *localObserver) addObservedDirWatches(
 
 	info, isSymlink, err := statObservedPath(fsPath)
 	if err != nil {
-		o.Logger.Warn("stat failed during watch setup",
+		o.logger.Warn("stat failed during watch setup",
 			slog.String("path", fsPath),
 			slog.String("error", err.Error()))
 		return nil
@@ -424,7 +424,7 @@ func (o *localObserver) addObservedDirWatches(
 
 	if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
 		o.rememberExcludedSymlink(dbRelPath)
-		o.Logger.Debug("skipping symlink in watch setup",
+		o.logger.Debug("skipping symlink in watch setup",
 			slog.String("path", fsPath))
 		return nil
 	}
@@ -453,7 +453,7 @@ func (o *localObserver) addObservedDirWatches(
 		"skipping symlinked directory cycle in watch setup",
 	)
 	if err != nil {
-		o.Logger.Warn("failed to resolve watched directory",
+		o.logger.Warn("failed to resolve watched directory",
 			slog.String("path", fsPath),
 			slog.String("error", err.Error()))
 		return nil
@@ -489,7 +489,7 @@ func (o *localObserver) addObservedWatch(
 	}
 
 	if isWatchLimitError(addErr) {
-		o.Logger.Error("inotify watch limit exhausted",
+		o.logger.Error("inotify watch limit exhausted",
 			slog.String("path", fsPath),
 			slog.Int("watches_added", counts.watched),
 		)
@@ -498,7 +498,7 @@ func (o *localObserver) addObservedWatch(
 	}
 
 	counts.failed++
-	o.Logger.Warn("failed to add watch",
+	o.logger.Warn("failed to add watch",
 		slog.String("path", fsPath),
 		slog.String("error", addErr.Error()))
 	return nil
@@ -515,7 +515,7 @@ func (o *localObserver) addObservedDirChildrenWatches(
 ) error {
 	entries, err := localpath.ReadDir(fsPath)
 	if err != nil {
-		o.Logger.Warn("read dir failed during watch setup",
+		o.logger.Warn("read dir failed during watch setup",
 			slog.String("path", fsPath),
 			slog.String("error", err.Error()))
 		return nil
@@ -585,14 +585,14 @@ func (o *localObserver) processSymlinkPath(
 ) error {
 	info, isSymlink, err := statObservedPath(fsPath)
 	if err != nil {
-		o.Logger.Debug("skipping symlink with unreadable target",
+		o.logger.Debug("skipping symlink with unreadable target",
 			slog.String("path", dbRelPath),
 			slog.String("error", err.Error()))
 		return nil
 	}
 
 	if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
-		o.Logger.Debug("skipping symlink",
+		o.logger.Debug("skipping symlink",
 			slog.String("path", dbRelPath))
 		return nil
 	}

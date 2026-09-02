@@ -27,7 +27,7 @@ func newSingleOwnerEngine(t *testing.T) *testEngine {
 
 	mock := &engineMockClient{}
 	eng, _ := newTestEngine(t, mock)
-	eng.nowFn = func() time.Time { return time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC) }
+	eng.clock = newManualClock(time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC))
 	setupWatchEngine(t, eng)
 
 	return eng
@@ -774,11 +774,7 @@ func newManualClock(start time.Time) *manualClock {
 }
 
 func installManualClock(eng *Engine, clock *manualClock) {
-	eng.nowFn = clock.Now
-	eng.afterFunc = clock.AfterFunc
-	eng.newTicker = clock.NewTicker
-	eng.sleepFn = clock.Sleep
-	eng.jitterFn = clock.Jitter
+	eng.clock = clock
 }
 
 func (c *manualClock) Now() time.Time {
@@ -1063,4 +1059,54 @@ func readObservationCursorForTest(t *testing.T, mgr *SyncStore, ctx context.Cont
 	}
 
 	return state.Cursor
+}
+
+// observingClock decorates a syncClock so a test can observe when the runtime
+// creates a ticker, arms a timer, or sleeps. It wraps rather than replaces:
+// the underlying clock still supplies the behavior, so observation cannot
+// produce the incoherent mix of real and fake time that separate injectable
+// function fields allowed.
+type observingClock struct {
+	syncClock
+	onNewTicker func(time.Duration)
+	onAfterFunc func(time.Duration)
+	onSleep     func(time.Duration)
+}
+
+func (c *observingClock) NewTicker(interval time.Duration) syncTicker {
+	if c.onNewTicker != nil {
+		c.onNewTicker(interval)
+	}
+
+	return c.syncClock.NewTicker(interval)
+}
+
+func (c *observingClock) AfterFunc(delay time.Duration, fn func()) syncTimer {
+	if c.onAfterFunc != nil {
+		c.onAfterFunc(delay)
+	}
+
+	return c.syncClock.AfterFunc(delay, fn)
+}
+
+func (c *observingClock) Sleep(ctx context.Context, delay time.Duration) error {
+	if c.onSleep != nil {
+		c.onSleep(delay)
+	}
+
+	//nolint:wrapcheck // decorator delegates to the wrapped clock; adding context here would attribute the failure to the test seam rather than the clock that produced it
+	return c.syncClock.Sleep(ctx, delay)
+}
+
+// observeEngineClock wraps the engine's current clock so callers can attach
+// hooks, returning the wrapper for further configuration.
+func observeEngineClock(eng *Engine) *observingClock {
+	if existing, ok := eng.clock.(*observingClock); ok {
+		return existing
+	}
+
+	wrapped := &observingClock{syncClock: eng.clock}
+	eng.clock = wrapped
+
+	return wrapped
 }
