@@ -114,7 +114,7 @@ func TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork(t *testing.T) 
 	require.NotNil(t, held)
 	rt.holdAction(held, heldReasonRetry, ScopeKey{}, eng.nowFunc().Add(-time.Second))
 
-	outbox, err := rt.runPublicationDrainStage(ctx, rt, bl, []*trackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*trackedAction{publication})
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, int64(2), outbox[0].ID, "publication drain should only enqueue dependents unlocked by publication success")
@@ -170,7 +170,7 @@ func TestRunPublicationDrainStage_PublicationSuccessClearsRetryWorkAndAdmitsDepe
 	}, 2, []int64{1})
 	assert.Nil(t, dependent)
 
-	outbox, err := rt.runPublicationDrainStage(ctx, rt, bl, []*trackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*trackedAction{publication})
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, int64(2), outbox[0].ID)
@@ -218,7 +218,7 @@ func TestRunPublicationDrainStage_PublicationSuccessDoesNotResetScopeFailureWind
 	}, 1, nil)
 	require.NotNil(t, publication)
 
-	outbox, err := rt.runPublicationDrainStage(ctx, rt, bl, []*trackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*trackedAction{publication})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 	assert.Contains(t, rt.scopeState.windows, SKService(),
@@ -253,7 +253,7 @@ func TestRunPublicationDrainStage_PersistsRetryWorkOnPublicationCommitFailure(t 
 	}, 1, nil)
 	require.NotNil(t, publication)
 
-	outbox, err := rt.runPublicationDrainStage(ctx, rt, &Baseline{}, []*trackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, &Baseline{}, []*trackedAction{publication})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 
@@ -336,7 +336,7 @@ func TestRunPublicationDrainStage_TerminatesWhenPublicationRetryPersistenceFails
 
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	outbox, err := rt.runPublicationDrainStage(ctx, rt, &Baseline{}, []*trackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, &Baseline{}, []*trackedAction{publication})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "record retry_work")
 	assert.Empty(t, outbox)

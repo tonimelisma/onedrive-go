@@ -20,7 +20,7 @@ func (rt *watchRuntime) beginWatchDrain(
 	rt.completeDrainOutbox()
 	rt.disableDrainInputs(p)
 	rt.refreshDrainCompletionSources()
-	rt.mustAssertInvariants(ctx, rt, "begin watch drain")
+	rt.mustAssertInvariants(ctx, "begin watch drain")
 }
 
 func (rt *watchRuntime) stopDrainTimers() {
@@ -91,10 +91,10 @@ func (rt *watchRuntime) handleDrainingCompletion(
 	err := rt.processShutdownCompletion(ctx, completion, p.bl)
 	if err != nil {
 		rt.logSuppressedShutdownCompletionError(completion, err)
-		rt.mustAssertInvariants(ctx, rt, "handle draining completion")
+		rt.mustAssertInvariants(ctx, "handle draining completion")
 		return false, nil
 	}
-	rt.mustAssertInvariants(ctx, rt, "handle draining completion")
+	rt.mustAssertInvariants(ctx, "handle draining completion")
 
 	return false, nil
 }
@@ -110,8 +110,8 @@ func (rt *watchRuntime) handleDrainingRefreshResult(
 	}
 
 	rt.dropRemoteRefreshResultOnShutdown()
-	rt.mustAssertRefreshBookkeepingCleared(rt, "handle draining refresh result")
-	rt.mustAssertInvariants(ctx, rt, "handle draining refresh result")
+	rt.mustAssertRefreshBookkeepingCleared("handle draining refresh result")
+	rt.mustAssertInvariants(ctx, "handle draining refresh result")
 
 	return rt.drainLoopDone(p), nil
 }

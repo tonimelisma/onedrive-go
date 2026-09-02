@@ -170,6 +170,32 @@ Permission timing follows the engine-owned runtime decision, not the probe:
   path; trial reclassification reuses that same fallback instead of treating
   inconclusive permission probes as fatal runtime errors
 
+## Asking For Future Work
+
+Completion, admission, and scope decisions do not reach for the watch runtime.
+They report through `runtimeSignals`: arm the held timers, arm the retry timer,
+arm the trial timer, release due held work now, or mark that a replan is
+needed.
+
+One-shot and watch differ in exactly one way those decisions can observe:
+whether there is a future. A one-shot pass returns when its work settles, so
+nothing armed during it could fire and no replan mark has a reader. Watch keeps
+the runtime alive across timer ticks and observation batches, so all five mean
+something.
+
+This was previously expressed by passing `watch *watchRuntime` into `engineFlow`
+methods and nil-checking it at nineteen sites -- a parent taking its own child
+as a nullable parameter, since `watchRuntime` embeds `*engineFlow`. The
+consequence was that `engineFlow` could not be reasoned about without knowing
+which callers passed nil, and the type relationship was circular. The no-op
+implementation states the same rule as a fact about one-shot rather than as an
+absence every call site must remember to check.
+
+`watchInspector` is the parallel seam for the debug-only invariant pass, which
+production leaves disabled through `engine.assertInvariants`. It is separate
+from `runtimeSignals` because the two have different lifetimes, and keeping them
+apart stops a debug-only read from re-introducing the production coupling.
+
 ## One-Shot Sync
 
 `RunOnce()` keeps one-shot behavior intentionally simple:

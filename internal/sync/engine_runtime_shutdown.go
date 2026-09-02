@@ -14,7 +14,7 @@ func (flow *engineFlow) processShutdownCompletion(
 	bl *Baseline,
 ) error {
 	ctx = contextWithShutdownFreshnessBypass(ctx)
-	ready, err := flow.applyRuntimeCompletionStage(ctx, nil, completion, bl)
+	ready, err := flow.applyRuntimeCompletionStage(ctx, completion, bl)
 	flow.completeOutboxAsShutdown(ready)
 	return err
 }

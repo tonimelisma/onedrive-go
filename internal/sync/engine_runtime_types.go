@@ -11,6 +11,15 @@ import (
 type engineFlow struct {
 	engine *Engine
 
+	// signals is how this flow asks for future work. Watch supplies the live
+	// runtime; one-shot supplies no-ops, because a one-shot pass has no future
+	// in which a timer could fire. See runtimeSignals.
+	signals runtimeSignals
+
+	// inspect is the debug-only view of watch state used by the invariant
+	// pass, which production leaves disabled.
+	inspect watchInspector
+
 	depGraph   *depGraph
 	dispatchCh chan *trackedAction
 
@@ -56,6 +65,8 @@ type heldAction struct {
 func newEngineFlow(engine *Engine) *engineFlow {
 	flow := &engineFlow{
 		engine:         engine,
+		signals:        noRuntimeSignals{},
+		inspect:        noWatchInspector{},
 		runID:          engine.nextRuntimeRunID(),
 		retryRowsByKey: make(map[RetryWorkKey]RetryWorkRow),
 		heldByKey:      make(map[RetryWorkKey]*heldAction),

@@ -30,21 +30,19 @@ type admissionDecision struct {
 // action dispatches now or is held as exact work for later release.
 func (flow *engineFlow) admitReady(
 	ctx context.Context,
-	watch *watchRuntime,
 	ready []*trackedAction,
 ) ([]*trackedAction, error) {
 	decisions := flow.decideAdmission(flow.engine.nowFunc(), ready)
-	filtered, ownedOnError, err := flow.filterFreshAdmissionDecisions(ctx, watch, decisions)
+	filtered, ownedOnError, err := flow.filterFreshAdmissionDecisions(ctx, decisions)
 	if err != nil {
 		return ownedOnError, err
 	}
 
-	return flow.applyAdmissionDecisions(ctx, watch, filtered)
+	return flow.applyAdmissionDecisions(ctx, filtered)
 }
 
 func (flow *engineFlow) filterFreshAdmissionDecisions(
 	ctx context.Context,
-	watch *watchRuntime,
 	decisions []admissionDecision,
 ) ([]admissionDecision, []*trackedAction, error) {
 	filtered := make([]admissionDecision, 0, len(decisions))
@@ -71,7 +69,7 @@ func (flow *engineFlow) filterFreshAdmissionDecisions(
 		completionErr := fmt.Errorf("%w: %s", errActionPreconditionChanged, freshness.Reason)
 		completion := actionCompletionFromTrackedAction(ta, nil, completionErr)
 		flow.engine.collector().RecordSuperseded(perf.SupersededSourceEngineAdmission, 1)
-		if err := flow.applySupersededCompletion(ctx, watch, ta, &completion, "admission stale action"); err != nil {
+		if err := flow.applySupersededCompletion(ctx, ta, &completion, "admission stale action"); err != nil {
 			return filtered, admissionDispatchActions(filtered), err
 		}
 	}
@@ -175,7 +173,6 @@ func (flow *engineFlow) applyActiveScopeAdmission(
 
 func (flow *engineFlow) applyAdmissionDecisions(
 	ctx context.Context,
-	watch *watchRuntime,
 	decisions []admissionDecision,
 ) ([]*trackedAction, error) {
 	var dispatch []*trackedAction
@@ -205,9 +202,7 @@ func (flow *engineFlow) applyAdmissionDecisions(
 		}
 	}
 
-	if watch != nil {
-		watch.armHeldTimers()
-	}
+	flow.signals.armHeldTimers()
 
 	return dispatch, nil
 }

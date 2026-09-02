@@ -60,7 +60,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions)
 	)
 
 	rt := newWatchRuntime(e)
-	bl, err := rt.runStartupStage(ctx, rt)
+	bl, err := rt.runStartupStage(ctx)
 	if err != nil {
 		if isWatchShutdownError(ctx, err) {
 			return nil
@@ -175,7 +175,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// the persisted block_scopes table into watch-owned runtime state.
 	depGraph := newDepGraph(rt.engine.logger)
 	rt.depGraph = depGraph
-	if err := rt.loadActiveScopes(ctx, rt); err != nil {
+	if err := rt.loadActiveScopes(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
 
@@ -284,7 +284,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode SyncMode, pipe *
 		return cursorCommitErr
 	}
 	// Dispatch through the watch runtime (same frontier path steady-state uses).
-	initialOutbox, _, err := rt.startRuntimeStage(ctx, runtime, pipe.bl, rt)
+	initialOutbox, _, err := rt.startRuntimeStage(ctx, runtime, pipe.bl)
 	if err != nil {
 		return fmt.Errorf("sync: bootstrap dispatch failed: %w", err)
 	}

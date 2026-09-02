@@ -30,7 +30,7 @@ func newBootstrapWatchPipelineForTest(
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.scopeState = newScopeState(eng.nowFunc, eng.logger)
-	bl, err := rt.runStartupStage(ctx, rt)
+	bl, err := rt.runStartupStage(ctx)
 	require.NoError(t, err)
 
 	pool := newWorkerPool(eng.execCfg, rt.dispatchCh, eng.baseline, eng.logger, 1024)

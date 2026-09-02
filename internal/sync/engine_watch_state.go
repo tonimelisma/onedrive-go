@@ -109,6 +109,11 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 		},
 	}
 
+	// The watch runtime is its own signal sink and inspector: it is the live
+	// future that completion and scope decisions are asking about.
+	rt.signals = rt
+	rt.inspect = rt
+
 	return rt
 }
 
@@ -389,4 +394,25 @@ func (rt *watchRuntime) resetRefreshTimer(next syncTimer) {
 	}
 
 	rt.refreshTimer = next
+}
+
+// kickDueHeldRelease satisfies runtimeSignals; the watch loop releases
+// due held retry work immediately rather than waiting for the next tick.
+func (rt *watchRuntime) kickDueHeldRelease() {
+	rt.kickRetryHeldReleaseNow()
+}
+
+// markReplanNeeded satisfies runtimeSignals: committed truth changed under the
+// current plan, so the debounce buffer should schedule a replan.
+func (rt *watchRuntime) markReplanNeeded() {
+	if rt.dirtyBuf == nil {
+		return
+	}
+
+	rt.dirtyBuf.MarkDirty()
+}
+
+// hasActiveRefresh satisfies watchInspector.
+func (rt *watchRuntime) hasActiveRefresh() bool {
+	return rt.refreshActive
 }

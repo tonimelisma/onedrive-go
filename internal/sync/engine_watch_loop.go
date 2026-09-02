@@ -454,7 +454,7 @@ func (rt *watchRuntime) releaseHeldFrontier(
 }
 
 func (rt *watchRuntime) handleObserverExit(_ *watchPipeline, shuttingDown bool) error {
-	rt.mustAssertObserverExitPhase(rt, shuttingDown, "handle observer exit")
+	rt.mustAssertObserverExitPhase(shuttingDown, "handle observer exit")
 
 	rt.activeObservers--
 	if rt.activeObservers > 0 {
@@ -488,7 +488,7 @@ func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *trackedAction, *trac
 	}
 
 	if rt.isDraining() {
-		rt.mustAssertDispatchAdmissionSealed(rt, outbox, "dispatch channel for outbox")
+		rt.mustAssertDispatchAdmissionSealed(outbox, "dispatch channel for outbox")
 		return nil, nil
 	}
 	if rt.hasPendingReplan() {
@@ -532,7 +532,7 @@ func (rt *watchRuntime) handleWatchActionCompletion(
 	completion *actionCompletion,
 ) error {
 	hadPendingReplan := rt.hasPendingReplan()
-	ready, err := rt.applyRuntimeCompletionStage(ctx, rt, completion, p.bl)
+	ready, err := rt.applyRuntimeCompletionStage(ctx, completion, p.bl)
 	if hadPendingReplan {
 		rt.advancePendingReplanDrainIdleTracking()
 	}

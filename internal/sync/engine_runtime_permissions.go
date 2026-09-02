@@ -22,7 +22,6 @@ func shouldHandleLocalPermission(r *actionCompletion) bool {
 
 func (flow *engineFlow) maybeHandlePermissionFailure(
 	ctx context.Context,
-	watch *watchRuntime,
 	decision *resultDecision,
 	current *trackedAction,
 	r *actionCompletion,
@@ -30,9 +29,9 @@ func (flow *engineFlow) maybeHandlePermissionFailure(
 ) (bool, error) {
 	switch {
 	case shouldHandleRemote403Permission(r):
-		return flow.handleRemote403PermissionFailure(ctx, watch, decision, current, r, bl)
+		return flow.handleRemote403PermissionFailure(ctx, decision, current, r, bl)
 	case shouldHandleLocalPermission(r):
-		return flow.handleLocalPermissionFailure(ctx, watch, decision, current, r)
+		return flow.handleLocalPermissionFailure(ctx, decision, current, r)
 	default:
 		return false, nil
 	}
@@ -40,7 +39,6 @@ func (flow *engineFlow) maybeHandlePermissionFailure(
 
 func (flow *engineFlow) handleRemote403PermissionFailure(
 	ctx context.Context,
-	watch *watchRuntime,
 	decision *resultDecision,
 	current *trackedAction,
 	r *actionCompletion,
@@ -55,12 +53,10 @@ func (flow *engineFlow) handleRemote403PermissionFailure(
 		return false, nil
 	}
 
-	if err := flow.applyPermissionFailureEvidence(ctx, watch, current, r, evidence, true); err != nil {
+	if err := flow.applyPermissionFailureEvidence(ctx, current, r, evidence, true); err != nil {
 		return true, err
 	}
-	if watch != nil {
-		watch.armHeldTimers()
-	}
+	flow.signals.armHeldTimers()
 	flow.recordError(decision, r)
 
 	return true, nil
@@ -68,7 +64,6 @@ func (flow *engineFlow) handleRemote403PermissionFailure(
 
 func (flow *engineFlow) handleLocalPermissionFailure(
 	ctx context.Context,
-	watch *watchRuntime,
 	decision *resultDecision,
 	current *trackedAction,
 	r *actionCompletion,
@@ -78,12 +73,10 @@ func (flow *engineFlow) handleLocalPermissionFailure(
 		return false, nil
 	}
 
-	if err := flow.applyPermissionFailureEvidence(ctx, watch, current, r, evidence, false); err != nil {
+	if err := flow.applyPermissionFailureEvidence(ctx, current, r, evidence, false); err != nil {
 		return true, err
 	}
-	if watch != nil {
-		watch.armHeldTimers()
-	}
+	flow.signals.armHeldTimers()
 	flow.recordError(decision, r)
 
 	return true, nil
@@ -91,7 +84,6 @@ func (flow *engineFlow) handleLocalPermissionFailure(
 
 func (flow *engineFlow) applyPermissionFailureEvidence(
 	ctx context.Context,
-	watch *watchRuntime,
 	current *trackedAction,
 	r *actionCompletion,
 	evidence permissionEvidence,
@@ -104,7 +96,7 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 		return fmt.Errorf("apply permission failure for %s: missing permission evidence", work.Path)
 	case permissionEvidenceKnownActiveBoundary:
 		if blocking := flow.findBlockingScope(current); !blocking.IsZero() {
-			return flow.holdActionUnderScope(ctx, watch, current, r, blocking)
+			return flow.holdActionUnderScope(ctx, current, r, blocking)
 		}
 		return nil
 	case permissionEvidenceFileDenied:
@@ -117,7 +109,7 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 		}
 		if scopeKey.PersistsInBlockScopes() {
-			if err := flow.applyBlockScope(ctx, watch, scopeUpdateResult{
+			if err := flow.applyBlockScope(ctx, scopeUpdateResult{
 				Block:         true,
 				ScopeKey:      scopeKey,
 				ConditionType: scopeKey.ConditionType(),
@@ -145,7 +137,6 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 
 func (flow *engineFlow) applyTrialPermissionReclassification(
 	ctx context.Context,
-	watch *watchRuntime,
 	r *actionCompletion,
 	bl *Baseline,
 ) (bool, error) {
@@ -162,12 +153,10 @@ func (flow *engineFlow) applyTrialPermissionReclassification(
 		return false, err
 	}
 
-	if err := flow.applyTrialPermissionEvidence(ctx, watch, work, r.TrialScopeKey, evidence); err != nil {
+	if err := flow.applyTrialPermissionEvidence(ctx, work, r.TrialScopeKey, evidence); err != nil {
 		return false, err
 	}
-	if watch != nil {
-		watch.armHeldTimers()
-	}
+	flow.signals.armHeldTimers()
 
 	return true, nil
 }
@@ -192,7 +181,6 @@ func (flow *engineFlow) permissionEvidenceForCompletion(
 
 func (flow *engineFlow) applyTrialPermissionEvidence(
 	ctx context.Context,
-	watch *watchRuntime,
 	work RetryWorkKey,
 	trialScopeKey ScopeKey,
 	evidence permissionEvidence,
@@ -218,7 +206,7 @@ func (flow *engineFlow) applyTrialPermissionEvidence(
 			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 		}
 		if scopeKey.PersistsInBlockScopes() {
-			if err := flow.applyBlockScope(ctx, watch, scopeUpdateResult{
+			if err := flow.applyBlockScope(ctx, scopeUpdateResult{
 				Block:         true,
 				ScopeKey:      scopeKey,
 				ConditionType: scopeKey.ConditionType(),

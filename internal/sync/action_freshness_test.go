@@ -396,7 +396,7 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
-	outbox, err := flow.admitReady(ctx, rt, []*trackedAction{root})
+	outbox, err := flow.admitReady(ctx, []*trackedAction{root})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 	assert.Equal(t, 0, flow.depGraph.InFlightCount())

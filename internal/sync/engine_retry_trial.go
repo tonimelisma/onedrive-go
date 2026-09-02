@@ -18,10 +18,10 @@ func (rt *watchRuntime) releaseDueHeldTrialsNow(
 	ctx context.Context,
 	bl *Baseline,
 ) ([]*trackedAction, error) {
-	rt.mustAssertHeldReleaseAllowed(rt, "releaseDueHeldTrialsNow", "release due held trials")
+	rt.mustAssertHeldReleaseAllowed("releaseDueHeldTrialsNow", "release due held trials")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialHeldReleaseStarted})
 
-	dispatch, err := rt.reduceReadyFrontierStage(ctx, rt, bl, nil)
+	dispatch, err := rt.reduceReadyFrontierStage(ctx, bl, nil)
 	if err != nil {
 		return dispatch, err
 	}
@@ -40,10 +40,10 @@ func (rt *watchRuntime) releaseDueHeldRetriesNow(
 	ctx context.Context,
 	bl *Baseline,
 ) ([]*trackedAction, error) {
-	rt.mustAssertHeldReleaseAllowed(rt, "releaseDueHeldRetriesNow", "release due held retries")
+	rt.mustAssertHeldReleaseAllowed("releaseDueHeldRetriesNow", "release due held retries")
 	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryHeldReleaseStarted})
 
-	dispatch, err := rt.reduceReadyFrontierStage(ctx, rt, bl, nil)
+	dispatch, err := rt.reduceReadyFrontierStage(ctx, bl, nil)
 	if err != nil {
 		return dispatch, err
 	}
