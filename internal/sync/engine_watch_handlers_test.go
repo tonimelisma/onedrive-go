@@ -32,7 +32,7 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	root := rt.depGraph.Add(&Action{
+	root := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "sync.txt",
 		DriveID: driveID,
@@ -40,7 +40,7 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	dependent := rt.depGraph.Add(&Action{
+	dependent := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: driveID,
@@ -59,7 +59,7 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 	})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox(), "publication-only dependents should drain on the engine side")
-	assert.Equal(t, 0, rt.depGraph.InFlightCount())
+	assert.Equal(t, 0, rt.sched.graph.InFlightCount())
 
 	_, found := bl.GetByPath("cleanup.txt")
 	assert.False(t, found, "cleanup publication should commit immediately instead of waiting for worker dispatch")
@@ -88,7 +88,7 @@ func TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork(t *testing.T) 
 
 	rt.initializeRuntimeState(&runtimePlan{})
 
-	publication := rt.depGraph.Add(&Action{
+	publication := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: driveID,
@@ -96,7 +96,7 @@ func TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork(t *testing.T) 
 	}, 1, nil)
 	require.NotNil(t, publication)
 
-	unlocked := rt.depGraph.Add(&Action{
+	unlocked := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "after.txt",
 		DriveID: driveID,
@@ -105,7 +105,7 @@ func TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork(t *testing.T) 
 	}, 2, []int64{1})
 	assert.Nil(t, unlocked)
 
-	held := rt.depGraph.Add(&Action{
+	held := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "held.txt",
 		DriveID: driveID,
@@ -118,7 +118,7 @@ func TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork(t *testing.T) 
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, int64(2), outbox[0].ID, "publication drain should only enqueue dependents unlocked by publication success")
-	assert.Contains(t, rt.heldByKey, retryWorkKeyForAction(&held.Action), "unrelated held retry work should not be released by publication drain")
+	assert.Contains(t, rt.retries.heldByKey, retryWorkKeyForAction(&held.Action), "unrelated held retry work should not be released by publication drain")
 }
 
 // Validates: R-2.10.5, R-2.10.33
@@ -153,7 +153,7 @@ func TestRunPublicationDrainStage_PublicationSuccessClearsRetryWorkAndAdmitsDepe
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	publication := rt.depGraph.Add(&Action{
+	publication := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: driveID,
@@ -161,7 +161,7 @@ func TestRunPublicationDrainStage_PublicationSuccessClearsRetryWorkAndAdmitsDepe
 	}, 1, nil)
 	require.NotNil(t, publication)
 
-	dependent := rt.depGraph.Add(&Action{
+	dependent := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "after.txt",
 		DriveID: driveID,
@@ -174,7 +174,7 @@ func TestRunPublicationDrainStage_PublicationSuccessClearsRetryWorkAndAdmitsDepe
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, int64(2), outbox[0].ID)
-	assert.Equal(t, 1, rt.succeeded)
+	assert.Equal(t, 1, rt.results.succeeded)
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
 }
 
@@ -200,17 +200,17 @@ func TestRunPublicationDrainStage_PublicationSuccessDoesNotResetScopeFailureWind
 	require.NoError(t, err)
 
 	rt.initializeRuntimeState(&runtimePlan{})
-	rt.scopeState = newScopeState(eng.nowFunc, eng.logger)
-	rt.scopeState.UpdateScope(&actionCompletion{
+	rt.scopes.state = newScopeState(eng.nowFunc, eng.logger)
+	rt.scopes.state.UpdateScope(&actionCompletion{
 		Path:       "service.txt",
 		ActionType: ActionUpload,
 		DriveID:    driveID,
 		HTTPStatus: 503,
 		ErrMsg:     "service unavailable",
 	})
-	require.Contains(t, rt.scopeState.windows, SKService())
+	require.Contains(t, rt.scopes.state.windows, SKService())
 
-	publication := rt.depGraph.Add(&Action{
+	publication := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: driveID,
@@ -221,7 +221,7 @@ func TestRunPublicationDrainStage_PublicationSuccessDoesNotResetScopeFailureWind
 	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*trackedAction{publication})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
-	assert.Contains(t, rt.scopeState.windows, SKService(),
+	assert.Contains(t, rt.scopes.state.windows, SKService(),
 		"publication-only successes must not clear unrelated scope failure windows")
 }
 
@@ -245,7 +245,7 @@ func TestRunPublicationDrainStage_PersistsRetryWorkOnPublicationCommitFailure(t 
 
 	rt.initializeRuntimeState(&runtimePlan{})
 
-	publication := rt.depGraph.Add(&Action{
+	publication := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: driveid.New("0000000000000002"),
@@ -258,7 +258,7 @@ func TestRunPublicationDrainStage_PersistsRetryWorkOnPublicationCommitFailure(t 
 	assert.Empty(t, outbox)
 
 	work := retryWorkKeyForAction(&publication.Action)
-	require.Contains(t, rt.heldByKey, work)
+	require.Contains(t, rt.retries.heldByKey, work)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, ctx)
 	require.Len(t, retryRows, 1)
@@ -297,7 +297,7 @@ func TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublication
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &row))
 	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
 
-	publication := rt.depGraph.Add(&Action{
+	publication := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
@@ -309,7 +309,7 @@ func TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublication
 	err = rt.handleWatchHeldRelease(ctx, &watchPipeline{bl: bl}, false)
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox(), "released publication retries must reduce on the engine side before any worker dispatch")
-	assert.Empty(t, rt.heldByKey)
+	assert.Empty(t, rt.retries.heldByKey)
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
 
 	_, found := bl.GetByPath("cleanup.txt")
@@ -326,7 +326,7 @@ func TestRunPublicationDrainStage_TerminatesWhenPublicationRetryPersistenceFails
 
 	rt.initializeRuntimeState(&runtimePlan{})
 
-	publication := rt.depGraph.Add(&Action{
+	publication := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
@@ -340,8 +340,8 @@ func TestRunPublicationDrainStage_TerminatesWhenPublicationRetryPersistenceFails
 	require.Error(t, err)
 	require.ErrorContains(t, err, "record retry_work")
 	assert.Empty(t, outbox)
-	assert.Empty(t, rt.heldByKey)
-	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "publication failure must terminate instead of pretending the unresolved node was handled")
+	assert.Empty(t, rt.retries.heldByKey)
+	assert.Equal(t, 1, rt.sched.graph.InFlightCount(), "publication failure must terminate instead of pretending the unresolved node was handled")
 }
 
 func TestWatchRuntime_HandleWatchSkippedSignal_ShutdownCancellationIsNonFatal(t *testing.T) {
@@ -372,7 +372,7 @@ func TestWatchRuntime_HandleWatchHeldRelease_CompletesReleasedConcreteActionsOnR
 
 	rt.initializeRuntimeState(&runtimePlan{})
 
-	concrete := rt.depGraph.Add(&Action{
+	concrete := rt.sched.graph.Add(&Action{
 		Type: ActionUpload,
 		Path: "retry.txt",
 		View: &pathView{Path: "retry.txt"},
@@ -380,7 +380,7 @@ func TestWatchRuntime_HandleWatchHeldRelease_CompletesReleasedConcreteActionsOnR
 	require.NotNil(t, concrete)
 	rt.holdAction(concrete, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
 
-	publication := rt.depGraph.Add(&Action{
+	publication := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
@@ -394,10 +394,10 @@ func TestWatchRuntime_HandleWatchHeldRelease_CompletesReleasedConcreteActionsOnR
 	err := rt.handleWatchHeldRelease(ctx, &watchPipeline{bl: &Baseline{}}, false)
 	require.ErrorContains(t, err, "reading observation state for action freshness")
 	assert.Empty(t, rt.currentOutbox(), "released frontier should be shutdown-completed when reduction fails")
-	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "only the publication action should remain unresolved on fail-closed termination")
+	assert.Equal(t, 1, rt.sched.graph.InFlightCount(), "only the publication action should remain unresolved on fail-closed termination")
 
-	_, concretePresent := rt.depGraph.Get(1)
+	_, concretePresent := rt.sched.graph.Get(1)
 	assert.False(t, concretePresent)
-	_, publicationPresent := rt.depGraph.Get(2)
+	_, publicationPresent := rt.sched.graph.Get(2)
 	assert.True(t, publicationPresent)
 }

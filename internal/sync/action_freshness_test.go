@@ -368,9 +368,9 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 	}}, "delta-1", remoteDriveID))
 
 	flow.initializeRuntimeState(&runtimePlan{})
-	flow.depGraph = newDepGraph(eng.logger)
+	flow.sched.graph = newDepGraph(eng.logger)
 
-	root := flow.depGraph.Add(&Action{
+	root := flow.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "download.txt",
 		ItemID:  "remote-1",
@@ -389,7 +389,7 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	child := flow.depGraph.Add(&Action{
+	child := flow.sched.graph.Add(&Action{
 		Type: ActionUpload,
 		Path: "dependent.txt",
 		View: &pathView{Path: "dependent.txt"},
@@ -399,7 +399,7 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 	outbox, err := flow.admitReady(ctx, []*trackedAction{root})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
-	assert.Equal(t, 0, flow.depGraph.InFlightCount())
+	assert.Equal(t, 0, flow.sched.graph.InFlightCount())
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
 	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
 	assert.Equal(t, 1, eng.collector().Snapshot().SupersededEngineAdmissionCount)

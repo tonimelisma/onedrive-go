@@ -6,18 +6,18 @@ import (
 )
 
 func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
-	flow.retryRowsByKey = make(map[RetryWorkKey]RetryWorkRow, len(runtime.RetryRows))
+	flow.retries.rowsByKey = make(map[RetryWorkKey]RetryWorkRow, len(runtime.RetryRows))
 	for i := range runtime.RetryRows {
 		row := runtime.RetryRows[i]
-		flow.retryRowsByKey[row.WorkKey()] = row
+		flow.retries.rowsByKey[row.WorkKey()] = row
 	}
 
-	flow.heldByKey = make(map[RetryWorkKey]*heldAction)
-	flow.heldScopeOrder = make(map[ScopeKey][]RetryWorkKey)
-	flow.queuedByID = make(map[int64]struct{})
-	flow.runningByID = make(map[int64]struct{})
-	flow.runningCount = 0
-	flow.nextHeldOrder = 0
+	flow.retries.heldByKey = make(map[RetryWorkKey]*heldAction)
+	flow.retries.heldByScope = make(map[ScopeKey][]RetryWorkKey)
+	flow.sched.queuedByID = make(map[int64]struct{})
+	flow.sched.runningByID = make(map[int64]struct{})
+	flow.sched.runningCount = 0
+	flow.retries.nextHeldOrder = 0
 
 	activeScopes := make([]activeScope, 0, len(runtime.BlockScopes))
 	for i := range runtime.BlockScopes {
@@ -26,42 +26,10 @@ func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
 		}
 		activeScopes = append(activeScopes, activeScopeFromBlockScopeRow(runtime.BlockScopes[i]))
 	}
-	flow.replaceActiveScopes(activeScopes)
-	if flow.scopeState == nil {
-		flow.scopeState = newScopeState(flow.engine.nowFunc, flow.deps.logger)
+	flow.scopes.replaceActiveScopes(activeScopes)
+	if flow.scopes.state == nil {
+		flow.scopes.state = newScopeState(flow.engine.nowFunc, flow.deps.logger)
 	}
-}
-
-func (flow *engineFlow) markQueued(ta *trackedAction) {
-	if ta == nil {
-		return
-	}
-	flow.queuedByID[ta.ID] = struct{}{}
-}
-
-func (flow *engineFlow) markRunning(ta *trackedAction) {
-	if ta == nil {
-		return
-	}
-	delete(flow.queuedByID, ta.ID)
-	if _, ok := flow.runningByID[ta.ID]; ok {
-		return
-	}
-	flow.runningByID[ta.ID] = struct{}{}
-	flow.runningCount++
-}
-
-func (flow *engineFlow) markFinished(ta *trackedAction) {
-	if ta == nil {
-		return
-	}
-	if _, ok := flow.runningByID[ta.ID]; ok {
-		delete(flow.runningByID, ta.ID)
-		if flow.runningCount > 0 {
-			flow.runningCount--
-		}
-	}
-	delete(flow.queuedByID, ta.ID)
 }
 
 func (flow *engineFlow) holdAction(ta *trackedAction, reason heldReason, scopeKey ScopeKey, nextRetry time.Time) {
@@ -69,49 +37,24 @@ func (flow *engineFlow) holdAction(ta *trackedAction, reason heldReason, scopeKe
 		return
 	}
 
-	flow.markFinished(ta)
+	flow.sched.markFinished(ta)
 	key := retryWorkKeyForAction(&ta.Action)
-	flow.nextHeldOrder++
+	flow.retries.nextHeldOrder++
 	held := &heldAction{
 		Tracked:   ta,
 		Reason:    reason,
 		ScopeKey:  scopeKey,
 		NextRetry: nextRetry,
-		HeldOrder: flow.nextHeldOrder,
+		HeldOrder: flow.retries.nextHeldOrder,
 	}
-	flow.heldByKey[key] = held
+	flow.retries.heldByKey[key] = held
 	if !scopeKey.IsZero() {
-		flow.heldScopeOrder[scopeKey] = append(flow.heldScopeOrder[scopeKey], key)
+		flow.retries.heldByScope[scopeKey] = append(flow.retries.heldByScope[scopeKey], key)
 	}
-}
-
-func (flow *engineFlow) releaseHeldAction(key RetryWorkKey) *trackedAction {
-	held, ok := flow.heldByKey[key]
-	if !ok || held == nil {
-		return nil
-	}
-
-	delete(flow.heldByKey, key)
-	if !held.ScopeKey.IsZero() {
-		keys := flow.heldScopeOrder[held.ScopeKey]
-		filtered := keys[:0]
-		for _, existing := range keys {
-			if existing != key {
-				filtered = append(filtered, existing)
-			}
-		}
-		if len(filtered) == 0 {
-			delete(flow.heldScopeOrder, held.ScopeKey)
-		} else {
-			flow.heldScopeOrder[held.ScopeKey] = filtered
-		}
-	}
-
-	return held.Tracked
 }
 
 func (flow *engineFlow) hasDueHeldWork(now time.Time) bool {
-	for _, held := range flow.heldByKey {
+	for _, held := range flow.retries.heldByKey {
 		if held == nil {
 			continue
 		}
@@ -120,11 +63,11 @@ func (flow *engineFlow) hasDueHeldWork(now time.Time) bool {
 		}
 	}
 
-	for _, scope := range flow.snapshotActiveScopes() {
+	for _, scope := range flow.scopes.snapshotActiveScopes() {
 		if scope.NextTrialAt.After(now) {
 			continue
 		}
-		if len(flow.heldScopeOrder[scope.Key]) > 0 {
+		if len(flow.retries.heldByScope[scope.Key]) > 0 {
 			return true
 		}
 	}
@@ -134,15 +77,15 @@ func (flow *engineFlow) hasDueHeldWork(now time.Time) bool {
 
 func (flow *engineFlow) dueRetryKeys(now time.Time) []RetryWorkKey {
 	keys := make([]RetryWorkKey, 0)
-	for key, held := range flow.heldByKey {
+	for key, held := range flow.retries.heldByKey {
 		if held == nil || held.Reason != heldReasonRetry || held.NextRetry.After(now) {
 			continue
 		}
 		keys = append(keys, key)
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		left := flow.heldByKey[keys[i]]
-		right := flow.heldByKey[keys[j]]
+		left := flow.retries.heldByKey[keys[i]]
+		right := flow.retries.heldByKey[keys[j]]
 		if left == nil || right == nil {
 			return keys[i].Path < keys[j].Path
 		}
@@ -155,7 +98,7 @@ func (flow *engineFlow) dueRetryKeys(now time.Time) []RetryWorkKey {
 }
 
 func (flow *engineFlow) dueTrialKeys(now time.Time) []RetryWorkKey {
-	activeScopes := flow.snapshotActiveScopes()
+	activeScopes := flow.scopes.snapshotActiveScopes()
 	sort.Slice(activeScopes, func(i, j int) bool {
 		if !activeScopes[i].NextTrialAt.Equal(activeScopes[j].NextTrialAt) {
 			return activeScopes[i].NextTrialAt.Before(activeScopes[j].NextTrialAt)
@@ -168,8 +111,8 @@ func (flow *engineFlow) dueTrialKeys(now time.Time) []RetryWorkKey {
 		if scope.NextTrialAt.After(now) {
 			continue
 		}
-		for _, key := range flow.heldScopeOrder[scope.Key] {
-			if held := flow.heldByKey[key]; held != nil && held.Reason == heldReasonScope {
+		for _, key := range flow.retries.heldByScope[scope.Key] {
+			if held := flow.retries.heldByKey[key]; held != nil && held.Reason == heldReasonScope {
 				keys = append(keys, key)
 				break
 			}
@@ -180,74 +123,21 @@ func (flow *engineFlow) dueTrialKeys(now time.Time) []RetryWorkKey {
 }
 
 func (flow *engineFlow) releaseHeldScope(scopeKey ScopeKey) {
-	keys := append([]RetryWorkKey(nil), flow.heldScopeOrder[scopeKey]...)
+	keys := append([]RetryWorkKey(nil), flow.retries.heldByScope[scopeKey]...)
 	now := flow.deps.now()
 	for _, key := range keys {
-		held := flow.heldByKey[key]
+		held := flow.retries.heldByKey[key]
 		if held == nil || held.Reason != heldReasonScope {
 			continue
 		}
-		if row, ok := flow.retryRowsByKey[key]; ok && row.Blocked && row.ScopeKey == scopeKey {
+		if row, ok := flow.retries.rowsByKey[key]; ok && row.Blocked && row.ScopeKey == scopeKey {
 			row.Blocked = false
 			row.NextRetryAt = now.UnixNano()
-			flow.retryRowsByKey[key] = row
+			flow.retries.rowsByKey[key] = row
 		}
 		held.Reason = heldReasonRetry
 		held.ScopeKey = ScopeKey{}
 		held.NextRetry = now
 	}
-	delete(flow.heldScopeOrder, scopeKey)
-}
-
-func (flow *engineFlow) replaceActiveScopes(blocks []activeScope) {
-	flow.activeScopesMu.Lock()
-	defer flow.activeScopesMu.Unlock()
-
-	flow.activeScopes = flow.activeScopes[:0]
-	flow.activeScopes = append(flow.activeScopes, blocks...)
-}
-
-func (flow *engineFlow) upsertActiveScope(block *activeScope) {
-	flow.activeScopesMu.Lock()
-	defer flow.activeScopesMu.Unlock()
-
-	flow.activeScopes = upsertScope(flow.activeScopes, block)
-}
-
-func (flow *engineFlow) removeActiveScope(key ScopeKey) {
-	flow.activeScopesMu.Lock()
-	defer flow.activeScopesMu.Unlock()
-
-	flow.activeScopes = removeScope(flow.activeScopes, key)
-}
-
-func (flow *engineFlow) lookupActiveScope(key ScopeKey) (activeScope, bool) {
-	flow.activeScopesMu.RLock()
-	defer flow.activeScopesMu.RUnlock()
-
-	return lookupScope(flow.activeScopes, key)
-}
-
-func (flow *engineFlow) hasActiveScope(key ScopeKey) bool {
-	flow.activeScopesMu.RLock()
-	defer flow.activeScopesMu.RUnlock()
-
-	return hasScope(flow.activeScopes, key)
-}
-
-func (flow *engineFlow) findBlockingScope(ta *trackedAction) ScopeKey {
-	flow.activeScopesMu.RLock()
-	defer flow.activeScopesMu.RUnlock()
-
-	return findBlockingScope(flow.activeScopes, ta)
-}
-
-func (flow *engineFlow) snapshotActiveScopes() []activeScope {
-	flow.activeScopesMu.RLock()
-	defer flow.activeScopesMu.RUnlock()
-
-	blocks := make([]activeScope, len(flow.activeScopes))
-	copy(blocks, flow.activeScopes)
-
-	return blocks
+	delete(flow.retries.heldByScope, scopeKey)
 }

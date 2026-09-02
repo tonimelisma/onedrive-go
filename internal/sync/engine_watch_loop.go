@@ -257,7 +257,7 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 func (rt *watchRuntime) handleWatchDispatch(nextAction *trackedAction) {
 	postReplanDispatch := rt.loop.postReplanOutbox
 	rt.loop.postReplanOutbox = false
-	rt.markRunning(nextAction)
+	rt.sched.markRunning(nextAction)
 	rt.consumeOutboxHead()
 	if postReplanDispatch {
 		rt.emitRuntimeDebugEvent(engineDebugEventFirstPostReplanDispatch, "", 0, time.Time{})
@@ -495,7 +495,7 @@ func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *trackedAction, *trac
 		return nil, nil
 	}
 
-	return rt.dispatchCh, nextAction
+	return rt.sched.dispatchCh, nextAction
 }
 
 func firstOutbox(outbox []*trackedAction) *trackedAction {
@@ -594,14 +594,14 @@ func (rt *watchRuntime) handleWatchHeldRelease(
 
 func (rt *watchRuntime) logBootstrapWait() {
 	rt.deps.logger.Info("bootstrap: waiting for in-flight actions",
-		slog.Int("in_flight", rt.depGraph.InFlightCount()),
-		slog.Int("running", rt.runningCount),
-		slog.Int("held", len(rt.heldByKey)),
+		slog.Int("in_flight", rt.sched.graph.InFlightCount()),
+		slog.Int("running", rt.sched.runningCount),
+		slog.Int("held", len(rt.retries.heldByKey)),
 	)
 }
 
 func (rt *watchRuntime) isBootstrapQuiescent() bool {
 	return len(rt.currentOutbox()) == 0 &&
-		rt.runningCount == 0 &&
+		rt.sched.runningCount == 0 &&
 		!rt.hasDueHeldWork(rt.deps.now())
 }

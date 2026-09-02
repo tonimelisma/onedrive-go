@@ -30,7 +30,7 @@ func (f *engineFlow) completeTrackedActionAsShutdown(ta *trackedAction) {
 		return
 	}
 
-	f.markFinished(ta)
+	f.sched.markFinished(ta)
 	ready := f.completeDepGraphAction(ta.ID, "completeTrackedActionAsShutdown")
 	f.completeSubtree(ready)
 }

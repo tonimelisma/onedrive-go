@@ -14,7 +14,7 @@ func TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly(t *testing.T) {
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	ta := rt.depGraph.Add(&Action{
+	ta := rt.sched.graph.Add(&Action{
 		Type: ActionUpload,
 		Path: "retry.txt",
 		View: &pathView{Path: "retry.txt"},
@@ -28,7 +28,7 @@ func TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly(t *testing.T) {
 	require.Len(t, outbox, 1)
 	assert.Equal(t, "retry.txt", outbox[0].Action.Path)
 	assert.False(t, outbox[0].IsTrial)
-	assert.Empty(t, rt.heldByKey)
+	assert.Empty(t, rt.retries.heldByKey)
 }
 
 // Validates: R-2.10.33
@@ -69,12 +69,12 @@ func TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial(t *testi
 		TrialInterval: 10 * time.Second,
 	})
 
-	first := rt.depGraph.Add(&Action{
+	first := rt.sched.graph.Add(&Action{
 		Type: ActionUpload,
 		Path: "first.txt",
 		View: &pathView{Path: "first.txt"},
 	}, 1, nil)
-	second := rt.depGraph.Add(&Action{
+	second := rt.sched.graph.Add(&Action{
 		Type: ActionDownload,
 		Path: "second.txt",
 		View: &pathView{Path: "second.txt"},
@@ -92,8 +92,8 @@ func TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial(t *testi
 	assert.True(t, outbox[0].IsTrial)
 	assert.Equal(t, scopeKey, outbox[0].TrialScopeKey)
 
-	require.Len(t, rt.heldByKey, 1)
-	assert.Contains(t, rt.heldByKey, retryWorkKeyForAction(&second.Action))
+	require.Len(t, rt.retries.heldByKey, 1)
+	assert.Contains(t, rt.retries.heldByKey, retryWorkKeyForAction(&second.Action))
 }
 
 // Validates: R-2.10.5

@@ -29,11 +29,11 @@ func newBootstrapWatchPipelineForTest(
 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.scopeState = newScopeState(eng.nowFunc, eng.logger)
+	rt.scopes.state = newScopeState(eng.nowFunc, eng.logger)
 	bl, err := rt.runStartupStage(ctx)
 	require.NoError(t, err)
 
-	pool := newWorkerPool(eng.execCfg, rt.dispatchCh, eng.baseline, eng.logger, 1024)
+	pool := newWorkerPool(eng.execCfg, rt.sched.dispatchCh, eng.baseline, eng.logger, 1024)
 	pool.Start(ctx, workers)
 	t.Cleanup(pool.Stop)
 
@@ -397,7 +397,7 @@ func TestWaitForQuiescence_ContextCancel(t *testing.T) {
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	rt.depGraph.Add(&Action{
+	rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "stuck.txt",
 		DriveID: driveid.New(engineTestDriveID),
@@ -461,7 +461,7 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(syncRoot, "newfile.txt"))
 	require.NoError(t, statErr, "newfile.txt should have been downloaded")
 
-	assert.Equal(t, 0, testWatchRuntime(t, eng).depGraph.InFlightCount())
+	assert.Equal(t, 0, testWatchRuntime(t, eng).sched.graph.InFlightCount())
 }
 
 // Validates: R-2.5.1
@@ -529,7 +529,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 		NextTrialAt:   eng.nowFunc().Add(30 * time.Millisecond),
 	})
 
-	ta := rt.depGraph.Add(&Action{
+	ta := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    "trial.txt",
 		DriveID: driveid.New(engineTestDriveID),
@@ -593,7 +593,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	})
 	_, err := eng.baseline.RecordBlockedRetryWork(ctx, testRetryWorkKey(blockedPath, "", ActionDownload), testThrottleScope())
 	require.NoError(t, err)
-	blocked := rt.depGraph.Add(&Action{
+	blocked := rt.sched.graph.Add(&Action{
 		Type:    ActionDownload,
 		Path:    blockedPath,
 		DriveID: driveID,
@@ -612,7 +612,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	require.NotNil(t, blocked)
 	rt.holdAction(blocked, heldReasonScope, testThrottleScope(), time.Time{})
 
-	ta := rt.depGraph.Add(&Action{
+	ta := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "trial.txt",
 		DriveID: driveID,
@@ -636,7 +636,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	assert.False(t, isTestBlockScopeed(eng, testThrottleScope()),
 		"trial success should clear the block scope")
 
-	retried := readReadyAction(t, rt.dispatchCh)
+	retried := readReadyAction(t, rt.sched.dispatchCh)
 	require.Equal(t, blockedPath, retried.Action.Path,
 		"trial success should re-dispatch blocked retry work without external observation")
 	assert.Equal(t, ActionDownload, retried.Action.Type)
@@ -692,7 +692,7 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	parent := rt.depGraph.Add(&Action{
+	parent := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "parent.txt",
 		DriveID: driveID,
@@ -700,7 +700,7 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}, 1, nil)
 	require.NotNil(t, parent)
 
-	child := rt.depGraph.Add(&Action{
+	child := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
 		Path:    "child.txt",
 		DriveID: driveID,
@@ -708,8 +708,8 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}, 2, []int64{1})
 	require.Nil(t, child)
 
-	rt.dispatchCh <- parent
-	readReady(t, rt.dispatchCh)
+	rt.sched.dispatchCh <- parent
+	readReady(t, rt.sched.dispatchCh)
 
 	results <- actionCompletion{
 		ActionID:   1,
@@ -728,7 +728,7 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}, "block scope activated from action completion")
 
 	select {
-	case ta := <-rt.dispatchCh:
+	case ta := <-rt.sched.dispatchCh:
 		require.Failf(t, "dependent dispatched early", "unexpected path %s", ta.Action.Path)
 	default:
 	}

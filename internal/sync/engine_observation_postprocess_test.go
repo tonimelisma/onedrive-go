@@ -433,13 +433,13 @@ func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationR
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	}
-	rt.upsertActiveScope(serviceScope)
+	rt.scopes.upsertActiveScope(serviceScope)
 
 	batch := buildPrimaryWatchBatch(eng.Engine, nil, "")
 	batch.findings = rootRemoteReadDeniedObservationFindingsBatch(eng.driveID)
 	require.NoError(t, rt.handleRemoteObservationBatch(ctx, &batch))
 
-	activeScopes := rt.snapshotActiveScopes()
+	activeScopes := rt.scopes.snapshotActiveScopes()
 	require.Len(t, activeScopes, 1)
 	assert.Equal(t, SKService(), activeScopes[0].Key)
 

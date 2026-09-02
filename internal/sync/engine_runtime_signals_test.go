@@ -86,7 +86,7 @@ func TestEngineFlow_ReleaseScope_ReportsThroughRuntimeSignals(t *testing.T) {
 
 	assert.Equal(t, 1, rec.kick, "release must ask the runtime to release due held work")
 	assert.Equal(t, 1, rec.trial, "release must ask the runtime to rearm the trial timer")
-	assert.False(t, flow.hasActiveScope(key))
+	assert.False(t, flow.scopes.hasActiveScope(key))
 }
 
 // markReplanNeeded must tolerate a watch runtime whose dirty buffer has not
