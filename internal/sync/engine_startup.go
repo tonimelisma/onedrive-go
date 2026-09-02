@@ -9,7 +9,6 @@ import (
 // one-shot and watch before they diverge into their own runtime shells.
 func (flow *engineFlow) runStartupStage(
 	ctx context.Context,
-	watch *watchRuntime,
 ) (*Baseline, error) {
 	eng := flow.engine
 
@@ -23,7 +22,7 @@ func (flow *engineFlow) runStartupStage(
 		return nil, proofErr
 	}
 
-	normalizeErr := flow.normalizePersistedScopes(ctx, watch)
+	normalizeErr := flow.normalizePersistedScopes(ctx)
 	if normalizeErr != nil {
 		return nil, fmt.Errorf("sync: normalizing persisted scopes: %w", normalizeErr)
 	}

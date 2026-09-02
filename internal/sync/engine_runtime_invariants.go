@@ -11,83 +11,80 @@ func (flow *engineFlow) invariantChecksEnabled() bool {
 	return flow.engine.assertInvariants
 }
 
-func (flow *engineFlow) mustAssertInvariants(ctx context.Context, watch *watchRuntime, stage string) {
+func (flow *engineFlow) mustAssertInvariants(ctx context.Context, stage string) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
-	if err := flow.assertCurrentInvariants(ctx, watch); err != nil {
+	if err := flow.assertCurrentInvariants(ctx); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
 
-func (flow *engineFlow) mustAssertReleasedScope(ctx context.Context, watch *watchRuntime, key ScopeKey, stage string) {
+func (flow *engineFlow) mustAssertReleasedScope(ctx context.Context, key ScopeKey, stage string) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
-	if err := flow.assertReleasedScope(context.WithoutCancel(ctx), watch, key); err != nil {
+	if err := flow.assertReleasedScope(context.WithoutCancel(ctx), key); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
 
-func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, watch *watchRuntime, key ScopeKey, stage string) {
+func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, key ScopeKey, stage string) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
-	if err := flow.assertDiscardedScope(context.WithoutCancel(ctx), watch, key); err != nil {
+	if err := flow.assertDiscardedScope(context.WithoutCancel(ctx), key); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
 
 func (flow *engineFlow) mustAssertDispatchAdmissionSealed(
-	watch *watchRuntime,
 	outbox []*trackedAction,
 	stage string,
 ) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
-	if err := flow.assertDispatchAdmissionSealed(watch, outbox); err != nil {
+	if err := flow.assertDispatchAdmissionSealed(outbox); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
 
 func (flow *engineFlow) mustAssertHeldReleaseAllowed(
-	watch *watchRuntime,
 	release string,
 	stage string,
 ) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
-	if err := flow.assertHeldReleaseAllowed(watch, release); err != nil {
+	if err := flow.assertHeldReleaseAllowed(release); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
 
-func (flow *engineFlow) mustAssertRefreshBookkeepingCleared(watch *watchRuntime, stage string) {
+func (flow *engineFlow) mustAssertRefreshBookkeepingCleared(stage string) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
-	if err := flow.assertRefreshBookkeepingCleared(watch); err != nil {
+	if err := flow.assertRefreshBookkeepingCleared(); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
 
 func (flow *engineFlow) mustAssertObserverExitPhase(
-	watch *watchRuntime,
 	shuttingDown bool,
 	stage string,
 ) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
-	if err := flow.assertObserverExitPhase(watch, shuttingDown); err != nil {
+	if err := flow.assertObserverExitPhase(shuttingDown); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
 
-func (flow *engineFlow) assertCurrentInvariants(ctx context.Context, watch *watchRuntime) error {
-	if err := flow.assertWatchRuntimeInvariants(watch); err != nil {
+func (flow *engineFlow) assertCurrentInvariants(ctx context.Context) error {
+	if err := flow.assertWatchRuntimeInvariants(); err != nil {
 		return err
 	}
 
@@ -104,9 +101,9 @@ func (flow *engineFlow) assertCurrentInvariants(ctx context.Context, watch *watc
 	return flow.assertPersistedInvariants(context.WithoutCancel(ctx))
 }
 
-func (flow *engineFlow) assertWatchRuntimeInvariants(watch *watchRuntime) error {
-	if watch != nil {
-		activeScopes := watch.snapshotActiveScopes()
+func (flow *engineFlow) assertWatchRuntimeInvariants() error {
+	{
+		activeScopes := flow.snapshotActiveScopes()
 		seen := make(map[ScopeKey]struct{}, len(activeScopes))
 		for i := range activeScopes {
 			key := activeScopes[i].Key
@@ -117,11 +114,11 @@ func (flow *engineFlow) assertWatchRuntimeInvariants(watch *watchRuntime) error 
 		}
 	}
 
-	if watch != nil && watch.phase() == watchRuntimePhaseDraining {
-		if watch.hasRetryTimer() {
+	if flow.inspect.phase() == watchRuntimePhaseDraining {
+		if flow.inspect.hasRetryTimer() {
 			return fmt.Errorf("draining runtime still has retry timer armed")
 		}
-		if watch.hasTrialTimer() {
+		if flow.inspect.hasTrialTimer() {
 			return fmt.Errorf("draining runtime still has trial timer armed")
 		}
 	}
@@ -130,26 +127,25 @@ func (flow *engineFlow) assertWatchRuntimeInvariants(watch *watchRuntime) error 
 }
 
 func (flow *engineFlow) assertDispatchAdmissionSealed(
-	watch *watchRuntime,
 	outbox []*trackedAction,
 ) error {
-	if watch == nil || !watch.isDraining() || len(outbox) == 0 {
+	if !flow.inspect.isDraining() || len(outbox) == 0 {
 		return nil
 	}
 
 	return fmt.Errorf("draining runtime must not attempt to admit %d queued actions", len(outbox))
 }
 
-func (flow *engineFlow) assertHeldReleaseAllowed(watch *watchRuntime, release string) error {
-	if watch == nil || !watch.isDraining() {
+func (flow *engineFlow) assertHeldReleaseAllowed(release string) error {
+	if !flow.inspect.isDraining() {
 		return nil
 	}
 
 	return fmt.Errorf("%s must not start after drain begins", release)
 }
 
-func (flow *engineFlow) assertRefreshBookkeepingCleared(watch *watchRuntime) error {
-	if watch == nil || !watch.refreshActive {
+func (flow *engineFlow) assertRefreshBookkeepingCleared() error {
+	if !flow.inspect.hasActiveRefresh() {
 		return nil
 	}
 
@@ -157,10 +153,9 @@ func (flow *engineFlow) assertRefreshBookkeepingCleared(watch *watchRuntime) err
 }
 
 func (flow *engineFlow) assertObserverExitPhase(
-	watch *watchRuntime,
 	shuttingDown bool,
 ) error {
-	if watch == nil || shuttingDown || !watch.isDraining() {
+	if shuttingDown || !flow.inspect.isDraining() {
 		return nil
 	}
 
@@ -267,9 +262,7 @@ func (links persistedScopeLinks) hasRelatedRows(key ScopeKey) bool {
 	return links.retryCountByScope[key] > 0
 }
 
-func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {
-	_ = watch
-
+func (flow *engineFlow) assertReleasedScope(ctx context.Context, key ScopeKey) error {
 	if flow.hasActiveScope(key) {
 		return fmt.Errorf("released scope %s still active in runtime state", key.String())
 	}
@@ -297,9 +290,7 @@ func (flow *engineFlow) assertReleasedScope(ctx context.Context, watch *watchRun
 	return nil
 }
 
-func (flow *engineFlow) assertDiscardedScope(ctx context.Context, watch *watchRuntime, key ScopeKey) error {
-	_ = watch
-
+func (flow *engineFlow) assertDiscardedScope(ctx context.Context, key ScopeKey) error {
 	if flow.hasActiveScope(key) {
 		return fmt.Errorf("discarded scope %s still active in runtime state", key.String())
 	}

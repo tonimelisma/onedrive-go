@@ -43,7 +43,7 @@ func TestStartRuntimeStage_ReleasesDueHeldTrialImmediately(t *testing.T) {
 		}},
 	}
 
-	outbox, dispatched, err := flow.startRuntimeStage(ctx, runtime, bl, nil)
+	outbox, dispatched, err := flow.startRuntimeStage(ctx, runtime, bl)
 	require.NoError(t, err)
 	require.True(t, dispatched)
 	require.Len(t, outbox, 1)

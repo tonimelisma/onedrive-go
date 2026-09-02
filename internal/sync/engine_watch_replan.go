@@ -57,7 +57,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	rt.emitRuntimeDebugEvent(engineDebugEventPlanningFinished, "", 0, planStart)
 
 	installStart := rt.engine.nowFunc()
-	dispatch, _, err := rt.startRuntimeStage(ctx, runtime, p.bl, rt)
+	dispatch, _, err := rt.startRuntimeStage(ctx, runtime, p.bl)
 	rt.recordReplanWorkerIdle(perf.ReplanIdlePhaseRuntimeInstall, installStart, rt.totalWorkers())
 	if err != nil {
 		return false, rt.finishSteadyStateReplanStep(ctx, "start_runtime", err)

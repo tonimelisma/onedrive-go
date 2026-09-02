@@ -74,7 +74,7 @@ func TestPermissionApply_ActivateTimedRemoteWriteScope_PersistsRetryWorkAndScope
 	flow := testEngineFlow(t, eng)
 	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
-	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), nil, nil, &actionCompletion{
+	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), nil, &actionCompletion{
 		Path:       "Shared/Docs/file.txt",
 		ActionType: ActionUpload,
 	}, permissionEvidence{
@@ -104,7 +104,7 @@ func TestPermissionApply_ReadBoundaryScope_DoesNotPersistBlockScopeRow(t *testin
 	flow := testEngineFlow(t, eng)
 	scopeKey := sKPermLocalRead("Private")
 
-	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), nil, nil, &actionCompletion{
+	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), nil, &actionCompletion{
 		Path:       "Private/file.txt",
 		ActionType: ActionDownload,
 	}, permissionEvidence{
@@ -141,7 +141,7 @@ func TestPermissionApply_KnownActiveBoundary_DoesNotPersistOrArmRetryTimer(t *te
 		NextTrialAt:   time.Unix(61, 0),
 	}))
 
-	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), rt, nil, &actionCompletion{
+	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), nil, &actionCompletion{
 		Path:       "Shared/Docs/file.txt",
 		ActionType: ActionUpload,
 	}, permissionEvidence{

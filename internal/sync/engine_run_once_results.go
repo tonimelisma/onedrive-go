@@ -112,7 +112,7 @@ func (r *oneShotRunner) releaseIdleDueHeldWork(
 		return nil, nil, false
 	}
 
-	outbox, err := r.reduceReadyFrontierStage(ctx, nil, bl, nil)
+	outbox, err := r.reduceReadyFrontierStage(ctx, bl, nil)
 	if err != nil {
 		r.completeOutboxAsShutdown(outbox)
 		return nil, err, true
@@ -159,7 +159,7 @@ func (r *oneShotRunner) handleOneShotCompletion(
 		return outbox, fatalErr
 	}
 
-	ready, completionErr := r.applyRuntimeCompletionStage(ctx, nil, completion, bl)
+	ready, completionErr := r.applyRuntimeCompletionStage(ctx, completion, bl)
 	if completionErr == nil {
 		return append(outbox, ready...), nil
 	} else {

@@ -68,10 +68,9 @@ func (flow *engineFlow) trackedActionForCompletion(r *actionCompletion) *tracked
 
 func (flow *engineFlow) admitReadyAfterSuccessfulAction(
 	ctx context.Context,
-	watch *watchRuntime,
 	actionID int64,
 	reason string,
 ) ([]*trackedAction, error) {
 	ready := flow.completeDepGraphAction(actionID, reason)
-	return flow.admitReady(ctx, watch, ready)
+	return flow.admitReady(ctx, ready)
 }

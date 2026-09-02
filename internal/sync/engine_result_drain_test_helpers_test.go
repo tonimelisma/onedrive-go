@@ -124,7 +124,7 @@ func appendDrainOutcome(
 	outbox []*trackedAction,
 	workerResult *actionCompletion,
 ) ([]*trackedAction, bool) {
-	ready, completionErr := rt.applyRuntimeCompletionStage(ctx, rt, workerResult, bl)
+	ready, completionErr := rt.applyRuntimeCompletionStage(ctx, workerResult, bl)
 	if completionErr != nil {
 		return outbox, true
 	}

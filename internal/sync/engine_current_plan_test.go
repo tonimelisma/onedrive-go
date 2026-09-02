@@ -245,12 +245,12 @@ func TestRunStartupStage_OneShotAndWatchShareStartupNormalization(t *testing.T) 
 		NextTrialAt:   watchEng.nowFunc().Add(time.Minute),
 	}))
 
-	oneShotBaseline, err := newOneShotRunner(oneShotEng.Engine).runStartupStage(ctx, nil)
+	oneShotBaseline, err := newOneShotRunner(oneShotEng.Engine).runStartupStage(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, oneShotBaseline)
 
 	setupWatchEngine(t, watchEng)
-	watchBaseline, err := testWatchRuntime(t, watchEng).runStartupStage(ctx, testWatchRuntime(t, watchEng))
+	watchBaseline, err := testWatchRuntime(t, watchEng).runStartupStage(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, watchBaseline)
 
@@ -332,7 +332,7 @@ func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
-	bl, err := rt.runStartupStage(ctx, rt)
+	bl, err := rt.runStartupStage(ctx)
 	require.NoError(t, err)
 	var closeStore sync.Once
 	attachDebugEventRecorderWithHook(eng, func(event engineDebugEvent) {

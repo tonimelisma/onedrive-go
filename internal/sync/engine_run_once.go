@@ -103,7 +103,7 @@ func (e *Engine) runRunOnceStartup(
 	ctx context.Context,
 	runner *oneShotRunner,
 ) (*Baseline, error) {
-	return runner.runStartupStage(ctx, nil)
+	return runner.runStartupStage(ctx)
 }
 
 func (r *oneShotRunner) executePreparedPlan(
@@ -178,7 +178,7 @@ func (r *oneShotRunner) dispatchInitialReadyActions(
 	runtime *runtimePlan,
 	report *Report,
 ) ([]*trackedAction, bool, error) {
-	initialOutbox, dispatched, err := r.startRuntimeStage(ctx, runtime, bl, nil)
+	initialOutbox, dispatched, err := r.startRuntimeStage(ctx, runtime, bl)
 	if err != nil {
 		report.Succeeded, report.Failed, report.Errors = r.resultStats()
 		report.Errors = append(report.Errors, err)

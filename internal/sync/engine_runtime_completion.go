@@ -22,7 +22,6 @@ func (flow *engineFlow) failAfterControlStateError(current *trackedAction, err e
 // then release any due held work back into the ready frontier.
 func (flow *engineFlow) applyRuntimeCompletionStage(
 	ctx context.Context,
-	watch *watchRuntime,
 	r *actionCompletion,
 	bl *Baseline,
 ) ([]*trackedAction, error) {
@@ -38,26 +37,25 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 		err        error
 	)
 	if r.IsTrial && !r.TrialScopeKey.IsZero() {
-		dispatched, err = flow.applyTrialCompletionDecision(ctx, watch, r.TrialScopeKey, &decision, current, r, bl)
+		dispatched, err = flow.applyTrialCompletionDecision(ctx, r.TrialScopeKey, &decision, current, r, bl)
 	} else {
-		dispatched, err = flow.applyNormalCompletionDecision(ctx, watch, &decision, current, r, bl)
+		dispatched, err = flow.applyNormalCompletionDecision(ctx, &decision, current, r, bl)
 	}
 	if err != nil {
 		return dispatched, err
 	}
 
-	return flow.reduceReadyFrontierStage(ctx, watch, bl, dispatched)
+	return flow.reduceReadyFrontierStage(ctx, bl, dispatched)
 }
 
 func (flow *engineFlow) applyNormalCompletionDecision(
 	ctx context.Context,
-	watch *watchRuntime,
 	decision *resultDecision,
 	current *trackedAction,
 	r *actionCompletion,
 	bl *Baseline,
 ) ([]*trackedAction, error) {
-	if handled, err := flow.maybeHandlePermissionFailure(ctx, watch, decision, current, r, bl); handled {
+	if handled, err := flow.maybeHandlePermissionFailure(ctx, decision, current, r, bl); handled {
 		return nil, err
 	}
 
@@ -69,7 +67,7 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 		flow.markFinished(current)
 		return nil, fmt.Errorf("classify action completion: invalid failure class")
 	case errclass.ClassSuccess:
-		dispatched, err := flow.applyCompletionSuccess(ctx, watch, current, r)
+		dispatched, err := flow.applyCompletionSuccess(ctx, current, r)
 		if err != nil {
 			return nil, flow.failAfterControlStateError(nil, err)
 		}
@@ -78,17 +76,17 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 		flow.applyCompletedSubtree(current, r.ActionID, "shutdown action completion")
 		return nil, nil
 	case errclass.ClassSuperseded:
-		if err := flow.applySupersededCompletion(ctx, watch, current, r, "superseded action completion"); err != nil {
+		if err := flow.applySupersededCompletion(ctx, current, r, "superseded action completion"); err != nil {
 			return nil, flow.failAfterControlStateError(current, err)
 		}
 		return nil, nil
 	case errclass.ClassFatal:
 		flow.applyCompletedSubtree(current, r.ActionID, "fatal action completion")
-		flow.applyFatalAuthEffects(ctx, watch, r, decision.ConditionKey)
+		flow.applyFatalAuthEffects(ctx, r, decision.ConditionKey)
 		flow.recordError(decision, r)
 		return nil, fatalResultError(r)
 	case errclass.ClassRetryableTransient, errclass.ClassScopeBlockingTransient, errclass.ClassActionable:
-		if err := flow.applyOrdinaryFailureEffects(ctx, watch, current, decision, r); err != nil {
+		if err := flow.applyOrdinaryFailureEffects(ctx, current, decision, r); err != nil {
 			return nil, flow.failAfterControlStateError(current, err)
 		}
 	}
@@ -98,7 +96,6 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 
 func (flow *engineFlow) applyTrialCompletionDecision(
 	ctx context.Context,
-	watch *watchRuntime,
 	trialScopeKey ScopeKey,
 	decision *resultDecision,
 	current *trackedAction,
@@ -106,10 +103,10 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 	bl *Baseline,
 ) ([]*trackedAction, error) {
 	if decision.Class == errclass.ClassSuperseded {
-		if err := flow.applySupersededCompletion(ctx, watch, current, r, "trial superseded action completion"); err != nil {
+		if err := flow.applySupersededCompletion(ctx, current, r, "trial superseded action completion"); err != nil {
 			return nil, flow.failAfterControlStateError(current, err)
 		}
-		if err := flow.rearmOrDiscardScope(ctx, watch, trialScopeKey); err != nil {
+		if err := flow.rearmOrDiscardScope(ctx, trialScopeKey); err != nil {
 			return nil, flow.failAfterControlStateError(nil, err)
 		}
 		return nil, nil
@@ -117,7 +114,7 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 
 	switch evaluateScopeTrialOutcome(trialScopeKey, decision) {
 	case scopeTrialOutcomeRelease:
-		dispatched, err := flow.applyTrialReleaseDecision(ctx, watch, current, r, trialScopeKey)
+		dispatched, err := flow.applyTrialReleaseDecision(ctx, current, r, trialScopeKey)
 		if err != nil {
 			return nil, flow.failAfterControlStateError(current, err)
 		}
@@ -126,20 +123,20 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 		flow.applyCompletedSubtree(current, r.ActionID, "trial shutdown action completion")
 		return nil, nil
 	case scopeTrialOutcomeExtend:
-		if err := flow.applyTrialExtendDecision(ctx, watch, current, r, trialScopeKey); err != nil {
+		if err := flow.applyTrialExtendDecision(ctx, current, r, trialScopeKey); err != nil {
 			return nil, flow.failAfterControlStateError(nil, err)
 		}
 		flow.recordError(decision, r)
 		return nil, nil
 	case scopeTrialOutcomeRearmOrDiscard:
-		if err := flow.applyTrialRearmOrDiscardDecision(ctx, watch, current, decision, r, bl, trialScopeKey); err != nil {
+		if err := flow.applyTrialRearmOrDiscardDecision(ctx, current, decision, r, bl, trialScopeKey); err != nil {
 			return nil, flow.failAfterControlStateError(nil, err)
 		}
 		flow.recordError(decision, r)
 		return nil, nil
 	case scopeTrialOutcomeFatal:
 		flow.applyCompletedSubtree(current, r.ActionID, "trial fatal action completion")
-		flow.applyFatalAuthEffects(ctx, watch, r, decision.ConditionKey)
+		flow.applyFatalAuthEffects(ctx, r, decision.ConditionKey)
 		flow.recordError(decision, r)
 		return nil, fatalResultError(r)
 	}
@@ -149,7 +146,6 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 
 func (flow *engineFlow) applySupersededCompletion(
 	ctx context.Context,
-	watch *watchRuntime,
 	current *trackedAction,
 	r *actionCompletion,
 	depGraphReason string,
@@ -163,25 +159,21 @@ func (flow *engineFlow) applySupersededCompletion(
 		actionID = r.ActionID
 	}
 	flow.applyCompletedSubtree(current, actionID, depGraphReason)
-	if watch != nil && watch.dirtyBuf != nil {
-		watch.dirtyBuf.MarkDirty()
-	}
+	flow.signals.markReplanNeeded()
 
 	return nil
 }
 
 func (flow *engineFlow) applyCompletionSuccess(
 	ctx context.Context,
-	watch *watchRuntime,
 	current *trackedAction,
 	r *actionCompletion,
 ) ([]*trackedAction, error) {
-	return flow.applyTrackedActionSuccess(ctx, watch, current, r, "successful action completion")
+	return flow.applyTrackedActionSuccess(ctx, current, r, "successful action completion")
 }
 
 func (flow *engineFlow) applyTrackedActionSuccess(
 	ctx context.Context,
-	watch *watchRuntime,
 	current *trackedAction,
 	r *actionCompletion,
 	depGraphReason string,
@@ -207,7 +199,7 @@ func (flow *engineFlow) applyTrackedActionSuccess(
 		return nil, nil
 	}
 
-	return flow.admitReadyAfterSuccessfulAction(ctx, watch, actionID, depGraphReason)
+	return flow.admitReadyAfterSuccessfulAction(ctx, actionID, depGraphReason)
 }
 
 // applyOrdinaryFailureEffects handles post-routing side effects for normal
@@ -216,7 +208,6 @@ func (flow *engineFlow) applyTrackedActionSuccess(
 // failure recording or scope detection.
 func (flow *engineFlow) applyOrdinaryFailureEffects(
 	ctx context.Context,
-	watch *watchRuntime,
 	current *trackedAction,
 	decision *resultDecision,
 	r *actionCompletion,
@@ -225,10 +216,10 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 	if err != nil {
 		return err
 	}
-	if err := flow.applyPersistedFailureScopeEffects(ctx, watch, decision, r, persisted); err != nil {
+	if err := flow.applyPersistedFailureScopeEffects(ctx, decision, r, persisted); err != nil {
 		return err
 	}
-	flow.armFailureTimers(watch, decision, persisted)
+	flow.armFailureTimers(decision, persisted)
 
 	flow.recordError(decision, r)
 	return nil
@@ -255,7 +246,6 @@ func (flow *engineFlow) persistAndHoldFailure(
 
 func (flow *engineFlow) applyPersistedFailureScopeEffects(
 	ctx context.Context,
-	watch *watchRuntime,
 	decision *resultDecision,
 	r *actionCompletion,
 	persisted bool,
@@ -264,13 +254,13 @@ func (flow *engineFlow) applyPersistedFailureScopeEffects(
 		return nil
 	}
 	if decision.RunScopeDetection {
-		return flow.feedScopeDetection(ctx, watch, r)
+		return flow.feedScopeDetection(ctx, r)
 	}
 	if decision.Class != errclass.ClassScopeBlockingTransient || decision.ScopeKey.IsZero() {
 		return nil
 	}
 
-	return flow.applyBlockScope(ctx, watch, scopeUpdateResult{
+	return flow.applyBlockScope(ctx, scopeUpdateResult{
 		Block:         true,
 		ScopeKey:      decision.ScopeKey,
 		ConditionType: decision.ScopeKey.ConditionType(),
@@ -278,18 +268,14 @@ func (flow *engineFlow) applyPersistedFailureScopeEffects(
 }
 
 func (flow *engineFlow) armFailureTimers(
-	watch *watchRuntime,
 	decision *resultDecision,
 	persisted bool,
 ) {
-	if watch == nil {
-		return
-	}
 	if decision.Class == errclass.ClassScopeBlockingTransient {
-		watch.armTrialTimer()
+		flow.signals.armTrialTimer()
 	}
 	if persisted {
-		watch.armRetryTimer()
+		flow.signals.armRetryTimer()
 	}
 }
 
@@ -303,7 +289,6 @@ func fatalResultError(r *actionCompletion) error {
 
 func (flow *engineFlow) applyFatalAuthEffects(
 	ctx context.Context,
-	watch *watchRuntime,
 	r *actionCompletion,
 	conditionKey ConditionKey,
 ) {
@@ -334,7 +319,6 @@ func (flow *engineFlow) applyFatalAuthEffects(
 	)
 
 	_ = ctx
-	_ = watch
 }
 
 func isPublicationOnlyActionType(actionType actionType) bool {
@@ -383,38 +367,35 @@ func partitionPublicationFrontier(ready []*trackedAction) ([]*trackedAction, []*
 
 func (flow *engineFlow) failPublicationDrainAction(
 	ctx context.Context,
-	watch *watchRuntime,
 	bl *Baseline,
 	current *trackedAction,
 	cause error,
 ) ([]*trackedAction, error) {
 	completion := actionCompletionFromTrackedAction(current, nil, cause)
-	return flow.applyRuntimeCompletionStage(ctx, watch, &completion, bl)
+	return flow.applyRuntimeCompletionStage(ctx, &completion, bl)
 }
 
 func (flow *engineFlow) applyPublicationDrainAction(
 	ctx context.Context,
-	watch *watchRuntime,
 	bl *Baseline,
 	current *trackedAction,
 ) ([]*trackedAction, error) {
 	if err := flow.applyPublicationMutation(ctx, current); err != nil {
-		return flow.failPublicationDrainAction(ctx, watch, bl, current, err)
+		return flow.failPublicationDrainAction(ctx, bl, current, err)
 	}
 
-	return flow.completePublicationDrainAction(ctx, watch, current)
+	return flow.completePublicationDrainAction(ctx, current)
 }
 
 func (flow *engineFlow) completePublicationDrainAction(
 	ctx context.Context,
-	watch *watchRuntime,
 	current *trackedAction,
 ) ([]*trackedAction, error) {
 	if current == nil {
 		return nil, nil
 	}
 
-	return flow.applyTrackedActionSuccess(ctx, watch, current, nil, "successful action completion")
+	return flow.applyTrackedActionSuccess(ctx, current, nil, "successful action completion")
 }
 
 // runPublicationDrainStage keeps publication-only actions on the engine/store
@@ -425,7 +406,6 @@ func (flow *engineFlow) completePublicationDrainAction(
 // complete as shutdown instead of dispatching.
 func (flow *engineFlow) runPublicationDrainStage(
 	ctx context.Context,
-	watch *watchRuntime,
 	bl *Baseline,
 	ready []*trackedAction,
 ) ([]*trackedAction, error) {
@@ -436,7 +416,7 @@ func (flow *engineFlow) runPublicationDrainStage(
 		current := queue[0]
 		queue = queue[1:]
 
-		released, err := flow.applyPublicationDrainAction(ctx, watch, bl, current)
+		released, err := flow.applyPublicationDrainAction(ctx, bl, current)
 		if err != nil {
 			return append(concrete, queue...), err
 		}

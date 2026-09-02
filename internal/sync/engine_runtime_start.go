@@ -10,7 +10,6 @@ func (flow *engineFlow) startRuntimeStage(
 	ctx context.Context,
 	runtime *runtimePlan,
 	bl *Baseline,
-	watch *watchRuntime,
 ) ([]*trackedAction, bool, error) {
 	if runtime == nil || runtime.Plan == nil {
 		return nil, false, nil
@@ -29,11 +28,11 @@ func (flow *engineFlow) startRuntimeStage(
 	}
 
 	ready := flow.registerPlanActions(plan)
-	ready, err := flow.admitReady(ctx, watch, ready)
+	ready, err := flow.admitReady(ctx, ready)
 	if err != nil {
 		return nil, false, err
 	}
-	outbox, err := flow.reduceReadyFrontierStage(ctx, watch, bl, ready)
+	outbox, err := flow.reduceReadyFrontierStage(ctx, bl, ready)
 	if err != nil {
 		flow.completeOutboxAsShutdown(outbox)
 		return nil, false, err
@@ -48,16 +47,15 @@ func (flow *engineFlow) startRuntimeStage(
 // publication drain on any newly released frontier.
 func (flow *engineFlow) reduceReadyFrontierStage(
 	ctx context.Context,
-	watch *watchRuntime,
 	bl *Baseline,
 	ready []*trackedAction,
 ) ([]*trackedAction, error) {
-	reduced, err := flow.runPublicationDrainStage(ctx, watch, bl, ready)
+	reduced, err := flow.runPublicationDrainStage(ctx, bl, ready)
 	if err != nil {
 		return reduced, err
 	}
 
-	dueHeld, err := flow.drainDueHeldWorkNow(ctx, watch)
+	dueHeld, err := flow.drainDueHeldWorkNow(ctx)
 	if err != nil {
 		return append(reduced, dueHeld...), err
 	}
@@ -65,7 +63,7 @@ func (flow *engineFlow) reduceReadyFrontierStage(
 		return reduced, nil
 	}
 
-	released, err := flow.runPublicationDrainStage(ctx, watch, bl, dueHeld)
+	released, err := flow.runPublicationDrainStage(ctx, bl, dueHeld)
 	return append(reduced, released...), err
 }
 
