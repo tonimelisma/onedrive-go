@@ -35,17 +35,17 @@ const (
 
 // CommitObservation atomically persists observed remote mirror state and may
 // also advance the primary observation cursor in the same transaction.
-func (m *SyncStore) CommitObservation(ctx context.Context, events []observedItem, newToken string, driveID driveid.ID) error {
-	return m.commitObservation(ctx, events, newToken, driveID)
+func (s *SyncStore) CommitObservation(ctx context.Context, events []observedItem, newToken string, driveID driveid.ID) error {
+	return s.commitObservation(ctx, events, newToken, driveID)
 }
 
-func (m *SyncStore) commitObservation(
+func (s *SyncStore) commitObservation(
 	ctx context.Context,
 	events []observedItem,
 	newToken string,
 	driveID driveid.ID,
 ) (err error) {
-	tx, err := beginPerfTx(ctx, m.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning observation transaction: %w", err)
 	}
@@ -53,7 +53,7 @@ func (m *SyncStore) commitObservation(
 		err = finalizeTxRollback(err, tx, "sync: rollback observation transaction")
 	}()
 
-	if commitErr := m.commitObservationTx(ctx, tx, events, newToken, driveID); commitErr != nil {
+	if commitErr := s.commitObservationTx(ctx, tx, events, newToken, driveID); commitErr != nil {
 		err = commitErr
 		return err
 	}
@@ -62,7 +62,7 @@ func (m *SyncStore) commitObservation(
 		return fmt.Errorf("sync: committing observation transaction: %w", err)
 	}
 
-	m.logger.Debug("observations committed",
+	s.logger.Debug("observations committed",
 		slog.Int("items", len(events)),
 		slog.String("drive_id", driveID.String()),
 	)
@@ -70,18 +70,18 @@ func (m *SyncStore) commitObservation(
 	return nil
 }
 
-func (m *SyncStore) commitObservationTx(
+func (s *SyncStore) commitObservationTx(
 	ctx context.Context,
 	tx sqlTxRunner,
 	events []observedItem,
 	newToken string,
 	driveID driveid.ID,
 ) error {
-	state, err := m.readObservationStateTx(ctx, tx)
+	state, err := s.readObservationStateTx(ctx, tx)
 	if err != nil {
 		return err
 	}
-	if ensureErr := m.ensureContentDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
+	if ensureErr := s.ensureContentDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
 		return ensureErr
 	}
 	if driveID.IsZero() {
@@ -92,28 +92,28 @@ func (m *SyncStore) commitObservationTx(
 		if events[i].DriveID.IsZero() && !driveID.IsZero() {
 			events[i].DriveID = driveID
 		}
-		if processErr := m.processObservedItem(ctx, tx, &events[i]); processErr != nil {
+		if processErr := s.processObservedItem(ctx, tx, &events[i]); processErr != nil {
 			return processErr
 		}
 	}
 
 	if newToken != "" {
 		state.Cursor = newToken
-		if saveErr := m.writeObservationStateTx(ctx, tx, state); saveErr != nil {
+		if saveErr := s.writeObservationStateTx(ctx, tx, state); saveErr != nil {
 			return saveErr
 		}
 	}
 	return nil
 }
 
-func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, item *observedItem) error {
-	existing := m.scanRemoteStateRow(ctx, tx, item.DriveID.String(), item.ItemID)
+func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, item *observedItem) error {
+	existing := s.scanRemoteStateRow(ctx, tx, item.DriveID.String(), item.ItemID)
 
 	if existing == nil {
 		if item.IsDeleted {
 			return nil
 		}
-		return m.insertRemoteState(ctx, tx, item)
+		return s.insertRemoteState(ctx, tx, item)
 	}
 
 	if item.IsDeleted {
@@ -125,7 +125,7 @@ func (m *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 		return nil
 	}
 
-	return m.updateRemoteStateFromObs(ctx, tx, item)
+	return s.updateRemoteStateFromObs(ctx, tx, item)
 }
 
 func deleteObservedRemoteState(
@@ -159,7 +159,7 @@ func observedRemoteStateUpdate(
 		item.ETag != existing.ETag
 }
 
-func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driveID, itemID string) *remoteStateRow {
+func (s *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driveID, itemID string) *remoteStateRow {
 	contentDriveID := driveid.New(driveID)
 	row, err := scanRemoteStateRowWithQuerier(
 		contentDriveID,
@@ -174,7 +174,7 @@ func (m *SyncStore) scanRemoteStateRow(ctx context.Context, tx sqlTxRunner, driv
 	return row
 }
 
-func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *observedItem) error {
+func (s *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *observedItem) error {
 	_, err := tx.ExecContext(ctx, sqlInsertRemoteState,
 		item.DriveID.String(),
 		item.ItemID, item.Path,
@@ -189,7 +189,7 @@ func (m *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item 
 	return nil
 }
 
-func (m *SyncStore) updateRemoteStateFromObs(
+func (s *SyncStore) updateRemoteStateFromObs(
 	ctx context.Context,
 	tx sqlTxRunner,
 	item *observedItem,

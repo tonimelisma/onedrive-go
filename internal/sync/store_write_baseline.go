@@ -91,20 +91,20 @@ const (
 // maps via updateBaselineCache() after each transaction. This is safe
 // because SyncStore exclusively owns the database (sole-writer
 // pattern with SetMaxOpenConns(1)).
-func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
-	m.baselineMu.Lock()
-	defer m.baselineMu.Unlock()
+func (s *SyncStore) Load(ctx context.Context) (*Baseline, error) {
+	s.baselineMu.Lock()
+	defer s.baselineMu.Unlock()
 
-	if m.baseline != nil {
-		return m.baseline, nil
+	if s.baseline != nil {
+		return s.baseline, nil
 	}
 
-	contentDriveID, err := m.contentDriveIDForRead(ctx, driveid.ID{})
+	contentDriveID, err := s.contentDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading content drive for baseline: %w", err)
 	}
 
-	rows, err := m.db.QueryContext(ctx, sqlLoadBaseline)
+	rows, err := s.db.QueryContext(ctx, sqlLoadBaseline)
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading baseline: %w", err)
 	}
@@ -133,8 +133,8 @@ func (m *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 		return nil, fmt.Errorf("sync: iterating baseline rows: %w", err)
 	}
 
-	m.baseline = b
-	m.logger.Debug("baseline loaded", slog.Int("entries", len(b.ByPath)))
+	s.baseline = b
+	s.logger.Debug("baseline loaded", slog.Int("entries", len(b.ByPath)))
 
 	return b, nil
 }
@@ -331,7 +331,7 @@ func publicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*
 // CommitMutation atomically applies a single mutation to the baseline in a
 // SQLite transaction. After the DB write, the in-memory baseline cache is
 // updated incrementally (Put or Delete).
-func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutation) (err error) {
+func (s *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutation) (err error) {
 	if outcome == nil {
 		return fmt.Errorf("sync: commit mutation requires outcome")
 	}
@@ -341,13 +341,13 @@ func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 	}
 
 	// Ensure baseline is loaded so we can update the in-memory cache.
-	if m.baseline == nil {
-		if _, loadErr := m.Load(ctx); loadErr != nil {
+	if s.baseline == nil {
+		if _, loadErr := s.Load(ctx); loadErr != nil {
 			return fmt.Errorf("sync: loading baseline before commit outcome: %w", loadErr)
 		}
 	}
 
-	tx, err := beginPerfTx(ctx, m.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning commit outcome transaction: %w", err)
 	}
@@ -355,11 +355,11 @@ func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback outcome transaction for %s", outcome.Path))
 	}()
 
-	state, err := m.readObservationStateTx(ctx, tx)
+	state, err := s.readObservationStateTx(ctx, tx)
 	if err != nil {
 		return err
 	}
-	if ensureErr := m.ensureContentDriveIDTx(ctx, tx, outcome.DriveID, state); ensureErr != nil {
+	if ensureErr := s.ensureContentDriveIDTx(ctx, tx, outcome.DriveID, state); ensureErr != nil {
 		return ensureErr
 	}
 	if !state.ContentDriveID.IsZero() {
@@ -375,7 +375,7 @@ func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 	}
 
 	// Update in-memory baseline cache incrementally.
-	if cacheErr := m.updateBaselineCache(ctx, outcome); cacheErr != nil {
+	if cacheErr := s.updateBaselineCache(ctx, outcome); cacheErr != nil {
 		return cacheErr
 	}
 
@@ -385,15 +385,15 @@ func (m *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 // RefreshLocalBaseline updates the local-side comparison tuple for one path
 // while preserving any existing remote-side metadata. If a matching
 // remote_state row exists, it is marked synced in the same transaction.
-func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh localBaselineRefresh) (err error) {
-	if m.baseline == nil {
-		if _, loadErr := m.Load(ctx); loadErr != nil {
+func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh localBaselineRefresh) (err error) {
+	if s.baseline == nil {
+		if _, loadErr := s.Load(ctx); loadErr != nil {
 			return fmt.Errorf("sync: loading baseline before refresh local baseline: %w", loadErr)
 		}
 	}
 
 	var existing *BaselineEntry
-	if entry, ok := m.baseline.GetByPath(refresh.Path); ok {
+	if entry, ok := s.baseline.GetByPath(refresh.Path); ok {
 		existing = entry
 	}
 
@@ -420,7 +420,7 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh localBasel
 		entry.ETag = existing.ETag
 	}
 
-	tx, err := beginPerfTx(ctx, m.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning refresh local baseline transaction: %w", err)
 	}
@@ -428,11 +428,11 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh localBasel
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback refresh local baseline transaction for %s", refresh.Path))
 	}()
 
-	state, err := m.readObservationStateTx(ctx, tx)
+	state, err := s.readObservationStateTx(ctx, tx)
 	if err != nil {
 		return err
 	}
-	if ensureErr := m.ensureContentDriveIDTx(ctx, tx, entry.DriveID, state); ensureErr != nil {
+	if ensureErr := s.ensureContentDriveIDTx(ctx, tx, entry.DriveID, state); ensureErr != nil {
 		return ensureErr
 	}
 	if !state.ContentDriveID.IsZero() {
@@ -463,7 +463,7 @@ func (m *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh localBasel
 		return fmt.Errorf("sync: committing refresh local baseline transaction: %w", err)
 	}
 
-	m.baseline.Put(entry)
+	s.baseline.Put(entry)
 
 	return nil
 }
@@ -511,16 +511,16 @@ func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutatio
 
 // updateBaselineCache applies a single outcome to the in-memory baseline,
 // keeping the cache consistent without a full DB reload.
-func (m *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation) error {
+func (s *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation) error {
 	mutation, err := classifyBaselineMutation(o.Action)
 	if err != nil {
-		m.logger.Warn("baseline cache classification failed, reloading cache from database",
+		s.logger.Warn("baseline cache classification failed, reloading cache from database",
 			slog.String("path", o.Path),
 			slog.String("action", o.Action.String()),
 			slog.String("error", err.Error()),
 		)
 
-		if reloadErr := m.reloadBaselineCache(ctx); reloadErr != nil {
+		if reloadErr := s.reloadBaselineCache(ctx); reloadErr != nil {
 			return fmt.Errorf("sync: reloading baseline cache after impossible mutation state: %w", reloadErr)
 		}
 
@@ -531,23 +531,23 @@ func (m *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation
 	case baselineMutationNoop:
 		return nil
 	case baselineMutationUpsert:
-		m.baseline.Put(mutationToEntry(o))
+		s.baseline.Put(mutationToEntry(o))
 	case baselineMutationDelete:
-		m.baseline.Delete(o.Path)
+		s.baseline.Delete(o.Path)
 	case baselineMutationMove:
-		m.baseline.Delete(o.OldPath)
-		m.baseline.Put(mutationToEntry(o))
+		s.baseline.Delete(o.OldPath)
+		s.baseline.Put(mutationToEntry(o))
 	}
 
 	return nil
 }
 
-func (m *SyncStore) reloadBaselineCache(ctx context.Context) error {
-	m.baselineMu.Lock()
-	m.baseline = nil
-	m.baselineMu.Unlock()
+func (s *SyncStore) reloadBaselineCache(ctx context.Context) error {
+	s.baselineMu.Lock()
+	s.baseline = nil
+	s.baselineMu.Unlock()
 
-	if _, err := m.Load(ctx); err != nil {
+	if _, err := s.Load(ctx); err != nil {
 		return fmt.Errorf("sync: loading baseline after cache invalidation: %w", err)
 	}
 
@@ -732,17 +732,17 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 // Thread-safety: called from the engine-owned result loop (single-goroutine context)
 // after all workers complete. The Baseline cache is stable at this point —
 // no concurrent mutation is possible.
-func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
-	if m.baseline == nil {
+func (s *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
+	if s.baseline == nil {
 		return 0, nil
 	}
 
-	contentDriveID, err := m.contentDriveIDForRead(ctx, driveid.ID{})
+	contentDriveID, err := s.contentDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
 		return 0, fmt.Errorf("sync: loading content drive for consistency check: %w", err)
 	}
 
-	rows, err := m.db.QueryContext(ctx, sqlLoadBaseline)
+	rows, err := s.db.QueryContext(ctx, sqlLoadBaseline)
 	if err != nil {
 		return 0, fmt.Errorf("sync: querying baseline for consistency check: %w", err)
 	}
@@ -773,10 +773,10 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	// The callback must not call back into the baseline: ForEachPath holds the
 	// read lock for its duration, and a nested acquire can deadlock against a
 	// writer that queued in between. It only consults the local dbEntries map.
-	m.baseline.ForEachPath(func(p string, cached *BaselineEntry) {
+	s.baseline.ForEachPath(func(p string, cached *BaselineEntry) {
 		dbEntry, ok := dbEntries[p]
 		if !ok {
-			m.logger.Warn("cache consistency: entry in cache not in DB",
+			s.logger.Warn("cache consistency: entry in cache not in DB",
 				slog.String("path", p),
 			)
 
@@ -786,7 +786,7 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 		}
 
 		if !baselineEntriesEqual(cached, dbEntry) {
-			m.logger.Warn("cache consistency: field mismatch",
+			s.logger.Warn("cache consistency: field mismatch",
 				slog.String("path", p),
 			)
 
@@ -796,8 +796,8 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 
 	// Check for entries in DB not in cache.
 	for p := range dbEntries {
-		if _, ok := m.baseline.GetByPath(p); !ok {
-			m.logger.Warn("cache consistency: entry in DB not in cache",
+		if _, ok := s.baseline.GetByPath(p); !ok {
+			s.logger.Warn("cache consistency: entry in DB not in cache",
 				slog.String("path", p),
 			)
 
@@ -806,7 +806,7 @@ func (m *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	}
 
 	if mismatches > 0 {
-		m.logger.Warn("cache consistency check complete",
+		s.logger.Warn("cache consistency check complete",
 			slog.Int("mismatches", mismatches),
 		)
 	}

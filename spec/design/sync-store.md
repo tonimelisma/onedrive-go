@@ -79,6 +79,14 @@ surface a transient cleanup diagnostic for the current owner, but the next
 source of truth is still the parent `shortcut_roots` row and any remaining child
 artifacts, not a multisync cache.
 
+### Receiver Naming
+
+`SyncStore` methods use `s`. They used `m` -- residue from a previous name --
+across all eighty methods, which is the "ghost architecture" the repo's own
+guardrails ban: a reader looking for the store's methods does not grep for `m`,
+and every other significant type in the tree already matched its own name
+(`c *Client`, `s *Session`, `o *Orchestrator`, `tm *TransferManager`).
+
 ## Ownership Contract
 
 - Owns: SQLite truth, transactions, restart-safe rows, and narrow read helpers.

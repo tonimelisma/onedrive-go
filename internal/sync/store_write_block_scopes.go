@@ -42,8 +42,8 @@ func validateBlockScope(block *BlockScope) error {
 // INSERT OR REPLACE — the scope_key is the primary key, so this handles
 // both insert and update. All fields are serialized: ScopeKey.String() for
 // the key, UnixNano for timestamps, nanoseconds for Duration.
-func (m *SyncStore) UpsertBlockScope(ctx context.Context, block *BlockScope) error {
-	return upsertBlockScopeWithRunner(ctx, m.db, block)
+func (s *SyncStore) UpsertBlockScope(ctx context.Context, block *BlockScope) error {
+	return upsertBlockScopeWithRunner(ctx, s.db, block)
 }
 
 func upsertBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, block *BlockScope) error {
@@ -73,8 +73,8 @@ func upsertBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, block *
 
 // DeleteBlockScope removes a block scope from the block_scopes table.
 // No-op if the row doesn't exist (DELETE WHERE is a natural no-op).
-func (m *SyncStore) DeleteBlockScope(ctx context.Context, key ScopeKey) error {
-	return deleteBlockScopeWithRunner(ctx, m.db, key)
+func (s *SyncStore) DeleteBlockScope(ctx context.Context, key ScopeKey) error {
+	return deleteBlockScopeWithRunner(ctx, s.db, key)
 }
 
 func deleteBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, key ScopeKey) error {
@@ -92,8 +92,8 @@ func deleteBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, key Sco
 // ListBlockScopes returns all persisted block scopes. Used at startup to
 // populate the engine-owned active scope working set. Returns an empty slice
 // (not nil) if no rows exist.
-func (m *SyncStore) ListBlockScopes(ctx context.Context) ([]*BlockScope, error) {
-	result, err := queryBlockScopeRowsWithRunner(ctx, m.db)
+func (s *SyncStore) ListBlockScopes(ctx context.Context) ([]*BlockScope, error) {
+	result, err := queryBlockScopeRowsWithRunner(ctx, s.db)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing block scopes: %w", err)
 	}
