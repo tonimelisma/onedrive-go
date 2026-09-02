@@ -157,7 +157,7 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 	}
 
 	if batch.source == remoteObservationBatchFullRefresh {
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRemoteRefreshCommitted})
+		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshCommitted})
 	}
 
 	if batch.source == remoteObservationBatchFullRefresh && ctx.Err() != nil {
@@ -165,7 +165,7 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 			rt.dirtyBuf.MarkFullRefresh()
 		}
 		batch.finishApplied(nil)
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRemoteRefreshApplied})
+		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshApplied})
 		return nil
 	}
 
@@ -173,7 +173,7 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 	batch.finishApplied(nil)
 
 	if batch.source == remoteObservationBatchFullRefresh {
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRemoteRefreshApplied})
+		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshApplied})
 	}
 
 	return nil
@@ -197,13 +197,13 @@ func (rt *watchRuntime) handleRemoteObservationBatchApplyFailure(
 
 		return newFatalObserverError(fmt.Errorf("apply %s batch: %w", batch.source, err))
 	case remoteObservationBatchFullRefresh:
-		rt.engine.logger.Error("failed to apply full remote refresh batch",
+		rt.deps.logger.Error("failed to apply full remote refresh batch",
 			slog.String("error", err.Error()),
 		)
 		if rt.dirtyBuf != nil {
 			rt.dirtyBuf.MarkFullRefresh()
 		}
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRemoteRefreshApplied})
+		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshApplied})
 		batch.finishApplied(nil)
 		return nil
 	default:

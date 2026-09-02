@@ -30,6 +30,7 @@ func TestPostSyncHousekeeping_SkipsConfiguredChildRoots(t *testing.T) {
 			contentFilter: ContentFilterConfig{IgnoredDirs: []string{"Shortcuts/Docs"}},
 		},
 	}
+	flow.deps = newRuntimeDeps(flow.engine)
 	flow.postSyncHousekeeping(t.Context())
 
 	assert.NoFileExists(t, filepath.Join(syncRoot, testOwnedPartialName("root.txt")))
@@ -57,6 +58,7 @@ func TestPostSyncHousekeeping_SkipsProtectedShortcutRoots(t *testing.T) {
 			}},
 		},
 	}
+	flow.deps = newRuntimeDeps(flow.engine)
 	flow.postSyncHousekeeping(t.Context())
 
 	assert.NoFileExists(t, filepath.Join(syncRoot, testOwnedPartialName("root.txt")))
@@ -83,6 +85,7 @@ func TestPostSyncHousekeeping_RespectsIncludedDirs(t *testing.T) {
 			contentFilter: ContentFilterConfig{IncludedDirs: []string{"Projects"}},
 		},
 	}
+	flow.deps = newRuntimeDeps(flow.engine)
 	flow.postSyncHousekeeping(t.Context())
 
 	assert.NoFileExists(t, filepath.Join(includedRoot, testOwnedPartialName("owned.txt")))

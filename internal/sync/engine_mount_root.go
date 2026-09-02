@@ -210,7 +210,7 @@ func (rt *watchRuntime) handleMountRootPollError(
 	}
 
 	delay := bo.Next()
-	rt.engine.logger.Warn("mount-root watch poll failed, backing off",
+	rt.deps.logger.Warn("mount-root watch poll failed, backing off",
 		slog.String("error", err.Error()),
 		slog.Duration("backoff", delay),
 		slog.String("drive_id", rt.engine.driveID.String()),

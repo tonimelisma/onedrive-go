@@ -43,7 +43,7 @@ func (flow *engineFlow) logSuppressedShutdownCompletionError(
 		return
 	}
 
-	flow.engine.logger.Warn("suppressed action completion error during shutdown",
+	flow.deps.logger.Warn("suppressed action completion error during shutdown",
 		slog.String("path", completion.Path),
 		slog.String("action_type", completion.ActionType.String()),
 		slog.String("error", err.Error()),

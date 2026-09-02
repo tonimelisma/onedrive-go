@@ -603,7 +603,7 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	recorder := attachDebugEventRecorder(eng)
 
 	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
-	installManualClock(eng.Engine, clock)
+	installManualClockForTestEngine(eng, clock)
 
 	ctx := t.Context()
 	setTestBlockScope(t, eng, &BlockScope{
@@ -732,7 +732,7 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 	}
 	eng, _ := newTestEngine(t, mock)
 	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
-	installManualClock(eng.Engine, clock)
+	installManualClockForTestEngine(eng, clock)
 	watcher := newSignalingWatcher()
 	eng.localWatcherFactory = func() (fsWatcher, error) {
 		return watcher, nil
@@ -824,7 +824,7 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 
 	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
 	clock.SetJitter(5 * time.Second)
-	installManualClock(eng.Engine, clock)
+	installManualClockForTestEngine(eng, clock)
 
 	sleepStarted := make(chan struct{})
 	var sleepStartedOnce atomic.Bool
