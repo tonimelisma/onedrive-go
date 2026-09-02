@@ -98,7 +98,7 @@ func TestWatchRuntime_MarkReplanNeededWithoutDirtyBufferIsSafe(t *testing.T) {
 
 	eng := newSingleOwnerEngine(t)
 	rt := newWatchRuntime(eng.Engine)
-	require.Nil(t, rt.dirtyBuf)
+	require.Nil(t, rt.resources.dirtyBuf)
 
 	assert.NotPanics(t, rt.markReplanNeeded)
 }

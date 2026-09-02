@@ -77,11 +77,16 @@ type watchResources struct {
 
 // watchRuntime owns all mutable watch-mode state. It is created by RunWatch
 // and discarded when the watch session ends.
+// The three state groups are named fields rather than embedded ones. Embedding
+// grouped the declarations but promoted every field back to the top level, so
+// any method could still touch anything and the grouping was documentation
+// rather than structure. Qualified access makes each method's reach visible at
+// its call sites, which is the input any further decomposition needs.
 type watchRuntime struct {
 	*engineFlow
-	loop watchLoopState
-	watchResources
-	watchTimerState
+	loop      watchLoopState
+	resources watchResources
+	timers    watchTimerState
 }
 
 type watchRuntimePhase string
@@ -99,11 +104,11 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 			phase:             watchRuntimePhaseRunning,
 			lastRemoteBlocked: make(map[ScopeKey]string),
 		},
-		watchTimerState: watchTimerState{
+		timers: watchTimerState{
 			trialCh:      make(chan struct{}, 1),
 			retryTimerCh: make(chan struct{}, 1),
 		},
-		watchResources: watchResources{
+		resources: watchResources{
 			refreshCh:      make(chan time.Time, 1),
 			refreshResults: make(chan remoteObservationBatch, 1),
 		},
@@ -137,8 +142,8 @@ func (rt *watchRuntime) beginObserverBackedRunning() error {
 	if rt.isDraining() {
 		return errWatchObserversDuringDrain
 	}
-	if rt.activeObservers != 0 {
-		return fmt.Errorf("sync: start watch observers while %d observers are already active", rt.activeObservers)
+	if rt.resources.activeObservers != 0 {
+		return fmt.Errorf("sync: start watch observers while %d observers are already active", rt.resources.activeObservers)
 	}
 	rt.enterRunning()
 	return nil
@@ -283,14 +288,14 @@ func (rt *watchRuntime) advancePendingReplanDrainIdleTracking() {
 }
 
 func (rt *watchRuntime) rescheduleReplanIntent(batch dirtyBatch) error {
-	if rt.dirtyBuf == nil {
+	if rt.resources.dirtyBuf == nil {
 		return fmt.Errorf("sync: reschedule watch replan: dirty buffer not initialized")
 	}
 	if batch.FullRefresh {
-		rt.dirtyBuf.MarkFullRefresh()
+		rt.resources.dirtyBuf.MarkFullRefresh()
 		return nil
 	}
-	rt.dirtyBuf.MarkDirty()
+	rt.resources.dirtyBuf.MarkDirty()
 	return nil
 }
 
@@ -347,53 +352,53 @@ func (rt *watchRuntime) earliestTrialAt() (time.Time, bool) {
 }
 
 func (rt *watchRuntime) resetTrialTimer(next syncTimer) {
-	rt.timerMu.Lock()
-	defer rt.timerMu.Unlock()
+	rt.timers.timerMu.Lock()
+	defer rt.timers.timerMu.Unlock()
 
-	if rt.trialTimer != nil {
-		rt.trialTimer.Stop()
-		rt.trialTimer = nil
+	if rt.timers.trialTimer != nil {
+		rt.timers.trialTimer.Stop()
+		rt.timers.trialTimer = nil
 	}
 
-	rt.trialTimer = next
+	rt.timers.trialTimer = next
 }
 
 func (rt *watchRuntime) hasTrialTimer() bool {
-	rt.timerMu.RLock()
-	defer rt.timerMu.RUnlock()
+	rt.timers.timerMu.RLock()
+	defer rt.timers.timerMu.RUnlock()
 
-	return rt.trialTimer != nil
+	return rt.timers.trialTimer != nil
 }
 
 func (rt *watchRuntime) resetRetryTimer(next syncTimer) {
-	rt.timerMu.Lock()
-	defer rt.timerMu.Unlock()
+	rt.timers.timerMu.Lock()
+	defer rt.timers.timerMu.Unlock()
 
-	if rt.retryTimer != nil {
-		rt.retryTimer.Stop()
-		rt.retryTimer = nil
+	if rt.timers.retryTimer != nil {
+		rt.timers.retryTimer.Stop()
+		rt.timers.retryTimer = nil
 	}
 
-	rt.retryTimer = next
+	rt.timers.retryTimer = next
 }
 
 func (rt *watchRuntime) hasRetryTimer() bool {
-	rt.timerMu.RLock()
-	defer rt.timerMu.RUnlock()
+	rt.timers.timerMu.RLock()
+	defer rt.timers.timerMu.RUnlock()
 
-	return rt.retryTimer != nil
+	return rt.timers.retryTimer != nil
 }
 
 func (rt *watchRuntime) resetRefreshTimer(next syncTimer) {
-	rt.timerMu.Lock()
-	defer rt.timerMu.Unlock()
+	rt.timers.timerMu.Lock()
+	defer rt.timers.timerMu.Unlock()
 
-	if rt.refreshTimer != nil {
-		rt.refreshTimer.Stop()
-		rt.refreshTimer = nil
+	if rt.resources.refreshTimer != nil {
+		rt.resources.refreshTimer.Stop()
+		rt.resources.refreshTimer = nil
 	}
 
-	rt.refreshTimer = next
+	rt.resources.refreshTimer = next
 }
 
 // kickDueHeldRelease satisfies runtimeSignals; the watch loop releases
@@ -405,14 +410,14 @@ func (rt *watchRuntime) kickDueHeldRelease() {
 // markReplanNeeded satisfies runtimeSignals: committed truth changed under the
 // current plan, so the debounce buffer should schedule a replan.
 func (rt *watchRuntime) markReplanNeeded() {
-	if rt.dirtyBuf == nil {
+	if rt.resources.dirtyBuf == nil {
 		return
 	}
 
-	rt.dirtyBuf.MarkDirty()
+	rt.resources.dirtyBuf.MarkDirty()
 }
 
 // hasActiveRefresh satisfies watchInspector.
 func (rt *watchRuntime) hasActiveRefresh() bool {
-	return rt.refreshActive
+	return rt.resources.refreshActive
 }

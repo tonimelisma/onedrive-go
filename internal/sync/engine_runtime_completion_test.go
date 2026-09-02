@@ -181,7 +181,7 @@ func TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOr
 	eng := newSingleOwnerEngine(t)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 	flow := testEngineFlow(t, eng)
 
 	row := RetryWorkRow{
@@ -231,7 +231,7 @@ func TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOr
 	assert.Equal(t, 0, failed)
 	assert.Empty(t, errs)
 
-	batch := rt.dirtyBuf.FlushImmediate()
+	batch := rt.resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
 	assert.False(t, batch.FullRefresh)
 }
@@ -679,7 +679,7 @@ func TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEm
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 	flow := testEngineFlow(t, eng)
 	trialScopeKey := SKService()
 
@@ -725,7 +725,7 @@ func TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEm
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 	assert.False(t, isTestBlockScopeed(eng, trialScopeKey), "empty trial scope should be discarded, not extended")
 
-	batch := rt.dirtyBuf.FlushImmediate()
+	batch := rt.resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
 	assert.False(t, batch.FullRefresh)
 }

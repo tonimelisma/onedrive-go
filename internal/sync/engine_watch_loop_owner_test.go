@@ -22,11 +22,11 @@ func TestWatchRuntime_BeginWatchDrain_ObserverChannelsStayRuntimeOwned(t *testin
 	eng := newSingleOwnerEngine(t)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.localBatches = make(chan localObservationBatch)
-	rt.remoteBatches = make(chan remoteObservationBatch)
-	rt.skippedItems = make(chan []skippedItem)
-	rt.observerErrs = make(chan error)
-	rt.activeObservers = 1
+	rt.resources.localBatches = make(chan localObservationBatch)
+	rt.resources.remoteBatches = make(chan remoteObservationBatch)
+	rt.resources.skippedItems = make(chan []skippedItem)
+	rt.resources.observerErrs = make(chan error)
+	rt.resources.activeObservers = 1
 
 	p := &watchPipeline{
 		runtime:      rt,
@@ -38,11 +38,11 @@ func TestWatchRuntime_BeginWatchDrain_ObserverChannelsStayRuntimeOwned(t *testin
 
 	assert.Nil(t, p.replanReady)
 	assert.Nil(t, p.maintenanceC)
-	assert.Nil(t, rt.localBatches)
-	assert.Nil(t, rt.remoteBatches)
-	assert.Nil(t, rt.skippedItems)
-	assert.NotNil(t, rt.observerErrs, "runtime must keep draining observer exits while observers are still active")
-	assert.Equal(t, 1, rt.activeObservers)
+	assert.Nil(t, rt.resources.localBatches)
+	assert.Nil(t, rt.resources.remoteBatches)
+	assert.Nil(t, rt.resources.skippedItems)
+	assert.NotNil(t, rt.resources.observerErrs, "runtime must keep draining observer exits while observers are still active")
+	assert.Equal(t, 1, rt.resources.activeObservers)
 }
 
 func TestWatchRuntime_RunWatchLoop_BootstrapPhaseQuiescesAndReturnsToRunning(t *testing.T) {
@@ -86,7 +86,7 @@ func TestWatchRuntime_BeginObserverBackedRunningRejectsDrainingOrDuplicateObserv
 	eng = newSingleOwnerEngine(t)
 	setupWatchEngine(t, eng)
 	rt = testWatchRuntime(t, eng)
-	rt.activeObservers = 1
+	rt.resources.activeObservers = 1
 	require.ErrorContains(t, rt.beginObserverBackedRunning(), "observers are already active")
 }
 
@@ -295,7 +295,7 @@ func TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
@@ -325,7 +325,7 @@ func TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal
 	assert.Empty(t, rt.currentOutbox())
 	assert.Empty(t, rt.queuedByID)
 	assert.Equal(t, 1, rt.depGraph.InFlightCount(), "retired outbox must stay retired after failed replacement replan")
-	batch := rt.dirtyBuf.FlushImmediate()
+	batch := rt.resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
 	assert.True(t, batch.FullRefresh)
 }
@@ -347,7 +347,7 @@ func TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal(t 
 			eng, syncRoot := newTestEngine(t, &engineMockClient{})
 			setupWatchEngine(t, eng)
 			rt := testWatchRuntime(t, eng)
-			rt.dirtyBuf = newDirtyBuffer(eng.logger)
+			rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 			bl, err := eng.baseline.Load(t.Context())
 			require.NoError(t, err)
 			require.NoError(t, os.RemoveAll(syncRoot))
@@ -364,7 +364,7 @@ func TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal(t 
 			assert.Empty(t, rt.queuedByID)
 			assert.Equal(t, 0, rt.runningCount)
 			assert.Equal(t, 0, rt.depGraph.InFlightCount())
-			batch := rt.dirtyBuf.FlushImmediate()
+			batch := rt.resources.dirtyBuf.FlushImmediate()
 			require.NotNil(t, batch)
 			assert.Equal(t, tc.fullRefresh, batch.FullRefresh)
 		})

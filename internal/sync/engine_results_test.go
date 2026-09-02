@@ -72,7 +72,7 @@ func TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue(t *testing.T)
 	rt.armRetryTimer()
 
 	select {
-	case <-rt.retryTimerCh:
+	case <-rt.timers.retryTimerCh:
 	default:
 		require.FailNow(t, "retry timer should kick immediately for due retry_work")
 	}
@@ -99,21 +99,21 @@ func TestWatchRuntime_ArmRetryTimer_FiresAfterDelay(t *testing.T) {
 	rt.armRetryTimer()
 
 	select {
-	case <-rt.retryTimerCh:
+	case <-rt.timers.retryTimerCh:
 		require.FailNow(t, "retry timer should not fire before the scheduled delay")
 	default:
 	}
 
 	clock.Advance(29 * time.Second)
 	select {
-	case <-rt.retryTimerCh:
+	case <-rt.timers.retryTimerCh:
 		require.FailNow(t, "retry timer should still be waiting before the deadline")
 	default:
 	}
 
 	clock.Advance(1 * time.Second)
 	select {
-	case <-rt.retryTimerCh:
+	case <-rt.timers.retryTimerCh:
 	default:
 		require.FailNow(t, "retry timer should fire once the delay elapses")
 	}

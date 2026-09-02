@@ -172,6 +172,19 @@ Permission timing follows the engine-owned runtime decision, not the probe:
   path; trial reclassification reuses that same fallback instead of treating
   inconclusive permission probes as fatal runtime errors
 
+## Watch State Is Grouped And Qualified
+
+`watchRuntime` holds its mutable state in three named fields: `loop` (phase,
+outbox, pending replan), `resources` (observer streams, refresh channels,
+websocket lifecycle), and `timers` (the retry and trial timers plus the mutex
+guarding them).
+
+Two of the three were embedded. Embedding grouped the declarations but promoted
+every field back to the top level, so any of the type's methods could still
+reach anything, and the grouping was documentation rather than structure.
+Qualified access makes each method's reach visible at its call sites, which is
+the input any further decomposition of this type needs.
+
 ## Run Capabilities Are Passed, Not Reached For
 
 Every per-run flow needs the same four things regardless of what it is

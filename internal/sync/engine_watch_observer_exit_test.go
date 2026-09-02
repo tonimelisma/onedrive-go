@@ -17,12 +17,12 @@ func TestHandleObserverExit_LastObserverOutsideShutdownReturnsError(t *testing.T
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	rt := newWatchRuntime(eng.Engine)
-	rt.activeObservers = 1
+	rt.resources.activeObservers = 1
 
 	err := rt.handleObserverExit(&watchPipeline{}, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "all observers exited")
-	assert.Equal(t, 0, rt.activeObservers)
+	assert.Equal(t, 0, rt.resources.activeObservers)
 }
 
 // Validates: R-2.11, R-6.7.1
@@ -31,10 +31,10 @@ func TestHandleObserverExit_RemainingObserverKeepsWatchAlive(t *testing.T) {
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	rt := newWatchRuntime(eng.Engine)
-	rt.activeObservers = 2
+	rt.resources.activeObservers = 2
 
 	require.NoError(t, rt.handleObserverExit(&watchPipeline{}, false))
-	assert.Equal(t, 1, rt.activeObservers)
+	assert.Equal(t, 1, rt.resources.activeObservers)
 }
 
 // Validates: R-2.11, R-6.7.1
@@ -45,10 +45,10 @@ func TestHandleObserverExit_LastObserverDuringShutdownIsNotAnError(t *testing.T)
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	rt := newWatchRuntime(eng.Engine)
-	rt.activeObservers = 1
+	rt.resources.activeObservers = 1
 
 	require.NoError(t, rt.handleObserverExit(&watchPipeline{}, true))
-	assert.Equal(t, 0, rt.activeObservers)
+	assert.Equal(t, 0, rt.resources.activeObservers)
 }
 
 // Validates: R-2.11, R-6.7.1
@@ -60,7 +60,7 @@ func TestHandleObserverExit_DrainingOutsideShutdownViolatesInvariant(t *testing.
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	rt := newWatchRuntime(eng.Engine)
-	rt.activeObservers = 1
+	rt.resources.activeObservers = 1
 	require.True(t, rt.enterDraining())
 
 	var err error

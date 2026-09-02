@@ -17,7 +17,7 @@ func TestWatchRuntime_LocalObservationBatchUpsertsScopedRows(t *testing.T) {
 	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []localStateRow{{
 		Path:     "stale.txt",
@@ -69,7 +69,7 @@ func TestWatchRuntime_LocalObservationBatchUpsertsScopedRows(t *testing.T) {
 			LocalHasIdentity: true,
 		},
 	}, rows)
-	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
+	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
 	snapshot := eng.collector().Snapshot()
 	assert.Equal(t, 1, snapshot.LocalObservationScopedCommitCount)
 	assert.Equal(t, 2, snapshot.LocalObservationScopedUpsertCount)
@@ -83,7 +83,7 @@ func TestWatchRuntime_LocalObservationBatchDeletesExactPath(t *testing.T) {
 	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []localStateRow{
 		{Path: "deleted.txt", ItemType: ItemTypeFile},
@@ -99,7 +99,7 @@ func TestWatchRuntime_LocalObservationBatchDeletesExactPath(t *testing.T) {
 	rows, err := eng.baseline.ListLocalState(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, []localStateRow{{Path: "kept.txt", ItemType: ItemTypeFile}}, rows)
-	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
+	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
 	snapshot := eng.collector().Snapshot()
 	assert.Equal(t, 1, snapshot.LocalObservationScopedCommitCount)
 	assert.Equal(t, 1, snapshot.LocalObservationExactDeleteCount)
@@ -113,7 +113,7 @@ func TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix(t *testing.T) 
 	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []localStateRow{
 		{Path: "dir", ItemType: ItemTypeFolder},
@@ -132,7 +132,7 @@ func TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix(t *testing.T) 
 	rows, err := eng.baseline.ListLocalState(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, []localStateRow{{Path: "dir-sibling.txt", ItemType: ItemTypeFile}}, rows)
-	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
+	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
 	snapshot := eng.collector().Snapshot()
 	assert.Equal(t, 1, snapshot.LocalObservationScopedCommitCount)
 	assert.Equal(t, 1, snapshot.LocalObservationPrefixDeleteCount)
@@ -146,7 +146,7 @@ func TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth(t *tes
 	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	require.NoError(t, eng.baseline.MarkLocalTruthSuspect(t.Context(), localTruthRecoveryDroppedEvents))
 	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []localStateRow{
@@ -169,7 +169,7 @@ func TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth(t *tes
 	state := readObservationStateForTest(t, eng.baseline, t.Context())
 	assert.True(t, state.LocalTruthComplete)
 	assert.Empty(t, state.LocalTruthRecoveryReason)
-	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
+	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
 	assert.Equal(t, 1, eng.collector().Snapshot().LocalObservationFullSnapshotReplacementCount)
 }
 
@@ -181,7 +181,7 @@ func TestWatchRuntime_LocalObservationBatchMarksLocalTruthSuspect(t *testing.T) 
 	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []localStateRow{
 		{Path: "known.txt", ItemType: ItemTypeFile},
@@ -196,7 +196,7 @@ func TestWatchRuntime_LocalObservationBatchMarksLocalTruthSuspect(t *testing.T) 
 	state := readObservationStateForTest(t, eng.baseline, t.Context())
 	assert.False(t, state.LocalTruthComplete)
 	assert.Equal(t, localTruthRecoveryDroppedEvents, state.LocalTruthRecoveryReason)
-	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
+	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
 	assert.Equal(t, 1, eng.collector().Snapshot().LocalObservationSuspectDroppedEventsCount)
 }
 
@@ -207,13 +207,13 @@ func TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation(t
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	rt.localObs = newLocalObserver(bl, eng.logger, eng.checkWorkers)
-	rt.localObs.droppedEvents.Add(1)
-	rt.localObs.droppedRetries.Add(1)
+	rt.resources.localObs = newLocalObserver(bl, eng.logger, eng.checkWorkers)
+	rt.resources.localObs.droppedEvents.Add(1)
+	rt.resources.localObs.droppedRetries.Add(1)
 
 	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []localStateRow{
 		{Path: "known.txt", ItemType: ItemTypeFile},
@@ -224,7 +224,7 @@ func TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation(t
 	state := readObservationStateForTest(t, eng.baseline, t.Context())
 	assert.False(t, state.LocalTruthComplete)
 	assert.Equal(t, localTruthRecoveryDroppedEvents, state.LocalTruthRecoveryReason)
-	assert.Zero(t, rt.localObs.DroppedEvents())
-	assert.Zero(t, rt.localObs.DroppedRetries())
-	require.NotNil(t, rt.dirtyBuf.FlushImmediate())
+	assert.Zero(t, rt.resources.localObs.DroppedEvents())
+	assert.Zero(t, rt.resources.localObs.DroppedRetries())
+	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
 }

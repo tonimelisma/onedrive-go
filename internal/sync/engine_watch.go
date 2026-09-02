@@ -194,7 +194,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// dirty/full-refresh signals only; snapshot refresh and planning happen
 	// after debounce.
 	dirtyBuf := newDirtyBuffer(rt.deps.logger)
-	rt.dirtyBuf = dirtyBuf
+	rt.resources.dirtyBuf = dirtyBuf
 	replanReady := dirtyBuf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
 
 	// Tickers/timers.
@@ -215,13 +215,13 @@ func (rt *watchRuntime) initWatchInfra(
 	}
 
 	pipe.cleanup = func() {
-		if rt.socketIOWakeStop != nil {
-			close(rt.socketIOWakeStop)
-			if rt.socketIOWakeDone != nil {
-				<-rt.socketIOWakeDone
+		if rt.resources.socketIOWakeStop != nil {
+			close(rt.resources.socketIOWakeStop)
+			if rt.resources.socketIOWakeDone != nil {
+				<-rt.resources.socketIOWakeDone
 			}
-			rt.socketIOWakeStop = nil
-			rt.socketIOWakeDone = nil
+			rt.resources.socketIOWakeStop = nil
+			rt.resources.socketIOWakeDone = nil
 		}
 
 		stopTicker(maintenanceTicker)
@@ -237,13 +237,13 @@ func (rt *watchRuntime) initWatchInfra(
 		rt.stopRetryTimer()
 		rt.stopTrialTimer()
 		pool.Stop() // closes completions channel after workers exit
-		rt.observerErrs = nil
-		rt.localBatches = nil
-		rt.remoteBatches = nil
-		rt.skippedItems = nil
-		rt.activeObservers = 0
-		rt.remoteObs = nil
-		rt.localObs = nil
+		rt.resources.observerErrs = nil
+		rt.resources.localBatches = nil
+		rt.resources.remoteBatches = nil
+		rt.resources.skippedItems = nil
+		rt.resources.activeObservers = 0
+		rt.resources.remoteObs = nil
+		rt.resources.localObs = nil
 		rt.deps.emit(engineDebugEvent{Type: engineDebugEventWatchStopped})
 		rt.deps.logger.Info("watch mode stopped")
 	}
@@ -377,7 +377,7 @@ func (rt *watchRuntime) startObservers(
 		localObs.SetWatcherFactory(rt.engine.localWatcherFactory)
 	}
 
-	rt.localObs = localObs
+	rt.resources.localObs = localObs
 
 	obsWg.Add(1)
 	count++
@@ -385,12 +385,12 @@ func (rt *watchRuntime) startObservers(
 
 	rt.startLocalObserver(ctx, &obsWg, localObs, localBatches, protectedRootEvents, errs)
 
-	rt.observerErrs = errs
-	rt.activeObservers = count
-	rt.skippedItems = skippedCh
-	rt.localBatches = localBatches
-	rt.protectedRootEvents = protectedRootEvents
-	rt.remoteBatches = remoteBatches
+	rt.resources.observerErrs = errs
+	rt.resources.activeObservers = count
+	rt.resources.skippedItems = skippedCh
+	rt.resources.localBatches = localBatches
+	rt.resources.protectedRootEvents = protectedRootEvents
+	rt.resources.remoteBatches = remoteBatches
 	return nil
 }
 
@@ -453,8 +453,8 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 	wakeCh := make(chan struct{}, 1)
 
 	stopCh := make(chan struct{})
-	rt.socketIOWakeStop = stopCh
-	rt.socketIOWakeDone = make(chan struct{})
+	rt.resources.socketIOWakeStop = stopCh
+	rt.resources.socketIOWakeDone = make(chan struct{})
 	wakeSource := rt.engine.socketIOWakeSourceFactory(
 		rt.engine.socketIOFetcher,
 		rt.engine.driveID,
@@ -467,7 +467,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 	go func() {
 		wakeCtx, wakeCancel := context.WithCancel(ctx)
 		defer wakeCancel()
-		defer close(rt.socketIOWakeDone)
+		defer close(rt.resources.socketIOWakeDone)
 
 		go func() {
 			select {

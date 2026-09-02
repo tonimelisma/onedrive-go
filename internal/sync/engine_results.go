@@ -77,7 +77,7 @@ func (rt *watchRuntime) stopRetryTimer() {
 // across the engine.
 func (rt *watchRuntime) kickRetryHeldReleaseNow() {
 	select {
-	case rt.retryTimerCh <- struct{}{}:
+	case rt.timers.retryTimerCh <- struct{}{}:
 		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRetryKicked})
 	default:
 	}
@@ -87,7 +87,7 @@ func (rt *watchRuntime) kickRetryHeldReleaseNow() {
 // channel when retryTimerCh is not initialized (one-shot mode), which blocks
 // forever in a select — effectively disabling the case.
 func (rt *watchRuntime) retryTimerChan() <-chan struct{} {
-	return rt.retryTimerCh
+	return rt.timers.retryTimerCh
 }
 
 // recordError increments the failed counter, preserves the raw error for the
@@ -257,7 +257,7 @@ func (rt *watchRuntime) armTrialTimer() {
 	rt.resetTrialTimer(rt.deps.clock.AfterFunc(delay, func() {
 		rt.deps.emit(engineDebugEvent{Type: engineDebugEventTrialTimerFired})
 		select {
-		case rt.trialCh <- struct{}{}:
+		case rt.timers.trialCh <- struct{}{}:
 		default:
 		}
 	}))
@@ -267,7 +267,7 @@ func (rt *watchRuntime) armTrialTimer() {
 // time.AfterFunc sends to this channel when a trial timer fires.
 // The channel is always non-nil after NewEngine.
 func (rt *watchRuntime) trialTimerChan() <-chan struct{} {
-	return rt.trialCh
+	return rt.timers.trialCh
 }
 
 // stopTrialTimer stops and clears the trial timer. Called on shutdown.

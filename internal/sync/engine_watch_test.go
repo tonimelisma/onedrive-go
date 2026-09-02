@@ -947,8 +947,8 @@ func TestEngine_Close_CleansStaleAndIsIdempotent(t *testing.T) {
 	// only; watch observers now belong to the runtime and are cleaned up by the
 	// watch coordinator, not by Engine.Close.
 	setupWatchEngine(t, testEng)
-	testWatchRuntime(t, testEng).remoteObs = &remoteObserver{}
-	testWatchRuntime(t, testEng).localObs = &localObserver{}
+	testWatchRuntime(t, testEng).resources.remoteObs = &remoteObserver{}
+	testWatchRuntime(t, testEng).resources.localObs = &localObserver{}
 
 	// First Close should succeed.
 	require.NoError(t, eng.Close(t.Context()))
