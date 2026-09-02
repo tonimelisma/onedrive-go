@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync/atomic"
-	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -62,10 +61,6 @@ type Engine struct {
 	assertInvariants bool
 	debugEventHook   func(DebugEvent)
 
-	// nowFn is the engine's clock. Defaults to time.Now. Tests inject a
-	// controllable clock for deterministic trial timer and scope timing.
-	nowFn func() time.Time
-
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
 	// inotify watch limit exhaustion (ENOSPC).
@@ -79,10 +74,10 @@ type Engine struct {
 		socketIOWakeSourceOptions,
 	) socketIOWakeSourceRunner
 
-	afterFunc func(time.Duration, func()) syncTimer
-	newTicker func(time.Duration) syncTicker
-	sleepFn   func(context.Context, time.Duration) error
-	jitterFn  func(time.Duration) time.Duration
+	// clock is the engine's single time capability: now, delayed callbacks,
+	// tickers, sleeps, and retry jitter. See syncClock for why these are one
+	// value rather than five injectable fields.
+	clock     syncClock
 	nextRunID atomic.Int64
 }
 
@@ -167,11 +162,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		enableWebsocket:          cfg.EnableWebsocket,
 		minFreeSpace:             cfg.MinFreeSpace,
 		diskAvailableFn:          driveops.DiskAvailable,
-		nowFn:                    time.Now,
-		afterFunc:                realAfterFunc,
-		newTicker:                realNewTicker,
-		sleepFn:                  realSleep,
-		jitterFn:                 realJitter,
+		clock:                    realClock{},
 		socketIOWakeSourceFactory: func(
 			fetcher socketIOEndpointFetcher,
 			driveID driveid.ID,

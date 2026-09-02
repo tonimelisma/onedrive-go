@@ -1409,7 +1409,7 @@ func TestWatch_PollsAtInterval(t *testing.T) {
 	}
 
 	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-	obs.SleepFunc = noopSleep
+	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: noopSleep}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
@@ -1553,10 +1553,10 @@ func TestWatch_BackoffOnError(t *testing.T) {
 	var sleepDurations []time.Duration
 
 	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-	obs.SleepFunc = func(_ context.Context, d time.Duration) error {
+	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(_ context.Context, d time.Duration) error {
 		sleepDurations = append(sleepDurations, d)
 		return nil
-	}
+	}}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
@@ -1649,7 +1649,7 @@ func TestWatch_DeltaExpiredResets(t *testing.T) {
 	}
 
 	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-	obs.SleepFunc = noopSleep
+	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: noopSleep}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
@@ -1680,7 +1680,7 @@ func TestWatch_ContextCancellation(t *testing.T) {
 
 	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	pollStarted := make(chan struct{})
-	obs.SleepFunc = func(ctx context.Context, _ time.Duration) error {
+	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
 		select {
 		case <-pollStarted:
 		default:
@@ -1689,7 +1689,7 @@ func TestWatch_ContextCancellation(t *testing.T) {
 		// Block until canceled.
 		<-ctx.Done()
 		return ctx.Err()
-	}
+	}}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
@@ -1742,7 +1742,7 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 	}
 
 	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-	obs.SleepFunc = noopSleep
+	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: noopSleep}
 
 	// Before Watch starts, token is empty.
 	assert.Empty(t, obs.CurrentDeltaToken(), "initial token")
@@ -1752,15 +1752,15 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 	_ = startTestRemoteBatchDrain(ctx, batches, nil)
 
 	pollCount := 0
-	origSleep := obs.SleepFunc
-	obs.SleepFunc = func(ctx context.Context, d time.Duration) error {
+	origSleep := obs.clock.Sleep
+	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(ctx context.Context, d time.Duration) error {
 		pollCount++
 		if pollCount >= 2 {
 			cancel()
 			return ctx.Err()
 		}
 		return origSleep(ctx, d)
-	}
+	}}
 
 	err := obs.Watch(ctx, "initial-token", batches, time.Millisecond, nil, nil)
 	require.NoError(t, err, "Watch returned error")
@@ -1786,10 +1786,10 @@ func TestWatch_IntervalClamping(t *testing.T) {
 
 	// Track what interval the sleep function actually receives.
 	var actualSleepDuration time.Duration
-	obs.SleepFunc = func(_ context.Context, d time.Duration) error {
+	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(_ context.Context, d time.Duration) error {
 		actualSleepDuration = d
 		return errors.New("stop after first sleep")
-	}
+	}}
 
 	batches := make(chan remoteObservationBatch, 10)
 	// Pass zero interval — should be clamped to MinPollInterval (30s).
@@ -2260,7 +2260,7 @@ func TestWatch_CommitsObservations(t *testing.T) {
 
 	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	store := newTestStore(t)
-	obs.SleepFunc = noopSleep
+	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: noopSleep}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
@@ -2362,7 +2362,7 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	store := newTestStore(t)
 	ctx, cancel := context.WithCancel(t.Context())
-	obs.SleepFunc = func(ctx context.Context, _ time.Duration) error {
+	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
 		pollCount++
 		if pollCount >= 1 {
 			cancel()
@@ -2370,7 +2370,7 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 		}
 
 		return nil
-	}
+	}}
 
 	batches := make(chan remoteObservationBatch, 10)
 	err := obs.Watch(

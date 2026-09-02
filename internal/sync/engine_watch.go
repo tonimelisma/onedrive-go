@@ -200,7 +200,7 @@ func (rt *watchRuntime) initWatchInfra(
 
 	// Tickers/timers.
 	rt.resetRefreshTimer(nil)
-	maintenanceTicker := rt.engine.newTicker(maintenanceInterval)
+	maintenanceTicker := rt.engine.clock.NewTicker(maintenanceInterval)
 
 	// Arm retrier timer from DB — picks up items from prior crash or prior pass.
 	rt.kickRetryHeldReleaseNow()
@@ -372,7 +372,7 @@ func (rt *watchRuntime) startObservers(
 	localObs.SetSkippedChannel(skippedCh)
 	localObs.SetLocalObservationBatchChannel(localBatches)
 	localObs.safetyScanInterval = localWatchHealthySafetyScanInterval
-	localObs.StartupSafetyScan = true
+	localObs.startupSafetyScan = true
 
 	if rt.engine.localWatcherFactory != nil {
 		localObs.SetWatcherFactory(rt.engine.localWatcherFactory)
@@ -533,7 +533,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 	ctx context.Context, obs *localObserver, tree *synctree.Root,
 	events chan<- changeEvent, interval time.Duration,
 ) {
-	ticker := rt.engine.newTicker(interval)
+	ticker := rt.engine.clock.NewTicker(interval)
 	defer stopTicker(ticker)
 
 	rt.engine.logger.Info("periodic full scan fallback started",
@@ -546,7 +546,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 			// Jitter: sleep 0-10% of interval to prevent thundering-herd
 			// when multiple drives fire periodic scans simultaneously.
 			if jitter := interval / periodicScanJitterDivisor; jitter > 0 {
-				if err := rt.engine.sleepFn(ctx, rt.engine.jitterFn(jitter)); err != nil {
+				if err := rt.engine.clock.Sleep(ctx, rt.engine.clock.Jitter(jitter)); err != nil {
 					return
 				}
 			}

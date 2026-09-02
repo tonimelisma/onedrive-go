@@ -154,31 +154,32 @@ func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 // comparing each entry against the in-memory baseline. Stateless — syncRoot
 // is a parameter of FullScan, allowing reuse across passes.
 type localObserver struct {
-	Baseline            *Baseline
-	Logger              *slog.Logger
+	baseline            *Baseline
+	logger              *slog.Logger
 	checkWorkers        int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
 	filterConfig        ContentFilterConfig
 	protectedRoots      []ProtectedRoot
 	observationRules    LocalObservationRules
 	expectedRootID      *synctree.FileIdentity
 	protectedRootEvents protectedRootEventSink
-	WatcherFactory      func() (fsWatcher, error)
-	droppedEvents       atomic.Int64                                     // events dropped by TrySend due to full channel
-	droppedRetries      atomic.Int64                                     // hash requests dropped due to full channel
-	lastActivityNano    atomic.Int64                                     // liveness: updated on each event emit (B-125)
-	SleepFunc           func(ctx context.Context, d time.Duration) error // injectable for testing
-	SafetyTickFunc      func(d time.Duration) (<-chan time.Time, func()) // injectable for testing; returns tick channel + stop func
-	safetyScanInterval  time.Duration                                    // 0 → default (5 minutes); configurable (B-099)
+	watcherFactory      func() (fsWatcher, error)
+	droppedEvents       atomic.Int64  // events dropped by TrySend due to full channel
+	droppedRetries      atomic.Int64  // hash requests dropped due to full channel
+	lastActivityNano    atomic.Int64  // liveness: updated on each event emit (B-125)
+	safetyScanInterval  time.Duration // 0 → default (5 minutes); configurable (B-099)
 
 	// hashFunc computes the QuickXorHash of a file. Injectable for testing
 	// (e.g., to simulate panics in the hash phase).
-	HashFunc func(path string) (string, error)
+	hashFunc func(path string) (string, error)
 
-	AfterFunc       func(delay time.Duration, fn func()) syncTimer // injectable for deterministic tests
-	AfterSafetyScan func()                                         // test hook: called after safety-scan state reset completes
+	// clock is the observer's time capability: safety-scan ticks, retry
+	// sleeps, and write-coalesce timers all read the same clock, so a test
+	// cannot advance one without the others.
+	clock           syncClock
+	afterSafetyScan func() // test hook: called after safety-scan state reset completes
 
-	WriteCoalesceCooldown time.Duration // 0 → defaultWriteCoalesceCooldown; injectable for tests
-	StartupSafetyScan     bool          // engine watch mode closes the bootstrap-to-fsnotify startup gap
+	writeCoalesceCooldown time.Duration // 0 → defaultWriteCoalesceCooldown; injectable for tests
+	startupSafetyScan     bool          // engine watch mode closes the bootstrap-to-fsnotify startup gap
 
 	// skippedCh forwards SkippedItems from safety scans to the engine for
 	// observation-issue persistence. Nil disables forwarding (pre-existing behavior).
@@ -202,18 +203,13 @@ type localObserver struct {
 // during observation.
 func newLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int) *localObserver {
 	return &localObserver{
-		Baseline:        baseline,
-		Logger:          logger,
+		baseline:        baseline,
+		logger:          logger,
 		checkWorkers:    checkWorkers,
-		HashFunc:        driveops.ComputeQuickXorHash,
-		AfterFunc:       realAfterFunc,
-		SleepFunc:       timeSleep,
+		hashFunc:        driveops.ComputeQuickXorHash,
+		clock:           realClock{},
 		localWatchState: newLocalWatchState(),
-		SafetyTickFunc: func(d time.Duration) (<-chan time.Time, func()) {
-			t := time.NewTicker(d)
-			return t.C, t.Stop
-		},
-		WatcherFactory: func() (fsWatcher, error) {
+		watcherFactory: func() (fsWatcher, error) {
 			w, err := fsnotify.NewWatcher()
 			if err != nil {
 				return nil, fmt.Errorf("create fsnotify watcher: %w", err)
@@ -302,7 +298,7 @@ func (o *localObserver) cancelPendingTimer(path string) {
 // tests to inject a mock factory that simulates inotify watch limit exhaustion
 // (ENOSPC) or other platform-specific failure modes.
 func (o *localObserver) SetWatcherFactory(fn func() (fsWatcher, error)) {
-	o.WatcherFactory = fn
+	o.watcherFactory = fn
 }
 
 // TrySend sends a ChangeEvent to the events channel without blocking. If the
@@ -326,7 +322,7 @@ func (o *localObserver) TrySendChangeEventOnly(ctx context.Context, events chan<
 	case <-ctx.Done():
 	default:
 		o.droppedEvents.Add(1)
-		o.Logger.Warn("event channel full, dropping event (safety scan will catch up)",
+		o.logger.Warn("event channel full, dropping event (safety scan will catch up)",
 			slog.String("path", ev.Path),
 			slog.String("type", ev.Type.String()),
 		)
@@ -344,7 +340,7 @@ func (o *localObserver) TrySendLocalObservationBatch(ctx context.Context, batch 
 	case <-ctx.Done():
 	default:
 		o.droppedEvents.Add(1)
-		o.Logger.Warn("local observation batch channel full, marking local truth suspect on maintenance",
+		o.logger.Warn("local observation batch channel full, marking local truth suspect on maintenance",
 			slog.Bool("full_snapshot", batch.fullSnapshot),
 			slog.Int("rows", len(batch.rows)),
 			slog.Int("deleted_paths", len(batch.deletedPaths)),
@@ -414,7 +410,7 @@ func (o *localObserver) recordActivity() {
 func (o *localObserver) EstimateDirCount() int {
 	count := 1 // sync root always needs a watch
 
-	o.Baseline.ForEachPath(func(_ string, entry *BaselineEntry) {
+	o.baseline.ForEachPath(func(_ string, entry *BaselineEntry) {
 		if entry.ItemType == ItemTypeFolder {
 			count++
 		}
@@ -435,11 +431,11 @@ func (o *localObserver) EstimateDirCount() int {
 // scan provides eventual consistency for any dropped events.
 func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events chan<- changeEvent) error {
 	syncRoot := tree.Path()
-	o.Logger.Info("local observer starting watch",
+	o.logger.Info("local observer starting watch",
 		slog.String("sync_root", syncRoot),
 	)
 
-	watcher, err := o.WatcherFactory()
+	watcher, err := o.watcherFactory()
 	if err != nil {
 		return fmt.Errorf("sync: creating filesystem watcher: %w", err)
 	}
@@ -448,7 +444,7 @@ func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 	defer o.cancelPendingTimers()
 
 	// Pre-flight capacity check (Linux only; no-op on other platforms).
-	checkInotifyCapacity(o.EstimateDirCount(), o.Logger)
+	checkInotifyCapacity(o.EstimateDirCount(), o.logger)
 
 	// Walk the sync root to add watches on all existing directories.
 	if walkErr := o.AddWatchesRecursive(ctx, watcher, tree); walkErr != nil {
@@ -458,7 +454,7 @@ func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 
 		return fmt.Errorf("sync: adding initial watches: %w", walkErr)
 	}
-	if o.StartupSafetyScan {
+	if o.startupSafetyScan {
 		// Close the startup gap between the bootstrap local scan and the point at
 		// which fsnotify watches are fully installed. Any local change that lands in
 		// that window is observed here; subsequent changes are covered by the
@@ -496,7 +492,7 @@ func (o *localObserver) rollbackAddedWatches(watcher fsWatcher, session *watchAd
 	for i := len(session.added) - 1; i >= 0; i-- {
 		path := session.added[i]
 		if err := watcher.Remove(path); err != nil {
-			o.Logger.Warn("watch setup rollback: failed to remove watch",
+			o.logger.Warn("watch setup rollback: failed to remove watch",
 				slog.String("path", path),
 				slog.String("error", err.Error()))
 		}
@@ -521,7 +517,7 @@ func (o *localObserver) AddWatchesRecursive(ctx context.Context, watcher fsWatch
 		logLevel = slog.LevelInfo
 	}
 
-	o.Logger.Log(ctx, logLevel, "watch setup complete",
+	o.logger.Log(ctx, logLevel, "watch setup complete",
 		slog.Int("watches_added", counts.watched),
 		slog.Int("watches_failed", counts.failed),
 	)

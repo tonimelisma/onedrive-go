@@ -7,6 +7,45 @@ import (
 	"time"
 )
 
+// syncClock is the engine's single time capability. Every time-dependent
+// decision in the runtime -- now, delayed callbacks, tickers, sleeps, and
+// retry jitter -- goes through one value.
+//
+// It is one interface rather than five injectable function fields because the
+// five are not independent. A test that replaced only `now` kept a real
+// ticker, and the pair described a state production can never reach: a clock
+// that has jumped an hour while the tickers that pace the runtime have not
+// moved. Bundling them makes that combination unrepresentable rather than
+// merely discouraged.
+type syncClock interface {
+	Now() time.Time
+	AfterFunc(delay time.Duration, fn func()) syncTimer
+	NewTicker(interval time.Duration) syncTicker
+	Sleep(ctx context.Context, delay time.Duration) error
+	Jitter(maxDelay time.Duration) time.Duration
+}
+
+// realClock is the production wall-clock implementation of syncClock.
+type realClock struct{}
+
+func (realClock) Now() time.Time { return time.Now() }
+
+func (realClock) AfterFunc(delay time.Duration, fn func()) syncTimer {
+	return realAfterFunc(delay, fn)
+}
+
+func (realClock) NewTicker(interval time.Duration) syncTicker {
+	return realNewTicker(interval)
+}
+
+func (realClock) Sleep(ctx context.Context, delay time.Duration) error {
+	return realSleep(ctx, delay)
+}
+
+func (realClock) Jitter(maxDelay time.Duration) time.Duration {
+	return realJitter(maxDelay)
+}
+
 // syncTimer is the engine-owned timer boundary. Production uses wall-clock
 // timers; tests can inject deterministic implementations without changing the
 // watch/runtime code paths.

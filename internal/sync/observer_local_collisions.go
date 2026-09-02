@@ -70,7 +70,7 @@ func (o *localObserver) HasCaseCollisionCached(_ *synctree.Root, dirPath, name, 
 	// Cross-check baseline for files that exist remotely but not locally.
 	// A file synced to OneDrive but unchanged on disk produces no event
 	// and may not appear in the filesystem cache (e.g., remote-only items).
-	variants := o.Baseline.GetCaseVariants(dbDir, name)
+	variants := o.baseline.GetCaseVariants(dbDir, name)
 	for _, v := range variants {
 		baseName := filepath.Base(v.Path)
 		if baseName == name {
