@@ -25,18 +25,18 @@ func (rt *watchRuntime) armRetryTimer() {
 		return
 	}
 
-	delay := earliest.Sub(rt.engine.nowFunc())
+	delay := earliest.Sub(rt.deps.now())
 	if delay <= 0 {
 		rt.kickRetryHeldReleaseNow()
 		return
 	}
 
-	rt.engine.emitDebugEvent(engineDebugEvent{
+	rt.deps.emit(engineDebugEvent{
 		Type:  engineDebugEventRetryTimerArmed,
 		Delay: delay,
 	})
-	rt.resetRetryTimer(rt.engine.clock.AfterFunc(delay, func() {
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryTimerFired})
+	rt.resetRetryTimer(rt.deps.clock.AfterFunc(delay, func() {
+		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRetryTimerFired})
 		rt.kickRetryHeldReleaseNow()
 	}))
 }
@@ -78,7 +78,7 @@ func (rt *watchRuntime) stopRetryTimer() {
 func (rt *watchRuntime) kickRetryHeldReleaseNow() {
 	select {
 	case rt.retryTimerCh <- struct{}{}:
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryKicked})
+		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRetryKicked})
 	default:
 	}
 }
@@ -240,7 +240,7 @@ func (rt *watchRuntime) armTrialTimer() {
 		return
 	}
 
-	delay := earliest.Sub(rt.engine.nowFunc())
+	delay := earliest.Sub(rt.deps.now())
 	if delay <= 0 {
 		delay = 1 * time.Millisecond // fire immediately
 	}
@@ -250,12 +250,12 @@ func (rt *watchRuntime) armTrialTimer() {
 	// the watch loop calls DueTrials, so even if a second AfterFunc
 	// fires while a signal is pending, all due scopes are still processed
 	// on the next loop iteration.
-	rt.engine.emitDebugEvent(engineDebugEvent{
+	rt.deps.emit(engineDebugEvent{
 		Type:  engineDebugEventTrialTimerArmed,
 		Delay: delay,
 	})
-	rt.resetTrialTimer(rt.engine.clock.AfterFunc(delay, func() {
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialTimerFired})
+	rt.resetTrialTimer(rt.deps.clock.AfterFunc(delay, func() {
+		rt.deps.emit(engineDebugEvent{Type: engineDebugEventTrialTimerFired})
 		select {
 		case rt.trialCh <- struct{}{}:
 		default:

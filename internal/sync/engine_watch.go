@@ -172,13 +172,13 @@ func (rt *watchRuntime) initWatchInfra(
 ) (*watchPipeline, error) {
 	// DepGraph tracks action dependencies. Active scope state is loaded from
 	// the persisted block_scopes table into watch-owned runtime state.
-	depGraph := newDepGraph(rt.engine.logger)
+	depGraph := newDepGraph(rt.deps.logger)
 	rt.depGraph = depGraph
 	if err := rt.loadActiveScopes(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
 
-	rt.scopeState = newScopeState(rt.engine.nowFunc, rt.engine.logger)
+	rt.scopeState = newScopeState(rt.engine.nowFunc, rt.deps.logger)
 	rt.nextActionID = 0
 
 	// dispatchCh feeds admitted actions to workers. Watch mode keeps this
@@ -186,20 +186,20 @@ func (rt *watchRuntime) initWatchInfra(
 	// actually ready to receive it.
 	rt.dispatchCh = make(chan *trackedAction, watchDispatchBuf)
 
-	pool := newWorkerPool(rt.engine.execCfg, rt.dispatchCh, rt.engine.baseline, rt.engine.logger, watchCompletionBuf)
+	pool := newWorkerPool(rt.engine.execCfg, rt.dispatchCh, rt.deps.store, rt.deps.logger, watchCompletionBuf)
 	pool.perfCollector = rt.engine.collector()
 	pool.Start(ctx, rt.engine.transferWorkers)
 
 	// DirtyBuffer is the watch scheduler boundary. Observation marks coarse
 	// dirty/full-refresh signals only; snapshot refresh and planning happen
 	// after debounce.
-	dirtyBuf := newDirtyBuffer(rt.engine.logger)
+	dirtyBuf := newDirtyBuffer(rt.deps.logger)
 	rt.dirtyBuf = dirtyBuf
 	replanReady := dirtyBuf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
 
 	// Tickers/timers.
 	rt.resetRefreshTimer(nil)
-	maintenanceTicker := rt.engine.clock.NewTicker(maintenanceInterval)
+	maintenanceTicker := rt.deps.clock.NewTicker(maintenanceInterval)
 
 	// Arm retrier timer from DB — picks up items from prior crash or prior pass.
 	rt.kickRetryHeldReleaseNow()
@@ -229,7 +229,7 @@ func (rt *watchRuntime) initWatchInfra(
 
 		inFlight := depGraph.InFlightCount()
 		if inFlight > 0 {
-			rt.engine.logger.Info("graceful shutdown: draining in-flight actions",
+			rt.deps.logger.Info("graceful shutdown: draining in-flight actions",
 				slog.Int("in_flight", inFlight),
 			)
 		}
@@ -244,8 +244,8 @@ func (rt *watchRuntime) initWatchInfra(
 		rt.activeObservers = 0
 		rt.remoteObs = nil
 		rt.localObs = nil
-		rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventWatchStopped})
-		rt.engine.logger.Info("watch mode stopped")
+		rt.deps.emit(engineDebugEvent{Type: engineDebugEventWatchStopped})
+		rt.deps.logger.Info("watch mode stopped")
 	}
 
 	return pipe, nil
@@ -260,7 +260,7 @@ func (rt *watchRuntime) initWatchInfra(
 //
 // Must be called after startup + initWatchInfra and before startObservers.
 func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode SyncMode, pipe *watchPipeline) error {
-	rt.engine.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
+	rt.deps.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
 
 	if pipe == nil || pipe.bl == nil {
 		return fmt.Errorf("sync: bootstrap requires startup baseline")
@@ -303,23 +303,23 @@ func (rt *watchRuntime) finishBootstrapWithoutActions(
 	if _, err := rt.commitPendingRemoteObservation(ctx, pendingRemoteObservation); err != nil {
 		return err
 	}
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
+	rt.deps.emit(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 	if err := rt.armFullRefreshTimer(ctx); err != nil {
 		return fmt.Errorf("sync: arming full remote refresh timer: %w", err)
 	}
-	rt.engine.logger.Info("bootstrap sync complete: no changes detected")
+	rt.deps.logger.Info("bootstrap sync complete: no changes detected")
 	return nil
 }
 
 func (rt *watchRuntime) finishBootstrapAfterActions(
 	ctx context.Context,
 ) error {
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
+	rt.deps.emit(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 	rt.postSyncHousekeeping(ctx)
 	if err := rt.armFullRefreshTimer(ctx); err != nil {
 		return fmt.Errorf("sync: arming full remote refresh timer: %w", err)
 	}
-	rt.engine.logger.Info("bootstrap sync complete")
+	rt.deps.logger.Info("bootstrap sync complete")
 	return nil
 }
 
@@ -346,14 +346,14 @@ func (rt *watchRuntime) startObservers(
 
 	obsWg.Add(1)
 	count++
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverRemote})
+	rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverRemote})
 	rt.startRemoteObserver(ctx, &obsWg, bl, remoteBatches, errs, opts)
 
 	// Channel for forwarding SkippedItems from safety scans to the engine.
 	// Buffered(2) — at most 2 safety scans could overlap before draining.
 	skippedCh := make(chan []skippedItem, 2)
 
-	localObs := newLocalObserver(bl, rt.engine.logger, rt.engine.checkWorkers)
+	localObs := newLocalObserver(bl, rt.deps.logger, rt.engine.checkWorkers)
 	localObs.SetFilterConfig(rt.engine.contentFilter)
 	localObs.SetProtectedRoots(rt.engine.protectedRoots)
 	localObs.SetObservationRules(rt.engine.localRules)
@@ -362,7 +362,7 @@ func (rt *watchRuntime) startObservers(
 		select {
 		case protectedRootEvents <- event:
 		default:
-			rt.engine.logger.Warn("managed shortcut root event channel full; parent engine reconciliation will retry",
+			rt.deps.logger.Warn("managed shortcut root event channel full; parent engine reconciliation will retry",
 				slog.String("path", event.Path),
 				slog.String("binding_id", event.BindingID),
 			)
@@ -381,7 +381,7 @@ func (rt *watchRuntime) startObservers(
 
 	obsWg.Add(1)
 	count++
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverLocal})
+	rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverLocal})
 
 	rt.startLocalObserver(ctx, &obsWg, localObs, localBatches, protectedRootEvents, errs)
 
@@ -406,20 +406,20 @@ func (rt *watchRuntime) startLocalObserver(
 ) {
 	go func() {
 		defer obsWg.Done()
-		defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverLocal})
+		defer rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverLocal})
 		defer close(localBatches)
 		defer close(protectedRootEvents)
-		defer recoverObserverPanic(rt.engine.logger, observerNameLocal, errs)
+		defer recoverObserverPanic(rt.deps.logger, observerNameLocal, errs)
 
 		watchErr := localObs.Watch(ctx, rt.engine.syncTree, nil)
 		if errors.Is(watchErr, errWatchLimitExhausted) {
-			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
-			rt.engine.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
+			rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
+			rt.deps.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
 				slog.Duration("scan_interval", localWatchDegradedFullScanInterval),
 			)
 
 			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, nil, localWatchDegradedFullScanInterval)
-			rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal})
+			rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal})
 			errs <- nil // clean exit after context cancel
 
 			return
@@ -446,7 +446,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 		return nil
 	}
 
-	rt.engine.logger.Info("starting socket.io wake source",
+	rt.deps.logger.Info("starting socket.io wake source",
 		slog.String("drive_id", rt.engine.driveID.String()),
 	)
 
@@ -459,7 +459,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 		rt.engine.socketIOFetcher,
 		rt.engine.driveID,
 		socketIOWakeSourceOptions{
-			Logger:        rt.engine.logger,
+			Logger:        rt.deps.logger,
 			LifecycleHook: rt.emitSocketIOLifecycleEvent,
 		},
 	)
@@ -478,7 +478,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 		}()
 
 		if err := wakeSource.Run(wakeCtx, wakeCh); err != nil {
-			rt.engine.logger.Warn("socket.io wake source exited",
+			rt.deps.logger.Warn("socket.io wake source exited",
 				slog.String("drive_id", rt.engine.driveID.String()),
 				slog.String("error", err.Error()),
 			)
@@ -522,7 +522,7 @@ func (rt *watchRuntime) emitSocketIOLifecycleEvent(event socketIOLifecycleEvent)
 		return
 	}
 
-	rt.engine.emitDebugEvent(debugEvent)
+	rt.deps.emit(debugEvent)
 }
 
 // runPeriodicFullScan runs periodic full filesystem scans as a fallback when
@@ -532,10 +532,10 @@ func (rt *watchRuntime) runPeriodicFullScan(
 	ctx context.Context, obs *localObserver, tree *synctree.Root,
 	events chan<- changeEvent, interval time.Duration,
 ) {
-	ticker := rt.engine.clock.NewTicker(interval)
+	ticker := rt.deps.clock.NewTicker(interval)
 	defer stopTicker(ticker)
 
-	rt.engine.logger.Info("periodic full scan fallback started",
+	rt.deps.logger.Info("periodic full scan fallback started",
 		slog.Duration("interval", interval),
 	)
 
@@ -545,7 +545,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 			// Jitter: sleep 0-10% of interval to prevent thundering-herd
 			// when multiple drives fire periodic scans simultaneously.
 			if jitter := interval / periodicScanJitterDivisor; jitter > 0 {
-				if err := rt.engine.clock.Sleep(ctx, rt.engine.clock.Jitter(jitter)); err != nil {
+				if err := rt.deps.clock.Sleep(ctx, rt.deps.clock.Jitter(jitter)); err != nil {
 					return
 				}
 			}
@@ -556,7 +556,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 					return
 				}
 
-				rt.engine.logger.Warn("periodic full scan failed",
+				rt.deps.logger.Warn("periodic full scan failed",
 					slog.String("error", err.Error()),
 				)
 
@@ -572,7 +572,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 			}
 
 			if len(result.Skipped) > 0 {
-				rt.engine.logger.Debug("periodic scan: skipped items",
+				rt.deps.logger.Debug("periodic scan: skipped items",
 					slog.Int("count", len(result.Skipped)))
 			}
 		case <-ctx.Done():

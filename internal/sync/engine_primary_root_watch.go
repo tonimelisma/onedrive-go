@@ -19,24 +19,24 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		rt.warnMountRootWebsocketFallback()
 		go func() {
 			defer obsWg.Done()
-			defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
+			defer rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
 			defer close(batches)
-			defer recoverObserverPanic(rt.engine.logger, observerNameRemote, errs)
+			defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
 
 			errs <- rt.watchMountRootRemote(ctx, bl, batches, pollInterval)
 		}()
 		return
 	}
 
-	remoteObs := newRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.engine.logger)
+	remoteObs := newRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.deps.logger)
 	remoteObs.SetItemClient(rt.engine.itemsClient)
 	remoteObs.SetShortcutTopology(rt.engine.shortcutNamespaceID, rt.engine.protectedRoots)
 	rt.remoteObs = remoteObs
 	wakeCh := rt.startSocketIOWakeSource(ctx)
 
-	state, tokenErr := rt.engine.baseline.ReadObservationState(ctx)
+	state, tokenErr := rt.deps.store.ReadObservationState(ctx)
 	if tokenErr != nil {
-		rt.engine.logger.Warn("failed to get delta token for watch",
+		rt.deps.logger.Warn("failed to get delta token for watch",
 			slog.String("error", tokenErr.Error()),
 		)
 	}
@@ -47,9 +47,9 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 
 	go func() {
 		defer obsWg.Done()
-		defer rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
+		defer rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
 		defer close(batches)
-		defer recoverObserverPanic(rt.engine.logger, observerNameRemote, errs)
+		defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
 
 		errs <- remoteObs.Watch(
 			ctx,
@@ -76,11 +76,11 @@ func (rt *watchRuntime) warnMountRootWebsocketFallback() {
 		return
 	}
 
-	rt.engine.emitDebugEvent(engineDebugEvent{
+	rt.deps.emit(engineDebugEvent{
 		Type: engineDebugEventWebsocketFallback,
 		Note: "mount_root",
 	})
-	rt.engine.logger.Warn("websocket watch is not supported for mount-root engines; falling back to polling",
+	rt.deps.logger.Warn("websocket watch is not supported for mount-root engines; falling back to polling",
 		slog.String("drive_id", rt.engine.driveID.String()),
 		slog.String("remote_root_item_id", rt.engine.remoteRootItemID),
 	)

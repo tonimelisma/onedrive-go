@@ -773,8 +773,28 @@ func newManualClock(start time.Time) *manualClock {
 	return &manualClock{now: start}
 }
 
+// installManualClock swaps the engine's clock and refreshes any runtime already
+// built from it.
+//
+// runtimeDeps snapshots the clock when a run starts, which is the right rule
+// for production -- a run's capabilities do not change underneath it -- so a
+// test that swaps the clock after building the runtime has to say so rather
+// than relying on the runtime re-reading the engine.
 func installManualClock(eng *Engine, clock *manualClock) {
 	eng.clock = clock
+}
+
+// installManualClockForTestEngine is the testEngine-aware form: it also
+// refreshes the deps of the runtime and flow the harness already built.
+func installManualClockForTestEngine(eng *testEngine, clock *manualClock) {
+	installManualClock(eng.Engine, clock)
+
+	if rt, ok := lookupTestWatchRuntime(eng); ok {
+		rt.deps = newRuntimeDeps(eng.Engine)
+	}
+	if flow, ok := lookupTestEngineFlow(eng); ok {
+		flow.deps = newRuntimeDeps(eng.Engine)
+	}
 }
 
 func (c *manualClock) Now() time.Time {

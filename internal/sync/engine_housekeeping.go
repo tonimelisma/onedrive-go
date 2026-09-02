@@ -10,15 +10,15 @@ import (
 // .partial deletion and session file cleanup. Synchronous — completes
 // before RunOnce returns to guarantee cleanup on process exit.
 func (flow *engineFlow) postSyncHousekeeping(ctx context.Context) {
-	if err := flow.engine.refreshProtectedRootsFromStore(ctx); err != nil && flow.engine.logger != nil {
-		flow.engine.logger.Warn("refresh protected roots before housekeeping",
+	if err := flow.engine.refreshProtectedRootsFromStore(ctx); err != nil && flow.deps.logger != nil {
+		flow.deps.logger.Warn("refresh protected roots before housekeeping",
 			"error", err.Error(),
 		)
 	}
 	driveops.CleanTransferArtifactsWithOptions(
 		flow.engine.syncTree,
 		flow.engine.sessionStore,
-		flow.engine.logger,
+		flow.deps.logger,
 		driveops.TransferArtifactCleanupOptions{
 			SkipDirs:            transferArtifactCleanupSkipDirs(flow.engine.contentFilter, flow.engine.protectedRoots),
 			IncludedDirs:        flow.engine.contentFilter.IncludedDirs,

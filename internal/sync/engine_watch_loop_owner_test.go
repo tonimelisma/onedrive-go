@@ -431,7 +431,7 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 	eng.transferWorkers = 2
 	clock := newManualClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	advance := clock.Advance
-	installManualClock(eng.Engine, clock)
+	installManualClockForTestEngine(eng, clock)
 	recorder := attachDebugEventRecorder(eng)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)

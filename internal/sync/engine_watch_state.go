@@ -175,7 +175,7 @@ func (rt *watchRuntime) queuePendingReplan(batch dirtyBatch) {
 	wasPending := rt.loop.hasPendingReplan
 	rt.loop.hasPendingReplan = true
 	if !wasPending {
-		rt.loop.pendingReplanAt = rt.engine.nowFunc()
+		rt.loop.pendingReplanAt = rt.deps.now()
 		rt.startPendingReplanDrainIdleTracking(rt.loop.pendingReplanAt)
 		rt.emitRuntimeDebugEvent(engineDebugEventPendingReplanSet, "", 0, time.Time{})
 	}
@@ -255,7 +255,7 @@ func (rt *watchRuntime) recordReplanWorkerIdle(phase perf.ReplanIdlePhase, start
 		return
 	}
 
-	rt.engine.collector().RecordReplanWorkerIdle(phase, idleWorkers, rt.engine.since(start))
+	rt.engine.collector().RecordReplanWorkerIdle(phase, idleWorkers, rt.deps.since(start))
 }
 
 func (rt *watchRuntime) startPendingReplanDrainIdleTracking(now time.Time) {
@@ -272,7 +272,7 @@ func (rt *watchRuntime) advancePendingReplanDrainIdleTracking() {
 		return
 	}
 
-	now := rt.engine.nowFunc()
+	now := rt.deps.now()
 	rt.engine.collector().RecordReplanWorkerIdle(
 		perf.ReplanIdlePhaseWaitingDrain,
 		rt.loop.pendingReplanDrainIdleWorkers,
@@ -324,9 +324,9 @@ func (rt *watchRuntime) emitRuntimeDebugEvent(
 		IdleWorkers: rt.idleWorkers(),
 	}
 	if !start.IsZero() {
-		event.Delay = rt.engine.since(start)
+		event.Delay = rt.deps.since(start)
 	}
-	rt.engine.emitDebugEvent(event)
+	rt.deps.emit(event)
 }
 
 func (rt *watchRuntime) earliestTrialAt() (time.Time, bool) {

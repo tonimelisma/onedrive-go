@@ -163,12 +163,12 @@ func (flow *engineFlow) assertObserverExitPhase(
 }
 
 func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
-	blocks, err := flow.engine.baseline.ListBlockScopes(ctx)
+	blocks, err := flow.deps.store.ListBlockScopes(ctx)
 	if err != nil {
 		return fmt.Errorf("listing block scopes: %w", err)
 	}
 
-	retryWork, err := flow.engine.baseline.ListRetryWork(ctx)
+	retryWork, err := flow.deps.store.ListRetryWork(ctx)
 	if err != nil {
 		return fmt.Errorf("listing retry_work rows: %w", err)
 	}
@@ -267,7 +267,7 @@ func (flow *engineFlow) assertReleasedScope(ctx context.Context, key ScopeKey) e
 		return fmt.Errorf("released scope %s still active in runtime state", key.String())
 	}
 
-	blocks, err := flow.engine.baseline.ListBlockScopes(ctx)
+	blocks, err := flow.deps.store.ListBlockScopes(ctx)
 	if err != nil {
 		return fmt.Errorf("listing block scopes: %w", err)
 	}
@@ -277,7 +277,7 @@ func (flow *engineFlow) assertReleasedScope(ctx context.Context, key ScopeKey) e
 		}
 	}
 
-	retryWork, err := flow.engine.baseline.ListRetryWork(ctx)
+	retryWork, err := flow.deps.store.ListRetryWork(ctx)
 	if err != nil {
 		return fmt.Errorf("listing retry_work rows: %w", err)
 	}
@@ -295,7 +295,7 @@ func (flow *engineFlow) assertDiscardedScope(ctx context.Context, key ScopeKey) 
 		return fmt.Errorf("discarded scope %s still active in runtime state", key.String())
 	}
 
-	blocks, err := flow.engine.baseline.ListBlockScopes(ctx)
+	blocks, err := flow.deps.store.ListBlockScopes(ctx)
 	if err != nil {
 		return fmt.Errorf("listing block scopes: %w", err)
 	}
@@ -305,7 +305,7 @@ func (flow *engineFlow) assertDiscardedScope(ctx context.Context, key ScopeKey) 
 		}
 	}
 
-	retryWork, err := flow.engine.baseline.ListRetryWork(ctx)
+	retryWork, err := flow.deps.store.ListRetryWork(ctx)
 	if err != nil {
 		return fmt.Errorf("listing retry_work rows: %w", err)
 	}

@@ -17,7 +17,7 @@ import (
 func (rt *watchRuntime) loadActiveScopes(ctx context.Context) error {
 	flow := rt.engineFlow
 
-	blocks, err := flow.engine.baseline.ListBlockScopes(ctx)
+	blocks, err := flow.deps.store.ListBlockScopes(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: listing active scopes: %w", err)
 	}
@@ -38,12 +38,12 @@ func (rt *watchRuntime) loadActiveScopes(ctx context.Context) error {
 func (flow *engineFlow) normalizePersistedScopes(
 	ctx context.Context,
 ) error {
-	blocks, listScopeErr := flow.engine.baseline.ListBlockScopes(ctx)
+	blocks, listScopeErr := flow.deps.store.ListBlockScopes(ctx)
 	if listScopeErr != nil {
 		return fmt.Errorf("sync: listing block scopes: %w", listScopeErr)
 	}
 
-	blockedRetries, err := flow.engine.baseline.ListBlockedRetryWork(ctx)
+	blockedRetries, err := flow.deps.store.ListBlockedRetryWork(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: listing blocked retry_work rows: %w", err)
 	}
@@ -59,10 +59,10 @@ func (flow *engineFlow) normalizePersistedScopes(
 }
 
 func (flow *engineFlow) dropStartupScopeRow(ctx context.Context, key ScopeKey, note string) error {
-	if err := flow.engine.baseline.DeleteBlockScope(ctx, key); err != nil {
+	if err := flow.deps.store.DeleteBlockScope(ctx, key); err != nil {
 		return fmt.Errorf("sync: deleting startup scope %s: %w", key.String(), err)
 	}
-	flow.engine.emitDebugEvent(engineDebugEvent{
+	flow.deps.emit(engineDebugEvent{
 		Type:     engineDebugEventStartupScopeNormalized,
 		ScopeKey: key,
 		Note:     note,
@@ -80,12 +80,12 @@ func (flow *engineFlow) activateScope(ctx context.Context, block *activeScope) e
 		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
 	}
 
-	if err := flow.engine.baseline.UpsertBlockScope(ctx, persisted); err != nil {
+	if err := flow.deps.store.UpsertBlockScope(ctx, persisted); err != nil {
 		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
 	}
 
 	flow.upsertActiveScope(block)
-	flow.engine.emitDebugEvent(engineDebugEvent{
+	flow.deps.emit(engineDebugEvent{
 		Type:     engineDebugEventScopeActivated,
 		ScopeKey: block.Key,
 	})
@@ -106,9 +106,9 @@ func (flow *engineFlow) extendScopeTrial(
 	}
 
 	newInterval := computeTrialInterval(retryAfter)
-	nextAt := flow.engine.nowFunc().Add(newInterval)
+	nextAt := flow.deps.now().Add(newInterval)
 
-	flow.engine.logger.Debug("extending trial interval",
+	flow.deps.logger.Debug("extending trial interval",
 		slog.String("scope_key", scopeKey.String()),
 		slog.Duration("new_interval", newInterval),
 		slog.Duration("retry_after", retryAfter),
@@ -134,12 +134,12 @@ func (flow *engineFlow) rearmScopeTrial(ctx context.Context, scopeKey ScopeKey) 
 		return nil
 	}
 
-	block.NextTrialAt = flow.engine.nowFunc().Add(block.TrialInterval)
+	block.NextTrialAt = flow.deps.now().Add(block.TrialInterval)
 	if err := flow.activateScope(ctx, &block); err != nil {
 		return fmt.Errorf("rearm trial interval for %s: %w", scopeKey.String(), err)
 	}
 
-	flow.engine.logger.Debug("rearming trial interval",
+	flow.deps.logger.Debug("rearming trial interval",
 		slog.String("scope_key", scopeKey.String()),
 		slog.Duration("interval", block.TrialInterval),
 	)
@@ -150,7 +150,7 @@ func (flow *engineFlow) rearmScopeTrial(ctx context.Context, scopeKey ScopeKey) 
 }
 
 func (flow *engineFlow) scopeHasBlockedRetryWork(ctx context.Context, scopeKey ScopeKey) (bool, error) {
-	rows, err := flow.engine.baseline.ListBlockedRetryWork(ctx)
+	rows, err := flow.deps.store.ListBlockedRetryWork(ctx)
 	if err != nil {
 		return false, fmt.Errorf("sync: checking blocked retry work for scope %s: %w", scopeKey.String(), err)
 	}
@@ -208,7 +208,7 @@ func (flow *engineFlow) feedScopeDetection(ctx context.Context, r *actionComplet
 // applyBlockScope persists and activates a new block scope using the same
 // timing policy as trial extension and rearm.
 func (flow *engineFlow) applyBlockScope(ctx context.Context, sr scopeUpdateResult) error {
-	now := flow.engine.nowFunc()
+	now := flow.deps.now()
 	interval := computeTrialInterval(sr.RetryAfter)
 
 	block := &activeScope{
@@ -220,7 +220,7 @@ func (flow *engineFlow) applyBlockScope(ctx context.Context, sr scopeUpdateResul
 		return fmt.Errorf("apply block scope %s: %w", sr.ScopeKey.String(), err)
 	}
 
-	flow.engine.logger.Warn("block scope active — actions blocked",
+	flow.deps.logger.Warn("block scope active — actions blocked",
 		slog.String("scope_key", sr.ScopeKey.String()),
 		slog.String("condition_type", sr.ConditionType),
 		slog.Duration("trial_interval", interval),
@@ -242,7 +242,7 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 		return nil
 	}
 
-	now := flow.engine.nowFunc()
+	now := flow.deps.now()
 	interval := computeTrialInterval(retryAfter)
 	block := &activeScope{
 		Key:           to,
@@ -253,12 +253,12 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 	if err != nil {
 		return fmt.Errorf("transition blocked scope %s -> %s: %w", from.String(), to.String(), err)
 	}
-	if err := flow.engine.baseline.UpsertBlockScope(ctx, persisted); err != nil {
+	if err := flow.deps.store.UpsertBlockScope(ctx, persisted); err != nil {
 		return fmt.Errorf("transition blocked scope %s -> %s: %w", from.String(), to.String(), err)
 	}
 
 	flow.upsertActiveScope(block)
-	flow.engine.emitDebugEvent(engineDebugEvent{
+	flow.deps.emit(engineDebugEvent{
 		Type:     engineDebugEventScopeActivated,
 		ScopeKey: to,
 	})
@@ -273,18 +273,18 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 				return fmt.Errorf("transition blocked scope %s -> %s: rearm old scope: %w", from.String(), to.String(), err)
 			}
 		} else {
-			if err := flow.engine.baseline.DiscardScope(ctx, from); err != nil {
+			if err := flow.deps.store.DiscardScope(ctx, from); err != nil {
 				return fmt.Errorf("transition blocked scope %s -> %s: discard old scope: %w", from.String(), to.String(), err)
 			}
 			flow.removeActiveScope(from)
-			flow.engine.emitDebugEvent(engineDebugEvent{
+			flow.deps.emit(engineDebugEvent{
 				Type:     engineDebugEventScopeDiscarded,
 				ScopeKey: from,
 			})
 		}
 	}
 
-	flow.engine.logger.Warn("block scope active — actions blocked",
+	flow.deps.logger.Warn("block scope active — actions blocked",
 		slog.String("scope_key", to.String()),
 		slog.String("condition_type", conditionType),
 		slog.Duration("trial_interval", interval),
@@ -297,19 +297,19 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 // releaseScope atomically removes the block scope and makes blocked retry work
 // under that scope eligible to run again.
 func (flow *engineFlow) releaseScope(ctx context.Context, key ScopeKey) error {
-	if err := flow.engine.baseline.ReleaseScope(ctx, key, flow.engine.nowFunc()); err != nil {
+	if err := flow.deps.store.ReleaseScope(ctx, key, flow.deps.now()); err != nil {
 		return fmt.Errorf("sync: releasing scope %s: %w", key.String(), err)
 	}
 
 	flow.removeActiveScope(key)
-	flow.engine.emitDebugEvent(engineDebugEvent{
+	flow.deps.emit(engineDebugEvent{
 		Type:     engineDebugEventScopeReleased,
 		ScopeKey: key,
 	})
 	flow.signals.kickDueHeldRelease()
 	flow.signals.armTrialTimer()
 
-	flow.engine.logger.Info("block scope cleared — blocked work released",
+	flow.deps.logger.Info("block scope cleared — blocked work released",
 		slog.String("scope_key", key.String()),
 	)
 
@@ -322,13 +322,13 @@ func (flow *engineFlow) releaseScope(ctx context.Context, key ScopeKey) error {
 // discardScope atomically removes the block scope and deletes blocked retry
 // work tied to it. Used when the blocked subtree itself disappears.
 func (flow *engineFlow) discardScope(ctx context.Context, key ScopeKey) error {
-	if err := flow.engine.baseline.DiscardScope(ctx, key); err != nil {
+	if err := flow.deps.store.DiscardScope(ctx, key); err != nil {
 		return fmt.Errorf("sync: discarding scope %s: %w", key.String(), err)
 	}
 
 	flow.removeActiveScope(key)
 	flow.signals.armTrialTimer()
-	flow.engine.emitDebugEvent(engineDebugEvent{
+	flow.deps.emit(engineDebugEvent{
 		Type:     engineDebugEventScopeDiscarded,
 		ScopeKey: key,
 	})
@@ -348,7 +348,7 @@ func (flow *engineFlow) persistBlockedRetryWork(
 		return fmt.Errorf("persist blocked retry_work for %s: missing scope key", work.Path)
 	}
 
-	row, err := flow.engine.baseline.RecordBlockedRetryWork(ctx, work, scopeKey)
+	row, err := flow.deps.store.RecordBlockedRetryWork(ctx, work, scopeKey)
 	if err != nil {
 		return fmt.Errorf("persist blocked retry_work for %s under %s: %w", work.Path, scopeKey.String(), err)
 	}
@@ -373,7 +373,7 @@ func (flow *engineFlow) clearBlockedRetryWorkForScope(
 		return nil
 	}
 
-	if err := flow.engine.baseline.ClearBlockedRetryWork(ctx, work, scopeKey); err != nil {
+	if err := flow.deps.store.ClearBlockedRetryWork(ctx, work, scopeKey); err != nil {
 		return fmt.Errorf("clear blocked retry_work for %s under %s: %w", work.Path, scopeKey.String(), err)
 	}
 	if row, ok := flow.retryRowsByKey[work]; ok && row.Blocked && row.ScopeKey == scopeKey {
@@ -444,7 +444,7 @@ func (flow *engineFlow) rehomeBlockedRetryWork(
 func (flow *engineFlow) drainDueHeldWorkNow(
 	ctx context.Context,
 ) ([]*trackedAction, error) {
-	now := flow.engine.nowFunc()
+	now := flow.deps.now()
 	var ready []*trackedAction
 
 	for _, key := range flow.dueRetryKeys(now) {

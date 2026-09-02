@@ -84,7 +84,7 @@ func TestWatchRuntime_ArmRetryTimer_FiresAfterDelay(t *testing.T) {
 
 	eng := newSingleOwnerEngine(t)
 	clock := newManualClock(eng.nowFunc())
-	installManualClock(eng.Engine, clock)
+	installManualClockForTestEngine(eng, clock)
 	rt := testWatchRuntime(t, eng)
 	now := clock.Now()
 

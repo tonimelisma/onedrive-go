@@ -32,7 +32,7 @@ func (flow *engineFlow) admitReady(
 	ctx context.Context,
 	ready []*trackedAction,
 ) ([]*trackedAction, error) {
-	decisions := flow.decideAdmission(flow.engine.nowFunc(), ready)
+	decisions := flow.decideAdmission(flow.deps.now(), ready)
 	filtered, ownedOnError, err := flow.filterFreshAdmissionDecisions(ctx, decisions)
 	if err != nil {
 		return ownedOnError, err
@@ -57,7 +57,7 @@ func (flow *engineFlow) filterFreshAdmissionDecisions(
 			continue
 		}
 
-		freshness, err := evaluateActionFreshnessFromStore(ctx, flow.engine.baseline, &ta.Action)
+		freshness, err := evaluateActionFreshnessFromStore(ctx, flow.deps.store, &ta.Action)
 		if err != nil {
 			return filtered, append(admissionDispatchActions(filtered), ta), err
 		}

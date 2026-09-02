@@ -19,14 +19,14 @@ func (rt *watchRuntime) releaseDueHeldTrialsNow(
 	bl *Baseline,
 ) ([]*trackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed("releaseDueHeldTrialsNow", "release due held trials")
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventTrialHeldReleaseStarted})
+	rt.deps.emit(engineDebugEvent{Type: engineDebugEventTrialHeldReleaseStarted})
 
 	dispatch, err := rt.reduceReadyFrontierStage(ctx, bl, nil)
 	if err != nil {
 		return dispatch, err
 	}
 	rt.armHeldTimers()
-	rt.engine.emitDebugEvent(engineDebugEvent{
+	rt.deps.emit(engineDebugEvent{
 		Type:  engineDebugEventTrialHeldReleaseCompleted,
 		Count: len(dispatch),
 	})
@@ -41,14 +41,14 @@ func (rt *watchRuntime) releaseDueHeldRetriesNow(
 	bl *Baseline,
 ) ([]*trackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed("releaseDueHeldRetriesNow", "release due held retries")
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventRetryHeldReleaseStarted})
+	rt.deps.emit(engineDebugEvent{Type: engineDebugEventRetryHeldReleaseStarted})
 
 	dispatch, err := rt.reduceReadyFrontierStage(ctx, bl, nil)
 	if err != nil {
 		return dispatch, err
 	}
 	rt.armHeldTimers()
-	rt.engine.emitDebugEvent(engineDebugEvent{
+	rt.deps.emit(engineDebugEvent{
 		Type:  engineDebugEventRetryHeldReleaseCompleted,
 		Count: len(dispatch),
 	})
@@ -79,7 +79,7 @@ func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, actio
 		if action != nil {
 			path = action.Path
 		}
-		flow.engine.logger.Warn("failed to clear retry_work on success",
+		flow.deps.logger.Warn("failed to clear retry_work on success",
 			slog.String("path", path),
 			slog.String("error", clearErr.Error()),
 		)
@@ -110,7 +110,7 @@ func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 	work RetryWorkKey,
 	resolutionSource string,
 ) error {
-	row, found, err := flow.engine.baseline.ResolveRetryWork(ctx, work)
+	row, found, err := flow.deps.store.ResolveRetryWork(ctx, work)
 	if err != nil {
 		return fmt.Errorf("resolve retry work %s: %w", work.Path, err)
 	}
@@ -121,7 +121,7 @@ func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 	delete(flow.retryRowsByKey, work)
 	flow.releaseHeldAction(work)
 
-	flow.engine.logger.Info("retry_work resolved",
+	flow.deps.logger.Info("retry_work resolved",
 		slog.String("path", row.Path),
 		slog.String("condition_type", retryConditionTypeForRow(row)),
 		slog.String("action_type", row.ActionType.String()),

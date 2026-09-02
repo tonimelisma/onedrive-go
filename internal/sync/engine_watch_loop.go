@@ -16,7 +16,7 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 	p *watchPipeline,
 	initialOutbox []*trackedAction,
 ) error {
-	ticker := rt.engine.clock.NewTicker(quiescenceLogInterval)
+	ticker := rt.deps.clock.NewTicker(quiescenceLogInterval)
 	defer stopTicker(ticker)
 
 	rt.enterBootstrap()
@@ -319,7 +319,7 @@ func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 	if event == nil {
 		return false, nil
 	}
-	bl, err := rt.engine.baseline.Load(ctx)
+	bl, err := rt.deps.store.Load(ctx)
 	if err != nil {
 		return false, fmt.Errorf("sync: load baseline for protected root event: %w", err)
 	}
@@ -333,7 +333,7 @@ func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 	if !changed || rt.engine.shortcutChildWorkSink == nil {
 		return false, nil
 	}
-	roots, err := rt.engine.baseline.listShortcutRoots(ctx)
+	roots, err := rt.deps.store.listShortcutRoots(ctx)
 	if err != nil {
 		return false, fmt.Errorf("sync: read shortcut roots after protected root event: %w", err)
 	}
@@ -427,7 +427,7 @@ func (rt *watchRuntime) appendReadyFrontier(ready []*trackedAction) error {
 	}
 	nextOutbox := append(rt.currentOutbox(), ready...)
 	rt.replaceOutbox(nextOutbox)
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventReadyFrontierAppended})
+	rt.deps.emit(engineDebugEvent{Type: engineDebugEventReadyFrontierAppended})
 	return nil
 }
 
@@ -462,11 +462,11 @@ func (rt *watchRuntime) handleObserverExit(_ *watchPipeline, shuttingDown bool) 
 	}
 
 	if shuttingDown {
-		rt.engine.logger.Info("all observers exited during shutdown")
+		rt.deps.logger.Info("all observers exited during shutdown")
 		return nil
 	}
 
-	rt.engine.logger.Error("all observers have exited, stopping watch mode")
+	rt.deps.logger.Error("all observers have exited, stopping watch mode")
 	return fmt.Errorf("sync: all observers exited")
 }
 
@@ -475,7 +475,7 @@ func (rt *watchRuntime) logObserverError(obsErr error) {
 		return
 	}
 
-	rt.engine.logger.Warn("observer error",
+	rt.deps.logger.Warn("observer error",
 		slog.String("error", obsErr.Error()),
 	)
 }
@@ -593,7 +593,7 @@ func (rt *watchRuntime) handleWatchHeldRelease(
 }
 
 func (rt *watchRuntime) logBootstrapWait() {
-	rt.engine.logger.Info("bootstrap: waiting for in-flight actions",
+	rt.deps.logger.Info("bootstrap: waiting for in-flight actions",
 		slog.Int("in_flight", rt.depGraph.InFlightCount()),
 		slog.Int("running", rt.runningCount),
 		slog.Int("held", len(rt.heldByKey)),
@@ -603,5 +603,5 @@ func (rt *watchRuntime) logBootstrapWait() {
 func (rt *watchRuntime) isBootstrapQuiescent() bool {
 	return len(rt.currentOutbox()) == 0 &&
 		rt.runningCount == 0 &&
-		!rt.hasDueHeldWork(rt.engine.nowFunc())
+		!rt.hasDueHeldWork(rt.deps.now())
 }

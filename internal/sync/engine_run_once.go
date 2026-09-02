@@ -124,7 +124,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	// Invariant: the current actionable-set builder always returns one
 	// dependency slice per action. Assert here to catch regressions early.
 	if len(plan.Actions) != len(plan.Deps) {
-		r.engine.logger.Error("plan invariant violation: Actions/Deps length mismatch",
+		r.deps.logger.Error("plan invariant violation: Actions/Deps length mismatch",
 			slog.Int("actions", len(plan.Actions)),
 			slog.Int("deps", len(plan.Deps)),
 		)
@@ -147,7 +147,7 @@ func (r *oneShotRunner) executePreparedPlan(
 		return nil
 	}
 
-	pool := newWorkerPool(r.engine.execCfg, r.dispatchCh, r.engine.baseline, r.engine.logger, len(plan.Actions))
+	pool := newWorkerPool(r.engine.execCfg, r.dispatchCh, r.deps.store, r.deps.logger, len(plan.Actions))
 	pool.perfCollector = r.engine.collector()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -230,7 +230,7 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 	}
 
 	if observation.cursorToken != "" {
-		if err := flow.engine.baseline.CommitObservationCursor(
+		if err := flow.deps.store.CommitObservationCursor(
 			ctx,
 			flow.engine.driveID,
 			observation.cursorToken,
@@ -239,10 +239,10 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 		}
 	}
 	if observation.markFullRemoteRefresh {
-		if err := flow.engine.baseline.MarkFullRemoteRefresh(
+		if err := flow.deps.store.MarkFullRemoteRefresh(
 			ctx,
 			flow.engine.driveID,
-			flow.engine.nowFunc(),
+			flow.deps.now(),
 			observation.observationMode,
 		); err != nil {
 			return false, fmt.Errorf("sync: marking full remote refresh: %w", err)
@@ -250,10 +250,10 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 		return false, nil
 	}
 	if observation.observationMode == remoteObservationModeEnumerate {
-		deadlineChanged, err := flow.engine.baseline.ClampFullRemoteRefreshDeadline(
+		deadlineChanged, err := flow.deps.store.ClampFullRemoteRefreshDeadline(
 			ctx,
 			flow.engine.driveID,
-			flow.engine.nowFunc().Add(remoteRefreshEnumerateInterval),
+			flow.deps.now().Add(remoteRefreshEnumerateInterval),
 		)
 		if err != nil {
 			return false, fmt.Errorf("sync: clamping full remote refresh: %w", err)

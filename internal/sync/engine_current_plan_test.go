@@ -126,7 +126,7 @@ func TestFilterLifecycle_LocalSnapshotRefreshAndRemoteRawReprojection(t *testing
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 	clock := newManualClock(time.Date(2026, 4, 29, 9, 0, 0, 0, time.UTC))
-	installManualClock(eng.Engine, clock)
+	installManualClockForTestEngine(eng, clock)
 
 	writeLocalFile(t, syncRoot, "visible/local.txt", "visible local")
 	writeLocalFile(t, syncRoot, "hidden/local.txt", "hidden local")

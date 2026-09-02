@@ -172,6 +172,26 @@ Permission timing follows the engine-owned runtime decision, not the probe:
   path; trial reclassification reuses that same fallback instead of treating
   inconclusive permission probes as fatal runtime errors
 
+## Run Capabilities Are Passed, Not Reached For
+
+Every per-run flow needs the same four things regardless of what it is
+deciding: somewhere to log, the durable store, the clock, and the debug event
+stream. Those arrive as `runtimeDeps`, constructed once when the run starts.
+
+They were reached through a back-pointer to the whole `Engine`. That pointer
+carried 320 references, and four targets accounted for 191 of them. Those four
+are not collaborators the flow coordinates with; they are ambient capabilities
+that happened to be in scope. Passing them in narrows what a flow can reach
+for, and leaves the remaining engine references as what they actually are: the
+specific configuration and collaborators a particular decision consults --
+`driveID`, `contentFilter`, `permHandler`, `syncTree`.
+
+The snapshot is deliberate. A run's capabilities do not change underneath it,
+so `runtimeDeps` copies them at construction rather than re-reading the engine
+on each access. The consequence is visible in tests: swapping the engine's
+clock after a runtime exists has no effect on that runtime, and the test helper
+that does so refreshes the deps explicitly rather than relying on a read-through.
+
 ## Asking For Future Work
 
 Completion, admission, and scope decisions do not reach for the watch runtime.

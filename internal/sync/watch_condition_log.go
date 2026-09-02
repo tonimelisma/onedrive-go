@@ -12,7 +12,7 @@ import (
 // in watch mode. The summary builder stays raw and machine-oriented; this
 // boundary owns human-oriented log phrasing and churn suppression.
 func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
-	snapshot, err := rt.engine.baseline.ReadDriveStatusSnapshot(ctx)
+	snapshot, err := rt.deps.store.ReadDriveStatusSnapshot(ctx)
 	if err != nil {
 		return
 	}
@@ -22,7 +22,7 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 	totalConditions := summary.ConditionTotal
 	if totalConditions == 0 {
 		if rt.loop.lastSummarySignature != "" {
-			rt.engine.logger.Info("sync conditions cleared")
+			rt.deps.logger.Info("sync conditions cleared")
 		}
 		rt.loop.lastSummarySignature = ""
 		return
@@ -35,7 +35,7 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 
 	rt.loop.lastSummarySignature = signature
 
-	rt.engine.logger.Warn("sync conditions",
+	rt.deps.logger.Warn("sync conditions",
 		slog.Int("total", totalConditions),
 		slog.String("breakdown", formatWatchConditionBreakdown(summary)),
 	)
@@ -82,12 +82,12 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup
 
 		switch previous, ok := rt.loop.lastRemoteBlocked[group.ScopeKey]; {
 		case !ok:
-			rt.engine.logger.Warn("shared-folder writes blocked",
+			rt.deps.logger.Warn("shared-folder writes blocked",
 				slog.String("boundary", boundary),
 				slog.Int("blocked_writes", len(group.BlockedPaths)),
 			)
 		case previous != signature:
-			rt.engine.logger.Warn("shared-folder writes still blocked",
+			rt.deps.logger.Warn("shared-folder writes still blocked",
 				slog.String("boundary", boundary),
 				slog.Int("blocked_writes", len(group.BlockedPaths)),
 			)
@@ -98,7 +98,7 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup
 		if _, ok := current[scopeKey]; ok {
 			continue
 		}
-		rt.engine.logger.Info("shared-folder write block cleared",
+		rt.deps.logger.Info("shared-folder write block cleared",
 			slog.String("boundary", scopeKey.Humanize()),
 		)
 	}

@@ -72,7 +72,7 @@ func (r *oneShotRunner) pollImmediateCompletion(
 
 func (r *oneShotRunner) finishResultsLoopIfSettled(outbox []*trackedAction, fatalErr error) (bool, error) {
 	switch {
-	case fatalErr == nil && len(outbox) == 0 && r.runningCount == 0 && !r.hasDueHeldWork(r.engine.nowFunc()):
+	case fatalErr == nil && len(outbox) == 0 && r.runningCount == 0 && !r.hasDueHeldWork(r.deps.now()):
 		return true, nil
 	case fatalErr != nil && len(outbox) == 0 && r.runningCount == 0:
 		return true, fatalErr
@@ -108,7 +108,7 @@ func (r *oneShotRunner) releaseIdleDueHeldWork(
 	ctx context.Context,
 	bl *Baseline,
 ) ([]*trackedAction, error, bool) {
-	if r.runningCount != 0 || !r.hasDueHeldWork(r.engine.nowFunc()) {
+	if r.runningCount != 0 || !r.hasDueHeldWork(r.deps.now()) {
 		return nil, nil, false
 	}
 

@@ -11,6 +11,10 @@ import (
 type engineFlow struct {
 	engine *Engine
 
+	// deps are the capabilities this run needs regardless of what it decides.
+	// See runtimeDeps for why they are passed rather than reached for.
+	deps runtimeDeps
+
 	// signals is how this flow asks for future work. Watch supplies the live
 	// runtime; one-shot supplies no-ops, because a one-shot pass has no future
 	// in which a timer could fire. See runtimeSignals.
@@ -65,6 +69,7 @@ type heldAction struct {
 func newEngineFlow(engine *Engine) *engineFlow {
 	flow := &engineFlow{
 		engine:         engine,
+		deps:           newRuntimeDeps(engine),
 		signals:        noRuntimeSignals{},
 		inspect:        noWatchInspector{},
 		runID:          engine.nextRuntimeRunID(),
