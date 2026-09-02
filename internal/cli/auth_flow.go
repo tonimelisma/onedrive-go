@@ -280,7 +280,7 @@ func cleanupPendingToken(cc *CLIContext, path string, reason string) {
 	}
 }
 
-func runLogoutWithContext(cc *CLIContext, purge bool) error {
+func runLogoutWithContext(ctx context.Context, cc *CLIContext, purge bool) error {
 	logger := cc.Logger
 
 	validated, warnings, err := config.LoadValidatedState(cc.CfgPath, true, logger)
@@ -290,6 +290,7 @@ func runLogoutWithContext(cc *CLIContext, purge bool) error {
 		}
 
 		account, autoErr := resolveLogoutAccountWithCatalog(
+			ctx,
 			validated.Config,
 			validated.Catalog,
 			cc.Flags.Account,
@@ -306,6 +307,7 @@ func runLogoutWithContext(cc *CLIContext, purge bool) error {
 
 	cfg, catalog := loadLogoutRecoveryState(cc.CfgPath, logger, warnings, err)
 	account, autoErr := resolveLogoutAccountWithCatalog(
+		ctx,
 		cfg,
 		catalog,
 		cc.Flags.Account,

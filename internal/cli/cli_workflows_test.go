@@ -77,7 +77,7 @@ func TestStatusCommand_NoAccountsWritesGuidance(t *testing.T) {
 	var out bytes.Buffer
 	cc := newCommandContext(&out, t.TempDir()+"/missing-config.toml")
 
-	require.NoError(t, runStatusCommand(cc, false))
+	require.NoError(t, runStatusCommand(t.Context(), cc, false))
 	assert.Contains(t, out.String(), "No accounts configured")
 }
 
@@ -153,7 +153,7 @@ func TestLogoutCommand_NoAccountsConfigured(t *testing.T) {
 
 	var out bytes.Buffer
 	cc := newCommandContext(&out, t.TempDir()+"/config.toml")
-	err := runLogoutWithContext(cc, false)
+	err := runLogoutWithContext(t.Context(), cc, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no accounts configured")
 }
@@ -167,7 +167,7 @@ func TestLogoutCommand_AutoSelectsSingleKnownAccountWithoutConfiguredDrives(t *t
 	var out bytes.Buffer
 	cc := newCommandContext(&out, t.TempDir()+"/config.toml")
 
-	require.NoError(t, runLogoutWithContext(cc, false))
+	require.NoError(t, runLogoutWithContext(t.Context(), cc, false))
 
 	_, tokenErr := os.Stat(filepath.Join(config.DefaultDataDir(), "token_personal_alice@example.com.json"))
 	assert.True(t, os.IsNotExist(tokenErr), "plain logout should remove the lone saved login even without configured drives")
@@ -199,7 +199,7 @@ func TestLogoutCommand_PurgeRemovesCatalogAccountAndDrive(t *testing.T) {
 	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Account = "alice@contoso.com"
 
-	require.NoError(t, runLogoutWithContext(cc, true))
+	require.NoError(t, runLogoutWithContext(t.Context(), cc, true))
 
 	_, tokenErr := os.Stat(config.DriveTokenPath(cid))
 	assert.True(t, os.IsNotExist(tokenErr), "logout --purge should remove token file")
@@ -238,7 +238,7 @@ func TestLogoutCommand_PurgeFallsBackWhenValidatedStateIsBroken(t *testing.T) {
 	cc.Logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	cc.Flags.Account = cid.Email()
 
-	require.NoError(t, runLogoutWithContext(cc, true))
+	require.NoError(t, runLogoutWithContext(t.Context(), cc, true))
 
 	_, tokenErr := os.Stat(config.DriveTokenPath(cid))
 	assert.True(t, os.IsNotExist(tokenErr), "purge fallback should remove token file")
@@ -322,7 +322,7 @@ func TestPauseCommand_PersistsTimedPause(t *testing.T) {
 
 	now := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
 
-	require.NoError(t, runPauseCommand(cc, func() time.Time { return now }, []string{"2h"}))
+	require.NoError(t, runPauseCommand(t.Context(), cc, func() time.Time { return now }, []string{"2h"}))
 
 	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
@@ -347,7 +347,7 @@ func TestResumeCommand_ClearsPausedKeys(t *testing.T) {
 	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
 
-	require.NoError(t, runResumeCommand(cc, time.Now))
+	require.NoError(t, runResumeCommand(t.Context(), cc, time.Now))
 
 	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)

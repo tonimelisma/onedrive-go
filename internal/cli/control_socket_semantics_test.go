@@ -84,7 +84,7 @@ func TestNotifyDaemon_ReportsControlSocketPathFailureClearly(t *testing.T) {
 	var status bytes.Buffer
 	cc := &CLIContext{StatusWriter: &status}
 
-	notifyDaemon(cc)
+	notifyDaemon(t.Context(), cc)
 	assert.Contains(t, status.String(), "control socket unavailable")
 	assert.Contains(t, status.String(), "changes take effect on next daemon start")
 }
@@ -103,7 +103,7 @@ func TestNotifyDaemon_ReportsAmbiguousProbeFailureClearly(t *testing.T) {
 	var status bytes.Buffer
 	cc := &CLIContext{StatusWriter: &status}
 
-	notifyDaemon(cc)
+	notifyDaemon(t.Context(), cc)
 	assert.Contains(t, status.String(), "control socket probe failed")
 	assert.Contains(t, status.String(), "changes take effect on next daemon start")
 	assert.NotContains(t, status.String(), "no running daemon found")
