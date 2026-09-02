@@ -1,6 +1,6 @@
 # Sync Observation
 
-GOVERNS: internal/sync/buffer.go, internal/sync/content_filter.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/issue_types.go, internal/sync/item_converter.go, internal/sync/local_hash_reuse.go, internal/sync/local_observation_batch.go, internal/sync/observed_items.go, internal/sync/observer_local.go, internal/sync/observer_local_collisions.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/scanner.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/symlink_observation.go
+GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/item_converter.go, internal/sync/local_hash_reuse.go, internal/sync/local_observation_batch.go, internal/sync/observed_items.go, internal/sync/observer_local.go, internal/sync/observer_local_collisions.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/scanner.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/symlink_observation.go
 
 Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.8.8 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified]
 

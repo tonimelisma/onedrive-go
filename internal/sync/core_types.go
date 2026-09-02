@@ -19,17 +19,6 @@ type skippedItem struct {
 	BlocksReadBoundary bool   // true when observation proved an unreadable subtree boundary
 }
 
-// scanResult is the return type of FullScan. Rows are the direct current local
-// snapshot that local_state persists. Events remain observation-local signals
-// for watch dirtiness and diagnostics; they are not planner input. Skipped are
-// user-actionable rejections (invalid names, path too long, file too large)
-// that the engine should record.
-type scanResult struct {
-	Events  []changeEvent
-	Rows    []localStateRow
-	Skipped []skippedItem
-}
-
 // changeEvent is an immutable observation fact produced by observers. The
 // runtime uses these facts to mark coarse dirty/full-refresh signals and to describe local or
 // remote observation results, but they are not the durable sync truth and are

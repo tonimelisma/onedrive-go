@@ -1,6 +1,6 @@
 # Sync Planning
 
-GOVERNS: internal/sync/planner.go, internal/sync/planner_actions.go, internal/sync/planner_truth_overlay.go, internal/sync/truth_status.go, internal/sync/actions.go, internal/sync/api_types.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/core_types.go
+GOVERNS: internal/sync/planner.go, internal/sync/planner_actions.go, internal/sync/planner_truth_overlay.go
 
 Implements: R-2.1.3 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified]
 
@@ -17,6 +17,18 @@ Planning is split between SQLite reconciliation and a Go action builder.
   and builds dependencies.
 
 The executable plan is runtime-owned and is not a durable SQLite authority.
+
+### The Vocabulary Moved Out
+
+`Action`, `ItemType`, `Baseline`, the sentinel errors, and the rest of the sync
+vocabulary used to live in this family. Because every other family needs those
+names, every other family appeared to depend on planning: 28 symbols from the
+store, 32 from observation, 24 from execution.
+
+That inverted the real relationship. Planning is a deterministic transform
+sitting *above* the store, not a foundation beneath everything. The vocabulary
+now lives in [sync-domain.md](sync-domain.md), and planning's inbound coupling
+is a single symbol.
 
 ### File Names Follow Ownership, Not History
 

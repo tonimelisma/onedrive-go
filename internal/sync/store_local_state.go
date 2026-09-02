@@ -336,9 +336,3 @@ func scanLocalStateRow(
 
 	return &row, nil
 }
-
-func buildLocalStateRows(result scanResult) []localStateRow {
-	rows := make([]localStateRow, len(result.Rows))
-	copy(rows, result.Rows)
-	return rows
-}

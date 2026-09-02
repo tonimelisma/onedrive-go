@@ -7,9 +7,7 @@ import (
 	"log/slog"
 	"runtime/debug"
 	stdsync "sync" // used by WaitGroup
-	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
@@ -326,34 +324,4 @@ func (wp *workerPool) closeCompletions() {
 	wp.closeOnce.Do(func() {
 		close(wp.completions)
 	})
-}
-
-// extractHTTPStatus unwraps a graph.GraphError from err and returns its
-// StatusCode. Returns 0 if err is nil or not a GraphError.
-func extractHTTPStatus(err error) int {
-	if err == nil {
-		return 0
-	}
-
-	var ge *graph.GraphError
-	if errors.As(err, &ge) {
-		return ge.StatusCode
-	}
-
-	return 0
-}
-
-// extractRetryAfter unwraps a graph.GraphError from err and returns its
-// RetryAfter duration. Returns 0 if err is nil or not a GraphError.
-func extractRetryAfter(err error) time.Duration {
-	if err == nil {
-		return 0
-	}
-
-	var ge *graph.GraphError
-	if errors.As(err, &ge) {
-		return ge.RetryAfter
-	}
-
-	return 0
 }

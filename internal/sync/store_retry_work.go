@@ -401,3 +401,8 @@ func retryConditionTypeForRow(row *RetryWorkRow) string {
 
 	return row.ScopeKey.ConditionType()
 }
+
+// WorkKey derives the domain identity of the work this persisted row records.
+func (row RetryWorkRow) WorkKey() RetryWorkKey {
+	return retryWorkKey(row.Path, row.OldPath, row.ActionType)
+}
