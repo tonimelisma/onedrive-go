@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.8.16 [verified]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.8.16 [verified]
 
 ## Overview
 
@@ -91,6 +91,32 @@ this matter.
 The signal logger writes to the status stream because the configured command
 logger does not exist yet when the handler is installed -- log configuration is
 resolved from flags after the command starts.
+
+### Commands Must Consume The Command Context
+
+Installing the handler is only half of the contract. A command that calls
+`context.Background()` on its own behalf silently opts out of cancellation: the
+signal still fires, the command context is still canceled, and the work the
+command is actually doing never learns about it.
+
+`status` did exactly that. It read `cmd.Context()` only to recover the
+`CLIContext` from it and then discarded the context itself, so the account
+snapshot load, the live overlay (which performs an OAuth token refresh and
+Graph calls), the runtime overlay, and the perf overlay all ran under a
+detached background context. Interrupting `onedrive-go status` could not stop a
+token refresh already in flight.
+
+The rule is therefore stated positively: a command entry point threads
+`cmd.Context()` into its command function as the first parameter, and every
+helper that performs I/O takes that context through. `context.Background()`
+belongs only at the process entry point in `root.go`, where the root context is
+created and the signal handler is attached to it.
+
+This is a behavioral requirement rather than a style preference, which is why
+R-6.3.6 is now evidenced by a test asserting the command's context reaches the
+live overlay, not only by a test asserting the handler cancels the context it
+owns. The two are independently falsifiable and the second does not imply the
+first.
 
 ## Command Surface
 

@@ -30,5 +30,7 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("read --perf flag: %w", err)
 	}
 
-	return runStatusCommand(mustCLIContext(cmd.Context()), false, showPerf)
+	ctx := cmd.Context()
+
+	return runStatusCommand(ctx, mustCLIContext(ctx), false, showPerf)
 }

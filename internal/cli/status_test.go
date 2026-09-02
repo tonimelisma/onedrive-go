@@ -69,7 +69,7 @@ type mockSyncStateQuerier struct {
 	state *syncStateInfo
 }
 
-func (m *mockSyncStateQuerier) QuerySyncState(_ string) *syncStateInfo {
+func (m *mockSyncStateQuerier) QuerySyncState(_ context.Context, _ string) *syncStateInfo {
 	return m.state
 }
 
@@ -183,6 +183,7 @@ func TestBuildChildStatusMount_InheritsParentPause(t *testing.T) {
 	child := testShortcutStatusChild(parentCID, syncengine.ShortcutRootStateActive)
 	paused := true
 	mount := buildChildStatusMount(
+		t.Context(),
 		&config.Drive{SyncDir: "/tmp/sync-root", Paused: &paused},
 		&child,
 	)
@@ -359,7 +360,7 @@ func buildStatusLifecycleMount(
 		}
 	}
 	child := testShortcutStatusChildFromRecord(parentCID, &record)
-	return buildChildStatusMount(&config.Drive{SyncDir: "/tmp/sync-root"}, &child)
+	return buildChildStatusMount(t.Context(), &config.Drive{SyncDir: "/tmp/sync-root"}, &child)
 }
 
 func assertStatusLifecycleMount(t *testing.T, mount *statusMount, tc *shortcutStatusLifecycleCase) {
@@ -443,6 +444,7 @@ func TestBuildChildStatusMount_SurfacesProtectedPaths(t *testing.T) {
 	record.ProtectedPaths = []string{"Shortcuts/Docs", "Shortcuts/Old Docs"}
 	child := testShortcutStatusChildFromRecord(parentCID, &record)
 	mount := buildChildStatusMount(
+		t.Context(),
 		&config.Drive{SyncDir: "/tmp/sync-root"},
 		&child,
 	)
@@ -466,6 +468,7 @@ func TestBuildSingleAccountStatusWith_NestsChildMountsUnderParent(t *testing.T) 
 	}
 
 	account := buildSingleAccountStatusWith(
+		t.Context(),
 		cfg,
 		"alice@example.com",
 		[]driveid.CanonicalID{parentCID},
@@ -541,6 +544,7 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	record.BlockedDetail = "shortcut alias path is blocked by a local file"
 	child := testShortcutStatusChildFromRecord(parentCID, &record)
 	mount := buildChildStatusMount(
+		t.Context(),
 		&config.Drive{SyncDir: "/tmp/sync-root"},
 		&child,
 	)
@@ -576,6 +580,7 @@ func TestBuildChildStatusMount_FinalDrainGuidesAccessRestore(t *testing.T) {
 	child := testShortcutStatusChild(parentCID, syncengine.ShortcutRootStateRemovedFinalDrain)
 
 	mount := buildChildStatusMount(
+		t.Context(),
 		&config.Drive{SyncDir: "/tmp/sync-root"},
 		&child,
 	)
@@ -665,7 +670,7 @@ func TestBuildStatusAccountsWith_SingleAccount(t *testing.T) {
 		},
 	}
 
-	accounts := buildStatusAccountsWith(cfg,
+	accounts := buildStatusAccountsWith(t.Context(), cfg,
 		&mockNameReader{displayName: "Alice", orgName: ""},
 		&mockSavedLoginChecker{},
 		&mockSyncStateQuerier{},
@@ -694,7 +699,7 @@ func TestBuildStatusAccountsWith_MultiAccountGrouping(t *testing.T) {
 		},
 	}
 
-	accounts := buildStatusAccountsWith(cfg,
+	accounts := buildStatusAccountsWith(t.Context(), cfg,
 		&mockNameReader{displayName: "", orgName: ""},
 		&mockSavedLoginChecker{},
 		&mockSyncStateQuerier{},
@@ -740,7 +745,7 @@ func TestBuildStatusAccountsWith_AuthenticationRequiredStates(t *testing.T) {
 				},
 			}
 
-			accounts := buildStatusAccountsWith(cfg,
+			accounts := buildStatusAccountsWith(t.Context(), cfg,
 				&mockNameReader{},
 				&mockSavedLoginChecker{reason: tc.savedLogin},
 				&mockSyncStateQuerier{},
@@ -761,7 +766,7 @@ func TestBuildStatusAccountsWith_EmptySyncDir(t *testing.T) {
 		},
 	}
 
-	accounts := buildStatusAccountsWith(cfg,
+	accounts := buildStatusAccountsWith(t.Context(), cfg,
 		&mockNameReader{},
 		&mockSavedLoginChecker{},
 		&mockSyncStateQuerier{},
@@ -781,7 +786,7 @@ func TestBuildStatusAccountsWith_SharePointGrouping(t *testing.T) {
 		},
 	}
 
-	accounts := buildStatusAccountsWith(cfg,
+	accounts := buildStatusAccountsWith(t.Context(), cfg,
 		&mockNameReader{displayName: "Alice", orgName: "Contoso"},
 		&mockSavedLoginChecker{},
 		&mockSyncStateQuerier{},
@@ -877,7 +882,7 @@ func TestBuildStatusAccountsWith_PersonalDriveUsesAccountFacingName(t *testing.T
 		},
 	}
 
-	accounts := buildStatusAccountsWith(cfg,
+	accounts := buildStatusAccountsWith(t.Context(), cfg,
 		&mockNameReader{displayName: "Alice"},
 		&mockSavedLoginChecker{},
 		&mockSyncStateQuerier{},
@@ -898,7 +903,7 @@ func TestBuildStatusAccountsWith_PausedOverridesNoToken(t *testing.T) {
 		},
 	}
 
-	accounts := buildStatusAccountsWith(cfg,
+	accounts := buildStatusAccountsWith(t.Context(), cfg,
 		&mockNameReader{},
 		&mockSavedLoginChecker{reason: authReasonMissingLogin},
 		&mockSyncStateQuerier{},
@@ -914,7 +919,7 @@ func TestBuildStatusAccountsWith_EmptyConfig(t *testing.T) {
 		Drives: map[driveid.CanonicalID]config.Drive{},
 	}
 
-	accounts := buildStatusAccountsWith(cfg,
+	accounts := buildStatusAccountsWith(t.Context(), cfg,
 		&mockNameReader{},
 		&mockSavedLoginChecker{},
 		&mockSyncStateQuerier{},
@@ -937,7 +942,7 @@ func TestBuildStatusAccountsWith_SyncStatePopulated(t *testing.T) {
 		ConditionCount: 2,
 	}
 
-	accounts := buildStatusAccountsWith(cfg,
+	accounts := buildStatusAccountsWith(t.Context(), cfg,
 		&mockNameReader{},
 		&mockSavedLoginChecker{},
 		&mockSyncStateQuerier{state: syncState},
@@ -959,7 +964,7 @@ func TestBuildStatusAccountsWith_NilSyncState(t *testing.T) {
 		},
 	}
 
-	accounts := buildStatusAccountsWith(cfg,
+	accounts := buildStatusAccountsWith(t.Context(), cfg,
 		&mockNameReader{},
 		&mockSavedLoginChecker{},
 		&mockSyncStateQuerier{state: nil},
@@ -974,7 +979,7 @@ func TestQuerySyncState_NoDB(t *testing.T) {
 
 	logger := slog.New(slog.DiscardHandler)
 
-	info := querySyncState("/nonexistent/path/state.db", logger)
+	info := querySyncState(t.Context(), "/nonexistent/path/state.db", logger)
 	require.NotNil(t, info)
 	assert.Zero(t, info.FileCount)
 }
@@ -989,7 +994,7 @@ func TestQuerySyncState_EmptyDB(t *testing.T) {
 	// Create a minimal DB with the required tables.
 	createTestStateDB(t, dbPath)
 
-	info := querySyncState(dbPath, logger)
+	info := querySyncState(t.Context(), dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, 0, info.FileCount)
 	assert.Equal(t, 0, info.ConditionCount)
@@ -1017,7 +1022,7 @@ func TestQuerySyncState_WithBaselineEntries(t *testing.T) {
 
 	require.NoError(t, db.Close())
 
-	info := querySyncState(dbPath, logger)
+	info := querySyncState(t.Context(), dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, 1, info.FileCount)
 	assert.Zero(t, info.ConditionCount)
@@ -1113,7 +1118,7 @@ func TestQuerySyncState_RemoteDriftAndConditions(t *testing.T) {
 		IssueType: syncengine.IssueInvalidFilename,
 	})
 
-	info := querySyncState(dbPath, logger)
+	info := querySyncState(t.Context(), dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, 4, info.RemoteDrift)    // three remote-only creates plus one baseline row missing on remote
 	assert.Equal(t, 1, info.ConditionCount) // 1 durable observation condition
@@ -1163,7 +1168,7 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions(t *testing.
 		IssueType: syncengine.IssueInvalidFilename,
 	})
 
-	info := querySyncState(dbPath, logger)
+	info := querySyncState(t.Context(), dbPath, logger)
 	require.NotNil(t, info)
 	assert.Equal(t, 3, info.ConditionCount)
 }
@@ -1206,7 +1211,7 @@ func TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper(t *testing.T) {
 		assert.NoError(t, store.Close(context.Background()))
 	})
 
-	info := querySyncState(dbPath, logger)
+	info := querySyncState(t.Context(), dbPath, logger)
 	require.NotNil(t, info)
 	assert.Zero(t, info.ConditionCount)
 }
@@ -1254,7 +1259,7 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 	}, scopeKey)
 	require.NoError(t, err)
 
-	info := querySyncState(dbPath, logger)
+	info := querySyncState(t.Context(), dbPath, logger)
 	require.NotNil(t, info)
 	invalidDescriptor := describeStatusCondition(syncengine.ConditionInvalidFilename)
 	sharedDescriptor := describeStatusCondition(syncengine.ConditionRemoteWriteDenied)
@@ -1933,7 +1938,7 @@ func TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState(t *testing.
 	cc.Flags.Drive = []string{cid.String()}
 	cc.Flags.JSON = true
 
-	require.NoError(t, runStatusCommand(cc, false))
+	require.NoError(t, runStatusCommand(t.Context(), cc, false))
 
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -1981,7 +1986,7 @@ func TestBuildConfiguredStatusDrive_ReportsDefaultSyncDirWhenUnset(t *testing.T)
 	cfg.Drives = map[driveid.CanonicalID]config.Drive{cid: {}}
 
 	drive := cfg.Drives[cid]
-	got := buildConfiguredStatusDrive(cfg, cid, &drive, &statusAccount{}, nil)
+	got := buildConfiguredStatusDrive(t.Context(), cfg, cid, &drive, &statusAccount{}, nil)
 
 	assert.NotEmpty(t, got.Folder, "status must report the effective sync dir, not the raw configured value")
 	assert.Equal(t,
@@ -1999,7 +2004,7 @@ func TestBuildConfiguredStatusDrive_PrefersConfiguredSyncDir(t *testing.T) {
 	cfg.Drives = map[driveid.CanonicalID]config.Drive{cid: {SyncDir: "/explicit/path"}}
 
 	drive := cfg.Drives[cid]
-	got := buildConfiguredStatusDrive(cfg, cid, &drive, &statusAccount{}, nil)
+	got := buildConfiguredStatusDrive(t.Context(), cfg, cid, &drive, &statusAccount{}, nil)
 
 	assert.Equal(t, "/explicit/path", got.Folder)
 }

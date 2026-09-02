@@ -41,7 +41,7 @@ func TestStatusRuntime_SummaryJSONWithActiveOwner(t *testing.T) {
 	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.JSON = true
 
-	require.NoError(t, runStatusCommand(cc, false))
+	require.NoError(t, runStatusCommand(t.Context(), cc, false))
 
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))

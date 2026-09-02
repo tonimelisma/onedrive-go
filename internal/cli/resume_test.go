@@ -84,7 +84,7 @@ func TestClearPausedKeys_ExpiredTimedPause_ClearedByResume(t *testing.T) {
 		StatusWriter: &statusBuf,
 	}
 
-	require.NoError(t, resumeSingleDrive(cc, cfg, cid.String()))
+	require.NoError(t, resumeSingleDrive(t.Context(), cc, cfg, cid.String()))
 
 	// Verify stale keys were removed from config file.
 	data, err := localpath.ReadFile(cfgPath)

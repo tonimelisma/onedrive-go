@@ -31,13 +31,15 @@ Examples:
 }
 
 func runPause(cmd *cobra.Command, args []string) error {
-	return runPauseCommand(mustCLIContext(cmd.Context()), time.Now, args)
+	ctx := cmd.Context()
+
+	return runPauseCommand(ctx, mustCLIContext(ctx), time.Now, args)
 }
 
 // notifyDaemon attempts to ask a running sync owner to reload configuration.
 // Non-fatal: if no daemon is running, prints a note instead.
-func notifyDaemon(cc *CLIContext) {
-	notifyDaemonWithOptions(context.Background(), cc, true)
+func notifyDaemon(ctx context.Context, cc *CLIContext) {
+	notifyDaemonWithOptions(ctx, cc, true)
 }
 
 func notifyDaemonIfRunning(ctx context.Context, cc *CLIContext) {

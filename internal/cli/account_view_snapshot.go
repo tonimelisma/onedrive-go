@@ -91,8 +91,8 @@ func loadAccountViewSnapshotWithBestEffortIdentityRefresh(
 	return loadAccountViewSnapshot(ctx, cc)
 }
 
-func statusAccounts(cc *CLIContext, snapshot accountViewSnapshot, history bool) []statusAccount {
-	return buildStatusAccountsFromViews(snapshot.Config, snapshot.ShortcutRoots, snapshot.Accounts, &liveSyncStateQuerier{
+func statusAccounts(ctx context.Context, cc *CLIContext, snapshot accountViewSnapshot, history bool) []statusAccount {
+	return buildStatusAccountsFromViews(ctx, snapshot.Config, snapshot.ShortcutRoots, snapshot.Accounts, &liveSyncStateQuerier{
 		logger:        cc.Logger,
 		history:       history,
 		verbose:       cc.Flags.Verbose,

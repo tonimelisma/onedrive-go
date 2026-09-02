@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -10,7 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-func runPauseCommand(cc *CLIContext, now func() time.Time, args []string) error {
+func runPauseCommand(ctx context.Context, cc *CLIContext, now func() time.Time, args []string) error {
 	driveSelector, driveErr := cc.Flags.SingleDrive()
 	if driveErr != nil {
 		return driveErr
@@ -54,12 +55,12 @@ func runPauseCommand(cc *CLIContext, now func() time.Time, args []string) error 
 		cc.Statusf("Drive %s paused\n", cid.String())
 	}
 
-	notifyDaemon(cc)
+	notifyDaemon(ctx, cc)
 
 	return nil
 }
 
-func runResumeCommand(cc *CLIContext, now func() time.Time) error {
+func runResumeCommand(ctx context.Context, cc *CLIContext, now func() time.Time) error {
 	cfg, err := config.LoadOrDefault(cc.CfgPath, cc.Logger)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -71,13 +72,13 @@ func runResumeCommand(cc *CLIContext, now func() time.Time) error {
 	}
 
 	if driveSelector != "" {
-		return resumeSingleDriveWithNow(cc, now, cfg, driveSelector)
+		return resumeSingleDriveWithNow(ctx, cc, now, cfg, driveSelector)
 	}
 
-	return resumeAllDrivesWithNow(cc, now, cfg)
+	return resumeAllDrivesWithNow(ctx, cc, now, cfg)
 }
 
-func resumeSingleDriveWithNow(cc *CLIContext, now func() time.Time, cfg *config.Config, selector string) error {
+func resumeSingleDriveWithNow(ctx context.Context, cc *CLIContext, now func() time.Time, cfg *config.Config, selector string) error {
 	cid, err := driveid.NewCanonicalID(selector)
 	if err != nil {
 		return fmt.Errorf("invalid drive ID %q: %w", selector, err)
@@ -107,7 +108,7 @@ func resumeSingleDriveWithNow(cc *CLIContext, now func() time.Time, cfg *config.
 	}
 
 	cc.Statusf("Drive %s resumed\n", cid.String())
-	notifyDaemon(cc)
+	notifyDaemon(ctx, cc)
 
 	return nil
 }
@@ -119,7 +120,7 @@ func resumeSingleDriveWithNow(cc *CLIContext, now func() time.Time, cfg *config.
 // with nothing saying which -- the drives the loop had not reached yet look
 // exactly like the ones that resumed. Every drive is attempted and the
 // failures are reported together.
-func resumeAllDrivesWithNow(cc *CLIContext, now func() time.Time, cfg *config.Config) error {
+func resumeAllDrivesWithNow(ctx context.Context, cc *CLIContext, now func() time.Time, cfg *config.Config) error {
 	if len(cfg.Drives) == 0 {
 		return fmt.Errorf("no drives configured")
 	}
@@ -148,7 +149,7 @@ func resumeAllDrivesWithNow(cc *CLIContext, now func() time.Time, cfg *config.Co
 	}
 
 	if resumed > 0 {
-		notifyDaemon(cc)
+		notifyDaemon(ctx, cc)
 	}
 
 	if len(errs) > 0 {

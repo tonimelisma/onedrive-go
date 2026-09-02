@@ -140,7 +140,7 @@ func TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline(t *testing.T) {
 		statusLiveOverlayLoader: noStatusLiveOverlay,
 	}
 
-	require.NoError(t, runStatusCommand(cc, false))
+	require.NoError(t, runStatusCommand(t.Context(), cc, false))
 
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -169,7 +169,7 @@ func TestStatusCommand_DoesNotClearPersistedAuthScope(t *testing.T) {
 		statusLiveOverlayLoader: noStatusLiveOverlay,
 	}
 
-	require.NoError(t, runStatusCommand(cc, false))
+	require.NoError(t, runStatusCommand(t.Context(), cc, false))
 	assert.True(t, hasPersistedAccountAuthRequirement(cid.Email(), testDriveLogger(t)))
 }
 

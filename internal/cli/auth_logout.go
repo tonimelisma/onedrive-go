@@ -17,15 +17,16 @@ import (
 // validated offline account view. Plain logout auto-selects only when exactly
 // one known account still has a usable saved login. Purge-only cleanup may
 // auto-select a single known account even when its saved login is already gone.
-func resolveLogoutAccount(cfg *config.Config, purge bool, logger *slog.Logger) (string, error) {
+func resolveLogoutAccount(ctx context.Context, cfg *config.Config, purge bool, logger *slog.Logger) (string, error) {
 	stored, err := config.LoadCatalog()
 	if err != nil {
 		return "", fmt.Errorf("loading catalog: %w", err)
 	}
-	return resolveLogoutAccountWithCatalog(cfg, stored, "", purge, logger)
+	return resolveLogoutAccountWithCatalog(ctx, cfg, stored, "", purge, logger)
 }
 
 func resolveLogoutAccountWithCatalog(
+	ctx context.Context,
 	cfg *config.Config,
 	stored *config.Catalog,
 	accountFlag string,
@@ -36,7 +37,7 @@ func resolveLogoutAccountWithCatalog(
 		return accountFlag, nil
 	}
 
-	views := buildAccountViews(context.Background(), cfg, stored, logger)
+	views := buildAccountViews(ctx, cfg, stored, logger)
 	known := knownAccountViews(views)
 	if len(known) == 0 {
 		return "", fmt.Errorf("no accounts configured — nothing to log out")

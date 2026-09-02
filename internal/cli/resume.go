@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -28,11 +29,13 @@ Examples:
 }
 
 func runResume(cmd *cobra.Command, _ []string) error {
-	return runResumeCommand(mustCLIContext(cmd.Context()), time.Now)
+	ctx := cmd.Context()
+
+	return runResumeCommand(ctx, mustCLIContext(ctx), time.Now)
 }
 
-func resumeSingleDrive(cc *CLIContext, cfg *config.Config, selector string) error {
-	return resumeSingleDriveWithNow(cc, time.Now, cfg, selector)
+func resumeSingleDrive(ctx context.Context, cc *CLIContext, cfg *config.Config, selector string) error {
+	return resumeSingleDriveWithNow(ctx, cc, time.Now, cfg, selector)
 }
 
 // clearPausedKeys removes both paused and paused_until keys from a drive section.

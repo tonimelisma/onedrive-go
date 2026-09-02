@@ -61,7 +61,7 @@ func TestStatusPerf_SummaryJSON_WithLivePerf(t *testing.T) {
 	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.JSON = true
 
-	require.NoError(t, runStatusCommand(cc, false, true))
+	require.NoError(t, runStatusCommand(t.Context(), cc, false, true))
 
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
@@ -85,7 +85,7 @@ func TestStatusPerf_SummaryText_WithPerfAndNoActiveOwner(t *testing.T) {
 	var out bytes.Buffer
 	cc := newCommandContext(&out, cfgPath)
 
-	require.NoError(t, runStatusCommand(cc, false, true))
+	require.NoError(t, runStatusCommand(t.Context(), cc, false, true))
 
 	assert.Contains(t, out.String(), "    PERF")
 	assert.Contains(t, out.String(), "Live performance unavailable: "+statusPerfUnavailableNoOwner)
@@ -123,7 +123,7 @@ func TestStatusPerf_FilteredJSON_WithPerfUnavailableFromActiveOwner(t *testing.T
 	cc.Flags.Drive = []string{cid.String()}
 	cc.Flags.JSON = true
 
-	require.NoError(t, runStatusCommand(cc, true, true))
+	require.NoError(t, runStatusCommand(t.Context(), cc, true, true))
 
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))

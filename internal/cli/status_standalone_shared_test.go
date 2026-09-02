@@ -31,7 +31,7 @@ func TestBuildConfiguredStatusDrive_StandaloneSharedFolderIsItsOwnDrive(t *testi
 	cid := sharedFolderCID(t)
 	drive := &config.Drive{SyncDir: "/tmp/shared-root", Owner: "Alice Smith"}
 
-	status := buildConfiguredStatusDrive(&config.Config{}, cid, drive, nil, nil)
+	status := buildConfiguredStatusDrive(t.Context(), &config.Config{}, cid, drive, nil, nil)
 
 	assert.Equal(t, statusProjectionStandalone, status.ProjectionKind,
 		"a separately configured shared folder is a standalone drive, not a nested child projection")
@@ -51,7 +51,7 @@ func TestBuildConfiguredStatusDrive_StandaloneSharedFolderShowsUserFacingIdentit
 	cid := sharedFolderCID(t)
 	drive := &config.Drive{SyncDir: "/tmp/shared-root", Owner: "Alice Smith"}
 
-	status := buildConfiguredStatusDrive(&config.Config{}, cid, drive, nil, nil)
+	status := buildConfiguredStatusDrive(t.Context(), &config.Config{}, cid, drive, nil, nil)
 
 	assert.Equal(t, "Alice Smith", status.Name)
 	assert.Equal(t, "Alice Smith", status.DisplayName)
@@ -69,7 +69,7 @@ func TestBuildConfiguredStatusDrive_SharedFolderWithoutOwnerFallsBackToReadableN
 
 	cid := sharedFolderCID(t)
 
-	status := buildConfiguredStatusDrive(&config.Config{}, cid, &config.Drive{SyncDir: "/tmp/x"}, nil, nil)
+	status := buildConfiguredStatusDrive(t.Context(), &config.Config{}, cid, &config.Drive{SyncDir: "/tmp/x"}, nil, nil)
 
 	assert.NotEmpty(t, status.Name)
 	assert.NotEqual(t, cid.String(), status.Name,

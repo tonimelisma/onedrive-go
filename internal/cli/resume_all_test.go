@@ -51,7 +51,7 @@ func TestResumeAllDrives_ContinuesPastAFailingDrive(t *testing.T) {
 
 	cc := &CLIContext{CfgPath: cfgPath, StatusWriter: &status}
 
-	err := resumeAllDrivesWithNow(cc, time.Now, cfg)
+	err := resumeAllDrivesWithNow(t.Context(), cc, time.Now, cfg)
 
 	require.Error(t, err, "the failing drive is still reported")
 	assert.Contains(t, err.Error(), missing.Email())
