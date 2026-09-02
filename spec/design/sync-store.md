@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/baseline_orphans.go, internal/sync/block_scope_rows.go, internal/sync/blocked_retry_projection.go, internal/sync/condition_keys.go, internal/sync/condition_projection.go, internal/sync/observation_reconcile_policy.go, internal/sync/retry_work_key.go, internal/sync/schema.go, internal/sync/scope_block.go, internal/sync/scope_key.go, internal/sync/scope_lifecycle_policy.go, internal/sync/scope_semantics.go, internal/sync/shortcut_alias_mutation.go, internal/sync/shortcut_root_state.go, internal/sync/shortcut_root_store.go, internal/sync/sqlite_compare.go, internal/sync/store.go, internal/sync/store_compatibility.go, internal/sync/store_inspect.go, internal/sync/store_local_state.go, internal/sync/store_observation_issues.go, internal/sync/store_observation_state.go, internal/sync/store_read_remote_state.go, internal/sync/store_reset.go, internal/sync/store_retry_work.go, internal/sync/store_scope_admin.go, internal/sync/store_scratch.go, internal/sync/store_types.go, internal/sync/store_write_baseline.go, internal/sync/store_write_block_scopes.go, internal/sync/store_write_observation.go, internal/sync/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go
+GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/baseline_orphans.go, internal/sync/block_scope_rows.go, internal/sync/blocked_retry_projection.go, internal/sync/condition_keys.go, internal/sync/condition_projection.go, internal/sync/observation_reconcile_policy.go, internal/sync/retry_work_key.go, internal/sync/schema.go, internal/sync/scope_block.go, internal/sync/scope_key.go, internal/sync/scope_lifecycle_policy.go, internal/sync/scope_semantics.go, internal/sync/shortcut_root_state.go, internal/sync/shortcut_root_store.go, internal/sync/sqlite_compare.go, internal/sync/store_planner_visible.go, internal/sync/store.go, internal/sync/store_compatibility.go, internal/sync/store_inspect.go, internal/sync/store_local_state.go, internal/sync/store_observation_issues.go, internal/sync/store_observation_state.go, internal/sync/store_read_remote_state.go, internal/sync/store_reset.go, internal/sync/store_retry_work.go, internal/sync/store_scope_admin.go, internal/sync/store_scratch.go, internal/sync/store_types.go, internal/sync/store_write_baseline.go, internal/sync/store_write_block_scopes.go, internal/sync/store_write_observation.go, internal/sync/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go
 
 Implements: R-2.5 [designed], R-2.7 [verified], R-2.8.8 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -34,7 +34,21 @@ architecture it owns:
 - read-only raw row access used by `status`
 
 It does not own planning policy, execution policy, or a competing history/status
-model. Shortcut status display metadata is sync-owned but derived from
+model.
+
+`store_planner_visible.go` (previously `planner_visibility.go`) is store-owned
+for the same reason every other table writer is: it issues the `INSERT` and
+`DELETE` statements that materialize the transaction-local
+`planner_visible_local_state` and `planner_visible_remote_state` tables, and it
+is the only file outside this family that consumed the store's SQL encoding
+helpers (`boolInt`, `nullString`, `nullKnownInt64`, `nullOptionalInt64`,
+`sqlTxRunner`). Deciding *what* is visible remains planning policy through the
+compiled `contentFilter`; writing the rows is store work.
+
+`shortcut_alias_mutation.go` is no longer claimed here. It declares `*Engine`
+methods that perform Graph mutations and persist the resulting shortcut-root
+state, which is engine orchestration, not store truth. It was the only reason
+this family appeared to depend on `Engine` at all. Shortcut status display metadata is sync-owned but derived from
 `ShortcutRootState`; the store persists the state rows, not presentation copy.
 Read-only shortcut status helpers return `ShortcutRootStatusView`, a sync-owned
 projection that gives the CLI display-ready fields without exposing raw
