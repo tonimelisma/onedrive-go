@@ -2,6 +2,8 @@
 
 GOVERNS: internal/sync/planner.go, internal/sync/planner_actions.go, internal/sync/planner_truth_overlay.go
 
+LAYER: 2
+
 Implements: R-2.1.3 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified]
 
 ## Overview

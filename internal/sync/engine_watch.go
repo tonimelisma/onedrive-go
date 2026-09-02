@@ -33,7 +33,6 @@ const (
 )
 
 const (
-	fullRemoteRefreshInterval           = 24 * time.Hour
 	localWatchHealthySafetyScanInterval = 5 * time.Minute
 	localWatchDegradedFullScanInterval  = time.Hour
 )

@@ -1,6 +1,8 @@
 # Sync Domain
 
-GOVERNS: internal/sync/actions.go, internal/sync/api_types.go, internal/sync/condition_keys.go, internal/sync/content_filter.go, internal/sync/core_types.go, internal/sync/domain_graph_error.go, internal/sync/domain_path_kind.go, internal/sync/domain_runtime_decision.go, internal/sync/engine_time.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/issue_types.go, internal/sync/permission_capability.go, internal/sync/retry_work_key.go, internal/sync/scope_block.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/tracked_action.go, internal/sync/types.go, internal/sync/worker_result.go
+GOVERNS: internal/sync/actions.go, internal/sync/condition_keys.go, internal/sync/content_filter.go, internal/sync/core_types.go, internal/sync/domain_clock.go, internal/sync/domain_graph_error.go, internal/sync/domain_io_seams.go, internal/sync/domain_observation_mode.go, internal/sync/domain_path_kind.go, internal/sync/domain_runtime_decision.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/issue_types.go, internal/sync/permission_capability.go, internal/sync/retry_work_key.go, internal/sync/scope_block.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/tracked_action.go, internal/sync/types.go, internal/sync/worker_result.go
+
+LAYER: 0
 
 Implements: R-2.1 [verified], R-2.7 [verified]
 

@@ -66,20 +66,6 @@ func ReadDriveStatusSnapshot(
 	})
 }
 
-// ReadShortcutRootStatusSnapshot opens a read-only inspector for parent-owned
-// shortcut-root lifecycle state and closes it before returning.
-func ReadShortcutRootStatusSnapshot(
-	ctx context.Context,
-	dbPath string,
-	namespaceID string,
-	parentSyncRoot string,
-	logger *slog.Logger,
-) ([]ShortcutRootStatusView, error) {
-	return readWithInspector(dbPath, logger, func(inspector *storeInspector) ([]ShortcutRootStatusView, error) {
-		return inspector.ReadShortcutRootStatusSnapshot(ctx, namespaceID, parentSyncRoot)
-	})
-}
-
 // readPathTruthStatus opens a read-only inspector, derives current truth
 // availability for the requested paths from durable observation issues and
 // read-boundary issue scope keys, and closes the inspector before returning.
@@ -107,25 +93,6 @@ func (m *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSna
 	}
 
 	return inspector.ReadDriveStatusSnapshot(ctx)
-}
-
-// ReadShortcutRootStatusSnapshot reads parent-owned shortcut-root lifecycle
-// state from an already-open sync store.
-func (m *SyncStore) ReadShortcutRootStatusSnapshot(
-	ctx context.Context,
-	namespaceID string,
-	parentSyncRoot string,
-) ([]ShortcutRootStatusView, error) {
-	if m == nil {
-		return nil, fmt.Errorf("read shortcut root status snapshot: nil store")
-	}
-
-	inspector := &storeInspector{
-		db:     m.db,
-		logger: m.logger,
-	}
-
-	return inspector.ReadShortcutRootStatusSnapshot(ctx, namespaceID, parentSyncRoot)
 }
 
 // ReadPathTruthStatus derives current truth availability for the requested
