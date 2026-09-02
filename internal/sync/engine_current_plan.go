@@ -16,7 +16,7 @@ func (r *oneShotRunner) runLiveCurrentPlan(
 	mode SyncMode,
 	opts RunOptions,
 ) (*runtimePlan, error) {
-	observeStart := r.engine.nowFunc()
+	observeStart := r.deps.now()
 	pendingRemoteObservation, err := r.observeAndCommitCurrentState(ctx, bl, opts.FullReconcile)
 	if err != nil {
 		return nil, err
@@ -25,7 +25,7 @@ func (r *oneShotRunner) runLiveCurrentPlan(
 	if err != nil {
 		return nil, err
 	}
-	r.engine.collector().RecordObserve(observation.observedPaths, r.engine.since(observeStart))
+	r.engine.collector().RecordObserve(observation.observedPaths, r.deps.since(observeStart))
 
 	build, err := r.buildCurrentPlanStage(ctx, bl, mode, opts, observation)
 	if err != nil {
@@ -41,12 +41,12 @@ func (r *oneShotRunner) runDryRunCurrentPlan(
 	mode SyncMode,
 	opts RunOptions,
 ) (*runtimePlan, error) {
-	observeStart := r.engine.nowFunc()
+	observeStart := r.deps.now()
 	observation, err := r.loadDryRunCurrentObservation(ctx, bl, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
-	r.engine.collector().RecordObserve(observation.observedPaths, r.engine.since(observeStart))
+	r.engine.collector().RecordObserve(observation.observedPaths, r.deps.since(observeStart))
 
 	build, err := r.buildCurrentPlanStage(ctx, bl, mode, opts, observation)
 	if err != nil {
@@ -66,7 +66,7 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 		return nil, fmt.Errorf("sync: deciding bootstrap full remote refresh: %w", err)
 	}
 
-	observeStart := rt.engine.nowFunc()
+	observeStart := rt.deps.now()
 	pendingRemoteObservation, err := rt.observeAndCommitCurrentState(ctx, bl, fullRefresh)
 	if err != nil {
 		return nil, fmt.Errorf("sync: bootstrap observation failed: %w", err)
@@ -75,7 +75,7 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 	if err != nil {
 		return nil, fmt.Errorf("sync: bootstrap load_current_inputs: %w", err)
 	}
-	rt.engine.collector().RecordObserve(observation.observedPaths, rt.engine.since(observeStart))
+	rt.engine.collector().RecordObserve(observation.observedPaths, rt.deps.since(observeStart))
 
 	build, err := rt.buildCurrentPlanStage(ctx, bl, mode, RunOptions{}, observation)
 	if err != nil {
@@ -235,7 +235,7 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 	}
 	remoteChanged := topology.shouldApply()
 	if remoteChanged {
-		if _, err := flow.engine.baseline.applyShortcutTopology(ctx, topology); err != nil {
+		if _, err := flow.deps.store.applyShortcutTopology(ctx, topology); err != nil {
 			return fmt.Errorf("sync: persist parent shortcut root state: %w", err)
 		}
 	}
@@ -249,7 +249,7 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 	if refreshErr := flow.engine.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
 		return fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
 	}
-	parentRoots, err := flow.engine.baseline.listShortcutRoots(ctx)
+	parentRoots, err := flow.deps.store.listShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read parent shortcut root state: %w", err)
 	}
@@ -375,7 +375,7 @@ func (flow *engineFlow) commitCurrentLocalSnapshot(
 	localResult scanResult,
 ) error {
 	rows := buildLocalStateRows(localResult)
-	if err := flow.engine.baseline.ReplaceLocalState(ctx, rows); err != nil {
+	if err := flow.deps.store.ReplaceLocalState(ctx, rows); err != nil {
 		return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
 	}
 
@@ -397,7 +397,7 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 		return nil, err
 	}
 
-	scratchStore, cleanup, err := flow.engine.baseline.createScratchPlanningStore(ctx, bl)
+	scratchStore, cleanup, err := flow.deps.store.createScratchPlanningStore(ctx, bl)
 	if err != nil {
 		return nil, err
 	}
@@ -411,12 +411,12 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 	if commitErr != nil {
 		return nil, fmt.Errorf("sync: committing dry-run remote snapshot to scratch store: %w", commitErr)
 	}
-	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &observationBatch.findings, flow.engine.nowFunc()); reconcileErr != nil {
+	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &observationBatch.findings, flow.deps.now()); reconcileErr != nil {
 		return nil, fmt.Errorf("sync: reconciling dry-run remote observation findings in scratch store: %w", reconcileErr)
 	}
 	flow.logSkippedObservationFindings(localResult.Skipped)
 	localFindings := localObservationFindingsBatchFromSkippedItems(flow.engine.driveID, localResult.Skipped)
-	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &localFindings, flow.engine.nowFunc()); reconcileErr != nil {
+	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &localFindings, flow.deps.now()); reconcileErr != nil {
 		return nil, fmt.Errorf("sync: reconciling dry-run local observation findings in scratch store: %w", reconcileErr)
 	}
 
@@ -441,7 +441,7 @@ func (flow *engineFlow) loadCommittedCurrentObservation(
 	ctx context.Context,
 	pendingRemoteObservation *remoteObservationBatch,
 ) (*currentObservation, error) {
-	inputs, err := flow.loadCurrentInputs(ctx, flow.engine.baseline, flow.engine.driveID)
+	inputs, err := flow.loadCurrentInputs(ctx, flow.deps.store, flow.engine.driveID)
 	if err != nil {
 		return nil, err
 	}
@@ -461,11 +461,11 @@ func (flow *engineFlow) loadCommittedCurrentObservation(
 func (flow *engineFlow) currentShortcutChildPublication(
 	ctx context.Context,
 ) (ShortcutChildWorkSnapshot, error) {
-	if flow == nil || flow.engine == nil || flow.engine.baseline == nil ||
+	if flow == nil || flow.engine == nil || flow.deps.store == nil ||
 		flow.engine.shortcutNamespaceID == "" {
 		return ShortcutChildWorkSnapshot{}, nil
 	}
-	roots, err := flow.engine.baseline.listShortcutRoots(ctx)
+	roots, err := flow.deps.store.listShortcutRoots(ctx)
 	if err != nil {
 		return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: read current shortcut child publication: %w", err)
 	}
@@ -488,7 +488,7 @@ func (flow *engineFlow) loadCurrentInputs(
 	}
 	defer func() {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			flow.engine.logger.Debug("current action planner read transaction rollback failed",
+			flow.deps.logger.Debug("current action planner read transaction rollback failed",
 				slog.String("error", rollbackErr.Error()),
 			)
 		}
@@ -579,12 +579,12 @@ func (flow *engineFlow) buildCurrentPlanStage(
 		return nil, fmt.Errorf("sync: building current plan from observed state: %w", err)
 	}
 
-	planStart := flow.engine.nowFunc()
+	planStart := flow.deps.now()
 	plan, err := flow.engine.buildCurrentActionPlanFromInputs(&observation.inputs, bl, mode)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
-	flow.engine.collector().RecordPlan(len(plan.Actions), flow.engine.since(planStart))
+	flow.engine.collector().RecordPlan(len(plan.Actions), flow.deps.since(planStart))
 
 	counts := countByType(plan.Actions)
 	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
@@ -642,11 +642,11 @@ func (flow *engineFlow) keepBuiltCurrentPlan(build *builtCurrentPlan) *runtimePl
 }
 
 func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *actionPlan) error {
-	if err := flow.engine.baseline.PruneRetryWorkToCurrentActions(ctx, retryWorkKeysForActions(plan.Actions)); err != nil {
+	if err := flow.deps.store.PruneRetryWorkToCurrentActions(ctx, retryWorkKeysForActions(plan.Actions)); err != nil {
 		return fmt.Errorf("sync: pruning retry_work to current actions: %w", err)
 	}
 
-	if err := flow.engine.baseline.PruneBlockScopesWithoutBlockedWork(ctx); err != nil {
+	if err := flow.deps.store.PruneBlockScopesWithoutBlockedWork(ctx); err != nil {
 		return fmt.Errorf("sync: pruning block scopes without blocked work: %w", err)
 	}
 
@@ -654,12 +654,12 @@ func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *actionP
 }
 
 func (flow *engineFlow) loadRuntimeState(ctx context.Context) ([]RetryWorkRow, []*BlockScope, error) {
-	retryRows, err := flow.engine.baseline.ListRetryWork(ctx)
+	retryRows, err := flow.deps.store.ListRetryWork(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("sync: listing retry_work for runtime-state handoff: %w", err)
 	}
 
-	blockScopes, err := flow.engine.baseline.ListBlockScopes(ctx)
+	blockScopes, err := flow.deps.store.ListBlockScopes(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("sync: listing block_scopes for runtime-state handoff: %w", err)
 	}

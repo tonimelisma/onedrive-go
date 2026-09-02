@@ -247,7 +247,7 @@ func (flow *engineFlow) logRemotePermissionBoundary(
 		slog.String("boundary", evidence.BoundaryPath),
 		slog.String("trigger_path", evidence.TriggerPath),
 	)
-	flow.engine.logger.Info("handle403: read-only remote boundary detected, writes suppressed recursively", fields...)
+	flow.deps.logger.Info("handle403: read-only remote boundary detected, writes suppressed recursively", fields...)
 }
 
 func (flow *engineFlow) logLocalPermissionBoundary(
@@ -263,7 +263,7 @@ func (flow *engineFlow) logLocalPermissionBoundary(
 		slog.String("boundary", evidence.BoundaryPath),
 		slog.String("trigger_path", evidence.TriggerPath),
 	)
-	flow.engine.logger.Info("local permission denied: directory blocked", fields...)
+	flow.deps.logger.Info("local permission denied: directory blocked", fields...)
 }
 
 func (flow *engineFlow) recordPermissionRetryWork(
@@ -272,7 +272,7 @@ func (flow *engineFlow) recordPermissionRetryWork(
 	scopeKey ScopeKey,
 	conditionType string,
 ) error {
-	row, err := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+	row, err := flow.deps.store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Work:     work,
 		ScopeKey: scopeKey,
 	}, retry.ReconcilePolicy().Delay)
@@ -291,7 +291,7 @@ func (flow *engineFlow) recordPermissionRetryWork(
 	),
 		slog.String("condition_type", conditionType),
 	)
-	flow.engine.logger.Debug("retry_work permission failure recorded", fields...)
+	flow.deps.logger.Debug("retry_work permission failure recorded", fields...)
 	return nil
 }
 
@@ -300,7 +300,7 @@ func (flow *engineFlow) recordPermissionBlockedRetry(
 	work RetryWorkKey,
 	scopeKey ScopeKey,
 ) error {
-	row, err := flow.engine.baseline.RecordBlockedRetryWork(ctx, work, scopeKey)
+	row, err := flow.deps.store.RecordBlockedRetryWork(ctx, work, scopeKey)
 	if err != nil {
 		return err
 	}
@@ -316,6 +316,6 @@ func (flow *engineFlow) recordPermissionBlockedRetry(
 	),
 		slog.String("condition_type", scopeKey.ConditionType()),
 	)
-	flow.engine.logger.Debug("retry_work permission failure recorded", fields...)
+	flow.deps.logger.Debug("retry_work permission failure recorded", fields...)
 	return nil
 }

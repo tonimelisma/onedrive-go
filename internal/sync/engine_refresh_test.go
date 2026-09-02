@@ -395,7 +395,7 @@ func TestShouldRunFullRemoteRefresh_Overdue(t *testing.T) {
 
 	e, _ := newTestEngine(t, &engineMockClient{})
 	clock := newManualClock(time.Unix(1_000, 0))
-	installManualClock(e.Engine, clock)
+	installManualClockForTestEngine(e, clock)
 	require.NoError(t, e.baseline.CommitObservationCursor(t.Context(), e.driveID, "token-1"))
 	require.NoError(t, e.baseline.MarkFullRemoteRefresh(
 		t.Context(),
@@ -414,7 +414,7 @@ func TestShouldRunFullRemoteRefresh_WithinCadence(t *testing.T) {
 
 	e, _ := newTestEngine(t, &engineMockClient{})
 	clock := newManualClock(time.Unix(2_000, 0))
-	installManualClock(e.Engine, clock)
+	installManualClockForTestEngine(e, clock)
 	require.NoError(t, e.baseline.CommitObservationCursor(t.Context(), e.driveID, "token-1"))
 	require.NoError(t, e.baseline.MarkFullRemoteRefresh(
 		t.Context(),
@@ -433,7 +433,7 @@ func TestFullRemoteRefreshDelay_UsesPersistedTimestamp(t *testing.T) {
 
 	e, _ := newTestEngine(t, &engineMockClient{})
 	clock := newManualClock(time.Unix(3_000, 0))
-	installManualClock(e.Engine, clock)
+	installManualClockForTestEngine(e, clock)
 	require.NoError(t, e.baseline.MarkFullRemoteRefresh(
 		t.Context(),
 		e.driveID,

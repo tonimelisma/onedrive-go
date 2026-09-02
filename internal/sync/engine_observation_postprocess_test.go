@@ -230,7 +230,7 @@ func TestHandleRemoteObservationBatch_MountRootEnumerateClampRearmsRefreshTimerI
 	ctx := t.Context()
 
 	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
-	installManualClock(eng.Engine, clock)
+	installManualClockForTestEngine(eng, clock)
 
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, eng.driveID, "cursor-shared"))
 	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(

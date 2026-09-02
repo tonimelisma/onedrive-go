@@ -28,7 +28,7 @@ func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
 	}
 	flow.replaceActiveScopes(activeScopes)
 	if flow.scopeState == nil {
-		flow.scopeState = newScopeState(flow.engine.nowFunc, flow.engine.logger)
+		flow.scopeState = newScopeState(flow.engine.nowFunc, flow.deps.logger)
 	}
 }
 
@@ -181,7 +181,7 @@ func (flow *engineFlow) dueTrialKeys(now time.Time) []RetryWorkKey {
 
 func (flow *engineFlow) releaseHeldScope(scopeKey ScopeKey) {
 	keys := append([]RetryWorkKey(nil), flow.heldScopeOrder[scopeKey]...)
-	now := flow.engine.nowFunc()
+	now := flow.deps.now()
 	for _, key := range keys {
 		held := flow.heldByKey[key]
 		if held == nil || held.Reason != heldReasonScope {

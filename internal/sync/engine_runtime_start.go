@@ -21,7 +21,7 @@ func (flow *engineFlow) startRuntimeStage(
 	}
 
 	flow.initializeRuntimeState(runtime)
-	flow.depGraph = newDepGraph(flow.engine.logger)
+	flow.depGraph = newDepGraph(flow.deps.logger)
 
 	if len(plan.Actions) == 0 {
 		return nil, false, nil
@@ -90,7 +90,7 @@ func (flow *engineFlow) registerPlanActions(plan *actionPlan) []*trackedAction {
 		}
 	}
 
-	flow.engine.logger.Info("runtime plan registered",
+	flow.deps.logger.Info("runtime plan registered",
 		slog.Int("actions", len(plan.Actions)),
 	)
 

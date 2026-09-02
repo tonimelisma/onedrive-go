@@ -27,16 +27,16 @@ func (rt *watchRuntime) runSteadyStateReplan(
 		return false, fmt.Errorf("sync: steady-state replan requires loaded baseline")
 	}
 
-	rt.engine.logger.Info("processing watch steady-state replan",
+	rt.deps.logger.Info("processing watch steady-state replan",
 		slog.Bool("dirty_signal", true),
 		slog.Bool("full_refresh", batch.FullRefresh),
 	)
 	rt.engine.collector().RecordWatchBatch(1)
 
-	replanStart := rt.engine.nowFunc()
+	replanStart := rt.deps.now()
 	rt.emitRuntimeDebugEvent(engineDebugEventSteadyStateReplanStarted, "", 0, time.Time{})
 
-	observeStart := rt.engine.nowFunc()
+	observeStart := rt.deps.now()
 	rt.emitRuntimeDebugEvent(engineDebugEventLocalTruthRefreshStarted, "", 0, replanStart)
 	localResult, err := rt.refreshAndCommitLocalCurrentState(ctx, p.bl)
 	rt.recordReplanWorkerIdle(perf.ReplanIdlePhaseLocalRefresh, observeStart, rt.totalWorkers())
@@ -44,10 +44,10 @@ func (rt *watchRuntime) runSteadyStateReplan(
 		return rt.handleSteadyStateLocalRefreshError(ctx, err)
 	}
 	rt.emitRuntimeDebugEvent(engineDebugEventLocalTruthRefreshFinished, "", len(localResult.Rows), observeStart)
-	rt.engine.emitDebugEvent(engineDebugEvent{Type: engineDebugEventSteadyStateObservationCompleted})
-	rt.engine.collector().RecordObserve(len(localResult.Rows), rt.engine.since(observeStart))
+	rt.deps.emit(engineDebugEvent{Type: engineDebugEventSteadyStateObservationCompleted})
+	rt.engine.collector().RecordObserve(len(localResult.Rows), rt.deps.since(observeStart))
 
-	planStart := rt.engine.nowFunc()
+	planStart := rt.deps.now()
 	rt.emitRuntimeDebugEvent(engineDebugEventPlanningStarted, "", 0, replanStart)
 	runtime, err := rt.runSteadyStateCurrentPlan(ctx, p.bl, p.mode)
 	rt.recordReplanWorkerIdle(perf.ReplanIdlePhasePlanning, planStart, rt.totalWorkers())
@@ -56,7 +56,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	}
 	rt.emitRuntimeDebugEvent(engineDebugEventPlanningFinished, "", 0, planStart)
 
-	installStart := rt.engine.nowFunc()
+	installStart := rt.deps.now()
 	dispatch, _, err := rt.startRuntimeStage(ctx, runtime, p.bl)
 	rt.recordReplanWorkerIdle(perf.ReplanIdlePhaseRuntimeInstall, installStart, rt.totalWorkers())
 	if err != nil {
@@ -75,7 +75,7 @@ func (rt *watchRuntime) finishSteadyStateReplanStep(
 	err error,
 ) error {
 	if isWatchShutdownError(ctx, err) {
-		rt.engine.logger.Debug("steady-state replan stopped by shutdown",
+		rt.deps.logger.Debug("steady-state replan stopped by shutdown",
 			slog.String("step", step),
 			slog.String("error", err.Error()),
 		)
@@ -98,7 +98,7 @@ func (rt *watchRuntime) handleSteadyStateLocalRefreshError(
 		return false, fmt.Errorf("sync: watch replan local refresh: %w", err)
 	}
 	if step == localCurrentRefreshStepObservation {
-		rt.engine.logger.Error("watch local refresh failed before runtime replacement",
+		rt.deps.logger.Error("watch local refresh failed before runtime replacement",
 			slog.String("error", err.Error()),
 		)
 		return false, nil

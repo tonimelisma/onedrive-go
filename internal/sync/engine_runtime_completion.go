@@ -310,11 +310,11 @@ func (flow *engineFlow) applyFatalAuthEffects(
 				slog.String("account", flow.engine.permHandler.accountEmail),
 				slog.String("error", err.Error()),
 			)
-			flow.engine.logger.Warn("fatal unauthorized: failed to persist catalog auth requirement", fields...)
+			flow.deps.logger.Warn("fatal unauthorized: failed to persist catalog auth requirement", fields...)
 		}
 	}
 
-	flow.engine.logger.Error("authentication required: sync stopping",
+	flow.deps.logger.Error("authentication required: sync stopping",
 		logFields...,
 	)
 
@@ -342,7 +342,7 @@ func isPublicationOnlyActionType(actionType actionType) bool {
 func (flow *engineFlow) applyPublicationMutation(ctx context.Context, ta *trackedAction) error {
 	mutation, err := publicationMutationFromAction(&ta.Action, flow.engine.driveID)
 	if err == nil {
-		err = flow.engine.baseline.CommitMutation(ctx, mutation)
+		err = flow.deps.store.CommitMutation(ctx, mutation)
 	}
 	return err
 }
@@ -443,18 +443,18 @@ func (flow *engineFlow) recordRetryWork(
 			slog.String("condition_type", decision.ConditionType),
 			slog.String("scope_evidence", decision.ScopeEvidence.String()),
 		)
-		flow.engine.logger.Debug(
+		flow.deps.logger.Debug(
 			"execution recorded retry_work for a current-truth condition; observation may suppress the next plan and prune it",
 			fields...,
 		)
 	}
 
-	row, recErr := flow.engine.baseline.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+	row, recErr := flow.deps.store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
 		Work:     retryWorkKeyForCompletion(r),
 		ScopeKey: scopeKey,
 	}, delayFn)
 	if blocked {
-		row, recErr = flow.engine.baseline.RecordBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), scopeKey)
+		row, recErr = flow.deps.store.RecordBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), scopeKey)
 	}
 	if recErr != nil {
 		return fmt.Errorf("record retry_work for %s: %w", r.Path, recErr)
@@ -471,7 +471,7 @@ func (flow *engineFlow) recordRetryWork(
 	}
 	flow.retryRowsByKey[row.WorkKey()] = *row
 	fields = append(fields, slog.Int("attempt_count", row.AttemptCount))
-	flow.engine.logger.Debug("retry_work recorded", fields...)
+	flow.deps.logger.Debug("retry_work recorded", fields...)
 
 	return nil
 }
