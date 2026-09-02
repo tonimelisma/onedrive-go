@@ -18,8 +18,8 @@ func (rt *watchRuntime) handleWatchLocalObservationBatch(
 	if err != nil {
 		return err
 	}
-	if dirty && rt.dirtyBuf != nil {
-		rt.dirtyBuf.MarkDirty()
+	if dirty && rt.resources.dirtyBuf != nil {
+		rt.resources.dirtyBuf.MarkDirty()
 	}
 
 	return nil

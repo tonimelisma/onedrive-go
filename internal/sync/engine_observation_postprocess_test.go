@@ -111,7 +111,7 @@ func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *te
 	eng.contentFilter = ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 	ctx := t.Context()
 
 	batch := buildPrimaryWatchBatch(eng.Engine, []changeEvent{
@@ -125,7 +125,7 @@ func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *te
 	require.True(t, found)
 	assert.Equal(t, "item-hidden", remoteRow.ItemID)
 	assert.Equal(t, "cursor-hidden", readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String()))
-	assert.Nil(t, rt.dirtyBuf.FlushImmediate())
+	assert.Nil(t, rt.resources.dirtyBuf.FlushImmediate())
 }
 
 // Validates: R-2.4.2
@@ -385,7 +385,7 @@ func TestHandleRemoteObservationBatch_FullRefreshApplyFailureMarksDirtyForRetry(
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 
 	ctx := t.Context()
 	require.NoError(t, eng.baseline.Close(ctx))
@@ -404,7 +404,7 @@ func TestHandleRemoteObservationBatch_FullRefreshApplyFailureMarksDirtyForRetry(
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
 
-	dirty := rt.dirtyBuf.FlushImmediate()
+	dirty := rt.resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, dirty)
 	assert.True(t, dirty.FullRefresh)
 }
