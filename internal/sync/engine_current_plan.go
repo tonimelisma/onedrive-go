@@ -414,7 +414,7 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &observationBatch.findings, flow.deps.now()); reconcileErr != nil {
 		return nil, fmt.Errorf("sync: reconciling dry-run remote observation findings in scratch store: %w", reconcileErr)
 	}
-	flow.logSkippedObservationFindings(localResult.Skipped)
+	flow.logSkippedObservationFindings(localResult.Skipped, flow.knownObservationIssues(ctx))
 	localFindings := localObservationFindingsBatchFromSkippedItems(flow.engine.driveID, localResult.Skipped)
 	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &localFindings, flow.deps.now()); reconcileErr != nil {
 		return nil, fmt.Errorf("sync: reconciling dry-run local observation findings in scratch store: %w", reconcileErr)

@@ -106,10 +106,13 @@ func (f *engineFlow) recordError(decision *resultDecision, r *actionCompletion) 
 	})
 }
 
-// logFailureSummary logs an aggregated summary of transient execution failures
-// from the current pass. Groups failures by condition_type and mirrors the
-// scanner-time aggregation rule: >10 items produce one WARN summary plus
-// per-item DEBUG detail, otherwise each item gets its own WARN.
+// logFailureSummary logs an aggregated summary of the current pass's failures
+// kept as retry work. Groups failures by condition_type: >10 items produce one
+// INFO summary plus per-item DEBUG detail, otherwise each item is logged at
+// DEBUG. The user-facing report of each failed file is the sync console's
+// activity line (R-6.6.18), which shows failures that need the user at
+// default verbosity and retried ones only with --verbose; a WARN here would
+// print the same failure twice and expose retries the console hides.
 func (f *engineFlow) logFailureSummary() {
 	summaries := f.results.summaries
 	f.results.summaries = nil
@@ -154,7 +157,7 @@ func (f *engineFlow) logFailureSummary() {
 	for _, key := range keys {
 		g := groups[key]
 		if g.count > aggregateThreshold {
-			f.engine.logger.Warn("sync retry work (aggregated)",
+			f.engine.logger.Info("Some files will be retried on the next sync",
 				slog.String("condition_type", key),
 				slog.Int("count", g.count),
 				slog.Any("sample_paths", g.paths),
@@ -168,7 +171,7 @@ func (f *engineFlow) logFailureSummary() {
 			}
 		} else {
 			for _, item := range g.items {
-				f.engine.logger.Warn("sync retry work",
+				f.engine.logger.Debug("sync retry work",
 					slog.String("condition_type", key),
 					slog.String("path", item.path),
 					slog.String("error", item.errMsg),

@@ -253,6 +253,7 @@ func (o *remoteObserver) Watch(
 
 	bo := retry.NewBackoff(retry.WatchRemotePolicy())
 	bo.SetMaxOverride(interval)
+	var outage pollOutageLog
 
 	for {
 		drainWakeSignals(wakeCh)
@@ -261,7 +262,7 @@ func (o *remoteObserver) Watch(
 
 		polledEvents, newToken, topology, windowItems, err := o.fullDelta(ctx, token)
 		if err != nil {
-			result := o.handleWatchPollError(ctx, bo, err, wakeCh)
+			result := o.handleWatchPollError(ctx, bo, &outage, err, wakeCh)
 			if result.err != nil {
 				return result.err
 			}
@@ -271,6 +272,7 @@ func (o *remoteObserver) Watch(
 
 			continue
 		}
+		outage.recovered(o.logger, "Checking OneDrive for changes works again")
 
 		result := o.handleWatchBatch(
 			ctx, batches, polledEvents, windowItems, newToken, topology, interval, bo, wakeCh, handleBatch,
@@ -333,6 +335,7 @@ func (o *remoteObserver) handleWatchBatch(
 func (o *remoteObserver) handleWatchPollError(
 	ctx context.Context,
 	bo *retry.Backoff,
+	outage *pollOutageLog,
 	err error,
 	wakeCh <-chan struct{},
 ) watchStepResult {
@@ -341,7 +344,8 @@ func (o *remoteObserver) handleWatchPollError(
 	}
 
 	if errors.Is(err, errDeltaExpired) {
-		o.logger.Warn("delta token expired during watch, resetting for full resync")
+		// Self-healing: the next poll re-enumerates from scratch.
+		o.logger.Info("OneDrive change history expired; rescanning the whole drive (this may take a while)")
 		o.setDeltaToken("")
 		bo.Reset()
 
@@ -349,9 +353,7 @@ func (o *remoteObserver) handleWatchPollError(
 	}
 
 	delay := bo.Next()
-	o.logger.Warn("remote watch poll failed, backing off",
-		slog.String("error", err.Error()),
-		slog.Duration("backoff", delay),
+	outage.failed(o.logger, "Can't check OneDrive for changes; retrying", err, delay,
 		slog.Int("consecutive_errors", bo.Consecutive()),
 	)
 
@@ -572,6 +574,44 @@ func (o *remoteObserver) fetchPage(
 	}
 
 	return events, items, dp.NextLink, false, nil
+}
+
+// pollOutageLog reports a polling loop's failures once per outage instead of
+// once per attempt. The first failure after a success is a Warn with the plain
+// reason and the retry delay; later attempts in the same outage are Debug; the
+// first success after an outage is one Info. A loop owns its pollOutageLog and
+// only that loop's goroutine touches it, so it needs no lock.
+type pollOutageLog struct {
+	failing bool
+}
+
+func (l *pollOutageLog) failed(logger *slog.Logger, msg string, err error, delay time.Duration, attrs ...any) {
+	if logger == nil {
+		return
+	}
+
+	fields := append([]any{
+		slog.String("error", err.Error()),
+		slog.String("retry_in", delay.Round(time.Second).String()),
+	}, attrs...)
+	if l.failing {
+		logger.Debug(msg, fields...)
+		return
+	}
+
+	l.failing = true
+	logger.Warn(msg, fields...)
+}
+
+func (l *pollOutageLog) recovered(logger *slog.Logger, msg string) {
+	if !l.failing {
+		return
+	}
+
+	l.failing = false
+	if logger != nil {
+		logger.Info(msg)
+	}
 }
 
 // ---------------------------------------------------------------------------

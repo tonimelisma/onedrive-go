@@ -141,10 +141,12 @@ func (wp *workerPool) safeExecuteAction(ctx context.Context, ta *trackedAction) 
 			// The stack is captured here because the goroutine that could
 			// answer "where" is unwound by the time anyone reads the failed
 			// completion, and the recovered value names only "what".
-			wp.logger.Error("worker: panic in action execution",
+			wp.logger.Error("Internal error while syncing "+ta.Action.Path+"; this is a bug, please report it",
+				slog.Any("panic", r),
+			)
+			wp.logger.Debug("worker: panic in action execution",
 				slog.Int64("id", ta.ID),
 				slog.String("path", ta.Action.Path),
-				slog.Any("panic", r),
 				slog.String("stack", string(debug.Stack())),
 			)
 			panicErr := fmt.Errorf("panic: %v", r)
@@ -174,7 +176,9 @@ func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 	// Load baseline (cached after first call).
 	bl, loadErr := wp.baseline.Load(actionCtx)
 	if loadErr != nil {
-		wp.logger.Error("worker: baseline load failed",
+		// Debug: the error is returned as this action's failure and
+		// reported once by the engine and console.
+		wp.logger.Debug("worker: baseline load failed",
 			slog.String("error", loadErr.Error()),
 		)
 		wp.sendResult(ctx, ta, nil, loadErr)
@@ -192,7 +196,9 @@ func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 		mutation := mutationFromActionOutcome(&outcome)
 		if mutation != nil {
 			if commitErr := wp.baseline.CommitMutation(ctx, mutation); commitErr != nil {
-				wp.logger.Error("worker: commit outcome failed",
+				// Debug: returned as the action's failure (and a shutdown
+				// cancellation is not a failure the user needs to see).
+				wp.logger.Debug("worker: commit outcome failed",
 					slog.Int64("id", ta.ID),
 					slog.String("error", commitErr.Error()),
 				)

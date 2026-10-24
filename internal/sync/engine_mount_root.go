@@ -43,7 +43,9 @@ func (flow *engineFlow) observeMountRootRemote(
 
 		items, newToken, err := eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, eng.remoteRootItemID, token)
 		if err != nil && errors.Is(err, graph.ErrGone) && !fullReconcile {
-			eng.logger.Warn("mount-root delta token expired, performing full mount-root resync",
+			// Self-healing: the next call re-enumerates the shared folder from
+			// scratch, so nothing needs the user's attention.
+			eng.logger.Info("Change history for a shared folder expired; rescanning the folder",
 				slog.String("drive_id", eng.driveID.String()),
 				slog.String("remote_root_item_id", eng.remoteRootItemID),
 			)
@@ -52,6 +54,7 @@ func (flow *engineFlow) observeMountRootRemote(
 			fullReconcile = true
 		}
 		if err == nil {
+			eng.mountRootDeltaFallbackReported.Store(false)
 			events := convertMountRootItems(ctx, items, eng.remoteRootItemID, eng.driveID, bl, eng.logger, eng.itemsClient)
 			if fullReconcile {
 				events = append(events, detectMountRootOrphans(items, eng.driveID, bl)...)
@@ -64,11 +67,20 @@ func (flow *engineFlow) observeMountRootRemote(
 			return nil, "", remoteObservationModeDelta, fmt.Errorf("sync: mount-root delta: %w", err)
 		}
 
-		eng.logger.Warn("mount-root delta unsupported or not ready, falling back to recursive listing",
+		// The fallback is retried on every poll, but the condition does not
+		// change between polls: report it once, keep the repeats at Debug.
+		fallbackAttrs := []any{
 			slog.String("drive_id", eng.driveID.String()),
 			slog.String("remote_root_item_id", eng.remoteRootItemID),
 			slog.String("error", err.Error()),
-		)
+		}
+		if eng.mountRootDeltaFallbackReported.CompareAndSwap(false, true) {
+			eng.logger.Info("Shared folder change tracking is unavailable; listing the whole folder on each check",
+				fallbackAttrs...)
+		} else {
+			eng.logger.Debug("mount-root delta unsupported or not ready, falling back to recursive listing",
+				fallbackAttrs...)
+		}
 	}
 
 	if eng.recursiveLister == nil {
@@ -139,16 +151,18 @@ func (rt *watchRuntime) watchMountRootRemote(
 
 	bo := retry.NewBackoff(retry.WatchRemotePolicy())
 	bo.SetMaxOverride(interval)
+	var outage pollOutageLog
 
 	for {
 		observationBatch, err := rt.executeMountRootObservation(ctx, bl, false)
 		if err != nil {
-			stop, handleErr := rt.handleMountRootPollError(ctx, bo, err)
+			stop, handleErr := rt.handleMountRootPollError(ctx, bo, &outage, err)
 			if handleErr != nil || stop {
 				return handleErr
 			}
 			continue
 		}
+		outage.recovered(rt.deps.logger, "Checking the shared folder for changes works again")
 		if err := rt.handleMountRootObservationResult(ctx, batches, interval, bo, &observationBatch); err != nil {
 			if mountRootWatchStopped(ctx, err) {
 				return nil
@@ -203,6 +217,7 @@ func shouldSkipMountRootWatchBatch(batch *remoteObservationBatch) bool {
 func (rt *watchRuntime) handleMountRootPollError(
 	ctx context.Context,
 	bo *retry.Backoff,
+	outage *pollOutageLog,
 	err error,
 ) (bool, error) {
 	if mountRootWatchStopped(ctx, err) {
@@ -210,9 +225,7 @@ func (rt *watchRuntime) handleMountRootPollError(
 	}
 
 	delay := bo.Next()
-	rt.deps.logger.Warn("mount-root watch poll failed, backing off",
-		slog.String("error", err.Error()),
-		slog.Duration("backoff", delay),
+	outage.failed(rt.deps.logger, "Can't check the shared folder for changes; retrying", err, delay,
 		slog.String("drive_id", rt.engine.driveID.String()),
 		slog.String("remote_root_item_id", rt.engine.remoteRootItemID),
 	)

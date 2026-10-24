@@ -80,6 +80,13 @@ type Engine struct {
 	// value rather than five injectable fields.
 	clock     syncClock
 	nextRunID atomic.Int64
+
+	// mountRootDeltaFallbackReported is set once the engine has reported, at
+	// Info, that folder delta is unavailable for its shared-folder root and
+	// observation is listing the folder instead. It clears when folder delta
+	// succeeds again, so a later fallback is reported once more. Atomic
+	// because one-shot and watch observation can run on different goroutines.
+	mountRootDeltaFallbackReported atomic.Bool
 }
 
 // newEngine creates an Engine and opens the per-mount SyncStore. Existing

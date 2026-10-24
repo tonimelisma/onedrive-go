@@ -321,8 +321,10 @@ func (o *localObserver) TrySendChangeEventOnly(ctx context.Context, events chan<
 		o.recordActivity()
 	case <-ctx.Done():
 	default:
+		// Debug per event: a bulk copy can drop thousands. droppedEvents
+		// aggregates them and the maintenance tick schedules one rescan.
 		o.droppedEvents.Add(1)
-		o.logger.Warn("event channel full, dropping event (safety scan will catch up)",
+		o.logger.Debug("event channel full, dropping event (safety scan will catch up)",
 			slog.String("path", ev.Path),
 			slog.String("type", ev.Type.String()),
 		)
@@ -340,7 +342,7 @@ func (o *localObserver) TrySendLocalObservationBatch(ctx context.Context, batch 
 	case <-ctx.Done():
 	default:
 		o.droppedEvents.Add(1)
-		o.logger.Warn("local observation batch channel full, marking local truth suspect on maintenance",
+		o.logger.Debug("local observation batch channel full, marking local truth suspect on maintenance",
 			slog.Bool("full_snapshot", batch.fullSnapshot),
 			slog.Int("rows", len(batch.rows)),
 			slog.Int("deleted_paths", len(batch.deletedPaths)),
@@ -492,7 +494,9 @@ func (o *localObserver) rollbackAddedWatches(watcher fsWatcher, session *watchAd
 	for i := len(session.added) - 1; i >= 0; i-- {
 		path := session.added[i]
 		if err := watcher.Remove(path); err != nil {
-			o.logger.Warn("watch setup rollback: failed to remove watch",
+			// Debug: rollback also runs on shutdown, and the watcher is
+			// being discarded either way.
+			o.logger.Debug("watch setup rollback: failed to remove watch",
 				slog.String("path", path),
 				slog.String("error", err.Error()))
 		}

@@ -155,7 +155,9 @@ func (e *executor) DeleteLocalFolder(action *Action, absPath string) actionOutco
 		for _, entry := range entries {
 			entryPath := filepath.Join(relPath, entry.Name())
 			if rmErr := e.syncTree.RemoveAll(entryPath); rmErr != nil {
-				e.logger.Warn("failed to remove disposable file",
+				// Debug: the folder removal below then fails and carries
+				// the user-visible reason.
+				e.logger.Debug("failed to remove disposable file",
 					slog.String("path", entryPath),
 					slog.String("error", normalizeSyncTreePathError(rmErr).Error()),
 				)
@@ -204,7 +206,9 @@ func (e *executor) DeleteLocalFile(_ context.Context, action *Action, absPath st
 		}
 
 		if !localDeleteUnchangedWithoutHash(baselineEntry, info) {
-			e.logger.Warn("local delete: no baseline hash and local file is unverified, keeping local file and requiring replan",
+			// Debug: the returned precondition error supersedes the action
+			// and the engine replans; nothing is asked of the user.
+			e.logger.Debug("local delete: no baseline hash and local file is unverified, keeping local file and requiring replan",
 				slog.String("path", action.Path),
 			)
 
@@ -232,7 +236,9 @@ func (e *executor) DeleteLocalFile(_ context.Context, action *Action, absPath st
 		}
 
 		if currentHash != baselineHash {
-			e.logger.Warn("local delete: hash mismatch, keeping local file and requiring replan",
+			// Debug: the file changed locally after the remote delete; the
+			// engine replans and normally uploads it. Nothing to do.
+			e.logger.Debug("local delete: hash mismatch, keeping local file and requiring replan",
 				slog.String("path", action.Path),
 			)
 			return e.failedOutcomeWithFailure(

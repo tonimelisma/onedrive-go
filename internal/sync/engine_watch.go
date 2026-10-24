@@ -425,7 +425,7 @@ func (rt *watchRuntime) startLocalObserver(
 			return
 		}
 
-		errs <- watchErr
+		errs <- observerExitError(observerNameLocal, watchErr)
 	}()
 }
 

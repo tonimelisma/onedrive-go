@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -216,15 +217,12 @@ func (flow *engineFlow) applyBlockScope(ctx context.Context, sr scopeUpdateResul
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
 	}
+	wasActive := flow.scopes.hasActiveScope(sr.ScopeKey)
 	if err := flow.activateScope(ctx, block); err != nil {
 		return fmt.Errorf("apply block scope %s: %w", sr.ScopeKey.String(), err)
 	}
 
-	flow.deps.logger.Warn("block scope active — actions blocked",
-		slog.String("scope_key", sr.ScopeKey.String()),
-		slog.String("condition_type", sr.ConditionType),
-		slog.Duration("trial_interval", interval),
-	)
+	flow.logBlockScopeActivated(sr.ScopeKey, sr.ConditionType, interval, wasActive)
 
 	flow.signals.armTrialTimer()
 
@@ -249,6 +247,7 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
 	}
+	wasActive := flow.scopes.hasActiveScope(to)
 	persisted, err := blockScopeRowFromActiveScope(*block)
 	if err != nil {
 		return fmt.Errorf("transition blocked scope %s -> %s: %w", from.String(), to.String(), err)
@@ -284,14 +283,51 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 		}
 	}
 
-	flow.deps.logger.Warn("block scope active — actions blocked",
-		slog.String("scope_key", to.String()),
-		slog.String("condition_type", conditionType),
-		slog.Duration("trial_interval", interval),
-	)
+	flow.logBlockScopeActivated(to, conditionType, interval, wasActive)
 
 	flow.mustAssertInvariants(ctx, "transition blocked scope")
 	return nil
+}
+
+// logBlockScopeActivated reports a block scope once, when it starts. Every
+// in-flight transfer that fails the same way (each 429 of a throttling burst,
+// each upload into a full drive) re-applies the same scope, and trial
+// transitions re-persist it; those repeats stay at Debug. Throttling and
+// service outages are handled automatically, so they are Info; conditions
+// the user can act on (storage full, local disk full, no permission) are one
+// Warn in plain words.
+func (flow *engineFlow) logBlockScopeActivated(
+	key ScopeKey,
+	conditionType string,
+	interval time.Duration,
+	wasActive bool,
+) {
+	fields := []any{
+		slog.String("scope_key", key.String()),
+		slog.String("condition_type", conditionType),
+		slog.Duration("trial_interval", interval),
+	}
+	if wasActive {
+		flow.deps.logger.Debug("block scope active — actions blocked", fields...)
+		return
+	}
+
+	retryIn := interval.Round(time.Second).String()
+	switch conditionType {
+	case issueRateLimited:
+		flow.deps.logger.Info("OneDrive is limiting requests; pausing affected transfers and retrying in "+retryIn, fields...)
+	case issueServiceOutage:
+		flow.deps.logger.Info("OneDrive is temporarily unavailable; pausing transfers and retrying in "+retryIn, fields...)
+	case IssueQuotaExceeded:
+		flow.deps.logger.Warn("OneDrive storage is full; uploads are paused until space is freed (checking again in "+retryIn+")",
+			fields...)
+	case issueDiskFull:
+		flow.deps.logger.Warn("The local disk is full; downloads are paused until space is freed (checking again in "+retryIn+")",
+			fields...)
+	default:
+		flow.deps.logger.Warn("Paused syncing "+key.Humanize()+" ("+strings.ReplaceAll(conditionType, "_", " ")+
+			"); checking again in "+retryIn, fields...)
+	}
 }
 
 // releaseScope atomically removes the block scope and makes blocked retry work
@@ -309,7 +345,7 @@ func (flow *engineFlow) releaseScope(ctx context.Context, key ScopeKey) error {
 	flow.signals.kickDueHeldRelease()
 	flow.signals.armTrialTimer()
 
-	flow.deps.logger.Info("block scope cleared — blocked work released",
+	flow.deps.logger.Info("Resumed syncing: "+key.Humanize(),
 		slog.String("scope_key", key.String()),
 	)
 

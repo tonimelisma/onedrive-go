@@ -140,8 +140,10 @@ func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scan
 		return scanResult{}, fmt.Errorf("sync: walking %s: %w", syncRoot, err)
 	}
 
+	// Debug: unreadable entries are recorded as skipped items, which the
+	// engine reports once when first found and `status` lists.
 	if n := skippedEntries.Load(); n > 0 {
-		o.logger.Warn("full scan: skipped entries due to walk errors",
+		o.logger.Debug("full scan: skipped entries due to walk errors",
 			slog.Int64("count", n),
 			slog.String("sync_root", syncRoot))
 	}
@@ -202,12 +204,13 @@ func (o *localObserver) validateFullScanRoot(tree *synctree.Root, syncRoot strin
 	// WalkDir silently succeeds with zero events (walkFn's SkipEntry returns
 	// filepath.SkipDir for the root error, so WalkDir returns nil).
 	if !syncRootExists(syncRoot) {
-		o.logger.Warn("sync root missing, aborting scan",
+		// Debug: the returned error is reported once by the caller.
+		o.logger.Debug("sync root missing, aborting scan",
 			slog.String("sync_root", syncRoot))
 		return errSyncRootMissing
 	}
 	if err := validateExpectedSyncRootIdentity(tree, o.expectedRootID); err != nil {
-		o.logger.Warn("sync root identity changed, aborting scan",
+		o.logger.Debug("sync root identity changed, aborting scan",
 			slog.String("sync_root", syncRoot),
 			slog.String("error", err.Error()))
 		return err
@@ -274,8 +277,20 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 
 			hash, err := hashFn(job.fsPath)
 			if err != nil {
-				o.logger.Warn("hash computation failed, emitting event with empty hash",
+				// Debug: this repeats on every safety scan for a file that
+				// stats but cannot be opened. An unreadable file is recorded
+				// as a skipped item instead, reported once and in `status`.
+				o.logger.Debug("hash computation failed, emitting event with empty hash",
 					slog.String("path", job.dbRelPath), slog.String("error", err.Error()))
+				if errors.Is(err, os.ErrPermission) {
+					mu.Lock()
+					skipped = append(skipped, skippedItem{
+						Path:   job.dbRelPath,
+						Reason: issueLocalReadDenied,
+						Detail: "file not readable (check filesystem permissions)",
+					})
+					mu.Unlock()
+				}
 			}
 
 			// For modifies: check if hash matches baseline (no real change).
@@ -352,7 +367,9 @@ func (o *localObserver) makeWalkFunc(
 
 	return func(fsPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			o.logger.Warn("walk error", slog.String("path", fsPath), slog.String("error", walkErr.Error()))
+			// Debug: a persistent unreadable folder would warn on every
+			// scan; the skipped item below is the single user-facing report.
+			o.logger.Debug("walk error", slog.String("path", fsPath), slog.String("error", walkErr.Error()))
 			// Any unreadable entry other than one that vanished mid-walk is a
 			// read boundary: an I/O error must not make content look deleted
 			// any more than a permission error does.
@@ -449,8 +466,9 @@ func (o *localObserver) processEntry(
 				Detail: "file not accessible (check filesystem permissions)",
 			})
 		}
-		// File disappeared between readdir and stat — skip and continue.
-		o.logger.Warn("stat failed (file may have disappeared)",
+		// File disappeared between readdir and stat (an expected race), or
+		// is unreadable (recorded above) -- skip and continue.
+		o.logger.Debug("stat failed (file may have disappeared)",
 			slog.String("path", dbRelPath), slog.String("error", err.Error()))
 		return nil
 	}

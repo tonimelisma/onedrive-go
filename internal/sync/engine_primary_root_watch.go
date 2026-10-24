@@ -23,7 +23,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 			defer close(batches)
 			defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
 
-			errs <- rt.watchMountRootRemote(ctx, bl, batches, pollInterval)
+			errs <- observerExitError(observerNameRemote, rt.watchMountRootRemote(ctx, bl, batches, pollInterval))
 		}()
 		return
 	}
@@ -51,7 +51,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		defer close(batches)
 		defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
 
-		errs <- remoteObs.Watch(
+		watchErr := remoteObs.Watch(
 			ctx,
 			savedToken,
 			batches,
@@ -68,6 +68,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 				return batch, nil
 			},
 		)
+		errs <- observerExitError(observerNameRemote, watchErr)
 	}()
 }
 

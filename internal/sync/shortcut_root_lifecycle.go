@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -47,8 +48,17 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 		releaseCleanupErr = errors.Join(releaseCleanupErr, step.releaseCleanupErr)
 	}
 	if !changed {
+		// A cleanup that was already blocked and is still blocked for the
+		// same reason is persisted durable state (`status` shows it, and it
+		// is retried here every pass). Returning its error again would fail
+		// every one-shot run and end the watch remote observer over a
+		// condition that has not changed, stalling unrelated remote sync.
+		// The error is returned once, on the transition into the blocked
+		// state below.
 		if releaseCleanupErr != nil {
-			return false, releaseCleanupErr
+			e.logger.Debug("shortcut root release cleanup still blocked",
+				slog.String("error", releaseCleanupErr.Error()),
+			)
 		}
 		return false, nil
 	}

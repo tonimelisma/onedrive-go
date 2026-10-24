@@ -1002,7 +1002,9 @@ func TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeRetur
 }
 
 // Validates: R-2.4.8
-func TestEngine_ReconcileShortcutRootLocalStateReturnsRepeatedCleanupBlockedError(t *testing.T) {
+// Regression: an unchanged blocked cleanup used to return its error on every
+// pass, failing each one-shot run and ending the watch remote observer.
+func TestEngine_ReconcileShortcutRootLocalStateRepeatedCleanupBlockedIsQuiet(t *testing.T) {
 	t.Parallel()
 
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
@@ -1018,16 +1020,19 @@ func TestEngine_ReconcileShortcutRootLocalStateReturnsRepeatedCleanupBlockedErro
 		RemoteDriveID:     driveid.New("drive-1"),
 		RemoteItemID:      "target-1",
 		RemoteIsFolder:    true,
-		State:             ShortcutRootStateRemovedCleanupBlocked,
-		BlockedDetail:     "shortcut alias path is not a directory",
+		State:             ShortcutRootStateRemovedReleasePending,
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
-
-	require.Error(t, err)
-	assert.False(t, changed)
+	_, err := eng.reconcileShortcutRootLocalState(t.Context())
+	require.Error(t, err, "the transition into the blocked state is reported once")
 	assert.Contains(t, err.Error(), "not a directory")
+
+	for range 3 {
+		changed, repeatErr := eng.reconcileShortcutRootLocalState(t.Context())
+		require.NoError(t, repeatErr, "the unchanged blocked state is already persisted and shown by status")
+		assert.False(t, changed)
+	}
 	roots, listErr := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, listErr)
 	require.Len(t, roots, 1)
