@@ -51,11 +51,12 @@ func SameIdentity(a FileIdentity, b FileIdentity) bool {
 func (r *Root) IdentityNoFollow(rel string) (FileIdentity, error) {
 	info, err := r.Lstat(rel)
 	if err != nil {
-		return FileIdentity{}, fmt.Errorf("stating identity %s: %w", rel, err)
+		// Lstat already names the path; restating it here only stuttered.
+		return FileIdentity{}, err
 	}
 	identity, ok := IdentityFromFileInfo(info)
 	if !ok {
-		return FileIdentity{}, fmt.Errorf("file info for %s has no stable device/inode identity", rel)
+		return FileIdentity{}, fmt.Errorf("can't identify folder %s: this filesystem reports no stable file identity", rel)
 	}
 
 	return identity, nil

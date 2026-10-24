@@ -363,6 +363,14 @@ Static verification is a first-class architectural constraint, not a best-effort
   translation to its own escape sentinel matched on message text before this,
   which is fragile across a package boundary and could only recognize the two
   phrasings it happened to know.
+- Synctree refusals are `treeRefusalError` values: `errors.Is` matches
+  `ErrUnsafePath` or `ErrUnsupportedTreeEntry`, but the error has no `Unwrap`
+  and its message is the detail alone ("a/b is a symbolic link", "parent
+  folder a is not a folder"). Wrapping the sentinel with `%w` made the bare
+  sentinel the innermost error, and the sync console, which reports the
+  innermost error as the reason, printed "sync tree path is unsafe" and
+  dropped the part that named the path. Evidence:
+  `TestRootRefusals_KeepSentinelAndShowTheDetailAsInnermostError`.
 - Requirement traceability is checked in both directions, and the reverse
   direction is the one that matters. Forward: a `Validates:` or `Implements:`
   reference must resolve to a declared requirement, so a renamed requirement

@@ -131,3 +131,25 @@ func TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration(t *
 	assert.Equal(t, synccontrol.ErrorInvalidRequest, decoded.Code)
 	assert.Contains(t, decoded.Message, "greater than zero")
 }
+
+// The owner resolves nothing against its own working directory: a relative
+// capture path that reaches it is refused rather than written somewhere the
+// requester never looks.
+//
+// Validates: R-6.6.16
+func TestPerfCaptureOptionsFromRequest_RejectsRelativeOutputDir(t *testing.T) {
+	_, err := perfCaptureOptionsFromRequest(synccontrol.OwnerModeWatch, &synccontrol.PerfCaptureRequest{
+		DurationMS: 1000,
+		OutputDir:  "relative/out",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be an absolute path")
+
+	absolute := t.TempDir()
+	opts, err := perfCaptureOptionsFromRequest(synccontrol.OwnerModeWatch, &synccontrol.PerfCaptureRequest{
+		DurationMS: 1000,
+		OutputDir:  absolute,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, absolute, opts.OutputDir)
+}

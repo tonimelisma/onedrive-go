@@ -185,7 +185,7 @@ func (c *oneShotChildRuns) runChildrenForParent(
 			Identity:       parent.identity(),
 			DisplayName:    parent.displayName(),
 			Status:         MountStartupFatal,
-			Err:            fmt.Errorf("building child mount specs after parent snapshot: %w", err),
+			Err:            fmt.Errorf("set up shared-folder shortcuts: %w", err),
 		})
 		return
 	}
@@ -212,15 +212,13 @@ func (c *oneShotChildRuns) runChildrenForParent(
 		cloneParentAckHandles(parentAckers),
 		c.cache,
 	); purgeErr != nil {
-		c.orchestrator.logger.Warn("purging shortcut child state artifacts",
-			slog.String("parent_mount_id", parentID.String()),
-			slog.String("error", purgeErr.Error()),
-		)
+		// The report is the user-facing channel for this failure; logging it
+		// at WARN as well printed it twice.
 		c.appendReports(&MountReport{
 			SelectionIndex: parent.selectionIndex(),
 			Identity:       parent.identity(),
 			DisplayName:    parent.displayName(),
-			Err:            fmt.Errorf("shortcut child artifact cleanup: %w", purgeErr),
+			Err:            fmt.Errorf("clean up removed shortcuts: %w", purgeErr),
 		})
 	}
 	if finalized, finalizeErr := c.orchestrator.finalizeSuccessfulFinalDrainMounts(
@@ -230,18 +228,15 @@ func (c *oneShotChildRuns) runChildrenForParent(
 		parentAckers,
 		c.cache,
 	); finalizeErr != nil {
-		c.orchestrator.logger.Warn("finalizing drained shortcut child mounts",
-			slog.String("parent_mount_id", parentID.String()),
-			slog.String("error", finalizeErr.Error()),
-		)
 		c.appendReports(&MountReport{
 			SelectionIndex: parent.selectionIndex(),
 			Identity:       parent.identity(),
 			DisplayName:    parent.displayName(),
-			Err:            fmt.Errorf("shortcut child final-drain cleanup: %w", finalizeErr),
+			Err:            fmt.Errorf("finish removing shortcuts: %w", finalizeErr),
 		})
 	} else if finalized {
-		c.orchestrator.logger.Info("finalized drained shortcut child mounts",
+		c.orchestrator.logger.Info("Finished removing shortcuts",
+			slog.String("drive", parent.label()),
 			slog.String("parent_mount_id", parentID.String()),
 		)
 	}

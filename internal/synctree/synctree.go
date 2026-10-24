@@ -165,9 +165,36 @@ type Root struct {
 	ops rootOps
 }
 
-var ErrUnsafePath = errors.New("sync tree path is unsafe")
+// ErrUnsafePath classifies a path the sync folder must not touch: outside the
+// folder, through a non-folder, or the folder itself. Callers branch on it with
+// errors.Is to tell a permanent path problem from a transient one.
+var ErrUnsafePath = errors.New("path is not safe to change inside the sync folder")
 
-var ErrUnsupportedTreeEntry = errors.New("sync tree entry is unsupported")
+// ErrUnsupportedTreeEntry classifies an entry the rooted tree cannot operate
+// on, such as a symbolic link or a device file.
+var ErrUnsupportedTreeEntry = errors.New("unsupported entry in the sync folder")
+
+// treeRefusalError is a refusal classified by one of the sentinels above. Its
+// message is the detail alone ("a/b is a symbolic link"), and it has no
+// Unwrap, so a renderer that reports the innermost error shows what is wrong
+// with which path instead of the bare sentinel text. errors.Is still matches
+// the sentinel through Is.
+type treeRefusalError struct {
+	kind   error
+	detail string
+}
+
+func (e *treeRefusalError) Error() string { return e.detail }
+
+func (e *treeRefusalError) Is(target error) bool { return target == e.kind }
+
+func unsafePathf(format string, args ...any) error {
+	return &treeRefusalError{kind: ErrUnsafePath, detail: fmt.Sprintf(format, args...)}
+}
+
+func unsupportedEntryf(format string, args ...any) error {
+	return &treeRefusalError{kind: ErrUnsupportedTreeEntry, detail: fmt.Sprintf(format, args...)}
+}
 
 type PathState struct {
 	Exists    bool
@@ -191,13 +218,13 @@ type rootedTreeEntry struct {
 // Open establishes a rooted sync-tree capability for dir.
 func Open(dir string) (*Root, error) {
 	if dir == "" {
-		return nil, fmt.Errorf("sync root is empty")
+		return nil, fmt.Errorf("sync folder path is empty")
 	}
 
 	clean := filepath.Clean(dir)
 	abs, err := filepath.Abs(clean)
 	if err != nil {
-		return nil, fmt.Errorf("resolving sync root %s: %w", clean, err)
+		return nil, fmt.Errorf("resolving sync folder %s: %w", clean, err)
 	}
 
 	return newRoot(abs), nil
@@ -224,12 +251,12 @@ func cleanRelative(path string) (string, error) {
 		return ".", nil
 	}
 	if filepath.IsAbs(path) {
-		return "", fmt.Errorf("%w: relative path %q must not be absolute", ErrUnsafePath, path)
+		return "", unsafePathf("%q is an absolute path, not a path inside the sync folder", path)
 	}
 
 	clean := filepath.Clean(path)
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("%w: relative path %q escapes root", ErrUnsafePath, path)
+		return "", unsafePathf("%q points outside the sync folder", path)
 	}
 	if clean == "." {
 		return ".", nil
@@ -290,7 +317,7 @@ func (r *Root) openWithRoot(
 
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return nil, fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 
 	file, openErr := opener(root, clean)
@@ -313,7 +340,7 @@ func (r *Root) openWithRoot(
 			return nil, errors.Join(closeErr, fileCloseErr)
 		}
 
-		return nil, fmt.Errorf("closing sync root %s: %w", r.dir, closeErr)
+		return nil, fmt.Errorf("closing sync folder %s: %w", r.dir, closeErr)
 	}
 
 	return file, nil
@@ -378,7 +405,7 @@ func (r *Root) statWithRoot(
 
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return nil, fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 
 	info, statErr := stat(root, clean)
@@ -397,7 +424,7 @@ func (r *Root) statWithRoot(
 	}
 
 	if closeErr != nil {
-		return nil, fmt.Errorf("closing sync root %s: %w", r.dir, closeErr)
+		return nil, fmt.Errorf("closing sync folder %s: %w", r.dir, closeErr)
 	}
 
 	return info, nil
@@ -419,7 +446,7 @@ func (r *Root) mutateWithRoot(
 
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 
 	mutateErr := mutate(root, clean)
@@ -433,7 +460,7 @@ func (r *Root) mutateWithRoot(
 	}
 
 	if closeErr != nil {
-		return fmt.Errorf("closing sync root %s: %w", r.dir, closeErr)
+		return fmt.Errorf("closing sync folder %s: %w", r.dir, closeErr)
 	}
 
 	return nil
@@ -490,7 +517,7 @@ func (r *Root) ReadDir(rel string) ([]os.DirEntry, error) {
 
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return nil, fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 
 	entries, readErr := fs.ReadDir(root.FS(), clean)
@@ -509,7 +536,7 @@ func (r *Root) ReadDir(rel string) ([]os.DirEntry, error) {
 	}
 
 	if closeErr != nil {
-		return nil, fmt.Errorf("closing sync root %s: %w", r.dir, closeErr)
+		return nil, fmt.Errorf("closing sync folder %s: %w", r.dir, closeErr)
 	}
 
 	return entries, nil
@@ -533,7 +560,7 @@ func (r *Root) DirEmptyNoFollow(rel string) (bool, error) {
 		return false, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return false, fmt.Errorf("%w: %s is not a directory", ErrUnsafePath, rel)
+		return false, unsafePathf("%s is not a folder", rel)
 	}
 
 	entries, err := r.ReadDir(rel)
@@ -551,7 +578,7 @@ func (r *Root) DirEmptyNoFollow(rel string) (bool, error) {
 			return false, err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return false, fmt.Errorf("%w: symlink %s", ErrUnsupportedTreeEntry, child)
+			return false, unsupportedEntryf("%s is a symbolic link", child)
 		}
 	}
 
@@ -608,7 +635,7 @@ func (r *Root) validateTreeNoFollow(rel string) error {
 	}
 	switch {
 	case info.Mode()&os.ModeSymlink != 0:
-		return fmt.Errorf("%w: symlink %s", ErrUnsupportedTreeEntry, rel)
+		return unsupportedEntryf("%s is a symbolic link", rel)
 	case info.IsDir():
 		children, err := r.ReadDir(rel)
 		if err != nil {
@@ -626,7 +653,7 @@ func (r *Root) validateTreeNoFollow(rel string) error {
 	case info.Mode().IsRegular():
 		return nil
 	default:
-		return fmt.Errorf("%w: %s has mode %s", ErrUnsupportedTreeEntry, rel, info.Mode())
+		return unsupportedEntryf("%s is not a regular file or folder (mode %s)", rel, info.Mode())
 	}
 }
 
@@ -641,7 +668,7 @@ func (r *Root) rootedTreeManifestNoFollow(baseRel string) (map[string]rootedTree
 		return nil, err
 	}
 	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
-		return nil, fmt.Errorf("%w: tree root %s is not a directory", ErrUnsafePath, baseRel)
+		return nil, unsafePathf("%s is not a folder", baseRel)
 	}
 
 	entries := make(map[string]rootedTreeEntry)
@@ -675,7 +702,7 @@ func (r *Root) appendRootedTreeManifest(baseRel string, rel string, entries map[
 		}
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
-			return fmt.Errorf("%w: symlink %s", ErrUnsupportedTreeEntry, rootedChildRel)
+			return unsupportedEntryf("%s is a symbolic link", rootedChildRel)
 		case info.IsDir():
 			entries[childRel] = rootedTreeEntry{kind: rootedTreeEntryDir}
 			if err := r.appendRootedTreeManifest(baseRel, childRel, entries); err != nil {
@@ -692,7 +719,7 @@ func (r *Root) appendRootedTreeManifest(baseRel string, rel string, entries map[
 				hash: hash,
 			}
 		default:
-			return fmt.Errorf("%w: %s has mode %s", ErrUnsupportedTreeEntry, rootedChildRel, info.Mode())
+			return unsupportedEntryf("%s is not a regular file or folder (mode %s)", rootedChildRel, info.Mode())
 		}
 	}
 
@@ -725,11 +752,11 @@ func (r *Root) RemoveTreeNoFollow(rel string) error {
 		return err
 	}
 	if clean == "." {
-		return fmt.Errorf("%w: refusing to remove sync root", ErrUnsafePath)
+		return unsafePathf("refusing to remove the sync folder itself")
 	}
 
 	if err := r.removeTreeNoFollow(clean); err != nil {
-		return fmt.Errorf("removing rooted tree %s: %w", rel, err)
+		return fmt.Errorf("removing folder %s: %w", rel, err)
 	}
 
 	return nil
@@ -742,7 +769,7 @@ func (r *Root) removeTreeNoFollow(rel string) error {
 	}
 	switch {
 	case info.Mode()&os.ModeSymlink != 0:
-		return fmt.Errorf("%w: symlink %s", ErrUnsupportedTreeEntry, rel)
+		return unsupportedEntryf("%s is a symbolic link", rel)
 	case info.IsDir():
 		children, err := r.ReadDir(rel)
 		if err != nil {
@@ -760,7 +787,7 @@ func (r *Root) removeTreeNoFollow(rel string) error {
 	case info.Mode().IsRegular():
 		return r.Remove(rel)
 	default:
-		return fmt.Errorf("%w: %s has mode %s", ErrUnsupportedTreeEntry, rel, info.Mode())
+		return unsupportedEntryf("%s is not a regular file or folder (mode %s)", rel, info.Mode())
 	}
 }
 
@@ -804,10 +831,10 @@ func (r *Root) ValidateNoSymlinkAncestors(rel string) error {
 			return nil
 		}
 		if statErr != nil {
-			return fmt.Errorf("checking sync-tree ancestor %s: %w", current, statErr)
+			return fmt.Errorf("checking parent folder %s: %w", current, statErr)
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return fmt.Errorf("%w: ancestor %s is not a directory", ErrUnsafePath, current)
+			return unsafePathf("parent folder %s is not a folder", current)
 		}
 	}
 
@@ -908,7 +935,7 @@ func (r *Root) Rename(srcRel, dstRel string) error {
 
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 
 	renameErr := r.ops.rename(root, srcClean, dstClean)
@@ -929,7 +956,7 @@ func (r *Root) Rename(srcRel, dstRel string) error {
 	}
 
 	if closeErr != nil {
-		return fmt.Errorf("closing sync root %s: %w", r.dir, closeErr)
+		return fmt.Errorf("closing sync folder %s: %w", r.dir, closeErr)
 	}
 
 	return nil
@@ -1004,7 +1031,7 @@ func (r *Root) Chtimes(rel string, atime time.Time, mtime time.Time) error {
 func (r *Root) WalkDir(fn fs.WalkDirFunc) error {
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 	defer root.Close() //nolint:errcheck // rooted handle release; mutation errors are reported by the operation itself
 
@@ -1016,7 +1043,7 @@ func (r *Root) WalkDir(fn fs.WalkDirFunc) error {
 
 		return fn(absPath, d, walkErr)
 	}); err != nil {
-		return fmt.Errorf("walking sync tree %s: %w", r.dir, err)
+		return fmt.Errorf("walking sync folder %s: %w", r.dir, err)
 	}
 
 	return nil
@@ -1048,10 +1075,10 @@ func (r *Root) normalizeNotExist(path string, original error) error {
 func (r *Root) validateRootDirectoryNoFollow() error {
 	info, err := r.ops.lstatAbs(r.dir)
 	if err != nil {
-		return fmt.Errorf("checking sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return fmt.Errorf("checking sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("%w: root %s is not a directory", ErrUnsafePath, r.dir)
+		return unsafePathf("sync folder %s is not a folder", r.dir)
 	}
 
 	return nil
@@ -1064,7 +1091,7 @@ func (r *Root) openRootNoFollow() (rootHandle, error) {
 
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening sync root %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return nil, fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
 	}
 
 	return root, nil
@@ -1074,7 +1101,7 @@ func ensureNoFollowDirectory(root rootHandle, rel string, perm os.FileMode) erro
 	info, err := root.Lstat(rel)
 	if err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return fmt.Errorf("%w: path %s is not a directory", ErrUnsafePath, rel)
+			return unsafePathf("%s is not a folder", rel)
 		}
 		return nil
 	}
@@ -1088,7 +1115,7 @@ func ensureNoFollowDirectory(root rootHandle, rel string, perm os.FileMode) erro
 				return fmt.Errorf("checking directory %s after create race: %w", rel, statErr)
 			}
 			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-				return fmt.Errorf("%w: path %s is not a directory", ErrUnsafePath, rel)
+				return unsafePathf("%s is not a folder", rel)
 			}
 			return nil
 		}

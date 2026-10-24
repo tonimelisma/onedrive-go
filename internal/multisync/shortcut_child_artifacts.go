@@ -53,11 +53,13 @@ type shortcutChildArtifactCleanupError struct {
 	err   error
 }
 
+// Error reads as plain "what failed: why". The failure class is for status
+// diagnostics (see shortcutChildArtifactCleanupClasses), not for the message.
 func (e shortcutChildArtifactCleanupError) Error() string {
 	if e.op == "" {
-		return fmt.Sprintf("%s cleanup failure: %v", e.class, e.err)
+		return e.err.Error()
 	}
-	return fmt.Sprintf("%s cleanup failure: %s: %v", e.class, e.op, e.err)
+	return fmt.Sprintf("%s: %v", e.op, e.err)
 }
 
 func (e shortcutChildArtifactCleanupError) Unwrap() error {
@@ -159,7 +161,7 @@ func newShortcutChildArtifactCleanupExecutor(logger *slog.Logger, dataDir string
 			sessionStore := driveops.NewSessionStore(dataDir, logger)
 			_, err := sessionStore.DeleteForScope(childMountID, localRoot)
 			if err != nil {
-				return fmt.Errorf("delete upload sessions for child mount %s: %w", childMountID, err)
+				return fmt.Errorf("delete upload sessions: %w", err)
 			}
 			return nil
 		},
@@ -256,7 +258,7 @@ func (o *Orchestrator) purgeAndAcknowledgeShortcutChildArtifacts(
 	for _, cleanup := range cleanups {
 		scope := shortcutChildArtifactScope{mountID: cleanup.mountID, localRoot: cleanup.localRoot}
 		if err := o.childArtifactCleanupExecutor().purge(ctx, scope); err != nil {
-			errs = append(errs, fmt.Errorf("purging %s shortcut child mount %s: %w", source, cleanup.mountID, err))
+			errs = append(errs, fmt.Errorf("removed shortcut %s: %w", cleanup.localRoot, err))
 			continue
 		}
 		purged = append(purged, cleanup)
@@ -397,7 +399,7 @@ func (e shortcutChildArtifactCleanupExecutor) purge(
 		if err := e.remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, classifiedShortcutChildCleanupError(
 				shortcutChildArtifactCleanupStateArtifactFailure,
-				fmt.Sprintf("remove child state artifact %s", path),
+				"delete its sync state",
 				err,
 			))
 		}
@@ -405,19 +407,19 @@ func (e shortcutChildArtifactCleanupExecutor) purge(
 	if err := e.pruneCatalogRecord(childMountID); err != nil {
 		errs = append(errs, classifiedShortcutChildCleanupError(
 			shortcutChildArtifactCleanupCatalogFailure,
-			"prune child catalog record",
+			"forget it in the drive catalog",
 			err,
 		))
 	}
 	if err := e.deleteUploadSessions(childMountID, scope.localRoot); err != nil {
 		errs = append(errs, classifiedShortcutChildCleanupError(
 			shortcutChildArtifactCleanupUploadSessionFailure,
-			"delete child upload sessions",
+			"discard its unfinished uploads",
 			err,
 		))
 	}
 	if err := errors.Join(errs...); err != nil {
-		return fmt.Errorf("purging managed child mount artifacts: %w", err)
+		return err
 	}
 
 	if e.logger != nil {

@@ -578,7 +578,7 @@ func TestRoot_OpenRootFailureInjection(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, file)
 	require.ErrorIs(t, err, openRootErr)
-	assert.Contains(t, err.Error(), "opening sync root")
+	assert.Contains(t, err.Error(), "opening sync folder")
 }
 
 // Validates: R-2.10, R-6.2
@@ -639,7 +639,7 @@ func TestRoot_WalkDir_FailureInjection(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.ErrorIs(t, err, walkErr)
-	assert.Contains(t, err.Error(), "walking sync tree")
+	assert.Contains(t, err.Error(), "walking sync folder")
 }
 
 // Validates: R-2.10, R-6.2
@@ -820,4 +820,28 @@ func runRootHandleErrorCase(
 
 func (f errorFS) Open(name string) (fs.File, error) {
 	return nil, f.err
+}
+
+// A refusal keeps its sentinel classification for callers that branch on it,
+// while the innermost error a user sees says what is wrong with which path
+// rather than only "path is not safe".
+//
+// Validates: R-2.10, R-6.2
+func TestRootRefusals_KeepSentinelAndShowTheDetailAsInnermostError(t *testing.T) {
+	root, err := Open(t.TempDir())
+	require.NoError(t, err)
+
+	_, err = root.Stat("../outside.txt")
+	require.ErrorIs(t, err, ErrUnsafePath)
+	require.NotErrorIs(t, err, ErrUnsupportedTreeEntry)
+	innermost := err
+	for unwrapped := errors.Unwrap(innermost); unwrapped != nil; unwrapped = errors.Unwrap(innermost) {
+		innermost = unwrapped
+	}
+	assert.Equal(t, `"../outside.txt" points outside the sync folder`, innermost.Error())
+
+	refusal := unsupportedEntryf("%s is a symbolic link", "a/link")
+	require.ErrorIs(t, refusal, ErrUnsupportedTreeEntry)
+	assert.Equal(t, "a/link is a symbolic link", refusal.Error())
+	assert.NoError(t, errors.Unwrap(refusal), "a refusal must not unwrap to its sentinel")
 }

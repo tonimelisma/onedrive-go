@@ -33,6 +33,11 @@ const (
 	// VerifyUnverifiable marks a baseline entry that carries no local hash to
 	// compare against, so its content was never checked.
 	VerifyUnverifiable = "unverifiable"
+
+	// VerifyUnreadable marks a file that exists (or may exist) but could not
+	// be stat'ed or read. It is not evidence of corruption or loss, so it is
+	// reported apart from missing and hash_mismatch, with the reason.
+	VerifyUnreadable = "unreadable"
 )
 
 // VerifyBaseline performs a full-tree hash verification of local files against
@@ -65,7 +70,7 @@ func verifyBaselineWithHasher(
 		}
 
 		if ctx.Err() != nil {
-			ctxErr = fmt.Errorf("sync: verify canceled: %w", ctx.Err())
+			ctxErr = fmt.Errorf("verify canceled: %w", ctx.Err())
 			return
 		}
 
@@ -99,6 +104,15 @@ func verifyBaselineWithHasher(
 	return report, nil
 }
 
+func unreadableResult(entry *syncengine.BaselineEntry, err error) Result {
+	return Result{
+		Path:     entry.Path,
+		Status:   VerifyUnreadable,
+		Expected: entry.LocalHash,
+		Reason:   err.Error(),
+	}
+}
+
 // verifyEntry checks a single baseline entry against the local filesystem.
 func verifyEntry(
 	tree verifyRoot,
@@ -117,14 +131,11 @@ func verifyEntry(
 			}
 		}
 
-		logger.Warn("verify: stat failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
+		// The result is the report of this file; a per-file WARN on top of it
+		// would print every unreadable file twice.
+		logger.Debug("verify: stat failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
 
-		return Result{
-			Path:     entry.Path,
-			Status:   VerifyMissing,
-			Expected: entry.LocalHash,
-			Actual:   err.Error(),
-		}
+		return unreadableResult(entry, err)
 	}
 
 	// Check size first (fast path) when the baseline knows the local file size.
@@ -147,26 +158,16 @@ func verifyEntry(
 
 	absPath, err := tree.Abs(relPath)
 	if err != nil {
-		logger.Warn("verify: rooted path failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
+		logger.Debug("verify: rooted path failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
 
-		return Result{
-			Path:     entry.Path,
-			Status:   VerifyHashMismatch,
-			Expected: entry.LocalHash,
-			Actual:   err.Error(),
-		}
+		return unreadableResult(entry, err)
 	}
 
 	hash, err := computeHash(absPath)
 	if err != nil {
-		logger.Warn("verify: hash failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
+		logger.Debug("verify: hash failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
 
-		return Result{
-			Path:     entry.Path,
-			Status:   VerifyHashMismatch,
-			Expected: entry.LocalHash,
-			Actual:   err.Error(),
-		}
+		return unreadableResult(entry, err)
 	}
 
 	if hash != entry.LocalHash {

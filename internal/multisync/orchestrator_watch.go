@@ -27,6 +27,9 @@ type watchRunner struct {
 	parentAck shortcutChildAckHandle
 	cancel    context.CancelFunc
 	done      chan struct{} // closed exactly once by the goroutine started in startWatchRunner
+	// startedAt tells a runner that failed straight away from one that ran
+	// for a while first; see runnerHealthyRunDuration.
+	startedAt time.Time
 }
 
 type watchRunnerEvent struct {
@@ -42,6 +45,7 @@ type watchRunnerEvent struct {
 // the active mount set: stopped mounts are removed, new mounts are started.
 // Returns nil on clean context cancel.
 func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error {
+	o.watchReportMemory = newWatchReportState()
 	commands := make(chan controlCommand)
 	runnerEvents := make(chan watchRunnerEvent, watchRunnerEventBuffer)
 	childWork := newParentChildWorkSnapshots()
@@ -57,25 +61,23 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 	}
 
 	defer func() {
-		for id, wr := range runners {
+		for _, wr := range runners {
 			wr.cancel()
 			<-wr.done
-
-			if closeErr := wr.engine.Close(ctx); closeErr != nil {
-				o.logger.Warn("engine close error on shutdown",
-					slog.String("mount_id", id.String()),
-					slog.String("error", closeErr.Error()),
-				)
-			}
+			o.closeEngine(ctx, wr.mount, wr.engine)
 		}
 
-		o.logger.Info("orchestrator RunWatch stopped")
+		o.logger.Info("Stopped watching for changes")
 	}()
 
 	reconcileTickCh, stopReconcileTicks := o.reconcileTicks(reconcileWatchInterval(opts.PollInterval))
 	defer stopReconcileTicks()
 
+	restarts := watchRestartWake{orchestrator: o}
+	defer restarts.stop()
+
 	for {
+		restarts.arm()
 		select {
 		case cmd := <-commands:
 			if o.handleControlCommand(ctx, &cmd, mode, opts, runners, runnerEvents, childWork) {
@@ -85,10 +87,42 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 			o.handleWatchRunnerEvent(ctx, event, mode, opts, runners, runnerEvents, childWork)
 		case <-reconcileTickCh:
 			o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
+		case <-restarts.ch:
+			o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
 		case <-ctx.Done():
 			return nil
 		}
 	}
+}
+
+// watchRestartWake is the RunWatch loop's single timer for the earliest
+// backed-off runner restart. The loop re-arms it before every select, from
+// the absolute restart times in watchReportState, so it never drifts and
+// never runs when nothing is waiting.
+type watchRestartWake struct {
+	orchestrator *Orchestrator
+	ch           <-chan time.Time
+	cancel       func()
+}
+
+func (w *watchRestartWake) arm() {
+	w.stop()
+	delay, ok := w.orchestrator.nextRunnerRestartDelay()
+	if !ok {
+		return
+	}
+	timer := w.orchestrator.restartTimer
+	if timer == nil {
+		timer = newRestartTimer
+	}
+	w.ch, w.cancel = timer(delay)
+}
+
+func (w *watchRestartWake) stop() {
+	if w.cancel != nil {
+		w.cancel()
+	}
+	w.ch, w.cancel = nil, nil
 }
 
 func (o *Orchestrator) startWatchRuntime(
@@ -105,7 +139,7 @@ func (o *Orchestrator) startWatchRuntime(
 				Summary: summarizeStartupResults(o.cfg.InitialStartupResults),
 			}
 		}
-		return nil, nil, fmt.Errorf("sync: no standalone mounts configured")
+		return nil, nil, fmt.Errorf("no drives selected for sync")
 	}
 
 	control, err := o.startControlServer(ctx, synccontrol.OwnerModeWatch, commands)
@@ -115,12 +149,12 @@ func (o *Orchestrator) startWatchRuntime(
 
 	decisions, err := o.buildStandaloneRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
-		return nil, control, fmt.Errorf("sync: building mount specs: %w", err)
+		return nil, control, err
 	}
 	o.setControlMountIDs(mountIDsForSpecs(decisions.Mounts))
 
-	o.logger.Info("orchestrator starting RunWatch",
-		slog.Int("mounts", len(decisions.Mounts)),
+	o.logger.Info("Watching drives for changes",
+		slog.Int("drives", len(decisions.Mounts)),
 		slog.String("mode", mode.String()),
 	)
 
@@ -137,9 +171,7 @@ func (o *Orchestrator) startWatchRuntime(
 	if err := validateInitialWatchStart(runners, startSummary); err != nil {
 		return nil, control, err
 	}
-	if startSummary.SelectedCount() > 0 {
-		o.emitStartWarning(startSummary)
-	}
+	o.emitStartWarning(startResults, startAnnounceFull)
 
 	return runners, control, nil
 }
@@ -159,8 +191,8 @@ func (o *Orchestrator) startInitialWatchRunners(
 	for i := range mounts {
 		mount := mounts[i]
 		if mount.paused() {
-			o.logger.Info("skipping paused mount",
-				slog.String("mount_id", mount.id().String()),
+			o.logger.Info("Skipping paused drive",
+				slog.String("drive", mount.label()),
 			)
 			startResults = append(startResults, MountStartupResult{
 				SelectionIndex: mount.selectionIndex(),
@@ -175,7 +207,9 @@ func (o *Orchestrator) startInitialWatchRunners(
 		o.attachParentChildWorkSink(mount, childWork, runnerEvents, nil)
 		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents)
 		if err != nil {
-			o.logger.Error("failed to start watch runner",
+			// The startup result is the user-facing report of this failure
+			// (a StartWarning, or the returned WatchStartupError).
+			o.logger.Debug("watch runner did not start",
 				slog.String("mount_id", mount.id().String()),
 				slog.String("error", err.Error()),
 			)
@@ -208,23 +242,40 @@ func validateInitialWatchStart(
 	return &WatchStartupError{Summary: startSummary}
 }
 
-func (o *Orchestrator) emitStartWarning(summary StartupSelectionSummary) {
-	failures := summary.SkippedResults()
-	if len(failures) == 0 || o == nil || o.cfg == nil || o.cfg.StartWarning == nil {
-		return
-	}
-
-	o.cfg.StartWarning(StartupWarning{Summary: summarizeStartupResults(failures)})
-}
-
+// closeControlSocket runs on every exit path, including shutdown. A failure
+// here leaves at most a stale socket file, which the next sync detects as
+// stale and removes, so it is not worth a warning.
 func (o *Orchestrator) closeControlSocket(ctx context.Context, control *controlSocketServer) {
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), controlCloseTimeout)
 	defer cancel()
 	if closeErr := control.Close(closeCtx); closeErr != nil {
-		o.logger.Warn("control socket close error",
+		o.logger.Debug("close control socket",
 			slog.String("error", closeErr.Error()),
 		)
 	}
+}
+
+// closeEngine closes one drive's engine. Cancellation is the normal shutdown
+// path and stays at DEBUG; any other close failure means the drive's sync
+// state may not have been written cleanly, which is worth one warning.
+func (o *Orchestrator) closeEngine(ctx context.Context, mount *mountSpec, engine engineRunner) {
+	if engine == nil {
+		return
+	}
+	closeErr := engine.Close(ctx)
+	if closeErr == nil {
+		return
+	}
+	if errors.Is(closeErr, context.Canceled) || errors.Is(closeErr, context.DeadlineExceeded) {
+		o.logger.Debug("close sync engine during shutdown",
+			slog.String("mount_id", mount.id().String()),
+			slog.String("error", closeErr.Error()),
+		)
+		return
+	}
+	o.logger.Warn(fmt.Sprintf("Couldn't close the sync state for %s cleanly", mount.label()),
+		slog.String("error", closeErr.Error()),
+	)
 }
 
 func (o *Orchestrator) startWatchRunner(
@@ -236,7 +287,9 @@ func (o *Orchestrator) startWatchRunner(
 ) (*watchRunner, error) {
 	session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 	if err != nil {
-		return nil, fmt.Errorf("session error for mount %s: %w", mount.label(), err)
+		// The caller reports this against the drive, so the text names only
+		// what failed, not which drive.
+		return nil, fmt.Errorf("connect to OneDrive: %w", err)
 	}
 
 	mountCollector := o.registerMountPerfCollector(mount.id().String())
@@ -249,7 +302,7 @@ func (o *Orchestrator) startWatchRunner(
 	})
 	if engineErr != nil {
 		o.removeMountPerfCollector(mount.id().String())
-		return nil, fmt.Errorf("engine creation failed for mount %s: %w", mount.label(), engineErr)
+		return nil, engineErr
 	}
 
 	mountCtx, mountCancel := context.WithCancel(ctx)
@@ -261,6 +314,7 @@ func (o *Orchestrator) startWatchRunner(
 		parentAck: shortcutParentAckHandleForMount(mount, engine),
 		cancel:    mountCancel,
 		done:      done,
+		startedAt: o.clockNow(),
 	}
 
 	go func() {
@@ -270,11 +324,16 @@ func (o *Orchestrator) startWatchRunner(
 
 		if mount.isFinalDrainChild() {
 			report, drainErr := engine.RunOnce(mountCtx, syncengine.SyncBidirectional, syncengine.RunOptions{FullReconcile: true})
-			if drainErr != nil && mountCtx.Err() == nil {
-				o.logger.Error("final-drain watch runner exited with error",
+			// The main loop reports a failed drain once; this goroutine only
+			// hands it over. When the orchestrator canceled the drain itself
+			// (reload, parent snapshot change, shutdown), the error is just
+			// that cancellation and nobody needs to hear about it.
+			if drainErr != nil && mountCtx.Err() != nil {
+				o.logger.Debug("final-drain runner stopped",
 					slog.String("mount_id", mount.id().String()),
 					slog.String("error", drainErr.Error()),
 				)
+				return
 			}
 			if runnerEvents != nil {
 				select {
@@ -287,7 +346,8 @@ func (o *Orchestrator) startWatchRunner(
 
 		if watchErr := engine.RunWatch(mountCtx, mode, opts); watchErr != nil {
 			if mountCtx.Err() == nil {
-				o.logger.Error("watch runner exited with error",
+				// Reported once, in user words, by handleWatchRunnerEvent.
+				o.logger.Debug("watch runner exited",
 					slog.String("mount_id", mount.id().String()),
 					slog.String("error", watchErr.Error()),
 				)
@@ -301,7 +361,8 @@ func (o *Orchestrator) startWatchRunner(
 		}
 	}()
 
-	o.logger.Info("watch runner started",
+	o.logger.Info("Started syncing drive",
+		slog.String("drive", mount.label()),
 		slog.String("mount_id", mount.id().String()),
 	)
 
@@ -324,19 +385,24 @@ func (o *Orchestrator) removeMountPerfCollector(mountID string) {
 	o.perfRuntime.RemoveMount(mountID)
 }
 
+// reload applies the config file to the running sync. It returns an error
+// only when nothing could be applied (the config would not load or compile);
+// the running drives then keep their previous settings, and the caller tells
+// the client that asked for the reload. Drives that fail to start under the
+// new config are not a reload failure: they are reported as startup results.
 func (o *Orchestrator) reload(
 	ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
-) {
+) error {
 	newCfg, newSelection, err := o.loadReloadSelection(ctx)
 	if err != nil {
-		o.logger.Warn("config reload failed, keeping current state",
+		o.logger.Warn("Couldn't reload the config; keeping the previous settings",
 			slog.String("error", err.Error()),
 		)
 
-		return
+		return err
 	}
 
 	oldCfg := o.cfg.Holder.Config()
@@ -353,11 +419,14 @@ func (o *Orchestrator) reload(
 		o.cfg.StandaloneMounts = oldMounts
 		o.cfg.InitialStartupResults = oldStartup
 		o.cfg.Runtime.FlushTokenCache()
-		o.logger.Warn("config reload failed, keeping current state",
-			slog.String("error", fmt.Errorf("building mount specs after reload: %w", err).Error()),
+		o.logger.Warn("Couldn't reload the config; keeping the previous settings",
+			slog.String("error", err.Error()),
 		)
-		return
+		return err
 	}
+	// The user asked for the config to be applied now, so drives waiting out
+	// a restart backoff get their next attempt immediately.
+	o.releaseRunnerRestartWaits()
 	stopped, started, startResults := o.applyWatchMountSet(
 		ctx,
 		runners,
@@ -367,16 +436,15 @@ func (o *Orchestrator) reload(
 		runnerEvents,
 		childWork,
 	)
-	if len(startResults) > 0 {
-		o.emitStartWarning(summarizeStartupResults(startResults))
-	}
+	o.emitStartWarning(startResults, startAnnounceFull)
 
-	o.logger.Info("config reload complete",
+	o.logger.Info("Reloaded the config",
 		slog.Int("started", started),
 		slog.Int("stopped", stopped),
 		slog.Int("active", len(runners)),
 		slog.Int("skipped", len(summarizeStartupResults(startResults).SkippedResults())),
 	)
+	return nil
 }
 
 func (o *Orchestrator) reconcileWatchRunners(
@@ -389,22 +457,44 @@ func (o *Orchestrator) reconcileWatchRunners(
 ) {
 	decisions, err := o.buildRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults, childWork)
 	if err != nil {
-		o.logger.Warn("shortcut runner reconciliation refresh failed, keeping current runners",
-			slog.String("error", err.Error()),
-		)
+		o.warnOnChange(reconcileWarningKey(""),
+			"Couldn't update shared-folder shortcuts; the shortcuts already syncing keep syncing", err)
 		return
 	}
+	o.clearWarnOnChange(reconcileWarningKey(""))
 
 	stopped, started, startResults := o.applyWatchMountSet(ctx, runners, decisions, mode, opts, runnerEvents, childWork)
-	if len(startResults) > 0 {
-		o.emitStartWarning(summarizeStartupResults(startResults))
-	}
-	o.logger.Info("shortcut runner reconciliation refresh complete",
+	o.emitStartWarning(startResults, startAnnounceFull)
+	o.logReconcileOutcome("", started, stopped, len(runners), startResults)
+}
+
+func reconcileWarningKey(parentID mountID) string {
+	return "reconcile:" + parentID.String()
+}
+
+// logReconcileOutcome stays at DEBUG for the common pass that changed
+// nothing, which runs every reconcile tick.
+func (o *Orchestrator) logReconcileOutcome(
+	parentID mountID,
+	started int,
+	stopped int,
+	active int,
+	startResults []MountStartupResult,
+) {
+	attrs := []any{
 		slog.Int("started", started),
 		slog.Int("stopped", stopped),
-		slog.Int("active", len(runners)),
+		slog.Int("active", active),
 		slog.Int("skipped", len(summarizeStartupResults(startResults).SkippedResults())),
-	)
+	}
+	if parentID != "" {
+		attrs = append(attrs, slog.String("parent_mount_id", parentID.String()))
+	}
+	if started == 0 && stopped == 0 {
+		o.logger.Debug("drive set unchanged", attrs...)
+		return
+	}
+	o.logger.Info("Updated the set of drives and shortcuts being synced", attrs...)
 }
 
 func (o *Orchestrator) handleWatchRunnerEvent(
@@ -428,38 +518,60 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 	}
 
 	wr := runners[event.mountID]
-	if wr != nil {
-		<-wr.done
-		if closeErr := wr.engine.Close(ctx); closeErr != nil {
-			o.logger.Warn("engine close error after watch runner exit",
-				slog.String("mount_id", event.mountID.String()),
-				slog.String("error", closeErr.Error()),
-			)
-		}
-		delete(runners, event.mountID)
-		if wr.mount != nil && wr.mount.projectionKind() == MountProjectionStandalone {
-			childWork.forget(event.mountID)
-			o.stopChildWatchRunnersForParent(ctx, runners, event.mountID)
-		}
+	if wr == nil {
+		// The orchestrator already stopped this runner (reload, parent
+		// change, or shutdown) and reconciled; the event was queued before
+		// that and describes nothing current.
+		o.logger.Debug("ignoring event from a runner that was already stopped",
+			slog.String("mount_id", event.mountID.String()),
+		)
+		return
 	}
 
-	if wr != nil && wr.mount.isFinalDrainChild() {
+	<-wr.done
+	o.closeEngine(ctx, wr.mount, wr.engine)
+	delete(runners, event.mountID)
+	if wr.mount != nil && wr.mount.projectionKind() == MountProjectionStandalone {
+		childWork.forget(event.mountID)
+		o.stopChildWatchRunnersForParent(ctx, runners, event.mountID)
+	}
+
+	if wr.mount.isFinalDrainChild() {
 		o.handleFinalDrainWatchRunnerEvent(ctx, runners, wr, event, childWork)
 	}
 
-	if event.err != nil && errors.Is(event.err, syncengine.ErrMountRootUnavailable) {
-		o.logger.Info("watch runner stopped because mount root is unavailable",
-			slog.String("mount_id", event.mountID.String()),
-			slog.String("error", event.err.Error()),
-		)
-	} else if event.err != nil {
-		o.logger.Warn("watch runner stopped; reconciling mount set",
-			slog.String("mount_id", event.mountID.String()),
-			slog.String("error", event.err.Error()),
-		)
+	if event.err != nil && ctx.Err() == nil {
+		o.reportWatchRunnerExit(wr, event.err)
 	}
 
 	o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
+}
+
+// reportWatchRunnerExit records a runner failure for restart backoff and tells
+// the user once: the first time, and again only when the error changes. The
+// restart itself happens from the RunWatch loop once the backoff has passed.
+func (o *Orchestrator) reportWatchRunnerExit(wr *watchRunner, err error) {
+	delay, isNew := o.recordRunnerFailure(wr.mount.id(), wr.startedAt, err)
+	name := wr.mount.label()
+
+	switch {
+	case errors.Is(err, syncengine.ErrMountRootUnavailable):
+		// The restart attempt fails at startup with the same cause, and that
+		// startup failure is what gets announced.
+		o.logger.Info(fmt.Sprintf("Stopped syncing %s: its sync folder is unavailable", name),
+			slog.String("error", err.Error()),
+		)
+	case isNew:
+		o.logger.Warn(fmt.Sprintf("Stopped syncing %s; retrying in %s", name, humanDelay(delay)),
+			slog.String("error", err.Error()),
+		)
+	default:
+		o.logger.Debug("drive stopped again with the same error",
+			slog.String("mount_id", wr.mount.id().String()),
+			slog.String("retry_in", delay.String()),
+			slog.String("error", err.Error()),
+		)
+	}
 }
 
 func parentSnapshotEventIsCurrent(
@@ -487,8 +599,7 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 ) {
 	decisions, err := o.buildRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults, childWork)
 	if err != nil {
-		o.logger.Warn("compiling mount set after final-drain child completion failed",
-			slog.String("mount_id", event.mountID.String()),
+		o.logger.Warn(fmt.Sprintf("Couldn't finish removing shortcut %s; will retry", wr.mount.label()),
 			slog.String("error", err.Error()),
 		)
 		return
@@ -508,14 +619,14 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 		childWork,
 	)
 	if err != nil {
-		o.logger.Warn("finalizing drained shortcut child mount after watch completion failed",
-			slog.String("mount_id", event.mountID.String()),
+		o.logger.Warn(fmt.Sprintf("Couldn't finish removing shortcut %s; will retry", wr.mount.label()),
 			slog.String("error", err.Error()),
 		)
 		return
 	}
 	if finalized {
-		o.logger.Info("finalized drained shortcut child mount",
+		o.logger.Info("Finished removing shortcut",
+			slog.String("shortcut", wr.mount.label()),
 			slog.String("mount_id", event.mountID.String()),
 		)
 	}
@@ -591,11 +702,7 @@ func (o *Orchestrator) applyWatchMountSet(
 	removeCleanupWorkForParents(decisions, restartingParents)
 	stopped := o.stopInactiveWatchRunners(ctx, runners, runnable, childWork, restartingParents)
 	parentArtifactAckers := watchParentArtifactCleanupAckers(runners)
-	if purgeErr := o.purgeShortcutChildArtifactsForDecisions(ctx, decisions, parentArtifactAckers, childWork); purgeErr != nil {
-		o.logger.Warn("purging shortcut child state artifacts",
-			slog.String("error", purgeErr.Error()),
-		)
-	}
+	o.reportShortcutCleanup(o.purgeShortcutChildArtifactsForDecisions(ctx, decisions, parentArtifactAckers, childWork))
 	started, startResults := o.startReloadWatchRunners(
 		ctx,
 		runners,
@@ -609,6 +716,18 @@ func (o *Orchestrator) applyWatchMountSet(
 	o.setControlMountIDs(sortedRunnerMountIDs(runners))
 
 	return stopped, started, startResults
+}
+
+// reportShortcutCleanup warns about a failed removed-shortcut cleanup once
+// per distinct failure. Cleanup is retried on every pass, and the failure is
+// also kept in the status diagnostics, so repeating it every pass adds nothing.
+func (o *Orchestrator) reportShortcutCleanup(err error) {
+	const key = "shortcut-cleanup"
+	if err == nil {
+		o.clearWarnOnChange(key)
+		return
+	}
+	o.warnOnChange(key, "Couldn't clean up local state for removed shortcuts; will retry", err)
 }
 
 func (o *Orchestrator) reconcileWatchRunnersForParent(
@@ -627,10 +746,7 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 	}
 	parents, err := buildStandaloneMountSpecs(o.cfg.StandaloneMounts)
 	if err != nil {
-		o.logger.Warn("parent-scoped shortcut runner reconciliation failed, keeping current runners",
-			slog.String("parent_mount_id", parentID.String()),
-			slog.String("error", err.Error()),
-		)
+		o.warnParentReconcileFailure(parentID, err)
 		return
 	}
 	var parent *mountSpec
@@ -644,7 +760,7 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 		stopped := o.stopChildWatchRunnersForParent(ctx, runners, parentID)
 		childWork.forget(parentID)
 		o.setControlMountIDs(sortedRunnerMountIDs(runners))
-		o.logger.Info("parent-scoped shortcut runner reconciliation removed missing parent children",
+		o.logger.Debug("stopped shortcuts of a drive that is no longer selected",
 			slog.String("parent_mount_id", parentID.String()),
 			slog.Int("stopped", stopped),
 		)
@@ -655,12 +771,10 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 	}
 	decisions, err := o.buildRuntimeWorkFromParentSnapshots([]*mountSpec{parent}, publications)
 	if err != nil {
-		o.logger.Warn("parent-scoped shortcut runner reconciliation failed, keeping current runners",
-			slog.String("parent_mount_id", parentID.String()),
-			slog.String("error", err.Error()),
-		)
+		o.warnParentReconcileFailure(parentID, err)
 		return
 	}
+	o.clearWarnOnChange(reconcileWarningKey(parentID))
 	stopped, started, startResults := o.applyWatchMountSetForParent(
 		ctx,
 		runners,
@@ -671,16 +785,28 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 		runnerEvents,
 		childWork,
 	)
-	if len(startResults) > 0 {
-		o.emitStartWarning(summarizeStartupResults(startResults))
-	}
-	o.logger.Info("parent-scoped shortcut runner reconciliation complete",
-		slog.String("parent_mount_id", parentID.String()),
-		slog.Int("started", started),
-		slog.Int("stopped", stopped),
-		slog.Int("active", len(runners)),
-		slog.Int("skipped", len(summarizeStartupResults(startResults).SkippedResults())),
+	o.emitStartWarning(startResults, startAnnouncePartial)
+	o.logReconcileOutcome(parentID, started, stopped, len(runners), startResults)
+}
+
+func (o *Orchestrator) warnParentReconcileFailure(parentID mountID, err error) {
+	o.warnOnChange(reconcileWarningKey(parentID),
+		fmt.Sprintf("Couldn't update shared-folder shortcuts for %s; the shortcuts already syncing keep syncing",
+			o.standaloneDisplayName(parentID)),
+		err,
 	)
+}
+
+// standaloneDisplayName names a configured drive by its mount ID for messages,
+// falling back to the ID when the drive is not (or no longer) configured.
+func (o *Orchestrator) standaloneDisplayName(id mountID) string {
+	for i := range o.cfg.StandaloneMounts {
+		mount := &o.cfg.StandaloneMounts[i]
+		if mount.CanonicalID.String() == id.String() && mount.DisplayName != "" {
+			return mount.DisplayName
+		}
+	}
+	return id.String()
 }
 
 func (o *Orchestrator) applyWatchMountSetForParent(
@@ -697,11 +823,7 @@ func (o *Orchestrator) applyWatchMountSetForParent(
 	runnable := runnableMountMap(childMounts)
 	stopped := o.stopInactiveChildWatchRunnersForParent(ctx, runners, parentID, runnable)
 	parentArtifactAckers := watchParentArtifactCleanupAckers(runners)
-	if purgeErr := o.purgeShortcutChildArtifactsForDecisions(ctx, decisions, parentArtifactAckers, childWork); purgeErr != nil {
-		o.logger.Warn("purging shortcut child state artifacts",
-			slog.String("error", purgeErr.Error()),
-		)
-	}
+	o.reportShortcutCleanup(o.purgeShortcutChildArtifactsForDecisions(ctx, decisions, parentArtifactAckers, childWork))
 	started, startResults := o.startReloadWatchRunners(
 		ctx,
 		runners,
@@ -751,21 +873,19 @@ func (o *Orchestrator) stopInactiveWatchRunners(
 			}
 		}
 
-		o.logger.Info("stopping watch runner for removed/paused mount",
+		o.logger.Info("Stopped syncing drive",
+			slog.String("drive", wr.mount.label()),
 			slog.String("mount_id", id.String()),
 		)
 
 		wr.cancel()
 		<-wr.done
-
-		if closeErr := wr.engine.Close(ctx); closeErr != nil {
-			o.logger.Warn("engine close error during reload",
-				slog.String("mount_id", id.String()),
-				slog.String("error", closeErr.Error()),
-			)
-		}
+		o.closeEngine(ctx, wr.mount, wr.engine)
 
 		delete(runners, id)
+		if _, stillSelected := runnable[id]; !stillSelected {
+			o.forgetRunnerRestart(id)
+		}
 		if wr.mount.projectionKind() == MountProjectionStandalone {
 			childWork.forget(id)
 		}
@@ -858,18 +978,14 @@ func (o *Orchestrator) stopChildWatchRunnersForParent(
 		if wr.mount.childParentMountID() != parentID {
 			continue
 		}
-		o.logger.Info("stopping child watch runner because parent stopped",
+		o.logger.Info("Stopped syncing shortcut because its drive stopped",
+			slog.String("shortcut", wr.mount.label()),
 			slog.String("mount_id", id.String()),
 			slog.String("parent_mount_id", parentID.String()),
 		)
 		wr.cancel()
 		<-wr.done
-		if closeErr := wr.engine.Close(ctx); closeErr != nil {
-			o.logger.Warn("engine close error while stopping child after parent stop",
-				slog.String("mount_id", id.String()),
-				slog.String("error", closeErr.Error()),
-			)
-		}
+		o.closeEngine(ctx, wr.mount, wr.engine)
 		delete(runners, id)
 		stopped++
 	}
@@ -898,18 +1014,14 @@ func (o *Orchestrator) stopInactiveChildWatchRunnersForParent(
 			}
 		}
 
-		o.logger.Info("stopping child watch runner for parent snapshot change",
+		o.logger.Info("Stopped syncing shortcut after it changed on OneDrive",
+			slog.String("shortcut", wr.mount.label()),
 			slog.String("mount_id", id.String()),
 			slog.String("parent_mount_id", parentID.String()),
 		)
 		wr.cancel()
 		<-wr.done
-		if closeErr := wr.engine.Close(ctx); closeErr != nil {
-			o.logger.Warn("engine close error while stopping child after parent snapshot",
-				slog.String("mount_id", id.String()),
-				slog.String("error", closeErr.Error()),
-			)
-		}
+		o.closeEngine(ctx, wr.mount, wr.engine)
 		delete(runners, id)
 		stopped++
 	}
@@ -934,11 +1046,19 @@ func (o *Orchestrator) startReloadWatchRunners(
 		if _, ok := runners[id]; ok {
 			continue
 		}
+		if o.runnerRestartPending(id) {
+			o.logger.Debug("waiting before restarting drive",
+				slog.String("mount_id", id.String()),
+			)
+			continue
+		}
 
 		o.attachParentChildWorkSink(mount, childWork, runnerEvents, nil)
 		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents)
 		if err != nil {
-			o.logger.Error("failed to start watch runner during reload",
+			// Reported through the startup result, once per distinct
+			// failure, by emitStartWarning.
+			o.logger.Debug("watch runner did not start",
 				slog.String("mount_id", id.String()),
 				slog.String("error", err.Error()),
 			)

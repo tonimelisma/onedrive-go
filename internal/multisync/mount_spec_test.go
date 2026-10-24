@@ -412,5 +412,5 @@ func TestBuildRuntimeWork_MissingParentSkipsChild(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, decisions.Mounts, 1)
 	require.Len(t, decisions.Skipped, 1)
-	assert.Contains(t, decisions.Skipped[0].Err.Error(), "missing parent mount")
+	assert.Contains(t, decisions.Skipped[0].Err.Error(), "belongs to a drive that is no longer selected for sync")
 }

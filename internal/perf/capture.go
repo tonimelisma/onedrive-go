@@ -22,7 +22,7 @@ const (
 
 var (
 	ErrCaptureInProgress  = errors.New("performance capture already in progress")
-	ErrCaptureUnavailable = errors.New("performance capture is unavailable")
+	ErrCaptureUnavailable = errors.New("performance capture is unavailable: this sync was started without performance collection")
 )
 
 type CaptureOptions struct {
