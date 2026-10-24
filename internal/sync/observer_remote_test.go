@@ -2448,6 +2448,146 @@ func TestWatch_OnlyUnrecoverableDeletes_AdvancesToken(t *testing.T) {
 		"the advanced token must be committed so a restart does not replay the window")
 }
 
+// Regression: an incremental window can carry a change inside a folder that
+// is neither in the window nor in the baseline (a suppressed OneNote package,
+// or a folder whose own download has not succeeded yet). That orphan used to
+// mark the window incomplete on every poll, so the cursor never advanced and
+// remote sync stalled forever. The observer now reads the missing ancestor by
+// ID, places the item, and advances.
+//
+// Validates: R-2.1.2
+func TestWatch_OrphanWithReadableParent_AdvancesToken(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{
+			{page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "notes.txt", ParentID: "unsynced-folder", DriveID: driveID},
+				},
+				DeltaLink: "token-after-orphan",
+			}},
+		},
+	}
+
+	var fetchedIDs []string
+	itemClient := &testMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			fetchedIDs = append(fetchedIDs, itemID)
+			require.Equal(t, "unsynced-folder", itemID)
+
+			return &graph.Item{ID: "unsynced-folder", Name: "Docs", ParentID: "root", DriveID: driveID, IsFolder: true}, nil
+		},
+	}
+
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs.SetItemClient(itemClient)
+	token, emitted := runSingleWatchPoll(t, obs, driveID)
+
+	assert.Equal(t, []string{"unsynced-folder"}, fetchedIDs, "only the missing parent is read")
+	assert.Equal(t, "token-after-orphan", token, "a resolved orphan must not hold the cursor")
+	require.Len(t, emitted, 1, "the fetched parent is path context, not an event")
+	assert.Equal(t, "Docs/notes.txt", emitted[0].Path)
+}
+
+// Regression: when Graph says the orphan's parent no longer exists (or is not
+// readable), no replay can ever place the item. It is skipped and the window
+// advances instead of stalling every later poll.
+//
+// Validates: R-2.1.2
+func TestWatch_OrphanWithUnreachableParent_AdvancesToken(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{
+			{page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "notes.txt", ParentID: "gone-folder", DriveID: driveID},
+					{ID: "f2", Name: "kept.txt", ParentID: "root", DriveID: driveID},
+				},
+				DeltaLink: "token-after-orphan",
+			}},
+		},
+	}
+
+	itemClient := &testMockItemClient{
+		getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+			return nil, graph.ErrNotFound
+		},
+	}
+
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs.SetItemClient(itemClient)
+	token, emitted := runSingleWatchPoll(t, obs, driveID)
+
+	assert.Equal(t, "token-after-orphan", token, "an unplaceable orphan must not hold the cursor")
+	require.Len(t, emitted, 1, "the rest of the window still syncs")
+	assert.Equal(t, "kept.txt", emitted[0].Path)
+}
+
+// A transient failure reading the missing parent keeps today's safe
+// behaviour: the window is incomplete and is retried, never committed with
+// the orphan's create silently dropped.
+//
+// Validates: R-2.1.2
+func TestFullDelta_OrphanParentReadTransientFailure_StaysIncomplete(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "f1", Name: "notes.txt", ParentID: "unsynced-folder", DriveID: driveID},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs.SetItemClient(&testMockItemClient{
+		getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+			return nil, errors.New("connection reset")
+		},
+	})
+	events, token, err := obs.FullDelta(t.Context(), "saved-token")
+	require.ErrorIs(t, err, errRemoteObservationIncomplete)
+	assert.Empty(t, events)
+	assert.Empty(t, token)
+}
+
+// runSingleWatchPoll runs one Watch poll against a fresh store, commits the
+// batch it produces, and returns the committed cursor and emitted events.
+func runSingleWatchPoll(t *testing.T, obs *remoteObserver, driveID driveid.ID) (string, []changeEvent) {
+	t.Helper()
+
+	store := newTestStore(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
+		cancel()
+		return ctx.Err()
+	}}
+
+	var emitted []changeEvent
+	batches := make(chan remoteObservationBatch, 10)
+	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
+		emitted = append(emitted, batch.emitted...)
+		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
+	})
+	err := obs.Watch(ctx, "old-token", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
+	require.NoError(t, err)
+
+	assert.Equal(t, obs.CurrentDeltaToken(), readObservationCursor(t, store.rawDB(), driveID.String()),
+		"the in-memory cursor must match the committed one")
+
+	return obs.CurrentDeltaToken(), emitted
+}
+
 // ---------------------------------------------------------------------------
 // Embedded shared-folder link handling
 // ---------------------------------------------------------------------------

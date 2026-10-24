@@ -551,6 +551,7 @@ func (o *remoteObserver) fetchPage(
 	for i := range dp.Items {
 		o.Converter.registerInflight(&dp.Items[i], inflight)
 	}
+	o.Converter.resolveMissingAncestors(ctx, dp.Items, inflight)
 
 	// Pass 2: classify and emit events (inflight map is fully populated).
 	for i := range dp.Items {
