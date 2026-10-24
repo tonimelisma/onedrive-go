@@ -46,7 +46,7 @@ func appendObservedEvent(
 ) []observedItem {
 	if ev.ItemID == "" {
 		if logger != nil {
-			logger.Warn("projectObservedItems: skipping event with empty ItemID",
+			logger.Debug("projectObservedItems: skipping event with empty ItemID",
 				slog.String("path", ev.Path),
 			)
 		}

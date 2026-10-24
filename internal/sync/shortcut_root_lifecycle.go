@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -47,8 +48,17 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 		releaseCleanupErr = errors.Join(releaseCleanupErr, step.releaseCleanupErr)
 	}
 	if !changed {
+		// A cleanup that was already blocked and is still blocked for the
+		// same reason is persisted durable state (`status` shows it, and it
+		// is retried here every pass). Returning its error again would fail
+		// every one-shot run and end the watch remote observer over a
+		// condition that has not changed, stalling unrelated remote sync.
+		// The error is returned once, on the transition into the blocked
+		// state below.
 		if releaseCleanupErr != nil {
-			return false, releaseCleanupErr
+			e.logger.Debug("shortcut root release cleanup still blocked",
+				slog.String("error", releaseCleanupErr.Error()),
+			)
 		}
 		return false, nil
 	}
@@ -634,23 +644,23 @@ func (e *Engine) finalizeShortcutRootReleaseRecord(
 func (e *Engine) removeShortcutRootProjection(relativeLocalPath string) error {
 	relativePath, ok := cleanShortcutRootRelativePath(relativeLocalPath)
 	if !ok {
-		return fmt.Errorf("%w: shortcut alias path escapes parent sync root", synctree.ErrUnsafePath)
+		return fmt.Errorf("%w: the shared folder's local path leaves the sync folder", synctree.ErrUnsafePath)
 	}
 	if err := e.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
-		return fmt.Errorf("validating shortcut alias projection: %w", err)
+		return fmt.Errorf("checking the removed shared folder's local folder: %w", err)
 	}
 	state, err := e.syncTree.PathStateNoFollow(relativePath)
 	if err != nil {
-		return fmt.Errorf("stating shortcut alias projection: %w", err)
+		return fmt.Errorf("reading the removed shared folder's local folder: %w", err)
 	}
 	if !state.Exists {
 		return nil
 	}
 	if !state.IsDir {
-		return fmt.Errorf("%w: shortcut alias path is not a directory", synctree.ErrUnsafePath)
+		return fmt.Errorf("%w: the shared folder's local path is not a directory", synctree.ErrUnsafePath)
 	}
 	if err := e.syncTree.RemoveTreeNoFollow(relativePath); err != nil {
-		return fmt.Errorf("removing shortcut alias projection: %w", err)
+		return fmt.Errorf("removing the removed shared folder's local folder: %w", err)
 	}
 	return nil
 }

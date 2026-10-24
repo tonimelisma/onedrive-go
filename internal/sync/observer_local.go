@@ -163,10 +163,16 @@ type localObserver struct {
 	expectedRootID      *synctree.FileIdentity
 	protectedRootEvents protectedRootEventSink
 	watcherFactory      func() (fsWatcher, error)
-	droppedEvents       atomic.Int64  // events dropped by TrySend due to full channel
-	droppedRetries      atomic.Int64  // hash requests dropped due to full channel
-	lastActivityNano    atomic.Int64  // liveness: updated on each event emit (B-125)
-	safetyScanInterval  time.Duration // 0 → default (5 minutes); configurable (B-099)
+	droppedEvents       atomic.Int64 // events dropped by TrySend due to full channel
+	droppedRetries      atomic.Int64 // hash requests dropped due to full channel
+	lastActivityNano    atomic.Int64 // liveness: updated on each event emit (B-125)
+
+	// watchLimitReported and safetyScanFailing let the watch loop report a
+	// persistent condition once instead of per directory or per scan.
+	// Both are touched only by the goroutine running Watch.
+	watchLimitReported bool
+	safetyScanFailing  bool
+	safetyScanInterval time.Duration // 0 → default (5 minutes); configurable (B-099)
 
 	// hashFunc computes the QuickXorHash of a file. Injectable for testing
 	// (e.g., to simulate panics in the hash phase).
@@ -321,8 +327,10 @@ func (o *localObserver) TrySendChangeEventOnly(ctx context.Context, events chan<
 		o.recordActivity()
 	case <-ctx.Done():
 	default:
+		// Debug per event: a bulk copy can drop thousands. droppedEvents
+		// aggregates them and the maintenance tick schedules one rescan.
 		o.droppedEvents.Add(1)
-		o.logger.Warn("event channel full, dropping event (safety scan will catch up)",
+		o.logger.Debug("event channel full, dropping event (safety scan will catch up)",
 			slog.String("path", ev.Path),
 			slog.String("type", ev.Type.String()),
 		)
@@ -340,7 +348,7 @@ func (o *localObserver) TrySendLocalObservationBatch(ctx context.Context, batch 
 	case <-ctx.Done():
 	default:
 		o.droppedEvents.Add(1)
-		o.logger.Warn("local observation batch channel full, marking local truth suspect on maintenance",
+		o.logger.Debug("local observation batch channel full, marking local truth suspect on maintenance",
 			slog.Bool("full_snapshot", batch.fullSnapshot),
 			slog.Int("rows", len(batch.rows)),
 			slog.Int("deleted_paths", len(batch.deletedPaths)),
@@ -492,7 +500,9 @@ func (o *localObserver) rollbackAddedWatches(watcher fsWatcher, session *watchAd
 	for i := len(session.added) - 1; i >= 0; i-- {
 		path := session.added[i]
 		if err := watcher.Remove(path); err != nil {
-			o.logger.Warn("watch setup rollback: failed to remove watch",
+			// Debug: rollback also runs on shutdown, and the watcher is
+			// being discarded either way.
+			o.logger.Debug("watch setup rollback: failed to remove watch",
 				slog.String("path", path),
 				slog.String("error", err.Error()))
 		}

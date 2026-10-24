@@ -107,7 +107,8 @@ func ensureMatchingContentDriveID(expected, actual driveid.ID) error {
 		return nil
 	}
 
-	return fmt.Errorf("sync: state DB content drive mismatch: stored %s, attempted %s", actual, expected)
+	return fmt.Errorf("sync: the saved sync state belongs to a different OneDrive drive (stored %s, now %s); "+
+		"reset it with onedrive-go drive reset-sync-state", actual, expected)
 }
 
 func (s *SyncStore) ReadObservationState(ctx context.Context) (*observationState, error) {

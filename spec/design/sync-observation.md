@@ -183,8 +183,26 @@ Sparse parent recovery is intentionally layered:
   materializing the path
 - if enrich still leaves the parent missing, fall back to exact Graph
   `parentReference.path` or baseline ancestry for path reconstruction when
-  possible; otherwise fail the batch as `errRemoteObservationIncomplete` rather
-  than fabricating a root-level path
+  possible
+- if the parent chain still leaves both the window and the baseline (an
+  incremental window carries a change inside a folder this client never put
+  in its baseline, such as a suppressed OneNote package or Personal Vault
+  folder, or a folder whose own download has not succeeded yet), read each
+  missing ancestor by ID with `GetItem` and register it as path context only
+  (never as an event), bounded per window by `maxAncestorFetchesPerWindow`.
+  A fetched ancestor carries its vault and package flags, so a child inside
+  the Personal Vault or a OneNote package is still skipped exactly as if that
+  ancestor had been in the window (`TestWatch_OrphanUnderFetchedVaultStaysExcluded`,
+  `TestWatch_OrphanUnderFetchedPackageStaysExcluded`)
+- if Graph answers a missing ancestor as not found or forbidden, no replay can
+  ever place the item: skip it with one warning and let the window advance,
+  so a permanently orphaned item cannot hold the cursor forever
+  (`TestWatch_OrphanWithUnreachableParent_AdvancesToken`)
+- otherwise (a transient read failure, or the fetch bound reached) fail the
+  batch as `errRemoteObservationIncomplete` rather than fabricating a
+  root-level path, and retry it on the next poll
+  (`TestWatch_OrphanWithReadableParent_AdvancesToken`,
+  `TestFullDelta_OrphanParentReadTransientFailure_StaysIncomplete`)
 
 Observation does not fail merely because the best-effort enrich read returns an
 error. The enrich read exists only to reduce sparse-delta blind spots before

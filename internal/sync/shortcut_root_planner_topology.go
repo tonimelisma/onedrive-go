@@ -106,7 +106,7 @@ func applyShortcutRootRemoteUpserts(
 			next = plannedShortcutRootTransition(&next,
 				shortcutRootEventProtectedPathConflict,
 				ShortcutRootStateBlockedPath,
-				"shortcut alias path is protected by another shortcut root",
+				"the path is already used by another shared folder",
 			)
 			next.ProtectedPaths = protectedPathsForShortcutRoot(next.RelativeLocalPath, next.ProtectedPaths)
 			changed = upsertShortcutRootRecord(byBinding, &next) || changed
@@ -275,8 +275,7 @@ func duplicateShortcutTargetDetails(records map[string]ShortcutRootRecord) map[s
 		winner := group[0]
 		for i := 1; i < len(group); i++ {
 			duplicateBindings[group[i].BindingItemID] = fmt.Sprintf(
-				"shortcut target already projected by %s at %s",
-				winner.BindingItemID,
+				"another shortcut to the same shared folder is already synced at %s; remove one of the shortcuts in OneDrive",
 				winner.RelativeLocalPath,
 			)
 		}

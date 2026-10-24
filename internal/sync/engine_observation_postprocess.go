@@ -197,9 +197,13 @@ func (rt *watchRuntime) handleRemoteObservationBatchApplyFailure(
 
 		return newFatalObserverError(fmt.Errorf("apply %s batch: %w", batch.source, err))
 	case remoteObservationBatchFullRefresh:
-		rt.deps.logger.Error("failed to apply full remote refresh batch",
-			slog.String("error", err.Error()),
-		)
+		// The full refresh is re-armed below and retried, so this is a
+		// Warn, and a Ctrl-C landing during its commit is not reported.
+		if ctx.Err() == nil {
+			rt.deps.logger.Warn("Could not save the result of the full OneDrive check; will retry",
+				slog.String("error", err.Error()),
+			)
+		}
 		if rt.resources.dirtyBuf != nil {
 			rt.resources.dirtyBuf.MarkFullRefresh()
 		}

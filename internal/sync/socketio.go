@@ -81,6 +81,12 @@ type socketIOWakeSource struct {
 	refreshLeadTime  time.Duration
 	refreshInterval  time.Duration
 	backoffMax       time.Duration
+
+	// retryReported is set once a retry has been reported at Info and
+	// cleared when a connection succeeds, so a long outage logs one Info
+	// line plus Debug repeats instead of a line per backoff step. Run is
+	// the only goroutine that touches it.
+	retryReported bool
 }
 
 func newSocketIOWakeSourceWithOptions(
@@ -210,6 +216,10 @@ func (s *socketIOWakeSource) runIteration(
 		)
 	}
 
+	if s.retryReported {
+		s.retryReported = false
+		s.logger.Info("Instant change notifications from OneDrive are working again")
+	}
 	s.emitLifecycleEvent(socketIOLifecycleEvent{
 		Type:       socketIOLifecycleEventConnected,
 		EndpointID: endpoint.ID,
@@ -220,7 +230,8 @@ func (s *socketIOWakeSource) runIteration(
 	bo.Reset()
 	runErr := s.runConnection(ctx, conn, endpoint.ID, refreshAt, wakes)
 	if closeErr := conn.conn.Close(websocket.StatusNormalClosure, "watch stop"); closeErr != nil && !watchShouldStop(ctx, closeErr) {
-		s.logger.Warn("socket.io close failed",
+		// Debug: closing an already broken connection; nothing to do.
+		s.logger.Debug("socket.io close failed",
 			slog.String("drive_id", s.driveID.String()),
 			slog.String("error", closeErr.Error()),
 		)
@@ -306,11 +317,23 @@ func (s *socketIOWakeSource) logRetry(message string, err error, delay time.Dura
 		return
 	}
 
-	s.logger.Warn(message,
+	// Socket.io is only a best-effort wake source: watch keeps polling on
+	// its interval whatever happens here, so a retry is never a warning.
+	// The first retry of an outage is one Info line; repeats are Debug.
+	fields := []any{
 		slog.String("drive_id", s.driveID.String()),
 		slog.String("error", err.Error()),
 		slog.Duration("retry_in", delay),
-	)
+	}
+	if s.retryReported {
+		s.logger.Debug(message, fields...)
+		return
+	}
+
+	s.retryReported = true
+	s.logger.Info("Instant change notifications from OneDrive are unavailable; still checking for changes on the poll interval",
+		fields...)
+	s.logger.Debug(message, fields...)
 }
 
 func (s *socketIOWakeSource) emitLifecycleEvent(event socketIOLifecycleEvent) {

@@ -145,7 +145,7 @@ func (o *remoteObserver) fullDelta(
 	ctx context.Context,
 	savedToken string,
 ) ([]changeEvent, string, shortcutTopologyBatch, int, error) {
-	o.logger.Info("remote observer starting delta enumeration",
+	o.logger.Debug("remote observer starting delta enumeration",
 		slog.String("drive_id", o.driveID.String()),
 		slog.Bool("has_token", savedToken != ""),
 	)
@@ -204,7 +204,13 @@ func (o *remoteObserver) fullDelta(
 			o.stats.pollsCompleted.Add(1)
 			o.stats.eventsEmitted.Add(int64(len(events)))
 
-			o.logger.Info("remote observer completed delta enumeration",
+			// Info only when the poll found changes: an empty watch poll
+			// every few minutes is not progress worth showing at --verbose.
+			completedLevel := slog.LevelDebug
+			if len(events) > 0 {
+				completedLevel = slog.LevelInfo
+			}
+			o.logger.Log(ctx, completedLevel, "remote observer completed delta enumeration",
 				slog.Int("pages", page+1),
 				slog.Int("events", len(events)),
 			)
@@ -235,7 +241,8 @@ func (o *remoteObserver) Watch(
 	handleBatch remoteWatchBatchHandler,
 ) error {
 	if interval < MinPollInterval {
-		o.logger.Warn("poll interval below minimum, clamping",
+		o.logger.Warn("poll_interval "+interval.String()+" is below the minimum "+MinPollInterval.String()+
+			"; using "+MinPollInterval.String(),
 			slog.Duration("requested", interval),
 			slog.Duration("minimum", MinPollInterval),
 		)
@@ -253,6 +260,7 @@ func (o *remoteObserver) Watch(
 
 	bo := retry.NewBackoff(retry.WatchRemotePolicy())
 	bo.SetMaxOverride(interval)
+	var outage pollOutageLog
 
 	for {
 		drainWakeSignals(wakeCh)
@@ -261,7 +269,7 @@ func (o *remoteObserver) Watch(
 
 		polledEvents, newToken, topology, windowItems, err := o.fullDelta(ctx, token)
 		if err != nil {
-			result := o.handleWatchPollError(ctx, bo, err, wakeCh)
+			result := o.handleWatchPollError(ctx, bo, &outage, err, wakeCh)
 			if result.err != nil {
 				return result.err
 			}
@@ -271,6 +279,7 @@ func (o *remoteObserver) Watch(
 
 			continue
 		}
+		outage.recovered(o.logger, "Checking OneDrive for changes works again")
 
 		result := o.handleWatchBatch(
 			ctx, batches, polledEvents, windowItems, newToken, topology, interval, bo, wakeCh, handleBatch,
@@ -333,6 +342,7 @@ func (o *remoteObserver) handleWatchBatch(
 func (o *remoteObserver) handleWatchPollError(
 	ctx context.Context,
 	bo *retry.Backoff,
+	outage *pollOutageLog,
 	err error,
 	wakeCh <-chan struct{},
 ) watchStepResult {
@@ -341,7 +351,8 @@ func (o *remoteObserver) handleWatchPollError(
 	}
 
 	if errors.Is(err, errDeltaExpired) {
-		o.logger.Warn("delta token expired during watch, resetting for full resync")
+		// Self-healing: the next poll re-enumerates from scratch.
+		o.logger.Info("OneDrive change history expired; rescanning the whole drive (this may take a while)")
 		o.setDeltaToken("")
 		bo.Reset()
 
@@ -349,9 +360,7 @@ func (o *remoteObserver) handleWatchPollError(
 	}
 
 	delay := bo.Next()
-	o.logger.Warn("remote watch poll failed, backing off",
-		slog.String("error", err.Error()),
-		slog.Duration("backoff", delay),
+	outage.failed(o.logger, "Can't check OneDrive for changes; retrying", err, delay,
 		slog.Int("consecutive_errors", bo.Consecutive()),
 	)
 
@@ -551,6 +560,7 @@ func (o *remoteObserver) fetchPage(
 	for i := range dp.Items {
 		o.Converter.registerInflight(&dp.Items[i], inflight)
 	}
+	o.Converter.resolveMissingAncestors(ctx, dp.Items, inflight)
 
 	// Pass 2: classify and emit events (inflight map is fully populated).
 	for i := range dp.Items {
@@ -571,6 +581,57 @@ func (o *remoteObserver) fetchPage(
 	}
 
 	return events, items, dp.NextLink, false, nil
+}
+
+// waitText renders a retry delay or interval in human units for console
+// messages ("8 s", "5 min", "1 h"), never a raw Go duration.
+func waitText(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%d s", int(d.Round(time.Second)/time.Second))
+	case d < time.Hour:
+		return fmt.Sprintf("%d min", int(d.Round(time.Minute)/time.Minute))
+	default:
+		return fmt.Sprintf("%d h", int(d.Round(time.Hour)/time.Hour))
+	}
+}
+
+// pollOutageLog reports a polling loop's failures once per outage instead of
+// once per attempt. The first failure after a success is a Warn with the plain
+// reason and the retry delay; later attempts in the same outage are Debug; the
+// first success after an outage is one Info. A loop owns its pollOutageLog and
+// only that loop's goroutine touches it, so it needs no lock.
+type pollOutageLog struct {
+	failing bool
+}
+
+func (l *pollOutageLog) failed(logger *slog.Logger, msg string, err error, delay time.Duration, attrs ...any) {
+	if logger == nil {
+		return
+	}
+
+	fields := append([]any{
+		slog.String("error", err.Error()),
+		slog.String("retry_in", waitText(delay)),
+	}, attrs...)
+	if l.failing {
+		logger.Debug(msg, fields...)
+		return
+	}
+
+	l.failing = true
+	logger.Warn(msg, fields...)
+}
+
+func (l *pollOutageLog) recovered(logger *slog.Logger, msg string) {
+	if !l.failing {
+		return
+	}
+
+	l.failing = false
+	if logger != nil {
+		logger.Info(msg)
+	}
 }
 
 // ---------------------------------------------------------------------------

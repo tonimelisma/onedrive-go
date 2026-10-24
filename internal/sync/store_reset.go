@@ -14,7 +14,7 @@ import (
 // fresh canonical store in place.
 func ResetStateDB(ctx context.Context, dbPath string, logger *slog.Logger) error {
 	if logger != nil {
-		logger.Warn("resetting sync state DB",
+		logger.Info("resetting sync state DB",
 			slog.String("db_path", dbPath),
 		)
 	}

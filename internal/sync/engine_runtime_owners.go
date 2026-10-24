@@ -67,6 +67,12 @@ type runResults struct {
 	failed    int
 	errors    []error
 	summaries []failureSummaryEntry
+
+	// fatalAuthRecorded is set once this run has recorded that sign-in is
+	// required. Every in-flight transfer that also gets a 401 reaches the
+	// fatal path again while the run stops; the account is marked and the
+	// condition reported once. Not reset per pass: it lasts for the run.
+	fatalAuthRecorded bool
 }
 
 // heldAction is one action waiting for a retry deadline or a blocked scope.

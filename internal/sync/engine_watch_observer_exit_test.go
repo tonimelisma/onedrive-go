@@ -21,7 +21,7 @@ func TestHandleObserverExit_LastObserverOutsideShutdownReturnsError(t *testing.T
 
 	err := rt.handleObserverExit(&watchPipeline{}, false)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "all observers exited")
+	assert.Contains(t, err.Error(), "stopped watching for changes")
 	assert.Equal(t, 0, rt.resources.activeObservers)
 }
 

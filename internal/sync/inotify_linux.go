@@ -50,7 +50,7 @@ func checkInotifyCapacity(estimatedDirs int, logger *slog.Logger) {
 	// negligible compared with the clarity of having no package-level state.
 	limit, err := readInotifyLimit()
 	if err != nil {
-		logger.Warn("failed to read inotify watch limit",
+		logger.Debug("failed to read inotify watch limit",
 			slog.String("error", err.Error()))
 
 		return
@@ -62,7 +62,8 @@ func checkInotifyCapacity(estimatedDirs int, logger *slog.Logger) {
 
 	usage := float64(estimatedDirs) / float64(limit)
 	if usage >= inotifyCapacityThreshold {
-		logger.Warn("inotify watch usage near limit — consider increasing",
+		logger.Warn(fmt.Sprintf("Watching about %d folders is close to the system limit (%d). "+
+			"Raise it with: sudo sysctl -w fs.inotify.max_user_watches=524288", estimatedDirs, limit),
 			slog.Int("estimated_dirs", estimatedDirs),
 			slog.Int("max_user_watches", limit),
 			slog.String("usage", fmt.Sprintf("%.0f%%", usage*percentMultiplier)),

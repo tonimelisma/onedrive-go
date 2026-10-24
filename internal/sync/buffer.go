@@ -140,7 +140,9 @@ func (b *dirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, 
 				select {
 				case out <- *batch:
 				default:
-					b.logger.Warn("dirty buffer final drain discarded: output channel full",
+					// Debug: only reachable on shutdown; the next start
+					// rescans, so the dropped batch loses nothing.
+					b.logger.Debug("dirty buffer final drain discarded: output channel full",
 						slog.Bool("full_refresh", batch.FullRefresh),
 					)
 				}

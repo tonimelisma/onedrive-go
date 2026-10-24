@@ -514,7 +514,7 @@ func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutatio
 func (s *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation) error {
 	mutation, err := classifyBaselineMutation(o.Action)
 	if err != nil {
-		s.logger.Warn("baseline cache classification failed, reloading cache from database",
+		s.logger.Debug("baseline cache classification failed, reloading cache from database",
 			slog.String("path", o.Path),
 			slog.String("action", o.Action.String()),
 			slog.String("error", err.Error()),
@@ -776,7 +776,7 @@ func (s *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	s.baseline.ForEachPath(func(p string, cached *BaselineEntry) {
 		dbEntry, ok := dbEntries[p]
 		if !ok {
-			s.logger.Warn("cache consistency: entry in cache not in DB",
+			s.logger.Debug("cache consistency: entry in cache not in DB",
 				slog.String("path", p),
 			)
 
@@ -786,7 +786,7 @@ func (s *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 		}
 
 		if !baselineEntriesEqual(cached, dbEntry) {
-			s.logger.Warn("cache consistency: field mismatch",
+			s.logger.Debug("cache consistency: field mismatch",
 				slog.String("path", p),
 			)
 
@@ -797,7 +797,7 @@ func (s *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	// Check for entries in DB not in cache.
 	for p := range dbEntries {
 		if _, ok := s.baseline.GetByPath(p); !ok {
-			s.logger.Warn("cache consistency: entry in DB not in cache",
+			s.logger.Debug("cache consistency: entry in DB not in cache",
 				slog.String("path", p),
 			)
 
@@ -806,7 +806,7 @@ func (s *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	}
 
 	if mismatches > 0 {
-		s.logger.Warn("cache consistency check complete",
+		s.logger.Debug("cache consistency check complete",
 			slog.Int("mismatches", mismatches),
 		)
 	}
