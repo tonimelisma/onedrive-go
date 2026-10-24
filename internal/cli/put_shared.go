@@ -31,7 +31,7 @@ func runSharedPut(cmd *cobra.Command, args []string, cc *CLIContext, fi os.FileI
 	}
 
 	progress := func(uploaded, total int64) {
-		cc.Statusf("Uploading: %s / %s\n", formatSize(uploaded), formatSize(total))
+		cc.Progressf("Uploading: %s / %s", formatSize(uploaded), formatSize(total))
 	}
 
 	store := driveops.NewSessionStore(config.DefaultDataDir(), cc.Logger)

@@ -128,8 +128,8 @@ func writeWatchStartWarnings(output io.Writer, warning multisync.StartupWarning)
 
 	for i := range results {
 		result := results[i]
-		writeWarningf(output, "warning: mount %s did not start: %s\n",
-			result.Identity.Label(),
+		writeWarningf(output, "Warning: %s did not start: %s\n",
+			startupResultLabel(&result),
 			formatStartupResultMessage(&result),
 		)
 	}
@@ -141,4 +141,14 @@ func shellQuoteArg(value string) string {
 	}
 
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+// startupResultLabel names a drive by its display name, falling back to the
+// internal mount label only when there is none.
+func startupResultLabel(result *multisync.MountStartupResult) string {
+	if result.DisplayName != "" {
+		return result.DisplayName
+	}
+
+	return result.Identity.Label()
 }

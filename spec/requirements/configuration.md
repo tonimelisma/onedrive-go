@@ -8,6 +8,7 @@ TOML configuration, service integration, and interactive setup.
 - R-4.1.2: The system shall support XDG paths (Linux: `~/.config/onedrive-go/`, macOS: `~/Library/Application Support/onedrive-go/`). [verified]
 - R-4.1.3: The system shall support `--config` flag and `ONEDRIVE_GO_CONFIG` env var overrides. [verified]
 - R-4.1.4: `config.toml` shall contain drive sections only. Durable account and drive inventory shall live in a managed `catalog.json`, saved-login state shall live in token files, retained sync state shall live in per-drive or per-mount state DBs, and automatic shortcut lifecycle state shall live in the owning parent engine's sync store. [verified]
+- R-4.1.5: Config problems shall name the file and say what to do. A type error in a drive section reports the line in `config.toml` that holds it. Warnings from lenient loading state the problem in the message itself, prefixed by the config path, and print once per command. A drive configured in `config.toml` but missing from the drive inventory names the drive and the command that registers it. A development build without full XDG isolation refuses to run with a plain error that explains how to build a versioned binary, instead of panicking. [verified]
 
 ## R-4.2 Config Auto-Creation [verified]
 

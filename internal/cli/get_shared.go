@@ -211,7 +211,7 @@ func downloadSharedRecursive(
 			})
 			state.result.TotalSize += result.Size
 			state.done++
-			cc.Statusf("Downloaded %d/%d files\n", state.done, state.total)
+			cc.Progressf("Downloaded %d/%d files", state.done, state.total)
 		}(child, childLocalPath)
 	}
 }

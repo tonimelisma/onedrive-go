@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-6.8.16 [verified]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.8.16 [verified]
 
 ## Overview
 
@@ -157,6 +157,18 @@ command (under `--json` the failures stay in the document, and only the exit
 status changes). `sync --json` swaps the console's text for JSON lines
 (`sync_console_json.go`), and `status --json` prints an empty document
 instead of prose.
+
+`pause` parses its duration before writing `paused = true`, and `pause`/`resume`
+resolve `--drive` through `config.MatchDrive`, the same selector rules as
+`sync`. `drive remove` and `drive reset-sync-state` use
+`resolveExactDriveSelector`, which accepts an exact canonical ID (so leftovers
+of an unconfigured drive can still be purged) or a display name, never a
+partial match (R-2.6.5). Human-readable listings show local time; `--json`
+timestamps are always UTC.
+
+Transfer progress goes through `CLIContext.Progressf`, which redraws one line
+(`\r` + erase-line) on a terminal and prints nothing otherwise; `Statusf` and
+main's final error clear it first (R-6.6.29).
 
 ### Commands Must Consume The Command Context
 

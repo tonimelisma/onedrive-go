@@ -202,7 +202,7 @@ func TestRunStatusCommand_InvalidDriveSelectorReturnsMatchError(t *testing.T) {
 
 	err := runStatusCommand(t.Context(), cc, false)
 	require.Error(t, err)
-	assert.EqualError(t, err, `resolving status drive selectors: resolving selector "missing": no drive matching "missing"`)
+	assert.EqualError(t, err, `resolving status drive selectors: resolving selector "missing": no drive matching "missing"; configured drives: personal:ready@example.com`)
 }
 
 // Validates: R-3.3.2

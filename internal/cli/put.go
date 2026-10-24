@@ -101,7 +101,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 	}
 
 	progress := func(uploaded, total int64) {
-		cc.Statusf("Uploading: %s / %s\n", formatSize(uploaded), formatSize(total))
+		cc.Progressf("Uploading: %s / %s", formatSize(uploaded), formatSize(total))
 	}
 
 	store := driveops.NewSessionStore(config.DefaultDataDir(), logger)
@@ -383,7 +383,7 @@ func uploadFileEntry(
 	})
 	state.result.TotalSize += fi.Size()
 	state.done++
-	cc.Statusf("Uploaded %d/%d files\n", state.done, state.total)
+	cc.Progressf("Uploaded %d/%d files", state.done, state.total)
 
 	return nil
 }

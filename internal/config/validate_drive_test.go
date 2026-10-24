@@ -264,3 +264,20 @@ sync_dir = "~/OneDrive"
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid canonical ID")
 }
+
+// Validates: R-2.6.5
+func TestValidateDrives_UnparseablePausedUntilIsReported(t *testing.T) {
+	t.Parallel()
+
+	bad := "tomorrow"
+	good := "2026-10-24T15:00:00Z"
+	cfg := &Config{Drives: map[driveid.CanonicalID]Drive{
+		driveid.MustCanonicalID("personal:a@example.com"): {SyncDir: "~/A", PausedUntil: &bad},
+		driveid.MustCanonicalID("personal:b@example.com"): {SyncDir: "~/B", PausedUntil: &good},
+	}}
+
+	errs := validateDrives(cfg)
+	require.Len(t, errs, 1, "a corrupt paused_until must not stay a silent indefinite pause")
+	assert.Contains(t, errs[0].Error(), `paused_until "tomorrow"`)
+	assert.Contains(t, errs[0].Error(), "personal:a@example.com")
+}

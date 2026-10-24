@@ -18,7 +18,7 @@ func newPauseCmd() *cobra.Command {
 (e.g., "2h", "30m", "1d") schedules automatic resume after the interval.
 
 Without a duration, the drive stays paused until manually resumed.
-If a sync --watch daemon is running, it receives a control-socket reload.
+A running sync --watch picks up the change immediately.
 
 Examples:
   onedrive-go pause --drive personal:user@example.com
@@ -51,31 +51,32 @@ func notifyDaemonWithOptions(ctx context.Context, cc *CLIContext, reportNoDaemon
 	switch probe.state {
 	case controlOwnerStateWatchOwner:
 	case controlOwnerStatePathUnavailable:
-		cc.Statusf("Note: control socket unavailable (%v) — changes take effect on next daemon start\n", err)
+		cc.Statusf("Note: onedrive-go cannot use its control socket path (%v), so a running 'sync --watch' "+
+			"cannot be told; the change applies when sync next starts.\n", err)
 		return
 	case controlOwnerStateNoSocket:
 		if !reportNoDaemon {
 			return
 		}
-		cc.Statusf("Note: no running daemon found — changes take effect on next daemon start\n")
+		cc.Statusf("No 'sync --watch' is running; the change applies the next time sync runs.\n")
 		return
 	case controlOwnerStateOneShotOwner:
-		cc.Statusf("Note: foreground sync is running — changes take effect on next daemon start\n")
+		cc.Statusf("Note: a one-time sync is running; the change applies the next time sync runs.\n")
 		return
 	case controlOwnerStateProbeFailed:
-		cc.Statusf("Note: control socket probe failed (%v) — changes take effect on next daemon start\n", err)
+		cc.Statusf("Note: could not check for a running 'sync --watch' (%v); the change applies when sync next starts.\n", err)
 		return
 	}
 
 	if err := probe.client.reload(ctx); err != nil {
 		if isControlSocketGone(err) {
-			cc.Statusf("Note: running daemon disappeared before reload could be sent — changes take effect on next daemon start\n")
+			cc.Statusf("Note: the running 'sync --watch' stopped before it could be told; the change applies when sync next starts.\n")
 			return
 		}
 
-		cc.Statusf("Note: %v — changes take effect on next daemon start\n", err)
+		cc.Statusf("Note: could not tell the running 'sync --watch' about the change (%v); it applies when sync next starts.\n", err)
 	} else {
-		cc.Statusf("Notified running daemon to reload config\n")
+		cc.Statusf("The running 'sync --watch' picked up the change.\n")
 	}
 }
 

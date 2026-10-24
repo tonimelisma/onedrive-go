@@ -556,6 +556,8 @@ func statusDriveStateLabel(state string) string {
 		return "Pending changes"
 	case driveStatePaused:
 		return "Paused"
+	case driveStateNotSynced:
+		return "Not synced yet. Run 'onedrive-go sync' to start"
 	case driveStateIssues:
 		return "Issues"
 	case driveStateUnavailable:

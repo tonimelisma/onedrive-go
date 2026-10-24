@@ -40,7 +40,7 @@ func loadAccountViewSnapshot(ctx context.Context, cc *CLIContext) (accountViewSn
 	}
 
 	if outcome.Class == errclass.ClassActionable {
-		config.LogWarnings(warnings, logger)
+		config.LogWarnings(cc.CfgPath, warnings, logger)
 	}
 
 	return accountViewSnapshot{
@@ -61,13 +61,11 @@ func loadAccountViewSnapshotWithBestEffortIdentityRefresh(
 ) (accountViewSnapshot, error) {
 	logger := cc.Logger
 
-	validated, warnings, err := config.LoadValidatedState(cc.CfgPath, true, logger)
+	// Config warnings are reported by the loadAccountViewSnapshot call below;
+	// reporting them here too printed every warning twice.
+	validated, _, err := config.LoadValidatedState(cc.CfgPath, true, logger)
 	if err != nil {
 		return accountViewSnapshot{}, fmt.Errorf("loading config: %w", err)
-	}
-
-	if outcome := config.ClassifyLoadOutcome(err, warnings); outcome.Class == errclass.ClassActionable {
-		config.LogWarnings(warnings, logger)
 	}
 
 	for _, key := range validated.Catalog.SortedAccountKeys() {

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -22,10 +21,45 @@ const (
 
 // driveSectionDecoder owns the second TOML decode pass so strict and lenient
 // config loading do not drift apart on how drive tables are interpreted.
-type driveSectionDecoder struct{}
+// Drive tables are decoded from the original document's primitives, so a
+// type error names the line in config.toml where the bad value is.
+type driveSectionDecoder struct {
+	state *primitiveState
+}
+
+// primitiveState holds the second pass's TOML metadata and per-key
+// primitives; it is created once per decode and only read afterwards.
+type primitiveState struct {
+	md         toml.MetaData
+	primitives map[string]toml.Primitive
+}
 
 func newDriveSectionDecoder() driveSectionDecoder {
-	return driveSectionDecoder{}
+	return driveSectionDecoder{state: &primitiveState{}}
+}
+
+func (d driveSectionDecoder) decodePrimitives(data []byte) error {
+	md, err := toml.Decode(string(data), &d.state.primitives)
+	if err != nil {
+		return fmt.Errorf("decoding drive sections: %w", err)
+	}
+
+	d.state.md = md
+
+	return nil
+}
+
+func (d driveSectionDecoder) decodeDrive(key string, drive *Drive) error {
+	prim, ok := d.state.primitives[key]
+	if !ok {
+		return fmt.Errorf("drive section [%q] not found", key)
+	}
+
+	if err := d.state.md.PrimitiveDecode(prim, drive); err != nil {
+		return fmt.Errorf("decoding drive data: %w", err)
+	}
+
+	return nil
 }
 
 // decodeDriveSections performs the strict second TOML decode pass to extract
@@ -62,6 +96,9 @@ func (d driveSectionDecoder) decodeLenient(data []byte, cfg *Config) []ConfigWar
 // mode, errors are collected as warnings and bad drives are skipped.
 func (d driveSectionDecoder) decode(data []byte, cfg *Config, mode decodeMode) ([]ConfigWarning, error) {
 	rawMap, err := decodeRawMap(data)
+	if err == nil {
+		err = d.decodePrimitives(data)
+	}
 	if err != nil {
 		if mode == decodeModeStrict {
 			return nil, fmt.Errorf("drive sections: %w", err)
@@ -116,7 +153,7 @@ func (d driveSectionDecoder) decode(data []byte, cfg *Config, mode decodeMode) (
 		}
 
 		var drive Drive
-		if err := mapToDrive(driveMap, &drive); err != nil {
+		if err := d.decodeDrive(key, &drive); err != nil {
 			if mode == decodeModeStrict {
 				return nil, fmt.Errorf("drive section [%q]: %w", key, err)
 			}
@@ -141,22 +178,4 @@ func decodeRawMap(data []byte) (map[string]any, error) {
 	}
 
 	return rawMap, nil
-}
-
-// mapToDrive converts a raw map to a Drive struct by re-encoding as TOML
-// and decoding into the typed struct. This reuses the TOML library's type
-// coercion rather than hand-writing map extraction for each field.
-func mapToDrive(m map[string]any, d *Drive) error {
-	var buf bytes.Buffer
-
-	enc := toml.NewEncoder(&buf)
-	if err := enc.Encode(m); err != nil {
-		return fmt.Errorf("encoding drive data: %w", err)
-	}
-
-	if _, err := toml.Decode(buf.String(), d); err != nil {
-		return fmt.Errorf("decoding drive data: %w", err)
-	}
-
-	return nil
 }

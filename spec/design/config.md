@@ -2,7 +2,7 @@
 
 GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/config/catalog_lifecycle.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/mount_state_path.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validated_state.go, internal/config/validator.go, internal/config/write.go
 
-Implements: R-3.7 [verified], R-4.1 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.1 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-4.9.4 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-3.7 [verified], R-4.1 [verified], R-4.1.5 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.1 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-4.9.4 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Clearing The Account Auth Requirement Has One Owner
 
@@ -405,7 +405,7 @@ Two loading paths: strict (`Load`/`LoadOrDefault`) for data commands, lenient (`
 
 Internal refactoring supports both paths cleanly: `collectUnknownGlobalKeyErrors`, `collectDriveUnknownKeyErrors`, and `collectValidationErrors` return `[]error` slices. The strict wrappers (`checkUnknownKeys`, `Validate`) join them into a single error. The lenient path converts them to warnings.
 
-Strict and lenient loading also share one loader/decoder pipeline: `configLoader` owns managed-file reads and base TOML decode, while `driveSectionDecoder` owns the second pass that extracts and validates drive tables. That keeps strict and lenient behavior aligned instead of maintaining two separate decode implementations.
+Strict and lenient loading also share one loader/decoder pipeline: `configLoader` owns managed-file reads and base TOML decode, while `driveSectionDecoder` owns the second pass that extracts and validates drive tables. That keeps strict and lenient behavior aligned instead of maintaining two separate decode implementations. The second pass decodes each drive table from the original document's `toml.Primitive` (`MetaData.PrimitiveDecode`) instead of re-encoding the table into a scratch buffer, so a type error reports the line in `config.toml` where the bad value is (R-4.1.5). Lenient-load warnings go through `LogWarnings(path, …)`, which puts the config path and the problem in the message itself.
 
 `ClassifyLoadOutcome(err, warnings)` is the single config-owned translation
 step into the shared failure model: fatal read/parse errors map to `fatal`,
