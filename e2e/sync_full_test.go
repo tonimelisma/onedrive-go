@@ -968,8 +968,10 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 	require.NoError(t, os.Remove(filepath.Join(localDir, "existing.txt")))
 
 	// Step 3: Dry-run sync.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--dry-run")
-	assert.Contains(t, stderr, "Dry run")
+	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--dry-run")
+	assert.Contains(t, out, "Dry run, nothing was changed.")
+	assert.Contains(t, out, "Would upload "+testFolder+"/pending-upload.txt")
+	assert.Contains(t, out, "Would download "+testFolder+"/pending-download.txt")
 
 	// Step 4: Verify NO side effects.
 	// pending-upload.txt NOT remotely uploaded.

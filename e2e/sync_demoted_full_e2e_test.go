@@ -24,8 +24,9 @@ func TestE2E_Sync_DryRun(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "dryrun.txt"), []byte("dry run test\n"), 0o600))
 
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--dry-run")
-	assert.Contains(t, stderr, "Dry run")
+	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--dry-run")
+	assert.Contains(t, out, "Dry run, nothing was changed.")
+	assert.Contains(t, out, "Would upload "+testFolder+"/dryrun.txt", "a dry run names each planned action")
 
 	output := runCLIWithConfigExpectError(t, cfgPath, env, "ls", "/"+testFolder)
 	assert.Contains(t, output, testFolder)
