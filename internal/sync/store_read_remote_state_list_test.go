@@ -108,7 +108,7 @@ func TestSyncStore_GetRemoteStateByPath_RejectsMismatchedDriveWhenStateAlreadyCo
 	require.Error(t, err)
 	assert.Nil(t, row)
 	assert.False(t, found)
-	assert.Contains(t, err.Error(), "state DB content drive mismatch")
+	assert.Contains(t, err.Error(), "belongs to a different OneDrive drive")
 }
 
 // Validates: R-2.2

@@ -193,7 +193,7 @@ func TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner(t *testing
 	}
 	newRoot := byBinding["new-binding"]
 	assert.Equal(t, ShortcutRootStateBlockedPath, newRoot.State)
-	assert.Contains(t, newRoot.BlockedDetail, "protected by another shortcut root")
+	assert.Contains(t, newRoot.BlockedDetail, "already used by another shared folder")
 	assert.Nil(t, newRoot.Waiting)
 	oldRoot := byBinding["old-binding"]
 	assert.Equal(t, ShortcutRootStateActive, oldRoot.State)
@@ -243,7 +243,8 @@ func TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked(t *testing.T)
 	assert.Equal(t, ShortcutRootStateActive, byBinding["binding-a"].State)
 	duplicate := byBinding["binding-z"]
 	assert.Equal(t, ShortcutRootStateDuplicateTarget, duplicate.State)
-	assert.Contains(t, duplicate.BlockedDetail, "binding-a")
+	assert.Contains(t, duplicate.BlockedDetail, "Shared/Alpha", "names where the winning shortcut syncs")
+	assert.NotContains(t, duplicate.BlockedDetail, "binding-a", "raw OneDrive item IDs stay out of status text")
 	assert.Equal(t, []string{"Shared/Zed"}, duplicate.ProtectedPaths)
 }
 

@@ -218,7 +218,7 @@ func closeEngineSyncStoreOnStartupFailure(
 			return
 		}
 		if closeErr := store.Close(context.WithoutCancel(ctx)); closeErr != nil && logger != nil {
-			logger.Warn("closed sync store after engine startup failure",
+			logger.Debug("could not close sync store after engine startup failure",
 				slog.String("error", closeErr.Error()),
 			)
 		}
@@ -258,7 +258,7 @@ func (e *Engine) Close(ctx context.Context) error {
 	// Clean stale upload session files (best-effort).
 	if e.sessionStore != nil {
 		if n, err := e.sessionStore.CleanStale(driveops.StaleSessionAge); err != nil {
-			e.logger.Warn("failed to clean stale sessions on close",
+			e.logger.Debug("failed to clean stale sessions on close",
 				slog.String("error", err.Error()),
 			)
 		} else if n > 0 {
@@ -294,7 +294,8 @@ func (e *Engine) proveDriveIdentity(ctx context.Context) (driveIdentityProof, er
 
 	if drive.ID != e.driveID {
 		return driveIdentityProof{attempted: true, drive: drive}, fmt.Errorf(
-			"sync: drive ID mismatch: mount %s, remote returned %s", e.driveID, drive.ID)
+			"sync: this sync folder is set up for a different OneDrive drive than the account now returns "+
+				"(expected drive %s, got %s); check the drive with onedrive-go drive list", e.driveID, drive.ID)
 	}
 
 	return driveIdentityProof{attempted: true, drive: drive}, nil

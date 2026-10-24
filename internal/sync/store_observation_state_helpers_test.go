@@ -65,7 +65,7 @@ func TestEnsureMatchingContentDriveID_RejectsMismatch(t *testing.T) {
 
 	err := ensureMatchingContentDriveID(driveid.New("attempted"), driveid.New("configured"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "state DB content drive mismatch")
+	assert.Contains(t, err.Error(), "belongs to a different OneDrive drive")
 }
 
 func TestCommitObservationCursor_RejectsMismatchedDriveID(t *testing.T) {
@@ -78,7 +78,7 @@ func TestCommitObservationCursor_RejectsMismatchedDriveID(t *testing.T) {
 
 	err := store.CommitObservationCursor(ctx, driveid.New("drive-b"), "token-b")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "state DB content drive mismatch")
+	assert.Contains(t, err.Error(), "belongs to a different OneDrive drive")
 }
 
 func TestMarkFullRemoteRefresh_UpdatesNextDeadlineForLatestMode(t *testing.T) {

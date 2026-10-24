@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 )
 
@@ -29,39 +28,117 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 	}
 
 	signature := watchConditionSummaryFingerprint(summary)
-	if signature == rt.loop.lastSummarySignature {
+	previous := rt.loop.lastSummarySignature
+	breakdown := formatWatchConditionBreakdown(summary)
+	if signature == previous {
+		// Same kinds of condition, only counts moved: the 10 s maintenance
+		// tick would otherwise re-warn on every count change.
+		rt.deps.logger.Debug("sync conditions changed",
+			slog.Int("total", totalConditions),
+			slog.String("breakdown", breakdown),
+		)
 		return
 	}
 
 	rt.loop.lastSummarySignature = signature
 
-	rt.deps.logger.Warn("sync conditions",
+	fields := []any{
 		slog.Int("total", totalConditions),
-		slog.String("breakdown", formatWatchConditionBreakdown(summary)),
-	)
+		slog.String("breakdown", breakdown),
+		slog.String("action", "run onedrive-go status for details"),
+	}
+	if watchConditionSummaryAddsActionable(summary, previous) {
+		rt.deps.logger.Warn("Some files are not syncing: "+breakdown, fields...)
+		return
+	}
+
+	rt.deps.logger.Info("Sync conditions: "+breakdown, fields...)
 }
 
 // watchConditionSummaryFingerprint is the churn-suppression key for one raw
-// summary. It stays raw-only so log copy can evolve without redefining churn
-// suppression.
+// summary: the set of condition kinds present, not their counts, so the
+// summary is reported when a kind of problem appears or clears rather than
+// every time a count moves.
 func watchConditionSummaryFingerprint(summary watchConditionSummary) string {
-	var builder strings.Builder
-	builder.WriteString(strconv.Itoa(summary.ConditionTotal))
-
+	keys := make([]string, 0, len(summary.Counts))
 	for i := range summary.Counts {
-		builder.WriteByte('|')
-		builder.WriteString(string(summary.Counts[i].Key))
-		builder.WriteByte('=')
-		builder.WriteString(strconv.Itoa(summary.Counts[i].Count))
+		keys = append(keys, string(summary.Counts[i].Key))
 	}
 
-	return builder.String()
+	return strings.Join(keys, "|")
+}
+
+// watchConditionSummaryAddsActionable reports whether the summary contains a
+// condition kind absent from the previous fingerprint that the user may need
+// to act on. Throttling and service outages are handled automatically and
+// never make this summary a warning.
+func watchConditionSummaryAddsActionable(summary watchConditionSummary, previousFingerprint string) bool {
+	previous := make(map[string]struct{})
+	for _, key := range strings.Split(previousFingerprint, "|") {
+		previous[key] = struct{}{}
+	}
+
+	for i := range summary.Counts {
+		key := summary.Counts[i].Key
+		if key == ConditionRateLimited || key == ConditionServiceOutage {
+			continue
+		}
+		if _, seen := previous[string(key)]; !seen {
+			return true
+		}
+	}
+
+	return false
+}
+
+// conditionLabel names a condition kind in user words for console text.
+func conditionLabel(key ConditionKey, count int) string {
+	files := "files"
+	if count == 1 {
+		files = "file"
+	}
+
+	switch key {
+	case ConditionInvalidFilename:
+		return files + " with names OneDrive does not allow"
+	case ConditionPathTooLong:
+		return files + " with paths too long for OneDrive"
+	case ConditionFileTooLarge:
+		return files + " too large for OneDrive"
+	case ConditionCaseCollision:
+		return files + " whose names differ only in case"
+	case ConditionLocalReadDenied:
+		return files + " that cannot be read locally"
+	case ConditionLocalWriteDenied:
+		return files + " that cannot be written locally"
+	case ConditionRemoteWriteDenied:
+		return files + " in read-only shared folders"
+	case ConditionRemoteReadDenied:
+		return files + " in OneDrive folders you cannot read"
+	case ConditionQuotaExceeded:
+		return files + " waiting for OneDrive storage space"
+	case ConditionDiskFull, ConditionFileTooLargeForSpace:
+		return files + " waiting for local disk space"
+	case ConditionRateLimited:
+		return files + " waiting while OneDrive limits requests"
+	case ConditionServiceOutage:
+		return files + " waiting for OneDrive to become available"
+	case ConditionAuthenticationRequired:
+		return files + " waiting for sign-in"
+	case ConditionHashError:
+		return files + " that could not be checked"
+	case ConditionUnexpectedCondition:
+		return files + " with unexpected errors"
+	}
+
+	return files + " with " + strings.ReplaceAll(string(key), "_", " ")
 }
 
 func formatWatchConditionBreakdown(summary watchConditionSummary) string {
 	parts := make([]string, 0, len(summary.Counts))
 	for i := range summary.Counts {
-		parts = append(parts, fmt.Sprintf("%d %s", summary.Counts[i].Count, summary.Counts[i].Key))
+		parts = append(parts, fmt.Sprintf("%d %s", summary.Counts[i].Count,
+			conditionLabel(summary.Counts[i].Key, summary.Counts[i].Count)))
 	}
 
 	return strings.Join(parts, ", ")
@@ -82,12 +159,13 @@ func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup
 
 		switch previous, ok := rt.loop.lastRemoteBlocked[group.ScopeKey]; {
 		case !ok:
-			rt.deps.logger.Warn("shared-folder writes blocked",
-				slog.String("boundary", boundary),
+			rt.deps.logger.Warn("Can't upload changes in "+boundary+": you have read-only access to this shared folder. "+
+				"Ask the owner for edit access or move the files elsewhere",
 				slog.Int("blocked_writes", len(group.BlockedPaths)),
 			)
 		case previous != signature:
-			rt.deps.logger.Warn("shared-folder writes still blocked",
+			// Info: the block was already reported; only its file set moved.
+			rt.deps.logger.Info("shared-folder writes still blocked",
 				slog.String("boundary", boundary),
 				slog.Int("blocked_writes", len(group.BlockedPaths)),
 			)

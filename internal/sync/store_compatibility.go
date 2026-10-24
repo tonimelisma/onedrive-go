@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
@@ -23,16 +22,15 @@ type StateStoreIncompatibleError struct {
 	Cause  error
 }
 
+// Error is one plain sentence shown at default verbosity. The underlying
+// cause (SQLite or schema detail) is reachable through Unwrap for --verbose
+// and the log file, not embedded here.
 func (e *StateStoreIncompatibleError) Error() string {
 	if e == nil {
 		return ""
 	}
 
-	if e.Cause != nil {
-		return fmt.Sprintf("sync state DB is incompatible: %s: %v", e.Reason.Description(), e.Cause)
-	}
-
-	return fmt.Sprintf("sync state DB is incompatible: %s", e.Reason.Description())
+	return "the saved sync state for this drive can't be used: " + e.Reason.Description()
 }
 
 func (e *StateStoreIncompatibleError) Unwrap() error {
@@ -54,11 +52,11 @@ func IsStateStoreIncompatible(err error) bool {
 func (r stateStoreIncompatibleReason) Description() string {
 	switch r {
 	case stateStoreIncompatibleReasonOpenFailed:
-		return "existing sync state DB could not be opened"
+		return "its database could not be opened"
 	case StateStoreIncompatibleReasonIncompatibleSchema:
-		return "existing sync state DB uses an unsupported store generation or schema"
+		return "it was written by an incompatible version of onedrive-go"
 	default:
-		return "existing sync state DB is unsupported"
+		return "its format is not supported"
 	}
 }
 

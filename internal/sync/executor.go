@@ -521,8 +521,10 @@ func normalizeSyncTreePathError(err error) error {
 		return nil
 	}
 
+	// One line, not errors.Join: the console prints this as a failure
+	// reason, and a joined error renders on two lines.
 	if errors.Is(err, synctree.ErrUnsafePath) {
-		return errors.Join(errPathEscapesSyncRoot, err)
+		return fmt.Errorf("%w: %w", errPathEscapesSyncRoot, err)
 	}
 
 	return err
@@ -564,7 +566,7 @@ func (e *executor) ResolveParentID(relPath string) (string, error) {
 		return entry.ItemID, nil
 	}
 
-	return "", fmt.Errorf("sync: cannot resolve parent ID for %s (parent %s not in baseline)", relPath, parentDir)
+	return "", fmt.Errorf("parent folder %s has not been synced yet", parentDir)
 }
 
 // resolveDriveID returns the action's DriveID when present. Brand-new local

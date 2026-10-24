@@ -163,10 +163,16 @@ type localObserver struct {
 	expectedRootID      *synctree.FileIdentity
 	protectedRootEvents protectedRootEventSink
 	watcherFactory      func() (fsWatcher, error)
-	droppedEvents       atomic.Int64  // events dropped by TrySend due to full channel
-	droppedRetries      atomic.Int64  // hash requests dropped due to full channel
-	lastActivityNano    atomic.Int64  // liveness: updated on each event emit (B-125)
-	safetyScanInterval  time.Duration // 0 → default (5 minutes); configurable (B-099)
+	droppedEvents       atomic.Int64 // events dropped by TrySend due to full channel
+	droppedRetries      atomic.Int64 // hash requests dropped due to full channel
+	lastActivityNano    atomic.Int64 // liveness: updated on each event emit (B-125)
+
+	// watchLimitReported and safetyScanFailing let the watch loop report a
+	// persistent condition once instead of per directory or per scan.
+	// Both are touched only by the goroutine running Watch.
+	watchLimitReported bool
+	safetyScanFailing  bool
+	safetyScanInterval time.Duration // 0 → default (5 minutes); configurable (B-099)
 
 	// hashFunc computes the QuickXorHash of a file. Injectable for testing
 	// (e.g., to simulate panics in the hash phase).

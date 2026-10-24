@@ -21,7 +21,7 @@ func (p *planner) PlanCurrentState(
 	mount plannerMountContext,
 	mode SyncMode,
 ) (*actionPlan, error) {
-	p.logger.Info("planning current actionable set from sqlite reconciliation",
+	p.logger.Debug("planning current actionable set from sqlite reconciliation",
 		slog.Int("comparison_rows", len(comparisons)),
 		slog.Int("reconciliation_rows", len(reconciliations)),
 		slog.Int("baseline_entries", baseline.Len()),

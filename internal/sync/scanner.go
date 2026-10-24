@@ -60,6 +60,8 @@ const (
 	maxOneDrivePathLength = 400
 	// maxOneDriveFileSize is the maximum file size OneDrive allows (250 GB).
 	maxOneDriveFileSize = driveops.MaxOneDriveFileSize
+	// bytesPerGB renders the oversized-file detail in GB (1024^3 bytes).
+	bytesPerGB = 1 << 30
 )
 
 // defaultCheckWorkers is the default parallel hash goroutine limit when
@@ -536,7 +538,7 @@ func (o *localObserver) processObservedInfo(
 		*skipped = append(*skipped, skippedItem{
 			Path:     dbRelPath,
 			Reason:   issueFileTooLarge,
-			Detail:   fmt.Sprintf("file size %d bytes exceeds 250 GB limit", info.Size()),
+			Detail:   fmt.Sprintf("file is %d GB; OneDrive allows at most 250 GB", info.Size()/bytesPerGB),
 			FileSize: info.Size(),
 		})
 		return nil

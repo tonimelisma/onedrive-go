@@ -79,7 +79,7 @@ func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, actio
 		if action != nil {
 			path = action.Path
 		}
-		flow.deps.logger.Warn("failed to clear retry_work on success",
+		flow.deps.logger.Debug("failed to clear retry_work on success",
 			slog.String("path", path),
 			slog.String("error", clearErr.Error()),
 		)
@@ -121,7 +121,7 @@ func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 	delete(flow.retries.rowsByKey, work)
 	flow.retries.releaseHeldAction(work)
 
-	flow.deps.logger.Info("retry_work resolved",
+	flow.deps.logger.Debug("retry_work resolved",
 		slog.String("path", row.Path),
 		slog.String("condition_type", retryConditionTypeForRow(row)),
 		slog.String("action_type", row.ActionType.String()),

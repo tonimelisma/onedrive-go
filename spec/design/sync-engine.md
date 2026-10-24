@@ -4,7 +4,7 @@ GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/
 
 LAYER: 4
 
-Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified]
+Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.29 [verified]
 
 ## Overview
 
@@ -78,6 +78,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | A panic inside a watch observer fails its mount instead of terminating the process, and is reported with its stack so the failure stays diagnosable after the goroutine is gone. | `TestRecoverObserverPanic_DeliversPanicAsObserverError`, `TestRecoverObserverPanic_CleanExitReportsNothing`, `TestRecoverObserverPanic_FullChannelDoesNotBlock`, `TestRunWatch_LocalObserverPanicFailsMountInsteadOfCrashing` |
 | Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
 | Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child work snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestShortcutRootTransitionMatrixEnumeratesEveryStateAndEvent`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroReturnsExplicitErrors` |
+| Console reporting states each fact once: sign-in and observer-exit failures are returned, not logged; persistent conditions (skipped files, block scopes, poll outages, socket.io retries, condition summaries, blocked shortcut cleanup) are reported when they start; shutdown bookkeeping stays below WARN. | `TestEngineFlow_FatalAuth_ReturnedOnceNotLogged`, `TestEngineFlow_SuppressedShutdownCompletionError_QuietForCancellationAndRepeatFatal`, `TestPollOutageLog_WarnsOncePerOutage`, `TestEngineFlow_SkippedFindings_WarnOnlyWhenNew`, `TestEngineFlow_BlockScope_ReportedOnceWhenItStarts`, `TestSocketIOWakeSource_RetriesNeverWarn`, `TestWatchRuntime_ObserverExit_ReturnedOnceWithCause`, `TestWatchConditionSummary_WarnsOnlyForNewActionableKinds`, `TestEngineFlow_LogFailureSummary_AggregatesRetryWorkBelowWarn`, `TestEngine_ReconcileShortcutRootLocalStateRepeatedCleanupBlockedIsQuiet`, `TestFullScan_UnreadableFileIsSkippedItemNotWarning` |
 | Pending watch replans retire old-runtime work that has not started yet, including dependents released by already-running old actions, and leave replacement work to a fresh plan from current truth. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal` |
 
 ## The Engine Clock Is One Capability
@@ -892,6 +893,33 @@ Fatal authentication failures are not retry-owned. A `401` action completion
 marks the account auth requirement and stops the runtime; it must not create
 `retry_work`, activate `block_scopes`, or leave a timed trial path behind. The
 catalog auth requirement is the durable restart fact for that class of failure.
+The account is marked once per run, and the failure is returned, not logged:
+the CLI prints it once as a sign-in message, and the same 401 on other
+in-flight transfers adds nothing (`fatalCompletionError`).
+
+## Console Reporting
+
+A console WARN is shown to every user at default verbosity and ERROR even
+with `--quiet`, so the engine keeps both for things a user must notice and
+reports each fact once (R-6.6.21, R-6.6.22, R-6.6.29):
+
+- Per-file failures belong to the sync console's activity line. The executor
+  logs a failed action at Debug, and the end-of-pass retry summary is INFO
+  (R-6.6.12).
+- Errors the engine returns (fatal sign-in, all observers stopped, worker
+  baseline/commit failures, scanner root checks) are not also logged at
+  WARN/ERROR.
+- A persistent condition is reported when it starts or changes: skipped
+  files only when newly found (diffed against the persisted observation
+  issues), block scopes once on activation (throttling and outages at Info),
+  poll failures once per outage via `pollOutageLog` with an Info on recovery,
+  socket.io retries once at Info, the watch condition summary only when a new
+  kind of condition appears, and the inotify limit once with its fix. An
+  unchanged blocked shared-folder cleanup is retried quietly instead of being
+  returned on every pass.
+- Shutdown is quiet: cancellation and repeat-fatal errors in shutdown
+  bookkeeping, a canceled safety scan or full-refresh commit, and the final
+  dirty-buffer drain are Debug.
 
 ## Activity Hook
 

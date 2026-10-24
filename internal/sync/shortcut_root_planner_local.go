@@ -90,7 +90,7 @@ func planShortcutRootLocalObservation(
 	if !observation.RelativePathOK {
 		return shortcutRootLocalPlan{
 			Action:  shortcutRootLocalKeepRecord,
-			Next:    planShortcutRootBlocked(&normalized, "shortcut alias path escapes parent sync root"),
+			Next:    planShortcutRootBlocked(&normalized, "the shared folder's local path leaves the sync folder"),
 			Keep:    true,
 			Changed: true,
 		}
@@ -115,7 +115,7 @@ func planShortcutRootLocalObservation(
 		if !observation.PathState.IsDir {
 			return shortcutRootLocalPlan{
 				Action:  shortcutRootLocalKeepRecord,
-				Next:    planShortcutRootBlocked(&normalized, "shortcut alias path is not a directory"),
+				Next:    planShortcutRootBlocked(&normalized, "the shared folder's local path is not a directory"),
 				Keep:    true,
 				Changed: true,
 			}
@@ -166,7 +166,7 @@ func planRetiringShortcutRootLocalObservation(
 	if !observation.RelativePathOK {
 		return shortcutRootLocalPlan{
 			Action:  shortcutRootLocalKeepRecord,
-			Next:    planShortcutRootBlocked(&normalized, "shortcut alias path escapes parent sync root"),
+			Next:    planShortcutRootBlocked(&normalized, "the shared folder's local path leaves the sync folder"),
 			Keep:    true,
 			Changed: true,
 		}
@@ -191,7 +191,7 @@ func planRetiringShortcutRootLocalObservation(
 		if !observation.PathState.IsDir {
 			return shortcutRootLocalPlan{
 				Action:  shortcutRootLocalKeepRecord,
-				Next:    planShortcutRootCleanupBlocked(&normalized, errors.New("shortcut alias path is not a directory")),
+				Next:    planShortcutRootCleanupBlocked(&normalized, errors.New("the shared folder's local path is not a directory")),
 				Keep:    true,
 				Changed: true,
 			}
@@ -277,7 +277,7 @@ func planShortcutRootMaterializeResult(
 		}
 	}
 	if result.Identity == nil {
-		next := planShortcutRootUnavailable(&normalized, "shortcut alias local root identity is unavailable")
+		next := planShortcutRootUnavailable(&normalized, "the shared folder's local folder could not be identified")
 		return shortcutRootLocalObservationPlan{
 			Next:    next,
 			Keep:    true,
@@ -317,7 +317,7 @@ func planShortcutProjectionMoveResult(
 		}
 	}
 	if result.Identity == nil {
-		next := planShortcutRootUnavailable(&normalized, "shortcut alias local root identity is unavailable")
+		next := planShortcutRootUnavailable(&normalized, "the shared folder's local folder could not be identified")
 		return shortcutRootLocalObservationPlan{
 			Next:    next,
 			Keep:    true,
@@ -481,7 +481,7 @@ func planMissingMaterializedShortcutRoot(
 		next := plannedShortcutRootTransition(&normalized,
 			shortcutRootEventAliasRenameAmbiguous,
 			ShortcutRootStateRenameAmbiguous,
-			"multiple same-parent shortcut alias rename candidates",
+			"more than one renamed folder could be this shared folder",
 		)
 		next.ProtectedPaths = appendUniqueProtectedRootPaths(next.ProtectedPaths, candidates...)
 		return shortcutRootLocalPlan{
@@ -555,7 +555,7 @@ func planMissingAliasRenameResult(
 		}
 	}
 	if result.Identity == nil {
-		next := planShortcutRootUnavailable(record, "shortcut alias local root identity is unavailable")
+		next := planShortcutRootUnavailable(record, "the shared folder's local folder could not be identified")
 		return shortcutRootLocalPlan{
 			Action:  shortcutRootLocalKeepRecord,
 			Next:    next,

@@ -27,7 +27,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 		return false, fmt.Errorf("sync: steady-state replan requires loaded baseline")
 	}
 
-	rt.deps.logger.Info("processing watch steady-state replan",
+	rt.deps.logger.Debug("processing watch steady-state replan",
 		slog.Bool("dirty_signal", true),
 		slog.Bool("full_refresh", batch.FullRefresh),
 	)
@@ -98,7 +98,9 @@ func (rt *watchRuntime) handleSteadyStateLocalRefreshError(
 		return false, fmt.Errorf("sync: watch replan local refresh: %w", err)
 	}
 	if step == localCurrentRefreshStepObservation {
-		rt.deps.logger.Error("watch local refresh failed before runtime replacement",
+		// Warn, not Error: watch keeps running and retries on the next
+		// change signal.
+		rt.deps.logger.Warn("Could not scan the sync folder for changes; will retry",
 			slog.String("error", err.Error()),
 		)
 		return false, nil

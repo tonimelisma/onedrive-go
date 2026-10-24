@@ -11,7 +11,7 @@ import (
 // before RunOnce returns to guarantee cleanup on process exit.
 func (flow *engineFlow) postSyncHousekeeping(ctx context.Context) {
 	if err := flow.engine.refreshProtectedRootsFromStore(ctx); err != nil && flow.deps.logger != nil {
-		flow.deps.logger.Warn("refresh protected roots before housekeeping",
+		flow.deps.logger.Debug("refresh protected roots before housekeeping",
 			"error", err.Error(),
 		)
 	}

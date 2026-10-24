@@ -312,7 +312,7 @@ func (flow *engineFlow) logBlockScopeActivated(
 		return
 	}
 
-	retryIn := interval.Round(time.Second).String()
+	retryIn := waitText(interval)
 	switch conditionType {
 	case issueRateLimited:
 		flow.deps.logger.Info("OneDrive is limiting requests; pausing affected transfers and retrying in "+retryIn, fields...)

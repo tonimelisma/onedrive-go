@@ -288,3 +288,47 @@ func TestWatchRuntime_ObserverExit_ReturnedOnceWithCause(t *testing.T) {
 	require.ErrorIs(t, err, cause, "the returned error names why watching stopped")
 	assert.Zero(t, countLevel(logs.String(), "ERROR"), "the returned error is the only report")
 }
+
+// The watch condition summary used to fingerprint counts, so it re-warned on
+// every count change at the 10 s maintenance tick, including for throttling
+// the engine handles itself.
+//
+// Validates: R-6.6.29
+func TestWatchConditionSummary_WarnsOnlyForNewActionableKinds(t *testing.T) {
+	t.Parallel()
+
+	throttled := watchConditionSummary{ConditionTotal: 3, Counts: []watchConditionCount{
+		{Key: ConditionRateLimited, Count: 3},
+	}}
+	moreThrottled := watchConditionSummary{ConditionTotal: 9, Counts: []watchConditionCount{
+		{Key: ConditionRateLimited, Count: 9},
+	}}
+	withBadName := watchConditionSummary{ConditionTotal: 10, Counts: []watchConditionCount{
+		{Key: ConditionInvalidFilename, Count: 1},
+		{Key: ConditionRateLimited, Count: 9},
+	}}
+
+	assert.False(t, watchConditionSummaryAddsActionable(throttled, ""), "throttling is never a warning")
+	assert.Equal(t, watchConditionSummaryFingerprint(throttled), watchConditionSummaryFingerprint(moreThrottled),
+		"a count change alone is not a new report")
+	assert.True(t, watchConditionSummaryAddsActionable(withBadName, watchConditionSummaryFingerprint(throttled)))
+	assert.False(t, watchConditionSummaryAddsActionable(withBadName, watchConditionSummaryFingerprint(withBadName)))
+	assert.Equal(t, "1 file with names OneDrive does not allow, 9 files waiting while OneDrive limits requests",
+		formatWatchConditionBreakdown(withBadName))
+}
+
+// The console prints this reason after the folder path; it used to dump the
+// whole blocker list as a Go slice with internal "non-disposable" wording.
+//
+// Validates: R-6.6.11
+func TestFolderNotEmptyError_NamesAFewBlockersAndTheAction(t *testing.T) {
+	t.Parallel()
+
+	err := folderNotEmptyError([]string{"a.txt", "b.txt", "c.txt", "d.txt", "e.txt"})
+	assert.Equal(t,
+		"folder still contains files that are not on OneDrive (a.txt, b.txt, c.txt and 2 more); move or delete them to finish",
+		err.Error())
+	assert.Equal(t,
+		"folder still contains files that are not on OneDrive (a.txt); move or delete them to finish",
+		folderNotEmptyError([]string{"a.txt"}).Error())
+}

@@ -8,6 +8,7 @@ import (
 	"os"
 	slashpath "path"
 	"path/filepath"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -147,8 +148,7 @@ func (e *executor) DeleteLocalFolder(action *Action, absPath string) actionOutco
 		}
 
 		if len(blockers) > 0 {
-			return e.failedOutcome(action, ActionLocalDelete,
-				fmt.Errorf("directory %s blocked by non-disposable files: %v", action.Path, blockers))
+			return e.failedOutcome(action, ActionLocalDelete, folderNotEmptyError(blockers))
 		}
 
 		// All entries are disposable — remove them before deleting the folder.
@@ -340,4 +340,21 @@ func localDeleteUnchangedWithoutHash(entry *BaselineEntry, info os.FileInfo) boo
 	}
 
 	return entry.LocalSize == info.Size() && entry.LocalMtime == info.ModTime().UnixNano()
+}
+
+// folderNotEmptyError is the user-facing reason a folder deleted on OneDrive
+// cannot be removed locally: it still holds files that are not on OneDrive.
+// The console prints it after the folder path, so it names at most a few
+// blockers and says what to do instead of dumping the whole list.
+func folderNotEmptyError(blockers []string) error {
+	const maxNamed = 3
+	named := blockers
+	more := ""
+	if len(blockers) > maxNamed {
+		named = blockers[:maxNamed]
+		more = fmt.Sprintf(" and %d more", len(blockers)-maxNamed)
+	}
+
+	return fmt.Errorf("folder still contains files that are not on OneDrive (%s%s); move or delete them to finish",
+		strings.Join(named, ", "), more)
 }

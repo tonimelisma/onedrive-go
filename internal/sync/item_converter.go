@@ -394,7 +394,7 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 	// Emitting them would create buffer/planner entries the rest of the
 	// pipeline cannot reconcile back to durable remote state.
 	if item.ID == "" {
-		c.Logger.Warn("skipping remote item with empty id",
+		c.Logger.Debug("skipping remote item with empty id",
 			slog.String("name", item.Name),
 			slog.String("parent_id", item.ParentID),
 			slog.String("drive_id", itemDriveID.String()),
@@ -414,7 +414,7 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 	// existing baseline entry can supply the missing name safely.
 	_, knownProtectedRoot := c.ProtectedRootBindings[item.ID]
 	if !item.IsDeleted && item.Name == "" && existing == nil && !knownProtectedRoot {
-		c.Logger.Warn("skipping remote item with empty name",
+		c.Logger.Debug("skipping remote item with empty name",
 			slog.String("item_id", item.ID),
 			slog.String("parent_id", item.ParentID),
 			slog.String("drive_id", itemDriveID.String()),
@@ -851,7 +851,7 @@ func (c *itemConverter) shouldSkipVaultItem(
 		return false
 	}
 
-	c.Logger.Info("skipping vault item",
+	c.Logger.Debug("skipping vault item",
 		slog.String("item_id", item.ID),
 		slog.String("name", item.Name),
 	)

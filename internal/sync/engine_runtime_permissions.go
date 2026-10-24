@@ -247,7 +247,7 @@ func (flow *engineFlow) logRemotePermissionBoundary(
 		slog.String("boundary", evidence.BoundaryPath),
 		slog.String("trigger_path", evidence.TriggerPath),
 	)
-	flow.deps.logger.Info("handle403: read-only remote boundary detected, writes suppressed recursively", fields...)
+	flow.deps.logger.Debug("handle403: read-only remote boundary detected, writes suppressed recursively", fields...)
 }
 
 func (flow *engineFlow) logLocalPermissionBoundary(

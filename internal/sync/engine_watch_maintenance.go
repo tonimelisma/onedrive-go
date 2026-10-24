@@ -98,7 +98,7 @@ func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
 		}
 	}))
 
-	rt.deps.logger.Info("full remote refresh armed",
+	rt.deps.logger.Debug("full remote refresh armed",
 		slog.Duration("delay", delay),
 		slog.Time("due_at", time.Unix(0, state.NextFullRemoteRefreshAt)),
 	)

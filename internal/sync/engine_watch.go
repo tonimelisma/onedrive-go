@@ -86,7 +86,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions)
 			return nil
 		}
 
-		return fmt.Errorf("sync: initial sync failed: %w", err)
+		return fmt.Errorf("sync: initial sync: %w", err)
 	}
 
 	// Step 3: Start observers AFTER bootstrap — they see the post-bootstrap baseline.
@@ -285,12 +285,12 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode SyncMode, pipe *
 	// Dispatch through the watch runtime (same frontier path steady-state uses).
 	initialOutbox, _, err := rt.startRuntimeStage(ctx, runtime, pipe.bl)
 	if err != nil {
-		return fmt.Errorf("sync: bootstrap dispatch failed: %w", err)
+		return fmt.Errorf("starting transfers: %w", err)
 	}
 
 	// Wait for all bootstrap actions to complete.
 	if err := rt.runWatchUntilQuiescent(ctx, pipe, initialOutbox); err != nil {
-		return fmt.Errorf("sync: bootstrap quiescence failed: %w", err)
+		return fmt.Errorf("finishing transfers: %w", err)
 	}
 
 	return rt.finishBootstrapAfterActions(ctx)
@@ -362,7 +362,8 @@ func (rt *watchRuntime) startObservers(
 		select {
 		case protectedRootEvents <- event:
 		default:
-			rt.deps.logger.Warn("managed shortcut root event channel full; parent engine reconciliation will retry",
+			// Debug: self-healing back-pressure; reconciliation retries.
+			rt.deps.logger.Debug("managed shortcut root event channel full; parent engine reconciliation will retry",
 				slog.String("path", event.Path),
 				slog.String("binding_id", event.BindingID),
 			)
@@ -414,7 +415,9 @@ func (rt *watchRuntime) startLocalObserver(
 		watchErr := localObs.Watch(ctx, rt.engine.syncTree, nil)
 		if errors.Is(watchErr, errWatchLimitExhausted) {
 			rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
-			rt.deps.logger.Warn("inotify watch limit exhausted, falling back to periodic full scan",
+			rt.deps.logger.Warn("Too many folders to watch for changes (system inotify limit reached). "+
+				"Local changes will be noticed every "+waitText(localWatchDegradedFullScanInterval)+
+				" instead of at once. To fix: sudo sysctl -w fs.inotify.max_user_watches=524288",
 				slog.Duration("scan_interval", localWatchDegradedFullScanInterval),
 			)
 
@@ -478,7 +481,8 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 		}()
 
 		if err := wakeSource.Run(wakeCtx, wakeCh); err != nil {
-			rt.deps.logger.Warn("socket.io wake source exited",
+			// Info: watch keeps polling on its interval regardless.
+			rt.deps.logger.Info("Instant change notifications from OneDrive stopped; still checking on the poll interval",
 				slog.String("drive_id", rt.engine.driveID.String()),
 				slog.String("error", err.Error()),
 			)
@@ -539,6 +543,8 @@ func (rt *watchRuntime) runPeriodicFullScan(
 		slog.Duration("interval", interval),
 	)
 
+	// scanFailing keeps a persistent scan failure to one Warn per streak.
+	scanFailing := false
 	for {
 		select {
 		case <-tickerChan(ticker):
@@ -556,12 +562,18 @@ func (rt *watchRuntime) runPeriodicFullScan(
 					return
 				}
 
-				rt.deps.logger.Warn("periodic full scan failed",
+				level := slog.LevelDebug
+				if !scanFailing {
+					level = slog.LevelWarn
+				}
+				scanFailing = true
+				rt.deps.logger.Log(ctx, level, "Could not rescan the sync folder; will retry",
 					slog.String("error", err.Error()),
 				)
 
 				continue
 			}
+			scanFailing = false
 
 			obs.TrySendFullLocalSnapshot(ctx, result)
 
