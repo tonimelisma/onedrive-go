@@ -35,10 +35,14 @@ At any moment a person looking at the output must be able to tell:
 
 | Stream | Carries | Never carries |
 |---|---|---|
-| stdout | The command's result: listings, `status`, `--json` documents | Progress, warnings, logs |
-| stderr | Human messages: progress, per-file activity, warnings, errors, the sync summary | Data a script must parse |
+| stdout | The command's result: listings, `status`, `--json` documents, and for `sync` its activity (one line per file) and summary | Warnings, errors, logs |
+| stderr | Warnings, errors, transient progress, log lines | Data a script must parse |
 | Log file / journal | Durable diagnostic history | Anything the user needs to see now and nowhere else |
 
+- **For `sync`, the activity report is the result.** `sync` has no other
+  output, so the per-file lines and the summary go to stdout (as rsync and the
+  D client do). `sync 2>/dev/null` then shows what happened, `sync >/dev/null`
+  shows only problems.
 - **One format per stream.** A stream is either human text or JSON lines,
   decided once at startup. Never interleave `key=value` lines, JSON objects
   and prose on the same stream.
@@ -99,8 +103,8 @@ Check each stream separately, once, at startup:
 |---|---|---|
 | quiet | `-q` | Errors only |
 | default | | Startup line (watch), per-file activity, summaries, warnings with actions |
-| verbose | `-v` | Per-phase progress (scanning, delta pages), skipped items with reasons |
-| debug | `--debug` | Internal state, HTTP, timings, raw error chains |
+| verbose | `-v` | Failures that will be retried, the full error chain behind plain messages, and timestamped key=value progress logs (scanning, delta pages, plan counts) |
+| debug | `--debug` | Internal state, HTTP, timings |
 
 The log file has its own level and is always structured (JSON lines). The
 console is always human text, whatever `log_format` says, unless the console
