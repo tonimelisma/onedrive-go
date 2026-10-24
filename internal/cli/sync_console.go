@@ -52,7 +52,7 @@ func newSyncConsole(cc *CLIContext, watch bool) *syncConsole {
 		return nil
 	}
 
-	journal := stderrIsJournal()
+	journal := isWriterJournal(cc.Status())
 	// Without a home directory paths are shown in full, which is still correct.
 	home, homeErr := os.UserHomeDir()
 	if homeErr != nil {

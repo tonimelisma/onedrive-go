@@ -16,15 +16,11 @@ const (
 	journalPriorityDebug   = 7
 )
 
-// stderrIsJournal reports whether stderr is connected to the systemd journal.
-// systemd sets $JOURNAL_STREAM to the "device:inode" of the stream it hands a
-// service; comparing it with stderr's own identity is the documented check
-// (systemd.exec(5)), and it fails safely when the variable was inherited by a
-// process whose stderr was redirected elsewhere.
-func stderrIsJournal() bool {
-	return fileIsJournalStream(os.Stderr, os.Getenv("JOURNAL_STREAM"))
-}
-
+// fileIsJournalStream reports whether f is the stream systemd connected to the
+// journal. systemd sets $JOURNAL_STREAM to the "device:inode" of the stream it
+// hands a service; comparing it with the file's own identity is the documented
+// check (systemd.exec(5)), and it fails safely when the variable was inherited
+// by a process whose output was redirected elsewhere.
 func fileIsJournalStream(f *os.File, journalStream string) bool {
 	if f == nil || journalStream == "" {
 		return false
