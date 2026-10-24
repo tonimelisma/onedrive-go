@@ -893,6 +893,20 @@ marks the account auth requirement and stops the runtime; it must not create
 `retry_work`, activate `block_scopes`, or leave a timed trial path behind. The
 catalog auth requirement is the durable restart fact for that class of failure.
 
+## Activity Hook
+
+`Engine.SetActivityHook` reports each finished user-visible file action as an
+`Activity` (kind, path, old path, size, success, will-retry, error), so the CLI
+can name files instead of printing counts (R-6.6.18). It is emitted from
+`applyRuntimeCompletionStage`, the one completion seam shared by one-shot and
+watch mode, right after classification: successes and failures are reported,
+shutdown and superseded completions are not (the work stopped on request or
+was replaced by newer truth), and bookkeeping actions (baseline updates,
+cleanups) are never activity. A dry run reports each planned action with
+`Planned` set. `internal/multisync` tags activity with its mount
+(`MountActivity`) so multi-drive output can say where it happened. The hook
+runs on the completion path and must not block.
+
 ## What The Engine Does Not Own
 
 The engine does not own:

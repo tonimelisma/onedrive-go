@@ -27,6 +27,10 @@ var (
 	ErrRangeNotSatisfiable = errors.New("graph: range not satisfiable")
 	ErrServerError         = errors.New("graph: server error")
 	ErrNotLoggedIn         = errors.New("graph: not logged in")
+	// ErrLoginExpired marks a saved refresh token Microsoft no longer accepts
+	// (OAuth invalid_grant: expired after inactivity, revoked, or password
+	// changed). It always travels together with ErrUnauthorized.
+	ErrLoginExpired = errors.New("graph: saved login expired")
 
 	// ErrProviderReadOnly marks a Microsoft-side read-only window: the service
 	// answers, authentication is valid, and the account is fine, but the

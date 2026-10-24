@@ -460,6 +460,33 @@ func TestTokenBridge_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
+// A refresh token Microsoft has expired or revoked comes back as
+// invalid_grant. That is a sign-in problem the user must fix, so it has to be
+// recognizable as such rather than an opaque token failure.
+//
+// Validates: R-6.6.23
+func TestTokenBridge_InvalidGrantIsLoginExpired(t *testing.T) {
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, writeErr := w.Write([]byte(`{"error":"invalid_grant","error_description":"AADSTS70000: The user could not be authenticated as the grant is expired."}`))
+		assert.NoError(t, writeErr)
+	}))
+	defer tokenSrv.Close()
+
+	cfg := &oauth2.Config{
+		ClientID: "test",
+		Endpoint: oauth2.Endpoint{TokenURL: tokenSrv.URL + "/token"},
+	}
+	tok := &oauth2.Token{AccessToken: "expired", RefreshToken: "stale", Expiry: time.Now().Add(-time.Hour)}
+	bridge := &tokenBridge{src: cfg.TokenSource(t.Context(), tok), logger: slog.Default()}
+
+	_, err := bridge.Token()
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrLoginExpired)
+	require.ErrorIs(t, err, ErrUnauthorized, "an expired login must also take every existing unauthorized path")
+}
+
 func TestOAuthConfig_OnTokenChange(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "callback.json")

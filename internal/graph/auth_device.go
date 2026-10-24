@@ -72,6 +72,7 @@ func doLoginWithFlow(
 	display(DeviceAuth{
 		UserCode:        da.UserCode,
 		VerificationURI: da.VerificationURI,
+		Expiry:          da.Expiry,
 	})
 
 	tok, err := exchangeToken(ctx, cfg, da)

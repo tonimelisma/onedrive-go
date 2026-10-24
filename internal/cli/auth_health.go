@@ -21,6 +21,7 @@ const (
 	authReasonMissingLogin        = authstate.ReasonMissingLogin
 	authReasonInvalidSavedLogin   = authstate.ReasonInvalidSavedLogin
 	authReasonSyncAuthRejected    = authstate.ReasonSyncAuthRejected
+	authReasonSavedLoginExpired   = authstate.ReasonSavedLoginExpired
 )
 
 type accountAuthHealth = authstate.Health
@@ -322,6 +323,9 @@ func printAccountAuthRequirementsText(w io.Writer, items []accountAuthRequiremen
 
 func authErrorMessage(err error) string {
 	switch {
+	case errors.Is(err, graph.ErrLoginExpired):
+		return "Authentication required: Microsoft no longer accepts the saved login for this account " +
+			"(it expired or was revoked). Run 'onedrive-go login' to sign in again."
 	case errors.Is(err, graph.ErrNotLoggedIn):
 		return "Authentication required: no saved login was found for this account. Run 'onedrive-go login'."
 	case errors.Is(err, graph.ErrUnauthorized):

@@ -53,8 +53,8 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 	// Re-sync should not schedule fresh uploads for the unchanged local tree
 	// even if unrelated remote churn elsewhere on the shared live drive makes
 	// the global delta feed non-idle.
-	stderr := assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--upload-only")
-	assert.NotContains(t, stderr, "Uploads:",
+	out := assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--upload-only")
+	assert.NotContains(t, out, "Uploaded "+testFolder+"/",
 		"incremental upload-only sync should not re-upload unchanged files once the delta token is established")
 
 	// Add a new file remotely.
@@ -84,8 +84,8 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 		},
 		"--download-only",
 	)
-	assert.Contains(t, attempt.Stderr, "Downloads:",
-		"incremental download should report the new file once delta catches up")
+	assert.Contains(t, attempt.Stdout, "Downloaded "+testFolder+"/delta-new.txt",
+		"incremental download should name the new file once delta catches up")
 	assert.Equal(t, "new from remote", string(data))
 }
 
@@ -138,8 +138,8 @@ func TestE2E_Sync_CrashRecoveryIdempotent(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Re-sync immediately — should show no changes (idempotent).
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync")
-	assert.Contains(t, stderr, "No changes detected",
+	out, _ := runCLIWithConfig(t, cfgPath, env, "sync")
+	assert.Contains(t, out, "Up to date",
 		"immediate re-sync after mixed changes should be idempotent")
 }
 
@@ -185,16 +185,16 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 		"upload-only should observe remote drift before durable mirror recovery",
 		func(result syncAttemptResult) bool {
 			return result.Err == nil &&
-				strings.Contains(result.Stderr, "Deferred by mode:") &&
-				strings.Contains(result.Stderr, "Downloads:") &&
-				strings.Contains(result.Stderr, "Local deletes:")
+				strings.Contains(result.Stdout, "Held back by --upload-only:") &&
+				strings.Contains(result.Stdout, "downloads") &&
+				strings.Contains(result.Stdout, "local deletes")
 		},
 		"--upload-only",
 	)
-	assert.Contains(t, attempt.Stderr, "Deferred by mode:",
+	assert.Contains(t, attempt.Stdout, "Held back by --upload-only:",
 		"upload-only should report remote drift even when it cannot apply it")
-	assert.Contains(t, attempt.Stderr, "Downloads:")
-	assert.Contains(t, attempt.Stderr, "Local deletes:")
+	assert.Contains(t, attempt.Stdout, "downloads")
+	assert.Contains(t, attempt.Stdout, "local deletes")
 
 	editData, err := os.ReadFile(remoteEditPath)
 	require.NoError(t, err)
@@ -226,10 +226,10 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 		},
 		"--download-only",
 	)
-	assert.Contains(t, attempt.Stderr, "Plan:",
+	assert.Contains(t, attempt.Stdout, "Done in",
 		"download-only should settle durable remote mirror drift")
-	assert.Contains(t, attempt.Stderr, "Downloads:")
-	assert.Contains(t, attempt.Stderr, "Local deletes:")
+	assert.Contains(t, attempt.Stdout, "Downloaded "+testFolder+"/remote-edit.txt")
+	assert.Contains(t, attempt.Stdout, "Deleted locally "+testFolder+"/remote-delete.txt")
 
 	editData, err = os.ReadFile(remoteEditPath)
 	require.NoError(t, err)
@@ -239,8 +239,8 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 	assert.ErrorIs(t, err, os.ErrNotExist)
 
 	snapshot := snapshotLocalTree(t, localDir)
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
-	assert.Contains(t, stderr, "No changes detected",
+	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+	assert.Contains(t, out, "Up to date",
 		"immediate rerun after durable mirror settlement should be idle")
 	assert.Equal(t, snapshot, snapshotLocalTree(t, localDir))
 }
@@ -283,10 +283,10 @@ func TestE2E_Sync_DriveRemovePurgeResetsState(t *testing.T) {
 	require.NoError(t, os.RemoveAll(localDir))
 
 	// Sync download-only — should do full re-enumeration and re-download.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
-	assert.Contains(t, stderr, "Plan:",
+	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+	assert.Contains(t, out, "Done in",
 		"sync after purge should report applied work for at least one mount")
-	assert.Contains(t, stderr, "Downloads:",
+	assert.Contains(t, out, "Downloaded "+testFolder+"/purge-a.txt",
 		"sync after purge should re-enumerate and re-download the removed local files")
 
 	// Verify files re-downloaded locally.

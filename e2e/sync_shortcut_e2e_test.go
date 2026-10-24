@@ -20,8 +20,8 @@ func TestE2E_ShortcutSmoke_DownloadOnlyProjectsChildMount(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, syncDir)
 
-	_, stderr := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
-	assert.Contains(t, stderr, "Mode: download-only")
+	out, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
+	assert.Contains(t, out, "(download only)")
 
 	record := requireActiveShortcutChild(t, env, fixture)
 	childRoot := filepath.Join(syncDir, fixture.ShortcutName)

@@ -152,8 +152,8 @@ func TestE2E_Sync_MultiDriveReport(t *testing.T) {
 	})
 
 	// Sync all drives.
-	_, stderr := runCLIWithConfigAllDrives(t, cfgPath, env, "sync", "--upload-only")
+	out, _ := runCLIWithConfigAllDrives(t, cfgPath, env, "sync", "--upload-only")
 
-	// Multi-drive output should have per-drive headers with "---" separators.
-	assert.Contains(t, stderr, "---", "multi-drive report should have separator headers")
+	// Multi-drive output names the drive on each summary line.
+	assert.Regexp(t, `(?m)^.+: (Done in|Up to date)`, out, "multi-drive summaries should be prefixed with the drive name")
 }

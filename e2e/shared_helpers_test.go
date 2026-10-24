@@ -83,9 +83,9 @@ func assertSyncLeavesLocalTreeStableForDrive(
 	t.Helper()
 
 	before := snapshotLocalTree(t, root)
-	_, stderr := runCLIWithConfigForDrive(t, cfgPath, env, driveID, args...)
+	out, _ := runCLIWithConfigForDrive(t, cfgPath, env, driveID, args...)
 	after := snapshotLocalTree(t, root)
 	assert.Equal(t, before, after, "sync should not mutate the test-owned local tree")
 
-	return stderr
+	return out
 }

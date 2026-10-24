@@ -498,7 +498,14 @@ func newSignalLogger(statusWriter io.Writer) *slog.Logger {
 		statusWriter = os.Stderr
 	}
 
-	return slog.New(slog.NewTextHandler(statusWriter, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// The stop notice is meant for whoever pressed Ctrl-C, so it renders as a
+	// plain line (or a journal line) rather than a key=value log record.
+	style := consoleLogHuman
+	if isWriterJournal(statusWriter) {
+		style = consoleLogJournal
+	}
+
+	return slog.New(newConsoleLogHandler(statusWriter, slog.LevelInfo, style))
 }
 
 func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
@@ -528,11 +535,7 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 		class := classifyCommandError(err)
 		presentation := commandFailurePresentationForClass(class)
 		if class != errclass.ClassShutdown {
-			if authMessage := authErrorMessage(err); authMessage != "" {
-				writeWarningf(statusWriter, "%s\n", authMessage)
-			} else {
-				writeWarningf(statusWriter, "Error: %v\n", err)
-			}
+			writeWarningf(statusWriter, "%s\n", commandErrorText(err, commandWantsErrorDetails(cmd)))
 		}
 
 		return presentation.ExitCode
@@ -670,10 +673,9 @@ func resolveFileLogLevelWithStatusWriter(cfg *config.ResolvedDrive, statusWriter
 }
 
 // buildHandler creates the appropriate slog.Handler based on the log_format
-// config setting. Defaults to text for bootstrap (nil cfg) or empty format.
+// config setting. A nil cfg (bootstrap) or empty format means "auto", so the
+// bootstrap logger and the configured logger render the same way.
 // The w parameter specifies the output destination (typically os.Stderr).
-// For "auto" format, TTY detection checks w itself (not hardcoded stderr),
-// so log_file redirection will correctly select JSON.
 func buildHandler(w io.Writer, cfg *config.ResolvedDrive, opts *slog.HandlerOptions) slog.Handler {
 	return buildHandlerWithStatusWriter(w, cfg, opts, w)
 }
@@ -684,7 +686,7 @@ func buildHandlerWithStatusWriter(
 	opts *slog.HandlerOptions,
 	statusWriter io.Writer,
 ) slog.Handler {
-	format := logFormatText
+	format := logFormatAuto
 	if cfg != nil && cfg.LogFormat != "" {
 		format = cfg.LogFormat
 	}
@@ -692,19 +694,43 @@ func buildHandlerWithStatusWriter(
 	switch format {
 	case logFormatJSON:
 		return slog.NewJSONHandler(w, opts)
-	case logFormatAuto:
-		if isWriterTTY(w) {
-			return slog.NewTextHandler(w, opts)
-		}
-
-		return slog.NewJSONHandler(w, opts)
 	case logFormatText:
 		return slog.NewTextHandler(w, opts)
+	case logFormatAuto:
+		return autoConsoleHandler(w, opts)
 	default:
-		writeWarningf(statusWriter, "warning: unknown log format %q, using text\n", format)
+		writeWarningf(statusWriter, "warning: unknown log format %q, using auto\n", format)
 
-		return slog.NewTextHandler(w, opts)
+		return autoConsoleHandler(w, opts)
 	}
+}
+
+// autoConsoleHandler picks the console log style for the default "auto"
+// format. The console is for people, so it is never JSON here (structured
+// history belongs in log_file): the journal gets priority-prefixed lines
+// without timestamps, default verbosity gets plain "Warning: ..." lines, and
+// --verbose/--debug get full timestamped key=value detail.
+func autoConsoleHandler(w io.Writer, opts *slog.HandlerOptions) slog.Handler {
+	if isWriterJournal(w) {
+		return newConsoleLogHandler(w, opts.Level, consoleLogJournal)
+	}
+
+	if opts.Level != nil && opts.Level.Level() >= slog.LevelWarn {
+		return newConsoleLogHandler(w, opts.Level, consoleLogHuman)
+	}
+
+	return slog.NewTextHandler(w, opts)
+}
+
+// isWriterJournal reports whether w is a file that systemd connected to the
+// journal.
+func isWriterJournal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+
+	return fileIsJournalStream(f, os.Getenv("JOURNAL_STREAM"))
 }
 
 // fdProvider is implemented by types that expose a file descriptor (e.g., *os.File).
@@ -824,4 +850,19 @@ func buildLoggerDualWithStatusWriter(
 	fileHandler := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: fileLevel})
 
 	return slog.New(&multiHandler{handlers: []slog.Handler{consoleHandler, fileHandler}}), f
+}
+
+// commandWantsErrorDetails reports whether --verbose or --debug asked for the
+// full error chain alongside the plain message.
+func commandWantsErrorDetails(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+
+	cc := cliContextFrom(cmd.Context())
+	if cc == nil {
+		return false
+	}
+
+	return cc.Flags.Verbose || cc.Flags.Debug
 }

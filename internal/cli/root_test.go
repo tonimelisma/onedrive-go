@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -733,17 +734,35 @@ func TestBuildHandler_FormatJSON(t *testing.T) {
 	assert.True(t, ok, "expected *slog.JSONHandler")
 }
 
-func TestBuildHandler_FormatAutoNonTTY(t *testing.T) {
+// Validates: R-6.6.21
+func TestBuildHandler_FormatAutoIsHumanAtDefaultVerbosity(t *testing.T) {
 	t.Parallel()
 
-	// bytes.Buffer has no Fd() method → isWriterTTY returns false → JSON.
+	// The console is for people: auto never switches it to JSON, even when
+	// stderr is not a terminal (structured history belongs in log_file).
 	var buf bytes.Buffer
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "auto"},
 	}
-	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{})
-	_, ok := handler.(*slog.JSONHandler)
-	assert.True(t, ok, "expected *slog.JSONHandler for non-TTY writer")
+	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{Level: slog.LevelWarn})
+	_, ok := handler.(*consoleLogHandler)
+	require.True(t, ok, "expected *consoleLogHandler at default verbosity")
+
+	slog.New(handler).Warn("poll interval below minimum, clamping", slog.Duration("minimum", 30*time.Second))
+	assert.Equal(t, "Warning: poll interval below minimum, clamping (minimum=30s)\n", buf.String())
+}
+
+// Validates: R-6.6.21
+func TestBuildHandler_FormatAutoVerboseKeepsTimestampedDetail(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	cfg := &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{LogFormat: "auto"},
+	}
+	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{Level: slog.LevelInfo})
+	_, ok := handler.(*slog.TextHandler)
+	assert.True(t, ok, "--verbose keeps full key=value detail")
 }
 
 func TestBuildHandler_NilConfigUsesText(t *testing.T) {

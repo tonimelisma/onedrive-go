@@ -186,10 +186,10 @@ func TestE2E_Orchestrator_OneDriveFails(t *testing.T) {
 	assert.Contains(t, combined, "Error:",
 		"output should contain 'Error:' for the failed drive")
 
-	// Verify drive1 reported success in this run (not stale remote state).
-	// Sync report is printed to stderr (via Statusf), so check combined.
-	assert.Contains(t, combined, "Succeeded:",
-		"output should contain 'Succeeded:' proving drive1 completed this run")
+	// Verify drive1 reported a finished run (not stale remote state). The
+	// per-drive summary is on stdout; combined holds both streams.
+	assert.True(t, strings.Contains(combined, "Done in") || strings.Contains(combined, "Up to date"),
+		"output should contain drive1's summary proving it completed this run")
 
 	// drive1's file should still have been uploaded.
 	remotePath := "/" + testFolder + "/survive.txt"

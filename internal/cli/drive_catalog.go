@@ -59,10 +59,7 @@ func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driv
 
 	for id := range cfg.Drives {
 		d := cfg.Drives[id]
-		state := driveStateReady
-		if d.IsPaused(time.Now()) {
-			state = driveStatePaused
-		}
+		state := configuredDriveListState(id, d.IsPaused(time.Now()))
 
 		syncDir := d.SyncDir
 		if syncDir == "" {
@@ -455,6 +452,22 @@ func sharedFoldersToEntries(folders []sharedFolderInfo) []driveListEntry {
 	}
 
 	return entries
+}
+
+// configuredDriveListState is what drive list can say without contacting
+// OneDrive. A drive with no state database has never completed a sync here,
+// so calling it up to date would be false.
+func configuredDriveListState(cid driveid.CanonicalID, paused bool) string {
+	if paused {
+		return driveStatePaused
+	}
+
+	path := config.DriveStatePath(cid)
+	if path == "" || !managedPathExists(path) {
+		return driveStateNotSynced
+	}
+
+	return driveStateReady
 }
 
 // annotateStateDB sets HasStateDB on available drive entries that have a state

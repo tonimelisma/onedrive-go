@@ -102,21 +102,6 @@ func TestMountReportsError(t *testing.T) {
 	}
 }
 
-// --- printMountReports ---
-
-// quietCC returns a CLIContext with Quiet=true for tests that call status-printing
-// functions. Only populates the Flags field — other fields are nil/zero.
-func quietCC() *CLIContext {
-	return &CLIContext{Flags: CLIFlags{Quiet: true}}
-}
-
-func statusCC() (*CLIContext, *bytes.Buffer) {
-	status := &bytes.Buffer{}
-	return &CLIContext{
-		StatusWriter: status,
-	}, status
-}
-
 func newSyncTestContext(parent context.Context, cfgPath string, statusWriter io.Writer) context.Context {
 	cc := &CLIContext{
 		Logger:       slog.New(slog.DiscardHandler),
@@ -165,38 +150,6 @@ func installDryRunSuccessRunner(t *testing.T, cc *CLIContext) *bool {
 	return &called
 }
 
-func TestPrintMountReports_SingleMount_NoHeader(t *testing.T) {
-	t.Parallel()
-
-	reports := []*multisync.MountReport{
-		{
-			DisplayName: "Personal",
-			Report:      &syncengine.Report{Mode: syncengine.SyncBidirectional},
-		},
-	}
-
-	// Should not panic or produce headers for a single mount.
-	printMountReports(reports, quietCC())
-}
-
-func TestPrintMountReports_MultiMount_WithError(t *testing.T) {
-	t.Parallel()
-
-	reports := []*multisync.MountReport{
-		{
-			DisplayName: "Personal",
-			Report:      &syncengine.Report{Mode: syncengine.SyncBidirectional},
-		},
-		{
-			DisplayName: "Business",
-			Err:         fmt.Errorf("sync failed"),
-		},
-	}
-
-	// Should not panic. Output goes to stderr via statusf.
-	printMountReports(reports, quietCC())
-}
-
 // --- syncModeFromFlags ---
 
 // Validates: R-2.1
@@ -225,66 +178,6 @@ func TestSyncModeFromFlags(t *testing.T) {
 			assert.Equal(t, tt.want, syncModeFromFlags(cmd))
 		})
 	}
-}
-
-// --- printNonZero ---
-
-func TestPrintNonZero(t *testing.T) {
-	t.Parallel()
-
-	// n=0 should produce no output; n>0 should produce labeled line.
-	cc := quietCC()
-	printNonZero(cc, "Downloads", 0) // should not panic
-	printNonZero(cc, "Downloads", 5) // should not panic
-}
-
-// --- printSyncReport ---
-
-func TestPrintSyncReport(t *testing.T) {
-	t.Parallel()
-
-	cc, status := statusCC()
-
-	// Dry-run report.
-	printSyncReport(&syncengine.Report{DryRun: true, Mode: syncengine.SyncBidirectional}, cc)
-
-	// No-changes report.
-	printSyncReport(&syncengine.Report{Mode: syncengine.SyncUploadOnly}, cc)
-
-	// Full report with results.
-	printSyncReport(&syncengine.Report{
-		Downloads: 3,
-		Uploads:   2,
-		Succeeded: 5,
-		Mode:      syncengine.SyncDownloadOnly,
-	}, cc)
-
-	output := status.String()
-	assert.Contains(t, output, "Dry run")
-	assert.Contains(t, output, "No changes detected")
-	assert.Contains(t, output, "Plan:")
-	assert.Contains(t, output, "Results:")
-}
-
-func TestPrintSyncReport_DeferredOnlyDoesNotRenderFalseIdleOrResults(t *testing.T) {
-	t.Parallel()
-
-	cc, status := statusCC()
-
-	printSyncReport(&syncengine.Report{
-		Mode: syncengine.SyncUploadOnly,
-		DeferredByMode: syncengine.DeferredCounts{
-			Downloads:    1,
-			LocalDeletes: 1,
-		},
-	}, cc)
-
-	output := status.String()
-	assert.Contains(t, output, "Deferred by mode:")
-	assert.Contains(t, output, "Downloads:")
-	assert.Contains(t, output, "Local deletes:")
-	assert.NotContains(t, output, "No changes detected")
-	assert.NotContains(t, output, "Results:")
 }
 
 // --- newSyncCmd ---
@@ -959,10 +852,10 @@ paused = true
 `, runnableSyncDir)
 	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
 
-	var status bytes.Buffer
+	var status, output bytes.Buffer
 	cc := &CLIContext{
 		Logger:       slog.New(slog.DiscardHandler),
-		OutputWriter: io.Discard,
+		OutputWriter: &output,
 		StatusWriter: &status,
 		CfgPath:      cfgPath,
 	}
@@ -1017,5 +910,5 @@ paused = true
 	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
 	require.NoError(t, err)
 	assert.True(t, called)
-	assert.Contains(t, status.String(), "Skipped: mount is paused")
+	assert.Contains(t, output.String(), "Skipped (paused).")
 }

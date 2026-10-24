@@ -12,7 +12,62 @@ against [cli-output-guidelines.md](cli-output-guidelines.md).
   strings from `src/*.d` at master (2.5.12) and output users pasted into
   GitHub issues (#3300, #3344, #3463, #3609, #3718).
 
-## Verdict
+## After the console-output increment
+
+The fix list at the end was implemented in the increment that followed this
+audit (except the items marked otherwise there). The same journeys against
+the same account now print:
+
+```
+$ onedrive-go sync --dry-run
+Checking (dry run) ~/OneDrive with user@example.com...
+Would download Accessory Structures.pdf
+Would create folder Documents
+…
+Dry run, nothing was changed. Would download 19 files, create 2 folders.
+
+$ onedrive-go sync
+Syncing ~/OneDrive with user@example.com...
+Downloaded Accessory Structures.pdf (746.6 KB)
+Created folder Documents
+…
+Done in 6.2 s: downloaded 19 files (339.2 MB), created 2 folders.
+
+$ onedrive-go sync            # after deleting one local file
+Syncing ~/OneDrive with user@example.com...
+Deleted on OneDrive odgo-journey-test.txt
+Done in 2.5 s: deleted 1 file on OneDrive.
+
+$ onedrive-go sync            # nothing changed
+Syncing ~/OneDrive with user@example.com...
+Up to date (1.6 s).
+
+$ onedrive-go sync --watch    # local add, local delete, Ctrl-C
+[00:19:03] Watching ~/OneDrive for user@example.com.
+[00:19:03] Press Ctrl-C to stop.
+[00:19:26] Uploaded odgo-watch-test.txt (11 B)
+[00:19:49] Deleted on OneDrive odgo-watch-test.txt
+Stopping... (press Ctrl-C again to force quit)
+[00:20:08] Stopped.
+
+$ onedrive-go sync            # refresh token rejected (invalid_grant)
+Syncing ~/OneDrive with user@example.com...
+Authentication required: Microsoft no longer accepts the saved login for this account (it expired or was revoked). Run 'onedrive-go login' to sign in again.
+
+$ onedrive-go sync            # network unreachable
+Syncing ~/OneDrive with user@example.com...
+Warning: can't reach OneDrive, retrying (…, attempt=2, max_attempts=6, retry_in=2.1s, error="… connection refused")
+Warning: OneDrive still unreachable, giving up (…)
+Error: can't reach OneDrive through the configured proxy (connection refused). Check your network connection, then run the command again.
+```
+
+Two bugs surfaced while diagnosing the watch output and were fixed in the
+same increment: watch mode never advanced the delta token when a window held
+only deletes of items never synced here, so it replayed them (and warned)
+every poll; and closing the store with the canceled shutdown context made
+every clean Ctrl-C log a false checkpoint failure.
+
+## Verdict (at the time of the audit)
 
 The D client is chatty, sends everything (errors included) to stdout, has no
 journal priorities and spams progress lines into the journal. But at every
@@ -302,6 +357,14 @@ would put JSON objects into the journal, also all at priority info, and has no
 `sd_notify`. Neither detects `$JOURNAL_STREAM`.
 
 ## Fix list, in order of user impact
+
+Status: items 1–6 and 11 are done. Item 7 was resolved differently: `-v`
+stays the "extra detail" level (timestamped key=value logs, retried failures,
+full error chains) rather than a separate plain-words tier, because default
+output now carries the plain-words narrative. Item 9 is done for state and
+wording; canonical IDs stay in `drive list` because `drive add` takes them.
+Item 10 is done for journal priorities; `Type=notify` remains open. Item 8
+(progress bars) remains `[future]` (R-6.6.5).
 
 1. **Watch mode startup line and per-file activity lines** at default
    verbosity (stderr, timestamped when on a TTY and not the journal).

@@ -88,12 +88,15 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
 
+	console := newSyncConsole(cc, false)
+	console.Starting(standaloneMountSelectionFromResolvedDrives(drives).Mounts, opts.Mode, effectiveDryRun)
+
 	result := runSyncOnce(ctx, cc, holder, drives, opts.Mode, syncengine.RunOptions{
 		DryRun:        effectiveDryRun,
 		FullReconcile: opts.FullReconcile,
-	}, logger, controlSocketPath)
+	}, logger, controlSocketPath, console.Activity)
 
-	printRunOnceResult(result, cc)
+	console.Summary(result)
 
 	return runOnceResultError(result)
 }
@@ -112,6 +115,7 @@ func runSyncWatch(
 	if cc != nil && cc.seams.syncWatch != nil {
 		return cc.seams.syncWatch(ctx, holder, selectors, mode, opts, logger, statusWriter, controlSocketPath)
 	}
+	console := newSyncConsole(cc, true)
 	if cc != nil && cc.seams.syncDaemonOrchestrator != nil {
 		return runSyncDaemonWithFactory(
 			ctx,
@@ -122,11 +126,12 @@ func runSyncWatch(
 			logger,
 			statusWriter,
 			controlSocketPath,
+			console,
 			cc.seams.syncDaemonOrchestrator,
 		)
 	}
 
-	return runSyncDaemon(ctx, holder, selectors, mode, opts, logger, statusWriter, controlSocketPath)
+	return runSyncDaemon(ctx, holder, selectors, mode, opts, logger, statusWriter, controlSocketPath, console)
 }
 
 func runSyncOnce(
@@ -138,6 +143,7 @@ func runSyncOnce(
 	opts syncengine.RunOptions,
 	logger *slog.Logger,
 	controlSocketPath string,
+	activity func(multisync.MountActivity),
 ) multisync.RunOnceResult {
 	if cc != nil && cc.seams.syncRunOnce != nil {
 		return cc.seams.syncRunOnce(ctx, holder, drives, mode, opts, logger, controlSocketPath)
@@ -155,6 +161,7 @@ func runSyncOnce(
 		DataDir:                config.DefaultDataDir(),
 		Logger:                 logger,
 		ControlSocketPath:      controlSocketPath,
+		ActivityHook:           activity,
 		PerfParent:             perf.FromContext(ctx),
 	})
 

@@ -2390,6 +2390,64 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "token should not advance when 0 events returned")
 }
 
+// Regression: a delta window whose only items are deletes of never-synced
+// items converts to zero events. Treating that like an empty window kept the
+// old token, so every poll replayed the same deletes forever (and warned about
+// them each time). The window did carry items, so the token must advance.
+//
+// Validates: R-2.1.2
+func TestWatch_OnlyUnrecoverableDeletes_AdvancesToken(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	pollCount := 0
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{
+			{page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "gone-1", IsDeleted: true, DriveID: driveID},
+					{ID: "gone-2", IsDeleted: true, DriveID: driveID},
+				},
+				DeltaLink: "token-after-deletes",
+			}},
+		},
+	}
+
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	store := newTestStore(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
+		pollCount++
+		if pollCount >= 1 {
+			cancel()
+			return ctx.Err()
+		}
+
+		return nil
+	}}
+
+	batches := make(chan remoteObservationBatch, 10)
+	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
+		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
+	})
+	err := obs.Watch(
+		ctx,
+		"old-token",
+		batches,
+		time.Millisecond,
+		nil,
+		testPrimaryWatchBatchHandler(driveID),
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, "token-after-deletes", obs.CurrentDeltaToken(),
+		"a window that returned items must advance the token even when none converted to events")
+	assert.Equal(t, "token-after-deletes", readObservationCursor(t, store.rawDB(), driveID.String()),
+		"the advanced token must be committed so a restart does not replay the window")
+}
+
 // ---------------------------------------------------------------------------
 // Embedded shared-folder link handling
 // ---------------------------------------------------------------------------

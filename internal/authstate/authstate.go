@@ -13,6 +13,7 @@ const (
 	ReasonMissingLogin      Reason = "missing_login"
 	ReasonInvalidSavedLogin Reason = "invalid_saved_login"
 	ReasonSyncAuthRejected  Reason = "sync_auth_rejected"
+	ReasonSavedLoginExpired Reason = "saved_login_expired"
 )
 
 type Presentation struct {
@@ -57,6 +58,12 @@ func PresentationForReason(reason Reason) Presentation {
 			Title:  "Authentication required",
 			Reason: "The saved login for this account is invalid or unreadable.",
 			Action: "Run 'onedrive-go login' to sign in.",
+		}
+	case ReasonSavedLoginExpired:
+		return Presentation{
+			Title:  "Authentication required",
+			Reason: "Microsoft no longer accepts the saved login (it expired after a long time unused, or was revoked).",
+			Action: "Run 'onedrive-go login' to sign in again.",
 		}
 	case ReasonSyncAuthRejected:
 		return Presentation{

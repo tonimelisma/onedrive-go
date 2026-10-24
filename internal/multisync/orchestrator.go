@@ -95,7 +95,10 @@ type OrchestratorConfig struct {
 	ControlSocketPath      string
 	StartWarning           func(StartupWarning)
 	DebugEventHook         func(syncengine.DebugEvent)
-	PerfParent             *perf.Collector
+	// ActivityHook receives each finished user-visible file action, tagged
+	// with the mount it happened in. It must not block.
+	ActivityHook func(MountActivity)
+	PerfParent   *perf.Collector
 }
 
 // Orchestrator manages per-mount sync runners. It is always used, even for a
@@ -140,6 +143,9 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 			}
 			if cfg.DebugEventHook != nil {
 				engine.SetDebugEventHook(cfg.DebugEventHook)
+			}
+			if cfg.ActivityHook != nil {
+				engine.SetActivityHook(mountActivityHook(req.Mount, cfg.ActivityHook))
 			}
 			return engineRunnerAdapter{engine: engine}, nil
 		},

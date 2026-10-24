@@ -116,6 +116,14 @@ type tokenBridge struct {
 func (b *tokenBridge) Token() (string, error) {
 	t, err := b.src.Token()
 	if err != nil {
+		var retrieveErr *oauth2.RetrieveError
+		if errors.As(err, &retrieveErr) && retrieveErr.ErrorCode == "invalid_grant" {
+			// The caller reports this as "sign-in required"; logging it as a
+			// warning as well would only repeat the same fact less clearly.
+			b.logger.Debug("saved login rejected", slog.String("error", err.Error()))
+			return "", fmt.Errorf("graph: obtaining token: %w: %w: %w", ErrLoginExpired, ErrUnauthorized, err)
+		}
+
 		b.logger.Warn("token acquisition failed", slog.String("error", err.Error()))
 		return "", fmt.Errorf("graph: obtaining token: %w", err)
 	}

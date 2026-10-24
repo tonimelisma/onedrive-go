@@ -28,10 +28,8 @@ func shutdownContext(parent context.Context, logger *slog.Logger) (context.Conte
 		defer signal.Stop(sigCh)
 
 		select {
-		case sig := <-sigCh:
-			logger.Info("received signal, initiating graceful shutdown",
-				slog.String("signal", sig.String()),
-			)
+		case <-sigCh:
+			logger.Info("Stopping... (press Ctrl-C again to force quit)")
 			cancel()
 		case <-ctx.Done():
 			return
@@ -39,10 +37,8 @@ func shutdownContext(parent context.Context, logger *slog.Logger) (context.Conte
 
 		// Wait for second signal — force exit.
 		select {
-		case sig := <-sigCh:
-			logger.Warn("received second signal, forcing exit",
-				slog.String("signal", sig.String()),
-			)
+		case <-sigCh:
+			logger.Warn("Forcing exit")
 			os.Exit(1)
 		case <-parent.Done():
 			return

@@ -119,7 +119,8 @@ func printConfiguredDrives(w io.Writer, entries []driveListEntry) error {
 			syncDir = syncDirNotSet
 		}
 
-		if err := writef(w, fmtStr, driveLabel(&entries[i]), syncDir, driveAuthLabel(&entries[i]), entries[i].State); err != nil {
+		state := driveStateLabel(entries[i].State)
+		if err := writef(w, fmtStr, driveLabel(&entries[i]), syncDir, driveAuthLabel(&entries[i]), state); err != nil {
 			return err
 		}
 	}
@@ -273,4 +274,17 @@ func driveListSharedOwnerLabel(entry *driveListEntry) string {
 	}
 
 	return ""
+}
+
+// driveStateLabel renders a drive state enum as words for text output; JSON
+// keeps the enum.
+func driveStateLabel(state string) string {
+	switch state {
+	case driveStateReady:
+		return "up to date"
+	case driveStateNotSynced:
+		return "not synced yet"
+	default:
+		return strings.ReplaceAll(state, "_", " ")
+	}
 }

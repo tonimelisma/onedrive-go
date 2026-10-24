@@ -23,7 +23,12 @@ const (
 	driveStatePaused      = "paused"
 	driveStateIssues      = "issues"
 	driveStateUnavailable = "unavailable"
-	syncDirNotSet         = "(not set)"
+	driveStateNotSynced   = "not_synced"
+
+	// driveStateLabelSyncing is the display word for an active sync, shared by
+	// status and the sync console.
+	driveStateLabelSyncing = "Syncing"
+	syncDirNotSet          = "(not set)"
 )
 
 const (

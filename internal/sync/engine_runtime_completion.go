@@ -31,6 +31,7 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 
 	decision := classifyResult(r)
 	current := flow.sched.trackedActionForCompletion(r)
+	flow.engine.emitActivity(r, decision.Class)
 
 	var (
 		dispatched []*trackedAction

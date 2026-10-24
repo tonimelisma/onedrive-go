@@ -59,6 +59,12 @@ func (m *mockSavedLoginChecker) CheckAccountAuth(_ context.Context, _ string, _ 
 			Reason: authReasonSyncAuthRejected,
 			Action: authAction(authReasonSyncAuthRejected),
 		}
+	case authReasonSavedLoginExpired:
+		return accountAuthHealth{
+			State:  authStateAuthenticationNeeded,
+			Reason: authReasonSavedLoginExpired,
+			Action: authAction(authReasonSavedLoginExpired),
+		}
 	default:
 		return accountAuthHealth{State: authStateReady}
 	}

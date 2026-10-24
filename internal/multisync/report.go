@@ -157,3 +157,27 @@ func (e *WatchStartupError) Error() string {
 
 	return fmt.Sprintf("%d mounts failed to start in watch mode", len(failures))
 }
+
+// MountActivity is one finished file action together with the mount it ran
+// in, so a caller watching several mounts can say where it happened.
+type MountActivity struct {
+	Identity    MountIdentity
+	DisplayName string
+	SyncRoot    string
+	Activity    syncengine.Activity
+}
+
+func mountActivityHook(mount *mountSpec, hook func(MountActivity)) func(syncengine.Activity) {
+	identity := mount.identity()
+	displayName := mount.displayName()
+	syncRoot := mount.syncRoot()
+
+	return func(activity syncengine.Activity) {
+		hook(MountActivity{
+			Identity:    identity,
+			DisplayName: displayName,
+			SyncRoot:    syncRoot,
+			Activity:    activity,
+		})
+	}
+}

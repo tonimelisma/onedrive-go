@@ -112,7 +112,11 @@ func openSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, ensu
 // after `sync`) see all committed data when they open a new connection to the
 // same database file.
 func (s *SyncStore) Close(ctx context.Context) error {
-	if err := s.Checkpoint(ctx); err != nil {
+	// Close usually runs during shutdown, when ctx is already canceled. The
+	// checkpoint is short local I/O that cross-process readers depend on, so
+	// it must not be skipped (or reported as a failure) just because the
+	// caller is stopping.
+	if err := s.Checkpoint(context.WithoutCancel(ctx)); err != nil {
 		s.logger.Warn("checkpoint failed on close", slog.String("error", err.Error()))
 	}
 

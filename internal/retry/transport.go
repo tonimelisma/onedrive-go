@@ -107,6 +107,9 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 }
 
+// retryLogPrecision rounds logged backoff delays to what a person can read.
+const retryLogPrecision = 100 * time.Millisecond
+
 func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attempt int, sleepFn SleepFunc) (bool, error) {
 	if req.Context().Err() != nil {
 		return false, fmt.Errorf("retry: request canceled: %w", req.Context().Err())
@@ -121,11 +124,19 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 		if collector := perf.FromContext(req.Context()); collector != nil {
 			collector.RecordHTTPRetry(backoff)
 		}
-		rt.Logger.Debug("retrying after network error",
+		// A single blip retries silently (R-6.6.8). Once a second attempt has
+		// failed too, say so once, so a person is not left watching 30
+		// seconds of silence while the remaining attempts back off.
+		level := slog.LevelDebug
+		if attempt == 1 {
+			level = slog.LevelWarn
+		}
+		rt.Logger.Log(req.Context(), level, "can't reach OneDrive, retrying",
 			slog.String("method", req.Method),
 			slog.String("url", logTarget),
 			slog.Int("attempt", attempt+1),
-			slog.Duration("backoff", backoff),
+			slog.Int("max_attempts", rt.Policy.MaxAttempts+1),
+			slog.Duration("retry_in", backoff.Round(retryLogPrecision)),
 			slog.String("error", err.Error()),
 		)
 
@@ -136,7 +147,7 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 		return true, nil
 	}
 
-	rt.Logger.Warn("request failed after all retries",
+	rt.Logger.Warn("OneDrive still unreachable, giving up",
 		slog.String("method", req.Method),
 		slog.String("url", logTarget),
 		slog.Int("attempts", attempt+1),
