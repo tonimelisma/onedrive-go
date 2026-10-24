@@ -294,6 +294,37 @@ func postControlJSON(t *testing.T, socketPath string, path string, body []byte) 
 	return decoded
 }
 
+// postControlJSONAnyStatus sends one control request, retrying only until the
+// socket accepts it, and returns whatever status the owner answered with.
+func postControlJSONAnyStatus(
+	t *testing.T,
+	socketPath string,
+	path string,
+	body []byte,
+) (int, synccontrol.MutationResponse) {
+	t.Helper()
+
+	client := controlTestClient(socketPath)
+	var decoded synccontrol.MutationResponse
+	statusCode := 0
+	require.Eventually(t, func() bool {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, synccontrol.HTTPBaseURL+path, bytes.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+
+		// #nosec G704 -- fixed Unix-domain test socket client.
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		statusCode = resp.StatusCode
+		return json.NewDecoder(resp.Body).Decode(&decoded) == nil
+	}, 5*time.Second, 10*time.Millisecond, "control socket request was not answered")
+
+	return statusCode, decoded
+}
+
 func controlTestClient(socketPath string) *http.Client {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -2341,6 +2372,8 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot(
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
+	clock := newTestClock()
+	orch.now = clock.now
 
 	child := testChildRecord(t, mountID(parent.CanonicalID.String()), "binding-exit", "Shortcuts/Exit")
 	childWork := newParentChildWorkSnapshots()
@@ -2410,6 +2443,19 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot(
 	require.True(t, childCanceled)
 	assert.NotContains(t, runners, childMount.id())
 	assert.Empty(t, childWork.latestFor(parentMount.id()).RunCommands)
+	// A failed runner restarts after its backoff, not in the same pass.
+	assert.Empty(t, restarted)
+	assert.NotContains(t, runners, parentMount.id())
+
+	clock.advance(runnerRestartBaseDelay)
+	orch.reconcileWatchRunners(
+		ctx,
+		syncengine.SyncBidirectional,
+		syncengine.WatchOptions{},
+		runners,
+		make(chan watchRunnerEvent, 4),
+		childWork,
+	)
 	assert.Equal(t, []mountID{parentMount.id()}, restarted)
 
 	cancel()
@@ -3240,7 +3286,7 @@ func TestOrchestrator_Reload_PausedMount(t *testing.T) {
 	}
 }
 
-// Validates: R-2.4
+// Validates: R-2.4, R-2.9.3
 func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:invalidcfg@example.com", "InvalidCfg")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
@@ -3275,9 +3321,16 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 		return started.Load() >= 1
 	}, 5*time.Second, 10*time.Millisecond)
 
-	// Write invalid TOML and request a control-socket reload; old state should remain.
+	// Write invalid TOML and request a control-socket reload; old state should
+	// remain, and the requester must be told the reload did not apply instead
+	// of getting "reloaded".
 	require.NoError(t, os.WriteFile(cfgPath, []byte("{{invalid toml"), 0o600))
-	postControlReload(t, cfg.ControlSocketPath)
+	statusCode, response := postControlJSONAnyStatus(t, cfg.ControlSocketPath, synccontrol.PathReload, nil)
+	assert.Equal(t, http.StatusUnprocessableEntity, statusCode)
+	assert.Equal(t, synccontrol.StatusError, response.Status)
+	assert.Equal(t, synccontrol.ErrorReloadFailed, response.Code)
+	assert.Contains(t, response.Message, "kept its previous settings")
+	assert.Contains(t, response.Message, "loading config for reload")
 
 	assert.Never(t, func() bool {
 		return started.Load() > 1
@@ -3453,7 +3506,7 @@ func TestOrchestrator_RunWatch_ZeroMounts(t *testing.T) {
 
 	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no standalone mounts")
+	assert.Contains(t, err.Error(), "no drives selected for sync")
 }
 
 // --- test config helpers ---

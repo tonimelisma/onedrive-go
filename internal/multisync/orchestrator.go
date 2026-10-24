@@ -2,7 +2,6 @@ package multisync
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	gosync "sync"
 	"time"
@@ -27,16 +26,16 @@ type engineRunnerAdapter struct {
 	engine *syncengine.Engine
 }
 
+// The adapter returns engine errors as they are. The engine already names
+// what it was doing, and this layer adds no information: a wrapper here only
+// put "run sync engine once:" in front of every per-drive error a user sees.
 func (a engineRunnerAdapter) RunOnce(
 	ctx context.Context,
 	mode syncengine.SyncMode,
 	opts syncengine.RunOptions,
 ) (*syncengine.Report, error) {
-	report, err := a.engine.RunOnce(ctx, mode, opts)
-	if err != nil {
-		return report, fmt.Errorf("run sync engine once: %w", err)
-	}
-	return report, nil
+	//nolint:wrapcheck // The engine error already carries its own context; see the adapter comment.
+	return a.engine.RunOnce(ctx, mode, opts)
 }
 
 func (a engineRunnerAdapter) RunWatch(
@@ -44,17 +43,13 @@ func (a engineRunnerAdapter) RunWatch(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 ) error {
-	if err := a.engine.RunWatch(ctx, mode, opts); err != nil {
-		return fmt.Errorf("run sync engine watch: %w", err)
-	}
-	return nil
+	//nolint:wrapcheck // The engine error already carries its own context; see the adapter comment.
+	return a.engine.RunWatch(ctx, mode, opts)
 }
 
 func (a engineRunnerAdapter) Close(ctx context.Context) error {
-	if err := a.engine.Close(ctx); err != nil {
-		return fmt.Errorf("close sync engine: %w", err)
-	}
-	return nil
+	//nolint:wrapcheck // The engine error already carries its own context; see the adapter comment.
+	return a.engine.Close(ctx)
 }
 
 func (a engineRunnerAdapter) ShortcutChildAckHandle() shortcutChildAckHandle {
@@ -116,7 +111,15 @@ type Orchestrator struct {
 	// clients. Durable recovery remains in parent shortcut_roots.
 	shortcutCleanupDiagnostics []synccontrol.ShortcutCleanupDiagnostic
 	reconcileTicks             func(time.Duration) (<-chan time.Time, func())
-	artifactCleanup            shortcutChildArtifactCleanupExecutor
+	// restartTimer arms the one-shot wake-up for the earliest backed-off
+	// watch runner restart. Injectable so tests control time.
+	restartTimer func(time.Duration) (<-chan time.Time, func())
+	// now is the clock for restart backoff; nil means time.Now.
+	now             func() time.Time
+	artifactCleanup shortcutChildArtifactCleanupExecutor
+	// watchReportMemory is owned by the RunWatch select loop; see
+	// watchReportState. It is reset at the start of each RunWatch.
+	watchReportMemory *watchReportState
 }
 
 // NewOrchestrator creates an Orchestrator with real Engine factory.
@@ -128,7 +131,7 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 		engineFactory: func(ctx context.Context, req engineFactoryRequest) (engineRunner, error) {
 			mountCfg, err := engineMountConfigForMount(req.Mount, cfg.DataDir)
 			if err != nil {
-				return nil, fmt.Errorf("engine mount config: %w", err)
+				return nil, err
 			}
 			engine, err := syncengine.NewMountEngine(
 				ctx,
@@ -139,7 +142,8 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 				req.VerifyDrive,
 			)
 			if err != nil {
-				return nil, fmt.Errorf("new engine: %w", err)
+				//nolint:wrapcheck // The engine names its own startup failure; the caller names the drive.
+				return nil, err
 			}
 			if cfg.DebugEventHook != nil {
 				engine.SetDebugEventHook(cfg.DebugEventHook)
@@ -160,5 +164,11 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 			ticker := time.NewTicker(interval)
 			return ticker.C, ticker.Stop
 		},
+		restartTimer: newRestartTimer,
 	}
+}
+
+func newRestartTimer(delay time.Duration) (<-chan time.Time, func()) {
+	timer := time.NewTimer(delay)
+	return timer.C, func() { timer.Stop() }
 }

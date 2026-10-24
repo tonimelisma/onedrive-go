@@ -41,7 +41,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 	}
 	control, err := o.startControlServer(ctx, synccontrol.OwnerModeOneShot, nil)
 	if err != nil {
-		return controlFailureRunOnceResult(o.cfg.StandaloneMounts, o.cfg.InitialStartupResults, err)
+		return processFailureRunOnceResult(err)
 	}
 	if control != nil {
 		defer o.closeControlSocket(ctx, control)
@@ -49,16 +49,12 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 
 	parentMounts, err := buildStandaloneMountSpecs(o.cfg.StandaloneMounts)
 	if err != nil {
-		return controlFailureRunOnceResult(
-			o.cfg.StandaloneMounts,
-			o.cfg.InitialStartupResults,
-			fmt.Errorf("building mount specs: %w", err),
-		)
+		return processFailureRunOnceResult(err)
 	}
 	o.setControlMountIDs(mountIDsForSpecs(parentMounts))
 
-	o.logger.Info("orchestrator starting RunOnce",
-		slog.Int("mounts", len(parentMounts)),
+	o.logger.Info("Syncing drives",
+		slog.Int("drives", len(parentMounts)),
 		slog.String("mode", mode.String()),
 	)
 
@@ -81,7 +77,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 
 	allReports := append([]*MountReport{}, parentReports...)
 	allReports = append(allReports, childCoordinator.reports()...)
-	o.logger.Info("orchestrator RunOnce complete", slog.Int("reports", len(allReports)))
+	o.logger.Info("Sync pass finished", slog.Int("drives", len(allReports)))
 
 	startupResults := append([]MountStartupResult{}, parentStartup.Results...)
 	startupResults = append(startupResults, childCoordinator.startupResults()...)
@@ -127,30 +123,18 @@ func runIndexedParentMountWork(
 	wg.Wait()
 }
 
-func controlFailureRunOnceResult(
-	configs []StandaloneMountConfig,
-	initialStartup []MountStartupResult,
-	err error,
-) RunOnceResult {
-	mounts, buildErr := buildStandaloneMountSpecs(configs)
-	if buildErr != nil {
-		results := append([]MountStartupResult(nil), initialStartup...)
-		results = append(results, MountStartupResult{
-			Status: MountStartupFatal,
-			Err:    fmt.Errorf("building mount specs: %w", buildErr),
-		})
-		return RunOnceResult{
-			Startup: summarizeStartupResults(results),
-		}
-	}
-
-	results := append([]MountStartupResult(nil), initialStartup...)
-	for i := range mounts {
-		results = append(results, mountStartupResultForMount(mounts[i], err))
-	}
-
+// processFailureRunOnceResult reports a failure that stops the whole run
+// before any drive starts, such as another sync already owning the control
+// socket. It is one condition, so it is one result with no drive identity:
+// copying it onto every selected drive printed the same line once per drive.
+// Per-drive config failures from InitialStartupResults are left out on
+// purpose; the next run that gets past this point reports them.
+func processFailureRunOnceResult(err error) RunOnceResult {
 	return RunOnceResult{
-		Startup: summarizeStartupResults(results),
+		Startup: summarizeStartupResults([]MountStartupResult{{
+			Status: classifyMountStartupError(err),
+			Err:    err,
+		}}),
 	}
 }
 
@@ -188,7 +172,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 		if err != nil {
 			startResults = append(startResults, mountStartupResultForMount(
 				mount,
-				fmt.Errorf("session error for mount %s: %w", mount.label(), err),
+				fmt.Errorf("connect to OneDrive: %w", err),
 			))
 			continue
 		}
@@ -240,7 +224,7 @@ func (o *Orchestrator) buildEngineWork(
 	})
 	if engineErr != nil {
 		o.removeMountPerfCollector(mount.id().String())
-		return mountWork{}, fmt.Errorf("engine creation failed for mount %s: %w", mount.label(), engineErr)
+		return mountWork{}, engineErr
 	}
 
 	return mountWork{
@@ -288,11 +272,7 @@ func (o *Orchestrator) closeRunOnceEngine(ctx context.Context, mount *mountSpec,
 		return
 	}
 	defer o.removeMountPerfCollector(mount.id().String())
-	if closeErr := engine.Close(ctx); closeErr != nil {
-		o.logger.Warn("engine close error",
-			slog.String("mount_id", mount.id().String()),
-			slog.String("error", closeErr.Error()))
-	}
+	o.closeEngine(ctx, mount, engine)
 }
 
 func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
@@ -370,18 +350,18 @@ func acknowledgeSuccessfulFinalDrains(
 	for _, result := range successful {
 		mount := mountByID[result.MountID]
 		if mount == nil || result.AckRef.IsZero() {
-			return nil, fmt.Errorf("final-drain child mount %s is missing parent acknowledgement reference", result.MountID)
+			return nil, fmt.Errorf("removed shortcut %s has no reference to its drive's removal record", result.MountID)
 		}
 		parentID := mount.childParentMountID()
 		acker := parentAckers[parentID]
 		if shortcutChildAckHandleIsZero(acker) {
-			return nil, fmt.Errorf("parent mount %s is unavailable for final-drain acknowledgement", parentID)
+			return nil, fmt.Errorf("drive %s is not running, so removed shortcut %s can't be released yet", parentID, mount.label())
 		}
 		snapshot, err := acker.AcknowledgeChildFinalDrain(ctx, syncengine.ShortcutChildDrainAck{
 			Ref: result.AckRef,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("acknowledging final drain for child mount %s: %w", result.MountID, err)
+			return nil, fmt.Errorf("release removed shortcut %s: %w", mount.label(), err)
 		}
 		publishedCleanups, cleanupErr := shortcutChildArtifactCleanups(map[mountID]syncengine.ShortcutChildWorkSnapshot{
 			parentID: snapshot,

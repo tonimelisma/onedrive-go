@@ -13,7 +13,7 @@ import (
 // synthesized by multisync.
 func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.EngineMountConfig, error) {
 	if mount == nil {
-		return nil, fmt.Errorf("multisync: mount is required")
+		return nil, fmt.Errorf("mount is required")
 	}
 
 	cfg := &syncengine.EngineMountConfig{
@@ -42,7 +42,7 @@ func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.En
 			mount.shortcutChildRunCommand(),
 			cfg,
 		); err != nil {
-			return nil, fmt.Errorf("multisync: apply parent-declared child engine input: %w", err)
+			return nil, fmt.Errorf("apply shortcut settings: %w", err)
 		}
 	}
 	return cfg, nil

@@ -60,8 +60,10 @@ type ControlSocketInUseError struct {
 	Path string
 }
 
+// Error names the condition and the way out. The socket path is an internal
+// detail kept on the struct for diagnostics; it is not part of the message.
 func (e *ControlSocketInUseError) Error() string {
-	return fmt.Sprintf("another sync process is already running (control socket %s is live)", e.Path)
+	return "another onedrive-go sync is already running; stop it or wait for it to finish, then try again"
 }
 
 type controlSocketServer struct {
@@ -116,7 +118,7 @@ func startControlSocketServer(
 	go func() {
 		defer close(control.done)
 		if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			logger.Error("control socket server exited",
+			logger.Warn("The control channel stopped; status, pause and resume can't reach this sync until it restarts",
 				slog.String("path", path),
 				slog.String("error", serveErr.Error()),
 			)
@@ -128,7 +130,9 @@ func startControlSocketServer(
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), controlCloseTimeout)
 		defer cancel()
 		if closeErr := control.Close(shutdownCtx); closeErr != nil {
-			logger.Warn("close control socket after context cancellation",
+			// Shutdown path: a leftover socket file is detected as stale and
+			// replaced by the next sync, so this is not worth a warning.
+			logger.Debug("close control socket after context cancellation",
 				slog.String("path", path),
 				slog.String("error", closeErr.Error()),
 			)
@@ -168,7 +172,8 @@ func assertControlSocketDirSafe(dir string) error {
 	if mode.Perm()&controlSocketDirOtherWrite != 0 && mode&os.ModeSticky == 0 {
 		return fmt.Errorf(
 			"control socket directory %s is writable by other users without the sticky bit (mode %#o); "+
-				"another user could replace the socket", dir, mode.Perm())
+				"another user could replace the socket. Run 'chmod 700 %s'",
+			dir, mode.Perm(), dir)
 	}
 
 	stat, ok := info.Sys().(*syscall.Stat_t)
@@ -179,7 +184,8 @@ func assertControlSocketDirSafe(dir string) error {
 	if owner := stat.Uid; owner != uint32(os.Getuid()) && owner != 0 {
 		return fmt.Errorf(
 			"control socket directory %s is owned by uid %d, not this user or root; "+
-				"its owner could replace the socket", dir, owner)
+				"its owner could replace the socket. Point TMPDIR or XDG_DATA_HOME at a directory only you own",
+			dir, owner)
 	}
 
 	return nil
@@ -195,6 +201,8 @@ func listenControlSocket(ctx context.Context, path string) (net.Listener, error)
 	if controlSocketLive(ctx, path) {
 		return nil, &ControlSocketInUseError{Path: path}
 	}
+	// The socket did not answer, so it is a leftover from a sync that exited
+	// without cleaning up; it is replaced below.
 	if removeErr := localpath.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("remove stale control socket %s: %w", path, removeErr)
 	}
@@ -483,12 +491,8 @@ func (o *Orchestrator) capturePerf(ctx context.Context, opts perf.CaptureOptions
 		return perf.CaptureResult{}, perf.ErrCaptureUnavailable
 	}
 
-	result, err := o.perfRuntime.Capture(ctx, opts)
-	if err != nil {
-		return perf.CaptureResult{}, fmt.Errorf("capture perf: %w", err)
-	}
-
-	return result, nil
+	//nolint:wrapcheck // perf errors already say "capture ..."; a "capture perf:" prefix only stuttered.
+	return o.perfRuntime.Capture(ctx, opts)
 }
 
 func perfCaptureOptionsFromRequest(
@@ -502,6 +506,12 @@ func perfCaptureOptionsFromRequest(
 	duration := time.Duration(request.DurationMS) * time.Millisecond
 	if duration <= 0 {
 		return perf.CaptureOptions{}, fmt.Errorf("perf capture duration must be greater than zero")
+	}
+	// The owner runs in its own working directory, so a relative path would
+	// not mean what the requester typed. Clients send absolute paths (see
+	// synccontrol.PerfCaptureRequest.MarshalJSON).
+	if request.OutputDir != "" && !filepath.IsAbs(request.OutputDir) {
+		return perf.CaptureOptions{}, fmt.Errorf("perf capture output directory %q must be an absolute path", request.OutputDir)
 	}
 
 	return perf.CaptureOptions{
@@ -537,7 +547,17 @@ func (o *Orchestrator) handleControlCommand(
 	case controlCommandStatus:
 		cmd.response <- controlResponse{Body: o.controlStatus(ctx, synccontrol.OwnerModeWatch)}
 	case controlCommandReload:
-		o.reload(ctx, mode, opts, runners, runnerEvents, childWork)
+		if err := o.reload(ctx, mode, opts, runners, runnerEvents, childWork); err != nil {
+			// The client that asked for the reload (pause, resume, drive add,
+			// login) must learn the running sync kept its old settings;
+			// answering "reloaded" here made those commands report success.
+			cmd.response <- controlResponse{
+				StatusCode: http.StatusUnprocessableEntity,
+				Code:       synccontrol.ErrorReloadFailed,
+				Err:        fmt.Errorf("the running sync couldn't apply the new config and kept its previous settings: %w", err),
+			}
+			return false
+		}
 		cmd.response <- controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.StatusReloaded}}
 	case controlCommandStop:
 		cmd.response <- controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.StatusStopping}}

@@ -69,7 +69,10 @@ func (o *Orchestrator) receiveParentChildWorkSnapshotFromParent(
 	}
 	if snapshot.NamespaceID != parent.id().String() {
 		if o != nil && o.logger != nil {
-			o.logger.Warn("ignoring parent child work snapshot from mismatched namespace",
+			// An internal invariant the user can do nothing about, and it would
+			// repeat on every publish from this parent; the snapshot is
+			// dropped, so no wrong child work can start from it.
+			o.logger.Debug("ignoring parent child work snapshot from mismatched namespace",
 				"namespace_id", snapshot.NamespaceID,
 				"parent_id", parent.id().String(),
 			)

@@ -63,7 +63,7 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsStateArtifactRemoveFailure(
 
 	require.Error(t, err)
 	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupStateArtifactFailure)
-	assert.Contains(t, err.Error(), "remove child state artifact")
+	assert.Contains(t, err.Error(), "delete its sync state")
 	assert.Contains(t, err.Error(), "state db locked")
 }
 
@@ -116,7 +116,7 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsUploadSessionFailure(t *tes
 
 	require.Error(t, err)
 	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupUploadSessionFailure)
-	assert.Contains(t, err.Error(), "delete child upload sessions")
+	assert.Contains(t, err.Error(), "discard its unfinished uploads")
 	assert.Contains(t, err.Error(), "session store unavailable")
 }
 

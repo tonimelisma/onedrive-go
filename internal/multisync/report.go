@@ -144,18 +144,22 @@ type WatchStartupError struct {
 
 func (e *WatchStartupError) Error() string {
 	if e == nil || e.Summary.SelectedCount() == 0 {
-		return "watch startup failed"
+		return "no drives could start syncing; run 'onedrive-go status' for details"
 	}
 	if e.Summary.AllPaused() {
-		return "watch startup failed: all selected mounts are paused"
+		return "all selected drives are paused; run 'onedrive-go resume' to unpause"
 	}
 	failures := e.Summary.SkippedResults()
 	if len(failures) == 1 {
 		failure := failures[0]
-		return fmt.Sprintf("watch startup failed for %s: %v", failure.Identity.Label(), failure.Err)
+		name := failure.DisplayName
+		if name == "" {
+			name = failure.Identity.Label()
+		}
+		return fmt.Sprintf("%s could not start syncing: %v", name, failure.Err)
 	}
 
-	return fmt.Sprintf("%d mounts failed to start in watch mode", len(failures))
+	return fmt.Sprintf("%d drives could not start syncing; run 'onedrive-go status' for details", len(failures))
 }
 
 // MountActivity is one finished file action together with the mount it ran

@@ -92,5 +92,5 @@ func TestAcknowledgeSuccessfulFinalDrainsRequiresLiveParentAck(t *testing.T) {
 	)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parent mount parent is unavailable for final-drain acknowledgement")
+	assert.Contains(t, err.Error(), "drive parent is not running, so removed shortcut child can't be released yet")
 }

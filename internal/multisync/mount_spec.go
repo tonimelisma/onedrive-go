@@ -245,7 +245,8 @@ func buildChildMountSpecs(
 		parent := parentByID[declared.namespaceID]
 		if parent == nil {
 			skipped = append(skipped, childCommandStartupResult(declared.namespaceID, &declared.command, 0, fmt.Errorf(
-				"child mount %s references missing parent mount %s",
+				"shortcut %s belongs to a drive that is no longer selected for sync, so it will not sync (child %s, drive %s)",
+				childCommandLabel(&declared.command, childMountID),
 				childMountID,
 				declared.namespaceID,
 			)))
@@ -325,6 +326,15 @@ func assembleRuntimeMountSet(
 	return finalMounts
 }
 
+// childCommandLabel names a shortcut for messages: its display name when the
+// parent supplied one, else its child mount ID.
+func childCommandLabel(command *syncengine.ShortcutChildRunCommand, childMountID string) string {
+	if command != nil && command.DisplayName != "" {
+		return fmt.Sprintf("%q", command.DisplayName)
+	}
+	return childMountID
+}
+
 func childCommandStartupResult(
 	parentID mountID,
 	command *syncengine.ShortcutChildRunCommand,
@@ -360,10 +370,10 @@ func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
 
 func newParentMountSpec(cfg *StandaloneMountConfig) (parentMountSpec, error) {
 	if cfg == nil || cfg.CanonicalID.IsZero() {
-		return parentMountSpec{}, fmt.Errorf("multisync: standalone mount canonical ID is required")
+		return parentMountSpec{}, fmt.Errorf("standalone mount canonical ID is required")
 	}
 	if cfg.StatePath == "" {
-		return parentMountSpec{}, fmt.Errorf("multisync: state path is required for %s", cfg.CanonicalID)
+		return parentMountSpec{}, fmt.Errorf("state path is required for %s", cfg.CanonicalID)
 	}
 	accountEmail := cfg.AccountEmail
 	if accountEmail == "" {
@@ -431,7 +441,7 @@ func buildChildMountFromCommand(
 	dataDir string,
 ) (*mountSpec, error) {
 	if parent == nil || command == nil {
-		return nil, fmt.Errorf("multisync: parent-declared child run command is incomplete")
+		return nil, fmt.Errorf("parent-declared child run command is incomplete")
 	}
 	childMountID, err := validateChildRunCommand(command)
 	if err != nil {
@@ -439,7 +449,7 @@ func buildChildMountFromCommand(
 	}
 	statePath := config.MountStatePathForDataDir(dataDir, childMountID)
 	if statePath == "" {
-		return nil, fmt.Errorf("multisync: state path is required for child mount %s", childMountID)
+		return nil, fmt.Errorf("state path is required for child mount %s", childMountID)
 	}
 
 	displayName := command.DisplayName
@@ -452,7 +462,7 @@ func buildChildMountFromCommand(
 func validateChildRunCommand(command *syncengine.ShortcutChildRunCommand) (string, error) {
 	childMountID, err := syncengine.ValidateShortcutChildRunCommand(command)
 	if err != nil {
-		return "", fmt.Errorf("multisync: parent-declared child run command: %w", err)
+		return "", fmt.Errorf("parent-declared child run command: %w", err)
 	}
 	return childMountID, nil
 }
@@ -771,7 +781,13 @@ func cloneContentFilterConfig(filter syncengine.ContentFilterConfig) syncengine.
 	}
 }
 
+// label names the mount for people: its display name (the drive name, or the
+// shortcut name for a child), falling back to the stable identifier. Logs that
+// need the identifier itself carry mount_id separately.
 func (m *mountSpec) label() string {
+	if name := m.displayName(); name != "" {
+		return name
+	}
 	identity := m.identity()
 	return identity.Label()
 }
