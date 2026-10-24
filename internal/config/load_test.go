@@ -351,7 +351,7 @@ sync_dir = "~/Work"
 		testLogger(t),
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "multiple drives")
+	assert.Contains(t, err.Error(), "several drives are configured")
 }
 
 func TestResolveDrive_CLIDriveSelector(t *testing.T) {

@@ -681,7 +681,7 @@ sync_dir = "` + tmpDir + `/two"
 	_, _, err = loadAndResolve(cmd, flags, config.EnvOverrides{}, logger)
 	require.Error(t, err)
 	// MatchDrive errors are returned unwrapped — they're user-facing messages.
-	assert.Contains(t, err.Error(), "multiple drives configured")
+	assert.Contains(t, err.Error(), "several drives are configured")
 }
 
 func TestLoadAndResolve_NoDoubleWrapping(t *testing.T) {
