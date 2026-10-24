@@ -67,7 +67,7 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 
 	sourceItem, err := session.ResolveItem(ctx, sourcePath)
 	if err != nil {
-		return fmt.Errorf("resolving source %q: %w", sourcePath, err)
+		return newRemoteOpError("resolving source", sourcePath, err)
 	}
 
 	dest, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
@@ -86,13 +86,13 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 	// between delete and copy. Server-side copy has no atomic overwrite.
 	if dest.existingID != "" {
 		if delErr := session.DeleteResolvedPath(ctx, destPath, dest.existingID); delErr != nil {
-			return fmt.Errorf("deleting existing %q: %w", destPath, delErr)
+			return newRemoteOpError("deleting existing", destPath, delErr)
 		}
 	}
 
 	copyResult, err := session.CopyItem(ctx, sourceItem.ID, dest.parentID, dest.newName)
 	if err != nil {
-		return fmt.Errorf("copying %q: %w", sourcePath, err)
+		return newRemoteOpError("copying", sourcePath, err)
 	}
 
 	resourceID, err := awaitCopy(ctx, cc, session.Meta, copyResult.MonitorURL)

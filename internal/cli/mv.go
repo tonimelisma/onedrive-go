@@ -77,14 +77,14 @@ func resolveDest(
 
 	// Attempt 2: if not found, split into parent + name and resolve parent.
 	if !errors.Is(resolveErr, graph.ErrNotFound) {
-		return destInfo{}, fmt.Errorf("resolving destination %q: %w", destPath, resolveErr)
+		return destInfo{}, newRemoteOpError("resolving destination", destPath, resolveErr)
 	}
 
 	parentPath, destName := driveops.SplitParentAndName(destPath)
 
 	parentItem, parentErr := session.ResolveItem(ctx, parentPath)
 	if parentErr != nil {
-		return destInfo{}, fmt.Errorf("resolving destination parent %q: %w", parentPath, parentErr)
+		return destInfo{}, newRemoteOpError("resolving destination parent", parentPath, parentErr)
 	}
 
 	if !parentItem.IsFolder {
@@ -147,7 +147,7 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 
 	sourceItem, err := session.ResolveItem(ctx, sourcePath)
 	if err != nil {
-		return fmt.Errorf("resolving source %q: %w", sourcePath, err)
+		return newRemoteOpError("resolving source", sourcePath, err)
 	}
 
 	dest, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
@@ -168,7 +168,7 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 	// between delete and move. The Graph API has no atomic overwrite for moves.
 	if dest.existingID != "" && !isSelfReference(sourceItem.ID, dest) {
 		if delErr := session.DeleteResolvedPath(ctx, destPath, dest.existingID); delErr != nil {
-			return fmt.Errorf("deleting existing %q: %w", destPath, delErr)
+			return newRemoteOpError("deleting existing", destPath, delErr)
 		}
 	}
 
@@ -188,7 +188,7 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 
 	moved, err := session.MoveItem(ctx, sourceItem.ID, moveParentID, moveName)
 	if err != nil {
-		return fmt.Errorf("moving %q: %w", sourcePath, err)
+		return newRemoteOpError("moving", sourcePath, err)
 	}
 
 	// Build display destination from info we already have — no extra API call.

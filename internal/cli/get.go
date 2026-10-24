@@ -67,7 +67,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 	item, err := session.ResolveItem(ctx, remotePath)
 	if err != nil {
-		return fmt.Errorf("resolving %q: %w", remotePath, err)
+		return newRemoteOpError("resolving", remotePath, err)
 	}
 
 	if item.IsFolder {
@@ -229,7 +229,7 @@ func downloadFolder(
 func countRemoteFiles(ctx context.Context, session *driveops.MountSession, remotePath string, state *downloadState) error {
 	children, err := session.ListChildren(ctx, remotePath)
 	if err != nil {
-		return fmt.Errorf("listing %q: %w", remotePath, err)
+		return newRemoteOpError("listing", remotePath, err)
 	}
 
 	for i := range children {

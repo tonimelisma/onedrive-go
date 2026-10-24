@@ -54,7 +54,7 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 
 		item, createErr := session.EnsureFolder(ctx, parentID, seg)
 		if createErr != nil {
-			return fmt.Errorf("creating folder %q: %w", seg, createErr)
+			return newRemoteOpError("creating folder", seg, createErr)
 		}
 
 		parentID = item.ID

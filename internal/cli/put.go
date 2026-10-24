@@ -48,7 +48,7 @@ type uploadParentResolver interface {
 func resolveUploadParent(ctx context.Context, session uploadParentResolver, parentPath string) (*graph.Item, error) {
 	parentItem, err := session.WaitPathVisible(ctx, parentPath)
 	if err != nil {
-		return nil, fmt.Errorf("resolving parent %q: %w", parentPath, err)
+		return nil, newRemoteOpError("resolving parent", parentPath, err)
 	}
 
 	return parentItem, nil
@@ -112,7 +112,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 		Progress: progress,
 	})
 	if err != nil {
-		return fmt.Errorf("uploading %q: %w", remotePath, err)
+		return newRemoteOpError("uploading", remotePath, err)
 	}
 
 	visibleItem, err := session.WaitPathVisible(ctx, remotePath)
@@ -188,7 +188,7 @@ func uploadFolder(
 
 	rootFolder, err := session.EnsureFolder(ctx, parentItem.ID, name)
 	if err != nil {
-		return fmt.Errorf("creating remote folder %q: %w", remotePath, err)
+		return newRemoteOpError("creating remote folder", remotePath, err)
 	}
 
 	store := driveops.NewSessionStore(config.DefaultDataDir(), logger)

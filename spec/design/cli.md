@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.8.16 [verified]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.8.16 [verified]
 
 ## Overview
 
@@ -137,6 +137,17 @@ run next. A refresh token rejected with `invalid_grant` is `ErrLoginExpired`
 (which also matches `ErrUnauthorized`) and is presented as sign-in required
 everywhere (R-6.6.23). `drive list` reports a configured drive without a state
 database as "not synced yet" (R-6.6.25).
+
+File commands wrap failures in `remoteOpError` (action, path, cause) instead
+of `fmt.Errorf("<action> %q: %w")`; its `Error()` text is unchanged, but
+`commandErrorText` uses the path to print one plain sentence for the Graph
+failure classes and missing or unreadable local files (R-6.6.26). Command-line
+mistakes become `usageError` through cobra's flag-error hook, a wrapper on
+every command's `Args` validator, and a flag-group check that runs before
+`initializeCLIContext`; `main` prints them with a `--help` pointer and exits 2.
+Only a stop the user requested (the shutdown context is done) is silent and
+exits 130; `context.DeadlineExceeded` from anything else is an error. Under
+the journal, `writeCommandError` prefixes each line with `<3>` (R-6.6.27).
 
 ### Commands Must Consume The Command Context
 

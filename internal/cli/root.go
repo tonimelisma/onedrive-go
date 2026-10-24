@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -441,6 +442,13 @@ func newRootCmdWithWriters(outputWriter, statusWriter io.Writer) *cobra.Command 
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// Cobra checks flag groups only after this hook, so a conflict
+			// such as --quiet --verbose would otherwise surface as whatever
+			// config or login error setup hits first.
+			if err := cmd.ValidateFlagGroups(); err != nil {
+				return &usageError{commandPath: cmd.CommandPath(), err: err}
+			}
+
 			return initializeCLIContext(cmd, args, bindings, outputWriter, statusWriter)
 		},
 	}
@@ -448,6 +456,7 @@ func newRootCmdWithWriters(outputWriter, statusWriter io.Writer) *cobra.Command 
 	bindRootFlags(cmd, &bindings)
 
 	addRootSubcommands(cmd)
+	markUsageErrors(cmd)
 
 	return cmd
 }
@@ -508,6 +517,74 @@ func newSignalLogger(statusWriter io.Writer) *slog.Logger {
 	return slog.New(newConsoleLogHandler(statusWriter, slog.LevelInfo, style))
 }
 
+// exitInterrupted is the conventional status for a run stopped by SIGINT
+// (128 + 2), so shells and service managers can tell it from a failure.
+const exitInterrupted = 130
+
+// writeCommandError prints main's final error. Under the systemd journal each
+// line carries the err priority, so `journalctl -p err` finds it.
+func writeCommandError(w io.Writer, text string) {
+	if isWriterJournal(w) {
+		text = "<3>" + strings.ReplaceAll(text, "\n", "\n<3>")
+	}
+
+	writeWarningf(w, "%s\n", text)
+}
+
+// asUsageError tags command-line mistakes so main can point at --help and
+// exit 2. Cobra does not type these errors, so unknown commands and flag
+// group conflicts are recognized by their fixed cobra wording.
+func asUsageError(executed *cobra.Command, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	var usage *usageError
+	if errors.As(err, &usage) {
+		return err
+	}
+
+	text := err.Error()
+	if strings.HasPrefix(text, "unknown command ") ||
+		strings.HasPrefix(text, "if any flags in the group") ||
+		strings.HasPrefix(text, "required flag(s)") {
+		commandPath := "onedrive-go"
+		if executed != nil {
+			commandPath = executed.CommandPath()
+		}
+
+		return &usageError{commandPath: commandPath, err: err}
+	}
+
+	return err
+}
+
+// markUsageErrors makes flag-parsing and argument-count failures of every
+// command a usageError.
+func markUsageErrors(root *cobra.Command) {
+	root.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		return &usageError{commandPath: cmd.CommandPath(), err: err}
+	})
+
+	var walk func(cmd *cobra.Command)
+	walk = func(cmd *cobra.Command) {
+		if validate := cmd.Args; validate != nil {
+			cmd.Args = func(c *cobra.Command, args []string) error {
+				if err := validate(c, args); err != nil {
+					return &usageError{commandPath: c.CommandPath(), err: err}
+				}
+
+				return nil
+			}
+		}
+
+		for _, child := range cmd.Commands() {
+			walk(child)
+		}
+	}
+	walk(root)
+}
+
 func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 	cmd := newRootCmdWithWriters(outputWriter, statusWriter)
 	cmd.SetArgs(args)
@@ -520,7 +597,8 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 	ctx, cancel := shutdownContext(context.Background(), newSignalLogger(statusWriter))
 	defer cancel()
 
-	err := cmd.ExecuteContext(ctx)
+	executed, err := cmd.ExecuteContextC(ctx)
+	err = asUsageError(executed, err)
 	completeRootCommandPerf(cmd, err)
 	closeErr := closeRootCommandLogger(cmd)
 	if closeErr != nil {
@@ -532,13 +610,22 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 	}
 
 	if err != nil {
-		class := classifyCommandError(err)
-		presentation := commandFailurePresentationForClass(class)
-		if class != errclass.ClassShutdown {
-			writeWarningf(statusWriter, "%s\n", commandErrorText(err, commandWantsErrorDetails(cmd)))
+		// Only a stop the user asked for (Ctrl-C, SIGTERM) ends silently; the
+		// signal handler already said "Stopping...". A timeout or an internal
+		// cancellation is a failure and must say so.
+		if ctx.Err() != nil && classifyCommandError(err) == errclass.ClassShutdown {
+			return exitInterrupted
 		}
 
-		return presentation.ExitCode
+		var usage *usageError
+		if errors.As(err, &usage) {
+			writeCommandError(statusWriter, commandErrorText(err, false))
+			return exitUsage
+		}
+
+		writeCommandError(statusWriter, commandErrorText(err, commandWantsErrorDetails(cmd)))
+
+		return commandFailurePresentationForClass(classifyCommandError(err)).ExitCode
 	}
 
 	return 0
