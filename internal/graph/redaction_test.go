@@ -1,7 +1,9 @@
 package graph
 
 import (
+	"errors"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -59,4 +61,53 @@ func TestBuildGraphError_RedactsPlainTextSecrets(t *testing.T) {
 	assert.NotContains(t, err.Error(), "top-secret-token")
 	assert.NotContains(t, err.Error(), "y4msecret-token-here")
 	assert.Equal(t, err.Message, err.RawBody)
+}
+
+type failingRoundTripper struct{ err error }
+
+func (f failingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) { return nil, f.err }
+
+// Validates: R-6.8.17
+func TestDispatchRequest_RedactsPreAuthURLFromTransportError(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{httpClient: &http.Client{Transport: failingRoundTripper{err: errors.New("unexpected EOF")}}}
+
+	for _, rawURL := range []string{
+		"https://public.bn1304.livefilestore.com/y4msecret-token-here/file.txt",
+		"https://contoso-my.sharepoint.com/personal/u/_api/v2.0/drives/d/items/i/uploadSession?guid=g&tempauth=secret-tempauth",
+		"https://my.microsoftpersonalcontent.com/personal/upload/secret-token?sig=abc",
+	} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, rawURL, http.NoBody)
+		require.NoError(t, err)
+
+		resp, err := client.dispatchRequest(req)
+		if resp != nil {
+			require.NoError(t, resp.Body.Close())
+		}
+		require.Error(t, err)
+
+		assert.NotContains(t, err.Error(), "secret")
+		assert.Contains(t, err.Error(), "/[REDACTED]")
+		assert.Contains(t, err.Error(), "unexpected EOF", "the cause must survive redaction")
+
+		var urlErr *url.Error
+		assert.ErrorAs(t, err, &urlErr, "callers still classify the transport failure")
+	}
+}
+
+// Validates: R-6.8.17
+func TestDispatchRequest_KeepsGraphAPIURLInTransportError(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{httpClient: &http.Client{Transport: failingRoundTripper{err: errors.New("unexpected EOF")}}}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://graph.microsoft.com/v1.0/me/drive/root", http.NoBody)
+	require.NoError(t, err)
+
+	resp, err := client.dispatchRequest(req)
+	if resp != nil {
+		require.NoError(t, resp.Body.Close())
+	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "https://graph.microsoft.com/v1.0/me/drive/root")
 }

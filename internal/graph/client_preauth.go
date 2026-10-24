@@ -118,7 +118,10 @@ func (c *Client) dispatchRequest(req *http.Request) (*http.Response, error) {
 	// checked in NewClient and pre-auth URLs are validated at their boundary.
 	resp, err := c.httpClient.Do(req) //nolint:gosec // Request URLs are validated by the Graph/pre-auth boundary helpers.
 	if err != nil {
-		return nil, fmt.Errorf("dispatching request: %w", err)
+		// net/http wraps transport failures in *url.Error, whose text carries
+		// the full request URL. Pre-authenticated URLs embed their credential,
+		// so scrub it before the error can reach logs or the console.
+		return nil, fmt.Errorf("dispatching request: %w", redactURLError(err))
 	}
 
 	return resp, nil

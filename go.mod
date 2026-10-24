@@ -7,7 +7,7 @@ go 1.25.0
 // release: CI resolves go-version-file from this file, and pinning the floor
 // alone built against the unpatched 1.25.0 standard library, which govulncheck
 // correctly rejected with 29 stdlib advisories.
-toolchain go1.26.6
+toolchain go1.26.10
 
 require (
 	github.com/BurntSushi/toml v1.6.0
