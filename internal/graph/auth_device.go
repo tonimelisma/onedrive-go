@@ -2,12 +2,21 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"golang.org/x/oauth2"
 
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
+)
+
+// OAuth error codes the token and authorization endpoints return for
+// user-side sign-in outcomes (RFC 6749 section 4.1.2.1, RFC 8628 section 3.5).
+const (
+	oauthErrAccessDenied          = "access_denied"
+	oauthErrAuthorizationDeclined = "authorization_declined"
+	oauthErrExpiredToken          = "expired_token"
 )
 
 type (
@@ -77,7 +86,7 @@ func doLoginWithFlow(
 
 	tok, err := exchangeToken(ctx, cfg, da)
 	if err != nil {
-		return nil, fmt.Errorf("graph: device code authorization failed: %w", err)
+		return nil, deviceLoginError(err, logger)
 	}
 
 	logger.Info("user authorized, saving token",
@@ -96,4 +105,24 @@ func doLoginWithFlow(
 	src := cfg.TokenSource(ctx, tok)
 
 	return &tokenBridge{src: src, logger: logger}, nil
+}
+
+// deviceLoginError turns the token endpoint's answer for the common user-side
+// outcomes (code expired, sign-in declined) into plain sentinel errors, so the
+// default Error line does not carry raw OAuth codes and AADSTS text. The raw
+// error stays in a Debug record. Anything else keeps its full chain.
+func deviceLoginError(err error, logger *slog.Logger) error {
+	var retrieveErr *oauth2.RetrieveError
+	if errors.As(err, &retrieveErr) {
+		switch retrieveErr.ErrorCode {
+		case oauthErrExpiredToken:
+			logger.Debug("device code expired before authorization", slog.String("error", err.Error()))
+			return ErrLoginCodeExpired
+		case oauthErrAccessDenied, oauthErrAuthorizationDeclined:
+			logger.Debug("device code authorization declined", slog.String("error", err.Error()))
+			return ErrLoginDeclined
+		}
+	}
+
+	return fmt.Errorf("graph: device code authorization failed: %w", err)
 }

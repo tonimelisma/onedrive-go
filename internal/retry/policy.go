@@ -11,8 +11,10 @@ import (
 // Policy defines a reusable exponential backoff configuration. All fields are
 // immutable after construction — Policy values are safe for concurrent use.
 type Policy struct {
-	// MaxAttempts is the total number of attempts (including the first).
-	// 0 means infinite (for watch loops that never give up).
+	// MaxAttempts is the total number of attempts (including the first), for
+	// every consumer: RetryTransport, the graph quirk retries, and the
+	// driveops visibility waits. 0 means infinite (for watch loops that
+	// never give up); RetryTransport treats 0 and 1 alike as "no retry".
 	MaxAttempts int
 
 	// Base is the initial backoff delay before any multiplication.

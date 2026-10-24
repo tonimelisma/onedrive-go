@@ -116,7 +116,8 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, er
 
 	// Delete expired sessions eagerly so callers don't attempt a doomed resume.
 	if time.Since(info.ModTime()) > StaleSessionAge {
-		s.logger.Warn("session file expired, deleting",
+		// Debug only: expected housekeeping with nothing for the user to do.
+		s.logger.Debug("session file expired, deleting",
 			slog.String("path", path),
 			slog.Duration("age", time.Since(info.ModTime()).Truncate(time.Hour)),
 		)
@@ -142,8 +143,10 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, er
 
 	var rec SessionRecord
 	if err := json.Unmarshal(data, &rec); err != nil {
-		// Corrupt file — delete and treat as absent.
-		s.logger.Warn("corrupt session file, deleting",
+		// Corrupt file — delete and treat as absent. Info, and the one report
+		// of it: the upload proceeds with a fresh session, so the user has
+		// nothing to do, and the caller logs ErrCorruptSession at Debug only.
+		s.logger.Info("corrupt upload session file, deleting",
 			slog.String("path", path),
 			slog.String("error", err.Error()),
 		)
@@ -332,9 +335,9 @@ func (s *SessionStore) CleanStale(maxAge time.Duration) (int, error) {
 				continue
 			}
 
-			s.logger.Info("deleted stale upload session",
+			s.logger.Debug("deleted stale upload session",
 				slog.String("file", e.Name()),
-				slog.Duration("age", time.Since(info.ModTime())),
+				slog.Duration("age", time.Since(info.ModTime()).Truncate(time.Hour)),
 			)
 
 			deleted++

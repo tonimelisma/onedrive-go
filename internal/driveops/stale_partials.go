@@ -48,7 +48,10 @@ func CleanStalePartialsWithOptions(
 
 	err := tree.WalkDir(func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			logger.Warn("skipping path due to error",
+			// Debug only: the local scanner owns reporting unreadable paths,
+			// and this housekeeping walk runs after every sync pass, so a
+			// Warn here repeated the same condition on every run.
+			logger.Debug("couldn't check path for leftover download files",
 				slog.String("path", path),
 				slog.String("error", walkErr.Error()),
 			)
@@ -72,7 +75,7 @@ func CleanStalePartialsWithOptions(
 
 		relPath, relErr := tree.Rel(path)
 		if relErr != nil {
-			logger.Warn("failed to relativize partial file for cleanup",
+			logger.Debug("failed to relativize partial file for cleanup",
 				slog.String("path", path),
 				slog.String("error", relErr.Error()),
 			)
@@ -84,7 +87,7 @@ func CleanStalePartialsWithOptions(
 		}
 
 		if removeErr := tree.Remove(relPath); removeErr != nil && !os.IsNotExist(removeErr) {
-			logger.Warn("failed to delete partial file",
+			logger.Warn("couldn't remove a leftover download file",
 				slog.String("path", relPath),
 				slog.String("error", removeErr.Error()),
 			)
@@ -143,7 +146,7 @@ func shouldSkipPartialCleanupDir(
 ) bool {
 	relPath, err := tree.Rel(dirPath)
 	if err != nil {
-		logger.Warn("failed to relativize directory for partial cleanup",
+		logger.Debug("failed to relativize directory for partial cleanup",
 			slog.String("path", dirPath),
 			slog.String("error", err.Error()),
 		)

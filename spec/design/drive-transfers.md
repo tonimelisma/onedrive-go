@@ -218,12 +218,30 @@ starts:
 
 QuickXorHash computation for local files (`hash.go`). The `pkg/quickxorhash/` package implements the algorithm (vendored from rclone, BSD-0 license). When a remote file lacks a hash (common on Business/SharePoint), a fallback chain is attempted: QuickXorHash → SHA256 → SHA1. `HashVerified` is set to false when the remote hash is empty.
 
-For iOS `.heic` downloads, the transfer manager keeps the normal integrity
-mechanism: retry hash mismatch, warn, then accept after exhaustion so the sync
-engine does not loop forever on a server metadata bug. When the accepted
-download is a `.heic` whose API metadata still disagrees with the downloaded
-bytes, the warning explicitly names the known OneDrive/iOS metadata mismatch
-instead of looking like an unexplained integrity bypass.
+Hash verification retries a mismatch (logged at Debug, since a retry will
+probably succeed) and, after exhaustion, accepts the download with one plain
+warning naming the file ("doesn't match OneDrive's checksum; kept it anyway")
+so the sync engine does not loop forever on a server metadata bug. Raw hashes
+stay at Debug. An item with no content hash at all is downloaded unverified
+without a warning; `DownloadResult.HashVerified` carries that fact.
+
+For iOS `.heic` downloads the known OneDrive/iOS metadata bug serves a
+post-processed file whose size differs from the API metadata. Re-downloading
+returns the same bytes, so when a `.heic` download's hash and size both
+disagree with the metadata the transfer manager accepts the first download
+instead of fetching it again, and logs the known mismatch at Debug only.
+A same-size `.heic` hash mismatch is not the quirk and keeps the normal
+retries. Evidence: `TestTransferManager_HEICMetadataMismatch_AcceptsFirstDownloadQuietly`,
+`TestTransferManager_HEICSameSizeHashMismatch_StillRetries`,
+`TestTransferManager_HashExhaustion_WarnsOnceInPlainWords`,
+`TestTransferManager_NoRemoteHash_DoesNotWarn`.
+
+Errors and warnings at default verbosity name the file the caller asked for,
+never the internal `.onedrive-go.<name>.partial` temp file, and give sizes in
+human units (`TestTransferManager_DownloadError_NamesTargetNotPartial`).
+Housekeeping (expired or corrupt upload-session files, unreadable directories
+met by the partial-file cleanup walk) logs at Debug or Info: there is nothing
+for the user to do, and the walk runs after every sync pass.
 
 ## Cleanup
 
@@ -240,7 +258,8 @@ Implements: R-6.2.6 [verified], R-6.4.7 [verified], R-2.10.43 [verified], R-2.10
 
 Design properties:
 - **Zero/nil disables**: `WithDiskCheck(0, fn)` or omitting the option entirely skips the check (R-6.4.7).
-- **Fail-open**: statfs errors are logged and the download proceeds — a transient syscall failure should not block all downloads.
+- **Fail-open**: statfs errors are logged and the download proceeds — a transient syscall failure should not block all downloads. The first failure per `TransferManager` warns; later ones log at Debug, so a persistently failing filesystem does not warn on every download (`TestTransferManager_DiskCheckFailure_WarnsOnce`).
+- **Plain errors**: `ErrDiskFull` and `ErrFileTooLargeForSpace` wrap text in human units with the action ("100.0 MB free, min_free_space requires 1.0 GB; free up space or lower min_free_space in the config").
 - **Path accuracy**: checks `filepath.Dir(targetPath)` rather than the sync root, correctly handling cross-filesystem mounts.
 - **Error sentinels** (`errors.go`): `ErrDiskFull` and `ErrFileTooLargeForSpace` are in the `driveops` package. The sync engine matches them via `errors.Is` in `classifyResult` and `issueTypeForHTTPStatus`.
 - **DiskAvailable** (`disk_unix.go`): exported function using `syscall.Statfs` — `f_bavail * f_bsize` (blocks available to unprivileged users). Build-tagged `darwin || linux`.

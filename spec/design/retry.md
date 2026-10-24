@@ -1,6 +1,6 @@
 # Retry
 
-GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/policy.go, internal/retry/throttle_gate.go, internal/retry/transport.go
+GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/notices.go, internal/retry/policy.go, internal/retry/throttle_gate.go, internal/retry/transport.go
 
 Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.7 [designed], R-6.8.8 [verified], R-6.8.10 [designed], R-6.8.11 [designed], R-6.6.8 [verified], R-2.10.3 [designed], R-2.10.5 [designed], R-2.10.6 [designed], R-2.10.7 [designed], R-2.10.8 [designed], R-2.10.14 [designed], R-6.8.16 [designed], R-6.10.6 [verified]
 
@@ -24,6 +24,8 @@ rely on transport-level retry loops for action execution.
   `RetryTransport`
 - Mutable Runtime Owner: backoff counters are request-scoped. Shared 429
   coordination is optional and explicitly caller-owned via `ThrottleGate`.
+  Shared retry announcements are caller-owned via `Notices`
+  (`driveops.SessionRuntime` holds one for every retrying client it builds).
 - Error Boundary: `retry` consumes already-normalized retryable signals from
   [error-model.md](error-model.md). It never upgrades actionable or fatal
   conditions into retryable ones on its own.
@@ -34,16 +36,19 @@ rely on transport-level retry loops for action execution.
 | --- | --- |
 | Retry policy curves and backoff timing remain package-owned value logic. | `internal/retry/backoff_test.go`, `internal/retry/policy_test.go`, `internal/retry/named_test.go` |
 | Shared `Retry-After` coordination stays optional and caller-injected. | `internal/retry/throttle_gate_test.go`, `internal/retry/transport_test.go` |
+| An outage is announced once per process across concurrent requests and transports, and re-arms after OneDrive answers. | `TestRetryTransport_OutageIsAnnouncedOncePerProcessAcrossConcurrentRequests`, `TestRetryTransport_OutageNoticeRearmsAfterAResponse`, `TestSessionRuntime_RetryingClientsShareOneRetryNotices` |
+| Long rate-limit waits are announced once; short ones stay quiet; exhaustion is not logged above Debug. | `TestRetryTransport_LongRateLimitWaitIsAnnouncedOnce`, `TestRetryTransport_NetworkError_ExhaustionAnnouncesOnceAndDoesNotRepeatTheError`, `TestRetryTransport_HTTPError_ExhaustionDoesNotWarn` |
 | CLI/control-plane callers use retry without reinterpreting retryable versus fatal conditions themselves. | `internal/cli/control_client_additional_test.go`, `internal/multisync/orchestrator_test.go`, `internal/graph/client_test.go` |
 
 ## Named Policies
 
 | Policy | Use Case | MaxAttempts | Initial | Max |
 | --- | --- | --- | --- | --- |
-| `TransportPolicy()` | HTTP retry via `RetryTransport` for CLI callers | 5 | 1s | 60s |
+| `TransportPolicy()` | HTTP retry via `RetryTransport` for CLI callers | 6 | 1s | 60s |
 | `DriveDiscoveryPolicy()` | Drive enumeration retry | 5 | 1s | 60s |
 | `RootChildrenPolicy()` | Exact `root/children` quirk retry | 3 | 250ms | 1s |
-| `DownloadMetadataPolicy()` | Exact item-by-ID download metadata quirk retry | 4 | 250ms | 2s |
+| `DownloadMetadataPolicy()` | Exact item-by-ID download metadata quirk retry | 6 | 250ms | 4s |
+| `CopyDestinationPolicy()` | Exact server-side copy fresh-destination quirk retry | 6 | 250ms | 4s |
 | `SimpleUploadMtimePatchPolicy()` | Exact post-simple-upload `UpdateFileSystemInfo` retry | 8 | 250ms | 16s |
 | `UploadSessionCreatePolicy()` | Exact create-upload-session fresh-parent quirk retry | 6 | 250ms | 4s |
 | `SimpleUploadCreatePolicy()` | Final simple-upload create retry after session-path disambiguation | 7 | 250ms | 8s |
@@ -51,6 +56,11 @@ rely on transport-level retry loops for action execution.
 | `WatchLocalPolicy()` | Local observer error recovery | 0 (infinite) | 1s | 30s |
 | `ReconcilePolicy()` | Engine-owned durable retry timing for `retry_work` | 0 (infinite) | 1s | 1h |
 | `WatchRemotePolicy()` | Remote observer error recovery | 0 (infinite) | 5s | 5m |
+
+`MaxAttempts` counts every attempt, the first included, for every consumer:
+`RetryTransport`, the graph quirk retries, and the driveops visibility waits.
+(`RetryTransport` used to treat it as a retry count and made `MaxAttempts+1`
+attempts; `TransportPolicy()` now says 6 to keep the same six attempts.)
 
 `ReconcilePolicy()` is the single retry curve for durable transient work in the
 sync engine. The engine computes `next_retry_at` from that policy and persists
@@ -73,6 +83,24 @@ Features:
 
 Sync action execution does not use `RetryTransport`. Workers issue one request,
 return the result immediately, and let the engine classify it.
+
+### What the transport says (R-6.6.8)
+
+- every attempt, backoff and the final give-up log at Debug with method and
+  log target
+- the second consecutive network failure of a request announces "can't reach
+  OneDrive, retrying" at Warn with the cause, the wait in human units and the
+  attempt count, but only if no other request has announced the same outage:
+  `Notices` latches the announcement until some request gets an HTTP
+  response, so concurrent workers print one line per outage
+- a retry wait of `LongWaitThreshold` (10 s) or more, from `Retry-After` or
+  backoff, announces "OneDrive is limiting requests" (429) or "OneDrive is
+  busy" (5xx) once per throttling episode; a 2xx response ends the episode
+- exhaustion is returned (the error, or the last retryable response) and is
+  not logged above Debug: the command reports it once
+
+`Notices` is caller-owned like `ThrottleGate`. A transport built without one
+uses private notices, which keeps the announcements correct per transport.
 
 ## Sync Retry Model
 

@@ -65,10 +65,11 @@ func (failingToken) Token() (string, error) {
 
 const retryBodyFixture = `{"name":"test-folder","folder":{}}`
 
-// testRetryPolicy is a fast retry policy for tests.
+// testRetryPolicy is a fast retry policy for tests: 6 total attempts, the
+// same count as the production TransportPolicy.
 func testRetryPolicy() retry.Policy {
 	return retry.Policy{
-		MaxAttempts: 5,
+		MaxAttempts: 6,
 		Base:        1 * time.Millisecond,
 		Max:         10 * time.Millisecond,
 		Multiplier:  2.0,
@@ -993,7 +994,7 @@ func TestDo_CustomPolicy_LimitsAttempts(t *testing.T) {
 		defer srv.Close()
 
 		twoRetryPolicy := retry.Policy{
-			MaxAttempts: 2,
+			MaxAttempts: 3,
 			Base:        1 * time.Millisecond,
 			Max:         10 * time.Millisecond,
 			Multiplier:  2.0,
@@ -1005,8 +1006,8 @@ func TestDo_CustomPolicy_LimitsAttempts(t *testing.T) {
 		resp, err := client.do(t.Context(), http.MethodGet, "/fail", nil)
 		closeClientTestResponse(t, resp)
 		require.Error(t, err)
-		// MaxAttempts=2 means 2 retries after the initial attempt = 3 total server hits.
-		assert.Equal(t, int32(3), attempts.Load(), "MaxAttempts=2 should make 1 initial + 2 retries = 3 total")
+		// MaxAttempts counts every attempt: 1 initial + 2 retries = 3 server hits.
+		assert.Equal(t, int32(3), attempts.Load(), "MaxAttempts=3 should make 3 total attempts")
 	})
 
 	t.Run("NoRetryClient makes exactly 1 attempt", func(t *testing.T) {

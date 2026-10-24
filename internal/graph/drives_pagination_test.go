@@ -12,13 +12,19 @@ import (
 
 // twoPageDriveServer serves a drive listing split across two pages, linking the
 // first to the second with @odata.nextLink.
-func twoPageDriveServer(t *testing.T, secondPagePath string) (*httptest.Server, *int) {
+//
+// Like real Graph, the nextLink is an absolute URL on the same host as the
+// client's base URL. Every request path is recorded so tests can prove the
+// second page was requested at the right path rather than at the base URL
+// glued to the absolute link.
+func twoPageDriveServer(t *testing.T, secondPagePath string) (*httptest.Server, *[]string) {
 	t.Helper()
 
-	var requests int
+	var requestedPaths []string
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
 
 		w.Header().Set("Content-Type", "application/json")
 
@@ -30,11 +36,11 @@ func twoPageDriveServer(t *testing.T, secondPagePath string) (*httptest.Server, 
 
 		writeTestResponse(t, w, fmt.Sprintf(
 			`{"value":[{"id":"drive-1","name":"First","driveType":"business"}],`+
-				`"@odata.nextLink":%q}`, secondPagePath))
+				`"@odata.nextLink":%q}`, srv.URL+secondPagePath))
 	}))
 	t.Cleanup(srv.Close)
 
-	return srv, &requests
+	return srv, &requestedPaths
 }
 
 // Validates: R-6.7.32
@@ -46,7 +52,7 @@ func twoPageDriveServer(t *testing.T, secondPagePath string) (*httptest.Server, 
 func TestDrives_FollowsNextLinkAcrossPages(t *testing.T) {
 	t.Parallel()
 
-	srv, requests := twoPageDriveServer(t, "/me/drives-page-2")
+	srv, requestedPaths := twoPageDriveServer(t, "/me/drives-page-2")
 	client := newTestClient(t, srv.URL)
 
 	drives, err := client.Drives(t.Context())
@@ -56,21 +62,22 @@ func TestDrives_FollowsNextLinkAcrossPages(t *testing.T) {
 	assert.Equal(t, "First", drives[0].Name)
 	assert.Equal(t, "Second", drives[1].Name,
 		"the drive that only exists on the second page must survive")
-	assert.Equal(t, 2, *requests, "the second page must actually be fetched")
+	assert.Equal(t, []string{"/me/drives", "/me/drives-page-2"}, *requestedPaths,
+		"the absolute nextLink must be followed at its own path, not appended to the base URL")
 }
 
 // Validates: R-6.7.32
 func TestSiteDrives_FollowsNextLinkAcrossPages(t *testing.T) {
 	t.Parallel()
 
-	srv, requests := twoPageDriveServer(t, "/sites/site-1/drives-page-2")
+	srv, requestedPaths := twoPageDriveServer(t, "/sites/site-1/drives-page-2")
 	client := newTestClient(t, srv.URL)
 
 	drives, err := client.SiteDrives(t.Context(), "site-1")
 	require.NoError(t, err)
 
 	require.Len(t, drives, 2, "both pages of site drives must be returned")
-	assert.Equal(t, 2, *requests)
+	assert.Equal(t, []string{"/sites/site-1/drives", "/sites/site-1/drives-page-2"}, *requestedPaths)
 }
 
 // Validates: R-6.7.32
@@ -82,13 +89,14 @@ func TestDrives_SelfReferentialNextLinkIsBounded(t *testing.T) {
 
 	var requests int
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests++
 
 		w.Header().Set("Content-Type", "application/json")
-		writeTestResponse(t, w,
+		writeTestResponse(t, w, fmt.Sprintf(
 			`{"value":[{"id":"drive-loop","name":"Loop","driveType":"business"}],`+
-				`"@odata.nextLink":"/me/drives-loop"}`)
+				`"@odata.nextLink":%q}`, srv.URL+"/me/drives-loop"))
 	}))
 	defer srv.Close()
 

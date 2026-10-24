@@ -20,7 +20,7 @@ import (
 func (c *Client) SimpleUpload(
 	ctx context.Context, driveID driveid.ID, parentID, name string, r io.Reader, size int64,
 ) (*Item, error) {
-	c.logger.Info("simple upload",
+	c.logger.Debug("simple upload",
 		slog.String("drive_id", driveID.String()),
 		slog.String("parent_id", parentID),
 		slog.String("name", name),
@@ -55,7 +55,7 @@ func (c *Client) SimpleUpload(
 func (c *Client) SimpleUploadToItem(
 	ctx context.Context, driveID driveid.ID, itemID string, r io.Reader, size int64,
 ) (*Item, error) {
-	c.logger.Info("simple upload existing item",
+	c.logger.Debug("simple upload existing item",
 		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 		slog.Int64("size", size),
@@ -169,11 +169,14 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, bool, error) {
 			return nil, false, fmt.Errorf("graph: reading unexpected chunk response body: %w", readErr)
 		}
 
-		c.logger.Error("chunk upload returned unexpected 2xx status",
+		// The raw body stays at Debug: it is server output, not something the
+		// returned error should carry to the user.
+		c.logger.Debug("chunk upload returned unexpected 2xx status",
 			slog.Int("status", resp.StatusCode),
+			slog.String("body", string(body)),
 		)
 
-		return nil, false, fmt.Errorf("graph: chunk upload unexpected status %d: %s", resp.StatusCode, string(body))
+		return nil, false, fmt.Errorf("graph: chunk upload unexpected status %d", resp.StatusCode)
 	}
 }
 
@@ -207,7 +210,9 @@ func (c *Client) doRawUpload(
 
 	resp, err := c.dispatchRequest(req)
 	if err != nil {
-		c.logger.Error("raw upload request failed",
+		// Returned, not logged above Debug: the caller reports the failure
+		// once, and a canceled context here is an ordinary shutdown.
+		c.logger.Debug("raw upload request failed",
 			slog.String("method", method),
 			slog.String("path", path),
 			slog.String("error", err.Error()),
@@ -220,7 +225,7 @@ func (c *Client) doRawUpload(
 		errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
 		if readErr != nil {
 			if closeErr := resp.Body.Close(); closeErr != nil {
-				c.logger.Warn("failed to close upload error response body after read failure",
+				c.logger.Debug("failed to close upload error response body after read failure",
 					slog.String("path", path),
 					slog.String("error", closeErr.Error()),
 				)
@@ -229,7 +234,7 @@ func (c *Client) doRawUpload(
 		}
 
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			c.logger.Warn("failed to close upload error response body",
+			c.logger.Debug("failed to close upload error response body",
 				slog.String("path", path),
 				slog.String("error", closeErr.Error()),
 			)
@@ -340,7 +345,7 @@ func (c *Client) simpleUploadCreateByParent(
 	// PUT /content route while the equivalent upload-session route returns the
 	// correct permission status. Retry that narrower case through
 	// createUploadSession so higher layers see the real outcome.
-	c.logger.Warn("simple upload returned not found, retrying via upload session",
+	c.logger.Debug("simple upload returned not found, retrying via upload session",
 		slog.String("drive_id", driveID.String()),
 		slog.String("parent_id", parentID),
 		slog.String("name", name),
@@ -359,7 +364,7 @@ func (c *Client) simpleUploadCreateByParent(
 	// the original simple upload under a slightly longer bounded create
 	// convergence budget tuned for the final create path, not the permission
 	// oracle.
-	c.logger.Warn("upload session create still returned not found, retrying simple upload",
+	c.logger.Debug("upload session create still returned not found, retrying simple upload",
 		slog.String("drive_id", driveID.String()),
 		slog.String("parent_id", parentID),
 		slog.String("name", name),
@@ -400,7 +405,9 @@ func (c *Client) chunkedUploadEncapsulated(
 
 		cancelErr := c.CancelUploadSession(cancelCtx, session)
 		if cancelErr != nil {
-			c.logger.Warn("failed to cancel upload session after error",
+			// Best-effort cleanup the user cannot act on; the upload error
+			// returned below is the report.
+			c.logger.Debug("failed to cancel upload session after error",
 				slog.String("error", cancelErr.Error()),
 			)
 		}
@@ -427,7 +434,9 @@ func (c *Client) chunkedUploadToExistingItem(
 
 		cancelErr := c.CancelUploadSession(cancelCtx, session)
 		if cancelErr != nil {
-			c.logger.Warn("failed to cancel upload session after error",
+			// Best-effort cleanup the user cannot act on; the upload error
+			// returned below is the report.
+			c.logger.Debug("failed to cancel upload session after error",
 				slog.String("error", cancelErr.Error()),
 			)
 		}
@@ -507,7 +516,7 @@ func (c *Client) uploadChunksFrom(
 func (c *Client) recoverUploadChunkOffset(
 	ctx context.Context, session *UploadSession, currentOffset int64,
 ) (int64, error) {
-	c.logger.Warn("upload chunk range mismatch, querying session status",
+	c.logger.Debug("upload chunk range mismatch, querying session status",
 		slog.Int64("offset", currentOffset),
 	)
 
@@ -532,7 +541,7 @@ func (c *Client) recoverUploadChunkOffset(
 	session.UploadURL = status.UploadURL
 	session.ExpirationTime = status.ExpirationTime
 
-	c.logger.Info("upload session recovered authoritative offset after 416",
+	c.logger.Debug("upload session recovered authoritative offset after 416",
 		slog.Int64("current_offset", currentOffset),
 		slog.Int64("recovered_offset", recoveredOffset),
 	)

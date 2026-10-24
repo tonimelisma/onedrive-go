@@ -77,5 +77,6 @@ func TestResolveShareURL_Invalid(t *testing.T) {
 
 	_, err := client.ResolveShareURL(t.Context(), "not a url")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must use https")
+	assert.Contains(t, err.Error(), "not a OneDrive sharing link")
+	assert.Contains(t, err.Error(), "must start with https://")
 }

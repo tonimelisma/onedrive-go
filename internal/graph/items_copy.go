@@ -35,7 +35,7 @@ type copyItemRequest struct {
 func (c *Client) CopyItem(
 	ctx context.Context, driveID driveid.ID, itemID, destParentID, newName string,
 ) (*CopyResult, error) {
-	c.logger.Info("copying item",
+	c.logger.Debug("copying item",
 		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 		slog.String("dest_parent_id", destParentID),
@@ -101,6 +101,13 @@ func (c *Client) PollCopyStatus(ctx context.Context, monitorURL string) (*CopySt
 	resp, err := c.dispatchRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("graph: polling copy status: %w", err)
+	}
+
+	// A non-2xx monitor reply (expired monitor, 404, 5xx) is a failure to
+	// report, not a status document: decoding it produced an empty Status
+	// and hid the HTTP failure. buildError closes the body.
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("graph: polling copy status: %w", c.buildError(http.MethodGet, "copy monitor", resp))
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 

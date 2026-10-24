@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -36,7 +38,7 @@ const (
 	downloadPartialSuffix = ".partial"
 )
 
-const heicMetadataMismatchWarning = "known OneDrive/iOS metadata mismatch, accepting download"
+const heicMetadataMismatchMessage = "known OneDrive/iOS metadata mismatch, accepting download"
 
 // resolveMaxRetries returns the effective max hash retries, applying the
 // default and overflow-safe upper bound.
@@ -61,6 +63,16 @@ func isHEICMetadataMismatch(targetPath, remoteHash string, hashVerified bool, re
 	sizeMismatch := remoteSize > 0 && remoteSize != localSize
 
 	return hashMismatchAccepted || sizeMismatch
+}
+
+// isKnownHEICServedSmaller reports whether a just-downloaded file shows the
+// documented OneDrive/iOS HEIC quirk: the API metadata describes the original
+// upload, but OneDrive serves a post-processed, different-size file. Hash
+// retries cannot help there (the server serves the same bytes every time),
+// so the retry loop accepts the first download instead of fetching it again.
+// A same-size mismatch is not this quirk and keeps the normal retries.
+func isKnownHEICServedSmaller(targetPath string, remoteSize, localSize int64) bool {
+	return strings.EqualFold(filepath.Ext(targetPath), ".heic") && remoteSize > 0 && remoteSize != localSize
 }
 
 // DownloadOpts configures a single download operation.
@@ -137,6 +149,11 @@ type TransferManager struct {
 	// diskAvailableFunc queries available disk space. nil = skip disk check.
 	// Injected via WithDiskCheck to allow testing without real statfs calls.
 	diskAvailableFunc func(string) (uint64, error)
+
+	// diskCheckFailureWarned is set once the first failed disk-space check
+	// has been warned about, so a persistent statfs failure does not warn on
+	// every download. Atomic because concurrent workers share one manager.
+	diskCheckFailureWarned atomic.Bool
 }
 
 func (tm *TransferManager) logHEICMetadataMismatch(
@@ -159,7 +176,10 @@ func (tm *TransferManager) logHEICMetadataMismatch(
 		)
 	}
 
-	tm.logger.Warn(heicMetadataMismatchWarning, attrs...)
+	// Debug only: this is a documented OneDrive bug that affects every
+	// iOS-uploaded photo and recurs on every re-download. The user cannot do
+	// anything about it, and a photo library holds thousands of them.
+	tm.logger.Debug(heicMetadataMismatchMessage, attrs...)
 }
 
 // Option configures a TransferManager. Pass to NewTransferManager.
@@ -231,7 +251,7 @@ func (tm *TransferManager) DownloadToFile(
 
 	// Disk space pre-check (R-6.2.6, R-2.10.43, R-2.10.44).
 	// Runs before directory creation or download to avoid partial writes.
-	if err := tm.checkDiskSpace(targetPath, opts.RemoteSize); err != nil {
+	if err := tm.checkDiskSpace(ctx, targetPath, opts.RemoteSize); err != nil {
 		return nil, err
 	}
 
@@ -252,10 +272,17 @@ func (tm *TransferManager) DownloadToFile(
 	if isHEICMetadataMismatch(targetPath, opts.RemoteHash, hashVerified, opts.RemoteSize, size) {
 		tm.logHEICMetadataMismatch(targetPath, localHash, opts.RemoteHash, size, opts.RemoteSize, hashVerified)
 	} else if opts.RemoteSize > 0 && size != opts.RemoteSize {
-		tm.logger.Warn("download size mismatch",
+		// A verified hash proves the content is right and the size metadata
+		// is what is stale, so that case is Debug. Without verification the
+		// mismatch is the only integrity signal, so it stays a warning.
+		level := slog.LevelWarn
+		if hashVerified {
+			level = slog.LevelDebug
+		}
+		tm.logger.Log(ctx, level, "downloaded file size differs from OneDrive's",
 			slog.String("target", targetPath),
-			slog.Int64("local_size", size),
-			slog.Int64("remote_size", opts.RemoteSize),
+			slog.String("local_size", formatSize(size)),
+			slog.String("remote_size", formatSize(opts.RemoteSize)),
 		)
 	}
 
@@ -263,8 +290,8 @@ func (tm *TransferManager) DownloadToFile(
 	if opts.RemoteMtime != 0 {
 		mtime := time.Unix(0, opts.RemoteMtime)
 		if err := localpath.Chtimes(partialPath, mtime, mtime); err != nil {
-			tm.logger.Warn("failed to set mtime on partial",
-				slog.String("target", targetPath),
+			tm.logger.Warn("couldn't set the modification time of the downloaded file",
+				slog.String("path", targetPath),
 				slog.String("error", err.Error()),
 			)
 		}
@@ -317,13 +344,18 @@ func (tm *TransferManager) downloadToVerifiedPartial(
 			return "", 0, "", false, err
 		}
 
-		tm.logger.Warn("remote item has no content hash, skipping verification",
+		// Debug only: some SharePoint files have no hash at all, and the
+		// user cannot do anything about it. DownloadResult.HashVerified
+		// carries the fact to callers that need it.
+		tm.logger.Debug("remote item has no content hash, skipping verification",
 			slog.String("target", targetPath),
 		)
 		return localHash, size, remoteHash, hashVerified, nil
 	}
 
-	return tm.downloadWithHashRetry(ctx, driveID, itemID, partialPath, targetPath, remoteHash, opts.MaxHashRetries)
+	return tm.downloadWithHashRetry(
+		ctx, driveID, itemID, partialPath, targetPath, remoteHash, opts.RemoteSize, opts.MaxHashRetries,
+	)
 }
 
 func downloadPartialPath(targetPath string) string {
@@ -347,7 +379,7 @@ func IsOwnedTransferArtifactName(name string) bool {
 // are rare and correctness trumps transfer savings.
 func (tm *TransferManager) downloadWithHashRetry(
 	ctx context.Context, driveID driveid.ID, itemID, partialPath, targetPath, remoteHash string,
-	maxHashRetries int,
+	remoteSize int64, maxHashRetries int,
 ) (localHash string, size int64, effectiveRemoteHash string, hashVerified bool, err error) {
 	effectiveRemoteHash = remoteHash
 	hashVerified = true
@@ -367,13 +399,22 @@ func (tm *TransferManager) downloadWithHashRetry(
 			return localHash, size, effectiveRemoteHash, true, nil
 		}
 
+		// Known OneDrive/iOS HEIC quirk: re-downloading returns the same
+		// post-processed bytes, so accept now instead of downloading the
+		// photo two more times. DownloadToFile logs the acceptance.
+		if isKnownHEICServedSmaller(targetPath, remoteSize, size) {
+			return localHash, size, localHash, false, nil
+		}
+
 		if attempt < maxRetries {
 			if cleanupErr := localpath.Remove(partialPath); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
-				tm.logger.Warn("failed to remove partial download before retry",
+				tm.logger.Warn("couldn't remove a leftover download file",
 					slog.String("path", partialPath),
 					slog.String("error", cleanupErr.Error()))
 			}
-			tm.logger.Warn("download hash mismatch, retrying",
+			// Debug only: a retry that will probably succeed. Only the final
+			// outcome below is worth a warning.
+			tm.logger.Debug("download hash mismatch, retrying",
 				slog.String("target", targetPath),
 				slog.Int("attempt", attempt+1),
 				slog.String("local_hash", localHash),
@@ -384,10 +425,13 @@ func (tm *TransferManager) downloadWithHashRetry(
 		}
 
 		// All hash retries exhausted — accept to prevent infinite loop.
-		tm.logger.Warn("download hash mismatch after all retries, accepting download",
+		tm.logger.Debug("download hash mismatch after all retries",
 			slog.String("target", targetPath),
 			slog.String("local_hash", localHash),
 			slog.String("remote_hash", effectiveRemoteHash),
+		)
+		tm.logger.Warn("downloaded file doesn't match OneDrive's checksum; kept it anyway",
+			slog.String("path", targetPath),
 		)
 
 		effectiveRemoteHash = localHash
@@ -437,7 +481,10 @@ func (tm *TransferManager) downloadToPartial(
 func (tm *TransferManager) removePartialIfNotCanceled(ctx context.Context, path string) {
 	if ctx.Err() == nil {
 		if removeErr := localpath.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			tm.logger.Warn("failed to remove partial file after interrupted transfer")
+			tm.logger.Warn("couldn't remove a leftover download file",
+				slog.String("path", path),
+				slog.String("error", removeErr.Error()),
+			)
 		}
 	}
 }
@@ -464,7 +511,8 @@ func (tm *TransferManager) freshDownload(
 		// Preserve partial on context cancellation so resume can reuse it.
 		tm.removePartialIfNotCanceled(ctx, partialPath)
 
-		return "", 0, fmt.Errorf("downloading to %s: %w", partialPath, err)
+		// Name the file the caller asked for, not the internal partial file.
+		return "", 0, fmt.Errorf("downloading %s: %w", targetPathForPartial(partialPath), err)
 	}
 
 	if err := f.Close(); err != nil {
@@ -506,7 +554,9 @@ func (tm *TransferManager) resumeDownloadFromFile(
 	}
 
 	if err != nil {
-		tm.logger.Warn("range download failed, falling back to fresh download",
+		// Debug only: a handled fallback. If the fresh download fails too,
+		// its error is the report.
+		tm.logger.Debug("range download failed, falling back to fresh download",
 			slog.String("path", partialPath), slog.String("error", err.Error()))
 
 		tm.removePartialIfNotCanceled(ctx, partialPath)
@@ -661,8 +711,7 @@ func (tm *TransferManager) UploadFile(
 
 	size := info.Size()
 	if size > MaxOneDriveFileSize {
-		return nil, fmt.Errorf("%w: %s size %d bytes exceeds OneDrive 250 GB limit (%d bytes)",
-			ErrFileExceedsOneDriveLimit, localPath, size, MaxOneDriveFileSize)
+		return nil, fileTooLargeForOneDriveError(localPath, size)
 	}
 
 	// Hash the file first (opens, reads, closes internally). The hash is
@@ -672,7 +721,7 @@ func (tm *TransferManager) UploadFile(
 	// requires io.ReaderAt for random-access (session-based resume).
 	localHash, err := tm.hashFunc(localPath)
 	if err != nil {
-		return nil, fmt.Errorf("hashing %s: %w", localPath, err)
+		return nil, err
 	}
 	if validationErr := validateUploadExpectedHash(opts, localPath, localHash); validationErr != nil {
 		return nil, validationErr
@@ -719,7 +768,10 @@ func (tm *TransferManager) UploadFile(
 	// hash.go — it picks QuickXorHash > SHA256Hash (B-222).
 	remoteHash := SelectHash(item)
 	if remoteHash != "" && localHash != remoteHash {
-		tm.logger.Warn("upload hash mismatch",
+		// Info, not Warn: the upload succeeded, and SharePoint rewrites some
+		// Office files server-side, so this can recur for every such upload
+		// with nothing for the user to do.
+		tm.logger.Info("upload hash mismatch",
 			slog.String("path", localPath),
 			slog.String("local_hash", localHash),
 			slog.String("remote_hash", remoteHash),
@@ -764,13 +816,12 @@ func (tm *TransferManager) UploadFileToItem(
 
 	size := info.Size()
 	if size > MaxOneDriveFileSize {
-		return nil, fmt.Errorf("%w: %s size %d bytes exceeds OneDrive 250 GB limit (%d bytes)",
-			ErrFileExceedsOneDriveLimit, localPath, size, MaxOneDriveFileSize)
+		return nil, fileTooLargeForOneDriveError(localPath, size)
 	}
 
 	localHash, err := tm.hashFunc(localPath)
 	if err != nil {
-		return nil, fmt.Errorf("hashing %s: %w", localPath, err)
+		return nil, err
 	}
 	if validationErr := validateUploadExpectedHash(opts, localPath, localHash); validationErr != nil {
 		return nil, validationErr
@@ -810,7 +861,10 @@ func (tm *TransferManager) UploadFileToItem(
 
 	remoteHash := SelectHash(item)
 	if remoteHash != "" && localHash != remoteHash {
-		tm.logger.Warn("upload hash mismatch",
+		// Info, not Warn: the upload succeeded, and SharePoint rewrites some
+		// Office files server-side, so this can recur for every such upload
+		// with nothing for the user to do.
+		tm.logger.Info("upload hash mismatch",
 			slog.String("path", localPath),
 			slog.String("local_hash", localHash),
 			slog.String("remote_hash", remoteHash),
@@ -891,7 +945,9 @@ func (tm *TransferManager) sessionUpload(
 	// Check for existing session.
 	rec, found, loadErr := tm.sessionStore.Load(driveStr, localPath)
 	if loadErr != nil {
-		tm.logger.Warn("failed to load upload session",
+		// Debug only: the store already reported what it did with the file,
+		// and the upload proceeds with a fresh session.
+		tm.logger.Debug("failed to load upload session",
 			slog.String("path", localPath),
 			slog.String("error", loadErr.Error()),
 		)
@@ -969,7 +1025,8 @@ func (tm *TransferManager) sessionUploadToItem(
 
 	rec, found, loadErr := tm.sessionStore.Load(driveStr, sessionKey)
 	if loadErr != nil {
-		tm.logger.Warn("failed to load upload session",
+		// Debug only: see sessionUpload.
+		tm.logger.Debug("failed to load upload session",
 			slog.String("path", localPath),
 			slog.String("item_id", itemID),
 			slog.String("error", loadErr.Error()),
@@ -1039,7 +1096,7 @@ func (tm *TransferManager) sessionUploadToItem(
 //
 // Fails open on statfs errors: a transient statfs failure should not block
 // all downloads.
-func (tm *TransferManager) checkDiskSpace(targetPath string, fileSize int64) error {
+func (tm *TransferManager) checkDiskSpace(ctx context.Context, targetPath string, fileSize int64) error {
 	if tm.diskAvailableFunc == nil || tm.minFreeSpace == 0 {
 		return nil
 	}
@@ -1050,7 +1107,14 @@ func (tm *TransferManager) checkDiskSpace(targetPath string, fileSize int64) err
 	available, err := tm.diskAvailableFunc(checkPath)
 	if err != nil {
 		// Fail open: a transient statfs error should not block downloads.
-		tm.logger.Warn("disk space check failed, proceeding with download",
+		// A persistent one (an unusual FUSE mount) fails for every download
+		// of every pass, so it is announced once per TransferManager and
+		// logged at Debug after that.
+		level := slog.LevelDebug
+		if tm.diskCheckFailureWarned.CompareAndSwap(false, true) {
+			level = slog.LevelWarn
+		}
+		tm.logger.Log(ctx, level, "couldn't check free disk space, downloading anyway",
 			slog.String("path", checkPath),
 			slog.String("error", err.Error()),
 		)
@@ -1060,13 +1124,17 @@ func (tm *TransferManager) checkDiskSpace(targetPath string, fileSize int64) err
 
 	minFree := uint64(tm.minFreeSpace)
 	if available < minFree {
-		return fmt.Errorf("%w: available %d bytes < min_free_space %d bytes", ErrDiskFull, available, minFree)
+		return fmt.Errorf(
+			"%w: %s free, min_free_space requires %s; free up space or lower min_free_space in the config",
+			ErrDiskFull, formatSize(clampToInt64(available)), formatSize(tm.minFreeSpace))
 	}
 
 	// Per-file check: can this specific file fit within available - minFreeSpace?
 	if fileSize > 0 && available < uint64(fileSize)+minFree {
-		return fmt.Errorf("%w: need %d bytes, available %d bytes (after reserving %d)",
-			ErrFileTooLargeForSpace, fileSize, available-minFree, minFree)
+		return fmt.Errorf(
+			"%w: the file needs %s but only %s is free after keeping min_free_space (%s) in reserve",
+			ErrFileTooLargeForSpace, formatSize(fileSize), formatSize(clampToInt64(available-minFree)),
+			formatSize(tm.minFreeSpace))
 	}
 
 	return nil
@@ -1082,4 +1150,60 @@ func (tm *TransferManager) deleteSession(driveID, localPath string) {
 			slog.String("error", err.Error()),
 		)
 	}
+}
+
+// fileTooLargeForOneDriveError names the file and its size in human units;
+// the sentinel supplies the limit, so the limit is stated once.
+func fileTooLargeForOneDriveError(localPath string, size int64) error {
+	return fmt.Errorf("%s is %s: %w", localPath, formatSize(size), ErrFileExceedsOneDriveLimit)
+}
+
+// targetPathForPartial recovers the file a namespaced partial download stands
+// for, so errors name the file the user asked for rather than the internal
+// ".onedrive-go.<name>.partial" temp file.
+func targetPathForPartial(partialPath string) string {
+	base := filepath.Base(partialPath)
+	if !IsOwnedTransferArtifactName(base) {
+		return partialPath
+	}
+
+	name := strings.TrimSuffix(strings.TrimPrefix(base, downloadPartialPrefix), downloadPartialSuffix)
+
+	return filepath.Join(filepath.Dir(partialPath), name)
+}
+
+// Binary size units for formatSize. OneDrive's own limits (250 GB) are
+// binary, so the same units keep messages consistent with them.
+const (
+	sizeKB = 1 << 10
+	sizeMB = 1 << 20
+	sizeGB = 1 << 30
+	sizeTB = 1 << 40
+)
+
+// formatSize renders a byte count in human units ("1.5 GB") for error and
+// warning text a user reads at default verbosity.
+func formatSize(bytes int64) string {
+	switch {
+	case bytes >= sizeTB:
+		return fmt.Sprintf("%.1f TB", float64(bytes)/float64(sizeTB))
+	case bytes >= sizeGB:
+		return fmt.Sprintf("%.1f GB", float64(bytes)/float64(sizeGB))
+	case bytes >= sizeMB:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/float64(sizeMB))
+	case bytes >= sizeKB:
+		return fmt.Sprintf("%.1f KB", float64(bytes)/float64(sizeKB))
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
+}
+
+// clampToInt64 converts a statfs byte count for formatSize. Free space beyond
+// int64 range (8 EiB) does not occur on real filesystems.
+func clampToInt64(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return math.MaxInt64
+	}
+
+	return int64(v)
 }

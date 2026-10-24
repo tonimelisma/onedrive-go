@@ -226,7 +226,7 @@ func decodeURLEncodedNames(items []Item, logger *slog.Logger) []Item {
 	}
 
 	if decoded > 0 {
-		logger.Info("URL-decoded item names in delta batch",
+		logger.Debug("decoded percent-encoded item names",
 			slog.Int("decoded_count", decoded),
 		)
 	}

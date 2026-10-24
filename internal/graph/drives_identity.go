@@ -12,7 +12,7 @@ import (
 
 // Me returns the authenticated user's profile.
 func (c *Client) Me(ctx context.Context) (*User, error) {
-	c.logger.Info("fetching authenticated user profile")
+	c.logger.Debug("fetching authenticated user profile")
 
 	resp, err := c.do(ctx, http.MethodGet, "/me", nil)
 	if err != nil {
@@ -39,7 +39,7 @@ func (c *Client) Me(ctx context.Context) (*User, error) {
 // Retries on transient 403 from /me/drives — Microsoft Graph occasionally
 // returns "accessDenied" during token propagation even with a valid token.
 func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
-	c.logger.Info("listing accessible drives")
+	c.logger.Debug("listing accessible drives")
 
 	return doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 		name:   "drives-token-propagation",
@@ -62,7 +62,7 @@ func (c *Client) drivesList(ctx context.Context) ([]Drive, error) {
 		return nil, err
 	}
 
-	c.logger.Info("listed drives",
+	c.logger.Debug("listed drives",
 		slog.Int("count", len(drives)),
 	)
 
@@ -92,7 +92,15 @@ func (c *Client) fetchAllDrives(ctx context.Context, apiPath string, subject str
 			drives = append(drives, dlr.Value[i].toDrive())
 		}
 
-		apiPath = dlr.NextLink
+		apiPath = ""
+		if dlr.NextLink != "" {
+			// Graph returns @odata.nextLink as an absolute URL, while c.do
+			// prepends the base URL, so the link must be made relative first.
+			apiPath, err = c.stripBaseURL(dlr.NextLink)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return drives, nil
@@ -132,7 +140,7 @@ func (c *Client) normalizeDrives(ctx context.Context, drives []Drive) ([]Drive, 
 
 	normalized := replacePersonalDrives(drives, *primary)
 
-	c.logger.Info("normalized personal drive discovery",
+	c.logger.Debug("normalized personal drive discovery",
 		slog.Int("raw_count", len(drives)),
 		slog.Int("normalized_count", len(normalized)),
 		slog.String("primary_drive_id", primary.ID.String()),
@@ -178,7 +186,7 @@ func replacePersonalDrives(drives []Drive, primary Drive) []Drive {
 // metadata) in non-deterministic order on personal accounts. These system drives
 // return HTTP 400 "ObjectHandle is Invalid" when accessed.
 func (c *Client) PrimaryDrive(ctx context.Context) (*Drive, error) {
-	c.logger.Info("fetching primary drive")
+	c.logger.Debug("fetching primary drive")
 
 	resp, err := c.do(ctx, http.MethodGet, "/me/drive", nil)
 	if err != nil {
@@ -204,7 +212,7 @@ func (c *Client) PrimaryDrive(ctx context.Context) (*Drive, error) {
 
 // Drive returns a specific drive by ID.
 func (c *Client) Drive(ctx context.Context, driveID driveid.ID) (*Drive, error) {
-	c.logger.Info("fetching drive",
+	c.logger.Debug("fetching drive",
 		slog.String("drive_id", driveID.String()),
 	)
 
@@ -238,7 +246,7 @@ func (c *Client) Drive(ctx context.Context, driveID driveid.ID) (*Drive, error) 
 // the first organization's display name, which is used for sync directory
 // naming (e.g., "~/OneDrive - Contoso").
 func (c *Client) Organization(ctx context.Context) (*Organization, error) {
-	c.logger.Info("fetching user organization")
+	c.logger.Debug("fetching user organization")
 
 	resp, err := c.do(ctx, http.MethodGet, "/me/organization", nil)
 	if err != nil {

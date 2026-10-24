@@ -74,10 +74,12 @@ Runtime policy:
 
 `.heic` files uploaded from iOS via the OneDrive app have metadata (size, hash) that doesn't match the actual download content. The API reports the original file size but serves a post-processed (smaller) version. Example: API reports 3,039,814 bytes, actual download is 682,474 bytes. Filed as [onedrive-api-docs#1723](https://github.com/OneDrive/onedrive-api-docs/issues/1723), unresolved.
 
-Runtime policy: keep the normal download integrity path (retry hash mismatch,
-warn, then accept after exhaustion so the sync loop does not thrash), and make
-the acceptance warning explicit for `.heic` so the degraded behavior is owned
-as a known OneDrive/iOS metadata bug rather than an unexplained bypass.
+Runtime policy: accept the download rather than failing validation, so the
+sync loop does not thrash. Because the server serves the same processed bytes
+on every request, a `.heic` whose size and hash both disagree with the
+metadata is accepted on the first download (no hash retries), and the known
+mismatch is logged at Debug as an owned OneDrive/iOS metadata bug rather than
+as a per-photo warning.
 
 ### SharePoint File Enrichment
 

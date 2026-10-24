@@ -41,10 +41,19 @@ type RetryTransport struct {
 	// multiple transports that belong to the same caller scope.
 	ThrottleGate *ThrottleGate
 
-	// throttledUntil stores the local transport-scoped throttle deadline when
-	// no shared gate is injected.
+	// Notices optionally shares the "can't reach OneDrive" and long-wait
+	// announcements across every transport of one process, so an outage is
+	// announced once rather than once per in-flight request. When nil, the
+	// transport uses its own private notices.
+	Notices *Notices
+
+	// throttleMu guards throttledUntil, the local transport-scoped throttle
+	// deadline used when no shared gate is injected.
 	throttleMu     sync.Mutex
 	throttledUntil time.Time
+
+	// localNotices backs Notices when the caller injected none.
+	localNotices Notices
 }
 
 type logTargetKey struct{}
@@ -74,7 +83,7 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	// Shared throttle gate: wait if a previous 429 set a caller-owned deadline.
-	if err := rt.waitForThrottle(req.Context(), sleepFn); err != nil {
+	if err := rt.waitForThrottle(req, sleepFn); err != nil {
 		return nil, err
 	}
 
@@ -100,6 +109,10 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, finalErr
 		}
 
+		// Any HTTP response proves OneDrive is reachable again, which ends the
+		// outage the next network failure would otherwise stay silent about.
+		rt.notices().markReachable()
+
 		done, finalResp, finalErr := rt.handleResponse(req, resp, attempt, sleepFn)
 		if done {
 			return finalResp, finalErr
@@ -107,54 +120,83 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 }
 
-// retryLogPrecision rounds logged backoff delays to what a person can read.
+// retryLogPrecision rounds Debug-logged backoff delays to what a person can read.
 const retryLogPrecision = 100 * time.Millisecond
+
+// LongWaitThreshold is the shortest rate-limit or backoff wait announced at
+// Warn. Shorter waits stay at Debug: they pass before a person would wonder
+// why the command went quiet.
+const LongWaitThreshold = 10 * time.Second
+
+// retriesLeft reports whether a request that just made attempt (0-based) may
+// be sent again. Policy.MaxAttempts counts every attempt, the first included.
+func (rt *RetryTransport) retriesLeft(attempt int) bool {
+	return attempt+1 < rt.Policy.MaxAttempts
+}
+
+func (rt *RetryTransport) notices() *Notices {
+	if rt.Notices != nil {
+		return rt.Notices
+	}
+
+	return &rt.localNotices
+}
 
 func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attempt int, sleepFn SleepFunc) (bool, error) {
 	if req.Context().Err() != nil {
-		return false, fmt.Errorf("retry: request canceled: %w", req.Context().Err())
+		return false, fmt.Errorf("request canceled: %w", req.Context().Err())
 	}
 	if !retryableRequestMethod(req.Method) {
 		return false, err
 	}
 
 	logTarget := requestLogTarget(req)
-	if attempt < rt.Policy.MaxAttempts {
-		backoff := rt.Policy.Delay(attempt)
-		if collector := perf.FromContext(req.Context()); collector != nil {
-			collector.RecordHTTPRetry(backoff)
-		}
-		// A single blip retries silently (R-6.6.8). Once a second attempt has
-		// failed too, say so once, so a person is not left watching 30
-		// seconds of silence while the remaining attempts back off.
-		level := slog.LevelDebug
-		if attempt == 1 {
-			level = slog.LevelWarn
-		}
-		rt.Logger.Log(req.Context(), level, "can't reach OneDrive, retrying",
+	if !rt.retriesLeft(attempt) {
+		// Debug only: the error is returned and the command reports it once,
+		// in plain words ("can't reach OneDrive ..."). Logging it here as
+		// well printed the same failure twice.
+		rt.Logger.Debug("OneDrive still unreachable, giving up",
 			slog.String("method", req.Method),
 			slog.String("url", logTarget),
-			slog.Int("attempt", attempt+1),
-			slog.Int("max_attempts", rt.Policy.MaxAttempts+1),
-			slog.Duration("retry_in", backoff.Round(retryLogPrecision)),
+			slog.Int("attempts", attempt+1),
 			slog.String("error", err.Error()),
 		)
 
-		if sleepErr := sleepFn(req.Context(), backoff); sleepErr != nil {
-			return false, fmt.Errorf("retry: request canceled during backoff: %w", sleepErr)
-		}
-
-		return true, nil
+		return false, err
 	}
 
-	rt.Logger.Warn("OneDrive still unreachable, giving up",
+	backoff := rt.Policy.Delay(attempt)
+	if collector := perf.FromContext(req.Context()); collector != nil {
+		collector.RecordHTTPRetry(backoff)
+	}
+
+	rt.Logger.Debug("retrying after network error",
 		slog.String("method", req.Method),
 		slog.String("url", logTarget),
-		slog.Int("attempts", attempt+1),
+		slog.Int("attempt", attempt+1),
+		slog.Int("max_attempts", rt.Policy.MaxAttempts),
+		slog.Duration("retry_in", backoff.Round(retryLogPrecision)),
 		slog.String("error", err.Error()),
 	)
 
-	return false, err
+	// A single blip retries silently (R-6.6.8). Once a second consecutive
+	// attempt has failed too, the outage is announced once per process, not
+	// once per request: concurrent workers share the notice, and it re-arms
+	// only after some request gets a response again.
+	if attempt >= 1 && rt.notices().claimUnreachable() {
+		rt.Logger.Warn("can't reach OneDrive, retrying",
+			slog.String("retry_in", HumanDuration(backoff)),
+			slog.Int("attempt", attempt+1),
+			slog.Int("max_attempts", rt.Policy.MaxAttempts),
+			slog.String("error", err.Error()),
+		)
+	}
+
+	if sleepErr := sleepFn(req.Context(), backoff); sleepErr != nil {
+		return false, backoffInterrupted(req, sleepErr)
+	}
+
+	return true, nil
 }
 
 func (rt *RetryTransport) handleResponse(
@@ -165,6 +207,7 @@ func (rt *RetryTransport) handleResponse(
 ) (bool, *http.Response, error) {
 	// --- 2xx success ---
 	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		rt.notices().markSucceeded()
 		return true, resp, nil
 	}
 
@@ -176,9 +219,11 @@ func (rt *RetryTransport) handleResponse(
 		return true, resp, nil
 	}
 
-	// Retryable but exhausted — terminal failure (R-6.6.8).
-	if attempt >= rt.Policy.MaxAttempts {
-		rt.Logger.Warn("request failed after all retries",
+	// Retryable but exhausted — terminal failure (R-6.6.8). Debug only: the
+	// response is returned, the caller turns it into an error, and the
+	// command reports that once.
+	if !rt.retriesLeft(attempt) {
+		rt.Logger.Debug("request failed after all retries",
 			slog.String("method", req.Method),
 			slog.String("url", requestLogTarget(req)),
 			slog.Int("attempts", attempt+1),
@@ -198,7 +243,7 @@ func (rt *RetryTransport) handleResponse(
 	// relevant because it can reduce connection reuse.
 	logTarget := requestLogTarget(req)
 	if drainErr := drainAndCloseBody(resp.Body); drainErr != nil {
-		rt.Logger.Warn("retry response body cleanup degraded",
+		rt.Logger.Debug("retry response body cleanup degraded",
 			slog.String("method", req.Method),
 			slog.String("url", logTarget),
 			slog.Int("status", resp.StatusCode),
@@ -214,11 +259,25 @@ func (rt *RetryTransport) handleResponse(
 		slog.Duration("backoff", backoff),
 	)
 
+	rt.announceLongWait(resp.StatusCode, backoff)
+
 	if sleepErr := sleepFn(req.Context(), backoff); sleepErr != nil {
-		return true, nil, fmt.Errorf("retry: request canceled during backoff: %w", sleepErr)
+		return true, nil, backoffInterrupted(req, sleepErr)
 	}
 
 	return false, nil, nil
+}
+
+// backoffInterrupted reports a wait that ended early. It wraps the request
+// context's own error when that is the cause, so the text reads "request
+// canceled during backoff: context canceled" instead of stacking the sleep
+// helper's wrapper on top.
+func backoffInterrupted(req *http.Request, sleepErr error) error {
+	if ctxErr := req.Context().Err(); ctxErr != nil {
+		return fmt.Errorf("request canceled during backoff: %w", ctxErr)
+	}
+
+	return fmt.Errorf("request canceled during backoff: %w", sleepErr)
 }
 
 func retryableRequestMethod(method string) bool {
@@ -250,20 +309,37 @@ func drainAndCloseBody(body io.ReadCloser) error {
 	return nil
 }
 
+// announceLongWait says once per throttling episode that a retry wait is
+// long enough for a person to notice the silence (R-6.6.8). Short waits stay
+// at Debug through the per-attempt record above.
+func (rt *RetryTransport) announceLongWait(status int, wait time.Duration) {
+	if wait < LongWaitThreshold || !rt.notices().claimLongWait() {
+		return
+	}
+
+	msg := "OneDrive is busy, waiting before retrying"
+	if status == http.StatusTooManyRequests {
+		msg = "OneDrive is limiting requests, waiting before retrying"
+	}
+
+	rt.Logger.Warn(msg, slog.String("retry_in", HumanDuration(wait)))
+}
+
 // waitForThrottle blocks until the active throttle deadline passes. Called at
 // the start of every request to enforce 429 Retry-After across this transport
 // or an injected caller-owned gate.
-func (rt *RetryTransport) waitForThrottle(ctx context.Context, sleepFn SleepFunc) error {
-	if rt.ThrottleGate != nil {
-		return rt.ThrottleGate.Wait(ctx, sleepFn)
+func (rt *RetryTransport) waitForThrottle(req *http.Request, sleepFn SleepFunc) error {
+	deadline := rt.ThrottleDeadline()
+
+	delay := time.Until(deadline)
+	if delay <= 0 {
+		return nil
 	}
 
-	rt.throttleMu.Lock()
-	deadline := rt.throttledUntil
-	rt.throttleMu.Unlock()
+	rt.announceLongWait(http.StatusTooManyRequests, delay)
 
-	if delay := time.Until(deadline); delay > 0 {
-		return sleepFn(ctx, delay)
+	if err := sleepFn(req.Context(), delay); err != nil {
+		return backoffInterrupted(req, err)
 	}
 
 	return nil

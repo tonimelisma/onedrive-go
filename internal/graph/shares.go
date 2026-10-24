@@ -18,7 +18,10 @@ const graphSharingURLPrefix = "u!"
 func (c *Client) ResolveShareURL(ctx context.Context, rawURL string) (*Item, error) {
 	shareToken, err := encodeSharingURL(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("graph: encoding sharing URL: %w", err)
+		return nil, fmt.Errorf(
+			"not a OneDrive sharing link (%w); paste the full https://1drv.ms/... or https://<tenant>.sharepoint.com/... link",
+			err,
+		)
 	}
 
 	resp, err := c.do(ctx, http.MethodGet, "/shares/"+shareToken+"/driveItem", nil)
@@ -55,10 +58,10 @@ func encodeSharingURL(raw string) (string, error) {
 	}
 
 	if parsed.Scheme != "https" {
-		return "", fmt.Errorf("sharing URL must use https")
+		return "", fmt.Errorf("it must start with https://")
 	}
 	if parsed.Host == "" {
-		return "", fmt.Errorf("sharing URL host is empty")
+		return "", fmt.Errorf("it has no host name")
 	}
 
 	return graphSharingURLPrefix + base64.RawURLEncoding.EncodeToString([]byte(parsed.String())), nil

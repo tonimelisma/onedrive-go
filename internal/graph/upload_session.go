@@ -24,7 +24,7 @@ import (
 func (c *Client) CreateUploadSession(
 	ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time,
 ) (*UploadSession, error) {
-	c.logger.Info("creating upload session",
+	c.logger.Debug("creating upload session",
 		slog.String("drive_id", driveID.String()),
 		slog.String("parent_id", parentID),
 		slog.String("name", name),
@@ -67,7 +67,7 @@ func (c *Client) CreateUploadSession(
 func (c *Client) CreateUploadSessionForItem(
 	ctx context.Context, driveID driveid.ID, itemID string, size int64, mtime time.Time,
 ) (*UploadSession, error) {
-	c.logger.Info("creating upload session for existing item",
+	c.logger.Debug("creating upload session for existing item",
 		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 		slog.Int64("size", size),
@@ -101,7 +101,7 @@ func (c *Client) CreateUploadSessionForItem(
 // CancelUploadSession cancels an in-progress upload session.
 // The session URL is pre-authenticated, so no Authorization header is sent.
 func (c *Client) CancelUploadSession(ctx context.Context, session *UploadSession) error {
-	c.logger.Info("canceling upload session")
+	c.logger.Debug("canceling upload session")
 
 	resp, err := c.doPreAuth(ctx, "cancel upload session", func() (*http.Request, error) {
 		uploadURL, urlErr := c.validatedUploadURL(session.UploadURL)
@@ -129,10 +129,6 @@ func (c *Client) CancelUploadSession(ctx context.Context, session *UploadSession
 	}
 
 	if resp.StatusCode != http.StatusNoContent {
-		c.logger.Error("cancel upload session returned unexpected status",
-			slog.Int("status", resp.StatusCode),
-		)
-
 		return fmt.Errorf("graph: cancel upload session failed with status %d", resp.StatusCode)
 	}
 
@@ -147,7 +143,7 @@ func (c *Client) CancelUploadSession(ctx context.Context, session *UploadSession
 func (c *Client) QueryUploadSession(
 	ctx context.Context, session *UploadSession,
 ) (*UploadSessionStatus, error) {
-	c.logger.Info("querying upload session status")
+	c.logger.Debug("querying upload session status")
 
 	resp, err := c.doPreAuth(ctx, "query upload session", func() (*http.Request, error) {
 		uploadURL, urlErr := c.validatedUploadURL(session.UploadURL)
@@ -184,7 +180,7 @@ func (c *Client) QueryUploadSession(
 
 	expTime, parseErr := time.Parse(time.RFC3339, ssr.ExpirationDateTime)
 	if parseErr != nil {
-		c.logger.Warn("invalid session status expiration, using zero time",
+		c.logger.Debug("invalid session status expiration, using zero time",
 			slog.String("raw", ssr.ExpirationDateTime),
 			slog.String("error", parseErr.Error()),
 		)
@@ -216,7 +212,7 @@ func (c *Client) ResumeUpload(
 	ctx context.Context, session *UploadSession,
 	content io.ReaderAt, totalSize int64, progress ProgressFunc,
 ) (*Item, error) {
-	c.logger.Info("attempting to resume upload session")
+	c.logger.Debug("attempting to resume upload session")
 
 	status, err := c.QueryUploadSession(ctx, session)
 	if err != nil {
@@ -283,7 +279,7 @@ func (c *Client) parseUploadSessionResponse(resp *http.Response) (*UploadSession
 
 	expTime, parseErr := time.Parse(time.RFC3339, usr.ExpirationDateTime)
 	if parseErr != nil {
-		c.logger.Warn("invalid upload session expiration, using zero time",
+		c.logger.Debug("invalid upload session expiration, using zero time",
 			slog.String("raw", usr.ExpirationDateTime),
 			slog.String("error", parseErr.Error()),
 		)

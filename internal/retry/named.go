@@ -5,7 +5,7 @@ import "time"
 // Canonical retry constants. Kept local to this package so callers consume the
 // fully shaped Policy values rather than piecing them together themselves.
 const (
-	transportAttempts            = 5
+	transportAttempts            = 6
 	driveDiscoveryAttempts       = 5
 	rootChildrenAttempts         = 3
 	downloadMetadataAttempts     = 6
@@ -39,8 +39,9 @@ const (
 	watchRemoteMaxDelay          = 5 * time.Minute
 )
 
-// TransportPolicy is the HTTP transport retry policy (graph/client.go).
-// 5 retries, 1s base, 60s max, 2x multiplier, ±25% jitter.
+// TransportPolicy is the HTTP transport retry policy used by RetryTransport.
+// 6 total attempts (the first plus 5 retries), 1s base, 60s max, 2x
+// multiplier, ±25% jitter.
 func TransportPolicy() Policy {
 	return Policy{
 		MaxAttempts: transportAttempts,

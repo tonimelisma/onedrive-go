@@ -160,9 +160,11 @@ func TestParseAndValidateUploadURL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "https://contoso.sharepoint.com/upload", validated)
 
-	_, err = parseAndValidateUploadURL("://bad url", validateUploadURL)
+	_, err = parseAndValidateUploadURL("://bad url?tempauth=secret-token", validateUploadURL)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing upload URL")
+	assert.NotContains(t, err.Error(), "secret-token",
+		"a malformed pre-authenticated URL must not leak its credential into the error text")
 
 	_, err = parseAndValidateUploadURL("https://example.com/upload", validateUploadURL)
 	require.Error(t, err)

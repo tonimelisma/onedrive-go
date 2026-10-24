@@ -46,7 +46,7 @@ func (c *Client) fetchAllChildren(
 		args = append(args, a)
 	}
 
-	c.logger.Info(entryMsg, args...)
+	c.logger.Debug(entryMsg, args...)
 
 	var items []Item
 	page := 1
@@ -67,14 +67,14 @@ func (c *Client) fetchAllChildren(
 	}
 
 	args = append(args, slog.Int("total_items", len(items)))
-	c.logger.Info(doneMsg, args...)
+	c.logger.Debug(doneMsg, args...)
 
 	return items, nil
 }
 
 // GetItem retrieves a single drive item by ID.
 func (c *Client) GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*Item, error) {
-	c.logger.Info("getting item",
+	c.logger.Debug("getting item",
 		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 	)
@@ -91,7 +91,7 @@ func (c *Client) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePa
 		return nil, err
 	}
 
-	c.logger.Info("getting item by path",
+	c.logger.Debug("getting item by path",
 		slog.String("drive_id", driveID.String()),
 		slog.String("path", remotePath),
 	)
@@ -161,7 +161,7 @@ func (c *Client) ListChildrenByPath(ctx context.Context, driveID driveid.ID, rem
 // and folders. Used for enumerating shared folder content on Business/SharePoint
 // drives where folder-scoped delta is not available.
 func (c *Client) ListChildrenRecursive(ctx context.Context, driveID driveid.ID, folderID string) ([]Item, error) {
-	c.logger.Info("listing children recursively",
+	c.logger.Debug("listing children recursively",
 		slog.String("drive_id", driveID.String()),
 		slog.String("folder_id", folderID),
 	)

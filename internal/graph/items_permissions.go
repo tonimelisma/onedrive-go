@@ -284,7 +284,7 @@ func (c *Client) ListRecycleBinItems(
 func (c *Client) RestoreItem(
 	ctx context.Context, driveID driveid.ID, itemID string,
 ) (*Item, error) {
-	c.logger.Info("restoring item",
+	c.logger.Debug("restoring item",
 		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 	)

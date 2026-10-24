@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -171,6 +173,65 @@ func TestDoLogin_TokenEndpointErrors(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.wantMessage)
 		})
 	}
+}
+
+// Validates: R-6.6.24
+//
+// The two common user-side outcomes of a device-code sign-in (the code ran out
+// before it was entered, or the user declined) come back as plain sentinels,
+// without the raw OAuth code or AADSTS text on the default Error line.
+func TestDoLogin_UserSideOAuthOutcomesArePlain(t *testing.T) {
+	tests := []struct {
+		name      string
+		errorCode string
+		want      error
+	}{
+		{name: "code expired", errorCode: "expired_token", want: ErrLoginCodeExpired},
+		{name: "declined", errorCode: "authorization_declined", want: ErrLoginDeclined},
+		{name: "access denied", errorCode: "access_denied", want: ErrLoginDeclined},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
+			cfg := oauthConfig(tokenPath, slog.Default())
+
+			_, err := doLoginWithFlow(
+				t.Context(),
+				tokenPath,
+				cfg,
+				noopDisplay,
+				slog.Default(),
+				func(context.Context, *oauth2.Config) (*oauth2.DeviceAuthResponse, error) {
+					return testDeviceAuthResponse(), nil
+				},
+				func(context.Context, *oauth2.Config, *oauth2.DeviceAuthResponse) (*oauth2.Token, error) {
+					return nil, &oauth2.RetrieveError{
+						ErrorCode:        tt.errorCode,
+						ErrorDescription: "AADSTS70020: The provided value for the input parameter 'device_code' is not valid.",
+					}
+				},
+			)
+			require.ErrorIs(t, err, tt.want)
+			assert.NotContains(t, err.Error(), "AADSTS")
+			assert.NotContains(t, err.Error(), tt.errorCode)
+		})
+	}
+}
+
+// Validates: R-6.6.24
+func TestBrowserAuthorizationError_AccessDeniedIsPlain(t *testing.T) {
+	t.Parallel()
+
+	err := browserAuthorizationError("access_denied", "AADSTS65004: User declined to consent to access the app.")
+	require.ErrorIs(t, err, ErrLoginDeclined)
+	assert.NotContains(t, err.Error(), "AADSTS")
+
+	other := browserAuthorizationError("invalid_request", "AADSTS900144: missing parameter")
+	require.Error(t, other)
+	require.NotErrorIs(t, other, ErrLoginDeclined)
+	assert.Contains(t, other.Error(), "invalid_request", "unexpected failures keep their diagnostic detail")
 }
 
 func TestDoLogin_ContextCancel(t *testing.T) {
@@ -996,4 +1057,38 @@ func TestGenerateState(t *testing.T) {
 	state2, err := generateState()
 	require.NoError(t, err)
 	assert.NotEqual(t, state1, state2, "consecutive states should differ")
+}
+
+// failingOAuthSource is an oauth2.TokenSource whose refresh always fails the
+// way an offline machine does.
+type failingOAuthSource struct{}
+
+func (failingOAuthSource) Token() (*oauth2.Token, error) {
+	return nil, errors.New(`oauth2: cannot fetch token: Post "https://login.microsoftonline.com/common/oauth2/v2.0/token": dial tcp: lookup login.microsoftonline.com: no such host`)
+}
+
+// Validates: R-6.6.22
+//
+// Sync workers ask for a token on every request, so a refresh failure while
+// offline used to print a warning per request on top of the command's own
+// network error. The failure is returned once per call and logged at Debug.
+func TestTokenBridge_RefreshFailureIsReturnedNotWarned(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	bridge := &tokenBridge{
+		src:    failingOAuthSource{},
+		logger: slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})),
+	}
+
+	for range 3 {
+		_, err := bridge.Token()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no such host")
+		assert.Equal(t, 1, strings.Count(err.Error(), "refreshing access token"))
+		assert.NotContains(t, err.Error(), "graph: obtaining token",
+			"callers add their own context; the bridge wraps once")
+	}
+
+	assert.Empty(t, logBuf.String())
 }

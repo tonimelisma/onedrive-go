@@ -2,10 +2,13 @@ package graph
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -545,4 +548,61 @@ func TestDownload_RetriesOn503(t *testing.T) {
 	assert.Equal(t, "retry success", buf.String())
 	assert.Equal(t, int64(len("retry success")), n)
 	assert.Equal(t, int32(3), dlCalls.Load())
+}
+
+// cancelOnWrite cancels a context on the first write it receives, modeling
+// Ctrl-C arriving while a transfer is streaming.
+type cancelOnWrite struct {
+	cancel context.CancelFunc
+}
+
+func (w cancelOnWrite) Write(p []byte) (int, error) {
+	w.cancel()
+
+	return len(p), nil
+}
+
+// Validates: R-6.6.21, R-6.6.22
+//
+// A transfer interrupted by shutdown returns its error to the caller, which
+// treats cancellation as shutdown. The graph client used to log the failure
+// at ERROR as well, so a clean Ctrl-C printed an error line per active
+// transfer, even under --quiet.
+func TestTransfersCanceledMidFlightLogNothingAboveDebug(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Length", "1048576")
+			w.WriteHeader(http.StatusOK)
+			_, writeErr := w.Write(bytes.Repeat([]byte("x"), 1024))
+			assert.NoError(t, writeErr)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	var logBuf bytes.Buffer
+	client := newTestClient(t, srv.URL)
+	client.logger = slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	downloadCtx, cancelDownload := context.WithCancel(t.Context())
+	defer cancelDownload()
+
+	_, err := client.downloadFromURL(downloadCtx, srv.URL+"/content", cancelOnWrite{cancel: cancelDownload})
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+
+	uploadCtx, cancelUpload := context.WithCancel(t.Context())
+	cancelUpload()
+
+	_, err = client.SimpleUpload(uploadCtx, driveid.New("d1"), "parent", "a.txt", strings.NewReader("data"), 4)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+
+	assert.Empty(t, logBuf.String(), "a canceled transfer must not log at Warn or Error")
 }

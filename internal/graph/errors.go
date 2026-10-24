@@ -31,6 +31,13 @@ var (
 	// (OAuth invalid_grant: expired after inactivity, revoked, or password
 	// changed). It always travels together with ErrUnauthorized.
 	ErrLoginExpired = errors.New("graph: saved login expired")
+	// ErrLoginDeclined marks an interactive sign-in the user canceled or
+	// declined (OAuth access_denied / authorization_declined). Its text is
+	// the user-facing message; the raw OAuth detail is logged at Debug.
+	ErrLoginDeclined = errors.New("sign-in was canceled or declined")
+	// ErrLoginCodeExpired marks a device-code sign-in whose code expired
+	// before the user entered it (OAuth expired_token).
+	ErrLoginCodeExpired = errors.New("the sign-in code expired before it was entered")
 
 	// ErrProviderReadOnly marks a Microsoft-side read-only window: the service
 	// answers, authentication is valid, and the account is fine, but the
