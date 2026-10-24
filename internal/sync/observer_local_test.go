@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"syscall"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
