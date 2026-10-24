@@ -98,11 +98,12 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 
 	console.Summary(result)
 
-	if err := runOnceResultError(result); err != nil {
-		return err
-	}
-
-	return incompleteSyncError(result.Reports, console.PermanentFailures)
+	// Item-level failures are not a failed run: each one is printed as it
+	// happens and the engine keeps it as a durable condition that status
+	// reports (a read-only shared folder, a locked file, throttling).
+	// Failing every run on such a state would make the exit status useless
+	// to cron. A drive that could not sync at all still fails the command.
+	return runOnceResultError(result)
 }
 
 func runSyncWatch(

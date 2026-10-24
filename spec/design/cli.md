@@ -149,9 +149,9 @@ Only a stop the user requested (the shutdown context is done) is silent and
 exits 130; `context.DeadlineExceeded` from anything else is an error. Under
 the journal, `writeCommandError` prefixes each line with `<3>` (R-6.6.27).
 
-Commands never report success for work they skipped (R-6.6.28). One-shot sync
-turns the failures that will not be retried (the console's `PermanentFailures`,
-the same count as the summary's "N failed") into `errSyncIncomplete`. Folder `get`/`put` go through
+Commands never report success for work they skipped (R-6.6.28). One-shot sync fails
+only when a drive could not sync; per-file failures are printed and kept as
+durable engine conditions for `status`, not turned into a failed run. Folder `get`/`put` go through
 `bulkTransferError`, which lists each failed item on stderr and fails the
 command (under `--json` the failures stay in the document, and only the exit
 status changes). `sync --json` swaps the console's text for JSON lines

@@ -7,15 +7,12 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/multisync"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func graphNotFound() error {
@@ -119,39 +116,6 @@ func TestWriteCommandError_JournalLinesCarryErrPriority(t *testing.T) {
 	var buf bytes.Buffer
 	writeCommandError(&buf, "Error: one\nRun 'x --help' for usage.")
 	require.Equal(t, "Error: one\nRun 'x --help' for usage.\n", buf.String(), "a plain writer is not the journal")
-}
-
-// Validates: R-6.6.28
-func TestIncompleteSyncError_FailedItemsMakeTheRunFail(t *testing.T) {
-	t.Parallel()
-
-	allFailed := func(r *multisync.MountReport) int { return r.Report.Failed }
-	require.NoError(t, incompleteSyncError([]*multisync.MountReport{{Report: &syncengine.Report{Succeeded: 3}}}, allFailed))
-
-	err := incompleteSyncError([]*multisync.MountReport{
-		{Report: &syncengine.Report{Succeeded: 3, Failed: 1}},
-		{Report: &syncengine.Report{Failed: 1}},
-		nil,
-	}, allFailed)
-	require.Error(t, err)
-	require.ErrorIs(t, err, errSyncIncomplete)
-	assert.Equal(t, "Error: 2 items could not be synced (see above).", commandErrorText(err, false))
-}
-
-// Validates: R-6.6.28
-func TestIncompleteSyncError_ItemsQueuedForRetryDoNotFailTheRun(t *testing.T) {
-	t.Parallel()
-
-	c, _, _ := testSyncConsole()
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "churn.txt", WillRetry: true, Err: errors.New("transient 404")}))
-
-	report := &multisync.MountReport{Identity: multisync.MountIdentity{MountID: "m1"}, Report: &syncengine.Report{Failed: 1}}
-	require.NoError(t, incompleteSyncError([]*multisync.MountReport{report}, c.PermanentFailures),
-		"a failure the next sync retries is reported in the summary, not as a failed run")
-
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "locked.txt", Err: os.ErrPermission}))
-	report.Report.Failed = 2
-	require.Error(t, incompleteSyncError([]*multisync.MountReport{report}, c.PermanentFailures))
 }
 
 // Validates: R-6.6.28

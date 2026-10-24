@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
@@ -84,32 +83,4 @@ func formatMountReportErrorMessage(dr *multisync.MountReport) string {
 	}
 
 	return formatStateStoreIncompatibleMessage(&dr.Identity, dr.Err)
-}
-
-// errSyncIncomplete marks a pass that ran but left items unsynced, so cron
-// and systemd see a failure instead of exit 0 after "...; 2 failed."
-var errSyncIncomplete = errors.New("sync incomplete")
-
-// incompleteSyncError fails a pass that left items unsynced for good. Items
-// the engine recorded for retry (throttling, transient 404s, server errors)
-// are not counted: the summary already says the next sync retries them, and
-// failing every run on a passing condition would train cron users to ignore
-// the exit status. permanentFailures is the console's per-drive count, so the
-// exit status and the "N failed" in the summary never disagree.
-func incompleteSyncError(reports []*multisync.MountReport, permanentFailures func(*multisync.MountReport) int) error {
-	failed := 0
-	for _, dr := range reports {
-		if dr != nil && dr.Report != nil {
-			failed += permanentFailures(dr)
-		}
-	}
-
-	if failed == 0 {
-		return nil
-	}
-
-	return newPresentedError(
-		countItems(failed)+" could not be synced (see above).",
-		errSyncIncomplete,
-	)
 }
