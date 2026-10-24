@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1055,4 +1057,38 @@ func TestGenerateState(t *testing.T) {
 	state2, err := generateState()
 	require.NoError(t, err)
 	assert.NotEqual(t, state1, state2, "consecutive states should differ")
+}
+
+// failingOAuthSource is an oauth2.TokenSource whose refresh always fails the
+// way an offline machine does.
+type failingOAuthSource struct{}
+
+func (failingOAuthSource) Token() (*oauth2.Token, error) {
+	return nil, errors.New(`oauth2: cannot fetch token: Post "https://login.microsoftonline.com/common/oauth2/v2.0/token": dial tcp: lookup login.microsoftonline.com: no such host`)
+}
+
+// Validates: R-6.6.22
+//
+// Sync workers ask for a token on every request, so a refresh failure while
+// offline used to print a warning per request on top of the command's own
+// network error. The failure is returned once per call and logged at Debug.
+func TestTokenBridge_RefreshFailureIsReturnedNotWarned(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	bridge := &tokenBridge{
+		src:    failingOAuthSource{},
+		logger: slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})),
+	}
+
+	for range 3 {
+		_, err := bridge.Token()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no such host")
+		assert.Equal(t, 1, strings.Count(err.Error(), "refreshing access token"))
+		assert.NotContains(t, err.Error(), "graph: obtaining token",
+			"callers add their own context; the bridge wraps once")
+	}
+
+	assert.Empty(t, logBuf.String())
 }

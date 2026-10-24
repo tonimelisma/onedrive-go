@@ -350,7 +350,8 @@ recovery, quirk retry exhaustion, unparseable timestamps or session
 expirations) log at Debug, because their outcome is either success or a
 returned error. Errors are returned and never also logged above Debug, so the
 command reports each failure once and a canceled context during shutdown
-prints nothing. Interactive sign-in maps the user-side outcomes (consent
+prints nothing (`TestTransfersCanceledMidFlightLogNothingAboveDebug`,
+`TestTokenBridge_RefreshFailureIsReturnedNotWarned`). Interactive sign-in maps the user-side outcomes (consent
 canceled or declined, device code expired) to the plain sentinels
 `ErrLoginDeclined` and `ErrLoginCodeExpired` instead of raw OAuth/AADSTS text
 (`TestDoLogin_UserSideOAuthOutcomesArePlain`,
