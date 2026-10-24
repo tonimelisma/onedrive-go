@@ -31,7 +31,7 @@ func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
 	}); err != nil {
 		rt.resources.localObs.droppedEvents.Add(droppedEvents)
 		rt.resources.localObs.droppedRetries.Add(droppedRetries)
-		rt.deps.logger.Warn("mark local truth suspect after dropped observation failed",
+		rt.deps.logger.Warn("Could not schedule a rescan of the sync folder after missed changes; will retry",
 			slog.Int64("dropped_events", droppedEvents),
 			slog.Int64("dropped_hash_requests", droppedRetries),
 			slog.String("error", err.Error()),
@@ -39,7 +39,8 @@ func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
 		return
 	}
 
-	rt.deps.logger.Warn("local truth marked suspect after dropped observation",
+	// Info: self-healing, the engine rescans by itself.
+	rt.deps.logger.Info("Many local changes arrived at once; rescanning the sync folder to catch up",
 		slog.Int64("dropped_events", droppedEvents),
 		slog.Int64("dropped_hash_requests", droppedRetries),
 	)
@@ -97,7 +98,7 @@ func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
 		}
 	}))
 
-	rt.deps.logger.Info("full remote refresh armed",
+	rt.deps.logger.Debug("full remote refresh armed",
 		slog.Duration("delay", delay),
 		slog.Time("due_at", time.Unix(0, state.NextFullRemoteRefreshAt)),
 	)
@@ -140,7 +141,8 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 	observationBatch, err := rt.executePrimaryRootObservation(ctx, bl, true)
 	if err != nil {
 		if ctx.Err() == nil {
-			rt.deps.logger.Error("full remote refresh failed",
+			// Warn, not Error: the refresh is retried when watch is idle.
+			rt.deps.logger.Warn("Full check of OneDrive for changes failed; will retry",
 				slog.String("error", err.Error()),
 			)
 		}

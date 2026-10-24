@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -466,18 +467,43 @@ func (rt *watchRuntime) handleObserverExit(_ *watchPipeline, shuttingDown bool) 
 		return nil
 	}
 
-	rt.deps.logger.Error("all observers have exited, stopping watch mode")
-	return fmt.Errorf("sync: all observers exited")
+	// Returned, not logged: the caller reports the watch error once.
+	if rt.resources.lastObserverErr != nil {
+		return fmt.Errorf("sync: stopped watching for changes: %w", rt.resources.lastObserverErr)
+	}
+	return fmt.Errorf("sync: stopped watching for changes")
 }
 
+// logObserverError reports one observer's exit while the other keeps
+// running. Watch then no longer sees changes on that side until it is
+// restarted, so this is a Warn naming the side (observer errors are wrapped
+// by observerExitError). Cancellation is shutdown, not news.
 func (rt *watchRuntime) logObserverError(obsErr error) {
-	if obsErr == nil {
+	if obsErr == nil || errors.Is(obsErr, context.Canceled) || errors.Is(obsErr, context.DeadlineExceeded) {
 		return
 	}
 
-	rt.deps.logger.Warn("observer error",
-		slog.String("error", obsErr.Error()),
-	)
+	rt.resources.lastObserverErr = obsErr
+	if rt.isDraining() {
+		rt.deps.logger.Debug("observer error during shutdown", slog.String("error", obsErr.Error()))
+		return
+	}
+
+	rt.deps.logger.Warn("Stopped " + obsErr.Error() + "; those changes will not sync until onedrive-go is restarted")
+}
+
+// observerExitError names which side an observer watched, so the one-line
+// report says what stopped. Nil stays nil; fatal observer errors stay
+// recognizable through the wrap.
+func observerExitError(observerName string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if observerName == observerNameLocal {
+		return fmt.Errorf("watching local files for changes: %w", err)
+	}
+
+	return fmt.Errorf("checking OneDrive for changes: %w", err)
 }
 
 func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *trackedAction, *trackedAction) {

@@ -117,7 +117,7 @@ func (s *SyncStore) Close(ctx context.Context) error {
 	// it must not be skipped (or reported as a failure) just because the
 	// caller is stopping.
 	if err := s.Checkpoint(context.WithoutCancel(ctx)); err != nil {
-		s.logger.Warn("checkpoint failed on close", slog.String("error", err.Error()))
+		s.logger.Debug("checkpoint failed on close", slog.String("error", err.Error()))
 	}
 
 	if err := s.db.Close(); err != nil {

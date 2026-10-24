@@ -15,10 +15,16 @@ func (ph *permissionHandler) handleLocalPermission(
 	issueType := localPermissionIssueType(r)
 
 	if !isDirAccessible(ph.syncTree, ".") {
-		ph.logger.Warn("sync root directory is inaccessible",
-			slog.String("path", ph.syncTree.Path()),
-			slog.String("error", r.ErrMsg),
-		)
+		if ph.rootInaccessibleReported.CompareAndSwap(false, true) {
+			ph.logger.Warn("Cannot access the sync folder "+ph.syncTree.Path()+": permission denied. Check its permissions",
+				slog.String("error", r.ErrMsg),
+			)
+		} else {
+			ph.logger.Debug("sync root directory is inaccessible",
+				slog.String("path", ph.syncTree.Path()),
+				slog.String("error", r.ErrMsg),
+			)
+		}
 
 		return ph.localFilePermissionEvidence(
 			r.Path,
@@ -28,9 +34,11 @@ func (ph *permissionHandler) handleLocalPermission(
 		)
 	}
 
+	ph.rootInaccessibleReported.Store(false)
+
 	absPath, absErr := ph.syncTree.Abs(r.Path)
 	if absErr != nil {
-		ph.logger.Warn("handleLocalPermission: failed to resolve sync-tree path",
+		ph.logger.Debug("handleLocalPermission: failed to resolve sync-tree path",
 			slog.String("path", r.Path),
 			slog.String("error", absErr.Error()),
 		)
@@ -56,7 +64,7 @@ func (ph *permissionHandler) handleLocalPermission(
 	boundary := ph.deepestDeniedBoundary(parentDir)
 	relBoundary, relErr := ph.syncTree.Rel(boundary)
 	if relErr != nil {
-		ph.logger.Warn("handleLocalPermission: failed to relativize boundary path",
+		ph.logger.Debug("handleLocalPermission: failed to relativize boundary path",
 			slog.String("boundary", boundary),
 			slog.String("error", relErr.Error()),
 		)

@@ -32,7 +32,7 @@ func TestCheckInotifyCapacity_WarnsAboveThreshold(t *testing.T) {
 	// We can't control the real limit, so use a very high number to guarantee warning.
 	checkInotifyCapacity(999_999_999, logger)
 
-	assert.Contains(t, buf.String(), "inotify watch usage near limit")
+	assert.Contains(t, buf.String(), "close to the system limit")
 	assert.Contains(t, buf.String(), "max_user_watches")
 }
 

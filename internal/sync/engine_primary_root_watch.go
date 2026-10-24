@@ -23,7 +23,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 			defer close(batches)
 			defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
 
-			errs <- rt.watchMountRootRemote(ctx, bl, batches, pollInterval)
+			errs <- observerExitError(observerNameRemote, rt.watchMountRootRemote(ctx, bl, batches, pollInterval))
 		}()
 		return
 	}
@@ -36,7 +36,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 
 	state, tokenErr := rt.deps.store.ReadObservationState(ctx)
 	if tokenErr != nil {
-		rt.deps.logger.Warn("failed to get delta token for watch",
+		rt.deps.logger.Info("Could not read the saved OneDrive sync position; rescanning OneDrive",
 			slog.String("error", tokenErr.Error()),
 		)
 	}
@@ -51,7 +51,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		defer close(batches)
 		defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
 
-		errs <- remoteObs.Watch(
+		watchErr := remoteObs.Watch(
 			ctx,
 			savedToken,
 			batches,
@@ -68,6 +68,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 				return batch, nil
 			},
 		)
+		errs <- observerExitError(observerNameRemote, watchErr)
 	}()
 }
 
@@ -80,7 +81,9 @@ func (rt *watchRuntime) warnMountRootWebsocketFallback() {
 		Type: engineDebugEventWebsocketFallback,
 		Note: "mount_root",
 	})
-	rt.deps.logger.Warn("websocket watch is not supported for mount-root engines; falling back to polling",
+	// Debug: a by-design limitation with nothing for the user to do; it
+	// fired at every watch start for every shared folder.
+	rt.deps.logger.Debug("websocket watch is not supported for mount-root engines; falling back to polling",
 		slog.String("drive_id", rt.engine.driveID.String()),
 		slog.String("remote_root_item_id", rt.engine.remoteRootItemID),
 	)

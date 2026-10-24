@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"path"
 	"slices"
@@ -21,6 +22,7 @@ type inflightParent struct {
 	ParentDriveID driveid.ID // drive containing this item's parent
 	IsRoot        bool
 	IsVault       bool // true for Personal Vault folder (B-271)
+	IsPackage     bool // true for OneNote and other package items, which sync never manages
 }
 
 // itemConverter converts []graph.Item into []ChangeEvent with full path
@@ -54,8 +56,29 @@ type itemConverter struct {
 	// applicable to the primary drive.
 	EnableVaultFilter bool
 
+	// incompleteObservation, unreachableParents and ancestorFetches are
+	// per-window state, reset by resetIncompleteObservation at the start of
+	// every delta window or mount-root batch. The converter is owned by one
+	// observer goroutine, so they need no lock.
 	incompleteObservation bool
+
+	// unreachableParents holds parent IDs that Graph answered as not found or
+	// forbidden while resolving a window's missing ancestors. Children of such
+	// a parent can never be placed, so they are skipped instead of holding
+	// the delta cursor on a window that no replay can complete.
+	unreachableParents map[string]struct{}
+
+	// ancestorFetches counts GetItem calls spent resolving missing ancestors
+	// in the current window, bounded by maxAncestorFetchesPerWindow.
+	ancestorFetches int
 }
+
+// maxAncestorFetchesPerWindow bounds the item-by-ID reads one delta window may
+// spend resolving parents that are neither in the window nor in the baseline.
+// Orphans are rare, so the bound only stops a pathological window from
+// turning into thousands of Graph calls; items it leaves unresolved keep the
+// window incomplete and are retried on the next poll.
+const maxAncestorFetchesPerWindow = 200
 
 // newPrimaryConverter creates an ItemConverter for primary-drive or
 // mount-root observation. Embedded shared-folder items are ignored here;
@@ -91,6 +114,7 @@ func (c *itemConverter) ConvertItems(ctx context.Context, items []graph.Item) []
 	for i := range items {
 		c.registerInflight(&items[i], inflight)
 	}
+	c.resolveMissingAncestors(ctx, items, inflight)
 
 	// Pass 2: classify and emit events.
 	var events []changeEvent
@@ -107,6 +131,8 @@ func (c *itemConverter) ConvertItems(ctx context.Context, items []graph.Item) []
 func (c *itemConverter) resetIncompleteObservation() {
 	if c != nil {
 		c.incompleteObservation = false
+		c.unreachableParents = nil
+		c.ancestorFetches = 0
 	}
 }
 
@@ -227,6 +253,104 @@ func mergeSparseRemoteItem(dst *graph.Item, enriched *graph.Item) {
 	}
 }
 
+// resolveMissingAncestors reads, by ID, the ancestors of window items whose
+// parent chain leaves both the window (inflight) and the baseline, and
+// registers them in inflight so path materialization can place the item.
+//
+// An incremental delta window carries only changed items. A change inside a
+// folder that this client never put in its baseline -- a OneNote package or
+// Personal Vault folder that observation suppresses, or a folder whose own
+// download has not succeeded yet -- arrives without its parent. Without this
+// step that item marks the window incomplete, the cursor never advances, and
+// every later poll replays the same window: remote sync stalls for good.
+//
+// Fetched ancestors are path context only; they are never emitted as events.
+// A parent Graph answers as not found or forbidden is recorded in
+// unreachableParents so its children are skipped rather than stalling the
+// cursor. Any other read failure leaves the item unresolved, which keeps the
+// window incomplete and retries it on the next poll.
+func (c *itemConverter) resolveMissingAncestors(
+	ctx context.Context,
+	items []graph.Item,
+	inflight map[string]inflightParent,
+) {
+	if c == nil || c.Items == nil || len(items) == 0 {
+		return
+	}
+
+	for i := range items {
+		item := &items[i]
+		if item.IsDeleted || item.IsRoot || item.ID == "" {
+			continue
+		}
+
+		c.resolveAncestorChain(ctx, item.ParentID, resolveParentDriveID(item, c.resolveItemDriveID(item)), inflight)
+	}
+}
+
+func (c *itemConverter) resolveAncestorChain(
+	ctx context.Context,
+	parentID string,
+	parentDriveID driveid.ID,
+	inflight map[string]inflightParent,
+) {
+	for range maxPathDepth {
+		if parentID == "" || (c.RemoteRootItemID != "" && parentID == c.RemoteRootItemID) {
+			return
+		}
+		if p, ok := inflight[parentID]; ok {
+			if p.IsRoot {
+				return
+			}
+			parentID, parentDriveID = p.ParentID, p.ParentDriveID
+
+			continue
+		}
+		if entry, ok := c.Baseline.GetByID(parentID); ok && entry.Path != "" {
+			return
+		}
+		if _, unreachable := c.unreachableParents[parentID]; unreachable {
+			return
+		}
+		if c.ancestorFetches >= maxAncestorFetchesPerWindow || ctx.Err() != nil {
+			return
+		}
+
+		c.ancestorFetches++
+		ancestor, err := c.Items.GetItem(ctx, parentDriveID, parentID)
+		if err != nil || ancestor == nil || ancestor.ID == "" {
+			c.recordAncestorFetchFailure(parentID, parentDriveID, err)
+
+			return
+		}
+
+		c.registerInflight(ancestor, inflight)
+	}
+}
+
+func (c *itemConverter) recordAncestorFetchFailure(parentID string, parentDriveID driveid.ID, err error) {
+	if errors.Is(err, graph.ErrNotFound) || errors.Is(err, graph.ErrForbidden) {
+		if c.unreachableParents == nil {
+			c.unreachableParents = make(map[string]struct{})
+		}
+		c.unreachableParents[parentID] = struct{}{}
+	}
+
+	if c.Logger == nil {
+		return
+	}
+
+	errText := "empty item"
+	if err != nil {
+		errText = err.Error()
+	}
+	c.Logger.Debug("missing remote ancestor read failed",
+		slog.String("parent_id", parentID),
+		slog.String("parent_drive_id", parentDriveID.String()),
+		slog.String("error", errText),
+	)
+}
+
 // registerInflight adds an item to the inflight parent map without
 // classification. Called in pass 1 to ensure the full page/batch is
 // registered before any vault/classification checks (B-281).
@@ -251,6 +375,7 @@ func (c *itemConverter) registerInflight(item *graph.Item, inflight map[string]i
 		ParentDriveID: parentDriveID,
 		IsRoot:        item.IsRoot,
 		IsVault:       item.SpecialFolderName == specialFolderVault,
+		IsPackage:     item.IsPackage,
 	}
 }
 
@@ -271,7 +396,7 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 	// Emitting them would create buffer/planner entries the rest of the
 	// pipeline cannot reconcile back to durable remote state.
 	if item.ID == "" {
-		c.Logger.Warn("skipping remote item with empty id",
+		c.Logger.Debug("skipping remote item with empty id",
 			slog.String("name", item.Name),
 			slog.String("parent_id", item.ParentID),
 			slog.String("drive_id", itemDriveID.String()),
@@ -291,7 +416,7 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 	// existing baseline entry can supply the missing name safely.
 	_, knownProtectedRoot := c.ProtectedRootBindings[item.ID]
 	if !item.IsDeleted && item.Name == "" && existing == nil && !knownProtectedRoot {
-		c.Logger.Warn("skipping remote item with empty name",
+		c.Logger.Debug("skipping remote item with empty name",
 			slog.String("item_id", item.ID),
 			slog.String("parent_id", item.ParentID),
 			slog.String("drive_id", itemDriveID.String()),
@@ -309,7 +434,7 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 
 	// OneNote/package items are valid Graph objects, but they are compound
 	// provider objects rather than normal file/folder content sync can manage.
-	if item.IsPackage {
+	if item.IsPackage || c.isDescendantOfPackage(item, inflight) {
 		c.Logger.Debug("skipping package item",
 			slog.String("item_id", item.ID),
 			slog.String("name", item.Name),
@@ -515,7 +640,10 @@ func (c *itemConverter) classifyAndConvert(
 	}
 
 	if ev.Path == "" {
-		c.Logger.Warn("skipping remote item without materialized path",
+		// Debug: the reason was already reported where materialization failed
+		// (an unreachable parent warns once; an unresolved one fails the
+		// window and is retried).
+		c.Logger.Debug("skipping remote item without materialized path",
 			slog.String("item_id", item.ID),
 			slog.String("name", item.Name),
 			slog.String("parent_id", item.ParentID),
@@ -666,8 +794,26 @@ func (c *itemConverter) materializePathFromParts(
 			return c.applyPrefix(resolvedPath)
 		}
 
-		// Parent not found — orphaned item.
-		c.Logger.Warn("orphaned item: parent not found in inflight or baseline",
+		// Parent not found -- orphaned item.
+		if _, unreachable := c.unreachableParents[parentID]; unreachable {
+			// Graph itself says the parent is gone or not readable, so no
+			// replay can ever place this item. Skip it and let the window
+			// advance; one line here, because the window is not replayed.
+			if markIncomplete {
+				c.Logger.Warn("Not syncing a OneDrive item: its parent folder is not accessible",
+					slog.String("name", name),
+				)
+				c.Logger.Debug("orphaned item skipped: parent unreachable",
+					slog.String("item_id", itemID),
+					slog.String("parent_id", parentID),
+					slog.String("parent_drive_id", parentDriveID.String()),
+				)
+			}
+
+			return ""
+		}
+
+		c.Logger.Debug("orphaned item: parent not found in inflight or baseline",
 			slog.String("item_id", itemID),
 			slog.String("parent_id", parentID),
 			slog.String("parent_drive_id", parentDriveID.String()),
@@ -707,7 +853,7 @@ func (c *itemConverter) shouldSkipVaultItem(
 		return false
 	}
 
-	c.Logger.Info("skipping vault item",
+	c.Logger.Debug("skipping vault item",
 		slog.String("item_id", item.ID),
 		slog.String("name", item.Name),
 	)
@@ -738,6 +884,32 @@ func (c *itemConverter) isDescendantOfVault(
 
 		if p.IsRoot {
 			return false
+		}
+
+		parentID = p.ParentID
+	}
+
+	return false
+}
+
+// isDescendantOfPackage reports whether an item sits inside a package (a
+// OneNote notebook, for example). Packages are skipped, so their contents
+// must be too: resolveMissingAncestors can now place such a child by
+// fetching the package as its parent, and without this check the notebook's
+// sections would sync as ordinary files.
+func (c *itemConverter) isDescendantOfPackage(
+	item *graph.Item, inflight map[string]inflightParent,
+) bool {
+	parentID := item.ParentID
+
+	for range maxPathDepth {
+		p, ok := inflight[parentID]
+		if parentID == "" || !ok || p.IsRoot {
+			return false
+		}
+
+		if p.IsPackage {
+			return true
 		}
 
 		parentID = p.ParentID

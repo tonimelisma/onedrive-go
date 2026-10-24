@@ -14,7 +14,7 @@ import (
 )
 
 // Validates: R-6.6.7
-func TestEngineFlow_LogFailureSummary_AggregatesRetryWorkWarnings(t *testing.T) {
+func TestEngineFlow_LogFailureSummary_AggregatesRetryWorkBelowWarn(t *testing.T) {
 	t.Parallel()
 
 	var logBuf bytes.Buffer
@@ -41,8 +41,10 @@ func TestEngineFlow_LogFailureSummary_AggregatesRetryWorkWarnings(t *testing.T) 
 	flow.logFailureSummary()
 
 	output := logBuf.String()
-	assert.Contains(t, output, "msg=\"sync retry work (aggregated)\"")
-	assert.Equal(t, 11, strings.Count(output, "msg=\"sync retry work\""))
+	assert.Contains(t, output, "level=INFO msg=\"Some files will be retried on the next sync\"")
+	assert.Equal(t, 11, strings.Count(output, "level=DEBUG msg=\"sync retry work\""))
+	assert.NotContains(t, output, "level=WARN",
+		"the sync console reports each failed file; the summary must not repeat it at WARN")
 	assert.Contains(t, output, "condition_type=service_outage")
 	assert.Contains(t, output, "retry-00.txt")
 	assert.Contains(t, output, "retry-10.txt")

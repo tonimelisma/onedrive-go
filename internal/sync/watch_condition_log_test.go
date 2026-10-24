@@ -6,8 +6,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// Validates: R-2.10.47
-func TestFormatWatchConditionBreakdown_UsesRawCountsOnly(t *testing.T) {
+// Validates: R-6.6.30
+func TestFormatWatchConditionBreakdown_UsesUserWords(t *testing.T) {
 	t.Parallel()
 
 	summary := watchConditionSummary{
@@ -20,13 +20,13 @@ func TestFormatWatchConditionBreakdown_UsesRawCountsOnly(t *testing.T) {
 	}
 
 	assert.Equal(t,
-		"1 authentication_required, 2 remote_write_denied",
+		"1 file waiting for sign-in, 2 files in read-only shared folders",
 		formatWatchConditionBreakdown(summary),
 	)
 }
 
-// Validates: R-2.10.47
-func TestWatchConditionSummaryFingerprint_IncludesTotalAndBreakdown(t *testing.T) {
+// Validates: R-6.6.30
+func TestWatchConditionSummaryFingerprint_IsTheSetOfConditionKinds(t *testing.T) {
 	t.Parallel()
 
 	summary := watchConditionSummary{
@@ -36,5 +36,6 @@ func TestWatchConditionSummaryFingerprint_IncludesTotalAndBreakdown(t *testing.T
 		ConditionTotal: 4,
 	}
 
-	assert.Equal(t, "4|invalid_filename=4", watchConditionSummaryFingerprint(summary))
+	assert.Equal(t, "invalid_filename", watchConditionSummaryFingerprint(summary),
+		"counts are left out so a count change alone does not re-report")
 }

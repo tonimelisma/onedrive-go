@@ -140,7 +140,7 @@ func (ss *scopeState) checkWindow(
 
 	triggered := w.add(path, now)
 	if triggered {
-		ss.logger.Info("scope threshold crossed",
+		ss.logger.Debug("scope threshold crossed",
 			slog.String("scope_key", sk.String()),
 			slog.Int("unique_paths", w.uniqueCount(now)),
 		)

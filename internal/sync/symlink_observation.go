@@ -443,9 +443,12 @@ func (o *localObserver) addObservedDirWatches(
 		return fmt.Errorf("watch setup context: %w", ctx.Err())
 	}
 
+	// Per-directory watch setup failures are Debug: unreadable folders are
+	// already recorded by the scanner as skipped items, and the setup
+	// summary counts failures.
 	info, isSymlink, err := statObservedPath(fsPath)
 	if err != nil {
-		o.logger.Warn("stat failed during watch setup",
+		o.logger.Debug("stat failed during watch setup",
 			slog.String("path", fsPath),
 			slog.String("error", err.Error()))
 		return nil
@@ -482,7 +485,7 @@ func (o *localObserver) addObservedDirWatches(
 		"skipping symlinked directory cycle in watch setup",
 	)
 	if err != nil {
-		o.logger.Warn("failed to resolve watched directory",
+		o.logger.Debug("failed to resolve watched directory",
 			slog.String("path", fsPath),
 			slog.String("error", err.Error()))
 		return nil
@@ -518,7 +521,9 @@ func (o *localObserver) addObservedWatch(
 	}
 
 	if isWatchLimitError(addErr) {
-		o.logger.Error("inotify watch limit exhausted",
+		// Debug: the caller falls back to periodic scans and reports the
+		// limit once with the fix.
+		o.logger.Debug("inotify watch limit exhausted",
 			slog.String("path", fsPath),
 			slog.Int("watches_added", counts.watched),
 		)
@@ -527,7 +532,7 @@ func (o *localObserver) addObservedWatch(
 	}
 
 	counts.failed++
-	o.logger.Warn("failed to add watch",
+	o.logger.Debug("failed to add watch",
 		slog.String("path", fsPath),
 		slog.String("error", addErr.Error()))
 	return nil
@@ -544,7 +549,7 @@ func (o *localObserver) addObservedDirChildrenWatches(
 ) error {
 	entries, err := localpath.ReadDir(fsPath)
 	if err != nil {
-		o.logger.Warn("read dir failed during watch setup",
+		o.logger.Debug("read dir failed during watch setup",
 			slog.String("path", fsPath),
 			slog.String("error", err.Error()))
 		return nil

@@ -13,13 +13,17 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
+// The handle403 probes below log at Debug only: each runs once per failing
+// remote write, alongside the console's own failure line, and a boundary
+// they record is reported once as a block scope when it starts.
+//
 // ActiveRemoteBlockedBoundaries returns all persisted remote permission
 // boundaries currently blocking write admission under read-only subtrees.
 // Runtime blocking derives directly from persisted block_scopes.
 func (ph *permissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) []string {
 	blocks, err := ph.store.ListBlockScopes(ctx)
 	if err != nil {
-		ph.logger.Warn("ActiveRemoteBlockedBoundaries: failed to list block scopes",
+		ph.logger.Debug("ActiveRemoteBlockedBoundaries: failed to list block scopes",
 			slog.String("error", err.Error()),
 		)
 
@@ -108,7 +112,7 @@ func (ph *permissionHandler) handle403(
 
 		return permissionEvidence{}
 	case graph.PermissionWriteAccessInconclusive:
-		ph.logger.Warn("handle403: permission evidence inconclusive, not suppressing",
+		ph.logger.Debug("handle403: permission evidence inconclusive, not suppressing",
 			slog.String("path", failedPath),
 		)
 
@@ -138,7 +142,7 @@ func (ph *permissionHandler) handlePermissionCheckError(
 	actionType actionType,
 ) permissionEvidence {
 	if errors.Is(err, graph.ErrNotFound) {
-		ph.logger.Warn("handle403: folder not found, recording as permission denied",
+		ph.logger.Debug("handle403: folder not found, recording as permission denied",
 			slog.String("path", parentFolder),
 		)
 
@@ -151,7 +155,7 @@ func (ph *permissionHandler) handlePermissionCheckError(
 		)
 	}
 
-	ph.logger.Warn("handle403: permission check failed, not suppressing",
+	ph.logger.Debug("handle403: permission check failed, not suppressing",
 		slog.String("path", failedPath),
 		slog.String("error", err.Error()),
 	)

@@ -119,7 +119,7 @@ func (g *depGraph) WireDeps(id int64, depIDs []int64) *trackedAction {
 
 	node, ok := g.actions[id]
 	if !ok {
-		g.logger.Warn("dep_graph: WireDeps called with unknown ID",
+		g.logger.Debug("dep_graph: WireDeps called with unknown ID",
 			slog.Int64("id", id),
 		)
 
@@ -132,7 +132,7 @@ func (g *depGraph) WireDeps(id int64, depIDs []int64) *trackedAction {
 		dep, ok := g.actions[depID]
 		if !ok {
 			// Should not happen with Register-all-first pattern.
-			g.logger.Warn("dep_graph: WireDeps references unregistered action",
+			g.logger.Debug("dep_graph: WireDeps references unregistered action",
 				slog.Int64("id", id),
 				slog.Int64("dep_id", depID),
 			)
@@ -198,7 +198,7 @@ func (g *depGraph) Complete(id int64) ([]*trackedAction, bool) {
 	node, ok := g.actions[id]
 	if !ok {
 		g.mu.Unlock()
-		g.logger.Warn("dep_graph: Complete called with unknown ID",
+		g.logger.Debug("dep_graph: Complete called with unknown ID",
 			slog.Int64("id", id),
 		)
 		return nil, false

@@ -79,8 +79,15 @@ func (o *localObserver) watchLoop(
 				return nil
 			}
 
+			// Self-healing: local truth is marked for a rescan. The first
+			// error of a streak is Info; repeats under sustained kernel
+			// queue overflow are Debug.
 			delay := errBackoff.Next()
-			o.logger.Warn("filesystem watcher error",
+			watcherErrLevel := slog.LevelDebug
+			if errBackoff.Consecutive() <= 1 {
+				watcherErrLevel = slog.LevelInfo
+			}
+			o.logger.Log(ctx, watcherErrLevel, "filesystem watcher error; rescanning the sync folder",
 				slog.String("error", watchErr.Error()),
 				slog.Duration("backoff", delay),
 			)
@@ -95,7 +102,9 @@ func (o *localObserver) watchLoop(
 			// After watcher error, check if sync root still exists (B-113).
 			// A deleted root means the watcher is watching nothing.
 			if !syncRootExists(syncRoot) {
-				o.logger.Error("sync root deleted, stopping watch",
+				// Debug: the returned error is reported once by the watch
+				// runtime.
+				o.logger.Debug("sync root deleted, stopping watch",
 					slog.String("sync_root", syncRoot))
 
 				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
@@ -104,7 +113,7 @@ func (o *localObserver) watchLoop(
 		case <-tickCh:
 			// Check if sync root still exists before running safety scan (B-113).
 			if !syncRootExists(syncRoot) {
-				o.logger.Error("sync root deleted, stopping watch",
+				o.logger.Debug("sync root deleted, stopping watch",
 					slog.String("sync_root", syncRoot))
 
 				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
@@ -129,7 +138,7 @@ func (o *localObserver) HandleFsEvent(
 
 	relPath, err := tree.Rel(fsEvent.Name)
 	if err != nil {
-		o.logger.Warn("failed to compute relative path",
+		o.logger.Debug("failed to compute relative path",
 			slog.String("path", fsEvent.Name), slog.String("error", err.Error()))
 
 		return
@@ -264,8 +273,7 @@ func (o *localObserver) handleCreate(
 		ev.ItemType = ItemTypeFolder
 
 		if addErr := watcher.Add(fsPath); addErr != nil {
-			o.logger.Warn("failed to add watch on new directory",
-				slog.String("path", dbRelPath), slog.String("error", addErr.Error()))
+			o.reportWatchAddFailure("failed to add watch on new directory", dbRelPath, addErr)
 		} else {
 			if o.watchedDirs == nil {
 				o.watchedDirs = make(map[string]struct{})
@@ -305,7 +313,9 @@ func (o *localObserver) stableHashOrEmpty(fsPath, dbRelPath string) string {
 			o.logger.Debug("file metadata still settling, emitting with empty hash",
 				slog.String("path", dbRelPath))
 		} else {
-			o.logger.Warn("hash failed, emitting event with empty hash",
+			// Debug: an unreadable file fails its upload, which the
+			// console reports; this would repeat on every write.
+			o.logger.Debug("hash failed, emitting event with empty hash",
 				slog.String("path", dbRelPath), slog.String("error", err.Error()))
 		}
 
@@ -454,8 +464,7 @@ func (o *localObserver) scanNewDirectoryChildDir(
 	events chan<- changeEvent,
 ) {
 	if addErr := watcher.Add(entryFsPath); addErr != nil {
-		o.logger.Warn("failed to add watch on nested directory",
-			slog.String("path", entryRelPath), slog.String("error", addErr.Error()))
+		o.reportWatchAddFailure("failed to add watch on nested directory", entryRelPath, addErr)
 	} else {
 		if o.watchedDirs == nil {
 			o.watchedDirs = make(map[string]struct{})
@@ -596,13 +605,13 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		// Distinguish retry exhaustion from generic hash failures for
 		// observability — helps diagnose continuously-written files.
 		if errors.Is(err, errFileChangedDuringHash) {
-			o.logger.Warn("hash retries exhausted, emitting with empty hash",
+			o.logger.Debug("hash retries exhausted, emitting with empty hash",
 				slog.String("path", req.DbRelPath),
 				slog.Int("retries", req.Retries),
 				slog.Int("max_retries", maxCoalesceRetries),
 			)
 		} else {
-			o.logger.Warn("hash failed for deferred write, emitting with empty hash",
+			o.logger.Debug("hash failed for deferred write, emitting with empty hash",
 				slog.String("path", req.DbRelPath), slog.String("error", err.Error()))
 		}
 	} else {
@@ -749,6 +758,27 @@ func (o *localObserver) HandleDelete(
 	o.TrySend(ctx, events, &ev)
 }
 
+// reportWatchAddFailure reports a directory the watcher could not add. Once
+// the inotify limit is reached every new directory fails the same way, so
+// the limit is warned once with the fix; other failures are per-directory
+// Debug lines (the safety scan still covers those folders).
+func (o *localObserver) reportWatchAddFailure(msg, dbRelPath string, addErr error) {
+	if isWatchLimitError(addErr) {
+		if !o.watchLimitReported {
+			o.watchLimitReported = true
+			o.logger.Warn("Too many folders to watch for changes (system inotify limit reached); "+
+				"changes in new folders will be noticed only by the periodic rescan. "+
+				"To fix: sudo sysctl -w fs.inotify.max_user_watches=524288",
+				slog.String("path", dbRelPath),
+			)
+		}
+
+		return
+	}
+
+	o.logger.Debug(msg, slog.String("path", dbRelPath), slog.String("error", addErr.Error()))
+}
+
 // runSafetyScan performs a full filesystem scan as a safety net, sending any
 // detected changes to the events channel. This catches events that fsnotify
 // may have missed. Skipped items are logged at DEBUG — the engine's primary
@@ -760,10 +790,20 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 
 	result, err := o.FullScan(ctx, tree)
 	if err != nil {
-		o.logger.Warn("safety scan failed", slog.String("error", err.Error()))
+		switch {
+		case ctx.Err() != nil:
+			// Shutdown interrupted the scan: not a failure.
+			o.logger.Debug("safety scan canceled", slog.String("error", err.Error()))
+		case o.safetyScanFailing:
+			o.logger.Debug("safety scan failed again", slog.String("error", err.Error()))
+		default:
+			o.safetyScanFailing = true
+			o.logger.Warn("Could not rescan the sync folder; will retry", slog.String("error", err.Error()))
+		}
 		o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryFullScanFailed)
 		return
 	}
+	o.safetyScanFailing = false
 
 	o.TrySendFullLocalSnapshot(ctx, result)
 

@@ -126,7 +126,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	// Invariant: the current actionable-set builder always returns one
 	// dependency slice per action. Assert here to catch regressions early.
 	if len(plan.Actions) != len(plan.Deps) {
-		r.deps.logger.Error("plan invariant violation: Actions/Deps length mismatch",
+		r.deps.logger.Debug("plan invariant violation: Actions/Deps length mismatch",
 			slog.Int("actions", len(plan.Actions)),
 			slog.Int("deps", len(plan.Deps)),
 		)
@@ -309,14 +309,10 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	orphans := findBaselineOrphans(bl, seen, eng.driveID, "")
 
 	if len(orphans) > 0 {
-		eng.logger.Info("full remote refresh: detected orphaned items",
-			slog.Int("orphans", len(orphans)),
-		)
-
 		events = append(events, orphans...)
 	}
 
-	eng.logger.Info("full remote refresh complete",
+	eng.logger.Info(fmt.Sprintf("Full OneDrive rescan complete: %d synced items no longer exist online", len(orphans)),
 		slog.Int("total_events", len(events)),
 		slog.Int("orphans", len(orphans)),
 	)

@@ -280,12 +280,29 @@ func (flow *engineFlow) armFailureTimers(
 	}
 }
 
-func fatalResultError(r *actionCompletion) error {
-	if r.Err != nil {
-		return fmt.Errorf("sync: unauthorized action completion for %s: %w", r.Path, r.Err)
+// fatalCompletionError is the run-ending error for an action that failed
+// because sign-in is required. It is returned, never logged here: the CLI
+// renders it once as a sign-in message. Shutdown bookkeeping recognizes it so
+// that the same 401 on other in-flight transfers is not reported again.
+type fatalCompletionError struct {
+	path string
+	err  error
+}
+
+func (e *fatalCompletionError) Error() string {
+	if e.err != nil {
+		return fmt.Sprintf("sync: unauthorized action completion for %s: %v", e.path, e.err)
 	}
 
-	return fmt.Errorf("sync: unauthorized action completion for %s", r.Path)
+	return fmt.Sprintf("sync: unauthorized action completion for %s", e.path)
+}
+
+func (e *fatalCompletionError) Unwrap() error {
+	return e.err
+}
+
+func fatalResultError(r *actionCompletion) error {
+	return &fatalCompletionError{path: r.Path, err: r.Err}
 }
 
 func (flow *engineFlow) applyFatalAuthEffects(
@@ -293,6 +310,13 @@ func (flow *engineFlow) applyFatalAuthEffects(
 	r *actionCompletion,
 	conditionKey ConditionKey,
 ) {
+	// The first 401 of a run marks the account and ends the run; later
+	// in-flight transfers that also got a 401 add nothing new.
+	if flow.results.fatalAuthRecorded {
+		return
+	}
+	flow.results.fatalAuthRecorded = true
+
 	logFields := flow.summaryLogFields(
 		errclass.ClassFatal,
 		conditionKey,
@@ -311,11 +335,14 @@ func (flow *engineFlow) applyFatalAuthEffects(
 				slog.String("account", flow.engine.permHandler.accountEmail),
 				slog.String("error", err.Error()),
 			)
-			flow.deps.logger.Warn("fatal unauthorized: failed to persist catalog auth requirement", fields...)
+			flow.deps.logger.Warn("Could not record that sign-in is required; status may not show it until the next sync",
+				fields...)
 		}
 	}
 
-	flow.deps.logger.Error("authentication required: sync stopping",
+	// Debug only: the returned fatalCompletionError is the user-facing
+	// report, printed once by the CLI as a sign-in message.
+	flow.deps.logger.Debug("authentication required: sync stopping",
 		logFields...,
 	)
 

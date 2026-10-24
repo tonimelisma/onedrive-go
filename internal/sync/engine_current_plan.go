@@ -63,17 +63,17 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 ) (*runtimePlan, error) {
 	fullRefresh, err := rt.engine.shouldRunFullRemoteRefresh(ctx, false)
 	if err != nil {
-		return nil, fmt.Errorf("sync: deciding bootstrap full remote refresh: %w", err)
+		return nil, fmt.Errorf("sync: deciding whether to rescan OneDrive: %w", err)
 	}
 
 	observeStart := rt.deps.now()
 	pendingRemoteObservation, err := rt.observeAndCommitCurrentState(ctx, bl, fullRefresh)
 	if err != nil {
-		return nil, fmt.Errorf("sync: bootstrap observation failed: %w", err)
+		return nil, fmt.Errorf("checking for changes: %w", err)
 	}
 	observation, err := rt.loadCommittedCurrentObservation(ctx, pendingRemoteObservation)
 	if err != nil {
-		return nil, fmt.Errorf("sync: bootstrap load_current_inputs: %w", err)
+		return nil, fmt.Errorf("reading sync state: %w", err)
 	}
 	rt.engine.collector().RecordObserve(observation.observedPaths, rt.deps.since(observeStart))
 
@@ -92,7 +92,7 @@ func (rt *watchRuntime) runSteadyStateCurrentPlan(
 ) (*runtimePlan, error) {
 	observation, err := rt.loadCommittedCurrentObservation(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("sync: watch load_current_inputs: %w", err)
+		return nil, fmt.Errorf("sync: reading sync state: %w", err)
 	}
 
 	build, err := rt.buildCurrentPlanStage(ctx, bl, mode, RunOptions{}, observation)
@@ -331,7 +331,8 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 			return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: observing remote delta: %w", err)
 		}
 
-		eng.logger.Warn("delta token expired, performing full resync")
+		// Info: self-healing, the next call re-enumerates from scratch.
+		eng.logger.Info("OneDrive change history expired; rescanning the whole drive (this may take a while)")
 
 		events, token, topology, err = obs.FullDeltaWithShortcutTopology(ctx, "")
 		if err != nil {
@@ -414,7 +415,7 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &observationBatch.findings, flow.deps.now()); reconcileErr != nil {
 		return nil, fmt.Errorf("sync: reconciling dry-run remote observation findings in scratch store: %w", reconcileErr)
 	}
-	flow.logSkippedObservationFindings(localResult.Skipped)
+	flow.logSkippedObservationFindings(localResult.Skipped, flow.knownObservationIssues(ctx))
 	localFindings := localObservationFindingsBatchFromSkippedItems(flow.engine.driveID, localResult.Skipped)
 	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &localFindings, flow.deps.now()); reconcileErr != nil {
 		return nil, fmt.Errorf("sync: reconciling dry-run local observation findings in scratch store: %w", reconcileErr)

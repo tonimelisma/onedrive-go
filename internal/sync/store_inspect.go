@@ -146,7 +146,7 @@ func finalizeInspectorRead[T any](
 	wrappedCloseErr := fmt.Errorf("close sync store inspector %s: %w", dbPath, closeErr)
 	if readErr == nil {
 		if logger != nil {
-			logger.Warn("close sync store inspector after successful read",
+			logger.Debug("close sync store inspector after successful read",
 				slog.String("path", dbPath),
 				slog.Any("error", wrappedCloseErr),
 			)

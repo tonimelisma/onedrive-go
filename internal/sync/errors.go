@@ -2,17 +2,21 @@ package sync
 
 import "errors"
 
+// Sentinel texts are user words without a package prefix: the sync console
+// prints the innermost error of a chain as a failure's reason, and wrappers
+// already add the "sync:" context.
+
 // ---------------------------------------------------------------------------
 // Executor errors
 // ---------------------------------------------------------------------------
 
 // errPathEscapesSyncRoot is returned when a relative path would resolve
 // outside the sync root directory (path traversal attack prevention).
-var errPathEscapesSyncRoot = errors.New("sync: path escapes sync root")
+var errPathEscapesSyncRoot = errors.New("path leaves the sync folder")
 
 // errActionPreconditionChanged is returned when executor-time revalidation
 // proves the planner's item-level preconditions no longer hold.
-var errActionPreconditionChanged = errors.New("sync: action precondition changed")
+var errActionPreconditionChanged = errors.New("file changed while it was being synced")
 
 // ---------------------------------------------------------------------------
 // Observer errors
@@ -20,19 +24,19 @@ var errActionPreconditionChanged = errors.New("sync: action precondition changed
 
 // errSyncRootDeleted is returned when the sync root directory has been deleted
 // or become inaccessible while a watch was running.
-var errSyncRootDeleted = errors.New("sync: sync root directory deleted or inaccessible")
+var errSyncRootDeleted = errors.New("sync folder was deleted or is not accessible")
 
 // errWatchLimitExhausted is returned when the inotify watch limit is
 // exhausted (Linux ENOSPC). The engine falls back to periodic full scans.
-var errWatchLimitExhausted = errors.New("sync: inotify watch limit exhausted")
+var errWatchLimitExhausted = errors.New("inotify watch limit reached")
 
 // errDeltaExpired indicates the saved delta token has expired and a full
 // resync is required. Returned when the Graph API responds with HTTP 410.
-var errDeltaExpired = errors.New("sync: delta token expired (resync required)")
+var errDeltaExpired = errors.New("OneDrive change history expired")
 
 // errRemoteObservationIncomplete is returned when remote observation cannot
 // materialize a provider item safely enough to advance the delta cursor.
-var errRemoteObservationIncomplete = errors.New("sync: remote observation incomplete")
+var errRemoteObservationIncomplete = errors.New("OneDrive change list was incomplete")
 
 // ErrMountRootUnavailable is returned when the sync root for a mounted content
 // root is missing or inaccessible. Runtimes treat this as mount lifecycle, not
@@ -45,7 +49,7 @@ var ErrMountRootUnavailable = errors.New("sync: mount root unavailable")
 
 // errSyncRootMissing is returned when the sync root directory does not exist
 // or is not a directory. Callers can match with errors.Is.
-var errSyncRootMissing = errors.New("sync: sync root directory does not exist")
+var errSyncRootMissing = errors.New("sync folder does not exist")
 
 // errFileChangedDuringHash is returned when a file's metadata changes between
 // pre-hash stat and post-hash stat, indicating active writing (B-119).

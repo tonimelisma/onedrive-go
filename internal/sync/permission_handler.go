@@ -2,6 +2,7 @@ package sync
 
 import (
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -20,4 +21,9 @@ type permissionHandler struct {
 	remoteRootItemID string
 	logger           *slog.Logger
 	nowFn            func() time.Time
+
+	// rootInaccessibleReported is set once an inaccessible sync folder has
+	// been warned about, and cleared when it is accessible again, so a
+	// queue of failing actions warns once rather than once per action.
+	rootInaccessibleReported atomic.Bool
 }

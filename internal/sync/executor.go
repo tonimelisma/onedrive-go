@@ -122,7 +122,10 @@ func (e *executor) confirmRemotePathVisible(ctx context.Context, action *Action)
 		message = "remote path still not visible after mutation"
 	}
 
-	e.logger.Warn(message,
+	// Debug: the mutation itself succeeded; Graph's eventual consistency
+	// only delays when the new path is listable, and nothing is asked of
+	// the user.
+	e.logger.Debug(message,
 		slog.String("path", action.Path),
 		slog.String("target_path", remotePath),
 		slog.String("error", err.Error()),
@@ -250,7 +253,9 @@ func (e *executor) createLocalFolder(action *Action) actionOutcome {
 	if action.View != nil && action.View.Remote != nil && action.View.Remote.Mtime != 0 {
 		mtime := time.Unix(0, action.View.Remote.Mtime)
 		if err := e.syncTree.Chtimes(action.Path, mtime, mtime); err != nil {
-			e.logger.Warn("failed to set folder mtime", slog.String("path", action.Path), slog.String("error", err.Error()))
+			// Debug: the folder exists; some filesystems (SMB, FUSE) refuse
+			// directory times, which would otherwise warn once per folder.
+			e.logger.Debug("failed to set folder mtime", slog.String("path", action.Path), slog.String("error", err.Error()))
 		}
 	}
 
@@ -516,8 +521,10 @@ func normalizeSyncTreePathError(err error) error {
 		return nil
 	}
 
+	// One line, not errors.Join: the console prints this as a failure
+	// reason, and a joined error renders on two lines.
 	if errors.Is(err, synctree.ErrUnsafePath) {
-		return errors.Join(errPathEscapesSyncRoot, err)
+		return fmt.Errorf("%w: %w", errPathEscapesSyncRoot, err)
 	}
 
 	return err
@@ -559,7 +566,7 @@ func (e *executor) ResolveParentID(relPath string) (string, error) {
 		return entry.ItemID, nil
 	}
 
-	return "", fmt.Errorf("sync: cannot resolve parent ID for %s (parent %s not in baseline)", relPath, parentDir)
+	return "", fmt.Errorf("parent folder %s has not been synced yet", parentDir)
 }
 
 // resolveDriveID returns the action's DriveID when present. Brand-new local
@@ -583,8 +590,13 @@ func (e *executor) resolveDriveID(action *Action) driveid.ID {
 }
 
 // failedOutcome builds an ActionOutcome for a failed action.
+//
+// The failure is logged at Debug only. Its user-facing report is the sync
+// console's activity line ("Failed to upload X: reason", or the --verbose
+// "will retry" line), which also knows to hide superseded and retried
+// failures; a Warn here printed every failure a second time.
 func (e *executor) failedOutcome(action *Action, actionType actionType, err error) actionOutcome {
-	e.logger.Warn("action failed",
+	e.logger.Debug("action failed",
 		slog.String("action", actionType.String()),
 		slog.String("path", action.Path),
 		slog.String("error", err.Error()),

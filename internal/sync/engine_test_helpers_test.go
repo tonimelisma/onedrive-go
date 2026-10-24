@@ -1093,20 +1093,27 @@ type observingClock struct {
 	onSleep     func(time.Duration)
 }
 
+// NewTicker and AfterFunc register with the wrapped clock before signaling.
+// A test that waits for the signal and then advances a manual clock must find
+// the ticker or timer already registered; signaling first let the advance
+// land in the gap, so the tick was never delivered and the test timed out
+// under -race -count=50 load (TestRunWatch_FallbackSleepHonorsCancellation).
 func (c *observingClock) NewTicker(interval time.Duration) syncTicker {
+	ticker := c.syncClock.NewTicker(interval)
 	if c.onNewTicker != nil {
 		c.onNewTicker(interval)
 	}
 
-	return c.syncClock.NewTicker(interval)
+	return ticker
 }
 
 func (c *observingClock) AfterFunc(delay time.Duration, fn func()) syncTimer {
+	timer := c.syncClock.AfterFunc(delay, fn)
 	if c.onAfterFunc != nil {
 		c.onAfterFunc(delay)
 	}
 
-	return c.syncClock.AfterFunc(delay, fn)
+	return timer
 }
 
 func (c *observingClock) Sleep(ctx context.Context, delay time.Duration) error {
