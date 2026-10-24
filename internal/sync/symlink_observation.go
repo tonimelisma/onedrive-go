@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -84,6 +85,30 @@ func resolvedObservedDirPath(fsPath string) (string, error) {
 	}
 
 	return filepath.Clean(resolved), nil
+}
+
+const (
+	unreadableDirectoryDetail     = "directory not accessible (check filesystem permissions)"
+	unreadableSymlinkTargetDetail = "symlink target is missing or unreadable (is its disk mounted?)"
+)
+
+// recordUnreadableObservedBoundary marks a path observation could not read as
+// a local read boundary. Its baseline descendants are absent from the observed
+// set, and without the boundary they would look deleted and be removed from
+// OneDrive. With it, the planner treats local truth under the path as
+// unavailable and leaves remote content alone (R-2.4.12). A path that no
+// longer exists is a real deletion and gets no boundary.
+func recordUnreadableObservedBoundary(skipped *[]skippedItem, dbRelPath string, err error, detail string) {
+	if errors.Is(err, fs.ErrNotExist) && detail != unreadableSymlinkTargetDetail {
+		return
+	}
+
+	*skipped = append(*skipped, skippedItem{
+		Path:               dbRelPath,
+		Reason:             issueLocalReadDenied,
+		Detail:             detail,
+		BlocksReadBoundary: true,
+	})
 }
 
 func shouldSkipObservedSymlink(isSymlink bool, filter ContentFilterConfig) bool {
@@ -177,6 +202,7 @@ func (o *localObserver) walkFollowedDirectory(
 		o.logger.Debug("skipping symlinked directory with unresolved target",
 			slog.String("path", dbRelPath),
 			slog.String("error", err.Error()))
+		recordUnreadableObservedBoundary(skipped, dbRelPath, err, unreadableSymlinkTargetDetail)
 		return nil
 	}
 
@@ -218,9 +244,10 @@ func (o *localObserver) walkObservedDirectory(
 		"skipping observed directory cycle",
 	)
 	if err != nil {
-		o.logger.Warn("resolve observed directory failed",
+		o.logger.Debug("resolve observed directory failed",
 			slog.String("path", dbRelPath),
 			slog.String("error", err.Error()))
+		recordUnreadableObservedBoundary(skipped, dbRelPath, err, unreadableDirectoryDetail)
 		return nil
 	}
 
@@ -254,9 +281,10 @@ func (o *localObserver) walkObservedEntries(
 ) error {
 	entries, err := localpath.ReadDir(fsPath)
 	if err != nil {
-		o.logger.Warn("read dir failed "+stage,
+		o.logger.Debug("read dir failed "+stage,
 			slog.String("path", dbRelPath),
 			slog.String("error", err.Error()))
+		recordUnreadableObservedBoundary(skipped, dbRelPath, err, unreadableDirectoryDetail)
 		return nil
 	}
 
@@ -344,9 +372,10 @@ func (o *localObserver) walkObservedEntry(
 
 	info, err := entry.Info()
 	if err != nil {
-		o.logger.Warn("stat failed "+stage,
+		o.logger.Debug("stat failed "+stage,
 			slog.String("path", entryRelPath),
 			slog.String("error", err.Error()))
+		recordUnreadableObservedBoundary(skipped, entryRelPath, err, unreadableDirectoryDetail)
 		return nil
 	}
 
@@ -588,6 +617,11 @@ func (o *localObserver) processSymlinkPath(
 		o.logger.Debug("skipping symlink with unreadable target",
 			slog.String("path", dbRelPath),
 			slog.String("error", err.Error()))
+		if isSymlink {
+			recordUnreadableObservedBoundary(skipped, dbRelPath, err, unreadableSymlinkTargetDetail)
+		} else {
+			recordUnreadableObservedBoundary(skipped, dbRelPath, err, unreadableDirectoryDetail)
+		}
 		return nil
 	}
 
