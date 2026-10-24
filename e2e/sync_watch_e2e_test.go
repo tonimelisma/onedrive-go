@@ -364,7 +364,7 @@ func TestE2E_SyncWatch_ControlSocketReload(t *testing.T) {
 	postControlSocket(t, env, "/v1/reload")
 
 	// Wait for config reload to complete.
-	waitForStderrContains(t, &stderr, "config reload complete", 30*time.Second)
+	waitForStderrContains(t, &stderr, "Reloaded the config", 30*time.Second)
 
 	// Create a file in drive2's sync dir.
 	localDir2 := filepath.Join(syncDir2, testFolder2)
