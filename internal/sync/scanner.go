@@ -353,15 +353,11 @@ func (o *localObserver) makeWalkFunc(
 	return func(fsPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			o.logger.Warn("walk error", slog.String("path", fsPath), slog.String("error", walkErr.Error()))
-			if errors.Is(walkErr, os.ErrPermission) {
-				if relPath, err := tree.Rel(fsPath); err == nil {
-					*skipped = append(*skipped, skippedItem{
-						Path:               nfcNormalize(filepath.ToSlash(relPath)),
-						Reason:             issueLocalReadDenied,
-						Detail:             "directory not accessible (check filesystem permissions)",
-						BlocksReadBoundary: true,
-					})
-				}
+			// Any unreadable entry other than one that vanished mid-walk is a
+			// read boundary: an I/O error must not make content look deleted
+			// any more than a permission error does.
+			if relPath, err := tree.Rel(fsPath); err == nil {
+				recordUnreadableObservedBoundary(skipped, nfcNormalize(filepath.ToSlash(relPath)), walkErr, unreadableDirectoryDetail)
 			}
 			skippedEntries.Add(1)
 			return skipEntry(d)

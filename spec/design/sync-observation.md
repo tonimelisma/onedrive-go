@@ -4,7 +4,7 @@ GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/
 
 LAYER: 2
 
-Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.8.8 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified]
+Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified]
 
 ## Overview
 
@@ -255,6 +255,12 @@ Built-in local observation policy remains:
   paths, and hash failures as observation issues for visible paths only
 - skip symlinks by default; when `follow_symlinks=true`, observe at the alias
   path with cycle protection and executor no-follow delete safety
+- never let unreadable content look deleted (R-2.4.12): any walk error other
+  than a vanished entry, an unreadable directory reached through a followed
+  symlink, and a followed symlink whose target is missing or unreadable all
+  record a `local_read_denied` read boundary at that path; the planner then
+  suppresses remote deletes beneath it, exactly as for a permission-denied
+  directory in the main walk
 - keep scanner/watch behavior aligned for hashing and case-collision detection
 
 Ignore invariants:

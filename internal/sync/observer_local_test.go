@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -590,6 +591,78 @@ func TestFullScan_SymlinkDirectoryCycleStopsAtAliasBoundary(t *testing.T) {
 	assert.NotNil(t, findEvent(result.Events, "real.txt"))
 	assert.NotNil(t, findEvent(result.Events, "loop"))
 	assert.Nil(t, findEvent(result.Events, "loop/real.txt"))
+}
+
+// Validates: R-2.4.12
+func TestFullScan_FollowedSymlinkUnreadableTargetRecordsReadBoundary(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses permission checks")
+	}
+
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "real/nested.txt", "payload")
+	require.NoError(t, os.Symlink(filepath.Join(dir, "real"), filepath.Join(dir, "alias")), "Symlink")
+	setTestDirPermissions(t, filepath.Join(dir, "real"), 0o000)
+	t.Cleanup(func() { setTestDirPermissions(t, filepath.Join(dir, "real"), 0o700) })
+
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(ContentFilterConfig{FollowSymlinks: true})
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	require.NoError(t, err, "FullScan")
+
+	boundary := findSkipped(result.Skipped, "alias")
+	require.NotNil(t, boundary, "an unreadable followed directory must become a read boundary, or its synced content looks deleted")
+	assert.Equal(t, issueLocalReadDenied, boundary.Reason)
+	assert.True(t, boundary.BlocksReadBoundary)
+}
+
+// Validates: R-2.4.12
+func TestFullScan_FollowedSymlinkMissingTargetRecordsReadBoundary(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// The target is gone, as when the disk a symlink points at is unmounted.
+	require.NoError(t, os.Symlink(filepath.Join(dir, "unmounted-disk"), filepath.Join(dir, "alias")), "Symlink")
+
+	baseline := baselineWith(
+		&BaselineEntry{Path: "alias", ItemType: ItemTypeFolder},
+		&BaselineEntry{Path: "alias/photo.jpg", ItemType: ItemTypeFile},
+	)
+	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(ContentFilterConfig{FollowSymlinks: true})
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	require.NoError(t, err, "FullScan")
+
+	boundary := findSkipped(result.Skipped, "alias")
+	require.NotNil(t, boundary, "a symlink whose target vanished must protect what was synced through it")
+	assert.Equal(t, issueLocalReadDenied, boundary.Reason)
+	assert.True(t, boundary.BlocksReadBoundary)
+	assert.Equal(t, unreadableSymlinkTargetDetail, boundary.Detail)
+}
+
+// Validates: R-2.4.12
+func TestRecordUnreadableObservedBoundary_VanishedEntryIsARealDelete(t *testing.T) {
+	t.Parallel()
+
+	var skipped []skippedItem
+	recordUnreadableObservedBoundary(&skipped, "gone", fs.ErrNotExist, unreadableDirectoryDetail)
+	assert.Empty(t, skipped, "an entry deleted mid-walk is a deletion, not a read boundary")
+
+	recordUnreadableObservedBoundary(&skipped, "eio", syscall.EIO, unreadableDirectoryDetail)
+	require.Len(t, skipped, 1, "an I/O error must not make content look deleted")
+	assert.True(t, skipped[0].BlocksReadBoundary)
+}
+
+func findSkipped(items []skippedItem, path string) *skippedItem {
+	for i := range items {
+		if items[i].Path == path {
+			return &items[i]
+		}
+	}
+
+	return nil
 }
 
 // Validates: R-2.11.2, R-2.11.3, R-2.11.5
