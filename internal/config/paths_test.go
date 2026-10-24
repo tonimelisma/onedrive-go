@@ -170,38 +170,30 @@ func TestDefaultCacheDir_XDGFallback(t *testing.T) {
 	assert.Contains(t, result, appName)
 }
 
-func TestAssertDevSafe_PanicsWithoutXDG(t *testing.T) {
-	// t.Setenv("") sets to empty string (not unset); AssertDevSafe treats "" as unset.
+func TestCheckDevSafe_RefusesWithoutXDG(t *testing.T) {
+	// t.Setenv("") sets to empty string (not unset); CheckDevSafe treats "" as unset.
 	t.Setenv("XDG_DATA_HOME", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("XDG_CACHE_HOME", "")
 
-	assert.Panics(t, func() {
-		AssertDevSafe()
-	})
+	require.ErrorIs(t, CheckDevSafe(), ErrDevBuildUnsafe)
 }
 
-func TestAssertDevSafe_PanicsWithPartialXDG(t *testing.T) {
+func TestCheckDevSafe_NamesMissingVariablesWithPartialXDG(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/tmp/test-data")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("XDG_CACHE_HOME", "")
 
-	panicValue := "DEV BUILD: set XDG_DATA_HOME, XDG_CONFIG_HOME, and XDG_CACHE_HOME " +
-		"to avoid touching production data.\n" +
-		"Missing: XDG_CONFIG_HOME, XDG_CACHE_HOME\n" +
-		"Example: source scripts/dev-env.sh && go run . <command>"
-
-	assert.PanicsWithValue(t, panicValue, func() {
-		AssertDevSafe()
-	})
+	err := CheckDevSafe()
+	require.ErrorIs(t, err, ErrDevBuildUnsafe)
+	assert.Contains(t, err.Error(), "missing: XDG_CONFIG_HOME, XDG_CACHE_HOME")
+	assert.Contains(t, err.Error(), "Building from Source")
 }
 
-func TestAssertDevSafe_PassesWithFullXDG(t *testing.T) {
+func TestCheckDevSafe_PassesWithFullXDG(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/tmp/test-data")
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/test-config")
 	t.Setenv("XDG_CACHE_HOME", "/tmp/test-cache")
 
-	assert.NotPanics(t, func() {
-		AssertDevSafe()
-	})
+	require.NoError(t, CheckDevSafe())
 }

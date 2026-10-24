@@ -66,7 +66,8 @@ func TestE2E_Status_JSON(t *testing.T) {
 }
 
 // TestE2E_Status_PausedDrive validates that pausing a drive changes its
-// status to "paused" and resuming changes it back to "up_to_date".
+// status to "paused" and resuming clears it. The drive here has never synced,
+// so after resume it reads "not_synced" (R-6.6.25), not "up_to_date".
 func TestE2E_Status_PausedDrive(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -90,10 +91,9 @@ func TestE2E_Status_PausedDrive(t *testing.T) {
 	// Resume the drive.
 	runCLIWithConfig(t, cfgPath, env, "resume")
 
-	// Check status shows "ready".
 	status := readStatus(t, cfgPath, env)
 	driveStatus := requireStatusDrive(t, status, drive)
-	assert.Equal(t, "up_to_date", driveStatus.State)
+	assert.Equal(t, "not_synced", driveStatus.State)
 }
 
 // TestE2E_Pause_WithDuration validates that pausing with a duration shows
@@ -107,7 +107,8 @@ func TestE2E_Pause_WithDuration(t *testing.T) {
 
 	// Pause for 30 seconds.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "pause", "30s")
-	assert.Contains(t, stderr, "paused until", "pause with duration should show 'paused until'")
+	assert.Contains(t, stderr, "Paused ", "pause with duration should confirm the pause")
+	assert.Contains(t, stderr, " until ", "pause with duration should say until when")
 
 	// Resume to clean up.
 	runCLIWithConfig(t, cfgPath, env, "resume")
@@ -124,18 +125,16 @@ func TestE2E_Pause_IndefiniteAndResume(t *testing.T) {
 
 	// Pause indefinitely.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "pause")
-	assert.Contains(t, stderr, "paused", "pause should confirm drive is paused")
+	assert.Contains(t, stderr, "Paused ", "pause should confirm drive is paused")
 
 	// Resume.
 	_, stderr = runCLIWithConfig(t, cfgPath, env, "resume")
 	assert.Contains(t, stderr, "resumed", "resume should confirm drive is resumed")
 
-	// Status should report the drive healthy again. This must be asserted
-	// structurally: the text renderer signals "up to date" by omitting the
-	// Status line entirely (printDriveState returns early for that state), so
-	// there is no healthy-state string for text matching to find.
+	// Status should no longer report the drive paused. It has never synced
+	// in this test, so the healthy state is "not_synced" (R-6.6.25).
 	resumedDrive := requireStatusDrive(t, readStatus(t, cfgPath, env), drive)
-	assert.Equal(t, "up_to_date", resumedDrive.State)
+	assert.Equal(t, "not_synced", resumedDrive.State)
 }
 
 // TestE2E_Resume_NotPaused validates that resuming a non-paused drive gives

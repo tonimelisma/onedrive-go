@@ -33,7 +33,7 @@ func TestMatchDrive_MultipleDrives_NoSelector_Error(t *testing.T) {
 
 	_, _, err := MatchDrive(cfg, "", testLogger(t))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "multiple drives")
+	assert.Contains(t, err.Error(), "several drives are configured")
 }
 
 func TestMatchDrive_NoDrives_NoSelector_NoTokens(t *testing.T) {

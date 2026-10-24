@@ -654,6 +654,26 @@ func TestGroupDrivesByAccount_Empty(t *testing.T) {
 	assert.Empty(t, grouped)
 }
 
+// Validates: R-6.6.25
+func TestBuildStatusAccountsWith_NeverSyncedDriveIsNotUpToDate(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := driveid.MustCanonicalID("personal:alice@example.com")
+	cfg := &config.Config{Drives: map[driveid.CanonicalID]config.Drive{cid: {SyncDir: "~/OneDrive"}}}
+	build := func() string {
+		accounts := buildStatusAccountsWith(t.Context(), cfg,
+			&mockNameReader{displayName: "Alice"}, &mockSavedLoginChecker{}, &mockSyncStateQuerier{})
+		require.Len(t, accounts, 1)
+		require.Len(t, accounts[0].Mounts, 1)
+		return accounts[0].Mounts[0].State
+	}
+
+	assert.Equal(t, driveStateNotSynced, build(), "status and drive list must agree on a drive that never synced")
+
+	require.NoError(t, touchStateDBForAccount(t, cid))
+	assert.Equal(t, driveStateReady, build())
+}
+
 // Validates: R-6.3.2
 func TestNewStatusCmd_Structure(t *testing.T) {
 	cmd := newStatusCmd()
@@ -691,7 +711,7 @@ func TestBuildStatusAccountsWith_SingleAccount(t *testing.T) {
 
 	require.Len(t, acct.Mounts, 1)
 	assert.Equal(t, "~/OneDrive", acct.Mounts[0].SyncDir)
-	assert.Equal(t, driveStateReady, acct.Mounts[0].State)
+	assert.Equal(t, driveStateNotSynced, acct.Mounts[0].State)
 }
 
 func TestBuildStatusAccountsWith_MultiAccountGrouping(t *testing.T) {
@@ -760,7 +780,7 @@ func TestBuildStatusAccountsWith_AuthenticationRequiredStates(t *testing.T) {
 			require.Len(t, accounts, 1)
 			assert.Equal(t, authStateAuthenticationNeeded, accounts[0].AuthState)
 			assert.Equal(t, tc.wantReason, accounts[0].AuthReason)
-			assert.Equal(t, driveStateReady, accounts[0].Mounts[0].State)
+			assert.Equal(t, driveStateNotSynced, accounts[0].Mounts[0].State)
 		})
 	}
 }
@@ -780,7 +800,7 @@ func TestBuildStatusAccountsWith_EmptySyncDir(t *testing.T) {
 
 	require.Len(t, accounts, 1)
 	// Empty sync_dir no longer overrides drive state — drive is still "ready".
-	assert.Equal(t, driveStateReady, accounts[0].Mounts[0].State)
+	assert.Equal(t, driveStateNotSynced, accounts[0].Mounts[0].State)
 }
 
 func TestBuildStatusAccountsWith_SharePointGrouping(t *testing.T) {

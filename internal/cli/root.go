@@ -151,8 +151,9 @@ type CLIContext struct {
 	PerfSession      *perf.Session            // command-scoped performance collector/logging session
 	seams            cliSeams                 // test injection points; see cliSeams
 	logCloser        io.Closer                // log file closer; nil when no log file is configured
-	statusMu         sync.Mutex               // guards statusErr for concurrent progress callbacks
+	statusMu         sync.Mutex               // guards statusErr and progressShown for concurrent progress callbacks
 	statusErr        error
+	progressShown    bool       // a redrawn progress line is on screen and must be cleared before other output
 	reconcileMu      sync.Mutex // guards reconcileNotices and selector mutation
 	reconcileNotices map[string]struct{}
 }
@@ -349,7 +350,10 @@ func initializeCLIContext(
 	statusWriter io.Writer,
 ) error {
 	if version == "dev" {
-		config.AssertDevSafe() // prevent go run . from touching production data
+		// Keep go run . and unversioned builds away from production data.
+		if err := config.CheckDevSafe(); err != nil {
+			return err //nolint:wrapcheck // CheckDevSafe's text is the user-facing message.
+		}
 	}
 
 	flags := bindings.cliFlags()
@@ -526,6 +530,9 @@ const exitInterrupted = 130
 func writeCommandError(w io.Writer, text string) {
 	if isWriterJournal(w) {
 		text = "<3>" + strings.ReplaceAll(text, "\n", "\n<3>")
+	} else if isWriterTTY(w) {
+		// Clear a progress line the failed command may have left behind.
+		text = "\r\x1b[K" + text
 	}
 
 	writeWarningf(w, "%s\n", text)
@@ -605,7 +612,7 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 		if err == nil {
 			err = closeErr
 		} else {
-			writeWarningf(statusWriter, "warning: close command log: %v\n", closeErr)
+			writeWarningf(statusWriter, "Warning: could not close the log file: %v\n", closeErr)
 		}
 	}
 
@@ -754,7 +761,7 @@ func resolveFileLogLevelWithStatusWriter(cfg *config.ResolvedDrive, statusWriter
 		return mapped
 	}
 
-	writeWarningf(statusWriter, "warning: unknown log level %q, using info for file logs\n", cfg.LogLevel)
+	writeWarningf(statusWriter, "Warning: unknown log_level %q in the config; logging to the log file at info.\n", cfg.LogLevel)
 
 	return level
 }
@@ -786,7 +793,7 @@ func buildHandlerWithStatusWriter(
 	case logFormatAuto:
 		return autoConsoleHandler(w, opts)
 	default:
-		writeWarningf(statusWriter, "warning: unknown log format %q, using auto\n", format)
+		writeWarningf(statusWriter, "Warning: unknown log_format %q in the config; using auto.\n", format)
 
 		return autoConsoleHandler(w, opts)
 	}
@@ -918,7 +925,7 @@ func buildLoggerDualWithStatusWriter(
 
 	f, err := logfile.Open(cfg.LogFile, cfg.LogRetentionDays)
 	if err != nil {
-		writeWarningf(statusWriter, "warning: cannot open log file %q: %v\n", cfg.LogFile, err)
+		writeWarningf(statusWriter, "Warning: cannot open log file %q: %v\n", cfg.LogFile, err)
 
 		return buildLoggerWithStatusWriter(cfg, flags, statusWriter), nil
 	}

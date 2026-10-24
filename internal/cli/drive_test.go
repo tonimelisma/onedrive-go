@@ -2239,6 +2239,55 @@ func TestDriveAdd_SharedNameHonorsAccountFilter(t *testing.T) {
 	assert.False(t, otherExists)
 }
 
+// Validates: R-6.6.28
+func TestDriveAdd_AmbiguousSharedNameFailsWithoutAdding(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	var out, status bytes.Buffer
+
+	item := func(id, name string) string {
+		return `{"id":"` + id + `","name":"` + name + `","folder":{"childCount":1},` +
+			`"parentReference":{"driveId":"0000b!drive-user"},` +
+			`"shared":{"owner":{"user":{"email":"alice@example.com","displayName":"Alice Smith"}}}}`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case testGraphMePath:
+			writeTestResponse(t, w, `{"id":"user-123","displayName":driveTestUserExample,"mail":"user@example.com"}`)
+		case testDriveSearchAllPath:
+			writeTestResponse(t, w, `{"value":[
+				{"id":"l1","name":"Project A","folder":{"childCount":1},"remoteItem":{"id":"src-a","parentReference":{"driveId":"b!drive-user"}}},
+				{"id":"l2","name":"Project B","folder":{"childCount":1},"remoteItem":{"id":"src-b","parentReference":{"driveId":"b!drive-user"}}}
+			]}`)
+		case "/drives/0000b!drive-user/items/src-a":
+			writeTestResponse(t, w, item("src-a", "Project A"))
+		case "/drives/0000b!drive-user/items/src-b":
+			writeTestResponse(t, w, item("src-b", "Project B"))
+		default:
+			http.Error(w, "unexpected graph path", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	cc := &CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &status,
+		CfgPath:      cfgPath,
+		GraphBaseURL: srv.URL,
+	}
+
+	err := runDriveAddWithContext(context.Background(), cc, []string{"Project"})
+	require.Error(t, err, "listing candidates and adding nothing is a failure")
+	assert.Contains(t, err.Error(), "nothing was added")
+	assert.Contains(t, status.String(), "Multiple shared folders match", "the candidate list is guidance on stderr")
+	assert.Empty(t, out.String())
+}
+
 // Validates: R-3.3.6, R-3.6.5
 func TestDriveAdd_SharedNameNoMatchesIncludesBlockedAccounts(t *testing.T) {
 	setTestDriveHome(t)

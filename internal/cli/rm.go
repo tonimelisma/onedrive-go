@@ -118,7 +118,7 @@ func confirmRmParentVisibility(
 		if errors.As(err, &visibilityErr) {
 			writeWarningf(
 				statusWriter,
-				"warning: deleted %s, but parent /%s is still settling in Graph; follow-up reads may lag\n",
+				"Note: deleted %s; OneDrive may take a moment to show the change in /%s.\n",
 				remotePath,
 				parentPath,
 			)

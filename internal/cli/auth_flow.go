@@ -287,7 +287,7 @@ func runLogoutWithContext(ctx context.Context, cc *CLIContext, purge bool) error
 	validated, warnings, err := config.LoadValidatedState(cc.CfgPath, true, logger)
 	if err == nil {
 		if outcome := config.ClassifyLoadOutcome(err, warnings); outcome.Class == errclass.ClassActionable {
-			config.LogWarnings(warnings, logger)
+			config.LogWarnings(cc.CfgPath, warnings, logger)
 		}
 
 		account, autoErr := resolveLogoutAccountWithCatalog(
@@ -330,7 +330,7 @@ func loadLogoutRecoveryState(
 	validatedErr error,
 ) (*config.Config, *config.Catalog) {
 	if len(validatedWarnings) > 0 {
-		config.LogWarnings(validatedWarnings, logger)
+		config.LogWarnings(cfgPath, validatedWarnings, logger)
 	}
 	if validatedErr != nil {
 		logger.Warn("validated logout state unavailable, falling back to best-effort recovery",
@@ -340,7 +340,7 @@ func loadLogoutRecoveryState(
 
 	cfg, fallbackWarnings, cfgErr := config.LoadOrDefaultLenient(cfgPath, logger)
 	if len(fallbackWarnings) > 0 {
-		config.LogWarnings(fallbackWarnings, logger)
+		config.LogWarnings(cfgPath, fallbackWarnings, logger)
 	}
 	if cfgErr != nil {
 		logger.Warn("logout recovery could not load config, using defaults",

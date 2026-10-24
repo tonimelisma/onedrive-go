@@ -4,8 +4,10 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -490,4 +492,35 @@ func annotateStateDB(entries []driveListEntry) {
 			entries[i].HasStateDB = true
 		}
 	}
+}
+
+// resolveExactDriveSelector resolves --drive for commands that delete state
+// (drive remove, drive reset-sync-state). They accept an exact canonical ID,
+// which may name a drive no longer in config.toml so its leftovers can be
+// purged, or a configured drive's display name. Unlike sync and pause they
+// never take a partial match, so a substring can't select the wrong drive.
+func resolveExactDriveSelector(cfg *config.Config, selector string) (driveid.CanonicalID, bool, error) {
+	if cid, err := driveid.NewCanonicalID(selector); err == nil {
+		_, inConfig := cfg.Drives[cid]
+		return cid, inConfig, nil
+	}
+
+	for cid := range cfg.Drives {
+		if strings.EqualFold(cfg.Drives[cid].DisplayName, selector) {
+			return cid, true, nil
+		}
+	}
+
+	configured := make([]string, 0, len(cfg.Drives))
+	for cid := range cfg.Drives {
+		configured = append(configured, cid.String())
+	}
+	slices.Sort(configured)
+
+	if len(configured) == 0 {
+		return driveid.CanonicalID{}, false, fmt.Errorf("no drive matching %q, and no drives are configured", selector)
+	}
+
+	return driveid.CanonicalID{}, false, fmt.Errorf("no drive matching %q; use its full ID or display name. Configured drives: %s",
+		selector, strings.Join(configured, ", "))
 }

@@ -17,8 +17,15 @@ func runPauseCommand(ctx context.Context, cc *CLIContext, now func() time.Time, 
 		return driveErr
 	}
 
-	if driveSelector == "" {
-		return fmt.Errorf("--drive is required (specify which drive to pause)")
+	// Parse the duration before touching the config: a typo must not leave
+	// the drive paused with no end time.
+	var duration time.Duration
+	if len(args) > 0 {
+		parsed, err := parseDuration(args[0])
+		if err != nil {
+			return fmt.Errorf("invalid duration %q: %w", args[0], err)
+		}
+		duration = parsed
 	}
 
 	cfg, err := config.LoadOrDefault(cc.CfgPath, cc.Logger)
@@ -26,33 +33,24 @@ func runPauseCommand(ctx context.Context, cc *CLIContext, now func() time.Time, 
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	cid, err := driveid.NewCanonicalID(driveSelector)
+	cid, drive, err := config.MatchDrive(cfg, driveSelector, cc.Logger)
 	if err != nil {
-		return fmt.Errorf("invalid drive ID %q: %w", driveSelector, err)
-	}
-
-	if _, exists := cfg.Drives[cid]; !exists {
-		return fmt.Errorf("drive %q not found in config", driveSelector)
+		return fmt.Errorf("choosing the drive to pause: %w", err)
 	}
 
 	if err := config.SetDriveKey(cc.CfgPath, cid, "paused", "true"); err != nil {
 		return fmt.Errorf("setting paused flag: %w", err)
 	}
 
-	if len(args) > 0 {
-		duration, err := parseDuration(args[0])
-		if err != nil {
-			return fmt.Errorf("invalid duration %q: %w", args[0], err)
-		}
-
-		until := now().Add(duration).Format(time.RFC3339)
-		if err := config.SetDriveKey(cc.CfgPath, cid, "paused_until", until); err != nil {
+	if duration > 0 {
+		until := now().Add(duration)
+		if err := config.SetDriveKey(cc.CfgPath, cid, "paused_until", until.Format(time.RFC3339)); err != nil {
 			return fmt.Errorf("setting paused_until: %w", err)
 		}
 
-		cc.Statusf("Drive %s paused until %s\n", cid.String(), until)
+		cc.Statusf("Paused %s until %s.\n", configuredDriveLabel(cid, &drive), until.Local().Format("Mon Jan 2 15:04"))
 	} else {
-		cc.Statusf("Drive %s paused\n", cid.String())
+		cc.Statusf("Paused %s until you run 'onedrive-go resume'.\n", configuredDriveLabel(cid, &drive))
 	}
 
 	notifyDaemon(ctx, cc)
@@ -79,14 +77,9 @@ func runResumeCommand(ctx context.Context, cc *CLIContext, now func() time.Time)
 }
 
 func resumeSingleDriveWithNow(ctx context.Context, cc *CLIContext, now func() time.Time, cfg *config.Config, selector string) error {
-	cid, err := driveid.NewCanonicalID(selector)
+	cid, d, err := config.MatchDrive(cfg, selector, cc.Logger)
 	if err != nil {
-		return fmt.Errorf("invalid drive ID %q: %w", selector, err)
-	}
-
-	d, exists := cfg.Drives[cid]
-	if !exists {
-		return fmt.Errorf("drive %q not found in config", selector)
+		return fmt.Errorf("choosing the drive to resume: %w", err)
 	}
 
 	if !d.IsPaused(now()) {
@@ -204,4 +197,14 @@ func resumeOneDrive(
 	cc.Statusf("Drive %s resumed\n", cid.String())
 
 	return true, nil
+}
+
+// configuredDriveLabel names a drive the way a person configured it: its display name
+// when it has one, otherwise its canonical ID.
+func configuredDriveLabel(cid driveid.CanonicalID, drive *config.Drive) string {
+	if drive != nil && drive.DisplayName != "" {
+		return drive.DisplayName
+	}
+
+	return cid.String()
 }

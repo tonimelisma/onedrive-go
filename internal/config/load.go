@@ -18,10 +18,20 @@ type ConfigWarning struct {
 
 // LogWarnings logs each warning at Warn level. Used by informational commands
 // (drive list, status, shared) to surface config issues without failing.
-func LogWarnings(warnings []ConfigWarning, logger *slog.Logger) {
+func LogWarnings(path string, warnings []ConfigWarning, logger *slog.Logger) {
 	for _, w := range warnings {
-		logger.Warn("config issue", "message", w.Message)
+		// The message is the warning; a "config issue (message=...)" wrapper
+		// hid it in an attribute and never said which file to edit.
+		logger.Warn(configWarningText(path, w.Message))
 	}
+}
+
+func configWarningText(path, message string) string {
+	if path == "" {
+		return "config: " + message
+	}
+
+	return path + ": " + message
 }
 
 // Load reads and parses a TOML config file using a two-pass decode, validates

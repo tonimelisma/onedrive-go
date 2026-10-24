@@ -83,7 +83,8 @@ func matchSingleDrive(cfg *Config, logger *slog.Logger) (driveid.CanonicalID, Dr
 		}
 	}
 
-	return driveid.CanonicalID{}, Drive{}, fmt.Errorf("multiple drives configured — specify with --drive")
+	return driveid.CanonicalID{}, Drive{}, fmt.Errorf("several drives are configured; choose one with --drive (%s)",
+		strings.Join(configuredDriveNames(cfg), ", "))
 }
 
 // matchBySelector finds a drive by exact ID, display_name, or partial substring match.
@@ -138,7 +139,24 @@ func matchPartial(cfg *Config, selector string, logger *slog.Logger) (driveid.Ca
 			selector, strings.Join(strs, ", "))
 	}
 
-	return driveid.CanonicalID{}, Drive{}, fmt.Errorf("no drive matching %q", selector)
+	return driveid.CanonicalID{}, Drive{}, fmt.Errorf("no drive matching %q; configured drives: %s",
+		selector, strings.Join(configuredDriveNames(cfg), ", "))
+}
+
+// configuredDriveNames lists drives for selector errors, display name first
+// when there is one, sorted so the message is stable.
+func configuredDriveNames(cfg *Config) []string {
+	names := make([]string, 0, len(cfg.Drives))
+	for cid := range cfg.Drives {
+		name := cid.String()
+		if display := cfg.Drives[cid].DisplayName; display != "" {
+			name = display + " (" + name + ")"
+		}
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	return names
 }
 
 // buildResolvedDrive creates a ResolvedDrive by starting with global config

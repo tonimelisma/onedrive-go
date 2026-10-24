@@ -313,7 +313,7 @@ func TestConfirmRmParentVisibility_WarnsButSucceedsOnSettlingParent(t *testing.T
 	err := confirmRmParentVisibility(context.Background(), waiter, "/docs/old-report.pdf", &status)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"docs"}, waiter.calls)
-	assert.Contains(t, status.String(), "warning:")
+	assert.Contains(t, status.String(), "Note: deleted")
 	assert.Contains(t, status.String(), "/docs")
 	assert.Contains(t, status.String(), "/docs/old-report.pdf")
 }

@@ -20,6 +20,12 @@ func readDriveStatusSnapshot(
 
 	snapshot, err := syncengine.ReadDriveStatusSnapshot(ctx, statePath, logger)
 	if err != nil {
+		// Without this, an unreadable state database looked like a drive
+		// with nothing to report: zero files and no issues.
+		if logger != nil {
+			logger.Warn("cannot read the sync state for this drive; its status may be incomplete",
+				slog.String("path", statePath), slog.String("error", err.Error()))
+		}
 		return syncengine.DriveStatusSnapshot{}
 	}
 

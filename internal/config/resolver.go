@@ -2,6 +2,7 @@ package config
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -172,12 +173,14 @@ func ClearExpiredPauses(cfgPath string, cfg *Config, now time.Time, logger *slog
 			slog.String("drive", cid.String()),
 		)
 
-		if delErr := DeleteDriveKey(cfgPath, cid, "paused"); delErr != nil {
-			logger.Warn("could not clear paused key", slog.String("error", delErr.Error()))
-		}
-
-		if delErr := DeleteDriveKey(cfgPath, cid, "paused_until"); delErr != nil {
-			logger.Warn("could not clear paused_until key", slog.String("error", delErr.Error()))
+		pausedErr := DeleteDriveKey(cfgPath, cid, "paused")
+		untilErr := DeleteDriveKey(cfgPath, cid, "paused_until")
+		if err := errors.Join(pausedErr, untilErr); err != nil {
+			// The in-memory pause is cleared below either way; only the file
+			// still says paused, so name the drive and the file to fix.
+			logger.Warn("could not remove an expired pause from "+cfgPath+"; the drive syncs again, "+
+				"but the file still lists it as paused",
+				slog.String("drive", cid.String()), slog.String("error", err.Error()))
 		}
 
 		d.Paused = nil

@@ -82,8 +82,8 @@ func TestLoadAccountViewSnapshot_UsesValidatedStateInvariantErrors(t *testing.T)
 		CfgPath:      cfgPath,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "configured drive")
-	assert.Contains(t, err.Error(), "has no catalog entry")
+	assert.Contains(t, err.Error(), "is in config.toml")
+	assert.Contains(t, err.Error(), "not in onedrive-go's drive inventory")
 }
 
 func writeInvalidTokenFile(path string) error {

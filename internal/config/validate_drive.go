@@ -5,6 +5,7 @@ import (
 	slashpath "path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -38,8 +39,26 @@ func validateDrives(cfg *Config) []error {
 func validateSingleDrive(id driveid.CanonicalID, drive *Drive, syncDirs map[string]string) []error {
 	errs := checkDriveSyncDirUniqueness(id.String(), drive, syncDirs)
 	errs = append(errs, validateDriveFilterConfig(id.String(), drive.DriveFilterConfig)...)
+	errs = append(errs, validatePausedUntil(id.String(), drive.PausedUntil)...)
 
 	return errs
+}
+
+// validatePausedUntil rejects a paused_until that is not a time. IsPaused
+// deliberately treats such a value as an indefinite pause so a corrupt file
+// never resumes a drive by surprise; this makes that state visible instead
+// of silent.
+func validatePausedUntil(id string, pausedUntil *string) []error {
+	if pausedUntil == nil {
+		return nil
+	}
+
+	if _, err := time.Parse(time.RFC3339, *pausedUntil); err != nil {
+		return []error{fmt.Errorf("drive %s: paused_until %q is not a time like 2026-10-24T15:00:00Z; "+
+			"the drive stays paused until you run 'onedrive-go resume' or fix the value", id, *pausedUntil)}
+	}
+
+	return nil
 }
 
 func validateDriveFilterConfig(id string, filter DriveFilterConfig) []error {

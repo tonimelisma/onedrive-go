@@ -151,7 +151,7 @@ func awaitCopy(ctx context.Context, cc *CLIContext, meta *graph.Client, monitorU
 			return "", fmt.Errorf("copy %s", status.Status)
 		}
 
-		cc.Statusf("Copying: %.0f%%\n", status.PercentageComplete)
+		cc.Progressf("Copying: %.0f%%", status.PercentageComplete)
 
 		select {
 		case <-ctx.Done():

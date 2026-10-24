@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -96,10 +97,16 @@ func DefaultCacheDir() string {
 	}
 }
 
-// AssertDevSafe panics if a dev build (version=="dev") is running without full
-// XDG isolation. Partial isolation is unsafe: setting only one XDG root can still
-// leave config, data, or cache operations falling back to production paths.
-func AssertDevSafe() {
+// ErrDevBuildUnsafe reports a development build started without full XDG
+// isolation.
+var ErrDevBuildUnsafe = errors.New("refusing to run a development build without XDG isolation")
+
+// CheckDevSafe refuses a dev build (version=="dev") that is running without
+// full XDG isolation. Partial isolation is unsafe: setting only one XDG root
+// can still leave config, data, or cache operations falling back to
+// production paths. It returns a plain error rather than panicking, because
+// anyone who builds from source without the version ldflag gets a dev build.
+func CheckDevSafe() error {
 	var missing []string
 	for _, name := range []string{"XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"} {
 		if os.Getenv(name) == "" {
@@ -107,13 +114,14 @@ func AssertDevSafe() {
 		}
 	}
 	if len(missing) == 0 {
-		return
+		return nil
 	}
 
-	panic("DEV BUILD: set XDG_DATA_HOME, XDG_CONFIG_HOME, and XDG_CACHE_HOME " +
-		"to avoid touching production data.\n" +
-		"Missing: " + strings.Join(missing, ", ") + "\n" +
-		"Example: source scripts/dev-env.sh && go run . <command>")
+	return fmt.Errorf("%w, so it cannot touch your real OneDrive settings or data. "+
+		"For development, set XDG_DATA_HOME, XDG_CONFIG_HOME and XDG_CACHE_HOME (missing: %s), "+
+		"for example with 'source scripts/dev-env.sh'. To use it for real, build it with a version as shown "+
+		"in README.md under Building from Source",
+		ErrDevBuildUnsafe, strings.Join(missing, ", "))
 }
 
 // ControlSocketPath returns the Unix-domain control socket path. The socket is

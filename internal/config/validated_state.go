@@ -77,7 +77,9 @@ func validateConfiguredDrivesInCatalog(cfg *Config, stored *Catalog) error {
 
 	for cid := range cfg.Drives {
 		if _, found := stored.DriveByCanonicalID(cid); !found {
-			return fmt.Errorf("catalog invariant: configured drive %s has no catalog entry", cid)
+			return fmt.Errorf("drive %s is in config.toml but not in onedrive-go's drive inventory (catalog.json); "+
+				"run 'onedrive-go login --account %s' to register it, or remove its section from config.toml",
+				cid, cid.Email())
 		}
 	}
 

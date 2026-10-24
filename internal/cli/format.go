@@ -57,6 +57,7 @@ func (cc *CLIContext) Statusf(format string, args ...any) {
 		return
 	}
 
+	cc.ProgressDone()
 	if err := writef(cc.StatusWriter, format, args...); err != nil {
 		cc.recordStatusError(fmt.Errorf("write status output: %w", err))
 	}
@@ -130,6 +131,9 @@ func formatTime(t time.Time) string {
 		return unknownTimeLabel
 	}
 
+	// Show the user's local time, as ls(1) does. Graph timestamps arrive in
+	// UTC, so printing them unconverted was hours off with no zone label.
+	t = t.Local()
 	now := time.Now()
 
 	// Same calendar year: show "Jan  2 15:04"
@@ -148,7 +152,7 @@ func formatAPITime(t time.Time) string {
 		return ""
 	}
 
-	return t.Format("2006-01-02T15:04:05Z")
+	return t.UTC().Format("2006-01-02T15:04:05Z")
 }
 
 // formatExactTime returns the full UTC timestamp for text output.
@@ -227,4 +231,56 @@ func countItems(n int) string {
 	}
 
 	return fmt.Sprintf("%d items", n)
+}
+
+// formatAPITimeForHumans renders a formatAPITime string the way formatTime
+// renders a time, for text tables built from already-serialized records.
+func formatAPITimeForHumans(apiTime string) string {
+	if apiTime == "" {
+		return unknownTimeLabel
+	}
+
+	parsed, err := time.Parse(time.RFC3339, apiTime)
+	if err != nil {
+		return apiTime
+	}
+
+	return formatTime(parsed)
+}
+
+// Progressf redraws one transient progress line on stderr. It shows only
+// when a person is watching (stderr is a terminal) and the run is neither
+// --quiet nor --json; piped and scripted runs get the final summary only,
+// instead of one stored line per chunk, second or file.
+func (cc *CLIContext) Progressf(format string, args ...any) {
+	if cc.StatusWriter == nil || cc.Flags.Quiet || cc.Flags.JSON || !isWriterTTY(cc.StatusWriter) {
+		return
+	}
+
+	cc.statusMu.Lock()
+	defer cc.statusMu.Unlock()
+
+	// \r returns to column 0 and \x1b[K clears the old line's tail.
+	if _, err := fmt.Fprintf(cc.StatusWriter, "\r\x1b[K"+format, args...); err != nil {
+		return
+	}
+	cc.progressShown = true
+}
+
+// ProgressDone clears the progress line so the next message starts clean.
+func (cc *CLIContext) ProgressDone() {
+	if cc.StatusWriter == nil {
+		return
+	}
+
+	cc.statusMu.Lock()
+	defer cc.statusMu.Unlock()
+
+	if !cc.progressShown {
+		return
+	}
+	cc.progressShown = false
+	if _, err := fmt.Fprint(cc.StatusWriter, "\r\x1b[K"); err != nil {
+		return
+	}
 }

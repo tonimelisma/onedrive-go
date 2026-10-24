@@ -66,11 +66,11 @@ func runDriveResetSyncStateWithInput(
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	cid, err := driveid.NewCanonicalID(driveSelector)
+	cid, inConfig, err := resolveExactDriveSelector(cfg, driveSelector)
 	if err != nil {
-		return fmt.Errorf("invalid drive ID %q: %w", driveSelector, err)
+		return err
 	}
-	if _, exists := cfg.Drives[cid]; !exists {
+	if !inConfig {
 		return fmt.Errorf("drive %q not found in config", driveSelector)
 	}
 
@@ -78,7 +78,8 @@ func runDriveResetSyncStateWithInput(
 		return err
 	}
 
-	if err := confirmDriveStateResetIntent(stdin, cc.Output(), cid, yes); err != nil {
+	// The prompt is a conversation, not the command's result: stderr.
+	if err := confirmDriveStateResetIntent(stdin, cc.Status(), cid, yes); err != nil {
 		return err
 	}
 
@@ -137,7 +138,7 @@ func confirmDriveStateResetIntent(
 		return fmt.Errorf("reset-sync-state requires confirmation; rerun with --yes or use an interactive terminal")
 	}
 
-	if err := writeln(output, "This will delete and recreate the sync state DB for "+canonicalID.String()+"."); err != nil {
+	if err := writeln(output, "This deletes and recreates the sync state database for "+canonicalID.String()+"."); err != nil {
 		return err
 	}
 	if err := writeln(output, "Local files, remote files, config, and tokens will not be changed."); err != nil {

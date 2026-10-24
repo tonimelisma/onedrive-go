@@ -561,7 +561,7 @@ func addSharedDriveByName(
 		return addSharedDrive(ctx, cc.CfgPath, cc.Output(), matches[0].cid, matches[0].displayName, logger, cc.runtime())
 
 	default:
-		if err := writef(cc.Output(), "Multiple shared folders match %q — be more specific:\n\n", selector); err != nil {
+		if err := writef(cc.Status(), "Multiple shared folders match %q — be more specific:\n\n", selector); err != nil {
 			return err
 		}
 
@@ -577,7 +577,7 @@ func addSharedDriveByName(
 			}
 
 			if err := writef(
-				cc.Output(),
+				cc.Status(),
 				"  %d. %s%s%s\n     %s\n",
 				i+1,
 				matches[i].displayName,
@@ -589,7 +589,13 @@ func addSharedDriveByName(
 			}
 		}
 
-		return writeln(cc.Output(), "\nRun 'onedrive-go drive add <canonical-id>' to add a specific drive.")
+		// Nothing was added, so this is a failure for scripts, and the list
+		// is guidance rather than the command's result: stderr.
+		if err := writeln(cc.Status(), "\nRun 'onedrive-go drive add <canonical-id>' to add a specific drive."); err != nil {
+			return err
+		}
+
+		return fmt.Errorf("%d shared folders match %q; nothing was added", len(matches), selector)
 	}
 }
 

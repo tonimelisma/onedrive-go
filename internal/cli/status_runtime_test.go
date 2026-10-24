@@ -48,7 +48,7 @@ func TestStatusRuntime_SummaryJSONWithActiveOwner(t *testing.T) {
 	require.Len(t, decoded.Accounts, 1)
 	require.Len(t, decoded.Accounts[0].Drives, 1)
 	drive := decoded.Accounts[0].Drives[0]
-	assert.Equal(t, driveStateReady, drive.State)
+	assert.Equal(t, driveStateNotSynced, drive.State)
 	assert.Equal(t, "watch", decoded.Summary.RuntimeOwner)
 	assert.Equal(t, 1, decoded.Summary.RuntimeActiveDrives)
 }
