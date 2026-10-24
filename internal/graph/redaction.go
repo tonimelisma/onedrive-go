@@ -2,6 +2,7 @@ package graph
 
 import (
 	"encoding/json"
+	"errors"
 	"net/url"
 	"regexp"
 	"strings"
@@ -152,6 +153,7 @@ func isSensitiveURL(raw string) bool {
 		"access_token",
 		"authkey",
 		"sig",
+		"tempauth",
 		"token",
 	}
 	query := parsed.Query()
@@ -162,4 +164,23 @@ func isSensitiveURL(raw string) bool {
 	}
 
 	return false
+}
+
+// redactURLError scrubs the request URL that net/http embeds in a *url.Error
+// when that URL carries a credential. Only the scheme and host survive, which
+// is enough to tell a user which service failed.
+func redactURLError(err error) error {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) || !isSensitiveURL(urlErr.URL) {
+		return err
+	}
+
+	redacted := "[REDACTED_URL]"
+	if parsed, parseErr := url.Parse(urlErr.URL); parseErr == nil && parsed.Host != "" {
+		redacted = parsed.Scheme + "://" + parsed.Host + "/[REDACTED]"
+	}
+
+	urlErr.URL = redacted
+
+	return err
 }
