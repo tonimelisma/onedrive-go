@@ -113,17 +113,17 @@ func downloadSharedFolder(
 	state.wg.Wait()
 
 	if cc.Flags.JSON {
-		return printGetFolderJSON(cc.Output(), state.result)
+		if err := printGetFolderJSON(cc.Output(), state.result); err != nil {
+			return err
+		}
+
+		return bulkTransferError(nil, "download", state.result.Errors)
 	}
 
 	cc.Statusf("Downloaded %d files, %d folders (%s)\n",
 		len(state.result.Files), state.result.FoldersCreated, formatSize(state.result.TotalSize))
 
-	if len(state.result.Errors) > 0 {
-		return fmt.Errorf("%d errors during download", len(state.result.Errors))
-	}
-
-	return nil
+	return bulkTransferError(cc.Status(), "download", state.result.Errors)
 }
 
 func countSharedFiles(ctx context.Context, client *graph.Client, driveID driveid.ID, folderID string, state *downloadState) error {

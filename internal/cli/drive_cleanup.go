@@ -70,13 +70,16 @@ func purgeOrphanedDriveState(w io.Writer, cid driveid.CanonicalID, logger *slog.
 // without touching the owning account record. Token deletion is handled
 // separately since tokens may be shared (SharePoint).
 func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *slog.Logger) error {
-	// Remove retained state (best-effort, errors logged).
-	if _, err := removeDriveDataFiles(canonicalID, logger); err != nil {
-		logger.Warn("errors removing drive data files", "drive", canonicalID.String(), "error", err)
-	}
+	// Remove the config section even when some sync data cannot be deleted,
+	// but report the leftovers so the command does not claim a clean purge.
+	_, dataErr := removeDriveDataFiles(canonicalID, logger)
 
 	if err := config.DeleteDriveSection(cfgPath, canonicalID); err != nil {
 		return fmt.Errorf("deleting drive section: %w", err)
+	}
+
+	if dataErr != nil {
+		return fmt.Errorf("removed %s from the config, but could not delete all of its sync data: %w", canonicalID.String(), dataErr)
 	}
 
 	return nil

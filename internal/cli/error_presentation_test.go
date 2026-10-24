@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/multisync"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func graphNotFound() error {
@@ -116,4 +118,35 @@ func TestWriteCommandError_JournalLinesCarryErrPriority(t *testing.T) {
 	var buf bytes.Buffer
 	writeCommandError(&buf, "Error: one\nRun 'x --help' for usage.")
 	require.Equal(t, "Error: one\nRun 'x --help' for usage.\n", buf.String(), "a plain writer is not the journal")
+}
+
+// Validates: R-6.6.28
+func TestIncompleteSyncError_FailedItemsMakeTheRunFail(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, incompleteSyncError([]*multisync.MountReport{{Report: &syncengine.Report{Succeeded: 3}}}))
+
+	err := incompleteSyncError([]*multisync.MountReport{
+		{Report: &syncengine.Report{Succeeded: 3, Failed: 1}},
+		{Report: &syncengine.Report{Failed: 1}},
+		nil,
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, errSyncIncomplete)
+	assert.Equal(t, "Error: 2 items did not sync (see above). The next sync retries them.", commandErrorText(err, false))
+}
+
+// Validates: R-6.6.28
+func TestBulkTransferError_NamesEachFailureAndFails(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, bulkTransferError(nil, "download", nil))
+
+	var stderr bytes.Buffer
+	err := bulkTransferError(&stderr, "download", []string{"a.txt: boom", "b.txt: bang"})
+	require.EqualError(t, err, "2 items failed to download")
+	assert.Equal(t, "Failed: a.txt: boom\nFailed: b.txt: bang\n", stderr.String())
+
+	require.EqualError(t, bulkTransferError(nil, "upload", []string{"x"}), "1 item failed to upload",
+		"--json mode keeps failures in the document but still fails the command")
 }

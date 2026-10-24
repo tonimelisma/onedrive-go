@@ -47,14 +47,16 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 	segments := strings.Split(remotePath, "/")
 	parentID := mkdirStartParentID(session)
 
+	created := ""
 	for _, seg := range segments {
 		if seg == "" {
 			continue
 		}
 
+		created += "/" + seg
 		item, createErr := session.EnsureFolder(ctx, parentID, seg)
 		if createErr != nil {
-			return newRemoteOpError("creating folder", seg, createErr)
+			return newRemoteOpError("creating folder", created, createErr)
 		}
 
 		parentID = item.ID

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
@@ -61,7 +62,7 @@ func runOnceResultError(result multisync.RunOnceResult) error {
 	}
 
 	if failCount == 0 {
-		return nil
+		return incompleteSyncError(result.Reports)
 	}
 
 	if result.Startup.SelectedCount() <= 1 {
@@ -83,4 +84,26 @@ func formatMountReportErrorMessage(dr *multisync.MountReport) string {
 	}
 
 	return formatStateStoreIncompatibleMessage(&dr.Identity, dr.Err)
+}
+
+// errSyncIncomplete marks a pass that ran but left items unsynced, so cron
+// and systemd see a failure instead of exit 0 after "...; 2 failed."
+var errSyncIncomplete = errors.New("sync incomplete")
+
+func incompleteSyncError(reports []*multisync.MountReport) error {
+	failed := 0
+	for _, dr := range reports {
+		if dr != nil && dr.Report != nil {
+			failed += dr.Report.Failed
+		}
+	}
+
+	if failed == 0 {
+		return nil
+	}
+
+	return newPresentedError(
+		countItems(failed)+" did not sync (see above). The next sync retries them.",
+		errSyncIncomplete,
+	)
 }

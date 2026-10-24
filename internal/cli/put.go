@@ -216,17 +216,17 @@ func uploadFolder(
 	}
 
 	if cc.Flags.JSON {
-		return printPutFolderJSON(cc.Output(), state.result)
+		if err := printPutFolderJSON(cc.Output(), state.result); err != nil {
+			return err
+		}
+
+		return bulkTransferError(nil, "upload", state.result.Errors)
 	}
 
 	cc.Statusf("Uploaded %d files, %d folders (%s)\n",
 		len(state.result.Files), state.result.FoldersCreated, formatSize(state.result.TotalSize))
 
-	if len(state.result.Errors) > 0 {
-		return fmt.Errorf("%d errors during upload", len(state.result.Errors))
-	}
-
-	return nil
+	return bulkTransferError(cc.Status(), "upload", state.result.Errors)
 }
 
 func countUploadFiles(localRoot string, state *uploadWalkState) error {

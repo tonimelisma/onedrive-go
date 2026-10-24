@@ -154,6 +154,26 @@ func TestRunStatusCommand_AuthRequiredOnlyJSON(t *testing.T) {
 	assert.Empty(t, decoded.Accounts[0].Drives)
 }
 
+// Validates: R-6.6.28
+func TestRunStatusCommand_NoAccountsJSONIsStillJSON(t *testing.T) {
+	setTestDriveHome(t)
+
+	var out bytes.Buffer
+	cc := &CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		CfgPath:      filepath.Join(t.TempDir(), "missing-config.toml"),
+		Flags:        CLIFlags{JSON: true},
+	}
+
+	require.NoError(t, runStatusCommand(t.Context(), cc, false))
+
+	var decoded statusOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded), "stdout must be one JSON document: %q", out.String())
+	assert.Empty(t, decoded.Accounts)
+}
+
 // Validates: R-3.5.1, R-3.1.5
 func TestRunStatusCommand_InvalidDriveSelectorReturnsMatchError(t *testing.T) {
 	setTestDriveHome(t)

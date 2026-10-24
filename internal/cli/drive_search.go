@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -43,9 +44,10 @@ func runDriveSearchWithContext(ctx context.Context, cc *CLIContext, query string
 	var (
 		results                []driveSearchResult
 		discoveredAuthRequired []accountAuthRequirement
+		searchErrs             []error
 	)
 	for _, tokenCID := range businessTokens {
-		accountResults, accountAuthRequired := searchAccountSharePoint(
+		accountResults, accountAuthRequired, searchErr := searchAccountSharePoint(
 			ctx,
 			tokenCID,
 			query,
@@ -54,8 +56,17 @@ func runDriveSearchWithContext(ctx context.Context, cc *CLIContext, query string
 			cc.GraphBaseURL,
 			cc.runtime(),
 		)
+		if searchErr != nil {
+			searchErrs = append(searchErrs, searchErr)
+			if len(businessTokens) > 1 {
+				writeWarningf(cc.Status(), "Warning: %s\n", strings.TrimPrefix(commandErrorText(searchErr, false), "Error: "))
+			}
+		}
 		results = append(results, accountResults...)
 		discoveredAuthRequired = append(discoveredAuthRequired, accountAuthRequired...)
+	}
+	if len(results) == 0 && len(searchErrs) > 0 {
+		return searchErrs[0]
 	}
 	authRequired := mergeAuthRequirements(businessAuthRequired, discoveredAuthRequired)
 
@@ -91,17 +102,17 @@ func searchAccountSharePoint(
 	recorder *authProofRecorder,
 	baseURL string,
 	runtime *driveops.SessionRuntime,
-) ([]driveSearchResult, []accountAuthRequirement) {
+) ([]driveSearchResult, []accountAuthRequirement, error) {
 	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
 	if err != nil {
 		logger.Debug("skipping token for search", "token", tokenCID.String(), "error", err)
 
-		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}
+		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}, nil
 	}
 
 	client, err := newGraphClientWithHTTP(
@@ -113,19 +124,20 @@ func searchAccountSharePoint(
 	if err != nil {
 		logger.Debug("skipping token for search", "token", tokenCID.String(), "error", err)
 
-		return nil, nil
+		return nil, nil, nil
 	}
 	attachAccountAuthProof(client, recorder, tokenCID.Email(), "drive-search")
 
 	sites, err := client.SearchSites(ctx, query, sharePointSearchLimit)
 	if err != nil {
-		logger.Warn("SharePoint search failed", "account", tokenCID.Email(), "error", err)
-
 		if errors.Is(err, graph.ErrUnauthorized) {
-			return nil, []accountAuthRequirement{tokenAuthRequirement(tokenCID, authReasonSyncAuthRejected, logger)}
+			logger.Debug("SharePoint search rejected the saved login", "account", tokenCID.Email(), "error", err)
+			return nil, []accountAuthRequirement{tokenAuthRequirement(tokenCID, authReasonSyncAuthRejected, logger)}, nil
 		}
 
-		return nil, nil
+		// A failed search is not an empty result: report it so the command
+		// fails instead of printing "No SharePoint sites found".
+		return nil, nil, fmt.Errorf("searching SharePoint for %s: %w", tokenCID.Email(), err)
 	}
 
 	email := tokenCID.Email()
@@ -157,7 +169,7 @@ func searchAccountSharePoint(
 		}
 	}
 
-	return results, nil
+	return results, nil, nil
 }
 
 func printDriveSearchJSON(

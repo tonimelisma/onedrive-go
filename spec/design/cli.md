@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.8.16 [verified]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-6.8.16 [verified]
 
 ## Overview
 
@@ -148,6 +148,14 @@ every command's `Args` validator, and a flag-group check that runs before
 Only a stop the user requested (the shutdown context is done) is silent and
 exits 130; `context.DeadlineExceeded` from anything else is an error. Under
 the journal, `writeCommandError` prefixes each line with `<3>` (R-6.6.27).
+
+Commands never report success for work they skipped (R-6.6.28). One-shot sync
+turns `Report.Failed` into `errSyncIncomplete`. Folder `get`/`put` go through
+`bulkTransferError`, which lists each failed item on stderr and fails the
+command (under `--json` the failures stay in the document, and only the exit
+status changes). `sync --json` swaps the console's text for JSON lines
+(`sync_console_json.go`), and `status --json` prints an empty document
+instead of prose.
 
 ### Commands Must Consume The Command Context
 

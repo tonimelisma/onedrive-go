@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -263,4 +264,38 @@ func TestHumanDuration(t *testing.T) {
 	assert.Equal(t, "0.4 s", humanDuration(400*time.Millisecond))
 	assert.Equal(t, "2 min 10 s", humanDuration(130*time.Second))
 	assert.Equal(t, "1 h 5 min", humanDuration(65*time.Minute))
+}
+
+// Validates: R-6.6.28
+func TestSyncConsole_JSONWritesOnlyJSONLines(t *testing.T) {
+	t.Parallel()
+
+	c, out, errOut := testSyncConsole()
+	c.json = true
+	c.Starting([]multisync.StandaloneMountConfig{{DisplayName: "Personal", SyncRoot: "/home/user/OneDrive", AccountEmail: "user@example.com"}},
+		syncengine.SyncBidirectional, false)
+	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "a.pdf", Size: 10, SizeKnown: true, Success: true}))
+	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "b.txt", Err: os.ErrPermission}))
+	c.Summary(singleMountResult(&syncengine.Report{Duration: 2 * time.Second, Downloads: 1, Uploads: 1, Succeeded: 1, Failed: 1}))
+
+	var events []syncJSONEvent
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		var event syncJSONEvent
+		require.NoError(t, json.Unmarshal([]byte(line), &event), "every stdout line must be JSON: %q", line)
+		events = append(events, event)
+	}
+
+	require.Len(t, events, 4)
+	assert.Equal(t, "start", events[0].Event)
+	assert.Equal(t, "user@example.com", events[0].Account)
+	assert.Equal(t, "activity", events[1].Event)
+	assert.Equal(t, "download", events[1].Action)
+	assert.Equal(t, "done", events[1].Status)
+	assert.Equal(t, "failed", events[2].Status)
+	assert.Equal(t, "permission denied", events[2].Error)
+	assert.Equal(t, "summary", events[3].Event)
+	require.NotNil(t, events[3].Failed)
+	assert.Equal(t, 1, *events[3].Failed)
+	assert.Equal(t, 1, events[3].Counts["download"])
+	assert.Empty(t, errOut.String(), "under --json, file failures are data on stdout")
 }
