@@ -25,7 +25,7 @@ var errRoundTripUnexpected = errors.New("unexpected round trip")
 func TestBootstrapMetadataClient(t *testing.T) {
 	t.Parallel()
 
-	client := BootstrapMetadataClient(testLogger())
+	client := BootstrapMetadataClient(testLogger(), nil)
 
 	require.NotNil(t, client)
 	assert.Zero(t, client.Timeout, "bootstrap metadata client must not use http.Client.Timeout")
@@ -92,7 +92,7 @@ func TestBuildTransport_PanicsWhenDefaultTransportIsNotHTTPTransport(t *testing.
 func TestInteractiveMetadataClient_TransportRetryDeadlineIsRetryable(t *testing.T) {
 	t.Parallel()
 
-	retryTransport, ok := InteractiveMetadataClient(testLogger(), &retry.ThrottleGate{}).Transport.(*retry.RetryTransport)
+	retryTransport, ok := InteractiveMetadataClient(testLogger(), &retry.ThrottleGate{}, nil).Transport.(*retry.RetryTransport)
 	require.True(t, ok)
 
 	var attempts int
@@ -109,7 +109,7 @@ func TestInteractiveMetadataClient_TransportRetryDeadlineIsRetryable(t *testing.
 		}, nil
 	})
 	retryTransport.Policy = retry.Policy{
-		MaxAttempts: 1,
+		MaxAttempts: 2,
 		Base:        time.Millisecond,
 		Max:         time.Millisecond,
 		Multiplier:  1,

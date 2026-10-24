@@ -266,6 +266,42 @@ func TestSessionRuntime_InteractiveClientsReuseThrottleGatePerMountTarget(t *tes
 	assert.Same(t, driveA.Transfer, rooted.Transfer, "interactive transfer client should be shared across targets")
 }
 
+// Validates: R-6.6.8
+//
+// Throttle gates stay per target, but the retry announcements are shared by
+// every retrying client of the runtime, so one outage prints one "can't reach
+// OneDrive" line however many targets and transfers are in flight.
+func TestSessionRuntime_RetryingClientsShareOneRetryNotices(t *testing.T) {
+	holder := config.NewHolder(config.DefaultConfig(), "")
+	runtime := NewSessionRuntime(holder, "test/1.0", discardLogger())
+
+	ownerCID := driveid.MustCanonicalID("personal:user@example.com")
+	driveA := runtime.interactiveClientsForMount(&MountSessionConfig{
+		TokenOwnerCanonical: ownerCID,
+		DriveID:             driveid.New("drive-a"),
+		AccountEmail:        ownerCID.Email(),
+	})
+	driveB := runtime.interactiveClientsForMount(&MountSessionConfig{
+		TokenOwnerCanonical: ownerCID,
+		DriveID:             driveid.New("drive-b"),
+		AccountEmail:        ownerCID.Email(),
+	})
+
+	transports := make([]*retry.RetryTransport, 0, 4)
+	for _, client := range []*http.Client{driveA.Meta, driveB.Meta, driveA.Transfer, runtime.BootstrapMeta()} {
+		rt, ok := client.Transport.(*retry.RetryTransport)
+		require.True(t, ok)
+		transports = append(transports, rt)
+	}
+
+	require.NotNil(t, transports[0].Notices)
+	for _, rt := range transports[1:] {
+		assert.Same(t, transports[0].Notices, rt.Notices)
+	}
+	assert.NotSame(t, transports[0].ThrottleGate, transports[1].ThrottleGate,
+		"throttle coordination stays per target")
+}
+
 // --- FlushTokenCache ---
 
 func TestSessionRuntime_FlushTokenCache(t *testing.T) {

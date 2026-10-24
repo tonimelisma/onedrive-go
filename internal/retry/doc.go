@@ -15,10 +15,10 @@
 //
 // Named policies preserve exact behavior from their original implementations:
 //
-//   - [Transport]: HTTP transport retries (graph/client.go) — 5 attempts, 1s-60s.
-//   - [DriveDiscovery]: Transient 403 retry during drive enumeration — 3 attempts.
-//   - [WatchLocal]: Local observer error backoff — infinite, 1s-30s, no jitter.
-//   - [WatchRemote]: Remote observer error backoff — infinite, 5s-dynamic, no jitter.
+//   - [TransportPolicy]: HTTP transport retries (RetryTransport) — 6 attempts, 1s-60s.
+//   - [DriveDiscoveryPolicy]: Transient 403 retry during drive enumeration — 5 attempts.
+//   - [WatchLocalPolicy]: Local observer error backoff — infinite, 1s-30s, no jitter.
+//   - [WatchRemotePolicy]: Remote observer error backoff — infinite, 5s-dynamic, no jitter.
 //
 // # Exclusions
 //

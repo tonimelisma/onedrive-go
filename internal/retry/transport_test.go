@@ -3,10 +3,12 @@ package retry_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,10 +24,11 @@ const (
 	networkRetryExhaustedLogMessage = "OneDrive still unreachable, giving up"
 )
 
-// testPolicy is a fast retry policy for tests: 3 attempts, tiny delays, no jitter.
+// testPolicy is a fast retry policy for tests: 4 total attempts (the first
+// plus 3 retries), tiny delays, no jitter.
 func testPolicy() retry.Policy {
 	return retry.Policy{
-		MaxAttempts: 3,
+		MaxAttempts: 4,
 		Base:        1 * time.Millisecond,
 		Max:         10 * time.Millisecond,
 		Multiplier:  2.0,
@@ -124,7 +127,7 @@ func TestRetryTransport_NetworkRetryExhausted(t *testing.T) {
 	closeTestResponse(t, resp)
 	require.Error(t, err)
 	assert.Nil(t, resp)
-	// MaxAttempts=3: initial + 3 retries = 4 total attempts
+	// MaxAttempts=4 counts every attempt: initial + 3 retries.
 	assert.Equal(t, int32(4), attempts.Load())
 }
 
@@ -403,7 +406,7 @@ func TestRetryTransport_MaxAttemptsExhausted(t *testing.T) {
 	resp, err := rt.RoundTrip(req)
 	require.NoError(t, err)
 	assert.Equal(t, 500, resp.StatusCode, "exhausted retries should return last response")
-	// MaxAttempts=3: initial + 3 retries = 4 total attempts
+	// MaxAttempts=4 counts every attempt: initial + 3 retries.
 	assert.Equal(t, int32(4), attempts.Load())
 	require.NoError(t, resp.Body.Close())
 }
@@ -767,7 +770,11 @@ func TestRetryTransport_StripeRetryCount(t *testing.T) {
 }
 
 // Validates: R-6.6.8
-func TestRetryTransport_NetworkError_ExhaustionLogsWarn(t *testing.T) {
+//
+// The exhausted network error is returned and the command prints it once, so
+// the transport announces the outage while it is still retrying and logs the
+// final give-up at Debug only.
+func TestRetryTransport_NetworkError_ExhaustionAnnouncesOnceAndDoesNotRepeatTheError(t *testing.T) {
 	t.Parallel()
 
 	// Use a log handler that captures log records to verify the WARN log.
@@ -797,14 +804,18 @@ func TestRetryTransport_NetworkError_ExhaustionLogsWarn(t *testing.T) {
 	// All retries exhausted (1 initial + 3 retries = 4 attempts).
 	assert.Equal(t, int32(4), attempts.Load())
 
-	assert.Contains(t, logBuf.String(), networkRetryExhaustedLogMessage)
-	assert.Contains(t, logBuf.String(), `"level":"WARN"`)
-	assert.Equal(t, 1, strings.Count(logBuf.String(), "can't reach OneDrive, retrying"),
-		"a sustained outage is announced once, while it is still retrying")
+	warns := warnMessages(t, logBuf.Bytes())
+	assert.Equal(t, []string{"can't reach OneDrive, retrying"}, warns,
+		"a sustained outage is announced once, while it is still retrying, and the give-up is not repeated at Warn")
+	assert.NotContains(t, logBuf.String(), networkRetryExhaustedLogMessage,
+		"the give-up record is Debug, below this logger's level")
 }
 
 // Validates: R-6.6.8
-func TestRetryTransport_HTTPError_ExhaustionLogsWarn(t *testing.T) {
+//
+// The exhausted response is returned and becomes the caller's error, so the
+// transport does not also warn about it.
+func TestRetryTransport_HTTPError_ExhaustionDoesNotWarn(t *testing.T) {
 	t.Parallel()
 
 	var logBuf bytes.Buffer
@@ -836,8 +847,9 @@ func TestRetryTransport_HTTPError_ExhaustionLogsWarn(t *testing.T) {
 	// All retries exhausted (1 initial + 3 retries = 4 attempts).
 	assert.Equal(t, int32(4), attempts.Load())
 
-	assert.Contains(t, logBuf.String(), retryExhaustedLogMessage)
-	assert.Contains(t, logBuf.String(), `"level":"WARN"`)
+	assert.Empty(t, warnMessages(t, logBuf.Bytes()))
+	assert.NotContains(t, logBuf.String(), retryExhaustedLogMessage,
+		"the exhausted-retries record is Debug, below this logger's level")
 }
 
 // Validates: R-6.6.8
@@ -912,4 +924,248 @@ func TestRetryTransport_UsesRedactedLogTargetFromContext(t *testing.T) {
 	assert.NotContains(t, logBuf.String(), opaqueSessionURL)
 	assert.Contains(t, logBuf.String(), "preauth:upload chunk")
 	assert.NotContains(t, logBuf.String(), `"url":"`+opaqueSessionURL+`"`)
+}
+
+// warnMessages returns the msg of every WARN-or-higher record in JSON log output.
+func warnMessages(t *testing.T, logOutput []byte) []string {
+	t.Helper()
+
+	var messages []string
+	for _, line := range bytes.Split(bytes.TrimSpace(logOutput), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+
+		var record struct {
+			Level string `json:"level"`
+			Msg   string `json:"msg"`
+		}
+		require.NoError(t, json.Unmarshal(line, &record))
+		if record.Level == slog.LevelWarn.String() || record.Level == slog.LevelError.String() {
+			messages = append(messages, record.Msg)
+		}
+	}
+
+	return messages
+}
+
+// Validates: R-6.6.8
+//
+// Concurrent workers in one outage all fail at once. Each used to print its
+// own "can't reach OneDrive" warning; the shared notice makes it one line per
+// outage, even across separate transports.
+func TestRetryTransport_OutageIsAnnouncedOncePerProcessAcrossConcurrentRequests(t *testing.T) {
+	t.Parallel()
+
+	var logBuf syncBuffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+
+	inner := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, io.ErrUnexpectedEOF
+	})
+
+	notices := &retry.Notices{}
+	newTransport := func() *retry.RetryTransport {
+		return &retry.RetryTransport{
+			Inner:   inner,
+			Policy:  testPolicy(),
+			Logger:  logger,
+			Sleep:   noopSleep,
+			Notices: notices,
+		}
+	}
+	transports := []*retry.RetryTransport{newTransport(), newTransport()}
+
+	const workers = 8
+
+	var (
+		ready sync.WaitGroup
+		done  sync.WaitGroup
+	)
+	start := make(chan struct{})
+
+	for i := range workers {
+		ready.Add(1)
+		done.Add(1)
+
+		go func(rt *retry.RetryTransport) {
+			defer done.Done()
+
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com", http.NoBody)
+			assert.NoError(t, err)
+
+			ready.Done()
+			<-start
+
+			resp, rtErr := rt.RoundTrip(req)
+			if resp != nil {
+				assert.NoError(t, resp.Body.Close())
+			}
+			assert.Error(t, rtErr)
+		}(transports[i%len(transports)])
+	}
+
+	ready.Wait()
+	close(start)
+	done.Wait()
+
+	assert.Equal(t, []string{"can't reach OneDrive, retrying"}, warnMessages(t, logBuf.Bytes()),
+		"one outage, one announcement, however many requests hit it")
+}
+
+// Validates: R-6.6.8
+//
+// The notice re-arms once OneDrive answers again, so a later, separate outage
+// is announced too.
+func TestRetryTransport_OutageNoticeRearmsAfterAResponse(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+
+	var online atomic.Bool
+	inner := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		if online.Load() {
+			return makeResponse(http.StatusOK, nil), nil
+		}
+
+		return nil, io.ErrUnexpectedEOF
+	})
+
+	rt := &retry.RetryTransport{
+		Inner:  inner,
+		Policy: testPolicy(),
+		Logger: logger,
+		Sleep:  noopSleep,
+	}
+
+	roundTrip := func() {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com", http.NoBody)
+		require.NoError(t, err)
+
+		resp, rtErr := rt.RoundTrip(req)
+		if rtErr == nil {
+			require.NoError(t, resp.Body.Close())
+		}
+	}
+
+	roundTrip()
+	roundTrip()
+	assert.Len(t, warnMessages(t, logBuf.Bytes()), 1, "a continuing outage stays announced once")
+
+	online.Store(true)
+	roundTrip()
+	online.Store(false)
+	roundTrip()
+
+	assert.Equal(t, []string{"can't reach OneDrive, retrying", "can't reach OneDrive, retrying"},
+		warnMessages(t, logBuf.Bytes()), "a new outage after OneDrive answered is announced again")
+}
+
+// Validates: R-6.6.8
+//
+// A Retry-After long enough for a person to notice the silence is announced
+// once per throttling episode; short waits stay quiet.
+func TestRetryTransport_LongRateLimitWaitIsAnnouncedOnce(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		retryAfter string
+		wantWarns  []string
+	}{
+		{name: "short wait stays quiet", retryAfter: "2", wantWarns: nil},
+		{
+			name:       "long wait is announced",
+			retryAfter: "120",
+			wantWarns:  []string{"OneDrive is limiting requests, waiting before retrying"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var logBuf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+
+			var attempts atomic.Int32
+			inner := roundTripFunc(func(*http.Request) (*http.Response, error) {
+				if attempts.Add(1) <= 2 {
+					return makeResponse(http.StatusTooManyRequests, map[string]string{"Retry-After": tt.retryAfter}), nil
+				}
+
+				return makeResponse(http.StatusOK, nil), nil
+			})
+
+			var slept []time.Duration
+			rt := &retry.RetryTransport{
+				Inner:  inner,
+				Policy: testPolicy(),
+				Logger: logger,
+				Sleep: func(_ context.Context, d time.Duration) error {
+					slept = append(slept, d)
+					return nil
+				},
+			}
+
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com", http.NoBody)
+			require.NoError(t, err)
+
+			resp, err := rt.RoundTrip(req)
+			require.NoError(t, err)
+			require.NoError(t, resp.Body.Close())
+
+			assert.Equal(t, tt.wantWarns, warnMessages(t, logBuf.Bytes()),
+				"two throttled attempts in one episode produce at most one line")
+			assert.Len(t, slept, 2)
+		})
+	}
+}
+
+// Validates: R-6.6.8
+func TestHumanDuration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		in   time.Duration
+		want string
+	}{
+		{in: 0, want: "1 s"},
+		{in: 400 * time.Millisecond, want: "1 s"},
+		{in: 2100 * time.Millisecond, want: "2 s"},
+		{in: 59 * time.Second, want: "59 s"},
+		{in: 2 * time.Minute, want: "2 min"},
+		{in: 90 * time.Second, want: "1 min 30 s"},
+	}
+
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, retry.HumanDuration(tt.in), tt.in.String())
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for the concurrent writes of a logger
+// shared by several goroutines.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	n, err := b.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write log buffer: %w", err)
+	}
+
+	return n, nil
+}
+
+func (b *syncBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return append([]byte(nil), b.buf.Bytes()...)
 }

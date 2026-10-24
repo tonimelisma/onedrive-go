@@ -768,7 +768,7 @@ func TestDrives_Permanent403_ExhaustsRetries(t *testing.T) {
 	_, err := client.Drives(t.Context())
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrForbidden)
-	assert.Equal(t, 5, attempts, "should have exhausted all 5 attempts")
+	assert.Equal(t, testRetryPolicy().MaxAttempts, attempts, "should have exhausted every attempt of the policy")
 }
 
 // Validates: R-6.7.13

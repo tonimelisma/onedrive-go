@@ -314,7 +314,7 @@ func interactiveMountSessionConfigFromResolvedDrive(rd *config.ResolvedDrive) (*
 // newGraphClient creates a graph.Client with the standard HTTP client,
 // user-agent, and base URL. Eliminates boilerplate repeated across commands.
 func newGraphClient(ts graph.TokenSource, logger *slog.Logger) (*graph.Client, error) {
-	return newGraphClientWithHTTP("", graphtransport.BootstrapMetadataClient(logger), ts, logger)
+	return newGraphClientWithHTTP("", graphtransport.BootstrapMetadataClient(logger, nil), ts, logger)
 }
 
 func newGraphClientWithHTTP(

@@ -27,27 +27,32 @@ type ClientSet struct {
 	Transfer *http.Client
 }
 
+// Every retrying builder takes the caller's shared *retry.Notices so that one
+// outage or long rate-limit wait is announced once per process, not once per
+// client (R-6.6.8). A nil notices gives the client private announcements.
+
 // BootstrapMetadataClient builds the retrying metadata client used before
 // account identity is known.
-func BootstrapMetadataClient(logger *slog.Logger) *http.Client {
-	return retryingMetadataClient(logger, nil)
+func BootstrapMetadataClient(logger *slog.Logger, notices *retry.Notices) *http.Client {
+	return retryingMetadataClient(logger, nil, notices)
 }
 
 // InteractiveMetadataClient builds the retrying metadata client used for one
 // interactive target. Callers own any shared throttle-gate lifetime.
-func InteractiveMetadataClient(logger *slog.Logger, gate *retry.ThrottleGate) *http.Client {
-	return retryingMetadataClient(logger, gate)
+func InteractiveMetadataClient(logger *slog.Logger, gate *retry.ThrottleGate, notices *retry.Notices) *http.Client {
+	return retryingMetadataClient(logger, gate, notices)
 }
 
 // InteractiveTransferClient builds the retrying transfer client shared by
 // interactive commands once a target has been selected.
-func InteractiveTransferClient(logger *slog.Logger) *http.Client {
+func InteractiveTransferClient(logger *slog.Logger, notices *retry.Notices) *http.Client {
 	return &http.Client{
 		Timeout: 0,
 		Transport: &retry.RetryTransport{
-			Inner:  perf.RoundTripper{Inner: transferTransport()},
-			Policy: retry.TransportPolicy(),
-			Logger: normalizeLogger(logger),
+			Inner:   perf.RoundTripper{Inner: transferTransport()},
+			Policy:  retry.TransportPolicy(),
+			Logger:  normalizeLogger(logger),
+			Notices: notices,
 		},
 	}
 }
@@ -66,7 +71,7 @@ func SyncClientSet() ClientSet {
 	}
 }
 
-func retryingMetadataClient(logger *slog.Logger, gate *retry.ThrottleGate) *http.Client {
+func retryingMetadataClient(logger *slog.Logger, gate *retry.ThrottleGate, notices *retry.Notices) *http.Client {
 	return &http.Client{
 		Timeout: 0,
 		Transport: &retry.RetryTransport{
@@ -74,6 +79,7 @@ func retryingMetadataClient(logger *slog.Logger, gate *retry.ThrottleGate) *http
 			Policy:       retry.TransportPolicy(),
 			Logger:       normalizeLogger(logger),
 			ThrottleGate: gate,
+			Notices:      notices,
 		},
 	}
 }
