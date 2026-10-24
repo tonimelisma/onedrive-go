@@ -293,14 +293,14 @@ func moveToken(src, dst string) error {
 
 // printLoginSuccess prints the user-facing login output. Format differs
 // for personal vs. business accounts per accounts.md section 9.
-func printLoginSuccess(w io.Writer, driveType, email, orgName, canonicalID, syncDir string) error {
+func printLoginSuccess(w io.Writer, driveType, email, orgName, syncDir string) error {
 	switch driveType {
 	case driveid.DriveTypePersonal:
 		if err := writef(w, "Signed in as %s (personal account).\n", email); err != nil {
 			return err
 		}
 
-		return writef(w, "Drive added: %s -> %s\n", canonicalID, syncDir)
+		return writeLoginNextSteps(w, syncDir)
 	case driveid.DriveTypeBusiness:
 		orgLabel := orgName
 		if orgLabel == "" {
@@ -310,7 +310,7 @@ func printLoginSuccess(w io.Writer, driveType, email, orgName, canonicalID, sync
 		if err := writef(w, "Signed in as %s (%s).\n", email, orgLabel); err != nil {
 			return err
 		}
-		if err := writef(w, "Drive added: %s -> %s\n", canonicalID, syncDir); err != nil {
+		if err := writeLoginNextSteps(w, syncDir); err != nil {
 			return err
 		}
 		if err := writeln(w); err != nil {
@@ -326,6 +326,16 @@ func printLoginSuccess(w io.Writer, driveType, email, orgName, canonicalID, sync
 			return err
 		}
 
-		return writef(w, "Drive added: %s -> %s\n", canonicalID, syncDir)
+		return writeLoginNextSteps(w, syncDir)
 	}
+}
+
+// writeLoginNextSteps says where files will go and how to start syncing, so
+// a first-time user is not left guessing what to run after signing in.
+func writeLoginNextSteps(w io.Writer, syncDir string) error {
+	if err := writef(w, "Your files will sync to %s.\n", syncDir); err != nil {
+		return err
+	}
+
+	return writeln(w, "Next: run 'onedrive-go sync' to sync now, or 'onedrive-go sync --watch' to keep syncing.")
 }

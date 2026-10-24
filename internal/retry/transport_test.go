@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,7 +17,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-const retryExhaustedLogMessage = "request failed after all retries"
+const (
+	retryExhaustedLogMessage        = "request failed after all retries"
+	networkRetryExhaustedLogMessage = "OneDrive still unreachable, giving up"
+)
 
 // testPolicy is a fast retry policy for tests: 3 attempts, tiny delays, no jitter.
 func testPolicy() retry.Policy {
@@ -793,8 +797,10 @@ func TestRetryTransport_NetworkError_ExhaustionLogsWarn(t *testing.T) {
 	// All retries exhausted (1 initial + 3 retries = 4 attempts).
 	assert.Equal(t, int32(4), attempts.Load())
 
-	assert.Contains(t, logBuf.String(), retryExhaustedLogMessage)
+	assert.Contains(t, logBuf.String(), networkRetryExhaustedLogMessage)
 	assert.Contains(t, logBuf.String(), `"level":"WARN"`)
+	assert.Equal(t, 1, strings.Count(logBuf.String(), "can't reach OneDrive, retrying"),
+		"a sustained outage is announced once, while it is still retrying")
 }
 
 // Validates: R-6.6.8

@@ -75,7 +75,15 @@ except that the type had once been public.
 Important properties:
 
 - observation emits wake/dirty signals plus normalized remote facts
-- zero-event delta responses do **not** advance the saved cursor
+- delta windows that carried no items (apart from the root) do **not**
+  advance the saved cursor; the old token replays the empty window at no cost
+  while a recent delete may still be propagating
+  ([graph-api-quirks.md](../reference/graph-api-quirks.md))
+- a window that carried items does advance the cursor even when every item
+  converted to no event (for example deletes of items never synced here).
+  Treating that as an empty window kept the old token, so watch mode replayed
+  the same deletes on every poll indefinitely
+  (`TestWatch_OnlyUnrecoverableDeletes_AdvancesToken`)
 - HTTP 410 delta expiry is surfaced as a restart/re-enumerate condition
 - sparse delta items recover omitted name/parent data from baseline when
   possible, and missing parent IDs trigger one best-effort item-by-ID enrich
@@ -84,7 +92,8 @@ Important properties:
 - deleted delta items that are absent from baseline require a surviving item
   name plus enough path or parent-chain context before observation may emit a
   delete; missing-name untracked deletes are skipped even when the parent is
-  known, because the child path cannot be identified safely
+  known, because the child path cannot be identified safely. Such a skip is
+  logged at DEBUG: there is nothing local to remove and no user action
 - explicit remote read denial discovered during observation is emitted as an
   observation-owned finding (`remote_read_denied`) plus
   `perm:remote:read:<boundary>`

@@ -22,6 +22,10 @@ type actionCompletion struct {
 	FailurePath       string
 	FailureCapability permissionCapability
 
+	// Size is the transferred file size for display, when the outcome knows it.
+	Size      int64
+	SizeKnown bool
+
 	// Err is the full error for classification (context.Canceled, os.ErrPermission, etc.).
 	// The engine uses errors.Is to distinguish shutdown from genuine failures.
 	Err error
@@ -87,6 +91,7 @@ func actionCompletionFromTrackedAction(
 		r.Success = outcome.Success
 		r.FailurePath = outcome.FailurePath
 		r.FailureCapability = outcome.FailureCapability
+		r.Size, r.SizeKnown = outcomeDisplaySize(outcome)
 		if outcome.Error != nil {
 			r.ErrMsg = outcome.Error.Error()
 			r.Err = outcome.Error
@@ -98,4 +103,20 @@ func actionCompletionFromTrackedAction(
 	}
 
 	return r
+}
+
+// outcomeDisplaySize picks the size a user would associate with the action:
+// what arrived for a download, what was sent for an upload.
+func outcomeDisplaySize(outcome *actionOutcome) (int64, bool) {
+	switch outcome.Action {
+	case ActionDownload:
+		return outcome.RemoteSize, outcome.RemoteSizeKnown
+	case ActionUpload:
+		return outcome.LocalSize, outcome.LocalSizeKnown
+	case ActionLocalDelete, ActionRemoteDelete, ActionLocalMove, ActionRemoteMove,
+		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
+		return 0, false
+	}
+
+	return 0, false
 }

@@ -390,3 +390,25 @@ func benchCommandName(spec benchCommandSpec) string {
 func isBenchDryRunCommand(spec benchCommandSpec) bool {
 	return len(spec.Arg) == 6 && spec.Arg[5] == "--dry-run"
 }
+
+// Validates: R-6.10.14, R-6.6.18
+func TestParseBenchSyncPlanOutput_ReadsCurrentAndLegacyDryRunFormats(t *testing.T) {
+	t.Parallel()
+
+	current := parseBenchSyncPlanOutput([]byte(
+		"Checking (dry run) ~/OneDrive with user@example.com...\n" +
+			"Would download a.txt\n" +
+			"Would download b.txt\n" +
+			"Would delete locally c.txt\n" +
+			"Would upload d.txt\n" +
+			"Dry run, nothing was changed. Would download 2 files, delete 1 file locally, upload 1 file.\n",
+	))
+	assert.Equal(t, 2, current.Downloads)
+	assert.Equal(t, 1, current.LocalDeletes)
+	assert.Equal(t, 1, current.Uploads)
+	assert.Zero(t, current.RemoteDeletes)
+
+	legacy := parseBenchSyncPlanOutput(nil, []byte("Plan:\n  Downloads: 2\n  Local deletes: 1\n"))
+	assert.Equal(t, 2, legacy.Downloads)
+	assert.Equal(t, 1, legacy.LocalDeletes)
+}

@@ -76,8 +76,8 @@ func TestE2E_SharedFolder_RemoteMutationSyncsToRecipient(t *testing.T) {
 	runCLIWithConfigForDrive(t, cfgPath, env, fixture.FolderItem.Selector, "put", contentFile, remotePath)
 
 	require.Eventually(t, func() bool {
-		_, stderr := runCLIWithConfigForDrive(t, cfgPath, env, fixture.FolderItem.Selector, "sync", "--download-only")
-		if !strings.Contains(stderr, "Mode: download-only") {
+		out, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.FolderItem.Selector, "sync", "--download-only")
+		if !strings.Contains(out, "(download only)") {
 			return false
 		}
 
@@ -113,7 +113,7 @@ func TestE2E_SharedFolder_RecipientSyncTwice_Idempotent(t *testing.T) {
 		return err == nil && string(data) == expectedContent
 	}, pollTimeout, 2*time.Second)
 
-	stderr := assertSyncLeavesLocalTreeStableForDrive(
+	out := assertSyncLeavesLocalTreeStableForDrive(
 		t,
 		cfgPath,
 		env,
@@ -122,5 +122,5 @@ func TestE2E_SharedFolder_RecipientSyncTwice_Idempotent(t *testing.T) {
 		"sync",
 		"--download-only",
 	)
-	assert.Contains(t, stderr, "Mode: download-only")
+	assert.Contains(t, out, "(download only)")
 }

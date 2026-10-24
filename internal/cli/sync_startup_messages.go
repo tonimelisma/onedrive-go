@@ -92,7 +92,7 @@ func formatStateStoreIncompatibleError(identity *multisync.MountIdentity, err er
 		return err
 	}
 
-	return fmt.Errorf("%s", message)
+	return newPresentedError(message, err)
 }
 
 func formatWatchStartupError(err error) error {

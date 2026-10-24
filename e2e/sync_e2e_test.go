@@ -299,11 +299,11 @@ func assertSyncLeavesLocalTreeStable(
 	t.Helper()
 
 	before := snapshotLocalTree(t, root)
-	_, stderr := runCLIWithConfig(t, cfgPath, env, args...)
+	out, _ := runCLIWithConfig(t, cfgPath, env, args...)
 	after := snapshotLocalTree(t, root)
 	assert.Equal(t, before, after, "sync should not mutate the test-owned local tree")
 
-	return stderr
+	return out
 }
 
 const (
@@ -590,8 +590,9 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Run sync --upload-only.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	assert.Contains(t, stderr, "Mode: upload-only")
+	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	assert.Contains(t, out, "(upload only)")
+	assert.Contains(t, out, "Uploaded "+testFolder+"/upload-test.txt", "each uploaded file is named")
 
 	// Upload-only success is persisted in the durable baseline immediately even
 	// when follow-on remote path reads still lag Graph visibility convergence.
@@ -652,7 +653,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 		},
 		"--download-only",
 	)
-	assert.Contains(t, attempt.Stderr, "Mode: download-only")
+	assert.Contains(t, attempt.Stdout, "(download only)")
 	assert.Equal(t, content, downloaded)
 }
 

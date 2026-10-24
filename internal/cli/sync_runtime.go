@@ -136,6 +136,7 @@ func runSyncDaemon(
 	logger *slog.Logger,
 	statusWriter io.Writer,
 	controlSocketPath string,
+	console *syncConsole,
 ) error {
 	return runSyncDaemonWithFactory(
 		ctx,
@@ -146,6 +147,7 @@ func runSyncDaemon(
 		logger,
 		statusWriter,
 		controlSocketPath,
+		console,
 		defaultSyncDaemonOrchestratorFactory,
 	)
 }
@@ -159,6 +161,7 @@ func runSyncDaemonWithFactory(
 	logger *slog.Logger,
 	statusWriter io.Writer,
 	controlSocketPath string,
+	console *syncConsole,
 	orchestratorFactory syncDaemonOrchestratorFactory,
 ) (err error) {
 	if orchestratorFactory == nil {
@@ -209,12 +212,17 @@ func runSyncDaemonWithFactory(
 			writeWatchStartWarnings(statusWriter, warning)
 		},
 		DebugEventHook: debugEventHook,
+		ActivityHook:   console.ActivityHook(),
 		PerfParent:     perf.FromContext(ctx),
 	})
+
+	console.Watching(standaloneSelection.Mounts, mode)
 
 	if err := orch.RunWatch(ctx, mode, opts); err != nil {
 		return fmt.Errorf("run watch sync: %w", formatWatchStartupError(err))
 	}
+
+	console.Stopped()
 
 	return nil
 }

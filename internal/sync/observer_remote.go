@@ -133,12 +133,25 @@ func (o *remoteObserver) FullDeltaWithShortcutTopology(
 	ctx context.Context,
 	savedToken string,
 ) ([]changeEvent, string, shortcutTopologyBatch, error) {
+	events, token, topology, _, err := o.fullDelta(ctx, savedToken)
+	return events, token, topology, err
+}
+
+// fullDelta enumerates delta pages and also reports how many non-root items
+// the window carried. That count, not the converted event count, says whether
+// the window was empty: deletes of never-synced items convert to no events but
+// still mean the change log has moved on.
+func (o *remoteObserver) fullDelta(
+	ctx context.Context,
+	savedToken string,
+) ([]changeEvent, string, shortcutTopologyBatch, int, error) {
 	o.logger.Info("remote observer starting delta enumeration",
 		slog.String("drive_id", o.driveID.String()),
 		slog.Bool("has_token", savedToken != ""),
 	)
 
 	var events []changeEvent
+	windowItems := 0
 	topology := shortcutTopologyBatch{
 		NamespaceID: o.shortcutNamespaceID,
 		Kind:        shortcutTopologyObservationIncremental,
@@ -159,19 +172,20 @@ func (o *remoteObserver) FullDeltaWithShortcutTopology(
 	}
 
 	for page := range maxDeltaPaginationGuard {
-		pageEvents, newToken, done, err := o.fetchPage(ctx, token, page, inflight)
+		pageEvents, pageItems, newToken, done, err := o.fetchPage(ctx, token, page, inflight)
 		if err != nil {
 			o.stats.errors.Add(1)
 
-			return nil, "", shortcutTopologyBatch{}, err
+			return nil, "", shortcutTopologyBatch{}, 0, err
 		}
 		if o.Converter.observationIncomplete() {
 			o.stats.errors.Add(1)
 
-			return nil, "", shortcutTopologyBatch{}, errRemoteObservationIncomplete
+			return nil, "", shortcutTopologyBatch{}, 0, errRemoteObservationIncomplete
 		}
 
 		events = append(events, pageEvents...)
+		windowItems += pageItems
 
 		// Periodic progress logging for long-running enumerations (100K+ item
 		// drives can take minutes). Time-based (30s) rather than page-based to
@@ -195,13 +209,13 @@ func (o *remoteObserver) FullDeltaWithShortcutTopology(
 				slog.Int("events", len(events)),
 			)
 
-			return events, newToken, topology, nil
+			return events, newToken, topology, windowItems, nil
 		}
 
 		token = newToken
 	}
 
-	return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: exceeded maximum page count (%d)", maxDeltaPaginationGuard)
+	return nil, "", shortcutTopologyBatch{}, 0, fmt.Errorf("sync: exceeded maximum page count (%d)", maxDeltaPaginationGuard)
 }
 
 // Watch continuously polls for remote delta changes and sends events to the
@@ -245,7 +259,7 @@ func (o *remoteObserver) Watch(
 
 		token := o.CurrentDeltaToken()
 
-		polledEvents, newToken, topology, err := o.FullDeltaWithShortcutTopology(ctx, token)
+		polledEvents, newToken, topology, windowItems, err := o.fullDelta(ctx, token)
 		if err != nil {
 			result := o.handleWatchPollError(ctx, bo, err, wakeCh)
 			if result.err != nil {
@@ -258,7 +272,9 @@ func (o *remoteObserver) Watch(
 			continue
 		}
 
-		result := o.handleWatchBatch(ctx, batches, polledEvents, newToken, topology, interval, bo, wakeCh, handleBatch)
+		result := o.handleWatchBatch(
+			ctx, batches, polledEvents, windowItems, newToken, topology, interval, bo, wakeCh, handleBatch,
+		)
 		if result.err != nil {
 			return result.err
 		}
@@ -272,6 +288,7 @@ func (o *remoteObserver) handleWatchBatch(
 	ctx context.Context,
 	batches chan<- remoteObservationBatch,
 	polledEvents []changeEvent,
+	windowItems int,
 	newToken string,
 	topology shortcutTopologyBatch,
 	interval time.Duration,
@@ -279,7 +296,10 @@ func (o *remoteObserver) handleWatchBatch(
 	wakeCh <-chan struct{},
 	handleBatch remoteWatchBatchHandler,
 ) watchStepResult {
-	if len(polledEvents) == 0 && !topology.shouldApply() {
+	// Only a window that carried no items is empty. A window of items that all
+	// converted to nothing (deletes of never-synced items) must still advance
+	// the token, or every poll replays it forever.
+	if windowItems == 0 && len(polledEvents) == 0 && !topology.shouldApply() {
 		return o.handleZeroEventPoll(ctx, interval, bo, wakeCh)
 	}
 
@@ -352,8 +372,8 @@ func (o *remoteObserver) handleZeroEventPoll(
 	bo *retry.Backoff,
 	wakeCh <-chan struct{},
 ) watchStepResult {
-	// Skip token advancement and observation commit when 0 events are
-	// returned. The old token replays the same empty window at zero cost,
+	// Skip token advancement and observation commit when the window carried no
+	// items. The old token replays the same empty window at zero cost,
 	// but avoids advancing past deletions still propagating through the
 	// Graph change log (ci_issues.md §20).
 	o.logger.Debug("watch: delta returned 0 events, skipping token advancement")
@@ -514,14 +534,14 @@ func timeSleep(ctx context.Context, d time.Duration) error {
 // when the child appears before its vault parent in the response.
 func (o *remoteObserver) fetchPage(
 	ctx context.Context, token string, page int, inflight map[string]inflightParent,
-) ([]changeEvent, string, bool, error) {
+) (events []changeEvent, items int, next string, done bool, err error) {
 	dp, err := o.fetcher.Delta(ctx, o.driveID, token)
 	if err != nil {
 		if errors.Is(err, graph.ErrGone) {
-			return nil, "", false, errDeltaExpired
+			return nil, 0, "", false, errDeltaExpired
 		}
 
-		return nil, "", false, fmt.Errorf("sync: fetching delta page %d: %w", page, err)
+		return nil, 0, "", false, fmt.Errorf("sync: fetching delta page %d: %w", page, err)
 	}
 
 	o.Converter.enrichSparseParentRefs(ctx, dp.Items)
@@ -533,23 +553,24 @@ func (o *remoteObserver) fetchPage(
 	}
 
 	// Pass 2: classify and emit events (inflight map is fully populated).
-	var events []changeEvent
-
 	for i := range dp.Items {
+		if !dp.Items[i].IsRoot {
+			items++
+		}
 		if ev := o.Converter.ClassifyItem(&dp.Items[i], inflight); ev != nil {
 			events = append(events, *ev)
 		}
 	}
 
 	if dp.DeltaLink != "" {
-		return events, dp.DeltaLink, true, nil
+		return events, items, dp.DeltaLink, true, nil
 	}
 
 	if dp.NextLink == "" {
-		return nil, "", false, fmt.Errorf("sync: delta page %d has neither NextLink nor DeltaLink", page)
+		return nil, 0, "", false, fmt.Errorf("sync: delta page %d has neither NextLink nor DeltaLink", page)
 	}
 
-	return events, dp.NextLink, false, nil
+	return events, items, dp.NextLink, false, nil
 }
 
 // ---------------------------------------------------------------------------

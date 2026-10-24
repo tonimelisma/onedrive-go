@@ -489,7 +489,9 @@ func (c *itemConverter) classifyAndConvert(
 			ev.Path = c.materializePathForUntrackedDelete(item, inflight, itemDriveID)
 		}
 		if ev.Path == "" {
-			c.Logger.Warn("skipping remote delete without recoverable path",
+			// A delete of an item this client never synced: there is nothing
+			// local to remove, so this is expected and needs no user action.
+			c.Logger.Debug("skipping remote delete without recoverable path",
 				slog.String("item_id", item.ID),
 				slog.String("name", item.Name),
 				slog.String("drive_id", itemDriveID.String()),

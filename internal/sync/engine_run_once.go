@@ -96,6 +96,8 @@ func (e *Engine) runOnceDryRun(
 		return nil, err
 	}
 
+	e.emitPlannedActivity(runtime.Plan)
+
 	return e.completeDryRunReport(start, runtime.Report), nil
 }
 

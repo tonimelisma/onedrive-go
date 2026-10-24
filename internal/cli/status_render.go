@@ -551,7 +551,7 @@ func statusDriveStateLabel(state string) string {
 	case driveStateReady:
 		return "Up to date"
 	case driveStateSyncing:
-		return "Syncing"
+		return driveStateLabelSyncing
 	case driveStatePending:
 		return "Pending changes"
 	case driveStatePaused:
