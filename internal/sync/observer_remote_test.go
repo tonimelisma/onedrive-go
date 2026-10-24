@@ -2530,7 +2530,7 @@ func TestWatch_OrphanWithUnreachableParent_AdvancesToken(t *testing.T) {
 }
 
 // A transient failure reading the missing parent keeps today's safe
-// behaviour: the window is incomplete and is retried, never committed with
+// behavior: the window is incomplete and is retried, never committed with
 // the orphan's create silently dropped.
 //
 // Validates: R-2.1.2
