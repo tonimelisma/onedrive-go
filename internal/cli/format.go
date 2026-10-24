@@ -130,6 +130,9 @@ func formatTime(t time.Time) string {
 		return unknownTimeLabel
 	}
 
+	// Show the user's local time, as ls(1) does. Graph timestamps arrive in
+	// UTC, so printing them unconverted was hours off with no zone label.
+	t = t.Local()
 	now := time.Now()
 
 	// Same calendar year: show "Jan  2 15:04"
@@ -148,7 +151,7 @@ func formatAPITime(t time.Time) string {
 		return ""
 	}
 
-	return t.Format("2006-01-02T15:04:05Z")
+	return t.UTC().Format("2006-01-02T15:04:05Z")
 }
 
 // formatExactTime returns the full UTC timestamp for text output.
@@ -227,4 +230,19 @@ func countItems(n int) string {
 	}
 
 	return fmt.Sprintf("%d items", n)
+}
+
+// formatAPITimeForHumans renders a formatAPITime string the way formatTime
+// renders a time, for text tables built from already-serialized records.
+func formatAPITimeForHumans(apiTime string) string {
+	if apiTime == "" {
+		return unknownTimeLabel
+	}
+
+	parsed, err := time.Parse(time.RFC3339, apiTime)
+	if err != nil {
+		return apiTime
+	}
+
+	return formatTime(parsed)
 }

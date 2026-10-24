@@ -369,7 +369,48 @@ func TestPauseCommand_PersistsTimedPause(t *testing.T) {
 	assert.True(t, *drive.Paused)
 	require.NotNil(t, drive.PausedUntil)
 	assert.Equal(t, now.Add(2*time.Hour).Format(time.RFC3339), *drive.PausedUntil)
-	assert.Contains(t, out.String(), "paused until")
+	assert.Contains(t, out.String(), "Paused personal:pause@example.com until ")
+}
+
+// Validates: R-2.6.5
+func TestPauseCommand_BadDurationLeavesDriveUnpaused(t *testing.T) {
+	setTestDriveHome(t)
+
+	var out bytes.Buffer
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:pause@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+
+	cc := newCommandContext(&out, cfgPath)
+	err := runPauseCommand(t.Context(), cc, time.Now, []string{"2 hours"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid duration")
+
+	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	drive := cfg.Drives[cid]
+	assert.False(t, drive.Paused != nil && *drive.Paused, "a rejected duration must not pause the drive indefinitely")
+}
+
+// Validates: R-2.6.5
+func TestPauseCommand_SelectsTheOnlyDriveAndAcceptsDisplayNames(t *testing.T) {
+	setTestDriveHome(t)
+
+	var out bytes.Buffer
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:pause@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+
+	cc := newCommandContext(&out, cfgPath)
+	require.NoError(t, runPauseCommand(t.Context(), cc, time.Now, nil), "a single configured drive needs no --drive")
+
+	cc.Flags.Drive = []string{"pause@"}
+	require.NoError(t, runResumeCommand(t.Context(), cc, time.Now), "a partial selector works as it does for sync")
+
+	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	drive := cfg.Drives[cid]
+	assert.False(t, drive.Paused != nil && *drive.Paused)
 }
 
 // Validates: R-2.6

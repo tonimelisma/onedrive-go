@@ -178,7 +178,7 @@ func printSharedItemsSection(w io.Writer, items []sharedListItem) error {
 
 	for i := range items {
 		owner := sharedOwnerLabel(&items[i])
-		if err := writef(w, format, items[i].Type, items[i].Name, owner, items[i].ModifiedAt); err != nil {
+		if err := writef(w, format, items[i].Type, items[i].Name, owner, formatAPITimeForHumans(items[i].ModifiedAt)); err != nil {
 			return err
 		}
 		if err := writef(w, "    target: %s\n", items[i].Selector); err != nil {

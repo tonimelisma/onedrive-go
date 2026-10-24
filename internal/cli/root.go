@@ -608,7 +608,7 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 		if err == nil {
 			err = closeErr
 		} else {
-			writeWarningf(statusWriter, "warning: close command log: %v\n", closeErr)
+			writeWarningf(statusWriter, "Warning: could not close the log file: %v\n", closeErr)
 		}
 	}
 
@@ -757,7 +757,7 @@ func resolveFileLogLevelWithStatusWriter(cfg *config.ResolvedDrive, statusWriter
 		return mapped
 	}
 
-	writeWarningf(statusWriter, "warning: unknown log level %q, using info for file logs\n", cfg.LogLevel)
+	writeWarningf(statusWriter, "Warning: unknown log_level %q in the config; logging to the log file at info.\n", cfg.LogLevel)
 
 	return level
 }
@@ -789,7 +789,7 @@ func buildHandlerWithStatusWriter(
 	case logFormatAuto:
 		return autoConsoleHandler(w, opts)
 	default:
-		writeWarningf(statusWriter, "warning: unknown log format %q, using auto\n", format)
+		writeWarningf(statusWriter, "Warning: unknown log_format %q in the config; using auto.\n", format)
 
 		return autoConsoleHandler(w, opts)
 	}
@@ -921,7 +921,7 @@ func buildLoggerDualWithStatusWriter(
 
 	f, err := logfile.Open(cfg.LogFile, cfg.LogRetentionDays)
 	if err != nil {
-		writeWarningf(statusWriter, "warning: cannot open log file %q: %v\n", cfg.LogFile, err)
+		writeWarningf(statusWriter, "Warning: cannot open log file %q: %v\n", cfg.LogFile, err)
 
 		return buildLoggerWithStatusWriter(cfg, flags, statusWriter), nil
 	}

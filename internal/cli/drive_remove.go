@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 func runDriveRemoveWithContext(ctx context.Context, cc *CLIContext, purge bool) error {
@@ -25,12 +24,10 @@ func runDriveRemoveWithContext(ctx context.Context, cc *CLIContext, purge bool) 
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	cid, cidErr := driveid.NewCanonicalID(driveSelector)
-	if cidErr != nil {
-		return fmt.Errorf("invalid drive ID %q: %w", driveSelector, cidErr)
+	cid, inConfig, err := resolveExactDriveSelector(cfg, driveSelector)
+	if err != nil {
+		return err
 	}
-
-	_, inConfig := cfg.Drives[cid]
 	if !inConfig && !purge {
 		return fmt.Errorf("drive %q not found in config — use --purge to clean up leftover state", driveSelector)
 	}

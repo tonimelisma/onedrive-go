@@ -116,6 +116,7 @@ func TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot reset sync state while a sync owner is active")
 }
 
+// Validates: R-2.6.5
 func TestRunDriveResetSyncStateWithInput_RejectsInvalidCanonicalID(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -130,7 +131,7 @@ func TestRunDriveResetSyncStateWithInput_RejectsInvalidCanonicalID(t *testing.T)
 
 	err := runDriveResetSyncStateWithInput(t.Context(), cc, bytes.NewBufferString(""), true)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid drive ID")
+	assert.Contains(t, err.Error(), `no drive matching "not-a-canonical-id"`)
 }
 
 func TestRunDriveResetSyncStateWithInput_RejectsUnknownConfiguredDrive(t *testing.T) {

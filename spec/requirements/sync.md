@@ -61,6 +61,7 @@ When the same file has been modified on both the local filesystem and OneDrive s
 
 - R-2.6.1: When the user runs `pause [duration]`, the system shall stop data transfers while continuing to track changes. [verified]
 - R-2.6.2: When the user runs `resume`, the system shall resume transfers with a complete picture of accumulated changes. [verified]
+- R-2.6.5: `pause` shall validate its duration before changing anything, so a rejected duration never pauses a drive indefinitely. `pause` and `resume` shall resolve `--drive` like `sync` (canonical ID, display name or unique partial match; the only configured drive needs no `--drive`). Commands that delete state (`drive remove`, `drive reset-sync-state`) accept only an exact canonical ID or a display name, and an unmatched selector lists the configured drives. Confirmations name the drive by display name and show local times. [verified]
 
 ## R-2.7 Verification [verified]
 

@@ -800,7 +800,7 @@ func TestBuildHandler_UnknownFormatWarnsAndFallsBack(t *testing.T) {
 	assert.True(t, ok, "unknown format should fall back to *slog.TextHandler")
 
 	// Warning should be written to the same writer (not hardcoded stderr).
-	assert.Contains(t, buf.String(), `unknown log format "xml"`)
+	assert.Contains(t, buf.String(), `unknown log_format "xml"`)
 }
 
 func TestBuildHandlerWithStatusWriter_UnknownFormatWarnsToStatusWriter(t *testing.T) {
@@ -817,7 +817,7 @@ func TestBuildHandlerWithStatusWriter_UnknownFormatWarnsToStatusWriter(t *testin
 	_, ok := handler.(*slog.TextHandler)
 	assert.True(t, ok, "unknown format should fall back to *slog.TextHandler")
 	assert.Empty(t, logBuf.String(), "format warning should not leak into the log stream")
-	assert.Contains(t, statusBuf.String(), `unknown log format "xml"`)
+	assert.Contains(t, statusBuf.String(), `unknown log_format "xml"`)
 }
 
 // Validates: R-4.7.2, R-6.6.4
@@ -910,7 +910,7 @@ func TestResolveFileLogLevelWithStatusWriter_UnknownLogLevelWarnsToProvidedWrite
 	level := resolveFileLogLevelWithStatusWriter(cfg, &statusBuf)
 
 	assert.Equal(t, slog.LevelInfo, level)
-	assert.Contains(t, statusBuf.String(), `unknown log level "bogus"`)
+	assert.Contains(t, statusBuf.String(), `unknown log_level "bogus"`)
 }
 
 // --- B-296: sync command log_level fix ---

@@ -85,8 +85,8 @@ func TestNotifyDaemon_ReportsControlSocketPathFailureClearly(t *testing.T) {
 	cc := &CLIContext{StatusWriter: &status}
 
 	notifyDaemon(t.Context(), cc)
-	assert.Contains(t, status.String(), "control socket unavailable")
-	assert.Contains(t, status.String(), "changes take effect on next daemon start")
+	assert.Contains(t, status.String(), "cannot use its control socket path")
+	assert.Contains(t, status.String(), "applies when sync next starts")
 }
 
 func TestNotifyDaemon_ReportsAmbiguousProbeFailureClearly(t *testing.T) {
@@ -104,9 +104,9 @@ func TestNotifyDaemon_ReportsAmbiguousProbeFailureClearly(t *testing.T) {
 	cc := &CLIContext{StatusWriter: &status}
 
 	notifyDaemon(t.Context(), cc)
-	assert.Contains(t, status.String(), "control socket probe failed")
-	assert.Contains(t, status.String(), "changes take effect on next daemon start")
-	assert.NotContains(t, status.String(), "no running daemon found")
+	assert.Contains(t, status.String(), "could not check for a running 'sync --watch'")
+	assert.Contains(t, status.String(), "applies when sync next starts")
+	assert.NotContains(t, status.String(), "No 'sync --watch' is running")
 }
 
 func TestProbeControlOwner_ClassifiesOutcomes(t *testing.T) {
