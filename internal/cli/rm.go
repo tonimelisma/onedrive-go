@@ -63,7 +63,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 
 	item, err := session.ResolveDeleteTarget(ctx, remotePath)
 	if err != nil {
-		return fmt.Errorf("resolving %q: %w", remotePath, err)
+		return newRemoteOpError("resolving", remotePath, err)
 	}
 
 	// Require --recursive for folder deletion (B-156).
@@ -160,13 +160,13 @@ func executeRmDelete(
 	switch deleteMode {
 	case rmDeletePermanent:
 		if err := session.PermanentDeleteResolvedPath(ctx, remotePath, itemID); err != nil {
-			return fmt.Errorf("permanently deleting %q: %w", remotePath, err)
+			return newRemoteOpError("permanently deleting", remotePath, err)
 		}
 
 		logger.Debug("permanent delete complete", "path", remotePath, "item_id", itemID)
 	case rmDeleteRecycleBin:
 		if err := session.DeleteResolvedPath(ctx, remotePath, itemID); err != nil {
-			return fmt.Errorf("deleting %q: %w", remotePath, err)
+			return newRemoteOpError("deleting", remotePath, err)
 		}
 
 		logger.Debug("delete complete", "path", remotePath, "item_id", itemID)

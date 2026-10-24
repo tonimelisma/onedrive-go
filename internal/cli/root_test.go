@@ -1275,7 +1275,7 @@ func TestMain_HelpReturnsSuccess(t *testing.T) {
 }
 
 func TestMain_UnknownCommandReturnsFailure(t *testing.T) {
-	assert.Equal(t, 1, Main([]string{"definitely-not-a-real-command"}))
+	assert.Equal(t, exitUsage, Main([]string{"definitely-not-a-real-command"}))
 }
 
 func TestMainWithWriters_StatusHelpSucceeds(t *testing.T) {
@@ -1296,8 +1296,9 @@ func TestMainWithWriters_UnknownCommandWritesToProvidedStatusWriter(t *testing.T
 	var stderrBuf bytes.Buffer
 
 	exitCode := mainWithWriters([]string{"definitely-not-a-real-command"}, &stdoutBuf, &stderrBuf)
-	assert.Equal(t, 1, exitCode)
+	assert.Equal(t, exitUsage, exitCode)
 	assert.Empty(t, stdoutBuf.String())
 	assert.Contains(t, stderrBuf.String(), "Error:")
 	assert.Contains(t, stderrBuf.String(), "unknown command")
+	assert.Contains(t, stderrBuf.String(), "Run 'onedrive-go --help' for usage.")
 }

@@ -48,7 +48,7 @@ func runSharedPut(cmd *cobra.Command, args []string, cc *CLIContext, fi os.FileI
 		},
 	)
 	if err != nil {
-		return fmt.Errorf("uploading %q: %w", cc.SharedTarget.Selector(), err)
+		return newRemoteOpError("uploading", cc.SharedTarget.Selector(), err)
 	}
 
 	if cc.Flags.JSON {

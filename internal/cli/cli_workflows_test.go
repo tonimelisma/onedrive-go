@@ -128,7 +128,7 @@ func TestDriveSearch_RefreshesIdentityOnceBeforeSharePointSearch(t *testing.T) {
 				"displayName":"Alice Smith",
 				"mail":"alice@contoso.com"
 			}`)
-		case "/sites":
+		case testGraphSitesPath:
 			assert.Contains(t, r.URL.RawQuery, "search=marketing")
 			writeTestResponse(t, w, `{"value":[]}`)
 		default:
@@ -145,6 +145,44 @@ func TestDriveSearch_RefreshesIdentityOnceBeforeSharePointSearch(t *testing.T) {
 	require.NoError(t, runDriveSearchWithContext(t.Context(), cc, "marketing"))
 	assert.Equal(t, int32(1), meCalls.Load())
 	assert.Contains(t, out.String(), `No SharePoint sites found matching "marketing".`)
+}
+
+const testGraphSitesPath = "/sites"
+
+// Validates: R-6.6.28
+func TestDriveSearch_FailedSearchFailsInsteadOfReportingNoSites(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := driveid.MustCanonicalID("business:alice@contoso.com")
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.UserID = snapshotTestUserID123
+		account.DisplayName = snapshotTestDisplayNameAliceSmith
+	})
+	writeAccessTokenFile(t, cid, "token-business-search")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case testGraphMePath:
+			writeTestResponse(t, w, `{"id":"user-123","displayName":"Alice Smith","mail":"alice@contoso.com"}`)
+		case testGraphSitesPath:
+			w.WriteHeader(http.StatusForbidden)
+			writeTestResponse(t, w, `{"error":{"code":"accessDenied","message":"Access denied"}}`)
+		default:
+			http.Error(w, "unexpected graph path", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	cc := newCommandContext(&out, filepath.Join(t.TempDir(), "missing-config.toml"))
+	cc.GraphBaseURL = srv.URL
+
+	err := runDriveSearchWithContext(t.Context(), cc, "marketing")
+	require.Error(t, err)
+	require.ErrorIs(t, err, graph.ErrForbidden)
+	assert.NotContains(t, out.String(), "No SharePoint sites found", "a failed search is not an empty result")
 }
 
 // Validates: R-3.1.4

@@ -38,7 +38,7 @@ func runLs(cmd *cobra.Command, args []string) error {
 
 	items, err := session.ListChildren(ctx, remotePath)
 	if err != nil {
-		return fmt.Errorf("listing %q: %w", remotePath, err)
+		return newRemoteOpError("listing", remotePath, err)
 	}
 
 	if cc.Flags.JSON {
