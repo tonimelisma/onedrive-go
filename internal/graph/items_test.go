@@ -2052,6 +2052,29 @@ func TestPollCopyStatus_Failed(t *testing.T) {
 	assert.Equal(t, "failed", status.Status)
 }
 
+// Validates: R-6.6.26
+//
+// A failed monitor request used to be decoded as a status document, giving an
+// empty Status and hiding the HTTP failure from the caller.
+func TestPollCopyStatus_NonSuccessStatusReturnsGraphError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"monitor expired"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	status, err := client.PollCopyStatus(t.Context(), srv.URL+"/monitor/gone")
+	require.Error(t, err)
+	assert.Nil(t, status)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	var graphErr *GraphError
+	require.ErrorAs(t, err, &graphErr)
+	assert.Equal(t, http.StatusNotFound, graphErr.StatusCode)
+}
+
 // --- ListChildrenRecursive tests ---
 
 func TestListChildrenRecursive_FlatFolder(t *testing.T) {

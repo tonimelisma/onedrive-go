@@ -19,7 +19,7 @@ import (
 // CreateFolder creates a new folder under the given parent.
 // Uses conflictBehavior "fail" — returns ErrConflict (409) on name collision.
 func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
-	c.logger.Info("creating folder",
+	c.logger.Debug("creating folder",
 		slog.String("drive_id", driveID.String()),
 		slog.String("parent_id", parentID),
 		slog.String("name", name),
@@ -76,7 +76,7 @@ func (c *Client) readCreatedFolderAfterEmptySuccessBody(
 	parentID string,
 	name string,
 ) (*Item, error) {
-	c.logger.Warn("create folder returned empty success body, confirming by parent listing",
+	c.logger.Debug("create folder returned empty success body, confirming by parent listing",
 		slog.String("drive_id", driveID.String()),
 		slog.String("parent_id", parentID),
 		slog.String("name", name),
@@ -173,7 +173,7 @@ func (c *Client) MoveItemIfMatch(
 		return nil, ErrMoveNoChanges
 	}
 
-	c.logger.Info("moving item",
+	c.logger.Debug("moving item",
 		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 		slog.String("new_parent_id", newParentID),
@@ -265,7 +265,7 @@ func (c *Client) UpdateFileSystemInfo(
 // Only supported on Business/SharePoint accounts — Personal accounts return 405.
 // Uses POST /drives/{driveId}/items/{itemId}/permanentDelete.
 func (c *Client) PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error {
-	c.logger.Info("permanently deleting item",
+	c.logger.Debug("permanently deleting item",
 		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 	)
@@ -283,7 +283,7 @@ func (c *Client) DeleteItem(ctx context.Context, driveID driveid.ID, itemID stri
 // non-empty so Graph rejects the mutation if the item changed after the
 // caller's live preflight.
 func (c *Client) DeleteItemIfMatch(ctx context.Context, driveID driveid.ID, itemID string, ifMatch string) error {
-	c.logger.Info("deleting item",
+	c.logger.Debug("deleting item",
 		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 	)

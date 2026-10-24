@@ -173,6 +173,65 @@ func TestDoLogin_TokenEndpointErrors(t *testing.T) {
 	}
 }
 
+// Validates: R-6.6.24
+//
+// The two common user-side outcomes of a device-code sign-in (the code ran out
+// before it was entered, or the user declined) come back as plain sentinels,
+// without the raw OAuth code or AADSTS text on the default Error line.
+func TestDoLogin_UserSideOAuthOutcomesArePlain(t *testing.T) {
+	tests := []struct {
+		name      string
+		errorCode string
+		want      error
+	}{
+		{name: "code expired", errorCode: "expired_token", want: ErrLoginCodeExpired},
+		{name: "declined", errorCode: "authorization_declined", want: ErrLoginDeclined},
+		{name: "access denied", errorCode: "access_denied", want: ErrLoginDeclined},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
+			cfg := oauthConfig(tokenPath, slog.Default())
+
+			_, err := doLoginWithFlow(
+				t.Context(),
+				tokenPath,
+				cfg,
+				noopDisplay,
+				slog.Default(),
+				func(context.Context, *oauth2.Config) (*oauth2.DeviceAuthResponse, error) {
+					return testDeviceAuthResponse(), nil
+				},
+				func(context.Context, *oauth2.Config, *oauth2.DeviceAuthResponse) (*oauth2.Token, error) {
+					return nil, &oauth2.RetrieveError{
+						ErrorCode:        tt.errorCode,
+						ErrorDescription: "AADSTS70020: The provided value for the input parameter 'device_code' is not valid.",
+					}
+				},
+			)
+			require.ErrorIs(t, err, tt.want)
+			assert.NotContains(t, err.Error(), "AADSTS")
+			assert.NotContains(t, err.Error(), tt.errorCode)
+		})
+	}
+}
+
+// Validates: R-6.6.24
+func TestBrowserAuthorizationError_AccessDeniedIsPlain(t *testing.T) {
+	t.Parallel()
+
+	err := browserAuthorizationError("access_denied", "AADSTS65004: User declined to consent to access the app.")
+	require.ErrorIs(t, err, ErrLoginDeclined)
+	assert.NotContains(t, err.Error(), "AADSTS")
+
+	other := browserAuthorizationError("invalid_request", "AADSTS900144: missing parameter")
+	require.Error(t, other)
+	require.NotErrorIs(t, other, ErrLoginDeclined)
+	assert.Contains(t, other.Error(), "invalid_request", "unexpected failures keep their diagnostic detail")
+}
+
 func TestDoLogin_ContextCancel(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "test.json")

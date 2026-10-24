@@ -88,7 +88,9 @@ func (c *Client) doOnce(
 			slog.String("error", err.Error()),
 		)
 
-		return nil, fmt.Errorf("HTTP %s %s: %w", method, url, err)
+		// doRequest adds the method and path; *url.Error already names the
+		// URL. Wrapping here again printed the request three times.
+		return nil, err
 	}
 
 	c.logger.Debug("HTTP response received",
@@ -188,7 +190,7 @@ func (c *Client) retryUnauthorized(
 
 	retryResp, err := c.dispatchRequest(req)
 	if err != nil {
-		return nil, false, fmt.Errorf("HTTP %s %s retry: %w", method, url, err)
+		return nil, false, fmt.Errorf("retrying after 401: %w", err)
 	}
 
 	return retryResp, true, nil

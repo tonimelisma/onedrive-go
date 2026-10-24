@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -126,7 +127,9 @@ func validateTrustedPreAuthURL(parsed *url.URL, kind string, allowedHosts ...str
 func parseAndValidateUploadURL(raw UploadURL, validate func(*url.URL) error) (string, error) {
 	parsed, err := url.Parse(string(raw))
 	if err != nil {
-		return "", fmt.Errorf("graph: parsing upload URL: %w", err)
+		// Not wrapped: *url.Error embeds the raw pre-authenticated URL, which
+		// carries its credential, in its message.
+		return "", errors.New("graph: parsing upload URL: OneDrive returned a malformed upload URL")
 	}
 
 	if err := validate(parsed); err != nil {

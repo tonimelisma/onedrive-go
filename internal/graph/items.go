@@ -212,8 +212,8 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 	// Timestamps — validate and fallback to now if invalid.
 	// Deleted items routinely have empty timestamps (known OneDrive API behavior),
 	// so we log at DEBUG instead of WARN to avoid noise.
-	item.CreatedAt = parseTimestamp(d.CreatedDateTime, "createdDateTime", d.ID, item.IsDeleted, logger)
-	item.ModifiedAt = parseTimestamp(d.LastModifiedDateTime, "lastModifiedDateTime", d.ID, item.IsDeleted, logger)
+	item.CreatedAt = parseTimestamp(d.CreatedDateTime, "createdDateTime", d.ID, logger)
+	item.ModifiedAt = parseTimestamp(d.LastModifiedDateTime, "lastModifiedDateTime", d.ID, logger)
 
 	return item
 }
@@ -283,13 +283,12 @@ func (d *driveItemResponse) resolveSharedOwner() (name, email string) {
 // Invalid, missing, JSON-null-decoded, or out-of-range timestamps remain
 // unknown and are represented as the zero time instead of fabricating a
 // current timestamp.
-// For deleted items, anomalies are logged at DEBUG (expected sparse API
-// behavior); for live items, they're logged at WARN (genuinely unexpected).
-func parseTimestamp(raw, field, itemID string, isDeleted bool, logger *slog.Logger) time.Time {
-	logFunc := logger.Warn
-	if isDeleted {
-		logFunc = logger.Debug
-	}
+// Anomalies are logged at Debug for every item: the user cannot act on a
+// field Microsoft returned, and the same unchanged item reappears in every
+// delta or listing, so a Warn would repeat on each pass. Downstream sync
+// already treats an unknown timestamp as unset state.
+func parseTimestamp(raw, field, itemID string, logger *slog.Logger) time.Time {
+	logFunc := logger.Debug
 
 	if raw == "" {
 		logFunc("empty timestamp, leaving unknown",

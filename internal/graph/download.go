@@ -20,7 +20,7 @@ var ErrNoDownloadURL = errors.New("graph: item has no download URL")
 // then streams the content directly from that URL (bypassing the Graph API).
 // Returns the number of bytes written.
 func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error) {
-	c.logger.Info("downloading item",
+	c.logger.Debug("downloading item",
 		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 	)
@@ -73,7 +73,7 @@ func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string
 func (c *Client) DownloadRange(
 	ctx context.Context, driveID driveid.ID, itemID string, w io.Writer, offset int64,
 ) (int64, error) {
-	c.logger.Info("downloading item with range",
+	c.logger.Debug("downloading item with range",
 		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 		slog.Int64("offset", offset),
@@ -149,9 +149,10 @@ func (c *Client) refreshDownloadItemAfterPreAuthUnauthorized(
 }
 
 func (c *Client) logMissingDownloadURL(driveID driveid.ID, itemID string, item *Item) {
-	// Warn, not Error: this is expected for folders, OneNote packages, and
-	// zero-byte files, so the caller decides whether it is terminal.
-	c.logger.Warn("item has no download URL",
+	// Debug only: this is expected for folders, OneNote packages, and
+	// zero-byte files. ErrNoDownloadURL is returned, so the caller owns
+	// deciding whether it is terminal and reporting it once.
+	c.logger.Debug("item has no download URL",
 		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
 		slog.Bool("is_folder", item != nil && item.IsFolder),
@@ -195,7 +196,9 @@ func (c *Client) downloadFromURLWithRange(
 
 	n, copyErr := io.Copy(w, resp.Body)
 	if copyErr != nil {
-		c.logger.Error("streaming range download content failed",
+		// Returned, not logged above Debug: the caller reports the failure
+		// once, and a canceled context here is an ordinary shutdown.
+		c.logger.Debug("streaming range download content failed",
 			slog.String("error", copyErr.Error()),
 			slog.Int64("bytes_before_error", n),
 		)
@@ -229,7 +232,9 @@ func (c *Client) downloadFromURL(ctx context.Context, downloadURL string, w io.W
 
 	n, copyErr := io.Copy(w, resp.Body)
 	if copyErr != nil {
-		c.logger.Error("streaming download content failed",
+		// Returned, not logged above Debug: the caller reports the failure
+		// once, and a canceled context here is an ordinary shutdown.
+		c.logger.Debug("streaming download content failed",
 			slog.String("error", copyErr.Error()),
 			slog.Int64("bytes_before_error", n),
 		)
