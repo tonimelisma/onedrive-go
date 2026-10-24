@@ -24,6 +24,8 @@ type syncConsole struct {
 	errOut  io.Writer
 	quiet   bool
 	verbose bool
+	// json makes stdout JSON lines (sync_console_json.go) instead of text.
+	json bool
 	// stamp prefixes lines with the time of day. Watch mode does this for
 	// terminal scrollback; the journal adds its own timestamps.
 	stamp bool
@@ -63,6 +65,7 @@ func newSyncConsole(cc *CLIContext, watch bool) *syncConsole {
 		out:     cc.Output(),
 		errOut:  cc.Status(),
 		quiet:   cc.Flags.Quiet,
+		json:    cc.Flags.JSON,
 		verbose: cc.Flags.Verbose || cc.Flags.Debug,
 		stamp:   watch && !journal,
 		journal: journal,
@@ -82,6 +85,10 @@ func (c *syncConsole) setMountCount(n int) {
 // Starting announces a one-shot run so a long first sync is never silent.
 func (c *syncConsole) Starting(mounts []multisync.StandaloneMountConfig, mode syncengine.SyncMode, dryRun bool) {
 	c.setMountCount(len(mounts))
+	if c.json {
+		c.jsonMountEvents("start", mounts, mode, dryRun)
+		return
+	}
 
 	verb := driveStateLabelSyncing
 	if dryRun {
@@ -102,6 +109,10 @@ func (c *syncConsole) Watching(mounts []multisync.StandaloneMountConfig, mode sy
 		return
 	}
 	c.setMountCount(len(mounts))
+	if c.json {
+		c.jsonMountEvents("watching", mounts, mode, false)
+		return
+	}
 
 	for i := range mounts {
 		m := &mounts[i]
@@ -119,6 +130,10 @@ func (c *syncConsole) Watching(mounts []multisync.StandaloneMountConfig, mode sy
 // Stopped reports a clean end of watch mode.
 func (c *syncConsole) Stopped() {
 	if c == nil {
+		return
+	}
+	if c.json {
+		c.emitJSON(&syncJSONEvent{Event: "stopped"})
 		return
 	}
 	c.printOut("", "Stopped.")
@@ -140,6 +155,10 @@ func (c *syncConsole) ActivityHook() func(multisync.MountActivity) {
 func (c *syncConsole) Activity(ma multisync.MountActivity) {
 	a := &ma.Activity
 	c.record(ma.Identity.MountID, a)
+	if c.json {
+		c.jsonActivity(ma)
+		return
+	}
 
 	prefix := c.mountPrefix(ma.DisplayName)
 	switch {
@@ -157,6 +176,11 @@ func (c *syncConsole) Activity(ma multisync.MountActivity) {
 // Summary prints how each mount's one-shot run ended. Errors for a single
 // selected drive are left to the command's returned error so they print once.
 func (c *syncConsole) Summary(result multisync.RunOnceResult) {
+	if c.json {
+		c.jsonSummary(result)
+		return
+	}
+
 	reportsBySelection := make(map[int][]*multisync.MountReport, len(result.Reports))
 	for _, report := range result.Reports {
 		if report != nil {

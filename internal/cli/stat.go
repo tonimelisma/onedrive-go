@@ -54,7 +54,7 @@ func runStat(cmd *cobra.Command, args []string) error {
 
 	item, err := session.ResolveItem(ctx, remotePath)
 	if err != nil {
-		return fmt.Errorf("resolving %q: %w", remotePath, err)
+		return newRemoteOpError("resolving", remotePath, err)
 	}
 
 	if cc.Flags.JSON {

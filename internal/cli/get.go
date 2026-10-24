@@ -67,7 +67,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 	item, err := session.ResolveItem(ctx, remotePath)
 	if err != nil {
-		return fmt.Errorf("resolving %q: %w", remotePath, err)
+		return newRemoteOpError("resolving", remotePath, err)
 	}
 
 	if item.IsFolder {
@@ -213,23 +213,23 @@ func downloadFolder(
 	state.wg.Wait()
 
 	if cc.Flags.JSON {
-		return printGetFolderJSON(cc.Output(), state.result)
+		if err := printGetFolderJSON(cc.Output(), state.result); err != nil {
+			return err
+		}
+
+		return bulkTransferError(nil, "download", state.result.Errors)
 	}
 
 	cc.Statusf("Downloaded %d files, %d folders (%s)\n",
 		len(state.result.Files), state.result.FoldersCreated, formatSize(state.result.TotalSize))
 
-	if len(state.result.Errors) > 0 {
-		return fmt.Errorf("%d errors during download", len(state.result.Errors))
-	}
-
-	return nil
+	return bulkTransferError(cc.Status(), "download", state.result.Errors)
 }
 
 func countRemoteFiles(ctx context.Context, session *driveops.MountSession, remotePath string, state *downloadState) error {
 	children, err := session.ListChildren(ctx, remotePath)
 	if err != nil {
-		return fmt.Errorf("listing %q: %w", remotePath, err)
+		return newRemoteOpError("listing", remotePath, err)
 	}
 
 	for i := range children {

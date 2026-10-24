@@ -164,7 +164,7 @@ func runStatusCommand(ctx context.Context, cc *CLIContext, history bool, showPer
 	}
 
 	if len(snapshot.Accounts) == 0 && len(snapshot.Config.Drives) == 0 {
-		return writeln(cc.Output(), "No accounts configured. Run 'onedrive-go login' to get started.")
+		return writeStatusEmpty(cc, "No accounts configured. Run 'onedrive-go login' to get started.")
 	}
 
 	filteredSnapshot, err := filterStatusSnapshot(snapshot, cc.Flags.Account, cc.Flags.Drive, logger)
@@ -173,12 +173,12 @@ func runStatusCommand(ctx context.Context, cc *CLIContext, history bool, showPer
 	}
 	if len(filteredSnapshot.Accounts) == 0 && len(filteredSnapshot.Config.Drives) == 0 {
 		if cc.Flags.Account != "" {
-			return writeln(cc.Output(), "No matching accounts selected.")
+			return writeStatusEmpty(cc, "No matching accounts selected.")
 		}
 		if len(cc.Flags.Drive) > 0 {
-			return writeln(cc.Output(), "No matching drives selected.")
+			return writeStatusEmpty(cc, "No matching drives selected.")
 		}
-		return writeln(cc.Output(), "No accounts configured. Run 'onedrive-go login' to get started.")
+		return writeStatusEmpty(cc, "No accounts configured. Run 'onedrive-go login' to get started.")
 	}
 
 	accounts := statusAccounts(ctx, cc, filteredSnapshot, history)
@@ -194,6 +194,16 @@ func runStatusCommand(ctx context.Context, cc *CLIContext, history bool, showPer
 	}
 
 	return printStatusText(cc.Output(), accounts, history)
+}
+
+// writeStatusEmpty reports that status has nothing to show: the sentence for
+// people, or an empty status document under --json so stdout stays JSON.
+func writeStatusEmpty(cc *CLIContext, message string) error {
+	if cc.Flags.JSON {
+		return printStatusJSON(cc.Output(), []statusAccount{})
+	}
+
+	return writeln(cc.Output(), message)
 }
 
 func filterStatusSnapshot(

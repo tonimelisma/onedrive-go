@@ -201,3 +201,30 @@ func printRow(w io.Writer, cells []string, widths []int) error {
 
 	return writeln(w, strings.Join(parts, "  "))
 }
+
+// bulkTransferError names every item a folder get/put could not transfer
+// (on stderr, so it shows even with --quiet) and fails the command, in text
+// and --json mode alike. With w nil the failures are already in the JSON
+// document and only the exit status is set.
+func bulkTransferError(w io.Writer, noun string, failures []string) error {
+	if len(failures) == 0 {
+		return nil
+	}
+
+	if w != nil {
+		for _, failure := range failures {
+			writeWarningf(w, "Failed: %s\n", failure)
+		}
+	}
+
+	return fmt.Errorf("%s failed to %s", countItems(len(failures)), noun)
+}
+
+// countItems renders "1 item" or "N items".
+func countItems(n int) string {
+	if n == 1 {
+		return "1 item"
+	}
+
+	return fmt.Sprintf("%d items", n)
+}
