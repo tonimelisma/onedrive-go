@@ -189,7 +189,11 @@ Sparse parent recovery is intentionally layered:
   in its baseline, such as a suppressed OneNote package or Personal Vault
   folder, or a folder whose own download has not succeeded yet), read each
   missing ancestor by ID with `GetItem` and register it as path context only
-  (never as an event), bounded per window by `maxAncestorFetchesPerWindow`
+  (never as an event), bounded per window by `maxAncestorFetchesPerWindow`.
+  A fetched ancestor carries its vault and package flags, so a child inside
+  the Personal Vault or a OneNote package is still skipped exactly as if that
+  ancestor had been in the window (`TestWatch_OrphanUnderFetchedVaultStaysExcluded`,
+  `TestWatch_OrphanUnderFetchedPackageStaysExcluded`)
 - if Graph answers a missing ancestor as not found or forbidden, no replay can
   ever place the item: skip it with one warning and let the window advance,
   so a permanently orphaned item cannot hold the cursor forever

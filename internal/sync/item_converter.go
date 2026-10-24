@@ -22,6 +22,7 @@ type inflightParent struct {
 	ParentDriveID driveid.ID // drive containing this item's parent
 	IsRoot        bool
 	IsVault       bool // true for Personal Vault folder (B-271)
+	IsPackage     bool // true for OneNote and other package items, which sync never manages
 }
 
 // itemConverter converts []graph.Item into []ChangeEvent with full path
@@ -374,6 +375,7 @@ func (c *itemConverter) registerInflight(item *graph.Item, inflight map[string]i
 		ParentDriveID: parentDriveID,
 		IsRoot:        item.IsRoot,
 		IsVault:       item.SpecialFolderName == specialFolderVault,
+		IsPackage:     item.IsPackage,
 	}
 }
 
@@ -432,7 +434,7 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 
 	// OneNote/package items are valid Graph objects, but they are compound
 	// provider objects rather than normal file/folder content sync can manage.
-	if item.IsPackage {
+	if item.IsPackage || c.isDescendantOfPackage(item, inflight) {
 		c.Logger.Debug("skipping package item",
 			slog.String("item_id", item.ID),
 			slog.String("name", item.Name),
@@ -882,6 +884,32 @@ func (c *itemConverter) isDescendantOfVault(
 
 		if p.IsRoot {
 			return false
+		}
+
+		parentID = p.ParentID
+	}
+
+	return false
+}
+
+// isDescendantOfPackage reports whether an item sits inside a package (a
+// OneNote notebook, for example). Packages are skipped, so their contents
+// must be too: resolveMissingAncestors can now place such a child by
+// fetching the package as its parent, and without this check the notebook's
+// sections would sync as ordinary files.
+func (c *itemConverter) isDescendantOfPackage(
+	item *graph.Item, inflight map[string]inflightParent,
+) bool {
+	parentID := item.ParentID
+
+	for range maxPathDepth {
+		p, ok := inflight[parentID]
+		if parentID == "" || !ok || p.IsRoot {
+			return false
+		}
+
+		if p.IsPackage {
+			return true
 		}
 
 		parentID = p.ParentID

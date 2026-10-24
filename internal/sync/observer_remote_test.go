@@ -2492,6 +2492,83 @@ func TestWatch_OrphanWithReadableParent_AdvancesToken(t *testing.T) {
 	assert.Equal(t, "Docs/notes.txt", emitted[0].Path)
 }
 
+// Safety: resolving a missing parent must not smuggle Personal Vault content
+// into sync. A change inside the vault arrives without the (suppressed) vault
+// folder; once the fetched ancestor shows it is the vault, the child stays
+// excluded exactly as if the vault had been in the window (R-2.4.7).
+//
+// Validates: R-2.4.7, R-2.1.2
+func TestWatch_OrphanUnderFetchedVaultStaysExcluded(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{
+			{page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "secret", Name: "passport.pdf", ParentID: "vault-folder", DriveID: driveID},
+				},
+				DeltaLink: "token-after-vault",
+			}},
+		},
+	}
+
+	itemClient := &testMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			require.Equal(t, "vault-folder", itemID)
+
+			return &graph.Item{
+				ID: "vault-folder", Name: "Personal Vault", ParentID: "root", DriveID: driveID,
+				IsFolder: true, SpecialFolderName: specialFolderVault,
+			}, nil
+		},
+	}
+
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs.SetItemClient(itemClient)
+	token, emitted := runSingleWatchPoll(t, obs, driveID)
+
+	assert.Equal(t, "token-after-vault", token, "the window still advances")
+	assert.Empty(t, emitted, "vault content must never become a sync event")
+}
+
+// Safety: a change inside a OneNote notebook (a package, which sync skips)
+// must stay skipped once its parent package is fetched to place it.
+//
+// Validates: R-2.1.2
+func TestWatch_OrphanUnderFetchedPackageStaysExcluded(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{
+			{page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "section", Name: "Meetings.one", ParentID: "notebook", DriveID: driveID},
+				},
+				DeltaLink: "token-after-package",
+			}},
+		},
+	}
+
+	itemClient := &testMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			require.Equal(t, "notebook", itemID)
+
+			return &graph.Item{ID: "notebook", Name: "Work Notebook", ParentID: "root", DriveID: driveID, IsPackage: true}, nil
+		},
+	}
+
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs.SetItemClient(itemClient)
+	token, emitted := runSingleWatchPoll(t, obs, driveID)
+
+	assert.Equal(t, "token-after-package", token)
+	assert.Empty(t, emitted, "a notebook's sections must not sync as ordinary files")
+}
+
 // Regression: when Graph says the orphan's parent no longer exists (or is not
 // readable), no replay can ever place the item. It is skipped and the window
 // advances instead of stalling every later poll.
