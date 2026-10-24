@@ -668,13 +668,13 @@ func buildConfiguredStatusDrive(
 		return statusDrive{}
 	}
 
+	// The same rule as drive list: a drive with no state database has never
+	// synced and must not read as up to date.
 	status := statusDrive{
 		InternalID:     cid.String(),
 		Kind:           statusDriveKind(cid),
 		Name:           statusConfiguredDriveName(cid, drive, acct),
 		Folder:         config.EffectiveSyncDir(cfg, cid, drive.SyncDir, slog.New(slog.DiscardHandler)),
-		// The same rule as drive list: a drive with no state database has
-		// never synced and must not read as up to date.
 		State:          configuredDriveListState(cid, drive.IsPaused(time.Now())),
 		MountID:        cid.String(),
 		MountRef:       config.MountRef(cid.String()),

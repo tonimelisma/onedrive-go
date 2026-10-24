@@ -153,7 +153,7 @@ type CLIContext struct {
 	logCloser        io.Closer                // log file closer; nil when no log file is configured
 	statusMu         sync.Mutex               // guards statusErr and progressShown for concurrent progress callbacks
 	statusErr        error
-	progressShown    bool // a redrawn progress line is on screen and must be cleared before other output
+	progressShown    bool       // a redrawn progress line is on screen and must be cleared before other output
 	reconcileMu      sync.Mutex // guards reconcileNotices and selector mutation
 	reconcileNotices map[string]struct{}
 }
