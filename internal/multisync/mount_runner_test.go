@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -74,8 +75,9 @@ func TestMountRunner_Run_Panic(t *testing.T) {
 	assert.Equal(t, "Panic Drive", result.DisplayName)
 	assert.Nil(t, result.Report)
 	require.Error(t, result.Err)
-	assert.Contains(t, result.Err.Error(), "panic")
+	assert.Contains(t, result.Err.Error(), "internal error while syncing Panic Drive")
 	assert.Contains(t, result.Err.Error(), "nil pointer dereference in observer")
+	assert.Contains(t, result.Err.Error(), "This is a bug")
 }
 
 // Validates: R-6.8
@@ -94,7 +96,31 @@ func TestMountRunner_Run_PanicWithError(t *testing.T) {
 
 	assert.Nil(t, result.Report)
 	require.Error(t, result.Err)
-	assert.Contains(t, result.Err.Error(), "panic")
+	assert.Contains(t, result.Err.Error(), "internal error while syncing Panic Error Drive: some internal error")
+}
+
+// The report error is the one user-facing account of a panic; the stack goes
+// to the log below WARN so default and --quiet consoles are not flooded.
+//
+// Validates: R-6.8
+func TestMountRunner_Run_PanicStackStaysOffDefaultConsole(t *testing.T) {
+	capture, logger := newLogCapture()
+	dr := &MountRunner{
+		identity:    testStandaloneMountIdentity(testCanonicalID(t, "personal:panic-log@example.com")),
+		displayName: "Panic Log Drive",
+		logger:      logger,
+	}
+
+	result := dr.run(t.Context(), func(_ context.Context) (*syncengine.Report, error) {
+		panic("boom")
+	})
+
+	require.Error(t, result.Err)
+	assert.Empty(t, capture.atLeast(slog.LevelWarn), "a panic must not also be logged at WARN/ERROR")
+	logged := capture.atLeast(slog.LevelInfo)
+	require.Len(t, logged, 1)
+	assert.Contains(t, logged[0].attrs["stack"], "goroutine")
+	assert.Equal(t, "Panic Log Drive", logged[0].attrs["drive"])
 }
 
 // Validates: R-2.4

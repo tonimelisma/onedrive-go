@@ -1,7 +1,6 @@
 package perf
 
 import (
-	"fmt"
 	"net/http"
 	"time"
 )
@@ -26,9 +25,11 @@ func (rt RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	if collector := FromContext(req.Context()); collector != nil {
 		collector.RecordHTTPRequest(statusCode, time.Since(startedAt), err)
 	}
-	if err != nil {
-		return resp, fmt.Errorf("round trip: %w", err)
-	}
-
-	return resp, nil
+	// The error is returned as the transport produced it. net/http wraps it
+	// in a *url.Error that already names the request, so a "round trip:"
+	// prefix only put a code-path word into every network failure message.
+	// Callers that classify transport errors use errors.Is/As, which see
+	// the same chain either way.
+	//nolint:wrapcheck // See above: this transport is a transparent decorator.
+	return resp, err
 }

@@ -6,6 +6,9 @@ type Result struct {
 	Status   string `json:"status"`
 	Expected string `json:"expected,omitempty"`
 	Actual   string `json:"actual,omitempty"`
+	// Reason says why a file could not be read (VerifyUnreadable). It is kept
+	// apart from Actual so an I/O error is never mistaken for a hash.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Report summarizes a full-tree hash verification of local files against the

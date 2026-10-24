@@ -40,16 +40,28 @@ func (dr *MountRunner) run(ctx context.Context, fn func(context.Context) (*synce
 			return
 		}
 
+		name := dr.displayName
+		if name == "" {
+			name = dr.identity.Label()
+		}
+
+		// The report error is the user-facing account of this panic; the CLI
+		// prints it once. The stack is diagnostic detail for a bug report,
+		// so it goes to the log at INFO (kept by the log file, shown with
+		// --verbose) instead of dumping kilobytes onto every console,
+		// including --quiet ones.
 		if dr.logger != nil {
-			dr.logger.Error("panic in mount sync",
-				slog.String("mount", dr.identity.Label()),
+			dr.logger.Info("recovered panic while syncing a drive",
+				slog.String("drive", name),
+				slog.String("mount_id", dr.identity.Label()),
 				slog.Any("panic", r),
 				slog.String("stack", string(debug.Stack())),
 			)
 		}
 
 		result.Report = nil
-		result.Err = fmt.Errorf("panic in mount %s: %v", dr.identity.Label(), r)
+		result.Err = fmt.Errorf(
+			"internal error while syncing %s: %v. This is a bug; please report it, with the log file if you have one", name, r)
 	}()
 
 	report, err := fn(ctx)

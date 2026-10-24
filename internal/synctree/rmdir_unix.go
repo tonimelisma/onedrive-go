@@ -24,7 +24,7 @@ func removeEmptyDirRooted(root rootHandle, name string) error {
 	parent := filepath.Dir(name)
 	base := filepath.Base(name)
 	if base == "." || base == string(filepath.Separator) || base == "" {
-		return fmt.Errorf("%w: refusing to remove sync root", ErrUnsafePath)
+		return unsafePathf("refusing to remove the sync folder itself")
 	}
 
 	dir, err := root.Open(parent)

@@ -19,6 +19,15 @@ a comparison is not a passing comparison. The count a user reads now means what
 it says, and the unchecked files are named so the gap is visible rather than
 absorbed.
 
+A file that could not be stat'ed or read is reported as `unreadable`, with the
+I/O error in `reason`, not as `missing` or `hash_mismatch`: an unreadable file
+is not evidence of loss or corruption, and an error string is never put in the
+`actual` hash field. The report is the output; verification logs per-file
+problems at DEBUG only, so a tree of unreadable files does not also print a
+warning per file. Evidence: `TestVerifyBaseline_ClassifiesStatErrorsAsUnreadable`,
+`TestVerifyBaseline_ClassifiesRootedPathErrorsAsUnreadable`,
+`TestVerifyBaseline_ClassifiesHashComputationErrorsAsUnreadable`.
+
 ## Overview
 
 `SyncStore` is the sole durable owner of per-mount sync state. In the target

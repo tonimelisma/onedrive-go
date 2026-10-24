@@ -2,7 +2,7 @@
 
 GOVERNS: internal/cli/sync.go, internal/multisync/*.go, internal/synccontrol/*.go
 
-Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.8.11 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Control Socket Exposure
 
@@ -66,6 +66,9 @@ runtime package that implements it.
 | The Unix control socket is the single owner lock for one-shot and watch sync, is acquired before parent engines start, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. Dry-run one-shot sync uses the same owner lock as live one-shot sync. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestRunOnce_BindsControlSocketBeforeEngineStartup`, `TestRunOnce_DryRunBindsControlSocketBeforeEngineStartup`, `TestRunWatch_BindsControlSocketBeforeEngineStartup`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
+| Watch mode announces each drive start failure once and again only when its reason changes or the drive has started in between, including the carried-over CLI config failures; repeats of the same shortcut-refresh or cleanup failure stay at DEBUG. | `TestReconcileWatchRunners_AnnouncesEachStartFailureOnceUntilItChanges`, `TestWarnOnChange_RepeatsOfTheSameFailureStayBelowWarn` |
+| A watch runner that exits with an error is restarted after exponential backoff from the RunWatch loop's own wake-up timer, warned about once per distinct error with the retry delay, and starts over after a healthy run; stale events from runners the orchestrator already stopped, and canceled final drains, produce no warning. | `TestHandleWatchRunnerEvent_BacksOffAndWarnsOncePerDistinctRunnerFailure`, `TestHandleWatchRunnerEvent_HealthyRunResetsBackoff`, `TestRunWatch_RestartsFailedRunnerWhenBackoffTimerFires`, `TestRunnerRestartDelay_DoublesUpToTheCap`, `TestHandleWatchRunnerEvent_IgnoresEventFromAlreadyStoppedRunner`, `TestStartWatchRunner_CanceledFinalDrainSendsNoEvent`, `TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot` |
+| A reload the watch owner cannot apply is answered with `reload_failed` instead of `reloaded`, and the running drives keep their previous settings. Another sync owning the socket is one process-level startup failure, not one per drive, and its message names the way out rather than the socket path. | `TestOrchestrator_Reload_InvalidConfig`, `TestRunOnce_ControlSocketInUseIsReportedOnceForAllDrives` |
 | Control-socket reload applies add/remove/pause/expired-pause/filter diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry`, `TestOrchestrator_Reload_ContentFilterChangeRestartsOnlyAffectedMount` |
 | Parent engines own shortcut-root state, alias mutation, protected-root derivation, and durable cleanup retry state before multisync sees child work. | `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeReturningError`, `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain` |
 | Multisync owns runtime-only shortcut child admission from exact parent snapshots: one-shot stores the exact publication and starts that parent's children only after that parent's safe point, while watch initial startup starts parent runners only and admits children from live parent publications that still match the live runner/cache state. | `TestReceiveParentChildWorkSnapshot_StoresSnapshotInMemory`, `TestReceiveParentChildWorkSnapshot_EmptySnapshotClearsCachedChildren`, `TestRunOnce_PublishesParentChildWorkSnapshotBeforeStartingChildren`, `TestRunOnce_StartsParentChildrenAfterPublishingParentSafePoint`, `TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents`, `TestRunOnce_UsesFinalParentSnapshotInsteadOfIntermediateSkip`, `TestRunWatch_PublishesParentChildWorkSnapshotBeforeStartingChildren`, `TestRunWatch_ReconcilesChildRunnersFromLiveParentSnapshot`, `TestApplyWatchMountSet_ParentRestartClearsSnapshotAndDoesNotRestartChild`, `TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot`, `TestHandleWatchRunnerEvent_IgnoresStaleParentSnapshotEvents` |
@@ -378,6 +381,29 @@ healthy mounts running, and exits non-zero only when no runnable mount starts.
 A paused-only or all-failed selection is a structured startup refusal, not a
 special string-only path.
 
+Every reconcile tick, reload, and runner event re-runs the start logic, and
+the carried-over CLI conversion failures ride along on each pass. The watch
+loop therefore remembers what it has announced (`watchReportState`, owned by
+the RunWatch goroutine alone): a start failure reaches `StartWarning` the
+first time and again only when its status or error text changes, or after the
+drive started or was paused in between. A full pass forgets announced
+failures that no longer appear, except for drives waiting out a restart
+backoff, which make no attempt and so produce no result. The same memory keeps
+a persistently failing shortcut refresh or removed-shortcut cleanup at one
+WARN per distinct error; the cleanup failure also stays visible in `status`
+through the shortcut cleanup diagnostics.
+
+A runner that exits with an error is not restarted in the same pass. Its
+restart waits 5 s, doubling per consecutive failure up to 5 min; a runner that
+stayed up for 5 min before failing starts the sequence over. The RunWatch loop
+arms one timer for the earliest pending restart and reconciles when it fires,
+so a backed-off drive does not wait for the next reconcile tick. The exit is
+logged once per distinct error as "Stopped syncing <drive>; retrying in <delay>"
+(a lost sync folder is INFO, because the restart's start failure is what gets
+announced). An event from a runner the orchestrator already stopped is
+ignored, and a final drain the orchestrator canceled sends no event, so
+reloads and parent changes never surface "context canceled".
+
 ### Control Socket
 
 `RunOnce` and `RunWatch` both bind the configured Unix control socket before
@@ -417,7 +443,18 @@ mutation path for sync decisions anymore.
 
 Error responses have the shape `{status, code, message}`. Stable codes are
 `invalid_request`, `foreground_sync_running`, `capture_unavailable`,
-`capture_in_progress`, and `internal_error`.
+`capture_in_progress`, `reload_failed`, and `internal_error`.
+
+A capture request's `output_dir` must be absolute: the owner runs in its own
+working directory, so it refuses a relative path instead of resolving it
+there. `synccontrol.PerfCaptureRequest` resolves a relative path against the
+sending process's working directory when it is encoded, which is where the
+user typed it.
+
+When the socket is already owned, `ControlSocketInUseError` keeps the path on
+the struct for diagnostics but its message only says another sync is running
+and how to proceed. One-shot reports it as a single process-level startup
+result rather than one copy per selected drive.
 
 ### Reload
 
@@ -427,6 +464,14 @@ Control-socket reload does four things in order:
 2. clear expired timed pauses
 3. compile the new active runtime mount set
 4. diff that set against running mounts
+
+If the config cannot be loaded or compiled, nothing is applied: the running
+drives keep their previous settings and the reload request is answered with
+HTTP 422 and `code="reload_failed"`, so `pause`, `resume`, `drive add` and
+`login` do not report that the running sync picked up their change. Drives
+that fail to start under a config that did load are startup results, not a
+reload failure. A successful reload releases pending restart backoff waits,
+because the user asked for the current config to be applied now.
 
 Removed or newly paused mounts are stopped and closed. Newly added or newly
 resumed mounts are started when they are runnable; incompatible-store mounts
@@ -453,7 +498,8 @@ runner set.
 - The `RunWatch` select loop is the single writer for the `runners` map.
 - `startWatchRunner` creates one goroutine per running mount. That goroutine owns closing the runner's `done` channel exactly once on exit.
 - The control command channel is internal to `RunWatch`; socket handlers send commands into that channel and wait for one response.
-- The control plane itself owns no timers; reload, stop, and perf capture are event-driven through control-socket requests and context cancellation.
+- The control plane owns two timers, both read only by the RunWatch loop: the reconcile ticker (default every 5 minutes) and a one-shot wake-up for the earliest backed-off runner restart. Both are injectable for tests. Reload, stop, and perf capture are event-driven through control-socket requests and context cancellation.
+- `watchReportState` (announced start failures, per-key last warnings, restart backoff) is owned by the RunWatch goroutine alone and needs no lock; it is reset at each RunWatch start and is disposable.
 - The control plane owns live perf registration for active mounts, but not the
   counters themselves. `internal/perf` owns the aggregate/live snapshot state;
   the control plane only exposes that state through the local socket and
@@ -465,6 +511,18 @@ runner set.
 error isolation. One mount panicking must become one isolated mount outcome,
 not
 a process-wide crash or a cross-mount failure cascade.
+
+The report error ("internal error while syncing <drive>: <panic>. This is a
+bug; please report it") is the one user-facing account of the panic. The
+stack is logged at INFO, so the log file and `--verbose` keep it for a bug
+report while default and `--quiet` consoles do not get a multi-kilobyte
+attribute. This deliberately departs from the "log recovered panics at Error"
+convention, which would print the same failure twice and put the stack in
+front of `--quiet` users. Evidence: `TestMountRunner_Run_PanicStackStaysOffDefaultConsole`.
+
+User-facing labels use the drive or shortcut display name (`mountSpec.label`);
+the mount ID (`<parent canonical ID>|binding:<item ID>` for shortcuts) appears
+only as a `mount_id` log attribute.
 
 ## CLI Contract
 

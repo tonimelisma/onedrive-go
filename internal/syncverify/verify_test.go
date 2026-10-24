@@ -359,7 +359,7 @@ func TestVerifyBaseline_EmptyLocalHashIsReportedUnverifiable(t *testing.T) {
 }
 
 // Validates: R-2.7
-func TestVerifyBaseline_ClassifiesStatErrorsAsMissing(t *testing.T) {
+func TestVerifyBaseline_ClassifiesStatErrorsAsUnreadable(t *testing.T) {
 	t.Parallel()
 
 	report, err := verifyBaselineWithHasher(
@@ -380,13 +380,14 @@ func TestVerifyBaseline_ClassifiesStatErrorsAsMissing(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, report.Mismatches, 1)
-	assert.Equal(t, VerifyMissing, report.Mismatches[0].Status)
+	assert.Equal(t, VerifyUnreadable, report.Mismatches[0].Status)
 	assert.Equal(t, "expected-hash", report.Mismatches[0].Expected)
-	assert.Equal(t, "disk I/O failed", report.Mismatches[0].Actual)
+	assert.Equal(t, "disk I/O failed", report.Mismatches[0].Reason)
+	assert.Empty(t, report.Mismatches[0].Actual, "an I/O error is not a hash")
 }
 
 // Validates: R-2.7
-func TestVerifyBaseline_ClassifiesRootedPathErrorsAsHashMismatch(t *testing.T) {
+func TestVerifyBaseline_ClassifiesRootedPathErrorsAsUnreadable(t *testing.T) {
 	t.Parallel()
 
 	report, err := verifyBaselineWithHasher(
@@ -410,13 +411,14 @@ func TestVerifyBaseline_ClassifiesRootedPathErrorsAsHashMismatch(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, report.Mismatches, 1)
-	assert.Equal(t, VerifyHashMismatch, report.Mismatches[0].Status)
+	assert.Equal(t, VerifyUnreadable, report.Mismatches[0].Status)
 	assert.Equal(t, "expected-hash", report.Mismatches[0].Expected)
-	assert.Equal(t, "root join failed", report.Mismatches[0].Actual)
+	assert.Equal(t, "root join failed", report.Mismatches[0].Reason)
+	assert.Empty(t, report.Mismatches[0].Actual, "an I/O error is not a hash")
 }
 
 // Validates: R-2.7
-func TestVerifyBaseline_ClassifiesHashComputationErrorsAsHashMismatch(t *testing.T) {
+func TestVerifyBaseline_ClassifiesHashComputationErrorsAsUnreadable(t *testing.T) {
 	t.Parallel()
 
 	report, err := verifyBaselineWithHasher(
@@ -440,7 +442,8 @@ func TestVerifyBaseline_ClassifiesHashComputationErrorsAsHashMismatch(t *testing
 	)
 	require.NoError(t, err)
 	require.Len(t, report.Mismatches, 1)
-	assert.Equal(t, VerifyHashMismatch, report.Mismatches[0].Status)
+	assert.Equal(t, VerifyUnreadable, report.Mismatches[0].Status)
 	assert.Equal(t, "expected-hash", report.Mismatches[0].Expected)
-	assert.Equal(t, "hash reader failed", report.Mismatches[0].Actual)
+	assert.Equal(t, "hash reader failed", report.Mismatches[0].Reason)
+	assert.Empty(t, report.Mismatches[0].Actual, "an I/O error is not a hash")
 }

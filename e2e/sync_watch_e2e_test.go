@@ -184,7 +184,7 @@ func TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners(t *testing.T) {
 		assert.Contains(
 			t,
 			combined,
-			"another sync process is already running",
+			"another onedrive-go sync is already running",
 			"%s should report the owner-socket conflict",
 			name,
 		)
