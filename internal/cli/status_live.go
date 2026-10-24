@@ -92,11 +92,12 @@ func statusConfiguredDriveOverlay(
 	user, err := client.Me(ctx)
 	if err != nil {
 		if errors.Is(err, graph.ErrUnauthorized) {
-			if markErr := config.MarkAccountAuthRequired(config.DefaultDataDir(), entry.Email, authstate.ReasonSyncAuthRejected); markErr != nil {
+			reason := unauthorizedAuthReason(err)
+			if markErr := config.MarkAccountAuthRequired(config.DefaultDataDir(), entry.Email, reason); markErr != nil {
 				logger.Warn("status: persisting account auth requirement", "account", entry.Email, "error", markErr)
 			}
 			return statusAccountLiveOverlay{
-				AuthHealth: authstate.RequiredHealth(authReasonSyncAuthRejected),
+				AuthHealth: authstate.RequiredHealth(reason),
 			}, true
 		}
 		logger.Warn("status: live account probe failed", "account", entry.Email, "error", err)
@@ -113,10 +114,11 @@ func statusConfiguredDriveOverlay(
 		drive, found, err := fetchConfiguredStatusDrive(ctx, client, snapshot.Stored, cid)
 		if err != nil {
 			if errors.Is(err, graph.ErrUnauthorized) {
-				if markErr := config.MarkAccountAuthRequired(config.DefaultDataDir(), entry.Email, authstate.ReasonSyncAuthRejected); markErr != nil {
+				reason := unauthorizedAuthReason(err)
+				if markErr := config.MarkAccountAuthRequired(config.DefaultDataDir(), entry.Email, reason); markErr != nil {
 					logger.Warn("status: persisting account auth requirement after configured drive probe", "account", entry.Email, "error", markErr)
 				}
-				overlay.AuthHealth = authstate.RequiredHealth(authReasonSyncAuthRejected)
+				overlay.AuthHealth = authstate.RequiredHealth(reason)
 				return overlay, true
 			}
 			logger.Debug("status: configured drive live storage unavailable",
@@ -207,4 +209,14 @@ func applyStatusStorageOverlay(drives []statusDrive, storage map[string]statusSt
 		}
 		applyStatusStorageOverlay(drives[i].SharedFolders, storage)
 	}
+}
+
+// unauthorizedAuthReason distinguishes a saved login Microsoft has expired or
+// revoked from a request OneDrive rejected with a still-valid login.
+func unauthorizedAuthReason(err error) authstate.Reason {
+	if errors.Is(err, graph.ErrLoginExpired) {
+		return authReasonSavedLoginExpired
+	}
+
+	return authReasonSyncAuthRejected
 }

@@ -933,11 +933,18 @@ func benchRemoteDeltaPlanReady(plan benchSyncPlanCounts, expected benchBidirecti
 		plan.ConflictCopies == 0
 }
 
+// parseBenchSyncPlanOutput reads dry-run plan counts. Current builds list one
+// "Would <action> <path>" line per planned action; older builds (still
+// measured when comparing against earlier revisions) printed "Label: N"
+// counts. A binary prints only one of the two, so both are accepted.
 func parseBenchSyncPlanOutput(streams ...[]byte) benchSyncPlanCounts {
 	var counts benchSyncPlanCounts
 	for _, stream := range streams {
 		scanner := bufio.NewScanner(bytes.NewReader(stream))
 		for scanner.Scan() {
+			if countBenchPlannedActionLine(&counts, scanner.Text()) {
+				continue
+			}
 			label, value, ok := parseBenchSyncCountLine(scanner.Text())
 			if !ok {
 				continue
@@ -963,6 +970,28 @@ func parseBenchSyncPlanOutput(streams ...[]byte) benchSyncPlanCounts {
 	}
 
 	return counts
+}
+
+// countBenchPlannedActionLine counts one "Would ..." dry-run line.
+func countBenchPlannedActionLine(counts *benchSyncPlanCounts, line string) bool {
+	switch {
+	case strings.HasPrefix(line, "Would download "):
+		counts.Downloads++
+	case strings.HasPrefix(line, "Would upload "):
+		counts.Uploads++
+	case strings.HasPrefix(line, "Would delete locally "):
+		counts.LocalDeletes++
+	case strings.HasPrefix(line, "Would delete on OneDrive "):
+		counts.RemoteDeletes++
+	case strings.HasPrefix(line, "Would keep both versions of "):
+		counts.ConflictCopies++
+	case strings.HasPrefix(line, "Would create folder "):
+		counts.FolderCreates++
+	default:
+		return false
+	}
+
+	return true
 }
 
 func parseBenchSyncCountLine(line string) (string, int, bool) {

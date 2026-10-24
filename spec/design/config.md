@@ -203,7 +203,7 @@ This table is the authoritative config-package view of the current schema.
 | `dry_run` | `bool` | `false` | boolean | `sync` | Config-owned default for dry-run sync. CLI flag may override. |
 | `log_level` | `string` | `info` | `debug`, `info`, `warn`, `error` | `all CLI` | File-log verbosity. Console verbosity is owned by `--verbose`, `--debug`, and `--quiet`. |
 | `log_file` | `string` | `""` | path string | `all CLI` | Empty disables file logging. A non-empty path enables dual-channel logging. |
-| `log_format` | `string` | `auto` | `auto`, `json`, `text` | `all CLI` | Console log format. File logs are structured JSON. |
+| `log_format` | `string` | `auto` | `auto`, `json`, `text` | `all CLI` | Console log format. `auto` is human text: plain "Warning: …" lines at default verbosity, timestamped key=value with `--verbose`/`--debug`, and `<N>`-prefixed lines under the systemd journal. `text` forces key=value, `json` forces JSON. File logs are structured JSON. |
 | `log_retention_days` | `int` | `30` | `>= 1` | `all CLI` | Log rotation retention window. |
 
 `dry_run = true` is only a config-owned default for one-shot `sync`; it is not

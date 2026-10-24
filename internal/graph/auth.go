@@ -21,6 +21,8 @@ func defaultScopes() []string {
 type DeviceAuth struct {
 	UserCode        string
 	VerificationURI string
+	// Expiry is when the code stops working; zero when Microsoft omitted it.
+	Expiry time.Time
 }
 
 // Login performs the device code OAuth2 flow:

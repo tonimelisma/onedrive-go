@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/graph"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -225,10 +227,43 @@ func TestFindTokenFallback_ExistingToken(t *testing.T) {
 func TestPrintLoginSuccess_DoesNotPanic(t *testing.T) {
 	// Verify the print functions don't panic with various inputs.
 	var buf bytes.Buffer
-	require.NoError(t, printLoginSuccess(&buf, "personal", "toni@outlook.com", "", "personal:toni@outlook.com", "~/OneDrive"))
-	require.NoError(t, printLoginSuccess(&buf, "business", "alice@contoso.com", "Contoso Ltd", "business:alice@contoso.com", "~/OneDrive - Contoso"))
-	require.NoError(t, printLoginSuccess(&buf, "business", "bob@example.com", "", "business:bob@example.com", "~/OneDrive - Business"))
-	require.NoError(t, printLoginSuccess(&buf, "documentLibrary", "carol@example.com", "", "documentLibrary:carol@example.com", "~/SP"))
+	require.NoError(t, printLoginSuccess(&buf, "personal", "toni@outlook.com", "", "~/OneDrive"))
+	require.NoError(t, printLoginSuccess(&buf, "business", "alice@contoso.com", "Contoso Ltd", "~/OneDrive - Contoso"))
+	require.NoError(t, printLoginSuccess(&buf, "business", "bob@example.com", "", "~/OneDrive - Business"))
+	require.NoError(t, printLoginSuccess(&buf, "documentLibrary", "carol@example.com", "", "~/SP"))
+}
+
+// Validates: R-6.6.24
+func TestPrintLoginSuccess_SaysWhereFilesGoAndWhatToRunNext(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printLoginSuccess(&buf, "personal", "user@example.com", "", "~/OneDrive"))
+
+	out := buf.String()
+	assert.Contains(t, out, "Signed in as user@example.com (personal account).")
+	assert.Contains(t, out, "Your files will sync to ~/OneDrive.")
+	assert.Contains(t, out, "onedrive-go sync")
+	assert.NotContains(t, out, "personal:user@example.com", "canonical IDs are internal identifiers")
+}
+
+// Validates: R-6.6.24
+func TestDeviceLoginInstructions_ExplainCodeExpiryAndWaiting(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 23, 22, 0, 0, 0, time.Local)
+	text := deviceLoginInstructions(graph.DeviceAuth{
+		UserCode:        "ABCD1234E",
+		VerificationURI: "https://login.microsoft.com/device",
+		Expiry:          now.Add(15 * time.Minute),
+	}, "user@example.com", now)
+
+	assert.Contains(t, text, "https://login.microsoft.com/device")
+	assert.Contains(t, text, "    ABCD1234E\n")
+	assert.Contains(t, text, "Sign in as user@example.com.")
+	assert.Contains(t, text, "expires at 22:15 (in 15 minutes)")
+	assert.Contains(t, text, "Other ways to sign in")
+	assert.Contains(t, text, "Waiting for you to finish signing in")
 }
 
 func TestMoveToken_Success(t *testing.T) {

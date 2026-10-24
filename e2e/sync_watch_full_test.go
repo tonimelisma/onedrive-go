@@ -522,10 +522,10 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	))
 
 	// Run one-shot sync.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	// Verify the one-shot sync uploaded only the new file (incremental).
-	assert.Contains(t, stderr, "Uploads:", "one-shot should report uploads")
+	assert.Contains(t, out, "Uploaded ", "one-shot should name the uploaded file")
 
 	// Verify both files exist remotely.
 	waitForRemoteReadContains(t, cfgPath, env, "", "after-shutdown.txt", pollTimeout, "stat", "/"+testFolder+"/after-shutdown.txt")

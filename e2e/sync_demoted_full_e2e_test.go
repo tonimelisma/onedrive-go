@@ -69,8 +69,8 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(conflictFile, []byte("local edit"), 0o600))
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/conflict.txt", "remote edit")
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync")
-	assert.Contains(t, stderr, "Conflict copies:")
+	out, _ := runCLIWithConfig(t, cfgPath, env, "sync")
+	assert.Contains(t, out, "Conflict, kept both versions of")
 
 	content, err := os.ReadFile(conflictFile)
 	require.NoError(t, err)
@@ -118,8 +118,8 @@ sync_dir = %q
 		filepath.Join(localDir, "file1.txt"), []byte("first file\n"), 0o644))
 
 	cfgPath := writeConfig(t)
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-	assert.Contains(t, stderr, "Mode: upload-only")
+	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	assert.Contains(t, out, "(upload only)")
 
 	firstRelPath := filepath.ToSlash(filepath.Join(testFolder, "file1.txt"))
 	requireBaselinePathPresent(t, env, firstRelPath)
@@ -132,8 +132,8 @@ sync_dir = %q
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "file2.txt"), []byte("second file\n"), 0o644))
 
-	_, stderr = runCLIWithConfig(t, cfgPath2, env, "sync", "--upload-only")
-	assert.Contains(t, stderr, "Mode: upload-only")
+	out, _ = runCLIWithConfig(t, cfgPath2, env, "sync", "--upload-only")
+	assert.Contains(t, out, "(upload only)")
 
 	secondRelPath := filepath.ToSlash(filepath.Join(testFolder, "file2.txt"))
 	requireBaselinePathPresent(t, env, firstRelPath)

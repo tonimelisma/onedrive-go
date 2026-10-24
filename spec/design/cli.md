@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.8.16 [verified]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.8.16 [verified]
 
 ## Overview
 
@@ -90,7 +90,52 @@ this matter.
 
 The signal logger writes to the status stream because the configured command
 logger does not exist yet when the handler is installed -- log configuration is
-resolved from flags after the command starts.
+resolved from flags after the command starts. It renders plain lines
+("Stopping... (press Ctrl-C again to force quit)"), not log records, because
+the person who pressed Ctrl-C is its reader.
+
+## Console Output
+
+Rules: [cli-output-guidelines.md](../reference/cli-output-guidelines.md).
+
+`sync` output is owned by `syncConsole` (`internal/cli/sync_console.go`):
+
+- before a one-shot run, one line per drive: "Syncing ~/OneDrive with
+  user@example.com..." (R-6.6.19)
+- one line per finished file action, fed by the engine activity hook through
+  `OrchestratorConfig.ActivityHook` (R-6.6.18). Successes and dry-run plans go
+  to stdout, because for `sync` they are the command's output; failures that
+  need the user go to stderr; failures the engine keeps as retry work appear
+  only with `--verbose`
+- one summary line per drive in human units, plus a "Held back by
+  --download-only" line for work a one-way mode skipped (R-6.6.19)
+- watch mode: a startup line per folder and account, the Ctrl-C hint on a
+  terminal, time-of-day prefixes off the journal, and "Stopped." (R-6.6.20)
+- `--quiet` keeps only failures
+
+Errors print once (R-6.6.22). For a single drive the console prints nothing
+for its error and `main` prints the returned error through
+`commandErrorText`: sign-in problems become the auth message, unreachable
+network becomes one plain line naming the cause, the full chain is added with
+`--verbose`/`--debug`. Messages composed for display wrap their cause in
+`presentedError` so classification still sees it; flattening them with `%s`
+previously hid `ErrNotLoggedIn` and doubled the output. With several drives,
+each drive's error is printed under its name and the command error only counts
+them.
+
+Console logging (R-6.6.21): with `log_format = "auto"` the console is never
+JSON. Default verbosity uses `consoleLogHandler` ("Warning: msg (k=v)"),
+`--verbose`/`--debug` use timestamped key=value, and when stderr is the
+journal (`stderrIsJournal`, `$JOURNAL_STREAM` matched against stderr's
+device:inode) each line carries a `<N>` priority prefix and no timestamp. The
+bootstrap logger resolves the same way, so a run no longer mixes formats.
+
+`login` (R-6.6.24) shows the code, its expiry, the account to use, a passkey
+hint, and that it is waiting; success says where files will sync and what to
+run next. A refresh token rejected with `invalid_grant` is `ErrLoginExpired`
+(which also matches `ErrUnauthorized`) and is presented as sign-in required
+everywhere (R-6.6.23). `drive list` reports a configured drive without a state
+database as "not synced yet" (R-6.6.25).
 
 ### Commands Must Consume The Command Context
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -184,8 +185,8 @@ func TestE2E_Shortcut_WritableUploadSyncsToSharedTarget(t *testing.T) {
 		_, _, _ = runCLICore(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, "rm", remotePath)
 	})
 
-	_, stderr := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
-	assert.Contains(t, stderr, "Mode: upload-only")
+	out, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
+	assert.Contains(t, out, "(upload only)")
 
 	waitForRemoteReadContains(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, remoteName, pollTimeout, "stat", remotePath)
 }
@@ -205,8 +206,8 @@ func TestE2E_Shortcut_ReadOnlyBlockedUploadStatus(t *testing.T) {
 	blockedLocalPath := filepath.Join(syncDir, fixture.ShortcutName, blockedName)
 	require.NoError(t, os.WriteFile(blockedLocalPath, []byte("recipient write attempt\n"), 0o600))
 
-	_, stderr := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
-	assert.Contains(t, stderr, "Mode: upload-only")
+	out, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
+	assert.Contains(t, out, "(upload only)")
 
 	statusOut, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "status")
 	assert.Contains(t, statusOut, "Shared folder writes blocked")
@@ -232,11 +233,11 @@ func TestE2E_Shortcut_LocalRootCollisionSkipsChildButParentCompletes(t *testing.
 		_, _, _ = runCLICore(t, cfgPath, env, fixture.ParentDrive, "rm", parentRemotePath)
 	})
 
-	_, stderr, err := runCLICore(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
+	out, stderr, err := runCLICore(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
 	require.Error(t, err)
-	assert.Contains(t, stderr, "Mode: upload-only")
+	assert.Contains(t, out, "(upload only)")
 	assert.Contains(t, stderr, string(syncengine.ShortcutRootStateBlockedPath))
-	assert.Contains(t, stderr, "Succeeded: 1")
+	assert.Equal(t, 1, strings.Count(out, "Uploaded "), "exactly one upload should succeed")
 
 	record := requireShortcutChildAtPath(t, env, fixture, fixture.ShortcutName)
 	assert.Equal(t, syncengine.ShortcutRootStateBlockedPath, record.State)

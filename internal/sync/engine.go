@@ -60,6 +60,7 @@ type Engine struct {
 	// tests enable it to catch lifecycle and scope regressions immediately.
 	assertInvariants bool
 	debugEventHook   func(DebugEvent)
+	activityHook     func(Activity)
 
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate

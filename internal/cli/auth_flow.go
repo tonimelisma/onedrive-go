@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -82,7 +84,7 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 		return nil
 	}
 
-	if err := printLoginSuccess(cc.Output(), canonicalID.DriveType(), email, orgName, canonicalID.String(), syncDir); err != nil {
+	if err := printLoginSuccess(cc.Output(), canonicalID.DriveType(), email, orgName, syncDir); err != nil {
 		return err
 	}
 	notifyDaemonIfRunning(ctx, cc)
@@ -264,8 +266,7 @@ func authenticateLogin(
 	}
 
 	ts, err := graph.Login(ctx, tempPath, func(da graph.DeviceAuth) {
-		writeWarningf(cc.Status(), "To sign in, visit: %s\n", da.VerificationURI)
-		writeWarningf(cc.Status(), "Enter code: %s\n", da.UserCode)
+		writeWarningf(cc.Status(), "%s", deviceLoginInstructions(da, cc.Flags.Account, time.Now()))
 	}, cc.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("device-code login: %w", err)
@@ -357,4 +358,26 @@ func loadLogoutRecoveryState(
 	}
 
 	return cfg, catalog
+}
+
+// deviceLoginInstructions tells the user exactly what to do in the browser
+// and what happens meanwhile. The passkey tip is there because a passkey or
+// Windows Hello sign-in in this flow can end on a "localhost" error page,
+// which otherwise gives no hint that a password sign-in works.
+func deviceLoginInstructions(da graph.DeviceAuth, account string, now time.Time) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "To sign in, open %s in any browser and enter this code:\n\n    %s\n\n", da.VerificationURI, da.UserCode)
+	if account != "" {
+		fmt.Fprintf(&b, "Sign in as %s. ", account)
+	}
+	if !da.Expiry.IsZero() {
+		minutes := int(da.Expiry.Sub(now).Round(time.Minute).Minutes())
+		fmt.Fprintf(&b, "The code expires at %s (in %d minutes).", da.Expiry.Local().Format("15:04"), minutes)
+	}
+	b.WriteString("\n")
+	b.WriteString("If a passkey or Windows Hello sign-in ends on an error page, choose \"Other ways to sign in\" and use your password.\n")
+	b.WriteString("Waiting for you to finish signing in...\n")
+
+	return b.String()
 }

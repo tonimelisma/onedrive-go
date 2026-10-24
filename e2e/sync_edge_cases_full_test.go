@@ -177,8 +177,8 @@ func TestE2E_Sync_MtimeOnlyChange(t *testing.T) {
 	// Re-sync — should not schedule uploads for the owned subtree when only
 	// mtime changed and content/hash stayed the same. Shared-drive delta churn
 	// elsewhere can still make the global run report unrelated deferred work.
-	stderr := assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--upload-only")
-	assert.NotContains(t, stderr, "Uploads:",
+	out := assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--upload-only")
+	assert.NotContains(t, out, "Uploaded "+testFolder+"/",
 		"mtime-only change should not trigger upload when hash matches baseline")
 }
 
@@ -268,5 +268,5 @@ func TestE2E_Sync_TransferWorkersConfig(t *testing.T) {
 		},
 		"--upload-only",
 	)
-	assert.Contains(t, attempt.Stderr, "Mode: upload-only")
+	assert.Contains(t, attempt.Stdout, "(upload only)")
 }

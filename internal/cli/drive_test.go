@@ -103,8 +103,10 @@ func TestBuildConfiguredDriveEntries_Empty(t *testing.T) {
 	assert.Nil(t, entries)
 }
 
-// Validates: R-3.3.2
+// Validates: R-3.3.2, R-6.6.25
 func TestBuildConfiguredDriveEntries_OneDrive_WithSyncDir(t *testing.T) {
+	setTestDriveHome(t)
+
 	cfg := config.DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:user@example.com")] = config.Drive{
 		SyncDir: "~/OneDrive",
@@ -115,8 +117,35 @@ func TestBuildConfiguredDriveEntries_OneDrive_WithSyncDir(t *testing.T) {
 	assert.Equal(t, "personal:user@example.com", entries[0].CanonicalID)
 	assert.Equal(t, "user@example.com", entries[0].DisplayName)
 	assert.Equal(t, "~/OneDrive", entries[0].SyncDir)
-	assert.Equal(t, driveStateReady, entries[0].State)
+	assert.Equal(t, driveStateNotSynced, entries[0].State, "no state database means the drive never synced here")
 	assert.Equal(t, "configured", entries[0].Source)
+}
+
+// Validates: R-6.6.25
+func TestBuildConfiguredDriveEntries_WithStateDB_IsUpToDate(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	statePath := config.DriveStatePath(cid)
+	require.NotEmpty(t, statePath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
+	require.NoError(t, os.WriteFile(statePath, nil, 0o600))
+
+	cfg := config.DefaultConfig()
+	cfg.Drives[cid] = config.Drive{SyncDir: "~/OneDrive"}
+
+	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
+	require.Len(t, entries, 1)
+	assert.Equal(t, driveStateReady, entries[0].State)
+}
+
+// Validates: R-6.6.25
+func TestDriveStateLabel_RendersWords(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "up to date", driveStateLabel(driveStateReady))
+	assert.Equal(t, "not synced yet", driveStateLabel(driveStateNotSynced))
+	assert.Equal(t, "paused", driveStateLabel(driveStatePaused))
 }
 
 func TestBuildConfiguredDriveEntries_PausedDrive(t *testing.T) {
