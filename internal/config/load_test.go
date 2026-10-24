@@ -529,9 +529,10 @@ func TestLoad_DriveSectionNotTable(t *testing.T) {
 	assert.Contains(t, err.Error(), "must be a table")
 }
 
+// Validates: R-4.1.5
 func TestLoad_DriveSection_TypeMismatch(t *testing.T) {
-	// A drive section where "paused" is a string instead of a boolean should
-	// trigger a type-coercion error in mapToDrive during the re-encode/decode cycle.
+	// A drive section where "paused" is a string instead of a boolean is a
+	// type error, and it must name the line in config.toml that holds it.
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
@@ -540,6 +541,7 @@ paused = "not-a-bool"
 	_, err := Load(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "personal:toni@outlook.com")
+	assert.Contains(t, err.Error(), "line 4", "the line number must point into config.toml, not a re-encoded copy")
 }
 
 // --- ResolveDrives ---
@@ -769,6 +771,7 @@ func TestResolveConfigPath_CLIOverridesDefault(t *testing.T) {
 	assert.Equal(t, "/cli/config.toml", result)
 }
 
+// Validates: R-4.1.5
 func TestLogWarnings_EmitsWarnPerWarning(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
@@ -778,17 +781,19 @@ func TestLogWarnings_EmitsWarnPerWarning(t *testing.T) {
 		{Message: "invalid value for bar"},
 	}
 
-	LogWarnings(warnings, logger)
+	LogWarnings("/home/u/.config/onedrive-go/config.toml", warnings, logger)
 
 	lines := strings.Split(strings.TrimSpace(logBuf.String()), "\n")
 	assert.Len(t, lines, 2)
+	assert.Contains(t, lines[0], `"msg":"/home/u/.config/onedrive-go/config.toml: unknown key foo"`,
+		"the warning names the file and states the problem in the message itself")
 }
 
 func TestLogWarnings_EmptySlice_NoLogs(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
 
-	LogWarnings(nil, logger)
+	LogWarnings("", nil, logger)
 
 	assert.Empty(t, strings.TrimSpace(logBuf.String()))
 }

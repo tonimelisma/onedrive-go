@@ -349,7 +349,10 @@ func initializeCLIContext(
 	statusWriter io.Writer,
 ) error {
 	if version == "dev" {
-		config.AssertDevSafe() // prevent go run . from touching production data
+		// Keep go run . and unversioned builds away from production data.
+		if err := config.CheckDevSafe(); err != nil {
+			return err //nolint:wrapcheck // CheckDevSafe's text is the user-facing message.
+		}
 	}
 
 	flags := bindings.cliFlags()

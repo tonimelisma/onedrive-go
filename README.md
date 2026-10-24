@@ -44,8 +44,13 @@ drift ahead of what actually builds.
 ```bash
 git clone https://github.com/tonimelisma/onedrive-go.git
 cd onedrive-go
-go build ./...
+go build -ldflags "-X github.com/tonimelisma/onedrive-go/internal/cli.version=$(git rev-parse --short HEAD)" -o onedrive-go .
 ```
+
+The version flag matters: a build without it reports version `dev` and, to
+protect your real data during development, refuses to run unless
+`XDG_DATA_HOME`, `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` are all set
+(`source scripts/dev-env.sh` sets them for a scratch tree).
 
 Requires Go 1.24+.
 
