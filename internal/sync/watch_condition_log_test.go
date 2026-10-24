@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// Validates: R-6.6.29
+// Validates: R-6.6.30
 func TestFormatWatchConditionBreakdown_UsesUserWords(t *testing.T) {
 	t.Parallel()
 
@@ -25,7 +25,7 @@ func TestFormatWatchConditionBreakdown_UsesUserWords(t *testing.T) {
 	)
 }
 
-// Validates: R-6.6.29
+// Validates: R-6.6.30
 func TestWatchConditionSummaryFingerprint_IsTheSetOfConditionKinds(t *testing.T) {
 	t.Parallel()
 

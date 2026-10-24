@@ -109,7 +109,7 @@ func TestEngineFlow_SuppressedShutdownCompletionError_QuietForCancellationAndRep
 	assert.Contains(t, output, "Could not record the result for a.txt while stopping")
 }
 
-// Validates: R-6.6.29
+// Validates: R-6.6.30
 func TestPollOutageLog_WarnsOncePerOutage(t *testing.T) {
 	t.Parallel()
 
@@ -133,7 +133,7 @@ func TestPollOutageLog_WarnsOncePerOutage(t *testing.T) {
 // file, and each report used to WARN again, so one badly named file warned
 // every 5 minutes forever. Only a newly skipped file warns.
 //
-// Validates: R-6.6.29
+// Validates: R-6.6.30
 func TestEngineFlow_SkippedFindings_WarnOnlyWhenNew(t *testing.T) {
 	t.Parallel()
 
@@ -161,7 +161,7 @@ func TestEngineFlow_SkippedFindings_WarnOnlyWhenNew(t *testing.T) {
 // failed" on every safety scan forever. It is now a skipped local_read_denied
 // item (reported once, listed by status) and the scan logs nothing at WARN.
 //
-// Validates: R-6.6.29
+// Validates: R-6.6.30
 func TestFullScan_UnreadableFileIsSkippedItemNotWarning(t *testing.T) {
 	t.Parallel()
 
@@ -186,7 +186,7 @@ func TestFullScan_UnreadableFileIsSkippedItemNotWarning(t *testing.T) {
 // Socket.io is a best-effort wake source; watch keeps polling. A long outage
 // used to print one WARN per backoff step (about once a minute forever).
 //
-// Validates: R-6.6.29
+// Validates: R-6.6.30
 func TestSocketIOWakeSource_RetriesNeverWarn(t *testing.T) {
 	t.Parallel()
 
@@ -219,7 +219,7 @@ func TestSocketIOWakeSource_RetriesNeverWarn(t *testing.T) {
 // same block scope; each used to print "block scope active" at WARN. The
 // scope is now reported once when it starts, throttling at Info.
 //
-// Validates: R-6.6.29
+// Validates: R-6.6.30
 func TestEngineFlow_BlockScope_ReportedOnceWhenItStarts(t *testing.T) {
 	t.Parallel()
 
@@ -293,7 +293,7 @@ func TestWatchRuntime_ObserverExit_ReturnedOnceWithCause(t *testing.T) {
 // every count change at the 10 s maintenance tick, including for throttling
 // the engine handles itself.
 //
-// Validates: R-6.6.29
+// Validates: R-6.6.30
 func TestWatchConditionSummary_WarnsOnlyForNewActionableKinds(t *testing.T) {
 	t.Parallel()
 

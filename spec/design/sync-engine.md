@@ -4,7 +4,7 @@ GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/
 
 LAYER: 4
 
-Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.29 [verified]
+Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified]
 
 ## Overview
 
@@ -901,7 +901,7 @@ in-flight transfers adds nothing (`fatalCompletionError`).
 
 A console WARN is shown to every user at default verbosity and ERROR even
 with `--quiet`, so the engine keeps both for things a user must notice and
-reports each fact once (R-6.6.21, R-6.6.22, R-6.6.29):
+reports each fact once (R-6.6.21, R-6.6.22, R-6.6.30):
 
 - Per-file failures belong to the sync console's activity line. The executor
   logs a failed action at Debug, and the end-of-pass retry summary is INFO
