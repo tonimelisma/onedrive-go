@@ -151,8 +151,9 @@ type CLIContext struct {
 	PerfSession      *perf.Session            // command-scoped performance collector/logging session
 	seams            cliSeams                 // test injection points; see cliSeams
 	logCloser        io.Closer                // log file closer; nil when no log file is configured
-	statusMu         sync.Mutex               // guards statusErr for concurrent progress callbacks
+	statusMu         sync.Mutex               // guards statusErr and progressShown for concurrent progress callbacks
 	statusErr        error
+	progressShown    bool // a redrawn progress line is on screen and must be cleared before other output
 	reconcileMu      sync.Mutex // guards reconcileNotices and selector mutation
 	reconcileNotices map[string]struct{}
 }
@@ -529,6 +530,9 @@ const exitInterrupted = 130
 func writeCommandError(w io.Writer, text string) {
 	if isWriterJournal(w) {
 		text = "<3>" + strings.ReplaceAll(text, "\n", "\n<3>")
+	} else if isWriterTTY(w) {
+		// Clear a progress line the failed command may have left behind.
+		text = "\r\x1b[K" + text
 	}
 
 	writeWarningf(w, "%s\n", text)

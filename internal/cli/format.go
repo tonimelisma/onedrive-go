@@ -57,6 +57,7 @@ func (cc *CLIContext) Statusf(format string, args ...any) {
 		return
 	}
 
+	cc.ProgressDone()
 	if err := writef(cc.StatusWriter, format, args...); err != nil {
 		cc.recordStatusError(fmt.Errorf("write status output: %w", err))
 	}
@@ -245,4 +246,41 @@ func formatAPITimeForHumans(apiTime string) string {
 	}
 
 	return formatTime(parsed)
+}
+
+// Progressf redraws one transient progress line on stderr. It shows only
+// when a person is watching (stderr is a terminal) and the run is neither
+// --quiet nor --json; piped and scripted runs get the final summary only,
+// instead of one stored line per chunk, second or file.
+func (cc *CLIContext) Progressf(format string, args ...any) {
+	if cc.StatusWriter == nil || cc.Flags.Quiet || cc.Flags.JSON || !isWriterTTY(cc.StatusWriter) {
+		return
+	}
+
+	cc.statusMu.Lock()
+	defer cc.statusMu.Unlock()
+
+	// \r returns to column 0 and \x1b[K clears the old line's tail.
+	if _, err := fmt.Fprintf(cc.StatusWriter, "\r\x1b[K"+format, args...); err != nil {
+		return
+	}
+	cc.progressShown = true
+}
+
+// ProgressDone clears the progress line so the next message starts clean.
+func (cc *CLIContext) ProgressDone() {
+	if cc.StatusWriter == nil {
+		return
+	}
+
+	cc.statusMu.Lock()
+	defer cc.statusMu.Unlock()
+
+	if !cc.progressShown {
+		return
+	}
+	cc.progressShown = false
+	if _, err := fmt.Fprint(cc.StatusWriter, "\r\x1b[K"); err != nil {
+		return
+	}
 }

@@ -143,3 +143,17 @@ func TestStatusf(t *testing.T) {
 		assert.Equal(t, "hello world", buf.String())
 	})
 }
+
+// Validates: R-6.6.29
+func TestProgressf_OnlyOnATerminal(t *testing.T) {
+	t.Parallel()
+
+	var piped bytes.Buffer
+	cc := &CLIContext{StatusWriter: &piped}
+	cc.Progressf("Uploading: %s / %s", "10 MB", "50 MB")
+	cc.ProgressDone()
+	cc.Statusf("Uploaded 1 file\n")
+
+	assert.Equal(t, "Uploaded 1 file\n", piped.String(),
+		"piped and scripted runs get the summary, not one stored line per chunk")
+}
