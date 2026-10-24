@@ -51,7 +51,8 @@ func notifyDaemonWithOptions(ctx context.Context, cc *CLIContext, reportNoDaemon
 	switch probe.state {
 	case controlOwnerStateWatchOwner:
 	case controlOwnerStatePathUnavailable:
-		cc.Statusf("Note: onedrive-go cannot use its control socket path (%v), so a running 'sync --watch' cannot be told; the change applies when sync next starts.\n", err)
+		cc.Statusf("Note: onedrive-go cannot use its control socket path (%v), so a running 'sync --watch' "+
+			"cannot be told; the change applies when sync next starts.\n", err)
 		return
 	case controlOwnerStateNoSocket:
 		if !reportNoDaemon {
