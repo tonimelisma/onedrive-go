@@ -62,7 +62,7 @@ func runOnceResultError(result multisync.RunOnceResult) error {
 	}
 
 	if failCount == 0 {
-		return incompleteSyncError(result.Reports)
+		return nil
 	}
 
 	if result.Startup.SelectedCount() <= 1 {
@@ -90,11 +90,17 @@ func formatMountReportErrorMessage(dr *multisync.MountReport) string {
 // and systemd see a failure instead of exit 0 after "...; 2 failed."
 var errSyncIncomplete = errors.New("sync incomplete")
 
-func incompleteSyncError(reports []*multisync.MountReport) error {
+// incompleteSyncError fails a pass that left items unsynced for good. Items
+// the engine recorded for retry (throttling, transient 404s, server errors)
+// are not counted: the summary already says the next sync retries them, and
+// failing every run on a passing condition would train cron users to ignore
+// the exit status. permanentFailures is the console's per-drive count, so the
+// exit status and the "N failed" in the summary never disagree.
+func incompleteSyncError(reports []*multisync.MountReport, permanentFailures func(*multisync.MountReport) int) error {
 	failed := 0
 	for _, dr := range reports {
 		if dr != nil && dr.Report != nil {
-			failed += dr.Report.Failed
+			failed += permanentFailures(dr)
 		}
 	}
 
@@ -103,7 +109,7 @@ func incompleteSyncError(reports []*multisync.MountReport) error {
 	}
 
 	return newPresentedError(
-		countItems(failed)+" did not sync (see above). The next sync retries them.",
+		countItems(failed)+" could not be synced (see above).",
 		errSyncIncomplete,
 	)
 }

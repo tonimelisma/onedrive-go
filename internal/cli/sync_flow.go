@@ -98,7 +98,11 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 
 	console.Summary(result)
 
-	return runOnceResultError(result)
+	if err := runOnceResultError(result); err != nil {
+		return err
+	}
+
+	return incompleteSyncError(result.Reports, console.PermanentFailures)
 }
 
 func runSyncWatch(

@@ -276,6 +276,21 @@ func (c *syncConsole) tallyFor(mountID string, r *syncengine.Report) *activityTa
 	}
 }
 
+// PermanentFailures is how many of a drive's failed items will not be
+// retried: the "N failed" the summary prints, and what fails the command.
+func (c *syncConsole) PermanentFailures(report *multisync.MountReport) int {
+	if report == nil || report.Report == nil {
+		return 0
+	}
+	if c == nil {
+		return report.Report.Failed
+	}
+
+	tally := c.tallyFor(report.Identity.MountID, report.Report)
+
+	return max(tally.failed, report.Report.Failed-tally.willRetry)
+}
+
 func (c *syncConsole) reportSummary(mountID string, r *syncengine.Report) string {
 	tally := c.tallyFor(mountID, r)
 	parts := tally.parts()

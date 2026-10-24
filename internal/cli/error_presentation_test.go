@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -124,16 +125,33 @@ func TestWriteCommandError_JournalLinesCarryErrPriority(t *testing.T) {
 func TestIncompleteSyncError_FailedItemsMakeTheRunFail(t *testing.T) {
 	t.Parallel()
 
-	require.NoError(t, incompleteSyncError([]*multisync.MountReport{{Report: &syncengine.Report{Succeeded: 3}}}))
+	allFailed := func(r *multisync.MountReport) int { return r.Report.Failed }
+	require.NoError(t, incompleteSyncError([]*multisync.MountReport{{Report: &syncengine.Report{Succeeded: 3}}}, allFailed))
 
 	err := incompleteSyncError([]*multisync.MountReport{
 		{Report: &syncengine.Report{Succeeded: 3, Failed: 1}},
 		{Report: &syncengine.Report{Failed: 1}},
 		nil,
-	})
+	}, allFailed)
 	require.Error(t, err)
 	require.ErrorIs(t, err, errSyncIncomplete)
-	assert.Equal(t, "Error: 2 items did not sync (see above). The next sync retries them.", commandErrorText(err, false))
+	assert.Equal(t, "Error: 2 items could not be synced (see above).", commandErrorText(err, false))
+}
+
+// Validates: R-6.6.28
+func TestIncompleteSyncError_ItemsQueuedForRetryDoNotFailTheRun(t *testing.T) {
+	t.Parallel()
+
+	c, _, _ := testSyncConsole()
+	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "churn.txt", WillRetry: true, Err: errors.New("transient 404")}))
+
+	report := &multisync.MountReport{Identity: multisync.MountIdentity{MountID: "m1"}, Report: &syncengine.Report{Failed: 1}}
+	require.NoError(t, incompleteSyncError([]*multisync.MountReport{report}, c.PermanentFailures),
+		"a failure the next sync retries is reported in the summary, not as a failed run")
+
+	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "locked.txt", Err: os.ErrPermission}))
+	report.Report.Failed = 2
+	require.Error(t, incompleteSyncError([]*multisync.MountReport{report}, c.PermanentFailures))
 }
 
 // Validates: R-6.6.28
