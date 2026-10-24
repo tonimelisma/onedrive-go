@@ -152,7 +152,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request, state string, r
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
 		desc := r.URL.Query().Get("error_description")
 		http.Error(w, "Authorization failed: "+errParam, http.StatusBadRequest)
-		deliverCallbackResult(resultCh, callbackResult{err: fmt.Errorf("graph: authorization failed: %s: %s", errParam, desc)})
+		deliverCallbackResult(resultCh, callbackResult{err: browserAuthorizationError(errParam, desc)})
 
 		return
 	}
@@ -184,7 +184,7 @@ func shutdownCallbackServer(ctx context.Context, srv *http.Server, logger *slog.
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		// Best-effort shutdown — log but don't propagate since we're in a defer.
-		logger.Warn("callback server shutdown error", slog.String("error", err.Error()))
+		logger.Debug("callback server shutdown error", slog.String("error", err.Error()))
 	}
 }
 
@@ -194,7 +194,9 @@ func launchBrowser(ctx context.Context, authURL string, openURL func(context.Con
 	logger.Info("opening browser for authorization")
 
 	if openErr := openURL(ctx, authURL); openErr != nil {
-		logger.Warn("failed to open browser",
+		// Debug only: the openURL callback already told the user to open
+		// the URL by hand, which is the report that matters.
+		logger.Debug("failed to open browser",
 			slog.String("error", openErr.Error()),
 		)
 	}
@@ -253,4 +255,16 @@ func generateState() (string, error) {
 	}
 
 	return hex.EncodeToString(b), nil
+}
+
+// browserAuthorizationError maps the authorization server's error redirect to
+// a returned error. A user who cancels or declines consent gets the plain
+// ErrLoginDeclined sentinel; the OAuth code and AADSTS description are only
+// useful for diagnosing other failures, so they stay in the text only there.
+func browserAuthorizationError(errParam, desc string) error {
+	if errParam == oauthErrAccessDenied {
+		return ErrLoginDeclined
+	}
+
+	return fmt.Errorf("graph: authorization failed: %s: %s", errParam, desc)
 }

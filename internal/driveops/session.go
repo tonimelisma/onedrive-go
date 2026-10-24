@@ -109,6 +109,12 @@ type SessionRuntime struct {
 	// for test injection; defaults to graph.TokenSourceFromPath.
 	TokenSourceFn func(ctx context.Context, tokenPath string, logger *slog.Logger) (graph.TokenSource, error)
 
+	// retryNotices is shared by every retrying client this runtime builds,
+	// so one outage or long rate-limit wait is announced once per process
+	// rather than once per client or request (R-6.6.8). Set at construction
+	// and never replaced; Notices guards its own state.
+	retryNotices *retry.Notices
+
 	// mu guards the lazily built caches below: tokenCache, bootstrapMeta,
 	// interactiveMeta, interactiveTransfer, and syncClients. Sessions for
 	// different mounts build them concurrently.
@@ -131,6 +137,7 @@ func NewSessionRuntime(holder *config.Holder, userAgent string, logger *slog.Log
 		userAgent:       userAgent,
 		logger:          logger,
 		TokenSourceFn:   graph.TokenSourceFromPath,
+		retryNotices:    &retry.Notices{},
 		tokenCache:      make(map[string]graph.TokenSource),
 		interactiveMeta: make(map[string]*http.Client),
 	}
@@ -315,7 +322,7 @@ func (r *SessionRuntime) BootstrapMeta() *http.Client {
 	defer r.mu.Unlock()
 
 	if r.bootstrapMeta == nil {
-		r.bootstrapMeta = graphtransport.BootstrapMetadataClient(r.logger)
+		r.bootstrapMeta = graphtransport.BootstrapMetadataClient(r.logger, r.retryNotices)
 	}
 
 	return r.bootstrapMeta
@@ -354,12 +361,12 @@ func (r *SessionRuntime) interactiveClientsForKey(targetKey string) graphtranspo
 
 	meta := r.interactiveMeta[targetKey]
 	if meta == nil {
-		meta = graphtransport.InteractiveMetadataClient(r.logger, &retry.ThrottleGate{})
+		meta = graphtransport.InteractiveMetadataClient(r.logger, &retry.ThrottleGate{}, r.retryNotices)
 		r.interactiveMeta[targetKey] = meta
 	}
 
 	if r.interactiveTransfer == nil {
-		r.interactiveTransfer = graphtransport.InteractiveTransferClient(r.logger)
+		r.interactiveTransfer = graphtransport.InteractiveTransferClient(r.logger, r.retryNotices)
 	}
 
 	return graphtransport.ClientSet{

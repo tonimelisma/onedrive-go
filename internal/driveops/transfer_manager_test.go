@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -469,7 +470,7 @@ func TestTransferManager_ResumeDownload_FallsBackToFreshDownload(t *testing.T) {
 	}
 }
 
-// Validates: R-5.5
+// Validates: R-5.5.1
 func TestTransferManager_HashMismatch_Retry(t *testing.T) {
 	t.Parallel()
 
@@ -538,15 +539,23 @@ func TestTransferManager_HashExhaustion_Accepts(t *testing.T) {
 }
 
 // Validates: R-5.8.1
-func TestTransferManager_HEICMetadataMismatch_AcceptsWithQuirkWarning(t *testing.T) {
+//
+// The documented OneDrive/iOS HEIC quirk serves a smaller post-processed file
+// than the metadata describes. Re-downloading returns the same bytes, so the
+// download is accepted on the first attempt (it used to be fetched three
+// times), and the known, unactionable condition is logged at Debug only (it
+// used to print four warnings per photo).
+func TestTransferManager_HEICMetadataMismatch_AcceptsFirstDownloadQuietly(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	content := []byte("heic-bytes-after-download")
 
+	var downloadCount int
 	dl := &tmSimpleDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			downloadCount++
 			n, err := w.Write(content)
 			return int64(n), err
 		},
@@ -558,13 +567,153 @@ func TestTransferManager_HEICMetadataMismatch_AcceptsWithQuirkWarning(t *testing
 	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
 		RemoteHash:     "definitely-wrong-hash",
 		RemoteSize:     int64(len(content) + 1234),
-		MaxHashRetries: 1,
+		MaxHashRetries: 2,
 	})
 	require.NoError(t, err)
+	assert.Equal(t, 1, downloadCount, "re-downloading cannot fix the server-side HEIC quirk")
 	assert.False(t, result.HashVerified)
 	assert.Equal(t, result.LocalHash, result.EffectiveRemoteHash)
 	assert.Contains(t, buf.String(), "known OneDrive/iOS metadata mismatch")
 	assert.Contains(t, buf.String(), "accepting download")
+	assert.NotContains(t, buf.String(), "level=WARN")
+}
+
+// Validates: R-5.5.1
+//
+// A HEIC whose size matches but whose hash does not is not the known quirk,
+// so it keeps the normal hash retries.
+func TestTransferManager_HEICSameSizeHashMismatch_StillRetries(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("heic-bytes")
+
+	var downloadCount int
+	dl := &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			downloadCount++
+			n, err := w.Write(content)
+			return int64(n), err
+		},
+	}
+
+	tm := newTestTM(dl, &tmMockUploader{}, nil)
+	targetPath := filepath.Join(t.TempDir(), "IMG_0002.heic")
+
+	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+		RemoteHash:     "definitely-wrong-hash",
+		RemoteSize:     int64(len(content)),
+		MaxHashRetries: 2,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 3, downloadCount)
+}
+
+// Validates: R-5.5.1
+//
+// Retries that will probably succeed stay at Debug; only the final accepted
+// mismatch warns, once, in plain words and without raw hashes.
+func TestTransferManager_HashExhaustion_WarnsOnceInPlainWords(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	content := []byte("always-wrong-hash")
+
+	dl := &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(content)
+			return int64(n), err
+		},
+	}
+
+	tm := NewTransferManager(dl, &tmMockUploader{}, nil, logger)
+	targetPath := filepath.Join(t.TempDir(), "file.txt")
+
+	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+		RemoteHash:     "definitely-wrong-hash",
+		MaxHashRetries: 2,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(buf.String(), "level=WARN"), buf.String())
+	assert.Contains(t, buf.String(), "doesn't match OneDrive's checksum")
+	assert.NotContains(t, buf.String(), "definitely-wrong-hash")
+}
+
+// Validates: R-5.5.1
+//
+// Items without any content hash (some SharePoint files) are downloaded on
+// every pass; the unverifiable state is reported through HashVerified, not as
+// a warning per file.
+func TestTransferManager_NoRemoteHash_DoesNotWarn(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	dl := &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write([]byte("content"))
+			return int64(n), err
+		},
+	}
+
+	tm := NewTransferManager(dl, &tmMockUploader{}, nil, logger)
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1",
+		filepath.Join(t.TempDir(), "x.docx"), DownloadOpts{})
+	require.NoError(t, err)
+	assert.False(t, result.HashVerified)
+	assert.Empty(t, buf.String())
+}
+
+// Validates: R-6.2.6
+//
+// A persistent statfs failure (an unusual FUSE mount) fails open for every
+// download; it is announced once, not once per file.
+func TestTransferManager_DiskCheckFailure_WarnsOnce(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	dl := &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write([]byte("content"))
+			return int64(n), err
+		},
+	}
+
+	tm := NewTransferManager(dl, &tmMockUploader{}, nil, logger,
+		WithDiskCheck(1, func(string) (uint64, error) { return 0, errors.New("statfs: function not implemented") }))
+
+	dir := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item-"+name, filepath.Join(dir, name), DownloadOpts{})
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, 1, strings.Count(buf.String(), "level=WARN"), buf.String())
+}
+
+// Validates: R-6.6.26
+//
+// A failed download names the file the user asked for, not the internal
+// ".onedrive-go.<name>.partial" temp file.
+func TestTransferManager_DownloadError_NamesTargetNotPartial(t *testing.T) {
+	t.Parallel()
+
+	dl := &tmSimpleDownloader{
+		downloadFn: func(context.Context, driveid.ID, string, io.Writer) (int64, error) {
+			return 0, errors.New("connection reset")
+		},
+	}
+
+	tm := newTestTM(dl, &tmMockUploader{}, nil)
+	targetPath := filepath.Join(t.TempDir(), "report.pdf")
+
+	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), targetPath)
+	assert.NotContains(t, err.Error(), ".partial")
 }
 
 // ---------------------------------------------------------------------------

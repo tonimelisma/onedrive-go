@@ -85,13 +85,8 @@ func oauthConfig(tokenPath string, logger *slog.Logger) *oauth2.Config {
 		Endpoint: microsoft.AzureADEndpoint("common"),
 		// Called by ReuseTokenSource after each silent refresh, outside its mutex.
 		OnTokenChange: func(tok *oauth2.Token) {
-			logger.Info("token refreshed by oauth2 library",
-				slog.String("path", tokenPath),
-				slog.Time("new_expiry", tok.Expiry),
-			)
-
 			if err := tokenfile.Save(tokenPath, tok); err != nil {
-				logger.Warn("failed to persist refreshed token",
+				logger.Warn("couldn't save the refreshed sign-in; the next run may ask you to sign in again. Check the permissions on this file",
 					slog.String("path", tokenPath),
 					slog.String("error", err.Error()),
 				)
@@ -99,8 +94,9 @@ func oauthConfig(tokenPath string, logger *slog.Logger) *oauth2.Config {
 				return
 			}
 
-			logger.Info("persisted refreshed token to disk",
+			logger.Info("refreshed sign-in",
 				slog.String("path", tokenPath),
+				slog.Time("expiry", tok.Expiry),
 			)
 		},
 	}
@@ -121,11 +117,15 @@ func (b *tokenBridge) Token() (string, error) {
 			// The caller reports this as "sign-in required"; logging it as a
 			// warning as well would only repeat the same fact less clearly.
 			b.logger.Debug("saved login rejected", slog.String("error", err.Error()))
-			return "", fmt.Errorf("graph: obtaining token: %w: %w: %w", ErrLoginExpired, ErrUnauthorized, err)
+			return "", fmt.Errorf("refreshing access token: %w: %w: %w", ErrLoginExpired, ErrUnauthorized, err)
 		}
 
-		b.logger.Warn("token acquisition failed", slog.String("error", err.Error()))
-		return "", fmt.Errorf("graph: obtaining token: %w", err)
+		// Debug only: the error is returned, and the command or sync layer
+		// reports it once (as a network or sign-in problem). Sync workers call
+		// Token() per request, so a Warn here repeated on every request while
+		// offline with an expired access token.
+		b.logger.Debug("token acquisition failed", slog.String("error", err.Error()))
+		return "", fmt.Errorf("refreshing access token: %w", err)
 	}
 
 	b.logger.Debug("token acquired",

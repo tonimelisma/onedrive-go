@@ -99,7 +99,8 @@ func assertPolicyShape(t *testing.T, got Policy, maxAttempts int, base, maxDelay
 func TestNamedPolicies_RequestPathPolicies(t *testing.T) {
 	t.Parallel()
 
-	assertPolicyShape(t, TransportPolicy(), 5, 1*time.Second, 60*time.Second, 0.25)
+	// 6 total attempts: the first plus the 5 retries the transport has always made.
+	assertPolicyShape(t, TransportPolicy(), 6, 1*time.Second, 60*time.Second, 0.25)
 	assert.Equal(t, 5, DriveDiscoveryPolicy().MaxAttempts)
 	assert.Equal(t, 1*time.Second, DriveDiscoveryPolicy().Base)
 	assertPolicyShape(t, RootChildrenPolicy(), 3, 250*time.Millisecond, 1*time.Second, 0.0)

@@ -68,6 +68,8 @@ func TestDoQuirkRetry_ExhaustionWrapsTerminalErrorWithAttemptEvidence(t *testing
 	require.Len(t, logs, 2)
 	assert.Equal(t, "retrying after documented graph quirk", logs[0]["msg"])
 	assert.Equal(t, "graph quirk retry exhausted", logs[1]["msg"])
+	assert.Equal(t, "DEBUG", logs[1]["level"],
+		"the exhausted error is returned to the caller, so the log stays at Debug instead of repeating it")
 	assert.Equal(t, "drives-token-propagation", logs[1]["graph_quirk"])
 	assert.EqualValues(t, 2, logs[1]["graph_quirk_attempt_count"])
 	assert.Contains(t, logBuf.String(), "\"graphCode\":\"accessDenied\"")

@@ -341,6 +341,26 @@ Generic retry has been extracted from the graph client into `retry.RetryTranspor
 
 This keeps caller profile selection out of `graph` while preserving a single generic retry implementation.
 
+Logging levels: per-request and per-item chatter (getting, listing, creating,
+moving, deleting, uploading and downloading items, upload-session lifecycle)
+logs at Debug; Info is kept for once-per-command milestones (sign-in, delta
+enumeration, search). Documented Graph quirks the client handles (the
+simple-upload 404 fallback, an empty create-folder success body, 416 chunk
+recovery, quirk retry exhaustion, unparseable timestamps or session
+expirations) log at Debug, because their outcome is either success or a
+returned error. Errors are returned and never also logged above Debug, so the
+command reports each failure once and a canceled context during shutdown
+prints nothing (`TestTransfersCanceledMidFlightLogNothingAboveDebug`,
+`TestTokenBridge_RefreshFailureIsReturnedNotWarned`). Interactive sign-in maps the user-side outcomes (consent
+canceled or declined, device code expired) to the plain sentinels
+`ErrLoginDeclined` and `ErrLoginCodeExpired` instead of raw OAuth/AADSTS text
+(`TestDoLogin_UserSideOAuthOutcomesArePlain`,
+`TestBrowserAuthorizationError_AccessDeniedIsPlain`). Every listing follows
+Graph's absolute `@odata.nextLink` through `stripBaseURL`, drive listings
+included (`TestDrives_FollowsNextLinkAcrossPages`). A non-2xx copy-monitor
+reply is a `GraphError`, not a status document
+(`TestPollCopyStatus_NonSuccessStatusReturnsGraphError`).
+
 Pre-authenticated requests (upload chunks, downloads) go through `httpClient.Do()` directly. The `doPreAuth` helper sets `req.GetBody` using the `makeReq` factory so `RetryTransport` can rewind request bodies between attempts (e.g., `io.SectionReader` for upload chunks). It also attaches a request-scoped redacted log target such as `preauth:upload chunk`, so transport retry logs never emit the pre-authenticated URL itself. Transport failures come back from `http.Client.Do` as `*url.Error`, whose text embeds the full request URL; `dispatchRequest` scrubs it to scheme and host (`redactURLError`) before the error is wrapped, so surfaced error text and logs never carry the credential either. Implements: R-6.8.17 [verified]
 
 ## 401 Token Refresh

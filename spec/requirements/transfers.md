@@ -43,4 +43,4 @@ Download and upload transfer infrastructure shared by file operations and sync.
 
 ## R-5.8 iOS Media Handling [verified]
 
-- R-5.8.1: When downloading iOS `.heic` files whose API-reported size/hash does not match the actual downloaded bytes (known API bug), the system shall log a warning and accept the download rather than failing validation. [verified]
+- R-5.8.1: When downloading iOS `.heic` files whose API-reported size/hash does not match the actual downloaded bytes (known API bug), the system shall accept the download rather than failing validation. A size mismatch identifies the quirk, so the first download is accepted without hash retries; the known condition is logged at DEBUG, not as a per-photo warning. [verified]

@@ -40,7 +40,11 @@ func doDocumentedGraphQuirkRetry[T any](ctx context.Context, c *Client, spec doc
 				Err:      err,
 			}
 
-			c.logger.Warn("graph quirk retry exhausted",
+			// Debug only: quirkErr is returned and reported once by the caller
+			// (it unwraps to the underlying not-found or server error). The
+			// retry evidence stays in this record and on QuirkRetryError for
+			// --debug and live-test incident capture.
+			c.logger.Debug("graph quirk retry exhausted",
 				slog.String("graph_quirk", quirkErr.Quirk),
 				slog.Int("graph_quirk_attempt_count", len(quirkErr.Attempts)),
 				slog.Any("graph_quirk_attempts", quirkErr.Attempts),
