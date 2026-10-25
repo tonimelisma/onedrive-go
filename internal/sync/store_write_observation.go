@@ -117,7 +117,17 @@ func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 	}
 
 	if item.IsDeleted {
-		return deleteObservedRemoteState(ctx, tx, item, existing.Path)
+		if err := deleteObservedRemoteState(ctx, tx, item, existing.Path); err != nil {
+			return err
+		}
+		if existing.ItemType == ItemTypeFolder {
+			// Delta reports a deleted folder as one item, like a moved one.
+			// Left behind, a child that was never downloaded stayed in
+			// remote_state forever: status showed "Remote changes: 1 item"
+			// and "Syncing" for a folder that no longer existed.
+			return deleteRemoteStateSubtreeTx(ctx, tx, existing.Path)
+		}
+		return nil
 	}
 
 	changed := observedRemoteStateUpdate(existing, item)
@@ -152,6 +162,20 @@ func deleteObservedRemoteState(
 		item.ItemID,
 	); err != nil {
 		return fmt.Errorf("sync: deleting remote_state for %s: %w", existingPath, err)
+	}
+
+	return nil
+}
+
+// deleteRemoteStateSubtreeTx removes every remote_state row strictly below
+// folderPath.
+func deleteRemoteStateSubtreeTx(ctx context.Context, tx sqlTxRunner, folderPath string) error {
+	descendantPrefix := folderPath + "/"
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM remote_state WHERE substr(path, 1, length(?)) = ? COLLATE BINARY`,
+		descendantPrefix, descendantPrefix,
+	); err != nil {
+		return fmt.Errorf("sync: deleting remote_state below deleted folder %s: %w", folderPath, err)
 	}
 
 	return nil

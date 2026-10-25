@@ -308,6 +308,16 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	// Detect orphans: baseline entries whose ItemID is not in the seen set.
 	orphans := findBaselineOrphans(bl, seen, eng.driveID, "")
 
+	// remote_state can also hold items that were never synced (one whose name
+	// the local filesystem cannot store is never downloaded). A missed delete
+	// left such a row behind forever, keeping status at "Syncing" with a
+	// phantom remote change, and the baseline scan above never sees it.
+	remoteRows, err := eng.baseline.ListRemoteState(ctx)
+	if err != nil {
+		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: listing remote state for full refresh: %w", err)
+	}
+	orphans = append(orphans, findRemoteStateOrphans(remoteRows, seen, orphans, eng.driveID)...)
+
 	if len(orphans) > 0 {
 		events = append(events, orphans...)
 	}

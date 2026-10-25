@@ -1289,6 +1289,13 @@ func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing
 		now,
 	)
 	require.NoError(t, err, "seed remote mirror row")
+	// A saved cursor makes this an incremental run: without one the first
+	// run is a full enumeration, which is authoritative and would rightly
+	// treat a row it does not list as deleted on OneDrive.
+	require.NoError(t, eng.baseline.CommitObservation(ctx, nil, "token-0", driveID))
+	_, err = eng.baseline.rawDB().ExecContext(ctx,
+		`UPDATE observation_state SET next_full_remote_refresh_at = ?`, time.Now().Add(time.Hour).UnixNano())
+	require.NoError(t, err)
 
 	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
@@ -1503,4 +1510,37 @@ func TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T) {
 	require.NoError(t, err)
 	_, found := bl.GetByPath("retry-delete.txt")
 	assert.False(t, found)
+}
+
+// Regression: a remote_state row for an item that was never synced (here one
+// whose name the local filesystem cannot store) outlived the item on
+// OneDrive, because a full rescan only looked for orphans in the baseline.
+// status showed "Syncing" with a phantom remote change indefinitely.
+//
+// Validates: R-2.17.2
+func TestRunOnce_FullRescanDropsUnsyncedRemoteStateOrphans(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}}, "token-1"), nil
+		},
+	}
+	eng, _ := newTestEngine(t, mock)
+	ctx := t.Context()
+
+	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES ('ghost', 'gone/never-synced.txt', 'file', 'h', 1, 1)`)
+	require.NoError(t, err)
+
+	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{FullReconcile: true})
+	require.NoError(t, err)
+	assert.Zero(t, report.Downloads+report.LocalDeletes+report.RemoteDeletes)
+
+	var count int
+	require.NoError(t, eng.baseline.rawDB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM remote_state WHERE item_id = 'ghost'`).Scan(&count))
+	assert.Zero(t, count, "a full rescan that no longer lists an item drops its remote_state row")
 }
