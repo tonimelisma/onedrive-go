@@ -244,6 +244,13 @@ instead of a raw "any write/owner role means writable" heuristic:
 - `upload_transfer.go` / `upload_session.go`: existing-item overwrite helpers
   for shared-file `put` by `(driveID, itemID)`
 
+Simple-upload PUTs take an `io.ReaderAt` plus the size and go out with an
+exact `Content-Length` and a `GetBody` that opens a fresh `SectionReader`, so
+the interactive clients' `RetryTransport` resends every byte on a retry
+(R-6.8.19, `TestSimpleUpload_RetryAfter503ResendsFullBody`). The PUT used to
+go out chunked over a one-shot reader, and a retry after a 503 sent zero bytes
+and replaced the user's file online with an empty one.
+
 For create-by-parent uploads, the graph boundary treats a non-zero-size simple
 upload `404 itemNotFound` as potentially ambiguous and retries that narrower
 case through `createUploadSession` once. Live E2E coverage showed read-only

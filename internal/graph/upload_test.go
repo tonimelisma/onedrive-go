@@ -2248,3 +2248,64 @@ func TestResumeUpload_StatusWithoutUploadURLResumesOnSessionURL(t *testing.T) {
 	assert.Equal(t, "resumed-item", item.ID)
 	assert.Equal(t, "/upload/session", putPath, "the remaining chunk goes to the original session URL")
 }
+
+// Validates: R-6.8.19, R-5.3.1
+func TestSimpleUpload_RetryAfter503ResendsFullBody(t *testing.T) {
+	content := "content that must survive a retry"
+	// Production passes a SectionReader over the open file, a type
+	// http.NewRequest cannot replay by itself (unlike *strings.Reader).
+	source := func() *io.SectionReader {
+		return io.NewSectionReader(strings.NewReader(content), 0, int64(len(content)))
+	}
+
+	tests := []struct {
+		name   string
+		upload func(*Client) (*Item, error)
+	}{
+		{name: "CreateByParent", upload: func(c *Client) (*Item, error) {
+			return c.SimpleUpload(t.Context(), driveid.New("d"), "parent", "a.txt", source(), int64(len(content)))
+		}},
+		{name: "OverwriteByID", upload: func(c *Client) (*Item, error) {
+			return c.SimpleUploadToItem(t.Context(), driveid.New("d"), "item-1", source(), int64(len(content)))
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			var bodies []string
+			var lengths []int64
+			var chunked []bool
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if !assert.NoError(t, err) {
+					return
+				}
+				bodies = append(bodies, string(body))
+				lengths = append(lengths, r.ContentLength)
+				chunked = append(chunked, len(r.TransferEncoding) > 0)
+
+				if attempts.Add(1) == 1 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+				writeTestResponsef(t, w, `{"id":"item-1","name":"a.txt","size":%d,"file":{}}`, len(content))
+			}))
+			defer srv.Close()
+
+			item, err := tt.upload(newTestClient(t, srv.URL))
+			require.NoError(t, err)
+			assert.Equal(t, "item-1", item.ID)
+
+			// The retried PUT carries every byte again: before the fix it
+			// carried none, which replaced the online file with an empty one.
+			assert.Equal(t, []string{content, content}, bodies)
+			assert.Equal(t, []int64{int64(len(content)), int64(len(content))}, lengths)
+			assert.Equal(t, []bool{false, false}, chunked)
+		})
+	}
+}

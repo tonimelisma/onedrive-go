@@ -1169,3 +1169,58 @@ func (b *syncBuffer) Bytes() []byte {
 
 	return append([]byte(nil), b.buf.Bytes()...)
 }
+
+// onceReader is a body http.NewRequest cannot replay: no GetBody, no Seek.
+type onceReader struct{ io.Reader }
+
+// Validates: R-6.8.19
+func TestRetryTransport_NonReplayableBodyIsNotRetried(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		respond func() (*http.Response, error)
+	}{
+		{name: "RetryableStatus", respond: func() (*http.Response, error) { return makeResponse(503, nil), nil }},
+		{name: "NetworkError", respond: func() (*http.Response, error) { return nil, io.ErrUnexpectedEOF }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var bodies []string
+			inner := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				body, err := io.ReadAll(req.Body)
+				require.NoError(t, err)
+				bodies = append(bodies, string(body))
+
+				return tt.respond()
+			})
+
+			rt := &retry.RetryTransport{
+				Inner:  inner,
+				Policy: testPolicy(),
+				Logger: slog.Default(),
+				Sleep:  noopSleep,
+			}
+
+			body := &onceReader{Reader: bytes.NewReader([]byte("file content"))}
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, "http://example.com/upload", body)
+			require.NoError(t, err)
+			require.Nil(t, req.GetBody)
+
+			resp, err := rt.RoundTrip(req)
+			closeTestResponse(t, resp)
+
+			// One attempt only: a retry would have sent zero bytes as the
+			// file's new content.
+			assert.Equal(t, []string{"file content"}, bodies)
+			if resp != nil {
+				assert.Equal(t, 503, resp.StatusCode)
+			} else {
+				require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			}
+		})
+	}
+}

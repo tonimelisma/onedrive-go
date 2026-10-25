@@ -16,9 +16,10 @@ import (
 
 // SimpleUpload uploads a file up to 4 MB using a single PUT request.
 // For larger files, use CreateUploadSession + UploadChunk.
-// The content is sent with application/octet-stream content type.
+// The content is sent with application/octet-stream content type. content is
+// an io.ReaderAt so every attempt of the request can resend all size bytes.
 func (c *Client) SimpleUpload(
-	ctx context.Context, driveID driveid.ID, parentID, name string, r io.Reader, size int64,
+	ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64,
 ) (*Item, error) {
 	c.logger.Debug("simple upload",
 		slog.String("drive_id", driveID.String()),
@@ -32,7 +33,7 @@ func (c *Client) SimpleUpload(
 	// must use a query parameter since the body is the raw file content.
 	path := fmt.Sprintf("/drives/%s/items/%s:/%s:/content?@microsoft.graph.conflictBehavior=replace", driveID, parentID, url.PathEscape(name))
 
-	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", r)
+	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", content, size)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +54,7 @@ func (c *Client) SimpleUpload(
 // request. Files larger than 4 MiB should use UploadToItem or
 // CreateUploadSessionForItem.
 func (c *Client) SimpleUploadToItem(
-	ctx context.Context, driveID driveid.ID, itemID string, r io.Reader, size int64,
+	ctx context.Context, driveID driveid.ID, itemID string, content io.ReaderAt, size int64,
 ) (*Item, error) {
 	c.logger.Debug("simple upload existing item",
 		slog.String("drive_id", driveID.String()),
@@ -63,7 +64,7 @@ func (c *Client) SimpleUploadToItem(
 
 	path := fmt.Sprintf("/drives/%s/items/%s/content", driveID, itemID)
 
-	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", r)
+	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", content, size)
 	if err != nil {
 		return nil, err
 	}
@@ -181,10 +182,14 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, bool, error) {
 }
 
 // doRawUpload sends an authenticated request with a custom content type.
-// Used for SimpleUpload where application/octet-stream is needed instead of application/json.
-// Unlike do(), this does not retry — retrying a partially-consumed reader is not safe.
+// Used for SimpleUpload where application/octet-stream is needed instead of
+// application/json. The interactive clients' RetryTransport does retry this
+// PUT, so the request carries an exact Content-Length and a GetBody that
+// opens a fresh SectionReader over all size bytes. Without them the request
+// went out chunked and a retry after a 5xx sent the already-drained reader:
+// zero bytes, which replaced the online file with an empty one (D-033).
 func (c *Client) doRawUpload(
-	ctx context.Context, method, path, contentType string, body io.Reader,
+	ctx context.Context, method, path, contentType string, content io.ReaderAt, size int64,
 ) (*http.Response, error) {
 	url := c.baseURL + path
 
@@ -194,9 +199,14 @@ func (c *Client) doRawUpload(
 		slog.String("content_type", contentType),
 	)
 
-	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	req, err := http.NewRequestWithContext(ctx, method, url, replayableUploadBody(content, size))
 	if err != nil {
 		return nil, fmt.Errorf("graph: creating raw upload request: %w", err)
+	}
+
+	req.ContentLength = size
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(replayableUploadBody(content, size)), nil
 	}
 
 	tok, err := c.token.Token()
@@ -254,6 +264,16 @@ func (c *Client) doRawUpload(
 	return resp, nil
 }
 
+// replayableUploadBody returns a reader over exactly size bytes of content.
+// A zero-byte upload sends http.NoBody so the request is not chunked.
+func replayableUploadBody(content io.ReaderAt, size int64) io.Reader {
+	if size == 0 {
+		return http.NoBody
+	}
+
+	return io.NewSectionReader(content, 0, size)
+}
+
 // Upload uploads a file to OneDrive, automatically choosing simple upload for
 // files up to 4 MiB or chunked (resumable) upload for larger files. The session
 // lifecycle (create, chunk loop, cancel-on-error) is fully encapsulated.
@@ -285,9 +305,7 @@ func (c *Client) UploadToItem(
 	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
 ) (*Item, error) {
 	if size <= SimpleUploadMaxSize {
-		r := io.NewSectionReader(content, 0, size)
-
-		item, err := c.SimpleUploadToItem(ctx, driveID, itemID, r, size)
+		item, err := c.SimpleUploadToItem(ctx, driveID, itemID, content, size)
 		if err != nil {
 			return nil, err
 		}
@@ -335,7 +353,7 @@ func (c *Client) simpleUploadCreateByParent(
 	mtime time.Time,
 	progress ProgressFunc,
 ) (*Item, bool, error) {
-	item, err := c.SimpleUpload(ctx, driveID, parentID, name, io.NewSectionReader(content, 0, size), size)
+	item, err := c.SimpleUpload(ctx, driveID, parentID, name, content, size)
 	if err == nil {
 		return item, true, nil
 	}
@@ -379,7 +397,7 @@ func (c *Client) simpleUploadCreateByParent(
 		policy: c.policies.simpleUploadCreate,
 		match:  isTransientSimpleUploadCreateError,
 	}, func() (*Item, error) {
-		return c.SimpleUpload(ctx, driveID, parentID, name, io.NewSectionReader(content, 0, size), size)
+		return c.SimpleUpload(ctx, driveID, parentID, name, content, size)
 	})
 	if retryErr != nil {
 		return nil, false, retryErr
