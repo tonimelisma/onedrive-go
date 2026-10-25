@@ -124,6 +124,10 @@ func (c *Client) dispatchRequest(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("dispatching request: %w", redactURLError(err))
 	}
 
+	if resp.Body != nil {
+		resp.Body = markedResponseBody{ReadCloser: resp.Body}
+	}
+
 	return resp, nil
 }
 

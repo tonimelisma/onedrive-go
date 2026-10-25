@@ -306,7 +306,7 @@ func (c *Client) finalizeSimpleUpload(
 	// preventing mtime mismatch on the next sync pass.
 	if !mtime.IsZero() {
 		patched, patchErr := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
-			name:   "simple-upload-mtime-transient-404",
+			name:   QuirkSimpleUploadMtimeTransient404,
 			policy: c.policies.simpleUploadMtime,
 			match:  isTransientSimpleUploadMtimeError,
 		}, func() (*Item, error) {
@@ -372,7 +372,7 @@ func (c *Client) simpleUploadCreateByParent(
 	)
 
 	item, retryErr := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
-		name:   "simple-upload-create-transient-404",
+		name:   QuirkSimpleUploadCreateTransient404,
 		policy: c.policies.simpleUploadCreate,
 		match:  isTransientSimpleUploadCreateError,
 	}, func() (*Item, error) {

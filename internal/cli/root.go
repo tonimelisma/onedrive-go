@@ -137,6 +137,7 @@ type cliSeams struct {
 	// ($NOTIFY_SOCKET, $WATCHDOG_USEC) of `sync --watch`.
 	notifyGetenv      func(string) string
 	statusLiveOverlay func(context.Context, *CLIContext, accountViewSnapshot) map[string]statusAccountLiveOverlay
+	cpAwaitCopy       func(context.Context, *CLIContext, *graph.Client, string) (string, error)
 }
 
 type CLIContext struct {

@@ -1,13 +1,17 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"sort"
 
 	"github.com/spf13/cobra"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -38,7 +42,15 @@ func runLs(cmd *cobra.Command, args []string) error {
 
 	items, err := session.ListChildren(ctx, remotePath)
 	if err != nil {
-		return newRemoteOpError("listing", remotePath, err)
+		// Like ls(1), ls on a file lists that one file. OneDrive refuses to
+		// list a file's children (HTTP 422), so look the path up once and,
+		// if it is a file, print it; anything else keeps the listing error.
+		file, ok := lsFileFallback(ctx, session, remotePath, err)
+		if !ok {
+			return newRemoteOpError("listing", remotePath, err)
+		}
+
+		items = []graph.Item{*file}
 	}
 
 	if cc.Flags.JSON {
@@ -46,6 +58,30 @@ func runLs(cmd *cobra.Command, args []string) error {
 	}
 
 	return printItemsTable(cc.Output(), items)
+}
+
+// lsFileFallback returns the item at remotePath when listing it failed
+// because it is a file. Only OneDrive's "not a folder" refusal (HTTP 400 or
+// 422) triggers the lookup, so a network, sign-in or not-found failure is
+// reported as it was, without a second request.
+func lsFileFallback(
+	ctx context.Context,
+	session *driveops.MountSession,
+	remotePath string,
+	listErr error,
+) (*graph.Item, bool) {
+	var graphErr *graph.GraphError
+	if !errors.As(listErr, &graphErr) ||
+		(graphErr.StatusCode != http.StatusUnprocessableEntity && graphErr.StatusCode != http.StatusBadRequest) {
+		return nil, false
+	}
+
+	item, err := session.ResolveItem(ctx, remotePath)
+	if err != nil || item.IsFolder {
+		return nil, false
+	}
+
+	return item, true
 }
 
 // lsJSONItem is the JSON output schema for a single item in ls output.

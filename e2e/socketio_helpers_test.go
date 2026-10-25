@@ -31,6 +31,43 @@ func withSocketIODebugEvents(t *testing.T, env map[string]string) (map[string]st
 	return cloned, path
 }
 
+// ensureDebugEvents makes sure a daemon started with env writes the
+// structured debug-event stream, returning the env to start it with and the
+// stream's path. An env that already names a stream keeps it, so a test that
+// set one up for its own assertions and a daemon helper share one file.
+func ensureDebugEvents(t *testing.T, env map[string]string) (map[string]string, string) {
+	t.Helper()
+
+	if path := env["ONEDRIVE_TEST_DEBUG_EVENTS_PATH"]; path != "" {
+		return env, path
+	}
+
+	return withSocketIODebugEvents(t, env)
+}
+
+// waitForDaemonReady waits until a watch daemon has started its first
+// observer. Readiness comes from the structured debug-event stream (see
+// ensureDebugEvents), not from log wording: rewording a log line must not be
+// able to break, or falsely satisfy, a test's synchronization.
+func waitForDaemonReady(t *testing.T, eventsPath string, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		for _, event := range readSocketIODebugEvents(t, eventsPath) {
+			if string(event.Type) == "observer_started" {
+				t.Logf("daemon ready (%s observer started)", event.Observer)
+				return
+			}
+		}
+
+		sleepForLiveTestPropagation(500 * time.Millisecond)
+	}
+
+	require.FailNowf(t, "daemon did not become ready",
+		"no observer started within %v; events: %+v", timeout, readSocketIODebugEvents(t, eventsPath))
+}
+
 func readSocketIODebugEvents(t *testing.T, path string) []syncengine.DebugEvent {
 	t.Helper()
 

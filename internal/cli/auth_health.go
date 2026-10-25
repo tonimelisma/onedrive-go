@@ -119,7 +119,7 @@ func attachDriveAuthProof(session interface {
 }
 
 func inspectSavedLogin(
-	ctx context.Context,
+	_ context.Context,
 	account string,
 	driveIDs []driveid.CanonicalID,
 	logger *slog.Logger,
@@ -140,7 +140,9 @@ func inspectSavedLogin(
 		return authReasonMissingLogin
 	}
 
-	_, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
+	// Only check the file: the command loads the token for real later, and
+	// that load is the one that logs "loaded saved token".
+	err := graph.CheckSavedLogin(tokenPath)
 	if err == nil {
 		return ""
 	}
@@ -324,9 +326,9 @@ func printAccountAuthRequirementsText(w io.Writer, items []accountAuthRequiremen
 func authErrorMessage(err error) string {
 	switch {
 	case errors.Is(err, graph.ErrLoginCodeExpired):
-		return "Error: the sign-in code expired before sign-in finished. Run 'onedrive-go login' to get a new code."
+		return "Error: the sign-in code expired before sign-in finished. Run 'onedrive-go login' again to get a new code."
 	case errors.Is(err, graph.ErrLoginDeclined):
-		return "Error: sign-in was canceled or declined. Run 'onedrive-go login' to try again."
+		return "Error: sign-in was canceled or declined. Run 'onedrive-go login' again."
 	case errors.Is(err, graph.ErrLoginExpired):
 		return "Authentication required: Microsoft no longer accepts the saved login for this account " +
 			"(it expired or was revoked). Run 'onedrive-go login' to sign in again."

@@ -92,11 +92,21 @@ func runDriveResetSyncStateWithInput(
 		return fmt.Errorf("reset sync state DB: %w", err)
 	}
 
+	if cc.Flags.JSON {
+		return writeJSONDocument(cc.Output(), driveResetSyncStateJSONOutput{Drive: cid.String(), Reset: true})
+	}
+
 	if err := writef(cc.Output(), "Reset sync state DB for %s.\n", cid.String()); err != nil {
 		return err
 	}
 
 	return writeln(cc.Output(), "The next sync for this drive will rebuild state from current local and remote data.")
+}
+
+// driveResetSyncStateJSONOutput is `drive reset-sync-state --json`.
+type driveResetSyncStateJSONOutput struct {
+	Drive string `json:"drive"`
+	Reset bool   `json:"reset"`
 }
 
 func ensureNoLiveStateResetOwner(ctx context.Context, canonicalID driveid.CanonicalID) error {

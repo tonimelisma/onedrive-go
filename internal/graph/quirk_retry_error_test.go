@@ -62,7 +62,8 @@ func TestDoQuirkRetry_ExhaustionWrapsTerminalErrorWithAttemptEvidence(t *testing
 	assert.Equal(t, "req-1", quirkErr.Attempts[0].RequestID)
 	assert.Equal(t, 2, quirkErr.Attempts[1].Attempt)
 	assert.Equal(t, "req-2", quirkErr.Attempts[1].RequestID)
-	assert.Contains(t, quirkErr.Error(), "retry exhausted")
+	assert.Equal(t, "graph: OneDrive did not yet accept the new sign-in, even after 2 tries: "+graphErr.Error(), quirkErr.Error())
+	assert.NotContains(t, quirkErr.Error(), QuirkDrivesTokenPropagation, "the quirk ID is for code, not for the message")
 
 	logs := decodeJSONLogLines(t, logBuf.Bytes())
 	require.Len(t, logs, 2)

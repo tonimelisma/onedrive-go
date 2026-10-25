@@ -15,81 +15,121 @@ import (
 )
 
 func runDriveAddWithContext(ctx context.Context, cc *CLIContext, args []string) error {
-	logger := cc.Logger
-
 	if cc.SharedTarget != nil {
-		item, _, err := cc.resolveSharedItem(ctx)
-		if err != nil {
-			return err
-		}
-		if !item.IsFolder {
-			return fmt.Errorf("shared files are direct stat/get/put targets, not drives")
-		}
-
-		cid, err := driveid.NewCanonicalID(cc.SharedTarget.Selector())
-		if err != nil {
-			return fmt.Errorf("parse shared drive identity: %w", err)
-		}
-
-		return finishDriveAdd(ctx, cc, addSharedDrive(ctx, cc.CfgPath, cc.Output(), cid, "", logger, cc.runtime()))
+		result, err := addDriveFromSharedTarget(ctx, cc)
+		return finishDriveAdd(ctx, cc, result, err)
 	}
 
-	selector := ""
-	if len(args) > 0 {
-		selector = args[0]
+	selector, err := driveAddSelector(cc, args)
+	if err != nil {
+		return err
 	}
 
 	if selector == "" {
-		var driveErr error
-		selector, driveErr = cc.Flags.SingleDrive()
-		if driveErr != nil {
-			return driveErr
+		if cc.Flags.JSON {
+			// Without a selector, drive add only prints guidance; the
+			// listing a script wants is `drive list --json`.
+			return &usageError{
+				commandPath: "onedrive-go drive add",
+				err:         fmt.Errorf("drive add --json needs a drive to add; run 'onedrive-go drive list --json' to see available drives"),
+			}
 		}
-	}
 
-	if selector == "" {
 		return listAvailableDrives(cc.Output())
 	}
 
-	cid, err := driveid.NewCanonicalID(selector)
-	if err != nil {
+	cid, parseErr := driveid.NewCanonicalID(selector)
+	if parseErr != nil {
 		if strings.Contains(selector, ":") {
 			return fmt.Errorf("invalid canonical ID %q: %w\n"+
-				"Run 'onedrive-go drive list' to see valid canonical IDs", selector, err)
+				"Run 'onedrive-go drive list' to see valid canonical IDs", selector, parseErr)
 		}
 
-		return finishDriveAdd(ctx, cc, addSharedDriveByName(ctx, cc, selector))
+		result, addErr := addSharedDriveByName(ctx, cc, selector)
+		return finishDriveAdd(ctx, cc, result, addErr)
 	}
 
 	if cid.IsShared() {
-		clients, err := cc.sharedTargetClients(ctx, sharedref.Ref{
-			AccountEmail:  cid.Email(),
-			RemoteDriveID: cid.SourceDriveID(),
-			RemoteItemID:  cid.SourceItemID(),
-		})
-		if err != nil {
-			return err
-		}
-
-		item, err := clients.Meta.GetItem(ctx, driveid.New(cid.SourceDriveID()), cid.SourceItemID())
-		if err != nil {
-			return fmt.Errorf("loading shared item: %w", err)
-		}
-		if !item.IsFolder {
-			return fmt.Errorf("shared files are direct stat/get/put targets, not drives")
-		}
-
-		return finishDriveAdd(ctx, cc, addSharedDrive(ctx, cc.CfgPath, cc.Output(), cid, "", logger, cc.runtime()))
+		result, addErr := addSharedDriveByCanonicalID(ctx, cc, cid)
+		return finishDriveAdd(ctx, cc, result, addErr)
 	}
 
-	return finishDriveAdd(ctx, cc, addNewDrive(cc.Output(), cc.CfgPath, cid, logger))
+	result, addErr := addNewDrive(cc.resultWriter(), cc.CfgPath, cid, cc.Logger)
+	return finishDriveAdd(ctx, cc, result, addErr)
 }
 
-func finishDriveAdd(ctx context.Context, cc *CLIContext, err error) error {
+// driveAddSelector is the drive to add: the argument, else a single --drive.
+func driveAddSelector(cc *CLIContext, args []string) (string, error) {
+	if len(args) > 0 && args[0] != "" {
+		return args[0], nil
+	}
+
+	return cc.Flags.SingleDrive()
+}
+
+// addDriveFromSharedTarget adds the shared folder named by a shared-target
+// selector (shared:<recipient>:<drive>:<item>) resolved at bootstrap.
+func addDriveFromSharedTarget(ctx context.Context, cc *CLIContext) (driveAddResult, error) {
+	item, _, err := cc.resolveSharedItem(ctx)
+	if err != nil {
+		return driveAddResult{}, err
+	}
+	if !item.IsFolder {
+		return driveAddResult{}, fmt.Errorf("shared files are direct stat/get/put targets, not drives")
+	}
+
+	cid, err := driveid.NewCanonicalID(cc.SharedTarget.Selector())
+	if err != nil {
+		return driveAddResult{}, fmt.Errorf("parse shared drive identity: %w", err)
+	}
+
+	return addSharedDrive(ctx, cc.CfgPath, cc.resultWriter(), cid, "", cc.Logger, cc.runtime())
+}
+
+// addSharedDriveByCanonicalID adds a shared folder given as a shared
+// canonical ID, after checking it is a folder rather than a file.
+func addSharedDriveByCanonicalID(ctx context.Context, cc *CLIContext, cid driveid.CanonicalID) (driveAddResult, error) {
+	clients, err := cc.sharedTargetClients(ctx, sharedref.Ref{
+		AccountEmail:  cid.Email(),
+		RemoteDriveID: cid.SourceDriveID(),
+		RemoteItemID:  cid.SourceItemID(),
+	})
+	if err != nil {
+		return driveAddResult{}, err
+	}
+
+	item, err := clients.Meta.GetItem(ctx, driveid.New(cid.SourceDriveID()), cid.SourceItemID())
+	if err != nil {
+		return driveAddResult{}, fmt.Errorf("loading shared item: %w", err)
+	}
+	if !item.IsFolder {
+		return driveAddResult{}, fmt.Errorf("shared files are direct stat/get/put targets, not drives")
+	}
+
+	return addSharedDrive(ctx, cc.CfgPath, cc.resultWriter(), cid, "", cc.Logger, cc.runtime())
+}
+
+// driveAddResult is what drive add did, and is also `drive add --json`.
+// added is false when the drive was already configured.
+type driveAddResult struct {
+	Drive       string `json:"drive"`
+	DisplayName string `json:"display_name,omitempty"`
+	SyncDir     string `json:"sync_dir"`
+	Added       bool   `json:"added"`
+}
+
+// finishDriveAdd tells a running sync about the new drive and, under --json,
+// prints the result.
+func finishDriveAdd(ctx context.Context, cc *CLIContext, result driveAddResult, err error) error {
 	if err != nil {
 		return err
 	}
 	notifyDaemonIfRunning(ctx, cc)
+
+	if cc.Flags.JSON {
+		return writeJSONDocument(cc.Output(), result)
+	}
+
 	return nil
 }
 
@@ -108,7 +148,7 @@ func defaultDriveAddDurableOps() driveAddDurableOps {
 // addNewDrive adds a new drive to the config with a computed default sync_dir.
 // If the drive already exists, reports it as already configured. Token
 // existence is verified as a precondition before writing config.
-func addNewDrive(w io.Writer, cfgPath string, cid driveid.CanonicalID, logger *slog.Logger) error {
+func addNewDrive(w io.Writer, cfgPath string, cid driveid.CanonicalID, logger *slog.Logger) (driveAddResult, error) {
 	return addNewDriveWithOps(w, cfgPath, cid, logger, defaultDriveAddDurableOps())
 }
 
@@ -118,32 +158,32 @@ func addNewDriveWithOps(
 	cid driveid.CanonicalID,
 	logger *slog.Logger,
 	ops driveAddDurableOps,
-) error {
+) (driveAddResult, error) {
 	// Verify a token exists for this drive's account.
 	tokenPath := config.DriveTokenPath(cid)
 	if tokenPath == "" {
-		return fmt.Errorf("cannot determine data directory for %s", cid.Email())
+		return driveAddResult{}, fmt.Errorf("cannot determine data directory for %s", cid.Email())
 	}
 
 	if !managedPathExists(tokenPath) {
-		return fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
+		return driveAddResult{}, fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
 	}
 
 	dataDir := config.DefaultDataDir()
 	priorCatalogDrive, hadPriorCatalogDrive, err := loadExistingCatalogDrive(dataDir, cid)
 	if err != nil {
-		return fmt.Errorf("loading existing catalog drive: %w", err)
+		return driveAddResult{}, fmt.Errorf("loading existing catalog drive: %w", err)
 	}
 
 	ensureResult, err := config.EnsureDriveInConfigDetailed(cfgPath, cid, logger)
 	if err != nil {
-		return fmt.Errorf("adding drive to config: %w", err)
+		return driveAddResult{}, fmt.Errorf("adding drive to config: %w", err)
 	}
 	if ensureResult.Added {
 		driveDisplayName := config.DefaultDisplayName(cid)
 		if err := ops.registerDrive(dataDir, cid, driveDisplayName); err != nil {
 			rollbackDriveAddConfig(cfgPath, cid, ensureResult, logger, "drive add rollback failed to restore config")
-			return fmt.Errorf("updating catalog: %w", err)
+			return driveAddResult{}, fmt.Errorf("updating catalog: %w", err)
 		}
 	}
 
@@ -160,15 +200,16 @@ func addNewDriveWithOps(
 			rollbackDriveAddCatalog(dataDir, cid, priorCatalogDrive, hadPriorCatalogDrive, logger,
 				"drive add rollback failed to restore catalog")
 		}
-		return fmt.Errorf("creating sync directory: %w", err)
+		return driveAddResult{}, fmt.Errorf("creating sync directory: %w", err)
 	}
 
+	result := driveAddResult{Drive: cid.String(), SyncDir: syncDir, Added: ensureResult.Added}
 	if !ensureResult.Added {
-		return writef(w, "Drive %s is already configured.\n", cid.String())
+		return result, writef(w, "Drive %s is already configured.\n", cid.String())
 	}
 
-	driveDisplayName := config.DefaultDisplayName(cid)
-	return writef(w, "Added drive %s (%s) -> %s\n", driveDisplayName, cid.String(), syncDir)
+	result.DisplayName = config.DefaultDisplayName(cid)
+	return result, writef(w, "Added drive %s (%s) -> %s\n", result.DisplayName, cid.String(), syncDir)
 }
 
 func rollbackDriveAddConfig(
@@ -309,7 +350,7 @@ func addSharedDrive(
 	preResolvedName string,
 	logger *slog.Logger,
 	runtime *driveops.SessionRuntime,
-) error {
+) (driveAddResult, error) {
 	return addSharedDriveWithOps(ctx, cfgPath, w, cid, preResolvedName, logger, runtime, defaultDriveAddDurableOps())
 }
 
@@ -322,32 +363,33 @@ func addSharedDriveWithOps(
 	logger *slog.Logger,
 	runtime *driveops.SessionRuntime,
 	ops driveAddDurableOps,
-) error {
+) (driveAddResult, error) {
 	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return driveAddResult{}, fmt.Errorf("loading config: %w", err)
 	}
 
-	if _, exists := cfg.Drives[cid]; exists {
-		return writef(w, "Drive %s is already configured.\n", cid.String())
+	if existing, exists := cfg.Drives[cid]; exists {
+		result := driveAddResult{Drive: cid.String(), DisplayName: existing.DisplayName, SyncDir: existing.SyncDir}
+		return result, writef(w, "Drive %s is already configured.\n", cid.String())
 	}
 
 	// Shared drives don't have their own token — find the parent account.
 	parentCID, err := config.LoadAccountCanonicalIDByEmail(config.DefaultDataDir(), cid.Email())
 	if err != nil {
-		return fmt.Errorf("loading catalog owner: %w", err)
+		return driveAddResult{}, fmt.Errorf("loading catalog owner: %w", err)
 	}
 	if parentCID.IsZero() {
-		return fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
+		return driveAddResult{}, fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
 	}
 
 	tokenPath := config.DriveTokenPath(parentCID)
 	if tokenPath == "" {
-		return fmt.Errorf("cannot determine data directory for %s", cid.Email())
+		return driveAddResult{}, fmt.Errorf("cannot determine data directory for %s", cid.Email())
 	}
 
 	if !managedPathExists(tokenPath) {
-		return fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
+		return driveAddResult{}, fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
 	}
 
 	displayName := preResolvedName
@@ -365,31 +407,32 @@ func addSharedDriveWithOps(
 	syncDir := config.BaseSyncDir(cid, "", displayName)
 	priorCatalogDrive, hadPriorCatalogDrive, err := loadExistingCatalogDrive(config.DefaultDataDir(), cid)
 	if err != nil {
-		return fmt.Errorf("loading existing catalog drive: %w", err)
+		return driveAddResult{}, fmt.Errorf("loading existing catalog drive: %w", err)
 	}
 
 	dataDir := config.DefaultDataDir()
 	if err := ops.registerSharedDrive(dataDir, cid, parentCID, displayName); err != nil {
-		return fmt.Errorf("updating catalog: %w", err)
+		return driveAddResult{}, fmt.Errorf("updating catalog: %w", err)
 	}
 
 	if err := config.AppendDriveSection(cfgPath, cid, syncDir); err != nil {
 		rollbackSharedDriveAdd(cfgPath, cid, priorCatalogDrive, hadPriorCatalogDrive, nil, logger)
-		return fmt.Errorf("writing drive config: %w", err)
+		return driveAddResult{}, fmt.Errorf("writing drive config: %w", err)
 	}
 
 	expectedDrive := &config.Drive{SyncDir: syncDir}
 	if err := config.SetDriveKey(cfgPath, cid, "display_name", displayName); err != nil {
 		rollbackSharedDriveAdd(cfgPath, cid, priorCatalogDrive, hadPriorCatalogDrive, expectedDrive, logger)
-		return fmt.Errorf("writing display_name to config: %w", err)
+		return driveAddResult{}, fmt.Errorf("writing display_name to config: %w", err)
 	}
 	expectedDrive.DisplayName = displayName
 	if err := materializeDriveSyncDir(syncDir); err != nil {
 		rollbackSharedDriveAdd(cfgPath, cid, priorCatalogDrive, hadPriorCatalogDrive, expectedDrive, logger)
-		return fmt.Errorf("creating sync directory: %w", err)
+		return driveAddResult{}, fmt.Errorf("creating sync directory: %w", err)
 	}
 
-	return writef(w, "Added drive %s (%s) -> %s\n", displayName, cid.String(), syncDir)
+	result := driveAddResult{Drive: cid.String(), DisplayName: displayName, SyncDir: syncDir, Added: true}
+	return result, writef(w, "Added drive %s (%s) -> %s\n", displayName, cid.String(), syncDir)
 }
 
 func loadExistingCatalogDrive(
@@ -538,16 +581,16 @@ func addSharedDriveByName(
 	ctx context.Context,
 	cc *CLIContext,
 	selector string,
-) error {
+) (driveAddResult, error) {
 	logger := cc.Logger
 	cfg, err := config.LoadOrDefault(cc.CfgPath, logger)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return driveAddResult{}, fmt.Errorf("loading config: %w", err)
 	}
 
 	snapshot, err := loadAccountViewSnapshotWithBestEffortIdentityRefresh(ctx, cc)
 	if err != nil {
-		return err
+		return driveAddResult{}, err
 	}
 
 	discovery := discoverSharedTargets(ctx, cc, filterAccountViews(snapshot.Accounts, cc.Flags.Account))
@@ -555,14 +598,14 @@ func addSharedDriveByName(
 
 	switch len(matches) {
 	case 0:
-		return sharedDiscoveryNoMatchesError(selector, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)
+		return driveAddResult{}, sharedDiscoveryNoMatchesError(selector, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)
 
 	case 1:
-		return addSharedDrive(ctx, cc.CfgPath, cc.Output(), matches[0].cid, matches[0].displayName, logger, cc.runtime())
+		return addSharedDrive(ctx, cc.CfgPath, cc.resultWriter(), matches[0].cid, matches[0].displayName, logger, cc.runtime())
 
 	default:
 		if err := writef(cc.Status(), "Multiple shared folders match %q — be more specific:\n\n", selector); err != nil {
-			return err
+			return driveAddResult{}, err
 		}
 
 		for i := range matches {
@@ -585,17 +628,17 @@ func addSharedDriveByName(
 				viaInfo,
 				matches[i].cid.String(),
 			); err != nil {
-				return err
+				return driveAddResult{}, err
 			}
 		}
 
 		// Nothing was added, so this is a failure for scripts, and the list
 		// is guidance rather than the command's result: stderr.
 		if err := writeln(cc.Status(), "\nRun 'onedrive-go drive add <canonical-id>' to add a specific drive."); err != nil {
-			return err
+			return driveAddResult{}, err
 		}
 
-		return fmt.Errorf("%d shared folders match %q; nothing was added", len(matches), selector)
+		return driveAddResult{}, fmt.Errorf("%d shared folders match %q; nothing was added", len(matches), selector)
 	}
 }
 

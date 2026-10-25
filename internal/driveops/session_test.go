@@ -170,7 +170,7 @@ func TestSessionRuntime_ZeroDriveID(t *testing.T) {
 
 	_, err = p.InteractiveSession(t.Context(), mount)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "drive ID not resolved")
+	assert.Contains(t, err.Error(), "doesn't know which OneDrive to use for test@example.com")
 }
 
 // --- Token caching ---

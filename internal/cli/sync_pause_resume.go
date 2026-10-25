@@ -42,20 +42,63 @@ func runPauseCommand(ctx context.Context, cc *CLIContext, now func() time.Time, 
 		return fmt.Errorf("setting paused flag: %w", err)
 	}
 
+	result := pauseJSONOutput{Drive: cid.String(), Paused: true}
+
 	if duration > 0 {
 		until := now().Add(duration)
 		if err := config.SetDriveKey(cc.CfgPath, cid, "paused_until", until.Format(time.RFC3339)); err != nil {
 			return fmt.Errorf("setting paused_until: %w", err)
 		}
 
-		cc.Statusf("Paused %s until %s.\n", configuredDriveLabel(cid, &drive), until.Local().Format("Mon Jan 2 15:04"))
-	} else {
+		result.PausedUntil = until.UTC().Format(time.RFC3339)
+		if !cc.Flags.JSON {
+			cc.Statusf("Paused %s until %s.\n", configuredDriveLabel(cid, &drive), until.Local().Format("Mon Jan 2 15:04"))
+		}
+	} else if !cc.Flags.JSON {
 		cc.Statusf("Paused %s until you run 'onedrive-go resume'.\n", configuredDriveLabel(cid, &drive))
 	}
 
 	notifyDaemon(ctx, cc)
 
+	if cc.Flags.JSON {
+		return writeJSONDocument(cc.Output(), result)
+	}
+
 	return nil
+}
+
+// pauseJSONOutput is `pause --json`: the drive and the pause now recorded for
+// it. paused_until is omitted for a pause that lasts until `resume`.
+type pauseJSONOutput struct {
+	Drive       string `json:"drive"`
+	Paused      bool   `json:"paused"`
+	PausedUntil string `json:"paused_until,omitempty"`
+}
+
+// resumeJSONOutput is `resume --json`: one entry per drive the command looked
+// at, saying what it did there.
+type resumeJSONOutput struct {
+	Drives []resumeJSONDrive `json:"drives"`
+}
+
+type resumeJSONDrive struct {
+	Drive  string        `json:"drive"`
+	Result resumeOutcome `json:"result"`
+	Error  string        `json:"error,omitempty"`
+}
+
+// resumeOutcome says what resume did to one drive.
+type resumeOutcome string
+
+const (
+	resumeOutcomeResumed      resumeOutcome = "resumed"
+	resumeOutcomeExpiredPause resumeOutcome = "expired_pause_cleared"
+	resumeOutcomeNotPaused    resumeOutcome = "not_paused"
+	resumeOutcomeResumeFailed resumeOutcome = "failed"
+)
+
+func (o resumeOutcome) cleared() bool {
+	return o == resumeOutcomeResumed || o == resumeOutcomeExpiredPause
 }
 
 func runResumeCommand(ctx context.Context, cc *CLIContext, now func() time.Time) error {
@@ -82,26 +125,24 @@ func resumeSingleDriveWithNow(ctx context.Context, cc *CLIContext, now func() ti
 		return fmt.Errorf("choosing the drive to resume: %w", err)
 	}
 
-	if !d.IsPaused(now()) {
-		if d.Paused != nil && *d.Paused {
-			if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
-				return err
-			}
-
-			cc.Statusf("Drive %s: expired timed pause cleared\n", cid.String())
-			return nil
-		}
-
-		cc.Statusf("Drive %s is not paused\n", cid.String())
-		return nil
-	}
-
-	if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
+	outcome, err := resumeOneDrive(cc, now, cid, &d)
+	if err != nil {
 		return err
 	}
 
-	cc.Statusf("Drive %s resumed\n", cid.String())
-	notifyDaemon(ctx, cc)
+	if outcome == resumeOutcomeNotPaused && !cc.Flags.JSON {
+		cc.Statusf("Drive %s is not paused\n", cid.String())
+	}
+
+	if outcome == resumeOutcomeResumed {
+		notifyDaemon(ctx, cc)
+	}
+
+	if cc.Flags.JSON {
+		return writeJSONDocument(cc.Output(), resumeJSONOutput{
+			Drives: []resumeJSONDrive{{Drive: cid.String(), Result: outcome}},
+		})
+	}
 
 	return nil
 }
@@ -119,6 +160,7 @@ func resumeAllDrivesWithNow(ctx context.Context, cc *CLIContext, now func() time
 	}
 
 	resumed := 0
+	report := resumeJSONOutput{Drives: []resumeJSONDrive{}}
 
 	var errs []error
 
@@ -129,14 +171,18 @@ func resumeAllDrivesWithNow(ctx context.Context, cc *CLIContext, now func() time
 	for _, cid := range sortedDriveCanonicalIDs(cfg.Drives) {
 		drive := cfg.Drives[cid]
 
-		cleared, err := resumeOneDrive(cc, now, cid, &drive)
+		outcome, err := resumeOneDrive(cc, now, cid, &drive)
 		if err != nil {
 			errs = append(errs, err)
+			report.Drives = append(report.Drives, resumeJSONDrive{
+				Drive: cid.String(), Result: resumeOutcomeResumeFailed, Error: err.Error(),
+			})
 
 			continue
 		}
 
-		if cleared {
+		report.Drives = append(report.Drives, resumeJSONDrive{Drive: cid.String(), Result: outcome})
+		if outcome.cleared() {
 			resumed++
 		}
 	}
@@ -145,11 +191,19 @@ func resumeAllDrivesWithNow(ctx context.Context, cc *CLIContext, now func() time
 		notifyDaemon(ctx, cc)
 	}
 
+	// Under --json the document reports every drive, including the ones that
+	// failed; the exit status still says the run failed.
+	if cc.Flags.JSON {
+		if err := writeJSONDocument(cc.Output(), report); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
 
-	if resumed == 0 {
+	if resumed == 0 && !cc.Flags.JSON {
 		cc.Statusf("No paused drives found\n")
 	}
 
@@ -168,35 +222,40 @@ func sortedDriveCanonicalIDs(drives map[driveid.CanonicalID]config.Drive) []driv
 	return ids
 }
 
-// resumeOneDrive clears any pause on a single drive, reporting whether it
-// cleared one.
+// resumeOneDrive clears any pause on a single drive and reports what it did.
+// The human confirmation is printed here; under --json the caller's document
+// carries the outcome instead.
 func resumeOneDrive(
 	cc *CLIContext,
 	now func() time.Time,
 	cid driveid.CanonicalID,
 	drive *config.Drive,
-) (bool, error) {
+) (resumeOutcome, error) {
 	if !drive.IsPaused(now()) {
 		if drive.Paused == nil || !*drive.Paused {
-			return false, nil
+			return resumeOutcomeNotPaused, nil
 		}
 
 		if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
-			return false, fmt.Errorf("clearing expired pause for %s: %w", cid.String(), err)
+			return resumeOutcomeResumeFailed, fmt.Errorf("clearing expired pause for %s: %w", cid.String(), err)
 		}
 
-		cc.Statusf("Drive %s: expired timed pause cleared\n", cid.String())
+		if !cc.Flags.JSON {
+			cc.Statusf("Drive %s: expired timed pause cleared\n", cid.String())
+		}
 
-		return true, nil
+		return resumeOutcomeExpiredPause, nil
 	}
 
 	if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
-		return false, fmt.Errorf("resuming %s: %w", cid.String(), err)
+		return resumeOutcomeResumeFailed, fmt.Errorf("resuming %s: %w", cid.String(), err)
 	}
 
-	cc.Statusf("Drive %s resumed\n", cid.String())
+	if !cc.Flags.JSON {
+		cc.Statusf("Drive %s resumed\n", cid.String())
+	}
 
-	return true, nil
+	return resumeOutcomeResumed, nil
 }
 
 // configuredDriveLabel names a drive the way a person configured it: its display name

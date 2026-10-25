@@ -1,6 +1,6 @@
 # Graph Client
 
-GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
+GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/response_body.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
 
 Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.6.2 [verified], R-1.7 [verified], R-1.8 [verified], R-1.2.5 [verified], R-1.3.5 [verified], R-3.6.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [verified], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [verified], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.8.17 [verified]
 
@@ -319,6 +319,27 @@ second error classification scheme. Callers still branch on the unwrapped
 terminal cause (`ErrForbidden`, `ErrNotFound`, `*GraphError`, and so on), then
 optionally project the attached retry evidence through `ExtractQuirkEvidence`
 when they intentionally degrade or summarize verifier output.
+
+Each documented quirk has an exported name constant (`graph.Quirk*`, for
+example `QuirkSimpleUploadCreateTransient404`). That name is the stable
+identifier: it is `QuirkRetryError.Quirk`, and it is the `graph.QuirkLogKey`
+(`graph_quirk`) field on the one debug record logged when a budget runs out
+(per-attempt records use `quirk`). Code and tests that must recognize a quirk
+use `errors.As` in process or that log field across a process boundary
+(the live-test fixture classifier reads it from `--debug` stderr), never the
+error text. `QuirkRetryError.Error()` is plain words for the symptom ("OneDrive
+kept reporting the upload's destination folder as missing, even after 7
+tries: ...") and deliberately does not contain the quirk name, so rewording it
+cannot break a classifier.
+
+`dispatchRequest` wraps every response body so a read failure other than
+`io.EOF` carries `*ResponseReadError` (cause reachable through `Unwrap`). It
+tells "the connection dropped while OneDrive was answering" apart from a local
+write failure returned by the same `io.Copy`, which net/http cannot: it reports
+body read failures without the `*url.Error` it uses before the response.
+`CheckSavedLogin` validates a token file without building a token source or
+logging, for health checks that must not repeat the "loaded saved token" record
+of the real `TokenSourceFromPath` load.
 
 This package owns the wire-to-domain normalization step for remote failures:
 raw HTTP and Graph payloads become `GraphError` values plus sentinels such as

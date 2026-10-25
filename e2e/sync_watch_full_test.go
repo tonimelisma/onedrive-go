@@ -27,8 +27,9 @@ import (
 // daemonHandle bundles the command and stderr buffer for daemon tests that
 // need to poll daemon output (e.g., waiting for pause acknowledgment).
 type daemonHandle struct {
-	Cmd    *exec.Cmd
-	Stderr *syncBuffer
+	Cmd        *exec.Cmd
+	Stderr     *syncBuffer
+	EventsPath string // structured debug-event stream; see ensureDebugEvents
 }
 
 // startDaemon starts the sync daemon as a background process and waits for
@@ -54,6 +55,7 @@ func startDaemonWithStderr(
 	daemonArgs := []string{"--config", cfgPath, "--debug"}
 	daemonArgs = append(daemonArgs, args...)
 
+	env, eventsPath := ensureDebugEvents(t, env)
 	cmd := makeCmd(daemonArgs, env)
 
 	var stdout syncBuffer
@@ -72,9 +74,9 @@ func startDaemonWithStderr(
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
-	waitForDaemonReady(t, stderr, 30*time.Second)
+	waitForDaemonReady(t, eventsPath, 30*time.Second)
 
-	return &daemonHandle{Cmd: cmd, Stderr: stderr}
+	return &daemonHandle{Cmd: cmd, Stderr: stderr, EventsPath: eventsPath}
 }
 
 // daemonPollTimeout is the default timeout for polling in daemon tests.
@@ -171,7 +173,7 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 		"--drive", resolveDriveSelection(env, ""), "sync", "--watch")
 
 	// Wait for fsnotify watches to be established before creating files.
-	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
+	waitForObserverStarted(t, h.EventsPath, "local", 30*time.Second)
 
 	// Create file and wait for it to sync.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -240,7 +242,7 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 
 	// Wait for fsnotify watches to be established before creating files.
-	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
+	waitForObserverStarted(t, h.EventsPath, "local", 30*time.Second)
 
 	// Create file.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -296,7 +298,7 @@ func TestE2E_SyncWatch_FileDeletion(t *testing.T) {
 		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 
 	// Wait for fsnotify watches to be established before creating files.
-	waitForStderrContains(t, h.Stderr, "local observer starting watch", 30*time.Second)
+	waitForObserverStarted(t, h.EventsPath, "local", 30*time.Second)
 
 	// Create file.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -416,7 +418,7 @@ func TestE2E_SyncWatch_LargeFile(t *testing.T) {
 
 	// Poll until the file appears remotely with correct size.
 	remotePath := "/" + testFolder + "/large-watch.bin"
-	waitForRemoteReadContains(t, cfgPath, env, "", fmt.Sprintf("%d bytes", fileSize), daemonPollTimeout, "stat", remotePath)
+	waitForRemoteStatSize(t, cfgPath, env, "", remotePath, int64(fileSize), daemonPollTimeout)
 
 	// Download and verify byte-for-byte integrity.
 	downloadDir := t.TempDir()
@@ -548,11 +550,10 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 	cmd := h.Cmd
 
-	// Pause for 5 seconds.
+	// Pause for 5 seconds; the synchronous reload answer proves the daemon
+	// applied it.
 	runCLIWithConfig(t, cfgPath, env, "pause", "5s")
-
-	// Poll stderr for pause acknowledgment.
-	waitForStderrContains(t, h.Stderr, "paused", 10*time.Second)
+	reloadDaemonConfig(t, env)
 
 	// Create local file while paused.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -578,7 +579,7 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	// Wait for pause to expire (5s total from pause command), then use the
 	// control socket to trigger clearExpiredPauses.
 	sleepForLiveTestPropagation(4 * time.Second)
-	postControlSocket(t, env, "/v1/reload")
+	reloadDaemonConfig(t, env)
 
 	// Poll until file appears remotely (daemon should now be unpaused).
 	waitForRemoteReadContains(t, cfgPath, env, "", "paused-file.txt", daemonPollTimeout, "stat", remotePath)

@@ -287,6 +287,15 @@ No changes detected
 
 ## 7. Failures
 
+The blocks below are the audit-time output at `78fdc5d` and are kept as
+evidence; none of them is current. Today the per-attempt and final retry
+records (`request failed after all retries`, `OneDrive still unreachable,
+giving up`) are DEBUG only; a network outage prints one `Warning: can't
+reach OneDrive, retrying` when it starts and then one plain `Error:` line; an
+expired sign-in prints `Authentication required: ...` with the login
+command. See [After the console-output increment](#after-the-console-output-increment)
+for the current text.
+
 **Not signed in** (`sync`, token file absent), exit 1:
 
 ```

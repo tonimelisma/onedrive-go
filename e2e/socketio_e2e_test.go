@@ -36,22 +36,6 @@ func (sb *fastSyncBuffer) String() string {
 	return string(sb.buf)
 }
 
-func waitForFastDaemonReady(t *testing.T, stderr *fastSyncBuffer, timeout time.Duration) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		output := stderr.String()
-		if output != "" && (containsAny(output, "watch mode starting", "watch runner started", "watch setup complete")) {
-			return
-		}
-
-		sleepForLiveTestPropagation(500 * time.Millisecond)
-	}
-
-	require.FailNowf(t, "daemon did not become ready", "stderr so far: %s", stderr.String())
-}
-
 func containsAny(output string, targets ...string) bool {
 	for _, target := range targets {
 		if strings.Contains(output, target) {
@@ -68,6 +52,7 @@ func startFastDaemon(t *testing.T, cfgPath string, env map[string]string, args .
 	daemonArgs := []string{"--config", cfgPath, "--debug"}
 	daemonArgs = append(daemonArgs, args...)
 
+	env, eventsPath := ensureDebugEvents(t, env)
 	cmd := makeCmd(daemonArgs, env)
 	var stdout fastSyncBuffer
 	stderr := &fastSyncBuffer{}
@@ -84,7 +69,7 @@ func startFastDaemon(t *testing.T, cfgPath string, env map[string]string, args .
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
-	waitForFastDaemonReady(t, stderr, 30*time.Second)
+	waitForDaemonReady(t, eventsPath, 30*time.Second)
 	return cmd, stderr
 }
 

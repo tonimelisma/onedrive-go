@@ -42,7 +42,7 @@ func (c *Client) Drives(ctx context.Context) ([]Drive, error) {
 	c.logger.Debug("listing accessible drives")
 
 	return doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
-		name:   "drives-token-propagation",
+		name:   QuirkDrivesTokenPropagation,
 		policy: c.policies.driveDiscovery,
 		match:  isTransientDrivesDiscoveryError,
 	}, func() ([]Drive, error) {

@@ -80,6 +80,39 @@ func postControlSocket(t *testing.T, env map[string]string, requestPath string) 
 	require.NoError(t, lastErr, "post control socket %s", requestPath)
 }
 
+// reloadDaemonConfig asks the watch daemon to reload and returns once it
+// has. A reload is synchronous: the daemon answers only after it applied the
+// config (or with 422 if it kept its old settings, which postControlSocket
+// treats as a failure). That answer, not a log line, is how a test knows a
+// config change such as `pause` or a new drive is in effect.
+func reloadDaemonConfig(t *testing.T, env map[string]string) {
+	t.Helper()
+
+	postControlSocket(t, env, synccontrol.PathReload)
+}
+
+// waitForControlSocketMount waits until the watch daemon reports mount (a
+// canonical drive ID) among the mounts it is running.
+func waitForControlSocketMount(t *testing.T, env map[string]string, mount string, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var status synccontrol.StatusResponse
+	for time.Now().Before(deadline) {
+		status = getControlSocketStatus(t, env)
+		for _, running := range status.Mounts {
+			if strings.EqualFold(running, mount) {
+				return
+			}
+		}
+
+		sleepForLiveTestPropagation(500 * time.Millisecond)
+	}
+
+	require.Failf(t, "daemon is not running the mount",
+		"after %v waiting for %q; control socket reports mounts %v", timeout, mount, status.Mounts)
+}
+
 func getControlSocketStatus(t *testing.T, env map[string]string) synccontrol.StatusResponse {
 	t.Helper()
 

@@ -668,14 +668,14 @@ func buildConfiguredStatusDrive(
 		return statusDrive{}
 	}
 
-	// The same rule as drive list: a drive with no state database has never
-	// synced and must not read as up to date.
+	state, syncState := configuredDriveState(ctx, cid, drive, syncQ)
 	status := statusDrive{
 		InternalID:     cid.String(),
 		Kind:           statusDriveKind(cid),
 		Name:           statusConfiguredDriveName(cid, drive, acct),
 		Folder:         config.EffectiveSyncDir(cfg, cid, drive.SyncDir, slog.New(slog.DiscardHandler)),
-		State:          configuredDriveListState(cid, drive.IsPaused(time.Now())),
+		State:          state,
+		SyncState:      syncState,
 		MountID:        cid.String(),
 		MountRef:       config.MountRef(cid.String()),
 		ProjectionKind: statusProjectionStandalone,
@@ -683,12 +683,29 @@ func buildConfiguredStatusDrive(
 		DisplayName:    statusConfiguredDriveName(cid, drive, acct),
 		SyncDir:        drive.SyncDir,
 	}
-	if syncQ != nil {
-		status.SyncState = syncQ.QuerySyncState(ctx, config.DriveStatePath(cid))
-	}
-	finalizeStatusDriveState(&status)
 
 	return status
+}
+
+// configuredDriveState is the one derivation of a configured drive's state,
+// shared by status and drive list so they never disagree: paused, else not
+// synced when there is no state database (it has never synced here, so "up to
+// date" would be false), then refined by what the state database records
+// (issues, pending) through finalizeStatusDriveState. It also returns the
+// sync state it read, for status to render.
+func configuredDriveState(
+	ctx context.Context,
+	cid driveid.CanonicalID,
+	drive *config.Drive,
+	syncQ syncStateQuerier,
+) (string, *syncStateInfo) {
+	probe := statusDrive{State: configuredDriveListState(cid, drive.IsPaused(time.Now()))}
+	if syncQ != nil {
+		probe.SyncState = syncQ.QuerySyncState(ctx, config.DriveStatePath(cid))
+	}
+	finalizeStatusDriveState(&probe)
+
+	return probe.State, probe.SyncState
 }
 
 func buildChildStatusDrive(

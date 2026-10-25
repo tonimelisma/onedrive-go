@@ -271,7 +271,8 @@ func TestE2E_Orchestrator_WatchSimultaneous(t *testing.T) {
 		"--debug",
 		"sync", "--watch", "--upload-only",
 	}
-	cmd := makeCmd(daemonArgs, env)
+	daemonEnv, eventsPath := ensureDebugEvents(t, env)
+	cmd := makeCmd(daemonArgs, daemonEnv)
 
 	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
@@ -288,7 +289,7 @@ func TestE2E_Orchestrator_WatchSimultaneous(t *testing.T) {
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
-	waitForDaemonReady(t, &stderr, 30*time.Second)
+	waitForDaemonReady(t, eventsPath, 30*time.Second)
 
 	// Create files in each sync dir.
 	localDir1 := filepath.Join(syncDir1, testFolder1)
@@ -333,7 +334,8 @@ func TestE2E_Orchestrator_WatchDriveIsolation(t *testing.T) {
 		"--debug",
 		"sync", "--watch", "--upload-only",
 	}
-	cmd := makeCmd(daemonArgs, env)
+	daemonEnv, eventsPath := ensureDebugEvents(t, env)
+	cmd := makeCmd(daemonArgs, daemonEnv)
 
 	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
@@ -350,7 +352,7 @@ func TestE2E_Orchestrator_WatchDriveIsolation(t *testing.T) {
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
-	waitForDaemonReady(t, &stderr, 30*time.Second)
+	waitForDaemonReady(t, eventsPath, 30*time.Second)
 
 	// Create file only in drive1's sync dir.
 	localDir1 := filepath.Join(syncDir1, testFolder)
@@ -419,7 +421,8 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 		"--debug",
 		"sync", "--watch", "--upload-only",
 	}
-	cmd := makeCmd(daemonArgs, env)
+	daemonEnv, eventsPath := ensureDebugEvents(t, env)
+	cmd := makeCmd(daemonArgs, daemonEnv)
 
 	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
@@ -436,7 +439,7 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
-	waitForDaemonReady(t, &stderr, 30*time.Second)
+	waitForDaemonReady(t, eventsPath, 30*time.Second)
 
 	// Create files in both sync dirs.
 	localDir1 := filepath.Join(syncDir1, testFolder1)

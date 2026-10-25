@@ -155,13 +155,16 @@ func formatAPITime(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04:05Z")
 }
 
-// formatExactTime returns the full UTC timestamp for text output.
+// formatExactTime returns the full timestamp for text output, in the user's
+// local time zone like every other time the CLI prints (ls, status), with the
+// zone named so the exact value is unambiguous. --json output keeps UTC
+// through formatAPITime.
 func formatExactTime(t time.Time) string {
 	if t.IsZero() {
 		return unknownTimeLabel
 	}
 
-	return t.Format("2006-01-02 15:04:05 UTC")
+	return t.Local().Format("2006-01-02 15:04:05 MST")
 }
 
 // printTable writes aligned columns to the given writer.

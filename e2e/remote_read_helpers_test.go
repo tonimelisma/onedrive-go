@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -204,6 +205,41 @@ func waitForRemoteReadContains(
 			return err == nil && strings.Contains(stdout, expected)
 		},
 		args...,
+	)
+}
+
+// waitForRemoteStatSize waits until `stat --json` reports remotePath at
+// size bytes. It reads the JSON document rather than the human "N bytes"
+// text, so the wait cannot break when stat's human formatting changes.
+func waitForRemoteStatSize(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	remotePath string,
+	size int64,
+	timeout time.Duration,
+) {
+	t.Helper()
+
+	pollRemoteEventually(
+		t,
+		cfgPath,
+		env,
+		driveID,
+		timeout,
+		timingKindRemoteWriteVisibility,
+		fmt.Sprintf("remote stat size %d for %s", size, remotePath),
+		func(stdout, _ string, err error) bool {
+			if err != nil {
+				return false
+			}
+			var stat struct {
+				Size int64 `json:"size"`
+			}
+			return json.Unmarshal([]byte(stdout), &stat) == nil && stat.Size == size
+		},
+		"--json", "stat", remotePath,
 	)
 }
 

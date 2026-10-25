@@ -354,6 +354,11 @@ Static verification is a first-class architectural constraint, not a best-effort
   failed CI on a branch that had just verified clean. `devtool verify` now
   reads the pin out of the workflow, so the two cannot drift apart through a
   second copy of the number, and refuses to lint against a different version.
+- `synctree` error text names paths inside the sync root relative to it
+  (`stating docs/a.txt: ...`), matching the rest of the user-facing output
+  (cli-output-guidelines §5); only the sync folder itself is named by its full
+  path. Each operation names its path once (`nameForMessage`); the absolute
+  path is used only for the not-exist/unsafe-path re-check (`absForCheck`).
 - Path containment failures carry `synctree.ErrUnsafePath`. They are the
   definition of an unsafe path, and callers classify on that sentinel to tell a
   permanent path problem from a transient one: shortcut-root planning treats it

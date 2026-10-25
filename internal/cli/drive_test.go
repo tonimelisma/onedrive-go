@@ -99,7 +99,7 @@ func TestNewDriveSearchCmd_HasRunE(t *testing.T) {
 // Validates: R-3.3.2
 func TestBuildConfiguredDriveEntries_Empty(t *testing.T) {
 	cfg := config.DefaultConfig()
-	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
+	entries := buildConfiguredDriveEntries(t.Context(), cfg, nil, testDriveLogger(t))
 	assert.Nil(t, entries)
 }
 
@@ -112,7 +112,7 @@ func TestBuildConfiguredDriveEntries_OneDrive_WithSyncDir(t *testing.T) {
 		SyncDir: "~/OneDrive",
 	}
 
-	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
+	entries := buildConfiguredDriveEntries(t.Context(), cfg, nil, testDriveLogger(t))
 	require.Len(t, entries, 1)
 	assert.Equal(t, "personal:user@example.com", entries[0].CanonicalID)
 	assert.Equal(t, "user@example.com", entries[0].DisplayName)
@@ -134,9 +134,44 @@ func TestBuildConfiguredDriveEntries_WithStateDB_IsUpToDate(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Drives[cid] = config.Drive{SyncDir: "~/OneDrive"}
 
-	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
+	entries := buildConfiguredDriveEntries(t.Context(), cfg, nil, testDriveLogger(t))
 	require.Len(t, entries, 1)
 	assert.Equal(t, driveStateReady, entries[0].State)
+}
+
+// drive list and status derive a drive's state the same way, so a drive with
+// recorded issues reads "issues" in drive list exactly when status says
+// "Issues" (drive list used to say "up to date" for it).
+//
+// Validates: R-6.6.25
+func TestBuildConfiguredDriveEntries_StateMatchesStatus(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	statePath := config.DriveStatePath(cid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
+	require.NoError(t, os.WriteFile(statePath, nil, 0o600))
+
+	cfg := config.DefaultConfig()
+	cfg.Drives[cid] = config.Drive{SyncDir: "~/OneDrive"}
+	drive := cfg.Drives[cid]
+
+	for name, syncState := range map[string]*syncStateInfo{
+		"issues":     {ConditionCount: 9},
+		"pending":    {RemoteDrift: 2},
+		"up to date": {},
+	} {
+		syncQ := &mockSyncStateQuerier{state: syncState}
+		entries := buildConfiguredDriveEntries(t.Context(), cfg, syncQ, testDriveLogger(t))
+		require.Len(t, entries, 1)
+
+		status := buildConfiguredStatusDrive(t.Context(), cfg, cid, &drive, &statusAccount{}, syncQ)
+		assert.Equal(t, status.State, entries[0].State, name)
+	}
+
+	entries := buildConfiguredDriveEntries(t.Context(), cfg, &mockSyncStateQuerier{state: &syncStateInfo{ConditionCount: 9}}, testDriveLogger(t))
+	assert.Equal(t, driveStateIssues, entries[0].State)
+	assert.Equal(t, "issues", driveStateLabel(entries[0].State))
 }
 
 // Validates: R-6.6.25
@@ -156,7 +191,7 @@ func TestBuildConfiguredDriveEntries_PausedDrive(t *testing.T) {
 		Paused:  &paused,
 	}
 
-	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
+	entries := buildConfiguredDriveEntries(t.Context(), cfg, nil, testDriveLogger(t))
 	require.Len(t, entries, 1)
 	assert.Equal(t, driveStatePaused, entries[0].State)
 }
@@ -167,7 +202,7 @@ func TestBuildConfiguredDriveEntries_MultipleDrives_Sorted(t *testing.T) {
 	cfg.Drives[driveid.MustCanonicalID("personal:zack@example.com")] = config.Drive{SyncDir: "~/OneDrive-Z"}
 	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = config.Drive{SyncDir: "~/OneDrive-A"}
 
-	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
+	entries := buildConfiguredDriveEntries(t.Context(), cfg, nil, testDriveLogger(t))
 	require.Len(t, entries, 2)
 	// Should be sorted by canonical ID.
 	assert.Equal(t, "business:alice@contoso.com", entries[0].CanonicalID)
@@ -181,7 +216,7 @@ func TestBuildConfiguredDriveEntries_NoSyncDir_ComputesDefault(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Drives[driveid.MustCanonicalID("personal:user@example.com")] = config.Drive{}
 
-	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
+	entries := buildConfiguredDriveEntries(t.Context(), cfg, nil, testDriveLogger(t))
 	require.Len(t, entries, 1)
 	// Without a catalog account entry, personal defaults to "~/OneDrive".
 	assert.Equal(t, "~/OneDrive", entries[0].SyncDir)
@@ -203,7 +238,7 @@ func TestBuildConfiguredDriveEntries_NoSyncDir_WithCatalogAccount(t *testing.T) 
 	cfg := config.DefaultConfig()
 	cfg.Drives[bizCID] = config.Drive{}
 
-	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
+	entries := buildConfiguredDriveEntries(t.Context(), cfg, nil, testDriveLogger(t))
 	require.Len(t, entries, 1)
 	assert.Equal(t, "~/OneDrive - Contoso", entries[0].SyncDir)
 }
@@ -277,7 +312,7 @@ func TestBuildConfiguredDriveEntries_ExplicitDisplayName(t *testing.T) {
 		DisplayName: "My Personal Drive",
 	}
 
-	entries := buildConfiguredDriveEntries(cfg, testDriveLogger(t))
+	entries := buildConfiguredDriveEntries(t.Context(), cfg, nil, testDriveLogger(t))
 	require.Len(t, entries, 1)
 	assert.Equal(t, "My Personal Drive", entries[0].DisplayName)
 }
@@ -914,7 +949,7 @@ func TestAddNewDrive_NoToken(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:nobody@example.com")
 
-	err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	_, err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no token file")
 }
@@ -932,7 +967,7 @@ func TestAddNewDrive_WithToken(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
-	err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	_, err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.NoError(t, err)
 
 	// Verify config was updated with canonical ID and sync_dir.
@@ -961,7 +996,7 @@ func TestAddNewDrive_SyncDirCreateFailureRollsBackConfig(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	_, err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating sync directory")
 
@@ -985,7 +1020,7 @@ func TestAddNewDrive_CatalogMutationFailureRollsBackConfig(t *testing.T) {
 		return errors.New("catalog unavailable")
 	}
 
-	err := addNewDriveWithOps(io.Discard, cfgPath, cid, testDriveLogger(t), ops)
+	_, err := addNewDriveWithOps(io.Discard, cfgPath, cid, testDriveLogger(t), ops)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "updating catalog")
 
@@ -1010,7 +1045,7 @@ func TestAddNewDrive_SyncDirCreateFailureRollsBackBackfilledSyncDir(t *testing.T
 	require.NoError(t, os.WriteFile(cfgPath, []byte(`["personal:user@example.com"]
 `), 0o600))
 
-	err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	_, err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating sync directory")
 
@@ -1276,7 +1311,8 @@ sync_dir = "~/OneDrive-Shared/Test"
 	originalData, err := localpath.ReadFile(cfgPath)
 	require.NoError(t, err)
 
-	require.NoError(t, addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t), driveops.NewSessionRuntime(nil, "test-agent", testDriveLogger(t))))
+	_, err = addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t), driveops.NewSessionRuntime(nil, "test-agent", testDriveLogger(t)))
+	require.NoError(t, err)
 
 	updatedData, err := localpath.ReadFile(cfgPath)
 	require.NoError(t, err)
@@ -1294,7 +1330,7 @@ func TestAddSharedDrive_NoToken(t *testing.T) {
 	// Empty config — no primary drive to resolve token from.
 	require.NoError(t, os.WriteFile(cfgPath, []byte(""), 0o600))
 
-	err := addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t), driveops.NewSessionRuntime(nil, "test-agent", testDriveLogger(t)))
+	_, err := addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t), driveops.NewSessionRuntime(nil, "test-agent", testDriveLogger(t)))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no token file")
 }
@@ -1309,7 +1345,7 @@ func TestAddSharedDrive_CreatesSyncDir(t *testing.T) {
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_owner@example.com.json")
 	seedCatalogAccount(t, ownerCID, nil)
 
-	err := addSharedDrive(
+	_, err := addSharedDrive(
 		t.Context(),
 		cfgPath,
 		io.Discard,
@@ -1345,7 +1381,7 @@ func TestAddSharedDrive_ConfigWriteFailureRollsBackCatalogRegistration(t *testin
 		require.NoError(t, os.Chmod(cfgDir, 0o700))
 	})
 
-	err := addSharedDrive(
+	_, err := addSharedDrive(
 		t.Context(),
 		cfgPath,
 		io.Discard,
@@ -1394,7 +1430,7 @@ func TestAddSharedDrive_ConfigWriteFailurePreservesPreExistingCatalogDrive(t *te
 		require.NoError(t, os.Chmod(cfgDir, 0o700))
 	})
 
-	err := addSharedDrive(
+	_, err := addSharedDrive(
 		t.Context(),
 		cfgPath,
 		io.Discard,

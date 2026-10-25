@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"io/fs"
@@ -90,27 +91,61 @@ func networkErrorReason(err error) string {
 }
 
 // transportErrorReason covers network failures after the connection was
-// made: timeouts, TLS problems and dropped connections. It only applies to
-// errors that came from the HTTP transport (*url.Error), so a local file
-// timeout is never described as a OneDrive problem.
+// made: timeouts (including a response-header timeout), TLS problems, and
+// connections that dropped or were reset, HTTP/2 stream resets included. It
+// only applies to errors that came from the HTTP transport: a *url.Error
+// (before the response) or a *graph.ResponseReadError (while reading it). So
+// a local file timeout, or a disk error io.Copy returned during a download,
+// is never described as a OneDrive problem.
 func transportErrorReason(err error) string {
 	var urlErr *url.Error
-	if !errors.As(err, &urlErr) {
+	var readErr *graph.ResponseReadError
+	fromURL := errors.As(err, &urlErr)
+	if !fromURL && !errors.As(err, &readErr) {
 		return ""
 	}
 
-	var certErr *tls.CertificateVerificationError
-	var recordErr tls.RecordHeaderError
 	switch {
-	case urlErr.Timeout():
+	case fromURL && urlErr.Timeout(), !fromURL && isTimeout(readErr.Err):
 		return "OneDrive did not answer in time"
-	case errors.As(err, &certErr), errors.As(err, &recordErr):
+	case isTLSFailure(err):
 		return "the secure connection to OneDrive failed (" + innermostErrorText(err) + ")"
-	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF), errors.Is(err, syscall.ECONNRESET):
+	case isDroppedConnection(err):
 		return "the connection to OneDrive was interrupted"
 	default:
 		return ""
 	}
+}
+
+func isTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func isTLSFailure(err error) bool {
+	var certErr *tls.CertificateVerificationError
+	var recordErr tls.RecordHeaderError
+	var alertErr tls.AlertError
+	var authorityErr x509.UnknownAuthorityError
+	var hostnameErr x509.HostnameError
+	var invalidErr x509.CertificateInvalidError
+
+	return errors.As(err, &certErr) || errors.As(err, &recordErr) || errors.As(err, &alertErr) ||
+		errors.As(err, &authorityErr) || errors.As(err, &hostnameErr) || errors.As(err, &invalidErr)
+}
+
+// isDroppedConnection recognizes a connection that ended mid-exchange. net/http
+// does not export its HTTP/2 stream and connection errors, so those are
+// recognized by their fixed "stream error:" and "http2:" text.
+func isDroppedConnection(err error) bool {
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+
+	text := err.Error()
+
+	return strings.Contains(text, "stream error:") || strings.Contains(text, "http2: ")
 }
 
 // remoteFailureSubject returns the path a command recorded for its failure
