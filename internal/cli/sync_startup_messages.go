@@ -109,7 +109,7 @@ func formatWatchStartupError(err error) error {
 
 	failures := startupErr.Summary.SkippedResults()
 	if len(failures) == 1 {
-		return fmt.Errorf("%s", formatStartupResultMessage(&failures[0]))
+		return startupFailureError(formatStartupResultMessage(&failures[0]), failures)
 	}
 
 	parts := make([]string, 0, len(failures))
@@ -117,7 +117,28 @@ func formatWatchStartupError(err error) error {
 		parts = append(parts, formatStartupResultMessage(&failures[i]))
 	}
 
-	return fmt.Errorf("watch startup failed: %s", strings.Join(parts, "; "))
+	return startupFailureError("watch startup failed: "+strings.Join(parts, "; "), failures)
+}
+
+// startupFailureError keeps the drives' causes reachable for the exit status
+// (R-6.6.31) only when every failed drive failed for the same reason that a
+// restart cannot fix: all need sign-in, or all have invalid config. A mixed
+// set exits 1, because restarting may still bring the other drives up.
+func startupFailureError(message string, failures []multisync.MountStartupResult) error {
+	causes := make([]error, 0, len(failures))
+	allSignIn, allConfig := len(failures) > 0, len(failures) > 0
+	for i := range failures {
+		cause := failures[i].Err
+		causes = append(causes, cause)
+		allSignIn = allSignIn && cause != nil && isSignInRequired(cause)
+		allConfig = allConfig && cause != nil && errors.Is(cause, config.ErrInvalidConfig)
+	}
+
+	if allSignIn || allConfig {
+		return newPresentedError(message, errors.Join(causes...))
+	}
+
+	return errors.New(message)
 }
 
 func writeWatchStartWarnings(output io.Writer, warning multisync.StartupWarning) {

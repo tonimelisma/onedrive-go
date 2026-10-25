@@ -54,6 +54,39 @@ protect your real data during development, refuses to run unless
 
 Requires Go 1.24+.
 
+## Running Under systemd
+
+`sync --watch` supports `Type=notify` units: it reports `READY=1` once every
+drive that could start is watching, keeps a one-line `STATUS=` ("Watching
+~/OneDrive"), and answers `WatchdogSec=`. Under the journal its output carries
+priorities, so `journalctl -p warning` works. An example user unit is in
+[`contrib/systemd/onedrive-go.service`](contrib/systemd/onedrive-go.service):
+
+```ini
+[Service]
+Type=notify
+ExecStart=%h/.local/bin/onedrive-go sync --watch
+Restart=on-failure
+RestartSec=30s
+RestartPreventExitStatus=77 78
+WatchdogSec=2min
+```
+
+### Exit Status
+
+| Status | Meaning |
+| --- | --- |
+| 0 | Success, or `sync --watch` stopped by a signal |
+| 1 | Any other failure, including network, throttling and server errors; running again may succeed |
+| 2 | Command-line mistake (unknown command or flag, wrong arguments) |
+| 77 | Sign-in required: run `onedrive-go login` (EX_NOPERM) |
+| 78 | Invalid configuration: fix `config.toml` or `--drive` (EX_CONFIG) |
+| 130 | Stopped with Ctrl-C |
+
+77 and 78 mean that running again unchanged fails the same way, which is why
+the unit above sets `RestartPreventExitStatus=77 78`. `sync --watch` exits with
+one of them only when every drive that could not start failed for that reason.
+
 ## Development
 
 New contributors should start with the

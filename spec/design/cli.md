@@ -1,8 +1,8 @@
 # CLI
 
-GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go
+GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go, internal/sdnotify/sdnotify.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.8.16 [verified]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.8.16 [verified]
 
 ## Overview
 
@@ -42,7 +42,8 @@ are inserted, updated, pruned, and validated.
 | Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestDryRunFlagSurfaceOnlySyncCommand`, `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_DryRunOpensLogFileAndWarnsOnFailure`, `TestRunSyncCommand_DryRunFailsWhenControlSocketPathCannotBeDerived`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_PassesMissingSyncDirToRunOnce`, `TestRunSyncCommand_DryRunPassesMissingSyncDirWithoutCreatingIt`, `TestRunSyncCommand_PassesPausedInvalidDriveToRunnerAsPaused`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestSyncConsole_MultiDriveNamesEachDrive` |
 | `sync` names every finished file, summarizes in human units, prints errors once, and renders console logs as human or journal text. | `TestSyncConsole_NamesEveryCompletedFile`, `TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose`, `TestSyncConsole_SummaryInHumanUnits`, `TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError`, `TestSyncConsole_WatchLinesAreTimestampedAndAnnounceStartAndStop`, `TestConsoleLogHandler_JournalLinesCarryPriorityAndNoTimestamp`, `TestCommandLogger_PerfSummaryInLogFileNotDefaultConsole`, `TestCommandLogger_SyncSchemaFieldsOnlyInLogFileAndVerboseConsole`, `TestMainWithWriters_SkipConfigCommandLogsPerfSummaryToLogFile`, `TestMainWithWriters_BootstrapRecordsFollowTheCommandLogger`, `TestCommandErrorText_NetworkFailureIsOnePlainLine`, `TestUnauthorizedAuthReason_DistinguishesExpiredLogin` |
 | Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusMount_RendersLifecycleState`, `TestBuildChildStatusMount_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
-| Command failure presentation exhaustively maps the shared error classes, while lower layers still own their own domain classification. | `TestClassifyCommandError`, `TestCommandFailurePresentationForClass` |
+| Command failures map into the shared error classes, and the exit status is chosen from typed errors: 77 sign-in required, 78 invalid config, 2 usage, 130 user stop, 1 everything else. | `TestClassifyCommandError`, `TestCommandExitCode`, `TestCommandExitCode_EveryFailureClassHasAStatus`, `TestMainWithWriters_ConfigErrorExits78`, `TestMainWithWriters_SignInRequiredExits77`, `TestFormatWatchStartupError_ExitStatusFollowsSharedCause`, `TestConfigFailuresAreTaggedInvalidConfig` |
+| `sync --watch` reports READY/STATUS/RELOADING/STOPPING/WATCHDOG to systemd through `internal/sdnotify`, and nothing outside systemd. | `TestRunSyncDaemon_NotifiesSystemdOfLifecycle`, `TestRunSyncDaemon_SignInFailureSetsStatusAndExitCode`, `TestRunSyncDaemon_NoDrivesIsAConfigFailure`, `TestSyncNotifierWatchingStatus`, `TestOpenSyncNotifier_BadSocketWarnsAndContinues`, `TestNotifier_SendsProtocolMessages`, `TestOpen_AbstractSocket`, `TestOpen_WatchdogInterval`, `TestRunWatch_ReportsLifecycleTransitions` |
 | Command-level side-effect contracts are tested at the CLI boundary: read-only commands do not mutate managed state, and mutating commands fail selector/path validation before remote mutation. | `TestRunLs_DoesNotMutateManagedState`, `TestRunRm_RequiresExplicitPathBeforeGraphMutation` |
 
 ## Log Retention Deletes Only Its Own Logs
@@ -94,6 +95,71 @@ logger does not exist yet when the handler is installed -- log configuration is
 resolved from flags after the command starts. It renders plain lines
 ("Stopping... (press Ctrl-C again to force quit)"), not log records, because
 the person who pressed Ctrl-C is its reader.
+
+## Exit Status
+
+`commandExitCode` (`failure_class.go`) is the one place that turns a command's
+final error into the process status (R-6.6.31). The values are a contract for
+scripts and service managers:
+
+| Status | Meaning | Chosen by |
+| --- | --- | --- |
+| 0 | success (also `sync --watch` stopped by a signal: the watch finishes cleanly) | `err == nil` |
+| 1 | any other failure, transient or not | default |
+| 2 | command-line mistake | `*usageError` |
+| 77 (EX_NOPERM) | sign-in required | `graph.ErrNotLoggedIn` or `graph.ErrUnauthorized` (`ErrLoginExpired` travels with it) |
+| 78 (EX_CONFIG) | invalid configuration | `config.ErrInvalidConfig` |
+| 130 | stopped by the user | shutdown context done and the error is a cancellation |
+
+77 and 78 mean "running again unchanged fails the same way", so a unit can set
+`RestartPreventExitStatus=77 78`. A sign-in the user declined or let expire
+during `login` exits 1: rerunning `login` is the fix.
+
+Classification is by sentinel only. `internal/config` tags every failure at its
+exported read/parse/validate/resolve entrypoints (`Load*`, `Validate*`,
+`ResolveDrive(s)`, `MatchDrive`, the config-vs-catalog check of
+`LoadValidatedState`) with `ErrInvalidConfig` through a wrapper whose
+`Error()` is the original text, so messages are unchanged; catalog and
+token-file I/O are not config errors. "No drives configured" is raised in the
+CLI and carries the same sentinel. Composed messages keep their cause through
+`presentedError`. A watch whose drives all failed to start keeps the drives'
+causes only when every one is sign-in or every one is config
+(`startupFailureError`): with a mix, restarting can still bring a drive up, so
+it exits 1. One-shot `sync` keeps its first drive failure as the cause
+(`runOnceResultError`).
+
+## systemd Notify
+
+`internal/sdnotify` owns the process's only access to `$NOTIFY_SOCKET`,
+`$WATCHDOG_USEC` and `$WATCHDOG_PID` (R-6.6.32). It speaks the datagram
+protocol with the standard library: one connected `unixgram` socket, a path or
+an abstract `@name` (Go maps the leading `@` to the abstract namespace), a
+bounded write per message, `STATUS=` flattened to one line, and
+`MONOTONIC_USEC=` from `CLOCK_MONOTONIC`. A nil `*Notifier` is the no-op used
+outside systemd, so callers do not branch.
+
+`runSyncWatch` opens the notifier (through the `notifyGetenv` seam, `os.Getenv`
+in production) and closes it; an unusable socket logs one warning and sync
+continues. `runSyncDaemonWithFactory` hands `syncNotifier.lifecycle` to
+`multisync.OrchestratorConfig.WatchLifecycle`, which the watch loop calls on
+its own goroutine:
+
+- `WatchReady` (all startable drives are running watchers) sends `READY=1` with
+  `STATUS=Watching <roots>` plus "sign-in required for <drive>" or "N drives
+  could not start" for the drives that did not start.
+- `WatchReloading` sends `RELOADING=1` and `MONOTONIC_USEC=`; `WatchReloaded`
+  always sends `READY=1` again, saying when the previous settings were kept.
+- `WatchStopping` sends `STOPPING=1` before the runners drain.
+
+A watch that ends with an error sets a final `STATUS=` ("Sign-in required: run
+'onedrive-go login'", "Invalid config: ...", "Failed: ..."). When the unit sets
+`WatchdogSec=`, a goroutine owned by `runSyncDaemonWithFactory` sends
+`WATCHDOG=1` at half the timeout until the watch returns. The keepalive proves
+the process is alive and scheduling, not that every drive is healthy; drive
+health is in `STATUS=` and `status`. Reloads are started by the control socket
+(`pause`, `resume`, `drive add`, `login`); there is no SIGHUP reload, so units
+use `Type=notify`, not `Type=notify-reload`. An example user unit is
+`contrib/systemd/onedrive-go.service`.
 
 ## Console Output
 

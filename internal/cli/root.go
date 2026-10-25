@@ -17,7 +17,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/graphtransport"
 	"github.com/tonimelisma/onedrive-go/internal/logfile"
@@ -134,7 +133,10 @@ type cliSeams struct {
 	syncWatch              syncWatchRunner
 	syncRunOnce            syncRunOnceRunner
 	syncDaemonOrchestrator syncDaemonOrchestratorFactory
-	statusLiveOverlay      func(context.Context, *CLIContext, accountViewSnapshot) map[string]statusAccountLiveOverlay
+	// notifyGetenv replaces os.Getenv for the systemd notify environment
+	// ($NOTIFY_SOCKET, $WATCHDOG_USEC) of `sync --watch`.
+	notifyGetenv      func(string) string
+	statusLiveOverlay func(context.Context, *CLIContext, accountViewSnapshot) map[string]statusAccountLiveOverlay
 }
 
 type CLIContext struct {
@@ -576,10 +578,6 @@ func newSignalLogger(statusWriter io.Writer) *slog.Logger {
 	return slog.New(newConsoleLogHandler(statusWriter, slog.LevelInfo, style))
 }
 
-// exitInterrupted is the conventional status for a run stopped by SIGINT
-// (128 + 2), so shells and service managers can tell it from a failure.
-const exitInterrupted = 130
-
 // writeCommandError prints main's final error. Under the systemd journal each
 // line carries the err priority, so `journalctl -p err` finds it.
 func writeCommandError(w io.Writer, text string) {
@@ -671,26 +669,20 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 		}
 	}
 
-	if err != nil {
+	exitCode := commandExitCode(err, ctx.Err() != nil)
+	switch exitCode {
+	case exitSuccess:
+	case exitInterrupted:
 		// Only a stop the user asked for (Ctrl-C, SIGTERM) ends silently; the
 		// signal handler already said "Stopping...". A timeout or an internal
 		// cancellation is a failure and must say so.
-		if ctx.Err() != nil && classifyCommandError(err) == errclass.ClassShutdown {
-			return exitInterrupted
-		}
-
-		var usage *usageError
-		if errors.As(err, &usage) {
-			writeCommandError(statusWriter, commandErrorText(err, false))
-			return exitUsage
-		}
-
+	case exitUsage:
+		writeCommandError(statusWriter, commandErrorText(err, false))
+	default:
 		writeCommandError(statusWriter, commandErrorText(err, commandWantsErrorDetails(cmd)))
-
-		return commandFailurePresentationForClass(classifyCommandError(err)).ExitCode
 	}
 
-	return 0
+	return exitCode
 }
 
 func newCommandPerfSession(

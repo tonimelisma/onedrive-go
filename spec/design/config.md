@@ -2,7 +2,7 @@
 
 GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/config/catalog_lifecycle.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/mount_state_path.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validated_state.go, internal/config/validator.go, internal/config/write.go
 
-Implements: R-3.7 [verified], R-4.1 [verified], R-4.1.5 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.1 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-4.9.4 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-3.7 [verified], R-4.1 [verified], R-4.1.5 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.1 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-4.9.4 [verified], R-6.3.4 [verified], R-6.6.31 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Clearing The Account Auth Requirement Has One Owner
 
@@ -411,6 +411,16 @@ Strict and lenient loading also share one loader/decoder pipeline: `configLoader
 step into the shared failure model: fatal read/parse errors map to `fatal`,
 successful loads with warnings map to `actionable`, and clean loads map to
 `success`.
+
+Every failure returned by the exported read, parse, validate and resolve
+entrypoints (`Load`, `LoadOrDefault`, `LoadLenient`, `LoadOrDefaultLenient`,
+`Validate`, `ValidateResolved`, `ValidateResolvedForSync`, `ResolveDrive`,
+`ResolveDrives`, `MatchDrive`, and the config-vs-catalog check in
+`LoadValidatedState`) matches `ErrInvalidConfig` (`failure_class.go`). The tag
+wraps the error without changing its text or hiding its chain, and is
+idempotent across entrypoints that call each other. Catalog and token-file
+failures are not tagged. The CLI exits 78 (EX_CONFIG) on it so a service
+manager stops restarting a run that would fail the same way (R-6.6.31).
 
 **Sync-specific validation** (`ValidateResolvedForSync`): enforces that the resolved `sync_dir` is set and absolute, and that an existing path is a directory. That validation happens after `buildResolvedDrive` has already applied either the explicit per-drive `sync_dir` or the deterministic runtime default for drives that omit it. Non-existent paths are accepted by validation because engine startup owns root availability and reports a missing root as a per-mount `ErrMountRootUnavailable`. Login and `drive add` own creating sync roots when they enroll or repair drives; one-shot sync, watch startup, dry-run, and reload never create them. The CLI compiles resolved drives into `multisync.StandaloneMountConfig`; malformed per-drive sync settings become mount startup failures instead of aborting the whole selection. File operations do not require an explicit `sync_dir` in config.
 

@@ -353,11 +353,13 @@ Neither client is good here. The D client writes everything to stdout at
 journal priority info, progress percentages become separate journal lines, and
 its shipped units are `Type=simple`. onedrive-go's default `log_format = auto`
 would put JSON objects into the journal, also all at priority info, and has no
-`sd_notify`. Neither detects `$JOURNAL_STREAM`.
+`sd_notify`. Neither detects `$JOURNAL_STREAM`. (Historical: onedrive-go has
+since gained journal detection, `Type=notify` and distinct exit statuses; see
+the fix list below.)
 
 ## Fix list, in order of user impact
 
-Status: items 1–6 and 11 are done. Item 5's logger split is finished: every
+Status: items 1–6, 10 and 11 are done. Item 5's logger split is finished: every
 command gets the configured log file before it runs, and the records logged
 while the config file is being found are replayed through the command logger,
 so one run uses one console format and the log file has the whole run. Item 7 was resolved differently: `-v`
@@ -365,7 +367,8 @@ stays the "extra detail" level (timestamped key=value logs, retried failures,
 full error chains) rather than a separate plain-words tier, because default
 output now carries the plain-words narrative. Item 9 is done for state and
 wording; canonical IDs stay in `drive list` because `drive add` takes them.
-Item 10 is done for journal priorities; `Type=notify` remains open. Item 8
+Item 10 is done: journal priorities, `Type=notify` (R-6.6.32) and exit
+statuses 77/78 for `RestartPreventExitStatus=` (R-6.6.31). Item 8
 (progress bars) remains `[future]` (R-6.6.5).
 
 1. **Watch mode startup line and per-file activity lines** at default

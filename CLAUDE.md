@@ -20,6 +20,7 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | `internal/devtool/` | `spec/design/system.md` | |
 | `internal/synctree/` | `spec/design/system.md` | `spec/design/sync-engine.md`, `spec/design/sync-observation.md`, `spec/design/drive-transfers.md` |
 | `internal/logfile/` | `spec/design/cli.md` | `spec/requirements/configuration.md` |
+| `internal/sdnotify/`, `internal/cli/sync_notify.go` | `spec/design/cli.md` | `spec/design/sync-control-plane.md`, `spec/reference/cli-output-guidelines.md` |
 | `internal/sync/observer*.go`, `internal/sync/scanner*.go`, `internal/sync/socketio*.go`, `internal/sync/item_converter*.go`, `internal/sync/local_hash_reuse.go` | `spec/design/sync-observation.md` | `spec/reference/onedrive-sync-behavior.md` |
 | `internal/sync/actions.go`, `internal/sync/api_types.go`, `internal/sync/core_types.go`, `internal/sync/domain_*.go`, `internal/sync/domain_clock.go`, `internal/sync/enums.go`, `internal/sync/errors.go`, `internal/sync/issue_types.go`, `internal/sync/scope_key.go`, `internal/sync/scope_semantics.go`, `internal/sync/types.go`, `internal/sync/worker_result.go` | `spec/design/sync-domain.md` | `spec/design/sync-planning.md`, `spec/design/sync-store.md` |
 | `internal/sync/planner*.go`, `internal/sync/truth_status.go` | `spec/design/sync-planning.md` | `spec/reference/onedrive-sync-behavior.md` |

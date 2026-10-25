@@ -369,6 +369,7 @@ func TestRunSyncDaemonWithFactory_NoDrivesConfigured(t *testing.T) {
 		"/tmp/control.sock",
 		nil,
 		nil,
+		nil,
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no drives configured")
@@ -394,6 +395,7 @@ func TestRunSyncDaemonWithFactory_ReportsInvalidSyncDirThroughStartupResults(t *
 		slog.New(slog.DiscardHandler),
 		io.Discard,
 		"/tmp/control.sock",
+		nil,
 		nil,
 		func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 			factoryCalls++
@@ -434,6 +436,7 @@ func TestRunSyncDaemonWithFactory_CallsOrchestrator(t *testing.T) {
 		logger,
 		io.Discard,
 		"/tmp/control.sock",
+		nil,
 		nil,
 		func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 			factoryCalls++
@@ -476,6 +479,7 @@ func TestRunSyncDaemonWithFactory_PassesMissingSyncDirToOrchestrator(t *testing.
 		io.Discard,
 		"/tmp/control.sock",
 		nil,
+		nil,
 		func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 			called = true
 			require.Len(t, cfg.StandaloneMounts, 1)
@@ -510,6 +514,7 @@ func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoMountStarts(t *testi
 		slog.New(slog.DiscardHandler),
 		io.Discard,
 		"/tmp/control.sock",
+		nil,
 		nil,
 		func(_ *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 			return &testSyncDaemonOrchestrator{
@@ -551,6 +556,7 @@ func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
 		slog.New(slog.DiscardHandler),
 		status,
 		"/tmp/control.sock",
+		nil,
 		nil,
 		func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 			require.NotNil(t, cfg.StartWarning)

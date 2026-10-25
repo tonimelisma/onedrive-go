@@ -69,6 +69,9 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 
 		o.logger.Info("Stopped watching for changes")
 	}()
+	// Registered after the drain above so it runs first: the service manager
+	// hears "stopping" before the runners take time to settle.
+	defer o.emitWatchLifecycle(WatchStopping, nil, nil, nil)
 
 	reconcileTickCh, stopReconcileTicks := o.reconcileTicks(reconcileWatchInterval(opts.PollInterval))
 	defer stopReconcileTicks()
@@ -172,6 +175,7 @@ func (o *Orchestrator) startWatchRuntime(
 		return nil, control, err
 	}
 	o.emitStartWarning(startResults, startAnnounceFull)
+	o.emitWatchLifecycle(WatchReady, runners, startResults, nil)
 
 	return runners, control, nil
 }
@@ -396,11 +400,14 @@ func (o *Orchestrator) reload(
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
 ) error {
+	o.emitWatchLifecycle(WatchReloading, nil, nil, nil)
+
 	newCfg, newSelection, err := o.loadReloadSelection(ctx)
 	if err != nil {
 		o.logger.Warn("Couldn't reload the config; keeping the previous settings",
 			slog.String("error", err.Error()),
 		)
+		o.emitWatchLifecycle(WatchReloaded, nil, nil, err)
 
 		return err
 	}
@@ -422,6 +429,7 @@ func (o *Orchestrator) reload(
 		o.logger.Warn("Couldn't reload the config; keeping the previous settings",
 			slog.String("error", err.Error()),
 		)
+		o.emitWatchLifecycle(WatchReloaded, nil, nil, err)
 		return err
 	}
 	// The user asked for the config to be applied now, so drives waiting out
@@ -437,6 +445,7 @@ func (o *Orchestrator) reload(
 		childWork,
 	)
 	o.emitStartWarning(startResults, startAnnounceFull)
+	o.emitWatchLifecycle(WatchReloaded, runners, startResults, nil)
 
 	o.logger.Info("Reloaded the config",
 		slog.Int("started", started),

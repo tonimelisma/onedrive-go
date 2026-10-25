@@ -93,7 +93,10 @@ type OrchestratorConfig struct {
 	// ActivityHook receives each finished user-visible file action, tagged
 	// with the mount it happened in. It must not block.
 	ActivityHook func(MountActivity)
-	PerfParent   *perf.Collector
+	// WatchLifecycle receives RunWatch's ready, reload and stop transitions
+	// (see WatchLifecycleEvent). It runs on the watch loop and must not block.
+	WatchLifecycle func(WatchLifecycleEvent)
+	PerfParent     *perf.Collector
 }
 
 // Orchestrator manages per-mount sync runners. It is always used, even for a

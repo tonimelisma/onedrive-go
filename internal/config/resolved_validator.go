@@ -16,7 +16,7 @@ func ValidateResolved(rd *ResolvedDrive) error {
 }
 
 func validateResolvedWithIO(rd *ResolvedDrive, io configIO) error {
-	return newResolvedDriveValidator(io).validate(rd)
+	return markInvalidConfig(newResolvedDriveValidator(io).validate(rd))
 }
 
 // ValidateResolvedForSync checks sync-specific constraints on a resolved drive.
@@ -29,7 +29,7 @@ func ValidateResolvedForSync(rd *ResolvedDrive) error {
 }
 
 func validateResolvedForSyncWithIO(rd *ResolvedDrive, io configIO) error {
-	return newResolvedDriveValidator(io).validateForSync(rd)
+	return markInvalidConfig(newResolvedDriveValidator(io).validateForSync(rd))
 }
 
 // resolvedDriveValidator owns post-override validation so resolve-time path

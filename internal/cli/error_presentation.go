@@ -59,7 +59,7 @@ func newRemoteOpError(action, remotePath string, err error) error {
 
 // usageError marks a command-line mistake (unknown command or flag, wrong
 // argument count, conflicting flags). main prints it with a pointer to --help
-// and exits 2, the conventional usage-error status.
+// and exits exitUsage (2), the conventional usage-error status.
 type usageError struct {
 	commandPath string
 	err         error
@@ -68,8 +68,6 @@ type usageError struct {
 func (e *usageError) Error() string { return e.err.Error() }
 
 func (e *usageError) Unwrap() error { return e.err }
-
-const exitUsage = 2
 
 // networkErrorReason recognizes "could not reach the server" failures and
 // names the concrete cause, or returns "" for anything else.
