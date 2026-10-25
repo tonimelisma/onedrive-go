@@ -441,21 +441,31 @@ prints a healthy `Auth: ready` line.
 
 Child lifecycle rows expose `state`, `state_reason`, `state_detail`,
 `protected_current_path`, `protected_reserved_paths`, typed
-`issue_class`/`recovery_class`, `recovery_action`, and `auto_retry` from
-sync-owned `ShortcutRootStatusView` values plus child sync-state snapshots. The
-CLI does not read raw `shortcut_roots` fields such as protected-path
-bookkeeping, blocker detail, or waiting replacement internals; sync owns that
-projection. Text and JSON status describe the protected-root state and the next
-recovery step without duplicating engine transition policy or shortcut-state
-copy tables in the CLI. Recovery copy uses the same product vocabulary as the
-control plane: "shortcut alias", "child projection", "reserved path", and
-"parent engine child work snapshots".
+`issue_class`/`recovery_class`, `recovery_action`, `auto_retry`, and, only
+under `--verbose` or `--debug`, `state_debug_detail`, from sync-owned
+`ShortcutRootStatusView` values plus child sync-state snapshots. `state`,
+`state_reason`, `issue_class` and `recovery_class` are stable machine tokens;
+`state_detail` (the view's `Reason`) and `recovery_action` are one plain
+sentence each in user vocabulary (shared folder, folder, OneDrive), per
+[cli-output-guidelines.md](../reference/cli-output-guidelines.md);
+`state_debug_detail` (the view's `Detail`) is the raw diagnostic recorded with
+the state, such as a Graph or filesystem error chain. Text output prints
+`Status: <plain label>`, `Reason: <state_detail>` and `Action:
+<recovery_action>`, never the machine tokens, and adds `Detail:` only under
+`--verbose`/`--debug`; `runStatusCommand` drops the debug detail otherwise,
+for text and JSON alike. The CLI does not read raw `shortcut_roots` fields
+such as protected-path bookkeeping, blocker detail, or waiting replacement
+internals; sync owns that projection and its copy table
+(`shortcutRootStatusMetadata`). Evidence: `TestBuildChildStatusMount_RendersLifecycleState`,
+`TestStatusOutputGoldenText`, `TestStatusOutputGoldenTextVerbose`,
+`TestDropStatusDebugDetail_ClearsNestedRawDetailOnly`,
+`TestShortcutRootStatusView_SeparatesReasonFromRawDetail`.
 
 For `removed_final_drain`, status must make the retry/discard choice explicit:
 the child keeps retrying while its state DB owns dirty content state; the user
-can restore shared-folder access for normal retry, or delete the local shortcut
-directory to discard the dirty local projection and let parent release cleanup
-purge the child state automatically.
+can restore access to the shared folder for normal retry, or delete its local
+folder to discard the changes that have not synced and let parent release
+cleanup purge the child state automatically.
 
 Shortcut child status distinguishes the recovery class rather than collapsing
 all failures into one blocked row: target unavailable, local root unavailable,

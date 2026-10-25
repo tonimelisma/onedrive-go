@@ -73,6 +73,7 @@ func goldenStatusAccounts() []statusAccount {
 							},
 						},
 					},
+					SharedFolders: []statusDrive{goldenBlockedSharedFolder()},
 				},
 			},
 		},
@@ -98,13 +99,58 @@ func goldenStatusAccounts() []statusAccount {
 	}
 }
 
+// goldenBlockedSharedFolder is a removed shared folder whose local cleanup
+// is blocked, carrying the raw diagnostic that only --verbose shows.
+func goldenBlockedSharedFolder() statusDrive {
+	metadata := syncengine.ShortcutRootStatus(syncengine.ShortcutRootStateRemovedCleanupBlocked)
+	autoRetry := metadata.AutoRetry
+	return statusDrive{
+		MountID:              "personal:alice@example.com|binding-docs",
+		MountRef:             config.MountRef("personal:alice@example.com|binding-docs"),
+		NamespaceID:          "personal:alice@example.com",
+		ProjectionKind:       statusProjectionChild,
+		Kind:                 statusDriveKindSharedFolder,
+		Name:                 "Docs",
+		Folder:               "/Users/alice/OneDrive/Shared/Docs",
+		State:                metadata.DisplayState,
+		StateLabel:           metadata.StatusLabel,
+		StateReason:          metadata.StateReason,
+		IssueClass:           string(metadata.IssueClass),
+		StateDetail:          metadata.Issue,
+		StateDebugDetail:     "unsafe path: the shared folder's local path is not a directory",
+		RecoveryClass:        string(metadata.RecoveryClass),
+		RecoveryAction:       metadata.RecoveryAction,
+		AutoRetry:            &autoRetry,
+		ProtectedCurrentPath: "/Users/alice/OneDrive/Shared/Docs",
+	}
+}
+
+// goldenDefaultStatusAccounts is what status shows without --verbose or
+// --debug: the raw diagnostics are dropped before rendering.
+func goldenDefaultStatusAccounts() []statusAccount {
+	accounts := goldenStatusAccounts()
+	dropStatusDebugDetail(accounts)
+	return accounts
+}
+
 // Validates: R-2.14.3
 func TestStatusOutputGoldenText(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, goldenStatusAccounts(), false))
+	require.NoError(t, printStatusText(&buf, goldenDefaultStatusAccounts(), false))
 	assertGoldenFile(t, "status_text.golden", buf.Bytes())
+}
+
+// Validates: R-2.14.3, R-2.10.1
+// Under --verbose or --debug a shared folder row adds the raw diagnostic
+// behind its plain reason.
+func TestStatusOutputGoldenTextVerbose(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatusText(&buf, goldenStatusAccounts(), false))
+	assertGoldenFile(t, "status_text_verbose.golden", buf.Bytes())
 }
 
 // Validates: R-2.14.3
@@ -112,6 +158,6 @@ func TestStatusOutputGoldenJSON(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusJSON(&buf, goldenStatusAccounts()))
+	require.NoError(t, printStatusJSON(&buf, goldenDefaultStatusAccounts()))
 	assertGoldenFile(t, "status_json.golden", buf.Bytes())
 }

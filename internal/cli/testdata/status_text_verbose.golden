@@ -1,0 +1,47 @@
+Status: 2 drives, 1 shared folder: 1 paused, 1 with issues, 1 account needs sign-in
+
+Account: Alice Example <alice@example.com>
+  Organization: Contoso
+  Alice Example's personal OneDrive
+    Folder: /Users/alice/OneDrive
+    Status: Issues
+    Files: 42
+    Remote changes: 2 items
+    Retrying: 1 item
+
+    Issues:
+      Invalid filename: 1 item
+        The filename contains characters not allowed by OneDrive.
+        Action: Rename the file to remove invalid characters.
+
+        /invalid:name.txt
+
+      Sign-in required: 1 item
+        The last sync attempt for this account was rejected by OneDrive.
+        Action: Run 'onedrive-go status' to re-check access, or 'onedrive-go login' to sign in again.
+        Scope: your OneDrive account authorization
+
+      Shared folder writes blocked: 1 item
+        This shared folder is read-only for your current write attempts. Downloads continue normally.
+        Action: Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.
+        Scope: Shared/Docs
+
+        Shared/Docs/report.docx
+    Shared folders:
+    Docs
+      Folder: /Users/alice/OneDrive/Shared/Docs
+      Status: Removed, cleanup blocked
+      Shared folder: Managed through the parent drive
+      Reason: This shared folder was removed, but its local copy can't be removed.
+      Protected current path: /Users/alice/OneDrive/Shared/Docs
+      Action: Move or delete what is in the way at that path; the next sync finishes the cleanup.
+      Detail: unsafe path: the shared folder's local path is not a directory
+      Auto retry: yes
+
+Account: Bob Example <bob@example.com>
+  Organization: Example Corp
+  Sign-in required: The saved login for this account is invalid or unreadable.
+  Action: Run 'onedrive-go login' to sign in.
+  OneDrive - Example Corp
+    Folder: /Users/bob/WorkDrive
+    Status: Paused

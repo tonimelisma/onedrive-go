@@ -100,7 +100,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	}
 
 	if !syncRootExists(cfg.SyncRoot) {
-		return nil, fmt.Errorf("sync: opening sync tree %q: %w", cfg.SyncRoot, ErrMountRootUnavailable)
+		return nil, fmt.Errorf("%w: %s is missing or is not a folder", ErrMountRootUnavailable, cfg.SyncRoot)
 	}
 
 	bm, err := openEngineSyncStore(ctx, cfg.DBPath, cfg.Logger)

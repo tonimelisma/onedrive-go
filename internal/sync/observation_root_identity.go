@@ -15,10 +15,13 @@ func validateExpectedSyncRootIdentity(root *synctree.Root, expected *synctree.Fi
 	}
 	actual, err := root.IdentityNoFollow("")
 	if err != nil {
-		return fmt.Errorf("sync: verifying mount root identity: %w: %w", ErrMountRootUnavailable, err)
+		return fmt.Errorf("%w: %w", ErrMountRootUnavailable, err)
 	}
 	if !synctree.SameIdentity(actual, *expected) {
-		return fmt.Errorf("sync: verifying mount root identity: %w", ErrMountRootUnavailable)
+		// The folder at the sync path is not the one this state belongs to
+		// (replaced, or a different disk mounted there): scanning it would
+		// read as mass deletion.
+		return fmt.Errorf("%w: it was replaced by a different folder", ErrMountRootUnavailable)
 	}
 	return nil
 }
