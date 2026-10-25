@@ -115,13 +115,13 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 func batchObservationFailureMessage(source remoteObservationBatchSource) string {
 	switch source {
 	case remoteObservationBatchPrimaryWatch:
-		return "failed to reconcile primary remote observation findings"
+		return "record skipped OneDrive items"
 	case remoteObservationBatchMountRoot:
-		return "failed to reconcile mount-root remote observation findings"
+		return "record skipped shared folder items"
 	case remoteObservationBatchFullRefresh:
-		return "failed to reconcile full remote refresh observation findings"
+		return "record skipped items from the full OneDrive check"
 	default:
-		return "failed to reconcile remote observation findings"
+		return "record skipped OneDrive items"
 	}
 }
 

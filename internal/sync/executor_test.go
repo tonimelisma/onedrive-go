@@ -1876,7 +1876,7 @@ func TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition(t *testi
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	assert.Contains(t, o.Error.Error(), "refusing to delete alias/file.txt through symlink boundary alias")
+	assert.Contains(t, o.Error.Error(), "won't delete alias/file.txt: alias is a symbolic link")
 	assert.FileExists(t, outsideFile)
 	assert.FileExists(t, filepath.Join(syncRoot, "alias", "file.txt"))
 }

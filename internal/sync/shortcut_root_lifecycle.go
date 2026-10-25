@@ -80,7 +80,6 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 		e.logger.Warn("Could not remove the local copy of removed shared folder "+
 			newlyBlocked[i].relativeLocalPath+
 			"; move or delete what is in the way and the next sync finishes the cleanup",
-			slog.String("path", newlyBlocked[i].relativeLocalPath),
 			slog.String("error", newlyBlocked[i].err.Error()),
 		)
 	}

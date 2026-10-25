@@ -445,7 +445,7 @@ func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 
 	watcher, err := o.watcherFactory()
 	if err != nil {
-		return fmt.Errorf("sync: creating filesystem watcher: %w", err)
+		return fmt.Errorf("create filesystem watcher: %w", err)
 	}
 	defer watcher.Close() //nolint:errcheck // watcher shutdown releases OS resources and reports nothing a caller can act on
 
@@ -460,7 +460,7 @@ func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 			return errWatchLimitExhausted
 		}
 
-		return fmt.Errorf("sync: adding initial watches: %w", walkErr)
+		return fmt.Errorf("add initial watches: %w", walkErr)
 	}
 	if o.startupSafetyScan {
 		// Close the startup gap between the bootstrap local scan and the point at

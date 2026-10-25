@@ -43,14 +43,14 @@ func validateShortcutRootTransition(
 	to = normalizeShortcutRootState(to)
 	targets, ok := shortcutRootTransitionTable()[from][event]
 	if !ok {
-		return fmt.Errorf("sync: shortcut root transition %s from %s is not allowed", event, from)
+		return fmt.Errorf("invalid shared folder state change: %s is not allowed in %s", event, from)
 	}
 	for _, target := range targets {
 		if target == to {
 			return nil
 		}
 	}
-	return fmt.Errorf("sync: shortcut root transition %s from %s to %s is not allowed", event, from, to)
+	return fmt.Errorf("invalid shared folder state change: %s from %s to %s is not allowed", event, from, to)
 }
 
 func normalizeShortcutRootState(state ShortcutRootState) ShortcutRootState {
@@ -67,7 +67,7 @@ func shortcutRootWithTransition(
 	detail string,
 ) (ShortcutRootRecord, error) {
 	if record == nil {
-		return ShortcutRootRecord{}, fmt.Errorf("sync: shortcut root transition %s requires record", event)
+		return ShortcutRootRecord{}, fmt.Errorf("invalid shared folder state change: %s has no record", event)
 	}
 	next := *record
 	if err := validateShortcutRootTransition(next.State, event, to); err != nil {

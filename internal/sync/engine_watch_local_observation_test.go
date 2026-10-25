@@ -1,6 +1,10 @@
 package sync
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -227,4 +231,75 @@ func TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation(t
 	assert.Zero(t, rt.resources.localObs.DroppedEvents())
 	assert.Zero(t, rt.resources.localObs.DroppedRetries())
 	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
+}
+
+// Validates: R-6.6.30
+// Regression: a dropped-event rescan that keeps failing for the same reason
+// warned on every maintenance tick. It now warns once, repeats at Debug, and
+// warns again only after the failure changed or a rescan was scheduled.
+func TestWatchRuntime_DroppedObservationRescanFailureWarnsOnce(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
+	var logBuf bytes.Buffer
+	rt.deps.logger = slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+	rt.resources.localObs = newLocalObserver(bl, eng.logger, eng.checkWorkers)
+	rt.resources.localObs.droppedEvents.Add(1)
+
+	// A canceled context makes marking local truth suspect fail the same way
+	// on every tick.
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	for range 3 {
+		rt.recoverDroppedLocalObservation(canceled)
+	}
+
+	const message = "Could not schedule a rescan of the sync folder after missed changes"
+	warnLines := func() int {
+		count := 0
+		for _, line := range strings.Split(logBuf.String(), "\n") {
+			if strings.Contains(line, "level=WARN") && strings.Contains(line, message) {
+				count++
+			}
+		}
+		return count
+	}
+	assert.Equal(t, 1, warnLines(), "an unchanged failure warns once")
+	assert.Equal(t, 3, strings.Count(logBuf.String(), message), "repeats stay visible at Debug")
+	assert.Equal(t, int64(1), rt.resources.localObs.DroppedEvents(), "the dropped count is kept for the retry")
+
+	rt.recoverDroppedLocalObservation(t.Context())
+	assert.Zero(t, rt.resources.localObs.DroppedEvents(), "the retry schedules the rescan")
+
+	rt.resources.localObs.droppedEvents.Add(1)
+	rt.recoverDroppedLocalObservation(canceled)
+	assert.Equal(t, 2, warnLines(), "a failure after a successful rescan is news again")
+}
+
+// Validates: R-6.6.30
+// The initial pass's periodic wait line repeats only when its counts moved;
+// an unchanged tick goes to Debug.
+func TestWatchRuntime_BootstrapWaitLogsOnlyWhenCountsChange(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	var logBuf bytes.Buffer
+	rt.deps.logger = slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	for range 3 {
+		rt.logBootstrapWait(t.Context())
+	}
+	assert.Equal(t, 1, strings.Count(logBuf.String(), "Waiting for the remaining changes to finish"))
+
+	rt.sched.runningCount++
+	rt.logBootstrapWait(t.Context())
+	assert.Equal(t, 2, strings.Count(logBuf.String(), "Waiting for the remaining changes to finish"))
 }

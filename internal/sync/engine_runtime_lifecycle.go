@@ -219,7 +219,8 @@ func (flow *engineFlow) applyBlockScope(ctx context.Context, sr scopeUpdateResul
 	}
 	wasActive := flow.scopes.hasActiveScope(sr.ScopeKey)
 	if err := flow.activateScope(ctx, block); err != nil {
-		return fmt.Errorf("apply block scope %s: %w", sr.ScopeKey.String(), err)
+		// activateScope already names the operation and the scope.
+		return err
 	}
 
 	flow.logBlockScopeActivated(sr.ScopeKey, sr.ConditionType, interval, wasActive)

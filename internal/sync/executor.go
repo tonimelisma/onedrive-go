@@ -173,7 +173,7 @@ func (e *executor) waitRemoteParentVisible(ctx context.Context, action *Action) 
 	}
 
 	if _, err := pathConvergence.WaitPathVisible(ctx, remotePath); err != nil {
-		return fmt.Errorf("wait for parent path %q visibility: %w", parentPath, err)
+		return fmt.Errorf("confirm parent folder %s is on OneDrive: %w", parentPath, err)
 	}
 
 	return nil

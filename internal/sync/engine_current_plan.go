@@ -215,7 +215,7 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 	if err := flow.applyObservationFindingsBatch(
 		ctx,
 		&observationBatch.findings,
-		"failed to reconcile remote observation findings",
+		"record skipped OneDrive items",
 		engineDebugNoteRemoteCurrent,
 	); err != nil {
 		return nil, nil, err
