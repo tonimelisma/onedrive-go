@@ -435,6 +435,28 @@ func TestResumeCommand_ClearsPausedKeys(t *testing.T) {
 	assert.Contains(t, out.String(), "resumed")
 }
 
+// Resume used to name the drive by canonical ID even when pause, for the
+// same drive, used its display name.
+//
+// Validates: R-2.6.5
+func TestResumeCommand_NamesDriveByDisplayName(t *testing.T) {
+	setTestDriveHome(t)
+
+	var out bytes.Buffer
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:resume@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "display_name", "Home"))
+	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
+
+	cc := newCommandContext(&out, cfgPath)
+	cc.Flags.Drive = []string{cid.String()}
+
+	require.NoError(t, runResumeCommand(t.Context(), cc, time.Now))
+	assert.Contains(t, out.String(), "Drive Home resumed")
+	assert.NotContains(t, out.String(), cid.String())
+}
+
 // Validates: R-1.9
 func TestRecycleBinList_PersonalAccountMessage(t *testing.T) {
 	setTestDriveHome(t)

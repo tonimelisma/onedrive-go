@@ -360,7 +360,7 @@ func TestExecuteLocalDelete_BlocksDescendantUnderSymlinkedDirectory(t *testing.T
 	outcome := e.ExecuteLocalDelete(t.Context(), action)
 
 	requireOutcomeFailure(t, &outcome)
-	assert.Contains(t, outcome.Error.Error(), "symlink boundary linkdir")
+	assert.Contains(t, outcome.Error.Error(), "linkdir is a symbolic link")
 	assert.FileExists(t, targetPath)
 	_, linkErr := os.Lstat(filepath.Join(syncRoot, "linkdir"))
 	require.NoError(t, linkErr)

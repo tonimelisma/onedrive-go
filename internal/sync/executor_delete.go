@@ -64,7 +64,7 @@ func (e *executor) ExecuteLocalDelete(ctx context.Context, action *Action) actio
 		cleanActionPath := slashpath.Clean(filepath.ToSlash(action.Path))
 		if boundary != cleanActionPath {
 			return e.failedOutcome(action, ActionLocalDelete,
-				fmt.Errorf("refusing to delete %s through symlink boundary %s", action.Path, boundary))
+				fmt.Errorf("won't delete %s: %s is a symbolic link, and sync never deletes through one", action.Path, boundary))
 		}
 
 		return e.DeleteLocalSymlink(action, boundary)

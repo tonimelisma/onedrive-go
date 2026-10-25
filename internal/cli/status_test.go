@@ -139,10 +139,8 @@ func testShortcutStatusChildFromRecord(
 		DisplayName:      record.LocalAlias,
 		DisplayLocalRoot: filepath.Join(parentSyncRoot, filepath.FromSlash(record.RelativeLocalPath)),
 		Metadata:         metadata,
-		StateDetail:      metadata.Issue,
-	}
-	if record.BlockedDetail != "" {
-		statusView.StateDetail = record.BlockedDetail
+		Reason:           metadata.Issue,
+		Detail:           record.BlockedDetail,
 	}
 	if record.Waiting != nil {
 		statusView.WaitingReplacementPath = record.Waiting.RelativeLocalPath
@@ -221,8 +219,8 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 			state:        syncengine.ShortcutRootStateTargetUnavailable,
 			displayState: string(syncengine.ShortcutRootStateTargetUnavailable),
 			reason:       string(syncengine.ShortcutRootStateTargetUnavailable),
-			detail:       "The shortcut target is unavailable.",
-			action:       "Restore target access or remove the shortcut alias.",
+			detail:       "OneDrive can't open this shared folder; it may have been unshared, moved or deleted.",
+			action:       "Ask the owner to share it with you again, or remove the shortcut from your OneDrive.",
 			autoRetry:    boolPtr(true),
 			protectsPath: true,
 		},
@@ -231,8 +229,8 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 			state:        syncengine.ShortcutRootStateLocalRootUnavailable,
 			displayState: string(syncengine.ShortcutRootStateLocalRootUnavailable),
 			reason:       string(syncengine.ShortcutRootStateLocalRootUnavailable),
-			detail:       "The shortcut alias local root is unavailable.",
-			action:       "Restore the local shortcut directory or delete it to discard unresolved local state.",
+			detail:       "This shared folder's local folder is missing or can't be read.",
+			action:       "Restore the local folder, or delete it to discard changes that have not synced.",
 			autoRetry:    boolPtr(true),
 			protectsPath: true,
 		},
@@ -241,8 +239,8 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 			state:        syncengine.ShortcutRootStateBlockedPath,
 			displayState: string(syncengine.ShortcutRootStateBlockedPath),
 			reason:       string(syncengine.ShortcutRootStateBlockedPath),
-			detail:       "The shortcut alias path is blocked.",
-			action:       "Clear the blocking local path.",
+			detail:       "Something else is in the way at this shared folder's local path.",
+			action:       "Move or rename the file or folder at that path.",
 			autoRetry:    boolPtr(true),
 			protectsPath: true,
 		},
@@ -251,8 +249,8 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 			state:        syncengine.ShortcutRootStateRenameAmbiguous,
 			displayState: string(syncengine.ShortcutRootStateRenameAmbiguous),
 			reason:       string(syncengine.ShortcutRootStateRenameAmbiguous),
-			detail:       "Multiple same-folder shortcut alias rename candidates were found.",
-			action:       "Keep exactly one renamed shortcut alias or restore the original name.",
+			detail:       "More than one renamed folder could be this shared folder.",
+			action:       "Keep exactly one renamed folder, or restore the original name.",
 			autoRetry:    boolPtr(true),
 			protectsPath: true,
 		},
@@ -261,8 +259,8 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 			state:        syncengine.ShortcutRootStateAliasMutationBlocked,
 			displayState: string(syncengine.ShortcutRootStateAliasMutationBlocked),
 			reason:       string(syncengine.ShortcutRootStateAliasMutationBlocked),
-			detail:       "The parent engine cannot update the shortcut alias in OneDrive.",
-			action:       "Fix account, network, or permission access, or restore the local alias.",
+			detail:       "Renaming or deleting this shared folder locally couldn't be applied in OneDrive.",
+			action:       "Check your connection and your access to the folder, or undo the local rename or delete.",
 			autoRetry:    boolPtr(true),
 			protectsPath: true,
 		},
@@ -277,8 +275,8 @@ func shortcutStatusRemovalLifecycleCases() []shortcutStatusLifecycleCase {
 			state:        syncengine.ShortcutRootStateRemovedFinalDrain,
 			displayState: string(syncengine.ShortcutRootStateRemovedFinalDrain),
 			reason:       string(syncengine.ShortcutRootStateRemovedFinalDrain),
-			detail:       "The shortcut alias was removed; child sync is finishing before release.",
-			action:       "Restore shared-folder access, or delete the local shortcut directory to discard dirty local state.",
+			detail:       "This shared folder was removed from your OneDrive; its last local changes are syncing before the local copy is removed.",
+			action:       "Restore access to the shared folder, or delete its local folder to discard changes that have not synced.",
 			autoRetry:    boolPtr(true),
 			protectsPath: true,
 		},
@@ -287,8 +285,8 @@ func shortcutStatusRemovalLifecycleCases() []shortcutStatusLifecycleCase {
 			state:        syncengine.ShortcutRootStateRemovedCleanupBlocked,
 			displayState: string(syncengine.ShortcutRootStateRemovedCleanupBlocked),
 			reason:       string(syncengine.ShortcutRootStateRemovedCleanupBlocked),
-			detail:       "The parent engine cannot release the protected shortcut alias path.",
-			action:       "Clear the local filesystem blocker.",
+			detail:       "This shared folder was removed, but its local copy can't be removed.",
+			action:       "Move or delete what is in the way at that path; the next sync finishes the cleanup.",
 			autoRetry:    boolPtr(true),
 			protectsPath: true,
 		},
@@ -297,7 +295,7 @@ func shortcutStatusRemovalLifecycleCases() []shortcutStatusLifecycleCase {
 			state:        syncengine.ShortcutRootStateRemovedReleasePending,
 			displayState: string(syncengine.ShortcutRootStateRemovedReleasePending),
 			reason:       string(syncengine.ShortcutRootStateRemovedReleasePending),
-			detail:       "Child sync finished; the parent engine is releasing the protected shortcut alias path.",
+			detail:       "This shared folder was removed and its last changes have synced; its local copy is being removed.",
 			autoRetry:    boolPtr(true),
 			protectsPath: true,
 		},
@@ -306,7 +304,7 @@ func shortcutStatusRemovalLifecycleCases() []shortcutStatusLifecycleCase {
 			state:        syncengine.ShortcutRootStateRemovedChildCleanupPending,
 			displayState: string(syncengine.ShortcutRootStateRemovedChildCleanupPending),
 			reason:       string(syncengine.ShortcutRootStateRemovedChildCleanupPending),
-			detail:       "The shortcut alias was released; child cleanup is finishing.",
+			detail:       "This shared folder was removed; its local sync data is being cleaned up.",
 			autoRetry:    boolPtr(true),
 		},
 		{
@@ -314,7 +312,7 @@ func shortcutStatusRemovalLifecycleCases() []shortcutStatusLifecycleCase {
 			state:              syncengine.ShortcutRootStateSamePathReplacementWaiting,
 			displayState:       string(syncengine.ShortcutRootStateSamePathReplacementWaiting),
 			reason:             string(syncengine.ShortcutRootStateSamePathReplacementWaiting),
-			detail:             "A new shortcut is waiting for the old child sync to finish.",
+			detail:             "A new shared folder with the same name is waiting for the old one to finish syncing.",
 			autoRetry:          boolPtr(true),
 			protectsPath:       true,
 			waitingReplacement: "Shortcuts/Docs",
@@ -324,8 +322,8 @@ func shortcutStatusRemovalLifecycleCases() []shortcutStatusLifecycleCase {
 			state:        syncengine.ShortcutRootStateDuplicateTarget,
 			displayState: string(syncengine.ShortcutRootStateDuplicateTarget),
 			reason:       string(syncengine.ShortcutRootStateDuplicateTarget),
-			detail:       "Another shortcut alias in this parent already projects the same target.",
-			action:       "Remove or rename the duplicate shortcut alias.",
+			detail:       "Another shortcut in this drive already syncs the same shared folder.",
+			action:       "Remove one of the two shortcuts from your OneDrive.",
 			autoRetry:    boolPtr(true),
 			protectsPath: true,
 		},
@@ -401,8 +399,8 @@ func assertStatusLifecycleText(t *testing.T, mount *statusMount, tc *shortcutSta
 	assert.NotContains(t, rendered, "onedrive-go ")
 	assert.NotContains(t, rendered, "Run ")
 	if tc.reason != "" {
-		assert.Contains(t, rendered, "Reason: "+tc.reason)
-		assert.Contains(t, rendered, "Next: "+tc.detail)
+		assert.Contains(t, rendered, "Reason: "+tc.detail)
+		assert.NotContains(t, rendered, tc.reason, "the machine state token is for --json only")
 		assert.Contains(t, rendered, "Auto retry: yes")
 		if tc.protectsPath {
 			assert.Contains(t, rendered, "Protected current path: /tmp/sync-root/Shortcuts/Docs")
@@ -457,7 +455,7 @@ func TestBuildChildStatusMount_SurfacesProtectedPaths(t *testing.T) {
 
 	assert.Equal(t, "/tmp/sync-root/Shortcuts/Docs", mount.ProtectedCurrentPath)
 	assert.Equal(t, []string{"/tmp/sync-root/Shortcuts/Old Docs"}, mount.ProtectedReservedPaths)
-	assert.Contains(t, mount.StateDetail, "child sync")
+	assert.Contains(t, mount.StateDetail, "last local changes are syncing")
 	assert.NotContains(t, mount.RecoveryAction, "rerun sync")
 }
 
@@ -504,14 +502,16 @@ func TestPrintMountStatus_RendersChildLifecycleReasonAndNextAction(t *testing.T)
 		DisplayName:    "Docs",
 		SyncDir:        "/tmp/sync-root/Shortcuts/Docs",
 		State:          string(syncengine.ShortcutRootStateTargetUnavailable),
+		StateLabel:     "Shared folder unavailable",
 		StateReason:    string(syncengine.ShortcutRootStateTargetUnavailable),
-		StateDetail:    "The shortcut target is unavailable.",
+		StateDetail:    "OneDrive can't open this shared folder; it may have been unshared, moved or deleted.",
 	})
 	require.NoError(t, err)
 
 	output := buf.String()
-	assert.Contains(t, output, "Reason: "+string(syncengine.ShortcutRootStateTargetUnavailable))
-	assert.Contains(t, output, "Next: The shortcut target is unavailable.")
+	assert.Contains(t, output, "Status: Shared folder unavailable")
+	assert.Contains(t, output, "Reason: OneDrive can't open this shared folder")
+	assert.NotContains(t, output, string(syncengine.ShortcutRootStateTargetUnavailable))
 	assert.Contains(t, output, "Shared folder: Managed through the parent drive")
 }
 
@@ -529,7 +529,7 @@ func TestPrintMountStatus_RendersGuidedShortcutRecovery(t *testing.T) {
 		SyncDir:                "/tmp/sync-root/Shortcuts/Docs",
 		State:                  string(syncengine.ShortcutRootStateRemovedFinalDrain),
 		StateReason:            string(syncengine.ShortcutRootStateRemovedFinalDrain),
-		StateDetail:            "The shortcut alias was removed; child sync is finishing before release.",
+		StateDetail:            "This shared folder was removed from your OneDrive; its last local changes are syncing before the local copy is removed.",
 		ProtectedCurrentPath:   "/tmp/sync-root/Shortcuts/Docs",
 		ProtectedReservedPaths: []string{"/tmp/sync-root/Shortcuts/Old Docs"},
 		AutoRetry:              &autoRetry,
@@ -539,7 +539,7 @@ func TestPrintMountStatus_RendersGuidedShortcutRecovery(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "Protected current path: /tmp/sync-root/Shortcuts/Docs")
 	assert.Contains(t, output, "Reserved path: /tmp/sync-root/Shortcuts/Old Docs")
-	assert.Contains(t, output, "Next: The shortcut alias was removed")
+	assert.Contains(t, output, "Reason: This shared folder was removed")
 	assert.Contains(t, output, "Auto retry: yes")
 }
 
@@ -560,8 +560,9 @@ func TestBuildChildStatusMount_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	assert.Empty(t, mount.CanonicalID)
 	assert.Equal(t, "Docs", statusMountLabel(&mount))
 	assert.Equal(t, string(syncengine.ShortcutRootStateBlockedPath), mount.StateReason)
-	assert.Contains(t, mount.StateDetail, "local file")
-	assert.Contains(t, mount.RecoveryAction, "Clear the blocking local path")
+	assert.Equal(t, "Something else is in the way at this shared folder's local path.", mount.StateDetail)
+	assert.Equal(t, "shortcut alias path is blocked by a local file", mount.StateDebugDetail)
+	assert.Contains(t, mount.RecoveryAction, "Move or rename the file or folder at that path")
 	require.NotNil(t, mount.AutoRetry)
 	assert.True(t, *mount.AutoRetry)
 	assert.NotContains(t, mount.StateDetail, "pause")
@@ -593,9 +594,9 @@ func TestBuildChildStatusMount_FinalDrainGuidesAccessRestore(t *testing.T) {
 
 	assert.Equal(t, string(syncengine.ShortcutRootStateRemovedFinalDrain), mount.State)
 	assert.Equal(t, string(syncengine.ShortcutRootStateRemovedFinalDrain), mount.StateReason)
-	assert.Contains(t, mount.StateDetail, "child sync is finishing")
-	assert.Contains(t, mount.RecoveryAction, "Restore shared-folder access")
-	assert.Contains(t, mount.RecoveryAction, "delete the local shortcut directory")
+	assert.Contains(t, mount.StateDetail, "last local changes are syncing")
+	assert.Contains(t, mount.RecoveryAction, "Restore access to the shared folder")
+	assert.Contains(t, mount.RecoveryAction, "delete its local folder")
 	require.NotNil(t, mount.AutoRetry)
 	assert.True(t, *mount.AutoRetry)
 }
@@ -2094,4 +2095,30 @@ func TestStatusJSON_MountRefDistinguishesSiblingChildren(t *testing.T) {
 
 	assert.NotEqual(t, config.MountRef(first), config.MountRef(second),
 		"two shortcut children under one parent must be distinguishable")
+}
+
+// Validates: R-2.10.1
+// Without --verbose or --debug, status drops the raw diagnostic behind every
+// shared folder row, however deeply it is nested, and keeps the plain reason.
+func TestDropStatusDebugDetail_ClearsNestedRawDetailOnly(t *testing.T) {
+	t.Parallel()
+
+	child := statusDrive{StateDetail: "plain reason", StateDebugDetail: "raw: chain"}
+	accounts := []statusAccount{{
+		Drives: []statusDrive{{
+			StateDebugDetail: "raw: drive",
+			SharedFolders:    []statusDrive{child},
+			ChildMounts:      []statusDrive{child},
+		}},
+		Mounts: []statusDrive{{SharedFolders: []statusDrive{child}}},
+	}}
+
+	dropStatusDebugDetail(accounts)
+
+	drive := accounts[0].Drives[0]
+	assert.Empty(t, drive.StateDebugDetail)
+	assert.Empty(t, drive.SharedFolders[0].StateDebugDetail)
+	assert.Equal(t, "plain reason", drive.SharedFolders[0].StateDetail)
+	assert.Empty(t, drive.ChildMounts[0].StateDebugDetail)
+	assert.Empty(t, accounts[0].Mounts[0].SharedFolders[0].StateDebugDetail)
 }

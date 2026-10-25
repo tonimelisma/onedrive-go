@@ -1,4 +1,4 @@
-Status: 2 drives: 1 paused, 1 with issues, 1 account needs sign-in
+Status: 2 drives, 1 shared folder: 1 paused, 1 with issues, 1 account needs sign-in
 
 Account: Alice Example <alice@example.com>
   Organization: Contoso
@@ -27,6 +27,15 @@ Account: Alice Example <alice@example.com>
         Scope: Shared/Docs
 
         Shared/Docs/report.docx
+    Shared folders:
+    Docs
+      Folder: /Users/alice/OneDrive/Shared/Docs
+      Status: Removed, cleanup blocked
+      Shared folder: Managed through the parent drive
+      Reason: This shared folder was removed, but its local copy can't be removed.
+      Protected current path: /Users/alice/OneDrive/Shared/Docs
+      Action: Move or delete what is in the way at that path; the next sync finishes the cleanup.
+      Auto retry: yes
 
 Account: Bob Example <bob@example.com>
   Organization: Example Corp

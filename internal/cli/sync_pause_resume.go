@@ -241,7 +241,7 @@ func resumeOneDrive(
 		}
 
 		if !cc.Flags.JSON {
-			cc.Statusf("Drive %s: expired timed pause cleared\n", cid.String())
+			cc.Statusf("Drive %s: expired timed pause cleared\n", configuredDriveLabel(cid, drive))
 		}
 
 		return resumeOutcomeExpiredPause, nil
@@ -252,7 +252,7 @@ func resumeOneDrive(
 	}
 
 	if !cc.Flags.JSON {
-		cc.Statusf("Drive %s resumed\n", cid.String())
+		cc.Statusf("Drive %s resumed\n", configuredDriveLabel(cid, drive))
 	}
 
 	return resumeOutcomeResumed, nil

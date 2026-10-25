@@ -31,13 +31,21 @@ func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
 	}); err != nil {
 		rt.resources.localObs.droppedEvents.Add(droppedEvents)
 		rt.resources.localObs.droppedRetries.Add(droppedRetries)
-		rt.deps.logger.Warn("Could not schedule a rescan of the sync folder after missed changes; will retry",
+		level := slog.LevelWarn
+		if errText := err.Error(); errText == rt.loop.lastDroppedRescanErr {
+			// Already reported; the next maintenance tick retries it.
+			level = slog.LevelDebug
+		} else {
+			rt.loop.lastDroppedRescanErr = errText
+		}
+		rt.deps.logger.Log(ctx, level, "Could not schedule a rescan of the sync folder after missed changes; will retry",
 			slog.Int64("dropped_events", droppedEvents),
 			slog.Int64("dropped_hash_requests", droppedRetries),
 			slog.String("error", err.Error()),
 		)
 		return
 	}
+	rt.loop.lastDroppedRescanErr = ""
 
 	// Info: self-healing, the engine rescans by itself.
 	rt.deps.logger.Info("Many local changes arrived at once; rescanning the sync folder to catch up",
