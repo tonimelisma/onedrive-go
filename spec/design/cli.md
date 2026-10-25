@@ -283,7 +283,7 @@ instead of prose.
 ### JSON Output Everywhere
 
 `--json` is a persistent root flag, so it reaches every command; a command that
-ignored it would hand a script prose where it asked for JSON (R-6.6.31). Each
+ignored it would hand a script prose where it asked for JSON (R-6.6.33). Each
 runnable command therefore does one of two things:
 
 - **Prints its result as JSON.** One document on stdout (`sync` streams JSON
