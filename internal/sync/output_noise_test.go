@@ -155,6 +155,37 @@ func TestEngineFlow_SkippedFindings_WarnOnlyWhenNew(t *testing.T) {
 	output = logs.String()
 	assert.Equal(t, 2, countLevel(output, "WARN"), "a newly skipped file still warns")
 	assert.Contains(t, output, "Not syncing docs/other?.txt")
+	assert.NotContains(t, output, "action=", "each line is complete; the watch summary names status once")
+}
+
+// Regression: the watch condition summary printed its breakdown twice and a
+// raw action attribute on the console: "Some files are not syncing: 2 files
+// ... (total=2, breakdown=\"2 files ...\", action=\"run onedrive-go status
+// for details\")". The message now carries the breakdown and the next step.
+//
+// Validates: R-6.6.30
+func TestWatchConditionSummary_StatesBreakdownAndHintOnce(t *testing.T) {
+	t.Parallel()
+
+	logger, logs := newCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+
+	seedObservationIssueRowForTest(t, rt.deps.store, &ObservationIssue{
+		Path:      "docs/CON",
+		DriveID:   driveid.New(engineTestDriveID),
+		IssueType: IssueInvalidFilename,
+	})
+	rt.logWatchSummary(t.Context())
+
+	output := logs.String()
+	assert.Equal(t, 1, countLevel(output, "WARN"))
+	assert.Contains(t, output,
+		`msg="Some files are not syncing: 1 file with names OneDrive does not allow. Run 'onedrive-go status' for details."`)
+	assert.Contains(t, output, "condition_total=1", "the count stays in the log file")
+	assert.NotContains(t, output, "breakdown=")
+	assert.NotContains(t, output, "action=")
 }
 
 // A file that stats but cannot be opened used to warn "hash computation

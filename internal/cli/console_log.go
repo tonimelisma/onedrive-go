@@ -42,10 +42,12 @@ type consoleLogHandler struct {
 // isInternalLogField reports the R-6.6.13 sync log schema fields other than path:
 // identifiers and classifications that make the log file joinable and
 // greppable, but mean nothing to the person reading the console. The path
-// stays, because it names the file the line is about.
+// stays, because it names the file the line is about. condition_total is not a
+// schema field but belongs here too: the watch condition summary spells the
+// counts out in its message, so the console would only repeat them.
 func isInternalLogField(key string) bool {
 	switch key {
-	case "run_id", "action_id", "action_type", "condition_key", "failure_class",
+	case "run_id", "action_id", "action_type", "condition_key", "condition_total", "failure_class",
 		"log_owner", "scope_key", "trial_scope_key", "drive_id", "http_status":
 		return true
 	default:

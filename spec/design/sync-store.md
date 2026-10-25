@@ -4,7 +4,7 @@ GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/
 
 LAYER: 1
 
-Implements: R-2.5 [designed], R-2.7 [verified], R-2.8.8 [verified], R-2.10.33 [designed], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
+Implements: R-2.5 [designed], R-2.7 [verified], R-2.8.8 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
 ## Verification Counts Only What It Compared
 
@@ -377,6 +377,12 @@ blocked descendants from those boundary facts.
 - `readPathTruthStatus` for derived truth availability over requested paths,
   built from `observation_issues` plus boundary-tagged `ScopeKey` facts without
   materializing fake durable descendant rows
+
+`DriveStatusSnapshot.RemoteDriftItems` (status "Remote changes") uses the same
+content test as the planner's `remote_changed` in `sqlite_compare.go`: folders
+differ only by path or type, and a file's hash decides whenever either side has
+one. Baseline stores no folder mtime, so comparing folder times counted every
+remote folder as drift on a converged drive (R-2.10.48).
 
 ## State-DB Diagnosis And Reset
 

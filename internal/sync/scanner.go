@@ -1133,44 +1133,47 @@ func dirEntryKind(d fs.DirEntry) observedKind {
 
 // validateOneDriveName checks whether a filename is valid for OneDrive.
 // Returns ("", "") for valid names. For invalid names, returns the issue
-// type constant and a human-readable detail string.
+// type constant and a human-readable detail string. The detail never repeats
+// the name: every caller prints it next to the path ("Not syncing a/CON: the
+// name is reserved by Windows"), and %q-quoting the name again doubled any
+// backslash in it.
 //
 // Checks (ordered by specificity): empty name, trailing dot/space, leading
 // space, component length > 255, reserved device names, reserved patterns,
 // invalid characters.
 func validateOneDriveName(name string) (reason, detail string) {
 	if name == "" {
-		return IssueInvalidFilename, "empty filename"
+		return IssueInvalidFilename, "the name is empty"
 	}
 
 	if name[len(name)-1] == '.' {
-		return IssueInvalidFilename, fmt.Sprintf("filename %q ends with a period", name)
+		return IssueInvalidFilename, "the name ends with a period"
 	}
 
 	if name[len(name)-1] == ' ' {
-		return IssueInvalidFilename, fmt.Sprintf("filename %q ends with a space", name)
+		return IssueInvalidFilename, "the name ends with a space"
 	}
 
 	if name[0] == ' ' {
-		return IssueInvalidFilename, fmt.Sprintf("filename %q starts with a space", name)
+		return IssueInvalidFilename, "the name starts with a space"
 	}
 
 	if len(name) > maxComponentLength {
-		return IssueInvalidFilename, fmt.Sprintf("filename %q exceeds %d-character component limit", name, maxComponentLength)
+		return IssueInvalidFilename, fmt.Sprintf("the name is longer than %d characters", maxComponentLength)
 	}
 
 	lower := strings.ToLower(name)
 
 	if isReservedDeviceName(lower) {
-		return IssueInvalidFilename, fmt.Sprintf("filename %q is a reserved Windows device name", name)
+		return IssueInvalidFilename, "the name is reserved by Windows"
 	}
 
 	if isReservedPattern(name, lower) {
-		return IssueInvalidFilename, fmt.Sprintf("filename %q matches a reserved OneDrive pattern", name)
+		return IssueInvalidFilename, "OneDrive reserves this name"
 	}
 
 	if containsInvalidChars(name) {
-		return IssueInvalidFilename, fmt.Sprintf("filename %q contains characters forbidden by OneDrive", name)
+		return IssueInvalidFilename, `the name contains a character OneDrive does not allow (" * : < > ? / \ |)`
 	}
 
 	return "", ""
@@ -1197,7 +1200,7 @@ func validateObservedName(name, path string, rules LocalObservationRules) (reaso
 	}
 
 	if rules.RejectSharePointRootForms && isSharePointRootForms(name, path) {
-		return IssueInvalidFilename, fmt.Sprintf("name %q is reserved at the root of a SharePoint library", name)
+		return IssueInvalidFilename, "the name is reserved at the root of a SharePoint library"
 	}
 
 	return "", ""

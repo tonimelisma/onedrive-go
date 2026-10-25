@@ -79,9 +79,9 @@ func (flow *engineFlow) logSkippedObservationFindings(
 		const aggregateThreshold = 10
 		if len(items) <= aggregateThreshold {
 			for i := range items {
-				eng.logger.Warn("Not syncing "+items[i].Path+": "+skippedItemReasonText(&items[i]),
-					slog.String("action", "run onedrive-go status for the full list"),
-				)
+				// No per-line hint: the line is complete, and the watch
+				// condition summary that follows names `status` once.
+				eng.logger.Warn("Not syncing " + items[i].Path + ": " + skippedItemReasonText(&items[i]))
 			}
 
 			continue
@@ -98,7 +98,6 @@ func (flow *engineFlow) logSkippedObservationFindings(
 
 		eng.logger.Warn(fmt.Sprintf("Not syncing %d files: %s", len(items), skippedItemReasonText(&items[0])),
 			slog.Any("examples", samples),
-			slog.String("action", "run onedrive-go status for the full list"),
 		)
 		// Keep full per-path visibility at Debug while avoiding a warning
 		// storm once a single scanner issue fans out across many files.
