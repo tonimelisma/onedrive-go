@@ -911,12 +911,14 @@ func reviewThreadIsResolved(ctx context.Context, runner commandRunner, repoRoot 
 	if err != nil {
 		return false, fmt.Errorf("dod read review thread %s: %w", threadID, err)
 	}
+	// Untagged like the other gh response structs: encoding/json matches
+	// GitHub's camelCase keys case-insensitively.
 	var response struct {
 		Data struct {
 			Node *struct {
-				IsResolved bool `json:"isResolved"`
-			} `json:"node"`
-		} `json:"data"`
+				IsResolved bool
+			}
+		}
 	}
 	if err := json.Unmarshal(out, &response); err != nil {
 		return false, fmt.Errorf("decode review thread %s state: %w", threadID, err)
