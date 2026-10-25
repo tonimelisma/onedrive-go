@@ -157,6 +157,7 @@ The system shall validate filenames against OneDrive naming restrictions before 
 - R-2.11.4: The system shall reject local files with trailing dots or leading/trailing whitespace. [verified]
 - R-2.11.5: When the scanner filters a file due to naming restrictions, the system shall record it as an actionable issue (not silently skip with only a DEBUG log). [verified]
 - R-2.11.6: The system shall reject local names that are not valid UTF-8 or that contain control characters (U+0000 to U+001F, U+007F). Graph rejects control characters, and it reinterprets invalid bytes (0xFF arrives as `ÿ`), after which the renamed remote item would rename the local file. [verified]
+- R-2.11.7: Every path the system accepts (up to OneDrive's 400 characters) shall stay resolvable. Graph rejects path-addressed URLs well before that limit, so a long path shall be resolved in item-relative chunks. [verified]
 
 ## R-2.12 Case Collision Handling [verified]
 
