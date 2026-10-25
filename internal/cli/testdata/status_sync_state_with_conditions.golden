@@ -9,8 +9,8 @@
         /quota/a.txt
 
       Invalid filename: 2 items
-        The filename contains characters not allowed by OneDrive.
-        Action: Rename the file to remove invalid characters.
+        OneDrive does not allow these names: they contain a forbidden character, are reserved, or end in a space or period.
+        Action: Rename the files so OneDrive accepts their names.
 
         /bad:name.txt
         /worse:name.txt
