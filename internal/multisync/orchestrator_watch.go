@@ -559,11 +559,14 @@ func (o *Orchestrator) reportWatchRunnerExit(wr *watchRunner, err error) {
 		// The restart attempt fails at startup with the same cause, and that
 		// startup failure is what gets announced.
 		o.logger.Info(fmt.Sprintf("Stopped syncing %s: its sync folder is unavailable", name),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	case isNew:
+		// The error value, not its text: the CLI console shows a plain
+		// reason at default verbosity, and the log file and --verbose keep
+		// the full chain.
 		o.logger.Warn(fmt.Sprintf("Stopped syncing %s; retrying in %s", name, humanDelay(delay)),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	default:
 		o.logger.Debug("drive stopped again with the same error",

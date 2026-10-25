@@ -357,7 +357,10 @@ would put JSON objects into the journal, also all at priority info, and has no
 
 ## Fix list, in order of user impact
 
-Status: items 1–6 and 11 are done. Item 7 was resolved differently: `-v`
+Status: items 1–6 and 11 are done. Item 5's logger split is finished: every
+command gets the configured log file before it runs, and the records logged
+while the config file is being found are replayed through the command logger,
+so one run uses one console format and the log file has the whole run. Item 7 was resolved differently: `-v`
 stays the "extra detail" level (timestamped key=value logs, retried failures,
 full error chains) rather than a separate plain-words tier, because default
 output now carries the plain-words narrative. Item 9 is done for state and

@@ -33,6 +33,24 @@ type consoleLogHandler struct {
 	style  consoleLogStyle
 	attrs  []slog.Attr
 	groups []string
+	// showInternalFields keeps the sync log schema fields (isInternalLogField)
+	// on the line. Only --verbose/--debug set it: at default verbosity those
+	// identifiers are noise to a person, and the log file keeps them.
+	showInternalFields bool
+}
+
+// isInternalLogField reports the R-6.6.13 sync log schema fields other than path:
+// identifiers and classifications that make the log file joinable and
+// greppable, but mean nothing to the person reading the console. The path
+// stays, because it names the file the line is about.
+func isInternalLogField(key string) bool {
+	switch key {
+	case "run_id", "action_id", "action_type", "condition_key", "failure_class",
+		"log_owner", "scope_key", "trial_scope_key", "drive_id", "http_status":
+		return true
+	default:
+		return false
+	}
 }
 
 func newConsoleLogHandler(w io.Writer, level slog.Leveler, style consoleLogStyle) *consoleLogHandler {
@@ -65,11 +83,11 @@ func (h *consoleLogHandler) Handle(_ context.Context, r slog.Record) error {
 
 	details := make([]string, 0, len(h.attrs)+r.NumAttrs())
 	for _, attr := range h.attrs {
-		details = appendConsoleAttr(details, "", attr)
+		details = h.appendAttr(details, "", attr)
 	}
 	prefix := strings.Join(h.groups, ".")
 	r.Attrs(func(attr slog.Attr) bool {
-		details = appendConsoleAttr(details, prefix, attr)
+		details = h.appendAttr(details, prefix, attr)
 		return true
 	})
 
@@ -145,10 +163,20 @@ func journalPriorityFor(level slog.Level) int {
 	}
 }
 
-func appendConsoleAttr(details []string, prefix string, attr slog.Attr) []string {
+func (h *consoleLogHandler) appendAttr(details []string, prefix string, attr slog.Attr) []string {
 	attr.Value = attr.Value.Resolve()
 	if attr.Equal(slog.Attr{}) {
 		return details
+	}
+	if !h.showInternalFields && attr.Value.Kind() != slog.KindGroup {
+		// WithAttrs stores group-qualified keys, so match the last segment.
+		key := attr.Key
+		if i := strings.LastIndexByte(key, '.'); i >= 0 {
+			key = key[i+1:]
+		}
+		if isInternalLogField(key) {
+			return details
+		}
 	}
 
 	key := attr.Key
@@ -158,9 +186,20 @@ func appendConsoleAttr(details []string, prefix string, attr slog.Attr) []string
 
 	if attr.Value.Kind() == slog.KindGroup {
 		for _, member := range attr.Value.Group() {
-			details = appendConsoleAttr(details, key, member)
+			details = h.appendAttr(details, key, member)
 		}
 		return details
+	}
+
+	if !h.showInternalFields && attr.Value.Kind() == slog.KindAny {
+		// An error value is a full chain ("sync drive: observe remote: GET
+		// ...: dial tcp ...: connection refused"). A person at default
+		// verbosity gets the plain reason (plainErrorReason, as the sync
+		// console uses for per-file failures); the chain stays in the log file
+		// and under --verbose/--debug.
+		if err, ok := attr.Value.Any().(error); ok && err != nil {
+			return append(details, plainErrorReason(err))
+		}
 	}
 
 	value := attr.Value.String()

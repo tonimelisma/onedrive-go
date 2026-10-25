@@ -151,6 +151,8 @@ type CLIContext struct {
 	PerfSession      *perf.Session            // command-scoped performance collector/logging session
 	seams            cliSeams                 // test injection points; see cliSeams
 	logCloser        io.Closer                // log file closer; nil when no log file is configured
+	logging          config.LoggingConfig     // logging settings the command logger was last built from
+	hasLogging       bool                     // logging holds settings from a config file (not just the bootstrap flags)
 	statusMu         sync.Mutex               // guards statusErr and progressShown for concurrent progress callbacks
 	statusErr        error
 	progressShown    bool       // a redrawn progress line is on screen and must be cleared before other output
@@ -188,6 +190,45 @@ func (cc *CLIContext) replaceCommandLogger(logger *slog.Logger, closer io.Closer
 	}
 
 	return nil
+}
+
+// useLoggingConfig builds the command logger from logging: the console half
+// follows the CLI flags, the log-file half follows logging. Called again with
+// the settings it already uses, it keeps the current logger, so a command that
+// re-reads its config does not reopen the log file or repeat its warnings.
+func (cc *CLIContext) useLoggingConfig(logging config.LoggingConfig) error {
+	if cc.hasLogging && cc.logging == logging {
+		return nil
+	}
+
+	logger, closer := buildLoggerDualWithStatusWriter(
+		&config.ResolvedDrive{LoggingConfig: logging}, cc.Flags, cc.Status())
+	if err := cc.replaceCommandLogger(logger, closer); err != nil {
+		return err
+	}
+
+	cc.logging = logging
+	cc.hasLogging = true
+
+	return nil
+}
+
+// attachConfiguredLogging gives the command the log file the config asks for
+// before any command work runs. Commands that skip the strict config load
+// (auth, drive, status, sync, shared targets) used to keep the flag-only
+// bootstrap logger, so their INFO records -- the performance summary above
+// all -- never reached the log file. It is best effort: a config that cannot
+// be read leaves the console-only logger in place, and the command reports the
+// problem itself if it needs the config.
+func (cc *CLIContext) attachConfiguredLogging() error {
+	rawCfg, _, err := config.LoadOrDefaultLenient(cc.CfgPath, slog.New(slog.DiscardHandler))
+	if err != nil {
+		cc.Logger.Debug("log file not attached: config unreadable", slog.String("error", err.Error()))
+
+		return nil
+	}
+
+	return cc.useLoggingConfig(rawCfg.LoggingConfig)
 }
 
 func (cc *CLIContext) closeCommandLogger() error {
@@ -357,23 +398,37 @@ func initializeCLIContext(
 	}
 
 	flags := bindings.cliFlags()
-	logger := buildLoggerWithStatusWriter(nil, flags, statusWriter)
-	env := config.ReadEnvOverrides(logger)
+	// Finding the config file logs before the log settings are known, so
+	// those records wait in a buffer and go through the command logger once
+	// it is built: same console rules, and into the log file too.
+	bootstrapLog := newBootstrapLogBuffer()
+	bootstrapLogger := slog.New(bootstrapLog)
+	env := config.ReadEnvOverrides(bootstrapLogger)
 	cc := &CLIContext{
 		OutputWriter: outputWriter,
 		Flags:        flags,
-		Logger:       logger,
+		Logger:       buildLoggerWithStatusWriter(nil, flags, statusWriter),
 		StatusWriter: statusWriter,
-		CfgPath:      config.ResolveConfigPath(env, config.CLIOverrides{ConfigPath: flags.ConfigPath}, logger),
+		CfgPath:      config.ResolveConfigPath(env, config.CLIOverrides{ConfigPath: flags.ConfigPath}, bootstrapLogger),
 		Env:          env,
-		Runtime:      driveops.NewSessionRuntime(nil, "onedrive-go/"+version, logger),
 	}
 
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	perfSession, perfCtx := newCommandPerfSession(ctx, cmd, logger)
+
+	// Every command gets the configured log file before it does any work,
+	// including the commands that skip the strict config load (auth, drive,
+	// status, sync, shared targets). A command that resolves a drive later
+	// reuses this logger, because logging settings are global.
+	if err := cc.attachConfiguredLogging(); err != nil {
+		return err
+	}
+	bootstrapLog.replayInto(ctx, cc.Logger.Handler())
+	cc.Runtime = driveops.NewSessionRuntime(nil, "onedrive-go/"+version, cc.Logger)
+
+	perfSession, perfCtx := newCommandPerfSession(ctx, cmd, cc.Logger)
 	cc.PerfSession = perfSession
 	if perfCtx != nil {
 		ctx = perfCtx
@@ -393,7 +448,8 @@ func initializeCLIContext(
 		cc.SharedTarget = sharedTarget
 	}
 
-	if cc.SharedTarget == nil && cmd.Annotations[skipConfigAnnotation] != skipConfigValue {
+	skipsConfig := cmd.Annotations[skipConfigAnnotation] == skipConfigValue
+	if cc.SharedTarget == nil && !skipsConfig {
 		if err := initializeResolvedCLIContext(cmd, cc); err != nil {
 			return err
 		}
@@ -410,8 +466,7 @@ func initializeResolvedCLIContext(cmd *cobra.Command, cc *CLIContext) error {
 
 	cc.Cfg = resolved
 
-	dualLogger, closer := buildLoggerDualWithStatusWriter(resolved, cc.Flags, cc.StatusWriter)
-	if err := cc.replaceCommandLogger(dualLogger, closer); err != nil {
+	if err := cc.useLoggingConfig(resolved.LoggingConfig); err != nil {
 		return err
 	}
 	holder := config.NewHolder(rawCfg, cc.CfgPath)
@@ -733,6 +788,13 @@ func buildLoggerWithStatusWriter(cfg *config.ResolvedDrive, flags CLIFlags, stat
 	return slog.New(buildHandlerWithStatusWriter(statusWriterOrDefault(statusWriter), cfg, opts, statusWriter))
 }
 
+// resolveConsoleLogLevel sets the console half of the command logger. The
+// console and the log file have separate levels by design (R-6.6.2, R-6.6.3):
+// INFO records are operational history -- performance summaries (R-6.6.14),
+// plan counts, runner lifecycle -- that the log file keeps at its default
+// level, while the default console starts at WARN and shows them only with
+// --verbose/--debug. What a person must see at default verbosity (activity,
+// summaries, startup lines) is written by the command itself, not logged.
 func resolveConsoleLogLevel(flags CLIFlags) slog.Level {
 	level := slog.LevelWarn
 
@@ -803,10 +865,15 @@ func buildHandlerWithStatusWriter(
 // format. The console is for people, so it is never JSON here (structured
 // history belongs in log_file): the journal gets priority-prefixed lines
 // without timestamps, default verbosity gets plain "Warning: ..." lines, and
-// --verbose/--debug get full timestamped key=value detail.
+// --verbose/--debug get full timestamped key=value detail. At default
+// verbosity both styles also drop the sync log schema identifiers
+// (isInternalLogField); the log file and --verbose/--debug keep them.
 func autoConsoleHandler(w io.Writer, opts *slog.HandlerOptions) slog.Handler {
 	if isWriterJournal(w) {
-		return newConsoleLogHandler(w, opts.Level, consoleLogJournal)
+		journal := newConsoleLogHandler(w, opts.Level, consoleLogJournal)
+		journal.showInternalFields = opts.Level != nil && journalShowsInternalFields(opts.Level.Level())
+
+		return journal
 	}
 
 	if opts.Level != nil && opts.Level.Level() >= slog.LevelWarn {
@@ -814,6 +881,12 @@ func autoConsoleHandler(w io.Writer, opts *slog.HandlerOptions) slog.Handler {
 	}
 
 	return slog.NewTextHandler(w, opts)
+}
+
+// journalShowsInternalFields reports whether journal lines at consoleLevel
+// keep the sync log schema fields: only --verbose/--debug (below WARN) do.
+func journalShowsInternalFields(consoleLevel slog.Level) bool {
+	return consoleLevel < slog.LevelWarn
 }
 
 // isWriterJournal reports whether w is a file that systemd connected to the
