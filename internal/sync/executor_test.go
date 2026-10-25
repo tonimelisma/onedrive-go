@@ -3338,7 +3338,7 @@ func TestExecutor_RemoteMove_FileETagMismatchStillSupersedes(t *testing.T) {
 			return &graph.Item{ID: "item-file", DriveID: driveID, ETag: `"etag-changed"`}, nil
 		},
 		moveItemIfMatchFn: func(_ context.Context, _ driveid.ID, _, _, _, _ string) (*graph.Item, error) {
-			t.Error("a changed file must not be moved")
+			assert.Fail(t, "a changed file must not be moved")
 			return nil, errors.New("unexpected move")
 		},
 	}
@@ -3377,7 +3377,7 @@ func TestExecutor_RemoteMove_ItemAlreadyAtDestinationSucceedsWithoutMoving(t *te
 			}, nil
 		},
 		moveItemIfMatchFn: func(_ context.Context, _ driveid.ID, _, _, _, _ string) (*graph.Item, error) {
-			t.Error("an item already at its destination must not be moved again")
+			assert.Fail(t, "an item already at its destination must not be moved again")
 			return nil, errors.New("unexpected move")
 		},
 	}
