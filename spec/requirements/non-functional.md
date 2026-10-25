@@ -46,7 +46,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.4.3: Removed delete-safety configuration keys shall be rejected as unknown configuration rather than silently ignored or mapped to hidden defaults. [verified]
 - R-6.4.4: Remote deletions shall go to the OneDrive recycle bin by default. [verified]
 - R-6.4.7: The system shall support configurable disk space reservation (`min_free_space`, default 1 GB). When available space falls below this threshold, downloads shall be scope-blocked. Set to 0 to disable. [verified]
-- R-6.4.8: All local filesystem writes shall be confined to the sync root directory. The executor validates resolved paths via `containedPath()` to prevent escape from path reconstruction bugs. [verified]
+- R-6.4.8: All local filesystem writes shall be confined to the sync root directory. The executor writes only through the rooted `synctree` capability, which refuses traversal, absolute paths and symlinked components that would leave the root, to prevent escape from path reconstruction bugs. [verified]
 
 ## R-6.5 Crash Recovery [verified]
 

@@ -308,11 +308,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 		},
 		ShortcutRootStateRemovedFinalDrain: {
 			status: shortcutRootStatusMetadata{
-				DisplayState:   string(ShortcutRootStateRemovedFinalDrain),
-				StatusLabel:    "Removed, finishing sync",
-				StateReason:    string(ShortcutRootStateRemovedFinalDrain),
-				IssueClass:     shortcutRootIssueRemovedFinalDrain,
-				Issue:          "This shared folder was removed from your OneDrive; its last local changes are syncing before the local copy is removed.",
+				DisplayState: string(ShortcutRootStateRemovedFinalDrain),
+				StatusLabel:  "Removed, finishing sync",
+				StateReason:  string(ShortcutRootStateRemovedFinalDrain),
+				IssueClass:   shortcutRootIssueRemovedFinalDrain,
+				Issue: "This shared folder was removed from your OneDrive; " +
+					"its last local changes are syncing before the local copy is removed.",
 				RecoveryClass:  shortcutRootRecoveryRestoreTargetOrDiscard,
 				RecoveryAction: "Restore access to the shared folder, or delete its local folder to discard changes that have not synced.",
 				AutoRetry:      true,

@@ -215,7 +215,7 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 	if err := flow.applyObservationFindingsBatch(
 		ctx,
 		&observationBatch.findings,
-		"record skipped OneDrive items",
+		recordSkippedOneDriveItems,
 		engineDebugNoteRemoteCurrent,
 	); err != nil {
 		return nil, nil, err

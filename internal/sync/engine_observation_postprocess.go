@@ -112,16 +112,20 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 	return nil
 }
 
+// recordSkippedOneDriveItems prefixes a failure to persist the skipped-item
+// findings of a remote observation batch.
+const recordSkippedOneDriveItems = "record skipped OneDrive items"
+
 func batchObservationFailureMessage(source remoteObservationBatchSource) string {
 	switch source {
 	case remoteObservationBatchPrimaryWatch:
-		return "record skipped OneDrive items"
+		return recordSkippedOneDriveItems
 	case remoteObservationBatchMountRoot:
 		return "record skipped shared folder items"
 	case remoteObservationBatchFullRefresh:
 		return "record skipped items from the full OneDrive check"
 	default:
-		return "record skipped OneDrive items"
+		return recordSkippedOneDriveItems
 	}
 }
 

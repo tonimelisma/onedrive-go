@@ -479,17 +479,16 @@ func TestPlanShortcutRootReleaseCleanupPromotesWaitingReplacement(t *testing.T) 
 	assert.Empty(t, plan.Records[0].ProtectedPaths)
 }
 
-// shortcutStatusInternalTerms are words from the implementation that must not
-// reach the default `status` text (spec/reference/cli-output-guidelines.md 5).
-var shortcutStatusInternalTerms = []string{
-	"alias", "parent engine", "parent-engine", "child", "mount", "projection", "protected", "release", "_",
-}
-
 func assertShortcutStatusTextIsUserVocabulary(t *testing.T, state ShortcutRootState, texts ...string) {
 	t.Helper()
+	// Words from the implementation that must not reach the default `status`
+	// text (spec/reference/cli-output-guidelines.md section 5).
+	internalTerms := []string{
+		"alias", "parent engine", "parent-engine", "child", "mount", "projection", "protected", "release", "_",
+	}
 	for _, text := range texts {
 		lower := strings.ToLower(text)
-		for _, term := range shortcutStatusInternalTerms {
+		for _, term := range internalTerms {
 			assert.NotContainsf(t, lower, term, "%s status text %q uses internal term %q", state, text, term)
 		}
 	}

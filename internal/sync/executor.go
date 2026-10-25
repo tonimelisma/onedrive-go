@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -471,45 +469,6 @@ func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) action
 // Helpers
 // ---------------------------------------------------------------------------
 
-// containedPath joins syncRoot and relPath, returning the absolute path only
-// if the result stays within syncRoot. Uses filepath.IsLocal (Go 1.20+) to
-// reject traversal sequences, absolute paths, and empty strings. Additionally
-// resolves symlinks to detect TOCTOU escape via symlinked path components.
-func containedPath(syncRoot, relPath string) (string, error) {
-	if !filepath.IsLocal(relPath) {
-		return "", fmt.Errorf("%w: %q", errPathEscapesSyncRoot, relPath)
-	}
-
-	absPath := filepath.Join(syncRoot, relPath)
-
-	// Resolve symlinks on the parent directory to detect escape via
-	// symlinked path components. The file itself may not exist yet
-	// (common for downloads), but its parent directory must exist for
-	// symlink-based attacks to work.
-	parentDir := filepath.Dir(absPath)
-
-	resolvedRoot, err := filepath.EvalSymlinks(syncRoot)
-	if err != nil {
-		return "", fmt.Errorf("evaluating sync root symlinks: %w", err)
-	}
-
-	resolvedParent, parentKnown, err := resolveParentForContainment(parentDir)
-	if err != nil {
-		return "", err
-	}
-	if !parentKnown {
-		return absPath, nil
-	}
-
-	if resolvedParent != resolvedRoot &&
-		!strings.HasPrefix(resolvedParent, resolvedRoot+string(filepath.Separator)) {
-		return "", fmt.Errorf("%w: symlink resolves to %q outside root %q",
-			errPathEscapesSyncRoot, resolvedParent, resolvedRoot)
-	}
-
-	return absPath, nil
-}
-
 // normalizeSyncTreePathError adds the sync-domain escape sentinel to a
 // containment failure from the sync tree.
 //
@@ -528,19 +487,6 @@ func normalizeSyncTreePathError(err error) error {
 	}
 
 	return err
-}
-
-func resolveParentForContainment(parentDir string) (string, bool, error) {
-	resolvedParent, err := filepath.EvalSymlinks(parentDir)
-	if err == nil {
-		return resolvedParent, true, nil
-	}
-
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", false, nil
-	}
-
-	return "", false, fmt.Errorf("evaluating parent directory symlinks: %w", err)
 }
 
 // ResolveParentID determines the remote parent ID for a given relative path.

@@ -221,7 +221,8 @@ func (o *remoteObserver) fullDelta(
 		token = newToken
 	}
 
-	return nil, "", shortcutTopologyBatch{}, 0, fmt.Errorf("read OneDrive changes: more than %d pages in one change list", maxDeltaPaginationGuard)
+	return nil, "", shortcutTopologyBatch{}, 0,
+		fmt.Errorf("read OneDrive changes: more than %d pages in one change list", maxDeltaPaginationGuard)
 }
 
 // Watch continuously polls for remote delta changes and sends events to the

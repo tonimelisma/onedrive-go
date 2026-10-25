@@ -2969,63 +2969,7 @@ func TestExecutor_Upload_MtimePassedToUploader(t *testing.T) {
 	assert.Equal(t, targetMtime.UnixNano(), o.LocalMtime)
 }
 
-// ---------------------------------------------------------------------------
-// Path containment guard tests (B-312)
-// ---------------------------------------------------------------------------
-
-func TestContainedPath_ValidPaths(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-
-	tests := []struct {
-		name    string
-		relPath string
-		want    string
-	}{
-		{"simple file", "file.txt", filepath.Join(root, "file.txt")},
-		{"nested path", "dir/subdir/file.txt", filepath.Join(root, "dir", "subdir", "file.txt")},
-		{"deep nesting", "a/b/c/d/e.txt", filepath.Join(root, "a", "b", "c", "d", "e.txt")},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got, err := containedPath(root, tt.relPath)
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestContainedPath_TraversalAttempts(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-
-	tests := []struct {
-		name    string
-		relPath string
-	}{
-		{"parent traversal", "../escape.txt"},
-		{"deep traversal", "../../etc/passwd"},
-		{"mid-path traversal", "subdir/../../escape.txt"},
-		{"absolute path", "/etc/passwd"},
-		{"empty path", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			_, err := containedPath(root, tt.relPath)
-			require.Error(t, err)
-			assert.ErrorIs(t, err, errPathEscapesSyncRoot)
-		})
-	}
-}
-
+// Validates: R-6.4.8
 func TestCreateLocalFolder_TraversalBlocked(t *testing.T) {
 	t.Parallel()
 
@@ -3041,61 +2985,6 @@ func TestCreateLocalFolder_TraversalBlocked(t *testing.T) {
 	o := e.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeFailure(t, &o)
 	assert.ErrorIs(t, o.Error, errPathEscapesSyncRoot)
-}
-
-// ---------------------------------------------------------------------------
-// Symlink TOCTOU tests (B-323)
-// ---------------------------------------------------------------------------
-
-func TestContainedPath_SymlinkEscape(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	outside := t.TempDir()
-
-	// Create a symlink inside root that points outside root.
-	require.NoError(t, os.Symlink(outside, filepath.Join(root, "escape")))
-
-	_, err := containedPath(root, "escape/secret.txt")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, errPathEscapesSyncRoot)
-}
-
-func TestContainedPath_SymlinkWithinRoot(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-
-	// Create a real target directory and a symlink to it, both within root.
-	target := filepath.Join(root, "real")
-	require.NoError(t, os.MkdirAll(target, 0o700))
-	require.NoError(t, os.Symlink(target, filepath.Join(root, "link")))
-
-	got, err := containedPath(root, "link/file.txt")
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(root, "link", "file.txt"), got)
-}
-
-func TestContainedPath_NonexistentPath_StillAllowed(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-
-	// Path doesn't exist on disk — EvalSymlinks will fail, so
-	// ContainedPath should fall back to lexical-only (still safe).
-	got, err := containedPath(root, "does/not/exist.txt")
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(root, "does", "not", "exist.txt"), got)
-}
-
-func TestContainedPath_MissingSyncRootReturnsError(t *testing.T) {
-	t.Parallel()
-
-	root := filepath.Join(t.TempDir(), "missing-root")
-
-	_, err := containedPath(root, "file.txt")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "evaluating sync root symlinks")
 }
 
 // ---------------------------------------------------------------------------

@@ -79,9 +79,8 @@ and nothing in `spec/` resolves them.
 | `B-296` | `internal/cli/root_test.go` |
 | `B-300` | `internal/driveops/session_store.go`, `internal/driveops/session_store_test.go` |
 | `B-310` | `internal/sync/observer_local_create_test.go` |
-| `B-312` | `internal/sync/executor_test.go`, `internal/sync/observer_local_handlers.go` |
+| `B-312` | `internal/sync/observer_local_handlers.go` |
 | `B-313` | `internal/sync/errors.go`, `internal/sync/planner.go` |
 | `B-314` | `internal/graph/client.go`, `internal/graph/client_test.go` |
 | `B-315` | `internal/graph/types.go`, `internal/graph/types_test.go` |
 | `B-318` | `internal/sync/fault_injection_test.go` |
-| `B-323` | `internal/sync/executor_test.go` |
