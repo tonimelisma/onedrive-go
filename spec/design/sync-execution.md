@@ -36,6 +36,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 
 | Behavior | Evidence |
 | --- | --- |
+| Move outcomes publish observed or proven local facts, keep a pending remote edit visible, and folder creates record local filesystem identity. | `TestExecutor_LocalMove_PublishesSourceBaselineLocalHalf`, `TestExecutor_LocalMove_RemoteEditKeepsBaselineRemoteContent`, `TestExecutor_RemoteMove_PublishesObservedDestinationLocalTruth`, `TestExecutor_CreateLocalFolder_RecordsFilesystemIdentity`, `TestExecutor_CreateRemoteFolder_RecordsObservedLocalIdentity` |
 | Edit/edit and create/create conflicts are handled immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestExecutor_ConflictDownloadFails_LeavesConflictCopy`, `TestConflictCopyPath_Normal` |
 | Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal`, `TestExecutor_ConflictCopy_ReservationGivesEachCopyItsOwnDestination`, `TestExecutor_ConflictCopy_ReleasedReservationLeavesNoPlaceholder`, `TestExecutor_ConflictCopy_LeavesExactlyOneCopyHoldingTheOriginal`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestExecutor_LocalDelete_NoBaselineHashAndChangedFile_PreservesLocalContent`, `TestExecutor_LocalDelete_NoBaselineHashAndUnchangedFile_Deletes`, `TestExecutor_LocalDelete_NoBaselineEvidence_PreservesLocalContent`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
 | Worker-start validation rejects already-submitted stale actions before executor side effects, while suspect local truth disables local-state-based rejection. Dependent uploads after planned remote moves tolerate move-produced eTag churn but still reject proven remote content drift, and executable actions without planner truth fail closed. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState`, `TestActionFreshness_PostRemoteMoveUploadAllowsMoveProducedETagChange`, `TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange`, `TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction` |
@@ -91,8 +92,19 @@ missing planner view data is an internal validation error once committed truth
 is authoritative, not a reason to skip stale work checks. Move actions
 additionally check the source/destination peer path that is not represented by
 the main `pathView`, so a changed local source, reappeared remote source,
-missing local move destination, or occupied remote move destination supersedes
-the old move before side effects.
+missing local move destination, a local move destination that no longer matches
+the planner's `Action.MovedLocal`, or occupied remote move destination
+supersedes the old move before side effects.
+
+Move outcomes publish only what was observed or proven (R-2.17.3).
+`ActionRemoteMove` (a local-origin move) takes its local half from
+`Action.MovedLocal` and keeps an unknown destination hash unknown instead of
+inheriting the source baseline's. `ActionLocalMove` (a remote move applied
+locally) takes its local half from the source baseline its view carries: the
+precondition proved the source still matched it and a rename preserves content,
+size, mtime and identity. If the remote item's content changed as well as its
+path, the outcome keeps the baseline's remote content facts so the next pass
+downloads the edit instead of recording an agreement that does not exist.
 
 Worker-start rejections record aggregate perf counters by truth authority
 (`local_state` or `remote_state`). Executor live-precondition rejections carry

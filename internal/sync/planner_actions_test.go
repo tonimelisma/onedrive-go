@@ -88,8 +88,7 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 		byPath[action.Path] = action
 	}
 
-	assert.Equal(t, ActionFolderCreate, byPath["folder"].Type)
-	assert.Equal(t, createLocal, byPath["folder"].CreateSide)
+	assert.Equal(t, ActionRemoteDelete, byPath["folder"].Type, "a locally deleted folder is deleted remotely")
 	assert.Equal(t, ActionFolderCreate, byPath["new-folder"].Type)
 	assert.Equal(t, CreateRemote, byPath["new-folder"].CreateSide)
 	assert.Equal(t, ActionUpload, byPath["upload.txt"].Type)
@@ -187,8 +186,8 @@ func TestOmitDescendantRemoteMovesCoveredByFolderMoves_KeepsDescendantRename(t *
 	assert.Len(t, actions, 3, "normalization should not mutate the caller's action slice")
 }
 
-// Validates: R-2.1.3, R-2.1.4
-func TestPlannerPlanCurrentState_MovedAndEditedFilePlansMoveBeforeUpload(t *testing.T) {
+// Validates: R-2.17.1
+func TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -219,14 +218,174 @@ func TestPlannerPlanCurrentState_MovedAndEditedFilePlansMoveBeforeUpload(t *test
 		VALUES ('item-file', 'old.txt', 'file', 'old-hash', 10, 1)`)
 	require.NoError(t, err)
 
+	// Same inode but different size and content is indistinguishable from
+	// inode reuse after delete + create, so it must not move old.txt's remote
+	// content (and history) onto new.txt.
 	plan := planCurrentStateForStore(t, store)
 	require.Len(t, plan.Actions, 2)
-	assert.Equal(t, ActionRemoteMove, plan.Actions[0].Type)
-	assert.Equal(t, "old.txt", plan.Actions[0].OldPath)
-	assert.Equal(t, "new.txt", plan.Actions[0].Path)
+	byPath := make(map[string]Action, len(plan.Actions))
+	for _, action := range plan.Actions {
+		byPath[action.Path] = action
+	}
+	assert.Equal(t, ActionRemoteDelete, byPath["old.txt"].Type)
+	assert.Equal(t, ActionUpload, byPath["new.txt"].Type)
+}
+
+// Validates: R-2.17.1, R-2.17.3
+func TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (
+			item_id, path, item_type, local_hash, remote_hash,
+			local_size, remote_size, local_mtime, remote_mtime,
+			local_device, local_inode, local_has_identity
+		)
+		VALUES ('item-file', 'old.txt', 'file', 'old-hash', 'old-hash', 10, 10, 1, 1, 5, 6, 1)`)
+	require.NoError(t, err)
+
+	destination := localStateRow{
+		Path:             "new.txt",
+		ItemType:         ItemTypeFile,
+		Size:             10,
+		Mtime:            1,
+		LocalDevice:      5,
+		LocalInode:       6,
+		LocalHasIdentity: true,
+	}
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{destination}))
+
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES ('item-file', 'old.txt', 'file', 'old-hash', 10, 1)`)
+	require.NoError(t, err)
+
+	plan := planCurrentStateForStore(t, store)
+	require.Len(t, plan.Actions, 2)
+	move := plan.Actions[0]
+	assert.Equal(t, ActionRemoteMove, move.Type)
+	assert.Equal(t, "old.txt", move.OldPath)
+	assert.Equal(t, "new.txt", move.Path)
+	require.NotNil(t, move.MovedLocal, "a local-origin move must carry the destination's observed local truth")
+	assert.Empty(t, move.MovedLocal.Hash)
+	assert.Equal(t, destination.Mtime, move.MovedLocal.Mtime)
 	assert.Equal(t, ActionUpload, plan.Actions[1].Type)
 	assert.Equal(t, "new.txt", plan.Actions[1].Path)
 	assert.Equal(t, []int{0}, plan.Deps[1])
+}
+
+// Validates: R-2.17.3
+func TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (
+			item_id, path, item_type, local_hash, remote_hash,
+			local_size, remote_size, local_mtime, remote_mtime,
+			local_device, local_inode, local_has_identity, etag
+		)
+		VALUES ('item-file', 'renamed.txt', 'file', 'h', 'h', 2, 2, 3, 3, 5, 6, 1, 'etag-old')`)
+	require.NoError(t, err)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+		Path:             "renamed.txt",
+		ItemType:         ItemTypeFile,
+		Hash:             "h",
+		Size:             2,
+		Mtime:            3,
+		LocalDevice:      5,
+		LocalInode:       6,
+		LocalHasIdentity: true,
+	}}))
+
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
+		VALUES ('item-file', 'sub/renamed-remotely.txt', 'file', 'h', 2, 3, 'etag-new')`)
+	require.NoError(t, err)
+
+	plan := planCurrentStateForStore(t, store)
+	require.Len(t, plan.Actions, 1)
+	move := plan.Actions[0]
+	assert.Equal(t, ActionLocalMove, move.Type)
+	assert.Equal(t, "renamed.txt", move.OldPath)
+	assert.Equal(t, "sub/renamed-remotely.txt", move.Path)
+	require.NotNil(t, move.View.Baseline, "a remote move must carry the source baseline")
+	assert.Equal(t, "renamed.txt", move.View.Baseline.Path)
+	assert.Equal(t, "h", move.View.Baseline.LocalHash)
+}
+
+// Validates: R-2.17.2
+func TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildMoves(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	// A folder baseline without identity (written before folder identity was
+	// recorded) cannot pair, so the folder move decomposes. The source folder
+	// must be deleted on OneDrive, never re-created locally, and only after
+	// the child it contains has been moved out of it.
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (
+			item_id, path, item_type, local_hash, remote_hash,
+			local_size, remote_size, local_mtime, remote_mtime,
+			local_device, local_inode, local_has_identity
+		)
+		VALUES
+			('item-deep', 'deep', 'folder', '', '', NULL, NULL, NULL, NULL, 0, 0, 0),
+			('item-leaf', 'deep/leaf.md', 'file', 'hash-leaf', 'hash-leaf', 5, 5, 1, 1, 33, 44, 1)`)
+	require.NoError(t, err)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+		{
+			Path:             "moved-deep",
+			ItemType:         ItemTypeFolder,
+			LocalDevice:      11,
+			LocalInode:       22,
+			LocalHasIdentity: true,
+		},
+		{
+			Path:             "moved-deep/leaf.md",
+			ItemType:         ItemTypeFile,
+			Hash:             "hash-leaf",
+			Size:             5,
+			Mtime:            1,
+			LocalDevice:      33,
+			LocalInode:       44,
+			LocalHasIdentity: true,
+		},
+	}))
+
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES
+			('item-deep', 'deep', 'folder', '', NULL, NULL),
+			('item-leaf', 'deep/leaf.md', 'file', 'hash-leaf', 5, 1)`)
+	require.NoError(t, err)
+
+	plan := planCurrentStateForStore(t, store)
+	indexByKey := make(map[string]int, len(plan.Actions))
+	for i := range plan.Actions {
+		action := plan.Actions[i]
+		assert.False(t, action.Type == ActionFolderCreate && action.CreateSide == createLocal,
+			"no local folder may be re-created: %+v", action)
+		indexByKey[action.Type.String()+":"+action.Path] = i
+	}
+	deleteIdx, ok := indexByKey[ActionRemoteDelete.String()+":deep"]
+	require.True(t, ok, "source folder must be deleted on OneDrive: %v", indexByKey)
+	moveIdx, ok := indexByKey[ActionRemoteMove.String()+":moved-deep/leaf.md"]
+	require.True(t, ok, "child must move on OneDrive: %v", indexByKey)
+	createIdx, ok := indexByKey[ActionFolderCreate.String()+":moved-deep"]
+	require.True(t, ok, "destination folder must be created on OneDrive: %v", indexByKey)
+	assert.Equal(t, CreateRemote, plan.Actions[createIdx].CreateSide)
+	assert.Contains(t, plan.Deps[deleteIdx], moveIdx, "folder delete must wait for the move out of it")
+	assert.Len(t, plan.Actions, 3)
 }
 
 // Validates: R-2.1.3, R-2.10.4
@@ -1351,4 +1510,210 @@ func TestPlannerPlanCurrentState_UnavailableTruthNeverDeletesData(t *testing.T) 
 
 		assert.Empty(t, plan.Actions)
 	})
+}
+
+// Validates: R-2.17.2
+func TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	// rm -rf many/ while watch mode runs: every baseline row under many is
+	// gone locally and still present remotely.
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (
+			item_id, path, item_type, local_hash, remote_hash,
+			local_size, remote_size, local_mtime, remote_mtime
+		)
+		VALUES
+			('item-many', 'many', 'folder', '', '', NULL, NULL, NULL, NULL),
+			('item-f000', 'many/f000.txt', 'file', 'h0', 'h0', 1, 1, 1, 1),
+			('item-f001', 'many/f001.txt', 'file', 'h1', 'h1', 1, 1, 1, 1),
+			('item-sub', 'many/sub', 'folder', '', '', NULL, NULL, NULL, NULL),
+			('item-f002', 'many/sub/f002.txt', 'file', 'h2', 'h2', 1, 1, 1, 1)`)
+	require.NoError(t, err)
+
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES
+			('item-many', 'many', 'folder', '', NULL, NULL),
+			('item-f000', 'many/f000.txt', 'file', 'h0', 1, 1),
+			('item-f001', 'many/f001.txt', 'file', 'h1', 1, 1),
+			('item-sub', 'many/sub', 'folder', '', NULL, NULL),
+			('item-f002', 'many/sub/f002.txt', 'file', 'h2', 1, 1)`)
+	require.NoError(t, err)
+
+	plan := planCurrentStateForStore(t, store)
+	require.Len(t, plan.Actions, 5)
+	indexByPath := make(map[string]int, len(plan.Actions))
+	for i := range plan.Actions {
+		assert.Equal(t, ActionRemoteDelete, plan.Actions[i].Type,
+			"%s: a locally deleted tree is deleted remotely, never re-created locally", plan.Actions[i].Path)
+		indexByPath[plan.Actions[i].Path] = i
+	}
+	assert.ElementsMatch(t,
+		[]int{indexByPath["many/f000.txt"], indexByPath["many/f001.txt"], indexByPath["many/sub"], indexByPath["many/sub/f002.txt"]},
+		plan.Deps[indexByPath["many"]],
+		"the folder delete runs only after everything under it")
+}
+
+func planActionIndex(t *testing.T, plan *actionPlan) map[string]int {
+	t.Helper()
+
+	index := make(map[string]int, len(plan.Actions))
+	for i := range plan.Actions {
+		key := plan.Actions[i].Type.String() + ":" + plan.Actions[i].Path
+		_, dup := index[key]
+		require.False(t, dup, "duplicate action %s", key)
+		index[key] = i
+	}
+
+	return index
+}
+
+// Validates: R-2.17.4
+func TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	// rm lowercase.txt; mkdir lowercase.txt; echo > lowercase.txt/inside.txt
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
+		VALUES ('item-lower', 'lowercase.txt', 'file', 'h', 'h', 1, 1, 1, 1)`)
+	require.NoError(t, err)
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+		{Path: "lowercase.txt", ItemType: ItemTypeFolder},
+		{Path: "lowercase.txt/inside.txt", ItemType: ItemTypeFile, Hash: "inside", Size: 1, Mtime: 2},
+	}))
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES ('item-lower', 'lowercase.txt', 'file', 'h', 1, 1)`)
+	require.NoError(t, err)
+
+	plan := planCurrentStateForStore(t, store)
+	index := planActionIndex(t, plan)
+	require.Len(t, plan.Actions, 3, "%v", index)
+
+	deleteIdx, ok := index[ActionRemoteDelete.String()+":lowercase.txt"]
+	require.True(t, ok, "%v", index)
+	assert.Equal(t, "item-lower", plan.Actions[deleteIdx].ItemID)
+	createIdx, ok := index[ActionFolderCreate.String()+":lowercase.txt"]
+	require.True(t, ok, "%v", index)
+	assert.Equal(t, CreateRemote, plan.Actions[createIdx].CreateSide)
+	uploadIdx, ok := index[ActionUpload.String()+":lowercase.txt/inside.txt"]
+	require.True(t, ok, "%v", index)
+
+	assert.Contains(t, plan.Deps[createIdx], deleteIdx, "the new folder is created only after the old file is gone")
+	assert.Contains(t, plan.Deps[uploadIdx], createIdx)
+}
+
+// Validates: R-2.17.4
+func TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
+		VALUES
+			('item-dir', 'thing', 'folder', NULL, NULL, NULL, NULL, NULL, NULL),
+			('item-child', 'thing/child.txt', 'file', 'c', 'c', 1, 1, 1, 1)`)
+	require.NoError(t, err)
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+		{Path: "thing", ItemType: ItemTypeFile, Hash: "now-a-file", Size: 3, Mtime: 4},
+	}))
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES
+			('item-dir', 'thing', 'folder', NULL, NULL, NULL),
+			('item-child', 'thing/child.txt', 'file', 'c', 1, 1)`)
+	require.NoError(t, err)
+
+	plan := planCurrentStateForStore(t, store)
+	index := planActionIndex(t, plan)
+	require.Len(t, plan.Actions, 3, "%v", index)
+
+	childDeleteIdx, ok := index[ActionRemoteDelete.String()+":thing/child.txt"]
+	require.True(t, ok, "%v", index)
+	folderDeleteIdx, ok := index[ActionRemoteDelete.String()+":thing"]
+	require.True(t, ok, "%v", index)
+	uploadIdx, ok := index[ActionUpload.String()+":thing"]
+	require.True(t, ok, "%v", index)
+	assert.Empty(t, plan.Actions[uploadIdx].ItemID, "the file is new content, not an overwrite of the folder item")
+
+	assert.Contains(t, plan.Deps[folderDeleteIdx], childDeleteIdx)
+	assert.Contains(t, plan.Deps[uploadIdx], folderDeleteIdx)
+}
+
+// Validates: R-2.17.4
+func TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
+		VALUES ('item-old-file', 'shape', 'file', 'h', 'h', 1, 1, 1, 1)`)
+	require.NoError(t, err)
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+		{Path: "shape", ItemType: ItemTypeFile, Hash: "h", Size: 1, Mtime: 1},
+	}))
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES
+			('item-new-folder', 'shape', 'folder', NULL, NULL, NULL),
+			('item-inner', 'shape/inner.txt', 'file', 'i', 1, 1)`)
+	require.NoError(t, err)
+
+	plan := planCurrentStateForStore(t, store)
+	index := planActionIndex(t, plan)
+	require.Len(t, plan.Actions, 3, "%v", index)
+
+	deleteIdx, ok := index[ActionLocalDelete.String()+":shape"]
+	require.True(t, ok, "%v", index)
+	createIdx, ok := index[ActionFolderCreate.String()+":shape"]
+	require.True(t, ok, "%v", index)
+	assert.Equal(t, createLocal, plan.Actions[createIdx].CreateSide)
+	downloadIdx, ok := index[ActionDownload.String()+":shape/inner.txt"]
+	require.True(t, ok, "%v", index)
+
+	assert.Contains(t, plan.Deps[createIdx], deleteIdx)
+	assert.Contains(t, plan.Deps[downloadIdx], createIdx)
+}
+
+// Validates: R-2.17.4
+func TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
+		VALUES ('item-old-dir', 'shape', 'folder', NULL, NULL, NULL, NULL, NULL, NULL)`)
+	require.NoError(t, err)
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+		{Path: "shape", ItemType: ItemTypeFolder},
+	}))
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES ('item-new-file', 'shape', 'file', 'f', 1, 1)`)
+	require.NoError(t, err)
+
+	plan := planCurrentStateForStore(t, store)
+	index := planActionIndex(t, plan)
+	require.Len(t, plan.Actions, 2, "%v", index)
+
+	deleteIdx, ok := index[ActionLocalDelete.String()+":shape"]
+	require.True(t, ok, "%v", index)
+	downloadIdx, ok := index[ActionDownload.String()+":shape"]
+	require.True(t, ok, "%v", index)
+	assert.True(t, plan.Actions[downloadIdx].RequireMissingLocalTarget)
+	assert.Equal(t, "item-new-file", plan.Actions[downloadIdx].ItemID)
+	assert.Contains(t, plan.Deps[downloadIdx], deleteIdx)
 }

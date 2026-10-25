@@ -286,13 +286,74 @@ func buildActionsForReconciliation(
 			makeConflictCopyAction(view),
 			makeDownloadAfterConflictCopyAction(view),
 		}, nil
+	case "replace_remote":
+		return buildReplaceRemoteActions(view), nil
+	case "replace_local":
+		return buildReplaceLocalActions(view), nil
 	case strLocalMove:
 		return buildLocalMoveReconciliationActions(rec, cmp, view, views)
 	case strRemoteMove:
-		return buildRemoteMoveReconciliationActions(rec, cmp, view)
+		return buildRemoteMoveReconciliationActions(rec, cmp, view, views)
 	default:
 		return nil, fmt.Errorf("sync: unsupported reconciliation kind %q for %s", rec.ReconciliationKind, rec.Path)
 	}
+}
+
+// buildReplaceRemoteActions replaces the OneDrive item at a path whose local
+// item is now of another type (or whose remote type changed while local
+// content also changed): delete the old remote item, then create the local
+// item as new content. buildDependencies orders the create after the delete.
+//
+// The create's view has no baseline or remote: it is a brand-new item, and by
+// the time it dispatches the delete outcome has removed the old remote_state
+// row, so remote freshness expects absence.
+func buildReplaceRemoteActions(view *pathView) []Action {
+	deleteAction := makeAction(ActionRemoteDelete, view)
+
+	createView := &pathView{
+		Path:        view.Path,
+		Local:       view.Local,
+		TruthStatus: view.TruthStatus,
+	}
+	if view.Local != nil && view.Local.ItemType == ItemTypeFolder {
+		return []Action{deleteAction, makeFolderCreate(createView, CreateRemote)}
+	}
+
+	return []Action{deleteAction, makeCreateUploadAction(createView)}
+}
+
+// buildReplaceLocalActions replaces the local item at a path whose OneDrive
+// item is now of another type while local truth is unchanged: delete the old
+// local item, then materialize the remote one.
+//
+// The delete's view describes the old local item (resolveItemType prefers the
+// remote side, which already has the new type). local_state is refreshed only
+// by observation, so the create keeps the planned local row for freshness, and
+// a download requires its target to be missing, as after a conflict copy.
+func buildReplaceLocalActions(view *pathView) []Action {
+	deleteView := &pathView{
+		Path:        view.Path,
+		Local:       view.Local,
+		Remote:      view.Remote,
+		Baseline:    view.Baseline,
+		TruthStatus: view.TruthStatus,
+	}
+	deleteAction := makeAction(ActionLocalDelete, deleteView)
+
+	createView := &pathView{
+		Path:        view.Path,
+		Local:       view.Local,
+		Remote:      view.Remote,
+		TruthStatus: view.TruthStatus,
+	}
+	if view.Remote != nil && view.Remote.ItemType == ItemTypeFolder {
+		return []Action{deleteAction, makeFolderCreate(createView, createLocal)}
+	}
+
+	download := makeAction(ActionDownload, createView)
+	download.RequireMissingLocalTarget = true
+
+	return []Action{deleteAction, download}
 }
 
 func buildLocalMoveReconciliationActions(
@@ -311,6 +372,9 @@ func buildLocalMoveReconciliationActions(
 	action := makeAction(ActionRemoteMove, view)
 	action.OldPath = rec.Path
 	action.Path = rec.LocalMoveTarget
+	if targetView := views[rec.LocalMoveTarget]; targetView != nil {
+		action.MovedLocal = targetView.Local
+	}
 
 	actions := []Action{action}
 	if upload := localMoveContentUpdateAfterMove(rec.LocalMoveTarget, view, views); upload != nil {
@@ -362,10 +426,17 @@ func localFileDiffersFromBaseline(local *localState, baseline *BaselineEntry) bo
 	return baseline.LocalMtime != local.Mtime
 }
 
+// buildRemoteMoveReconciliationActions turns a remote move into a local
+// rename. The destination path has no baseline row of its own, so the action
+// view carries the source's baseline: executor preconditions and freshness
+// validate the local source against it, and the move outcome republishes its
+// local half at the destination. Without it the moved row would lose its
+// local hash and identity, and the next scan would re-upload unchanged content.
 func buildRemoteMoveReconciliationActions(
 	rec *sQLiteReconciliationRow,
 	cmp *sQLiteComparisonRow,
 	view *pathView,
+	views map[string]*pathView,
 ) ([]Action, error) {
 	if cmp.ComparisonKind != "remote_move_dest" {
 		return nil, nil
@@ -374,7 +445,14 @@ func buildRemoteMoveReconciliationActions(
 		return nil, fmt.Errorf("sync: remote_move destination %q missing source path", rec.Path)
 	}
 
-	action := makeAction(ActionLocalMove, view)
+	moveView := view
+	if sourceView := views[rec.RemoteMoveSource]; sourceView != nil && sourceView.Baseline != nil && view.Baseline == nil {
+		withSource := *view
+		withSource.Baseline = sourceView.Baseline
+		moveView = &withSource
+	}
+
+	action := makeAction(ActionLocalMove, moveView)
 	action.OldPath = rec.RemoteMoveSource
 
 	return []Action{action}, nil

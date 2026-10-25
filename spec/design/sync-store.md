@@ -206,9 +206,13 @@ and, when needed, keeps `remote_state` aligned with the remote truth implied by
 the successful action.
 
 Baseline writes also publish the local filesystem identity observed for the
-successful mutation. Local move detection compares that last-synced identity to
-the next `local_state` snapshot; when identity is unavailable, file moves may
-fall back to unique content-hash candidates, but directory moves do not.
+successful mutation, for directories as well as files: remote folder creates
+record the observed local folder's identity, and local folder creates and
+downloads stat the entry they just materialized (a failed lookup records "no
+identity", never a stale one). Local move detection compares that last-synced
+identity to the next `local_state` snapshot; when identity is unavailable, file
+moves may fall back to unique content-hash candidates, but directory moves do
+not. Move outcomes publish only observed or proven local facts (R-2.17.3).
 
 That same store boundary also owns publication-only planner actions:
 

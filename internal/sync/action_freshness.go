@@ -296,6 +296,9 @@ func evaluateRemoteMoveEndpointFreshness(action *Action, inputs actionFreshnessI
 		if !inputs.LocalAtMovePeerFound || inputs.LocalAtMovePeer == nil {
 			return staleLocalAction("%s local move destination is missing from current local truth", action.Path)
 		}
+		if action.MovedLocal != nil && !localRowMatchesPlanned(inputs.LocalAtMovePeer, action.MovedLocal) {
+			return staleLocalAction("%s local move destination changed since planning", action.Path)
+		}
 	}
 	if inputs.RemoteTruthKnown && action.Path != "" && action.Path != actionViewPath(action) && inputs.RemoteAtMovePeerFound {
 		return staleRemoteAction("%s remote move destination already exists in current remote truth", action.Path)
