@@ -233,3 +233,42 @@ func TestCommitObservation_PersistsJunkRowsAsRawRemoteTruth(t *testing.T) {
 	require.NotNil(t, readRemoteStateRow(t, mgr.rawDB(), "item-junk"))
 	assert.Equal(t, "delta-token-junk", readObservationCursor(t, mgr.rawDB(), testDriveID))
 }
+
+// Regression: delta reports a renamed folder as one item. Its children kept
+// their old remote_state paths, so after the rename was applied locally they
+// looked moved back on OneDrive, and sync moved them back into a re-created
+// old folder (live: "Moved locally links-renamed/x -> links/x").
+//
+// Validates: R-2.17.3
+func TestCommitObservation_FolderRenameRepathsDescendants(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+
+	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{
+		{DriveID: driveID, ItemID: "dir", Path: "links", ItemType: ItemTypeFolder},
+		{DriveID: driveID, ItemID: "sub", Path: "links/sub", ItemType: ItemTypeFolder},
+		{DriveID: driveID, ItemID: "a", Path: "links/a.txt", ItemType: ItemTypeFile, Hash: "ha", Size: 1},
+		{DriveID: driveID, ItemID: "b", Path: "links/sub/b.txt", ItemType: ItemTypeFile, Hash: "hb", Size: 1},
+		{DriveID: driveID, ItemID: "sib", Path: "links-other/c.txt", ItemType: ItemTypeFile, Hash: "hc", Size: 1},
+	}, "t1", driveID))
+
+	// The next delta carries only the folder.
+	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{
+		{DriveID: driveID, ItemID: "dir", Path: "links-renamed", ItemType: ItemTypeFolder, ETag: "e2"},
+	}, "t2", driveID))
+
+	for id, want := range map[string]string{
+		"dir": "links-renamed",
+		"sub": "links-renamed/sub",
+		"a":   "links-renamed/a.txt",
+		"b":   "links-renamed/sub/b.txt",
+		"sib": "links-other/c.txt",
+	} {
+		row := readRemoteStateRow(t, mgr.rawDB(), id)
+		require.NotNil(t, row, id)
+		assert.Equal(t, want, row.Path, id)
+	}
+}

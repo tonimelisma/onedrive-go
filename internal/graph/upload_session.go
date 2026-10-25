@@ -173,7 +173,16 @@ func (c *Client) QueryUploadSession(
 		return nil, fmt.Errorf("graph: decoding session status response: %w", decErr)
 	}
 
-	uploadURL, err := c.validatedUploadURL(UploadURL(ssr.UploadURL))
+	// Graph's session status response carries only expirationDateTime and
+	// nextExpectedRanges (verified live), so an absent uploadUrl means the
+	// session keeps the URL it was queried with. Validating the empty field
+	// failed every resume with "upload URL must use https", so a crash
+	// always restarted the whole file.
+	statusURL := UploadURL(ssr.UploadURL)
+	if statusURL == "" {
+		statusURL = session.UploadURL
+	}
+	uploadURL, err := c.validatedUploadURL(statusURL)
 	if err != nil {
 		return nil, err
 	}

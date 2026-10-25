@@ -107,6 +107,7 @@ func conditionLabels() map[ConditionKey]string {
 		ConditionQuotaExceeded:          "waiting for OneDrive storage space",
 		ConditionDiskFull:               "waiting for local disk space",
 		ConditionFileTooLargeForSpace:   "waiting for local disk space",
+		ConditionLocalNameTooLong:       "with names too long for this computer",
 		ConditionRateLimited:            "waiting while OneDrive limits requests",
 		ConditionServiceOutage:          "waiting for OneDrive to become available",
 		ConditionAuthenticationRequired: "waiting for sign-in",

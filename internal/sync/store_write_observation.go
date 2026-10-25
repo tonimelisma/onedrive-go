@@ -125,7 +125,20 @@ func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 		return nil
 	}
 
-	return s.updateRemoteStateFromObs(ctx, tx, item)
+	if err := s.updateRemoteStateFromObs(ctx, tx, item); err != nil {
+		return err
+	}
+
+	// Delta reports a renamed or moved folder as one item; its unchanged
+	// descendants are not repeated. Their rows must follow the folder, or
+	// every child keeps its old path: once the move is applied locally the
+	// children look moved back on OneDrive, and sync moved them back into a
+	// re-created old folder.
+	if existing.ItemType == ItemTypeFolder && item.Path != "" && item.Path != existing.Path {
+		return repathSubtreeTx(ctx, tx, "remote_state", existing.Path, item.Path)
+	}
+
+	return nil
 }
 
 func deleteObservedRemoteState(

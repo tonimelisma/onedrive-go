@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -2414,6 +2415,22 @@ func TestConflictCopyPath_Normal(t *testing.T) {
 	expected := "/sync/root/exec-file.conflict-20260115-123045.txt"
 
 	assert.Equal(t, expected, result)
+}
+
+// Validates: R-5.2.5
+func TestConflictCopyPath_LongNameStaysWithinLocalLimit(t *testing.T) {
+	t.Parallel()
+
+	ts := time.Date(2026, 1, 15, 12, 30, 45, 0, time.UTC)
+	name := strings.Repeat("w", 246) + ".txt" // 250 bytes
+	result := filepath.Base(conflictCopyPath("/sync/root/"+name, ts))
+	assert.LessOrEqual(t, len(result), maxLocalNameBytes)
+	assert.True(t, strings.HasSuffix(result, ".conflict-20260115-123045.txt"), result)
+
+	multibyte := strings.Repeat("日", 80) + ".md" // 243 bytes
+	result = filepath.Base(conflictCopyPath("/sync/root/"+multibyte, ts))
+	assert.LessOrEqual(t, len(result), maxLocalNameBytes)
+	assert.True(t, utf8.ValidString(result))
 }
 
 func TestConflictCopyPath_Dotfile(t *testing.T) {

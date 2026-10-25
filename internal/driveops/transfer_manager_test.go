@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1685,4 +1686,23 @@ func TestTransferManager_DiskSpaceCheck(t *testing.T) {
 			assert.Equal(t, expectedHash, result.LocalHash)
 		})
 	}
+}
+
+// Validates: R-5.2.5
+func TestDownloadPartialName_FitsLocalNameLimit(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, ".onedrive-go.report.pdf.partial", downloadPartialName("report.pdf"))
+
+	long := strings.Repeat("w", 246) + ".txt" // 250 bytes: valid locally
+	partial := downloadPartialName(long)
+	assert.LessOrEqual(t, len(partial), maxLocalNameBytes)
+	assert.True(t, IsOwnedTransferArtifactName(partial))
+	assert.Equal(t, partial, downloadPartialName(long), "deterministic, so a resume finds the same partial")
+	assert.NotEqual(t, partial, downloadPartialName(strings.Repeat("w", 246)+".TXT"), "different names never share a partial")
+
+	japanese := strings.Repeat("日本", 42) // 252 bytes of multi-byte runes
+	partial = downloadPartialName(japanese)
+	assert.LessOrEqual(t, len(partial), maxLocalNameBytes)
+	assert.True(t, utf8.ValidString(partial), "truncation keeps whole runes")
 }

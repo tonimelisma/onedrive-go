@@ -2508,3 +2508,50 @@ func TestRestoreItem_Conflict(t *testing.T) {
 		return err
 	}, ErrConflict)
 }
+
+// Regression: Graph rejects a path-addressed URL over its maxUrlLength (a
+// 346-character path on a Personal drive), far below OneDrive's 400-character
+// path limit, so a deep folder could be created and then never resolved: its
+// children failed to sync with "graph: bad request" forever.
+//
+// Validates: R-2.11.7
+func TestGetItemByPath_LongPathResolvesInChunks(t *testing.T) {
+	segment := strings.Repeat("x", 45)
+	segments := make([]string, 8)
+	for i := range segments {
+		segments[i] = segment
+	}
+	longPath := strings.Join(segments, "/")
+	require.Greater(t, len(longPath), maxPathAddressedLength)
+
+	var routes []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		routes = append(routes, r.URL.EscapedPath())
+		assert.LessOrEqual(t, len(r.URL.EscapedPath()), maxPathAddressedLength+80, "no request carries the whole path")
+		w.Header().Set("Content-Type", "application/json")
+		id := fmt.Sprintf("item-%d", len(routes))
+		parentPath := "/drive/root:/" + strings.Join(segments[:len(segments)-1], "/")
+		writeTestResponse(t, w, `{"id":"`+id+`","name":"`+segment+`","folder":{"childCount":0},
+			"createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z",
+			"parentReference":{"id":"p","driveId":"d","path":"`+parentPath+`"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItemByPath(t.Context(), driveid.New("d"), longPath)
+	require.NoError(t, err)
+
+	require.Len(t, routes, 2)
+	assert.True(t, strings.HasPrefix(routes[0], "/drives/000000000000000d/root:/"), routes[0])
+	assert.True(t, strings.HasPrefix(routes[1], "/drives/000000000000000d/items/item-1:/"), routes[1])
+	assert.Equal(t, "item-2", item.ID)
+}
+
+func TestPathAddressChunks(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, []string{"a/b/c"}, pathAddressChunks("a/b/c", 240))
+	assert.Equal(t, []string{"aa/bb", "cc"}, pathAddressChunks("aa/bb/cc", 5))
+	assert.Equal(t, []string{"toolong", "a"}, pathAddressChunks("toolong/a", 3), "a single long segment stands alone")
+	assert.Equal(t, []string{"caf%C3%A9"}, pathAddressChunks("café", 240), "chunks are measured encoded")
+}

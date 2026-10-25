@@ -323,7 +323,10 @@ func (flow *engineFlow) logBlockScopeActivated(
 		flow.deps.logger.Warn("OneDrive storage is full; uploads are paused until space is freed (checking again in "+retryIn+")",
 			fields...)
 	case issueDiskFull:
-		flow.deps.logger.Warn("The local disk is full; downloads are paused until space is freed (checking again in "+retryIn+")",
+		// The block trips below the min_free_space reserve, usually long
+		// before the disk is actually full, so say which limit was hit.
+		flow.deps.logger.Warn("Free local disk space is below the min_free_space reserve; downloads are paused "+
+			"until there is room (checking again in "+retryIn+")",
 			fields...)
 	default:
 		flow.deps.logger.Warn("Paused syncing "+key.Humanize()+" ("+strings.ReplaceAll(conditionType, "_", " ")+

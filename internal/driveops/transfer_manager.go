@@ -2,7 +2,9 @@ package driveops
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -364,11 +367,34 @@ func DownloadPartialPath(targetPath string) string {
 	return downloadPartialPath(targetPath)
 }
 
+// maxLocalNameBytes is NAME_MAX on Linux and macOS filesystems.
+const maxLocalNameBytes = 255
+
 func downloadPartialPath(targetPath string) string {
-	return filepath.Join(
-		filepath.Dir(targetPath),
-		downloadPartialPrefix+filepath.Base(targetPath)+downloadPartialSuffix,
-	)
+	return filepath.Join(filepath.Dir(targetPath), downloadPartialName(filepath.Base(targetPath)))
+}
+
+// downloadPartialName namespaces a target's partial file. The prefix and
+// suffix add 21 bytes, so a name the filesystem accepts (up to 255 bytes)
+// could have no partial at all: every download of a 235-255 byte name failed
+// with "file name too long". Such names keep a readable head plus a hash of
+// the full name, which stays deterministic so an interrupted download still
+// resumes from the same partial.
+func downloadPartialName(base string) string {
+	name := downloadPartialPrefix + base + downloadPartialSuffix
+	if len(name) <= maxLocalNameBytes {
+		return name
+	}
+
+	sum := sha256.Sum256([]byte(base))
+	tag := "~" + hex.EncodeToString(sum[:8])
+	room := maxLocalNameBytes - len(downloadPartialPrefix) - len(tag) - len(downloadPartialSuffix)
+	head := base[:room]
+	for !utf8.ValidString(head) {
+		head = head[:len(head)-1]
+	}
+
+	return downloadPartialPrefix + head + tag + downloadPartialSuffix
 }
 
 // IsOwnedTransferArtifactName reports whether a local basename belongs to

@@ -27,4 +27,5 @@ const (
 	issueDiskFull             = "disk_full"
 	issueServiceOutage        = "service_outage"
 	issueFileTooLargeForSpace = "file_too_large_for_space"
+	issueLocalNameTooLong     = "local_name_too_long"
 )
