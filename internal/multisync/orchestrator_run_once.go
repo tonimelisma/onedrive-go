@@ -291,7 +291,7 @@ func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 	}
 	successful := cleanShortcutChildDrainResults(results)
 	if len(successful) == 0 {
-		logUnfinishedFinalDrains(results, o.logger)
+		o.reportKeptFinalDrains(results, decisions.Mounts)
 		return false, nil
 	}
 
@@ -318,20 +318,77 @@ func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(
 	return true, nil
 }
 
-func logUnfinishedFinalDrains(results []shortcutChildDrainResult, logger *slog.Logger) {
-	if logger == nil {
+// reportKeptFinalDrains tells the user, once, that a removed shared folder's
+// local copy stays on disk because its final sync has not finished cleanly.
+// The notice repeats only when the reason changes: watch mode re-runs the
+// final drain on every child pass, and the condition is already visible in
+// `status`, so each repeat goes to Debug.
+func (o *Orchestrator) reportKeptFinalDrains(results []shortcutChildDrainResult, mounts []*mountSpec) {
+	if o.logger == nil {
 		return
+	}
+	labels := make(map[string]string, len(mounts))
+	for _, mount := range mounts {
+		if mount != nil {
+			labels[mount.id().String()] = mount.label()
+		}
 	}
 	for _, result := range results {
 		if result.Status == shortcutChildDrainClean {
 			continue
 		}
-		logger.Info("shortcut child final drain not ready for parent release",
-			"mount_id", result.MountID,
-			"status", string(result.Status),
-			"detail", result.Detail,
+		label := labels[result.MountID]
+		if label == "" {
+			label = result.MountID
+		}
+		if !o.markKeptFinalDrainNotice(result) {
+			o.logger.Debug("removed shared folder final drain still not finished",
+				slog.String("mount_id", result.MountID),
+				slog.String("status", string(result.Status)),
+				slog.String("detail", result.Detail),
+			)
+			continue
+		}
+		o.logger.Info(keptFinalDrainNotice(label, result.Status),
+			slog.String("detail", result.Detail),
 		)
 	}
+}
+
+// keptFinalDrainNotice is the plain sentence for a removed shared folder
+// whose local copy is kept, by why its final sync did not finish.
+func keptFinalDrainNotice(label string, status shortcutChildDrainStatus) string {
+	switch status {
+	case shortcutChildDrainRootUnavailable:
+		return fmt.Sprintf("Keeping removed shared folder %s: its local folder is unavailable, "+
+			"so its last changes can't be synced yet", label)
+	case shortcutChildDrainBlocked:
+		return fmt.Sprintf("Keeping the local copy of removed shared folder %s until its "+
+			"unsynced changes are resolved; run 'onedrive-go status' for details", label)
+	case shortcutChildDrainClean, shortcutChildDrainFailed:
+	}
+	return fmt.Sprintf("Keeping the local copy of removed shared folder %s until its last sync "+
+		"finishes; it is retried on the next sync", label)
+}
+
+// markKeptFinalDrainNotice records that result is about to be reported and
+// says whether it is new: first seen for the mount, or with a different
+// status or detail. One-shot parents finalize concurrently, so the memory is
+// guarded by keptDrainNoticesMu.
+func (o *Orchestrator) markKeptFinalDrainNotice(result shortcutChildDrainResult) bool {
+	fingerprint := string(result.Status) + "\x00" + result.Detail
+
+	o.keptDrainNoticesMu.Lock()
+	defer o.keptDrainNoticesMu.Unlock()
+
+	if o.keptDrainNotices == nil {
+		o.keptDrainNotices = make(map[string]string)
+	}
+	if o.keptDrainNotices[result.MountID] == fingerprint {
+		return false
+	}
+	o.keptDrainNotices[result.MountID] = fingerprint
+	return true
 }
 
 func acknowledgeSuccessfulFinalDrains(
