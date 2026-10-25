@@ -1654,14 +1654,14 @@ func TestPrintStatusText_HealthySingleDriveIsUserFacing(t *testing.T) {
 
 	accounts := []statusAccount{
 		{
-			Email:       "tommipommi2026@outlook.com",
-			DisplayName: "Tommi Pommi",
+			Email:       "user@example.com",
+			DisplayName: "Test User",
 			AuthState:   authStateReady,
 			Drives: []statusDrive{
 				{
 					Kind:   statusDriveKindPersonalOneDrive,
-					Name:   "Tommi Pommi's personal OneDrive",
-					Folder: "~/tommi",
+					Name:   "Test User's personal OneDrive",
+					Folder: "~/OneDrive",
 					State:  driveStateReady,
 					Storage: &statusStorage{
 						UsedBytes:  135 * 1024,
@@ -1679,10 +1679,11 @@ func TestPrintStatusText_HealthySingleDriveIsUserFacing(t *testing.T) {
 	require.NoError(t, printStatusText(&buf, accounts, false))
 
 	assert.Equal(t, ""+
-		"Account: Tommi Pommi <tommipommi2026@outlook.com>\n"+
-		"  Tommi Pommi's personal OneDrive\n"+
-		"    Folder: ~/tommi\n"+
+		"Account: Test User <user@example.com>\n"+
+		"  Test User's personal OneDrive\n"+
+		"    Folder: ~/OneDrive\n"+
 		"    Storage: 135.0 KB of 5.0 GB used\n"+
+		"    Status: Up to date\n"+
 		"    Files: 7\n",
 		buf.String(),
 	)

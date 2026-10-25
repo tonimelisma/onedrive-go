@@ -37,9 +37,9 @@ func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 	t.Parallel()
 
 	snapshot := &syncengine.DriveStatusSnapshot{
-		BaselineEntryCount: 11,
-		RemoteDriftItems:   2,
-		RetryingItems:      3,
+		BaselineFileCount: 11,
+		RemoteDriftItems:  2,
+		RetryingItems:     3,
 		ObservationIssues: []syncengine.ObservationIssueRow{
 			{
 				Path:      "/z.txt",
@@ -342,6 +342,35 @@ func TestPrintDriveStatus_WithoutSyncStateUsesSyncDirFallback(t *testing.T) {
 		"    Status: Paused\n",
 		buf.String(),
 	)
+}
+
+// Validates: R-6.6.25
+func TestPrintDriveStatus_UpToDateIsNamedAndWatchIsShown(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, printMountStatus(&buf, &statusMount{
+		CanonicalID: "personal:user@example.com",
+		Folder:      "~/OneDrive",
+		State:       driveStateReady,
+	}))
+	assert.Equal(t, ""+
+		"  Personal OneDrive\n"+
+		"    Folder: ~/OneDrive\n"+
+		"    Status: Up to date\n",
+		buf.String(),
+		"a single synced drive must still say it is up to date",
+	)
+
+	buf.Reset()
+	require.NoError(t, printMountStatus(&buf, &statusMount{
+		CanonicalID:  "personal:user@example.com",
+		Folder:       "~/OneDrive",
+		State:        driveStateReady,
+		RuntimeOwner: "watch",
+		RuntimeState: statusRuntimeStateActive,
+	}))
+	assert.Contains(t, buf.String(), "    Status: Up to date, watching for changes\n")
 }
 
 func TestPrintSyncStateText_PerfOnlyOutput(t *testing.T) {

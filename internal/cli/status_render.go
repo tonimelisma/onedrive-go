@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 // computeSummary aggregates health information across all status accounts.
@@ -296,13 +298,17 @@ func printDriveStorage(w io.Writer, layout statusDriveTextLayout, drive *statusD
 	return writef(w, "%sStorage: %s\n", layout.detailIndent, formatStatusStorage(drive.Storage))
 }
 
+// printDriveState always names the drive's state, "Up to date" included: with
+// a single drive there is no summary line, so omitting it left status silent
+// on whether the drive was synced. A running watch is named too, because "up
+// to date" alone does not say whether changes will keep syncing.
 func printDriveState(w io.Writer, layout statusDriveTextLayout, drive *statusDrive) error {
-	if drive.State == driveStateReady {
-		return nil
-	}
 	label := statusDriveStateLabel(drive.State)
 	if label == drive.State && drive.StateLabel != "" {
 		label = drive.StateLabel
+	}
+	if drive.RuntimeState == statusRuntimeStateActive && drive.RuntimeOwner == string(synccontrol.OwnerModeWatch) {
+		label += ", watching for changes"
 	}
 	return writef(w, "%sStatus: %s\n", layout.detailIndent, label)
 }
