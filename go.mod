@@ -1,6 +1,6 @@
 module github.com/tonimelisma/onedrive-go
 
-go 1.25.0
+go 1.26.0
 
 // The go directive is the language floor (os.Root gained its mutating methods
 // in 1.25). The toolchain directive is separate and must track a patched
@@ -18,12 +18,12 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/oauth2 v0.30.0
-	golang.org/x/sync v0.22.0
-	golang.org/x/text v0.41.0
+	golang.org/x/sync v0.24.0
+	golang.org/x/text v0.43.0
 	modernc.org/sqlite v1.57.0
 )
 
-require golang.org/x/sys v0.47.0
+require golang.org/x/sys v0.49.0
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
