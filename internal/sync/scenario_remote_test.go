@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
@@ -269,14 +271,10 @@ func (r *moveScenarioRemote) putFileAt(t *testing.T, remotePath, content string)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	parent, ok := r.itemAt(remoteParentPath(remotePath))
-	if !ok || !parent.IsFolder {
-		t.Fatalf("remote parent of %s missing", remotePath)
-	}
+	require.True(t, ok && parent.IsFolder, "remote parent of %s missing", remotePath)
 	name := path.Base(remotePath)
 	if existing, ok := r.childNamed(parent.ID, name); ok {
-		if existing.IsFolder {
-			t.Fatalf("remote %s is a folder", remotePath)
-		}
+		require.False(t, existing.IsFolder, "remote %s is a folder", remotePath)
 		r.setContent(t, existing.ID, content)
 		return
 	}
@@ -288,9 +286,7 @@ func (r *moveScenarioRemote) mkdirAt(t *testing.T, remotePath string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	parent, ok := r.itemAt(remoteParentPath(remotePath))
-	if !ok || !parent.IsFolder {
-		t.Fatalf("remote parent of %s missing", remotePath)
-	}
+	require.True(t, ok && parent.IsFolder, "remote parent of %s missing", remotePath)
 	if _, exists := r.childNamed(parent.ID, path.Base(remotePath)); exists {
 		return
 	}
@@ -302,9 +298,7 @@ func (r *moveScenarioRemote) deleteAt(t *testing.T, remotePath string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	item, ok := r.itemAt(remotePath)
-	if !ok {
-		t.Fatalf("remote %s missing", remotePath)
-	}
+	require.True(t, ok, "remote %s missing", remotePath)
 	r.remove(item.ID)
 }
 
@@ -313,13 +307,9 @@ func (r *moveScenarioRemote) moveAt(t *testing.T, fromPath, toPath string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	item, ok := r.itemAt(fromPath)
-	if !ok {
-		t.Fatalf("remote %s missing", fromPath)
-	}
+	require.True(t, ok, "remote %s missing", fromPath)
 	parent, ok := r.itemAt(remoteParentPath(toPath))
-	if !ok || !parent.IsFolder {
-		t.Fatalf("remote parent of %s missing", toPath)
-	}
+	require.True(t, ok && parent.IsFolder, "remote parent of %s missing", toPath)
 	r.moveLocked(item.ID, parent.ID, path.Base(toPath))
 }
 
