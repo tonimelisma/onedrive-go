@@ -272,8 +272,8 @@ func TestPrintDriveSyncSections_WritesHeadingAndConditions(t *testing.T) {
 		Conditions: []statusConditionJSON{
 			{
 				Title:  "Invalid filename",
-				Reason: "The filename contains characters not allowed by OneDrive.",
-				Action: "Rename the file to remove invalid characters.",
+				Reason: "OneDrive does not allow these names: they contain a forbidden character, are reserved, or end in a space or period.",
+				Action: "Rename the files so OneDrive accepts their names.",
 				Count:  1,
 				Paths:  []string{"/bad:name.txt"},
 			},
@@ -285,8 +285,8 @@ func TestPrintDriveSyncSections_WritesHeadingAndConditions(t *testing.T) {
 		"\n"+
 		"    Issues:\n"+
 		"      Invalid filename: 1 item\n"+
-		"        The filename contains characters not allowed by OneDrive.\n"+
-		"        Action: Rename the file to remove invalid characters.\n"+
+		"        OneDrive does not allow these names: they contain a forbidden character, are reserved, or end in a space or period.\n"+
+		"        Action: Rename the files so OneDrive accepts their names.\n"+
 		"\n"+
 		"        /bad:name.txt\n",
 		buf.String(),
@@ -397,8 +397,8 @@ func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
 					Conditions: []statusConditionJSON{
 						{
 							Title:  "Invalid filename",
-							Reason: "The filename contains characters not allowed by OneDrive.",
-							Action: "Rename the file to remove invalid characters.",
+							Reason: "OneDrive does not allow these names: they contain a forbidden character, are reserved, or end in a space or period.",
+							Action: "Rename the files so OneDrive accepts their names.",
 							Count:  1,
 							Paths:  []string{"/bad:name.txt"},
 						},
@@ -555,8 +555,8 @@ func descriptorFilesystemCases() []descriptorCase {
 			name:       "local read denied",
 			key:        syncengine.ConditionLocalReadDenied,
 			wantTitle:  "Local read blocked",
-			wantReason: "The local source file or directory can no longer be read.",
-			wantAction: "Restore local read access so uploads and conflict recovery can read the source content.",
+			wantReason: "The local file or directory can't be read.",
+			wantAction: "Restore read access (for example with chmod) so it can be uploaded.",
 		},
 		{
 			name:       "local write denied",
@@ -569,8 +569,8 @@ func descriptorFilesystemCases() []descriptorCase {
 			name:       "invalid filename",
 			key:        syncengine.ConditionInvalidFilename,
 			wantTitle:  "Invalid filename",
-			wantReason: "The filename contains characters not allowed by OneDrive.",
-			wantAction: "Rename the file to remove invalid characters.",
+			wantReason: "OneDrive does not allow these names: they contain a forbidden character, are reserved, or end in a space or period.",
+			wantAction: "Rename the files so OneDrive accepts their names.",
 		},
 		{
 			name:       "path too long",

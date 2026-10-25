@@ -20,8 +20,8 @@
               {
                 "type": "invalid_filename",
                 "title": "Invalid filename",
-                "reason": "The filename contains characters not allowed by OneDrive.",
-                "action": "Rename the file to remove invalid characters.",
+                "reason": "OneDrive does not allow these names: they contain a forbidden character, are reserved, or end in a space or period.",
+                "action": "Rename the files so OneDrive accepts their names.",
                 "count": 1,
                 "paths": [
                   "/invalid:name.txt"

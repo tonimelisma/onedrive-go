@@ -20,6 +20,10 @@ type storeInspector struct {
 // sqlCountRemoteDriftItems counts already-observed remote-side differences
 // that are not yet reflected in baseline. This is the durable remote half of
 // "not fully converged yet"; exact local-only drift still requires a live scan.
+// The content test mirrors the planner's remote_changed (sqlite_compare.go):
+// folders change only by path or type, and a file's hash decides when either
+// side has one. Comparing folder mtimes, which baseline never records, made
+// every remote folder count as drift on a fully synced drive.
 const sqlCountRemoteDriftItems = `
 SELECT COUNT(*) FROM (
 	SELECT rs.item_id
@@ -30,8 +34,16 @@ SELECT COUNT(*) FROM (
 		b.item_id IS NULL OR
 		b.path <> rs.path OR
 		b.item_type <> rs.item_type OR
-		COALESCE(b.remote_hash, '') <> COALESCE(rs.hash, '') OR
-		COALESCE(b.remote_mtime, 0) <> COALESCE(rs.mtime, 0)
+		(rs.item_type <> 'folder' AND (
+			CASE
+				WHEN COALESCE(b.remote_hash, '') <> '' OR COALESCE(rs.hash, '') <> '' THEN
+					COALESCE(b.remote_hash, '') <> COALESCE(rs.hash, '')
+				ELSE
+					COALESCE(b.remote_size, 0) <> COALESCE(rs.size, 0) OR
+					COALESCE(b.remote_mtime, 0) <> COALESCE(rs.mtime, 0) OR
+					COALESCE(b.etag, '') <> COALESCE(rs.etag, '')
+			END
+		))
 	  )
 	UNION
 	SELECT b.item_id

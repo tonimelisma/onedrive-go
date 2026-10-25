@@ -110,6 +110,61 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 	assert.Equal(t, "Shared/Docs/a.txt", snapshot.BlockedRetryWork[0].Path)
 }
 
+// Validates: R-2.10.48
+func TestReadDriveStatusSnapshot_RemoteDriftUsesPlannerContentTest(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	driveID := driveid.New(testDriveID)
+
+	// Baseline never records a folder mtime; Graph always reports one.
+	require.NoError(t, store.CommitMutation(t.Context(), &BaselineMutation{
+		Action:   ActionFolderCreate,
+		Success:  true,
+		Path:     "Docs",
+		DriveID:  driveID,
+		ItemID:   "item-docs",
+		ItemType: ItemTypeFolder,
+	}))
+	for _, file := range []struct{ path, id, hash string }{
+		{path: "same.txt", id: "item-same", hash: "abc"},
+		{path: "changed.txt", id: "item-changed", hash: "abc"},
+	} {
+		require.NoError(t, store.CommitMutation(t.Context(), &BaselineMutation{
+			Action:          ActionDownload,
+			Success:         true,
+			Path:            file.path,
+			DriveID:         driveID,
+			ItemID:          file.id,
+			ItemType:        ItemTypeFile,
+			LocalHash:       file.hash,
+			RemoteHash:      file.hash,
+			LocalSize:       3,
+			LocalSizeKnown:  true,
+			RemoteSize:      3,
+			RemoteSizeKnown: true,
+			LocalMtime:      1700000000,
+			RemoteMtime:     1700000000,
+		}))
+	}
+
+	// The commits above wrote matching remote_state rows; replace them with
+	// what a later remote observation reports.
+	_, err := store.rawDB().ExecContext(t.Context(), `
+		INSERT OR REPLACE INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES
+			('item-docs', 'Docs', 'folder', NULL, NULL, 1777605693000000000),
+			('item-same', 'same.txt', 'file', 'abc', 3, 1700000999),
+			('item-changed', 'changed.txt', 'file', 'def', 3, 1700000000)`)
+	require.NoError(t, err)
+
+	snapshot, err := ReadDriveStatusSnapshot(t.Context(), syncStorePathForStoreScopeTest(t, store), testLogger(t))
+	require.NoError(t, err)
+	// Only changed.txt differs: the folder's mtime and same.txt's mtime are
+	// not changes when the planner would not act on them.
+	assert.Equal(t, 1, snapshot.RemoteDriftItems)
+}
+
 // Validates: R-2.1.3, R-2.10.4
 func TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities(t *testing.T) {
 	t.Parallel()

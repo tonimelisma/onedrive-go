@@ -42,17 +42,16 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 
 	rt.loop.lastSummarySignature = signature
 
-	fields := []any{
-		slog.Int("total", totalConditions),
-		slog.String("breakdown", breakdown),
-		slog.String("action", "run onedrive-go status for details"),
-	}
+	// The breakdown and the next step are already the message; repeating
+	// them as attributes printed everything twice on the console. The count
+	// stays as condition_total, a log-file-only field.
+	total := slog.Int("condition_total", totalConditions)
 	if watchConditionSummaryAddsActionable(summary, previous) {
-		rt.deps.logger.Warn("Some files are not syncing: "+breakdown, fields...)
+		rt.deps.logger.Warn("Some files are not syncing: "+breakdown+". Run 'onedrive-go status' for details.", total)
 		return
 	}
 
-	rt.deps.logger.Info("Sync conditions: "+breakdown, fields...)
+	rt.deps.logger.Info("Sync conditions: "+breakdown+". Run 'onedrive-go status' for details.", total)
 }
 
 // watchConditionSummaryFingerprint is the churn-suppression key for one raw

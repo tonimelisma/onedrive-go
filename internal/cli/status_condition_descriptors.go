@@ -218,8 +218,8 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 	case syncengine.ConditionLocalReadDenied:
 		return newStatusConditionDescriptor(
 			"Local read blocked",
-			"The local source file or directory can no longer be read.",
-			"Restore local read access so uploads and conflict recovery can read the source content.",
+			"The local file or directory can't be read.",
+			"Restore read access (for example with chmod) so it can be uploaded.",
 		)
 	case syncengine.ConditionLocalWriteDenied:
 		return newStatusConditionDescriptor(
@@ -230,8 +230,8 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 	case syncengine.ConditionInvalidFilename:
 		return newStatusConditionDescriptor(
 			"Invalid filename",
-			"The filename contains characters not allowed by OneDrive.",
-			"Rename the file to remove invalid characters.",
+			"OneDrive does not allow these names: they contain a forbidden character, are reserved, or end in a space or period.",
+			"Rename the files so OneDrive accepts their names.",
 		)
 	case syncengine.ConditionPathTooLong:
 		return newStatusConditionDescriptor(
