@@ -3362,3 +3362,43 @@ func TestExecutor_RemoteMove_FileETagMismatchStillSupersedes(t *testing.T) {
 	requireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
 }
+
+// Validates: R-2.8.10, R-2.17.2
+func TestExecutor_RemoteMove_ItemAlreadyAtDestinationSucceedsWithoutMoving(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	items := &executorMockItemClient{
+		// A parent folder move already carried the item to the destination.
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			return &graph.Item{
+				ID: "item-inner", DriveID: driveID, IsFolder: true, Name: "inner",
+				ParentPath: "movedst", ParentPathKnown: true, ETag: `"etag-after-parent-move"`,
+			}, nil
+		},
+		moveItemIfMatchFn: func(_ context.Context, _ driveid.ID, _, _, _, _ string) (*graph.Item, error) {
+			t.Error("an item already at its destination must not be moved again")
+			return nil, errors.New("unexpected move")
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteMove,
+		Path:    "movedst/inner",
+		OldPath: "movesrc/inner",
+		ItemID:  "item-inner",
+		DriveID: driveID,
+		View: &pathView{
+			Path:   "movesrc/inner",
+			Remote: &remoteState{DriveID: driveID, ItemID: "item-inner", ItemType: ItemTypeFolder, ETag: `"etag-planned"`},
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.Equal(t, "movedst/inner", o.Path)
+	assert.Equal(t, `"etag-after-parent-move"`, o.ETag)
+}

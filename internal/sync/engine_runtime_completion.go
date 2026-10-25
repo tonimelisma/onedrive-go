@@ -576,13 +576,20 @@ func (flow *engineFlow) recordSupersede(r *actionCompletion) {
 	if streak == supersedeStreakWarnThreshold {
 		// Once per streak: a file that is rewritten continuously also lands
 		// here, and it must not warn on every pass.
-		logger.Warn("A planned change keeps going stale before it can run; sync will keep retrying it",
-			slog.String("action", r.ActionType.String()),
-			slog.String("path", r.Path),
-			slog.String("old_path", r.OldPath),
-			slog.Int("consecutive", streak),
-			slog.String("reason", reason),
+		// The console shows the path and a plain reason; the raw chain (with
+		// item IDs) and the classification travel as internal fields that
+		// only the log file and --verbose show.
+		attrs := []any{slog.String("path", r.Path)}
+		if r.OldPath != "" && r.OldPath != r.Path {
+			attrs = append(attrs, slog.String("from", r.OldPath))
+		}
+		attrs = append(attrs,
+			slog.String("reason", "it no longer matches what sync planned"),
+			slog.String("action_type", r.ActionType.String()),
+			slog.Int("supersede_streak", streak),
+			slog.String("error_detail", reason),
 		)
+		logger.Warn("A planned change keeps going stale before it can run; sync will keep retrying it", attrs...)
 	}
 }
 

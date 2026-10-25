@@ -412,11 +412,19 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) actionOutcome {
 	driveID := e.resolveDriveID(action)
 
-	newParentID, err := e.ResolveParentID(action.Path)
-	if err != nil {
-		return e.failedOutcomeWithFailure(action, ActionRemoteMove, err, action.OldPath, permissionCapabilityUnknown)
-	}
 	sourceETag, sourcePreconditionErr := e.remoteSourcePreconditionETag(ctx, driveID, action, "remote move")
+	if errors.Is(sourcePreconditionErr, errRemoteMoveAlreadyApplied) {
+		// Already where the plan wants it (an earlier attempt or a parent
+		// folder move got there first): record the move instead of
+		// superseding work that has nothing left to do.
+		e.logger.Debug("remote move already applied",
+			slog.String("from", action.OldPath),
+			slog.String("to", action.Path),
+		)
+		o := e.moveOutcome(action)
+		o.ETag = sourceETag
+		return o
+	}
 	if sourcePreconditionErr != nil {
 		return e.failedOutcomeWithFailure(
 			action,
@@ -425,6 +433,10 @@ func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) action
 			action.OldPath,
 			permissionCapabilityRemoteRead,
 		)
+	}
+	newParentID, err := e.ResolveParentID(action.Path)
+	if err != nil {
+		return e.failedOutcomeWithFailure(action, ActionRemoteMove, err, action.OldPath, permissionCapabilityUnknown)
 	}
 	parentPreconditionErr := e.validateRemoteParentPrecondition(ctx, driveID, newParentID, action, "remote move")
 	if parentPreconditionErr != nil {

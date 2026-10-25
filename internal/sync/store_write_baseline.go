@@ -535,6 +535,14 @@ func (s *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation
 	case baselineMutationDelete:
 		s.baseline.Delete(o.Path)
 	case baselineMutationMove:
+		if isFolderPathMove(o) {
+			// The subtree moved too; rebuilding beats re-deriving every
+			// descendant path in the cache.
+			if err := s.reloadBaselineCache(ctx); err != nil {
+				return fmt.Errorf("sync: reloading baseline cache after folder move: %w", err)
+			}
+			return nil
+		}
 		s.baseline.Delete(o.OldPath)
 		s.baseline.Put(mutationToEntry(o))
 	}
@@ -665,7 +673,49 @@ func commitMove(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error 
 	// Upsert handles both the path update and all other field updates.
 	// The ON CONFLICT(item_id) clause matches the existing row
 	// and updates path + all mutable fields atomically.
-	return commitUpsert(ctx, tx, o)
+	if err := commitUpsert(ctx, tx, o); err != nil {
+		return err
+	}
+	if !isFolderPathMove(o) {
+		return nil
+	}
+
+	// A folder move moves its whole subtree, on OneDrive and on disk alike,
+	// and the planner omits the descendant moves it covers. The descendants'
+	// baseline rows must follow in the same transaction; left at the old
+	// paths, every child looked like a fresh move whose source had vanished
+	// and was superseded on every replan.
+	if err := repathSubtreeTx(ctx, tx, "baseline", o.OldPath, o.Path); err != nil {
+		return err
+	}
+	if o.Action == ActionRemoteMove {
+		// The local-origin move just moved the remote subtree; remote
+		// observation would report the same paths later.
+		return repathSubtreeTx(ctx, tx, "remote_state", o.OldPath, o.Path)
+	}
+
+	return nil
+}
+
+func isFolderPathMove(o *BaselineMutation) bool {
+	return o.ItemType == ItemTypeFolder && o.OldPath != "" && o.OldPath != o.Path
+}
+
+// repathSubtreeTx rewrites every path strictly below oldPath to sit below
+// newPath. Prefix matching uses SQLite's own length() on the bound prefix so
+// multi-byte names cut at the same character boundary they are matched on.
+// table is always a fixed internal table name, never input.
+func repathSubtreeTx(ctx context.Context, tx sqlTxRunner, table, oldPath, newPath string) error {
+	oldPrefix := oldPath + "/"
+	newPrefix := newPath + "/"
+	query := `UPDATE ` + table + `
+		SET path = ? || substr(path, length(?) + 1)
+		WHERE substr(path, 1, length(?)) = ? COLLATE BINARY`
+	if _, err := tx.ExecContext(ctx, query, newPrefix, oldPrefix, oldPrefix, oldPrefix); err != nil {
+		return fmt.Errorf("sync: moving %s subtree %s -> %s: %w", table, oldPath, newPath, err)
+	}
+
+	return nil
 }
 
 // updateRemoteStateOnOutcome updates the remote mirror when execution produces

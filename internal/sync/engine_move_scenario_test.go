@@ -185,6 +185,34 @@ func (r *moveScenarioRemote) client(t *testing.T) *engineMockClient {
 	}
 }
 
+// requireScenarioBaselineMoved asserts a folder move re-pathed the subtree's
+// baseline rows: left at the old paths, every descendant replans as a move
+// whose source is gone and is superseded forever.
+func requireScenarioBaselineMoved(t *testing.T, eng *testEngine, oldPaths, newPaths []string) {
+	t.Helper()
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+	for _, p := range oldPaths {
+		_, found := bl.GetByPath(p)
+		assert.False(t, found, "baseline still holds pre-move path %s", p)
+	}
+	for _, p := range newPaths {
+		_, found := bl.GetByPath(p)
+		assert.True(t, found, "baseline lacks moved path %s", p)
+	}
+}
+
+// requireScenarioQuietPlan asserts the next plan from current truth is empty.
+func requireScenarioQuietPlan(t *testing.T, eng *testEngine) {
+	t.Helper()
+
+	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{DryRun: true})
+	require.NoError(t, err)
+	assert.Zero(t, report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes+report.FolderCreates+report.Moves,
+		"converged state must plan nothing: %+v", report)
+}
+
 func runScenarioPass(t *testing.T, eng *testEngine) *Report {
 	t.Helper()
 
@@ -224,6 +252,14 @@ func TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource(t 
 	assert.Zero(t, remote.uploads)
 	assert.NoDirExists(t, filepath.Join(syncRoot, "deep"), "the moved source tree must not be re-created locally")
 	assert.FileExists(t, filepath.Join(syncRoot, "ünïcødé 日本語 🎉", "moved-deep", "er", "still deeper", "leaf.md"))
+
+	requireScenarioBaselineMoved(t, eng,
+		[]string{"deep", "deep/er", "deep/er/still deeper", "deep/er/still deeper/leaf.md"},
+		[]string{
+			"ünïcødé 日本語 🎉/moved-deep", "ünïcødé 日本語 🎉/moved-deep/er",
+			"ünïcødé 日本語 🎉/moved-deep/er/still deeper", "ünïcødé 日本語 🎉/moved-deep/er/still deeper/leaf.md",
+		})
+	requireScenarioQuietPlan(t, eng)
 
 	// A converged pass afterwards must be quiet.
 	report := runScenarioPass(t, eng)
@@ -325,4 +361,14 @@ func TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn(t *testing.T) {
 	assert.Equal(t, []string{"created-movesrc->movedst"}, remote.moves)
 	assert.Empty(t, remote.deletes)
 	assert.Equal(t, 1, remote.uploads)
+	requireScenarioBaselineMoved(t, eng,
+		[]string{"movesrc", "movesrc/inner", "movesrc/inner/a.txt"},
+		[]string{"movedst", "movedst/inner", "movedst/inner/a.txt"})
+
+	// Delta now reports the children under movedst/ and local agrees: the
+	// next passes must converge without planning a child move.
+	requireScenarioQuietPlan(t, eng)
+	runScenarioPass(t, eng)
+	assert.Equal(t, []string{"created-movesrc->movedst"}, remote.moves, "no descendant move after the folder move")
+	requireScenarioQuietPlan(t, eng)
 }

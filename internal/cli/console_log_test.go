@@ -54,3 +54,24 @@ func TestUnauthorizedAuthReason_DistinguishesExpiredLogin(t *testing.T) {
 	assert.Equal(t, authstate.ReasonSyncAuthRejected, unauthorizedAuthReason(rejected))
 	assert.Contains(t, authErrorMessage(expired), "no longer accepts the saved login")
 }
+
+// Validates: R-6.6.21
+func TestConsoleLogHandler_HumanStyleHidesSupersedeDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(newConsoleLogHandler(&buf, slog.LevelWarn, consoleLogHuman))
+
+	logger.Warn("A planned change keeps going stale before it can run; sync will keep retrying it",
+		slog.String("path", "playground/movedst/inner"),
+		slog.String("reason", "it no longer matches what sync planned"),
+		slog.String("action_type", "remote_move"),
+		slog.Int("supersede_streak", 3),
+		slog.String("error_detail", "remote move remote item C763212F!s1eaa moved to playground/movedst/inner"),
+	)
+
+	assert.Equal(t,
+		"Warning: A planned change keeps going stale before it can run; sync will keep retrying it "+
+			"(path=playground/movedst/inner, reason=\"it no longer matches what sync planned\")\n",
+		buf.String())
+}

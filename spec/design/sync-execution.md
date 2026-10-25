@@ -36,6 +36,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 
 | Behavior | Evidence |
 | --- | --- |
+| A remote move whose item already sits at the destination succeeds without a Graph call. | `TestExecutor_RemoteMove_ItemAlreadyAtDestinationSucceedsWithoutMoving` |
 | Folder eTag churn from descendant changes neither supersedes a folder move nor conditions it, while a file's eTag mismatch still supersedes. | `TestExecutor_RemoteMove_FolderETagChurnFromChildrenDoesNotSupersede`, `TestExecutor_RemoteMove_FileETagMismatchStillSupersedes`, `TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn` |
 | Move outcomes publish observed or proven local facts, keep a pending remote edit visible, and folder creates record local filesystem identity. | `TestExecutor_LocalMove_PublishesSourceBaselineLocalHalf`, `TestExecutor_LocalMove_RemoteEditKeepsBaselineRemoteContent`, `TestExecutor_RemoteMove_PublishesObservedDestinationLocalTruth`, `TestExecutor_CreateLocalFolder_RecordsFilesystemIdentity`, `TestExecutor_CreateRemoteFolder_RecordsObservedLocalIdentity` |
 | Edit/edit and create/create conflicts are handled immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestExecutor_ConflictDownloadFails_LeavesConflictCopy`, `TestConflictCopyPath_Normal` |
@@ -96,6 +97,12 @@ the main `pathView`, so a changed local source, reappeared remote source,
 missing local move destination, a local move destination that no longer matches
 the planner's `Action.MovedLocal`, or occupied remote move destination
 supersedes the old move before side effects.
+
+A remote move whose live preflight finds the item already at the planned
+destination, with the same identity and content, is done rather than stale
+(an earlier attempt or a parent folder move got there): the executor records
+the move outcome without calling Graph. The source preflight runs before parent
+resolution so an already-applied move needs nothing else.
 
 Move outcomes publish only what was observed or proven (R-2.17.3).
 `ActionRemoteMove` (a local-origin move) takes its local half from
