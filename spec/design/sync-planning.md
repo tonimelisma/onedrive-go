@@ -152,6 +152,10 @@ same derivation rather than a second planner-shaped helper.
 - local and remote with equal hashes -> `ActionBaselineUpdate` (publication-only)
 - local and remote with different hashes -> `ActionConflictCopy` + dependent `ActionDownload`
 
+Local absence alone never plans `ActionRemoteDelete`: without a baseline row
+proving the item was synced, a remote-only item is downloaded (R-6.2.1,
+`TestPlannerPlanCurrentState_LocalAbsenceDeletesRemoteOnlyWithBaseline`).
+
 ## Publication-Only Planner Actions
 
 `ActionBaselineUpdate` and `ActionCleanup` remain real planner action types.

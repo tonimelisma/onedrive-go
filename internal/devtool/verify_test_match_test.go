@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Validates: R-6.2.1
+// Validates: R-6.10.1
 //
 // go test exits 0 when a -run pattern matches nothing, so a targeted step whose
 // target was renamed away keeps reporting success while verifying nothing. That
@@ -21,7 +21,7 @@ func TestAssertTestsMatched_RejectsEmptyRun(t *testing.T) {
 	assert.Contains(t, err.Error(), "watch-ordering stress matched no tests")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.1
 //
 // The marker also has to be caught inside `go test -json` output, which is how
 // the e2e buckets run.
@@ -35,7 +35,7 @@ func TestAssertTestsMatched_RejectsEmptyRunInJSONOutput(t *testing.T) {
 	require.Error(t, err)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.1
 func TestAssertTestsMatched_AcceptsRealRun(t *testing.T) {
 	t.Parallel()
 

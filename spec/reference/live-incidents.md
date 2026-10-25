@@ -19,6 +19,7 @@ Promotion contract:
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261024-01 | Overlapping live E2E runs against one test account failed each other | fixed | CI configuration | 2026-10-24 | no |
 | LI-20260830-01 | Watch shutdown test intermittently saw watch mode stop before it began draining | fixed | product bug | 2026-08-31 | yes |
 | LI-20260823-01 | Graph returned `serviceReadOnly` on `/me/drives` for every test account | mitigated | provider outage | 2026-08-23 | no |
 | LI-20260503-01 | Nightly incremental-delta E2E failed on unrelated unrecoverable delete noise | fixed | product bug | 2026-05-03 | no |
@@ -61,6 +62,33 @@ Promotion contract:
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20261024-01: Overlapping live E2E runs against one test account failed each other
+
+First seen: 2026-10-24
+Last seen: 2026-10-24
+Area: `.github/workflows/ci.yml` live jobs
+Suite / test: full `e2e` job (`verify e2e-full`) dispatched on several stacked
+PR branches at once
+Classification: CI configuration
+Status: fixed
+Recurring: no
+Summary: While landing PRs #776-#781, full E2E runs were dispatched on several
+branches at the same time. Every run scrubs and mutates the same test drive,
+so runs deleted each other's fixtures and failed on state they did not create.
+The same branches passed when rerun one at a time.
+
+Evidence:
+- The failures appeared only while two or more `e2e` jobs overlapped.
+- Each branch passed when its run had the account to itself.
+
+Fix: the `integration` and `e2e` jobs each declare a job-level concurrency
+group (`live-account-integration`, `live-account-e2e`) with
+`cancel-in-progress: false`, so runs of one job queue instead of overlapping.
+GitHub keeps one pending run per group, so a third arrival cancels the older
+pending run; that run is rerun rather than raced. The same change runs CI for
+PRs on any base, so stacked PRs no longer need a manual `workflow_dispatch` to
+get checks.
 
 ## LI-20260830-01: Watch shutdown test intermittently saw watch mode stop before it began draining
 

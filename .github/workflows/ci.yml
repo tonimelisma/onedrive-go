@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every PR, whatever its base, so a stacked PR gets CI before the PR under it
+  # merges and retargets it to main.
   pull_request:
-    branches: [main]
   workflow_dispatch:
 
 # Cancel stale PR runs; never cancel push/manual runs.
@@ -125,12 +126,20 @@ jobs:
           retention-days: 7
 
   # --- Live API jobs (skip on forks — no OIDC trust) ---
-  # Each job uses its own dedicated test account so they run in parallel
-  # without OAuth token refresh races.
+  # Each job uses its own dedicated test account so the two jobs run in
+  # parallel without OAuth token refresh races.
 
+  # Each live job's account is shared by every run of that job, across PRs and
+  # manual dispatches. Two runs at once scrub and mutate the same drive and
+  # fail each other, so runs of one job queue instead of overlapping.
+  # GitHub keeps one pending run per group; a third arrival cancels the older
+  # pending one, which is rerun rather than raced.
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    concurrency:
+      group: live-account-integration
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write # OIDC federation with Azure
@@ -237,6 +246,9 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    concurrency:
+      group: live-account-e2e
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write # OIDC federation with Azure

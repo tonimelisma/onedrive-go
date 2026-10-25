@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Validates: R-6.2.1
+// Validates: R-6.10.21
 func TestBootstrapWorktreeCopiesFilesAndSymlinksEntries(t *testing.T) {
 	t.Parallel()
 
@@ -34,8 +34,27 @@ func TestBootstrapWorktreeCopiesFilesAndSymlinksEntries(t *testing.T) {
 	assert.Equal(t, filepath.Join(repoRoot, ".testdata"), linkTarget)
 }
 
-// Validates: R-6.2.1
-func TestBootstrapWorktreeFailsWhenIncludeSourceMissing(t *testing.T) {
+// Validates: R-6.10.21
+func TestBootstrapWorktreeSkipsIncludeSourceMissingFromRoot(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	targetRoot := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".worktreeinclude"), []byte("@.testdata\n.env\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".env"), []byte("TOKEN=1\n"), 0o600))
+
+	skipped, err := bootstrapWorktree(defaultWorktreeFS(), repoRoot, targetRoot)
+	require.NoError(t, err)
+	assert.Equal(t, []string{".testdata"}, skipped)
+
+	_, statErr := os.Lstat(filepath.Join(targetRoot, ".testdata"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+	assert.FileExists(t, filepath.Join(targetRoot, ".env"))
+}
+
+// Validates: R-6.10.21
+func TestBootstrapWorktreeFailsWhenIncludeSourceUnreadable(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
@@ -43,12 +62,15 @@ func TestBootstrapWorktreeFailsWhenIncludeSourceMissing(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".worktreeinclude"), []byte(".env\n"), 0o600))
 
-	err := BootstrapWorktree(repoRoot, targetRoot)
-	require.Error(t, err)
+	fs := defaultWorktreeFS()
+	fs.stat = func(string) (os.FileInfo, error) { return nil, os.ErrPermission }
+
+	_, err := bootstrapWorktree(fs, repoRoot, targetRoot)
+	require.ErrorIs(t, err, os.ErrPermission)
 	assert.Contains(t, err.Error(), "stat include source")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.21
 func TestAddWorktreeCleansUpWhenBootstrapFails(t *testing.T) {
 	t.Parallel()
 

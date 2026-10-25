@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Validates: R-6.2.1
+// Validates: R-6.10.2
 //
 // CLAUDE.md requires checking Close() on anything written to, because Close
 // flushes buffers and a dropped error there is silent data loss. That rule is
