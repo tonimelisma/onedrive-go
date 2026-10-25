@@ -36,7 +36,7 @@ func SelectHash(item *graph.Item) string {
 // ComputeQuickXorHash computes the QuickXorHash of a file and returns the
 // base64-encoded digest. Uses streaming I/O (constant memory).
 func ComputeQuickXorHash(fsPath string) (string, error) {
-	f, err := localpath.Open(fsPath)
+	f, err := localpath.OpenRegular(fsPath)
 	if err != nil {
 		return "", fmt.Errorf("opening %s for hashing: %w", fsPath, err)
 	}

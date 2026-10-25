@@ -156,6 +156,16 @@ func TestOneDriveInvalidNames_Rejected(t *testing.T) {
 		{"trailing.", "trailing dot"},
 		{"trailing ", "trailing space"},
 		{" leading", "leading space"},
+		// Device names are reserved with any extension (verified against Graph).
+		{"NUL.txt", "device name with extension"},
+		{"con.txt", "device name with extension"},
+		{"com1.txt", "device name with extension"},
+		{"nul.tar.gz", "device name with double extension"},
+		{"tab\tname.txt", "control character"},
+		{"new\nline.txt", "control character"},
+		{"del\x7f.txt", "DEL"},
+		{"bad-\xff.txt", "invalid UTF-8"},
+		{"my_vti_file.txt", "_vti_"},
 	}
 
 	for _, tt := range invalidNames {
@@ -177,16 +187,15 @@ func TestOneDriveValidNames_Accepted(t *testing.T) {
 		"café.txt",
 		"日本語.doc",
 		".hidden",
-		"COM10",   // 5 chars, not a reserved device name
-		"COMX",    // Not COM + digit
-		"LPT",     // 3 chars, not LPT + digit
-		"NUL.txt", // Wait — this contains "NUL" but has an extension!
+		"COM10", // 5 chars, not a reserved device name
+		"COMX",  // Not COM + digit
+		"LPT",   // 3 chars, not LPT + digit
+		"console.txt",
+		"COM¹.txt",
 	}
 
 	for _, name := range validNames {
 		t.Run(name, func(t *testing.T) {
-			// Note: NUL.txt would actually be valid since we only check
-			// the exact name "nul", not names starting with "nul".
 			reason, _ := validateOneDriveName(name)
 			assert.Empty(t, reason,
 				"%q should be accepted", name)
@@ -259,4 +268,23 @@ func TestIsOversizedFile(t *testing.T) {
 	// Zero-length file — should NOT be oversized.
 	assert.False(t, obs.IsOversizedFile(0, "empty.txt"),
 		"zero-length file should not be oversized")
+}
+
+// Validates: R-2.11.6
+func TestValidateOneDriveNameFor_PersonalAcceptsNamesWorkDrivesReserve(t *testing.T) {
+	t.Parallel()
+
+	// Verified against Graph on a Personal drive: all of these upload.
+	for _, name := range []string{"yarn.lock", "Cargo.lock", ".lock", "x.LOCK", "desktop.ini", "~$Report.docx"} {
+		reason, _ := validateOneDriveNameFor(name, true)
+		assert.Empty(t, reason, "%q is accepted by OneDrive Personal", name)
+
+		reason, _ = validateOneDriveNameFor(name, false)
+		assert.Equal(t, IssueInvalidFilename, reason, "%q stays reserved for work or school drives", name)
+	}
+
+	for _, name := range []string{"my_vti_file.txt", "con.txt", "bad\tname"} {
+		reason, _ := validateOneDriveNameFor(name, true)
+		assert.Equal(t, IssueInvalidFilename, reason, "%q is rejected by every drive type", name)
+	}
 }

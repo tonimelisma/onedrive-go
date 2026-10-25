@@ -26,6 +26,11 @@ const (
 		FROM retry_work
 		WHERE blocked = 1
 		ORDER BY scope_key, path, old_path, action_type`
+	// sqlListRetryWorkRetrying matches the "Retrying" count in status.
+	sqlListRetryWorkRetrying = `SELECT ` + sqlSelectRetryWorkCols + `
+		FROM retry_work
+		WHERE blocked = 0 AND attempt_count >= 3
+		ORDER BY path, old_path, action_type`
 )
 
 func (s *SyncStore) UpsertRetryWork(ctx context.Context, row *RetryWorkRow) error {
@@ -298,6 +303,19 @@ func queryBlockedRetryWorkRowsWithRunner(
 	rows, err := runner.QueryContext(ctx, sqlListRetryWorkBlocked)
 	if err != nil {
 		return nil, fmt.Errorf("query blocked retry_work rows: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+
+	return scanRetryWorkRows(rows)
+}
+
+func queryRetryingRetryWorkRowsWithRunner(
+	ctx context.Context,
+	runner sqlTxRunner,
+) ([]RetryWorkRow, error) {
+	rows, err := runner.QueryContext(ctx, sqlListRetryWorkRetrying)
+	if err != nil {
+		return nil, fmt.Errorf("query retrying retry_work rows: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 

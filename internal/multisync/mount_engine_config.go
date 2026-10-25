@@ -29,6 +29,7 @@ func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.En
 		EnableWebsocket:        mount.enableWebsocket(),
 		LocalRules: syncengine.LocalObservationRules{
 			RejectSharePointRootForms: mount.rejectSharePointRootForms(),
+			PersonalNameRules:         mount.personalNameRules(),
 		},
 		ShortcutNamespaceID:   mount.id().String(),
 		ShortcutChildWorkSink: mount.shortcutChildWorkSink(),

@@ -63,6 +63,15 @@ func defaultConfigTemplate() string {
 # ── Drives ──
 # Added automatically by 'login' and 'drive add'.
 # Each section name is the canonical drive identifier.
+#
+# Per-drive options go in a drive's section, for example:
+#   ignore_junk_files = true      # skip editor/browser temp files (*.tmp, *.swp,
+#                                 # *.partial, *.crdownload), .DS_Store, Thumbs.db
+#   ignore_dotfiles = true        # skip names starting with "."
+#   ignored_dirs = ["node_modules"]
+#   ignored_paths = ["*.iso"]
+#   included_dirs = ["Documents"] # sync only these folders
+#   follow_symlinks = true
 `,
 		defaultTransferWorkers,
 		defaultCheckWorkers,
