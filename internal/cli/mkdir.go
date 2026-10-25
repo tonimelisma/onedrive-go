@@ -43,6 +43,16 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 	logger := cc.Logger
 	logger.Debug("mkdir", "path", remotePath)
 
+	// An existing folder is success, like mkdir -p, but say so instead of
+	// claiming to have created it.
+	if existing, resolveErr := session.ResolveItem(ctx, remotePath); resolveErr == nil && existing.IsFolder {
+		if cc.Flags.JSON {
+			return printMkdirJSON(cc.Output(), mkdirJSONOutput{Created: "/" + remotePath, ID: existing.ID})
+		}
+		cc.Statusf("Folder /%s already exists\n", remotePath)
+		return nil
+	}
+
 	// Walk path segments, creating each missing folder.
 	segments := strings.Split(remotePath, "/")
 	parentID := mkdirStartParentID(session)
@@ -70,10 +80,10 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 	logger.Debug("mkdir complete", "path", remotePath, "folder_id", parentID)
 
 	if cc.Flags.JSON {
-		return printMkdirJSON(cc.Output(), mkdirJSONOutput{Created: remotePath, ID: item.ID})
+		return printMkdirJSON(cc.Output(), mkdirJSONOutput{Created: "/" + remotePath, ID: item.ID})
 	}
 
-	cc.Statusf("Created %s\n", remotePath)
+	cc.Statusf("Created /%s\n", remotePath)
 
 	return nil
 }

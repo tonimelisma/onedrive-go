@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
@@ -85,7 +86,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 	localPath := item.Name
 	if len(args) > 1 {
-		localPath = args[1]
+		localPath = localFileTarget(args[1], item.Name)
 	}
 
 	// Parse min_free_space from config for disk space pre-check (R-6.2.6).
@@ -107,7 +108,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 		RemoteSize: item.Size,
 	})
 	if err != nil {
-		partialPath := localPath + ".partial"
+		partialPath := driveops.DownloadPartialPath(localPath)
 		if _, statErr := localpath.Stat(partialPath); statErr == nil {
 			cc.Statusf("Partial download saved: %s\n", partialPath)
 			cc.Statusf("Re-run the same command to resume.\n")
@@ -129,6 +130,21 @@ func runGet(cmd *cobra.Command, args []string) error {
 	cc.Statusf("Downloaded %s (%s)\n", localPath, formatSize(result.Size))
 
 	return nil
+}
+
+// localFileTarget treats a destination that ends in a path separator or
+// names an existing directory as "into that directory", like cp. Downloading
+// onto "./" used to fail at the final rename and leave a nameless
+// ".onedrive-go...partial" file behind.
+func localFileTarget(target, remoteName string) string {
+	if strings.HasSuffix(target, string(filepath.Separator)) {
+		return filepath.Join(target, remoteName)
+	}
+	if info, err := localpath.Stat(target); err == nil && info.IsDir() {
+		return filepath.Join(target, remoteName)
+	}
+
+	return target
 }
 
 // printGetJSON writes the get command's single-file JSON output to w.

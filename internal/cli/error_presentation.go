@@ -164,6 +164,20 @@ func remoteFailureSubject(err error) (*remoteOpError, string, string) {
 	return op, op.path, hint
 }
 
+func isNotImplemented(err error) bool {
+	var graphErr *graph.GraphError
+	return errors.As(err, &graphErr) && graphErr.StatusCode == http.StatusNotImplemented
+}
+
+func notImplementedMessage(err error) string {
+	var graphErr *graph.GraphError
+	if errors.As(err, &graphErr) && graphErr.Message != "" {
+		return graphErr.Message
+	}
+
+	return "the request is not supported"
+}
+
 func isQuotaFull(err error) bool {
 	var graphErr *graph.GraphError
 	return errors.As(err, &graphErr) &&
@@ -194,6 +208,10 @@ func remoteFailureText(err error) string {
 		return "OneDrive is limiting requests right now. Wait a few minutes, then run the command again."
 	case errors.Is(err, graph.ErrProviderReadOnly):
 		return "OneDrive is temporarily read-only for this account. Try again later."
+	case isNotImplemented(err):
+		// 501 is OneDrive refusing the request, not an outage: retrying
+		// "in a few minutes" cannot help, so pass on what it said.
+		return "OneDrive cannot do this for " + subject + ": " + notImplementedMessage(err)
 	case errors.Is(err, graph.ErrServerError):
 		return "OneDrive had a temporary server problem. Try again in a few minutes."
 	default:
