@@ -5,7 +5,7 @@ Product vision: a fast, safe, well-tested CLI OneDrive client for Linux and macO
 ## Target Platforms
 
 - **Linux** (primary): x86_64, ARM64. inotify for filesystem monitoring.
-- **macOS** (primary): x86_64, ARM64 (Apple Silicon). FSEvents for filesystem monitoring.
+- **macOS** (primary): x86_64, ARM64 (Apple Silicon). kqueue for filesystem monitoring (through fsnotify, which has no FSEvents backend). kqueue holds an open file descriptor per watched directory and per file in it, so very large trees are bounded by the open-file limit.
 - **FreeBSD** (best-effort): cross-compiled on every CI run so the claim cannot rot, but not otherwise tested.
 - **Windows**: Explicit non-goal (Microsoft ships a native client).
 
@@ -21,12 +21,15 @@ Product vision: a fast, safe, well-tested CLI OneDrive client for Linux and macO
 
 | ID | Capability | File | Status |
 |----|------------|------|--------|
-| R-1 | File Operations | [file-operations.md](file-operations.md) | implemented |
-| R-2 | Sync | [sync.md](sync.md) | implemented (partial: RPC planned) |
-| R-3 | Drive Management | [drive-management.md](drive-management.md) | implemented |
-| R-4 | Configuration | [configuration.md](configuration.md) | implemented |
-| R-5 | Transfers | [transfers.md](transfers.md) | implemented |
-| R-6 | Non-Functional | [non-functional.md](non-functional.md) | partial |
+| R-1 | File Operations | [file-operations.md](file-operations.md) | verified |
+| R-2 | Sync | [sync.md](sync.md) | verified (some status and retry-scope requirements still `designed`) |
+| R-3 | Drive Management | [drive-management.md](drive-management.md) | verified (migration from other clients `future`) |
+| R-4 | Configuration | [configuration.md](configuration.md) | verified (interactive setup and service management `future`) |
+| R-5 | Transfers | [transfers.md](transfers.md) | verified |
+| R-6 | Non-Functional | [non-functional.md](non-functional.md) | partial (performance targets not yet measured) |
+
+The status column summarizes the requirement statuses inside each file; the
+files are the source of truth.
 
 ## Status Legend
 

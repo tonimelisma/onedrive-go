@@ -85,15 +85,22 @@ as a per-photo warning.
 
 SharePoint injects metadata into uploaded files, changing the hash and size post-upload. This can cause infinite upload/download loops if upload validation compares against the original local file. Filed as [onedrive-api-docs#935](https://github.com/OneDrive/onedrive-api-docs/issues/935).
 
-### Upload Creates Double Versions (Business/SharePoint)
+### Upload Creates Double Versions (All Account Types)
 
-On Business/SharePoint, uploading a file and then PATCHing its `fileSystemInfo` (to preserve local timestamps) creates two versions, doubling storage consumption. The fix is to include `fileSystemInfo` in the upload session creation request, setting timestamps atomically with the content. Modified file re-uploads still create an extra version (unfixed API bug, [onedrive-api-docs#877](https://github.com/OneDrive/onedrive-api-docs/issues/877)).
+Uploading a file and then PATCHing its `fileSystemInfo` (to preserve local timestamps) creates two versions, doubling storage consumption. This was first documented for Business/SharePoint; a live probe on a OneDrive Personal account on 2026-10-25 (simple `PUT /content` followed by an mtime PATCH) also produced **2 versions**, so the earlier "Business/SharePoint only" scoping is stale. The fix is to include `fileSystemInfo` in the upload session creation request, setting timestamps atomically with the content. Modified file re-uploads still create an extra version (unfixed API bug, [onedrive-api-docs#877](https://github.com/OneDrive/onedrive-api-docs/issues/877)).
 
 Runtime policy: avoid the avoidable double-version case by putting
 `fileSystemInfo` into upload-session creation, accept the remaining modified
 re-upload extra version as a server bug, and rely on per-side baseline hashes
 to prevent re-upload/download loops instead of attempting version-history
 cleanup workarounds.
+
+Current gap: files at or below `graph.SimpleUploadMaxSize` (4 MiB) still use
+simple upload plus a follow-on PATCH (`internal/graph/upload_transfer.go`), so
+they still get the double version on every account type. Routing every
+non-empty file through an upload session is tracked as hardening work; zero-byte
+files still need a simple PUT, because an upload session cannot carry an empty
+body.
 
 ### Simple Upload Cannot Set Metadata
 
@@ -167,9 +174,28 @@ When a file is renamed and a new file is created with the old name, the delta re
 
 The same item can appear multiple times in a single delta response page or across pages. The normalization pipeline deduplicates by keeping only the last occurrence of each item ID.
 
-### URL-Encoded Item Names
+### URL-Encoded Item Names (Disproved On Personal)
 
-Some responses return item names with URL encoding (e.g., `%20` for spaces, `%E6%97%A5%E6%9C%AC%E8%AA%9E.txt` for `日本語.txt`). This is inconsistent — most responses return plain UTF-8. The normalization pipeline decodes all item names unconditionally.
+Original claim (initial docs commit `df615b06`, 2026-02-22, with no endpoint or
+response evidence recorded): some responses return item names with URL
+encoding (e.g., `%20` for spaces, `%E6%97%A5%E6%9C%AC%E8%AA%9E.txt` for
+`日本語.txt`), so the normalization pipeline decodes all item names
+unconditionally.
+
+**Live evidence contradicts it.** A probe on a OneDrive Personal account on
+2026-10-25 created `a%20b.txt`, `test%46.txt`, `x%2Fy.txt`, `plus+sign.txt` and
+`pct%.txt`. The create response, `GET` by ID, `/children` and `/delta` all
+returned the literal name. Decoding them is therefore wrong: it turns a user's
+`a%20b.txt` into `a b.txt` (which sync then sees as a rename), can fold two
+distinct names onto one, and makes `x%2Fy.txt` look like a subfolder.
+
+Status: item names must be treated as opaque. The unconditional decode in
+`internal/graph/normalize.go` is still present at the time of writing and is
+being removed as a separate code fix; until then this entry documents a known
+defect, not a policy. If an encoded-name response is ever observed (for
+example on Business), it must be recorded with the endpoint and a fixture and
+decoded only for that response shape. `parentReference.path` is genuinely URL
+form and is still decoded (see "URL-Encoded Paths" below).
 
 ### OneNote Package Items
 
@@ -402,7 +428,8 @@ e2e-full`:
 
 - `put /e2e-sync-ee-1775448127403708000/conflict-file.txt` completed after the
   remote edit step of the historical nightly E2E
-  `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`
+  `TestE2E_Sync_EditEditConflict_ResolveKeepRemote` (since removed; see
+  [live-incidents.md](live-incidents.md#historical-test-names))
 - the immediate follow-on `stat /e2e-sync-ee-1775448127403708000/conflict-file.txt`
   kept returning HTTP 404 `itemNotFound` with request ID
   `0d76a7d9-c2b4-4eec-acd2-de29e5aec5c7` until the test's 30s poll window
@@ -483,7 +510,8 @@ Observed evidence on April 5, 2026 during `go test -tags='e2e e2e_full' ./e2e
 - Graph request ID for the failed delete: `335ea56d-e3a9-4d2f-8b4c-742da9088eec`
 
 Observed extension on April 7, 2026 during the historical isolated repro for
-`TestE2E_Sync_DeleteSafetyThreshold`:
+`TestE2E_Sync_DeleteSafetyThreshold` (since removed with the delete-safety
+threshold; see [live-incidents.md](live-incidents.md#historical-test-names)):
 
 - repeated sibling deletes in `/e2e-sync-bigdel-1775633571947871000` reached a
   state where `rm /e2e-sync-bigdel-1775633571947871000/file-10.txt` failed
@@ -716,9 +744,15 @@ limits are drive-local. The service may still enforce broader quotas. The
 client simply avoids proactively suppressing unrelated work when the response
 does not identify a broader bucket with enough confidence.
 
-`RateLimit-Remaining` and `RateLimit-Limit` headers exist but only cover
-per-app 1-minute resource units. They are not reliable enough for proactive
-throttling decisions across file operations.
+Do not rely on `RateLimit-*` headers. Microsoft's current SharePoint Online
+throttling guidance states that SharePoint "does not return or support IETF
+RateLimit headers" and that clients should honor `Retry-After` instead
+([how to avoid getting throttled](https://learn.microsoft.com/en-us/sharepoint/dev/general-development/how-to-avoid-getting-throttled-or-blocked-in-sharepoint-online),
+checked 2026-10-25). An earlier version of this entry said the headers exist
+but only cover per-app 1-minute resource units; that is superseded. The client
+reads no `RateLimit-*` header: `Retry-After` is the only throttling header it
+honours (`internal/retry/transport.go` `parseRetryAfterHeader`,
+`internal/graph/client_preauth.go` `parseRetryAfter`).
 
 ## Shared Folder Issues
 
@@ -1031,7 +1065,7 @@ Two files differing only in case cannot coexist in the same OneDrive folder. The
 
 All delta responses pass through a 5-stage normalization pipeline (`internal/graph/normalize.go`) before the sync engine processes them:
 
-1. Decode URL-encoded names
+1. Decode URL-encoded names (wrong on Personal and being removed; see "URL-Encoded Item Names (Disproved On Personal)")
 2. Preserve package items for provider-truth callers; sync filters them later
 3. Clear deleted item hashes
 4. Deduplicate (keep last occurrence per item ID)
@@ -1041,9 +1075,15 @@ All delta responses pass through a 5-stage normalization pipeline (`internal/gra
 
 The `/drives/{id}/special/recyclebin/children` endpoint only works on Business/SharePoint drives. Personal OneDrive accounts return **HTTP 400** (`"The special folder identifier isn't valid"`) because the `special` folder collection does not include `recyclebin` on Personal accounts.
 
-Similarly, `permanentDelete` (used by `recycle-bin empty`) returns **HTTP 405** on Personal accounts — the code already handles this by falling back to regular `DELETE` (`recycle_bin.go`).
+`permanentDelete` (used by `rm --permanent` and `recycle-bin empty`) was
+previously documented here as returning **HTTP 405** on Personal accounts. A
+live probe on a OneDrive Personal account on 2026-10-25 got **204 and the item
+was permanently deleted**, so that claim is stale. `recycle-bin empty` still
+falls back to a regular `DELETE` if a drive answers 405
+(`internal/cli/recycle_bin_flow.go`), which is harmless where it is never
+taken.
 
-**Impact**: `recycle-bin list` and `recycle-bin restore` are Business-only. E2E tests skip on Personal accounts.
+**Impact**: `recycle-bin list`, `recycle-bin restore` and `recycle-bin empty` are Business-only, because all three start from the recycle-bin listing. `rm --permanent` works on every account type. E2E tests skip on Personal accounts.
 
 ### Backend Read-Only Windows Masquerade As accessDenied
 
