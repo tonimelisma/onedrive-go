@@ -280,6 +280,10 @@ Built-in local observation policy remains:
 - validate OneDrive-invalid names before they become upload work
 - report invalid names, path length, file size, case collisions, read-denied
   paths, and hash failures as observation issues for visible paths only
+- a case collision needs both names on disk: a baseline name the scan no
+  longer finds is the old half of a case-only rename (or a local delete), not
+  a collider; the planner orders the remote delete or move of the old name
+  before the create of the new one
 - skip symlinks by default; when `follow_symlinks=true`, observe at the alias
   path with cycle protection and executor no-follow delete safety; observed
   facts are the followed target's, and the executor's upload precondition

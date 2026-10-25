@@ -149,6 +149,11 @@ same derivation rather than a second planner-shaped helper.
 - local changed + remote changed with different hashes -> `ActionConflictCopy` + dependent `ActionDownload`
 - local unchanged + remote deleted -> `ActionLocalDelete`
 - local changed + remote deleted -> `ActionUpload` with no stale item ID, so execution recreates the remote file
+- content unchanged on both sides but file metadata moved (a new local mtime
+  from `touch`, a new remote mtime or eTag over the same hash) ->
+  `ActionBaselineUpdate` (publication-only, R-2.2.3). Nothing transfers, but the
+  scanner's size+mtime fast path compares against the baseline, so a stale
+  mtime would re-hash the file on every scan
 
 ### No baseline
 
@@ -298,6 +303,18 @@ ordering and parent preservation use the deleted side's type
 (`deletedItemType`), since the two sides disagree across a type change. Moves that cross drive ownership are
 decomposed into delete + upload because Graph move cannot cross drive
 ownership.
+
+OneDrive's namespace is case-insensitive, so a case-only rename needs the same
+care (R-2.12.1). When it cannot be paired as a move because the content
+changed too, it plans `ActionRemoteDelete` of `edit.txt` and `ActionUpload` of
+`EDIT.txt`. Uploads replace on name conflict, so an upload that ran first
+would overwrite the old item in place and the delete would then remove the new
+content. A remote upload, remote folder create or remote move therefore
+depends on any remote delete of a sibling whose path differs from it only in
+case, and an upload or folder create also on a remote move away from such a
+path. Move-to-move edges are skipped: two moves that trade case-variant names
+would otherwise wait on each other, and a blocked rename fails on its name
+conflict and is retried.
 
 Local folder moves execute as `ActionRemoteMove` work. Graph applies a folder
 move to unchanged descendants, so descendant `ActionRemoteMove` entries whose
