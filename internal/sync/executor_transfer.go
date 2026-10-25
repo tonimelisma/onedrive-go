@@ -125,6 +125,7 @@ func (e *executor) downloadOutcome(
 		}
 	}
 	o.ParentID = e.resolvedParentIDForOutcome(action, nil)
+	e.observeLocalIdentity(&o)
 
 	return o
 }

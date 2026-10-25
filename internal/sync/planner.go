@@ -207,7 +207,31 @@ func isFolderDelete(action *Action) bool {
 	isDelete := action.Type == ActionLocalDelete ||
 		action.Type == ActionRemoteDelete ||
 		action.Type == ActionCleanup
-	return isDelete && resolveItemType(action.View) == ItemTypeFolder
+	return isDelete && deletedItemType(action) == ItemTypeFolder
+}
+
+// deletedItemType is the type of the item a delete removes: the side it
+// deletes from, when that side is known. It differs from resolveItemType only
+// across a type change, where the two sides disagree and the view's preferred
+// (remote) type would misdescribe a local delete.
+func deletedItemType(action *Action) ItemType {
+	if action == nil || action.View == nil {
+		return resolveItemType(nil)
+	}
+	switch action.Type {
+	case ActionLocalDelete:
+		if action.View.Local != nil {
+			return action.View.Local.ItemType
+		}
+	case ActionRemoteDelete:
+		if action.View.Remote != nil {
+			return action.View.Remote.ItemType
+		}
+	case ActionDownload, ActionUpload, ActionLocalMove, ActionRemoteMove,
+		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
+	}
+
+	return resolveItemType(action.View)
 }
 
 func runnableSubtreeActionRequiresParent(actions []Action, parentPath string, mode SyncMode) bool {
@@ -236,7 +260,9 @@ func actionRequiresParentFolder(actionType actionType) bool {
 // Returns deps where deps[i] contains the indices that action i depends on.
 // Rules: (1) folder create before any action in that subtree,
 // (2) child delete/cleanup before parent folder delete,
-// (3) move target parent must exist first.
+// (3) move target parent must exist first, (4) a folder delete waits for
+// same-side moves that carry descendants out of it, (5) the create half of a
+// type-change replacement waits for the delete at the same path.
 func buildDependencies(actions []Action) [][]int {
 	deps := make([][]int, len(actions))
 
@@ -266,7 +292,9 @@ func buildDependencies(actions []Action) [][]int {
 		deps[i] = addParentFolderDep(deps[i], i, &actions[i], folderCreateIdx)
 		deps[i] = addConflictCopyDep(deps[i], i, &actions[i], conflictCopyIdx)
 		deps[i] = addChildDeleteDeps(deps[i], i, &actions[i], deleteIdx)
+		deps[i] = addSamePathReplacementDep(deps[i], i, &actions[i], deleteIdx)
 		deps[i] = addRemoteMoveDeps(deps[i], i, &actions[i], actions)
+		deps[i] = addMoveOutOfDeletedFolderDeps(deps[i], i, &actions[i], actions)
 		// Sort dependency indices for reproducible ordering (B-154).
 		sort.Ints(deps[i])
 	}
@@ -302,13 +330,26 @@ func addConflictCopyDep(deps []int, idx int, a *Action, conflictCopyIdx map[stri
 	return deps
 }
 
+// addSamePathReplacementDep makes the create half of a type-change
+// replacement wait for the delete of the old item at the same path.
+func addSamePathReplacementDep(deps []int, idx int, a *Action, deleteIdx map[string]int) []int {
+	if a.Type != ActionUpload && a.Type != ActionDownload && a.Type != ActionFolderCreate {
+		return deps
+	}
+	if delIdx, ok := deleteIdx[a.Path]; ok && delIdx != idx {
+		deps = append(deps, delIdx)
+	}
+
+	return deps
+}
+
 // addChildDeleteDeps makes folder deletes depend on child deletes at deeper paths.
 func addChildDeleteDeps(deps []int, idx int, a *Action, deleteIdx map[string]int) []int {
 	if a.Type != ActionLocalDelete && a.Type != ActionRemoteDelete {
 		return deps
 	}
 
-	if resolveItemType(a.View) != ItemTypeFolder {
+	if deletedItemType(a) != ItemTypeFolder {
 		return deps
 	}
 
@@ -317,6 +358,39 @@ func addChildDeleteDeps(deps []int, idx int, a *Action, deleteIdx map[string]int
 	for childPath, childIdx := range deleteIdx {
 		if childIdx != idx && strings.HasPrefix(childPath, prefix) {
 			deps = append(deps, childIdx)
+		}
+	}
+
+	return deps
+}
+
+// addMoveOutOfDeletedFolderDeps makes a folder delete wait for moves that
+// carry descendants out of it on the same side. Deleting a folder deletes its
+// subtree, so a remote folder delete that ran before a remote move of one of
+// its children would take the child with it (and a local folder delete would
+// do the same to a child a remote move is relocating locally).
+func addMoveOutOfDeletedFolderDeps(deps []int, idx int, a *Action, actions []Action) []int {
+	var sameSideMove actionType
+	switch a.Type {
+	case ActionRemoteDelete:
+		sameSideMove = ActionRemoteMove
+	case ActionLocalDelete:
+		sameSideMove = ActionLocalMove
+	case ActionDownload, ActionUpload, ActionLocalMove, ActionRemoteMove,
+		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
+		return deps
+	default:
+		return deps
+	}
+	if deletedItemType(a) != ItemTypeFolder {
+		return deps
+	}
+
+	prefix := a.Path + "/"
+	for moveIdx := range actions {
+		move := &actions[moveIdx]
+		if moveIdx != idx && move.Type == sameSideMove && strings.HasPrefix(move.OldPath, prefix) {
+			deps = append(deps, moveIdx)
 		}
 	}
 

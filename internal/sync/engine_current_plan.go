@@ -174,6 +174,10 @@ type currentInputs struct {
 	localRows         []localStateRow
 	remoteRows        []remoteStateRow
 	observationIssues []ObservationIssueRow
+	// baseline is read in the same transaction as the comparison rows, so a
+	// baseline_present row always has its entry. The run's cached baseline
+	// can lag or lead that snapshot when a commit lands between them.
+	baseline *Baseline
 }
 
 func (flow *engineFlow) observeAndCommitCurrentState(
@@ -554,7 +558,12 @@ func (flow *engineFlow) loadCurrentInputsTx(
 		return currentInputs{}, fmt.Errorf("sync: listing observation issues: %w", err)
 	}
 	observationIssues = filterObservationIssueRowsForPlanning(observationIssues, flow.engine.contentFilter)
+	snapshotBaseline, err := loadBaselineWithRunner(ctx, tx, contentDriveID)
+	if err != nil {
+		return currentInputs{}, fmt.Errorf("sync: loading planning baseline snapshot: %w", err)
+	}
 	return currentInputs{
+		baseline:          snapshotBaseline,
 		comparisons:       comparisons,
 		reconciliations:   reconciliations,
 		localRows:         plannerVisibleRows.Local,
@@ -673,6 +682,9 @@ func (e *Engine) buildCurrentActionPlanFromInputs(
 	bl *Baseline,
 	mode SyncMode,
 ) (*actionPlan, error) {
+	if inputs.baseline != nil {
+		bl = inputs.baseline
+	}
 	return e.planner.PlanCurrentState(
 		inputs.comparisons,
 		inputs.reconciliations,

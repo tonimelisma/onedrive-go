@@ -48,7 +48,8 @@ type consoleLogHandler struct {
 func isInternalLogField(key string) bool {
 	switch key {
 	case "run_id", "action_id", "action_type", "condition_key", "condition_total", "failure_class",
-		"log_owner", "scope_key", "trial_scope_key", "drive_id", "http_status":
+		"log_owner", "scope_key", "trial_scope_key", "drive_id", "http_status",
+		"supersede_streak", "error_detail":
 		return true
 	default:
 		return false

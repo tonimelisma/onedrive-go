@@ -520,3 +520,40 @@ func TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction(t *tes
 	assert.Contains(t, err.Error(), "missing planner view")
 	assert.False(t, decision.Fresh)
 }
+
+// Validates: R-2.8.9, R-2.17.3
+func TestActionFreshness_LocalOriginMoveRejectsChangedDestination(t *testing.T) {
+	t.Parallel()
+
+	action := &Action{
+		Type:    ActionRemoteMove,
+		Path:    "secret.txt",
+		OldPath: "vim.swp",
+		ItemID:  "item-swap",
+		View:    &pathView{Path: "vim.swp"},
+		MovedLocal: &localState{
+			ItemType: ItemTypeFile, Size: 5, Mtime: 100,
+			LocalDevice: 7, LocalInode: 8, LocalHasIdentity: true,
+		},
+	}
+	planned := &localStateRow{
+		Path: "secret.txt", ItemType: ItemTypeFile, Size: 5, Mtime: 100,
+		LocalDevice: 7, LocalInode: 8, LocalHasIdentity: true,
+	}
+
+	fresh := evaluateMoveEndpointFreshness(action, actionFreshnessInputs{
+		LocalTruthComplete:   true,
+		LocalAtMovePeer:      planned,
+		LocalAtMovePeerFound: true,
+	})
+	assert.True(t, fresh.Fresh)
+
+	changed := *planned
+	changed.Mtime = 200
+	stale := evaluateMoveEndpointFreshness(action, actionFreshnessInputs{
+		LocalTruthComplete:   true,
+		LocalAtMovePeer:      &changed,
+		LocalAtMovePeerFound: true,
+	})
+	assert.False(t, stale.Fresh, "a destination that changed since planning must not be moved onto")
+}

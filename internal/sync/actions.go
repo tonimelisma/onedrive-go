@@ -58,6 +58,12 @@ type Action struct {
 	CreateSide                folderCreateSide // for folder creates
 	View                      *pathView        // full three-way context
 	RequireMissingLocalTarget bool             // downloads after preserving a local conflict copy
+	// MovedLocal is the local truth the planner observed at Path for a
+	// local-origin move (ActionRemoteMove). View describes the source at
+	// OldPath, which is absent locally, so this is the only record of what
+	// now sits at the destination. Freshness checks the destination against
+	// it, and the move outcome publishes it as the baseline's local half.
+	MovedLocal *localState
 }
 
 // ThrottleTargetKey returns the narrowest remote boundary that can be blocked

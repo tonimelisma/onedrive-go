@@ -1129,6 +1129,51 @@ func TestCommitMutation_Move(t *testing.T) {
 	assert.Equal(t, "p2", entry.ParentID)
 }
 
+// Validates: R-2.17.2
+func TestCommitMutation_FolderMoveRepathsSubtree(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New("d")
+
+	for _, seed := range []BaselineMutation{
+		{Action: ActionFolderCreate, Success: true, Path: "ü src", DriveID: driveID, ItemID: "dir", ItemType: ItemTypeFolder},
+		{Action: ActionFolderCreate, Success: true, Path: "ü src/inner", DriveID: driveID, ItemID: "inner", ItemType: ItemTypeFolder},
+		{
+			Action: ActionUpload, Success: true, Path: "ü src/inner/a.txt", DriveID: driveID, ItemID: "a",
+			ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
+		},
+		// A sibling sharing the name prefix must not move.
+		{Action: ActionFolderCreate, Success: true, Path: "ü src2", DriveID: driveID, ItemID: "sibling", ItemType: ItemTypeFolder},
+	} {
+		require.NoError(t, mgr.CommitMutation(ctx, &seed))
+	}
+
+	move := BaselineMutation{
+		Action: ActionRemoteMove, Success: true, Path: "日本 dst", OldPath: "ü src",
+		DriveID: driveID, ItemID: "dir", ItemType: ItemTypeFolder,
+	}
+	require.NoError(t, mgr.CommitMutation(ctx, &move))
+
+	for _, cached := range []bool{true, false} {
+		bl := mgr.cachedBaseline()
+		if !cached {
+			var err error
+			bl, err = mgr.Load(ctx)
+			require.NoError(t, err)
+		}
+		for _, p := range []string{"日本 dst", "日本 dst/inner", "日本 dst/inner/a.txt", "ü src2"} {
+			_, ok := bl.GetByPath(p)
+			assert.True(t, ok, "missing %s (cached=%v)", p, cached)
+		}
+		for _, p := range []string{"ü src", "ü src/inner", "ü src/inner/a.txt"} {
+			_, ok := bl.GetByPath(p)
+			assert.False(t, ok, "stale %s (cached=%v)", p, cached)
+		}
+	}
+}
+
 // Validates: R-2.2
 func TestCommitMutation_SkipsFailedOutcome(t *testing.T) {
 	t.Parallel()

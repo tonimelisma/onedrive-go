@@ -8,7 +8,20 @@ import (
 )
 
 const (
-	sqlQueryComparisonState = `
+	// sqlLocalAndRemoteMoveCTEs is the shared head of the comparison and
+	// reconciliation queries: the path universe plus local and remote move
+	// pairing. Both queries must classify moves identically, so the pairing
+	// rules live here once.
+	//
+	// Local move pairing: a baseline row and an unbaselined local_state row
+	// pair on filesystem identity (device + inode, same item type). For files
+	// identity is necessary but not sufficient, see the corroboration clause.
+	// Directories pair on identity alone: a directory has no content of its
+	// own, its descendants are paired independently, and a wrong pairing after
+	// rmdir + mkdir reuse still converges to the same tree (only the remote
+	// folder's item identity differs). Baseline files without identity fall
+	// back to unique content-hash pairing.
+	sqlLocalAndRemoteMoveCTEs = `
 WITH
 all_paths AS (
 	SELECT path FROM baseline
@@ -29,6 +42,27 @@ local_move_candidates AS (
 		AND b.local_has_identity = 1
 		AND l.local_device = b.local_device
 		AND l.local_inode = b.local_inode
+		AND (
+			COALESCE(b.item_type, '') = 'folder'
+			OR (
+				-- Identity alone never proves a file move: after delete +
+				-- create in one batch the filesystem may hand the freed inode
+				-- to an unrelated file. A rename preserves size, mtime and
+				-- content, so the destination must still agree with the
+				-- baseline on size and on content (both hashes known) or,
+				-- when either hash is unknown, on mtime.
+				b.local_size IS NOT NULL
+				AND l.size IS NOT NULL
+				AND l.size = b.local_size
+				AND (
+					CASE
+						WHEN NULLIF(b.local_hash, '') IS NOT NULL AND NULLIF(l.hash, '') IS NOT NULL
+							THEN l.hash = b.local_hash
+						ELSE COALESCE(b.local_mtime, 0) <> 0 AND l.mtime = b.local_mtime
+					END
+				)
+			)
+		)
 	WHERE NOT EXISTS (SELECT 1 FROM baseline target WHERE target.path = l.path)
 	UNION ALL
 	SELECT
@@ -73,6 +107,9 @@ remote_move_targets AS (
 		source_path
 	FROM remote_move_sources
 ),
+`
+
+	sqlQueryComparisonState = sqlLocalAndRemoteMoveCTEs + `
 comparison_state AS (
 	SELECT
 		p.path,
@@ -241,71 +278,7 @@ SELECT
 FROM comparison_state
 ORDER BY path`
 
-	sqlQueryReconciliationState = `
-WITH
-all_paths AS (
-	SELECT path FROM baseline
-	UNION
-	SELECT path FROM local_state
-	UNION
-	SELECT path FROM remote_state
-),
-local_move_candidates AS (
-	SELECT
-		b.path AS source_path,
-		l.path AS target_path
-	FROM baseline b
-	JOIN local_state l
-		ON l.path <> b.path
-		AND COALESCE(l.item_type, '') = COALESCE(b.item_type, '')
-		AND l.local_has_identity = 1
-		AND b.local_has_identity = 1
-		AND l.local_device = b.local_device
-		AND l.local_inode = b.local_inode
-	WHERE NOT EXISTS (SELECT 1 FROM baseline target WHERE target.path = l.path)
-	UNION ALL
-	SELECT
-		b.path AS source_path,
-		l.path AS target_path
-	FROM baseline b
-	JOIN local_state l
-		ON l.path <> b.path
-		AND COALESCE(l.item_type, '') = 'file'
-		AND COALESCE(b.item_type, '') = 'file'
-		AND b.local_has_identity = 0
-		AND NULLIF(l.hash, '') = NULLIF(b.local_hash, '')
-	WHERE b.local_hash IS NOT NULL
-		AND b.local_hash <> ''
-		AND NOT EXISTS (SELECT 1 FROM baseline target WHERE target.path = l.path)
-),
-local_move_sources AS (
-	SELECT
-		source_path,
-		MIN(target_path) AS target_path,
-		COUNT(*) AS candidate_count
-	FROM local_move_candidates
-	GROUP BY source_path
-),
-local_move_targets AS (
-	SELECT
-		target_path,
-		source_path,
-		candidate_count
-	FROM local_move_sources
-),
-remote_move_sources AS (
-	SELECT
-		b.path AS source_path,
-		r.path AS target_path
-	FROM baseline b
-	JOIN remote_state r ON r.item_id = b.item_id AND r.path <> b.path
-),
-remote_move_targets AS (
-	SELECT
-		target_path,
-		source_path
-	FROM remote_move_sources
-),
+	sqlQueryReconciliationState = sqlLocalAndRemoteMoveCTEs + `
 comparison_flags AS (
 	SELECT
 		p.path,
@@ -359,7 +332,19 @@ comparison_flags AS (
 		COALESCE(lms.candidate_count, lmt.candidate_count, 0) AS local_move_candidate_count,
 		COALESCE(lmt.source_path, '') AS local_move_source,
 		COALESCE(rms.target_path, '') AS remote_move_target,
-		COALESCE(rmt.source_path, '') AS remote_move_source
+		COALESCE(rmt.source_path, '') AS remote_move_source,
+		COALESCE(l.item_type, '') AS local_item_type,
+		COALESCE(r.item_type, '') AS remote_item_type,
+		CASE
+			WHEN b.path IS NOT NULL AND l.path IS NOT NULL
+				AND COALESCE(b.item_type, '') <> COALESCE(l.item_type, '') THEN 1
+			ELSE 0
+		END AS local_type_changed,
+		CASE
+			WHEN b.path IS NOT NULL AND r.path IS NOT NULL
+				AND COALESCE(b.item_type, '') <> COALESCE(r.item_type, '') THEN 1
+			ELSE 0
+		END AS remote_type_changed
 	FROM all_paths p
 	LEFT JOIN baseline b ON b.path = p.path
 	LEFT JOIN local_state l ON l.path = p.path
@@ -384,6 +369,10 @@ comparison_state AS (
 		local_move_source,
 		remote_move_target,
 		remote_move_source,
+		local_item_type,
+		remote_item_type,
+		local_type_changed,
+		remote_type_changed,
 		CASE
 			WHEN baseline_present = 1 AND local_present = 0 AND local_move_candidate_count = 1 THEN 'local_move_source'
 			WHEN baseline_present = 1 AND local_present = 0 AND remote_present = 0 THEN 'both_missing'
@@ -413,6 +402,16 @@ reconciliation_state AS (
 		remote_move_target,
 		remote_move_source,
 		CASE
+			-- A type change (file <-> folder) replaces the item: the old one is
+			-- deleted and the new one created, never "uploaded" or
+			-- "downloaded" as the baseline's type. When the other side also
+			-- changed, local wins: the replaced OneDrive item goes to the
+			-- recycle bin, whereas replacing local truth would destroy it.
+			WHEN comparison_kind = 'diverged' AND local_changed = 1
+				AND (local_type_changed = 1 OR remote_type_changed = 1) THEN 'replace_remote'
+			WHEN comparison_kind = 'diverged' AND remote_type_changed = 1 THEN 'replace_local'
+			WHEN comparison_kind = 'remote_missing' AND local_type_changed = 1 AND local_item_type = 'folder' THEN 'folder_create_remote'
+			WHEN comparison_kind = 'local_missing' AND remote_type_changed = 1 AND remote_item_type = 'folder' THEN 'folder_create_local'
 			WHEN comparison_kind = 'both_missing' THEN 'baseline_remove'
 			WHEN comparison_kind = 'local_move_source' THEN 'local_move'
 			WHEN comparison_kind = 'local_move_dest' THEN 'local_move'
@@ -426,7 +425,10 @@ reconciliation_state AS (
 			WHEN comparison_kind = 'create_conflict' THEN 'conflict_create_create'
 			WHEN comparison_kind = 'unchanged' THEN 'noop'
 			WHEN comparison_kind = 'equal_again' THEN 'baseline_update'
-			WHEN comparison_kind = 'local_missing' AND item_type = 'folder' AND remote_changed = 0 THEN 'folder_create_local'
+			-- A folder the user deleted (or moved without a provable identity
+			-- pairing) is deleted on OneDrive exactly like a file. Remote-only
+			-- descendants that still need the folder are protected by action
+			-- normalization, which rewrites this delete into a local re-create.
 			WHEN comparison_kind = 'local_missing' AND remote_changed = 0 THEN 'remote_delete'
 			WHEN comparison_kind = 'local_missing' AND remote_changed = 1 THEN 'download'
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 0 THEN 'local_delete'

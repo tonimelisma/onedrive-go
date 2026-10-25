@@ -104,7 +104,22 @@ func (s *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 		return nil, fmt.Errorf("sync: loading content drive for baseline: %w", err)
 	}
 
-	rows, err := s.db.QueryContext(ctx, sqlLoadBaseline)
+	b, err := loadBaselineWithRunner(ctx, s.db, contentDriveID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.baseline = b
+	s.logger.Debug("baseline loaded", slog.Int("entries", len(b.ByPath)))
+
+	return b, nil
+}
+
+// loadBaselineWithRunner builds a Baseline from the rows runner sees. Inside a
+// read transaction it is the baseline of that transaction's snapshot, which is
+// what planning must use alongside SQL comparison rows from the same snapshot.
+func loadBaselineWithRunner(ctx context.Context, runner sqlTxRunner, contentDriveID driveid.ID) (*Baseline, error) {
+	rows, err := runner.QueryContext(ctx, sqlLoadBaseline)
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading baseline: %w", err)
 	}
@@ -132,9 +147,6 @@ func (s *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("sync: iterating baseline rows: %w", err)
 	}
-
-	s.baseline = b
-	s.logger.Debug("baseline loaded", slog.Int("entries", len(b.ByPath)))
 
 	return b, nil
 }
@@ -535,6 +547,14 @@ func (s *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation
 	case baselineMutationDelete:
 		s.baseline.Delete(o.Path)
 	case baselineMutationMove:
+		if isFolderPathMove(o) {
+			// The subtree moved too; rebuilding beats re-deriving every
+			// descendant path in the cache.
+			if err := s.reloadBaselineCache(ctx); err != nil {
+				return fmt.Errorf("sync: reloading baseline cache after folder move: %w", err)
+			}
+			return nil
+		}
 		s.baseline.Delete(o.OldPath)
 		s.baseline.Put(mutationToEntry(o))
 	}
@@ -542,14 +562,28 @@ func (s *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation
 	return nil
 }
 
+// reloadBaselineCache rebuilds the cache from SQLite in place. Callers hold
+// the *Baseline that Load returned for a whole run (watch keeps its startup
+// pointer), so swapping in a new object would orphan theirs: every later
+// commit would update only the new one, and planning would see SQL rows for
+// paths its baseline never received.
 func (s *SyncStore) reloadBaselineCache(ctx context.Context) error {
-	s.baselineMu.Lock()
-	s.baseline = nil
-	s.baselineMu.Unlock()
-
-	if _, err := s.Load(ctx); err != nil {
+	contentDriveID, err := s.contentDriveIDForRead(ctx, driveid.ID{})
+	if err != nil {
+		return fmt.Errorf("sync: loading content drive for baseline reload: %w", err)
+	}
+	fresh, err := loadBaselineWithRunner(ctx, s.db, contentDriveID)
+	if err != nil {
 		return fmt.Errorf("sync: loading baseline after cache invalidation: %w", err)
 	}
+
+	s.baselineMu.Lock()
+	defer s.baselineMu.Unlock()
+	if s.baseline == nil {
+		s.baseline = fresh
+		return nil
+	}
+	s.baseline.replaceContents(fresh)
 
 	return nil
 }
@@ -665,7 +699,49 @@ func commitMove(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error 
 	// Upsert handles both the path update and all other field updates.
 	// The ON CONFLICT(item_id) clause matches the existing row
 	// and updates path + all mutable fields atomically.
-	return commitUpsert(ctx, tx, o)
+	if err := commitUpsert(ctx, tx, o); err != nil {
+		return err
+	}
+	if !isFolderPathMove(o) {
+		return nil
+	}
+
+	// A folder move moves its whole subtree, on OneDrive and on disk alike,
+	// and the planner omits the descendant moves it covers. The descendants'
+	// baseline rows must follow in the same transaction; left at the old
+	// paths, every child looked like a fresh move whose source had vanished
+	// and was superseded on every replan.
+	if err := repathSubtreeTx(ctx, tx, "baseline", o.OldPath, o.Path); err != nil {
+		return err
+	}
+	if o.Action == ActionRemoteMove {
+		// The local-origin move just moved the remote subtree; remote
+		// observation would report the same paths later.
+		return repathSubtreeTx(ctx, tx, "remote_state", o.OldPath, o.Path)
+	}
+
+	return nil
+}
+
+func isFolderPathMove(o *BaselineMutation) bool {
+	return o.ItemType == ItemTypeFolder && o.OldPath != "" && o.OldPath != o.Path
+}
+
+// repathSubtreeTx rewrites every path strictly below oldPath to sit below
+// newPath. Prefix matching uses SQLite's own length() on the bound prefix so
+// multi-byte names cut at the same character boundary they are matched on.
+// table is always a fixed internal table name, never input.
+func repathSubtreeTx(ctx context.Context, tx sqlTxRunner, table, oldPath, newPath string) error {
+	oldPrefix := oldPath + "/"
+	newPrefix := newPath + "/"
+	query := `UPDATE ` + table + `
+		SET path = ? || substr(path, length(?) + 1)
+		WHERE substr(path, 1, length(?)) = ? COLLATE BINARY`
+	if _, err := tx.ExecContext(ctx, query, newPrefix, oldPrefix, oldPrefix, oldPrefix); err != nil {
+		return fmt.Errorf("sync: moving %s subtree %s -> %s: %w", table, oldPath, newPath, err)
+	}
+
+	return nil
 }
 
 // updateRemoteStateOnOutcome updates the remote mirror when execution produces

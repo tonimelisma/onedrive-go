@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -3070,4 +3071,334 @@ func TestExecutor_Upload_AlwaysChecksFreshnessWhenBaselineETagKnown(t *testing.T
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, 1, getItemCalls, "expected one freshness probe before upload")
+}
+
+// moveTestFileBaseline builds the source baseline a real sync would have
+// recorded for relPath, so local move preconditions pass against it.
+func moveTestFileBaseline(t *testing.T, e *executor, syncRoot, relPath string) *BaselineEntry {
+	t.Helper()
+
+	info, err := os.Stat(filepath.Join(syncRoot, relPath))
+	require.NoError(t, err)
+	hash, err := e.hashFunc(filepath.Join(syncRoot, relPath))
+	require.NoError(t, err)
+	identity, err := e.syncTree.IdentityNoFollow(relPath)
+	require.NoError(t, err)
+
+	return &BaselineEntry{
+		Path:             relPath,
+		ItemID:           "item-moved",
+		ItemType:         ItemTypeFile,
+		LocalHash:        hash,
+		LocalSize:        info.Size(),
+		LocalSizeKnown:   true,
+		LocalMtime:       info.ModTime().UnixNano(),
+		LocalDevice:      identity.Device,
+		LocalInode:       identity.Inode,
+		LocalHasIdentity: true,
+		RemoteHash:       "remote-hash",
+		RemoteSize:       info.Size(),
+		RemoteSizeKnown:  true,
+		RemoteMtime:      11,
+		ETag:             "etag-before-move",
+	}
+}
+
+// Validates: R-2.8.10, R-2.17.3
+func TestExecutor_LocalMove_PublishesSourceBaselineLocalHalf(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+	writeExecTestFile(t, syncRoot, "renamed.txt", "hi")
+	baseline := moveTestFileBaseline(t, e, syncRoot, "renamed.txt")
+
+	// A server-side rename with unchanged content: only path and eTag move.
+	action := &Action{
+		Type:    ActionLocalMove,
+		Path:    "sub/renamed-remotely.txt",
+		OldPath: "renamed.txt",
+		ItemID:  "item-moved",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View: &pathView{
+			Path: "sub/renamed-remotely.txt",
+			Remote: &remoteState{
+				ItemID: "item-moved", ItemType: ItemTypeFile,
+				Hash: "remote-hash", Size: baseline.RemoteSize, Mtime: 11, ETag: "etag-after-move",
+			},
+			Baseline: baseline,
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+
+	// Without the source baseline's local half the moved row lost its local
+	// hash and identity, so the next scan saw a change and re-uploaded.
+	assert.Equal(t, baseline.LocalHash, o.LocalHash)
+	assert.Equal(t, baseline.LocalSize, o.LocalSize)
+	assert.True(t, o.LocalSizeKnown)
+	assert.Equal(t, baseline.LocalMtime, o.LocalMtime)
+	moved, err := e.syncTree.IdentityNoFollow("sub/renamed-remotely.txt")
+	require.NoError(t, err)
+	assert.True(t, o.LocalHasIdentity)
+	assert.Equal(t, moved.Inode, o.LocalInode)
+	assert.Equal(t, "remote-hash", o.RemoteHash)
+	assert.Equal(t, "etag-after-move", o.ETag)
+}
+
+// Validates: R-2.17.3
+func TestExecutor_LocalMove_RemoteEditKeepsBaselineRemoteContent(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+	writeExecTestFile(t, syncRoot, "doc.txt", "old")
+	baseline := moveTestFileBaseline(t, e, syncRoot, "doc.txt")
+
+	action := &Action{
+		Type:    ActionLocalMove,
+		Path:    "moved-doc.txt",
+		OldPath: "doc.txt",
+		ItemID:  "item-moved",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View: &pathView{
+			Path: "moved-doc.txt",
+			Remote: &remoteState{
+				ItemID: "item-moved", ItemType: ItemTypeFile,
+				Hash: "edited-remote-hash", Size: 99, Mtime: 12, ETag: "etag-edited",
+			},
+			Baseline: baseline,
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+
+	// The local copy still holds the old content, so the baseline must keep
+	// describing the old remote content; the next pass then downloads the edit.
+	assert.Equal(t, "remote-hash", o.RemoteHash)
+	assert.Equal(t, baseline.RemoteSize, o.RemoteSize)
+	assert.Equal(t, "etag-before-move", o.ETag)
+	assert.Equal(t, baseline.LocalHash, o.LocalHash)
+}
+
+// Validates: R-2.17.3
+func TestExecutor_RemoteMove_PublishesObservedDestinationLocalTruth(t *testing.T) {
+	t.Parallel()
+
+	items := &executorMockItemClient{
+		moveItemFn: func(_ context.Context, _ driveid.ID, _, _, _ string) (*graph.Item, error) {
+			return &graph.Item{ID: "item-swap", ETag: "etag-moved"}, nil
+		},
+	}
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteMove,
+		Path:    "secret.txt",
+		OldPath: "vim.swp",
+		ItemID:  "item-swap",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View: &pathView{
+			Path: "vim.swp",
+			Baseline: &BaselineEntry{
+				Path: "vim.swp", ItemID: "item-swap", ItemType: ItemTypeFile,
+				LocalHash: "swap-hash", LocalSize: 5, LocalSizeKnown: true, LocalMtime: 100,
+				LocalDevice: 7, LocalInode: 8, LocalHasIdentity: true,
+				RemoteHash: "swap-hash", RemoteSize: 5, RemoteSizeKnown: true,
+			},
+		},
+		MovedLocal: &localState{
+			ItemType: ItemTypeFile, Size: 5, Mtime: 100,
+			LocalDevice: 7, LocalInode: 8, LocalHasIdentity: true,
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+
+	// The destination was never hashed; the baseline must not claim the
+	// source's hash for it.
+	assert.Empty(t, o.LocalHash)
+	assert.Equal(t, int64(5), o.LocalSize)
+	assert.Equal(t, int64(100), o.LocalMtime)
+	assert.True(t, o.LocalIdentityObserved)
+	assert.Equal(t, uint64(8), o.LocalInode)
+	assert.Equal(t, "swap-hash", o.RemoteHash)
+}
+
+// Validates: R-2.17.1
+func TestExecutor_CreateLocalFolder_RecordsFilesystemIdentity(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:       ActionFolderCreate,
+		Path:       "deep/er",
+		CreateSide: createLocal,
+		ItemID:     "item-er",
+		DriveID:    driveid.New(synctest.TestDriveID),
+		View: &pathView{
+			Path:   "deep/er",
+			Remote: &remoteState{ItemID: "item-er", ItemType: ItemTypeFolder},
+		},
+	}
+
+	o := e.ExecuteFolderCreate(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+
+	identity, err := e.syncTree.IdentityNoFollow("deep/er")
+	require.NoError(t, err)
+	assert.True(t, o.LocalIdentityObserved)
+	assert.True(t, o.LocalHasIdentity, "folder baselines need identity so a later local rename pairs as one move")
+	assert.Equal(t, identity.Device, o.LocalDevice)
+	assert.Equal(t, identity.Inode, o.LocalInode)
+}
+
+// Validates: R-2.17.1
+func TestExecutor_CreateRemoteFolder_RecordsObservedLocalIdentity(t *testing.T) {
+	t.Parallel()
+
+	items := &executorMockItemClient{
+		createFolderFn: func(_ context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
+			return &graph.Item{ID: "item-" + name, Name: name, IsFolder: true}, nil
+		},
+	}
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:       ActionFolderCreate,
+		Path:       "deep",
+		CreateSide: CreateRemote,
+		DriveID:    driveid.New(synctest.TestDriveID),
+		View: &pathView{
+			Path:  "deep",
+			Local: &localState{ItemType: ItemTypeFolder, LocalDevice: 3, LocalInode: 4, LocalHasIdentity: true},
+		},
+	}
+
+	o := e.ExecuteFolderCreate(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.True(t, o.LocalHasIdentity)
+	assert.Equal(t, uint64(4), o.LocalInode)
+}
+
+// Validates: R-2.8.10, R-2.17.1
+func TestExecutor_RemoteMove_FolderETagChurnFromChildrenDoesNotSupersede(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	var sentIfMatch string
+	items := &executorMockItemClient{
+		// The folder's eTag moved on when children were uploaded into it
+		// after its baseline/remote row was recorded.
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			return &graph.Item{ID: "item-dir", DriveID: driveID, IsFolder: true, ETag: `"etag-after-children"`}, nil
+		},
+		moveItemIfMatchFn: func(_ context.Context, _ driveid.ID, _, _, _, ifMatch string) (*graph.Item, error) {
+			sentIfMatch = ifMatch
+			return &graph.Item{ID: "item-dir", IsFolder: true, ETag: `"etag-moved"`}, nil
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteMove,
+		Path:    "movedst",
+		OldPath: "movesrc",
+		ItemID:  "item-dir",
+		DriveID: driveID,
+		View: &pathView{
+			Path: "movesrc",
+			Remote: &remoteState{
+				DriveID: driveID, ItemID: "item-dir", ItemType: ItemTypeFolder, ETag: `"etag-at-create"`,
+			},
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.Empty(t, sentIfMatch, "a folder move must not be conditional on a churning folder eTag")
+}
+
+// Validates: R-2.8.10
+func TestExecutor_RemoteMove_FileETagMismatchStillSupersedes(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			return &graph.Item{ID: "item-file", DriveID: driveID, ETag: `"etag-changed"`}, nil
+		},
+		moveItemIfMatchFn: func(_ context.Context, _ driveid.ID, _, _, _, _ string) (*graph.Item, error) {
+			assert.Fail(t, "a changed file must not be moved")
+			return nil, errors.New("unexpected move")
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteMove,
+		Path:    "b.txt",
+		OldPath: "a.txt",
+		ItemID:  "item-file",
+		DriveID: driveID,
+		View: &pathView{
+			Path:   "a.txt",
+			Remote: &remoteState{DriveID: driveID, ItemID: "item-file", ItemType: ItemTypeFile, ETag: `"etag-planned"`},
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+}
+
+// Validates: R-2.8.10, R-2.17.2
+func TestExecutor_RemoteMove_ItemAlreadyAtDestinationSucceedsWithoutMoving(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	items := &executorMockItemClient{
+		// A parent folder move already carried the item to the destination.
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			return &graph.Item{
+				ID: "item-inner", DriveID: driveID, IsFolder: true, Name: "inner",
+				ParentPath: "movedst", ParentPathKnown: true, ETag: `"etag-after-parent-move"`,
+			}, nil
+		},
+		moveItemIfMatchFn: func(_ context.Context, _ driveid.ID, _, _, _, _ string) (*graph.Item, error) {
+			assert.Fail(t, "an item already at its destination must not be moved again")
+			return nil, errors.New("unexpected move")
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteMove,
+		Path:    "movedst/inner",
+		OldPath: "movesrc/inner",
+		ItemID:  "item-inner",
+		DriveID: driveID,
+		View: &pathView{
+			Path:   "movesrc/inner",
+			Remote: &remoteState{DriveID: driveID, ItemID: "item-inner", ItemType: ItemTypeFolder, ETag: `"etag-planned"`},
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.Equal(t, "movedst/inner", o.Path)
+	assert.Equal(t, `"etag-after-parent-move"`, o.ETag)
 }

@@ -323,7 +323,7 @@ func (e *executor) createRemoteFolder(ctx context.Context, action *Action) actio
 
 	e.confirmRemotePathVisible(ctx, action)
 
-	return actionOutcome{
+	o := actionOutcome{
 		Action:     ActionFolderCreate,
 		Success:    true,
 		Path:       action.Path,
@@ -334,6 +334,16 @@ func (e *executor) createRemoteFolder(ctx context.Context, action *Action) actio
 		RemoteHash: driveops.SelectHash(item), // SelectHash: driveops package (B-222)
 		ETag:       item.ETag,
 	}
+	// The folder already exists locally; its observed identity is what lets a
+	// later local rename of it pair as one move instead of delete + create.
+	if action.View != nil && action.View.Local != nil {
+		o.LocalDevice = action.View.Local.LocalDevice
+		o.LocalInode = action.View.Local.LocalInode
+		o.LocalHasIdentity = action.View.Local.LocalHasIdentity
+		o.LocalIdentityObserved = true
+	}
+
+	return o
 }
 
 // ExecuteMove dispatches to local or remote move.
@@ -402,11 +412,19 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) actionOutcome {
 	driveID := e.resolveDriveID(action)
 
-	newParentID, err := e.ResolveParentID(action.Path)
-	if err != nil {
-		return e.failedOutcomeWithFailure(action, ActionRemoteMove, err, action.OldPath, permissionCapabilityUnknown)
-	}
 	sourceETag, sourcePreconditionErr := e.remoteSourcePreconditionETag(ctx, driveID, action, "remote move")
+	if errors.Is(sourcePreconditionErr, errRemoteMoveAlreadyApplied) {
+		// Already where the plan wants it (an earlier attempt or a parent
+		// folder move got there first): record the move instead of
+		// superseding work that has nothing left to do.
+		e.logger.Debug("remote move already applied",
+			slog.String("from", action.OldPath),
+			slog.String("to", action.Path),
+		)
+		o := e.moveOutcome(action)
+		o.ETag = sourceETag
+		return o
+	}
 	if sourcePreconditionErr != nil {
 		return e.failedOutcomeWithFailure(
 			action,
@@ -415,6 +433,10 @@ func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) action
 			action.OldPath,
 			permissionCapabilityRemoteRead,
 		)
+	}
+	newParentID, err := e.ResolveParentID(action.Path)
+	if err != nil {
+		return e.failedOutcomeWithFailure(action, ActionRemoteMove, err, action.OldPath, permissionCapabilityUnknown)
 	}
 	parentPreconditionErr := e.validateRemoteParentPrecondition(ctx, driveID, newParentID, action, "remote move")
 	if parentPreconditionErr != nil {
@@ -428,6 +450,12 @@ func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) action
 	}
 
 	newName := filepath.Base(action.Path)
+	// No If-Match for a folder move: its eTag also changes when a child
+	// changes, which does not make moving the folder unsafe, and a busy folder
+	// would otherwise keep failing the move. Files keep the conditional.
+	if plannedRemoteItemType(action) == ItemTypeFolder {
+		sourceETag = ""
+	}
 
 	item, err := e.items.MoveItemIfMatch(ctx, driveID, action.ItemID, newParentID, newName, sourceETag)
 	if err != nil {
@@ -607,11 +635,44 @@ func (e *executor) folderOutcome(action *Action) actionOutcome {
 		o.ItemID = action.View.Remote.ItemID
 		o.ETag = action.View.Remote.ETag
 	}
+	e.observeLocalIdentity(&o)
 
 	return o
 }
 
+// observeLocalIdentity records the filesystem identity of the entry this
+// executor just materialized at o.Path, so a later local rename of it can pair
+// as a move. The identity is always marked observed: an entry the executor
+// just (re)created must never inherit a stale baseline identity, so a failed
+// lookup records "no identity" rather than falling back.
+func (e *executor) observeLocalIdentity(o *actionOutcome) {
+	o.LocalIdentityObserved = true
+	identity, err := e.syncTree.IdentityNoFollow(o.Path)
+	if err != nil {
+		e.logger.Debug("local identity unavailable after materializing entry",
+			slog.String("path", o.Path),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+	o.LocalDevice = identity.Device
+	o.LocalInode = identity.Inode
+	o.LocalHasIdentity = true
+}
+
 // moveOutcome builds a successful ActionOutcome for a move action.
+//
+// The baseline row it publishes must describe only what was observed or proven:
+//   - ActionRemoteMove propagates a local move, so the local half comes from the
+//     local truth the planner observed at the destination (MovedLocal), never
+//     from the source baseline. An unknown destination hash stays unknown.
+//   - ActionLocalMove propagates a remote move. The rename preserves content,
+//     size, mtime and filesystem identity, and validateLocalMovePrecondition
+//     proved the source still matched its baseline, so the source baseline's
+//     local half is exactly what now sits at the destination.
+//   - If the remote item's content changed as well as its path, the local copy
+//     still holds the old content: the remote half keeps the source baseline's
+//     content facts so the next pass sees the remote edit and downloads it.
 func (e *executor) moveOutcome(action *Action) actionOutcome {
 	o := actionOutcome{
 		Action:   action.Type,
@@ -623,31 +684,72 @@ func (e *executor) moveOutcome(action *Action) actionOutcome {
 		ParentID: e.resolvedParentIDForOutcome(action, nil),
 	}
 
-	if action.View != nil {
-		if action.View.Remote != nil {
-			o.RemoteHash = action.View.Remote.Hash
-			o.RemoteSize = action.View.Remote.Size
-			o.RemoteSizeKnown = true
-			o.RemoteMtime = action.View.Remote.Mtime
-			o.ETag = action.View.Remote.ETag
-			o.ItemType = action.View.Remote.ItemType
-		}
+	if action.View == nil {
+		return o
+	}
+	baseline := action.View.Baseline
 
-		if action.View.Local != nil {
-			o.LocalHash = action.View.Local.Hash
-			o.LocalSize = action.View.Local.Size
-			o.LocalSizeKnown = true
-			o.LocalMtime = action.View.Local.Mtime
-			o.LocalDevice = action.View.Local.LocalDevice
-			o.LocalInode = action.View.Local.LocalInode
-			o.LocalHasIdentity = action.View.Local.LocalHasIdentity
-			o.LocalIdentityObserved = true
+	if remote := action.View.Remote; remote != nil {
+		o.ItemType = remote.ItemType
+		o.ETag = remote.ETag
+		o.RemoteHash = remote.Hash
+		o.RemoteSize = remote.Size
+		o.RemoteSizeKnown = true
+		o.RemoteMtime = remote.Mtime
+		if action.Type == ActionLocalMove && remoteContentDiffersFromBaseline(remote, baseline) {
+			o.ETag = baseline.ETag
+			o.RemoteHash = baseline.RemoteHash
+			o.RemoteSize = baseline.RemoteSize
+			o.RemoteSizeKnown = baseline.RemoteSizeKnown
+			o.RemoteMtime = baseline.RemoteMtime
 		}
+	}
 
-		fillOutcomeFromBaseline(&o, action.View.Baseline)
+	local := action.View.Local
+	if action.Type == ActionRemoteMove && action.MovedLocal != nil {
+		local = action.MovedLocal
+	}
+	if local != nil {
+		o.LocalHash = local.Hash
+		o.LocalSize = local.Size
+		o.LocalSizeKnown = true
+		o.LocalMtime = local.Mtime
+		o.LocalDevice = local.LocalDevice
+		o.LocalInode = local.LocalInode
+		o.LocalHasIdentity = local.LocalHasIdentity
+		o.LocalIdentityObserved = true
+		fillRemoteOutcomeFromBaseline(&o, baseline)
+	} else {
+		fillOutcomeFromBaseline(&o, baseline)
+	}
+	if o.ItemType == ItemTypeFile && baseline != nil && baseline.ItemType != ItemTypeFile {
+		o.ItemType = baseline.ItemType
 	}
 
 	return o
+}
+
+// plannedRemoteItemType is the remote item type the planner saw for action.
+func plannedRemoteItemType(action *Action) ItemType {
+	if planned := plannedRemoteStateForPrecondition(action); planned != nil {
+		return planned.ItemType
+	}
+
+	return resolveItemType(action.View)
+}
+
+// remoteContentDiffersFromBaseline reports whether remote content facts prove
+// the item's content changed since the baseline. eTag and mtime churn alone
+// (a Graph move rewrites both) are not content changes.
+func remoteContentDiffersFromBaseline(remote *remoteState, baseline *BaselineEntry) bool {
+	if remote == nil || baseline == nil || baseline.ItemType != ItemTypeFile {
+		return false
+	}
+	if remote.Hash != "" && baseline.RemoteHash != "" && remote.Hash != baseline.RemoteHash {
+		return true
+	}
+
+	return baseline.RemoteSizeKnown && remote.Size != baseline.RemoteSize
 }
 
 func fillOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {
@@ -670,6 +772,17 @@ func fillOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {
 		o.LocalInode = baseline.LocalInode
 		o.LocalHasIdentity = baseline.LocalHasIdentity
 	}
+	fillRemoteOutcomeFromBaseline(o, baseline)
+}
+
+// fillRemoteOutcomeFromBaseline fills only unknown remote-side facts. It is
+// used on its own when the local half was observed, because an observed but
+// unknown local hash must stay unknown rather than inherit the baseline's.
+func fillRemoteOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {
+	if baseline == nil {
+		return
+	}
+
 	if o.RemoteHash == "" {
 		o.RemoteHash = baseline.RemoteHash
 	}

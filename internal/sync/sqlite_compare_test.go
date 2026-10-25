@@ -93,7 +93,7 @@ func TestQueryReconciliationState_FileDecisionMatrix(t *testing.T) {
 	assert.Equal(t, "download", got["new-remote.txt"])
 }
 
-// Validates: R-2.1.3, R-2.1.4
+// Validates: R-2.1.3, R-2.1.4, R-2.17.2
 func TestQueryReconciliationState_FolderDecisionMatrix(t *testing.T) {
 	t.Parallel()
 
@@ -103,7 +103,7 @@ func TestQueryReconciliationState_FolderDecisionMatrix(t *testing.T) {
 	_, err := store.rawDB().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type)
 		VALUES
-			('item-keep-remote', 'keep-remote', 'folder'),
+			('item-deleted-locally', 'deleted-locally', 'folder'),
 			('item-delete-local', 'delete-local', 'folder')`)
 	require.NoError(t, err)
 
@@ -117,7 +117,7 @@ func TestQueryReconciliationState_FolderDecisionMatrix(t *testing.T) {
 	_, err = store.rawDB().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type)
 		VALUES
-			('item-keep-remote', 'keep-remote', 'folder'),
+			('item-deleted-locally', 'deleted-locally', 'folder'),
 			('item-new-remote', 'new-remote-folder', 'folder')`)
 	require.NoError(t, err)
 
@@ -125,7 +125,10 @@ func TestQueryReconciliationState_FolderDecisionMatrix(t *testing.T) {
 	require.NoError(t, err)
 	got := reconciliationKindsByPath(reconciliationRows)
 
-	assert.Equal(t, "folder_create_local", got["keep-remote"])
+	// A folder the user deleted locally is deleted on OneDrive, exactly like
+	// a file. It must never be re-created locally (that resurrected the source
+	// tree of every unpaired local folder move and of every rm -rf).
+	assert.Equal(t, "remote_delete", got["deleted-locally"])
 	assert.Equal(t, "local_delete", got["delete-local"])
 	assert.Equal(t, "folder_create_remote", got["new-local-folder"])
 	assert.Equal(t, "folder_create_local", got["new-remote-folder"])
@@ -203,8 +206,8 @@ func TestQueryReconciliationState_LocalFolderMoveUsesFilesystemIdentity(t *testi
 	assert.Equal(t, "local_move", got["Projects"])
 }
 
-// Validates: R-2.1.3, R-2.1.4
-func TestQueryReconciliationState_LocalFileMoveIdentityBeatsAmbiguousHash(t *testing.T) {
+// Validates: R-2.17.1
+func TestQueryReconciliationState_LocalFileMoveIdentityWithoutContentIsNotAMove(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -219,6 +222,10 @@ func TestQueryReconciliationState_LocalFileMoveIdentityBeatsAmbiguousHash(t *tes
 		VALUES ('item-file', 'old.txt', 'file', 'same-hash', 'same-hash', 12, 12, 1, 1, 5, 6, 1)`)
 	require.NoError(t, err)
 
+	// The inode moved to a file with different content and size, and an exact
+	// copy appeared under a different inode. Neither proves a move: the
+	// identity match lacks content corroboration, and a baseline row that has
+	// identity never falls back to hash pairing.
 	_, err = store.rawDB().ExecContext(ctx, `
 		INSERT INTO local_state (
 			path, item_type, hash, size, mtime, local_device, local_inode, local_has_identity
@@ -233,19 +240,83 @@ func TestQueryReconciliationState_LocalFileMoveIdentityBeatsAmbiguousHash(t *tes
 		VALUES ('item-file', 'old.txt', 'file', 'same-hash', 12, 1)`)
 	require.NoError(t, err)
 
-	comparisonRows, err := store.QueryComparisonState(ctx)
+	reconciliationRows, err := store.QueryReconciliationState(ctx)
 	require.NoError(t, err)
+	got := reconciliationKindsByPath(reconciliationRows)
+	assert.Equal(t, "remote_delete", got["old.txt"])
+	assert.Equal(t, "upload", got["identity-target.txt"])
+	assert.Equal(t, "upload", got["same-hash-copy.txt"])
+}
 
-	var source sQLiteComparisonRow
-	for i := range comparisonRows {
-		if comparisonRows[i].Path == "old.txt" {
-			source = comparisonRows[i]
-			break
-		}
+// Validates: R-2.17.1
+func TestQueryReconciliationState_LocalFileMoveRequiresContentCorroboration(t *testing.T) {
+	t.Parallel()
+
+	const (
+		baseSize  = 5
+		baseMtime = 100
+	)
+
+	tests := []struct {
+		name     string
+		hash     any
+		size     int64
+		mtime    int64
+		wantMove bool
+	}{
+		{name: "rename keeps hash size and mtime", hash: "base-hash", size: baseSize, mtime: baseMtime, wantMove: true},
+		{name: "touched rename keeps hash and size", hash: "base-hash", size: baseSize, mtime: baseMtime + 1, wantMove: true},
+		{name: "unhashed rename keeps size and mtime", hash: nil, size: baseSize, mtime: baseMtime, wantMove: true},
+		// The live repro: vim.swp deleted, secret.txt created unreadable in the
+		// same batch, ext4 reused the inode. Same size, no hash, newer mtime.
+		{name: "inode reuse by unreadable new file", hash: nil, size: baseSize, mtime: baseMtime + 7, wantMove: false},
+		{name: "inode reuse with different content", hash: "other-hash", size: baseSize, mtime: baseMtime, wantMove: false},
+		{name: "inode reuse with different size", hash: "base-hash", size: baseSize + 1, mtime: baseMtime, wantMove: false},
 	}
-	assert.Equal(t, "local_move_source", source.ComparisonKind)
-	assert.Equal(t, "identity-target.txt", source.LocalMoveTarget)
-	assert.Equal(t, 1, source.LocalMoveCandidateCount)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newTestStore(t)
+			ctx := t.Context()
+
+			_, err := store.rawDB().ExecContext(ctx, `
+				INSERT INTO baseline (
+					item_id, path, item_type, local_hash, remote_hash,
+					local_size, remote_size, local_mtime, remote_mtime,
+					local_device, local_inode, local_has_identity
+				)
+				VALUES ('item-swap', 'vim.swp', 'file', 'base-hash', 'base-hash', ?, ?, ?, ?, 7, 8, 1)`,
+				baseSize, baseSize, baseMtime, baseMtime)
+			require.NoError(t, err)
+
+			_, err = store.rawDB().ExecContext(ctx, `
+				INSERT INTO local_state (
+					path, item_type, hash, size, mtime, local_device, local_inode, local_has_identity
+				)
+				VALUES ('secret.txt', 'file', ?, ?, ?, 7, 8, 1)`,
+				tt.hash, tt.size, tt.mtime)
+			require.NoError(t, err)
+
+			_, err = store.rawDB().ExecContext(ctx, `
+				INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+				VALUES ('item-swap', 'vim.swp', 'file', 'base-hash', ?, ?)`,
+				baseSize, baseMtime)
+			require.NoError(t, err)
+
+			reconciliationRows, err := store.QueryReconciliationState(ctx)
+			require.NoError(t, err)
+			got := reconciliationKindsByPath(reconciliationRows)
+			if tt.wantMove {
+				assert.Equal(t, "local_move", got["vim.swp"])
+				assert.Equal(t, "local_move", got["secret.txt"])
+				return
+			}
+			assert.Equal(t, "remote_delete", got["vim.swp"])
+			assert.Equal(t, "upload", got["secret.txt"])
+		})
+	}
 }
 
 // Validates: R-2.1.3, R-2.1.4
