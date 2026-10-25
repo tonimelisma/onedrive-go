@@ -275,8 +275,8 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 	case syncengine.ConditionDiskFull:
 		return newStatusConditionDescriptor(
 			"Disk full",
-			"Local disk space is insufficient for downloads.",
-			"Free up local disk space.",
+			"Free local disk space is below the min_free_space reserve (1 GB unless configured).",
+			"Free up local disk space, or lower min_free_space in the config file.",
 		)
 	case syncengine.ConditionHashError:
 		return newStatusConditionDescriptor(
