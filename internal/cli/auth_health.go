@@ -323,6 +323,10 @@ func printAccountAuthRequirementsText(w io.Writer, items []accountAuthRequiremen
 
 func authErrorMessage(err error) string {
 	switch {
+	case errors.Is(err, graph.ErrLoginCodeExpired):
+		return "Error: the sign-in code expired before sign-in finished. Run 'onedrive-go login' to get a new code."
+	case errors.Is(err, graph.ErrLoginDeclined):
+		return "Error: sign-in was canceled or declined. Run 'onedrive-go login' to try again."
 	case errors.Is(err, graph.ErrLoginExpired):
 		return "Authentication required: Microsoft no longer accepts the saved login for this account " +
 			"(it expired or was revoked). Run 'onedrive-go login' to sign in again."

@@ -168,3 +168,24 @@ func TestProbeControlOwner_ClassifiesOutcomes(t *testing.T) {
 		assert.Contains(t, err.Error(), "unexpected control status response")
 	})
 }
+
+// Validates: R-2.9.3
+func TestNotifyDaemon_ReloadRejectedByRunningSyncIsAWarning(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	startCLIControlSocket(t, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeWatch},
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, err := w.Write([]byte(`{"status":"error","code":"reload_failed",` +
+				`"message":"the running sync couldn't apply the new config and kept its previous settings: bad value"}`))
+			assert.NoError(t, err)
+		})
+
+	var status bytes.Buffer
+	cc := &CLIContext{StatusWriter: &status}
+
+	notifyDaemon(t.Context(), cc)
+	assert.Equal(t,
+		"Warning: the running sync couldn't apply the new config and kept its previous settings: bad value\n",
+		status.String(), "a rejected reload must not read as success or show the raw error code")
+}

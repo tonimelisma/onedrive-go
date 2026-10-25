@@ -2,12 +2,15 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 func newPauseCmd() *cobra.Command {
@@ -69,6 +72,13 @@ func notifyDaemonWithOptions(ctx context.Context, cc *CLIContext, reportNoDaemon
 	}
 
 	if err := probe.client.reload(ctx); err != nil {
+		var daemonErr *controlDaemonError
+		if errors.As(err, &daemonErr) && daemonErr.code == synccontrol.ErrorReloadFailed {
+			// The change is saved, but the running sync rejected it and kept
+			// its old settings: that needs the user's attention.
+			writeWarningf(cc.Status(), "Warning: %s\n", daemonErr.message)
+			return
+		}
 		if isControlSocketGone(err) {
 			cc.Statusf("Note: the running 'sync --watch' stopped before it could be told; the change applies when sync next starts.\n")
 			return

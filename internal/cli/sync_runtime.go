@@ -219,7 +219,9 @@ func runSyncDaemonWithFactory(
 	console.Watching(standaloneSelection.Mounts, mode)
 
 	if err := orch.RunWatch(ctx, mode, opts); err != nil {
-		return fmt.Errorf("run watch sync: %w", formatWatchStartupError(err))
+		// The orchestrator's error already says what failed; a "run watch
+		// sync:" prefix only lengthened the line main prints.
+		return formatWatchStartupError(err)
 	}
 
 	console.Stopped()

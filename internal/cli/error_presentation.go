@@ -2,13 +2,17 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
@@ -84,7 +88,31 @@ func networkErrorReason(err error) string {
 		return "can't reach OneDrive (" + cause + ")"
 	}
 
-	return ""
+	return transportErrorReason(err)
+}
+
+// transportErrorReason covers network failures after the connection was
+// made: timeouts, TLS problems and dropped connections. It only applies to
+// errors that came from the HTTP transport (*url.Error), so a local file
+// timeout is never described as a OneDrive problem.
+func transportErrorReason(err error) string {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		return ""
+	}
+
+	var certErr *tls.CertificateVerificationError
+	var recordErr tls.RecordHeaderError
+	switch {
+	case urlErr.Timeout():
+		return "OneDrive did not answer in time"
+	case errors.As(err, &certErr), errors.As(err, &recordErr):
+		return "the secure connection to OneDrive failed (" + innermostErrorText(err) + ")"
+	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF), errors.Is(err, syscall.ECONNRESET):
+		return "the connection to OneDrive was interrupted"
+	default:
+		return ""
+	}
 }
 
 // remoteFailureSubject returns the path a command recorded for its failure
