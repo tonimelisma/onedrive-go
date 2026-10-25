@@ -2511,7 +2511,7 @@ func TestRunOnce_ZeroDriveID_ReportsError(t *testing.T) {
 	require.Len(t, result.Startup.SkippedResults(), 1)
 	require.Empty(t, result.Reports)
 	require.Error(t, result.Startup.SkippedResults()[0].Err)
-	assert.Contains(t, result.Startup.SkippedResults()[0].Err.Error(), "drive ID not resolved")
+	assert.Contains(t, result.Startup.SkippedResults()[0].Err.Error(), "doesn't know which OneDrive to use")
 	assert.Contains(t, result.Startup.SkippedResults()[0].Err.Error(), "login")
 }
 
