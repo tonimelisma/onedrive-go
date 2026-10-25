@@ -36,6 +36,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 
 | Behavior | Evidence |
 | --- | --- |
+| Folder eTag churn from descendant changes neither supersedes a folder move nor conditions it, while a file's eTag mismatch still supersedes. | `TestExecutor_RemoteMove_FolderETagChurnFromChildrenDoesNotSupersede`, `TestExecutor_RemoteMove_FileETagMismatchStillSupersedes`, `TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn` |
 | Move outcomes publish observed or proven local facts, keep a pending remote edit visible, and folder creates record local filesystem identity. | `TestExecutor_LocalMove_PublishesSourceBaselineLocalHalf`, `TestExecutor_LocalMove_RemoteEditKeepsBaselineRemoteContent`, `TestExecutor_RemoteMove_PublishesObservedDestinationLocalTruth`, `TestExecutor_CreateLocalFolder_RecordsFilesystemIdentity`, `TestExecutor_CreateRemoteFolder_RecordsObservedLocalIdentity` |
 | Edit/edit and create/create conflicts are handled immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestExecutor_ConflictDownloadFails_LeavesConflictCopy`, `TestConflictCopyPath_Normal` |
 | Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal`, `TestExecutor_ConflictCopy_ReservationGivesEachCopyItsOwnDestination`, `TestExecutor_ConflictCopy_ReleasedReservationLeavesNoPlaceholder`, `TestExecutor_ConflictCopy_LeavesExactlyOneCopyHoldingTheOriginal`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestExecutor_LocalDelete_NoBaselineHashAndChangedFile_PreservesLocalContent`, `TestExecutor_LocalDelete_NoBaselineHashAndUnchangedFile_Deletes`, `TestExecutor_LocalDelete_NoBaselineEvidence_PreservesLocalContent`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
@@ -239,8 +240,16 @@ out because the parent is actually gone, the stale parent preflight result takes
 precedence over the visibility timeout. A live `itemNotFound` result, changed item identity,
 drive, item type, eTag, hash, size, or same-coordinate path where Graph supplies
 that fact is a stale precondition and maps to `errActionPreconditionChanged`.
-Remote delete and move also pass the live preflight eTag to Graph as an
-`If-Match` condition when one is available. If Graph returns 412 after the
+Folder eTags are the exception: OneDrive changes a folder's eTag whenever
+anything beneath it changes, so a folder's recorded eTag (often captured when
+it was created, before its children were uploaded) is not evidence the folder
+changed, and comparing it once made every local folder move supersede forever.
+Folders are checked on identity, drive, type and path, both in this preflight
+and in worker-start freshness. Remote delete and move also pass the live
+preflight eTag to Graph as an `If-Match` condition when one is available,
+except for a folder move, where a concurrent child change does not make the
+move unsafe; a folder delete keeps the condition, so a child appearing after
+the preflight still stops the delete. If Graph returns 412 after the
 explicit preflight, the executor treats that as a post-preflight stale
 precondition with remote-write capability and does not report ordinary retry
 work for that exact old action.

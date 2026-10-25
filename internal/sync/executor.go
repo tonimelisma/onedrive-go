@@ -438,6 +438,12 @@ func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) action
 	}
 
 	newName := filepath.Base(action.Path)
+	// No If-Match for a folder move: its eTag also changes when a child
+	// changes, which does not make moving the folder unsafe, and a busy folder
+	// would otherwise keep failing the move. Files keep the conditional.
+	if plannedRemoteItemType(action) == ItemTypeFolder {
+		sourceETag = ""
+	}
 
 	item, err := e.items.MoveItemIfMatch(ctx, driveID, action.ItemID, newParentID, newName, sourceETag)
 	if err != nil {
@@ -709,6 +715,15 @@ func (e *executor) moveOutcome(action *Action) actionOutcome {
 	}
 
 	return o
+}
+
+// plannedRemoteItemType is the remote item type the planner saw for action.
+func plannedRemoteItemType(action *Action) ItemType {
+	if planned := plannedRemoteStateForPrecondition(action); planned != nil {
+		return planned.ItemType
+	}
+
+	return resolveItemType(action.View)
 }
 
 // remoteContentDiffersFromBaseline reports whether remote content facts prove

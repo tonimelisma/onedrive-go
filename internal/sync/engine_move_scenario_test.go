@@ -23,9 +23,14 @@ import (
 type moveScenarioRemote struct {
 	mu       stdsync.Mutex
 	driveID  driveid.ID
-	items    map[string]*graph.Item // by item ID
+	items    map[string]*graph.Item // by item ID, as GetItem sees them live
 	contents map[string]string      // file content by item ID
 	etagSeq  int
+	// observedFolderETags is the folder eTag delta reports. Live, a folder's
+	// eTag also changes whenever a descendant changes, but remote_state kept
+	// the eTag recorded when the folder was created (live retest, movesrc).
+	// GetItem returns the churned eTag; delta returns this one.
+	observedFolderETags map[string]string
 
 	uploads       int
 	folderCreates []string
@@ -39,7 +44,21 @@ func newMoveScenarioRemote(driveID driveid.ID) *moveScenarioRemote {
 		items: map[string]*graph.Item{
 			"root": {ID: "root", IsRoot: true, IsFolder: true, DriveID: driveID},
 		},
-		contents: map[string]string{},
+		contents:            map[string]string{},
+		observedFolderETags: map[string]string{},
+	}
+}
+
+// bumpAncestorETags models OneDrive changing every ancestor folder's eTag when
+// something beneath it changes.
+func (r *moveScenarioRemote) bumpAncestorETags(parentID string) {
+	for id := parentID; id != "" && id != strRoot; {
+		item, ok := r.items[id]
+		if !ok {
+			return
+		}
+		item.ETag = r.nextETag()
+		id = item.ParentID
 	}
 }
 
@@ -49,7 +68,10 @@ func (r *moveScenarioRemote) nextETag() string {
 }
 
 func (r *moveScenarioRemote) addFolder(id, parentID, name string) {
-	r.items[id] = &graph.Item{ID: id, Name: name, ParentID: parentID, IsFolder: true, DriveID: r.driveID, ETag: r.nextETag()}
+	etag := r.nextETag()
+	r.items[id] = &graph.Item{ID: id, Name: name, ParentID: parentID, IsFolder: true, DriveID: r.driveID, ETag: etag}
+	r.observedFolderETags[id] = etag
+	r.bumpAncestorETags(parentID)
 }
 
 func (r *moveScenarioRemote) addFile(t *testing.T, id, parentID, name, content string) {
@@ -60,15 +82,21 @@ func (r *moveScenarioRemote) addFile(t *testing.T, id, parentID, name, content s
 		ModifiedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 	}
 	r.contents[id] = content
+	r.bumpAncestorETags(parentID)
 }
 
 func (r *moveScenarioRemote) move(id, parentID, name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	item := r.items[id]
+	r.bumpAncestorETags(item.ParentID)
 	item.ParentID = parentID
 	item.Name = name
 	item.ETag = r.nextETag()
+	if item.IsFolder {
+		r.observedFolderETags[id] = item.ETag
+	}
+	r.bumpAncestorETags(parentID)
 }
 
 func (r *moveScenarioRemote) snapshot() []graph.Item {
@@ -76,9 +104,14 @@ func (r *moveScenarioRemote) snapshot() []graph.Item {
 	defer r.mu.Unlock()
 	out := []graph.Item{*r.items["root"]}
 	for id, item := range r.items {
-		if id != "root" {
-			out = append(out, *item)
+		if id == "root" {
+			continue
 		}
+		reported := *item
+		if observed, ok := r.observedFolderETags[id]; ok {
+			reported.ETag = observed
+		}
+		out = append(out, reported)
 	}
 	return out
 }
@@ -127,6 +160,9 @@ func (r *moveScenarioRemote) client(t *testing.T) *engineMockClient {
 		deleteItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, _ string) error {
 			r.mu.Lock()
 			defer r.mu.Unlock()
+			if item, ok := r.items[itemID]; ok {
+				r.bumpAncestorETags(item.ParentID)
+			}
 			delete(r.items, itemID)
 			r.deletes = append(r.deletes, itemID)
 			return nil
@@ -267,4 +303,26 @@ func TestRunOnce_LocalFileReplacedByFolderConverges(t *testing.T) {
 	report := runScenarioPass(t, eng)
 	assert.Zero(t, report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes+report.FolderCreates,
 		"a replaced item must converge, not stall or churn")
+}
+
+// Validates: R-2.17.1
+func TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+
+	// Created locally, so the folders are created remotely before their
+	// children are uploaded into them: the recorded folder eTags go stale.
+	writeLocalFile(t, syncRoot, filepath.Join("movesrc", "inner", "a.txt"), "a\n")
+	runScenarioPass(t, eng)
+	require.Len(t, remote.folderCreates, 2)
+
+	require.NoError(t, os.Rename(filepath.Join(syncRoot, "movesrc"), filepath.Join(syncRoot, "movedst")))
+	runScenarioPass(t, eng)
+
+	assert.Equal(t, []string{"created-movesrc->movedst"}, remote.moves)
+	assert.Empty(t, remote.deletes)
+	assert.Equal(t, 1, remote.uploads)
 }

@@ -557,7 +557,9 @@ func remoteIdentityMatchesPlanned(row *remoteStateRow, planned *remoteState) boo
 	if !remoteIdentityMatchesPlannedExceptETag(row, planned) {
 		return false
 	}
-	if planned.ETag != "" && row.ETag != planned.ETag {
+	// Folder eTags churn with every descendant change; see
+	// remoteRowMatchesLivePreconditionForAction.
+	if planned.ItemType != ItemTypeFolder && planned.ETag != "" && row.ETag != planned.ETag {
 		return false
 	}
 

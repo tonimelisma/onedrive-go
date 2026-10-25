@@ -154,6 +154,7 @@ func (flow *engineFlow) applySupersededCompletion(
 	if err := flow.clearRetryWorkOnSuperseded(ctx, r, current); err != nil {
 		return err
 	}
+	flow.recordSupersede(r)
 
 	actionID := int64(0)
 	if r != nil {
@@ -181,6 +182,7 @@ func (flow *engineFlow) applyTrackedActionSuccess(
 ) ([]*trackedAction, error) {
 	flow.sched.markFinished(current)
 	flow.results.succeeded++
+	flow.clearSupersedeStreak(r)
 	if current != nil {
 		flow.clearRetryWorkOnActionSuccess(ctx, &current.Action)
 	} else {
@@ -534,4 +536,59 @@ func (flow *engineFlow) applyResultPersistence(
 	default:
 		panic(fmt.Sprintf("unknown failure persistence mode %d", decision.Persistence))
 	}
+}
+
+// supersedeStreakWarnThreshold is how many consecutive supersedes of the same
+// action make the stall visible at Warn. One or two are ordinary: truth moved
+// on between planning and execution and the replan absorbs it.
+const supersedeStreakWarnThreshold = 3
+
+func supersedeStreakKey(r *actionCompletion) string {
+	return r.ActionType.String() + "\x00" + r.OldPath + "\x00" + r.Path
+}
+
+// recordSupersede logs every superseded completion at Debug and warns once
+// when the same action keeps being superseded, so a precondition that can
+// never hold is visible instead of a silent stall.
+func (flow *engineFlow) recordSupersede(r *actionCompletion) {
+	if r == nil || flow.supersedeStreaks == nil {
+		return
+	}
+	key := supersedeStreakKey(r)
+	flow.supersedeStreaks[key]++
+	streak := flow.supersedeStreaks[key]
+
+	reason := r.ErrMsg
+	if r.Err != nil {
+		reason = r.Err.Error()
+	}
+	logger := flow.deps.logger
+	if logger == nil {
+		return
+	}
+	logger.Debug("action superseded; replanning",
+		slog.String("action", r.ActionType.String()),
+		slog.String("path", r.Path),
+		slog.String("old_path", r.OldPath),
+		slog.Int("consecutive", streak),
+		slog.String("reason", reason),
+	)
+	if streak == supersedeStreakWarnThreshold {
+		// Once per streak: a file that is rewritten continuously also lands
+		// here, and it must not warn on every pass.
+		logger.Warn("A planned change keeps going stale before it can run; sync will keep retrying it",
+			slog.String("action", r.ActionType.String()),
+			slog.String("path", r.Path),
+			slog.String("old_path", r.OldPath),
+			slog.Int("consecutive", streak),
+			slog.String("reason", reason),
+		)
+	}
+}
+
+func (flow *engineFlow) clearSupersedeStreak(r *actionCompletion) {
+	if r == nil || flow.supersedeStreaks == nil {
+		return
+	}
+	delete(flow.supersedeStreaks, supersedeStreakKey(r))
 }

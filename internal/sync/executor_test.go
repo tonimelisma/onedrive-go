@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -3285,4 +3286,79 @@ func TestExecutor_CreateRemoteFolder_RecordsObservedLocalIdentity(t *testing.T) 
 	requireOutcomeSuccess(t, &o)
 	assert.True(t, o.LocalHasIdentity)
 	assert.Equal(t, uint64(4), o.LocalInode)
+}
+
+// Validates: R-2.8.10, R-2.17.1
+func TestExecutor_RemoteMove_FolderETagChurnFromChildrenDoesNotSupersede(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	var sentIfMatch string
+	items := &executorMockItemClient{
+		// The folder's eTag moved on when children were uploaded into it
+		// after its baseline/remote row was recorded.
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			return &graph.Item{ID: "item-dir", DriveID: driveID, IsFolder: true, ETag: `"etag-after-children"`}, nil
+		},
+		moveItemIfMatchFn: func(_ context.Context, _ driveid.ID, _, _, _, ifMatch string) (*graph.Item, error) {
+			sentIfMatch = ifMatch
+			return &graph.Item{ID: "item-dir", IsFolder: true, ETag: `"etag-moved"`}, nil
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteMove,
+		Path:    "movedst",
+		OldPath: "movesrc",
+		ItemID:  "item-dir",
+		DriveID: driveID,
+		View: &pathView{
+			Path: "movesrc",
+			Remote: &remoteState{
+				DriveID: driveID, ItemID: "item-dir", ItemType: ItemTypeFolder, ETag: `"etag-at-create"`,
+			},
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.Empty(t, sentIfMatch, "a folder move must not be conditional on a churning folder eTag")
+}
+
+// Validates: R-2.8.10
+func TestExecutor_RemoteMove_FileETagMismatchStillSupersedes(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	items := &executorMockItemClient{
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			return &graph.Item{ID: "item-file", DriveID: driveID, ETag: `"etag-changed"`}, nil
+		},
+		moveItemIfMatchFn: func(_ context.Context, _ driveid.ID, _, _, _, _ string) (*graph.Item, error) {
+			t.Error("a changed file must not be moved")
+			return nil, errors.New("unexpected move")
+		},
+	}
+
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionRemoteMove,
+		Path:    "b.txt",
+		OldPath: "a.txt",
+		ItemID:  "item-file",
+		DriveID: driveID,
+		View: &pathView{
+			Path:   "a.txt",
+			Remote: &remoteState{DriveID: driveID, ItemID: "item-file", ItemType: ItemTypeFile, ETag: `"etag-planned"`},
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
 }

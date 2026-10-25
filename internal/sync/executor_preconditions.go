@@ -66,7 +66,12 @@ func remoteRowMatchesLivePreconditionForAction(action *Action, row *remoteStateR
 		return remoteRowMatchesPostRemoteMoveLivePrecondition(row, planned)
 	}
 
-	return remoteRowMatchesLivePrecondition(row, planned, true)
+	// A folder's eTag changes whenever anything beneath it changes, so a
+	// folder eTag recorded at planning time (often before its own children
+	// were uploaded) is not evidence that the folder itself changed. Folders
+	// are checked on identity, type and path; comparing their eTag made every
+	// folder move and delete supersede forever.
+	return remoteRowMatchesLivePrecondition(row, planned, planned.ItemType != ItemTypeFolder)
 }
 
 func remoteRowMatchesPostRemoteMoveLivePrecondition(row *remoteStateRow, planned *remoteState) bool {
