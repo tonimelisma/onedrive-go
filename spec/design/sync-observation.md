@@ -281,7 +281,10 @@ Built-in local observation policy remains:
 - report invalid names, path length, file size, case collisions, read-denied
   paths, and hash failures as observation issues for visible paths only
 - skip symlinks by default; when `follow_symlinks=true`, observe at the alias
-  path with cycle protection and executor no-follow delete safety
+  path with cycle protection and executor no-follow delete safety; observed
+  facts are the followed target's, and the executor's upload precondition
+  re-reads them the same followed way (`sync-execution.md`, Symlink Boundary
+  Policy), so a file beneath a directory alias to another disk uploads
 - never let unreadable content look deleted (R-2.4.12): any walk error other
   than a vanished entry, an unreadable directory reached through a followed
   symlink, and a followed symlink whose target is missing or unreadable all

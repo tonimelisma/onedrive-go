@@ -801,6 +801,10 @@ func (r *Root) MkdirAll(rel string, perm os.FileMode) error {
 	})
 }
 
+// ValidateNoSymlinkAncestors refuses rel when any parent component is a
+// symbolic link or not a directory. The refusal names which, because "is a
+// symbolic link" is the everyday case under follow_symlinks and reads very
+// differently from a file standing where a folder should be.
 func (r *Root) ValidateNoSymlinkAncestors(rel string) error {
 	clean, err := cleanRelative(rel)
 	if err != nil {
@@ -833,7 +837,10 @@ func (r *Root) ValidateNoSymlinkAncestors(rel string) error {
 		if statErr != nil {
 			return fmt.Errorf("checking parent folder %s: %w", current, statErr)
 		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return unsafePathf("parent folder %s is a symbolic link", current)
+		}
+		if !info.IsDir() {
 			return unsafePathf("parent folder %s is not a folder", current)
 		}
 	}

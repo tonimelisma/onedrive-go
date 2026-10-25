@@ -268,23 +268,45 @@ func (e *executor) validateUploadSourcePrecondition(action *Action) error {
 	return nil
 }
 
+// uploadSourceInfo returns the facts of the file an upload is about to read.
+//
+// Uploading reads through a followed alias (R-2.4.6): observation recorded the
+// followed target's facts, and the transfer manager reads the followed path.
+// So when the source itself or any of its ancestors is a symbolic link, the
+// source is stated by following links, exactly as observation stated it.
+//
+// The rooted sync tree must not answer that question. It refuses every name
+// that resolves outside the sync root, which is the correct answer for a write
+// and the wrong one for this read: a file beneath a directory alias that
+// points at another disk would otherwise never upload. Containment is not
+// weakened by this. The path is still checked lexically first, the boundary
+// walk itself is rooted and no-follow, and a path with no link on it is
+// stated through the rooted capability as before. Writes beneath an alias
+// stay refused by validateNoSymlinkBoundary and by synctree.
 func (e *executor) uploadSourceInfo(path string) (os.FileInfo, error) {
-	info, err := e.syncTree.Lstat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, stalePreconditionError("upload source %s is missing", path)
-		}
-		return nil, normalizeSyncTreePathError(err)
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		return info, nil
-	}
-
 	absPath, err := e.syncTree.Abs(path)
 	if err != nil {
 		return nil, normalizeSyncTreePathError(err)
 	}
-	info, err = localpath.Stat(absPath)
+
+	_, readsThroughLink, err := e.symlinkBoundaryForPath(path)
+	if err != nil {
+		return nil, normalizeSyncTreePathError(err)
+	}
+
+	if !readsThroughLink {
+		info, lstatErr := e.syncTree.Lstat(path)
+		if lstatErr != nil {
+			if errors.Is(lstatErr, os.ErrNotExist) {
+				return nil, stalePreconditionError("upload source %s is missing", path)
+			}
+			return nil, normalizeSyncTreePathError(lstatErr)
+		}
+
+		return info, nil
+	}
+
+	info, err := localpath.Stat(absPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, stalePreconditionError("upload source %s target is missing", path)
@@ -484,9 +506,11 @@ func (e *executor) validateLocalSourceAgainstBaseline(
 	return nil
 }
 
-// symlinkBoundaryForPath reports the first ancestor component of relPath that
-// is a symbolic link, walking one component at a time so every Lstat resolves
-// against a fully real prefix.
+// symlinkBoundaryForPath reports the first component of relPath, the final
+// one included, that is a symbolic link, walking one component at a time so
+// every Lstat resolves against a fully real prefix. A link as the final
+// component is never followed by that Lstat, so the walk itself cannot leave
+// the sync root.
 //
 // An absent component means nothing beneath it exists yet, so there is no
 // boundary to cross and the walk stops cleanly.

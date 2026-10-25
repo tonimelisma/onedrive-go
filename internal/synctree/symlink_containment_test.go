@@ -230,3 +230,23 @@ func TestRoot_MutationsThroughInRootSymlinkSucceed(t *testing.T) {
 	require.NoError(t, root.MkdirAll("inner/sub", 0o700))
 	assert.DirExists(t, filepath.Join(dir, "real", "sub"))
 }
+
+// Validates: R-2.4.6, R-6.2
+//
+// A refused ancestor says what it is. Under follow_symlinks the symlinked
+// ancestor is the everyday case, and calling it "not a folder" sent readers
+// looking for a stray file instead of at the alias.
+func TestRoot_ValidateNoSymlinkAncestors_NamesLinkAndNonFolderSeparately(t *testing.T) {
+	t.Parallel()
+
+	f := newEscapeFixture(t)
+	require.NoError(t, os.WriteFile(filepath.Join(f.rootDir, "plain.txt"), []byte("x"), 0o600))
+
+	linkErr := f.root.ValidateNoSymlinkAncestors("alias/photo.txt")
+	require.ErrorIs(t, linkErr, ErrUnsafePath)
+	assert.Equal(t, "parent folder alias is a symbolic link", linkErr.Error())
+
+	fileErr := f.root.ValidateNoSymlinkAncestors("plain.txt/child.txt")
+	require.ErrorIs(t, fileErr, ErrUnsafePath)
+	assert.Equal(t, "parent folder plain.txt is not a folder", fileErr.Error())
+}
