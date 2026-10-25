@@ -110,6 +110,14 @@ The log file has its own level and is always structured (JSON lines). The
 console is always human text, whatever `log_format` says, unless the console
 is the journal.
 
+The two levels are independent. INFO records are diagnostic history
+(performance summaries, plan counts, runner lifecycle): the log file keeps
+them at its default level, the console shows them only from `-v`. Anything a
+person needs at default verbosity is written as output, not logged, so it
+cannot be lost to the console level. Default-verbosity console lines also
+leave out log-schema identifiers (run, action and drive IDs, condition and
+failure classes, scope keys, HTTP status); the file and `-v` keep them.
+
 ## 7. systemd
 
 - `Type=notify`: send `READY=1` once the first pass has finished (or the

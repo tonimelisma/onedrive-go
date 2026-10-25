@@ -60,10 +60,9 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 		return err
 	}
 
-	cfgForLog := &config.ResolvedDrive{LoggingConfig: rawCfg.LoggingConfig}
-	dualLogger, logCloser := buildLoggerDualWithStatusWriter(cfgForLog, cc.Flags, cc.Status())
-	if swapErr := cc.replaceCommandLogger(dualLogger, logCloser); swapErr != nil {
-		return swapErr
+	// Usually a no-op: the root already attached these logging settings.
+	if logErr := cc.useLoggingConfig(rawCfg.LoggingConfig); logErr != nil {
+		return logErr
 	}
 	logger = cc.Logger
 
