@@ -60,6 +60,7 @@ type DriveStatusSnapshot struct {
 	BaselineFileCount int
 	RemoteDriftItems  int
 	RetryingItems     int
+	RetryingWork      []RetryWorkRow
 	ObservationIssues []ObservationIssueRow
 	BlockScopes       []*BlockScope
 	BlockedRetryWork  []RetryWorkRow
@@ -236,6 +237,11 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 	snapshot.BlockedRetryWork, err = queryBlockedRetryWorkRowsWithRunner(ctx, i.db)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status blocked retry_work: %w", err)
+	}
+
+	snapshot.RetryingWork, err = queryRetryingRetryWorkRowsWithRunner(ctx, i.db)
+	if err != nil {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status retrying retry_work: %w", err)
 	}
 
 	return snapshot, nil

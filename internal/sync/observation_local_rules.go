@@ -8,4 +8,8 @@ package sync
 // the target drive type or sync surface.
 type LocalObservationRules struct {
 	RejectSharePointRootForms bool
+	// PersonalNameRules applies OneDrive Personal's name rules, which accept
+	// names Business and SharePoint reserve: lockfiles such as yarn.lock,
+	// desktop.ini, and Office "~$" owner files (verified against Graph).
+	PersonalNameRules bool
 }
