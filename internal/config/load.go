@@ -42,7 +42,8 @@ func Load(path string, logger *slog.Logger) (*Config, error) {
 }
 
 func loadWithIO(path string, logger *slog.Logger, io configIO) (*Config, error) {
-	return newConfigLoader(io).load(path, logger)
+	cfg, err := newConfigLoader(io).load(path, logger)
+	return cfg, markInvalidConfig(err)
 }
 
 // LoadOrDefault reads a TOML config file if it exists, otherwise returns
@@ -54,7 +55,8 @@ func LoadOrDefault(path string, logger *slog.Logger) (*Config, error) {
 }
 
 func loadOrDefaultWithIO(path string, logger *slog.Logger, io configIO) (*Config, error) {
-	return newConfigLoader(io).loadOrDefault(path, logger)
+	cfg, err := newConfigLoader(io).loadOrDefault(path, logger)
+	return cfg, markInvalidConfig(err)
 }
 
 // LoadLenient reads and parses a TOML config file, collecting unknown keys and
@@ -66,7 +68,8 @@ func LoadLenient(path string, logger *slog.Logger) (*Config, []ConfigWarning, er
 }
 
 func loadLenientWithIO(path string, logger *slog.Logger, io configIO) (*Config, []ConfigWarning, error) {
-	return newConfigLoader(io).loadLenient(path, logger)
+	cfg, warnings, err := newConfigLoader(io).loadLenient(path, logger)
+	return cfg, warnings, markInvalidConfig(err)
 }
 
 // LoadOrDefaultLenient reads a TOML config file leniently if it exists,
@@ -76,7 +79,8 @@ func LoadOrDefaultLenient(path string, logger *slog.Logger) (*Config, []ConfigWa
 }
 
 func loadOrDefaultLenientWithIO(path string, logger *slog.Logger, io configIO) (*Config, []ConfigWarning, error) {
-	return newConfigLoader(io).loadOrDefaultLenient(path, logger)
+	cfg, warnings, err := newConfigLoader(io).loadOrDefaultLenient(path, logger)
+	return cfg, warnings, markInvalidConfig(err)
 }
 
 // configLoader owns config-file entrypoints so strict and lenient loading share

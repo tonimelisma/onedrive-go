@@ -2,7 +2,7 @@
 
 GOVERNS: internal/cli/sync.go, internal/multisync/*.go, internal/synccontrol/*.go
 
-Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.8.11 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
+Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.8.11 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.6.32 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
 ## Control Socket Exposure
 
@@ -62,6 +62,7 @@ runtime package that implements it.
 
 | Behavior | Evidence |
 | --- | --- |
+| `RunWatch` reports ready, reload and stop transitions through `WatchLifecycle`, and a watch that never started reports none. | `TestRunWatch_ReportsLifecycleTransitions`, `TestRunWatch_StartupFailureIsNotReady` |
 | `RunWatch` starts the runnable runtime mount set, skips incompatible-store mounts with immediate warnings, and rejects all-paused startup through the same startup-summary model. | `TestOrchestrator_RunWatch_SingleMount`, `TestOrchestrator_RunWatch_MultiMount`, `TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts`, `TestOrchestrator_RunWatch_ReturnsErrorWhenAllMountsPaused` |
 | The Unix control socket is the single owner lock for one-shot and watch sync, is acquired before parent engines start, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. Dry-run one-shot sync uses the same owner lock as live one-shot sync. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestRunOnce_BindsControlSocketBeforeEngineStartup`, `TestRunOnce_DryRunBindsControlSocketBeforeEngineStartup`, `TestRunWatch_BindsControlSocketBeforeEngineStartup`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
@@ -541,6 +542,16 @@ an `Orchestrator`, and chooses between `RunOnce` and `RunWatch`.
 
 No timer escalates the first signal; forced exit is owned only by the second
 signal.
+
+`OrchestratorConfig.WatchLifecycle` reports `RunWatch`'s transitions to the
+CLI (`watch_lifecycle.go`, R-6.6.32): `WatchReady` once startup finished with
+at least one runner, `WatchReloading` and `WatchReloaded` (with `Err` when the
+previous settings were kept) around every control-socket reload, and
+`WatchStopping` before the runners drain. The hook runs on the watch-loop
+goroutine that owns the runner set, so its `SyncRoots` and `Skipped` are a
+consistent snapshot; it must not block. A watch that fails to start reports
+nothing. The CLI turns these into systemd notifications; multisync knows
+nothing about systemd.
 
 The CLI command does not reach into per-mount engine internals. It only speaks
 to the control-plane boundary.

@@ -52,7 +52,7 @@ func LoadValidatedState(cfgPath string, lenient bool, logger *slog.Logger) (Vali
 	}
 
 	if err := validateConfiguredDrivesInCatalog(cfg, stored); err != nil {
-		return ValidatedState{}, warnings, err
+		return ValidatedState{}, warnings, markInvalidConfig(err)
 	}
 	if err := validateCatalogDriveOwners(stored); err != nil {
 		return ValidatedState{}, warnings, err

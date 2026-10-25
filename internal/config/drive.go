@@ -47,30 +47,35 @@ func (rd *ResolvedDrive) StatePath() string {
 // When no drives are configured, provides smart error messages: checks for
 // existing tokens on disk and suggests "drive add" or "login" accordingly.
 func MatchDrive(cfg *Config, selector string, logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
-	if len(cfg.Drives) == 0 {
-		return matchNoDrives(logger)
+	var (
+		canonicalID driveid.CanonicalID
+		drive       Drive
+		err         error
+	)
+
+	switch {
+	case len(cfg.Drives) == 0:
+		err = matchNoDrives(logger)
+	case selector == "":
+		canonicalID, drive, err = matchSingleDrive(cfg, logger)
+	default:
+		canonicalID, drive, err = matchBySelector(cfg, selector, logger)
 	}
 
-	if selector == "" {
-		return matchSingleDrive(cfg, logger)
-	}
-
-	return matchBySelector(cfg, selector, logger)
+	return canonicalID, drive, markInvalidConfig(err)
 }
 
 // matchNoDrives handles drive matching when no drives are configured.
 // Always returns an error with context-aware guidance based on whether
 // tokens exist on disk (suggests "drive add") or not (suggests "login").
-func matchNoDrives(logger *slog.Logger) (driveid.CanonicalID, Drive, error) {
+func matchNoDrives(logger *slog.Logger) error {
 	// Check for tokens on disk to provide a more helpful error message.
 	tokens := DiscoverTokens(logger)
 	if len(tokens) > 0 {
-		return driveid.CanonicalID{}, Drive{},
-			fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
+		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
 
-	return driveid.CanonicalID{}, Drive{},
-		fmt.Errorf("no accounts configured — run 'onedrive-go login' to get started")
+	return fmt.Errorf("no accounts configured — run 'onedrive-go login' to get started")
 }
 
 // matchSingleDrive auto-selects when exactly one drive is configured.

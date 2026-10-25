@@ -124,11 +124,15 @@ failure classes, scope keys, HTTP status); the file and `-v` keep them.
   watcher is running), `STATUS=` with a one-line state
   ("Watching ~/OneDrive, 3 uploads queued", "Sign-in required"),
   `STOPPING=1` on shutdown, `RELOADING=1`/`READY=1` around a reload, and
-  `WATCHDOG=1` if `WatchdogSec=` is set.
+  `WATCHDOG=1` if `WatchdogSec=` is set. onedrive-go does this for
+  `sync --watch` (R-6.6.32); `contrib/systemd/onedrive-go.service` is the
+  example unit.
 - Under the journal, write plain text with `<N>` priority prefixes per line
   and no timestamps, so `journalctl -p warning` works.
 - Exit codes distinguish "do not restart" (bad config, sign-in required) from
   transient failures, so units can use `RestartPreventExitStatus=`.
+  onedrive-go uses the sysexits values: 77 (EX_NOPERM) for sign-in required,
+  78 (EX_CONFIG) for invalid config, 1 for everything else (R-6.6.31).
 - Default log location, when one is used: `$XDG_STATE_HOME/onedrive-go/`
   (`~/.local/state/onedrive-go/`).
 
