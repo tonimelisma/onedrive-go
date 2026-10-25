@@ -30,7 +30,7 @@ func newJSONCommandContext(cfgPath string) (*CLIContext, *bytes.Buffer, *bytes.B
 	return cc, &stdout, &stderr
 }
 
-// Validates: R-2.6, R-6.6.31
+// Validates: R-2.6, R-6.6.33
 func TestPauseCommand_JSONReportsDriveAndEndTime(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -53,7 +53,7 @@ func TestPauseCommand_JSONReportsDriveAndEndTime(t *testing.T) {
 	assert.NotContains(t, stdout.String(), "paused_until")
 }
 
-// Validates: R-2.6, R-6.6.31
+// Validates: R-2.6, R-6.6.33
 func TestResumeCommand_JSONReportsEveryDriveOutcome(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -81,7 +81,7 @@ func TestResumeCommand_JSONReportsEveryDriveOutcome(t *testing.T) {
 	assert.NotContains(t, stderr.String(), "resumed")
 }
 
-// Validates: R-3.3, R-6.6.31
+// Validates: R-3.3, R-6.6.33
 func TestDriveRemove_JSONReportsWhatWasRemoved(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -104,7 +104,7 @@ func TestDriveRemove_JSONReportsWhatWasRemoved(t *testing.T) {
 	assert.Equal(t, driveRemoveJSONOutput{Drive: cid.String(), Purged: true}, got)
 }
 
-// Validates: R-3.3, R-6.6.31
+// Validates: R-3.3, R-6.6.33
 func TestDriveAdd_JSONReportsAddedThenAlreadyConfigured(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -127,7 +127,7 @@ func TestDriveAdd_JSONReportsAddedThenAlreadyConfigured(t *testing.T) {
 	assert.Equal(t, got.SyncDir, again.SyncDir)
 }
 
-// Validates: R-3.1.3, R-6.6.31
+// Validates: R-3.1.3, R-6.6.33
 func TestLogoutCommand_JSONNamesAccountAndDrives(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -147,7 +147,7 @@ func TestLogoutCommand_JSONNamesAccountAndDrives(t *testing.T) {
 	}, got)
 }
 
-// Validates: R-1.9, R-6.6.31
+// Validates: R-1.9, R-6.6.33
 func TestRecycleBinEmpty_JSONListsDeletedAndFailedAndStillFails(t *testing.T) {
 	setTestDriveHome(t)
 

@@ -58,7 +58,7 @@ type jsonContractCase struct {
 // silently ignored it would print prose to a script expecting JSON; adding a
 // command without a case here fails this test.
 //
-// Validates: R-6.6.31
+// Validates: R-6.6.33
 func TestCommandTree_EveryLeafHonorsJSON(t *testing.T) {
 	cases := jsonContractCases()
 
@@ -518,7 +518,7 @@ func invokeSyncJSON(t *testing.T, leaf *cobra.Command) (string, error) {
 // drive add without a selector prints only guidance, so --json is refused
 // rather than wrapped around prose.
 //
-// Validates: R-6.6.31
+// Validates: R-6.6.33
 func TestDriveAdd_JSONWithoutSelectorIsAUsageError(t *testing.T) {
 	setTestDriveHome(t)
 
