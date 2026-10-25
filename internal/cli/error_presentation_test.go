@@ -5,8 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -131,4 +134,28 @@ func TestBulkTransferError_NamesEachFailureAndFails(t *testing.T) {
 
 	require.EqualError(t, bulkTransferError(nil, "upload", []string{"x"}), "1 item failed to upload",
 		"--json mode keeps failures in the document but still fails the command")
+}
+
+// Validates: R-6.6.22
+func TestCommandErrorText_TransportFailuresArePlain(t *testing.T) {
+	t.Parallel()
+
+	reset := fmt.Errorf("listing %q: %w", "/", &url.Error{Op: "Get", URL: "https://graph.microsoft.com/v1.0/me", Err: io.ErrUnexpectedEOF})
+	assert.Equal(t,
+		"Error: the connection to OneDrive was interrupted. Check your network connection, then run the command again.",
+		commandErrorText(reset, false))
+
+	slow := &url.Error{Op: "Get", URL: "https://graph.microsoft.com/v1.0/me", Err: context.DeadlineExceeded}
+	assert.Contains(t, commandErrorText(slow, false), "OneDrive did not answer in time")
+
+	localTimeout := fmt.Errorf("reading: %w", os.ErrDeadlineExceeded)
+	assert.NotContains(t, commandErrorText(localTimeout, false), "OneDrive", "only transport errors are described as OneDrive problems")
+}
+
+// Validates: R-6.6.26
+func TestCommandErrorText_SignInCodeOutcomes(t *testing.T) {
+	t.Parallel()
+
+	assert.Contains(t, commandErrorText(fmt.Errorf("device login: %w", graph.ErrLoginCodeExpired), false), "sign-in code expired")
+	assert.Contains(t, commandErrorText(fmt.Errorf("browser login: %w", graph.ErrLoginDeclined), false), "canceled or declined")
 }

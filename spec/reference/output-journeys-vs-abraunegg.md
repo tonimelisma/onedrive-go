@@ -56,8 +56,7 @@ Authentication required: Microsoft no longer accepts the saved login for this ac
 
 $ onedrive-go sync            # network unreachable
 Syncing ~/OneDrive with user@example.com...
-Warning: can't reach OneDrive, retrying (…, attempt=2, max_attempts=6, retry_in=2.1s, error="… connection refused")
-Warning: OneDrive still unreachable, giving up (…)
+Warning: can't reach OneDrive, retrying (retry_in=2 s, attempt=2, max_attempts=6, error="… connection refused")
 Error: can't reach OneDrive through the configured proxy (connection refused). Check your network connection, then run the command again.
 ```
 
