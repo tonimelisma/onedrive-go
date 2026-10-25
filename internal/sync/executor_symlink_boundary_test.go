@@ -369,7 +369,7 @@ func TestExecutor_UnderFollowedDirectoryAlias_UploadReadsButDownloadStaysRefused
 	}
 	downloadOutcome := f.exec.ExecuteDownload(t.Context(), download)
 	requireOutcomeFailure(t, &downloadOutcome)
-	assert.Contains(t, downloadOutcome.Error.Error(), "refusing to download alias/photo.txt through symlink boundary alias")
+	assert.Contains(t, downloadOutcome.Error.Error(), "won't download alias/photo.txt: alias is a symbolic link")
 	f.requireTargetIntact(t, "photo.txt")
 }
 
