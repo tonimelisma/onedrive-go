@@ -79,12 +79,22 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 	restarts := watchRestartWake{orchestrator: o}
 	defer restarts.stop()
 
+	reloadTriggers, stopReloadTriggers := watchConfigReloadTriggers(ctx, o.configPath(), configFilePollInterval)
+	defer stopReloadTriggers()
+
 	for {
 		restarts.arm()
 		select {
 		case cmd := <-commands:
 			if o.handleControlCommand(ctx, &cmd, mode, opts, runners, runnerEvents, childWork) {
 				return nil
+			}
+		case reason := <-reloadTriggers:
+			o.logger.Info("Reloading the config (" + reason + ")")
+			if err := o.reload(ctx, mode, opts, runners, runnerEvents, childWork); err != nil {
+				// reload already warned and kept the previous settings;
+				// with no client waiting there is nobody else to tell.
+				o.logger.Debug("config reload after file change failed", slog.String("error", err.Error()))
 			}
 		case event := <-runnerEvents:
 			o.handleWatchRunnerEvent(ctx, event, mode, opts, runners, runnerEvents, childWork)
@@ -1167,6 +1177,15 @@ func contentFilterConfigsEquivalent(current syncengine.ContentFilterConfig, next
 		current.IgnoreDotfiles == next.IgnoreDotfiles &&
 		current.IgnoreJunkFiles == next.IgnoreJunkFiles &&
 		current.FollowSymlinks == next.FollowSymlinks
+}
+
+// configPath is the config file a running watch reloads from.
+func (o *Orchestrator) configPath() string {
+	if o.cfg == nil || o.cfg.Holder == nil {
+		return ""
+	}
+
+	return o.cfg.Holder.Path()
 }
 
 func reconcileWatchInterval(pollInterval time.Duration) time.Duration {

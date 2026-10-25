@@ -23,6 +23,9 @@ Documentation=https://github.com/tonimelisma/onedrive-go
 # shows what is being watched and which drives need sign-in.
 Type=notify
 ExecStart=%h/.local/bin/onedrive-go sync --watch
+# Edits to config.toml are picked up within seconds anyway; this makes
+# `systemctl --user reload onedrive-go` apply them at once.
+ExecReload=/bin/kill -HUP $MAINPID
 # Startup checks each drive with OneDrive before it reports ready.
 TimeoutStartSec=5min
 Restart=on-failure
