@@ -81,7 +81,7 @@ func TestMarkInvalidConfigKeepsChainAndIsIdempotent(t *testing.T) {
 	cause := &os.PathError{Op: "open", Path: "/x/config.toml", Err: os.ErrPermission}
 	marked := markInvalidConfig(cause)
 	require.ErrorIs(t, marked, ErrInvalidConfig)
-	assert.ErrorIs(t, marked, os.ErrPermission)
+	require.ErrorIs(t, marked, os.ErrPermission)
 	assert.Equal(t, cause.Error(), marked.Error())
 	assert.Same(t, marked, markInvalidConfig(marked))
 	assert.NotErrorIs(t, errors.New("other"), ErrInvalidConfig)
