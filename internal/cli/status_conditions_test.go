@@ -605,7 +605,7 @@ func descriptorFilesystemCases() []descriptorCase {
 			name:       "path too long",
 			key:        syncengine.ConditionPathTooLong,
 			wantTitle:  "Path too long",
-			wantReason: "The full path exceeds OneDrive's 400-character limit.",
+			wantReason: "The full path is longer than OneDrive allows: 400 characters, and in practice a few dozen fewer.",
 			wantAction: "Shorten the path by renaming files or folders.",
 		},
 		{
@@ -631,8 +631,8 @@ func descriptorLocalRuntimeCases() []descriptorCase {
 			name:       "disk full",
 			key:        syncengine.ConditionDiskFull,
 			wantTitle:  "Disk full",
-			wantReason: "Local disk space is insufficient for downloads.",
-			wantAction: "Free up local disk space.",
+			wantReason: "Free local disk space is below the min_free_space reserve (1 GB unless configured).",
+			wantAction: "Free up local disk space, or lower min_free_space in the config file.",
 		},
 		{
 			name:       "hash error",

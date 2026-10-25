@@ -2203,3 +2203,48 @@ func TestQueryUploadSession_RetriesOn429(t *testing.T) {
 	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/retry"), status.UploadURL)
 	assert.Equal(t, int32(2), calls.Load())
 }
+
+// Regression: Graph's session status response has no uploadUrl (verified
+// live: only expirationDateTime and nextExpectedRanges), and validating the
+// absent field failed every resume with "upload URL must use https", so a
+// crashed 300 MB upload with 280 MB already on OneDrive restarted from zero.
+//
+// Validates: R-5.6.11
+func TestResumeUpload_StatusWithoutUploadURLResumesOnSessionURL(t *testing.T) {
+	totalSize := int64(ChunkedUploadChunkSize + 1024)
+	resumeOffset := int64(ChunkedUploadChunkSize)
+	content := make([]byte, totalSize)
+
+	var putPath string
+	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"expirationDateTime": "2025-12-31T23:59:59Z",
+				"nextExpectedRanges": []string{fmt.Sprintf("%d-%d", resumeOffset, totalSize-1)},
+			}))
+		case http.MethodPut:
+			putPath = r.URL.Path
+			body, readErr := io.ReadAll(r.Body)
+			assert.NoError(t, readErr)
+			assert.Len(t, body, int(totalSize-resumeOffset), "only the missing bytes are sent")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			writeTestResponse(t, w, `{"id":"resumed-item","name":"big.bin","size":`+fmt.Sprintf("%d", totalSize)+`,
+				"createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z",
+				"parentReference":{"id":"parent","driveId":"d"},"file":{"mimeType":"application/octet-stream"}}`)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer chunkSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload/session")}
+
+	item, err := client.ResumeUpload(t.Context(), session, bytes.NewReader(content), totalSize, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "resumed-item", item.ID)
+	assert.Equal(t, "/upload/session", putPath, "the remaining chunk goes to the original session URL")
+}

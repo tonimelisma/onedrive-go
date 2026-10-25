@@ -13,6 +13,7 @@ Download and upload transfer infrastructure shared by file operations and sync.
 - R-5.2.2: When a download is interrupted, the system shall resume via `.partial` files and HTTP Range requests on retry. [verified]
 - R-5.2.3: Upload session state shall be persisted to disk and survive process restart. [verified]
 - R-5.2.4: Interrupted transfers shall resume automatically on next sync. [verified]
+- R-5.2.5: Names the system derives from a user's file name (download partials, conflict copies) shall stay within the 255-byte local name limit, staying deterministic for partials so a download still resumes. A name that is valid locally shall never become undownloadable because of the name the client gives its partial file. [verified]
 
 ## R-5.3 Upload Chunking [verified]
 
@@ -36,6 +37,7 @@ Download and upload transfer infrastructure shared by file operations and sync.
 - R-5.6.8: The system shall not re-query file metadata immediately after upload. After upload completion, server-side processing (virus scanning, indexing, SharePoint enrichment) can temporarily show incorrect size and hash values. The upload completion response itself contains the correct metadata. Querying the item endpoint immediately can return stale pre-processing values, causing false hash mismatches and unnecessary re-uploads on the next sync cycle. [verified]
 - R-5.6.9: When uploading, the system shall pass `@microsoft.graph.conflictBehavior=replace` to overwrite the existing remote item. The sync engine resolves conflicts client-side via rename-aside (local conflicting version is renamed to `<name>.conflict-<timestamp>.<ext>`). By the time an upload reaches the API, the decision to overwrite has already been made. Without `replace`, the API defaults to `fail` or `rename`, which either errors out or creates a server-side duplicate that the sync engine doesn't expect. [verified]
 - R-5.6.10: When a non-zero create-by-parent simple upload returns `404 itemNotFound` and the fallback `createUploadSession` path also exhausts the documented fresh-parent `404 itemNotFound` retry budget, the graph boundary shall retry the original simple upload against the same parent with a second bounded create-convergence policy before surfacing final not-found. The session-route budget remains the narrow permission oracle for shared-folder `403` disambiguation, while the longer final simple-upload budget hardens ordinary recently-created-parent creates against longer convergence windows. [verified]
+- R-5.6.11: Resuming an upload session shall keep the session URL when Graph's session status response omits `uploadUrl`, which it always does, and send only the byte ranges Graph still expects. [verified]
 
 ## R-5.7 Upload Size Limits [verified]
 

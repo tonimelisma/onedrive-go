@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -96,7 +97,7 @@ func (c *Client) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePa
 		slog.String("path", remotePath),
 	)
 
-	item, err := c.fetchItem(ctx, fmt.Sprintf("/drives/%s/root:/%s:", driveID, encodePathSegments(remotePath)))
+	item, err := c.fetchItemByPathChunks(ctx, driveID, remotePath)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +120,55 @@ func (c *Client) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePa
 	}
 
 	return item, nil
+}
+
+// maxPathAddressedLength bounds the encoded path one path-addressed request
+// carries. Graph rejects longer URLs with 400 "The length of the URL for this
+// request exceeds the configured maxUrlLength value" (measured on a Personal
+// drive: a 300-character path resolves, 346 does not), well below OneDrive's
+// 400-character path limit, so deep folders could be created but never looked
+// up again.
+const maxPathAddressedLength = 240
+
+// fetchItemByPathChunks resolves remotePath with as few path-addressed
+// requests as fit under maxPathAddressedLength: the first chunk from the
+// drive root, each further chunk relative to the item before it.
+func (c *Client) fetchItemByPathChunks(ctx context.Context, driveID driveid.ID, remotePath string) (*Item, error) {
+	chunks := pathAddressChunks(remotePath, maxPathAddressedLength)
+
+	item, err := c.fetchItem(ctx, fmt.Sprintf("/drives/%s/root:/%s:", driveID, chunks[0]))
+	if err != nil {
+		return nil, err
+	}
+	for _, chunk := range chunks[1:] {
+		item, err = c.fetchItem(ctx, fmt.Sprintf("/drives/%s/items/%s:/%s:", driveID, url.PathEscape(item.ID), chunk))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return item, nil
+}
+
+// pathAddressChunks splits remotePath into encoded chunks of whole segments,
+// each at most limit long (a single longer segment stands alone).
+func pathAddressChunks(remotePath string, limit int) []string {
+	var chunks []string
+	current := ""
+	for _, segment := range strings.Split(remotePath, "/") {
+		encoded := url.PathEscape(segment)
+		switch {
+		case current == "":
+			current = encoded
+		case len(current)+1+len(encoded) <= limit:
+			current += "/" + encoded
+		default:
+			chunks = append(chunks, current)
+			current = encoded
+		}
+	}
+
+	return append(chunks, current)
 }
 
 // ListChildren returns all children of a folder, handling pagination automatically.
@@ -144,9 +194,18 @@ func (c *Client) ListChildrenByPath(ctx context.Context, driveID driveid.ID, rem
 		return nil, err
 	}
 
+	route := fmt.Sprintf("/drives/%s/root:/%s:/children?$top=%d", driveID, encodePathSegments(remotePath), listChildrenPageSize)
+	if len(encodePathSegments(remotePath)) > maxPathAddressedLength {
+		folder, err := c.fetchItemByPathChunks(ctx, driveID, remotePath)
+		if err != nil {
+			return nil, err
+		}
+		route = fmt.Sprintf("/drives/%s/items/%s/children?$top=%d", driveID, folder.ID, listChildrenPageSize)
+	}
+
 	return c.fetchAllChildren(
 		ctx,
-		fmt.Sprintf("/drives/%s/root:/%s:/children?$top=%d", driveID, encodePathSegments(remotePath), listChildrenPageSize),
+		route,
 		"listing children by path",
 		"listed children by path complete",
 		[]slog.Attr{

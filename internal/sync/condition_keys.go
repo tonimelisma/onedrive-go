@@ -22,6 +22,7 @@ const (
 	ConditionDiskFull               ConditionKey = "disk_full"
 	ConditionHashError              ConditionKey = "hash_error"
 	ConditionFileTooLargeForSpace   ConditionKey = "file_too_large_for_space"
+	ConditionLocalNameTooLong       ConditionKey = "local_name_too_long"
 	ConditionUnexpectedCondition    ConditionKey = "unexpected_condition"
 )
 
@@ -103,6 +104,7 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionDiskFull,
 		ConditionHashError,
 		ConditionFileTooLargeForSpace,
+		ConditionLocalNameTooLong,
 		ConditionUnexpectedCondition,
 	}
 
@@ -141,6 +143,7 @@ func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
 		{issueType: issueDiskFull, key: ConditionDiskFull},
 		{issueType: issueHashPanic, key: ConditionHashError},
 		{issueType: issueFileTooLargeForSpace, key: ConditionFileTooLargeForSpace},
+		{issueType: issueLocalNameTooLong, key: ConditionLocalNameTooLong},
 	} {
 		if mapping.issueType == issueType {
 			return mapping.key, true
