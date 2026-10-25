@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ type fakeNotifySocket struct {
 func newFakeNotifySocket(t *testing.T) *fakeNotifySocket {
 	t.Helper()
 
-	address := filepath.Join(t.TempDir(), "notify.sock")
+	address := shortSocketPath(t, "notify.sock")
 	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: address, Net: "unixgram"})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, conn.Close()) })
@@ -270,4 +271,16 @@ func TestOpenSyncNotifier_BadSocketWarnsAndContinues(t *testing.T) {
 	assert.Nil(t, notifier)
 	assert.Contains(t, logs.String(), "notify socket")
 	assert.Nil(t, openSyncNotifier(func(string) string { return "" }, logger))
+}
+
+// shortSocketPath returns a socket path under /tmp. macOS limits a Unix socket
+// path to 104 bytes, and its per-test TMPDIR under /var/folders is too long.
+func shortSocketPath(t *testing.T, name string) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("/tmp", "odg-sd")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, os.RemoveAll(dir)) })
+
+	return filepath.Join(dir, name)
 }

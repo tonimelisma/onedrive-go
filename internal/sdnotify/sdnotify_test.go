@@ -3,6 +3,7 @@ package sdnotify
 import (
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -47,7 +48,7 @@ func envOf(values map[string]string) func(string) string {
 func openFake(t *testing.T, env map[string]string) (*Notifier, *fakeManager) {
 	t.Helper()
 
-	address := filepath.Join(t.TempDir(), "notify.sock")
+	address := shortSocketPath(t, "notify.sock")
 	manager := newFakeManager(t, address)
 	env[EnvNotifySocket] = address
 
@@ -175,7 +176,7 @@ func TestOpen_WatchdogInterval(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			address := filepath.Join(t.TempDir(), "n.sock")
+			address := shortSocketPath(t, "n.sock")
 			newFakeManager(t, address)
 			tt.env[EnvNotifySocket] = address
 
@@ -195,11 +196,23 @@ func TestOpen_WatchdogInterval(t *testing.T) {
 func TestNotifier_SendAfterCloseFails(t *testing.T) {
 	t.Parallel()
 
-	address := filepath.Join(t.TempDir(), "n.sock")
+	address := shortSocketPath(t, "n.sock")
 	newFakeManager(t, address)
 	notifier, err := Open(envOf(map[string]string{EnvNotifySocket: address}), 1)
 	require.NoError(t, err)
 	require.NoError(t, notifier.Close())
 
 	assert.Error(t, notifier.Ready(""))
+}
+
+// shortSocketPath returns a socket path under /tmp. macOS limits a Unix socket
+// path to 104 bytes, and its per-test TMPDIR under /var/folders is too long.
+func shortSocketPath(t *testing.T, name string) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("/tmp", "odg-sd")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, os.RemoveAll(dir)) })
+
+	return filepath.Join(dir, name)
 }
