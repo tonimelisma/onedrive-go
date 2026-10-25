@@ -2,6 +2,7 @@ package devtool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -107,23 +108,39 @@ func cleanupFailedWorktree(ctx context.Context, runner commandRunner, repoRoot, 
 	return nil
 }
 
+// BootstrapWorktree applies .worktreeinclude to targetPath and tells the
+// developer on stderr about any entry the root checkout does not have.
 func BootstrapWorktree(repoRoot, targetPath string) error {
-	return bootstrapWorktree(defaultWorktreeFS(), repoRoot, targetPath)
-}
-
-func bootstrapWorktree(fs worktreeFS, repoRoot, targetPath string) error {
-	entries, err := readIncludeEntries(fs, filepath.Join(repoRoot, ".worktreeinclude"))
-	if err != nil {
-		return err
+	skipped, err := bootstrapWorktree(defaultWorktreeFS(), repoRoot, targetPath)
+	for _, path := range skipped {
+		fmt.Fprintf(os.Stderr, "Skipped %s: not present in %s. Only live E2E and integration tests need it.\n", path, repoRoot)
 	}
 
+	return err
+}
+
+// bootstrapWorktree returns the include entries it skipped because the root
+// checkout lacks them. Every entry is a local adjunct that only live tests
+// use (credentials, .env), so a contributor without test credentials still
+// gets a working worktree; the live suites then fail their own preflight.
+func bootstrapWorktree(fs worktreeFS, repoRoot, targetPath string) ([]string, error) {
+	entries, err := readIncludeEntries(fs, filepath.Join(repoRoot, ".worktreeinclude"))
+	if err != nil {
+		return nil, err
+	}
+
+	var skipped []string
 	for _, entry := range entries {
-		if err := applyIncludeEntry(fs, repoRoot, targetPath, entry); err != nil {
-			return err
+		applied, err := applyIncludeEntry(fs, repoRoot, targetPath, entry)
+		if err != nil {
+			return skipped, err
+		}
+		if !applied {
+			skipped = append(skipped, entry.path)
 		}
 	}
 
-	return nil
+	return skipped, nil
 }
 
 func readIncludeEntries(fs worktreeFS, includePath string) ([]includeEntry, error) {
@@ -157,43 +174,48 @@ func readIncludeEntries(fs worktreeFS, includePath string) ([]includeEntry, erro
 	return entries, nil
 }
 
-func applyIncludeEntry(fs worktreeFS, repoRoot, targetPath string, entry includeEntry) error {
+// applyIncludeEntry reports false, with no error, when the source does not
+// exist in the root checkout.
+func applyIncludeEntry(fs worktreeFS, repoRoot, targetPath string, entry includeEntry) (bool, error) {
 	sourcePath := filepath.Join(repoRoot, entry.path)
 	targetEntryPath := filepath.Join(targetPath, entry.path)
 
 	info, err := fs.stat(sourcePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
 	if err != nil {
-		return fmt.Errorf("stat include source %s: %w", sourcePath, err)
+		return false, fmt.Errorf("stat include source %s: %w", sourcePath, err)
 	}
 
 	if mkdirErr := fs.mkdirAll(filepath.Dir(targetEntryPath), worktreeDirPerm); mkdirErr != nil {
-		return fmt.Errorf("mkdir include target %s: %w", filepath.Dir(targetEntryPath), mkdirErr)
+		return false, fmt.Errorf("mkdir include target %s: %w", filepath.Dir(targetEntryPath), mkdirErr)
 	}
 
 	if removeErr := fs.removeAll(targetEntryPath); removeErr != nil && !os.IsNotExist(removeErr) {
-		return fmt.Errorf("remove existing include target %s: %w", targetEntryPath, removeErr)
+		return false, fmt.Errorf("remove existing include target %s: %w", targetEntryPath, removeErr)
 	}
 
 	if entry.symlink {
 		if symlinkErr := fs.symlink(sourcePath, targetEntryPath); symlinkErr != nil {
-			return fmt.Errorf("symlink include %s -> %s: %w", sourcePath, targetEntryPath, symlinkErr)
+			return false, fmt.Errorf("symlink include %s -> %s: %w", sourcePath, targetEntryPath, symlinkErr)
 		}
 
-		return nil
+		return true, nil
 	}
 
 	if info.IsDir() {
-		return fmt.Errorf("copy include %s: directories must use @ symlink entries", sourcePath)
+		return false, fmt.Errorf("copy include %s: directories must use @ symlink entries", sourcePath)
 	}
 
 	data, err := fs.readFile(sourcePath)
 	if err != nil {
-		return fmt.Errorf("read include source %s: %w", sourcePath, err)
+		return false, fmt.Errorf("read include source %s: %w", sourcePath, err)
 	}
 
 	if err := fs.writeFile(targetEntryPath, data, info.Mode().Perm()); err != nil {
-		return fmt.Errorf("write include target %s: %w", targetEntryPath, err)
+		return false, fmt.Errorf("write include target %s: %w", targetEntryPath, err)
 	}
 
-	return nil
+	return true, nil
 }
