@@ -70,7 +70,8 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 		"--debug",
 		"sync", "--watch", "--upload-only",
 	}
-	cmd := makeCmd(daemonArgs, env)
+	daemonEnv, eventsPath := ensureDebugEvents(t, env)
+	cmd := makeCmd(daemonArgs, daemonEnv)
 
 	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
@@ -89,7 +90,7 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 	})
 
 	// Wait for daemon to initialize (watch setup complete).
-	waitForDaemonReady(t, &stderr, 30*time.Second)
+	waitForDaemonReady(t, eventsPath, 30*time.Second)
 
 	// Create a local file inside the sync dir.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -136,7 +137,8 @@ func TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners(t *testing.T) {
 		"--debug",
 		"sync", "--watch",
 	}
-	cmd := makeCmd(daemonArgs, env)
+	daemonEnv, eventsPath := ensureDebugEvents(t, env)
+	cmd := makeCmd(daemonArgs, daemonEnv)
 
 	var daemonStdout, daemonStderr syncBuffer
 	cmd.Stdout = &daemonStdout
@@ -152,7 +154,7 @@ func TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners(t *testing.T) {
 		logCLIExecution(t, daemonArgs, daemonStdout.String(), daemonStderr.String())
 	})
 
-	waitForDaemonReady(t, &daemonStderr, 30*time.Second)
+	waitForDaemonReady(t, eventsPath, 30*time.Second)
 
 	assertCompetingOwnerFails := func(name string, args ...string) {
 		t.Helper()
@@ -213,7 +215,8 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 		"--debug",
 		"sync", "--watch", "--upload-only",
 	}
-	cmd := makeCmd(daemonArgs, env)
+	daemonEnv, eventsPath := ensureDebugEvents(t, env)
+	cmd := makeCmd(daemonArgs, daemonEnv)
 
 	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
@@ -231,13 +234,13 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 	})
 
 	// Wait for daemon to initialize.
-	waitForDaemonReady(t, &stderr, 30*time.Second)
+	waitForDaemonReady(t, eventsPath, 30*time.Second)
 
-	// Pause notifies the daemon through the control socket.
+	// Pause notifies the daemon through the control socket. Reloading again
+	// ourselves is idempotent and its synchronous answer proves the daemon
+	// has applied the pause; no log wording involved.
 	runCLIWithConfig(t, cfgPath, env, "pause")
-
-	// Poll stderr for pause acknowledgment instead of sleeping.
-	waitForStderrContains(t, &stderr, "paused", 10*time.Second)
+	reloadDaemonConfig(t, env)
 
 	// Create a local file while paused.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -322,7 +325,8 @@ func TestE2E_SyncWatch_ControlSocketReload(t *testing.T) {
 		"--debug",
 		"sync", "--watch", "--upload-only",
 	}
-	cmd := makeCmd(daemonArgs, env)
+	daemonEnv, eventsPath := ensureDebugEvents(t, env)
+	cmd := makeCmd(daemonArgs, daemonEnv)
 
 	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
@@ -340,7 +344,7 @@ func TestE2E_SyncWatch_ControlSocketReload(t *testing.T) {
 	})
 
 	// Wait for daemon to initialize (drive1 watch setup).
-	waitForDaemonReady(t, &stderr, 30*time.Second)
+	waitForDaemonReady(t, eventsPath, 30*time.Second)
 
 	// Create a file in drive1's sync dir to verify it works.
 	localDir1 := filepath.Join(syncDir1, testFolder1)
@@ -360,11 +364,10 @@ func TestE2E_SyncWatch_ControlSocketReload(t *testing.T) {
 		drive, syncDir1, drive2, syncDir2)
 	require.NoError(t, os.WriteFile(cfgPath, []byte(updatedCfg), 0o600))
 
-	// Ask the daemon to reload through the durable control path.
-	postControlSocket(t, env, "/v1/reload")
-
-	// Wait for config reload to complete.
-	waitForStderrContains(t, &stderr, "Reloaded the config", 30*time.Second)
+	// Ask the daemon to reload through the durable control path. The reload
+	// answers once applied; then the control socket must list drive2.
+	reloadDaemonConfig(t, env)
+	waitForControlSocketMount(t, env, drive2, 30*time.Second)
 
 	// Create a file in drive2's sync dir.
 	localDir2 := filepath.Join(syncDir2, testFolder2)
@@ -411,63 +414,5 @@ func pollForDrive2File(
 		}
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
-}
-
-// waitForStderrContains polls stderr until it contains the target string.
-func waitForStderrContains(t *testing.T, stderr *syncBuffer, target string, timeout time.Duration) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-
-	for {
-		if strings.Contains(stderr.String(), target) {
-			t.Logf("found %q in stderr", target)
-			return
-		}
-
-		if time.Now().After(deadline) {
-			require.Failf(t, "timed out waiting for stderr content",
-				"after %v waiting for %q in stderr\nstderr so far: %s",
-				timeout, target, stderr.String())
-		}
-
-		sleepForLiveTestPropagation(500 * time.Millisecond)
-	}
-}
-
-// waitForDaemonReady polls the daemon's stderr output until it contains
-// evidence that watch mode has initialized, or times out.
-func waitForDaemonReady(t *testing.T, stderr *syncBuffer, timeout time.Duration) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-
-	// Watch for indicators that the daemon has started:
-	// - "watch mode starting" from engine
-	// - "watch runner started" from orchestrator
-	// - "watch setup complete" from observer
-	readyIndicators := []string{
-		"watch mode starting",
-		"watch runner started",
-		"watch setup complete",
-	}
-
-	for {
-		output := stderr.String()
-		for _, indicator := range readyIndicators {
-			if strings.Contains(output, indicator) {
-				t.Logf("daemon ready (found %q in stderr)", indicator)
-				return
-			}
-		}
-
-		if time.Now().After(deadline) {
-			require.Failf(t, "daemon did not become ready",
-				"within %v\nstderr so far: %s",
-				timeout, output)
-		}
-
-		sleepForLiveTestPropagation(500 * time.Millisecond)
 	}
 }

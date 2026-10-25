@@ -84,7 +84,7 @@ func testLargeFileUploadDownload(t *testing.T, opsCfgPath, testFolder string) {
 	assert.Contains(t, stderr, "Uploaded")
 
 	// Poll for eventual consistency — file may not be visible immediately.
-	waitForRemoteReadContains(t, opsCfgPath, nil, "", fmt.Sprintf("%d bytes", fileSize), pollTimeout, "stat", remotePath)
+	waitForRemoteStatSize(t, opsCfgPath, nil, "", remotePath, int64(fileSize), pollTimeout)
 
 	// Download and verify byte-for-byte content integrity.
 	downloadDir := t.TempDir()
