@@ -332,6 +332,15 @@ kept reporting the upload's destination folder as missing, even after 7
 tries: ...") and deliberately does not contain the quirk name, so rewording it
 cannot break a classifier.
 
+`dispatchRequest` wraps every response body so a read failure other than
+`io.EOF` carries `*ResponseReadError` (cause reachable through `Unwrap`). It
+tells "the connection dropped while OneDrive was answering" apart from a local
+write failure returned by the same `io.Copy`, which net/http cannot: it reports
+body read failures without the `*url.Error` it uses before the response.
+`CheckSavedLogin` validates a token file without building a token source or
+logging, for health checks that must not repeat the "loaded saved token" record
+of the real `TokenSourceFromPath` load.
+
 This package owns the wire-to-domain normalization step for remote failures:
 raw HTTP and Graph payloads become `GraphError` values plus sentinels such as
 `ErrGone` and `ErrUnauthorized`. Retry, persistence, and user-facing decisions

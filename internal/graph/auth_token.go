@@ -24,17 +24,9 @@ import (
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
 func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Logger) (TokenSource, error) {
-	tok, err := tokenfile.Load(tokenPath)
-	if errors.Is(err, tokenfile.ErrNotFound) {
-		return nil, ErrNotLoggedIn
-	}
-
+	tok, err := loadSavedToken(tokenPath)
 	if err != nil {
-		return nil, fmt.Errorf("load token file: %w", err)
-	}
-
-	if tok.RefreshToken == "" {
-		return nil, ErrNotLoggedIn
+		return nil, err
 	}
 
 	expired := !tok.Expiry.IsZero() && tok.Expiry.Before(time.Now())
@@ -48,6 +40,33 @@ func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Log
 	src := cfg.TokenSource(ctx, tok)
 
 	return &tokenBridge{src: src, logger: logger}, nil
+}
+
+// CheckSavedLogin reports whether tokenPath holds a usable saved login,
+// without building a token source or logging. It returns ErrNotLoggedIn when
+// there is none and a wrapped error when the file cannot be read. Health
+// checks use it so a command that then loads the token for real reports
+// "loaded saved token" once, not once per check.
+func CheckSavedLogin(tokenPath string) error {
+	_, err := loadSavedToken(tokenPath)
+	return err
+}
+
+func loadSavedToken(tokenPath string) (*oauth2.Token, error) {
+	tok, err := tokenfile.Load(tokenPath)
+	if errors.Is(err, tokenfile.ErrNotFound) {
+		return nil, ErrNotLoggedIn
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("load token file: %w", err)
+	}
+
+	if tok.RefreshToken == "" {
+		return nil, ErrNotLoggedIn
+	}
+
+	return tok, nil
 }
 
 // Logout removes the saved token file at the given path.
