@@ -20,6 +20,7 @@ type bootstrapLogBuffer struct {
 }
 
 type bootstrapLogState struct {
+	// mu guards records and target, shared by every handler WithAttrs derives.
 	mu      sync.Mutex
 	records []slog.Record
 	target  slog.Handler
