@@ -408,3 +408,31 @@ func TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn(t *testing.T) {
 	assert.Equal(t, []string{"created-movesrc->movedst"}, remote.moves, "no descendant move after the folder move")
 	requireScenarioQuietPlan(t, eng)
 }
+
+// Validates: R-2.2.3
+func TestRunOnce_TimestampOnlyLocalChangeRefreshesBaselineWithoutTransfer(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFile(t, "item-touch", "root", "touch.txt", "touch me\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	// touch -d 2020-01-01: same content, new mtime.
+	old := time.Date(2020, 1, 1, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(filepath.Join(syncRoot, "touch.txt"), old, old))
+
+	report := runScenarioPass(t, eng)
+	assert.Zero(t, report.Uploads+report.Downloads, "a timestamp-only change transfers nothing")
+	assert.Zero(t, remote.uploads)
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+	entry, ok := bl.GetByPath("touch.txt")
+	require.True(t, ok)
+	assert.Equal(t, old.UnixNano(), entry.LocalMtime,
+		"the baseline must learn the new mtime, or every scan re-hashes the file")
+	requireScenarioQuietPlan(t, eng)
+}

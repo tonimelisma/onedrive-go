@@ -26,7 +26,7 @@ func TestDetectCaseCollisions_TwoWay(t *testing.T) {
 		{Path: "dir/file.txt", Name: "file.txt", Type: changeCreate},
 	}
 
-	clean, collisions := detectCaseCollisions(events, nil)
+	clean, collisions := detectCaseCollisions(events, nil, nil)
 	assert.Empty(t, clean, "both colliders should be removed from clean events")
 	require.Len(t, collisions, 2, "both colliders should be returned as SkippedItems")
 
@@ -46,7 +46,7 @@ func TestDetectCaseCollisions_ThreeWay(t *testing.T) {
 		{Path: "FILE.txt", Name: "FILE.txt", Type: changeCreate},
 	}
 
-	clean, collisions := detectCaseCollisions(events, nil)
+	clean, collisions := detectCaseCollisions(events, nil, nil)
 	assert.Empty(t, clean)
 	assert.Len(t, collisions, 3, "all three colliders should be flagged")
 }
@@ -60,7 +60,7 @@ func TestDetectCaseCollisions_DifferentDirs(t *testing.T) {
 		{Path: "dir2/file.txt", Name: "file.txt", Type: changeCreate},
 	}
 
-	clean, collisions := detectCaseCollisions(events, nil)
+	clean, collisions := detectCaseCollisions(events, nil, nil)
 	assert.Len(t, clean, 2, "files in different dirs should not collide")
 	assert.Empty(t, collisions)
 }
@@ -69,7 +69,7 @@ func TestDetectCaseCollisions_DifferentDirs(t *testing.T) {
 func TestDetectCaseCollisions_Empty(t *testing.T) {
 	t.Parallel()
 
-	clean, collisions := detectCaseCollisions(nil, nil)
+	clean, collisions := detectCaseCollisions(nil, nil, nil)
 	assert.Empty(t, clean)
 	assert.Empty(t, collisions)
 }
@@ -86,7 +86,7 @@ func TestDetectCaseCollisions_NoCollisions(t *testing.T) {
 		{Path: "dir/e.txt", Name: "e.txt", Type: changeCreate},
 	}
 
-	clean, collisions := detectCaseCollisions(events, nil)
+	clean, collisions := detectCaseCollisions(events, nil, nil)
 	assert.Len(t, clean, 5, "no collisions — all events returned clean")
 	assert.Empty(t, collisions)
 }
@@ -100,7 +100,7 @@ func TestDetectCaseCollisions_DetailContainsCollidingName(t *testing.T) {
 		{Path: "docs/report.md", Name: "report.md", Type: changeCreate},
 	}
 
-	_, collisions := detectCaseCollisions(events, nil)
+	_, collisions := detectCaseCollisions(events, nil, nil)
 	require.Len(t, collisions, 2)
 
 	// Each collision's Detail should mention the other collider's name.
@@ -291,12 +291,34 @@ func TestDetectCaseCollisions_BaselineCrossCheck(t *testing.T) {
 		{Path: "file.txt", Name: "file.txt", Type: changeCreate},
 	}
 
-	clean, collisions := detectCaseCollisions(events, baseline)
+	clean, collisions := detectCaseCollisions(events, baseline, nil)
 	assert.Empty(t, clean, "new file should be removed — collides with baseline")
 	require.Len(t, collisions, 1)
 	assert.Equal(t, "file.txt", collisions[0].Path)
 	assert.Equal(t, issueCaseCollision, collisions[0].Reason)
 	assert.Contains(t, collisions[0].Detail, "File.txt", "detail should name the synced file")
+}
+
+// Validates: R-2.12.1
+func TestDetectCaseCollisions_CaseOnlyRenameIsNotACollision(t *testing.T) {
+	t.Parallel()
+
+	// mv File.txt file.txt: the baseline still names File.txt, but the scan
+	// no longer finds it on disk, so nothing collides.
+	baseline := newBaselineForTest([]*BaselineEntry{
+		{Path: "File.txt", DriveID: driveid.New("d"), ItemID: "id1"},
+	})
+	events := []changeEvent{
+		{Path: "file.txt", Name: "file.txt", Type: changeCreate},
+	}
+
+	clean, collisions := detectCaseCollisions(events, baseline, map[string]bool{"file.txt": true})
+	assert.Len(t, clean, 1)
+	assert.Empty(t, collisions)
+
+	clean, collisions = detectCaseCollisions(events, baseline, map[string]bool{"file.txt": true, "File.txt": true})
+	assert.Empty(t, clean, "a synced variant still on disk is a real collision")
+	require.Len(t, collisions, 1)
 }
 
 // Validates: R-2.12.1
@@ -312,7 +334,7 @@ func TestDetectCaseCollisions_BaselineExactMatch_NoCollision(t *testing.T) {
 		{Path: "File.txt", Name: "File.txt", Type: ChangeModify},
 	}
 
-	clean, collisions := detectCaseCollisions(events, baseline)
+	clean, collisions := detectCaseCollisions(events, baseline, nil)
 	assert.Len(t, clean, 1, "exact match should not be a collision")
 	assert.Empty(t, collisions)
 }
@@ -333,7 +355,7 @@ func TestDetectCaseCollisions_BaselineAndEventCollision(t *testing.T) {
 		{Path: "file.txt", Name: "file.txt", Type: changeCreate},
 	}
 
-	clean, collisions := detectCaseCollisions(events, baseline)
+	clean, collisions := detectCaseCollisions(events, baseline, nil)
 	assert.Empty(t, clean, "both events should be flagged")
 	assert.Len(t, collisions, 2, "both events collide with each other and baseline")
 }
@@ -351,7 +373,7 @@ func TestDetectCaseCollisions_BaselineInSubdir(t *testing.T) {
 		{Path: "docs/report.md", Name: "report.md", Type: changeCreate},
 	}
 
-	clean, collisions := detectCaseCollisions(events, baseline)
+	clean, collisions := detectCaseCollisions(events, baseline, nil)
 	assert.Empty(t, clean)
 	require.Len(t, collisions, 1)
 	assert.Contains(t, collisions[0].Detail, "Report.md")
@@ -366,7 +388,7 @@ func TestDetectCaseCollisions_NilBaseline_NoChange(t *testing.T) {
 		{Path: "unique.txt", Name: "unique.txt", Type: changeCreate},
 	}
 
-	clean, collisions := detectCaseCollisions(events, nil)
+	clean, collisions := detectCaseCollisions(events, nil, nil)
 	assert.Len(t, clean, 1)
 	assert.Empty(t, collisions)
 }
@@ -387,7 +409,7 @@ func TestDetectCaseCollisions_DirectoryChildrenSuppressed(t *testing.T) {
 		{Path: "Docs/readme.txt", Name: "readme.txt", Type: changeCreate, ItemType: ItemTypeFile},
 	}
 
-	clean, collisions := detectCaseCollisions(events, nil)
+	clean, collisions := detectCaseCollisions(events, nil, nil)
 	assert.Empty(t, clean, "all events should be suppressed")
 	assert.Len(t, collisions, 3, "parent collision + child should all be skipped")
 
@@ -411,7 +433,7 @@ func TestDetectCaseCollisions_DirectoryNestedChildrenSuppressed(t *testing.T) {
 		{Path: "Docs/sub/file.txt", Name: "file.txt", Type: changeCreate, ItemType: ItemTypeFile},
 	}
 
-	clean, collisions := detectCaseCollisions(events, nil)
+	clean, collisions := detectCaseCollisions(events, nil, nil)
 	assert.Empty(t, clean, "all events should be suppressed")
 	assert.Len(t, collisions, 4, "parent + child dir + nested file should all be skipped")
 }
@@ -426,7 +448,7 @@ func TestDetectCaseCollisions_DirectoryNoCollision_ChildrenPass(t *testing.T) {
 		{Path: "Docs/readme.txt", Name: "readme.txt", Type: changeCreate, ItemType: ItemTypeFile},
 	}
 
-	clean, collisions := detectCaseCollisions(events, nil)
+	clean, collisions := detectCaseCollisions(events, nil, nil)
 	assert.Len(t, clean, 2, "no collision — all events pass")
 	assert.Empty(t, collisions)
 }
@@ -499,7 +521,7 @@ func TestDetectCaseCollisions_ChildInMultiGroup_NoDuplicate(t *testing.T) {
 		{Path: "Docs/README.txt", ItemType: ItemTypeFile},
 	}
 
-	_, collisions := detectCaseCollisions(events, nil)
+	_, collisions := detectCaseCollisions(events, nil, nil)
 
 	// Count occurrences of each path in SkippedItems.
 	pathCounts := make(map[string]int)
