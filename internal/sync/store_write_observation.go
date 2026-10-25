@@ -14,6 +14,8 @@ package sync
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -162,6 +164,45 @@ func deleteObservedRemoteState(
 		item.ItemID,
 	); err != nil {
 		return fmt.Errorf("sync: deleting remote_state for %s: %w", existingPath, err)
+	}
+
+	return nil
+}
+
+// ForgetRemoteItem removes itemID, and its subtree when it is a folder, from
+// remote_state after a live read proved it gone.
+func (s *SyncStore) ForgetRemoteItem(ctx context.Context, itemID string) (err error) {
+	tx, err := beginPerfTx(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("sync: beginning forget-remote-item transaction: %w", err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback forget-remote-item transaction")
+	}()
+
+	var (
+		path     string
+		itemType string
+	)
+	switch scanErr := tx.QueryRowContext(ctx,
+		`SELECT path, item_type FROM remote_state WHERE item_id = ?`, itemID,
+	).Scan(&path, &itemType); {
+	case errors.Is(scanErr, sql.ErrNoRows):
+		return nil
+	case scanErr != nil:
+		return fmt.Errorf("sync: reading remote_state for %s: %w", itemID, scanErr)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM remote_state WHERE item_id = ?`, itemID); err != nil {
+		return fmt.Errorf("sync: deleting remote_state for %s: %w", path, err)
+	}
+	if parsed, parseErr := parseItemType(itemType); parseErr == nil && parsed == ItemTypeFolder {
+		if err := deleteRemoteStateSubtreeTx(ctx, tx, path); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing forget-remote-item transaction: %w", err)
 	}
 
 	return nil

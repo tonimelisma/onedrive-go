@@ -1,0 +1,570 @@
+package sync
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"path"
+	"sort"
+	"strings"
+	stdsync "sync"
+	"testing"
+	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
+)
+
+// moveScenarioRemote is a small in-memory OneDrive for multi-pass engine
+// scenarios. It follows the Graph behaviors the engine depends on:
+//
+//   - Delta: an empty token enumerates the whole tree; a saved token returns
+//     only the items changed since it, plus tombstones for deleted ones. A
+//     folder move or delete reports the folder (and ancestors whose eTag
+//     changed), never its unchanged descendants. A fake that returned the
+//     whole tree on every call hid two engine bugs that left descendants at
+//     stale remote paths.
+//   - Names are unique per folder case-insensitively. Uploads replace an
+//     existing file of that name in place (same item ID), and an upload onto
+//     a folder's name fails as Graph's 501 does. Folder creates and moves onto
+//     a taken name fail with 409.
+//   - Deleting a folder deletes its subtree.
+//   - A folder's eTag changes whenever anything beneath it changes, but delta
+//     keeps reporting the eTag recorded when the folder was created (see
+//     observedFolderETags).
+type moveScenarioRemote struct {
+	mu       stdsync.Mutex
+	driveID  driveid.ID
+	items    map[string]*graph.Item // by item ID, as GetItem sees them live
+	contents map[string]string      // file content by item ID
+	etagSeq  int
+	idSeq    int
+	// observedFolderETags is the folder eTag delta reports. Live, a folder's
+	// eTag also changes whenever a descendant changes, but remote_state kept
+	// the eTag recorded when the folder was created (live retest, movesrc).
+	// GetItem returns the churned eTag; delta returns this one.
+	observedFolderETags map[string]string
+
+	// changeSeq numbers mutations; changedAt and tombstones record the
+	// sequence of each item's last change so delta can return only what a
+	// token has not seen.
+	changeSeq  int
+	changedAt  map[string]int
+	tombstones map[string]deletedScenarioItem
+
+	uploads       int
+	folderCreates []string
+	deletes       []string
+	moves         []string
+}
+
+type deletedScenarioItem struct {
+	item graph.Item
+	seq  int
+}
+
+func newMoveScenarioRemote(driveID driveid.ID) *moveScenarioRemote {
+	return &moveScenarioRemote{
+		driveID: driveID,
+		items: map[string]*graph.Item{
+			"root": {ID: "root", IsRoot: true, IsFolder: true, DriveID: driveID},
+		},
+		contents:            map[string]string{},
+		observedFolderETags: map[string]string{},
+		changedAt:           map[string]int{},
+		tombstones:          map[string]deletedScenarioItem{},
+	}
+}
+
+// touch records that delta must report id again.
+func (r *moveScenarioRemote) touch(id string) {
+	r.changeSeq++
+	r.changedAt[id] = r.changeSeq
+}
+
+// bumpAncestorETags models OneDrive changing every ancestor folder's eTag when
+// something beneath it changes.
+func (r *moveScenarioRemote) bumpAncestorETags(parentID string) {
+	for id := parentID; id != "" && id != strRoot; {
+		item, ok := r.items[id]
+		if !ok {
+			return
+		}
+		item.ETag = r.nextETag()
+		r.touch(id)
+		id = item.ParentID
+	}
+}
+
+func (r *moveScenarioRemote) nextETag() string {
+	r.etagSeq++
+	return fmt.Sprintf("etag-%d", r.etagSeq)
+}
+
+func (r *moveScenarioRemote) nextID(prefix string) string {
+	r.idSeq++
+	return fmt.Sprintf("%s-%d", prefix, r.idSeq)
+}
+
+// childNamed finds parentID's child whose name matches name the way OneDrive
+// compares names: case-insensitively.
+func (r *moveScenarioRemote) childNamed(parentID, name string) (*graph.Item, bool) {
+	for _, item := range r.items {
+		if item.ParentID == parentID && strings.EqualFold(item.Name, name) {
+			return item, true
+		}
+	}
+
+	return nil, false
+}
+
+func (r *moveScenarioRemote) addFolder(id, parentID, name string) {
+	etag := r.nextETag()
+	r.items[id] = &graph.Item{ID: id, Name: name, ParentID: parentID, IsFolder: true, DriveID: r.driveID, ETag: etag}
+	r.observedFolderETags[id] = etag
+	r.touch(id)
+	r.bumpAncestorETags(parentID)
+}
+
+func (r *moveScenarioRemote) addFile(t *testing.T, id, parentID, name, content string) {
+	t.Helper()
+	r.items[id] = &graph.Item{ID: id, Name: name, ParentID: parentID, DriveID: r.driveID}
+	r.setContent(t, id, content)
+}
+
+// setContent replaces a file's bytes in place, as an overwrite on OneDrive
+// does: the item keeps its ID and gets a new hash, size and eTag.
+func (r *moveScenarioRemote) setContent(t *testing.T, id, content string) {
+	t.Helper()
+	item := r.items[id]
+	item.Size = int64(len(content))
+	item.QuickXorHash = hashContentQuickXor(t, content)
+	item.ETag = r.nextETag()
+	item.ModifiedAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).Add(time.Duration(r.etagSeq) * time.Second)
+	r.contents[id] = content
+	r.touch(id)
+	r.bumpAncestorETags(item.ParentID)
+}
+
+func (r *moveScenarioRemote) move(id, parentID, name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.moveLocked(id, parentID, name)
+}
+
+func (r *moveScenarioRemote) moveLocked(id, parentID, name string) {
+	item := r.items[id]
+	r.bumpAncestorETags(item.ParentID)
+	item.ParentID = parentID
+	item.Name = name
+	item.ETag = r.nextETag()
+	if item.IsFolder {
+		r.observedFolderETags[id] = item.ETag
+	}
+	r.touch(id)
+	r.bumpAncestorETags(parentID)
+}
+
+// deleteRemotely deletes id on "OneDrive" as another client would.
+func (r *moveScenarioRemote) deleteRemotely(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.remove(id)
+}
+
+// remove deletes id and, for a folder, its whole subtree, as OneDrive does.
+// Only id itself gets a tombstone: delta reports a deleted folder alone.
+func (r *moveScenarioRemote) remove(id string) {
+	item, ok := r.items[id]
+	if !ok {
+		return
+	}
+	r.bumpAncestorETags(item.ParentID)
+	for _, childID := range r.childIDs(id) {
+		r.removeUnreported(childID)
+	}
+	delete(r.items, id)
+	delete(r.changedAt, id)
+	r.changeSeq++
+	tombstone := *item
+	tombstone.IsDeleted = true
+	r.tombstones[id] = deletedScenarioItem{item: tombstone, seq: r.changeSeq}
+}
+
+func (r *moveScenarioRemote) removeUnreported(id string) {
+	for _, childID := range r.childIDs(id) {
+		r.removeUnreported(childID)
+	}
+	delete(r.items, id)
+	delete(r.changedAt, id)
+}
+
+func (r *moveScenarioRemote) childIDs(parentID string) []string {
+	var ids []string
+	for id, item := range r.items {
+		if item.ParentID == parentID {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+
+	return ids
+}
+
+// pathOf is id's root-relative path, "" for the root.
+func (r *moveScenarioRemote) pathOf(id string) string {
+	var parts []string
+	for current := id; current != "" && current != strRoot; {
+		item, ok := r.items[current]
+		if !ok {
+			return ""
+		}
+		parts = append([]string{item.Name}, parts...)
+		current = item.ParentID
+	}
+
+	return strings.Join(parts, "/")
+}
+
+// itemAt resolves a root-relative path case-insensitively, as OneDrive does.
+func (r *moveScenarioRemote) itemAt(remotePath string) (*graph.Item, bool) {
+	current := r.items[strRoot]
+	if remotePath == "" {
+		return current, true
+	}
+	for _, name := range strings.Split(remotePath, "/") {
+		child, ok := r.childNamed(current.ID, name)
+		if !ok {
+			return nil, false
+		}
+		current = child
+	}
+
+	return current, true
+}
+
+// tree is the drive as path -> content for files and path -> "/" for folders.
+func (r *moveScenarioRemote) tree() map[string]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]string, len(r.items))
+	for id, item := range r.items {
+		if id == strRoot {
+			continue
+		}
+		if item.IsFolder {
+			out[r.pathOf(id)] = "/"
+			continue
+		}
+		out[r.pathOf(id)] = r.contents[id]
+	}
+
+	return out
+}
+
+// Remote-side edits by path, as another device would make them.
+
+func (r *moveScenarioRemote) putFileAt(t *testing.T, remotePath, content string) {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	parent, ok := r.itemAt(remoteParentPath(remotePath))
+	if !ok || !parent.IsFolder {
+		t.Fatalf("remote parent of %s missing", remotePath)
+	}
+	name := path.Base(remotePath)
+	if existing, ok := r.childNamed(parent.ID, name); ok {
+		if existing.IsFolder {
+			t.Fatalf("remote %s is a folder", remotePath)
+		}
+		r.setContent(t, existing.ID, content)
+		return
+	}
+	r.addFile(t, r.nextID("remote-file"), parent.ID, name, content)
+}
+
+func (r *moveScenarioRemote) mkdirAt(t *testing.T, remotePath string) {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	parent, ok := r.itemAt(remoteParentPath(remotePath))
+	if !ok || !parent.IsFolder {
+		t.Fatalf("remote parent of %s missing", remotePath)
+	}
+	if _, exists := r.childNamed(parent.ID, path.Base(remotePath)); exists {
+		return
+	}
+	r.addFolder(r.nextID("remote-folder"), parent.ID, path.Base(remotePath))
+}
+
+func (r *moveScenarioRemote) deleteAt(t *testing.T, remotePath string) {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, ok := r.itemAt(remotePath)
+	if !ok {
+		t.Fatalf("remote %s missing", remotePath)
+	}
+	r.remove(item.ID)
+}
+
+func (r *moveScenarioRemote) moveAt(t *testing.T, fromPath, toPath string) {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, ok := r.itemAt(fromPath)
+	if !ok {
+		t.Fatalf("remote %s missing", fromPath)
+	}
+	parent, ok := r.itemAt(remoteParentPath(toPath))
+	if !ok || !parent.IsFolder {
+		t.Fatalf("remote parent of %s missing", toPath)
+	}
+	r.moveLocked(item.ID, parent.ID, path.Base(toPath))
+}
+
+func (r *moveScenarioRemote) snapshot() []graph.Item {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := []graph.Item{*r.items["root"]}
+	for _, id := range r.sortedIDs() {
+		if id == "root" {
+			continue
+		}
+		out = append(out, r.reported(id))
+	}
+	return out
+}
+
+func (r *moveScenarioRemote) sortedIDs() []string {
+	ids := make([]string, 0, len(r.items))
+	for id := range r.items {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	return ids
+}
+
+func (r *moveScenarioRemote) reported(id string) graph.Item {
+	reported := *r.items[id]
+	if observed, ok := r.observedFolderETags[id]; ok {
+		reported.ETag = observed
+	}
+
+	return reported
+}
+
+// delta returns the page for token: the whole tree for "", otherwise the
+// items changed and deleted since that token's sequence.
+func (r *moveScenarioRemote) delta(token string) *graph.DeltaPage {
+	r.mu.Lock()
+	since, incremental := parseScenarioDeltaToken(token)
+	next := fmt.Sprintf("seq-%d", r.changeSeq)
+	r.mu.Unlock()
+	if !incremental {
+		return deltaPageWithItems(r.snapshot(), next)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var items []graph.Item
+	for _, id := range r.sortedIDs() {
+		if seq, ok := r.changedAt[id]; ok && seq > since {
+			items = append(items, r.reported(id))
+		}
+	}
+	for id := range r.tombstones {
+		if r.tombstones[id].seq > since {
+			items = append(items, r.tombstones[id].item)
+		}
+	}
+
+	return deltaPageWithItems(items, next)
+}
+
+func parseScenarioDeltaToken(token string) (int, bool) {
+	var seq int
+	if _, err := fmt.Sscanf(token, "seq-%d", &seq); err != nil {
+		return 0, false
+	}
+
+	return seq, true
+}
+
+func (r *moveScenarioRemote) client(t *testing.T) *engineMockClient {
+	t.Helper()
+
+	return &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, token string) (*graph.DeltaPage, error) {
+			return r.delta(token), nil
+		},
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			return r.getItem(itemID)
+		},
+		getItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
+			return r.getItemByPath(remotePath)
+		},
+		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
+			return r.download(itemID, w)
+		},
+		moveItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, newParentID, newName, _ string) (*graph.Item, error) {
+			return r.moveItem(itemID, newParentID, newName)
+		},
+		createFolderFn: func(_ context.Context, _ driveid.ID, parentID, name string) (*graph.Item, error) {
+			return r.createFolder(parentID, name)
+		},
+		deleteItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, _ string) error {
+			return r.deleteItem(itemID)
+		},
+		uploadFn: func(
+			_ context.Context, _ driveid.ID, parentID, name string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc,
+		) (*graph.Item, error) {
+			return r.upload(t, parentID, name, content, size)
+		},
+		uploadToItemFn: func(
+			_ context.Context, _ driveid.ID, itemID string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc,
+		) (*graph.Item, error) {
+			return r.uploadToItem(t, itemID, content, size)
+		},
+	}
+}
+
+func (r *moveScenarioRemote) getItem(itemID string) (*graph.Item, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, ok := r.items[itemID]
+	if !ok {
+		return nil, graph.ErrNotFound
+	}
+	copied := *item
+	return &copied, nil
+}
+
+func (r *moveScenarioRemote) getItemByPath(remotePath string) (*graph.Item, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, ok := r.itemAt(strings.Trim(remotePath, "/"))
+	if !ok {
+		return nil, graph.ErrNotFound
+	}
+	copied := *item
+	return &copied, nil
+}
+
+func (r *moveScenarioRemote) download(itemID string, w io.Writer) (int64, error) {
+	r.mu.Lock()
+	content, ok := r.contents[itemID]
+	r.mu.Unlock()
+	if !ok {
+		return 0, graph.ErrNotFound
+	}
+	n, err := w.Write([]byte(content))
+	if err != nil {
+		return int64(n), fmt.Errorf("write scenario download: %w", err)
+	}
+	return int64(n), nil
+}
+
+func scenarioNameConflict() error {
+	return &graph.GraphError{StatusCode: 409, Message: "Name already exists", Err: graph.ErrConflict}
+}
+
+func (r *moveScenarioRemote) moveItem(itemID, newParentID, newName string) (*graph.Item, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, ok := r.items[itemID]
+	if !ok {
+		return nil, graph.ErrNotFound
+	}
+	if newParentID == "" {
+		newParentID = item.ParentID
+	}
+	if newName == "" {
+		newName = item.Name
+	}
+	if taken, exists := r.childNamed(newParentID, newName); exists && taken.ID != itemID {
+		return nil, scenarioNameConflict()
+	}
+	r.moveLocked(itemID, newParentID, newName)
+	r.moves = append(r.moves, itemID+"->"+newName)
+	copied := *r.items[itemID]
+	return &copied, nil
+}
+
+func (r *moveScenarioRemote) createFolder(parentID, name string) (*graph.Item, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.childNamed(parentID, name); exists {
+		return nil, scenarioNameConflict()
+	}
+	id := r.nextID("created-folder")
+	r.addFolder(id, parentID, name)
+	r.folderCreates = append(r.folderCreates, name)
+	copied := *r.items[id]
+	return &copied, nil
+}
+
+func (r *moveScenarioRemote) deleteItem(itemID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.items[itemID]; !ok {
+		return graph.ErrNotFound
+	}
+	r.remove(itemID)
+	r.deletes = append(r.deletes, itemID)
+	return nil
+}
+
+// upload follows conflictBehavior=replace: an existing file of that name
+// keeps its item; a folder of that name refuses the bytes with Graph's 501.
+func (r *moveScenarioRemote) upload(t *testing.T, parentID, name string, content io.ReaderAt, size int64) (*graph.Item, error) {
+	t.Helper()
+	data, err := readScenarioUpload(content, size)
+	if err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.uploads++
+	if existing, exists := r.childNamed(parentID, name); exists {
+		if existing.IsFolder {
+			return nil, &graph.GraphError{
+				StatusCode: 501, Message: "Cannot upload content to an item representing a folder.", Err: graph.ErrServerError,
+			}
+		}
+		r.setContent(t, existing.ID, data)
+		copied := *r.items[existing.ID]
+		return &copied, nil
+	}
+	id := r.nextID("uploaded")
+	r.addFile(t, id, parentID, name, data)
+	copied := *r.items[id]
+	return &copied, nil
+}
+
+func (r *moveScenarioRemote) uploadToItem(t *testing.T, itemID string, content io.ReaderAt, size int64) (*graph.Item, error) {
+	t.Helper()
+	data, err := readScenarioUpload(content, size)
+	if err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.items[itemID]; !ok {
+		return nil, graph.ErrNotFound
+	}
+	r.uploads++
+	r.setContent(t, itemID, data)
+	copied := *r.items[itemID]
+	return &copied, nil
+}
+
+func readScenarioUpload(content io.ReaderAt, size int64) (string, error) {
+	data := make([]byte, size)
+	if _, err := content.ReadAt(data, 0); err != nil && err != io.EOF {
+		return "", fmt.Errorf("read upload content: %w", err)
+	}
+
+	return string(data), nil
+}
