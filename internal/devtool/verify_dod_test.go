@@ -1,10 +1,12 @@
 package devtool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -240,6 +242,61 @@ func TestDODReviewThreadMutationCommands(t *testing.T) {
 		"-F",
 		"threadId=thread-1",
 	}, args)
+}
+
+// Regression: a manifest left in the root checkout still said a May thread
+// was open, so every later pre-merge run replied "Addressed in #<PR>" to that
+// long-resolved thread again, crediting whichever PR was merging. Replies now
+// go only to threads GitHub still shows open, and each answered thread is
+// marked resolved in the manifest.
+//
+// Validates: R-6.10.16
+func TestReplyToManifestThreads_SkipsThreadsAlreadyResolvedOnGitHub(t *testing.T) {
+	t.Parallel()
+
+	const stateQuery = "query=query($threadId:ID!){node(id:$threadId){... on PullRequestReviewThread{isResolved}}}"
+	liveResolved := map[string]bool{"thread-stale": true, "thread-open": false}
+	var mutations []string
+	runner := &fakeRunner{
+		outputFunc: func(_ string, _ []string, _ string, args ...string) ([]byte, error) {
+			threadID := strings.TrimPrefix(args[len(args)-1], "threadId=")
+			switch {
+			case slices.Contains(args, stateQuery):
+				return fmt.Appendf(nil, `{"data":{"node":{"isResolved":%t}}}`, liveResolved[threadID]), nil
+			case strings.Contains(strings.Join(args, " "), "addPullRequestReviewThreadReply"):
+				mutations = append(mutations, "reply:"+strings.TrimPrefix(args[len(args)-3], "threadId="))
+				return []byte(`{"data":{"addPullRequestReviewThreadReply":{"comment":{"url":"u"}}}}`), nil
+			default:
+				mutations = append(mutations, "resolve:"+threadID)
+				return []byte(`{}`), nil
+			}
+		},
+	}
+	threads := []DODReviewThread{
+		{ThreadID: "thread-stale", Classification: DODCommentFixed, WhatChanged: "w", HowFixed: "h"},
+		{ThreadID: "thread-open", Classification: DODCommentFixed, WhatChanged: "w", HowFixed: "h"},
+		{ThreadID: "thread-known", IsResolved: true},
+	}
+
+	var stdout bytes.Buffer
+	summary, changed, err := replyToManifestThreads(t.Context(), runner, "/repo", threads, 790, "abc123", &stdout)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"reply:thread-open", "resolve:thread-open"}, mutations,
+		"only the thread still open on GitHub is answered")
+	assert.Equal(t, 1, summary.CommentedAndResolved)
+	assert.Equal(t, 2, summary.AlreadyResolved)
+	assert.True(t, changed)
+	for i := range threads {
+		assert.True(t, threads[i].IsResolved, "%s is recorded as resolved", threads[i].ThreadID)
+	}
+
+	// A second run with the updated manifest touches nothing.
+	mutations = nil
+	_, changed, err = replyToManifestThreads(t.Context(), runner, "/repo", threads, 791, "def456", &stdout)
+	require.NoError(t, err)
+	assert.Empty(t, mutations)
+	assert.False(t, changed)
 }
 
 // Validates: R-6.10.16
