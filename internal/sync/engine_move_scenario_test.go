@@ -18,8 +18,12 @@ import (
 )
 
 // moveScenarioRemote is a tiny in-memory OneDrive for multi-pass engine
-// scenarios: every delta call returns the whole current tree, and mutations
-// change that tree, so each RunOnce sees what the previous one did.
+// scenarios. Delta follows Graph's contract: an empty token enumerates the
+// whole tree, and a saved token returns only the items changed since it,
+// plus tombstones for deleted ones. Like Graph, a folder move or delete
+// reports the folder (and ancestors whose eTag changed), never its unchanged
+// descendants. A fake that returned the whole tree on every call hid two
+// bugs where the engine left those descendants at stale remote paths.
 type moveScenarioRemote struct {
 	mu       stdsync.Mutex
 	driveID  driveid.ID
@@ -32,10 +36,22 @@ type moveScenarioRemote struct {
 	// GetItem returns the churned eTag; delta returns this one.
 	observedFolderETags map[string]string
 
+	// changeSeq numbers mutations; changedAt and tombstones record the
+	// sequence of each item's last change so delta can return only what a
+	// token has not seen.
+	changeSeq  int
+	changedAt  map[string]int
+	tombstones map[string]deletedScenarioItem
+
 	uploads       int
 	folderCreates []string
 	deletes       []string
 	moves         []string
+}
+
+type deletedScenarioItem struct {
+	item graph.Item
+	seq  int
 }
 
 func newMoveScenarioRemote(driveID driveid.ID) *moveScenarioRemote {
@@ -46,7 +62,15 @@ func newMoveScenarioRemote(driveID driveid.ID) *moveScenarioRemote {
 		},
 		contents:            map[string]string{},
 		observedFolderETags: map[string]string{},
+		changedAt:           map[string]int{},
+		tombstones:          map[string]deletedScenarioItem{},
 	}
+}
+
+// touch records that delta must report id again.
+func (r *moveScenarioRemote) touch(id string) {
+	r.changeSeq++
+	r.changedAt[id] = r.changeSeq
 }
 
 // bumpAncestorETags models OneDrive changing every ancestor folder's eTag when
@@ -58,6 +82,7 @@ func (r *moveScenarioRemote) bumpAncestorETags(parentID string) {
 			return
 		}
 		item.ETag = r.nextETag()
+		r.touch(id)
 		id = item.ParentID
 	}
 }
@@ -71,6 +96,7 @@ func (r *moveScenarioRemote) addFolder(id, parentID, name string) {
 	etag := r.nextETag()
 	r.items[id] = &graph.Item{ID: id, Name: name, ParentID: parentID, IsFolder: true, DriveID: r.driveID, ETag: etag}
 	r.observedFolderETags[id] = etag
+	r.touch(id)
 	r.bumpAncestorETags(parentID)
 }
 
@@ -82,6 +108,7 @@ func (r *moveScenarioRemote) addFile(t *testing.T, id, parentID, name, content s
 		ModifiedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 	}
 	r.contents[id] = content
+	r.touch(id)
 	r.bumpAncestorETags(parentID)
 }
 
@@ -96,7 +123,95 @@ func (r *moveScenarioRemote) move(id, parentID, name string) {
 	if item.IsFolder {
 		r.observedFolderETags[id] = item.ETag
 	}
+	r.touch(id)
 	r.bumpAncestorETags(parentID)
+}
+
+// deleteRemotely deletes id on "OneDrive" as another client would.
+func (r *moveScenarioRemote) deleteRemotely(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.remove(id)
+}
+
+// remove deletes id and, for a folder, its whole subtree, as OneDrive does.
+// Only id itself gets a tombstone: delta reports a deleted folder alone.
+func (r *moveScenarioRemote) remove(id string) {
+	item, ok := r.items[id]
+	if !ok {
+		return
+	}
+	r.bumpAncestorETags(item.ParentID)
+	for _, childID := range r.childIDs(id) {
+		r.removeUnreported(childID)
+	}
+	delete(r.items, id)
+	delete(r.changedAt, id)
+	r.changeSeq++
+	tombstone := *item
+	tombstone.IsDeleted = true
+	r.tombstones[id] = deletedScenarioItem{item: tombstone, seq: r.changeSeq}
+}
+
+func (r *moveScenarioRemote) removeUnreported(id string) {
+	for _, childID := range r.childIDs(id) {
+		r.removeUnreported(childID)
+	}
+	delete(r.items, id)
+	delete(r.changedAt, id)
+}
+
+func (r *moveScenarioRemote) childIDs(parentID string) []string {
+	var ids []string
+	for id, item := range r.items {
+		if item.ParentID == parentID {
+			ids = append(ids, id)
+		}
+	}
+
+	return ids
+}
+
+// delta returns the page for token: the whole tree for "", otherwise the
+// items changed and deleted since that token's sequence.
+func (r *moveScenarioRemote) delta(token string) *graph.DeltaPage {
+	r.mu.Lock()
+	since, incremental := parseScenarioDeltaToken(token)
+	next := fmt.Sprintf("seq-%d", r.changeSeq)
+	r.mu.Unlock()
+	if !incremental {
+		return deltaPageWithItems(r.snapshot(), next)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var items []graph.Item
+	for id, seq := range r.changedAt {
+		if seq <= since {
+			continue
+		}
+		reported := *r.items[id]
+		if observed, ok := r.observedFolderETags[id]; ok {
+			reported.ETag = observed
+		}
+		items = append(items, reported)
+	}
+	for _, deleted := range r.tombstones {
+		if deleted.seq > since {
+			items = append(items, deleted.item)
+		}
+	}
+
+	return deltaPageWithItems(items, next)
+}
+
+func parseScenarioDeltaToken(token string) (int, bool) {
+	var seq int
+	if _, err := fmt.Sscanf(token, "seq-%d", &seq); err != nil {
+		return 0, false
+	}
+
+	return seq, true
 }
 
 func (r *moveScenarioRemote) snapshot() []graph.Item {
@@ -120,8 +235,8 @@ func (r *moveScenarioRemote) client(t *testing.T) *engineMockClient {
 	t.Helper()
 
 	return &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems(r.snapshot(), "token"), nil
+		deltaFn: func(_ context.Context, _ driveid.ID, token string) (*graph.DeltaPage, error) {
+			return r.delta(token), nil
 		},
 		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
 			r.mu.Lock()
@@ -160,10 +275,7 @@ func (r *moveScenarioRemote) client(t *testing.T) *engineMockClient {
 		deleteItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, _ string) error {
 			r.mu.Lock()
 			defer r.mu.Unlock()
-			if item, ok := r.items[itemID]; ok {
-				r.bumpAncestorETags(item.ParentID)
-			}
-			delete(r.items, itemID)
+			r.remove(itemID)
 			r.deletes = append(r.deletes, itemID)
 			return nil
 		},
@@ -434,5 +546,59 @@ func TestRunOnce_TimestampOnlyLocalChangeRefreshesBaselineWithoutTransfer(t *tes
 	require.True(t, ok)
 	assert.Equal(t, old.UnixNano(), entry.LocalMtime,
 		"the baseline must learn the new mtime, or every scan re-hashes the file")
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.3
+func TestRunOnce_RemoteFolderRenameMovesExistingChildrenOnce(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFolder("item-links", "root", "links")
+	remote.addFolder("item-sub", "item-links", "sub")
+	remote.addFile(t, "item-a", "item-links", "a.txt", "a\n")
+	remote.addFile(t, "item-b", "item-sub", "b.txt", "b\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+	require.FileExists(t, filepath.Join(syncRoot, "links", "sub", "b.txt"))
+
+	// Renamed on OneDrive: the next delta reports only the folder.
+	remote.move("item-links", "root", "links-renamed")
+	runScenarioPass(t, eng)
+
+	assert.NoDirExists(t, filepath.Join(syncRoot, "links"), "the old folder must not come back")
+	assert.FileExists(t, filepath.Join(syncRoot, "links-renamed", "a.txt"))
+	assert.FileExists(t, filepath.Join(syncRoot, "links-renamed", "sub", "b.txt"))
+	assert.Empty(t, remote.folderCreates, "nothing is re-created on OneDrive")
+	assert.Empty(t, remote.moves, "the engine moves nothing back")
+	assert.Zero(t, remote.uploads)
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.2
+func TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFolder("item-probe", "root", "probe")
+	remote.addFolder("item-len", "item-probe", "len")
+	remote.addFile(t, "item-f", "item-len", "f.txt", "f\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+	require.FileExists(t, filepath.Join(syncRoot, "probe", "len", "f.txt"))
+
+	// Deleted on OneDrive: the next delta reports only the folder's tombstone.
+	remote.deleteRemotely("item-probe")
+	runScenarioPass(t, eng)
+
+	assert.NoDirExists(t, filepath.Join(syncRoot, "probe"))
+	var leftover int
+	require.NoError(t, eng.baseline.rawDB().QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM remote_state WHERE path LIKE 'probe%'`).Scan(&leftover))
+	assert.Zero(t, leftover, "no remote_state rows survive under a deleted folder")
 	requireScenarioQuietPlan(t, eng)
 }
