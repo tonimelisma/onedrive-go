@@ -1558,6 +1558,46 @@ func TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes(t 
 		"the folder delete runs only after everything under it")
 }
 
+// The folder delete that a local rm -rf now propagates must never take a file
+// added on OneDrive after the last sync with it: that file is downloaded and
+// the folder is re-created locally instead.
+//
+// Validates: R-2.17.2
+func TestPlannerPlanCurrentState_LocalFolderDeleteKeepsFolderForNewRemoteChild(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (
+			item_id, path, item_type, local_hash, remote_hash,
+			local_size, remote_size, local_mtime, remote_mtime
+		)
+		VALUES
+			('item-many', 'many', 'folder', '', '', NULL, NULL, NULL, NULL),
+			('item-f000', 'many/f000.txt', 'file', 'h0', 'h0', 1, 1, 1, 1)`)
+	require.NoError(t, err)
+
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES
+			('item-many', 'many', 'folder', '', NULL, NULL),
+			('item-f000', 'many/f000.txt', 'file', 'h0', 1, 1),
+			('item-new', 'many/added-remotely.txt', 'file', 'hn', 1, 2)`)
+	require.NoError(t, err)
+
+	plan := planCurrentStateForStore(t, store)
+	index := planActionIndex(t, plan)
+
+	assert.Contains(t, index, "remote_delete:many/f000.txt", "the file the user deleted is still deleted")
+	assert.Contains(t, index, "download:many/added-remotely.txt", "the new remote file is kept")
+	assert.NotContains(t, index, "remote_delete:many", "the folder holding the new file is not deleted")
+	folderIdx, ok := index["folder_create:many"]
+	require.True(t, ok, "the folder is re-created locally for the new file")
+	assert.Equal(t, createLocal, plan.Actions[folderIdx].CreateSide)
+}
+
 func planActionIndex(t *testing.T, plan *actionPlan) map[string]int {
 	t.Helper()
 
