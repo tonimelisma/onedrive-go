@@ -605,7 +605,7 @@ func descriptorFilesystemCases() []descriptorCase {
 			name:       "path too long",
 			key:        syncengine.ConditionPathTooLong,
 			wantTitle:  "Path too long",
-			wantReason: "The full path exceeds OneDrive's 400-character limit.",
+			wantReason: "The full path is longer than OneDrive allows: 400 characters, and in practice a few dozen fewer.",
 			wantAction: "Shorten the path by renaming files or folders.",
 		},
 		{

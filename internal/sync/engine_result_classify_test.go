@@ -14,9 +14,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-// Validates: R-2.10.4, R-2.10.7, R-2.10.8
+// Validates: R-2.10.4, R-2.10.7, R-2.10.8, R-2.11.7
 func TestIssueTypeForHTTPResult_RepresentativeMappings(t *testing.T) {
 	t.Parallel()
 
@@ -29,6 +30,17 @@ func TestIssueTypeForHTTPResult_RepresentativeMappings(t *testing.T) {
 	}{
 		{name: "nil", result: nil, want: "", ok: false},
 		{name: "unauthorized", result: &actionCompletion{HTTPStatus: http.StatusUnauthorized}, want: IssueUnauthorized, ok: true},
+		{
+			name: "path too long for OneDrive",
+			result: &actionCompletion{HTTPStatus: http.StatusBadRequest, Err: &graph.GraphError{
+				StatusCode: http.StatusBadRequest,
+				Message:    "The specified file or folder name is too long. The URL path for all files and folders must be 400 characters or less.",
+				Err:        graph.ErrBadRequest,
+			}},
+			want: issuePathTooLong,
+			ok:   true,
+		},
+		{name: "other bad request", result: &actionCompletion{HTTPStatus: http.StatusBadRequest, Err: graph.ErrBadRequest}, want: "", ok: false},
 		{name: "rate limited", result: &actionCompletion{HTTPStatus: http.StatusTooManyRequests}, want: issueRateLimited, ok: true},
 		{name: "quota exceeded", result: &actionCompletion{HTTPStatus: http.StatusInsufficientStorage}, want: IssueQuotaExceeded, ok: true},
 		{

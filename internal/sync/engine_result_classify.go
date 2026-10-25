@@ -5,10 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strings"
 	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 const (
@@ -202,6 +204,8 @@ func issueTypeForHTTPResult(r *actionCompletion) (string, bool) {
 	}
 
 	switch httpStatus := r.HTTPStatus; {
+	case httpStatus == http.StatusBadRequest && isGraphPathTooLong(r.Err):
+		return issuePathTooLong, true
 	case httpStatus == http.StatusUnauthorized:
 		return IssueUnauthorized, true
 	case httpStatus == http.StatusTooManyRequests:
@@ -223,6 +227,23 @@ func issueTypeForHTTPResult(r *actionCompletion) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// isGraphPathTooLong recognizes OneDrive refusing a create because the
+// resulting path is too long: "The specified file or folder name is too long.
+// The URL path for all files and folders must be 400 characters or less." It
+// counts more than the drive-relative path (on a Personal drive a 364-character
+// path was accepted and 365 refused), so the scanner's 400-character check
+// cannot catch every case, and the bare 400 used to retry forever as
+// "graph: bad request".
+func isGraphPathTooLong(err error) bool {
+	var graphErr *graph.GraphError
+	if !errors.As(err, &graphErr) {
+		return false
+	}
+
+	message := strings.ToLower(graphErr.Message)
+	return strings.Contains(message, "name is too long") || strings.Contains(message, "400 characters or less")
 }
 
 func issueTypeForForbiddenResult(r *actionCompletion) string {

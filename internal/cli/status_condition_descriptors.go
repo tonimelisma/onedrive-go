@@ -238,7 +238,7 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 	case syncengine.ConditionPathTooLong:
 		return newStatusConditionDescriptor(
 			"Path too long",
-			"The full path exceeds OneDrive's 400-character limit.",
+			"The full path is longer than OneDrive allows: 400 characters, and in practice a few dozen fewer.",
 			"Shorten the path by renaming files or folders.",
 		)
 	case syncengine.ConditionFileTooLarge:
