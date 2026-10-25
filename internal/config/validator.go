@@ -13,7 +13,7 @@ func collectValidationErrors(cfg *Config) []error {
 // It accumulates every error rather than stopping at the first, so users
 // see a complete report and can fix all issues in one pass.
 func Validate(cfg *Config) error {
-	return newConfigValidator().validate(cfg)
+	return markInvalidConfig(newConfigValidator().validate(cfg))
 }
 
 // configValidator centralizes whole-config validation so strict loading,

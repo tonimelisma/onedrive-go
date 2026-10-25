@@ -16,7 +16,8 @@ import (
 // It returns the fully resolved drive configuration and the raw parsed config
 // (needed by driveops.SessionRuntime for shared drive token resolution).
 func ResolveDrive(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) (*ResolvedDrive, *Config, error) {
-	return newDriveResolver(logger).resolveDrive(env, cli)
+	resolved, cfg, err := newDriveResolver(logger).resolveDrive(env, cli)
+	return resolved, cfg, markInvalidConfig(err)
 }
 
 // ResolveDrives resolves multiple drives from the config, applying global
@@ -25,7 +26,8 @@ func ResolveDrive(env EnvOverrides, cli CLIOverrides, logger *slog.Logger) (*Res
 // is false, paused drives are excluded. Results are sorted by canonical ID
 // for deterministic ordering.
 func ResolveDrives(cfg *Config, selectors []string, includePaused bool, logger *slog.Logger) ([]*ResolvedDrive, error) {
-	return newDriveResolver(logger).resolveDrives(cfg, selectors, includePaused)
+	resolved, err := newDriveResolver(logger).resolveDrives(cfg, selectors, includePaused)
+	return resolved, markInvalidConfig(err)
 }
 
 // ResolveConfigPath determines the config file path using the three-layer

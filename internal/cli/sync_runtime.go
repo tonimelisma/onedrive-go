@@ -11,6 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sdnotify"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -137,6 +138,7 @@ func runSyncDaemon(
 	statusWriter io.Writer,
 	controlSocketPath string,
 	console *syncConsole,
+	notifier *sdnotify.Notifier,
 ) error {
 	return runSyncDaemonWithFactory(
 		ctx,
@@ -148,6 +150,7 @@ func runSyncDaemon(
 		statusWriter,
 		controlSocketPath,
 		console,
+		notifier,
 		defaultSyncDaemonOrchestratorFactory,
 	)
 }
@@ -162,11 +165,20 @@ func runSyncDaemonWithFactory(
 	statusWriter io.Writer,
 	controlSocketPath string,
 	console *syncConsole,
+	notifier *sdnotify.Notifier,
 	orchestratorFactory syncDaemonOrchestratorFactory,
 ) (err error) {
 	if orchestratorFactory == nil {
 		orchestratorFactory = defaultSyncDaemonOrchestratorFactory
 	}
+
+	// Under a Type=notify unit (R-6.6.32): readiness, reload and stop
+	// transitions come from the watch loop; a failed run leaves its reason
+	// as the final STATUS=.
+	serviceNotifier := newSyncNotifier(notifier, logger, console)
+	defer func() { serviceNotifier.failed(err) }()
+	stopWatchdog := startSyncWatchdog(ctx, serviceNotifier)
+	defer stopWatchdog()
 	// Include paused drives — Orchestrator handles pause/resume internally.
 	drives, err := config.ResolveDrives(holder.Config(), selectors, true, logger)
 	if err != nil {
@@ -174,7 +186,7 @@ func runSyncDaemonWithFactory(
 	}
 
 	if len(drives) == 0 {
-		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
+		return errNoDrivesConfigured()
 	}
 	standaloneSelection := standaloneMountSelectionFromResolvedDrives(drives)
 
@@ -213,6 +225,7 @@ func runSyncDaemonWithFactory(
 		},
 		DebugEventHook: debugEventHook,
 		ActivityHook:   console.ActivityHook(),
+		WatchLifecycle: serviceNotifier.lifecycle,
 		PerfParent:     perf.FromContext(ctx),
 	})
 

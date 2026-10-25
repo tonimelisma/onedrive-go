@@ -1,0 +1,37 @@
+# Example systemd user unit for continuous sync.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp contrib/systemd/onedrive-go.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now onedrive-go
+#   loginctl enable-linger "$USER"   # keep syncing while logged out
+#
+# Sign in first (`onedrive-go login`, then `onedrive-go drive add`): the
+# service cannot open a browser. Watch it with
+#   systemctl --user status onedrive-go
+#   journalctl --user -u onedrive-go -p warning
+
+[Unit]
+Description=onedrive-go OneDrive sync
+Documentation=https://github.com/tonimelisma/onedrive-go
+# No network-online.target: user managers cannot order against it, and sync
+# waits out an offline network on its own.
+
+[Service]
+# READY=1 is sent once every drive that could start is watching; STATUS=
+# shows what is being watched and which drives need sign-in.
+Type=notify
+ExecStart=%h/.local/bin/onedrive-go sync --watch
+# Startup checks each drive with OneDrive before it reports ready.
+TimeoutStartSec=5min
+Restart=on-failure
+RestartSec=30s
+# 77: sign-in required, 78: invalid config. Restarting cannot fix either;
+# run `onedrive-go login` or fix config.toml, then `systemctl --user restart`.
+RestartPreventExitStatus=77 78
+# Keepalives go out at half this interval.
+WatchdogSec=2min
+
+[Install]
+WantedBy=default.target

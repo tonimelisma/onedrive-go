@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -84,7 +85,7 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 	}
 
 	if len(drives) == 0 {
-		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
+		return errNoDrivesConfigured()
 	}
 
 	console := newSyncConsole(cc, false)
@@ -120,6 +121,18 @@ func runSyncWatch(
 		return cc.seams.syncWatch(ctx, holder, selectors, mode, opts, logger, statusWriter, controlSocketPath)
 	}
 	console := newSyncConsole(cc, true)
+
+	getenv := os.Getenv
+	if cc != nil && cc.seams.notifyGetenv != nil {
+		getenv = cc.seams.notifyGetenv
+	}
+	notifier := openSyncNotifier(getenv, logger)
+	defer func() {
+		if closeErr := notifier.Close(); closeErr != nil {
+			logger.Debug("close systemd notify socket", slog.String("error", closeErr.Error()))
+		}
+	}()
+
 	if cc != nil && cc.seams.syncDaemonOrchestrator != nil {
 		return runSyncDaemonWithFactory(
 			ctx,
@@ -131,11 +144,12 @@ func runSyncWatch(
 			statusWriter,
 			controlSocketPath,
 			console,
+			notifier,
 			cc.seams.syncDaemonOrchestrator,
 		)
 	}
 
-	return runSyncDaemon(ctx, holder, selectors, mode, opts, logger, statusWriter, controlSocketPath, console)
+	return runSyncDaemon(ctx, holder, selectors, mode, opts, logger, statusWriter, controlSocketPath, console, notifier)
 }
 
 func runSyncOnce(
@@ -234,4 +248,10 @@ func reconcileSyncAccounts(
 	}
 
 	return reconciled
+}
+
+// errNoDrivesConfigured is a configuration problem a restart cannot fix, so it
+// carries config.ErrInvalidConfig for the exit status (R-6.6.31).
+func errNoDrivesConfigured() error {
+	return newPresentedError("no drives configured — run 'onedrive-go drive add' to add a drive", config.ErrInvalidConfig)
 }
