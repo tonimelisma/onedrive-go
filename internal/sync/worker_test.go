@@ -969,3 +969,44 @@ func syncedBaselineFor(t *testing.T, absPath string) *BaselineEntry {
 		LocalMtime:     info.ModTime().UnixNano(),
 	}
 }
+
+// Validates: R-6.8.9
+// Regression: a shutdown landing between transfer completion and the outcome
+// commit used to drop the record because the commit ran on the pool context.
+// The remote create has already happened, so its baseline row must persist.
+func TestWorkerPool_CommitsCompletedOutcomeAfterPoolCancellation(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	poolCtx, cancelPool := context.WithCancel(t.Context())
+	defer cancelPool()
+
+	cfg.items = &workerMockItemClient{
+		createFolderFn: func(_ context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
+			// The transfer succeeds, then shutdown arrives before the worker
+			// commits the outcome.
+			cancelPool()
+			return &graph.Item{ID: "created-" + name, Name: name, ParentID: "root-id"}, nil
+		},
+	}
+
+	pool := newWorkerPool(cfg, nil, mgr, synctest.TestLogger(t), 1)
+	pool.executeAction(poolCtx, &trackedAction{
+		ID: 1,
+		Action: Action{
+			Type:       ActionFolderCreate,
+			Path:       "Projects",
+			DriveID:    driveid.New("0000000000000001"),
+			CreateSide: CreateRemote,
+			View:       &pathView{Path: "Projects"},
+		},
+	})
+
+	require.Error(t, poolCtx.Err(), "pool context must be canceled before the commit")
+
+	bl, err := mgr.Load(t.Context())
+	require.NoError(t, err)
+	entry, ok := bl.GetByPath("Projects")
+	require.True(t, ok, "completed remote create must be committed despite pool cancellation")
+	assert.Equal(t, "created-Projects", entry.ItemID)
+}
