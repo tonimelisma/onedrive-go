@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // Validates: R-2.1.3
@@ -92,6 +94,71 @@ func TestReplaceLocalState_PersistsFilesystemIdentity(t *testing.T) {
 		LocalInode:       404,
 		LocalHasIdentity: true,
 	}, rows[1])
+}
+
+// Validates: R-2.17.1
+func TestReplaceLocalState_BackfillsBaselineIdentityForUnchangedItems(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	// Rows written before baselines recorded identity.
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, local_size, local_mtime) VALUES
+			('item-folder', 'folder', 'folder', NULL, NULL, NULL),
+			('item-same', 'folder/same.txt', 'file', 'hash-a', 12, 34),
+			('item-edited', 'folder/edited.txt', 'file', 'hash-old', 12, 34),
+			('item-unhashed', 'folder/unhashed.txt', 'file', NULL, 12, 34),
+			('item-swapped', 'swapped', 'folder', NULL, NULL, NULL)`)
+	require.NoError(t, err)
+	_, err = store.Load(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+		{Path: "folder", ItemType: ItemTypeFolder, LocalDevice: 1, LocalInode: 10, LocalHasIdentity: true},
+		{
+			Path: "folder/same.txt", ItemType: ItemTypeFile, Hash: "hash-a", Size: 12, Mtime: 34,
+			LocalDevice: 1, LocalInode: 11, LocalHasIdentity: true,
+		},
+		{
+			Path: "folder/edited.txt", ItemType: ItemTypeFile, Hash: "hash-new", Size: 12, Mtime: 34,
+			LocalDevice: 1, LocalInode: 12, LocalHasIdentity: true,
+		},
+		{
+			Path: "folder/unhashed.txt", ItemType: ItemTypeFile, Size: 12, Mtime: 34,
+			LocalDevice: 1, LocalInode: 13, LocalHasIdentity: true,
+		},
+		{
+			Path: "swapped", ItemType: ItemTypeFile, Hash: "hash-s", Size: 1, Mtime: 2,
+			LocalDevice: 1, LocalInode: 14, LocalHasIdentity: true,
+		},
+	}))
+
+	// The cache reflects the backfill without a reload by the caller.
+	cached := store.cachedBaseline()
+	require.NotNil(t, cached)
+	identity := func(path string) (uint64, bool) {
+		entry, ok := cached.ByPath[path]
+		require.True(t, ok, path)
+		return entry.LocalInode, entry.LocalHasIdentity
+	}
+
+	inode, has := identity("folder")
+	assert.True(t, has)
+	assert.Equal(t, uint64(10), inode)
+	inode, has = identity("folder/same.txt")
+	assert.True(t, has)
+	assert.Equal(t, uint64(11), inode)
+	for _, path := range []string{"folder/edited.txt", "folder/unhashed.txt", "swapped"} {
+		_, has = identity(path)
+		assert.False(t, has, "%s must not adopt an identity its content was not proven against", path)
+	}
+
+	fresh, err := loadBaselineWithRunner(ctx, store.rawDB(), driveid.ID{})
+	require.NoError(t, err)
+	assert.True(t, fresh.ByPath["folder"].LocalHasIdentity)
+	assert.Equal(t, uint64(10), fresh.ByPath["folder"].LocalInode)
 }
 
 // Validates: R-2.8.8
