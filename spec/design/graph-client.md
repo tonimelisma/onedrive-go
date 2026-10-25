@@ -320,6 +320,18 @@ terminal cause (`ErrForbidden`, `ErrNotFound`, `*GraphError`, and so on), then
 optionally project the attached retry evidence through `ExtractQuirkEvidence`
 when they intentionally degrade or summarize verifier output.
 
+Each documented quirk has an exported name constant (`graph.Quirk*`, for
+example `QuirkSimpleUploadCreateTransient404`). That name is the stable
+identifier: it is `QuirkRetryError.Quirk`, and it is the `graph.QuirkLogKey`
+(`graph_quirk`) field on the one debug record logged when a budget runs out
+(per-attempt records use `quirk`). Code and tests that must recognize a quirk
+use `errors.As` in process or that log field across a process boundary
+(the live-test fixture classifier reads it from `--debug` stderr), never the
+error text. `QuirkRetryError.Error()` is plain words for the symptom ("OneDrive
+kept reporting the upload's destination folder as missing, even after 7
+tries: ...") and deliberately does not contain the quirk name, so rewording it
+cannot break a classifier.
+
 This package owns the wire-to-domain normalization step for remote failures:
 raw HTTP and Graph payloads become `GraphError` values plus sentinels such as
 `ErrGone` and `ErrUnauthorized`. Retry, persistence, and user-facing decisions
