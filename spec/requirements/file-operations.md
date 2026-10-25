@@ -19,6 +19,7 @@ When the user runs `get <remote> [local]`, the system shall download the specifi
 - R-1.2.3: When download completes, the system shall verify hash and size against API metadata. [verified]
 - R-1.2.4: When `--json` is passed, the system shall output structured JSON with path, size, and hash_verified; for folders, with files array, folders_created, total_size, and errors. [verified]
 - R-1.2.5: When the user runs `get <shared-target> [local]`, where `<shared-target>` is either a raw OneDrive share URL or a `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` selector, the system shall resolve the underlying shared item and download it without requiring `drive add` first. Shared folder targets shall download recursively by item identity. [verified]
+- R-1.2.6: When the local destination of a file `get` ends in a path separator or names an existing directory, the system shall download into that directory under the remote name. When a download fails and keeps a partial file, it shall name that partial file. [verified]
 
 ## R-1.3 Upload (`put`) [verified]
 
@@ -30,6 +31,7 @@ When the user runs `put <local> [remote]`, the system shall upload the specified
 - R-1.3.4: When `--json` is passed, the system shall output structured JSON with path, id, and size; for directories, with files array, folders_created, total_size, and errors. [verified]
 - R-1.3.5: When the user runs `put <local> <shared-target>`, where `<shared-target>` is either a raw OneDrive share URL or a `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` selector, the system shall overwrite that exact shared file by item identity. Shared folder targets shall be rejected with guidance to `drive add` the folder first. [verified]
 - R-1.3.6: When a single-file `put` command reports success, the destination path shall already be readable by an immediate follow-on CLI path lookup. [verified]
+- R-1.3.7: When the remote destination of a file `put` ends in `/` or names an existing folder, the system shall upload into that folder under the local name, never onto the folder itself. [verified]
 
 ## R-1.4 Delete (`rm`) [verified]
 
@@ -47,6 +49,7 @@ When the user runs `mkdir <path>`, the system shall create the folder on OneDriv
 
 - R-1.5.1: When `--json` is passed, the system shall output structured JSON with created path and folder ID. [verified]
 - R-1.5.2: When `mkdir` reports success, the created path shall already be readable by an immediate follow-on CLI path lookup. [verified]
+- R-1.5.3: When the folder already exists, `mkdir` shall succeed and say that it already exists rather than that it was created. [verified]
 
 ## R-1.6 Metadata (`stat`) [verified]
 
@@ -61,6 +64,7 @@ When the user runs `mv <src> <dst>`, the system shall perform a server-side move
 
 - R-1.7.1: When `--json` is passed, the system shall output structured JSON with source, destination, and item ID. [verified]
 - R-1.7.2: When `mv` reports success, the destination path shall already be readable by an immediate follow-on CLI path lookup. [verified]
+- R-1.7.3: `mv` shall refuse to move a folder into itself or its own subtree before sending any request, including the `--force` delete of an existing destination. `mv`, `cp` and `mkdir` shall print remote paths with a leading `/`. [verified]
 
 ## R-1.8 Copy (`cp`) [verified]
 
@@ -74,3 +78,4 @@ When the user runs `cp <src> <dst>`, the system shall perform a server-side asyn
 - R-1.9.2: When the user runs `recycle-bin restore <id>`, the system shall restore the item. [verified]
 - R-1.9.3: When the user runs `recycle-bin empty`, the system shall permanently delete all recycled items. [verified]
 - R-1.9.4: When `--json` is passed, `recycle-bin list` and `recycle-bin restore` shall output structured JSON. [verified]
+- R-1.9.5: The recycle-bin help shall say the commands need a work, school or SharePoint drive, because Microsoft Graph offers no recycle bin API for personal accounts. [verified]

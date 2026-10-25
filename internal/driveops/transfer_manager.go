@@ -358,6 +358,12 @@ func (tm *TransferManager) downloadToVerifiedPartial(
 	)
 }
 
+// DownloadPartialPath is where an interrupted download of targetPath keeps
+// its bytes, so callers can point users at it.
+func DownloadPartialPath(targetPath string) string {
+	return downloadPartialPath(targetPath)
+}
+
 func downloadPartialPath(targetPath string) string {
 	return filepath.Join(
 		filepath.Dir(targetPath),

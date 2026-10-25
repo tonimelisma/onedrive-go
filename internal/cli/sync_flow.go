@@ -88,6 +88,14 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 		return errNoDrivesConfigured()
 	}
 
+	// Refuse before announcing: "Checking (dry run) ~/OneDrive..." followed
+	// by "another onedrive-go sync is already running" read as a run that
+	// started and then broke.
+	if probe, probeErr := probeControlOwner(ctx); probeErr == nil &&
+		(probe.state == controlOwnerStateWatchOwner || probe.state == controlOwnerStateOneShotOwner) {
+		return &multisync.ControlSocketInUseError{Path: controlSocketPath}
+	}
+
 	console := newSyncConsole(cc, false)
 	console.Starting(standaloneMountSelectionFromResolvedDrives(drives).Mounts, opts.Mode, effectiveDryRun)
 

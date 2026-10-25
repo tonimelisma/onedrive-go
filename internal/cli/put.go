@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -88,7 +89,10 @@ func runPut(cmd *cobra.Command, args []string) error {
 	// Default remote path is root + local filename.
 	remotePath := "/" + filepath.Base(localPath)
 	if len(args) > 1 {
-		remotePath = args[1]
+		remotePath, err = resolvePutFileTarget(ctx, session, args[1], filepath.Base(localPath))
+		if err != nil {
+			return err
+		}
 	}
 
 	logger.Debug("put", "local_path", localPath, "remote_path", remotePath, "size", fi.Size())
@@ -133,6 +137,30 @@ func runPut(cmd *cobra.Command, args []string) error {
 	cc.Statusf("Uploaded %s (%s)\n", remotePath, formatSize(fi.Size()))
 
 	return nil
+}
+
+type putTargetResolver interface {
+	ResolveItem(ctx context.Context, remotePath string) (*graph.Item, error)
+}
+
+// resolvePutFileTarget treats a destination that ends in "/" or names an
+// existing folder as "into that folder", like cp and scp. Uploading to the
+// folder's own name used to send the file's bytes onto the folder, which
+// OneDrive rejects with a 501 the CLI then called a temporary server problem.
+func resolvePutFileTarget(ctx context.Context, session putTargetResolver, target, localName string) (string, error) {
+	if strings.HasSuffix(target, "/") {
+		return strings.TrimRight(target, "/") + "/" + localName, nil
+	}
+
+	item, err := session.ResolveItem(ctx, target)
+	switch {
+	case err == nil && item.IsFolder:
+		return strings.TrimRight(target, "/") + "/" + localName, nil
+	case err == nil, errors.Is(err, graph.ErrNotFound):
+		return target, nil
+	default:
+		return "", newRemoteOpError("resolving", target, err)
+	}
 }
 
 // printPutJSON writes the put command's single-file JSON output to w.

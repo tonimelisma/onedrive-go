@@ -14,7 +14,9 @@ func newRecycleBinCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "recycle-bin",
 		Short: "Manage OneDrive recycle bin",
-		Long:  "List, restore, and empty items in the OneDrive recycle bin.",
+		Long: "List, restore, and empty items in the OneDrive recycle bin.\n\n" +
+			"Available for OneDrive for work or school and SharePoint. Microsoft Graph does not\n" +
+			"offer the recycle bin for personal OneDrive accounts; use onedrive.live.com there.",
 	}
 
 	cmd.AddCommand(

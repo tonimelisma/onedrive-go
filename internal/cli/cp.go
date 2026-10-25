@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -109,10 +108,7 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 
 	displayDest := destPath
 	if dest.destIsDir {
-		clean := driveops.CleanRemotePath(destPath)
-		if clean != "" {
-			displayDest = clean + "/" + dest.newName
-		}
+		displayDest = joinDisplayPath(destPath, dest.newName)
 	}
 
 	if cc.Flags.JSON {

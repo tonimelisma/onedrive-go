@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -155,6 +156,13 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 		return err
 	}
 
+	// A folder cannot move into itself or its own subtree. Graph rejects it
+	// with a bare 400, and with --force the delete below would first remove an
+	// existing destination inside the source, so refuse before anything runs.
+	if sourceItem.IsFolder && isWithinRemotePath(moveTargetPath(destPath, dest), sourcePath) {
+		return fmt.Errorf("cannot move %s into itself", sourcePath)
+	}
+
 	// Check for no-op BEFORE any destructive action (delete or move).
 	if isNoOpMove(dest, sourceItem.ParentID, sourceItem.Name) {
 		logger.Debug("mv: no-op, source and dest are the same")
@@ -194,10 +202,7 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 	// Build display destination from info we already have — no extra API call.
 	displayDest := destPath
 	if dest.destIsDir {
-		clean := driveops.CleanRemotePath(destPath)
-		if clean != "" {
-			displayDest = clean + "/" + moved.Name
-		}
+		displayDest = joinDisplayPath(destPath, moved.Name)
 	}
 
 	if _, err := session.WaitPathVisible(ctx, displayDest); err != nil {
@@ -205,4 +210,36 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 	}
 
 	return emitMoveResult(cc, sourcePath, displayDest, moved.ID)
+}
+
+// moveTargetPath is the path the moved item ends up at.
+func moveTargetPath(destPath string, dest destInfo) string {
+	if dest.destIsDir {
+		return joinDisplayPath(destPath, dest.newName)
+	}
+
+	return "/" + driveops.CleanRemotePath(destPath)
+}
+
+// isWithinRemotePath reports whether target is root or inside it, comparing
+// case-insensitively like OneDrive does.
+func isWithinRemotePath(target, root string) bool {
+	t := strings.ToLower(driveops.CleanRemotePath(target))
+	r := strings.ToLower(driveops.CleanRemotePath(root))
+	if r == "" {
+		return true
+	}
+
+	return t == r || strings.HasPrefix(t, r+"/")
+}
+
+// joinDisplayPath names child inside the remote folder dir with the leading
+// slash every other command prints ("/docs/a.txt", never "docs/a.txt").
+func joinDisplayPath(dir, child string) string {
+	clean := driveops.CleanRemotePath(dir)
+	if clean == "" {
+		return "/" + child
+	}
+
+	return "/" + clean + "/" + child
 }
