@@ -146,6 +146,11 @@ identifiers other than `path` (`run_id`, `action_id`, `action_type`,
 `trial_scope_key`, `drive_id`, `http_status`); the log file and
 `--verbose`/`--debug` keep them, and so does the journal under
 `--verbose`/`--debug`.
+An `error` attribute logged as an error value (`slog.Any`, as multisync's
+"Stopped syncing <drive>; retrying in ..." warning does) renders at default
+verbosity as `plainErrorReason` (the network or sign-in wording, else the
+innermost cause); the log file and `--verbose`/`--debug` keep the full chain.
+Text-valued `error` attributes are shown as given.
 
 `initializeCLIContext` attaches the configured log file before any command
 work, for every command (`attachConfiguredLogging`, a lenient best-effort read
