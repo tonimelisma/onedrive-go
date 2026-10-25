@@ -40,7 +40,7 @@ are inserted, updated, pruned, and validated.
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
 | Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestDryRunFlagSurfaceOnlySyncCommand`, `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_DryRunOpensLogFileAndWarnsOnFailure`, `TestRunSyncCommand_DryRunFailsWhenControlSocketPathCannotBeDerived`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_PassesMissingSyncDirToRunOnce`, `TestRunSyncCommand_DryRunPassesMissingSyncDirWithoutCreatingIt`, `TestRunSyncCommand_PassesPausedInvalidDriveToRunnerAsPaused`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestSyncConsole_MultiDriveNamesEachDrive` |
-| `sync` names every finished file, summarizes in human units, prints errors once, and renders console logs as human or journal text. | `TestSyncConsole_NamesEveryCompletedFile`, `TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose`, `TestSyncConsole_SummaryInHumanUnits`, `TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError`, `TestSyncConsole_WatchLinesAreTimestampedAndAnnounceStartAndStop`, `TestConsoleLogHandler_JournalLinesCarryPriorityAndNoTimestamp`, `TestCommandErrorText_NetworkFailureIsOnePlainLine`, `TestUnauthorizedAuthReason_DistinguishesExpiredLogin` |
+| `sync` names every finished file, summarizes in human units, prints errors once, and renders console logs as human or journal text. | `TestSyncConsole_NamesEveryCompletedFile`, `TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose`, `TestSyncConsole_SummaryInHumanUnits`, `TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError`, `TestSyncConsole_WatchLinesAreTimestampedAndAnnounceStartAndStop`, `TestConsoleLogHandler_JournalLinesCarryPriorityAndNoTimestamp`, `TestCommandLogger_PerfSummaryInLogFileNotDefaultConsole`, `TestCommandLogger_SyncSchemaFieldsOnlyInLogFileAndVerboseConsole`, `TestMainWithWriters_SkipConfigCommandLogsPerfSummaryToLogFile`, `TestMainWithWriters_BootstrapRecordsFollowTheCommandLogger`, `TestCommandErrorText_NetworkFailureIsOnePlainLine`, `TestUnauthorizedAuthReason_DistinguishesExpiredLogin` |
 | Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusMount_RendersLifecycleState`, `TestBuildChildStatusMount_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
 | Command failure presentation exhaustively maps the shared error classes, while lower layers still own their own domain classification. | `TestClassifyCommandError`, `TestCommandFailurePresentationForClass` |
 | Command-level side-effect contracts are tested at the CLI boundary: read-only commands do not mutate managed state, and mutating commands fail selector/path validation before remote mutation. | `TestRunLs_DoesNotMutateManagedState`, `TestRunRm_RequiresExplicitPathBeforeGraphMutation` |
@@ -128,8 +128,37 @@ Console logging (R-6.6.21): with `log_format = "auto"` the console is never
 JSON. Default verbosity uses `consoleLogHandler` ("Warning: msg (k=v)"),
 `--verbose`/`--debug` use timestamped key=value, and when stderr is the
 journal (`stderrIsJournal`, `$JOURNAL_STREAM` matched against stderr's
-device:inode) each line carries a `<N>` priority prefix and no timestamp. The
-bootstrap logger resolves the same way, so a run no longer mixes formats.
+device:inode) each line carries a `<N>` priority prefix and no timestamp.
+
+The command logger is one console handler and, when `log_file` is set, one
+JSON file handler, each with its own level (R-6.6.2, R-6.6.3). The console
+level comes only from the flags: WARN by default, INFO with `--verbose`, DEBUG
+with `--debug`, ERROR with `--quiet`. The file level comes only from
+`log_level` (INFO by default). INFO records are operational history -- the
+performance summaries (R-6.6.14, which `devtool bench` reads back from the log
+file), plan counts, runner lifecycle -- so they reach the log file always and
+the console only with `--verbose`/`--debug`. What a person must see at default
+verbosity (activity, summaries, startup lines) is written by the command
+itself (`syncConsole`), not logged, so the split hides nothing they need. At
+default verbosity `consoleLogHandler` also drops the R-6.6.13 schema
+identifiers other than `path` (`run_id`, `action_id`, `action_type`,
+`condition_key`, `failure_class`, `log_owner`, `scope_key`,
+`trial_scope_key`, `drive_id`, `http_status`); the log file and
+`--verbose`/`--debug` keep them, and so does the journal under
+`--verbose`/`--debug`.
+
+`initializeCLIContext` attaches the configured log file before any command
+work, for every command (`attachConfiguredLogging`, a lenient best-effort read
+of the logging settings). Commands that skip the strict config load -- auth,
+`drive`, `status`, `sync`, `pause`/`resume`, `perf`, shared targets --
+previously kept the flag-only bootstrap logger, so their performance summary
+and graph logs never reached the log file. `useLoggingConfig` is the one
+place that builds the command logger; a later call with the same settings
+(strict drive resolution, `sync` re-reading its config) keeps the logger, so
+the file is opened and its warnings printed once. The few records logged
+while the config file is still being found go to a `bootstrapLogBuffer` and
+are replayed through the command logger once it exists, so they follow the
+same console rules and `log_format`, and reach the log file too.
 
 `login` (R-6.6.24) shows the code, its expiry, the account to use, a passkey
 hint, and that it is waiting; success says where files will sync and what to
