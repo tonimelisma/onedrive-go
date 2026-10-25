@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -272,4 +274,28 @@ func TestBootstrapLogBuffer_ReplaysOnlyWhatTheTargetAccepts(t *testing.T) {
 	assert.Equal(t,
 		"Warning: config path unusual (phase=bootstrap)\nWarning: after replay (phase=bootstrap)\n",
 		out.String())
+}
+
+// Validates: R-6.6.21, R-6.6.22
+//
+// multisync's "Stopped syncing <drive>; retrying in ..." warning used to put
+// the raw error chain on the default console.
+func TestCommandLogger_ErrorValueIsPlainOnDefaultConsoleAndFullElsewhere(t *testing.T) {
+	t.Parallel()
+
+	cause := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	err := fmt.Errorf("sync drive: observe remote: GET /delta: %w", cause)
+
+	logger, console, logPath := dualLoggerForTest(t, CLIFlags{})
+	logger.Warn("Stopped syncing Personal; retrying in 5 s", slog.Any("error", err))
+
+	assert.Equal(t,
+		"Warning: Stopped syncing Personal; retrying in 5 s (can't reach OneDrive (connection refused))\n",
+		console.String())
+	record := logFileRecord(t, readLogFile(t, logPath), "Stopped syncing Personal; retrying in 5 s")
+	assert.Equal(t, err.Error(), record["error"], "the log file keeps the full chain")
+
+	verboseLogger, verboseConsole, _ := dualLoggerForTest(t, CLIFlags{Verbose: true})
+	verboseLogger.Warn("Stopped syncing Personal; retrying in 5 s", slog.Any("error", err))
+	assert.Contains(t, verboseConsole.String(), "sync drive: observe remote: GET /delta")
 }

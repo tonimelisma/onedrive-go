@@ -191,6 +191,17 @@ func (h *consoleLogHandler) appendAttr(details []string, prefix string, attr slo
 		return details
 	}
 
+	if !h.showInternalFields && attr.Value.Kind() == slog.KindAny {
+		// An error value is a full chain ("sync drive: observe remote: GET
+		// ...: dial tcp ...: connection refused"). A person at default
+		// verbosity gets the plain reason (plainErrorReason, as the sync
+		// console uses for per-file failures); the chain stays in the log file
+		// and under --verbose/--debug.
+		if err, ok := attr.Value.Any().(error); ok && err != nil {
+			return append(details, plainErrorReason(err))
+		}
+	}
+
 	value := attr.Value.String()
 	if value == "" || strings.ContainsAny(value, " \t\"=") {
 		value = strconv.Quote(value)
