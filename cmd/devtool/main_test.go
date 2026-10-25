@@ -21,7 +21,7 @@ import (
 
 const testRepoRoot = "/repo"
 
-// Validates: R-6.2.1
+// Validates: R-6.10.1
 func TestNewVerifyCmdDefaultsToDefaultProfile(t *testing.T) {
 	t.Parallel()
 
@@ -48,7 +48,7 @@ func TestNewVerifyCmdDefaultsToDefaultProfile(t *testing.T) {
 	assert.Equal(t, devtool.DefaultDODCITimeout, got.DODCITimeout)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.1
 func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	t.Parallel()
 
@@ -197,7 +197,7 @@ func TestNewCleanupAuditCmdPassesFlagsThrough(t *testing.T) {
 	assert.True(t, got.JSON)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.21
 func TestNewWorktreeAddCmdRequiresFlags(t *testing.T) {
 	t.Parallel()
 
@@ -214,7 +214,7 @@ func TestNewWorktreeAddCmdRequiresFlags(t *testing.T) {
 	assert.Contains(t, err.Error(), "required flag")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.21
 func TestNewWorktreeAddCmdCallsAddWorktree(t *testing.T) {
 	t.Parallel()
 
@@ -243,7 +243,7 @@ func TestNewWorktreeAddCmdCallsAddWorktree(t *testing.T) {
 	assert.Equal(t, "refactor/test", gotBranch)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.21
 func TestNewWorktreeBootstrapCmdDefaultsTargetPathToRepoRoot(t *testing.T) {
 	t.Parallel()
 
@@ -269,7 +269,7 @@ func TestNewWorktreeBootstrapCmdDefaultsTargetPathToRepoRoot(t *testing.T) {
 	assert.Equal(t, testRepoRoot, gotTarget)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.21
 func TestNewWorktreeBootstrapCmdSupportsExplicitSourceRoot(t *testing.T) {
 	t.Parallel()
 
@@ -295,7 +295,7 @@ func TestNewWorktreeBootstrapCmdSupportsExplicitSourceRoot(t *testing.T) {
 	assert.Equal(t, "/target", gotTarget)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.1
 func TestNewVerifyCmdWrapsWorkingDirectoryError(t *testing.T) {
 	t.Parallel()
 
@@ -321,7 +321,7 @@ func TestNewRootCmd(t *testing.T) {
 	assert.Len(t, cmd.Commands(), 4)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.1
 func TestDefaultCWD(t *testing.T) {
 	t.Parallel()
 
@@ -330,7 +330,7 @@ func TestDefaultCWD(t *testing.T) {
 	assert.NotEmpty(t, cwd)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.1
 func TestDefaultVerifyWrapsRunVerifyError(t *testing.T) {
 	t.Parallel()
 
@@ -353,7 +353,7 @@ func TestDefaultBenchWrapsRunBenchError(t *testing.T) {
 	assert.Contains(t, err.Error(), "run bench")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.21
 func TestDefaultBootstrapWorktreeWrapsError(t *testing.T) {
 	t.Parallel()
 
@@ -362,7 +362,7 @@ func TestDefaultBootstrapWorktreeWrapsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "bootstrap worktree")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.21
 func TestDefaultAddWorktreeWrapsError(t *testing.T) {
 	t.Parallel()
 
@@ -385,7 +385,7 @@ func TestDefaultCleanupAuditWrapsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "run cleanup audit")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.1
 func TestRequireFlagPanicsForUnknownFlag(t *testing.T) {
 	t.Parallel()
 
@@ -395,7 +395,7 @@ func TestRequireFlagPanicsForUnknownFlag(t *testing.T) {
 	})
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.1
 func TestMainIntegrationHelpersUseRealFilesystemState(t *testing.T) {
 	t.Parallel()
 
@@ -465,7 +465,7 @@ func runGit(t *testing.T, cwd string, args ...string) string {
 	return string(output)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.1
 func TestDevtoolBinary_VerifyRejectsUnknownProfile(t *testing.T) {
 	binPath := buildDevtoolBinary(t)
 
@@ -474,7 +474,7 @@ func TestDevtoolBinary_VerifyRejectsUnknownProfile(t *testing.T) {
 	assert.Contains(t, stderr, "usage: devtool verify [default|public|e2e|e2e-full|integration|stress|failed-test]")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.21
 func TestDevtoolBinary_WorktreeBootstrapCopiesAndSymlinks(t *testing.T) {
 	binPath := buildDevtoolBinary(t)
 
@@ -499,7 +499,7 @@ func TestDevtoolBinary_WorktreeBootstrapCopiesAndSymlinks(t *testing.T) {
 	assert.Equal(t, filepath.Join(sourceRoot, ".testdata"), linkTarget)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.21
 func TestDevtoolBinary_WorktreeBootstrapHonorsExplicitSourceRoot(t *testing.T) {
 	binPath := buildDevtoolBinary(t)
 
@@ -538,7 +538,7 @@ func TestDevtoolBinary_WorktreeBootstrapHonorsExplicitSourceRoot(t *testing.T) {
 	assert.Equal(t, filepath.Join(sourceRoot, ".testdata"), linkTarget)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.21
 func TestDevtoolBinary_WorktreeAddCreatesBootstrappedWorktree(t *testing.T) {
 	binPath := buildDevtoolBinary(t)
 

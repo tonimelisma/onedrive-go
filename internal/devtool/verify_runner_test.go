@@ -738,7 +738,7 @@ func assertVerifyStopsAfterPreflightFailure(
 	require.Len(t, runner.runCommands, expectedCommands)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.8
 func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 	t.Parallel()
 
@@ -900,7 +900,7 @@ func TestRunVerifyFailedTestRequiresLogPath(t *testing.T) {
 	assert.Contains(t, err.Error(), "--failed-log is required")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.4
 func TestParseCoverageTotal(t *testing.T) {
 	t.Parallel()
 
@@ -909,7 +909,7 @@ func TestParseCoverageTotal(t *testing.T) {
 	assert.InDelta(t, 76.2, total, 0.001)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.4
 func TestRunVerifyCoverageThresholdFailure(t *testing.T) {
 	t.Parallel()
 
@@ -934,7 +934,7 @@ func TestRunVerifyCoverageThresholdFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "coverage gate failed")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.4
 //
 // A negative threshold reports coverage without gating, so a secondary
 // platform leg can run the same suite without owning the coverage number.
@@ -963,7 +963,7 @@ func TestRunVerifyNegativeCoverageThresholdReportsWithoutGating(t *testing.T) {
 	assert.Contains(t, stdout.String(), "coverage gate disabled (total 12.3%)")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.1
 func TestResolveVerifyPlanRejectsUnknownProfile(t *testing.T) {
 	t.Parallel()
 

@@ -45,7 +45,7 @@ func (f governsFixture) run(t *testing.T) error {
 	return runSpecGoverns(context.Background(), &fakeRunner{}, f.root, nil, &bytes.Buffer{}, &bytes.Buffer{})
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.5
 func TestSpecGoverns_AcceptsFullyGovernedTree(t *testing.T) {
 	t.Parallel()
 
@@ -56,7 +56,7 @@ func TestSpecGoverns_AcceptsFullyGovernedTree(t *testing.T) {
 	require.NoError(t, f.run(t))
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.5
 func TestSpecGoverns_RejectsUngovernedProductionFile(t *testing.T) {
 	t.Parallel()
 
@@ -70,7 +70,7 @@ func TestSpecGoverns_RejectsUngovernedProductionFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "internal/other/other.go: no design doc GOVERNS this file")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.5
 //
 // Test files are not production files and must not require ownership.
 func TestSpecGoverns_IgnoresTestFiles(t *testing.T) {
@@ -84,7 +84,7 @@ func TestSpecGoverns_IgnoresTestFiles(t *testing.T) {
 	require.NoError(t, f.run(t))
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.5
 func TestSpecGoverns_RejectsPatternMatchingNothing(t *testing.T) {
 	t.Parallel()
 
@@ -97,7 +97,7 @@ func TestSpecGoverns_RejectsPatternMatchingNothing(t *testing.T) {
 	assert.Contains(t, err.Error(), `GOVERNS pattern "internal/thing/moved.go" matches no file`)
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.5
 //
 // A narrower pattern is the intended owner, so a doc can own a subset of a
 // directory another doc owns broadly.
@@ -113,7 +113,7 @@ func TestSpecGoverns_MoreSpecificPatternWinsOverBroadGlob(t *testing.T) {
 	require.NoError(t, f.run(t))
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.5
 func TestSpecGoverns_RejectsEquallySpecificDoubleOwnership(t *testing.T) {
 	t.Parallel()
 
@@ -128,7 +128,7 @@ func TestSpecGoverns_RejectsEquallySpecificDoubleOwnership(t *testing.T) {
 	assert.Contains(t, err.Error(), "spec/design/a.md, spec/design/b.md")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.5
 //
 // Listing the same file twice in one doc is redundant but not ambiguous.
 func TestSpecGoverns_AllowsOverlappingPatternsWithinOneDoc(t *testing.T) {
@@ -141,7 +141,7 @@ func TestSpecGoverns_AllowsOverlappingPatternsWithinOneDoc(t *testing.T) {
 	require.NoError(t, f.run(t))
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.5
 //
 // Prose entries such as "README.md (Some section)" are references, not path
 // patterns, and must not be treated as globs.
@@ -155,7 +155,7 @@ func TestSpecGoverns_SkipsProseGovernsEntries(t *testing.T) {
 	require.NoError(t, f.run(t))
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.13
 //
 // A requirement marked verified on the strength of a test that no longer
 // exists is a false claim, so citations are checked too.
@@ -174,7 +174,7 @@ func TestSpecGoverns_RejectsCitationOfMissingTest(t *testing.T) {
 	assert.NotContains(t, err.Error(), "TestRealOne")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.13
 func TestSpecGoverns_AcceptsCitationOfExistingTest(t *testing.T) {
 	t.Parallel()
 
@@ -192,7 +192,7 @@ func (f governsFixture) writeRoutingTable(t *testing.T, body string) {
 	require.NoError(t, writeFile(filepath.Join(f.root, "CLAUDE.md"), []byte(body)))
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.5
 //
 // CLAUDE.md's routing table is the first thing a contributor reads to find the
 // governing doc for the code they are about to touch, so a reference that no
@@ -212,7 +212,7 @@ func TestSpecGoverns_RejectsDeadRoutingTableReference(t *testing.T) {
 	assert.NotContains(t, err.Error(), "thing.go\", which matches no file")
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.5
 func TestSpecGoverns_AcceptsResolvableRoutingTable(t *testing.T) {
 	t.Parallel()
 
@@ -224,7 +224,7 @@ func TestSpecGoverns_AcceptsResolvableRoutingTable(t *testing.T) {
 	require.NoError(t, f.run(t))
 }
 
-// Validates: R-6.2.1
+// Validates: R-6.10.5
 //
 // A repo without a routing table is not a defect for this check.
 func TestSpecGoverns_MissingRoutingTableIsNotAViolation(t *testing.T) {
