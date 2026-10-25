@@ -839,26 +839,94 @@ func applyManifestReviewThreads(
 	if err != nil {
 		return dodReviewThreadApplySummary{}, err
 	}
+	summary, changed, replyErr := replyToManifestThreads(ctx, runner, opts.RepoRoot, manifest.Threads, opts.DODPR, commit, stdout)
+	if changed {
+		// Record what is now resolved even when a later reply failed, so a
+		// rerun never answers the same thread twice.
+		if err := writeDODCommentManifest(manifestPath, manifest); err != nil {
+			return dodReviewThreadApplySummary{}, errors.Join(replyErr, err)
+		}
+	}
+	if replyErr != nil {
+		return dodReviewThreadApplySummary{}, replyErr
+	}
+	return summary, nil
+}
+
+// replyToManifestThreads answers and resolves every classified thread that is
+// still open on GitHub. The manifest's is_resolved is only a snapshot from when
+// the manifest was written, and an ignored manifest outlives its increment, so
+// each thread's live state is checked first; without that, every pre-merge
+// run from the same checkout replied to the same long-resolved thread again,
+// crediting whichever PR was merging. threads is updated in place, and changed
+// reports whether any is_resolved flag moved so the caller can persist it.
+func replyToManifestThreads(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	threads []DODReviewThread,
+	prNumber int,
+	commit string,
+	stdout io.Writer,
+) (dodReviewThreadApplySummary, bool, error) {
 	summary := dodReviewThreadApplySummary{}
-	for i := range manifest.Threads {
-		thread := &manifest.Threads[i]
+	changed := false
+	for i := range threads {
+		thread := &threads[i]
 		if thread.IsResolved {
 			summary.AlreadyResolved++
 			continue
 		}
-		body := renderDODThreadReply(thread, opts.DODPR, commit)
-		if _, err := postReviewThreadReply(ctx, runner, opts.RepoRoot, thread.ThreadID, body); err != nil {
-			return dodReviewThreadApplySummary{}, err
+		resolved, err := reviewThreadIsResolved(ctx, runner, repoRoot, thread.ThreadID)
+		if err != nil {
+			return summary, changed, err
 		}
-		if err := resolveReviewThread(ctx, runner, opts.RepoRoot, thread.ThreadID); err != nil {
-			return dodReviewThreadApplySummary{}, err
+		if resolved {
+			thread.IsResolved = true
+			changed = true
+			summary.AlreadyResolved++
+			continue
 		}
+		body := renderDODThreadReply(thread, prNumber, commit)
+		if _, err := postReviewThreadReply(ctx, runner, repoRoot, thread.ThreadID, body); err != nil {
+			return summary, changed, err
+		}
+		if err := resolveReviewThread(ctx, runner, repoRoot, thread.ThreadID); err != nil {
+			return summary, changed, err
+		}
+		thread.IsResolved = true
+		changed = true
 		summary.CommentedAndResolved++
 		if err := writeStatus(stdout, formatDODThreadResolutionStatus(thread)); err != nil {
-			return dodReviewThreadApplySummary{}, err
+			return summary, changed, err
 		}
 	}
-	return summary, nil
+	return summary, changed, nil
+}
+
+// reviewThreadIsResolved reads one review thread's live resolution state.
+func reviewThreadIsResolved(ctx context.Context, runner commandRunner, repoRoot string, threadID string) (bool, error) {
+	name, args := buildThreadResolvedQueryArgs(threadID)
+	out, err := runner.Output(ctx, repoRoot, os.Environ(), name, args...)
+	if err != nil {
+		return false, fmt.Errorf("dod read review thread %s: %w", threadID, err)
+	}
+	// Untagged like the other gh response structs: encoding/json matches
+	// GitHub's camelCase keys case-insensitively.
+	var response struct {
+		Data struct {
+			Node *struct {
+				IsResolved bool
+			}
+		}
+	}
+	if err := json.Unmarshal(out, &response); err != nil {
+		return false, fmt.Errorf("decode review thread %s state: %w", threadID, err)
+	}
+	if response.Data.Node == nil {
+		return false, fmt.Errorf("dod read review thread %s: thread not found", threadID)
+	}
+	return response.Data.Node.IsResolved, nil
 }
 
 func formatDODThreadResolutionStatus(thread *DODReviewThread) string {
@@ -970,6 +1038,17 @@ func buildAddThreadReplyArgs(threadID string, body string) (string, []string) {
 		"threadId=" + threadID,
 		"-F",
 		"body=" + body,
+	}
+}
+
+func buildThreadResolvedQueryArgs(threadID string) (string, []string) {
+	return githubCLI, []string{
+		"api",
+		"graphql",
+		"-f",
+		"query=query($threadId:ID!){node(id:$threadId){... on PullRequestReviewThread{isResolved}}}",
+		"-F",
+		"threadId=" + threadID,
 	}
 }
 
