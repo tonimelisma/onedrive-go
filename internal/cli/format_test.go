@@ -68,6 +68,24 @@ func TestFormatAPITime_IsAlwaysUTC(t *testing.T) {
 	assert.Equal(t, "2026-10-24T15:08:00Z", formatAPITime(time.Date(2026, 10, 24, 8, 8, 0, 0, pacific)))
 }
 
+// stat's exact times are local, like ls and status, and name the zone; the
+// old text printed whatever zone the value carried and labeled it "UTC".
+//
+// Validates: R-6.6.26
+func TestFormatExactTime_IsLocalWithZone(t *testing.T) {
+	t.Parallel()
+
+	utc := time.Date(2026, 10, 25, 5, 43, 32, 0, time.UTC)
+	assert.Equal(t, utc.Local().Format("2006-01-02 15:04:05 MST"), formatExactTime(utc))
+
+	elsewhere := time.Date(2026, 10, 25, 14, 43, 32, 0, time.FixedZone("JST", 9*60*60))
+	parsed, err := time.ParseInLocation("2006-01-02 15:04:05 MST", formatExactTime(elsewhere), time.Local)
+	require.NoError(t, err)
+	assert.True(t, parsed.Equal(elsewhere), "the printed time is the same instant, in local time")
+
+	assert.Equal(t, "unknown", formatExactTime(time.Time{}))
+}
+
 type errWriter struct{}
 
 func (errWriter) Write(_ []byte) (int, error) {

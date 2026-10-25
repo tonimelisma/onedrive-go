@@ -44,6 +44,7 @@ are inserted, updated, pruned, and validated.
 | Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusMount_RendersLifecycleState`, `TestBuildChildStatusMount_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
 | Command failures map into the shared error classes, and the exit status is chosen from typed errors: 77 sign-in required, 78 invalid config, 2 usage, 130 user stop, 1 everything else. | `TestClassifyCommandError`, `TestCommandExitCode`, `TestCommandExitCode_EveryFailureClassHasAStatus`, `TestMainWithWriters_ConfigErrorExits78`, `TestMainWithWriters_SignInRequiredExits77`, `TestFormatWatchStartupError_ExitStatusFollowsSharedCause`, `TestConfigFailuresAreTaggedInvalidConfig` |
 | `sync --watch` reports READY/STATUS/RELOADING/STOPPING/WATCHDOG to systemd through `internal/sdnotify`, and nothing outside systemd. | `TestRunSyncDaemon_NotifiesSystemdOfLifecycle`, `TestRunSyncDaemon_SignInFailureSetsStatusAndExitCode`, `TestRunSyncDaemon_NoDrivesIsAConfigFailure`, `TestSyncNotifierWatchingStatus`, `TestOpenSyncNotifier_BadSocketWarnsAndContinues`, `TestNotifier_SendsProtocolMessages`, `TestOpen_AbstractSocket`, `TestOpen_WatchdogInterval`, `TestRunWatch_ReportsLifecycleTransitions` |
+| User-facing output agrees across commands: `drive list` and `status` derive a configured drive's state through one function (`configuredDriveState`); `stat` prints local times like `ls`; `ls` on a file lists that file; every transport failure, before or while reading the response, and every sign-in outcome is one plain line; health checks do not log a token load. | `TestBuildConfiguredDriveEntries_StateMatchesStatus`, `TestFormatExactTime_IsLocalWithZone`, `TestLs_OnAFileListsThatFile`, `TestCommandErrorText_EveryTransportFailureIsPlain`, `TestCommandErrorText_SignInOutcomesSayRunLoginAgain`, `TestInspectSavedLogin_DoesNotLogATokenLoad` |
 | Every runnable command honors `--json` (one document on stdout, or JSON lines for `sync`) or refuses it as a usage error; the mutating commands report their result as JSON. | `TestCommandTree_EveryLeafHonorsJSON`, `TestDriveAdd_JSONWithoutSelectorIsAUsageError`, `TestPauseCommand_JSONReportsDriveAndEndTime`, `TestResumeCommand_JSONReportsEveryDriveOutcome`, `TestDriveRemove_JSONReportsWhatWasRemoved`, `TestDriveAdd_JSONReportsAddedThenAlreadyConfigured`, `TestLogoutCommand_JSONNamesAccountAndDrives`, `TestRecycleBinEmpty_JSONListsDeletedAndFailedAndStillFails` |
 | Command-level side-effect contracts are tested at the CLI boundary: read-only commands do not mutate managed state, and mutating commands fail selector/path validation before remote mutation. | `TestRunLs_DoesNotMutateManagedState`, `TestRunRm_RequiresExplicitPathBeforeGraphMutation` |
 
@@ -236,8 +237,28 @@ same console rules and `log_format`, and reach the log file too.
 hint, and that it is waiting; success says where files will sync and what to
 run next. A refresh token rejected with `invalid_grant` is `ErrLoginExpired`
 (which also matches `ErrUnauthorized`) and is presented as sign-in required
-everywhere (R-6.6.23). `drive list` reports a configured drive without a state
-database as "not synced yet" (R-6.6.25).
+everywhere (R-6.6.23). A canceled or declined sign-in and an expired sign-in
+code are one line that says to run `login` again. `drive list` and `status`
+take a configured drive's state from the same `configuredDriveState`: paused,
+"not synced yet" without a state database, then issues or pending changes as
+the state database records them (R-6.6.25). The auth health check behind both
+only checks the token file (`graph.CheckSavedLogin`); the command's real load
+is the one that logs "loaded saved token".
+
+Transport failures are recognized whether they happen before the response
+(`*url.Error`) or while reading it (`*graph.ResponseReadError`, set on every
+response body by the Graph client): timeouts, including a response-header
+timeout, are "OneDrive did not answer in time"; certificate, TLS record and
+TLS alert failures are "the secure connection to OneDrive failed"; EOF,
+unexpected EOF, resets, closed connections and HTTP/2 stream or connection
+errors (matched by net/http's fixed "stream error:"/"http2: " text, since those
+types are unexported) are "the connection to OneDrive was interrupted". A disk
+error io.Copy returns during a download carries neither mark and is never
+described as a OneDrive problem.
+
+`ls` on a file lists that one file, as ls(1) does: when OneDrive refuses to
+list a path's children with HTTP 400/422, `ls` looks the path up once and
+prints it if it is a file; any other failure is reported unchanged.
 
 File commands wrap failures in `remoteOpError` (action, path, cause) instead
 of `fmt.Errorf("<action> %q: %w")`; its `Error()` text is unchanged, but
@@ -307,8 +328,9 @@ resolve `--drive` through `config.MatchDrive`, the same selector rules as
 `sync`. `drive remove` and `drive reset-sync-state` use
 `resolveExactDriveSelector`, which accepts an exact canonical ID (so leftovers
 of an unconfigured drive can still be purged) or a display name, never a
-partial match (R-2.6.5). Human-readable listings show local time; `--json`
-timestamps are always UTC.
+partial match (R-2.6.5). Human-readable output shows local time (`ls`
+compactly, `stat` exactly with the zone name); `--json` timestamps are always
+UTC.
 
 Transfer progress goes through `CLIContext.Progressf`, which redraws one line
 (`\r` + erase-line) on a terminal and prints nothing otherwise; `Statusf` and

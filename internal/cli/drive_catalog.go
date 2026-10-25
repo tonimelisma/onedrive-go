@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -51,8 +50,15 @@ type driveListEntry struct {
 	parsedCID driveid.CanonicalID
 }
 
-// buildConfiguredDriveEntries creates list entries from the config.
-func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driveListEntry {
+// buildConfiguredDriveEntries creates list entries from the config. Each
+// entry's state comes from configuredDriveState, the derivation status uses,
+// so drive list and status never disagree about a drive.
+func buildConfiguredDriveEntries(
+	ctx context.Context,
+	cfg *config.Config,
+	syncQ syncStateQuerier,
+	logger *slog.Logger,
+) []driveListEntry {
 	if len(cfg.Drives) == 0 {
 		return nil
 	}
@@ -61,7 +67,7 @@ func buildConfiguredDriveEntries(cfg *config.Config, logger *slog.Logger) []driv
 
 	for id := range cfg.Drives {
 		d := cfg.Drives[id]
-		state := configuredDriveListState(id, d.IsPaused(time.Now()))
+		state, _ := configuredDriveState(ctx, id, &d, syncQ)
 
 		syncDir := d.SyncDir
 		if syncDir == "" {

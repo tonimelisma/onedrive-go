@@ -227,6 +227,13 @@ func (f *fakeGraphDrive) serveByPath(w http.ResponseWriter, r *http.Request, res
 			return
 		}
 		f.writeJSON(w, http.StatusOK, f.itemJSON(item))
+	case r.Method == http.MethodGet && suffix == "/children":
+		item := f.byPath(itemPath)
+		if item == nil {
+			f.notFound(w)
+			return
+		}
+		f.serveItemGet(fakeGraphRequest{w: w, r: r, id: item.ID, item: item, action: fakeGraphActionChildren})
 	case r.Method == http.MethodPut && suffix == "/content":
 		f.upload(w, r, fakeGraphRootID, itemPath)
 	default:
@@ -280,6 +287,14 @@ func (f *fakeGraphDrive) serveItemGet(req fakeGraphRequest) {
 	case "":
 		f.writeJSON(req.w, http.StatusOK, f.itemJSON(req.item))
 	case fakeGraphActionChildren:
+		if !req.item.Folder {
+			// What OneDrive answers when asked for a file's children.
+			f.writeJSON(req.w, http.StatusUnprocessableEntity, map[string]any{"error": map[string]any{
+				"code":    "invalidRequest",
+				"message": "Children cannot be listed from an item that is not a folder",
+			}})
+			return
+		}
 		f.writeJSON(req.w, http.StatusOK, map[string]any{"value": f.childrenOf(req.id)})
 	case fakeGraphActionContent:
 		f.serveContent(req.w, req.r, req.item)

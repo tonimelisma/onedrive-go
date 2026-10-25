@@ -536,3 +536,51 @@ func TestDriveAdd_JSONWithoutSelectorIsAUsageError(t *testing.T) {
 	assert.Empty(t, mainStdout.String())
 	assert.Contains(t, mainStderr.String(), "drive list --json")
 }
+
+// ls on a file lists that one file, as ls(1) does, instead of failing with
+// OneDrive's "Children cannot be listed from an item that is not a folder".
+//
+// Validates: R-6.6.26
+func TestLs_OnAFileListsThatFile(t *testing.T) {
+	setTestDriveHome(t)
+
+	cc, fake := jsonContractFileContext(t)
+	fake.addFile("notes.txt", "hello")
+	stdout, err := runDetachedLeaf(t, lsLeaf(t), cc, "/notes.txt")
+	require.NoError(t, err)
+
+	var items []lsJSONItem
+	require.NoError(t, json.Unmarshal([]byte(stdout), &items), stdout)
+	require.Len(t, items, 1)
+	assert.Equal(t, "notes.txt", items[0].Name)
+	assert.False(t, items[0].IsFolder)
+	assert.Equal(t, int64(len("hello")), items[0].Size)
+
+	textCC, textFake := jsonContractFileContext(t)
+	textFake.addFile("notes.txt", "hello")
+	var textOut bytes.Buffer
+	textCC.OutputWriter = &textOut
+	textCC.StatusWriter = io.Discard
+	leaf := findLeaf(t, "onedrive-go ls")
+	leaf.SetContext(context.WithValue(t.Context(), cliContextKey{}, textCC))
+	leaf.SetArgs([]string{"/notes.txt"})
+	leaf.SetOut(io.Discard)
+	leaf.SetErr(io.Discard)
+	require.NoError(t, leaf.Execute())
+	assert.Contains(t, textOut.String(), "notes.txt")
+	assert.NotContains(t, textOut.String(), "notes.txt/", "a file is not marked as a folder")
+
+	// A path that does not exist still fails as not found.
+	missingCC, _ := jsonContractFileContext(t)
+	_, err = runDetachedLeaf(t, lsLeaf(t), missingCC, "/missing")
+	require.ErrorIs(t, err, graph.ErrNotFound)
+}
+
+func lsLeaf(t *testing.T) *cobra.Command {
+	t.Helper()
+
+	leaf := findLeaf(t, "onedrive-go ls")
+	leaf.SetContext(t.Context())
+
+	return leaf
+}

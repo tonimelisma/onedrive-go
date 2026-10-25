@@ -116,7 +116,10 @@ func loadDriveListSnapshot(
 	}
 
 	logger := cc.Logger
-	configured := buildConfiguredDriveEntries(viewSnapshot.Config, logger)
+	configured := buildConfiguredDriveEntries(ctx, viewSnapshot.Config, &liveSyncStateQuerier{
+		logger:        logger,
+		examplesLimit: defaultVisiblePaths,
+	}, logger)
 	configuredAuth := accountViewAuthByEmail(viewSnapshot.Accounts)
 	annotateConfiguredDriveAuth(configured, configuredAuth)
 
