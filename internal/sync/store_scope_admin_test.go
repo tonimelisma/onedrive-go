@@ -101,7 +101,7 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 	dbPath := syncStorePathForStoreScopeTest(t, store)
 	snapshot, err := ReadDriveStatusSnapshot(t.Context(), dbPath, testLogger(t))
 	require.NoError(t, err)
-	assert.Equal(t, 1, snapshot.BaselineEntryCount)
+	assert.Equal(t, 1, snapshot.BaselineFileCount)
 	require.Len(t, snapshot.ObservationIssues, 1)
 	assert.Equal(t, "bad:name.txt", snapshot.ObservationIssues[0].Path)
 	require.Len(t, snapshot.BlockScopes, 1)

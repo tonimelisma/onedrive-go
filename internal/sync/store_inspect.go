@@ -57,12 +57,12 @@ SELECT COUNT(*) FROM (
 // product-facing status command. The store owns the read-only database access,
 // but the CLI owns grouping and presentation policy.
 type DriveStatusSnapshot struct {
-	BaselineEntryCount int
-	RemoteDriftItems   int
-	RetryingItems      int
-	ObservationIssues  []ObservationIssueRow
-	BlockScopes        []*BlockScope
-	BlockedRetryWork   []RetryWorkRow
+	BaselineFileCount int
+	RemoteDriftItems  int
+	RetryingItems     int
+	ObservationIssues []ObservationIssueRow
+	BlockScopes       []*BlockScope
+	BlockedRetryWork  []RetryWorkRow
 }
 
 // ReadDriveStatusSnapshot opens a read-only inspector for one per-mount status
@@ -206,7 +206,7 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 	snapshot := DriveStatusSnapshot{}
 
 	var err error
-	snapshot.BaselineEntryCount, err = i.readCount(ctx, "SELECT COUNT(*) FROM baseline")
+	snapshot.BaselineFileCount, err = i.readCount(ctx, "SELECT COUNT(*) FROM baseline WHERE item_type = 'file'")
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status baseline count: %w", err)
 	}
