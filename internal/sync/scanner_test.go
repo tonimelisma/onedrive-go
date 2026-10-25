@@ -536,3 +536,21 @@ func TestDetectCaseCollisions_ChildInMultiGroup_NoDuplicate(t *testing.T) {
 	// All 4 events should be in SkippedItems.
 	assert.Len(t, collisions, 4, "all 4 events should be skipped")
 }
+
+// Validates: R-2.12.1
+func TestDetectCaseCollisions_UnicodeFormTwinsReportOnceWithClearReason(t *testing.T) {
+	t.Parallel()
+
+	// "café" composed and decomposed both normalize to the same NFC path.
+	events := []changeEvent{
+		{Path: "dir/café.txt", Name: "café.txt", Type: changeCreate},
+		{Path: "dir/café.txt", Name: "café.txt", Type: changeCreate},
+	}
+
+	clean, collisions := detectCaseCollisions(events, nil, nil)
+	assert.Empty(t, clean)
+	require.Len(t, collisions, 1, "one path, one report")
+	assert.Equal(t, "dir/café.txt", collisions[0].Path)
+	assert.Contains(t, collisions[0].Detail, "different Unicode form")
+	assert.NotContains(t, collisions[0].Detail, "conflicts with café.txt")
+}

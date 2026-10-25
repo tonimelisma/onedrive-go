@@ -81,6 +81,7 @@ type parentMountSpec struct {
 	canonicalID               driveid.CanonicalID
 	driveType                 string
 	rejectSharePointRootForms bool
+	personalNameRules         bool
 	displayName               string
 	syncRoot                  string
 	statePath                 string
@@ -132,6 +133,7 @@ type parentMountRuntime struct {
 	canonicalID               driveid.CanonicalID
 	driveType                 string
 	rejectSharePointRootForms bool
+	personalNameRules         bool
 	childWorkSink             syncengine.ShortcutChildWorkSink
 }
 
@@ -386,6 +388,7 @@ func newParentMountSpec(cfg *StandaloneMountConfig) (parentMountSpec, error) {
 		canonicalID:               cfg.CanonicalID,
 		driveType:                 cfg.CanonicalID.DriveType(),
 		rejectSharePointRootForms: cfg.CanonicalID.IsSharePoint(),
+		personalNameRules:         cfg.CanonicalID.IsPersonal(),
 		displayName:               cfg.DisplayName,
 		syncRoot:                  cfg.SyncRoot,
 		statePath:                 cfg.StatePath,
@@ -410,6 +413,7 @@ func (spec *parentMountSpec) runtimeMountSpec() *mountSpec {
 			canonicalID:               spec.canonicalID,
 			driveType:                 spec.driveType,
 			rejectSharePointRootForms: spec.rejectSharePointRootForms,
+			personalNameRules:         spec.personalNameRules,
 		},
 	}
 }
@@ -710,6 +714,10 @@ func (m *mountSpec) parentDriveType() string {
 
 func (m *mountSpec) rejectSharePointRootForms() bool {
 	return m != nil && m.parent != nil && m.parent.rejectSharePointRootForms
+}
+
+func (m *mountSpec) personalNameRules() bool {
+	return m != nil && m.parent != nil && m.parent.personalNameRules
 }
 
 func (m *mountSpec) shortcutChildWorkSink() syncengine.ShortcutChildWorkSink {

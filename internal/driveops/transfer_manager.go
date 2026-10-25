@@ -732,7 +732,7 @@ func (tm *TransferManager) UploadFile(
 
 	mtime := uploadMtime(info, opts)
 
-	f, err := localpath.Open(localPath)
+	f, err := localpath.OpenRegular(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s for upload: %w", localPath, err)
 	}
@@ -835,7 +835,7 @@ func (tm *TransferManager) UploadFileToItem(
 		mtime = info.ModTime()
 	}
 
-	f, err := localpath.Open(localPath)
+	f, err := localpath.OpenRegular(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s for upload: %w", localPath, err)
 	}

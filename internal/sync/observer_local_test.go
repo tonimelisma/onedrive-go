@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1853,4 +1854,34 @@ func TestNewLocalObserver_MapsInitialized(t *testing.T) {
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	assert.NotNil(t, obs.PendingTimers, "pendingTimers should be initialized in constructor")
 	assert.NotNil(t, obs.HashRequests, "hashRequests should be initialized in constructor")
+}
+
+// Validates: R-2.4.13
+func TestFullScan_SkipsFIFOAndSocketWithoutBlocking(t *testing.T) {
+	t.Parallel()
+
+	// Unix socket paths are capped near 104 bytes, so keep the root short.
+	dir, err := os.MkdirTemp("/tmp", "odg-sp")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, os.RemoveAll(dir)) })
+
+	writeTestFile(t, dir, "real.txt", "content")
+	require.NoError(t, syscall.Mkfifo(filepath.Join(dir, "a-fifo"), 0o600))
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", filepath.Join(dir, "a-socket"))
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, listener.Close()) })
+
+	// Opening the FIFO for reading would block forever; the scan must not.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	result, err := obs.FullScan(ctx, mustOpenSyncTree(t, dir))
+	require.NoError(t, err, "FullScan")
+
+	require.Len(t, result.Events, 1, "only the regular file is observed: %+v", result.Events)
+	assert.Equal(t, "real.txt", result.Events[0].Path)
+	assert.Empty(t, result.Skipped, "special files are skipped silently, like symlinks")
+	for _, row := range result.Rows {
+		assert.Equal(t, "real.txt", row.Path)
+	}
 }

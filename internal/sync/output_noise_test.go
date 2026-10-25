@@ -158,6 +158,36 @@ func TestEngineFlow_SkippedFindings_WarnOnlyWhenNew(t *testing.T) {
 	assert.NotContains(t, output, "action=", "each line is complete; the watch summary names status once")
 }
 
+// Regression: eleven invalid names with eleven different problems printed as
+// "Not syncing 11 files: the name starts with a space (examples=...)", the
+// first file's detail standing in for all of them.
+//
+// Validates: R-6.6.30
+func TestEngineFlow_SkippedFindings_GroupedWarningNamesTheWholeGroup(t *testing.T) {
+	t.Parallel()
+
+	logger, logs := newCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	flow := testEngineFlow(t, eng)
+
+	var mixed, same []skippedItem
+	for i := range 11 {
+		detail := "detail B"
+		if i%2 == 0 {
+			detail = "detail A"
+		}
+		mixed = append(mixed, skippedItem{Path: fmt.Sprintf("mixed/%02d", i), Reason: IssueInvalidFilename, Detail: detail})
+		same = append(same, skippedItem{Path: fmt.Sprintf("same/%02d", i), Reason: IssueInvalidFilename, Detail: "the name ends with a period"})
+	}
+	require.NoError(t, flow.reconcileSkippedObservationFindings(t.Context(), mixed))
+	require.NoError(t, flow.reconcileSkippedObservationFindings(t.Context(), same))
+
+	output := logs.String()
+	assert.Contains(t, output, "Not syncing 11 files with names OneDrive does not allow, such as mixed/00, mixed/01, mixed/02")
+	assert.Contains(t, output, "Not syncing 11 files: the name ends with a period, such as same/00, same/01, same/02")
+	assert.NotContains(t, output, "examples=")
+}
+
 // Regression: the watch condition summary printed its breakdown twice and a
 // raw action attribute on the console: "Some files are not syncing: 2 files
 // ... (total=2, breakdown=\"2 files ...\", action=\"run onedrive-go status

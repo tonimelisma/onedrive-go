@@ -223,6 +223,10 @@ func (o *localObserver) handleCreate(
 
 	o.forgetExcludedSymlink(dbRelPath)
 
+	if isSpecialFile(info) {
+		return // FIFOs, sockets and devices are never synced (see processObservedInfo).
+	}
+
 	if protectedRoot, ok := protectedRootIdentityReservation(dbRelPath, info, o.protectedRoots); ok {
 		o.reportProtectedRootEvent(protectedRootEvent{
 			Type:         protectedRootEventIdentityMatch,
@@ -439,6 +443,9 @@ func (o *localObserver) scanNewDirectoryEntryInfo(
 		}
 
 		o.forgetExcludedSymlink(entryRelPath)
+		if isSpecialFile(info) {
+			return nil, observedKindUnknown, false
+		}
 		return info, observedKindFromInfo(info), true
 	}
 
@@ -448,6 +455,9 @@ func (o *localObserver) scanNewDirectoryEntryInfo(
 	if err != nil {
 		o.logger.Debug("stat failed during directory scan",
 			slog.String("path", entryRelPath), slog.String("error", err.Error()))
+		return nil, observedKindUnknown, false
+	}
+	if isSpecialFile(info) {
 		return nil, observedKindUnknown, false
 	}
 
@@ -525,6 +535,9 @@ func (o *localObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 	if info.IsDir() {
 		return
 	}
+	if isSpecialFile(info) {
+		return // FIFOs, sockets and devices are never synced (see processObservedInfo).
+	}
 
 	cooldown := o.writeCoalesceCooldown
 	if cooldown == 0 {
@@ -576,6 +589,10 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 
 	if info.IsDir() {
 		return
+	}
+
+	if isSpecialFile(info) {
+		return // FIFOs, sockets and devices are never synced (see processObservedInfo).
 	}
 
 	// Stage 2 observation filter: file size check (requires stat).

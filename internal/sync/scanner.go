@@ -31,6 +31,7 @@ import (
 	stdsync "sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/sync/errgroup"
 
@@ -531,6 +532,17 @@ func (o *localObserver) processObservedInfo(
 		return nil
 	}
 
+	// FIFOs, sockets and devices have no content to sync, and opening a FIFO
+	// to hash it would block until a writer appears. Marking the path
+	// observed keeps deletion detection from treating it as removed.
+	if isSpecialFile(info) {
+		observed[dbRelPath] = true
+		o.logger.Debug("skipping special file",
+			slog.String("path", dbRelPath),
+			slog.String("mode", info.Mode().Type().String()))
+		return nil
+	}
+
 	// Stage 2 observation filter: file size check (requires stat, hence here).
 	// FullScan records SkippedItems for oversized files; watch handlers don't
 	// (the safety scan catches them).
@@ -939,22 +951,46 @@ func appendMultiGroupCollisions(
 	indices []int,
 	childColliderSet map[int]struct{},
 ) []skippedItem {
+	seen := make(map[string]bool, len(indices))
 	for i, idx := range indices {
 		if _, isChild := childColliderSet[idx]; isChild {
 			continue
 		}
 
 		var others []string
+		sameForm := false
 		for j, otherIdx := range indices {
-			if j != i {
-				others = append(others, filepath.Base(events[otherIdx].Path))
+			if j == i {
+				continue
+			}
+			if events[otherIdx].Path == events[idx].Path {
+				sameForm = true
+				continue
+			}
+			others = append(others, filepath.Base(events[otherIdx].Path))
+		}
+
+		if seen[events[idx].Path] {
+			continue // the same normalized path is reported once
+		}
+		seen[events[idx].Path] = true
+
+		detail := fmt.Sprintf("conflicts with %s", strings.Join(others, ", "))
+		if sameForm {
+			// Paths are NFC-normalized, so two files whose names differ only
+			// in Unicode form (composed "é" vs "e" + combining accent) arrive
+			// with identical paths: naming the other one would print the same
+			// name twice.
+			detail = "another file here has the same name in a different Unicode form (for example é typed as e plus an accent); rename one of them"
+			if len(others) > 0 {
+				detail += "; it also conflicts with " + strings.Join(others, ", ")
 			}
 		}
 
 		collisions = append(collisions, skippedItem{
 			Path:   events[idx].Path,
 			Reason: issueCaseCollision,
-			Detail: fmt.Sprintf("conflicts with %s", strings.Join(others, ", ")),
+			Detail: detail,
 		})
 	}
 
@@ -1069,7 +1105,7 @@ func computeStableHashWith(fsPath string, hashFunc func(string) (string, error))
 }
 
 func trustedStat(path string) (os.FileInfo, error) {
-	file, err := localpath.Open(path)
+	file, err := localpath.OpenRegular(path)
 	if err != nil {
 		// No path here: the *os.PathError already names it.
 		return nil, fmt.Errorf("open trusted path: %w", err)
@@ -1139,6 +1175,12 @@ func shouldObserveWithFilter(
 	return nil
 }
 
+// isSpecialFile reports a non-directory that is not a regular file: a FIFO,
+// socket or device. Symlinks are classified before this, on the link itself.
+func isSpecialFile(info fs.FileInfo) bool {
+	return !info.IsDir() && !info.Mode().IsRegular()
+}
+
 func dirEntryKind(d fs.DirEntry) observedKind {
 	if d.IsDir() {
 		return observedKindDir
@@ -1158,8 +1200,25 @@ func dirEntryKind(d fs.DirEntry) observedKind {
 // space, component length > 255, reserved device names, reserved patterns,
 // invalid characters.
 func validateOneDriveName(name string) (reason, detail string) {
+	return validateOneDriveNameFor(name, false)
+}
+
+// validateOneDriveNameFor applies the name rules of the target drive type.
+// personal relaxes the Business/SharePoint-only reservations (lockfiles,
+// desktop.ini, "~$" owner files) that OneDrive Personal accepts.
+func validateOneDriveNameFor(name string, personal bool) (reason, detail string) {
 	if name == "" {
 		return IssueInvalidFilename, "the name is empty"
+	}
+
+	// Graph would reinterpret invalid bytes (0xFF arrives as "ÿ"), and the
+	// renamed remote item would then rename the local file to match.
+	if !utf8.ValidString(name) {
+		return IssueInvalidFilename, "the name is not valid UTF-8"
+	}
+
+	if containsControlChar(name) {
+		return IssueInvalidFilename, "the name contains a control character (such as a tab or newline)"
 	}
 
 	if name[len(name)-1] == '.' {
@@ -1184,8 +1243,12 @@ func validateOneDriveName(name string) (reason, detail string) {
 		return IssueInvalidFilename, "the name is reserved by Windows"
 	}
 
-	if isReservedPattern(name, lower) {
-		return IssueInvalidFilename, "OneDrive reserves this name"
+	if strings.Contains(lower, "_vti_") {
+		return IssueInvalidFilename, `OneDrive reserves names containing "_vti_"`
+	}
+
+	if !personal && isReservedPattern(name, lower) {
+		return IssueInvalidFilename, "OneDrive for work or school reserves this name"
 	}
 
 	if containsInvalidChars(name) {
@@ -1211,7 +1274,7 @@ func syncRootExists(syncRoot string) bool {
 }
 
 func validateObservedName(name, path string, rules LocalObservationRules) (reason, detail string) {
-	if reason, detail := validateOneDriveName(name); reason != "" {
+	if reason, detail := validateOneDriveNameFor(name, rules.PersonalNameRules); reason != "" {
 		return reason, detail
 	}
 
@@ -1227,8 +1290,14 @@ func isSharePointRootForms(name, path string) bool {
 }
 
 // isReservedDeviceName returns true for Windows reserved device names
-// (case-insensitive): CON, PRN, AUX, NUL, COM0-COM9, LPT0-LPT9.
+// (case-insensitive): CON, PRN, AUX, NUL, COM0-COM9, LPT0-LPT9, with or
+// without an extension. OneDrive rejects "con.txt" and "nul.tar.gz" exactly
+// like "con", so only the part before the first period matters.
 func isReservedDeviceName(lower string) bool {
+	if base, _, found := strings.Cut(lower, "."); found {
+		lower = base
+	}
+
 	switch lower {
 	case "con", "prn", "aux", "nul":
 		return true
@@ -1244,8 +1313,21 @@ func isReservedDeviceName(lower string) bool {
 	return false
 }
 
-// isReservedPattern returns true for OneDrive-specific reserved file patterns:
-// .lock extension, desktop.ini, ~$ prefix (Office temp), _vti_ substring.
+// containsControlChar reports C0 control characters and DEL, which Graph
+// rejects in names.
+func containsControlChar(name string) bool {
+	for _, c := range name {
+		if c < 0x20 || c == 0x7f {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isReservedPattern returns true for the names OneDrive for work or school
+// reserves: .lock extension, desktop.ini, ~$ prefix (Office temp). "_vti_" is
+// checked separately because every drive type rejects it.
 func isReservedPattern(name, lower string) bool {
 	if strings.HasSuffix(lower, ".lock") {
 		return true
@@ -1255,11 +1337,7 @@ func isReservedPattern(name, lower string) bool {
 		return true
 	}
 
-	if strings.HasPrefix(name, "~$") {
-		return true
-	}
-
-	return strings.Contains(lower, "_vti_")
+	return strings.HasPrefix(name, "~$")
 }
 
 // containsInvalidChars returns true if the name contains characters

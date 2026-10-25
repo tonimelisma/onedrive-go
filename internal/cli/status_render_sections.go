@@ -7,18 +7,40 @@ import (
 
 func printDriveSyncSections(w io.Writer, indent string, ss *syncStateInfo, history bool) error {
 	_ = history
-	if ss == nil || len(ss.Conditions) == 0 {
+	if ss == nil {
 		return nil
 	}
 
+	if len(ss.Conditions) > 0 {
+		if err := writeln(w); err != nil {
+			return err
+		}
+		if err := writeln(w, indent+"Issues:"); err != nil {
+			return err
+		}
+		if err := printIssueSection(w, indent+"  ", ss.Conditions); err != nil {
+			return err
+		}
+	}
+
+	return printRetryingSection(w, indent, ss)
+}
+
+func printRetryingSection(w io.Writer, indent string, ss *syncStateInfo) error {
+	if len(ss.RetryingPaths) == 0 {
+		return nil
+	}
 	if err := writeln(w); err != nil {
 		return err
 	}
-	if err := writeln(w, indent+"Issues:"); err != nil {
+	if err := writeln(w, indent+"Retrying:"); err != nil {
+		return err
+	}
+	if err := writef(w, "%s  Sync keeps retrying these; the sync log has each error.\n", indent); err != nil {
 		return err
 	}
 
-	return printIssueSection(w, indent+"  ", ss.Conditions)
+	return printIssuePaths(w, indent+"  ", ss.RetryingPaths, ss.Retrying)
 }
 
 func printIssueSection(w io.Writer, indent string, groups []statusConditionJSON) error {

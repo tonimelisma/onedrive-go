@@ -130,6 +130,7 @@ type syncStateInfo struct {
 	ConditionCount        int                   `json:"issue_count,omitempty"`
 	RemoteDrift           int                   `json:"remote_changes,omitempty"`
 	Retrying              int                   `json:"retrying"`
+	RetryingPaths         []string              `json:"retrying_paths,omitempty"`
 	Conditions            []statusConditionJSON `json:"issues,omitempty"`
 	ExamplesLimit         int                   `json:"examples_limit,omitempty"`
 	Verbose               bool                  `json:"verbose,omitempty"`

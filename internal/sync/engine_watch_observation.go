@@ -96,9 +96,8 @@ func (flow *engineFlow) logSkippedObservationFindings(
 			samples = append(samples, items[i].Path)
 		}
 
-		eng.logger.Warn(fmt.Sprintf("Not syncing %d files: %s", len(items), skippedItemReasonText(&items[0])),
-			slog.Any("examples", samples),
-		)
+		eng.logger.Warn(fmt.Sprintf("Not syncing %s, such as %s",
+			aggregateSkippedText(reason, items), strings.Join(samples, ", ")))
 		// Keep full per-path visibility at Debug while avoiding a warning
 		// storm once a single scanner issue fans out across many files.
 		for i := range items {
@@ -109,6 +108,25 @@ func (flow *engineFlow) logSkippedObservationFindings(
 			)
 		}
 	}
+}
+
+// aggregateSkippedText words a group of skipped files: "11 files: <detail>"
+// when every file shares one detail, otherwise the condition's label ("11
+// files with names OneDrive does not allow"). One file's detail once spoke for
+// eleven different invalid names as "the name starts with a space".
+func aggregateSkippedText(reason string, items []skippedItem) string {
+	shared := skippedItemReasonText(&items[0])
+	for i := 1; i < len(items); i++ {
+		if skippedItemReasonText(&items[i]) == shared {
+			continue
+		}
+		if key, ok := conditionKeyForIssueType(reason); ok {
+			return fmt.Sprintf("%d %s", len(items), conditionLabel(key, len(items)))
+		}
+		return fmt.Sprintf("%d files: %s", len(items), strings.ReplaceAll(reason, "_", " "))
+	}
+
+	return fmt.Sprintf("%d files: %s", len(items), shared)
 }
 
 // skippedItemReasonText is the user-facing reason for a skipped file: the

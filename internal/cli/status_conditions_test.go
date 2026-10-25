@@ -660,3 +660,36 @@ func descriptorFallbackCase() descriptorCase {
 		wantAction: "Check logs for details or rerun status after the next sync pass.",
 	}
 }
+
+// Validates: R-6.6.25
+func TestBuildSyncStateInfo_ListsRetryingWork(t *testing.T) {
+	t.Parallel()
+
+	snapshot := &syncengine.DriveStatusSnapshot{
+		RetryingItems: 3,
+		RetryingWork: []syncengine.RetryWorkRow{
+			{Path: "docs/a.txt", ActionType: syncengine.ActionUpload, AttemptCount: 9},
+			{Path: "docs/new.txt", OldPath: "docs/old.txt", ActionType: syncengine.ActionRemoteMove, AttemptCount: 4},
+			{Path: "docs/c.txt", ActionType: syncengine.ActionDownload, AttemptCount: 3},
+		},
+	}
+
+	info := buildSyncStateInfo(snapshot, false, 2)
+	assert.Equal(t, []string{
+		"docs/a.txt (upload, 9 attempts)",
+		"docs/old.txt -> docs/new.txt (remote_move, 4 attempts)",
+	}, info.RetryingPaths)
+
+	var buf bytes.Buffer
+	require.NoError(t, printDriveSyncSections(&buf, "    ", &info, false))
+	assert.Equal(t, "\n"+
+		"    Retrying:\n"+
+		"      Sync keeps retrying these; the sync log has each error.\n"+
+		"\n"+
+		"      docs/a.txt (upload, 9 attempts)\n"+
+		"      docs/old.txt -> docs/new.txt (remote_move, 4 attempts)\n"+
+		"      ... and 1 more (use --verbose to see all)\n",
+		buf.String())
+
+	assert.Len(t, buildSyncStateInfo(snapshot, true, 2).RetryingPaths, 3, "--verbose lists every item")
+}

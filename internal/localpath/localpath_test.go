@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -255,4 +256,34 @@ func TestRejectsEmptyPath(t *testing.T) {
 	_, err = ReadDir("")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "path is empty")
+}
+
+func TestOpenRegular_RejectsFIFOWithoutBlocking(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
+
+	done := make(chan error, 1)
+	go func() {
+		f, err := OpenRegular(fifo)
+		if f != nil {
+			assert.NoError(t, f.Close())
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrNotRegularFile)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "OpenRegular blocked on a FIFO")
+	}
+
+	regular := filepath.Join(dir, "file.txt")
+	require.NoError(t, os.WriteFile(regular, []byte("x"), 0o600))
+	f, err := OpenRegular(regular)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -49,6 +50,39 @@ func Open(path string) (*os.File, error) {
 	file, err := os.Open(abs)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", path, err)
+	}
+
+	return file, nil
+}
+
+// ErrNotRegularFile reports that a path names a FIFO, socket, device or other
+// non-regular file, which sync never reads.
+var ErrNotRegularFile = errors.New("not a regular file")
+
+// OpenRegular opens path read-only and returns ErrNotRegularFile unless it is
+// a regular file. The open never blocks: a plain open of a FIFO waits for a
+// writer forever, which used to hang the whole sync engine (and its shutdown)
+// on any FIFO in the sync tree. O_NONBLOCK has no effect on regular files.
+func OpenRegular(path string) (*os.File, error) {
+	abs, err := absolutePath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	//nolint:gosec // localpath is the explicit arbitrary-path boundary after clean+Abs validation.
+	file, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s: %w", path, err)
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		closeErr := file.Close()
+		return nil, errors.Join(fmt.Errorf("stat %s: %w", path, err), closeErr)
+	}
+	if !info.Mode().IsRegular() {
+		closeErr := file.Close()
+		return nil, errors.Join(fmt.Errorf("opening %s: %w", path, ErrNotRegularFile), closeErr)
 	}
 
 	return file, nil

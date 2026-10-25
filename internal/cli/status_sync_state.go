@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -83,7 +84,26 @@ func buildSyncStateInfo(
 		Verbose:       verbose,
 	}
 
+	info.RetryingPaths = retryingPaths(snapshot.RetryingWork, verbose, examplesLimit)
 	info.ConditionCount = conditionTotal(info.Conditions)
 
 	return info
+}
+
+// retryingPaths names the work behind the "Retrying" count, which on its own
+// gave no way to find out what kept failing.
+func retryingPaths(rows []syncengine.RetryWorkRow, verbose bool, limit int) []string {
+	paths := make([]string, 0, len(rows))
+	for i := range rows {
+		if !verbose && len(paths) >= limit {
+			break
+		}
+		path := rows[i].Path
+		if rows[i].OldPath != "" && rows[i].OldPath != rows[i].Path {
+			path = rows[i].OldPath + " -> " + rows[i].Path
+		}
+		paths = append(paths, fmt.Sprintf("%s (%s, %d attempts)", path, rows[i].ActionType.String(), rows[i].AttemptCount))
+	}
+
+	return paths
 }

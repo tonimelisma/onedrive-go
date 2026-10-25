@@ -48,6 +48,7 @@ When the same file has been modified on both the local filesystem and OneDrive s
 - R-2.4.10: Shortcut projection conflicts shall be durable parent-owned lifecycle facts. Duplicate automatic child projections for the same namespace/content root are marked by the parent engine as `duplicate_target` using a deterministic path/binding winner. Explicit standalone shared-folder mounts may project the same remote content root as automatic shortcut children when their configured local `sync_dir`s do not overlap; config validation owns duplicate/nested configured sync-dir rejection. Local child-root file, final-symlink, symlinked-ancestor, or traversal collisions are recorded in parent `shortcut_roots` instead of letting the child engine start on an unsafe path. [verified]
 - R-2.4.11: Local watch prefiltering shall treat filesystem events with unknown kind as directory-capable as well as file-capable. Included directory roots and their necessary ancestors must pass the pre-stat filter so the later observation stage can refresh authoritative local truth for that path. [verified]
 - R-2.4.12: Content local observation cannot read shall never look deleted. When a directory or entry cannot be read for any reason other than having been removed, or when a followed symlink's target is missing or unreadable (for example, its disk is unmounted), observation shall record a local read boundary at that path, so the planner treats local truth under it as unavailable and never deletes the corresponding OneDrive content. The boundary surfaces in `status` with its reason. [verified]
+- R-2.4.13: Local observation shall skip FIFOs, sockets and device files silently, like excluded symlinks, and shall never open them. Every read of local content (hashing, upload) shall use a non-blocking open that refuses anything but a regular file, because a blocking open of a FIFO waits for a writer forever and once hung the whole sync engine and its shutdown. [verified]
 
 ## R-2.5 Crash Recovery [verified]
 
@@ -151,10 +152,11 @@ Failure tracking, scope-based classification, and lifecycle management. Each fai
 The system shall validate filenames against OneDrive naming restrictions before upload and during remote observation.
 
 - R-2.11.1: The system shall reject local files with characters invalid on OneDrive (`"`, `*`, `:`, `<`, `>`, `?`, `/`, `\`, `|`) before upload. [verified]
-- R-2.11.2: The system shall reject local files with OneDrive reserved names (case-insensitive): `.lock`, `desktop.ini`, `CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`. [verified]
-- R-2.11.3: The system shall reject local files matching OneDrive reserved patterns: names starting with `~$`, names containing `_vti_`, and `forms` at root level on SharePoint drives. [verified]
+- R-2.11.2: The system shall reject local files with Windows device names (case-insensitive) `CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`, with or without an extension (`con.txt`, `nul.tar.gz`), on every drive type. On OneDrive for work or school and SharePoint it shall also reject `.lock` names and `desktop.ini`; OneDrive Personal accepts those, so they sync there. [verified]
+- R-2.11.3: The system shall reject local files matching OneDrive reserved patterns: names containing `_vti_` on every drive type, names starting with `~$` on work or school and SharePoint drives (OneDrive Personal accepts them), and `forms` at root level on SharePoint drives. [verified]
 - R-2.11.4: The system shall reject local files with trailing dots or leading/trailing whitespace. [verified]
 - R-2.11.5: When the scanner filters a file due to naming restrictions, the system shall record it as an actionable issue (not silently skip with only a DEBUG log). [verified]
+- R-2.11.6: The system shall reject local names that are not valid UTF-8 or that contain control characters (U+0000 to U+001F, U+007F). Graph rejects control characters, and it reinterprets invalid bytes (0xFF arrives as `ÿ`), after which the renamed remote item would rename the local file. [verified]
 
 ## R-2.12 Case Collision Handling [verified]
 
