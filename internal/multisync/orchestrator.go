@@ -123,6 +123,12 @@ type Orchestrator struct {
 	// watchReportMemory is owned by the RunWatch select loop; see
 	// watchReportState. It is reset at the start of each RunWatch.
 	watchReportMemory *watchReportState
+	// keptDrainNoticesMu guards keptDrainNotices: the fingerprint last
+	// reported per removed shared folder whose local copy is kept. One-shot
+	// parents finalize their children concurrently, so this is not owned by
+	// a single loop the way watchReportMemory is.
+	keptDrainNoticesMu gosync.Mutex
+	keptDrainNotices   map[string]string
 }
 
 // NewOrchestrator creates an Orchestrator with real Engine factory.

@@ -247,7 +247,7 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 	case <-rt.retryTimerChan():
 		return false, rt.handleWatchHeldReleaseSignal(ctx, p, false)
 	case <-logC:
-		rt.logBootstrapWait()
+		rt.logBootstrapWait(ctx)
 		return false, nil
 	case <-ctx.Done():
 		rt.beginWatchDrain(ctx, p)
@@ -618,11 +618,24 @@ func (rt *watchRuntime) handleWatchHeldRelease(
 	return rt.releaseHeldFrontier(ctx, p, trial)
 }
 
-func (rt *watchRuntime) logBootstrapWait() {
-	rt.deps.logger.Info("bootstrap: waiting for in-flight actions",
-		slog.Int("in_flight", rt.sched.graph.InFlightCount()),
-		slog.Int("running", rt.sched.runningCount),
-		slog.Int("held", len(rt.retries.heldByKey)),
+// logBootstrapWait is the periodic progress line while the initial pass
+// waits for its last actions. It is verbose-level progress only when the
+// counts moved since the previous tick; an unchanged tick goes to Debug so a
+// long transfer does not repeat the same line.
+func (rt *watchRuntime) logBootstrapWait(ctx context.Context) {
+	inFlight := rt.sched.graph.InFlightCount()
+	running := rt.sched.runningCount
+	held := len(rt.retries.heldByKey)
+	signature := fmt.Sprintf("%d/%d/%d", inFlight, running, held)
+	level := slog.LevelInfo
+	if signature == rt.loop.lastBootstrapWait {
+		level = slog.LevelDebug
+	}
+	rt.loop.lastBootstrapWait = signature
+	rt.deps.logger.Log(ctx, level, "Waiting for the remaining changes to finish",
+		slog.Int("in_flight", inFlight),
+		slog.Int("running", running),
+		slog.Int("held", held),
 	)
 }
 

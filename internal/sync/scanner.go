@@ -1029,7 +1029,7 @@ func computeStableHash(fsPath string) (string, error) {
 func computeStableHashWith(fsPath string, hashFunc func(string) (string, error)) (string, error) {
 	pre, err := trustedStat(fsPath)
 	if err != nil {
-		return "", fmt.Errorf("sync: pre-hash stat %s: %w", fsPath, err)
+		return "", fmt.Errorf("stat before hashing: %w", err)
 	}
 
 	if hashFunc == nil {
@@ -1038,12 +1038,12 @@ func computeStableHashWith(fsPath string, hashFunc func(string) (string, error))
 
 	hash, err := hashFunc(fsPath)
 	if err != nil {
-		return "", fmt.Errorf("compute quickxor hash %s: %w", fsPath, err)
+		return "", fmt.Errorf("compute quickxor hash: %w", err)
 	}
 
 	post, err := trustedStat(fsPath)
 	if err != nil {
-		return "", fmt.Errorf("sync: post-hash stat %s: %w", fsPath, err)
+		return "", fmt.Errorf("stat after hashing: %w", err)
 	}
 
 	if pre.Size() != post.Size() || pre.ModTime() != post.ModTime() {
@@ -1056,7 +1056,8 @@ func computeStableHashWith(fsPath string, hashFunc func(string) (string, error))
 func trustedStat(path string) (os.FileInfo, error) {
 	file, err := localpath.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("open trusted path %s: %w", path, err)
+		// No path here: the *os.PathError already names it.
+		return nil, fmt.Errorf("open trusted path: %w", err)
 	}
 
 	info, statErr := file.Stat()
@@ -1066,7 +1067,7 @@ func trustedStat(path string) (os.FileInfo, error) {
 			return nil, errors.Join(statErr, closeErr)
 		}
 
-		return nil, fmt.Errorf("stat %s: %w", path, statErr)
+		return nil, fmt.Errorf("stat trusted path: %w", statErr)
 	}
 	if closeErr != nil {
 		return nil, fmt.Errorf("closing %s: %w", path, closeErr)

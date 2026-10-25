@@ -1,9 +1,12 @@
 package sync
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -970,11 +973,16 @@ func TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending(t *t
 }
 
 // Validates: R-2.4.8
-func TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeReturningError(t *testing.T) {
+// Regression: entering the cleanup-blocked state used to return the cleanup
+// error once, which in watch mode ended the remote observer. The transition
+// now persists the blocked state, warns once, and returns no error.
+func TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedWithoutError(t *testing.T) {
 	t.Parallel()
 
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
 	eng.shortcutNamespaceID = shortcutNamespaceTestID
+	var logBuf bytes.Buffer
+	eng.logger = slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(filepath.Dir(aliasRoot), 0o700))
 	require.NoError(t, os.WriteFile(aliasRoot, []byte("blocking file"), 0o600))
@@ -992,14 +1000,16 @@ func TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedBeforeRetur
 
 	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
 
-	require.Error(t, err)
-	assert.False(t, changed)
+	require.NoError(t, err, "a blocked cleanup is durable state, not a pass failure")
+	assert.True(t, changed)
 	roots, listErr := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, listErr)
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateRemovedCleanupBlocked, roots[0].State)
 	assert.Contains(t, roots[0].BlockedDetail, "not a directory")
 	assert.Equal(t, []string{"Shared/Docs"}, roots[0].ProtectedPaths)
+	assert.Equal(t, 1, strings.Count(logBuf.String(), "level=WARN"), "the transition warns exactly once")
+	assert.Contains(t, logBuf.String(), "Could not remove the local copy of removed shared folder Shared/Docs")
 }
 
 // Validates: R-2.4.8
@@ -1010,6 +1020,8 @@ func TestEngine_ReconcileShortcutRootLocalStateRepeatedCleanupBlockedIsQuiet(t *
 
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
 	eng.shortcutNamespaceID = shortcutNamespaceTestID
+	var logBuf bytes.Buffer
+	eng.logger = slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(filepath.Dir(aliasRoot), 0o700))
 	require.NoError(t, os.WriteFile(aliasRoot, []byte("still blocking"), 0o600))
@@ -1025,15 +1037,16 @@ func TestEngine_ReconcileShortcutRootLocalStateRepeatedCleanupBlockedIsQuiet(t *
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	_, err := eng.reconcileShortcutRootLocalState(t.Context())
-	require.Error(t, err, "the transition into the blocked state is reported once")
-	assert.Contains(t, err.Error(), "not a directory")
+	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	require.NoError(t, err)
+	assert.True(t, changed, "the transition into the blocked state is persisted")
 
 	for range 3 {
 		changed, repeatErr := eng.reconcileShortcutRootLocalState(t.Context())
 		require.NoError(t, repeatErr, "the unchanged blocked state is already persisted and shown by status")
 		assert.False(t, changed)
 	}
+	assert.Equal(t, 1, strings.Count(logBuf.String(), "level=WARN"), "only the transition warns")
 	roots, listErr := eng.baseline.listShortcutRoots(t.Context())
 	require.NoError(t, listErr)
 	require.Len(t, roots, 1)

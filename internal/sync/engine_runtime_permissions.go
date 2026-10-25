@@ -280,7 +280,7 @@ func (flow *engineFlow) recordPermissionRetryWork(
 		return err
 	}
 	if row == nil {
-		return fmt.Errorf("missing persisted row")
+		return errors.New("sync store returned no retry_work row")
 	}
 	flow.retries.rowsByKey[row.WorkKey()] = *row
 	fields := append(flow.summaryLogFields(
@@ -305,7 +305,7 @@ func (flow *engineFlow) recordPermissionBlockedRetry(
 		return err
 	}
 	if row == nil {
-		return fmt.Errorf("missing persisted row")
+		return errors.New("sync store returned no retry_work row")
 	}
 	flow.retries.rowsByKey[row.WorkKey()] = *row
 	fields := append(flow.summaryLogFields(

@@ -24,7 +24,7 @@ var errActionPreconditionChanged = errors.New("file changed while it was being s
 
 // errSyncRootDeleted is returned when the sync root directory has been deleted
 // or become inaccessible while a watch was running.
-var errSyncRootDeleted = errors.New("sync folder was deleted or is not accessible")
+var errSyncRootDeleted = errors.New("it was deleted or can't be read")
 
 // errWatchLimitExhausted is returned when the inotify watch limit is
 // exhausted (Linux ENOSPC). The engine falls back to periodic full scans.
@@ -41,7 +41,7 @@ var errRemoteObservationIncomplete = errors.New("OneDrive change list was incomp
 // ErrMountRootUnavailable is returned when the sync root for a mounted content
 // root is missing or inaccessible. Runtimes treat this as mount lifecycle, not
 // a request to delete remote content below that root.
-var ErrMountRootUnavailable = errors.New("sync: mount root unavailable")
+var ErrMountRootUnavailable = errors.New("sync folder unavailable")
 
 // ---------------------------------------------------------------------------
 // Scanner errors

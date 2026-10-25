@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"runtime/debug"
 	stdsync "sync" // used by WaitGroup
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
@@ -18,6 +19,11 @@ var (
 
 // minWorkers is the floor for total worker count.
 const minWorkers = 4
+
+// outcomeCommitTimeout bounds the shutdown-detached commit of a completed
+// action's outcome. One baseline transaction is milliseconds; the bound only
+// exists so a wedged store cannot block shutdown forever.
+const outcomeCommitTimeout = 30 * time.Second
 
 // workerPool spawns goroutines that pull TrackedActions from the dispatch
 // channel, execute them, persist success outcomes, and send completions back
@@ -190,12 +196,15 @@ func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 	outcome := wp.dispatchAction(actionCtx, exec, ta)
 
 	// Persist success outcomes immediately via the store-owned mutation input.
-	// Uses pool-level ctx because the action already completed — its outcome
-	// should be persisted even if the owning runtime canceled actionCtx.
+	// The transfer already happened, so the commit is detached from both the
+	// action and the pool context: a shutdown (Ctrl-C) landing between
+	// transfer completion and commit must not drop the record of work that
+	// is already done. outcomeCommitTimeout bounds the detached commit so a
+	// wedged store cannot hold shutdown hostage.
 	if outcome.Success {
 		mutation := mutationFromActionOutcome(&outcome)
 		if mutation != nil {
-			if commitErr := wp.baseline.CommitMutation(ctx, mutation); commitErr != nil {
+			if commitErr := wp.commitOutcome(ctx, mutation); commitErr != nil {
 				// Debug: returned as the action's failure (and a shutdown
 				// cancellation is not a failure the user needs to see).
 				wp.logger.Debug("worker: commit outcome failed",
@@ -210,6 +219,16 @@ func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 
 	wp.sendResult(ctx, ta, &outcome, outcome.Error)
 	// NO depGraph.Complete() — engine owns completion decisions.
+}
+
+// commitOutcome persists a completed action's baseline mutation on a context
+// that keeps the caller's values but not its cancellation, bounded by
+// outcomeCommitTimeout.
+func (wp *workerPool) commitOutcome(ctx context.Context, mutation *BaselineMutation) error {
+	commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), outcomeCommitTimeout)
+	defer cancel()
+
+	return wp.baseline.CommitMutation(commitCtx, mutation)
 }
 
 func (wp *workerPool) validateActionFreshness(ctx context.Context, ta *trackedAction) error {

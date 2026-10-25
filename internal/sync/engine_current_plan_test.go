@@ -304,7 +304,7 @@ func TestRunLiveCurrentPlan_FailsClosedWhenRemoteObservationReconcileFails(t *te
 		FullReconcile: fullReconcile,
 	})
 	require.Error(t, err)
-	require.ErrorContains(t, err, "failed to reconcile remote observation findings")
+	require.ErrorContains(t, err, "record skipped OneDrive items")
 }
 
 // Validates: R-2.10.5
@@ -349,7 +349,7 @@ func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing
 		completions: make(chan actionCompletion),
 	})
 	require.Error(t, err)
-	require.ErrorContains(t, err, "failed to reconcile remote observation findings")
+	require.ErrorContains(t, err, "record skipped OneDrive items")
 }
 
 // Validates: R-2.10.5

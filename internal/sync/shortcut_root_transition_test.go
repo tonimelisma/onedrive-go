@@ -2,6 +2,7 @@ package sync
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -64,6 +65,8 @@ func TestShortcutRootStatusMetadataCoversNonActiveStates(t *testing.T) {
 		assert.Equal(t, string(tt.state), metadata.StateReason)
 		assert.Equal(t, tt.issue, metadata.IssueClass)
 		assert.NotEmpty(t, metadata.Issue)
+		assert.NotEmpty(t, metadata.StatusLabel)
+		assertShortcutStatusTextIsUserVocabulary(t, tt.state, metadata.StatusLabel, metadata.Issue, metadata.RecoveryAction)
 		assert.Equal(t, tt.recovery, metadata.RecoveryClass)
 		assert.True(t, metadata.AutoRetry)
 		assert.Equal(t, tt.protectsPath, metadata.ProtectsPath)
@@ -474,4 +477,45 @@ func TestPlanShortcutRootReleaseCleanupPromotesWaitingReplacement(t *testing.T) 
 	assert.Equal(t, ShortcutRootStateActive, plan.Records[1].State)
 	assert.Equal(t, "new-binding", plan.Records[1].BindingItemID)
 	assert.Empty(t, plan.Records[0].ProtectedPaths)
+}
+
+func assertShortcutStatusTextIsUserVocabulary(t *testing.T, state ShortcutRootState, texts ...string) {
+	t.Helper()
+	// Words from the implementation that must not reach the default `status`
+	// text (spec/reference/cli-output-guidelines.md section 5).
+	internalTerms := []string{
+		"alias", "parent engine", "parent-engine", "child", "mount", "projection", "protected", "release", "_",
+	}
+	for _, text := range texts {
+		lower := strings.ToLower(text)
+		for _, term := range internalTerms {
+			assert.NotContainsf(t, lower, term, "%s status text %q uses internal term %q", state, text, term)
+		}
+	}
+}
+
+// Validates: R-2.4.8, R-2.10.1
+// The status view keeps the plain reason for the state apart from the raw
+// diagnostic recorded with it, so the CLI can show the reason by default and
+// the raw chain only on request.
+func TestShortcutRootStatusView_SeparatesReasonFromRawDetail(t *testing.T) {
+	t.Parallel()
+
+	rawChain := "sync: rename shortcut alias: graph: PATCH /drives/x/items/y: 403 accessDenied"
+	view := shortcutRootStatusViewFromRecord(&ShortcutRootRecord{
+		NamespaceID:       "personal:user@example.com",
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		LocalAlias:        "Docs",
+		State:             ShortcutRootStateAliasMutationBlocked,
+		BlockedDetail:     rawChain,
+	}, "", "/sync")
+
+	assert.Equal(t, ShortcutRootStatus(ShortcutRootStateAliasMutationBlocked).Issue, view.Reason)
+	assert.NotContains(t, view.Reason, "graph:")
+	assert.Equal(t, rawChain, view.Detail)
+
+	fallback := ShortcutRootStatus(ShortcutRootState("future_state"))
+	assert.NotEmpty(t, fallback.StatusLabel)
+	assertShortcutStatusTextIsUserVocabulary(t, "future_state", fallback.StatusLabel, fallback.Issue)
 }

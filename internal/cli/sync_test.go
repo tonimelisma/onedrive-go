@@ -559,7 +559,7 @@ sync_dir = %q
 					Identity:       testStandaloneMountIdentity(drives[0].CanonicalID),
 					DisplayName:    drives[0].DisplayName,
 					Status:         multisync.MountStartupFatal,
-					Err:            fmt.Errorf("sync: opening sync tree %q: %w", drives[0].SyncDir, syncengine.ErrMountRootUnavailable),
+					Err:            fmt.Errorf("%w: %s is missing or is not a folder", syncengine.ErrMountRootUnavailable, drives[0].SyncDir),
 				}},
 			},
 		}
@@ -567,7 +567,7 @@ sync_dir = %q
 
 	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "mount root unavailable")
+	assert.Contains(t, err.Error(), "sync folder unavailable")
 	assert.True(t, called)
 	require.Len(t, gotDrives, 1)
 	assert.Equal(t, syncDir, gotDrives[0].SyncDir)

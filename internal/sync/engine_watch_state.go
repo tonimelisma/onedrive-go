@@ -22,6 +22,14 @@ type watchLoopState struct {
 	// shared-folder child-set signatures for watch summaries.
 	lastSummarySignature string
 	lastRemoteBlocked    map[ScopeKey]string
+
+	// lastDroppedRescanErr is the error text last warned for a failed
+	// dropped-event rescan; a repeat of the same failure goes to Debug
+	// (R-6.6.30). Cleared when a rescan is scheduled.
+	lastDroppedRescanErr string
+	// lastBootstrapWait is the in-flight/running/held counts last logged
+	// while bootstrap waited; an unchanged tick goes to Debug.
+	lastBootstrapWait string
 }
 
 type watchTimerState struct {

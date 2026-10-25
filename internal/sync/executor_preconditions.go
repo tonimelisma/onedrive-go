@@ -569,5 +569,5 @@ func (e *executor) validateNoSymlinkBoundary(relPath string, verb string) error 
 		return nil
 	}
 
-	return fmt.Errorf("refusing to %s %s through symlink boundary %s", verb, relPath, boundary)
+	return fmt.Errorf("won't %s %s: %s is a symbolic link, and sync never writes through one", verb, relPath, boundary)
 }

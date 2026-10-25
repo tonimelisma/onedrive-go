@@ -37,7 +37,7 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 	}
 	changed := false
 	nextRecords := make([]ShortcutRootRecord, 0, len(records))
-	var releaseCleanupErr error
+	var newlyBlocked []shortcutRootCleanupBlockedReport
 	for i := range records {
 		step, recordErr := e.reconcileShortcutRootLocalStateRecord(ctx, &records[i], localRows)
 		if recordErr != nil {
@@ -45,21 +45,29 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 		}
 		nextRecords = append(nextRecords, step.records...)
 		changed = changed || step.changed
-		releaseCleanupErr = errors.Join(releaseCleanupErr, step.releaseCleanupErr)
+		if step.releaseCleanupErr == nil {
+			continue
+		}
+		// A blocked cleanup is durable state: it is persisted below, `status`
+		// shows it, and it is retried here every pass. It is never returned
+		// as an error, because that would fail every one-shot run and end
+		// the watch remote observer, stalling unrelated remote sync over a
+		// condition only the user can clear. It is reported once, when the
+		// record first enters the blocked state (or its reason changes);
+		// an unchanged repeat stays at Debug.
+		if !step.changed {
+			e.logger.Debug("shortcut root release cleanup still blocked",
+				slog.String("path", records[i].RelativeLocalPath),
+				slog.String("error", step.releaseCleanupErr.Error()),
+			)
+			continue
+		}
+		newlyBlocked = append(newlyBlocked, shortcutRootCleanupBlockedReport{
+			relativeLocalPath: records[i].RelativeLocalPath,
+			err:               step.releaseCleanupErr,
+		})
 	}
 	if !changed {
-		// A cleanup that was already blocked and is still blocked for the
-		// same reason is persisted durable state (`status` shows it, and it
-		// is retried here every pass). Returning its error again would fail
-		// every one-shot run and end the watch remote observer over a
-		// condition that has not changed, stalling unrelated remote sync.
-		// The error is returned once, on the transition into the blocked
-		// state below.
-		if releaseCleanupErr != nil {
-			e.logger.Debug("shortcut root release cleanup still blocked",
-				slog.String("error", releaseCleanupErr.Error()),
-			)
-		}
 		return false, nil
 	}
 	if err := e.baseline.replaceShortcutRoots(ctx, nextRecords); err != nil {
@@ -68,10 +76,21 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 	if err := e.refreshProtectedRootsFromStore(ctx); err != nil {
 		return false, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
-	if releaseCleanupErr != nil {
-		return false, releaseCleanupErr
+	for i := range newlyBlocked {
+		e.logger.Warn("Could not remove the local copy of removed shared folder "+
+			newlyBlocked[i].relativeLocalPath+
+			"; move or delete what is in the way and the next sync finishes the cleanup",
+			slog.String("error", newlyBlocked[i].err.Error()),
+		)
 	}
 	return true, nil
+}
+
+// shortcutRootCleanupBlockedReport is one record that entered the
+// cleanup-blocked state in this pass, reported after the state is persisted.
+type shortcutRootCleanupBlockedReport struct {
+	relativeLocalPath string
+	err               error
 }
 
 type shortcutRootLocalReconcileStep struct {

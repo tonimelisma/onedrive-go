@@ -300,7 +300,11 @@ func printDriveState(w io.Writer, layout statusDriveTextLayout, drive *statusDri
 	if drive.State == driveStateReady {
 		return nil
 	}
-	return writef(w, "%sStatus: %s\n", layout.detailIndent, statusDriveStateLabel(drive.State))
+	label := statusDriveStateLabel(drive.State)
+	if label == drive.State && drive.StateLabel != "" {
+		label = drive.StateLabel
+	}
+	return writef(w, "%sStatus: %s\n", layout.detailIndent, label)
 }
 
 func printSharedFolderStatuses(
@@ -331,13 +335,10 @@ func printDriveLifecycleStatus(w io.Writer, layout statusDriveTextLayout, drive 
 			return err
 		}
 	}
-	if drive.StateReason != "" {
-		if err := writef(w, "%sReason: %s\n", layout.detailIndent, drive.StateReason); err != nil {
-			return err
-		}
-	}
+	// The machine token (StateReason) is for --json; people read the plain
+	// sentence, and the raw diagnostic only when they asked for it.
 	if drive.StateDetail != "" {
-		if err := writef(w, "%sNext: %s\n", layout.detailIndent, drive.StateDetail); err != nil {
+		if err := writef(w, "%sReason: %s\n", layout.detailIndent, drive.StateDetail); err != nil {
 			return err
 		}
 	}
@@ -351,6 +352,11 @@ func printDriveLifecycleStatus(w io.Writer, layout statusDriveTextLayout, drive 
 	}
 	if drive.RecoveryAction != "" && drive.RecoveryAction != drive.StateDetail {
 		if err := writef(w, "%sAction: %s\n", layout.detailIndent, drive.RecoveryAction); err != nil {
+			return err
+		}
+	}
+	if drive.StateDebugDetail != "" {
+		if err := writef(w, "%sDetail: %s\n", layout.detailIndent, drive.StateDebugDetail); err != nil {
 			return err
 		}
 	}

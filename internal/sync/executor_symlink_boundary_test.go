@@ -85,7 +85,7 @@ func TestExecutor_Download_SymlinkedAncestorIsBlocked(t *testing.T) {
 
 	o := f.exec.ExecuteDownload(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	assert.Contains(t, o.Error.Error(), "refusing to download alias/victim.txt through symlink boundary alias")
+	assert.Contains(t, o.Error.Error(), "won't download alias/victim.txt: alias is a symbolic link")
 	f.requireTargetIntact(t, "victim.txt")
 }
 
@@ -106,7 +106,7 @@ func TestExecutor_LocalMove_SymlinkedAncestorSourceIsBlocked(t *testing.T) {
 
 	o := f.exec.ExecuteLocalMove(action)
 	requireOutcomeFailure(t, &o)
-	assert.Contains(t, o.Error.Error(), "symlink boundary alias")
+	assert.Contains(t, o.Error.Error(), "alias is a symbolic link")
 	f.requireTargetIntact(t, "src.txt")
 }
 
@@ -128,7 +128,7 @@ func TestExecutor_LocalMove_SymlinkedAncestorDestinationIsBlocked(t *testing.T) 
 
 	o := f.exec.ExecuteLocalMove(action)
 	requireOutcomeFailure(t, &o)
-	assert.Contains(t, o.Error.Error(), "symlink boundary alias")
+	assert.Contains(t, o.Error.Error(), "alias is a symbolic link")
 	f.requireTargetIntact(t, "victim.txt")
 	assert.FileExists(t, filepath.Join(f.syncRoot, "src.txt"))
 }
@@ -149,7 +149,7 @@ func TestExecutor_ConflictCopy_SymlinkedAncestorIsBlocked(t *testing.T) {
 
 	o := f.exec.ExecuteConflictCopy(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	assert.Contains(t, o.Error.Error(), "refusing to conflict-copy alias/doc.txt through symlink boundary alias")
+	assert.Contains(t, o.Error.Error(), "won't conflict-copy alias/doc.txt: alias is a symbolic link")
 	f.requireTargetIntact(t, "doc.txt")
 }
 
@@ -169,7 +169,7 @@ func TestExecutor_CreateLocalFolder_SymlinkedAncestorIsBlocked(t *testing.T) {
 
 	o := f.exec.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	assert.Contains(t, o.Error.Error(), "refusing to create folder alias/newdir through symlink boundary alias")
+	assert.Contains(t, o.Error.Error(), "won't create folder alias/newdir: alias is a symbolic link")
 	assert.NoDirExists(t, filepath.Join(f.outside, "target", "newdir"))
 }
 
@@ -369,7 +369,7 @@ func TestExecutor_UnderFollowedDirectoryAlias_UploadReadsButDownloadStaysRefused
 	}
 	downloadOutcome := f.exec.ExecuteDownload(t.Context(), download)
 	requireOutcomeFailure(t, &downloadOutcome)
-	assert.Contains(t, downloadOutcome.Error.Error(), "refusing to download alias/photo.txt through symlink boundary alias")
+	assert.Contains(t, downloadOutcome.Error.Error(), "won't download alias/photo.txt: alias is a symbolic link")
 	f.requireTargetIntact(t, "photo.txt")
 }
 

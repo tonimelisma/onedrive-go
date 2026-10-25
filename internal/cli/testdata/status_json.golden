@@ -50,7 +50,23 @@
               }
             ],
             "examples_limit": 5
-          }
+          },
+          "shared_folders": [
+            {
+              "mount_ref": "gH9xM5RsNZEGvohwhTrLyBzqOhjOxe12cI7NWqFZ-T0",
+              "kind": "shared_folder",
+              "name": "Docs",
+              "folder": "/Users/alice/OneDrive/Shared/Docs",
+              "state": "removed_cleanup_blocked",
+              "state_reason": "removed_cleanup_blocked",
+              "issue_class": "removed_cleanup_blocked",
+              "state_detail": "This shared folder was removed, but its local copy can't be removed.",
+              "protected_current_path": "/Users/alice/OneDrive/Shared/Docs",
+              "recovery_class": "clear_blocked_path",
+              "recovery_action": "Move or delete what is in the way at that path; the next sync finishes the cleanup.",
+              "auto_retry": true
+            }
+          ]
         }
       ]
     },
@@ -75,6 +91,7 @@
   ],
   "summary": {
     "total_drives": 2,
+    "total_shared_folders": 1,
     "paused": 1,
     "with_issues": 1,
     "accounts_requiring_sign_in": 1,

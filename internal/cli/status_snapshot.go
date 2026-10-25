@@ -88,15 +88,20 @@ type statusDrive struct {
 	// surface because they carry the account email and, for shortcut children,
 	// the remote drive and item IDs. The ref is an opaque digest: stable across
 	// runs so a consumer can follow one mount, and revealing none of that.
-	MountRef               string         `json:"mount_ref"`
-	Kind                   string         `json:"kind"`
-	Name                   string         `json:"name"`
-	Folder                 string         `json:"folder"`
-	State                  string         `json:"state"`
-	Storage                *statusStorage `json:"storage,omitempty"`
+	MountRef string         `json:"mount_ref"`
+	Kind     string         `json:"kind"`
+	Name     string         `json:"name"`
+	Folder   string         `json:"folder"`
+	State    string         `json:"state"`
+	Storage  *statusStorage `json:"storage,omitempty"`
+	// StateReason, IssueClass and RecoveryClass are stable machine tokens.
+	// StateDetail and RecoveryAction are the plain sentences a person reads.
+	// StateDebugDetail is the raw diagnostic behind the state (an error
+	// chain, for example); it is filled only under --verbose or --debug.
 	StateReason            string         `json:"state_reason,omitempty"`
 	IssueClass             string         `json:"issue_class,omitempty"`
 	StateDetail            string         `json:"state_detail,omitempty"`
+	StateDebugDetail       string         `json:"state_debug_detail,omitempty"`
 	ProtectedCurrentPath   string         `json:"protected_current_path,omitempty"`
 	ProtectedReservedPaths []string       `json:"protected_reserved_paths,omitempty"`
 	RecoveryClass          string         `json:"recovery_class,omitempty"`
@@ -114,6 +119,9 @@ type statusDrive struct {
 	DisplayName    string        `json:"-"`
 	SyncDir        string        `json:"-"`
 	ChildMounts    []statusDrive `json:"-"`
+	// StateLabel is the plain status label for a State that is a lifecycle
+	// token (a shared folder's state) rather than one of the drive states.
+	StateLabel string `json:"-"`
 }
 
 // syncStateInfo holds the per-drive sync status payload rendered by `status`.
@@ -189,11 +197,32 @@ func runStatusCommand(ctx context.Context, cc *CLIContext, history bool, showPer
 	applyStatusLiveOverlay(accounts, liveOverlayLoader(ctx, cc, filteredSnapshot))
 	applyStatusRuntimeOverlay(accounts, loadStatusRuntimeOverlay(ctx))
 	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(ctx, perfEnabled))
+	if !cc.Flags.Verbose && !cc.Flags.Debug {
+		dropStatusDebugDetail(accounts)
+	}
 	if cc.Flags.JSON {
 		return printStatusJSON(cc.Output(), accounts)
 	}
 
 	return printStatusText(cc.Output(), accounts, history)
+}
+
+// dropStatusDebugDetail removes the raw diagnostics behind each state, which
+// status shows only under --verbose or --debug: the plain reason and action
+// are the default output (spec/reference/cli-output-guidelines.md 5).
+func dropStatusDebugDetail(accounts []statusAccount) {
+	for i := range accounts {
+		dropStatusDriveDebugDetail(accounts[i].Drives)
+		dropStatusDriveDebugDetail(accounts[i].Mounts)
+	}
+}
+
+func dropStatusDriveDebugDetail(drives []statusDrive) {
+	for i := range drives {
+		drives[i].StateDebugDetail = ""
+		dropStatusDriveDebugDetail(drives[i].SharedFolders)
+		dropStatusDriveDebugDetail(drives[i].ChildMounts)
+	}
 }
 
 // writeStatusEmpty reports that status has nothing to show: the sentence for
@@ -720,28 +749,29 @@ func buildChildStatusDrive(
 	root := child.Root
 	metadata := root.Metadata
 	state := driveState(parentDrive)
-	statusDetail := root.StateDetail
 	if metadata.DisplayState != "" {
 		state = metadata.DisplayState
 	}
 
 	status := statusDrive{
-		InternalID:     root.MountID,
-		NamespaceID:    child.ParentID.String(),
-		Kind:           statusDriveKindSharedFolder,
-		Name:           root.DisplayName,
-		Folder:         root.DisplayLocalRoot,
-		State:          state,
-		StateReason:    metadata.StateReason,
-		IssueClass:     string(metadata.IssueClass),
-		StateDetail:    statusDetail,
-		RecoveryClass:  string(metadata.RecoveryClass),
-		RecoveryAction: metadata.RecoveryAction,
-		MountID:        root.MountID,
-		MountRef:       config.MountRef(root.MountID),
-		ProjectionKind: statusProjectionChild,
-		DisplayName:    root.DisplayName,
-		SyncDir:        root.DisplayLocalRoot,
+		InternalID:       root.MountID,
+		NamespaceID:      child.ParentID.String(),
+		Kind:             statusDriveKindSharedFolder,
+		Name:             root.DisplayName,
+		Folder:           root.DisplayLocalRoot,
+		State:            state,
+		StateLabel:       metadata.StatusLabel,
+		StateReason:      metadata.StateReason,
+		IssueClass:       string(metadata.IssueClass),
+		StateDetail:      root.Reason,
+		StateDebugDetail: root.Detail,
+		RecoveryClass:    string(metadata.RecoveryClass),
+		RecoveryAction:   metadata.RecoveryAction,
+		MountID:          root.MountID,
+		MountRef:         config.MountRef(root.MountID),
+		ProjectionKind:   statusProjectionChild,
+		DisplayName:      root.DisplayName,
+		SyncDir:          root.DisplayLocalRoot,
 	}
 	status.WaitingReplacement = root.WaitingReplacementPath
 	if metadata.ProtectsPath {

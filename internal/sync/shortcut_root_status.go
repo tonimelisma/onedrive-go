@@ -39,8 +39,15 @@ const (
 	shortcutRootRecoveryRemoveDuplicateAlias       shortcutRootRecoveryClass = "remove_duplicate_alias"
 )
 
+// shortcutRootStatusMetadata is the display contract for one lifecycle
+// state. DisplayState, StateReason, IssueClass and RecoveryClass are stable
+// machine tokens for --json consumers. StatusLabel, Issue and RecoveryAction
+// are the user-facing words: a short status label, one plain sentence saying
+// what is going on, and the step that clears it, all in user vocabulary
+// (shared folder, folder, OneDrive) per spec/reference/cli-output-guidelines.md.
 type shortcutRootStatusMetadata struct {
 	DisplayState   string
+	StatusLabel    string
 	StateReason    string
 	IssueClass     shortcutRootIssueClass
 	Issue          string
@@ -50,13 +57,18 @@ type shortcutRootStatusMetadata struct {
 	ProtectsPath   bool
 }
 
+// ShortcutRootStatusView is one shortcut root as `status` shows it. Reason is
+// the plain user-facing sentence for its state; Detail is the raw diagnostic
+// recorded with the state (an error chain, for example), which the CLI shows
+// only with --verbose or --debug.
 type ShortcutRootStatusView struct {
 	MountID                     string
 	SortPath                    string
 	DisplayName                 string
 	DisplayLocalRoot            string
 	Metadata                    shortcutRootStatusMetadata
-	StateDetail                 string
+	Reason                      string
+	Detail                      string
 	ProtectedCurrentLocalRoot   string
 	ProtectedReservedLocalRoots []string
 	WaitingReplacementPath      string
@@ -81,10 +93,8 @@ func shortcutRootStatusViewFromRecord(
 		DisplayName:      shortcutRootStatusDisplayName(normalized.LocalAlias, normalized.RelativeLocalPath),
 		DisplayLocalRoot: shortcutRootStatusLocalRoot(parentSyncRoot, normalized.RelativeLocalPath),
 		Metadata:         metadata,
-		StateDetail:      metadata.Issue,
-	}
-	if normalized.BlockedDetail != "" {
-		view.StateDetail = normalized.BlockedDetail
+		Reason:           metadata.Issue,
+		Detail:           normalized.BlockedDetail,
 	}
 	if normalized.Waiting != nil {
 		view.WaitingReplacementPath = normalized.Waiting.RelativeLocalPath
@@ -168,9 +178,10 @@ func ShortcutRootStatus(state ShortcutRootState) shortcutRootStatusMetadata {
 	}
 	return shortcutRootStatusMetadata{
 		DisplayState:  string(state),
+		StatusLabel:   "Recovering",
 		StateReason:   string(state),
 		IssueClass:    shortcutRootIssueParentRecovery,
-		Issue:         "The shortcut alias is waiting for parent-engine recovery.",
+		Issue:         "This shared folder is recovering; it is retried on every sync.",
 		RecoveryClass: shortcutRootRecoveryWaitForRetry,
 		AutoRetry:     true,
 		ProtectsPath:  true,
@@ -215,11 +226,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 		ShortcutRootStateTargetUnavailable: {
 			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateTargetUnavailable),
+				StatusLabel:    "Shared folder unavailable",
 				StateReason:    string(ShortcutRootStateTargetUnavailable),
 				IssueClass:     shortcutRootIssueTargetUnavailable,
-				Issue:          "The shortcut target is unavailable.",
+				Issue:          "OneDrive can't open this shared folder; it may have been unshared, moved or deleted.",
 				RecoveryClass:  shortcutRootRecoveryRestoreTargetOrRemoveAlias,
-				RecoveryAction: "Restore target access or remove the shortcut alias.",
+				RecoveryAction: "Ask the owner to share it with you again, or remove the shortcut from your OneDrive.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
 			},
@@ -229,11 +241,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 		ShortcutRootStateLocalRootUnavailable: {
 			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateLocalRootUnavailable),
+				StatusLabel:    "Local folder unavailable",
 				StateReason:    string(ShortcutRootStateLocalRootUnavailable),
 				IssueClass:     shortcutRootIssueLocalRootUnavailable,
-				Issue:          "The shortcut alias local root is unavailable.",
+				Issue:          "This shared folder's local folder is missing or can't be read.",
 				RecoveryClass:  shortcutRootRecoveryRestoreLocalRootOrDiscard,
-				RecoveryAction: "Restore the local shortcut directory or delete it to discard unresolved local state.",
+				RecoveryAction: "Restore the local folder, or delete it to discard changes that have not synced.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
 			},
@@ -245,11 +258,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 		ShortcutRootStateBlockedPath: {
 			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateBlockedPath),
+				StatusLabel:    "Blocked",
 				StateReason:    string(ShortcutRootStateBlockedPath),
 				IssueClass:     shortcutRootIssueBlockedPath,
-				Issue:          "The shortcut alias path is blocked.",
+				Issue:          "Something else is in the way at this shared folder's local path.",
 				RecoveryClass:  shortcutRootRecoveryClearBlockedPath,
-				RecoveryAction: "Clear the blocking local path.",
+				RecoveryAction: "Move or rename the file or folder at that path.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
 			},
@@ -259,11 +273,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 		ShortcutRootStateRenameAmbiguous: {
 			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateRenameAmbiguous),
+				StatusLabel:    "Rename unclear",
 				StateReason:    string(ShortcutRootStateRenameAmbiguous),
 				IssueClass:     shortcutRootIssueRenameAmbiguous,
-				Issue:          "Multiple same-folder shortcut alias rename candidates were found.",
+				Issue:          "More than one renamed folder could be this shared folder.",
 				RecoveryClass:  shortcutRootRecoveryDisambiguateAliasRename,
-				RecoveryAction: "Keep exactly one renamed shortcut alias or restore the original name.",
+				RecoveryAction: "Keep exactly one renamed folder, or restore the original name.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
 			},
@@ -276,11 +291,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 		ShortcutRootStateAliasMutationBlocked: {
 			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateAliasMutationBlocked),
+				StatusLabel:    "Change not applied",
 				StateReason:    string(ShortcutRootStateAliasMutationBlocked),
 				IssueClass:     shortcutRootIssueAliasMutationBlocked,
-				Issue:          "The parent engine cannot update the shortcut alias in OneDrive.",
+				Issue:          "Renaming or deleting this shared folder locally couldn't be applied in OneDrive.",
 				RecoveryClass:  shortcutRootRecoveryFixAliasMutation,
-				RecoveryAction: "Fix account, network, or permission access, or restore the local alias.",
+				RecoveryAction: "Check your connection and your access to the folder, or undo the local rename or delete.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
 			},
@@ -292,12 +308,14 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 		},
 		ShortcutRootStateRemovedFinalDrain: {
 			status: shortcutRootStatusMetadata{
-				DisplayState:   string(ShortcutRootStateRemovedFinalDrain),
-				StateReason:    string(ShortcutRootStateRemovedFinalDrain),
-				IssueClass:     shortcutRootIssueRemovedFinalDrain,
-				Issue:          "The shortcut alias was removed; child sync is finishing before release.",
+				DisplayState: string(ShortcutRootStateRemovedFinalDrain),
+				StatusLabel:  "Removed, finishing sync",
+				StateReason:  string(ShortcutRootStateRemovedFinalDrain),
+				IssueClass:   shortcutRootIssueRemovedFinalDrain,
+				Issue: "This shared folder was removed from your OneDrive; " +
+					"its last local changes are syncing before the local copy is removed.",
 				RecoveryClass:  shortcutRootRecoveryRestoreTargetOrDiscard,
-				RecoveryAction: "Restore shared-folder access, or delete the local shortcut directory to discard dirty local state.",
+				RecoveryAction: "Restore access to the shared folder, or delete its local folder to discard changes that have not synced.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
 			},
@@ -314,9 +332,10 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 		ShortcutRootStateRemovedReleasePending: {
 			status: shortcutRootStatusMetadata{
 				DisplayState:  string(ShortcutRootStateRemovedReleasePending),
+				StatusLabel:   "Removed, cleaning up",
 				StateReason:   string(ShortcutRootStateRemovedReleasePending),
 				IssueClass:    shortcutRootIssueRemovedReleasePending,
-				Issue:         "Child sync finished; the parent engine is releasing the protected shortcut alias path.",
+				Issue:         "This shared folder was removed and its last changes have synced; its local copy is being removed.",
 				RecoveryClass: shortcutRootRecoveryWaitForRetry,
 				AutoRetry:     true,
 				ProtectsPath:  true,
@@ -331,11 +350,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 		ShortcutRootStateRemovedCleanupBlocked: {
 			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateRemovedCleanupBlocked),
+				StatusLabel:    "Removed, cleanup blocked",
 				StateReason:    string(ShortcutRootStateRemovedCleanupBlocked),
 				IssueClass:     shortcutRootIssueRemovedCleanupBlocked,
-				Issue:          "The parent engine cannot release the protected shortcut alias path.",
+				Issue:          "This shared folder was removed, but its local copy can't be removed.",
 				RecoveryClass:  shortcutRootRecoveryClearBlockedPath,
-				RecoveryAction: "Clear the local filesystem blocker.",
+				RecoveryAction: "Move or delete what is in the way at that path; the next sync finishes the cleanup.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
 			},
@@ -352,9 +372,10 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 		ShortcutRootStateRemovedChildCleanupPending: {
 			status: shortcutRootStatusMetadata{
 				DisplayState:  string(ShortcutRootStateRemovedChildCleanupPending),
+				StatusLabel:   "Removed, cleaning up",
 				StateReason:   string(ShortcutRootStateRemovedChildCleanupPending),
 				IssueClass:    shortcutRootIssueRemovedChildCleanupPending,
-				Issue:         "The shortcut alias was released; child cleanup is finishing.",
+				Issue:         "This shared folder was removed; its local sync data is being cleaned up.",
 				RecoveryClass: shortcutRootRecoveryWaitForRetry,
 				AutoRetry:     true,
 			},
@@ -367,9 +388,10 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 		ShortcutRootStateSamePathReplacementWaiting: {
 			status: shortcutRootStatusMetadata{
 				DisplayState:  string(ShortcutRootStateSamePathReplacementWaiting),
+				StatusLabel:   "Waiting",
 				StateReason:   string(ShortcutRootStateSamePathReplacementWaiting),
 				IssueClass:    shortcutRootIssueSamePathReplacementWaiting,
-				Issue:         "A new shortcut is waiting for the old child sync to finish.",
+				Issue:         "A new shared folder with the same name is waiting for the old one to finish syncing.",
 				RecoveryClass: shortcutRootRecoveryWaitForRetry,
 				AutoRetry:     true,
 				ProtectsPath:  true,
@@ -387,11 +409,12 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 		ShortcutRootStateDuplicateTarget: {
 			status: shortcutRootStatusMetadata{
 				DisplayState:   string(ShortcutRootStateDuplicateTarget),
+				StatusLabel:    "Duplicate",
 				StateReason:    string(ShortcutRootStateDuplicateTarget),
 				IssueClass:     shortcutRootIssueDuplicateTarget,
-				Issue:          "Another shortcut alias in this parent already projects the same target.",
+				Issue:          "Another shortcut in this drive already syncs the same shared folder.",
 				RecoveryClass:  shortcutRootRecoveryRemoveDuplicateAlias,
-				RecoveryAction: "Remove or rename the duplicate shortcut alias.",
+				RecoveryAction: "Remove one of the two shortcuts from your OneDrive.",
 				AutoRetry:      true,
 				ProtectsPath:   true,
 			},
