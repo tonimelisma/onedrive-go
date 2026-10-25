@@ -914,7 +914,7 @@ func TestAddNewDrive_NoToken(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:nobody@example.com")
 
-	err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	_, err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no token file")
 }
@@ -932,7 +932,7 @@ func TestAddNewDrive_WithToken(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
-	err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	_, err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.NoError(t, err)
 
 	// Verify config was updated with canonical ID and sync_dir.
@@ -961,7 +961,7 @@ func TestAddNewDrive_SyncDirCreateFailureRollsBackConfig(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	_, err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating sync directory")
 
@@ -985,7 +985,7 @@ func TestAddNewDrive_CatalogMutationFailureRollsBackConfig(t *testing.T) {
 		return errors.New("catalog unavailable")
 	}
 
-	err := addNewDriveWithOps(io.Discard, cfgPath, cid, testDriveLogger(t), ops)
+	_, err := addNewDriveWithOps(io.Discard, cfgPath, cid, testDriveLogger(t), ops)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "updating catalog")
 
@@ -1010,7 +1010,7 @@ func TestAddNewDrive_SyncDirCreateFailureRollsBackBackfilledSyncDir(t *testing.T
 	require.NoError(t, os.WriteFile(cfgPath, []byte(`["personal:user@example.com"]
 `), 0o600))
 
-	err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	_, err := addNewDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating sync directory")
 
@@ -1276,7 +1276,8 @@ sync_dir = "~/OneDrive-Shared/Test"
 	originalData, err := localpath.ReadFile(cfgPath)
 	require.NoError(t, err)
 
-	require.NoError(t, addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t), driveops.NewSessionRuntime(nil, "test-agent", testDriveLogger(t))))
+	_, err = addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t), driveops.NewSessionRuntime(nil, "test-agent", testDriveLogger(t)))
+	require.NoError(t, err)
 
 	updatedData, err := localpath.ReadFile(cfgPath)
 	require.NoError(t, err)
@@ -1294,7 +1295,7 @@ func TestAddSharedDrive_NoToken(t *testing.T) {
 	// Empty config — no primary drive to resolve token from.
 	require.NoError(t, os.WriteFile(cfgPath, []byte(""), 0o600))
 
-	err := addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t), driveops.NewSessionRuntime(nil, "test-agent", testDriveLogger(t)))
+	_, err := addSharedDrive(t.Context(), cfgPath, io.Discard, cid, "", testDriveLogger(t), driveops.NewSessionRuntime(nil, "test-agent", testDriveLogger(t)))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no token file")
 }
@@ -1309,7 +1310,7 @@ func TestAddSharedDrive_CreatesSyncDir(t *testing.T) {
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_owner@example.com.json")
 	seedCatalogAccount(t, ownerCID, nil)
 
-	err := addSharedDrive(
+	_, err := addSharedDrive(
 		t.Context(),
 		cfgPath,
 		io.Discard,
@@ -1345,7 +1346,7 @@ func TestAddSharedDrive_ConfigWriteFailureRollsBackCatalogRegistration(t *testin
 		require.NoError(t, os.Chmod(cfgDir, 0o700))
 	})
 
-	err := addSharedDrive(
+	_, err := addSharedDrive(
 		t.Context(),
 		cfgPath,
 		io.Discard,
@@ -1394,7 +1395,7 @@ func TestAddSharedDrive_ConfigWriteFailurePreservesPreExistingCatalogDrive(t *te
 		require.NoError(t, os.Chmod(cfgDir, 0o700))
 	})
 
-	err := addSharedDrive(
+	_, err := addSharedDrive(
 		t.Context(),
 		cfgPath,
 		io.Discard,

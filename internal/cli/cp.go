@@ -95,7 +95,14 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 		return newRemoteOpError("copying", sourcePath, err)
 	}
 
-	resourceID, err := awaitCopy(ctx, cc, session.Meta, copyResult.MonitorURL)
+	wait := awaitCopy
+	if cc.seams.cpAwaitCopy != nil {
+		// Copy monitor URLs must be HTTPS on Microsoft hosts, so a fake
+		// Graph server cannot serve one; tests stand in for the poll here.
+		wait = cc.seams.cpAwaitCopy
+	}
+
+	resourceID, err := wait(ctx, cc, session.Meta, copyResult.MonitorURL)
 	if err != nil {
 		return err
 	}

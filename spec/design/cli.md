@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go, internal/sdnotify/sdnotify.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.8.16 [verified]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.33 [verified], R-6.8.16 [verified]
 
 ## Overview
 
@@ -44,6 +44,7 @@ are inserted, updated, pruned, and validated.
 | Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusMount_RendersLifecycleState`, `TestBuildChildStatusMount_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
 | Command failures map into the shared error classes, and the exit status is chosen from typed errors: 77 sign-in required, 78 invalid config, 2 usage, 130 user stop, 1 everything else. | `TestClassifyCommandError`, `TestCommandExitCode`, `TestCommandExitCode_EveryFailureClassHasAStatus`, `TestMainWithWriters_ConfigErrorExits78`, `TestMainWithWriters_SignInRequiredExits77`, `TestFormatWatchStartupError_ExitStatusFollowsSharedCause`, `TestConfigFailuresAreTaggedInvalidConfig` |
 | `sync --watch` reports READY/STATUS/RELOADING/STOPPING/WATCHDOG to systemd through `internal/sdnotify`, and nothing outside systemd. | `TestRunSyncDaemon_NotifiesSystemdOfLifecycle`, `TestRunSyncDaemon_SignInFailureSetsStatusAndExitCode`, `TestRunSyncDaemon_NoDrivesIsAConfigFailure`, `TestSyncNotifierWatchingStatus`, `TestOpenSyncNotifier_BadSocketWarnsAndContinues`, `TestNotifier_SendsProtocolMessages`, `TestOpen_AbstractSocket`, `TestOpen_WatchdogInterval`, `TestRunWatch_ReportsLifecycleTransitions` |
+| Every runnable command honors `--json` (one document on stdout, or JSON lines for `sync`) or refuses it as a usage error; the mutating commands report their result as JSON. | `TestCommandTree_EveryLeafHonorsJSON`, `TestDriveAdd_JSONWithoutSelectorIsAUsageError`, `TestPauseCommand_JSONReportsDriveAndEndTime`, `TestResumeCommand_JSONReportsEveryDriveOutcome`, `TestDriveRemove_JSONReportsWhatWasRemoved`, `TestDriveAdd_JSONReportsAddedThenAlreadyConfigured`, `TestLogoutCommand_JSONNamesAccountAndDrives`, `TestRecycleBinEmpty_JSONListsDeletedAndFailedAndStillFails` |
 | Command-level side-effect contracts are tested at the CLI boundary: read-only commands do not mutate managed state, and mutating commands fail selector/path validation before remote mutation. | `TestRunLs_DoesNotMutateManagedState`, `TestRunRm_RequiresExplicitPathBeforeGraphMutation` |
 
 ## Log Retention Deletes Only Its Own Logs
@@ -257,6 +258,49 @@ command (under `--json` the failures stay in the document, and only the exit
 status changes). `sync --json` swaps the console's text for JSON lines
 (`sync_console_json.go`), and `status --json` prints an empty document
 instead of prose.
+
+### JSON Output Everywhere
+
+`--json` is a persistent root flag, so it reaches every command; a command that
+ignored it would hand a script prose where it asked for JSON (R-6.6.31). Each
+runnable command therefore does one of two things:
+
+- **Prints its result as JSON.** One document on stdout (`sync` streams JSON
+  lines), written once at the end through `writeJSONDocument` or the command's
+  own printer. The prose confirmation ("Removed drive ...", "Token removed for
+  ...") is dropped: helpers that print it take `CLIContext.resultWriter()`,
+  which is `io.Discard` under `--json`. Warnings, prompts (the
+  `reset-sync-state` RESET prompt, the sign-in code) and errors stay on
+  stderr. When a bulk command partly fails (`resume` across drives,
+  `recycle-bin empty`), the document lists what succeeded and what failed, and
+  the exit status still reports the failure.
+- **Refuses `--json` as a `usageError`** (exit 2) before any side effect, when
+  that form has no result to print: today only `drive add` with no drive,
+  which prints guidance and points at `drive list --json`.
+
+The mutating commands' documents:
+
+| Command | Document |
+| --- | --- |
+| `login` | `account`, `drive`, `drive_type`, `organization` (business), `sync_dir`, `added` (false on a re-login) |
+| `logout` | `account`, `token_removed`, `purged`, `drives` |
+| `pause` | `drive`, `paused`, `paused_until` (UTC; omitted for an open-ended pause) |
+| `resume` | `drives[]` of `drive`, `result` (`resumed`, `expired_pause_cleared`, `not_paused`, `failed`), `error` |
+| `drive add` | `drive`, `display_name`, `sync_dir`, `added` (false when already configured) |
+| `drive remove` | `drive`, `removed_from_config`, `purged` |
+| `drive reset-sync-state` | `drive`, `reset` |
+| `recycle-bin empty` | `deleted[]` and `failed[]` of `id`, `name` (and `error`) |
+
+`TestCommandTree_EveryLeafHonorsJSON` walks the real command tree, runs every
+runnable leaf with `--json` against fakes (an in-memory Graph drive, a fake
+control socket, the sync runner seam) and asserts stdout parses as exactly one
+JSON value (or JSON lines), or that the flag is refused. A new command without
+a case fails the test. Two seams exist only so this can run offline:
+`completeLogin` is everything after the Microsoft sign-in exchange, and
+`cliSeams.cpAwaitCopy` stands in for polling the copy monitor, whose URL must
+be HTTPS on a Microsoft host. Cobra's generated `completion` and `help`
+commands are outside the tree the test walks; they print shell scripts and
+help text and ignore `--json`.
 
 `pause` parses its duration before writing `paused = true`, and `pause`/`resume`
 resolve `--drive` through `config.MatchDrive`, the same selector rules as

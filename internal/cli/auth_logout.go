@@ -79,8 +79,20 @@ func joinAccountViewEmails(entries []accountView) string {
 	return result
 }
 
+// logoutJSONOutput is `logout --json`: the account signed out, the drives
+// removed from the config with it, and whether --purge also deleted their
+// state. token_removed is false only for a purge after the token was already
+// gone.
+type logoutJSONOutput struct {
+	Account      string   `json:"account"`
+	TokenRemoved bool     `json:"token_removed"`
+	Purged       bool     `json:"purged"`
+	Drives       []string `json:"drives"`
+}
+
 // executeLogout performs the actual logout: finds affected drives, deletes
-// token, and optionally purges config sections and state databases.
+// token, and optionally purges config sections and state databases. The
+// human confirmation goes to w; the returned result is what --json prints.
 func executeLogout(
 	cfg *config.Config,
 	stored *config.Catalog,
@@ -89,23 +101,32 @@ func executeLogout(
 	account string,
 	purge bool,
 	logger *slog.Logger,
-) error {
+) (logoutJSONOutput, error) {
 	affected := drivesForAccount(cfg, account)
-	if err := removeLogoutToken(w, stored, account, affected, purge, logger); err != nil {
-		return err
+	result := logoutJSONOutput{Account: account, Purged: purge, Drives: make([]string, 0, len(affected))}
+	for _, cid := range affected {
+		result.Drives = append(result.Drives, cid.String())
 	}
 
+	removed, err := removeLogoutToken(w, stored, account, affected, purge, logger)
+	if err != nil {
+		return result, err
+	}
+	result.TokenRemoved = removed
+
 	if err := printAffectedDrives(w, cfg, affected); err != nil {
-		return err
+		return result, err
 	}
 
 	if purge {
-		return executePurgeLogout(cfgPath, w, account, affected, logger)
+		return result, executePurgeLogout(cfgPath, w, account, affected, logger)
 	}
 
-	return executePlainLogout(cfgPath, w, account, affected, logger)
+	return result, executePlainLogout(cfgPath, w, account, affected, logger)
 }
 
+// removeLogoutToken deletes the account's saved login, reporting whether
+// there was one to delete.
 func removeLogoutToken(
 	w io.Writer,
 	stored *config.Catalog,
@@ -113,7 +134,7 @@ func removeLogoutToken(
 	affected []driveid.CanonicalID,
 	purge bool,
 	logger *slog.Logger,
-) error {
+) (bool, error) {
 	tokenCanonicalID := canonicalIDForToken(account, affected)
 	if tokenCanonicalID.IsZero() {
 		tokenCanonicalID = config.AccountCanonicalIDByEmail(stored, account)
@@ -122,20 +143,20 @@ func removeLogoutToken(
 	tokenPath := config.DriveTokenPath(tokenCanonicalID)
 	if tokenPath != "" {
 		if err := graph.Logout(tokenPath, logger); err != nil {
-			return fmt.Errorf("remove token file: %w", err)
+			return false, fmt.Errorf("remove token file: %w", err)
 		}
-		return writef(w, "Token removed for %s.\n", account)
+		return true, writef(w, "Token removed for %s.\n", account)
 	}
 
 	if !purge {
-		return fmt.Errorf(
+		return false, fmt.Errorf(
 			"no saved login was found for %s — run 'onedrive-go logout --purge --account %s' to remove retained state",
 			account,
 			account,
 		)
 	}
 
-	return writef(w, "Token already removed for %s.\n", account)
+	return false, writef(w, "Token already removed for %s.\n", account)
 }
 
 func executePurgeLogout(
