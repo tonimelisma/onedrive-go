@@ -460,7 +460,16 @@ result rather than one copy per selected drive.
 
 ### Reload
 
-Control-socket reload does four things in order:
+A reload runs on three triggers: a control-socket request (sent by `pause`,
+`resume`, `drive add` and `login` after they write the config), a change to
+the config file on disk (`watch_config_file.go` compares size, mtime and
+inode every 5 s), and SIGHUP (the systemd unit's `ExecReload`). File and
+signal triggers coalesce into one pending reload; a failed one is only
+logged, since no client is waiting for an answer. Before the file trigger,
+hand edits to `config.toml` were silently ignored until the watch restarted
+(R-4.4.3).
+
+Every reload does four things in order:
 
 1. load config from disk
 2. clear expired timed pauses
