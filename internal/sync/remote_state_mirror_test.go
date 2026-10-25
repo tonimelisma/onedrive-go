@@ -272,3 +272,33 @@ func TestCommitObservation_FolderRenameRepathsDescendants(t *testing.T) {
 		assert.Equal(t, want, row.Path, id)
 	}
 }
+
+// Regression: delta reports a deleted folder as one item. A child that was
+// never downloaded (its name was too long for the local filesystem) stayed in
+// remote_state, and status showed "Remote changes: 1 item" and "Syncing"
+// forever for a folder that no longer existed.
+//
+// Validates: R-2.17.2
+func TestCommitObservation_FolderDeleteRemovesDescendants(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+
+	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{
+		{DriveID: driveID, ItemID: "dir", Path: "probe", ItemType: ItemTypeFolder},
+		{DriveID: driveID, ItemID: "sub", Path: "probe/len", ItemType: ItemTypeFolder},
+		{DriveID: driveID, ItemID: "kid", Path: "probe/len/long.txt", ItemType: ItemTypeFile, Hash: "h", Size: 1},
+		{DriveID: driveID, ItemID: "sib", Path: "probe-other/keep.txt", ItemType: ItemTypeFile, Hash: "h2", Size: 1},
+	}, "t1", driveID))
+
+	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{
+		{DriveID: driveID, ItemID: "dir", Path: "probe", ItemType: ItemTypeFolder, IsDeleted: true},
+	}, "t2", driveID))
+
+	for _, id := range []string{"dir", "sub", "kid"} {
+		assert.Nil(t, readRemoteStateRow(t, mgr.rawDB(), id), id)
+	}
+	require.NotNil(t, readRemoteStateRow(t, mgr.rawDB(), "sib"), "a sibling with the same name prefix stays")
+}
