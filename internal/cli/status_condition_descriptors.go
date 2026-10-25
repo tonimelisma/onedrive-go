@@ -131,7 +131,8 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 		return describeFilesystemStatusCondition(key)
 	case syncengine.ConditionDiskFull,
 		syncengine.ConditionHashError,
-		syncengine.ConditionFileTooLargeForSpace:
+		syncengine.ConditionFileTooLargeForSpace,
+		syncengine.ConditionLocalNameTooLong:
 		return describeLocalRuntimeStatusCondition(key)
 	case syncengine.ConditionUnexpectedCondition:
 		return newStatusConditionDescriptor(
@@ -206,6 +207,7 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionDiskFull,
 		syncengine.ConditionHashError,
 		syncengine.ConditionFileTooLargeForSpace,
+		syncengine.ConditionLocalNameTooLong,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -260,6 +262,7 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionDiskFull,
 		syncengine.ConditionHashError,
 		syncengine.ConditionFileTooLargeForSpace,
+		syncengine.ConditionLocalNameTooLong,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -286,6 +289,13 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 			"File too large for available space",
 			"The file is larger than available local disk space.",
 			"Free up local disk space to fit this file.",
+		)
+	case syncengine.ConditionLocalNameTooLong:
+		return newStatusConditionDescriptor(
+			"Name too long for this computer",
+			"OneDrive allows longer names than this computer's filesystem, which stores at most 255 bytes "+
+				"per name (fewer characters for accented or non-Latin names).",
+			"Rename the item on OneDrive to a shorter name.",
 		)
 	case syncengine.ConditionAuthenticationRequired,
 		syncengine.ConditionQuotaExceeded,

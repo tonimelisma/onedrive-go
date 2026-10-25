@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -71,7 +72,7 @@ func TestIssueTypeForHTTPResult_RepresentativeMappings(t *testing.T) {
 	}
 }
 
-// Validates: R-2.10.4, R-6.2.5
+// Validates: R-2.10.4, R-6.2.5, R-2.11.8
 func TestIssueTypeForFilesystemResult_RepresentativeMappings(t *testing.T) {
 	t.Parallel()
 
@@ -106,6 +107,14 @@ func TestIssueTypeForFilesystemResult_RepresentativeMappings(t *testing.T) {
 				DriveID:    driveID,
 			},
 			want: issueLocalWriteDenied,
+			ok:   true,
+		},
+		{
+			name: "name too long for local filesystem",
+			result: &actionCompletion{
+				Err: &os.PathError{Op: "open", Path: "very-long-name.partial", Err: syscall.ENAMETOOLONG},
+			},
+			want: issueLocalNameTooLong,
 			ok:   true,
 		},
 		{name: "unmapped", result: &actionCompletion{Err: errors.New("no mapping")}, want: "", ok: false},

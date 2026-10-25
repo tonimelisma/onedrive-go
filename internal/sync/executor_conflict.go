@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // conflictCopyReservationPerm is the mode of the placeholder that claims a
@@ -171,10 +172,22 @@ func conflictCopyPath(absPath string, now time.Time) string {
 	dir := filepath.Dir(absPath)
 	name := filepath.Base(absPath)
 	stem, ext := ConflictStemExt(name)
-	ts := now.Format("20060102-150405")
+	marker := ".conflict-" + now.Format("20060102-150405")
 
-	return filepath.Join(dir, fmt.Sprintf("%s.conflict-%s%s", stem, ts, ext))
+	// The marker adds 25 bytes; a name near the 255-byte filesystem limit
+	// would leave the conflict copy unwritable, so the stem gives way.
+	if room := maxLocalNameBytes - len(marker) - len(ext); len(stem) > room && room > 0 {
+		stem = stem[:room]
+		for !utf8.ValidString(stem) {
+			stem = stem[:len(stem)-1]
+		}
+	}
+
+	return filepath.Join(dir, stem+marker+ext)
 }
+
+// maxLocalNameBytes is NAME_MAX on Linux and macOS filesystems.
+const maxLocalNameBytes = 255
 
 // ConflictStemExt splits a filename into stem and extension, handling the
 // dotfile edge case where filepath.Ext returns the entire name for files

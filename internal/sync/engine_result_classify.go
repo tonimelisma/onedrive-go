@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
@@ -250,6 +251,11 @@ func issueTypeForFilesystemResult(r *actionCompletion) (string, bool) {
 		return issueFileTooLargeForSpace, true
 	case errors.Is(err, driveops.ErrFileExceedsOneDriveLimit):
 		return issueFileTooLarge, true
+	case errors.Is(err, syscall.ENAMETOOLONG):
+		// OneDrive accepts names longer than the 255 bytes a Linux or
+		// macOS filesystem can store; without a named issue each download
+		// retried forever as an "unexpected" failure.
+		return issueLocalNameTooLong, true
 	case errors.Is(err, os.ErrPermission):
 		return issueTypeForLocalPermissionResult(r), true
 	default:

@@ -13,6 +13,7 @@ Download and upload transfer infrastructure shared by file operations and sync.
 - R-5.2.2: When a download is interrupted, the system shall resume via `.partial` files and HTTP Range requests on retry. [verified]
 - R-5.2.3: Upload session state shall be persisted to disk and survive process restart. [verified]
 - R-5.2.4: Interrupted transfers shall resume automatically on next sync. [verified]
+- R-5.2.5: Names the system derives from a user's file name (download partials, conflict copies) shall stay within the 255-byte local name limit, staying deterministic for partials so a download still resumes. A name that is valid locally shall never become undownloadable because of the name the client gives its partial file. [verified]
 
 ## R-5.3 Upload Chunking [verified]
 
