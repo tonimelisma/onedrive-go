@@ -66,6 +66,12 @@ func runRm(cmd *cobra.Command, args []string) error {
 		return newRemoteOpError("resolving", remotePath, err)
 	}
 
+	// The drive root is never a delete target. Without this, "rm /" answered
+	// that it needed -r, as if "rm -r /" were a way to empty the drive.
+	if item.IsRoot {
+		return fmt.Errorf("refusing to delete the drive root %q; delete the items inside it instead", remotePath)
+	}
+
 	// Require --recursive for folder deletion (B-156).
 	recursive, err := cmd.Flags().GetBool("recursive")
 	if err != nil {

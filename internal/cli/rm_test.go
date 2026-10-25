@@ -340,3 +340,35 @@ func TestRemovableParentPath(t *testing.T) {
 	assert.Equal(t, "docs", removableParentPath("/docs/old-report.pdf"))
 	assert.Equal(t, "docs/sub", removableParentPath("/docs/sub/report.pdf"))
 }
+
+// Validates: R-1.4.5
+func TestRunRm_RefusesDriveRootEvenWithRecursive(t *testing.T) {
+	deleteCalls := 0
+	cmd, _ := newRmTestCommand(
+		t,
+		driveid.MustCanonicalID("personal:user@example.com"),
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				w.Header().Set("Content-Type", "application/json")
+				writeTestResponse(t, w, `{
+					"id":"root-id",
+					"name":"root",
+					"root":{},
+					"folder":{"childCount":3},
+					"createdDateTime":"2026-04-03T00:00:00Z",
+					"lastModifiedDateTime":"2026-04-03T00:00:00Z"
+				}`)
+			default:
+				deleteCalls++
+				w.WriteHeader(http.StatusNoContent)
+			}
+		}),
+	)
+
+	require.NoError(t, cmd.Flags().Set("recursive", "true"))
+	err := runRm(cmd, []string{"/"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to delete the drive root")
+	assert.Zero(t, deleteCalls, "no delete request may reach OneDrive")
+}

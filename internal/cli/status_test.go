@@ -1683,6 +1683,7 @@ func TestPrintStatusText_HealthySingleDriveIsUserFacing(t *testing.T) {
 		"  Test User's personal OneDrive\n"+
 		"    Folder: ~/OneDrive\n"+
 		"    Storage: 135.0 KB of 5.0 GB used\n"+
+		"    Status: Up to date\n"+
 		"    Files: 7\n",
 		buf.String(),
 	)
