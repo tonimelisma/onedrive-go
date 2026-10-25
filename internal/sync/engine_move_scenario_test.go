@@ -267,6 +267,42 @@ func TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource(t 
 	assert.NoDirExists(t, filepath.Join(syncRoot, "deep"))
 }
 
+// Validates: R-2.17.1
+func TestRunOnce_LegacyFolderBaselineGainsIdentityAndMovesAsOne(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFolder("item-old", "root", "old")
+	remote.addFolder("item-sub", "item-old", "sub")
+	remote.addFile(t, "item-leaf", "item-sub", "leaf.md", "leaf\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	// Simulate a state database written before folder baselines recorded
+	// their filesystem identity.
+	ctx := t.Context()
+	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+		UPDATE baseline SET local_device = 0, local_inode = 0, local_has_identity = 0
+		WHERE item_type = 'folder'`)
+	require.NoError(t, err)
+	require.NoError(t, eng.baseline.reloadBaselineCache(ctx))
+
+	// The next full scan backfills identity without changing anything.
+	report := runScenarioPass(t, eng)
+	assert.Zero(t, report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes+report.FolderCreates)
+
+	require.NoError(t, os.Rename(filepath.Join(syncRoot, "old"), filepath.Join(syncRoot, "new")))
+	runScenarioPass(t, eng)
+
+	assert.Equal(t, []string{"item-old->new"}, remote.moves, "a legacy folder must move as one item once its identity is known")
+	assert.Empty(t, remote.folderCreates)
+	assert.Empty(t, remote.deletes)
+	assert.Zero(t, remote.uploads)
+	requireScenarioQuietPlan(t, eng)
+}
+
 // Validates: R-2.17.2
 func TestRunOnce_LocalFolderDeleteDeletesRemoteFolder(t *testing.T) {
 	t.Parallel()

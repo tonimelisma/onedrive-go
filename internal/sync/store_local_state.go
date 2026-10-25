@@ -20,6 +20,32 @@ const (
 		path, item_type, hash, size, mtime, local_device, local_inode, local_has_identity
 		FROM local_state
 		WHERE path = ?`
+
+	// sqlBackfillBaselineIdentity records the observed filesystem identity on
+	// baseline rows that predate identity tracking, so a later rename of the
+	// same item pairs as a move (R-2.17.1). A folder needs only the same path
+	// and type: it has no content of its own. A file must also still match the
+	// baseline's content facts, so identity is never attached to content the
+	// baseline did not record.
+	sqlBackfillBaselineIdentity = `UPDATE baseline
+		SET local_device = l.local_device,
+			local_inode = l.local_inode,
+			local_has_identity = 1
+		FROM local_state l
+		WHERE l.path = baseline.path
+			AND baseline.local_has_identity = 0
+			AND l.local_has_identity = 1
+			AND COALESCE(l.item_type, '') = COALESCE(baseline.item_type, '')
+			AND (
+				COALESCE(baseline.item_type, '') = 'folder'
+				OR (
+					COALESCE(baseline.item_type, '') = 'file'
+					AND NULLIF(baseline.local_hash, '') IS NOT NULL
+					AND l.hash = baseline.local_hash
+					AND l.size = baseline.local_size
+					AND l.mtime = baseline.local_mtime
+				)
+			)`
 )
 
 // ReplaceLocalState atomically replaces the durable local snapshot with the
@@ -39,6 +65,10 @@ func (s *SyncStore) ReplaceLocalState(
 	if err := replaceLocalStateTx(ctx, tx, rows); err != nil {
 		return err
 	}
+	backfilled, backfillErr := backfillBaselineIdentityTx(ctx, tx)
+	if backfillErr != nil {
+		return backfillErr
+	}
 	if err := markLocalTruthCompleteTx(ctx, tx); err != nil {
 		return err
 	}
@@ -47,7 +77,28 @@ func (s *SyncStore) ReplaceLocalState(
 		return fmt.Errorf("sync: committing local_state transaction: %w", err)
 	}
 
+	if backfilled > 0 {
+		if err := s.reloadBaselineCache(ctx); err != nil {
+			return fmt.Errorf("sync: reloading baseline cache after identity backfill: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// backfillBaselineIdentityTx attaches the full snapshot's filesystem identity
+// to baseline rows that lack one and returns how many rows it changed.
+func backfillBaselineIdentityTx(ctx context.Context, tx sqlTxRunner) (int64, error) {
+	result, err := tx.ExecContext(ctx, sqlBackfillBaselineIdentity)
+	if err != nil {
+		return 0, fmt.Errorf("sync: backfilling baseline identity: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("sync: counting backfilled baseline identities: %w", err)
+	}
+
+	return changed, nil
 }
 
 // ListLocalState returns the durable local snapshot rows in path order.
