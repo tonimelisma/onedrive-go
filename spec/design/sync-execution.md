@@ -40,6 +40,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal`, `TestExecutor_ConflictCopy_ReservationGivesEachCopyItsOwnDestination`, `TestExecutor_ConflictCopy_ReleasedReservationLeavesNoPlaceholder`, `TestExecutor_ConflictCopy_LeavesExactlyOneCopyHoldingTheOriginal`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestExecutor_LocalDelete_NoBaselineHashAndChangedFile_PreservesLocalContent`, `TestExecutor_LocalDelete_NoBaselineHashAndUnchangedFile_Deletes`, `TestExecutor_LocalDelete_NoBaselineEvidence_PreservesLocalContent`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
 | Worker-start validation rejects already-submitted stale actions before executor side effects, while suspect local truth disables local-state-based rejection. Dependent uploads after planned remote moves tolerate move-produced eTag churn but still reject proven remote content drift, and executable actions without planner truth fail closed. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState`, `TestActionFreshness_PostRemoteMoveUploadAllowsMoveProducedETagChange`, `TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange`, `TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction` |
 | Local mutation is refused beneath a symlinked ancestor, at every mutating action, with the target content outside the sync root left byte-identical. | `TestExecutor_Download_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorSourceIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorDestinationIsBlocked`, `TestExecutor_ConflictCopy_SymlinkedAncestorIsBlocked`, `TestExecutor_CreateLocalFolder_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition`, `TestExecutor_LocalDelete_AliasItselfStillRemovesOnlyTheSymlink`, `TestExecutor_LocalMove_WithoutSymlinkBoundarySucceeds` |
+| Uploads read through a followed alias: a file beneath a directory symlink whose target is outside the sync root uploads with the target content, its followed facts are still checked against the plan, the same path still refuses a download, and a path that lexically leaves the root is refused. | `TestRunOnce_FollowSymlinks_UploadsFileInsideDirectoryAliasOutsideRoot`, `TestExecutor_Upload_UnderFollowedDirectoryAliasSucceeds`, `TestExecutor_Upload_UnderFollowedDirectoryAliasDetectsChangedTarget`, `TestExecutor_UnderFollowedDirectoryAlias_UploadReadsButDownloadStaysRefused`, `TestExecutor_Upload_PathLeavingSyncRootIsRefused`, `TestExecutor_Upload_SymlinkAliasSourceUsesFollowedTargetPrecondition` |
 | Executor live preconditions reject stale work at the side-effect boundary without mutating local or remote state. | `TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure`, `TestExecutor_RemoteDelete_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_RemoteDelete_WrongDrivePreflightReturnsStalePrecondition`, `TestExecutor_RemoteDelete_StalePathPreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_StaleSourcePreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_CreateRemoteFolder_MissingParentPreflightReturnsStalePrecondition`, `TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition`, `TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition`, `TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStalePrecondition`, `TestExecutor_Download_MountRootAllowsGraphDriveRootPath`, `TestExecutor_LocalMove_SourceChangedReturnsStalePrecondition`, `TestExecutor_LocalMove_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition` |
 | Workers preserve executor failure capability on completions and record worker-start/live-precondition superseded counters by local-vs-remote source. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_RemoteDownloadMismatchRecordsRemoteTruthCounter`, `TestWorkerPool_SendResultCountsLivePreconditionSupersededByCapability`, `TestWorkerPool_SendResultDoesNotGuessLivePreconditionSourceWithoutCapability` |
 | Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork` |
@@ -189,7 +190,15 @@ the sync root, resolves to a regular file, and still matches planned identity,
 size/mtime, and hash facts when those facts are available. Symlink aliases
 admitted by local observation are validated against the followed target facts
 that observation persisted, not rejected merely because the alias directory
-entry is a symlink. The transfer manager then reuses the executor-supplied
+entry is a symlink. That holds for a file beneath a symlinked directory as
+well as for a file symlink: when the source or any ancestor is a link
+(`symlinkBoundaryForPath`, a rooted no-follow walk), the source is stated by
+following links, as observation did; otherwise it is stated through the rooted
+no-follow `synctree.Lstat`. The rooted capability is deliberately not asked
+about a followed source, because it refuses every name that resolves outside
+the sync root, which is right for a write and wrong for this read: an alias to
+another disk would otherwise never upload. The lexical containment check
+(`synctree.Abs`) still runs first. The transfer manager then reuses the executor-supplied
 callback before upload reads so a large file can abort if it changes
 mid-session. Expected source-hash mismatches are returned as
 `errActionPreconditionChanged`.
@@ -414,7 +423,12 @@ removes only the symlink and never target content.
 Two deliberate exclusions:
 
 - **Upload is not blocked.** Uploading reads through the alias, and observing
-  plus uploading target content is the entire purpose of the setting.
+  plus uploading target content is the entire purpose of the setting. The
+  upload source precondition follows the alias for its stat (see the upload
+  paragraph above) instead of going through the rooted `synctree` capability,
+  which would refuse an alias whose target is outside the sync root. Allowing
+  that read opens no write path: every local mutation beneath the alias still
+  hits `validateNoSymlinkBoundary` and, below it, `synctree` containment.
 - **Reads are not blocked** for the same reason.
 
 This policy is redundant with `synctree`, which already fails such calls closed
