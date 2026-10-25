@@ -122,7 +122,7 @@ func (c *Client) DownloadRange(
 
 func (c *Client) downloadItemMetadata(ctx context.Context, driveID driveid.ID, itemID string) (*Item, error) {
 	return doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
-		name:   "download-metadata-transient-404",
+		name:   QuirkDownloadMetadataTransient404,
 		policy: c.policies.downloadMetadata,
 		match:  isTransientDownloadMetadataError,
 	}, func() (*Item, error) {

@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -158,4 +161,80 @@ func TestCommandErrorText_SignInCodeOutcomes(t *testing.T) {
 
 	assert.Contains(t, commandErrorText(fmt.Errorf("device login: %w", graph.ErrLoginCodeExpired), false), "sign-in code expired")
 	assert.Contains(t, commandErrorText(fmt.Errorf("browser login: %w", graph.ErrLoginDeclined), false), "canceled or declined")
+}
+
+// http2StreamError has the shape and text of net/http's unexported HTTP/2
+// stream error, which callers can only recognize by its text.
+type http2StreamError struct{}
+
+func (http2StreamError) Error() string {
+	return "stream error: stream ID 7; INTERNAL_ERROR; received from peer"
+}
+
+type headerTimeoutError struct{}
+
+func (headerTimeoutError) Error() string   { return "net/http: timeout awaiting response headers" }
+func (headerTimeoutError) Timeout() bool   { return true }
+func (headerTimeoutError) Temporary() bool { return true }
+
+// Every transport failure, before or during the response, is one plain line
+// rather than the whole wrapped chain; a local error that io.Copy returned
+// during the same download is not blamed on OneDrive.
+//
+// Validates: R-6.6.22
+func TestCommandErrorText_EveryTransportFailureIsPlain(t *testing.T) {
+	t.Parallel()
+
+	before := func(cause error) error {
+		return fmt.Errorf("listing %q: %w", "/", &url.Error{Op: "Get", URL: "https://graph.microsoft.com/v1.0/me", Err: cause})
+	}
+	during := func(cause error) error {
+		return fmt.Errorf("downloading %q: graph: streaming download content: %w", "/a.txt", &graph.ResponseReadError{Err: cause})
+	}
+
+	const interrupted = "Error: the connection to OneDrive was interrupted. Check your network connection, then run the command again."
+	const slow = "Error: OneDrive did not answer in time. Check your network connection, then run the command again."
+
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"EOF before the response":            {before(io.EOF), interrupted},
+		"unexpected EOF while downloading":   {during(io.ErrUnexpectedEOF), interrupted},
+		"HTTP/2 stream reset":                {before(http2StreamError{}), interrupted},
+		"HTTP/2 stream reset mid-download":   {during(http2StreamError{}), interrupted},
+		"connection reset mid-download":      {during(syscall.ECONNRESET), interrupted},
+		"response-header timeout":            {before(headerTimeoutError{}), slow},
+		"read timeout while downloading":     {during(os.ErrDeadlineExceeded), slow},
+		"TLS alert":                          {before(tls.AlertError(40)), ""},
+		"unknown certificate authority":      {before(x509.UnknownAuthorityError{}), ""},
+		"certificate for the wrong hostname": {before(x509.HostnameError{Host: "graph.microsoft.com", Certificate: &x509.Certificate{}}), ""},
+	} {
+		got := commandErrorText(tc.err, false)
+		if tc.want == "" {
+			assert.Contains(t, got, "Error: the secure connection to OneDrive failed (", name)
+			assert.NotContains(t, got, "listing", name)
+			continue
+		}
+		assert.Equal(t, tc.want, got, name)
+	}
+
+	disk := fmt.Errorf("downloading %q: graph: streaming download content: %w", "/a.txt",
+		&fs.PathError{Op: "write", Path: "/tmp/a.txt", Err: syscall.ENOSPC})
+	assert.NotContains(t, commandErrorText(disk, false), "OneDrive", "a local write failure is not a OneDrive problem")
+}
+
+// A canceled or declined sign-in, or an expired sign-in code, is one plain
+// line that says to run login again, never the wrapped sentinel chain.
+//
+// Validates: R-6.6.26
+func TestCommandErrorText_SignInOutcomesSayRunLoginAgain(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t,
+		"Error: sign-in was canceled or declined. Run 'onedrive-go login' again.",
+		commandErrorText(fmt.Errorf("authenticate account: browser login: %w", graph.ErrLoginDeclined), true))
+	assert.Equal(t,
+		"Error: the sign-in code expired before sign-in finished. Run 'onedrive-go login' again to get a new code.",
+		commandErrorText(fmt.Errorf("authenticate account: device login: %w", graph.ErrLoginCodeExpired), true))
 }

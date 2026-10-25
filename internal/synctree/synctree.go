@@ -327,12 +327,7 @@ func (r *Root) openWithRoot(
 			return nil, errors.Join(openErr, closeErr)
 		}
 
-		target := r.dir
-		if clean != "." {
-			target = filepath.Join(r.dir, clean)
-		}
-
-		return nil, r.normalizeNotExist(target, openErr)
+		return nil, fmt.Errorf("opening %s: %w", r.nameForMessage(clean), r.normalizeNotExist(r.absForCheck(clean), openErr))
 	}
 
 	if closeErr != nil {
@@ -348,12 +343,7 @@ func (r *Root) openWithRoot(
 
 func (r *Root) Open(rel string) (*os.File, error) {
 	file, err := r.openWithRoot(rel, func(root rootHandle, clean string) (*os.File, error) {
-		f, openErr := root.Open(clean)
-		if openErr != nil {
-			return nil, fmt.Errorf("opening %s: %w", clean, openErr)
-		}
-
-		return f, nil
+		return root.Open(clean)
 	})
 	if err != nil {
 		return nil, err
@@ -373,12 +363,7 @@ func (r *Root) OpenAbs(abs string) (*os.File, error) {
 
 func (r *Root) OpenFile(rel string, flag int, perm os.FileMode) (*os.File, error) {
 	file, err := r.openWithRoot(rel, func(root rootHandle, clean string) (*os.File, error) {
-		f, openErr := root.OpenFile(clean, flag, perm)
-		if openErr != nil {
-			return nil, fmt.Errorf("opening %s: %w", clean, openErr)
-		}
-
-		return f, nil
+		return root.OpenFile(clean, flag, perm)
 	})
 	if err != nil {
 		return nil, err
@@ -415,12 +400,7 @@ func (r *Root) statWithRoot(
 			return nil, errors.Join(statErr, closeErr)
 		}
 
-		target := r.dir
-		if clean != "." {
-			target = filepath.Join(r.dir, clean)
-		}
-
-		return nil, fmt.Errorf(errorFormat+": %w", target, r.normalizeNotExist(target, statErr))
+		return nil, fmt.Errorf(errorFormat+": %w", r.nameForMessage(clean), r.normalizeNotExist(r.absForCheck(clean), statErr))
 	}
 
 	if closeErr != nil {
@@ -456,7 +436,7 @@ func (r *Root) mutateWithRoot(
 			return errors.Join(mutateErr, closeErr)
 		}
 
-		return fmt.Errorf(errorFormat+": %w", r.absForMessage(clean), r.normalizeNotExist(r.absForMessage(clean), mutateErr))
+		return fmt.Errorf(errorFormat+": %w", r.nameForMessage(clean), r.normalizeNotExist(r.absForCheck(clean), mutateErr))
 	}
 
 	if closeErr != nil {
@@ -466,14 +446,26 @@ func (r *Root) mutateWithRoot(
 	return nil
 }
 
-// absForMessage renders a rooted-relative name as an absolute path for error
-// text only. It is never used to perform filesystem work.
-func (r *Root) absForMessage(clean string) string {
+// absForCheck renders a rooted-relative name as an absolute path for the
+// not-exist/unsafe-path re-check in normalizeNotExist. It never performs
+// filesystem work itself.
+func (r *Root) absForCheck(clean string) string {
 	if clean == "." {
 		return r.dir
 	}
 
 	return filepath.Join(r.dir, clean)
+}
+
+// nameForMessage is how error text names a rooted-relative path: relative to
+// the sync folder, as everything the user sees does, with the sync folder
+// itself named by its full path.
+func (r *Root) nameForMessage(clean string) string {
+	if clean == "." {
+		return r.dir
+	}
+
+	return clean
 }
 
 func (r *Root) StatAbs(abs string) (os.FileInfo, error) {
@@ -527,12 +519,7 @@ func (r *Root) ReadDir(rel string) ([]os.DirEntry, error) {
 			return nil, errors.Join(readErr, closeErr)
 		}
 
-		target := r.dir
-		if clean != "." {
-			target = filepath.Join(r.dir, clean)
-		}
-
-		return nil, fmt.Errorf("reading directory %s: %w", target, r.normalizeNotExist(target, readErr))
+		return nil, fmt.Errorf("reading directory %s: %w", r.nameForMessage(clean), r.normalizeNotExist(r.absForCheck(clean), readErr))
 	}
 
 	if closeErr != nil {
@@ -952,13 +939,11 @@ func (r *Root) Rename(srcRel, dstRel string) error {
 			return errors.Join(renameErr, closeErr)
 		}
 
-		srcPath := r.absForMessage(srcClean)
-
 		return fmt.Errorf(
 			"renaming %s to %s: %w",
-			srcPath,
-			r.absForMessage(dstClean),
-			r.normalizeNotExist(srcPath, renameErr),
+			r.nameForMessage(srcClean),
+			r.nameForMessage(dstClean),
+			r.normalizeNotExist(r.absForCheck(srcClean), renameErr),
 		)
 	}
 
@@ -970,13 +955,14 @@ func (r *Root) Rename(srcRel, dstRel string) error {
 }
 
 func (r *Root) SameFile(srcRel, dstRel string) (bool, error) {
+	// Stat already names the path; wrapping again would say it twice.
 	srcInfo, err := r.Stat(srcRel)
 	if err != nil {
-		return false, fmt.Errorf("stating %s: %w", srcRel, err)
+		return false, err
 	}
 	dstInfo, err := r.Stat(dstRel)
 	if err != nil {
-		return false, fmt.Errorf("stating %s: %w", dstRel, err)
+		return false, err
 	}
 
 	return os.SameFile(srcInfo, dstInfo), nil

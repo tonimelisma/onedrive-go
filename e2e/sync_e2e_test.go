@@ -27,6 +27,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
@@ -430,8 +431,8 @@ func classifyFixturePutCommandFailure(stderr string) liveProviderRecurrenceDecis
 			Reason: liveProviderRecurrenceTransientGraphGatewayFailure,
 			Retry:  true,
 		}
-	case strings.Contains(stderr, "simple-upload-create-transient-404 retry exhausted"),
-		strings.Contains(stderr, "upload-session-create-transient-404 retry exhausted"):
+	case graphQuirkExhausted(stderr, graph.QuirkSimpleUploadCreateTransient404),
+		graphQuirkExhausted(stderr, graph.QuirkUploadSessionCreateTransient404):
 		return liveProviderRecurrenceDecision{
 			Reason: liveProviderRecurrenceFreshParentChildCreateLag,
 			Retry:  true,
@@ -448,6 +449,16 @@ func classifyFixturePutCommandFailure(stderr string) liveProviderRecurrenceDecis
 			Retry:  false,
 		}
 	}
+}
+
+// graphQuirkExhausted reports whether a --debug CLI run's stderr carries the
+// structured "retry exhausted" record for quirk. It keys on the record's
+// graph.QuirkLogKey field (text or JSON console form), not on error wording,
+// so rewording the user-facing error cannot silently stop the classifier
+// from recognizing the quirk.
+func graphQuirkExhausted(stderr string, quirk string) bool {
+	return strings.Contains(stderr, graph.QuirkLogKey+"="+quirk) ||
+		strings.Contains(stderr, `"`+graph.QuirkLogKey+`":"`+quirk+`"`)
 }
 
 func classifyFixtureMkdirCommandFailure(stderr string) liveProviderRecurrenceDecision {
@@ -478,13 +489,14 @@ func TestClassifyFixturePutCommandFailure_KnownConvergenceFamilies(t *testing.T)
 		Reason: liveProviderRecurrenceFreshParentChildCreateLag,
 		Retry:  true,
 	}, classifyFixturePutCommandFailure(
-		`Error: graph: simple-upload-create-transient-404 retry exhausted after 7 attempts: graph: HTTP 404`,
+		`time=2026-04-10T23:56:11.987-07:00 level=DEBUG msg="graph quirk retry exhausted" graph_quirk=simple-upload-create-transient-404 graph_quirk_attempt_count=7
+Error: graph: OneDrive kept reporting the upload's destination folder as missing, even after 7 tries: graph: HTTP 404`,
 	))
 	assert.Equal(t, liveProviderRecurrenceDecision{
 		Reason: liveProviderRecurrenceFreshParentChildCreateLag,
 		Retry:  true,
 	}, classifyFixturePutCommandFailure(
-		`Error: graph: upload-session-create-transient-404 retry exhausted after 6 attempts: graph: HTTP 404`,
+		`{"level":"DEBUG","msg":"graph quirk retry exhausted","graph_quirk":"upload-session-create-transient-404","graph_quirk_attempt_count":6}`,
 	))
 	assert.Equal(t, liveProviderRecurrenceDecision{
 		Reason: liveProviderRecurrenceFreshParentParentPathLag,
@@ -507,7 +519,8 @@ func TestClassifyFixturePutCommandFailure_RejectsUnrelatedFailures(t *testing.T)
 		Reason: liveProviderRecurrenceUnknown,
 		Retry:  false,
 	}, classifyFixturePutCommandFailure(
-		`Error: graph: setting mtime after simple upload: graph: simple-upload-mtime-transient-404 retry exhausted`,
+		`time=2026-04-10T23:56:11.987-07:00 level=DEBUG msg="graph quirk retry exhausted" graph_quirk=simple-upload-mtime-transient-404 graph_quirk_attempt_count=4
+Error: graph: setting mtime after simple upload: graph: OneDrive kept reporting the just-uploaded file as missing while setting its modified time, even after 4 tries`,
 	))
 	assert.Equal(t, liveProviderRecurrenceDecision{
 		Reason: liveProviderRecurrenceUnknown,

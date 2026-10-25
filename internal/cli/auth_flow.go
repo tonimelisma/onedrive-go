@@ -26,6 +26,16 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 		return fmt.Errorf("authenticate account: %w", err)
 	}
 
+	return completeLogin(ctx, cc, ts, tempPath)
+}
+
+// completeLogin is everything login does once the person has signed in:
+// discover the account, save the token and config, and report the result.
+// It is split from the sign-in exchange so it can be tested with a fake
+// Graph server and a token that is already in hand.
+func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, tempPath string) error {
+	logger := cc.Logger
+
 	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, logger, cc.runtime())
 	if err != nil {
 		cleanupPendingToken(cc, tempPath, "discovery failure")
@@ -77,18 +87,39 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 
 	if !added {
 		logger.Info("re-login detected, token and metadata refreshed", "canonical_id", canonicalID.String())
-		if err := writef(cc.Output(), "Token refreshed for %s.\n", email); err != nil {
+		if err := writef(cc.resultWriter(), "Token refreshed for %s.\n", email); err != nil {
 			return err
 		}
-		notifyDaemonIfRunning(ctx, cc)
-		return nil
-	}
-
-	if err := printLoginSuccess(cc.Output(), canonicalID.DriveType(), email, orgName, syncDir); err != nil {
+	} else if err := printLoginSuccess(cc.resultWriter(), canonicalID.DriveType(), email, orgName, syncDir); err != nil {
 		return err
 	}
 	notifyDaemonIfRunning(ctx, cc)
+
+	if cc.Flags.JSON {
+		return writeJSONDocument(cc.Output(), loginJSONOutput{
+			Account:      email,
+			Drive:        canonicalID.String(),
+			DriveType:    canonicalID.DriveType(),
+			Organization: orgName,
+			SyncDir:      syncDir,
+			Added:        added,
+		})
+	}
+
 	return nil
+}
+
+// loginJSONOutput is `login --json`. The sign-in prompt (device code or
+// browser URL) still goes to stderr, so a script can show it to the person
+// and read this document from stdout once sign-in finishes. added is false
+// when the account was already configured and only its token was refreshed.
+type loginJSONOutput struct {
+	Account      string `json:"account"`
+	Drive        string `json:"drive"`
+	DriveType    string `json:"drive_type"`
+	Organization string `json:"organization,omitempty"`
+	SyncDir      string `json:"sync_dir"`
+	Added        bool   `json:"added"`
 }
 
 func persistLoginMetadata(
@@ -303,7 +334,7 @@ func runLogoutWithContext(ctx context.Context, cc *CLIContext, purge bool) error
 		}
 
 		logger.Info("logout started", "account", account, "purge", purge)
-		return executeLogout(validated.Config, validated.Catalog, cc.CfgPath, cc.Output(), account, purge, logger)
+		return logoutAndReport(cc, validated.Config, validated.Catalog, account, purge)
 	}
 
 	cfg, catalog := loadLogoutRecoveryState(cc.CfgPath, logger, warnings, err)
@@ -320,7 +351,22 @@ func runLogoutWithContext(ctx context.Context, cc *CLIContext, purge bool) error
 	}
 
 	logger.Info("logout started with degraded state recovery", "account", account, "purge", purge)
-	return executeLogout(cfg, catalog, cc.CfgPath, cc.Output(), account, purge, logger)
+	return logoutAndReport(cc, cfg, catalog, account, purge)
+}
+
+// logoutAndReport runs the logout and prints its result: prose by default,
+// one JSON document under --json.
+func logoutAndReport(cc *CLIContext, cfg *config.Config, catalog *config.Catalog, account string, purge bool) error {
+	result, err := executeLogout(cfg, catalog, cc.CfgPath, cc.resultWriter(), account, purge, cc.Logger)
+	if err != nil {
+		return err
+	}
+
+	if cc.Flags.JSON {
+		return writeJSONDocument(cc.Output(), result)
+	}
+
+	return nil
 }
 
 func loadLogoutRecoveryState(

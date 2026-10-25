@@ -99,16 +99,40 @@ type QuirkRetryError struct {
 	Err      error               `json:"-"`
 }
 
+// Error says, in plain words, what OneDrive kept doing. The quirk name is
+// not part of the text: it is on Quirk (and the QuirkLogKey log field) for
+// anything that needs to recognize the quirk.
 func (e *QuirkRetryError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
 
+	text := fmt.Sprintf("graph: OneDrive %s, even after %d tries", quirkSymptom(e.Quirk), len(e.Attempts))
 	if e.Err == nil {
-		return fmt.Sprintf("graph: %s retry exhausted after %d attempts", e.Quirk, len(e.Attempts))
+		return text
 	}
 
-	return fmt.Sprintf("graph: %s retry exhausted after %d attempts: %v", e.Quirk, len(e.Attempts), e.Err)
+	return text + ": " + e.Err.Error()
+}
+
+// quirkSymptom describes what a documented quirk looks like from outside.
+func quirkSymptom(quirk string) string {
+	switch quirk {
+	case QuirkDrivesTokenPropagation:
+		return "did not yet accept the new sign-in"
+	case QuirkCopyDestinationTransient404:
+		return "kept reporting the copy's destination folder as missing"
+	case QuirkUploadSessionCreateTransient404, QuirkSimpleUploadCreateTransient404:
+		return "kept reporting the upload's destination folder as missing"
+	case QuirkSimpleUploadMtimeTransient404:
+		return "kept reporting the just-uploaded file as missing while setting its modified time"
+	case QuirkDownloadMetadataTransient404:
+		return "kept reporting the file as missing when starting the download"
+	case QuirkRootChildrenTransient404:
+		return "kept reporting the drive's top folder as missing"
+	default:
+		return "kept failing with a known temporary error"
+	}
 }
 
 func (e *QuirkRetryError) Unwrap() error {

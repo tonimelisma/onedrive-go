@@ -11,6 +11,25 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
+// Documented Graph quirk names. Each is a stable identifier: it is the
+// QuirkRetryError.Quirk value and the QuirkLogKey field on the "retry
+// exhausted" debug record, so tests and incident tooling can recognize a
+// quirk without matching message wording.
+const (
+	QuirkDrivesTokenPropagation          = "drives-token-propagation"
+	QuirkCopyDestinationTransient404     = "copy-destination-transient-404"
+	QuirkUploadSessionCreateTransient404 = "upload-session-create-transient-404"
+	QuirkSimpleUploadMtimeTransient404   = "simple-upload-mtime-transient-404"
+	QuirkSimpleUploadCreateTransient404  = "simple-upload-create-transient-404"
+	QuirkDownloadMetadataTransient404    = "download-metadata-transient-404"
+	QuirkRootChildrenTransient404        = "root-children-transient-404"
+)
+
+// QuirkLogKey is the structured log field naming the quirk whose bounded
+// retry budget ran out. It appears only on the exhaustion record, never on
+// the per-attempt retry records.
+const QuirkLogKey = "graph_quirk"
+
 type documentedGraphQuirkSpec struct {
 	name   string
 	policy retry.Policy
@@ -45,7 +64,7 @@ func doDocumentedGraphQuirkRetry[T any](ctx context.Context, c *Client, spec doc
 			// retry evidence stays in this record and on QuirkRetryError for
 			// --debug and live-test incident capture.
 			c.logger.Debug("graph quirk retry exhausted",
-				slog.String("graph_quirk", quirkErr.Quirk),
+				slog.String(QuirkLogKey, quirkErr.Quirk),
 				slog.Int("graph_quirk_attempt_count", len(quirkErr.Attempts)),
 				slog.Any("graph_quirk_attempts", quirkErr.Attempts),
 				slog.Any("error", err),

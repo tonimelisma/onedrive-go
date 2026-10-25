@@ -263,8 +263,8 @@ func TestE2E_Shortcut_WatchLocalUploadSyncsToSharedTarget(t *testing.T) {
 		_, _, _ = runCLICore(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, "rm", remotePath)
 	})
 
-	_, stderr := withShortcutWatchDaemon(t, cfgPath, env, fixture.ParentDrive, "--upload-only")
-	waitForDaemonReady(t, stderr, 30*time.Second)
+	eventsPath := withShortcutWatchDaemon(t, cfgPath, env, fixture.ParentDrive, "--upload-only")
+	waitForDaemonReady(t, eventsPath, 30*time.Second)
 
 	localPath := filepath.Join(syncDir, fixture.ShortcutName, remoteName)
 	require.NoError(t, os.WriteFile(localPath, []byte("watch local shortcut upload\n"), 0o600))
@@ -292,8 +292,8 @@ func TestE2E_Shortcut_WatchRemoteWakeUpdatesChildRoot(t *testing.T) {
 		_, _, _ = runCLICore(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, "rm", remotePath)
 	})
 
-	_, stderr := withShortcutWatchDaemon(t, cfgPath, env, fixture.ParentDrive, "--download-only")
-	waitForDaemonReady(t, stderr, 30*time.Second)
+	eventsPath := withShortcutWatchDaemon(t, cfgPath, env, fixture.ParentDrive, "--download-only")
+	waitForDaemonReady(t, eventsPath, 30*time.Second)
 
 	runCLIWithConfigForDrive(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, "put", contentFile, remotePath)
 
@@ -361,7 +361,7 @@ func withShortcutWatchDaemon(
 	env map[string]string,
 	driveID string,
 	modeArg string,
-) (*syncBuffer, *syncBuffer) {
+) string {
 	t.Helper()
 
 	daemonArgs := []string{
@@ -370,6 +370,7 @@ func withShortcutWatchDaemon(
 		"--debug",
 		"sync", "--watch", modeArg,
 	}
+	env, eventsPath := ensureDebugEvents(t, env)
 	cmd := makeCmd(daemonArgs, env)
 
 	var stdout, stderr syncBuffer
@@ -386,7 +387,7 @@ func withShortcutWatchDaemon(
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
-	return &stdout, &stderr
+	return eventsPath
 }
 
 func requireShortcutChildAtPath(

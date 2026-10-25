@@ -185,9 +185,14 @@ func (r *SessionRuntime) session(
 	}
 
 	if mount.DriveID.IsZero() {
+		// The drive record lost its OneDrive drive ID (a missing or damaged
+		// saved login). Say it in the user's terms: which account, and the
+		// one command that restores it.
+		email := mount.TokenOwnerCanonical.Email()
 		return nil, fmt.Errorf(
-			"drive ID not resolved for token owner %s — token file may be missing or corrupted; re-run 'onedrive-go login'",
-			mount.TokenOwnerCanonical,
+			"onedrive-go doesn't know which OneDrive to use for %s; run 'onedrive-go login --account %s' to set it up again",
+			email,
+			email,
 		)
 	}
 

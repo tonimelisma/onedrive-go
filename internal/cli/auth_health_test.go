@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -229,4 +230,20 @@ func TestAuthReasonTextAndAction_ReturnExpectedStrings(t *testing.T) {
 	assert.Equal(t, "Run 'onedrive-go login' to sign in.", authAction(authReasonInvalidSavedLogin))
 	assert.Equal(t, "Run 'onedrive-go status' to re-check access, or 'onedrive-go login' to sign in again.", authAction(authReasonSyncAuthRejected))
 	assert.Empty(t, authAction("unknown"))
+}
+
+// Checking a saved login is not loading it: the health check behind status
+// and drive list only reads the file, so a command that then loads the token
+// for real logs "loaded saved token" once per run, not twice.
+func TestInspectSavedLogin_DoesNotLogATokenLoad(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	assert.Empty(t, inspectSavedLogin(t.Context(), cid.Email(), []driveid.CanonicalID{cid}, logger))
+	assert.NotContains(t, logs.String(), "loaded saved token")
 }
