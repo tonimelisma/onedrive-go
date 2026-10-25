@@ -1757,3 +1757,54 @@ func TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem(t *
 	assert.Equal(t, "item-new-file", plan.Actions[downloadIdx].ItemID)
 	assert.Contains(t, plan.Deps[downloadIdx], deleteIdx)
 }
+
+// Validates: R-2.12.1, R-2.17.1
+func TestPlannerPlanCurrentState_CaseOnlyRenameWithEditUploadsAfterOldNameIsDeleted(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	// mv edit.txt EDIT.txt; then rewrite it, so no move can be proven.
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
+		VALUES ('item-edit', 'edit.txt', 'file', 'old', 'old', 3, 3, 1, 1)`)
+	require.NoError(t, err)
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+		{Path: "EDIT.txt", ItemType: ItemTypeFile, Hash: "new", Size: 30, Mtime: 2},
+	}))
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES ('item-edit', 'edit.txt', 'file', 'old', 3, 1)`)
+	require.NoError(t, err)
+
+	plan := planCurrentStateForStore(t, store)
+	index := planActionIndex(t, plan)
+	require.Len(t, plan.Actions, 2, "%v", index)
+
+	deleteIdx, ok := index[ActionRemoteDelete.String()+":edit.txt"]
+	require.True(t, ok, "%v", index)
+	uploadIdx, ok := index[ActionUpload.String()+":EDIT.txt"]
+	require.True(t, ok, "%v", index)
+	assert.Contains(t, plan.Deps[uploadIdx], deleteIdx,
+		"OneDrive names are case-insensitive: an upload that ran first would replace the item the delete then removes")
+}
+
+// Validates: R-2.12.1
+func TestBuildDependencies_CaseVariantMovesDoNotWaitOnEachOther(t *testing.T) {
+	t.Parallel()
+
+	// Two files trade case-variant names: x -> Y and y -> X.
+	actions := []Action{
+		{Type: ActionRemoteMove, OldPath: "x", Path: "Y"},
+		{Type: ActionRemoteMove, OldPath: "y", Path: "X"},
+		{Type: ActionUpload, Path: "dir/A.txt"},
+		{Type: ActionRemoteMove, OldPath: "dir/a.txt", Path: "dir/b.txt"},
+	}
+
+	deps := buildDependencies(actions)
+	require.NoError(t, detectDependencyCycle(deps))
+	assert.Empty(t, deps[0])
+	assert.Empty(t, deps[1])
+	assert.Equal(t, []int{3}, deps[2], "a create waits for a move that vacates its case-variant name")
+}

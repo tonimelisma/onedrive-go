@@ -170,7 +170,7 @@ func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scan
 	// (set in Phase 1) to prevent Phase 3 from generating spurious ChangeDelete
 	// events for files that exist locally but were excluded from events (R-2.12.1).
 	var caseSkipped []skippedItem
-	events, caseSkipped = detectCaseCollisions(events, o.baseline)
+	events, caseSkipped = detectCaseCollisions(events, o.baseline, observed)
 	skipped = append(skipped, caseSkipped...)
 
 	// Phase 3: Deletion detection.
@@ -703,9 +703,15 @@ func sortedLocalStateRows(current map[string]localStateRow) []localStateRow {
 // as SkippedItems. OneDrive uses a case-insensitive namespace — uploading
 // both would cause one to silently overwrite the other (R-2.12.1).
 //
+// observed is the set of paths this scan found on disk. A baseline variant
+// that is not on disk any more is the old name of a case-only rename (or a
+// local delete), not a collision; the planner orders the remote side so the
+// old item is gone before the new name is created (R-2.12.1). A nil observed
+// set treats every baseline variant as present.
+//
 // O(n) time, O(n) memory. Pure function — no side effects.
 func detectCaseCollisions(
-	events []changeEvent, baseline *Baseline,
+	events []changeEvent, baseline *Baseline, observed map[string]bool,
 ) (clean []changeEvent, collisions []skippedItem) {
 	if len(events) == 0 {
 		return nil, nil
@@ -731,7 +737,7 @@ func detectCaseCollisions(
 	}
 
 	// Cross-check single-event groups against baseline.
-	crossCheckBaseline(events, groups, baseline, colliderSet)
+	crossCheckBaseline(events, groups, baseline, observed, colliderSet)
 
 	// Suppress children of colliding directories.
 	childColliderSet, collidingDirPrefixes := suppressDirectoryChildren(events, colliderSet)
@@ -742,7 +748,7 @@ func detectCaseCollisions(
 
 	// Build SkippedItems with Detail naming the other collider(s).
 	collisions = buildCollisionSkippedItems(
-		events, groups, colliderSet, childColliderSet, collidingDirPrefixes, baseline)
+		events, groups, colliderSet, childColliderSet, collidingDirPrefixes, baseline, observed)
 
 	// Build clean events — those not in the collider set.
 	clean = make([]changeEvent, 0, len(events)-len(colliderSet))
@@ -769,6 +775,7 @@ func crossCheckBaseline(
 	events []changeEvent,
 	groups map[caseGroupKey][]int,
 	baseline *Baseline,
+	observed map[string]bool,
 	colliderSet map[int]struct{},
 ) {
 	if baseline == nil {
@@ -788,13 +795,19 @@ func crossCheckBaseline(
 		variants := baseline.GetCaseVariants(key.dir, filepath.Base(ev.Path))
 
 		for _, v := range variants {
-			if v.Path != ev.Path {
+			if v.Path != ev.Path && baselineVariantPresent(v, observed) {
 				colliderSet[indices[0]] = struct{}{}
 
 				break
 			}
 		}
 	}
+}
+
+// baselineVariantPresent reports whether a baseline case variant still exists
+// on disk in this scan. Without an observed set every variant counts.
+func baselineVariantPresent(v *BaselineEntry, observed map[string]bool) bool {
+	return observed == nil || observed[v.Path]
 }
 
 // suppressDirectoryChildren marks children of colliding directories as colliders.
@@ -836,6 +849,7 @@ func buildCollisionSkippedItems(
 	colliderSet, childColliderSet map[int]struct{},
 	collidingDirPrefixes []string,
 	baseline *Baseline,
+	observed map[string]bool,
 ) []skippedItem {
 	collisions := make([]skippedItem, 0, len(colliderSet))
 
@@ -843,7 +857,7 @@ func buildCollisionSkippedItems(
 	for _, indices := range groups {
 		if len(indices) <= 1 {
 			collisions = appendSingleGroupCollision(
-				collisions, events, indices, colliderSet, childColliderSet, baseline)
+				collisions, events, indices, colliderSet, childColliderSet, baseline, observed)
 
 			continue
 		}
@@ -884,6 +898,7 @@ func appendSingleGroupCollision(
 	indices []int,
 	colliderSet, childColliderSet map[int]struct{},
 	baseline *Baseline,
+	observed map[string]bool,
 ) []skippedItem {
 	idx := indices[0]
 
@@ -903,7 +918,7 @@ func appendSingleGroupCollision(
 
 	variants := baseline.GetCaseVariants(filepath.Dir(ev.Path), filepath.Base(ev.Path))
 	for _, v := range variants {
-		if v.Path != ev.Path {
+		if v.Path != ev.Path && baselineVariantPresent(v, observed) {
 			return append(collisions, skippedItem{
 				Path:   ev.Path,
 				Reason: issueCaseCollision,

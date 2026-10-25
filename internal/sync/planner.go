@@ -262,7 +262,9 @@ func actionRequiresParentFolder(actionType actionType) bool {
 // (2) child delete/cleanup before parent folder delete,
 // (3) move target parent must exist first, (4) a folder delete waits for
 // same-side moves that carry descendants out of it, (5) the create half of a
-// type-change replacement waits for the delete at the same path.
+// type-change replacement waits for the delete at the same path, (6) a remote
+// create waits for the remote delete or move-away of a sibling whose name
+// differs only in case.
 func buildDependencies(actions []Action) [][]int {
 	deps := make([][]int, len(actions))
 
@@ -295,6 +297,7 @@ func buildDependencies(actions []Action) [][]int {
 		deps[i] = addSamePathReplacementDep(deps[i], i, &actions[i], deleteIdx)
 		deps[i] = addRemoteMoveDeps(deps[i], i, &actions[i], actions)
 		deps[i] = addMoveOutOfDeletedFolderDeps(deps[i], i, &actions[i], actions)
+		deps[i] = addRemoteCaseVariantDeps(deps[i], i, &actions[i], actions)
 		// Sort dependency indices for reproducible ordering (B-154).
 		sort.Ints(deps[i])
 	}
@@ -392,6 +395,51 @@ func addMoveOutOfDeletedFolderDeps(deps []int, idx int, a *Action, actions []Act
 		if moveIdx != idx && move.Type == sameSideMove && strings.HasPrefix(move.OldPath, prefix) {
 			deps = append(deps, moveIdx)
 		}
+	}
+
+	return deps
+}
+
+// addRemoteCaseVariantDeps orders a case-only rename on OneDrive, whose
+// namespace is case-insensitive. When the rename cannot be paired as a move
+// (the content changed too), it plans a delete of "edit.txt" and an upload of
+// "EDIT.txt". Uploads replace on conflict, so an upload that ran first would
+// overwrite the old item in place, and the delete of that item would then
+// remove the new content. The create therefore waits for the old name to be
+// deleted or moved away.
+func addRemoteCaseVariantDeps(deps []int, idx int, a *Action, actions []Action) []int {
+	switch {
+	case a.Type == ActionUpload, a.Type == ActionRemoteMove:
+	case a.Type == ActionFolderCreate && a.CreateSide == CreateRemote:
+	default:
+		return deps
+	}
+
+	for otherIdx := range actions {
+		other := &actions[otherIdx]
+		if otherIdx == idx {
+			continue
+		}
+		var vacated string
+		switch {
+		case other.Type == ActionRemoteDelete:
+			vacated = other.Path
+		case other.Type == ActionRemoteMove && a.Type != ActionRemoteMove:
+			// Move-to-move edges are skipped: two moves that trade
+			// case-variant names would wait on each other. A blocked rename
+			// fails on its name conflict and is retried instead.
+			vacated = other.OldPath
+		default:
+			continue
+		}
+		if vacated == a.Path || vacated == a.OldPath || !strings.EqualFold(vacated, a.Path) {
+			continue
+		}
+		if a.Type == ActionRemoteMove && strings.HasPrefix(a.OldPath, vacated+"/") {
+			// The folder delete already waits for this move out of it.
+			continue
+		}
+		deps = append(deps, otherIdx)
 	}
 
 	return deps

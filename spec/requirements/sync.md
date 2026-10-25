@@ -17,6 +17,7 @@ When the same file has been modified on both the local filesystem and OneDrive s
 
 - R-2.2.1: The system shall use content hash comparison (QuickXorHash) against the baseline as the primary conflict signal. [verified]
 - R-2.2.2: The system shall use mtime as a fast-path optimization (skip hashing when timestamps match baseline). [verified]
+- R-2.2.3: When only an item's metadata changed (for example `touch` gives a file a new mtime with the same content), the system shall transfer nothing and shall record the new metadata in the baseline, so the R-2.2.2 fast path applies again instead of re-hashing the file on every scan. [verified]
 
 ## R-2.3 Conflict Handling [verified]
 
@@ -157,7 +158,7 @@ The system shall validate filenames against OneDrive naming restrictions before 
 
 ## R-2.12 Case Collision Handling [verified]
 
-- R-2.12.1: Before uploading, the system shall detect local case-insensitive filename collisions (e.g., `file.txt` vs `File.txt`) — including collisions between a new local file and an already-synced file in the baseline — and flag them as conflicts rather than attempting upload. [verified]
+- R-2.12.1: Before uploading, the system shall detect local case-insensitive filename collisions (e.g., `file.txt` vs `File.txt`) — including collisions between a new local file and an already-synced file in the baseline — and flag them as conflicts rather than attempting upload. A case-only rename (`edit.txt` to `EDIT.txt`, the old name no longer on disk) is not a collision. Because the OneDrive namespace is case-insensitive, an upload or folder create at a name shall wait for the remote delete or move-away of a sibling whose name differs from it only in case. [verified]
 - R-2.12.2: When a case collision is detected, neither colliding file nor directory shall be uploaded until the collision is resolved. Children of a colliding directory shall also be suppressed, since the parent path is unresolvable. In watch mode, collision detection applies to both files and directories, with N-way peer tracking for immediate re-emission on delete resolution. [verified]
 
 ## R-2.13 Unicode Normalization [verified]

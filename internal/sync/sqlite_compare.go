@@ -344,7 +344,20 @@ comparison_flags AS (
 			WHEN b.path IS NOT NULL AND r.path IS NOT NULL
 				AND COALESCE(b.item_type, '') <> COALESCE(r.item_type, '') THEN 1
 			ELSE 0
-		END AS remote_type_changed
+		END AS remote_type_changed,
+		-- File content the change tests call unchanged can still carry new
+		-- metadata (touch, tar, rsync: same bytes, new mtime; or a new remote
+		-- mtime or eTag over the same hash).
+		CASE
+			WHEN b.path IS NULL OR l.path IS NULL OR r.path IS NULL THEN 0
+			WHEN COALESCE(b.item_type, '') <> 'file' THEN 0
+			WHEN COALESCE(b.local_mtime, 0) <> COALESCE(l.mtime, 0)
+				OR COALESCE(b.local_size, 0) <> COALESCE(l.size, 0)
+				OR COALESCE(b.remote_mtime, 0) <> COALESCE(r.mtime, 0)
+				OR COALESCE(b.remote_size, 0) <> COALESCE(r.size, 0)
+				OR COALESCE(b.etag, '') <> COALESCE(r.etag, '') THEN 1
+			ELSE 0
+		END AS metadata_drift
 	FROM all_paths p
 	LEFT JOIN baseline b ON b.path = p.path
 	LEFT JOIN local_state l ON l.path = p.path
@@ -373,6 +386,7 @@ comparison_state AS (
 		remote_item_type,
 		local_type_changed,
 		remote_type_changed,
+		metadata_drift,
 		CASE
 			WHEN baseline_present = 1 AND local_present = 0 AND local_move_candidate_count = 1 THEN 'local_move_source'
 			WHEN baseline_present = 1 AND local_present = 0 AND remote_present = 0 THEN 'both_missing'
@@ -423,6 +437,10 @@ reconciliation_state AS (
 			WHEN comparison_kind = 'remote_only_create' THEN 'download'
 			WHEN comparison_kind = 'create_equal' THEN 'baseline_update'
 			WHEN comparison_kind = 'create_conflict' THEN 'conflict_create_create'
+			-- Nothing transfers, but the baseline must learn the new metadata:
+			-- the scanner's size+mtime fast path compares against it, so a
+			-- stale mtime would re-hash the file on every scan (R-2.2.3).
+			WHEN comparison_kind = 'unchanged' AND metadata_drift = 1 THEN 'baseline_update'
 			WHEN comparison_kind = 'unchanged' THEN 'noop'
 			WHEN comparison_kind = 'equal_again' THEN 'baseline_update'
 			-- A folder the user deleted (or moved without a provable identity
