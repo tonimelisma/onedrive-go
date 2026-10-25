@@ -74,6 +74,10 @@ intent; multisync receives only that child work intent.
 | Local/remote equality is never inferred from size alone: a missing hash on either side forces reconciliation instead of a baseline update recording unproven agreement. | `TestPlanCurrentState_HashlessSameSizeIsNotTreatedAsEqual`, `TestPlanCurrentState_HashOnOneSideOnlyIsNotTreatedAsEqual`, `TestPlanCurrentState_MatchingHashesStillCompareEqual` |
 | Conflict reconciliation rows expand into concrete actions for edit/edit, create/create, and edit/delete cases. | `TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_ExpandsCreateCreateConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID` |
 | Folder-delete descendants are reconciled by SQLite after planner-visible pruning, with parent availability preserved only when descendant work requires it. | `TestReplacePlannerVisibleStateTx_PrunesRemoteDescendantsWhenBaselineFolderMissingRemotely`, `TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMissingLocally`, `TestPlannerPlanCurrentState_RemoteParentDeletePlansDescendantLocalDeleteThroughSQLite`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_LocalParentDeleteCreatesParentForChangedRemoteChild`, `TestPlannerPlanCurrentState_BothParentSidesDeletedCleansUpDescendantsThroughSQLite` |
+| A file move needs content corroboration beyond inode identity; identity without it is delete + create, and unhashed moves carry the destination's observed truth. | `TestQueryReconciliationState_LocalFileMoveRequiresContentCorroboration`, `TestQueryReconciliationState_LocalFileMoveIdentityWithoutContentIsNotAMove`, `TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate`, `TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads`, `TestActionFreshness_LocalOriginMoveRejectsChangedDestination` |
+| Locally deleted or unpaired moved folders are deleted on OneDrive after their descendants, never re-created locally; identity-paired folder moves are one remote move. | `TestQueryReconciliationState_FolderDecisionMatrix`, `TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes`, `TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildMoves`, `TestRunOnce_LocalFolderDeleteDeletesRemoteFolder`, `TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource` |
+| Remote moves applied locally carry the source baseline and do not re-upload unchanged content. | `TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline`, `TestRunOnce_RemoteRenameAppliedLocallyDoesNotReupload` |
+| Type changes on either side are replacements ordered delete-then-create, never a silent stall. | `TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem`, `TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem`, `TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem`, `TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem`, `TestRunOnce_LocalFileReplacedByFolderConverges` |
 | Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/planner_actions_test.go`, `internal/sync/planner_dependency_test.go` |
 | Planner decisions stay row-driven and action-shaped across conflict and folder-parent preservation cases. | `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_DownloadOnlyKeepsParentDeleteWhenEditedChildUploadDeferred`, `internal/sync/store_planner_visible_test.go` |
 
@@ -135,7 +139,8 @@ same derivation rather than a second planner-shaped helper.
 
 ### Baseline exists
 
-- local deleted + remote unchanged -> `ActionRemoteDelete`
+- local deleted + remote unchanged -> `ActionRemoteDelete` (files and folders
+  alike, see below)
 - local deleted + remote changed -> `ActionDownload` (remote wins canonical path)
 - local deleted + remote deleted -> `ActionCleanup` (publication-only)
 - local changed + remote unchanged -> `ActionUpload`
@@ -233,6 +238,17 @@ local parent deletes become remote folder creates, remote parent deletes become
 local folder creates, and cleanup stays cleanup. Deferred descendant work must
 not preserve a parent that the current mode would otherwise delete.
 
+A folder that is missing locally while its baseline and remote item remain is a
+local delete and becomes `ActionRemoteDelete`, ordered after the deletes and
+same-side moves of everything under it (R-2.17.2). Only action normalization may
+turn it back into a local folder create, and only for runnable descendant work.
+History: the event-driven planner's ED4 ("local deleted, remote present ->
+recreate locally, remote wins") meant "remote reported a change"; when #513
+moved planning to snapshots, remote presence became unconditional and ED4
+swallowed ED8 ("propagate delete"), so every locally deleted or unpaired moved
+folder was resurrected. Remote wins only when the remote side actually
+changed, which the descendant rows and parent preservation already express.
+
 Folder reconciliation is existence/type-based, not metadata-based. Folder
 size, mtime, and ETag churn caused by child mutations must not be treated as
 content drift or expanded into conflict/download actions.
@@ -241,12 +257,45 @@ Local or remote moves that stay within one Graph drive become move actions.
 Local move detection first matches unique filesystem identity
 (`local_device`, `local_inode`, `local_has_identity`) between `baseline` and
 `local_state` for both files and directories. File-hash matching is a fallback
-only for files without identity. A local folder move emits one
-`ActionRemoteMove` for the folder and makes descendant work depend on that
-move instead of re-uploading or deleting/recreating the subtree. A moved file
-whose content also changed emits the remote move before the upload/update at
-the moved path. Identity mismatch at the same path is treated as replacement
-or delete/create truth, not as a move. Moves that cross drive ownership are
+only for files without identity.
+
+Identity is necessary but not sufficient for a file (R-2.17.1). After a delete
+and a create in one batch, ext4 and other filesystems may give the new file the
+freed inode, and pairing on inode alone once moved `vim.swp`'s OneDrive content
+onto an unrelated unreadable `secret.txt`. A rename preserves size, mtime and
+content; inode reuse preserves none of them. So an identity pair is a file move
+only when sizes are equal and either both hashes are known and equal, or a hash
+is unknown and the mtimes are equal. Everything else (different size, different
+known hash, unknown hash with a different mtime) is delete + create. The cost is
+that a rename followed by an edit inside one observation window also becomes
+delete + create: the content is uploaded fresh and the old item goes to the
+recycle bin, which is safe. Directories pair on identity alone: a directory has
+no content of its own, its descendants pair independently, and a wrong pairing
+after rmdir + mkdir reuse still converges to the same tree. The pairing rule
+lives once, in `sqlLocalAndRemoteMoveCTEs`, shared by the comparison and
+reconciliation queries.
+
+A local folder move emits one `ActionRemoteMove` for the folder and makes
+descendant work depend on that move instead of re-uploading or
+deleting/recreating the subtree. A moved file whose hash is unknown (size and
+mtime corroborated) emits the remote move before an upload at the moved path.
+A local-origin move carries the destination's planned local truth as
+`Action.MovedLocal`: freshness rejects a destination that changed since
+planning, and the move outcome publishes exactly that truth. A remote move
+applied locally carries the source's baseline in its view, so the precondition
+validates the source and the outcome keeps its local facts (R-2.17.3).
+Identity mismatch at the same path is treated as replacement or delete/create
+truth, not as a move.
+
+A type change (file <-> folder) at one path is a replacement (R-2.17.4):
+`replace_remote` emits `ActionRemoteDelete` of the old item and then a remote
+folder create or a new-item upload; `replace_local` emits `ActionLocalDelete`
+and then a local folder create or a download that requires a missing target.
+The create depends on the same-path delete. When both sides changed and either
+changed type, local wins (`replace_remote`), because a replaced OneDrive item
+survives in the recycle bin while replaced local truth would be gone. Delete
+ordering and parent preservation use the deleted side's type
+(`deletedItemType`), since the two sides disagree across a type change. Moves that cross drive ownership are
 decomposed into delete + upload because Graph move cannot cross drive
 ownership.
 

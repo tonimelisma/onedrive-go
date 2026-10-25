@@ -73,7 +73,9 @@ The table is keyed by item identity, not path, so remote moves stay atomic
 `UPDATE`s instead of delete/reinsert churn. For local moves, the planner
 compares the last-synced local filesystem identity in `baseline` with the
 current identity in `local_state`; directory identity matches produce one
-remote folder move instead of subtree delete/create churn.
+remote folder move instead of subtree delete/create churn. A file identity match
+additionally needs size and content (or, without a hash, mtime) corroboration,
+because inode numbers are reused (see `sync-planning.md`).
 
 ## `remote_state`
 

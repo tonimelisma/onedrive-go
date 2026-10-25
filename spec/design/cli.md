@@ -211,7 +211,9 @@ itself (`syncConsole`), not logged, so the split hides nothing they need. At
 default verbosity `consoleLogHandler` also drops the R-6.6.13 schema
 identifiers other than `path` (`run_id`, `action_id`, `action_type`,
 `condition_key`, `failure_class`, `log_owner`, `scope_key`,
-`trial_scope_key`, `drive_id`, `http_status`); the log file and
+`trial_scope_key`, `drive_id`, `http_status`), plus the diagnostic
+`supersede_streak` and `error_detail` (a raw error chain with item IDs, kept
+for the log file while the line itself carries a plain `reason`); the log file and
 `--verbose`/`--debug` keep them, and so does the journal under
 `--verbose`/`--debug`.
 An `error` attribute logged as an error value (`slog.Any`, as multisync's

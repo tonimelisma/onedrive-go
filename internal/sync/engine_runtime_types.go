@@ -27,6 +27,13 @@ type engineFlow struct {
 	results runResults
 
 	runID string
+
+	// supersedeStreaks counts consecutive superseded completions per action
+	// key (type, old path, path) and resets when that action succeeds. A
+	// superseded action leaves no retry row and no user-facing output, so an
+	// action that is superseded on every replan would otherwise stall
+	// silently (a folder move once did, on a churning folder eTag).
+	supersedeStreaks map[string]int
 }
 
 func newEngineFlow(engine *Engine) *engineFlow {
@@ -38,6 +45,8 @@ func newEngineFlow(engine *Engine) *engineFlow {
 		runID:   engine.nextRuntimeRunID(),
 		sched:   newActionScheduler(),
 		retries: newRetryLedger(),
+
+		supersedeStreaks: make(map[string]int),
 	}
 	return flow
 }

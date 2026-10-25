@@ -212,6 +212,17 @@ func (b *Baseline) Delete(path string) {
 	}
 }
 
+// replaceContents swaps in other's indexes so every holder of b sees them.
+// other must not be used afterwards.
+func (b *Baseline) replaceContents(other *Baseline) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.ByPath = other.ByPath
+	b.ByID = other.ByID
+	b.ByDirLower = other.ByDirLower
+}
+
 // Len returns the number of entries in the baseline.
 // Thread-safe: holds a read lock during access.
 func (b *Baseline) Len() int {

@@ -16,6 +16,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
+// errRemoteMoveAlreadyApplied reports that the item a remote move targets
+// already sits at the planned destination: the work is done, not stale.
+var errRemoteMoveAlreadyApplied = errors.New("remote move already applied")
+
 func stalePreconditionError(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", errActionPreconditionChanged, fmt.Sprintf(format, args...))
 }
@@ -50,6 +54,12 @@ func (e *executor) remoteSourcePreconditionETag(
 
 	row := remoteStateRowFromGraphItem(item)
 	planned := plannedRemoteStateForPrecondition(action)
+	// Already at the destination with the same identity and content: moving
+	// it (or the parent that carried it) churned its eTag, so eTag is not
+	// compared here.
+	if e.remoteMoveAlreadyApplied(action, row, planned) {
+		return item.ETag, errRemoteMoveAlreadyApplied
+	}
 	if planned != nil && !remoteRowMatchesLivePreconditionForAction(action, row, planned) {
 		return "", stalePreconditionError("%s remote item %s changed since planning", op, action.ItemID)
 	}
@@ -61,12 +71,30 @@ func (e *executor) remoteSourcePreconditionETag(
 	return item.ETag, nil
 }
 
+func (e *executor) remoteMoveAlreadyApplied(action *Action, row *remoteStateRow, planned *remoteState) bool {
+	if action.Type != ActionRemoteMove || row.Path == "" || row.Path != action.Path {
+		return false
+	}
+	// Mount-root engines cannot compare Graph paths; see
+	// expectedRemotePreconditionPath.
+	if e.expectedRemotePreconditionPath(action) == "" {
+		return false
+	}
+
+	return planned == nil || remoteRowMatchesLivePrecondition(row, planned, false)
+}
+
 func remoteRowMatchesLivePreconditionForAction(action *Action, row *remoteStateRow, planned *remoteState) bool {
 	if plannedPostRemoteMoveContentUpload(action) {
 		return remoteRowMatchesPostRemoteMoveLivePrecondition(row, planned)
 	}
 
-	return remoteRowMatchesLivePrecondition(row, planned, true)
+	// A folder's eTag changes whenever anything beneath it changes, so a
+	// folder eTag recorded at planning time (often before its own children
+	// were uploaded) is not evidence that the folder itself changed. Folders
+	// are checked on identity, type and path; comparing their eTag made every
+	// folder move and delete supersede forever.
+	return remoteRowMatchesLivePrecondition(row, planned, planned.ItemType != ItemTypeFolder)
 }
 
 func remoteRowMatchesPostRemoteMoveLivePrecondition(row *remoteStateRow, planned *remoteState) bool {
