@@ -149,6 +149,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.8.15: The engine shall classify the following HTTP status codes as transient: 5xx (`server_error`), 408 (`request_timeout`), 412 (`transient_conflict`), 404 (`transient_not_found`), 423 (`resource_locked`). Transient exact work is recorded in `retry_work` with `next_retry_at` (backoff via `retry.Reconcile`: 1s-1h). Shared transient conditions activate `block_scopes`. In one-shot mode, failed work remains durable for the next `onedrive sync` invocation to replan. [designed]
 - R-6.8.16: External and runtime failures shall be translated into the documented domain error model before retry, durable persistence, or user presentation. [verified]
 - R-6.8.17: Errors from pre-authenticated requests (downloads, upload sessions, copy monitors) shall never carry the pre-authenticated URL, whose path or query embeds a credential. Transport failures keep their cause and the URL scheme and host, so users can still tell which service failed. [verified]
+- R-6.8.18: Every request to Graph, upload and download hosts shall carry one User-Agent in Microsoft's decorated form, `ISV|onedrive-go|onedrive-go/<version>`, built in one place (`graph.UserAgent`) for every command and the sync engine. [verified]
 
 ## R-6.9 Packaging [future]
 

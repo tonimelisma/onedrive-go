@@ -254,11 +254,11 @@ func (cc *CLIContext) closeCommandLogger() error {
 
 func (cc *CLIContext) runtime() *driveops.SessionRuntime {
 	if cc == nil {
-		return driveops.NewSessionRuntime(nil, "onedrive-go/"+version, slog.Default())
+		return driveops.NewSessionRuntime(nil, graph.UserAgent(version), slog.Default())
 	}
 
 	if cc.Runtime == nil {
-		cc.Runtime = driveops.NewSessionRuntime(nil, "onedrive-go/"+version, cc.Logger)
+		cc.Runtime = driveops.NewSessionRuntime(nil, graph.UserAgent(version), cc.Logger)
 	}
 
 	return cc.Runtime
@@ -376,7 +376,7 @@ func newGraphClientWithHTTP(
 		baseURL = graph.DefaultBaseURL
 	}
 
-	client, err := graph.NewClient(baseURL, httpClient, ts, logger, "onedrive-go/"+version)
+	client, err := graph.NewClient(baseURL, httpClient, ts, logger, graph.UserAgent(version))
 	if err != nil {
 		return nil, fmt.Errorf("creating graph client: %w", err)
 	}
@@ -433,7 +433,7 @@ func initializeCLIContext(
 		return err
 	}
 	bootstrapLog.replayInto(ctx, cc.Logger.Handler())
-	cc.Runtime = driveops.NewSessionRuntime(nil, "onedrive-go/"+version, cc.Logger)
+	cc.Runtime = driveops.NewSessionRuntime(nil, graph.UserAgent(version), cc.Logger)
 
 	perfSession, perfCtx := newCommandPerfSession(ctx, cmd, cc.Logger)
 	cc.PerfSession = perfSession
@@ -477,7 +477,7 @@ func initializeResolvedCLIContext(cmd *cobra.Command, cc *CLIContext) error {
 		return err
 	}
 	holder := config.NewHolder(rawCfg, cc.CfgPath)
-	cc.Runtime = driveops.NewSessionRuntime(holder, "onedrive-go/"+version, cc.Logger)
+	cc.Runtime = driveops.NewSessionRuntime(holder, graph.UserAgent(version), cc.Logger)
 
 	return nil
 }

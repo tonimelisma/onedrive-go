@@ -12,8 +12,26 @@ import (
 // DefaultBaseURL is the production Microsoft Graph API v1.0 endpoint.
 const DefaultBaseURL = "https://graph.microsoft.com/v1.0"
 
+// userAgentISV and userAgentApp fill Microsoft's decorated User-Agent form,
+// ISV|<company>|<app>/<version> (MS-190). Microsoft's throttling guidance
+// prioritizes traffic it can attribute to an app over undecorated clients,
+// and support can find the app's requests by it.
 const (
-	defaultUserAgent = "onedrive-go/dev"
+	userAgentISV = "onedrive-go"
+	userAgentApp = "onedrive-go"
+)
+
+// UserAgent is the one User-Agent this client sends for a given build
+// version.
+func UserAgent(version string) string {
+	if version == "" {
+		version = "dev"
+	}
+
+	return "ISV|" + userAgentISV + "|" + userAgentApp + "/" + version
+}
+
+const (
 
 	// maxErrBodySize caps error response body reads to prevent OOM from
 	// malicious or buggy servers returning enormous error responses (B-314).

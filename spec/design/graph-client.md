@@ -389,6 +389,11 @@ offset (`TestDownload_ContentEndpointNeverSendsBearerToRedirectHost`,
 `TestDownloadRange_ContentEndpointRefusesAFullBodyAtAnOffset`,
 `TestDownload_ContentRedirectToUntrustedHostRefused`).
 
+**User-Agent** — `graph.UserAgent(version)` is the one User-Agent:
+`ISV|onedrive-go|onedrive-go/<version>`, Microsoft's decorated form for
+attributing traffic (MS-190). Every CLI and sync construction site uses it
+(`TestUserAgent_DecoratedFormOnEveryRequest`).
+
 **Gateway diagnostics** — `GraphError.AgsDiagnostic` keeps the
 `X-Ms-Ags-Diagnostic` header, and `QuirkRetryAttempt` carries it, for support
 escalation next to the request ID (`TestGraphError_KeepsAgsDiagnosticHeader`,
