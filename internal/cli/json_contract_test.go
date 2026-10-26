@@ -366,7 +366,10 @@ func fileJSONContractCases() map[string]jsonContractCase {
 			t.Helper()
 			cc, _ := jsonContractFileContext(t)
 			local := filepath.Join(t.TempDir(), "upload.txt")
-			require.NoError(t, os.WriteFile(local, []byte("hello"), 0o600))
+			// Zero bytes: every non-empty upload goes through an upload
+			// session, whose pre-authenticated URL must be an https Microsoft
+			// host the local fake cannot serve. The JSON contract is the same.
+			require.NoError(t, os.WriteFile(local, nil, 0o600))
 			return runDetachedLeaf(t, leaf, cc, local, "/upload.txt")
 		}},
 		"onedrive-go rm": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
