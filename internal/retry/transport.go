@@ -59,6 +59,29 @@ type RetryTransport struct {
 
 type logTargetKey struct{}
 
+type backoffObserverKey struct{}
+
+// WithBackoffObserver returns a context whose requests call observe before
+// every retry or throttle wait. A transfer's stall watchdog uses it to stop
+// counting while the transport deliberately waits: a Retry-After longer than
+// the stall timeout is not a stalled transfer.
+func WithBackoffObserver(ctx context.Context, observe func()) context.Context {
+	if observe == nil {
+		return ctx
+	}
+
+	return context.WithValue(ctx, backoffObserverKey{}, observe)
+}
+
+// sleepObserved notifies the request's backoff observer, then sleeps.
+func sleepObserved(req *http.Request, sleepFn SleepFunc, d time.Duration) error {
+	if observe, ok := req.Context().Value(backoffObserverKey{}).(func()); ok {
+		observe()
+	}
+
+	return sleepFn(req.Context(), d)
+}
+
 func WithLogTarget(ctx context.Context, target string) context.Context {
 	if target == "" {
 		return ctx
@@ -145,7 +168,9 @@ func (rt *RetryTransport) notices() *Notices {
 
 func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attempt int, sleepFn SleepFunc) (bool, error) {
 	if req.Context().Err() != nil {
-		return false, fmt.Errorf("request canceled: %w", req.Context().Err())
+		// context.Cause keeps why the request was canceled (a stalled
+		// transfer is not a shutdown).
+		return false, fmt.Errorf("request canceled: %w", context.Cause(req.Context()))
 	}
 	if !retryableRequestMethod(req.Method) || !requestBodyReplayable(req) {
 		return false, err
@@ -193,7 +218,7 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 		)
 	}
 
-	if sleepErr := sleepFn(req.Context(), backoff); sleepErr != nil {
+	if sleepErr := sleepObserved(req, sleepFn, backoff); sleepErr != nil {
 		return false, backoffInterrupted(req, sleepErr)
 	}
 
@@ -262,7 +287,7 @@ func (rt *RetryTransport) handleResponse(
 
 	rt.announceLongWait(resp.StatusCode, backoff)
 
-	if sleepErr := sleepFn(req.Context(), backoff); sleepErr != nil {
+	if sleepErr := sleepObserved(req, sleepFn, backoff); sleepErr != nil {
 		return true, nil, backoffInterrupted(req, sleepErr)
 	}
 
@@ -274,8 +299,8 @@ func (rt *RetryTransport) handleResponse(
 // canceled during backoff: context canceled" instead of stacking the sleep
 // helper's wrapper on top.
 func backoffInterrupted(req *http.Request, sleepErr error) error {
-	if ctxErr := req.Context().Err(); ctxErr != nil {
-		return fmt.Errorf("request canceled during backoff: %w", ctxErr)
+	if req.Context().Err() != nil {
+		return fmt.Errorf("request canceled during backoff: %w", context.Cause(req.Context()))
 	}
 
 	return fmt.Errorf("request canceled during backoff: %w", sleepErr)
@@ -339,7 +364,7 @@ func (rt *RetryTransport) waitForThrottle(req *http.Request, sleepFn SleepFunc) 
 
 	rt.announceLongWait(http.StatusTooManyRequests, delay)
 
-	if err := sleepFn(req.Context(), delay); err != nil {
+	if err := sleepObserved(req, sleepFn, delay); err != nil {
 		return backoffInterrupted(req, err)
 	}
 

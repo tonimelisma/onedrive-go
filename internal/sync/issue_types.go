@@ -38,4 +38,6 @@ const (
 	issueLocalDatabaseOpen    = "local_database_open"
 	issueUploadVerification   = "upload_verification_failed"
 	issueDownloadIntegrity    = "download_integrity"
+	// issueTransferStalled shares the request-timeout condition family.
+	issueTransferStalled = "request_timeout"
 )

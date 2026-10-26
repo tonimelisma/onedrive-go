@@ -7,6 +7,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 const (
@@ -28,6 +29,18 @@ func classifyResult(r *actionCompletion) resultDecision {
 			Class:         resultSuccess,
 			RecordSuccess: true,
 			TrialHint:     trialHintRelease,
+		})
+	}
+
+	// Before the context check: a transfer the stall watchdog abandoned is
+	// retryable work, not a shutdown. Classified as a shutdown it was
+	// neither retried nor recorded, and its dependents were dropped.
+	if errors.Is(r.Err, graph.ErrTransferStalled) {
+		return withRuntimeSummary(&resultDecision{
+			Class:         resultRequeue,
+			Persistence:   persistRetryWork,
+			TrialHint:     trialHintReclassify,
+			ConditionType: issueTransferStalled,
 		})
 	}
 

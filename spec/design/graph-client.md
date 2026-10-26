@@ -1,6 +1,6 @@
 # Graph Client
 
-GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/response_body.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
+GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/response_body.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/transfer_watchdog.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
 
 Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.6.2 [verified], R-1.7 [verified], R-1.8 [verified], R-1.2.5 [verified], R-1.3.5 [verified], R-3.6.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [verified], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [verified], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.8.17 [verified]
 
@@ -250,6 +250,30 @@ the interactive clients' `RetryTransport` resends every byte on a retry
 (R-6.8.19, `TestSimpleUpload_RetryAfter503ResendsFullBody`). The PUT used to
 go out chunked over a one-shot reader, and a retry after a 503 sent zero bytes
 and replaced the user's file online with an empty one.
+
+Transfer bodies run under a stall watchdog (`transfer_watchdog.go`): the
+download routes and every upload fragment get a request context that is
+canceled with `ErrTransferStalled` when the body moves no bytes for
+`defaultTransferStallTimeout` (2 minutes; tests shorten
+`transferStallTimeout`). It is armed only around body I/O, while a request
+body is being written and while a response body is read; the wait for
+headers belongs to the transports' `ResponseHeaderTimeout`, and
+`RetryTransport` disarms it before every retry or throttle wait
+(`retry.WithBackoffObserver`), so a long `Retry-After` is not a stall
+(`TestUploadChunk_RetryAfterLongerThanStallTimeoutIsNotAStall`). A stall is
+reported as `ErrTransferStalled` alone, never with `context.Canceled` in the
+chain (`doPreAuth` and `RetryTransport` return `context.Cause`), because sync
+reads a cancellation as a shutdown and would drop the action; sync
+classifies a stall as retryable before its context check
+(`TestClassifyResult_StalledTransferIsRetryableNotShutdown`). A resumed
+download that stalls keeps its partial and is retried; only a refused
+resume (`ErrRangeResumeRejected`, 416) starts over
+(`TestTransferManager_StalledResumeKeepsPartial`). The transports bound only dialing, TLS and the wait
+for headers, so a connection that delivered headers and went quiet held a
+worker forever (D-045, `TestDownload_StalledBodyIsAbandoned`,
+`TestUploadChunk_StalledBodyIsAbandoned`). The transfer and metadata
+transports also ping idle HTTP/2 connections (`graphtransport`,
+`TestTransferTransport_PingsIdleHTTP2Connections`).
 
 Mutation answers go through `decodeMutatedItem`: a 2xx whose body is empty
 (204), not a driveItem (a 201 carrying `{"error":…}`), or an item without

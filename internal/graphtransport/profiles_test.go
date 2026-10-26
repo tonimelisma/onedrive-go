@@ -132,3 +132,16 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
+
+// Validates: R-6.8.20
+func TestTransferTransport_PingsIdleHTTP2Connections(t *testing.T) {
+	t.Parallel()
+
+	transport := transferTransport()
+
+	// TCP keepalive cannot see an HTTP/2 peer that stopped answering on a
+	// live connection; without pings such a transfer hung forever.
+	require.NotNil(t, transport.HTTP2)
+	assert.Equal(t, http2SendPingTimeout, transport.HTTP2.SendPingTimeout)
+	assert.Equal(t, http2PingTimeout, transport.HTTP2.PingTimeout)
+}

@@ -94,10 +94,15 @@ func (c *Client) UploadChunk(
 
 	contentRange := fmt.Sprintf("bytes %d-%d/%d", offset, offset+length-1, total)
 
+	// A fragment whose body stops moving is abandoned after the stall
+	// timeout and resumed through the session (D-045).
+	ctx, watchdog := c.watchTransfer(ctx)
+	defer watchdog.stop()
+
 	resp, err := c.doPreAuth(ctx, "upload chunk", func() (*http.Request, error) {
 		// Fresh SectionReader per attempt — io.ReaderAt.ReadAt is goroutine-safe,
 		// so no race with a previous attempt's transport writeLoop goroutine.
-		reader := io.NewSectionReader(chunk, 0, length)
+		reader := watchdog.reader(io.NewSectionReader(chunk, 0, length))
 		uploadURL, urlErr := c.validatedUploadURL(session.UploadURL)
 		if urlErr != nil {
 			return nil, urlErr
@@ -116,7 +121,7 @@ func (c *Client) UploadChunk(
 		return req, nil
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, false, watchdog.explain(ctx, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 

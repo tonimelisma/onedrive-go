@@ -479,7 +479,7 @@ func TestTransferManager_ResumeDownload_FallsBackToFreshDownload(t *testing.T) {
 
 			dl := &tmMockDownloader{
 				downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer, _ int64) (int64, error) {
-					return 0, errors.New(tt.rangeErr)
+					return 0, fmt.Errorf("%s: %w", tt.rangeErr, graph.ErrRangeResumeRejected)
 				},
 				downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 					freshDownloadCalled = true
@@ -2330,4 +2330,70 @@ func (m *tmItemSessionUploader) UploadToItem(
 	_ context.Context, _ driveid.ID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc,
 ) (*graph.Item, error) {
 	return nil, errors.New("UploadToItem not mocked")
+}
+
+// Validates: R-6.8.20
+func TestDownloadToFile_StalledTransferKeepsPartialForResume(t *testing.T) {
+	t.Parallel()
+
+	dl := &tmSimpleDownloader{downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+		n, err := w.Write([]byte("first half"))
+		if err != nil {
+			return int64(n), err
+		}
+
+		return int64(n), fmt.Errorf("download: %w", graph.ErrTransferStalled)
+	}}
+
+	targetPath := filepath.Join(t.TempDir(), "big.bin")
+	opts := DownloadOpts{RemoteETag: "v1", RemoteSize: 100}
+	_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
+	require.ErrorIs(t, err, graph.ErrTransferStalled)
+
+	got, readErr := localpath.ReadFile(DownloadPartialPath(targetPath, opts))
+	require.NoError(t, readErr, "the retry resumes from the bytes that arrived")
+	assert.Equal(t, "first half", string(got))
+}
+
+// Validates: R-6.8.20, R-5.2.2
+func TestTransferManager_StalledResumeKeepsPartial(t *testing.T) {
+	t.Parallel()
+
+	for _, rangeErr := range []error{
+		fmt.Errorf("range download: %w", graph.ErrTransferStalled),
+		fmt.Errorf("range download: %w", io.ErrUnexpectedEOF),
+	} {
+		t.Run(rangeErr.Error(), func(t *testing.T) {
+			t.Parallel()
+
+			var fresh int
+			dl := &tmMockDownloader{
+				downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer, _ int64) (int64, error) {
+					n, err := w.Write([]byte(" more"))
+					if err != nil {
+						return int64(n), err
+					}
+					return int64(n), rangeErr
+				},
+				downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+					fresh++
+					return 0, nil
+				},
+			}
+
+			targetPath := filepath.Join(t.TempDir(), "big.bin")
+			opts := DownloadOpts{RemoteETag: "v1", RemoteSize: 100}
+			require.NoError(t, os.WriteFile(DownloadPartialPath(targetPath, opts), []byte("resumed"), 0o600))
+
+			_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
+
+			// Starting over threw the resumed bytes away, so a link that
+			// stalls before a file finishes never finished it.
+			require.ErrorIs(t, err, rangeErr)
+			assert.Zero(t, fresh, "no fresh download after a stalled resume")
+			got, readErr := localpath.ReadFile(DownloadPartialPath(targetPath, opts))
+			require.NoError(t, readErr)
+			assert.Equal(t, "resumed more", string(got))
+		})
+	}
 }

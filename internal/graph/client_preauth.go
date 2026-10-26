@@ -80,7 +80,10 @@ func (c *Client) doPreAuth(
 	resp, err := c.dispatchRequest(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("graph: %s canceled: %w", desc, ctx.Err())
+			// The cause, not ctx.Err(): a transfer the stall watchdog
+			// abandoned is retryable, while context.Canceled reads as a
+			// shutdown and drops the action without retry.
+			return nil, fmt.Errorf("graph: %s canceled: %w", desc, context.Cause(ctx))
 		}
 
 		return nil, fmt.Errorf("graph: %s failed: %w", desc, err)

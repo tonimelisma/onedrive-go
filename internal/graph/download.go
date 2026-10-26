@@ -234,6 +234,9 @@ func isPreAuthDownloadUnauthorized(err error) bool {
 func (c *Client) downloadFromURLWithRange(
 	ctx context.Context, item *Item, w io.Writer, offset int64,
 ) (int64, error) {
+	ctx, watchdog := c.watchTransfer(ctx)
+	defer watchdog.stop()
+
 	resp, err := c.doPreAuth(ctx, "range download", func() (*http.Request, error) {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, string(item.DownloadURL), http.NoBody)
 		if reqErr != nil {
@@ -246,7 +249,7 @@ func (c *Client) downloadFromURLWithRange(
 		return req, nil
 	})
 	if err != nil {
-		return 0, err
+		return 0, watchdog.explain(ctx, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
@@ -258,7 +261,7 @@ func (c *Client) downloadFromURLWithRange(
 		return 0, bodyErr
 	}
 
-	n, copyErr := io.Copy(w, resp.Body)
+	n, copyErr := io.Copy(w, watchdog.reader(resp.Body))
 	if copyErr != nil {
 		// Returned, not logged above Debug: the caller reports the failure
 		// once, and a canceled context here is an ordinary shutdown.
@@ -267,7 +270,7 @@ func (c *Client) downloadFromURLWithRange(
 			slog.Int64("bytes_before_error", n),
 		)
 
-		return n, fmt.Errorf("graph: streaming range download content: %w", copyErr)
+		return n, watchdog.explain(ctx, fmt.Errorf("graph: streaming range download content: %w", copyErr))
 	}
 
 	return n, nil
@@ -340,6 +343,9 @@ func mediaTypeOrUnknown(contentType string) string {
 // Only the HTTP request/response cycle is retried; streaming (io.Copy) happens after
 // doPreAuthRetry returns, so partial-stream failures are handled by the caller.
 func (c *Client) downloadFromURL(ctx context.Context, item *Item, w io.Writer) (int64, error) {
+	ctx, watchdog := c.watchTransfer(ctx)
+	defer watchdog.stop()
+
 	resp, err := c.doPreAuth(ctx, "download", func() (*http.Request, error) {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, string(item.DownloadURL), http.NoBody)
 		if reqErr != nil {
@@ -351,7 +357,7 @@ func (c *Client) downloadFromURL(ctx context.Context, item *Item, w io.Writer) (
 		return req, nil
 	})
 	if err != nil {
-		return 0, err
+		return 0, watchdog.explain(ctx, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
@@ -359,7 +365,7 @@ func (c *Client) downloadFromURL(ctx context.Context, item *Item, w io.Writer) (
 		return 0, bodyErr
 	}
 
-	n, copyErr := io.Copy(w, resp.Body)
+	n, copyErr := io.Copy(w, watchdog.reader(resp.Body))
 	if copyErr != nil {
 		// Returned, not logged above Debug: the caller reports the failure
 		// once, and a canceled context here is an ordinary shutdown.
@@ -368,7 +374,7 @@ func (c *Client) downloadFromURL(ctx context.Context, item *Item, w io.Writer) (
 			slog.Int64("bytes_before_error", n),
 		)
 
-		return n, fmt.Errorf("graph: streaming download content: %w", copyErr)
+		return n, watchdog.explain(ctx, fmt.Errorf("graph: streaming download content: %w", copyErr))
 	}
 
 	return n, nil
@@ -402,9 +408,12 @@ func (c *Client) downloadViaContentEndpoint(
 		slog.String("item_id", item.ID),
 	)
 
+	ctx, watchdog := c.watchTransfer(ctx)
+	defer watchdog.stop()
+
 	resp, err := c.requestContent(ctx, driveID, item.ID, offset)
 	if err != nil {
-		return 0, err
+		return 0, watchdog.explain(ctx, err)
 	}
 
 	if resp.StatusCode >= http.StatusMultipleChoices {
@@ -425,7 +434,7 @@ func (c *Client) downloadViaContentEndpoint(
 			return req, nil
 		})
 		if err != nil {
-			return 0, err
+			return 0, watchdog.explain(ctx, err)
 		}
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
@@ -438,9 +447,9 @@ func (c *Client) downloadViaContentEndpoint(
 		return 0, bodyErr
 	}
 
-	n, copyErr := io.Copy(w, resp.Body)
+	n, copyErr := io.Copy(w, watchdog.reader(resp.Body))
 	if copyErr != nil {
-		return n, fmt.Errorf("graph: streaming content download: %w", copyErr)
+		return n, watchdog.explain(ctx, fmt.Errorf("graph: streaming content download: %w", copyErr))
 	}
 
 	return n, nil

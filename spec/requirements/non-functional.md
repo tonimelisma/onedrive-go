@@ -153,6 +153,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.8.17: Errors from pre-authenticated requests (downloads, upload sessions, copy monitors) shall never carry the pre-authenticated URL, whose path or query embeds a credential. Transport failures keep their cause and the URL scheme and host, so users can still tell which service failed. [verified]
 - R-6.8.18: Every request to Graph, upload and download hosts shall carry one User-Agent in Microsoft's decorated form, `ISV|onedrive-go|onedrive-go/<version>`, built in one place (`graph.UserAgent`) for every command and the sync engine. [verified]
 - R-6.8.19: A request the transport retries shall resend its complete body with an exact `Content-Length`. A request whose body cannot be replayed shall be returned to the caller after one attempt, never resent with the bytes the first attempt consumed. [verified]
+- R-6.8.20: A transfer body (download response or upload fragment) that moves no bytes for 2 minutes shall be abandoned with a retryable stalled-transfer error, keeping a download's partial for resume; transfer connections shall ping idle HTTP/2 connections and close one whose ping goes unanswered. [verified]
 
 ## R-6.9 Packaging [future]
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
@@ -100,4 +101,20 @@ func TestExecutor_Download_RecordsObservedLocalMtime(t *testing.T) {
 	info, err := os.Stat(filepath.Join(syncRoot, "observed.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, info.ModTime().UnixNano(), o.LocalMtime)
+}
+
+// Validates: R-6.8.20
+func TestClassifyResult_StalledTransferIsRetryableNotShutdown(t *testing.T) {
+	t.Parallel()
+
+	// What the graph boundary returns when its watchdog abandons a body:
+	// even if a caller wrapped it with a cancellation, it is retry work.
+	stalled := fmt.Errorf("downloading a.bin: %w: %w", graph.ErrTransferStalled, context.Canceled)
+
+	decision := classifyResult(&actionCompletion{Err: stalled})
+
+	// A shutdown classification dropped the action and its dependents
+	// without recording anything to retry.
+	assert.Equal(t, resultRequeue, decision.Class)
+	assert.Equal(t, persistRetryWork, decision.Persistence)
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync/atomic"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
@@ -114,6 +115,10 @@ type Client struct {
 	maxRecursionDepth    int
 	policies             retryPolicies
 	validators           urlValidators
+
+	// transferStallTimeout bounds how long a transfer body may make no
+	// progress; zero means defaultTransferStallTimeout. Tests shorten it.
+	transferStallTimeout time.Duration
 
 	// clampWarned is set once a modification time before 1900 has been
 	// clamped, so the warning is given once per client.

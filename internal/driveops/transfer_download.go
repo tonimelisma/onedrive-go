@@ -607,8 +607,11 @@ func (tm *TransferManager) freshDownload(
 				slog.String("path", partialPath), slog.String("error", closeErr.Error()))
 		}
 
-		// Preserve partial on context cancellation so resume can reuse it.
-		tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
+		// Preserve the partial on cancellation, and on a stalled transfer,
+		// so the retry resumes from it.
+		if !errors.Is(err, graph.ErrTransferStalled) {
+			tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
+		}
 
 		// Name the file the caller asked for, not the internal partial file.
 		return "", 0, fmt.Errorf("downloading %s: %w", targetPathForPartial(partialPath), err)
@@ -653,9 +656,18 @@ func (tm *TransferManager) resumeDownloadFromFile(
 	}
 
 	if err != nil {
+		if !resumeRefused(err) {
+			// A stall, a cancellation or a dropped connection: the partial
+			// still holds verified-offset bytes of this version, so keep it
+			// and let the retry resume again. Starting over here threw away
+			// every resumed byte, so a link that stalls before a file
+			// finishes never finished it.
+			return "", 0, fmt.Errorf("resuming the download of %s: %w", targetPathForPartial(partialPath), err)
+		}
+
 		// Debug only: a handled fallback. If the fresh download fails too,
 		// its error is the report.
-		tm.logger.Debug("range download failed, falling back to fresh download",
+		tm.logger.Debug("range download refused, falling back to fresh download",
 			slog.String("path", partialPath), slog.String("error", err.Error()))
 
 		tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
@@ -673,6 +685,13 @@ func (tm *TransferManager) resumeDownloadFromFile(
 	}
 
 	return localHash, totalSize, nil
+}
+
+// resumeRefused reports a resume the server cannot serve from this partial:
+// the version moved on, the Range was not honored, or the range is not
+// satisfiable. Only these start the download over.
+func resumeRefused(err error) bool {
+	return errors.Is(err, graph.ErrRangeResumeRejected) || errors.Is(err, graph.ErrRangeNotSatisfiable)
 }
 
 func validateDownloadTargetBeforeRename(opts DownloadOpts) error {
