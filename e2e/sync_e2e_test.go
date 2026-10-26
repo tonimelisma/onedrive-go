@@ -431,8 +431,7 @@ func classifyFixturePutCommandFailure(stderr string) liveProviderRecurrenceDecis
 			Reason: liveProviderRecurrenceTransientGraphGatewayFailure,
 			Retry:  true,
 		}
-	case graphQuirkExhausted(stderr, graph.QuirkSimpleUploadCreateTransient404),
-		graphQuirkExhausted(stderr, graph.QuirkUploadSessionCreateTransient404):
+	case graphQuirkExhausted(stderr, graph.QuirkUploadSessionCreateTransient404):
 		return liveProviderRecurrenceDecision{
 			Reason: liveProviderRecurrenceFreshParentChildCreateLag,
 			Retry:  true,
@@ -485,13 +484,6 @@ func classifyFixtureMkdirCommandFailure(stderr string) liveProviderRecurrenceDec
 func TestClassifyFixturePutCommandFailure_KnownConvergenceFamilies(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, liveProviderRecurrenceDecision{
-		Reason: liveProviderRecurrenceFreshParentChildCreateLag,
-		Retry:  true,
-	}, classifyFixturePutCommandFailure(
-		`time=2026-04-10T23:56:11.987-07:00 level=DEBUG msg="graph quirk retry exhausted" graph_quirk=simple-upload-create-transient-404 graph_quirk_attempt_count=7
-Error: graph: OneDrive kept reporting the upload's destination folder as missing, even after 7 tries: graph: HTTP 404`,
-	))
 	assert.Equal(t, liveProviderRecurrenceDecision{
 		Reason: liveProviderRecurrenceFreshParentChildCreateLag,
 		Retry:  true,

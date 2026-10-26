@@ -50,8 +50,7 @@ rely on transport-level retry loops for action execution.
 | `DownloadMetadataPolicy()` | Exact item-by-ID download metadata quirk retry | 6 | 250ms | 4s |
 | `CopyDestinationPolicy()` | Exact server-side copy fresh-destination quirk retry | 6 | 250ms | 4s |
 | `SimpleUploadMtimePatchPolicy()` | Exact post-simple-upload `UpdateFileSystemInfo` retry | 8 | 250ms | 16s |
-| `UploadSessionCreatePolicy()` | Exact create-upload-session fresh-parent quirk retry | 6 | 250ms | 4s |
-| `SimpleUploadCreatePolicy()` | Final simple-upload create retry after session-path disambiguation | 7 | 250ms | 8s |
+| `UploadSessionCreatePolicy()` | Exact create-upload-session fresh-parent quirk retry | 9 | 250ms | 8s |
 | `PathVisibilityPolicy()` | Post-success path-read/delete convergence at the CLI/session boundary | 10 | 250ms | 32s |
 | `WatchLocalPolicy()` | Local observer error recovery | 0 (infinite) | 1s | 30s |
 | `ReconcilePolicy()` | Engine-owned durable retry timing for `retry_work` | 0 (infinite) | 1s | 1h |

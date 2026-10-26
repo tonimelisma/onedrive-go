@@ -45,9 +45,16 @@ failure.
 ### Upload
 
 1. Stat the local file and reject anything above the 250 GB OneDrive limit before hashing or opening network transfer state
-2. Files ≤ 4 MiB: simple PUT (single request)
-3. Files > 4 MiB: create resumable upload session, upload in chunks (320 KiB aligned)
+2. Non-empty files of any size: create an upload session whose request carries `fileSystemInfo`, then upload in chunks (320 KiB aligned), so content and mtime land in one version. Sessions of files above 4 MiB are persisted for resume; smaller ones are not worth a record
+3. Zero-byte files: simple PUT, then a `fileSystemInfo` PATCH. If the PATCH still fails after its bounded retry, the upload is a success with `UploadResult.RemoteMtimePending` set and one plain warning: the content is on OneDrive, and failing the upload re-sent it (one more version per attempt) without ever setting the mtime
 4. Verify server-reported hash matches local file after upload
+
+Before 2026-10-25 files up to 4 MiB were PUT and then PATCHed, which live
+probe 7 showed makes two versions per upload on Personal as well as Business
+for the same two requests a session takes (D-034). Evidence:
+`TestUpload_SmallFileUsesSessionWithFileSystemInfo`,
+`TestUpload_ZeroByteMtimePatchFailureReturnsUploadedItem`,
+`TestUploadFile_ZeroByteMtimeNotAppliedStillSucceeds`.
 
 `UploadOpts.ValidateSourceBeforeRead` is an optional sync-supplied callback.
 `driveops` runs it before upload work begins and through the `io.ReaderAt`
@@ -68,36 +75,20 @@ parses the authoritative `nextExpectedRanges` start offset, and resumes from
 that offset. Empty, malformed, or non-forward session replies are treated as
 hard errors instead of guessing.
 
-If a non-zero-size create-by-parent simple upload returns `404 itemNotFound`,
-the graph boundary retries that same create once through `createUploadSession`
-before surfacing the error. This preserves the fast path for ordinary small
-uploads while correcting the observed OneDrive quirk where read-only shared
-folders misreport create denial as 404 on the simple-upload route but return
-the correct 403 on the upload-session route.
+A read-only shared folder answers a create's `createUploadSession` with the
+correct `403`, and a freshly created parent can briefly answer it with `404
+itemNotFound`; the graph boundary retries only that exact `404` with a bounded
+budget sized for the live convergence window.
 
-If that same fresh-parent create family still exhausts the bounded
-`createUploadSession` retry budget on exact `itemNotFound`, the graph boundary
-replays the original simple upload under a second, slightly longer bounded
-create-convergence policy before giving up. That keeps the session route fast
-as the permission-oracle fallback while extending robustness for ordinary
-own-drive creates whose parent path is readable slightly before the child
-create routes converge.
-
-If the create-by-parent simple upload falls back to the upload-session route
-and that session succeeds, the session result is already final. The graph
-boundary must not run the simple-upload-only mtime finalization PATCH on that
-session-created item, because upload-session writes already own timestamp
-authority for that path and an extra simple-finalization PATCH only adds a
-second false-negative point.
-
-When simple upload succeeds and mtime preservation is required, the immediate
-follow-on `UpdateFileSystemInfo` PATCH can also briefly return `404
-itemNotFound` for the returned item ID, or hit a transient 502/503/504
-service failure after the content write has already succeeded. That retry stays
+When a zero-byte simple upload succeeds and mtime preservation is required,
+the immediate follow-on `UpdateFileSystemInfo` PATCH can also briefly return
+`404 itemNotFound` for the returned item ID, `409 resourceModified`, or a
+transient 502/503/504 service failure after the content write has already
+succeeded. That retry stays
 in the graph boundary and only applies to the post-simple-upload finalization
 path, with a bounded window sized for the longer mount-root item-ID lag seen
-in live E2E; transfer-manager and CLI callers still see one success or one
-failure outcome.
+in live E2E; transfer-manager and CLI callers see one success, one success
+with the mtime pending, or one failure.
 
 Shared-file `put` reuses the same transfer machinery, but targets an existing
 item by `(driveID, itemID)` instead of resolving a destination parent path.

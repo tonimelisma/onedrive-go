@@ -4,10 +4,6 @@ package graph
 // All chunks except the final one must be a multiple of this value.
 const ChunkAlignment = 320 * 1024
 
-// SimpleUploadMaxSize is the maximum file size for simple (single-request) upload (4 MiB).
-// Files larger than this must use resumable upload sessions.
-const SimpleUploadMaxSize = 4 * 1024 * 1024
-
 // ChunkedUploadChunkSize is the chunk size for resumable uploads (10 MiB, aligned to 320 KiB).
 const ChunkedUploadChunkSize = 10 * 1024 * 1024
 

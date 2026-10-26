@@ -86,7 +86,6 @@ type retryPolicies struct {
 	simpleUploadMtime    retry.Policy
 	uploadSessionCreate  retry.Policy
 	copyDestination      retry.Policy
-	simpleUploadCreate   retry.Policy
 }
 
 // urlValidators guard the server-supplied URLs the client will follow. They are

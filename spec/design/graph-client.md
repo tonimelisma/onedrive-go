@@ -239,7 +239,7 @@ instead of a raw "any write/owner role means writable" heuristic:
 ## Transfers
 
 - `download.go`: streaming download with content URL
-- `upload.go`: simple PUT (≤4 MiB) and resumable upload sessions (>4 MiB, 320 KiB-aligned chunks)
+- `upload.go`: upload sessions for every non-empty file (320 KiB-aligned chunks) and the zero-byte simple PUT
 - `shares.go`: raw share-link resolution into underlying shared item identity
 - `upload_transfer.go` / `upload_session.go`: existing-item overwrite helpers
   for shared-file `put` by `(driveID, itemID)`
@@ -251,25 +251,14 @@ the interactive clients' `RetryTransport` resends every byte on a retry
 go out chunked over a one-shot reader, and a retry after a 503 sent zero bytes
 and replaced the user's file online with an empty one.
 
-For create-by-parent uploads, the graph boundary treats a non-zero-size simple
-upload `404 itemNotFound` as potentially ambiguous and retries that narrower
-case through `createUploadSession` once. Live E2E coverage showed read-only
-shared folders returning a bogus 404 on `PUT ...:/content` while
-`POST ...:/createUploadSession` returned the correct 403. The fallback keeps
-simple upload as the fast path while preserving permission accuracy.
+Every non-empty upload, create or overwrite, goes through an upload session
+whose creation carries `fileSystemInfo`, so content and mtime land in one
+version; only zero-byte files use the simple PUT plus mtime PATCH (D-034,
+live probe 7). Create-by-parent session creation retries the exact fresh-parent
+`404 itemNotFound` with `UploadSessionCreatePolicy()`; a read-only shared
+folder answers that route with the correct `403`, which is not retried.
 
-Live E2E coverage also captured the inverse creation-order quirk: a freshly
-created parent folder can already be readable via path lookup while the first
-`POST ...:/createUploadSession` against that parent still returns `404
-itemNotFound`. The graph boundary applies a short exact retry to that
-create-upload-session path, and when the same small-file create already saw an
-initial simple-upload `404`, it can replay the original simple upload under
-a second deterministic create budget before surfacing final not-found. That
-keeps read-only shared-folder permission handling intact while leaving the
-session route as the short permission oracle and giving the final create path a
-slightly longer convergence window on own-drive parents.
-
-For simple uploads with non-zero mtime, the follow-on `PATCH /items/{itemID}`
+For zero-byte simple uploads with non-zero mtime, the follow-on `PATCH /items/{itemID}`
 used to restore `fileSystemInfo.lastModifiedDateTime` can also race item-ID
 visibility and return transient `404 itemNotFound`, or hit a bounded
 502/503/504 service failure, even though the upload response already returned
@@ -278,7 +267,9 @@ post-simple-upload patch with a bounded policy tuned for the longer
 mount-root visibility lag observed in live coverage for separately configured
 shared-folder mounts. Direct
 `UpdateFileSystemInfo` calls outside the immediate simple-upload finalization
-path remain strict.
+path remain strict. When the retry is exhausted the content has still landed,
+so `Upload`/`UploadToItem` return the uploaded item together with a
+`*MtimeNotAppliedError` instead of a bare failure.
 
 ## Paged Listings
 
@@ -328,7 +319,7 @@ optionally project the attached retry evidence through `ExtractQuirkEvidence`
 when they intentionally degrade or summarize verifier output.
 
 Each documented quirk has an exported name constant (`graph.Quirk*`, for
-example `QuirkSimpleUploadCreateTransient404`). That name is the stable
+example `QuirkUploadSessionCreateTransient404`). That name is the stable
 identifier: it is `QuirkRetryError.Quirk`, and it is the `graph.QuirkLogKey`
 (`graph_quirk`) field on the one debug record logged when a budget runs out
 (per-attempt records use `quirk`). Code and tests that must recognize a quirk

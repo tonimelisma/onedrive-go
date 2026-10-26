@@ -110,7 +110,17 @@ type UploadResult struct {
 	LocalHash string
 	Size      int64
 	Mtime     time.Time
+	// RemoteMtimePending is true when the content landed but OneDrive did
+	// not accept the modified time (a zero-byte upload whose follow-on PATCH
+	// failed). Item then carries the server's receipt time, not Mtime.
+	RemoteMtimePending bool
 }
+
+// persistedSessionMinSize is the size above which an upload's session is
+// persisted for cross-restart resume. Smaller files still upload through a
+// session (for atomic fileSystemInfo), but re-sending at most 4 MiB costs
+// less than a session record's bookkeeping.
+const persistedSessionMinSize = 4 * 1024 * 1024
 
 type validatingReaderAt struct {
 	io.ReaderAt
@@ -704,17 +714,37 @@ func (tm *TransferManager) uploadGraphItem(
 	size int64,
 	mtime time.Time,
 	progress graph.ProgressFunc,
-) (*graph.Item, error) {
-	if size > graph.SimpleUploadMaxSize && tm.sessionStore != nil && hasSessionUploader {
-		return tm.sessionUpload(ctx, su, content, driveID, parentID, name, localPath, localHash, size, mtime, progress)
+) (*graph.Item, bool, error) {
+	if size > persistedSessionMinSize && tm.sessionStore != nil && hasSessionUploader {
+		item, err := tm.sessionUpload(ctx, su, content, driveID, parentID, name, localPath, localHash, size, mtime, progress)
+		return item, false, err
 	}
 
 	item, err := tm.uploads.Upload(ctx, driveID, parentID, name, content, size, mtime, progress)
-	if err != nil {
-		return nil, fmt.Errorf("uploading %s: %w", localPath, err)
+
+	return tm.uploadedItemOrError(localPath, item, err)
+}
+
+// uploadedItemOrError separates "the content landed but the mtime did not"
+// from a failed upload. Failing that upload re-sent content that was already
+// on OneDrive, one more version per attempt, and still never set the mtime
+// (D-034).
+func (tm *TransferManager) uploadedItemOrError(localPath string, item *graph.Item, err error) (*graph.Item, bool, error) {
+	if err == nil {
+		return item, false, nil
 	}
 
-	return item, nil
+	var mtimeErr *graph.MtimeNotAppliedError
+	if errors.As(err, &mtimeErr) && mtimeErr.Item != nil {
+		tm.logger.Warn("uploaded the file, but OneDrive didn't accept its modified time",
+			slog.String("path", localPath),
+			slog.String("error", mtimeErr.Err.Error()),
+		)
+
+		return mtimeErr.Item, true, nil
+	}
+
+	return nil, false, fmt.Errorf("uploading %s: %w", localPath, err)
 }
 
 func recordUploadPerf(ctx context.Context, size int64, startedAt time.Time) {
@@ -787,7 +817,7 @@ func (tm *TransferManager) UploadFile(
 
 	// For large files with session store + SessionUploader, use session-based upload.
 	su, hasSU := tm.uploads.(SessionUploader)
-	item, err := tm.uploadGraphItem(
+	item, mtimePending, err := tm.uploadGraphItem(
 		ctx,
 		su,
 		hasSU,
@@ -830,7 +860,7 @@ func (tm *TransferManager) UploadFile(
 	)
 	recordUploadPerf(ctx, size, startedAt)
 
-	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime}, nil
+	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime, RemoteMtimePending: mtimePending}, nil
 }
 
 // UploadFileToItem overwrites an existing remote file identified by item ID.
@@ -886,7 +916,7 @@ func (tm *TransferManager) UploadFileToItem(
 	}
 	defer f.Close() //nolint:errcheck // the file is opened read-only for upload; there is nothing buffered to flush
 
-	item, err := tm.uploadExistingItem(
+	item, mtimePending, err := tm.uploadExistingItem(
 		ctx,
 		validatingReaderAt{ReaderAt: f, Validate: opts.ValidateSourceBeforeRead},
 		driveID,
@@ -927,7 +957,7 @@ func (tm *TransferManager) UploadFileToItem(
 		collector.AddCommandBytes(size)
 	}
 
-	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime}, nil
+	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime, RemoteMtimePending: mtimePending}, nil
 }
 
 func (tm *TransferManager) uploadExistingItem(
@@ -940,12 +970,12 @@ func (tm *TransferManager) uploadExistingItem(
 	size int64,
 	mtime time.Time,
 	progress graph.ProgressFunc,
-) (*graph.Item, error) {
+) (*graph.Item, bool, error) {
 	sessionUploader, hasSessionUploader := tm.uploads.(ItemSessionUploader)
 	itemUploader, hasItemUploader := tm.uploads.(ItemUploader)
 
-	if size > graph.SimpleUploadMaxSize && tm.sessionStore != nil && hasSessionUploader {
-		return tm.sessionUploadToItem(
+	if size > persistedSessionMinSize && tm.sessionStore != nil && hasSessionUploader {
+		item, err := tm.sessionUploadToItem(
 			ctx,
 			sessionUploader,
 			content,
@@ -957,18 +987,17 @@ func (tm *TransferManager) uploadExistingItem(
 			mtime,
 			progress,
 		)
+
+		return item, false, err
 	}
 
 	if !hasItemUploader {
-		return nil, fmt.Errorf("uploading %s: uploader does not support item-ID overwrite", localPath)
+		return nil, false, fmt.Errorf("uploading %s: uploader does not support item-ID overwrite", localPath)
 	}
 
 	item, err := itemUploader.UploadToItem(ctx, driveID, itemID, content, size, mtime, progress)
-	if err != nil {
-		return nil, fmt.Errorf("uploading %s: %w", localPath, err)
-	}
 
-	return item, nil
+	return tm.uploadedItemOrError(localPath, item, err)
 }
 
 // sessionUpload performs a session-based upload with persistence for resume.

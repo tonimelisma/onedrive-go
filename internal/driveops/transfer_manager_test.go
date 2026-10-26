@@ -880,9 +880,9 @@ func TestTransferManager_SessionUpload_Success(t *testing.T) {
 
 	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
 
-	// Create a file larger than SimpleUploadMaxSize.
+	// Create a file larger than persistedSessionMinSize.
 	localPath := filepath.Join(dir, "large.bin")
-	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+	largeData := make([]byte, persistedSessionMinSize+1)
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
@@ -899,9 +899,9 @@ func TestTransferManager_SessionUpload_Resume(t *testing.T) {
 	dir := t.TempDir()
 	store := NewSessionStore(dir, slog.Default())
 
-	// Create a file larger than SimpleUploadMaxSize.
+	// Create a file larger than persistedSessionMinSize.
 	localPath := filepath.Join(dir, "resume.bin")
-	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+	largeData := make([]byte, persistedSessionMinSize+1)
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
@@ -947,9 +947,9 @@ func TestTransferManager_SessionUpload_ExpiredFallback(t *testing.T) {
 	dir := t.TempDir()
 	store := NewSessionStore(dir, slog.Default())
 
-	// Create a file larger than SimpleUploadMaxSize.
+	// Create a file larger than persistedSessionMinSize.
 	localPath := filepath.Join(dir, "expired.bin")
-	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+	largeData := make([]byte, persistedSessionMinSize+1)
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
@@ -1063,7 +1063,7 @@ func TestSessionUpload_NonExpiredResumeError_DeletesSession(t *testing.T) {
 	store := NewSessionStore(dir, slog.Default())
 
 	localPath := filepath.Join(dir, "network-err.bin")
-	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+	largeData := make([]byte, persistedSessionMinSize+1)
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
@@ -1105,7 +1105,7 @@ func TestSessionUpload_NonExpiredResumeError_FreshOnRetry(t *testing.T) {
 	store := NewSessionStore(dir, slog.Default())
 
 	localPath := filepath.Join(dir, "retry.bin")
-	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+	largeData := make([]byte, persistedSessionMinSize+1)
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
@@ -1369,7 +1369,7 @@ func TestUploadFile_SourcePreconditionRunsDuringSessionRead(t *testing.T) {
 	store := NewSessionStore(dir, slog.Default())
 	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
 	localPath := filepath.Join(dir, "large.bin")
-	require.NoError(t, os.WriteFile(localPath, make([]byte, graph.SimpleUploadMaxSize+1), 0o600))
+	require.NoError(t, os.WriteFile(localPath, make([]byte, persistedSessionMinSize+1), 0o600))
 
 	_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "large.bin", localPath, UploadOpts{
 		ValidateSourceBeforeRead: func() error {
@@ -1418,7 +1418,7 @@ func TestSessionUpload_SaveFailure_StillCompletes(t *testing.T) {
 	t.Cleanup(func() { setTestDirPermissions(t, store.dir, 0o700) })
 
 	localPath := filepath.Join(dir, "save-fail.bin")
-	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+	largeData := make([]byte, persistedSessionMinSize+1)
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
@@ -1705,4 +1705,32 @@ func TestDownloadPartialName_FitsLocalNameLimit(t *testing.T) {
 	partial = downloadPartialName(japanese)
 	assert.LessOrEqual(t, len(partial), maxLocalNameBytes)
 	assert.True(t, utf8.ValidString(partial), "truncation keeps whole runes")
+}
+
+// Validates: R-5.6.5
+func TestUploadFile_ZeroByteMtimeNotAppliedStillSucceeds(t *testing.T) {
+	t.Parallel()
+
+	localPath := filepath.Join(t.TempDir(), "empty.txt")
+	require.NoError(t, os.WriteFile(localPath, nil, 0o600))
+
+	var uploads int
+	uploaded := &graph.Item{ID: "empty-item", Name: "empty.txt"}
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploads++
+			return uploaded, &graph.MtimeNotAppliedError{Item: uploaded, Err: errors.New("patch failed")}
+		},
+	}
+
+	result, err := newTestTM(&tmMockDownloader{}, ul, nil).UploadFile(
+		t.Context(), driveid.New("d"), "parent", "empty.txt", localPath, UploadOpts{},
+	)
+
+	// The content is on OneDrive: failing here made the caller upload it
+	// again, one more version per attempt, and still never set the mtime.
+	require.NoError(t, err)
+	assert.Same(t, uploaded, result.Item)
+	assert.True(t, result.RemoteMtimePending)
+	assert.Equal(t, 1, uploads)
 }

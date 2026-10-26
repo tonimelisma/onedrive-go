@@ -274,22 +274,27 @@ func replayableUploadBody(content io.ReaderAt, size int64) io.Reader {
 	return io.NewSectionReader(content, 0, size)
 }
 
-// Upload uploads a file to OneDrive, automatically choosing simple upload for
-// files up to 4 MiB or chunked (resumable) upload for larger files. The session
-// lifecycle (create, chunk loop, cancel-on-error) is fully encapsulated.
-// content must be an io.ReaderAt so that retries can re-read from arbitrary offsets.
-// progress may be nil if no progress reporting is needed.
+// Upload creates a file under parentID. Every non-empty file goes through an
+// upload session whose create request carries fileSystemInfo, so content and
+// modified time land in one version. The simple PUT plus mtime PATCH this
+// replaced made two versions per upload on Personal as well as Business (live
+// probe 7) for the same request count, and a PATCH failure failed an upload
+// whose content had already landed (D-034). Only a zero-byte file, which a
+// session cannot carry, is still PUT and then PATCHed. The session lifecycle
+// (create, chunk loop, cancel-on-error) is fully encapsulated. content must be
+// an io.ReaderAt so that retries can re-read from arbitrary offsets. progress
+// may be nil.
+//
+// A zero-byte upload whose content landed but whose mtime PATCH failed
+// returns the uploaded item together with a *MtimeNotAppliedError.
 func (c *Client) Upload(
 	ctx context.Context, driveID driveid.ID, parentID, name string,
 	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
 ) (*Item, error) {
-	if size <= SimpleUploadMaxSize {
-		item, needsFinalize, err := c.simpleUploadCreateByParent(ctx, driveID, parentID, name, content, size, mtime, progress)
+	if size == 0 {
+		item, err := c.SimpleUpload(ctx, driveID, parentID, name, content, size)
 		if err != nil {
 			return nil, err
-		}
-		if !needsFinalize {
-			return item, nil
 		}
 
 		return c.finalizeSimpleUpload(ctx, driveID, item, mtime)
@@ -298,13 +303,15 @@ func (c *Client) Upload(
 	return c.chunkedUploadEncapsulated(ctx, driveID, parentID, name, content, size, mtime, progress)
 }
 
-// UploadToItem overwrites an existing file by item ID, automatically choosing
-// simple upload or resumable upload by size.
+// UploadToItem overwrites an existing file by item ID. Like Upload, every
+// non-empty overwrite goes through a session carrying fileSystemInfo and only
+// a zero-byte overwrite is PUT and then PATCHed, with the same
+// *MtimeNotAppliedError contract.
 func (c *Client) UploadToItem(
 	ctx context.Context, driveID driveid.ID, itemID string,
 	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
 ) (*Item, error) {
-	if size <= SimpleUploadMaxSize {
+	if size == 0 {
 		item, err := c.SimpleUploadToItem(ctx, driveID, itemID, content, size)
 		if err != nil {
 			return nil, err
@@ -316,6 +323,24 @@ func (c *Client) UploadToItem(
 	return c.chunkedUploadToExistingItem(ctx, driveID, itemID, content, size, mtime, progress)
 }
 
+// MtimeNotAppliedError reports a zero-byte upload whose content landed but
+// whose follow-on fileSystemInfo PATCH failed. Item is the uploaded item: the
+// content is on OneDrive, so callers record it as uploaded rather than
+// uploading it again (each retry made one more version), and treat only the
+// modified time as not applied.
+type MtimeNotAppliedError struct {
+	Item *Item
+	Err  error
+}
+
+func (e *MtimeNotAppliedError) Error() string {
+	return "graph: setting mtime after simple upload: " + e.Err.Error()
+}
+
+func (e *MtimeNotAppliedError) Unwrap() error {
+	return e.Err
+}
+
 func (c *Client) finalizeSimpleUpload(
 	ctx context.Context,
 	driveID driveid.ID,
@@ -325,85 +350,22 @@ func (c *Client) finalizeSimpleUpload(
 	// Simple upload (PUT /content) cannot include fileSystemInfo in the
 	// request body. Post-upload PATCH preserves local mtime on the server,
 	// preventing mtime mismatch on the next sync pass.
-	if !mtime.IsZero() {
-		patched, patchErr := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
-			name:   QuirkSimpleUploadMtimeTransient404,
-			policy: c.policies.simpleUploadMtime,
-			match:  isTransientSimpleUploadMtimeError,
-		}, func() (*Item, error) {
-			return c.UpdateFileSystemInfo(ctx, driveID, item.ID, mtime)
-		})
-		if patchErr != nil {
-			return nil, fmt.Errorf("graph: setting mtime after simple upload: %w", patchErr)
-		}
-
-		return patched, nil
+	if mtime.IsZero() {
+		return item, nil
 	}
 
-	return item, nil
-}
-
-func (c *Client) simpleUploadCreateByParent(
-	ctx context.Context,
-	driveID driveid.ID,
-	parentID string,
-	name string,
-	content io.ReaderAt,
-	size int64,
-	mtime time.Time,
-	progress ProgressFunc,
-) (*Item, bool, error) {
-	item, err := c.SimpleUpload(ctx, driveID, parentID, name, content, size)
-	if err == nil {
-		return item, true, nil
-	}
-
-	if size == 0 || !errors.Is(err, ErrNotFound) {
-		return nil, false, err
-	}
-
-	// Graph misreports some shared-folder create denials as 404 on the simple
-	// PUT /content route while the equivalent upload-session route returns the
-	// correct permission status. Retry that narrower case through
-	// createUploadSession so higher layers see the real outcome.
-	c.logger.Debug("simple upload returned not found, retrying via upload session",
-		slog.String("drive_id", driveID.String()),
-		slog.String("parent_id", parentID),
-		slog.String("name", name),
-		slog.Int64("size", size),
-	)
-
-	item, sessionErr := c.chunkedUploadEncapsulated(ctx, driveID, parentID, name, content, size, mtime, progress)
-	if sessionErr == nil || !errors.Is(sessionErr, ErrNotFound) {
-		return item, false, sessionErr
-	}
-
-	// Live full-suite coverage also shows the inverse ordering quirk: after the
-	// parent path is already readable, both the first simple upload and the
-	// follow-on createUploadSession can still report itemNotFound for a while.
-	// Once the session route has ruled out the shared-folder 403 case, replay
-	// the original simple upload under a slightly longer bounded create
-	// convergence budget tuned for the final create path, not the permission
-	// oracle.
-	c.logger.Debug("upload session create still returned not found, retrying simple upload",
-		slog.String("drive_id", driveID.String()),
-		slog.String("parent_id", parentID),
-		slog.String("name", name),
-		slog.Int64("size", size),
-	)
-
-	item, retryErr := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
-		name:   QuirkSimpleUploadCreateTransient404,
-		policy: c.policies.simpleUploadCreate,
-		match:  isTransientSimpleUploadCreateError,
+	patched, patchErr := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
+		name:   QuirkSimpleUploadMtimeTransient404,
+		policy: c.policies.simpleUploadMtime,
+		match:  isTransientSimpleUploadMtimeError,
 	}, func() (*Item, error) {
-		return c.SimpleUpload(ctx, driveID, parentID, name, content, size)
+		return c.UpdateFileSystemInfo(ctx, driveID, item.ID, mtime)
 	})
-	if retryErr != nil {
-		return nil, false, retryErr
+	if patchErr != nil {
+		return item, &MtimeNotAppliedError{Item: item, Err: patchErr}
 	}
 
-	return item, true, nil
+	return patched, nil
 }
 
 // chunkedUploadEncapsulated creates an upload session, uploads all chunks,
