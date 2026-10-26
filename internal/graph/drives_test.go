@@ -1014,7 +1014,7 @@ func TestSearchDriveItems_Pagination(t *testing.T) {
 }
 
 // Validates: R-6.7.8
-func TestSearchDriveItems_DecodesNamesAndKeepsPackages(t *testing.T) {
+func TestSearchDriveItems_KeepsNamesVerbatimAndKeepsPackages(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -1046,9 +1046,9 @@ func TestSearchDriveItems_DecodesNamesAndKeepsPackages(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, items, 2)
-	assert.Equal(t, "Shared Notes.txt", items[0].Name)
+	assert.Equal(t, "Shared%20Notes.txt", items[0].Name)
 	assert.False(t, items[0].IsPackage)
-	assert.Equal(t, "Notebook Two", items[1].Name)
+	assert.Equal(t, "Notebook%20Two", items[1].Name)
 	assert.True(t, items[1].IsPackage)
 }
 

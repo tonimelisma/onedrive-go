@@ -42,7 +42,7 @@ type changeEvent struct {
 	ParentID string     // server parent ID (remote only)
 	DriveID  driveid.ID // normalized (lowercase, zero-padded to 16 chars)
 	ItemType ItemType
-	Name     string // URL-decoded, NFC-normalized
+	Name     string // verbatim from Graph, NFC-normalized
 	Size     int64
 	// Hash is a QuickXorHash (base64) on both sides: driveops.SelectHash
 	// returns only QuickXor, so a remote item with SHA digests alone is

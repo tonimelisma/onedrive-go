@@ -49,7 +49,7 @@ type Item struct {
 	Name              string
 	DriveID           driveid.ID // normalized: lowercase, zero-padded (Graph API casing is inconsistent)
 	ParentID          string
-	ParentPath        string     // decoded root-relative parent path from parentReference.path; empty for root/unknown
+	ParentPath        string     // verbatim root-relative parent path from parentReference.path (not URL-encoded, L-32); empty for root/unknown
 	ParentPathKnown   bool       // true when parentReference.path was present and valid, including root
 	ParentDriveID     driveid.ID // drive containing parent (for cross-drive references)
 	ParentDriveType   string     // parentReference.driveType: "personal", "business", "documentLibrary"; empty when Graph omits it

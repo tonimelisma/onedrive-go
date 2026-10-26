@@ -104,17 +104,21 @@ the real oauth polling integration.
 All API quirks handled at the graph boundary — downstream code never sees them:
 - DriveId casing normalization (lowercase)
 - DriveId truncation fix (zero-pad Personal IDs to 16 chars)
-- Single-item item names are URL-decoded across fetch, mutation, share-resolution,
-  restore, and upload-completion responses
-- Paginated non-delta item surfaces (`ListChildren`, drive search) URL-decode
-  names and keep provider-visible package items. Sync-only package suppression
-  is owned by `internal/sync/item_converter.go`, not by the Graph client.
+- Item names are opaque and pass through verbatim on every surface (R-6.7.8).
+  A live probe on Personal returned `a%20b.txt`, `test%46.txt` and
+  `x%2Fy.txt` literally from create, GET, `/children` and `/delta`; the
+  earlier unconditional URL-decode renamed such files locally and invented
+  subfolders. No surface has been recorded returning an encoded name; if one
+  is, decode only that response shape, with a recorded fixture.
+- Paginated non-delta item surfaces (`ListChildren`, drive search) keep
+  provider-visible package items. Sync-only package suppression is owned by
+  `internal/sync/item_converter.go`, not by the Graph client.
 - Delta deletion reordering (deletions before creations within each page)
 - Missing field recovery (name, size for deleted items)
 - Timestamp validation that preserves unknown timestamps as zero time instead of fabricating a replacement, including `null`, missing, invalid, and out-of-range wire values
 - `parentReference.path` is usually unavailable in delta and sync primarily
   tracks remote items by ID. When Graph does provide a valid path, it is
-  URL-decoded and normalized to root-relative `Item.ParentPath`; `Item.ParentPathKnown`
+  kept verbatim (it is not URL-encoded, L-32) as root-relative `Item.ParentPath`; `Item.ParentPathKnown`
   distinguishes a known root parent from an omitted/invalid path because both
   normalize to an empty string.
 - `GetItemByPath` post-validates Graph's response against the requested path. Internal path helpers distinguish exact root-relative paths (when `parentReference.path` survived normalization) from best-effort leaf-only fallbacks. When the exact parent path is unavailable the client logs the fallback at Debug and validates only the leaf name before accepting the result.

@@ -7,6 +7,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -23,6 +24,11 @@ type inflightParent struct {
 	IsRoot        bool
 	IsVault       bool // true for Personal Vault folder (B-271)
 	IsPackage     bool // true for OneNote and other package items, which sync never manages
+
+	// HasUnmaterializableName marks a folder whose Graph name cannot be one
+	// local path segment (see unmaterializableRemoteNameReason). Its children
+	// are skipped rather than placed under a folded or escaped path.
+	HasUnmaterializableName bool
 }
 
 // itemConverter converts []graph.Item into []ChangeEvent with full path
@@ -71,6 +77,12 @@ type itemConverter struct {
 	// ancestorFetches counts GetItem calls spent resolving missing ancestors
 	// in the current window, bounded by maxAncestorFetchesPerWindow.
 	ancestorFetches int
+
+	// sparseEnrichFailed holds IDs of items that arrived without a parent
+	// reference and whose GetItem enrichment failed in this window. Such an
+	// item is unplaceable for now, and the window is replayed; one whose
+	// enrichment succeeded and still has no parent is skipped for good.
+	sparseEnrichFailed map[string]struct{}
 }
 
 // maxAncestorFetchesPerWindow bounds the item-by-ID reads one delta window may
@@ -133,6 +145,7 @@ func (c *itemConverter) resetIncompleteObservation() {
 		c.incompleteObservation = false
 		c.unreachableParents = nil
 		c.ancestorFetches = 0
+		c.sparseEnrichFailed = nil
 	}
 }
 
@@ -172,6 +185,10 @@ func (c *itemConverter) enrichSparseParentRefs(ctx context.Context, items []grap
 					slog.String("error", err.Error()),
 				)
 			}
+			if c.sparseEnrichFailed == nil {
+				c.sparseEnrichFailed = make(map[string]struct{})
+			}
+			c.sparseEnrichFailed[item.ID] = struct{}{}
 
 			continue
 		}
@@ -376,6 +393,8 @@ func (c *itemConverter) registerInflight(item *graph.Item, inflight map[string]i
 		IsRoot:        item.IsRoot,
 		IsVault:       item.SpecialFolderName == specialFolderVault,
 		IsPackage:     item.IsPackage,
+
+		HasUnmaterializableName: name != "" && unmaterializableRemoteNameReason(name) != "",
 	}
 }
 
@@ -425,6 +444,10 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 		return nil
 	}
 
+	if c.hasUnmaterializableName(item, existing) {
+		return nil
+	}
+
 	// Skip the mount observation root itself.
 	if c.RemoteRootItemID != "" && item.ID == c.RemoteRootItemID {
 		c.Logger.Debug("skipping mount root item", slog.String("item_id", item.ID))
@@ -463,6 +486,29 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 	}
 
 	return c.classifyAndConvert(item, inflight, itemDriveID, existing)
+}
+
+// hasUnmaterializableName reports, with a warning, an item whose Graph name
+// is opaque but cannot be exactly one local path segment: path.Join would
+// fold ".." into the parent and turn "a/b" into a nested path. A delete of a
+// synced item keeps its baseline path and needs no name.
+func (c *itemConverter) hasUnmaterializableName(item *graph.Item, existing *BaselineEntry) bool {
+	if item.Name == "" || (item.IsDeleted && existing != nil) {
+		return false
+	}
+
+	reason := unmaterializableRemoteNameReason(item.Name)
+	if reason == "" {
+		return false
+	}
+
+	c.Logger.Warn("Not syncing a OneDrive item whose name cannot be a local file name",
+		slog.String("item_id", item.ID),
+		slog.String("name", item.Name),
+		slog.String("reason", reason),
+	)
+
+	return true
 }
 
 func (c *itemConverter) isShortcutTopologyItem(item *graph.Item) bool {
@@ -684,11 +730,7 @@ func (c *itemConverter) materializePathWithBaselineFallback(
 
 		return path.Join(parentDir, name)
 	}
-	if graphPath := c.materializePathFromGraphParentPath(item, name); graphPath != "" {
-		return graphPath
-	}
-
-	return c.materializePathFromParts(item.ID, name, item.ParentID, resolveParentDriveID(item, itemDriveID), inflight, true)
+	return c.materializePathPreferringIDChain(item, name, itemDriveID, inflight, true)
 }
 
 // materializePath builds the full relative path by walking the parent chain.
@@ -696,18 +738,7 @@ func (c *itemConverter) materializePathWithBaselineFallback(
 func (c *itemConverter) materializePath(
 	item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID,
 ) string {
-	if graphPath := c.materializePathFromGraphParentPath(item, nfcNormalize(item.Name)); graphPath != "" {
-		return graphPath
-	}
-
-	return c.materializePathFromParts(
-		item.ID,
-		nfcNormalize(item.Name),
-		item.ParentID,
-		resolveParentDriveID(item, itemDriveID),
-		inflight,
-		true,
-	)
+	return c.materializePathPreferringIDChain(item, nfcNormalize(item.Name), itemDriveID, inflight, true)
 }
 
 func (c *itemConverter) materializePathForUntrackedDelete(
@@ -717,18 +748,52 @@ func (c *itemConverter) materializePathForUntrackedDelete(
 	if name == "" {
 		return ""
 	}
+	return c.materializePathPreferringIDChain(item, name, itemDriveID, inflight, false)
+}
+
+// materializePathPreferringIDChain places an item by its parent-ID chain and
+// uses parentReference.path only when that chain cannot be resolved. IDs are
+// the authority (R-6.7.3); the path is a second rendering of the same names,
+// and every segment of it is checked like a name before it is used.
+//
+// A live item with no parent reference at all is not placed at the drive
+// root, which is where an omitted parentReference would otherwise put it. It
+// is unplaceable, and its window is replayed only when the sparse-item read
+// that should have supplied the parent failed (a transient condition).
+// Untracked deletes (markIncomplete false) keep the leaf fallback: Business
+// routinely omits parentReference on deletes, and such an event only retires
+// state for an ID this client never synced.
+func (c *itemConverter) materializePathPreferringIDChain(
+	item *graph.Item,
+	name string,
+	itemDriveID driveid.ID,
+	inflight map[string]inflightParent,
+	markIncomplete bool,
+) string {
+	if item.ParentID == "" && markIncomplete {
+		if graphPath := c.materializePathFromGraphParentPath(item, name); graphPath != "" {
+			return graphPath
+		}
+		c.Logger.Debug("skipping remote item without a parent reference",
+			slog.String("item_id", item.ID),
+			slog.String("name", name),
+		)
+		if _, failed := c.sparseEnrichFailed[item.ID]; failed {
+			c.markIncompleteObservation()
+		}
+
+		return ""
+	}
+
+	parentDriveID := resolveParentDriveID(item, itemDriveID)
+	if idPath := c.materializePathFromParts(item.ID, name, item.ParentID, parentDriveID, inflight, false); idPath != "" {
+		return idPath
+	}
 	if graphPath := c.materializePathFromGraphParentPath(item, name); graphPath != "" {
 		return graphPath
 	}
 
-	return c.materializePathFromParts(
-		item.ID,
-		name,
-		item.ParentID,
-		resolveParentDriveID(item, itemDriveID),
-		inflight,
-		false,
-	)
+	return c.materializePathFromParts(item.ID, name, item.ParentID, parentDriveID, inflight, markIncomplete)
 }
 
 func (c *itemConverter) materializePathFromGraphParentPath(item *graph.Item, name string) string {
@@ -740,6 +805,13 @@ func (c *itemConverter) materializePathFromGraphParentPath(item *graph.Item, nam
 	}
 	if item.ParentPath == "" {
 		return c.applyPrefix(name)
+	}
+	// The path is verbatim (L-32), so each segment is a raw name: one that
+	// cannot be a local path segment ("..", "") must not reach path.Join.
+	for _, segment := range strings.Split(item.ParentPath, "/") {
+		if segment == "" || unmaterializableRemoteNameReason(segment) != "" {
+			return ""
+		}
 	}
 
 	return c.applyPrefix(path.Join(item.ParentPath, name))
@@ -770,6 +842,11 @@ func (c *itemConverter) materializePathFromParts(
 			// not a real parent segment in the local relative path.
 			if c.RemoteRootItemID != "" && parentID == c.RemoteRootItemID {
 				break
+			}
+
+			if p.HasUnmaterializableName {
+				// The parent itself was skipped and warned about.
+				return ""
 			}
 
 			segments = append(segments, p.Name)
@@ -942,4 +1019,26 @@ func resolveParentDriveID(item *graph.Item, itemDriveID driveid.ID) driveid.ID {
 	}
 
 	return itemDriveID
+}
+
+// parentDirSegment is the path segment that names a parent directory.
+const parentDirSegment = ".."
+
+// unmaterializableRemoteNameReason reports why a Graph item name cannot be
+// used as one local path segment, or "" when it can. OneDrive itself rejects
+// all of these, so they only arrive from a malformed or hostile response; the
+// check exists so such a response cannot place content outside its folder.
+func unmaterializableRemoteNameReason(name string) string {
+	switch {
+	case name == "." || name == parentDirSegment:
+		return "dot segment"
+	case strings.ContainsRune(name, '/'):
+		return "contains a slash"
+	case strings.ContainsRune(name, 0):
+		return "contains NUL"
+	case !utf8.ValidString(name):
+		return "invalid UTF-8"
+	default:
+		return ""
+	}
 }

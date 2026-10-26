@@ -141,7 +141,7 @@ func TestGetItem_DriveIDNormalization(t *testing.T) {
 }
 
 // Validates: R-6.7.8
-func TestGetItem_DecodesURLencodedName(t *testing.T) {
+func TestGetItem_KeepsPercentSequencesInName(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -160,11 +160,11 @@ func TestGetItem_DecodesURLencodedName(t *testing.T) {
 	item, err := client.GetItem(t.Context(), driveid.New("drive-1"), "item-encoded")
 	require.NoError(t, err)
 
-	assert.Equal(t, "Quarterly Report #1.pdf", item.Name)
+	assert.Equal(t, "Quarterly%20Report%20%231.pdf", item.Name)
 }
 
 // Validates: R-6.7.23
-func TestGetItem_DecodesParentReferencePath(t *testing.T) {
+func TestGetItem_KeepsParentReferencePathVerbatim(t *testing.T) {
 	srv := newSingleItemServer(t, `{
 		"id": "item-with-parent-path",
 		"name": "notes.txt",
@@ -173,7 +173,7 @@ func TestGetItem_DecodesParentReferencePath(t *testing.T) {
 		"parentReference": {
 			"id": "docs-folder",
 			"driveId": "d",
-			"path": "/drives/d/root:/Team%20Docs/Specs%20%231"
+			"path": "/drives/d/root:/a%20b/Specs #1"
 		}
 	}`)
 	defer srv.Close()
@@ -182,31 +182,10 @@ func TestGetItem_DecodesParentReferencePath(t *testing.T) {
 	item, err := client.GetItem(t.Context(), driveid.New("d"), "item-with-parent-path")
 	require.NoError(t, err)
 
-	assert.Equal(t, "Team Docs/Specs #1", item.ParentPath)
+	// L-32: Graph does not percent-encode parentReference.path, so `a%20b`
+	// is a folder literally named that.
+	assert.Equal(t, "a%20b/Specs #1", item.ParentPath)
 	assert.True(t, item.ParentPathKnown)
-}
-
-// Validates: R-6.7.23
-func TestGetItem_IgnoresInvalidParentReferencePathEncoding(t *testing.T) {
-	srv := newSingleItemServer(t, `{
-		"id": "bad-parent-path",
-		"name": "notes.txt",
-		"createdDateTime": "2024-01-01T00:00:00Z",
-		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
-		"parentReference": {
-			"id": "docs-folder",
-			"driveId": "d",
-			"path": "/drives/d/root:/Team%20Docs/%ZZ"
-		}
-	}`)
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	item, err := client.GetItem(t.Context(), driveid.New("d"), "bad-parent-path")
-	require.NoError(t, err)
-
-	assert.Empty(t, item.ParentPath)
-	assert.False(t, item.ParentPathKnown)
 }
 
 // Validates: R-6.7.23
@@ -529,7 +508,7 @@ func TestListChildren_Empty(t *testing.T) {
 }
 
 // Validates: R-6.7.8
-func TestListChildren_DecodesNamesAndKeepsPackages(t *testing.T) {
+func TestListChildren_KeepsNamesVerbatimAndKeepsPackages(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -549,13 +528,13 @@ func TestListChildren_DecodesNamesAndKeepsPackages(t *testing.T) {
 
 	assert.Len(t, items, 3)
 	assert.False(t, items[0].IsFolder)
-	assert.Equal(t, "doc one.pdf", items[0].Name)
+	assert.Equal(t, "doc%20one.pdf", items[0].Name)
 	assert.Equal(t, "application/pdf", items[0].MimeType)
 	assert.True(t, items[1].IsFolder)
-	assert.Equal(t, "Photos & Videos", items[1].Name)
+	assert.Equal(t, "Photos%20%26%20Videos", items[1].Name)
 	assert.Equal(t, 100, items[1].ChildCount)
 	assert.True(t, items[2].IsPackage)
-	assert.Equal(t, "Notebook One", items[2].Name)
+	assert.Equal(t, "Notebook%20One", items[2].Name)
 }
 
 func TestListChildren_InvalidNextLink(t *testing.T) {
@@ -1301,16 +1280,18 @@ func TestGetItemByPath_Success(t *testing.T) {
 }
 
 // Validates: R-6.7.22, R-6.7.23
-func TestGetItemByPath_UsesDecodedParentReferencePath(t *testing.T) {
+func TestGetItemByPath_VerifiesAgainstVerbatimParentReferencePath(t *testing.T) {
+	// A folder literally named `a%20b` (L-32: the path is not encoded). The
+	// decode turned it into `a b` and rejected the correct item.
 	srv := newSingleItemServer(t, `{
-		"id": "item-path-decoded",
+		"id": "item-path-verbatim",
 		"name": "Quarterly Report #1.txt",
 		"createdDateTime": "2024-01-01T00:00:00Z",
 		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
 		"parentReference": {
 			"id": "reports-folder",
 			"driveId": "d",
-			"path": "/drives/d/root:/Team%20Docs/Shared%20Reports"
+			"path": "/drives/d/root:/a%20b/Shared Reports"
 		}
 	}`)
 	defer srv.Close()
@@ -1319,11 +1300,11 @@ func TestGetItemByPath_UsesDecodedParentReferencePath(t *testing.T) {
 	item, err := client.GetItemByPath(
 		t.Context(),
 		driveid.New("d"),
-		"Team Docs/Shared Reports/Quarterly Report #1.txt",
+		"a%20b/Shared Reports/Quarterly Report #1.txt",
 	)
 	require.NoError(t, err)
 
-	assert.Equal(t, "Team Docs/Shared Reports", item.ParentPath)
+	assert.Equal(t, "a%20b/Shared Reports", item.ParentPath)
 }
 
 func TestItemExactRootRelativePath(t *testing.T) {
@@ -1411,32 +1392,47 @@ func TestItemBestEffortRootRelativePath(t *testing.T) {
 	}
 }
 
-func TestGetItemByPath_EncodesSpecialChars(t *testing.T) {
-	// Verify that paths with special characters (#, spaces, ?) are URL-encoded
-	// per-segment before being sent to the server.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// RequestURI preserves the raw percent-encoded path as sent on the wire.
-		// "folder/my file#2.txt" → "folder/my%20file%232.txt"
-		assert.Contains(t, r.RequestURI, "/drives/000000000000000d/root:/folder/my%20file%232.txt:")
+// Validates: R-6.7.8
+func TestGetItemByPath_EncodesSegmentsAndKeepsNamesVerbatim(t *testing.T) {
+	// Paths with special characters (#, spaces, %) are URL-encoded per
+	// segment on the wire, and the name Graph returns is compared verbatim:
+	// a literal "a%20b.txt" must not be checked against "a b.txt".
+	tests := []struct {
+		name       string
+		path       string
+		wantInURI  string
+		returnName string
+	}{
+		{
+			name: "special characters", path: "folder/my file#2.txt",
+			wantInURI: "/drives/000000000000000d/root:/folder/my%20file%232.txt:", returnName: "my file#2.txt",
+		},
+		{
+			name: "percent sequences", path: "100%25 done/a%20b.txt",
+			wantInURI: "/root:/100%2525%20done/a%2520b.txt:", returnName: "a%20b.txt",
+		},
+	}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		writeTestResponse(t, w, `{
-			"id": "encoded-item",
-			"name": "my file#2.txt",
-			"createdDateTime": "2024-01-01T00:00:00Z",
-			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
-			"parentReference": {"id": "folder-id", "driveId": "d"}
-		}`)
-	}))
-	defer srv.Close()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// RequestURI preserves the raw percent-encoded path as sent.
+				assert.Contains(t, r.RequestURI, tt.wantInURI)
 
-	client := newTestClient(t, srv.URL)
-	item, err := client.GetItemByPath(t.Context(), driveid.New("d"), "folder/my file#2.txt")
-	require.NoError(t, err)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				writeTestResponsef(t, w, `{"id":"encoded-item","name":%q,
+					"createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z",
+					"parentReference":{"id":"folder-id","driveId":"d"}}`, tt.returnName)
+			}))
+			defer srv.Close()
 
-	assert.Equal(t, "encoded-item", item.ID)
-	assert.Equal(t, "my file#2.txt", item.Name)
+			item, err := newTestClient(t, srv.URL).GetItemByPath(t.Context(), driveid.New("d"), tt.path)
+			require.NoError(t, err)
+			assert.Equal(t, "encoded-item", item.ID)
+			assert.Equal(t, tt.returnName, item.Name)
+		})
+	}
 }
 
 func TestEncodePathSegments(t *testing.T) {

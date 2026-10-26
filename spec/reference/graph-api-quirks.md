@@ -169,28 +169,11 @@ When a file is renamed and a new file is created with the old name, the delta re
 
 The same item can appear multiple times in a single delta response page or across pages. The normalization pipeline deduplicates by keeping only the last occurrence of each item ID.
 
-### URL-Encoded Item Names (Disproved On Personal)
+### Item Names Are Not URL-Encoded
 
-Original claim (initial docs commit `df615b06`, 2026-02-22, with no endpoint or
-response evidence recorded): some responses return item names with URL
-encoding (e.g., `%20` for spaces, `%E6%97%A5%E6%9C%AC%E8%AA%9E.txt` for
-`日本語.txt`), so the normalization pipeline decodes all item names
-unconditionally.
+Item names come back literally. A live probe on Personal (2026-10-25) created `a%20b.txt`, `test%46.txt`, `x%2Fy.txt`, `plus+sign.txt` and `pct%.txt`; the create response, `GET` by ID, `/children` and `/delta` all returned the literal names. An earlier version of this document claimed "some responses" URL-encode names, citing no endpoint, and the client decoded every name: that renamed `a%20b.txt` to `a b.txt` after one round trip and turned `x%2Fy` into a subfolder. Names are now opaque (R-6.7.8). `parentReference.path` is not encoded either (L-32).
 
-**Live evidence contradicts it.** A probe on a OneDrive Personal account on
-2026-10-25 created `a%20b.txt`, `test%46.txt`, `x%2Fy.txt`, `plus+sign.txt` and
-`pct%.txt`. The create response, `GET` by ID, `/children` and `/delta` all
-returned the literal name. Decoding them is therefore wrong: it turns a user's
-`a%20b.txt` into `a b.txt` (which sync then sees as a rename), can fold two
-distinct names onto one, and makes `x%2Fy.txt` look like a subfolder.
-
-Status: item names must be treated as opaque. The unconditional decode in
-`internal/graph/normalize.go` is still present at the time of writing and is
-being removed as a separate code fix; until then this entry documents a known
-defect, not a policy. If an encoded-name response is ever observed (for
-example on Business), it must be recorded with the endpoint and a fixture and
-decoded only for that response shape. `parentReference.path` is genuinely URL
-form and is still decoded (see "URL-Encoded Paths" below).
+Upgrade note: a name with a literal `%XX` sequence that an earlier build decoded on the way down (a folder `a%20b` that became `a b` locally) is renamed back to its real name, `a%20b`, on the first full enumeration after the upgrade.
 
 ### OneNote Package Items
 
@@ -1037,7 +1020,7 @@ On OneDrive for Business and SharePoint, the delta action is only available on t
 
 ### Personal Shared Folders — Inconsistent Parent References
 
-Shared folder items in delta responses reference parent IDs on a different drive (the sharer's drive). The driveId in these references is subject to the truncation and casing bugs. URL-encoded spaces appear in `parentReference.path` ([onedrive-api-docs#1765](https://github.com/OneDrive/onedrive-api-docs/issues/1765)).
+Shared folder items in delta responses reference parent IDs on a different drive (the sharer's drive). The driveId in these references is subject to the truncation and casing bugs. An old report says URL-encoded spaces appear in `parentReference.path` here ([onedrive-api-docs#1765](https://github.com/OneDrive/onedrive-api-docs/issues/1765)); L-32 found no encoding on Personal (see "parentReference.path Is Not URL-Encoded").
 
 ## Upload Session Quirks
 
@@ -1099,9 +1082,9 @@ At the time of writing the client's remote renames do not send
 the local one; the fix (send the baseline mtime in the same PATCH) is in
 progress.
 
-### URL-Encoded Paths
+### parentReference.path Is Not URL-Encoded (L-32)
 
-`parentReference.path` (when present) contains URL-encoded characters (`%20` for spaces). The client decodes it at the Graph boundary and stores the root-relative result on `graph.Item.ParentPath`. A valid root parent path normalizes to the empty string, so `graph.Item.ParentPathKnown` records whether Graph actually supplied a valid path. Malformed encodings or missing `/root:` markers are ignored rather than propagated as bogus paths.
+An earlier version of this entry said `parentReference.path` contains URL-encoded characters and the client decoded it. Live probe L-32 (Personal, 2026-10-26) disproved that: folders named `a b`, `a%b`, `a%20b`, `a#b`, `ä`, `a+b`, `a&b` and `a'b` all appear verbatim in the path of their children, in the create answer, `GET` and delta alike. Decoding turned a folder literally named `a%20b` into `a b`. The client now strips the `/drives/{id}/root:` prefix and keeps the rest verbatim as `graph.Item.ParentPath`; a valid root parent path is the empty string, so `graph.Item.ParentPathKnown` records whether Graph supplied a valid path, and a path without the `/root:` marker is ignored. Sync places items and checks locations by parent ID first, and uses this path only as a fallback. The report of encoded spaces in shared-folder delta (onedrive-api-docs#1765) predates the probe and is unconfirmed on Personal; Business is unprobed.
 
 ## Case Sensitivity
 
@@ -1143,13 +1126,11 @@ OneDrive's namespace. See also R-2.11.7 for the observed full-path limit.
 
 ## Normalization Pipeline
 
-All delta responses pass through a 5-stage normalization pipeline (`internal/graph/normalize.go`) before the sync engine processes them:
+All delta responses pass through a normalization pipeline (`internal/graph/normalize.go`) before the sync engine processes them. Names are left verbatim, and package items are preserved for provider-truth callers (sync filters them later):
 
-1. Decode URL-encoded names (wrong on Personal and being removed; see "URL-Encoded Item Names (Disproved On Personal)")
-2. Preserve package items for provider-truth callers; sync filters them later
-3. Clear deleted item hashes
-4. Deduplicate (keep last occurrence per item ID)
-5. Reorder deletions before creations (within each parent)
+1. Clear deleted item hashes
+2. Deduplicate (keep last occurrence per item ID)
+3. Reorder deletions before creations (within each parent)
 
 ## Recycle Bin API — Personal vs Business
 

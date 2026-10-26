@@ -65,7 +65,6 @@ func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID,
 	}
 
 	item := dir.toItem(c.logger)
-	normalizeSingleItem(&item, c.logger)
 
 	return &item, nil
 }
@@ -208,7 +207,6 @@ func (c *Client) MoveItemIfMatch(
 	}
 
 	item := dir.toItem(c.logger)
-	normalizeSingleItem(&item, c.logger)
 
 	return &item, nil
 }
@@ -310,7 +308,6 @@ func (c *Client) decodeItemBody(body io.Reader, desc string) (item *Item, hasIte
 	}
 
 	decoded := dir.toItem(c.logger)
-	normalizeSingleItem(&decoded, c.logger)
 
 	return &decoded, true, nil
 }

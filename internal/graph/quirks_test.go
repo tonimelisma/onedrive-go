@@ -114,28 +114,12 @@ func TestClearDeletedHashes_BogusAllZeros(t *testing.T) {
 	assert.Empty(t, result[0].SHA256Hash, "bogus hash should be cleared")
 }
 
-// TestDecodeURLEncodedNames_UTF8Sequences validates decoding of multi-byte
-// UTF-8 percent-encoded sequences in item names (Japanese characters).
-func TestDecodeURLEncodedNames_UTF8Sequences(t *testing.T) {
-	items := []Item{
-		{ID: "utf8-1", Name: "%E6%97%A5%E6%9C%AC%E8%AA%9E.txt"},
-		{ID: "space", Name: "file%20name.txt"},
-		{ID: "plus", Name: "file+name.txt"},
-	}
-
-	result := decodeURLEncodedNames(items, testNoopLogger())
-
-	assert.Equal(t, "日本語.txt", result[0].Name)
-	assert.Equal(t, "file name.txt", result[1].Name)
-	// Plus signs are NOT decoded by PathUnescape (only QueryUnescape does that).
-	assert.Equal(t, "file+name.txt", result[2].Name)
-}
-
 // TestNormalizeDeltaItems_PipelineOrder validates that the full normalization
-// pipeline runs in the correct order: decode → clear hashes → dedup → reorder.
+// pipeline runs in the correct order: clear hashes → dedup → reorder, with
+// names left verbatim.
 func TestNormalizeDeltaItems_PipelineOrder(t *testing.T) {
 	items := []Item{
-		// URL-encoded name that should be decoded first.
+		// Percent sequences in a name are literal and must survive.
 		{ID: "encoded", Name: "my%20doc.txt", ParentID: "root"},
 		// Package stays visible to Graph callers; sync filters it later.
 		{ID: "pkg", Name: "Notebook.one", IsPackage: true, ParentID: "root"},
@@ -153,7 +137,7 @@ func TestNormalizeDeltaItems_PipelineOrder(t *testing.T) {
 	// Duplicate removed; package remains provider truth.
 	require.Len(t, result, 5)
 
-	// Verify URL decoding applied.
+	// Verify the name was not decoded.
 	var encodedItem *Item
 	for i := range result {
 		if result[i].ID == "encoded" {
@@ -162,7 +146,7 @@ func TestNormalizeDeltaItems_PipelineOrder(t *testing.T) {
 		}
 	}
 	require.NotNil(t, encodedItem)
-	assert.Equal(t, "my doc.txt", encodedItem.Name)
+	assert.Equal(t, "my%20doc.txt", encodedItem.Name)
 
 	// Verify duplicate kept last version.
 	for i := range result {
