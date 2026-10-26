@@ -37,7 +37,7 @@ const (
 // docs and config creation do not drift when defaults change.
 func defaultConfigTemplate() string {
 	return fmt.Sprintf(`# onedrive-go configuration
-# Docs: https://github.com/tonimelisma/onedrive-go
+# Docs: https://github.com/tonimelisma/onedrive-go/blob/main/docs/configuration.md
 
 # ── Global settings ──
 # Uncomment and modify to override defaults.

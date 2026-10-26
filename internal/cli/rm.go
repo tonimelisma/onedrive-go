@@ -31,7 +31,7 @@ Use --permanent for permanent deletion (bypasses the recycle bin).`,
 	}
 
 	cmd.Flags().BoolP("recursive", "r", false, "confirm recursive folder deletion")
-	cmd.Flags().Bool("permanent", false, "permanently delete instead of moving to recycle bin (Business/SharePoint only)")
+	cmd.Flags().Bool("permanent", false, "permanently delete instead of moving to the recycle bin")
 
 	return cmd
 }

@@ -651,7 +651,7 @@ func (s *MountSession) DeleteResolvedPath(ctx context.Context, remotePath, itemI
 	return s.deleteResolvedPath(ctx, remotePath, itemID, s.DeleteItem)
 }
 
-// PermanentDeleteItem permanently deletes an item (Business/SharePoint only).
+// PermanentDeleteItem permanently deletes an item, bypassing the recycle bin.
 func (s *Session) PermanentDeleteItem(ctx context.Context, itemID string) error {
 	if err := s.Meta.PermanentDeleteItem(ctx, s.DriveID, itemID); err != nil {
 		return fmt.Errorf("permanent delete item %q: %w", itemID, err)

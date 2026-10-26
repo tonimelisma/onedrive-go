@@ -177,7 +177,7 @@ the best path.
 
 Read these first:
 
-1. `README.md`
+1. `README.md` and `CONTRIBUTING.md`
 2. `AGENTS.md`
 3. `CLAUDE.md`
 4. `spec/requirements/index.md`
@@ -626,7 +626,7 @@ use this:
 
 ### Day 1
 
-1. `README.md`
+1. `README.md` and `CONTRIBUTING.md`
 2. `AGENTS.md`
 3. `CLAUDE.md`
 4. `spec/requirements/index.md`

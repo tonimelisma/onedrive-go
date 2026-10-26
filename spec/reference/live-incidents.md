@@ -15,6 +15,27 @@ Promotion contract:
   current policy can be opened directly without replaying the whole incident
   history in your head
 
+## Historical test names
+
+Entries keep the test names that were current when the incident was seen.
+These names no longer exist in the repo; the table records what became of each
+one (checked 2026-10-25 against `git log -S` and the current `e2e/` tree).
+"No direct replacement" means the incident's regression coverage now rests on
+the product fix and the broader tests named, not on a dedicated test.
+
+| Historical name | Removed in | Current coverage |
+| --- | --- | --- |
+| `TestE2E_FileOps_Whoami`, `_LsRoot`, `_LsFolder`, `_Mkdir`, `_Put`, `_Stat`, `_Get`, `_RmFile`, `_RmSubfolder`, `_RmPermanent`, `_Status` | #487 (`bc9913f8`), fast-lane smoke reset | `TestE2E_FileOpsSmokeCRUD` (fast lane) and `TestE2E_RoundTrip` subtests (full suite) |
+| `TestE2E_Sync_DownloadOnlyIgnoresLocal` | #487 (`bc9913f8`) | renamed to `TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges` |
+| `TestE2E_Sync_UploadOnlyIgnoresRemote` | #487 (`bc9913f8`) | renamed to `TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges` |
+| `TestResolveConflict_KeepLocal_FollowUpSyncDoesNotRedetectConflictWhenRemoteDeltaStillShowsLoser` | #496 (`83d303d4`), with the manual conflict-resolution workflow | no direct replacement; the `resolve` workflow no longer exists |
+| `TestE2E_ConflictDetectionAndResolution`, `TestE2E_Resolve_Both_PreservesConflictCopy`, `TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent`, `TestE2E_Resolve_DeletesWithWatchDaemon`, `TestE2E_Sync_ResolveAll`, `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote` | #595 (`406a5409`); the `resolve` command itself went in #496 (`83d303d4`) | conflict detection and preservation: `TestE2E_Sync_Conflicts`, `TestE2E_Sync_DirectionalModes_PreserveEditEditConflict`, `_PreserveEditDeleteConflict`, `_PreserveCreateCreateConflict`; absence of `resolve`: `TestE2E_CLI_NoResolveCommand` |
+| `TestE2E_Status_JSON_ConflictDetails`, `TestE2E_Status_History_ShowsResolvedStrategies` | #595 (`406a5409`), with status history | no direct replacement; `TestE2E_Status_NoLegacyHistorySurface` pins that the history surface is gone |
+| `TestE2E_Sync_DeleteSafetyThreshold` | #595 (`406a5409`); the threshold itself went in #496 (`83d303d4`) | no direct replacement; the threshold no longer exists |
+| `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile` | #595 (`406a5409`); `sync_paths` itself went in #496 (`83d303d4`) | no direct replacement; `sync_paths` no longer exists |
+| `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload` | #595 (`406a5409`); the ignore-marker filter itself went in #496 (`83d303d4`) | no direct replacement; the ignore-marker filter no longer exists |
+| `TestE2E_Status_PerDrive_NoConditionsOrRetries`, `TestE2E_Status_JSON_ConditionDetails`, `TestE2E_Status_ConditionLifecycle` | #701 (`75f872de`), status redesign | renamed to `TestE2E_Status_PerDrive_NoIssuesOrRetries`, `TestE2E_Status_JSON_IssueDetails`, `TestE2E_Status_IssueLifecycle` |
+
 ## Index
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
@@ -962,7 +983,8 @@ calling `/me/drive` through the saved token before suite scrub starts. Existing
 metadata files are preserved, and sharepoint/shared-root test drives still fail
 loudly if their required metadata is missing because that identity cannot be
 reconstructed from `/me/drive` alone. Unit coverage lives in
-[`e2e/drive_metadata_bootstrap_test.go`](../../e2e/drive_metadata_bootstrap_test.go).
+`e2e/drive_metadata_bootstrap_test.go`, since moved to
+[`e2e/catalog_drive_bootstrap_test.go`](../../e2e/catalog_drive_bootstrap_test.go) (#508).
 Promoted docs: [developer-onboarding.md](developer-onboarding.md), [config.md](../design/config.md)
 
 ## LI-20260415-01: Nightly `e2e_full` preflight still referenced deleted sync-control status counters
@@ -1058,7 +1080,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 First seen: 2026-04-12
 Last seen: 2026-04-12
 Area: `e2e_full`, directional sync semantics, conflict coverage
-Suite / test: local `go run ./cmd/devtool verify e2e-full`, `TestE2E_Sync_DownloadOnlyIgnoresLocal`
+Suite / test: local `go run ./cmd/devtool verify e2e-full`, `TestE2E_Sync_DownloadOnlyIgnoresLocal` (historical test names; see [Historical test names](#historical-test-names))
 Classification: test bug
 Status: fixed
 Recurring: no
@@ -1170,7 +1192,7 @@ Promoted docs: [system.md](../design/system.md)
 First seen: 2026-04-12
 Last seen: 2026-04-12
 Area: `e2e_full`, manual conflict resolution, one-shot follow-up planning
-Suite / test: local `go run ./cmd/devtool verify e2e-full`, `TestE2E_ConflictDetectionAndResolution`
+Suite / test: local `go run ./cmd/devtool verify e2e-full`, `TestE2E_ConflictDetectionAndResolution` (historical test names; see [Historical test names](#historical-test-names))
 Classification: product bug
 Status: fixed
 Recurring: no
@@ -1514,14 +1536,14 @@ Required PR live lanes now give the strict auth preflight a longer live-provider
 endpoint budget, and graph integration tests use a test-only drive-discovery
 policy scoped to the integration timeout. Production `graph.Client.Drives()`
 keeps its shorter policy so CLI discovery still degrades promptly for users.
-Promoted docs: [graph-api-quirks.md#strict-auth-preflight-quirks](graph-api-quirks.md#strict-auth-preflight-quirks), [graph-client.md](../design/graph-client.md), [degraded-mode.md](../design/degraded-mode.md), [cli.md](../design/cli.md)
+Promoted docs: [graph-api-quirks.md#transient-504-profileexception-on-me-during-strict-auth-preflight](graph-api-quirks.md#transient-504-profileexception-on-me-during-strict-auth-preflight), [graph-client.md](../design/graph-client.md), [degraded-mode.md](../design/degraded-mode.md), [cli.md](../design/cli.md)
 
 ## LI-20260405-09: Recently created parent folder lagged child create and child-list routes
 
 First seen: 2026-04-05
 Last seen: 2026-04-22
 Area: `e2e_full` and fast `e2e`, child create or child-list after recently created parent visibility
-Suite / test: `verify e2e-full`, `TestE2E_SyncWatch_WebsocketStartupSmoke`; later `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`; later `TestE2E_Sync_DriveRemoveAndReAdd`; later PR `e2e` CI `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload` fixture setup
+Suite / test: `verify e2e-full`, `TestE2E_SyncWatch_WebsocketStartupSmoke`; later `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`; later `TestE2E_Sync_DriveRemoveAndReAdd`; later PR `e2e` CI `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload` fixture setup (historical test names; see [Historical test names](#historical-test-names))
 Classification: graph quirk
 Status: mitigated
 Recurring: yes
@@ -1667,14 +1689,14 @@ same `ls /` boundary before and after known exact-path `stat`, `get`, or
 equivalent CLI read-poller `404` failures, so later sync assertions do not
 treat this documented route-lag family as a product regression once the
 shared-root drive has already been selected successfully.
-Promoted docs: [graph-api-quirks.md#fresh-parent-child-create-lag](graph-api-quirks.md#fresh-parent-child-create-lag), [system.md](../design/system.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [sync-execution.md](../design/sync-execution.md)
+Promoted docs: [graph-api-quirks.md#recently-created-parent-folders-can-lag-child-routes](graph-api-quirks.md#recently-created-parent-folders-can-lag-child-routes), [system.md](../design/system.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [sync-execution.md](../design/sync-execution.md)
 
 ## LI-20260405-08: Delete-by-ID returned `404 itemNotFound` after successful path lookup
 
 First seen: 2026-04-05
 Last seen: 2026-04-12
 Area: `e2e_full`, CLI `rm`, forced-overwrite cleanup
-Suite / test: `go test -tags='e2e e2e_full' ./e2e -run '^TestE2E_EdgeCases$|^TestE2E_Sync_BidirectionalMerge$'`; later isolated `TestE2E_Sync_DeleteSafetyThreshold`
+Suite / test: `go test -tags='e2e e2e_full' ./e2e -run '^TestE2E_EdgeCases$|^TestE2E_Sync_BidirectionalMerge$'`; later isolated `TestE2E_Sync_DeleteSafetyThreshold` (historical test names; see [Historical test names](#historical-test-names))
 Classification: graph quirk
 Status: mitigated
 Recurring: yes
@@ -1713,14 +1735,14 @@ parent's children by item ID instead of failing on the first path-shaped
 false negative. `DeleteResolvedPath()` / `PermanentDeleteResolvedPath()` still
 retry delete intent against the currently resolved target while treating a
 now-missing path as success.
-Promoted docs: [graph-api-quirks.md#post-mutation-visibility-lag](graph-api-quirks.md#post-mutation-visibility-lag), [drive-transfers.md](../design/drive-transfers.md)
+Promoted docs: [graph-api-quirks.md#post-mutation-path-reads-can-lag-successful-mkdir-put-mv-and-sync-created-writes](graph-api-quirks.md#post-mutation-path-reads-can-lag-successful-mkdir-put-mv-and-sync-created-writes), [drive-transfers.md](../design/drive-transfers.md)
 
 ## LI-20260405-07: Destination path stayed unreadable after successful mutation
 
 First seen: 2026-04-05
 Last seen: 2026-05-01
 Area: `e2e_full`, CLI mutation follow-on path reads
-Suite / test: `verify e2e-full`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`; later `TestE2E_Sync_BidirectionalMerge`, `TestE2E_Resolve_Both_PreservesConflictCopy`, local `verify default` scoped-sync fixture setup, and `TestE2E_RoundTrip/rm_permanent`
+Suite / test: `verify e2e-full`, `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`; later `TestE2E_Sync_BidirectionalMerge`, `TestE2E_Resolve_Both_PreservesConflictCopy`, local `verify default` scoped-sync fixture setup, and `TestE2E_RoundTrip/rm_permanent` (historical test names; see [Historical test names](#historical-test-names))
 Classification: graph quirk
 Status: mitigated
 Recurring: yes
@@ -1928,8 +1950,9 @@ E2E fixture setup now accepts either exact-path `stat` or parent `ls`
 visibility, so setup helpers stop depending on one specific Graph read model
 being the first one to converge after a mutation.
 The fast file-operation battery no longer chains unrelated assertions through
-one long-lived `TestE2E_RoundTrip` folder. It now uses isolated
-`TestE2E_FileOps_*` cases with fresh remote folders, so one transient
+one long-lived `TestE2E_RoundTrip` folder. At the time it used isolated
+`TestE2E_FileOps_*` cases (since collapsed into `TestE2E_FileOpsSmokeCRUD`;
+see [Historical test names](#historical-test-names)) with fresh remote folders, so one transient
 destination-visibility wobble cannot cascade into later `rm`, `get`, or
 `status` assertions that are trying to prove something else.
 `rm` now keeps the same bounded parent-read check for
@@ -1958,7 +1981,7 @@ repro proved the product boundary itself could still exhaust too early,
 three capped sleeps, which yields about `95.75s` of deterministic wait before
 request overhead and roughly a two-minute wall-clock budget before surfacing
 `ErrPathNotVisible`.
-Promoted docs: [graph-api-quirks.md#post-mutation-visibility-lag](graph-api-quirks.md#post-mutation-visibility-lag), [drive-transfers.md](../design/drive-transfers.md), [cli.md](../design/cli.md)
+Promoted docs: [graph-api-quirks.md#post-mutation-path-reads-can-lag-successful-mkdir-put-mv-and-sync-created-writes](graph-api-quirks.md#post-mutation-path-reads-can-lag-successful-mkdir-put-mv-and-sync-created-writes), [drive-transfers.md](../design/drive-transfers.md), [cli.md](../design/cli.md)
 
 ## LI-20260407-04: Shared-file preflight assumed only one configured recipient could open the raw link
 
@@ -1993,7 +2016,7 @@ Promoted docs: [system.md](../design/system.md)
 First seen: 2026-04-07
 Last seen: 2026-04-07
 Area: `e2e_full`, CLI `rm`, delete-safety setup
-Suite / test: local isolated repro of `TestE2E_Sync_DeleteSafetyThreshold`
+Suite / test: local isolated repro of `TestE2E_Sync_DeleteSafetyThreshold` (historical test names; see [Historical test names](#historical-test-names))
 Classification: graph quirk
 Status: fixed
 Recurring: no
@@ -2028,7 +2051,7 @@ Promoted docs: [drive-transfers.md](../design/drive-transfers.md), [graph-api-qu
 First seen: 2026-04-07
 Last seen: 2026-04-07
 Area: `e2e_full`, conflict resolution, upload execution
-Suite / test: `verify e2e-full`, `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal`
+Suite / test: `verify e2e-full`, `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal` (historical test names; see [Historical test names](#historical-test-names))
 Classification: product bug
 Status: fixed
 Recurring: no
@@ -2045,7 +2068,7 @@ Promoted docs: [drive-transfers.md](../design/drive-transfers.md), [sync-executi
 First seen: 2026-04-07
 Last seen: 2026-04-09
 Area: `e2e_full`, CLI `put`, conflict setup
-Suite / test: `verify e2e-full`, `TestE2E_Resolve_Both_PreservesConflictCopy`
+Suite / test: `verify e2e-full`, `TestE2E_Resolve_Both_PreservesConflictCopy` (historical test names; see [Historical test names](#historical-test-names))
 Classification: graph quirk
 Status: fixed
 Recurring: yes
@@ -2084,7 +2107,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [drive-transfers.md](
 First seen: 2026-04-06
 Last seen: 2026-04-06
 Area: fast-e2e, sync scope bootstrap
-Suite / test: `e2e`, `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload`
+Suite / test: `e2e`, `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload` (historical test names; see [Historical test names](#historical-test-names))
 Classification: graph quirk
 Status: fixed
 Recurring: no
@@ -2117,7 +2140,7 @@ Promoted docs: [sync-store.md](../design/sync-store.md), [sync-engine.md](../des
 First seen: 2026-04-05
 Last seen: 2026-05-01
 Area: fast-e2e, download-only sync
-Suite / test: `e2e`, `TestE2E_Sync_DownloadOnly`; later `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile`
+Suite / test: `e2e`, `TestE2E_Sync_DownloadOnly`; later `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile` (historical test names; see [Historical test names](#historical-test-names))
 Classification: graph quirk
 Status: closed as test
 Recurring: yes

@@ -398,7 +398,7 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestWatchLoop_ChmodCreateCombinedEvent verifies that a combined Chmod|Create
-// fsnotify event (which macOS FSEvents sometimes delivers) is handled as a
+// fsnotify event (which some watcher backends deliver) is handled as a
 // Create, not filtered out as a pure Chmod (B-108). The filter at
 // handleFsEvent ignores pure Chmod only; combined events must pass through.
 func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
@@ -419,7 +419,7 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
 	}()
 
-	// Inject a combined Chmod|Create event — macOS FSEvents edge case.
+	// Inject a combined Chmod|Create event — a backend-dependent edge case.
 	mockWatcher.events <- fsnotify.Event{
 		Name: filepath.Join(dir, "combo.txt"),
 		Op:   fsnotify.Chmod | fsnotify.Create,

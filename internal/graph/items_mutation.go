@@ -262,7 +262,8 @@ func (c *Client) UpdateFileSystemInfo(
 }
 
 // PermanentDeleteItem permanently deletes a drive item (bypasses the recycle bin).
-// Only supported on Business/SharePoint accounts — Personal accounts return 405.
+// Works on Personal and Business/SharePoint drives (Personal returned 204 in a
+// 2026-10-25 live probe; earlier docs said it returned 405).
 // Uses POST /drives/{driveId}/items/{itemId}/permanentDelete.
 func (c *Client) PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error {
 	c.logger.Debug("permanently deleting item",
