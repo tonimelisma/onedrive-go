@@ -127,9 +127,9 @@ func loadBaselineWithRunner(ctx context.Context, runner sqlTxRunner, contentDriv
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	b := &Baseline{
-		ByPath:     make(map[string]*BaselineEntry),
-		ByID:       make(map[string]*BaselineEntry),
-		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
+		ByPath:       make(map[string]*BaselineEntry),
+		ByID:         make(map[string]*BaselineEntry),
+		ByDirNameKey: make(map[DirNameKey][]*BaselineEntry),
 	}
 
 	for rows.Next() {
@@ -141,8 +141,8 @@ func loadBaselineWithRunner(ctx context.Context, runner sqlTxRunner, contentDriv
 		b.ByPath[entry.Path] = entry
 		b.ByID[entry.ItemID] = entry
 
-		dlk := dirLowerKeyFromPath(entry.Path)
-		b.ByDirLower[dlk] = append(b.ByDirLower[dlk], entry)
+		dnk := dirNameKeyFromPath(entry.Path)
+		b.ByDirNameKey[dnk] = append(b.ByDirNameKey[dnk], entry)
 	}
 
 	if err := rows.Err(); err != nil {

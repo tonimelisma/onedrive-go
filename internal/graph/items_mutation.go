@@ -9,10 +9,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -135,7 +135,7 @@ func findCreatedFolder(children []Item, name string) (Item, bool) {
 			return child, true
 		}
 
-		if strings.EqualFold(child.Name, name) {
+		if namekey.Equal(child.Name, name) {
 			if hasFoldedMatch {
 				return Item{}, false
 			}

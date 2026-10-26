@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // fetchItem fetches a single drive item from the given API path and decodes it.
@@ -102,7 +103,7 @@ func (c *Client) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePa
 	}
 
 	if exactPath, ok := itemExactRootRelativePath(item); ok {
-		if strings.EqualFold(exactPath, remotePath) {
+		if namekey.EqualPath(exactPath, remotePath) {
 			return item, nil
 		}
 
@@ -114,7 +115,7 @@ func (c *Client) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePa
 		slog.String("resolved_leaf", item.Name),
 	)
 
-	if !strings.EqualFold(item.Name, pathLeaf(remotePath)) {
+	if !namekey.Equal(item.Name, pathLeaf(remotePath)) {
 		return nil, fmt.Errorf("graph: requested path %q resolved to %q: %w", remotePath, itemBestEffortRootRelativePath(item), ErrNotFound)
 	}
 

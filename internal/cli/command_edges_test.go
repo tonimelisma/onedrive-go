@@ -69,6 +69,8 @@ func TestMoveTargetChecksAndDisplayPaths(t *testing.T) {
 	assert.True(t, isWithinRemotePath("/a", "/a/"))
 	assert.False(t, isWithinRemotePath("/ab", "/a"))
 	assert.False(t, isWithinRemotePath("/b/a", "/a"))
+	assert.True(t, isWithinRemotePath("/STRASSE/x", "/stra\u00dfe"), "full case folding, like OneDrive")
+	assert.False(t, isWithinRemotePath("/stra\u00dfex/y", "/strasse"))
 
 	assert.Equal(t, "/a/b/copy.txt", joinDisplayPath("/a/b/", "copy.txt"))
 	assert.Equal(t, "/a/b/copy.txt", joinDisplayPath("a/b", "copy.txt"))

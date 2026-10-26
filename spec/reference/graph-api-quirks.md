@@ -1088,6 +1088,19 @@ An earlier version of this entry said `parentReference.path` contains URL-encode
 
 ## Case Sensitivity
 
+### Name Equivalence Is A Collation, Not Unicode Folding (L-33, M-1)
+
+OneDrive refuses a second sibling whose name it considers equal (409 `nameAlreadyExists` with `conflictBehavior=fail`). Its equivalence matches no Unicode standard form. Probed on Personal (2026-10-25/26; the systematic probe M-1 tested every BMP code point whose full case folding differs from simple lowercasing, every composition exclusion, the canonical singletons and the default-ignorable format characters, about 500 pairs):
+
+- Same name: case (simple folding, including σ/ς/Σ and Cherokee), NFC/NFD Latin spellings, Indic and Tibetan composition exclusions (U+0958 = U+0915 U+093C), the Angstrom sign = Å, ß = ss, İ = i̇, ﬀ ﬁ ﬂ ﬃ ﬄ ﬆ = their letters. Ignored entirely: every code point above U+FFFF (any two emoji are one name), ZWJ, U+180B-U+180D, U+2060-U+2064, U+FE00-U+FE0F (`x` = `x` + VS16).
+- Different names: other canonical singletons (Kelvin sign vs K, U+1F71 vs U+03AC, CJK compatibility ideographs), Hebrew presentation forms vs their decompositions (U+FB2A vs U+05E9 U+05C1), some precomposed Greek letters vs their decompositions, compatibility case variants (µ, ſ, ϐ, ϑ, ϕ, ϖ, ϰ, ϱ, ϵ, ẞ, U+1C80-U+1C87), and expanding foldings other than those listed above (ŉ, ﬅ, Armenian ligatures, Greek with iota subscript). ZWNJ, ZWSP and the soft hyphen are compared normally.
+
+`internal/namekey` encodes this as explicit tables, and its tests replay every probed pair (`internal/namekey/testdata/probe-m1-personal.tsv`). Because the sync store keys paths in NFC, siblings that are different on OneDrive but NFC-equal (U+FB2A next to U+05E9 U+05C1) are "remote twins" for this client (R-2.12.6). Business is unprobed.
+
+### Path-Routed Upload Sessions Create A Visible Placeholder (L-30, L-31)
+
+A path-routed `createUploadSession` on Personal makes a visible 0-byte item at once, with the empty-content QuickXor (`AAAA…`) and eTag `",1"`; the commit keeps the same item ID and moves the eTag to `",2"`. Another writer's create of a case variant during the session gets 409, and a session for an existing name with `conflictBehavior=fail` answers 409 `nameAlreadyExists` at creation. So any interrupted session upload, not only the create-by-body path, can leave an empty item behind: sync records a pending create before the content step and treats such a placeholder as its own (R-5.6.15). Path-routed sessions also fail with 400 for names of 300 characters or more (250 works), which is one more reason new files are created by body.
+
 ### OneDrive Is Case-Insensitive
 
 Two files differing only in case cannot coexist in the same OneDrive folder. The API's path-based queries perform case-insensitive matching but can return items from incorrect paths (observed with git repository files where `v1.0.0` and `v2.0.0` produce false matches). `GetItemByPath` mitigates this by post-validating the returned item against the requested path: exact reconstructed path when `parentReference.path` is present, otherwise leaf-name match only. The leaf-only path is intentionally treated as a best-effort fallback, not as exact identity.

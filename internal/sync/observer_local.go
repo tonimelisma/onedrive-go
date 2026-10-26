@@ -64,10 +64,10 @@ type localWatchState struct {
 	PendingTimers map[string]syncTimer // per-path timers; watchLoop-only (no mutex needed)
 	HashRequests  chan hashRequest     // timer callback → watchLoop
 
-	// dirNameCache caches lowercase→original name mappings per directory for
-	// O(1) case collision lookups. Built lazily on first check; invalidated
+	// dirNameCache caches namespace key→original name mappings per directory
+	// for O(1) collision lookups. Built lazily on first check; invalidated
 	// by Create/Delete events. Single-goroutine access (watchLoop) — no mutex.
-	DirNameCache map[string]map[string][]string // dirPath → lowName → []originalNames
+	DirNameCache map[string]map[string][]string // dirPath → namekey.Key → []originalNames
 
 	// recentLocalDeletes tracks dbRelPaths of files deleted locally in the
 	// current watch session. Used to suppress false-positive baseline

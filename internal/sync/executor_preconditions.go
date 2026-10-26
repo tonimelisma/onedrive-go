@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -461,7 +462,7 @@ func (e *executor) validateLocalMovePrecondition(action *Action) error {
 		}
 		return normalizeSyncTreePathError(err)
 	}
-	if err := e.validateLocalMoveDestinationAbsent(action); err != nil {
+	if err := e.validateLocalMoveDestinationAbsent(action, source, info); err != nil {
 		return err
 	}
 
@@ -496,9 +497,18 @@ func localMoveSourcePath(action *Action) string {
 	return action.Path
 }
 
-func (e *executor) validateLocalMoveDestinationAbsent(action *Action) error {
-	_, destErr := e.syncTree.Lstat(action.Path)
+// validateLocalMoveDestinationAbsent refuses a move onto an existing entry,
+// except the source itself: on a case-insensitive or normalization-insensitive
+// volume (macOS by default) a remote case-only or Unicode-form-only rename
+// finds its destination already "present" as the same inode, and refusing it
+// left the rename stale on every pass forever (D-031).
+func (e *executor) validateLocalMoveDestinationAbsent(action *Action, source string, sourceInfo os.FileInfo) error {
+	destInfo, destErr := e.syncTree.Lstat(action.Path)
 	if destErr == nil {
+		if isLocalSpellingOnlyMove(source, action.Path) && os.SameFile(sourceInfo, destInfo) {
+			return nil
+		}
+
 		return stalePreconditionError("local move destination %s already exists", action.Path)
 	}
 	if !errors.Is(destErr, os.ErrNotExist) {
@@ -658,4 +668,11 @@ func (e *executor) refuseLiveDatabaseTarget(path string) error {
 	}
 
 	return nil
+}
+
+// isLocalSpellingOnlyMove reports a move that changes only the spelling of a
+// name under OneDrive's equivalence (case, Unicode form): the same OneDrive
+// name, a different local one.
+func isLocalSpellingOnlyMove(oldPath, newPath string) bool {
+	return oldPath != newPath && namekey.EqualPath(oldPath, newPath)
 }

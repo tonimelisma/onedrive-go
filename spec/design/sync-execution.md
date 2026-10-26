@@ -142,6 +142,17 @@ evidence is not evidence of sameness, and a destructive action may not run on
 it. Each refusal is a superseded precondition, so the path is replanned rather
 than stranded, and a row that later hashes cleanly deletes normally.
 
+A spelling-only local move (the old and new names are one OneDrive name:
+case or Unicode form) accepts a destination that is the source's own inode,
+which is what a case- or normalization-insensitive volume reports. It renames
+directly, and only when the directory still holds the old spelling goes
+through a temporary sibling named `.onedrive-go.spelling.<name>`, which local
+observation always excludes and cleanup never deletes, so a crash between the
+two renames leaves nothing that syncs (R-2.12.4,
+`TestContentFilter_SpellingRenameArtifactIsAlwaysExcluded`,
+`TestExecutor_LocalMove_SpellingOnlyRenameOntoSameInodeIsAllowed`). Refusing it
+left a remote case-only rename stale on every pass on macOS.
+
 Local move checks that its destination is absent and then renames, which is
 the same check-then-act shape the conflict copy no longer uses. The asymmetry
 is deliberate, and worth stating so it does not read as an oversight.

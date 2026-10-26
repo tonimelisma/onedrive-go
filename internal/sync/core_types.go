@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // skippedItem records a local filesystem entry that was rejected at
@@ -80,35 +81,36 @@ type BaselineEntry struct {
 	ETag             string
 }
 
-// DirLowerKey groups baseline entries by (directory, lowercase name) for
-// O(1) case-insensitive sibling lookups. Used by detectCaseCollisions to
-// find collisions between new files and already-synced baseline entries.
-type DirLowerKey struct {
+// DirNameKey groups baseline entries by (directory, OneDrive namespace key of
+// the name) for O(1) sibling lookups under OneDrive's name equivalence. Used
+// by detectCaseCollisions to find collisions between new files and
+// already-synced baseline entries.
+type DirNameKey struct {
 	Dir     string
-	LowName string
+	NameKey string
 }
 
-// dirLowerKeyFromPath computes the case-insensitive grouping key for a path.
-func dirLowerKeyFromPath(path string) DirLowerKey {
-	return DirLowerKey{
+// dirNameKeyFromPath computes the namespace grouping key for a path.
+func dirNameKeyFromPath(path string) DirNameKey {
+	return DirNameKey{
 		Dir:     filepath.Dir(path),
-		LowName: strings.ToLower(filepath.Base(path)),
+		NameKey: namekey.Key(filepath.Base(path)),
 	}
 }
 
 // Baseline is the in-memory container for all baseline entries, providing
 // triple-key access: by path (primary), by item ID (for move detection),
-// and by (directory, lowercase name) for case collision detection.
+// and by (directory, namespace key) for case collision detection.
 // Maps remain public for test setup convenience; production code MUST use
 // the locked accessor methods (GetByPath, GetByID, GetCaseVariants, Put,
 // Delete, Len, ForEachPath) which hold mu during access.
 type Baseline struct {
 	// mu guards the three indexes below, which are always mutated together so
 	// a lookup never sees a path present in one index and absent from another.
-	mu         sync.RWMutex
-	ByPath     map[string]*BaselineEntry
-	ByID       map[string]*BaselineEntry        // keyed by item_id within this per-mount DB
-	ByDirLower map[DirLowerKey][]*BaselineEntry // case-insensitive sibling index
+	mu           sync.RWMutex
+	ByPath       map[string]*BaselineEntry
+	ByID         map[string]*BaselineEntry       // keyed by item_id within this per-mount DB
+	ByDirNameKey map[DirNameKey][]*BaselineEntry // OneDrive-equivalent sibling index (namekey)
 }
 
 // GetByPath returns the baseline entry for the given relative path.
@@ -136,7 +138,8 @@ func (b *Baseline) GetByID(itemID string) (*BaselineEntry, bool) {
 }
 
 // GetCaseVariants returns all baseline entries in the same directory whose
-// name matches case-insensitively. Used by detectCaseCollisions to find
+// name OneDrive treats as the same name (namekey: case, Unicode form,
+// ignored emoji). Used by detectCaseCollisions to find
 // collisions between new files and already-synced baseline entries.
 // The caller must filter out exact path matches (same casing = not a collision).
 // Thread-safe: holds a read lock during access.
@@ -144,7 +147,7 @@ func (b *Baseline) GetCaseVariants(dir, name string) []*BaselineEntry {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	return b.ByDirLower[DirLowerKey{Dir: dir, LowName: strings.ToLower(name)}]
+	return b.ByDirNameKey[DirNameKey{Dir: dir, NameKey: namekey.Key(name)}]
 }
 
 // Put inserts or updates a baseline entry in both maps. If the path already
@@ -166,13 +169,13 @@ func (b *Baseline) Put(entry *BaselineEntry) {
 	b.ByPath[entry.Path] = entry
 	b.ByID[entry.ItemID] = entry
 
-	// Maintain ByDirLower index: update existing entry or append new one.
-	dlk := dirLowerKeyFromPath(entry.Path)
+	// Maintain ByDirNameKey index: update existing entry or append new one.
+	dnk := dirNameKeyFromPath(entry.Path)
 	found := false
 
-	for i, e := range b.ByDirLower[dlk] {
+	for i, e := range b.ByDirNameKey[dnk] {
 		if e.Path == entry.Path {
-			b.ByDirLower[dlk][i] = entry
+			b.ByDirNameKey[dnk][i] = entry
 			found = true
 
 			break
@@ -180,7 +183,7 @@ func (b *Baseline) Put(entry *BaselineEntry) {
 	}
 
 	if !found {
-		b.ByDirLower[dlk] = append(b.ByDirLower[dlk], entry)
+		b.ByDirNameKey[dnk] = append(b.ByDirNameKey[dnk], entry)
 	}
 }
 
@@ -196,15 +199,15 @@ func (b *Baseline) Delete(path string) {
 
 	delete(b.ByPath, path)
 
-	// Maintain ByDirLower index: remove the entry for this exact path.
-	dlk := dirLowerKeyFromPath(path)
-	entries := b.ByDirLower[dlk]
+	// Maintain ByDirNameKey index: remove the entry for this exact path.
+	dnk := dirNameKeyFromPath(path)
+	entries := b.ByDirNameKey[dnk]
 
 	for i, e := range entries {
 		if e.Path == path {
-			b.ByDirLower[dlk] = append(entries[:i], entries[i+1:]...)
-			if len(b.ByDirLower[dlk]) == 0 {
-				delete(b.ByDirLower, dlk)
+			b.ByDirNameKey[dnk] = append(entries[:i], entries[i+1:]...)
+			if len(b.ByDirNameKey[dnk]) == 0 {
+				delete(b.ByDirNameKey, dnk)
 			}
 
 			break
@@ -220,7 +223,7 @@ func (b *Baseline) replaceContents(other *Baseline) {
 
 	b.ByPath = other.ByPath
 	b.ByID = other.ByID
-	b.ByDirLower = other.ByDirLower
+	b.ByDirNameKey = other.ByDirNameKey
 }
 
 // Len returns the number of entries in the baseline.
@@ -292,17 +295,17 @@ func (b *Baseline) FindOrphans(seen map[string]struct{}, driveID driveid.ID, pat
 // Exported for test files; not intended for production use.
 func NewBaselineForTest(entries []*BaselineEntry) *Baseline {
 	bl := &Baseline{
-		ByPath:     make(map[string]*BaselineEntry, len(entries)),
-		ByID:       make(map[string]*BaselineEntry, len(entries)),
-		ByDirLower: make(map[DirLowerKey][]*BaselineEntry, len(entries)),
+		ByPath:       make(map[string]*BaselineEntry, len(entries)),
+		ByID:         make(map[string]*BaselineEntry, len(entries)),
+		ByDirNameKey: make(map[DirNameKey][]*BaselineEntry, len(entries)),
 	}
 
 	for _, e := range entries {
 		bl.ByPath[e.Path] = e
 		bl.ByID[e.ItemID] = e
 
-		dlk := dirLowerKeyFromPath(e.Path)
-		bl.ByDirLower[dlk] = append(bl.ByDirLower[dlk], e)
+		dnk := dirNameKeyFromPath(e.Path)
+		bl.ByDirNameKey[dnk] = append(bl.ByDirNameKey[dnk], e)
 	}
 
 	return bl

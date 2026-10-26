@@ -291,6 +291,14 @@ Built-in local observation policy remains:
 - validate OneDrive-invalid names before they become upload work
 - report invalid names, path length, file size, case collisions, read-denied
   paths, and hash failures as observation issues for visible paths only
+- "the same name" means OneDrive's name, decided by `internal/namekey` (R-2.12.3):
+  full case folding (`straße`/`STRASSE`), canonical equivalence (an NFD and an
+  NFC twin), and supplementary-plane characters ignored (`a.txt` collides with
+  `a😀.txt`; the issue detail names both files and says why). Full scans,
+  watch-mode collision caches and the baseline sibling index all group by that
+  key (`TestDetectCaseCollisions_FullCaseFoldingCollides`,
+  `TestDetectCaseCollisions_EmojiOnlyDifferenceCollidesAndNamesBothFiles`,
+  `TestHasCaseCollisionCached_NFDOnDiskNameDoesNotCollideWithItself`)
 - a case collision needs both names on disk: a baseline name the scan no
   longer finds is the old half of a case-only rename (or a local delete), not
   a collider; the planner orders the remote delete or move of the old name

@@ -1530,6 +1530,42 @@ func TestGetItemByPath_PathValidationIsCaseInsensitive(t *testing.T) {
 	assert.Equal(t, "case-insensitive", item.ID)
 }
 
+// Validates: R-2.12.3
+func TestGetItemByPath_PathValidationUsesNamespaceKey(t *testing.T) {
+	// OneDrive resolves a path under its own name equivalence: full case
+	// folding (straße/STRASSE) and NFD spellings, which it stores as
+	// uploaded. strings.EqualFold rejected both as "resolved elsewhere".
+	srv := newSingleItemServer(t, `{
+		"id": "folded",
+		"name": "cafe\u0301.txt",
+		"createdDateTime": "2024-01-01T00:00:00Z",
+		"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+		"parentReference": {
+			"id": "folder",
+			"driveId": "d",
+			"path": "/drives/d/root:/stra\u00dfe"
+		}
+	}`)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.GetItemByPath(t.Context(), driveid.New("d"), "STRASSE/caf\u00e9.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "folded", item.ID)
+}
+
+// Validates: R-2.12.3
+func TestFindCreatedFolder_MatchesUnderNamespaceKey(t *testing.T) {
+	children := []Item{
+		{ID: "file", Name: "Stra\u00dfe", IsFolder: false},
+		{ID: "folder", Name: "stra\u00dfe", IsFolder: true},
+	}
+
+	item, ok := findCreatedFolder(children, "STRASSE")
+	require.True(t, ok)
+	assert.Equal(t, "folder", item.ID)
+}
+
 // --- ListChildrenByPath tests ---
 
 // Validates: R-1.1

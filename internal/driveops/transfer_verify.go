@@ -9,10 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/text/unicode/norm"
-
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // ErrUploadVerificationFailed reports an upload whose stored item does not
@@ -207,14 +206,6 @@ func (tm *TransferManager) settleUploadedItem(
 		localPath, ErrUploadVerificationFailed, formatSize(sent.size), formatSize(item.Size))
 }
 
-// sameRemoteName compares names the way OneDrive does closely enough to find
-// an item the upload just wrote: case-insensitively after NFC normalization
-// (live probes 2 and 3: NFC/NFD and case variants are one name). The WS2
-// namespace key, which also folds beyond ASCII, will replace this.
-func sameRemoteName(a, b string) bool {
-	return strings.EqualFold(norm.NFC.String(a), norm.NFC.String(b))
-}
-
 // lookupUploadTarget reads the item an upload wrote: by ID, or by an exact
 // name match in the parent's listing for a create.
 func (tm *TransferManager) lookupUploadTarget(ctx context.Context, target uploadTarget) (*graph.Item, error) {
@@ -238,7 +229,7 @@ func (tm *TransferManager) lookupUploadTarget(ctx context.Context, target upload
 	}
 
 	for i := range children {
-		if !children[i].IsFolder && sameRemoteName(children[i].Name, target.name) && children[i].ID != "" {
+		if !children[i].IsFolder && namekey.Equal(children[i].Name, target.name) && children[i].ID != "" {
 			return &children[i], nil
 		}
 	}

@@ -663,3 +663,39 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 	assert.Empty(t, obs.CollisionPeers, "collisionPeers should be cleared after safety scan")
 	assert.Empty(t, obs.DirNameCache, "dirNameCache should be cleared after safety scan")
 }
+
+// Validates: R-2.12.3
+func TestHasCaseCollisionCached_NFDOnDiskNameDoesNotCollideWithItself(t *testing.T) {
+	t.Parallel()
+
+	// Watch events carry the NFC name; the cache holds the on-disk NFD
+	// spelling. One file is not a collision with itself.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "café.txt"), []byte("a"), 0o600))
+
+	obs := &localObserver{baseline: emptyBaseline()}
+
+	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "café.txt", ".")
+	assert.False(t, found)
+}
+
+// Validates: R-2.12.3
+func TestHasCaseCollisionCached_FullCaseFoldingAndEmojiCollide(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "straße.txt"), []byte("a"), 0o600))
+	emojiName := "a\U0001F600.txt"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, emojiName), []byte("b"), 0o600))
+
+	obs := &localObserver{baseline: emptyBaseline()}
+	tree := mustOpenSyncTree(t, dir)
+
+	colliding, found := obs.HasCaseCollisionCached(tree, dir, "STRASSE.txt", ".")
+	assert.True(t, found)
+	assert.Equal(t, "straße.txt", colliding)
+
+	colliding, found = obs.HasCaseCollisionCached(tree, dir, "a.txt", ".")
+	assert.True(t, found)
+	assert.Equal(t, "a\U0001F600.txt", colliding)
+}

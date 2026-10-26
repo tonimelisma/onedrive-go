@@ -467,6 +467,78 @@ func TestExecutor_LocalMove(t *testing.T) {
 	assert.FileExists(t, filepath.Join(syncRoot, "new-name.txt"), "new path not created")
 }
 
+// Validates: R-2.12.4
+func TestExecutor_LocalMove_SpellingOnlyRenameOntoSameInodeIsAllowed(t *testing.T) {
+	t.Parallel()
+
+	// A case-insensitive volume reports "EDIT.txt" present when only
+	// "edit.txt" exists: both names resolve to one inode. A hard link
+	// reproduces that on a case-sensitive test filesystem. The remote
+	// case-only rename must not be refused as "destination exists".
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	writeExecTestFile(t, syncRoot, "edit.txt", "content")
+	require.NoError(t, os.Link(filepath.Join(syncRoot, "edit.txt"), filepath.Join(syncRoot, "EDIT.txt")))
+
+	action := &Action{
+		Type:    ActionLocalMove,
+		Path:    "EDIT.txt",
+		OldPath: "edit.txt",
+		View:    &pathView{Path: "EDIT.txt"},
+	}
+
+	require.NoError(t, e.validateLocalMovePrecondition(action))
+}
+
+// Validates: R-2.12.4
+func TestExecutor_LocalMove_SpellingOnlyRenameOntoDifferentFileIsStale(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	writeExecTestFile(t, syncRoot, "edit.txt", "content")
+	writeExecTestFile(t, syncRoot, "EDIT.txt", "other content")
+
+	action := &Action{
+		Type:    ActionLocalMove,
+		Path:    "EDIT.txt",
+		OldPath: "edit.txt",
+		View:    &pathView{Path: "EDIT.txt"},
+	}
+
+	require.ErrorIs(t, e.validateLocalMovePrecondition(action), errActionPreconditionChanged)
+}
+
+// Validates: R-2.12.4
+func TestExecutor_LocalMove_SpellingOnlyRenameLeavesNoTemporarySibling(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	writeExecTestFile(t, syncRoot, "stra\u00dfe.txt", "content")
+
+	action := &Action{
+		Type:    ActionLocalMove,
+		Path:    "STRASSE.txt",
+		OldPath: "stra\u00dfe.txt",
+		View:    &pathView{Path: "STRASSE.txt"},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+
+	entries, err := os.ReadDir(syncRoot)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	assert.Equal(t, []string{"STRASSE.txt"}, names)
+}
+
 func TestExecutor_LocalMove_SourceMissing(t *testing.T) {
 	t.Parallel()
 
