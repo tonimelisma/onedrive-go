@@ -138,6 +138,8 @@ type cliSeams struct {
 	notifyGetenv      func(string) string
 	statusLiveOverlay func(context.Context, *CLIContext, accountViewSnapshot) map[string]statusAccountLiveOverlay
 	cpAwaitCopy       func(context.Context, *CLIContext, *graph.Client, string) (string, error)
+	// asideRestoreTimeout replaces restoreAsideTimeout when non-zero.
+	asideRestoreTimeout time.Duration
 }
 
 type CLIContext struct {

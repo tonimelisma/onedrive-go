@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -41,6 +43,50 @@ const copyPollInterval = 1 * time.Second
 
 // copyTimeout is the maximum time to wait for an async copy to complete.
 const copyTimeout = 5 * time.Minute
+
+// Copy monitor statuses (asyncJobStatus). Only completed and the
+// in-progress ones are named; everything else ends the poll as a failure.
+const (
+	copyStatusCompleted  = "completed"
+	copyStatusInProgress = "inProgress"
+	copyStatusNotStarted = "notStarted"
+	copyStatusWaiting    = "waiting"
+	copyStatusUpdating   = "updating"
+)
+
+// copyStatusOutcome reports whether a monitor status ends the poll, and the
+// error when it ended in failure. Every status other than the documented
+// in-progress ones ("failed", "deletePending", "deleteFailed", or one
+// Microsoft adds later) is terminal: polling it until the five-minute timeout only
+// delayed the failure (RCL-081).
+func copyStatusOutcome(status string) (bool, error) {
+	switch status {
+	case copyStatusCompleted:
+		return true, nil
+	case copyStatusInProgress, copyStatusNotStarted, copyStatusWaiting, copyStatusUpdating:
+		return false, nil
+	default:
+		return true, fmt.Errorf("copy %s", status)
+	}
+}
+
+// applySourceMtime gives the copy its source's modification time. A
+// server-side copy is stamped with the copy time, so a later sync saw every
+// copied file as changed (RCL-028). The copy itself already succeeded, so a
+// failure here is a warning, not a failed command.
+func applySourceMtime(
+	ctx context.Context, cc *CLIContext, session *driveops.MountSession, source *graph.Item, copyID string,
+) {
+	if source == nil || source.IsFolder || source.ModifiedAt.IsZero() || copyID == "" {
+		return
+	}
+
+	if _, err := session.Meta.UpdateFileSystemInfo(ctx, session.DriveID, copyID, source.ModifiedAt); err != nil {
+		cc.Logger.Warn("the copy keeps the time it was made, not the source's modification time",
+			slog.String("error", err.Error()),
+		)
+	}
+}
 
 // checkSelfCopy returns an error if the copy would overwrite the source item.
 func checkSelfCopy(sourceID string, dest destInfo) error {
@@ -80,20 +126,6 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 		return selfErr
 	}
 
-	// If --force resolved to an existing file, delete it before copying.
-	// NOTE: This is a TOCTOU race — another client could recreate the file
-	// between delete and copy. Server-side copy has no atomic overwrite.
-	if dest.existingID != "" {
-		if delErr := session.DeleteResolvedPath(ctx, destPath, dest.existingID); delErr != nil {
-			return newRemoteOpError("deleting existing", destPath, delErr)
-		}
-	}
-
-	copyResult, err := session.CopyItem(ctx, sourceItem.ID, dest.parentID, dest.newName)
-	if err != nil {
-		return newRemoteOpError("copying", sourcePath, err)
-	}
-
 	wait := awaitCopy
 	if cc.seams.cpAwaitCopy != nil {
 		// Copy monitor URLs must be HTTPS on Microsoft hosts, so a fake
@@ -101,10 +133,27 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 		wait = cc.seams.cpAwaitCopy
 	}
 
-	resourceID, err := wait(ctx, cc, session.Meta, copyResult.MonitorURL)
+	// With --force, an existing destination is set aside, not deleted, until
+	// the copy has completed (D-082).
+	var resourceID string
+	if force {
+		hintAboutLeftoverAside(ctx, cc, session, destPath, dest)
+	}
+
+	err = replaceDestination(ctx, cc, session, destPath, dest, time.Now(), func() error {
+		copyResult, copyErr := session.CopyItem(ctx, sourceItem.ID, dest.parentID, dest.newName)
+		if copyErr != nil {
+			return newRemoteOpError("copying", sourcePath, copyErr)
+		}
+
+		resourceID, copyErr = wait(ctx, cc, session.Meta, copyResult.MonitorURL)
+		return copyErr
+	})
 	if err != nil {
 		return err
 	}
+
+	applySourceMtime(ctx, cc, session, sourceItem, resourceID)
 
 	displayDest := destPath
 	if dest.destIsDir {
@@ -146,12 +195,8 @@ func awaitCopy(ctx context.Context, cc *CLIContext, meta *graph.Client, monitorU
 			return "", fmt.Errorf("polling copy status: %w", pollErr)
 		}
 
-		if status.Status == "completed" {
-			return status.ResourceID, nil
-		}
-
-		if status.Status == "failed" || status.Status == "canceled" {
-			return "", fmt.Errorf("copy %s", status.Status)
+		if done, err := copyStatusOutcome(status.Status); done {
+			return status.ResourceID, err
 		}
 
 		cc.Progressf("Copying: %.0f%%", status.PercentageComplete)
