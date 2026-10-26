@@ -136,15 +136,16 @@ func (c *Client) DownloadRange(
 		return 0, ErrMalwareDetected
 	}
 
+	if item.DownloadURL == "" && !hasDownloadableContent(item) {
+		c.logMissingDownloadURL(driveID, itemID, item)
+		return 0, ErrNoDownloadURL
+	}
+
 	if !version.matches(item) {
 		return 0, fmt.Errorf("%w: the item changed since the partial download started", ErrRangeResumeRejected)
 	}
 
 	if item.DownloadURL == "" {
-		if !hasDownloadableContent(item) {
-			c.logMissingDownloadURL(driveID, itemID, item)
-			return 0, ErrNoDownloadURL
-		}
 		return c.downloadViaContentEndpoint(ctx, driveID, item, w, offset)
 	}
 

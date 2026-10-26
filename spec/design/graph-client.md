@@ -388,10 +388,12 @@ apply, but on a copy of the HTTP client whose `CheckRedirect` returns
 never carried across the 302. The `Location` is validated against the
 content-host allow-list and fetched through the unauthenticated pre-auth path.
 Live probe L-20 (Personal) showed `my.microsoftpersonalcontent.com` serves
-the file without the bearer. A resumed download (offset > 0) requires 206 with
-a `Content-Range` starting at the offset on whichever leg serves the bytes;
-anything else is `ErrRangeNotHonored`, never a full body appended at the
-offset (`TestDownload_ContentEndpointNeverSendsBearerToRedirectHost`,
+the file without the bearer. A resumed download (offset > 0) goes through the
+same `validateContentRange` check as the tempauth route: 206 with a
+`Content-Range` starting at the offset and spanning the item, on whichever
+leg serves the bytes; anything else is `ErrRangeResumeRejected`, never a full
+body appended at the offset. The version binding is checked before either
+route is used (`TestDownload_ContentEndpointNeverSendsBearerToRedirectHost`,
 `TestDownload_ContentEndpoint401ForcesRefresh`,
 `TestDownloadRange_ContentEndpointResumes`,
 `TestDownloadRange_ContentEndpointRefusesAFullBodyAtAnOffset`,

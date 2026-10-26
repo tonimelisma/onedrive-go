@@ -140,10 +140,11 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 		syncengine.ConditionUnsupportedOperation,
 		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionMalwareDetected,
-		syncengine.ConditionLocalDatabaseOpen,
-		syncengine.ConditionUploadVerification,
-		syncengine.ConditionDownloadIntegrity:
+		syncengine.ConditionLocalDatabaseOpen:
 		return describeLocalRuntimeStatusCondition(key)
+	case syncengine.ConditionUploadVerification,
+		syncengine.ConditionDownloadIntegrity:
+		return describeTransferStatusCondition(key)
 	case syncengine.ConditionUnexpectedCondition:
 		return newStatusConditionDescriptor(
 			"Sync issue",
@@ -375,18 +376,6 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 				"per name (fewer characters for accented or non-Latin names).",
 			"Rename the item on OneDrive to a shorter name.",
 		)
-	case syncengine.ConditionDownloadIntegrity:
-		return newStatusConditionDescriptor(
-			"Download doesn't match OneDrive",
-			"OneDrive served bytes that disagree with its own size or checksum, or an error page instead of the file.",
-			"Nothing is lost: the local file is kept and the download is retried. If it keeps failing, check the file on the OneDrive website.",
-		)
-	case syncengine.ConditionUploadVerification:
-		return newStatusConditionDescriptor(
-			"Upload not stored as sent",
-			"OneDrive answered the upload with a different size or checksum than the file that was sent.",
-			"Nothing is lost: the local file is kept and the upload is retried. If it keeps failing, upload the file again with put.",
-		)
 	case syncengine.ConditionAuthenticationRequired,
 		syncengine.ConditionQuotaExceeded,
 		syncengine.ConditionServiceOutage,
@@ -399,8 +388,31 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 		syncengine.ConditionPathTooLong,
 		syncengine.ConditionFileTooLarge,
 		syncengine.ConditionCaseCollision,
+		syncengine.ConditionUploadVerification,
+		syncengine.ConditionDownloadIntegrity,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
+	default:
+		return unexpectedStatusConditionDescriptor()
+	}
+}
+
+// describeTransferStatusCondition names the transfer-integrity conditions:
+// OneDrive stored or served different content than its own facts describe.
+func describeTransferStatusCondition(key syncengine.ConditionKey) statusConditionDescriptor {
+	switch key { //nolint:exhaustive // only the transfer-integrity keys route here
+	case syncengine.ConditionDownloadIntegrity:
+		return newStatusConditionDescriptor(
+			"Download doesn't match OneDrive",
+			"OneDrive served bytes that disagree with its own size or checksum, or an error page instead of the file.",
+			"Nothing is lost: the local file is kept and the download is retried. If it keeps failing, check the file on the OneDrive website.",
+		)
+	case syncengine.ConditionUploadVerification:
+		return newStatusConditionDescriptor(
+			"Upload not stored as sent",
+			"OneDrive answered the upload with a different size or checksum than the file that was sent.",
+			"Nothing is lost: the local file is kept and the upload is retried. If it keeps failing, upload the file again with put.",
+		)
 	default:
 		return unexpectedStatusConditionDescriptor()
 	}
