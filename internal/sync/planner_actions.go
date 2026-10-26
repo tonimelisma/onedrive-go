@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"sort"
 	"strings"
 )
 
@@ -79,7 +80,128 @@ func (p *planner) PlanCurrentState(
 // reconciliation row.
 func normalizeCurrentPlanActions(actions []Action, mode SyncMode) []Action {
 	actions = omitDescendantRemoteMoveActionsCoveredByGraphFolderMoves(actions)
+	actions = rebaseLocalWritesThroughLocalFolderMoves(actions)
+	actions = omitDescendantLocalMovesCoveredByLocalFolderMoves(actions)
 	return preserveParentFoldersForRunnableDescendants(actions, mode)
+}
+
+// rebaseLocalWritesThroughLocalFolderMoves composes the two sides' moves. A
+// remote-origin action that writes locally carries remote paths, but a folder
+// the user renamed locally in the same plan no longer exists at its old local
+// path: OneDrive moving photos into docs/x while docs was renamed locally to
+// renamed-docs must land at renamed-docs/x. Applied at the old path, the move
+// re-created docs/ locally, and the next pass uploaded the stray folders.
+// Remote-side writes need no rebasing: they address parents by item ID.
+func rebaseLocalWritesThroughLocalFolderMoves(actions []Action) []Action {
+	var folderMoves []graphFolderMoveBoundary
+	for i := range actions {
+		action := &actions[i]
+		if action.Type != ActionRemoteMove || resolveItemType(action.View) != ItemTypeFolder || action.OldPath == "" {
+			continue
+		}
+		folderMoves = append(folderMoves, graphFolderMoveBoundary{
+			oldPrefix: action.OldPath + "/",
+			newPrefix: action.Path + "/",
+		})
+	}
+	if len(folderMoves) == 0 {
+		return actions
+	}
+	// The deepest moved folder decides, so nested renames compose.
+	sort.Slice(folderMoves, func(i, j int) bool {
+		return len(folderMoves[i].oldPrefix) > len(folderMoves[j].oldPrefix)
+	})
+
+	rebased := make([]Action, len(actions))
+	copy(rebased, actions)
+	for i := range rebased {
+		if !writesLocally(&rebased[i]) {
+			continue
+		}
+		rebased[i].Path = rebaseThroughFolderMoves(rebased[i].Path, folderMoves)
+		rebased[i].OldPath = rebaseThroughFolderMoves(rebased[i].OldPath, folderMoves)
+	}
+
+	return rebased
+}
+
+// omitDescendantLocalMovesCoveredByLocalFolderMoves is the local mirror of
+// omitDescendantRemoteMoveActionsCoveredByGraphFolderMoves. A folder moved on
+// OneDrive arrives with its descendants' new remote paths, so each child also
+// pairs as a remote move; renaming the folder locally already carries every
+// child with an unchanged suffix. Left in, a child move could run first,
+// create the folder's destination, and make the folder move fail on a taken
+// path forever.
+func omitDescendantLocalMovesCoveredByLocalFolderMoves(actions []Action) []Action {
+	var folderMoves []graphFolderMoveBoundary
+	for i := range actions {
+		action := &actions[i]
+		if action.Type != ActionLocalMove || resolveItemType(action.View) != ItemTypeFolder || action.OldPath == "" {
+			continue
+		}
+		folderMoves = append(folderMoves, graphFolderMoveBoundary{
+			oldPrefix: action.OldPath + "/",
+			newPrefix: action.Path + "/",
+		})
+	}
+	if len(folderMoves) == 0 {
+		return actions
+	}
+
+	kept := make([]Action, 0, len(actions))
+	for i := range actions {
+		action := actions[i]
+		if action.Type == ActionLocalMove && moveCoveredByFolderMove(action.OldPath, action.Path, folderMoves) {
+			continue
+		}
+		kept = append(kept, action)
+	}
+
+	return kept
+}
+
+func moveCoveredByFolderMove(oldPath, newPath string, folderMoves []graphFolderMoveBoundary) bool {
+	if oldPath == "" {
+		return false
+	}
+	for _, move := range folderMoves {
+		if !strings.HasPrefix(oldPath, move.oldPrefix) || !strings.HasPrefix(newPath, move.newPrefix) {
+			continue
+		}
+		if strings.TrimPrefix(oldPath, move.oldPrefix) == strings.TrimPrefix(newPath, move.newPrefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// writesLocally reports remote-origin actions that apply OneDrive's state to
+// the local tree, addressed by path.
+func writesLocally(action *Action) bool {
+	switch action.Type {
+	case ActionLocalMove, ActionDownload, ActionLocalDelete, ActionConflictCopy:
+		return true
+	case ActionFolderCreate:
+		return action.CreateSide == createLocal
+	case ActionUpload, ActionRemoteMove, ActionRemoteDelete, ActionBaselineUpdate, ActionCleanup:
+		return false
+	default:
+		return false
+	}
+}
+
+func rebaseThroughFolderMoves(p string, folderMoves []graphFolderMoveBoundary) string {
+	if p == "" {
+		return p
+	}
+	for _, move := range folderMoves {
+		if strings.HasPrefix(p, move.oldPrefix) {
+			return move.newPrefix + strings.TrimPrefix(p, move.oldPrefix)
+		}
+	}
+
+	return p
 }
 
 type graphFolderMoveBoundary struct {

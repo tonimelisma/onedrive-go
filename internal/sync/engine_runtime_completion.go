@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -154,6 +155,9 @@ func (flow *engineFlow) applySupersededCompletion(
 	if err := flow.clearRetryWorkOnSuperseded(ctx, r, current); err != nil {
 		return err
 	}
+	if err := flow.forgetRemoteItemProvenGone(ctx, r); err != nil {
+		return err
+	}
 	flow.recordSupersede(r)
 
 	actionID := int64(0)
@@ -162,6 +166,19 @@ func (flow *engineFlow) applySupersededCompletion(
 	}
 	flow.applyCompletedSubtree(current, actionID, depGraphReason)
 	flow.signals.markReplanNeeded()
+
+	return nil
+}
+
+// forgetRemoteItemProvenGone applies an executor's live 404 to remote truth.
+func (flow *engineFlow) forgetRemoteItemProvenGone(ctx context.Context, r *actionCompletion) error {
+	var gone *remoteItemGoneError
+	if r == nil || !errors.As(r.Err, &gone) || gone.itemID == "" || flow.deps.store == nil {
+		return nil
+	}
+	if err := flow.deps.store.ForgetRemoteItem(ctx, gone.itemID); err != nil {
+		return fmt.Errorf("sync: forgetting remote item %s proven gone: %w", gone.itemID, err)
+	}
 
 	return nil
 }
