@@ -115,6 +115,7 @@ func conditionLabels() map[ConditionKey]string {
 		ConditionUnsupportedOperation:   "that OneDrive refuses to handle",
 		ConditionTimestampOutOfRange:    "with dates OneDrive does not accept",
 		ConditionMalwareDetected:        "that OneDrive flagged as malware",
+		ConditionLocalDatabaseOpen:      "that are databases open in an application",
 		ConditionRateLimited:            "waiting while OneDrive limits requests",
 		ConditionServiceOutage:          "waiting for OneDrive to become available",
 		ConditionAuthenticationRequired: "waiting for sign-in",

@@ -87,7 +87,7 @@ func standaloneMountConfigFromResolvedDrive(
 			IncludedDirs:    append([]string(nil), rd.IncludedDirs...),
 			IgnoredPaths:    append([]string(nil), rd.IgnoredPaths...),
 			IgnoreDotfiles:  rd.IgnoreDotfiles,
-			IgnoreJunkFiles: rd.IgnoreJunkFiles,
+			IgnoreJunkFiles: rd.JunkFilesIgnored(),
 			FollowSymlinks:  rd.FollowSymlinks,
 		},
 	}, nil

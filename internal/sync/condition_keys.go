@@ -30,6 +30,7 @@ const (
 	ConditionUnsupportedOperation   ConditionKey = "unsupported_operation"
 	ConditionTimestampOutOfRange    ConditionKey = "timestamp_out_of_range"
 	ConditionMalwareDetected        ConditionKey = "malware_detected"
+	ConditionLocalDatabaseOpen      ConditionKey = "local_database_open"
 	ConditionUnexpectedCondition    ConditionKey = "unexpected_condition"
 )
 
@@ -119,6 +120,7 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionUnsupportedOperation,
 		ConditionTimestampOutOfRange,
 		ConditionMalwareDetected,
+		ConditionLocalDatabaseOpen,
 		ConditionUnexpectedCondition,
 	}
 
@@ -165,6 +167,7 @@ func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
 		{issueType: issueUnsupportedOperation, key: ConditionUnsupportedOperation},
 		{issueType: issueTimestampOutOfRange, key: ConditionTimestampOutOfRange},
 		{issueType: issueMalwareDetected, key: ConditionMalwareDetected},
+		{issueType: issueLocalDatabaseOpen, key: ConditionLocalDatabaseOpen},
 	} {
 		if mapping.issueType == issueType {
 			return mapping.key, true

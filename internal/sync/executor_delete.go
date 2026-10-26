@@ -17,26 +17,26 @@ import (
 // isDisposable returns true for bundled junk names that are safe to remove
 // when configured junk filtering makes them non-content. Invalid OneDrive
 // names are user-actionable observation issues, not disposable trash.
-func isDisposable(name string) bool {
-	return isBundledJunkName(name)
+func isDisposable(name string, isDir bool) bool {
+	return isBundledJunkName(name) || (!isDir && isBundledJunkFileName(name))
 }
 
-func (e *executor) isDisposable(name string) bool {
-	return e.ignoreJunkFiles && isDisposable(name)
+func (e *executor) isDisposable(name string, isDir bool) bool {
+	return e.ignoreJunkFiles && isDisposable(name, isDir)
 }
 
 func (e *executor) findNonDisposable(dirPath string) string {
 	return findNonDisposable(e.syncTree, dirPath, e.isDisposable)
 }
 
-func findNonDisposable(tree *synctree.Root, dirPath string, isDisposable func(string) bool) string {
+func findNonDisposable(tree *synctree.Root, dirPath string, isDisposable func(string, bool) bool) string {
 	entries, err := tree.ReadDir(dirPath)
 	if err != nil {
 		return "."
 	}
 
 	for _, entry := range entries {
-		if !isDisposable(entry.Name()) {
+		if !isDisposable(entry.Name(), entry.IsDir()) {
 			return entry.Name()
 		}
 
@@ -138,7 +138,7 @@ func (e *executor) DeleteLocalFolder(action *Action, absPath string) actionOutco
 		var blockers []string
 		for _, entry := range entries {
 			entryPath := filepath.Join(relPath, entry.Name())
-			if !e.isDisposable(entry.Name()) {
+			if !e.isDisposable(entry.Name(), entry.IsDir()) {
 				blockers = append(blockers, entry.Name())
 			} else if entry.IsDir() {
 				if nonDisp := e.findNonDisposable(entryPath); nonDisp != "" {

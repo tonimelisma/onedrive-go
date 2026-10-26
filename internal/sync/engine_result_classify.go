@@ -233,6 +233,8 @@ func issueTypeForFilesystemResult(r *actionCompletion) (string, bool) {
 
 	err := r.Err
 	switch {
+	case errors.Is(err, errDatabaseInUse):
+		return issueLocalDatabaseOpen, true
 	case errors.Is(err, driveops.ErrFileTooLargeForSpace):
 		return issueFileTooLargeForSpace, true
 	case errors.Is(err, driveops.ErrFileExceedsOneDriveLimit):

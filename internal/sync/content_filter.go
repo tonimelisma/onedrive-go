@@ -65,7 +65,7 @@ func (f contentFilter) Visible(path string, itemType ItemType) bool {
 		return false
 	}
 
-	if f.isIgnored(normalized) {
+	if f.isIgnored(normalized, isDir) {
 		return false
 	}
 
@@ -122,7 +122,7 @@ func (f contentFilter) inIncludedScope(path string, isDir bool) bool {
 	return false
 }
 
-func (f contentFilter) isIgnored(path string) bool {
+func (f contentFilter) isIgnored(path string, isDir bool) bool {
 	if matchesExactSubtree(path, f.config.IgnoredDirs) {
 		return true
 	}
@@ -138,7 +138,7 @@ func (f contentFilter) isIgnored(path string) bool {
 		return true
 	}
 
-	if f.config.IgnoreJunkFiles && hasJunkComponent(parts) {
+	if f.config.IgnoreJunkFiles && hasJunkComponent(parts, !isDir) {
 		return true
 	}
 
@@ -217,9 +217,16 @@ func pathOrAncestorMatchesSlashPattern(path, pattern string) bool {
 	return false
 }
 
-func hasJunkComponent(parts []string) bool {
-	for _, part := range parts {
+// hasJunkComponent reports a junk name anywhere in the path. The file-only
+// rules apply only to the last component, and only when it is a file: a
+// folder named "~Projects" or "notes~", or a project folder "4913", is the
+// user's, while the same name on a file is an editor temporary.
+func hasJunkComponent(parts []string, leafIsFile bool) bool {
+	for i, part := range parts {
 		if isBundledJunkName(part) {
+			return true
+		}
+		if i == len(parts)-1 && leafIsFile && isBundledJunkFileName(part) {
 			return true
 		}
 	}
@@ -227,23 +234,65 @@ func hasJunkComponent(parts []string) bool {
 	return false
 }
 
+// isBundledJunkName reports names that ignore_junk_files excludes: OS
+// metadata, editor and IDE temporaries, browser partials, Office owner
+// files, and SQLite sidecars. Each is either rewritten constantly while its
+// owner runs, meaningless on another device, or (sidecars) harmful when
+// synced apart from its database (D-084, P-2, P-3).
 func isBundledJunkName(name string) bool {
 	lower := asciiLower(name)
 
-	if lower == ".ds_store" || lower == "thumbs.db" || lower == "__macosx" {
+	switch lower {
+	case ".ds_store", "thumbs.db", "__macosx",
+		".spotlight-v100", ".trashes", ".fseventsd", ".temporaryitems", "$recycle.bin",
+		"icon\r":
 		return true
 	}
 
-	if strings.HasSuffix(lower, ".partial") ||
-		strings.HasSuffix(lower, ".tmp") ||
-		strings.HasSuffix(lower, ".swp") ||
-		strings.HasSuffix(lower, ".crdownload") {
+	for _, suffix := range bundledJunkSuffixes() {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+
+	switch {
+	case strings.HasPrefix(name, ".~"), strings.HasPrefix(name, "._"),
+		strings.HasPrefix(name, ".#"),                                                 // emacs lock links
+		strings.HasPrefix(lower, ".trash-"),                                           // freedesktop per-user trash on removable media
+		len(name) > 2 && strings.HasPrefix(name, "#") && strings.HasSuffix(name, "#"): // emacs autosave
 		return true
 	}
 
-	if strings.HasPrefix(name, ".~") || strings.HasPrefix(name, "._") {
-		return true
+	return isSQLiteSidecarName(lower)
+}
+
+// isBundledJunkFileName adds the rules that are junk only on a file: vim's
+// 4913 write probe, "~"-prefixed temporaries and Office "~$" owner files,
+// and "file~" editor backups. On a folder these are ordinary user names.
+func isBundledJunkFileName(name string) bool {
+	return name == "4913" || strings.HasPrefix(name, "~") || strings.HasSuffix(name, "~")
+}
+
+// bundledJunkSuffixes are lowercase name endings of temporaries.
+func bundledJunkSuffixes() []string {
+	return []string{
+		".partial", ".tmp", ".crdownload",
+		".swp", ".swo", ".swx", // vim swap files
+		"___jb_tmp___", "___jb_old___", // JetBrains safe-write temporaries
+	}
+}
+
+// isSQLiteSidecarName matches <db>-wal, <db>-shm and <db>-journal where the
+// database name itself has an extension (app.db-wal, places.sqlite-shm).
+// Requiring the dot keeps ordinary names such as "travel-journal" syncing;
+// SQLite databases kept in a sync folder essentially always carry one.
+func isSQLiteSidecarName(lower string) bool {
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		base, found := strings.CutSuffix(lower, suffix)
+		if found && strings.Contains(base, ".") && !strings.HasSuffix(base, ".") {
+			return true
+		}
 	}
 
-	return strings.HasPrefix(name, "~") && !strings.HasPrefix(name, "~$")
+	return false
 }

@@ -65,8 +65,9 @@ func defaultConfigTemplate() string {
 # Each section name is the canonical drive identifier.
 #
 # Per-drive options go in a drive's section, for example:
-#   ignore_junk_files = true      # skip editor/browser temp files (*.tmp, *.swp,
-#                                 # *.partial, *.crdownload), .DS_Store, Thumbs.db
+#   ignore_junk_files = false     # sync junk too; by default editor/OS temp files
+#                                 # (*.tmp, *.swp, *~, ~$*, .DS_Store, Thumbs.db,
+#                                 # SQLite -wal/-shm/-journal) are skipped
 #   ignore_dotfiles = true        # skip names starting with "."
 #   ignored_dirs = ["node_modules"]
 #   ignored_paths = ["*.iso"]
@@ -740,7 +741,7 @@ func drivesEqual(left *Drive, right *Drive) bool {
 		slices.Equal(left.IncludedDirs, right.IncludedDirs) &&
 		slices.Equal(left.IgnoredPaths, right.IgnoredPaths) &&
 		left.IgnoreDotfiles == right.IgnoreDotfiles &&
-		left.IgnoreJunkFiles == right.IgnoreJunkFiles &&
+		boolPointersEqual(left.IgnoreJunkFiles, right.IgnoreJunkFiles) &&
 		left.FollowSymlinks == right.FollowSymlinks
 }
 

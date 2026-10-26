@@ -139,7 +139,8 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 		syncengine.ConditionLocalCrossDevice,
 		syncengine.ConditionUnsupportedOperation,
 		syncengine.ConditionTimestampOutOfRange,
-		syncengine.ConditionMalwareDetected:
+		syncengine.ConditionMalwareDetected,
+		syncengine.ConditionLocalDatabaseOpen:
 		return describeLocalRuntimeStatusCondition(key)
 	case syncengine.ConditionUnexpectedCondition:
 		return newStatusConditionDescriptor(
@@ -222,6 +223,7 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionUnsupportedOperation,
 		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionMalwareDetected,
+		syncengine.ConditionLocalDatabaseOpen,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -284,6 +286,7 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionUnsupportedOperation,
 		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionMalwareDetected,
+		syncengine.ConditionLocalDatabaseOpen,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -322,6 +325,12 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 			"Not supported by OneDrive",
 			"OneDrive refuses this operation here (for example creating a folder inside some shared folders).",
 			"Make the change on the OneDrive website, or move the item somewhere OneDrive supports it.",
+		)
+	case syncengine.ConditionLocalDatabaseOpen:
+		return newStatusConditionDescriptor(
+			"Database open locally",
+			"A newer copy is on OneDrive, but the local database is open in an application, and replacing it now would corrupt it.",
+			"Close the application using the database; the download is retried automatically.",
 		)
 	case syncengine.ConditionMalwareDetected:
 		return newStatusConditionDescriptor(

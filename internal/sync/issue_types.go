@@ -35,4 +35,5 @@ const (
 	issueUnsupportedOperation = "unsupported_operation"
 	issueTimestampOutOfRange  = "timestamp_out_of_range"
 	issueMalwareDetected      = "malware_detected"
+	issueLocalDatabaseOpen    = "local_database_open"
 )

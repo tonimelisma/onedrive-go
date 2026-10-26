@@ -263,7 +263,7 @@ follow_symlinks = true
 	assert.Equal(t, []string{"Projects"}, d.IncludedDirs)
 	assert.Equal(t, []string{"*.log", "tmp/*"}, d.IgnoredPaths)
 	assert.True(t, d.IgnoreDotfiles)
-	assert.True(t, d.IgnoreJunkFiles)
+	assert.True(t, d.JunkFilesIgnored())
 	assert.True(t, d.FollowSymlinks)
 }
 
@@ -495,7 +495,7 @@ follow_symlinks = true
 	assert.Equal(t, []string{"Projects"}, resolved.IncludedDirs)
 	assert.Equal(t, []string{"*.tmp"}, resolved.IgnoredPaths)
 	assert.True(t, resolved.IgnoreDotfiles)
-	assert.True(t, resolved.IgnoreJunkFiles)
+	assert.True(t, resolved.JunkFilesIgnored())
 	assert.True(t, resolved.FollowSymlinks)
 }
 
@@ -924,4 +924,26 @@ owner = "Alice Smith"
 		require.True(t, exists, "lenient should have drive %s", cid.String())
 		assert.Equal(t, strictDrive, lenientDrive, "drives should match for %s", cid.String())
 	}
+}
+
+// Validates: R-2.4.14
+func TestLoad_IgnoreJunkFilesDefaultsOnAndExplicitFalseSticks(t *testing.T) {
+	path := writeTestConfig(t, `
+["personal:toni@outlook.com"]
+sync_dir = "~/OneDrive"
+
+["business:alice@contoso.com"]
+sync_dir = "~/Work"
+ignore_junk_files = false
+`)
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+
+	omitted := cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")]
+	assert.Nil(t, omitted.IgnoreJunkFiles)
+	assert.True(t, omitted.JunkFilesIgnored(), "junk is skipped unless a drive opts out (P-2)")
+
+	optedOut := cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")]
+	require.NotNil(t, optedOut.IgnoreJunkFiles)
+	assert.False(t, optedOut.JunkFilesIgnored(), "an explicit false is kept, not replaced by the default")
 }
