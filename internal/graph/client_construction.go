@@ -55,7 +55,6 @@ func NewClient(
 			simpleUploadMtime:    retry.SimpleUploadMtimePatchPolicy(),
 			uploadSessionCreate:  retry.UploadSessionCreatePolicy(),
 			copyDestination:      retry.CopyDestinationPolicy(),
-			simpleUploadCreate:   retry.SimpleUploadCreatePolicy(),
 		},
 		validators: urlValidators{
 			uploadURL:   validateUploadURL,

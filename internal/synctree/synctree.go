@@ -1020,6 +1020,28 @@ func (r *Root) Chtimes(rel string, atime time.Time, mtime time.Time) error {
 	})
 }
 
+// SyncDir flushes a directory inside the sync root to stable storage, so a
+// rename into it survives a power cut.
+func (r *Root) SyncDir(rel string) error {
+	dir, err := r.Open(rel)
+	if err != nil {
+		return err
+	}
+
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+
+	if syncErr != nil {
+		return fmt.Errorf("syncing directory %s: %w", rel, syncErr)
+	}
+
+	if closeErr != nil {
+		return fmt.Errorf("closing directory %s: %w", rel, closeErr)
+	}
+
+	return nil
+}
+
 // WalkDir walks the sync tree and calls fn with absolute paths rooted under r.
 func (r *Root) WalkDir(fn fs.WalkDirFunc) error {
 	root, err := r.ops.openRoot(r.dir)

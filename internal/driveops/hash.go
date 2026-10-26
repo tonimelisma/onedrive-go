@@ -10,27 +10,24 @@ import (
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
-// HasHash reports whether the item has at least one content hash.
-// Items without hashes (e.g., some SharePoint files) cannot be hash-verified.
-// Delegates to SelectHash to avoid duplicating the hash field enumeration.
+// HasHash reports whether the item has a content hash the client can compare.
+// Items without one (some SharePoint files, SHA-only items) cannot be
+// hash-verified.
 func HasHash(item *graph.Item) bool {
 	return SelectHash(item) != ""
 }
 
-// SelectHash returns the best available content hash from the item, preferring
-// QuickXorHash (most common on all account types), falling back to SHA256Hash,
-// then SHA1Hash. Returns empty string if no hash is available — the caller must
-// handle hash-less items appropriately (typically skipping verification) (B-021).
+// SelectHash returns the item's content hash in the only algorithm the local
+// side computes: QuickXorHash. It used to fall back to SHA-256 and SHA-1,
+// which can never equal a local QuickXor digest, so such an item failed every
+// download verification and never compared equal (D-041); now it is hashless
+// and its size is the evidence. SHA digests stay on the item for diagnostics.
 func SelectHash(item *graph.Item) string {
-	if item.QuickXorHash != "" {
-		return item.QuickXorHash
+	if item == nil {
+		return ""
 	}
 
-	if item.SHA256Hash != "" {
-		return item.SHA256Hash
-	}
-
-	return item.SHA1Hash
+	return item.QuickXorHash
 }
 
 // ComputeQuickXorHash computes the QuickXorHash of a file and returns the

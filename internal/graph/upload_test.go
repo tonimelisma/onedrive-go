@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	stdsync "sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -257,7 +258,7 @@ func TestSimpleUpload_DecodeError(t *testing.T) {
 		strings.NewReader("data"), 4,
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "decoding simple upload response")
+	require.ErrorIs(t, err, ErrUploadCompletedWithoutItem)
 }
 
 // Validates: R-5.6.9
@@ -667,10 +668,6 @@ func TestChunkAlignment(t *testing.T) {
 	assert.Equal(t, 327680, ChunkAlignment)
 }
 
-func TestSimpleUploadMaxSize(t *testing.T) {
-	assert.Equal(t, 4194304, SimpleUploadMaxSize)
-}
-
 // Validates: R-5.6.4
 func TestCreateUploadSession_WithFileSystemInfo(t *testing.T) {
 	mtime := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
@@ -809,7 +806,7 @@ func TestHandleChunkResponse_FinalDecodeError(t *testing.T) {
 		0, 10, 10,
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "decoding final chunk response")
+	require.ErrorIs(t, err, ErrUploadCompletedWithoutItem)
 }
 
 func TestHandleChunkResponse_IntermediateDrainError(t *testing.T) {
@@ -871,524 +868,199 @@ func TestQueryUploadSession_InvalidExpiration(t *testing.T) {
 	assert.Equal(t, []string{"0-"}, status.NextExpectedRanges)
 }
 
-// Validates: R-5.3.1
-func TestUpload_SimpleForSmallFile(t *testing.T) {
-	// Files <= 4 MiB should use simple upload (single PUT), not create a session.
-	content := []byte("small file content")
+// sessionUploadRecorder is a Graph plus upload-URL fake that records every
+// request a small-file upload makes.
+type sessionUploadRecorder struct {
+	mu            stdsync.Mutex
+	sessionBodies []string
+	chunkBodies   []string
+	simplePuts    int
+	patches       int
+	other         []string
+}
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simple upload goes to /drives/{driveID}/items/{parentID}:/{name}:/content
-		assert.Equal(t, http.MethodPut, r.Method)
-		assert.Contains(t, r.URL.Path, "/content")
-		assert.NotContains(t, r.URL.Path, "createUploadSession")
+func newSessionUploadServer(t *testing.T, rec *sessionUploadRecorder, sessionStatus int) *httptest.Server {
+	t.Helper()
 
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if !assert.NoError(t, err) {
 			return
 		}
-		assert.Equal(t, content, body)
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		writeTestResponsef(t, w, `{
-			"id": "simple-item-id",
-			"name": "small.txt",
-			"size": %d,
-			"createdDateTime": "2024-06-01T12:00:00Z",
-			"lastModifiedDateTime": "2024-06-01T12:00:00Z",
-			"parentReference": {"id": "parent", "driveId": "d"},
-			"file": {"mimeType": "text/plain"}
-		}`, len(content))
-	}))
-	defer srv.Close()
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
 
-	client := newTestClient(t, srv.URL)
-	item, err := client.Upload(
-		t.Context(), driveid.New("d"), "parent", "small.txt",
-		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
-	)
-	require.NoError(t, err)
-	assert.Equal(t, "simple-item-id", item.ID)
-	assert.Equal(t, "small.txt", item.Name)
-}
-
-// Validates: R-5.6.5
-func TestUpload_SimplePreservesMtime(t *testing.T) {
-	// When mtime is non-zero, Upload() should call UpdateFileSystemInfo
-	// after the simple upload to preserve local mtime on the server.
-	content := []byte("small mtime file")
-	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
-
-	var patchCalled bool
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		if r.Method == http.MethodPut {
-			// Simple upload — return item.
-			w.WriteHeader(http.StatusCreated)
-			writeTestResponsef(t, w, `{
-				"id": "mtime-item",
-				"name": "mtime.txt",
-				"size": %d,
-				"createdDateTime": "2024-06-01T12:00:00Z",
-				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
-				"parentReference": {"id": "parent", "driveId": "d"},
-				"file": {"mimeType": "text/plain"}
-			}`, len(content))
-
-			return
-		}
-
-		if r.Method == http.MethodPatch {
-			// UpdateFileSystemInfo PATCH.
-			patchCalled = true
-
-			body, err := io.ReadAll(r.Body)
-			if !assert.NoError(t, err) {
-				return
-			}
-			assert.Contains(t, string(body), `"lastModifiedDateTime":"2024-07-10T09:00:00Z"`)
-			assert.Equal(t, "/drives/000000000000000d/items/mtime-item", r.URL.Path)
-
-			w.WriteHeader(http.StatusOK)
-			writeTestResponsef(t, w, `{
-				"id": "mtime-item",
-				"name": "mtime.txt",
-				"size": %d,
-				"createdDateTime": "2024-06-01T12:00:00Z",
-				"lastModifiedDateTime": "2024-07-10T09:00:00Z",
-				"parentReference": {"id": "parent", "driveId": "d"},
-				"file": {"mimeType": "text/plain"}
-			}`, len(content))
-
-			return
-		}
-
-		assert.Failf(t, "unexpected method", "got %s", r.Method)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	item, err := client.Upload(
-		t.Context(), driveid.New("d"), "parent", "mtime.txt",
-		bytes.NewReader(content), int64(len(content)), mtime, nil,
-	)
-	require.NoError(t, err)
-	assert.Equal(t, "mtime-item", item.ID)
-	assert.True(t, patchCalled, "UpdateFileSystemInfo should be called for non-zero mtime")
-	assert.Equal(t, 2024, item.ModifiedAt.Year())
-	assert.Equal(t, time.July, item.ModifiedAt.Month())
-}
-
-func TestUpload_SimpleSkipsPatchForZeroMtime(t *testing.T) {
-	// When mtime is zero, Upload() should NOT call UpdateFileSystemInfo.
-	content := []byte("no mtime file")
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPatch {
-			assert.Fail(t, "PATCH should not be called when mtime is zero")
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		writeTestResponsef(t, w, `{
-			"id": "no-mtime-item",
-			"name": "no-mtime.txt",
-			"size": %d,
-			"createdDateTime": "2024-06-01T12:00:00Z",
-			"lastModifiedDateTime": "2024-06-01T12:00:00Z",
-			"parentReference": {"id": "parent", "driveId": "d"},
-			"file": {"mimeType": "text/plain"}
-		}`, len(content))
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	item, err := client.Upload(
-		t.Context(), driveid.New("d"), "parent", "no-mtime.txt",
-		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
-	)
-	require.NoError(t, err)
-	assert.Equal(t, "no-mtime-item", item.ID)
-}
-
-func TestUpload_SimpleNotFoundFallsBackToUploadSessionPermissionError(t *testing.T) {
-	content := []byte("shared-folder-write")
-
-	var simpleCalls, sessionCalls int
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		switch {
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/content"):
-			simpleCalls++
-			w.Header().Set("request-id", "req-simple-404")
-			w.WriteHeader(http.StatusNotFound)
-			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "createUploadSession"):
+			rec.sessionBodies = append(rec.sessionBodies, string(body))
+			if sessionStatus != http.StatusOK {
+				w.WriteHeader(sessionStatus)
+				writeTestResponse(t, w, `{"error":{"code":"accessDenied"}}`)
 
-		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "createUploadSession"):
-			sessionCalls++
-			w.Header().Set("request-id", "req-session-403")
-			w.WriteHeader(http.StatusForbidden)
-			writeTestResponse(t, w, `{"error":{"code":"accessDenied"}}`)
-
-		default:
-			assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
-		}
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.Upload(
-		t.Context(), driveid.New("d"), "shared-folder", "blocked.txt",
-		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
-	)
-	require.ErrorIs(t, err, ErrForbidden)
-	assert.Equal(t, 1, simpleCalls)
-	assert.Equal(t, 1, sessionCalls)
-}
-
-func TestUpload_SimpleNotFoundFallsBackToUploadSessionSuccess(t *testing.T) {
-	content := []byte("shared-folder-write")
-
-	var simpleCalls, sessionCalls, chunkCalls int
-
-	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPut:
-			chunkCalls++
-			body, err := io.ReadAll(r.Body)
-			if !assert.NoError(t, err) {
 				return
 			}
-			assert.Equal(t, content, body)
 
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusCreated)
-			writeTestResponsef(t, w, `{
-				"id": "fallback-item",
-				"name": "shared.txt",
-				"size": %d,
-				"createdDateTime": "2024-06-01T12:00:00Z",
-				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
-				"parentReference": {"id": "shared-folder", "driveId": "d"},
-				"file": {"mimeType": "text/plain"}
-			}`, len(content))
-
-		case http.MethodDelete:
-			assert.Fail(t, "unexpected session cancel on successful fallback upload")
-			w.WriteHeader(http.StatusNoContent)
-
-		default:
-			assert.Failf(t, "unexpected upload-session request", "method=%s path=%s", r.Method, r.URL.Path)
-		}
-	}))
-	defer chunkSrv.Close()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		switch {
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/content"):
-			simpleCalls++
-			w.Header().Set("request-id", "req-simple-404")
-			w.WriteHeader(http.StatusNotFound)
-			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
-
-		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "createUploadSession"):
-			sessionCalls++
 			w.WriteHeader(http.StatusOK)
-			writeTestResponsef(t, w, `{
-				"uploadUrl": "%s/upload",
-				"expirationDateTime": "2024-12-31T23:59:59Z"
-			}`, chunkSrv.URL)
-
-		default:
-			assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
-		}
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	item, err := client.Upload(
-		t.Context(), driveid.New("d"), "shared-folder", "shared.txt",
-		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
-	)
-	require.NoError(t, err)
-	require.NotNil(t, item)
-	assert.Equal(t, "fallback-item", item.ID)
-	assert.Equal(t, 1, simpleCalls)
-	assert.Equal(t, 1, sessionCalls)
-	assert.Equal(t, 1, chunkCalls)
-}
-
-func TestUpload_SimpleNotFoundFallbackSessionSuccessSkipsSimpleFinalizePatch(t *testing.T) {
-	content := []byte("shared-folder-write")
-	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
-
-	chunkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPut:
-			body, err := io.ReadAll(r.Body)
-			if !assert.NoError(t, err) {
-				return
-			}
-			assert.Equal(t, content, body)
-
-			w.Header().Set("Content-Type", "application/json")
+			writeTestResponsef(t, w, `{"uploadUrl":"%s/upload-session","expirationDateTime":"2030-01-01T00:00:00Z"}`, srv.URL)
+		case r.Method == http.MethodPut && r.URL.Path == "/upload-session":
+			rec.chunkBodies = append(rec.chunkBodies, string(body))
 			w.WriteHeader(http.StatusCreated)
-			writeTestResponsef(t, w, `{
-				"id": "fallback-item",
-				"name": "shared.txt",
-				"size": %d,
-				"createdDateTime": "2024-06-01T12:00:00Z",
-				"lastModifiedDateTime": "2024-07-10T09:00:00Z",
-				"parentReference": {"id": "shared-folder", "driveId": "d"},
-				"file": {"mimeType": "text/plain"}
-			}`, len(content))
-		case http.MethodDelete:
-			assert.Fail(t, "unexpected session cancel on successful fallback upload")
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			assert.Failf(t, "unexpected upload-session request", "method=%s path=%s", r.Method, r.URL.Path)
-		}
-	}))
-	defer chunkSrv.Close()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		switch {
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/content"):
-			w.Header().Set("request-id", "req-simple-404")
-			w.WriteHeader(http.StatusNotFound)
-			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
-		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "createUploadSession"):
-			w.WriteHeader(http.StatusOK)
-			writeTestResponsef(t, w, `{
-				"uploadUrl": "%s/upload",
-				"expirationDateTime": "2024-12-31T23:59:59Z"
-			}`, chunkSrv.URL)
+			writeTestResponsef(t, w, `{"id":"small-item","name":"small.txt","size":%d,
+				"lastModifiedDateTime":"2024-07-10T09:00:00Z","file":{}}`, len(body))
+		case r.Method == http.MethodPut:
+			rec.simplePuts++
+			w.WriteHeader(http.StatusCreated)
+			writeTestResponse(t, w, `{"id":"small-item","name":"small.txt","size":0,"file":{}}`)
 		case r.Method == http.MethodPatch:
-			assert.Fail(t, "fallback session upload should not run simple-upload finalization patch")
-			w.WriteHeader(http.StatusInternalServerError)
+			rec.patches++
+			w.WriteHeader(http.StatusOK)
+			writeTestResponse(t, w, `{"id":"small-item","name":"small.txt","size":0,"file":{}}`)
 		default:
-			assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
+			rec.other = append(rec.other, r.Method+" "+r.URL.Path)
+			w.WriteHeader(http.StatusTeapot)
 		}
 	}))
-	defer srv.Close()
 
-	client := newTestClient(t, srv.URL)
-	item, err := client.Upload(
-		t.Context(), driveid.New("d"), "shared-folder", "shared.txt",
-		bytes.NewReader(content), int64(len(content)), mtime, nil,
-	)
-	require.NoError(t, err)
-	require.NotNil(t, item)
-	assert.Equal(t, "fallback-item", item.ID)
+	return srv
 }
 
-func TestUpload_SimpleNotFoundThenSessionNotFoundRetriesSimpleUpload(t *testing.T) {
-	content := []byte("fresh-parent")
-
-	var simpleCalls atomic.Int32
-	var sessionCalls atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		switch {
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/content"):
-			call := simpleCalls.Add(1)
-			if call == 1 {
-				w.Header().Set("request-id", "req-simple-404")
-				w.WriteHeader(http.StatusNotFound)
-				writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
-
-				return
-			}
-
-			w.WriteHeader(http.StatusCreated)
-			writeTestResponsef(t, w, `{
-				"id": "fresh-parent-item",
-				"name": "fresh.txt",
-				"size": %d,
-				"createdDateTime": "2024-06-01T12:00:00Z",
-				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
-				"parentReference": {"id": "parent", "driveId": "d"},
-				"file": {"mimeType": "text/plain"}
-			}`, len(content))
-
-		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "createUploadSession"):
-			sessionCalls.Add(1)
-			w.Header().Set("request-id", "req-session-404")
-			w.WriteHeader(http.StatusNotFound)
-			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
-
-		default:
-			assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
-		}
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	client.policies.uploadSessionCreate = testRetryPolicy()
-
-	item, err := client.Upload(
-		t.Context(), driveid.New("d"), "fresh-parent", "fresh.txt",
-		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
-	)
-	require.NoError(t, err)
-	require.NotNil(t, item)
-	assert.Equal(t, "fresh-parent-item", item.ID)
-	assert.Equal(t, int32(2), simpleCalls.Load())
-	assert.Equal(t, int32(testRetryPolicy().MaxAttempts), sessionCalls.Load())
-}
-
-// Validates: R-5.6.10
-func TestUpload_SimpleRetryUsesLongerPostSessionBudget(t *testing.T) {
-	content := []byte("longer-budget")
-
-	var simpleCalls atomic.Int32
-	var sessionCalls atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		switch {
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/content"):
-			call := simpleCalls.Add(1)
-			if call < 4 {
-				w.Header().Set("request-id", fmt.Sprintf("req-simple-404-%d", call))
-				w.WriteHeader(http.StatusNotFound)
-				writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
-
-				return
-			}
-
-			w.WriteHeader(http.StatusCreated)
-			writeTestResponsef(t, w, `{
-				"id": "longer-budget-item",
-				"name": "later.txt",
-				"size": %d,
-				"createdDateTime": "2024-06-01T12:00:00Z",
-				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
-				"parentReference": {"id": "parent", "driveId": "d"},
-				"file": {"mimeType": "text/plain"}
-			}`, len(content))
-
-		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "createUploadSession"):
-			sessionCalls.Add(1)
-			w.Header().Set("request-id", fmt.Sprintf("req-session-404-%d", sessionCalls.Load()))
-			w.WriteHeader(http.StatusNotFound)
-			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
-
-		default:
-			assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
-		}
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	client.policies.uploadSessionCreate = retry.Policy{
-		MaxAttempts: 2,
-		Base:        1 * time.Millisecond,
-		Max:         1 * time.Millisecond,
-		Multiplier:  2.0,
-		Jitter:      0.0,
-	}
-	client.policies.simpleUploadCreate = retry.Policy{
-		MaxAttempts: 3,
-		Base:        1 * time.Millisecond,
-		Max:         1 * time.Millisecond,
-		Multiplier:  2.0,
-		Jitter:      0.0,
-	}
-
-	item, err := client.Upload(
-		t.Context(), driveid.New("d"), "fresh-parent", "later.txt",
-		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
-	)
-	require.NoError(t, err)
-	require.NotNil(t, item)
-	assert.Equal(t, "longer-budget-item", item.ID)
-	assert.Equal(t, int32(2), sessionCalls.Load(), "session path should keep its shorter permission-oracle budget")
-	assert.Equal(t, int32(4), simpleCalls.Load(), "simple retry should use the longer post-session create budget")
-}
-
-func TestUpload_SimpleMtimePatchFailure(t *testing.T) {
-	// When the PATCH fails after simple upload, Upload() should return an error.
-	content := []byte("patch-fail")
+// Validates: R-5.3.1, R-5.6.4
+func TestUpload_SmallFileUsesSessionWithFileSystemInfo(t *testing.T) {
+	content := bytes.Repeat([]byte("k"), 1024)
 	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+	tests := []struct {
+		name   string
+		upload func(*Client) (*Item, error)
+	}{
+		{name: "CreateByParent", upload: func(c *Client) (*Item, error) {
+			return c.Upload(t.Context(), driveid.New("d"), "parent", "small.txt",
+				bytes.NewReader(content), int64(len(content)), mtime, nil)
+		}},
+		{name: "OverwriteByID", upload: func(c *Client) (*Item, error) {
+			return c.UploadToItem(t.Context(), driveid.New("d"), "small-item",
+				bytes.NewReader(content), int64(len(content)), mtime, nil)
+		}},
+	}
 
-		if r.Method == http.MethodPut {
-			w.WriteHeader(http.StatusCreated)
-			writeTestResponsef(t, w, `{
-				"id": "patch-fail-item",
-				"name": "fail.txt",
-				"size": %d,
-				"createdDateTime": "2024-06-01T12:00:00Z",
-				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
-				"parentReference": {"id": "parent", "driveId": "d"},
-				"file": {"mimeType": "text/plain"}
-			}`, len(content))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &sessionUploadRecorder{}
+			srv := newSessionUploadServer(t, rec, http.StatusOK)
+			defer srv.Close()
 
-			return
-		}
+			item, err := tt.upload(newTestClient(t, srv.URL))
+			require.NoError(t, err)
+			assert.Equal(t, "small-item", item.ID)
 
-		if r.Method == http.MethodPatch {
-			w.Header().Set("request-id", "req-patch-fail")
-			w.WriteHeader(http.StatusInternalServerError)
-			writeTestResponse(t, w, `{"error":"server error"}`)
+			// One session create carrying the mtime and one fragment with the
+			// whole file: content and mtime land in one version. The simple
+			// PUT plus mtime PATCH made two versions on Personal (probe 7).
+			require.Len(t, rec.sessionBodies, 1)
+			assert.Contains(t, rec.sessionBodies[0], `"fileSystemInfo":{"lastModifiedDateTime":"2024-07-10T09:00:00Z"}`)
+			assert.Equal(t, []string{string(content)}, rec.chunkBodies)
+			assert.Zero(t, rec.simplePuts, "a non-empty file must not use the simple PUT")
+			assert.Zero(t, rec.patches, "a session upload must not PATCH the mtime afterwards")
+			assert.Empty(t, rec.other)
+		})
+	}
+}
 
-			return
-		}
-	}))
+// Validates: R-5.3.1
+func TestUpload_SmallFileSessionPermissionDeniedIsNotRetried(t *testing.T) {
+	rec := &sessionUploadRecorder{}
+	srv := newSessionUploadServer(t, rec, http.StatusForbidden)
 	defer srv.Close()
 
-	client := newTestClient(t, srv.URL)
-	_, err := client.Upload(
-		t.Context(), driveid.New("d"), "parent", "fail.txt",
-		bytes.NewReader(content), int64(len(content)), mtime, nil,
-	)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "setting mtime after simple upload")
+	content := []byte("shared-folder-write")
+	_, err := newTestClient(t, srv.URL).Upload(t.Context(), driveid.New("d"), "shared-folder", "blocked.txt",
+		bytes.NewReader(content), int64(len(content)), time.Time{}, nil)
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.Len(t, rec.sessionBodies, 1)
+	assert.Zero(t, rec.simplePuts)
+}
+
+// Validates: R-5.6.5, R-5.6.7
+func TestUpload_ZeroBytePutThenPatchesMtime(t *testing.T) {
+	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
+
+	for _, withMtime := range []bool{true, false} {
+		t.Run(fmt.Sprintf("mtime=%v", withMtime), func(t *testing.T) {
+			rec := &sessionUploadRecorder{}
+			srv := newSessionUploadServer(t, rec, http.StatusOK)
+			defer srv.Close()
+
+			sent := time.Time{}
+			if withMtime {
+				sent = mtime
+			}
+
+			item, err := newTestClient(t, srv.URL).Upload(t.Context(), driveid.New("d"), "parent", "empty.txt",
+				bytes.NewReader(nil), 0, sent, nil)
+			require.NoError(t, err)
+			assert.Equal(t, "small-item", item.ID)
+			assert.Equal(t, 1, rec.simplePuts)
+			assert.Empty(t, rec.sessionBodies, "a zero-byte file cannot use a session")
+			if withMtime {
+				assert.Equal(t, 1, rec.patches)
+			} else {
+				assert.Zero(t, rec.patches)
+			}
+		})
+	}
 }
 
 // Validates: R-5.6.5
-func TestUpload_SimpleMtimePatchTransientRetries(t *testing.T) {
+func TestUpload_ZeroByteMtimePatchFailureReturnsUploadedItem(t *testing.T) {
+	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
+
+	var puts, patches atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.Method {
+		case http.MethodPut:
+			puts.Add(1)
+			w.WriteHeader(http.StatusCreated)
+			writeTestResponse(t, w, `{"id":"empty-item","name":"empty.txt","size":0,"file":{}}`)
+		case http.MethodPatch:
+			patches.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+			writeTestResponse(t, w, `{"error":{"code":"generalException"}}`)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	item, err := newTestClient(t, srv.URL).Upload(t.Context(), driveid.New("d"), "parent", "empty.txt",
+		bytes.NewReader(nil), 0, mtime, nil)
+
+	// The content landed, so the caller gets the item and a typed "mtime not
+	// applied", not a plain failure that makes it upload the file again.
+	var mtimeErr *MtimeNotAppliedError
+	require.ErrorAs(t, err, &mtimeErr)
+	require.NotNil(t, item)
+	assert.Equal(t, "empty-item", item.ID)
+	assert.Same(t, item, mtimeErr.Item)
+	assert.Equal(t, int32(1), puts.Load())
+	assert.Positive(t, patches.Load())
+}
+
+// Validates: R-5.6.5
+func TestUpload_ZeroByteMtimePatchTransientRetries(t *testing.T) {
 	tests := []struct {
 		name       string
-		fileName   string
-		itemID     string
-		content    []byte
 		statusCode int
-		requestID  string
 		errorBody  string
 	}{
-		{
-			name:       "item not found",
-			fileName:   "retry.txt",
-			itemID:     "patch-retry-item",
-			content:    []byte("patch-retry"),
-			statusCode: http.StatusNotFound,
-			requestID:  "req-patch-404",
-			errorBody:  `{"error":{"code":"itemNotFound","message":"not ready"}}`,
-		},
-		{
-			name:       "gateway timeout",
-			fileName:   "retry-gateway.txt",
-			itemID:     "patch-retry-gateway-item",
-			content:    []byte("patch-retry-gateway"),
-			statusCode: http.StatusGatewayTimeout,
-			requestID:  "req-patch-504",
-			errorBody:  `{"error":{"code":"UnknownError","message":"gateway timeout"}}`,
-		},
+		{name: "item not found", statusCode: http.StatusNotFound, errorBody: `{"error":{"code":"itemNotFound","message":"not ready"}}`},
+		{name: "gateway timeout", statusCode: http.StatusGatewayTimeout, errorBody: `{"error":{"code":"UnknownError"}}`},
+		{name: "resource modified", statusCode: http.StatusConflict, errorBody: `{"error":{"code":"resourceModified"}}`},
 	}
 
 	for _, tt := range tests {
@@ -1400,25 +1072,13 @@ func TestUpload_SimpleMtimePatchTransientRetries(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 
-				if r.Method == http.MethodPut {
+				switch r.Method {
+				case http.MethodPut:
 					w.WriteHeader(http.StatusCreated)
-					writeTestResponsef(t, w, `{
-						"id": %q,
-						"name": %q,
-						"size": %d,
-						"createdDateTime": "2024-06-01T12:00:00Z",
-						"lastModifiedDateTime": "2024-06-01T12:00:00Z",
-						"parentReference": {"id": "parent", "driveId": "d"},
-						"file": {"mimeType": "text/plain"}
-					}`, tt.itemID, tt.fileName, len(tt.content))
-
-					return
-				}
-
-				if r.Method == http.MethodPatch {
-					call := patchCalls.Add(1)
-					if call == 1 {
-						w.Header().Set("request-id", tt.requestID)
+					writeTestResponse(t, w, `{"id":"retry-item","name":"retry.txt","size":0,
+						"lastModifiedDateTime":"2024-06-01T12:00:00Z","file":{}}`)
+				case http.MethodPatch:
+					if patchCalls.Add(1) == 1 {
 						w.WriteHeader(tt.statusCode)
 						writeTestResponse(t, w, tt.errorBody)
 
@@ -1426,43 +1086,28 @@ func TestUpload_SimpleMtimePatchTransientRetries(t *testing.T) {
 					}
 
 					w.WriteHeader(http.StatusOK)
-					writeTestResponsef(t, w, `{
-						"id": %q,
-						"name": %q,
-						"size": %d,
-						"createdDateTime": "2024-06-01T12:00:00Z",
-						"lastModifiedDateTime": "2024-07-10T09:00:00Z",
-						"parentReference": {"id": "parent", "driveId": "d"},
-						"file": {"mimeType": "text/plain"}
-					}`, tt.itemID, tt.fileName, len(tt.content))
-
-					return
+					writeTestResponse(t, w, `{"id":"retry-item","name":"retry.txt","size":0,
+						"lastModifiedDateTime":"2024-07-10T09:00:00Z","file":{}}`)
+				default:
+					assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
 				}
-
-				assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
 			}))
 			defer srv.Close()
 
 			client := newTestClient(t, srv.URL)
 			client.policies.simpleUploadMtime = testRetryPolicy()
 
-			item, err := client.Upload(
-				t.Context(), driveid.New("d"), "parent", tt.fileName,
-				bytes.NewReader(tt.content), int64(len(tt.content)), mtime, nil,
-			)
+			item, err := client.Upload(t.Context(), driveid.New("d"), "parent", "retry.txt",
+				bytes.NewReader(nil), 0, mtime, nil)
 			require.NoError(t, err)
-			require.NotNil(t, item)
 			assert.Equal(t, int32(2), patchCalls.Load())
-			assert.Equal(t, tt.itemID, item.ID)
-			assert.Equal(t, 2024, item.ModifiedAt.Year())
 			assert.Equal(t, time.July, item.ModifiedAt.Month())
 		})
 	}
 }
 
 // Validates: R-5.6.5
-func TestUpload_SimpleMtimePatchTransientNotFoundRetriesAcrossLongerLag(t *testing.T) {
-	content := []byte("patch-retry-longer")
+func TestUpload_ZeroByteMtimePatchTransientNotFoundRetriesAcrossLongerLag(t *testing.T) {
 	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
 
 	var patchCalls atomic.Int32
@@ -1470,25 +1115,12 @@ func TestUpload_SimpleMtimePatchTransientNotFoundRetriesAcrossLongerLag(t *testi
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if r.Method == http.MethodPut {
+		switch r.Method {
+		case http.MethodPut:
 			w.WriteHeader(http.StatusCreated)
-			writeTestResponsef(t, w, `{
-				"id": "patch-retry-longer-item",
-				"name": "retry-longer.txt",
-				"size": %d,
-				"createdDateTime": "2024-06-01T12:00:00Z",
-				"lastModifiedDateTime": "2024-06-01T12:00:00Z",
-				"parentReference": {"id": "parent", "driveId": "d"},
-				"file": {"mimeType": "text/plain"}
-			}`, len(content))
-
-			return
-		}
-
-		if r.Method == http.MethodPatch {
-			call := patchCalls.Add(1)
-			if call < 7 {
-				w.Header().Set("request-id", fmt.Sprintf("req-patch-404-%d", call))
+			writeTestResponse(t, w, `{"id":"lag-item","name":"lag.txt","size":0,"file":{}}`)
+		case http.MethodPatch:
+			if patchCalls.Add(1) < 7 {
 				w.WriteHeader(http.StatusNotFound)
 				writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"not ready"}}`)
 
@@ -1496,20 +1128,11 @@ func TestUpload_SimpleMtimePatchTransientNotFoundRetriesAcrossLongerLag(t *testi
 			}
 
 			w.WriteHeader(http.StatusOK)
-			writeTestResponsef(t, w, `{
-				"id": "patch-retry-longer-item",
-				"name": "retry-longer.txt",
-				"size": %d,
-				"createdDateTime": "2024-06-01T12:00:00Z",
-				"lastModifiedDateTime": "2024-07-10T09:00:00Z",
-				"parentReference": {"id": "parent", "driveId": "d"},
-				"file": {"mimeType": "text/plain"}
-			}`, len(content))
-
-			return
+			writeTestResponse(t, w, `{"id":"lag-item","name":"lag.txt","size":0,
+				"lastModifiedDateTime":"2024-07-10T09:00:00Z","file":{}}`)
+		default:
+			assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
 		}
-
-		assert.Failf(t, "unexpected request", "method=%s path=%s", r.Method, r.URL.Path)
 	}))
 	defer srv.Close()
 
@@ -1518,22 +1141,17 @@ func TestUpload_SimpleMtimePatchTransientNotFoundRetriesAcrossLongerLag(t *testi
 	client.policies.simpleUploadMtime.Base = 1 * time.Millisecond
 	client.policies.simpleUploadMtime.Max = 8 * time.Millisecond
 
-	item, err := client.Upload(
-		t.Context(), driveid.New("d"), "parent", "retry-longer.txt",
-		bytes.NewReader(content), int64(len(content)), mtime, nil,
-	)
+	item, err := client.Upload(t.Context(), driveid.New("d"), "parent", "lag.txt",
+		bytes.NewReader(nil), 0, mtime, nil)
 	require.NoError(t, err)
-	require.NotNil(t, item)
 	assert.Equal(t, int32(7), patchCalls.Load())
-	assert.Equal(t, "patch-retry-longer-item", item.ID)
-	assert.Equal(t, 2024, item.ModifiedAt.Year())
-	assert.Equal(t, time.July, item.ModifiedAt.Month())
+	assert.Equal(t, "lag-item", item.ID)
 }
 
 // Validates: R-5.2.1
 func TestUpload_ChunkedForLargeFile(t *testing.T) {
 	// Files > 4 MiB should create a session and upload in chunks.
-	fileSize := int64(SimpleUploadMaxSize + 1) // 4 MiB + 1 byte
+	fileSize := int64(4*1024*1024 + 1) // 4 MiB + 1 byte
 	content := bytes.Repeat([]byte("X"), int(fileSize))
 
 	var sessionCreated bool
@@ -1606,7 +1224,7 @@ func TestUpload_ChunkedForLargeFile(t *testing.T) {
 // Validates: R-5.6.3
 func TestUpload_ChunkedCancelsSessionOnError(t *testing.T) {
 	// When a chunk upload fails, the session should be canceled.
-	fileSize := int64(SimpleUploadMaxSize + 1)
+	fileSize := int64(4*1024*1024 + 1)
 	content := bytes.Repeat([]byte("Y"), int(fileSize))
 
 	var sessionCanceled bool
@@ -1724,33 +1342,19 @@ func TestUpload_ProgressCallback(t *testing.T) {
 }
 
 func TestUpload_NilProgress(t *testing.T) {
-	// Verify that nil progress callback doesn't panic.
+	// Verify that nil progress callback doesn't panic on the session route.
 	content := []byte("nil-progress-file")
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		writeTestResponsef(t, w, `{
-			"id": "nil-prog-item",
-			"name": "nilprog.txt",
-			"size": %d,
-			"createdDateTime": "2024-06-01T12:00:00Z",
-			"lastModifiedDateTime": "2024-06-01T12:00:00Z",
-			"parentReference": {"id": "parent", "driveId": "d"},
-			"file": {"mimeType": "text/plain"}
-		}`, len(content))
-	}))
+	rec := &sessionUploadRecorder{}
+	srv := newSessionUploadServer(t, rec, http.StatusOK)
 	defer srv.Close()
 
-	client := newTestClient(t, srv.URL)
-
-	// Should not panic with nil progress.
-	item, err := client.Upload(
+	item, err := newTestClient(t, srv.URL).Upload(
 		t.Context(), driveid.New("d"), "parent", "nilprog.txt",
 		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "nil-prog-item", item.ID)
+	assert.Equal(t, "small-item", item.ID)
 }
 
 func TestUpload_ChunkedUploadChunkSize(t *testing.T) {
@@ -2046,7 +1650,7 @@ func TestUpload_ChunkedCancelsSession_CanceledContext(t *testing.T) {
 	// When the parent context is canceled during a chunked upload, the session
 	// cancel request must still fire using context.Background(). This prevents
 	// server-side quota leaks from orphaned upload sessions.
-	fileSize := int64(SimpleUploadMaxSize + 1)
+	fileSize := int64(4*1024*1024 + 1)
 	content := bytes.Repeat([]byte("Z"), int(fileSize))
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -2139,7 +1743,7 @@ func TestUpload_NoPostUploadMetadataQuery(t *testing.T) {
 	// values. The upload completion response itself contains the correct metadata.
 	var requestCount atomic.Int32
 
-	content := []byte("no-requery-content")
+	content := []byte{} // zero-byte: the one route that answers with one request
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
@@ -2151,15 +1755,15 @@ func TestUpload_NoPostUploadMetadataQuery(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		writeTestResponsef(t, w, `{
+		writeTestResponse(t, w, `{
 			"id": "no-requery-item",
 			"name": "norequery.txt",
-			"size": %d,
+			"size": 0,
 			"createdDateTime": "2024-06-01T12:00:00Z",
 			"lastModifiedDateTime": "2024-06-01T12:00:00Z",
 			"parentReference": {"id": "parent", "driveId": "d"},
 			"file": {"mimeType": "text/plain"}
-		}`, len(content))
+		}`)
 	}))
 	defer srv.Close()
 
@@ -2247,4 +1851,173 @@ func TestResumeUpload_StatusWithoutUploadURLResumesOnSessionURL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "resumed-item", item.ID)
 	assert.Equal(t, "/upload/session", putPath, "the remaining chunk goes to the original session URL")
+}
+
+// Validates: R-6.8.19, R-5.3.1
+func TestSimpleUpload_RetryAfter503ResendsFullBody(t *testing.T) {
+	content := "content that must survive a retry"
+	// Production passes a SectionReader over the open file, a type
+	// http.NewRequest cannot replay by itself (unlike *strings.Reader).
+	source := func() *io.SectionReader {
+		return io.NewSectionReader(strings.NewReader(content), 0, int64(len(content)))
+	}
+
+	tests := []struct {
+		name   string
+		upload func(*Client) (*Item, error)
+	}{
+		{name: "CreateByParent", upload: func(c *Client) (*Item, error) {
+			return c.SimpleUpload(t.Context(), driveid.New("d"), "parent", "a.txt", source(), int64(len(content)))
+		}},
+		{name: "OverwriteByID", upload: func(c *Client) (*Item, error) {
+			return c.SimpleUploadToItem(t.Context(), driveid.New("d"), "item-1", source(), int64(len(content)))
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			var bodies []string
+			var lengths []int64
+			var chunked []bool
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if !assert.NoError(t, err) {
+					return
+				}
+				bodies = append(bodies, string(body))
+				lengths = append(lengths, r.ContentLength)
+				chunked = append(chunked, len(r.TransferEncoding) > 0)
+
+				if attempts.Add(1) == 1 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+				writeTestResponsef(t, w, `{"id":"item-1","name":"a.txt","size":%d,"file":{}}`, len(content))
+			}))
+			defer srv.Close()
+
+			item, err := tt.upload(newTestClient(t, srv.URL))
+			require.NoError(t, err)
+			assert.Equal(t, "item-1", item.ID)
+
+			// The retried PUT carries every byte again: before the fix it
+			// carried none, which replaced the online file with an empty one.
+			assert.Equal(t, []string{content, content}, bodies)
+			assert.Equal(t, []int64{int64(len(content)), int64(len(content))}, lengths)
+			assert.Equal(t, []bool{false, false}, chunked)
+		})
+	}
+}
+
+// Validates: R-6.7.33
+func TestMutationResponsesWithoutItem(t *testing.T) {
+	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
+
+	bodies := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "204", status: http.StatusNoContent, body: ""},
+		{name: "empty 200", status: http.StatusOK, body: ""},
+		{name: "201 error body", status: http.StatusCreated, body: `{"error":{"code":"generalException"}}`},
+		{name: "item without id", status: http.StatusOK, body: `{"name":"a.txt"}`},
+	}
+
+	for _, tc := range bodies {
+		t.Run("PATCH fileSystemInfo "+tc.name, func(t *testing.T) {
+			var gets atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodPatch:
+					w.WriteHeader(tc.status)
+					writeTestResponse(t, w, tc.body)
+				case http.MethodGet:
+					gets.Add(1)
+					assert.Equal(t, "/drives/000000000000000d/items/item-1", r.URL.Path)
+					w.Header().Set("Content-Type", "application/json")
+					writeTestResponse(t, w, `{"id":"item-1","name":"a.txt","lastModifiedDateTime":"2024-07-10T09:00:00Z","file":{}}`)
+				default:
+					assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+
+			// A 204 was a JSON "EOF" decode failure, so a PATCH that had
+			// succeeded became retry work.
+			item, err := newTestClient(t, srv.URL).UpdateFileSystemInfo(t.Context(), driveid.New("d"), "item-1", mtime)
+			require.NoError(t, err)
+			assert.Equal(t, "item-1", item.ID)
+			assert.Equal(t, int32(1), gets.Load(), "the item is read back by ID")
+		})
+
+		t.Run("final chunk "+tc.name, func(t *testing.T) {
+			if tc.status == http.StatusNoContent {
+				t.Skip("a 204 on a fragment is an unexpected status, not a completion")
+			}
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				writeTestResponse(t, w, tc.body)
+			}))
+			defer srv.Close()
+
+			client := newTestClient(t, srv.URL)
+			_, _, err := client.UploadChunk(t.Context(), &UploadSession{UploadURL: UploadURL(srv.URL + "/s")},
+				strings.NewReader("abc"), 0, 3, 3)
+
+			// The content landed; an item without identity must never be
+			// returned as the upload result.
+			require.ErrorIs(t, err, ErrUploadCompletedWithoutItem)
+		})
+	}
+}
+
+// Validates: R-5.6.12
+func TestUploadFromSession_RecoveredOffsetPastEndIsRefused(t *testing.T) {
+	content := bytes.Repeat([]byte("C"), 1024)
+	sessionSrv := newUpload416RecoveryServer(t, "99999-")
+	defer sessionSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: UploadURL(sessionSrv.URL + "/upload")}
+
+	_, err := client.UploadFromSession(t.Context(), session, bytes.NewReader(content), int64(len(content)), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "past the end")
+}
+
+// Validates: R-5.6.12
+func TestUploadFromSession_OnlyFinalFragmentFailureIsUncertain(t *testing.T) {
+	content := bytes.Repeat([]byte("F"), int(ChunkedUploadChunkSize+1024))
+
+	for _, failAt := range []int{1, 2} {
+		t.Run(fmt.Sprintf("fail fragment %d", failAt), func(t *testing.T) {
+			var puts atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, err := io.Copy(io.Discard, r.Body)
+				assert.NoError(t, err)
+				if int(puts.Add(1)) == failAt {
+					w.WriteHeader(http.StatusBadGateway)
+					return
+				}
+				w.WriteHeader(http.StatusAccepted)
+			}))
+			defer srv.Close()
+
+			client := newNoRetryTestClient(t, srv.URL)
+			session := &UploadSession{UploadURL: UploadURL(srv.URL + "/upload")}
+
+			_, err := client.UploadFromSession(t.Context(), session, bytes.NewReader(content), int64(len(content)), nil)
+			require.Error(t, err)
+
+			// Only a failed last fragment may have committed the file.
+			assert.Equal(t, failAt == 2, IsFinalFragmentUncertain(err))
+		})
+	}
 }

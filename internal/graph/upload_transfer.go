@@ -2,7 +2,6 @@ package graph
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,9 +15,10 @@ import (
 
 // SimpleUpload uploads a file up to 4 MB using a single PUT request.
 // For larger files, use CreateUploadSession + UploadChunk.
-// The content is sent with application/octet-stream content type.
+// The content is sent with application/octet-stream content type. content is
+// an io.ReaderAt so every attempt of the request can resend all size bytes.
 func (c *Client) SimpleUpload(
-	ctx context.Context, driveID driveid.ID, parentID, name string, r io.Reader, size int64,
+	ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64,
 ) (*Item, error) {
 	c.logger.Debug("simple upload",
 		slog.String("drive_id", driveID.String()),
@@ -32,28 +32,29 @@ func (c *Client) SimpleUpload(
 	// must use a query parameter since the body is the raw file content.
 	path := fmt.Sprintf("/drives/%s/items/%s:/%s:/content?@microsoft.graph.conflictBehavior=replace", driveID, parentID, url.PathEscape(name))
 
-	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", r)
+	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", content, size)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
-	var dir driveItemResponse
-	if decErr := json.NewDecoder(resp.Body).Decode(&dir); decErr != nil {
-		return nil, fmt.Errorf("graph: decoding simple upload response: %w", decErr)
+	item, hasItem, err := c.decodeItemBody(resp.Body, "simple upload")
+	if err != nil {
+		return nil, err
 	}
 
-	item := dir.toItem(c.logger)
-	normalizeSingleItem(&item, c.logger)
+	if !hasItem {
+		return nil, ErrUploadCompletedWithoutItem
+	}
 
-	return &item, nil
+	return item, nil
 }
 
 // SimpleUploadToItem overwrites an existing file by item ID using a single PUT
 // request. Files larger than 4 MiB should use UploadToItem or
 // CreateUploadSessionForItem.
 func (c *Client) SimpleUploadToItem(
-	ctx context.Context, driveID driveid.ID, itemID string, r io.Reader, size int64,
+	ctx context.Context, driveID driveid.ID, itemID string, content io.ReaderAt, size int64,
 ) (*Item, error) {
 	c.logger.Debug("simple upload existing item",
 		slog.String("drive_id", driveID.String()),
@@ -63,21 +64,15 @@ func (c *Client) SimpleUploadToItem(
 
 	path := fmt.Sprintf("/drives/%s/items/%s/content", driveID, itemID)
 
-	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", r)
+	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", content, size)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
-	var dir driveItemResponse
-	if decErr := json.NewDecoder(resp.Body).Decode(&dir); decErr != nil {
-		return nil, fmt.Errorf("graph: decoding simple upload response: %w", decErr)
-	}
-
-	item := dir.toItem(c.logger)
-	normalizeSingleItem(&item, c.logger)
-
-	return &item, nil
+	return c.decodeMutatedItem(ctx, resp.Body, "simple upload", func(ctx context.Context) (*Item, error) {
+		return c.GetItem(ctx, driveID, itemID)
+	})
 }
 
 // UploadChunk uploads a chunk of data to an upload session.
@@ -99,10 +94,15 @@ func (c *Client) UploadChunk(
 
 	contentRange := fmt.Sprintf("bytes %d-%d/%d", offset, offset+length-1, total)
 
+	// A fragment whose body stops moving is abandoned after the stall
+	// timeout and resumed through the session (D-045).
+	ctx, watchdog := c.watchTransfer(ctx)
+	defer watchdog.stop()
+
 	resp, err := c.doPreAuth(ctx, "upload chunk", func() (*http.Request, error) {
 		// Fresh SectionReader per attempt — io.ReaderAt.ReadAt is goroutine-safe,
 		// so no race with a previous attempt's transport writeLoop goroutine.
-		reader := io.NewSectionReader(chunk, 0, length)
+		reader := watchdog.reader(io.NewSectionReader(chunk, 0, length))
 		uploadURL, urlErr := c.validatedUploadURL(session.UploadURL)
 		if urlErr != nil {
 			return nil, urlErr
@@ -121,7 +121,7 @@ func (c *Client) UploadChunk(
 		return req, nil
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, false, watchdog.explain(ctx, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
@@ -146,21 +146,23 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, bool, error) {
 		return nil, false, nil
 
 	case http.StatusOK, http.StatusCreated:
-		// Upload complete — response contains the created/updated item.
-		var dir driveItemResponse
-		if decErr := json.NewDecoder(resp.Body).Decode(&dir); decErr != nil {
-			return nil, false, fmt.Errorf("graph: decoding final chunk response: %w", decErr)
+		// Upload complete — response should contain the created/updated item.
+		// Without it the content has still landed: the caller looks it up.
+		item, hasItem, decErr := c.decodeItemBody(resp.Body, "final chunk")
+		if decErr != nil {
+			return nil, false, decErr
 		}
 
-		item := dir.toItem(c.logger)
-		normalizeSingleItem(&item, c.logger)
+		if !hasItem {
+			return nil, false, ErrUploadCompletedWithoutItem
+		}
 
 		c.logger.Debug("upload complete",
 			slog.String("item_id", item.ID),
 			slog.String("item_name", item.Name),
 		)
 
-		return &item, true, nil
+		return item, true, nil
 
 	default:
 		// Unexpected 2xx status (e.g., 204, 206). doPreAuth filters non-2xx.
@@ -181,10 +183,14 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, bool, error) {
 }
 
 // doRawUpload sends an authenticated request with a custom content type.
-// Used for SimpleUpload where application/octet-stream is needed instead of application/json.
-// Unlike do(), this does not retry — retrying a partially-consumed reader is not safe.
+// Used for SimpleUpload where application/octet-stream is needed instead of
+// application/json. The interactive clients' RetryTransport does retry this
+// PUT, so the request carries an exact Content-Length and a GetBody that
+// opens a fresh SectionReader over all size bytes. Without them the request
+// went out chunked and a retry after a 5xx sent the already-drained reader:
+// zero bytes, which replaced the online file with an empty one (D-033).
 func (c *Client) doRawUpload(
-	ctx context.Context, method, path, contentType string, body io.Reader,
+	ctx context.Context, method, path, contentType string, content io.ReaderAt, size int64,
 ) (*http.Response, error) {
 	url := c.baseURL + path
 
@@ -194,9 +200,14 @@ func (c *Client) doRawUpload(
 		slog.String("content_type", contentType),
 	)
 
-	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	req, err := http.NewRequestWithContext(ctx, method, url, replayableUploadBody(content, size))
 	if err != nil {
 		return nil, fmt.Errorf("graph: creating raw upload request: %w", err)
+	}
+
+	req.ContentLength = size
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(replayableUploadBody(content, size)), nil
 	}
 
 	tok, err := c.token.Token()
@@ -254,22 +265,37 @@ func (c *Client) doRawUpload(
 	return resp, nil
 }
 
-// Upload uploads a file to OneDrive, automatically choosing simple upload for
-// files up to 4 MiB or chunked (resumable) upload for larger files. The session
-// lifecycle (create, chunk loop, cancel-on-error) is fully encapsulated.
-// content must be an io.ReaderAt so that retries can re-read from arbitrary offsets.
-// progress may be nil if no progress reporting is needed.
+// replayableUploadBody returns a reader over exactly size bytes of content.
+// A zero-byte upload sends http.NoBody so the request is not chunked.
+func replayableUploadBody(content io.ReaderAt, size int64) io.Reader {
+	if size == 0 {
+		return http.NoBody
+	}
+
+	return io.NewSectionReader(content, 0, size)
+}
+
+// Upload creates a file under parentID. Every non-empty file goes through an
+// upload session whose create request carries fileSystemInfo, so content and
+// modified time land in one version. The simple PUT plus mtime PATCH this
+// replaced made two versions per upload on Personal as well as Business (live
+// probe 7) for the same request count, and a PATCH failure failed an upload
+// whose content had already landed (D-034). Only a zero-byte file, which a
+// session cannot carry, is still PUT and then PATCHed. The session lifecycle
+// (create, chunk loop, cancel-on-error) is fully encapsulated. content must be
+// an io.ReaderAt so that retries can re-read from arbitrary offsets. progress
+// may be nil.
+//
+// A zero-byte upload whose content landed but whose mtime PATCH failed
+// returns the uploaded item together with a *MtimeNotAppliedError.
 func (c *Client) Upload(
 	ctx context.Context, driveID driveid.ID, parentID, name string,
 	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
 ) (*Item, error) {
-	if size <= SimpleUploadMaxSize {
-		item, needsFinalize, err := c.simpleUploadCreateByParent(ctx, driveID, parentID, name, content, size, mtime, progress)
+	if size == 0 {
+		item, err := c.SimpleUpload(ctx, driveID, parentID, name, content, size)
 		if err != nil {
 			return nil, err
-		}
-		if !needsFinalize {
-			return item, nil
 		}
 
 		return c.finalizeSimpleUpload(ctx, driveID, item, mtime)
@@ -278,16 +304,16 @@ func (c *Client) Upload(
 	return c.chunkedUploadEncapsulated(ctx, driveID, parentID, name, content, size, mtime, progress)
 }
 
-// UploadToItem overwrites an existing file by item ID, automatically choosing
-// simple upload or resumable upload by size.
+// UploadToItem overwrites an existing file by item ID. Like Upload, every
+// non-empty overwrite goes through a session carrying fileSystemInfo and only
+// a zero-byte overwrite is PUT and then PATCHed, with the same
+// *MtimeNotAppliedError contract.
 func (c *Client) UploadToItem(
 	ctx context.Context, driveID driveid.ID, itemID string,
 	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
 ) (*Item, error) {
-	if size <= SimpleUploadMaxSize {
-		r := io.NewSectionReader(content, 0, size)
-
-		item, err := c.SimpleUploadToItem(ctx, driveID, itemID, r, size)
+	if size == 0 {
+		item, err := c.SimpleUploadToItem(ctx, driveID, itemID, content, size)
 		if err != nil {
 			return nil, err
 		}
@@ -296,6 +322,24 @@ func (c *Client) UploadToItem(
 	}
 
 	return c.chunkedUploadToExistingItem(ctx, driveID, itemID, content, size, mtime, progress)
+}
+
+// MtimeNotAppliedError reports a zero-byte upload whose content landed but
+// whose follow-on fileSystemInfo PATCH failed. Item is the uploaded item: the
+// content is on OneDrive, so callers record it as uploaded rather than
+// uploading it again (each retry made one more version), and treat only the
+// modified time as not applied.
+type MtimeNotAppliedError struct {
+	Item *Item
+	Err  error
+}
+
+func (e *MtimeNotAppliedError) Error() string {
+	return "graph: setting mtime after simple upload: " + e.Err.Error()
+}
+
+func (e *MtimeNotAppliedError) Unwrap() error {
+	return e.Err
 }
 
 func (c *Client) finalizeSimpleUpload(
@@ -307,85 +351,22 @@ func (c *Client) finalizeSimpleUpload(
 	// Simple upload (PUT /content) cannot include fileSystemInfo in the
 	// request body. Post-upload PATCH preserves local mtime on the server,
 	// preventing mtime mismatch on the next sync pass.
-	if !mtime.IsZero() {
-		patched, patchErr := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
-			name:   QuirkSimpleUploadMtimeTransient404,
-			policy: c.policies.simpleUploadMtime,
-			match:  isTransientSimpleUploadMtimeError,
-		}, func() (*Item, error) {
-			return c.UpdateFileSystemInfo(ctx, driveID, item.ID, mtime)
-		})
-		if patchErr != nil {
-			return nil, fmt.Errorf("graph: setting mtime after simple upload: %w", patchErr)
-		}
-
-		return patched, nil
+	if mtime.IsZero() {
+		return item, nil
 	}
 
-	return item, nil
-}
-
-func (c *Client) simpleUploadCreateByParent(
-	ctx context.Context,
-	driveID driveid.ID,
-	parentID string,
-	name string,
-	content io.ReaderAt,
-	size int64,
-	mtime time.Time,
-	progress ProgressFunc,
-) (*Item, bool, error) {
-	item, err := c.SimpleUpload(ctx, driveID, parentID, name, io.NewSectionReader(content, 0, size), size)
-	if err == nil {
-		return item, true, nil
-	}
-
-	if size == 0 || !errors.Is(err, ErrNotFound) {
-		return nil, false, err
-	}
-
-	// Graph misreports some shared-folder create denials as 404 on the simple
-	// PUT /content route while the equivalent upload-session route returns the
-	// correct permission status. Retry that narrower case through
-	// createUploadSession so higher layers see the real outcome.
-	c.logger.Debug("simple upload returned not found, retrying via upload session",
-		slog.String("drive_id", driveID.String()),
-		slog.String("parent_id", parentID),
-		slog.String("name", name),
-		slog.Int64("size", size),
-	)
-
-	item, sessionErr := c.chunkedUploadEncapsulated(ctx, driveID, parentID, name, content, size, mtime, progress)
-	if sessionErr == nil || !errors.Is(sessionErr, ErrNotFound) {
-		return item, false, sessionErr
-	}
-
-	// Live full-suite coverage also shows the inverse ordering quirk: after the
-	// parent path is already readable, both the first simple upload and the
-	// follow-on createUploadSession can still report itemNotFound for a while.
-	// Once the session route has ruled out the shared-folder 403 case, replay
-	// the original simple upload under a slightly longer bounded create
-	// convergence budget tuned for the final create path, not the permission
-	// oracle.
-	c.logger.Debug("upload session create still returned not found, retrying simple upload",
-		slog.String("drive_id", driveID.String()),
-		slog.String("parent_id", parentID),
-		slog.String("name", name),
-		slog.Int64("size", size),
-	)
-
-	item, retryErr := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
-		name:   QuirkSimpleUploadCreateTransient404,
-		policy: c.policies.simpleUploadCreate,
-		match:  isTransientSimpleUploadCreateError,
+	patched, patchErr := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
+		name:   QuirkSimpleUploadMtimeTransient404,
+		policy: c.policies.simpleUploadMtime,
+		match:  isTransientSimpleUploadMtimeError,
 	}, func() (*Item, error) {
-		return c.SimpleUpload(ctx, driveID, parentID, name, io.NewSectionReader(content, 0, size), size)
+		return c.UpdateFileSystemInfo(ctx, driveID, item.ID, mtime)
 	})
-	if retryErr != nil {
-		return nil, false, retryErr
+	if patchErr != nil {
+		return item, &MtimeNotAppliedError{Item: item, Err: patchErr}
 	}
 
-	return item, true, nil
+	return patched, nil
 }
 
 // chunkedUploadEncapsulated creates an upload session, uploads all chunks,
@@ -482,7 +463,7 @@ func (c *Client) uploadChunksFrom(
 		item, complete, err := c.UploadChunk(ctx, session, chunk, offset, chunkSize, totalSize)
 		if err != nil {
 			if errors.Is(err, ErrRangeNotSatisfiable) {
-				recoveredOffset, recoverErr := c.recoverUploadChunkOffset(ctx, session, offset)
+				recoveredOffset, recoverErr := c.recoverUploadChunkOffset(ctx, session, offset, totalSize)
 				if recoverErr != nil {
 					return nil, recoverErr
 				}
@@ -493,6 +474,15 @@ func (c *Client) uploadChunksFrom(
 				}
 
 				continue
+			}
+
+			if offset+chunkSize == totalSize {
+				// The last fragment may have committed even though its answer
+				// was lost or slow (a large file's commit can outlast the
+				// response-header timeout). The caller looks the item up
+				// before uploading again (D-036).
+				return nil, fmt.Errorf("graph: uploading final chunk at offset %d: %w", offset,
+					&FinalFragmentError{Err: err})
 			}
 
 			return nil, fmt.Errorf("graph: uploading chunk at offset %d: %w", offset, err)
@@ -517,7 +507,7 @@ func (c *Client) uploadChunksFrom(
 }
 
 func (c *Client) recoverUploadChunkOffset(
-	ctx context.Context, session *UploadSession, currentOffset int64,
+	ctx context.Context, session *UploadSession, currentOffset, totalSize int64,
 ) (int64, error) {
 	c.logger.Debug("upload chunk range mismatch, querying session status",
 		slog.Int64("offset", currentOffset),
@@ -531,6 +521,13 @@ func (c *Client) recoverUploadChunkOffset(
 	recoveredOffset, err := parseNextExpectedRangeStart(status.NextExpectedRanges)
 	if err != nil {
 		return 0, fmt.Errorf("graph: parsing nextExpectedRanges after 416 at offset %d: %w", currentOffset, err)
+	}
+
+	// A recovered offset past the end ended the loop with "no final item"
+	// and a confusing error (RCL-044).
+	if recoveredOffset > totalSize {
+		return 0, fmt.Errorf(
+			"graph: upload session nextExpectedRanges %d is past the end of the %d-byte file", recoveredOffset, totalSize)
 	}
 
 	if recoveredOffset <= currentOffset {
@@ -550,6 +547,24 @@ func (c *Client) recoverUploadChunkOffset(
 	)
 
 	return recoveredOffset, nil
+}
+
+// FinalFragmentError marks a failure of an upload's last fragment. The
+// server may have committed the file anyway, so the upload is uncertain
+// rather than failed.
+type FinalFragmentError struct {
+	Err error
+}
+
+func (e *FinalFragmentError) Error() string { return "final fragment: " + e.Err.Error() }
+
+func (e *FinalFragmentError) Unwrap() error { return e.Err }
+
+// IsFinalFragmentUncertain reports whether err is a final-fragment failure
+// whose upload may nevertheless have committed.
+func IsFinalFragmentUncertain(err error) bool {
+	var finalErr *FinalFragmentError
+	return errors.As(err, &finalErr)
 }
 
 // UploadFromSession uploads all chunks for an existing upload session.

@@ -622,6 +622,7 @@ func remoteStateFromSnapshotRow(row *remoteStateRow) *remoteState {
 		Name:      path.Base(row.Path),
 		ItemType:  row.ItemType,
 		Size:      row.Size,
+		SizeKnown: row.SizeKnown,
 		Hash:      row.Hash,
 		Mtime:     row.Mtime,
 		ETag:      row.ETag,

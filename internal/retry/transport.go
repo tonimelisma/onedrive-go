@@ -2,6 +2,7 @@ package retry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -57,6 +58,29 @@ type RetryTransport struct {
 }
 
 type logTargetKey struct{}
+
+type backoffObserverKey struct{}
+
+// WithBackoffObserver returns a context whose requests call observe before
+// every retry or throttle wait. A transfer's stall watchdog uses it to stop
+// counting while the transport deliberately waits: a Retry-After longer than
+// the stall timeout is not a stalled transfer.
+func WithBackoffObserver(ctx context.Context, observe func()) context.Context {
+	if observe == nil {
+		return ctx
+	}
+
+	return context.WithValue(ctx, backoffObserverKey{}, observe)
+}
+
+// sleepObserved notifies the request's backoff observer, then sleeps.
+func sleepObserved(req *http.Request, sleepFn SleepFunc, d time.Duration) error {
+	if observe, ok := req.Context().Value(backoffObserverKey{}).(func()); ok {
+		observe()
+	}
+
+	return sleepFn(req.Context(), d)
+}
 
 func WithLogTarget(ctx context.Context, target string) context.Context {
 	if target == "" {
@@ -144,9 +168,11 @@ func (rt *RetryTransport) notices() *Notices {
 
 func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attempt int, sleepFn SleepFunc) (bool, error) {
 	if req.Context().Err() != nil {
-		return false, fmt.Errorf("request canceled: %w", req.Context().Err())
+		// context.Cause keeps why the request was canceled (a stalled
+		// transfer is not a shutdown).
+		return false, fmt.Errorf("request canceled: %w", context.Cause(req.Context()))
 	}
-	if !retryableRequestMethod(req.Method) {
+	if !retryableRequestMethod(req.Method) || !requestBodyReplayable(req) {
 		return false, err
 	}
 
@@ -192,7 +218,7 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 		)
 	}
 
-	if sleepErr := sleepFn(req.Context(), backoff); sleepErr != nil {
+	if sleepErr := sleepObserved(req, sleepFn, backoff); sleepErr != nil {
 		return false, backoffInterrupted(req, sleepErr)
 	}
 
@@ -215,7 +241,7 @@ func (rt *RetryTransport) handleResponse(
 	if !isRetryable(resp.StatusCode) {
 		return true, resp, nil
 	}
-	if !retryableRequestMethod(req.Method) {
+	if !retryableRequestMethod(req.Method) || !requestBodyReplayable(req) {
 		return true, resp, nil
 	}
 
@@ -261,7 +287,7 @@ func (rt *RetryTransport) handleResponse(
 
 	rt.announceLongWait(resp.StatusCode, backoff)
 
-	if sleepErr := sleepFn(req.Context(), backoff); sleepErr != nil {
+	if sleepErr := sleepObserved(req, sleepFn, backoff); sleepErr != nil {
 		return true, nil, backoffInterrupted(req, sleepErr)
 	}
 
@@ -273,8 +299,8 @@ func (rt *RetryTransport) handleResponse(
 // canceled during backoff: context canceled" instead of stacking the sleep
 // helper's wrapper on top.
 func backoffInterrupted(req *http.Request, sleepErr error) error {
-	if ctxErr := req.Context().Err(); ctxErr != nil {
-		return fmt.Errorf("request canceled during backoff: %w", ctxErr)
+	if req.Context().Err() != nil {
+		return fmt.Errorf("request canceled during backoff: %w", context.Cause(req.Context()))
 	}
 
 	return fmt.Errorf("request canceled during backoff: %w", sleepErr)
@@ -338,7 +364,7 @@ func (rt *RetryTransport) waitForThrottle(req *http.Request, sleepFn SleepFunc) 
 
 	rt.announceLongWait(http.StatusTooManyRequests, delay)
 
-	if err := sleepFn(req.Context(), delay); err != nil {
+	if err := sleepObserved(req, sleepFn, delay); err != nil {
 		return backoffInterrupted(req, err)
 	}
 
@@ -400,19 +426,37 @@ func parseRetryAfterHeader(resp *http.Response) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
+// errBodyNotReplayable reports a retry that would have resent a request
+// whose body was already consumed. requestBodyReplayable keeps such requests
+// from reaching rewindBody, so this is a fail-safe, not a flow.
+var errBodyNotReplayable = errors.New("retry: request body cannot be replayed")
+
+// requestBodyReplayable reports whether a retry can resend the request's full
+// body. A body without GetBody that is not seekable was consumed by the first
+// attempt: resending it sends zero bytes, and a PUT of zero bytes to
+// /content replaced the user's file online with an empty one and reported
+// success (D-033). Such requests are returned to the caller after one
+// attempt instead of being retried.
+func requestBodyReplayable(req *http.Request) bool {
+	if req.Body == nil || req.Body == http.NoBody || req.GetBody != nil {
+		return true
+	}
+
+	_, seekable := req.Body.(io.Seeker)
+
+	return seekable
+}
+
 // rewindBody resets the request body for retry. Prefers GetBody (set by
-// http.NewRequest for bytes.Reader/Buffer/strings.Reader) which creates a
-// fresh reader. Falls back to seeking the body directly if it implements
-// io.Seeker (e.g., when the caller wraps an io.SectionReader and sets
-// GetBody manually). Non-seekable bodies (nil, http.NoBody) are skipped.
+// http.NewRequest for bytes.Reader/Buffer/strings.Reader, and by callers for
+// io.SectionReader bodies) which creates a fresh reader. Falls back to seeking
+// a body that implements io.Seeker. Any other non-empty body cannot be
+// replayed, and rewinding it is an error rather than a silent no-op.
 func rewindBody(req *http.Request) error {
 	if req.Body == nil || req.Body == http.NoBody {
 		return nil
 	}
 
-	// Prefer GetBody — creates a fresh ReadCloser, works for all types
-	// that http.NewRequest recognizes (bytes.Reader, bytes.Buffer,
-	// strings.Reader) and any caller-provided GetBody.
 	if req.GetBody != nil {
 		body, err := req.GetBody()
 		if err != nil {
@@ -424,12 +468,13 @@ func rewindBody(req *http.Request) error {
 		return nil
 	}
 
-	// Fall back to seeking the existing body (for custom ReadClosers that
-	// implement io.Seeker but don't set GetBody).
-	if seeker, ok := req.Body.(io.Seeker); ok {
-		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
-			return fmt.Errorf("retry: rewinding request body: %w", err)
-		}
+	seeker, ok := req.Body.(io.Seeker)
+	if !ok {
+		return errBodyNotReplayable
+	}
+
+	if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("retry: rewinding request body: %w", err)
 	}
 
 	return nil

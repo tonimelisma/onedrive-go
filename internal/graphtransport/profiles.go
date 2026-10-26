@@ -18,6 +18,11 @@ const (
 	keepAliveIdle                 = 30 * time.Second
 	keepAliveInterval             = 10 * time.Second
 	keepAliveCount                = 3
+	// HTTP/2 health checks: TCP keepalive cannot see a stream whose peer
+	// stopped answering on a live connection, so an idle HTTP/2 connection
+	// is pinged, and one whose ping goes unanswered is closed (D-045).
+	http2SendPingTimeout = 30 * time.Second
+	http2PingTimeout     = 15 * time.Second
 )
 
 // ClientSet is the paired Graph HTTP client set used to construct graph.Client
@@ -122,6 +127,10 @@ func buildTransport(responseHeaderTimeout time.Duration) *http.Transport {
 			Count:    keepAliveCount,
 		},
 	}).DialContext
+	transport.HTTP2 = &http.HTTP2Config{
+		SendPingTimeout: http2SendPingTimeout,
+		PingTimeout:     http2PingTimeout,
+	}
 
 	return transport
 }

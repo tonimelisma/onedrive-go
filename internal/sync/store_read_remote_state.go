@@ -79,6 +79,7 @@ func queryRemoteStateRowsWithRunner(
 
 		if size.Valid {
 			row.Size = size.Int64
+			row.SizeKnown = true
 		}
 		if mtime.Valid {
 			row.Mtime = mtime.Int64
@@ -169,6 +170,7 @@ func scanRemoteStateRowWithQuerier(
 
 	if size.Valid {
 		row.Size = size.Int64
+		row.SizeKnown = true
 	}
 	if mtime.Valid {
 		row.Mtime = mtime.Int64

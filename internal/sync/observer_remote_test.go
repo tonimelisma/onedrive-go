@@ -707,7 +707,8 @@ func TestFullDelta_HashSelection(t *testing.T) {
 
 	require.Len(t, events, 3)
 	assert.Equal(t, "qxh", events[0].Hash, "QuickXorHash preferred")
-	assert.Equal(t, "sha-only", events[1].Hash, "SHA256 fallback")
+	// SHA digests cannot be compared with local QuickXor: hashless.
+	assert.Empty(t, events[1].Hash, "no SHA256 fallback")
 	assert.Empty(t, events[2].Hash)
 }
 
@@ -866,7 +867,7 @@ func TestSelectHash(t *testing.T) {
 		want string
 	}{
 		{"QuickXor present", graph.Item{QuickXorHash: "qxh", SHA256Hash: "sha"}, "qxh"},
-		{"SHA256 only", graph.Item{SHA256Hash: "sha"}, "sha"},
+		{"SHA256 only", graph.Item{SHA256Hash: "sha"}, ""},
 		{"neither", graph.Item{}, ""},
 	}
 
@@ -1865,14 +1866,14 @@ func TestSelectHash_FallbackChain(t *testing.T) {
 			want: "qxor",
 		},
 		{
-			name: "SHA256Hash fallback",
+			name: "SHA256Hash is not comparable",
 			item: graph.Item{SHA256Hash: "sha256", SHA1Hash: "sha1"},
-			want: "sha256",
+			want: "",
 		},
 		{
-			name: "SHA1Hash fallback",
+			name: "SHA1Hash is not comparable",
 			item: graph.Item{SHA1Hash: "sha1"},
-			want: "sha1",
+			want: "",
 		},
 		{
 			name: "no hash returns empty",
@@ -2145,7 +2146,7 @@ func TestObserverStats_HashesComputed(t *testing.T) {
 	require.NoError(t, err, "FullDelta")
 
 	stats := obs.Stats()
-	assert.Equal(t, int64(2), stats.HashesComputed, "items with hashes")
+	assert.Equal(t, int64(1), stats.HashesComputed, "items with a comparable (QuickXor) hash")
 }
 
 // ---------------------------------------------------------------------------

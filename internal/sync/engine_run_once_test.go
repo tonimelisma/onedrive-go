@@ -30,7 +30,7 @@ func newRunOnceBidirectionalMock(driveID driveid.ID) *engineMockClient {
 				{ID: "root", IsRoot: true, DriveID: driveID},
 				{
 					ID: "remote-file-1", Name: "remote.txt", ParentID: "root",
-					DriveID: driveID, Size: 42, QuickXorHash: "remotehash1",
+					DriveID: driveID, Size: int64(len("remote-content")), QuickXorHash: testQuickXor("remote-content"),
 				},
 			}, "token-after"), nil
 		},
@@ -877,7 +877,7 @@ func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
 				{ID: "root", IsRoot: true, DriveID: driveID},
 				{
 					ID: "f1", Name: "good.txt", ParentID: "root",
-					DriveID: driveID, Size: 10, QuickXorHash: "hash1",
+					DriveID: driveID, Size: int64(len("good")), QuickXorHash: testQuickXor("good"),
 				},
 				{
 					ID: "f2", Name: "bad.txt", ParentID: "root",

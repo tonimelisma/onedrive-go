@@ -2,7 +2,7 @@
 
 GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/notices.go, internal/retry/policy.go, internal/retry/throttle_gate.go, internal/retry/transport.go
 
-Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.7 [designed], R-6.8.8 [verified], R-6.8.10 [designed], R-6.8.11 [designed], R-6.6.8 [verified], R-2.10.3 [designed], R-2.10.5 [designed], R-2.10.6 [designed], R-2.10.7 [designed], R-2.10.8 [designed], R-2.10.14 [designed], R-6.8.16 [designed], R-6.10.6 [verified]
+Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.7 [designed], R-6.8.8 [verified], R-6.8.19 [verified], R-6.8.10 [designed], R-6.8.11 [designed], R-6.6.8 [verified], R-2.10.3 [designed], R-2.10.5 [designed], R-2.10.6 [designed], R-2.10.7 [designed], R-2.10.8 [designed], R-2.10.14 [designed], R-6.8.16 [designed], R-6.10.6 [verified]
 
 ## Overview
 
@@ -50,8 +50,7 @@ rely on transport-level retry loops for action execution.
 | `DownloadMetadataPolicy()` | Exact item-by-ID download metadata quirk retry | 6 | 250ms | 4s |
 | `CopyDestinationPolicy()` | Exact server-side copy fresh-destination quirk retry | 6 | 250ms | 4s |
 | `SimpleUploadMtimePatchPolicy()` | Exact post-simple-upload `UpdateFileSystemInfo` retry | 8 | 250ms | 16s |
-| `UploadSessionCreatePolicy()` | Exact create-upload-session fresh-parent quirk retry | 6 | 250ms | 4s |
-| `SimpleUploadCreatePolicy()` | Final simple-upload create retry after session-path disambiguation | 7 | 250ms | 8s |
+| `UploadSessionCreatePolicy()` | Exact create-upload-session fresh-parent quirk retry | 9 | 250ms | 8s |
 | `PathVisibilityPolicy()` | Post-success path-read/delete convergence at the CLI/session boundary | 10 | 250ms | 32s |
 | `WatchLocalPolicy()` | Local observer error recovery | 0 (infinite) | 1s | 30s |
 | `ReconcilePolicy()` | Engine-owned durable retry timing for `retry_work` | 0 (infinite) | 1s | 1h |
@@ -76,7 +75,12 @@ Features:
 - exponential backoff with jitter per `Policy`
 - `Retry-After` parsing for 429/503 responses
 - optional caller-injected shared 429 deadline coordination via `ThrottleGate`
-- seekable request-body rewinding between attempts
+- request-body rewinding between attempts through `GetBody` or `Seek`; a
+  request whose body can be neither is returned after one attempt rather
+  than resent with the bytes the first attempt consumed (R-6.8.19,
+  `TestRetryTransport_NonReplayableBodyIsNotRetried`). The simple-upload PUT
+  once went out that way, and a retry after a 503 replaced the file online
+  with zero bytes
 - `X-Retry-Count` header annotation on retried requests
 - request-scoped log target override via `WithLogTarget(ctx, target)`
 - retryable status codes: 408, 429, 500, 502, 503, 504, 509

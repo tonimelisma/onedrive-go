@@ -266,6 +266,35 @@ func Chtimes(path string, atime, mtime time.Time) error {
 	return nil
 }
 
+// SyncDir flushes a directory's entries to stable storage, so a rename into
+// it survives a power cut. Without it the rename can be lost while state
+// recorded elsewhere says the file is in place.
+func SyncDir(path string) error {
+	abs, err := absolutePath(path)
+	if err != nil {
+		return err
+	}
+
+	//nolint:gosec // localpath is the explicit arbitrary-path boundary after clean+Abs validation.
+	dir, err := os.Open(abs)
+	if err != nil {
+		return fmt.Errorf("opening directory %s for sync: %w", path, err)
+	}
+
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+
+	if syncErr != nil {
+		return fmt.Errorf("syncing directory %s: %w", path, syncErr)
+	}
+
+	if closeErr != nil {
+		return fmt.Errorf("closing directory %s: %w", path, closeErr)
+	}
+
+	return nil
+}
+
 func CreateTemp(dir, pattern string) (*os.File, error) {
 	abs, err := absolutePath(dir)
 	if err != nil {

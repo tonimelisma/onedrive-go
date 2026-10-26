@@ -46,7 +46,7 @@ type workerMockUploader struct {
 
 func (m *workerMockUploader) Upload(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
 	if m.uploadFn != nil {
-		return m.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress)
+		return faithfulUploadResult(content, size)(m.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress))
 	}
 
 	return nil, fmt.Errorf("Upload not mocked")

@@ -286,7 +286,6 @@ func scopeKeyForResult(answer serverAnswer, targetDriveID driveid.ID) ScopeKey {
 		serverAnswerForbidden,
 		serverAnswerUnsupported,
 		serverAnswerPathTooLong,
-		serverAnswerTimestampOutOfRange,
 		serverAnswerRequestTimeout,
 		serverAnswerTransientConflict,
 		serverAnswerTransientNotFound,

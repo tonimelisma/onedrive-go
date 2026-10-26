@@ -233,11 +233,14 @@ func (c *Client) UpdateFileSystemInfo(
 
 	path := fmt.Sprintf("/drives/%s/items/%s", driveID, itemID)
 
-	reqBody := updateFileSystemInfoRequest{
-		FileSystemInfo: &fileSystemInfo{
-			LastModifiedDateTime: mtime.UTC().Format(time.RFC3339),
-		},
+	if mtime.IsZero() {
+		return nil, errors.New("graph: UpdateFileSystemInfo needs a modification time")
 	}
+
+	sent := c.sendableMtime(mtime)
+	info := c.newFileSystemInfo(sent)
+
+	reqBody := updateFileSystemInfoRequest{FileSystemInfo: info}
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -246,19 +249,98 @@ func (c *Client) UpdateFileSystemInfo(
 
 	resp, err := c.do(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return nil, relabelTimestampRangeError(err, mtime)
+		return nil, relabelTimestampRangeError(err, sent)
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
-	var dir driveItemResponse
-	if err := json.NewDecoder(resp.Body).Decode(&dir); err != nil {
-		return nil, fmt.Errorf("graph: decoding fileSystemInfo response: %w", err)
+	return c.decodeMutatedItem(ctx, resp.Body, "fileSystemInfo", func(ctx context.Context) (*Item, error) {
+		return c.GetItem(ctx, driveID, itemID)
+	})
+}
+
+// ErrUploadCompletedWithoutItem reports a 2xx upload completion whose body
+// did not carry the item: empty (204, or a proxy-trimmed 200), not JSON, a
+// 201 carrying {"error":...}, or an item without an id. The content may well
+// have landed, so callers look the item up instead of failing the upload or
+// recording an item without identity: such an item was written to the
+// baseline with an empty primary key, and a second one rewrote the first
+// row's path (D-035).
+var ErrUploadCompletedWithoutItem = errors.New("graph: upload completed without returning the item")
+
+// errMutationReturnedNoItem is the readback-less form of the same condition.
+var errMutationReturnedNoItem = errors.New("graph: mutation succeeded without returning the item")
+
+// decodeItemBody reads a success-path driveItem body. hasItem is false when
+// the body is empty, is not a driveItem, or carries no id; err is only a read
+// failure or an oversized body.
+func (c *Client) decodeItemBody(body io.Reader, desc string) (item *Item, hasItem bool, err error) {
+	// Reads one byte past the cap so an oversized body is reported rather
+	// than silently truncated.
+	raw, err := io.ReadAll(io.LimitReader(body, maxItemResponseSize+1))
+	if err != nil {
+		return nil, false, fmt.Errorf("graph: reading %s response: %w", desc, err)
 	}
 
-	item := dir.toItem(c.logger)
-	normalizeSingleItem(&item, c.logger)
+	if len(raw) > maxItemResponseSize {
+		return nil, false, fmt.Errorf("graph: %s response exceeds %d bytes", desc, maxItemResponseSize)
+	}
 
-	return &item, nil
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, false, nil
+	}
+
+	// A body that is not a driveItem is not a failure of the mutation: the
+	// caller resolves the item another way, so the decode error is recorded
+	// here and goes no further.
+	var dir driveItemResponse
+	jsonErr := json.Unmarshal(raw, &dir)
+	if jsonErr != nil || dir.ID == "" {
+		reason := "no id"
+		if jsonErr != nil {
+			reason = jsonErr.Error()
+		}
+
+		c.logger.Debug("success response carried no item",
+			slog.String("operation", desc),
+			slog.Int("body_bytes", len(raw)),
+			slog.String("reason", reason),
+		)
+
+		return nil, false, nil
+	}
+
+	decoded := dir.toItem(c.logger)
+	normalizeSingleItem(&decoded, c.logger)
+
+	return &decoded, true, nil
+}
+
+// decodeMutatedItem decodes the item a 2xx mutation returned, reading it back
+// by ID when the body did not carry it. A 204 or an empty 200 used to fail as
+// a JSON "EOF" decode error, which classified the mutation that had just
+// succeeded as retry work (D-047).
+func (c *Client) decodeMutatedItem(
+	ctx context.Context, body io.Reader, desc string, readback func(context.Context) (*Item, error),
+) (*Item, error) {
+	item, hasItem, err := c.decodeItemBody(body, desc)
+	if err != nil {
+		return nil, err
+	}
+
+	if hasItem {
+		return item, nil
+	}
+
+	if readback == nil {
+		return nil, fmt.Errorf("%s: %w", desc, errMutationReturnedNoItem)
+	}
+
+	item, err = readback(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("graph: reading back item after %s: %w", desc, err)
+	}
+
+	return item, nil
 }
 
 // PermanentDeleteItem permanently deletes a drive item (bypasses the recycle bin).

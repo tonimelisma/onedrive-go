@@ -938,6 +938,35 @@ func TestCommitMutation_Upload(t *testing.T) {
 	assert.Equal(t, "i2", entry.ItemID)
 }
 
+// Validates: R-2.5.7
+func TestCommitMutation_EmptyItemIDFails(t *testing.T) {
+	t.Parallel()
+
+	for _, action := range []actionType{ActionUpload, ActionDownload, ActionFolderCreate, ActionRemoteMove} {
+		t.Run(action.String(), func(t *testing.T) {
+			t.Parallel()
+
+			mgr := newTestStore(t)
+			outcome := BaselineMutation{
+				Action:   action,
+				Success:  true,
+				Path:     "no-id.txt",
+				OldPath:  "old.txt",
+				DriveID:  driveid.New("d"),
+				ItemType: ItemTypeFile,
+			}
+
+			// An empty item_id is the baseline's primary key: the next such
+			// outcome would rewrite this row's path.
+			err := mgr.CommitMutation(t.Context(), &outcome)
+			require.ErrorIs(t, err, errMutationWithoutItemID)
+
+			_, found := mgr.cachedBaseline().GetByPath("no-id.txt")
+			assert.False(t, found)
+		})
+	}
+}
+
 // Validates: R-6.7.17
 func TestCommitMutation_PersistsSideAwareFileMetadata(t *testing.T) {
 	t.Parallel()

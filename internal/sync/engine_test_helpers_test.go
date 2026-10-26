@@ -235,30 +235,24 @@ func (m *engineMockClient) Download(ctx context.Context, driveID driveid.ID, ite
 
 func (m *engineMockClient) Upload(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
 	if m.uploadFn != nil {
-		return m.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress)
+		return faithfulUploadResult(content, size)(m.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress))
 	}
 
-	return &graph.Item{
-		ID:           "uploaded-item-id",
-		Name:         name,
-		Size:         size,
-		QuickXorHash: "abc123hash",
-	}, nil
+	return faithfulUploadResult(content, size)(&graph.Item{
+		ID:   "uploaded-item-id",
+		Name: name,
+	}, nil)
 }
 
 func (m *engineMockClient) UploadToItem(ctx context.Context, driveID driveid.ID, itemID string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
 	if m.uploadToItemFn != nil {
-		return m.uploadToItemFn(ctx, driveID, itemID, content, size, mtime, progress)
+		return faithfulUploadResult(content, size)(m.uploadToItemFn(ctx, driveID, itemID, content, size, mtime, progress))
 	}
 	if m.uploadFn != nil {
-		return m.uploadFn(ctx, driveID, "", "", content, size, mtime, progress)
+		return faithfulUploadResult(content, size)(m.uploadFn(ctx, driveID, "", "", content, size, mtime, progress))
 	}
 
-	return &graph.Item{
-		ID:           itemID,
-		Size:         size,
-		QuickXorHash: "abc123hash",
-	}, nil
+	return faithfulUploadResult(content, size)(&graph.Item{ID: itemID}, nil)
 }
 
 const (
@@ -1038,6 +1032,15 @@ func writeLocalFile(t *testing.T, syncRoot, relPath, content string) {
 	absPath := filepath.Join(syncRoot, relPath)
 	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o750), "MkdirAll")
 	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o600), "WriteFile")
+}
+
+// testQuickXor is the QuickXorHash a faithful server reports for content,
+// for fixtures built outside a test's scope.
+func testQuickXor(content string) string {
+	h := quickxorhash.New()
+	h.Write([]byte(content))
+
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
 func hashContentQuickXor(t *testing.T, content string) string {

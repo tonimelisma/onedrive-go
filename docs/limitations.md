@@ -59,9 +59,8 @@ gaps that are being fixed are listed separately in
   `report.txt`. Two local names that differ only in case are both held back
   until one is renamed.
 - **Timestamps:** OneDrive stores modification times to the whole second, and
-  only from 1900-01-01 onward. A file dated earlier cannot keep its date on
-  OneDrive; onedrive-go does not yet adjust such dates, so uploading such a
-  file can fail with a misleading "not found" error.
+  only from 1900-01-01 onward. A file dated earlier is uploaded with
+  1900-01-01 as its OneDrive date (with a warning); its local date is kept.
 - **Emoji in names:** when OneDrive compares names it ignores emoji and other
   characters outside Unicode's Basic Multilingual Plane, so `notes😀.txt` and
   `notes.txt` are the same name there. Keep such files in different folders
@@ -81,11 +80,15 @@ gaps that are being fixed are listed separately in
 - **Watch mode notices remote changes every 5 minutes by default**
   (`poll_interval`). `websocket = true` makes it react sooner.
 - **Extra versions.** Uploading a file and then setting its modification time
-  creates two versions on OneDrive. onedrive-go sets the time as part of the
-  upload for large files, but files of 4 MiB or less are still uploaded and
-  then updated, so each upload of a small file adds two versions. Re-uploading
-  a changed file on work or school drives can also add an extra version
+  would create two versions on OneDrive, so onedrive-go sets the time as part
+  of the upload. Empty files are the exception: they are uploaded and then
+  updated, which adds a second version. Re-uploading a changed file on work or
+  school drives can also add an extra version
   ([onedrive-api-docs#877](https://github.com/OneDrive/onedrive-api-docs/issues/877)).
+- **An empty file can keep OneDrive's time.** If OneDrive keeps refusing the
+  modification time of an uploaded empty file, the upload still counts (with
+  a warning) and the file shows the time OneDrive received it. onedrive-go
+  does not retry setting the time later.
 - **Files changed by SharePoint.** SharePoint can add metadata to uploaded
   Office and media files, which changes their size and hash. onedrive-go
   records each side's hash separately, so this does not cause repeated

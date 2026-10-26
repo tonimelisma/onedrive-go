@@ -1,6 +1,6 @@
 # Graph Client
 
-GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/response_body.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
+GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/response_body.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/transfer_watchdog.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
 
 Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.6.2 [verified], R-1.7 [verified], R-1.8 [verified], R-1.2.5 [verified], R-1.3.5 [verified], R-3.6.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [verified], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [verified], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.8.17 [verified]
 
@@ -238,31 +238,61 @@ instead of a raw "any write/owner role means writable" heuristic:
 
 ## Transfers
 
-- `download.go`: streaming download with content URL
-- `upload.go`: simple PUT (≤4 MiB) and resumable upload sessions (>4 MiB, 320 KiB-aligned chunks)
+- `download.go`: streaming download with content URL. A ranged read is bound to a `DownloadVersion` and accepted only as a 206 whose Content-Range starts at the offset and spans the item (`validateContentRange`, `ErrRangeResumeRejected`); for a hashless item, an HTML or JSON answer of another type whose length is not the item's is `ErrUnexpectedDownloadBody` (`checkDownloadBodyType`); hashed items are never gated by type, since the hash decides
+- `upload.go`: upload sessions for every non-empty file (320 KiB-aligned chunks) and the zero-byte simple PUT
 - `shares.go`: raw share-link resolution into underlying shared item identity
 - `upload_transfer.go` / `upload_session.go`: existing-item overwrite helpers
   for shared-file `put` by `(driveID, itemID)`
 
-For create-by-parent uploads, the graph boundary treats a non-zero-size simple
-upload `404 itemNotFound` as potentially ambiguous and retries that narrower
-case through `createUploadSession` once. Live E2E coverage showed read-only
-shared folders returning a bogus 404 on `PUT ...:/content` while
-`POST ...:/createUploadSession` returned the correct 403. The fallback keeps
-simple upload as the fast path while preserving permission accuracy.
+Simple-upload PUTs take an `io.ReaderAt` plus the size and go out with an
+exact `Content-Length` and a `GetBody` that opens a fresh `SectionReader`, so
+the interactive clients' `RetryTransport` resends every byte on a retry
+(R-6.8.19, `TestSimpleUpload_RetryAfter503ResendsFullBody`). The PUT used to
+go out chunked over a one-shot reader, and a retry after a 503 sent zero bytes
+and replaced the user's file online with an empty one.
 
-Live E2E coverage also captured the inverse creation-order quirk: a freshly
-created parent folder can already be readable via path lookup while the first
-`POST ...:/createUploadSession` against that parent still returns `404
-itemNotFound`. The graph boundary applies a short exact retry to that
-create-upload-session path, and when the same small-file create already saw an
-initial simple-upload `404`, it can replay the original simple upload under
-a second deterministic create budget before surfacing final not-found. That
-keeps read-only shared-folder permission handling intact while leaving the
-session route as the short permission oracle and giving the final create path a
-slightly longer convergence window on own-drive parents.
+Transfer bodies run under a stall watchdog (`transfer_watchdog.go`): the
+download routes and every upload fragment get a request context that is
+canceled with `ErrTransferStalled` when the body moves no bytes for
+`defaultTransferStallTimeout` (2 minutes; tests shorten
+`transferStallTimeout`). It is armed only around body I/O, while a request
+body is being written and while a response body is read; the wait for
+headers belongs to the transports' `ResponseHeaderTimeout`, and
+`RetryTransport` disarms it before every retry or throttle wait
+(`retry.WithBackoffObserver`), so a long `Retry-After` is not a stall
+(`TestUploadChunk_RetryAfterLongerThanStallTimeoutIsNotAStall`). A stall is
+reported as `ErrTransferStalled` alone, never with `context.Canceled` in the
+chain (`doPreAuth` and `RetryTransport` return `context.Cause`), because sync
+reads a cancellation as a shutdown and would drop the action; sync
+classifies a stall as retryable before its context check
+(`TestClassifyResult_StalledTransferIsRetryableNotShutdown`). A resumed
+download that stalls keeps its partial and is retried; only a refused
+resume (`ErrRangeResumeRejected`, 416) starts over
+(`TestTransferManager_StalledResumeKeepsPartial`). The transports bound only dialing, TLS and the wait
+for headers, so a connection that delivered headers and went quiet held a
+worker forever (D-045, `TestDownload_StalledBodyIsAbandoned`,
+`TestUploadChunk_StalledBodyIsAbandoned`). The transfer and metadata
+transports also ping idle HTTP/2 connections (`graphtransport`,
+`TestTransferTransport_PingsIdleHTTP2Connections`).
 
-For simple uploads with non-zero mtime, the follow-on `PATCH /items/{itemID}`
+Mutation answers go through `decodeMutatedItem`: a 2xx whose body is empty
+(204), not a driveItem (a 201 carrying `{"error":…}`), or an item without
+`id` is read back by ID instead of failing as a JSON "EOF" decode error that
+classified a mutation that had succeeded as retry work (D-047, R-6.7.33,
+`TestMutationResponsesWithoutItem`). An upload completion without its item
+returns `ErrUploadCompletedWithoutItem`, because a create has no ID to read
+back; the transfer layer looks it up. Items carry `parentReference.driveType`
+as `ParentDriveType`. `MoveItemIfMatch` still decodes strictly; its echo
+check belongs with the move-outcome work.
+
+Every non-empty upload, create or overwrite, goes through an upload session
+whose creation carries `fileSystemInfo`, so content and mtime land in one
+version; only zero-byte files use the simple PUT plus mtime PATCH (D-034,
+live probe 7). Create-by-parent session creation retries the exact fresh-parent
+`404 itemNotFound` with `UploadSessionCreatePolicy()`; a read-only shared
+folder answers that route with the correct `403`, which is not retried.
+
+For zero-byte simple uploads with non-zero mtime, the follow-on `PATCH /items/{itemID}`
 used to restore `fileSystemInfo.lastModifiedDateTime` can also race item-ID
 visibility and return transient `404 itemNotFound`, or hit a bounded
 502/503/504 service failure, even though the upload response already returned
@@ -271,7 +301,9 @@ post-simple-upload patch with a bounded policy tuned for the longer
 mount-root visibility lag observed in live coverage for separately configured
 shared-folder mounts. Direct
 `UpdateFileSystemInfo` calls outside the immediate simple-upload finalization
-path remain strict.
+path remain strict. When the retry is exhausted the content has still landed,
+so `Upload`/`UploadToItem` return the uploaded item together with a
+`*MtimeNotAppliedError` instead of a bare failure.
 
 ## Paged Listings
 
@@ -321,7 +353,7 @@ optionally project the attached retry evidence through `ExtractQuirkEvidence`
 when they intentionally degrade or summarize verifier output.
 
 Each documented quirk has an exported name constant (`graph.Quirk*`, for
-example `QuirkSimpleUploadCreateTransient404`). That name is the stable
+example `QuirkUploadSessionCreateTransient404`). That name is the stable
 identifier: it is `QuirkRetryError.Quirk`, and it is the `graph.QuirkLogKey`
 (`graph_quirk`) field on the one debug record logged when a budget runs out
 (per-attempt records use `quirk`). Code and tests that must recognize a quirk
@@ -361,6 +393,19 @@ relabels that 404 as `ErrTimestampOutOfRange`, keeping the status and request
 ID, so no caller reads a live item as deleted
 (`TestUpdateFileSystemInfo_Pre1900NotFoundIsRangeError`).
 
+The client never sends such a time: every `fileSystemInfo` it writes
+(upload-session creation and `UpdateFileSystemInfo`) goes through
+`newFileSystemInfo`, which omits the zero time (OneDrive would silently
+replace it with the current time) and clamps earlier times to
+`EarliestFileSystemTime`, warning once per client
+(`TestFileSystemInfo_ClampsPre1900AndNeverSendsZero`). A file whose local
+modification time is before 1900 is therefore uploaded with 1900-01-01 as
+its OneDrive time, while the baseline keeps its real local time. The
+relabelling stays as a defense; sync treats it as a generic per-file failure
+and has no user-visible condition for it. Items take their `ModifiedAt` from
+`fileSystemInfo.lastModifiedDateTime`, falling back to the top-level field,
+which renames and moves bump (D-046, `TestToItem_PrefersFileSystemInfoModifiedTime`).
+
 **Malware** — the `malware` facet decodes to `Item.MalwareDetected`.
 `Download`/`DownloadRange` refuse a flagged item with `ErrMalwareDetected`
 before requesting content, and a content-host 403 carrying `malwareDetected`
@@ -380,10 +425,12 @@ apply, but on a copy of the HTTP client whose `CheckRedirect` returns
 never carried across the 302. The `Location` is validated against the
 content-host allow-list and fetched through the unauthenticated pre-auth path.
 Live probe L-20 (Personal) showed `my.microsoftpersonalcontent.com` serves
-the file without the bearer. A resumed download (offset > 0) requires 206 with
-a `Content-Range` starting at the offset on whichever leg serves the bytes;
-anything else is `ErrRangeNotHonored`, never a full body appended at the
-offset (`TestDownload_ContentEndpointNeverSendsBearerToRedirectHost`,
+the file without the bearer. A resumed download (offset > 0) goes through the
+same `validateContentRange` check as the tempauth route: 206 with a
+`Content-Range` starting at the offset and spanning the item, on whichever
+leg serves the bytes; anything else is `ErrRangeResumeRejected`, never a full
+body appended at the offset. The version binding is checked before either
+route is used (`TestDownload_ContentEndpointNeverSendsBearerToRedirectHost`,
 `TestDownload_ContentEndpoint401ForcesRefresh`,
 `TestDownloadRange_ContentEndpointResumes`,
 `TestDownloadRange_ContentEndpointRefusesAFullBodyAtAnOffset`,

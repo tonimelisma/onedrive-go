@@ -326,7 +326,17 @@ outbox.
 
 Execution delegates transfer mechanics to `driveops.TransferManager`.
 
-- downloads use atomic local writes and integrity verification
+- downloads use atomic local writes and integrity verification, and write
+  through `syncDownloadTarget`, a `driveops.TargetFS` rooted in the sync
+  tree: the partial, its fsync and mode, the rename and the directory sync
+  never leave the root, and a parent is never created. A missing or
+  non-folder parent is a stale precondition and the engine replans
+  (`TestExecutor_Download_MissingParentIsStaleAndNotCreated`,
+  `TestExecutor_Download_ParentSwappedForSymlinkAfterCheckStaysInRoot`).
+  Rule: no executor side effect creates or replaces namespace state the plan
+  did not observe. Downloads used to `MkdirAll` the parent through absolute
+  paths, so a local rename between planning and dispatch re-created the old
+  folder holding the download (D-043)
 - uploads prefer overwrite-by-item-ID when the planner already knows the
   authoritative remote item
 - true creates still use parent-path upload because no remote item identity

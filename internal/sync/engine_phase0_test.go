@@ -444,8 +444,8 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 					Name:         "newfile.txt",
 					DriveID:      driveID,
 					ParentID:     "root",
-					Size:         10,
-					QuickXorHash: "hash1",
+					Size:         int64(len("downloaded-content")),
+					QuickXorHash: testQuickXor("downloaded-content"),
 				},
 			}, "token-2"), nil
 		},

@@ -129,6 +129,8 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.30: The system shall bound every API response body it buffers in memory, so a malformed or hostile response cannot dictate client memory use. An oversized body shall be reported as an error rather than silently truncated. [verified]
 - R-6.7.31: The system shall not panic on externally supplied values, including user-editable configuration and catalog entries, API responses, and filesystem state. A value that cannot be parsed shall be reported as an error or degraded to a documented empty value, never treated as a programmer error. [verified]
 - R-6.7.32: Every paged Graph listing shall follow `@odata.nextLink` to completion, and every page loop shall be bounded so a circular or buggy continuation fails with an error instead of looping indefinitely. [verified]
+- R-6.7.33: A 2xx mutation answer whose body is empty (204), not a driveItem, or an item without `id` shall be resolved by reading the item back by ID, never reported as a failure of the mutation that succeeded nor returned as an item without identity. An upload completion without an item is reported as `ErrUploadCompletedWithoutItem` so the transfer layer looks it up. [verified]
+- R-6.7.34: An item's modification time shall come from `fileSystemInfo.lastModifiedDateTime` when Graph reports it (the top-level `lastModifiedDateTime` is the server's, which renames and moves bump), falling back to the top level. A modification time the client sends shall never be the zero time and shall be clamped to 1900-01-01T00:00:00Z or later (live probe L-26), warning once. A download's recorded local mtime shall be what the filesystem holds afterwards, not the time that was requested. [verified]
 
 ## R-6.8 Network Resilience [verified]
 
@@ -150,6 +152,8 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.8.16: External and runtime failures shall be translated into the documented domain error model before retry, durable persistence, or user presentation. [verified]
 - R-6.8.17: Errors from pre-authenticated requests (downloads, upload sessions, copy monitors) shall never carry the pre-authenticated URL, whose path or query embeds a credential. Transport failures keep their cause and the URL scheme and host, so users can still tell which service failed. [verified]
 - R-6.8.18: Every request to Graph, upload and download hosts shall carry one User-Agent in Microsoft's decorated form, `ISV|onedrive-go|onedrive-go/<version>`, built in one place (`graph.UserAgent`) for every command and the sync engine. [verified]
+- R-6.8.19: A request the transport retries shall resend its complete body with an exact `Content-Length`. A request whose body cannot be replayed shall be returned to the caller after one attempt, never resent with the bytes the first attempt consumed. [verified]
+- R-6.8.20: A transfer body (download response or upload fragment) that moves no bytes for 2 minutes shall be abandoned with a retryable stalled-transfer error, keeping a download's partial for resume; transfer connections shall ping idle HTTP/2 connections and close one whose ping goes unanswered. [verified]
 
 ## R-6.9 Packaging [future]
 

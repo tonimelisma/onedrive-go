@@ -221,14 +221,15 @@ func remoteStateRowFromGraphItem(item *graph.Item) *remoteStateRow {
 	}
 
 	return &remoteStateRow{
-		DriveID:  item.DriveID,
-		ItemID:   item.ID,
-		Path:     path,
-		ItemType: resolvedType,
-		Hash:     driveops.SelectHash(item),
-		Size:     item.Size,
-		Mtime:    mtime,
-		ETag:     item.ETag,
+		DriveID:   item.DriveID,
+		ItemID:    item.ID,
+		Path:      path,
+		ItemType:  resolvedType,
+		Hash:      driveops.SelectHash(item),
+		Size:      item.Size,
+		SizeKnown: true,
+		Mtime:     mtime,
+		ETag:      item.ETag,
 	}
 }
 

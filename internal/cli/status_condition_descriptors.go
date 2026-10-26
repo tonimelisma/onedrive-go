@@ -138,10 +138,12 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 		syncengine.ConditionLocalBusy,
 		syncengine.ConditionLocalCrossDevice,
 		syncengine.ConditionUnsupportedOperation,
-		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionMalwareDetected,
 		syncengine.ConditionLocalDatabaseOpen:
 		return describeLocalRuntimeStatusCondition(key)
+	case syncengine.ConditionUploadVerification,
+		syncengine.ConditionDownloadIntegrity:
+		return describeTransferStatusCondition(key)
 	case syncengine.ConditionUnexpectedCondition:
 		return newStatusConditionDescriptor(
 			"Sync issue",
@@ -221,9 +223,10 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionLocalBusy,
 		syncengine.ConditionLocalCrossDevice,
 		syncengine.ConditionUnsupportedOperation,
-		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionMalwareDetected,
 		syncengine.ConditionLocalDatabaseOpen,
+		syncengine.ConditionUploadVerification,
+		syncengine.ConditionDownloadIntegrity,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -284,9 +287,10 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionLocalBusy,
 		syncengine.ConditionLocalCrossDevice,
 		syncengine.ConditionUnsupportedOperation,
-		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionMalwareDetected,
 		syncengine.ConditionLocalDatabaseOpen,
+		syncengine.ConditionUploadVerification,
+		syncengine.ConditionDownloadIntegrity,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -338,12 +342,6 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 			"OneDrive's scan flagged this file as malware and will not let it be downloaded.",
 			"Check the file on the OneDrive website; delete it there if it is unwanted.",
 		)
-	case syncengine.ConditionTimestampOutOfRange:
-		return newStatusConditionDescriptor(
-			"Date not accepted by OneDrive",
-			"The file's modification date is before 1900, which OneDrive does not store.",
-			"Set a later modification date on the local file (for example with touch).",
-		)
 	case syncengine.ConditionLocalCrossDevice:
 		return newStatusConditionDescriptor(
 			"Move across a mount point",
@@ -381,8 +379,31 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 		syncengine.ConditionPathTooLong,
 		syncengine.ConditionFileTooLarge,
 		syncengine.ConditionCaseCollision,
+		syncengine.ConditionUploadVerification,
+		syncengine.ConditionDownloadIntegrity,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
+	default:
+		return unexpectedStatusConditionDescriptor()
+	}
+}
+
+// describeTransferStatusCondition names the transfer-integrity conditions:
+// OneDrive stored or served different content than its own facts describe.
+func describeTransferStatusCondition(key syncengine.ConditionKey) statusConditionDescriptor {
+	switch key { //nolint:exhaustive // only the transfer-integrity keys route here
+	case syncengine.ConditionDownloadIntegrity:
+		return newStatusConditionDescriptor(
+			"Download doesn't match OneDrive",
+			"OneDrive served bytes that disagree with its own size or checksum, or an error page instead of the file.",
+			"Nothing is lost: the local file is kept and the download is retried. If it keeps failing, check the file on the OneDrive website.",
+		)
+	case syncengine.ConditionUploadVerification:
+		return newStatusConditionDescriptor(
+			"Upload not stored as sent",
+			"OneDrive answered the upload with a different size or checksum than the file that was sent.",
+			"Nothing is lost: the local file is kept and the upload is retried. If it keeps failing, upload the file again with put.",
+		)
 	default:
 		return unexpectedStatusConditionDescriptor()
 	}

@@ -50,6 +50,10 @@ type SessionRecord struct {
 	FileHash   string    `json:"file_hash"`
 	FileSize   int64     `json:"file_size"`
 	CreatedAt  time.Time `json:"created_at"`
+	// ExpiresAt is the session's expirationDateTime. A session that is gone
+	// before it was invalidated, not expired (L-02). Zero for records
+	// written before it was kept.
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
 
 // UnmarshalJSON implements custom unmarshaling to support both the old

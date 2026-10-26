@@ -33,12 +33,7 @@ func (c *Client) CreateUploadSession(
 
 	path := fmt.Sprintf("/drives/%s/items/%s:/%s:/createUploadSession", driveID, parentID, url.PathEscape(name))
 
-	item := uploadSessionItem{ConflictBehavior: "replace"}
-	if !mtime.IsZero() {
-		item.FileSystemInfo = &fileSystemInfo{
-			LastModifiedDateTime: mtime.UTC().Format(time.RFC3339),
-		}
-	}
+	item := uploadSessionItem{ConflictBehavior: "replace", FileSystemInfo: c.newFileSystemInfo(mtime)}
 
 	reqBody := createUploadSessionRequest{Item: item}
 
@@ -75,12 +70,7 @@ func (c *Client) CreateUploadSessionForItem(
 
 	path := fmt.Sprintf("/drives/%s/items/%s/createUploadSession", driveID, itemID)
 
-	item := uploadSessionItem{ConflictBehavior: "replace"}
-	if !mtime.IsZero() {
-		item.FileSystemInfo = &fileSystemInfo{
-			LastModifiedDateTime: mtime.UTC().Format(time.RFC3339),
-		}
-	}
+	item := uploadSessionItem{ConflictBehavior: "replace", FileSystemInfo: c.newFileSystemInfo(mtime)}
 
 	reqBody := createUploadSessionRequest{Item: item}
 
