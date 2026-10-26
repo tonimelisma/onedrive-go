@@ -140,7 +140,15 @@ func (tm *TransferManager) uploadGraphItem(
 	progress graph.ProgressFunc,
 ) (*graph.Item, bool, error) {
 	if size > persistedSessionMinSize && tm.sessionStore != nil && hasSessionUploader {
-		item, err := tm.sessionUpload(ctx, su, content, driveID, parentID, name, localPath, localHash, size, mtime, progress)
+		item, err := tm.persistedSessionUpload(ctx, &persistedUpload{
+			target:  uploadTarget{driveID: driveID, parentID: parentID, name: name},
+			key:     localPath,
+			content: content, localPath: localPath, localHash: localHash, size: size, progress: progress,
+			create: func() (*graph.UploadSession, error) {
+				return su.CreateUploadSession(ctx, driveID, parentID, name, size, mtime)
+			},
+			sessions: su,
+		})
 		return item, false, err
 	}
 
@@ -374,18 +382,15 @@ func (tm *TransferManager) uploadExistingItem(
 	itemUploader, hasItemUploader := tm.uploads.(ItemUploader)
 
 	if size > persistedSessionMinSize && tm.sessionStore != nil && hasSessionUploader {
-		item, err := tm.sessionUploadToItem(
-			ctx,
-			sessionUploader,
-			content,
-			driveID,
-			itemID,
-			localPath,
-			localHash,
-			size,
-			mtime,
-			progress,
-		)
+		item, err := tm.persistedSessionUpload(ctx, &persistedUpload{
+			target:  uploadTarget{driveID: driveID, itemID: itemID},
+			key:     existingItemSessionKey(localPath, itemID),
+			content: content, localPath: localPath, localHash: localHash, size: size, progress: progress,
+			create: func() (*graph.UploadSession, error) {
+				return sessionUploader.CreateUploadSessionForItem(ctx, driveID, itemID, size, mtime)
+			},
+			sessions: sessionUploader,
+		})
 
 		return item, false, err
 	}
@@ -397,176 +402,6 @@ func (tm *TransferManager) uploadExistingItem(
 	item, err := itemUploader.UploadToItem(ctx, driveID, itemID, content, size, mtime, progress)
 
 	return tm.uploadedItemOrError(localPath, item, err)
-}
-
-// sessionUpload performs a session-based upload with persistence for resume.
-// localPath is the filesystem path of the file being uploaded — used as a
-// session store key and in log messages. (Named "localPath" not "remotePath"
-// because it identifies the local file, not a remote OneDrive path.)
-func (tm *TransferManager) sessionUpload(
-	ctx context.Context, su SessionUploader, content io.ReaderAt,
-	driveID driveid.ID, parentID, name, localPath, localHash string,
-	size int64, mtime time.Time, progress graph.ProgressFunc,
-) (*graph.Item, error) {
-	tm.logger.Debug("sessionUpload",
-		slog.String("path", localPath),
-		slog.Int64("size", size),
-	)
-
-	driveStr := driveID.String()
-
-	// Check for existing session.
-	rec, found, loadErr := tm.sessionStore.Load(driveStr, localPath)
-	if loadErr != nil {
-		// Debug only: the store already reported what it did with the file,
-		// and the upload proceeds with a fresh session.
-		tm.logger.Debug("failed to load upload session",
-			slog.String("path", localPath),
-			slog.String("error", loadErr.Error()),
-		)
-	}
-
-	if found && rec.FileHash == localHash {
-		tm.logger.Debug("attempting upload session resume", slog.String("path", localPath))
-
-		session := &graph.UploadSession{UploadURL: graph.UploadURL(rec.SessionURL)}
-
-		item, resumeErr := su.ResumeUpload(ctx, session, content, size, progress)
-		if resumeErr == nil {
-			tm.deleteSession(driveStr, localPath)
-			return item, nil
-		}
-
-		// Delete stale session on any resume failure. Forces fresh session on
-		// next attempt, preventing infinite retry loops (B-208).
-		tm.deleteSession(driveStr, localPath)
-
-		if !errors.Is(resumeErr, graph.ErrUploadSessionExpired) {
-			return nil, fmt.Errorf("resuming upload of %s: %w", localPath, resumeErr)
-		}
-
-		tm.logger.Info("upload session expired, creating fresh session", slog.String("path", localPath))
-	}
-
-	// Fresh session-based upload.
-	session, err := su.CreateUploadSession(ctx, driveID, parentID, name, size, mtime)
-	if err != nil {
-		return nil, fmt.Errorf("creating upload session for %s: %w", localPath, err)
-	}
-
-	if saveErr := tm.sessionStore.Save(driveStr, localPath, &SessionRecord{
-		MountID:    tm.sessionMountID,
-		LocalRoot:  tm.sessionLocalRoot,
-		SessionURL: string(session.UploadURL),
-		FileHash:   localHash,
-		FileSize:   size,
-	}); saveErr != nil {
-		tm.logger.Warn("failed to save upload session — resume after crash will not work for this file",
-			slog.String("path", localPath),
-			slog.String("error", saveErr.Error()),
-		)
-	}
-
-	item, err := su.UploadFromSession(ctx, session, content, size, progress)
-	if err != nil {
-		// The session file persists for the next retry, unless the upload
-		// completed and only its item is missing: that session is finished.
-		if errors.Is(err, graph.ErrUploadCompletedWithoutItem) {
-			tm.deleteSession(driveStr, localPath)
-		}
-
-		return nil, fmt.Errorf("uploading %s: %w", localPath, err)
-	}
-
-	tm.deleteSession(driveStr, localPath)
-
-	return item, nil
-}
-
-func existingItemSessionKey(localPath, itemID string) string {
-	return "item::" + itemID + "::" + localPath
-}
-
-func (tm *TransferManager) sessionUploadToItem(
-	ctx context.Context, su ItemSessionUploader, content io.ReaderAt,
-	driveID driveid.ID, itemID, localPath, localHash string,
-	size int64, mtime time.Time, progress graph.ProgressFunc,
-) (*graph.Item, error) {
-	tm.logger.Debug("sessionUploadToItem",
-		slog.String("path", localPath),
-		slog.String("item_id", itemID),
-		slog.Int64("size", size),
-	)
-
-	driveStr := driveID.String()
-	sessionKey := existingItemSessionKey(localPath, itemID)
-
-	rec, found, loadErr := tm.sessionStore.Load(driveStr, sessionKey)
-	if loadErr != nil {
-		// Debug only: see sessionUpload.
-		tm.logger.Debug("failed to load upload session",
-			slog.String("path", localPath),
-			slog.String("item_id", itemID),
-			slog.String("error", loadErr.Error()),
-		)
-	}
-
-	if found && rec.FileHash == localHash {
-		tm.logger.Debug("attempting upload session resume",
-			slog.String("path", localPath),
-			slog.String("item_id", itemID),
-		)
-
-		session := &graph.UploadSession{UploadURL: graph.UploadURL(rec.SessionURL)}
-
-		item, resumeErr := su.ResumeUpload(ctx, session, content, size, progress)
-		if resumeErr == nil {
-			tm.deleteSession(driveStr, sessionKey)
-			return item, nil
-		}
-
-		tm.deleteSession(driveStr, sessionKey)
-		if !errors.Is(resumeErr, graph.ErrUploadSessionExpired) {
-			return nil, fmt.Errorf("resuming upload of %s: %w", localPath, resumeErr)
-		}
-
-		tm.logger.Info("upload session expired, creating fresh session",
-			slog.String("path", localPath),
-			slog.String("item_id", itemID),
-		)
-	}
-
-	session, err := su.CreateUploadSessionForItem(ctx, driveID, itemID, size, mtime)
-	if err != nil {
-		return nil, fmt.Errorf("creating upload session for %s: %w", localPath, err)
-	}
-
-	if saveErr := tm.sessionStore.Save(driveStr, sessionKey, &SessionRecord{
-		MountID:    tm.sessionMountID,
-		LocalRoot:  tm.sessionLocalRoot,
-		SessionURL: string(session.UploadURL),
-		FileHash:   localHash,
-		FileSize:   size,
-	}); saveErr != nil {
-		tm.logger.Warn("failed to save upload session — resume after crash will not work for this file",
-			slog.String("path", localPath),
-			slog.String("item_id", itemID),
-			slog.String("error", saveErr.Error()),
-		)
-	}
-
-	item, err := su.UploadFromSession(ctx, session, content, size, progress)
-	if err != nil {
-		if errors.Is(err, graph.ErrUploadCompletedWithoutItem) {
-			tm.deleteSession(driveStr, sessionKey)
-		}
-
-		return nil, fmt.Errorf("uploading %s: %w", localPath, err)
-	}
-
-	tm.deleteSession(driveStr, sessionKey)
-
-	return item, nil
 }
 
 // deleteSession removes an upload session file, logging on failure. Callers

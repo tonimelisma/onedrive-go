@@ -63,6 +63,12 @@ type tmMockUploader struct {
 	resumeUploadFn        func(ctx context.Context, session *graph.UploadSession, content io.ReaderAt, totalSize int64, progress graph.ProgressFunc) (*graph.Item, error)
 	getItemFn             func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
 	listChildrenFn        func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+	canceledSessions      []graph.UploadURL
+}
+
+func (m *tmMockUploader) CancelUploadSession(_ context.Context, session *graph.UploadSession) error {
+	m.canceledSessions = append(m.canceledSessions, session.UploadURL)
+	return nil
 }
 
 var (
@@ -2113,4 +2119,215 @@ func TestDownloadToFile_ParentRefusalStopsBeforeAnyWrite(t *testing.T) {
 	require.ErrorIs(t, err, errParentGone)
 	assert.Zero(t, downloads)
 	assert.NoDirExists(t, filepath.Dir(targetPath), "a parent the plan did not observe is never created")
+}
+
+// sessionTestFile writes a file large enough for a persisted session and
+// returns its path, bytes and QuickXorHash.
+func sessionTestFile(t *testing.T, dir string) (string, []byte, string) {
+	t.Helper()
+
+	data := bytes.Repeat([]byte("s"), persistedSessionMinSize+1)
+	localPath := filepath.Join(dir, "big.bin")
+	require.NoError(t, os.WriteFile(localPath, data, 0o600))
+
+	return localPath, data, tmHashBytes(data)
+}
+
+// Validates: R-5.6.12
+func TestSessionUpload_FinalFragmentFailureAdoptsCommittedItem(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	localPath, data, hash := sessionTestFile(t, dir)
+
+	var creates int
+	ul := &tmMockUploader{
+		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+			creates++
+			return &graph.UploadSession{UploadURL: "https://upload.example.com/s1", ExpirationTime: time.Now().Add(time.Hour)}, nil
+		},
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			// The commit outlasted the response timeout.
+			return nil, fmt.Errorf("upload: %w", &graph.FinalFragmentError{Err: context.DeadlineExceeded})
+		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+			return []graph.Item{{ID: "landed", Name: "big.bin", Size: int64(len(data)), QuickXorHash: hash}}, nil
+		},
+	}
+
+	result, err := newTestTM(&tmSimpleDownloader{}, ul, store).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "big.bin", localPath, UploadOpts{})
+
+	// It used to fail, and the next attempt's resume got 404 and uploaded
+	// the whole file again, possibly forever for a slow commit.
+	require.NoError(t, err)
+	assert.Equal(t, "landed", result.Item.ID)
+	assert.Equal(t, 1, creates, "no second session")
+	_, found, loadErr := store.Load(driveid.New("d1").String(), localPath)
+	require.NoError(t, loadErr)
+	assert.False(t, found, "the finished session's record is gone")
+}
+
+// Validates: R-5.6.12
+func TestSessionUpload_GoneSessionWithLandedItemIsAdopted(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	localPath, data, hash := sessionTestFile(t, dir)
+	require.NoError(t, store.Save(driveid.New("d1").String(), localPath, &SessionRecord{
+		SessionURL: "https://upload.example.com/old", FileHash: hash, FileSize: int64(len(data)),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}))
+
+	var creates int
+	ul := &tmMockUploader{
+		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, graph.ErrUploadSessionExpired // a crash after the final fragment
+		},
+		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+			creates++
+			return &graph.UploadSession{UploadURL: "https://upload.example.com/new"}, nil
+		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+			return []graph.Item{{ID: "landed", Name: "big.bin", Size: int64(len(data)), QuickXorHash: hash}}, nil
+		},
+	}
+
+	result, err := newTestTM(&tmSimpleDownloader{}, ul, store).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "big.bin", localPath, UploadOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, "landed", result.Item.ID)
+	assert.Zero(t, creates, "a committed upload is never sent again")
+}
+
+// Validates: R-5.6.12
+func TestSessionUpload_GoneSessionBeforeExpiryIsInvalidation(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	localPath, data, hash := sessionTestFile(t, dir)
+	require.NoError(t, store.Save(driveid.New("d1").String(), existingItemSessionKey(localPath, "item-1"), &SessionRecord{
+		SessionURL: "https://upload.example.com/old", FileHash: hash, FileSize: int64(len(data)),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}))
+
+	var creates int
+	ul := &tmItemSessionUploader{tmMockUploader: tmMockUploader{
+		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, graph.ErrUploadSessionExpired
+		},
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			// Another writer changed the item: its bytes are not ours.
+			return &graph.Item{ID: "item-1", Size: 7, QuickXorHash: tmHashBytes([]byte("theirs!"))}, nil
+		},
+	}, createForItem: func() { creates++ }}
+
+	_, err := newTestTM(&tmSimpleDownloader{}, ul, store).UploadFileToItem(
+		t.Context(), driveid.New("d1"), "item-1", localPath, UploadOpts{})
+
+	// Live probe L-02: a session opened before another writer's change
+	// answers 404. Restarting the upload overwrote that change.
+	require.ErrorIs(t, err, ErrUploadSessionInvalidated)
+	assert.Zero(t, creates, "no blind restart")
+}
+
+// Validates: R-5.6.13
+func TestSessionUpload_DroppedSessionsAreCancelled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		recHash   func(hash string) string
+		resumeErr error
+	}{
+		{name: "record for different content", recHash: func(string) string { return "stale-hash" }},
+		{
+			name:      "resume failure",
+			recHash:   func(hash string) string { return hash },
+			resumeErr: &graph.GraphError{StatusCode: 403, Message: "forbidden"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			store := NewSessionStore(dir, slog.Default())
+			localPath, data, hash := sessionTestFile(t, dir)
+			require.NoError(t, store.Save(driveid.New("d1").String(), localPath, &SessionRecord{
+				SessionURL: "https://upload.example.com/old", FileHash: tt.recHash(hash), FileSize: int64(len(data)),
+			}))
+
+			ul := &tmMockUploader{
+				resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+					return nil, tt.resumeErr
+				},
+				createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+					return &graph.UploadSession{UploadURL: "https://upload.example.com/new"}, nil
+				},
+				uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, content io.ReaderAt, size int64, _ graph.ProgressFunc) (*graph.Item, error) {
+					return tmUploadedItem(t, "new", content, size), nil
+				},
+			}
+
+			_, err := newTestTM(&tmSimpleDownloader{}, ul, store).UploadFile(
+				t.Context(), driveid.New("d1"), "parent1", "big.bin", localPath, UploadOpts{})
+			if tt.resumeErr == nil {
+				require.NoError(t, err, "a fresh session follows the dropped one")
+			}
+
+			// Dropping only the local record leaked the server session,
+			// holding quota and, on Business, blocking a new session.
+			assert.Equal(t, []graph.UploadURL{"https://upload.example.com/old"}, ul.canceledSessions)
+		})
+	}
+}
+
+// Validates: R-5.6.12
+func TestUploadFile_SmallFileFinalFragmentFailureAdoptsCommittedItem(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("small file")
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, &graph.FinalFragmentError{Err: io.ErrUnexpectedEOF}
+		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+			return []graph.Item{{ID: "landed", Name: "a.txt", Size: int64(len(data)), QuickXorHash: tmHashBytes(data)}}, nil
+		},
+	}
+
+	localPath := filepath.Join(t.TempDir(), "a.txt")
+	require.NoError(t, os.WriteFile(localPath, data, 0o600))
+
+	result, err := newTestTM(&tmSimpleDownloader{}, ul, nil).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "a.txt", localPath, UploadOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, "landed", result.Item.ID)
+}
+
+// tmItemSessionUploader adds the item-ID session methods to tmMockUploader.
+type tmItemSessionUploader struct {
+	tmMockUploader
+	createForItem func()
+}
+
+func (m *tmItemSessionUploader) CreateUploadSessionForItem(
+	_ context.Context, _ driveid.ID, _ string, _ int64, _ time.Time,
+) (*graph.UploadSession, error) {
+	if m.createForItem != nil {
+		m.createForItem()
+	}
+
+	return &graph.UploadSession{UploadURL: "https://upload.example.com/new"}, nil
+}
+
+func (m *tmItemSessionUploader) UploadToItem(
+	_ context.Context, _ driveid.ID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc,
+) (*graph.Item, error) {
+	return nil, errors.New("UploadToItem not mocked")
 }

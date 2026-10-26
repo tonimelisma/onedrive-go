@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -172,6 +173,7 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 
 	if shouldOverwriteKnownRemoteItem(action) {
 		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, action.ItemID, localPath, e.uploadOpts(action))
+		err = uploadTransferError(err)
 		if err != nil {
 			return e.failedOutcomeWithFailure(
 				action,
@@ -204,6 +206,7 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 
 		name := filepath.Base(action.Path)
 		result, err = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, e.uploadOpts(action))
+		err = uploadTransferError(err)
 		if err != nil {
 			return e.failedOutcomeWithFailure(
 				action,
@@ -290,6 +293,18 @@ func downloadTransferFailureCapability(err error) permissionCapability {
 	}
 
 	return inferFailureCapabilityFromError(err, permissionCapabilityLocalWrite, permissionCapabilityRemoteRead)
+}
+
+// uploadTransferError translates transfer outcomes that mean "the plan is
+// stale" into sync's stale-precondition error. An invalidated upload session
+// means another writer changed the item mid-upload (L-02): the engine must
+// re-observe it, and may raise a conflict, rather than upload again.
+func uploadTransferError(err error) error {
+	if errors.Is(err, driveops.ErrUploadSessionInvalidated) {
+		return fmt.Errorf("%w: %w", errActionPreconditionChanged, err)
+	}
+
+	return err
 }
 
 func uploadTransferFailureCapability(err error) permissionCapability {

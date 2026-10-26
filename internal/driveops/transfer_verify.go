@@ -129,6 +129,17 @@ func (tm *TransferManager) settleUploadedItem(
 	ctx context.Context, target uploadTarget, sent uploadedContent, localPath string, item *graph.Item, uploadErr error,
 ) (*graph.Item, error) {
 	if uploadErr != nil {
+		if graph.IsFinalFragmentUncertain(uploadErr) {
+			// The encapsulated small-file session canceled itself, but its
+			// last fragment may have committed: adopt the item if it holds
+			// exactly these bytes (D-036).
+			if landed, ok := tm.adoptLandedUpload(ctx, target, sent); ok {
+				return landed, nil
+			}
+
+			return nil, uploadErr
+		}
+
 		if !errors.Is(uploadErr, graph.ErrUploadCompletedWithoutItem) {
 			return nil, uploadErr
 		}

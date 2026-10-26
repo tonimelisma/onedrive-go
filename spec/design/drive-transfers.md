@@ -1,6 +1,6 @@
 # Drive Transfers
 
-GOVERNS: internal/cli/get.go, internal/cli/put.go, internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/local_errors.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_download.go, internal/driveops/transfer_manager.go, internal/driveops/transfer_target.go, internal/driveops/transfer_upload.go, internal/driveops/transfer_verify.go, pkg/quickxorhash/quickxorhash.go
+GOVERNS: internal/cli/get.go, internal/cli/put.go, internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/local_errors.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_download.go, internal/driveops/transfer_manager.go, internal/driveops/transfer_session.go, internal/driveops/transfer_target.go, internal/driveops/transfer_upload.go, internal/driveops/transfer_verify.go, pkg/quickxorhash/quickxorhash.go
 
 Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-5.5.2 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-2.8.10 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-5.8.2 [verified], R-5.10 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified]
 
@@ -215,6 +215,35 @@ Interactive path operations anchor themselves at `RemoteRootItemID` when one
 is configured. Generic `driveops.Session` stays an authenticated drive-client
 shape, so sync engine construction receives mount-root scope from
 `EngineMountConfig` rather than session state.
+
+## Session Lifecycle
+
+`persistedSessionUpload` (`transfer_session.go`) owns one resumable upload
+for create and overwrite alike. A record for other content is canceled on
+the server before it is dropped, and so is one whose resume fails for any
+reason but shutdown (D-037, R-5.6.13); records carry the session's
+`ExpiresAt`. A failed final fragment (`graph.FinalFragmentError`) or a resume
+whose session is gone looks the item up first and adopts it when it holds
+exactly the bytes sent, so a commit that outlasted its response is never
+uploaded again (D-036, R-5.6.12); the encapsulated small-file session gets
+the same adoption through `settleUploadedItem`. A session gone before its
+expiry while the item holds other bytes, or a fragment answered 404, is
+`ErrUploadSessionInvalidated`: another writer changed the item (live probe
+L-02), and sync turns it into a stale precondition. Evidence:
+`TestSessionUpload_FinalFragmentFailureAdoptsCommittedItem`,
+`TestSessionUpload_GoneSessionWithLandedItemIsAdopted`,
+`TestSessionUpload_GoneSessionBeforeExpiryIsInvalidation`,
+`TestSessionUpload_DroppedSessionsAreCancelled`,
+`TestUploadFile_SmallFileFinalFragmentFailureAdoptsCommittedItem`,
+`TestUploadFromSession_OnlyFinalFragmentFailureIsUncertain`,
+`TestUploadFromSession_RecoveredOffsetPastEndIsRefused`,
+`TestUploadTransferError_InvalidatedSessionIsAStalePlan`.
+
+Not yet done: `drive reset-sync-state` and managed-child cleanup delete
+session records without cancelling their server sessions (they hold no
+Graph client), the session's `expirationDateTime` is not watched while
+fragments upload, the final fragment's header timeout does not scale with
+the file size, and `item.fileSize` is not sent (unprobed on Personal).
 
 ## SessionStore
 

@@ -458,7 +458,7 @@ func (c *Client) uploadChunksFrom(
 		item, complete, err := c.UploadChunk(ctx, session, chunk, offset, chunkSize, totalSize)
 		if err != nil {
 			if errors.Is(err, ErrRangeNotSatisfiable) {
-				recoveredOffset, recoverErr := c.recoverUploadChunkOffset(ctx, session, offset)
+				recoveredOffset, recoverErr := c.recoverUploadChunkOffset(ctx, session, offset, totalSize)
 				if recoverErr != nil {
 					return nil, recoverErr
 				}
@@ -469,6 +469,15 @@ func (c *Client) uploadChunksFrom(
 				}
 
 				continue
+			}
+
+			if offset+chunkSize == totalSize {
+				// The last fragment may have committed even though its answer
+				// was lost or slow (a large file's commit can outlast the
+				// response-header timeout). The caller looks the item up
+				// before uploading again (D-036).
+				return nil, fmt.Errorf("graph: uploading final chunk at offset %d: %w", offset,
+					&FinalFragmentError{Err: err})
 			}
 
 			return nil, fmt.Errorf("graph: uploading chunk at offset %d: %w", offset, err)
@@ -493,7 +502,7 @@ func (c *Client) uploadChunksFrom(
 }
 
 func (c *Client) recoverUploadChunkOffset(
-	ctx context.Context, session *UploadSession, currentOffset int64,
+	ctx context.Context, session *UploadSession, currentOffset, totalSize int64,
 ) (int64, error) {
 	c.logger.Debug("upload chunk range mismatch, querying session status",
 		slog.Int64("offset", currentOffset),
@@ -507,6 +516,13 @@ func (c *Client) recoverUploadChunkOffset(
 	recoveredOffset, err := parseNextExpectedRangeStart(status.NextExpectedRanges)
 	if err != nil {
 		return 0, fmt.Errorf("graph: parsing nextExpectedRanges after 416 at offset %d: %w", currentOffset, err)
+	}
+
+	// A recovered offset past the end ended the loop with "no final item"
+	// and a confusing error (RCL-044).
+	if recoveredOffset > totalSize {
+		return 0, fmt.Errorf(
+			"graph: upload session nextExpectedRanges %d is past the end of the %d-byte file", recoveredOffset, totalSize)
 	}
 
 	if recoveredOffset <= currentOffset {
@@ -526,6 +542,24 @@ func (c *Client) recoverUploadChunkOffset(
 	)
 
 	return recoveredOffset, nil
+}
+
+// FinalFragmentError marks a failure of an upload's last fragment. The
+// server may have committed the file anyway, so the upload is uncertain
+// rather than failed.
+type FinalFragmentError struct {
+	Err error
+}
+
+func (e *FinalFragmentError) Error() string { return "final fragment: " + e.Err.Error() }
+
+func (e *FinalFragmentError) Unwrap() error { return e.Err }
+
+// IsFinalFragmentUncertain reports whether err is a final-fragment failure
+// whose upload may nevertheless have committed.
+func IsFinalFragmentUncertain(err error) bool {
+	var finalErr *FinalFragmentError
+	return errors.As(err, &finalErr)
 }
 
 // UploadFromSession uploads all chunks for an existing upload session.

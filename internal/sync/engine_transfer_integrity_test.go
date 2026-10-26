@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -51,4 +53,16 @@ func TestRunOnce_AcceptedServerTransformIsNotDownloadedAgain(t *testing.T) {
 			assert.Zero(t, second.Downloads+second.Uploads, "an accepted transform is converged")
 		})
 	}
+}
+
+// Validates: R-5.6.12
+func TestUploadTransferError_InvalidatedSessionIsAStalePlan(t *testing.T) {
+	t.Parallel()
+
+	err := uploadTransferError(fmt.Errorf("uploading a.bin: %w", driveops.ErrUploadSessionInvalidated))
+
+	// Another writer changed the item mid-upload: re-observe and replan,
+	// never upload over the change.
+	require.ErrorIs(t, err, errActionPreconditionChanged)
+	assert.Equal(t, resultSuperseded, classifyResult(&actionCompletion{Err: err}).Class)
 }

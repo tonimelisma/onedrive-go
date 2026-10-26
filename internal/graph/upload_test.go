@@ -1977,3 +1977,47 @@ func TestMutationResponsesWithoutItem(t *testing.T) {
 		})
 	}
 }
+
+// Validates: R-5.6.12
+func TestUploadFromSession_RecoveredOffsetPastEndIsRefused(t *testing.T) {
+	content := bytes.Repeat([]byte("C"), 1024)
+	sessionSrv := newUpload416RecoveryServer(t, "99999-")
+	defer sessionSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: UploadURL(sessionSrv.URL + "/upload")}
+
+	_, err := client.UploadFromSession(t.Context(), session, bytes.NewReader(content), int64(len(content)), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "past the end")
+}
+
+// Validates: R-5.6.12
+func TestUploadFromSession_OnlyFinalFragmentFailureIsUncertain(t *testing.T) {
+	content := bytes.Repeat([]byte("F"), int(ChunkedUploadChunkSize+1024))
+
+	for _, failAt := range []int{1, 2} {
+		t.Run(fmt.Sprintf("fail fragment %d", failAt), func(t *testing.T) {
+			var puts atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, err := io.Copy(io.Discard, r.Body)
+				assert.NoError(t, err)
+				if int(puts.Add(1)) == failAt {
+					w.WriteHeader(http.StatusBadGateway)
+					return
+				}
+				w.WriteHeader(http.StatusAccepted)
+			}))
+			defer srv.Close()
+
+			client := newNoRetryTestClient(t, srv.URL)
+			session := &UploadSession{UploadURL: UploadURL(srv.URL + "/upload")}
+
+			_, err := client.UploadFromSession(t.Context(), session, bytes.NewReader(content), int64(len(content)), nil)
+			require.Error(t, err)
+
+			// Only a failed last fragment may have committed the file.
+			assert.Equal(t, failAt == 2, IsFinalFragmentUncertain(err))
+		})
+	}
+}
