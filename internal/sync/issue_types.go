@@ -33,7 +33,6 @@ const (
 	issueLocalBusy            = "local_busy"
 	issueLocalCrossDevice     = "local_cross_device"
 	issueUnsupportedOperation = "unsupported_operation"
-	issueTimestampOutOfRange  = "timestamp_out_of_range"
 	issueMalwareDetected      = "malware_detected"
 	issueLocalDatabaseOpen    = "local_database_open"
 	issueUploadVerification   = "upload_verification_failed"

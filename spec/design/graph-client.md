@@ -398,8 +398,11 @@ The client never sends such a time: every `fileSystemInfo` it writes
 `newFileSystemInfo`, which omits the zero time (OneDrive would silently
 replace it with the current time) and clamps earlier times to
 `EarliestFileSystemTime`, warning once per client
-(`TestFileSystemInfo_ClampsPre1900AndNeverSendsZero`). The relabelling stays
-as a defense. Items take their `ModifiedAt` from
+(`TestFileSystemInfo_ClampsPre1900AndNeverSendsZero`). A file whose local
+modification time is before 1900 is therefore uploaded with 1900-01-01 as
+its OneDrive time, while the baseline keeps its real local time. The
+relabelling stays as a defense; sync treats it as a generic per-file failure
+and has no user-visible condition for it. Items take their `ModifiedAt` from
 `fileSystemInfo.lastModifiedDateTime`, falling back to the top-level field,
 which renames and moves bump (D-046, `TestToItem_PrefersFileSystemInfoModifiedTime`).
 

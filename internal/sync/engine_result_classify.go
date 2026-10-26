@@ -100,7 +100,6 @@ func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {
 	case serverAnswerForbidden,
 		serverAnswerUnsupported,
 		serverAnswerPathTooLong,
-		serverAnswerTimestampOutOfRange,
 		serverAnswerMalware,
 		serverAnswerOther:
 		// Actionable per item: retrying the same request gets the same
@@ -214,7 +213,6 @@ func serverAnswerIssueTypes() map[serverAnswer]string {
 		serverAnswerThrottled:           issueRateLimited,
 		serverAnswerQuota:               IssueQuotaExceeded,
 		serverAnswerUnsupported:         issueUnsupportedOperation,
-		serverAnswerTimestampOutOfRange: issueTimestampOutOfRange,
 		serverAnswerServiceOutage:       issueServiceOutage,
 		serverAnswerRequestTimeout:      "request_timeout",
 		serverAnswerTransientConflict:   "transient_conflict",

@@ -518,10 +518,10 @@ func TestClassifyResult_ServerAnswerTable(t *testing.T) {
 			class:  resultRequeue, issueType: "transient_conflict",
 		},
 		{
-			name:   "pre-1900 mtime 404 is a range error, not gone",
+			name:   "pre-1900 mtime 404 is a generic per-file failure, not gone",
 			status: http.StatusNotFound,
 			err:    &graph.GraphError{StatusCode: http.StatusNotFound, Code: "itemNotFound", Err: graph.ErrTimestampOutOfRange},
-			class:  resultSkip, issueType: issueTimestampOutOfRange,
+			class:  resultSkip, issueType: "",
 		},
 		{
 			name:   "plain 500 is still outage evidence",

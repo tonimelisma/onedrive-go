@@ -28,7 +28,6 @@ const (
 	ConditionLocalBusy              ConditionKey = "local_busy"
 	ConditionLocalCrossDevice       ConditionKey = "local_cross_device"
 	ConditionUnsupportedOperation   ConditionKey = "unsupported_operation"
-	ConditionTimestampOutOfRange    ConditionKey = "timestamp_out_of_range"
 	ConditionMalwareDetected        ConditionKey = "malware_detected"
 	ConditionLocalDatabaseOpen      ConditionKey = "local_database_open"
 	ConditionUploadVerification     ConditionKey = "upload_verification_failed"
@@ -120,7 +119,6 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionLocalBusy,
 		ConditionLocalCrossDevice,
 		ConditionUnsupportedOperation,
-		ConditionTimestampOutOfRange,
 		ConditionMalwareDetected,
 		ConditionLocalDatabaseOpen,
 		ConditionUploadVerification,
@@ -169,7 +167,6 @@ func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
 		{issueType: issueLocalBusy, key: ConditionLocalBusy},
 		{issueType: issueLocalCrossDevice, key: ConditionLocalCrossDevice},
 		{issueType: issueUnsupportedOperation, key: ConditionUnsupportedOperation},
-		{issueType: issueTimestampOutOfRange, key: ConditionTimestampOutOfRange},
 		{issueType: issueMalwareDetected, key: ConditionMalwareDetected},
 		{issueType: issueLocalDatabaseOpen, key: ConditionLocalDatabaseOpen},
 		{issueType: issueUploadVerification, key: ConditionUploadVerification},

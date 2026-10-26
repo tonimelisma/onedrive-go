@@ -69,9 +69,6 @@ const (
 	// toward the service scope: five refusals used to block every drive.
 	serverAnswerUnsupported
 	serverAnswerPathTooLong
-	// serverAnswerTimestampOutOfRange is OneDrive rejecting a fileSystemInfo
-	// timestamp (graph.ErrTimestampOutOfRange), reported on the wire as 404.
-	serverAnswerTimestampOutOfRange
 	serverAnswerRequestTimeout
 	// serverAnswerTransientConflict is 412, and 409 resourceModified: the
 	// item changed between our read and our write (an mtime PATCH racing a
@@ -121,7 +118,10 @@ func classifyServerAnswer(status int, err error) serverAnswer {
 
 	switch {
 	case errors.Is(err, graph.ErrTimestampOutOfRange):
-		return serverAnswerTimestampOutOfRange
+		// The client clamps every time it sends to 1900 or later, so this
+		// is a defense: a generic per-file failure, never "the item is
+		// gone" (the wire status is a misleading 404).
+		return serverAnswerOther
 	case errors.Is(err, graph.ErrAuthTransient):
 		// A 401 that a just-refreshed token still got, naming a server-side
 		// validation fault: an outage, never "sign-in required" (D-072).

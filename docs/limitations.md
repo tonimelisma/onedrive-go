@@ -59,9 +59,8 @@ gaps that are being fixed are listed separately in
   `report.txt`. Two local names that differ only in case are both held back
   until one is renamed.
 - **Timestamps:** OneDrive stores modification times to the whole second, and
-  only from 1900-01-01 onward. A file dated earlier cannot keep its date on
-  OneDrive; onedrive-go does not yet adjust such dates, so uploading such a
-  file can fail with a misleading "not found" error.
+  only from 1900-01-01 onward. A file dated earlier is uploaded with
+  1900-01-01 as its OneDrive date (with a warning); its local date is kept.
 - **Emoji in names:** when OneDrive compares names it ignores emoji and other
   characters outside Unicode's Basic Multilingual Plane, so `notes😀.txt` and
   `notes.txt` are the same name there. Keep such files in different folders

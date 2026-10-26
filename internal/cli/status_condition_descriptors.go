@@ -138,7 +138,6 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 		syncengine.ConditionLocalBusy,
 		syncengine.ConditionLocalCrossDevice,
 		syncengine.ConditionUnsupportedOperation,
-		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionMalwareDetected,
 		syncengine.ConditionLocalDatabaseOpen:
 		return describeLocalRuntimeStatusCondition(key)
@@ -224,7 +223,6 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionLocalBusy,
 		syncengine.ConditionLocalCrossDevice,
 		syncengine.ConditionUnsupportedOperation,
-		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionMalwareDetected,
 		syncengine.ConditionLocalDatabaseOpen,
 		syncengine.ConditionUploadVerification,
@@ -289,7 +287,6 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionLocalBusy,
 		syncengine.ConditionLocalCrossDevice,
 		syncengine.ConditionUnsupportedOperation,
-		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionMalwareDetected,
 		syncengine.ConditionLocalDatabaseOpen,
 		syncengine.ConditionUploadVerification,
@@ -344,12 +341,6 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 			"Blocked as malware",
 			"OneDrive's scan flagged this file as malware and will not let it be downloaded.",
 			"Check the file on the OneDrive website; delete it there if it is unwanted.",
-		)
-	case syncengine.ConditionTimestampOutOfRange:
-		return newStatusConditionDescriptor(
-			"Date not accepted by OneDrive",
-			"The file's modification date is before 1900, which OneDrive does not store.",
-			"Set a later modification date on the local file (for example with touch).",
 		)
 	case syncengine.ConditionLocalCrossDevice:
 		return newStatusConditionDescriptor(

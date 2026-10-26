@@ -113,7 +113,6 @@ func conditionLabels() map[ConditionKey]string {
 		ConditionLocalBusy:              "busy on this computer",
 		ConditionLocalCrossDevice:       "that would move across a mount point",
 		ConditionUnsupportedOperation:   "that OneDrive refuses to handle",
-		ConditionTimestampOutOfRange:    "with dates OneDrive does not accept",
 		ConditionMalwareDetected:        "that OneDrive flagged as malware",
 		ConditionLocalDatabaseOpen:      "that are databases open in an application",
 		ConditionUploadVerification:     "that OneDrive stored differently than uploaded",
