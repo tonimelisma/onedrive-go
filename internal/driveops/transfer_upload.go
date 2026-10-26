@@ -35,10 +35,6 @@ type UploadResult struct {
 	LocalHash string
 	Size      int64
 	Mtime     time.Time
-	// RemoteMtimePending is true when the content landed but OneDrive did
-	// not accept the modified time (a zero-byte upload whose follow-on PATCH
-	// failed). Item then carries the server's receipt time, not Mtime.
-	RemoteMtimePending bool
 }
 
 // persistedSessionMinSize is the size above which an upload's session is
@@ -143,7 +139,7 @@ func (tm *TransferManager) uploadGraphItem(
 	mtime time.Time,
 	progress graph.ProgressFunc,
 	sent uploadedContent,
-) (*graph.Item, bool, error) {
+) (*graph.Item, error) {
 	if size > persistedSessionMinSize && tm.sessionStore != nil && hasSessionUploader {
 		item, err := tm.persistedSessionUpload(ctx, &persistedUpload{
 			target:  uploadTarget{driveID: driveID, parentID: parentID, name: name},
@@ -155,7 +151,7 @@ func (tm *TransferManager) uploadGraphItem(
 			sessions: su,
 			sent:     sent,
 		})
-		return item, false, err
+		return item, err
 	}
 
 	item, err := tm.uploads.Upload(ctx, driveID, parentID, name, content, size, mtime, progress)
@@ -167,9 +163,9 @@ func (tm *TransferManager) uploadGraphItem(
 // from a failed upload. Failing that upload re-sent content that was already
 // on OneDrive, one more version per attempt, and still never set the mtime
 // (D-034).
-func (tm *TransferManager) uploadedItemOrError(localPath string, item *graph.Item, err error) (*graph.Item, bool, error) {
+func (tm *TransferManager) uploadedItemOrError(localPath string, item *graph.Item, err error) (*graph.Item, error) {
 	if err == nil {
-		return item, false, nil
+		return item, nil
 	}
 
 	var mtimeErr *graph.MtimeNotAppliedError
@@ -179,10 +175,10 @@ func (tm *TransferManager) uploadedItemOrError(localPath string, item *graph.Ite
 			slog.String("error", mtimeErr.Err.Error()),
 		)
 
-		return mtimeErr.Item, true, nil
+		return mtimeErr.Item, nil
 	}
 
-	return nil, false, fmt.Errorf("uploading %s: %w", localPath, err)
+	return nil, fmt.Errorf("uploading %s: %w", localPath, err)
 }
 
 func recordUploadPerf(ctx context.Context, size int64, startedAt time.Time) {
@@ -258,7 +254,7 @@ func (tm *TransferManager) UploadFile(
 	sent := uploadedContent{
 		size: size, quickXorHash: localHash, name: name, mtime: mtime, planETag: opts.PlannedRemoteETag,
 	}
-	item, mtimePending, err := tm.uploadGraphItem(
+	item, err := tm.uploadGraphItem(
 		ctx,
 		su,
 		hasSU,
@@ -288,7 +284,7 @@ func (tm *TransferManager) UploadFile(
 	)
 	recordUploadPerf(ctx, size, startedAt)
 
-	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime, RemoteMtimePending: mtimePending}, nil
+	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime}, nil
 }
 
 // UploadFileToItem overwrites an existing remote file identified by item ID.
@@ -347,7 +343,7 @@ func (tm *TransferManager) UploadFileToItem(
 	sent := uploadedContent{
 		size: size, quickXorHash: localHash, name: filepath.Base(localPath), mtime: mtime, planETag: opts.PlannedRemoteETag,
 	}
-	item, mtimePending, err := tm.uploadExistingItem(
+	item, err := tm.uploadExistingItem(
 		ctx,
 		validatingReaderAt{ReaderAt: f, Validate: opts.ValidateSourceBeforeRead},
 		driveID,
@@ -378,7 +374,7 @@ func (tm *TransferManager) UploadFileToItem(
 		collector.AddCommandBytes(size)
 	}
 
-	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime, RemoteMtimePending: mtimePending}, nil
+	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime}, nil
 }
 
 func (tm *TransferManager) uploadExistingItem(
@@ -392,7 +388,7 @@ func (tm *TransferManager) uploadExistingItem(
 	mtime time.Time,
 	progress graph.ProgressFunc,
 	sent uploadedContent,
-) (*graph.Item, bool, error) {
+) (*graph.Item, error) {
 	sessionUploader, hasSessionUploader := tm.uploads.(ItemSessionUploader)
 	itemUploader, hasItemUploader := tm.uploads.(ItemUploader)
 
@@ -408,11 +404,11 @@ func (tm *TransferManager) uploadExistingItem(
 			sent:     sent,
 		})
 
-		return item, false, err
+		return item, err
 	}
 
 	if !hasItemUploader {
-		return nil, false, fmt.Errorf("uploading %s: uploader does not support item-ID overwrite", localPath)
+		return nil, fmt.Errorf("uploading %s: uploader does not support item-ID overwrite", localPath)
 	}
 
 	item, err := itemUploader.UploadToItem(ctx, driveID, itemID, content, size, mtime, progress)

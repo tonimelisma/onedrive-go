@@ -1962,7 +1962,6 @@ func TestUploadFile_ZeroByteMtimeNotAppliedStillSucceeds(t *testing.T) {
 	// again, one more version per attempt, and still never set the mtime.
 	require.NoError(t, err)
 	assert.Same(t, uploaded, result.Item)
-	assert.True(t, result.RemoteMtimePending)
 	assert.Equal(t, 1, uploads)
 }
 

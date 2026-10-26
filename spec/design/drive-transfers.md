@@ -61,7 +61,7 @@ failure.
 
 1. Stat the local file and reject anything above the 250 GB OneDrive limit before hashing or opening network transfer state
 2. Non-empty files of any size: create an upload session whose request carries `fileSystemInfo`, then upload in chunks (320 KiB aligned), so content and mtime land in one version. Sessions of files above 4 MiB are persisted for resume; smaller ones are not worth a record
-3. Zero-byte files: simple PUT, then a `fileSystemInfo` PATCH. If the PATCH still fails after its bounded retry, the upload is a success with `UploadResult.RemoteMtimePending` set and one plain warning: the content is on OneDrive, and failing the upload re-sent it (one more version per attempt) without ever setting the mtime
+3. Zero-byte files: simple PUT, then a `fileSystemInfo` PATCH. If the PATCH still fails after its bounded retry, the upload is a success with one plain warning: the content is on OneDrive, and failing the upload re-sent it (one more version per attempt) without ever setting the mtime. The file keeps OneDrive's receipt time; nothing repairs it later (a known limitation, `docs/limitations.md`)
 4. Verify the stored item against what was sent (`transfer_verify.go`, R-5.5.2)
 
 `verifyTransfer` is the one decision for "did OneDrive store what we sent".
