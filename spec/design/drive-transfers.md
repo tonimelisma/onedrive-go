@@ -1,8 +1,8 @@
 # Drive Transfers
 
-GOVERNS: internal/cli/get.go, internal/cli/put.go, internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/local_errors.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_download.go, internal/driveops/transfer_manager.go, internal/driveops/transfer_upload.go, pkg/quickxorhash/quickxorhash.go
+GOVERNS: internal/cli/get.go, internal/cli/put.go, internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/local_errors.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_download.go, internal/driveops/transfer_manager.go, internal/driveops/transfer_upload.go, internal/driveops/transfer_verify.go, pkg/quickxorhash/quickxorhash.go
 
-Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-2.8.10 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified]
+Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-5.5.2 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-2.8.10 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified]
 
 ## TransferManager
 
@@ -47,7 +47,26 @@ failure.
 1. Stat the local file and reject anything above the 250 GB OneDrive limit before hashing or opening network transfer state
 2. Non-empty files of any size: create an upload session whose request carries `fileSystemInfo`, then upload in chunks (320 KiB aligned), so content and mtime land in one version. Sessions of files above 4 MiB are persisted for resume; smaller ones are not worth a record
 3. Zero-byte files: simple PUT, then a `fileSystemInfo` PATCH. If the PATCH still fails after its bounded retry, the upload is a success with `UploadResult.RemoteMtimePending` set and one plain warning: the content is on OneDrive, and failing the upload re-sent it (one more version per attempt) without ever setting the mtime
-4. Verify server-reported hash matches local file after upload
+4. Verify the stored item against what was sent (`transfer_verify.go`, R-5.5.2)
+
+`verifyTransfer` is the one decision for "did OneDrive store what we sent".
+QuickXorHash is the only comparable digest (the only one computed locally,
+and it covers the length); without it the size is the only evidence. It
+returns `Verified`, `EnrichedKnown` (Office documents and media on a drive
+whose `parentReference.driveType` is `business` or `documentLibrary`, or
+whose ID starts `b!` when Graph omits the type) or `Mismatch`. A mismatch is
+read back by ID once, because server processing can briefly show pre-commit
+facts, and then fails with `ErrUploadVerificationFailed`: it used to be an
+Info line and a success, so the baseline recorded different bytes on each
+side as converged, forever (D-035). An upload completion without an item
+(`graph.ErrUploadCompletedWithoutItem`) is looked up by ID, or by an exact
+name in the parent listing for a create, through the optional `ItemReader`
+capability, and a persisted session whose upload completed that way is
+deleted. Evidence: `TestTransferManager_Upload_PersonalHashMismatchFails`,
+`TestTransferManager_Upload_MismatchThatReadsBackVerifiedSucceeds`,
+`TestTransferManager_Upload_WarnsOnHashMismatch` (enrichment accepted),
+`TestTransferManager_Upload_CompletionWithoutItemIsLookedUp`,
+`TestExecuteUpload_ResponseSizeMismatch_DoesNotCommitBaseline`.
 
 Before 2026-10-25 files up to 4 MiB were PUT and then PATCHed, which live
 probe 7 showed makes two versions per upload on Personal as well as Business
@@ -312,4 +331,4 @@ single goroutine.
 
 ### Rationale: Per-Side Hashes
 
-SharePoint enrichment silently modifies files after upload (hash/size change). Per-side hash baselines (`local_hash`, `remote_hash`) handle this natively: the planner compares new hashes against the correct side's baseline. No special code paths, no false conflicts from enrichment.
+SharePoint enrichment silently modifies files after upload (hash/size change). Per-side hash baselines (`local_hash`, `remote_hash`) handle this natively once `verifyTransfer` has classified the difference as enrichment: the planner compares new hashes against the correct side's baseline, with no false conflicts. A difference outside that class is not recorded at all.

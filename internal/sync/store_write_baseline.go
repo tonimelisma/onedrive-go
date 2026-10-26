@@ -23,6 +23,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -495,11 +496,23 @@ func classifyBaselineMutation(action actionType) (baselineMutationKind, error) {
 	}
 }
 
+// errMutationWithoutItemID reports a successful mutation outcome that has no
+// remote item identity to key its baseline row by.
+var errMutationWithoutItemID = errors.New("mutation outcome has no item ID")
+
 // applySingleMutation dispatches a single mutation to the appropriate DB helper.
 func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
 	mutation, err := classifyBaselineMutation(o.Action)
 	if err != nil {
 		return err
+	}
+
+	// item_id is the baseline's primary key. An upload or move whose Graph
+	// response carried no id was written with an empty key, and the next one
+	// rewrote that row's path (D-035): refuse it instead of corrupting the
+	// baseline.
+	if (mutation == baselineMutationUpsert || mutation == baselineMutationMove) && o.ItemID == "" {
+		return fmt.Errorf("sync: committing %s for %s: %w", o.Action.String(), o.Path, errMutationWithoutItemID)
 	}
 
 	switch mutation {

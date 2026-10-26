@@ -140,7 +140,8 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 		syncengine.ConditionUnsupportedOperation,
 		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionMalwareDetected,
-		syncengine.ConditionLocalDatabaseOpen:
+		syncengine.ConditionLocalDatabaseOpen,
+		syncengine.ConditionUploadVerification:
 		return describeLocalRuntimeStatusCondition(key)
 	case syncengine.ConditionUnexpectedCondition:
 		return newStatusConditionDescriptor(
@@ -224,6 +225,7 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionMalwareDetected,
 		syncengine.ConditionLocalDatabaseOpen,
+		syncengine.ConditionUploadVerification,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -287,6 +289,7 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionMalwareDetected,
 		syncengine.ConditionLocalDatabaseOpen,
+		syncengine.ConditionUploadVerification,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -368,6 +371,12 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 			"OneDrive allows longer names than this computer's filesystem, which stores at most 255 bytes "+
 				"per name (fewer characters for accented or non-Latin names).",
 			"Rename the item on OneDrive to a shorter name.",
+		)
+	case syncengine.ConditionUploadVerification:
+		return newStatusConditionDescriptor(
+			"Upload not stored as sent",
+			"OneDrive answered the upload with a different size or checksum than the file that was sent.",
+			"Nothing is lost: the local file is kept and the upload is retried. If it keeps failing, upload the file again with put.",
 		)
 	case syncengine.ConditionAuthenticationRequired,
 		syncengine.ConditionQuotaExceeded,

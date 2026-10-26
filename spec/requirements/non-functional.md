@@ -129,6 +129,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.30: The system shall bound every API response body it buffers in memory, so a malformed or hostile response cannot dictate client memory use. An oversized body shall be reported as an error rather than silently truncated. [verified]
 - R-6.7.31: The system shall not panic on externally supplied values, including user-editable configuration and catalog entries, API responses, and filesystem state. A value that cannot be parsed shall be reported as an error or degraded to a documented empty value, never treated as a programmer error. [verified]
 - R-6.7.32: Every paged Graph listing shall follow `@odata.nextLink` to completion, and every page loop shall be bounded so a circular or buggy continuation fails with an error instead of looping indefinitely. [verified]
+- R-6.7.33: A 2xx mutation answer whose body is empty (204), not a driveItem, or an item without `id` shall be resolved by reading the item back by ID, never reported as a failure of the mutation that succeeded nor returned as an item without identity. An upload completion without an item is reported as `ErrUploadCompletedWithoutItem` so the transfer layer looks it up. [verified]
 
 ## R-6.8 Network Resilience [verified]
 

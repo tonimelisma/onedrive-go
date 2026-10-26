@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -254,26 +255,12 @@ func (tm *TransferManager) UploadFile(
 		mtime,
 		progress,
 	)
+	item, err = tm.settleUploadedItem(ctx,
+		uploadTarget{driveID: driveID, parentID: parentID, name: name},
+		uploadedContent{size: size, quickXorHash: localHash, name: name},
+		localPath, item, err)
 	if err != nil {
 		return nil, err
-	}
-
-	if item == nil {
-		return nil, fmt.Errorf("upload of %s returned nil item", localPath)
-	}
-
-	// Post-upload hash verification. SelectHash is defined in
-	// hash.go — it picks QuickXorHash > SHA256Hash (B-222).
-	remoteHash := SelectHash(item)
-	if remoteHash != "" && localHash != remoteHash {
-		// Info, not Warn: the upload succeeded, and SharePoint rewrites some
-		// Office files server-side, so this can recur for every such upload
-		// with nothing for the user to do.
-		tm.logger.Info("upload hash mismatch",
-			slog.String("path", localPath),
-			slog.String("local_hash", localHash),
-			slog.String("remote_hash", remoteHash),
-		)
 	}
 
 	tm.logger.Debug("upload complete",
@@ -350,23 +337,12 @@ func (tm *TransferManager) UploadFileToItem(
 		mtime,
 		opts.Progress,
 	)
+	item, err = tm.settleUploadedItem(ctx,
+		uploadTarget{driveID: driveID, itemID: itemID},
+		uploadedContent{size: size, quickXorHash: localHash, name: filepath.Base(localPath)},
+		localPath, item, err)
 	if err != nil {
 		return nil, err
-	}
-	if item == nil {
-		return nil, fmt.Errorf("upload of %s returned nil item", localPath)
-	}
-
-	remoteHash := SelectHash(item)
-	if remoteHash != "" && localHash != remoteHash {
-		// Info, not Warn: the upload succeeded, and SharePoint rewrites some
-		// Office files server-side, so this can recur for every such upload
-		// with nothing for the user to do.
-		tm.logger.Info("upload hash mismatch",
-			slog.String("path", localPath),
-			slog.String("local_hash", localHash),
-			slog.String("remote_hash", remoteHash),
-		)
 	}
 
 	tm.logger.Debug("upload complete",
@@ -493,7 +469,12 @@ func (tm *TransferManager) sessionUpload(
 
 	item, err := su.UploadFromSession(ctx, session, content, size, progress)
 	if err != nil {
-		// Session file persists for next retry.
+		// The session file persists for the next retry, unless the upload
+		// completed and only its item is missing: that session is finished.
+		if errors.Is(err, graph.ErrUploadCompletedWithoutItem) {
+			tm.deleteSession(driveStr, localPath)
+		}
+
 		return nil, fmt.Errorf("uploading %s: %w", localPath, err)
 	}
 
@@ -576,6 +557,10 @@ func (tm *TransferManager) sessionUploadToItem(
 
 	item, err := su.UploadFromSession(ctx, session, content, size, progress)
 	if err != nil {
+		if errors.Is(err, graph.ErrUploadCompletedWithoutItem) {
+			tm.deleteSession(driveStr, sessionKey)
+		}
+
 		return nil, fmt.Errorf("uploading %s: %w", localPath, err)
 	}
 

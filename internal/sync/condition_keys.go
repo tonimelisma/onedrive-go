@@ -31,6 +31,7 @@ const (
 	ConditionTimestampOutOfRange    ConditionKey = "timestamp_out_of_range"
 	ConditionMalwareDetected        ConditionKey = "malware_detected"
 	ConditionLocalDatabaseOpen      ConditionKey = "local_database_open"
+	ConditionUploadVerification     ConditionKey = "upload_verification_failed"
 	ConditionUnexpectedCondition    ConditionKey = "unexpected_condition"
 )
 
@@ -121,6 +122,7 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionTimestampOutOfRange,
 		ConditionMalwareDetected,
 		ConditionLocalDatabaseOpen,
+		ConditionUploadVerification,
 		ConditionUnexpectedCondition,
 	}
 
@@ -168,6 +170,7 @@ func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
 		{issueType: issueTimestampOutOfRange, key: ConditionTimestampOutOfRange},
 		{issueType: issueMalwareDetected, key: ConditionMalwareDetected},
 		{issueType: issueLocalDatabaseOpen, key: ConditionLocalDatabaseOpen},
+		{issueType: issueUploadVerification, key: ConditionUploadVerification},
 	} {
 		if mapping.issueType == issueType {
 			return mapping.key, true

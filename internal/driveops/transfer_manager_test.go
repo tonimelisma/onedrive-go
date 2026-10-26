@@ -61,12 +61,31 @@ type tmMockUploader struct {
 	createUploadSessionFn func(ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error)
 	uploadFromSessionFn   func(ctx context.Context, session *graph.UploadSession, content io.ReaderAt, totalSize int64, progress graph.ProgressFunc) (*graph.Item, error)
 	resumeUploadFn        func(ctx context.Context, session *graph.UploadSession, content io.ReaderAt, totalSize int64, progress graph.ProgressFunc) (*graph.Item, error)
+	getItemFn             func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+	listChildrenFn        func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
 }
 
 var (
 	_ Uploader        = (*tmMockUploader)(nil)
 	_ SessionUploader = (*tmMockUploader)(nil)
+	_ ItemReader      = (*tmMockUploader)(nil)
 )
+
+func (m *tmMockUploader) GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
+	if m.getItemFn != nil {
+		return m.getItemFn(ctx, driveID, itemID)
+	}
+
+	return nil, fmt.Errorf("GetItem not mocked")
+}
+
+func (m *tmMockUploader) ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {
+	if m.listChildrenFn != nil {
+		return m.listChildrenFn(ctx, driveID, parentID)
+	}
+
+	return nil, fmt.Errorf("ListChildren not mocked")
+}
 
 func (m *tmMockUploader) Upload(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
 	if m.uploadFn != nil {
@@ -725,8 +744,8 @@ func TestTransferManager_Upload_Success(t *testing.T) {
 	t.Parallel()
 
 	ul := &tmMockUploader{
-		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{ID: "item-1", ETag: "etag-1"}, nil
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return tmUploadedItem(t, "item-1", content, size), nil
 		},
 	}
 
@@ -750,56 +769,140 @@ func TestTransferManager_Upload_Success(t *testing.T) {
 }
 
 // Validates: R-5.5.2
+func TestTransferManager_Upload_PersonalHashMismatchFails(t *testing.T) {
+	t.Parallel()
+
+	var rereads int
+	stored := &graph.Item{
+		ID:              "item-1",
+		Size:            int64(len("upload data")),
+		QuickXorHash:    tmHashBytes([]byte("other data!")),
+		ParentDriveType: "personal",
+	}
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return stored, nil
+		},
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			rereads++
+			assert.Equal(t, "item-1", itemID)
+			return stored, nil
+		},
+	}
+
+	localPath := filepath.Join(t.TempDir(), "report.docx")
+	require.NoError(t, os.WriteFile(localPath, []byte("upload data"), 0o600))
+
+	_, err := newTestTM(&tmSimpleDownloader{}, ul, nil).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "report.docx", localPath, UploadOpts{})
+
+	// Logged at Info and reported as success before: the baseline then
+	// recorded different bytes on each side as converged, forever.
+	require.ErrorIs(t, err, ErrUploadVerificationFailed)
+	assert.Equal(t, 1, rereads, "a mismatch is read back once before failing")
+}
+
+// Validates: R-5.5.2
+func TestTransferManager_Upload_MismatchThatReadsBackVerifiedSucceeds(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("upload data")
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{ID: "item-1", Size: 3, QuickXorHash: tmHashBytes([]byte("pre"))}, nil
+		},
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			return &graph.Item{ID: "item-1", Size: int64(len(data)), QuickXorHash: tmHashBytes(data), ETag: "committed"}, nil
+		},
+	}
+
+	localPath := filepath.Join(t.TempDir(), "a.txt")
+	require.NoError(t, os.WriteFile(localPath, data, 0o600))
+
+	result, err := newTestTM(&tmSimpleDownloader{}, ul, nil).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "a.txt", localPath, UploadOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, "committed", result.Item.ETag, "the verified read-back is the recorded item")
+}
+
+// Validates: R-5.5.2
 func TestTransferManager_Upload_WarnsOnHashMismatch(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
+	enriched := &graph.Item{
+		ID:              "item-1",
+		Size:            4096,
+		QuickXorHash:    base64.StdEncoding.EncodeToString([]byte("remote-hash")),
+		ParentDriveType: "documentLibrary",
+	}
 	ul := &tmMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{
-				ID:           "item-1",
-				QuickXorHash: base64.StdEncoding.EncodeToString([]byte("remote-hash")),
-			}, nil
+			return enriched, nil
 		},
 	}
 
-	dir := t.TempDir()
-	localPath := filepath.Join(dir, "upload.txt")
+	localPath := filepath.Join(t.TempDir(), "report.docx")
 	require.NoError(t, os.WriteFile(localPath, []byte("upload data"), 0o600))
 
 	tm := NewTransferManager(&tmSimpleDownloader{}, ul, nil, logger)
 
-	result, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "upload.txt", localPath, UploadOpts{})
+	// SharePoint rewrites Office documents on every upload: the stored item
+	// is recorded as it is, without a failure or a warning.
+	result, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "report.docx", localPath, UploadOpts{})
 	require.NoError(t, err, "UploadFile")
-	require.NotNil(t, result)
-
-	assert.Contains(t, buf.String(), "upload hash mismatch")
-	assert.Contains(t, buf.String(), "local_hash")
-	assert.Contains(t, buf.String(), "remote_hash")
+	assert.Same(t, enriched, result.Item)
+	assert.Contains(t, buf.String(), "OneDrive enriched the uploaded file")
+	assert.NotContains(t, buf.String(), "level=WARN")
 }
 
+// Validates: R-5.5.2
+func TestTransferManager_Upload_CompletionWithoutItemIsLookedUp(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("data")
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, graph.ErrUploadCompletedWithoutItem
+		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, parentID string) ([]graph.Item, error) {
+			assert.Equal(t, "parent1", parentID)
+			return []graph.Item{
+				{ID: "folder", Name: "nil-item.txt", IsFolder: true},
+				{ID: "found", Name: "nil-item.txt", Size: int64(len(data)), QuickXorHash: tmHashBytes(data)},
+			}, nil
+		},
+	}
+
+	localPath := filepath.Join(t.TempDir(), "nil-item.txt")
+	require.NoError(t, os.WriteFile(localPath, data, 0o600))
+
+	result, err := newTestTM(&tmSimpleDownloader{}, ul, nil).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "nil-item.txt", localPath, UploadOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, "found", result.Item.ID, "an item without identity is never recorded")
+}
+
+// Validates: R-5.5.2
 func TestTransferManager_Upload_NilItem(t *testing.T) {
 	t.Parallel()
 
 	ul := &tmMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return nil, nil //nolint:nilnil // intentional to test nil-item guard
+			return &graph.Item{}, nil
 		},
 	}
 
 	tm := newTestTM(&tmSimpleDownloader{}, ul, nil)
 
-	dir := t.TempDir()
-	localPath := filepath.Join(dir, "nil-item.txt")
-
+	localPath := filepath.Join(t.TempDir(), "nil-item.txt")
 	require.NoError(t, os.WriteFile(localPath, []byte("data"), 0o600))
 
 	_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "nil-item.txt", localPath, UploadOpts{})
 	require.Error(t, err)
-
-	assert.Contains(t, err.Error(), "returned nil item")
+	assert.Contains(t, err.Error(), "looking it up failed")
 }
 
 func TestTransferManager_Upload_ErrorWrapping(t *testing.T) {
@@ -873,8 +976,8 @@ func TestTransferManager_SessionUpload_Success(t *testing.T) {
 		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
 			return &graph.UploadSession{UploadURL: "https://upload.example.com/session"}, nil
 		},
-		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{ID: "session-item"}, nil
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, content io.ReaderAt, size int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return tmUploadedItem(t, "session-item", content, size), nil
 		},
 	}
 
@@ -921,14 +1024,14 @@ func TestTransferManager_SessionUpload_Resume(t *testing.T) {
 	var resumeCalled bool
 
 	ul := &tmMockUploader{
-		resumeUploadFn: func(_ context.Context, session *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+		resumeUploadFn: func(_ context.Context, session *graph.UploadSession, content io.ReaderAt, size int64, _ graph.ProgressFunc) (*graph.Item, error) {
 			resumeCalled = true
 
 			if session.UploadURL != "https://upload.example.com/existing" {
 				return nil, fmt.Errorf("unexpected session URL: %s", session.UploadURL)
 			}
 
-			return &graph.Item{ID: "resumed-item"}, nil
+			return tmUploadedItem(t, "resumed-item", content, size), nil
 		},
 	}
 
@@ -975,10 +1078,10 @@ func TestTransferManager_SessionUpload_ExpiredFallback(t *testing.T) {
 
 			return &graph.UploadSession{UploadURL: "https://upload.example.com/fresh"}, nil
 		},
-		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, content io.ReaderAt, size int64, _ graph.ProgressFunc) (*graph.Item, error) {
 			uploadFromCalled = true
 
-			return &graph.Item{ID: "fresh-item"}, nil
+			return tmUploadedItem(t, "fresh-item", content, size), nil
 		},
 	}
 
@@ -1130,8 +1233,8 @@ func TestSessionUpload_NonExpiredResumeError_FreshOnRetry(t *testing.T) {
 		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
 			return &graph.UploadSession{UploadURL: "https://upload.example.com/fresh-retry"}, nil
 		},
-		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{ID: "fresh-retry-item"}, nil
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, content io.ReaderAt, size int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return tmUploadedItem(t, "fresh-retry-item", content, size), nil
 		},
 	}
 
@@ -1405,8 +1508,8 @@ func TestSessionUpload_SaveFailure_StillCompletes(t *testing.T) {
 		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
 			return &graph.UploadSession{UploadURL: "https://upload.example.com/save-fail"}, nil
 		},
-		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{ID: "save-fail-ok"}, nil
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, content io.ReaderAt, size int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return tmUploadedItem(t, "save-fail-ok", content, size), nil
 		},
 	}
 
@@ -1733,4 +1836,18 @@ func TestUploadFile_ZeroByteMtimeNotAppliedStillSucceeds(t *testing.T) {
 	assert.Same(t, uploaded, result.Item)
 	assert.True(t, result.RemoteMtimePending)
 	assert.Equal(t, 1, uploads)
+}
+
+// tmUploadedItem is the item OneDrive returns for a faithful upload: its
+// QuickXorHash and size match what was sent.
+func tmUploadedItem(t *testing.T, id string, content io.ReaderAt, size int64) *graph.Item {
+	t.Helper()
+
+	data := make([]byte, size)
+	_, err := content.ReadAt(data, 0)
+	if err != nil && !errors.Is(err, io.EOF) {
+		require.NoError(t, err)
+	}
+
+	return &graph.Item{ID: id, Size: size, QuickXorHash: tmHashBytes(data)}
 }

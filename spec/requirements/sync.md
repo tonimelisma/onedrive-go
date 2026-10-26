@@ -60,6 +60,7 @@ When the same file has been modified on both the local filesystem and OneDrive s
 - R-2.5.4: When a prior run has already advanced remote observation, later runs shall still rediscover already-observed remote drift from durable `remote_state` and reconcile it without requiring synthetic pending-state bridge rows or fresh delta events. [verified]
 - R-2.5.5: When an existing per-drive state DB cannot be opened under the current schema or store generation, sync startup shall not destroy or recreate it automatically. Startup shall skip that drive, keep read-only inspectors non-mutating, and surface explicit guidance to pause the drive, rerun with `--drive` selecting only other drives, or run `onedrive-go drive reset-sync-state --drive <drive>`. [verified]
 - R-2.5.6: The sync state DB shall bootstrap directly into the current canonical schema, stamp an explicit supported store-generation marker, reject non-canonical existing state stores loudly at the store boundary, and expose one explicit per-drive reset command (`drive reset-sync-state`) that requires confirmation unless `--yes` is supplied. [verified]
+- R-2.5.7: The store shall refuse to commit a successful upload, download, folder create or move whose outcome has no remote item ID: `item_id` is the baseline's primary key, and an empty one let a second such outcome rewrite the first row's path. [verified]
 
 ## R-2.6 Pause / Resume [verified]
 

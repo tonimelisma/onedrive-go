@@ -78,9 +78,10 @@ type specialFolderFacet struct {
 }
 
 type parentRef struct {
-	ID      string `json:"id"`
-	DriveID string `json:"driveId"`
-	Path    string `json:"path"`
+	ID        string `json:"id"`
+	DriveID   string `json:"driveId"`
+	DriveType string `json:"driveType"`
+	Path      string `json:"path"`
 }
 
 type fileFacet struct {
@@ -183,6 +184,7 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 		item.ParentID = d.ParentReference.ID
 		item.ParentPath, item.ParentPathKnown = decodeParentReferencePath(d.ParentReference.Path, logger)
 		item.ParentDriveID = driveid.New(d.ParentReference.DriveID)
+		item.ParentDriveType = d.ParentReference.DriveType
 	}
 
 	// Folder child count

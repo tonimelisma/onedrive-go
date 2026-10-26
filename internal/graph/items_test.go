@@ -1235,7 +1235,9 @@ func TestUpdateFileSystemInfo_DecodeError(t *testing.T) {
 		time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "decoding fileSystemInfo response")
+	// An unparseable success body is read back by ID; here the read-back
+	// gets the same body and fails, so the error names the read-back.
+	assert.Contains(t, err.Error(), "reading back item after fileSystemInfo")
 }
 
 func TestUpdateFileSystemInfo_NotFound(t *testing.T) {

@@ -258,7 +258,7 @@ func TestSimpleUpload_DecodeError(t *testing.T) {
 		strings.NewReader("data"), 4,
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "decoding simple upload response")
+	require.ErrorIs(t, err, ErrUploadCompletedWithoutItem)
 }
 
 // Validates: R-5.6.9
@@ -806,7 +806,7 @@ func TestHandleChunkResponse_FinalDecodeError(t *testing.T) {
 		0, 10, 10,
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "decoding final chunk response")
+	require.ErrorIs(t, err, ErrUploadCompletedWithoutItem)
 }
 
 func TestHandleChunkResponse_IntermediateDrainError(t *testing.T) {
@@ -1910,6 +1910,70 @@ func TestSimpleUpload_RetryAfter503ResendsFullBody(t *testing.T) {
 			assert.Equal(t, []string{content, content}, bodies)
 			assert.Equal(t, []int64{int64(len(content)), int64(len(content))}, lengths)
 			assert.Equal(t, []bool{false, false}, chunked)
+		})
+	}
+}
+
+// Validates: R-6.7.33
+func TestMutationResponsesWithoutItem(t *testing.T) {
+	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
+
+	bodies := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "204", status: http.StatusNoContent, body: ""},
+		{name: "empty 200", status: http.StatusOK, body: ""},
+		{name: "201 error body", status: http.StatusCreated, body: `{"error":{"code":"generalException"}}`},
+		{name: "item without id", status: http.StatusOK, body: `{"name":"a.txt"}`},
+	}
+
+	for _, tc := range bodies {
+		t.Run("PATCH fileSystemInfo "+tc.name, func(t *testing.T) {
+			var gets atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodPatch:
+					w.WriteHeader(tc.status)
+					writeTestResponse(t, w, tc.body)
+				case http.MethodGet:
+					gets.Add(1)
+					assert.Equal(t, "/drives/000000000000000d/items/item-1", r.URL.Path)
+					w.Header().Set("Content-Type", "application/json")
+					writeTestResponse(t, w, `{"id":"item-1","name":"a.txt","lastModifiedDateTime":"2024-07-10T09:00:00Z","file":{}}`)
+				default:
+					assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+
+			// A 204 was a JSON "EOF" decode failure, so a PATCH that had
+			// succeeded became retry work.
+			item, err := newTestClient(t, srv.URL).UpdateFileSystemInfo(t.Context(), driveid.New("d"), "item-1", mtime)
+			require.NoError(t, err)
+			assert.Equal(t, "item-1", item.ID)
+			assert.Equal(t, int32(1), gets.Load(), "the item is read back by ID")
+		})
+
+		t.Run("final chunk "+tc.name, func(t *testing.T) {
+			if tc.status == http.StatusNoContent {
+				t.Skip("a 204 on a fragment is an unexpected status, not a completion")
+			}
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				writeTestResponse(t, w, tc.body)
+			}))
+			defer srv.Close()
+
+			client := newTestClient(t, srv.URL)
+			_, _, err := client.UploadChunk(t.Context(), &UploadSession{UploadURL: UploadURL(srv.URL + "/s")},
+				strings.NewReader("abc"), 0, 3, 3)
+
+			// The content landed; an item without identity must never be
+			// returned as the upload result.
+			require.ErrorIs(t, err, ErrUploadCompletedWithoutItem)
 		})
 	}
 }

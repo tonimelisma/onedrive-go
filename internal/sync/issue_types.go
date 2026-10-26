@@ -36,4 +36,5 @@ const (
 	issueTimestampOutOfRange  = "timestamp_out_of_range"
 	issueMalwareDetected      = "malware_detected"
 	issueLocalDatabaseOpen    = "local_database_open"
+	issueUploadVerification   = "upload_verification_failed"
 )

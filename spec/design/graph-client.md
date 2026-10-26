@@ -251,6 +251,16 @@ the interactive clients' `RetryTransport` resends every byte on a retry
 go out chunked over a one-shot reader, and a retry after a 503 sent zero bytes
 and replaced the user's file online with an empty one.
 
+Mutation answers go through `decodeMutatedItem`: a 2xx whose body is empty
+(204), not a driveItem (a 201 carrying `{"error":…}`), or an item without
+`id` is read back by ID instead of failing as a JSON "EOF" decode error that
+classified a mutation that had succeeded as retry work (D-047, R-6.7.33,
+`TestMutationResponsesWithoutItem`). An upload completion without its item
+returns `ErrUploadCompletedWithoutItem`, because a create has no ID to read
+back; the transfer layer looks it up. Items carry `parentReference.driveType`
+as `ParentDriveType`. `MoveItemIfMatch` still decodes strictly; its echo
+check belongs with the move-outcome work.
+
 Every non-empty upload, create or overwrite, goes through an upload session
 whose creation carries `fileSystemInfo`, so content and mtime land in one
 version; only zero-byte files use the simple PUT plus mtime PATCH (D-034,

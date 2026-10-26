@@ -239,6 +239,8 @@ func issueTypeForFilesystemResult(r *actionCompletion) (string, bool) {
 		return issueFileTooLargeForSpace, true
 	case errors.Is(err, driveops.ErrFileExceedsOneDriveLimit):
 		return issueFileTooLarge, true
+	case errors.Is(err, driveops.ErrUploadVerificationFailed):
+		return issueUploadVerification, true
 	}
 
 	switch driveops.ClassifyLocalError(err) {

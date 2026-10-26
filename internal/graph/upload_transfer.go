@@ -2,7 +2,6 @@ package graph
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,15 +38,16 @@ func (c *Client) SimpleUpload(
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
-	var dir driveItemResponse
-	if decErr := json.NewDecoder(resp.Body).Decode(&dir); decErr != nil {
-		return nil, fmt.Errorf("graph: decoding simple upload response: %w", decErr)
+	item, hasItem, err := c.decodeItemBody(resp.Body, "simple upload")
+	if err != nil {
+		return nil, err
 	}
 
-	item := dir.toItem(c.logger)
-	normalizeSingleItem(&item, c.logger)
+	if !hasItem {
+		return nil, ErrUploadCompletedWithoutItem
+	}
 
-	return &item, nil
+	return item, nil
 }
 
 // SimpleUploadToItem overwrites an existing file by item ID using a single PUT
@@ -70,15 +70,9 @@ func (c *Client) SimpleUploadToItem(
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
-	var dir driveItemResponse
-	if decErr := json.NewDecoder(resp.Body).Decode(&dir); decErr != nil {
-		return nil, fmt.Errorf("graph: decoding simple upload response: %w", decErr)
-	}
-
-	item := dir.toItem(c.logger)
-	normalizeSingleItem(&item, c.logger)
-
-	return &item, nil
+	return c.decodeMutatedItem(ctx, resp.Body, "simple upload", func(ctx context.Context) (*Item, error) {
+		return c.GetItem(ctx, driveID, itemID)
+	})
 }
 
 // UploadChunk uploads a chunk of data to an upload session.
@@ -147,21 +141,23 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, bool, error) {
 		return nil, false, nil
 
 	case http.StatusOK, http.StatusCreated:
-		// Upload complete — response contains the created/updated item.
-		var dir driveItemResponse
-		if decErr := json.NewDecoder(resp.Body).Decode(&dir); decErr != nil {
-			return nil, false, fmt.Errorf("graph: decoding final chunk response: %w", decErr)
+		// Upload complete — response should contain the created/updated item.
+		// Without it the content has still landed: the caller looks it up.
+		item, hasItem, decErr := c.decodeItemBody(resp.Body, "final chunk")
+		if decErr != nil {
+			return nil, false, decErr
 		}
 
-		item := dir.toItem(c.logger)
-		normalizeSingleItem(&item, c.logger)
+		if !hasItem {
+			return nil, false, ErrUploadCompletedWithoutItem
+		}
 
 		c.logger.Debug("upload complete",
 			slog.String("item_id", item.ID),
 			slog.String("item_name", item.Name),
 		)
 
-		return &item, true, nil
+		return item, true, nil
 
 	default:
 		// Unexpected 2xx status (e.g., 204, 206). doPreAuth filters non-2xx.
