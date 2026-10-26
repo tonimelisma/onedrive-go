@@ -9,6 +9,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
+// Validates: R-2.10.34, R-2.10.61
 func TestScopeKey_StringParseRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -19,6 +20,8 @@ func TestScopeKey_StringParseRoundTrip(t *testing.T) {
 		SKPermLocalWrite("/docs"),
 		SKPermRemoteWrite(""),
 		SKDiskLocal(),
+		SKLocalReadOnly("media"),
+		SKLocalReadOnly(""),
 	}
 
 	for _, key := range keys {

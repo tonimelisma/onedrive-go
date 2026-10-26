@@ -420,3 +420,53 @@ func TestPermissionCapabilityFallbacks(t *testing.T) {
 	assert.Equal(t, "drive:"+driveID.String(), (&actionCompletion{DriveID: driveID}).ThrottleTargetKey())
 	assert.Empty(t, (&actionCompletion{}).ThrottleTargetKey())
 }
+
+// Validates: R-2.10.60, R-2.10.61, R-2.10.62
+func TestClassifyResult_LocalErrnoTable(t *testing.T) {
+	t.Parallel()
+
+	pathErr := func(errno syscall.Errno) error {
+		return &os.PathError{Op: "write", Path: "/sync/docs/report.pdf", Err: errno}
+	}
+	testCases := []struct {
+		name      string
+		err       error
+		class     errclass.Class
+		scopeKey  ScopeKey
+		issueType string
+	}{
+		{name: "enospc mid-write is the disk scope", err: pathErr(syscall.ENOSPC), class: resultBlockScope, scopeKey: SKDiskLocal(), issueType: issueDiskFull},
+		{name: "edquot is the disk scope", err: pathErr(syscall.EDQUOT), class: resultBlockScope, scopeKey: SKDiskLocal(), issueType: issueDiskFull},
+		{name: "erofs is named read-only", err: pathErr(syscall.EROFS), class: resultSkip, issueType: issueLocalReadOnly},
+		{name: "efbig is a per-item issue", err: pathErr(syscall.EFBIG), class: resultSkip, issueType: issueLocalFileTooLarge},
+		{name: "exdev is a per-item issue", err: pathErr(syscall.EXDEV), class: resultSkip, issueType: issueLocalCrossDevice},
+		{name: "ebusy is retried", err: pathErr(syscall.EBUSY), class: resultRequeue, issueType: issueLocalBusy},
+		{name: "etxtbsy is retried", err: pathErr(syscall.ETXTBSY), class: resultRequeue, issueType: issueLocalBusy},
+		{name: "estale is retried", err: pathErr(syscall.ESTALE), class: resultRequeue, issueType: issueLocalBusy},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := classifyResult(&actionCompletion{Err: tc.err, ActionType: ActionDownload, Path: "docs/report.pdf"})
+			assert.Equal(t, tc.class, got.Class)
+			assert.Equal(t, tc.scopeKey, got.ScopeKey)
+			assert.Equal(t, tc.issueType, got.ConditionType)
+			assert.NotEqual(t, ConditionUnexpectedCondition, got.ConditionKey,
+				"a recognized errno must never be reported as an unexpected failure")
+		})
+	}
+}
+
+// Validates: R-2.10.61
+func TestShouldHandleLocalPermission_IncludesReadOnlyFilesystem(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, shouldHandleLocalPermission(&actionCompletion{
+		Err: &os.PathError{Op: "open", Path: "/sync/a", Err: syscall.EROFS},
+	}))
+	assert.False(t, shouldHandleLocalPermission(&actionCompletion{
+		Err: &os.PathError{Op: "open", Path: "/sync/a", Err: syscall.EBUSY},
+	}))
+}

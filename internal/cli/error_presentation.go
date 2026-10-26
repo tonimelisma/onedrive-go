@@ -15,7 +15,9 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 // presentedError carries a user-facing message while keeping the underlying
@@ -219,11 +221,30 @@ func remoteFailureText(err error) string {
 	}
 }
 
-// localFailureText recognizes missing and unreadable local files.
+// localFailureText recognizes local filesystem failures a user can fix: a
+// full disk (including the sync state database failing with SQLITE_FULL), a
+// read-only filesystem, a file the filesystem cannot hold, and missing or
+// unreadable files. The errno meaning comes from driveops' shared table.
 func localFailureText(err error) string {
+	if syncengine.IsLocalDiskFull(err) {
+		return "The local disk is full (or below the min_free_space reserve). Free up space, then run the command again."
+	}
+
 	var pathErr *fs.PathError
 	if !errors.As(err, &pathErr) {
 		return ""
+	}
+
+	switch driveops.ClassifyLocalError(err) {
+	case driveops.LocalErrorReadOnly:
+		return pathErr.Path + " is on a read-only filesystem. Remount it read-write, then run the command again."
+	case driveops.LocalErrorFileTooLarge:
+		return "The file is too large for the filesystem holding " + pathErr.Path + "."
+	case driveops.LocalErrorOther,
+		driveops.LocalErrorNoSpace,
+		driveops.LocalErrorBusy,
+		driveops.LocalErrorCrossDevice,
+		driveops.LocalErrorNameTooLong:
 	}
 
 	switch {

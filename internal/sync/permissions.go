@@ -1,8 +1,11 @@
 package sync
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -45,4 +48,18 @@ func isDirAccessible(tree *synctree.Root, dir string) bool {
 	}
 
 	return true
+}
+
+// isOnReadOnlyFilesystem reports whether absDir sits on a read-only mount.
+// The mount flags from statfs (ST_RDONLY on Linux, MNT_RDONLY on macOS) are
+// the authority: they cover a read-only bind mount of a writable filesystem.
+// When statfs cannot answer, faccessat(W_OK) is the fallback; it returns
+// EROFS for a read-only superblock before checking permission bits, so it
+// does not depend on ownership or on running as root.
+func isOnReadOnlyFilesystem(absDir string) bool {
+	if readOnly, known := mountIsReadOnly(absDir); known {
+		return readOnly
+	}
+
+	return errors.Is(unix.Access(absDir, unix.W_OK), unix.EROFS)
 }

@@ -75,6 +75,40 @@ func TestCommandErrorText_LocalFileFailuresDoNotStutter(t *testing.T) {
 	assert.Equal(t, "Error: /home/u/x does not exist.", commandErrorText(err, false))
 }
 
+// Validates: R-6.6.26, R-2.10.60, R-2.10.61, R-2.10.62
+func TestCommandErrorText_LocalFilesystemConditionsArePlain(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "enospc",
+			err:  fmt.Errorf("downloading: %w", &fs.PathError{Op: "write", Path: "/home/u/big.iso", Err: syscall.ENOSPC}),
+			want: "Error: The local disk is full (or below the min_free_space reserve). Free up space, then run the command again.",
+		},
+		{
+			name: "read-only filesystem",
+			err:  fmt.Errorf("creating: %w", &fs.PathError{Op: "open", Path: "/mnt/ro/a.txt", Err: syscall.EROFS}),
+			want: "Error: /mnt/ro/a.txt is on a read-only filesystem. Remount it read-write, then run the command again.",
+		},
+		{
+			name: "file too large for filesystem",
+			err:  fmt.Errorf("writing: %w", &fs.PathError{Op: "write", Path: "/media/usb/movie.mkv", Err: syscall.EFBIG}),
+			want: "Error: The file is too large for the filesystem holding /media/usb/movie.mkv.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, commandErrorText(tt.err, false))
+		})
+	}
+}
+
 // Validates: R-6.6.27
 func TestCommandErrorText_TimeoutIsReported(t *testing.T) {
 	t.Parallel()

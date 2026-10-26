@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
@@ -16,8 +17,12 @@ func shouldHandleRemote403Permission(r *actionCompletion) bool {
 	return r != nil && r.HTTPStatus == http.StatusForbidden && remoteWriteScopeBlocksAction(r.ActionType)
 }
 
+// shouldHandleLocalPermission selects completions the local probe owns:
+// permission denials, and EROFS, which is not os.ErrPermission but is the
+// same "this subtree cannot be written" fact at a filesystem boundary.
 func shouldHandleLocalPermission(r *actionCompletion) bool {
-	return r != nil && errors.Is(r.Err, os.ErrPermission)
+	return r != nil && (errors.Is(r.Err, os.ErrPermission) ||
+		driveops.ClassifyLocalError(r.Err) == driveops.LocalErrorReadOnly)
 }
 
 func (flow *engineFlow) maybeHandlePermissionFailure(
@@ -227,6 +232,8 @@ func scopeKeyForPermissionEvidence(evidence permissionEvidence) ScopeKey {
 		return sKPermLocalRead(evidence.BoundaryPath)
 	case issueLocalWriteDenied:
 		return SKPermLocalWrite(evidence.BoundaryPath)
+	case issueLocalReadOnly:
+		return SKLocalReadOnly(evidence.BoundaryPath)
 	case IssueRemoteWriteDenied:
 		return SKPermRemoteWrite(evidence.BoundaryPath)
 	default:

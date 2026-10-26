@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/api_types.go, internal/sync/debug_event_sink.go, internal/sync/doc.go, internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/engine_debug_events.go, internal/sync/engine_runtime*.go, internal/sync/engine_watch*.go, internal/sync/observation_findings.go, internal/sync/permission_evidence.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permissions.go, internal/sync/shortcut_alias_mutation.go, internal/sync/shortcut_root_lifecycle.go, internal/sync/shortcut_root_publication.go, internal/sync/watch_condition_log.go, internal/sync/watch_summary.go
+GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/api_types.go, internal/sync/debug_event_sink.go, internal/sync/doc.go, internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/engine_debug_events.go, internal/sync/engine_runtime*.go, internal/sync/engine_watch*.go, internal/sync/observation_findings.go, internal/sync/permission_evidence.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permissions.go, internal/sync/permissions_rdonly_bsd.go, internal/sync/permissions_rdonly_linux.go, internal/sync/shortcut_alias_mutation.go, internal/sync/shortcut_root_lifecycle.go, internal/sync/shortcut_root_publication.go, internal/sync/watch_condition_log.go, internal/sync/watch_summary.go
 
 LAYER: 4
 
@@ -811,6 +811,7 @@ The target scope families are:
 - `quota:own`
 - `disk:local`
 - `perm:dir:write:<path>`
+- `local:read-only:<path>`
 - `perm:remote:write:<boundary>`
 - `account:throttled`
 
@@ -849,6 +850,19 @@ corresponding issue-boundary fact.
 Remote write block scopes clear through normal timed trials, successful write work, or
 cleanup that leaves no blocked work. They do not have a separate global
 maintenance cadence.
+
+A local `EROFS` is handled by the same local probe as `os.ErrPermission`
+(`shouldHandleLocalPermission`). The probe walks up from the failing path's
+parent while each directory is still on a read-only mount (statfs mount
+flags `ST_RDONLY`/`MNT_RDONLY`, which cover `bind,ro`; `faccessat(W_OK)`
+answering `EROFS` when statfs cannot) and stops at the sync root, so the boundary
+is the inner read-only mount point or the root itself. It records a
+`local:read-only:<path>` write scope with condition `local_read_only`: the
+same family, blocking and trial behaviour as `perm:dir:write`, but its own
+condition, because no permission change fixes it. A writable parent keeps the
+failure per file (`TestPermHandler_HandleLocalPermission_ReadOnlyMountIsOneBoundary`,
+`TestPermHandler_HandleLocalPermission_ReadOnlySyncRootBlocksWholeTree`,
+`TestPermHandler_HandleLocalPermission_ReadOnlyWithWritableParentStaysPerFile`).
 
 Remote `403` handling is intentionally narrow:
 

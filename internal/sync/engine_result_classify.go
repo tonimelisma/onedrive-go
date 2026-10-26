@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
@@ -128,14 +127,19 @@ func isRetryableHTTPStatus(status int) bool {
 func classifyLocalResult(r *actionCompletion) resultDecision {
 	conditionType := issueTypeForResult(r)
 
-	switch {
-	case errors.Is(r.Err, errActionPreconditionChanged):
+	if errors.Is(r.Err, errActionPreconditionChanged) {
 		return withRuntimeSummary(&resultDecision{
 			Class:       resultSuperseded,
 			Persistence: persistNone,
 			TrialHint:   trialHintReclassify,
 		})
-	case errors.Is(r.Err, driveops.ErrDiskFull):
+	}
+
+	switch driveops.ClassifyLocalError(r.Err) {
+	case driveops.LocalErrorNoSpace:
+		// Every write on a full filesystem fails the same way, so one
+		// disk-wide scope replaces N per-file "unexpected" failures whether the
+		// min_free_space pre-check or a real ENOSPC/EDQUOT write found it.
 		return withRuntimeSummary(&resultDecision{
 			Class:         resultBlockScope,
 			ScopeKey:      SKDiskLocal(),
@@ -144,35 +148,29 @@ func classifyLocalResult(r *actionCompletion) resultDecision {
 			TrialHint:     trialHintExtendOnMatchingScope,
 			ConditionType: conditionType,
 		})
-	case errors.Is(r.Err, driveops.ErrFileTooLargeForSpace):
+	case driveops.LocalErrorBusy:
 		return withRuntimeSummary(&resultDecision{
-			Class:         resultSkip,
+			Class:         resultRequeue,
 			Persistence:   persistRetryWork,
 			TrialHint:     trialHintReclassify,
 			ConditionType: conditionType,
 		})
-	case errors.Is(r.Err, driveops.ErrFileExceedsOneDriveLimit):
-		return withRuntimeSummary(&resultDecision{
-			Class:         resultSkip,
-			Persistence:   persistRetryWork,
-			TrialHint:     trialHintReclassify,
-			ConditionType: conditionType,
-		})
-	case errors.Is(r.Err, os.ErrPermission):
-		return withRuntimeSummary(&resultDecision{
-			Class:         resultSkip,
-			Persistence:   persistRetryWork,
-			TrialHint:     trialHintReclassify,
-			ConditionType: conditionType,
-		})
-	default:
-		return withRuntimeSummary(&resultDecision{
-			Class:         resultSkip,
-			Persistence:   persistRetryWork,
-			TrialHint:     trialHintReclassify,
-			ConditionType: conditionType,
-		})
+	case driveops.LocalErrorOther,
+		driveops.LocalErrorReadOnly,
+		driveops.LocalErrorFileTooLarge,
+		driveops.LocalErrorCrossDevice,
+		driveops.LocalErrorNameTooLong:
+		// Read-only filesystems become a boundary scope through the local
+		// permission probe (engine_runtime_permissions.go); the per-item kinds
+		// are actionable rows named by issueTypeForFilesystemResult.
 	}
+
+	return withRuntimeSummary(&resultDecision{
+		Class:         resultSkip,
+		Persistence:   persistRetryWork,
+		TrialHint:     trialHintReclassify,
+		ConditionType: conditionType,
+	})
 }
 
 func withRuntimeSummary(decision *resultDecision) resultDecision {
@@ -265,23 +263,38 @@ func issueTypeForFilesystemResult(r *actionCompletion) (string, bool) {
 		return "", false
 	}
 
-	switch err := r.Err; {
-	case errors.Is(err, driveops.ErrDiskFull):
-		return issueDiskFull, true
+	err := r.Err
+	switch {
 	case errors.Is(err, driveops.ErrFileTooLargeForSpace):
 		return issueFileTooLargeForSpace, true
 	case errors.Is(err, driveops.ErrFileExceedsOneDriveLimit):
 		return issueFileTooLarge, true
-	case errors.Is(err, syscall.ENAMETOOLONG):
+	}
+
+	switch driveops.ClassifyLocalError(err) {
+	case driveops.LocalErrorNoSpace:
+		return issueDiskFull, true
+	case driveops.LocalErrorReadOnly:
+		return issueLocalReadOnly, true
+	case driveops.LocalErrorFileTooLarge:
+		return issueLocalFileTooLarge, true
+	case driveops.LocalErrorBusy:
+		return issueLocalBusy, true
+	case driveops.LocalErrorCrossDevice:
+		return issueLocalCrossDevice, true
+	case driveops.LocalErrorNameTooLong:
 		// OneDrive accepts names longer than the 255 bytes a Linux or
 		// macOS filesystem can store; without a named issue each download
 		// retried forever as an "unexpected" failure.
 		return issueLocalNameTooLong, true
-	case errors.Is(err, os.ErrPermission):
-		return issueTypeForLocalPermissionResult(r), true
-	default:
-		return "", false
+	case driveops.LocalErrorOther:
 	}
+
+	if errors.Is(err, os.ErrPermission) {
+		return issueTypeForLocalPermissionResult(r), true
+	}
+
+	return "", false
 }
 
 func issueTypeForLocalPermissionResult(r *actionCompletion) string {

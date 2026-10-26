@@ -232,8 +232,21 @@ func NewTransferManager(
 // DownloadToFile downloads a remote file to targetPath with a namespaced
 // partial file in the target directory: write to partial, optionally resume
 // from existing partial, verify hash with retry, set mtime, atomic rename to
-// target.
+// target. A write that runs out of local space (ENOSPC, EDQUOT, no free
+// inodes) returns ErrDiskFull like the pre-check does, so a full disk is one
+// condition whichever step found it.
 func (tm *TransferManager) DownloadToFile(
+	ctx context.Context, driveID driveid.ID, itemID, targetPath string, opts DownloadOpts,
+) (*DownloadResult, error) {
+	result, err := tm.downloadToFile(ctx, driveID, itemID, targetPath, opts)
+	if err != nil {
+		return nil, wrapLocalWriteError(filepath.Dir(targetPath), err)
+	}
+
+	return result, nil
+}
+
+func (tm *TransferManager) downloadToFile(
 	ctx context.Context, driveID driveid.ID, itemID, targetPath string, opts DownloadOpts,
 ) (*DownloadResult, error) {
 	startedAt := time.Now()

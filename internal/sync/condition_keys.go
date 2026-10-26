@@ -23,6 +23,10 @@ const (
 	ConditionHashError              ConditionKey = "hash_error"
 	ConditionFileTooLargeForSpace   ConditionKey = "file_too_large_for_space"
 	ConditionLocalNameTooLong       ConditionKey = "local_name_too_long"
+	ConditionLocalReadOnly          ConditionKey = "local_read_only"
+	ConditionLocalFileTooLarge      ConditionKey = "local_file_too_large"
+	ConditionLocalBusy              ConditionKey = "local_busy"
+	ConditionLocalCrossDevice       ConditionKey = "local_cross_device"
 	ConditionUnexpectedCondition    ConditionKey = "unexpected_condition"
 )
 
@@ -105,6 +109,10 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionHashError,
 		ConditionFileTooLargeForSpace,
 		ConditionLocalNameTooLong,
+		ConditionLocalReadOnly,
+		ConditionLocalFileTooLarge,
+		ConditionLocalBusy,
+		ConditionLocalCrossDevice,
 		ConditionUnexpectedCondition,
 	}
 
@@ -144,6 +152,10 @@ func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
 		{issueType: issueHashPanic, key: ConditionHashError},
 		{issueType: issueFileTooLargeForSpace, key: ConditionFileTooLargeForSpace},
 		{issueType: issueLocalNameTooLong, key: ConditionLocalNameTooLong},
+		{issueType: issueLocalReadOnly, key: ConditionLocalReadOnly},
+		{issueType: issueLocalFileTooLarge, key: ConditionLocalFileTooLarge},
+		{issueType: issueLocalBusy, key: ConditionLocalBusy},
+		{issueType: issueLocalCrossDevice, key: ConditionLocalCrossDevice},
 	} {
 		if mapping.issueType == issueType {
 			return mapping.key, true
