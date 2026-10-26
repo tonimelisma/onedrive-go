@@ -2,7 +2,7 @@
 
 GOVERNS: internal/cli/get.go, internal/cli/put.go, internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/local_errors.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_download.go, internal/driveops/transfer_manager.go, internal/driveops/transfer_upload.go, internal/driveops/transfer_verify.go, pkg/quickxorhash/quickxorhash.go
 
-Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-5.5.2 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-2.8.10 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified]
+Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-5.5.2 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-2.8.10 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-5.8.2 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified]
 
 ## TransferManager
 
@@ -226,25 +226,41 @@ starts:
 
 ## Hash Utilities
 
-QuickXorHash computation for local files (`hash.go`). The `pkg/quickxorhash/` package implements the algorithm (vendored from rclone, BSD-0 license). When a remote file lacks a hash (common on Business/SharePoint), a fallback chain is attempted: QuickXorHash → SHA256 → SHA1. `HashVerified` is set to false when the remote hash is empty.
+QuickXorHash computation for local files (`hash.go`). The `pkg/quickxorhash/` package implements the algorithm (vendored from rclone, BSD-0 license). `SelectHash` returns only an item's QuickXorHash: SHA-256 and SHA-1 can never equal a local QuickXor digest, so the old fallback made such items fail every verification and never compare equal (D-041). An item with SHA digests only is hashless, and its size is the evidence (`TestSelectHash_ReturnsOnlyQuickXor`).
 
-Hash verification retries a mismatch (logged at Debug, since a retry will
-probably succeed) and, after exhaustion, accepts the download with one plain
-warning naming the file ("doesn't match OneDrive's checksum; kept it anyway")
-so the sync engine does not loop forever on a server metadata bug. Raw hashes
-stay at Debug. An item with no content hash at all is downloaded unverified
-without a warning; `DownloadResult.HashVerified` carries that fact.
+## Download Verification
 
-For iOS `.heic` downloads the known OneDrive/iOS metadata bug serves a
-post-processed file whose size differs from the API metadata. Re-downloading
-returns the same bytes, so when a `.heic` download's hash and size both
-disagree with the metadata the transfer manager accepts the first download
-instead of fetching it again, and logs the known mismatch at Debug only.
-A same-size `.heic` hash mismatch is not the quirk and keeps the normal
-retries. Evidence: `TestTransferManager_HEICMetadataMismatch_AcceptsFirstDownloadQuietly`,
+`downloadToVerifiedPartial` judges every attempt with `classifyDownload`:
+verified (QuickXor match), unverifiable but size-consistent (no hash),
+the known HEIC quirk (served smaller than the metadata, accepted on the
+first attempt and logged at Debug), or a mismatch. A mismatch, an empty or
+short body, or an HTML/JSON error document (`graph.ErrUnexpectedDownloadBody`)
+discards the partial and downloads again. After the last attempt only a
+deterministic server transform is accepted (`acceptsServerTransform`: the
+same bytes at the reported size every time, with a hash to differ from);
+anything else fails with `ErrDownloadIntegrity`, which sync reports as
+`download_integrity`, and the existing local file is never replaced (D-038,
+D-039, R-5.5.1, R-5.8.2). An accepted transform sets
+`DownloadResult.AcceptedMismatch` and keeps OneDrive's reported hash as
+`EffectiveRemoteHash`: recording the local hash there made every later pass
+see a remote change and download the file again. Evidence:
+`TestTransferManager_IntegrityFailureKeepsCanonicalFile`,
+`TestTransferManager_DeterministicMismatchAtReportedSize_AcceptedOnce`,
+`TestTransferManager_HEICMetadataMismatch_AcceptsFirstDownloadQuietly`,
 `TestTransferManager_HEICSameSizeHashMismatch_StillRetries`,
-`TestTransferManager_HashExhaustion_WarnsOnceInPlainWords`,
-`TestTransferManager_NoRemoteHash_DoesNotWarn`.
+`TestTransferManager_AcceptedTransformDoesNotWarn`,
+`TestRunOnce_AcceptedServerTransformIsNotDownloadedAgain`.
+
+A partial file's name carries the remote version (`~v` plus 12 hex digits
+of the QuickXorHash, or of the eTag for a hashless item), so a resume only
+ever appends to bytes of the same version; the graph boundary also checks
+that the item is still that version and that the answer is a 206 whose
+Content-Range starts at the partial's length (D-040, R-5.2.2). A partial
+with no version to bind is downloaded afresh. Evidence:
+`TestTransferManager_StalePartialFromOldVersionIsNotResumed`,
+`TestTransferManager_PartialWithoutVersionIsNotResumed`,
+`TestDownloadRange_RejectsUnboundOrMisalignedAnswers`. `DownloadOptsForItem`
+builds the options from a Graph item for CLI `get`.
 
 Errors and warnings at default verbosity name the file the caller asked for,
 never the internal `.onedrive-go.<name>.partial` temp file, and give sizes in

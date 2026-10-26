@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,14 +14,40 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// ErrRangeNotHonored means a resumed download's answer did not start at the
-// requested offset (a 200 with the whole file, or a different Content-Range).
-// Appending it would corrupt the partial file, so the caller restarts.
-var ErrRangeNotHonored = errors.New("graph: the server did not resume the download at the requested offset")
-
 // ErrNoDownloadURL is returned when a drive item has no pre-authenticated download URL.
 // This can happen for folders, OneNote packages, or zero-byte files.
 var ErrNoDownloadURL = errors.New("graph: item has no download URL")
+
+// ErrRangeResumeRejected reports a ranged resume the client must not append:
+// the item is no longer the version the partial was started against, the
+// server ignored the Range (200), or its Content-Range does not start at the
+// requested offset or describe the current size. Appending any of those to
+// the partial spliced two versions or two copies of one file, silently for
+// a hashless item (D-040). The caller discards the partial and starts over.
+var ErrRangeResumeRejected = errors.New("graph: ranged resume rejected")
+
+// ErrUnexpectedDownloadBody reports a download answered with an HTML or JSON
+// document for an item that is not one: an error page or a proxy's answer
+// with a 200 status. It used to be renamed over the user's file once the hash
+// retries ran out, or at once for a hashless item (D-038, D-039).
+var ErrUnexpectedDownloadBody = errors.New("graph: download returned an error document instead of the file")
+
+// DownloadVersion binds a ranged resume to the version of the item its
+// partial file holds. QuickXorHash is the content identity when the item has
+// one; otherwise ETag is.
+type DownloadVersion struct {
+	ETag         string
+	QuickXorHash string
+}
+
+// matches reports whether item is still the bound version.
+func (v DownloadVersion) matches(item *Item) bool {
+	if v.QuickXorHash != "" {
+		return item.QuickXorHash == v.QuickXorHash
+	}
+
+	return v.ETag != "" && item.ETag == v.ETag
+}
 
 // Download streams the content of a drive item to the given writer.
 // It first fetches the item metadata to obtain the pre-authenticated download URL,
@@ -45,10 +72,10 @@ func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string
 			c.logMissingDownloadURL(driveID, itemID, item)
 			return 0, ErrNoDownloadURL
 		}
-		return c.downloadViaContentEndpoint(ctx, driveID, itemID, w, 0)
+		return c.downloadViaContentEndpoint(ctx, driveID, item, w, 0)
 	}
 
-	n, err := c.downloadFromURL(ctx, string(item.DownloadURL), w)
+	n, err := c.downloadFromURL(ctx, item, w)
 	if err != nil {
 		if !isPreAuthDownloadUnauthorized(err) {
 			return 0, err
@@ -63,14 +90,14 @@ func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string
 				c.logMissingDownloadURL(driveID, itemID, item)
 				return 0, ErrNoDownloadURL
 			}
-			return c.downloadViaContentEndpoint(ctx, driveID, itemID, w, 0)
+			return c.downloadViaContentEndpoint(ctx, driveID, item, w, 0)
 		}
 
-		n, err = c.downloadFromURL(ctx, string(item.DownloadURL), w)
+		n, err = c.downloadFromURL(ctx, item, w)
 		if isPreAuthDownloadUnauthorized(err) {
 			// A fresh tempauth URL refused again: the tempauth scheme itself
 			// is unavailable (it retires on 2027-04-01), so use /content.
-			return c.downloadViaContentEndpoint(ctx, driveID, itemID, w, 0)
+			return c.downloadViaContentEndpoint(ctx, driveID, item, w, 0)
 		}
 		if err != nil {
 			return 0, err
@@ -88,11 +115,12 @@ func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string
 
 // DownloadRange streams the content of a drive item starting from a byte offset.
 // Used to resume interrupted downloads from existing .partial files (B-085).
-// If the server ignores the Range header (returns 200 instead of 206), the full
-// content is streamed (caller should handle this case). Returns the number of
-// bytes written.
+// version is what the partial holds: when the item is no longer that version,
+// or the server answers with anything but a 206 whose Content-Range starts at
+// offset and spans the item's size, nothing is written and the error wraps
+// ErrRangeResumeRejected. Returns the number of bytes written.
 func (c *Client) DownloadRange(
-	ctx context.Context, driveID driveid.ID, itemID string, w io.Writer, offset int64,
+	ctx context.Context, driveID driveid.ID, itemID string, w io.Writer, offset int64, version DownloadVersion,
 ) (int64, error) {
 	c.logger.Debug("downloading item with range",
 		slog.String("drive_id", driveID.String()),
@@ -108,15 +136,19 @@ func (c *Client) DownloadRange(
 		return 0, ErrMalwareDetected
 	}
 
+	if !version.matches(item) {
+		return 0, fmt.Errorf("%w: the item changed since the partial download started", ErrRangeResumeRejected)
+	}
+
 	if item.DownloadURL == "" {
 		if !hasDownloadableContent(item) {
 			c.logMissingDownloadURL(driveID, itemID, item)
 			return 0, ErrNoDownloadURL
 		}
-		return c.downloadViaContentEndpoint(ctx, driveID, itemID, w, offset)
+		return c.downloadViaContentEndpoint(ctx, driveID, item, w, offset)
 	}
 
-	n, err := c.downloadFromURLWithRange(ctx, string(item.DownloadURL), w, offset)
+	n, err := c.downloadFromURLWithRange(ctx, item, w, offset)
 	if err != nil {
 		if !isPreAuthDownloadUnauthorized(err) {
 			return 0, err
@@ -130,8 +162,11 @@ func (c *Client) DownloadRange(
 			c.logMissingDownloadURL(driveID, itemID, item)
 			return 0, ErrNoDownloadURL
 		}
+		if !version.matches(item) {
+			return 0, fmt.Errorf("%w: the item changed since the partial download started", ErrRangeResumeRejected)
+		}
 
-		n, err = c.downloadFromURLWithRange(ctx, string(item.DownloadURL), w, offset)
+		n, err = c.downloadFromURLWithRange(ctx, item, w, offset)
 		if err != nil {
 			return 0, err
 		}
@@ -192,22 +227,20 @@ func isPreAuthDownloadUnauthorized(err error) bool {
 }
 
 // downloadFromURLWithRange streams content from a pre-authenticated URL with
-// an optional Range header. The URL is pre-authenticated, so no Authorization
-// header is sent. Accepts both 200 (server ignores Range) and 206 (partial).
+// a Range header. The URL is pre-authenticated, so no Authorization header is
+// sent. Only a 206 whose Content-Range starts at offset and spans the item's
+// size is appended.
 func (c *Client) downloadFromURLWithRange(
-	ctx context.Context, downloadURL string, w io.Writer, offset int64,
+	ctx context.Context, item *Item, w io.Writer, offset int64,
 ) (int64, error) {
 	resp, err := c.doPreAuth(ctx, "range download", func() (*http.Request, error) {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, http.NoBody)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, string(item.DownloadURL), http.NoBody)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating range download request: %w", reqErr)
 		}
 
 		req.Header.Set("User-Agent", c.userAgent)
-
-		if offset > 0 {
-			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
-		}
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 
 		return req, nil
 	})
@@ -215,6 +248,14 @@ func (c *Client) downloadFromURLWithRange(
 		return 0, err
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
+
+	if rangeErr := validateContentRange(resp, offset, item.Size); rangeErr != nil {
+		return 0, rangeErr
+	}
+
+	if bodyErr := checkDownloadBodyType(resp, item); bodyErr != nil {
+		return 0, bodyErr
+	}
 
 	n, copyErr := io.Copy(w, resp.Body)
 	if copyErr != nil {
@@ -231,14 +272,75 @@ func (c *Client) downloadFromURLWithRange(
 	return n, nil
 }
 
+// validateContentRange is the one check for every resumed download route
+// (the tempauth URL and the /content fallback): with offset > 0 it accepts
+// only a 206 whose Content-Range is "bytes offset-end/size" for this item. A
+// 200 means the server ignored the Range and is sending the whole file,
+// which appended to the partial doubled its first bytes; a different start
+// or size splices two copies or two versions.
+func validateContentRange(resp *http.Response, offset, size int64) error {
+	if offset <= 0 {
+		return nil
+	}
+
+	if resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("%w: HTTP %d instead of 206", ErrRangeResumeRejected, resp.StatusCode)
+	}
+
+	var start, end, total int64
+	header := resp.Header.Get("Content-Range")
+	if _, err := fmt.Sscanf(header, "bytes %d-%d/%d", &start, &end, &total); err != nil {
+		return fmt.Errorf("%w: unreadable Content-Range %q", ErrRangeResumeRejected, header)
+	}
+
+	if start != offset || end < start || (size > 0 && (total != size || end != size-1)) {
+		return fmt.Errorf("%w: Content-Range %q for offset %d of %d bytes", ErrRangeResumeRejected, header, offset, size)
+	}
+
+	return nil
+}
+
+// checkDownloadBodyType refuses an HTML or JSON answer for an item whose own
+// type is something else: OneDrive serves a file with the type its metadata
+// names, so such an answer is an error document with a 200 status.
+func checkDownloadBodyType(resp *http.Response, item *Item) error {
+	served := mediaType(resp.Header.Get("Content-Type"))
+	if served != "text/html" && served != "application/json" {
+		return nil
+	}
+
+	if mediaType(item.MimeType) == served {
+		return nil
+	}
+
+	return fmt.Errorf("%w (%s for a %s file)", ErrUnexpectedDownloadBody, served, mediaTypeOrUnknown(item.MimeType))
+}
+
+func mediaType(contentType string) string {
+	parsed, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return strings.ToLower(strings.TrimSpace(contentType))
+	}
+
+	return parsed
+}
+
+func mediaTypeOrUnknown(contentType string) string {
+	if parsed := mediaType(contentType); parsed != "" {
+		return parsed
+	}
+
+	return "untyped"
+}
+
 // downloadFromURL streams content from a pre-authenticated URL directly to the writer.
 // The URL is pre-authenticated by the Graph API, so no Authorization header is needed.
 // The URL itself is never logged because it contains embedded auth tokens (architecture.md section 9.2).
 // Only the HTTP request/response cycle is retried; streaming (io.Copy) happens after
 // doPreAuthRetry returns, so partial-stream failures are handled by the caller.
-func (c *Client) downloadFromURL(ctx context.Context, downloadURL string, w io.Writer) (int64, error) {
+func (c *Client) downloadFromURL(ctx context.Context, item *Item, w io.Writer) (int64, error) {
 	resp, err := c.doPreAuth(ctx, "download", func() (*http.Request, error) {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, http.NoBody)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, string(item.DownloadURL), http.NoBody)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating download request: %w", reqErr)
 		}
@@ -251,6 +353,10 @@ func (c *Client) downloadFromURL(ctx context.Context, downloadURL string, w io.W
 		return 0, err
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
+
+	if bodyErr := checkDownloadBodyType(resp, item); bodyErr != nil {
+		return 0, bodyErr
+	}
 
 	n, copyErr := io.Copy(w, resp.Body)
 	if copyErr != nil {
@@ -288,14 +394,14 @@ func hasDownloadableContent(item *Item) bool {
 // starts at offset: a 200 carries the whole file, and appending it at the
 // offset would corrupt the partial.
 func (c *Client) downloadViaContentEndpoint(
-	ctx context.Context, driveID driveid.ID, itemID string, w io.Writer, offset int64,
+	ctx context.Context, driveID driveid.ID, item *Item, w io.Writer, offset int64,
 ) (int64, error) {
 	c.logger.Debug("downloading through the content endpoint",
 		slog.String("drive_id", driveID.String()),
-		slog.String("item_id", itemID),
+		slog.String("item_id", item.ID),
 	)
 
-	resp, err := c.requestContent(ctx, driveID, itemID, offset)
+	resp, err := c.requestContent(ctx, driveID, item.ID, offset)
 	if err != nil {
 		return 0, err
 	}
@@ -323,8 +429,12 @@ func (c *Client) downloadViaContentEndpoint(
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
-	if rangeErr := checkResumeResponse(resp, offset); rangeErr != nil {
+	if rangeErr := validateContentRange(resp, offset, item.Size); rangeErr != nil {
 		return 0, rangeErr
+	}
+
+	if bodyErr := checkDownloadBodyType(resp, item); bodyErr != nil {
+		return 0, bodyErr
 	}
 
 	n, copyErr := io.Copy(w, resp.Body)
@@ -380,20 +490,4 @@ func (c *Client) validatedContentRedirect(resp *http.Response) (string, error) {
 	}
 
 	return parsed.String(), nil
-}
-
-// checkResumeResponse refuses a resumed download whose answer does not start
-// at offset: anything but 206 with "Content-Range: bytes <offset>-...".
-func checkResumeResponse(resp *http.Response, offset int64) error {
-	if offset <= 0 {
-		return nil
-	}
-
-	want := fmt.Sprintf("bytes %d-", offset)
-	if resp.StatusCode != http.StatusPartialContent || !strings.HasPrefix(resp.Header.Get("Content-Range"), want) {
-		return fmt.Errorf("%w: resuming at byte %d got HTTP %d with Content-Range %q",
-			ErrRangeNotHonored, offset, resp.StatusCode, resp.Header.Get("Content-Range"))
-	}
-
-	return nil
 }

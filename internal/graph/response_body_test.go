@@ -23,6 +23,7 @@ func TestDownloadRange_DroppedConnectionIsAResponseReadError(t *testing.T) {
 	var hangUp atomic.Bool
 	hangUp.Store(true)
 	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Range", "bytes 1-99/100")
 		if !hangUp.Load() {
 			w.WriteHeader(http.StatusPartialContent)
 			writeDownloadTestBody(t, w, "complete")
@@ -46,7 +47,7 @@ func TestDownloadRange_DroppedConnectionIsAResponseReadError(t *testing.T) {
 	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		writeTestResponsef(t, w, `{
-			"id": "item-range", "name": "range.txt", "size": 100,
+			"id": "item-range", "name": "range.txt", "size": 100, "eTag": "v1",
 			"parentReference": {"id": "p", "driveId": "d"},
 			"file": {"mimeType": "text/plain"},
 			"@microsoft.graph.downloadUrl": %q
@@ -55,7 +56,7 @@ func TestDownloadRange_DroppedConnectionIsAResponseReadError(t *testing.T) {
 	defer graphSrv.Close()
 
 	client := newTestClient(t, graphSrv.URL)
-	_, err := client.DownloadRange(t.Context(), driveid.New("d"), "item-range", &bytes.Buffer{}, 1)
+	_, err := client.DownloadRange(t.Context(), driveid.New("d"), "item-range", &bytes.Buffer{}, 1, DownloadVersion{ETag: "v1"})
 	require.Error(t, err)
 
 	var readErr *ResponseReadError
@@ -64,7 +65,7 @@ func TestDownloadRange_DroppedConnectionIsAResponseReadError(t *testing.T) {
 
 	// The local side failing is not a response read failure.
 	hangUp.Store(false)
-	_, err = client.DownloadRange(t.Context(), driveid.New("d"), "item-range", failingWriter{}, 1)
+	_, err = client.DownloadRange(t.Context(), driveid.New("d"), "item-range", failingWriter{}, 1, DownloadVersion{ETag: "v1"})
 	require.ErrorIs(t, err, errDiskFull)
 	assert.NotErrorAs(t, err, &readErr, "a local write failure must not read as a dropped connection: %v", err)
 }

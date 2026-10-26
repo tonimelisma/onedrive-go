@@ -32,6 +32,7 @@ const (
 	ConditionMalwareDetected        ConditionKey = "malware_detected"
 	ConditionLocalDatabaseOpen      ConditionKey = "local_database_open"
 	ConditionUploadVerification     ConditionKey = "upload_verification_failed"
+	ConditionDownloadIntegrity      ConditionKey = "download_integrity"
 	ConditionUnexpectedCondition    ConditionKey = "unexpected_condition"
 )
 
@@ -123,6 +124,7 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionMalwareDetected,
 		ConditionLocalDatabaseOpen,
 		ConditionUploadVerification,
+		ConditionDownloadIntegrity,
 		ConditionUnexpectedCondition,
 	}
 
@@ -171,6 +173,7 @@ func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
 		{issueType: issueMalwareDetected, key: ConditionMalwareDetected},
 		{issueType: issueLocalDatabaseOpen, key: ConditionLocalDatabaseOpen},
 		{issueType: issueUploadVerification, key: ConditionUploadVerification},
+		{issueType: issueDownloadIntegrity, key: ConditionDownloadIntegrity},
 	} {
 		if mapping.issueType == issueType {
 			return mapping.key, true

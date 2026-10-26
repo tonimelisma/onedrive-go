@@ -59,7 +59,7 @@ func contentFallbackServersWith(
 		}
 		w.Header().Set("Content-Type", "application/json")
 		writeTestResponsef(t, w, `{
-			"id": "item-1", "name": "a.bin", "size": %d,
+			"id": "item-1", "name": "a.bin", "size": %d, "eTag": "v1",
 			"createdDateTime": "2024-01-01T00:00:00Z", "lastModifiedDateTime": "2024-01-01T00:00:00Z",
 			"parentReference": {"id": "parent", "driveId": "d"},
 			"file": {"mimeType": "application/octet-stream"}
@@ -96,7 +96,7 @@ func TestDownloadRange_ContentEndpointResumes(t *testing.T) {
 	allowAnyContentHost(client)
 
 	var buf bytes.Buffer
-	_, err := client.DownloadRange(t.Context(), driveid.New("d"), "item-1", &buf, 3)
+	_, err := client.DownloadRange(t.Context(), driveid.New("d"), "item-1", &buf, 3, DownloadVersion{ETag: "v1"})
 	require.NoError(t, err)
 	assert.Equal(t, "defgh", buf.String())
 	assert.Empty(t, (*contentAuth)[0])
@@ -136,7 +136,7 @@ func TestDownloadRange_ContentEndpointRefusesAFullBodyAtAnOffset(t *testing.T) {
 	allowAnyContentHost(client)
 
 	var buf bytes.Buffer
-	_, err := client.DownloadRange(t.Context(), driveid.New("d"), "item-1", &buf, 3)
-	require.ErrorIs(t, err, ErrRangeNotHonored)
+	_, err := client.DownloadRange(t.Context(), driveid.New("d"), "item-1", &buf, 3, DownloadVersion{ETag: "v1"})
+	require.ErrorIs(t, err, ErrRangeResumeRejected)
 	assert.Zero(t, buf.Len(), "nothing is appended to the partial")
 }

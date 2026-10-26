@@ -47,7 +47,7 @@ func (m *tmMockDownloader) Download(ctx context.Context, driveID driveid.ID, ite
 	return 0, fmt.Errorf("Download not mocked")
 }
 
-func (m *tmMockDownloader) DownloadRange(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer, offset int64) (int64, error) {
+func (m *tmMockDownloader) DownloadRange(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer, offset int64, _ graph.DownloadVersion) (int64, error) {
 	if m.downloadRangeFn != nil {
 		return m.downloadRangeFn(ctx, driveID, itemID, w, offset)
 	}
@@ -199,9 +199,10 @@ func TestTransferManager_FreshDownload_Success(t *testing.T) {
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	targetPath := filepath.Join(t.TempDir(), "sub", "file.txt")
 
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+	opts := DownloadOpts{
 		RemoteHash: expectedHash,
-	})
+	}
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.NoError(t, err, "DownloadToFile")
 
 	assert.Equal(t, expectedHash, result.LocalHash)
@@ -216,7 +217,7 @@ func TestTransferManager_FreshDownload_Success(t *testing.T) {
 	assert.Equal(t, content, got, "file content mismatch")
 
 	// .partial should not exist after successful download.
-	_, statErr := os.Stat(downloadPartialPath(targetPath))
+	_, statErr := os.Stat(DownloadPartialPath(targetPath, opts))
 	assert.True(t, os.IsNotExist(statErr), "expected .partial to be removed")
 }
 
@@ -232,13 +233,14 @@ func TestTransferManager_FreshDownload_Error(t *testing.T) {
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	targetPath := filepath.Join(t.TempDir(), "file.txt")
 
-	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{})
+	opts := DownloadOpts{}
+	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.Error(t, err)
 
 	assert.Contains(t, err.Error(), "network failure")
 
 	// .partial should be cleaned up on non-ctx error.
-	_, statErr := os.Stat(downloadPartialPath(targetPath))
+	_, statErr := os.Stat(DownloadPartialPath(targetPath, opts))
 	assert.True(t, os.IsNotExist(statErr), "expected .partial to be removed on non-ctx error")
 }
 
@@ -261,11 +263,12 @@ func TestTransferManager_FreshDownload_CtxCancel_PreservesPartial(t *testing.T) 
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	targetPath := filepath.Join(t.TempDir(), "file.txt")
 
-	_, err := tm.DownloadToFile(ctx, driveid.New("d1"), "item1", targetPath, DownloadOpts{})
+	opts := DownloadOpts{}
+	_, err := tm.DownloadToFile(ctx, driveid.New("d1"), "item1", targetPath, opts)
 	require.Error(t, err)
 
 	// .partial should be preserved on context cancellation.
-	info, statErr := os.Stat(downloadPartialPath(targetPath))
+	info, statErr := os.Stat(DownloadPartialPath(targetPath, opts))
 	require.NoError(t, statErr, "expected .partial to be preserved")
 
 	assert.NotZero(t, info.Size(), "expected .partial to have data")
@@ -295,14 +298,15 @@ func TestTransferManager_ResumeDownload_Success(t *testing.T) {
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "file.txt")
-	partialPath := downloadPartialPath(targetPath)
+	opts := DownloadOpts{
+		RemoteHash: expectedHash,
+	}
+	partialPath := DownloadPartialPath(targetPath, opts)
 
 	// Pre-create the .partial file with existing data.
 	require.NoError(t, os.WriteFile(partialPath, existingData, 0o600))
 
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-		RemoteHash: expectedHash,
-	})
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.NoError(t, err, "DownloadToFile")
 
 	assert.Equal(t, expectedHash, result.LocalHash)
@@ -331,13 +335,14 @@ func TestTransferManager_ResumeDownload_CorruptPartial_RetriesFresh(t *testing.T
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "file.txt")
-	partialPath := downloadPartialPath(targetPath)
-	require.NoError(t, os.WriteFile(partialPath, corruptPartial, 0o600))
-
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+	opts := DownloadOpts{
 		RemoteHash:     expectedHash,
 		MaxHashRetries: 1,
-	})
+	}
+	partialPath := DownloadPartialPath(targetPath, opts)
+	require.NoError(t, os.WriteFile(partialPath, corruptPartial, 0o600))
+
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.NoError(t, err, "DownloadToFile")
 
 	assert.Equal(t, 1, rangeCalls, "expected one resume attempt before retrying fresh")
@@ -368,13 +373,14 @@ func TestTransferManager_ResumeDownload_RemoteChangedDuringResume_RetriesFresh(t
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "changed.txt")
-	partialPath := downloadPartialPath(targetPath)
-	require.NoError(t, os.WriteFile(partialPath, partialData, 0o600))
-
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+	opts := DownloadOpts{
 		RemoteHash:     expectedHash,
 		MaxHashRetries: 1,
-	})
+	}
+	partialPath := DownloadPartialPath(targetPath, opts)
+	require.NoError(t, os.WriteFile(partialPath, partialData, 0o600))
+
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.NoError(t, err, "DownloadToFile")
 
 	assert.Equal(t, 1, rangeCalls, "expected one resume attempt against stale partial data")
@@ -415,13 +421,14 @@ func TestTransferManager_ResumeDownload_OversizedPartial_RetriesFresh(t *testing
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "oversized-partial.txt")
-	partialPath := downloadPartialPath(targetPath)
-	require.NoError(t, os.WriteFile(partialPath, oversizedPartial, 0o600))
-
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+	opts := DownloadOpts{
 		RemoteHash:     expectedHash,
 		MaxHashRetries: 1,
-	})
+	}
+	partialPath := DownloadPartialPath(targetPath, opts)
+	require.NoError(t, os.WriteFile(partialPath, oversizedPartial, 0o600))
+
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.NoError(t, err, "DownloadToFile")
 
 	assert.Equal(t, 1, rangeCalls, "expected one resume attempt against oversized partial state")
@@ -477,12 +484,13 @@ func TestTransferManager_ResumeDownload_FallsBackToFreshDownload(t *testing.T) {
 
 			tm := newTestTM(dl, &tmMockUploader{}, nil)
 			targetPath := filepath.Join(t.TempDir(), "file.txt")
-			partialPath := downloadPartialPath(targetPath)
+			opts := DownloadOpts{
+				RemoteHash: expectedHash,
+			}
+			partialPath := DownloadPartialPath(targetPath, opts)
 			require.NoError(t, os.WriteFile(partialPath, tt.partialData, 0o600))
 
-			result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-				RemoteHash: expectedHash,
-			})
+			result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 			require.NoError(t, err, "DownloadToFile")
 			assert.True(t, freshDownloadCalled, "expected fresh Download() fallback")
 			assert.Equal(t, expectedHash, result.LocalHash)
@@ -528,13 +536,11 @@ func TestTransferManager_HashMismatch_Retry(t *testing.T) {
 	assert.Equal(t, correctHash, result.LocalHash)
 }
 
-func TestTransferManager_HashExhaustion_Accepts(t *testing.T) {
+// Validates: R-5.5.1, R-5.8.2
+func TestTransferManager_DeterministicMismatchAtReportedSize_AcceptedOnce(t *testing.T) {
 	t.Parallel()
 
-	// All downloads produce content with a different hash. After exhaustion,
-	// EffectiveRemoteHash should be set to localHash.
-	content := []byte("always-wrong-hash")
-
+	content := []byte("always-the-same-bytes")
 	dl := &tmSimpleDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write(content)
@@ -546,16 +552,183 @@ func TestTransferManager_HashExhaustion_Accepts(t *testing.T) {
 	targetPath := filepath.Join(t.TempDir(), "file.txt")
 
 	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-		RemoteHash:     "definitely-wrong-hash",
+		RemoteHash:     "reported-hash",
+		RemoteSize:     int64(len(content)),
 		MaxHashRetries: 1,
 	})
 	require.NoError(t, err, "DownloadToFile")
 
-	// After exhaustion, EffectiveRemoteHash should match localHash (accepted).
-	assert.Equal(t, result.LocalHash, result.EffectiveRemoteHash)
+	// The same bytes at the reported size every time: what OneDrive serves
+	// for this version. The remote hash recorded is OneDrive's, not the
+	// local one (that made every later pass see a remote change).
+	assert.True(t, result.AcceptedMismatch)
+	assert.False(t, result.HashVerified)
+	assert.Equal(t, "reported-hash", result.EffectiveRemoteHash)
+	assert.Equal(t, tmHashBytes(content), result.LocalHash)
+}
 
-	// HashVerified should be false when retries exhausted with mismatch.
-	assert.False(t, result.HashVerified, "HashVerified should be false after exhaustion")
+// Validates: R-5.5.1, R-5.8.2
+func TestTransferManager_IntegrityFailureKeepsCanonicalFile(t *testing.T) {
+	t.Parallel()
+
+	const good = "the user's good local copy"
+	errorBody := []byte(`{"error":{"code":"generalException","message":"try again"}}`)
+
+	tests := []struct {
+		name     string
+		opts     DownloadOpts
+		download func(attempt int, w io.Writer) (int64, error)
+	}{
+		{
+			name: "200 with a JSON error body three times",
+			opts: DownloadOpts{RemoteHash: "reported-hash", RemoteSize: 4096},
+			download: func(_ int, w io.Writer) (int64, error) {
+				n, err := w.Write(errorBody)
+				return int64(n), err
+			},
+		},
+		{
+			name: "error document recognized by type",
+			opts: DownloadOpts{RemoteHash: "reported-hash", RemoteSize: 4096},
+			download: func(_ int, _ io.Writer) (int64, error) {
+				return 0, fmt.Errorf("downloading: %w", graph.ErrUnexpectedDownloadBody)
+			},
+		},
+		{
+			name: "different wrong bytes each time",
+			opts: DownloadOpts{RemoteHash: "reported-hash", RemoteSize: 5},
+			download: func(attempt int, w io.Writer) (int64, error) {
+				n, err := fmt.Fprintf(w, "try%d", attempt)
+				return int64(n), err
+			},
+		},
+		{
+			name: "hashless short body",
+			opts: DownloadOpts{RemoteSize: 4096},
+			download: func(_ int, w io.Writer) (int64, error) {
+				n, err := w.Write([]byte("short"))
+				return int64(n), err
+			},
+		},
+		{
+			name: "hashless empty body for a non-empty item",
+			opts: DownloadOpts{RemoteSize: 4096},
+			download: func(_ int, _ io.Writer) (int64, error) {
+				return 0, nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var attempts int
+			dl := &tmSimpleDownloader{
+				downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+					attempts++
+					return tt.download(attempts, w)
+				},
+			}
+
+			targetPath := filepath.Join(t.TempDir(), "report.bin")
+			require.NoError(t, os.WriteFile(targetPath, []byte(good), 0o600))
+
+			_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(
+				t.Context(), driveid.New("d1"), "item1", targetPath, tt.opts)
+
+			// These used to be renamed over the user's file: after three
+			// attempts with a hash, at once without one.
+			require.ErrorIs(t, err, ErrDownloadIntegrity)
+			got, readErr := localpath.ReadFile(targetPath)
+			require.NoError(t, readErr)
+			assert.Equal(t, good, string(got))
+			assert.Equal(t, defaultMaxHashRetries+1, attempts, "bounded retries")
+			_, statErr := os.Stat(DownloadPartialPath(targetPath, tt.opts))
+			assert.ErrorIs(t, statErr, os.ErrNotExist, "no partial is left behind")
+		})
+	}
+}
+
+// Validates: R-5.5.1
+func TestTransferManager_EmptyItemWithoutDownloadURLCreatesEmptyFile(t *testing.T) {
+	t.Parallel()
+
+	dl := &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			return 0, graph.ErrNoDownloadURL
+		},
+	}
+
+	targetPath := filepath.Join(t.TempDir(), "empty.txt")
+	result, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(
+		t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{RemoteSize: 0, RemoteSizeKnown: true})
+	require.NoError(t, err)
+	assert.Zero(t, result.Size)
+
+	info, statErr := os.Stat(targetPath)
+	require.NoError(t, statErr)
+	assert.Zero(t, info.Size())
+}
+
+// Validates: R-5.2.2
+func TestTransferManager_StalePartialFromOldVersionIsNotResumed(t *testing.T) {
+	t.Parallel()
+
+	newContent := []byte("version two bytes")
+	var rangeCalls int
+	dl := &tmMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(newContent)
+			return int64(n), err
+		},
+		downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer, _ int64) (int64, error) {
+			rangeCalls++
+			return 0, nil
+		},
+	}
+
+	targetPath := filepath.Join(t.TempDir(), "doc.bin")
+	oldOpts := DownloadOpts{RemoteETag: "etag-v1", RemoteSize: int64(len(newContent))}
+	newOpts := DownloadOpts{RemoteETag: "etag-v2", RemoteSize: int64(len(newContent))}
+	require.NotEqual(t, DownloadPartialPath(targetPath, oldOpts), DownloadPartialPath(targetPath, newOpts))
+	require.NoError(t, os.WriteFile(DownloadPartialPath(targetPath, oldOpts), []byte("version"), 0o600))
+
+	_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(
+		t.Context(), driveid.New("d1"), "item1", targetPath, newOpts)
+	require.NoError(t, err)
+
+	// A hashless item resumed across versions spliced old bytes onto new
+	// ones with nothing to catch it.
+	assert.Zero(t, rangeCalls)
+	got, readErr := localpath.ReadFile(targetPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, newContent, got)
+}
+
+// Validates: R-5.2.2
+func TestTransferManager_PartialWithoutVersionIsNotResumed(t *testing.T) {
+	t.Parallel()
+
+	var rangeCalls int
+	dl := &tmMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write([]byte("whole"))
+			return int64(n), err
+		},
+		downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer, _ int64) (int64, error) {
+			rangeCalls++
+			return 0, nil
+		},
+	}
+
+	targetPath := filepath.Join(t.TempDir(), "doc.bin")
+	require.NoError(t, os.WriteFile(DownloadPartialPath(targetPath, DownloadOpts{}), []byte("wh"), 0o600))
+
+	_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(
+		t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{})
+	require.NoError(t, err)
+	assert.Zero(t, rangeCalls, "nothing binds the partial to a version")
 }
 
 // Validates: R-5.8.1
@@ -592,7 +765,10 @@ func TestTransferManager_HEICMetadataMismatch_AcceptsFirstDownloadQuietly(t *tes
 	require.NoError(t, err)
 	assert.Equal(t, 1, downloadCount, "re-downloading cannot fix the server-side HEIC quirk")
 	assert.False(t, result.HashVerified)
-	assert.Equal(t, result.LocalHash, result.EffectiveRemoteHash)
+	assert.True(t, result.AcceptedMismatch)
+	// OneDrive's own hash is what the baseline records, so the next pass
+	// sees no remote change and does not download the photo again.
+	assert.Equal(t, "definitely-wrong-hash", result.EffectiveRemoteHash)
 	assert.Contains(t, buf.String(), "known OneDrive/iOS metadata mismatch")
 	assert.Contains(t, buf.String(), "accepting download")
 	assert.NotContains(t, buf.String(), "level=WARN")
@@ -628,16 +804,13 @@ func TestTransferManager_HEICSameSizeHashMismatch_StillRetries(t *testing.T) {
 	assert.Equal(t, 3, downloadCount)
 }
 
-// Validates: R-5.5.1
-//
-// Retries that will probably succeed stay at Debug; only the final accepted
-// mismatch warns, once, in plain words and without raw hashes.
-func TestTransferManager_HashExhaustion_WarnsOnceInPlainWords(t *testing.T) {
+// Validates: R-5.8.2
+func TestTransferManager_AcceptedTransformDoesNotWarn(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	content := []byte("always-wrong-hash")
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	content := []byte("always-the-same-bytes")
 
 	dl := &tmSimpleDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
@@ -651,11 +824,12 @@ func TestTransferManager_HashExhaustion_WarnsOnceInPlainWords(t *testing.T) {
 
 	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
 		RemoteHash:     "definitely-wrong-hash",
+		RemoteSize:     int64(len(content)),
 		MaxHashRetries: 2,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 1, strings.Count(buf.String(), "level=WARN"), buf.String())
-	assert.Contains(t, buf.String(), "doesn't match OneDrive's checksum")
+	assert.NotContains(t, buf.String(), "level=WARN", buf.String())
+	assert.Equal(t, 1, strings.Count(buf.String(), "level=INFO"), buf.String())
 	assert.NotContains(t, buf.String(), "definitely-wrong-hash")
 }
 
@@ -1384,15 +1558,16 @@ func TestDownloadToFile_RenameFailure_PreservesPartial(t *testing.T) {
 	targetPath := filepath.Join(dir, "target_is_dir")
 	require.NoError(t, os.Mkdir(targetPath, 0o700))
 
-	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+	opts := DownloadOpts{
 		RemoteHash: expectedHash,
-	})
+	}
+	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.Error(t, err)
 
 	assert.Contains(t, err.Error(), "renaming partial")
 
 	// .partial should still exist with correct content.
-	partialPath := downloadPartialPath(targetPath)
+	partialPath := DownloadPartialPath(targetPath, opts)
 
 	got, readErr := localpath.ReadFile(partialPath)
 	require.NoError(t, readErr, "expected .partial to be preserved")
@@ -1416,16 +1591,17 @@ func TestDownloadToFile_TargetPreconditionBeforeRenamePreservesPartial(t *testin
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	targetPath := filepath.Join(t.TempDir(), "target.txt")
 
-	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+	opts := DownloadOpts{
 		RemoteHash: expectedHash,
 		ValidateTargetBeforeRename: func() error {
 			return assert.AnError
 		},
-	})
+	}
+	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.ErrorIs(t, err, assert.AnError)
 
 	assert.NoFileExists(t, targetPath)
-	got, readErr := localpath.ReadFile(downloadPartialPath(targetPath))
+	got, readErr := localpath.ReadFile(DownloadPartialPath(targetPath, opts))
 	require.NoError(t, readErr)
 	assert.Equal(t, content, got)
 }
@@ -1573,14 +1749,15 @@ func TestDownloadToFile_SimpleDownloader_OverwritesPartial(t *testing.T) {
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "file.txt")
-	partialPath := downloadPartialPath(targetPath)
+	opts := DownloadOpts{
+		RemoteHash: expectedHash,
+	}
+	partialPath := DownloadPartialPath(targetPath, opts)
 
 	// Pre-create a .partial file with old content — should be overwritten.
 	require.NoError(t, os.WriteFile(partialPath, []byte("old-partial-data-that-should-go-away"), 0o600))
 
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-		RemoteHash: expectedHash,
-	})
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.NoError(t, err, "DownloadToFile")
 
 	// Final file should contain fresh content, not concatenated with old.
@@ -1795,17 +1972,17 @@ func TestTransferManager_DiskSpaceCheck(t *testing.T) {
 func TestDownloadPartialName_FitsLocalNameLimit(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, ".onedrive-go.report.pdf.partial", downloadPartialName("report.pdf"))
+	assert.Equal(t, ".onedrive-go.report.pdf.partial", downloadPartialName("report.pdf", ""))
 
 	long := strings.Repeat("w", 246) + ".txt" // 250 bytes: valid locally
-	partial := downloadPartialName(long)
+	partial := downloadPartialName(long, "")
 	assert.LessOrEqual(t, len(partial), maxLocalNameBytes)
 	assert.True(t, IsOwnedTransferArtifactName(partial))
-	assert.Equal(t, partial, downloadPartialName(long), "deterministic, so a resume finds the same partial")
-	assert.NotEqual(t, partial, downloadPartialName(strings.Repeat("w", 246)+".TXT"), "different names never share a partial")
+	assert.Equal(t, partial, downloadPartialName(long, ""), "deterministic, so a resume finds the same partial")
+	assert.NotEqual(t, partial, downloadPartialName(strings.Repeat("w", 246)+".TXT", ""), "different names never share a partial")
 
 	japanese := strings.Repeat("日本", 42) // 252 bytes of multi-byte runes
-	partial = downloadPartialName(japanese)
+	partial = downloadPartialName(japanese, "")
 	assert.LessOrEqual(t, len(partial), maxLocalNameBytes)
 	assert.True(t, utf8.ValidString(partial), "truncation keeps whole runes")
 }

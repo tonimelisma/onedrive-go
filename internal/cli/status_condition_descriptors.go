@@ -141,7 +141,8 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionMalwareDetected,
 		syncengine.ConditionLocalDatabaseOpen,
-		syncengine.ConditionUploadVerification:
+		syncengine.ConditionUploadVerification,
+		syncengine.ConditionDownloadIntegrity:
 		return describeLocalRuntimeStatusCondition(key)
 	case syncengine.ConditionUnexpectedCondition:
 		return newStatusConditionDescriptor(
@@ -226,6 +227,7 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionMalwareDetected,
 		syncengine.ConditionLocalDatabaseOpen,
 		syncengine.ConditionUploadVerification,
+		syncengine.ConditionDownloadIntegrity,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -290,6 +292,7 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionMalwareDetected,
 		syncengine.ConditionLocalDatabaseOpen,
 		syncengine.ConditionUploadVerification,
+		syncengine.ConditionDownloadIntegrity,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -371,6 +374,12 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 			"OneDrive allows longer names than this computer's filesystem, which stores at most 255 bytes "+
 				"per name (fewer characters for accented or non-Latin names).",
 			"Rename the item on OneDrive to a shorter name.",
+		)
+	case syncengine.ConditionDownloadIntegrity:
+		return newStatusConditionDescriptor(
+			"Download doesn't match OneDrive",
+			"OneDrive served bytes that disagree with its own size or checksum, or an error page instead of the file.",
+			"Nothing is lost: the local file is kept and the download is retried. If it keeps failing, check the file on the OneDrive website.",
 		)
 	case syncengine.ConditionUploadVerification:
 		return newStatusConditionDescriptor(

@@ -241,6 +241,8 @@ func issueTypeForFilesystemResult(r *actionCompletion) (string, bool) {
 		return issueFileTooLarge, true
 	case errors.Is(err, driveops.ErrUploadVerificationFailed):
 		return issueUploadVerification, true
+	case errors.Is(err, driveops.ErrDownloadIntegrity):
+		return issueDownloadIntegrity, true
 	}
 
 	switch driveops.ClassifyLocalError(err) {

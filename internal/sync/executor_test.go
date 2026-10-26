@@ -1050,16 +1050,51 @@ func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 	assert.Equal(t, execHelloWorldContent, string(data))
 }
 
-func TestExecutor_Download_HashMismatch_Accepted(t *testing.T) {
+// Validates: R-5.5.1, R-5.8.2
+func TestExecutor_Download_HashMismatch_FailsWithoutWritingTarget(t *testing.T) {
 	t.Parallel()
 
 	callCount := 0
-
 	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			callCount++
-			// Always return wrong content to exhaust retries.
-			n, err := w.Write([]byte("wrong content"))
+			// An error page served with status 200, every time.
+			n, err := w.Write([]byte(`<html>Service unavailable</html>`))
+			return int64(n), err
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	action := &Action{
+		Type:    ActionDownload,
+		Path:    "hash-reject.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View:    &pathView{Remote: &remoteState{Hash: "remote-hash", Size: 4096, Mtime: 1}},
+	}
+
+	o := e.ExecuteDownload(t.Context(), action)
+
+	// It used to be accepted after three attempts and renamed into place,
+	// with the local hash recorded as the remote one.
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, driveops.ErrDownloadIntegrity)
+	assert.Equal(t, 3, callCount, "1 initial + 2 retries")
+	assert.Equal(t, issueDownloadIntegrity, issueTypeForResult(&actionCompletion{Err: o.Error}))
+
+	assert.NoFileExists(t, filepath.Join(syncRoot, "hash-reject.txt"), "the error page is never renamed into place")
+}
+
+// Validates: R-5.8.2
+func TestExecutor_Download_DeterministicTransformRecordsRemoteHash(t *testing.T) {
+	t.Parallel()
+
+	served := []byte("served bytes")
+	dl := &executorMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(served)
 			return int64(n), err
 		},
 	}
@@ -1067,22 +1102,19 @@ func TestExecutor_Download_HashMismatch_Accepted(t *testing.T) {
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
 	e := newExecution(cfg, emptyBaseline())
 
-	action := &Action{
+	o := e.ExecuteDownload(t.Context(), &Action{
 		Type:    ActionDownload,
-		Path:    "hash-accept.txt",
+		Path:    "transformed.docx",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &pathView{Remote: &remoteState{Hash: "stale-remote-hash", Mtime: 1}},
-	}
-
-	o := e.ExecuteDownload(t.Context(), action)
+		View:    &pathView{Remote: &remoteState{Hash: "reported-hash", Size: int64(len(served)), Mtime: 1}},
+	})
 	requireOutcomeSuccess(t, &o)
 
-	// All retries exhausted: 1 initial + 2 retries = 3.
-	assert.Equal(t, 3, callCount, "expected 3 download calls")
-
-	// After exhaustion, remoteHash is overridden to localHash to prevent baseline mismatch loop.
-	assert.Equal(t, o.LocalHash, o.RemoteHash, "LocalHash should equal RemoteHash after exhaustion")
+	// Each side records what it has: OneDrive's hash as the remote half,
+	// the bytes' hash as the local half, so neither looks changed next pass.
+	assert.Equal(t, "reported-hash", o.RemoteHash)
+	assert.Equal(t, hashContentQuickXor(t, string(served)), o.LocalHash)
 }
 
 func TestExecutor_Download_HashMatch_NoRetry(t *testing.T) {

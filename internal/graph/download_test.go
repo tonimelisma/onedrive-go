@@ -399,6 +399,7 @@ func TestDownloadRange_Success(t *testing.T) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		rangeHdr := r.Header.Get("Range")
 		assert.Equal(t, fmt.Sprintf("bytes=%d-", offset), rangeHdr)
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", offset, len(fullContent)-1, len(fullContent)))
 		w.WriteHeader(http.StatusPartialContent)
 		writeDownloadTestBody(t, w, fullContent[offset:])
 	}))
@@ -408,7 +409,7 @@ func TestDownloadRange_Success(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		writeTestResponsef(t, w, `{
-			"id": "item-range", "name": "range.txt", "size": %d,
+			"id": "item-range", "name": "range.txt", "size": %d, "eTag": "v1",
 			"createdDateTime": "2024-01-01T00:00:00Z",
 			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
 			"parentReference": {"id": "p", "driveId": "d"},
@@ -420,7 +421,7 @@ func TestDownloadRange_Success(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	n, err := client.DownloadRange(t.Context(), driveid.New("d"), "item-range", &buf, offset)
+	n, err := client.DownloadRange(t.Context(), driveid.New("d"), "item-range", &buf, offset, DownloadVersion{ETag: "v1"})
 	require.NoError(t, err)
 	assert.Equal(t, fullContent[offset:], buf.String())
 	assert.Equal(t, int64(len(fullContent))-offset, n)
@@ -447,6 +448,7 @@ func TestDownloadRange_RefreshesPreAuthURLAfterUnauthorized(t *testing.T) {
 			writeTestResponse(t, w, `{"error":{"code":"unauthenticated","message":"expired range URL"}}`)
 		case freshDownloadPath:
 			freshDownloadCalls.Add(1)
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", offset, len(fullContent)-1, len(fullContent)))
 			w.WriteHeader(http.StatusPartialContent)
 			writeDownloadTestBody(t, w, fullContent[offset:])
 		default:
@@ -468,6 +470,7 @@ func TestDownloadRange_RefreshesPreAuthURLAfterUnauthorized(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		writeTestResponsef(t, w, `{
 			"id": "item-refresh-range-url",
+			"eTag": "v1",
 			"name": "range.txt",
 			"size": %d,
 			"createdDateTime": "2024-01-01T00:00:00Z",
@@ -481,7 +484,7 @@ func TestDownloadRange_RefreshesPreAuthURLAfterUnauthorized(t *testing.T) {
 
 	client := newTestClient(t, graphSrv.URL)
 	var buf bytes.Buffer
-	n, err := client.DownloadRange(t.Context(), driveid.New("d"), "item-refresh-range-url", &buf, offset)
+	n, err := client.DownloadRange(t.Context(), driveid.New("d"), "item-refresh-range-url", &buf, offset, DownloadVersion{ETag: "v1"})
 	require.NoError(t, err)
 
 	assert.Equal(t, fullContent[offset:], buf.String())
@@ -507,7 +510,7 @@ func TestDownloadRange_NoDownloadURL(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	var buf bytes.Buffer
-	_, err := client.DownloadRange(t.Context(), driveid.New("d"), "folder-r", &buf, 100)
+	_, err := client.DownloadRange(t.Context(), driveid.New("d"), "folder-r", &buf, 100, DownloadVersion{ETag: "v1"})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNoDownloadURL)
 }
@@ -593,7 +596,7 @@ func TestTransfersCanceledMidFlightLogNothingAboveDebug(t *testing.T) {
 	downloadCtx, cancelDownload := context.WithCancel(t.Context())
 	defer cancelDownload()
 
-	_, err := client.downloadFromURL(downloadCtx, srv.URL+"/content", cancelOnWrite{cancel: cancelDownload})
+	_, err := client.downloadFromURL(downloadCtx, &Item{DownloadURL: DownloadURL(srv.URL + "/content")}, cancelOnWrite{cancel: cancelDownload})
 	require.Error(t, err)
 	require.ErrorIs(t, err, context.Canceled)
 
@@ -605,4 +608,122 @@ func TestTransfersCanceledMidFlightLogNothingAboveDebug(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 
 	assert.Empty(t, logBuf.String(), "a canceled transfer must not log at Warn or Error")
+}
+
+func newRangeTestServers(t *testing.T, etag string, size int, serve http.HandlerFunc) (*httptest.Server, *httptest.Server) {
+	t.Helper()
+
+	dlSrv := httptest.NewServer(serve)
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponsef(t, w, `{"id":"item-range","name":"range.bin","size":%d,"eTag":%q,
+			"file":{"mimeType":"application/octet-stream"},"@microsoft.graph.downloadUrl":%q}`,
+			size, etag, dlSrv.URL+"/dl")
+	}))
+
+	return dlSrv, graphSrv
+}
+
+// Validates: R-5.2.2, R-5.5.1
+func TestDownloadRange_RejectsUnboundOrMisalignedAnswers(t *testing.T) {
+	const content = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	const offset = 10
+
+	tests := []struct {
+		name    string
+		version DownloadVersion
+		serve   http.HandlerFunc
+	}{
+		{
+			name:    "server ignored the Range",
+			version: DownloadVersion{ETag: "v1"},
+			serve: func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				writeDownloadTestBody(t, w, content)
+			},
+		},
+		{
+			name:    "Content-Range starts elsewhere",
+			version: DownloadVersion{ETag: "v1"},
+			serve: func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(content)-1, len(content)))
+				w.WriteHeader(http.StatusPartialContent)
+				writeDownloadTestBody(t, w, content)
+			},
+		},
+		{
+			name:    "item changed since the partial started",
+			version: DownloadVersion{ETag: "v0"},
+			serve: func(w http.ResponseWriter, _ *http.Request) {
+				assert.Fail(t, "a changed item must not be fetched for resume")
+				w.WriteHeader(http.StatusPartialContent)
+			},
+		},
+		{
+			name:    "no version to bind to",
+			version: DownloadVersion{},
+			serve: func(w http.ResponseWriter, _ *http.Request) {
+				assert.Fail(t, "an unbound partial must not be resumed")
+				w.WriteHeader(http.StatusPartialContent)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dlSrv, graphSrv := newRangeTestServers(t, "v1", len(content), tt.serve)
+			defer dlSrv.Close()
+			defer graphSrv.Close()
+
+			var buf bytes.Buffer
+			_, err := newTestClient(t, graphSrv.URL).DownloadRange(
+				t.Context(), driveid.New("d"), "item-range", &buf, offset, tt.version)
+
+			// Appending any of these to the partial spliced two copies or
+			// two versions of the file, silently for a hashless item.
+			require.ErrorIs(t, err, ErrRangeResumeRejected)
+			assert.Zero(t, buf.Len(), "nothing may be appended")
+		})
+	}
+}
+
+// Validates: R-5.5.1
+func TestDownload_ErrorDocumentWithStatus200IsRejected(t *testing.T) {
+	tests := []struct {
+		name        string
+		mimeType    string
+		served      string
+		wantRefused bool
+	}{
+		{name: "html page for a binary file", mimeType: "application/octet-stream", served: "text/html; charset=utf-8", wantRefused: true},
+		{name: "json error for a photo", mimeType: "image/jpeg", served: "application/json", wantRefused: true},
+		{name: "a real html file", mimeType: "text/html", served: "text/html", wantRefused: false},
+		{name: "a real json file", mimeType: "application/json", served: "application/json; charset=utf-8", wantRefused: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", tt.served)
+				writeDownloadTestBody(t, w, `{"error":{"code":"generalException"}}`)
+			}))
+			defer dlSrv.Close()
+
+			graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				writeTestResponsef(t, w, `{"id":"i","name":"f","size":38,"file":{"mimeType":%q},
+					"@microsoft.graph.downloadUrl":%q}`, tt.mimeType, dlSrv.URL+"/dl")
+			}))
+			defer graphSrv.Close()
+
+			var buf bytes.Buffer
+			_, err := newTestClient(t, graphSrv.URL).Download(t.Context(), driveid.New("d"), "i", &buf)
+			if tt.wantRefused {
+				require.ErrorIs(t, err, ErrUnexpectedDownloadBody)
+				assert.Zero(t, buf.Len())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

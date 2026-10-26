@@ -10,11 +10,11 @@ import (
 )
 
 // maxHashRetries is the number of additional download attempts when the
-// downloaded content hash doesn't match the remote hash. This is separate from
-// transport-level retries because hash mismatches indicate corrupted content,
-// not transport failures. iOS .heic files are a known source of stale
-// remote hashes — after exhausting retries we accept the download to prevent
-// an infinite re-download loop (B-132).
+// downloaded bytes don't match the remote metadata. This is separate from
+// transport-level retries because a mismatch indicates wrong content, not a
+// transport failure. Only a deterministic server transform is accepted after
+// them (driveops); anything else fails as download_integrity and keeps the
+// local file.
 const maxHashRetries = 2
 
 // ExecuteDownload downloads a remote file via TransferManager with .partial
@@ -78,6 +78,7 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 		opts.RemoteHash = action.View.Remote.Hash
 		opts.RemoteMtime = action.View.Remote.Mtime
 		opts.RemoteSize = action.View.Remote.Size
+		opts.RemoteETag = action.View.Remote.ETag
 	}
 
 	result, err := e.transferMgr.DownloadToFile(ctx, driveID, action.ItemID, targetPath, opts)

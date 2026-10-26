@@ -10,7 +10,7 @@ Download and upload transfer infrastructure shared by file operations and sync.
 ## R-5.2 Resumable Transfers [verified]
 
 - R-5.2.1: When a file exceeds 4 MiB, the system shall use a resumable upload session. [verified]
-- R-5.2.2: When a download is interrupted, the system shall resume via `.partial` files and HTTP Range requests on retry. [verified]
+- R-5.2.2: When a download is interrupted, the system shall resume via `.partial` files and HTTP Range requests on retry. A partial is bound to the remote version it holds (its QuickXorHash, or its eTag for a hashless item, in the partial's name) and is resumed only while the item is still that version and only from a 206 whose Content-Range starts at the partial's length and spans the item's size; anything else discards the partial and downloads from the start. A partial with no version to bind to is never resumed. [verified]
 - R-5.2.3: Upload session state shall be persisted to disk and survive process restart. [verified]
 - R-5.2.4: Interrupted transfers shall resume automatically on next sync. [verified]
 - R-5.2.5: Names the system derives from a user's file name (download partials, conflict copies) shall stay within the 255-byte local name limit, staying deterministic for partials so a download still resumes. A name that is valid locally shall never become undownloadable because of the name the client gives its partial file. [verified]
@@ -22,7 +22,7 @@ Download and upload transfer infrastructure shared by file operations and sync.
 
 ## R-5.5 Transfer Validation [verified]
 
-- R-5.5.1: After download, the system shall verify hash and size against API metadata. [verified]
+- R-5.5.1: After download, the system shall verify the bytes against API metadata: by QuickXorHash when the item has one (SHA digests are never computed locally and are not comparable), otherwise by size. An HTML or JSON answer for an item of another type is an error document, never the file. A download that cannot be verified is retried (3 attempts in all) and then fails with `download_integrity`, leaving the existing local file untouched and no partial behind. An empty item without a download URL is written as an empty file. [verified]
 - R-5.5.2: After upload, the system shall verify the stored item against the bytes sent: by QuickXorHash when OneDrive reports one, otherwise by size. A difference is accepted only for the documented Business/SharePoint enrichment class (Office documents and media on a Business or SharePoint drive). Any other difference shall be read back once, and if it persists the upload shall fail: `put`/`cp` exit non-zero, and sync records `upload_verification_failed` and commits no baseline. An upload completion that carries no item shall be resolved by looking the item up, never recorded without identity. [verified]
 
 ## R-5.6 Upload Session Robustness [verified]
@@ -46,6 +46,7 @@ Download and upload transfer infrastructure shared by file operations and sync.
 ## R-5.8 iOS Media Handling [verified]
 
 - R-5.8.1: When downloading iOS `.heic` files whose API-reported size/hash does not match the actual downloaded bytes (known API bug), the system shall accept the download rather than failing validation. A size mismatch identifies the quirk, so the first download is accepted without hash retries; the known condition is logged at DEBUG, not as a per-photo warning. [verified]
+- R-5.8.2: Download bytes that differ from OneDrive's metadata shall be accepted only as a known, deterministic server transform: the iOS HEIC quirk, or the same bytes at the reported size on every attempt (P-10). The baseline then records OneDrive's reported hash as the remote side and the bytes' hash as the local side, so the next pass neither downloads nor uploads the file. [verified]
 
 ## R-5.9 Download Routes [verified]
 

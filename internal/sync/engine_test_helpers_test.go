@@ -1034,6 +1034,15 @@ func writeLocalFile(t *testing.T, syncRoot, relPath, content string) {
 	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o600), "WriteFile")
 }
 
+// testQuickXor is the QuickXorHash a faithful server reports for content,
+// for fixtures built outside a test's scope.
+func testQuickXor(content string) string {
+	h := quickxorhash.New()
+	h.Write([]byte(content))
+
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
+}
+
 func hashContentQuickXor(t *testing.T, content string) string {
 	t.Helper()
 

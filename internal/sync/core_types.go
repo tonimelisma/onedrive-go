@@ -44,10 +44,10 @@ type changeEvent struct {
 	ItemType ItemType
 	Name     string // URL-decoded, NFC-normalized
 	Size     int64
-	// Hash is a QuickXorHash (base64) for locally scanned rows. Remote rows
-	// carry whatever driveops.SelectHash picked, which prefers quickXor but
-	// falls back to sha256/sha1, so a remote hash is not guaranteed to be
-	// comparable with a local one. Empty for folders.
+	// Hash is a QuickXorHash (base64) on both sides: driveops.SelectHash
+	// returns only QuickXor, so a remote item with SHA digests alone is
+	// hashless here, never compared against a local QuickXor. Empty for
+	// folders.
 	Hash             string
 	Mtime            int64 // Unix nanoseconds
 	LocalDevice      uint64
