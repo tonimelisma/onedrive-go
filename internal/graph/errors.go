@@ -38,6 +38,34 @@ var (
 	// ErrLoginCodeExpired marks a device-code sign-in whose code expired
 	// before the user entered it (OAuth expired_token).
 	ErrLoginCodeExpired = errors.New("the sign-in code expired before it was entered")
+	// ErrLoginInteractionRequired marks Microsoft requiring an interactive
+	// sign-in: multi-factor authentication or a sign-in policy
+	// (interaction_required, AADSTS50076, AADSTS50079). A silent refresh
+	// cannot satisfy it, so during sync it travels with ErrUnauthorized.
+	ErrLoginInteractionRequired = errors.New("a new interactive sign-in is required")
+	// ErrLoginAppNotAllowed marks the account or its organization not
+	// allowing this app to access OneDrive (AADSTS65001 consent not granted,
+	// AADSTS65005 the app's requested access is not allowed).
+	ErrLoginAppNotAllowed = errors.New("this account or its organization has not allowed onedrive-go to access OneDrive")
+	// ErrLoginConsumerNotEnabled marks a personal Microsoft account signing
+	// in to an app registration that accepts only work or school accounts
+	// ("not enabled for consumers").
+	ErrLoginConsumerNotEnabled = errors.New("this app registration does not accept personal Microsoft accounts")
+
+	// ErrAuthTransient marks a 401 that a just-refreshed, valid token still
+	// got, with a body that names a server-side authentication fault: "Unable
+	// to initialize RPS" or generalException (RCL-114, MS-198). The account is
+	// fine (Microsoft just issued that token), so it is a transient outage,
+	// never "sign-in required": treating it as fatal made the watch daemon
+	// exit on a server blip.
+	ErrAuthTransient = errors.New("graph: OneDrive could not check the sign-in (temporary)")
+
+	// ErrPreAuthURLRejected marks a 401 from a pre-authenticated
+	// upload or download URL. Those URLs carry their own short-lived
+	// credential; a rejection means that URL expired or was revoked, not that
+	// the account's sign-in did, so callers refetch the URL (or fail the one
+	// file) instead of stopping the run.
+	ErrPreAuthURLRejected = errors.New("graph: pre-authenticated URL rejected")
 
 	// ErrTimestampOutOfRange marks a fileSystemInfo timestamp OneDrive does
 	// not accept. Personal refuses anything before 1900-01-01T00:00:00Z with a
@@ -57,6 +85,29 @@ var (
 	// temporary property of the service that no client action changes.
 	ErrProviderReadOnly = errors.New("graph: provider is in a read-only window")
 )
+
+// aadOutcomeError maps an Azure AD / OAuth outcome (the OAuth error code and
+// its AADSTS description) to a plain sentinel, or returns nil when the
+// outcome is not one the user can act on in plain words. It is the one table
+// shared by the device-code, browser and refresh paths (D-076), so the same
+// AADSTS answer reads the same way wherever it arrives.
+func aadOutcomeError(code, description string) error {
+	lowerCode := strings.ToLower(code)
+	desc := strings.ToUpper(description)
+
+	switch {
+	case lowerCode == "interaction_required",
+		strings.Contains(desc, "AADSTS50076"),
+		strings.Contains(desc, "AADSTS50079"):
+		return ErrLoginInteractionRequired
+	case strings.Contains(desc, "AADSTS65001"), strings.Contains(desc, "AADSTS65005"):
+		return ErrLoginAppNotAllowed
+	case strings.Contains(strings.ToLower(description), "not enabled for consumers"):
+		return ErrLoginConsumerNotEnabled
+	default:
+		return nil
+	}
+}
 
 // graphCodeServiceReadOnly is the inner Graph code for a backend read-only
 // window.

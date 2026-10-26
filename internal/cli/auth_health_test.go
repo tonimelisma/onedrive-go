@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -183,6 +184,29 @@ func TestAuthErrorMessage_UsesUnifiedAuthenticationRequiredWording(t *testing.T)
 	unauthorized := authErrorMessage(graph.ErrUnauthorized)
 	assert.Contains(t, unauthorized, "Authentication required:")
 	assert.Contains(t, unauthorized, "OneDrive rejected the saved login")
+}
+
+// Validates: R-6.6.34
+func TestAuthErrorMessage_AADOutcomesArePlain(t *testing.T) {
+	t.Parallel()
+
+	mfa := authErrorMessage(fmt.Errorf("refreshing access token: %w: %w", graph.ErrLoginInteractionRequired, graph.ErrUnauthorized))
+	assert.Equal(t, "Authentication required: Microsoft requires you to sign in again (multi-factor authentication or a "+
+		"sign-in policy asks for it). Run 'onedrive-go login'.", mfa)
+	assert.Equal(t, exitSignInRequired, commandExitCode(
+		fmt.Errorf("x: %w: %w", graph.ErrLoginInteractionRequired, graph.ErrUnauthorized), false))
+
+	assert.Contains(t, authErrorMessage(graph.ErrLoginAppNotAllowed), "has not allowed onedrive-go")
+	assert.Contains(t, authErrorMessage(graph.ErrLoginConsumerNotEnabled), "accepts only work or school accounts")
+	assert.Empty(t, authErrorMessage(graph.ErrAuthTransient), "a transient auth fault is not a sign-in message")
+
+	// What the token bridge returns for these outcomes at refresh: status must
+	// report the saved login as no longer accepted, not "rejected with a
+	// still-valid login".
+	for _, outcome := range []error{graph.ErrLoginInteractionRequired, graph.ErrLoginAppNotAllowed, graph.ErrLoginConsumerNotEnabled} {
+		refreshErr := fmt.Errorf("refreshing access token: %w: %w: %w", outcome, graph.ErrLoginExpired, graph.ErrUnauthorized)
+		assert.Equal(t, authReasonSavedLoginExpired, unauthorizedAuthReason(refreshErr), outcome.Error())
+	}
 }
 
 func TestMergeAuthRequirements_PrefersExistingFieldsAndSorts(t *testing.T) {

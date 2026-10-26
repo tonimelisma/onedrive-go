@@ -406,7 +406,7 @@ Pre-authenticated requests (upload chunks, downloads) go through `httpClient.Do(
 
 ## 401 Token Refresh
 
-Implements: R-6.8.14 [implemented]
+Implements: R-6.8.14 [verified], R-6.6.34 [verified]
 
 Transparent token refresh on 401 inside `doOnce()`, independent of retry transport. On 401: refresh token → retry once. If still 401 → return `ErrUnauthorized` (fatal). Auth refresh is lifecycle management, not transient retry — it works regardless of whether the HTTP client has a `RetryTransport`.
 
@@ -417,12 +417,41 @@ and retry the request once. If that still fails, callers receive
 condition for the current pass or watch session, and CLI surfaces present it as
 `Authentication required`.
 
-This policy is evidence-driven. The repository documents one spurious `401`
-class for pre-authenticated upload-session fragment requests when a Bearer
-token is sent unnecessarily. That case is handled at the pre-auth transport
-boundary by omitting Bearer auth. The repository does **not** currently have
-captured evidence for a general post-refresh ordinary-Graph `401` quirk, so no
-generic runtime retry or sync-trial behavior exists for that case.
+The refresh is forced when needed. `oauth2.ReuseTokenSource` refreshes only an
+expired token, so a token the service revoked early came back unchanged and
+the second attempt resent it. `tokenBridge.ForceRefresh` (the optional
+`forceRefresher` capability) redeems the refresh token now and swaps in the
+new source; concurrent 401s serialize on it and share one token-endpoint call
+per 30 s (`TestDoOnce_401_ForcesRefreshWhenCachedTokenIsUnchanged`,
+`TestTokenBridge_ForceRefreshRedeemsRefreshTokenOncePerBurst`).
+
+A 401 is fatal (`ErrUnauthorized`) only when the refresh itself fails or a
+known-fresh token is rejected without a server-side fault. When a freshly
+refreshed token still gets "Unable to initialize RPS", `generalException`, or
+an `invalid_token` challenge that does not say "expired", the account is
+fine and the service failed to validate it, so the error is
+`ErrAuthTransient` (RCL-114, MS-198): sync treats it as service-outage
+evidence and the watch daemon keeps running
+(`TestDoOnce_401_RPSAfterForcedRefreshIsTransient`,
+`TestDoOnce_401_TransientSignatures`). A token source that cannot force a
+refresh cannot prove freshness, so its 401s stay `ErrUnauthorized`
+(`TestDoOnce_401_SameToken_Returns401`).
+
+A 401 from a pre-authenticated URL is `ErrPreAuthURLRejected`, never
+`ErrUnauthorized`: those URLs carry their own credential, and its expiry says
+nothing about the account. Downloads refetch the URL; sync retries the one
+file (`TestDoPreAuth_401IsURLRejectedNotSignIn`). The repository also documents
+a spurious `401` for upload-session fragments sent with a Bearer token, handled
+at the pre-auth boundary by omitting Bearer auth.
+
+Azure AD outcomes the user can act on map to plain sentinels through one table
+(`aadOutcomeError`) shared by the device-code, browser and refresh paths:
+`interaction_required`/AADSTS50076/AADSTS50079 to
+`ErrLoginInteractionRequired`, AADSTS65001/AADSTS65005 to
+`ErrLoginAppNotAllowed`, "not enabled for consumers" to
+`ErrLoginConsumerNotEnabled` (`TestAADOutcomeError_Table`,
+`TestTokenBridge_InteractionRequiredIsPlainSignInRequired`). At refresh they
+also carry `ErrUnauthorized`, since each needs a new interactive sign-in.
 
 `Client` also exposes an optional per-instance authenticated-success hook. The
 hook fires only after a normal authenticated Graph request succeeds. CLI code

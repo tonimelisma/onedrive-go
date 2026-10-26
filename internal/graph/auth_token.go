@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	stdsync "sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -36,10 +37,7 @@ func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Log
 		slog.Bool("expired", expired),
 	)
 
-	cfg := oauthConfig(tokenPath, logger)
-	src := cfg.TokenSource(ctx, tok)
-
-	return &tokenBridge{src: src, logger: logger}, nil
+	return newTokenBridge(ctx, oauthConfig(tokenPath, logger), tok, logger), nil
 }
 
 // CheckSavedLogin reports whether tokenPath holds a usable saved login,
@@ -124,27 +122,100 @@ func oauthConfig(tokenPath string, logger *slog.Logger) *oauth2.Config {
 // tokenBridge adapts oauth2.TokenSource to graph.TokenSource.
 // Logs every token acquisition so refresh activity is visible.
 type tokenBridge struct {
-	src    oauth2.TokenSource
-	logger *slog.Logger
+	// mu guards src, which ForceRefresh replaces while request goroutines
+	// call Token.
+	mu  stdsync.Mutex
+	src oauth2.TokenSource
+
+	// restart builds a fresh auto-refreshing source from a token; nil means
+	// ForceRefresh is unavailable (tests that wrap a bare source).
+	restart func(*oauth2.Token) oauth2.TokenSource
+	logger  *slog.Logger
+
+	// refreshMu serializes ForceRefresh and guards lastForced, which bounds
+	// forced refreshes to one per forcedRefreshMinInterval. now is
+	// injectable for tests.
+	refreshMu  stdsync.Mutex
+	lastForced time.Time
+	now        func() time.Time
+}
+
+// forcedRefreshMinInterval is how long a forced refresh is trusted before
+// another 401 may force the next one.
+const forcedRefreshMinInterval = 30 * time.Second
+
+func newTokenBridge(ctx context.Context, cfg *oauth2.Config, tok *oauth2.Token, logger *slog.Logger) *tokenBridge {
+	return &tokenBridge{
+		src: cfg.TokenSource(ctx, tok),
+		restart: func(t *oauth2.Token) oauth2.TokenSource {
+			return cfg.TokenSource(ctx, t)
+		},
+		logger: logger,
+		now:    time.Now,
+	}
+}
+
+func (b *tokenBridge) source() oauth2.TokenSource {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.src
+}
+
+// ForceRefresh redeems the refresh token now even though the cached access
+// token has not expired. oauth2.ReuseTokenSource only refreshes an expired
+// token, so a 401 against a token the server revoked early (or one minted
+// moments before an RPS fault) used to retry with the same rejected token
+// and fail fatally (D-072). The new token is persisted through the same
+// OnTokenChange hook as any silent refresh. Concurrent callers serialize on
+// refreshMu and share one refresh per forcedRefreshMinInterval: a burst of
+// 401s from parallel workers makes one token-endpoint call, and every caller
+// gets the token it produced.
+func (b *tokenBridge) ForceRefresh() (string, error) {
+	if b.restart == nil {
+		return b.Token()
+	}
+
+	b.refreshMu.Lock()
+	defer b.refreshMu.Unlock()
+
+	now := time.Now
+	if b.now != nil {
+		now = b.now
+	}
+	if !b.lastForced.IsZero() && now().Sub(b.lastForced) < forcedRefreshMinInterval {
+		return b.Token()
+	}
+
+	current, err := b.source().Token()
+	if err != nil {
+		return "", b.tokenError(err)
+	}
+
+	stale := *current
+	stale.AccessToken = ""
+	stale.Expiry = time.Unix(1, 0)
+	fresh := b.restart(&stale)
+
+	t, err := fresh.Token()
+	if err != nil {
+		return "", b.tokenError(err)
+	}
+
+	b.mu.Lock()
+	b.src = fresh
+	b.mu.Unlock()
+	b.lastForced = now()
+
+	b.logger.Debug("token force-refreshed after 401", slog.Time("expiry", t.Expiry))
+
+	return t.AccessToken, nil
 }
 
 func (b *tokenBridge) Token() (string, error) {
-	t, err := b.src.Token()
+	t, err := b.source().Token()
 	if err != nil {
-		var retrieveErr *oauth2.RetrieveError
-		if errors.As(err, &retrieveErr) && retrieveErr.ErrorCode == "invalid_grant" {
-			// The caller reports this as "sign-in required"; logging it as a
-			// warning as well would only repeat the same fact less clearly.
-			b.logger.Debug("saved login rejected", slog.String("error", err.Error()))
-			return "", fmt.Errorf("refreshing access token: %w: %w: %w", ErrLoginExpired, ErrUnauthorized, err)
-		}
-
-		// Debug only: the error is returned, and the command or sync layer
-		// reports it once (as a network or sign-in problem). Sync workers call
-		// Token() per request, so a Warn here repeated on every request while
-		// offline with an expired access token.
-		b.logger.Debug("token acquisition failed", slog.String("error", err.Error()))
-		return "", fmt.Errorf("refreshing access token: %w", err)
+		return "", b.tokenError(err)
 	}
 
 	b.logger.Debug("token acquired",
@@ -153,4 +224,33 @@ func (b *tokenBridge) Token() (string, error) {
 	)
 
 	return t.AccessToken, nil
+}
+
+// tokenError maps a token-endpoint failure into the graph error vocabulary.
+func (b *tokenBridge) tokenError(err error) error {
+	var retrieveErr *oauth2.RetrieveError
+	if errors.As(err, &retrieveErr) {
+		if plain := aadOutcomeError(retrieveErr.ErrorCode, retrieveErr.ErrorDescription); plain != nil {
+			// Every one of these means the saved login can no longer be used
+			// silently: a new interactive sign-in is the fix. So it also
+			// carries ErrLoginExpired and ErrUnauthorized, and status reports
+			// the saved login as no longer accepted rather than "rejected
+			// with a still-valid login".
+			b.logger.Debug("token refresh needs a new sign-in", slog.String("error", err.Error()))
+			return fmt.Errorf("refreshing access token: %w: %w: %w: %w", plain, ErrLoginExpired, ErrUnauthorized, err)
+		}
+	}
+	if errors.As(err, &retrieveErr) && retrieveErr.ErrorCode == "invalid_grant" {
+		// The caller reports this as "sign-in required"; logging it as a
+		// warning as well would only repeat the same fact less clearly.
+		b.logger.Debug("saved login rejected", slog.String("error", err.Error()))
+		return fmt.Errorf("refreshing access token: %w: %w: %w", ErrLoginExpired, ErrUnauthorized, err)
+	}
+
+	// Debug only: the error is returned, and the command or sync layer
+	// reports it once (as a network or sign-in problem). Sync workers call
+	// Token() per request, so a Warn here repeated on every request while
+	// offline with an expired access token.
+	b.logger.Debug("token acquisition failed", slog.String("error", err.Error()))
+	return fmt.Errorf("refreshing access token: %w", err)
 }

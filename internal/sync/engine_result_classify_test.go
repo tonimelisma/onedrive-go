@@ -536,3 +536,35 @@ func TestClassifyResult_ServerAnswerTable(t *testing.T) {
 		})
 	}
 }
+
+// Validates: R-2.10.45, R-2.10.69
+func TestClassifyResult_Only401ErrUnauthorizedIsFatal(t *testing.T) {
+	t.Parallel()
+
+	rps := classifyResult(&actionCompletion{
+		HTTPStatus: http.StatusUnauthorized,
+		Err: &graph.GraphError{
+			StatusCode: http.StatusUnauthorized, Message: "Unable to initialize RPS", Err: graph.ErrAuthTransient,
+		},
+		ActionType: ActionUpload, Path: "a.txt",
+	})
+	assert.Equal(t, resultRequeue, rps.Class, "a server-side auth fault must not end the watch session")
+	assert.Equal(t, SKService(), rps.ScopeEvidence)
+	assert.Equal(t, issueServiceOutage, rps.ConditionType)
+
+	preAuth := classifyResult(&actionCompletion{
+		HTTPStatus: http.StatusUnauthorized,
+		Err:        &graph.GraphError{StatusCode: http.StatusUnauthorized, Err: graph.ErrPreAuthURLRejected},
+		ActionType: ActionDownload, Path: "a.txt",
+	})
+	assert.Equal(t, resultRequeue, preAuth.Class, "an expired transfer URL is one file's problem")
+	assert.True(t, preAuth.ScopeEvidence.IsZero())
+	assert.Equal(t, "transfer_url_rejected", preAuth.ConditionType)
+
+	signIn := classifyResult(&actionCompletion{
+		HTTPStatus: http.StatusUnauthorized,
+		Err:        &graph.GraphError{StatusCode: http.StatusUnauthorized, Err: graph.ErrUnauthorized},
+	})
+	assert.Equal(t, resultFatal, signIn.Class)
+	assert.Equal(t, IssueUnauthorized, signIn.ConditionType)
+}

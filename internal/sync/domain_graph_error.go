@@ -79,6 +79,10 @@ const (
 	serverAnswerTransientConflict
 	serverAnswerTransientNotFound
 	serverAnswerLocked
+	// serverAnswerTransferURLRejected is a pre-authenticated upload or
+	// download URL refusing its own credential (graph.ErrPreAuthURLRejected).
+	// Only that file's transfer is affected; it is retried with a new URL.
+	serverAnswerTransferURLRejected
 	serverAnswerOther
 )
 
@@ -108,6 +112,12 @@ func classifyServerAnswer(status int, err error) serverAnswer {
 	switch {
 	case errors.Is(err, graph.ErrTimestampOutOfRange):
 		return serverAnswerTimestampOutOfRange
+	case errors.Is(err, graph.ErrAuthTransient):
+		// A 401 that a just-refreshed token still got, naming a server-side
+		// validation fault: an outage, never "sign-in required" (D-072).
+		return serverAnswerServiceOutage
+	case errors.Is(err, graph.ErrPreAuthURLRejected):
+		return serverAnswerTransferURLRejected
 	case status == http.StatusInsufficientStorage, graph.IsQuotaExhausted(err):
 		return serverAnswerQuota
 	case status == http.StatusNotImplemented, status == http.StatusHTTPVersionNotSupported, graph.IsNotSupported(err):

@@ -114,6 +114,11 @@ func (c *Client) doPreAuth(
 
 	graphErr := buildGraphError(resp.StatusCode, reqID, retryAfter, errBody)
 	graphErr.AgsDiagnostic = resp.Header.Get(headerAgsDiagnostic)
+	if resp.StatusCode == http.StatusUnauthorized {
+		// The URL's own credential was refused; the account sign-in was never
+		// involved, so this must not read as ErrUnauthorized (D-072).
+		graphErr.Err = ErrPreAuthURLRejected
+	}
 
 	return nil, graphErr
 }

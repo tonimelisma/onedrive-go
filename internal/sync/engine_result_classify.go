@@ -74,7 +74,8 @@ func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {
 		serverAnswerRequestTimeout,
 		serverAnswerTransientConflict,
 		serverAnswerTransientNotFound,
-		serverAnswerLocked:
+		serverAnswerLocked,
+		serverAnswerTransferURLRejected:
 		return withRuntimeSummary(&resultDecision{
 			Class:             resultRequeue,
 			ScopeEvidence:     scopeEvidence,
@@ -179,36 +180,34 @@ func issueTypeForHTTPResult(r *actionCompletion) (string, bool) {
 		return "", false
 	}
 
-	switch r.serverAnswer() {
-	case serverAnswerPathTooLong:
-		return issuePathTooLong, true
-	case serverAnswerUnauthorized:
-		return IssueUnauthorized, true
-	case serverAnswerThrottled:
-		return issueRateLimited, true
-	case serverAnswerQuota:
-		return IssueQuotaExceeded, true
-	case serverAnswerForbidden:
+	answer := r.serverAnswer()
+	if answer == serverAnswerForbidden {
 		return issueTypeForForbiddenResult(r), true
-	case serverAnswerUnsupported:
-		return issueUnsupportedOperation, true
-	case serverAnswerTimestampOutOfRange:
-		return issueTimestampOutOfRange, true
-	case serverAnswerServiceOutage:
-		return issueServiceOutage, true
-	case serverAnswerRequestTimeout:
-		return "request_timeout", true
-	case serverAnswerTransientConflict:
-		return "transient_conflict", true
-	case serverAnswerTransientNotFound:
-		return "transient_not_found", true
-	case serverAnswerLocked:
-		return "resource_locked", true
-	case serverAnswerNone, serverAnswerOther:
-		return "", false
 	}
 
-	return "", false
+	issueType, ok := serverAnswerIssueTypes()[answer]
+	return issueType, ok
+}
+
+// serverAnswerIssueTypes names the issue each server answer records. A
+// function, not a package-level map, so the table cannot be mutated.
+// serverAnswerNone, serverAnswerForbidden (probe-dependent) and
+// serverAnswerOther have no fixed issue.
+func serverAnswerIssueTypes() map[serverAnswer]string {
+	return map[serverAnswer]string{
+		serverAnswerPathTooLong:         issuePathTooLong,
+		serverAnswerUnauthorized:        IssueUnauthorized,
+		serverAnswerThrottled:           issueRateLimited,
+		serverAnswerQuota:               IssueQuotaExceeded,
+		serverAnswerUnsupported:         issueUnsupportedOperation,
+		serverAnswerTimestampOutOfRange: issueTimestampOutOfRange,
+		serverAnswerServiceOutage:       issueServiceOutage,
+		serverAnswerRequestTimeout:      "request_timeout",
+		serverAnswerTransientConflict:   "transient_conflict",
+		serverAnswerTransientNotFound:   "transient_not_found",
+		serverAnswerLocked:              "resource_locked",
+		serverAnswerTransferURLRejected: "transfer_url_rejected",
+	}
 }
 
 func issueTypeForForbiddenResult(r *actionCompletion) string {

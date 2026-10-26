@@ -161,12 +161,7 @@ func (c *Client) logMissingDownloadURL(driveID driveid.ID, itemID string, item *
 }
 
 func isPreAuthDownloadUnauthorized(err error) bool {
-	if !errors.Is(err, ErrUnauthorized) {
-		return false
-	}
-
-	var graphErr *GraphError
-	return errors.As(err, &graphErr) && graphErr.StatusCode == http.StatusUnauthorized
+	return errors.Is(err, ErrPreAuthURLRejected)
 }
 
 // downloadFromURLWithRange streams content from a pre-authenticated URL with
