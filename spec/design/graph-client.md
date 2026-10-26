@@ -361,6 +361,16 @@ relabels that 404 as `ErrTimestampOutOfRange`, keeping the status and request
 ID, so no caller reads a live item as deleted
 (`TestUpdateFileSystemInfo_Pre1900NotFoundIsRangeError`).
 
+**Malware** — the `malware` facet decodes to `Item.MalwareDetected`.
+`Download`/`DownloadRange` refuse a flagged item with `ErrMalwareDetected`
+before requesting content, and a content-host 403 carrying `malwareDetected`
+or an `X-Virus-Infected` header is relabelled the same way, so sync records
+one `malware_detected` issue instead of probing a permission boundary
+(`TestDownload_MalwareFacetRefusesWithoutFetchingContent`,
+`TestDownload_MalwareAnswersFromContentHost`). The exact Personal answer is
+still to be confirmed by live probe L-19 (EICAR); both signals are
+documented, and each is safe if it never appears.
+
 **Gateway diagnostics** — `GraphError.AgsDiagnostic` keeps the
 `X-Ms-Ags-Diagnostic` header, and `QuirkRetryAttempt` carries it, for support
 escalation next to the request ID (`TestGraphError_KeepsAgsDiagnosticHeader`,

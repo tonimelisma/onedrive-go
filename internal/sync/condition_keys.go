@@ -29,6 +29,7 @@ const (
 	ConditionLocalCrossDevice       ConditionKey = "local_cross_device"
 	ConditionUnsupportedOperation   ConditionKey = "unsupported_operation"
 	ConditionTimestampOutOfRange    ConditionKey = "timestamp_out_of_range"
+	ConditionMalwareDetected        ConditionKey = "malware_detected"
 	ConditionUnexpectedCondition    ConditionKey = "unexpected_condition"
 )
 
@@ -117,6 +118,7 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionLocalCrossDevice,
 		ConditionUnsupportedOperation,
 		ConditionTimestampOutOfRange,
+		ConditionMalwareDetected,
 		ConditionUnexpectedCondition,
 	}
 
@@ -162,6 +164,7 @@ func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
 		{issueType: issueLocalCrossDevice, key: ConditionLocalCrossDevice},
 		{issueType: issueUnsupportedOperation, key: ConditionUnsupportedOperation},
 		{issueType: issueTimestampOutOfRange, key: ConditionTimestampOutOfRange},
+		{issueType: issueMalwareDetected, key: ConditionMalwareDetected},
 	} {
 		if mapping.issueType == issueType {
 			return mapping.key, true

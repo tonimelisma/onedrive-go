@@ -292,6 +292,7 @@ func scopeKeyForResult(answer serverAnswer, targetDriveID driveid.ID) ScopeKey {
 		serverAnswerTransientNotFound,
 		serverAnswerLocked,
 		serverAnswerTransferURLRejected,
+		serverAnswerMalware,
 		serverAnswerOther:
 		return ScopeKey{}
 	}

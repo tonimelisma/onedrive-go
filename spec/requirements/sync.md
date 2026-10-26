@@ -156,6 +156,7 @@ Failure tracking, scope-based classification, and lifecycle management. Each fai
 - R-2.10.67: A 409 `resourceModified` (the item changed between the read and the write, as when an mtime update races a server-side post-upload change) shall be retried as a transient conflict, not reported as an actionable failure. [verified]
 - R-2.10.68: Every Graph error shall keep the `X-Ms-Ags-Diagnostic` response header next to the request ID, on the error and in documented-quirk retry evidence, so an outage or throttle can be escalated to Microsoft with the gateway's routing record. [verified]
 - R-2.10.69: A 401 is the fatal account-auth condition of R-2.10.45 only when it is `ErrUnauthorized`. A transient authentication fault (`ErrAuthTransient`, see R-6.8.14) shall be service-outage evidence retried through `retry_work`, and a 401 from a pre-authenticated upload or download URL (`ErrPreAuthURLRejected`) shall be a retryable per-file `transfer_url_rejected`; neither shall mark the account as needing sign-in or stop a watch session. [verified]
+- R-2.10.70: Content OneDrive flagged as malware (the item's `malware` facet, a download 403 `malwareDetected`, or an `X-Virus-Infected` header) shall be the per-file actionable condition `malware_detected`: the download is refused before any content request when the facet is present, and the failure is never probed as a permission problem, labelled read-denied, or counted as scope evidence. [verified]
 
 ## R-2.11 Filename Validation [verified]
 

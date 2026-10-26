@@ -29,6 +29,9 @@ func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string
 	if err != nil {
 		return 0, fmt.Errorf("graph: getting item for download: %w", err)
 	}
+	if item.MalwareDetected {
+		return 0, ErrMalwareDetected
+	}
 
 	if item.DownloadURL == "" {
 		c.logMissingDownloadURL(driveID, itemID, item)
@@ -82,6 +85,9 @@ func (c *Client) DownloadRange(
 	item, err := c.downloadItemMetadata(ctx, driveID, itemID)
 	if err != nil {
 		return 0, fmt.Errorf("graph: getting item for range download: %w", err)
+	}
+	if item.MalwareDetected {
+		return 0, ErrMalwareDetected
 	}
 
 	if item.DownloadURL == "" {

@@ -83,6 +83,11 @@ const (
 	// download URL refusing its own credential (graph.ErrPreAuthURLRejected).
 	// Only that file's transfer is affected; it is retried with a new URL.
 	serverAnswerTransferURLRejected
+	// serverAnswerMalware is content OneDrive flagged as malware
+	// (graph.ErrMalwareDetected). It is a permanent per-file issue: before,
+	// the download 403 was probed as a permission problem, labeled
+	// read-denied and retried forever.
+	serverAnswerMalware
 	serverAnswerOther
 )
 
@@ -98,6 +103,11 @@ const (
 // HTTP status recorded on the completion; err supplies the code and message
 // when it carries a graph.GraphError.
 func classifyServerAnswer(status int, err error) serverAnswer {
+	if errors.Is(err, graph.ErrMalwareDetected) {
+		// Checked before the status: the facet check refuses before any
+		// request, so there may be no status at all.
+		return serverAnswerMalware
+	}
 	if status == 0 {
 		return serverAnswerNone
 	}

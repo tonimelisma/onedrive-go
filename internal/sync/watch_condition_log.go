@@ -114,6 +114,7 @@ func conditionLabels() map[ConditionKey]string {
 		ConditionLocalCrossDevice:       "that would move across a mount point",
 		ConditionUnsupportedOperation:   "that OneDrive refuses to handle",
 		ConditionTimestampOutOfRange:    "with dates OneDrive does not accept",
+		ConditionMalwareDetected:        "that OneDrive flagged as malware",
 		ConditionRateLimited:            "waiting while OneDrive limits requests",
 		ConditionServiceOutage:          "waiting for OneDrive to become available",
 		ConditionAuthenticationRequired: "waiting for sign-in",

@@ -67,6 +67,12 @@ var (
 	// file) instead of stopping the run.
 	ErrPreAuthURLRejected = errors.New("graph: pre-authenticated URL rejected")
 
+	// ErrMalwareDetected marks content OneDrive's scan flagged as malware: the
+	// item carries the malware facet, or a download answered 403
+	// malwareDetected or with an X-Virus-Infected header. OneDrive will not
+	// serve it, so retrying cannot help, and it is not a permission problem.
+	ErrMalwareDetected = errors.New("graph: OneDrive flagged this file as malware and will not download it")
+
 	// ErrTimestampOutOfRange marks a fileSystemInfo timestamp OneDrive does
 	// not accept. Personal refuses anything before 1900-01-01T00:00:00Z with a
 	// misleading 404 itemNotFound (live probe L-26, 2026-10-25); the client
@@ -112,6 +118,13 @@ func aadOutcomeError(code, description string) error {
 // graphCodeServiceReadOnly is the inner Graph code for a backend read-only
 // window.
 const graphCodeServiceReadOnly = "serviceReadOnly"
+
+// graphCodeMalwareDetected is the Graph code for content OneDrive's scan
+// flagged; headerVirusInfected is the SharePoint download header for it.
+const (
+	graphCodeMalwareDetected = "malwareDetected"
+	headerVirusInfected      = "X-Virus-Infected"
+)
 
 // earliestFileSystemYear is the first year OneDrive Personal accepts in a
 // fileSystemInfo timestamp (live probe L-26): 1899-12-31T23:59:59Z returns

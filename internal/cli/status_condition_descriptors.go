@@ -138,7 +138,8 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 		syncengine.ConditionLocalBusy,
 		syncengine.ConditionLocalCrossDevice,
 		syncengine.ConditionUnsupportedOperation,
-		syncengine.ConditionTimestampOutOfRange:
+		syncengine.ConditionTimestampOutOfRange,
+		syncengine.ConditionMalwareDetected:
 		return describeLocalRuntimeStatusCondition(key)
 	case syncengine.ConditionUnexpectedCondition:
 		return newStatusConditionDescriptor(
@@ -220,6 +221,7 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionLocalCrossDevice,
 		syncengine.ConditionUnsupportedOperation,
 		syncengine.ConditionTimestampOutOfRange,
+		syncengine.ConditionMalwareDetected,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -281,6 +283,7 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionLocalCrossDevice,
 		syncengine.ConditionUnsupportedOperation,
 		syncengine.ConditionTimestampOutOfRange,
+		syncengine.ConditionMalwareDetected,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -319,6 +322,12 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 			"Not supported by OneDrive",
 			"OneDrive refuses this operation here (for example creating a folder inside some shared folders).",
 			"Make the change on the OneDrive website, or move the item somewhere OneDrive supports it.",
+		)
+	case syncengine.ConditionMalwareDetected:
+		return newStatusConditionDescriptor(
+			"Blocked as malware",
+			"OneDrive's scan flagged this file as malware and will not let it be downloaded.",
+			"Check the file on the OneDrive website; delete it there if it is unwanted.",
 		)
 	case syncengine.ConditionTimestampOutOfRange:
 		return newStatusConditionDescriptor(

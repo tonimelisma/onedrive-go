@@ -88,6 +88,7 @@ func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {
 		serverAnswerUnsupported,
 		serverAnswerPathTooLong,
 		serverAnswerTimestampOutOfRange,
+		serverAnswerMalware,
 		serverAnswerOther:
 		// Actionable per item: retrying the same request gets the same
 		// answer, and none of these say anything about a wider scope.
@@ -207,6 +208,7 @@ func serverAnswerIssueTypes() map[serverAnswer]string {
 		serverAnswerTransientNotFound:   "transient_not_found",
 		serverAnswerLocked:              "resource_locked",
 		serverAnswerTransferURLRejected: "transfer_url_rejected",
+		serverAnswerMalware:             issueMalwareDetected,
 	}
 }
 

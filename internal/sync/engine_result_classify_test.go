@@ -568,3 +568,29 @@ func TestClassifyResult_Only401ErrUnauthorizedIsFatal(t *testing.T) {
 	assert.Equal(t, resultFatal, signIn.Class)
 	assert.Equal(t, IssueUnauthorized, signIn.ConditionType)
 }
+
+// Validates: R-2.10.70
+func TestClassifyResult_MalwareIsPerFileNotReadDenied(t *testing.T) {
+	t.Parallel()
+
+	for name, completion := range map[string]*actionCompletion{
+		"facet refusal before any request": {Err: graph.ErrMalwareDetected},
+		"content host 403": {
+			HTTPStatus: http.StatusForbidden,
+			Err:        &graph.GraphError{StatusCode: http.StatusForbidden, Code: "malwareDetected", Err: graph.ErrMalwareDetected},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			completion.ActionType = ActionDownload
+			completion.Path = "eicar.com"
+			completion.DriveID = driveid.New("drive-malware")
+			got := classifyResult(completion)
+			assert.Equal(t, resultSkip, got.Class)
+			assert.Equal(t, issueMalwareDetected, got.ConditionType, "not remote_read_denied")
+			assert.True(t, got.ScopeEvidence.IsZero())
+			assert.False(t, shouldHandleRemote403Permission(completion), "no permission probe for blocked content")
+		})
+	}
+}

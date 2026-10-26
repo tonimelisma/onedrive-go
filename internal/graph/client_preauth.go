@@ -114,10 +114,13 @@ func (c *Client) doPreAuth(
 
 	graphErr := buildGraphError(resp.StatusCode, reqID, retryAfter, errBody)
 	graphErr.AgsDiagnostic = resp.Header.Get(headerAgsDiagnostic)
-	if resp.StatusCode == http.StatusUnauthorized {
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
 		// The URL's own credential was refused; the account sign-in was never
 		// involved, so this must not read as ErrUnauthorized (D-072).
 		graphErr.Err = ErrPreAuthURLRejected
+	case resp.Header.Get(headerVirusInfected) != "":
+		graphErr.Err = ErrMalwareDetected
 	}
 
 	return nil, graphErr
@@ -203,7 +206,7 @@ func buildGraphError(statusCode int, requestID string, retryAfter time.Duration,
 	message = sanitizeGraphErrorText(message)
 	raw := sanitizeGraphErrorText(string(rawBody))
 
-	return &GraphError{
+	graphErr := &GraphError{
 		StatusCode: statusCode,
 		RequestID:  requestID,
 		Code:       code,
@@ -213,4 +216,10 @@ func buildGraphError(statusCode int, requestID string, retryAfter time.Duration,
 		Err:        classifyStatus(statusCode),
 		RetryAfter: retryAfter,
 	}
+	if graphErr.HasCode(graphCodeMalwareDetected) {
+		// A 403 here is not a permission answer: the content is blocked.
+		graphErr.Err = ErrMalwareDetected
+	}
+
+	return graphErr
 }
