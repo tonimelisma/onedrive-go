@@ -64,6 +64,8 @@ local_move_candidates AS (
 			)
 		)
 	WHERE NOT EXISTS (SELECT 1 FROM baseline target WHERE target.path = l.path)
+		AND EXISTS (SELECT 1 FROM remote_state rs WHERE rs.item_id = b.item_id)
+		AND NOT EXISTS (SELECT 1 FROM remote_state occupied WHERE occupied.path = l.path AND occupied.item_id <> b.item_id)
 	UNION ALL
 	SELECT
 		b.path AS source_path,
@@ -78,6 +80,8 @@ local_move_candidates AS (
 	WHERE b.local_hash IS NOT NULL
 		AND b.local_hash <> ''
 		AND NOT EXISTS (SELECT 1 FROM baseline target WHERE target.path = l.path)
+		AND EXISTS (SELECT 1 FROM remote_state rs WHERE rs.item_id = b.item_id)
+		AND NOT EXISTS (SELECT 1 FROM remote_state occupied WHERE occupied.path = l.path AND occupied.item_id <> b.item_id)
 ),
 local_move_sources AS (
 	SELECT
@@ -94,12 +98,39 @@ local_move_targets AS (
 		candidate_count
 	FROM local_move_sources
 ),
+-- A move pairs only while the other side still holds the item. A local move
+-- of an item deleted on OneDrive is a fresh upload at the destination; a
+-- remote move of an item deleted or moved locally is a fresh download (or,
+-- when the local side moved it too, nothing: the local move wins). Pairing
+-- them anyway planned a move whose source was gone, superseded it, and
+-- replanned it on every pass.
 remote_move_sources AS (
 	SELECT
 		b.path AS source_path,
 		r.path AS target_path
 	FROM baseline b
 	JOIN remote_state r ON r.item_id = b.item_id AND r.path <> b.path
+	WHERE EXISTS (SELECT 1 FROM local_state ls WHERE ls.path = b.path)
+		-- A destination the other side filled with something else in the
+		-- meantime is not a move target: the source plays out as a delete
+		-- (hash-verified, recoverable) and the destination as a create/create
+		-- conflict that keeps both versions. Paired, the move found its
+		-- destination taken and was superseded on every pass.
+		AND NOT EXISTS (
+			SELECT 1 FROM local_state occupied
+			WHERE occupied.path = r.path
+				AND NOT EXISTS (SELECT 1 FROM baseline bo WHERE bo.path = r.path)
+		)
+),
+-- remote_move_shadowed holds remote paths of items the local side moved: the
+-- local move carries the item there, so the remote copy must not also be
+-- downloaded as a new file.
+remote_move_shadowed AS (
+	SELECT r.path AS path
+	FROM local_move_sources lms
+	JOIN baseline b ON b.path = lms.source_path
+	JOIN remote_state r ON r.item_id = b.item_id AND r.path <> b.path
+	WHERE lms.candidate_count = 1
 ),
 remote_move_targets AS (
 	SELECT
@@ -173,6 +204,7 @@ comparison_state AS (
 			WHEN b.path IS NOT NULL AND rms.target_path <> '' THEN 'remote_move_source'
 			WHEN r.path IS NOT NULL AND b.path IS NULL AND rmt.source_path <> '' THEN 'remote_move_dest'
 			WHEN b.path IS NULL AND l.path IS NOT NULL AND r.path IS NULL THEN 'local_only_create'
+			WHEN b.path IS NULL AND l.path IS NULL AND r.path IS NOT NULL AND rmsh.path IS NOT NULL THEN 'remote_move_shadowed'
 			WHEN b.path IS NULL AND l.path IS NULL AND r.path IS NOT NULL THEN 'remote_only_create'
 			WHEN b.path IS NULL AND l.path IS NOT NULL AND r.path IS NOT NULL AND (
 				COALESCE(l.item_type, '') = COALESCE(r.item_type, '')
@@ -257,6 +289,7 @@ comparison_state AS (
 	LEFT JOIN local_move_targets lmt ON lmt.target_path = p.path
 	LEFT JOIN remote_move_sources rms ON rms.source_path = p.path
 	LEFT JOIN remote_move_targets rmt ON rmt.target_path = p.path
+	LEFT JOIN remote_move_shadowed rmsh ON rmsh.path = p.path
 )
 SELECT
 	path,
@@ -345,6 +378,7 @@ comparison_flags AS (
 				AND COALESCE(b.item_type, '') <> COALESCE(r.item_type, '') THEN 1
 			ELSE 0
 		END AS remote_type_changed,
+		CASE WHEN rmsh.path IS NOT NULL THEN 1 ELSE 0 END AS remote_move_shadowed,
 		-- File content the change tests call unchanged can still carry new
 		-- metadata (touch, tar, rsync: same bytes, new mtime; or a new remote
 		-- mtime or eTag over the same hash).
@@ -366,6 +400,7 @@ comparison_flags AS (
 	LEFT JOIN local_move_targets lmt ON lmt.target_path = p.path
 	LEFT JOIN remote_move_sources rms ON rms.source_path = p.path
 	LEFT JOIN remote_move_targets rmt ON rmt.target_path = p.path
+	LEFT JOIN remote_move_shadowed rmsh ON rmsh.path = p.path
 ),
 comparison_state AS (
 	SELECT
@@ -386,6 +421,7 @@ comparison_state AS (
 		remote_item_type,
 		local_type_changed,
 		remote_type_changed,
+		remote_move_shadowed,
 		metadata_drift,
 		CASE
 			WHEN baseline_present = 1 AND local_present = 0 AND local_move_candidate_count = 1 THEN 'local_move_source'
@@ -394,6 +430,7 @@ comparison_state AS (
 			WHEN baseline_present = 1 AND remote_move_target <> '' THEN 'remote_move_source'
 			WHEN remote_present = 1 AND baseline_present = 0 AND remote_move_source <> '' THEN 'remote_move_dest'
 			WHEN baseline_present = 0 AND local_present = 1 AND remote_present = 0 THEN 'local_only_create'
+			WHEN baseline_present = 0 AND local_present = 0 AND remote_present = 1 AND remote_move_shadowed = 1 THEN 'remote_move_shadowed'
 			WHEN baseline_present = 0 AND local_present = 0 AND remote_present = 1 THEN 'remote_only_create'
 			WHEN baseline_present = 0 AND local_present = 1 AND remote_present = 1 AND current_equal = 1 THEN 'create_equal'
 			WHEN baseline_present = 0 AND local_present = 1 AND remote_present = 1 THEN 'create_conflict'
@@ -433,6 +470,9 @@ reconciliation_state AS (
 			WHEN comparison_kind = 'remote_move_dest' THEN 'remote_move'
 			WHEN comparison_kind = 'local_only_create' AND item_type = 'folder' THEN 'folder_create_remote'
 			WHEN comparison_kind = 'local_only_create' THEN 'upload'
+			-- The local side moved this item too; its local move wins and
+			-- carries the item, so the remote copy is not a new download.
+			WHEN comparison_kind = 'remote_move_shadowed' THEN 'noop'
 			WHEN comparison_kind = 'remote_only_create' AND item_type = 'folder' THEN 'folder_create_local'
 			WHEN comparison_kind = 'remote_only_create' THEN 'download'
 			WHEN comparison_kind = 'create_equal' THEN 'baseline_update'

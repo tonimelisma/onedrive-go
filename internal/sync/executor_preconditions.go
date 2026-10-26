@@ -20,6 +20,24 @@ import (
 // already sits at the planned destination: the work is done, not stale.
 var errRemoteMoveAlreadyApplied = errors.New("remote move already applied")
 
+// remoteItemGoneError reports that a live read found a remote item missing:
+// positive evidence it was deleted, even when delta never said so (an item
+// moved into a folder that was then deleted is not reported again). It wraps
+// errActionPreconditionChanged, so the action is superseded as before, and
+// the engine also drops the item from remote_state so the next plan stops
+// targeting it instead of superseding the same action on every pass.
+type remoteItemGoneError struct {
+	op     string
+	itemID string
+	role   string
+}
+
+func (e *remoteItemGoneError) Error() string {
+	return fmt.Sprintf("%s: %s remote %s %s is missing", errActionPreconditionChanged, e.op, e.role, e.itemID)
+}
+
+func (e *remoteItemGoneError) Unwrap() error { return errActionPreconditionChanged }
+
 func stalePreconditionError(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", errActionPreconditionChanged, fmt.Sprintf(format, args...))
 }
@@ -47,7 +65,7 @@ func (e *executor) remoteSourcePreconditionETag(
 	item, err := e.items.GetItem(ctx, driveID, action.ItemID)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotFound) {
-			return "", stalePreconditionError("%s remote item %s is missing", op, action.ItemID)
+			return "", &remoteItemGoneError{op: op, itemID: action.ItemID, role: "item"}
 		}
 		return "", fmt.Errorf("checking remote %s precondition for %s: %w", op, action.Path, err)
 	}
@@ -168,7 +186,7 @@ func (e *executor) validateRemoteParentPrecondition(
 	item, err := e.items.GetItem(ctx, driveID, parentID)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotFound) {
-			return stalePreconditionError("%s remote parent %s is missing", op, parentID)
+			return &remoteItemGoneError{op: op, itemID: parentID, role: "parent"}
 		}
 		return fmt.Errorf("checking remote %s parent precondition for %s: %w", op, action.Path, err)
 	}

@@ -696,7 +696,12 @@ func (e *executor) moveOutcome(action *Action) actionOutcome {
 		o.RemoteSize = remote.Size
 		o.RemoteSizeKnown = true
 		o.RemoteMtime = remote.Mtime
-		if action.Type == ActionLocalMove && remoteContentDiffersFromBaseline(remote, baseline) {
+		// A move publishes only what it changed: the path. Remote content
+		// that changed since the baseline is still pending in either
+		// direction. Recording it here (a local rename racing a remote
+		// edit of the same file) marked the edit synced while the local
+		// file kept the old bytes: a silent, permanent divergence.
+		if remoteContentDiffersFromBaseline(remote, baseline) {
 			o.ETag = baseline.ETag
 			o.RemoteHash = baseline.RemoteHash
 			o.RemoteSize = baseline.RemoteSize

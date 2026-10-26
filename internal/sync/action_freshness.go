@@ -155,10 +155,9 @@ func loadRemoteActionFreshnessInputs(
 	}
 
 	if actionUsesRemoteFreshness(action) {
-		viewPath := actionViewPath(action)
-		row, found, err := store.GetRemoteStateByPath(ctx, viewPath, driveid.ID{})
+		row, found, err := loadPlannedRemoteTruth(ctx, store, action)
 		if err != nil {
-			return fmt.Errorf("sync: reading remote truth for action freshness: %w", err)
+			return err
 		}
 		inputs.RemoteAtView = row
 		inputs.RemoteAtViewFound = found
@@ -183,6 +182,29 @@ func loadRemoteActionFreshnessInputs(
 	}
 
 	return nil
+}
+
+// loadPlannedRemoteTruth reads the remote truth an action was planned
+// against. A remote item the plan knew is looked up by item ID: its path can
+// legitimately change during the pass, when a folder move above it commits
+// and re-paths the subtree. Looked up by path, a download or local move into
+// a folder renamed earlier in the same pass was declared stale and replanned
+// on the next pass. Absence (a planned create) is still checked by path.
+func loadPlannedRemoteTruth(ctx context.Context, store *SyncStore, action *Action) (*remoteStateRow, bool, error) {
+	if planned := action.View.Remote; planned != nil && !planned.IsDeleted && planned.ItemID != "" {
+		row, found, err := store.GetRemoteStateByID(ctx, driveid.ID{}, planned.ItemID)
+		if err != nil {
+			return nil, false, fmt.Errorf("sync: reading remote truth for action freshness: %w", err)
+		}
+		return row, found, nil
+	}
+
+	row, found, err := store.GetRemoteStateByPath(ctx, actionViewPath(action), driveid.ID{})
+	if err != nil {
+		return nil, false, fmt.Errorf("sync: reading remote truth for action freshness: %w", err)
+	}
+
+	return row, found, nil
 }
 
 func evaluateActionFreshness(action *Action, inputs actionFreshnessInputs) actionFreshnessDecision {
