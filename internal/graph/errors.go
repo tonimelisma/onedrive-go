@@ -230,7 +230,7 @@ func quirkSymptom(quirk string) string {
 		return "did not yet accept the new sign-in"
 	case QuirkCopyDestinationTransient404:
 		return "kept reporting the copy's destination folder as missing"
-	case QuirkUploadSessionCreateTransient404, QuirkSimpleUploadCreateTransient404:
+	case QuirkUploadSessionCreateTransient404:
 		return "kept reporting the upload's destination folder as missing"
 	case QuirkSimpleUploadMtimeTransient404:
 		return "kept reporting the just-uploaded file as missing while setting its modified time"

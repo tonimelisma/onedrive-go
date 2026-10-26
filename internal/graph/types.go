@@ -52,6 +52,7 @@ type Item struct {
 	ParentPath        string     // decoded root-relative parent path from parentReference.path; empty for root/unknown
 	ParentPathKnown   bool       // true when parentReference.path was present and valid, including root
 	ParentDriveID     driveid.ID // drive containing parent (for cross-drive references)
+	ParentDriveType   string     // parentReference.driveType: "personal", "business", "documentLibrary"; empty when Graph omits it
 	Size              int64
 	ETag              string
 	CTag              string

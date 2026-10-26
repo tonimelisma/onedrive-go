@@ -53,24 +53,32 @@ func encodePathSegments(path string) string {
 // driveItemResponse mirrors the Graph API driveItem JSON exactly.
 // Unexported — callers use Item via toItem() normalization.
 type driveItemResponse struct {
-	ID                   string              `json:"id"`
-	Name                 string              `json:"name"`
-	Size                 int64               `json:"size"`
-	ETag                 string              `json:"eTag"`
-	CTag                 string              `json:"cTag"`
-	CreatedDateTime      string              `json:"createdDateTime"`
-	LastModifiedDateTime string              `json:"lastModifiedDateTime"`
-	ParentReference      *parentRef          `json:"parentReference"`
-	File                 *fileFacet          `json:"file"`
-	Folder               *folderFacet        `json:"folder"`
-	Root                 *json.RawMessage    `json:"root"`
-	Deleted              *json.RawMessage    `json:"deleted"`
-	Package              *json.RawMessage    `json:"package"`
-	Malware              *json.RawMessage    `json:"malware"`
-	DownloadURL          string              `json:"@microsoft.graph.downloadUrl"`
-	SpecialFolder        *specialFolderFacet `json:"specialFolder"`
-	RemoteItem           *remoteItemFacet    `json:"remoteItem"`
-	Shared               *sharedFacet        `json:"shared"`
+	ID                   string               `json:"id"`
+	Name                 string               `json:"name"`
+	Size                 int64                `json:"size"`
+	ETag                 string               `json:"eTag"`
+	CTag                 string               `json:"cTag"`
+	CreatedDateTime      string               `json:"createdDateTime"`
+	LastModifiedDateTime string               `json:"lastModifiedDateTime"`
+	FileSystemInfo       *fileSystemInfoFacet `json:"fileSystemInfo"`
+	ParentReference      *parentRef           `json:"parentReference"`
+	File                 *fileFacet           `json:"file"`
+	Folder               *folderFacet         `json:"folder"`
+	Root                 *json.RawMessage     `json:"root"`
+	Deleted              *json.RawMessage     `json:"deleted"`
+	Package              *json.RawMessage     `json:"package"`
+	Malware              *json.RawMessage     `json:"malware"`
+	DownloadURL          string               `json:"@microsoft.graph.downloadUrl"`
+	SpecialFolder        *specialFolderFacet  `json:"specialFolder"`
+	RemoteItem           *remoteItemFacet     `json:"remoteItem"`
+	Shared               *sharedFacet         `json:"shared"`
+}
+
+// fileSystemInfoFacet is the client-reported timestamps facet. Its
+// lastModifiedDateTime is the file's own mtime; the top-level one is the
+// server's, which a rename or move can bump (D-046).
+type fileSystemInfoFacet struct {
+	LastModifiedDateTime string `json:"lastModifiedDateTime"`
 }
 
 type specialFolderFacet struct {
@@ -78,9 +86,10 @@ type specialFolderFacet struct {
 }
 
 type parentRef struct {
-	ID      string `json:"id"`
-	DriveID string `json:"driveId"`
-	Path    string `json:"path"`
+	ID        string `json:"id"`
+	DriveID   string `json:"driveId"`
+	DriveType string `json:"driveType"`
+	Path      string `json:"path"`
 }
 
 type fileFacet struct {
@@ -183,6 +192,7 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 		item.ParentID = d.ParentReference.ID
 		item.ParentPath, item.ParentPathKnown = decodeParentReferencePath(d.ParentReference.Path, logger)
 		item.ParentDriveID = driveid.New(d.ParentReference.DriveID)
+		item.ParentDriveType = d.ParentReference.DriveType
 	}
 
 	// Folder child count
@@ -217,7 +227,7 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 	// Deleted items routinely have empty timestamps (known OneDrive API behavior),
 	// so we log at DEBUG instead of WARN to avoid noise.
 	item.CreatedAt = parseTimestamp(d.CreatedDateTime, "createdDateTime", d.ID, logger)
-	item.ModifiedAt = parseTimestamp(d.LastModifiedDateTime, "lastModifiedDateTime", d.ID, logger)
+	item.ModifiedAt = d.modifiedAt(logger)
 
 	return item
 }
@@ -281,6 +291,22 @@ func (d *driveItemResponse) resolveSharedOwner() (name, email string) {
 	default:
 		return "", ""
 	}
+}
+
+// modifiedAt prefers fileSystemInfo.lastModifiedDateTime, the file's own
+// modification time, over the top-level lastModifiedDateTime, which records
+// when the server last changed the item: renames and moves bump it, so a
+// hashless item looked changed after every rename and a download stamped
+// the server's time on the local file (D-046). The top level is the fallback
+// for items without the facet.
+func (d *driveItemResponse) modifiedAt(logger *slog.Logger) time.Time {
+	if d.FileSystemInfo != nil && d.FileSystemInfo.LastModifiedDateTime != "" {
+		if t := parseTimestamp(d.FileSystemInfo.LastModifiedDateTime, "fileSystemInfo.lastModifiedDateTime", d.ID, logger); !t.IsZero() {
+			return t
+		}
+	}
+
+	return parseTimestamp(d.LastModifiedDateTime, "lastModifiedDateTime", d.ID, logger)
 }
 
 // parseTimestamp parses an RFC3339 timestamp and validates the year range.

@@ -103,12 +103,9 @@ func runGet(cmd *cobra.Command, args []string) error {
 		driveops.WithDiskCheck(minFree, driveops.DiskAvailable),
 	)
 
-	result, err := tm.DownloadToFile(ctx, session.DriveID, item.ID, localPath, driveops.DownloadOpts{
-		RemoteHash: item.QuickXorHash,
-		RemoteSize: item.Size,
-	})
+	result, err := tm.DownloadToFile(ctx, session.DriveID, item.ID, localPath, driveops.DownloadOptsForItem(item))
 	if err != nil {
-		partialPath := driveops.DownloadPartialPath(localPath)
+		partialPath := driveops.DownloadPartialPath(localPath, driveops.DownloadOptsForItem(item))
 		if _, statErr := localpath.Stat(partialPath); statErr == nil {
 			cc.Statusf("Partial download saved: %s\n", partialPath)
 			cc.Statusf("Re-run the same command to resume.\n")
@@ -334,10 +331,7 @@ func downloadRecursive(
 
 			defer func() { <-state.sem }()
 
-			dlResult, dlErr := tm.DownloadToFile(ctx, session.DriveID, child.ID, childLocal, driveops.DownloadOpts{
-				RemoteHash: child.QuickXorHash,
-				RemoteSize: child.Size,
-			})
+			dlResult, dlErr := tm.DownloadToFile(ctx, session.DriveID, child.ID, childLocal, driveops.DownloadOptsForItem(&child))
 
 			state.mu.Lock()
 			defer state.mu.Unlock()

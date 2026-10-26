@@ -65,6 +65,7 @@ func TestComputeQuickXorHash_NonexistentFile(t *testing.T) {
 	require.Error(t, err)
 }
 
+// Validates: R-5.5.1
 func TestHasHash(t *testing.T) {
 	t.Parallel()
 
@@ -74,8 +75,9 @@ func TestHasHash(t *testing.T) {
 		want bool
 	}{
 		{"quickxor only", &graph.Item{QuickXorHash: "abc123"}, true},
-		{"sha256 only", &graph.Item{SHA256Hash: "def456"}, true},
-		{"sha1 only", &graph.Item{SHA1Hash: "ghi789"}, true},
+		// SHA digests are never computed locally, so they can prove nothing.
+		{"sha256 only", &graph.Item{SHA256Hash: "def456"}, false},
+		{"sha1 only", &graph.Item{SHA1Hash: "ghi789"}, false},
 		{"no hashes", &graph.Item{}, false},
 		{"all empty strings", &graph.Item{QuickXorHash: "", SHA256Hash: "", SHA1Hash: ""}, false},
 	}
@@ -88,4 +90,14 @@ func TestHasHash(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// Validates: R-5.5.1
+func TestSelectHash_ReturnsOnlyQuickXor(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "qx", SelectHash(&graph.Item{QuickXorHash: "qx", SHA256Hash: "s256", SHA1Hash: "s1"}))
+	assert.Empty(t, SelectHash(&graph.Item{SHA256Hash: "s256"}), "SHA-256 is not comparable with local QuickXor")
+	assert.Empty(t, SelectHash(&graph.Item{SHA1Hash: "s1"}), "SHA-1 is not comparable with local QuickXor")
+	assert.Empty(t, SelectHash(nil))
 }

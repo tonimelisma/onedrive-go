@@ -108,7 +108,6 @@ func newTestClient(t *testing.T, url string) *Client {
 	client.policies.simpleUploadMtime = testRetryPolicy()
 	client.policies.uploadSessionCreate = testRetryPolicy()
 	client.policies.copyDestination = testRetryPolicy()
-	client.policies.simpleUploadCreate = testRetryPolicy()
 	client.validators.uploadURL = allowTestUploadURL
 	client.validators.copyMonitor = allowTestCopyMonitorURL
 	client.validators.socketIO = allowTestSocketIONotificationURL

@@ -49,13 +49,10 @@ func runSharedGet(cmd *cobra.Command, args []string, cc *CLIContext) error {
 		driveid.New(cc.SharedTarget.Ref.RemoteDriveID),
 		cc.SharedTarget.Ref.RemoteItemID,
 		localPath,
-		driveops.DownloadOpts{
-			RemoteHash: item.QuickXorHash,
-			RemoteSize: item.Size,
-		},
+		driveops.DownloadOptsForItem(item),
 	)
 	if err != nil {
-		partialPath := localPath + ".partial"
+		partialPath := driveops.DownloadPartialPath(localPath, driveops.DownloadOptsForItem(item))
 		if _, statErr := localpath.Stat(partialPath); statErr == nil {
 			cc.Statusf("Partial download saved: %s\n", partialPath)
 			cc.Statusf("Re-run the same command to resume.\n")
@@ -191,10 +188,7 @@ func downloadSharedRecursive(
 				return
 			}
 
-			result, err := tm.DownloadToFile(ctx, driveID, child.ID, childLocalPath, driveops.DownloadOpts{
-				RemoteHash: child.QuickXorHash,
-				RemoteSize: child.Size,
-			})
+			result, err := tm.DownloadToFile(ctx, driveID, child.ID, childLocalPath, driveops.DownloadOptsForItem(&child))
 
 			state.mu.Lock()
 			defer state.mu.Unlock()

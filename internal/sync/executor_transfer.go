@@ -3,26 +3,30 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // maxHashRetries is the number of additional download attempts when the
-// downloaded content hash doesn't match the remote hash. This is separate from
-// transport-level retries because hash mismatches indicate corrupted content,
-// not transport failures. iOS .heic files are a known source of stale
-// remote hashes — after exhausting retries we accept the download to prevent
-// an infinite re-download loop (B-132).
+// downloaded bytes don't match the remote metadata. This is separate from
+// transport-level retries because a mismatch indicates wrong content, not a
+// transport failure. Only a deterministic server transform is accepted after
+// them (driveops); anything else fails as download_integrity and keeps the
+// local file.
 const maxHashRetries = 2
 
 // ExecuteDownload downloads a remote file via TransferManager with .partial
 // safety, hash verification with retry, and atomic rename.
 func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOutcome {
-	// Checked before Abs: the absolute path below leaves the rooted boundary
-	// and is executed by driveops through the deliberately uncontained
-	// localpath helpers, so this is the only layer that can refuse it.
+	// The download itself runs through the rooted sync tree, which refuses
+	// any escape; this check additionally refuses writing through a
+	// symlinked folder that stays inside the root.
 	if err := e.validateNoSymlinkBoundary(action.Path, "download"); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
@@ -30,17 +34,6 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 			err,
 			action.Path,
 			permissionCapabilityLocalWrite,
-		)
-	}
-
-	targetPath, err := e.syncTree.Abs(action.Path)
-	if err != nil {
-		return e.failedOutcomeWithFailure(
-			action,
-			ActionDownload,
-			normalizeSyncTreePathError(err),
-			action.Path,
-			permissionCapabilityUnknown,
 		)
 	}
 
@@ -69,6 +62,7 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 
 	opts := driveops.DownloadOpts{
 		MaxHashRetries: maxHashRetries,
+		Target:         syncDownloadTarget{tree: e.syncTree},
 		ValidateTargetBeforeRename: func() error {
 			return e.validateDownloadTargetPrecondition(action)
 		},
@@ -78,9 +72,11 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 		opts.RemoteHash = action.View.Remote.Hash
 		opts.RemoteMtime = action.View.Remote.Mtime
 		opts.RemoteSize = action.View.Remote.Size
+		opts.RemoteSizeKnown = action.View.Remote.SizeKnown
+		opts.RemoteETag = action.View.Remote.ETag
 	}
 
-	result, err := e.transferMgr.DownloadToFile(ctx, driveID, action.ItemID, targetPath, opts)
+	result, err := e.transferMgr.DownloadToFile(ctx, driveID, action.ItemID, action.Path, opts)
 	if err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
@@ -123,6 +119,13 @@ func (e *executor) downloadOutcome(
 		if remoteHash == "" {
 			o.RemoteHash = action.View.Remote.Hash
 		}
+	}
+	// The local half records what the filesystem holds after the download,
+	// not the mtime that was asked for: a filesystem with coarse timestamps
+	// (FAT, SMB, some FUSE mounts) stores a rounded time, and recording the
+	// intended one made every later scan see a local change (D-046).
+	if info, statErr := e.syncTree.Stat(action.Path); statErr == nil {
+		o.LocalMtime = info.ModTime().UnixNano()
 	}
 	o.ParentID = e.resolvedParentIDForOutcome(action, nil)
 	e.observeLocalIdentity(&o)
@@ -178,6 +181,7 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 
 	if shouldOverwriteKnownRemoteItem(action) {
 		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, action.ItemID, localPath, e.uploadOpts(action))
+		err = uploadTransferError(err)
 		if err != nil {
 			return e.failedOutcomeWithFailure(
 				action,
@@ -210,6 +214,7 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 
 		name := filepath.Base(action.Path)
 		result, err = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, e.uploadOpts(action))
+		err = uploadTransferError(err)
 		if err != nil {
 			return e.failedOutcomeWithFailure(
 				action,
@@ -227,12 +232,87 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 	return outcome
 }
 
+// syncDownloadTarget is the driveops.TargetFS sync downloads write through:
+// every operation is rooted in the sync tree, so a parent swapped for a
+// symlink after planning cannot redirect the write outside the root, and a
+// parent is never created. Downloads used to MkdirAll the parent and write
+// through absolute paths, so a local rename between planning and dispatch
+// re-created the old folder holding the download (D-043). Sync's rule: no
+// executor side effect creates namespace state the plan did not observe; a
+// missing parent is a stale plan, and the engine replans.
+type syncDownloadTarget struct {
+	tree *synctree.Root
+}
+
+func (t syncDownloadTarget) PrepareParent(dir string) error {
+	if dir == "" || dir == "." {
+		return nil
+	}
+
+	info, err := t.tree.Lstat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return stalePreconditionError("download parent %s is missing", dir)
+	}
+	if err != nil {
+		return normalizeSyncTreePathError(err)
+	}
+	if !info.IsDir() {
+		return stalePreconditionError("download parent %s is no longer a folder", dir)
+	}
+
+	return nil
+}
+
+func (t syncDownloadTarget) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	return t.tree.OpenFile(name, flag, perm) //nolint:wrapcheck // synctree names the path
+}
+
+func (t syncDownloadTarget) Open(name string) (*os.File, error) {
+	return t.tree.Open(name) //nolint:wrapcheck // synctree names the path
+}
+
+func (t syncDownloadTarget) Stat(name string) (os.FileInfo, error) {
+	return t.tree.Stat(name) //nolint:wrapcheck // synctree names the path
+}
+
+func (t syncDownloadTarget) Remove(name string) error {
+	return t.tree.Remove(name) //nolint:wrapcheck // synctree names the path
+}
+
+func (t syncDownloadTarget) Rename(oldName, newName string) error {
+	return t.tree.Rename(oldName, newName) //nolint:wrapcheck // synctree names the paths
+}
+
+func (t syncDownloadTarget) Chtimes(name string, atime, mtime time.Time) error {
+	return t.tree.Chtimes(name, atime, mtime) //nolint:wrapcheck // synctree names the path
+}
+
+func (t syncDownloadTarget) SyncDir(dir string) error {
+	return t.tree.SyncDir(dir) //nolint:wrapcheck // synctree names the path
+}
+
+func (t syncDownloadTarget) Abs(name string) (string, error) {
+	return t.tree.Abs(name) //nolint:wrapcheck // synctree names the path
+}
+
 func downloadTransferFailureCapability(err error) permissionCapability {
 	if errors.Is(err, errActionPreconditionChanged) {
 		return permissionCapabilityLocalWrite
 	}
 
 	return inferFailureCapabilityFromError(err, permissionCapabilityLocalWrite, permissionCapabilityRemoteRead)
+}
+
+// uploadTransferError translates transfer outcomes that mean "the plan is
+// stale" into sync's stale-precondition error. An invalidated upload session
+// means another writer changed the item mid-upload (L-02): the engine must
+// re-observe it, and may raise a conflict, rather than upload again.
+func uploadTransferError(err error) error {
+	if errors.Is(err, driveops.ErrUploadSessionInvalidated) {
+		return fmt.Errorf("%w: %w", errActionPreconditionChanged, err)
+	}
+
+	return err
 }
 
 func uploadTransferFailureCapability(err error) permissionCapability {
@@ -283,8 +363,14 @@ func (e *executor) uploadOutcome(
 }
 
 func (e *executor) uploadOpts(action *Action) driveops.UploadOpts {
+	plannedETag := ""
+	if action.View != nil && action.View.Remote != nil {
+		plannedETag = action.View.Remote.ETag
+	}
+
 	return driveops.UploadOpts{
-		ExpectedHash: expectedUploadHash(action),
+		ExpectedHash:      expectedUploadHash(action),
+		PlannedRemoteETag: plannedETag,
 		HashMismatchError: func(_ string, expectedHash, actualHash string) error {
 			return stalePreconditionError(
 				"upload source %s changed hash (expected=%s current=%s)",

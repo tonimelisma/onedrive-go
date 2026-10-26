@@ -537,7 +537,7 @@ func TestUpload_SessionCanceledOnChunkError(t *testing.T) {
 
 // TestUpload_SimpleUploadFollowedByMtimePatch validates that files ≤4 MiB
 // use simple upload and then PATCH to set mtime.
-func TestUpload_SimpleUploadFollowedByMtimePatch(t *testing.T) {
+func TestUpload_ZeroByteSimpleUploadFollowedByMtimePatch(t *testing.T) {
 	var patchCalled atomic.Int32
 
 	mtime := time.Date(2025, 6, 15, 10, 30, 0, 0, time.UTC)
@@ -578,7 +578,7 @@ func TestUpload_SimpleUploadFollowedByMtimePatch(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	content := bytes.NewReader([]byte("small file content"))
+	content := bytes.NewReader(nil) // only a zero-byte file still uses the simple PUT
 
 	item, err := client.Upload(
 		t.Context(),
@@ -591,9 +591,9 @@ func TestUpload_SimpleUploadFollowedByMtimePatch(t *testing.T) {
 		"mtime PATCH should be called after simple upload")
 }
 
-// TestUpload_SimpleUploadNoMtime validates that when mtime is zero,
+// TestUpload_ZeroByteSimpleUploadNoMtime validates that when mtime is zero,
 // no PATCH is sent after simple upload.
-func TestUpload_SimpleUploadNoMtime(t *testing.T) {
+func TestUpload_ZeroByteSimpleUploadNoMtime(t *testing.T) {
 	var patchCalled atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -612,7 +612,7 @@ func TestUpload_SimpleUploadNoMtime(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	content := bytes.NewReader([]byte("content"))
+	content := bytes.NewReader(nil) // only a zero-byte file still uses the simple PUT
 
 	_, err := client.Upload(
 		t.Context(),

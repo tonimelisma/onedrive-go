@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sync/atomic"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
@@ -86,7 +88,6 @@ type retryPolicies struct {
 	simpleUploadMtime    retry.Policy
 	uploadSessionCreate  retry.Policy
 	copyDestination      retry.Policy
-	simpleUploadCreate   retry.Policy
 }
 
 // urlValidators guard the server-supplied URLs the client will follow. They are
@@ -114,6 +115,14 @@ type Client struct {
 	maxRecursionDepth    int
 	policies             retryPolicies
 	validators           urlValidators
+
+	// transferStallTimeout bounds how long a transfer body may make no
+	// progress; zero means defaultTransferStallTimeout. Tests shorten it.
+	transferStallTimeout time.Duration
+
+	// clampWarned is set once a modification time before 1900 has been
+	// clamped, so the warning is given once per client.
+	clampWarned atomic.Bool
 }
 
 // SetAuthenticatedSuccessHook installs a best-effort callback that runs after

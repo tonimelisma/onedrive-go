@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"syscall"
@@ -99,6 +100,12 @@ func TestIssueTypeForFilesystemResult_RepresentativeMappings(t *testing.T) {
 		{name: "disk full", result: &actionCompletion{Err: driveops.ErrDiskFull}, want: issueDiskFull, ok: true},
 		{name: "file too large for space", result: &actionCompletion{Err: driveops.ErrFileTooLargeForSpace}, want: issueFileTooLargeForSpace, ok: true},
 		{name: "onedrive limit", result: &actionCompletion{Err: driveops.ErrFileExceedsOneDriveLimit}, want: issueFileTooLarge, ok: true},
+		{
+			name:   "upload stored differently",
+			result: &actionCompletion{Err: fmt.Errorf("uploading a.txt: %w", driveops.ErrUploadVerificationFailed)},
+			want:   issueUploadVerification,
+			ok:     true,
+		},
 		{
 			name: "local read denied",
 			result: &actionCompletion{
@@ -511,10 +518,10 @@ func TestClassifyResult_ServerAnswerTable(t *testing.T) {
 			class:  resultRequeue, issueType: "transient_conflict",
 		},
 		{
-			name:   "pre-1900 mtime 404 is a range error, not gone",
+			name:   "pre-1900 mtime 404 is a generic per-file failure, not gone",
 			status: http.StatusNotFound,
 			err:    &graph.GraphError{StatusCode: http.StatusNotFound, Code: "itemNotFound", Err: graph.ErrTimestampOutOfRange},
-			class:  resultSkip, issueType: issueTimestampOutOfRange,
+			class:  resultSkip, issueType: "",
 		},
 		{
 			name:   "plain 500 is still outage evidence",

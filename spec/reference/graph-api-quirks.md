@@ -85,26 +85,21 @@ as a per-photo warning.
 
 SharePoint injects metadata into uploaded files, changing the hash and size post-upload. This can cause infinite upload/download loops if upload validation compares against the original local file. Filed as [onedrive-api-docs#935](https://github.com/OneDrive/onedrive-api-docs/issues/935).
 
-### Upload Creates Double Versions (All Account Types)
+### Upload Plus Mtime PATCH Creates Double Versions (Personal and Business)
 
-Uploading a file and then PATCHing its `fileSystemInfo` (to preserve local timestamps) creates two versions, doubling storage consumption. This was first documented for Business/SharePoint; a live probe on a OneDrive Personal account on 2026-10-25 (simple `PUT /content` followed by an mtime PATCH) also produced **2 versions**, so the earlier "Business/SharePoint only" scoping is stale. The fix is to include `fileSystemInfo` in the upload session creation request, setting timestamps atomically with the content. Modified file re-uploads still create an extra version (unfixed API bug, [onedrive-api-docs#877](https://github.com/OneDrive/onedrive-api-docs/issues/877)).
+Uploading a file and then PATCHing its `fileSystemInfo` (to preserve local timestamps) creates two versions, doubling storage consumption. This was documented for Business/SharePoint; live probe 7 (2026-10-25) showed a simple upload plus PATCH makes 2 versions on Personal too, and live probe L-01 showed a session carrying `fileSystemInfo` makes 1. The fix is to include `fileSystemInfo` in the upload session creation request, setting timestamps atomically with the content. Modified file re-uploads still create an extra version (unfixed API bug, [onedrive-api-docs#877](https://github.com/OneDrive/onedrive-api-docs/issues/877)).
 
-Runtime policy: avoid the avoidable double-version case by putting
-`fileSystemInfo` into upload-session creation, accept the remaining modified
-re-upload extra version as a server bug, and rely on per-side baseline hashes
+Runtime policy: every non-empty upload goes through an upload session whose
+creation carries `fileSystemInfo` (the same request count as PUT plus PATCH);
+only zero-byte files, which a session cannot carry, are PUT and then PATCHed.
+The client accepts the remaining modified
+re-upload extra version as a server bug, and relies on per-side baseline hashes
 to prevent re-upload/download loops instead of attempting version-history
 cleanup workarounds.
 
-Current gap: files at or below `graph.SimpleUploadMaxSize` (4 MiB) still use
-simple upload plus a follow-on PATCH (`internal/graph/upload_transfer.go`), so
-they still get the double version on every account type. Routing every
-non-empty file through an upload session is tracked as hardening work; zero-byte
-files still need a simple PUT, because an upload session cannot carry an empty
-body.
-
 ### Simple Upload Cannot Set Metadata
 
-Simple upload (PUT `/content`) sends raw binary — there's no way to include `fileSystemInfo` in the same request. Files ≤4 MiB uploaded via simple upload get server receipt timestamps. A post-upload PATCH to `UpdateFileSystemInfo` is required when mtime preservation matters.
+Simple upload (PUT `/content`) sends raw binary — there's no way to include `fileSystemInfo` in the same request, so the file gets the server receipt timestamp. The client now uses it only for zero-byte files, followed by a PATCH to `UpdateFileSystemInfo`. When that PATCH keeps failing, the content has still landed: the graph boundary returns the uploaded item with `MtimeNotAppliedError` and callers record the upload instead of re-sending it.
 
 That immediate follow-on PATCH can itself briefly race the new item's
 item-by-ID visibility and return `404 itemNotFound` even though the upload
@@ -863,13 +858,11 @@ folder itself is readable and listable. The equivalent upload-session creation
 request (`POST ...:/createUploadSession`) against the same folder returns the
 correct HTTP 403 `accessDenied`.
 
-Runtime policy:
-- simple upload remains the fast path for small creates
-- if that create-by-parent simple upload returns `ErrNotFound` for a non-zero
-  file, retry once via `createUploadSession`
-- the session route becomes the authoritative result for permission handling,
-  so read-only shared folders surface `403` and enter the normal
-  `perm:remote` flow instead of being misclassified as missing
+Runtime policy: non-empty creates no longer use the simple-upload route at
+all (they go through `createUploadSession` for atomic `fileSystemInfo`), so a
+read-only shared folder answers `403` directly and enters the normal
+`perm:remote` flow. A zero-byte create still uses the simple route; its `404`
+is not retried.
 
 <a id="fresh-parent-child-create-lag"></a>
 ### Recently Created Parent Folders Can Lag Child Routes
@@ -891,15 +884,12 @@ Graph caught up.
 
 Runtime policy:
 - `CreateUploadSession()` retries that exact fresh-parent `404 itemNotFound`
-  case with a short bounded policy (`6` total attempts, `250ms` base, `4s` max,
-  no jitter)
+  case with a bounded policy (`9` total attempts, `250ms` base, `8s` max,
+  no jitter, about 32 s scheduled). It covers the window the old two-stage
+  budget did (a shorter session budget, then a simple-upload replay of `7`
+  attempts at up to `8s`) now that every non-empty create uses this route
 - the retry stays at the graph quirk boundary instead of teaching callers or
   generic transport retry about parent-creation ordering
-- when the same small-file create already saw an initial simple-upload
-  `404 itemNotFound`, the graph boundary may replay the original simple upload
-  under a second bounded create-convergence policy (`7` total attempts, `250ms`
-  base, `8s` max, no jitter) after the session path still exhausts on exact
-  `itemNotFound`
 - flows that already know the authoritative remote `itemID` avoid this parent
   create route entirely and overwrite by item ID instead of re-creating by
   parent path

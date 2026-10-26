@@ -7,6 +7,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 const (
@@ -28,6 +29,18 @@ func classifyResult(r *actionCompletion) resultDecision {
 			Class:         resultSuccess,
 			RecordSuccess: true,
 			TrialHint:     trialHintRelease,
+		})
+	}
+
+	// Before the context check: a transfer the stall watchdog abandoned is
+	// retryable work, not a shutdown. Classified as a shutdown it was
+	// neither retried nor recorded, and its dependents were dropped.
+	if errors.Is(r.Err, graph.ErrTransferStalled) {
+		return withRuntimeSummary(&resultDecision{
+			Class:         resultRequeue,
+			Persistence:   persistRetryWork,
+			TrialHint:     trialHintReclassify,
+			ConditionType: issueTransferStalled,
 		})
 	}
 
@@ -87,7 +100,6 @@ func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {
 	case serverAnswerForbidden,
 		serverAnswerUnsupported,
 		serverAnswerPathTooLong,
-		serverAnswerTimestampOutOfRange,
 		serverAnswerMalware,
 		serverAnswerOther:
 		// Actionable per item: retrying the same request gets the same
@@ -201,7 +213,6 @@ func serverAnswerIssueTypes() map[serverAnswer]string {
 		serverAnswerThrottled:           issueRateLimited,
 		serverAnswerQuota:               IssueQuotaExceeded,
 		serverAnswerUnsupported:         issueUnsupportedOperation,
-		serverAnswerTimestampOutOfRange: issueTimestampOutOfRange,
 		serverAnswerServiceOutage:       issueServiceOutage,
 		serverAnswerRequestTimeout:      "request_timeout",
 		serverAnswerTransientConflict:   "transient_conflict",
@@ -239,6 +250,10 @@ func issueTypeForFilesystemResult(r *actionCompletion) (string, bool) {
 		return issueFileTooLargeForSpace, true
 	case errors.Is(err, driveops.ErrFileExceedsOneDriveLimit):
 		return issueFileTooLarge, true
+	case errors.Is(err, driveops.ErrUploadVerificationFailed):
+		return issueUploadVerification, true
+	case errors.Is(err, driveops.ErrDownloadIntegrity):
+		return issueDownloadIntegrity, true
 	}
 
 	switch driveops.ClassifyLocalError(err) {

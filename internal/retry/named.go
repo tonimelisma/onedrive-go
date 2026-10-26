@@ -10,9 +10,8 @@ const (
 	rootChildrenAttempts         = 3
 	downloadMetadataAttempts     = 6
 	simpleUploadMtimeAttempts    = 8
-	uploadSessionCreateAttempts  = 6
+	uploadSessionCreateAttempts  = 9
 	copyDestinationAttempts      = 6
-	simpleUploadCreateAttempts   = 7
 	pathVisibilityAttempts       = 10
 	infiniteAttempts             = 0
 	standardMultiplier           = 2.0
@@ -26,11 +25,9 @@ const (
 	simpleUploadMtimeBaseDelay   = 250 * time.Millisecond
 	simpleUploadMtimeMaxDelay    = 16 * time.Second
 	uploadSessionCreateBaseDelay = 250 * time.Millisecond
-	uploadSessionCreateMaxDelay  = 4 * time.Second
+	uploadSessionCreateMaxDelay  = 8 * time.Second
 	copyDestinationBaseDelay     = 250 * time.Millisecond
 	copyDestinationMaxDelay      = 4 * time.Second
-	simpleUploadCreateBaseDelay  = 250 * time.Millisecond
-	simpleUploadCreateMaxDelay   = 8 * time.Second
 	pathVisibilityBaseDelay      = 250 * time.Millisecond
 	pathVisibilityMaxDelay       = 32 * time.Second
 	transportMaxDelay            = 60 * time.Second
@@ -111,11 +108,13 @@ func SimpleUploadMtimePatchPolicy() Policy {
 	}
 }
 
-// UploadSessionCreatePolicy is the quick-retry policy for transient
-// item-not-found misfires when createUploadSession targets a freshly created
-// parent folder. The budget is long enough to bridge the live consistency
-// window we have observed after freshly created folders become path-visible,
-// while still staying bounded for real missing parents or permission problems.
+// UploadSessionCreatePolicy is the retry policy for transient item-not-found
+// misfires when createUploadSession targets a freshly created parent folder.
+// Every non-empty create now goes through this route, so the budget covers
+// the whole convergence window live E2E has shown after a fresh folder
+// becomes path-visible (about 32 s scheduled; the old simple-upload replay
+// plus the shorter session budget gave about 24 s), while staying bounded for
+// a real missing parent. A permission denial is a 403 and is not retried.
 func UploadSessionCreatePolicy() Policy {
 	return Policy{
 		MaxAttempts: uploadSessionCreateAttempts,
@@ -134,19 +133,6 @@ func CopyDestinationPolicy() Policy {
 		MaxAttempts: copyDestinationAttempts,
 		Base:        copyDestinationBaseDelay,
 		Max:         copyDestinationMaxDelay,
-		Multiplier:  standardMultiplier,
-		Jitter:      noJitter,
-	}
-}
-
-// SimpleUploadCreatePolicy is the longer post-disambiguation retry policy for
-// create-by-parent simple uploads that still return item-not-found after the
-// session-route permission oracle has already exhausted on the same parent.
-func SimpleUploadCreatePolicy() Policy {
-	return Policy{
-		MaxAttempts: simpleUploadCreateAttempts,
-		Base:        simpleUploadCreateBaseDelay,
-		Max:         simpleUploadCreateMaxDelay,
 		Multiplier:  standardMultiplier,
 		Jitter:      noJitter,
 	}

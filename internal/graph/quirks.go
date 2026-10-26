@@ -20,7 +20,6 @@ const (
 	QuirkCopyDestinationTransient404     = "copy-destination-transient-404"
 	QuirkUploadSessionCreateTransient404 = "upload-session-create-transient-404"
 	QuirkSimpleUploadMtimeTransient404   = "simple-upload-mtime-transient-404"
-	QuirkSimpleUploadCreateTransient404  = "simple-upload-create-transient-404"
 	QuirkDownloadMetadataTransient404    = "download-metadata-transient-404"
 	QuirkRootChildrenTransient404        = "root-children-transient-404"
 )
@@ -158,6 +157,15 @@ func isTransientSimpleUploadMtimeError(err error) (*GraphError, bool) {
 		return graphErr, true
 	}
 
+	// The PATCH right after the content write can race the server's own
+	// post-upload processing and answer 409 resourceModified (MS-160); the
+	// item is not in conflict with anything the client did.
+	var conflictErr *GraphError
+	if errors.As(err, &conflictErr) && conflictErr.StatusCode == http.StatusConflict &&
+		conflictErr.HasCode("resourceModified") {
+		return conflictErr, true
+	}
+
 	if !errors.Is(err, ErrServerError) {
 		return nil, false
 	}
@@ -173,10 +181,6 @@ func isTransientSimpleUploadMtimeError(err error) (*GraphError, bool) {
 	default:
 		return nil, false
 	}
-}
-
-func isTransientSimpleUploadCreateError(err error) (*GraphError, bool) {
-	return isTransientItemNotFoundError(err)
 }
 
 func isTransientUploadSessionCreateError(err error) (*GraphError, bool) {

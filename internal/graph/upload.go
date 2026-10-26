@@ -1,12 +1,13 @@
 package graph
 
+import (
+	"log/slog"
+	"time"
+)
+
 // ChunkAlignment is the required alignment for upload chunk sizes (320 KiB).
 // All chunks except the final one must be a multiple of this value.
 const ChunkAlignment = 320 * 1024
-
-// SimpleUploadMaxSize is the maximum file size for simple (single-request) upload (4 MiB).
-// Files larger than this must use resumable upload sessions.
-const SimpleUploadMaxSize = 4 * 1024 * 1024
 
 // ChunkedUploadChunkSize is the chunk size for resumable uploads (10 MiB, aligned to 320 KiB).
 const ChunkedUploadChunkSize = 10 * 1024 * 1024
@@ -29,6 +30,37 @@ type uploadSessionItem struct {
 // from overwriting them with server-side receipt time (double-versioning).
 type fileSystemInfo struct {
 	LastModifiedDateTime string `json:"lastModifiedDateTime"`
+}
+
+// newFileSystemInfo is the fileSystemInfo to send for mtime: nil for the
+// zero time, which OneDrive silently replaces with the current time, and
+// clamped to EarliestFileSystemTime, before which it answers a misleading
+// 404 itemNotFound (live probe L-26). The relabelling of that 404 stays as
+// a defense for any other sender.
+func (c *Client) newFileSystemInfo(mtime time.Time) *fileSystemInfo {
+	if mtime.IsZero() {
+		return nil
+	}
+
+	return &fileSystemInfo{LastModifiedDateTime: c.sendableMtime(mtime).UTC().Format(time.RFC3339)}
+}
+
+// sendableMtime clamps mtime to EarliestFileSystemTime, warning once per
+// client.
+func (c *Client) sendableMtime(mtime time.Time) time.Time {
+	if !mtime.Before(EarliestFileSystemTime()) {
+		return mtime
+	}
+
+	logAt := c.logger.Debug
+	if c.clampWarned.CompareAndSwap(false, true) {
+		logAt = c.logger.Warn
+	}
+	logAt("OneDrive doesn't accept modification times before 1900; using 1900-01-01 instead",
+		slog.Time("mtime", mtime),
+	)
+
+	return EarliestFileSystemTime()
 }
 
 type uploadSessionResponse struct {

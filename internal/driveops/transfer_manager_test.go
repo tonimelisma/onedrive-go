@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -47,7 +48,7 @@ func (m *tmMockDownloader) Download(ctx context.Context, driveID driveid.ID, ite
 	return 0, fmt.Errorf("Download not mocked")
 }
 
-func (m *tmMockDownloader) DownloadRange(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer, offset int64) (int64, error) {
+func (m *tmMockDownloader) DownloadRange(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer, offset int64, _ graph.DownloadVersion) (int64, error) {
 	if m.downloadRangeFn != nil {
 		return m.downloadRangeFn(ctx, driveID, itemID, w, offset)
 	}
@@ -61,12 +62,37 @@ type tmMockUploader struct {
 	createUploadSessionFn func(ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error)
 	uploadFromSessionFn   func(ctx context.Context, session *graph.UploadSession, content io.ReaderAt, totalSize int64, progress graph.ProgressFunc) (*graph.Item, error)
 	resumeUploadFn        func(ctx context.Context, session *graph.UploadSession, content io.ReaderAt, totalSize int64, progress graph.ProgressFunc) (*graph.Item, error)
+	getItemFn             func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+	listChildrenFn        func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+	canceledSessions      []graph.UploadURL
+}
+
+func (m *tmMockUploader) CancelUploadSession(_ context.Context, session *graph.UploadSession) error {
+	m.canceledSessions = append(m.canceledSessions, session.UploadURL)
+	return nil
 }
 
 var (
 	_ Uploader        = (*tmMockUploader)(nil)
 	_ SessionUploader = (*tmMockUploader)(nil)
+	_ ItemReader      = (*tmMockUploader)(nil)
 )
+
+func (m *tmMockUploader) GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
+	if m.getItemFn != nil {
+		return m.getItemFn(ctx, driveID, itemID)
+	}
+
+	return nil, fmt.Errorf("GetItem not mocked")
+}
+
+func (m *tmMockUploader) ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {
+	if m.listChildrenFn != nil {
+		return m.listChildrenFn(ctx, driveID, parentID)
+	}
+
+	return nil, fmt.Errorf("ListChildren not mocked")
+}
 
 func (m *tmMockUploader) Upload(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
 	if m.uploadFn != nil {
@@ -180,9 +206,10 @@ func TestTransferManager_FreshDownload_Success(t *testing.T) {
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	targetPath := filepath.Join(t.TempDir(), "sub", "file.txt")
 
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+	opts := DownloadOpts{
 		RemoteHash: expectedHash,
-	})
+	}
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.NoError(t, err, "DownloadToFile")
 
 	assert.Equal(t, expectedHash, result.LocalHash)
@@ -197,7 +224,7 @@ func TestTransferManager_FreshDownload_Success(t *testing.T) {
 	assert.Equal(t, content, got, "file content mismatch")
 
 	// .partial should not exist after successful download.
-	_, statErr := os.Stat(downloadPartialPath(targetPath))
+	_, statErr := os.Stat(DownloadPartialPath(targetPath, opts))
 	assert.True(t, os.IsNotExist(statErr), "expected .partial to be removed")
 }
 
@@ -213,13 +240,14 @@ func TestTransferManager_FreshDownload_Error(t *testing.T) {
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	targetPath := filepath.Join(t.TempDir(), "file.txt")
 
-	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{})
+	opts := DownloadOpts{}
+	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.Error(t, err)
 
 	assert.Contains(t, err.Error(), "network failure")
 
 	// .partial should be cleaned up on non-ctx error.
-	_, statErr := os.Stat(downloadPartialPath(targetPath))
+	_, statErr := os.Stat(DownloadPartialPath(targetPath, opts))
 	assert.True(t, os.IsNotExist(statErr), "expected .partial to be removed on non-ctx error")
 }
 
@@ -242,11 +270,12 @@ func TestTransferManager_FreshDownload_CtxCancel_PreservesPartial(t *testing.T) 
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	targetPath := filepath.Join(t.TempDir(), "file.txt")
 
-	_, err := tm.DownloadToFile(ctx, driveid.New("d1"), "item1", targetPath, DownloadOpts{})
+	opts := DownloadOpts{}
+	_, err := tm.DownloadToFile(ctx, driveid.New("d1"), "item1", targetPath, opts)
 	require.Error(t, err)
 
 	// .partial should be preserved on context cancellation.
-	info, statErr := os.Stat(downloadPartialPath(targetPath))
+	info, statErr := os.Stat(DownloadPartialPath(targetPath, opts))
 	require.NoError(t, statErr, "expected .partial to be preserved")
 
 	assert.NotZero(t, info.Size(), "expected .partial to have data")
@@ -276,14 +305,15 @@ func TestTransferManager_ResumeDownload_Success(t *testing.T) {
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "file.txt")
-	partialPath := downloadPartialPath(targetPath)
+	opts := DownloadOpts{
+		RemoteHash: expectedHash,
+	}
+	partialPath := DownloadPartialPath(targetPath, opts)
 
 	// Pre-create the .partial file with existing data.
 	require.NoError(t, os.WriteFile(partialPath, existingData, 0o600))
 
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-		RemoteHash: expectedHash,
-	})
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.NoError(t, err, "DownloadToFile")
 
 	assert.Equal(t, expectedHash, result.LocalHash)
@@ -312,13 +342,14 @@ func TestTransferManager_ResumeDownload_CorruptPartial_RetriesFresh(t *testing.T
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "file.txt")
-	partialPath := downloadPartialPath(targetPath)
-	require.NoError(t, os.WriteFile(partialPath, corruptPartial, 0o600))
-
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+	opts := DownloadOpts{
 		RemoteHash:     expectedHash,
 		MaxHashRetries: 1,
-	})
+	}
+	partialPath := DownloadPartialPath(targetPath, opts)
+	require.NoError(t, os.WriteFile(partialPath, corruptPartial, 0o600))
+
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.NoError(t, err, "DownloadToFile")
 
 	assert.Equal(t, 1, rangeCalls, "expected one resume attempt before retrying fresh")
@@ -349,13 +380,14 @@ func TestTransferManager_ResumeDownload_RemoteChangedDuringResume_RetriesFresh(t
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "changed.txt")
-	partialPath := downloadPartialPath(targetPath)
-	require.NoError(t, os.WriteFile(partialPath, partialData, 0o600))
-
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+	opts := DownloadOpts{
 		RemoteHash:     expectedHash,
 		MaxHashRetries: 1,
-	})
+	}
+	partialPath := DownloadPartialPath(targetPath, opts)
+	require.NoError(t, os.WriteFile(partialPath, partialData, 0o600))
+
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.NoError(t, err, "DownloadToFile")
 
 	assert.Equal(t, 1, rangeCalls, "expected one resume attempt against stale partial data")
@@ -396,13 +428,14 @@ func TestTransferManager_ResumeDownload_OversizedPartial_RetriesFresh(t *testing
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "oversized-partial.txt")
-	partialPath := downloadPartialPath(targetPath)
-	require.NoError(t, os.WriteFile(partialPath, oversizedPartial, 0o600))
-
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+	opts := DownloadOpts{
 		RemoteHash:     expectedHash,
 		MaxHashRetries: 1,
-	})
+	}
+	partialPath := DownloadPartialPath(targetPath, opts)
+	require.NoError(t, os.WriteFile(partialPath, oversizedPartial, 0o600))
+
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.NoError(t, err, "DownloadToFile")
 
 	assert.Equal(t, 1, rangeCalls, "expected one resume attempt against oversized partial state")
@@ -447,7 +480,7 @@ func TestTransferManager_ResumeDownload_FallsBackToFreshDownload(t *testing.T) {
 
 			dl := &tmMockDownloader{
 				downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer, _ int64) (int64, error) {
-					return 0, errors.New(tt.rangeErr)
+					return 0, fmt.Errorf("%s: %w", tt.rangeErr, graph.ErrRangeResumeRejected)
 				},
 				downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 					freshDownloadCalled = true
@@ -458,12 +491,13 @@ func TestTransferManager_ResumeDownload_FallsBackToFreshDownload(t *testing.T) {
 
 			tm := newTestTM(dl, &tmMockUploader{}, nil)
 			targetPath := filepath.Join(t.TempDir(), "file.txt")
-			partialPath := downloadPartialPath(targetPath)
+			opts := DownloadOpts{
+				RemoteHash: expectedHash,
+			}
+			partialPath := DownloadPartialPath(targetPath, opts)
 			require.NoError(t, os.WriteFile(partialPath, tt.partialData, 0o600))
 
-			result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-				RemoteHash: expectedHash,
-			})
+			result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 			require.NoError(t, err, "DownloadToFile")
 			assert.True(t, freshDownloadCalled, "expected fresh Download() fallback")
 			assert.Equal(t, expectedHash, result.LocalHash)
@@ -509,13 +543,11 @@ func TestTransferManager_HashMismatch_Retry(t *testing.T) {
 	assert.Equal(t, correctHash, result.LocalHash)
 }
 
-func TestTransferManager_HashExhaustion_Accepts(t *testing.T) {
+// Validates: R-5.5.1, R-5.8.2
+func TestTransferManager_DeterministicMismatchAtReportedSize_AcceptedOnce(t *testing.T) {
 	t.Parallel()
 
-	// All downloads produce content with a different hash. After exhaustion,
-	// EffectiveRemoteHash should be set to localHash.
-	content := []byte("always-wrong-hash")
-
+	content := []byte("always-the-same-bytes")
 	dl := &tmSimpleDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write(content)
@@ -527,16 +559,183 @@ func TestTransferManager_HashExhaustion_Accepts(t *testing.T) {
 	targetPath := filepath.Join(t.TempDir(), "file.txt")
 
 	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-		RemoteHash:     "definitely-wrong-hash",
+		RemoteHash:     "reported-hash",
+		RemoteSize:     int64(len(content)),
 		MaxHashRetries: 1,
 	})
 	require.NoError(t, err, "DownloadToFile")
 
-	// After exhaustion, EffectiveRemoteHash should match localHash (accepted).
-	assert.Equal(t, result.LocalHash, result.EffectiveRemoteHash)
+	// The same bytes at the reported size every time: what OneDrive serves
+	// for this version. The remote hash recorded is OneDrive's, not the
+	// local one (that made every later pass see a remote change).
+	assert.True(t, result.AcceptedMismatch)
+	assert.False(t, result.HashVerified)
+	assert.Equal(t, "reported-hash", result.EffectiveRemoteHash)
+	assert.Equal(t, tmHashBytes(content), result.LocalHash)
+}
 
-	// HashVerified should be false when retries exhausted with mismatch.
-	assert.False(t, result.HashVerified, "HashVerified should be false after exhaustion")
+// Validates: R-5.5.1, R-5.8.2
+func TestTransferManager_IntegrityFailureKeepsCanonicalFile(t *testing.T) {
+	t.Parallel()
+
+	const good = "the user's good local copy"
+	errorBody := []byte(`{"error":{"code":"generalException","message":"try again"}}`)
+
+	tests := []struct {
+		name     string
+		opts     DownloadOpts
+		download func(attempt int, w io.Writer) (int64, error)
+	}{
+		{
+			name: "200 with a JSON error body three times",
+			opts: DownloadOpts{RemoteHash: "reported-hash", RemoteSize: 4096},
+			download: func(_ int, w io.Writer) (int64, error) {
+				n, err := w.Write(errorBody)
+				return int64(n), err
+			},
+		},
+		{
+			name: "error document recognized by type",
+			opts: DownloadOpts{RemoteHash: "reported-hash", RemoteSize: 4096},
+			download: func(_ int, _ io.Writer) (int64, error) {
+				return 0, fmt.Errorf("downloading: %w", graph.ErrUnexpectedDownloadBody)
+			},
+		},
+		{
+			name: "different wrong bytes each time",
+			opts: DownloadOpts{RemoteHash: "reported-hash", RemoteSize: 5},
+			download: func(attempt int, w io.Writer) (int64, error) {
+				n, err := fmt.Fprintf(w, "try%d", attempt)
+				return int64(n), err
+			},
+		},
+		{
+			name: "hashless short body",
+			opts: DownloadOpts{RemoteSize: 4096},
+			download: func(_ int, w io.Writer) (int64, error) {
+				n, err := w.Write([]byte("short"))
+				return int64(n), err
+			},
+		},
+		{
+			name: "hashless empty body for a non-empty item",
+			opts: DownloadOpts{RemoteSize: 4096},
+			download: func(_ int, _ io.Writer) (int64, error) {
+				return 0, nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var attempts int
+			dl := &tmSimpleDownloader{
+				downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+					attempts++
+					return tt.download(attempts, w)
+				},
+			}
+
+			targetPath := filepath.Join(t.TempDir(), "report.bin")
+			require.NoError(t, os.WriteFile(targetPath, []byte(good), 0o600))
+
+			_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(
+				t.Context(), driveid.New("d1"), "item1", targetPath, tt.opts)
+
+			// These used to be renamed over the user's file: after three
+			// attempts with a hash, at once without one.
+			require.ErrorIs(t, err, ErrDownloadIntegrity)
+			got, readErr := localpath.ReadFile(targetPath)
+			require.NoError(t, readErr)
+			assert.Equal(t, good, string(got))
+			assert.Equal(t, defaultMaxHashRetries+1, attempts, "bounded retries")
+			_, statErr := os.Stat(DownloadPartialPath(targetPath, tt.opts))
+			assert.ErrorIs(t, statErr, os.ErrNotExist, "no partial is left behind")
+		})
+	}
+}
+
+// Validates: R-5.5.1
+func TestTransferManager_EmptyItemWithoutDownloadURLCreatesEmptyFile(t *testing.T) {
+	t.Parallel()
+
+	dl := &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			return 0, graph.ErrNoDownloadURL
+		},
+	}
+
+	targetPath := filepath.Join(t.TempDir(), "empty.txt")
+	result, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(
+		t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{RemoteSize: 0, RemoteSizeKnown: true})
+	require.NoError(t, err)
+	assert.Zero(t, result.Size)
+
+	info, statErr := os.Stat(targetPath)
+	require.NoError(t, statErr)
+	assert.Zero(t, info.Size())
+}
+
+// Validates: R-5.2.2
+func TestTransferManager_StalePartialFromOldVersionIsNotResumed(t *testing.T) {
+	t.Parallel()
+
+	newContent := []byte("version two bytes")
+	var rangeCalls int
+	dl := &tmMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(newContent)
+			return int64(n), err
+		},
+		downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer, _ int64) (int64, error) {
+			rangeCalls++
+			return 0, nil
+		},
+	}
+
+	targetPath := filepath.Join(t.TempDir(), "doc.bin")
+	oldOpts := DownloadOpts{RemoteETag: "etag-v1", RemoteSize: int64(len(newContent))}
+	newOpts := DownloadOpts{RemoteETag: "etag-v2", RemoteSize: int64(len(newContent))}
+	require.NotEqual(t, DownloadPartialPath(targetPath, oldOpts), DownloadPartialPath(targetPath, newOpts))
+	require.NoError(t, os.WriteFile(DownloadPartialPath(targetPath, oldOpts), []byte("version"), 0o600))
+
+	_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(
+		t.Context(), driveid.New("d1"), "item1", targetPath, newOpts)
+	require.NoError(t, err)
+
+	// A hashless item resumed across versions spliced old bytes onto new
+	// ones with nothing to catch it.
+	assert.Zero(t, rangeCalls)
+	got, readErr := localpath.ReadFile(targetPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, newContent, got)
+}
+
+// Validates: R-5.2.2
+func TestTransferManager_PartialWithoutVersionIsNotResumed(t *testing.T) {
+	t.Parallel()
+
+	var rangeCalls int
+	dl := &tmMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write([]byte("whole"))
+			return int64(n), err
+		},
+		downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer, _ int64) (int64, error) {
+			rangeCalls++
+			return 0, nil
+		},
+	}
+
+	targetPath := filepath.Join(t.TempDir(), "doc.bin")
+	require.NoError(t, os.WriteFile(DownloadPartialPath(targetPath, DownloadOpts{}), []byte("wh"), 0o600))
+
+	_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(
+		t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{})
+	require.NoError(t, err)
+	assert.Zero(t, rangeCalls, "nothing binds the partial to a version")
 }
 
 // Validates: R-5.8.1
@@ -573,7 +772,10 @@ func TestTransferManager_HEICMetadataMismatch_AcceptsFirstDownloadQuietly(t *tes
 	require.NoError(t, err)
 	assert.Equal(t, 1, downloadCount, "re-downloading cannot fix the server-side HEIC quirk")
 	assert.False(t, result.HashVerified)
-	assert.Equal(t, result.LocalHash, result.EffectiveRemoteHash)
+	assert.True(t, result.AcceptedMismatch)
+	// OneDrive's own hash is what the baseline records, so the next pass
+	// sees no remote change and does not download the photo again.
+	assert.Equal(t, "definitely-wrong-hash", result.EffectiveRemoteHash)
 	assert.Contains(t, buf.String(), "known OneDrive/iOS metadata mismatch")
 	assert.Contains(t, buf.String(), "accepting download")
 	assert.NotContains(t, buf.String(), "level=WARN")
@@ -609,16 +811,13 @@ func TestTransferManager_HEICSameSizeHashMismatch_StillRetries(t *testing.T) {
 	assert.Equal(t, 3, downloadCount)
 }
 
-// Validates: R-5.5.1
-//
-// Retries that will probably succeed stay at Debug; only the final accepted
-// mismatch warns, once, in plain words and without raw hashes.
-func TestTransferManager_HashExhaustion_WarnsOnceInPlainWords(t *testing.T) {
+// Validates: R-5.8.2
+func TestTransferManager_AcceptedTransformDoesNotWarn(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	content := []byte("always-wrong-hash")
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	content := []byte("always-the-same-bytes")
 
 	dl := &tmSimpleDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
@@ -632,11 +831,12 @@ func TestTransferManager_HashExhaustion_WarnsOnceInPlainWords(t *testing.T) {
 
 	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
 		RemoteHash:     "definitely-wrong-hash",
+		RemoteSize:     int64(len(content)),
 		MaxHashRetries: 2,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 1, strings.Count(buf.String(), "level=WARN"), buf.String())
-	assert.Contains(t, buf.String(), "doesn't match OneDrive's checksum")
+	assert.NotContains(t, buf.String(), "level=WARN", buf.String())
+	assert.Equal(t, 1, strings.Count(buf.String(), "level=INFO"), buf.String())
 	assert.NotContains(t, buf.String(), "definitely-wrong-hash")
 }
 
@@ -725,8 +925,8 @@ func TestTransferManager_Upload_Success(t *testing.T) {
 	t.Parallel()
 
 	ul := &tmMockUploader{
-		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{ID: "item-1", ETag: "etag-1"}, nil
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return tmUploadedItem(t, "item-1", content, size), nil
 		},
 	}
 
@@ -750,56 +950,140 @@ func TestTransferManager_Upload_Success(t *testing.T) {
 }
 
 // Validates: R-5.5.2
+func TestTransferManager_Upload_PersonalHashMismatchFails(t *testing.T) {
+	t.Parallel()
+
+	var rereads int
+	stored := &graph.Item{
+		ID:              "item-1",
+		Size:            int64(len("upload data")),
+		QuickXorHash:    tmHashBytes([]byte("other data!")),
+		ParentDriveType: "personal",
+	}
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return stored, nil
+		},
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			rereads++
+			assert.Equal(t, "item-1", itemID)
+			return stored, nil
+		},
+	}
+
+	localPath := filepath.Join(t.TempDir(), "report.docx")
+	require.NoError(t, os.WriteFile(localPath, []byte("upload data"), 0o600))
+
+	_, err := newTestTM(&tmSimpleDownloader{}, ul, nil).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "report.docx", localPath, UploadOpts{})
+
+	// Logged at Info and reported as success before: the baseline then
+	// recorded different bytes on each side as converged, forever.
+	require.ErrorIs(t, err, ErrUploadVerificationFailed)
+	assert.Equal(t, 1, rereads, "a mismatch is read back once before failing")
+}
+
+// Validates: R-5.5.2
+func TestTransferManager_Upload_MismatchThatReadsBackVerifiedSucceeds(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("upload data")
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{ID: "item-1", Size: 3, QuickXorHash: tmHashBytes([]byte("pre"))}, nil
+		},
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			return &graph.Item{ID: "item-1", Size: int64(len(data)), QuickXorHash: tmHashBytes(data), ETag: "committed"}, nil
+		},
+	}
+
+	localPath := filepath.Join(t.TempDir(), "a.txt")
+	require.NoError(t, os.WriteFile(localPath, data, 0o600))
+
+	result, err := newTestTM(&tmSimpleDownloader{}, ul, nil).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "a.txt", localPath, UploadOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, "committed", result.Item.ETag, "the verified read-back is the recorded item")
+}
+
+// Validates: R-5.5.2
 func TestTransferManager_Upload_WarnsOnHashMismatch(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
+	enriched := &graph.Item{
+		ID:              "item-1",
+		Size:            4096,
+		QuickXorHash:    base64.StdEncoding.EncodeToString([]byte("remote-hash")),
+		ParentDriveType: "documentLibrary",
+	}
 	ul := &tmMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{
-				ID:           "item-1",
-				QuickXorHash: base64.StdEncoding.EncodeToString([]byte("remote-hash")),
-			}, nil
+			return enriched, nil
 		},
 	}
 
-	dir := t.TempDir()
-	localPath := filepath.Join(dir, "upload.txt")
+	localPath := filepath.Join(t.TempDir(), "report.docx")
 	require.NoError(t, os.WriteFile(localPath, []byte("upload data"), 0o600))
 
 	tm := NewTransferManager(&tmSimpleDownloader{}, ul, nil, logger)
 
-	result, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "upload.txt", localPath, UploadOpts{})
+	// SharePoint rewrites Office documents on every upload: the stored item
+	// is recorded as it is, without a failure or a warning.
+	result, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "report.docx", localPath, UploadOpts{})
 	require.NoError(t, err, "UploadFile")
-	require.NotNil(t, result)
-
-	assert.Contains(t, buf.String(), "upload hash mismatch")
-	assert.Contains(t, buf.String(), "local_hash")
-	assert.Contains(t, buf.String(), "remote_hash")
+	assert.Same(t, enriched, result.Item)
+	assert.Contains(t, buf.String(), "OneDrive enriched the uploaded file")
+	assert.NotContains(t, buf.String(), "level=WARN")
 }
 
+// Validates: R-5.5.2
+func TestTransferManager_Upload_CompletionWithoutItemIsLookedUp(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("data")
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, graph.ErrUploadCompletedWithoutItem
+		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, parentID string) ([]graph.Item, error) {
+			assert.Equal(t, "parent1", parentID)
+			return []graph.Item{
+				{ID: "folder", Name: "nil-item.txt", IsFolder: true},
+				{ID: "found", Name: "nil-item.txt", Size: int64(len(data)), QuickXorHash: tmHashBytes(data)},
+			}, nil
+		},
+	}
+
+	localPath := filepath.Join(t.TempDir(), "nil-item.txt")
+	require.NoError(t, os.WriteFile(localPath, data, 0o600))
+
+	result, err := newTestTM(&tmSimpleDownloader{}, ul, nil).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "nil-item.txt", localPath, UploadOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, "found", result.Item.ID, "an item without identity is never recorded")
+}
+
+// Validates: R-5.5.2
 func TestTransferManager_Upload_NilItem(t *testing.T) {
 	t.Parallel()
 
 	ul := &tmMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return nil, nil //nolint:nilnil // intentional to test nil-item guard
+			return &graph.Item{}, nil
 		},
 	}
 
 	tm := newTestTM(&tmSimpleDownloader{}, ul, nil)
 
-	dir := t.TempDir()
-	localPath := filepath.Join(dir, "nil-item.txt")
-
+	localPath := filepath.Join(t.TempDir(), "nil-item.txt")
 	require.NoError(t, os.WriteFile(localPath, []byte("data"), 0o600))
 
 	_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "nil-item.txt", localPath, UploadOpts{})
 	require.Error(t, err)
-
-	assert.Contains(t, err.Error(), "returned nil item")
+	assert.Contains(t, err.Error(), "looking it up failed")
 }
 
 func TestTransferManager_Upload_ErrorWrapping(t *testing.T) {
@@ -873,16 +1157,16 @@ func TestTransferManager_SessionUpload_Success(t *testing.T) {
 		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
 			return &graph.UploadSession{UploadURL: "https://upload.example.com/session"}, nil
 		},
-		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{ID: "session-item"}, nil
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, content io.ReaderAt, size int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return tmUploadedItem(t, "session-item", content, size), nil
 		},
 	}
 
 	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
 
-	// Create a file larger than SimpleUploadMaxSize.
+	// Create a file larger than persistedSessionMinSize.
 	localPath := filepath.Join(dir, "large.bin")
-	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+	largeData := make([]byte, persistedSessionMinSize+1)
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
@@ -899,9 +1183,9 @@ func TestTransferManager_SessionUpload_Resume(t *testing.T) {
 	dir := t.TempDir()
 	store := NewSessionStore(dir, slog.Default())
 
-	// Create a file larger than SimpleUploadMaxSize.
+	// Create a file larger than persistedSessionMinSize.
 	localPath := filepath.Join(dir, "resume.bin")
-	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+	largeData := make([]byte, persistedSessionMinSize+1)
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
@@ -921,14 +1205,14 @@ func TestTransferManager_SessionUpload_Resume(t *testing.T) {
 	var resumeCalled bool
 
 	ul := &tmMockUploader{
-		resumeUploadFn: func(_ context.Context, session *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+		resumeUploadFn: func(_ context.Context, session *graph.UploadSession, content io.ReaderAt, size int64, _ graph.ProgressFunc) (*graph.Item, error) {
 			resumeCalled = true
 
 			if session.UploadURL != "https://upload.example.com/existing" {
 				return nil, fmt.Errorf("unexpected session URL: %s", session.UploadURL)
 			}
 
-			return &graph.Item{ID: "resumed-item"}, nil
+			return tmUploadedItem(t, "resumed-item", content, size), nil
 		},
 	}
 
@@ -947,9 +1231,9 @@ func TestTransferManager_SessionUpload_ExpiredFallback(t *testing.T) {
 	dir := t.TempDir()
 	store := NewSessionStore(dir, slog.Default())
 
-	// Create a file larger than SimpleUploadMaxSize.
+	// Create a file larger than persistedSessionMinSize.
 	localPath := filepath.Join(dir, "expired.bin")
-	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+	largeData := make([]byte, persistedSessionMinSize+1)
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
@@ -970,15 +1254,18 @@ func TestTransferManager_SessionUpload_ExpiredFallback(t *testing.T) {
 		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
 			return nil, graph.ErrUploadSessionExpired
 		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+			return nil, nil // nothing landed: the session expired
+		},
 		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
 			createCalled = true
 
 			return &graph.UploadSession{UploadURL: "https://upload.example.com/fresh"}, nil
 		},
-		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, content io.ReaderAt, size int64, _ graph.ProgressFunc) (*graph.Item, error) {
 			uploadFromCalled = true
 
-			return &graph.Item{ID: "fresh-item"}, nil
+			return tmUploadedItem(t, "fresh-item", content, size), nil
 		},
 	}
 
@@ -1022,36 +1309,6 @@ func TestTransferManager_DriveID_InLogs(t *testing.T) {
 	assert.Contains(t, logOutput, "test-drive-id-123", "expected drive_id in log output")
 }
 
-func TestTransferManager_ParentDirPerms(t *testing.T) {
-	t.Parallel()
-
-	content := []byte("perms-test")
-	expectedHash := tmHashBytes(content)
-
-	dl := &tmSimpleDownloader{
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, err := w.Write(content)
-			return int64(n), err
-		},
-	}
-
-	tm := newTestTM(dl, &tmMockUploader{}, nil)
-	base := t.TempDir()
-	targetPath := filepath.Join(base, "newdir", "file.txt")
-
-	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-		RemoteHash: expectedHash,
-	})
-	require.NoError(t, err, "DownloadToFile")
-
-	info, statErr := os.Stat(filepath.Join(base, "newdir"))
-	require.NoError(t, statErr, "Stat newdir")
-
-	// Fix #15: parent dir should be 0o700 (owner-only).
-	perms := info.Mode().Perm()
-	assert.Equal(t, os.FileMode(0o700), perms, "parent dir perms")
-}
-
 // ---------------------------------------------------------------------------
 // B-208: session delete on any resume failure
 // ---------------------------------------------------------------------------
@@ -1063,7 +1320,7 @@ func TestSessionUpload_NonExpiredResumeError_DeletesSession(t *testing.T) {
 	store := NewSessionStore(dir, slog.Default())
 
 	localPath := filepath.Join(dir, "network-err.bin")
-	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+	largeData := make([]byte, persistedSessionMinSize+1)
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
@@ -1105,7 +1362,7 @@ func TestSessionUpload_NonExpiredResumeError_FreshOnRetry(t *testing.T) {
 	store := NewSessionStore(dir, slog.Default())
 
 	localPath := filepath.Join(dir, "retry.bin")
-	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+	largeData := make([]byte, persistedSessionMinSize+1)
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
@@ -1130,8 +1387,8 @@ func TestSessionUpload_NonExpiredResumeError_FreshOnRetry(t *testing.T) {
 		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
 			return &graph.UploadSession{UploadURL: "https://upload.example.com/fresh-retry"}, nil
 		},
-		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{ID: "fresh-retry-item"}, nil
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, content io.ReaderAt, size int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return tmUploadedItem(t, "fresh-retry-item", content, size), nil
 		},
 	}
 
@@ -1227,7 +1484,7 @@ func TestRemovePartialIfNotCanceled(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "test.partial")
 		require.NoError(t, os.WriteFile(path, []byte("data"), 0o600))
 
-		tm.removePartialIfNotCanceled(t.Context(), path)
+		tm.removePartialIfNotCanceled(t.Context(), LocalTarget(), path)
 
 		_, err := os.Stat(path)
 		assert.True(t, os.IsNotExist(err), "expected file to be removed")
@@ -1242,7 +1499,7 @@ func TestRemovePartialIfNotCanceled(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
-		tm.removePartialIfNotCanceled(ctx, path)
+		tm.removePartialIfNotCanceled(ctx, LocalTarget(), path)
 
 		_, err := os.Stat(path)
 		assert.NoError(t, err, "expected file to be preserved")
@@ -1252,7 +1509,7 @@ func TestRemovePartialIfNotCanceled(t *testing.T) {
 		t.Parallel()
 
 		// Should not panic when file doesn't exist.
-		tm.removePartialIfNotCanceled(t.Context(), "/nonexistent/path.partial")
+		tm.removePartialIfNotCanceled(t.Context(), LocalTarget(), "/nonexistent/path.partial")
 	})
 }
 
@@ -1281,15 +1538,16 @@ func TestDownloadToFile_RenameFailure_PreservesPartial(t *testing.T) {
 	targetPath := filepath.Join(dir, "target_is_dir")
 	require.NoError(t, os.Mkdir(targetPath, 0o700))
 
-	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+	opts := DownloadOpts{
 		RemoteHash: expectedHash,
-	})
+	}
+	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.Error(t, err)
 
 	assert.Contains(t, err.Error(), "renaming partial")
 
 	// .partial should still exist with correct content.
-	partialPath := downloadPartialPath(targetPath)
+	partialPath := DownloadPartialPath(targetPath, opts)
 
 	got, readErr := localpath.ReadFile(partialPath)
 	require.NoError(t, readErr, "expected .partial to be preserved")
@@ -1313,16 +1571,17 @@ func TestDownloadToFile_TargetPreconditionBeforeRenamePreservesPartial(t *testin
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	targetPath := filepath.Join(t.TempDir(), "target.txt")
 
-	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+	opts := DownloadOpts{
 		RemoteHash: expectedHash,
 		ValidateTargetBeforeRename: func() error {
 			return assert.AnError
 		},
-	})
+	}
+	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.ErrorIs(t, err, assert.AnError)
 
 	assert.NoFileExists(t, targetPath)
-	got, readErr := localpath.ReadFile(downloadPartialPath(targetPath))
+	got, readErr := localpath.ReadFile(DownloadPartialPath(targetPath, opts))
 	require.NoError(t, readErr)
 	assert.Equal(t, content, got)
 }
@@ -1369,7 +1628,7 @@ func TestUploadFile_SourcePreconditionRunsDuringSessionRead(t *testing.T) {
 	store := NewSessionStore(dir, slog.Default())
 	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
 	localPath := filepath.Join(dir, "large.bin")
-	require.NoError(t, os.WriteFile(localPath, make([]byte, graph.SimpleUploadMaxSize+1), 0o600))
+	require.NoError(t, os.WriteFile(localPath, make([]byte, persistedSessionMinSize+1), 0o600))
 
 	_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "large.bin", localPath, UploadOpts{
 		ValidateSourceBeforeRead: func() error {
@@ -1405,8 +1664,8 @@ func TestSessionUpload_SaveFailure_StillCompletes(t *testing.T) {
 		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
 			return &graph.UploadSession{UploadURL: "https://upload.example.com/save-fail"}, nil
 		},
-		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
-			return &graph.Item{ID: "save-fail-ok"}, nil
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, content io.ReaderAt, size int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return tmUploadedItem(t, "save-fail-ok", content, size), nil
 		},
 	}
 
@@ -1418,7 +1677,7 @@ func TestSessionUpload_SaveFailure_StillCompletes(t *testing.T) {
 	t.Cleanup(func() { setTestDirPermissions(t, store.dir, 0o700) })
 
 	localPath := filepath.Join(dir, "save-fail.bin")
-	largeData := make([]byte, graph.SimpleUploadMaxSize+1)
+	largeData := make([]byte, persistedSessionMinSize+1)
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
@@ -1470,14 +1729,15 @@ func TestDownloadToFile_SimpleDownloader_OverwritesPartial(t *testing.T) {
 	tm := newTestTM(dl, &tmMockUploader{}, nil)
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "file.txt")
-	partialPath := downloadPartialPath(targetPath)
+	opts := DownloadOpts{
+		RemoteHash: expectedHash,
+	}
+	partialPath := DownloadPartialPath(targetPath, opts)
 
 	// Pre-create a .partial file with old content — should be overwritten.
 	require.NoError(t, os.WriteFile(partialPath, []byte("old-partial-data-that-should-go-away"), 0o600))
 
-	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-		RemoteHash: expectedHash,
-	})
+	result, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.NoError(t, err, "DownloadToFile")
 
 	// Final file should contain fresh content, not concatenated with old.
@@ -1490,34 +1750,6 @@ func TestDownloadToFile_SimpleDownloader_OverwritesPartial(t *testing.T) {
 	// .partial should not exist after successful download.
 	_, statErr := os.Stat(partialPath)
 	assert.True(t, os.IsNotExist(statErr), "expected .partial to be removed")
-}
-
-func TestFreshDownload_FilePermissions(t *testing.T) {
-	t.Parallel()
-
-	content := []byte("perms-check")
-	expectedHash := tmHashBytes(content)
-
-	dl := &tmSimpleDownloader{
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, err := w.Write(content)
-			return int64(n), err
-		},
-	}
-
-	tm := newTestTM(dl, &tmMockUploader{}, nil)
-	targetPath := filepath.Join(t.TempDir(), "perm-test.txt")
-
-	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-		RemoteHash: expectedHash,
-	})
-	require.NoError(t, err, "DownloadToFile")
-
-	info, statErr := os.Stat(targetPath)
-	require.NoError(t, statErr, "Stat")
-
-	perms := info.Mode().Perm()
-	assert.Equal(t, os.FileMode(0o600), perms, "file perms")
 }
 
 // TestTransferManager_ResumeDownload_PartialDeletedBeforeOpen verifies that
@@ -1692,17 +1924,778 @@ func TestTransferManager_DiskSpaceCheck(t *testing.T) {
 func TestDownloadPartialName_FitsLocalNameLimit(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, ".onedrive-go.report.pdf.partial", downloadPartialName("report.pdf"))
+	assert.Equal(t, ".onedrive-go.report.pdf.partial", downloadPartialName("report.pdf", ""))
 
 	long := strings.Repeat("w", 246) + ".txt" // 250 bytes: valid locally
-	partial := downloadPartialName(long)
+	partial := downloadPartialName(long, "")
 	assert.LessOrEqual(t, len(partial), maxLocalNameBytes)
 	assert.True(t, IsOwnedTransferArtifactName(partial))
-	assert.Equal(t, partial, downloadPartialName(long), "deterministic, so a resume finds the same partial")
-	assert.NotEqual(t, partial, downloadPartialName(strings.Repeat("w", 246)+".TXT"), "different names never share a partial")
+	assert.Equal(t, partial, downloadPartialName(long, ""), "deterministic, so a resume finds the same partial")
+	assert.NotEqual(t, partial, downloadPartialName(strings.Repeat("w", 246)+".TXT", ""), "different names never share a partial")
 
 	japanese := strings.Repeat("日本", 42) // 252 bytes of multi-byte runes
-	partial = downloadPartialName(japanese)
+	partial = downloadPartialName(japanese, "")
 	assert.LessOrEqual(t, len(partial), maxLocalNameBytes)
 	assert.True(t, utf8.ValidString(partial), "truncation keeps whole runes")
+}
+
+// Validates: R-5.6.5
+func TestUploadFile_ZeroByteMtimeNotAppliedStillSucceeds(t *testing.T) {
+	t.Parallel()
+
+	localPath := filepath.Join(t.TempDir(), "empty.txt")
+	require.NoError(t, os.WriteFile(localPath, nil, 0o600))
+
+	var uploads int
+	uploaded := &graph.Item{ID: "empty-item", Name: "empty.txt"}
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploads++
+			return uploaded, &graph.MtimeNotAppliedError{Item: uploaded, Err: errors.New("patch failed")}
+		},
+	}
+
+	result, err := newTestTM(&tmMockDownloader{}, ul, nil).UploadFile(
+		t.Context(), driveid.New("d"), "parent", "empty.txt", localPath, UploadOpts{},
+	)
+
+	// The content is on OneDrive: failing here made the caller upload it
+	// again, one more version per attempt, and still never set the mtime.
+	require.NoError(t, err)
+	assert.Same(t, uploaded, result.Item)
+	assert.Equal(t, 1, uploads)
+}
+
+// tmUploadedItem is the item OneDrive returns for a faithful upload: its
+// QuickXorHash and size match what was sent.
+func tmUploadedItem(t *testing.T, id string, content io.ReaderAt, size int64) *graph.Item {
+	t.Helper()
+
+	data := make([]byte, size)
+	_, err := content.ReadAt(data, 0)
+	if err != nil && !errors.Is(err, io.EOF) {
+		require.NoError(t, err)
+	}
+
+	return &graph.Item{ID: id, Size: size, QuickXorHash: tmHashBytes(data)}
+}
+
+// tmDownloadWriting returns a downloader that serves content.
+func tmDownloadWriting(content []byte) *tmSimpleDownloader {
+	return &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(content)
+			return int64(n), err
+		},
+	}
+}
+
+// Validates: R-5.10.2
+func TestDownloadToFile_NewFileAndParentHonourUmask(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("new file")
+	umask := probeUmask()
+	targetPath := filepath.Join(t.TempDir(), "newdir", "file.txt")
+
+	_, err := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil).DownloadToFile(
+		t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{RemoteHash: tmHashBytes(content)})
+	require.NoError(t, err)
+
+	// Downloads used to be 0600 and new parents 0700 whatever the umask,
+	// which broke group sharing (Samba, shared folders) for every file.
+	fileInfo, err := os.Stat(targetPath)
+	require.NoError(t, err)
+	assert.Equal(t, 0o666&^umask, fileInfo.Mode().Perm())
+
+	dirInfo, err := os.Stat(filepath.Dir(targetPath))
+	require.NoError(t, err)
+	assert.Equal(t, 0o777&^umask, dirInfo.Mode().Perm())
+}
+
+// Validates: R-5.10.2
+func TestDownloadToFile_PreservesExistingTargetMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		existing os.FileMode
+		want     os.FileMode
+	}{
+		{name: "executable script keeps +x", existing: 0o755, want: 0o755},
+		{name: "group-readable file stays group-readable", existing: 0o640, want: 0o640},
+		{name: "setuid is never handed to new bytes", existing: 0o755 | os.ModeSetuid, want: 0o755},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			content := []byte("new remote version")
+			targetPath := filepath.Join(t.TempDir(), "tool.sh")
+			require.NoError(t, os.WriteFile(targetPath, []byte("old"), 0o600))
+			require.NoError(t, os.Chmod(targetPath, tt.existing))
+
+			_, err := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil).DownloadToFile(
+				t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{RemoteHash: tmHashBytes(content)})
+			require.NoError(t, err)
+
+			info, err := os.Stat(targetPath)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, info.Mode()&(os.ModePerm|os.ModeSetuid|os.ModeSetgid|os.ModeSticky))
+		})
+	}
+}
+
+// recordingTarget records the order of the filesystem steps a download takes.
+type recordingTarget struct {
+	TargetFS
+	steps []string
+}
+
+func (r *recordingTarget) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	step := "open-partial"
+	if flag == os.O_WRONLY {
+		step = "finalize(chmod,fsync)"
+	}
+	r.steps = append(r.steps, step)
+
+	return r.TargetFS.OpenFile(name, flag, perm) //nolint:wrapcheck // test pass-through
+}
+
+func (r *recordingTarget) Chtimes(name string, atime, mtime time.Time) error {
+	r.steps = append(r.steps, "chtimes")
+	return r.TargetFS.Chtimes(name, atime, mtime) //nolint:wrapcheck // test pass-through
+}
+
+func (r *recordingTarget) Rename(oldName, newName string) error {
+	r.steps = append(r.steps, "rename")
+	return r.TargetFS.Rename(oldName, newName) //nolint:wrapcheck // test pass-through
+}
+
+func (r *recordingTarget) SyncDir(dir string) error {
+	r.steps = append(r.steps, "syncdir:"+filepath.Base(dir))
+	return r.TargetFS.SyncDir(dir) //nolint:wrapcheck // test pass-through
+}
+
+// Validates: R-5.10.1
+func TestDownloadToFile_FsyncsBeforeRenameAndSyncsDirAfter(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("durable")
+	dir := filepath.Join(t.TempDir(), "folder")
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	target := &recordingTarget{TargetFS: LocalTarget()}
+
+	_, err := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil).DownloadToFile(
+		t.Context(), driveid.New("d1"), "item1", filepath.Join(dir, "f.txt"),
+		DownloadOpts{RemoteHash: tmHashBytes(content), RemoteMtime: time.Now().UnixNano(), Target: target})
+	require.NoError(t, err)
+
+	// The baseline commit follows success, so the bytes and the directory
+	// entry must be on disk first: a power cut used to leave an empty file
+	// the next pass trusted or uploaded over the good remote copy.
+	// The mtime is set before the fsync so the flush makes it durable too.
+	assert.Equal(t, []string{"open-partial", "chtimes", "finalize(chmod,fsync)", "rename", "syncdir:folder"}, target.steps)
+}
+
+// refusingParentTarget is a TargetFS whose parent check fails, as sync's
+// does for a parent the plan did not observe.
+type refusingParentTarget struct{ TargetFS }
+
+var errParentGone = errors.New("parent folder is gone")
+
+func (refusingParentTarget) PrepareParent(string) error { return errParentGone }
+
+// Validates: R-5.10.3
+func TestDownloadToFile_ParentRefusalStopsBeforeAnyWrite(t *testing.T) {
+	t.Parallel()
+
+	var downloads int
+	dl := &tmSimpleDownloader{downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+		downloads++
+		return 0, nil
+	}}
+	targetPath := filepath.Join(t.TempDir(), "moved-away", "f.txt")
+
+	_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath,
+		DownloadOpts{Target: refusingParentTarget{TargetFS: LocalTarget()}})
+	require.ErrorIs(t, err, errParentGone)
+	assert.Zero(t, downloads)
+	assert.NoDirExists(t, filepath.Dir(targetPath), "a parent the plan did not observe is never created")
+}
+
+// sessionTestFile writes a file large enough for a persisted session and
+// returns its path, bytes and QuickXorHash.
+func sessionTestFile(t *testing.T, dir string, name ...string) (string, []byte, string) {
+	t.Helper()
+
+	fileName := "big.bin"
+	if len(name) > 0 {
+		fileName = name[0]
+	}
+	data := bytes.Repeat([]byte("s"), persistedSessionMinSize+1)
+	localPath := filepath.Join(dir, fileName)
+	require.NoError(t, os.WriteFile(localPath, data, 0o600))
+
+	return localPath, data, tmHashBytes(data)
+}
+
+// Validates: R-5.6.12
+func TestSessionUpload_FinalFragmentFailureAdoptsCommittedItem(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	localPath, data, hash := sessionTestFile(t, dir)
+
+	var creates int
+	ul := &tmMockUploader{
+		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+			creates++
+			return &graph.UploadSession{UploadURL: "https://upload.example.com/s1", ExpirationTime: time.Now().Add(time.Hour)}, nil
+		},
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			// The commit outlasted the response timeout.
+			return nil, fmt.Errorf("upload: %w", &graph.FinalFragmentError{Err: context.DeadlineExceeded})
+		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+			return []graph.Item{{ID: "landed", Name: "big.bin", Size: int64(len(data)), QuickXorHash: hash}}, nil
+		},
+	}
+
+	result, err := newTestTM(&tmSimpleDownloader{}, ul, store).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "big.bin", localPath, UploadOpts{})
+
+	// It used to fail, and the next attempt's resume got 404 and uploaded
+	// the whole file again, possibly forever for a slow commit.
+	require.NoError(t, err)
+	assert.Equal(t, "landed", result.Item.ID)
+	assert.Equal(t, 1, creates, "no second session")
+	_, found, loadErr := store.Load(driveid.New("d1").String(), localPath)
+	require.NoError(t, loadErr)
+	assert.False(t, found, "the finished session's record is gone")
+}
+
+// Validates: R-5.6.12
+func TestSessionUpload_GoneSessionWithLandedItemIsAdopted(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	localPath, data, hash := sessionTestFile(t, dir)
+	require.NoError(t, store.Save(driveid.New("d1").String(), localPath, &SessionRecord{
+		SessionURL: "https://upload.example.com/old", FileHash: hash, FileSize: int64(len(data)),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}))
+
+	var creates int
+	ul := &tmMockUploader{
+		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, graph.ErrUploadSessionExpired // a crash after the final fragment
+		},
+		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+			creates++
+			return &graph.UploadSession{UploadURL: "https://upload.example.com/new"}, nil
+		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+			return []graph.Item{{ID: "landed", Name: "big.bin", Size: int64(len(data)), QuickXorHash: hash}}, nil
+		},
+	}
+
+	result, err := newTestTM(&tmSimpleDownloader{}, ul, store).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "big.bin", localPath, UploadOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, "landed", result.Item.ID)
+	assert.Zero(t, creates, "a committed upload is never sent again")
+}
+
+// Validates: R-5.6.12
+func TestSessionUpload_GoneSessionBeforeExpiryIsInvalidation(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	localPath, data, hash := sessionTestFile(t, dir)
+	require.NoError(t, store.Save(driveid.New("d1").String(), existingItemSessionKey(localPath, "item-1"), &SessionRecord{
+		SessionURL: "https://upload.example.com/old", FileHash: hash, FileSize: int64(len(data)),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}))
+
+	var creates int
+	ul := &tmItemSessionUploader{tmMockUploader: tmMockUploader{
+		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, graph.ErrUploadSessionExpired
+		},
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			// Another writer changed the item: its bytes are not ours.
+			return &graph.Item{ID: "item-1", Size: 7, QuickXorHash: tmHashBytes([]byte("theirs!"))}, nil
+		},
+	}, createForItem: func() { creates++ }}
+
+	_, err := newTestTM(&tmSimpleDownloader{}, ul, store).UploadFileToItem(
+		t.Context(), driveid.New("d1"), "item-1", localPath, UploadOpts{})
+
+	// Live probe L-02: a session opened before another writer's change
+	// answers 404. Restarting the upload overwrote that change.
+	require.ErrorIs(t, err, ErrUploadSessionInvalidated)
+	assert.Zero(t, creates, "no blind restart")
+}
+
+// Validates: R-5.6.13
+func TestSessionUpload_DroppedSessionsAreCancelled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		recHash   func(hash string) string
+		resumeErr error
+	}{
+		{name: "record for different content", recHash: func(string) string { return "stale-hash" }},
+		{
+			name:      "resume failure",
+			recHash:   func(hash string) string { return hash },
+			resumeErr: &graph.GraphError{StatusCode: 403, Message: "forbidden"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			store := NewSessionStore(dir, slog.Default())
+			localPath, data, hash := sessionTestFile(t, dir)
+			require.NoError(t, store.Save(driveid.New("d1").String(), localPath, &SessionRecord{
+				SessionURL: "https://upload.example.com/old", FileHash: tt.recHash(hash), FileSize: int64(len(data)),
+			}))
+
+			ul := &tmMockUploader{
+				resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+					return nil, tt.resumeErr
+				},
+				createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+					return &graph.UploadSession{UploadURL: "https://upload.example.com/new"}, nil
+				},
+				uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, content io.ReaderAt, size int64, _ graph.ProgressFunc) (*graph.Item, error) {
+					return tmUploadedItem(t, "new", content, size), nil
+				},
+			}
+
+			_, err := newTestTM(&tmSimpleDownloader{}, ul, store).UploadFile(
+				t.Context(), driveid.New("d1"), "parent1", "big.bin", localPath, UploadOpts{})
+			if tt.resumeErr == nil {
+				require.NoError(t, err, "a fresh session follows the dropped one")
+			}
+
+			// Dropping only the local record leaked the server session,
+			// holding quota and, on Business, blocking a new session.
+			assert.Equal(t, []graph.UploadURL{"https://upload.example.com/old"}, ul.canceledSessions)
+		})
+	}
+}
+
+// Validates: R-5.6.12
+func TestUploadFile_SmallFileFinalFragmentFailureAdoptsCommittedItem(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("small file")
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, &graph.FinalFragmentError{Err: io.ErrUnexpectedEOF}
+		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+			return []graph.Item{{ID: "landed", Name: "a.txt", Size: int64(len(data)), QuickXorHash: tmHashBytes(data)}}, nil
+		},
+	}
+
+	localPath := filepath.Join(t.TempDir(), "a.txt")
+	require.NoError(t, os.WriteFile(localPath, data, 0o600))
+
+	result, err := newTestTM(&tmSimpleDownloader{}, ul, nil).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "a.txt", localPath, UploadOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, "landed", result.Item.ID)
+}
+
+// tmItemSessionUploader adds the item-ID session methods to tmMockUploader.
+type tmItemSessionUploader struct {
+	tmMockUploader
+	createForItem func()
+}
+
+func (m *tmItemSessionUploader) CreateUploadSessionForItem(
+	_ context.Context, _ driveid.ID, _ string, _ int64, _ time.Time,
+) (*graph.UploadSession, error) {
+	if m.createForItem != nil {
+		m.createForItem()
+	}
+
+	return &graph.UploadSession{UploadURL: "https://upload.example.com/new"}, nil
+}
+
+func (m *tmItemSessionUploader) UploadToItem(
+	_ context.Context, _ driveid.ID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc,
+) (*graph.Item, error) {
+	return nil, errors.New("UploadToItem not mocked")
+}
+
+// Validates: R-6.8.20
+func TestDownloadToFile_StalledTransferKeepsPartialForResume(t *testing.T) {
+	t.Parallel()
+
+	dl := &tmSimpleDownloader{downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+		n, err := w.Write([]byte("first half"))
+		if err != nil {
+			return int64(n), err
+		}
+
+		return int64(n), fmt.Errorf("download: %w", graph.ErrTransferStalled)
+	}}
+
+	targetPath := filepath.Join(t.TempDir(), "big.bin")
+	opts := DownloadOpts{RemoteETag: "v1", RemoteSize: 100}
+	_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
+	require.ErrorIs(t, err, graph.ErrTransferStalled)
+
+	got, readErr := localpath.ReadFile(DownloadPartialPath(targetPath, opts))
+	require.NoError(t, readErr, "the retry resumes from the bytes that arrived")
+	assert.Equal(t, "first half", string(got))
+}
+
+// Validates: R-6.8.20, R-5.2.2
+func TestTransferManager_StalledResumeKeepsPartial(t *testing.T) {
+	t.Parallel()
+
+	for _, rangeErr := range []error{
+		fmt.Errorf("range download: %w", graph.ErrTransferStalled),
+		fmt.Errorf("range download: %w", io.ErrUnexpectedEOF),
+	} {
+		t.Run(rangeErr.Error(), func(t *testing.T) {
+			t.Parallel()
+
+			var fresh int
+			dl := &tmMockDownloader{
+				downloadRangeFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer, _ int64) (int64, error) {
+					n, err := w.Write([]byte(" more"))
+					if err != nil {
+						return int64(n), err
+					}
+					return int64(n), rangeErr
+				},
+				downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+					fresh++
+					return 0, nil
+				},
+			}
+
+			targetPath := filepath.Join(t.TempDir(), "big.bin")
+			opts := DownloadOpts{RemoteETag: "v1", RemoteSize: 100}
+			require.NoError(t, os.WriteFile(DownloadPartialPath(targetPath, opts), []byte("resumed"), 0o600))
+
+			_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
+
+			// Starting over threw the resumed bytes away, so a link that
+			// stalls before a file finishes never finished it.
+			require.ErrorIs(t, err, rangeErr)
+			assert.Zero(t, fresh, "no fresh download after a stalled resume")
+			got, readErr := localpath.ReadFile(DownloadPartialPath(targetPath, opts))
+			require.NoError(t, readErr)
+			assert.Equal(t, "resumed more", string(got))
+		})
+	}
+}
+
+// adoptionFixture is a big file with a live session record for item-1, and
+// an uploader whose resume finds the session gone.
+func adoptionFixture(
+	t *testing.T, stored *graph.Item, lookupErr error, name ...string,
+) (*TransferManager, *tmItemSessionUploader, *SessionStore, string, *int) {
+	t.Helper()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	localPath, data, hash := sessionTestFile(t, dir, name...)
+	require.NoError(t, store.Save(driveid.New("d1").String(), existingItemSessionKey(localPath, "item-1"), &SessionRecord{
+		SessionURL: "https://upload.example.com/old", FileHash: hash, FileSize: int64(len(data)),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}))
+
+	creates := new(int)
+	ul := &tmItemSessionUploader{tmMockUploader: tmMockUploader{
+		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, graph.ErrUploadSessionExpired
+		},
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			copied := *stored
+			copied.Size = int64(len(data))
+			return &copied, nil
+		},
+	}, createForItem: func() { *creates++ }}
+
+	return newTestTM(&tmSimpleDownloader{}, ul, store), ul, store, localPath, creates
+}
+
+// adoptionMtime is the modification time the adoption tests upload with.
+func adoptionMtime() time.Time { return time.Date(2024, 5, 6, 7, 8, 9, 0, time.UTC) }
+
+// Validates: R-5.6.12
+func TestSessionUpload_HashlessAdoptionNeedsPositiveEvidence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		stored    graph.Item
+		wantAdopt bool
+	}{
+		{
+			// Same size, no hash: the old version, untouched by us.
+			name:   "old version of the same size",
+			stored: graph.Item{ID: "item-1", ETag: "planned", ModifiedAt: adoptionMtime().Add(-time.Hour)},
+		},
+		{
+			name:   "new eTag but not our mtime",
+			stored: graph.Item{ID: "item-1", ETag: "other-writer", ModifiedAt: adoptionMtime().Add(time.Minute)},
+		},
+		{
+			name:      "our mtime and a new eTag",
+			stored:    graph.Item{ID: "item-1", ETag: "after-our-commit", ModifiedAt: adoptionMtime()},
+			wantAdopt: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stored := tt.stored
+			tm, _, _, localPath, creates := adoptionFixture(t, &stored, nil)
+			result, err := tm.UploadFileToItem(t.Context(), driveid.New("d1"), "item-1", localPath,
+				UploadOpts{Mtime: adoptionMtime(), PlannedRemoteETag: "planned"})
+
+			if tt.wantAdopt {
+				require.NoError(t, err)
+				assert.Equal(t, "after-our-commit", result.Item.ETag)
+			} else {
+				// Adopting a hashless item on size alone recorded the old
+				// version as our upload.
+				require.ErrorIs(t, err, ErrUploadSessionInvalidated)
+			}
+			assert.Zero(t, *creates)
+		})
+	}
+}
+
+// Validates: R-5.6.12
+func TestSessionUpload_EnrichedAdoptionNeedsMtimeEvidence(t *testing.T) {
+	t.Parallel()
+
+	for _, withEvidence := range []bool{true, false} {
+		t.Run(fmt.Sprintf("evidence=%v", withEvidence), func(t *testing.T) {
+			t.Parallel()
+
+			mtime := adoptionMtime()
+			if !withEvidence {
+				mtime = adoptionMtime().Add(-24 * time.Hour)
+			}
+			stored := graph.Item{
+				ID: "item-1", ETag: "after", ModifiedAt: mtime, ParentDriveType: "business",
+				QuickXorHash: tmHashBytes([]byte("enriched by sharepoint")),
+			}
+			tm, _, _, localPath, _ := adoptionFixture(t, &stored, nil, "plan.docx")
+
+			// Business rewrote the document after our commit, so the hash
+			// cannot match; only the sent mtime ties the item to us.
+			_, err := tm.UploadFileToItem(t.Context(), driveid.New("d1"), "item-1", localPath,
+				UploadOpts{Mtime: adoptionMtime(), PlannedRemoteETag: "planned"})
+			if withEvidence {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, ErrUploadSessionInvalidated)
+			}
+		})
+	}
+}
+
+// Validates: R-5.6.12
+func TestSessionUpload_FailedAdoptionLookupIsRetryableNotInvalidation(t *testing.T) {
+	t.Parallel()
+
+	tm, _, store, localPath, creates := adoptionFixture(t, &graph.Item{}, &graph.GraphError{StatusCode: 503, Err: graph.ErrServerError})
+
+	_, err := tm.UploadFileToItem(t.Context(), driveid.New("d1"), "item-1", localPath,
+		UploadOpts{Mtime: adoptionMtime(), PlannedRemoteETag: "planned"})
+
+	// Nothing is known about the item: concluding "invalidated" made sync
+	// replan an upload that may well have committed.
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrUploadSessionInvalidated)
+	assert.Zero(t, *creates)
+	_, found, loadErr := store.Load(driveid.New("d1").String(), existingItemSessionKey(localPath, "item-1"))
+	require.NoError(t, loadErr)
+	assert.True(t, found, "the record is kept for the next attempt")
+}
+
+// Validates: R-5.6.12
+func TestSessionUpload_ResumeFragment404IsInvalidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		resumeErr error
+	}{
+		{name: "non-final fragment", resumeErr: fmt.Errorf("chunk: %w", graph.ErrNotFound)},
+		{name: "final fragment", resumeErr: fmt.Errorf("chunk: %w", &graph.FinalFragmentError{Err: graph.ErrNotFound})},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stored := graph.Item{ID: "item-1", ETag: "other-writer", QuickXorHash: tmHashBytes([]byte("theirs"))}
+			tm, ul, _, localPath, creates := adoptionFixture(t, &stored, nil)
+			ul.resumeUploadFn = func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+				return nil, tt.resumeErr
+			}
+
+			_, err := tm.UploadFileToItem(t.Context(), driveid.New("d1"), "item-1", localPath,
+				UploadOpts{Mtime: adoptionMtime(), PlannedRemoteETag: "planned"})
+
+			// L-02: a fragment 404 means another writer changed the item.
+			require.ErrorIs(t, err, ErrUploadSessionInvalidated)
+			assert.Zero(t, *creates)
+		})
+	}
+}
+
+// Validates: R-5.5.2
+func TestTransferManager_Upload_EnrichedButEmptyAnswerIsReadBackAndFails(t *testing.T) {
+	t.Parallel()
+
+	var rereads int
+	empty := &graph.Item{ID: "item-1", Size: 0, QuickXorHash: tmHashBytes(nil), ParentDriveType: "business"}
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return empty, nil
+		},
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			rereads++
+			return empty, nil
+		},
+	}
+
+	localPath := filepath.Join(t.TempDir(), "report.docx")
+	require.NoError(t, os.WriteFile(localPath, []byte("a real document"), 0o600))
+
+	_, err := newTestTM(&tmSimpleDownloader{}, ul, nil).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "report.docx", localPath, UploadOpts{})
+
+	// Enrichment adds metadata; it never empties a document.
+	require.ErrorIs(t, err, ErrUploadVerificationFailed)
+	assert.Equal(t, 1, rereads)
+}
+
+// Validates: R-5.5.2
+func TestLookupUploadTarget_MatchesNameAcrossCaseAndNormalization(t *testing.T) {
+	t.Parallel()
+
+	ul := &tmMockUploader{listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+		return []graph.Item{{ID: "found", Name: "CAFÉ.TXT"}}, nil
+	}}
+
+	// OneDrive treats NFC/NFD and case variants as one name (live probes 2
+	// and 3), so an exact comparison missed the item the upload wrote.
+	item, err := newTestTM(&tmSimpleDownloader{}, ul, nil).lookupUploadTarget(t.Context(),
+		uploadTarget{driveID: driveid.New("d1"), parentID: "p", name: "café.txt"})
+	require.NoError(t, err)
+	assert.Equal(t, "found", item.ID)
+}
+
+// failingDirSyncTarget answers SyncDir with an injected error.
+type failingDirSyncTarget struct {
+	TargetFS
+	err error
+}
+
+func (f failingDirSyncTarget) SyncDir(string) error { return f.err }
+
+// Validates: R-5.10.1
+func TestDownloadToFile_DirSyncUnsupportedIsBestEffort(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		err     error
+		wantErr bool
+	}{
+		{name: "EINVAL", err: &os.PathError{Op: "fsync", Path: "d", Err: syscall.EINVAL}},
+		{name: "ENOTSUP", err: &os.PathError{Op: "fsync", Path: "d", Err: syscall.ENOTSUP}},
+		{name: "EOPNOTSUPP", err: &os.PathError{Op: "fsync", Path: "d", Err: syscall.EOPNOTSUPP}},
+		{name: "EIO is a real failure", err: &os.PathError{Op: "fsync", Path: "d", Err: syscall.EIO}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			content := []byte("in place")
+			targetPath := filepath.Join(t.TempDir(), "f.txt")
+			_, err := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil).DownloadToFile(
+				t.Context(), driveid.New("d1"), "item1", targetPath,
+				DownloadOpts{RemoteHash: tmHashBytes(content), Target: failingDirSyncTarget{TargetFS: LocalTarget(), err: tt.err}})
+
+			// Filesystems that cannot fsync a directory (FUSE, SMB) failed
+			// every download whose file was already in place.
+			if tt.wantErr {
+				require.ErrorIs(t, err, syscall.EIO)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.FileExists(t, targetPath)
+		})
+	}
+}
+
+// Validates: R-5.10.2
+func TestParseProcUmask(t *testing.T) {
+	t.Parallel()
+
+	umask, ok := parseProcUmask("Name:\tonedrive-go\nUmask:\t0027\nState:\tR (running)\n")
+	require.True(t, ok)
+	assert.Equal(t, os.FileMode(0o027), umask)
+
+	_, ok = parseProcUmask("Name:\tonedrive-go\n")
+	assert.False(t, ok, "kernels before 4.7 have no Umask line")
+
+	// On Linux the /proc answer and the file probe agree.
+	if status, err := localpath.ReadFile(procSelfStatus); err == nil {
+		fromProc, found := parseProcUmask(string(status))
+		require.True(t, found)
+		assert.Equal(t, probeUmaskWithFile(), fromProc)
+	}
+}
+
+// Validates: R-5.8.2
+func TestTransferManager_EmptyHashedItemNeverAcceptsIdenticalWrongBodies(t *testing.T) {
+	t.Parallel()
+
+	var attempts int
+	dl := &tmSimpleDownloader{downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+		attempts++
+		n, err := w.Write([]byte("same wrong bytes"))
+		return int64(n), err
+	}}
+
+	targetPath := filepath.Join(t.TempDir(), "empty.txt")
+	_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath,
+		DownloadOpts{RemoteHash: tmHashBytes(nil), RemoteSize: 0, RemoteSizeKnown: true})
+
+	// Identical bytes every time looks deterministic, but an empty item
+	// cannot be "transformed" into 16 bytes: the size must match too.
+	require.ErrorIs(t, err, ErrDownloadIntegrity)
+	assert.Equal(t, 3, attempts)
+	assert.NoFileExists(t, targetPath)
 }
