@@ -32,12 +32,19 @@ import (
 //
 // Failures print the seed; rerun one with ONEDRIVE_GO_MODEL_SEED=<seed> and
 // widen the search with ONEDRIVE_GO_MODEL_SEEDS=<count>.
+//
+// Under -race the default drops to modelRaceSeeds. The race detector makes each
+// seed 1-2 minutes on a 2-core host (4 seeds measured 204 s), and 12 pushed
+// internal/sync past go test's 10-minute package timeout. The race run is there
+// to catch data races, which two parallel seeds exercise as well as twelve; seed
+// breadth belongs to non-race runs and to ONEDRIVE_GO_MODEL_SEEDS.
 
 const (
 	modelBatches             = 6
 	modelMaxOpsPerSide       = 3
 	modelMaxSyncPasses       = 8
 	modelDefaultSeeds        = 12
+	modelRaceSeeds           = 2
 	modelInitialFolders      = 3
 	modelInitialFiles        = 5
 	modelFolderSentinel      = "/"
@@ -78,6 +85,9 @@ func modelSeeds(t *testing.T) []uint64 {
 		return []uint64{seed}
 	}
 	count := modelDefaultSeeds
+	if raceDetectorEnabled {
+		count = modelRaceSeeds
+	}
 	if raw := os.Getenv(modelSeedCountEnv); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		require.NoError(t, err, modelSeedCountEnv)
