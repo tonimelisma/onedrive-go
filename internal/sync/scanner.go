@@ -31,6 +31,7 @@ import (
 	stdsync "sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"golang.org/x/sync/errgroup"
@@ -58,7 +59,10 @@ const (
 	maxComponentLength     = 255
 	deviceNameWithDigitLen = 4 // COM0-COM9, LPT0-LPT9 have exactly 4 characters
 
-	// maxOneDrivePathLength is the maximum total path length OneDrive allows.
+	// maxOneDrivePathLength is the maximum total path length OneDrive allows,
+	// in characters as oneDrivePathLength counts them. The server is still the
+	// authority: it counts more than the drive-relative path, and its refusal
+	// maps to path_too_long (R-2.11.7).
 	maxOneDrivePathLength = 400
 	// maxOneDriveFileSize is the maximum file size OneDrive allows (250 GB).
 	maxOneDriveFileSize = driveops.MaxOneDriveFileSize
@@ -1179,11 +1183,11 @@ func shouldObserveWithFilter(
 		return &skippedItem{Path: path, Reason: reason, Detail: detail}
 	}
 
-	if len(path) > maxOneDrivePathLength {
+	if pathLength := oneDrivePathLength(path); pathLength > maxOneDrivePathLength {
 		return &skippedItem{
 			Path:   path,
 			Reason: issuePathTooLong,
-			Detail: fmt.Sprintf("path length %d exceeds %d-character limit", len(path), maxOneDrivePathLength),
+			Detail: fmt.Sprintf("path length %d exceeds %d-character limit", pathLength, maxOneDrivePathLength),
 		}
 	}
 
@@ -1386,4 +1390,12 @@ func buildLocalStateRows(result scanResult) []localStateRow {
 	rows := make([]localStateRow, len(result.Rows))
 	copy(rows, result.Rows)
 	return rows
+}
+
+// oneDrivePathLength counts a path the way OneDrive's 400-character limit
+// does: in UTF-16 code units, the unit its error messages and its 260-unit
+// emoji names measure (L-05). Counting UTF-8 bytes skipped valid paths: a
+// 150-character CJK path is 450 bytes, and 300 "ä" are 600.
+func oneDrivePathLength(path string) int {
+	return len(utf16.Encode([]rune(path)))
 }

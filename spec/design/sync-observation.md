@@ -289,6 +289,9 @@ and keep hash-based file move fallback behavior for files only.
 Built-in local observation policy remains:
 
 - validate OneDrive-invalid names before they become upload work
+- count the 400-character path limit in UTF-16 code units, the unit OneDrive
+  measures (R-2.11.10, `TestFullScan_LongNonASCIIPathWithinTheCharacterLimitIsObserved`);
+  counting UTF-8 bytes skipped valid CJK and accented paths
 - report invalid names, path length, file size, case collisions, read-denied
   paths, and hash failures as observation issues for visible paths only
 - "the same name" means OneDrive's name, decided by `internal/namekey` (R-2.12.3):

@@ -186,7 +186,11 @@ The executor therefore creates each candidate exclusively and treats an
 existing name as taken, walking the ordinal suffixes until a create succeeds.
 That makes the claim atomic against every other creator of the name. The
 placeholder is empty, so a claim that ends up unused is released rather than
-left behind, where it would read as a truncated conflict copy.
+left behind, where it would read as a truncated conflict copy. Every
+candidate, ordinal and extension included, is built to fit the 255-byte name
+limit (R-2.11.11, `TestExecutor_SecondSameSecondConflictCopyOfALongNameIsWritable`);
+the ordinal used to be appended after the stem was already trimmed to the
+limit, so the second same-second copy of a long name was unwritable.
 
 The dependency graph is dependency-only. It no longer defines runtime
 quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,
