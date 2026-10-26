@@ -1253,6 +1253,9 @@ func TestTransferManager_SessionUpload_ExpiredFallback(t *testing.T) {
 		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
 			return nil, graph.ErrUploadSessionExpired
 		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+			return nil, nil // nothing landed: the session expired
+		},
 		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
 			createCalled = true
 
@@ -2123,11 +2126,15 @@ func TestDownloadToFile_ParentRefusalStopsBeforeAnyWrite(t *testing.T) {
 
 // sessionTestFile writes a file large enough for a persisted session and
 // returns its path, bytes and QuickXorHash.
-func sessionTestFile(t *testing.T, dir string) (string, []byte, string) {
+func sessionTestFile(t *testing.T, dir string, name ...string) (string, []byte, string) {
 	t.Helper()
 
+	fileName := "big.bin"
+	if len(name) > 0 {
+		fileName = name[0]
+	}
 	data := bytes.Repeat([]byte("s"), persistedSessionMinSize+1)
-	localPath := filepath.Join(dir, "big.bin")
+	localPath := filepath.Join(dir, fileName)
 	require.NoError(t, os.WriteFile(localPath, data, 0o600))
 
 	return localPath, data, tmHashBytes(data)
@@ -2396,4 +2403,212 @@ func TestTransferManager_StalledResumeKeepsPartial(t *testing.T) {
 			assert.Equal(t, "resumed more", string(got))
 		})
 	}
+}
+
+// adoptionFixture is a big file with a live session record for item-1, and
+// an uploader whose resume finds the session gone.
+func adoptionFixture(
+	t *testing.T, stored *graph.Item, lookupErr error, name ...string,
+) (*TransferManager, *tmItemSessionUploader, *SessionStore, string, *int) {
+	t.Helper()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	localPath, data, hash := sessionTestFile(t, dir, name...)
+	require.NoError(t, store.Save(driveid.New("d1").String(), existingItemSessionKey(localPath, "item-1"), &SessionRecord{
+		SessionURL: "https://upload.example.com/old", FileHash: hash, FileSize: int64(len(data)),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}))
+
+	creates := new(int)
+	ul := &tmItemSessionUploader{tmMockUploader: tmMockUploader{
+		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, graph.ErrUploadSessionExpired
+		},
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			copied := *stored
+			copied.Size = int64(len(data))
+			return &copied, nil
+		},
+	}, createForItem: func() { *creates++ }}
+
+	return newTestTM(&tmSimpleDownloader{}, ul, store), ul, store, localPath, creates
+}
+
+// adoptionMtime is the modification time the adoption tests upload with.
+func adoptionMtime() time.Time { return time.Date(2024, 5, 6, 7, 8, 9, 0, time.UTC) }
+
+// Validates: R-5.6.12
+func TestSessionUpload_HashlessAdoptionNeedsPositiveEvidence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		stored    graph.Item
+		wantAdopt bool
+	}{
+		{
+			// Same size, no hash: the old version, untouched by us.
+			name:   "old version of the same size",
+			stored: graph.Item{ID: "item-1", ETag: "planned", ModifiedAt: adoptionMtime().Add(-time.Hour)},
+		},
+		{
+			name:   "new eTag but not our mtime",
+			stored: graph.Item{ID: "item-1", ETag: "other-writer", ModifiedAt: adoptionMtime().Add(time.Minute)},
+		},
+		{
+			name:      "our mtime and a new eTag",
+			stored:    graph.Item{ID: "item-1", ETag: "after-our-commit", ModifiedAt: adoptionMtime()},
+			wantAdopt: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stored := tt.stored
+			tm, _, _, localPath, creates := adoptionFixture(t, &stored, nil)
+			result, err := tm.UploadFileToItem(t.Context(), driveid.New("d1"), "item-1", localPath,
+				UploadOpts{Mtime: adoptionMtime(), PlannedRemoteETag: "planned"})
+
+			if tt.wantAdopt {
+				require.NoError(t, err)
+				assert.Equal(t, "after-our-commit", result.Item.ETag)
+			} else {
+				// Adopting a hashless item on size alone recorded the old
+				// version as our upload.
+				require.ErrorIs(t, err, ErrUploadSessionInvalidated)
+			}
+			assert.Zero(t, *creates)
+		})
+	}
+}
+
+// Validates: R-5.6.12
+func TestSessionUpload_EnrichedAdoptionNeedsMtimeEvidence(t *testing.T) {
+	t.Parallel()
+
+	for _, withEvidence := range []bool{true, false} {
+		t.Run(fmt.Sprintf("evidence=%v", withEvidence), func(t *testing.T) {
+			t.Parallel()
+
+			mtime := adoptionMtime()
+			if !withEvidence {
+				mtime = adoptionMtime().Add(-24 * time.Hour)
+			}
+			stored := graph.Item{
+				ID: "item-1", ETag: "after", ModifiedAt: mtime, ParentDriveType: "business",
+				QuickXorHash: tmHashBytes([]byte("enriched by sharepoint")),
+			}
+			tm, _, _, localPath, _ := adoptionFixture(t, &stored, nil, "plan.docx")
+
+			// Business rewrote the document after our commit, so the hash
+			// cannot match; only the sent mtime ties the item to us.
+			_, err := tm.UploadFileToItem(t.Context(), driveid.New("d1"), "item-1", localPath,
+				UploadOpts{Mtime: adoptionMtime(), PlannedRemoteETag: "planned"})
+			if withEvidence {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, ErrUploadSessionInvalidated)
+			}
+		})
+	}
+}
+
+// Validates: R-5.6.12
+func TestSessionUpload_FailedAdoptionLookupIsRetryableNotInvalidation(t *testing.T) {
+	t.Parallel()
+
+	tm, _, store, localPath, creates := adoptionFixture(t, &graph.Item{}, &graph.GraphError{StatusCode: 503, Err: graph.ErrServerError})
+
+	_, err := tm.UploadFileToItem(t.Context(), driveid.New("d1"), "item-1", localPath,
+		UploadOpts{Mtime: adoptionMtime(), PlannedRemoteETag: "planned"})
+
+	// Nothing is known about the item: concluding "invalidated" made sync
+	// replan an upload that may well have committed.
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrUploadSessionInvalidated)
+	assert.Zero(t, *creates)
+	_, found, loadErr := store.Load(driveid.New("d1").String(), existingItemSessionKey(localPath, "item-1"))
+	require.NoError(t, loadErr)
+	assert.True(t, found, "the record is kept for the next attempt")
+}
+
+// Validates: R-5.6.12
+func TestSessionUpload_ResumeFragment404IsInvalidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		resumeErr error
+	}{
+		{name: "non-final fragment", resumeErr: fmt.Errorf("chunk: %w", graph.ErrNotFound)},
+		{name: "final fragment", resumeErr: fmt.Errorf("chunk: %w", &graph.FinalFragmentError{Err: graph.ErrNotFound})},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stored := graph.Item{ID: "item-1", ETag: "other-writer", QuickXorHash: tmHashBytes([]byte("theirs"))}
+			tm, ul, _, localPath, creates := adoptionFixture(t, &stored, nil)
+			ul.resumeUploadFn = func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+				return nil, tt.resumeErr
+			}
+
+			_, err := tm.UploadFileToItem(t.Context(), driveid.New("d1"), "item-1", localPath,
+				UploadOpts{Mtime: adoptionMtime(), PlannedRemoteETag: "planned"})
+
+			// L-02: a fragment 404 means another writer changed the item.
+			require.ErrorIs(t, err, ErrUploadSessionInvalidated)
+			assert.Zero(t, *creates)
+		})
+	}
+}
+
+// Validates: R-5.5.2
+func TestTransferManager_Upload_EnrichedButEmptyAnswerIsReadBackAndFails(t *testing.T) {
+	t.Parallel()
+
+	var rereads int
+	empty := &graph.Item{ID: "item-1", Size: 0, QuickXorHash: tmHashBytes(nil), ParentDriveType: "business"}
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return empty, nil
+		},
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			rereads++
+			return empty, nil
+		},
+	}
+
+	localPath := filepath.Join(t.TempDir(), "report.docx")
+	require.NoError(t, os.WriteFile(localPath, []byte("a real document"), 0o600))
+
+	_, err := newTestTM(&tmSimpleDownloader{}, ul, nil).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "report.docx", localPath, UploadOpts{})
+
+	// Enrichment adds metadata; it never empties a document.
+	require.ErrorIs(t, err, ErrUploadVerificationFailed)
+	assert.Equal(t, 1, rereads)
+}
+
+// Validates: R-5.5.2
+func TestLookupUploadTarget_MatchesNameAcrossCaseAndNormalization(t *testing.T) {
+	t.Parallel()
+
+	ul := &tmMockUploader{listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+		return []graph.Item{{ID: "found", Name: "CAFÉ.TXT"}}, nil
+	}}
+
+	// OneDrive treats NFC/NFD and case variants as one name (live probes 2
+	// and 3), so an exact comparison missed the item the upload wrote.
+	item, err := newTestTM(&tmSimpleDownloader{}, ul, nil).lookupUploadTarget(t.Context(),
+		uploadTarget{driveID: driveid.New("d1"), parentID: "p", name: "café.txt"})
+	require.NoError(t, err)
+	assert.Equal(t, "found", item.ID)
 }

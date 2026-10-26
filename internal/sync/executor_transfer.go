@@ -362,8 +362,14 @@ func (e *executor) uploadOutcome(
 }
 
 func (e *executor) uploadOpts(action *Action) driveops.UploadOpts {
+	plannedETag := ""
+	if action.View != nil && action.View.Remote != nil {
+		plannedETag = action.View.Remote.ETag
+	}
+
 	return driveops.UploadOpts{
-		ExpectedHash: expectedUploadHash(action),
+		ExpectedHash:      expectedUploadHash(action),
+		PlannedRemoteETag: plannedETag,
 		HashMismatchError: func(_ string, expectedHash, actualHash string) error {
 			return stalePreconditionError(
 				"upload source %s changed hash (expected=%s current=%s)",

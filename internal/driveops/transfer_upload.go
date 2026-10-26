@@ -18,9 +18,13 @@ import (
 
 // UploadOpts configures a single upload operation.
 type UploadOpts struct {
-	Mtime                    time.Time
-	Progress                 graph.ProgressFunc
-	ExpectedHash             string
+	Mtime        time.Time
+	Progress     graph.ProgressFunc
+	ExpectedHash string
+	// PlannedRemoteETag is the eTag the overwritten item had when the
+	// upload was planned. An uncertain upload adopts a hashless or enriched
+	// item only when its eTag moved on from this one.
+	PlannedRemoteETag        string
 	HashMismatchError        func(localPath, expectedHash, actualHash string) error
 	ValidateSourceBeforeRead func() error
 }
@@ -138,6 +142,7 @@ func (tm *TransferManager) uploadGraphItem(
 	size int64,
 	mtime time.Time,
 	progress graph.ProgressFunc,
+	sent uploadedContent,
 ) (*graph.Item, bool, error) {
 	if size > persistedSessionMinSize && tm.sessionStore != nil && hasSessionUploader {
 		item, err := tm.persistedSessionUpload(ctx, &persistedUpload{
@@ -148,6 +153,7 @@ func (tm *TransferManager) uploadGraphItem(
 				return su.CreateUploadSession(ctx, driveID, parentID, name, size, mtime)
 			},
 			sessions: su,
+			sent:     sent,
 		})
 		return item, false, err
 	}
@@ -249,6 +255,9 @@ func (tm *TransferManager) UploadFile(
 
 	// For large files with session store + SessionUploader, use session-based upload.
 	su, hasSU := tm.uploads.(SessionUploader)
+	sent := uploadedContent{
+		size: size, quickXorHash: localHash, name: name, mtime: mtime, planETag: opts.PlannedRemoteETag,
+	}
 	item, mtimePending, err := tm.uploadGraphItem(
 		ctx,
 		su,
@@ -262,10 +271,11 @@ func (tm *TransferManager) UploadFile(
 		size,
 		mtime,
 		progress,
+		sent,
 	)
 	item, err = tm.settleUploadedItem(ctx,
 		uploadTarget{driveID: driveID, parentID: parentID, name: name},
-		uploadedContent{size: size, quickXorHash: localHash, name: name},
+		sent,
 		localPath, item, err)
 	if err != nil {
 		return nil, err
@@ -334,6 +344,9 @@ func (tm *TransferManager) UploadFileToItem(
 	}
 	defer f.Close() //nolint:errcheck // the file is opened read-only for upload; there is nothing buffered to flush
 
+	sent := uploadedContent{
+		size: size, quickXorHash: localHash, name: filepath.Base(localPath), mtime: mtime, planETag: opts.PlannedRemoteETag,
+	}
 	item, mtimePending, err := tm.uploadExistingItem(
 		ctx,
 		validatingReaderAt{ReaderAt: f, Validate: opts.ValidateSourceBeforeRead},
@@ -344,10 +357,11 @@ func (tm *TransferManager) UploadFileToItem(
 		size,
 		mtime,
 		opts.Progress,
+		sent,
 	)
 	item, err = tm.settleUploadedItem(ctx,
 		uploadTarget{driveID: driveID, itemID: itemID},
-		uploadedContent{size: size, quickXorHash: localHash, name: filepath.Base(localPath)},
+		sent,
 		localPath, item, err)
 	if err != nil {
 		return nil, err
@@ -377,6 +391,7 @@ func (tm *TransferManager) uploadExistingItem(
 	size int64,
 	mtime time.Time,
 	progress graph.ProgressFunc,
+	sent uploadedContent,
 ) (*graph.Item, bool, error) {
 	sessionUploader, hasSessionUploader := tm.uploads.(ItemSessionUploader)
 	itemUploader, hasItemUploader := tm.uploads.(ItemUploader)
@@ -390,6 +405,7 @@ func (tm *TransferManager) uploadExistingItem(
 				return sessionUploader.CreateUploadSessionForItem(ctx, driveID, itemID, size, mtime)
 			},
 			sessions: sessionUploader,
+			sent:     sent,
 		})
 
 		return item, false, err

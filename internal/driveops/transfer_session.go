@@ -52,6 +52,8 @@ type persistedUpload struct {
 	progress  graph.ProgressFunc
 	create    func() (*graph.UploadSession, error)
 	sessions  sessionTransport
+	// sent describes the upload for verification and adoption.
+	sent uploadedContent
 }
 
 // existingItemSessionKey is the session-store key of an overwrite by item ID.
@@ -77,7 +79,7 @@ const cancelSessionTimeout = 10 * time.Second
 //     ErrUploadSessionInvalidated, never a blind restart.
 func (tm *TransferManager) persistedSessionUpload(ctx context.Context, up *persistedUpload) (*graph.Item, error) {
 	driveStr := up.target.driveID.String()
-	sent := uploadedContent{size: up.size, quickXorHash: up.localHash, name: up.target.name}
+	sent := up.sent
 
 	rec, found, loadErr := tm.sessionStore.Load(driveStr, up.key)
 	if loadErr != nil {
@@ -131,9 +133,19 @@ func (tm *TransferManager) persistedSessionUpload(ctx context.Context, up *persi
 		// The session finished; settleUploadedItem looks the item up.
 		tm.deleteSession(driveStr, up.key)
 	case graph.IsFinalFragmentUncertain(err):
-		if landed, ok := tm.adoptLandedUpload(ctx, up.target, sent); ok {
+		landed, adopted, lookupErr := tm.adoptLandedUpload(ctx, up.target, sent)
+		if lookupErr != nil {
+			// Unknown outcome: keep the record, the next attempt resumes
+			// or looks again.
+			return nil, fmt.Errorf("uploading %s: %w", up.localPath, errors.Join(err, lookupErr))
+		}
+		if adopted {
 			tm.deleteSession(driveStr, up.key)
 			return landed, nil
+		}
+		if errors.Is(err, graph.ErrNotFound) {
+			tm.deleteSession(driveStr, up.key)
+			return nil, fmt.Errorf("uploading %s: %w", up.localPath, ErrUploadSessionInvalidated)
 		}
 	case errors.Is(err, graph.ErrNotFound):
 		// A fragment's session vanished mid-upload: invalidated (L-02).
@@ -166,7 +178,16 @@ func (tm *TransferManager) resumePersistedSession(
 		return nil, true, fmt.Errorf("resuming upload of %s: %w", up.localPath, resumeErr)
 	}
 
-	if !errors.Is(resumeErr, graph.ErrUploadSessionExpired) {
+	switch {
+	case graph.IsFinalFragmentUncertain(resumeErr) || errors.Is(resumeErr, graph.ErrUploadSessionExpired):
+		// The session finished or is gone: it completed (a crash after
+		// the final fragment), expired, or was invalidated by a concurrent
+		// change. Look before deciding.
+	case errors.Is(resumeErr, graph.ErrNotFound):
+		// A fragment answered 404 mid-upload: invalidated (L-02).
+		tm.deleteSession(driveStr, up.key)
+		return nil, true, fmt.Errorf("resuming upload of %s: %w", up.localPath, ErrUploadSessionInvalidated)
+	default:
 		// Any other resume failure drops the session (canceled on the
 		// server) and the next attempt starts fresh, preventing an endless
 		// resume loop (B-208).
@@ -174,13 +195,26 @@ func (tm *TransferManager) resumePersistedSession(
 		return nil, true, fmt.Errorf("resuming upload of %s: %w", up.localPath, resumeErr)
 	}
 
-	// The session is gone: it completed (a crash after the final fragment),
-	// expired, or was invalidated by a concurrent change.
-	tm.deleteSession(driveStr, up.key)
+	landed, adopted, lookupErr := tm.adoptLandedUpload(ctx, up.target, sent)
+	if lookupErr != nil {
+		// Unknown outcome: keep the record and retry; never conclude
+		// "invalidated" from a lookup that failed.
+		return nil, true, fmt.Errorf("resuming upload of %s: %w", up.localPath, errors.Join(resumeErr, lookupErr))
+	}
 
-	if landed, ok := tm.adoptLandedUpload(ctx, up.target, sent); ok {
+	if adopted {
+		tm.deleteSession(driveStr, up.key)
 		return landed, true, nil
 	}
+
+	if graph.IsFinalFragmentUncertain(resumeErr) && !errors.Is(resumeErr, graph.ErrNotFound) {
+		// The final fragment failed for another reason and the item is not
+		// ours: drop the session (canceled on the server) and start over.
+		tm.dropSession(ctx, driveStr, up.key, session.UploadURL)
+		return nil, false, nil
+	}
+
+	tm.deleteSession(driveStr, up.key)
 
 	if !rec.ExpiresAt.IsZero() && time.Now().Before(rec.ExpiresAt) {
 		return nil, true, fmt.Errorf("resuming upload of %s: %w", up.localPath, ErrUploadSessionInvalidated)
@@ -191,29 +225,56 @@ func (tm *TransferManager) resumePersistedSession(
 	return nil, false, nil
 }
 
-// adoptLandedUpload looks the upload's item up and reports whether it
-// already holds exactly the bytes sent.
+// adoptLandedUpload looks the upload's item up after an uncertain outcome
+// and reports whether it is provably the upload's own commit. A matching
+// QuickXor proves it. Without one (a hashless item, or Business enrichment
+// rewriting the bytes) a matching size proves nothing: the old version can
+// have the same size. Then the evidence must be positive: the item carries
+// the modification time the upload sent and an eTag other than the one the
+// upload was planned against. A failed lookup is returned as an error: the
+// caller retries, it does not conclude anything.
 func (tm *TransferManager) adoptLandedUpload(
 	ctx context.Context, target uploadTarget, sent uploadedContent,
-) (*graph.Item, bool) {
+) (*graph.Item, bool, error) {
 	item, err := tm.lookupUploadTarget(ctx, target)
+	if errors.Is(err, graph.ErrNotFound) {
+		return nil, false, nil
+	}
 	if err != nil {
-		tm.logger.Debug("could not look up the item of an uncertain upload",
-			slog.String("error", err.Error()),
+		return nil, false, fmt.Errorf("looking up the item of an uncertain upload: %w", err)
+	}
+
+	adopted := false
+	switch verdict := verifyTransfer(sent, item); {
+	case item.QuickXorHash != "" && verdict == transferVerified:
+		adopted = true
+	case verdict == transferVerified || verdict == transferEnrichedKnown:
+		adopted = committedByThisUpload(sent, item)
+	}
+
+	if adopted {
+		tm.logger.Debug("upload had already committed; adopting the stored item",
+			slog.String("item_id", item.ID),
 		)
-
-		return nil, false
 	}
 
-	if verifyTransfer(sent, item) != transferVerified {
-		return nil, false
+	return item, adopted, nil
+}
+
+// committedByThisUpload is the positive evidence for an item whose bytes
+// cannot be compared: OneDrive stores the sent time to the second (live
+// probe 6), clamped to its earliest accepted time.
+func committedByThisUpload(sent uploadedContent, item *graph.Item) bool {
+	if sent.mtime.IsZero() || item.ModifiedAt.IsZero() || item.ETag == "" || item.ETag == sent.planETag {
+		return false
 	}
 
-	tm.logger.Debug("upload had already committed; adopting the stored item",
-		slog.String("item_id", item.ID),
-	)
+	wire := sent.mtime
+	if wire.Before(graph.EarliestFileSystemTime()) {
+		wire = graph.EarliestFileSystemTime()
+	}
 
-	return item, true
+	return item.ModifiedAt.Unix() == wire.Unix()
 }
 
 // dropSession cancels a server session best-effort, on a context detached

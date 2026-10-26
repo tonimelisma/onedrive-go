@@ -69,7 +69,9 @@ QuickXorHash is the only comparable digest (the only one computed locally,
 and it covers the length); without it the size is the only evidence. It
 returns `Verified`, `EnrichedKnown` (Office documents and media on a drive
 whose `parentReference.driveType` is `business` or `documentLibrary`, or
-whose ID starts `b!` when Graph omits the type) or `Mismatch`. A mismatch is
+whose ID starts `b!` when Graph omits the type, and only when the stored
+item is non-empty and at least as large as what was sent: enrichment adds
+metadata, it never empties a file) or `Mismatch`. A mismatch is
 read back by ID once, because server processing can briefly show pre-commit
 facts, and then fails with `ErrUploadVerificationFailed`: it used to be an
 Info line and a success, so the baseline recorded different bytes on each
@@ -223,9 +225,18 @@ for create and overwrite alike. A record for other content is canceled on
 the server before it is dropped, and so is one whose resume fails for any
 reason but shutdown (D-037, R-5.6.13); records carry the session's
 `ExpiresAt`. A failed final fragment (`graph.FinalFragmentError`) or a resume
-whose session is gone looks the item up first and adopts it when it holds
-exactly the bytes sent, so a commit that outlasted its response is never
-uploaded again (D-036, R-5.6.12); the encapsulated small-file session gets
+whose session is gone looks the item up first and adopts it only when it is
+provably the upload's own commit, so a commit that outlasted its response is
+never uploaded again (D-036, R-5.6.12). A matching QuickXor proves it. A
+hashless item, or a Business item whose bytes enrichment rewrote, is adopted
+only on positive evidence: it carries the modification time the upload sent
+(to the second) and an eTag other than the one the upload was planned
+against (`UploadOpts.PlannedRemoteETag`); the same size proves nothing,
+since the old version can have it. A lookup that fails is a retryable error
+and the record is kept: nothing is concluded from it. A fragment 404, final
+or not, on a fresh or resumed upload is an invalidation unless the item is
+adopted. Names are matched case-insensitively after NFC normalization until
+the WS2 namespace key replaces it; the encapsulated small-file session gets
 the same adoption through `settleUploadedItem`. A session gone before its
 expiry while the item holds other bytes, or a fragment answered 404, is
 `ErrUploadSessionInvalidated`: another writer changed the item (live probe
