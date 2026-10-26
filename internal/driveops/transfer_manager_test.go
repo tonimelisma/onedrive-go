@@ -1299,36 +1299,6 @@ func TestTransferManager_DriveID_InLogs(t *testing.T) {
 	assert.Contains(t, logOutput, "test-drive-id-123", "expected drive_id in log output")
 }
 
-func TestTransferManager_ParentDirPerms(t *testing.T) {
-	t.Parallel()
-
-	content := []byte("perms-test")
-	expectedHash := tmHashBytes(content)
-
-	dl := &tmSimpleDownloader{
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, err := w.Write(content)
-			return int64(n), err
-		},
-	}
-
-	tm := newTestTM(dl, &tmMockUploader{}, nil)
-	base := t.TempDir()
-	targetPath := filepath.Join(base, "newdir", "file.txt")
-
-	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-		RemoteHash: expectedHash,
-	})
-	require.NoError(t, err, "DownloadToFile")
-
-	info, statErr := os.Stat(filepath.Join(base, "newdir"))
-	require.NoError(t, statErr, "Stat newdir")
-
-	// Fix #15: parent dir should be 0o700 (owner-only).
-	perms := info.Mode().Perm()
-	assert.Equal(t, os.FileMode(0o700), perms, "parent dir perms")
-}
-
 // ---------------------------------------------------------------------------
 // B-208: session delete on any resume failure
 // ---------------------------------------------------------------------------
@@ -1504,7 +1474,7 @@ func TestRemovePartialIfNotCanceled(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "test.partial")
 		require.NoError(t, os.WriteFile(path, []byte("data"), 0o600))
 
-		tm.removePartialIfNotCanceled(t.Context(), path)
+		tm.removePartialIfNotCanceled(t.Context(), LocalTarget(), path)
 
 		_, err := os.Stat(path)
 		assert.True(t, os.IsNotExist(err), "expected file to be removed")
@@ -1519,7 +1489,7 @@ func TestRemovePartialIfNotCanceled(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
-		tm.removePartialIfNotCanceled(ctx, path)
+		tm.removePartialIfNotCanceled(ctx, LocalTarget(), path)
 
 		_, err := os.Stat(path)
 		assert.NoError(t, err, "expected file to be preserved")
@@ -1529,7 +1499,7 @@ func TestRemovePartialIfNotCanceled(t *testing.T) {
 		t.Parallel()
 
 		// Should not panic when file doesn't exist.
-		tm.removePartialIfNotCanceled(t.Context(), "/nonexistent/path.partial")
+		tm.removePartialIfNotCanceled(t.Context(), LocalTarget(), "/nonexistent/path.partial")
 	})
 }
 
@@ -1772,34 +1742,6 @@ func TestDownloadToFile_SimpleDownloader_OverwritesPartial(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "expected .partial to be removed")
 }
 
-func TestFreshDownload_FilePermissions(t *testing.T) {
-	t.Parallel()
-
-	content := []byte("perms-check")
-	expectedHash := tmHashBytes(content)
-
-	dl := &tmSimpleDownloader{
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, err := w.Write(content)
-			return int64(n), err
-		},
-	}
-
-	tm := newTestTM(dl, &tmMockUploader{}, nil)
-	targetPath := filepath.Join(t.TempDir(), "perm-test.txt")
-
-	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-		RemoteHash: expectedHash,
-	})
-	require.NoError(t, err, "DownloadToFile")
-
-	info, statErr := os.Stat(targetPath)
-	require.NoError(t, statErr, "Stat")
-
-	perms := info.Mode().Perm()
-	assert.Equal(t, os.FileMode(0o600), perms, "file perms")
-}
-
 // TestTransferManager_ResumeDownload_PartialDeletedBeforeOpen verifies that
 // when a .partial file is deleted between the existence check and open
 // (TOCTOU race), downloadToPartial falls back to a fresh download (B-211).
@@ -2027,4 +1969,148 @@ func tmUploadedItem(t *testing.T, id string, content io.ReaderAt, size int64) *g
 	}
 
 	return &graph.Item{ID: id, Size: size, QuickXorHash: tmHashBytes(data)}
+}
+
+// tmDownloadWriting returns a downloader that serves content.
+func tmDownloadWriting(content []byte) *tmSimpleDownloader {
+	return &tmSimpleDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write(content)
+			return int64(n), err
+		},
+	}
+}
+
+// Validates: R-5.10.2
+func TestDownloadToFile_NewFileAndParentHonourUmask(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("new file")
+	umask := probeUmask()
+	targetPath := filepath.Join(t.TempDir(), "newdir", "file.txt")
+
+	_, err := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil).DownloadToFile(
+		t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{RemoteHash: tmHashBytes(content)})
+	require.NoError(t, err)
+
+	// Downloads used to be 0600 and new parents 0700 whatever the umask,
+	// which broke group sharing (Samba, shared folders) for every file.
+	fileInfo, err := os.Stat(targetPath)
+	require.NoError(t, err)
+	assert.Equal(t, 0o666&^umask, fileInfo.Mode().Perm())
+
+	dirInfo, err := os.Stat(filepath.Dir(targetPath))
+	require.NoError(t, err)
+	assert.Equal(t, 0o777&^umask, dirInfo.Mode().Perm())
+}
+
+// Validates: R-5.10.2
+func TestDownloadToFile_PreservesExistingTargetMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		existing os.FileMode
+		want     os.FileMode
+	}{
+		{name: "executable script keeps +x", existing: 0o755, want: 0o755},
+		{name: "group-readable file stays group-readable", existing: 0o640, want: 0o640},
+		{name: "setuid is never handed to new bytes", existing: 0o755 | os.ModeSetuid, want: 0o755},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			content := []byte("new remote version")
+			targetPath := filepath.Join(t.TempDir(), "tool.sh")
+			require.NoError(t, os.WriteFile(targetPath, []byte("old"), 0o600))
+			require.NoError(t, os.Chmod(targetPath, tt.existing))
+
+			_, err := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil).DownloadToFile(
+				t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{RemoteHash: tmHashBytes(content)})
+			require.NoError(t, err)
+
+			info, err := os.Stat(targetPath)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, info.Mode()&(os.ModePerm|os.ModeSetuid|os.ModeSetgid|os.ModeSticky))
+		})
+	}
+}
+
+// recordingTarget records the order of the filesystem steps a download takes.
+type recordingTarget struct {
+	TargetFS
+	steps []string
+}
+
+func (r *recordingTarget) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	step := "open-partial"
+	if flag == os.O_WRONLY {
+		step = "finalize(chmod,fsync)"
+	}
+	r.steps = append(r.steps, step)
+
+	return r.TargetFS.OpenFile(name, flag, perm) //nolint:wrapcheck // test pass-through
+}
+
+func (r *recordingTarget) Chtimes(name string, atime, mtime time.Time) error {
+	r.steps = append(r.steps, "chtimes")
+	return r.TargetFS.Chtimes(name, atime, mtime) //nolint:wrapcheck // test pass-through
+}
+
+func (r *recordingTarget) Rename(oldName, newName string) error {
+	r.steps = append(r.steps, "rename")
+	return r.TargetFS.Rename(oldName, newName) //nolint:wrapcheck // test pass-through
+}
+
+func (r *recordingTarget) SyncDir(dir string) error {
+	r.steps = append(r.steps, "syncdir:"+filepath.Base(dir))
+	return r.TargetFS.SyncDir(dir) //nolint:wrapcheck // test pass-through
+}
+
+// Validates: R-5.10.1
+func TestDownloadToFile_FsyncsBeforeRenameAndSyncsDirAfter(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("durable")
+	dir := filepath.Join(t.TempDir(), "folder")
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	target := &recordingTarget{TargetFS: LocalTarget()}
+
+	_, err := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil).DownloadToFile(
+		t.Context(), driveid.New("d1"), "item1", filepath.Join(dir, "f.txt"),
+		DownloadOpts{RemoteHash: tmHashBytes(content), RemoteMtime: time.Now().UnixNano(), Target: target})
+	require.NoError(t, err)
+
+	// The baseline commit follows success, so the bytes and the directory
+	// entry must be on disk first: a power cut used to leave an empty file
+	// the next pass trusted or uploaded over the good remote copy.
+	assert.Equal(t, []string{"open-partial", "finalize(chmod,fsync)", "chtimes", "rename", "syncdir:folder"}, target.steps)
+}
+
+// refusingParentTarget is a TargetFS whose parent check fails, as sync's
+// does for a parent the plan did not observe.
+type refusingParentTarget struct{ TargetFS }
+
+var errParentGone = errors.New("parent folder is gone")
+
+func (refusingParentTarget) PrepareParent(string) error { return errParentGone }
+
+// Validates: R-5.10.3
+func TestDownloadToFile_ParentRefusalStopsBeforeAnyWrite(t *testing.T) {
+	t.Parallel()
+
+	var downloads int
+	dl := &tmSimpleDownloader{downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+		downloads++
+		return 0, nil
+	}}
+	targetPath := filepath.Join(t.TempDir(), "moved-away", "f.txt")
+
+	_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath,
+		DownloadOpts{Target: refusingParentTarget{TargetFS: LocalTarget()}})
+	require.ErrorIs(t, err, errParentGone)
+	assert.Zero(t, downloads)
+	assert.NoDirExists(t, filepath.Dir(targetPath), "a parent the plan did not observe is never created")
 }

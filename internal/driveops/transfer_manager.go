@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
 	"strings"
+	gosync "sync"
 	"sync/atomic"
 )
 
@@ -33,6 +35,11 @@ type TransferManager struct {
 	// has been warned about, so a persistent statfs failure does not warn on
 	// every download. Atomic because concurrent workers share one manager.
 	diskCheckFailureWarned atomic.Bool
+
+	// umaskOnce guards umask, the process umask probed on first use for
+	// the mode of newly created downloads.
+	umaskOnce gosync.Once
+	umask     os.FileMode
 }
 
 // Option configures a TransferManager. Pass to NewTransferManager.

@@ -48,6 +48,12 @@ Download and upload transfer infrastructure shared by file operations and sync.
 - R-5.8.1: When downloading iOS `.heic` files whose API-reported size/hash does not match the actual downloaded bytes (known API bug), the system shall accept the download rather than failing validation. A size mismatch identifies the quirk, so the first download is accepted without hash retries; the known condition is logged at DEBUG, not as a per-photo warning. [verified]
 - R-5.8.2: Download bytes that differ from OneDrive's metadata shall be accepted only as a known, deterministic server transform: the iOS HEIC quirk, or the same bytes at the reported size on every attempt (P-10). The baseline then records OneDrive's reported hash as the remote side and the bytes' hash as the local side, so the next pass neither downloads nor uploads the file. [verified]
 
+## R-5.10 Download Write Path [verified]
+
+- R-5.10.1: A download shall be durable before it is reported: the partial's bytes are flushed to disk (fsync) before the rename, and the target's directory is flushed after it, so a power cut cannot leave an empty or zero-filled file that the baseline already records as synced. [verified]
+- R-5.10.2: A download that replaces a file shall keep that file's permission bits (never setuid, setgid or sticky); a new file shall get 0666 minus the umask and a folder the CLI creates 0777 minus the umask. Partials stay 0600 while they are written. [verified]
+- R-5.10.3: A sync download shall write only inside the sync root and shall never create a parent folder: a parent that is missing or no longer a folder makes the download a stale precondition. CLI `get` creates missing parents. [verified]
+
 ## R-5.9 Download Routes [verified]
 
 - R-5.9.1: A file whose metadata has no pre-authenticated `downloadUrl`, or whose freshly refetched `downloadUrl` is refused again, shall download through the bearer-authenticated `GET /items/{id}/content` route (tempauth URLs retire on 2027-04-01). The bearer goes only to Graph: the client does not follow the redirect itself, validates the target as a Microsoft content host, and fetches it without an `Authorization` header (live probe L-20 showed the content host needs none). The authenticated leg gets the same 401 forced refresh as every Graph request. Resume offsets carry over as `Range`, and a resumed answer must be 206 with a `Content-Range` starting at the offset; a full-body 200 is refused, never appended. Folders and OneNote packages still report that they have no content. [verified]

@@ -897,11 +897,14 @@ func TestExecutor_Download_APIError(t *testing.T) {
 	assert.Equal(t, permissionCapabilityRemoteRead, o.FailureCapability)
 }
 
-func TestExecutor_Download_ParentDirCreated(t *testing.T) {
+// Validates: R-5.10.3
+func TestExecutor_Download_MissingParentIsStaleAndNotCreated(t *testing.T) {
 	t.Parallel()
 
+	var downloads int
 	dl := &executorMockDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			downloads++
 			n, err := w.Write([]byte("data"))
 			return int64(n), err
 		},
@@ -910,18 +913,62 @@ func TestExecutor_Download_ParentDirCreated(t *testing.T) {
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
 	e := newExecution(cfg, emptyBaseline())
 
+	// The planned parent "A" was renamed away locally after planning.
 	action := &Action{
 		Type:    ActionDownload,
-		Path:    "deep/nested/dir/exec-dl.txt",
+		Path:    "A/exec-dl.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
 		View:    &pathView{Remote: &remoteState{Mtime: 1}},
 	}
 
 	o := e.ExecuteDownload(t.Context(), action)
-	requireOutcomeSuccess(t, &o)
 
-	assert.FileExists(t, filepath.Join(syncRoot, "deep", "nested", "dir", "exec-dl.txt"), "file not created in nested dir")
+	// It used to re-create an empty A/ holding the download, splitting the
+	// user's renamed folder in two.
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	assert.Zero(t, downloads)
+	assert.NoDirExists(t, filepath.Join(syncRoot, "A"))
+}
+
+// Validates: R-5.10.3
+func TestExecutor_Download_ParentSwappedForSymlinkAfterCheckStaysInRoot(t *testing.T) {
+	t.Parallel()
+
+	outside := t.TempDir()
+	moved := filepath.Join(outside, "moved")
+	var syncRoot string
+	dl := &executorMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			// Mid-download, after every check: the parent folder moves out
+			// of the sync root and a symlink to it takes its place.
+			parent := filepath.Join(syncRoot, "A")
+			require.NoError(t, os.Rename(parent, moved))
+			require.NoError(t, os.Symlink(moved, parent))
+
+			n, err := w.Write([]byte("data"))
+			return int64(n), err
+		},
+	}
+
+	cfg, root := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
+	syncRoot = root
+	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "A"), 0o700))
+	e := newExecution(cfg, emptyBaseline())
+
+	o := e.ExecuteDownload(t.Context(), &Action{
+		Type:    ActionDownload,
+		Path:    "A/escape.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View:    &pathView{Remote: &remoteState{Mtime: 1}},
+	})
+
+	// Absolute paths followed the swapped symlink, and the download was
+	// renamed into place outside the sync root.
+	requireOutcomeFailure(t, &o)
+	assert.NoFileExists(t, filepath.Join(moved, "escape.txt"), "nothing may be published outside the sync root")
 }
 
 func TestExecutor_Download_ZeroByte(t *testing.T) {

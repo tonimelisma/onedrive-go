@@ -17,7 +17,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
@@ -30,10 +29,10 @@ const defaultMaxHashRetries = 2
 // `range maxRetries + 1` loop. Any value above this is almost certainly a bug.
 const maxSaneRetries = 100
 
-// Download temp files may contain credentials or personal data, so both the
-// partial file and its parent directory stay owner-only.
+// A partial file may hold personal data before the rename publishes it, so
+// it stays owner-only while it is written; finalizePartial gives it its
+// final mode.
 const (
-	downloadTempDirPerms  = 0o700
 	downloadTempFilePerms = 0o600
 	downloadPartialPrefix = ".onedrive-go."
 	downloadPartialSuffix = ".partial"
@@ -84,6 +83,18 @@ type DownloadOpts struct {
 	RemoteETag                 string
 	MaxHashRetries             int // 0 = use default (2 retries, meaning 3 total download attempts)
 	ValidateTargetBeforeRename func() error
+	// Target is the filesystem the download writes through, resolving the
+	// target path. nil means LocalTarget: absolute local paths, missing
+	// parents created.
+	Target TargetFS
+}
+
+func (opts DownloadOpts) target() TargetFS {
+	if opts.Target == nil {
+		return LocalTarget()
+	}
+
+	return opts.Target
 }
 
 // DownloadOptsForItem is the verification and version binding a download of
@@ -223,15 +234,17 @@ func (tm *TransferManager) downloadToFile(
 		slog.String("item_id", itemID),
 	)
 
+	target := opts.target()
+	parentDir := filepath.Dir(targetPath)
+
 	// Disk space pre-check (R-6.2.6, R-2.10.43, R-2.10.44).
 	// Runs before directory creation or download to avoid partial writes.
-	if err := tm.checkDiskSpace(ctx, targetPath, opts.RemoteSize); err != nil {
+	if err := tm.checkDiskSpace(ctx, target, targetPath, opts.RemoteSize); err != nil {
 		return nil, err
 	}
 
-	// Ensure parent directory exists.
-	if err := localpath.MkdirAll(filepath.Dir(targetPath), downloadTempDirPerms); err != nil {
-		return nil, fmt.Errorf("creating parent dir for %s: %w", targetPath, err)
+	if err := target.PrepareParent(parentDir); err != nil {
+		return nil, fmt.Errorf("preparing the folder of %s: %w", targetPath, err)
 	}
 
 	partialPath := DownloadPartialPath(targetPath, opts)
@@ -249,26 +262,8 @@ func (tm *TransferManager) downloadToFile(
 		)
 	}
 
-	// Set mtime on the partial file before atomic rename.
-	if opts.RemoteMtime != 0 {
-		mtime := time.Unix(0, opts.RemoteMtime)
-		if err := localpath.Chtimes(partialPath, mtime, mtime); err != nil {
-			tm.logger.Warn("couldn't set the modification time of the downloaded file",
-				slog.String("path", targetPath),
-				slog.String("error", err.Error()),
-			)
-		}
-	}
-
-	if err := validateDownloadTargetBeforeRename(opts); err != nil {
+	if err := tm.publishPartial(target, partialPath, targetPath, parentDir, opts); err != nil {
 		return nil, err
-	}
-
-	// Atomic rename: .partial -> target. On failure the .partial file is
-	// intentionally preserved so the next attempt can resume from it rather
-	// than re-downloading the entire file (B-207).
-	if err := localpath.Rename(partialPath, targetPath); err != nil {
-		return nil, fmt.Errorf("renaming partial to %s: %w", targetPath, err)
 	}
 
 	tm.logger.Debug("download complete",
@@ -282,6 +277,79 @@ func (tm *TransferManager) downloadToFile(
 	}
 
 	return result, nil
+}
+
+// publishPartial makes the verified partial the target: final mode and
+// fsync, mtime, the caller's last precondition, the atomic rename and the
+// directory sync.
+func (tm *TransferManager) publishPartial(target TargetFS, partialPath, targetPath, parentDir string, opts DownloadOpts) error {
+	if err := tm.finalizePartial(target, partialPath, targetPath); err != nil {
+		return err
+	}
+
+	// Set mtime on the partial file before atomic rename.
+	if opts.RemoteMtime != 0 {
+		mtime := time.Unix(0, opts.RemoteMtime)
+		if err := target.Chtimes(partialPath, mtime, mtime); err != nil {
+			tm.logger.Warn("couldn't set the modification time of the downloaded file",
+				slog.String("path", targetPath),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
+
+	if err := validateDownloadTargetBeforeRename(opts); err != nil {
+		return err
+	}
+
+	// Atomic rename: .partial -> target. On failure the .partial file is
+	// intentionally preserved so the next attempt can resume from it rather
+	// than re-downloading the entire file (B-207).
+	if err := target.Rename(partialPath, targetPath); err != nil {
+		return fmt.Errorf("renaming partial to %s: %w", targetPath, err)
+	}
+
+	// The rename is only durable once the directory entry is: without this
+	// a power cut could lose it after the baseline recorded the download
+	// (D-042). The bytes are already on disk, so a failure here is reported
+	// rather than undone.
+	if err := target.SyncDir(parentDir); err != nil {
+		return fmt.Errorf("syncing the folder of %s: %w", targetPath, err)
+	}
+
+	return nil
+}
+
+// finalizePartial gives the verified partial its final mode and makes its
+// bytes durable before the rename publishes them: the replaced file's
+// permission bits, or 0666 minus the umask for a new file (D-044), and an
+// fsync (D-042). Without the fsync a power cut after the rename and the
+// baseline commit could leave a zero-filled or empty file that the next pass
+// trusts, or uploads over the good remote copy.
+func (tm *TransferManager) finalizePartial(target TargetFS, partialPath, targetPath string) error {
+	mode, err := tm.downloadedFileMode(target, targetPath)
+	if err != nil {
+		return err
+	}
+
+	f, err := target.OpenFile(partialPath, os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("reopening the download of %s: %w", targetPath, err)
+	}
+
+	if err := f.Chmod(mode); err != nil {
+		return errors.Join(fmt.Errorf("setting the mode of the download of %s: %w", targetPath, err), f.Close())
+	}
+
+	if err := f.Sync(); err != nil {
+		return errors.Join(fmt.Errorf("flushing the download of %s to disk: %w", targetPath, err), f.Close())
+	}
+
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing the download of %s: %w", targetPath, err)
+	}
+
+	return nil
 }
 
 // downloadToVerifiedPartial downloads until the partial holds bytes it can
@@ -364,7 +432,7 @@ func (tm *TransferManager) downloadToVerifiedPartial(
 			return result, nil
 		}
 
-		tm.removePartial(partialPath)
+		tm.removePartial(opts.target(), partialPath)
 	}
 
 	return nil, fmt.Errorf("downloading %s: %w (%s)", targetPath, ErrDownloadIntegrity, describeMismatches(opts, mismatches))
@@ -383,8 +451,8 @@ func describeMismatches(opts DownloadOpts, attempts []downloadAttempt) string {
 	}
 }
 
-func (tm *TransferManager) removePartial(partialPath string) {
-	if err := localpath.Remove(partialPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+func (tm *TransferManager) removePartial(target TargetFS, partialPath string) {
+	if err := target.Remove(partialPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		tm.logger.Warn("couldn't remove a leftover download file",
 			slog.String("path", partialPath),
 			slog.String("error", err.Error()))
@@ -478,7 +546,7 @@ func (tm *TransferManager) downloadToPartial(
 	rd, canRange := tm.downloads.(RangeDownloader)
 
 	if allowResume && canRange && (version.QuickXorHash != "" || version.ETag != "") {
-		f, openErr := localpath.OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, downloadTempFilePerms)
+		f, openErr := opts.target().OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, downloadTempFilePerms)
 		if openErr == nil {
 			info, statErr := f.Stat()
 			if statErr != nil || info.Size() == 0 {
@@ -503,9 +571,9 @@ func (tm *TransferManager) downloadToPartial(
 // removePartialIfNotCanceled removes a .partial file unless the context was
 // canceled (preserving the partial for future resume). Extracted to deduplicate
 // the identical pattern in freshDownload and resumeDownload.
-func (tm *TransferManager) removePartialIfNotCanceled(ctx context.Context, path string) {
+func (tm *TransferManager) removePartialIfNotCanceled(ctx context.Context, target TargetFS, path string) {
 	if ctx.Err() == nil {
-		if removeErr := localpath.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		if removeErr := target.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			tm.logger.Warn("couldn't remove a leftover download file",
 				slog.String("path", path),
 				slog.String("error", removeErr.Error()),
@@ -518,7 +586,7 @@ func (tm *TransferManager) removePartialIfNotCanceled(ctx context.Context, path 
 func (tm *TransferManager) freshDownload(
 	ctx context.Context, driveID driveid.ID, itemID, partialPath string, opts DownloadOpts,
 ) (string, int64, error) {
-	f, err := localpath.OpenFile(partialPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, downloadTempFilePerms)
+	f, err := opts.target().OpenFile(partialPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, downloadTempFilePerms)
 	if err != nil {
 		return "", 0, fmt.Errorf("creating partial file %s: %w", partialPath, err)
 	}
@@ -540,7 +608,7 @@ func (tm *TransferManager) freshDownload(
 		}
 
 		// Preserve partial on context cancellation so resume can reuse it.
-		tm.removePartialIfNotCanceled(ctx, partialPath)
+		tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
 
 		// Name the file the caller asked for, not the internal partial file.
 		return "", 0, fmt.Errorf("downloading %s: %w", targetPathForPartial(partialPath), err)
@@ -549,7 +617,7 @@ func (tm *TransferManager) freshDownload(
 	if err := f.Close(); err != nil {
 		// Close failure is always an error regardless of context — the file is corrupt.
 		baseErr := fmt.Errorf("closing partial file %s: %w", partialPath, err)
-		if removeErr := localpath.Remove(partialPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		if removeErr := opts.target().Remove(partialPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return "", 0, errors.Join(baseErr, fmt.Errorf("removing corrupt partial file %s: %w", partialPath, removeErr))
 		}
 
@@ -579,7 +647,7 @@ func (tm *TransferManager) resumeDownloadFromFile(
 		tm.logger.Warn("failed to close partial file after range download",
 			slog.String("path", partialPath), slog.String("error", closeErr.Error()))
 
-		tm.removePartialIfNotCanceled(ctx, partialPath)
+		tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
 
 		return tm.freshDownload(ctx, driveID, itemID, partialPath, opts)
 	}
@@ -590,16 +658,16 @@ func (tm *TransferManager) resumeDownloadFromFile(
 		tm.logger.Debug("range download failed, falling back to fresh download",
 			slog.String("path", partialPath), slog.String("error", err.Error()))
 
-		tm.removePartialIfNotCanceled(ctx, partialPath)
+		tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
 
 		return tm.freshDownload(ctx, driveID, itemID, partialPath, opts)
 	}
 
 	totalSize := existingSize + n
 
-	localHash, err := tm.hashFunc(partialPath)
+	localHash, err := hashTargetFile(opts.target(), partialPath)
 	if err != nil {
-		tm.removePartialIfNotCanceled(ctx, partialPath)
+		tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
 
 		return "", 0, fmt.Errorf("hashing resumed partial file %s: %w", partialPath, err)
 	}
@@ -624,13 +692,17 @@ func validateDownloadTargetBeforeRename(opts DownloadOpts) error {
 //
 // Fails open on statfs errors: a transient statfs failure should not block
 // all downloads.
-func (tm *TransferManager) checkDiskSpace(ctx context.Context, targetPath string, fileSize int64) error {
+func (tm *TransferManager) checkDiskSpace(ctx context.Context, target TargetFS, targetPath string, fileSize int64) error {
 	if tm.diskAvailableFunc == nil || tm.minFreeSpace == 0 {
 		return nil
 	}
 
 	// Check the filesystem containing the target's parent directory.
-	checkPath := filepath.Dir(targetPath)
+	absTarget, err := target.Abs(targetPath)
+	if err != nil {
+		return fmt.Errorf("resolving %s for the free-space check: %w", targetPath, err)
+	}
+	checkPath := filepath.Dir(absTarget)
 
 	available, err := tm.diskAvailableFunc(checkPath)
 	if err != nil {

@@ -1,8 +1,8 @@
 # Drive Transfers
 
-GOVERNS: internal/cli/get.go, internal/cli/put.go, internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/local_errors.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_download.go, internal/driveops/transfer_manager.go, internal/driveops/transfer_upload.go, internal/driveops/transfer_verify.go, pkg/quickxorhash/quickxorhash.go
+GOVERNS: internal/cli/get.go, internal/cli/put.go, internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/local_errors.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_download.go, internal/driveops/transfer_manager.go, internal/driveops/transfer_target.go, internal/driveops/transfer_upload.go, internal/driveops/transfer_verify.go, pkg/quickxorhash/quickxorhash.go
 
-Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-5.5.2 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-2.8.10 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-5.8.2 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified]
+Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-5.5.2 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-2.8.10 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-5.8.2 [verified], R-5.10 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified]
 
 ## TransferManager
 
@@ -34,7 +34,22 @@ Implements: R-6.2.3 [verified]
 2. If that owned partial exists with content, resume via HTTP Range request
 3. Stream response body, computing QuickXorHash incrementally
 4. Verify hash and size against API metadata
-5. Atomic rename owned partial → final path
+5. Give the partial its final mode and fsync it, set its mtime, atomically
+   rename it over the target, then fsync the directory
+
+Every step goes through a `TargetFS` (`transfer_target.go`): `LocalTarget`
+for CLI `get` (absolute paths; missing parents created with 0777 minus the
+umask) or sync's rooted target, which never creates a parent. The final mode
+is the replaced file's permission bits, or 0666 minus the umask for a new
+file; the umask is probed once per `TransferManager` by creating a file, since
+reading it with `umask(2)` would change it for every other goroutine (D-044,
+P-8). ACLs, extended attributes and Finder tags of a replaced file are not
+carried over. The fsync before the rename and the directory sync after it
+make the download durable before success is reported (D-042). Evidence:
+`TestDownloadToFile_FsyncsBeforeRenameAndSyncsDirAfter`,
+`TestDownloadToFile_PreservesExistingTargetMode`,
+`TestDownloadToFile_NewFileAndParentHonourUmask`,
+`TestDownloadToFile_ParentRefusalStopsBeforeAnyWrite`.
 
 `DownloadOpts.ValidateTargetBeforeRename` is an optional sync-supplied
 callback. `driveops` calls it after content/hash/mtime preparation and before
