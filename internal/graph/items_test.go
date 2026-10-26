@@ -2555,3 +2555,25 @@ func TestPathAddressChunks(t *testing.T) {
 	assert.Equal(t, []string{"toolong", "a"}, pathAddressChunks("toolong/a", 3), "a single long segment stands alone")
 	assert.Equal(t, []string{"caf%C3%A9"}, pathAddressChunks("café", 240), "chunks are measured encoded")
 }
+
+// Validates: R-2.10.64
+func TestUpdateFileSystemInfo_Pre1900NotFoundIsRangeError(t *testing.T) {
+	srv := newGraphErrorServer(t, http.StatusNotFound, "req-fsi-1899", "itemNotFound", nil)
+	t.Cleanup(srv.Close)
+	client := newTestClient(t, srv.URL)
+
+	_, err := client.UpdateFileSystemInfo(t.Context(), driveid.New("d"), "live-item",
+		time.Date(1899, 12, 31, 23, 59, 59, 0, time.UTC))
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrTimestampOutOfRange)
+	require.NotErrorIs(t, err, ErrNotFound, "a live item must never read as gone")
+	var graphErr *GraphError
+	require.ErrorAs(t, err, &graphErr)
+	assert.Equal(t, http.StatusNotFound, graphErr.StatusCode, "the wire status is kept for diagnosis")
+	assert.Equal(t, "req-fsi-1899", graphErr.RequestID)
+
+	// From 1900 on, a 404 is an ordinary not-found.
+	_, err = client.UpdateFileSystemInfo(t.Context(), driveid.New("d"), "gone-item", EarliestFileSystemTime())
+	require.ErrorIs(t, err, ErrNotFound)
+}

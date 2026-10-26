@@ -188,7 +188,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 			IncludedDirs:    slices.Clone(drive.IncludedDirs),
 			IgnoredPaths:    slices.Clone(drive.IgnoredPaths),
 			IgnoreDotfiles:  drive.IgnoreDotfiles,
-			IgnoreJunkFiles: drive.IgnoreJunkFiles,
+			IgnoreJunkFiles: cloneBoolPointer(drive.IgnoreJunkFiles),
 			FollowSymlinks:  drive.FollowSymlinks,
 		},
 	}
@@ -452,4 +452,13 @@ func DiscoverStateDBsForEmail(email string, logger *slog.Logger) []string {
 // discoverStateDBsForEmailIn scans dir for state DB files belonging to email.
 func discoverStateDBsForEmailIn(dir, email string, logger *slog.Logger) []string {
 	return discoverFilesForEmail(dir, "state_", ".db", email, logger)
+}
+
+func cloneBoolPointer(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+
+	clone := *value
+	return &clone
 }

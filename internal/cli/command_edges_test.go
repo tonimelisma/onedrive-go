@@ -90,5 +90,5 @@ func TestRemoteFailureText_NotImplementedPassesOnOneDriveMessage(t *testing.T) {
 
 	outage := newRemoteOpError("uploading", "/docs", &graph.GraphError{StatusCode: 503, Err: graph.ErrServerError})
 	assert.Contains(t, remoteFailureText(outage), "temporary server problem")
-	assert.False(t, isNotImplemented(errors.New("plain")))
+	assert.False(t, graph.IsNotSupported(errors.New("plain")))
 }

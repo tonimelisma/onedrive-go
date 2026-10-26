@@ -1,6 +1,6 @@
 # Drive Transfers
 
-GOVERNS: internal/cli/get.go, internal/cli/put.go, internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_manager.go, pkg/quickxorhash/quickxorhash.go
+GOVERNS: internal/cli/get.go, internal/cli/put.go, internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/local_errors.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_manager.go, pkg/quickxorhash/quickxorhash.go
 
 Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-2.8.10 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified]
 
@@ -262,7 +262,28 @@ Design properties:
 - **Plain errors**: `ErrDiskFull` and `ErrFileTooLargeForSpace` wrap text in human units with the action ("100.0 MB free, min_free_space requires 1.0 GB; free up space or lower min_free_space in the config").
 - **Path accuracy**: checks `filepath.Dir(targetPath)` rather than the sync root, correctly handling cross-filesystem mounts.
 - **Error sentinels** (`errors.go`): `ErrDiskFull` and `ErrFileTooLargeForSpace` are in the `driveops` package. The sync engine matches them via `errors.Is` in `classifyResult` and `issueTypeForHTTPStatus`.
+- **Mid-write exhaustion**: the pre-check cannot see an exhausted inode table (ENOSPC with bytes free), a user quota (EDQUOT), or space consumed by other writers during the transfer. `DownloadToFile` therefore wraps any ENOSPC/EDQUOT from its own steps in `ErrDiskFull`, naming inodes when statfs reports a non-zero inode total with none free (`TestDownloadToFile_WriteOutOfSpaceReturnsErrDiskFull`, `TestWrapLocalWriteError_NamesQuotaAndLeavesOthersAlone`).
 - **DiskAvailable** (`disk_unix.go`): exported function using `syscall.Statfs` — `f_bavail * f_bsize` (blocks available to unprivileged users). Build-tagged `darwin || linux`.
+
+## Local Errno Table
+
+`local_errors.go` owns the one errno-to-domain table for local filesystem
+failures, `ClassifyLocalError`. The sync result classifier and CLI error
+presentation both consume it, so a full disk or a read-only mount means the
+same thing whichever call (download, mkdir, rename, conflict copy) hit it
+(`TestClassifyLocalError_Table`):
+
+| Kind | Errors | Sync meaning |
+| --- | --- | --- |
+| `LocalErrorNoSpace` | `ErrDiskFull`, `ENOSPC`, `EDQUOT` | one `disk:local` block scope (R-2.10.60) |
+| `LocalErrorReadOnly` | `EROFS` | one `local:read-only:<path>` scope at the read-only mount (R-2.10.61) |
+| `LocalErrorFileTooLarge` | `EFBIG` | per-item `local_file_too_large` (R-2.10.62) |
+| `LocalErrorBusy` | `EBUSY`, `ETXTBSY`, `ESTALE` | retryable `local_busy` (R-2.10.62) |
+| `LocalErrorCrossDevice` | `EXDEV` | per-item `local_cross_device` (R-2.10.62) |
+| `LocalErrorNameTooLong` | `ENAMETOOLONG` | per-item `local_name_too_long` (R-2.11.8) |
+
+`EACCES`/`EPERM` are deliberately not in the table: `os.ErrPermission` already
+names them and the sync permission probe owns their boundary decision.
 
 ## Recursive Download Concurrency
 

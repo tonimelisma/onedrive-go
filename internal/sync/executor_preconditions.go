@@ -379,6 +379,12 @@ func (e *executor) validateDownloadTargetPrecondition(action *Action) error {
 	info, err := e.syncTree.Lstat(action.Path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			// A live -wal or -journal with no main file is a database the
+			// application is mid-way through creating or replacing: writing
+			// a downloaded main file beside it corrupts it just the same.
+			if dbErr := e.refuseLiveDatabaseTarget(action.Path); dbErr != nil {
+				return dbErr
+			}
 			if action.View == nil || action.View.Local == nil || actionClearsLocalBeforeDownload(action) {
 				return nil
 			}
@@ -389,6 +395,10 @@ func (e *executor) validateDownloadTargetPrecondition(action *Action) error {
 
 	if actionClearsLocalBeforeDownload(action) {
 		return stalePreconditionError("download target %s appeared", action.Path)
+	}
+
+	if err := e.refuseLiveDatabaseTarget(action.Path); err != nil {
+		return err
 	}
 
 	planned := plannedLocalState(action)
@@ -616,4 +626,35 @@ func (e *executor) validateNoSymlinkBoundary(relPath string, verb string) error 
 	}
 
 	return fmt.Errorf("won't %s %s: %s is a symbolic link, and sync never writes through one", verb, relPath, boundary)
+}
+
+// errDatabaseInUse means a download would replace a SQLite database that an
+// application has open: its write-ahead log or rollback journal is non-empty.
+// Renaming new bytes over the main file while the sidecar holds uncommitted
+// pages corrupts the database the next time the application checkpoints
+// (P-3, D-084). It is a per-file condition retried later, not a stale plan:
+// superseding would replan the same download at once.
+var errDatabaseInUse = errors.New("the local database is open in an application (it has a live -wal or -journal file)")
+
+// sqliteLiveSidecarSuffixes are the sidecars whose non-empty presence means
+// uncommitted database state. -shm is only an index and is not checked.
+func sqliteLiveSidecarSuffixes() []string {
+	return []string{"-wal", "-journal"}
+}
+
+// refuseLiveDatabaseTarget returns errDatabaseInUse when path has a
+// non-empty SQLite sidecar beside it. It runs before the download and again
+// just before the rename (ValidateTargetBeforeRename).
+func (e *executor) refuseLiveDatabaseTarget(path string) error {
+	for _, suffix := range sqliteLiveSidecarSuffixes() {
+		info, err := e.syncTree.Lstat(path + suffix)
+		if err != nil {
+			continue
+		}
+		if info.Mode().IsRegular() && info.Size() > 0 {
+			return fmt.Errorf("%w: %s%s", errDatabaseInUse, path, suffix)
+		}
+	}
+
+	return nil
 }

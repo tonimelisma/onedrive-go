@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -145,4 +147,69 @@ func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
 	require.NotEqual(t, permissionEvidenceNone, decision.Kind)
 	assert.Equal(t, permissionEvidenceFileDenied, decision.Kind)
 	assert.Equal(t, "accessible/file.txt", decision.TriggerPath)
+}
+
+// Validates: R-2.10.61
+func TestPermHandler_HandleLocalPermission_ReadOnlyMountIsOneBoundary(t *testing.T) {
+	t.Parallel()
+
+	ph, syncRoot := newTestPermHandler(t, nil)
+	mount := filepath.Join(syncRoot, "media")
+	require.NoError(t, os.MkdirAll(filepath.Join(mount, "photos", "2026"), 0o750))
+	// Everything at or below media/ is on the read-only filesystem.
+	ph.readOnlyDir = func(absDir string) bool {
+		return absDir == mount || strings.HasPrefix(absDir, mount+string(filepath.Separator))
+	}
+
+	evidence := ph.handleLocalPermission(t.Context(), &actionCompletion{
+		Path:       "media/photos/2026/a.jpg",
+		ActionType: ActionDownload,
+		Err:        &os.PathError{Op: "open", Path: "a.jpg", Err: syscall.EROFS},
+	})
+
+	assert.Equal(t, permissionEvidenceBoundaryDenied, evidence.Kind)
+	assert.Equal(t, "media", evidence.BoundaryPath)
+	assert.Equal(t, issueLocalReadOnly, evidence.IssueType)
+	assert.Equal(t, SKLocalReadOnly("media"), scopeKeyForPermissionEvidence(evidence))
+}
+
+// Validates: R-2.10.61
+func TestPermHandler_HandleLocalPermission_ReadOnlySyncRootBlocksWholeTree(t *testing.T) {
+	t.Parallel()
+
+	ph, syncRoot := newTestPermHandler(t, nil)
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "docs"), 0o750))
+	ph.readOnlyDir = func(string) bool { return true }
+
+	evidence := ph.handleLocalPermission(t.Context(), &actionCompletion{
+		Path:       "docs/a.txt",
+		ActionType: ActionDownload,
+		Err:        &os.PathError{Op: "open", Path: "a.txt", Err: syscall.EROFS},
+	})
+
+	assert.Equal(t, permissionEvidenceBoundaryDenied, evidence.Kind)
+	assert.Empty(t, evidence.BoundaryPath, "the walk stops at the sync root")
+	scope := scopeKeyForPermissionEvidence(evidence)
+	assert.True(t, scope.BlocksAction("docs/a.txt", "", ActionDownload))
+	assert.True(t, scope.BlocksAction("other/b.txt", "", ActionLocalDelete))
+	assert.False(t, scope.BlocksAction("docs/a.txt", "", ActionUpload), "uploads only read and keep running")
+	assert.True(t, scope.PersistsInBlockScopes(), "a timed trial revalidates the mount")
+	assert.Equal(t, issueLocalReadOnly, scope.ConditionType())
+}
+
+// Validates: R-2.10.61
+func TestPermHandler_HandleLocalPermission_ReadOnlyWithWritableParentStaysPerFile(t *testing.T) {
+	t.Parallel()
+
+	ph, _ := newTestPermHandler(t, nil)
+	ph.readOnlyDir = func(string) bool { return false }
+
+	evidence := ph.handleLocalPermission(t.Context(), &actionCompletion{
+		Path:       "bound.txt",
+		ActionType: ActionDownload,
+		Err:        &os.PathError{Op: "open", Path: "bound.txt", Err: syscall.EROFS},
+	})
+
+	assert.Equal(t, permissionEvidenceFileDenied, evidence.Kind)
+	assert.Equal(t, issueLocalReadOnly, evidence.IssueType)
 }

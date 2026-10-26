@@ -110,6 +110,19 @@ func describeScopeKey(key ScopeKey) scopeDescriptor {
 			DefaultConditionType: issueLocalWriteDenied,
 			Priority:             scopePriorityPermDir,
 		}
+	case ScopeLocalReadOnly:
+		// Same family and blocking as a local write-denied directory, so
+		// admission, trials and release reuse that machinery; only the
+		// condition differs, because no permission change can fix it.
+		return scopeDescriptor{
+			Key:                  key,
+			Family:               scopeFamilyPermDir,
+			Access:               scopeAccessWrite,
+			SubjectKind:          scopeSubjectKindPath,
+			SubjectValue:         key.Param,
+			DefaultConditionType: issueLocalReadOnly,
+			Priority:             scopePriorityPermDir,
+		}
 	case ScopePermRemoteRead:
 		return scopeDescriptor{
 			Key:                  key,

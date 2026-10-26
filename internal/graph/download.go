@@ -7,9 +7,16 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
+
+// ErrRangeNotHonored means a resumed download's answer did not start at the
+// requested offset (a 200 with the whole file, or a different Content-Range).
+// Appending it would corrupt the partial file, so the caller restarts.
+var ErrRangeNotHonored = errors.New("graph: the server did not resume the download at the requested offset")
 
 // ErrNoDownloadURL is returned when a drive item has no pre-authenticated download URL.
 // This can happen for folders, OneNote packages, or zero-byte files.
@@ -29,10 +36,16 @@ func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string
 	if err != nil {
 		return 0, fmt.Errorf("graph: getting item for download: %w", err)
 	}
+	if item.MalwareDetected {
+		return 0, ErrMalwareDetected
+	}
 
 	if item.DownloadURL == "" {
-		c.logMissingDownloadURL(driveID, itemID, item)
-		return 0, ErrNoDownloadURL
+		if !hasDownloadableContent(item) {
+			c.logMissingDownloadURL(driveID, itemID, item)
+			return 0, ErrNoDownloadURL
+		}
+		return c.downloadViaContentEndpoint(ctx, driveID, itemID, w, 0)
 	}
 
 	n, err := c.downloadFromURL(ctx, string(item.DownloadURL), w)
@@ -46,11 +59,19 @@ func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string
 			return 0, err
 		}
 		if item.DownloadURL == "" {
-			c.logMissingDownloadURL(driveID, itemID, item)
-			return 0, ErrNoDownloadURL
+			if !hasDownloadableContent(item) {
+				c.logMissingDownloadURL(driveID, itemID, item)
+				return 0, ErrNoDownloadURL
+			}
+			return c.downloadViaContentEndpoint(ctx, driveID, itemID, w, 0)
 		}
 
 		n, err = c.downloadFromURL(ctx, string(item.DownloadURL), w)
+		if isPreAuthDownloadUnauthorized(err) {
+			// A fresh tempauth URL refused again: the tempauth scheme itself
+			// is unavailable (it retires on 2027-04-01), so use /content.
+			return c.downloadViaContentEndpoint(ctx, driveID, itemID, w, 0)
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -83,10 +104,16 @@ func (c *Client) DownloadRange(
 	if err != nil {
 		return 0, fmt.Errorf("graph: getting item for range download: %w", err)
 	}
+	if item.MalwareDetected {
+		return 0, ErrMalwareDetected
+	}
 
 	if item.DownloadURL == "" {
-		c.logMissingDownloadURL(driveID, itemID, item)
-		return 0, ErrNoDownloadURL
+		if !hasDownloadableContent(item) {
+			c.logMissingDownloadURL(driveID, itemID, item)
+			return 0, ErrNoDownloadURL
+		}
+		return c.downloadViaContentEndpoint(ctx, driveID, itemID, w, offset)
 	}
 
 	n, err := c.downloadFromURLWithRange(ctx, string(item.DownloadURL), w, offset)
@@ -161,12 +188,7 @@ func (c *Client) logMissingDownloadURL(driveID driveid.ID, itemID string, item *
 }
 
 func isPreAuthDownloadUnauthorized(err error) bool {
-	if !errors.Is(err, ErrUnauthorized) {
-		return false
-	}
-
-	var graphErr *GraphError
-	return errors.As(err, &graphErr) && graphErr.StatusCode == http.StatusUnauthorized
+	return errors.Is(err, ErrPreAuthURLRejected)
 }
 
 // downloadFromURLWithRange streams content from a pre-authenticated URL with
@@ -243,4 +265,135 @@ func (c *Client) downloadFromURL(ctx context.Context, downloadURL string, w io.W
 	}
 
 	return n, nil
+}
+
+// hasDownloadableContent reports whether a missing downloadUrl means "fetch
+// it another way" rather than "there is no content": folders and OneNote
+// packages have no file stream.
+func hasDownloadableContent(item *Item) bool {
+	return item != nil && !item.IsFolder && !item.IsPackage
+}
+
+// downloadViaContentEndpoint streams an item through the bearer-authenticated
+// GET /items/{id}/content route, the fallback for items without a tempauth
+// downloadUrl (that scheme retires on 2027-04-01, RCL-050).
+//
+// Graph answers with a 302 to a content host. Live probe L-20 (Personal,
+// 2026-10-25) showed the content host serves the file without
+// Authorization, so the bearer is never sent there: the first leg goes
+// through the normal authenticated path (401 forced refresh and transient
+// auth handling included) on a client that does not follow redirects, and
+// the validated Location is fetched through the unauthenticated pre-auth
+// path. With offset > 0 both legs must answer 206 with a Content-Range that
+// starts at offset: a 200 carries the whole file, and appending it at the
+// offset would corrupt the partial.
+func (c *Client) downloadViaContentEndpoint(
+	ctx context.Context, driveID driveid.ID, itemID string, w io.Writer, offset int64,
+) (int64, error) {
+	c.logger.Debug("downloading through the content endpoint",
+		slog.String("drive_id", driveID.String()),
+		slog.String("item_id", itemID),
+	)
+
+	resp, err := c.requestContent(ctx, driveID, itemID, offset)
+	if err != nil {
+		return 0, err
+	}
+
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		location, locErr := c.validatedContentRedirect(resp)
+		if locErr != nil {
+			return 0, locErr
+		}
+
+		resp, err = c.doPreAuth(ctx, "content download", func() (*http.Request, error) {
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, location, http.NoBody)
+			if reqErr != nil {
+				return nil, fmt.Errorf("graph: creating content download request: %w", reqErr)
+			}
+			req.Header.Set("User-Agent", c.userAgent)
+			if offset > 0 {
+				req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+			}
+			return req, nil
+		})
+		if err != nil {
+			return 0, err
+		}
+	}
+	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
+
+	if rangeErr := checkResumeResponse(resp, offset); rangeErr != nil {
+		return 0, rangeErr
+	}
+
+	n, copyErr := io.Copy(w, resp.Body)
+	if copyErr != nil {
+		return n, fmt.Errorf("graph: streaming content download: %w", copyErr)
+	}
+
+	return n, nil
+}
+
+// requestContent sends the authenticated first leg without following its
+// redirect. A 3xx comes back with its body closed; a 2xx is the content.
+func (c *Client) requestContent(ctx context.Context, driveID driveid.ID, itemID string, offset int64) (*http.Response, error) {
+	var extra http.Header
+	if offset > 0 {
+		extra = http.Header{"Range": []string{fmt.Sprintf("bytes=%d-", offset)}}
+	}
+
+	noFollow := *c.httpClient
+	noFollow.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	path := fmt.Sprintf("/drives/%s/items/%s/content", driveID, url.PathEscape(itemID))
+	resp, err := c.doRequestVia(ctx, http.MethodGet, path, nil, extra, requestRoute{client: &noFollow, keepRedirect: true})
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return nil, fmt.Errorf("graph: closing content redirect response: %w", closeErr)
+		}
+	}
+
+	return resp, nil
+}
+
+// validatedContentRedirect returns the redirect target after checking it is
+// a Microsoft content host.
+func (c *Client) validatedContentRedirect(resp *http.Response) (string, error) {
+	location := resp.Header.Get("Location")
+	parsed, err := url.Parse(location)
+	if location == "" || err != nil {
+		return "", errors.New("graph: content download redirect has no usable Location")
+	}
+
+	validate := c.validators.contentRedirect
+	if validate == nil {
+		validate = validateUploadURL
+	}
+	if err := validate(parsed); err != nil {
+		return "", fmt.Errorf("graph: content download redirect: %w", err)
+	}
+
+	return parsed.String(), nil
+}
+
+// checkResumeResponse refuses a resumed download whose answer does not start
+// at offset: anything but 206 with "Content-Range: bytes <offset>-...".
+func checkResumeResponse(resp *http.Response, offset int64) error {
+	if offset <= 0 {
+		return nil
+	}
+
+	want := fmt.Sprintf("bytes %d-", offset)
+	if resp.StatusCode != http.StatusPartialContent || !strings.HasPrefix(resp.Header.Get("Content-Range"), want) {
+		return fmt.Errorf("%w: resuming at byte %d got HTTP %d with Content-Range %q",
+			ErrRangeNotHonored, offset, resp.StatusCode, resp.Header.Get("Content-Range"))
+	}
+
+	return nil
 }

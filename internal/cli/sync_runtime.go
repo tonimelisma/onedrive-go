@@ -9,6 +9,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/sdnotify"
@@ -87,7 +88,7 @@ func standaloneMountConfigFromResolvedDrive(
 			IncludedDirs:    append([]string(nil), rd.IncludedDirs...),
 			IgnoredPaths:    append([]string(nil), rd.IgnoredPaths...),
 			IgnoreDotfiles:  rd.IgnoreDotfiles,
-			IgnoreJunkFiles: rd.IgnoreJunkFiles,
+			IgnoreJunkFiles: rd.JunkFilesIgnored(),
 			FollowSymlinks:  rd.FollowSymlinks,
 		},
 	}, nil
@@ -190,7 +191,7 @@ func runSyncDaemonWithFactory(
 	}
 	standaloneSelection := standaloneMountSelectionFromResolvedDrives(drives)
 
-	runtime := driveops.NewSessionRuntime(holder, "onedrive-go/"+version, logger)
+	runtime := driveops.NewSessionRuntime(holder, graph.UserAgent(version), logger)
 
 	debugEventHook, closeDebugEvents, err := openSyncDebugEventHookFromEnv(logger)
 	if err != nil {

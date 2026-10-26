@@ -29,3 +29,14 @@ func DiskAvailable(path string) (uint64, error) {
 	// f_bsize = fundamental block size
 	return statfsFieldToUint64(stat.Bavail) * statfsFieldToUint64(stat.Bsize), nil
 }
+
+// inodeCounts returns the free and total inode counts of the filesystem
+// containing path.
+func inodeCounts(path string) (free, total uint64, err error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return 0, 0, fmt.Errorf("statfs %q: %w", path, err)
+	}
+
+	return statfsFieldToUint64(stat.Ffree), statfsFieldToUint64(stat.Files), nil
+}

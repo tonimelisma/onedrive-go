@@ -631,8 +631,15 @@ func descriptorLocalRuntimeCases() []descriptorCase {
 			name:       "disk full",
 			key:        syncengine.ConditionDiskFull,
 			wantTitle:  "Disk full",
-			wantReason: "Free local disk space is below the min_free_space reserve (1 GB unless configured).",
-			wantAction: "Free up local disk space, or lower min_free_space in the config file.",
+			wantReason: "The local disk is full, out of inodes or quota, or below the min_free_space reserve (1 GB unless configured).",
+			wantAction: "Free up local disk space (or delete files if inodes ran out), or lower min_free_space in the config file.",
+		},
+		{
+			name:       "local read-only",
+			key:        syncengine.ConditionLocalReadOnly,
+			wantTitle:  "Local folder read-only",
+			wantReason: "The local filesystem holding this folder is mounted read-only, so downloads and local changes cannot be written.",
+			wantAction: "Remount the filesystem read-write; syncing resumes automatically.",
 		},
 		{
 			name:       "hash error",

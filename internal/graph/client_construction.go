@@ -10,7 +10,7 @@ import (
 
 // NewClient creates a Graph API client.
 // baseURL is typically "https://graph.microsoft.com/v1.0".
-// userAgent is sent in every request; defaults to "onedrive-go/dev" if empty.
+// userAgent is sent in every request; defaults to UserAgent("dev") if empty.
 // Retry is handled by the httpClient's Transport (wrap with retry.RetryTransport
 // for automatic retry, or use http.DefaultTransport for single-attempt dispatch).
 func NewClient(
@@ -30,7 +30,7 @@ func NewClient(
 	}
 
 	if userAgent == "" {
-		userAgent = defaultUserAgent
+		userAgent = UserAgent("")
 	}
 
 	if err := validateGraphBaseURL(baseURL); err != nil {

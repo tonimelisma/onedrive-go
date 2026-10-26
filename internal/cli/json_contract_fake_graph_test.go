@@ -27,6 +27,11 @@ type fakeGraphDrive struct {
 	items   map[string]*fakeGraphItem // by ID
 	recycle map[string]*fakeGraphItem // by ID
 	baseURL string
+	// deleteRefused makes every DELETE answer 403, for cleanup-failure tests.
+	deleteRefused bool
+	// hangRenameTo makes a PATCH renaming an item to this name hang until
+	// the client gives up.
+	hangRenameTo string
 }
 
 type fakeGraphItem struct {
@@ -35,6 +40,9 @@ type fakeGraphItem struct {
 	ParentID string
 	Folder   bool
 	Content  []byte
+	// Modified is the item's fileSystemInfo.lastModifiedDateTime; empty
+	// means the fixed fixture time.
+	Modified string
 }
 
 // fakeGraphMoveBody is the PATCH (move/rename) and POST copy request body.
@@ -45,6 +53,9 @@ type fakeGraphMoveBody struct {
 	ParentReference struct {
 		ID string `json:"id"`
 	} `json:"parentReference"`
+	FileSystemInfo struct {
+		LastModifiedDateTime string `json:"lastModifiedDateTime"`
+	} `json:"fileSystemInfo"`
 }
 
 // fakeGraphRequest is one parsed request against an item by ID.
@@ -152,6 +163,10 @@ func (f *fakeGraphDrive) itemJSON(item *fakeGraphItem) map[string]any {
 		"cTag":                 "ctag-" + item.ID,
 		"createdDateTime":      "2026-04-03T00:00:00Z",
 		"lastModifiedDateTime": "2026-04-03T00:00:00Z",
+	}
+	if item.Modified != "" {
+		out["lastModifiedDateTime"] = item.Modified
+		out["fileSystemInfo"] = map[string]any{"lastModifiedDateTime": item.Modified}
 	}
 	if item.ID == fakeGraphRootID {
 		out["root"] = map[string]any{}
@@ -274,6 +289,10 @@ func (f *fakeGraphDrive) serveByID(w http.ResponseWriter, r *http.Request, rest 
 	case http.MethodPatch:
 		f.serveMove(req)
 	case http.MethodDelete:
+		if f.deleteRefused {
+			f.writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]any{"code": "accessDenied", "message": "no"}})
+			return
+		}
 		delete(f.items, id)
 		f.recycle[id] = req.item
 		w.WriteHeader(http.StatusNoContent)
@@ -340,11 +359,18 @@ func (f *fakeGraphDrive) serveMove(req fakeGraphRequest) {
 
 	var body fakeGraphMoveBody
 	f.decode(req.r, &body)
+	if f.hangRenameTo != "" && body.Name == f.hangRenameTo {
+		<-req.r.Context().Done()
+		return
+	}
 	if body.Name != "" {
 		req.item.Name = body.Name
 	}
 	if body.ParentReference.ID != "" {
 		req.item.ParentID = body.ParentReference.ID
+	}
+	if body.FileSystemInfo.LastModifiedDateTime != "" {
+		req.item.Modified = body.FileSystemInfo.LastModifiedDateTime
 	}
 	f.writeJSON(req.w, http.StatusOK, f.itemJSON(req.item))
 }

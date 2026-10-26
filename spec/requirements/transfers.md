@@ -46,3 +46,7 @@ Download and upload transfer infrastructure shared by file operations and sync.
 ## R-5.8 iOS Media Handling [verified]
 
 - R-5.8.1: When downloading iOS `.heic` files whose API-reported size/hash does not match the actual downloaded bytes (known API bug), the system shall accept the download rather than failing validation. A size mismatch identifies the quirk, so the first download is accepted without hash retries; the known condition is logged at DEBUG, not as a per-photo warning. [verified]
+
+## R-5.9 Download Routes [verified]
+
+- R-5.9.1: A file whose metadata has no pre-authenticated `downloadUrl`, or whose freshly refetched `downloadUrl` is refused again, shall download through the bearer-authenticated `GET /items/{id}/content` route (tempauth URLs retire on 2027-04-01). The bearer goes only to Graph: the client does not follow the redirect itself, validates the target as a Microsoft content host, and fetches it without an `Authorization` header (live probe L-20 showed the content host needs none). The authenticated leg gets the same 401 forced refresh as every Graph request. Resume offsets carry over as `Range`, and a resumed answer must be 206 with a `Content-Range` starting at the offset; a full-body 200 is refused, never appended. Folders and OneNote packages still report that they have no content. [verified]

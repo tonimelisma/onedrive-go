@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -51,7 +52,8 @@ type destInfo struct {
 // If dest doesn't exist, the parent must exist — the item moves there with the new name.
 // If dest exists and is a file, returns an error unless force is true.
 // When force is true and dest is an existing file, existingID is set to the
-// file's ID so the caller can delete it before the operation.
+// file's ID so the caller can set it aside for the operation
+// (replaceDestination).
 func resolveDest(
 	ctx context.Context,
 	session *driveops.MountSession,
@@ -157,7 +159,7 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 	}
 
 	// A folder cannot move into itself or its own subtree. Graph rejects it
-	// with a bare 400, and with --force the delete below would first remove an
+	// with a bare 400, and with --force the replacement below would first set aside an
 	// existing destination inside the source, so refuse before anything runs.
 	if sourceItem.IsFolder && isWithinRemotePath(moveTargetPath(destPath, dest), sourcePath) {
 		return fmt.Errorf("cannot move %s into itself", sourcePath)
@@ -168,16 +170,6 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 		logger.Debug("mv: no-op, source and dest are the same")
 
 		return emitMoveResult(cc, sourcePath, destPath, sourceItem.ID)
-	}
-
-	// If --force resolved to an existing file, delete it before moving.
-	// Skip when the existing file IS the source (self-reference via different paths).
-	// NOTE: This is a TOCTOU race — another client could recreate the file
-	// between delete and move. The Graph API has no atomic overwrite for moves.
-	if dest.existingID != "" && !isSelfReference(sourceItem.ID, dest) {
-		if delErr := session.DeleteResolvedPath(ctx, destPath, dest.existingID); delErr != nil {
-			return newRemoteOpError("deleting existing", destPath, delErr)
-		}
 	}
 
 	// Determine what changed — MoveItem requires at least one of parentID or newName.
@@ -194,9 +186,29 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 		moveName = ""
 	}
 
-	moved, err := session.MoveItem(ctx, sourceItem.ID, moveParentID, moveName)
+	// With --force, an existing destination is set aside, not deleted, until
+	// the move has landed (D-082). When the existing file is the source itself
+	// (two paths to one item) there is nothing to set aside.
+	replaced := dest
+	if isSelfReference(sourceItem.ID, dest) {
+		replaced.existingID = ""
+	}
+
+	var moved *graph.Item
+	if force {
+		hintAboutLeftoverAside(ctx, cc, session, destPath, dest)
+	}
+
+	err = replaceDestination(ctx, cc, session, destPath, replaced, time.Now(), func() error {
+		var moveErr error
+		moved, moveErr = session.MoveItem(ctx, sourceItem.ID, moveParentID, moveName)
+		if moveErr != nil {
+			return newRemoteOpError("moving", sourcePath, moveErr)
+		}
+		return nil
+	})
 	if err != nil {
-		return newRemoteOpError("moving", sourcePath, err)
+		return err
 	}
 
 	// Build display destination from info we already have — no extra API call.

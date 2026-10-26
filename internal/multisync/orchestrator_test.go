@@ -225,7 +225,7 @@ func testStandaloneMountsFromConfig(cfg *config.Config) (StandaloneMountSelectio
 				IncludedDirs:    append([]string(nil), drive.IncludedDirs...),
 				IgnoredPaths:    append([]string(nil), drive.IgnoredPaths...),
 				IgnoreDotfiles:  drive.IgnoreDotfiles,
-				IgnoreJunkFiles: drive.IgnoreJunkFiles,
+				IgnoreJunkFiles: drive.JunkFilesIgnored(),
 				FollowSymlinks:  drive.FollowSymlinks,
 			},
 		})
@@ -401,6 +401,9 @@ func testStandaloneMount(t *testing.T, cidStr, displayName string) StandaloneMou
 		TokenOwnerCanonical:    tokenOwner,
 		AccountEmail:           accountEmail,
 		RemoteRootDeltaCapable: config.RemoteRootDeltaCapableForTokenOwner(tokenOwner),
+		// Matches the config default (ignore_junk_files on), so a reload of
+		// an unchanged config does not read as a filter change.
+		ContentFilter: syncengine.ContentFilterConfig{IgnoreJunkFiles: true},
 	}
 }
 

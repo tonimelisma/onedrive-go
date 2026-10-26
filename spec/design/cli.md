@@ -380,6 +380,39 @@ first.
 Sync intent is derived from observation snapshots and planner reconciliation,
 then applied by the sync executor through concrete file and remote side effects.
 
+`sync` refuses to run as root (effective UID 0) unless `--allow-root` is
+given (P-9): a root sync writes root-owned files into the user's folder that
+the user's later syncs and editors cannot change. The refusal is a usage
+error raised before config is read (`refuseSyncAsRoot`,
+`TestSync_RefusesRootWithoutAllowRoot`).
+
+`cp --force` and `mv --force` replace an existing destination file through
+`replaceDestination` (`replace_destination.go`): the existing file is renamed
+aside to `.onedrive-go-replacing-<unix-ns>-<name>` (trimmed to 255 bytes on a
+rune boundary), the copy or move runs (for `cp`, until the monitor reports
+`completed`), and the aside file then goes to the recycle bin through
+`DeleteResolvedPath`, an already-missing one counting as done. If that cleanup
+still fails after the replacement landed, the command succeeds and warns,
+naming the leftover file. On any failure of the operation, a canceled
+context included, the aside file gets its name back under a 30-second bound.
+Graph has no atomic replace for either operation, and deleting first left a
+user whose copy failed with neither file (D-082).
+
+A process killed between the rename aside and the cleanup leaves a
+`.onedrive-go-replacing-*` sibling. Every later `--force` run to that name
+lists the destination folder and prints a one-line note naming any such
+sibling, so the previous version can be recovered by renaming it.
+
+A completed file copy is then PATCHed with the source's modification time,
+and every monitor status other than `inProgress`/`notStarted`/`waiting`/
+`updating` ends the poll (`TestCpForce_FailedCopyRestoresTheOriginal`,
+`TestCpForce_SuccessReplacesAndKeepsSourceMtime`,
+`TestCpForce_CleanupFailureWarnsAndSucceeds`,
+`TestCpForce_HintsAboutAnInterruptedReplacement`,
+`TestMvForce_ReplacesWithoutDeletingFirst`,
+`TestReplaceDestination_CanceledOperationStillRestores`,
+`TestReplaceDestination_RestoreIsBounded`, `TestCopyStatusOutcome`).
+
 Configured standalone mount-root mounts keep `/` anchored at the configured
 mount root, not the backing drive root. Path-oriented file operations such
 as `mkdir` therefore walk and mutate only inside that configured subtree.

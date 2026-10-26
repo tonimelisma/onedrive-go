@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/api_types.go, internal/sync/debug_event_sink.go, internal/sync/doc.go, internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/engine_debug_events.go, internal/sync/engine_runtime*.go, internal/sync/engine_watch*.go, internal/sync/observation_findings.go, internal/sync/permission_evidence.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permissions.go, internal/sync/shortcut_alias_mutation.go, internal/sync/shortcut_root_lifecycle.go, internal/sync/shortcut_root_publication.go, internal/sync/watch_condition_log.go, internal/sync/watch_summary.go
+GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/api_types.go, internal/sync/debug_event_sink.go, internal/sync/doc.go, internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/engine_debug_events.go, internal/sync/engine_runtime*.go, internal/sync/engine_watch*.go, internal/sync/observation_findings.go, internal/sync/permission_evidence.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permissions.go, internal/sync/permissions_rdonly_bsd.go, internal/sync/permissions_rdonly_linux.go, internal/sync/shortcut_alias_mutation.go, internal/sync/shortcut_root_lifecycle.go, internal/sync/shortcut_root_publication.go, internal/sync/watch_condition_log.go, internal/sync/watch_summary.go
 
 LAYER: 4
 
@@ -811,6 +811,7 @@ The target scope families are:
 - `quota:own`
 - `disk:local`
 - `perm:dir:write:<path>`
+- `local:read-only:<path>`
 - `perm:remote:write:<boundary>`
 - `account:throttled`
 
@@ -818,6 +819,28 @@ Write-side shared permission blockers are first-class persisted
 `block_scopes`. Read-side subtree blockers are observation-owned boundary facts
 carried on `observation_issues` via `ScopeKey`, not a second persisted scope
 table.
+
+### Sync root ownership
+
+Before it opens the state store, `newEngine` takes an exclusive,
+non-blocking `flock` on `<data dir>/locks/root-<st_dev>-<st_ino>.lock`
+(`engine_root_lock.go`) and holds it until `Close` has closed the store; on a
+startup failure the store's close also runs first. Keying the file by the
+root's device and inode means a symlink, bind mount or second configuration
+sharing the data dir contends for the same lock, and a refused engine never
+touches its store. The lock is a regular file in the data dir rather than a
+lock on the folder itself because `flock` on a directory descriptor fails on
+Linux NFS (`EBADF`) and some FUSE filesystems (`ENOSYS`). Lock files are
+never removed. Errnos that mean "cannot lock here" (`ENOTSUP`, `EOPNOTSUPP`,
+`ENOLCK`, `EINVAL`, `EBADF`, `ENOSYS`) are a warning, not a failure. Startup
+also warns when the root carries another sync client's marker or sits under
+macOS `~/Library/CloudStorage` (R-2.9.5, R-2.9.6,
+`TestEngine_SecondEngineOnSameRootRefused`,
+`TestSyncRootLock_IsADataDirFileKeyedByDeviceAndInode`,
+`TestSyncRootLock_UnsupportedFilesystemWarnsAndContinues`,
+`TestSyncRootLock_ReleasedOnlyAfterTheStoreCloses`,
+`TestSyncRootLock_ReleasedWhenStartupFailsAfterTakingIt`,
+`TestWarnAboutForeignSyncClients`).
 
 ### Permission recovery
 
@@ -849,6 +872,19 @@ corresponding issue-boundary fact.
 Remote write block scopes clear through normal timed trials, successful write work, or
 cleanup that leaves no blocked work. They do not have a separate global
 maintenance cadence.
+
+A local `EROFS` is handled by the same local probe as `os.ErrPermission`
+(`shouldHandleLocalPermission`). The probe walks up from the failing path's
+parent while each directory is still on a read-only mount (statfs mount
+flags `ST_RDONLY`/`MNT_RDONLY`, which cover `bind,ro`; `faccessat(W_OK)`
+answering `EROFS` when statfs cannot) and stops at the sync root, so the boundary
+is the inner read-only mount point or the root itself. It records a
+`local:read-only:<path>` write scope with condition `local_read_only`: the
+same family, blocking and trial behaviour as `perm:dir:write`, but its own
+condition, because no permission change fixes it. A writable parent keeps the
+failure per file (`TestPermHandler_HandleLocalPermission_ReadOnlyMountIsOneBoundary`,
+`TestPermHandler_HandleLocalPermission_ReadOnlySyncRootBlocksWholeTree`,
+`TestPermHandler_HandleLocalPermission_ReadOnlyWithWritableParentStaysPerFile`).
 
 Remote `403` handling is intentionally narrow:
 

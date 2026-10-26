@@ -4,14 +4,20 @@ import (
 	"context"
 	"log/slog"
 	"path/filepath"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
-// handleLocalPermission probes the local filesystem after os.ErrPermission and
-// returns a file-level retry row or a boundary-scoped local permission block.
+// handleLocalPermission probes the local filesystem after os.ErrPermission or
+// EROFS and returns a file-level retry row or a boundary-scoped local block.
 func (ph *permissionHandler) handleLocalPermission(
 	_ context.Context,
 	r *actionCompletion,
 ) permissionEvidence {
+	if driveops.ClassifyLocalError(r.Err) == driveops.LocalErrorReadOnly {
+		return ph.readOnlyFilesystemEvidence(r)
+	}
+
 	issueType := localPermissionIssueType(r)
 
 	if !isDirAccessible(ph.syncTree, ".") {
@@ -140,4 +146,63 @@ func localPermissionIssueType(r *actionCompletion) string {
 		return issueLocalWriteDenied
 	}
 	return issueLocalReadDenied
+}
+
+// readOnlyFilesystemEvidence turns an EROFS write failure into one boundary
+// scope. Every write under a read-only mount fails the same way, so before
+// this each file was its own "unexpected" failure. The boundary is the
+// highest sync-folder directory still on the read-only filesystem: the inner
+// mount point, or the sync root itself when the whole folder is read-only.
+// The scope is revalidated by the normal timed write trial, so a remount
+// read-write resumes syncing without user action.
+func (ph *permissionHandler) readOnlyFilesystemEvidence(r *actionCompletion) permissionEvidence {
+	fileEvidence := permissionEvidence{
+		Kind:        permissionEvidenceFileDenied,
+		TriggerPath: r.Path,
+		IssueType:   issueLocalReadOnly,
+		LastError:   "the local filesystem is read-only",
+	}
+
+	absPath, err := ph.syncTree.Abs(r.Path)
+	if err != nil {
+		return fileEvidence
+	}
+
+	readOnly := ph.readOnlyDir
+	if readOnly == nil {
+		readOnly = isOnReadOnlyFilesystem
+	}
+
+	root := ph.syncTree.Path()
+	dir := filepath.Dir(absPath)
+	if !readOnly(dir) {
+		// The directory itself is writable, so the failing path is a mount
+		// of its own (a read-only file bind-mounted in): keep it per file.
+		return fileEvidence
+	}
+
+	boundary := dir
+	for boundary != root {
+		parent := filepath.Dir(boundary)
+		if parent == boundary || !readOnly(parent) {
+			break
+		}
+		boundary = parent
+	}
+
+	relBoundary, err := ph.syncTree.Rel(boundary)
+	if err != nil {
+		return fileEvidence
+	}
+	if relBoundary == "." {
+		relBoundary = ""
+	}
+
+	return permissionEvidence{
+		Kind:         permissionEvidenceBoundaryDenied,
+		BoundaryPath: relBoundary,
+		TriggerPath:  r.Path,
+		IssueType:    issueLocalReadOnly,
+		LastError:    "the local filesystem is read-only",
+	}
 }

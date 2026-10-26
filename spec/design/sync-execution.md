@@ -276,6 +276,16 @@ further publication-only dependents through the engine-owned publication
 drain stage, and only then releases concrete dependents for worker
 dispatch.
 
+A download never replaces a SQLite database an application has open:
+`refuseLiveDatabaseTarget` returns `errDatabaseInUse` when the target has a
+non-empty `-wal` or `-journal` sibling, whether or not the target itself exists yet, both before the transfer and again in
+`ValidateTargetBeforeRename`. It is the retryable per-file condition
+`local_database_open`, not a superseded action, because superseding would
+replan the same download at once (R-2.4.15,
+`TestExecutor_Download_RefusesToReplaceDatabaseWithLiveWAL`,
+`TestExecutor_Download_DatabaseOpenedDuringDownloadIsNotReplaced`,
+`TestExecutor_Download_RefusesNewDatabaseBesideALiveWAL`).
+
 ## Publication-Only Actions
 
 `ActionBaselineUpdate` and `ActionCleanup` remain planner-visible action types so
