@@ -689,30 +689,47 @@ func TestDownloadRange_RejectsUnboundOrMisalignedAnswers(t *testing.T) {
 
 // Validates: R-5.5.1
 func TestDownload_ErrorDocumentWithStatus200IsRejected(t *testing.T) {
+	const errorBody = `{"error":{"code":"generalException"}}`
+
 	tests := []struct {
 		name        string
 		mimeType    string
 		served      string
+		size        int
+		quickXor    string
 		wantRefused bool
 	}{
-		{name: "html page for a binary file", mimeType: "application/octet-stream", served: "text/html; charset=utf-8", wantRefused: true},
-		{name: "json error for a photo", mimeType: "image/jpeg", served: "application/json", wantRefused: true},
-		{name: "a real html file", mimeType: "text/html", served: "text/html", wantRefused: false},
-		{name: "a real json file", mimeType: "application/json", served: "application/json; charset=utf-8", wantRefused: false},
+		// Hashless, and the length is not the item's: an error document.
+		{name: "html page for a binary file", mimeType: "application/octet-stream", served: "text/html; charset=utf-8", size: 4096, wantRefused: true},
+		{name: "json error for a photo", mimeType: "image/jpeg", served: "application/json", size: 4096, wantRefused: true},
+		{name: "a real html file", mimeType: "text/html", served: "text/html", size: len(errorBody)},
+		{name: "a real json file", mimeType: "application/json", served: "application/json; charset=utf-8", size: len(errorBody)},
+		// A .json file OneDrive types as octet-stream but serves as JSON:
+		// the hash decides, never the type.
+		{
+			name: "hashed json file typed octet-stream", mimeType: "application/octet-stream", served: "application/json",
+			size: len(errorBody), quickXor: "any-hash",
+		},
+		// Hashless, served as JSON, length matches the item: the file.
+		{name: "hashless json file of the right size", mimeType: "application/octet-stream", served: "application/json", size: len(errorBody)},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", tt.served)
-				writeDownloadTestBody(t, w, `{"error":{"code":"generalException"}}`)
+				writeDownloadTestBody(t, w, errorBody)
 			}))
 			defer dlSrv.Close()
 
+			hashes := ""
+			if tt.quickXor != "" {
+				hashes = fmt.Sprintf(`,"hashes":{"quickXorHash":%q}`, tt.quickXor)
+			}
 			graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				writeTestResponsef(t, w, `{"id":"i","name":"f","size":38,"file":{"mimeType":%q},
-					"@microsoft.graph.downloadUrl":%q}`, tt.mimeType, dlSrv.URL+"/dl")
+				writeTestResponsef(t, w, `{"id":"i","name":"f","size":%d,"file":{"mimeType":%q%s},
+					"@microsoft.graph.downloadUrl":%q}`, tt.size, tt.mimeType, hashes, dlSrv.URL+"/dl")
 			}))
 			defer graphSrv.Close()
 
@@ -723,6 +740,7 @@ func TestDownload_ErrorDocumentWithStatus200IsRejected(t *testing.T) {
 				assert.Zero(t, buf.Len())
 			} else {
 				require.NoError(t, err)
+				assert.Equal(t, len(errorBody), buf.Len())
 			}
 		})
 	}

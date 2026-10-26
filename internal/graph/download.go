@@ -257,7 +257,7 @@ func (c *Client) downloadFromURLWithRange(
 		return 0, rangeErr
 	}
 
-	if bodyErr := checkDownloadBodyType(resp, item); bodyErr != nil {
+	if bodyErr := checkDownloadBodyType(resp, item, offset); bodyErr != nil {
 		return 0, bodyErr
 	}
 
@@ -304,16 +304,27 @@ func validateContentRange(resp *http.Response, offset, size int64) error {
 	return nil
 }
 
-// checkDownloadBodyType refuses an HTML or JSON answer for an item whose own
-// type is something else: OneDrive serves a file with the type its metadata
-// names, so such an answer is an error document with a 200 status.
-func checkDownloadBodyType(resp *http.Response, item *Item) error {
+// checkDownloadBodyType refuses an HTML or JSON answer that is evidently an
+// error document rather than the file. It is only a gate for hashless items:
+// a hashed item's bytes are proven or refused by the hash and size checks,
+// and a real .json or .html file is served with that type whatever its
+// metadata says. For a hashless item the type is evidence only together with
+// the size: an answer whose length matches the item is the file.
+func checkDownloadBodyType(resp *http.Response, item *Item, offset int64) error {
+	if item.QuickXorHash != "" {
+		return nil
+	}
+
 	served := mediaType(resp.Header.Get("Content-Type"))
 	if served != "text/html" && served != "application/json" {
 		return nil
 	}
 
 	if mediaType(item.MimeType) == served {
+		return nil
+	}
+
+	if item.Size > 0 && resp.ContentLength >= 0 && offset+resp.ContentLength == item.Size {
 		return nil
 	}
 
@@ -343,6 +354,8 @@ func mediaTypeOrUnknown(contentType string) string {
 // Only the HTTP request/response cycle is retried; streaming (io.Copy) happens after
 // doPreAuthRetry returns, so partial-stream failures are handled by the caller.
 func (c *Client) downloadFromURL(ctx context.Context, item *Item, w io.Writer) (int64, error) {
+	const offset = 0
+
 	ctx, watchdog := c.watchTransfer(ctx)
 	defer watchdog.stop()
 
@@ -361,7 +374,7 @@ func (c *Client) downloadFromURL(ctx context.Context, item *Item, w io.Writer) (
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
-	if bodyErr := checkDownloadBodyType(resp, item); bodyErr != nil {
+	if bodyErr := checkDownloadBodyType(resp, item, offset); bodyErr != nil {
 		return 0, bodyErr
 	}
 
@@ -443,7 +456,7 @@ func (c *Client) downloadViaContentEndpoint(
 		return 0, rangeErr
 	}
 
-	if bodyErr := checkDownloadBodyType(resp, item); bodyErr != nil {
+	if bodyErr := checkDownloadBodyType(resp, item, offset); bodyErr != nil {
 		return 0, bodyErr
 	}
 

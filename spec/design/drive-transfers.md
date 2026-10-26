@@ -310,7 +310,10 @@ A partial file's name carries the remote version (`~v` plus 12 hex digits
 of the QuickXorHash, or of the eTag for a hashless item), so a resume only
 ever appends to bytes of the same version; the graph boundary also checks
 that the item is still that version and that the answer is a 206 whose
-Content-Range starts at the partial's length (D-040, R-5.2.2). A partial
+Content-Range starts at the partial's length (D-040, R-5.2.2). `If-Range` is
+deliberately not sent: the eTag format the download CDN compares is
+unprobed, and a mismatch would turn every resume into a full download; the
+version check plus the Content-Range check give the same protection. A partial
 with no version to bind is downloaded afresh. Evidence:
 `TestTransferManager_StalePartialFromOldVersionIsNotResumed`,
 `TestTransferManager_PartialWithoutVersionIsNotResumed`,

@@ -238,7 +238,7 @@ instead of a raw "any write/owner role means writable" heuristic:
 
 ## Transfers
 
-- `download.go`: streaming download with content URL. A ranged read is bound to a `DownloadVersion` and accepted only as a 206 whose Content-Range starts at the offset and spans the item (`validateContentRange`, `ErrRangeResumeRejected`); an HTML or JSON answer for an item of another type is `ErrUnexpectedDownloadBody` (`checkDownloadBodyType`)
+- `download.go`: streaming download with content URL. A ranged read is bound to a `DownloadVersion` and accepted only as a 206 whose Content-Range starts at the offset and spans the item (`validateContentRange`, `ErrRangeResumeRejected`); for a hashless item, an HTML or JSON answer of another type whose length is not the item's is `ErrUnexpectedDownloadBody` (`checkDownloadBodyType`); hashed items are never gated by type, since the hash decides
 - `upload.go`: upload sessions for every non-empty file (320 KiB-aligned chunks) and the zero-byte simple PUT
 - `shares.go`: raw share-link resolution into underlying shared item identity
 - `upload_transfer.go` / `upload_session.go`: existing-item overwrite helpers
