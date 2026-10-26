@@ -2677,3 +2677,25 @@ func TestParseProcUmask(t *testing.T) {
 		assert.Equal(t, probeUmaskWithFile(), fromProc)
 	}
 }
+
+// Validates: R-5.8.2
+func TestTransferManager_EmptyHashedItemNeverAcceptsIdenticalWrongBodies(t *testing.T) {
+	t.Parallel()
+
+	var attempts int
+	dl := &tmSimpleDownloader{downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+		attempts++
+		n, err := w.Write([]byte("same wrong bytes"))
+		return int64(n), err
+	}}
+
+	targetPath := filepath.Join(t.TempDir(), "empty.txt")
+	_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath,
+		DownloadOpts{RemoteHash: tmHashBytes(nil), RemoteSize: 0, RemoteSizeKnown: true})
+
+	// Identical bytes every time looks deterministic, but an empty item
+	// cannot be "transformed" into 16 bytes: the size must match too.
+	require.ErrorIs(t, err, ErrDownloadIntegrity)
+	assert.Equal(t, 3, attempts)
+	assert.NoFileExists(t, targetPath)
+}

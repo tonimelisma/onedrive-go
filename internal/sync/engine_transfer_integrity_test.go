@@ -118,3 +118,32 @@ func TestClassifyResult_StalledTransferIsRetryableNotShutdown(t *testing.T) {
 	assert.Equal(t, resultRequeue, decision.Class)
 	assert.Equal(t, persistRetryWork, decision.Persistence)
 }
+
+// Validates: R-5.5.1
+func TestExecutor_Download_KnownEmptyItemRejectsNonEmptyBody(t *testing.T) {
+	t.Parallel()
+
+	dl := &executorMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write([]byte("<html>not the empty file</html>"))
+			return int64(n), err
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	// remote_state holds a real size of 0 (not NULL) for this hashless item.
+	o := e.ExecuteDownload(t.Context(), &Action{
+		Type:    ActionDownload,
+		Path:    "empty.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View:    &pathView{Remote: &remoteState{Size: 0, SizeKnown: true, Mtime: 1}},
+	})
+
+	// A size of 0 used to read as "unknown", so any body was accepted.
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, driveops.ErrDownloadIntegrity)
+	assert.NoFileExists(t, filepath.Join(syncRoot, "empty.txt"))
+}

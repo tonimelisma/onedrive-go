@@ -64,8 +64,11 @@ type remoteStateRow struct {
 	ItemType ItemType
 	Hash     string
 	Size     int64
-	Mtime    int64
-	ETag     string
+	// SizeKnown is false only when the stored size is NULL: a file item
+	// from delta always carries its size, zero included.
+	SizeKnown bool
+	Mtime     int64
+	ETag      string
 }
 
 // localStateRow represents a row from the local_state table.

@@ -311,11 +311,14 @@ func NewBaselineForTest(entries []*BaselineEntry) *Baseline {
 // remoteState captures the current state of a path as observed from
 // the Graph API delta response.
 type remoteState struct {
-	ItemID    string
-	DriveID   driveid.ID // normalized (lowercase, zero-padded to 16 chars)
-	Name      string
-	ItemType  ItemType
-	Size      int64
+	ItemID   string
+	DriveID  driveid.ID // normalized (lowercase, zero-padded to 16 chars)
+	Name     string
+	ItemType ItemType
+	Size     int64
+	// SizeKnown is true when Size is the item's real size (zero included)
+	// rather than an absent value; downloads verify against it.
+	SizeKnown bool
 	Hash      string
 	Mtime     int64
 	ETag      string

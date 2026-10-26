@@ -72,6 +72,7 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 		opts.RemoteHash = action.View.Remote.Hash
 		opts.RemoteMtime = action.View.Remote.Mtime
 		opts.RemoteSize = action.View.Remote.Size
+		opts.RemoteSizeKnown = action.View.Remote.SizeKnown
 		opts.RemoteETag = action.View.Remote.ETag
 	}
 
