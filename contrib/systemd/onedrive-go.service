@@ -7,8 +7,9 @@
 #   systemctl --user enable --now onedrive-go
 #   loginctl enable-linger "$USER"   # keep syncing while logged out
 #
-# Sign in first (`onedrive-go login`, then `onedrive-go drive add`): the
-# service cannot open a browser. Watch it with
+# Sign in first with `onedrive-go login`, which also adds your main drive;
+# `onedrive-go drive add` is only needed for extra drives such as SharePoint
+# libraries or shared folders. The service cannot sign in for you. Watch it with
 #   systemctl --user status onedrive-go
 #   journalctl --user -u onedrive-go -p warning
 

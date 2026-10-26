@@ -24,6 +24,17 @@ OneDrive uses a case-insensitive, case-preserving namespace (consistent with Win
 - When two local items would collide under case-insensitive rules, flag a conflict
 - Path-based API queries perform case-insensitive matching
 
+Folding goes beyond ASCII. A live probe on a OneDrive Personal account on
+2026-10-25 created `straße` then `STRASSE`, `i̇stanbul` then `İstanbul`, and
+`σ` then `Σ` in one folder with `conflictBehavior=fail`; every second create
+returned **409**. A collision key must therefore use full Unicode case folding
+(where `ß` folds to `ss`), applied to the NFC form of the name, not
+`strings.ToLower` or `strings.EqualFold`, which treat `straße` and `STRASSE` as
+different. At the time of writing the local collision detection in
+`internal/sync/observer_local_collisions.go` and `internal/sync/scanner.go`
+still uses `strings.ToLower`, so these pairs are not yet caught locally; the
+fix is tracked as naming hardening work.
+
 ## Naming Restrictions
 
 OneDrive enforces naming rules that differ from POSIX. The following are rejected:
@@ -62,11 +73,30 @@ client's one refresh-and-retry lifecycle boundary.
 
 ## Permanent Deletion Availability
 
-`DELETE /items/{id}` with permanent deletion is only supported on OneDrive for Business and SharePoint. OneDrive Personal always sends items to the recycle bin. National clouds may not support permanent deletion regardless of account type.
+Permanent deletion is `POST /items/{id}/permanentDelete`; a plain `DELETE /items/{id}` sends the item to the recycle bin. This section previously said permanent deletion is only supported on OneDrive for Business and SharePoint and that Personal always uses the recycle bin. A live probe on a OneDrive Personal account on 2026-10-25 got **204** from `permanentDelete` and the item was gone, so it works on Personal too. National clouds may not support permanent deletion regardless of account type.
 
 ## NFC/NFD Unicode Normalization
 
-OneDrive does not normalize Unicode forms. A filename created on macOS (which uses NFD/decomposed form on APFS/HFS+) may appear as a different byte sequence than the same visually-identical name created on Linux (which typically uses NFC/composed form). A sync client on macOS must normalize filenames before comparison.
+OneDrive **does** treat NFC and NFD forms of a name as the same name. This
+section previously said the opposite. A live probe on a OneDrive Personal
+account on 2026-10-25 uploaded `café.txt` in NFC form, then uploaded the NFD
+form (`e` + U+0301) to the same parent: the second upload returned 200 with the
+**first item's ID** and replaced its content.
+
+Consequences for a sync client:
+
+- Two local files whose names differ only in Unicode normalization (possible
+  on Linux, where names are opaque bytes) are a true collision on OneDrive,
+  just like a case-only difference. Uploading both would make the second
+  overwrite the first.
+- Collision and grouping keys must normalize (NFC, then full case folding; see
+  "Case-Insensitive Namespace" above).
+- A file created on macOS (APFS/HFS+ commonly hand back NFD names) maps onto
+  the existing NFC remote item rather than creating a second one.
+
+Whether OneDrive stores the uploaded byte form or rewrites names to NFC has not
+been probed yet. The local scanner already NFC-normalizes the paths it records
+(`internal/sync/scanner.go`).
 
 ## Read-Only Shared Items
 

@@ -4,160 +4,273 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/tonimelisma/onedrive-go)](https://goreportcard.com/report/github.com/tonimelisma/onedrive-go)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A Go OneDrive CLI and sync client. It provides Unix-style file operations
-(`ls`, `get`, `put`) plus bidirectional sync with conflict tracking.
+A OneDrive command-line client and two-way sync client for Linux and macOS.
 
 ## Status
 
-**Active development** — capability claims use the repo requirement statuses:
-`verified`, `implemented`, `designed`, `planned`, and `future`. A release claim
-must not exceed the proof recorded in requirements, CI, live E2E artifacts, or
-benchmark artifacts for that release SHA.
+> [!WARNING]
+> **Pre-release.** There are no releases yet: you build it from source, and it
+> has not been used outside its own testing. Data-safety hardening is in
+> progress (see [known gaps](docs/safety.md#known-gaps)). Try it first with
+> `sync --dry-run` or a test account, and keep a backup of anything you cannot
+> lose. onedrive-go is not affiliated with Microsoft.
 
-See the [requirements](spec/requirements/) for the source-of-truth capability
-status and the full plan.
+File commands, two-way sync, drive management, configuration and transfers
+are implemented and covered by tests; some status and retry details are still
+being finished, and performance has not been measured yet. The
+[requirements](spec/requirements/index.md) are the source of truth for what
+each capability does and how far it is proven.
 
-## Capability Status
+## What it does
 
-| Capability | Status | Claim boundary |
-| --- | --- | --- |
-| CLI file operations (`ls`, `get`, `put`, `rm`, `mkdir`, `stat`, `mv`, `cp`) | `verified` | Covered by requirements and test evidence for normal command behavior. |
-| Configuration, drive identity, and multi-drive selection | `verified` | Config/catalog/token ownership is requirements-backed; live account coverage remains credential-gated. |
-| Bidirectional sync | `verified` | One-shot, watch, conflict preservation, retry/blocker state, and shortcut lifecycle are implemented with repo test evidence. |
-| `sync --dry-run` | `verified` | No local sync-tree content mutation and no remote OneDrive content mutation; operational side effects such as logs, sockets, token refresh, config reconciliation, state open/checkpoint, and scratch planning DBs may still occur. |
-| Microsoft Graph quirks | `verified` per documented quirk | Only quirks documented in `spec/reference/graph-api-quirks.md` with tests or live evidence are launch claims. Unknown provider behavior remains unclaimed. |
-| OneDrive Business, SharePoint, and shared libraries | `implemented` / `verified` per requirement | Covered behavior is tracked in requirements and live suites; do not claim full support without a green live release lane on the release SHA. |
-| Performance numbers | `planned` | Public "fast" claims require repo-owned benchmark artifacts with machine/date/methodology context. |
-| Native packages and container images | `future` | Not a launch claim. |
+- **Two-way sync** between a local folder and OneDrive, once (`sync`) or
+  continuously (`sync --watch`), plus `--download-only`, `--upload-only` and
+  `--dry-run`.
+- **Keeps both versions** when a file changed on both sides: OneDrive's copy
+  stays at the original name and yours is saved next to it as
+  `name.conflict-YYYYMMDD-HHMMSS.ext`.
+- **Every OneDrive type**: personal, work or school, SharePoint document
+  libraries, and folders other people shared with you.
+- **Unix-style file commands** (`ls`, `get`, `put`, `rm`, `mkdir`, `stat`,
+  `mv`, `cp`) that work directly against OneDrive, with or without sync.
+- **Filters** per drive: sync only some folders, or skip folders, glob
+  patterns, dotfiles and common editor or OS junk files.
+- **Built for unattended use**: a systemd `Type=notify` unit, journal-aware
+  output, exit codes a service manager can act on, and `--json` output for
+  scripts.
+- Resumable uploads and downloads, hash-checked transfers, and automatic
+  backoff when OneDrive throttles or is unavailable.
 
-## Platforms
+## What it looks like
 
-- Linux (primary) — full CI: build, lint, unit tests, coverage gate, live E2E
-- macOS (primary) — full CI: build, lint, unit tests
-- FreeBSD (best-effort) — cross-compiled on every CI run; not otherwise tested
+```console
+$ onedrive-go sync --dry-run
+Checking (dry run) ~/OneDrive with user@example.com...
+Would download Accessory Structures.pdf
+Would create folder Documents
+…
+Dry run, nothing was changed. Would download 19 files, create 2 folders.
 
-Every platform listed here is compiled on every CI run, so this list cannot
-drift ahead of what actually builds.
+$ onedrive-go sync
+Syncing ~/OneDrive with user@example.com...
+Downloaded Accessory Structures.pdf (746.6 KB)
+Created folder Documents
+…
+Done in 6.2 s: downloaded 19 files (339.2 MB), created 2 folders.
 
-## Building from Source
+$ onedrive-go sync --watch
+[00:19:03] Watching ~/OneDrive for user@example.com.
+[00:19:03] Press Ctrl-C to stop.
+[00:19:26] Uploaded notes.txt (11 B)
+[00:19:49] Deleted on OneDrive notes.txt
+```
+
+## Install
+
+There are no Homebrew, deb, rpm, AUR or container packages yet.
+
+### Building from source
+
+You need Go 1.26 or newer, on Linux or macOS. FreeBSD builds on every CI run
+but is not otherwise tested.
 
 ```bash
 git clone https://github.com/tonimelisma/onedrive-go.git
 cd onedrive-go
 go build -ldflags "-X github.com/tonimelisma/onedrive-go/internal/cli.version=$(git rev-parse --short HEAD)" -o onedrive-go .
+install -m 0755 onedrive-go ~/.local/bin/
 ```
 
-The version flag matters: a build without it reports version `dev` and, to
-protect your real data during development, refuses to run unless
-`XDG_DATA_HOME`, `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` are all set
-(`source scripts/dev-env.sh` sets them for a scratch tree).
+Keep the `-ldflags` part. A build without it (including `go install`) calls
+itself a development build and, to protect your real files, refuses to run
+unless `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` all point at a
+scratch location (`source scripts/dev-env.sh` sets them).
 
-Requires Go 1.24+.
+## Quick start
 
-## Running Under systemd
+1. **Sign in.** This shows a code to enter at Microsoft's sign-in page
+   (`--browser` opens a browser instead) and adds your main OneDrive:
 
-`sync --watch` supports `Type=notify` units: it reports `READY=1` once every
-drive that could start is watching, keeps a one-line `STATUS=` ("Watching
-~/OneDrive"), and answers `WatchdogSec=`. Under the journal its output carries
-priorities, so `journalctl -p warning` works. An example user unit is in
-[`contrib/systemd/onedrive-go.service`](contrib/systemd/onedrive-go.service):
+   ```console
+   $ onedrive-go login
+   …
+   Signed in as user@example.com (personal account).
+   Your files will sync to ~/OneDrive.
+   Next: run 'onedrive-go sync' to sync now, or 'onedrive-go sync --watch' to keep syncing.
+   ```
 
-```ini
-[Service]
-Type=notify
-ExecStart=%h/.local/bin/onedrive-go sync --watch
-Restart=on-failure
-RestartSec=30s
-RestartPreventExitStatus=77 78
-WatchdogSec=2min
-```
+   Personal accounts sync to `~/OneDrive`, work or school accounts to
+   `~/OneDrive - <organization>`.
 
-### Exit Status
+2. **Preview** what the first sync would do. Nothing is changed:
 
-| Status | Meaning |
+   ```bash
+   onedrive-go sync --dry-run
+   ```
+
+3. **Sync once**, or **keep syncing** until you press Ctrl-C:
+
+   ```bash
+   onedrive-go sync
+   onedrive-go sync --watch
+   ```
+
+4. **Check on it** at any time, even while a sync is running:
+
+   ```bash
+   onedrive-go status
+   ```
+
+If the folder already has files, the first sync merges them with OneDrive:
+files on only one side are copied to the other, identical files are left
+alone, and files that differ are kept as conflict copies. Nothing is deleted
+on either side on the first sync just because it is missing from the other.
+
+## How your files are kept safe
+
+- **Deletes are only propagated for files that were synced before.** A file
+  missing on one side is deleted on the other only if onedrive-go recorded it
+  as synced; otherwise it is copied over.
+- **Deletes on OneDrive go to the OneDrive recycle bin.** Deletes on your
+  computer are real deletes, so the recycle bin is where a mistake is undone.
+- **Local deletes are checked first.** Before deleting a local file because it
+  was deleted on OneDrive, onedrive-go checks that it is still what it last
+  synced. If you changed it, your version is kept and uploaded again.
+- **Conflicts keep both copies.**
+- **An interrupted OneDrive listing never causes deletes**, and neither does a
+  folder inside the sync folder that onedrive-go is not allowed to read.
+- **Downloads land atomically.** Files are written under a temporary name,
+  checked against OneDrive's hash, and then renamed into place. Downloads stop
+  when free space would fall below `min_free_space` (1 GB by default).
+- **Personal Vault and OneNote notebooks are skipped.**
+- **One sync at a time** per configuration; other commands can run alongside.
+
+There is no limit on how many deletes one sync propagates, and an unmounted
+or emptied sync folder is not yet detected. Read
+[docs/safety.md](docs/safety.md) for the full model and its known gaps.
+
+## Commands
+
+| Command | What it does |
 | --- | --- |
-| 0 | Success, or `sync --watch` stopped by a signal |
-| 1 | Any other failure, including network, throttling and server errors; running again may succeed |
-| 2 | Command-line mistake (unknown command or flag, wrong arguments) |
-| 77 | Sign-in required: run `onedrive-go login` (EX_NOPERM) |
-| 78 | Invalid configuration: fix `config.toml` or `--drive` (EX_CONFIG) |
+| `login` / `logout` | Sign in (adds your main drive) / sign out (`--purge` also removes sync state) |
+| `sync` | Sync once; `--watch`, `--download-only`, `--upload-only`, `--dry-run`, `--full` |
+| `status` | Accounts, drives, shared folders, and anything that needs you |
+| `pause [duration]` / `resume` | Pause syncing a drive (for example `2h`, `1d`) / resume it |
+| `ls`, `stat` | List a OneDrive folder / show an item's details |
+| `get`, `put` | Download / upload a file or folder |
+| `mkdir`, `mv`, `cp`, `rm` | Create, move, copy (server-side) and delete (`rm` uses the recycle bin; `--permanent` skips it) |
+| `shared` | List files and folders shared with you |
+| `drive list`, `add`, `remove`, `search` | Choose which drives are configured; find SharePoint libraries |
+| `drive reset-sync-state` | Start a drive's sync state over (your files are not touched) |
+| `recycle-bin list`, `restore`, `empty` | Work or school and SharePoint drives only |
+
+Every command has `--help`. Global flags: `--drive`, `--account`, `--config`,
+`--json`, `-v`/`--verbose`, `--debug`, `-q`/`--quiet`.
+
+## Work drives, SharePoint and shared folders
+
+```bash
+onedrive-go drive list                   # configured drives, and drives you could add
+onedrive-go drive search marketing       # find SharePoint sites and libraries
+onedrive-go drive add sharepoint:user@contoso.com:marketing:Documents
+onedrive-go drive add "Shared Folder"    # a folder shared with you, by name or share link
+```
+
+Run `login` once per account. With several drives configured, `sync` syncs
+every drive that is not paused, and other commands need `--drive` (a
+canonical ID such as `personal:user@example.com`, a display name, or part of
+one). Shared folders you added to your own OneDrive as shortcuts are synced
+automatically with the drive that holds the shortcut.
+
+## Configuration
+
+`login` creates the configuration file with every global setting present as a
+commented-out default:
+
+- Linux: `~/.config/onedrive-go/config.toml`
+- macOS: `~/Library/Application Support/onedrive-go/config.toml`
+
+Use `--config` or `ONEDRIVE_GO_CONFIG` to point elsewhere.
+
+```toml
+# min_free_space = "1GB"
+# poll_interval = "5m"
+
+["personal:user@example.com"]
+sync_dir = "~/OneDrive"
+ignore_junk_files = true
+ignored_dirs = ["node_modules"]
+ignored_paths = ["*.iso"]
+```
+
+Unknown or misspelled keys are an error. A running `sync --watch` picks up
+edits within a few seconds, without a restart. Every setting is described in
+[docs/configuration.md](docs/configuration.md).
+
+## Running in the background
+
+On Linux, use the systemd user unit in
+[`contrib/systemd/onedrive-go.service`](contrib/systemd/onedrive-go.service).
+Sign in first: the service cannot sign in for you.
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp contrib/systemd/onedrive-go.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now onedrive-go
+loginctl enable-linger "$USER"     # keep syncing while logged out
+```
+
+`systemctl --user status onedrive-go` shows what is being watched, and
+`systemctl --user reload onedrive-go` applies config edits at once. On macOS,
+run `sync --watch` in a terminal for now; no launchd example is provided yet.
+See [docs/running-as-a-service.md](docs/running-as-a-service.md).
+
+Exit codes tell a service manager or script whether to retry:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success, or `sync --watch` stopped normally |
+| 1 | Other failure (network, throttling, server); running again may work |
+| 2 | Command-line mistake |
+| 77 | Sign-in required: run `onedrive-go login` |
+| 78 | Invalid configuration: fix `config.toml` or `--drive` |
 | 130 | Stopped with Ctrl-C |
 
-77 and 78 mean that running again unchanged fails the same way, which is why
-the unit above sets `RestartPreventExitStatus=77 78`. `sync --watch` exits with
-one of them only when every drive that could not start failed for that reason.
+See [docs/scripting.md](docs/scripting.md) for `--json` output.
 
-## Development
+## Limitations
 
-New contributors should start with the
-[new developer onboarding guide](spec/reference/developer-onboarding.md) for a
-repo-wide architecture tour and reading order.
+- Linux and macOS only. Windows is out of scope; Microsoft ships a native
+  client.
+- Files are downloaded in full. There is no Files On-Demand.
+- Microsoft's global cloud only; national clouds (US Government, China) are
+  not supported.
+- No packages, no `service install` command, and no migration from other
+  clients yet.
+- Do not point two sync clients at the same folder.
 
-Work is done in PR-backed increments from isolated worktrees. Fetch first, then
-start from current `origin/main`:
+More in [docs/limitations.md](docs/limitations.md) and the
+[FAQ](docs/faq.md). For how it compares with
+[abraunegg/onedrive](https://github.com/abraunegg/onedrive) and
+[rclone](https://rclone.org/), see [docs/comparison.md](docs/comparison.md).
 
-```bash
-git fetch origin
-go run ./cmd/devtool worktree add --path <path> --branch <branch>
-```
+## Getting help
 
-The canonical local verification entrypoint is:
+Start with [docs/troubleshooting.md](docs/troubleshooting.md). To report a
+bug, open an [issue](https://github.com/tonimelisma/onedrive-go/issues) with
+the output of `onedrive-go --version` and `onedrive-go status`, what you ran
+and what happened. `--debug` adds detail, but check it for file names and
+account details before posting it. Report security problems privately as
+described in [SECURITY.md](SECURITY.md).
 
-```bash
-go run ./cmd/devtool verify default
-```
+## Contributing
 
-The Definition of Done is automated through staged verifier runs:
-
-```bash
-go run ./cmd/devtool verify --dod --stage start
-go run ./cmd/devtool verify --dod --stage pre-pr
-go run ./cmd/devtool verify --dod --stage pre-merge --pr <number>
-go run ./cmd/devtool verify --dod --stage post-merge --pr <number> --worktree <path> --branch <branch>
-```
-
-`start` audits unresolved review threads from recent merged PRs and writes the
-ignored `.dod-pr-comments.json` manifest. Agents must manually classify every
-unresolved thread as `fixed`, `already_fixed`, or `non_actionable` before the
-DoD can pass. `fixed` and `already_fixed` require `what_changed`, `how_fixed`,
-and evidence entries; `non_actionable` requires a reason. There is no passing
-deferred state.
-
-`pre-pr` runs the local verification profile, checks the branch is based on
-latest `origin/main`, and rejects undecided PR-comment carryover. `pre-merge`
-waits for PR CI (`verify`, `integration`, and `e2e`; PR `stress` may be
-skipped), posts the manifest's templated replies, resolves handled review
-threads, and requires zero unresolved review threads. `post-merge` performs the
-squash merge, handles already-completed multi-worktree merge/cleanup cases,
-fast-forwards root `main`, removes the increment worktree and branch, validates
-the configured post-merge CI-skip rule when applicable, and runs
-`cleanup-audit`.
-
-Direct package-level commands are still useful during short loops:
-
-```bash
-go build ./...                    # Build
-go test -race ./...               # Test with race detector
-golangci-lint run                 # Lint
-```
-
-See [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), and the
-[system architecture doc](spec/design/system.md) for repo workflow and
-architecture details.
-
-## Release Readiness
-
-A release is not ready until these proof gates are current for the release SHA:
-
-- `go run ./cmd/devtool verify default` passes cleanly.
-- Manual live E2E is green for the release SHA; broader SharePoint/shared-library
-  claims require matching live coverage.
-- Any public performance claim has a repo-owned benchmark artifact with
-  scenario, machine, date, method, and subject-under-test context.
-- Side-effect expectations are current, especially dry-run and destructive
-  command behavior.
-- README and spec language use only `verified`, `implemented`, `designed`,
-  `planned`, or `future` claims and contain no launch-blocking stale promises.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[developer onboarding guide](spec/reference/developer-onboarding.md).
+Behavior is specified in [spec/requirements](spec/requirements/) and
+[spec/design](spec/design/).
 
 ## License
 

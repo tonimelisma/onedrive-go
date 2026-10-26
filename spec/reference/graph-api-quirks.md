@@ -85,15 +85,22 @@ as a per-photo warning.
 
 SharePoint injects metadata into uploaded files, changing the hash and size post-upload. This can cause infinite upload/download loops if upload validation compares against the original local file. Filed as [onedrive-api-docs#935](https://github.com/OneDrive/onedrive-api-docs/issues/935).
 
-### Upload Creates Double Versions (Business/SharePoint)
+### Upload Creates Double Versions (All Account Types)
 
-On Business/SharePoint, uploading a file and then PATCHing its `fileSystemInfo` (to preserve local timestamps) creates two versions, doubling storage consumption. The fix is to include `fileSystemInfo` in the upload session creation request, setting timestamps atomically with the content. Modified file re-uploads still create an extra version (unfixed API bug, [onedrive-api-docs#877](https://github.com/OneDrive/onedrive-api-docs/issues/877)).
+Uploading a file and then PATCHing its `fileSystemInfo` (to preserve local timestamps) creates two versions, doubling storage consumption. This was first documented for Business/SharePoint; a live probe on a OneDrive Personal account on 2026-10-25 (simple `PUT /content` followed by an mtime PATCH) also produced **2 versions**, so the earlier "Business/SharePoint only" scoping is stale. The fix is to include `fileSystemInfo` in the upload session creation request, setting timestamps atomically with the content. Modified file re-uploads still create an extra version (unfixed API bug, [onedrive-api-docs#877](https://github.com/OneDrive/onedrive-api-docs/issues/877)).
 
 Runtime policy: avoid the avoidable double-version case by putting
 `fileSystemInfo` into upload-session creation, accept the remaining modified
 re-upload extra version as a server bug, and rely on per-side baseline hashes
 to prevent re-upload/download loops instead of attempting version-history
 cleanup workarounds.
+
+Current gap: files at or below `graph.SimpleUploadMaxSize` (4 MiB) still use
+simple upload plus a follow-on PATCH (`internal/graph/upload_transfer.go`), so
+they still get the double version on every account type. Routing every
+non-empty file through an upload session is tracked as hardening work; zero-byte
+files still need a simple PUT, because an upload session cannot carry an empty
+body.
 
 ### Simple Upload Cannot Set Metadata
 
@@ -167,9 +174,28 @@ When a file is renamed and a new file is created with the old name, the delta re
 
 The same item can appear multiple times in a single delta response page or across pages. The normalization pipeline deduplicates by keeping only the last occurrence of each item ID.
 
-### URL-Encoded Item Names
+### URL-Encoded Item Names (Disproved On Personal)
 
-Some responses return item names with URL encoding (e.g., `%20` for spaces, `%E6%97%A5%E6%9C%AC%E8%AA%9E.txt` for `日本語.txt`). This is inconsistent — most responses return plain UTF-8. The normalization pipeline decodes all item names unconditionally.
+Original claim (initial docs commit `df615b06`, 2026-02-22, with no endpoint or
+response evidence recorded): some responses return item names with URL
+encoding (e.g., `%20` for spaces, `%E6%97%A5%E6%9C%AC%E8%AA%9E.txt` for
+`日本語.txt`), so the normalization pipeline decodes all item names
+unconditionally.
+
+**Live evidence contradicts it.** A probe on a OneDrive Personal account on
+2026-10-25 created `a%20b.txt`, `test%46.txt`, `x%2Fy.txt`, `plus+sign.txt` and
+`pct%.txt`. The create response, `GET` by ID, `/children` and `/delta` all
+returned the literal name. Decoding them is therefore wrong: it turns a user's
+`a%20b.txt` into `a b.txt` (which sync then sees as a rename), can fold two
+distinct names onto one, and makes `x%2Fy.txt` look like a subfolder.
+
+Status: item names must be treated as opaque. The unconditional decode in
+`internal/graph/normalize.go` is still present at the time of writing and is
+being removed as a separate code fix; until then this entry documents a known
+defect, not a policy. If an encoded-name response is ever observed (for
+example on Business), it must be recorded with the endpoint and a fixture and
+decoded only for that response shape. `parentReference.path` is genuinely URL
+form and is still decoded (see "URL-Encoded Paths" below).
 
 ### OneNote Package Items
 
@@ -402,7 +428,8 @@ e2e-full`:
 
 - `put /e2e-sync-ee-1775448127403708000/conflict-file.txt` completed after the
   remote edit step of the historical nightly E2E
-  `TestE2E_Sync_EditEditConflict_ResolveKeepRemote`
+  `TestE2E_Sync_EditEditConflict_ResolveKeepRemote` (since removed; see
+  [live-incidents.md](live-incidents.md#historical-test-names))
 - the immediate follow-on `stat /e2e-sync-ee-1775448127403708000/conflict-file.txt`
   kept returning HTTP 404 `itemNotFound` with request ID
   `0d76a7d9-c2b4-4eec-acd2-de29e5aec5c7` until the test's 30s poll window
@@ -483,7 +510,8 @@ Observed evidence on April 5, 2026 during `go test -tags='e2e e2e_full' ./e2e
 - Graph request ID for the failed delete: `335ea56d-e3a9-4d2f-8b4c-742da9088eec`
 
 Observed extension on April 7, 2026 during the historical isolated repro for
-`TestE2E_Sync_DeleteSafetyThreshold`:
+`TestE2E_Sync_DeleteSafetyThreshold` (since removed with the delete-safety
+threshold; see [live-incidents.md](live-incidents.md#historical-test-names)):
 
 - repeated sibling deletes in `/e2e-sync-bigdel-1775633571947871000` reached a
   state where `rm /e2e-sync-bigdel-1775633571947871000/file-10.txt` failed
@@ -716,9 +744,15 @@ limits are drive-local. The service may still enforce broader quotas. The
 client simply avoids proactively suppressing unrelated work when the response
 does not identify a broader bucket with enough confidence.
 
-`RateLimit-Remaining` and `RateLimit-Limit` headers exist but only cover
-per-app 1-minute resource units. They are not reliable enough for proactive
-throttling decisions across file operations.
+Do not rely on `RateLimit-*` headers. Microsoft's current SharePoint Online
+throttling guidance states that SharePoint "does not return or support IETF
+RateLimit headers" and that clients should honor `Retry-After` instead
+([how to avoid getting throttled](https://learn.microsoft.com/en-us/sharepoint/dev/general-development/how-to-avoid-getting-throttled-or-blocked-in-sharepoint-online),
+checked 2026-10-25). An earlier version of this entry said the headers exist
+but only cover per-app 1-minute resource units; that is superseded. The client
+reads no `RateLimit-*` header: `Retry-After` is the only throttling header it
+honours (`internal/retry/transport.go` `parseRetryAfterHeader`,
+`internal/graph/client_preauth.go` `parseRetryAfter`).
 
 ## Shared Folder Issues
 
@@ -1017,6 +1051,35 @@ The API can return `0001-01-01T00:00:00Z` or far-future dates. `lastModifiedDate
 
 The client treats these as unknown metadata, not as clock values to repair locally. The graph boundary leaves invalid or absent timestamps as zero `time.Time`, sync observation/store persist that as unknown/NULL state, and CLI JSON/text output renders the unknown state explicitly instead of inventing a replacement timestamp.
 
+### Accepted Timestamp Range
+
+Live probe, OneDrive Personal, 2026-10-25: the earliest
+`fileSystemInfo.lastModifiedDateTime` accepted is `1900-01-01T00:00:00Z`.
+`1899-12-31T23:59:59Z` and earlier are refused with a misleading
+**404 itemNotFound**, even though the item exists. `9999-12-31` is accepted.
+`0001-01-01T00:00:00Z` is **silently replaced by the current time**.
+
+Consequences: a local file with a pre-1900 mtime cannot keep that mtime on
+OneDrive, and a 404 on an mtime PATCH carrying such a date is a range error,
+not evidence that the item is gone. The client does not yet clamp or classify
+this; that is tracked as transfer hardening work.
+
+### A Rename Resets The Remote Modification Time
+
+Live probe, OneDrive Personal, 2026-10-25: renaming an item resets both the
+top-level `lastModifiedDateTime` and `fileSystemInfo.lastModifiedDateTime` to
+the time of the rename; `createdDateTime` is unchanged, and a later move does
+not change the mtime again. A PATCH that carries `fileSystemInfo` together
+with `name` (or with `parentReference`) keeps the mtime it sends. Renaming a
+parent folder leaves its children's mtimes alone (their eTag changes, their
+cTag does not). Renames made on the web therefore look like metadata-only
+changes with an equal hash.
+
+At the time of writing the client's remote renames do not send
+`fileSystemInfo`, so every rename it performs moves the remote mtime away from
+the local one; the fix (send the baseline mtime in the same PATCH) is in
+progress.
+
 ### URL-Encoded Paths
 
 `parentReference.path` (when present) contains URL-encoded characters (`%20` for spaces). The client decodes it at the Graph boundary and stores the root-relative result on `graph.Item.ParentPath`. A valid root parent path normalizes to the empty string, so `graph.Item.ParentPathKnown` records whether Graph actually supplied a valid path. Malformed encodings or missing `/root:` markers are ignored rather than propagated as bogus paths.
@@ -1027,11 +1090,43 @@ The client treats these as unknown metadata, not as clock values to repair local
 
 Two files differing only in case cannot coexist in the same OneDrive folder. The API's path-based queries perform case-insensitive matching but can return items from incorrect paths (observed with git repository files where `v1.0.0` and `v2.0.0` produce false matches). `GetItemByPath` mitigates this by post-validating the returned item against the requested path: exact reconstructed path when `parentReference.path` is present, otherwise leaf-name match only. The leaf-only path is intentionally treated as a best-effort fallback, not as exact identity.
 
+### Names Are Compared Without Supplementary-Plane Characters
+
+Live probe, OneDrive Personal, 2026-10-25: when OneDrive compares names in a
+folder it **ignores every code point outside the Basic Multilingual Plane**
+(above U+FFFF): `😀.txt`, `😀😀.txt` and `😁.txt` are the same name, `a😀.txt`
+equals `a.txt`, CJK Extension B `𠀀.txt` equals `𠀁.txt`, and `👨‍👩.txt` equals
+`👨.txt`. BMP symbols (`☃`/`☄`), zero-width space and soft hyphen are compared
+normally, and stored names keep the astral characters.
+
+So two local files that differ only in emoji (or Extension B ideographs) map
+to one OneDrive item, and uploading the second replaces the first. A
+namespace key must drop code points above U+FFFF before case folding and NFC
+normalization. The client's collision detection does not do this yet; it is
+tracked with the other naming fixes (see `onedrive-sync-behavior.md`
+"Case-Insensitive Namespace").
+
+Other fold results from the same probes: `ǅ`/`ǆ` and `ﬁle`/`FILE` collide,
+while Kelvin `K` (U+212A) vs `K`, U+732A vs U+FA16, and `µ` (U+00B5) vs `Μ`
+(U+039C) do not, so plain Unicode full case folding over-collides on those
+compatibility characters.
+
+### Name And Path Length
+
+OneDrive's rule is "The URL path for all files and folders must be 400
+characters or less (and no more than 400 characters for any single file or
+folder)". Live probe, Personal, 2026-10-25: created by JSON body, a
+300-character name succeeds and a 400-character name fails; emoji names up to
+260 UTF-16 units succeed. Path-routed requests such as
+`PUT items/{parent}:/{name}:/content` fail earlier, with `maxUrlLength`, once
+the name reaches roughly 292 characters: that limit belongs to the URL, not to
+OneDrive's namespace. See also R-2.11.7 for the observed full-path limit.
+
 ## Normalization Pipeline
 
 All delta responses pass through a 5-stage normalization pipeline (`internal/graph/normalize.go`) before the sync engine processes them:
 
-1. Decode URL-encoded names
+1. Decode URL-encoded names (wrong on Personal and being removed; see "URL-Encoded Item Names (Disproved On Personal)")
 2. Preserve package items for provider-truth callers; sync filters them later
 3. Clear deleted item hashes
 4. Deduplicate (keep last occurrence per item ID)
@@ -1041,9 +1136,15 @@ All delta responses pass through a 5-stage normalization pipeline (`internal/gra
 
 The `/drives/{id}/special/recyclebin/children` endpoint only works on Business/SharePoint drives. Personal OneDrive accounts return **HTTP 400** (`"The special folder identifier isn't valid"`) because the `special` folder collection does not include `recyclebin` on Personal accounts.
 
-Similarly, `permanentDelete` (used by `recycle-bin empty`) returns **HTTP 405** on Personal accounts — the code already handles this by falling back to regular `DELETE` (`recycle_bin.go`).
+`permanentDelete` (used by `rm --permanent` and `recycle-bin empty`) was
+previously documented here as returning **HTTP 405** on Personal accounts. A
+live probe on a OneDrive Personal account on 2026-10-25 got **204 and the item
+was permanently deleted**, so that claim is stale. `recycle-bin empty` still
+falls back to a regular `DELETE` if a drive answers 405
+(`internal/cli/recycle_bin_flow.go`), which is harmless where it is never
+taken.
 
-**Impact**: `recycle-bin list` and `recycle-bin restore` are Business-only. E2E tests skip on Personal accounts.
+**Impact**: `recycle-bin list`, `recycle-bin restore` and `recycle-bin empty` are Business-only, because all three start from the recycle-bin listing. `rm --permanent` works on every account type. E2E tests skip on Personal accounts.
 
 ### Backend Read-Only Windows Masquerade As accessDenied
 

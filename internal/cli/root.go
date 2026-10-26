@@ -499,7 +499,7 @@ func newRootCmdWithWriters(outputWriter, statusWriter io.Writer) *cobra.Command 
 	cmd := &cobra.Command{
 		Use:           "onedrive-go",
 		Short:         "OneDrive CLI client",
-		Long:          "A fast, safe OneDrive CLI and sync client for Linux and macOS.",
+		Long:          "A OneDrive CLI and sync client for Linux and macOS.",
 		Version:       version,
 		SilenceErrors: true,
 		SilenceUsage:  true,
