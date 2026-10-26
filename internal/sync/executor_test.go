@@ -53,7 +53,7 @@ type executorMockUploader struct {
 	// to model a server that stored something other than what was sent.
 	rawResponse    bool
 	uploadFn       func(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
-	uploadToItemFn func(ctx context.Context, driveID driveid.ID, itemID string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
+	uploadToItemFn func(ctx context.Context, driveID driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
 }
 
 func (m *executorMockUploader) Upload(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
@@ -67,9 +67,9 @@ func (m *executorMockUploader) Upload(ctx context.Context, driveID driveid.ID, p
 	return nil, fmt.Errorf("Upload not mocked")
 }
 
-func (m *executorMockUploader) UploadToItem(ctx context.Context, driveID driveid.ID, itemID string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
+func (m *executorMockUploader) UploadToItem(ctx context.Context, driveID driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
 	if m.uploadToItemFn != nil {
-		return faithfulUploadResult(content, size)(m.uploadToItemFn(ctx, driveID, itemID, content, size, mtime, progress))
+		return faithfulUploadResult(content, size)(m.uploadToItemFn(ctx, driveID, itemID, ifMatch, content, size, mtime, progress))
 	}
 	if m.uploadFn != nil {
 		return faithfulUploadResult(content, size)(m.uploadFn(ctx, driveID, "", "", content, size, mtime, progress))
@@ -1659,7 +1659,7 @@ func TestExecutor_Upload_KnownItemUsesItemOverwrite(t *testing.T) {
 			require.FailNow(t, "parent-path upload should not be used when item ID is known")
 			return nil, fmt.Errorf("unexpected Upload call")
 		},
-		uploadToItemFn: func(_ context.Context, _ driveid.ID, itemID string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+		uploadToItemFn: func(_ context.Context, _ driveid.ID, itemID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			assert.Equal(t, "known-item-id", itemID)
 
 			return &graph.Item{
@@ -2562,7 +2562,7 @@ func TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal(t *testing.T) {
 				ETag: "etag-new",
 			}, nil
 		},
-		uploadToItemFn: func(_ context.Context, _ driveid.ID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+		uploadToItemFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			uploadToItemCalled = true
 			return nil, fmt.Errorf("unexpected UploadToItem call")
 		},

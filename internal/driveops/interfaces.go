@@ -9,6 +9,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
+// The Graph client must keep satisfying the upload seams: they are
+// type-asserted at runtime, so a signature drift would otherwise silently
+// fall back to another route instead of failing to compile.
+var (
+	_ Uploader            = (*graph.Client)(nil)
+	_ ItemUploader        = (*graph.Client)(nil)
+	_ SessionUploader     = (*graph.Client)(nil)
+	_ ItemSessionUploader = (*graph.Client)(nil)
+)
+
 // Downloader streams a remote file by item ID.
 type Downloader interface {
 	Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
@@ -23,10 +33,11 @@ type Uploader interface {
 	) (*graph.Item, error)
 }
 
-// ItemUploader overwrites an existing item by item ID.
+// ItemUploader overwrites an existing item by item ID. A non-empty ifMatch
+// makes the overwrite conditional on that eTag (412 otherwise).
 type ItemUploader interface {
 	UploadToItem(
-		ctx context.Context, driveID driveid.ID, itemID string,
+		ctx context.Context, driveID driveid.ID, itemID, ifMatch string,
 		content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
 	) (*graph.Item, error)
 }
@@ -41,31 +52,17 @@ type SessionUploader interface {
 		ctx context.Context, driveID driveid.ID, parentID, name string,
 		size int64, mtime time.Time,
 	) (*graph.UploadSession, error)
-	UploadFromSession(
-		ctx context.Context, session *graph.UploadSession,
-		content io.ReaderAt, totalSize int64, progress graph.ProgressFunc,
-	) (*graph.Item, error)
-	ResumeUpload(
-		ctx context.Context, session *graph.UploadSession,
-		content io.ReaderAt, totalSize int64, progress graph.ProgressFunc,
-	) (*graph.Item, error)
+	sessionTransport
 }
 
 // ItemSessionUploader provides session-based overwrite methods for existing
 // items identified by item ID.
 type ItemSessionUploader interface {
 	CreateUploadSessionForItem(
-		ctx context.Context, driveID driveid.ID, itemID string,
+		ctx context.Context, driveID driveid.ID, itemID, ifMatch string,
 		size int64, mtime time.Time,
 	) (*graph.UploadSession, error)
-	UploadFromSession(
-		ctx context.Context, session *graph.UploadSession,
-		content io.ReaderAt, totalSize int64, progress graph.ProgressFunc,
-	) (*graph.Item, error)
-	ResumeUpload(
-		ctx context.Context, session *graph.UploadSession,
-		content io.ReaderAt, totalSize int64, progress graph.ProgressFunc,
-	) (*graph.Item, error)
+	sessionTransport
 }
 
 // RangeDownloader downloads a file starting from a byte offset, bound to the

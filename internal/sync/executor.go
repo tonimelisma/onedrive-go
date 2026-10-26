@@ -280,6 +280,35 @@ func (e *executor) resolvedParentIDForOutcome(action *Action, item *graph.Item) 
 	return ""
 }
 
+// adoptExistingRemoteFolder handles a 409 on a folder create. A folder with
+// exactly this name already being there is the outcome the create wanted (a
+// lost response to our own earlier create, or another device creating the
+// same folder): adopt it, as observing it would have. Anything else under the
+// name, a file or a differently spelled folder OneDrive treats as the same
+// name, is a stale precondition for the planner to resolve; the 409 used to
+// be retried as is, forever.
+func (e *executor) adoptExistingRemoteFolder(
+	ctx context.Context, driveID driveid.ID, parentID, name string, conflictErr error,
+) (*graph.Item, error) {
+	children, err := e.items.ListChildren(ctx, driveID, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("listing parent after folder create conflict: %w", errors.Join(conflictErr, err))
+	}
+
+	for i := range children {
+		if children[i].IsFolder && children[i].ID != "" && nfcNormalize(children[i].Name) == nfcNormalize(name) {
+			e.logger.Debug("adopted existing remote folder after create conflict",
+				slog.String("name", name),
+				slog.String("item_id", children[i].ID),
+			)
+
+			return &children[i], nil
+		}
+	}
+
+	return nil, stalePreconditionError("folder create %s: OneDrive already has another item with this name", name)
+}
+
 // createRemoteFolder creates a folder on OneDrive. The DAG guarantees parent
 // folder creates complete before children, so ResolveParentID finds the parent
 // in the baseline (committed by CommitMutation before depGraph.Complete).
@@ -307,6 +336,9 @@ func (e *executor) createRemoteFolder(ctx context.Context, action *Action) actio
 	name := filepath.Base(action.Path)
 
 	item, err := e.items.CreateFolder(ctx, driveID, parentID, name)
+	if errors.Is(err, graph.ErrConflict) {
+		item, err = e.adoptExistingRemoteFolder(ctx, driveID, parentID, name, err)
+	}
 	if err != nil {
 		return e.failedOutcomeWithFailure(
 			action,

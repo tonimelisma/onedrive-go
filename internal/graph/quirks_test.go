@@ -263,8 +263,8 @@ func TestSimpleUpload_OctetStreamContentType(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	content := bytes.NewReader([]byte("hello"))
-	item, err := client.SimpleUpload(
-		t.Context(), driveid.New("drive1"), "parent1", "test.txt", content, 5,
+	item, err := client.SimpleUploadToItem(
+		t.Context(), driveid.New("drive1"), "item-1", "", content, 5,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "item-1", item.ID)
@@ -506,9 +506,8 @@ func TestUpload_SessionCanceledOnChunkError(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 
-	// Use chunkedUploadEncapsulated directly to test session lifecycle.
-	content := bytes.NewReader(make([]byte, 5*1024*1024)) // 5 MiB to force chunked.
-	_, err := client.chunkedUploadEncapsulated(
+	content := bytes.NewReader(make([]byte, 5*1024*1024))
+	_, err := client.Upload(
 		t.Context(),
 		driveid.New("drive1"), "parent1", "big.txt",
 		content, int64(content.Len()), time.Time{}, nil,
@@ -519,14 +518,18 @@ func TestUpload_SessionCanceledOnChunkError(t *testing.T) {
 		"upload session should be canceled on error")
 }
 
-// TestUpload_SimpleUploadFollowedByMtimePatch validates that files ≤4 MiB
-// use simple upload and then PATCH to set mtime.
-func TestUpload_ZeroByteSimpleUploadFollowedByMtimePatch(t *testing.T) {
+// TestUpload_ZeroByteCreateFollowedByMtimePatch validates that a zero-byte
+// file is created by body and then PATCHed to set its mtime.
+func TestUpload_ZeroByteCreateFollowedByMtimePatch(t *testing.T) {
 	var patchCalled atomic.Int32
 
 	mtime := time.Date(2025, 6, 15, 10, 30, 0, 0, time.UTC)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCreateFile(t, w, r, "new-item") {
+			return
+		}
+
 		switch {
 		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "content"):
 			// Simple upload.
@@ -562,7 +565,7 @@ func TestUpload_ZeroByteSimpleUploadFollowedByMtimePatch(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	content := bytes.NewReader(nil) // only a zero-byte file still uses the simple PUT
+	content := bytes.NewReader(nil)
 
 	item, err := client.Upload(
 		t.Context(),
@@ -572,15 +575,19 @@ func TestUpload_ZeroByteSimpleUploadFollowedByMtimePatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "new-item", item.ID)
 	assert.Equal(t, int32(1), patchCalled.Load(),
-		"mtime PATCH should be called after simple upload")
+		"mtime PATCH should follow the create")
 }
 
-// TestUpload_ZeroByteSimpleUploadNoMtime validates that when mtime is zero,
-// no PATCH is sent after simple upload.
-func TestUpload_ZeroByteSimpleUploadNoMtime(t *testing.T) {
+// TestUpload_ZeroByteCreateNoMtime validates that when mtime is zero, no
+// PATCH follows the create.
+func TestUpload_ZeroByteCreateNoMtime(t *testing.T) {
 	var patchCalled atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCreateFile(t, w, r, "new-item") {
+			return
+		}
+
 		if r.Method == http.MethodPatch {
 			patchCalled.Add(1)
 		}
@@ -596,7 +603,7 @@ func TestUpload_ZeroByteSimpleUploadNoMtime(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	content := bytes.NewReader(nil) // only a zero-byte file still uses the simple PUT
+	content := bytes.NewReader(nil)
 
 	_, err := client.Upload(
 		t.Context(),

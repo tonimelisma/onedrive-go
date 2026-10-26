@@ -10,6 +10,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -144,7 +145,8 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 	// Always validate the baseline eTag before overwriting a known remote item.
 	// Planning is snapshot-based, so execution must defend against remote drift
 	// regardless of whether the current runtime is one-shot or watch.
-	if freshnessErr := e.validateRemoteUploadPrecondition(ctx, driveID, action); freshnessErr != nil {
+	liveETag, freshnessErr := e.validateRemoteUploadPrecondition(ctx, driveID, action)
+	if freshnessErr != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionUpload,
@@ -180,7 +182,13 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 	)
 
 	if shouldOverwriteKnownRemoteItem(action) {
-		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, action.ItemID, localPath, e.uploadOpts(action))
+		// Conditional on the eTag the preflight just read: a remote edit made
+		// while a long upload runs answers 412 instead of being replaced
+		// (D-022, L-02). Not the planned eTag: a planned remote move bumps it
+		// before this content upload.
+		opts := e.uploadOpts(action)
+		opts.IfMatch = liveETag
+		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, action.ItemID, localPath, opts)
 		err = uploadTransferError(err)
 		if err != nil {
 			return e.failedOutcomeWithFailure(
@@ -307,8 +315,19 @@ func downloadTransferFailureCapability(err error) permissionCapability {
 // stale" into sync's stale-precondition error. An invalidated upload session
 // means another writer changed the item mid-upload (L-02): the engine must
 // re-observe it, and may raise a conflict, rather than upload again.
+// uploadTransferError turns the upload answers that mean "remote truth moved
+// on" into a stale precondition, so the engine replans from fresh truth
+// instead of retrying the same request:
+//   - an invalidated session (L-02);
+//   - 412 on a conditional overwrite: the item changed after the preflight
+//     (D-022);
+//   - 409 on a create: OneDrive already holds the name, or one it treats as
+//     the same, and a create never replaces (R-5.6.14). Retried as is, it
+//     failed with "graph: conflict" forever.
 func uploadTransferError(err error) error {
-	if errors.Is(err, driveops.ErrUploadSessionInvalidated) {
+	if errors.Is(err, driveops.ErrUploadSessionInvalidated) ||
+		errors.Is(err, graph.ErrPreconditionFailed) ||
+		errors.Is(err, graph.ErrConflict) {
 		return fmt.Errorf("%w: %w", errActionPreconditionChanged, err)
 	}
 
@@ -385,11 +404,14 @@ func (e *executor) uploadOpts(action *Action) driveops.UploadOpts {
 	}
 }
 
-func (e *executor) validateRemoteUploadPrecondition(ctx context.Context, driveID driveid.ID, action *Action) error {
+// validateRemoteUploadPrecondition checks an overwrite against live remote
+// truth and returns the eTag it read, which the overwrite then sends as
+// If-Match. A create has nothing to check.
+func (e *executor) validateRemoteUploadPrecondition(ctx context.Context, driveID driveid.ID, action *Action) (string, error) {
 	if !shouldOverwriteKnownRemoteItem(action) {
-		return nil
+		return "", nil
 	}
-	return e.validateRemoteSourcePrecondition(ctx, driveID, action, "upload overwrite")
+	return e.remoteSourcePreconditionETag(ctx, driveID, action, "upload overwrite")
 }
 
 func shouldOverwriteKnownRemoteItem(action *Action) bool {

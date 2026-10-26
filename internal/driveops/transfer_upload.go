@@ -24,7 +24,14 @@ type UploadOpts struct {
 	// PlannedRemoteETag is the eTag the overwritten item had when the
 	// upload was planned. An uncertain upload adopts a hashless or enriched
 	// item only when its eTag moved on from this one.
-	PlannedRemoteETag        string
+	PlannedRemoteETag string
+	// IfMatch, when set, makes an overwrite by item ID conditional on this
+	// eTag: Graph answers 412 (graph.ErrPreconditionFailed) if the item
+	// changed after the caller's preflight read it, so a remote edit made
+	// during a long upload is not silently replaced (D-022, L-02). Sync
+	// passes the eTag its live preflight saw, not PlannedRemoteETag: a
+	// planned remote move bumps the eTag before the content upload.
+	IfMatch                  string
 	HashMismatchError        func(localPath, expectedHash, actualHash string) error
 	ValidateSourceBeforeRead func() error
 }
@@ -353,6 +360,7 @@ func (tm *TransferManager) UploadFileToItem(
 		size,
 		mtime,
 		opts.Progress,
+		opts.IfMatch,
 		sent,
 	)
 	item, err = tm.settleUploadedItem(ctx,
@@ -387,6 +395,7 @@ func (tm *TransferManager) uploadExistingItem(
 	size int64,
 	mtime time.Time,
 	progress graph.ProgressFunc,
+	ifMatch string,
 	sent uploadedContent,
 ) (*graph.Item, error) {
 	sessionUploader, hasSessionUploader := tm.uploads.(ItemSessionUploader)
@@ -398,7 +407,7 @@ func (tm *TransferManager) uploadExistingItem(
 			key:     existingItemSessionKey(localPath, itemID),
 			content: content, localPath: localPath, localHash: localHash, size: size, progress: progress,
 			create: func() (*graph.UploadSession, error) {
-				return sessionUploader.CreateUploadSessionForItem(ctx, driveID, itemID, size, mtime)
+				return sessionUploader.CreateUploadSessionForItem(ctx, driveID, itemID, ifMatch, size, mtime)
 			},
 			sessions: sessionUploader,
 			sent:     sent,
@@ -411,7 +420,7 @@ func (tm *TransferManager) uploadExistingItem(
 		return nil, fmt.Errorf("uploading %s: uploader does not support item-ID overwrite", localPath)
 	}
 
-	item, err := itemUploader.UploadToItem(ctx, driveID, itemID, content, size, mtime, progress)
+	item, err := itemUploader.UploadToItem(ctx, driveID, itemID, ifMatch, content, size, mtime, progress)
 
 	return tm.uploadedItemOrError(localPath, item, err)
 }

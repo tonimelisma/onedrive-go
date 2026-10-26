@@ -1,6 +1,6 @@
 # Graph Client
 
-GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/response_body.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/transfer_watchdog.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
+GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/item_create.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/response_body.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/transfer_watchdog.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
 
 Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.6.2 [verified], R-1.7 [verified], R-1.8 [verified], R-1.2.5 [verified], R-1.3.5 [verified], R-3.6.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [verified], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [verified], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.8.17 [verified]
 
@@ -126,7 +126,7 @@ All API quirks handled at the graph boundary — downstream code never sees them
 - Exact transient 403 retry on `GET /me/drives` when the Graph code chain contains `accessDenied`, using the named drive-discovery policy (5 total attempts, 1s base, 2x multiplier, ±25% jitter)
 - Exact transient 404 retry on `GET /drives/{driveID}/items/root/children` when the Graph code chain contains `itemNotFound`
 - Exact transient 404 retry on `GET /drives/{driveID}/items/{itemID}` when `Download()` or `DownloadRange()` are fetching pre-authenticated download metadata and the Graph code chain contains `itemNotFound`
-- Exact transient 404 retry on `POST /drives/{driveID}/items/{parentID}:/{name}:/createUploadSession` when a freshly created parent is already visible by path but upload-session creation still reports `itemNotFound`
+- Exact transient 404 retry on the file create `POST /drives/{driveID}/items/{parentID}/children` when a freshly created parent is already visible by path but the create still reports `itemNotFound`
 - Exact transient 404 retry on `POST /drives/{driveID}/items/{itemID}/copy` when Graph says it failed to verify the destination location even though the destination folder is already path-visible
 
 The graph boundary intentionally stops at those exact request/response quirks.
@@ -196,7 +196,7 @@ The Graph client does not own websocket runtime state. It performs one synchrono
 
 ## Item Operations (`items.go`)
 
-GetItem, ListChildren, CreateFolder, MoveItem, CopyItem, DeleteItem. All operations use `graph.Item` — the clean type after normalization. `Item.ParentPath` carries the decoded root-relative `parentReference.path` when Graph provides it and `Item.ParentPathKnown` records that the path was valid, so callers never need to parse Graph's absolute `"/drives/{id}/root:..."` representation themselves or guess whether an empty parent path means root or unknown. `MoveItemIfMatch` and `DeleteItemIfMatch` are the conditional mutation variants used by sync execution after live preflight; they add `If-Match` when the caller supplies an eTag and map HTTP 412 to `ErrPreconditionFailed`.
+GetItem, ListChildren, CreateFolder, CreateFile, MoveItem, CopyItem, DeleteItem. Every check of whether a returned name is the one asked for (`GetItemByPath` verification, created-item read-backs) uses `internal/namekey`, OneDrive's own name equivalence, not `strings.EqualFold` (R-2.12.3, `TestGetItemByPath_PathValidationUsesNamespaceKey`). All operations use `graph.Item` — the clean type after normalization. `Item.ParentPath` carries the decoded root-relative `parentReference.path` when Graph provides it and `Item.ParentPathKnown` records that the path was valid, so callers never need to parse Graph's absolute `"/drives/{id}/root:..."` representation themselves or guess whether an empty parent path means root or unknown. `MoveItemIfMatch` and `DeleteItemIfMatch` are the conditional mutation variants used by sync execution after live preflight; they add `If-Match` when the caller supplies an eTag and map HTTP 412 to `ErrPreconditionFailed`.
 
 `CreateFolder` also owns one narrow ambiguous-success recovery path. If Graph
 returns a success status for `POST .../children` but the body is empty, the
@@ -243,7 +243,8 @@ instead of a raw "any write/owner role means writable" heuristic:
 ## Transfers
 
 - `download.go`: streaming download with content URL. A ranged read is bound to a `DownloadVersion` and accepted only as a 206 whose Content-Range starts at the offset and spans the item (`validateContentRange`, `ErrRangeResumeRejected`); for a hashless item, an HTML or JSON answer of another type whose length is not the item's is `ErrUnexpectedDownloadBody` (`checkDownloadBodyType`); hashed items are never gated by type, since the hash decides
-- `upload.go`: upload sessions for every non-empty file (320 KiB-aligned chunks) and the zero-byte simple PUT
+- `item_create.go`: new files. `CreateFile` posts the name in a JSON body with `conflictBehavior=fail`; `Upload` and `CreateUploadSession` then send the content by item ID through a session conditional on the created eTag, and a zero-byte file is the created item alone (R-5.6.14, L-01). No name ever goes into a URL: a path route turned `v1.0` into folder `_api` holding `v2.0` (probe 4)
+- `upload.go`: upload sessions for every non-empty file (320 KiB-aligned chunks) and the zero-byte simple PUT overwrite
 - `shares.go`: raw share-link resolution into underlying shared item identity
 - `upload_transfer.go` / `upload_session.go`: existing-item overwrite helpers
   for shared-file `put` by `(driveID, itemID)`
@@ -251,7 +252,8 @@ instead of a raw "any write/owner role means writable" heuristic:
 Simple-upload PUTs take an `io.ReaderAt` plus the size and go out with an
 exact `Content-Length` and a `GetBody` that opens a fresh `SectionReader`, so
 the interactive clients' `RetryTransport` resends every byte on a retry
-(R-6.8.19, `TestSimpleUpload_RetryAfter503ResendsFullBody`). The PUT used to
+(R-6.8.19, `TestSimpleUpload_RetryAfter503ResendsFullBody`, now exercised on the
+overwrite route, the only simple PUT left). The PUT used to
 go out chunked over a one-shot reader, and a retry after a 503 sent zero bytes
 and replaced the user's file online with an empty one.
 
@@ -291,10 +293,19 @@ check belongs with the move-outcome work.
 
 Every non-empty upload, create or overwrite, goes through an upload session
 whose creation carries `fileSystemInfo`, so content and mtime land in one
-version; only zero-byte files use the simple PUT plus mtime PATCH (D-034,
-live probe 7). Create-by-parent session creation retries the exact fresh-parent
-`404 itemNotFound` with `UploadSessionCreatePolicy()`; a read-only shared
-folder answers that route with the correct `403`, which is not retried.
+version; zero-byte files are the created item, or a simple PUT overwrite, plus
+an mtime PATCH (D-034, live probe 7). The create by body retries the exact
+fresh-parent `404 itemNotFound` with `UploadSessionCreatePolicy()`; a
+read-only shared folder answers it with the correct `403`, which is not
+retried. A create never replaces: 409 `nameAlreadyExists` is `ErrConflict`
+(`TestUpload_ExistingNameIsNeverReplaced`). When the content step fails
+before its final fragment the created empty item is deleted again with
+`If-Match` on its creation eTag
+(`TestUpload_FailedContentStepRemovesItsEmptyItemConditionally`).
+
+Overwrites by item ID take the caller's preflight eTag as `If-Match` on both
+routes (R-5.6.2, D-022, `TestUploadToItem_OverwriteIsConditionalOnBothRoutes`);
+a 412 is `ErrPreconditionFailed` and is never retried without the condition (`TestCreateUploadSessionForItem_PreconditionFailureIsNeverRetriedUnconditionally`); Business behaviour of If-Match on session creation is unprobed.
 
 For zero-byte simple uploads with non-zero mtime, the follow-on `PATCH /items/{itemID}`
 used to restore `fileSystemInfo.lastModifiedDateTime` can also race item-ID

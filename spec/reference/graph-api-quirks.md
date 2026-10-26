@@ -1035,7 +1035,11 @@ malformed, or non-forward replies as hard errors instead of guessing.
 
 ### eTag Changes During Upload Session
 
-Creating an upload session with `If-Match: {eTag}` can cause the eTag to change during session creation, leading to 412 Precondition Failed followed by 416 on subsequent fragments. Do not use `If-Match` on upload session creation.
+An older report says creating an upload session with `If-Match: {eTag}` can change the eTag during session creation and answer 412. Live probe L-02 (Personal, 2026-10-25) did not reproduce it: `If-Match` was honoured on `PUT /items/{id}/content`, `createUploadSession`, `PATCH` and `DELETE`, answering 412 only for a stale eTag, and a session opened under a fresh `If-Match` whose item another writer then changed answered its next fragment with 404 "The upload session was not found". The client therefore sends `If-Match` on overwrites (R-5.6.2) and treats every 412 as a real change. Business behaviour is unprobed; if the reported quirk exists there, such an overwrite replans instead of retrying unconditionally.
+
+### Name Routing In Path-Addressed URLs
+
+Path routes (`items/{parent}:/{name}:/...`) hand the name to Graph's router. Live probe 4: uploading `v1.0` through `items/{parent}:/v1.0:/content` created a folder `_api` holding a file `v2.0`; `root`, `children`, `content`, `delta` and others were harmless. Path routes also fail with `maxUrlLength` for names of about 292 characters or more, although OneDrive accepts single names up to 400 characters in a JSON body (L-05). New files are therefore created with `POST /items/{parent}/children` carrying the name in the body and `conflictBehavior=fail`, and their content is sent by item ID (L-01: one version in total; 409 `nameAlreadyExists` for an existing name or any spelling OneDrive treats as the same).
 
 ### Upload Session Leak
 
