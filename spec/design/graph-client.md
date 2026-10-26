@@ -369,6 +369,16 @@ relabels that 404 as `ErrTimestampOutOfRange`, keeping the status and request
 ID, so no caller reads a live item as deleted
 (`TestUpdateFileSystemInfo_Pre1900NotFoundIsRangeError`).
 
+The client never sends such a time: every `fileSystemInfo` it writes
+(upload-session creation and `UpdateFileSystemInfo`) goes through
+`newFileSystemInfo`, which omits the zero time (OneDrive would silently
+replace it with the current time) and clamps earlier times to
+`EarliestFileSystemTime`, warning once per client
+(`TestFileSystemInfo_ClampsPre1900AndNeverSendsZero`). The relabelling stays
+as a defense. Items take their `ModifiedAt` from
+`fileSystemInfo.lastModifiedDateTime`, falling back to the top-level field,
+which renames and moves bump (D-046, `TestToItem_PrefersFileSystemInfoModifiedTime`).
+
 **Malware** — the `malware` facet decodes to `Item.MalwareDetected`.
 `Download`/`DownloadRange` refuse a flagged item with `ErrMalwareDetected`
 before requesting content, and a content-host 403 carrying `malwareDetected`

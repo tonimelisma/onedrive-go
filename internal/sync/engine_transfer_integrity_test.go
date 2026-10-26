@@ -1,7 +1,10 @@
 package sync
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -11,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // Validates: R-5.8.1, R-5.8.2
@@ -65,4 +69,35 @@ func TestUploadTransferError_InvalidatedSessionIsAStalePlan(t *testing.T) {
 	// never upload over the change.
 	require.ErrorIs(t, err, errActionPreconditionChanged)
 	assert.Equal(t, resultSuperseded, classifyResult(&actionCompletion{Err: err}).Class)
+}
+
+// Validates: R-6.7.34
+func TestExecutor_Download_RecordsObservedLocalMtime(t *testing.T) {
+	t.Parallel()
+
+	dl := &executorMockDownloader{
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write([]byte("data"))
+			return int64(n), err
+		},
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	// No remote mtime to apply: the file keeps the time it was written.
+	o := e.ExecuteDownload(t.Context(), &Action{
+		Type:    ActionDownload,
+		Path:    "observed.txt",
+		ItemID:  "item1",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View:    &pathView{Remote: &remoteState{}},
+	})
+	requireOutcomeSuccess(t, &o)
+
+	// The outcome used to record the intended (here: no) time instead of
+	// what the filesystem holds, so the next scan saw a local change.
+	info, err := os.Stat(filepath.Join(syncRoot, "observed.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, info.ModTime().UnixNano(), o.LocalMtime)
 }

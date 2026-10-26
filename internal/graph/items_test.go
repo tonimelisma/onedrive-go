@@ -2560,14 +2560,10 @@ func TestPathAddressChunks(t *testing.T) {
 
 // Validates: R-2.10.64
 func TestUpdateFileSystemInfo_Pre1900NotFoundIsRangeError(t *testing.T) {
-	srv := newGraphErrorServer(t, http.StatusNotFound, "req-fsi-1899", "itemNotFound", nil)
-	t.Cleanup(srv.Close)
-	client := newTestClient(t, srv.URL)
-
-	_, err := client.UpdateFileSystemInfo(t.Context(), driveid.New("d"), "live-item",
+	// relabelTimestampRangeError stays as a defense for a pre-1900 time that
+	// reaches the wire; the client itself never sends one any more.
+	err := relabelTimestampRangeError(&GraphError{StatusCode: http.StatusNotFound, RequestID: "req-fsi-1899", Err: ErrNotFound},
 		time.Date(1899, 12, 31, 23, 59, 59, 0, time.UTC))
-
-	require.Error(t, err)
 	require.ErrorIs(t, err, ErrTimestampOutOfRange)
 	require.NotErrorIs(t, err, ErrNotFound, "a live item must never read as gone")
 	var graphErr *GraphError
@@ -2576,6 +2572,54 @@ func TestUpdateFileSystemInfo_Pre1900NotFoundIsRangeError(t *testing.T) {
 	assert.Equal(t, "req-fsi-1899", graphErr.RequestID)
 
 	// From 1900 on, a 404 is an ordinary not-found.
-	_, err = client.UpdateFileSystemInfo(t.Context(), driveid.New("d"), "gone-item", EarliestFileSystemTime())
+	srv := newGraphErrorServer(t, http.StatusNotFound, "req-fsi-404", "itemNotFound", nil)
+	t.Cleanup(srv.Close)
+	_, err = newTestClient(t, srv.URL).UpdateFileSystemInfo(t.Context(), driveid.New("d"), "gone-item", EarliestFileSystemTime())
 	require.ErrorIs(t, err, ErrNotFound)
+}
+
+// Validates: R-6.7.34
+func TestFileSystemInfo_ClampsPre1900AndNeverSendsZero(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		assert.NoError(t, err)
+		bodies = append(bodies, string(body))
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponse(t, w, `{"id":"item-1","name":"a","uploadUrl":"https://uploads.contoso.sharepoint.com/x","expirationDateTime":"2030-01-01T00:00:00Z","file":{}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.UpdateFileSystemInfo(t.Context(), driveid.New("d"), "item-1", time.Date(1601, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	_, err = client.CreateUploadSessionForItem(t.Context(), driveid.New("d"), "item-1", 10, time.Date(1850, 6, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	_, err = client.CreateUploadSessionForItem(t.Context(), driveid.New("d"), "item-1", 10, time.Time{})
+	require.NoError(t, err)
+	_, err = client.UpdateFileSystemInfo(t.Context(), driveid.New("d"), "item-1", time.Time{})
+	require.Error(t, err)
+
+	// Live probe L-26: before 1900 OneDrive answers a misleading 404, and
+	// 0001-01-01 is silently replaced by the current time.
+	require.Len(t, bodies, 3)
+	assert.Contains(t, bodies[0], `"lastModifiedDateTime":"1900-01-01T00:00:00Z"`)
+	assert.Contains(t, bodies[1], `"lastModifiedDateTime":"1900-01-01T00:00:00Z"`)
+	assert.NotContains(t, bodies[2], "fileSystemInfo", "the zero time is never sent")
+}
+
+// Validates: R-6.7.34
+func TestToItem_PrefersFileSystemInfoModifiedTime(t *testing.T) {
+	var dir driveItemResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"i","name":"a.txt",
+		"lastModifiedDateTime":"2026-10-25T12:00:00Z",
+		"fileSystemInfo":{"lastModifiedDateTime":"2019-03-04T05:06:07Z"},"file":{}}`), &dir))
+
+	// The top level is the server's time, which a rename bumps.
+	item := dir.toItem(slog.Default())
+	assert.Equal(t, time.Date(2019, 3, 4, 5, 6, 7, 0, time.UTC), item.ModifiedAt.UTC())
+
+	var bare driveItemResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"i","lastModifiedDateTime":"2026-10-25T12:00:00Z","file":{}}`), &bare))
+	assert.Equal(t, time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC), bare.toItem(slog.Default()).ModifiedAt.UTC())
 }

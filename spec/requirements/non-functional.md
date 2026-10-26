@@ -130,6 +130,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.31: The system shall not panic on externally supplied values, including user-editable configuration and catalog entries, API responses, and filesystem state. A value that cannot be parsed shall be reported as an error or degraded to a documented empty value, never treated as a programmer error. [verified]
 - R-6.7.32: Every paged Graph listing shall follow `@odata.nextLink` to completion, and every page loop shall be bounded so a circular or buggy continuation fails with an error instead of looping indefinitely. [verified]
 - R-6.7.33: A 2xx mutation answer whose body is empty (204), not a driveItem, or an item without `id` shall be resolved by reading the item back by ID, never reported as a failure of the mutation that succeeded nor returned as an item without identity. An upload completion without an item is reported as `ErrUploadCompletedWithoutItem` so the transfer layer looks it up. [verified]
+- R-6.7.34: An item's modification time shall come from `fileSystemInfo.lastModifiedDateTime` when Graph reports it (the top-level `lastModifiedDateTime` is the server's, which renames and moves bump), falling back to the top level. A modification time the client sends shall never be the zero time and shall be clamped to 1900-01-01T00:00:00Z or later (live probe L-26), warning once. A download's recorded local mtime shall be what the filesystem holds afterwards, not the time that was requested. [verified]
 
 ## R-6.8 Network Resilience [verified]
 

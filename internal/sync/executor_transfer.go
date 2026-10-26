@@ -119,6 +119,13 @@ func (e *executor) downloadOutcome(
 			o.RemoteHash = action.View.Remote.Hash
 		}
 	}
+	// The local half records what the filesystem holds after the download,
+	// not the mtime that was asked for: a filesystem with coarse timestamps
+	// (FAT, SMB, some FUSE mounts) stores a rounded time, and recording the
+	// intended one made every later scan see a local change (D-046).
+	if info, statErr := e.syncTree.Stat(action.Path); statErr == nil {
+		o.LocalMtime = info.ModTime().UnixNano()
+	}
 	o.ParentID = e.resolvedParentIDForOutcome(action, nil)
 	e.observeLocalIdentity(&o)
 

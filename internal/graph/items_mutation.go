@@ -233,11 +233,14 @@ func (c *Client) UpdateFileSystemInfo(
 
 	path := fmt.Sprintf("/drives/%s/items/%s", driveID, itemID)
 
-	reqBody := updateFileSystemInfoRequest{
-		FileSystemInfo: &fileSystemInfo{
-			LastModifiedDateTime: mtime.UTC().Format(time.RFC3339),
-		},
+	if mtime.IsZero() {
+		return nil, errors.New("graph: UpdateFileSystemInfo needs a modification time")
 	}
+
+	sent := c.sendableMtime(mtime)
+	info := c.newFileSystemInfo(sent)
+
+	reqBody := updateFileSystemInfoRequest{FileSystemInfo: info}
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -246,7 +249,7 @@ func (c *Client) UpdateFileSystemInfo(
 
 	resp, err := c.do(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return nil, relabelTimestampRangeError(err, mtime)
+		return nil, relabelTimestampRangeError(err, sent)
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
