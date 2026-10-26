@@ -43,8 +43,11 @@ gaps that are being fixed are listed separately in
 ## OneDrive's own rules
 
 - **File size:** at most 250 GB per file.
-- **Path length:** at most 400 characters for the full path, in practice a few
-  dozen fewer. Longer paths are reported in `status`.
+- **Name and path length:** OneDrive allows at most 400 characters for the
+  full path, and for any single name; in practice a few dozen fewer. Longer
+  paths are reported in `status`. Separately, your computer's filesystem
+  usually allows at most 255 bytes per name, so a long OneDrive name may not
+  fit locally (also reported in `status`).
 - **Names:** OneDrive rejects `" * : < > ? / \ |`, names ending in a period,
   names starting or ending with a space, names containing `_vti_`, and
   reserved names such as `CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9` and
@@ -55,7 +58,14 @@ gaps that are being fixed are listed separately in
 - **Letter case:** OneDrive does not distinguish `Report.txt` from
   `report.txt`. Two local names that differ only in case are both held back
   until one is renamed.
-- **Timestamps:** OneDrive stores modification times to the whole second.
+- **Timestamps:** OneDrive stores modification times to the whole second, and
+  only from 1900-01-01 onward. A file dated earlier cannot keep its date on
+  OneDrive; onedrive-go does not yet adjust such dates, so uploading such a
+  file can fail with a misleading "not found" error.
+- **Emoji in names:** when OneDrive compares names it ignores emoji and other
+  characters outside Unicode's Basic Multilingual Plane, so `notes😀.txt` and
+  `notes.txt` are the same name there. Keep such files in different folders
+  (see [safety](safety.md#known-gaps)).
 - **Personal Vault** is never synced.
 
 ## OneDrive behavior you may notice
@@ -63,6 +73,11 @@ gaps that are being fixed are listed separately in
 - **Delayed remote changes.** OneDrive's change feed can lag a direct look at
   a file by seconds to minutes, so a change made on the web may need a second
   sync to arrive. `sync --full` lists everything instead.
+- **A rename resets the modification time on OneDrive.** Renaming a file,
+  on the web or through onedrive-go, sets its OneDrive modification time to
+  the time of the rename; the content is unchanged. onedrive-go does not yet
+  preserve the original time when it renames, so after a rename the file's
+  time on OneDrive differs from the local one.
 - **Watch mode notices remote changes every 5 minutes by default**
   (`poll_interval`). `websocket = true` makes it react sooner.
 - **Extra versions.** Uploading a file and then setting its modification time

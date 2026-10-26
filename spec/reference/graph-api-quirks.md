@@ -1051,6 +1051,35 @@ The API can return `0001-01-01T00:00:00Z` or far-future dates. `lastModifiedDate
 
 The client treats these as unknown metadata, not as clock values to repair locally. The graph boundary leaves invalid or absent timestamps as zero `time.Time`, sync observation/store persist that as unknown/NULL state, and CLI JSON/text output renders the unknown state explicitly instead of inventing a replacement timestamp.
 
+### Accepted Timestamp Range
+
+Live probe, OneDrive Personal, 2026-10-25: the earliest
+`fileSystemInfo.lastModifiedDateTime` accepted is `1900-01-01T00:00:00Z`.
+`1899-12-31T23:59:59Z` and earlier are refused with a misleading
+**404 itemNotFound**, even though the item exists. `9999-12-31` is accepted.
+`0001-01-01T00:00:00Z` is **silently replaced by the current time**.
+
+Consequences: a local file with a pre-1900 mtime cannot keep that mtime on
+OneDrive, and a 404 on an mtime PATCH carrying such a date is a range error,
+not evidence that the item is gone. The client does not yet clamp or classify
+this; that is tracked as transfer hardening work.
+
+### A Rename Resets The Remote Modification Time
+
+Live probe, OneDrive Personal, 2026-10-25: renaming an item resets both the
+top-level `lastModifiedDateTime` and `fileSystemInfo.lastModifiedDateTime` to
+the time of the rename; `createdDateTime` is unchanged, and a later move does
+not change the mtime again. A PATCH that carries `fileSystemInfo` together
+with `name` (or with `parentReference`) keeps the mtime it sends. Renaming a
+parent folder leaves its children's mtimes alone (their eTag changes, their
+cTag does not). Renames made on the web therefore look like metadata-only
+changes with an equal hash.
+
+At the time of writing the client's remote renames do not send
+`fileSystemInfo`, so every rename it performs moves the remote mtime away from
+the local one; the fix (send the baseline mtime in the same PATCH) is in
+progress.
+
 ### URL-Encoded Paths
 
 `parentReference.path` (when present) contains URL-encoded characters (`%20` for spaces). The client decodes it at the Graph boundary and stores the root-relative result on `graph.Item.ParentPath`. A valid root parent path normalizes to the empty string, so `graph.Item.ParentPathKnown` records whether Graph actually supplied a valid path. Malformed encodings or missing `/root:` markers are ignored rather than propagated as bogus paths.
@@ -1060,6 +1089,38 @@ The client treats these as unknown metadata, not as clock values to repair local
 ### OneDrive Is Case-Insensitive
 
 Two files differing only in case cannot coexist in the same OneDrive folder. The API's path-based queries perform case-insensitive matching but can return items from incorrect paths (observed with git repository files where `v1.0.0` and `v2.0.0` produce false matches). `GetItemByPath` mitigates this by post-validating the returned item against the requested path: exact reconstructed path when `parentReference.path` is present, otherwise leaf-name match only. The leaf-only path is intentionally treated as a best-effort fallback, not as exact identity.
+
+### Names Are Compared Without Supplementary-Plane Characters
+
+Live probe, OneDrive Personal, 2026-10-25: when OneDrive compares names in a
+folder it **ignores every code point outside the Basic Multilingual Plane**
+(above U+FFFF): `😀.txt`, `😀😀.txt` and `😁.txt` are the same name, `a😀.txt`
+equals `a.txt`, CJK Extension B `𠀀.txt` equals `𠀁.txt`, and `👨‍👩.txt` equals
+`👨.txt`. BMP symbols (`☃`/`☄`), zero-width space and soft hyphen are compared
+normally, and stored names keep the astral characters.
+
+So two local files that differ only in emoji (or Extension B ideographs) map
+to one OneDrive item, and uploading the second replaces the first. A
+namespace key must drop code points above U+FFFF before case folding and NFC
+normalization. The client's collision detection does not do this yet; it is
+tracked with the other naming fixes (see `onedrive-sync-behavior.md`
+"Case-Insensitive Namespace").
+
+Other fold results from the same probes: `ǅ`/`ǆ` and `ﬁle`/`FILE` collide,
+while Kelvin `K` (U+212A) vs `K`, U+732A vs U+FA16, and `µ` (U+00B5) vs `Μ`
+(U+039C) do not, so plain Unicode full case folding over-collides on those
+compatibility characters.
+
+### Name And Path Length
+
+OneDrive's rule is "The URL path for all files and folders must be 400
+characters or less (and no more than 400 characters for any single file or
+folder)". Live probe, Personal, 2026-10-25: created by JSON body, a
+300-character name succeeds and a 400-character name fails; emoji names up to
+260 UTF-16 units succeed. Path-routed requests such as
+`PUT items/{parent}:/{name}:/content` fail earlier, with `maxUrlLength`, once
+the name reaches roughly 292 characters: that limit belongs to the URL, not to
+OneDrive's namespace. See also R-2.11.7 for the observed full-path limit.
 
 ## Normalization Pipeline
 
