@@ -34,7 +34,7 @@ func TestValidateDrives_ValidDriveFilterConfig(t *testing.T) {
 			IncludedDirs:    []string{"Projects"},
 			IgnoredPaths:    []string{"*.log", "tmp/*"},
 			IgnoreDotfiles:  true,
-			IgnoreJunkFiles: true,
+			IgnoreJunkFiles: new(true),
 			FollowSymlinks:  true,
 		},
 	}

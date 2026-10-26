@@ -720,6 +720,35 @@ One multi-hour Microsoft-side backend incident was observed returning HTTP 400 w
 
 HTTP 507 (Insufficient Storage) wraps `ErrServerError` at the sentinel level. If error classification checks sentinels before status codes, 507 is incorrectly classified as retryable (like other 5xx errors). Status code classification must take priority.
 
+### Quota And Refusal Answers Arrive Under Several Statuses
+
+A full drive is not always 507: OneDrive also answers 403 with
+`quotaLimitReached` and (Business, MS-216) 500 with "Insufficient Space
+Available". A refusal of an unsupported operation is 501 (for example a folder
+create inside some Personal shared folders), 505, or a `notSupported` code.
+Classification therefore checks the code chain and message before the status;
+a 501 counted as a 5xx outage once let a handful of refusals block every drive.
+
+### Tempauth Download URLs Retire On 2027-04-01
+
+Microsoft has announced that tempauth-signed `@microsoft.graph.downloadUrl`
+values stop working on 2027-04-01 (RCL-050). Live probe L-20 (Personal,
+2026-10-25): `GET /items/{id}/content` with the bearer returns 302 to
+`my.microsoftpersonalcontent.com`, and that host serves the file without an
+`Authorization` header. The client already falls back to `/content` when an
+item has no `downloadUrl` or a refetched one is refused again, and never
+sends the bearer to the redirect host. Revisit on 2027-04-01: if every
+`downloadUrl` disappears the fallback becomes the only route, and the extra
+metadata GET before each download could be dropped.
+
+### Pre-1900 Timestamps Return 404
+
+Live probe L-26 (Personal, 2026-10-25): the earliest accepted
+`fileSystemInfo.lastModifiedDateTime` is 1900-01-01T00:00:00Z.
+1899-12-31T23:59:59Z and earlier return `404 itemNotFound` for a live item;
+`0001-01-01` is silently replaced by the current time; `9999-12-31` is
+accepted. The client relabels that 404 as `ErrTimestampOutOfRange`.
+
 ## Throttling Scopes
 
 Official Microsoft docs describe throttling as multi-bucket: a request may be

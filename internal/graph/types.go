@@ -59,6 +59,7 @@ type Item struct {
 	IsRoot            bool // drive root folder (root facet present in API response)
 	IsDeleted         bool
 	IsPackage         bool // OneNote packages — sync should skip these
+	MalwareDetected   bool // malware facet present: OneDrive flagged the content and will not serve it
 	MimeType          string
 	QuickXorHash      string // base64-encoded
 	SHA1Hash          string // hex (Personal accounts only)

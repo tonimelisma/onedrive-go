@@ -227,6 +227,13 @@ func exchangeAndSave(
 
 	tok, err := cfg.Exchange(ctx, code, oauth2.VerifierOption(verifier))
 	if err != nil {
+		var retrieveErr *oauth2.RetrieveError
+		if errors.As(err, &retrieveErr) {
+			if plain := aadOutcomeError(retrieveErr.ErrorCode, retrieveErr.ErrorDescription); plain != nil {
+				logger.Debug("token exchange refused", slog.String("error", err.Error()))
+				return nil, plain
+			}
+		}
 		return nil, fmt.Errorf("graph: token exchange failed: %w", err)
 	}
 
@@ -241,9 +248,7 @@ func exchangeAndSave(
 		slog.Time("expiry", tok.Expiry),
 	)
 
-	src := cfg.TokenSource(ctx, tok)
-
-	return &tokenBridge{src: src, logger: logger}, nil
+	return newTokenBridge(ctx, cfg, tok, logger), nil
 }
 
 // generateState produces a cryptographically random hex string for the OAuth2
@@ -262,6 +267,9 @@ func generateState() (string, error) {
 // ErrLoginDeclined sentinel; the OAuth code and AADSTS description are only
 // useful for diagnosing other failures, so they stay in the text only there.
 func browserAuthorizationError(errParam, desc string) error {
+	if plain := aadOutcomeError(errParam, desc); plain != nil {
+		return plain
+	}
 	if errParam == oauthErrAccessDenied {
 		return ErrLoginDeclined
 	}

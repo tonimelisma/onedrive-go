@@ -31,11 +31,32 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 
 	// Pure-Go SQLite driver (no CGO).
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
+
+// sqlitePrimaryResultMask strips an extended SQLite result code to its
+// primary code (SQLITE_IOERR_WRITE -> SQLITE_IOERR, and so on).
+const sqlitePrimaryResultMask = 0xff
+
+// IsLocalDiskFull reports whether err means the local disk is out of space:
+// a local write that hit ENOSPC/EDQUOT or the min_free_space reserve, or the
+// sync state database failing with SQLITE_FULL. The store is the only
+// boundary that knows SQLite result codes, so it answers for them. A full
+// database cannot record a disk:local scope, so the run stops; this lets the
+// CLI say so in plain words instead of "database or disk is full (13)".
+func IsLocalDiskFull(err error) bool {
+	if driveops.ClassifyLocalError(err) == driveops.LocalErrorNoSpace {
+		return true
+	}
+
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code()&sqlitePrimaryResultMask == sqlite3.SQLITE_FULL
+}
 
 const syncStoreDirPerm = 0o700
 

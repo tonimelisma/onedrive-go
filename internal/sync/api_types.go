@@ -73,4 +73,8 @@ type engineInputs struct {
 	CheckWorkers             int
 	MinFreeSpace             int64
 	PerfCollector            *perf.Collector
+
+	// rootLockFlock replaces syscall.Flock for the sync root lock; nil in
+	// production. Tests inject unsupported-filesystem errnos through it.
+	rootLockFlock func(fd int, how int) error
 }

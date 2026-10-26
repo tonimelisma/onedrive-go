@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -26,6 +28,7 @@ one-way sync. Use --dry-run to preview what would happen without making changes.
 	cmd.Flags().Bool("dry-run", false, "preview sync actions without executing")
 	cmd.Flags().Bool("watch", false, "continuously sync changes (watch mode)")
 	cmd.Flags().Bool("full", false, "run full remote refresh (enumerate all remote items, detect orphans)")
+	cmd.Flags().Bool(allowRootFlag, false, "allow sync to run as root (files it creates will be owned by root)")
 
 	cmd.MarkFlagsMutuallyExclusive("download-only", "upload-only")
 	cmd.MarkFlagsMutuallyExclusive("full", "watch")
@@ -34,13 +37,17 @@ one-way sync. Use --dry-run to preview what would happen without making changes.
 }
 
 func runSync(cmd *cobra.Command, _ []string) error {
+	cc := mustCLIContext(cmd.Context())
+	if err := refuseSyncAsRoot(cmd, cc); err != nil {
+		return err
+	}
+
 	watch, err := cmd.Flags().GetBool("watch")
 	if err != nil {
 		return fmt.Errorf("read --watch flag: %w", err)
 	}
 
 	mode := syncModeFromFlags(cmd)
-	cc := mustCLIContext(cmd.Context())
 	// Signal handling is installed once for every command at the process
 	// entry point, so the command context already cancels on SIGINT/SIGTERM.
 	ctx := cmd.Context()
@@ -108,4 +115,37 @@ func syncModeFromFlags(cmd *cobra.Command) syncengine.SyncMode {
 	}
 
 	return syncengine.SyncBidirectional
+}
+
+const allowRootFlag = "allow-root"
+
+// errSyncAsRoot is the refusal to sync as root without --allow-root (P-9).
+// A root sync writes root-owned files and folders into the user's sync
+// folder, which the user's own later syncs, editors and backups then cannot
+// change or delete; it is almost always an accident (sudo, a system unit
+// without User=), so it is refused unless explicitly asked for.
+var errSyncAsRoot = errors.New("refusing to sync as root: files it creates would be owned by root. " +
+	"Run sync as the user who owns the sync folder, or pass --allow-root if this is intended")
+
+// refuseSyncAsRoot returns a usage error when sync runs with effective UID 0
+// and --allow-root was not given.
+func refuseSyncAsRoot(cmd *cobra.Command, cc *CLIContext) error {
+	euid := os.Geteuid
+	if cc.seams.effectiveUID != nil {
+		euid = cc.seams.effectiveUID
+	}
+	if euid() != 0 {
+		return nil
+	}
+
+	allowRoot, err := cmd.Flags().GetBool(allowRootFlag)
+	if err != nil {
+		return fmt.Errorf("read --%s flag: %w", allowRootFlag, err)
+	}
+	if allowRoot {
+		cc.Logger.Warn("running sync as root because --allow-root was given; files it creates will be owned by root")
+		return nil
+	}
+
+	return &usageError{commandPath: cmd.CommandPath(), err: errSyncAsRoot}
 }

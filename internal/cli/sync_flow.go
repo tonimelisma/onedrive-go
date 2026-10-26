@@ -10,6 +10,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
@@ -175,7 +176,7 @@ func runSyncOnce(
 		return cc.seams.syncRunOnce(ctx, holder, drives, mode, opts, logger, controlSocketPath)
 	}
 
-	runtime := driveops.NewSessionRuntime(holder, "onedrive-go/"+version, logger)
+	runtime := driveops.NewSessionRuntime(holder, graph.UserAgent(version), logger)
 	standaloneSelection := standaloneMountSelectionFromResolvedDrives(drives)
 
 	orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{

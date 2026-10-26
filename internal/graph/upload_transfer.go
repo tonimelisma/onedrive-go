@@ -240,12 +240,15 @@ func (c *Client) doRawUpload(
 			)
 		}
 
-		return nil, buildGraphError(
+		graphErr := buildGraphError(
 			resp.StatusCode,
 			resp.Header.Get("request-id"),
 			parseRetryAfter(resp),
 			errBody,
 		)
+		graphErr.AgsDiagnostic = resp.Header.Get(headerAgsDiagnostic)
+
+		return nil, graphErr
 	}
 
 	return resp, nil

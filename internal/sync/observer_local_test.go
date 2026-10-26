@@ -1080,8 +1080,9 @@ func TestFullScan_ExcludedDirSkipsSubtree(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	// Create a configured junk directory and a file inside it.
-	writeTestFile(t, dir, "~excluded/inner.txt", "hidden")
+	// Create a junk directory and a file inside it. (A "~" folder is not
+	// junk: that rule matches files only.)
+	writeTestFile(t, dir, "__MACOSX/inner.txt", "hidden")
 	writeTestFile(t, dir, "visible.txt", "shown")
 
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
@@ -1089,7 +1090,7 @@ func TestFullScan_ExcludedDirSkipsSubtree(t *testing.T) {
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
-	// Only visible.txt should appear; ~excluded dir and its contents are skipped.
+	// Only visible.txt should appear; __MACOSX and its contents are skipped.
 	require.Len(t, result.Events, 1)
 	assert.Equal(t, "visible.txt", result.Events[0].Path)
 }

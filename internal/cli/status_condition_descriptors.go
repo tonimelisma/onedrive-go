@@ -83,7 +83,7 @@ func statusScopeKindFromScopeKey(scopeKey syncengine.ScopeKey) string {
 		return statusScopeDrive
 	case syncengine.ScopePermRemoteRead, syncengine.ScopePermRemoteWrite:
 		return statusScopeDirectory
-	case syncengine.ScopePermDirRead, syncengine.ScopePermDirWrite:
+	case syncengine.ScopePermDirRead, syncengine.ScopePermDirWrite, syncengine.ScopeLocalReadOnly:
 		return statusScopeDirectory
 	case syncengine.ScopeDiskLocal:
 		return statusScopeDisk
@@ -132,7 +132,15 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 	case syncengine.ConditionDiskFull,
 		syncengine.ConditionHashError,
 		syncengine.ConditionFileTooLargeForSpace,
-		syncengine.ConditionLocalNameTooLong:
+		syncengine.ConditionLocalNameTooLong,
+		syncengine.ConditionLocalReadOnly,
+		syncengine.ConditionLocalFileTooLarge,
+		syncengine.ConditionLocalBusy,
+		syncengine.ConditionLocalCrossDevice,
+		syncengine.ConditionUnsupportedOperation,
+		syncengine.ConditionTimestampOutOfRange,
+		syncengine.ConditionMalwareDetected,
+		syncengine.ConditionLocalDatabaseOpen:
 		return describeLocalRuntimeStatusCondition(key)
 	case syncengine.ConditionUnexpectedCondition:
 		return newStatusConditionDescriptor(
@@ -208,6 +216,14 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionHashError,
 		syncengine.ConditionFileTooLargeForSpace,
 		syncengine.ConditionLocalNameTooLong,
+		syncengine.ConditionLocalReadOnly,
+		syncengine.ConditionLocalFileTooLarge,
+		syncengine.ConditionLocalBusy,
+		syncengine.ConditionLocalCrossDevice,
+		syncengine.ConditionUnsupportedOperation,
+		syncengine.ConditionTimestampOutOfRange,
+		syncengine.ConditionMalwareDetected,
+		syncengine.ConditionLocalDatabaseOpen,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -263,6 +279,14 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionHashError,
 		syncengine.ConditionFileTooLargeForSpace,
 		syncengine.ConditionLocalNameTooLong,
+		syncengine.ConditionLocalReadOnly,
+		syncengine.ConditionLocalFileTooLarge,
+		syncengine.ConditionLocalBusy,
+		syncengine.ConditionLocalCrossDevice,
+		syncengine.ConditionUnsupportedOperation,
+		syncengine.ConditionTimestampOutOfRange,
+		syncengine.ConditionMalwareDetected,
+		syncengine.ConditionLocalDatabaseOpen,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -275,8 +299,56 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 	case syncengine.ConditionDiskFull:
 		return newStatusConditionDescriptor(
 			"Disk full",
-			"Free local disk space is below the min_free_space reserve (1 GB unless configured).",
-			"Free up local disk space, or lower min_free_space in the config file.",
+			"The local disk is full, out of inodes or quota, or below the min_free_space reserve (1 GB unless configured).",
+			"Free up local disk space (or delete files if inodes ran out), or lower min_free_space in the config file.",
+		)
+	case syncengine.ConditionLocalReadOnly:
+		return newStatusConditionDescriptor(
+			"Local folder read-only",
+			"The local filesystem holding this folder is mounted read-only, so downloads and local changes cannot be written.",
+			"Remount the filesystem read-write; syncing resumes automatically.",
+		)
+	case syncengine.ConditionLocalFileTooLarge:
+		return newStatusConditionDescriptor(
+			"File too large for this filesystem",
+			"The file is larger than the local filesystem can store (for example 4 GB on FAT32).",
+			"Move the sync folder to a filesystem that supports large files, or exclude the file.",
+		)
+	case syncengine.ConditionLocalBusy:
+		return newStatusConditionDescriptor(
+			"Local file busy",
+			"The local file is in use or its network handle went stale.",
+			"Wait for the program using it to finish (automatic retry in progress).",
+		)
+	case syncengine.ConditionUnsupportedOperation:
+		return newStatusConditionDescriptor(
+			"Not supported by OneDrive",
+			"OneDrive refuses this operation here (for example creating a folder inside some shared folders).",
+			"Make the change on the OneDrive website, or move the item somewhere OneDrive supports it.",
+		)
+	case syncengine.ConditionLocalDatabaseOpen:
+		return newStatusConditionDescriptor(
+			"Database open locally",
+			"A newer copy is on OneDrive, but the local database is open in an application, and replacing it now would corrupt it.",
+			"Close the application using the database; the download is retried automatically.",
+		)
+	case syncengine.ConditionMalwareDetected:
+		return newStatusConditionDescriptor(
+			"Blocked as malware",
+			"OneDrive's scan flagged this file as malware and will not let it be downloaded.",
+			"Check the file on the OneDrive website; delete it there if it is unwanted.",
+		)
+	case syncengine.ConditionTimestampOutOfRange:
+		return newStatusConditionDescriptor(
+			"Date not accepted by OneDrive",
+			"The file's modification date is before 1900, which OneDrive does not store.",
+			"Set a later modification date on the local file (for example with touch).",
+		)
+	case syncengine.ConditionLocalCrossDevice:
+		return newStatusConditionDescriptor(
+			"Move across a mount point",
+			"A move inside the sync folder would cross into a different filesystem, which a rename cannot do.",
+			"Move the item yourself, or keep a single filesystem under the sync folder.",
 		)
 	case syncengine.ConditionHashError:
 		return newStatusConditionDescriptor(

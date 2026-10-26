@@ -226,7 +226,7 @@ Dry-run changes only the sync execution/commit semantics after setup.
 | `included_dirs` | `[]string` | empty | normalized root-relative directory paths; no absolute paths, `..`, root, or globs | `sync` | Empty means whole drive. Non-empty narrows sync to listed directories, descendants, and required ancestor containers. |
 | `ignored_paths` | `[]string` | empty | normalized root-relative slash globs; no absolute paths, `..`, or root pattern | `sync` | Excludes matching files or directories from local and remote sync visibility; a directory match excludes its subtree. |
 | `ignore_dotfiles` | `bool` | `false` | boolean | `sync` | Excludes any path with a component beginning with `.`. |
-| `ignore_junk_files` | `bool` | `false` | boolean | `sync` | Excludes bundled OS/editor/browser junk patterns from local and remote sync visibility. |
+| `ignore_junk_files` | `bool` | `true` | boolean | `sync` | Excludes bundled OS/editor/IDE/browser junk, Office `~$` owner files and SQLite sidecars from local and remote sync visibility (R-2.4.14). On unless set to `false` (P-2); stored as `*bool` so an explicit `false` survives (`DriveFilterConfig.JunkFilesIgnored`). |
 | `follow_symlinks` | `bool` | `false` | boolean | `sync` | When false, local symlinks are ignored. When true, local observation may project symlink target content with cycle and delete-safety rules. |
 
 ## Config File Manipulation

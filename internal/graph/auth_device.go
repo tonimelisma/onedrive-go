@@ -102,9 +102,7 @@ func doLoginWithFlow(
 		slog.Time("expiry", tok.Expiry),
 	)
 
-	src := cfg.TokenSource(ctx, tok)
-
-	return &tokenBridge{src: src, logger: logger}, nil
+	return newTokenBridge(ctx, cfg, tok, logger), nil
 }
 
 // deviceLoginError turns the token endpoint's answer for the common user-side
@@ -121,6 +119,10 @@ func deviceLoginError(err error, logger *slog.Logger) error {
 		case oauthErrAccessDenied, oauthErrAuthorizationDeclined:
 			logger.Debug("device code authorization declined", slog.String("error", err.Error()))
 			return ErrLoginDeclined
+		}
+		if plain := aadOutcomeError(retrieveErr.ErrorCode, retrieveErr.ErrorDescription); plain != nil {
+			logger.Debug("device code authorization refused", slog.String("error", err.Error()))
+			return plain
 		}
 	}
 

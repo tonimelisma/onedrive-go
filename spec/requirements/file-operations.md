@@ -64,13 +64,16 @@ When the user runs `mv <src> <dst>`, the system shall perform a server-side move
 
 - R-1.7.1: When `--json` is passed, the system shall output structured JSON with source, destination, and item ID. [verified]
 - R-1.7.2: When `mv` reports success, the destination path shall already be readable by an immediate follow-on CLI path lookup. [verified]
-- R-1.7.3: `mv` shall refuse to move a folder into itself or its own subtree before sending any request, including the `--force` delete of an existing destination. `mv`, `cp` and `mkdir` shall print remote paths with a leading `/`. [verified]
+- R-1.7.3: `mv` shall refuse to move a folder into itself or its own subtree before sending any request, including the `--force` replacement of an existing destination. `mv`, `cp` and `mkdir` shall print remote paths with a leading `/`. [verified]
 
 ## R-1.8 Copy (`cp`) [verified]
 
 When the user runs `cp <src> <dst>`, the system shall perform a server-side async copy with polling until complete.
 
 - R-1.8.1: When `--json` is passed, the system shall output structured JSON with source, destination, and item ID. [verified]
+- R-1.8.2: `cp --force` and `mv --force` shall never delete an existing destination before the copy or move has succeeded. The existing file is renamed aside, the operation runs, and then the aside copy goes to the recycle bin on success or gets its name back on any failure, including a copy the monitor reports as failed or a canceled command. [verified]
+- R-1.8.3: A completed `cp` of a file shall carry the source's modification time; a failure to set it is a warning, since the copy itself succeeded. [verified]
+- R-1.8.4: Every copy-monitor status other than `inProgress`, `notStarted`, `waiting` and `updating` shall end the poll: `completed` as success, anything else (including statuses Microsoft adds later) as a failure, instead of polling until the timeout. [verified]
 
 ## R-1.9 Recycle Bin [verified]
 

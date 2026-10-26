@@ -46,6 +46,17 @@ type actionCompletion struct {
 	ActionID int64
 }
 
+// serverAnswer is what this completion's Graph failure means (see
+// classifyServerAnswer). It is derived, not stored, so it can never disagree
+// with HTTPStatus and Err.
+func (r *actionCompletion) serverAnswer() serverAnswer {
+	if r == nil {
+		return serverAnswerNone
+	}
+
+	return classifyServerAnswer(r.HTTPStatus, r.Err)
+}
+
 // ThrottleTargetKey returns the narrowest remote boundary that can be blocked
 // after a 429 for this action completion.
 func (r *actionCompletion) ThrottleTargetKey() string {

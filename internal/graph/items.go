@@ -66,6 +66,7 @@ type driveItemResponse struct {
 	Root                 *json.RawMessage    `json:"root"`
 	Deleted              *json.RawMessage    `json:"deleted"`
 	Package              *json.RawMessage    `json:"package"`
+	Malware              *json.RawMessage    `json:"malware"`
 	DownloadURL          string              `json:"@microsoft.graph.downloadUrl"`
 	SpecialFolder        *specialFolderFacet `json:"specialFolder"`
 	RemoteItem           *remoteItemFacet    `json:"remoteItem"`
@@ -150,17 +151,20 @@ type moveParentRef struct {
 // toItem normalizes a Graph API driveItem response into our Item type.
 func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 	item := Item{
-		ID:          d.ID,
-		Name:        d.Name,
-		Size:        d.Size,
-		ETag:        d.ETag,
-		CTag:        d.CTag,
-		IsFolder:    d.Folder != nil,
-		IsRoot:      d.Root != nil,
-		IsDeleted:   d.Deleted != nil,
-		IsPackage:   d.Package != nil,
-		ChildCount:  ChildCountUnknown,
-		DownloadURL: DownloadURL(d.DownloadURL),
+		ID:        d.ID,
+		Name:      d.Name,
+		Size:      d.Size,
+		ETag:      d.ETag,
+		CTag:      d.CTag,
+		IsFolder:  d.Folder != nil,
+		IsRoot:    d.Root != nil,
+		IsDeleted: d.Deleted != nil,
+		IsPackage: d.Package != nil,
+		// The facet's body (a description) is advisory; its presence is
+		// the documented signal that OneDrive's scan flagged the content.
+		MalwareDetected: d.Malware != nil,
+		ChildCount:      ChildCountUnknown,
+		DownloadURL:     DownloadURL(d.DownloadURL),
 	}
 
 	if d.SpecialFolder != nil {

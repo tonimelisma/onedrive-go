@@ -76,12 +76,23 @@ type Drive struct {
 // sync observation and planning only; direct file operations continue to show
 // provider truth.
 type DriveFilterConfig struct {
-	IgnoredDirs     []string `toml:"ignored_dirs,omitempty"`
-	IncludedDirs    []string `toml:"included_dirs,omitempty"`
-	IgnoredPaths    []string `toml:"ignored_paths,omitempty"`
-	IgnoreDotfiles  bool     `toml:"ignore_dotfiles,omitempty"`
-	IgnoreJunkFiles bool     `toml:"ignore_junk_files,omitempty"`
-	FollowSymlinks  bool     `toml:"follow_symlinks,omitempty"`
+	IgnoredDirs    []string `toml:"ignored_dirs,omitempty"`
+	IncludedDirs   []string `toml:"included_dirs,omitempty"`
+	IgnoredPaths   []string `toml:"ignored_paths,omitempty"`
+	IgnoreDotfiles bool     `toml:"ignore_dotfiles,omitempty"`
+	// IgnoreJunkFiles is on unless a drive sets it to false (P-2): editor
+	// swap files, OS metadata and database sidecars churn and confuse other
+	// devices, and there are no existing users whose files it would hide.
+	// It is a pointer so an explicit false survives; read it through
+	// JunkFilesIgnored.
+	IgnoreJunkFiles *bool `toml:"ignore_junk_files,omitempty"`
+	FollowSymlinks  bool  `toml:"follow_symlinks,omitempty"`
+}
+
+// JunkFilesIgnored reports whether bundled junk is excluded: true unless the
+// drive explicitly set ignore_junk_files = false.
+func (c *DriveFilterConfig) JunkFilesIgnored() bool {
+	return c.IgnoreJunkFiles == nil || *c.IgnoreJunkFiles
 }
 
 // IsPaused returns whether this drive is currently paused. This is the single

@@ -308,7 +308,7 @@ fails as a confusing syntax error that hides the real cause.
 
 ## Error Handling (`errors.go`)
 
-Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `ErrConflict` (409). Error response bodies are read with a 64 KiB cap (`io.LimitReader`) to prevent unbounded memory allocation from malformed responses. HTTP 423 (Locked) from SharePoint co-authoring is classified as skip, not retryable — locks persist for hours; watch mode retries on the next safety scan.
+Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `ErrConflict` (409). Error response bodies are read with a 64 KiB cap (`io.LimitReader`) to prevent unbounded memory allocation from malformed responses. HTTP 423 (Locked) from SharePoint co-authoring or an open Office file is `ErrLocked`; the transport does not retry it (locks persist for minutes to hours), and sync records it as retryable `resource_locked` retry work whose backoff grows with each attempt.
 
 `GraphError` preserves Graph's structured error metadata: `Code`, `InnerCodes`, capped `RawBody`, and helper methods `MostSpecificCode()` / `HasCode()`. `Message`, `RawBody`, and `Error()` are sanitized before exposure so bearer tokens and pre-authenticated URLs are redacted even when Graph echoes them back in an error payload. Quirk retries key on the code chain first. One-off incident signatures without recoverable payload evidence stay in the reference layer and are not special-cased in runtime classification.
 
@@ -345,6 +345,59 @@ This package owns the wire-to-domain normalization step for remote failures:
 raw HTTP and Graph payloads become `GraphError` values plus sentinels such as
 `ErrGone` and `ErrUnauthorized`. Retry, persistence, and user-facing decisions
 consume that normalized boundary contract via [error-model.md](error-model.md).
+
+**Meaning predicates** — `IsQuotaExhausted` and `IsNotSupported` answer "is the
+drive full" and "did OneDrive refuse this operation" from the most specific
+evidence first (code chain and message, then status), because OneDrive
+reports a full drive as 507, 403 `quotaLimitReached` or 500 "Insufficient
+Space Available", and a refusal as 501, 505 or `notSupported`. The sync
+server-answer table and CLI presentation both consume them
+(`TestIsQuotaExhaustedAndIsNotSupported`).
+
+**Timestamp range** — OneDrive Personal accepts `fileSystemInfo` timestamps from
+1900-01-01T00:00:00Z (`EarliestFileSystemTime`) and answers anything earlier
+with a misleading `404 itemNotFound` (live probe L-26). `UpdateFileSystemInfo`
+relabels that 404 as `ErrTimestampOutOfRange`, keeping the status and request
+ID, so no caller reads a live item as deleted
+(`TestUpdateFileSystemInfo_Pre1900NotFoundIsRangeError`).
+
+**Malware** — the `malware` facet decodes to `Item.MalwareDetected`.
+`Download`/`DownloadRange` refuse a flagged item with `ErrMalwareDetected`
+before requesting content, and a content-host 403 carrying `malwareDetected`
+or an `X-Virus-Infected` header is relabelled the same way, so sync records
+one `malware_detected` issue instead of probing a permission boundary
+(`TestDownload_MalwareFacetRefusesWithoutFetchingContent`,
+`TestDownload_MalwareAnswersFromContentHost`). The exact Personal answer is
+still to be confirmed by live probe L-19 (EICAR); both signals are
+documented, and each is safe if it never appears.
+
+**`/content` fallback** — a file without a `downloadUrl`, or whose refetched
+`downloadUrl` is refused again, downloads through `GET /items/{id}/content`
+(`downloadViaContentEndpoint`). The first leg goes through the normal
+authenticated `doOnce` path, so the 401 forced refresh and `ErrAuthTransient`
+apply, but on a copy of the HTTP client whose `CheckRedirect` returns
+`http.ErrUseLastResponse` (`requestRoute{keepRedirect: true}`): the bearer is
+never carried across the 302. The `Location` is validated against the
+content-host allow-list and fetched through the unauthenticated pre-auth path.
+Live probe L-20 (Personal) showed `my.microsoftpersonalcontent.com` serves
+the file without the bearer. A resumed download (offset > 0) requires 206 with
+a `Content-Range` starting at the offset on whichever leg serves the bytes;
+anything else is `ErrRangeNotHonored`, never a full body appended at the
+offset (`TestDownload_ContentEndpointNeverSendsBearerToRedirectHost`,
+`TestDownload_ContentEndpoint401ForcesRefresh`,
+`TestDownloadRange_ContentEndpointResumes`,
+`TestDownloadRange_ContentEndpointRefusesAFullBodyAtAnOffset`,
+`TestDownload_ContentRedirectToUntrustedHostRefused`).
+
+**User-Agent** — `graph.UserAgent(version)` is the one User-Agent:
+`ISV|onedrive-go|onedrive-go/<version>`, Microsoft's decorated form for
+attributing traffic (MS-190). Every CLI and sync construction site uses it
+(`TestUserAgent_DecoratedFormOnEveryRequest`).
+
+**Gateway diagnostics** — `GraphError.AgsDiagnostic` keeps the
+`X-Ms-Ags-Diagnostic` header, and `QuirkRetryAttempt` carries it, for support
+escalation next to the request ID (`TestGraphError_KeepsAgsDiagnosticHeader`,
+`TestBuildQuirkRetryAttempt_CarriesAgsDiagnostic`).
 
 **RetryAfter Header** — `RetryAfter time.Duration` field on `GraphError`. Parsed from `Retry-After` header for 429 and 503 responses. Implements: R-6.8.6 [verified]
 
@@ -386,7 +439,7 @@ Pre-authenticated requests (upload chunks, downloads) go through `httpClient.Do(
 
 ## 401 Token Refresh
 
-Implements: R-6.8.14 [implemented]
+Implements: R-6.8.14 [verified], R-6.6.34 [verified]
 
 Transparent token refresh on 401 inside `doOnce()`, independent of retry transport. On 401: refresh token → retry once. If still 401 → return `ErrUnauthorized` (fatal). Auth refresh is lifecycle management, not transient retry — it works regardless of whether the HTTP client has a `RetryTransport`.
 
@@ -397,12 +450,41 @@ and retry the request once. If that still fails, callers receive
 condition for the current pass or watch session, and CLI surfaces present it as
 `Authentication required`.
 
-This policy is evidence-driven. The repository documents one spurious `401`
-class for pre-authenticated upload-session fragment requests when a Bearer
-token is sent unnecessarily. That case is handled at the pre-auth transport
-boundary by omitting Bearer auth. The repository does **not** currently have
-captured evidence for a general post-refresh ordinary-Graph `401` quirk, so no
-generic runtime retry or sync-trial behavior exists for that case.
+The refresh is forced when needed. `oauth2.ReuseTokenSource` refreshes only an
+expired token, so a token the service revoked early came back unchanged and
+the second attempt resent it. `tokenBridge.ForceRefresh` (the optional
+`forceRefresher` capability) redeems the refresh token now and swaps in the
+new source; concurrent 401s serialize on it and share one token-endpoint call
+per 30 s (`TestDoOnce_401_ForcesRefreshWhenCachedTokenIsUnchanged`,
+`TestTokenBridge_ForceRefreshRedeemsRefreshTokenOncePerBurst`).
+
+A 401 is fatal (`ErrUnauthorized`) only when the refresh itself fails or a
+known-fresh token is rejected without a server-side fault. When a freshly
+refreshed token still gets "Unable to initialize RPS", `generalException`, or
+an `invalid_token` challenge that does not say "expired", the account is
+fine and the service failed to validate it, so the error is
+`ErrAuthTransient` (RCL-114, MS-198): sync treats it as service-outage
+evidence and the watch daemon keeps running
+(`TestDoOnce_401_RPSAfterForcedRefreshIsTransient`,
+`TestDoOnce_401_TransientSignatures`). A token source that cannot force a
+refresh cannot prove freshness, so its 401s stay `ErrUnauthorized`
+(`TestDoOnce_401_SameToken_Returns401`).
+
+A 401 from a pre-authenticated URL is `ErrPreAuthURLRejected`, never
+`ErrUnauthorized`: those URLs carry their own credential, and its expiry says
+nothing about the account. Downloads refetch the URL; sync retries the one
+file (`TestDoPreAuth_401IsURLRejectedNotSignIn`). The repository also documents
+a spurious `401` for upload-session fragments sent with a Bearer token, handled
+at the pre-auth boundary by omitting Bearer auth.
+
+Azure AD outcomes the user can act on map to plain sentinels through one table
+(`aadOutcomeError`) shared by the device-code, browser and refresh paths:
+`interaction_required`/AADSTS50076/AADSTS50079 to
+`ErrLoginInteractionRequired`, AADSTS65001/AADSTS65005 to
+`ErrLoginAppNotAllowed`, "not enabled for consumers" to
+`ErrLoginConsumerNotEnabled` (`TestAADOutcomeError_Table`,
+`TestTokenBridge_InteractionRequiredIsPlainSignInRequired`). At refresh they
+also carry `ErrUnauthorized`, since each needs a new interactive sign-in.
 
 `Client` also exposes an optional per-instance authenticated-success hook. The
 hook fires only after a normal authenticated Graph request succeeds. CLI code

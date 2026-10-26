@@ -329,6 +329,15 @@ func authErrorMessage(err error) string {
 		return "Error: the sign-in code expired before sign-in finished. Run 'onedrive-go login' again to get a new code."
 	case errors.Is(err, graph.ErrLoginDeclined):
 		return "Error: sign-in was canceled or declined. Run 'onedrive-go login' again."
+	case errors.Is(err, graph.ErrLoginInteractionRequired):
+		return "Authentication required: Microsoft requires you to sign in again (multi-factor authentication or a " +
+			"sign-in policy asks for it). Run 'onedrive-go login'."
+	case errors.Is(err, graph.ErrLoginAppNotAllowed):
+		return "Error: this account or its organization has not allowed onedrive-go to access OneDrive. " +
+			"Ask your administrator to approve the app, or sign in with a different account."
+	case errors.Is(err, graph.ErrLoginConsumerNotEnabled):
+		return "Error: this app registration accepts only work or school accounts, not personal Microsoft accounts. " +
+			"Sign in with a work or school account, or use an app registration that allows personal accounts."
 	case errors.Is(err, graph.ErrLoginExpired):
 		return "Authentication required: Microsoft no longer accepts the saved login for this account " +
 			"(it expired or was revoked). Run 'onedrive-go login' to sign in again."

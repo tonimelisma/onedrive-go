@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"net/http"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -20,6 +19,7 @@ const (
 	ScopePermRemoteRead                          // Param = local boundary path
 	ScopePermRemoteWrite                         // Param = local boundary path
 	ScopeDiskLocal                               // no Param
+	ScopeLocalReadOnly                           // Param = relative directory path
 )
 
 // ScopeKey identifies a block scope. The Kind discriminator determines the
@@ -53,6 +53,13 @@ func SKPermLocalWrite(dirPath string) ScopeKey {
 	return ScopeKey{Kind: ScopePermDirWrite, Param: dirPath}
 }
 
+// SKLocalReadOnly returns the scope key for a sync-folder subtree that lives
+// on a read-only filesystem (EROFS). It is a local write scope like
+// SKPermLocalWrite, but no chmod fixes it, so it carries its own condition.
+func SKLocalReadOnly(dirPath string) ScopeKey {
+	return ScopeKey{Kind: ScopeLocalReadOnly, Param: dirPath}
+}
+
 // sKPermRemoteRead returns the scope key for a remote read-denied boundary.
 func sKPermRemoteRead(boundaryPath string) ScopeKey {
 	return ScopeKey{Kind: ScopePermRemoteRead, Param: boundaryPath}
@@ -79,6 +86,7 @@ const (
 	wirePermRemoteRead  = "perm:remote:read:"
 	wirePermRemoteWrite = "perm:remote:write:"
 	wireDiskLocal       = "disk:local"
+	wireLocalReadOnly   = "local:read-only:"
 )
 
 // String serializes to the wire format stored in SQLite scope_key columns.
@@ -101,6 +109,8 @@ func (sk ScopeKey) String() string {
 		return wirePermRemoteWrite + sk.Param
 	case ScopeDiskLocal:
 		return wireDiskLocal
+	case ScopeLocalReadOnly:
+		return wireLocalReadOnly + sk.Param
 	default:
 		return ""
 	}
@@ -126,6 +136,8 @@ func parseScopeKey(s string) ScopeKey {
 		return sKPermRemoteRead(strings.TrimPrefix(s, wirePermRemoteRead))
 	case strings.HasPrefix(s, wirePermRemoteWrite):
 		return SKPermRemoteWrite(strings.TrimPrefix(s, wirePermRemoteWrite))
+	case strings.HasPrefix(s, wireLocalReadOnly):
+		return SKLocalReadOnly(strings.TrimPrefix(s, wireLocalReadOnly))
 	default:
 		return ScopeKey{}
 	}
@@ -137,9 +149,10 @@ func (sk ScopeKey) IsGlobal() bool {
 	return sk.Kind == ScopeService
 }
 
-// IsPermDir returns true for local directory permission scopes.
+// IsPermDir returns true for local directory scopes: permission denials and
+// read-only filesystems.
 func (sk ScopeKey) IsPermDir() bool {
-	return sk.IsPermLocalRead() || sk.IsPermLocalWrite()
+	return sk.IsPermLocalRead() || sk.IsPermLocalWrite() || sk.Kind == ScopeLocalReadOnly
 }
 
 // IsPermLocalRead returns true for local read-denied directory scopes.
@@ -252,25 +265,39 @@ func scopePathMatches(path, boundary string) bool {
 	return path == boundary || strings.HasPrefix(path, boundary+"/")
 }
 
-// scopeKeyForResult maps one action completion target and HTTP status code to a
-// ScopeKey. Returns the zero-value for non-scope statuses. This is the single
-// source of truth for HTTP status → scope key classification.
-func scopeKeyForResult(httpStatus int, targetDriveID driveid.ID) ScopeKey {
-	switch {
-	case httpStatus == http.StatusTooManyRequests:
+// scopeKeyForResult maps one action completion's server answer and target
+// drive to a ScopeKey. Returns the zero value for answers that are not scope
+// evidence. This is the single source of truth for answer -> scope key.
+// Refusals (501, 505, notSupported) deliberately have no scope: they are
+// about one request, not about OneDrive being down.
+func scopeKeyForResult(answer serverAnswer, targetDriveID driveid.ID) ScopeKey {
+	switch answer {
+	case serverAnswerThrottled:
 		if targetDriveID.IsZero() {
 			return ScopeKey{}
 		}
 		return SKThrottleDrive(targetDriveID)
-	case httpStatus == http.StatusServiceUnavailable:
-		return SKService()
-	case httpStatus == http.StatusInsufficientStorage:
+	case serverAnswerQuota:
 		return SKQuotaOwn()
-	case httpStatus >= http.StatusInternalServerError:
+	case serverAnswerServiceOutage:
 		return SKService()
-	default:
+	case serverAnswerNone,
+		serverAnswerUnauthorized,
+		serverAnswerForbidden,
+		serverAnswerUnsupported,
+		serverAnswerPathTooLong,
+		serverAnswerTimestampOutOfRange,
+		serverAnswerRequestTimeout,
+		serverAnswerTransientConflict,
+		serverAnswerTransientNotFound,
+		serverAnswerLocked,
+		serverAnswerTransferURLRejected,
+		serverAnswerMalware,
+		serverAnswerOther:
 		return ScopeKey{}
 	}
+
+	return ScopeKey{}
 }
 
 const (

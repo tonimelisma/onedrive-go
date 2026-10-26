@@ -8,14 +8,15 @@ import (
 	"io"
 	"io/fs"
 	"net"
-	"net/http"
 	"net/url"
 	"path"
 	"strconv"
 	"strings"
 	"syscall"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 // presentedError carries a user-facing message while keeping the underlying
@@ -164,11 +165,6 @@ func remoteFailureSubject(err error) (*remoteOpError, string, string) {
 	return op, op.path, hint
 }
 
-func isNotImplemented(err error) bool {
-	var graphErr *graph.GraphError
-	return errors.As(err, &graphErr) && graphErr.StatusCode == http.StatusNotImplemented
-}
-
 func notImplementedMessage(err error) string {
 	var graphErr *graph.GraphError
 	if errors.As(err, &graphErr) && graphErr.Message != "" {
@@ -176,12 +172,6 @@ func notImplementedMessage(err error) string {
 	}
 
 	return "the request is not supported"
-}
-
-func isQuotaFull(err error) bool {
-	var graphErr *graph.GraphError
-	return errors.As(err, &graphErr) &&
-		(graphErr.StatusCode == http.StatusInsufficientStorage || graphErr.HasCode("quotaLimitReached"))
 }
 
 // remoteFailureText turns the OneDrive failures a user can understand into
@@ -192,7 +182,7 @@ func remoteFailureText(err error) string {
 	movesOrCopies := op != nil && (strings.HasPrefix(op.action, "moving") || strings.HasPrefix(op.action, "copying"))
 
 	switch {
-	case isQuotaFull(err):
+	case graph.IsQuotaExhausted(err):
 		return "Your OneDrive storage is full. Free up space or add storage, then run the command again."
 	case errors.Is(err, graph.ErrNotFound):
 		return subject + " was not found on OneDrive." + parentHint
@@ -208,7 +198,7 @@ func remoteFailureText(err error) string {
 		return "OneDrive is limiting requests right now. Wait a few minutes, then run the command again."
 	case errors.Is(err, graph.ErrProviderReadOnly):
 		return "OneDrive is temporarily read-only for this account. Try again later."
-	case isNotImplemented(err):
+	case graph.IsNotSupported(err):
 		// 501 is OneDrive refusing the request, not an outage: retrying
 		// "in a few minutes" cannot help, so pass on what it said.
 		return "OneDrive cannot do this for " + subject + ": " + notImplementedMessage(err)
@@ -219,11 +209,30 @@ func remoteFailureText(err error) string {
 	}
 }
 
-// localFailureText recognizes missing and unreadable local files.
+// localFailureText recognizes local filesystem failures a user can fix: a
+// full disk (including the sync state database failing with SQLITE_FULL), a
+// read-only filesystem, a file the filesystem cannot hold, and missing or
+// unreadable files. The errno meaning comes from driveops' shared table.
 func localFailureText(err error) string {
+	if syncengine.IsLocalDiskFull(err) {
+		return "The local disk is full (or below the min_free_space reserve). Free up space, then run the command again."
+	}
+
 	var pathErr *fs.PathError
 	if !errors.As(err, &pathErr) {
 		return ""
+	}
+
+	switch driveops.ClassifyLocalError(err) {
+	case driveops.LocalErrorReadOnly:
+		return pathErr.Path + " is on a read-only filesystem. Remount it read-write, then run the command again."
+	case driveops.LocalErrorFileTooLarge:
+		return "The file is too large for the filesystem holding " + pathErr.Path + "."
+	case driveops.LocalErrorOther,
+		driveops.LocalErrorNoSpace,
+		driveops.LocalErrorBusy,
+		driveops.LocalErrorCrossDevice,
+		driveops.LocalErrorNameTooLong:
 	}
 
 	switch {

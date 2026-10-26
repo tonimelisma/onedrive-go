@@ -80,7 +80,44 @@ func TestContentFilter_JunkFilesAreBidirectionalOptIn(t *testing.T) {
 	assert.False(t, filter.Visible("._resource", ItemTypeFile))
 	assert.False(t, filter.Visible(".~lock", ItemTypeFile))
 	assert.False(t, filter.Visible("~backup", ItemTypeFile))
-	assert.True(t, filter.Visible("~$office-lock.docx", ItemTypeFile))
+}
+
+// Validates: R-2.4.14
+func TestContentFilter_ExtendedJunkList(t *testing.T) {
+	filter := newContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
+
+	for _, junk := range []string{
+		"~$office-lock.docx", // Office owner file (P-2)
+		"notes.txt~", ".notes.txt.swx", ".notes.txt.swo", "4913", "#notes.txt#", ".#notes.txt",
+		"Main.java___jb_tmp___", "Main.java___jb_old___",
+		".Spotlight-V100", ".Trashes", ".fseventsd", ".TemporaryItems", ".Trash-1000", "$RECYCLE.BIN", "Icon\r",
+		"app.db-wal", "app.db-shm", "places.sqlite-journal", // SQLite sidecars (P-3)
+		"photos/.fseventsd/000001",
+	} {
+		assert.False(t, filter.Visible(junk, ItemTypeFile), "%q is junk", junk)
+	}
+
+	for _, kept := range []string{
+		"travel-journal", "fire-wal.txt", "notes.txt", "#hashtag", "app.db", "Icons", "budget-2026.xlsx",
+	} {
+		assert.True(t, filter.Visible(kept, ItemTypeFile), "%q is a user file", kept)
+	}
+}
+
+// Validates: R-2.4.14
+func TestContentFilter_FileOnlyJunkRulesKeepFolders(t *testing.T) {
+	filter := newContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
+
+	for _, folder := range []string{"~Projects", "notes~", "4913"} {
+		assert.True(t, filter.Visible(folder, ItemTypeFolder), "folder %q syncs", folder)
+		assert.True(t, filter.Visible(folder+"/report.docx", ItemTypeFile), "and so does its content")
+		assert.False(t, filter.Visible(folder, ItemTypeFile), "the same name on a file is an editor temporary")
+	}
+	assert.False(t, filter.Visible("~Projects/~$report.docx", ItemTypeFile), "an owner file inside it is still junk")
+
+	for _, trash := range []string{"$RECYCLE.BIN/x.txt", ".Trash-1000/files/x.txt"} {
+		assert.False(t, filter.Visible(trash, ItemTypeFile), "%q: trash folders stay junk at any depth", trash)
+	}
 }
 
 func TestContentFilter_JunkFilesDefaultVisible(t *testing.T) {

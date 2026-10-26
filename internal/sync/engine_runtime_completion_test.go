@@ -888,3 +888,47 @@ func TestEngineFlow_ProcessActionCompletion_RetryPersistenceFailureTerminatesAnd
 	assert.Empty(t, flow.sched.runningByID)
 	assert.Equal(t, 1, flow.sched.graph.InFlightCount(), "the unresolved action must remain in the graph when the runtime fails closed")
 }
+
+// Validates: R-2.10.66, R-2.14.1
+func TestEngineFlow_Quota403OnSharedMountIsQuotaNotPermission(t *testing.T) {
+	t.Parallel()
+
+	probes := 0
+	eng, _ := newTestEngine(t, &engineMockClient{
+		listItemPermissionsFn: func(context.Context, driveid.ID, string) ([]graph.Permission, error) {
+			probes++
+			return []graph.Permission{{Roles: []string{"read"}}}, nil
+		},
+	})
+	const quotaMountRoot = "quota-mount-root"
+	eng.remoteRootItemID = quotaMountRoot
+	eng.permHandler.remoteRootItemID = quotaMountRoot
+	setupWatchEngine(t, eng)
+	flow := testEngineFlow(t, eng)
+
+	for _, path := range []string{"Shared/a.txt", "Shared/b.txt", "Shared/c.txt"} {
+		r := &actionCompletion{
+			Path:       path,
+			ActionType: ActionUpload,
+			DriveID:    driveid.New(engineTestDriveID),
+			HTTPStatus: http.StatusForbidden,
+			Err: &graph.GraphError{
+				StatusCode: http.StatusForbidden, Code: "accessDenied", InnerCodes: []string{"quotaLimitReached"},
+				Err: graph.ErrForbidden,
+			},
+		}
+		decision := classifyResult(r)
+		_, err := flow.applyNormalCompletionDecision(t.Context(), &decision, nil, r, &Baseline{})
+		require.NoError(t, err)
+	}
+
+	assert.Zero(t, probes, "a full drive is not a permission boundary: no ListItemPermissions")
+	blockScopes, err := eng.baseline.ListBlockScopes(t.Context())
+	require.NoError(t, err)
+	keys := make([]ScopeKey, 0, len(blockScopes))
+	for _, scope := range blockScopes {
+		keys = append(keys, scope.Key)
+	}
+	assert.Contains(t, keys, SKQuotaOwn())
+	assert.NotContains(t, keys, SKPermRemoteWrite(""))
+}

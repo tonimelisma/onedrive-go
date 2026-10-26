@@ -71,6 +71,15 @@ entry points:
 - `internal/config/failure_class.go`: classify config load results
 - `internal/sync/executor_preconditions.go`: translate stale live local/remote
   side-effect checks into `errActionPreconditionChanged`
+- `internal/driveops/local_errors.go`: the one errno-to-domain table for local
+  filesystem failures (`ClassifyLocalError`), consumed by the sync classifier
+  and CLI presentation
+- `internal/sync/store.go` (`IsLocalDiskFull`): the store boundary's answer for
+  SQLite `SQLITE_FULL`, folded into the same "local disk full" meaning
+- `internal/sync/domain_graph_error.go` (`classifyServerAnswer`): the one table
+  from (status, Graph code, message) to meaning — quota, refusal, outage,
+  throttle, transient conflict, range error — read by scope detection, result
+  classification and issue naming alike
 - `internal/sync/engine_result_classify.go`: classify each action completion
 - `internal/cli/failure_class.go`: classify command-returned errors into exit
   behavior and reason/action text
@@ -138,3 +147,5 @@ Permission recovery follows the same ownership split:
 | Shared failure classes | `internal/errclass/errclass_test.go` (`TestClassStringAndValidity`), `internal/config/failure_class_test.go` (`TestClassifyLoadOutcome`), `internal/cli/failure_class_test.go` (`TestClassifyCommandError`, `TestCommandExitCode`, `TestCommandExitCode_EveryFailureClassHasAStatus`) |
 | Shared condition-key normalization, ordering, shared stored-condition projection, and CLI rendering tables | `internal/sync/condition_keys_test.go` (`TestConditionKeyForStoredCondition_RepresentativeMappings`, `TestConditionKeyLess_UsesCanonicalDisplayOrder`, `TestConditionKeyForIssueType_RepresentativeMappings`), `internal/sync/condition_projection_test.go` (`TestProjectStoredConditionGroups_MergesDurableAuthorities`), `internal/cli/status_test.go` (`TestQuerySyncState_PreservesConditionScopeContext`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions`, `TestPrintSyncStateText_WithConditions`), `internal/cli/status_golden_test.go` (`TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`) |
 | Sync result classification foundations | `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_SuccessAndShutdown`, `TestClassifyResult_HTTPPersistenceAndScopeRouting`, `TestClassifyResult_LocalPersistenceAndScopeRouting`), `internal/sync/engine_runtime_completion_test.go` (`TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess`, `TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEmptyScope`), `internal/sync/engine_run_once_results_test.go` (`TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOrRetry`), `internal/sync/engine_retry_trial_test.go` (`TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldRetriesNow_DoesNotConsultDurableRetryRowsWithoutHeldRuntimeEntry`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestReleaseDueHeldTrialsNow_SkipsScopesWithoutHeldDependencyReadyCandidates`, `TestReleaseDueHeldTrialsNow_DoesNotConsultDurableBlockedRetryRowsWithoutHeldRuntimeEntry`, `TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow`), `internal/sync/engine_runtime_lifecycle_test.go` (`TestEngineFlow_ApplyTrialReclassification_RehomesDiskScopeRetryWork`), `internal/sync/store_scope_admin_test.go` (`TestPruneBlockScopesWithoutBlockedWork`) |
+| Local errno table and disk-full folding | `internal/driveops/local_errors_test.go` (`TestClassifyLocalError_Table`, `TestDownloadToFile_WriteOutOfSpaceReturnsErrDiskFull`), `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_LocalErrnoTable`), `internal/sync/store_disk_full_test.go` (`TestIsLocalDiskFull_RecognizesRealSQLiteFull`), `internal/cli/error_presentation_test.go` (`TestCommandErrorText_LocalFilesystemConditionsArePlain`) |
+| Server-answer table | `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_ServerAnswerTable`), `internal/sync/scope_test.go` (`TestScope_FiveRefusalsSetNoServiceScope`, `TestScope_QuotaRecognizedOutsideStatus507`, `TestScopeKeyForResult`), `internal/graph/errors_classification_test.go` (`TestIsQuotaExhaustedAndIsNotSupported`), malware (`TestClassifyResult_MalwareIsPerFileNotReadDenied`) |

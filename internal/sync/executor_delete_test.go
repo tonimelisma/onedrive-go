@@ -21,6 +21,7 @@ import (
 // isDisposable tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.4.14
 func TestIsDisposable(t *testing.T) {
 	t.Parallel()
 
@@ -47,10 +48,13 @@ func TestIsDisposable(t *testing.T) {
 		{"file.crdownload", true},
 		{"~backup", true},
 		{".~lock.file", true},
+		// Office owner files are junk under P-2 (they are lock files that
+		// churn and confuse other devices).
+		{"~$doc.docx", true},
+		{"app.db-wal", true},
 
 		// Invalid OneDrive names are user-actionable issues, not disposable.
 		{"desktop.ini", false},
-		{"~$doc.docx", false},
 		{"CON", false},
 		{"file.", false},
 		{" leadingspace", false},
@@ -66,9 +70,16 @@ func TestIsDisposable(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.want, isDisposable(tt.name), "IsDisposable(%q)", tt.name)
+			assert.Equal(t, tt.want, isDisposable(tt.name, false), "IsDisposable(%q)", tt.name)
 		})
 	}
+
+	// The file-only rules never make a user's folder disposable.
+	for _, folder := range []string{"~Projects", "notes~", "4913"} {
+		assert.False(t, isDisposable(folder, true), "folder %q is the user's", folder)
+	}
+	assert.True(t, isDisposable("$RECYCLE.BIN", true), "trash folders stay junk")
+	assert.True(t, isDisposable(".Trash-1000", true))
 }
 
 // ---------------------------------------------------------------------------

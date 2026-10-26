@@ -66,7 +66,7 @@ runtime package that implements it.
 | `RunWatch` starts the runnable runtime mount set, skips incompatible-store mounts with immediate warnings, and rejects all-paused startup through the same startup-summary model. | `TestOrchestrator_RunWatch_SingleMount`, `TestOrchestrator_RunWatch_MultiMount`, `TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts`, `TestOrchestrator_RunWatch_ReturnsErrorWhenAllMountsPaused` |
 | The Unix control socket is the single owner lock for one-shot and watch sync, is acquired before parent engines start, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. Dry-run one-shot sync uses the same owner lock as live one-shot sync. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestRunOnce_BindsControlSocketBeforeEngineStartup`, `TestRunOnce_DryRunBindsControlSocketBeforeEngineStartup`, `TestRunWatch_BindsControlSocketBeforeEngineStartup`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
-| Socket files are permissioned private, stale sockets are removed only after a failed live probe, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
+| Socket files are permissioned private, ownership is a `flock` on `<socket>.lock` held for the owner's lifetime, stale sockets are replaced only under that lock, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Watch mode announces each drive start failure once and again only when its reason changes or the drive has started in between, including the carried-over CLI config failures; repeats of the same shortcut-refresh or cleanup failure stay at DEBUG. | `TestReconcileWatchRunners_AnnouncesEachStartFailureOnceUntilItChanges`, `TestWarnOnChange_RepeatsOfTheSameFailureStayBelowWarn` |
 | A removed shared folder whose final sync did not finish cleanly keeps its local copy, and multisync says so in one plain Info line naming the folder (not its mount ID), repeated only when the reason changes; unchanged repeats from watch passes go to Debug. The memory is mutex-guarded because one-shot parents finalize their children concurrently. | `TestReportKeptFinalDrains_NoticesOnceUntilReasonChanges` |
 | A watch runner that exits with an error is restarted after exponential backoff from the RunWatch loop's own wake-up timer, warned about once per distinct error with the retry delay, and starts over after a healthy run; stale events from runners the orchestrator already stopped, and canceled final drains, produce no warning. | `TestHandleWatchRunnerEvent_BacksOffAndWarnsOncePerDistinctRunnerFailure`, `TestHandleWatchRunnerEvent_HealthyRunResetsBackoff`, `TestRunWatch_RestartsFailedRunnerWhenBackoffTimerFires`, `TestRunnerRestartDelay_DoublesUpToTheCap`, `TestHandleWatchRunnerEvent_IgnoresEventFromAlreadyStoppedRunner`, `TestStartWatchRunner_CanceledFinalDrainSendsNoEvent`, `TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot` |
@@ -409,10 +409,26 @@ reloads and parent changes never surface "context canceled".
 ### Control Socket
 
 `RunOnce` and `RunWatch` both bind the configured Unix control socket before
-starting engine work. This socket is the single process-owner lock: a live
-socket means another sync owner is already running for the same data directory.
-Stale socket files are removed only after a failed live dial proves no process
-owns them.
+starting engine work. Ownership is an exclusive, non-blocking `flock` on
+`<socket>.lock` (`owner_lock.go`), taken before anything touches the socket
+file and held for the owner's lifetime. It replaced "a live socket means an
+owner": two syncs starting together both failed to dial a stale socket, both
+removed it, and one deleted the other's live socket, so two owners synced the
+same drives (D-083). With the lock held, a socket file already at the path is
+a crash leftover and is replaced; the old dial check stays only as a guard.
+On close the socket is removed first, then the lock file (while still
+locked), then the lock. A contender that opened the lock file just before
+that unlink locks an orphan inode, so after locking the descriptor's inode is
+compared with the path's and a mismatch retries
+(`TestStartControlSocketServer_RacingOwnersYieldExactlyOne`,
+`TestStartControlSocketServer_LockReleasedOnCloseAndOnlyThen`,
+`TestLockFileStillAtPath_DetectsAnUnlinkedOrReplacedLock`).
+
+That lock covers one control socket. Each engine also holds an exclusive
+`flock` on a data-dir lock file named after its sync root's device and inode
+(`internal/sync/engine_root_lock.go`), so a second configuration sharing the
+data dir and reaching the same folder by any path is refused with
+`ErrSyncRootInUse` (R-2.9.5, `TestEngine_SecondEngineOnSameRootRefused`).
 
 The configured socket path normally lives under the app data directory. If that
 absolute path would exceed the platform-safe Unix socket length, config derives

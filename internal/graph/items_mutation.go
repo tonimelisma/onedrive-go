@@ -246,7 +246,7 @@ func (c *Client) UpdateFileSystemInfo(
 
 	resp, err := c.do(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return nil, err
+		return nil, relabelTimestampRangeError(err, mtime)
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
