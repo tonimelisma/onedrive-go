@@ -112,6 +112,8 @@ func conditionLabels() map[ConditionKey]string {
 		ConditionLocalFileTooLarge:      "too large for the local filesystem",
 		ConditionLocalBusy:              "busy on this computer",
 		ConditionLocalCrossDevice:       "that would move across a mount point",
+		ConditionUnsupportedOperation:   "that OneDrive refuses to handle",
+		ConditionTimestampOutOfRange:    "with dates OneDrive does not accept",
 		ConditionRateLimited:            "waiting while OneDrive limits requests",
 		ConditionServiceOutage:          "waiting for OneDrive to become available",
 		ConditionAuthenticationRequired: "waiting for sign-in",

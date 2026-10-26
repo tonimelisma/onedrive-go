@@ -3,13 +3,10 @@ package sync
 import (
 	"context"
 	"errors"
-	"net/http"
 	"os"
-	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 const (
@@ -49,27 +46,21 @@ func classifyResult(r *actionCompletion) resultDecision {
 }
 
 func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {
+	answer := r.serverAnswer()
 	scopeEvidence := deriveScopeKey(r)
 	conditionType := issueTypeForResult(r)
 
-	switch {
-	case r.HTTPStatus == 0:
+	switch answer {
+	case serverAnswerNone:
 		return resultDecision{}, false
-	case r.HTTPStatus == http.StatusUnauthorized:
+	case serverAnswerUnauthorized:
 		return withRuntimeSummary(&resultDecision{
 			Class:         resultFatal,
 			Persistence:   persistNone,
 			TrialHint:     trialHintFatal,
 			ConditionType: conditionType,
 		}), true
-	case r.HTTPStatus == http.StatusForbidden:
-		return withRuntimeSummary(&resultDecision{
-			Class:         resultSkip,
-			Persistence:   persistRetryWork,
-			TrialHint:     trialHintReclassify,
-			ConditionType: conditionType,
-		}), true
-	case r.HTTPStatus == http.StatusTooManyRequests:
+	case serverAnswerThrottled, serverAnswerQuota:
 		return withRuntimeSummary(&resultDecision{
 			Class:             resultBlockScope,
 			ScopeKey:          scopeEvidence,
@@ -79,17 +70,11 @@ func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {
 			TrialHint:         trialHintExtendOnMatchingScope,
 			ConditionType:     conditionType,
 		}), true
-	case r.HTTPStatus == http.StatusInsufficientStorage:
-		return withRuntimeSummary(&resultDecision{
-			Class:             resultBlockScope,
-			ScopeKey:          scopeEvidence,
-			ScopeEvidence:     scopeEvidence,
-			Persistence:       persistRetryWork,
-			RunScopeDetection: true,
-			TrialHint:         trialHintExtendOnMatchingScope,
-			ConditionType:     conditionType,
-		}), true
-	case r.HTTPStatus >= http.StatusInternalServerError:
+	case serverAnswerServiceOutage,
+		serverAnswerRequestTimeout,
+		serverAnswerTransientConflict,
+		serverAnswerTransientNotFound,
+		serverAnswerLocked:
 		return withRuntimeSummary(&resultDecision{
 			Class:             resultRequeue,
 			ScopeEvidence:     scopeEvidence,
@@ -98,16 +83,13 @@ func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {
 			TrialHint:         trialHintExtendOnMatchingScope,
 			ConditionType:     conditionType,
 		}), true
-	case isRetryableHTTPStatus(r.HTTPStatus):
-		return withRuntimeSummary(&resultDecision{
-			Class:             resultRequeue,
-			ScopeEvidence:     scopeEvidence,
-			Persistence:       persistRetryWork,
-			RunScopeDetection: true,
-			TrialHint:         trialHintExtendOnMatchingScope,
-			ConditionType:     conditionType,
-		}), true
-	default:
+	case serverAnswerForbidden,
+		serverAnswerUnsupported,
+		serverAnswerPathTooLong,
+		serverAnswerTimestampOutOfRange,
+		serverAnswerOther:
+		// Actionable per item: retrying the same request gets the same
+		// answer, and none of these say anything about a wider scope.
 		return withRuntimeSummary(&resultDecision{
 			Class:         resultSkip,
 			Persistence:   persistRetryWork,
@@ -115,13 +97,8 @@ func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {
 			ConditionType: conditionType,
 		}), true
 	}
-}
 
-func isRetryableHTTPStatus(status int) bool {
-	return status == http.StatusRequestTimeout ||
-		status == http.StatusPreconditionFailed ||
-		status == http.StatusNotFound ||
-		status == http.StatusLocked
+	return resultDecision{}, false
 }
 
 func classifyLocalResult(r *actionCompletion) resultDecision {
@@ -179,10 +156,11 @@ func withRuntimeSummary(decision *resultDecision) resultDecision {
 }
 
 // deriveScopeKey maps an action completion to its typed scope key. Delegates to
-// ScopeKeyForResult — single source of truth for HTTP status → scope
-// key mapping. Returns the zero-value ScopeKey for non-scope statuses.
+// scopeKeyForResult, the single source of truth for server answer -> scope
+// key. Returns the zero-value ScopeKey for answers that are not scope
+// evidence.
 func deriveScopeKey(r *actionCompletion) ScopeKey {
-	return scopeKeyForResult(r.HTTPStatus, r.DriveID)
+	return scopeKeyForResult(r.serverAnswer(), r.DriveID)
 }
 
 func issueTypeForResult(r *actionCompletion) string {
@@ -201,47 +179,36 @@ func issueTypeForHTTPResult(r *actionCompletion) (string, bool) {
 		return "", false
 	}
 
-	switch httpStatus := r.HTTPStatus; {
-	case httpStatus == http.StatusBadRequest && isGraphPathTooLong(r.Err):
+	switch r.serverAnswer() {
+	case serverAnswerPathTooLong:
 		return issuePathTooLong, true
-	case httpStatus == http.StatusUnauthorized:
+	case serverAnswerUnauthorized:
 		return IssueUnauthorized, true
-	case httpStatus == http.StatusTooManyRequests:
+	case serverAnswerThrottled:
 		return issueRateLimited, true
-	case httpStatus == http.StatusInsufficientStorage:
+	case serverAnswerQuota:
 		return IssueQuotaExceeded, true
-	case httpStatus == http.StatusForbidden:
+	case serverAnswerForbidden:
 		return issueTypeForForbiddenResult(r), true
-	case httpStatus >= http.StatusInternalServerError:
+	case serverAnswerUnsupported:
+		return issueUnsupportedOperation, true
+	case serverAnswerTimestampOutOfRange:
+		return issueTimestampOutOfRange, true
+	case serverAnswerServiceOutage:
 		return issueServiceOutage, true
-	case httpStatus == http.StatusRequestTimeout:
+	case serverAnswerRequestTimeout:
 		return "request_timeout", true
-	case httpStatus == http.StatusPreconditionFailed:
+	case serverAnswerTransientConflict:
 		return "transient_conflict", true
-	case httpStatus == http.StatusNotFound:
+	case serverAnswerTransientNotFound:
 		return "transient_not_found", true
-	case httpStatus == http.StatusLocked:
+	case serverAnswerLocked:
 		return "resource_locked", true
-	default:
+	case serverAnswerNone, serverAnswerOther:
 		return "", false
 	}
-}
 
-// isGraphPathTooLong recognizes OneDrive refusing a create because the
-// resulting path is too long: "The specified file or folder name is too long.
-// The URL path for all files and folders must be 400 characters or less." It
-// counts more than the drive-relative path (on a Personal drive a 364-character
-// path was accepted and 365 refused), so the scanner's 400-character check
-// cannot catch every case, and the bare 400 used to retry forever as
-// "graph: bad request".
-func isGraphPathTooLong(err error) bool {
-	var graphErr *graph.GraphError
-	if !errors.As(err, &graphErr) {
-		return false
-	}
-
-	message := strings.ToLower(graphErr.Message)
-	return strings.Contains(message, "name is too long") || strings.Contains(message, "400 characters or less")
+	return "", false
 }
 
 func issueTypeForForbiddenResult(r *actionCompletion) string {

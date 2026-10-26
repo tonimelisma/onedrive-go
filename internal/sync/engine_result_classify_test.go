@@ -470,3 +470,69 @@ func TestShouldHandleLocalPermission_IncludesReadOnlyFilesystem(t *testing.T) {
 		Err: &os.PathError{Op: "open", Path: "/sync/a", Err: syscall.EBUSY},
 	}))
 }
+
+// Validates: R-2.10.64, R-2.10.65, R-2.10.66, R-2.10.67
+func TestClassifyResult_ServerAnswerTable(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name      string
+		status    int
+		err       error
+		class     errclass.Class
+		scopeKey  ScopeKey
+		evidence  ScopeKey
+		issueType string
+	}{
+		{
+			name:   "501 is a per-item refusal",
+			status: http.StatusNotImplemented,
+			err:    &graph.GraphError{StatusCode: http.StatusNotImplemented, Err: graph.ErrServerError},
+			class:  resultSkip, issueType: issueUnsupportedOperation,
+		},
+		{
+			name:   "505 is a per-item refusal",
+			status: http.StatusHTTPVersionNotSupported,
+			err:    &graph.GraphError{StatusCode: http.StatusHTTPVersionNotSupported, Err: graph.ErrServerError},
+			class:  resultSkip, issueType: issueUnsupportedOperation,
+		},
+		{
+			name:   "500 insufficient space is quota",
+			status: http.StatusInternalServerError,
+			err: &graph.GraphError{
+				StatusCode: http.StatusInternalServerError, Message: "Insufficient Space Available", Err: graph.ErrServerError,
+			},
+			class: resultBlockScope, scopeKey: SKQuotaOwn(), evidence: SKQuotaOwn(), issueType: IssueQuotaExceeded,
+		},
+		{
+			name:   "409 resourceModified is retried",
+			status: http.StatusConflict,
+			err:    &graph.GraphError{StatusCode: http.StatusConflict, Code: "resourceModified", Err: graph.ErrConflict},
+			class:  resultRequeue, issueType: "transient_conflict",
+		},
+		{
+			name:   "pre-1900 mtime 404 is a range error, not gone",
+			status: http.StatusNotFound,
+			err:    &graph.GraphError{StatusCode: http.StatusNotFound, Code: "itemNotFound", Err: graph.ErrTimestampOutOfRange},
+			class:  resultSkip, issueType: issueTimestampOutOfRange,
+		},
+		{
+			name:   "plain 500 is still outage evidence",
+			status: http.StatusInternalServerError,
+			err:    &graph.GraphError{StatusCode: http.StatusInternalServerError, Err: graph.ErrServerError},
+			class:  resultRequeue, evidence: SKService(), issueType: issueServiceOutage,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := classifyResult(&actionCompletion{HTTPStatus: tc.status, Err: tc.err, ActionType: ActionUpload, Path: "a.txt"})
+			assert.Equal(t, tc.class, got.Class)
+			assert.Equal(t, tc.scopeKey, got.ScopeKey)
+			assert.Equal(t, tc.evidence, got.ScopeEvidence)
+			assert.Equal(t, tc.issueType, got.ConditionType)
+		})
+	}
+}

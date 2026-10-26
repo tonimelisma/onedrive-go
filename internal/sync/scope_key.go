@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"net/http"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -266,25 +265,37 @@ func scopePathMatches(path, boundary string) bool {
 	return path == boundary || strings.HasPrefix(path, boundary+"/")
 }
 
-// scopeKeyForResult maps one action completion target and HTTP status code to a
-// ScopeKey. Returns the zero-value for non-scope statuses. This is the single
-// source of truth for HTTP status → scope key classification.
-func scopeKeyForResult(httpStatus int, targetDriveID driveid.ID) ScopeKey {
-	switch {
-	case httpStatus == http.StatusTooManyRequests:
+// scopeKeyForResult maps one action completion's server answer and target
+// drive to a ScopeKey. Returns the zero value for answers that are not scope
+// evidence. This is the single source of truth for answer -> scope key.
+// Refusals (501, 505, notSupported) deliberately have no scope: they are
+// about one request, not about OneDrive being down.
+func scopeKeyForResult(answer serverAnswer, targetDriveID driveid.ID) ScopeKey {
+	switch answer {
+	case serverAnswerThrottled:
 		if targetDriveID.IsZero() {
 			return ScopeKey{}
 		}
 		return SKThrottleDrive(targetDriveID)
-	case httpStatus == http.StatusServiceUnavailable:
-		return SKService()
-	case httpStatus == http.StatusInsufficientStorage:
+	case serverAnswerQuota:
 		return SKQuotaOwn()
-	case httpStatus >= http.StatusInternalServerError:
+	case serverAnswerServiceOutage:
 		return SKService()
-	default:
+	case serverAnswerNone,
+		serverAnswerUnauthorized,
+		serverAnswerForbidden,
+		serverAnswerUnsupported,
+		serverAnswerPathTooLong,
+		serverAnswerTimestampOutOfRange,
+		serverAnswerRequestTimeout,
+		serverAnswerTransientConflict,
+		serverAnswerTransientNotFound,
+		serverAnswerLocked,
+		serverAnswerOther:
 		return ScopeKey{}
 	}
+
+	return ScopeKey{}
 }
 
 const (

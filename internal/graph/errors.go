@@ -39,6 +39,13 @@ var (
 	// before the user entered it (OAuth expired_token).
 	ErrLoginCodeExpired = errors.New("the sign-in code expired before it was entered")
 
+	// ErrTimestampOutOfRange marks a fileSystemInfo timestamp OneDrive does
+	// not accept. Personal refuses anything before 1900-01-01T00:00:00Z with a
+	// misleading 404 itemNotFound (live probe L-26, 2026-10-25); the client
+	// re-labels that 404 so nothing downstream reads it as "the item is gone"
+	// and forgets a live item.
+	ErrTimestampOutOfRange = errors.New("graph: modification time out of OneDrive's range")
+
 	// ErrProviderReadOnly marks a Microsoft-side read-only window: the service
 	// answers, authentication is valid, and the account is fine, but the
 	// backing store will not serve the request. It is reported as an outer
@@ -55,6 +62,38 @@ var (
 // window.
 const graphCodeServiceReadOnly = "serviceReadOnly"
 
+// earliestFileSystemYear is the first year OneDrive Personal accepts in a
+// fileSystemInfo timestamp (live probe L-26): 1899-12-31T23:59:59Z returns
+// 404, 1900-01-01T00:00:00Z is stored.
+const earliestFileSystemYear = 1900
+
+// EarliestFileSystemTime is the earliest fileSystemInfo timestamp OneDrive
+// accepts.
+func EarliestFileSystemTime() time.Time {
+	return time.Date(earliestFileSystemYear, time.January, 1, 0, 0, 0, 0, time.UTC)
+}
+
+// relabelTimestampRangeError turns the 404 itemNotFound OneDrive returns for a
+// pre-1900 fileSystemInfo timestamp into ErrTimestampOutOfRange, keeping the
+// status, request ID and body for diagnosis. Any other error is unchanged.
+func relabelTimestampRangeError(err error, sent time.Time) error {
+	if !sent.Before(EarliestFileSystemTime()) || !errors.Is(err, ErrNotFound) {
+		return err
+	}
+
+	var graphErr *GraphError
+	if !errors.As(err, &graphErr) {
+		return fmt.Errorf("%w (sent %s): %w", ErrTimestampOutOfRange, sent.UTC().Format(time.RFC3339), err)
+	}
+
+	relabeled := *graphErr
+	relabeled.Err = ErrTimestampOutOfRange
+	relabeled.Message = fmt.Sprintf("modification time %s is before %s, which OneDrive does not accept (it answers %q)",
+		sent.UTC().Format(time.RFC3339), EarliestFileSystemTime().Format(time.RFC3339), graphErr.Message)
+
+	return &relabeled
+}
+
 // GraphError wraps a sentinel error with HTTP status code, request ID,
 // and the API error message body for debugging.
 type GraphError struct {
@@ -69,16 +108,21 @@ type GraphError struct {
 	// header on 429/503 responses. Zero when absent or unparseable. The engine
 	// uses this for scope-based backoff instead of computing its own delay.
 	RetryAfter time.Duration
+	// AgsDiagnostic is the X-Ms-Ags-Diagnostic response header: the Graph
+	// gateway's routing record (server, data center). Microsoft support asks
+	// for it next to the request ID when an outage or throttle is escalated.
+	AgsDiagnostic string
 }
 
 // QuirkRetryAttempt records the observable evidence from one retryable Graph
 // quirk attempt. It is attached to QuirkRetryError so callers can log or report
 // the exact request IDs and Graph codes that exhausted the bounded quirk budget.
 type QuirkRetryAttempt struct {
-	Attempt    int    `json:"attempt"`
-	StatusCode int    `json:"statusCode,omitempty"`
-	GraphCode  string `json:"graphCode,omitempty"`
-	RequestID  string `json:"requestId,omitempty"`
+	Attempt       int    `json:"attempt"`
+	StatusCode    int    `json:"statusCode,omitempty"`
+	GraphCode     string `json:"graphCode,omitempty"`
+	RequestID     string `json:"requestId,omitempty"`
+	AgsDiagnostic string `json:"agsDiagnostic,omitempty"`
 }
 
 // QuirkEvidence is the narrow reusable projection of bounded documented-quirk
@@ -180,6 +224,45 @@ func (e *GraphError) Is(target error) bool {
 	}
 
 	return false
+}
+
+// Graph codes and message fragments that identify a full OneDrive or a
+// refused operation regardless of the HTTP status they arrive under.
+const (
+	graphCodeQuotaLimitReached    = "quotaLimitReached"
+	graphCodeInsufficientStorage  = "insufficientStorage"
+	graphCodeNotSupported         = "notSupported"
+	graphMessageInsufficientSpace = "insufficient space"
+)
+
+// IsQuotaExhausted reports whether err is OneDrive saying the drive is full.
+// 507 is the documented answer, but OneDrive also reports a full drive as 403
+// quotaLimitReached and (on Business) as 500 "Insufficient Space Available",
+// so the most specific code and message are checked before the status.
+func IsQuotaExhausted(err error) bool {
+	var graphErr *GraphError
+	if !errors.As(err, &graphErr) {
+		return false
+	}
+
+	return graphErr.StatusCode == http.StatusInsufficientStorage ||
+		graphErr.HasCode(graphCodeQuotaLimitReached) ||
+		graphErr.HasCode(graphCodeInsufficientStorage) ||
+		strings.Contains(strings.ToLower(graphErr.Message), graphMessageInsufficientSpace)
+}
+
+// IsNotSupported reports whether err is OneDrive refusing an operation it
+// does not implement for this item: 501, 505, or a notSupported code under
+// any status. It is a stable answer about one request, never an outage.
+func IsNotSupported(err error) bool {
+	var graphErr *GraphError
+	if !errors.As(err, &graphErr) {
+		return false
+	}
+
+	return graphErr.StatusCode == http.StatusNotImplemented ||
+		graphErr.StatusCode == http.StatusHTTPVersionNotSupported ||
+		graphErr.HasCode(graphCodeNotSupported)
 }
 
 // IsProviderUnavailable reports whether err is a provider-side condition that

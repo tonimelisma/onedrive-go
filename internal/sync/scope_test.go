@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 // Validates: R-2.10.3, R-2.10.26
@@ -491,16 +492,88 @@ func TestScopeKey_BlocksAction(t *testing.T) {
 	}
 }
 
-// Validates: R-2.10.1, R-2.10.3
+// Validates: R-2.10.1, R-2.10.3, R-2.10.65
 func TestScopeKeyForResult(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, SKThrottleDrive(driveid.New("0000000000000001")), scopeKeyForResult(429, driveid.New("0000000000000001")))
-	assert.True(t, scopeKeyForResult(429, driveid.ID{}).IsZero(), "429 without a drive id should be zero")
-	assert.Equal(t, SKService(), scopeKeyForResult(503, driveid.ID{}))
-	assert.Equal(t, SKService(), scopeKeyForResult(500, driveid.ID{}))
-	assert.Equal(t, SKService(), scopeKeyForResult(502, driveid.ID{}))
-	assert.Equal(t, SKQuotaOwn(), scopeKeyForResult(507, driveid.ID{}))
-	assert.True(t, scopeKeyForResult(404, driveid.ID{}).IsZero(), "non-scope status should be zero")
-	assert.True(t, scopeKeyForResult(200, driveid.ID{}).IsZero(), "success status should be zero")
+	key := func(status int, drive driveid.ID) ScopeKey {
+		return scopeKeyForResult(classifyServerAnswer(status, nil), drive)
+	}
+	assert.Equal(t, SKThrottleDrive(driveid.New("0000000000000001")), key(429, driveid.New("0000000000000001")))
+	assert.True(t, key(429, driveid.ID{}).IsZero(), "429 without a drive id should be zero")
+	assert.Equal(t, SKService(), key(503, driveid.ID{}))
+	assert.Equal(t, SKService(), key(500, driveid.ID{}))
+	assert.Equal(t, SKService(), key(502, driveid.ID{}))
+	assert.Equal(t, SKQuotaOwn(), key(507, driveid.ID{}))
+	assert.True(t, key(501, driveid.ID{}).IsZero(), "a refusal is not service evidence")
+	assert.True(t, key(505, driveid.ID{}).IsZero(), "a refusal is not service evidence")
+	assert.True(t, key(404, driveid.ID{}).IsZero(), "non-scope status should be zero")
+	assert.True(t, key(200, driveid.ID{}).IsZero(), "success status should be zero")
+}
+
+// Validates: R-2.10.65
+func TestScope_FiveRefusalsSetNoServiceScope(t *testing.T) {
+	t.Parallel()
+
+	clock, advance := controllableClock()
+	ss := newScopeState(clock, discardLogger())
+
+	for _, p := range []string{"/a", "/b", "/c", "/d", "/e", "/f"} {
+		result := ss.UpdateScope(&actionCompletion{
+			Path:       p,
+			HTTPStatus: 501,
+			Err: &graph.GraphError{
+				StatusCode: 501, Code: "notImplemented", Err: graph.ErrServerError,
+				Message: "Creating a folder in this shared folder is not supported.",
+			},
+		})
+		assert.False(t, result.Block, "a 501 refusal must never block every drive")
+		advance(time.Second)
+	}
+
+	// A notSupported code under another 5xx is a refusal too.
+	for _, p := range []string{"/g", "/h", "/i", "/j", "/k"} {
+		result := ss.UpdateScope(&actionCompletion{
+			Path:       p,
+			HTTPStatus: 500,
+			Err:        &graph.GraphError{StatusCode: 500, Code: "notSupported", Err: graph.ErrServerError},
+		})
+		assert.False(t, result.Block)
+	}
+}
+
+// Validates: R-2.10.66
+func TestScope_QuotaRecognizedOutsideStatus507(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  *graph.GraphError
+	}{
+		{name: "500 insufficient space", err: &graph.GraphError{
+			StatusCode: 500, Code: "generalException", Err: graph.ErrServerError,
+			Message: "Insufficient Space Available",
+		}},
+		{name: "403 quotaLimitReached", err: &graph.GraphError{
+			StatusCode: 403, Code: "accessDenied", InnerCodes: []string{"quotaLimitReached"}, Err: graph.ErrForbidden,
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			clock, advance := controllableClock()
+			ss := newScopeState(clock, discardLogger())
+			var last scopeUpdateResult
+			for _, p := range []string{"/a", "/b", "/c"} {
+				last = ss.UpdateScope(&actionCompletion{Path: p, HTTPStatus: tt.err.StatusCode, Err: tt.err})
+				advance(time.Second)
+			}
+
+			require.True(t, last.Block, "three quota answers on distinct paths block uploads")
+			assert.Equal(t, SKQuotaOwn(), last.ScopeKey)
+			assert.Equal(t, IssueQuotaExceeded, last.ConditionType)
+		})
+	}
 }

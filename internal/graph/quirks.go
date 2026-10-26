@@ -106,6 +106,7 @@ func buildQuirkRetryAttempt(attempt int, graphErr *GraphError) QuirkRetryAttempt
 		record.GraphCode = graphErr.Code
 	}
 	record.RequestID = graphErr.RequestID
+	record.AgsDiagnostic = graphErr.AgsDiagnostic
 
 	return record
 }

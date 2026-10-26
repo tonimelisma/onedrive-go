@@ -2,6 +2,8 @@ package sync
 
 import (
 	"errors"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -41,4 +43,107 @@ func extractRetryAfter(err error) time.Duration {
 	}
 
 	return 0
+}
+
+// serverAnswer is what a Graph failure means for the work around it. It is
+// the one table from (HTTP status, Graph code, message) to meaning: scope
+// detection, result classification and issue naming all read it, so a quota
+// answer or a refusal is recognized identically everywhere. The most specific
+// evidence wins: a Graph code or a known message is checked before the bare
+// status, because OneDrive reports one condition under several statuses.
+type serverAnswer int
+
+const (
+	serverAnswerNone serverAnswer = iota
+	serverAnswerUnauthorized
+	serverAnswerForbidden
+	serverAnswerThrottled
+	// serverAnswerQuota is a full OneDrive: 507, or quotaLimitReached /
+	// insufficientStorage or an "insufficient space" message under any
+	// status (Business has returned it as 500 and 403).
+	serverAnswerQuota
+	serverAnswerServiceOutage
+	// serverAnswerUnsupported is OneDrive refusing an operation it does not
+	// implement (501, 505, or a notSupported code under any status). It is a
+	// stable answer about one request, not an outage, so it must never count
+	// toward the service scope: five refusals used to block every drive.
+	serverAnswerUnsupported
+	serverAnswerPathTooLong
+	// serverAnswerTimestampOutOfRange is OneDrive rejecting a fileSystemInfo
+	// timestamp (graph.ErrTimestampOutOfRange), reported on the wire as 404.
+	serverAnswerTimestampOutOfRange
+	serverAnswerRequestTimeout
+	// serverAnswerTransientConflict is 412, and 409 resourceModified: the
+	// item changed between our read and our write (an mtime PATCH racing a
+	// server-side post-upload update), so a retry against fresh truth works.
+	serverAnswerTransientConflict
+	serverAnswerTransientNotFound
+	serverAnswerLocked
+	serverAnswerOther
+)
+
+// Graph codes and message fragments the server-answer table recognizes
+// beyond graph.IsQuotaExhausted and graph.IsNotSupported.
+const (
+	graphCodeResourceModified = "resourceModified"
+	graphMessageNameTooLong   = "name is too long"
+	graphMessagePathLimit     = "400 characters or less"
+)
+
+// classifyServerAnswer maps one Graph failure to its meaning. status is the
+// HTTP status recorded on the completion; err supplies the code and message
+// when it carries a graph.GraphError.
+func classifyServerAnswer(status int, err error) serverAnswer {
+	if status == 0 {
+		return serverAnswerNone
+	}
+
+	var graphErr *graph.GraphError
+	hasGraphErr := errors.As(err, &graphErr)
+	message := ""
+	if hasGraphErr {
+		message = strings.ToLower(graphErr.Message)
+	}
+
+	switch {
+	case errors.Is(err, graph.ErrTimestampOutOfRange):
+		return serverAnswerTimestampOutOfRange
+	case status == http.StatusInsufficientStorage, graph.IsQuotaExhausted(err):
+		return serverAnswerQuota
+	case status == http.StatusNotImplemented, status == http.StatusHTTPVersionNotSupported, graph.IsNotSupported(err):
+		return serverAnswerUnsupported
+	case status == http.StatusBadRequest &&
+		(strings.Contains(message, graphMessageNameTooLong) || strings.Contains(message, graphMessagePathLimit)):
+		// OneDrive counts more than the drive-relative path toward its 400
+		// limit (a 364-character path was accepted and 365 refused), so the
+		// scanner cannot catch every case and the bare 400 retried forever.
+		return serverAnswerPathTooLong
+	case status == http.StatusConflict && hasGraphErr && graphErr.HasCode(graphCodeResourceModified):
+		return serverAnswerTransientConflict
+	}
+
+	return classifyServerStatus(status)
+}
+
+func classifyServerStatus(status int) serverAnswer {
+	switch {
+	case status == http.StatusUnauthorized:
+		return serverAnswerUnauthorized
+	case status == http.StatusForbidden:
+		return serverAnswerForbidden
+	case status == http.StatusTooManyRequests:
+		return serverAnswerThrottled
+	case status >= http.StatusInternalServerError:
+		return serverAnswerServiceOutage
+	case status == http.StatusRequestTimeout:
+		return serverAnswerRequestTimeout
+	case status == http.StatusPreconditionFailed:
+		return serverAnswerTransientConflict
+	case status == http.StatusNotFound:
+		return serverAnswerTransientNotFound
+	case status == http.StatusLocked:
+		return serverAnswerLocked
+	default:
+		return serverAnswerOther
+	}
 }

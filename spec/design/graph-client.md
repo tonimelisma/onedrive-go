@@ -308,7 +308,7 @@ fails as a confusing syntax error that hides the real cause.
 
 ## Error Handling (`errors.go`)
 
-Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `ErrConflict` (409). Error response bodies are read with a 64 KiB cap (`io.LimitReader`) to prevent unbounded memory allocation from malformed responses. HTTP 423 (Locked) from SharePoint co-authoring is classified as skip, not retryable — locks persist for hours; watch mode retries on the next safety scan.
+Sentinel errors: `ErrGone` (410), `ErrNotFound` (404), `ErrThrottled` (429), `ErrConflict` (409). Error response bodies are read with a 64 KiB cap (`io.LimitReader`) to prevent unbounded memory allocation from malformed responses. HTTP 423 (Locked) from SharePoint co-authoring or an open Office file is `ErrLocked`; the transport does not retry it (locks persist for minutes to hours), and sync records it as retryable `resource_locked` retry work whose backoff grows with each attempt.
 
 `GraphError` preserves Graph's structured error metadata: `Code`, `InnerCodes`, capped `RawBody`, and helper methods `MostSpecificCode()` / `HasCode()`. `Message`, `RawBody`, and `Error()` are sanitized before exposure so bearer tokens and pre-authenticated URLs are redacted even when Graph echoes them back in an error payload. Quirk retries key on the code chain first. One-off incident signatures without recoverable payload evidence stay in the reference layer and are not special-cased in runtime classification.
 
@@ -345,6 +345,26 @@ This package owns the wire-to-domain normalization step for remote failures:
 raw HTTP and Graph payloads become `GraphError` values plus sentinels such as
 `ErrGone` and `ErrUnauthorized`. Retry, persistence, and user-facing decisions
 consume that normalized boundary contract via [error-model.md](error-model.md).
+
+**Meaning predicates** — `IsQuotaExhausted` and `IsNotSupported` answer "is the
+drive full" and "did OneDrive refuse this operation" from the most specific
+evidence first (code chain and message, then status), because OneDrive
+reports a full drive as 507, 403 `quotaLimitReached` or 500 "Insufficient
+Space Available", and a refusal as 501, 505 or `notSupported`. The sync
+server-answer table and CLI presentation both consume them
+(`TestIsQuotaExhaustedAndIsNotSupported`).
+
+**Timestamp range** — OneDrive Personal accepts `fileSystemInfo` timestamps from
+1900-01-01T00:00:00Z (`EarliestFileSystemTime`) and answers anything earlier
+with a misleading `404 itemNotFound` (live probe L-26). `UpdateFileSystemInfo`
+relabels that 404 as `ErrTimestampOutOfRange`, keeping the status and request
+ID, so no caller reads a live item as deleted
+(`TestUpdateFileSystemInfo_Pre1900NotFoundIsRangeError`).
+
+**Gateway diagnostics** — `GraphError.AgsDiagnostic` keeps the
+`X-Ms-Ags-Diagnostic` header, and `QuirkRetryAttempt` carries it, for support
+escalation next to the request ID (`TestGraphError_KeepsAgsDiagnosticHeader`,
+`TestBuildQuirkRetryAttempt_CarriesAgsDiagnostic`).
 
 **RetryAfter Header** — `RetryAfter time.Duration` field on `GraphError`. Parsed from `Retry-After` header for 429 and 503 responses. Implements: R-6.8.6 [verified]
 

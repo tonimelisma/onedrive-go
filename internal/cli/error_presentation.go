@@ -8,7 +8,6 @@ import (
 	"io"
 	"io/fs"
 	"net"
-	"net/http"
 	"net/url"
 	"path"
 	"strconv"
@@ -166,11 +165,6 @@ func remoteFailureSubject(err error) (*remoteOpError, string, string) {
 	return op, op.path, hint
 }
 
-func isNotImplemented(err error) bool {
-	var graphErr *graph.GraphError
-	return errors.As(err, &graphErr) && graphErr.StatusCode == http.StatusNotImplemented
-}
-
 func notImplementedMessage(err error) string {
 	var graphErr *graph.GraphError
 	if errors.As(err, &graphErr) && graphErr.Message != "" {
@@ -178,12 +172,6 @@ func notImplementedMessage(err error) string {
 	}
 
 	return "the request is not supported"
-}
-
-func isQuotaFull(err error) bool {
-	var graphErr *graph.GraphError
-	return errors.As(err, &graphErr) &&
-		(graphErr.StatusCode == http.StatusInsufficientStorage || graphErr.HasCode("quotaLimitReached"))
 }
 
 // remoteFailureText turns the OneDrive failures a user can understand into
@@ -194,7 +182,7 @@ func remoteFailureText(err error) string {
 	movesOrCopies := op != nil && (strings.HasPrefix(op.action, "moving") || strings.HasPrefix(op.action, "copying"))
 
 	switch {
-	case isQuotaFull(err):
+	case graph.IsQuotaExhausted(err):
 		return "Your OneDrive storage is full. Free up space or add storage, then run the command again."
 	case errors.Is(err, graph.ErrNotFound):
 		return subject + " was not found on OneDrive." + parentHint
@@ -210,7 +198,7 @@ func remoteFailureText(err error) string {
 		return "OneDrive is limiting requests right now. Wait a few minutes, then run the command again."
 	case errors.Is(err, graph.ErrProviderReadOnly):
 		return "OneDrive is temporarily read-only for this account. Try again later."
-	case isNotImplemented(err):
+	case graph.IsNotSupported(err):
 		// 501 is OneDrive refusing the request, not an outage: retrying
 		// "in a few minutes" cannot help, so pass on what it said.
 		return "OneDrive cannot do this for " + subject + ": " + notImplementedMessage(err)

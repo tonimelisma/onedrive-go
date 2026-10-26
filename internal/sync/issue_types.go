@@ -32,4 +32,6 @@ const (
 	issueLocalFileTooLarge    = "local_file_too_large"
 	issueLocalBusy            = "local_busy"
 	issueLocalCrossDevice     = "local_cross_device"
+	issueUnsupportedOperation = "unsupported_operation"
+	issueTimestampOutOfRange  = "timestamp_out_of_range"
 )

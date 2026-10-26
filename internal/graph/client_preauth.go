@@ -32,6 +32,7 @@ func (c *Client) buildError(method, path string, resp *http.Response) *GraphErro
 	reqID := resp.Header.Get("request-id")
 	retryAfter := parseRetryAfter(resp)
 	graphErr := buildGraphError(resp.StatusCode, reqID, retryAfter, errBody)
+	graphErr.AgsDiagnostic = resp.Header.Get(headerAgsDiagnostic)
 
 	// Log at DEBUG — the HTTP layer lacks context to judge severity.
 	// Callers decide: e.g. DELETE 404 is success, GET 404 is an error.
@@ -40,6 +41,7 @@ func (c *Client) buildError(method, path string, resp *http.Response) *GraphErro
 		slog.String("path", path),
 		slog.Int("status", resp.StatusCode),
 		slog.String("request_id", reqID),
+		slog.String("ags_diagnostic", graphErr.AgsDiagnostic),
 	)
 
 	return graphErr
@@ -110,7 +112,10 @@ func (c *Client) doPreAuth(
 		slog.String("request_id", reqID),
 	)
 
-	return nil, buildGraphError(resp.StatusCode, reqID, retryAfter, errBody)
+	graphErr := buildGraphError(resp.StatusCode, reqID, retryAfter, errBody)
+	graphErr.AgsDiagnostic = resp.Header.Get(headerAgsDiagnostic)
+
+	return nil, graphErr
 }
 
 func (c *Client) dispatchRequest(req *http.Request) (*http.Response, error) {
@@ -179,6 +184,10 @@ func parseRetryAfter(resp *http.Response) time.Duration {
 
 	return time.Duration(seconds) * time.Second
 }
+
+// headerAgsDiagnostic is the Graph gateway's diagnostic header, kept on
+// GraphError for support escalation (MS-201).
+const headerAgsDiagnostic = "X-Ms-Ags-Diagnostic"
 
 func buildGraphError(statusCode int, requestID string, retryAfter time.Duration, rawBody []byte) *GraphError {
 	code, message, innerCodes := parseGraphErrorBody(rawBody)

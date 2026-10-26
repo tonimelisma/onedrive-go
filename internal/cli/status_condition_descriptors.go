@@ -136,7 +136,9 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 		syncengine.ConditionLocalReadOnly,
 		syncengine.ConditionLocalFileTooLarge,
 		syncengine.ConditionLocalBusy,
-		syncengine.ConditionLocalCrossDevice:
+		syncengine.ConditionLocalCrossDevice,
+		syncengine.ConditionUnsupportedOperation,
+		syncengine.ConditionTimestampOutOfRange:
 		return describeLocalRuntimeStatusCondition(key)
 	case syncengine.ConditionUnexpectedCondition:
 		return newStatusConditionDescriptor(
@@ -216,6 +218,8 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionLocalFileTooLarge,
 		syncengine.ConditionLocalBusy,
 		syncengine.ConditionLocalCrossDevice,
+		syncengine.ConditionUnsupportedOperation,
+		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -275,6 +279,8 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionLocalFileTooLarge,
 		syncengine.ConditionLocalBusy,
 		syncengine.ConditionLocalCrossDevice,
+		syncengine.ConditionUnsupportedOperation,
+		syncengine.ConditionTimestampOutOfRange,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -307,6 +313,18 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 			"Local file busy",
 			"The local file is in use or its network handle went stale.",
 			"Wait for the program using it to finish (automatic retry in progress).",
+		)
+	case syncengine.ConditionUnsupportedOperation:
+		return newStatusConditionDescriptor(
+			"Not supported by OneDrive",
+			"OneDrive refuses this operation here (for example creating a folder inside some shared folders).",
+			"Make the change on the OneDrive website, or move the item somewhere OneDrive supports it.",
+		)
+	case syncengine.ConditionTimestampOutOfRange:
+		return newStatusConditionDescriptor(
+			"Date not accepted by OneDrive",
+			"The file's modification date is before 1900, which OneDrive does not store.",
+			"Set a later modification date on the local file (for example with touch).",
 		)
 	case syncengine.ConditionLocalCrossDevice:
 		return newStatusConditionDescriptor(

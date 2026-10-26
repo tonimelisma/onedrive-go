@@ -63,13 +63,16 @@ func newScopeState(nowFunc func() time.Time, logger *slog.Logger) *scopeState {
 // Per the sync-engine scope taxonomy and activation rules:
 //   - 429 → immediate target-drive throttle block (server signal)
 //   - 503 with Retry-After → immediate service block (server signal)
-//   - 507 → sliding window quota:own (3 unique paths / 10s)
-//   - 5xx (no Retry-After) → sliding window service (5 unique paths / 30s)
+//   - quota (507, or a quota code/message under any status) → sliding
+//     window quota:own (3 unique paths / 10s)
+//   - outage 5xx (no Retry-After) → sliding window service (5 unique paths /
+//     30s); 501/505 refusals are excluded
 func (ss *scopeState) UpdateScope(r *actionCompletion) scopeUpdateResult {
+	answer := r.serverAnswer()
 	switch {
-	case r.HTTPStatus == http.StatusTooManyRequests:
+	case answer == serverAnswerThrottled:
 		// Immediate block — server signal, single response triggers (R-2.10.26).
-		scopeKey := scopeKeyForResult(r.HTTPStatus, r.DriveID)
+		scopeKey := scopeKeyForResult(answer, r.DriveID)
 		if scopeKey.IsZero() {
 			return scopeUpdateResult{}
 		}
@@ -80,7 +83,7 @@ func (ss *scopeState) UpdateScope(r *actionCompletion) scopeUpdateResult {
 			RetryAfter:    r.RetryAfter,
 		}
 
-	case r.HTTPStatus == http.StatusServiceUnavailable && r.RetryAfter > 0:
+	case answer == serverAnswerServiceOutage && r.HTTPStatus == http.StatusServiceUnavailable && r.RetryAfter > 0:
 		// Immediate block — 503 with Retry-After is a server signal (R-2.10.3).
 		return scopeUpdateResult{
 			Block:         true,
@@ -89,15 +92,17 @@ func (ss *scopeState) UpdateScope(r *actionCompletion) scopeUpdateResult {
 			RetryAfter:    r.RetryAfter,
 		}
 
-	case r.HTTPStatus == http.StatusInsufficientStorage:
+	case answer == serverAnswerQuota:
 		// Quota failure — a drive-scoped quota block suppresses uploads until the
-		// backing drive has space again.
-		sk := scopeKeyForResult(r.HTTPStatus, r.DriveID)
+		// backing drive has space again. The answer, not the bare 507, decides:
+		// OneDrive also reports a full drive as 500 or 403 (R-2.10.66).
+		sk := scopeKeyForResult(answer, r.DriveID)
 		return ss.checkWindow(sk, r.Path, quotaWindowThreshold, quotaWindowDuration, IssueQuotaExceeded)
 
-	case r.HTTPStatus >= http.StatusInternalServerError:
+	case answer == serverAnswerServiceOutage:
 		// Service error — feed into service sliding window (R-2.10.28, R-2.10.29).
-		sk := scopeKeyForResult(r.HTTPStatus, r.DriveID)
+		// A 501/505 refusal is not an outage and never gets here (R-2.10.65).
+		sk := scopeKeyForResult(answer, r.DriveID)
 		return ss.checkWindow(sk, r.Path,
 			serviceWindowThreshold, serviceWindowDuration,
 			issueServiceOutage)

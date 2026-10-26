@@ -27,6 +27,8 @@ const (
 	ConditionLocalFileTooLarge      ConditionKey = "local_file_too_large"
 	ConditionLocalBusy              ConditionKey = "local_busy"
 	ConditionLocalCrossDevice       ConditionKey = "local_cross_device"
+	ConditionUnsupportedOperation   ConditionKey = "unsupported_operation"
+	ConditionTimestampOutOfRange    ConditionKey = "timestamp_out_of_range"
 	ConditionUnexpectedCondition    ConditionKey = "unexpected_condition"
 )
 
@@ -113,6 +115,8 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionLocalFileTooLarge,
 		ConditionLocalBusy,
 		ConditionLocalCrossDevice,
+		ConditionUnsupportedOperation,
+		ConditionTimestampOutOfRange,
 		ConditionUnexpectedCondition,
 	}
 
@@ -156,6 +160,8 @@ func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
 		{issueType: issueLocalFileTooLarge, key: ConditionLocalFileTooLarge},
 		{issueType: issueLocalBusy, key: ConditionLocalBusy},
 		{issueType: issueLocalCrossDevice, key: ConditionLocalCrossDevice},
+		{issueType: issueUnsupportedOperation, key: ConditionUnsupportedOperation},
+		{issueType: issueTimestampOutOfRange, key: ConditionTimestampOutOfRange},
 	} {
 		if mapping.issueType == issueType {
 			return mapping.key, true

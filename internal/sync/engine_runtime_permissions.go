@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -13,8 +12,13 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
+// shouldHandleRemote403Permission selects completions the remote permission
+// probe owns: a write refused as a plain permission answer. It keys on the
+// server-answer table, not the bare 403, so a full drive (403
+// quotaLimitReached) goes to the quota scope and blocked content (403
+// malwareDetected) stays a per-file issue instead of a probed write boundary.
 func shouldHandleRemote403Permission(r *actionCompletion) bool {
-	return r != nil && r.HTTPStatus == http.StatusForbidden && remoteWriteScopeBlocksAction(r.ActionType)
+	return r != nil && r.serverAnswer() == serverAnswerForbidden && remoteWriteScopeBlocksAction(r.ActionType)
 }
 
 // shouldHandleLocalPermission selects completions the local probe owns:
