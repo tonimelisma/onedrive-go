@@ -35,11 +35,31 @@ func (c *Client) doGetWithHeaders(
 func (c *Client) doRequest(
 	ctx context.Context, method, path string, body io.Reader, extraHeaders http.Header,
 ) (*http.Response, error) {
+	return c.doRequestVia(ctx, method, path, body, extraHeaders, requestRoute{client: c.httpClient})
+}
+
+// requestRoute selects how an authenticated request is dispatched. The
+// default follows redirects through c.httpClient. keepRedirect sends the
+// request (and its 401 refresh retry) through client unchanged and hands a
+// 3xx back to the caller instead of treating it as an error, for routes
+// whose redirect target must not receive the bearer (/content).
+type requestRoute struct {
+	client       *http.Client
+	keepRedirect bool
+}
+
+func (c *Client) doRequestVia(
+	ctx context.Context, method, path string, body io.Reader, extraHeaders http.Header, route requestRoute,
+) (*http.Response, error) {
 	url := c.baseURL + path
 
-	resp, tokenFresh, err := c.doOnce(ctx, method, url, body, extraHeaders)
+	resp, tokenFresh, err := c.doOnce(ctx, method, url, body, extraHeaders, route.client)
 	if err != nil {
 		return nil, fmt.Errorf("graph: %s %s: %w", method, path, err)
+	}
+
+	if route.keepRedirect && resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
+		return resp, nil
 	}
 
 	// 2xx -> success, caller owns the response body.
@@ -99,7 +119,7 @@ type forceRefresher interface {
 // doOnce reports tokenFresh when a 401 forced a token refresh that
 // succeeded, so the token on the final attempt is known-good.
 func (c *Client) doOnce(
-	ctx context.Context, method, url string, body io.Reader, extraHeaders http.Header,
+	ctx context.Context, method, url string, body io.Reader, extraHeaders http.Header, client *http.Client,
 ) (resp *http.Response, tokenFresh bool, err error) {
 	c.logger.Debug("preparing request",
 		slog.String("method", method),
@@ -116,7 +136,7 @@ func (c *Client) doOnce(
 		return nil, false, err
 	}
 
-	resp, err = c.dispatchRequest(req)
+	resp, err = c.dispatchRequestWith(client, req)
 	if err != nil {
 		c.logger.Debug("HTTP request failed",
 			slog.String("method", method),
@@ -140,7 +160,7 @@ func (c *Client) doOnce(
 	// a fresh token. ReuseTokenSource refreshes only an expired token, so
 	// when it hands back the same rejected token the refresh is forced. This
 	// is auth lifecycle management, not transient retry.
-	retryResp, outcome, err := c.retryUnauthorized(ctx, method, url, body, extraHeaders, tok, resp)
+	retryResp, outcome, err := c.retryUnauthorized(ctx, client, method, url, body, extraHeaders, tok, resp)
 	if err != nil {
 		return nil, false, err
 	}
@@ -205,6 +225,7 @@ type unauthorizedRetry struct {
 
 func (c *Client) retryUnauthorized(
 	ctx context.Context,
+	client *http.Client,
 	method string,
 	url string,
 	body io.Reader,
@@ -265,7 +286,7 @@ func (c *Client) retryUnauthorized(
 		return nil, outcome, fmt.Errorf("building retry request: %w", err)
 	}
 
-	retryResp, err := c.dispatchRequest(req)
+	retryResp, err := c.dispatchRequestWith(client, req)
 	if err != nil {
 		return nil, outcome, fmt.Errorf("retrying after 401: %w", err)
 	}

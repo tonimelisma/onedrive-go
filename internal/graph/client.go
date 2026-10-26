@@ -78,6 +78,9 @@ type urlValidators struct {
 	uploadURL   func(*url.URL) error
 	copyMonitor func(*url.URL) error
 	socketIO    func(*url.URL) error
+	// contentRedirect validates the content host a /content request
+	// redirects to; nil means the upload host allow-list.
+	contentRedirect func(*url.URL) error
 }
 
 type Client struct {

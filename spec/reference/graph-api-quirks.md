@@ -729,6 +729,18 @@ create inside some Personal shared folders), 505, or a `notSupported` code.
 Classification therefore checks the code chain and message before the status;
 a 501 counted as a 5xx outage once let a handful of refusals block every drive.
 
+### Tempauth Download URLs Retire On 2027-04-01
+
+Microsoft has announced that tempauth-signed `@microsoft.graph.downloadUrl`
+values stop working on 2027-04-01 (RCL-050). Live probe L-20 (Personal,
+2026-10-25): `GET /items/{id}/content` with the bearer returns 302 to
+`my.microsoftpersonalcontent.com`, and that host serves the file without an
+`Authorization` header. The client already falls back to `/content` when an
+item has no `downloadUrl` or a refetched one is refused again, and never
+sends the bearer to the redirect host. Revisit on 2027-04-01: if every
+`downloadUrl` disappears the fallback becomes the only route, and the extra
+metadata GET before each download could be dropped.
+
 ### Pre-1900 Timestamps Return 404
 
 Live probe L-26 (Personal, 2026-10-25): the earliest accepted

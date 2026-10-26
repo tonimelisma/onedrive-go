@@ -371,6 +371,24 @@ one `malware_detected` issue instead of probing a permission boundary
 still to be confirmed by live probe L-19 (EICAR); both signals are
 documented, and each is safe if it never appears.
 
+**`/content` fallback** — a file without a `downloadUrl`, or whose refetched
+`downloadUrl` is refused again, downloads through `GET /items/{id}/content`
+(`downloadViaContentEndpoint`). The first leg goes through the normal
+authenticated `doOnce` path, so the 401 forced refresh and `ErrAuthTransient`
+apply, but on a copy of the HTTP client whose `CheckRedirect` returns
+`http.ErrUseLastResponse` (`requestRoute{keepRedirect: true}`): the bearer is
+never carried across the 302. The `Location` is validated against the
+content-host allow-list and fetched through the unauthenticated pre-auth path.
+Live probe L-20 (Personal) showed `my.microsoftpersonalcontent.com` serves
+the file without the bearer. A resumed download (offset > 0) requires 206 with
+a `Content-Range` starting at the offset on whichever leg serves the bytes;
+anything else is `ErrRangeNotHonored`, never a full body appended at the
+offset (`TestDownload_ContentEndpointNeverSendsBearerToRedirectHost`,
+`TestDownload_ContentEndpoint401ForcesRefresh`,
+`TestDownloadRange_ContentEndpointResumes`,
+`TestDownloadRange_ContentEndpointRefusesAFullBodyAtAnOffset`,
+`TestDownload_ContentRedirectToUntrustedHostRefused`).
+
 **Gateway diagnostics** — `GraphError.AgsDiagnostic` keeps the
 `X-Ms-Ags-Diagnostic` header, and `QuirkRetryAttempt` carries it, for support
 escalation next to the request ID (`TestGraphError_KeepsAgsDiagnosticHeader`,

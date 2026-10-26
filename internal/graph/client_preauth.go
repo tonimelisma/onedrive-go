@@ -127,9 +127,15 @@ func (c *Client) doPreAuth(
 }
 
 func (c *Client) dispatchRequest(req *http.Request) (*http.Response, error) {
+	return c.dispatchRequestWith(c.httpClient, req)
+}
+
+// dispatchRequestWith sends req through client (c.httpClient, or a copy
+// with a different redirect policy).
+func (c *Client) dispatchRequestWith(client *http.Client, req *http.Request) (*http.Response, error) {
 	// Callers validate the request URL before dispatch: Graph base URLs are
 	// checked in NewClient and pre-auth URLs are validated at their boundary.
-	resp, err := c.httpClient.Do(req) //nolint:gosec // Request URLs are validated by the Graph/pre-auth boundary helpers.
+	resp, err := client.Do(req) //nolint:gosec // Request URLs are validated by the Graph/pre-auth boundary helpers.
 	if err != nil {
 		// net/http wraps transport failures in *url.Error, whose text carries
 		// the full request URL. Pre-authenticated URLs embed their credential,
