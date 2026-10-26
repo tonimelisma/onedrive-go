@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -283,11 +284,8 @@ func (tm *TransferManager) downloadToFile(
 // fsync, mtime, the caller's last precondition, the atomic rename and the
 // directory sync.
 func (tm *TransferManager) publishPartial(target TargetFS, partialPath, targetPath, parentDir string, opts DownloadOpts) error {
-	if err := tm.finalizePartial(target, partialPath, targetPath); err != nil {
-		return err
-	}
-
-	// Set mtime on the partial file before atomic rename.
+	// Set mtime on the partial file before its fsync, so the flush makes the
+	// time durable together with the bytes.
 	if opts.RemoteMtime != 0 {
 		mtime := time.Unix(0, opts.RemoteMtime)
 		if err := target.Chtimes(partialPath, mtime, mtime); err != nil {
@@ -296,6 +294,10 @@ func (tm *TransferManager) publishPartial(target TargetFS, partialPath, targetPa
 				slog.String("error", err.Error()),
 			)
 		}
+	}
+
+	if err := tm.finalizePartial(target, partialPath, targetPath); err != nil {
+		return err
 	}
 
 	if err := validateDownloadTargetBeforeRename(opts); err != nil {
@@ -314,10 +316,26 @@ func (tm *TransferManager) publishPartial(target TargetFS, partialPath, targetPa
 	// (D-042). The bytes are already on disk, so a failure here is reported
 	// rather than undone.
 	if err := target.SyncDir(parentDir); err != nil {
-		return fmt.Errorf("syncing the folder of %s: %w", targetPath, err)
+		if !dirSyncUnsupported(err) {
+			return fmt.Errorf("syncing the folder of %s: %w", targetPath, err)
+		}
+
+		// Some filesystems (FUSE, SMB, some network mounts) cannot fsync a
+		// directory. The file is already in place and its bytes on disk,
+		// so this is best effort there.
+		tm.logger.Debug("the folder could not be synced; the filesystem does not support it",
+			slog.String("path", targetPath),
+			slog.String("error", err.Error()),
+		)
 	}
 
 	return nil
+}
+
+// dirSyncUnsupported reports the errnos a filesystem that cannot fsync a
+// directory answers with.
+func dirSyncUnsupported(err error) bool {
+	return errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP)
 }
 
 // finalizePartial gives the verified partial its final mode and makes its

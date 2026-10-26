@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
@@ -110,13 +112,47 @@ func (tm *TransferManager) newFileMode() os.FileMode {
 // newFilePerms is the mode requested for a new file before the umask.
 const newFilePerms = 0o666
 
-// defaultUmask is assumed when the probe cannot run (no writable temp dir).
+// defaultUmask is assumed when the umask cannot be read.
 const defaultUmask = 0o022
 
+// procSelfStatus is where Linux reports the process umask without changing
+// it ("Umask:\t0022", Linux 4.7+).
+const procSelfStatus = "/proc/self/status"
+
 // probeUmask reads the umask without changing it: syscall.Umask can only be
-// read by setting it, which races every other goroutine creating files. A
-// file created with mode 0666 carries exactly 0666 minus the umask.
+// read by setting it, which races every other goroutine creating files. On
+// Linux /proc/self/status reports it; elsewhere a file created with mode
+// 0666 carries exactly 0666 minus the umask.
 func probeUmask() os.FileMode {
+	if status, err := localpath.ReadFile(procSelfStatus); err == nil {
+		if umask, ok := parseProcUmask(string(status)); ok {
+			return umask
+		}
+	}
+
+	return probeUmaskWithFile()
+}
+
+// parseProcUmask finds the "Umask:" line of /proc/self/status.
+func parseProcUmask(status string) (os.FileMode, bool) {
+	for _, line := range strings.Split(status, "\n") {
+		value, found := strings.CutPrefix(line, "Umask:")
+		if !found {
+			continue
+		}
+
+		umask, err := strconv.ParseUint(strings.TrimSpace(value), 8, 32)
+		if err != nil || umask > uint64(os.ModePerm) {
+			return 0, false
+		}
+
+		return os.FileMode(umask), true
+	}
+
+	return 0, false
+}
+
+func probeUmaskWithFile() os.FileMode {
 	name := filepath.Join(os.TempDir(), fmt.Sprintf(".onedrive-go-umask-%d-%d", os.Getpid(), time.Now().UnixNano()))
 
 	f, err := localpath.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, newFilePerms)

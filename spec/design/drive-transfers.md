@@ -34,22 +34,24 @@ Implements: R-6.2.3 [verified]
 2. If that owned partial exists with content, resume via HTTP Range request
 3. Stream response body, computing QuickXorHash incrementally
 4. Verify hash and size against API metadata
-5. Give the partial its final mode and fsync it, set its mtime, atomically
-   rename it over the target, then fsync the directory
+5. Set the partial's mtime, give it its final mode and fsync it, atomically
+   rename it over the target, then fsync the directory (best effort where the
+   filesystem answers EINVAL, ENOTSUP or EOPNOTSUPP: FUSE, SMB)
 
 Every step goes through a `TargetFS` (`transfer_target.go`): `LocalTarget`
 for CLI `get` (absolute paths; missing parents created with 0777 minus the
 umask) or sync's rooted target, which never creates a parent. The final mode
 is the replaced file's permission bits, or 0666 minus the umask for a new
-file; the umask is probed once per `TransferManager` by creating a file, since
-reading it with `umask(2)` would change it for every other goroutine (D-044,
-P-8). ACLs, extended attributes and Finder tags of a replaced file are not
+file; the umask is read once per `TransferManager` from `/proc/self/status`
+on Linux, or by creating a probe file elsewhere, since reading it with
+`umask(2)` would change it for every other goroutine (D-044, P-8). ACLs, extended attributes and Finder tags of a replaced file are not
 carried over. The fsync before the rename and the directory sync after it
 make the download durable before success is reported (D-042). Evidence:
 `TestDownloadToFile_FsyncsBeforeRenameAndSyncsDirAfter`,
 `TestDownloadToFile_PreservesExistingTargetMode`,
 `TestDownloadToFile_NewFileAndParentHonourUmask`,
-`TestDownloadToFile_ParentRefusalStopsBeforeAnyWrite`.
+`TestDownloadToFile_ParentRefusalStopsBeforeAnyWrite`,
+`TestDownloadToFile_DirSyncUnsupportedIsBestEffort`, `TestParseProcUmask`.
 
 `DownloadOpts.ValidateTargetBeforeRename` is an optional sync-supplied
 callback. `driveops` calls it after content/hash/mtime preparation and before

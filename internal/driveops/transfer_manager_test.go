@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -2094,7 +2095,8 @@ func TestDownloadToFile_FsyncsBeforeRenameAndSyncsDirAfter(t *testing.T) {
 	// The baseline commit follows success, so the bytes and the directory
 	// entry must be on disk first: a power cut used to leave an empty file
 	// the next pass trusted or uploaded over the good remote copy.
-	assert.Equal(t, []string{"open-partial", "finalize(chmod,fsync)", "chtimes", "rename", "syncdir:folder"}, target.steps)
+	// The mtime is set before the fsync so the flush makes it durable too.
+	assert.Equal(t, []string{"open-partial", "chtimes", "finalize(chmod,fsync)", "rename", "syncdir:folder"}, target.steps)
 }
 
 // refusingParentTarget is a TargetFS whose parent check fails, as sync's
@@ -2610,4 +2612,68 @@ func TestLookupUploadTarget_MatchesNameAcrossCaseAndNormalization(t *testing.T) 
 		uploadTarget{driveID: driveid.New("d1"), parentID: "p", name: "café.txt"})
 	require.NoError(t, err)
 	assert.Equal(t, "found", item.ID)
+}
+
+// failingDirSyncTarget answers SyncDir with an injected error.
+type failingDirSyncTarget struct {
+	TargetFS
+	err error
+}
+
+func (f failingDirSyncTarget) SyncDir(string) error { return f.err }
+
+// Validates: R-5.10.1
+func TestDownloadToFile_DirSyncUnsupportedIsBestEffort(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		err     error
+		wantErr bool
+	}{
+		{name: "EINVAL", err: &os.PathError{Op: "fsync", Path: "d", Err: syscall.EINVAL}},
+		{name: "ENOTSUP", err: &os.PathError{Op: "fsync", Path: "d", Err: syscall.ENOTSUP}},
+		{name: "EOPNOTSUPP", err: &os.PathError{Op: "fsync", Path: "d", Err: syscall.EOPNOTSUPP}},
+		{name: "EIO is a real failure", err: &os.PathError{Op: "fsync", Path: "d", Err: syscall.EIO}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			content := []byte("in place")
+			targetPath := filepath.Join(t.TempDir(), "f.txt")
+			_, err := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil).DownloadToFile(
+				t.Context(), driveid.New("d1"), "item1", targetPath,
+				DownloadOpts{RemoteHash: tmHashBytes(content), Target: failingDirSyncTarget{TargetFS: LocalTarget(), err: tt.err}})
+
+			// Filesystems that cannot fsync a directory (FUSE, SMB) failed
+			// every download whose file was already in place.
+			if tt.wantErr {
+				require.ErrorIs(t, err, syscall.EIO)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.FileExists(t, targetPath)
+		})
+	}
+}
+
+// Validates: R-5.10.2
+func TestParseProcUmask(t *testing.T) {
+	t.Parallel()
+
+	umask, ok := parseProcUmask("Name:\tonedrive-go\nUmask:\t0027\nState:\tR (running)\n")
+	require.True(t, ok)
+	assert.Equal(t, os.FileMode(0o027), umask)
+
+	_, ok = parseProcUmask("Name:\tonedrive-go\n")
+	assert.False(t, ok, "kernels before 4.7 have no Umask line")
+
+	// On Linux the /proc answer and the file probe agree.
+	if status, err := localpath.ReadFile(procSelfStatus); err == nil {
+		fromProc, found := parseProcUmask(string(status))
+		require.True(t, found)
+		assert.Equal(t, probeUmaskWithFile(), fromProc)
+	}
 }
