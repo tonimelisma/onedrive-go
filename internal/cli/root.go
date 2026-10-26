@@ -140,6 +140,8 @@ type cliSeams struct {
 	cpAwaitCopy       func(context.Context, *CLIContext, *graph.Client, string) (string, error)
 	// asideRestoreTimeout replaces restoreAsideTimeout when non-zero.
 	asideRestoreTimeout time.Duration
+	// effectiveUID replaces os.Geteuid for the sync root refusal.
+	effectiveUID func() int
 }
 
 type CLIContext struct {
