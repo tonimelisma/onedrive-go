@@ -24,19 +24,21 @@ type driveIdentityProof struct {
 // Single mounted content root only; multi-mount orchestration is handled by
 // internal/multisync.
 type Engine struct {
-	baseline                 *SyncStore
-	planner                  *planner
-	execCfg                  *executorConfig
-	fetcher                  deltaFetcher
-	socketIOFetcher          socketIOEndpointFetcher
-	itemsClient              itemClient
-	driveVerifier            driveVerifier      // optional (B-074)
-	folderDelta              folderDeltaFetcher // optional: mount-root delta observation
-	recursiveLister          recursiveLister    // optional: mount-root recursive enumeration fallback
-	permHandler              *permissionHandler // encapsulates all permission logic (6.4c)
-	dataDir                  string
-	syncRoot                 string
-	syncTree                 *synctree.Root
+	baseline        *SyncStore
+	planner         *planner
+	execCfg         *executorConfig
+	fetcher         deltaFetcher
+	socketIOFetcher socketIOEndpointFetcher
+	itemsClient     itemClient
+	driveVerifier   driveVerifier      // optional (B-074)
+	folderDelta     folderDeltaFetcher // optional: mount-root delta observation
+	recursiveLister recursiveLister    // optional: mount-root recursive enumeration fallback
+	permHandler     *permissionHandler // encapsulates all permission logic (6.4c)
+	dataDir         string
+	syncRoot        string
+	syncTree        *synctree.Root
+	// rootLock holds the sync root for the engine's lifetime (R-2.9.5).
+	rootLock                 *syncRootLock
 	expectedSyncRootIdentity *synctree.FileIdentity
 	driveID                  driveid.ID
 	driveType                string
@@ -103,16 +105,28 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		return nil, fmt.Errorf("%w: %s is missing or is not a folder", ErrMountRootUnavailable, cfg.SyncRoot)
 	}
 
+	// The root lock comes first and goes last: a second engine is refused
+	// before it opens (and possibly migrates or checkpoints) the store, and
+	// the store is closed before the next owner can start. Deferred cleanups
+	// run in reverse, so the store's startup-failure close runs before this
+	// release.
+	rootLock, err := acquireSyncRootLock(syncRootLockDataDir(cfg), cfg.SyncRoot, cfg.Logger, cfg.rootLockFlock)
+	if err != nil {
+		return nil, fmt.Errorf("sync: %w", err)
+	}
+	storeOwnedByEngine := false
+	defer releaseSyncRootLockOnStartupFailure(cfg.Logger, rootLock, &storeOwnedByEngine)
+
 	bm, err := openEngineSyncStore(ctx, cfg.DBPath, cfg.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
-	storeOwnedByEngine := false
 	defer closeEngineSyncStoreOnStartupFailure(ctx, cfg.Logger, bm, &storeOwnedByEngine)()
 	syncTree, err := openSyncTreeWithExpectedIdentity(cfg.SyncRoot, cfg.ExpectedSyncRootIdentity)
 	if err != nil {
 		return nil, fmt.Errorf("sync: opening sync tree: %w", err)
 	}
+	warnAboutForeignSyncClients(cfg.SyncRoot, cfg.Logger)
 
 	execCfg := newExecutorConfig(
 		cfg.Items,
@@ -154,6 +168,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		dataDir:                  cfg.DataDir,
 		syncRoot:                 cfg.SyncRoot,
 		syncTree:                 syncTree,
+		rootLock:                 rootLock,
 		expectedSyncRootIdentity: cloneFileIdentity(cfg.ExpectedSyncRootIdentity),
 		driveID:                  cfg.DriveID,
 		driveType:                cfg.DriveType,
@@ -267,6 +282,14 @@ func (e *Engine) Close(ctx context.Context) error {
 			)
 		}
 	}
+
+	// The folder stays locked until the state store is closed, so the next
+	// owner never starts against a store this engine is still writing.
+	defer func() {
+		if releaseErr := e.rootLock.release(); releaseErr != nil {
+			e.logger.Debug("release sync folder lock", slog.String("error", releaseErr.Error()))
+		}
+	}()
 
 	if e.baseline == nil {
 		return nil

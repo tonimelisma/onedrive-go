@@ -72,6 +72,9 @@ type controlSocketServer struct {
 	listener net.Listener
 	done     chan struct{}
 	logger   *slog.Logger
+	// lock is held for the server's lifetime; it, not the socket file, is
+	// what makes this process the owner.
+	lock *ownerLock
 }
 
 func startControlSocketServer(
@@ -91,15 +94,21 @@ func startControlSocketServer(
 		return nil, err
 	}
 
-	listener, err := listenControlSocket(ctx, path)
+	lock, err := acquireOwnerLock(path+controlLockSuffix, path)
 	if err != nil {
 		return nil, err
+	}
+
+	listener, err := listenControlSocket(ctx, path)
+	if err != nil {
+		return nil, errors.Join(err, lock.release())
 	}
 	if chmodErr := localpath.Chmod(path, controlSocketFilePerm); chmodErr != nil {
 		cleanupErr := closeListenerAndRemoveSocket(listener, path)
 		return nil, errors.Join(
 			fmt.Errorf("set control socket permissions: %w", chmodErr),
 			cleanupErr,
+			lock.release(),
 		)
 	}
 
@@ -113,6 +122,7 @@ func startControlSocketServer(
 		listener: listener,
 		done:     make(chan struct{}),
 		logger:   logger,
+		lock:     lock,
 	}
 
 	go func() {
@@ -191,6 +201,11 @@ func assertControlSocketDirSafe(dir string) error {
 	return nil
 }
 
+// listenControlSocket binds the socket. The caller holds the owner lock, so
+// a socket file already at path cannot belong to a live owner of this
+// version: it is a leftover from a sync that exited without cleaning up, and
+// removing it is safe. The dial check stays as a guard against an owner that
+// predates the lock.
 func listenControlSocket(ctx context.Context, path string) (net.Listener, error) {
 	var listenConfig net.ListenConfig
 	listener, err := listenConfig.Listen(ctx, "unix", path)
@@ -201,8 +216,6 @@ func listenControlSocket(ctx context.Context, path string) (net.Listener, error)
 	if controlSocketLive(ctx, path) {
 		return nil, &ControlSocketInUseError{Path: path}
 	}
-	// The socket did not answer, so it is a leftover from a sync that exited
-	// without cleaning up; it is replaced below.
 	if removeErr := localpath.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("remove stale control socket %s: %w", path, removeErr)
 	}
@@ -243,6 +256,11 @@ func (s *controlSocketServer) Close(ctx context.Context) error {
 		} else {
 			err = errors.Join(err, fmt.Errorf("remove control socket: %w", removeErr))
 		}
+	}
+	// Release ownership only after the socket is gone, so the next owner
+	// never meets this process's socket while holding the lock.
+	if lockErr := s.lock.release(); lockErr != nil {
+		err = errors.Join(err, lockErr)
 	}
 
 	if dirErr := removeEmptyRuntimeSocketDir(s.path); dirErr != nil && s.logger != nil {
