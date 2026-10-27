@@ -363,7 +363,7 @@ func (o *localObserver) handleCreate(
 	}
 
 	ev.ItemType = ItemTypeFile
-	ev.Hash = o.watchCreateHash(fsPath, dbRelPath, name, info)
+	ev.Hash = o.watchCreateHash(tree, fsPath, dbRelPath, name, info)
 
 	o.TrySend(ctx, events, &ev)
 
@@ -390,10 +390,15 @@ func (o *localObserver) handleCreate(
 //
 // Every other create is hashed synchronously, as before: an unknown hash
 // there could only make a replan plan an upload or a conflict copy early.
-func (o *localObserver) watchCreateHash(fsPath, dbRelPath, name string, info os.FileInfo) string {
+func (o *localObserver) watchCreateHash(tree *synctree.Root, fsPath, dbRelPath, name string, info os.FileInfo) string {
 	if identity, ok := synctree.IdentityFromFileInfo(info); ok && !hasOtherHardLinks(info) {
 		entry := o.watchIdentityIndex().baselineEntryWithIdentity(o.baseline, identity)
-		if entry != nil && entry.Path != dbRelPath && entry.ItemType == ItemTypeFile {
+		// An identity match is only a move when the synced path is gone.
+		// If it still exists the inode was freed and reused (the synced
+		// file was replaced and the index is stale): the new file is
+		// unrelated content and is hashed like any create.
+		if entry != nil && entry.Path != dbRelPath && entry.ItemType == ItemTypeFile &&
+			syncedPathGone(tree, entry.Path) {
 			if canReuseBaselineHash(info, entry, o.clock.Now().UnixNano()) {
 				return entry.LocalHash
 			}
@@ -405,6 +410,17 @@ func (o *localObserver) watchCreateHash(fsPath, dbRelPath, name string, info os.
 	}
 
 	return o.stableHashOrEmpty(fsPath, dbRelPath)
+}
+
+// syncedPathGone reports whether the synced path is confirmed absent now.
+// Any other answer (present, or unreadable) is not proof of a move.
+func syncedPathGone(tree *synctree.Root, dbRelPath string) bool {
+	if tree == nil {
+		return false
+	}
+	_, err := tree.Lstat(dbRelPath)
+
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // stableHashOrEmpty computes a stable hash for a file, returning an empty
@@ -514,7 +530,7 @@ func (o *localObserver) scanNewDirectoryEntry(
 		Name:     entryName,
 		ItemType: ItemTypeFile,
 		Size:     info.Size(),
-		Hash:     o.watchCreateHash(entryFsPath, entryRelPath, entryName, info),
+		Hash:     o.watchCreateHash(tree, entryFsPath, entryRelPath, entryName, info),
 		Mtime:    info.ModTime().UnixNano(),
 	}
 	if identity, ok := synctree.IdentityFromFileInfo(info); ok {

@@ -119,6 +119,34 @@ func TestHandleCreate_RenamedUnchangedFileReusesSyncedHash(t *testing.T) {
 }
 
 // Validates: R-2.8.15
+func TestHandleCreate_ReusedInodeWhileSyncedPathExistsIsHashed(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fsPath := writeTestFile(t, dir, "new.txt", "unrelated content")
+	writeTestFile(t, dir, "old.txt", "the synced file, rewritten in place")
+	info, err := os.Stat(fsPath)
+	require.NoError(t, err)
+
+	// The synced file's recorded inode was freed (the file was replaced) and
+	// reused by an unrelated file of the same size with a preserved mtime.
+	// The synced path still exists, so this is not a move.
+	baseline := baselineWith(syncedFileAt(t, "old.txt", info, info.Size(), "synced-hash"))
+	clock := newManualClock(info.ModTime().Add(time.Hour))
+	var hashCalls atomic.Int64
+	obs := newSettleTestObserver(t, baseline, clock, &hashCalls)
+	events := make(chan changeEvent, 10)
+
+	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), fsPath, "new.txt", "new.txt", newMockFsWatcher(), events)
+
+	require.Len(t, events, 1)
+	ev := <-events
+	assert.Equal(t, "hash-from-read-1", ev.Hash, "the synced hash is not attached to unrelated content")
+	assert.Equal(t, int64(1), hashCalls.Load())
+	assert.Empty(t, obs.PendingTimers)
+}
+
+// Validates: R-2.8.15
 func TestHandleCreate_DirectoryRowPrecedesItsContents(t *testing.T) {
 	t.Parallel()
 
