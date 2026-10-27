@@ -159,7 +159,11 @@ func TestEngine_SymlinkedSyncDirRepointedIsRefused(t *testing.T) {
 
 	eng, err := openRootSafetyEngine(t, paths, remote.client(t))
 	require.NoError(t, err)
-	assert.Equal(t, target, eng.syncTree.Path(), "a symlinked sync folder is opened on its target, resolved once")
+	// The temp dir may itself sit behind a symlink (/var -> /private/var on
+	// macOS), and the engine resolves the whole path.
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	require.NoError(t, err)
+	assert.Equal(t, resolvedTarget, eng.syncTree.Path(), "a symlinked sync folder is opened on its target, resolved once")
 	runScenarioPass(t, eng)
 	require.FileExists(t, filepath.Join(target, "c.txt"))
 	closeRootSafetyEngine(t, eng)
