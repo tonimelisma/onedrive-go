@@ -25,8 +25,9 @@ func putEntry(t *testing.T, trash *Trash, syncRoot, rel, content string) Entry {
 func TestDirForStatePath_IsPerDriveUnderTheDataDir(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, filepath.Join("/data", "trash", "state_personal_user@example.com"),
-		DirForStatePath(filepath.Join("/data", "state_personal_user@example.com.db")))
+	dataDir := filepath.Join(string(filepath.Separator), "data")
+	assert.Equal(t, filepath.Join(dataDir, "trash", "state_personal_user@example.com"),
+		DirForStatePath(filepath.Join(dataDir, "state_personal_user@example.com.db")))
 	assert.Empty(t, DirForStatePath(""))
 }
 

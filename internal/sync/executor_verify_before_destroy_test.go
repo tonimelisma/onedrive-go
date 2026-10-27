@@ -212,7 +212,7 @@ func TestRunOnce_LocalFolderDeleteKeepsRemoteChildAddedAfterObservation(t *testi
 	assert.NotContains(t, remote.deletes, "item-x")
 
 	runScenarioPass(t, eng)
-	data, err := os.ReadFile(filepath.Join(syncRoot, "X", "new.txt"))
+	data, err := os.ReadFile(filepath.Join(syncRoot, "X", "new.txt")) //nolint:gosec // test reads its own temp tree
 	require.NoError(t, err)
 	assert.Equal(t, "added online\n", string(data), "the next pass brings the new child down")
 }

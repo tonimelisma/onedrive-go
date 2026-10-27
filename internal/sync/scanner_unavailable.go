@@ -20,7 +20,7 @@ import (
 //   - a synced path now occupied by a symlink sync does not follow, or by a
 //     FIFO, socket or device (D-004);
 //   - a synced item renamed to a name OneDrive refuses or a path too long, or
-//     into an excluded name such as a dotfile (D-004, P-5), recognised by its
+//     into an excluded name such as a dotfile (D-004, P-5), recognized by its
 //     filesystem identity reappearing under the skipped name;
 //   - a folder that is a mount point for another filesystem, which sync does
 //     not cross by default (D-003, P-11). The boundary is a read boundary, so
@@ -89,7 +89,7 @@ func (o *localObserver) recordSyncedPathReplaced(skipped *[]skippedItem, dbRelPa
 
 // recordSyncedItemMovedOutOfReach keeps a synced item that was renamed to
 // something sync skips (an invalid name, a too-long path, an excluded name)
-// unavailable at its synced path, recognised by its filesystem identity.
+// unavailable at its synced path, recognized by its filesystem identity.
 func (o *localObserver) recordSyncedItemMovedOutOfReach(
 	skipped *[]skippedItem,
 	availability *scanAvailability,
@@ -183,7 +183,7 @@ func hasOtherHardLinks(info fs.FileInfo) bool {
 
 func itemNoun(itemType ItemType) string {
 	if itemType == ItemTypeFolder {
-		return "folder"
+		return strFolder
 	}
-	return "file"
+	return strFile
 }

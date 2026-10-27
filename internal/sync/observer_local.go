@@ -166,7 +166,7 @@ type localObserver struct {
 	// Set and cleared by FullScan; nil outside a scan.
 	scanAvailability *scanAvailability
 	// watchIdentityLookup caches the identity index the watch handlers use
-	// to recognise a synced item renamed to a skipped name; rebuilt every
+	// to recognize a synced item renamed to a skipped name; rebuilt every
 	// watchIdentityIndexMaxAge. Touched only by the goroutine running Watch.
 	watchIdentityLookup  *scanAvailability
 	watchIdentityBuiltAt time.Time

@@ -209,9 +209,9 @@ func TestClearSyncRootIdentity_RebindAcceptsReplacedFolder(t *testing.T) {
 	require.NoError(t, os.Rename(paths.syncRoot, paths.syncRoot+".old"))
 	require.NoError(t, os.MkdirAll(filepath.Join(paths.syncRoot, "Docs"), 0o750))
 	for _, rel := range []string{"Docs/a.txt", "Docs/b.txt", "c.txt"} {
-		data, readErr := os.ReadFile(filepath.Join(paths.syncRoot+".old", rel))
+		data, readErr := os.ReadFile(filepath.Join(paths.syncRoot+".old", rel)) //nolint:gosec // test reads its own temp tree
 		require.NoError(t, readErr)
-		require.NoError(t, os.WriteFile(filepath.Join(paths.syncRoot, rel), data, 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(paths.syncRoot, rel), data, 0o600)) //nolint:gosec // test writes its own temp tree
 	}
 
 	rebound, err := openRootSafetyEngine(t, paths, remote.client(t))

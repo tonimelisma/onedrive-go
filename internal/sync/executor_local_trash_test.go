@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -79,14 +80,17 @@ func TestDeleteLocalFile_FileReplacedMidHashSurvives(t *testing.T) {
 				hash, err := driveops.ComputeQuickXorHashFromReader(r)
 				replacement := writeExecTestFile(t, syncRoot, "a.txt.save", "new edit\n")
 				require.NoError(t, os.Rename(replacement, target))
-				return hash, err
+				if err != nil {
+					return "", fmt.Errorf("hashing in test: %w", err)
+				}
+				return hash, nil
 			}
 
 			outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "a.txt", "synced\n"))
 
 			requireOutcomeFailure(t, &outcome)
 			require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
-			data, err := os.ReadFile(target)
+			data, err := os.ReadFile(target) //nolint:gosec // test reads its own temp tree
 			require.NoError(t, err)
 			assert.Equal(t, "new edit\n", string(data), "the new content must survive")
 			if trash != nil {

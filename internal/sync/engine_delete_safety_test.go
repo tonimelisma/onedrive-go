@@ -230,7 +230,7 @@ func TestRunOnce_DownloadOverwriteKeepsPreviousVersionInTrash(t *testing.T) {
 	remote.setContent(t, "item-keep", "edited on OneDrive\n")
 	runScenarioPass(t, eng)
 
-	data, err := os.ReadFile(filepath.Join(syncRoot, "keep.txt"))
+	data, err := os.ReadFile(filepath.Join(syncRoot, "keep.txt")) //nolint:gosec // test reads its own temp tree
 	require.NoError(t, err)
 	assert.Equal(t, "edited on OneDrive\n", string(data))
 	entries := listEngineTrash(t, eng)

@@ -415,9 +415,9 @@ func writeObservationStateToTx(
 		boolInt(state.LocalTruthComplete),
 		state.LocalTruthRecoveryReason,
 		boolInt(state.SyncRootIdentity != nil),
-		int64(rootIdentity.Device),       //nolint:gosec // SQLite INTEGER stores the uint64 bit pattern
-		int64(rootIdentity.Inode),        //nolint:gosec // SQLite INTEGER stores the uint64 bit pattern
-		int64(rootIdentity.FileSystemID), //nolint:gosec // SQLite INTEGER stores the uint64 bit pattern
+		int64(rootIdentity.Device),
+		int64(rootIdentity.Inode),
+		int64(rootIdentity.FileSystemID),
 	); err != nil {
 		return fmt.Errorf("sync: writing observation_state: %w", err)
 	}
@@ -431,9 +431,9 @@ func syncRootIdentityFromColumns(bound int, device, inode, fsid int64) *synctree
 	}
 
 	return &synctree.RootIdentity{
-		Device:       uint64(device), //nolint:gosec // restores the stored uint64 bit pattern
-		Inode:        uint64(inode),  //nolint:gosec // restores the stored uint64 bit pattern
-		FileSystemID: uint64(fsid),   //nolint:gosec // restores the stored uint64 bit pattern
+		Device:       uint64(device),
+		Inode:        uint64(inode),
+		FileSystemID: uint64(fsid),
 	}
 }
 

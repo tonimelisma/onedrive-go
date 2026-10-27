@@ -60,7 +60,7 @@ func TestTrashCommands_ListRestoreAndEmpty(t *testing.T) {
 
 	out.Reset()
 	require.NoError(t, runTrashRestore(t.Context(), cc, id))
-	data, err := os.ReadFile(filepath.Join(syncRoot, "Docs", "report.txt"))
+	data, err := os.ReadFile(filepath.Join(syncRoot, "Docs", "report.txt")) //nolint:gosec // test reads its own temp tree
 	require.NoError(t, err)
 	assert.Equal(t, "kept\n", string(data))
 
@@ -82,7 +82,7 @@ func TestTrashRestore_NeverOverwrites(t *testing.T) {
 
 	err := runTrashRestore(t.Context(), cc, id)
 	require.ErrorIs(t, err, localtrash.ErrRestoreTargetExists)
-	data, readErr := os.ReadFile(filepath.Join(syncRoot, "a.txt"))
+	data, readErr := os.ReadFile(filepath.Join(syncRoot, "a.txt")) //nolint:gosec // test reads its own temp tree
 	require.NoError(t, readErr)
 	assert.Equal(t, "current\n", string(data))
 }

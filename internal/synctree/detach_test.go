@@ -31,7 +31,7 @@ func TestDetachRegularFile_MovesTheVerifiedFileOut(t *testing.T) {
 	require.NoError(t, root.DetachRegularFile("docs/a.txt", nil, dest))
 
 	assert.NoFileExists(t, filepath.Join(dir, "docs", "a.txt"))
-	data, err := os.ReadFile(dest)
+	data, err := os.ReadFile(dest) //nolint:gosec // the test reads a file it created
 	require.NoError(t, err)
 	assert.Equal(t, "synced\n", string(data))
 }
@@ -82,7 +82,7 @@ func TestDetachRegularFile_FileReplacedDuringVerifyIsKept(t *testing.T) {
 			}
 
 			require.ErrorIs(t, err, ErrDetachRaced)
-			data, readErr := os.ReadFile(target)
+			data, readErr := os.ReadFile(target) //nolint:gosec // the test reads a file it created
 			require.NoError(t, readErr)
 			assert.Equal(t, "user's new edit\n", string(data))
 			assert.NoFileExists(t, dest)
@@ -103,7 +103,7 @@ func TestPreserveRegularFile_KeepsTheFileInPlace(t *testing.T) {
 	require.NoError(t, root.PreserveRegularFile("docs/a.txt", nil, dest))
 
 	assert.FileExists(t, filepath.Join(dir, "docs", "a.txt"))
-	data, err := os.ReadFile(dest)
+	data, err := os.ReadFile(dest) //nolint:gosec // the test reads a file it created
 	require.NoError(t, err)
 	assert.Equal(t, "synced\n", string(data))
 }

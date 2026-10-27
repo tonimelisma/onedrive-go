@@ -125,18 +125,7 @@ func describeScopeKey(key ScopeKey) scopeDescriptor {
 			Priority:             scopePriorityPermDir,
 		}
 	case ScopeDeleteSafety:
-		// Planner-owned: the hold keeps deletes out of the plan, so nothing
-		// is ever admitted for this scope to block, and it has no trials;
-		// only `sync --confirm-deletes` releases it.
-		return scopeDescriptor{
-			Key:                  key,
-			Family:               scopeFamilyDeleteSafety,
-			Access:               scopeAccessNone,
-			SubjectKind:          scopeSubjectKindNone,
-			SubjectValue:         key.Param,
-			DefaultConditionType: issueDeletesHeld,
-			Priority:             scopePriorityMax,
-		}
+		return deleteSafetyScopeDescriptor(key)
 	case ScopePermRemoteRead:
 		return scopeDescriptor{
 			Key:                  key,
@@ -162,6 +151,22 @@ func describeScopeKey(key ScopeKey) scopeDescriptor {
 			Key:      key,
 			Priority: scopePriorityMax,
 		}
+	}
+}
+
+// deleteSafetyScopeDescriptor describes the planner-owned delete-safety
+// scope: the hold keeps deletes out of the plan, so nothing is ever admitted
+// for this scope to block, and it has no trials; only `sync --confirm-deletes`
+// releases it.
+func deleteSafetyScopeDescriptor(key ScopeKey) scopeDescriptor {
+	return scopeDescriptor{
+		Key:                  key,
+		Family:               scopeFamilyDeleteSafety,
+		Access:               scopeAccessNone,
+		SubjectKind:          scopeSubjectKindNone,
+		SubjectValue:         key.Param,
+		DefaultConditionType: issueDeletesHeld,
+		Priority:             scopePriorityMax,
 	}
 }
 

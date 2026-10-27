@@ -134,8 +134,8 @@ func (r *Root) openVerifiedRegular(
 	if clean == "." {
 		return nil, "", nil, nil, unsafePathf("refusing to remove the sync folder itself")
 	}
-	if err := r.ValidateNoSymlinkAncestors(clean); err != nil {
-		return nil, "", nil, nil, err
+	if ancestorErr := r.ValidateNoSymlinkAncestors(clean); ancestorErr != nil {
+		return nil, "", nil, nil, ancestorErr
 	}
 
 	parentRel := filepath.Dir(clean)
@@ -202,7 +202,7 @@ func withFd(f *os.File, fn func(fd int) error) error {
 	}
 	var opErr error
 	if ctrlErr := conn.Control(func(fd uintptr) {
-		opErr = fn(int(fd)) //nolint:gosec // descriptors fit in int on every unix target
+		opErr = fn(int(fd))
 	}); ctrlErr != nil {
 		return fmt.Errorf("accessing descriptor: %w", ctrlErr)
 	}
@@ -214,12 +214,15 @@ func openatNoFollow(parent *os.File, name string) (*os.File, error) {
 	err := withFd(parent, func(dirfd int) error {
 		var openErr error
 		fd, openErr = unix.Openat(dirfd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
-		return openErr
+		if openErr != nil {
+			return fmt.Errorf("opening without following links: %w", openErr)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return os.NewFile(uintptr(fd), name), nil //nolint:gosec // fd came from openat and is non-negative
+	return os.NewFile(uintptr(fd), name), nil
 }
 
 func renameat(fromDir *os.File, from string, toDir *os.File, to string) error {
@@ -288,10 +291,10 @@ func moveDetachedOut(parent *os.File, tempName string, file *os.File, dest strin
 // copyThroughDescriptor writes the content of the verified descriptor to
 // dest atomically: a temporary sibling, fsync, rename.
 func copyThroughDescriptor(file *os.File, dest string) (err error) {
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
+	if _, err = file.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewinding file to copy it: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(dest), detachDirectoryPerm); err != nil {
+	if err = os.MkdirAll(filepath.Dir(dest), detachDirectoryPerm); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(dest), err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(dest), ".copy-*")

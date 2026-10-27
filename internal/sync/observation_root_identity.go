@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -75,8 +76,8 @@ func resolveExpectedSyncRoot(
 	}
 	if state.SyncRootIdentity != nil {
 		recorded := *state.SyncRootIdentity
-		if err := validateExpectedSyncRootIdentity(tree, &recorded); err != nil {
-			return resolvedSyncRoot{}, fmt.Errorf("%w; %s", err, errSyncRootRebindHint)
+		if mismatchErr := validateExpectedSyncRootIdentity(tree, &recorded); mismatchErr != nil {
+			return resolvedSyncRoot{}, fmt.Errorf("%w; %s", mismatchErr, errSyncRootRebindHint)
 		}
 		return resolvedSyncRoot{expected: &recorded}, nil
 	}
@@ -96,7 +97,7 @@ func resolveExpectedSyncRoot(
 // final component is resolved, so platform aliases in ancestors (such as
 // macOS's /var -> /private/var) keep the configured spelling.
 func resolveSyncRootPath(syncRoot string) (string, error) {
-	info, err := os.Lstat(syncRoot)
+	info, err := localpath.Lstat(syncRoot)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return syncRoot, nil

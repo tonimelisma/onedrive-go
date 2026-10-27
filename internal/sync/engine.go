@@ -132,12 +132,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
 	defer closeEngineSyncStoreOnStartupFailure(ctx, cfg.Logger, bm, &storeOwnedByEngine)()
-	syncTree, err := openSyncTree(cfg.SyncRoot)
-	if err != nil {
-		return nil, fmt.Errorf("sync: opening sync tree: %w", err)
-	}
-	warnAboutForeignSyncClients(cfg.SyncRoot, cfg.Logger)
-	syncRootBinding, err := resolveExpectedSyncRoot(ctx, bm, syncTree, cfg.ExpectedSyncRootIdentity)
+	syncTree, syncRootBinding, err := openBoundSyncTree(ctx, bm, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -151,11 +146,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		cfg.Logger,
 		cfg.PathConvergence,
 	)
-	execCfg.SetRemoteRootItemID(cfg.RemoteRootItemID)
-	execCfg.SetPendingCreates(bm)
-	trash := localtrash.Open(localtrash.DirForStatePath(cfg.DBPath), nil)
-	execCfg.SetTrash(trash)
-	execCfg.SetContentFilter(cfg.ContentFilter)
+	trash := configureEngineExecutor(execCfg, cfg, bm, syncRootBinding)
 
 	// Construct sessionStore and TransferManager together so the TM is
 	// immutable after creation (no post-hoc field mutation). Disk space
@@ -214,7 +205,6 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	}
 
 	e.syncRootBindPending.Store(syncRootBinding.bindPending)
-	execCfg.SetExpectedSyncRoot(syncRootBinding.expected)
 
 	if err := e.refreshProtectedRootsFromStore(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading parent shortcut protected roots: %w", err)
@@ -259,6 +249,40 @@ func closeEngineSyncStoreOnStartupFailure(
 			)
 		}
 	}
+}
+
+// configureEngineExecutor installs the mount-owned executor policy: the remote
+// root, pending-create store, local trash (P-4), content filter and the sync
+// folder identity remote deletes re-check (D-011). It returns the trash so the
+// engine's housekeeping purges the same one.
+func configureEngineExecutor(
+	execCfg *executorConfig,
+	cfg *engineInputs,
+	store *SyncStore,
+	binding resolvedSyncRoot,
+) *localtrash.Trash {
+	execCfg.SetRemoteRootItemID(cfg.RemoteRootItemID)
+	execCfg.SetPendingCreates(store)
+	trash := localtrash.Open(localtrash.DirForStatePath(cfg.DBPath), nil)
+	execCfg.SetTrash(trash)
+	execCfg.SetContentFilter(cfg.ContentFilter)
+	execCfg.SetExpectedSyncRoot(binding.expected)
+	return trash
+}
+
+// openBoundSyncTree opens the sync tree and resolves the folder identity
+// every scan of it is validated against (D-001).
+func openBoundSyncTree(ctx context.Context, store *SyncStore, cfg *engineInputs) (*synctree.Root, resolvedSyncRoot, error) {
+	syncTree, err := openSyncTree(cfg.SyncRoot)
+	if err != nil {
+		return nil, resolvedSyncRoot{}, fmt.Errorf("sync: opening sync tree: %w", err)
+	}
+	warnAboutForeignSyncClients(cfg.SyncRoot, cfg.Logger)
+	binding, err := resolveExpectedSyncRoot(ctx, store, syncTree, cfg.ExpectedSyncRootIdentity)
+	if err != nil {
+		return nil, resolvedSyncRoot{}, err
+	}
+	return syncTree, binding, nil
 }
 
 func openSyncTree(syncRoot string) (*synctree.Root, error) {

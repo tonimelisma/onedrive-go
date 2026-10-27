@@ -68,7 +68,7 @@ func TestFullRefresh_ItemTheConverterSkipsIsNotSynthesizedAsDelete(t *testing.T)
 	require.NoError(t, err)
 
 	assert.Zero(t, report.LocalDeletes, "an enumerated item is not absent")
-	data, readErr := os.ReadFile(filepath.Join(syncRoot, "notes.txt"))
+	data, readErr := os.ReadFile(filepath.Join(syncRoot, "notes.txt")) //nolint:gosec // test reads its own temp tree
 	require.NoError(t, readErr)
 	assert.Equal(t, "my notes", string(data))
 }
@@ -128,7 +128,7 @@ func TestValidateMountRootListingParents_ChildUnderUnlistedFolderAbortsListing(t
 	}
 	require.NoError(t, validateMountRootListingParents(ok, "mount-root"))
 
-	bad := append(ok, graph.Item{ID: "x", Name: "x.txt", ParentID: "some-other-folder"})
+	bad := append(append([]graph.Item(nil), ok...), graph.Item{ID: "x", Name: "x.txt", ParentID: "some-other-folder"})
 	err := validateMountRootListingParents(bad, "mount-root")
 	require.ErrorIs(t, err, errRemoteObservationIncomplete)
 }

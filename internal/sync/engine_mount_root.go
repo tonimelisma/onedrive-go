@@ -55,10 +55,7 @@ func (flow *engineFlow) observeMountRootRemote(
 		}
 		if err == nil {
 			eng.mountRootDeltaFallbackReported.Store(false)
-			events := convertMountRootItems(ctx, items, eng.remoteRootItemID, eng.driveID, bl, eng.logger, eng.itemsClient)
-			if fullReconcile {
-				events = append(events, eng.confirmMountRootOrphans(ctx, items, detectMountRootOrphans(items, eng.driveID, bl))...)
-			}
+			events := eng.mountRootEvents(ctx, items, bl, fullReconcile)
 
 			return events, newToken, remoteObservationModeDelta, nil
 		}
@@ -95,10 +92,19 @@ func (flow *engineFlow) observeMountRootRemote(
 		return nil, "", remoteObservationModeEnumerate, err
 	}
 
-	events := convertMountRootItems(ctx, items, eng.remoteRootItemID, eng.driveID, bl, eng.logger, eng.itemsClient)
-	events = append(events, eng.confirmMountRootOrphans(ctx, items, detectMountRootOrphans(items, eng.driveID, bl))...)
+	events := eng.mountRootEvents(ctx, items, bl, true)
 
 	return events, "", remoteObservationModeEnumerate, nil
+}
+
+// mountRootEvents converts a mount-root enumeration, adding confirmed orphan
+// deletes when the enumeration was complete.
+func (e *Engine) mountRootEvents(ctx context.Context, items []graph.Item, bl *Baseline, complete bool) []changeEvent {
+	events := convertMountRootItems(ctx, items, e.remoteRootItemID, e.driveID, bl, e.logger, e.itemsClient)
+	if complete {
+		events = append(events, e.confirmMountRootOrphans(ctx, items, detectMountRootOrphans(items, e.driveID, bl))...)
+	}
+	return events
 }
 
 func convertMountRootItems(

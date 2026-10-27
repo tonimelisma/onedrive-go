@@ -518,17 +518,23 @@ func (e *executor) validateDownloadTargetBeforeReplace(action *Action) error {
 	if err != nil || !info.Mode().IsRegular() || actionClearsLocalBeforeDownload(action) {
 		return e.validateDownloadTargetPrecondition(action)
 	}
-	if err := e.refuseLiveDatabaseTarget(action.Path); err != nil {
-		return err
+	if dbErr := e.refuseLiveDatabaseTarget(action.Path); dbErr != nil {
+		return dbErr
 	}
 	planned := plannedLocalState(action)
 	if planned == nil {
 		return stalePreconditionError("download target %s appeared", action.Path)
 	}
 
-	verify := func(f *os.File, current os.FileInfo) error {
-		if err := validateDownloadTargetMetadata(action, current, planned); err != nil {
-			return err
+	return e.preserveReplacedDownloadTarget(action, e.downloadTargetVerifier(action, planned))
+}
+
+// downloadTargetVerifier checks, through the open descriptor, that the file a
+// download is about to replace is still the version the plan saw.
+func (e *executor) downloadTargetVerifier(action *Action, planned *localState) synctree.VerifyFunc {
+	return func(f *os.File, current os.FileInfo) error {
+		if metaErr := validateDownloadTargetMetadata(action, current, planned); metaErr != nil {
+			return metaErr
 		}
 		if planned.Hash == "" {
 			return nil
@@ -542,10 +548,14 @@ func (e *executor) validateDownloadTargetBeforeReplace(action *Action) error {
 		}
 		return nil
 	}
+}
 
+// preserveReplacedDownloadTarget keeps the verified version of a download's
+// target in the trash before the download replaces it.
+func (e *executor) preserveReplacedDownloadTarget(action *Action, verify synctree.VerifyFunc) error {
 	placement, err := e.trash.Reserve(e.syncTree.Path(), action.Path, localtrash.ReasonReplaced)
 	if err != nil {
-		return err
+		return fmt.Errorf("keeping the replaced version of %s: %w", action.Path, err)
 	}
 	if err := e.syncTree.PreserveRegularFile(action.Path, verify, placement.ItemPath); err != nil {
 		if abandonErr := placement.Abandon(); abandonErr != nil {
@@ -555,7 +565,7 @@ func (e *executor) validateDownloadTargetBeforeReplace(action *Action) error {
 		if errors.Is(err, synctree.ErrDetachRaced) {
 			return stalePreconditionError("download target %s changed while it was checked", action.Path)
 		}
-		return err
+		return fmt.Errorf("keeping the replaced version of %s: %w", action.Path, err)
 	}
 	e.commitTrashPlacement(action.Path, placement)
 

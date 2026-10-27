@@ -76,7 +76,7 @@ func (r *Root) RootIdentity() (RootIdentity, error) {
 	}
 
 	var fsStat unix.Statfs_t
-	if err := unix.Fstatfs(int(dir.Fd()), &fsStat); err != nil { //nolint:gosec // descriptors fit in int on every unix target
+	if err := unix.Fstatfs(int(dir.Fd()), &fsStat); err != nil {
 		return RootIdentity{}, fmt.Errorf("reading filesystem of sync folder %s: %w", r.dir, err)
 	}
 
@@ -90,5 +90,5 @@ func (r *Root) RootIdentity() (RootIdentity, error) {
 func fileSystemIDFromStatfs(stat *unix.Statfs_t) uint64 {
 	// f_fsid is two 32-bit words on every unix target x/sys supports; their
 	// signedness differs, so convert through uint32 to keep the bit pattern.
-	return uint64(uint32(stat.Fsid.Val[0]))<<32 | uint64(uint32(stat.Fsid.Val[1])) //nolint:gosec // bit-pattern preserving widening
+	return uint64(uint32(stat.Fsid.Val[0]))<<32 | uint64(uint32(stat.Fsid.Val[1]))
 }

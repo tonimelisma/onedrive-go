@@ -28,6 +28,7 @@ import (
 const (
 	deleteSafetyMinFiles        = 50
 	deleteSafetyBaselinePercent = 30
+	percentDenominator          = 100
 )
 
 // deleteSafetyInput is the evidence the hold is decided from: the planner's
@@ -141,7 +142,7 @@ func deleteSafetyVerdict(
 // deleteSafetyThreshold is the most file deletes toward one side a pass may
 // run without confirmation.
 func deleteSafetyThreshold(baselineFiles int) int {
-	proportional := (baselineFiles*deleteSafetyBaselinePercent + 99) / 100
+	proportional := (baselineFiles*deleteSafetyBaselinePercent + percentDenominator - 1) / percentDenominator
 	return max(deleteSafetyMinFiles, proportional)
 }
 

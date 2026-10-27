@@ -47,6 +47,7 @@ const (
 	trashDirName   = "trash"
 	entryTempGlob  = ".entry-*"
 	maxListEntries = 1 << 20
+	parentDirName  = ".."
 
 	// incompletePlacementGrace is how old an entry without entry.json must
 	// be before Purge treats it as crash debris rather than a placement a
@@ -231,7 +232,7 @@ func (t *Trash) readEntry(id string) (Entry, bool, error) {
 // Restore puts entry id back at its original path and removes it from the
 // trash. It never overwrites: an occupied path is ErrRestoreTargetExists.
 func (t *Trash) Restore(id string) (string, error) {
-	if id == "" || strings.ContainsAny(id, `/\`) || id == "." || id == ".." {
+	if id == "" || strings.ContainsAny(id, `/\`) || id == "." || id == parentDirName {
 		return "", fmt.Errorf("%w: %q", ErrEntryNotFound, id)
 	}
 	entry, ok, err := t.readEntry(id)
@@ -272,7 +273,7 @@ func restoreTarget(entry Entry) (string, error) {
 		return "", fmt.Errorf("trash entry %s has no usable original path", entry.ID)
 	}
 	clean := filepath.Clean(rel)
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	if clean == "." || clean == parentDirName || strings.HasPrefix(clean, parentDirName+string(filepath.Separator)) {
 		return "", fmt.Errorf("trash entry %s points outside its sync folder", entry.ID)
 	}
 	return filepath.Join(entry.SyncRoot, clean), nil

@@ -294,19 +294,22 @@ func (e *executor) verifyLocalDeleteContent(action *Action, f *os.File, info os.
 // folder: into the trash when the drive has one, otherwise removed.
 func (e *executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFunc) error {
 	if e.trash == nil {
-		return e.syncTree.RemoveVerifiedRegularFile(rel, verify)
+		if err := e.syncTree.RemoveVerifiedRegularFile(rel, verify); err != nil {
+			return fmt.Errorf("removing verified file: %w", err)
+		}
+		return nil
 	}
 
 	placement, err := e.trash.Reserve(e.syncTree.Path(), rel, localtrash.ReasonDeleted)
 	if err != nil {
-		return err
+		return fmt.Errorf("reserving a trash entry: %w", err)
 	}
 	if err := e.syncTree.DetachRegularFile(rel, verify, placement.ItemPath); err != nil {
 		if abandonErr := placement.Abandon(); abandonErr != nil {
 			e.logger.Debug("could not remove unused trash entry",
 				slog.String("path", rel), slog.String("error", abandonErr.Error()))
 		}
-		return err
+		return fmt.Errorf("moving to the trash: %w", err)
 	}
 	e.commitTrashPlacement(rel, placement)
 
@@ -346,8 +349,8 @@ func (e *executor) ExecuteRemoteDelete(ctx context.Context, action *Action) acti
 			permissionCapabilityRemoteRead,
 		)
 	}
-	if err := e.validateRemoteFolderDeleteChildren(ctx, driveID, action); err != nil {
-		return e.failedOutcomeWithFailure(action, ActionRemoteDelete, err, action.Path, permissionCapabilityRemoteRead)
+	if childErr := e.validateRemoteFolderDeleteChildren(ctx, driveID, action); childErr != nil {
+		return e.failedOutcomeWithFailure(action, ActionRemoteDelete, childErr, action.Path, permissionCapabilityRemoteRead)
 	}
 
 	err = e.items.DeleteItemIfMatch(ctx, driveID, action.ItemID, sourceETag)
