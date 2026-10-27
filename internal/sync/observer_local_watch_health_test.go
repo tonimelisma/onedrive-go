@@ -151,6 +151,11 @@ func TestWatch_NewDirectoryEMFILEStopsWatchingForFallback(t *testing.T) {
 	})
 	obs := newWatchTestObserver(t, &watcher.mockFsWatcher, watchObserverTestOptions{})
 	obs.watcherFactory = func() (fsWatcher, error) { return watcher, nil }
+	// newdir must appear only after setup has walked the tree; created
+	// earlier, setup itself meets the limit, closes the watcher, and the
+	// Create below would be sent on a closed channel.
+	watching := make(chan struct{})
+	obs.beforeWatchLoop = func() { close(watching) }
 
 	events := make(chan changeEvent, 10)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -162,7 +167,7 @@ func TestWatch_NewDirectoryEMFILEStopsWatchingForFallback(t *testing.T) {
 	}()
 
 	select {
-	case <-watcher.Added():
+	case <-watching:
 	case err := <-done:
 		require.NoError(t, err, "watch exited before becoming ready")
 	case <-time.After(5 * time.Second):

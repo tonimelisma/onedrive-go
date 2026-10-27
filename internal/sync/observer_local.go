@@ -535,6 +535,7 @@ type localObserver struct {
 	// cannot advance one without the others.
 	clock           syncClock
 	afterSafetyScan func() // test hook: called after safety-scan state reset completes
+	beforeWatchLoop func() // test hook: called once setup is done, before events are read
 
 	writeCoalesceCooldown time.Duration // 0 → defaultWriteCoalesceCooldown; injectable for tests
 	startupSafetyScan     bool          // engine watch mode closes the bootstrap-to-fsnotify startup gap
@@ -936,6 +937,9 @@ func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 		if o.watchUnavailable != nil {
 			return o.watchUnavailable
 		}
+	}
+	if o.beforeWatchLoop != nil {
+		o.beforeWatchLoop()
 	}
 
 	return o.watchLoop(ctx, watcher, tree, events)
