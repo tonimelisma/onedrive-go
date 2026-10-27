@@ -46,10 +46,7 @@ func (o *localObserver) watchLoop(
 	ctx context.Context, watcher fsWatcher, tree *synctree.Root, events chan<- changeEvent,
 ) error {
 	syncRoot := tree.Path()
-	interval := o.safetyScanInterval
-	if interval == 0 {
-		interval = safetyScanInterval
-	}
+	interval := o.effectiveSafetyScanInterval()
 
 	ticker := o.clock.NewTicker(interval)
 	defer stopTicker(ticker)

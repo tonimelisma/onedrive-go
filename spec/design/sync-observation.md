@@ -4,7 +4,7 @@ GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/
 
 LAYER: 2
 
-Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
+Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
 
 ## Overview
 
@@ -70,6 +70,8 @@ except that the type had once been public.
 | A deleted or renamed-away directory drops the watches of its whole subtree, deepest first, so the re-added tree reports its new paths. | `TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst`, `TestWatch_RenamedDirectoryDescendantEventsUseNewPath`, `TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches` |
 | The destination half of a rename is observed without waiting on a content read: an identity match reuses the synced hash when size and mtime are unchanged, otherwise the row goes out with an unknown hash and the hash follows; a created directory's row precedes its contents. | `TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing`, `TestHandleCreate_RenamedUnchangedFileReusesSyncedHash`, `TestHandleCreate_DirectoryRowPrecedesItsContents` |
 | Write coalescing hashes a continuously written file within a bounded wait, and backs off exponentially for a file that never settles. | `TestScheduleWriteHash_ContinuousWritesHashWithinMaxWait`, `TestWatch_ContinuouslyWrittenFileBacksOff`, `TestPruneWriteChurn_DropsSettledPaths` |
+| On kqueue platforms watch setup projects its descriptor use (watched directories plus their entries) and falls back to periodic scans above half the open-file limit. | `TestAddWatchesRecursive_OverDescriptorBudgetFallsBackBeforeExhaustingFiles`, `TestAddWatchesRecursive_WithinDescriptorBudgetWatches` |
+| A network or FUSE sync root is identified with statfs, warned about once, and rescanned every two minutes. | `TestWatch_NetworkRootShortensSafetyScanInterval`, `TestAdaptToRootFilesystem_LocalRootKeepsInterval`, `TestLocalFilesystemKind_ReadsTheRealFilesystem` |
 | Local watch prefiltering keeps unknown-kind include-root and include-ancestor events observable until stat/type-aware observation can decide the exact item kind. | `TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths` |
 
 ## Remote Observation
@@ -309,6 +311,21 @@ up to `unstableWriteMaxBackoff`, and writes during the wait do not restart it.
 The first time a path becomes unstable the observer logs one Info line that
 suggests excluding it. The per-path history is watch-loop state, reset when the
 path goes quiet and pruned at safety scans.
+
+fsnotify has no FSEvents backend: on macOS and FreeBSD it uses kqueue, which
+holds an open descriptor for every watched directory and every file inside one.
+Watch setup therefore counts the entries of each directory it watches and stops
+with `watchCauseDescriptorBudget` once watched directories plus entries exceed
+`watchDescriptorBudget()`, half of `RLIMIT_NOFILE` (zero, meaning no budget,
+on Linux, where inotify watches are not open files). The runtime then falls
+back to periodic full scans. An FSEvents watcher behind `fsWatcher` is the
+durable fix and is planned separately (P-15).
+
+At watch start the observer identifies the sync root's filesystem with statfs
+(`localFilesystemKind`, in the platform files). Changes made to a network or
+FUSE filesystem from elsewhere raise no local events, so on such a root it
+warns once and shortens the safety-scan interval to
+`networkSafetyScanInterval` (2 minutes).
 
 Raw fsnotify events are not a durable journal. They only choose the observation
 scope. The observer performs normal filesystem reads for that scope, emits a

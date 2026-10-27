@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -76,3 +78,37 @@ func checkInotifyCapacity(estimatedDirs int, logger *slog.Logger) {
 // editors and IDEs share it); the per-process open-file limit is the other
 // possibility, and the warning names both.
 const watchCreateEMFILECause = watchCauseInstanceLimit
+
+// watchDescriptorBudget is zero on Linux: an inotify watch is a kernel watch
+// descriptor counted against max_user_watches, not an open file.
+func watchDescriptorBudget() int { return 0 }
+
+// remoteFilesystemMagics names the statfs f_type values of network and FUSE
+// filesystems, whose changes made by other clients raise no inotify events.
+var remoteFilesystemMagics = map[uint32]string{
+	unix.NFS_SUPER_MAGIC:  "nfs",
+	unix.SMB_SUPER_MAGIC:  "smb",
+	unix.CIFS_SUPER_MAGIC: "cifs",
+	unix.SMB2_SUPER_MAGIC: "smb2",
+	unix.FUSE_SUPER_MAGIC: "fuse",
+	unix.V9FS_MAGIC:       "9p",
+	unix.CEPH_SUPER_MAGIC: "ceph",
+	unix.AFS_SUPER_MAGIC:  "afs",
+	unix.CODA_SUPER_MAGIC: "coda",
+}
+
+// localFilesystemKind identifies the filesystem holding path from statfs.
+func localFilesystemKind(path string) (filesystemInfo, error) {
+	var stat unix.Statfs_t
+	if err := unix.Statfs(path, &stat); err != nil {
+		return filesystemInfo{}, fmt.Errorf("statfs %s: %w", path, err)
+	}
+
+	// f_type is int64 on amd64 and int32 on 32-bit platforms; the magic
+	// numbers are 32-bit, so compare the low 32 bits.
+	if kind, ok := remoteFilesystemMagics[uint32(stat.Type)]; ok { //nolint:gosec // truncation to the 32-bit magic is intended
+		return filesystemInfo{kind: kind, remote: true}, nil
+	}
+
+	return filesystemInfo{kind: fmt.Sprintf("0x%x", stat.Type)}, nil
+}

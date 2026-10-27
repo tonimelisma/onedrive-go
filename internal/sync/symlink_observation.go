@@ -416,6 +416,11 @@ func (o *localObserver) walkObservedEntry(
 type watchSetupCounts struct {
 	watched int
 	failed  int
+	// entries counts the directory entries seen under watched directories.
+	// The kqueue backend opens a descriptor for every file inside a watched
+	// directory as well as for the directory, so watched+entries projects
+	// the descriptors watching will hold.
+	entries int
 }
 
 type watchAddSession struct {
@@ -556,6 +561,11 @@ func (o *localObserver) addObservedDirChildrenWatches(
 		return nil
 	}
 
+	counts.entries += len(entries)
+	if err := o.checkWatchDescriptorBudget(counts); err != nil {
+		return err
+	}
+
 	for _, entry := range entries {
 		if ctx.Err() != nil {
 			return fmt.Errorf("watch setup context: %w", ctx.Err())
@@ -567,6 +577,30 @@ func (o *localObserver) addObservedDirChildrenWatches(
 	}
 
 	return nil
+}
+
+// checkWatchDescriptorBudget stops watch setup before kqueue would hold more
+// descriptors than the budget (D-079). kqueue keeps one open descriptor per
+// watched directory and per file inside one, so watching a large tree used
+// to exhaust the process's open-file limit; hashing, uploads and SQLite then
+// failed with EMFILE while parts of the tree silently went unwatched. Over
+// budget, the runtime falls back to periodic full scans instead. A budget of
+// zero means the backend holds no per-watch descriptors (inotify).
+func (o *localObserver) checkWatchDescriptorBudget(counts *watchSetupCounts) error {
+	if o.descriptorBudget <= 0 {
+		return nil
+	}
+
+	projected := counts.watched + counts.entries
+	if projected <= o.descriptorBudget {
+		return nil
+	}
+
+	return &localWatchUnavailableError{
+		cause: watchCauseDescriptorBudget,
+		err: fmt.Errorf("watching needs more than %d open files; the budget is %d (half the open-file limit)",
+			projected, o.descriptorBudget),
+	}
 }
 
 func (o *localObserver) addObservedChildWatch(

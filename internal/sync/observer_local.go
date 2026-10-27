@@ -351,9 +351,19 @@ type localObserver struct {
 	watchIdentityBuiltAt time.Time
 	protectedRootEvents  protectedRootEventSink
 	watcherFactory       func() (fsWatcher, error)
-	droppedEvents        atomic.Int64 // events dropped by TrySend due to full channel
-	droppedRetries       atomic.Int64 // hash requests dropped due to full channel
-	lastActivityNano     atomic.Int64 // liveness: updated on each event emit (B-125)
+
+	// descriptorBudget caps the open descriptors watch setup may commit to
+	// watches (kqueue); 0 means the backend uses none per watch (inotify).
+	descriptorBudget int
+
+	// filesystemKind identifies the sync root's filesystem so a network or
+	// FUSE root, whose remote-side changes produce no local events, gets a
+	// warning and a shorter safety-scan interval. Injectable for tests.
+	filesystemKind func(path string) (filesystemInfo, error)
+
+	droppedEvents    atomic.Int64 // events dropped by TrySend due to full channel
+	droppedRetries   atomic.Int64 // hash requests dropped due to full channel
+	lastActivityNano atomic.Int64 // liveness: updated on each event emit (B-125)
 
 	// reportedWatchCauses and safetyScanFailing let the watch loop report a
 	// persistent condition once instead of per directory or per scan.
@@ -405,12 +415,14 @@ type localObserver struct {
 // during observation.
 func newLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int) *localObserver {
 	return &localObserver{
-		baseline:        baseline,
-		logger:          logger,
-		checkWorkers:    checkWorkers,
-		hashFunc:        driveops.ComputeQuickXorHash,
-		clock:           realClock{},
-		localWatchState: newLocalWatchState(),
+		baseline:         baseline,
+		logger:           logger,
+		checkWorkers:     checkWorkers,
+		hashFunc:         driveops.ComputeQuickXorHash,
+		clock:            realClock{},
+		localWatchState:  newLocalWatchState(),
+		descriptorBudget: watchDescriptorBudget(),
+		filesystemKind:   localFilesystemKind,
 		watcherFactory: func() (fsWatcher, error) {
 			w, err := fsnotify.NewWatcher()
 			if err != nil {
@@ -714,6 +726,7 @@ func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 
 	// Pre-flight capacity check (Linux only; no-op on other platforms).
 	checkInotifyCapacity(o.EstimateDirCount(), o.logger)
+	o.adaptToRootFilesystem(syncRoot)
 
 	// Walk the sync root to add watches on all existing directories.
 	if walkErr := o.AddWatchesRecursive(ctx, watcher, tree); walkErr != nil {
@@ -730,6 +743,59 @@ func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 	}
 
 	return o.watchLoop(ctx, watcher, tree, events)
+}
+
+// filesystemInfo describes the filesystem holding the sync root.
+type filesystemInfo struct {
+	// kind is the platform's name for the filesystem type ("nfs", "cifs").
+	kind string
+	// remote is true for network and FUSE filesystems: changes made by other
+	// clients of the share, or by the FUSE server, generate no local watch
+	// events, so only rescans observe them.
+	remote bool
+}
+
+// networkSafetyScanInterval is the safety-scan interval on a network or FUSE
+// sync root (D-081c). The default five minutes relied on events that such a
+// root never delivers for changes made elsewhere; a full scan of an unchanged
+// tree is stat-only, so scanning more often costs metadata reads, not
+// content reads.
+const networkSafetyScanInterval = 2 * time.Minute
+
+// adaptToRootFilesystem warns once and shortens the safety-scan interval when
+// the sync root is on a network or FUSE filesystem.
+func (o *localObserver) adaptToRootFilesystem(syncRoot string) {
+	if o.filesystemKind == nil {
+		return
+	}
+
+	info, err := o.filesystemKind(syncRoot)
+	if err != nil {
+		o.logger.Debug("could not identify the sync folder's filesystem",
+			slog.String("error", err.Error()))
+		return
+	}
+	if !info.remote {
+		return
+	}
+
+	if o.effectiveSafetyScanInterval() > networkSafetyScanInterval {
+		o.safetyScanInterval = networkSafetyScanInterval
+	}
+
+	o.logger.Warn("The sync folder is on a network or FUSE file system ("+info.kind+"). "+
+		"Changes made to it from other computers are not reported to this one, so they are noticed "+
+		"only by the periodic rescan, every "+waitText(o.effectiveSafetyScanInterval())+".",
+		slog.String("filesystem", info.kind),
+	)
+}
+
+func (o *localObserver) effectiveSafetyScanInterval() time.Duration {
+	if o.safetyScanInterval == 0 {
+		return safetyScanInterval
+	}
+
+	return o.safetyScanInterval
 }
 
 // cancelPendingTimers stops and clears all pending write coalesce timers.
