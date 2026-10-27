@@ -464,3 +464,60 @@ func TestWatchRegistry_SubtreeLookupFollowsTheIndexAndUnlinksEmptyBranches(t *te
 	assert.NotContains(t, reg.children["/r"], "/r/a", "an empty branch is unlinked from its parent")
 	assert.Equal(t, []string{"/r/z"}, reg.descendants("/r"))
 }
+
+// Validates: R-2.8.13
+func TestRecoveryScanDelay_ScalesWithScanDurationAndBacksOffUnderStorm(t *testing.T) {
+	t.Parallel()
+
+	clock := newManualClock(time.Now())
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.clock = clock
+	obs.safetyScanInterval = localWatchHealthySafetyScanInterval
+
+	// A tree whose full scan takes 20 s is not rescanned 10 s apart.
+	obs.lastFullScanDuration = 20 * time.Second
+	obs.armRecoveryScan()
+	assert.True(t, clock.HasPendingTimerAt(clock.Now().Add(40*time.Second)), "delay is twice the last scan's duration")
+
+	// The storm continues: every request soon after a recovery scan doubles
+	// the delay, up to the safety-scan interval.
+	runArmedRecovery := func() {
+		t.Helper()
+		clock.Advance(obs.lastRecoveryDelay)
+		gen := <-obs.recoveryScanDue
+		require.True(t, obs.takeRecoveryScanDue(gen))
+		obs.finishRecoveryScan()
+	}
+	for _, want := range []time.Duration{80 * time.Second, 160 * time.Second, localWatchHealthySafetyScanInterval, localWatchHealthySafetyScanInterval} {
+		runArmedRecovery()
+		obs.armRecoveryScan()
+		assert.Equal(t, want, obs.lastRecoveryDelay)
+	}
+
+	// Once the storm has passed the delay is back to its base.
+	runArmedRecovery()
+	clock.Advance(2 * localWatchHealthySafetyScanInterval)
+	obs.armRecoveryScan()
+	assert.Equal(t, 40*time.Second, obs.lastRecoveryDelay)
+}
+
+// Validates: R-2.8.13
+func TestCancelRecoveryScan_StaleTimerFiringIsIgnored(t *testing.T) {
+	t.Parallel()
+
+	clock := newManualClock(time.Now())
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.clock = clock
+	obs.armRecoveryScan()
+	clock.mu.Lock()
+	staleFire := clock.timers[len(clock.timers)-1].fn
+	clock.mu.Unlock()
+
+	// A full scan disarms the recovery scan; a real timer can still fire
+	// after Stop and deliver its token.
+	obs.cancelRecoveryScan()
+	staleFire()
+
+	gen := <-obs.recoveryScanDue
+	assert.False(t, obs.takeRecoveryScanDue(gen), "a token from a canceled timer does not trigger a scan")
+}

@@ -77,12 +77,15 @@ func (o *localObserver) watchLoop(
 		case <-o.recoveryScanRequests:
 			o.armRecoveryScan()
 
-		case <-o.recoveryScanDue:
-			o.recoveryScanTimer = nil
+		case gen := <-o.recoveryScanDue:
+			if !o.takeRecoveryScanDue(gen) {
+				continue
+			}
 			o.logger.Debug("running recovery scan after missed local changes")
 			if err := o.rescanUnlessRootGone(ctx, tree, events); err != nil {
 				return err
 			}
+			o.finishRecoveryScan()
 
 		case watchErr, ok := <-watcher.Errors():
 			if !ok {
@@ -1228,9 +1231,10 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 	// this scan fails to deliver) re-arm it.
 	o.cancelRecoveryScan()
 
-	start := time.Now()
+	start := o.clock.Now()
 
 	result, err := o.FullScan(ctx, tree)
+	o.lastFullScanDuration = o.clock.Now().Sub(start)
 	if err != nil {
 		switch {
 		case ctx.Err() != nil:
@@ -1283,7 +1287,7 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 	}
 
 	// Log timing and resource counts for operational visibility (B-101).
-	elapsed := time.Since(start)
+	elapsed := o.lastFullScanDuration
 	o.logger.Info("safety scan complete",
 		slog.Duration("elapsed", elapsed),
 		slog.Int("events", len(result.Events)),

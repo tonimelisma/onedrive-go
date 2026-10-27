@@ -134,11 +134,23 @@ type localWatchState struct {
 	//
 	// recoveryScanRequests carries requests from timer callbacks (which must
 	// not touch watch-loop state); recoveryScanDue carries the armed timer's
-	// firing. Both are buffered(1): one pending signal is the whole message.
-	// recoveryScanTimer is watch-loop only.
+	// generation when it fires. Both are buffered(1): one pending signal is
+	// the whole message. The rest is watch-loop only: recoveryScanGen is
+	// bumped whenever the armed timer is canceled, so a timer that fires
+	// after Stop (a real timer can) delivers a stale generation that is
+	// ignored rather than a token that triggers an extra scan.
 	recoveryScanRequests chan struct{}
-	recoveryScanDue      chan struct{}
+	recoveryScanDue      chan uint64
 	recoveryScanTimer    syncTimer
+	recoveryScanGen      uint64
+
+	// Recovery-scan pacing (see recoveryScanDelayNow). lastFullScanDuration
+	// is how long the most recent full scan took; lastRecoveryDelay and
+	// lastRecoveryScanEnd let a request arriving soon after a recovery scan
+	// double the next delay.
+	lastFullScanDuration time.Duration
+	lastRecoveryDelay    time.Duration
+	lastRecoveryScanEnd  time.Time
 }
 
 func newLocalWatchState() localWatchState {
@@ -150,7 +162,7 @@ func newLocalWatchState() localWatchState {
 		CollisionPeers:       make(map[string]map[string]struct{}),
 		excludedSymlinkPaths: make(map[string]struct{}),
 		recoveryScanRequests: make(chan struct{}, 1),
-		recoveryScanDue:      make(chan struct{}, 1),
+		recoveryScanDue:      make(chan uint64, 1),
 	}
 }
 
@@ -742,13 +754,48 @@ func (o *localObserver) armRecoveryScan() {
 		return
 	}
 
+	delay := o.recoveryScanDelayNow()
 	due := o.recoveryScanDue
-	o.recoveryScanTimer = o.clock.AfterFunc(recoveryScanDelay, func() {
+	gen := o.recoveryScanGen
+	o.recoveryScanTimer = o.clock.AfterFunc(delay, func() {
 		select {
-		case due <- struct{}{}:
+		case due <- gen:
 		default:
 		}
 	})
+}
+
+// recoveryScanDelayNow paces recovery scans so they cannot run back to back on
+// a large tree under a sustained event storm: the delay is at least
+// recoveryScanDelay and twice the last full scan's duration, and doubles when
+// the request comes in while the previous recovery delay has not yet passed
+// since the last recovery scan ended (the storm continues). It never exceeds
+// the safety-scan interval, which would run the scan anyway.
+func (o *localObserver) recoveryScanDelayNow() time.Duration {
+	delay := max(recoveryScanDelay, 2*o.lastFullScanDuration)
+	if !o.lastRecoveryScanEnd.IsZero() && o.clock.Now().Sub(o.lastRecoveryScanEnd) < o.lastRecoveryDelay {
+		delay = max(delay, 2*o.lastRecoveryDelay)
+	}
+	delay = min(delay, o.effectiveSafetyScanInterval())
+	o.lastRecoveryDelay = delay
+
+	return delay
+}
+
+// takeRecoveryScanDue reports whether a fired recovery timer's generation is
+// the armed one, and disarms it. Watch-loop goroutine only.
+func (o *localObserver) takeRecoveryScanDue(gen uint64) bool {
+	if gen != o.recoveryScanGen || o.recoveryScanTimer == nil {
+		return false
+	}
+	o.recoveryScanTimer = nil
+
+	return true
+}
+
+// finishRecoveryScan records when a recovery scan ended, for pacing.
+func (o *localObserver) finishRecoveryScan() {
+	o.lastRecoveryScanEnd = o.clock.Now()
 }
 
 // cancelRecoveryScan disarms a pending recovery scan, including one whose
@@ -758,6 +805,7 @@ func (o *localObserver) cancelRecoveryScan() {
 		o.recoveryScanTimer.Stop()
 		o.recoveryScanTimer = nil
 	}
+	o.recoveryScanGen++
 
 	select {
 	case <-o.recoveryScanDue:

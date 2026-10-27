@@ -66,7 +66,7 @@ except that the type had once been public.
 | Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child work commands to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 | A watcher that cannot be created or extended because of an operating-system limit (inotify watches or instances, open files, kernel memory) degrades to periodic full scans with one warning naming the limit and its fix; a descriptor-limit failure after startup stops watching so the watcher's descriptors are released. | `TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable`, `TestClassifyWatcherCreateError_ResourceLimits`, `TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable`, `TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan`, `TestWatch_NewDirectoryEMFILEStopsWatchingForFallback` |
-| Known-missed local changes (kernel queue overflow, watcher errors, dropped batches or hash requests) arm one coalesced recovery rescan instead of waiting for the periodic safety scan. | `TestWatch_EventOverflowRunsRecoveryScan`, `TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan`, `TestTrySendLocalObservationBatch_DropRequestsRecoveryScan` |
+| Known-missed local changes (kernel queue overflow, watcher errors, dropped batches or hash requests) arm one coalesced recovery rescan instead of waiting for the periodic safety scan. | `TestWatch_EventOverflowRunsRecoveryScan`, `TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan`, `TestRecoveryScanDelay_ScalesWithScanDurationAndBacksOffUnderStorm`, `TestCancelRecoveryScan_StaleTimerFiringIsIgnored`, `TestTrySendLocalObservationBatch_DropRequestsRecoveryScan` |
 | A deleted or renamed-away directory drops the watches of its whole subtree, deepest first, so the re-added tree reports its new paths. | `TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst`, `TestWatch_RenamedDirectoryDescendantEventsUseNewPath`, `TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches`, `TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree`, `TestWatchRegistry_SubtreeLookupFollowsTheIndexAndUnlinksEmptyBranches` |
 | The destination half of a rename is observed without waiting on a content read: an identity match reuses the synced hash when size and mtime are unchanged, otherwise the row goes out with an unknown hash and the hash follows; a created directory's row precedes its contents. | `TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing`, `TestHandleCreate_RenamedUnchangedFileReusesSyncedHash`, `TestHandleCreate_ReusedInodeWhileSyncedPathExistsIsHashed`, `TestHandleCreate_DirectoryRowPrecedesItsContents` |
 | Write coalescing hashes a continuously written file within a bounded wait, and backs off exponentially for a file that never settles. | `TestScheduleWriteHash_ContinuousWritesHashWithinMaxWait`, `TestWatch_ContinuouslyWrittenFileBacksOff`, `TestHashAndEmit_StillChangingAtRetryCapStaysPendingWithoutEmptyHash`, `TestPruneWriteChurn_DropsSettledPaths` |
@@ -347,11 +347,14 @@ local observation batch, drops a delayed hash request, sees a watcher error, or
 cannot complete a safety scan, the watch runtime marks
 `observation_state.local_truth_complete=false` with a recovery reason and
 schedules a normal dirty replan/full local refresh. The observer itself
-arms one recovery rescan `recoveryScanDelay` (10 s) after the first such
-signal; further signals coalesce into it and any full scan that starts disarms
-it, so a sustained event storm costs one rescan per delay rather than one per
-dropped event, and missed changes are observed long before the five-minute
-safety scan. Local-state absence is
+arms one recovery rescan after the first such signal; further signals coalesce
+into it and any full scan that starts disarms it (a generation number makes a
+timer that fires after Stop harmless). The delay is at least
+`recoveryScanDelay` (10 s) and twice the last full scan's duration, doubles
+while requests keep arriving before the previous delay has passed since the
+last recovery scan ended, and is capped at the safety-scan interval, so a
+sustained event storm on a large tree cannot keep the observer rescanning back
+to back, and missed changes are still observed well before the safety scan. Local-state absence is
 therefore only trustworthy to later stale-work validation when local truth is
 marked complete.
 
