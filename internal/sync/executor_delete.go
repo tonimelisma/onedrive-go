@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -94,7 +95,7 @@ func (e *executor) ExecuteLocalDelete(ctx context.Context, action *Action) actio
 		return e.DeleteLocalFolder(action, absPath)
 	}
 
-	return e.DeleteLocalFile(ctx, action, absPath, info)
+	return e.DeleteLocalFile(action)
 }
 
 func (e *executor) DeleteLocalSymlink(action *Action, relPath string) actionOutcome {
@@ -178,93 +179,137 @@ func (e *executor) DeleteLocalFolder(action *Action, absPath string) actionOutco
 	return e.DeleteOutcome(action, ActionLocalDelete)
 }
 
-// DeleteLocalFile removes a file after verifying its hash matches baseline.
-// Hash mismatch means the file changed after planning; the executor keeps the
-// local file in place and returns a stale-precondition failure so the engine
-// replans from current truth.
-func (e *executor) DeleteLocalFile(_ context.Context, action *Action, absPath string, info os.FileInfo) actionOutcome {
-	baselineHash := ""
-	baselineRemoteHash := ""
-
-	if action.View != nil && action.View.Baseline != nil {
-		baselineHash = action.View.Baseline.LocalHash
-		baselineRemoteHash = action.View.Baseline.RemoteHash
+// DeleteLocalFile takes a file out of the sync folder after verifying that it
+// still holds the synced content, and puts it in the drive's trash (P-4).
+//
+// Verification and removal are bound to one inode (D-010): the file is
+// opened once, its content checked through that descriptor, and only that
+// inode leaves the folder. A file replaced while it was being hashed (an
+// editor's atomic save) is left in place and the delete is superseded. A
+// mismatch means the file changed after planning; the executor keeps it and
+// returns a stale-precondition failure so the engine replans from current
+// truth.
+func (e *executor) DeleteLocalFile(action *Action) actionOutcome {
+	verify := func(f *os.File, info os.FileInfo) error {
+		return e.verifyLocalDeleteContent(action, f, info)
 	}
 
-	// S4 safety: verify before delete. A baseline row can carry no local hash
-	// -- the scanner records an empty hash when hashing a file fails -- and
-	// skipping the check there would delete local content without ever asking
-	// whether the user changed it, which is the destructive half of the case
-	// S4 exists to prevent. Without a hash the baseline's size and mtime are
-	// the only evidence left. They are too weak to prove two files equal, but
-	// they are sound as a guard: any difference is proof the file changed, and
-	// a destructive action may not run on no evidence at all.
-	if baselineHash == "" {
-		var baselineEntry *BaselineEntry
-		if action.View != nil {
-			baselineEntry = action.View.Baseline
-		}
-
-		if !localDeleteUnchangedWithoutHash(baselineEntry, info) {
+	if err := e.removeVerifiedLocalFile(action.Path, verify); err != nil {
+		if errors.Is(err, errActionPreconditionChanged) || errors.Is(err, synctree.ErrDetachRaced) {
 			// Debug: the returned precondition error supersedes the action
 			// and the engine replans; nothing is asked of the user.
-			e.logger.Debug("local delete: no baseline hash and local file is unverified, keeping local file and requiring replan",
+			e.logger.Debug("local delete: file changed, keeping it and requiring replan",
 				slog.String("path", action.Path),
+				slog.String("error", err.Error()),
 			)
-
+			if !errors.Is(err, errActionPreconditionChanged) {
+				err = fmt.Errorf("%w: %w", errActionPreconditionChanged, err)
+			}
+			return e.failedOutcomeWithFailure(action, ActionLocalDelete, err, action.Path, permissionCapabilityLocalWrite)
+		}
+		if errors.Is(err, os.ErrNotExist) {
 			return e.failedOutcomeWithFailure(
 				action,
 				ActionLocalDelete,
-				fmt.Errorf("%w: local delete unverifiable for %s (no baseline hash; remote=%s size=%d mtime=%d)",
-					errActionPreconditionChanged,
-					action.Path,
-					baselineRemoteHash,
-					info.Size(),
-					info.ModTime().UnixNano(),
-				),
+				stalePreconditionError("local delete source %s is already absent", action.Path),
 				action.Path,
 				permissionCapabilityLocalWrite,
 			)
 		}
-	}
-
-	if baselineHash != "" {
-		currentHash, err := e.hashFunc(absPath)
-		if err != nil {
-			return e.failedOutcome(action, ActionLocalDelete,
-				fmt.Errorf("hashing %s before delete: %w", action.Path, err))
-		}
-
-		if currentHash != baselineHash {
-			// Debug: the file changed locally after the remote delete; the
-			// engine replans and normally uploads it. Nothing to do.
-			e.logger.Debug("local delete: hash mismatch, keeping local file and requiring replan",
-				slog.String("path", action.Path),
-			)
-			return e.failedOutcomeWithFailure(
-				action,
-				ActionLocalDelete,
-				fmt.Errorf("%w: local delete hash mismatch for %s (baseline=%s current=%s remote=%s mtime=%d)",
-					errActionPreconditionChanged,
-					action.Path,
-					baselineHash,
-					currentHash,
-					baselineRemoteHash,
-					info.ModTime().UnixNano(),
-				),
-				action.Path,
-				permissionCapabilityLocalWrite,
-			)
-		}
-	}
-
-	if err := e.syncTree.Remove(action.Path); err != nil {
 		return e.failedOutcome(action, ActionLocalDelete, fmt.Errorf("removing %s: %w", action.Path, normalizeSyncTreePathError(err)))
 	}
 
 	e.logger.Debug("deleted local file", slog.String("path", action.Path))
 
 	return e.DeleteOutcome(action, ActionLocalDelete)
+}
+
+// verifyLocalDeleteContent is S4, read through the descriptor that will be
+// removed. A baseline row can carry no local hash -- the scanner records an
+// empty hash when hashing a file fails -- and skipping the check there would
+// delete local content without ever asking whether the user changed it.
+// Without a hash the baseline's size and mtime are the only evidence left.
+// They are too weak to prove two files equal, but sound as a guard: any
+// difference is proof the file changed, and a destructive action may not run
+// on no evidence at all.
+func (e *executor) verifyLocalDeleteContent(action *Action, f *os.File, info os.FileInfo) error {
+	var baselineEntry *BaselineEntry
+	if action.View != nil {
+		baselineEntry = action.View.Baseline
+	}
+	baselineHash := ""
+	baselineRemoteHash := ""
+	if baselineEntry != nil {
+		baselineHash = baselineEntry.LocalHash
+		baselineRemoteHash = baselineEntry.RemoteHash
+	}
+
+	if baselineHash == "" {
+		if localDeleteUnchangedWithoutHash(baselineEntry, info) {
+			return nil
+		}
+		return fmt.Errorf("%w: local delete unverifiable for %s (no baseline hash; remote=%s size=%d mtime=%d)",
+			errActionPreconditionChanged,
+			action.Path,
+			baselineRemoteHash,
+			info.Size(),
+			info.ModTime().UnixNano(),
+		)
+	}
+
+	currentHash, err := e.hashReader(f)
+	if err != nil {
+		return fmt.Errorf("hashing %s before delete: %w", action.Path, err)
+	}
+	if currentHash != baselineHash {
+		return fmt.Errorf("%w: local delete hash mismatch for %s (baseline=%s current=%s remote=%s mtime=%d)",
+			errActionPreconditionChanged,
+			action.Path,
+			baselineHash,
+			currentHash,
+			baselineRemoteHash,
+			info.ModTime().UnixNano(),
+		)
+	}
+
+	return nil
+}
+
+// removeVerifiedLocalFile takes the verified file at rel out of the sync
+// folder: into the trash when the drive has one, otherwise removed.
+func (e *executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFunc) error {
+	if e.trash == nil {
+		return e.syncTree.RemoveVerifiedRegularFile(rel, verify)
+	}
+
+	placement, err := e.trash.Reserve(e.syncTree.Path(), rel, localtrash.ReasonDeleted)
+	if err != nil {
+		return err
+	}
+	if err := e.syncTree.DetachRegularFile(rel, verify, placement.ItemPath); err != nil {
+		if abandonErr := placement.Abandon(); abandonErr != nil {
+			e.logger.Debug("could not remove unused trash entry",
+				slog.String("path", rel), slog.String("error", abandonErr.Error()))
+		}
+		return err
+	}
+	e.commitTrashPlacement(rel, placement)
+
+	return nil
+}
+
+// commitTrashPlacement records a placement whose file already left the sync
+// folder. The delete itself has happened, so a failure here does not fail the
+// action; it is reported because the uncommitted entry will be purged as
+// crash debris instead of kept for the retention period.
+func (e *executor) commitTrashPlacement(rel string, placement *localtrash.Placement) {
+	if _, err := placement.Commit(); err != nil {
+		e.logger.Warn("could not record a trashed file; it is in the trash folder but will not be listed",
+			slog.String("path", rel),
+			slog.String("trash_path", placement.ItemPath),
+			slog.String("error", err.Error()),
+		)
+	}
 }
 
 // ExecuteRemoteDelete removes an item from OneDrive after checking the planned

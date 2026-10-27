@@ -11,6 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -52,16 +53,20 @@ type Engine struct {
 	logger                 *slog.Logger
 	perfCollector          *perf.Collector
 	sessionStore           *driveops.SessionStore // for CleanStale() housekeeping
-	transferWorkers        int                    // goroutine count for the worker pool
-	checkWorkers           int                    // goroutine limit for parallel file hashing
-	contentFilter          ContentFilterConfig
-	protectedRoots         []ProtectedRoot
-	localRules             LocalObservationRules
-	shortcutNamespaceID    string
-	shortcutChildWorkSink  ShortcutChildWorkSink
-	enableWebsocket        bool
-	minFreeSpace           int64 // startup disk-scope revalidation threshold
-	diskAvailableFn        func(string) (uint64, error)
+	trash                  *localtrash.Trash      // local deletes and replaced files (P-4)
+	// trashPurgedAt is when housekeeping last purged expired trash entries;
+	// watch maintenance purges at most once per trashPurgeInterval.
+	trashPurgedAt         atomic.Int64
+	transferWorkers       int // goroutine count for the worker pool
+	checkWorkers          int // goroutine limit for parallel file hashing
+	contentFilter         ContentFilterConfig
+	protectedRoots        []ProtectedRoot
+	localRules            LocalObservationRules
+	shortcutNamespaceID   string
+	shortcutChildWorkSink ShortcutChildWorkSink
+	enableWebsocket       bool
+	minFreeSpace          int64 // startup disk-scope revalidation threshold
+	diskAvailableFn       func(string) (uint64, error)
 
 	// Test/debug-only invariant checks. Production keeps this disabled;
 	// tests enable it to catch lifecycle and scope regressions immediately.
@@ -148,6 +153,8 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	)
 	execCfg.SetRemoteRootItemID(cfg.RemoteRootItemID)
 	execCfg.SetPendingCreates(bm)
+	trash := localtrash.Open(localtrash.DirForStatePath(cfg.DBPath), nil)
+	execCfg.SetTrash(trash)
 	execCfg.SetContentFilter(cfg.ContentFilter)
 
 	// Construct sessionStore and TransferManager together so the TM is
@@ -175,6 +182,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		folderDelta:              cfg.FolderDelta,
 		recursiveLister:          cfg.RecursiveLister,
 		sessionStore:             sessionStore,
+		trash:                    trash,
 		dataDir:                  cfg.DataDir,
 		syncRoot:                 cfg.SyncRoot,
 		syncTree:                 syncTree,

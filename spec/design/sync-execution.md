@@ -4,7 +4,7 @@ GOVERNS: internal/sync/action_freshness.go, internal/sync/active_scopes.go, inte
 
 LAYER: 3
 
-Implements: R-2.3.1 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified]
+Implements: R-2.3.1 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified]
 
 ## Overview
 
@@ -44,6 +44,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Worker-start validation rejects already-submitted stale actions before executor side effects, while suspect local truth disables local-state-based rejection. Dependent uploads after planned remote moves tolerate move-produced eTag churn but still reject proven remote content drift, and executable actions without planner truth fail closed. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState`, `TestActionFreshness_PostRemoteMoveUploadAllowsMoveProducedETagChange`, `TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange`, `TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction` |
 | Local mutation is refused beneath a symlinked ancestor, at every mutating action, with the target content outside the sync root left byte-identical. | `TestExecutor_Download_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorSourceIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorDestinationIsBlocked`, `TestExecutor_ConflictCopy_SymlinkedAncestorIsBlocked`, `TestExecutor_CreateLocalFolder_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition`, `TestExecutor_LocalDelete_AliasItselfStillRemovesOnlyTheSymlink`, `TestExecutor_LocalMove_WithoutSymlinkBoundarySucceeds` |
 | Uploads read through a followed alias: a file beneath a directory symlink whose target is outside the sync root uploads with the target content, its followed facts are still checked against the plan, the same path still refuses a download, and a path that lexically leaves the root is refused. | `TestRunOnce_FollowSymlinks_UploadsFileInsideDirectoryAliasOutsideRoot`, `TestExecutor_Upload_UnderFollowedDirectoryAliasSucceeds`, `TestExecutor_Upload_UnderFollowedDirectoryAliasDetectsChangedTarget`, `TestExecutor_UnderFollowedDirectoryAlias_UploadReadsButDownloadStaysRefused`, `TestExecutor_Upload_PathLeavingSyncRootIsRefused`, `TestExecutor_Upload_SymlinkAliasSourceUsesFollowedTargetPrecondition` |
+| Local deletes and download overwrites act only on the inode they verified, keep a file replaced mid-check, and put what they remove or replace in the drive's local trash. | `TestDeleteLocalFile_MovesTheFileToTheTrash`, `TestDeleteLocalFile_FileReplacedMidHashSurvives`, `TestDetachRegularFile_FileReplacedDuringVerifyIsKept`, `TestRunOnce_RemoteDeleteMovesLocalFileToTrash`, `TestRunOnce_DownloadOverwriteKeepsPreviousVersionInTrash` |
 | Executor live preconditions reject stale work at the side-effect boundary without mutating local or remote state. | `TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure`, `TestExecutor_RemoteDelete_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_RemoteDelete_WrongDrivePreflightReturnsStalePrecondition`, `TestExecutor_RemoteDelete_StalePathPreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_StaleSourcePreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_CreateRemoteFolder_MissingParentPreflightReturnsStalePrecondition`, `TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition`, `TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition`, `TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStalePrecondition`, `TestExecutor_Download_MountRootAllowsGraphDriveRootPath`, `TestExecutor_LocalMove_SourceChangedReturnsStalePrecondition`, `TestExecutor_LocalMove_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition` |
 | Workers preserve executor failure capability on completions and record worker-start/live-precondition superseded counters by local-vs-remote source. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_RemoteDownloadMismatchRecordsRemoteTruthCounter`, `TestWorkerPool_SendResultCountsLivePreconditionSupersededByCapability`, `TestWorkerPool_SendResultDoesNotGuessLivePreconditionSourceWithoutCapability` |
 | A worker commits a successful action's outcome on a context detached from the pool's cancellation and bounded by `outcomeCommitTimeout`, so a shutdown landing between the transfer and its commit still records the finished work. | `TestWorkerPool_CommitsCompletedOutcomeAfterPoolCancellation` |
@@ -395,6 +396,26 @@ Local delete keeps the ordinary per-item safety rule:
 - if the file changed after planning, do **not** delete newer local content;
   return a stale-precondition/superseded outcome so the engine replans from
   current truth without retrying that exact old delete
+
+Verification and removal are bound to one inode (D-010). `DeleteLocalFile`
+hands `synctree.DetachRegularFile` a verify function that hashes through the
+descriptor the tree opened without following links; the tree then renames the
+file to a client-owned partial sibling, proves the sibling is the verified
+inode, and only then moves it out. A file replaced while it was being hashed
+(an editor's atomic save) is put back with a no-replace link and the delete is
+superseded, so the new content survives.
+
+The file does not vanish: it moves into the drive's local trash
+(`internal/localtrash`, P-4), a per-mount directory under the data directory
+named after the state DB, by rename on the same filesystem and by a copy
+through the verified descriptor across filesystems. The previous version of a
+file a download replaces is kept the same way: just before the finished
+download is renamed over its target, `validateDownloadTargetBeforeReplace`
+verifies the target through the descriptor it hard-links (or copies) into the
+trash. Entries expire after 30 days; one-shot housekeeping and the watch
+maintenance tick (at most hourly) purge them, and `onedrive-go trash
+list/restore/empty` exposes them. Without a trash (executor-only tests) the
+verified inode is removed with `RemoveVerifiedRegularFile` instead.
 
 Directory delete also preserves non-disposable local content by refusing to
 remove directories blocked by non-disposable children. Folder removal uses the

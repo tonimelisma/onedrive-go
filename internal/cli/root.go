@@ -537,6 +537,7 @@ func addRootSubcommands(cmd *cobra.Command) {
 		newPauseCmd(), newResumeCmd(),
 		newMvCmd(), newCpCmd(),
 		newRecycleBinCmd(),
+		newTrashCmd(),
 	)
 }
 

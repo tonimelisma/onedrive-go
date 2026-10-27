@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 )
 
 // seedDeleteSafetyRemote builds a remote with count files spread over two
@@ -188,4 +189,55 @@ func TestPlanner_EmptiedLocalSideHoldsEvenFewDeletes(t *testing.T) {
 	assert.Empty(t, remote.deletes)
 	assert.Equal(t, 6, report.HeldRemoteDeletes, "four files and two folders")
 	assert.Empty(t, remote.folderCreates)
+}
+
+func listEngineTrash(t *testing.T, eng *testEngine) []localtrash.Entry {
+	t.Helper()
+
+	entries, err := eng.trash.List()
+	require.NoError(t, err)
+	return entries
+}
+
+// Validates: R-6.4.9
+func TestRunOnce_RemoteDeleteMovesLocalFileToTrash(t *testing.T) {
+	t.Parallel()
+
+	remote := seedDeleteSafetyRemote(t, 2)
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	remote.deleteRemotely("item-f000")
+	runScenarioPass(t, eng)
+
+	assert.NoFileExists(t, deleteSafetyFilePath(syncRoot, 0))
+	entries := listEngineTrash(t, eng)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "Photos/f000.txt", entries[0].Path)
+	assert.Equal(t, localtrash.ReasonDeleted, entries[0].Reason)
+	assert.Equal(t, eng.syncTree.Path(), entries[0].SyncRoot)
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-6.4.9
+func TestRunOnce_DownloadOverwriteKeepsPreviousVersionInTrash(t *testing.T) {
+	t.Parallel()
+
+	remote := seedDeleteSafetyRemote(t, 2)
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	remote.setContent(t, "item-keep", "edited on OneDrive\n")
+	runScenarioPass(t, eng)
+
+	data, err := os.ReadFile(filepath.Join(syncRoot, "keep.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "edited on OneDrive\n", string(data))
+	entries := listEngineTrash(t, eng)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "keep.txt", entries[0].Path)
+	assert.Equal(t, localtrash.ReasonReplaced, entries[0].Reason)
+	old, err := os.ReadFile(filepath.Join(eng.trash.Dir(), entries[0].ID, "item"))
+	require.NoError(t, err)
+	assert.Equal(t, "keep\n", string(old), "the replaced version is recoverable")
 }

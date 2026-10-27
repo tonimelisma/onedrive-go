@@ -62,11 +62,21 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 		)
 	}
 
+	// The replaced version goes to the trash once per action; a retried
+	// rename re-checks the target the ordinary way.
+	preserved := false
 	opts := driveops.DownloadOpts{
 		MaxHashRetries: maxHashRetries,
 		Target:         syncDownloadTarget{tree: e.syncTree},
 		ValidateTargetBeforeRename: func() error {
-			return e.validateDownloadTargetPrecondition(action)
+			if preserved {
+				return e.validateDownloadTargetPrecondition(action)
+			}
+			if err := e.validateDownloadTargetBeforeReplace(action); err != nil {
+				return err
+			}
+			preserved = true
+			return nil
 		},
 	}
 

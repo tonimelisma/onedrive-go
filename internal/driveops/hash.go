@@ -39,9 +39,21 @@ func ComputeQuickXorHash(fsPath string) (string, error) {
 	}
 	defer f.Close() //nolint:errcheck // the file is opened read-only for hashing; there is nothing buffered to flush
 
-	h := quickxorhash.New()
-	if _, err := io.Copy(h, f); err != nil {
+	hash, err := ComputeQuickXorHashFromReader(f)
+	if err != nil {
 		return "", fmt.Errorf("hashing %s: %w", fsPath, err)
+	}
+
+	return hash, nil
+}
+
+// ComputeQuickXorHashFromReader hashes everything r yields. Callers that must
+// act on exactly the bytes they verified hash an open descriptor with it
+// instead of re-opening a path.
+func ComputeQuickXorHashFromReader(r io.Reader) (string, error) {
+	h := quickxorhash.New()
+	if _, err := io.Copy(h, r); err != nil {
+		return "", fmt.Errorf("reading content to hash: %w", err)
 	}
 
 	return base64.StdEncoding.EncodeToString(h.Sum(nil)), nil

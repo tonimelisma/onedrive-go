@@ -37,6 +37,7 @@ are inserted, updated, pruned, and validated.
 | --- | --- |
 | Status JSON identifies each mount with a stable opaque `mount_ref` and still withholds canonical, mount, namespace, and remote drive IDs. | `TestStatusJSON_MountRefIsOpaqueAndDoesNotLeakIdentifiers`, `TestStatusJSON_MountRefDistinguishesSiblingChildren`, `TestMountRef_MatchesStateFileDigest`, `TestMountRef_IsStableUniqueAndOpaque`, `TestMountRef_EmptyForBlankMountID`, `TestStatusOutputGoldenJSON` |
 | `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestStatusCommand_NoAccountsDoesNotMutateManagedState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors`, `TestBuildChildStatusMount_FinalDrainGuidesAccessRestore`, `TestPrintMountStatus_RendersGuidedShortcutRecovery`, `TestStatusRuntime_SummaryJSONWithActiveOwner`, `TestStatusRuntimeOverlayApplyAndSummary`, `TestPrintMountStatus_ShowsRuntimeState`, `TestE2E_Status_NoLegacyHistorySurface`, `TestE2E_RoundTrip` |
+| `trash list/restore/empty` read and change one configured drive's local trash offline; restore never overwrites and empty needs `--confirm`. | `TestTrashCommands_ListRestoreAndEmpty`, `TestTrashRestore_NeverOverwrites` |
 | `drive rebind-root` clears only the recorded sync-folder fingerprint, keeps the rest of the state, needs `--drive`, and refuses while a sync owner holds the drive. | `TestRunDriveRebindRoot_RequiresDrive`, `TestRunDriveRebindRoot_KeepsStateAndReportsRebind`, `TestRunDriveRebindRoot_RefusesLiveSyncOwner` |
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
@@ -314,6 +315,9 @@ The mutating commands' documents:
 | `drive remove` | `drive`, `removed_from_config`, `purged` |
 | `drive reset-sync-state` | `drive`, `reset` |
 | `drive rebind-root` | `drive`, `rebound` |
+| `trash list` | `drive`, `entries[]` of `id`, `path`, `sync_root`, `reason` (`deleted`, `replaced`), `size`, `trashed_at` |
+| `trash restore` | `drive`, `id`, `restored_to` |
+| `trash empty` | `drive`, `removed` |
 | `recycle-bin empty` | `deleted[]` and `failed[]` of `id`, `name` (and `error`) |
 
 `TestCommandTree_EveryLeafHonorsJSON` walks the real command tree, runs every

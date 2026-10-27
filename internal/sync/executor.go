@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -44,13 +46,25 @@ type executorConfig struct {
 	transferMgr *driveops.TransferManager
 
 	// Injectable for testing.
-	nowFunc         func() time.Time
-	hashFunc        func(filePath string) (string, error)
+	nowFunc  func() time.Time
+	hashFunc func(filePath string) (string, error)
+	// hashReader hashes an open descriptor; destructive actions verify the
+	// exact inode they then remove or replace through it (D-010).
+	hashReader      func(r io.Reader) (string, error)
 	pathConvergence driveops.PathConvergence
+
+	// trash keeps what local deletes remove and what downloads replace
+	// (P-4). Nil only in executor-only tests; then removal is permanent.
+	trash *localtrash.Trash
 
 	// pendingCreates records new files whose empty item exists before their
 	// content is sent (R-5.6.15). Nil in executor-only tests.
 	pendingCreates pendingCreateStore
+}
+
+// SetTrash wires the drive's local trash.
+func (cfg *executorConfig) SetTrash(trash *localtrash.Trash) {
+	cfg.trash = trash
 }
 
 // SetPendingCreates wires the store that records pending creates.
@@ -81,6 +95,7 @@ func newExecutorConfig(
 		logger:          logger,
 		nowFunc:         time.Now,
 		hashFunc:        driveops.ComputeQuickXorHash,
+		hashReader:      driveops.ComputeQuickXorHashFromReader,
 		pathConvergence: pathConvergence,
 	}
 

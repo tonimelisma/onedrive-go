@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	slashpath "path"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -467,14 +469,8 @@ func plannedLocalState(action *Action) *localState {
 }
 
 func (e *executor) validateExistingDownloadTarget(action *Action, info os.FileInfo, planned *localState) error {
-	if info.IsDir() || planned.ItemType != ItemTypeFile {
-		return stalePreconditionError("download target %s changed type", action.Path)
-	}
-	if planned.Size != 0 && info.Size() != planned.Size {
-		return stalePreconditionError("download target %s changed size", action.Path)
-	}
-	if planned.Mtime != 0 && info.ModTime().UnixNano() != planned.Mtime {
-		return stalePreconditionError("download target %s changed mtime", action.Path)
+	if err := validateDownloadTargetMetadata(action, info, planned); err != nil {
+		return err
 	}
 	if planned.Hash != "" {
 		absPath, absErr := e.syncTree.Abs(action.Path)
@@ -489,6 +485,79 @@ func (e *executor) validateExistingDownloadTarget(action *Action, info os.FileIn
 			return stalePreconditionError("download target %s changed hash", action.Path)
 		}
 	}
+
+	return nil
+}
+
+// validateDownloadTargetMetadata is the cheap half of the overwrite check:
+// the file the planner saw must still be a file of the same size and mtime.
+func validateDownloadTargetMetadata(action *Action, info os.FileInfo, planned *localState) error {
+	if info.IsDir() || planned.ItemType != ItemTypeFile {
+		return stalePreconditionError("download target %s changed type", action.Path)
+	}
+	if planned.Size != 0 && info.Size() != planned.Size {
+		return stalePreconditionError("download target %s changed size", action.Path)
+	}
+	if planned.Mtime != 0 && info.ModTime().UnixNano() != planned.Mtime {
+		return stalePreconditionError("download target %s changed mtime", action.Path)
+	}
+
+	return nil
+}
+
+// validateDownloadTargetBeforeReplace runs just before a finished download is
+// renamed over its target. With a trash, an existing target is verified
+// through the descriptor of the inode that is then preserved in the trash, so
+// the version kept is exactly the version checked (D-010, P-4); the rename
+// that follows can no longer lose the content it replaces.
+func (e *executor) validateDownloadTargetBeforeReplace(action *Action) error {
+	if e.trash == nil {
+		return e.validateDownloadTargetPrecondition(action)
+	}
+	info, err := e.syncTree.Lstat(action.Path)
+	if err != nil || !info.Mode().IsRegular() || actionClearsLocalBeforeDownload(action) {
+		return e.validateDownloadTargetPrecondition(action)
+	}
+	if err := e.refuseLiveDatabaseTarget(action.Path); err != nil {
+		return err
+	}
+	planned := plannedLocalState(action)
+	if planned == nil {
+		return stalePreconditionError("download target %s appeared", action.Path)
+	}
+
+	verify := func(f *os.File, current os.FileInfo) error {
+		if err := validateDownloadTargetMetadata(action, current, planned); err != nil {
+			return err
+		}
+		if planned.Hash == "" {
+			return nil
+		}
+		currentHash, hashErr := e.hashReader(f)
+		if hashErr != nil {
+			return fmt.Errorf("hashing download target %s: %w", action.Path, hashErr)
+		}
+		if currentHash != planned.Hash {
+			return stalePreconditionError("download target %s changed hash", action.Path)
+		}
+		return nil
+	}
+
+	placement, err := e.trash.Reserve(e.syncTree.Path(), action.Path, localtrash.ReasonReplaced)
+	if err != nil {
+		return err
+	}
+	if err := e.syncTree.PreserveRegularFile(action.Path, verify, placement.ItemPath); err != nil {
+		if abandonErr := placement.Abandon(); abandonErr != nil {
+			e.logger.Debug("could not remove unused trash entry",
+				slog.String("path", action.Path), slog.String("error", abandonErr.Error()))
+		}
+		if errors.Is(err, synctree.ErrDetachRaced) {
+			return stalePreconditionError("download target %s changed while it was checked", action.Path)
+		}
+		return err
+	}
+	e.commitTrashPlacement(action.Path, placement)
 
 	return nil
 }
