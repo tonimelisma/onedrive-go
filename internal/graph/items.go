@@ -149,8 +149,9 @@ type createFolderRequest struct {
 }
 
 type moveItemRequest struct {
-	ParentReference *moveParentRef `json:"parentReference,omitempty"`
-	Name            string         `json:"name,omitempty"`
+	ParentReference *moveParentRef  `json:"parentReference,omitempty"`
+	Name            string          `json:"name,omitempty"`
+	FileSystemInfo  *fileSystemInfo `json:"fileSystemInfo,omitempty"`
 }
 
 type moveParentRef struct {

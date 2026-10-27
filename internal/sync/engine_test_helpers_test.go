@@ -65,12 +65,17 @@ type engineMockClient struct {
 	listItemPermissionsFn   func(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Permission, error)
 
 	// ItemClient
-	getItemFn           func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
-	getItemByPathFn     func(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
-	listChildrenFn      func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
-	createFolderFn      func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
-	moveItemFn          func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
-	moveItemIfMatchFn   func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName, ifMatch string) (*graph.Item, error)
+	getItemFn         func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+	getItemByPathFn   func(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
+	listChildrenFn    func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+	createFolderFn    func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
+	moveItemFn        func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
+	moveItemIfMatchFn func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName, ifMatch string) (*graph.Item, error)
+	// moveItemOptsFn sees every move with its full options; it wins over the
+	// two narrower hooks.
+	moveItemOptsFn func(
+		ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string, opts graph.MoveOptions,
+	) (*graph.Item, error)
 	deleteItemFn        func(ctx context.Context, driveID driveid.ID, itemID string) error
 	deleteItemIfMatchFn func(ctx context.Context, driveID driveid.ID, itemID, ifMatch string) error
 	permanentDeleteFn   func(ctx context.Context, driveID driveid.ID, itemID string) error
@@ -166,15 +171,10 @@ func (m *engineMockClient) CreateFolder(ctx context.Context, driveID driveid.ID,
 	return &graph.Item{ID: "new-folder-id"}, nil
 }
 
-func (m *engineMockClient) MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error) {
-	if m.moveItemIfMatchFn != nil {
-		return m.moveItemIfMatchFn(ctx, driveID, itemID, newParentID, newName, "")
-	}
-	if m.moveItemFn != nil {
-		return m.moveItemFn(ctx, driveID, itemID, newParentID, newName)
-	}
-
-	return &graph.Item{ID: itemID}, nil
+func (m *engineMockClient) MoveItem(
+	ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string, keepModified time.Time,
+) (*graph.Item, error) {
+	return m.MoveItemIfMatch(ctx, driveID, itemID, newParentID, newName, graph.MoveOptions{KeepModified: keepModified})
 }
 
 func (m *engineMockClient) MoveItemIfMatch(
@@ -183,10 +183,13 @@ func (m *engineMockClient) MoveItemIfMatch(
 	itemID string,
 	newParentID string,
 	newName string,
-	ifMatch string,
+	opts graph.MoveOptions,
 ) (*graph.Item, error) {
+	if m.moveItemOptsFn != nil {
+		return m.moveItemOptsFn(ctx, driveID, itemID, newParentID, newName, opts)
+	}
 	if m.moveItemIfMatchFn != nil {
-		return m.moveItemIfMatchFn(ctx, driveID, itemID, newParentID, newName, ifMatch)
+		return m.moveItemIfMatchFn(ctx, driveID, itemID, newParentID, newName, opts.IfMatch)
 	}
 	if m.moveItemFn != nil {
 		return m.moveItemFn(ctx, driveID, itemID, newParentID, newName)

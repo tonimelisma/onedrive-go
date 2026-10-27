@@ -183,6 +183,33 @@ func TestRunOnce_RemoteRenameAppliedLocallyDoesNotReupload(t *testing.T) {
 	assert.Zero(t, report.Uploads+report.Downloads)
 }
 
+// Validates: R-2.17.5
+func TestRunOnce_LocalRenameKeepsTheRemoteModificationTime(t *testing.T) {
+	t.Parallel()
+
+	// Manual test D-150: renaming a synced file locally left its OneDrive
+	// copy with the rename's time as its modification time, because a
+	// rename PATCH that does not carry fileSystemInfo resets it (L-09).
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFile(t, "item-old", "root", "old-name.txt", "keep my time\n")
+	before, err := remote.getItem("item-old")
+	require.NoError(t, err)
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	require.NoError(t, os.Rename(filepath.Join(syncRoot, "old-name.txt"), filepath.Join(syncRoot, "new-name.txt")))
+	runScenarioPass(t, eng)
+
+	assert.Equal(t, []string{"item-old->new-name.txt"}, remote.moves)
+	after, err := remote.getItem("item-old")
+	require.NoError(t, err)
+	assert.True(t, after.ModifiedAt.Equal(before.ModifiedAt),
+		"the rename must keep the modification time: was %s, now %s", before.ModifiedAt, after.ModifiedAt)
+	requireScenarioQuietPlan(t, eng)
+}
+
 // Validates: R-2.17.4
 func TestRunOnce_LocalFileReplacedByFolderConverges(t *testing.T) {
 	t.Parallel()

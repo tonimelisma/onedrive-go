@@ -677,9 +677,13 @@ func (s *Session) CreateFolder(ctx context.Context, parentID, name string) (*gra
 	return item, nil
 }
 
-// MoveItem moves and/or renames an item.
-func (s *Session) MoveItem(ctx context.Context, itemID, newParentID, newName string) (*graph.Item, error) {
-	item, err := s.Meta.MoveItem(ctx, s.DriveID, itemID, newParentID, newName)
+// MoveItem moves and/or renames an item. keepModified is the item's current
+// modification time, which a rename on OneDrive would otherwise reset; zero
+// leaves it to OneDrive.
+func (s *Session) MoveItem(
+	ctx context.Context, itemID, newParentID, newName string, keepModified time.Time,
+) (*graph.Item, error) {
+	item, err := s.Meta.MoveItem(ctx, s.DriveID, itemID, newParentID, newName, keepModified)
 	if err != nil {
 		return nil, fmt.Errorf("move item %q: %w", itemID, err)
 	}
