@@ -100,21 +100,49 @@ func (c *Client) readCreatedFileByName(ctx context.Context, driveID driveid.ID, 
 	return nil, fmt.Errorf("graph: created file %q is not in its folder: %w", name, ErrUploadCompletedWithoutItem)
 }
 
+// CreatedFunc is called after a new file's empty item exists and before any
+// content is sent. Sync records the pending create durably there, so an
+// interrupted upload's placeholder is recognized as its own (R-5.6.15). An
+// error aborts the upload and removes the placeholder.
+type CreatedFunc func(created *Item) error
+
+// CreatedItemError reports a failure after the new file's item was created.
+// Item is that item, so callers look the outcome up by its ID rather than by
+// name.
+type CreatedItemError struct {
+	Item *Item
+	Err  error
+}
+
+func (e *CreatedItemError) Error() string { return e.Err.Error() }
+
+func (e *CreatedItemError) Unwrap() error { return e.Err }
+
 // Upload creates a new file under parentID and uploads its content (see the
-// comment at the top of this file). A zero-byte file is the created item
-// plus an mtime PATCH; any other size is sent through an upload session on
-// the new item, conditional on the eTag it was created with, so a writer that
-// replaced it in between gets a 412 instead of being overwritten. When the
-// content step fails before its final fragment the empty item is removed
-// again (conditionally), so a retry does not meet its own placeholder as a
-// conflicting file. content must be an io.ReaderAt so that retries can
+// comment at the top of this file). It is UploadCreating without a hook.
+func (c *Client) Upload(
+	ctx context.Context, driveID driveid.ID, parentID, name string,
+	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
+) (*Item, error) {
+	return c.UploadCreating(ctx, driveID, parentID, name, content, size, mtime, progress, nil)
+}
+
+// UploadCreating creates a new file under parentID and uploads its content.
+// A zero-byte file is the created item plus an mtime PATCH; any other size is
+// sent through an upload session on the new item, conditional on the eTag it
+// was created with, so a writer that replaced it in between gets a 412
+// instead of being overwritten. onCreated (may be nil) runs between the two
+// steps. When the content step fails before its final fragment the empty
+// item is removed again (conditionally), so a retry does not meet its own
+// placeholder as a conflicting file; failures after the create are
+// *CreatedItemError. content must be an io.ReaderAt so that retries can
 // re-read from arbitrary offsets. progress may be nil.
 //
 // A zero-byte upload whose content landed but whose mtime PATCH failed
 // returns the uploaded item together with a *MtimeNotAppliedError.
-func (c *Client) Upload(
+func (c *Client) UploadCreating(
 	ctx context.Context, driveID driveid.ID, parentID, name string,
-	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
+	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc, onCreated CreatedFunc,
 ) (*Item, error) {
 	created, err := c.CreateFile(ctx, driveID, parentID, name)
 	if err != nil {
@@ -125,10 +153,17 @@ func (c *Client) Upload(
 		return c.finalizeSimpleUpload(ctx, driveID, created, mtime)
 	}
 
+	if onCreated != nil {
+		if hookErr := onCreated(created); hookErr != nil {
+			c.removeCreatedPlaceholder(ctx, driveID, created, hookErr)
+			return nil, &CreatedItemError{Item: created, Err: hookErr}
+		}
+	}
+
 	item, err := c.chunkedUploadToExistingItem(ctx, driveID, created.ID, created.ETag, content, size, mtime, progress)
 	if err != nil {
 		c.removeCreatedPlaceholder(ctx, driveID, created, err)
-		return nil, err
+		return nil, &CreatedItemError{Item: created, Err: err}
 	}
 
 	return item, nil
@@ -137,7 +172,8 @@ func (c *Client) Upload(
 // CreateUploadSession creates the file named name under parentID and opens a
 // resumable upload session on it, for callers that persist the session.
 // Like Upload it never replaces an existing name, and the session is
-// conditional on the created item's eTag.
+// conditional on the created item's eTag; the session names the created item
+// (ItemID, CreatedETag) so the caller can record it before sending content.
 func (c *Client) CreateUploadSession(
 	ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time,
 ) (*UploadSession, error) {
@@ -149,8 +185,9 @@ func (c *Client) CreateUploadSession(
 	session, err := c.CreateUploadSessionForItem(ctx, driveID, created.ID, created.ETag, size, mtime)
 	if err != nil {
 		c.removeCreatedPlaceholder(ctx, driveID, created, err)
-		return nil, err
+		return nil, &CreatedItemError{Item: created, Err: err}
 	}
+	session.CreatedETag = created.ETag
 
 	return session, nil
 }

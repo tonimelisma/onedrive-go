@@ -31,7 +31,12 @@ type UploadOpts struct {
 	// during a long upload is not silently replaced (D-022, L-02). Sync
 	// passes the eTag its live preflight saw, not PlannedRemoteETag: a
 	// planned remote move bumps the eTag before the content upload.
-	IfMatch                  string
+	IfMatch string
+	// OnCreated, when set, runs after a new file's empty item exists and
+	// before its content is sent, with that item's ID and eTag. Sync records
+	// the pending create durably there (R-5.6.15); an error aborts the upload
+	// and removes the empty item.
+	OnCreated                func(itemID, createdETag string) error
 	HashMismatchError        func(localPath, expectedHash, actualHash string) error
 	ValidateSourceBeforeRead func() error
 }
@@ -145,6 +150,7 @@ func (tm *TransferManager) uploadGraphItem(
 	size int64,
 	mtime time.Time,
 	progress graph.ProgressFunc,
+	onCreated func(itemID, createdETag string) error,
 	sent uploadedContent,
 ) (*graph.Item, error) {
 	if size > persistedSessionMinSize && tm.sessionStore != nil && hasSessionUploader {
@@ -155,10 +161,25 @@ func (tm *TransferManager) uploadGraphItem(
 			create: func() (*graph.UploadSession, error) {
 				return su.CreateUploadSession(ctx, driveID, parentID, name, size, mtime)
 			},
+			onCreated: onCreated,
+			createForCreated: func(itemID, createdETag string) (*graph.UploadSession, error) {
+				isu, ok := tm.uploads.(ItemSessionUploader)
+				if !ok {
+					return nil, fmt.Errorf("uploader cannot open a session for an existing item")
+				}
+				return isu.CreateUploadSessionForItem(ctx, driveID, itemID, createdETag, size, mtime)
+			},
 			sessions: su,
 			sent:     sent,
 		})
 		return item, err
+	}
+
+	if creating, ok := tm.uploads.(CreatingUploader); ok && onCreated != nil {
+		item, err := creating.UploadCreating(ctx, driveID, parentID, name, content, size, mtime, progress,
+			func(created *graph.Item) error { return onCreated(created.ID, created.ETag) })
+
+		return tm.uploadedItemOrError(localPath, item, err)
 	}
 
 	item, err := tm.uploads.Upload(ctx, driveID, parentID, name, content, size, mtime, progress)
@@ -274,6 +295,7 @@ func (tm *TransferManager) UploadFile(
 		size,
 		mtime,
 		progress,
+		opts.OnCreated,
 		sent,
 	)
 	item, err = tm.settleUploadedItem(ctx,

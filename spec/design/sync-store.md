@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/baseline_orphans.go, internal/sync/store_remote_twins.go, internal/sync/block_scope_rows.go, internal/sync/blocked_retry_projection.go, internal/sync/condition_projection.go, internal/sync/observation_reconcile_policy.go, internal/sync/schema.go, internal/sync/scope_lifecycle_policy.go, internal/sync/sqlite_compare.go, internal/sync/store.go, internal/sync/store_compatibility.go, internal/sync/store_inspect.go, internal/sync/store_local_state.go, internal/sync/store_observation_issues.go, internal/sync/store_observation_state.go, internal/sync/store_planner_visible.go, internal/sync/store_read_remote_state.go, internal/sync/store_reset.go, internal/sync/store_retry_work.go, internal/sync/store_scope_admin.go, internal/sync/store_scratch.go, internal/sync/store_sql_encoding.go, internal/sync/store_types.go, internal/sync/store_write_baseline.go, internal/sync/store_write_block_scopes.go, internal/sync/store_write_observation.go, internal/sync/truth_status.go, internal/sync/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go
+GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/baseline_orphans.go, internal/sync/store_remote_twins.go, internal/sync/store_pending_creates.go, internal/sync/block_scope_rows.go, internal/sync/blocked_retry_projection.go, internal/sync/condition_projection.go, internal/sync/observation_reconcile_policy.go, internal/sync/schema.go, internal/sync/scope_lifecycle_policy.go, internal/sync/sqlite_compare.go, internal/sync/store.go, internal/sync/store_compatibility.go, internal/sync/store_inspect.go, internal/sync/store_local_state.go, internal/sync/store_observation_issues.go, internal/sync/store_observation_state.go, internal/sync/store_planner_visible.go, internal/sync/store_read_remote_state.go, internal/sync/store_reset.go, internal/sync/store_retry_work.go, internal/sync/store_scope_admin.go, internal/sync/store_scratch.go, internal/sync/store_sql_encoding.go, internal/sync/store_types.go, internal/sync/store_write_baseline.go, internal/sync/store_write_block_scopes.go, internal/sync/store_write_observation.go, internal/sync/truth_status.go, internal/sync/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go
 
 LAYER: 1
 
@@ -316,6 +316,27 @@ Administrative write helpers are split by authority:
 
 - store compatibility helpers diagnose incompatible DBs
 - `store_reset.go` owns explicit delete-and-recreate reset
+
+### Pending creates
+
+A new file is created as an empty item first and filled by ID second; until
+the content commits, that empty item is a real OneDrive file (and a
+path-routed upload session makes one too, L-30). Seen by the next pass without
+memory of who made it, it was a create_conflict: the user's file was renamed
+to a conflict copy and the empty file downloaded. `pending_creates`
+(generation 18, `store_pending_creates.go`) is that memory: the executor
+records item ID, path and creation eTag before the first content byte is
+sent. The observation commit then classifies an observed item with a record:
+still empty with its creation eTag and not synced, it is adopted as a baseline
+row whose local side is the empty content, so the planner uploads by ID with
+If-Match, or deletes the placeholder with If-Match when the local file is
+gone; still empty with its creation eTag after the upload committed (a delta
+page captured mid-upload), it is stale and not recorded as a remote change;
+anything else drops the record (R-5.6.15,
+`TestCommitObservation_OwnPlaceholderIsAdoptedAsEmptySyncedContent`,
+`TestCommitObservation_PlaceholderStateSeenAfterTheCommitIsNotARemoteChange`,
+`TestRunOnce_InterruptedCreateFinishesIntoItsOwnPlaceholder`). Adopted rows
+are put into the in-memory baseline after the commit.
 
 ### Remote twins
 

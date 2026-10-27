@@ -55,7 +55,8 @@ func (s *SyncStore) commitObservation(
 		err = finalizeTxRollback(err, tx, "sync: rollback observation transaction")
 	}()
 
-	if commitErr := s.commitObservationTx(ctx, tx, events, newToken, driveID); commitErr != nil {
+	adopted, commitErr := s.commitObservationTx(ctx, tx, events, newToken, driveID)
+	if commitErr != nil {
 		err = commitErr
 		return err
 	}
@@ -63,6 +64,7 @@ func (s *SyncStore) commitObservation(
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing observation transaction: %w", err)
 	}
+	s.cacheAdoptedPlaceholders(adopted)
 
 	s.logger.Debug("observations committed",
 		slog.Int("items", len(events)),
@@ -78,37 +80,87 @@ func (s *SyncStore) commitObservationTx(
 	events []observedItem,
 	newToken string,
 	driveID driveid.ID,
-) error {
+) ([]*BaselineEntry, error) {
 	state, err := s.readObservationStateTx(ctx, tx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if ensureErr := s.ensureContentDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
-		return ensureErr
+		return nil, ensureErr
 	}
 	if driveID.IsZero() {
 		driveID = state.ContentDriveID
 	}
 
+	var adopted []*BaselineEntry
 	for i := range events {
 		if events[i].DriveID.IsZero() && !driveID.IsZero() {
 			events[i].DriveID = driveID
 		}
-		if processErr := s.processObservedItem(ctx, tx, &events[i]); processErr != nil {
-			return processErr
+		if processErr := s.processObservedItemWithPlaceholders(ctx, tx, &events[i], &adopted); processErr != nil {
+			return nil, processErr
 		}
 	}
 	if twinErr := s.reconcileRemoteTwinIssuesTx(ctx, tx); twinErr != nil {
-		return twinErr
+		return nil, twinErr
 	}
 
 	if newToken != "" {
 		state.Cursor = newToken
 		if saveErr := s.writeObservationStateTx(ctx, tx, state); saveErr != nil {
-			return saveErr
+			return nil, saveErr
 		}
 	}
-	return nil
+	return adopted, nil
+}
+
+// processObservedItemWithPlaceholders applies pending-create recognition
+// (store_pending_creates.go) around processObservedItem.
+func (s *SyncStore) processObservedItemWithPlaceholders(
+	ctx context.Context, tx sqlTxRunner, item *observedItem, adopted *[]*BaselineEntry,
+) error {
+	pending, decision, err := classifyObservedPlaceholderTx(ctx, tx, item)
+	if err != nil {
+		return err
+	}
+
+	switch decision {
+	case placeholderStale:
+		// Our placeholder's state from before the upload committed: the
+		// baseline already holds the content. Not a remote change.
+		return nil
+	case placeholderResolved:
+		if err := deletePendingCreateTx(ctx, tx, item.ItemID); err != nil {
+			return err
+		}
+	case placeholderNotPending, placeholderAdopt:
+	}
+
+	if err := s.processObservedItem(ctx, tx, item); err != nil {
+		return err
+	}
+	if decision != placeholderAdopt {
+		return nil
+	}
+
+	return adoptPlaceholderTx(ctx, tx, item, pending, adopted)
+}
+
+// cacheAdoptedPlaceholders puts placeholders adopted by an observation commit
+// into the in-memory baseline, which CommitMutation otherwise keeps current.
+func (s *SyncStore) cacheAdoptedPlaceholders(adopted []*BaselineEntry) {
+	if len(adopted) == 0 {
+		return
+	}
+
+	s.baselineMu.Lock()
+	defer s.baselineMu.Unlock()
+	if s.baseline == nil {
+		return
+	}
+	for _, entry := range adopted {
+		s.baseline.Put(entry)
+	}
 }
 
 func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, item *observedItem) error {
@@ -118,28 +170,11 @@ func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 		if item.IsDeleted {
 			return nil
 		}
-		stored, err := s.storedPathForObservedItem(ctx, tx, item)
-		if err != nil {
-			return err
-		}
-		item.Path = stored
-		return s.insertRemoteState(ctx, tx, item)
+		return s.insertObservedRemoteState(ctx, tx, item)
 	}
 
 	if item.IsDeleted {
-		if err := deleteObservedRemoteState(ctx, tx, item, existing.Path); err != nil {
-			return err
-		}
-		if existing.ItemType == ItemTypeFolder {
-			// Delta reports a deleted folder as one item, like a moved one.
-			// Left behind, a child that was never downloaded stayed in
-			// remote_state forever: status showed "Remote changes: 1 item"
-			// and "Syncing" for a folder that no longer existed.
-			if err := deleteRemoteStateSubtreeTx(ctx, tx, existing.Path); err != nil {
-				return err
-			}
-		}
-		return promoteRemoteTwinTx(ctx, tx, existing.Path)
+		return deleteObservedRemoteStateTree(ctx, tx, item, existing)
 	}
 
 	if item.Path != "" {
@@ -150,8 +185,7 @@ func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 		item.Path = stored
 	}
 
-	changed := observedRemoteStateUpdate(existing, item)
-	if !changed {
+	if !observedRemoteStateUpdate(existing, item) {
 		return nil
 	}
 
@@ -159,12 +193,41 @@ func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 		return err
 	}
 
-	// Delta reports a renamed or moved folder as one item; its unchanged
-	// descendants are not repeated. Their rows must follow the folder, or
-	// every child keeps its old path: once the move is applied locally the
-	// children look moved back on OneDrive, and sync moved them back into a
-	// re-created old folder.
-	if existing.ItemType == ItemTypeFolder && item.Path != "" && item.Path != existing.Path {
+	return followObservedPathChangeTx(ctx, tx, existing, item)
+}
+
+// deleteObservedRemoteStateTree removes a deleted item's row and, for a
+// folder, its subtree, then hands the freed path to a shadowed twin.
+func deleteObservedRemoteStateTree(ctx context.Context, tx sqlTxRunner, item *observedItem, existing *remoteStateRow) error {
+	if err := deleteObservedRemoteState(ctx, tx, item, existing.Path); err != nil {
+		return err
+	}
+	if existing.ItemType == ItemTypeFolder {
+		// Delta reports a deleted folder as one item, like a moved one.
+		// Left behind, a child that was never downloaded stayed in
+		// remote_state forever: status showed "Remote changes: 1 item"
+		// and "Syncing" for a folder that no longer existed.
+		if err := deleteRemoteStateSubtreeTx(ctx, tx, existing.Path); err != nil {
+			return err
+		}
+	}
+
+	return promoteRemoteTwinTx(ctx, tx, existing.Path)
+}
+
+// followObservedPathChangeTx moves a renamed or moved folder's subtree with
+// it and hands the freed path to a shadowed twin.
+//
+// Delta reports a renamed or moved folder as one item; its unchanged
+// descendants are not repeated. Their rows must follow the folder, or
+// every child keeps its old path: once the move is applied locally the
+// children look moved back on OneDrive, and sync moved them back into a
+// re-created old folder.
+func followObservedPathChangeTx(ctx context.Context, tx sqlTxRunner, existing *remoteStateRow, item *observedItem) error {
+	if item.Path == "" || item.Path == existing.Path {
+		return nil
+	}
+	if existing.ItemType == ItemTypeFolder {
 		if err := repathSubtreeTx(ctx, tx, "remote_state", existing.Path, item.Path); err != nil {
 			return err
 		}
@@ -172,11 +235,20 @@ func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 			return err
 		}
 	}
-	if item.Path != "" && item.Path != existing.Path {
-		return promoteRemoteTwinTx(ctx, tx, existing.Path)
-	}
 
-	return nil
+	return promoteRemoteTwinTx(ctx, tx, existing.Path)
+}
+
+// insertObservedRemoteState inserts a newly observed item at its stored path
+// (store_remote_twins.go).
+func (s *SyncStore) insertObservedRemoteState(ctx context.Context, tx sqlTxRunner, item *observedItem) error {
+	stored, err := s.storedPathForObservedItem(ctx, tx, item)
+	if err != nil {
+		return err
+	}
+	item.Path = stored
+
+	return s.insertRemoteState(ctx, tx, item)
 }
 
 func deleteObservedRemoteState(

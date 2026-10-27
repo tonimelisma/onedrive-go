@@ -142,6 +142,17 @@ evidence is not evidence of sameness, and a destructive action may not run on
 it. Each refusal is a superseded precondition, so the path is replanned rather
 than stranded, and a row that later hashes cleanly deletes normally.
 
+A create upload records the new item as a pending create through
+`UploadOpts.OnCreated` before any content is sent (R-5.6.15). A 409 on the
+create is resolved, not retried as is: into our own placeholder from an
+interrupted attempt (upload by ID with If-Match on its creation eTag), as a
+durable name collision when OneDrive holds a differently spelled sibling of
+the same name (`remoteNameTakenError`, classified as `case_collision` with
+backoff, naming both names;
+`TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableCollision`),
+or as a stale precondition when the same spelling exists or nothing is
+visible yet.
+
 A spelling-only local move (the old and new names are one OneDrive name:
 case or Unicode form) accepts a destination that is the source's own inode,
 which is what a case- or normalization-insensitive volume reports. It renames

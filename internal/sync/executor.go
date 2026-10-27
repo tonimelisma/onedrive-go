@@ -47,6 +47,15 @@ type executorConfig struct {
 	nowFunc         func() time.Time
 	hashFunc        func(filePath string) (string, error)
 	pathConvergence driveops.PathConvergence
+
+	// pendingCreates records new files whose empty item exists before their
+	// content is sent (R-5.6.15). Nil in executor-only tests.
+	pendingCreates pendingCreateStore
+}
+
+// SetPendingCreates wires the store that records pending creates.
+func (cfg *executorConfig) SetPendingCreates(store pendingCreateStore) {
+	cfg.pendingCreates = store
 }
 
 // executor executes individual actions against the Graph API and local

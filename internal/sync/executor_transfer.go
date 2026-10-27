@@ -11,6 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -221,7 +222,12 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 		}
 
 		name := filepath.Base(action.Path)
-		result, err = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, e.uploadOpts(action))
+		opts := e.uploadOpts(action)
+		opts.OnCreated = e.recordPendingCreate(ctx, action, driveID, parentID)
+		result, err = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, opts)
+		if errors.Is(err, graph.ErrConflict) {
+			result, err = e.resolveCreateConflict(ctx, action, driveID, parentID, localPath, err)
+		}
 		err = uploadTransferError(err)
 		if err != nil {
 			return e.failedOutcomeWithFailure(
@@ -325,6 +331,10 @@ func downloadTransferFailureCapability(err error) permissionCapability {
 //     the same, and a create never replaces (R-5.6.14). Retried as is, it
 //     failed with "graph: conflict" forever.
 func uploadTransferError(err error) error {
+	var nameTaken *remoteNameTakenError
+	if errors.As(err, &nameTaken) {
+		return err
+	}
 	if errors.Is(err, driveops.ErrUploadSessionInvalidated) ||
 		errors.Is(err, graph.ErrPreconditionFailed) ||
 		errors.Is(err, graph.ErrConflict) {
@@ -425,3 +435,97 @@ func shouldOverwriteKnownRemoteItem(action *Action) bool {
 
 	return true
 }
+
+// pendingCreateStore is the executor's narrow view of the sync store's
+// pending-create records (store_pending_creates.go).
+type pendingCreateStore interface {
+	RecordPendingCreate(ctx context.Context, pending *PendingCreate) error
+	PendingCreateAt(ctx context.Context, path string) (PendingCreate, bool, error)
+}
+
+// recordPendingCreate returns the hook that records a create's empty item
+// durably before its content is sent, or nil without a store (tests).
+func (e *executor) recordPendingCreate(
+	ctx context.Context, action *Action, driveID driveid.ID, parentID string,
+) func(itemID, createdETag string) error {
+	if e.pendingCreates == nil {
+		return nil
+	}
+
+	return func(itemID, createdETag string) error {
+		pending := &PendingCreate{
+			ItemID: itemID, DriveID: driveID, Path: action.Path, ParentID: parentID, CreatedETag: createdETag,
+		}
+		if action.View != nil && action.View.Local != nil {
+			pending.LocalSize = action.View.Local.Size
+			pending.LocalHash = action.View.Local.Hash
+		}
+
+		return e.pendingCreates.RecordPendingCreate(ctx, pending)
+	}
+}
+
+// resolveCreateConflict handles a create that OneDrive refused because the
+// name is taken (409; a create never replaces, R-5.6.14).
+//
+//   - Our own placeholder from an interrupted earlier attempt (a pending
+//     create at this path whose item is still empty with its creation eTag):
+//     upload the content into it by ID, conditionally. Going stale instead
+//     replanned the same create every pass.
+//   - A sibling OneDrive treats as the same name but spelled differently
+//     (STRASSE.txt next to straße.txt, a.txt next to a😀.txt): a durable
+//     name collision naming both, not a retry every pass.
+//   - The same spelling (another device created it meanwhile), or nothing
+//     visible yet: stale, so the replan sees the remote item and keeps both.
+func (e *executor) resolveCreateConflict(
+	ctx context.Context, action *Action, driveID driveid.ID, parentID, localPath string, conflictErr error,
+) (*driveops.UploadResult, error) {
+	if e.pendingCreates != nil {
+		pending, found, err := e.pendingCreates.PendingCreateAt(ctx, action.Path)
+		if err != nil {
+			return nil, errors.Join(conflictErr, err)
+		}
+		if found {
+			if item, getErr := e.items.GetItem(ctx, driveID, pending.ItemID); getErr == nil &&
+				item.Size == 0 && item.ETag == pending.CreatedETag {
+				opts := e.uploadOpts(action)
+				opts.IfMatch = pending.CreatedETag
+				return e.transferMgr.UploadFileToItem(ctx, driveID, pending.ItemID, localPath, opts) //nolint:wrapcheck // driveops names the file
+			}
+		}
+	}
+
+	name := filepath.Base(action.Path)
+	children, err := e.items.ListChildren(ctx, driveID, parentID)
+	if err != nil {
+		return nil, errors.Join(conflictErr, err)
+	}
+	for i := range children {
+		if children[i].ID == "" || !namekey.Equal(children[i].Name, name) {
+			continue
+		}
+		if nfcNormalize(children[i].Name) == nfcNormalize(name) {
+			break
+		}
+
+		return nil, &remoteNameTakenError{localName: name, remoteName: children[i].Name, err: conflictErr}
+	}
+
+	return nil, conflictErr
+}
+
+// remoteNameTakenError is a create refused because OneDrive already holds a
+// sibling whose name it treats as the same, spelled differently. It is a
+// durable name-collision condition naming both (classifyResult), not work to
+// retry as is.
+type remoteNameTakenError struct {
+	localName  string
+	remoteName string
+	err        error
+}
+
+func (e *remoteNameTakenError) Error() string {
+	return fmt.Sprintf("OneDrive already has %q, which it treats as the same name as %q; rename one of them", e.remoteName, e.localName)
+}
+
+func (e *remoteNameTakenError) Unwrap() error { return e.err }

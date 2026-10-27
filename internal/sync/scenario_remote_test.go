@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -55,10 +56,12 @@ type moveScenarioRemote struct {
 	changedAt  map[string]int
 	tombstones map[string]deletedScenarioItem
 
-	uploads       int
-	folderCreates []string
-	deletes       []string
-	moves         []string
+	uploads int
+	// interruptCreates stops every create after its empty item exists.
+	interruptCreates bool
+	folderCreates    []string
+	deletes          []string
+	moves            []string
 }
 
 type deletedScenarioItem struct {
@@ -396,6 +399,9 @@ func (r *moveScenarioRemote) client(t *testing.T) *engineMockClient {
 		getItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
 			return r.getItemByPath(remotePath)
 		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, parentID string) ([]graph.Item, error) {
+			return r.listChildren(parentID), nil
+		},
 		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
 			return r.download(itemID, w)
 		},
@@ -413,12 +419,30 @@ func (r *moveScenarioRemote) client(t *testing.T) *engineMockClient {
 		) (*graph.Item, error) {
 			return r.upload(t, parentID, name, content, size)
 		},
+		uploadCreatingFn: func(
+			_ context.Context, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
+		) (*graph.Item, error) {
+			return r.uploadCreating(t, parentID, name, content, size, onCreated)
+		},
 		uploadToItemFn: func(
 			_ context.Context, _ driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc,
 		) (*graph.Item, error) {
 			return r.uploadToItem(t, itemID, ifMatch, content, size)
 		},
 	}
+}
+
+func (r *moveScenarioRemote) listChildren(parentID string) []graph.Item {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var children []graph.Item
+	for _, item := range r.items {
+		if item.ParentID == parentID {
+			children = append(children, *item)
+		}
+	}
+
+	return children
 }
 
 func (r *moveScenarioRemote) getItem(itemID string) (*graph.Item, error) {
@@ -524,6 +548,49 @@ func (r *moveScenarioRemote) upload(t *testing.T, parentID, name string, content
 	}
 	id := r.nextID("uploaded")
 	r.addFile(t, id, parentID, name, data)
+	copied := *r.items[id]
+	return &copied, nil
+}
+
+// uploadCreating follows the client's two-step create (R-5.6.14): an empty
+// item with conflictBehavior=fail, the hook, then the content by ID. With
+// interruptCreates set it stops after the hook, as a process killed mid-upload
+// would, leaving the empty item behind.
+func (r *moveScenarioRemote) uploadCreating(
+	t *testing.T, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
+) (*graph.Item, error) {
+	t.Helper()
+	data, err := readScenarioUpload(content, size)
+	if err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	if _, exists := r.childNamed(parentID, name); exists {
+		r.mu.Unlock()
+		return nil, scenarioNameConflict()
+	}
+	r.uploads++
+	id := r.nextID("created")
+	r.addFile(t, id, parentID, name, "")
+	created := *r.items[id]
+	interrupt := r.interruptCreates
+	r.mu.Unlock()
+
+	if onCreated != nil {
+		if hookErr := onCreated(&created); hookErr != nil {
+			return nil, &graph.CreatedItemError{Item: &created, Err: hookErr}
+		}
+	}
+	if interrupt {
+		return nil, &graph.CreatedItemError{Item: &created, Err: errors.New("connection reset by peer")}
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if data != "" {
+		r.setContent(t, id, data)
+	}
 	copied := *r.items[id]
 	return &copied, nil
 }

@@ -136,23 +136,42 @@ func isBusinessLikeDrive(item *graph.Item) bool {
 // content has landed; an item that does not match what was sent is read back
 // once (server processing can briefly show pre-commit facts) and the upload
 // fails if it still does not match.
+// settleUncertainFinalFragment handles an upload whose last fragment may
+// have committed: the encapsulated small-file session canceled itself, but
+// the item is adopted if it is provably ours (D-036). When it is not, and the
+// create made it, the content provably did not land: the empty item is
+// removed now, conditional on its creation eTag, which only matches while it
+// is still the untouched placeholder.
+func (tm *TransferManager) settleUncertainFinalFragment(
+	ctx context.Context, target uploadTarget, sent uploadedContent, created *graph.CreatedItemError, uploadErr error,
+) (*graph.Item, error) {
+	landed, adopted, lookupErr := tm.adoptLandedUpload(ctx, target, sent)
+	if lookupErr != nil {
+		return nil, errors.Join(uploadErr, lookupErr)
+	}
+	if adopted {
+		return landed, nil
+	}
+	if created != nil && created.Item != nil {
+		tm.removePlaceholder(ctx, target.driveID, created.Item.ID, created.Item.ETag)
+	}
+
+	return nil, uploadErr
+}
+
 func (tm *TransferManager) settleUploadedItem(
 	ctx context.Context, target uploadTarget, sent uploadedContent, localPath string, item *graph.Item, uploadErr error,
 ) (*graph.Item, error) {
+	var created *graph.CreatedItemError
+	if errors.As(uploadErr, &created) && created.Item != nil && created.Item.ID != "" {
+		// The create made this item: look the outcome up by its ID, never
+		// by a name that a variant spelling could also match (M2).
+		target = uploadTarget{driveID: target.driveID, itemID: created.Item.ID}
+	}
+
 	if uploadErr != nil {
 		if graph.IsFinalFragmentUncertain(uploadErr) {
-			// The encapsulated small-file session canceled itself, but its
-			// last fragment may have committed: adopt the item if it is
-			// provably ours (D-036).
-			landed, adopted, lookupErr := tm.adoptLandedUpload(ctx, target, sent)
-			if lookupErr != nil {
-				return nil, errors.Join(uploadErr, lookupErr)
-			}
-			if adopted {
-				return landed, nil
-			}
-
-			return nil, uploadErr
+			return tm.settleUncertainFinalFragment(ctx, target, sent, created, uploadErr)
 		}
 
 		if !errors.Is(uploadErr, graph.ErrUploadCompletedWithoutItem) {

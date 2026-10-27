@@ -50,7 +50,13 @@ func (c *Client) CreateUploadSessionForItem(
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
-	return c.parseUploadSessionResponse(resp)
+	session, err := c.parseUploadSessionResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+	session.ItemID = itemID
+
+	return session, nil
 }
 
 // CancelUploadSession cancels an in-progress upload session.

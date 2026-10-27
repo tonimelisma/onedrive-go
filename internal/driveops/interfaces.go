@@ -17,6 +17,8 @@ var (
 	_ ItemUploader        = (*graph.Client)(nil)
 	_ SessionUploader     = (*graph.Client)(nil)
 	_ ItemSessionUploader = (*graph.Client)(nil)
+	_ CreatingUploader    = (*graph.Client)(nil)
+	_ PlaceholderRemover  = (*graph.Client)(nil)
 )
 
 // Downloader streams a remote file by item ID.
@@ -31,6 +33,22 @@ type Uploader interface {
 		ctx context.Context, driveID driveid.ID, parentID, name string,
 		content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
 	) (*graph.Item, error)
+}
+
+// CreatingUploader creates a new file and uploads its content, calling
+// onCreated after the empty item exists and before any content is sent.
+// Satisfied by *graph.Client; type-asserted like the other optional seams.
+type CreatingUploader interface {
+	UploadCreating(
+		ctx context.Context, driveID driveid.ID, parentID, name string,
+		content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc, onCreated graph.CreatedFunc,
+	) (*graph.Item, error)
+}
+
+// PlaceholderRemover deletes an item conditionally. Satisfied by
+// *graph.Client.
+type PlaceholderRemover interface {
+	DeleteItemIfMatch(ctx context.Context, driveID driveid.ID, itemID, ifMatch string) error
 }
 
 // ItemUploader overwrites an existing item by item ID. A non-empty ifMatch
