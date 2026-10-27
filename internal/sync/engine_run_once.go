@@ -316,6 +316,9 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	}
 	orphans = append(orphans, findRemoteStateOrphans(remoteRows, seen, orphans, eng.driveID)...)
 
+	// A complete enumeration that omits an item is not proof it is gone
+	// (Graph omits items transiently); only a live 404 or deleted facet is.
+	orphans = eng.confirmEnumerationOrphans(ctx, orphans, nil)
 	if len(orphans) > 0 {
 		events = append(events, orphans...)
 	}

@@ -114,6 +114,7 @@ func conditionLabels() map[ConditionKey]string {
 		ConditionLocalUnsyncable:        "renamed or replaced into something sync cannot use",
 		ConditionLocalMountBoundary:     "on another filesystem inside the sync folder",
 		ConditionLocalInterrupted:       "left set aside by an interrupted removal",
+		ConditionRemoteFolderUnverified: "too large to verify before deleting on OneDrive",
 		ConditionLocalFileTooLarge:      "too large for the local filesystem",
 		ConditionLocalBusy:              "busy on this computer",
 		ConditionLocalCrossDevice:       "that would move across a mount point",

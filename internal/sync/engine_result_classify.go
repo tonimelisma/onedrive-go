@@ -259,6 +259,8 @@ func issueTypeForFilesystemResult(r *actionCompletion) (string, bool) {
 	switch {
 	case errors.Is(err, errDatabaseInUse):
 		return issueLocalDatabaseOpen, true
+	case errors.Is(err, errRemoteFolderTooLargeToVerify):
+		return issueRemoteFolderUnverifiable, true
 	case errors.Is(err, driveops.ErrFileTooLargeForSpace):
 		return issueFileTooLargeForSpace, true
 	case errors.Is(err, driveops.ErrFileExceedsOneDriveLimit):

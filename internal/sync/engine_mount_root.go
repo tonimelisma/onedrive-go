@@ -165,18 +165,32 @@ func validateMountRootListingParents(items []graph.Item, remoteRootItemID string
 // delta) is not proof of absence: Graph omits items transiently, and a delete
 // synthesized from that omission removes the local copy, which the next
 // listing then downloads again (D-009). An item is gone when GetItem answers
-// 404 or a deleted facet, or when it now lives outside the mount; an item
-// still inside, or one the lookup could not settle, is left for the next
-// listing.
+// 404 or a deleted facet, or when its ancestors provably lead outside the
+// mount; an item still inside, one whose parent cannot be resolved, or a
+// lookup that failed is left for the next listing.
 func (e *Engine) confirmMountRootOrphans(ctx context.Context, listed []graph.Item, orphans []changeEvent) []changeEvent {
-	if len(orphans) == 0 || e.itemsClient == nil {
-		return orphans
-	}
-
 	inside := make(map[string]struct{}, len(listed)+1)
 	inside[e.remoteRootItemID] = struct{}{}
 	for i := range listed {
 		inside[listed[i].ID] = struct{}{}
+	}
+
+	return e.confirmEnumerationOrphans(ctx, orphans, inside)
+}
+
+// confirmEnumerationOrphans looks up each delete a complete enumeration
+// synthesized and keeps only those confirmed gone. inside is nil for a
+// drive-root enumeration, where any live item is still in scope; for a mount
+// root it holds the mount root and every item the listing returned. An
+// unconfirmed orphan produces no event, so its local copy stays and the next
+// complete enumeration judges it again.
+func (e *Engine) confirmEnumerationOrphans(
+	ctx context.Context,
+	orphans []changeEvent,
+	inside map[string]struct{},
+) []changeEvent {
+	if len(orphans) == 0 || e.itemsClient == nil {
+		return orphans
 	}
 
 	confirmed := make([]changeEvent, 0, len(orphans))
@@ -187,21 +201,57 @@ func (e *Engine) confirmMountRootOrphans(ctx context.Context, listed []graph.Ite
 		case errors.Is(err, graph.ErrNotFound):
 			confirmed = append(confirmed, orphan)
 		case err != nil:
-			e.logger.Debug("could not confirm a shared-folder item is gone; keeping it until the next listing",
+			e.logger.Debug("could not confirm an item missing from a listing is gone; keeping it",
 				slog.String("path", orphan.Path), slog.String("error", err.Error()))
+		case live == nil:
+			continue
 		case live.IsDeleted:
 			confirmed = append(confirmed, orphan)
+		case inside == nil:
+			e.logger.Debug("a full rescan omitted a live item; not deleting it",
+				slog.String("path", orphan.Path), slog.String("item_id", orphan.ItemID))
 		default:
-			if _, stillInside := inside[live.ParentID]; stillInside {
-				e.logger.Debug("shared-folder listing omitted a live item; not deleting it",
-					slog.String("path", orphan.Path), slog.String("item_id", orphan.ItemID))
+			if e.liveItemLeftMount(ctx, live, inside) {
+				confirmed = append(confirmed, orphan)
 				continue
 			}
-			confirmed = append(confirmed, orphan)
+			e.logger.Debug("shared-folder listing omitted a live item; not deleting it",
+				slog.String("path", orphan.Path), slog.String("item_id", orphan.ItemID))
 		}
 	}
 
 	return confirmed
+}
+
+// mountAncestorLookupLimit bounds the parent walk that proves an item left
+// a mount.
+const mountAncestorLookupLimit = 64
+
+// liveItemLeftMount reports whether a live item's ancestors provably lead
+// outside the mount: the walk reaches a drive root or a parentless item
+// without passing through the mount. An empty or unresolvable parent, a
+// failed lookup or a walk that is too deep proves nothing, and the item is
+// treated as still inside.
+func (e *Engine) liveItemLeftMount(ctx context.Context, live *graph.Item, inside map[string]struct{}) bool {
+	parentID := live.ParentID
+	for range mountAncestorLookupLimit {
+		if parentID == "" {
+			return false
+		}
+		if _, ok := inside[parentID]; ok {
+			return false
+		}
+		parent, err := e.itemsClient.GetItem(ctx, e.driveID, parentID)
+		if err != nil || parent == nil || parent.IsDeleted {
+			return false
+		}
+		if parent.IsRoot {
+			return true
+		}
+		parentID = parent.ParentID
+	}
+
+	return false
 }
 
 func (flow *engineFlow) commitObservedItems(

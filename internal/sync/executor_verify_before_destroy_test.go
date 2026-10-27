@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -244,4 +245,59 @@ func TestRunOnce_RemoteFolderDeleteWithIgnoredLocalFileConverges(t *testing.T) {
 	runScenarioPass(t, eng)
 	assert.Equal(t, "/", remote.tree()["X"], "the kept folder is re-created, empty, on OneDrive")
 	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.8.10
+func TestExecuteRemoteDelete_FolderChildChangedOnlyInETagOrSizeIsStale(t *testing.T) {
+	t.Parallel()
+
+	known := &BaselineEntry{
+		Path: "X/a.txt", ItemID: "known", ItemType: ItemTypeFile, RemoteHash: "hash-a",
+		ETag: "etag-synced", RemoteSize: 10, RemoteSizeKnown: true,
+	}
+	cases := map[string]graph.Item{
+		"eTag changed": {ID: "known", Name: "a.txt", ParentID: "folder-x", QuickXorHash: "hash-a", ETag: "etag-new", Size: 10},
+		"size changed": {ID: "known", Name: "a.txt", ParentID: "folder-x", ETag: "etag-synced", Size: 11},
+	}
+	for name, child := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var deleted []string
+			items := folderDeleteItems(t, map[string][]graph.Item{"folder-x": {child}}, &deleted)
+			cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+
+			outcome := newExecution(cfg, baselineWith(known)).ExecuteRemoteDelete(t.Context(), remoteFolderDeleteAction("X", "folder-x"))
+
+			requireOutcomeFailure(t, &outcome)
+			require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
+			assert.Empty(t, deleted)
+		})
+	}
+}
+
+// Validates: R-2.8.10
+func TestExecuteRemoteDelete_FolderOverListingCapIsDurableIssueNotStale(t *testing.T) {
+	t.Parallel()
+
+	children := make([]graph.Item, 0, remoteFolderDeleteListLimit+1)
+	entries := make([]*BaselineEntry, 0, remoteFolderDeleteListLimit+1)
+	for i := range remoteFolderDeleteListLimit + 1 {
+		id := fmt.Sprintf("c%05d", i)
+		children = append(children, graph.Item{ID: id, Name: id, ParentID: "folder-x", IsFolder: true})
+		entries = append(entries, &BaselineEntry{Path: "X/" + id, ItemID: id, ItemType: ItemTypeFolder})
+	}
+	var deleted []string
+	items := folderDeleteItems(t, map[string][]graph.Item{"folder-x": children}, &deleted)
+	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
+
+	outcome := newExecution(cfg, baselineWith(entries...)).ExecuteRemoteDelete(t.Context(), remoteFolderDeleteAction("X", "folder-x"))
+
+	requireOutcomeFailure(t, &outcome)
+	require.ErrorIs(t, outcome.Error, errRemoteFolderTooLargeToVerify)
+	assert.NotErrorIs(t, outcome.Error, errActionPreconditionChanged, "a stale verdict would relist the folder every pass")
+	issue, ok := issueTypeForFilesystemResult(&actionCompletion{Err: outcome.Error})
+	require.True(t, ok)
+	assert.Equal(t, issueRemoteFolderUnverifiable, issue)
+	assert.Empty(t, deleted)
 }

@@ -378,12 +378,17 @@ A full remote refresh deletes what a complete enumeration did not return, so
 - the drive-root refresh builds its seen set from the raw ID of every live
   item the enumeration returned (`FullEnumerationWithShortcutTopology`), not
   from converted events; an item the converter skipped (a package facet, an
-  orphan whose parent it could not fetch) was still enumerated (D-008);
+  orphan whose parent it could not fetch) was still enumerated (D-008); every
+  orphan it still synthesizes is then confirmed by `GetItem`, and only a 404
+  or a deleted facet becomes a delete; an unconfirmed orphan keeps its local
+  copy and is judged again by the next full refresh;
 - a mount-root enumeration (`/children` walk or folder delta) is rejected as
   incomplete when an item hangs off a folder the same listing did not return,
   and every synthesized orphan is confirmed by `GetItem`: only a 404, a
-  deleted facet, or a parent outside the mount is absence; a live item still
-  inside, or a lookup that failed, is left for the next listing (D-009);
+  deleted facet, or ancestors that provably lead outside the mount (the parent
+  walk reaches a drive root without passing the mount) is absence; a live item
+  still inside, one with an empty or unresolvable parent, or a lookup that
+  failed is left for the next listing (D-009);
 - a complete observation that omits an active shortcut placeholder no longer
   drains it on that evidence alone: `confirmShortcutCompleteOmissions` looks
   the binding up and re-adds it when it is still a live shortcut to the same
@@ -393,7 +398,7 @@ A full remote refresh deletes what a complete enumeration did not return, so
 
 | Behavior | Evidence |
 | --- | --- |
-| A full refresh never treats an enumerated item as gone, shared-folder orphans need a live 404/deleted/moved-out answer, a listing with an unlisted parent is incomplete, and an omitted shortcut drains only on a confirmed removal. | `TestFullRefresh_ItemTheConverterSkipsIsNotSynthesizedAsDelete`, `TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing`, `TestValidateMountRootListingParents_ChildUnderUnlistedFolderAbortsListing`, `TestApplyShortcutRootCompleteOmission_ConfirmedLiveBindingStaysActive` |
+| A full refresh never treats an enumerated item as gone, shared-folder orphans need a live 404/deleted/moved-out answer, a listing with an unlisted parent is incomplete, and an omitted shortcut drains only on a confirmed removal. | `TestFullRefresh_ItemTheConverterSkipsIsNotSynthesizedAsDelete`, `TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing`, `TestValidateMountRootListingParents_ChildUnderUnlistedFolderAbortsListing`, `TestApplyShortcutRootCompleteOmission_ConfirmedLiveBindingStaysActive`, `TestFullRefresh_OrphanStillLiveOnOneDriveIsNotDeleted` |
 
 If watch mode shortens `observation_state.next_full_remote_refresh_at` after
 startup, it must rearm the in-memory timer in that same control path.

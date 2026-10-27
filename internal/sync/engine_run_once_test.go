@@ -1529,6 +1529,10 @@ func TestRunOnce_FullRescanDropsUnsyncedRemoteStateOrphans(t *testing.T) {
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return deltaPageWithItems([]graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}}, "token-1"), nil
 		},
+		// The orphan is confirmed gone by a live lookup.
+		getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+			return nil, graph.ErrNotFound
+		},
 	}
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()

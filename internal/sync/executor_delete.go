@@ -534,7 +534,10 @@ func (e *executor) validateRemoteFolderDeleteChildren(ctx context.Context, drive
 		for i := range children {
 			seen++
 			if seen > remoteFolderDeleteListLimit {
-				return stalePreconditionError("remote delete folder %s holds more than %d items", action.Path, remoteFolderDeleteListLimit)
+				// Not stale: replanning would list the same folder again on
+				// every pass. A durable issue asks the user instead.
+				return fmt.Errorf("%w: %s holds more than %d items", errRemoteFolderTooLargeToVerify,
+					action.Path, remoteFolderDeleteListLimit)
 			}
 			child := &children[i]
 			if err := e.validateLiveFolderDeleteChild(action, child); err != nil {
@@ -558,11 +561,32 @@ func (e *executor) validateLiveFolderDeleteChild(action *Action, child *graph.It
 		return stalePreconditionError("remote delete folder %s holds %q, which sync has not seen", action.Path, child.Name)
 	}
 	if child.IsFolder || known.ItemType != ItemTypeFile {
+		// Folder eTags churn with every descendant change; the descendants
+		// themselves are checked as the walk reaches them.
 		return nil
 	}
-	if liveHash := driveops.SelectHash(child); liveHash != "" && known.RemoteHash != "" && liveHash != known.RemoteHash {
-		return stalePreconditionError("remote delete folder %s holds %s, edited on OneDrive since it was synced", action.Path, known.Path)
+	if liveFileChangedSinceSync(child, known) {
+		return stalePreconditionError("remote delete folder %s holds %s, changed on OneDrive since it was synced", action.Path, known.Path)
 	}
 
 	return nil
 }
+
+// liveFileChangedSinceSync compares a live file with its synced record by
+// content hash, eTag and size. The baseline keeps no cTag, so a content change
+// that kept the eTag and hash (none is known) is the remaining blind spot.
+func liveFileChangedSinceSync(live *graph.Item, known *BaselineEntry) bool {
+	if liveHash := driveops.SelectHash(live); liveHash != "" && known.RemoteHash != "" && liveHash != known.RemoteHash {
+		return true
+	}
+	if live.ETag != "" && known.ETag != "" && live.ETag != known.ETag {
+		return true
+	}
+	return known.RemoteSizeKnown && live.Size != known.RemoteSize
+}
+
+// errRemoteFolderTooLargeToVerify reports a folder delete whose live content
+// is too large to list before deleting it recursively. It becomes a durable
+// issue rather than a stale precondition that would replan and relist the
+// folder on every pass.
+var errRemoteFolderTooLargeToVerify = errors.New("folder is too large to verify before deleting it on OneDrive")

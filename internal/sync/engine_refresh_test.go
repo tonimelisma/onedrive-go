@@ -307,6 +307,10 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 				DeltaLink: "full-token",
 			}, nil
 		},
+		// The orphan is confirmed gone by a live lookup (D-008).
+		getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+			return nil, graph.ErrNotFound
+		},
 	}
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -463,6 +467,10 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 				},
 				DeltaLink: "full-token",
 			}, nil
+		},
+		// The orphan is confirmed gone by a live lookup (D-008).
+		getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+			return nil, graph.ErrNotFound
 		},
 	}
 

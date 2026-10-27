@@ -89,6 +89,16 @@ func TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing(t *te
 					return &graph.Item{ID: itemID, Name: "a.txt", ParentID: "sub", DriveID: driveID}, nil
 				case "moved-out":
 					return &graph.Item{ID: itemID, Name: "b.txt", ParentID: "elsewhere", DriveID: driveID}, nil
+				case "elsewhere":
+					return &graph.Item{ID: itemID, Name: "elsewhere", ParentID: "drive-root", IsFolder: true, DriveID: driveID}, nil
+				case "drive-root":
+					return &graph.Item{ID: itemID, IsRoot: true, IsFolder: true, DriveID: driveID}, nil
+				case "no-parent":
+					return &graph.Item{ID: itemID, Name: "f.txt", DriveID: driveID}, nil
+				case "unresolvable":
+					return &graph.Item{ID: itemID, Name: "g.txt", ParentID: "parent-lookup-fails", DriveID: driveID}, nil
+				case "parent-lookup-fails":
+					return nil, assert.AnError
 				case "trashed":
 					return &graph.Item{ID: itemID, Name: "c.txt", IsDeleted: true, DriveID: driveID}, nil
 				case "unknown":
@@ -106,6 +116,8 @@ func TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing(t *te
 		{ItemID: "trashed", Path: "c.txt", Type: ChangeDelete, IsDeleted: true},
 		{ItemID: "gone", Path: "d.txt", Type: ChangeDelete, IsDeleted: true},
 		{ItemID: "unknown", Path: "e.txt", Type: ChangeDelete, IsDeleted: true},
+		{ItemID: "no-parent", Path: "f.txt", Type: ChangeDelete, IsDeleted: true},
+		{ItemID: "unresolvable", Path: "g.txt", Type: ChangeDelete, IsDeleted: true},
 	}
 
 	confirmed := eng.confirmMountRootOrphans(t.Context(), listed, orphans)
@@ -115,7 +127,7 @@ func TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing(t *te
 		ids = append(ids, confirmed[i].ItemID)
 	}
 	assert.ElementsMatch(t, []string{"moved-out", "trashed", "gone"}, ids,
-		"only a 404, a deleted facet, or a move out of the mount is proof of absence")
+		"only a 404, a deleted facet, or a provable move out of the mount is proof of absence")
 }
 
 // Validates: R-6.2.2
@@ -200,4 +212,38 @@ func TestApplyShortcutRootCompleteOmission_ConfirmedLiveBindingStaysActive(t *te
 			assert.Equal(t, tc.state, roots[0].State)
 		})
 	}
+}
+
+// Validates: R-6.2.2
+func TestFullRefresh_OrphanStillLiveOnOneDriveIsNotDeleted(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	// A complete enumeration that transiently omits a.txt, which GetItem
+	// still returns.
+	remote.mu.Lock()
+	omitted := remote.items["item-a"]
+	delete(remote.items, "item-a")
+	remote.mu.Unlock()
+	client := remote.client(t)
+	baseGetItem := client.getItemFn
+	client.getItemFn = func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
+		if itemID == "item-a" {
+			copied := *omitted
+			return &copied, nil
+		}
+		return baseGetItem(ctx, driveID, itemID)
+	}
+	eng.fetcher = client
+	eng.itemsClient = client
+
+	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{FullReconcile: true})
+	require.NoError(t, err)
+
+	assert.FileExists(t, filepath.Join(syncRoot, "a.txt"), "an item a live lookup still finds is not deleted")
 }
