@@ -3050,6 +3050,9 @@ func TestExecutor_DeleteOutcome_FolderType(t *testing.T) {
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{
 		deleteItemFn: func(_ context.Context, _ driveid.ID, _ string) error { return nil },
+		listChildrenFn: func(context.Context, driveid.ID, string) ([]graph.Item, error) {
+			return nil, nil
+		},
 	}, &executorMockDownloader{}, &executorMockUploader{})
 	e := newExecution(cfg, emptyBaseline())
 

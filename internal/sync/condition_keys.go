@@ -25,6 +25,11 @@ const (
 	ConditionFileTooLargeForSpace   ConditionKey = "file_too_large_for_space"
 	ConditionLocalNameTooLong       ConditionKey = "local_name_too_long"
 	ConditionLocalReadOnly          ConditionKey = "local_read_only"
+	ConditionDeletesHeld            ConditionKey = "deletes_held"
+	ConditionLocalUnsyncable        ConditionKey = "local_unsyncable_replacement"
+	ConditionLocalMountBoundary     ConditionKey = "local_mount_boundary"
+	ConditionLocalInterrupted       ConditionKey = "local_interrupted_removal"
+	ConditionRemoteFolderUnverified ConditionKey = "remote_folder_delete_unverifiable"
 	ConditionLocalFileTooLarge      ConditionKey = "local_file_too_large"
 	ConditionLocalBusy              ConditionKey = "local_busy"
 	ConditionLocalCrossDevice       ConditionKey = "local_cross_device"
@@ -99,6 +104,7 @@ func conditionKeyForIssueTypeOrScope(
 
 func conditionKeyRank(key ConditionKey) int {
 	ordered := [...]ConditionKey{
+		ConditionDeletesHeld,
 		ConditionAuthenticationRequired,
 		ConditionQuotaExceeded,
 		ConditionServiceOutage,
@@ -117,6 +123,10 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionFileTooLargeForSpace,
 		ConditionLocalNameTooLong,
 		ConditionLocalReadOnly,
+		ConditionLocalUnsyncable,
+		ConditionLocalMountBoundary,
+		ConditionLocalInterrupted,
+		ConditionRemoteFolderUnverified,
 		ConditionLocalFileTooLarge,
 		ConditionLocalBusy,
 		ConditionLocalCrossDevice,
@@ -166,6 +176,11 @@ func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
 		{issueType: issueFileTooLargeForSpace, key: ConditionFileTooLargeForSpace},
 		{issueType: issueLocalNameTooLong, key: ConditionLocalNameTooLong},
 		{issueType: issueLocalReadOnly, key: ConditionLocalReadOnly},
+		{issueType: issueDeletesHeld, key: ConditionDeletesHeld},
+		{issueType: issueLocalUnsyncableReplacement, key: ConditionLocalUnsyncable},
+		{issueType: issueLocalMountBoundary, key: ConditionLocalMountBoundary},
+		{issueType: issueLocalInterruptedRemoval, key: ConditionLocalInterrupted},
+		{issueType: issueRemoteFolderUnverifiable, key: ConditionRemoteFolderUnverified},
 		{issueType: issueLocalFileTooLarge, key: ConditionLocalFileTooLarge},
 		{issueType: issueLocalBusy, key: ConditionLocalBusy},
 		{issueType: issueLocalCrossDevice, key: ConditionLocalCrossDevice},

@@ -28,10 +28,15 @@ one-way sync. Use --dry-run to preview what would happen without making changes.
 	cmd.Flags().Bool("dry-run", false, "preview sync actions without executing")
 	cmd.Flags().Bool("watch", false, "continuously sync changes (watch mode)")
 	cmd.Flags().Bool("full", false, "run full remote refresh (enumerate all remote items, detect orphans)")
+	cmd.Flags().Bool("confirm-deletes", false,
+		"apply deletes that sync held for confirmation because more was deleted than looks intended")
 	cmd.Flags().Bool(allowRootFlag, false, "allow sync to run as root (files it creates will be owned by root)")
 
 	cmd.MarkFlagsMutuallyExclusive("download-only", "upload-only")
 	cmd.MarkFlagsMutuallyExclusive("full", "watch")
+	// Confirmation answers one held set the user has looked at; a watch
+	// session would keep applying whatever later passes delete.
+	cmd.MarkFlagsMutuallyExclusive("confirm-deletes", "watch")
 
 	return cmd
 }
@@ -66,11 +71,17 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("read --full flag: %w", err)
 	}
 
+	confirmDeletes, err := cmd.Flags().GetBool("confirm-deletes")
+	if err != nil {
+		return fmt.Errorf("read --confirm-deletes flag: %w", err)
+	}
+
 	return runSyncCommand(ctx, cc, syncCommandOptions{
-		Mode:          mode,
-		Watch:         watch,
-		DryRun:        dryRun,
-		FullReconcile: fullReconcile,
+		Mode:           mode,
+		Watch:          watch,
+		DryRun:         dryRun,
+		FullReconcile:  fullReconcile,
+		ConfirmDeletes: confirmDeletes,
 	})
 }
 

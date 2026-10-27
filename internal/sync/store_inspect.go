@@ -64,6 +64,9 @@ type DriveStatusSnapshot struct {
 	ObservationIssues []ObservationIssueRow
 	BlockScopes       []*BlockScope
 	BlockedRetryWork  []RetryWorkRow
+	// HeldDeletes are the deletes the delete-safety hold keeps until the
+	// user runs `sync --confirm-deletes`.
+	HeldDeletes []HeldDeleteRow
 }
 
 // ReadDriveStatusSnapshot opens a read-only inspector for one per-mount status
@@ -237,6 +240,11 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 	snapshot.BlockedRetryWork, err = queryBlockedRetryWorkRowsWithRunner(ctx, i.db)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status blocked retry_work: %w", err)
+	}
+
+	snapshot.HeldDeletes, err = queryHeldDeleteRowsWithRunner(ctx, i.db)
+	if err != nil {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status held deletes: %w", err)
 	}
 
 	snapshot.RetryingWork, err = queryRetryingRetryWorkRowsWithRunner(ctx, i.db)

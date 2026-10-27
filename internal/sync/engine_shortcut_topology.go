@@ -2,7 +2,12 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func (e *Engine) publishShortcutChildWorkSnapshot(
@@ -94,4 +99,76 @@ func (e *Engine) acknowledgeChildArtifactsPurged(
 		}
 	}
 	return snapshot, nil
+}
+
+// confirmShortcutCompleteOmissions checks, before a complete observation is
+// applied, every active shortcut binding the observation did not return.
+// The planner turns a complete omission into a final drain, and releasing the
+// root removes its whole local projection, so one enumeration that dropped a
+// placeholder (a known transient Graph omission) deleted every file under it
+// (D-007). Here each omitted binding is looked up by ID:
+//   - still a live shortcut to the same target: it is re-added as observed and
+//     stays active;
+//   - 404, deleted, or now pointing elsewhere: it stays omitted and drains;
+//   - the lookup failed: it is marked target-unavailable, which keeps local
+//     data until a later observation settles it.
+func (e *Engine) confirmShortcutCompleteOmissions(ctx context.Context, topology *shortcutTopologyBatch) error {
+	if e == nil || topology == nil || topology.Kind != shortcutTopologyObservationComplete || e.itemsClient == nil {
+		return nil
+	}
+	roots, err := e.baseline.listShortcutRoots(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: read shortcut roots to confirm omissions: %w", err)
+	}
+	seen := shortcutRootCompleteBatchSeenBindings(*topology)
+	for i := range roots {
+		root := &roots[i]
+		if _, ok := seen[root.BindingItemID]; ok || shortcutRootCompleteOmissionKeepsState(root.State) {
+			continue
+		}
+		if root.NamespaceID != "" && topology.NamespaceID != "" && root.NamespaceID != topology.NamespaceID {
+			continue
+		}
+		e.confirmShortcutOmission(ctx, topology, root)
+	}
+
+	return nil
+}
+
+func (e *Engine) confirmShortcutOmission(ctx context.Context, topology *shortcutTopologyBatch, root *ShortcutRootRecord) {
+	live, err := e.itemsClient.GetItem(ctx, e.driveID, root.BindingItemID)
+	switch {
+	case errors.Is(err, graph.ErrNotFound):
+		return
+	case err != nil:
+		e.logger.Debug("could not confirm an omitted shortcut is gone; keeping its files",
+			slog.String("path", root.RelativeLocalPath), slog.String("error", err.Error()))
+		topology.Unavailable = append(topology.Unavailable, shortcutBindingUnavailable{
+			BindingItemID:     root.BindingItemID,
+			RelativeLocalPath: root.RelativeLocalPath,
+			LocalAlias:        root.LocalAlias,
+			RemoteDriveID:     root.RemoteDriveID.String(),
+			RemoteItemID:      root.RemoteItemID,
+			RemoteIsFolder:    root.RemoteIsFolder,
+			Reason:            "the shortcut could not be checked after a listing omitted it",
+		})
+		return
+	case live == nil || live.IsDeleted:
+		return
+	case live.RemoteItemID != root.RemoteItemID ||
+		(live.RemoteDriveID != "" && !driveid.New(live.RemoteDriveID).Equal(root.RemoteDriveID)):
+		return
+	}
+
+	e.logger.Info("OneDrive's listing omitted a shared-folder shortcut that still exists; keeping it",
+		slog.String("path", root.RelativeLocalPath))
+	topology.Upserts = append(topology.Upserts, shortcutBindingUpsert{
+		BindingItemID:     root.BindingItemID,
+		RelativeLocalPath: root.RelativeLocalPath,
+		LocalAlias:        root.LocalAlias,
+		RemoteDriveID:     root.RemoteDriveID.String(),
+		RemoteItemID:      root.RemoteItemID,
+		RemoteIsFolder:    root.RemoteIsFolder,
+		Complete:          true,
+	})
 }

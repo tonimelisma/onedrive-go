@@ -44,3 +44,32 @@ func removeStateDBFiles(dbPath string) error {
 
 	return nil
 }
+
+// RebindSyncRoot forgets the sync-folder fingerprint recorded in one drive's
+// state DB, keeping everything else. The next engine start binds the folder it
+// finds at the sync path. It is the explicit answer to a refused start after
+// the user moved, restored, or re-pointed the sync folder on purpose; the
+// delete-safety hold still guards whatever that folder turns out to lack.
+func RebindSyncRoot(ctx context.Context, dbPath string, logger *slog.Logger) (err error) {
+	if logger != nil {
+		logger.Info("clearing recorded sync folder identity",
+			slog.String("db_path", dbPath),
+		)
+	}
+
+	store, err := NewSyncStore(ctx, dbPath, logger)
+	if err != nil {
+		return fmt.Errorf("open sync store: %w", err)
+	}
+	defer func() {
+		if closeErr := store.Close(context.WithoutCancel(ctx)); closeErr != nil && err == nil {
+			err = fmt.Errorf("close sync store: %w", closeErr)
+		}
+	}()
+
+	if err := store.ClearSyncRootIdentity(ctx); err != nil {
+		return fmt.Errorf("clear sync folder identity: %w", err)
+	}
+
+	return nil
+}

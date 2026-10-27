@@ -319,6 +319,32 @@ func driveJSONContractCases() map[string]jsonContractCase {
 			cc.Flags.Drive = []string{cid.String()}
 			return runDetachedLeaf(t, leaf, cc)
 		}},
+		"onedrive-go trash list": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+			t.Helper()
+			cc, cid := jsonContractConfigContext(t)
+			cc.Flags.Drive = []string{cid.String()}
+			return runDetachedLeaf(t, leaf, cc)
+		}},
+		"onedrive-go trash restore": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+			t.Helper()
+			cc, cid := jsonContractConfigContext(t)
+			cc.Flags.Drive = []string{cid.String()}
+			id := seedTrashEntry(t, config.DriveStatePath(cid), t.TempDir(), "notes.txt")
+			return runDetachedLeaf(t, leaf, cc, id)
+		}},
+		"onedrive-go trash empty": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+			t.Helper()
+			cc, cid := jsonContractConfigContext(t)
+			cc.Flags.Drive = []string{cid.String()}
+			return runDetachedLeaf(t, leaf, cc, "--confirm")
+		}},
+		"onedrive-go drive rebind-root": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+			t.Helper()
+			cc, cid := jsonContractConfigContext(t)
+			cc.Flags.Drive = []string{cid.String()}
+			require.NoError(t, os.MkdirAll(filepath.Dir(config.DriveStatePath(cid)), 0o700))
+			return runDetachedLeaf(t, leaf, cc, "--yes")
+		}},
 		"onedrive-go drive reset-sync-state": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, cid := jsonContractConfigContext(t)

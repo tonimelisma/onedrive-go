@@ -122,6 +122,11 @@ type rootOps struct {
 	rename    func(root rootHandle, oldname, newname string) error
 	chtimes   func(root rootHandle, name string, atime time.Time, mtime time.Time) error
 	lstatAbs  func(path string) (os.FileInfo, error)
+	// getRootMark and setRootMark read and write the sync folder's bind
+	// token (root_identity_unix.go); a seam so tests can model filesystems
+	// without extended attributes.
+	getRootMark func(dir *os.File) (string, error)
+	setRootMark func(dir *os.File, token string) error
 }
 
 func defaultRootOps() rootOps {
@@ -155,7 +160,9 @@ func defaultRootOps() rootOps {
 		chtimes: func(root rootHandle, name string, atime time.Time, mtime time.Time) error {
 			return root.Chtimes(name, atime, mtime)
 		},
-		lstatAbs: os.Lstat,
+		lstatAbs:    os.Lstat,
+		getRootMark: getRootMarkXattr,
+		setRootMark: setRootMarkXattr,
 	}
 }
 

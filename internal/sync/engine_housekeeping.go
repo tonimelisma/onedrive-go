@@ -2,6 +2,8 @@ package sync
 
 import (
 	"context"
+	"log/slog"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
@@ -25,6 +27,34 @@ func (flow *engineFlow) postSyncHousekeeping(ctx context.Context) {
 			IncludeJunkPartials: flow.engine.contentFilter.IgnoreJunkFiles,
 		},
 	)
+	flow.engine.purgeExpiredTrash(true)
+}
+
+// trashPurgeInterval bounds how often a long-running watch session scans the
+// trash for expired entries.
+const trashPurgeInterval = time.Hour
+
+// purgeExpiredTrash removes trash entries older than the retention period.
+// It is best effort: a failure leaves entries for the next attempt.
+func (e *Engine) purgeExpiredTrash(force bool) {
+	if e == nil || e.trash == nil {
+		return
+	}
+	now := e.nowFunc()
+	if last := e.trashPurgedAt.Load(); !force && last != 0 && now.Sub(time.Unix(0, last)) < trashPurgeInterval {
+		return
+	}
+	e.trashPurgedAt.Store(now.UnixNano())
+
+	removed, err := e.trash.Purge()
+	if err != nil {
+		e.logger.Debug("could not purge expired trash entries",
+			slog.String("trash", e.trash.Dir()), slog.String("error", err.Error()))
+	}
+	if removed > 0 {
+		e.logger.Info("removed expired files from the sync trash",
+			slog.Int("removed", removed), slog.String("trash", e.trash.Dir()))
+	}
 }
 
 func transferArtifactCleanupSkipDirs(filter ContentFilterConfig, protectedRoots []ProtectedRoot) []string {

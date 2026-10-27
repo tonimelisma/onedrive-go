@@ -237,6 +237,9 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 	if topology.NamespaceID == "" {
 		topology.NamespaceID = flow.engine.shortcutNamespaceID
 	}
+	if err := flow.engine.confirmShortcutCompleteOmissions(ctx, &topology); err != nil {
+		return err
+	}
 	remoteChanged := topology.shouldApply()
 	if remoteChanged {
 		if _, err := flow.deps.store.applyShortcutTopology(ctx, topology); err != nil {
@@ -365,7 +368,12 @@ func (flow *engineFlow) observeLocal(
 	obs.SetFilterConfig(eng.contentFilter)
 	obs.SetProtectedRoots(eng.protectedRoots)
 	obs.SetObservationRules(eng.localRules)
-	obs.SetExpectedRootIdentity(eng.expectedSyncRootIdentity)
+	obs.SetSyncRootIdentity(eng.syncRootIdentity)
+	mountFlags, err := eng.baseline.listMountBoundaries(ctx)
+	if err != nil {
+		return scanResult{}, err
+	}
+	obs.SetMountBoundaryFlags(mountFlags)
 
 	result, err := obs.FullScan(ctx, eng.syncTree)
 	if err != nil {
@@ -379,12 +387,7 @@ func (flow *engineFlow) commitCurrentLocalSnapshot(
 	ctx context.Context,
 	localResult scanResult,
 ) error {
-	rows := buildLocalStateRows(localResult)
-	if err := flow.deps.store.ReplaceLocalState(ctx, rows); err != nil {
-		return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
-	}
-
-	return nil
+	return flow.engine.commitLocalSnapshot(ctx, buildLocalStateRows(localResult), localResult.CrossedMounts)
 }
 
 func (flow *engineFlow) loadDryRunCurrentObservation(
@@ -594,10 +597,27 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
+	var approved []heldDelete
+	if opts.ConfirmDeletes {
+		approved, err = flow.engine.baseline.listHeldDeletes(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("sync: reading the held deletes to confirm: %w", err)
+		}
+	}
+	if err := applyDeleteSafetyHold(plan, &deleteSafetyInput{
+		Baseline:   planningBaseline(&observation.inputs, bl),
+		LocalRows:  observation.inputs.localRows,
+		RemoteRows: observation.inputs.remoteRows,
+		Approved:   approved,
+	}); err != nil {
+		return nil, fmt.Errorf("sync: holding unconfirmed deletes: %w", err)
+	}
+	logDeleteSafetyHold(flow.deps.logger, plan.HeldDeletes)
 	flow.engine.collector().RecordPlan(len(plan.Actions), flow.deps.since(planStart))
 
 	counts := countByType(plan.Actions)
 	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
+	report.HeldLocalDeletes, report.HeldRemoteDeletes = countHeldDeletesBySide(plan.HeldDeletes)
 
 	return &builtCurrentPlan{
 		Plan:                     plan,
@@ -652,6 +672,9 @@ func (flow *engineFlow) keepBuiltCurrentPlan(build *builtCurrentPlan) *runtimePl
 }
 
 func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *actionPlan) error {
+	if err := flow.deps.store.ReplaceHeldDeletes(ctx, plan.HeldDeletes); err != nil {
+		return fmt.Errorf("sync: recording held deletes: %w", err)
+	}
 	if err := flow.deps.store.PruneRetryWorkToCurrentActions(ctx, retryWorkKeysForActions(plan.Actions)); err != nil {
 		return fmt.Errorf("sync: pruning retry_work to current actions: %w", err)
 	}
@@ -675,6 +698,15 @@ func (flow *engineFlow) loadRuntimeState(ctx context.Context) ([]RetryWorkRow, [
 	}
 
 	return retryRows, blockScopes, nil
+}
+
+// planningBaseline is the baseline the planner read: the snapshot loaded in
+// the same transaction as the comparison rows when there is one.
+func planningBaseline(inputs *currentInputs, fallback *Baseline) *Baseline {
+	if inputs != nil && inputs.baseline != nil {
+		return inputs.baseline
+	}
+	return fallback
 }
 
 func (e *Engine) buildCurrentActionPlanFromInputs(
@@ -713,4 +745,20 @@ func retryWorkKeysForActions(actions []Action) []RetryWorkKey {
 	}
 
 	return keys
+}
+
+// logDeleteSafetyHold reports a pass whose deletes were held. Info, not Warn:
+// watch mode replans on every batch while the hold stands, and the durable
+// condition (status, the watch condition summary, the one-shot summary line)
+// is the user-facing report.
+func logDeleteSafetyHold(logger *slog.Logger, held []heldDelete) {
+	if logger == nil || len(held) == 0 {
+		return
+	}
+	local, remote := countHeldDeletesBySide(held)
+	logger.Info("deletes held for confirmation; run 'onedrive-go sync --confirm-deletes' to apply them",
+		slog.Int("held_local_deletes", local),
+		slog.Int("held_remote_deletes", remote),
+		slog.String("reason", string(held[0].Reason)),
+	)
 }

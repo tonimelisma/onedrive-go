@@ -20,6 +20,7 @@ const (
 	ScopePermRemoteWrite                         // Param = local boundary path
 	ScopeDiskLocal                               // no Param
 	ScopeLocalReadOnly                           // Param = relative directory path
+	ScopeDeleteSafety                            // Param = "local" or "remote", the side deletes would remove content from
 )
 
 // ScopeKey identifies a block scope. The Kind discriminator determines the
@@ -70,6 +71,12 @@ func SKPermRemoteWrite(boundaryPath string) ScopeKey {
 	return ScopeKey{Kind: ScopePermRemoteWrite, Param: boundaryPath}
 }
 
+// sKDeleteSafety returns the scope key grouping deletes the delete-safety
+// hold kept for confirmation toward one side.
+func sKDeleteSafety(side deleteSafetySide) ScopeKey {
+	return ScopeKey{Kind: ScopeDeleteSafety, Param: string(side)}
+}
+
 // IsZero returns true for the zero-value ScopeKey (Kind == 0).
 func (sk ScopeKey) IsZero() bool {
 	return sk.Kind == 0
@@ -87,6 +94,7 @@ const (
 	wirePermRemoteWrite = "perm:remote:write:"
 	wireDiskLocal       = "disk:local"
 	wireLocalReadOnly   = "local:read-only:"
+	wireDeleteSafety    = "delete_safety:"
 )
 
 // String serializes to the wire format stored in SQLite scope_key columns.
@@ -111,6 +119,8 @@ func (sk ScopeKey) String() string {
 		return wireDiskLocal
 	case ScopeLocalReadOnly:
 		return wireLocalReadOnly + sk.Param
+	case ScopeDeleteSafety:
+		return wireDeleteSafety + sk.Param
 	default:
 		return ""
 	}
@@ -138,6 +148,8 @@ func parseScopeKey(s string) ScopeKey {
 		return SKPermRemoteWrite(strings.TrimPrefix(s, wirePermRemoteWrite))
 	case strings.HasPrefix(s, wireLocalReadOnly):
 		return SKLocalReadOnly(strings.TrimPrefix(s, wireLocalReadOnly))
+	case strings.HasPrefix(s, wireDeleteSafety):
+		return sKDeleteSafety(deleteSafetySide(strings.TrimPrefix(s, wireDeleteSafety)))
 	default:
 		return ScopeKey{}
 	}
@@ -258,7 +270,10 @@ func (sk ScopeKey) BlocksAction(
 }
 
 func scopePathMatches(path, boundary string) bool {
-	if boundary == "" {
+	// "." is how a rooted-relative path spells the sync root itself. A boundary
+	// there covers everything; matching nothing would let every path under an
+	// unreadable root read as deleted (D-005).
+	if boundary == "" || boundary == "." {
 		return true
 	}
 

@@ -780,12 +780,13 @@ func cloneShortcutChildEngineSpec(spec *syncengine.ShortcutChildEngineSpec) sync
 
 func cloneContentFilterConfig(filter syncengine.ContentFilterConfig) syncengine.ContentFilterConfig {
 	return syncengine.ContentFilterConfig{
-		IgnoredDirs:     append([]string(nil), filter.IgnoredDirs...),
-		IncludedDirs:    append([]string(nil), filter.IncludedDirs...),
-		IgnoredPaths:    append([]string(nil), filter.IgnoredPaths...),
-		IgnoreDotfiles:  filter.IgnoreDotfiles,
-		IgnoreJunkFiles: filter.IgnoreJunkFiles,
-		FollowSymlinks:  filter.FollowSymlinks,
+		IgnoredDirs:      append([]string(nil), filter.IgnoredDirs...),
+		IncludedDirs:     append([]string(nil), filter.IncludedDirs...),
+		IgnoredPaths:     append([]string(nil), filter.IgnoredPaths...),
+		IgnoreDotfiles:   filter.IgnoreDotfiles,
+		IgnoreJunkFiles:  filter.IgnoreJunkFiles,
+		FollowSymlinks:   filter.FollowSymlinks,
+		CrossFilesystems: filter.CrossFilesystems,
 	}
 }
 

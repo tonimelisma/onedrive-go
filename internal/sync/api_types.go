@@ -14,6 +14,10 @@ type (
 	RunOptions struct {
 		DryRun        bool
 		FullReconcile bool // when true, runs a full delta enumeration + orphan detection
+		// ConfirmDeletes releases the deletes the delete-safety hold
+		// recorded before this pass (`sync --confirm-deletes`); deletes that
+		// appeared since are judged by the hold again.
+		ConfirmDeletes bool
 	}
 	WatchOptions struct {
 		PollInterval time.Duration // remote delta polling interval (0 -> 5m)
@@ -34,6 +38,11 @@ type (
 		BaselineUpdates int
 		Cleanups        int
 		DeferredByMode  DeferredCounts
+		// HeldLocalDeletes and HeldRemoteDeletes count the deletes the
+		// delete-safety hold kept for confirmation, by the side they would
+		// remove content from.
+		HeldLocalDeletes  int
+		HeldRemoteDeletes int
 
 		Succeeded int
 		Failed    int

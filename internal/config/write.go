@@ -73,6 +73,7 @@ func defaultConfigTemplate() string {
 #   ignored_paths = ["*.iso"]
 #   included_dirs = ["Documents"] # sync only these folders
 #   follow_symlinks = true
+#   cross_filesystems = true      # also sync disks mounted inside the folder
 `,
 		defaultTransferWorkers,
 		defaultCheckWorkers,
@@ -742,7 +743,8 @@ func drivesEqual(left *Drive, right *Drive) bool {
 		slices.Equal(left.IgnoredPaths, right.IgnoredPaths) &&
 		left.IgnoreDotfiles == right.IgnoreDotfiles &&
 		boolPointersEqual(left.IgnoreJunkFiles, right.IgnoreJunkFiles) &&
-		left.FollowSymlinks == right.FollowSymlinks
+		left.FollowSymlinks == right.FollowSymlinks &&
+		left.CrossFilesystems == right.CrossFilesystems
 }
 
 func boolPointersEqual(left *bool, right *bool) bool {

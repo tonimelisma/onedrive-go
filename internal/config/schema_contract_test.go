@@ -32,6 +32,7 @@ func expectedGlobalSchemaKeys() []string {
 
 func expectedDriveSchemaKeys() []string {
 	return []string{
+		"cross_filesystems",
 		"display_name",
 		"follow_symlinks",
 		"ignore_dotfiles",

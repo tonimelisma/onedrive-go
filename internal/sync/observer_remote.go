@@ -133,8 +133,25 @@ func (o *remoteObserver) FullDeltaWithShortcutTopology(
 	ctx context.Context,
 	savedToken string,
 ) ([]changeEvent, string, shortcutTopologyBatch, error) {
-	events, token, topology, _, err := o.fullDelta(ctx, savedToken)
+	events, token, topology, _, err := o.fullDelta(ctx, savedToken, nil)
 	return events, token, topology, err
+}
+
+// FullEnumerationWithShortcutTopology enumerates the whole drive and also
+// returns the ID of every live item the enumeration returned, whether or not
+// it converted into an event. Absence from a complete enumeration is the
+// evidence a full refresh deletes on, so it must be absence from what Graph
+// returned, not from what the converter kept: an item it skipped (an orphan
+// whose parent it could not fetch, for one) was still there (D-008).
+func (o *remoteObserver) FullEnumerationWithShortcutTopology(
+	ctx context.Context,
+) ([]changeEvent, string, shortcutTopologyBatch, map[string]struct{}, error) {
+	enumerated := make(map[string]struct{})
+	events, token, topology, _, err := o.fullDelta(ctx, "", enumerated)
+	if err != nil {
+		return nil, "", shortcutTopologyBatch{}, nil, err
+	}
+	return events, token, topology, enumerated, nil
 }
 
 // fullDelta enumerates delta pages and also reports how many non-root items
@@ -144,6 +161,7 @@ func (o *remoteObserver) FullDeltaWithShortcutTopology(
 func (o *remoteObserver) fullDelta(
 	ctx context.Context,
 	savedToken string,
+	enumerated map[string]struct{},
 ) ([]changeEvent, string, shortcutTopologyBatch, int, error) {
 	o.logger.Debug("remote observer starting delta enumeration",
 		slog.String("drive_id", o.driveID.String()),
@@ -172,7 +190,7 @@ func (o *remoteObserver) fullDelta(
 	}
 
 	for page := range maxDeltaPaginationGuard {
-		pageEvents, pageItems, newToken, done, err := o.fetchPage(ctx, token, page, inflight)
+		pageEvents, pageItems, newToken, done, err := o.fetchPage(ctx, token, page, inflight, enumerated)
 		if err != nil {
 			o.stats.errors.Add(1)
 
@@ -268,7 +286,7 @@ func (o *remoteObserver) Watch(
 
 		token := o.CurrentDeltaToken()
 
-		polledEvents, newToken, topology, windowItems, err := o.fullDelta(ctx, token)
+		polledEvents, newToken, topology, windowItems, err := o.fullDelta(ctx, token, nil)
 		if err != nil {
 			result := o.handleWatchPollError(ctx, bo, &outage, err, wakeCh)
 			if result.err != nil {
@@ -544,6 +562,7 @@ func timeSleep(ctx context.Context, d time.Duration) error {
 // when the child appears before its vault parent in the response.
 func (o *remoteObserver) fetchPage(
 	ctx context.Context, token string, page int, inflight map[string]inflightParent,
+	enumerated map[string]struct{},
 ) (events []changeEvent, items int, next string, done bool, err error) {
 	dp, err := o.fetcher.Delta(ctx, o.driveID, token)
 	if err != nil {
@@ -567,6 +586,9 @@ func (o *remoteObserver) fetchPage(
 	for i := range dp.Items {
 		if !dp.Items[i].IsRoot {
 			items++
+		}
+		if enumerated != nil && !dp.Items[i].IsDeleted && dp.Items[i].ID != "" {
+			enumerated[dp.Items[i].ID] = struct{}{}
 		}
 		if ev := o.Converter.ClassifyItem(&dp.Items[i], inflight); ev != nil {
 			events = append(events, *ev)

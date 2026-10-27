@@ -17,10 +17,11 @@ import (
 )
 
 type syncCommandOptions struct {
-	Mode          syncengine.SyncMode
-	Watch         bool
-	DryRun        *bool
-	FullReconcile bool
+	Mode           syncengine.SyncMode
+	Watch          bool
+	DryRun         *bool
+	FullReconcile  bool
+	ConfirmDeletes bool
 }
 
 type syncWatchRunner func(
@@ -101,8 +102,9 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 	console.Starting(standaloneMountSelectionFromResolvedDrives(drives).Mounts, opts.Mode, effectiveDryRun)
 
 	result := runSyncOnce(ctx, cc, holder, drives, opts.Mode, syncengine.RunOptions{
-		DryRun:        effectiveDryRun,
-		FullReconcile: opts.FullReconcile,
+		DryRun:         effectiveDryRun,
+		FullReconcile:  opts.FullReconcile,
+		ConfirmDeletes: opts.ConfirmDeletes,
 	}, logger, controlSocketPath, console.Activity)
 
 	console.Summary(result)

@@ -56,6 +56,8 @@ rebuildable runtime facts:
 | `retry_work` | Exact delayed retry or blocked work for the current semantic intent | `(path, old_path, action_type)` |
 | `block_scopes` | Shared blocker timing and lifecycle | `scope_key` |
 | `observation_state` | Content drive owner, primary cursor, and remote refresh cadence | zero-or-one row |
+| `held_deletes` | Deletes the delete-safety hold keeps for confirmation (status projection) | zero or more rows |
+| `mount_boundaries` | Folders crossed into another filesystem under `cross_filesystems` | `path` |
 
 ## `baseline`
 
@@ -201,6 +203,10 @@ identity and cadence:
 - `content_drive_id`
 - `cursor`
 - `next_full_remote_refresh_at`
+- `sync_root_bound`, `sync_root_device`, `sync_root_inode`, `sync_root_fsid`,
+  `sync_root_token`: the fingerprint of the local sync folder this state was
+  built from
+- `sync_root_rebind`: an explicit `drive rebind-root` is pending
 
 The cursor is committed atomically with the corresponding remote observation
 writes. The stored next-refresh deadline makes periodic remote full-refresh
@@ -224,6 +230,62 @@ SQLite.
 `content_drive_id` identifies the remote drive for the mounted content root that
 owns the DB and cursor. It does not replace the per-row
 `remote_state.drive_id` authority.
+
+The sync-folder fingerprint is recorded in the same transaction as the first
+committed local snapshot (never by a dry run) and is never overwritten by a
+scan. Binding first writes a random token as the extended attribute
+`user.onedrive-go.root` on the folder and records it. Engine startup and every
+full scan compare the folder at the sync path against the record:
+
+- when the record has a token, the token alone decides: the same token is the
+  same folder whatever its inode is now (FUSE, SMB and FAT inode churn, macOS
+  fsid renumbering), and a missing or different token is a different folder
+  (rm -rf and mkdir may get the inode back, never the token);
+- without a token (a filesystem with no user extended attributes) the inode
+  must match, and the filesystem by `statfs` fsid when both sides have one,
+  otherwise by device number; a btrfs subvolume root (inode 256) also needs the
+  device to match, because sibling subvolumes share fsid and root inode.
+
+A token that does not read back after it is written counts as no token. A
+marker found on the folder at startup while the state has no binding (after
+`drive reset-sync-state`) is ignored, because the bind replaces it. The
+expected identity has one owner per engine (`syncRootIdentity`): the executor
+and every local observer read it there, so the token a bind adds is enforced
+everywhere at once, and mark-and-bind is serialized; if the store already
+holds a binding, the folder is re-marked with the recorded token.
+
+A mismatch is `ErrMountRootUnavailable`, so an unmounted disk, a wiped folder
+or a re-pointed symlink is refused instead of scanned as a deletion of
+everything. A state whose baseline is not empty but which has no recorded
+folder is refused the same way. Every refusal of a primary root (startup,
+full scan, remote delete) says whether the folder lacks the
+`user.onedrive-go.root` marker (replaced, or copied or restored without
+extended attributes) or carries a different one, and names `drive
+rebind-root`. `drive rebind-root` (which shows the
+remembered and present file counts and asks for confirmation) clears the
+fingerprint and sets `sync_root_rebind`, so the next start binds the folder now
+there (R-6.2.12).
+
+Remaining gap: on a filesystem without extended attributes, a folder recreated
+at the same path that happens to get the same inode on the same filesystem is
+accepted; the delete-safety hold (R-6.2.5) is then the guard.
+
+## `mount_boundaries`
+
+`mount_boundaries` lists folders (by path) that a scan crossed into another
+filesystem under `cross_filesystems`. It is written in the local-snapshot
+transaction and pruned of paths that are neither in the baseline nor in
+`local_state`; a flag outlives an unmount on purpose, because it is how the
+next scan recognises the empty folder as a disk that is not mounted.
+
+## `held_deletes`
+
+`held_deletes` lists the deletes the delete-safety hold kept out of the most
+recent live plan: `path`, `side` (`local` or `remote`, where the delete would
+remove content), `reason` (`side_vanished` or `too_many`), `item_type` and
+`item_id`. `sync --confirm-deletes` releases exactly these rows.
+It is replaced on every live plan; the planner re-derives the hold from
+current truth and reads the table only as the set a confirmation approves.
 
 ## Schema Discipline
 

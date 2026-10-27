@@ -32,14 +32,32 @@ const (
 	issueFileTooLargeForSpace = "file_too_large_for_space"
 	issueLocalNameTooLong     = "local_name_too_long"
 	issueLocalReadOnly        = "local_read_only"
-	issueLocalFileTooLarge    = "local_file_too_large"
-	issueLocalBusy            = "local_busy"
-	issueLocalCrossDevice     = "local_cross_device"
-	issueUnsupportedOperation = "unsupported_operation"
-	issueMalwareDetected      = "malware_detected"
-	issueLocalDatabaseOpen    = "local_database_open"
-	issueUploadVerification   = "upload_verification_failed"
-	issueDownloadIntegrity    = "download_integrity"
+	// issueDeletesHeld marks deletes the delete-safety hold kept for
+	// confirmation (planner_delete_safety.go).
+	issueDeletesHeld = "deletes_held"
+	// issueLocalUnsyncableReplacement marks a synced path whose item is now
+	// something sync cannot represent: replaced by a symlink or special file,
+	// or renamed to an invalid name or an excluded location. The synced path
+	// is unavailable truth, never a delete (D-004, P-5).
+	issueLocalUnsyncableReplacement = "local_unsyncable_replacement"
+	// issueLocalMountBoundary marks a folder on another filesystem inside the
+	// sync folder; sync does not cross into it (D-003, P-11).
+	issueLocalMountBoundary = "local_mount_boundary"
+	// issueLocalInterruptedRemoval marks a file sync set aside while removing
+	// it and never moved out, because a run was interrupted. It is the
+	// user's content, so it is reported, never deleted.
+	// issueRemoteFolderUnverifiable marks a folder delete on OneDrive that
+	// sync will not run because the folder is too large to list first.
+	issueRemoteFolderUnverifiable = "remote_folder_delete_unverifiable"
+	issueLocalInterruptedRemoval  = "local_interrupted_removal"
+	issueLocalFileTooLarge        = "local_file_too_large"
+	issueLocalBusy                = "local_busy"
+	issueLocalCrossDevice         = "local_cross_device"
+	issueUnsupportedOperation     = "unsupported_operation"
+	issueMalwareDetected          = "malware_detected"
+	issueLocalDatabaseOpen        = "local_database_open"
+	issueUploadVerification       = "upload_verification_failed"
+	issueDownloadIntegrity        = "download_integrity"
 	// issueTransferStalled shares the request-timeout condition family.
 	issueTransferStalled = "request_timeout"
 )

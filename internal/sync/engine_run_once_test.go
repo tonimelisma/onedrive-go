@@ -1470,8 +1470,11 @@ func TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T) {
 	driveID := driveid.New(engineTestDriveID)
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			// The kept folder keeps the remote side from being empty, which
+			// the delete-safety hold would rightly refuse to act on.
 			return deltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
+				{ID: "kept", Name: "kept", ParentID: "root", IsFolder: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
 	}
@@ -1525,6 +1528,10 @@ func TestRunOnce_FullRescanDropsUnsyncedRemoteStateOrphans(t *testing.T) {
 	mock := &engineMockClient{
 		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return deltaPageWithItems([]graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}}, "token-1"), nil
+		},
+		// The orphan is confirmed gone by a live lookup.
+		getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+			return nil, graph.ErrNotFound
 		},
 	}
 	eng, _ := newTestEngine(t, mock)

@@ -20,7 +20,8 @@ type storedConditionGroupKey struct {
 }
 
 // ProjectStoredConditionGroups collapses durable observation issues,
-// block scopes, and blocked retry rows into one raw grouped view.
+// block scopes, blocked retry rows, and held deletes into one raw grouped
+// view.
 func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []storedConditionGroup {
 	if snapshot == nil {
 		return nil
@@ -28,7 +29,7 @@ func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []storedConditi
 
 	blockedByScope := groupBlockedRetryWork(snapshot.BlockedRetryWork)
 	groupIndex := make(map[storedConditionGroupKey]int)
-	groups := make([]storedConditionGroup, 0, len(snapshot.ObservationIssues)+len(snapshot.BlockScopes))
+	groups := make([]storedConditionGroup, 0, len(snapshot.ObservationIssues)+len(snapshot.BlockScopes)+1)
 
 	for i := range snapshot.ObservationIssues {
 		issue := snapshot.ObservationIssues[i]
@@ -85,6 +86,23 @@ func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []storedConditi
 		if len(projection.Paths) > 0 {
 			group.Paths = append(group.Paths, projection.Paths...)
 		}
+	}
+
+	for i := range snapshot.HeldDeletes {
+		held := snapshot.HeldDeletes[i]
+		scopeKey := sKDeleteSafety(deleteSafetySide(held.Side))
+		group := ensureStoredConditionGroup(
+			&groups,
+			groupIndex,
+			ConditionDeletesHeld,
+			issueDeletesHeld,
+			scopeKey,
+		)
+		if group == nil {
+			continue
+		}
+		group.Count++
+		group.Paths = append(group.Paths, held.Path)
 	}
 
 	finalizeStoredConditionGroups(groups)

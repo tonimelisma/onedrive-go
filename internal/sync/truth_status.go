@@ -116,7 +116,9 @@ func observationIssueBlocksLocalTruth(issueType string) bool {
 		issueFileTooLarge,
 		issueCaseCollision,
 		issueHashPanic,
-		issueLocalReadDenied:
+		issueLocalReadDenied,
+		issueLocalUnsyncableReplacement,
+		issueLocalMountBoundary:
 		return true
 	default:
 		return false

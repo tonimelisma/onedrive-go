@@ -560,6 +560,10 @@ an `Orchestrator`, and chooses between `RunOnce` and `RunWatch`.
 - `--watch` selects daemon mode
 - `--download-only` and `--upload-only` select sync mode
 - `--dry-run` and `--full` apply only to one-shot mode
+- `--confirm-deletes` applies only to one-shot mode: it releases the
+  delete-safety hold for that pass (`RunOptions.ConfirmDeletes`), so the user
+  confirms the held set they were shown rather than whatever a watch session
+  deletes later (`TestNewSyncCmd_ConfirmDeletesIsOneShotOnly`)
 - `--dry-run` binds, probes, and unlinks the control socket like any one-shot
   sync owner; it only changes plan execution and commit semantics
 - first SIGINT/SIGTERM cancels the shared watch contexts and lets each mount's

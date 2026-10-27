@@ -219,6 +219,10 @@ func (c *syncConsole) Summary(result multisync.RunOnceResult) {
 				if held := heldBackSummary(report.Report); held != "" {
 					c.printOut(prefix, held)
 				}
+				if held := heldDeletesSummary(report.Report); held != "" {
+					// The deletes need the user, so the line goes to stderr.
+					c.printErr(prefix, held)
+				}
 			}
 		}
 	}
@@ -350,6 +354,26 @@ func dryRunParts(t *activityTally) []string {
 	}
 
 	return parts
+}
+
+// heldDeletesSummary explains deletes the delete-safety hold kept for
+// confirmation, and the one command that applies them.
+func heldDeletesSummary(r *syncengine.Report) string {
+	if r.HeldLocalDeletes == 0 && r.HeldRemoteDeletes == 0 {
+		return ""
+	}
+
+	var parts []string
+	if r.HeldRemoteDeletes > 0 {
+		parts = append(parts, fmt.Sprintf("%d on OneDrive", r.HeldRemoteDeletes))
+	}
+	if r.HeldLocalDeletes > 0 {
+		parts = append(parts, fmt.Sprintf("%d on this computer", r.HeldLocalDeletes))
+	}
+
+	return fmt.Sprintf("Held %s deletes for confirmation: more was deleted than looks intended. "+
+		"Check the sync folder, then run 'onedrive-go sync --confirm-deletes' to apply them.",
+		strings.Join(parts, " and "))
 }
 
 // heldBackSummary explains work a one-way mode deliberately skipped.

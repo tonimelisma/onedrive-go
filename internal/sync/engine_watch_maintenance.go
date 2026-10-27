@@ -10,6 +10,7 @@ import (
 // handleMaintenanceTick processes a periodic watch summary/maintenance tick.
 func (rt *watchRuntime) handleMaintenanceTick(ctx context.Context) {
 	rt.recoverDroppedLocalObservation(ctx)
+	rt.engine.purgeExpiredTrash(false)
 	rt.logWatchSummary(ctx)
 	rt.deps.emit(engineDebugEvent{Type: engineDebugEventMaintenanceTickHandled})
 }

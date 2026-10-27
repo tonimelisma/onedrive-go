@@ -10,6 +10,7 @@ const (
 	scopeFamilyPermDir        scopeFamily = "perm_dir"
 	scopeFamilyPermRemote     scopeFamily = "perm_remote"
 	scopeFamilyDiskLocal      scopeFamily = "disk_local"
+	scopeFamilyDeleteSafety   scopeFamily = "delete_safety"
 )
 
 type scopeAccess string
@@ -123,6 +124,8 @@ func describeScopeKey(key ScopeKey) scopeDescriptor {
 			DefaultConditionType: issueLocalReadOnly,
 			Priority:             scopePriorityPermDir,
 		}
+	case ScopeDeleteSafety:
+		return deleteSafetyScopeDescriptor(key)
 	case ScopePermRemoteRead:
 		return scopeDescriptor{
 			Key:                  key,
@@ -151,6 +154,22 @@ func describeScopeKey(key ScopeKey) scopeDescriptor {
 	}
 }
 
+// deleteSafetyScopeDescriptor describes the planner-owned delete-safety
+// scope: the hold keeps deletes out of the plan, so nothing is ever admitted
+// for this scope to block, and it has no trials; only `sync --confirm-deletes`
+// releases it.
+func deleteSafetyScopeDescriptor(key ScopeKey) scopeDescriptor {
+	return scopeDescriptor{
+		Key:                  key,
+		Family:               scopeFamilyDeleteSafety,
+		Access:               scopeAccessNone,
+		SubjectKind:          scopeSubjectKindNone,
+		SubjectValue:         key.Param,
+		DefaultConditionType: issueDeletesHeld,
+		Priority:             scopePriorityMax,
+	}
+}
+
 func (d scopeDescriptor) IsZero() bool {
 	return d.Family == scopeFamilyUnknown
 }
@@ -174,6 +193,9 @@ func (d scopeDescriptor) PersistsInBlockScopes() bool {
 	if d.Family == scopeFamilyPermDir || d.Family == scopeFamilyPermRemote {
 		return d.Access != scopeAccessRead
 	}
+	if d.Family == scopeFamilyDeleteSafety {
+		return false
+	}
 
 	return true
 }
@@ -195,6 +217,11 @@ func (d scopeDescriptor) Humanize() string {
 		return d.SubjectValue
 	case scopeFamilyDiskLocal:
 		return "local disk"
+	case scopeFamilyDeleteSafety:
+		if d.SubjectValue == string(deleteSafetySideLocal) {
+			return "deletes on this computer"
+		}
+		return "deletes on OneDrive"
 	default:
 		return d.Key.String()
 	}
@@ -214,6 +241,8 @@ func (d scopeDescriptor) BlocksAction(
 		return throttleTargetKey != "" && throttleTargetKey == d.SubjectValue
 	case scopeFamilyDiskLocal:
 		return actionType == ActionDownload
+	case scopeFamilyDeleteSafety:
+		return false
 	case scopeFamilyQuotaOwn:
 		return actionType == ActionUpload
 	case scopeFamilyPermDir:

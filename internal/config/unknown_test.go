@@ -138,3 +138,13 @@ func TestNewKnownDriveKeysList_Sorted(t *testing.T) {
 	assert.True(t, sort.StringsAreSorted(newKnownDriveKeysList()),
 		"newKnownDriveKeysList() must be sorted")
 }
+
+// Validates: R-6.4.3
+func TestLoad_UnknownKey_DeleteSafetyThresholdsAreNotConfiguration(t *testing.T) {
+	for _, key := range []string{"big_delete_threshold = 100", "delete_hold_min_files = 10", "max_delete = 50"} {
+		path := writeTestConfig(t, key)
+		_, err := Load(path, testLogger(t))
+		require.Error(t, err, key)
+		assert.Contains(t, err.Error(), "unknown config key", key)
+	}
+}
