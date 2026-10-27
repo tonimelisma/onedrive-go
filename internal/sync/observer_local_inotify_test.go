@@ -80,7 +80,7 @@ func TestAddWatchesRecursive_ENOSPCRollsBackAddedWatches(t *testing.T) {
 		filepath.Join(root, "a"),
 		root,
 	}, watcher.removedPaths)
-	assert.Empty(t, obs.watchedDirs, "rollback should remove newly added watches from observer state")
+	assert.Empty(t, obs.watchedDirs.paths(), "rollback should remove newly added watches from observer state")
 }
 
 func TestAddWatchesRecursive_NonENOSPC_ContinuesNormally(t *testing.T) {
@@ -102,7 +102,7 @@ func TestAddWatchesRecursive_NonENOSPC_ContinuesNormally(t *testing.T) {
 	// Non-ENOSPC errors should NOT return errLocalWatchUnavailable.
 	require.NoError(t, err) // walks continue, failures are just logged
 	assert.Empty(t, watcher.removed, "ordinary add failures should not trigger rollback")
-	assert.Contains(t, obs.watchedDirs, filepath.Clean(root), "successful watches should remain installed")
+	assert.Contains(t, obs.watchedDirs.paths(), filepath.Clean(root), "successful watches should remain installed")
 }
 
 // permErrWatcher returns EPERM after N successful Add calls.

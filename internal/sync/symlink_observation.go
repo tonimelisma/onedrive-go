@@ -479,7 +479,7 @@ func (o *localObserver) addObservedDirWatches(
 		}
 	}
 
-	if addErr := o.addObservedWatch(watcher, fsPath, counts, session); addErr != nil {
+	if addErr := o.addObservedWatch(watcher, fsPath, info, counts, session); addErr != nil {
 		return addErr
 	}
 
@@ -506,19 +506,17 @@ func (o *localObserver) addObservedDirWatches(
 func (o *localObserver) addObservedWatch(
 	watcher fsWatcher,
 	fsPath string,
+	info os.FileInfo,
 	counts *watchSetupCounts,
 	session *watchAddSession,
 ) error {
 	cleanPath := filepath.Clean(fsPath)
-	_, alreadyWatched := o.watchedDirs[cleanPath]
+	alreadyWatched := o.watchedDirs.has(cleanPath)
 
 	addErr := watcher.Add(fsPath)
 	if addErr == nil {
 		counts.watched++
-		if o.watchedDirs == nil {
-			o.watchedDirs = make(map[string]struct{})
-		}
-		o.watchedDirs[cleanPath] = struct{}{}
+		o.watchedDirs.add(cleanPath, info)
 		if session != nil && !alreadyWatched {
 			session.record(cleanPath)
 		}

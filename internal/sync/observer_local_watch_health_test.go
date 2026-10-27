@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	stdsync "sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -198,25 +199,17 @@ func TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst(t *testing.T
 	obs := newLocalObserver(baselineWith(&BaselineEntry{
 		Path: "a", DriveID: driveid.New("d"), ItemID: "a1", ItemType: ItemTypeFolder,
 	}), synctest.TestLogger(t), 0)
-	obs.watchedDirs = map[string]struct{}{
-		"/sync":         {},
-		"/sync/a":       {},
-		"/sync/a/x":     {},
-		"/sync/a/x/y":   {},
-		"/sync/a/z":     {},
-		"/sync/ab":      {},
-		"/sync/other/a": {},
-	}
+	// "/sync/a/q" is not registered (its Add failed) but a directory below
+	// it is: the subtree walk must still reach it.
+	registerWatchedForTest(obs, "/sync", "/sync/a", "/sync/a/q/r", "/sync/a/x", "/sync/a/x/y", "/sync/a/z", "/sync/ab", "/sync/other/a")
 
 	events := make(chan changeEvent, 10)
 	obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/a", "a", "a", events)
 
-	assert.Equal(t, []string{"/sync/a/x/y", "/sync/a/x", "/sync/a/z", "/sync/a"}, watcher.getRemovedPaths())
-	assert.Equal(t, map[string]struct{}{
-		"/sync":         {},
-		"/sync/ab":      {},
-		"/sync/other/a": {},
-	}, obs.watchedDirs, "only the removed subtree is forgotten; siblings sharing a name prefix stay")
+	assert.Equal(t, []string{"/sync/a/q/r", "/sync/a/x/y", "/sync/a/x", "/sync/a/z", "/sync/a"}, watcher.getRemovedPaths())
+	assert.Equal(t, []string{"/sync", "/sync/ab", "/sync/other/a"}, obs.watchedDirs.paths(),
+		"only the removed subtree is forgotten; siblings sharing a name prefix stay")
+	assert.Empty(t, obs.watchedDirs.descendants("/sync/a"), "the index holds nothing below the removed directory")
 }
 
 // Validates: R-2.8.14
@@ -270,22 +263,53 @@ func TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches(t *testing.T)
 	// moved away while watched; its delete event was ignored because "a"
 	// exists again.
 	stale := filepath.Join(replaced, "old", "deep")
-	obs.watchedDirs = map[string]struct{}{
-		dir:                             {},
-		replaced:                        {},
-		filepath.Join(replaced, "old"):  {},
-		stale:                           {},
-		filepath.Join(dir, "a-sibling"): {},
-	}
+	registerWatchedForTest(obs, dir, replaced, filepath.Join(replaced, "old"), stale, filepath.Join(dir, "a-sibling"))
 
 	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), replaced, "a", "a", watcher, make(chan changeEvent, 10))
 
 	assert.Equal(t, []string{stale, filepath.Join(replaced, "old")}, watcher.getRemovedPaths(),
 		"stale descendant watches of the replaced directory are dropped deepest first")
-	assert.NotContains(t, obs.watchedDirs, stale)
-	assert.Contains(t, obs.watchedDirs, replaced, "the new directory is watched")
-	assert.Contains(t, obs.watchedDirs, filepath.Join(replaced, "fresh"), "the new tree is registered")
-	assert.Contains(t, obs.watchedDirs, filepath.Join(dir, "a-sibling"))
+	assert.NotContains(t, obs.watchedDirs.paths(), stale)
+	assert.Contains(t, obs.watchedDirs.paths(), replaced, "the new directory is watched")
+	assert.Contains(t, obs.watchedDirs.paths(), filepath.Join(replaced, "fresh"), "the new tree is registered")
+	assert.Contains(t, obs.watchedDirs.paths(), filepath.Join(dir, "a-sibling"))
+}
+
+// Validates: R-2.8.14
+func TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeTestFile(t, dir, "photos/a.jpg", "image")
+	writeTestFile(t, dir, "photos/nested/b.jpg", "image")
+	photos := filepath.Join(dir, "photos")
+
+	var hashCalls atomic.Int64
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.hashFunc = func(string) (string, error) {
+		hashCalls.Add(1)
+		return "h", nil
+	}
+	watcher := newRecordingFsWatcher()
+	tree := mustOpenSyncTree(t, dir)
+	events := make(chan changeEvent, 16)
+
+	obs.handleCreate(t.Context(), tree, photos, "photos", "photos", watcher, events)
+	require.Equal(t, int64(2), hashCalls.Load(), "the first create scans and hashes the new tree")
+	require.Contains(t, obs.watchedDirs.paths(), filepath.Join(photos, "nested"))
+
+	// fsnotify's own Create for the same directory, racing the scan.
+	obs.handleCreate(t.Context(), tree, photos, "photos", "photos", watcher, events)
+
+	assert.Equal(t, int64(2), hashCalls.Load(), "a duplicate Create of the same directory does not re-hash its tree")
+	assert.Empty(t, watcher.getRemovedPaths(), "and does not drop its watches")
+	assert.Contains(t, obs.watchedDirs.paths(), filepath.Join(photos, "nested"))
+}
+
+func registerWatchedForTest(obs *localObserver, paths ...string) {
+	for _, path := range paths {
+		obs.watchedDirs.add(path, nil)
+	}
 }
 
 func waitForLocalEvent(t *testing.T, events <-chan changeEvent, match func(changeEvent) bool, what string) changeEvent {
@@ -420,4 +444,23 @@ func containsLocalRow(rows []localStateRow, path string) bool {
 	}
 
 	return false
+}
+
+// Validates: R-2.8.14
+func TestWatchRegistry_SubtreeLookupFollowsTheIndexAndUnlinksEmptyBranches(t *testing.T) {
+	t.Parallel()
+
+	var reg watchRegistry
+	reg.add("/r/a/b", nil)
+	reg.add("/r/a/b/c", nil)
+	reg.add("/r/z", nil)
+
+	assert.Equal(t, []string{"/r/a/b/c", "/r/a/b"}, reg.descendants("/r/a"),
+		"registered dirs below an unregistered intermediate are reachable")
+
+	reg.remove("/r/a/b/c")
+	reg.remove("/r/a/b")
+	assert.Empty(t, reg.descendants("/r"+"/a"))
+	assert.NotContains(t, reg.children["/r"], "/r/a", "an empty branch is unlinked from its parent")
+	assert.Equal(t, []string{"/r/z"}, reg.descendants("/r"))
 }

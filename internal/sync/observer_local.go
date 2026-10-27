@@ -17,6 +17,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -119,7 +122,7 @@ type localWatchState struct {
 
 	// watchedDirs tracks fsnotify registrations owned by this observer. The
 	// watch loop is the single writer, so no mutex is needed.
-	watchedDirs map[string]struct{}
+	watchedDirs watchRegistry
 
 	// Recovery scan (R-2.8.13). When observation is known to have missed
 	// changes -- a kernel queue overflow, a watcher error, a dropped batch or
@@ -146,7 +149,6 @@ func newLocalWatchState() localWatchState {
 		RecentLocalDeletes:   make(map[string]struct{}),
 		CollisionPeers:       make(map[string]map[string]struct{}),
 		excludedSymlinkPaths: make(map[string]struct{}),
-		watchedDirs:          make(map[string]struct{}),
 		recoveryScanRequests: make(chan struct{}, 1),
 		recoveryScanDue:      make(chan struct{}, 1),
 	}
@@ -281,6 +283,129 @@ func watchUnavailableFix(cause watchUnavailableCause) string {
 // healthy, so only new folders fall back to the safety scan.
 func watchCauseStopsWatching(cause watchUnavailableCause) bool {
 	return cause == watchCauseFileLimit
+}
+
+// watchedDir is one directory registration: the identity the directory had
+// when it was registered, so a repeated Create of the same directory can be
+// told apart from a new directory at the same path.
+type watchedDir struct {
+	identity    synctree.FileIdentity
+	hasIdentity bool
+}
+
+// watchRegistry is the observer's record of its fsnotify registrations, keyed
+// by cleaned filesystem path, with a parent-to-children index so a directory's
+// registered subtree is found in time proportional to the subtree rather than
+// to every watch (a linear scan over all watches ran on every directory create
+// and delete). The index also links unregistered intermediate directories
+// (one whose own Add failed) so registered descendants below them stay
+// reachable. Watch-loop goroutine only; the zero value is ready to use.
+type watchRegistry struct {
+	dirs     map[string]watchedDir
+	children map[string]map[string]struct{}
+}
+
+func (r *watchRegistry) add(path string, info os.FileInfo) {
+	path = filepath.Clean(path)
+	if r.dirs == nil {
+		r.dirs = make(map[string]watchedDir)
+		r.children = make(map[string]map[string]struct{})
+	}
+
+	entry := watchedDir{}
+	if info != nil {
+		entry.identity, entry.hasIdentity = synctree.IdentityFromFileInfo(info)
+	}
+	r.dirs[path] = entry
+
+	// Link the path to its ancestors until an existing link is found.
+	for child := path; ; {
+		parent := filepath.Dir(child)
+		if parent == child {
+			return
+		}
+		siblings := r.children[parent]
+		if siblings == nil {
+			siblings = make(map[string]struct{})
+			r.children[parent] = siblings
+		}
+		if _, linked := siblings[child]; linked {
+			return
+		}
+		siblings[child] = struct{}{}
+		child = parent
+	}
+}
+
+func (r *watchRegistry) get(path string) (watchedDir, bool) {
+	entry, ok := r.dirs[filepath.Clean(path)]
+	return entry, ok
+}
+
+func (r *watchRegistry) has(path string) bool {
+	_, ok := r.get(path)
+	return ok
+}
+
+func (r *watchRegistry) remove(path string) {
+	path = filepath.Clean(path)
+	delete(r.dirs, path)
+	r.unlinkIfUnused(path)
+}
+
+// unlinkIfUnused drops path's link from its parent when nothing registered
+// remains at or below it, and repeats upward.
+func (r *watchRegistry) unlinkIfUnused(path string) {
+	for {
+		if _, registered := r.dirs[path]; registered || len(r.children[path]) > 0 {
+			return
+		}
+		delete(r.children, path)
+		parent := filepath.Dir(path)
+		if parent == path {
+			return
+		}
+		siblings := r.children[parent]
+		if _, linked := siblings[path]; !linked {
+			return
+		}
+		delete(siblings, path)
+		path = parent
+	}
+}
+
+// descendants returns the registered directories strictly beneath path,
+// children before their parents (post-order), siblings in path order.
+func (r *watchRegistry) descendants(path string) []string {
+	var out []string
+	var walk func(string)
+	walk = func(dir string) {
+		kids := make([]string, 0, len(r.children[dir]))
+		for kid := range r.children[dir] {
+			kids = append(kids, kid)
+		}
+		slices.Sort(kids)
+		for _, kid := range kids {
+			walk(kid)
+			if _, registered := r.dirs[kid]; registered {
+				out = append(out, kid)
+			}
+		}
+	}
+	walk(filepath.Clean(path))
+
+	return out
+}
+
+// paths lists every registered directory, for tests and diagnostics.
+func (r *watchRegistry) paths() []string {
+	out := make([]string, 0, len(r.dirs))
+	for path := range r.dirs {
+		out = append(out, path)
+	}
+	slices.Sort(out)
+
+	return out
 }
 
 // fsWatcher abstracts filesystem event monitoring. Satisfied by
@@ -832,7 +957,7 @@ func (o *localObserver) rollbackAddedWatches(watcher fsWatcher, session *watchAd
 				slog.String("error", err.Error()))
 		}
 
-		delete(o.watchedDirs, path)
+		o.watchedDirs.remove(path)
 	}
 }
 

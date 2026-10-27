@@ -23,8 +23,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -319,6 +317,17 @@ func (o *localObserver) handleCreate(
 	if info.IsDir() {
 		ev.ItemType = ItemTypeFolder
 
+		// A Create for a directory already registered with the same
+		// identity is a duplicate (fsnotify's event racing the new-directory
+		// scan, or a directory that left and came back as the same inode):
+		// its watches are valid, so its subtree is not dropped, re-added and
+		// re-hashed.
+		if o.isRegisteredSameDirectory(fsPath, info) {
+			o.TrySend(ctx, events, &ev)
+			o.updateDirNameCache(filepath.Dir(fsPath), name)
+			return
+		}
+
 		// A directory created at a path that still has watched descendants
 		// replaced one that was deleted or moved away while watched: the
 		// delete event was ignored because the path exists again, or has not
@@ -330,10 +339,7 @@ func (o *localObserver) handleCreate(
 		if addErr := watcher.Add(fsPath); addErr != nil {
 			o.reportWatchAddFailure("failed to add watch on new directory", dbRelPath, addErr)
 		} else {
-			if o.watchedDirs == nil {
-				o.watchedDirs = make(map[string]struct{})
-			}
-			o.watchedDirs[filepath.Clean(fsPath)] = struct{}{}
+			o.watchedDirs.add(fsPath, info)
 		}
 
 		// The directory's own row goes out before its contents are scanned.
@@ -569,13 +575,14 @@ func (o *localObserver) scanNewDirectoryChildDir(
 	watcher fsWatcher,
 	events chan<- changeEvent,
 ) {
+	info, _, statErr := statObservedPath(entryFsPath)
 	if addErr := watcher.Add(entryFsPath); addErr != nil {
 		o.reportWatchAddFailure("failed to add watch on nested directory", entryRelPath, addErr)
 	} else {
-		if o.watchedDirs == nil {
-			o.watchedDirs = make(map[string]struct{})
+		if statErr != nil {
+			info = nil
 		}
-		o.watchedDirs[filepath.Clean(entryFsPath)] = struct{}{}
+		o.watchedDirs.add(entryFsPath, info)
 	}
 
 	dirEv := changeEvent{
@@ -585,7 +592,7 @@ func (o *localObserver) scanNewDirectoryChildDir(
 		Name:     entryName,
 		ItemType: ItemTypeFolder,
 	}
-	if info, _, err := statObservedPath(entryFsPath); err == nil {
+	if statErr == nil {
 		dirEv.Size = info.Size()
 		dirEv.Mtime = info.ModTime().UnixNano()
 		if identity, ok := synctree.IdentityFromFileInfo(info); ok {
@@ -1009,7 +1016,7 @@ func (o *localObserver) HandleDelete(
 
 	if existing, ok := o.baseline.GetByPath(dbRelPath); ok {
 		resolvedType = existing.ItemType
-	} else if _, ok := o.watchedDirs[filepath.Clean(fsPath)]; ok {
+	} else if o.watchedDirs.has(fsPath) {
 		resolvedType = ItemTypeFolder
 	}
 
@@ -1129,26 +1136,21 @@ func (o *localObserver) forgetWatchedSubtree(watcher fsWatcher, fsPath, dbRelPat
 // forgetWatchedDescendants removes every watch strictly beneath fsPath,
 // deepest first.
 func (o *localObserver) forgetWatchedDescendants(watcher fsWatcher, fsPath, dbRelPath string) {
-	root := filepath.Clean(fsPath)
-	prefix := root + string(filepath.Separator)
-	descendants := make([]string, 0)
-	for watched := range o.watchedDirs {
-		if strings.HasPrefix(watched, prefix) {
-			descendants = append(descendants, watched)
-		}
-	}
-	// Deepest first, so a parent is never removed while a child under it is
-	// still registered. Ties are broken by path for a deterministic order.
-	slices.SortFunc(descendants, func(a, b string) int {
-		if depth := strings.Count(b, string(filepath.Separator)) - strings.Count(a, string(filepath.Separator)); depth != 0 {
-			return depth
-		}
-		return strings.Compare(a, b)
-	})
-
-	for _, watched := range descendants {
+	for _, watched := range o.watchedDirs.descendants(fsPath) {
 		o.removeWatch(watcher, watched, dbRelPath)
 	}
+}
+
+// isRegisteredSameDirectory reports whether fsPath is already watched as the
+// same directory (same device and inode) that info describes.
+func (o *localObserver) isRegisteredSameDirectory(fsPath string, info os.FileInfo) bool {
+	registered, ok := o.watchedDirs.get(fsPath)
+	if !ok || !registered.hasIdentity {
+		return false
+	}
+	identity, ok := synctree.IdentityFromFileInfo(info)
+
+	return ok && identity == registered.identity
 }
 
 func (o *localObserver) removeWatch(watcher fsWatcher, fsPath, dbRelPath string) {
@@ -1161,7 +1163,7 @@ func (o *localObserver) removeWatch(watcher fsWatcher, fsPath, dbRelPath string)
 		)
 	}
 
-	delete(o.watchedDirs, filepath.Clean(fsPath))
+	o.watchedDirs.remove(fsPath)
 }
 
 // reportWatchAddFailure reports a directory the watcher could not add. Once

@@ -67,7 +67,7 @@ except that the type had once been public.
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 | A watcher that cannot be created or extended because of an operating-system limit (inotify watches or instances, open files, kernel memory) degrades to periodic full scans with one warning naming the limit and its fix; a descriptor-limit failure after startup stops watching so the watcher's descriptors are released. | `TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable`, `TestClassifyWatcherCreateError_ResourceLimits`, `TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable`, `TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan`, `TestWatch_NewDirectoryEMFILEStopsWatchingForFallback` |
 | Known-missed local changes (kernel queue overflow, watcher errors, dropped batches or hash requests) arm one coalesced recovery rescan instead of waiting for the periodic safety scan. | `TestWatch_EventOverflowRunsRecoveryScan`, `TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan`, `TestTrySendLocalObservationBatch_DropRequestsRecoveryScan` |
-| A deleted or renamed-away directory drops the watches of its whole subtree, deepest first, so the re-added tree reports its new paths. | `TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst`, `TestWatch_RenamedDirectoryDescendantEventsUseNewPath`, `TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches` |
+| A deleted or renamed-away directory drops the watches of its whole subtree, deepest first, so the re-added tree reports its new paths. | `TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst`, `TestWatch_RenamedDirectoryDescendantEventsUseNewPath`, `TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches`, `TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree`, `TestWatchRegistry_SubtreeLookupFollowsTheIndexAndUnlinksEmptyBranches` |
 | The destination half of a rename is observed without waiting on a content read: an identity match reuses the synced hash when size and mtime are unchanged, otherwise the row goes out with an unknown hash and the hash follows; a created directory's row precedes its contents. | `TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing`, `TestHandleCreate_RenamedUnchangedFileReusesSyncedHash`, `TestHandleCreate_DirectoryRowPrecedesItsContents` |
 | Write coalescing hashes a continuously written file within a bounded wait, and backs off exponentially for a file that never settles. | `TestScheduleWriteHash_ContinuousWritesHashWithinMaxWait`, `TestWatch_ContinuouslyWrittenFileBacksOff`, `TestHashAndEmit_StillChangingAtRetryCapStaysPendingWithoutEmptyHash`, `TestPruneWriteChurn_DropsSettledPaths` |
 | On kqueue platforms watch setup projects its descriptor use (watched directories plus their entries) and falls back to periodic scans above half the open-file limit. | `TestAddWatchesRecursive_OverDescriptorBudgetFallsBackBeforeExhaustingFiles`, `TestAddWatchesRecursive_WithinDescriptorBudgetWatches` |
@@ -270,7 +270,13 @@ delete for the removed directory. Safety scans emit a full local snapshot
 replacement and clear any suspect-local-truth marker after the engine commits
 the replacement.
 
-Watch registration is bookkept per directory in `watchedDirs`. When a watched
+Watch registration is bookkept per directory in `watchedDirs`, a
+`watchRegistry` that records each directory's identity (device and inode) at
+registration and indexes registrations by parent, so a directory's registered
+subtree is found in time proportional to that subtree. A Create for a
+directory already registered with the same identity is a duplicate (fsnotify's
+event racing the new-directory scan); it emits the directory's row but does
+not drop, re-add or re-scan the subtree. When a watched
 directory is deleted or renamed away, the observer removes the watch on it and
 on every watched directory beneath it, deepest first. inotify watches follow the
 inode while fsnotify keys registrations by path, so leaving descendant watches

@@ -38,7 +38,7 @@ func TestAddWatchesRecursive_OverDescriptorBudgetFallsBackBeforeExhaustingFiles(
 	cause, ok := watchUnavailableCauseOf(err)
 	require.True(t, ok)
 	assert.Equal(t, watchCauseDescriptorBudget, cause)
-	assert.Empty(t, obs.watchedDirs, "watches added before the budget was exceeded are rolled back")
+	assert.Empty(t, obs.watchedDirs.paths(), "watches added before the budget was exceeded are rolled back")
 }
 
 // Validates: R-2.8.18
@@ -52,7 +52,7 @@ func TestAddWatchesRecursive_WithinDescriptorBudgetWatches(t *testing.T) {
 	obs.descriptorBudget = 100
 
 	require.NoError(t, obs.AddWatchesRecursive(t.Context(), newRecordingFsWatcher(), mustOpenSyncTree(t, root)))
-	assert.Contains(t, obs.watchedDirs, filepath.Join(root, "sub"))
+	assert.Contains(t, obs.watchedDirs.paths(), filepath.Join(root, "sub"))
 }
 
 // ---------------------------------------------------------------------------
