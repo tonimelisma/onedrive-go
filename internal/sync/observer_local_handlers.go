@@ -324,24 +324,68 @@ func (o *localObserver) handleCreate(
 			o.watchedDirs[filepath.Clean(fsPath)] = struct{}{}
 		}
 
+		// The directory's own row goes out before its contents are scanned.
+		// When it is the destination half of a folder rename, its identity
+		// pairs the move; emitting it only after hashing a large tree left
+		// the replan seeing just the delete half (D-080).
+		o.TrySend(ctx, events, &ev)
+		o.updateDirNameCache(filepath.Dir(fsPath), name)
+
 		// Scan directory contents for files created before the watch was
 		// registered. Duplicates from fsnotify are harmless — the buffer's
 		// per-path deduplication handles them.
 		o.scanNewDirectory(ctx, tree, fsPath, dbRelPath, watcher, events)
-	} else {
-		// Stage 2 observation filter: file size check (requires stat).
-		if o.IsOversizedFile(info.Size(), dbRelPath) {
-			return
-		}
 
-		ev.ItemType = ItemTypeFile
-		ev.Hash = o.stableHashOrEmpty(fsPath, dbRelPath)
+		return
 	}
+
+	// Stage 2 observation filter: file size check (requires stat).
+	if o.IsOversizedFile(info.Size(), dbRelPath) {
+		return
+	}
+
+	ev.ItemType = ItemTypeFile
+	ev.Hash = o.watchCreateHash(fsPath, dbRelPath, name, info)
 
 	o.TrySend(ctx, events, &ev)
 
 	// Update directory name cache so subsequent collision checks see this entry.
 	o.updateDirNameCache(filepath.Dir(fsPath), name)
+}
+
+// watchCreateHash returns the content hash for a file a watch create (or a
+// new-directory scan) observed, without letting a long read hold back the
+// row of a moved file.
+//
+// A rename is observed as the delete of the old path, sent at once, and a
+// create of the new path. Hashing the new path synchronously meant a large
+// file's row reached the runtime only after the read finished; once that
+// took longer than the replan debounce, the replan saw only the delete half
+// and planned a remote delete instead of a move, losing the item's identity,
+// versions and sharing (D-080). So when the file's filesystem identity
+// matches a synced item at another path:
+//   - unchanged size and mtime mean the same content: the synced hash is
+//     reused and no read happens at all (a renamed tree is not re-read);
+//   - otherwise the row goes out now with an unknown hash, which the move
+//     pairing accepts on equal mtime, and the hash follows as a deferred
+//     hash request.
+//
+// Every other create is hashed synchronously, as before: an unknown hash
+// there could only make a replan plan an upload or a conflict copy early.
+func (o *localObserver) watchCreateHash(fsPath, dbRelPath, name string, info os.FileInfo) string {
+	if identity, ok := synctree.IdentityFromFileInfo(info); ok && !hasOtherHardLinks(info) {
+		entry := o.watchIdentityIndex().baselineEntryWithIdentity(o.baseline, identity)
+		if entry != nil && entry.Path != dbRelPath && entry.ItemType == ItemTypeFile {
+			if canReuseBaselineHash(info, entry, o.clock.Now().UnixNano()) {
+				return entry.LocalHash
+			}
+
+			o.scheduleDeferredHash(fsPath, dbRelPath, name, 0, o.writeCooldown())
+			return ""
+		}
+	}
+
+	return o.stableHashOrEmpty(fsPath, dbRelPath)
 }
 
 // stableHashOrEmpty computes a stable hash for a file, returning an empty
@@ -350,7 +394,7 @@ func (o *localObserver) handleCreate(
 // with empty hashes on failure because Create events and directory scans
 // have no guaranteed follow-up event (B-203).
 func (o *localObserver) stableHashOrEmpty(fsPath, dbRelPath string) string {
-	hash, err := computeStableHash(fsPath)
+	hash, err := computeStableHashWith(fsPath, o.hashFunc)
 	if err != nil {
 		if errors.Is(err, errFileChangedDuringHash) {
 			o.logger.Debug("file metadata still settling, emitting with empty hash",
@@ -451,7 +495,7 @@ func (o *localObserver) scanNewDirectoryEntry(
 		Name:     entryName,
 		ItemType: ItemTypeFile,
 		Size:     info.Size(),
-		Hash:     o.stableHashOrEmpty(entryFsPath, entryRelPath),
+		Hash:     o.watchCreateHash(entryFsPath, entryRelPath, entryName, info),
 		Mtime:    info.ModTime().UnixNano(),
 	}
 	if identity, ok := synctree.IdentityFromFileInfo(info); ok {
@@ -578,32 +622,162 @@ func (o *localObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 		return // FIFOs, sockets and devices are never synced (see processObservedInfo).
 	}
 
-	cooldown := o.writeCoalesceCooldown
-	if cooldown == 0 {
-		cooldown = defaultWriteCoalesceCooldown
+	o.scheduleWriteHash(fsPath, dbRelPath, name)
+}
+
+// scheduleWriteHash (re)arms the coalescing timer for a written file.
+//
+// Each Write restarts the quiet-period timer (B-107), so an IDE's burst of
+// saves costs one hash. Two limits keep that from going wrong:
+//   - a path is hashed at most maxWriteCoalesceWait after its first pending
+//     write: a file written more often than the quiet period used to restart
+//     the timer forever and was never observed between safety scans;
+//   - a path that keeps producing new content is marked unstable and backs
+//     off exponentially (D-081b): without it a log or database written every
+//     second was hashed, uploaded and superseded every second.
+func (o *localObserver) scheduleWriteHash(fsPath, dbRelPath, name string) {
+	now := o.clock.Now()
+	churn := o.writeChurnFor(dbRelPath, now)
+
+	if timer, pending := o.PendingTimers[dbRelPath]; pending {
+		if churn.backoff > 0 || now.Sub(churn.firstPendingAt) >= maxWriteCoalesceWait {
+			// Keep the armed deadline: the hash happens on schedule even
+			// while writes continue.
+			return
+		}
+		// Restart the quiet period but keep firstPendingAt: the window
+		// stays open.
+		timer.Stop()
+		delete(o.PendingTimers, dbRelPath)
+	} else {
+		churn.firstPendingAt = now
 	}
 
-	// Cancel existing timer for this path (B-107 coalescing).
-	o.cancelPendingTimer(dbRelPath)
+	delay := o.writeCooldown()
+	if churn.backoff > delay {
+		delay = churn.backoff
+	}
 
-	// Schedule deferred hash after cooldown. Timer callback sends to
-	// hashRequests channel (non-blocking); watchLoop picks it up via select.
+	o.scheduleDeferredHash(fsPath, dbRelPath, name, 0, delay)
+}
+
+func (o *localObserver) writeCooldown() time.Duration {
+	if o.writeCoalesceCooldown == 0 {
+		return defaultWriteCoalesceCooldown
+	}
+
+	return o.writeCoalesceCooldown
+}
+
+// scheduleDeferredHash arms a timer that hands a hash request to the watch
+// loop. Timer callbacks must not block or touch watch-loop state, so a full
+// channel drops the request and asks for a recovery rescan instead.
+func (o *localObserver) scheduleDeferredHash(fsPath, dbRelPath, name string, retries int, delay time.Duration) {
 	req := hashRequest{
 		FsPath:    fsPath,
 		DbRelPath: dbRelPath,
 		Name:      name,
+		Retries:   retries,
 	}
-	timer := o.clock.AfterFunc(cooldown, func() {
+	requests := o.HashRequests
+	timer := o.clock.AfterFunc(delay, func() {
 		select {
-		case o.HashRequests <- req:
+		case requests <- req:
 		default:
 			o.droppedRetries.Add(1)
 			o.requestRecoveryScan()
 			o.logger.Debug("hash request dropped, channel full (recovery scan will catch up)",
-				slog.String("path", dbRelPath))
+				slog.String("path", dbRelPath),
+				slog.Int("retry", retries))
 		}
 	})
 	o.recordPendingTimer(dbRelPath, timer)
+}
+
+// pathWriteChurn is the write history of one path, used to keep a file that
+// never stops changing from being re-hashed and re-uploaded on every write.
+// Watch-loop goroutine only.
+type pathWriteChurn struct {
+	// firstPendingAt is when the current coalescing window opened; zero
+	// when no hash is pending for the path.
+	firstPendingAt time.Time
+	// windowStart and emits count content changes emitted recently.
+	windowStart time.Time
+	emits       int
+	lastEmit    time.Time
+	// backoff is the minimum delay before the next hash; zero while the
+	// path is stable.
+	backoff time.Duration
+	warned  bool
+}
+
+// writeChurnFor returns the churn record for path, forgetting a path that has
+// been quiet long enough to count as stable again.
+func (o *localObserver) writeChurnFor(path string, now time.Time) *pathWriteChurn {
+	if o.writeChurn == nil {
+		o.writeChurn = make(map[string]*pathWriteChurn)
+	}
+
+	churn, ok := o.writeChurn[path]
+	if ok && churn.firstPendingAt.IsZero() && churn.isQuiet(now) {
+		if churn.backoff > 0 {
+			o.logger.Debug("file settled; watching it normally again", slog.String("path", path))
+		}
+		ok = false
+	}
+	if !ok {
+		churn = &pathWriteChurn{}
+		o.writeChurn[path] = churn
+	}
+
+	return churn
+}
+
+// isQuiet reports whether no change was emitted for long enough that the
+// path no longer counts as unstable: twice its current backoff, and at least
+// the window that detects instability.
+func (c *pathWriteChurn) isQuiet(now time.Time) bool {
+	quiet := max(unstableWriteWindow, 2*c.backoff)
+	return c.lastEmit.IsZero() || now.Sub(c.lastEmit) >= quiet
+}
+
+// recordWriteEmit notes that a changed file was emitted. Too many changes in
+// one window mark the path unstable and double its backoff, up to the cap.
+func (o *localObserver) recordWriteEmit(path string) {
+	now := o.clock.Now()
+	churn := o.writeChurnFor(path, now)
+	if churn.windowStart.IsZero() || now.Sub(churn.windowStart) > unstableWriteWindow {
+		churn.windowStart = now
+		churn.emits = 0
+	}
+	churn.emits++
+	churn.lastEmit = now
+	if churn.emits < unstableWriteEmits {
+		return
+	}
+
+	churn.windowStart = now
+	churn.emits = 0
+	churn.backoff = min(max(2*churn.backoff, unstableWriteInitialBackoff), unstableWriteMaxBackoff)
+	if !churn.warned {
+		churn.warned = true
+		// Info: self-managing; the file still syncs, only less often.
+		o.logger.Info("A file keeps changing; it will be uploaded less often until it settles. "+
+			"If it is a log or database, consider excluding it with ignored_paths",
+			slog.String("path", path),
+			slog.Duration("next_check_after", churn.backoff),
+		)
+	}
+}
+
+// pruneWriteChurn drops records of paths that are stable and idle, so the
+// map does not grow with every file ever written in a long session.
+func (o *localObserver) pruneWriteChurn(now time.Time) {
+	for path, churn := range o.writeChurn {
+		if churn.firstPendingAt.IsZero() && churn.isQuiet(now) {
+			delete(o.writeChurn, path)
+		}
+	}
 }
 
 // HashAndEmit is called from the watchLoop when a write coalesce timer fires.
@@ -653,7 +827,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		return
 	}
 
-	hash, err := computeStableHash(req.FsPath)
+	hash, err := computeStableHashWith(req.FsPath, o.hashFunc)
 	if err != nil {
 		if o.retryDeferredHashOnChange(req, err) {
 			return
@@ -694,11 +868,15 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		ev.LocalHasIdentity = true
 	}
 
+	o.recordWriteEmit(req.DbRelPath)
 	o.TrySend(ctx, events, &ev)
 }
 
 func (o *localObserver) prepareDeferredHashRequest(req hashRequest) hashRequest {
 	delete(o.PendingTimers, req.DbRelPath)
+	if churn, ok := o.writeChurn[req.DbRelPath]; ok {
+		churn.firstPendingAt = time.Time{}
+	}
 
 	return req
 }
@@ -712,25 +890,7 @@ func (o *localObserver) retryDeferredHashOnChange(req hashRequest, err error) bo
 		slog.String("path", req.DbRelPath),
 		slog.Int("retry", req.Retries+1))
 
-	cooldown := o.writeCoalesceCooldown
-	if cooldown == 0 {
-		cooldown = defaultWriteCoalesceCooldown
-	}
-
-	retryReq := req
-	retryReq.Retries++
-	timer := o.clock.AfterFunc(cooldown, func() {
-		select {
-		case o.HashRequests <- retryReq:
-		default:
-			o.droppedRetries.Add(1)
-			o.requestRecoveryScan()
-			o.logger.Debug("hash retry dropped, channel full (recovery scan will catch up)",
-				slog.String("path", req.DbRelPath),
-				slog.Int("retry", retryReq.Retries))
-		}
-	})
-	o.recordPendingTimer(req.DbRelPath, timer)
+	o.scheduleDeferredHash(req.FsPath, req.DbRelPath, req.Name, req.Retries+1, o.writeCooldown())
 
 	return true
 }
@@ -1046,6 +1206,7 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 	o.DirNameCache = make(map[string]map[string][]string)
 	o.CollisionPeers = make(map[string]map[string]struct{})
 	o.RecentLocalDeletes = make(map[string]struct{})
+	o.pruneWriteChurn(o.clock.Now())
 	if o.afterSafetyScan != nil {
 		o.afterSafetyScan()
 	}

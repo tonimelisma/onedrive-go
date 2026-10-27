@@ -4,7 +4,7 @@ GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/
 
 LAYER: 2
 
-Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
+Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
 
 ## Overview
 
@@ -68,6 +68,8 @@ except that the type had once been public.
 | A watcher that cannot be created or extended because of an operating-system limit (inotify watches or instances, open files, kernel memory) degrades to periodic full scans with one warning naming the limit and its fix; a descriptor-limit failure after startup stops watching so the watcher's descriptors are released. | `TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable`, `TestClassifyWatcherCreateError_ResourceLimits`, `TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable`, `TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan`, `TestWatch_NewDirectoryEMFILEStopsWatchingForFallback` |
 | Known-missed local changes (kernel queue overflow, watcher errors, dropped batches or hash requests) arm one coalesced recovery rescan instead of waiting for the periodic safety scan. | `TestWatch_EventOverflowRunsRecoveryScan`, `TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan`, `TestTrySendLocalObservationBatch_DropRequestsRecoveryScan` |
 | A deleted or renamed-away directory drops the watches of its whole subtree, deepest first, so the re-added tree reports its new paths. | `TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst`, `TestWatch_RenamedDirectoryDescendantEventsUseNewPath`, `TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches` |
+| The destination half of a rename is observed without waiting on a content read: an identity match reuses the synced hash when size and mtime are unchanged, otherwise the row goes out with an unknown hash and the hash follows; a created directory's row precedes its contents. | `TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing`, `TestHandleCreate_RenamedUnchangedFileReusesSyncedHash`, `TestHandleCreate_DirectoryRowPrecedesItsContents` |
+| Write coalescing hashes a continuously written file within a bounded wait, and backs off exponentially for a file that never settles. | `TestScheduleWriteHash_ContinuousWritesHashWithinMaxWait`, `TestWatch_ContinuouslyWrittenFileBacksOff`, `TestPruneWriteChurn_DropsSettledPaths` |
 | Local watch prefiltering keeps unknown-kind include-root and include-ancestor events observable until stat/type-aware observation can decide the exact item kind. | `TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths` |
 
 ## Remote Observation
@@ -286,6 +288,27 @@ watched directory holds a descriptor and keeping them starves hashing,
 transfers and SQLite. A watch or memory limit hit for a new folder after
 startup leaves existing watches healthy: it warns once per cause and the
 safety scan covers that folder.
+
+A rename arrives as the delete of the old path, sent at once, and a create of
+the new one. File creates are normally hashed in the watch loop before their
+row is emitted; for the destination of a rename that read could outlast the
+replan debounce, and the replan then saw only the delete and planned a remote
+delete instead of a move. So a created file whose filesystem identity matches a
+synced file at another path reuses that file's synced hash when size and mtime
+are unchanged (no read at all, so a renamed tree is not re-read), and otherwise
+is emitted at once with an unknown hash -- move pairing accepts an unknown hash
+on equal mtime -- and hashed through the deferred-hash path. A created
+directory's own row is emitted before its contents are scanned.
+
+Write coalescing (B-107) restarts a path's quiet-period timer on every write,
+but never past `maxWriteCoalesceWait` (30 s) after the first pending write, so a
+file written more often than the quiet period is still observed. A path that
+emits `unstableWriteEmits` content changes within `unstableWriteWindow` is
+unstable: its next hash waits `unstableWriteInitialBackoff`, doubling per burst
+up to `unstableWriteMaxBackoff`, and writes during the wait do not restart it.
+The first time a path becomes unstable the observer logs one Info line that
+suggests excluding it. The per-path history is watch-loop state, reset when the
+path goes quiet and pruned at safety scans.
 
 Raw fsnotify events are not a durable journal. They only choose the observation
 scope. The observer performs normal filesystem reads for that scope, emits a

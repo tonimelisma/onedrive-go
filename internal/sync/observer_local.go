@@ -47,6 +47,22 @@ const (
 	hashRequestBufSize = 256
 )
 
+// Write coalescing limits (see scheduleWriteHash).
+const (
+	// maxWriteCoalesceWait bounds how long writes that keep arriving can
+	// postpone the hash of a path.
+	maxWriteCoalesceWait = 30 * time.Second
+
+	// A path that emits unstableWriteEmits content changes within
+	// unstableWriteWindow is unstable: its next hash waits
+	// unstableWriteInitialBackoff, doubling per further burst up to
+	// unstableWriteMaxBackoff.
+	unstableWriteEmits          = 3
+	unstableWriteWindow         = 2 * time.Minute
+	unstableWriteInitialBackoff = time.Minute
+	unstableWriteMaxBackoff     = 30 * time.Minute
+)
+
 // maxCoalesceRetries caps the number of re-schedule attempts in hashAndEmit
 // when errFileChangedDuringHash is returned. Prevents infinite retry if a file
 // is being written to continuously.
@@ -70,6 +86,10 @@ type localWatchState struct {
 	// Write coalescing fields (B-107). Single watch-loop owner.
 	PendingTimers map[string]syncTimer // per-path timers; watchLoop-only (no mutex needed)
 	HashRequests  chan hashRequest     // timer callback → watchLoop
+
+	// writeChurn holds per-path write history for coalescing deadlines and
+	// unstable-file backoff (D-081b). Watch-loop only; pruned at safety scans.
+	writeChurn map[string]*pathWriteChurn
 
 	// dirNameCache caches namespace key→original name mappings per directory
 	// for O(1) collision lookups. Built lazily on first check; invalidated
@@ -489,6 +509,9 @@ func (o *localObserver) cancelPendingTimer(path string) {
 	if timer, ok := o.PendingTimers[path]; ok {
 		timer.Stop()
 		delete(o.PendingTimers, path)
+	}
+	if churn, ok := o.writeChurn[path]; ok {
+		churn.firstPendingAt = time.Time{}
 	}
 }
 
