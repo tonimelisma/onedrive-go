@@ -1,10 +1,10 @@
 # Sync Observation
 
-GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/item_converter.go, internal/sync/local_hash_reuse.go, internal/sync/local_observation_batch.go, internal/sync/observation_local_rules.go, internal/sync/observation_remote_batch.go, internal/sync/observation_root_identity.go, internal/sync/observed_items.go, internal/sync/observer_local.go, internal/sync/observer_local_collisions.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/scanner.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/symlink_observation.go
+GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/item_converter.go, internal/sync/local_hash_reuse.go, internal/sync/local_observation_batch.go, internal/sync/observation_local_rules.go, internal/sync/observation_remote_batch.go, internal/sync/observation_root_identity.go, internal/sync/observed_items.go, internal/sync/observer_local.go, internal/sync/observer_local_collisions.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/scanner.go, internal/sync/scanner_unavailable.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/symlink_observation.go
 
 LAYER: 2
 
-Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified]
+Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
 
 ## Overview
 
@@ -59,6 +59,7 @@ except that the type had once been public.
 | Behavior | Evidence |
 | --- | --- |
 | A full scan refuses a sync folder that is not the one the state was built from (replaced, an emptied mount point, a re-pointed root symlink) and a sync folder that cannot be read, rather than reading either as deletions; every engine validates against an expected identity, parent-issued for shortcut children and store-recorded for primary roots. | `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestRunOnce_EmptiedMountPointPlansNoRemoteDeletes`, `TestEngine_SymlinkedSyncDirRepointedIsRefused`, `TestRunOnce_SyncRootReplacedWhileEngineRunsIsRefused`, `TestFullScan_RootReadDirEIOReturnsError` |
+| Synced paths the scan cannot represent (replaced by a skipped symlink or special file, renamed to an invalid, too-long or excluded name, unstat-able, unreadable) and mount points of other filesystems are recorded as unavailable truth on the synced path, so nothing is deleted on either side; a watch create of such an entry triggers an immediate safety scan. | `TestRunOnce_SyncedItemsMadeUnrepresentableAreNotDeletedOnline`, `TestFullScan_EntryLstatEIOIsReadBoundaryNotDelete`, `TestFullScan_HashEIOProducesNoUploadAndNoDelete`, `TestIsForeignMountPoint_DoesNotCrossFilesystemsByDefault` |
 | A watch Remove or Rename event becomes a delete only when the exact name is really gone, so a lone MOVED_FROM, an atomic save or a misattributed event never deletes a file that is still there. | `TestHandleDelete_PathThatStillExistsEmitsNoDelete`, `TestHandleFsEvent_DeletePassesFsPath` |
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly, including filesystem identity for files and directories when available. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestFullScan_StoresFilesystemIdentityForFilesAndDirectories`, `TestFullScan_NosyncMarkerDoesNotGuardSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
 | Watch-mode local observation emits scoped engine-applied batches: exact file rows, directory-prefix deletes, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesExactPath`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
@@ -373,6 +374,41 @@ an isolated scratch store before SQLite comparison/reconciliation. Observation
 findings discovered during preview also reconcile only into that scratch store.
 The durable runtime store keeps its prior committed snapshots, observation
 issues, and block scopes unchanged during preview.
+
+### Unavailable Is Not Absent
+
+`local_state` holds only what the scan could represent, and SQLite reads a
+synced path missing from it as deleted. `scanner_unavailable.go` therefore
+turns every "could not represent" case into an observation issue on the
+*synced* path; the planner's truth overlay treats it as unavailable local truth,
+and a folder issue is a read boundary (`perm:dir:read` scope) covering the
+subtree:
+
+- a synced path now occupied by a symlink sync does not follow, or by a FIFO,
+  socket or device: `local_unsyncable_replacement` at that path (D-004);
+- a synced item renamed to a name OneDrive refuses, a too-long path, or an
+  excluded name (a dotfile under `ignore_dotfiles`, P-5):
+  `local_unsyncable_replacement` at the old synced path, found by matching the
+  skipped entry's (device, inode) against baseline identities; a regular file
+  with other hard links is not evidence and is skipped;
+- an entry the walk listed but could not stat (any error but ENOENT) and a
+  file whose content could not be hashed: a read boundary or `hash_error`
+  (D-005), never an empty hash that reads as a change;
+- a folder whose device differs from its parent's, both read in the same scan,
+  is a mount point; unless `cross_filesystems = true` it is not descended and
+  is recorded as `local_mount_boundary` (D-003, P-11). Devices are only
+  compared within one scan, because device numbers change between boots.
+
+A synced item moved *into* an excluded folder is still invisible: the walk
+does not descend excluded folders, so its identity is never seen. That case
+remains a delete on OneDrive (recycle bin) until the comparison can carry
+skipped identities (see the WS5 comparison work).
+
+In watch mode a create event for an entry sync skips does not produce a row.
+When that entry occupies a synced path, or carries a synced item's identity
+(looked up in an index rebuilt at most once a minute), the handler runs a
+safety scan immediately, so the issue reaches the store within the same
+debounce window as the rename's delete half.
 
 ## Dirty Buffer
 

@@ -87,6 +87,11 @@ type DriveFilterConfig struct {
 	// JunkFilesIgnored.
 	IgnoreJunkFiles *bool `toml:"ignore_junk_files,omitempty"`
 	FollowSymlinks  bool  `toml:"follow_symlinks,omitempty"`
+	// CrossFilesystems lets sync descend into folders that are mount points
+	// for another filesystem. Off by default (P-11): a disk mounted inside
+	// the sync folder that is later not mounted leaves an empty folder, which
+	// would otherwise read as every file in it deleted.
+	CrossFilesystems bool `toml:"cross_filesystems,omitempty"`
 }
 
 // JunkFilesIgnored reports whether bundled junk is excluded: true unless the

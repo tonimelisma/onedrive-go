@@ -111,6 +111,8 @@ func conditionLabels() map[ConditionKey]string {
 		ConditionLocalNameTooLong:       "with names too long for this computer",
 		ConditionLocalReadOnly:          "on a read-only local filesystem",
 		ConditionDeletesHeld:            "whose deletion is held until you confirm it",
+		ConditionLocalUnsyncable:        "renamed or replaced into something sync cannot use",
+		ConditionLocalMountBoundary:     "on another filesystem inside the sync folder",
 		ConditionLocalFileTooLarge:      "too large for the local filesystem",
 		ConditionLocalBusy:              "busy on this computer",
 		ConditionLocalCrossDevice:       "that would move across a mount point",

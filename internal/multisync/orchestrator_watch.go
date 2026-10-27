@@ -1176,7 +1176,8 @@ func contentFilterConfigsEquivalent(current syncengine.ContentFilterConfig, next
 		slices.Equal(current.IgnoredPaths, next.IgnoredPaths) &&
 		current.IgnoreDotfiles == next.IgnoreDotfiles &&
 		current.IgnoreJunkFiles == next.IgnoreJunkFiles &&
-		current.FollowSymlinks == next.FollowSymlinks
+		current.FollowSymlinks == next.FollowSymlinks &&
+		current.CrossFilesystems == next.CrossFilesystems
 }
 
 // configPath is the config file a running watch reloads from.

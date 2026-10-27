@@ -19,6 +19,9 @@ type ContentFilterConfig struct {
 	IgnoreDotfiles  bool
 	IgnoreJunkFiles bool
 	FollowSymlinks  bool
+	// CrossFilesystems lets local observation descend into mount points
+	// (P-11); see config.DriveFilterConfig.CrossFilesystems.
+	CrossFilesystems bool
 }
 
 // contentFilter answers whether a root-relative path belongs to the current
@@ -34,12 +37,13 @@ func newContentFilter(config ContentFilterConfig) contentFilter {
 
 func cloneContentFilterConfig(config ContentFilterConfig) ContentFilterConfig {
 	return ContentFilterConfig{
-		IgnoredDirs:     slices.Clone(config.IgnoredDirs),
-		IncludedDirs:    slices.Clone(config.IncludedDirs),
-		IgnoredPaths:    slices.Clone(config.IgnoredPaths),
-		IgnoreDotfiles:  config.IgnoreDotfiles,
-		IgnoreJunkFiles: config.IgnoreJunkFiles,
-		FollowSymlinks:  config.FollowSymlinks,
+		IgnoredDirs:      slices.Clone(config.IgnoredDirs),
+		IncludedDirs:     slices.Clone(config.IncludedDirs),
+		IgnoredPaths:     slices.Clone(config.IgnoredPaths),
+		IgnoreDotfiles:   config.IgnoreDotfiles,
+		IgnoreJunkFiles:  config.IgnoreJunkFiles,
+		FollowSymlinks:   config.FollowSymlinks,
+		CrossFilesystems: config.CrossFilesystems,
 	}
 }
 
@@ -49,7 +53,8 @@ func contentFilterConfigsEqual(a ContentFilterConfig, b ContentFilterConfig) boo
 		slices.Equal(a.IgnoredPaths, b.IgnoredPaths) &&
 		a.IgnoreDotfiles == b.IgnoreDotfiles &&
 		a.IgnoreJunkFiles == b.IgnoreJunkFiles &&
-		a.FollowSymlinks == b.FollowSymlinks
+		a.FollowSymlinks == b.FollowSymlinks &&
+		a.CrossFilesystems == b.CrossFilesystems
 }
 
 // Visible reports whether path should be present in planner-visible current

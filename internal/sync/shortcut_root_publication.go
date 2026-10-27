@@ -69,12 +69,13 @@ func projectShortcutChildContentFilter(parentFilter ContentFilterConfig, aliasPa
 	}
 
 	childFilter := ContentFilterConfig{
-		IgnoredDirs:     projectChildIgnoredDirs(parentFilter.IgnoredDirs, aliasPath),
-		IncludedDirs:    projectChildIncludedDirs(parentFilter.IncludedDirs, aliasPath),
-		IgnoredPaths:    projectChildIgnoredPaths(parentFilter.IgnoredPaths, aliasPath),
-		IgnoreDotfiles:  parentFilter.IgnoreDotfiles,
-		IgnoreJunkFiles: parentFilter.IgnoreJunkFiles,
-		FollowSymlinks:  parentFilter.FollowSymlinks,
+		IgnoredDirs:      projectChildIgnoredDirs(parentFilter.IgnoredDirs, aliasPath),
+		IncludedDirs:     projectChildIncludedDirs(parentFilter.IncludedDirs, aliasPath),
+		IgnoredPaths:     projectChildIgnoredPaths(parentFilter.IgnoredPaths, aliasPath),
+		IgnoreDotfiles:   parentFilter.IgnoreDotfiles,
+		IgnoreJunkFiles:  parentFilter.IgnoreJunkFiles,
+		FollowSymlinks:   parentFilter.FollowSymlinks,
+		CrossFilesystems: parentFilter.CrossFilesystems,
 	}
 	return childFilter, true
 }

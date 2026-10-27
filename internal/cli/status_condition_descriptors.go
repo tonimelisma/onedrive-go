@@ -111,6 +111,20 @@ func sampleStrings(values []string, verbose bool, examplesLimit int) []string {
 
 func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescriptor {
 	switch key {
+	case syncengine.ConditionLocalUnsyncable:
+		return newStatusConditionDescriptor(
+			"Synced item can no longer sync",
+			"A synced file or folder was renamed or replaced into something sync cannot use (a name OneDrive "+
+				"does not allow, an ignored location, a symbolic link or a special file). Its OneDrive copy is kept.",
+			"Rename or move it back. If you meant to remove it, delete it on OneDrive.",
+		)
+	case syncengine.ConditionLocalMountBoundary:
+		return newStatusConditionDescriptor(
+			"Another filesystem inside the sync folder",
+			"This folder is a mount point for another disk or filesystem. Sync does not cross into it, so a "+
+				"disk that is not mounted can never look like deleted files.",
+			"Move the mount outside the sync folder, or set cross_filesystems = true to sync it.",
+		)
 	case syncengine.ConditionDeletesHeld:
 		return newStatusConditionDescriptor(
 			"Deletes held for confirmation",
@@ -240,6 +254,8 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionUploadVerification,
 		syncengine.ConditionDownloadIntegrity,
 		syncengine.ConditionDeletesHeld,
+		syncengine.ConditionLocalUnsyncable,
+		syncengine.ConditionLocalMountBoundary,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -312,6 +328,8 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionUploadVerification,
 		syncengine.ConditionDownloadIntegrity,
 		syncengine.ConditionDeletesHeld,
+		syncengine.ConditionLocalUnsyncable,
+		syncengine.ConditionLocalMountBoundary,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -404,6 +422,8 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 		syncengine.ConditionUploadVerification,
 		syncengine.ConditionDownloadIntegrity,
 		syncengine.ConditionDeletesHeld,
+		syncengine.ConditionLocalUnsyncable,
+		syncengine.ConditionLocalMountBoundary,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:

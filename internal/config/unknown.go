@@ -51,7 +51,7 @@ func newKnownDriveKeys() map[string]bool {
 	return map[string]bool{
 		"sync_dir": true, "paused": true, "paused_until": true, "display_name": true, "owner": true,
 		"ignored_dirs": true, "included_dirs": true, "ignored_paths": true,
-		"ignore_dotfiles": true, "ignore_junk_files": true, "follow_symlinks": true,
+		"ignore_dotfiles": true, "ignore_junk_files": true, "follow_symlinks": true, "cross_filesystems": true,
 	}
 }
 

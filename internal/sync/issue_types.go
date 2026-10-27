@@ -34,7 +34,15 @@ const (
 	issueLocalReadOnly        = "local_read_only"
 	// issueDeletesHeld marks deletes the delete-safety hold kept for
 	// confirmation (planner_delete_safety.go).
-	issueDeletesHeld          = "deletes_held"
+	issueDeletesHeld = "deletes_held"
+	// issueLocalUnsyncableReplacement marks a synced path whose item is now
+	// something sync cannot represent: replaced by a symlink or special file,
+	// or renamed to an invalid name or an excluded location. The synced path
+	// is unavailable truth, never a delete (D-004, P-5).
+	issueLocalUnsyncableReplacement = "local_unsyncable_replacement"
+	// issueLocalMountBoundary marks a folder on another filesystem inside the
+	// sync folder; sync does not cross into it (D-003, P-11).
+	issueLocalMountBoundary   = "local_mount_boundary"
 	issueLocalFileTooLarge    = "local_file_too_large"
 	issueLocalBusy            = "local_busy"
 	issueLocalCrossDevice     = "local_cross_device"
