@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"strings"
 	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -39,20 +40,26 @@ type scanAvailability struct {
 	// on first use, so a skipped entry can be matched to the synced item it
 	// used to be.
 	baselineByIdentity map[synctree.FileIdentity]*BaselineEntry
+	// crossedMounts lists mount points crossed under cross_filesystems;
+	// the engine records them with the snapshot (mount_boundaries).
+	crossedMounts []string
+	// tree is the scanned sync tree, for emptiness checks.
+	tree *synctree.Root
 }
 
 func newScanAvailability(rootDevice uint64) *scanAvailability {
 	return &scanAvailability{dirDevices: map[string]uint64{"": rootDevice}}
 }
 
-// rootDeviceForScan is the device of the sync folder itself, or zero when it
-// cannot be read (identity checks then simply never fire).
-func rootDeviceForScan(tree *synctree.Root) uint64 {
+// rootDeviceForScan is the device of the sync folder itself. Without it no
+// mount boundary below the root can be recognised, so a failure stops the
+// scan rather than letting it cross into other filesystems unnoticed.
+func rootDeviceForScan(tree *synctree.Root) (uint64, error) {
 	identity, err := tree.RootIdentity()
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("%w: reading the sync folder's device: %w", ErrMountRootUnavailable, err)
 	}
-	return identity.Device
+	return identity.Device, nil
 }
 
 func (a *scanAvailability) baselineEntryWithIdentity(baseline *Baseline, identity synctree.FileIdentity) *BaselineEntry {
@@ -126,6 +133,9 @@ func (o *localObserver) recordSyncedItemMovedOutOfReach(
 // folder is the mount point of another filesystem that the scan must not
 // cross (P-11). Only current devices are compared (the folder and its parent,
 // both read in this scan), because device numbers can change between boots.
+// A mount point crossed under cross_filesystems is remembered in the scan
+// result, so a later scan can tell its unmounted, empty folder from deleted
+// content.
 func (o *localObserver) isForeignMountPoint(
 	availability *scanAvailability,
 	dbRelPath string,
@@ -135,17 +145,71 @@ func (o *localObserver) isForeignMountPoint(
 	if availability == nil || !hasIdentity {
 		return false
 	}
-	parent := path.Dir(dbRelPath)
-	if parent == "." {
-		parent = ""
-	}
-	parentDevice, known := availability.dirDevices[parent]
+	parentDevice, known := availability.dirDevices[parentRelPath(dbRelPath)]
 	availability.dirDevices[dbRelPath] = identity.Device
 	if !known || parentDevice == 0 || identity.Device == parentDevice {
 		return false
 	}
+	if o.filterConfig.CrossFilesystems {
+		availability.crossedMounts = append(availability.crossedMounts, dbRelPath)
+		return false
+	}
 
-	return !o.filterConfig.CrossFilesystems
+	return true
+}
+
+// flaggedMountIsGone reports whether a folder recorded as a crossed mount
+// point no longer holds that filesystem: it now sits on its parent's device,
+// or it is empty while the baseline still holds content beneath it. Either
+// way the disk is not mounted, and its synced content is unavailable, not
+// deleted (D-003). Call after isForeignMountPoint recorded the folder's
+// device.
+func (o *localObserver) flaggedMountIsGone(availability *scanAvailability, dbRelPath string) bool {
+	if availability == nil {
+		return false
+	}
+	if _, flagged := o.mountBoundaryFlags[dbRelPath]; !flagged {
+		return false
+	}
+	device := availability.dirDevices[dbRelPath]
+	parentDevice, known := availability.dirDevices[parentRelPath(dbRelPath)]
+	if known && parentDevice != 0 && device == parentDevice {
+		return true
+	}
+	if availability.tree == nil || !o.baselineHasDescendants(dbRelPath) {
+		return false
+	}
+	empty, err := availability.tree.DirEmptyNoFollow(dbRelPath)
+	return err == nil && empty
+}
+
+func (o *localObserver) baselineHasDescendants(dbRelPath string) bool {
+	prefix := dbRelPath + "/"
+	found := false
+	o.baseline.ForEachPath(func(entryPath string, _ *BaselineEntry) {
+		if !found && strings.HasPrefix(entryPath, prefix) {
+			found = true
+		}
+	})
+	return found
+}
+
+func parentRelPath(dbRelPath string) string {
+	parent := path.Dir(dbRelPath)
+	if parent == "." {
+		return ""
+	}
+	return parent
+}
+
+func vanishedMountSkippedItem(dbRelPath string) skippedItem {
+	return skippedItem{
+		Path:   dbRelPath,
+		Reason: issueLocalMountBoundary,
+		Detail: "this folder was a mount point for another filesystem that is no longer mounted; " +
+			"its synced content is kept until the disk is back",
+		BlocksReadBoundary: true,
+	}
 }
 
 func mountBoundarySkippedItem(dbRelPath string) skippedItem {

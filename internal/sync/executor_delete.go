@@ -167,26 +167,16 @@ func (e *executor) DeleteLocalFolder(action *Action, absPath string) actionOutco
 			return e.failedOutcome(action, ActionLocalDelete, folderNotEmptyError(blockers))
 		}
 
-		// All entries are disposable — remove them before deleting the folder.
-		for _, entry := range entries {
-			entryPath := filepath.Join(relPath, entry.Name())
-			if rmErr := e.syncTree.RemoveAll(entryPath); rmErr != nil {
-				// Debug: the folder removal below then fails and carries
-				// the user-visible reason.
-				e.logger.Debug("failed to remove disposable file",
-					slog.String("path", entryPath),
-					slog.String("error", normalizeSyncTreePathError(rmErr).Error()),
-				)
-			}
-		}
 	}
 
+	disposableErr := e.removeDisposableChildren(relPath, entries)
 	if err := e.syncTree.RemoveEmptyDirNoFollow(relPath); err != nil {
-		return e.failedOutcome(
-			action,
-			ActionLocalDelete,
-			fmt.Errorf("removing dir %s: %w", action.Path, normalizeSyncTreePathError(err)),
-		)
+		removeErr := fmt.Errorf("removing dir %s: %w", action.Path, normalizeSyncTreePathError(err))
+		if disposableErr != nil {
+			// The leftover junk is why the folder is not empty; say so.
+			removeErr = fmt.Errorf("%w (after failing to remove junk inside it: %w)", removeErr, disposableErr)
+		}
+		return e.failedOutcome(action, ActionLocalDelete, removeErr)
 	}
 
 	e.logger.Debug("deleted local folder", slog.String("path", action.Path))
@@ -398,6 +388,25 @@ func (e *executor) DeleteOutcome(action *Action, actionType actionType) actionOu
 		ItemID:   action.ItemID,
 		ItemType: actionItemType(action),
 	}
+}
+
+// removeDisposableChildren removes the junk entries left in a folder about to
+// be deleted (every entry is disposable when this runs). A failure is logged
+// at Warn and returned, so the folder-removal error that follows names it.
+func (e *executor) removeDisposableChildren(relPath string, entries []os.DirEntry) error {
+	var errs []error
+	for _, entry := range entries {
+		entryPath := filepath.Join(relPath, entry.Name())
+		if rmErr := e.syncTree.RemoveAll(entryPath); rmErr != nil {
+			rmErr = normalizeSyncTreePathError(rmErr)
+			e.logger.Warn("Could not remove junk file from a deleted folder",
+				slog.String("path", entryPath),
+				slog.String("error", rmErr.Error()),
+			)
+			errs = append(errs, fmt.Errorf("removing %s: %w", entryPath, rmErr))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // allBlockersIgnored reports whether every child blocking a folder delete is

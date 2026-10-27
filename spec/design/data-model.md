@@ -57,6 +57,7 @@ rebuildable runtime facts:
 | `block_scopes` | Shared blocker timing and lifecycle | `scope_key` |
 | `observation_state` | Content drive owner, primary cursor, and remote refresh cadence | zero-or-one row |
 | `held_deletes` | Deletes the delete-safety hold keeps for confirmation (status projection) | zero or more rows |
+| `mount_boundaries` | Folders crossed into another filesystem under `cross_filesystems` | `path` |
 
 ## `baseline`
 
@@ -256,6 +257,14 @@ there (R-6.2.12).
 Remaining gap: on a filesystem without extended attributes, a folder recreated
 at the same path that happens to get the same inode on the same filesystem is
 accepted; the delete-safety hold (R-6.2.5) is then the guard.
+
+## `mount_boundaries`
+
+`mount_boundaries` lists folders (by path) that a scan crossed into another
+filesystem under `cross_filesystems`. It is written in the local-snapshot
+transaction and pruned of paths that are neither in the baseline nor in
+`local_state`; a flag outlives an unmount on purpose, because it is how the
+next scan recognises the empty folder as a disk that is not mounted.
 
 ## `held_deletes`
 

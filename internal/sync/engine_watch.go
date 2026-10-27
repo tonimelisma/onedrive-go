@@ -358,6 +358,11 @@ func (rt *watchRuntime) startObservers(
 	localObs.SetProtectedRoots(rt.engine.protectedRoots)
 	localObs.SetObservationRules(rt.engine.localRules)
 	localObs.SetExpectedRootIdentity(rt.engine.currentExpectedSyncRoot())
+	mountFlags, err := rt.engine.baseline.listMountBoundaries(ctx)
+	if err != nil {
+		return err
+	}
+	localObs.SetMountBoundaryFlags(mountFlags)
 	localObs.SetProtectedRootEventSink(func(event protectedRootEvent) {
 		select {
 		case protectedRootEvents <- event:

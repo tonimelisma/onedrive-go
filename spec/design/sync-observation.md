@@ -59,7 +59,7 @@ except that the type had once been public.
 | Behavior | Evidence |
 | --- | --- |
 | A full scan refuses a sync folder that is not the one the state was built from (replaced, an emptied mount point, a re-pointed root symlink) and a sync folder that cannot be read, rather than reading either as deletions; every engine validates against an expected identity, parent-issued for shortcut children and store-recorded for primary roots. | `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestRunOnce_EmptiedMountPointPlansNoRemoteDeletes`, `TestEngine_SymlinkedSyncDirRepointedIsRefused`, `TestRunOnce_SyncRootReplacedWhileEngineRunsIsRefused`, `TestFullScan_RootReadDirEIOReturnsError`, `TestNewEngine_RootTokenDecidesOverInode`, `TestNewEngine_RootRecreatedAtSamePathIsRefusedEvenIfInodeIsReused`, `TestNewEngine_UnboundStateWithSyncedItemsIsRefusedUntilRebind`, `TestSameRoot_TokenDecidesWhenRecorded`, `TestSameRoot_BtrfsSubvolumeRootAlsoNeedsDevice`, `TestMarkRoot_FilesystemWithoutXattrsFallsBack` |
-| Synced paths the scan cannot represent (replaced by a skipped symlink or special file, renamed to an invalid, too-long or excluded name, unstat-able, unreadable) and mount points of other filesystems are recorded as unavailable truth on the synced path, so nothing is deleted on either side; a watch create of such an entry triggers an immediate safety scan. | `TestRunOnce_SyncedItemsMadeUnrepresentableAreNotDeletedOnline`, `TestFullScan_EntryLstatEIOIsReadBoundaryNotDelete`, `TestFullScan_HashEIOProducesNoUploadAndNoDelete`, `TestIsForeignMountPoint_DoesNotCrossFilesystemsByDefault` |
+| Synced paths the scan cannot represent (replaced by a skipped symlink or special file, renamed to an invalid, too-long or excluded name, unstat-able, unreadable) and mount points of other filesystems are recorded as unavailable truth on the synced path, so nothing is deleted on either side; a watch create of such an entry triggers an immediate safety scan. | `TestRunOnce_SyncedItemsMadeUnrepresentableAreNotDeletedOnline`, `TestFullScan_EntryLstatEIOIsReadBoundaryNotDelete`, `TestFullScan_HashEIOProducesNoUploadAndNoDelete`, `TestIsForeignMountPoint_DoesNotCrossFilesystemsByDefault`, `TestIsForeignMountPoint_CrossingRecordsTheBoundary`, `TestRunOnce_UnmountedNestedDiskWithFewFilesIsNotDeleted`, `TestRootDeviceForScan_UnreadableRootAbortsScan` |
 | A watch Remove or Rename event becomes a delete only when the exact name is really gone, so a lone MOVED_FROM, an atomic save or a misattributed event never deletes a file that is still there. | `TestHandleDelete_PathThatStillExistsEmitsNoDelete`, `TestHandleFsEvent_DeletePassesFsPath` |
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly, including filesystem identity for files and directories when available. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestFullScan_StoresFilesystemIdentityForFilesAndDirectories`, `TestFullScan_NosyncMarkerDoesNotGuardSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
 | Watch-mode local observation emits scoped engine-applied batches: exact file rows, directory-prefix deletes, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesExactPath`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
@@ -397,7 +397,15 @@ subtree:
 - a folder whose device differs from its parent's, both read in the same scan,
   is a mount point; unless `cross_filesystems = true` it is not descended and
   is recorded as `local_mount_boundary` (D-003, P-11). Devices are only
-  compared within one scan, because device numbers change between boots.
+  compared within one scan, because device numbers change between boots;
+  the sync folder's own device is required, and a scan that cannot read it
+  stops as an unavailable sync folder;
+- a mount point crossed under `cross_filesystems` is recorded in
+  `mount_boundaries` with the snapshot. A later scan that finds that folder on
+  its parent's device, or empty while the baseline holds content beneath it,
+  treats the disk as not mounted: a `local_mount_boundary` read boundary, not
+  deletions, however few files it held. Watch safety scans use the flags but
+  only one-shot and bootstrap scans record new ones.
 
 A synced item moved *into* an excluded folder is still invisible: the walk
 does not descend excluded folders, so its identity is never seen. That case

@@ -306,9 +306,9 @@ func openSyncTree(syncRoot string) (*synctree.Root, error) {
 // transaction. Binding first writes a fresh token on the folder (an extended
 // attribute) so later starts recognise it by name rather than by inode; a
 // filesystem without extended attributes binds on inode and fsid alone.
-func (e *Engine) commitLocalSnapshot(ctx context.Context, rows []localStateRow) error {
+func (e *Engine) commitLocalSnapshot(ctx context.Context, rows []localStateRow, crossedMounts []string) error {
 	if e == nil || !e.syncRootBindPending.Load() {
-		if err := e.baseline.ReplaceLocalState(ctx, rows); err != nil {
+		if err := e.baseline.ReplaceLocalStateBindingRoot(ctx, rows, nil, crossedMounts); err != nil {
 			return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
 		}
 		return nil
@@ -330,7 +330,7 @@ func (e *Engine) commitLocalSnapshot(ctx context.Context, rows []localStateRow) 
 		return fmt.Errorf("sync: binding sync folder: %w", err)
 	}
 
-	if err := e.baseline.ReplaceLocalStateBindingRoot(ctx, rows, &bind); err != nil {
+	if err := e.baseline.ReplaceLocalStateBindingRoot(ctx, rows, &bind, crossedMounts); err != nil {
 		return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
 	}
 	e.expectedSyncRoot.Store(&bind)

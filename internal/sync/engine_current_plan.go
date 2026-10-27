@@ -369,6 +369,11 @@ func (flow *engineFlow) observeLocal(
 	obs.SetProtectedRoots(eng.protectedRoots)
 	obs.SetObservationRules(eng.localRules)
 	obs.SetExpectedRootIdentity(eng.currentExpectedSyncRoot())
+	mountFlags, err := eng.baseline.listMountBoundaries(ctx)
+	if err != nil {
+		return scanResult{}, err
+	}
+	obs.SetMountBoundaryFlags(mountFlags)
 
 	result, err := obs.FullScan(ctx, eng.syncTree)
 	if err != nil {
@@ -382,7 +387,7 @@ func (flow *engineFlow) commitCurrentLocalSnapshot(
 	ctx context.Context,
 	localResult scanResult,
 ) error {
-	return flow.engine.commitLocalSnapshot(ctx, buildLocalStateRows(localResult))
+	return flow.engine.commitLocalSnapshot(ctx, buildLocalStateRows(localResult), localResult.CrossedMounts)
 }
 
 func (flow *engineFlow) loadDryRunCurrentObservation(

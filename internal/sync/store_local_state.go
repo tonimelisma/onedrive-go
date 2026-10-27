@@ -56,7 +56,7 @@ func (s *SyncStore) ReplaceLocalState(
 	ctx context.Context,
 	rows []localStateRow,
 ) error {
-	return s.ReplaceLocalStateBindingRoot(ctx, rows, nil)
+	return s.ReplaceLocalStateBindingRoot(ctx, rows, nil, nil)
 }
 
 // ReplaceLocalStateBindingRoot replaces local_state and, when bind is not
@@ -67,6 +67,7 @@ func (s *SyncStore) ReplaceLocalStateBindingRoot(
 	ctx context.Context,
 	rows []localStateRow,
 	bind *synctree.RootIdentity,
+	crossedMounts []string,
 ) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
@@ -90,6 +91,9 @@ func (s *SyncStore) ReplaceLocalStateBindingRoot(
 		if err := bindSyncRootIdentityTx(ctx, tx, *bind); err != nil {
 			return err
 		}
+	}
+	if err := recordMountBoundariesTx(ctx, tx, crossedMounts); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -405,4 +409,43 @@ func scanLocalStateRow(
 	row.LocalHasIdentity = localHasIdentity != 0
 
 	return &row, nil
+}
+
+// recordMountBoundariesTx remembers folders a scan crossed into another
+// filesystem, and forgets flags for folders that are neither synced nor
+// present any more. A flag outlives an unmount on purpose: it is what tells
+// the next scan that the empty folder is a disk that is not mounted.
+func recordMountBoundariesTx(ctx context.Context, tx sqlTxRunner, crossed []string) error {
+	for _, boundary := range crossed {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO mount_boundaries (path) VALUES (?)`, boundary); err != nil {
+			return fmt.Errorf("sync: recording mount boundary %s: %w", boundary, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM mount_boundaries
+		WHERE path NOT IN (SELECT path FROM baseline) AND path NOT IN (SELECT path FROM local_state)`); err != nil {
+		return fmt.Errorf("sync: pruning mount boundaries: %w", err)
+	}
+	return nil
+}
+
+// listMountBoundaries returns the folders recorded as crossed mount points.
+func (s *SyncStore) listMountBoundaries(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT path FROM mount_boundaries ORDER BY path`)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing mount boundaries: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+
+	var paths []string
+	for rows.Next() {
+		var boundary string
+		if err := rows.Scan(&boundary); err != nil {
+			return nil, fmt.Errorf("sync: scanning mount boundary: %w", err)
+		}
+		paths = append(paths, boundary)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating mount boundaries: %w", err)
+	}
+	return paths, nil
 }

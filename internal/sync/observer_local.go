@@ -168,6 +168,9 @@ type localObserver struct {
 	// watchIdentityLookup caches the identity index the watch handlers use
 	// to recognize a synced item renamed to a skipped name; rebuilt every
 	// watchIdentityIndexMaxAge. Touched only by the goroutine running Watch.
+	// mountBoundaryFlags are the folders recorded as crossed mount points;
+	// set by the engine before a scan (SetMountBoundaryFlags).
+	mountBoundaryFlags   map[string]struct{}
 	watchIdentityLookup  *scanAvailability
 	watchIdentityBuiltAt time.Time
 	protectedRootEvents  protectedRootEventSink
@@ -277,6 +280,15 @@ func (o *localObserver) SetProtectedRootEventSink(sink protectedRootEventSink) {
 // get conflated with local exclusions.
 func (o *localObserver) SetObservationRules(rules LocalObservationRules) {
 	o.observationRules = rules
+}
+
+// SetMountBoundaryFlags installs the folders previously recorded as crossed
+// mount points.
+func (o *localObserver) SetMountBoundaryFlags(paths []string) {
+	o.mountBoundaryFlags = make(map[string]struct{}, len(paths))
+	for _, flagged := range paths {
+		o.mountBoundaryFlags[flagged] = struct{}{}
+	}
 }
 
 func (o *localObserver) SetExpectedRootIdentity(identity *synctree.RootIdentity) {

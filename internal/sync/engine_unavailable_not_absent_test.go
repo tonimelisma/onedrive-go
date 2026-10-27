@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -191,4 +192,76 @@ func TestIsForeignMountPoint_DoesNotCrossFilesystemsByDefault(t *testing.T) {
 	item := mountBoundarySkippedItem("Docs/nas")
 	assert.True(t, item.BlocksReadBoundary, "everything beneath an uncrossed mount stays unavailable")
 	assert.Equal(t, issueLocalMountBoundary, item.Reason)
+}
+
+// A disk mounted inside the sync folder was crossed under cross_filesystems
+// and synced; later it is not mounted, leaving an empty folder on the parent
+// filesystem. Three files are far below the delete-safety hold, so only the
+// recorded mount boundary keeps them from being deleted on OneDrive (D-003).
+//
+// Validates: R-6.2.15
+func TestRunOnce_UnmountedNestedDiskWithFewFilesIsNotDeleted(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	remote.addFolder("item-nas", "root", "nas")
+	for i := range 3 {
+		remote.addFile(t, fmt.Sprintf("item-n%d", i), "item-nas", fmt.Sprintf("n%d.txt", i), "nas file\n")
+	}
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	filter := ContentFilterConfig{CrossFilesystems: true}
+	eng.contentFilter = filter
+	runScenarioPass(t, eng)
+
+	// The scan that crossed into the disk recorded the mount point.
+	_, err := eng.baseline.rawDB().ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES ('nas')`)
+	require.NoError(t, err)
+
+	// The disk is not mounted: the mount point is an empty folder now.
+	for i := range 3 {
+		require.NoError(t, os.Remove(filepath.Join(syncRoot, "nas", fmt.Sprintf("n%d.txt", i))))
+	}
+
+	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+
+	assert.Empty(t, remote.deletes, "an unmounted disk's synced files must not be deleted on OneDrive")
+	assert.Zero(t, report.RemoteDeletes)
+	issues, err := eng.baseline.ListObservationIssues(t.Context())
+	require.NoError(t, err)
+	found := false
+	for i := range issues {
+		found = found || (issues[i].Path == "nas" && issues[i].IssueType == issueLocalMountBoundary)
+	}
+	assert.True(t, found, "the vanished mount is reported: %+v", issues)
+}
+
+// Validates: R-6.2.15
+func TestIsForeignMountPoint_CrossingRecordsTheBoundary(t *testing.T) {
+	t.Parallel()
+
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(ContentFilterConfig{CrossFilesystems: true})
+	availability := newScanAvailability(10)
+
+	assert.False(t, obs.isForeignMountPoint(availability, "nas", synctree.FileIdentity{Device: 11, Inode: 3}, true))
+	assert.Equal(t, []string{"nas"}, availability.crossedMounts)
+
+	obs.SetMountBoundaryFlags([]string{"usb"})
+	assert.False(t, obs.isForeignMountPoint(availability, "usb", synctree.FileIdentity{Device: 10, Inode: 4}, true))
+	assert.True(t, obs.flaggedMountIsGone(availability, "usb"), "a flagged mount point back on its parent's device is not mounted")
+}
+
+// Validates: R-6.2.13
+func TestRootDeviceForScan_UnreadableRootAbortsScan(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "sync")
+	require.NoError(t, os.Mkdir(dir, 0o750))
+	tree := mustOpenSyncTree(t, dir)
+	require.NoError(t, os.Remove(dir))
+
+	_, err := rootDeviceForScan(tree)
+	require.ErrorIs(t, err, ErrMountRootUnavailable)
 }

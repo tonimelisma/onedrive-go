@@ -544,3 +544,24 @@ func TestDeleteLocalFolder_EmptyDir_Succeeds(t *testing.T) {
 	_, err := os.Stat(dir)
 	assert.True(t, os.IsNotExist(err))
 }
+
+// Validates: R-2.17.2
+func TestDeleteLocalFolder_JunkRemovalFailureIsNamedInTheError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	t.Parallel()
+
+	e, syncRoot := newDeleteTestExecutor(t)
+	dir := filepath.Join(syncRoot, "folder")
+	macDir := filepath.Join(dir, "__MACOSX")
+	require.NoError(t, os.MkdirAll(macDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(macDir, "._photo.jpg"), []byte{0}, 0o600))
+	require.NoError(t, os.Chmod(macDir, 0o500))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(macDir, 0o700)) })
+
+	outcome := e.DeleteLocalFolder(&Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}, dir)
+
+	requireOutcomeFailure(t, &outcome)
+	assert.Contains(t, outcome.Error.Error(), "after failing to remove junk inside it")
+}

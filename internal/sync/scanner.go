@@ -51,6 +51,9 @@ type scanResult struct {
 	Events  []changeEvent
 	Rows    []localStateRow
 	Skipped []skippedItem
+	// CrossedMounts are mount points this scan crossed under
+	// cross_filesystems; the engine remembers them (mount_boundaries).
+	CrossedMounts []string
 }
 
 // Constants for the local scanner.
@@ -117,7 +120,12 @@ func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scan
 	if err := o.validateFullScanRoot(tree, syncRoot); err != nil {
 		return scanResult{}, err
 	}
-	o.scanAvailability = newScanAvailability(rootDeviceForScan(tree))
+	rootDevice, err := rootDeviceForScan(tree)
+	if err != nil {
+		return scanResult{}, err
+	}
+	o.scanAvailability = newScanAvailability(rootDevice)
+	o.scanAvailability.tree = tree
 	defer func() { o.scanAvailability = nil }()
 
 	// Phase 1: Walk — collect observed paths, folder events, hash jobs, and skipped items.
@@ -203,9 +211,10 @@ func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scan
 	}
 
 	return scanResult{
-		Events:  events,
-		Rows:    sortedLocalStateRows(currentRows),
-		Skipped: skipped,
+		Events:        events,
+		Rows:          sortedLocalStateRows(currentRows),
+		Skipped:       skipped,
+		CrossedMounts: append([]string(nil), o.scanAvailability.crossedMounts...),
 	}, nil
 }
 
@@ -610,6 +619,12 @@ func (o *localObserver) processObservedInfo(
 			*skipped = append(*skipped, mountBoundarySkippedItem(dbRelPath))
 			observed[dbRelPath] = true
 			o.logger.Debug("not crossing into another filesystem", slog.String("path", dbRelPath))
+			return filepath.SkipDir
+		}
+		if o.flaggedMountIsGone(o.scanAvailability, dbRelPath) {
+			*skipped = append(*skipped, vanishedMountSkippedItem(dbRelPath))
+			observed[dbRelPath] = true
+			o.logger.Debug("a crossed mount point is no longer mounted", slog.String("path", dbRelPath))
 			return filepath.SkipDir
 		}
 	}
