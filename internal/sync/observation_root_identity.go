@@ -146,7 +146,7 @@ func CountSyncFolderFiles(syncDir string) (int, error) {
 	files := 0
 	walkErr := tree.WalkDir(func(_ string, d fs.DirEntry, entryErr error) error {
 		if entryErr != nil {
-			return nil
+			return nil //nolint:nilerr // an unreadable entry is simply not counted
 		}
 		if d.Type().IsRegular() {
 			files++

@@ -304,7 +304,7 @@ func openSyncTree(syncRoot string) (*synctree.Root, error) {
 // commitLocalSnapshot replaces local_state and, while a primary engine still
 // has to bind its sync folder, records the folder's identity in the same
 // transaction. Binding first writes a fresh token on the folder (an extended
-// attribute) so later starts recognise it by name rather than by inode; a
+// attribute) so later starts recognize it by name rather than by inode; a
 // filesystem without extended attributes binds on inode and fsid alone.
 func (e *Engine) commitLocalSnapshot(ctx context.Context, rows []localStateRow, crossedMounts []string) error {
 	if e == nil || !e.syncRootBindPending.Load() {

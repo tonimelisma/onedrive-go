@@ -52,7 +52,7 @@ func newScanAvailability(rootDevice uint64) *scanAvailability {
 }
 
 // rootDeviceForScan is the device of the sync folder itself. Without it no
-// mount boundary below the root can be recognised, so a failure stops the
+// mount boundary below the root can be recognized, so a failure stops the
 // scan rather than letting it cross into other filesystems unnoticed.
 func rootDeviceForScan(tree *synctree.Root) (uint64, error) {
 	identity, err := tree.RootIdentity()

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,7 +12,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
-	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 // Validates: R-6.2.12
@@ -66,26 +64,7 @@ func TestRunDriveRebindRoot_KeepsStateAndReportsRebind(t *testing.T) {
 
 // Validates: R-6.2.12
 func TestRunDriveRebindRoot_RefusesLiveSyncOwner(t *testing.T) {
-	setTestDriveHome(t)
-
-	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	cid := driveid.MustCanonicalID("personal:rebind@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
-
-	startCLIControlSocket(t, synccontrol.StatusResponse{
-		OwnerMode: synccontrol.OwnerModeWatch,
-		Mounts:    []string{cid.String()},
-	}, func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "unexpected mutation", http.StatusInternalServerError)
-	})
-
-	cc := &CLIContext{
-		Flags:        CLIFlags{Drive: []string{cid.String()}},
-		Logger:       testDriveLogger(t),
-		OutputWriter: &bytes.Buffer{},
-		StatusWriter: &bytes.Buffer{},
-		CfgPath:      cfgPath,
-	}
+	cc := liveSyncOwnerContext(t, "personal:rebind@example.com")
 
 	err := runDriveRebindRootWithInput(t.Context(), cc, bytes.NewBufferString(""), true)
 	require.Error(t, err)

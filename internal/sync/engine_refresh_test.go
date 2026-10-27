@@ -297,21 +297,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 
 	// Full delta returns 2 items (root + file1). Baseline has file1 + file2.
 	// file2 should be detected as an orphan.
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return &graph.DeltaPage{
-				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: driveID},
-					{ID: "f1", Name: "file1.txt", ParentID: "root", DriveID: driveID, Size: 100, QuickXorHash: "qxh1"},
-				},
-				DeltaLink: "full-token",
-			}, nil
-		},
-		// The orphan is confirmed gone by a live lookup (D-008).
-		getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
-			return nil, graph.ErrNotFound
-		},
-	}
+	mock := fullRefreshOneFileMock(driveID)
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
@@ -458,21 +444,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 
 	driveID := driveid.New(testDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return &graph.DeltaPage{
-				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: driveID},
-					{ID: "f1", Name: "file1.txt", ParentID: "root", DriveID: driveID, Size: 100, QuickXorHash: "qxh1"},
-				},
-				DeltaLink: "full-token",
-			}, nil
-		},
-		// The orphan is confirmed gone by a live lookup (D-008).
-		getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
-			return nil, graph.ErrNotFound
-		},
-	}
+	mock := fullRefreshOneFileMock(driveID)
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
@@ -1157,4 +1129,23 @@ func TestRunFullRemoteRefreshAsync_DurationInNoChangesLog(t *testing.T) {
 		"should have no-changes completion message")
 	assert.Contains(t, logOutput, "duration=",
 		"no-changes completion log must also include duration field")
+}
+
+// fullRefreshOneFileMock enumerates the root and file1 only; any other item
+// is confirmed gone by a live lookup (D-008).
+func fullRefreshOneFileMock(driveID driveid.ID) *engineMockClient {
+	return &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "f1", Name: "file1.txt", ParentID: "root", DriveID: driveID, Size: 100, QuickXorHash: "qxh1"},
+				},
+				DeltaLink: "full-token",
+			}, nil
+		},
+		getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+			return nil, graph.ErrNotFound
+		},
+	}
 }

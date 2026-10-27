@@ -33,13 +33,7 @@ It shows how many files the sync state remembers and how many are in the
 folder now. Type REBIND to confirm, or use --yes for non-interactive use.`,
 		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		Args:        cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			yes, err := cmd.Flags().GetBool("yes")
-			if err != nil {
-				return fmt.Errorf("read --yes flag: %w", err)
-			}
-			return runDriveRebindRootWithInput(cmd.Context(), mustCLIContext(cmd.Context()), cmd.InOrStdin(), yes)
-		},
+		RunE:        confirmedDriveStateRunE(runDriveRebindRootWithInput),
 	}
 	cmd.Flags().Bool("yes", false, "skip the interactive REBIND confirmation prompt")
 
@@ -47,28 +41,8 @@ folder now. Type REBIND to confirm, or use --yes for non-interactive use.`,
 }
 
 func runDriveRebindRootWithInput(ctx context.Context, cc *CLIContext, stdin io.Reader, yes bool) error {
-	driveSelector, driveErr := cc.Flags.SingleDrive()
-	if driveErr != nil {
-		return driveErr
-	}
-	if driveSelector == "" {
-		return fmt.Errorf("--drive is required (specify which drive's sync folder to rebind)")
-	}
-
-	cfg, err := config.LoadOrDefault(cc.CfgPath, cc.Logger)
+	cfg, cid, err := resolveDriveForStateChange(ctx, cc, "rebind", "rebind the sync folder")
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	cid, inConfig, err := resolveExactDriveSelector(cfg, driveSelector)
-	if err != nil {
-		return err
-	}
-	if !inConfig {
-		return fmt.Errorf("drive %q not found in config", driveSelector)
-	}
-
-	if err := ensureNoLiveSyncOwner(ctx, cid, "rebind the sync folder"); err != nil {
 		return err
 	}
 

@@ -90,26 +90,7 @@ func TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB(t *testing.T)
 }
 
 func TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner(t *testing.T) {
-	setTestDriveHome(t)
-
-	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	cid := driveid.MustCanonicalID("personal:reset@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
-
-	startCLIControlSocket(t, synccontrol.StatusResponse{
-		OwnerMode: synccontrol.OwnerModeWatch,
-		Mounts:    []string{cid.String()},
-	}, func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "unexpected mutation", http.StatusInternalServerError)
-	})
-
-	cc := &CLIContext{
-		Flags:        CLIFlags{Drive: []string{cid.String()}},
-		Logger:       testDriveLogger(t),
-		OutputWriter: &bytes.Buffer{},
-		StatusWriter: &bytes.Buffer{},
-		CfgPath:      cfgPath,
-	}
+	cc := liveSyncOwnerContext(t, "personal:reset@example.com")
 
 	err := runDriveResetSyncStateWithInput(t.Context(), cc, bytes.NewBufferString(""), true)
 	require.Error(t, err)
@@ -221,4 +202,32 @@ func TestNewDriveResetSyncStateCmd_RunE_UsesYesFlag(t *testing.T) {
 	err := cmd.RunE(cmd, nil)
 	require.NoError(t, err)
 	assert.Contains(t, output.String(), "Reset sync state DB for "+cid.String()+".")
+}
+
+// liveSyncOwnerContext configures one drive and a running watch owner that
+// holds it, for commands that must refuse to change its state.
+func liveSyncOwnerContext(t *testing.T, canonicalID string) *CLIContext {
+	t.Helper()
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID(canonicalID)
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+
+	startCLIControlSocket(t, synccontrol.StatusResponse{
+		OwnerMode: synccontrol.OwnerModeWatch,
+		Mounts:    []string{cid.String()},
+	}, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unexpected mutation", http.StatusInternalServerError)
+	})
+
+	cc := &CLIContext{
+		Flags:        CLIFlags{Drive: []string{cid.String()}},
+		Logger:       testDriveLogger(t),
+		OutputWriter: &bytes.Buffer{},
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      cfgPath,
+	}
+
+	return cc
 }

@@ -557,8 +557,8 @@ func TestDeleteLocalFolder_JunkRemovalFailureIsNamedInTheError(t *testing.T) {
 	macDir := filepath.Join(dir, "__MACOSX")
 	require.NoError(t, os.MkdirAll(macDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(macDir, "._photo.jpg"), []byte{0}, 0o600))
-	require.NoError(t, os.Chmod(macDir, 0o500))
-	t.Cleanup(func() { assert.NoError(t, os.Chmod(macDir, 0o700)) })
+	require.NoError(t, os.Chmod(macDir, 0o500))                      //nolint:gosec // a read-only folder makes junk removal fail
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(macDir, 0o700)) }) //nolint:gosec // restores the folder's permissions
 
 	outcome := e.DeleteLocalFolder(&Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}, dir)
 

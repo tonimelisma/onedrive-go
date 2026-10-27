@@ -166,7 +166,6 @@ func (e *executor) DeleteLocalFolder(action *Action, absPath string) actionOutco
 			}
 			return e.failedOutcome(action, ActionLocalDelete, folderNotEmptyError(blockers))
 		}
-
 	}
 
 	disposableErr := e.removeDisposableChildren(relPath, entries)

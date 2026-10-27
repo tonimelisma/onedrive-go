@@ -99,12 +99,12 @@ type VerifyFunc func(f *os.File, info os.FileInfo) error
 // ErrDetachRaced. dest lands by rename on the same filesystem and by copy
 // through the verified descriptor across filesystems.
 func (r *Root) DetachRegularFile(rel string, verify VerifyFunc, dest string) error {
-	parent, name, file, info, stamp, err := r.openVerifiedRegular(rel, verify)
+	v, err := r.openVerifiedRegular(rel, verify)
 	if err != nil {
 		return err
 	}
-	defer parent.Close() //nolint:errcheck // read-only directory descriptor
-	defer file.Close()   //nolint:errcheck // read-only file descriptor
+	defer v.close()
+	parent, name, file, info, stamp := v.parent, v.name, v.file, v.info, v.stamp
 
 	tempName, err := setAsideVerified(parent, name, file, info, stamp, rel)
 	if err != nil {
@@ -124,12 +124,12 @@ func (r *Root) DetachRegularFile(rel string, verify VerifyFunc, dest string) err
 // RemoveVerifiedRegularFile permanently removes the regular file at rel, but
 // only the inode verify approved; see DetachRegularFile for the binding.
 func (r *Root) RemoveVerifiedRegularFile(rel string, verify VerifyFunc) error {
-	parent, name, file, info, stamp, err := r.openVerifiedRegular(rel, verify)
+	v, err := r.openVerifiedRegular(rel, verify)
 	if err != nil {
 		return err
 	}
-	defer parent.Close() //nolint:errcheck // read-only directory descriptor
-	defer file.Close()   //nolint:errcheck // read-only file descriptor
+	defer v.close()
+	parent, name, file, info, stamp := v.parent, v.name, v.file, v.info, v.stamp
 
 	tempName, err := setAsideVerified(parent, name, file, info, stamp, rel)
 	if err != nil {
@@ -149,12 +149,12 @@ func (r *Root) RemoveVerifiedRegularFile(rel string, verify VerifyFunc) error {
 // through the verified descriptor across filesystems. A download that then
 // replaces rel by rename leaves the preserved inode untouched.
 func (r *Root) PreserveRegularFile(rel string, verify VerifyFunc, dest string) error {
-	parent, name, file, info, stamp, err := r.openVerifiedRegular(rel, verify)
+	v, err := r.openVerifiedRegular(rel, verify)
 	if err != nil {
 		return err
 	}
-	defer parent.Close() //nolint:errcheck // read-only directory descriptor
-	defer file.Close()   //nolint:errcheck // read-only file descriptor
+	defer v.close()
+	parent, name, file, info, stamp := v.parent, v.name, v.file, v.info, v.stamp
 
 	if err := unchangedBeforeMove(file, stamp); err != nil {
 		return fmt.Errorf("preserving %s: %w", rel, err)
@@ -179,52 +179,69 @@ func (r *Root) PreserveRegularFile(rel string, verify VerifyFunc, dest string) e
 	}
 }
 
-func (r *Root) openVerifiedRegular(
-	rel string,
-	verify VerifyFunc,
-) (parent *os.File, name string, file *os.File, info os.FileInfo, stamp fileStamp, err error) {
+// verifiedFile is a regular file opened and approved by a VerifyFunc, with
+// the directory it was opened through.
+type verifiedFile struct {
+	parent *os.File
+	name   string
+	file   *os.File
+	info   os.FileInfo
+	stamp  fileStamp
+}
+
+func (v *verifiedFile) close() {
+	_ = v.file.Close()   //nolint:errcheck // read-only file descriptor
+	_ = v.parent.Close() //nolint:errcheck // read-only directory descriptor
+}
+
+func (r *Root) openVerifiedRegular(rel string, verify VerifyFunc) (*verifiedFile, error) {
 	clean, err := cleanRelative(rel)
 	if err != nil {
-		return nil, "", nil, nil, fileStamp{}, err
+		return nil, err
 	}
 	if clean == "." {
-		return nil, "", nil, nil, fileStamp{}, unsafePathf("refusing to remove the sync folder itself")
+		return nil, unsafePathf("refusing to remove the sync folder itself")
 	}
 	if ancestorErr := r.ValidateNoSymlinkAncestors(clean); ancestorErr != nil {
-		return nil, "", nil, nil, fileStamp{}, ancestorErr
+		return nil, ancestorErr
 	}
 
-	parentRel := filepath.Dir(clean)
-	name = filepath.Base(clean)
-	parent, err = r.Open(parentRel)
+	parent, err := r.Open(filepath.Dir(clean))
 	if err != nil {
-		return nil, "", nil, nil, fileStamp{}, err
+		return nil, err
 	}
-
-	file, err = openatNoFollow(parent, name)
+	v := &verifiedFile{parent: parent, name: filepath.Base(clean)}
+	v.file, err = openatNoFollow(parent, v.name)
 	if err != nil {
 		_ = parent.Close() //nolint:errcheck // error path; the open failure is reported
-		return nil, "", nil, nil, fileStamp{}, &os.PathError{Op: "open", Path: r.nameForMessage(clean), Err: err}
+		return nil, &os.PathError{Op: "open", Path: r.nameForMessage(clean), Err: err}
 	}
-	info, err = file.Stat()
-	if err == nil && !info.Mode().IsRegular() {
-		err = unsupportedEntryf("%s is not a regular file", r.nameForMessage(clean))
-	}
-	if err == nil {
-		// The stamp is taken before the check, so a write during or after
-		// it is caught when the file is moved.
-		stamp, err = stampOf(file)
-	}
-	if err == nil && verify != nil {
-		err = verify(file, info)
-	}
-	if err != nil {
-		_ = file.Close()   //nolint:errcheck // error path; the verify failure is reported
-		_ = parent.Close() //nolint:errcheck // error path; the verify failure is reported
-		return nil, "", nil, nil, fileStamp{}, err
+	if err := v.check(r.nameForMessage(clean), verify); err != nil {
+		v.close()
+		return nil, err
 	}
 
-	return parent, name, file, info, stamp, nil
+	return v, nil
+}
+
+// check stamps the open file and runs verify on it. The stamp is taken before
+// the check, so a write during or after it is caught when the file is moved.
+func (v *verifiedFile) check(displayName string, verify VerifyFunc) error {
+	info, err := v.file.Stat()
+	if err != nil {
+		return fmt.Errorf("stating %s: %w", displayName, err)
+	}
+	if !info.Mode().IsRegular() {
+		return unsupportedEntryf("%s is not a regular file", displayName)
+	}
+	v.info = info
+	if v.stamp, err = stampOf(v.file); err != nil {
+		return err
+	}
+	if verify != nil {
+		return verify(v.file, info)
+	}
+	return nil
 }
 
 // setAsideVerified renames name to a temporary sibling and proves the

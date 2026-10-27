@@ -27,24 +27,63 @@ the drive config, token files, sync directory, local files, or remote files.
 Type RESET to confirm, or use --yes for non-interactive automation.`,
 		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		Args:        cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			yes, err := cmd.Flags().GetBool("yes")
-			if err != nil {
-				return fmt.Errorf("read --yes flag: %w", err)
-			}
-
-			return runDriveResetSyncStateWithInput(
-				cmd.Context(),
-				mustCLIContext(cmd.Context()),
-				cmd.InOrStdin(),
-				yes,
-			)
-		},
+		RunE:        confirmedDriveStateRunE(runDriveResetSyncStateWithInput),
 	}
 
 	cmd.Flags().Bool("yes", false, "skip the interactive RESET confirmation prompt")
 
 	return cmd
+}
+
+// confirmedDriveStateRunE adapts a drive-state command that asks for
+// confirmation unless --yes is given.
+func confirmedDriveStateRunE(
+	run func(ctx context.Context, cc *CLIContext, stdin io.Reader, yes bool) error,
+) func(cmd *cobra.Command, _ []string) error {
+	return func(cmd *cobra.Command, _ []string) error {
+		yes, err := cmd.Flags().GetBool("yes")
+		if err != nil {
+			return fmt.Errorf("read --yes flag: %w", err)
+		}
+		return run(cmd.Context(), mustCLIContext(cmd.Context()), cmd.InOrStdin(), yes)
+	}
+}
+
+// resolveDriveForStateChange resolves --drive to one configured drive and
+// refuses while a sync owner holds it. verb completes "specify which drive
+// to ..."; action completes "cannot ... while a sync owner is active".
+func resolveDriveForStateChange(
+	ctx context.Context,
+	cc *CLIContext,
+	verb string,
+	action string,
+) (*config.Config, driveid.CanonicalID, error) {
+	driveSelector, driveErr := cc.Flags.SingleDrive()
+	if driveErr != nil {
+		return nil, driveid.CanonicalID{}, driveErr
+	}
+	if driveSelector == "" {
+		return nil, driveid.CanonicalID{}, fmt.Errorf("--drive is required (specify which drive to %s)", verb)
+	}
+
+	cfg, err := config.LoadOrDefault(cc.CfgPath, cc.Logger)
+	if err != nil {
+		return nil, driveid.CanonicalID{}, fmt.Errorf("loading config: %w", err)
+	}
+
+	cid, inConfig, err := resolveExactDriveSelector(cfg, driveSelector)
+	if err != nil {
+		return nil, driveid.CanonicalID{}, err
+	}
+	if !inConfig {
+		return nil, driveid.CanonicalID{}, fmt.Errorf("drive %q not found in config", driveSelector)
+	}
+
+	if err := ensureNoLiveSyncOwner(ctx, cid, action); err != nil {
+		return nil, driveid.CanonicalID{}, err
+	}
+
+	return cfg, cid, nil
 }
 
 func runDriveResetSyncStateWithInput(
@@ -53,28 +92,8 @@ func runDriveResetSyncStateWithInput(
 	stdin io.Reader,
 	yes bool,
 ) error {
-	driveSelector, driveErr := cc.Flags.SingleDrive()
-	if driveErr != nil {
-		return driveErr
-	}
-	if driveSelector == "" {
-		return fmt.Errorf("--drive is required (specify which drive to reset)")
-	}
-
-	cfg, err := config.LoadOrDefault(cc.CfgPath, cc.Logger)
+	_, cid, err := resolveDriveForStateChange(ctx, cc, "reset", "reset sync state")
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	cid, inConfig, err := resolveExactDriveSelector(cfg, driveSelector)
-	if err != nil {
-		return err
-	}
-	if !inConfig {
-		return fmt.Errorf("drive %q not found in config", driveSelector)
-	}
-
-	if err := ensureNoLiveSyncOwner(ctx, cid, "reset sync state"); err != nil {
 		return err
 	}
 

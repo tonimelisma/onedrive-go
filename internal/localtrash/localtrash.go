@@ -328,26 +328,16 @@ func (t *Trash) Restore(id string) (string, error) {
 	if id == "" || strings.ContainsAny(id, `/\`) || id == "." || id == parentDirName {
 		return "", fmt.Errorf("%w: %q", ErrEntryNotFound, id)
 	}
-	dirEntries, err := localpath.ReadDir(t.dir)
+	found, err := t.findEntry(id)
 	if err != nil {
-		return "", fmt.Errorf("%w: %s", ErrEntryNotFound, id)
-	}
-	var found *scannedEntry
-	for _, dirEntry := range dirEntries {
-		if dirEntry.Name() == id && dirEntry.IsDir() {
-			scanned := t.scanEntry(dirEntry)
-			found = &scanned
-		}
-	}
-	if found == nil || !found.hasItem {
-		return "", fmt.Errorf("%w: %s", ErrEntryNotFound, id)
+		return "", err
 	}
 	if !found.hasRecord {
 		return "", fmt.Errorf("trash entry %s has no record of where it came from; the file is at %s",
 			id, found.entry.ItemPath)
 	}
 
-	target, err := restoreTarget(found.entry)
+	target, err := restoreTarget(&found.entry)
 	if err != nil {
 		return "", err
 	}
@@ -365,6 +355,25 @@ func (t *Trash) Restore(id string) (string, error) {
 	}
 
 	return target, nil
+}
+
+// findEntry returns the scanned entry id if it holds a file.
+func (t *Trash) findEntry(id string) (*scannedEntry, error) {
+	dirEntries, err := localpath.ReadDir(t.dir)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrEntryNotFound, id)
+	}
+	for _, dirEntry := range dirEntries {
+		if dirEntry.Name() != id || !dirEntry.IsDir() {
+			continue
+		}
+		scanned := t.scanEntry(dirEntry)
+		if !scanned.hasItem {
+			break
+		}
+		return &scanned, nil
+	}
+	return nil, fmt.Errorf("%w: %s", ErrEntryNotFound, id)
 }
 
 // moveNoReplace moves the trashed file to target without replacing anything
@@ -457,7 +466,7 @@ func refuseSymlinkedAncestors(syncRoot, target string) error {
 
 // restoreTarget is the absolute original path of entry, refusing a recorded
 // path that would leave its sync folder.
-func restoreTarget(entry Entry) (string, error) {
+func restoreTarget(entry *Entry) (string, error) {
 	rel := filepath.FromSlash(entry.Path)
 	if entry.SyncRoot == "" || rel == "" || filepath.IsAbs(rel) {
 		return "", fmt.Errorf("trash entry %s has no usable original path", entry.ID)

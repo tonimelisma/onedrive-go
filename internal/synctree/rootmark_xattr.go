@@ -16,7 +16,10 @@ func getRootMarkXattr(dir *os.File) (string, error) {
 	err := withFd(dir, func(fd int) error {
 		var getErr error
 		size, getErr = unix.Fgetxattr(fd, RootMarkAttribute, buf)
-		return getErr
+		if getErr != nil {
+			return fmt.Errorf("fgetxattr: %w", getErr)
+		}
+		return nil
 	})
 	if err != nil {
 		if errors.Is(err, errNoRootMark) {

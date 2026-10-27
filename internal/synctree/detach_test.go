@@ -10,6 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	opDetach = "detach"
+	opRemove = "remove"
+)
+
 func newDetachTree(t *testing.T) (*Root, string) {
 	t.Helper()
 
@@ -57,7 +62,7 @@ func TestDetachRegularFile_VerifyRefusalLeavesTheFile(t *testing.T) {
 func TestDetachRegularFile_FileReplacedDuringVerifyIsKept(t *testing.T) {
 	t.Parallel()
 
-	for _, operation := range []string{"detach", "remove", "preserve"} {
+	for _, operation := range []string{opDetach, opRemove, "preserve"} {
 		t.Run(operation, func(t *testing.T) {
 			t.Parallel()
 
@@ -73,9 +78,9 @@ func TestDetachRegularFile_FileReplacedDuringVerifyIsKept(t *testing.T) {
 
 			var err error
 			switch operation {
-			case "detach":
+			case opDetach:
 				err = root.DetachRegularFile("docs/a.txt", swap, dest)
-			case "remove":
+			case opRemove:
 				err = root.RemoveVerifiedRegularFile("docs/a.txt", swap)
 			default:
 				err = root.PreserveRegularFile("docs/a.txt", swap, dest)
@@ -128,14 +133,14 @@ func TestDetachRegularFile_RefusesSymlinks(t *testing.T) {
 func TestDetachRegularFile_InPlaceWriteAfterVerifyIsKept(t *testing.T) {
 	t.Parallel()
 
-	for _, operation := range []string{"detach", "remove", "preserve"} {
+	for _, operation := range []string{opDetach, opRemove, "preserve"} {
 		t.Run(operation, func(t *testing.T) {
 			t.Parallel()
 
 			root, dir := newDetachTree(t)
 			target := filepath.Join(dir, "docs", "a.txt")
 			writeInPlace := func(*os.File, os.FileInfo) error {
-				f, err := os.OpenFile(target, os.O_WRONLY|os.O_APPEND, 0)
+				f, err := os.OpenFile(target, os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // the test writes a file it created
 				require.NoError(t, err)
 				_, err = f.WriteString("appended by the user\n")
 				require.NoError(t, err)
@@ -146,9 +151,9 @@ func TestDetachRegularFile_InPlaceWriteAfterVerifyIsKept(t *testing.T) {
 
 			var err error
 			switch operation {
-			case "detach":
+			case opDetach:
 				err = root.DetachRegularFile("docs/a.txt", writeInPlace, dest)
-			case "remove":
+			case opRemove:
 				err = root.RemoveVerifiedRegularFile("docs/a.txt", writeInPlace)
 			default:
 				err = root.PreserveRegularFile("docs/a.txt", writeInPlace, dest)

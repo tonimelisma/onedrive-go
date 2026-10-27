@@ -38,10 +38,8 @@ func RenameNoReplace(src, dst string) error {
 // linkThenUnlink is the portable no-replace rename for regular files: link
 // fails with EEXIST instead of replacing.
 func linkThenUnlink(src, dst string) error {
-	//nolint:forbidigo // localpath is the arbitrary-path boundary
 	if err := os.Link(src, dst); err != nil {
 		return err //nolint:wrapcheck // the caller wraps with both paths
 	}
-	//nolint:forbidigo // localpath is the arbitrary-path boundary
 	return os.Remove(src) //nolint:wrapcheck // the caller wraps with both paths
 }

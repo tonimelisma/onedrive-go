@@ -124,9 +124,9 @@ func TestTrash_FailedCommitLeavesARecoverablePendingEntry(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(placement.ItemPath, []byte("old version\n"), 0o600))
 	entryDir := filepath.Dir(placement.ItemPath)
-	require.NoError(t, os.Chmod(entryDir, 0o500))
+	require.NoError(t, os.Chmod(entryDir, 0o500)) //nolint:gosec // a read-only directory makes the commit fail
 	_, err = placement.Commit()
-	require.NoError(t, os.Chmod(entryDir, 0o700))
+	require.NoError(t, os.Chmod(entryDir, 0o700)) //nolint:gosec // restores the entry directory's permissions
 	require.Error(t, err)
 
 	entries, err := trash.List()
