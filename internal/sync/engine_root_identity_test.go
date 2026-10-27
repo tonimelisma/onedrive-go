@@ -14,6 +14,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
+	"golang.org/x/sys/unix"
 )
 
 // rootSafetyPaths is one drive's on-disk layout, kept stable across engine
@@ -249,4 +251,85 @@ func TestScopePathMatches_RootBoundaryCoversEverything(t *testing.T) {
 	assert.True(t, scopePathMatches("Docs/a.txt", "."))
 	assert.True(t, scopePathMatches("c.txt", ""))
 	assert.False(t, scopePathMatches("Docs2/a.txt", "Docs"))
+}
+
+// Validates: R-6.2.12
+func TestNewEngine_RootRecreatedAtSamePathIsRefusedEvenIfInodeIsReused(t *testing.T) {
+	t.Parallel()
+
+	paths := newRootSafetyPaths(t)
+	remote := seedRootSafetyRemote(t)
+	eng, err := openRootSafetyEngine(t, paths, remote.client(t))
+	require.NoError(t, err)
+	runScenarioPass(t, eng)
+	closeRootSafetyEngine(t, eng)
+
+	// rm -rf and mkdir: the inode may well come back, the token does not.
+	require.NoError(t, os.RemoveAll(paths.syncRoot))
+	require.NoError(t, os.Mkdir(paths.syncRoot, 0o750))
+
+	_, err = openRootSafetyEngine(t, paths, remote.client(t))
+	require.ErrorIs(t, err, ErrMountRootUnavailable)
+	assert.Empty(t, remote.deletes)
+}
+
+// Validates: R-6.2.12
+func TestNewEngine_RootTokenDecidesOverInode(t *testing.T) {
+	t.Parallel()
+
+	paths := newRootSafetyPaths(t)
+	remote := seedRootSafetyRemote(t)
+	eng, err := openRootSafetyEngine(t, paths, remote.client(t))
+	require.NoError(t, err)
+	runScenarioPass(t, eng)
+	closeRootSafetyEngine(t, eng)
+
+	token := make([]byte, 256)
+	n, err := unix.Getxattr(paths.syncRoot, synctree.RootMarkAttribute, token)
+	require.NoError(t, err, "binding writes the token on the folder")
+	token = token[:n]
+
+	// The same folder brought back by a copy that kept its extended
+	// attributes (or a FUSE/SMB mount whose inodes churn): new inode, same
+	// token, accepted.
+	require.NoError(t, os.Rename(paths.syncRoot, paths.syncRoot+".old"))
+	require.NoError(t, os.Mkdir(paths.syncRoot, 0o750))
+	require.NoError(t, unix.Setxattr(paths.syncRoot, synctree.RootMarkAttribute, token, 0))
+	reopened, err := openRootSafetyEngine(t, paths, remote.client(t))
+	require.NoError(t, err, "a matching token is the same sync folder")
+	closeRootSafetyEngine(t, reopened)
+
+	// A folder carrying some other folder's token is refused.
+	require.NoError(t, unix.Setxattr(paths.syncRoot, synctree.RootMarkAttribute, []byte("another-folder"), 0))
+	_, err = openRootSafetyEngine(t, paths, remote.client(t))
+	require.ErrorIs(t, err, ErrMountRootUnavailable)
+}
+
+// Validates: R-6.2.12
+func TestNewEngine_UnboundStateWithSyncedItemsIsRefusedUntilRebind(t *testing.T) {
+	t.Parallel()
+
+	paths := newRootSafetyPaths(t)
+	remote := seedRootSafetyRemote(t)
+	eng, err := openRootSafetyEngine(t, paths, remote.client(t))
+	require.NoError(t, err)
+	runScenarioPass(t, eng)
+	// Simulate a state that holds synced items but never recorded its folder.
+	_, err = eng.baseline.rawDB().ExecContext(t.Context(), `UPDATE observation_state SET sync_root_bound = 0`)
+	require.NoError(t, err)
+	closeRootSafetyEngine(t, eng)
+
+	_, err = openRootSafetyEngine(t, paths, remote.client(t))
+	require.ErrorIs(t, err, ErrMountRootUnavailable, "binding silently would accept an unmounted folder")
+	assert.Contains(t, err.Error(), "drive rebind-root")
+
+	require.NoError(t, RebindSyncRoot(t.Context(), paths.dbPath, testLogger(t)))
+	rebound, err := openRootSafetyEngine(t, paths, remote.client(t))
+	require.NoError(t, err, "an explicit rebind allows binding the folder that is there")
+	runScenarioPass(t, rebound)
+	state, err := rebound.baseline.ReadObservationState(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, state.SyncRootIdentity)
+	assert.False(t, state.SyncRootRebind, "binding consumes the rebind")
+	closeRootSafetyEngine(t, rebound)
 }

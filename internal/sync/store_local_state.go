@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 const (
@@ -53,6 +55,18 @@ const (
 func (s *SyncStore) ReplaceLocalState(
 	ctx context.Context,
 	rows []localStateRow,
+) error {
+	return s.ReplaceLocalStateBindingRoot(ctx, rows, nil)
+}
+
+// ReplaceLocalStateBindingRoot replaces local_state and, when bind is not
+// nil, records it as the sync folder's identity in the same transaction: the
+// binding and the first snapshot taken of that folder land together or not
+// at all (D-001).
+func (s *SyncStore) ReplaceLocalStateBindingRoot(
+	ctx context.Context,
+	rows []localStateRow,
+	bind *synctree.RootIdentity,
 ) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
@@ -71,6 +85,11 @@ func (s *SyncStore) ReplaceLocalState(
 	}
 	if err := markLocalTruthCompleteTx(ctx, tx); err != nil {
 		return err
+	}
+	if bind != nil {
+		if err := bindSyncRootIdentityTx(ctx, tx, *bind); err != nil {
+			return err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

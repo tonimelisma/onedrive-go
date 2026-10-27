@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -11,7 +15,7 @@ import (
 )
 
 func newDriveRebindRootCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "rebind-root",
 		Short: "Accept the folder now at a drive's sync path as its sync folder",
 		Long: `Accept the folder now at the selected drive's sync path as its sync folder.
@@ -23,16 +27,26 @@ link pointing somewhere new would otherwise look like every file was deleted.
 Run this after moving, restoring, or re-pointing the sync folder on purpose.
 Sync state is kept. If the folder is missing files the state remembers, the
 next sync holds those deletes for confirmation rather than deleting them on
-OneDrive.`,
+OneDrive.
+
+It shows how many files the sync state remembers and how many are in the
+folder now. Type REBIND to confirm, or use --yes for non-interactive use.`,
 		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDriveRebindRoot(cmd.Context(), mustCLIContext(cmd.Context()))
+			yes, err := cmd.Flags().GetBool("yes")
+			if err != nil {
+				return fmt.Errorf("read --yes flag: %w", err)
+			}
+			return runDriveRebindRootWithInput(cmd.Context(), mustCLIContext(cmd.Context()), cmd.InOrStdin(), yes)
 		},
 	}
+	cmd.Flags().Bool("yes", false, "skip the interactive REBIND confirmation prompt")
+
+	return cmd
 }
 
-func runDriveRebindRoot(ctx context.Context, cc *CLIContext) error {
+func runDriveRebindRootWithInput(ctx context.Context, cc *CLIContext, stdin io.Reader, yes bool) error {
 	driveSelector, driveErr := cc.Flags.SingleDrive()
 	if driveErr != nil {
 		return driveErr
@@ -63,12 +77,28 @@ func runDriveRebindRoot(ctx context.Context, cc *CLIContext) error {
 		return fmt.Errorf("cannot determine state DB path for drive %q", cid)
 	}
 
+	drive := cfg.Drives[cid]
+	syncDir := config.EffectiveSyncDir(cfg, cid, drive.SyncDir, cc.Logger)
+	synced, err := syncengine.SyncedFileCount(ctx, dbPath, cc.Logger)
+	if err != nil {
+		return fmt.Errorf("read sync state: %w", err)
+	}
+	present, countErr := syncengine.CountSyncFolderFiles(syncDir)
+	if countErr != nil {
+		return fmt.Errorf("look at %s: %w", syncDir, countErr)
+	}
+	if err := confirmRebindRootIntent(stdin, cc.Status(), cid.String(), syncDir, synced, present, yes); err != nil {
+		return err
+	}
+
 	if err := syncengine.RebindSyncRoot(ctx, dbPath, cc.Logger); err != nil {
 		return fmt.Errorf("rebind sync folder: %w", err)
 	}
 
 	if cc.Flags.JSON {
-		return writeJSONDocument(cc.Output(), driveRebindRootJSONOutput{Drive: cid.String(), Rebound: true})
+		return writeJSONDocument(cc.Output(), driveRebindRootJSONOutput{
+			Drive: cid.String(), Rebound: true, SyncedFiles: synced, FilesInFolder: present,
+		})
 	}
 
 	return writef(cc.Output(), "The next sync for %s will use the folder now at its sync path.\n", cid.String())
@@ -76,6 +106,46 @@ func runDriveRebindRoot(ctx context.Context, cc *CLIContext) error {
 
 // driveRebindRootJSONOutput is `drive rebind-root --json`.
 type driveRebindRootJSONOutput struct {
-	Drive   string `json:"drive"`
-	Rebound bool   `json:"rebound"`
+	Drive         string `json:"drive"`
+	Rebound       bool   `json:"rebound"`
+	SyncedFiles   int    `json:"synced_files"`
+	FilesInFolder int    `json:"files_in_folder"`
+}
+
+// confirmRebindRootIntent shows what the rebind accepts and asks for REBIND,
+// unless --yes was given. The counts are the point: a folder with far fewer
+// files than the state remembers is usually the unmounted disk the refusal
+// was protecting against.
+func confirmRebindRootIntent(
+	stdin io.Reader,
+	output io.Writer,
+	drive string,
+	syncDir string,
+	synced int,
+	present int,
+	yes bool,
+) error {
+	if err := writef(output, "Sync state for %s remembers %d files; %s holds %d files now.\n",
+		drive, synced, syncDir, present); err != nil {
+		return err
+	}
+	if yes {
+		return nil
+	}
+	if !isWriterTTY(stdinAsWriter(stdin)) {
+		return fmt.Errorf("rebind-root requires confirmation; rerun with --yes or use an interactive terminal")
+	}
+	if err := writef(output, "Type REBIND to sync with this folder: "); err != nil {
+		return err
+	}
+
+	line, err := bufio.NewReader(stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("read rebind confirmation: %w", err)
+	}
+	if strings.TrimSpace(line) != "REBIND" {
+		return fmt.Errorf("rebind-root canceled: confirmation token did not match REBIND")
+	}
+
+	return nil
 }

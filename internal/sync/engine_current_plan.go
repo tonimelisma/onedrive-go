@@ -368,7 +368,7 @@ func (flow *engineFlow) observeLocal(
 	obs.SetFilterConfig(eng.contentFilter)
 	obs.SetProtectedRoots(eng.protectedRoots)
 	obs.SetObservationRules(eng.localRules)
-	obs.SetExpectedRootIdentity(eng.expectedSyncRootIdentity)
+	obs.SetExpectedRootIdentity(eng.currentExpectedSyncRoot())
 
 	result, err := obs.FullScan(ctx, eng.syncTree)
 	if err != nil {
@@ -382,12 +382,7 @@ func (flow *engineFlow) commitCurrentLocalSnapshot(
 	ctx context.Context,
 	localResult scanResult,
 ) error {
-	rows := buildLocalStateRows(localResult)
-	if err := flow.deps.store.ReplaceLocalState(ctx, rows); err != nil {
-		return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
-	}
-
-	return flow.engine.bindSyncRootIdentityAfterCommit(ctx)
+	return flow.engine.commitLocalSnapshot(ctx, buildLocalStateRows(localResult))
 }
 
 func (flow *engineFlow) loadDryRunCurrentObservation(

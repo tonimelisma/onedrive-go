@@ -202,8 +202,10 @@ identity and cadence:
 - `content_drive_id`
 - `cursor`
 - `next_full_remote_refresh_at`
-- `sync_root_bound`, `sync_root_device`, `sync_root_inode`, `sync_root_fsid`:
-  the fingerprint of the local sync folder this state was built from
+- `sync_root_bound`, `sync_root_device`, `sync_root_inode`, `sync_root_fsid`,
+  `sync_root_token`: the fingerprint of the local sync folder this state was
+  built from
+- `sync_root_rebind`: an explicit `drive rebind-root` is pending
 
 The cursor is committed atomically with the corresponding remote observation
 writes. The stored next-refresh deadline makes periodic remote full-refresh
@@ -228,15 +230,32 @@ SQLite.
 owns the DB and cursor. It does not replace the per-row
 `remote_state.drive_id` authority.
 
-The sync-folder fingerprint is recorded with the first committed local
-snapshot (never by a dry run) and is never overwritten by a scan. Engine
-startup and every full scan compare the folder at the sync path against it: the
-inode must match, and the filesystem by `statfs` fsid when both sides have one
-(the device number of the same disk can change between boots), otherwise by
-device number. A mismatch is `ErrMountRootUnavailable`, so an unmounted disk,
-a wiped folder or a re-pointed symlink is refused instead of scanned as a
-deletion of everything. `drive rebind-root` clears the fingerprint so the next
-start binds the folder now there (R-6.2.12).
+The sync-folder fingerprint is recorded in the same transaction as the first
+committed local snapshot (never by a dry run) and is never overwritten by a
+scan. Binding first writes a random token as the extended attribute
+`user.onedrive-go.root` on the folder and records it. Engine startup and every
+full scan compare the folder at the sync path against the record:
+
+- when the record has a token, the token alone decides: the same token is the
+  same folder whatever its inode is now (FUSE, SMB and FAT inode churn, macOS
+  fsid renumbering), and a missing or different token is a different folder
+  (rm -rf and mkdir may get the inode back, never the token);
+- without a token (a filesystem with no user extended attributes) the inode
+  must match, and the filesystem by `statfs` fsid when both sides have one,
+  otherwise by device number; a btrfs subvolume root (inode 256) also needs the
+  device to match, because sibling subvolumes share fsid and root inode.
+
+A mismatch is `ErrMountRootUnavailable`, so an unmounted disk, a wiped folder
+or a re-pointed symlink is refused instead of scanned as a deletion of
+everything. A state whose baseline is not empty but which has no recorded
+folder is refused the same way. `drive rebind-root` (which shows the
+remembered and present file counts and asks for confirmation) clears the
+fingerprint and sets `sync_root_rebind`, so the next start binds the folder now
+there (R-6.2.12).
+
+Remaining gap: on a filesystem without extended attributes, a folder recreated
+at the same path that happens to get the same inode on the same filesystem is
+accepted; the delete-safety hold (R-6.2.5) is then the guard.
 
 ## `held_deletes`
 

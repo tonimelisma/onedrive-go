@@ -61,7 +61,9 @@ CREATE TABLE IF NOT EXISTS observation_state (
     sync_root_bound             INTEGER NOT NULL DEFAULT 0 CHECK(sync_root_bound IN (0, 1)),
     sync_root_device            INTEGER NOT NULL DEFAULT 0,
     sync_root_inode             INTEGER NOT NULL DEFAULT 0,
-    sync_root_fsid              INTEGER NOT NULL DEFAULT 0
+    sync_root_fsid              INTEGER NOT NULL DEFAULT 0,
+    sync_root_token             TEXT    NOT NULL DEFAULT '',
+    sync_root_rebind            INTEGER NOT NULL DEFAULT 0 CHECK(sync_root_rebind IN (0, 1))
 );
 
 CREATE TABLE IF NOT EXISTS pending_creates (
@@ -187,6 +189,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"content_drive_id", "cursor", "next_full_remote_refresh_at",
 			"local_truth_complete", "local_truth_recovery_reason",
 			"sync_root_bound", "sync_root_device", "sync_root_inode", "sync_root_fsid",
+			"sync_root_token", "sync_root_rebind",
 		},
 		"remote_state": {
 			"drive_id", "item_id", "path", "item_type", "hash", "size", "mtime", "etag",

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -35,7 +37,7 @@ func validateExpectedSyncRootIdentity(root *synctree.Root, expected *synctree.Ro
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrMountRootUnavailable, err)
 	}
-	if !synctree.SameRoot(actual, *expected) {
+	if !synctree.SameRoot(*expected, actual) {
 		// The folder at the sync path is not the one this state belongs to
 		// (replaced, or a different disk mounted there): scanning it would
 		// read as mass deletion.
@@ -82,6 +84,22 @@ func resolveExpectedSyncRoot(
 		return resolvedSyncRoot{expected: &recorded}, nil
 	}
 
+	if !state.SyncRootRebind {
+		synced, countErr := store.baselineEntryCount(ctx)
+		if countErr != nil {
+			return resolvedSyncRoot{}, fmt.Errorf("sync: counting synced items before binding the sync folder: %w", countErr)
+		}
+		if synced > 0 {
+			// A state that already holds synced items but never recorded
+			// its folder cannot prove the folder now at the sync path is
+			// the one those items came from. Binding it silently would
+			// accept exactly the unmounted or replaced folder this check
+			// exists to refuse.
+			return resolvedSyncRoot{}, fmt.Errorf("%w: this sync state has no record of its sync folder; %s",
+				ErrMountRootUnavailable, errSyncRootRebindHint)
+		}
+	}
+
 	current, err := tree.RootIdentity()
 	if err != nil {
 		return resolvedSyncRoot{}, fmt.Errorf("%w: %w", ErrMountRootUnavailable, err)
@@ -114,4 +132,45 @@ func resolveSyncRootPath(syncRoot string) (string, error) {
 	}
 
 	return resolved, nil
+}
+
+// CountSyncFolderFiles counts the regular files under syncDir without
+// following links, so `drive rebind-root` can show the user what they are
+// about to bind against what the state remembers. A missing folder holds zero
+// files.
+func CountSyncFolderFiles(syncDir string) (int, error) {
+	tree, err := synctree.Open(syncDir)
+	if err != nil {
+		return 0, fmt.Errorf("opening sync folder: %w", err)
+	}
+	files := 0
+	walkErr := tree.WalkDir(func(_ string, d fs.DirEntry, entryErr error) error {
+		if entryErr != nil {
+			return nil
+		}
+		if d.Type().IsRegular() {
+			files++
+		}
+		return nil
+	})
+	if walkErr != nil {
+		if errors.Is(walkErr, os.ErrNotExist) {
+			return 0, nil
+		}
+		return files, fmt.Errorf("counting files in sync folder: %w", walkErr)
+	}
+	return files, nil
+}
+
+// SyncedFileCount reports how many files the drive's sync state at dbPath
+// records as synced.
+func SyncedFileCount(ctx context.Context, dbPath string, logger *slog.Logger) (int, error) {
+	if _, statErr := localpath.Stat(dbPath); errors.Is(statErr, os.ErrNotExist) {
+		return 0, nil
+	}
+	snapshot, err := ReadDriveStatusSnapshot(ctx, dbPath, logger)
+	if err != nil {
+		return 0, err
+	}
+	return snapshot.BaselineFileCount, nil
 }

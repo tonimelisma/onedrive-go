@@ -357,7 +357,7 @@ func (rt *watchRuntime) startObservers(
 	localObs.SetFilterConfig(rt.engine.contentFilter)
 	localObs.SetProtectedRoots(rt.engine.protectedRoots)
 	localObs.SetObservationRules(rt.engine.localRules)
-	localObs.SetExpectedRootIdentity(rt.engine.expectedSyncRootIdentity)
+	localObs.SetExpectedRootIdentity(rt.engine.currentExpectedSyncRoot())
 	localObs.SetProtectedRootEventSink(func(event protectedRootEvent) {
 		select {
 		case protectedRootEvents <- event:

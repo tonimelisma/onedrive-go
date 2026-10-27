@@ -343,7 +343,7 @@ func driveJSONContractCases() map[string]jsonContractCase {
 			cc, cid := jsonContractConfigContext(t)
 			cc.Flags.Drive = []string{cid.String()}
 			require.NoError(t, os.MkdirAll(filepath.Dir(config.DriveStatePath(cid)), 0o700))
-			return runDetachedLeaf(t, leaf, cc)
+			return runDetachedLeaf(t, leaf, cc, "--yes")
 		}},
 		"onedrive-go drive reset-sync-state": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()

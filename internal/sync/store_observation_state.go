@@ -20,7 +20,9 @@ const (
 				sync_root_bound,
 				sync_root_device,
 				sync_root_inode,
-				sync_root_fsid
+				sync_root_fsid,
+				sync_root_token,
+				sync_root_rebind
 			FROM observation_state
 			LIMIT 1`
 	sqlEnsureObservationStateRow = `INSERT INTO observation_state
@@ -43,6 +45,10 @@ type observationState struct {
 	// built against, recorded with the first committed local snapshot. Nil
 	// until then, and again after an explicit rebind.
 	SyncRootIdentity *synctree.RootIdentity
+	// SyncRootRebind records an explicit `drive rebind-root`: the next start
+	// may bind whatever folder is at the sync path even though the baseline
+	// is not empty. Cleared by the bind.
+	SyncRootRebind bool
 }
 
 const (
@@ -133,6 +139,8 @@ func (s *SyncStore) ReadObservationState(ctx context.Context) (*observationState
 		rootDevice     int64
 		rootInode      int64
 		rootFSID       int64
+		rootToken      string
+		rootRebind     int
 	)
 
 	if err := s.db.QueryRowContext(ctx, sqlReadObservationState).Scan(
@@ -145,11 +153,14 @@ func (s *SyncStore) ReadObservationState(ctx context.Context) (*observationState
 		&rootDevice,
 		&rootInode,
 		&rootFSID,
+		&rootToken,
+		&rootRebind,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
 	state.LocalTruthComplete = localComplete != 0
-	state.SyncRootIdentity = syncRootIdentityFromColumns(rootBound, rootDevice, rootInode, rootFSID)
+	state.SyncRootIdentity = syncRootIdentityFromColumns(rootBound, rootDevice, rootInode, rootFSID, rootToken)
+	state.SyncRootRebind = rootRebind != 0
 
 	if contentDriveID != "" {
 		state.ContentDriveID = driveid.New(contentDriveID)
@@ -323,6 +334,8 @@ func readObservationStateFromTx(
 		rootDevice     int64
 		rootInode      int64
 		rootFSID       int64
+		rootToken      string
+		rootRebind     int
 	)
 
 	if err := tx.QueryRowContext(ctx, sqlReadObservationState).Scan(
@@ -335,11 +348,14 @@ func readObservationStateFromTx(
 		&rootDevice,
 		&rootInode,
 		&rootFSID,
+		&rootToken,
+		&rootRebind,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
 	state.LocalTruthComplete = localComplete != 0
-	state.SyncRootIdentity = syncRootIdentityFromColumns(rootBound, rootDevice, rootInode, rootFSID)
+	state.SyncRootIdentity = syncRootIdentityFromColumns(rootBound, rootDevice, rootInode, rootFSID, rootToken)
+	state.SyncRootRebind = rootRebind != 0
 
 	if contentDriveID != "" {
 		state.ContentDriveID = driveid.New(contentDriveID)
@@ -407,8 +423,8 @@ func writeObservationStateToTx(
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO observation_state
 			(content_drive_id, cursor, next_full_remote_refresh_at, local_truth_complete, local_truth_recovery_reason,
-			 sync_root_bound, sync_root_device, sync_root_inode, sync_root_fsid)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 sync_root_bound, sync_root_device, sync_root_inode, sync_root_fsid, sync_root_token, sync_root_rebind)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		state.ContentDriveID.String(),
 		state.Cursor,
 		state.NextFullRemoteRefreshAt,
@@ -418,6 +434,8 @@ func writeObservationStateToTx(
 		int64(rootIdentity.Device),
 		int64(rootIdentity.Inode),
 		int64(rootIdentity.FileSystemID),
+		rootIdentity.Token,
+		boolInt(state.SyncRootRebind),
 	); err != nil {
 		return fmt.Errorf("sync: writing observation_state: %w", err)
 	}
@@ -425,7 +443,7 @@ func writeObservationStateToTx(
 	return nil
 }
 
-func syncRootIdentityFromColumns(bound int, device, inode, fsid int64) *synctree.RootIdentity {
+func syncRootIdentityFromColumns(bound int, device, inode, fsid int64, token string) *synctree.RootIdentity {
 	if bound == 0 {
 		return nil
 	}
@@ -434,29 +452,37 @@ func syncRootIdentityFromColumns(bound int, device, inode, fsid int64) *synctree
 		Device:       uint64(device),
 		Inode:        uint64(inode),
 		FileSystemID: uint64(fsid),
+		Token:        token,
 	}
 }
 
-// BindSyncRootIdentity records the fingerprint of the local folder this state
-// belongs to. It never overwrites an existing binding: replacing it is the
+// bindSyncRootIdentityTx records the fingerprint of the local folder this
+// state belongs to, inside the transaction that commits the local snapshot
+// taken of it. It never overwrites an existing binding: replacing it is the
 // explicit rebind decision (ClearSyncRootIdentity), never a side effect of a
 // scan that may itself be looking at the wrong folder.
-func (s *SyncStore) BindSyncRootIdentity(ctx context.Context, identity synctree.RootIdentity) error {
-	return s.updateObservationState(ctx, func(state *observationState) {
-		if state.SyncRootIdentity != nil {
-			return
-		}
-		bound := identity
-		state.SyncRootIdentity = &bound
-	})
+func bindSyncRootIdentityTx(ctx context.Context, tx sqlTxRunner, identity synctree.RootIdentity) error {
+	state, err := readObservationStateFromTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if state.SyncRootIdentity != nil {
+		return nil
+	}
+	bound := identity
+	state.SyncRootIdentity = &bound
+	state.SyncRootRebind = false
+	return writeObservationStateToTx(ctx, tx, state)
 }
 
-// ClearSyncRootIdentity forgets the recorded sync-folder fingerprint, so the
-// next engine start binds the folder it finds. It is the explicit rebind the
-// user asks for after moving or restoring the sync folder on purpose.
+// ClearSyncRootIdentity forgets the recorded sync-folder fingerprint and
+// allows the next start to bind the folder it finds even with a non-empty
+// baseline. It is the explicit rebind the user asks for after moving or
+// restoring the sync folder on purpose.
 func (s *SyncStore) ClearSyncRootIdentity(ctx context.Context) error {
 	return s.updateObservationState(ctx, func(state *observationState) {
 		state.SyncRootIdentity = nil
+		state.SyncRootRebind = true
 	})
 }
 
@@ -513,4 +539,15 @@ func (s *SyncStore) replaceObservationState(ctx context.Context, state *observat
 	}
 
 	return nil
+}
+
+// baselineEntryCount counts synced (non-root) baseline rows.
+func (s *SyncStore) baselineEntryCount(ctx context.Context) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM baseline WHERE item_type <> 'root'`,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("sync: counting baseline rows: %w", err)
+	}
+	return count, nil
 }
