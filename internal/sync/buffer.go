@@ -65,12 +65,33 @@ type dirtyBuffer struct {
 	notify      chan struct{}
 	logger      *slog.Logger
 	newTimer    func(time.Duration) debounceTimer
+	// newDeadlineTimer builds the max-wait timer; a separate seam so tests
+	// can drive the quiet-period timer and the deadline independently.
+	newDeadlineTimer func(time.Duration) debounceTimer
+}
+
+// minDirtyMaxWait is the floor of the longest a dirty signal waits for a
+// replan while new observations keep arriving (see dirtyMaxWait).
+const minDirtyMaxWait = 30 * time.Second
+
+// dirtyMaxWaitDebounceFactor scales the max wait with a long configured
+// debounce, so the deadline never undercuts the quiet period it bounds.
+const dirtyMaxWaitDebounceFactor = 6
+
+// dirtyMaxWait bounds how long continuous observations can postpone a
+// replan. The debounce alone is trailing: each observation restarted it, so
+// sustained local churn (a log written every two seconds, a long build)
+// postponed every replan indefinitely, and with it every remote change the
+// poller had already committed and every other local change (R-2.8.20).
+func dirtyMaxWait(debounce time.Duration) time.Duration {
+	return max(minDirtyMaxWait, dirtyMaxWaitDebounceFactor*debounce)
 }
 
 func newDirtyBuffer(logger *slog.Logger) *dirtyBuffer {
 	return &dirtyBuffer{
-		logger:   logger,
-		newTimer: newRealDebounceTimer,
+		logger:           logger,
+		newTimer:         newRealDebounceTimer,
+		newDeadlineTimer: newRealDebounceTimer,
 	}
 }
 
@@ -131,7 +152,36 @@ func (b *dirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, 
 	timer.Stop()
 	defer timer.Stop()
 
+	maxWait := dirtyMaxWait(debounce)
+	newDeadline := b.newDeadlineTimer
+	if newDeadline == nil {
+		newDeadline = newRealDebounceTimer
+	}
+	deadline := newDeadline(maxWait)
+	deadline.Stop()
+	defer deadline.Stop()
+
 	timerActive := false
+	deadlineActive := false
+	stopTimer := func(t debounceTimer, active *bool) {
+		if *active && !t.Stop() {
+			select {
+			case <-t.Chan():
+			default:
+			}
+		}
+		*active = false
+	}
+	flush := func() bool {
+		if batch := b.FlushImmediate(); batch != nil {
+			select {
+			case out <- *batch:
+			case <-ctx.Done():
+				return false
+			}
+		}
+		return true
+	}
 
 	for {
 		select {
@@ -154,25 +204,29 @@ func (b *dirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, 
 				return
 			}
 
-			if timerActive && !timer.Stop() {
-				select {
-				case <-timer.Chan():
-				default:
-				}
-			}
-
+			stopTimer(timer, &timerActive)
 			timer.Reset(debounce)
 			timerActive = true
 
+			// The deadline starts with the first signal of a batch and is
+			// not restarted by later ones.
+			if !deadlineActive {
+				deadline.Reset(maxWait)
+				deadlineActive = true
+			}
+
 		case <-timer.Chan():
 			timerActive = false
+			stopTimer(deadline, &deadlineActive)
+			if !flush() {
+				return
+			}
 
-			if batch := b.FlushImmediate(); batch != nil {
-				select {
-				case out <- *batch:
-				case <-ctx.Done():
-					return
-				}
+		case <-deadline.Chan():
+			deadlineActive = false
+			stopTimer(timer, &timerActive)
+			if !flush() {
+				return
 			}
 		}
 	}

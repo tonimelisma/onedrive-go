@@ -98,6 +98,7 @@ is not part of the normal product CLI.
 - R-2.8.17: Applying a full local snapshot shall write only the `local_state` rows that differ from the stored snapshot and shall not rewrite unchanged observation state, so a watch-mode safety scan of an unchanged tree performs no row writes. [verified]
 - R-2.8.18: On kqueue platforms (macOS, FreeBSD), where every watched directory and every file inside one holds an open descriptor, watch setup shall project the descriptors it will hold and, when they exceed half of the process's open-file limit, fall back to periodic full scans with the one-time warning of R-2.8.12 instead of exhausting the descriptors that hashing, transfers and the state database need. [verified]
 - R-2.8.19: When the sync folder is on a network or FUSE filesystem (NFS, SMB/CIFS, AFP, WebDAV, FUSE, 9p, Ceph, AFS, Coda), watch mode shall warn once that changes made from other computers are noticed only by the periodic rescan, and shall run that rescan every 2 minutes instead of every 5. [verified]
+- R-2.8.20: The watch-mode replan debounce shall be bounded: a replan shall start at most `max(30 s, 6 × debounce)` after the first unflushed observation even while observations keep arriving, so sustained local churn cannot postpone remote changes or other local changes indefinitely. [verified]
 
 ## R-2.9 RPC / Control Socket [verified]
 
