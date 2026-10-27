@@ -1,8 +1,10 @@
 package sync
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,9 +25,10 @@ func newSettleTestObserver(t *testing.T, baseline *Baseline, clock *manualClock,
 
 	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
 	obs.clock = clock
+	// Each read returns a new hash: every write in these tests changes the
+	// content.
 	obs.hashFunc = func(string) (string, error) {
-		hashCalls.Add(1)
-		return "hash-from-read", nil
+		return fmt.Sprintf("hash-from-read-%d", hashCalls.Add(1)), nil
 	}
 
 	return obs
@@ -75,6 +78,9 @@ func TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing(t *testing.T) {
 	assert.True(t, ev.LocalHasIdentity, "identity lets the planner pair the move")
 	assert.Equal(t, info.ModTime().UnixNano(), ev.Mtime)
 	assert.Zero(t, hashCalls.Load(), "no synchronous read on the create path")
+	require.Contains(t, obs.writeChurn, "new.txt")
+	assert.False(t, obs.writeChurn["new.txt"].firstPendingAt.IsZero(),
+		"the deferred hash opens a coalescing window, so later writes cannot postpone it past the max wait")
 
 	// The hash follows as a deferred request.
 	clock.Advance(defaultWriteCoalesceCooldown)
@@ -84,7 +90,7 @@ func TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing(t *testing.T) {
 	require.Len(t, events, 1)
 	followUp := <-events
 	assert.Equal(t, "new.txt", followUp.Path)
-	assert.Equal(t, "hash-from-read", followUp.Hash)
+	assert.Equal(t, "hash-from-read-1", followUp.Hash)
 }
 
 // Validates: R-2.8.15
@@ -171,40 +177,83 @@ func TestWatch_ContinuouslyWrittenFileBacksOff(t *testing.T) {
 	tree := mustOpenSyncTree(t, dir)
 	events := make(chan changeEvent, 16)
 
-	// One write, then quiet: hashed after the quiet period and emitted.
-	writeAndHash := func() {
+	// writeAndHashAfter writes once and expects the hash exactly delay later,
+	// not one quiet period earlier.
+	writeAndHashAfter := func(delay time.Duration) {
+		t.Helper()
 		obs.handleWrite(tree, fsPath, "app.db", "app.db")
-		clock.Advance(defaultWriteCoalesceCooldown)
-		require.Len(t, obs.HashRequests, 1)
+		if delay > defaultWriteCoalesceCooldown {
+			clock.Advance(delay - defaultWriteCoalesceCooldown)
+			require.Empty(t, obs.HashRequests, "hashed before the %s backoff passed", delay)
+			obs.handleWrite(tree, fsPath, "app.db", "app.db") // writes during backoff do not restart it
+			clock.Advance(defaultWriteCoalesceCooldown)
+		} else {
+			clock.Advance(delay)
+		}
+		require.Len(t, obs.HashRequests, 1, "the change is picked up once the %s backoff passes", delay)
 		obs.HashAndEmit(t.Context(), tree, <-obs.HashRequests, events)
 		require.Len(t, events, 1)
 		<-events
-		clock.Advance(10 * time.Second)
 	}
 
 	for range unstableWriteEmits {
-		writeAndHash()
+		writeAndHashAfter(defaultWriteCoalesceCooldown)
+		clock.Advance(10 * time.Second)
 	}
 
-	// The file has changed unstableWriteEmits times within the window: it
-	// is unstable, and the next write waits for the backoff instead of the
-	// quiet period. Before the fix it was hashed and uploaded every time.
-	obs.handleWrite(tree, fsPath, "app.db", "app.db")
-	clock.Advance(defaultWriteCoalesceCooldown)
-	assert.Empty(t, obs.HashRequests, "an unstable file is not hashed after the quiet period")
+	// Unstable now. Every further change doubles the backoff up to the cap.
+	// Before the fix the backoff stayed pinned at the initial minute, because
+	// three emits never fit in the two-minute window once each waited a
+	// minute.
+	for _, want := range []time.Duration{
+		unstableWriteInitialBackoff,
+		2 * time.Minute,
+		4 * time.Minute,
+		8 * time.Minute,
+		16 * time.Minute,
+		unstableWriteMaxBackoff,
+		unstableWriteMaxBackoff,
+	} {
+		writeAndHashAfter(want)
+	}
 
-	obs.handleWrite(tree, fsPath, "app.db", "app.db") // writes during backoff do not restart it
-	clock.Advance(unstableWriteInitialBackoff - defaultWriteCoalesceCooldown)
-	require.Len(t, obs.HashRequests, 1, "the change is still picked up once the backoff passes")
-	obs.HashAndEmit(t.Context(), tree, <-obs.HashRequests, events)
-	require.Len(t, events, 1)
-	<-events
+	// Quiet for twice the backoff: the path is stable again.
+	clock.Advance(2 * unstableWriteMaxBackoff)
+	writeAndHashAfter(defaultWriteCoalesceCooldown)
+}
 
-	// After a long quiet spell the path counts as stable again.
-	clock.Advance(4 * unstableWriteWindow)
-	obs.handleWrite(tree, fsPath, "app.db", "app.db")
-	clock.Advance(defaultWriteCoalesceCooldown)
-	assert.Len(t, obs.HashRequests, 1, "a settled file is watched normally again")
+// Validates: R-2.8.16
+func TestHashAndEmit_StillChangingAtRetryCapStaysPendingWithoutEmptyHash(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fsPath := writeTestFile(t, dir, "growing.log", "x")
+	clock := newManualClock(time.Now())
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.clock = clock
+	// The file grows during every read, as a log being appended to does.
+	grow := 0
+	obs.hashFunc = func(path string) (string, error) {
+		grow++
+		require.NoError(t, os.WriteFile(path, []byte(strings.Repeat("x", grow+1)), 0o600))
+		return "partial", nil
+	}
+	tree := mustOpenSyncTree(t, dir)
+	events := make(chan changeEvent, 8)
+
+	obs.handleWrite(tree, fsPath, "growing.log", "growing.log")
+	for range maxCoalesceRetries + 1 {
+		clock.Advance(defaultWriteCoalesceCooldown)
+		require.Len(t, obs.HashRequests, 1)
+		obs.HashAndEmit(t.Context(), tree, <-obs.HashRequests, events)
+	}
+
+	assert.Empty(t, events, "a file still being written is not emitted with an empty hash")
+	require.Contains(t, obs.PendingTimers, "growing.log", "the path stays pending")
+	assert.Equal(t, unstableWriteInitialBackoff, obs.writeChurn["growing.log"].backoff)
+
+	clock.Advance(unstableWriteInitialBackoff)
+	assert.Len(t, obs.HashRequests, 1, "it is checked again after the backoff")
 }
 
 // Validates: R-2.8.16
@@ -214,7 +263,7 @@ func TestPruneWriteChurn_DropsSettledPaths(t *testing.T) {
 	clock := newManualClock(time.Now())
 	var hashCalls atomic.Int64
 	obs := newSettleTestObserver(t, emptyBaseline(), clock, &hashCalls)
-	obs.recordWriteEmit("settled.txt")
+	obs.recordWriteEmit("settled.txt", "h1")
 	obs.writeChurnFor("pending.txt", clock.Now()).firstPendingAt = clock.Now()
 
 	clock.Advance(2 * unstableWriteWindow)

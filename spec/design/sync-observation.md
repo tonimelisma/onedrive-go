@@ -69,7 +69,7 @@ except that the type had once been public.
 | Known-missed local changes (kernel queue overflow, watcher errors, dropped batches or hash requests) arm one coalesced recovery rescan instead of waiting for the periodic safety scan. | `TestWatch_EventOverflowRunsRecoveryScan`, `TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan`, `TestTrySendLocalObservationBatch_DropRequestsRecoveryScan` |
 | A deleted or renamed-away directory drops the watches of its whole subtree, deepest first, so the re-added tree reports its new paths. | `TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst`, `TestWatch_RenamedDirectoryDescendantEventsUseNewPath`, `TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches` |
 | The destination half of a rename is observed without waiting on a content read: an identity match reuses the synced hash when size and mtime are unchanged, otherwise the row goes out with an unknown hash and the hash follows; a created directory's row precedes its contents. | `TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing`, `TestHandleCreate_RenamedUnchangedFileReusesSyncedHash`, `TestHandleCreate_DirectoryRowPrecedesItsContents` |
-| Write coalescing hashes a continuously written file within a bounded wait, and backs off exponentially for a file that never settles. | `TestScheduleWriteHash_ContinuousWritesHashWithinMaxWait`, `TestWatch_ContinuouslyWrittenFileBacksOff`, `TestPruneWriteChurn_DropsSettledPaths` |
+| Write coalescing hashes a continuously written file within a bounded wait, and backs off exponentially for a file that never settles. | `TestScheduleWriteHash_ContinuousWritesHashWithinMaxWait`, `TestWatch_ContinuouslyWrittenFileBacksOff`, `TestHashAndEmit_StillChangingAtRetryCapStaysPendingWithoutEmptyHash`, `TestPruneWriteChurn_DropsSettledPaths` |
 | On kqueue platforms watch setup projects its descriptor use (watched directories plus their entries) and falls back to periodic scans above half the open-file limit. | `TestAddWatchesRecursive_OverDescriptorBudgetFallsBackBeforeExhaustingFiles`, `TestAddWatchesRecursive_WithinDescriptorBudgetWatches` |
 | A network or FUSE sync root is identified with statfs, warned about once, and rescanned every two minutes. | `TestWatch_NetworkRootShortensSafetyScanInterval`, `TestAdaptToRootFilesystem_LocalRootKeepsInterval`, `TestLocalFilesystemKind_ReadsTheRealFilesystem` |
 | The replan debounce is bounded by a max wait that later observations do not push back. | `TestDirtyBuffer_FlushDebounced_ContinuousSignalsFlushAtMaxWait`, `TestDirtyMaxWait_ScalesWithLongDebounce` |
@@ -307,8 +307,12 @@ Write coalescing (B-107) restarts a path's quiet-period timer on every write,
 but never past `maxWriteCoalesceWait` (30 s) after the first pending write, so a
 file written more often than the quiet period is still observed. A path that
 emits `unstableWriteEmits` content changes within `unstableWriteWindow` is
-unstable: its next hash waits `unstableWriteInitialBackoff`, doubling per burst
-up to `unstableWriteMaxBackoff`, and writes during the wait do not restart it.
+unstable: its next hash waits `unstableWriteInitialBackoff`, and every later
+emit whose hash differs from the previous emit doubles the wait up to
+`unstableWriteMaxBackoff`; writes during the wait do not restart it. A file
+still changing after `maxCoalesceRetries` re-hashes is not emitted with an
+empty hash (that would only plan an upload of a file in mid-write); it stays
+pending with an escalated backoff.
 The first time a path becomes unstable the observer logs one Info line that
 suggests excluding it. The per-path history is watch-loop state, reset when the
 path goes quiet and pruned at safety scans.

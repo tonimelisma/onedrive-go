@@ -392,6 +392,7 @@ func (o *localObserver) watchCreateHash(fsPath, dbRelPath, name string, info os.
 				return entry.LocalHash
 			}
 
+			o.writeChurnFor(dbRelPath, o.clock.Now()).firstPendingAt = o.clock.Now()
 			o.scheduleDeferredHash(fsPath, dbRelPath, name, 0, o.writeCooldown())
 			return ""
 		}
@@ -717,6 +718,9 @@ type pathWriteChurn struct {
 	windowStart time.Time
 	emits       int
 	lastEmit    time.Time
+	// lastHash is the hash last emitted, so a re-emit of unchanged content
+	// does not count as churn.
+	lastHash string
 	// backoff is the minimum delay before the next hash; zero while the
 	// path is stable.
 	backoff time.Duration
@@ -753,33 +757,66 @@ func (c *pathWriteChurn) isQuiet(now time.Time) bool {
 	return c.lastEmit.IsZero() || now.Sub(c.lastEmit) >= quiet
 }
 
-// recordWriteEmit notes that a changed file was emitted. Too many changes in
-// one window mark the path unstable and double its backoff, up to the cap.
-func (o *localObserver) recordWriteEmit(path string) {
+// recordWriteEmit notes that a file's content was emitted with hash.
+//
+// A stable path becomes unstable after unstableWriteEmits changes within
+// unstableWriteWindow. From then on every emit of content that differs from
+// the previous emit doubles the backoff, up to unstableWriteMaxBackoff. (A
+// window count alone could never double it: with a one-minute backoff three
+// emits never fit in the two-minute window, so it stayed pinned at the
+// initial value.) writeChurnFor resets the path once it has been quiet for
+// twice its backoff.
+func (o *localObserver) recordWriteEmit(path, hash string) {
 	now := o.clock.Now()
 	churn := o.writeChurnFor(path, now)
+	contentChanged := churn.lastEmit.IsZero() || hash == "" || hash != churn.lastHash
+	churn.lastEmit = now
+	churn.lastHash = hash
+
+	if churn.backoff > 0 {
+		if contentChanged {
+			o.escalateWriteBackoff(path, churn)
+		}
+		return
+	}
+
 	if churn.windowStart.IsZero() || now.Sub(churn.windowStart) > unstableWriteWindow {
 		churn.windowStart = now
 		churn.emits = 0
 	}
 	churn.emits++
-	churn.lastEmit = now
-	if churn.emits < unstableWriteEmits {
+	if churn.emits >= unstableWriteEmits {
+		churn.windowStart = now
+		churn.emits = 0
+		o.escalateWriteBackoff(path, churn)
+	}
+}
+
+// escalateWriteBackoff marks path unstable, or doubles its backoff, up to the
+// cap, and says so once per path.
+func (o *localObserver) escalateWriteBackoff(path string, churn *pathWriteChurn) {
+	churn.backoff = min(max(2*churn.backoff, unstableWriteInitialBackoff), unstableWriteMaxBackoff)
+	if churn.warned {
 		return
 	}
 
-	churn.windowStart = now
-	churn.emits = 0
-	churn.backoff = min(max(2*churn.backoff, unstableWriteInitialBackoff), unstableWriteMaxBackoff)
-	if !churn.warned {
-		churn.warned = true
-		// Info: self-managing; the file still syncs, only less often.
-		o.logger.Info("A file keeps changing; it will be uploaded less often until it settles. "+
-			"If it is a log or database, consider excluding it with ignored_paths",
-			slog.String("path", path),
-			slog.Duration("next_check_after", churn.backoff),
-		)
-	}
+	churn.warned = true
+	// Info: self-managing; the file still syncs, only less often.
+	o.logger.Info("A file keeps changing; it will be uploaded less often until it settles. "+
+		"If it is a log or database, consider excluding it with ignored_paths",
+		slog.String("path", path),
+		slog.Duration("next_check_after", churn.backoff),
+	)
+}
+
+// deferStillChangingHash re-arms the hash of a file that kept changing
+// through every coalescing retry, after an escalated backoff.
+func (o *localObserver) deferStillChangingHash(req hashRequest) {
+	now := o.clock.Now()
+	churn := o.writeChurnFor(req.DbRelPath, now)
+	o.escalateWriteBackoff(req.DbRelPath, churn)
+	churn.firstPendingAt = now
+	o.scheduleDeferredHash(req.FsPath, req.DbRelPath, req.Name, 0, churn.backoff)
 }
 
 // pruneWriteChurn drops records of paths that are stable and idle, so the
@@ -845,18 +882,22 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 			return
 		}
 
-		// Distinguish retry exhaustion from generic hash failures for
-		// observability — helps diagnose continuously-written files.
 		if errors.Is(err, errFileChangedDuringHash) {
-			o.logger.Debug("hash retries exhausted, emitting with empty hash",
+			// Still being written after every retry. An empty-hash row
+			// would only plan an upload of a file in mid-write, so the path
+			// stays pending: it is marked unstable and checked again after
+			// the backoff.
+			o.logger.Debug("hash retries exhausted; file still changing, checking again after backoff",
 				slog.String("path", req.DbRelPath),
 				slog.Int("retries", req.Retries),
 				slog.Int("max_retries", maxCoalesceRetries),
 			)
-		} else {
-			o.logger.Debug("hash failed for deferred write, emitting with empty hash",
-				slog.String("path", req.DbRelPath), slog.String("error", err.Error()))
+			o.deferStillChangingHash(req)
+			return
 		}
+
+		o.logger.Debug("hash failed for deferred write, emitting with empty hash",
+			slog.String("path", req.DbRelPath), slog.String("error", err.Error()))
 	} else {
 		// Check baseline — if hash matches, the write was a no-op.
 		if existing, ok := o.baseline.GetByPath(req.DbRelPath); ok && existing.LocalHash == hash {
@@ -880,7 +921,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		ev.LocalHasIdentity = true
 	}
 
-	o.recordWriteEmit(req.DbRelPath)
+	o.recordWriteEmit(req.DbRelPath, hash)
 	o.TrySend(ctx, events, &ev)
 }
 
