@@ -23,6 +23,7 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 	assert.ElementsMatch(t, []string{
 		"baseline",
 		"block_scopes",
+		"held_deletes",
 		"local_state",
 		"observation_issues",
 		"observation_state",

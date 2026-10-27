@@ -56,6 +56,7 @@ rebuildable runtime facts:
 | `retry_work` | Exact delayed retry or blocked work for the current semantic intent | `(path, old_path, action_type)` |
 | `block_scopes` | Shared blocker timing and lifecycle | `scope_key` |
 | `observation_state` | Content drive owner, primary cursor, and remote refresh cadence | zero-or-one row |
+| `held_deletes` | Deletes the delete-safety hold keeps for confirmation (status projection) | zero or more rows |
 
 ## `baseline`
 
@@ -236,6 +237,14 @@ device number. A mismatch is `ErrMountRootUnavailable`, so an unmounted disk,
 a wiped folder or a re-pointed symlink is refused instead of scanned as a
 deletion of everything. `drive rebind-root` clears the fingerprint so the next
 start binds the folder now there (R-6.2.12).
+
+## `held_deletes`
+
+`held_deletes` lists the deletes the delete-safety hold kept out of the most
+recent live plan: `path`, `side` (`local` or `remote`, where the delete would
+remove content), `reason` (`side_vanished` or `too_many`) and `item_type`.
+It is a read-side projection for `status`, replaced on every live plan and
+never planner input; the planner re-derives the hold from current truth.
 
 ## Schema Discipline
 

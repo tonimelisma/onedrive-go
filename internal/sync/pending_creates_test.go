@@ -146,6 +146,9 @@ func TestRunOnce_PlaceholderOfACreateWhoseFileWasDeletedIsRemoved(t *testing.T) 
 	t.Parallel()
 
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	// A file both sides keep, so deleting doc.txt does not empty the local
+	// side, which the delete-safety hold would hold for confirmation.
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
 
@@ -164,7 +167,7 @@ func TestRunOnce_PlaceholderOfACreateWhoseFileWasDeletedIsRemoved(t *testing.T) 
 	require.NoError(t, os.Remove(local))
 	runScenarioPass(t, eng)
 
-	assert.Empty(t, remote.tree(), "the empty placeholder is deleted, not downloaded")
+	assert.Equal(t, map[string]string{"keep.txt": "keep\n"}, remote.tree(), "the empty placeholder is deleted, not downloaded")
 	assert.NoFileExists(t, local)
 }
 

@@ -87,6 +87,8 @@ func statusScopeKindFromScopeKey(scopeKey syncengine.ScopeKey) string {
 		return statusScopeDirectory
 	case syncengine.ScopeDiskLocal:
 		return statusScopeDisk
+	case syncengine.ScopeDeleteSafety:
+		return statusScopeDrive
 	default:
 		return statusScopeFile
 	}
@@ -109,6 +111,14 @@ func sampleStrings(values []string, verbose bool, examplesLimit int) []string {
 
 func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescriptor {
 	switch key {
+	case syncengine.ConditionDeletesHeld:
+		return newStatusConditionDescriptor(
+			"Deletes held for confirmation",
+			"More was deleted than looks intended (a whole side is empty, or more than 30% of synced files and "+
+				"at least 50), so sync held these deletes. Everything else keeps syncing.",
+			"Check the sync folder and OneDrive. If the deletes are intended, run 'onedrive-go sync --confirm-deletes'; "+
+				"otherwise restore the missing files.",
+		)
 	case syncengine.ConditionAuthenticationRequired:
 		presentation := authstate.UnauthorizedIssuePresentation()
 		return newStatusConditionDescriptor(
@@ -229,6 +239,7 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionLocalDatabaseOpen,
 		syncengine.ConditionUploadVerification,
 		syncengine.ConditionDownloadIntegrity,
+		syncengine.ConditionDeletesHeld,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -300,6 +311,7 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionLocalDatabaseOpen,
 		syncengine.ConditionUploadVerification,
 		syncengine.ConditionDownloadIntegrity,
+		syncengine.ConditionDeletesHeld,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -391,6 +403,7 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 		syncengine.ConditionRemoteNameTwin,
 		syncengine.ConditionUploadVerification,
 		syncengine.ConditionDownloadIntegrity,
+		syncengine.ConditionDeletesHeld,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:

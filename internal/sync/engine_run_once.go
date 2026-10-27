@@ -57,7 +57,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 	report := runtime.Report
 
 	if len(plan.Actions) == 0 {
-		if report.DeferredByMode.Total() > 0 {
+		if report.DeferredByMode.Total() > 0 || report.HeldLocalDeletes+report.HeldRemoteDeletes > 0 {
 			report.Duration = e.since(start)
 			e.logRunOnceCompletion(report)
 			return report, nil

@@ -138,6 +138,9 @@ func TestRunOnce_LocalFolderDeleteDeletesRemoteFolder(t *testing.T) {
 	driveID := driveid.New(engineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-many", "root", "many")
+	// A file outside the deleted folder keeps that side from being empty,
+	// which the delete-safety hold would hold for confirmation instead.
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 	for i := range 3 {
 		remote.addFile(t, fmt.Sprintf("item-f%03d", i), "item-many", fmt.Sprintf("f%03d.txt", i), fmt.Sprintf("file %d\n", i))
 	}
@@ -302,6 +305,9 @@ func TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift(t *testing.T
 	remote.addFolder("item-probe", "root", "probe")
 	remote.addFolder("item-len", "item-probe", "len")
 	remote.addFile(t, "item-f", "item-len", "f.txt", "f\n")
+	// A file outside the deleted folder keeps that side from being empty,
+	// which the delete-safety hold would hold for confirmation instead.
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)

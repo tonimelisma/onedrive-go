@@ -387,9 +387,9 @@ of treating absent optional state as a load failure.
 
 ## Validation
 
-Implements: R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified]
+Implements: R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-6.4.3 [verified]
 
-Unknown config keys are fatal errors (`unknown.go`). Per-drive validation checks sync_dir, filter patterns, size parsing, and drive-specific constraints. Global validation checks log level, transfer workers, and safety thresholds. `checkSyncDirOverlap()` prevents overlapping sync directories using `filepath.Clean` + `strings.HasPrefix` with separator suffix. Called at both config load and control-plane startup.
+Unknown config keys are fatal errors (`unknown.go`). There are no delete-threshold keys: the delete-safety hold uses fixed policy (`TestLoad_UnknownKey_DeleteSafetyThresholdsAreNotConfiguration`). Per-drive validation checks sync_dir, filter patterns, size parsing, and drive-specific constraints. Global validation checks log level, transfer workers, and safety thresholds. `checkSyncDirOverlap()` prevents overlapping sync directories using `filepath.Clean` + `strings.HasPrefix` with separator suffix. Called at both config load and control-plane startup.
 
 `ValidateResolved` and `ValidateResolvedForSync` treat only `os.ErrNotExist` as an acceptable sync-dir stat result. If the local path is unreadable or the filesystem returns another error, validation fails instead of silently accepting a broken path.
 

@@ -1,10 +1,10 @@
 # Sync Planning
 
-GOVERNS: internal/sync/planner.go, internal/sync/planner_actions.go, internal/sync/planner_truth_overlay.go
+GOVERNS: internal/sync/planner.go, internal/sync/planner_actions.go, internal/sync/planner_delete_safety.go, internal/sync/planner_truth_overlay.go
 
 LAYER: 2
 
-Implements: R-2.1.3 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified]
+Implements: R-2.1.3 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.4.2 [verified]
 
 ## Overview
 
@@ -78,6 +78,7 @@ intent; multisync receives only that child work intent.
 | Locally deleted or unpaired moved folders are deleted on OneDrive after their descendants, never re-created locally; identity-paired folder moves are one remote move. | `TestQueryReconciliationState_FolderDecisionMatrix`, `TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes`, `TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildMoves`, `TestRunOnce_LocalFolderDeleteDeletesRemoteFolder`, `TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource` |
 | Remote moves applied locally carry the source baseline and do not re-upload unchanged content. | `TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline`, `TestRunOnce_RemoteRenameAppliedLocallyDoesNotReupload` |
 | Type changes on either side are replacements ordered delete-then-create, never a silent stall. | `TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem`, `TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem`, `TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem`, `TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem`, `TestRunOnce_LocalFileReplacedByFolderConverges` |
+| Deletes toward one side are held for confirmation when the other side is empty while the baseline holds files, or when they exceed max(50, 30% of baseline files); moves never count, non-delete work continues, and `sync --confirm-deletes` releases them. | `TestPlanner_MassRemoteDeleteIsHeldForConfirmation`, `TestPlanner_MassLocalDeleteAfterAnomalousFullRefreshIsHeld`, `TestPlanner_EmptiedLocalSideHoldsEvenFewDeletes`, `TestPlanner_DeleteGuardBelowThresholdProceeds`, `TestPlanner_DeleteGuardIgnoresMoves` |
 | Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/planner_actions_test.go`, `internal/sync/planner_dependency_test.go` |
 | Planner decisions stay row-driven and action-shaped across conflict and folder-parent preservation cases. | `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_DownloadOnlyKeepsParentDeleteWhenEditedChildUploadDeferred`, `internal/sync/store_planner_visible_test.go` |
 
@@ -337,6 +338,34 @@ actions do not carry separate target-drive or target-root override fields.
 
 Cross-drive move decomposition still happens in planning. By the time work
 reaches execution, ordinary actions are mount-local concrete work.
+
+## Delete-Safety Hold
+
+`planner_delete_safety.go` is a post-pass over the admitted plan
+(`applyDeleteSafetyHold`, run by the engine's planning stage after
+`PlanCurrentState`). Per-item checks prove each delete matches what was
+synced; they cannot tell an intended mass delete from a wrong tree that
+passed every identity check (an fscrypt folder with its key unloaded, a
+restored folder without its contents, a complete but anomalous remote
+enumeration). So, per direction (product decision P-1):
+
+- **structural**: when the planner-visible snapshot of one side has no
+  non-root entries while the baseline holds files, every delete toward the
+  other side is held, however few;
+- **proportional**: when more than `max(50, 30% of baseline files)` file
+  deletes go toward one side, all deletes toward that side are held.
+
+Moves never count. A held delete is removed from the plan together with
+every action that depends on it, directly or transitively (the create half of
+a type-change replacement, an upload waiting on the delete of a case
+variant); dependencies are then rebuilt. Everything else runs.
+
+The hold is re-derived from current truth on every plan, so it stays while
+the evidence is unchanged and lifts by itself when the user restores the
+files. The engine records the held deletes in `held_deletes` for `status`
+(condition `deletes_held`, scope `delete_safety:{local|remote}`) and in the
+pass report. `sync --confirm-deletes` (one-shot only) plans without the hold.
+The thresholds are fixed policy, not configuration (R-6.4.3).
 
 ## Directional Suppression
 

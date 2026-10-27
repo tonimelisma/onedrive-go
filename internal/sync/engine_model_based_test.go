@@ -205,12 +205,20 @@ func (r *modelRun) seedInitialTree() {
 // syncUntilQuiet runs passes until one transfers and changes nothing. Early
 // passes may report failures (a move racing a delete is retried); the last
 // one must be clean.
+//
+// The model's trees are small, so random deletes often empty a side and trip
+// the delete-safety hold. The model plays a user who confirms: a pass that
+// held deletes is followed by a `--confirm-deletes` pass, and the held pass
+// itself counts as a change so the loop keeps going.
 func (r *modelRun) syncUntilQuiet(label string) {
+	confirm := false
 	for pass := 1; pass <= modelMaxSyncPasses; pass++ {
-		report, err := r.eng.RunOnce(r.t.Context(), SyncBidirectional, RunOptions{})
+		report, err := r.eng.RunOnce(r.t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: confirm})
 		require.NoError(r.t, err, "%s pass %d: %s", label, pass, r.failureContext())
+		held := report.HeldLocalDeletes + report.HeldRemoteDeletes
+		confirm = held > 0
 		changed := report.Uploads + report.Downloads + report.LocalDeletes + report.RemoteDeletes +
-			report.FolderCreates + report.Moves
+			report.FolderCreates + report.Moves + held
 		if os.Getenv(modelTraceEnv) != "" {
 			r.t.Logf("%s pass %d: up=%d down=%d ldel=%d rdel=%d mkdir=%d mv=%d ok=%d failed=%d errors=%v\n  local:  %v\n  remote: %v",
 				label, pass, report.Uploads, report.Downloads, report.LocalDeletes, report.RemoteDeletes,

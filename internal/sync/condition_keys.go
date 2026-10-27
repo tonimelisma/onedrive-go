@@ -25,6 +25,7 @@ const (
 	ConditionFileTooLargeForSpace   ConditionKey = "file_too_large_for_space"
 	ConditionLocalNameTooLong       ConditionKey = "local_name_too_long"
 	ConditionLocalReadOnly          ConditionKey = "local_read_only"
+	ConditionDeletesHeld            ConditionKey = "deletes_held"
 	ConditionLocalFileTooLarge      ConditionKey = "local_file_too_large"
 	ConditionLocalBusy              ConditionKey = "local_busy"
 	ConditionLocalCrossDevice       ConditionKey = "local_cross_device"
@@ -99,6 +100,7 @@ func conditionKeyForIssueTypeOrScope(
 
 func conditionKeyRank(key ConditionKey) int {
 	ordered := [...]ConditionKey{
+		ConditionDeletesHeld,
 		ConditionAuthenticationRequired,
 		ConditionQuotaExceeded,
 		ConditionServiceOutage,
@@ -166,6 +168,7 @@ func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
 		{issueType: issueFileTooLargeForSpace, key: ConditionFileTooLargeForSpace},
 		{issueType: issueLocalNameTooLong, key: ConditionLocalNameTooLong},
 		{issueType: issueLocalReadOnly, key: ConditionLocalReadOnly},
+		{issueType: issueDeletesHeld, key: ConditionDeletesHeld},
 		{issueType: issueLocalFileTooLarge, key: ConditionLocalFileTooLarge},
 		{issueType: issueLocalBusy, key: ConditionLocalBusy},
 		{issueType: issueLocalCrossDevice, key: ConditionLocalCrossDevice},

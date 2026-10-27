@@ -22,7 +22,8 @@ const (
 	//
 	// Generation 19 records the sync folder's fingerprint in observation_state,
 	// so a replaced or unmounted folder is refused instead of scanned as a
-	// mass deletion.
+	// mass deletion, and adds held_deletes, the deletes the delete-safety
+	// hold keeps for confirmation.
 	currentSyncStoreGeneration = 19
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
@@ -74,6 +75,14 @@ CREATE TABLE IF NOT EXISTS pending_creates (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pending_creates_path ON pending_creates(path);
+
+CREATE TABLE IF NOT EXISTS held_deletes (
+    path       TEXT    NOT NULL,
+    side       TEXT    NOT NULL CHECK(side IN ('local', 'remote')),
+    reason     TEXT    NOT NULL DEFAULT '',
+    item_type  TEXT    NOT NULL DEFAULT 'file',
+    PRIMARY KEY (path, side)
+);
 
 CREATE TABLE IF NOT EXISTS remote_state (
     drive_id      TEXT    NOT NULL DEFAULT '',
@@ -184,6 +193,9 @@ func canonicalSyncStoreColumns() map[string][]string {
 		},
 		"pending_creates": {
 			"item_id", "drive_id", "path", "parent_id", "created_etag", "local_size", "local_hash",
+		},
+		"held_deletes": {
+			"path", "side", "reason", "item_type",
 		},
 		"local_state": {
 			"path", "item_type", "hash", "size", "mtime",

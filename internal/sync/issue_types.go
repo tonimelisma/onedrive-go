@@ -32,6 +32,9 @@ const (
 	issueFileTooLargeForSpace = "file_too_large_for_space"
 	issueLocalNameTooLong     = "local_name_too_long"
 	issueLocalReadOnly        = "local_read_only"
+	// issueDeletesHeld marks deletes the delete-safety hold kept for
+	// confirmation (planner_delete_safety.go).
+	issueDeletesHeld          = "deletes_held"
 	issueLocalFileTooLarge    = "local_file_too_large"
 	issueLocalBusy            = "local_busy"
 	issueLocalCrossDevice     = "local_cross_device"
