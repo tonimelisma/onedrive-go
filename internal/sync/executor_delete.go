@@ -465,7 +465,7 @@ func folderNotEmptyError(blockers []string) error {
 // folder itself must still be the one the state belongs to, or "absent"
 // means nothing.
 func (e *executor) validateRemoteDeleteLocalAbsence(action *Action) error {
-	if err := validateExpectedSyncRootIdentity(e.syncTree, e.expectedSyncRoot); err != nil {
+	if err := e.syncRootIdentity.Validate(e.syncTree); err != nil {
 		return err
 	}
 

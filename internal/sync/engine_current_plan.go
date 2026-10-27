@@ -368,7 +368,7 @@ func (flow *engineFlow) observeLocal(
 	obs.SetFilterConfig(eng.contentFilter)
 	obs.SetProtectedRoots(eng.protectedRoots)
 	obs.SetObservationRules(eng.localRules)
-	obs.SetExpectedRootIdentity(eng.currentExpectedSyncRoot())
+	obs.SetSyncRootIdentity(eng.syncRootIdentity)
 	mountFlags, err := eng.baseline.listMountBoundaries(ctx)
 	if err != nil {
 		return scanResult{}, err

@@ -44,7 +44,7 @@ type executorConfig struct {
 	contentFilter contentFilter
 	// expectedSyncRoot is the sync folder identity the engine validated;
 	// a remote delete re-checks it before acting on local absence (D-011).
-	expectedSyncRoot *synctree.RootIdentity
+	syncRootIdentity *syncRootIdentity
 
 	// transferMgr handles unified download/upload with resume and disk
 	// space pre-checks (R-6.2.6). Disk check is configured via
@@ -130,15 +130,11 @@ func (cfg *executorConfig) SetContentFilter(filter ContentFilterConfig) {
 	cfg.contentFilter = newContentFilter(cloneContentFilterConfig(filter))
 }
 
-// SetExpectedSyncRoot installs the sync folder identity remote deletes
-// re-validate before acting on local absence.
-func (cfg *executorConfig) SetExpectedSyncRoot(identity *synctree.RootIdentity) {
-	if identity == nil {
-		cfg.expectedSyncRoot = nil
-		return
-	}
-	expected := *identity
-	cfg.expectedSyncRoot = &expected
+// SetSyncRootIdentity installs the engine's sync folder identity, which
+// remote deletes re-validate before acting on local absence. It is shared,
+// not copied, so a binding made after startup is seen here too.
+func (cfg *executorConfig) SetSyncRootIdentity(identity *syncRootIdentity) {
+	cfg.syncRootIdentity = identity
 }
 
 // Items returns the item client for direct API access (e.g., for trial

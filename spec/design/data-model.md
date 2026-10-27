@@ -246,10 +246,22 @@ full scan compare the folder at the sync path against the record:
   otherwise by device number; a btrfs subvolume root (inode 256) also needs the
   device to match, because sibling subvolumes share fsid and root inode.
 
+A token that does not read back after it is written counts as no token. A
+marker found on the folder at startup while the state has no binding (after
+`drive reset-sync-state`) is ignored, because the bind replaces it. The
+expected identity has one owner per engine (`syncRootIdentity`): the executor
+and every local observer read it there, so the token a bind adds is enforced
+everywhere at once, and mark-and-bind is serialized; if the store already
+holds a binding, the folder is re-marked with the recorded token.
+
 A mismatch is `ErrMountRootUnavailable`, so an unmounted disk, a wiped folder
 or a re-pointed symlink is refused instead of scanned as a deletion of
 everything. A state whose baseline is not empty but which has no recorded
-folder is refused the same way. `drive rebind-root` (which shows the
+folder is refused the same way. Every refusal of a primary root (startup,
+full scan, remote delete) says whether the folder lacks the
+`user.onedrive-go.root` marker (replaced, or copied or restored without
+extended attributes) or carries a different one, and names `drive
+rebind-root`. `drive rebind-root` (which shows the
 remembered and present file counts and asks for confirmation) clears the
 fingerprint and sets `sync_root_rebind`, so the next start binds the folder now
 there (R-6.2.12).

@@ -160,7 +160,7 @@ type localObserver struct {
 	filterConfig     ContentFilterConfig
 	protectedRoots   []ProtectedRoot
 	observationRules LocalObservationRules
-	expectedRootID   *synctree.RootIdentity
+	expectedRoot     *syncRootIdentity
 	// scanAvailability is FullScan's per-scan state for recording synced
 	// paths that are unavailable rather than absent (scanner_unavailable.go).
 	// Set and cleared by FullScan; nil outside a scan.
@@ -291,13 +291,19 @@ func (o *localObserver) SetMountBoundaryFlags(paths []string) {
 	}
 }
 
+// SetExpectedRootIdentity validates scans against one fixed identity.
 func (o *localObserver) SetExpectedRootIdentity(identity *synctree.RootIdentity) {
 	if identity == nil {
-		o.expectedRootID = nil
+		o.expectedRoot = nil
 		return
 	}
-	next := *identity
-	o.expectedRootID = &next
+	o.expectedRoot = fixedSyncRootIdentity(identity)
+}
+
+// SetSyncRootIdentity validates scans against the engine's shared identity,
+// so a binding made while the observer runs is enforced at once.
+func (o *localObserver) SetSyncRootIdentity(identity *syncRootIdentity) {
+	o.expectedRoot = identity
 }
 
 func (o *localObserver) reportProtectedRootEvent(event protectedRootEvent) {

@@ -357,7 +357,7 @@ func (rt *watchRuntime) startObservers(
 	localObs.SetFilterConfig(rt.engine.contentFilter)
 	localObs.SetProtectedRoots(rt.engine.protectedRoots)
 	localObs.SetObservationRules(rt.engine.localRules)
-	localObs.SetExpectedRootIdentity(rt.engine.currentExpectedSyncRoot())
+	localObs.SetSyncRootIdentity(rt.engine.syncRootIdentity)
 	mountFlags, err := rt.engine.baseline.listMountBoundaries(ctx)
 	if err != nil {
 		return err

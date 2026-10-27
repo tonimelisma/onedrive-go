@@ -461,18 +461,28 @@ func syncRootIdentityFromColumns(bound int, device, inode, fsid int64, token str
 // taken of it. It never overwrites an existing binding: replacing it is the
 // explicit rebind decision (ClearSyncRootIdentity), never a side effect of a
 // scan that may itself be looking at the wrong folder.
-func bindSyncRootIdentityTx(ctx context.Context, tx sqlTxRunner, identity synctree.RootIdentity) error {
+//
+// It returns the identity the store holds afterwards: the new one, or the
+// one already recorded.
+func bindSyncRootIdentityTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	identity synctree.RootIdentity,
+) (*synctree.RootIdentity, error) {
 	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if state.SyncRootIdentity != nil {
-		return nil
+		return state.SyncRootIdentity, nil
 	}
 	bound := identity
 	state.SyncRootIdentity = &bound
 	state.SyncRootRebind = false
-	return writeObservationStateToTx(ctx, tx, state)
+	if err := writeObservationStateToTx(ctx, tx, state); err != nil {
+		return nil, err
+	}
+	return &bound, nil
 }
 
 // ClearSyncRootIdentity forgets the recorded sync-folder fingerprint and

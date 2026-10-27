@@ -228,7 +228,7 @@ func (o *localObserver) validateFullScanRoot(tree *synctree.Root, syncRoot strin
 			slog.String("sync_root", syncRoot))
 		return errSyncRootMissing
 	}
-	if err := validateExpectedSyncRootIdentity(tree, o.expectedRootID); err != nil {
+	if err := o.expectedRoot.Validate(tree); err != nil {
 		o.logger.Debug("sync root identity changed, aborting scan",
 			slog.String("sync_root", syncRoot),
 			slog.String("error", err.Error()))

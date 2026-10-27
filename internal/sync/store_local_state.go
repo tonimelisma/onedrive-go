@@ -56,7 +56,8 @@ func (s *SyncStore) ReplaceLocalState(
 	ctx context.Context,
 	rows []localStateRow,
 ) error {
-	return s.ReplaceLocalStateBindingRoot(ctx, rows, nil, nil)
+	_, err := s.ReplaceLocalStateBindingRoot(ctx, rows, nil, nil)
+	return err
 }
 
 // ReplaceLocalStateBindingRoot replaces local_state and, when bind is not
@@ -68,45 +69,45 @@ func (s *SyncStore) ReplaceLocalStateBindingRoot(
 	rows []localStateRow,
 	bind *synctree.RootIdentity,
 	crossedMounts []string,
-) (err error) {
+) (bound *synctree.RootIdentity, err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning local_state transaction: %w", err)
+		return nil, fmt.Errorf("sync: beginning local_state transaction: %w", err)
 	}
 	defer func() {
 		err = finalizeTxRollback(err, tx, "sync: rollback local_state transaction")
 	}()
 
 	if err := replaceLocalStateTx(ctx, tx, rows); err != nil {
-		return err
+		return nil, err
 	}
 	backfilled, backfillErr := backfillBaselineIdentityTx(ctx, tx)
 	if backfillErr != nil {
-		return backfillErr
+		return nil, backfillErr
 	}
 	if err := markLocalTruthCompleteTx(ctx, tx); err != nil {
-		return err
+		return nil, err
 	}
 	if bind != nil {
-		if err := bindSyncRootIdentityTx(ctx, tx, *bind); err != nil {
-			return err
+		if bound, err = bindSyncRootIdentityTx(ctx, tx, *bind); err != nil {
+			return nil, err
 		}
 	}
 	if err := recordMountBoundariesTx(ctx, tx, crossedMounts); err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing local_state transaction: %w", err)
+		return nil, fmt.Errorf("sync: committing local_state transaction: %w", err)
 	}
 
 	if backfilled > 0 {
 		if err := s.reloadBaselineCache(ctx); err != nil {
-			return fmt.Errorf("sync: reloading baseline cache after identity backfill: %w", err)
+			return nil, fmt.Errorf("sync: reloading baseline cache after identity backfill: %w", err)
 		}
 	}
 
-	return nil
+	return bound, nil
 }
 
 // backfillBaselineIdentityTx attaches the full snapshot's filesystem identity

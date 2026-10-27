@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	stdsync "sync"
 	"sync/atomic"
 	"testing"
 
@@ -332,4 +333,123 @@ func TestNewEngine_UnboundStateWithSyncedItemsIsRefusedUntilRebind(t *testing.T)
 	require.NotNil(t, state.SyncRootIdentity)
 	assert.False(t, state.SyncRootRebind, "binding consumes the rebind")
 	closeRootSafetyEngine(t, rebound)
+}
+
+// resetAndReopen models `drive reset-sync-state`: a fresh state DB while the
+// folder still carries the previous binding's marker.
+func resetAndReopen(t *testing.T, paths rootSafetyPaths, remote *moveScenarioRemote) *testEngine {
+	t.Helper()
+
+	require.NoError(t, ResetStateDB(t.Context(), paths.dbPath, testLogger(t)))
+	eng, err := openRootSafetyEngine(t, paths, remote.client(t))
+	require.NoError(t, err, "a fresh state binds whatever folder is there")
+	return eng
+}
+
+// After a reset the folder still carries the old marker. The executor used
+// to copy the startup identity (with that old token) once, so after the
+// bind wrote a new token every remote delete in the same engine failed as
+// "sync folder unavailable" until a restart.
+//
+// Validates: R-6.2.12
+func TestRunOnce_RemoteDeleteAfterRebindingInTheSameEngineSucceeds(t *testing.T) {
+	t.Parallel()
+
+	paths := newRootSafetyPaths(t)
+	remote := seedRootSafetyRemote(t)
+	eng, err := openRootSafetyEngine(t, paths, remote.client(t))
+	require.NoError(t, err)
+	runScenarioPass(t, eng)
+	closeRootSafetyEngine(t, eng)
+
+	rebound := resetAndReopen(t, paths, remote)
+	t.Cleanup(func() { closeRootSafetyEngine(t, rebound) })
+	runScenarioPass(t, rebound)
+
+	require.NoError(t, os.Remove(filepath.Join(paths.syncRoot, "c.txt")))
+	report := runScenarioPass(t, rebound)
+
+	assert.Equal(t, 1, report.RemoteDeletes)
+	assert.Contains(t, remote.deletes, "item-c", "the remote delete validates against the new binding")
+}
+
+// The watch observer is built before the bootstrap commit binds the folder;
+// its safety scans must see the new marker, not a copy taken before it.
+//
+// Validates: R-6.2.12
+func TestWatchObserver_SeesBindingMadeAfterItWasBuilt(t *testing.T) {
+	t.Parallel()
+
+	paths := newRootSafetyPaths(t)
+	remote := seedRootSafetyRemote(t)
+	eng, err := openRootSafetyEngine(t, paths, remote.client(t))
+	require.NoError(t, err)
+	runScenarioPass(t, eng)
+	closeRootSafetyEngine(t, eng)
+
+	rebound := resetAndReopen(t, paths, remote)
+	t.Cleanup(func() { closeRootSafetyEngine(t, rebound) })
+	watchObserver := newLocalObserver(emptyBaseline(), testLogger(t), 0)
+	watchObserver.SetSyncRootIdentity(rebound.syncRootIdentity)
+
+	runScenarioPass(t, rebound) // binds, writing a new marker
+
+	_, err = watchObserver.FullScan(t.Context(), rebound.syncTree)
+	require.NoError(t, err, "a safety scan after the bind accepts the newly marked folder")
+}
+
+// Validates: R-6.2.12
+func TestCommitLocalSnapshot_ConcurrentBindsLeaveOneMarker(t *testing.T) {
+	t.Parallel()
+
+	paths := newRootSafetyPaths(t)
+	remote := seedRootSafetyRemote(t)
+	eng, err := openRootSafetyEngine(t, paths, remote.client(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { closeRootSafetyEngine(t, eng) })
+
+	var group stdsync.WaitGroup
+	errs := make([]error, 4)
+	for i := range errs {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			errs[i] = eng.commitLocalSnapshot(t.Context(), nil, nil)
+		}()
+	}
+	group.Wait()
+	for _, commitErr := range errs {
+		require.NoError(t, commitErr)
+	}
+
+	state, err := eng.baseline.ReadObservationState(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, state.SyncRootIdentity)
+	live, err := eng.syncTree.RootIdentity()
+	require.NoError(t, err)
+	assert.Equal(t, state.SyncRootIdentity.Token, live.Token, "the folder carries the token the store recorded")
+	assert.Equal(t, state.SyncRootIdentity.Token, eng.syncRootIdentity.Expected().Token)
+}
+
+// Validates: R-6.2.12
+func TestValidateExpectedSyncRootIdentity_NamesTheMarkerAndTheWayOut(t *testing.T) {
+	t.Parallel()
+
+	tree := mustOpenSyncTree(t, t.TempDir())
+	live, err := tree.RootIdentity()
+	require.NoError(t, err)
+
+	missing := live
+	missing.Token = "recorded-token"
+	err = validateExpectedSyncRootIdentity(tree, &missing, errSyncRootRebindHint)
+	require.ErrorIs(t, err, ErrMountRootUnavailable)
+	assert.Contains(t, err.Error(), "has no sync folder marker")
+	assert.Contains(t, err.Error(), synctree.RootMarkAttribute)
+	assert.Contains(t, err.Error(), "without extended attributes")
+	assert.Contains(t, err.Error(), "drive rebind-root")
+
+	require.NoError(t, tree.SetRootMark("someone-else"))
+	err = validateExpectedSyncRootIdentity(tree, &missing, errSyncRootRebindHint)
+	assert.Contains(t, err.Error(), "different sync folder marker")
+	assert.Contains(t, err.Error(), "drive rebind-root")
 }

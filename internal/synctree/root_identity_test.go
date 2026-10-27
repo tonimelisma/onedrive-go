@@ -104,3 +104,16 @@ func TestMarkRoot_FilesystemWithoutXattrsFallsBack(t *testing.T) {
 	assert.Empty(t, identity.Token, "no token: inode and fsid decide")
 	assert.NotZero(t, identity.Inode)
 }
+
+// Validates: R-6.2.12
+func TestMarkRoot_TokenThatDoesNotReadBackIsUnsupported(t *testing.T) {
+	t.Parallel()
+
+	root, err := Open(t.TempDir())
+	require.NoError(t, err)
+	root.ops.setRootMark = func(*os.File, string) error { return nil }
+	root.ops.getRootMark = func(*os.File) (string, error) { return "", nil }
+
+	_, err = root.MarkRoot()
+	require.ErrorIs(t, err, ErrRootMarkUnsupported, "a write that keeps nothing must not be bound as a token")
+}

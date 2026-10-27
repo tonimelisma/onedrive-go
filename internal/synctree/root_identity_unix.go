@@ -140,29 +140,43 @@ func (r *Root) readRootMark(dir *os.File) string {
 }
 
 // MarkRoot writes a fresh random bind token on the sync folder and returns it.
-// ErrRootMarkUnsupported means the filesystem has no user extended
-// attributes; the caller binds without a token.
+// ErrRootMarkUnsupported means the filesystem cannot keep the token (no user
+// extended attributes, or a write that does not read back); the caller binds
+// without a token.
 func (r *Root) MarkRoot() (string, error) {
 	var random [rootMarkRandomBytes]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return "", fmt.Errorf("generating sync folder token: %w", err)
 	}
 	token := hex.EncodeToString(random[:])
+	if err := r.SetRootMark(token); err != nil {
+		return "", err
+	}
+	return token, nil
+}
 
+// SetRootMark writes token as the sync folder's bind token and reads it back.
+// Some filesystems accept the write and keep nothing (or something else);
+// a token that does not read back is as good as none, so that is
+// ErrRootMarkUnsupported too.
+func (r *Root) SetRootMark(token string) error {
 	dir, err := r.Open(".")
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer dir.Close() //nolint:errcheck // read-only descriptor; nothing to flush
 
 	if err := r.ops.setRootMark(dir, token); err != nil {
 		if errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.EPERM) {
-			return "", fmt.Errorf("%w: %w", ErrRootMarkUnsupported, err)
+			return fmt.Errorf("%w: %w", ErrRootMarkUnsupported, err)
 		}
-		return "", fmt.Errorf("marking sync folder %s: %w", r.dir, err)
+		return fmt.Errorf("marking sync folder %s: %w", r.dir, err)
+	}
+	if readBack := r.readRootMark(dir); readBack != token {
+		return fmt.Errorf("%w: the attribute did not read back", ErrRootMarkUnsupported)
 	}
 
-	return token, nil
+	return nil
 }
 
 // ErrRootMarkUnsupported reports a filesystem that cannot store the sync

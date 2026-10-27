@@ -41,15 +41,9 @@ type Engine struct {
 	syncTree        *synctree.Root
 	// rootLock holds the sync root for the engine's lifetime (R-2.9.5).
 	rootLock *syncRootLock
-	// expectedSyncRoot is the sync folder identity scans validate against.
-	// Atomic because a pending binding replaces it (with its token) on the
-	// goroutine that commits while observers read it on theirs.
-	expectedSyncRoot atomic.Pointer[synctree.RootIdentity]
-	// syncRootBindPending is set while a primary engine still has to record
-	// expectedSyncRootIdentity in its store; the first committed local
-	// snapshot clears it. Atomic because one-shot and watch commits can run on
-	// different goroutines.
-	syncRootBindPending    atomic.Bool
+	// syncRootIdentity is the one owner of the identity the sync folder must
+	// match; the executor and every observer read it, never a copy.
+	syncRootIdentity       *syncRootIdentity
 	driveID                driveid.ID
 	driveType              string
 	remoteRootItemID       string
@@ -150,7 +144,12 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		cfg.Logger,
 		cfg.PathConvergence,
 	)
-	trash := configureEngineExecutor(execCfg, cfg, bm, syncRootBinding)
+	refusalHint := ""
+	if cfg.ExpectedSyncRootIdentity == nil {
+		refusalHint = errSyncRootRebindHint
+	}
+	rootIdentity := newSyncRootIdentity(syncRootBinding, refusalHint)
+	trash := configureEngineExecutor(execCfg, cfg, bm, rootIdentity)
 
 	// Construct sessionStore and TransferManager together so the TM is
 	// immutable after creation (no post-hoc field mutation). Disk space
@@ -181,6 +180,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		dataDir:                cfg.DataDir,
 		syncRoot:               cfg.SyncRoot,
 		syncTree:               syncTree,
+		syncRootIdentity:       rootIdentity,
 		rootLock:               rootLock,
 		driveID:                cfg.DriveID,
 		driveType:              cfg.DriveType,
@@ -206,9 +206,6 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 			return newSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
 		},
 	}
-
-	e.expectedSyncRoot.Store(syncRootBinding.expected)
-	e.syncRootBindPending.Store(syncRootBinding.bindPending)
 
 	if err := e.refreshProtectedRootsFromStore(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading parent shortcut protected roots: %w", err)
@@ -263,14 +260,14 @@ func configureEngineExecutor(
 	execCfg *executorConfig,
 	cfg *engineInputs,
 	store *SyncStore,
-	binding resolvedSyncRoot,
+	rootIdentity *syncRootIdentity,
 ) *localtrash.Trash {
 	execCfg.SetRemoteRootItemID(cfg.RemoteRootItemID)
 	execCfg.SetPendingCreates(store)
 	trash := localtrash.Open(localtrash.DirForStatePath(cfg.DBPath), nil)
 	execCfg.SetTrash(trash)
 	execCfg.SetContentFilter(cfg.ContentFilter)
-	execCfg.SetExpectedSyncRoot(binding.expected)
+	execCfg.SetSyncRootIdentity(rootIdentity)
 	return trash
 }
 
@@ -306,19 +303,32 @@ func openSyncTree(syncRoot string) (*synctree.Root, error) {
 // transaction. Binding first writes a fresh token on the folder (an extended
 // attribute) so later starts recognize it by name rather than by inode; a
 // filesystem without extended attributes binds on inode and fsid alone.
+// Mark-and-bind is serialized: two commits racing would otherwise write two
+// tokens, and the folder would keep the one the store did not record.
 func (e *Engine) commitLocalSnapshot(ctx context.Context, rows []localStateRow, crossedMounts []string) error {
-	if e == nil || !e.syncRootBindPending.Load() {
-		if err := e.baseline.ReplaceLocalStateBindingRoot(ctx, rows, nil, crossedMounts); err != nil {
+	identity := e.syncRootIdentity
+	if identity == nil || !identity.bindPending.Load() {
+		if _, err := e.baseline.ReplaceLocalStateBindingRoot(ctx, rows, nil, crossedMounts); err != nil {
 			return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
 		}
 		return nil
 	}
 
-	expected := e.currentExpectedSyncRoot()
+	identity.bindMu.Lock()
+	defer identity.bindMu.Unlock()
+	if !identity.bindPending.Load() {
+		if _, err := e.baseline.ReplaceLocalStateBindingRoot(ctx, rows, nil, crossedMounts); err != nil {
+			return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
+		}
+		return nil
+	}
+
+	expected := identity.Expected()
 	if expected == nil {
 		return fmt.Errorf("sync: binding sync folder: no identity was taken at startup")
 	}
 	bind := *expected
+	bind.Token = ""
 	token, err := e.syncTree.MarkRoot()
 	switch {
 	case err == nil:
@@ -330,23 +340,23 @@ func (e *Engine) commitLocalSnapshot(ctx context.Context, rows []localStateRow, 
 		return fmt.Errorf("sync: binding sync folder: %w", err)
 	}
 
-	if err := e.baseline.ReplaceLocalStateBindingRoot(ctx, rows, &bind, crossedMounts); err != nil {
+	bound, err := e.baseline.ReplaceLocalStateBindingRoot(ctx, rows, &bind, crossedMounts)
+	if err != nil {
 		return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
 	}
-	e.expectedSyncRoot.Store(&bind)
-	e.syncRootBindPending.Store(false)
-	return nil
-}
-
-// currentExpectedSyncRoot returns a copy of the identity scans validate
-// against, or nil. It changes once, when a pending binding gains its token.
-func (e *Engine) currentExpectedSyncRoot() *synctree.RootIdentity {
-	expected := e.expectedSyncRoot.Load()
-	if expected == nil {
-		return nil
+	if bound != nil && bound.Token != bind.Token && bound.Token != "" {
+		// Another binding won in the store; the folder must carry the token
+		// the store recorded, not the one just written.
+		if markErr := e.syncTree.SetRootMark(bound.Token); markErr != nil {
+			return fmt.Errorf("sync: restoring the recorded sync folder marker: %w", markErr)
+		}
 	}
-	copied := *expected
-	return &copied
+	if bound == nil {
+		bound = &bind
+	}
+	identity.current.Store(bound)
+	identity.bindPending.Store(false)
+	return nil
 }
 
 func (e *Engine) collector() *perf.Collector {

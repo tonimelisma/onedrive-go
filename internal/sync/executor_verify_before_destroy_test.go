@@ -138,7 +138,7 @@ func TestExecuteRemoteDelete_LocalPathReappearedIsSuperseded(t *testing.T) {
 	identity, err := cfg.syncTree.RootIdentity()
 	require.NoError(t, err)
 	identity.Inode++
-	cfg.SetExpectedSyncRoot(&identity)
+	cfg.SetSyncRootIdentity(fixedSyncRootIdentity(&identity))
 	outcome = newExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeFailure(t, &outcome)
 	require.ErrorIs(t, outcome.Error, ErrMountRootUnavailable)

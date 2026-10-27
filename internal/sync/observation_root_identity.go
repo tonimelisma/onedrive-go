@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	stdsync "sync"
+	"sync/atomic"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -29,22 +31,97 @@ import (
 const errSyncRootRebindHint = "if you moved or restored the sync folder on purpose, run " +
 	"'onedrive-go drive rebind-root' to sync with the folder that is there now"
 
-func validateExpectedSyncRootIdentity(root *synctree.Root, expected *synctree.RootIdentity) error {
+// validateExpectedSyncRootIdentity refuses a sync folder that is not the one
+// expected. hint, when not empty, is appended to the refusal (the rebind hint
+// for primary roots).
+func validateExpectedSyncRootIdentity(root *synctree.Root, expected *synctree.RootIdentity, hint string) error {
 	if root == nil || expected == nil {
 		return nil
 	}
 	actual, err := root.RootIdentity()
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrMountRootUnavailable, err)
+		return withRefusalHint(fmt.Errorf("%w: %w", ErrMountRootUnavailable, err), hint)
 	}
-	if !synctree.SameRoot(*expected, actual) {
-		// The folder at the sync path is not the one this state belongs to
-		// (replaced, or a different disk mounted there): scanning it would
-		// read as mass deletion.
-		return fmt.Errorf("%w: it was replaced by a different folder, or the disk it lives on is not mounted",
-			ErrMountRootUnavailable)
+	if synctree.SameRoot(*expected, actual) {
+		return nil
 	}
-	return nil
+
+	// The folder at the sync path is not the one this state belongs to:
+	// scanning it would read as mass deletion. Say which evidence decided.
+	var reason string
+	switch {
+	case expected.Token != "" && actual.Token == "":
+		reason = "the folder has no sync folder marker (the extended attribute " + synctree.RootMarkAttribute +
+			"); it was replaced, or copied or restored without extended attributes, or the disk it lives on is not mounted"
+	case expected.Token != "":
+		reason = "the folder carries a different sync folder marker (" + synctree.RootMarkAttribute +
+			"); it is another sync folder, not the one this state was built from"
+	default:
+		reason = "it was replaced by a different folder, or the disk it lives on is not mounted"
+	}
+	return withRefusalHint(fmt.Errorf("%w: %s", ErrMountRootUnavailable, reason), hint)
+}
+
+func withRefusalHint(err error, hint string) error {
+	if hint == "" {
+		return err
+	}
+	return fmt.Errorf("%w; %s", err, hint)
+}
+
+// syncRootIdentity is the one owner of the identity an engine's sync folder
+// must match. The executor, every local observer and the binding read it
+// through Expected, so the token a bind adds is seen everywhere at once
+// rather than by whoever copied the identity after it (a stale copy refused
+// every remote delete after a reset-sync-state rebind).
+type syncRootIdentity struct {
+	current atomic.Pointer[synctree.RootIdentity]
+	// refusalHint is appended to every refusal: the rebind hint for primary
+	// roots, nothing for parent-owned shortcut child roots.
+	refusalHint string
+	// bindPending is set while a primary engine still has to record the
+	// identity in its store.
+	bindPending atomic.Bool
+	// bindMu serializes mark-and-bind so two commits cannot write two
+	// different tokens.
+	bindMu stdsync.Mutex
+}
+
+func newSyncRootIdentity(binding resolvedSyncRoot, refusalHint string) *syncRootIdentity {
+	identity := &syncRootIdentity{refusalHint: refusalHint}
+	if binding.expected != nil {
+		expected := *binding.expected
+		identity.current.Store(&expected)
+	}
+	identity.bindPending.Store(binding.bindPending)
+	return identity
+}
+
+// fixedSyncRootIdentity wraps a single known identity (tests, and callers
+// that validate once).
+func fixedSyncRootIdentity(expected *synctree.RootIdentity) *syncRootIdentity {
+	return newSyncRootIdentity(resolvedSyncRoot{expected: expected}, "")
+}
+
+// Expected returns a copy of the identity to validate against, or nil.
+func (s *syncRootIdentity) Expected() *synctree.RootIdentity {
+	if s == nil {
+		return nil
+	}
+	expected := s.current.Load()
+	if expected == nil {
+		return nil
+	}
+	copied := *expected
+	return &copied
+}
+
+// Validate refuses tree when it is not the expected sync folder.
+func (s *syncRootIdentity) Validate(tree *synctree.Root) error {
+	if s == nil {
+		return nil
+	}
+	return validateExpectedSyncRootIdentity(tree, s.Expected(), s.refusalHint)
 }
 
 // resolvedSyncRoot is the expected identity an engine validates every scan
@@ -66,7 +143,7 @@ func resolveExpectedSyncRoot(
 ) (resolvedSyncRoot, error) {
 	if parentIssued != nil {
 		expected := synctree.RootIdentityFromFileIdentity(*parentIssued)
-		if err := validateExpectedSyncRootIdentity(tree, &expected); err != nil {
+		if err := validateExpectedSyncRootIdentity(tree, &expected, ""); err != nil {
 			return resolvedSyncRoot{}, err
 		}
 		return resolvedSyncRoot{expected: &expected}, nil
@@ -78,8 +155,8 @@ func resolveExpectedSyncRoot(
 	}
 	if state.SyncRootIdentity != nil {
 		recorded := *state.SyncRootIdentity
-		if mismatchErr := validateExpectedSyncRootIdentity(tree, &recorded); mismatchErr != nil {
-			return resolvedSyncRoot{}, fmt.Errorf("%w; %s", mismatchErr, errSyncRootRebindHint)
+		if mismatchErr := validateExpectedSyncRootIdentity(tree, &recorded, errSyncRootRebindHint); mismatchErr != nil {
+			return resolvedSyncRoot{}, mismatchErr
 		}
 		return resolvedSyncRoot{expected: &recorded}, nil
 	}
@@ -104,6 +181,10 @@ func resolveExpectedSyncRoot(
 	if err != nil {
 		return resolvedSyncRoot{}, fmt.Errorf("%w: %w", ErrMountRootUnavailable, err)
 	}
+	// A marker already on the folder belongs to a binding this state no
+	// longer has (a reset-sync-state or rebind-root): the bind writes a new
+	// one, so the stale token must not become the in-memory expectation.
+	current.Token = ""
 
 	return resolvedSyncRoot{expected: &current, bindPending: true}, nil
 }
