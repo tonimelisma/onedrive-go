@@ -511,9 +511,12 @@ func TestRunWatch_DownloadOnly_StartsLocalObserver(t *testing.T) {
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
+	// Wait for the local observer itself: canceling as soon as the remote one
+	// starts raced its startup (the remote start's state read saw the
+	// cancellation and the runtime stopped before the local observer began).
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
-	}, "remote observer started")
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	}, "local observer started")
 
 	// Create a local file. Download-only still observes it, but upload actions
 	// remain suppressed by mode admission.

@@ -154,18 +154,30 @@ func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 // comparing each entry against the in-memory baseline. Stateless — syncRoot
 // is a parameter of FullScan, allowing reuse across passes.
 type localObserver struct {
-	baseline            *Baseline
-	logger              *slog.Logger
-	checkWorkers        int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
-	filterConfig        ContentFilterConfig
-	protectedRoots      []ProtectedRoot
-	observationRules    LocalObservationRules
-	expectedRootID      *synctree.FileIdentity
-	protectedRootEvents protectedRootEventSink
-	watcherFactory      func() (fsWatcher, error)
-	droppedEvents       atomic.Int64 // events dropped by TrySend due to full channel
-	droppedRetries      atomic.Int64 // hash requests dropped due to full channel
-	lastActivityNano    atomic.Int64 // liveness: updated on each event emit (B-125)
+	baseline         *Baseline
+	logger           *slog.Logger
+	checkWorkers     int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
+	filterConfig     ContentFilterConfig
+	protectedRoots   []ProtectedRoot
+	observationRules LocalObservationRules
+	expectedRoot     *syncRootIdentity
+	// scanAvailability is FullScan's per-scan state for recording synced
+	// paths that are unavailable rather than absent (scanner_unavailable.go).
+	// Set and cleared by FullScan; nil outside a scan.
+	scanAvailability *scanAvailability
+	// watchIdentityLookup caches the identity index the watch handlers use
+	// to recognize a synced item renamed to a skipped name; rebuilt every
+	// watchIdentityIndexMaxAge. Touched only by the goroutine running Watch.
+	// mountBoundaryFlags are the folders recorded as crossed mount points;
+	// set by the engine before a scan (SetMountBoundaryFlags).
+	mountBoundaryFlags   map[string]struct{}
+	watchIdentityLookup  *scanAvailability
+	watchIdentityBuiltAt time.Time
+	protectedRootEvents  protectedRootEventSink
+	watcherFactory       func() (fsWatcher, error)
+	droppedEvents        atomic.Int64 // events dropped by TrySend due to full channel
+	droppedRetries       atomic.Int64 // hash requests dropped due to full channel
+	lastActivityNano     atomic.Int64 // liveness: updated on each event emit (B-125)
 
 	// watchLimitReported and safetyScanFailing let the watch loop report a
 	// persistent condition once instead of per directory or per scan.
@@ -240,12 +252,13 @@ func (o *localObserver) SetLocalObservationBatchChannel(ch chan<- localObservati
 // watch/scanner.
 func (o *localObserver) SetFilterConfig(cfg ContentFilterConfig) {
 	o.filterConfig = ContentFilterConfig{
-		IgnoredDirs:     append([]string(nil), cfg.IgnoredDirs...),
-		IncludedDirs:    append([]string(nil), cfg.IncludedDirs...),
-		IgnoredPaths:    append([]string(nil), cfg.IgnoredPaths...),
-		IgnoreDotfiles:  cfg.IgnoreDotfiles,
-		IgnoreJunkFiles: cfg.IgnoreJunkFiles,
-		FollowSymlinks:  cfg.FollowSymlinks,
+		IgnoredDirs:      append([]string(nil), cfg.IgnoredDirs...),
+		IncludedDirs:     append([]string(nil), cfg.IncludedDirs...),
+		IgnoredPaths:     append([]string(nil), cfg.IgnoredPaths...),
+		IgnoreDotfiles:   cfg.IgnoreDotfiles,
+		IgnoreJunkFiles:  cfg.IgnoreJunkFiles,
+		FollowSymlinks:   cfg.FollowSymlinks,
+		CrossFilesystems: cfg.CrossFilesystems,
 	}
 }
 
@@ -269,13 +282,28 @@ func (o *localObserver) SetObservationRules(rules LocalObservationRules) {
 	o.observationRules = rules
 }
 
-func (o *localObserver) SetExpectedRootIdentity(identity *synctree.FileIdentity) {
+// SetMountBoundaryFlags installs the folders previously recorded as crossed
+// mount points.
+func (o *localObserver) SetMountBoundaryFlags(paths []string) {
+	o.mountBoundaryFlags = make(map[string]struct{}, len(paths))
+	for _, flagged := range paths {
+		o.mountBoundaryFlags[flagged] = struct{}{}
+	}
+}
+
+// SetExpectedRootIdentity validates scans against one fixed identity.
+func (o *localObserver) SetExpectedRootIdentity(identity *synctree.RootIdentity) {
 	if identity == nil {
-		o.expectedRootID = nil
+		o.expectedRoot = nil
 		return
 	}
-	next := *identity
-	o.expectedRootID = &next
+	o.expectedRoot = fixedSyncRootIdentity(identity)
+}
+
+// SetSyncRootIdentity validates scans against the engine's shared identity,
+// so a binding made while the observer runs is enforced at once.
+func (o *localObserver) SetSyncRootIdentity(identity *syncRootIdentity) {
+	o.expectedRoot = identity
 }
 
 func (o *localObserver) reportProtectedRootEvent(event protectedRootEvent) {

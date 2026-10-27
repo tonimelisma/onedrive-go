@@ -87,6 +87,8 @@ func statusScopeKindFromScopeKey(scopeKey syncengine.ScopeKey) string {
 		return statusScopeDirectory
 	case syncengine.ScopeDiskLocal:
 		return statusScopeDisk
+	case syncengine.ScopeDeleteSafety:
+		return statusScopeDrive
 	default:
 		return statusScopeFile
 	}
@@ -109,6 +111,42 @@ func sampleStrings(values []string, verbose bool, examplesLimit int) []string {
 
 func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescriptor {
 	switch key {
+	case syncengine.ConditionLocalUnsyncable:
+		return newStatusConditionDescriptor(
+			"Synced item can no longer sync",
+			"A synced file or folder was renamed or replaced into something sync cannot use (a name OneDrive "+
+				"does not allow, an ignored location, a symbolic link or a special file). Its OneDrive copy is kept.",
+			"Rename or move it back. If you meant to remove it, delete it on OneDrive.",
+		)
+	case syncengine.ConditionRemoteFolderUnverified:
+		return newStatusConditionDescriptor(
+			"Folder too large to delete safely",
+			"You deleted this folder here, but on OneDrive it holds more items than sync checks before a "+
+				"recursive delete, so sync has not deleted it there.",
+			"Delete the folder on the OneDrive website, or restore it here.",
+		)
+	case syncengine.ConditionLocalInterrupted:
+		return newStatusConditionDescriptor(
+			"Interrupted removal",
+			"Sync set this file aside while removing it, and the run stopped before it finished. "+
+				"The file is your content; sync never deletes it on its own.",
+			"Check the file. Rename it back if you want to keep it, or delete it.",
+		)
+	case syncengine.ConditionLocalMountBoundary:
+		return newStatusConditionDescriptor(
+			"Another filesystem inside the sync folder",
+			"This folder is a mount point for another disk or filesystem. Sync does not cross into it, so a "+
+				"disk that is not mounted can never look like deleted files.",
+			"Move the mount outside the sync folder, or set cross_filesystems = true to sync it.",
+		)
+	case syncengine.ConditionDeletesHeld:
+		return newStatusConditionDescriptor(
+			"Deletes held for confirmation",
+			"More was deleted than looks intended (a whole side is empty, or more than 30% of synced files and "+
+				"at least 50), so sync held these deletes. Everything else keeps syncing.",
+			"Check the sync folder and OneDrive. If the deletes are intended, run 'onedrive-go sync --confirm-deletes'; "+
+				"otherwise restore the missing files.",
+		)
 	case syncengine.ConditionAuthenticationRequired:
 		presentation := authstate.UnauthorizedIssuePresentation()
 		return newStatusConditionDescriptor(
@@ -229,6 +267,11 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionLocalDatabaseOpen,
 		syncengine.ConditionUploadVerification,
 		syncengine.ConditionDownloadIntegrity,
+		syncengine.ConditionDeletesHeld,
+		syncengine.ConditionLocalUnsyncable,
+		syncengine.ConditionLocalMountBoundary,
+		syncengine.ConditionLocalInterrupted,
+		syncengine.ConditionRemoteFolderUnverified,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -300,6 +343,11 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionLocalDatabaseOpen,
 		syncengine.ConditionUploadVerification,
 		syncengine.ConditionDownloadIntegrity,
+		syncengine.ConditionDeletesHeld,
+		syncengine.ConditionLocalUnsyncable,
+		syncengine.ConditionLocalMountBoundary,
+		syncengine.ConditionLocalInterrupted,
+		syncengine.ConditionRemoteFolderUnverified,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -391,6 +439,11 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 		syncengine.ConditionRemoteNameTwin,
 		syncengine.ConditionUploadVerification,
 		syncengine.ConditionDownloadIntegrity,
+		syncengine.ConditionDeletesHeld,
+		syncengine.ConditionLocalUnsyncable,
+		syncengine.ConditionLocalMountBoundary,
+		syncengine.ConditionLocalInterrupted,
+		syncengine.ConditionRemoteFolderUnverified,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:

@@ -228,6 +228,7 @@ Dry-run changes only the sync execution/commit semantics after setup.
 | `ignore_dotfiles` | `bool` | `false` | boolean | `sync` | Excludes any path with a component beginning with `.`. |
 | `ignore_junk_files` | `bool` | `true` | boolean | `sync` | Excludes bundled OS/editor/IDE/browser junk, Office `~$` owner files and SQLite sidecars from local and remote sync visibility (R-2.4.14). On unless set to `false` (P-2); stored as `*bool` so an explicit `false` survives (`DriveFilterConfig.JunkFilesIgnored`). |
 | `follow_symlinks` | `bool` | `false` | boolean | `sync` | When false, local symlinks are ignored. When true, local observation may project symlink target content with cycle and delete-safety rules. |
+| `cross_filesystems` | `bool` | `false` | boolean | `sync` | When false, a folder inside the sync folder that is a mount point for another filesystem is not crossed: it is recorded as a `local_mount_boundary` read boundary, so a disk that is not mounted never reads as deleted files (P-11). When true, local observation descends into it like any folder. |
 
 ## Config File Manipulation
 
@@ -387,9 +388,9 @@ of treating absent optional state as a load failure.
 
 ## Validation
 
-Implements: R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified]
+Implements: R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-6.4.3 [verified]
 
-Unknown config keys are fatal errors (`unknown.go`). Per-drive validation checks sync_dir, filter patterns, size parsing, and drive-specific constraints. Global validation checks log level, transfer workers, and safety thresholds. `checkSyncDirOverlap()` prevents overlapping sync directories using `filepath.Clean` + `strings.HasPrefix` with separator suffix. Called at both config load and control-plane startup.
+Unknown config keys are fatal errors (`unknown.go`). There are no delete-threshold keys: the delete-safety hold uses fixed policy (`TestLoad_UnknownKey_DeleteSafetyThresholdsAreNotConfiguration`). Per-drive validation checks sync_dir, filter patterns, size parsing, and drive-specific constraints. Global validation checks log level, transfer workers, and safety thresholds. `checkSyncDirOverlap()` prevents overlapping sync directories using `filepath.Clean` + `strings.HasPrefix` with separator suffix. Called at both config load and control-plane startup.
 
 `ValidateResolved` and `ValidateResolvedForSync` treat only `os.ErrNotExist` as an acceptable sync-dir stat result. If the local path is unreadable or the filesystem returns another error, validation fails instead of silently accepting a broken path.
 

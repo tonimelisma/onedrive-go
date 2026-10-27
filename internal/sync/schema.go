@@ -19,7 +19,13 @@ const (
 	//
 	// Generation 18 adds pending_creates: new files whose empty item exists on
 	// OneDrive while their content upload has not committed (R-5.6.15).
-	currentSyncStoreGeneration = 18
+	//
+	// Generation 19 records the sync folder's fingerprint in observation_state,
+	// so a replaced or unmounted folder is refused instead of scanned as a
+	// mass deletion, and adds held_deletes, the deletes the delete-safety
+	// hold keeps for confirmation, and mount_boundaries, the folders a scan
+	// crossed into another filesystem under cross_filesystems.
+	currentSyncStoreGeneration = 19
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -52,7 +58,13 @@ CREATE TABLE IF NOT EXISTS observation_state (
     cursor                      TEXT    NOT NULL DEFAULT '',
     next_full_remote_refresh_at INTEGER NOT NULL DEFAULT 0,
     local_truth_complete        INTEGER NOT NULL DEFAULT 0 CHECK(local_truth_complete IN (0, 1)),
-    local_truth_recovery_reason TEXT    NOT NULL DEFAULT ''
+    local_truth_recovery_reason TEXT    NOT NULL DEFAULT '',
+    sync_root_bound             INTEGER NOT NULL DEFAULT 0 CHECK(sync_root_bound IN (0, 1)),
+    sync_root_device            INTEGER NOT NULL DEFAULT 0,
+    sync_root_inode             INTEGER NOT NULL DEFAULT 0,
+    sync_root_fsid              INTEGER NOT NULL DEFAULT 0,
+    sync_root_token             TEXT    NOT NULL DEFAULT '',
+    sync_root_rebind            INTEGER NOT NULL DEFAULT 0 CHECK(sync_root_rebind IN (0, 1))
 );
 
 CREATE TABLE IF NOT EXISTS pending_creates (
@@ -66,6 +78,19 @@ CREATE TABLE IF NOT EXISTS pending_creates (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pending_creates_path ON pending_creates(path);
+
+CREATE TABLE IF NOT EXISTS mount_boundaries (
+    path       TEXT    NOT NULL PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS held_deletes (
+    path       TEXT    NOT NULL,
+    side       TEXT    NOT NULL CHECK(side IN ('local', 'remote')),
+    reason     TEXT    NOT NULL DEFAULT '',
+    item_type  TEXT    NOT NULL DEFAULT 'file',
+    item_id    TEXT    NOT NULL DEFAULT '',
+    PRIMARY KEY (path, side)
+);
 
 CREATE TABLE IF NOT EXISTS remote_state (
     drive_id      TEXT    NOT NULL DEFAULT '',
@@ -169,12 +194,20 @@ func canonicalSyncStoreColumns() map[string][]string {
 		"observation_state": {
 			"content_drive_id", "cursor", "next_full_remote_refresh_at",
 			"local_truth_complete", "local_truth_recovery_reason",
+			"sync_root_bound", "sync_root_device", "sync_root_inode", "sync_root_fsid",
+			"sync_root_token", "sync_root_rebind",
 		},
 		"remote_state": {
 			"drive_id", "item_id", "path", "item_type", "hash", "size", "mtime", "etag",
 		},
 		"pending_creates": {
 			"item_id", "drive_id", "path", "parent_id", "created_etag", "local_size", "local_hash",
+		},
+		"mount_boundaries": {
+			"path",
+		},
+		"held_deletes": {
+			"path", "side", "reason", "item_type", "item_id",
 		},
 		"local_state": {
 			"path", "item_type", "hash", "size", "mtime",

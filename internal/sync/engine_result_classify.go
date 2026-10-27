@@ -256,9 +256,10 @@ func issueTypeForFilesystemResult(r *actionCompletion) (string, bool) {
 	}
 
 	err := r.Err
+	if issue, ok := issueTypeForSentinelResult(err); ok {
+		return issue, true
+	}
 	switch {
-	case errors.Is(err, errDatabaseInUse):
-		return issueLocalDatabaseOpen, true
 	case errors.Is(err, driveops.ErrFileTooLargeForSpace):
 		return issueFileTooLargeForSpace, true
 	case errors.Is(err, driveops.ErrFileExceedsOneDriveLimit):
@@ -293,6 +294,19 @@ func issueTypeForFilesystemResult(r *actionCompletion) (string, bool) {
 	}
 
 	return "", false
+}
+
+// issueTypeForSentinelResult maps the sync package's own durable-condition
+// errors.
+func issueTypeForSentinelResult(err error) (string, bool) {
+	switch {
+	case errors.Is(err, errDatabaseInUse):
+		return issueLocalDatabaseOpen, true
+	case errors.Is(err, errRemoteFolderTooLargeToVerify):
+		return issueRemoteFolderUnverifiable, true
+	default:
+		return "", false
+	}
 }
 
 func issueTypeForLocalPermissionResult(r *actionCompletion) string {

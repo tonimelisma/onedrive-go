@@ -51,6 +51,9 @@ type scanResult struct {
 	Events  []changeEvent
 	Rows    []localStateRow
 	Skipped []skippedItem
+	// CrossedMounts are mount points this scan crossed under
+	// cross_filesystems; the engine remembers them (mount_boundaries).
+	CrossedMounts []string
 }
 
 // Constants for the local scanner.
@@ -117,6 +120,13 @@ func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scan
 	if err := o.validateFullScanRoot(tree, syncRoot); err != nil {
 		return scanResult{}, err
 	}
+	rootDevice, err := rootDeviceForScan(tree)
+	if err != nil {
+		return scanResult{}, err
+	}
+	o.scanAvailability = newScanAvailability(rootDevice)
+	o.scanAvailability.tree = tree
+	defer func() { o.scanAvailability = nil }()
 
 	// Phase 1: Walk — collect observed paths, folder events, hash jobs, and skipped items.
 	var events []changeEvent
@@ -201,9 +211,10 @@ func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scan
 	}
 
 	return scanResult{
-		Events:  events,
-		Rows:    sortedLocalStateRows(currentRows),
-		Skipped: skipped,
+		Events:        events,
+		Rows:          sortedLocalStateRows(currentRows),
+		Skipped:       skipped,
+		CrossedMounts: append([]string(nil), o.scanAvailability.crossedMounts...),
 	}, nil
 }
 
@@ -217,7 +228,7 @@ func (o *localObserver) validateFullScanRoot(tree *synctree.Root, syncRoot strin
 			slog.String("sync_root", syncRoot))
 		return errSyncRootMissing
 	}
-	if err := validateExpectedSyncRootIdentity(tree, o.expectedRootID); err != nil {
+	if err := o.expectedRoot.Validate(tree); err != nil {
 		o.logger.Debug("sync root identity changed, aborting scan",
 			slog.String("sync_root", syncRoot),
 			slog.String("error", err.Error()))
@@ -290,12 +301,25 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 				// as a skipped item instead, reported once and in `status`.
 				o.logger.Debug("hash computation failed, emitting event with empty hash",
 					slog.String("path", job.dbRelPath), slog.String("error", err.Error()))
-				if errors.Is(err, os.ErrPermission) {
+				switch {
+				case errors.Is(err, os.ErrPermission):
 					mu.Lock()
 					skipped = append(skipped, skippedItem{
 						Path:   job.dbRelPath,
 						Reason: issueLocalReadDenied,
 						Detail: "file not readable (check filesystem permissions)",
+					})
+					mu.Unlock()
+				case !errors.Is(err, os.ErrNotExist):
+					// An I/O error is not a content change: without the
+					// issue the empty hash read as "changed", and an upload
+					// that failed the same way was planned on every pass
+					// (D-005). The issue makes the path unavailable truth.
+					mu.Lock()
+					skipped = append(skipped, skippedItem{
+						Path:   job.dbRelPath,
+						Reason: issueHashPanic,
+						Detail: fmt.Sprintf("could not read the file to check its content (%v)", err),
 					})
 					mu.Unlock()
 				}
@@ -374,6 +398,13 @@ func (o *localObserver) makeWalkFunc(
 	syncRoot := tree.Path()
 
 	return func(fsPath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil && fsPath == syncRoot {
+			// The sync folder itself could not be read (EIO on a dying disk,
+			// a stale network mount). A read boundary would be recorded at
+			// ".", which no path lies under, so every synced file would look
+			// deleted. Nothing about the tree is known: stop the scan (D-005).
+			return fmt.Errorf("%w: reading the sync folder: %w", ErrMountRootUnavailable, walkErr)
+		}
 		if walkErr != nil {
 			// Debug: a persistent unreadable folder would warn on every
 			// scan; the skipped item below is the single user-facing report.
@@ -409,6 +440,7 @@ func (o *localObserver) makeWalkFunc(
 		if d.Type()&fs.ModeSymlink != 0 {
 			if !newContentFilter(o.filterConfig).ShouldFollowSymlinks() {
 				o.rememberExcludedSymlink(dbRelPath)
+				o.recordSyncedPathReplaced(skipped, dbRelPath, "a symbolic link")
 				observed[dbRelPath] = true
 				o.logger.Debug("skipping symlink", slog.String("path", dbRelPath))
 				return skipEntry(d)
@@ -448,6 +480,21 @@ func (o *localObserver) makeWalkFunc(
 			} else {
 				o.logger.Debug("skipping excluded file", slog.String("name", name))
 			}
+			if synctree.IsDetachArtifactName(name) {
+				// A file set aside by a removal a crash interrupted: user
+				// content left under a hidden name. Report it every scan
+				// until the user deals with it; never delete it (P-4).
+				*skipped = append(*skipped, skippedItem{
+					Path:   dbRelPath,
+					Reason: issueLocalInterruptedRemoval,
+					Detail: "sync set this file aside while removing it and was interrupted; " +
+						"rename it back to keep it, or delete it",
+				})
+			}
+			// A synced item renamed to this skipped name (invalid, too long,
+			// excluded) is still the synced item: keep its synced path
+			// unavailable instead of letting it read as deleted.
+			o.recordSyncedItemMovedOutOfReach(skipped, o.scanAvailability, dbRelPath, d)
 
 			return skipEntry(d)
 		}
@@ -473,6 +520,10 @@ func (o *localObserver) processEntry(
 				Reason: issueLocalReadDenied,
 				Detail: "file not accessible (check filesystem permissions)",
 			})
+		} else {
+			// Anything but "it vanished" (an I/O error, a stale network
+			// handle) is unknown, not absent (D-005).
+			recordUnreadableEntry(skipped, dbRelPath, err)
 		}
 		// File disappeared between readdir and stat (an expected race), or
 		// is unreadable (recorded above) -- skip and continue.
@@ -541,6 +592,7 @@ func (o *localObserver) processObservedInfo(
 	// to hash it would block until a writer appears. Marking the path
 	// observed keeps deletion detection from treating it as removed.
 	if isSpecialFile(info) {
+		o.recordSyncedPathReplaced(skipped, dbRelPath, "a FIFO, socket or device file")
 		observed[dbRelPath] = true
 		o.logger.Debug("skipping special file",
 			slog.String("path", dbRelPath),
@@ -559,6 +611,22 @@ func (o *localObserver) processObservedInfo(
 			FileSize: info.Size(),
 		})
 		return nil
+	}
+
+	if kind == observedKindDir {
+		identity, hasIdentity := synctree.IdentityFromFileInfo(info)
+		if o.isForeignMountPoint(o.scanAvailability, dbRelPath, identity, hasIdentity) {
+			*skipped = append(*skipped, mountBoundarySkippedItem(dbRelPath))
+			observed[dbRelPath] = true
+			o.logger.Debug("not crossing into another filesystem", slog.String("path", dbRelPath))
+			return filepath.SkipDir
+		}
+		if o.flaggedMountIsGone(o.scanAvailability, dbRelPath) {
+			*skipped = append(*skipped, vanishedMountSkippedItem(dbRelPath))
+			observed[dbRelPath] = true
+			o.logger.Debug("a crossed mount point is no longer mounted", slog.String("path", dbRelPath))
+			return filepath.SkipDir
+		}
 	}
 
 	observed[dbRelPath] = true

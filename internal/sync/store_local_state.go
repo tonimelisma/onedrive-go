@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 const (
@@ -53,37 +55,59 @@ const (
 func (s *SyncStore) ReplaceLocalState(
 	ctx context.Context,
 	rows []localStateRow,
-) (err error) {
+) error {
+	_, err := s.ReplaceLocalStateBindingRoot(ctx, rows, nil, nil)
+	return err
+}
+
+// ReplaceLocalStateBindingRoot replaces local_state and, when bind is not
+// nil, records it as the sync folder's identity in the same transaction: the
+// binding and the first snapshot taken of that folder land together or not
+// at all (D-001).
+func (s *SyncStore) ReplaceLocalStateBindingRoot(
+	ctx context.Context,
+	rows []localStateRow,
+	bind *synctree.RootIdentity,
+	crossedMounts []string,
+) (bound *synctree.RootIdentity, err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning local_state transaction: %w", err)
+		return nil, fmt.Errorf("sync: beginning local_state transaction: %w", err)
 	}
 	defer func() {
 		err = finalizeTxRollback(err, tx, "sync: rollback local_state transaction")
 	}()
 
-	if err := replaceLocalStateTx(ctx, tx, rows); err != nil {
-		return err
+	if replaceErr := replaceLocalStateTx(ctx, tx, rows); replaceErr != nil {
+		return nil, replaceErr
 	}
 	backfilled, backfillErr := backfillBaselineIdentityTx(ctx, tx)
 	if backfillErr != nil {
-		return backfillErr
+		return nil, backfillErr
 	}
-	if err := markLocalTruthCompleteTx(ctx, tx); err != nil {
-		return err
+	if markErr := markLocalTruthCompleteTx(ctx, tx); markErr != nil {
+		return nil, markErr
+	}
+	if bind != nil {
+		if bound, err = bindSyncRootIdentityTx(ctx, tx, *bind); err != nil {
+			return nil, err
+		}
+	}
+	if err := recordMountBoundariesTx(ctx, tx, crossedMounts); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing local_state transaction: %w", err)
+		return nil, fmt.Errorf("sync: committing local_state transaction: %w", err)
 	}
 
 	if backfilled > 0 {
 		if err := s.reloadBaselineCache(ctx); err != nil {
-			return fmt.Errorf("sync: reloading baseline cache after identity backfill: %w", err)
+			return nil, fmt.Errorf("sync: reloading baseline cache after identity backfill: %w", err)
 		}
 	}
 
-	return nil
+	return bound, nil
 }
 
 // backfillBaselineIdentityTx attaches the full snapshot's filesystem identity
@@ -386,4 +410,43 @@ func scanLocalStateRow(
 	row.LocalHasIdentity = localHasIdentity != 0
 
 	return &row, nil
+}
+
+// recordMountBoundariesTx remembers folders a scan crossed into another
+// filesystem, and forgets flags for folders that are neither synced nor
+// present any more. A flag outlives an unmount on purpose: it is what tells
+// the next scan that the empty folder is a disk that is not mounted.
+func recordMountBoundariesTx(ctx context.Context, tx sqlTxRunner, crossed []string) error {
+	for _, boundary := range crossed {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO mount_boundaries (path) VALUES (?)`, boundary); err != nil {
+			return fmt.Errorf("sync: recording mount boundary %s: %w", boundary, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM mount_boundaries
+		WHERE path NOT IN (SELECT path FROM baseline) AND path NOT IN (SELECT path FROM local_state)`); err != nil {
+		return fmt.Errorf("sync: pruning mount boundaries: %w", err)
+	}
+	return nil
+}
+
+// listMountBoundaries returns the folders recorded as crossed mount points.
+func (s *SyncStore) listMountBoundaries(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT path FROM mount_boundaries ORDER BY path`)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing mount boundaries: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+
+	var paths []string
+	for rows.Next() {
+		var boundary string
+		if err := rows.Scan(&boundary); err != nil {
+			return nil, fmt.Errorf("sync: scanning mount boundary: %w", err)
+		}
+		paths = append(paths, boundary)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating mount boundaries: %w", err)
+	}
+	return paths, nil
 }

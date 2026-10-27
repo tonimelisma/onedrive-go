@@ -87,6 +87,9 @@ type actionPlan struct {
 	Actions        []Action       // flat list of all executable actions
 	Deps           [][]int        // Deps[i] = indices that action i depends on
 	DeferredByMode DeferredCounts // planner-observed work suppressed by direction
+	// HeldDeletes are deletes the delete-safety hold kept out of Actions
+	// until the user confirms them (planner_delete_safety.go).
+	HeldDeletes []heldDelete
 }
 
 // actionOutcome is the result of executing a single action. Self-contained —

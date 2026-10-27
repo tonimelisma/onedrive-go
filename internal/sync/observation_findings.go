@@ -58,7 +58,10 @@ func appendSkippedObservationFinding(
 		DriveID:   driveID,
 		IssueType: item.Reason,
 	}
-	if item.Reason == issueLocalReadDenied && item.BlocksReadBoundary {
+	// Any finding that proved a subtree unknown (an unreadable folder, a
+	// synced folder now out of reach, a mount boundary) is a read boundary:
+	// the planner treats everything beneath it as unavailable, not missing.
+	if item.BlocksReadBoundary {
 		issue.ScopeKey = sKPermLocalRead(item.Path)
 	}
 

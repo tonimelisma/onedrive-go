@@ -55,10 +55,7 @@ func (flow *engineFlow) observeMountRootRemote(
 		}
 		if err == nil {
 			eng.mountRootDeltaFallbackReported.Store(false)
-			events := convertMountRootItems(ctx, items, eng.remoteRootItemID, eng.driveID, bl, eng.logger, eng.itemsClient)
-			if fullReconcile {
-				events = append(events, detectMountRootOrphans(items, eng.driveID, bl)...)
-			}
+			events := eng.mountRootEvents(ctx, items, bl, fullReconcile)
 
 			return events, newToken, remoteObservationModeDelta, nil
 		}
@@ -91,11 +88,23 @@ func (flow *engineFlow) observeMountRootRemote(
 	if err != nil {
 		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: mount-root recursive listing: %w", err)
 	}
+	if err := validateMountRootListingParents(items, eng.remoteRootItemID); err != nil {
+		return nil, "", remoteObservationModeEnumerate, err
+	}
 
-	events := convertMountRootItems(ctx, items, eng.remoteRootItemID, eng.driveID, bl, eng.logger, eng.itemsClient)
-	events = append(events, detectMountRootOrphans(items, eng.driveID, bl)...)
+	events := eng.mountRootEvents(ctx, items, bl, true)
 
 	return events, "", remoteObservationModeEnumerate, nil
+}
+
+// mountRootEvents converts a mount-root enumeration, adding confirmed orphan
+// deletes when the enumeration was complete.
+func (e *Engine) mountRootEvents(ctx context.Context, items []graph.Item, bl *Baseline, complete bool) []changeEvent {
+	events := convertMountRootItems(ctx, items, e.remoteRootItemID, e.driveID, bl, e.logger, e.itemsClient)
+	if complete {
+		events = append(events, e.confirmMountRootOrphans(ctx, items, detectMountRootOrphans(items, e.driveID, bl))...)
+	}
+	return events
 }
 
 func convertMountRootItems(
@@ -123,6 +132,127 @@ func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Ba
 	}
 
 	return findBaselineOrphans(bl, seen, remoteDriveID, "")
+}
+
+// validateMountRootListingParents rejects a recursive listing whose items do
+// not hang off the listed folder: every item's parent must be the mount root
+// or a folder the same listing returned. A page that answered for another
+// folder, or a child whose folder the listing skipped, means the listing is
+// not a picture of the mount, and absence from it proves nothing (D-009).
+func validateMountRootListingParents(items []graph.Item, remoteRootItemID string) error {
+	folders := make(map[string]struct{}, len(items)+1)
+	folders[remoteRootItemID] = struct{}{}
+	for i := range items {
+		if items[i].IsFolder || items[i].IsRoot {
+			folders[items[i].ID] = struct{}{}
+		}
+	}
+	for i := range items {
+		if items[i].ID == remoteRootItemID || items[i].ParentID == "" {
+			continue
+		}
+		if _, ok := folders[items[i].ParentID]; !ok {
+			return fmt.Errorf("%w: shared folder listing returned %q under a folder it did not list",
+				errRemoteObservationIncomplete, items[i].Name)
+		}
+	}
+
+	return nil
+}
+
+// confirmMountRootOrphans keeps only the synthesized deletes a live lookup
+// confirms. One enumeration of a shared folder (/children pages, or a folder
+// delta) is not proof of absence: Graph omits items transiently, and a delete
+// synthesized from that omission removes the local copy, which the next
+// listing then downloads again (D-009). An item is gone when GetItem answers
+// 404 or a deleted facet, or when its ancestors provably lead outside the
+// mount; an item still inside, one whose parent cannot be resolved, or a
+// lookup that failed is left for the next listing.
+func (e *Engine) confirmMountRootOrphans(ctx context.Context, listed []graph.Item, orphans []changeEvent) []changeEvent {
+	inside := make(map[string]struct{}, len(listed)+1)
+	inside[e.remoteRootItemID] = struct{}{}
+	for i := range listed {
+		inside[listed[i].ID] = struct{}{}
+	}
+
+	return e.confirmEnumerationOrphans(ctx, orphans, inside)
+}
+
+// confirmEnumerationOrphans looks up each delete a complete enumeration
+// synthesized and keeps only those confirmed gone. inside is nil for a
+// drive-root enumeration, where any live item is still in scope; for a mount
+// root it holds the mount root and every item the listing returned. An
+// unconfirmed orphan produces no event, so its local copy stays and the next
+// complete enumeration judges it again.
+func (e *Engine) confirmEnumerationOrphans(
+	ctx context.Context,
+	orphans []changeEvent,
+	inside map[string]struct{},
+) []changeEvent {
+	if len(orphans) == 0 || e.itemsClient == nil {
+		return orphans
+	}
+
+	confirmed := make([]changeEvent, 0, len(orphans))
+	for i := range orphans {
+		orphan := orphans[i]
+		live, err := e.itemsClient.GetItem(ctx, e.driveID, orphan.ItemID)
+		switch {
+		case errors.Is(err, graph.ErrNotFound):
+			confirmed = append(confirmed, orphan)
+		case err != nil:
+			e.logger.Debug("could not confirm an item missing from a listing is gone; keeping it",
+				slog.String("path", orphan.Path), slog.String("error", err.Error()))
+		case live == nil:
+			continue
+		case live.IsDeleted:
+			confirmed = append(confirmed, orphan)
+		case inside == nil:
+			e.logger.Debug("a full rescan omitted a live item; not deleting it",
+				slog.String("path", orphan.Path), slog.String("item_id", orphan.ItemID))
+		default:
+			if e.liveItemLeftMount(ctx, live, inside) {
+				confirmed = append(confirmed, orphan)
+				continue
+			}
+			e.logger.Debug("shared-folder listing omitted a live item; not deleting it",
+				slog.String("path", orphan.Path), slog.String("item_id", orphan.ItemID))
+		}
+	}
+
+	return confirmed
+}
+
+// mountAncestorLookupLimit bounds the parent walk that proves an item left
+// a mount.
+const mountAncestorLookupLimit = 64
+
+// liveItemLeftMount reports whether a live item's ancestors provably lead
+// outside the mount: the parent walk reaches a drive root without passing
+// through the mount. Anything less proves nothing and the item is treated as
+// still inside: an empty parent anywhere on the walk (the item itself or an
+// ancestor), a lookup that fails or finds a deleted parent, or a walk deeper
+// than mountAncestorLookupLimit.
+func (e *Engine) liveItemLeftMount(ctx context.Context, live *graph.Item, inside map[string]struct{}) bool {
+	parentID := live.ParentID
+	for range mountAncestorLookupLimit {
+		if parentID == "" {
+			return false
+		}
+		if _, ok := inside[parentID]; ok {
+			return false
+		}
+		parent, err := e.itemsClient.GetItem(ctx, e.driveID, parentID)
+		if err != nil || parent == nil || parent.IsDeleted {
+			return false
+		}
+		if parent.IsRoot {
+			return true
+		}
+		parentID = parent.ParentID
+	}
+
+	return false
 }
 
 func (flow *engineFlow) commitObservedItems(

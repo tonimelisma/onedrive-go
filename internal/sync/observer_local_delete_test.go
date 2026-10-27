@@ -481,6 +481,9 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 		Name: dirPath,
 		Op:   fsnotify.Remove,
 	}
+	// The event reports a removal that happened: a delete event for a path
+	// that still exists is ignored (D-011).
+	require.NoError(t, os.Remove(dirPath))
 
 	obs.HandleFsEvent(t.Context(), fsEvent, watcher, mustOpenSyncTree(t, syncRoot), events)
 

@@ -1,6 +1,6 @@
 # System Architecture
 
-GOVERNS: internal/synctree/*.go, internal/fsroot/*.go, internal/localpath/*.go, internal/perf/*.go, internal/devtool/*.go, internal/errclass/*.go, internal/sharedref/*.go, internal/authstate/*.go, internal/synctest/*.go, internal/namekey/*.go
+GOVERNS: internal/synctree/*.go, internal/localtrash/*.go, internal/fsroot/*.go, internal/localpath/*.go, internal/perf/*.go, internal/devtool/*.go, internal/errclass/*.go, internal/sharedref/*.go, internal/authstate/*.go, internal/synctest/*.go, internal/namekey/*.go
 
 Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.1 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified], R-6.10.16 [verified], R-6.10.17 [verified], R-6.10.21 [verified]
 

@@ -184,12 +184,13 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		SyncConfig:      cfg.SyncConfig,
 		LoggingConfig:   cfg.LoggingConfig,
 		DriveFilterConfig: DriveFilterConfig{
-			IgnoredDirs:     slices.Clone(drive.IgnoredDirs),
-			IncludedDirs:    slices.Clone(drive.IncludedDirs),
-			IgnoredPaths:    slices.Clone(drive.IgnoredPaths),
-			IgnoreDotfiles:  drive.IgnoreDotfiles,
-			IgnoreJunkFiles: cloneBoolPointer(drive.IgnoreJunkFiles),
-			FollowSymlinks:  drive.FollowSymlinks,
+			IgnoredDirs:      slices.Clone(drive.IgnoredDirs),
+			IncludedDirs:     slices.Clone(drive.IncludedDirs),
+			IgnoredPaths:     slices.Clone(drive.IgnoredPaths),
+			IgnoreDotfiles:   drive.IgnoreDotfiles,
+			IgnoreJunkFiles:  cloneBoolPointer(drive.IgnoreJunkFiles),
+			FollowSymlinks:   drive.FollowSymlinks,
+			CrossFilesystems: drive.CrossFilesystems,
 		},
 	}
 

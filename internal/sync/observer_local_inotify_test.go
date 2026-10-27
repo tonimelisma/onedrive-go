@@ -185,7 +185,7 @@ func TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable(t 
 
 	syncRoot := t.TempDir()
 	tree := mustOpenSyncTree(t, syncRoot)
-	identity, err := tree.IdentityNoFollow("")
+	identity, err := tree.RootIdentity()
 	require.NoError(t, err)
 	identity.Inode++
 

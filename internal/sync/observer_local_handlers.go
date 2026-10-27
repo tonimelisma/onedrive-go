@@ -218,13 +218,16 @@ func (o *localObserver) handleCreate(
 
 	if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
 		o.rememberExcludedSymlink(dbRelPath)
+		o.rescanIfSkippedEntryHidesSyncedItem(ctx, tree, dbRelPath, info, events)
 		return
 	}
 
 	o.forgetExcludedSymlink(dbRelPath)
 
 	if isSpecialFile(info) {
-		return // FIFOs, sockets and devices are never synced (see processObservedInfo).
+		// FIFOs, sockets and devices are never synced (see processObservedInfo).
+		o.rescanIfSkippedEntryHidesSyncedItem(ctx, tree, dbRelPath, info, events)
+		return
 	}
 
 	if protectedRoot, ok := protectedRootIdentityReservation(dbRelPath, info, o.protectedRoots); ok {
@@ -239,6 +242,7 @@ func (o *localObserver) handleCreate(
 	}
 
 	if skip := shouldObserveWithFilter(name, dbRelPath, infoKind(info), o.filterConfig, o.protectedRoots, o.observationRules); skip != nil {
+		o.rescanIfSkippedEntryHidesSyncedItem(ctx, tree, dbRelPath, info, events)
 		return
 	}
 
@@ -705,6 +709,18 @@ func (o *localObserver) HandleDelete(
 	ctx context.Context, watcher fsWatcher, tree *synctree.Root, fsPath, dbRelPath, name string,
 	events chan<- changeEvent,
 ) {
+	// A Remove or Rename event names a path, not an inode, and arrives late.
+	// A lone MOVED_FROM, an atomic save (rename over the path) or an event
+	// attributed to the wrong name would otherwise become a delete of a file
+	// that is still there, and then a delete on OneDrive (D-011). The path
+	// is only deleted when it is actually gone; a replacement arrives as its
+	// own create or write event.
+	if localPathStillPresent(tree, dbRelPath, fsPath) {
+		o.logger.Debug("ignoring delete event for a path that still exists",
+			slog.String("path", dbRelPath))
+		return
+	}
+
 	// Clean up write coalesce timer for deleted path (B-107).
 	o.cancelPendingTimer(dbRelPath)
 
@@ -773,6 +789,77 @@ func (o *localObserver) HandleDelete(
 	}
 
 	o.TrySend(ctx, events, &ev)
+}
+
+// rescanIfSkippedEntryHidesSyncedItem runs a safety scan now when a created
+// entry sync skips is a synced item in disguise: it occupies a synced path
+// (a symlink or special file replacing it), or it is a synced item renamed to
+// a name sync skips (recognized by filesystem identity). The rename's delete
+// half has already reached the runtime; the scan records the synced path as
+// unavailable (scanner_unavailable.go) within the same debounce window, so
+// the replan sees an unavailable path instead of a deleted one (D-004, P-5).
+func (o *localObserver) rescanIfSkippedEntryHidesSyncedItem(
+	ctx context.Context,
+	tree *synctree.Root,
+	dbRelPath string,
+	info os.FileInfo,
+	events chan<- changeEvent,
+) {
+	hides := false
+	if _, synced := o.baseline.GetByPath(dbRelPath); synced {
+		hides = true
+	} else if identity, ok := synctree.IdentityFromFileInfo(info); ok && !hasOtherHardLinks(info) {
+		if entry := o.watchIdentityIndex().baselineEntryWithIdentity(o.baseline, identity); entry != nil && entry.Path != dbRelPath {
+			hides = true
+		}
+	}
+	if !hides || tree == nil {
+		return
+	}
+
+	o.logger.Debug("a synced item became something sync skips; rescanning",
+		slog.String("path", dbRelPath))
+	o.runSafetyScan(ctx, tree, events)
+}
+
+// watchIdentityIndexMaxAge bounds how stale the watch handler's
+// identity-to-baseline index may be. Skipped creates are frequent (editor
+// swap files, .DS_Store), so the index is rebuilt at most this often rather
+// than per event; an item synced within the window and then renamed out of
+// reach is caught by the next safety scan instead.
+const watchIdentityIndexMaxAge = time.Minute
+
+func (o *localObserver) watchIdentityIndex() *scanAvailability {
+	now := o.clock.Now()
+	if o.watchIdentityLookup == nil || now.Sub(o.watchIdentityBuiltAt) > watchIdentityIndexMaxAge {
+		o.watchIdentityLookup = newScanAvailability(0)
+		o.watchIdentityBuiltAt = now
+	}
+	return o.watchIdentityLookup
+}
+
+// localPathStillPresent reports whether the exact name at fsPath exists. On a
+// case-insensitive volume Lstat also finds a differently-cased sibling, which
+// is the other half of a case-only rename, so the parent listing decides.
+func localPathStillPresent(tree *synctree.Root, dbRelPath, fsPath string) bool {
+	if tree == nil {
+		return false
+	}
+	if _, err := tree.Lstat(dbRelPath); err != nil {
+		return false
+	}
+	entries, err := tree.ReadDir(filepath.Dir(dbRelPath))
+	if err != nil {
+		return false
+	}
+	want := filepath.Base(fsPath)
+	wantNFC := nfcNormalize(want)
+	for _, entry := range entries {
+		if entry.Name() == want || nfcNormalize(entry.Name()) == wantNFC {
+			return true
+		}
+	}
+	return false
 }
 
 // reportWatchAddFailure reports a directory the watcher could not add. Once

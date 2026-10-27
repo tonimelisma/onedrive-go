@@ -23,7 +23,9 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 	assert.ElementsMatch(t, []string{
 		"baseline",
 		"block_scopes",
+		"held_deletes",
 		"local_state",
+		"mount_boundaries",
 		"observation_issues",
 		"observation_state",
 		"pending_creates",
@@ -41,6 +43,12 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 		"local_truth_complete",
 		"local_truth_recovery_reason",
 		"next_full_remote_refresh_at",
+		"sync_root_bound",
+		"sync_root_device",
+		"sync_root_inode",
+		"sync_root_fsid",
+		"sync_root_token",
+		"sync_root_rebind",
 	}, columns)
 
 	state, err := store.ReadObservationState(ctx)

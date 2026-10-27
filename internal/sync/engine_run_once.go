@@ -57,7 +57,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 	report := runtime.Report
 
 	if len(plan.Actions) == 0 {
-		if report.DeferredByMode.Total() > 0 {
+		if report.DeferredByMode.Total() > 0 || report.HeldLocalDeletes+report.HeldRemoteDeletes > 0 {
 			report.Duration = e.since(start)
 			e.logRunOnceCompletion(report)
 			return report, nil
@@ -289,20 +289,18 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	}
 	obs.SetShortcutTopology(eng.shortcutNamespaceID, eng.protectedRoots)
 
-	// Full enumeration: empty token returns ALL items as create/modify events.
-	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, "")
+	// Full enumeration: empty token returns ALL items as create/modify
+	// events, plus the raw ID of every live item Graph returned. The seen set
+	// is the raw IDs: an item the converter dropped was still enumerated, and
+	// building seen from events synthesized a delete for it (D-008).
+	events, token, topology, seen, err := obs.FullEnumerationWithShortcutTopology(ctx)
 	if err != nil {
 		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: full remote refresh delta: %w", err)
 	}
-
-	// Build seen set from all non-deleted events in the full enumeration.
-	seen := make(map[string]struct{}, len(events))
 	for i := range events {
-		if events[i].IsDeleted {
-			continue
+		if !events[i].IsDeleted && events[i].ItemID != "" {
+			seen[events[i].ItemID] = struct{}{}
 		}
-
-		seen[events[i].ItemID] = struct{}{}
 	}
 
 	// Detect orphans: baseline entries whose ItemID is not in the seen set.
@@ -318,6 +316,9 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	}
 	orphans = append(orphans, findRemoteStateOrphans(remoteRows, seen, orphans, eng.driveID)...)
 
+	// A complete enumeration that omits an item is not proof it is gone
+	// (Graph omits items transiently); only a live 404 or deleted facet is.
+	orphans = eng.confirmEnumerationOrphans(ctx, orphans, nil)
 	if len(orphans) > 0 {
 		events = append(events, orphans...)
 	}

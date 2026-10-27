@@ -186,11 +186,3 @@ func cloneShortcutRootReplacement(replacement *ShortcutRootReplacement) *Shortcu
 	next := *replacement
 	return &next
 }
-
-func cloneFileIdentity(identity *synctree.FileIdentity) *synctree.FileIdentity {
-	if identity == nil {
-		return nil
-	}
-	next := *identity
-	return &next
-}
