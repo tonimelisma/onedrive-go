@@ -62,6 +62,9 @@ func isRemoteFilesystemType(kind string) bool {
 	switch kind {
 	case "nfs", "smbfs", "afpfs", "webdav", "cifs", "macfuse", "osxfuse", "fusefs":
 		return true
+	case "fuseblk":
+		// Block-backed FUSE drivers for local disks see every change.
+		return false
 	default:
 		return strings.HasPrefix(kind, "fuse")
 	}

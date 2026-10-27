@@ -417,9 +417,10 @@ type watchSetupCounts struct {
 	watched int
 	failed  int
 	// entries counts the directory entries seen under watched directories.
-	// The kqueue backend opens a descriptor for every file inside a watched
-	// directory as well as for the directory, so watched+entries projects
-	// the descriptors watching will hold.
+	// The kqueue backend opens one descriptor for every entry of a watched
+	// directory, files and subdirectories alike (a watched subdirectory's own
+	// watch reuses its entry's descriptor), so entries plus the root's own
+	// descriptor projects what watching will hold.
 	entries int
 }
 
@@ -589,7 +590,7 @@ func (o *localObserver) checkWatchDescriptorBudget(counts *watchSetupCounts) err
 		return nil
 	}
 
-	projected := counts.watched + counts.entries
+	projected := counts.entries + 1 // +1: the sync root's own watch
 	if projected <= o.descriptorBudget {
 		return nil
 	}

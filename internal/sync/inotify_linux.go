@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -119,9 +121,79 @@ func localFilesystemKind(path string) (filesystemInfo, error) {
 
 	// f_type is int64 on amd64 and int32 on 32-bit platforms; the magic
 	// numbers are 32-bit, so compare the low 32 bits.
-	if kind, ok := remoteFilesystemName(uint32(stat.Type)); ok {
+	kind, ok := remoteFilesystemName(uint32(stat.Type))
+	if !ok {
+		return filesystemInfo{kind: fmt.Sprintf("0x%x", stat.Type)}, nil
+	}
+	if uint32(stat.Type) != unix.FUSE_SUPER_MAGIC {
 		return filesystemInfo{kind: kind, remote: true}, nil
 	}
 
-	return filesystemInfo{kind: fmt.Sprintf("0x%x", stat.Type)}, nil
+	// FUSE covers both servers that synthesize content (sshfs, rclone
+	// mount) and block-backed drivers for local disks (ntfs-3g, exfat-fuse),
+	// which mount as "fuseblk" and see every change through this kernel.
+	// statfs cannot tell them apart; the mount table can.
+	mountinfo, err := localpath.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return filesystemInfo{kind: kind, remote: true}, nil //nolint:nilerr // unknown FUSE flavor: assume the conservative case
+	}
+	if fsType, found := mountFilesystemType(string(mountinfo), path); found {
+		return filesystemInfo{kind: fsType, remote: fsType != "fuseblk"}, nil
+	}
+
+	return filesystemInfo{kind: kind, remote: true}, nil
+}
+
+// mountFilesystemType returns the filesystem type of the mount that holds
+// path, from /proc/self/mountinfo text: the mount whose mount point is the
+// longest prefix of path.
+func mountFilesystemType(mountinfo, path string) (string, bool) {
+	path = filepath.Clean(path)
+	bestLen := -1
+	bestType := ""
+	for _, line := range strings.Split(mountinfo, "\n") {
+		fields := strings.Fields(line)
+		sep := slices.Index(fields, "-")
+		if len(fields) < 5 || sep < 0 || sep+1 >= len(fields) {
+			continue
+		}
+		mountPoint := unescapeMountinfo(fields[4])
+		if !pathWithin(path, mountPoint) || len(mountPoint) <= bestLen {
+			continue
+		}
+		bestLen = len(mountPoint)
+		bestType = fields[sep+1]
+	}
+
+	return bestType, bestLen >= 0
+}
+
+func pathWithin(path, mountPoint string) bool {
+	if mountPoint == "/" || path == mountPoint {
+		return true
+	}
+
+	return strings.HasPrefix(path, mountPoint+"/")
+}
+
+// unescapeMountinfo decodes the octal escapes (\040 for a space) the kernel
+// writes for special characters in mountinfo paths.
+func unescapeMountinfo(field string) string {
+	if !strings.Contains(field, "\\") {
+		return field
+	}
+
+	var out strings.Builder
+	for i := 0; i < len(field); i++ {
+		if field[i] == '\\' && i+3 < len(field) {
+			if v, err := strconv.ParseUint(field[i+1:i+4], 8, 8); err == nil {
+				out.WriteByte(byte(v))
+				i += 3
+				continue
+			}
+		}
+		out.WriteByte(field[i])
+	}
+
+	return out.String()
 }

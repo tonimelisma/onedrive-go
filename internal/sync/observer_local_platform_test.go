@@ -123,3 +123,38 @@ func manualTickerIntervals(clock *manualClock) []time.Duration {
 
 	return intervals
 }
+
+// Validates: R-2.8.19
+func TestAdaptToRootFilesystem_NonDefaultIntervalIsNeverOverridden(t *testing.T) {
+	t.Parallel()
+
+	for _, chosen := range []time.Duration{time.Minute, 10 * time.Minute} {
+		obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+		obs.safetyScanInterval = chosen
+		obs.filesystemKind = func(string) (filesystemInfo, error) {
+			return filesystemInfo{kind: "nfs", remote: true}, nil
+		}
+
+		obs.adaptToRootFilesystem(t.TempDir())
+
+		assert.Equal(t, chosen, obs.safetyScanInterval, "only the default interval is shortened")
+	}
+}
+
+// Validates: R-2.8.18
+func TestAddWatchesRecursive_DescriptorProjectionCountsSubdirectoriesOnce(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	for i := range 6 {
+		writeTestFile(t, root, fmt.Sprintf("sub/f%d.txt", i), "x")
+	}
+
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	// root + sub + six files: kqueue holds exactly eight descriptors (the
+	// watch on sub reuses the descriptor of sub's entry in root).
+	obs.descriptorBudget = 8
+
+	require.NoError(t, obs.AddWatchesRecursive(t.Context(), newRecordingFsWatcher(), mustOpenSyncTree(t, root)),
+		"a tree that fits the budget exactly is watched")
+}

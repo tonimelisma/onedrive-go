@@ -952,13 +952,15 @@ func (o *localObserver) adaptToRootFilesystem(syncRoot string) {
 		return
 	}
 
-	if o.effectiveSafetyScanInterval() > networkSafetyScanInterval {
+	// Only the default interval is shortened: a non-default interval was
+	// chosen deliberately, and it is never lengthened.
+	if o.effectiveSafetyScanInterval() == safetyScanInterval {
 		o.safetyScanInterval = networkSafetyScanInterval
 	}
 
-	o.logger.Warn("The sync folder is on a network or FUSE file system ("+info.kind+"). "+
-		"Changes made to it from other computers are not reported to this one, so they are noticed "+
-		"only by the periodic rescan, every "+waitText(o.effectiveSafetyScanInterval())+".",
+	o.logger.Warn("The sync folder is on a network or FUSE filesystem ("+info.kind+"). "+
+		"Changes that reach it without going through this computer may not be reported as they happen; "+
+		"they are noticed by the periodic rescan, every "+waitText(o.effectiveSafetyScanInterval())+".",
 		slog.String("filesystem", info.kind),
 	)
 }
