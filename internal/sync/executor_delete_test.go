@@ -453,7 +453,10 @@ func TestDeleteLocalFolder_AppleDoubleFiles_Succeeds(t *testing.T) {
 	assert.True(t, os.IsNotExist(err))
 }
 
-func TestDeleteLocalFolder_DisposableDirWithNonDisposableChild_Fails(t *testing.T) {
+// A junk-named folder never syncs, so a non-junk file inside it is content
+// sync does not own: the folder delete keeps it (D-012) instead of either
+// deleting it or failing forever.
+func TestDeleteLocalFolder_DisposableDirWithNonDisposableChildIsKept(t *testing.T) {
 	t.Parallel()
 
 	e, syncRoot := newDeleteTestExecutor(t)
@@ -466,8 +469,26 @@ func TestDeleteLocalFolder_DisposableDirWithNonDisposableChild_Fails(t *testing.
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
 	outcome := e.DeleteLocalFolder(action, dir)
 
+	requireOutcomeSuccess(t, &outcome)
+	assert.FileExists(t, filepath.Join(macDir, "important.txt"), "content inside an ignored folder is never deleted")
+}
+
+// A visible file still blocks the folder delete with a reason.
+func TestDeleteLocalFolder_VisibleChildBlocksDelete(t *testing.T) {
+	t.Parallel()
+
+	e, syncRoot := newDeleteTestExecutor(t)
+
+	dir := filepath.Join(syncRoot, "folder")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "important.txt"), []byte("data"), 0o600))
+
+	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
+	outcome := e.DeleteLocalFolder(action, dir)
+
 	requireOutcomeFailure(t, &outcome)
-	assert.Contains(t, outcome.Error.Error(), "__MACOSX/important.txt")
+	assert.Contains(t, outcome.Error.Error(), "important.txt")
+	assert.FileExists(t, filepath.Join(dir, "important.txt"))
 }
 
 func TestDeleteLocalFolder_DisposableDirAllDisposableChildren_Succeeds(t *testing.T) {

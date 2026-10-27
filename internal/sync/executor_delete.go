@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -149,6 +151,19 @@ func (e *executor) DeleteLocalFolder(action *Action, absPath string) actionOutco
 		}
 
 		if len(blockers) > 0 {
+			if e.allBlockersIgnored(relPath, blockers) {
+				// Everything left is content sync deliberately does not own
+				// (an ignored dir, a dotfile under ignore_dotfiles). Failing
+				// here retried forever (D-012). The folder's synced identity
+				// is gone on OneDrive, so drop it from the baseline and keep
+				// the folder with what it still holds; the next pass sees a
+				// local-only folder and re-creates it, empty, online.
+				e.logger.Debug("local delete: folder holds only ignored content, keeping it and forgetting the synced folder",
+					slog.String("path", action.Path),
+					slog.Int("ignored_entries", len(blockers)),
+				)
+				return e.DeleteOutcome(action, ActionLocalDelete)
+			}
 			return e.failedOutcome(action, ActionLocalDelete, folderNotEmptyError(blockers))
 		}
 
@@ -317,6 +332,10 @@ func (e *executor) commitTrashPlacement(rel string, placement *localtrash.Placem
 func (e *executor) ExecuteRemoteDelete(ctx context.Context, action *Action) actionOutcome {
 	driveID := e.resolveDriveID(action)
 
+	if err := e.validateRemoteDeleteLocalAbsence(action); err != nil {
+		return e.failedOutcomeWithFailure(action, ActionRemoteDelete, err, action.Path, permissionCapabilityLocalWrite)
+	}
+
 	sourceETag, err := e.remoteSourcePreconditionETag(ctx, driveID, action, "remote delete")
 	if err != nil {
 		return e.failedOutcomeWithFailure(
@@ -326,6 +345,9 @@ func (e *executor) ExecuteRemoteDelete(ctx context.Context, action *Action) acti
 			action.Path,
 			permissionCapabilityRemoteRead,
 		)
+	}
+	if err := e.validateRemoteFolderDeleteChildren(ctx, driveID, action); err != nil {
+		return e.failedOutcomeWithFailure(action, ActionRemoteDelete, err, action.Path, permissionCapabilityRemoteRead)
 	}
 
 	err = e.items.DeleteItemIfMatch(ctx, driveID, action.ItemID, sourceETag)
@@ -375,6 +397,27 @@ func (e *executor) DeleteOutcome(action *Action, actionType actionType) actionOu
 	}
 }
 
+// allBlockersIgnored reports whether every child blocking a folder delete is
+// hidden by the content filter, so sync never synced it and cannot own it.
+func (e *executor) allBlockersIgnored(relPath string, blockers []string) bool {
+	for _, blocker := range blockers {
+		childPath := filepath.ToSlash(filepath.Join(relPath, blocker))
+		info, err := e.syncTree.Lstat(childPath)
+		if err != nil {
+			return false
+		}
+		itemType := ItemTypeFile
+		if info.IsDir() {
+			itemType = ItemTypeFolder
+		}
+		if e.contentFilter.Visible(childPath, itemType) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // localDeleteUnchangedWithoutHash reports whether the baseline holds positive
 // evidence that the file on disk is still the one that was synced, for rows
 // that carry no local hash. Absence of evidence is not evidence of sameness,
@@ -402,4 +445,121 @@ func folderNotEmptyError(blockers []string) error {
 
 	return fmt.Errorf("folder still contains files that are not on OneDrive (%s%s); move or delete them to finish",
 		strings.Join(named, ", "), more)
+}
+
+// validateRemoteDeleteLocalAbsence is the remote-delete mirror of S4: a
+// delete on OneDrive is planned from local absence, so the absence must still
+// hold when it runs (D-011). The item may have come back (a restore, a
+// lone MOVED_FROM that was really a move within the folder), and the sync
+// folder itself must still be the one the state belongs to, or "absent"
+// means nothing.
+func (e *executor) validateRemoteDeleteLocalAbsence(action *Action) error {
+	if err := validateExpectedSyncRootIdentity(e.syncTree, e.expectedSyncRoot); err != nil {
+		return err
+	}
+
+	info, err := e.syncTree.Lstat(action.Path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return normalizeSyncTreePathError(err)
+	}
+
+	// A type-change replacement deletes the old item while the new one, of
+	// the other kind, already sits at the path; that is not a reappearance.
+	isDir := info.IsDir()
+	if (deletedItemType(action) == ItemTypeFolder) != isDir {
+		return nil
+	}
+	// On a case-insensitive volume, Lstat also finds a differently-cased
+	// name, which is the rename this delete belongs to.
+	if !e.exactLocalNameExists(action.Path) {
+		return nil
+	}
+
+	return stalePreconditionError("remote delete source %s exists locally again", action.Path)
+}
+
+func (e *executor) exactLocalNameExists(relPath string) bool {
+	entries, err := e.syncTree.ReadDir(filepath.Dir(relPath))
+	if err != nil {
+		// Unknown: keep the conservative answer that the path is occupied.
+		return true
+	}
+	want := nfcNormalize(filepath.Base(relPath))
+	for _, entry := range entries {
+		if nfcNormalize(entry.Name()) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// remoteFolderDeleteListLimit bounds the live listing a folder delete makes
+// before it may run. Descendants the plan deleted are already gone by then
+// (child deletes run first), so the listing is normally one empty page.
+const remoteFolderDeleteListLimit = 10000
+
+// validateRemoteFolderDeleteChildren refuses a recursive folder delete that
+// would take content the planner never saw (D-006). A DELETE of a folder
+// removes everything beneath it, and the folder precondition deliberately
+// skips the folder's eTag (it churns with every descendant change). A child
+// created on OneDrive after observation, or hidden by delta lag, was deleted
+// with no notice. Every live descendant must be a synced item whose content
+// is unchanged; anything else supersedes the delete so the next pass, which
+// observes it, plans from the truth. The If-Match on the folder eTag read
+// before this listing still turns a child added after it into a 412.
+func (e *executor) validateRemoteFolderDeleteChildren(ctx context.Context, driveID driveid.ID, action *Action) error {
+	if action.ItemID == "" || deletedItemType(action) != ItemTypeFolder {
+		return nil
+	}
+
+	pending := []string{action.ItemID}
+	seen := 0
+	for len(pending) > 0 {
+		folderID := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+
+		children, err := e.items.ListChildren(ctx, driveID, folderID)
+		if err != nil {
+			if errors.Is(err, graph.ErrNotFound) {
+				return stalePreconditionError("remote delete folder %s disappeared while listing", action.Path)
+			}
+			return fmt.Errorf("listing %s before deleting it on OneDrive: %w", action.Path, err)
+		}
+		for i := range children {
+			seen++
+			if seen > remoteFolderDeleteListLimit {
+				return stalePreconditionError("remote delete folder %s holds more than %d items", action.Path, remoteFolderDeleteListLimit)
+			}
+			child := &children[i]
+			if err := e.validateLiveFolderDeleteChild(action, child); err != nil {
+				return err
+			}
+			if child.IsFolder {
+				pending = append(pending, child.ID)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (e *executor) validateLiveFolderDeleteChild(action *Action, child *graph.Item) error {
+	var known *BaselineEntry
+	if e.baseline != nil {
+		known, _ = e.baseline.GetByID(child.ID)
+	}
+	if known == nil {
+		return stalePreconditionError("remote delete folder %s holds %q, which sync has not seen", action.Path, child.Name)
+	}
+	if child.IsFolder || known.ItemType != ItemTypeFile {
+		return nil
+	}
+	if liveHash := driveops.SelectHash(child); liveHash != "" && known.RemoteHash != "" && liveHash != known.RemoteHash {
+		return stalePreconditionError("remote delete folder %s holds %s, edited on OneDrive since it was synced", action.Path, known.Path)
+	}
+
+	return nil
 }

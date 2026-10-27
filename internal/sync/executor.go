@@ -39,6 +39,12 @@ type executorConfig struct {
 	remoteRootItemID string     // mounted remote root for mount-root engines; empty = drive root
 	logger           *slog.Logger
 	ignoreJunkFiles  bool
+	// contentFilter tells a folder delete which leftover children sync
+	// deliberately does not own (D-012).
+	contentFilter contentFilter
+	// expectedSyncRoot is the sync folder identity the engine validated;
+	// a remote delete re-checks it before acting on local absence (D-011).
+	expectedSyncRoot *synctree.RootIdentity
 
 	// transferMgr handles unified download/upload with resume and disk
 	// space pre-checks (R-6.2.6). Disk check is configured via
@@ -121,6 +127,18 @@ func (cfg *executorConfig) SetRemoteRootItemID(itemID string) {
 // delete.
 func (cfg *executorConfig) SetContentFilter(filter ContentFilterConfig) {
 	cfg.ignoreJunkFiles = filter.IgnoreJunkFiles
+	cfg.contentFilter = newContentFilter(cloneContentFilterConfig(filter))
+}
+
+// SetExpectedSyncRoot installs the sync folder identity remote deletes
+// re-validate before acting on local absence.
+func (cfg *executorConfig) SetExpectedSyncRoot(identity *synctree.RootIdentity) {
+	if identity == nil {
+		cfg.expectedSyncRoot = nil
+		return
+	}
+	expected := *identity
+	cfg.expectedSyncRoot = &expected
 }
 
 // Items returns the item client for direct API access (e.g., for trial

@@ -705,6 +705,18 @@ func (o *localObserver) HandleDelete(
 	ctx context.Context, watcher fsWatcher, tree *synctree.Root, fsPath, dbRelPath, name string,
 	events chan<- changeEvent,
 ) {
+	// A Remove or Rename event names a path, not an inode, and arrives late.
+	// A lone MOVED_FROM, an atomic save (rename over the path) or an event
+	// attributed to the wrong name would otherwise become a delete of a file
+	// that is still there, and then a delete on OneDrive (D-011). The path
+	// is only deleted when it is actually gone; a replacement arrives as its
+	// own create or write event.
+	if localPathStillPresent(tree, dbRelPath, fsPath) {
+		o.logger.Debug("ignoring delete event for a path that still exists",
+			slog.String("path", dbRelPath))
+		return
+	}
+
 	// Clean up write coalesce timer for deleted path (B-107).
 	o.cancelPendingTimer(dbRelPath)
 
@@ -773,6 +785,30 @@ func (o *localObserver) HandleDelete(
 	}
 
 	o.TrySend(ctx, events, &ev)
+}
+
+// localPathStillPresent reports whether the exact name at fsPath exists. On a
+// case-insensitive volume Lstat also finds a differently-cased sibling, which
+// is the other half of a case-only rename, so the parent listing decides.
+func localPathStillPresent(tree *synctree.Root, dbRelPath, fsPath string) bool {
+	if tree == nil {
+		return false
+	}
+	if _, err := tree.Lstat(dbRelPath); err != nil {
+		return false
+	}
+	entries, err := tree.ReadDir(filepath.Dir(dbRelPath))
+	if err != nil {
+		return false
+	}
+	want := filepath.Base(fsPath)
+	wantNFC := nfcNormalize(want)
+	for _, entry := range entries {
+		if entry.Name() == want || nfcNormalize(entry.Name()) == wantNFC {
+			return true
+		}
+	}
+	return false
 }
 
 // reportWatchAddFailure reports a directory the watcher could not add. Once

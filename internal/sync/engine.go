@@ -214,6 +214,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	}
 
 	e.syncRootBindPending.Store(syncRootBinding.bindPending)
+	execCfg.SetExpectedSyncRoot(syncRootBinding.expected)
 
 	if err := e.refreshProtectedRootsFromStore(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading parent shortcut protected roots: %w", err)
