@@ -489,11 +489,19 @@ func bindSyncRootIdentityTx(
 // allows the next start to bind the folder it finds even with a non-empty
 // baseline. It is the explicit rebind the user asks for after moving or
 // restoring the sync folder on purpose.
+// It also forgets recorded mount points: a rebind accepts the folder as it is
+// now, including a disk that is no longer mounted inside it.
 func (s *SyncStore) ClearSyncRootIdentity(ctx context.Context) error {
-	return s.updateObservationState(ctx, func(state *observationState) {
+	if err := s.updateObservationState(ctx, func(state *observationState) {
 		state.SyncRootIdentity = nil
 		state.SyncRootRebind = true
-	})
+	}); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM mount_boundaries`); err != nil {
+		return fmt.Errorf("sync: forgetting recorded mount points: %w", err)
+	}
+	return nil
 }
 
 func (s *SyncStore) MarkLocalTruthSuspect(ctx context.Context, reason string) error {

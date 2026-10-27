@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
-	"strings"
 	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -160,10 +159,10 @@ func (o *localObserver) isForeignMountPoint(
 
 // flaggedMountIsGone reports whether a folder recorded as a crossed mount
 // point no longer holds that filesystem: it now sits on its parent's device,
-// or it is empty while the baseline still holds content beneath it. Either
-// way the disk is not mounted, and its synced content is unavailable, not
-// deleted (D-003). Call after isForeignMountPoint recorded the folder's
-// device.
+// so the disk is not mounted and its synced content is unavailable, not
+// deleted (D-003). A flagged folder still on its own device is the mounted
+// disk, and emptying it is an ordinary delete the hold judges. Call after
+// isForeignMountPoint recorded the folder's device.
 func (o *localObserver) flaggedMountIsGone(availability *scanAvailability, dbRelPath string) bool {
 	if availability == nil {
 		return false
@@ -173,25 +172,7 @@ func (o *localObserver) flaggedMountIsGone(availability *scanAvailability, dbRel
 	}
 	device := availability.dirDevices[dbRelPath]
 	parentDevice, known := availability.dirDevices[parentRelPath(dbRelPath)]
-	if known && parentDevice != 0 && device == parentDevice {
-		return true
-	}
-	if availability.tree == nil || !o.baselineHasDescendants(dbRelPath) {
-		return false
-	}
-	empty, err := availability.tree.DirEmptyNoFollow(dbRelPath)
-	return err == nil && empty
-}
-
-func (o *localObserver) baselineHasDescendants(dbRelPath string) bool {
-	prefix := dbRelPath + "/"
-	found := false
-	o.baseline.ForEachPath(func(entryPath string, _ *BaselineEntry) {
-		if !found && strings.HasPrefix(entryPath, prefix) {
-			found = true
-		}
-	})
-	return found
+	return known && parentDevice != 0 && device == parentDevice
 }
 
 func parentRelPath(dbRelPath string) string {
@@ -207,7 +188,8 @@ func vanishedMountSkippedItem(dbRelPath string) skippedItem {
 		Path:   dbRelPath,
 		Reason: issueLocalMountBoundary,
 		Detail: "this folder was a mount point for another filesystem that is no longer mounted; " +
-			"its synced content is kept until the disk is back",
+			"its synced content is kept until the disk is back (if the disk is gone for good, " +
+			"'onedrive-go drive rebind-root' forgets recorded mount points)",
 		BlocksReadBoundary: true,
 	}
 }

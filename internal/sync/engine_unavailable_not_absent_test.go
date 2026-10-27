@@ -265,3 +265,42 @@ func TestRootDeviceForScan_UnreadableRootAbortsScan(t *testing.T) {
 	_, err := rootDeviceForScan(tree)
 	require.ErrorIs(t, err, ErrMountRootUnavailable)
 }
+
+// A user who empties a disk that is still mounted is deleting files: only a
+// flagged folder back on its parent's device is an unmounted disk.
+//
+// Validates: R-6.2.15
+func TestFlaggedMountIsGone_MountedButEmptiedDiskIsNotABoundary(t *testing.T) {
+	t.Parallel()
+
+	baseline := baselineWith(
+		&BaselineEntry{Path: "nas", ItemID: "nas", ItemType: ItemTypeFolder},
+		&BaselineEntry{Path: "nas/a.txt", ItemID: "a", ItemType: ItemTypeFile},
+	)
+	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs.SetFilterConfig(ContentFilterConfig{CrossFilesystems: true})
+	obs.SetMountBoundaryFlags([]string{"nas"})
+	availability := newScanAvailability(10)
+	availability.tree = mustOpenSyncTree(t, t.TempDir())
+	require.NoError(t, os.Mkdir(filepath.Join(availability.tree.Path(), "nas"), 0o750))
+
+	assert.False(t, obs.isForeignMountPoint(availability, "nas", synctree.FileIdentity{Device: 11, Inode: 3}, true))
+	assert.False(t, obs.flaggedMountIsGone(availability, "nas"),
+		"the disk is mounted (its own device); its emptied content is deleted like any other")
+}
+
+// Validates: R-6.2.15
+func TestClearSyncRootIdentity_ForgetsRecordedMountPoints(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	_, err := eng.baseline.rawDB().ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES ('nas')`)
+	require.NoError(t, err)
+
+	require.NoError(t, eng.baseline.ClearSyncRootIdentity(t.Context()))
+
+	flags, err := eng.baseline.listMountBoundaries(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, flags, "a rebind accepts the folder as it is now")
+	assert.Contains(t, vanishedMountSkippedItem("nas").Detail, "drive rebind-root")
+}
