@@ -307,6 +307,14 @@ func (o *localObserver) handleCreate(
 	if info.IsDir() {
 		ev.ItemType = ItemTypeFolder
 
+		// A directory created at a path that still has watched descendants
+		// replaced one that was deleted or moved away while watched: the
+		// delete event was ignored because the path exists again, or has not
+		// arrived yet. Those descendant registrations belong to the old
+		// inodes, so they are dropped before the new tree is registered; the
+		// scan below re-adds whatever the new directory holds.
+		o.forgetWatchedDescendants(watcher, fsPath, dbRelPath)
+
 		if addErr := watcher.Add(fsPath); addErr != nil {
 			o.reportWatchAddFailure("failed to add watch on new directory", dbRelPath, addErr)
 		} else {
@@ -896,6 +904,18 @@ func localPathStillPresent(tree *synctree.Root, dbRelPath, fsPath string) bool {
 // kept reporting changes as if it were still inside). Dropping the whole
 // subtree makes the re-add register fresh paths.
 func (o *localObserver) forgetWatchedSubtree(watcher fsWatcher, fsPath, dbRelPath string) {
+	o.forgetWatchedDescendants(watcher, fsPath, dbRelPath)
+
+	// The directory itself is removed by its original event path, not the
+	// cleaned map key: on macOS HFS+ the NFD spelling must match what
+	// fsnotify registered (B-312). Linux inotify auto-cleans a deleted
+	// directory, but macOS kqueue may not (B-112).
+	o.removeWatch(watcher, fsPath, dbRelPath)
+}
+
+// forgetWatchedDescendants removes every watch strictly beneath fsPath,
+// deepest first.
+func (o *localObserver) forgetWatchedDescendants(watcher fsWatcher, fsPath, dbRelPath string) {
 	root := filepath.Clean(fsPath)
 	prefix := root + string(filepath.Separator)
 	descendants := make([]string, 0)
@@ -916,12 +936,6 @@ func (o *localObserver) forgetWatchedSubtree(watcher fsWatcher, fsPath, dbRelPat
 	for _, watched := range descendants {
 		o.removeWatch(watcher, watched, dbRelPath)
 	}
-
-	// The directory itself is removed by its original event path, not the
-	// cleaned map key: on macOS HFS+ the NFD spelling must match what
-	// fsnotify registered (B-312). Linux inotify auto-cleans a deleted
-	// directory, but macOS kqueue may not (B-112).
-	o.removeWatch(watcher, fsPath, dbRelPath)
 }
 
 func (o *localObserver) removeWatch(watcher fsWatcher, fsPath, dbRelPath string) {

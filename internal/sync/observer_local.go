@@ -347,6 +347,7 @@ type localObserver struct {
 	// the watcher's descriptors are released for transfers and SQLite.
 	// Watch-loop goroutine only.
 	watchUnavailable error
+
 	safetyScanInterval time.Duration // 0 → default (5 minutes); configurable (B-099)
 
 	// hashFunc computes the QuickXorHash of a file. Injectable for testing

@@ -255,6 +255,39 @@ func TestWatch_RenamedDirectoryDescendantEventsUseNewPath(t *testing.T) {
 		"a descendant watch must not keep reporting the directory's old path")
 }
 
+// Validates: R-2.8.14
+func TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	replaced := filepath.Join(dir, "a")
+	require.NoError(t, os.Mkdir(replaced, 0o700))
+	require.NoError(t, os.Mkdir(filepath.Join(replaced, "fresh"), 0o700))
+
+	watcher := newRecordingFsWatcher()
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	// Registrations left by the directory that used to live at "a" and was
+	// moved away while watched; its delete event was ignored because "a"
+	// exists again.
+	stale := filepath.Join(replaced, "old", "deep")
+	obs.watchedDirs = map[string]struct{}{
+		dir:                             {},
+		replaced:                        {},
+		filepath.Join(replaced, "old"):  {},
+		stale:                           {},
+		filepath.Join(dir, "a-sibling"): {},
+	}
+
+	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), replaced, "a", "a", watcher, make(chan changeEvent, 10))
+
+	assert.Equal(t, []string{stale, filepath.Join(replaced, "old")}, watcher.getRemovedPaths(),
+		"stale descendant watches of the replaced directory are dropped deepest first")
+	assert.NotContains(t, obs.watchedDirs, stale)
+	assert.Contains(t, obs.watchedDirs, replaced, "the new directory is watched")
+	assert.Contains(t, obs.watchedDirs, filepath.Join(replaced, "fresh"), "the new tree is registered")
+	assert.Contains(t, obs.watchedDirs, filepath.Join(dir, "a-sibling"))
+}
+
 func waitForLocalEvent(t *testing.T, events <-chan changeEvent, match func(changeEvent) bool, what string) changeEvent {
 	t.Helper()
 
