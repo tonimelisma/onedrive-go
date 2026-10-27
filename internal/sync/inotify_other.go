@@ -2,11 +2,7 @@
 
 package sync
 
-import (
-	"errors"
-	"log/slog"
-	"syscall"
-)
+import "log/slog"
 
 // readInotifyLimit is a no-op on non-Linux platforms. fsnotify uses kqueue on
 // macOS and the BSDs (it has no FSEvents backend), and kqueue has no
@@ -15,14 +11,12 @@ import (
 // file inside one, so a large tree is bounded by the process's open-file limit.
 func readInotifyLimit() (int, error) { return 0, nil }
 
-// checkInotifyCapacity is a no-op on non-Linux platforms.
+// checkInotifyCapacity is a no-op on non-Linux platforms. fsnotify uses
+// kqueue on macOS and the BSDs, which has no inotify-style watch limit but
+// holds one open descriptor per watched directory and file; that budget is
+// checked separately.
 func checkInotifyCapacity(_ int, _ *slog.Logger) {}
 
-// isWatchLimitError checks for ENOSPC, which signals inotify watch limit
-// exhaustion on Linux. On non-Linux platforms this is still checked so that
-// the mock-based unit tests work correctly, but the kqueue backend never
-// returns it: running out of descriptors there surfaces as EMFILE, which this
-// check does not classify as a watch-limit error.
-func isWatchLimitError(err error) bool {
-	return errors.Is(err, syscall.ENOSPC)
-}
+// watchCreateEMFILECause: without inotify, EMFILE from watcher creation is the
+// open-file limit.
+const watchCreateEMFILECause = watchCauseFileLimit

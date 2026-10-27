@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -34,6 +35,12 @@ const (
 	// write coalescing (B-107). Multiple Write events within this window are
 	// coalesced into a single hash + emit.
 	defaultWriteCoalesceCooldown = 500 * time.Millisecond
+
+	// recoveryScanDelay is how long after the first missed-change signal the
+	// recovery rescan runs. Long enough for an event storm that overflowed
+	// the kernel queue to pass, short enough that missed changes are picked
+	// up long before the five-minute safety scan.
+	recoveryScanDelay = 10 * time.Second
 
 	// hashRequestBufSize is the buffer for the timer → watchLoop channel.
 	// Timer callbacks must not block; 256 handles bursts like `git checkout`.
@@ -93,6 +100,22 @@ type localWatchState struct {
 	// watchedDirs tracks fsnotify registrations owned by this observer. The
 	// watch loop is the single writer, so no mutex is needed.
 	watchedDirs map[string]struct{}
+
+	// Recovery scan (R-2.8.13). When observation is known to have missed
+	// changes -- a kernel queue overflow, a watcher error, a dropped batch or
+	// hash request -- marking local truth suspect alone left the missed
+	// changes unobserved until the next periodic safety scan, up to five
+	// minutes later. A recovery request arms one timer; when it fires the
+	// watch loop runs a full rescan. Requests while armed coalesce, so a
+	// sustained storm costs one rescan per delay, not one per drop.
+	//
+	// recoveryScanRequests carries requests from timer callbacks (which must
+	// not touch watch-loop state); recoveryScanDue carries the armed timer's
+	// firing. Both are buffered(1): one pending signal is the whole message.
+	// recoveryScanTimer is watch-loop only.
+	recoveryScanRequests chan struct{}
+	recoveryScanDue      chan struct{}
+	recoveryScanTimer    syncTimer
 }
 
 func newLocalWatchState() localWatchState {
@@ -104,7 +127,140 @@ func newLocalWatchState() localWatchState {
 		CollisionPeers:       make(map[string]map[string]struct{}),
 		excludedSymlinkPaths: make(map[string]struct{}),
 		watchedDirs:          make(map[string]struct{}),
+		recoveryScanRequests: make(chan struct{}, 1),
+		recoveryScanDue:      make(chan struct{}, 1),
 	}
+}
+
+// watchUnavailableCause names the operating-system limit that left watch
+// mode without the watches it needs. Each cause has its own operator fix, so
+// the one-time warning names the cause rather than a generic failure.
+type watchUnavailableCause int
+
+const (
+	// watchCauseWatchLimit: inotify max_user_watches is exhausted (ENOSPC).
+	watchCauseWatchLimit watchUnavailableCause = iota + 1
+	// watchCauseInstanceLimit: inotify max_user_instances is exhausted
+	// (EMFILE from inotify_init1 on Linux).
+	watchCauseInstanceLimit
+	// watchCauseFileLimit: the process or system open-file limit is reached
+	// (EMFILE or ENFILE). On kqueue every watched directory holds a descriptor.
+	watchCauseFileLimit
+	// watchCauseKernelMemory: the kernel could not allocate a watch (ENOMEM).
+	watchCauseKernelMemory
+	// watchCauseDescriptorBudget: watching the tree with kqueue would use more
+	// than the descriptor budget left for hashing, transfers and SQLite.
+	watchCauseDescriptorBudget
+)
+
+// localWatchUnavailableError carries the cause of a watch failure from the
+// observer to the watch runtime, which falls back to periodic full scans.
+// It matches errLocalWatchUnavailable with errors.Is.
+type localWatchUnavailableError struct {
+	cause watchUnavailableCause
+	err   error
+}
+
+func (e *localWatchUnavailableError) Error() string {
+	if e.err == nil {
+		return errLocalWatchUnavailable.Error()
+	}
+
+	return errLocalWatchUnavailable.Error() + ": " + e.err.Error()
+}
+
+func (e *localWatchUnavailableError) Unwrap() error { return e.err }
+
+func (e *localWatchUnavailableError) Is(target error) bool {
+	return target == errLocalWatchUnavailable
+}
+
+// watchUnavailableCauseOf returns the cause carried by err, if any.
+func watchUnavailableCauseOf(err error) (watchUnavailableCause, bool) {
+	var unavailable *localWatchUnavailableError
+	if !errors.As(err, &unavailable) {
+		return 0, false
+	}
+
+	return unavailable.cause, true
+}
+
+// classifyWatchAddError maps a failed watcher.Add to the resource limit it
+// hit. Any other error (EACCES on one directory, a vanished path) is a
+// per-directory failure that the safety scan covers, not a reason to stop
+// watching. Before this, only ENOSPC was recognized: EMFILE, ENFILE and ENOMEM
+// were logged at Debug and the directories silently went unwatched.
+func classifyWatchAddError(err error) (watchUnavailableCause, bool) {
+	switch {
+	case errors.Is(err, syscall.ENOSPC):
+		return watchCauseWatchLimit, true
+	case errors.Is(err, syscall.EMFILE), errors.Is(err, syscall.ENFILE):
+		return watchCauseFileLimit, true
+	case errors.Is(err, syscall.ENOMEM):
+		return watchCauseKernelMemory, true
+	default:
+		return 0, false
+	}
+}
+
+// classifyWatcherCreateError maps a failed watcher creation to its limit.
+// EMFILE from inotify_init1 means max_user_instances on Linux, not the
+// open-file limit, so that case is platform-owned (watchCreateEMFILECause).
+// Before this, any creation failure ended local observation for the session.
+func classifyWatcherCreateError(err error) (watchUnavailableCause, bool) {
+	switch {
+	case errors.Is(err, syscall.EMFILE):
+		return watchCreateEMFILECause, true
+	case errors.Is(err, syscall.ENFILE):
+		return watchCauseFileLimit, true
+	case errors.Is(err, syscall.ENOMEM):
+		return watchCauseKernelMemory, true
+	default:
+		return 0, false
+	}
+}
+
+// watchUnavailableReason is the user-facing description of a cause.
+func watchUnavailableReason(cause watchUnavailableCause) string {
+	switch cause {
+	case watchCauseWatchLimit:
+		return "the system inotify watch limit is reached"
+	case watchCauseInstanceLimit:
+		return "the system inotify instance limit or the open-file limit is reached"
+	case watchCauseFileLimit:
+		return "the open-file limit is reached"
+	case watchCauseKernelMemory:
+		return "the system is out of memory for file watches"
+	case watchCauseDescriptorBudget:
+		return "watching every folder would use too many open files"
+	default:
+		return "the system refused to watch the folder"
+	}
+}
+
+// watchUnavailableFix is the operator action that clears a cause.
+func watchUnavailableFix(cause watchUnavailableCause) string {
+	switch cause {
+	case watchCauseWatchLimit:
+		return "sudo sysctl -w fs.inotify.max_user_watches=524288"
+	case watchCauseInstanceLimit:
+		return "sudo sysctl -w fs.inotify.max_user_instances=1024, or raise the open-file limit (ulimit -n)"
+	case watchCauseFileLimit, watchCauseDescriptorBudget:
+		return "raise the open-file limit (ulimit -n, or LimitNOFILE= for a service), or exclude large folders with ignored_dirs"
+	case watchCauseKernelMemory:
+		return "free memory, or exclude large folders with ignored_dirs"
+	default:
+		return "check the system log"
+	}
+}
+
+// watchCauseStopsWatching reports whether a mid-session watch failure must
+// end watching altogether. A descriptor-limit failure does: on kqueue every
+// watched directory holds a descriptor, and continuing to hold them starves
+// hashing, uploads and SQLite. The other causes leave existing watches
+// healthy, so only new folders fall back to the safety scan.
+func watchCauseStopsWatching(cause watchUnavailableCause) bool {
+	return cause == watchCauseFileLimit
 }
 
 // fsWatcher abstracts filesystem event monitoring. Satisfied by
@@ -179,11 +335,18 @@ type localObserver struct {
 	droppedRetries       atomic.Int64 // hash requests dropped due to full channel
 	lastActivityNano     atomic.Int64 // liveness: updated on each event emit (B-125)
 
-	// watchLimitReported and safetyScanFailing let the watch loop report a
+	// reportedWatchCauses and safetyScanFailing let the watch loop report a
 	// persistent condition once instead of per directory or per scan.
 	// Both are touched only by the goroutine running Watch.
-	watchLimitReported bool
-	safetyScanFailing  bool
+	reportedWatchCauses map[watchUnavailableCause]struct{}
+	safetyScanFailing   bool
+
+	// watchUnavailable is set by an event handler when a mid-session watch
+	// failure means watching must stop (kqueue ran out of descriptors). The
+	// watch loop returns it so the runtime falls back to periodic scans and
+	// the watcher's descriptors are released for transfers and SQLite.
+	// Watch-loop goroutine only.
+	watchUnavailable error
 	safetyScanInterval time.Duration // 0 → default (5 minutes); configurable (B-099)
 
 	// hashFunc computes the QuickXorHash of a file. Injectable for testing
@@ -358,7 +521,8 @@ func (o *localObserver) TrySendChangeEventOnly(ctx context.Context, events chan<
 		// Debug per event: a bulk copy can drop thousands. droppedEvents
 		// aggregates them and the maintenance tick schedules one rescan.
 		o.droppedEvents.Add(1)
-		o.logger.Debug("event channel full, dropping event (safety scan will catch up)",
+		o.requestRecoveryScan()
+		o.logger.Debug("event channel full, dropping event (recovery scan will catch up)",
 			slog.String("path", ev.Path),
 			slog.String("type", ev.Type.String()),
 		)
@@ -376,6 +540,7 @@ func (o *localObserver) TrySendLocalObservationBatch(ctx context.Context, batch 
 	case <-ctx.Done():
 	default:
 		o.droppedEvents.Add(1)
+		o.requestRecoveryScan()
 		o.logger.Debug("local observation batch channel full, marking local truth suspect on maintenance",
 			slog.Bool("full_snapshot", batch.fullSnapshot),
 			slog.Int("rows", len(batch.rows)),
@@ -398,6 +563,45 @@ func (o *localObserver) TrySendFullLocalSnapshot(ctx context.Context, result sca
 		rows:         buildLocalStateRows(result),
 		dirty:        len(result.Events) > 0 || len(result.Skipped) > 0,
 	})
+}
+
+// requestRecoveryScan asks the watch loop for an early full rescan. Safe from
+// any goroutine: it only signals. A request while one is pending coalesces.
+func (o *localObserver) requestRecoveryScan() {
+	select {
+	case o.recoveryScanRequests <- struct{}{}:
+	default:
+	}
+}
+
+// armRecoveryScan starts the recovery-scan timer unless one is already
+// armed. Watch-loop goroutine only.
+func (o *localObserver) armRecoveryScan() {
+	if o.recoveryScanTimer != nil || o.recoveryScanDue == nil {
+		return
+	}
+
+	due := o.recoveryScanDue
+	o.recoveryScanTimer = o.clock.AfterFunc(recoveryScanDelay, func() {
+		select {
+		case due <- struct{}{}:
+		default:
+		}
+	})
+}
+
+// cancelRecoveryScan disarms a pending recovery scan, including one whose
+// timer already fired. Watch-loop goroutine only.
+func (o *localObserver) cancelRecoveryScan() {
+	if o.recoveryScanTimer != nil {
+		o.recoveryScanTimer.Stop()
+		o.recoveryScanTimer = nil
+	}
+
+	select {
+	case <-o.recoveryScanDue:
+	default:
+	}
 }
 
 // DroppedEvents returns the cumulative number of events dropped by TrySend
@@ -473,21 +677,24 @@ func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 
 	watcher, err := o.watcherFactory()
 	if err != nil {
+		if cause, ok := classifyWatcherCreateError(err); ok {
+			return &localWatchUnavailableError{cause: cause, err: fmt.Errorf("create filesystem watcher: %w", err)}
+		}
+
 		return fmt.Errorf("create filesystem watcher: %w", err)
 	}
 	defer watcher.Close() //nolint:errcheck // watcher shutdown releases OS resources and reports nothing a caller can act on
 
 	defer o.cancelPendingTimers()
+	defer o.cancelRecoveryScan()
 
 	// Pre-flight capacity check (Linux only; no-op on other platforms).
 	checkInotifyCapacity(o.EstimateDirCount(), o.logger)
 
 	// Walk the sync root to add watches on all existing directories.
 	if walkErr := o.AddWatchesRecursive(ctx, watcher, tree); walkErr != nil {
-		if errors.Is(walkErr, errWatchLimitExhausted) {
-			return errWatchLimitExhausted
-		}
-
+		// A resource-limit failure keeps its typed cause so the watch runtime
+		// can name the limit in its one-time warning.
 		return fmt.Errorf("add initial watches: %w", walkErr)
 	}
 	if o.startupSafetyScan {
@@ -515,7 +722,7 @@ func (o *localObserver) cancelPendingTimers() {
 }
 
 func isFatalWatchSetupError(err error) bool {
-	return errors.Is(err, errWatchLimitExhausted) ||
+	return errors.Is(err, errLocalWatchUnavailable) ||
 		errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded)
 }

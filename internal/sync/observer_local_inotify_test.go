@@ -58,8 +58,8 @@ func TestAddWatchesRecursive_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, errWatchLimitExhausted,
-		"expected ErrWatchLimitExhausted, got: %v", err)
+	assert.ErrorIs(t, err, errLocalWatchUnavailable,
+		"expected errLocalWatchUnavailable, got: %v", err)
 }
 
 // Validates: R-2.1.2
@@ -75,7 +75,7 @@ func TestAddWatchesRecursive_ENOSPCRollsBackAddedWatches(t *testing.T) {
 	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
 
 	require.Error(t, err)
-	require.ErrorIs(t, err, errWatchLimitExhausted)
+	require.ErrorIs(t, err, errLocalWatchUnavailable)
 	assert.Equal(t, []string{
 		filepath.Join(root, "a"),
 		root,
@@ -99,7 +99,7 @@ func TestAddWatchesRecursive_NonENOSPC_ContinuesNormally(t *testing.T) {
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
 
-	// Non-ENOSPC errors should NOT return ErrWatchLimitExhausted.
+	// Non-ENOSPC errors should NOT return errLocalWatchUnavailable.
 	require.NoError(t, err) // walks continue, failures are just logged
 	assert.Empty(t, watcher.removed, "ordinary add failures should not trigger rollback")
 	assert.Contains(t, obs.watchedDirs, filepath.Clean(root), "successful watches should remain installed")
@@ -139,7 +139,7 @@ func (w *permErrWatcher) Close() error {
 }
 
 // ---------------------------------------------------------------------------
-// Watch returns ErrWatchLimitExhausted
+// Watch returns errLocalWatchUnavailable
 // ---------------------------------------------------------------------------
 
 func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
@@ -159,8 +159,8 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	err := obs.Watch(ctx, mustOpenSyncTree(t, root), events)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, errWatchLimitExhausted,
-		"Watch should return ErrWatchLimitExhausted, got: %v", err)
+	assert.ErrorIs(t, err, errLocalWatchUnavailable,
+		"Watch should return errLocalWatchUnavailable, got: %v", err)
 }
 
 // ---------------------------------------------------------------------------

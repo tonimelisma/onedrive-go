@@ -4,7 +4,7 @@ GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/
 
 LAYER: 2
 
-Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
+Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
 
 ## Overview
 
@@ -65,6 +65,9 @@ except that the type had once been public.
 | Watch-mode local observation emits scoped engine-applied batches: exact file rows, directory-prefix deletes, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesExactPath`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
 | Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child work commands to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
+| A watcher that cannot be created or extended because of an operating-system limit (inotify watches or instances, open files, kernel memory) degrades to periodic full scans with one warning naming the limit and its fix; a descriptor-limit failure after startup stops watching so the watcher's descriptors are released. | `TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable`, `TestClassifyWatcherCreateError_ResourceLimits`, `TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable`, `TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan`, `TestWatch_NewDirectoryEMFILEStopsWatchingForFallback` |
+| Known-missed local changes (kernel queue overflow, watcher errors, dropped batches or hash requests) arm one coalesced recovery rescan instead of waiting for the periodic safety scan. | `TestWatch_EventOverflowRunsRecoveryScan`, `TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan`, `TestTrySendLocalObservationBatch_DropRequestsRecoveryScan` |
+| A deleted or renamed-away directory drops the watches of its whole subtree, deepest first, so the re-added tree reports its new paths. | `TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst`, `TestWatch_RenamedDirectoryDescendantEventsUseNewPath` |
 | Local watch prefiltering keeps unknown-kind include-root and include-ancestor events observable until stat/type-aware observation can decide the exact item kind. | `TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths` |
 
 ## Remote Observation
@@ -262,13 +265,37 @@ delete for the removed directory. Safety scans emit a full local snapshot
 replacement and clear any suspect-local-truth marker after the engine commits
 the replacement.
 
+Watch registration is bookkept per directory in `watchedDirs`. When a watched
+directory is deleted or renamed away, the observer removes the watch on it and
+on every watched directory beneath it, deepest first. inotify watches follow the
+inode while fsnotify keys registrations by path, so leaving descendant watches
+in place made a renamed tree keep reporting its old paths after it was re-added,
+and a tree moved out of the sync root keep reporting changes as if it were
+still inside.
+
+When the operating system cannot provide the watches -- inotify watch limit
+(ENOSPC), inotify instance or open-file limit at creation (EMFILE, ENFILE),
+kernel memory (ENOMEM) -- the observer returns a `localWatchUnavailableError`
+carrying the cause, and the watch runtime falls back to periodic full scans
+with one warning that names the limit and its fix. The same applies to a
+descriptor-limit failure on a new folder after startup, because on kqueue every
+watched directory holds a descriptor and keeping them starves hashing,
+transfers and SQLite. A watch or memory limit hit for a new folder after
+startup leaves existing watches healthy: it warns once per cause and the
+safety scan covers that folder.
+
 Raw fsnotify events are not a durable journal. They only choose the observation
 scope. The observer performs normal filesystem reads for that scope, emits a
 batch, and the watch loop applies that batch to SQLite. If the observer drops a
 local observation batch, drops a delayed hash request, sees a watcher error, or
 cannot complete a safety scan, the watch runtime marks
 `observation_state.local_truth_complete=false` with a recovery reason and
-schedules a normal dirty replan/full local refresh. Local-state absence is
+schedules a normal dirty replan/full local refresh. The observer itself
+arms one recovery rescan `recoveryScanDelay` (10 s) after the first such
+signal; further signals coalesce into it and any full scan that starts disarms
+it, so a sustained event storm costs one rescan per delay rather than one per
+dropped event, and missed changes are observed long before the five-minute
+safety scan. Local-state absence is
 therefore only trustworthy to later stale-work validation when local truth is
 marked complete.
 

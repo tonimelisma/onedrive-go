@@ -520,15 +520,16 @@ func (o *localObserver) addObservedWatch(
 		return nil
 	}
 
-	if isWatchLimitError(addErr) {
+	if cause, ok := classifyWatchAddError(addErr); ok {
 		// Debug: the caller falls back to periodic scans and reports the
 		// limit once with the fix.
-		o.logger.Debug("inotify watch limit exhausted",
+		o.logger.Debug("watch resource limit reached during setup",
 			slog.String("path", fsPath),
 			slog.Int("watches_added", counts.watched),
+			slog.String("error", addErr.Error()),
 		)
 
-		return errWatchLimitExhausted
+		return &localWatchUnavailableError{cause: cause, err: addErr}
 	}
 
 	counts.failed++

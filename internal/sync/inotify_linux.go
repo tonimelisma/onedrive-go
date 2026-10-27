@@ -9,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
@@ -72,8 +71,8 @@ func checkInotifyCapacity(estimatedDirs int, logger *slog.Logger) {
 	}
 }
 
-// isWatchLimitError returns true if the error is caused by exhaustion of the
-// inotify watch limit (ENOSPC on Linux).
-func isWatchLimitError(err error) bool {
-	return errors.Is(err, syscall.ENOSPC)
-}
+// watchCreateEMFILECause: on Linux, EMFILE from inotify_init1 usually means
+// fs.inotify.max_user_instances is exhausted (other inotify users such as
+// editors and IDEs share it); the per-process open-file limit is the other
+// possibility, and the warning names both.
+const watchCreateEMFILECause = watchCauseInstanceLimit

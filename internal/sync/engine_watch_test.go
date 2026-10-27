@@ -541,7 +541,7 @@ func TestRunWatch_DownloadOnly_StartsLocalObserver(t *testing.T) {
 }
 
 // TestRunWatch_WatchLimitExhausted_FallsBackToPolling verifies that when the
-// local observer returns ErrWatchLimitExhausted, the engine does NOT consider
+// local observer returns errLocalWatchUnavailable, the engine does NOT consider
 // the observer dead. Instead it falls back to periodic full scanning and
 // RunWatch continues until the context is canceled.
 func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {

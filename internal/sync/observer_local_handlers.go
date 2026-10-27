@@ -23,6 +23,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -66,6 +68,9 @@ func (o *localObserver) watchLoop(
 			}
 
 			o.HandleFsEvent(ctx, fsEvent, watcher, tree, events)
+			if o.watchUnavailable != nil {
+				return o.watchUnavailable
+			}
 
 			// Successful event resets error backoff.
 			errBackoff.Reset()
@@ -73,6 +78,21 @@ func (o *localObserver) watchLoop(
 		case req := <-o.HashRequests:
 			// Deferred hash from write coalesce timer (B-107).
 			o.HashAndEmit(ctx, tree, req, events)
+
+		case <-o.recoveryScanRequests:
+			o.armRecoveryScan()
+
+		case <-o.recoveryScanDue:
+			o.recoveryScanTimer = nil
+			if !syncRootExists(syncRoot) {
+				o.logger.Debug("sync root deleted, stopping watch",
+					slog.String("sync_root", syncRoot))
+
+				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
+			}
+
+			o.logger.Debug("running recovery scan after missed local changes")
+			o.runSafetyScan(ctx, tree, events)
 
 		case watchErr, ok := <-watcher.Errors():
 			if !ok {
@@ -87,11 +107,18 @@ func (o *localObserver) watchLoop(
 			if errBackoff.Consecutive() <= 1 {
 				watcherErrLevel = slog.LevelInfo
 			}
-			o.logger.Log(ctx, watcherErrLevel, "filesystem watcher error; rescanning the sync folder",
+			msg := "filesystem watcher error; rescanning the sync folder"
+			if errors.Is(watchErr, fsnotify.ErrEventOverflow) {
+				// IN_Q_OVERFLOW: the kernel discarded events, so changes
+				// are known to be missing, not merely possible.
+				msg = "too many local changes at once for the system to report; rescanning the sync folder"
+			}
+			o.logger.Log(ctx, watcherErrLevel, msg,
 				slog.String("error", watchErr.Error()),
 				slog.Duration("backoff", delay),
 			)
 			o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryWatcherError)
+			o.armRecoveryScan()
 
 			// Exponential backoff prevents tight loop under sustained errors
 			// (e.g., kernel buffer overflow).
@@ -563,7 +590,8 @@ func (o *localObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 		case o.HashRequests <- req:
 		default:
 			o.droppedRetries.Add(1)
-			o.logger.Debug("hash request dropped, channel full (safety scan will catch up)",
+			o.requestRecoveryScan()
+			o.logger.Debug("hash request dropped, channel full (recovery scan will catch up)",
 				slog.String("path", dbRelPath))
 		}
 	})
@@ -688,7 +716,8 @@ func (o *localObserver) retryDeferredHashOnChange(req hashRequest, err error) bo
 		case o.HashRequests <- retryReq:
 		default:
 			o.droppedRetries.Add(1)
-			o.logger.Debug("hash retry dropped, channel full (safety scan will catch up)",
+			o.requestRecoveryScan()
+			o.logger.Debug("hash retry dropped, channel full (recovery scan will catch up)",
 				slog.String("path", req.DbRelPath),
 				slog.Int("retry", retryReq.Retries))
 		}
@@ -769,14 +798,7 @@ func (o *localObserver) HandleDelete(
 	// Uses fsPath directly instead of reconstructing from syncRoot + dbRelPath
 	// to avoid NFC/NFD mismatch on macOS HFS+ (B-312).
 	if resolvedType == ItemTypeFolder {
-		if rmErr := watcher.Remove(fsPath); rmErr != nil {
-			o.logger.Debug("watch removal for deleted directory",
-				slog.String("path", dbRelPath),
-				slog.String("error", rmErr.Error()),
-			)
-		}
-
-		delete(o.watchedDirs, filepath.Clean(fsPath))
+		o.forgetWatchedSubtree(watcher, fsPath, dbRelPath)
 	}
 
 	ev := changeEvent{
@@ -862,25 +884,91 @@ func localPathStillPresent(tree *synctree.Root, dbRelPath, fsPath string) bool {
 	return false
 }
 
+// forgetWatchedSubtree removes the watch on a deleted or renamed-away
+// directory and on every watched directory beneath it, deepest first.
+//
+// Removing only the directory's own watch was wrong after a rename (D-077):
+// inotify watches follow the inode, and fsnotify keys its registrations by
+// path, so a descendant watch kept its old path. When the renamed tree was
+// re-added under its new name, fsnotify's register found the existing
+// descriptor and returned the old registration, and every later event under
+// the moved tree carried the old path (and a tree moved out of the sync root
+// kept reporting changes as if it were still inside). Dropping the whole
+// subtree makes the re-add register fresh paths.
+func (o *localObserver) forgetWatchedSubtree(watcher fsWatcher, fsPath, dbRelPath string) {
+	root := filepath.Clean(fsPath)
+	prefix := root + string(filepath.Separator)
+	descendants := make([]string, 0)
+	for watched := range o.watchedDirs {
+		if strings.HasPrefix(watched, prefix) {
+			descendants = append(descendants, watched)
+		}
+	}
+	// Deepest first, so a parent is never removed while a child under it is
+	// still registered. Ties are broken by path for a deterministic order.
+	slices.SortFunc(descendants, func(a, b string) int {
+		if depth := strings.Count(b, string(filepath.Separator)) - strings.Count(a, string(filepath.Separator)); depth != 0 {
+			return depth
+		}
+		return strings.Compare(a, b)
+	})
+
+	for _, watched := range descendants {
+		o.removeWatch(watcher, watched, dbRelPath)
+	}
+
+	// The directory itself is removed by its original event path, not the
+	// cleaned map key: on macOS HFS+ the NFD spelling must match what
+	// fsnotify registered (B-312). Linux inotify auto-cleans a deleted
+	// directory, but macOS kqueue may not (B-112).
+	o.removeWatch(watcher, fsPath, dbRelPath)
+}
+
+func (o *localObserver) removeWatch(watcher fsWatcher, fsPath, dbRelPath string) {
+	if rmErr := watcher.Remove(fsPath); rmErr != nil {
+		// Debug: the kernel often removed the watch already (benign).
+		o.logger.Debug("watch removal for deleted directory",
+			slog.String("path", dbRelPath),
+			slog.String("watch", fsPath),
+			slog.String("error", rmErr.Error()),
+		)
+	}
+
+	delete(o.watchedDirs, filepath.Clean(fsPath))
+}
+
 // reportWatchAddFailure reports a directory the watcher could not add. Once
-// the inotify limit is reached every new directory fails the same way, so
-// the limit is warned once with the fix; other failures are per-directory
-// Debug lines (the safety scan still covers those folders).
+// a resource limit is reached every new directory fails the same way, so each
+// cause is warned once with its fix; other failures are per-directory Debug
+// lines (the safety scan still covers those folders). A descriptor-limit
+// failure also records watchUnavailable so the watch loop stops watching.
 func (o *localObserver) reportWatchAddFailure(msg, dbRelPath string, addErr error) {
-	if isWatchLimitError(addErr) {
-		if !o.watchLimitReported {
-			o.watchLimitReported = true
-			o.logger.Warn("Too many folders to watch for changes (system inotify limit reached); "+
-				"changes in new folders will be noticed only by the periodic rescan. "+
-				"To fix: sudo sysctl -w fs.inotify.max_user_watches=524288",
-				slog.String("path", dbRelPath),
-			)
+	cause, ok := classifyWatchAddError(addErr)
+	if !ok {
+		o.logger.Debug(msg, slog.String("path", dbRelPath), slog.String("error", addErr.Error()))
+		return
+	}
+
+	if watchCauseStopsWatching(cause) {
+		if o.watchUnavailable == nil {
+			o.watchUnavailable = &localWatchUnavailableError{cause: cause, err: addErr}
 		}
 
 		return
 	}
 
-	o.logger.Debug(msg, slog.String("path", dbRelPath), slog.String("error", addErr.Error()))
+	if _, reported := o.reportedWatchCauses[cause]; reported {
+		return
+	}
+	if o.reportedWatchCauses == nil {
+		o.reportedWatchCauses = make(map[watchUnavailableCause]struct{})
+	}
+	o.reportedWatchCauses[cause] = struct{}{}
+	o.logger.Warn("Cannot watch new folders for changes ("+watchUnavailableReason(cause)+"); "+
+		"changes in new folders will be noticed only by the periodic rescan. "+
+		"To fix: "+watchUnavailableFix(cause),
+		slog.String("path", dbRelPath),
+	)
 }
 
 // runSafetyScan performs a full filesystem scan as a safety net, sending any
@@ -889,6 +977,11 @@ func (o *localObserver) reportWatchAddFailure(msg, dbRelPath string, addErr erro
 // scan handles observation-issue persistence.
 func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, events chan<- changeEvent) {
 	o.logger.Debug("running safety scan")
+
+	// This scan reads the whole tree, so it covers anything a pending
+	// recovery scan was armed for. Requests made after this point (a batch
+	// this scan fails to deliver) re-arm it.
+	o.cancelRecoveryScan()
 
 	start := time.Now()
 

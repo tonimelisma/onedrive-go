@@ -418,12 +418,13 @@ func (rt *watchRuntime) startLocalObserver(
 		defer recoverObserverPanic(rt.deps.logger, observerNameLocal, errs)
 
 		watchErr := localObs.Watch(ctx, rt.engine.syncTree, nil)
-		if errors.Is(watchErr, errWatchLimitExhausted) {
+		if cause, ok := watchUnavailableCauseOf(watchErr); ok {
 			rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
-			rt.deps.logger.Warn("Too many folders to watch for changes (system inotify limit reached). "+
+			rt.deps.logger.Warn("Cannot watch the sync folder for changes ("+watchUnavailableReason(cause)+"). "+
 				"Local changes will be noticed every "+waitText(localWatchDegradedFullScanInterval)+
-				" instead of at once. To fix: sudo sysctl -w fs.inotify.max_user_watches=524288",
+				" instead of at once. To fix: "+watchUnavailableFix(cause),
 				slog.Duration("scan_interval", localWatchDegradedFullScanInterval),
+				slog.String("error", watchErr.Error()),
 			)
 
 			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, nil, localWatchDegradedFullScanInterval)
