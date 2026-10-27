@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -19,16 +20,67 @@ import (
 // whatever is at the path now is left there.
 var ErrDetachRaced = errors.New("the file changed while it was being removed")
 
-// detachTempPrefix and detachTempSuffix give a detached file the client-owned
-// partial name pattern, so local observation ignores it for the instant it
-// exists inside the tree.
+// detachTempPrefix and detachTempSuffix name a file set aside while it is
+// being removed. Local observation ignores the name (IsDetachArtifactName),
+// and unlike a .partial download it is never cleaned up automatically: if a
+// run dies between setting a file aside and moving it out, the file left
+// behind is user content, which a full scan reports instead of deleting.
 const (
 	detachTempPrefix    = ".onedrive-go."
-	detachTempSuffix    = ".detach.partial"
+	detachTempSuffix    = ".detach"
 	detachRandomBytes   = 8
 	detachCopyFilePerm  = 0o600
 	detachDirectoryPerm = 0o700
 )
+
+// IsDetachArtifactName reports whether name is a file this package set aside
+// while removing it.
+func IsDetachArtifactName(name string) bool {
+	return strings.HasPrefix(name, detachTempPrefix) && strings.HasSuffix(name, detachTempSuffix)
+}
+
+// fileStamp is what a verified file must still be when it leaves the tree:
+// an in-place write after the content check changes at least one of these,
+// even when it keeps the inode.
+type fileStamp struct {
+	size  int64
+	mtime unix.Timespec
+	ctime unix.Timespec
+}
+
+func stampOf(file *os.File) (fileStamp, error) {
+	var st unix.Stat_t
+	if err := withFd(file, func(fd int) error { return unix.Fstat(fd, &st) }); err != nil {
+		return fileStamp{}, fmt.Errorf("stating verified file: %w", err)
+	}
+	return fileStamp{size: st.Size, mtime: st.Mtim, ctime: st.Ctim}, nil
+}
+
+// unchangedSince fails with ErrDetachRaced when the open file is no longer
+// what was verified: written in place between the check and the move.
+// unchangedBeforeMove also compares ctime; after the set-aside rename only
+// size and mtime are compared, because renaming the file updates its ctime.
+func unchangedSince(file *os.File, verified fileStamp) error {
+	now, err := stampOf(file)
+	if err != nil {
+		return err
+	}
+	if now.size != verified.size || now.mtime != verified.mtime {
+		return ErrDetachRaced
+	}
+	return nil
+}
+
+func unchangedBeforeMove(file *os.File, verified fileStamp) error {
+	now, err := stampOf(file)
+	if err != nil {
+		return err
+	}
+	if now != verified {
+		return ErrDetachRaced
+	}
+	return nil
+}
 
 // VerifyFunc inspects the open file a destructive operation is about to act
 // on. It reads through f, never through the path, so what it approves is
@@ -47,19 +99,19 @@ type VerifyFunc func(f *os.File, info os.FileInfo) error
 // ErrDetachRaced. dest lands by rename on the same filesystem and by copy
 // through the verified descriptor across filesystems.
 func (r *Root) DetachRegularFile(rel string, verify VerifyFunc, dest string) error {
-	parent, name, file, info, err := r.openVerifiedRegular(rel, verify)
+	parent, name, file, info, stamp, err := r.openVerifiedRegular(rel, verify)
 	if err != nil {
 		return err
 	}
 	defer parent.Close() //nolint:errcheck // read-only directory descriptor
 	defer file.Close()   //nolint:errcheck // read-only file descriptor
 
-	tempName, err := setAsideVerified(parent, name, info, rel)
+	tempName, err := setAsideVerified(parent, name, file, info, stamp, rel)
 	if err != nil {
 		return err
 	}
 
-	if err := moveDetachedOut(parent, tempName, file, dest); err != nil {
+	if err := moveDetachedOut(parent, tempName, file, stamp, dest); err != nil {
 		if restoreErr := linkBackNoReplace(parent, tempName, name); restoreErr != nil {
 			return fmt.Errorf("%w; putting %s back: %w", err, rel, restoreErr)
 		}
@@ -72,14 +124,14 @@ func (r *Root) DetachRegularFile(rel string, verify VerifyFunc, dest string) err
 // RemoveVerifiedRegularFile permanently removes the regular file at rel, but
 // only the inode verify approved; see DetachRegularFile for the binding.
 func (r *Root) RemoveVerifiedRegularFile(rel string, verify VerifyFunc) error {
-	parent, name, file, info, err := r.openVerifiedRegular(rel, verify)
+	parent, name, file, info, stamp, err := r.openVerifiedRegular(rel, verify)
 	if err != nil {
 		return err
 	}
 	defer parent.Close() //nolint:errcheck // read-only directory descriptor
 	defer file.Close()   //nolint:errcheck // read-only file descriptor
 
-	tempName, err := setAsideVerified(parent, name, info, rel)
+	tempName, err := setAsideVerified(parent, name, file, info, stamp, rel)
 	if err != nil {
 		return err
 	}
@@ -97,19 +149,23 @@ func (r *Root) RemoveVerifiedRegularFile(rel string, verify VerifyFunc) error {
 // through the verified descriptor across filesystems. A download that then
 // replaces rel by rename leaves the preserved inode untouched.
 func (r *Root) PreserveRegularFile(rel string, verify VerifyFunc, dest string) error {
-	parent, name, file, info, err := r.openVerifiedRegular(rel, verify)
+	parent, name, file, info, stamp, err := r.openVerifiedRegular(rel, verify)
 	if err != nil {
 		return err
 	}
 	defer parent.Close() //nolint:errcheck // read-only directory descriptor
 	defer file.Close()   //nolint:errcheck // read-only file descriptor
 
+	if err := unchangedBeforeMove(file, stamp); err != nil {
+		return fmt.Errorf("preserving %s: %w", rel, err)
+	}
 	linkErr := linkatOut(parent, name, dest)
 	switch {
 	case linkErr == nil:
-		// The link is by name; prove it names the verified inode.
+		// The link is by name; prove it names the verified inode, still
+		// holding the verified content.
 		linked, statErr := os.Lstat(dest)
-		if statErr == nil && os.SameFile(linked, info) {
+		if statErr == nil && os.SameFile(linked, info) && unchangedSince(file, stamp) == nil {
 			return nil
 		}
 		if removeErr := os.Remove(dest); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
@@ -117,7 +173,7 @@ func (r *Root) PreserveRegularFile(rel string, verify VerifyFunc, dest string) e
 		}
 		return fmt.Errorf("preserving %s: %w", rel, ErrDetachRaced)
 	case errors.Is(linkErr, unix.EXDEV), errors.Is(linkErr, unix.EPERM), errors.Is(linkErr, unix.EMLINK):
-		return copyThroughDescriptor(file, dest)
+		return copyVerified(file, stamp, dest)
 	default:
 		return fmt.Errorf("preserving %s: %w", rel, linkErr)
 	}
@@ -126,33 +182,38 @@ func (r *Root) PreserveRegularFile(rel string, verify VerifyFunc, dest string) e
 func (r *Root) openVerifiedRegular(
 	rel string,
 	verify VerifyFunc,
-) (parent *os.File, name string, file *os.File, info os.FileInfo, err error) {
+) (parent *os.File, name string, file *os.File, info os.FileInfo, stamp fileStamp, err error) {
 	clean, err := cleanRelative(rel)
 	if err != nil {
-		return nil, "", nil, nil, err
+		return nil, "", nil, nil, fileStamp{}, err
 	}
 	if clean == "." {
-		return nil, "", nil, nil, unsafePathf("refusing to remove the sync folder itself")
+		return nil, "", nil, nil, fileStamp{}, unsafePathf("refusing to remove the sync folder itself")
 	}
 	if ancestorErr := r.ValidateNoSymlinkAncestors(clean); ancestorErr != nil {
-		return nil, "", nil, nil, ancestorErr
+		return nil, "", nil, nil, fileStamp{}, ancestorErr
 	}
 
 	parentRel := filepath.Dir(clean)
 	name = filepath.Base(clean)
 	parent, err = r.Open(parentRel)
 	if err != nil {
-		return nil, "", nil, nil, err
+		return nil, "", nil, nil, fileStamp{}, err
 	}
 
 	file, err = openatNoFollow(parent, name)
 	if err != nil {
 		_ = parent.Close() //nolint:errcheck // error path; the open failure is reported
-		return nil, "", nil, nil, &os.PathError{Op: "open", Path: r.nameForMessage(clean), Err: err}
+		return nil, "", nil, nil, fileStamp{}, &os.PathError{Op: "open", Path: r.nameForMessage(clean), Err: err}
 	}
 	info, err = file.Stat()
 	if err == nil && !info.Mode().IsRegular() {
 		err = unsupportedEntryf("%s is not a regular file", r.nameForMessage(clean))
+	}
+	if err == nil {
+		// The stamp is taken before the check, so a write during or after
+		// it is caught when the file is moved.
+		stamp, err = stampOf(file)
 	}
 	if err == nil && verify != nil {
 		err = verify(file, info)
@@ -160,28 +221,42 @@ func (r *Root) openVerifiedRegular(
 	if err != nil {
 		_ = file.Close()   //nolint:errcheck // error path; the verify failure is reported
 		_ = parent.Close() //nolint:errcheck // error path; the verify failure is reported
-		return nil, "", nil, nil, err
+		return nil, "", nil, nil, fileStamp{}, err
 	}
 
-	return parent, name, file, info, nil
+	return parent, name, file, info, stamp, nil
 }
 
 // setAsideVerified renames name to a temporary sibling and proves the
-// sibling is the verified inode. On a mismatch the sibling is put back and
-// ErrDetachRaced returned.
-func setAsideVerified(parent *os.File, name string, info os.FileInfo, rel string) (string, error) {
+// sibling is the verified inode, unchanged since it was verified. On a
+// mismatch the sibling is put back and ErrDetachRaced returned.
+func setAsideVerified(
+	parent *os.File,
+	name string,
+	file *os.File,
+	info os.FileInfo,
+	stamp fileStamp,
+	rel string,
+) (string, error) {
 	tempName, err := detachTempName()
 	if err != nil {
 		return "", err
 	}
+	if err := unchangedBeforeMove(file, stamp); err != nil {
+		return "", fmt.Errorf("removing %s: %w", rel, err)
+	}
 	if err := renameat(parent, name, parent, tempName); err != nil {
 		return "", fmt.Errorf("setting aside %s: %w", rel, err)
 	}
-	if err := sameFileAt(parent, tempName, info); err != nil {
+	checkErr := sameFileAt(parent, tempName, info)
+	if checkErr == nil {
+		checkErr = unchangedSince(file, stamp)
+	}
+	if checkErr != nil {
 		if restoreErr := linkBackNoReplace(parent, tempName, name); restoreErr != nil {
-			return "", fmt.Errorf("%w; putting %s back: %w", err, rel, restoreErr)
+			return "", fmt.Errorf("%w; putting %s back: %w", checkErr, rel, restoreErr)
 		}
-		return "", fmt.Errorf("removing %s: %w", rel, err)
+		return "", fmt.Errorf("removing %s: %w", rel, checkErr)
 	}
 
 	return tempName, nil
@@ -266,7 +341,7 @@ func linkatOut(dir *os.File, name string, dest string) error {
 	})
 }
 
-func moveDetachedOut(parent *os.File, tempName string, file *os.File, dest string) error {
+func moveDetachedOut(parent *os.File, tempName string, file *os.File, stamp fileStamp, dest string) error {
 	err := withFd(parent, func(fd int) error {
 		return unix.Renameat(fd, tempName, unix.AT_FDCWD, dest)
 	})
@@ -277,7 +352,7 @@ func moveDetachedOut(parent *os.File, tempName string, file *os.File, dest strin
 		return fmt.Errorf("moving out of the sync folder: %w", err)
 	}
 
-	if err := copyThroughDescriptor(file, dest); err != nil {
+	if err := copyVerified(file, stamp, dest); err != nil {
 		return err
 	}
 	return withFd(parent, func(fd int) error {
@@ -286,6 +361,22 @@ func moveDetachedOut(parent *os.File, tempName string, file *os.File, dest strin
 		}
 		return nil
 	})
+}
+
+// copyVerified copies through the verified descriptor and then re-checks it:
+// a write that landed while the copy ran means the copy may be torn, so it is
+// discarded and the move reported as raced.
+func copyVerified(file *os.File, stamp fileStamp, dest string) error {
+	if err := copyThroughDescriptor(file, dest); err != nil {
+		return err
+	}
+	if err := unchangedSince(file, stamp); err != nil {
+		if removeErr := os.Remove(dest); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return fmt.Errorf("%w; discarding the copy: %w", err, removeErr)
+		}
+		return err
+	}
+	return nil
 }
 
 // copyThroughDescriptor writes the content of the verified descriptor to

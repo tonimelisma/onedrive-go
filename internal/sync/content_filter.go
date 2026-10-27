@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // ContentFilterConfig is the sync-engine visibility policy compiled from
@@ -134,7 +135,8 @@ func (f contentFilter) isIgnored(path string, isDir bool) bool {
 
 	parts := strings.Split(path, "/")
 	for _, part := range parts {
-		if driveops.IsOwnedTransferArtifactName(part) || isSpellingRenameArtifactName(part) {
+		if driveops.IsOwnedTransferArtifactName(part) || isSpellingRenameArtifactName(part) ||
+			synctree.IsDetachArtifactName(part) {
 			return true
 		}
 	}

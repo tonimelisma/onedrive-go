@@ -318,11 +318,11 @@ func (e *executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFun
 
 // commitTrashPlacement records a placement whose file already left the sync
 // folder. The delete itself has happened, so a failure here does not fail the
-// action; it is reported because the uncommitted entry will be purged as
-// crash debris instead of kept for the retention period.
+// action; the entry keeps its pending record, which lists and restores and is
+// never purged automatically.
 func (e *executor) commitTrashPlacement(rel string, placement *localtrash.Placement) {
 	if _, err := placement.Commit(); err != nil {
-		e.logger.Warn("could not record a trashed file; it is in the trash folder but will not be listed",
+		e.logger.Warn("could not finish recording a trashed file; it stays listed as interrupted and can be restored",
 			slog.String("path", rel),
 			slog.String("trash_path", placement.ItemPath),
 			slog.String("error", err.Error()),

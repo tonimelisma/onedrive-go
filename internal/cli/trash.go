@@ -115,6 +115,7 @@ type trashEntryJSON struct {
 	Reason    string `json:"reason"`
 	Size      int64  `json:"size"`
 	TrashedAt string `json:"trashed_at"`
+	State     string `json:"state"`
 }
 
 type trashListJSONOutput struct {
@@ -142,6 +143,7 @@ func runTrashList(_ context.Context, cc *CLIContext) error {
 				Reason:    string(entries[i].Reason),
 				Size:      entries[i].Size,
 				TrashedAt: entries[i].TrashedAt.UTC().Format(time.RFC3339),
+				State:     string(entries[i].State),
 			})
 		}
 		return writeJSONDocument(cc.Output(), out)
@@ -152,17 +154,31 @@ func runTrashList(_ context.Context, cc *CLIContext) error {
 	}
 	for i := range entries {
 		entry := entries[i]
-		what := "deleted"
-		if entry.Reason == localtrash.ReasonReplaced {
-			what = "replaced"
-		}
-		if err := writef(cc.Output(), "%s  %s  %s %s (%s)\n",
-			entry.ID, entry.TrashedAt.Local().Format(time.DateTime), what, entry.Path, formatSize(entry.Size)); err != nil {
+		if err := writeTrashEntryLine(cc, &entry); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func writeTrashEntryLine(cc *CLIContext, entry *localtrash.Entry) error {
+	switch entry.State {
+	case localtrash.StateOrphan:
+		return writef(cc.Output(), "%s  %s  unrecorded file (interrupted run): %s\n",
+			entry.ID, entry.TrashedAt.Local().Format(time.DateTime), entry.ItemPath)
+	case localtrash.StatePending, localtrash.StateCommitted:
+	}
+	what := "deleted"
+	if entry.Reason == localtrash.ReasonReplaced {
+		what = "replaced"
+	}
+	suffix := ""
+	if entry.State == localtrash.StatePending {
+		suffix = " [interrupted, recoverable]"
+	}
+	return writef(cc.Output(), "%s  %s  %s %s (%s)%s\n",
+		entry.ID, entry.TrashedAt.Local().Format(time.DateTime), what, entry.Path, formatSize(entry.Size), suffix)
 }
 
 type trashRestoreJSONOutput struct {

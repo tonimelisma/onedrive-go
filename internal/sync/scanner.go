@@ -471,6 +471,17 @@ func (o *localObserver) makeWalkFunc(
 			} else {
 				o.logger.Debug("skipping excluded file", slog.String("name", name))
 			}
+			if synctree.IsDetachArtifactName(name) {
+				// A file set aside by a removal a crash interrupted: user
+				// content left under a hidden name. Report it every scan
+				// until the user deals with it; never delete it (P-4).
+				*skipped = append(*skipped, skippedItem{
+					Path:   dbRelPath,
+					Reason: issueLocalInterruptedRemoval,
+					Detail: "sync set this file aside while removing it and was interrupted; " +
+						"rename it back to keep it, or delete it",
+				})
+			}
 			// A synced item renamed to this skipped name (invalid, too long,
 			// excluded) is still the synced item: keep its synced path
 			// unavailable instead of letting it read as deleted.

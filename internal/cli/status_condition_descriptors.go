@@ -118,6 +118,13 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 				"does not allow, an ignored location, a symbolic link or a special file). Its OneDrive copy is kept.",
 			"Rename or move it back. If you meant to remove it, delete it on OneDrive.",
 		)
+	case syncengine.ConditionLocalInterrupted:
+		return newStatusConditionDescriptor(
+			"Interrupted removal",
+			"Sync set this file aside while removing it, and the run stopped before it finished. "+
+				"The file is your content; sync never deletes it on its own.",
+			"Check the file. Rename it back if you want to keep it, or delete it.",
+		)
 	case syncengine.ConditionLocalMountBoundary:
 		return newStatusConditionDescriptor(
 			"Another filesystem inside the sync folder",
@@ -256,6 +263,7 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionDeletesHeld,
 		syncengine.ConditionLocalUnsyncable,
 		syncengine.ConditionLocalMountBoundary,
+		syncengine.ConditionLocalInterrupted,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -330,6 +338,7 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionDeletesHeld,
 		syncengine.ConditionLocalUnsyncable,
 		syncengine.ConditionLocalMountBoundary,
+		syncengine.ConditionLocalInterrupted,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:
@@ -424,6 +433,7 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 		syncengine.ConditionDeletesHeld,
 		syncengine.ConditionLocalUnsyncable,
 		syncengine.ConditionLocalMountBoundary,
+		syncengine.ConditionLocalInterrupted,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
 	default:

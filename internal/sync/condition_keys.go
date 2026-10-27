@@ -28,6 +28,7 @@ const (
 	ConditionDeletesHeld            ConditionKey = "deletes_held"
 	ConditionLocalUnsyncable        ConditionKey = "local_unsyncable_replacement"
 	ConditionLocalMountBoundary     ConditionKey = "local_mount_boundary"
+	ConditionLocalInterrupted       ConditionKey = "local_interrupted_removal"
 	ConditionLocalFileTooLarge      ConditionKey = "local_file_too_large"
 	ConditionLocalBusy              ConditionKey = "local_busy"
 	ConditionLocalCrossDevice       ConditionKey = "local_cross_device"
@@ -123,6 +124,7 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionLocalReadOnly,
 		ConditionLocalUnsyncable,
 		ConditionLocalMountBoundary,
+		ConditionLocalInterrupted,
 		ConditionLocalFileTooLarge,
 		ConditionLocalBusy,
 		ConditionLocalCrossDevice,
@@ -175,6 +177,7 @@ func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
 		{issueType: issueDeletesHeld, key: ConditionDeletesHeld},
 		{issueType: issueLocalUnsyncableReplacement, key: ConditionLocalUnsyncable},
 		{issueType: issueLocalMountBoundary, key: ConditionLocalMountBoundary},
+		{issueType: issueLocalInterruptedRemoval, key: ConditionLocalInterrupted},
 		{issueType: issueLocalFileTooLarge, key: ConditionLocalFileTooLarge},
 		{issueType: issueLocalBusy, key: ConditionLocalBusy},
 		{issueType: issueLocalCrossDevice, key: ConditionLocalCrossDevice},

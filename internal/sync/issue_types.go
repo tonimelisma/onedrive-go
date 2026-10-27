@@ -42,15 +42,19 @@ const (
 	issueLocalUnsyncableReplacement = "local_unsyncable_replacement"
 	// issueLocalMountBoundary marks a folder on another filesystem inside the
 	// sync folder; sync does not cross into it (D-003, P-11).
-	issueLocalMountBoundary   = "local_mount_boundary"
-	issueLocalFileTooLarge    = "local_file_too_large"
-	issueLocalBusy            = "local_busy"
-	issueLocalCrossDevice     = "local_cross_device"
-	issueUnsupportedOperation = "unsupported_operation"
-	issueMalwareDetected      = "malware_detected"
-	issueLocalDatabaseOpen    = "local_database_open"
-	issueUploadVerification   = "upload_verification_failed"
-	issueDownloadIntegrity    = "download_integrity"
+	issueLocalMountBoundary = "local_mount_boundary"
+	// issueLocalInterruptedRemoval marks a file sync set aside while removing
+	// it and never moved out, because a run was interrupted. It is the
+	// user's content, so it is reported, never deleted.
+	issueLocalInterruptedRemoval = "local_interrupted_removal"
+	issueLocalFileTooLarge       = "local_file_too_large"
+	issueLocalBusy               = "local_busy"
+	issueLocalCrossDevice        = "local_cross_device"
+	issueUnsupportedOperation    = "unsupported_operation"
+	issueMalwareDetected         = "malware_detected"
+	issueLocalDatabaseOpen       = "local_database_open"
+	issueUploadVerification      = "upload_verification_failed"
+	issueDownloadIntegrity       = "download_integrity"
 	// issueTransferStalled shares the request-timeout condition family.
 	issueTransferStalled = "request_timeout"
 )

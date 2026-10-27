@@ -119,3 +119,81 @@ func TestDetachRegularFile_RefusesSymlinks(t *testing.T) {
 	require.Error(t, err)
 	assert.FileExists(t, filepath.Join(dir, "docs", "a.txt"))
 }
+
+// An in-place write (same inode) between the content check and the move:
+// the inode check alone would let it through and the new bytes would leave
+// the tree as if they were the verified ones.
+//
+// Validates: R-6.2.4
+func TestDetachRegularFile_InPlaceWriteAfterVerifyIsKept(t *testing.T) {
+	t.Parallel()
+
+	for _, operation := range []string{"detach", "remove", "preserve"} {
+		t.Run(operation, func(t *testing.T) {
+			t.Parallel()
+
+			root, dir := newDetachTree(t)
+			target := filepath.Join(dir, "docs", "a.txt")
+			writeInPlace := func(*os.File, os.FileInfo) error {
+				f, err := os.OpenFile(target, os.O_WRONLY|os.O_APPEND, 0)
+				require.NoError(t, err)
+				_, err = f.WriteString("appended by the user\n")
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+				return nil
+			}
+			dest := filepath.Join(t.TempDir(), "item")
+
+			var err error
+			switch operation {
+			case "detach":
+				err = root.DetachRegularFile("docs/a.txt", writeInPlace, dest)
+			case "remove":
+				err = root.RemoveVerifiedRegularFile("docs/a.txt", writeInPlace)
+			default:
+				err = root.PreserveRegularFile("docs/a.txt", writeInPlace, dest)
+			}
+
+			require.ErrorIs(t, err, ErrDetachRaced)
+			data, readErr := os.ReadFile(target) //nolint:gosec // the test reads a file it created
+			require.NoError(t, readErr)
+			assert.Equal(t, "synced\nappended by the user\n", string(data))
+			assert.NoFileExists(t, dest)
+		})
+	}
+}
+
+// The cross-filesystem path copies through the verified descriptor; a write
+// that lands while the copy runs makes the copy untrustworthy.
+//
+// Validates: R-6.2.4
+func TestCopyVerified_WriteDuringCopyDiscardsTheCopy(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	require.NoError(t, os.WriteFile(path, []byte("synced\n"), 0o600))
+	file, err := os.Open(path) //nolint:gosec // the test opens a file it created
+	require.NoError(t, err)
+	defer file.Close()
+	stamp, err := stampOf(file)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(path, []byte("rewritten in place\n"), 0o600))
+	dest := filepath.Join(t.TempDir(), "item")
+
+	err = copyVerified(file, stamp, dest)
+	require.ErrorIs(t, err, ErrDetachRaced)
+	assert.NoFileExists(t, dest)
+}
+
+// Validates: R-6.4.9
+func TestIsDetachArtifactName(t *testing.T) {
+	t.Parallel()
+
+	name, err := detachTempName()
+	require.NoError(t, err)
+	assert.True(t, IsDetachArtifactName(name))
+	assert.False(t, IsDetachArtifactName(".onedrive-go.abc.partial"), "a download partial is a different artifact")
+	assert.False(t, IsDetachArtifactName("notes.detach"))
+}

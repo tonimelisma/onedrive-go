@@ -113,6 +113,7 @@ func conditionLabels() map[ConditionKey]string {
 		ConditionDeletesHeld:            "whose deletion is held until you confirm it",
 		ConditionLocalUnsyncable:        "renamed or replaced into something sync cannot use",
 		ConditionLocalMountBoundary:     "on another filesystem inside the sync folder",
+		ConditionLocalInterrupted:       "left set aside by an interrupted removal",
 		ConditionLocalFileTooLarge:      "too large for the local filesystem",
 		ConditionLocalBusy:              "busy on this computer",
 		ConditionLocalCrossDevice:       "that would move across a mount point",
