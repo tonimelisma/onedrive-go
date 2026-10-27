@@ -2779,3 +2779,132 @@ func TestFullDelta_EmbeddedSharedLinksIgnored(t *testing.T) {
 	assert.Equal(t, "f1", events[0].ItemID)
 	assert.Equal(t, "myfile.txt", events[0].Path)
 }
+
+// Validates: R-2.11.9
+func TestFullDelta_RejectsUnmaterializableRemoteNames(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "dotdot", Name: "..", ParentID: "root", DriveID: driveID, IsFolder: true},
+					{ID: "escaped-child", Name: "secret.txt", ParentID: "dotdot", DriveID: driveID},
+					{ID: "dot", Name: ".", ParentID: "root", DriveID: driveID},
+					{ID: "slash", Name: "x/y.txt", ParentID: "root", DriveID: driveID},
+					{ID: "nul", Name: "a\x00b.txt", ParentID: "root", DriveID: driveID},
+					{ID: "badutf8", Name: "caf\xe9.txt", ParentID: "root", DriveID: driveID},
+					{ID: "ok", Name: "a%2Fb.txt", ParentID: "root", DriveID: driveID},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	events, token, err := obs.FullDelta(t.Context(), "")
+	require.NoError(t, err, "an unmaterializable name must not stall the window")
+	assert.Equal(t, "delta-link", token)
+
+	require.Len(t, events, 1, "only the literal percent name is materializable")
+	assert.Equal(t, "ok", events[0].ItemID)
+	assert.Equal(t, "a%2Fb.txt", events[0].Path)
+}
+
+// Validates: R-2.11.9
+func TestFullDelta_ItemWithoutParentReferenceIsNotPlacedAtRoot(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "parentless", Name: "stray.txt", DriveID: driveID},
+					{ID: "placed", Name: "kept.txt", ParentID: "root", DriveID: driveID},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	events, _, err := obs.FullDelta(t.Context(), "")
+	require.NoError(t, err)
+
+	require.Len(t, events, 1)
+	assert.Equal(t, "kept.txt", events[0].Path)
+}
+
+// Validates: R-6.7.3
+func TestFullDelta_ParentIDChainWinsOverParentReferencePath(t *testing.T) {
+	t.Parallel()
+
+	// parentReference.path is URL-encoded, so a folder literally named
+	// "a%20b" decodes to "a b" there. The ID chain names it exactly.
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveID},
+					{ID: "d1", Name: "a%20b", ParentID: "root", DriveID: driveID, IsFolder: true},
+					{
+						ID: sharedTestFileItemID, Name: "c.txt", ParentID: "d1", DriveID: driveID,
+						ParentPath: "a b", ParentPathKnown: true,
+					},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	events, _, err := obs.FullDelta(t.Context(), "")
+	require.NoError(t, err)
+
+	var child *changeEvent
+	for i := range events {
+		if events[i].ItemID == sharedTestFileItemID {
+			child = &events[i]
+		}
+	}
+	require.NotNil(t, child)
+	assert.Equal(t, "a%20b/c.txt", child.Path)
+}
+
+// Validates: R-2.11.9, R-6.7.23
+func TestFullDelta_ParentReferencePathFallbackChecksEverySegment(t *testing.T) {
+	t.Parallel()
+
+	// The parent chain cannot be resolved here (the parent is in neither the
+	// window nor the baseline), so placement falls back to the verbatim
+	// parentReference.path. A ".." segment there must not climb out, and a
+	// folder literally named "a%20b" keeps its name (L-32).
+	driveID := driveid.New(synctest.TestDriveID)
+	place := func(parentPath string) ([]changeEvent, error) {
+		fetcher := &mockDeltaFetcher{pages: []mockDeltaPage{{page: &graph.DeltaPage{
+			Items: []graph.Item{{
+				ID: "child", Name: "x.txt", ParentID: "unknown-parent", DriveID: driveID,
+				ParentPath: parentPath, ParentPathKnown: true,
+			}},
+			DeltaLink: "delta-link",
+		}}}}
+		events, _, err := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t)).FullDelta(t.Context(), "")
+		return events, err
+	}
+
+	events, err := place("docs/../..")
+	if err != nil {
+		require.ErrorIs(t, err, errRemoteObservationIncomplete)
+	}
+	assert.Empty(t, events)
+
+	events, err = place("a%20b")
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "a%20b/x.txt", events[0].Path)
+}

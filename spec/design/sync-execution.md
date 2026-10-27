@@ -142,6 +142,28 @@ evidence is not evidence of sameness, and a destructive action may not run on
 it. Each refusal is a superseded precondition, so the path is replanned rather
 than stranded, and a row that later hashes cleanly deletes normally.
 
+A create upload records the new item as a pending create through
+`UploadOpts.OnCreated` before any content is sent (R-5.6.15). A 409 on the
+create is resolved, not retried as is: into our own placeholder from an
+interrupted attempt (upload by ID with If-Match on its creation eTag), as a
+durable name collision when OneDrive holds a differently spelled sibling of
+the same name (`remoteNameTakenError`, classified as `case_collision` with
+backoff, naming both names;
+`TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableCollision`),
+or as a stale precondition when the same spelling exists or nothing is
+visible yet.
+
+A spelling-only local move (the old and new names are one OneDrive name:
+case or Unicode form) accepts a destination that is the source's own inode,
+which is what a case- or normalization-insensitive volume reports. It renames
+directly, and only when the directory still holds the old spelling goes
+through a temporary sibling named `.onedrive-go.spelling.<name>`, which local
+observation always excludes and cleanup never deletes, so a crash between the
+two renames leaves nothing that syncs (R-2.12.4,
+`TestContentFilter_SpellingRenameArtifactIsAlwaysExcluded`,
+`TestExecutor_LocalMove_SpellingOnlyRenameOntoSameInodeIsAllowed`). Refusing it
+left a remote case-only rename stale on every pass on macOS.
+
 Local move checks that its destination is absent and then renames, which is
 the same check-then-act shape the conflict copy no longer uses. The asymmetry
 is deliberate, and worth stating so it does not read as an oversight.
@@ -175,7 +197,11 @@ The executor therefore creates each candidate exclusively and treats an
 existing name as taken, walking the ordinal suffixes until a create succeeds.
 That makes the claim atomic against every other creator of the name. The
 placeholder is empty, so a claim that ends up unused is released rather than
-left behind, where it would read as a truncated conflict copy.
+left behind, where it would read as a truncated conflict copy. Every
+candidate, ordinal and extension included, is built to fit the 255-byte name
+limit (R-2.11.11, `TestExecutor_SecondSameSecondConflictCopyOfALongNameIsWritable`);
+the ordinal used to be appended after the stem was already trimmed to the
+limit, so the second same-second copy of a long name was unwritable.
 
 The dependency graph is dependency-only. It no longer defines runtime
 quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,

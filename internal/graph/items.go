@@ -190,7 +190,7 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 	if d.ParentReference != nil {
 		item.DriveID = driveid.New(d.ParentReference.DriveID)
 		item.ParentID = d.ParentReference.ID
-		item.ParentPath, item.ParentPathKnown = decodeParentReferencePath(d.ParentReference.Path, logger)
+		item.ParentPath, item.ParentPathKnown = parseParentReferencePath(d.ParentReference.Path, logger)
 		item.ParentDriveID = driveid.New(d.ParentReference.DriveID)
 		item.ParentDriveType = d.ParentReference.DriveType
 	}
@@ -232,32 +232,24 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 	return item
 }
 
-// decodeParentReferencePath converts Graph's parentReference.path into a
-// decoded path relative to the drive root. Graph returns an absolute API path
-// prefix ("/drives/{id}/root:") plus URL-encoded segments in non-delta
-// responses. Callers only need the root-relative filesystem portion.
-func decodeParentReferencePath(rawPath string, logger *slog.Logger) (string, bool) {
+// parseParentReferencePath converts Graph's parentReference.path into a path
+// relative to the drive root, verbatim. Graph returns an absolute API prefix
+// ("/drives/{id}/root:") followed by the parent's names exactly as stored:
+// live probe L-32 (Personal) found folders named `a b`, `a%b`, `a%20b`,
+// `a#b`, `ä`, `a+b`, `a&b` and `a'b` unencoded in the create answer, GET and
+// delta alike. Decoding the path turned a folder literally named `a%20b`
+// into `a b` and misplaced its children. ':' cannot occur in a OneDrive
+// name, so the "/root:" marker is unambiguous.
+func parseParentReferencePath(rawPath string, logger *slog.Logger) (string, bool) {
 	if rawPath == "" {
 		return "", false
 	}
 
-	decoded, err := url.PathUnescape(rawPath)
-	if err != nil {
-		if logger != nil {
-			logger.Debug("failed to decode parentReference.path, ignoring",
-				slog.String("path", rawPath),
-				slog.String("error", err.Error()),
-			)
-		}
-
-		return "", false
-	}
-
-	_, rootRelativePath, found := strings.Cut(decoded, "/root:")
+	_, rootRelativePath, found := strings.Cut(rawPath, "/root:")
 	if !found {
 		if logger != nil {
 			logger.Debug("parentReference.path missing root marker, ignoring",
-				slog.String("path", decoded),
+				slog.String("path", rawPath),
 			)
 		}
 

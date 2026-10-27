@@ -603,7 +603,7 @@ func TestTransfersCanceledMidFlightLogNothingAboveDebug(t *testing.T) {
 	uploadCtx, cancelUpload := context.WithCancel(t.Context())
 	cancelUpload()
 
-	_, err = client.SimpleUpload(uploadCtx, driveid.New("d1"), "parent", "a.txt", strings.NewReader("data"), 4)
+	_, err = client.SimpleUploadToItem(uploadCtx, driveid.New("d1"), "item-1", "", strings.NewReader("data"), 4)
 	require.Error(t, err)
 	require.ErrorIs(t, err, context.Canceled)
 

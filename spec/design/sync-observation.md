@@ -170,7 +170,11 @@ It owns:
 - move detection against baseline
 - sync-only suppression of Graph package/OneNote items
 - sync-only suppression of Personal Vault content
-- malformed sparse-item rejection
+- malformed sparse-item rejection, including names that cannot be one local
+  path segment (`.`, `..`, `/`, NUL, invalid UTF-8): the item and its
+  descendants are skipped with a warning, never folded into another path
+  (`TestFullDelta_RejectsUnmaterializableRemoteNames`). Names are otherwise
+  opaque: the Graph client no longer URL-decodes them
 - mount-root path materialization relative to the engine's configured root
 
 Observation emits current truth for the mount root only. It does not carry a
@@ -181,9 +185,16 @@ Sparse parent recovery is intentionally layered:
 - first use the delta item directly when it already carries `ParentID`
 - otherwise try one best-effort `GetItem(driveID, itemID)` enrich before
   materializing the path
-- if enrich still leaves the parent missing, fall back to exact Graph
-  `parentReference.path` or baseline ancestry for path reconstruction when
-  possible
+- if enrich still leaves the parent missing, use the baseline ancestry of a
+  synced item or an exact Graph `parentReference.path`; a live item with
+  neither is skipped rather than placed at the drive root, and its window is
+  replayed only when the enrich read itself failed
+  (`TestFullDelta_ItemWithoutParentReferenceIsNotPlacedAtRoot`)
+- the parent-ID chain (window, then baseline) places an item before
+  `parentReference.path` is consulted: IDs are the authority, and the
+  client used to decode that path, which turned a folder literally named
+  `a%20b` into `a b`
+  (`TestFullDelta_ParentIDChainWinsOverParentReferencePath`)
 - if the parent chain still leaves both the window and the baseline (an
   incremental window carries a change inside a folder this client never put
   in its baseline, such as a suppressed OneNote package or Personal Vault
@@ -278,8 +289,19 @@ and keep hash-based file move fallback behavior for files only.
 Built-in local observation policy remains:
 
 - validate OneDrive-invalid names before they become upload work
+- count the 400-character path limit in UTF-16 code units, the unit OneDrive
+  measures (R-2.11.10, `TestFullScan_LongNonASCIIPathWithinTheCharacterLimitIsObserved`);
+  counting UTF-8 bytes skipped valid CJK and accented paths
 - report invalid names, path length, file size, case collisions, read-denied
   paths, and hash failures as observation issues for visible paths only
+- "the same name" means OneDrive's name, decided by `internal/namekey` (R-2.12.3):
+  full case folding (`straße`/`STRASSE`), canonical equivalence (an NFD and an
+  NFC twin), and supplementary-plane characters ignored (`a.txt` collides with
+  `a😀.txt`; the issue detail names both files and says why). Full scans,
+  watch-mode collision caches and the baseline sibling index all group by that
+  key (`TestDetectCaseCollisions_FullCaseFoldingCollides`,
+  `TestDetectCaseCollisions_EmojiOnlyDifferenceCollidesAndNamesBothFiles`,
+  `TestHasCaseCollisionCached_NFDOnDiskNameDoesNotCollideWithItself`)
 - a case collision needs both names on disk: a baseline name the scan no
   longer finds is the old half of a case-only rename (or a local delete), not
   a collider; the planner orders the remote delete or move of the old name

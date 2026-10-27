@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -46,6 +47,15 @@ type executorConfig struct {
 	nowFunc         func() time.Time
 	hashFunc        func(filePath string) (string, error)
 	pathConvergence driveops.PathConvergence
+
+	// pendingCreates records new files whose empty item exists before their
+	// content is sent (R-5.6.15). Nil in executor-only tests.
+	pendingCreates pendingCreateStore
+}
+
+// SetPendingCreates wires the store that records pending creates.
+func (cfg *executorConfig) SetPendingCreates(store pendingCreateStore) {
+	cfg.pendingCreates = store
 }
 
 // executor executes individual actions against the Graph API and local
@@ -279,6 +289,35 @@ func (e *executor) resolvedParentIDForOutcome(action *Action, item *graph.Item) 
 	return ""
 }
 
+// adoptExistingRemoteFolder handles a 409 on a folder create. A folder with
+// exactly this name already being there is the outcome the create wanted (a
+// lost response to our own earlier create, or another device creating the
+// same folder): adopt it, as observing it would have. Anything else under the
+// name, a file or a differently spelled folder OneDrive treats as the same
+// name, is a stale precondition for the planner to resolve; the 409 used to
+// be retried as is, forever.
+func (e *executor) adoptExistingRemoteFolder(
+	ctx context.Context, driveID driveid.ID, parentID, name string, conflictErr error,
+) (*graph.Item, error) {
+	children, err := e.items.ListChildren(ctx, driveID, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("listing parent after folder create conflict: %w", errors.Join(conflictErr, err))
+	}
+
+	for i := range children {
+		if children[i].IsFolder && children[i].ID != "" && nfcNormalize(children[i].Name) == nfcNormalize(name) {
+			e.logger.Debug("adopted existing remote folder after create conflict",
+				slog.String("name", name),
+				slog.String("item_id", children[i].ID),
+			)
+
+			return &children[i], nil
+		}
+	}
+
+	return nil, stalePreconditionError("folder create %s: OneDrive already has another item with this name", name)
+}
+
 // createRemoteFolder creates a folder on OneDrive. The DAG guarantees parent
 // folder creates complete before children, so ResolveParentID finds the parent
 // in the baseline (committed by CommitMutation before depGraph.Complete).
@@ -306,6 +345,9 @@ func (e *executor) createRemoteFolder(ctx context.Context, action *Action) actio
 	name := filepath.Base(action.Path)
 
 	item, err := e.items.CreateFolder(ctx, driveID, parentID, name)
+	if errors.Is(err, graph.ErrConflict) {
+		item, err = e.adoptExistingRemoteFolder(ctx, driveID, parentID, name, err)
+	}
 	if err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
@@ -393,7 +435,7 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 		)
 	}
 
-	if err := e.syncTree.Rename(action.OldPath, action.Path); err != nil {
+	if err := e.renameLocal(action.OldPath, action.Path); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionLocalMove,
@@ -407,6 +449,59 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 
 	return e.moveOutcome(action)
 }
+
+// renameLocal renames within the sync tree. A spelling-only rename is tried
+// directly first: Linux filesystems and APFS store the new spelling that way.
+// Only when the stored spelling did not change (a case-insensitive volume
+// that treats the rename as a no-op) does it go through a temporary sibling,
+// named so that local observation always excludes it
+// (isSpellingRenameArtifactName): a crash between the two renames must not
+// leave a file that syncs under the temporary name.
+func (e *executor) renameLocal(oldPath, newPath string) error {
+	if err := e.syncTree.Rename(oldPath, newPath); err != nil {
+		return err //nolint:wrapcheck // synctree names both paths
+	}
+	if !isLocalSpellingOnlyMove(oldPath, newPath) {
+		return nil
+	}
+
+	stored, err := e.storedNameSpelling(newPath)
+	if err != nil || stored == filepath.Base(newPath) {
+		return err
+	}
+
+	//nolint:wrapcheck // synctree names both paths
+	return e.syncTree.RenameWithTemporarySibling(
+		filepath.Join(filepath.Dir(newPath), stored), newPath,
+		spellingRenameArtifactPrefix+filepath.Base(newPath), localSpellingRenameAttempts,
+	)
+}
+
+// storedNameSpelling returns the spelling the parent directory holds for the
+// entry OneDrive would call path's name.
+func (e *executor) storedNameSpelling(path string) (string, error) {
+	entries, err := e.syncTree.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return "", fmt.Errorf("reading %s after a spelling rename: %w", filepath.Dir(path), normalizeSyncTreePathError(err))
+	}
+
+	base := filepath.Base(path)
+	stored := base
+	for _, entry := range entries {
+		if entry.Name() == base {
+			return base, nil
+		}
+		if namekey.Equal(entry.Name(), base) {
+			stored = entry.Name()
+		}
+	}
+
+	return stored, nil
+}
+
+// localSpellingRenameAttempts bounds the temporary sibling names tried for a
+// spelling-only local rename.
+const localSpellingRenameAttempts = 10
 
 // ExecuteRemoteMove renames/moves an item on OneDrive.
 func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) actionOutcome {

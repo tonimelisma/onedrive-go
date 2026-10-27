@@ -44,6 +44,19 @@ func classifyResult(r *actionCompletion) resultDecision {
 		})
 	}
 
+	// A create refused because OneDrive holds a differently spelled sibling
+	// of the same name: the user has to rename one, so it is a durable
+	// name-collision condition with backoff, not a 409 retried every pass.
+	var nameTaken *remoteNameTakenError
+	if errors.As(r.Err, &nameTaken) {
+		return withRuntimeSummary(&resultDecision{
+			Class:         resultSkip,
+			Persistence:   persistRetryWork,
+			TrialHint:     trialHintReclassify,
+			ConditionType: issueCaseCollision,
+		})
+	}
+
 	if errors.Is(r.Err, context.Canceled) || errors.Is(r.Err, context.DeadlineExceeded) {
 		return withRuntimeSummary(&resultDecision{
 			Class:     resultShutdown,

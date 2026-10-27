@@ -2,36 +2,21 @@ package graph
 
 import (
 	"log/slog"
-	"net/url"
 	"slices"
 )
 
-// normalizeSingleItem applies the basic non-delta graph normalization contract
-// to one item response. Single-item APIs should expose decoded names, but they
-// intentionally do not filter package-only items here because explicit package
-// fetch semantics are a higher-layer policy question.
-func normalizeSingleItem(item *Item, logger *slog.Logger) {
-	item.Name = decodeURLEncodedName(item.ID, item.Name, logger)
-}
-
-// normalizeListedItems applies the shared graph boundary normalization used by
-// paginated non-delta list/search/shared responses. These surfaces expose
-// provider truth with decoded names; sync-only package policy lives in the sync
-// observation layer.
-func normalizeListedItems(items []Item, logger *slog.Logger) []Item {
-	items = decodeURLEncodedNames(items, logger)
-
-	return items
-}
-
 // normalizeDeltaItems applies delta-specific quirk handling to a batch of
 // items. The pipeline runs in a fixed order:
-// 0. Apply the shared non-delta normalization (decode names)
 // 1. Clear bogus hashes on deleted items
 // 2. Deduplicate items that appear multiple times (keep last occurrence)
 // 3. Reorder so deletions at a parent are processed before creations
+//
+// Item names are opaque and pass through verbatim. An earlier stage
+// URL-decoded every name; a live probe on Personal (create, GET, /children
+// and /delta) returned `a%20b.txt`, `test%46.txt` and `x%2Fy.txt` literally,
+// so decoding renamed user files and invented subfolders.
+// parentReference.path is not encoded either (L-32; see items.go).
 func normalizeDeltaItems(items []Item, logger *slog.Logger) []Item {
-	items = normalizeListedItems(items, logger)
 	items = clearDeletedHashes(items, logger)
 	items = deduplicateItems(items, logger)
 	items = reorderDeletions(items, logger)
@@ -184,52 +169,4 @@ func partitionDeletionsFirst(items []Item, slots []int) bool {
 	}
 
 	return moved
-}
-
-func decodeURLEncodedName(itemID, name string, logger *slog.Logger) string {
-	unescaped, err := url.PathUnescape(name)
-	if err != nil {
-		// If unescaping fails, keep the original name — malformed percent
-		// sequences should not block callers from seeing the item at all.
-		logger.Debug("failed to URL-decode item name, keeping original",
-			slog.String("item_id", itemID),
-			slog.String("name", name),
-			slog.String("error", err.Error()),
-		)
-
-		return name
-	}
-
-	if unescaped != name {
-		logger.Debug("URL-decoded item name",
-			slog.String("item_id", itemID),
-			slog.String("encoded", name),
-			slog.String("decoded", unescaped),
-		)
-	}
-
-	return unescaped
-}
-
-// decodeURLEncodedNames applies url.PathUnescape to item names. The Graph API
-// can return percent-encoded names across both delta and non-delta item
-// surfaces, especially on shared-folder paths.
-func decodeURLEncodedNames(items []Item, logger *slog.Logger) []Item {
-	decoded := 0
-
-	for i := range items {
-		unescaped := decodeURLEncodedName(items[i].ID, items[i].Name, logger)
-		if unescaped != items[i].Name {
-			items[i].Name = unescaped
-			decoded++
-		}
-	}
-
-	if decoded > 0 {
-		logger.Debug("decoded percent-encoded item names",
-			slog.Int("decoded_count", decoded),
-		)
-	}
-
-	return items
 }

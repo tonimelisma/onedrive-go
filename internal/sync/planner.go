@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // planner is a pure decision engine that transforms SQLite-owned comparison
@@ -401,12 +402,12 @@ func addMoveOutOfDeletedFolderDeps(deps []int, idx int, a *Action, actions []Act
 }
 
 // addRemoteCaseVariantDeps orders a case-only rename on OneDrive, whose
-// namespace is case-insensitive. When the rename cannot be paired as a move
+// namespace treats case, Unicode form and emoji-only differences as one name
+// (namekey). When the rename cannot be paired as a move
 // (the content changed too), it plans a delete of "edit.txt" and an upload of
-// "EDIT.txt". Uploads replace on conflict, so an upload that ran first would
-// overwrite the old item in place, and the delete of that item would then
-// remove the new content. The create therefore waits for the old name to be
-// deleted or moved away.
+// "EDIT.txt". A create never replaces (R-5.6.14), so a create that ran first
+// would fail with 409 against the old item and only succeed on a later pass.
+// The create therefore waits for the old name to be deleted or moved away.
 func addRemoteCaseVariantDeps(deps []int, idx int, a *Action, actions []Action) []int {
 	switch {
 	case a.Type == ActionUpload, a.Type == ActionRemoteMove:
@@ -432,7 +433,7 @@ func addRemoteCaseVariantDeps(deps []int, idx int, a *Action, actions []Action) 
 		default:
 			continue
 		}
-		if vacated == a.Path || vacated == a.OldPath || !strings.EqualFold(vacated, a.Path) {
+		if vacated == a.Path || vacated == a.OldPath || !namekey.EqualPath(vacated, a.Path) {
 			continue
 		}
 		if a.Type == ActionRemoteMove && strings.HasPrefix(a.OldPath, vacated+"/") {

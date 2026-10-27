@@ -15,9 +15,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -52,17 +52,24 @@ func (o *localObserver) HasCaseCollisionCached(_ *synctree.Root, dirPath, name, 
 		cache = make(map[string][]string, len(entries))
 
 		for _, e := range entries {
-			low := strings.ToLower(e.Name())
-			cache[low] = append(cache[low], e.Name())
+			key := namekey.Key(e.Name())
+			cache[key] = append(cache[key], e.Name())
 		}
 
 		o.DirNameCache[dirPath] = cache
 	}
 
-	low := strings.ToLower(name)
-
-	for _, existing := range cache[low] {
-		if existing != name {
+	// Cached names are on-disk spellings, which may be NFD; name is NFC. A
+	// differently spelled sibling under the same namespace key is a
+	// collision, and so is a second on-disk spelling of name itself (an NFC
+	// and an NFD twin, one name on OneDrive).
+	sameSpellings := 0
+	for _, existing := range cache[namekey.Key(name)] {
+		if nfcNormalize(existing) != name {
+			return existing, true
+		}
+		sameSpellings++
+		if sameSpellings > 1 {
 			return existing, true
 		}
 	}
@@ -99,13 +106,12 @@ func (o *localObserver) updateDirNameCache(dirPath, name string) {
 		return // not cached yet — will be populated lazily on next check
 	}
 
-	low := strings.ToLower(name)
-
-	if slices.Contains(cache[low], name) {
-		return // already present
+	key := namekey.Key(name)
+	if slices.ContainsFunc(cache[key], func(existing string) bool { return nfcNormalize(existing) == nfcNormalize(name) }) {
+		return // already present, possibly in its on-disk spelling
 	}
 
-	cache[low] = append(cache[low], name)
+	cache[key] = append(cache[key], name)
 }
 
 // removeDirNameCache removes a name from the cache for the given directory.
@@ -116,15 +122,15 @@ func (o *localObserver) removeDirNameCache(dirPath, name string) {
 		return
 	}
 
-	low := strings.ToLower(name)
-	names := cache[low]
+	key := namekey.Key(name)
+	names := cache[key]
 
 	for i, n := range names {
-		if n == name {
-			cache[low] = append(names[:i], names[i+1:]...)
+		if nfcNormalize(n) == nfcNormalize(name) {
+			cache[key] = append(names[:i], names[i+1:]...)
 
-			if len(cache[low]) == 0 {
-				delete(cache, low)
+			if len(cache[key]) == 0 {
+				delete(cache, key)
 			}
 
 			break
@@ -143,8 +149,8 @@ func (o *localObserver) populateDirNameCache(dirPath string, entries []os.DirEnt
 	cache := make(map[string][]string, len(entries))
 
 	for _, e := range entries {
-		low := strings.ToLower(e.Name())
-		cache[low] = append(cache[low], e.Name())
+		key := namekey.Key(e.Name())
+		cache[key] = append(cache[key], e.Name())
 	}
 
 	o.DirNameCache[dirPath] = cache

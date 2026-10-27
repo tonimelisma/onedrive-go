@@ -32,6 +32,7 @@ When the user runs `put <local> [remote]`, the system shall upload the specified
 - R-1.3.5: When the user runs `put <local> <shared-target>`, where `<shared-target>` is either a raw OneDrive share URL or a `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` selector, the system shall overwrite that exact shared file by item identity. Shared folder targets shall be rejected with guidance to `drive add` the folder first. [verified]
 - R-1.3.6: When a single-file `put` command reports success, the destination path shall already be readable by an immediate follow-on CLI path lookup. [verified]
 - R-1.3.7: When the remote destination of a file `put` ends in `/` or names an existing folder, the system shall upload into that folder under the local name, never onto the folder itself. [verified]
+- R-1.3.8: `put` onto an existing file name (or a name OneDrive treats as the same) shall overwrite that file by item ID, conditional on the eTag just read, never by a create that replaces; an existing folder of that name is an error. An interrupted put of a new file leaves an empty item under the name, and the retry overwrites it the same way or resumes its recorded session. [verified]
 
 ## R-1.4 Delete (`rm`) [verified]
 

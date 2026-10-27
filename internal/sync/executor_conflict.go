@@ -103,22 +103,10 @@ func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) action
 // The caller owns the reservation and must release it if the rename does not
 // happen.
 func (e *executor) reserveUniqueConflictCopyPath(absPath string) (string, string, error) {
-	basePath := conflictCopyPath(absPath, e.nowFunc())
+	now := e.nowFunc()
 
-	rel, reserved, err := e.reserveConflictCopyPath(basePath)
-	if err != nil {
-		return "", "", err
-	}
-	if reserved {
-		return basePath, rel, nil
-	}
-
-	dir := filepath.Dir(basePath)
-	name := filepath.Base(basePath)
-	stem, ext := ConflictStemExt(name)
-
-	for ordinal := 2; ; ordinal++ {
-		candidate := filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, ordinal, ext))
+	for ordinal := 1; ; ordinal++ {
+		candidate := conflictCopyPathWithOrdinal(absPath, now, ordinal)
 
 		rel, reserved, err := e.reserveConflictCopyPath(candidate)
 		if err != nil {
@@ -169,21 +157,60 @@ func (e *executor) reserveConflictCopyPath(absPath string) (string, bool, error)
 // "file.txt" -> "file.conflict-20260101-120000.txt"
 // ".bashrc"  -> ".bashrc.conflict-20260101-120000" (dotfile: no separate ext)
 func conflictCopyPath(absPath string, now time.Time) string {
-	dir := filepath.Dir(absPath)
-	name := filepath.Base(absPath)
-	stem, ext := ConflictStemExt(name)
-	marker := ".conflict-" + now.Format("20060102-150405")
+	return conflictCopyPathWithOrdinal(absPath, now, 1)
+}
 
-	// The marker adds 25 bytes; a name near the 255-byte filesystem limit
-	// would leave the conflict copy unwritable, so the stem gives way.
-	if room := maxLocalNameBytes - len(marker) - len(ext); len(stem) > room && room > 0 {
-		stem = stem[:room]
-		for !utf8.ValidString(stem) {
-			stem = stem[:len(stem)-1]
-		}
+// conflictCopyPathWithOrdinal is conflictCopyPath for the ordinal-th copy of
+// the same second ("file.conflict-20260101-120000-2.txt" for ordinal 2). The
+// whole name, marker, ordinal and extension included, stays within
+// maxLocalNameBytes: the ordinal used to be appended after the stem had
+// already been trimmed to exactly 255 bytes, so a second same-second copy of
+// a long name was unwritable and blocked the download on every pass (D-030).
+// An extension too long to leave room for the marker is trimmed too.
+func conflictCopyPathWithOrdinal(absPath string, now time.Time, ordinal int) string {
+	dir := filepath.Dir(absPath)
+	stem, ext := ConflictStemExt(filepath.Base(absPath))
+
+	suffix := ".conflict-" + now.Format("20060102-150405")
+	if ordinal > 1 {
+		suffix += fmt.Sprintf("-%d", ordinal)
 	}
 
-	return filepath.Join(dir, stem+marker+ext)
+	if maxExt := maxLocalNameBytes - len(suffix) - minConflictStemBytes; len(ext) > maxExt {
+		ext = truncateUTF8(ext, maxExt)
+	}
+	if room := maxLocalNameBytes - len(suffix) - len(ext); len(stem) > room {
+		stem = truncateUTF8(stem, room)
+	}
+
+	return filepath.Join(dir, stem+suffix+ext)
+}
+
+// minConflictStemBytes is how much of the original stem a conflict copy keeps
+// when the extension alone would fill the name, so the copy still says what
+// it is a copy of.
+const minConflictStemBytes = 16
+
+// truncateUTF8 cuts s to at most n bytes at a UTF-8 sequence boundary and
+// never empties a non-empty string: when even the first character is longer
+// than n, that character is kept whole. It cuts at boundaries rather than
+// trimming until the result is valid UTF-8, which emptied a name containing
+// an invalid byte before the cut point.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+
+	cut := max(n, 0)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	if cut == 0 {
+		_, size := utf8.DecodeRuneInString(s)
+		return s[:size]
+	}
+
+	return s[:cut]
 }
 
 // maxLocalNameBytes is NAME_MAX on Linux and macOS filesystems.

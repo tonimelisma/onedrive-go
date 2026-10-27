@@ -14,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/graphtransport"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -769,7 +770,7 @@ func matchChildByName(children []graph.Item, name string) (graph.Item, bool) {
 			return children[i], true
 		}
 
-		if folded == nil && strings.EqualFold(children[i].Name, name) {
+		if folded == nil && namekey.Equal(children[i].Name, name) {
 			folded = &children[i]
 		}
 	}

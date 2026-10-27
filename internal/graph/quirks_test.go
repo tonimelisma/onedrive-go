@@ -114,28 +114,12 @@ func TestClearDeletedHashes_BogusAllZeros(t *testing.T) {
 	assert.Empty(t, result[0].SHA256Hash, "bogus hash should be cleared")
 }
 
-// TestDecodeURLEncodedNames_UTF8Sequences validates decoding of multi-byte
-// UTF-8 percent-encoded sequences in item names (Japanese characters).
-func TestDecodeURLEncodedNames_UTF8Sequences(t *testing.T) {
-	items := []Item{
-		{ID: "utf8-1", Name: "%E6%97%A5%E6%9C%AC%E8%AA%9E.txt"},
-		{ID: "space", Name: "file%20name.txt"},
-		{ID: "plus", Name: "file+name.txt"},
-	}
-
-	result := decodeURLEncodedNames(items, testNoopLogger())
-
-	assert.Equal(t, "日本語.txt", result[0].Name)
-	assert.Equal(t, "file name.txt", result[1].Name)
-	// Plus signs are NOT decoded by PathUnescape (only QueryUnescape does that).
-	assert.Equal(t, "file+name.txt", result[2].Name)
-}
-
 // TestNormalizeDeltaItems_PipelineOrder validates that the full normalization
-// pipeline runs in the correct order: decode → clear hashes → dedup → reorder.
+// pipeline runs in the correct order: clear hashes → dedup → reorder, with
+// names left verbatim.
 func TestNormalizeDeltaItems_PipelineOrder(t *testing.T) {
 	items := []Item{
-		// URL-encoded name that should be decoded first.
+		// Percent sequences in a name are literal and must survive.
 		{ID: "encoded", Name: "my%20doc.txt", ParentID: "root"},
 		// Package stays visible to Graph callers; sync filters it later.
 		{ID: "pkg", Name: "Notebook.one", IsPackage: true, ParentID: "root"},
@@ -153,7 +137,7 @@ func TestNormalizeDeltaItems_PipelineOrder(t *testing.T) {
 	// Duplicate removed; package remains provider truth.
 	require.Len(t, result, 5)
 
-	// Verify URL decoding applied.
+	// Verify the name was not decoded.
 	var encodedItem *Item
 	for i := range result {
 		if result[i].ID == "encoded" {
@@ -162,7 +146,7 @@ func TestNormalizeDeltaItems_PipelineOrder(t *testing.T) {
 		}
 	}
 	require.NotNil(t, encodedItem)
-	assert.Equal(t, "my doc.txt", encodedItem.Name)
+	assert.Equal(t, "my%20doc.txt", encodedItem.Name)
 
 	// Verify duplicate kept last version.
 	for i := range result {
@@ -279,8 +263,8 @@ func TestSimpleUpload_OctetStreamContentType(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	content := bytes.NewReader([]byte("hello"))
-	item, err := client.SimpleUpload(
-		t.Context(), driveid.New("drive1"), "parent1", "test.txt", content, 5,
+	item, err := client.SimpleUploadToItem(
+		t.Context(), driveid.New("drive1"), "item-1", "", content, 5,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "item-1", item.ID)
@@ -522,9 +506,8 @@ func TestUpload_SessionCanceledOnChunkError(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 
-	// Use chunkedUploadEncapsulated directly to test session lifecycle.
-	content := bytes.NewReader(make([]byte, 5*1024*1024)) // 5 MiB to force chunked.
-	_, err := client.chunkedUploadEncapsulated(
+	content := bytes.NewReader(make([]byte, 5*1024*1024))
+	_, err := client.Upload(
 		t.Context(),
 		driveid.New("drive1"), "parent1", "big.txt",
 		content, int64(content.Len()), time.Time{}, nil,
@@ -535,14 +518,18 @@ func TestUpload_SessionCanceledOnChunkError(t *testing.T) {
 		"upload session should be canceled on error")
 }
 
-// TestUpload_SimpleUploadFollowedByMtimePatch validates that files ≤4 MiB
-// use simple upload and then PATCH to set mtime.
-func TestUpload_ZeroByteSimpleUploadFollowedByMtimePatch(t *testing.T) {
+// TestUpload_ZeroByteCreateFollowedByMtimePatch validates that a zero-byte
+// file is created by body and then PATCHed to set its mtime.
+func TestUpload_ZeroByteCreateFollowedByMtimePatch(t *testing.T) {
 	var patchCalled atomic.Int32
 
 	mtime := time.Date(2025, 6, 15, 10, 30, 0, 0, time.UTC)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCreateFile(t, w, r, "new-item") {
+			return
+		}
+
 		switch {
 		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "content"):
 			// Simple upload.
@@ -578,7 +565,7 @@ func TestUpload_ZeroByteSimpleUploadFollowedByMtimePatch(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	content := bytes.NewReader(nil) // only a zero-byte file still uses the simple PUT
+	content := bytes.NewReader(nil)
 
 	item, err := client.Upload(
 		t.Context(),
@@ -588,15 +575,19 @@ func TestUpload_ZeroByteSimpleUploadFollowedByMtimePatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "new-item", item.ID)
 	assert.Equal(t, int32(1), patchCalled.Load(),
-		"mtime PATCH should be called after simple upload")
+		"mtime PATCH should follow the create")
 }
 
-// TestUpload_ZeroByteSimpleUploadNoMtime validates that when mtime is zero,
-// no PATCH is sent after simple upload.
-func TestUpload_ZeroByteSimpleUploadNoMtime(t *testing.T) {
+// TestUpload_ZeroByteCreateNoMtime validates that when mtime is zero, no
+// PATCH follows the create.
+func TestUpload_ZeroByteCreateNoMtime(t *testing.T) {
 	var patchCalled atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCreateFile(t, w, r, "new-item") {
+			return
+		}
+
 		if r.Method == http.MethodPatch {
 			patchCalled.Add(1)
 		}
@@ -612,7 +603,7 @@ func TestUpload_ZeroByteSimpleUploadNoMtime(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	content := bytes.NewReader(nil) // only a zero-byte file still uses the simple PUT
+	content := bytes.NewReader(nil)
 
 	_, err := client.Upload(
 		t.Context(),

@@ -13,9 +13,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 func newPutCmd() *cobra.Command {
@@ -111,7 +113,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 	store := driveops.NewSessionStore(config.DefaultDataDir(), logger)
 	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, store, logger)
 
-	result, err := tm.UploadFile(ctx, session.DriveID, parentItem.ID, name, localPath, driveops.UploadOpts{
+	result, err := putFile(ctx, session.Meta, tm, session.DriveID, parentItem.ID, name, localPath, driveops.UploadOpts{
 		Mtime:    fi.ModTime(),
 		Progress: progress,
 	})
@@ -383,7 +385,7 @@ func uploadFileEntry(
 		cc.Statusf("Uploading %s: %s / %s\n", d.Name(), formatSize(uploaded), formatSize(totalBytes))
 	}
 
-	uploadResult, uploadErr := tm.UploadFile(ctx, session.DriveID, parentID, d.Name(), path, driveops.UploadOpts{
+	uploadResult, uploadErr := putFile(ctx, session.Meta, tm, session.DriveID, parentID, d.Name(), path, driveops.UploadOpts{
 		Mtime:    fi.ModTime(),
 		Progress: progress,
 	})
@@ -414,4 +416,44 @@ func uploadFileEntry(
 	cc.Progressf("Uploaded %d/%d files", state.done, state.total)
 
 	return nil
+}
+
+// putChildLister lists a folder's children; satisfied by *graph.Client.
+type putChildLister interface {
+	ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+}
+
+// putFile uploads localPath as name under parentID with put's semantics: a
+// new name is created (never replacing, R-5.6.14), and an existing file of
+// that name, or of a name OneDrive treats as the same, is overwritten by ID,
+// conditional on the eTag just read, so a concurrent edit answers 412 instead
+// of being replaced blindly. An existing folder is an error. An interrupted
+// put left an empty placeholder under the name; the retry overwrites it the
+// same way (or resumes its recorded session).
+func putFile(
+	ctx context.Context, lister putChildLister, tm *driveops.TransferManager,
+	driveID driveid.ID, parentID, name, localPath string, opts driveops.UploadOpts,
+) (*driveops.UploadResult, error) {
+	result, err := tm.UploadFile(ctx, driveID, parentID, name, localPath, opts)
+	if !errors.Is(err, graph.ErrConflict) {
+		return result, err //nolint:wrapcheck // driveops names the file
+	}
+
+	children, listErr := lister.ListChildren(ctx, driveID, parentID)
+	if listErr != nil {
+		return nil, errors.Join(err, fmt.Errorf("listing the destination folder: %w", listErr))
+	}
+	for i := range children {
+		if children[i].ID == "" || !namekey.Equal(children[i].Name, name) {
+			continue
+		}
+		if children[i].IsFolder {
+			return nil, fmt.Errorf("%q is a folder on OneDrive", children[i].Name)
+		}
+
+		opts.IfMatch = children[i].ETag
+		return tm.UploadFileToItem(ctx, driveID, children[i].ID, localPath, opts) //nolint:wrapcheck // driveops names the file
+	}
+
+	return nil, err //nolint:wrapcheck // the 409 itself: nothing visible holds the name yet
 }

@@ -16,14 +16,17 @@ const (
 	issueHashPanic = "hash_panic"
 
 	// Runtime (execution-time).
-	IssueUnauthorized         = "unauthorized"
-	IssueRemoteWriteDenied    = "remote_write_denied"
-	issueRemoteReadDenied     = "remote_read_denied"
-	IssueQuotaExceeded        = "quota_exceeded"
-	issueRateLimited          = "rate_limited"
-	issueLocalReadDenied      = "local_read_denied"
-	issueLocalWriteDenied     = "local_permission_denied"
-	issueCaseCollision        = "case_collision"
+	IssueUnauthorized      = "unauthorized"
+	IssueRemoteWriteDenied = "remote_write_denied"
+	issueRemoteReadDenied  = "remote_read_denied"
+	IssueQuotaExceeded     = "quota_exceeded"
+	issueRateLimited       = "rate_limited"
+	issueLocalReadDenied   = "local_read_denied"
+	issueLocalWriteDenied  = "local_permission_denied"
+	issueCaseCollision     = "case_collision"
+	// issueRemoteNameTwin marks a path where OneDrive keeps two or more
+	// items that this computer stores under one name (store_remote_twins.go).
+	issueRemoteNameTwin       = "remote_name_twin"
 	issueDiskFull             = "disk_full"
 	issueServiceOutage        = "service_outage"
 	issueFileTooLargeForSpace = "file_too_large_for_space"

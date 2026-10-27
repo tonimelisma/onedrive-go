@@ -619,8 +619,15 @@ func descriptorFilesystemCases() []descriptorCase {
 			name:       "case collision",
 			key:        syncengine.ConditionCaseCollision,
 			wantTitle:  "Case collision",
-			wantReason: "Two files differ only in letter case, which OneDrive cannot distinguish.",
+			wantReason: "Two files have names OneDrive treats as the same (they differ only in letter case, in how accents are composed, or in emoji).",
 			wantAction: "Rename one of the conflicting files.",
+		},
+		{
+			name:       "remote name twin",
+			key:        syncengine.ConditionRemoteNameTwin,
+			wantTitle:  "Two OneDrive items, one name here",
+			wantReason: "OneDrive has two items that this computer would store under one name (they differ only in how their characters are composed). Neither syncs.",
+			wantAction: "Rename one of them on OneDrive.",
 		},
 	}
 }

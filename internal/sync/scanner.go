@@ -31,12 +31,14 @@ import (
 	stdsync "sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"golang.org/x/sync/errgroup"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -57,7 +59,10 @@ const (
 	maxComponentLength     = 255
 	deviceNameWithDigitLen = 4 // COM0-COM9, LPT0-LPT9 have exactly 4 characters
 
-	// maxOneDrivePathLength is the maximum total path length OneDrive allows.
+	// maxOneDrivePathLength is the maximum total path length OneDrive allows,
+	// in characters as oneDrivePathLength counts them. The server is still the
+	// authority: it counts more than the drive-relative path, and its refusal
+	// maps to path_too_long (R-2.11.7).
 	maxOneDrivePathLength = 400
 	// maxOneDriveFileSize is the maximum file size OneDrive allows (250 GB).
 	maxOneDriveFileSize = driveops.MaxOneDriveFileSize
@@ -729,12 +734,11 @@ func detectCaseCollisions(
 		return nil, nil
 	}
 
-	// Group event indices by (directory, lowercase name).
+	// Group event indices by (directory, OneDrive namespace key): case,
+	// Unicode form and ignored emoji all make two local names one remote one.
 	groups := make(map[caseGroupKey][]int, len(events))
 	for i := range events {
-		dir := filepath.Dir(events[i].Path)
-		lowName := strings.ToLower(filepath.Base(events[i].Path))
-		key := caseGroupKey{dir: dir, lowName: lowName}
+		key := caseGroupKey{dir: filepath.Dir(events[i].Path), nameKey: namekey.Key(filepath.Base(events[i].Path))}
 		groups[key] = append(groups[key], i)
 	}
 
@@ -773,10 +777,10 @@ func detectCaseCollisions(
 	return clean, collisions
 }
 
-// caseGroupKey groups events by (directory, lowercase name) for case collision detection.
+// caseGroupKey groups events by (directory, namespace key) for collision detection.
 type caseGroupKey struct {
 	dir     string
-	lowName string
+	nameKey string
 }
 
 // crossCheckBaseline flags single-event groups that collide with already-synced
@@ -934,13 +938,28 @@ func appendSingleGroupCollision(
 			return append(collisions, skippedItem{
 				Path:   ev.Path,
 				Reason: issueCaseCollision,
-				Detail: fmt.Sprintf("conflicts with synced file %s",
-					filepath.Base(v.Path)),
+				Detail: collisionDetail("conflicts with synced file", filepath.Base(ev.Path), []string{filepath.Base(v.Path)}),
 			})
 		}
 	}
 
 	return collisions
+}
+
+// collisionDetail names the other colliding file(s). When the names differ in
+// characters OneDrive ignores when comparing names (emoji and anything else
+// beyond U+FFFF), the visible difference would leave the user puzzled about
+// why `a.txt` and `a😀.txt` collide, so the detail names both and says why.
+func collisionDetail(prefix, name string, others []string) string {
+	detail := prefix + " " + strings.Join(others, ", ")
+	for _, other := range others {
+		if namekey.DiffersInIgnoredCharacters(name, other) {
+			return fmt.Sprintf("%s: OneDrive ignores emoji and other characters outside the Basic Multilingual Plane "+
+				"when it compares names, so %q and %q are one name there; rename one of them", detail, name, other)
+		}
+	}
+
+	return detail
 }
 
 // appendMultiGroupCollisions handles SkippedItem construction for groups with
@@ -975,7 +994,7 @@ func appendMultiGroupCollisions(
 		}
 		seen[events[idx].Path] = true
 
-		detail := fmt.Sprintf("conflicts with %s", strings.Join(others, ", "))
+		detail := collisionDetail("conflicts with", filepath.Base(events[idx].Path), others)
 		if sameForm {
 			// Paths are NFC-normalized, so two files whose names differ only
 			// in Unicode form (composed "é" vs "e" + combining accent) arrive
@@ -1164,11 +1183,11 @@ func shouldObserveWithFilter(
 		return &skippedItem{Path: path, Reason: reason, Detail: detail}
 	}
 
-	if len(path) > maxOneDrivePathLength {
+	if pathLength := oneDrivePathLength(path); pathLength > maxOneDrivePathLength {
 		return &skippedItem{
 			Path:   path,
 			Reason: issuePathTooLong,
-			Detail: fmt.Sprintf("path length %d exceeds %d-character limit", len(path), maxOneDrivePathLength),
+			Detail: fmt.Sprintf("path length %d exceeds %d-character limit", pathLength, maxOneDrivePathLength),
 		}
 	}
 
@@ -1371,4 +1390,12 @@ func buildLocalStateRows(result scanResult) []localStateRow {
 	rows := make([]localStateRow, len(result.Rows))
 	copy(rows, result.Rows)
 	return rows
+}
+
+// oneDrivePathLength counts a path the way OneDrive's 400-character limit
+// does: in UTF-16 code units, the unit its error messages and its 260-unit
+// emoji names measure (L-05). Counting UTF-8 bytes skipped valid paths: a
+// 150-character CJK path is 450 bytes, and 300 "ä" are 600.
+func oneDrivePathLength(path string) int {
+	return len(utf16.Encode([]rune(path)))
 }

@@ -9,10 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/text/unicode/norm"
-
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // ErrUploadVerificationFailed reports an upload whose stored item does not
@@ -137,23 +136,42 @@ func isBusinessLikeDrive(item *graph.Item) bool {
 // content has landed; an item that does not match what was sent is read back
 // once (server processing can briefly show pre-commit facts) and the upload
 // fails if it still does not match.
+// settleUncertainFinalFragment handles an upload whose last fragment may
+// have committed: the encapsulated small-file session canceled itself, but
+// the item is adopted if it is provably ours (D-036). When it is not, and the
+// create made it, the content provably did not land: the empty item is
+// removed now, conditional on its creation eTag, which only matches while it
+// is still the untouched placeholder.
+func (tm *TransferManager) settleUncertainFinalFragment(
+	ctx context.Context, target uploadTarget, sent uploadedContent, created *graph.CreatedItemError, uploadErr error,
+) (*graph.Item, error) {
+	landed, adopted, lookupErr := tm.adoptLandedUpload(ctx, target, sent)
+	if lookupErr != nil {
+		return nil, errors.Join(uploadErr, lookupErr)
+	}
+	if adopted {
+		return landed, nil
+	}
+	if created != nil && created.Item != nil {
+		tm.removePlaceholder(ctx, target.driveID, created.Item.ID, created.Item.ETag)
+	}
+
+	return nil, uploadErr
+}
+
 func (tm *TransferManager) settleUploadedItem(
 	ctx context.Context, target uploadTarget, sent uploadedContent, localPath string, item *graph.Item, uploadErr error,
 ) (*graph.Item, error) {
+	var created *graph.CreatedItemError
+	if errors.As(uploadErr, &created) && created.Item != nil && created.Item.ID != "" {
+		// The create made this item: look the outcome up by its ID, never
+		// by a name that a variant spelling could also match (M2).
+		target = uploadTarget{driveID: target.driveID, itemID: created.Item.ID}
+	}
+
 	if uploadErr != nil {
 		if graph.IsFinalFragmentUncertain(uploadErr) {
-			// The encapsulated small-file session canceled itself, but its
-			// last fragment may have committed: adopt the item if it is
-			// provably ours (D-036).
-			landed, adopted, lookupErr := tm.adoptLandedUpload(ctx, target, sent)
-			if lookupErr != nil {
-				return nil, errors.Join(uploadErr, lookupErr)
-			}
-			if adopted {
-				return landed, nil
-			}
-
-			return nil, uploadErr
+			return tm.settleUncertainFinalFragment(ctx, target, sent, created, uploadErr)
 		}
 
 		if !errors.Is(uploadErr, graph.ErrUploadCompletedWithoutItem) {
@@ -207,14 +225,6 @@ func (tm *TransferManager) settleUploadedItem(
 		localPath, ErrUploadVerificationFailed, formatSize(sent.size), formatSize(item.Size))
 }
 
-// sameRemoteName compares names the way OneDrive does closely enough to find
-// an item the upload just wrote: case-insensitively after NFC normalization
-// (live probes 2 and 3: NFC/NFD and case variants are one name). The WS2
-// namespace key, which also folds beyond ASCII, will replace this.
-func sameRemoteName(a, b string) bool {
-	return strings.EqualFold(norm.NFC.String(a), norm.NFC.String(b))
-}
-
 // lookupUploadTarget reads the item an upload wrote: by ID, or by an exact
 // name match in the parent's listing for a create.
 func (tm *TransferManager) lookupUploadTarget(ctx context.Context, target uploadTarget) (*graph.Item, error) {
@@ -238,7 +248,7 @@ func (tm *TransferManager) lookupUploadTarget(ctx context.Context, target upload
 	}
 
 	for i := range children {
-		if !children[i].IsFolder && sameRemoteName(children[i].Name, target.name) && children[i].ID != "" {
+		if !children[i].IsFolder && namekey.Equal(children[i].Name, target.name) && children[i].ID != "" {
 			return &children[i], nil
 		}
 	}

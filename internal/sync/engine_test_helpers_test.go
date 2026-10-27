@@ -80,7 +80,10 @@ type engineMockClient struct {
 
 	// Uploader
 	uploadFn       func(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
-	uploadToItemFn func(ctx context.Context, driveID driveid.ID, itemID string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
+	uploadToItemFn func(ctx context.Context, driveID driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
+	// uploadCreatingFn models the two-step create (empty item, then content)
+	// with its hook; nil delegates to Upload and never calls the hook.
+	uploadCreatingFn func(ctx context.Context, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc) (*graph.Item, error)
 }
 
 func (m *engineMockClient) Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
@@ -233,6 +236,17 @@ func (m *engineMockClient) Download(ctx context.Context, driveID driveid.ID, ite
 	return int64(n), err
 }
 
+func (m *engineMockClient) UploadCreating(
+	ctx context.Context, driveID driveid.ID, parentID, name string,
+	content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc, onCreated graph.CreatedFunc,
+) (*graph.Item, error) {
+	if m.uploadCreatingFn != nil {
+		return m.uploadCreatingFn(ctx, parentID, name, content, size, onCreated)
+	}
+
+	return m.Upload(ctx, driveID, parentID, name, content, size, mtime, progress)
+}
+
 func (m *engineMockClient) Upload(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
 	if m.uploadFn != nil {
 		return faithfulUploadResult(content, size)(m.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress))
@@ -244,9 +258,9 @@ func (m *engineMockClient) Upload(ctx context.Context, driveID driveid.ID, paren
 	}, nil)
 }
 
-func (m *engineMockClient) UploadToItem(ctx context.Context, driveID driveid.ID, itemID string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
+func (m *engineMockClient) UploadToItem(ctx context.Context, driveID driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
 	if m.uploadToItemFn != nil {
-		return faithfulUploadResult(content, size)(m.uploadToItemFn(ctx, driveID, itemID, content, size, mtime, progress))
+		return faithfulUploadResult(content, size)(m.uploadToItemFn(ctx, driveID, itemID, ifMatch, content, size, mtime, progress))
 	}
 	if m.uploadFn != nil {
 		return faithfulUploadResult(content, size)(m.uploadFn(ctx, driveID, "", "", content, size, mtime, progress))

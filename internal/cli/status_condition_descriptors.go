@@ -127,7 +127,8 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 		syncengine.ConditionInvalidFilename,
 		syncengine.ConditionPathTooLong,
 		syncengine.ConditionFileTooLarge,
-		syncengine.ConditionCaseCollision:
+		syncengine.ConditionCaseCollision,
+		syncengine.ConditionRemoteNameTwin:
 		return describeFilesystemStatusCondition(key)
 	case syncengine.ConditionDiskFull,
 		syncengine.ConditionHashError,
@@ -214,6 +215,7 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionPathTooLong,
 		syncengine.ConditionFileTooLarge,
 		syncengine.ConditionCaseCollision,
+		syncengine.ConditionRemoteNameTwin,
 		syncengine.ConditionDiskFull,
 		syncengine.ConditionHashError,
 		syncengine.ConditionFileTooLargeForSpace,
@@ -269,8 +271,15 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 	case syncengine.ConditionCaseCollision:
 		return newStatusConditionDescriptor(
 			"Case collision",
-			"Two files differ only in letter case, which OneDrive cannot distinguish.",
+			"Two files have names OneDrive treats as the same (they differ only in letter case, in how accents are composed, or in emoji).",
 			"Rename one of the conflicting files.",
+		)
+	case syncengine.ConditionRemoteNameTwin:
+		return newStatusConditionDescriptor(
+			"Two OneDrive items, one name here",
+			"OneDrive has two items that this computer would store under one name "+
+				"(they differ only in how their characters are composed). Neither syncs.",
+			"Rename one of them on OneDrive.",
 		)
 	case syncengine.ConditionAuthenticationRequired,
 		syncengine.ConditionQuotaExceeded,
@@ -379,6 +388,7 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 		syncengine.ConditionPathTooLong,
 		syncengine.ConditionFileTooLarge,
 		syncengine.ConditionCaseCollision,
+		syncengine.ConditionRemoteNameTwin,
 		syncengine.ConditionUploadVerification,
 		syncengine.ConditionDownloadIntegrity,
 		syncengine.ConditionUnexpectedCondition:

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -51,7 +52,16 @@ type persistedUpload struct {
 	size      int64
 	progress  graph.ProgressFunc
 	create    func() (*graph.UploadSession, error)
-	sessions  sessionTransport
+	// onCreated records a create's new item before content is sent; nil for
+	// overwrites (see UploadOpts.OnCreated).
+	onCreated func(itemID, createdETag string) error
+	// createForCreated opens a session on an item an earlier attempt of
+	// this create already made; nil for overwrites.
+	createForCreated func(itemID, createdETag string) (*graph.UploadSession, error)
+	// createdItem is the empty item this create made (ID and creation eTag),
+	// once known.
+	createdItem *graph.Item
+	sessions    sessionTransport
 	// sent describes the upload for verification and adoption.
 	sent uploadedContent
 }
@@ -78,9 +88,19 @@ const cancelSessionTimeout = 10 * time.Second
 //     bytes was invalidated by a concurrent change (L-02):
 //     ErrUploadSessionInvalidated, never a blind restart.
 func (tm *TransferManager) persistedSessionUpload(ctx context.Context, up *persistedUpload) (*graph.Item, error) {
-	driveStr := up.target.driveID.String()
-	sent := up.sent
+	item, err := tm.persistedSessionUploadOnce(ctx, up)
+	if err != nil && up.createdItem != nil {
+		// Failures after this upload created its item name that item, so the
+		// caller looks the outcome up by ID (M2).
+		return nil, &graph.CreatedItemError{Item: up.createdItem, Err: err}
+	}
 
+	return item, err
+}
+
+// loadUsableSessionRecord loads the upload's session record, dropping one
+// recorded for different content, and adopts a recorded create's item.
+func (tm *TransferManager) loadUsableSessionRecord(ctx context.Context, up *persistedUpload, driveStr string) (*SessionRecord, bool) {
 	rec, found, loadErr := tm.sessionStore.Load(driveStr, up.key)
 	if loadErr != nil {
 		// Debug only: the store already reported what it did with the file,
@@ -93,8 +113,63 @@ func (tm *TransferManager) persistedSessionUpload(ctx context.Context, up *persi
 
 	if found && rec.FileHash != up.localHash {
 		tm.dropSession(ctx, driveStr, up.key, graph.UploadURL(rec.SessionURL))
-		found = false
+		return nil, false
 	}
+	if found && rec.ItemID != "" && rec.CreatedETag != "" {
+		// The record names the item a create made: look it up by ID, not
+		// by name (M2).
+		up.target.itemID = rec.ItemID
+		up.createdItem = &graph.Item{ID: rec.ItemID, ETag: rec.CreatedETag}
+	}
+
+	return rec, found
+}
+
+// openSessionForUpload opens the session a fresh attempt uploads through and,
+// for a create, records the created item through onCreated before any
+// content is sent.
+func (tm *TransferManager) openSessionForUpload(ctx context.Context, up *persistedUpload, driveStr string) (*graph.UploadSession, error) {
+	create := up.create
+	if up.createdItem != nil && up.createForCreated != nil {
+		// An earlier attempt already created the item: a fresh session goes
+		// to that item, conditional on its creation eTag. Creating the file
+		// again would meet its own placeholder with 409.
+		createdItem := up.createdItem
+		create = func() (*graph.UploadSession, error) {
+			session, sessionErr := up.createForCreated(createdItem.ID, createdItem.ETag)
+			if session != nil {
+				session.CreatedETag = createdItem.ETag
+			}
+			return session, sessionErr
+		}
+	}
+
+	session, err := create()
+	if err != nil {
+		return nil, fmt.Errorf("creating upload session for %s: %w", up.localPath, err)
+	}
+	if session.CreatedETag == "" || session.ItemID == "" {
+		return session, nil
+	}
+
+	up.target.itemID = session.ItemID
+	up.createdItem = &graph.Item{ID: session.ItemID, ETag: session.CreatedETag}
+	if up.onCreated != nil {
+		if hookErr := up.onCreated(session.ItemID, session.CreatedETag); hookErr != nil {
+			tm.dropSession(ctx, driveStr, up.key, session.UploadURL)
+			tm.removePlaceholder(ctx, up.target.driveID, session.ItemID, session.CreatedETag)
+			return nil, fmt.Errorf("recording the new file %s: %w", up.localPath, hookErr)
+		}
+	}
+
+	return session, nil
+}
+
+func (tm *TransferManager) persistedSessionUploadOnce(ctx context.Context, up *persistedUpload) (*graph.Item, error) {
+	driveStr := up.target.driveID.String()
+	sent := up.sent
+
+	rec, found := tm.loadUsableSessionRecord(ctx, up, driveStr)
 
 	if found {
 		item, done, err := tm.resumePersistedSession(ctx, up, rec, sent)
@@ -103,18 +178,20 @@ func (tm *TransferManager) persistedSessionUpload(ctx context.Context, up *persi
 		}
 	}
 
-	session, err := up.create()
+	session, err := tm.openSessionForUpload(ctx, up, driveStr)
 	if err != nil {
-		return nil, fmt.Errorf("creating upload session for %s: %w", up.localPath, err)
+		return nil, err
 	}
 
 	if saveErr := tm.sessionStore.Save(driveStr, up.key, &SessionRecord{
-		MountID:    tm.sessionMountID,
-		LocalRoot:  tm.sessionLocalRoot,
-		SessionURL: string(session.UploadURL),
-		FileHash:   up.localHash,
-		FileSize:   up.size,
-		ExpiresAt:  session.ExpirationTime,
+		MountID:     tm.sessionMountID,
+		LocalRoot:   tm.sessionLocalRoot,
+		SessionURL:  string(session.UploadURL),
+		FileHash:    up.localHash,
+		FileSize:    up.size,
+		ExpiresAt:   session.ExpirationTime,
+		ItemID:      session.ItemID,
+		CreatedETag: session.CreatedETag,
 	}); saveErr != nil {
 		tm.logger.Warn("failed to save upload session — resume after crash will not work for this file",
 			slog.String("path", up.localPath),
@@ -280,6 +357,27 @@ func committedByThisUpload(sent uploadedContent, item *graph.Item) bool {
 // dropSession cancels a server session best-effort, on a context detached
 // from the caller's (the upload may be failing because that was canceled),
 // and deletes its record.
+// removePlaceholder deletes the empty item a create made, conditional on its
+// creation eTag, so it can only remove the untouched empty item. Best effort:
+// a leftover is an ordinary remote file that sync's pending-create record
+// still identifies (R-5.6.15).
+func (tm *TransferManager) removePlaceholder(ctx context.Context, driveID driveid.ID, itemID, createdETag string) {
+	remover, ok := tm.uploads.(PlaceholderRemover)
+	if !ok || itemID == "" || createdETag == "" {
+		return
+	}
+
+	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cancelSessionTimeout)
+	defer cancel()
+
+	if err := remover.DeleteItemIfMatch(removeCtx, driveID, itemID, createdETag); err != nil {
+		tm.logger.Debug("couldn't remove the empty file a failed upload created",
+			slog.String("item_id", itemID),
+			slog.String("error", err.Error()),
+		)
+	}
+}
+
 func (tm *TransferManager) dropSession(ctx context.Context, driveID, key string, uploadURL graph.UploadURL) {
 	tm.deleteSession(driveID, key)
 

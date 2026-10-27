@@ -1,6 +1,6 @@
 # System Architecture
 
-GOVERNS: internal/synctree/*.go, internal/fsroot/*.go, internal/localpath/*.go, internal/perf/*.go, internal/devtool/*.go, internal/errclass/*.go, internal/sharedref/*.go, internal/authstate/*.go, internal/synctest/*.go
+GOVERNS: internal/synctree/*.go, internal/fsroot/*.go, internal/localpath/*.go, internal/perf/*.go, internal/devtool/*.go, internal/errclass/*.go, internal/sharedref/*.go, internal/authstate/*.go, internal/synctest/*.go, internal/namekey/*.go
 
 Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.1 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified], R-6.10.16 [verified], R-6.10.17 [verified], R-6.10.21 [verified]
 
@@ -42,6 +42,7 @@ internal/
   localpath/                  Explicit arbitrary-local-path boundary helpers
   logfile/                    Log file creation, rotation, retention
   multisync/                  Multi-mount sync control plane and watch reload
+  namekey/                    OneDrive's name-equivalence key (leaf, x/text only)
   perf/                       Command-scoped and live sync performance instrumentation plus capture bundles
   retry/                      Retry policies, exponential backoff with jitter, retry transport
   sharedref/                  Shared item selector parsing and formatting
@@ -74,7 +75,16 @@ root pkg → internal/cli/ → internal/graphtransport/ → internal/retry/
 - No cycles. `driveops` does NOT import `sync`. `graph` does NOT import `config`.
 - `multisync` owns multi-mount lifecycle; `sync` owns the single mounted
   content-root runtime.
-- `driveid`, `errclass`, `tokenfile`, and `retry` are leaf packages (no internal imports).
+- `driveid`, `errclass`, `tokenfile`, `retry` and `namekey` are leaf packages (no internal imports).
+- `namekey` is the single authority for "are these two names in one folder the
+  same OneDrive name". It is shared because both sides of the boundary ask:
+  `graph` (path verification, created-item lookups), `driveops` (upload
+  readback, CLI path walks) and `sync` (collision detection, the baseline
+  sibling index, case-variant ordering). Its rule is reconstructed from live
+  probes, not a Unicode standard form (OneDrive behaves like a collation),
+  and every probed pair, including the 500-pair systematic probe M-1 kept in
+  `internal/namekey/testdata`, is a test case
+  (`TestKey_MatchesProbedOneDriveCollisions`, `TestKey_MatchesTheSystematicProbe`, R-2.12.3).
 - Both `graph` and `config` import `tokenfile` for token file I/O.
 - Callers pass token paths to `graph` — no config coupling.
 - `graphtransport` owns Graph-facing HTTP transport profile construction. `driveops` owns the session runtime that reuses those profiles and chooses between bootstrap, interactive, and sync paths.

@@ -43,6 +43,26 @@ func writeUploadTestBody(t *testing.T, w http.ResponseWriter, body string) {
 	require.NoError(t, err)
 }
 
+// createdFileETag is the eTag serveCreateFile gives the item it creates.
+const createdFileETag = `"created-etag"`
+
+// serveCreateFile answers the POST /items/{parent}/children that every new
+// file upload starts with (create by body, conflictBehavior=fail), and
+// reports whether r was that request.
+func serveCreateFile(t *testing.T, w http.ResponseWriter, r *http.Request, itemID string) bool {
+	t.Helper()
+
+	if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/children") {
+		return false
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	writeTestResponsef(t, w, `{"id":%q,"name":"created","size":0,"eTag":%q,"file":{}}`, itemID, createdFileETag)
+
+	return true
+}
+
 func newUpload416RecoveryServer(t *testing.T, nextExpectedRange string) *httptest.Server {
 	t.Helper()
 
@@ -65,80 +85,7 @@ func newUpload416RecoveryServer(t *testing.T, nextExpectedRange string) *httptes
 	}))
 }
 
-// Validates: R-1.3, R-5.3
-func TestSimpleUpload_Success(t *testing.T) {
-	content := "simple upload file content"
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPut, r.Method)
-		assert.Equal(t, "/drives/000000000000000d/items/parent:/upload.txt:/content", r.URL.Path)
-		assert.Equal(t, "replace", r.URL.Query().Get("@microsoft.graph.conflictBehavior"))
-
-		body, err := io.ReadAll(r.Body)
-		if !assert.NoError(t, err) {
-			return
-		}
-		assert.Equal(t, content, string(body))
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		writeTestResponsef(t, w, `{
-			"id": "new-item-1",
-			"name": "upload.txt",
-			"size": %d,
-			"createdDateTime": "2024-06-01T12:00:00Z",
-			"lastModifiedDateTime": "2024-06-01T12:00:00Z",
-			"parentReference": {"id": "parent", "driveId": "d"},
-			"file": {"mimeType": "text/plain"}
-		}`, len(content))
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	item, err := client.SimpleUpload(
-		t.Context(), driveid.New("d"), "parent", "upload.txt",
-		strings.NewReader(content), int64(len(content)),
-	)
-	require.NoError(t, err)
-
-	assert.Equal(t, "new-item-1", item.ID)
-	assert.Equal(t, "upload.txt", item.Name)
-	assert.Equal(t, int64(len(content)), item.Size)
-}
-
-// Validates: R-5.6.9
-func TestSimpleUpload_ConflictBehaviorReplace(t *testing.T) {
-	// Verify that SimpleUpload passes conflictBehavior=replace as a query
-	// parameter, matching CreateUploadSession which passes it in the JSON body.
-	// Without this, SimpleUpload relies on undocumented API default behavior.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "replace", r.URL.Query().Get("@microsoft.graph.conflictBehavior"),
-			"SimpleUpload must pass conflictBehavior=replace query param")
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		writeTestResponse(t, w, `{
-			"id": "cb-item",
-			"name": "conflict.txt",
-			"size": 4,
-			"createdDateTime": "2024-01-01T00:00:00Z",
-			"lastModifiedDateTime": "2024-01-01T00:00:00Z",
-			"parentReference": {"id": "p", "driveId": "d"},
-			"file": {"mimeType": "text/plain"}
-		}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	item, err := client.SimpleUpload(
-		t.Context(), driveid.New("d"), "p", "conflict.txt",
-		strings.NewReader("data"), 4,
-	)
-	require.NoError(t, err)
-	assert.Equal(t, "cb-item", item.ID)
-}
-
-func TestSimpleUpload_ContentType(t *testing.T) {
+func TestSimpleUploadToItem_ContentType(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "application/octet-stream", r.Header.Get("Content-Type"))
 		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
@@ -159,8 +106,8 @@ func TestSimpleUpload_ContentType(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.SimpleUpload(
-		t.Context(), driveid.New("d"), "p", "binary.dat",
+	_, err := client.SimpleUploadToItem(
+		t.Context(), driveid.New("d"), "item-1", "",
 		strings.NewReader("data"), 4,
 	)
 	require.NoError(t, err)
@@ -197,7 +144,7 @@ func TestSimpleUploadToItem_Success(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	item, err := client.SimpleUploadToItem(
-		t.Context(), driveid.New("d"), "item-123",
+		t.Context(), driveid.New("d"), "item-123", "",
 		strings.NewReader(content), int64(len(content)),
 	)
 	require.NoError(t, err)
@@ -206,7 +153,7 @@ func TestSimpleUploadToItem_Success(t *testing.T) {
 	assert.Equal(t, int64(len(content)), item.Size)
 }
 
-func TestSimpleUpload_Error(t *testing.T) {
+func TestSimpleUploadToItem_Error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "req-upload-err")
 		w.WriteHeader(http.StatusForbidden)
@@ -215,54 +162,38 @@ func TestSimpleUpload_Error(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.SimpleUpload(
-		t.Context(), driveid.New("d"), "p", "forbidden.txt",
+	_, err := client.SimpleUploadToItem(
+		t.Context(), driveid.New("d"), "item-1", "",
 		strings.NewReader("data"), 4,
 	)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrForbidden)
 }
 
-func TestSimpleUpload_TokenError(t *testing.T) {
+func TestSimpleUploadToItem_TokenError(t *testing.T) {
 	client := MustNewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent")
 
-	_, err := client.SimpleUpload(
-		t.Context(), driveid.New("d"), "p", "file.txt",
+	_, err := client.SimpleUploadToItem(
+		t.Context(), driveid.New("d"), "item-1", "",
 		strings.NewReader("data"), 4,
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "token")
 }
 
-func TestSimpleUpload_NetworkError(t *testing.T) {
+func TestSimpleUploadToItem_NetworkError(t *testing.T) {
 	client := MustNewClient("http://127.0.0.1:1", http.DefaultClient, staticToken("tok"), slog.Default(), "test-agent")
 
-	_, err := client.SimpleUpload(
-		t.Context(), driveid.New("d"), "p", "file.txt",
+	_, err := client.SimpleUploadToItem(
+		t.Context(), driveid.New("d"), "item-1", "",
 		strings.NewReader("data"), 4,
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "raw upload request failed")
 }
 
-func TestSimpleUpload_DecodeError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		writeTestResponse(t, w, `{not valid json`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	_, err := client.SimpleUpload(
-		t.Context(), driveid.New("d"), "p", "file.txt",
-		strings.NewReader("data"), 4,
-	)
-	require.Error(t, err)
-	require.ErrorIs(t, err, ErrUploadCompletedWithoutItem)
-}
-
 // Validates: R-5.6.9
-func TestCreateUploadSession_Success(t *testing.T) {
+func TestCreateUploadSessionForItem_ParsesSession(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Contains(t, r.URL.Path, "createUploadSession")
@@ -283,8 +214,8 @@ func TestCreateUploadSession_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	session, err := client.CreateUploadSession(
-		t.Context(), driveid.New("d"), "parent", "large-file.bin", 10485760, time.Time{},
+	session, err := client.CreateUploadSessionForItem(
+		t.Context(), driveid.New("d"), "item-123", "", 10485760, time.Time{},
 	)
 	require.NoError(t, err)
 
@@ -294,22 +225,26 @@ func TestCreateUploadSession_Success(t *testing.T) {
 	assert.Equal(t, 31, session.ExpirationTime.Day())
 }
 
-func TestCreateUploadSession_RetriesTransientNotFound(t *testing.T) {
-	var calls atomic.Int32
+func TestCreateUploadSession_RetriesTransientNotFoundOnCreate(t *testing.T) {
+	var creates atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Contains(t, r.URL.Path, "createUploadSession")
+		w.Header().Set("Content-Type", "application/json")
 
-		if calls.Add(1) <= 2 {
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("request-id", "req-upload-session-404")
-			w.WriteHeader(http.StatusNotFound)
-			writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+		if strings.HasSuffix(r.URL.Path, "/children") {
+			// A just-created parent can answer itemNotFound for a while.
+			if creates.Add(1) <= 2 {
+				w.Header().Set("request-id", "req-create-404")
+				w.WriteHeader(http.StatusNotFound)
+				writeTestResponse(t, w, `{"error":{"code":"itemNotFound"}}`)
+				return
+			}
+			serveCreateFile(t, w, r, "retry-item")
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
+		assert.Equal(t, "/drives/000000000000000d/items/retry-item/createUploadSession", r.URL.Path)
 		w.WriteHeader(http.StatusOK)
 		writeTestResponse(t, w, `{
 			"uploadUrl": "https://uploads.contoso.sharepoint.com/session/retry123",
@@ -326,7 +261,7 @@ func TestCreateUploadSession_RetriesTransientNotFound(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/retry123"), session.UploadURL)
-	assert.Equal(t, int32(3), calls.Load())
+	assert.Equal(t, int32(3), creates.Load())
 }
 
 // Validates: R-5.6.9
@@ -352,14 +287,14 @@ func TestCreateUploadSessionForItem_Success(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 	session, err := client.CreateUploadSessionForItem(
-		t.Context(), driveid.New("d"), "item-123", 10485760, time.Time{},
+		t.Context(), driveid.New("d"), "item-123", "", 10485760, time.Time{},
 	)
 	require.NoError(t, err)
 
 	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/abc123"), session.UploadURL)
 }
 
-func TestCreateUploadSession_PersonalUploadHost(t *testing.T) {
+func TestCreateUploadSessionForItem_PersonalUploadHost(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Contains(t, r.URL.Path, "createUploadSession")
@@ -374,8 +309,8 @@ func TestCreateUploadSession_PersonalUploadHost(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	session, err := client.CreateUploadSession(
-		t.Context(), driveid.New("d"), "parent", "large-file.bin", 10485760, time.Time{},
+	session, err := client.CreateUploadSessionForItem(
+		t.Context(), driveid.New("d"), "item-123", "", 10485760, time.Time{},
 	)
 	require.NoError(t, err)
 
@@ -386,7 +321,7 @@ func TestCreateUploadSession_PersonalUploadHost(t *testing.T) {
 	)
 }
 
-func TestCreateUploadSession_InvalidExpiration(t *testing.T) {
+func TestCreateUploadSessionForItem_InvalidExpiration(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -398,8 +333,8 @@ func TestCreateUploadSession_InvalidExpiration(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	session, err := client.CreateUploadSession(
-		t.Context(), driveid.New("d"), "parent", "file.bin", 1024, time.Time{},
+	session, err := client.CreateUploadSessionForItem(
+		t.Context(), driveid.New("d"), "item-123", "", 1024, time.Time{},
 	)
 	require.NoError(t, err)
 
@@ -407,7 +342,7 @@ func TestCreateUploadSession_InvalidExpiration(t *testing.T) {
 	assert.True(t, session.ExpirationTime.IsZero())
 }
 
-func TestCreateUploadSession_APIError(t *testing.T) {
+func TestCreateUploadSessionForItem_APIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "req-session-err")
 		w.WriteHeader(http.StatusForbidden)
@@ -416,14 +351,14 @@ func TestCreateUploadSession_APIError(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.CreateUploadSession(
-		t.Context(), driveid.New("d"), "parent", "file.bin", 1024, time.Time{},
+	_, err := client.CreateUploadSessionForItem(
+		t.Context(), driveid.New("d"), "item-123", "", 1024, time.Time{},
 	)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrForbidden)
 }
 
-func TestCreateUploadSession_DecodeError(t *testing.T) {
+func TestCreateUploadSessionForItem_DecodeError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -432,8 +367,8 @@ func TestCreateUploadSession_DecodeError(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.CreateUploadSession(
-		t.Context(), driveid.New("d"), "parent", "file.bin", 1024, time.Time{},
+	_, err := client.CreateUploadSessionForItem(
+		t.Context(), driveid.New("d"), "item-123", "", 1024, time.Time{},
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decoding upload session response")
@@ -669,7 +604,7 @@ func TestChunkAlignment(t *testing.T) {
 }
 
 // Validates: R-5.6.4
-func TestCreateUploadSession_WithFileSystemInfo(t *testing.T) {
+func TestCreateUploadSessionForItem_WithFileSystemInfo(t *testing.T) {
 	mtime := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -693,15 +628,15 @@ func TestCreateUploadSession_WithFileSystemInfo(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	session, err := client.CreateUploadSession(
-		t.Context(), driveid.New("d"), "parent", "timestamped.bin", 5242880, mtime,
+	session, err := client.CreateUploadSessionForItem(
+		t.Context(), driveid.New("d"), "item-123", "", 5242880, mtime,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/fsi"), session.UploadURL)
 }
 
 // Validates: R-5.6.4
-func TestCreateUploadSession_WithoutFileSystemInfo(t *testing.T) {
+func TestCreateUploadSessionForItem_WithoutFileSystemInfo(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if !assert.NoError(t, err) {
@@ -723,8 +658,8 @@ func TestCreateUploadSession_WithoutFileSystemInfo(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	session, err := client.CreateUploadSession(
-		t.Context(), driveid.New("d"), "parent", "no-timestamp.bin", 5242880, time.Time{},
+	session, err := client.CreateUploadSessionForItem(
+		t.Context(), driveid.New("d"), "item-123", "", 5242880, time.Time{},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, UploadURL("https://uploads.contoso.sharepoint.com/session/nofsi"), session.UploadURL)
@@ -872,6 +807,11 @@ func TestQueryUploadSession_InvalidExpiration(t *testing.T) {
 // request a small-file upload makes.
 type sessionUploadRecorder struct {
 	mu            stdsync.Mutex
+	createBodies  []string
+	createURLs    []string
+	deleteIfMatch []string
+	sessionURLs   []string
+	sessionMatch  []string
 	sessionBodies []string
 	chunkBodies   []string
 	simplePuts    int
@@ -895,7 +835,16 @@ func newSessionUploadServer(t *testing.T, rec *sessionUploadRecorder, sessionSta
 		w.Header().Set("Content-Type", "application/json")
 
 		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/children"):
+			rec.createBodies = append(rec.createBodies, string(body))
+			rec.createURLs = append(rec.createURLs, r.URL.RawPath+"|"+r.URL.Path)
+			serveCreateFile(t, w, r, "small-item")
+		case r.Method == http.MethodDelete:
+			rec.deleteIfMatch = append(rec.deleteIfMatch, r.Header.Get("If-Match"))
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "createUploadSession"):
+			rec.sessionURLs = append(rec.sessionURLs, r.URL.Path)
+			rec.sessionMatch = append(rec.sessionMatch, r.Header.Get("If-Match"))
 			rec.sessionBodies = append(rec.sessionBodies, string(body))
 			if sessionStatus != http.StatusOK {
 				w.WriteHeader(sessionStatus)
@@ -942,7 +891,7 @@ func TestUpload_SmallFileUsesSessionWithFileSystemInfo(t *testing.T) {
 				bytes.NewReader(content), int64(len(content)), mtime, nil)
 		}},
 		{name: "OverwriteByID", upload: func(c *Client) (*Item, error) {
-			return c.UploadToItem(t.Context(), driveid.New("d"), "small-item",
+			return c.UploadToItem(t.Context(), driveid.New("d"), "small-item", "",
 				bytes.NewReader(content), int64(len(content)), mtime, nil)
 		}},
 	}
@@ -985,7 +934,7 @@ func TestUpload_SmallFileSessionPermissionDeniedIsNotRetried(t *testing.T) {
 }
 
 // Validates: R-5.6.5, R-5.6.7
-func TestUpload_ZeroBytePutThenPatchesMtime(t *testing.T) {
+func TestUpload_ZeroByteCreatesByBodyThenPatchesMtime(t *testing.T) {
 	mtime := time.Date(2024, 7, 10, 9, 0, 0, 0, time.UTC)
 
 	for _, withMtime := range []bool{true, false} {
@@ -1003,8 +952,11 @@ func TestUpload_ZeroBytePutThenPatchesMtime(t *testing.T) {
 				bytes.NewReader(nil), 0, sent, nil)
 			require.NoError(t, err)
 			assert.Equal(t, "small-item", item.ID)
-			assert.Equal(t, 1, rec.simplePuts)
-			assert.Empty(t, rec.sessionBodies, "a zero-byte file cannot use a session")
+			// The create by body is the whole upload (L-01): the new item
+			// already is the empty file, so no content request follows.
+			assert.Len(t, rec.createBodies, 1)
+			assert.Zero(t, rec.simplePuts)
+			assert.Empty(t, rec.sessionBodies, "a zero-byte file needs no session")
 			if withMtime {
 				assert.Equal(t, 1, rec.patches)
 			} else {
@@ -1020,6 +972,10 @@ func TestUpload_ZeroByteMtimePatchFailureReturnsUploadedItem(t *testing.T) {
 
 	var puts, patches atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCreateFile(t, w, r, "empty-item") {
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 
 		switch r.Method {
@@ -1047,7 +1003,7 @@ func TestUpload_ZeroByteMtimePatchFailureReturnsUploadedItem(t *testing.T) {
 	require.NotNil(t, item)
 	assert.Equal(t, "empty-item", item.ID)
 	assert.Same(t, item, mtimeErr.Item)
-	assert.Equal(t, int32(1), puts.Load())
+	assert.Zero(t, puts.Load(), "a zero-byte file is created by body, never PUT")
 	assert.Positive(t, patches.Load())
 }
 
@@ -1070,6 +1026,10 @@ func TestUpload_ZeroByteMtimePatchTransientRetries(t *testing.T) {
 			var patchCalls atomic.Int32
 
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveCreateFile(t, w, r, "retry-item") {
+					return
+				}
+
 				w.Header().Set("Content-Type", "application/json")
 
 				switch r.Method {
@@ -1113,6 +1073,10 @@ func TestUpload_ZeroByteMtimePatchTransientNotFoundRetriesAcrossLongerLag(t *tes
 	var patchCalls atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCreateFile(t, w, r, "lag-item") {
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 
 		switch r.Method {
@@ -1196,6 +1160,10 @@ func TestUpload_ChunkedForLargeFile(t *testing.T) {
 	defer chunkSrv.Close()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCreateFile(t, w, r, "chunked-created") {
+			return
+		}
+
 		// createUploadSession request.
 		assert.Contains(t, r.URL.Path, "createUploadSession")
 		sessionCreated = true
@@ -1243,7 +1211,11 @@ func TestUpload_ChunkedCancelsSessionOnError(t *testing.T) {
 	}))
 	defer chunkSrv.Close()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCreateFile(t, w, r, "fail-created") {
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		writeTestResponsef(t, w, `{
@@ -1309,7 +1281,11 @@ func TestUpload_ProgressCallback(t *testing.T) {
 	}))
 	defer chunkSrv.Close()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCreateFile(t, w, r, "progress-created") {
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		writeTestResponsef(t, w, `{
@@ -1621,13 +1597,12 @@ func TestUploadFromSession_416RecoveryRejectsNonForwardProgress(t *testing.T) {
 }
 
 // Validates: R-5.6.2
-func TestCreateUploadSession_NoIfMatchHeader(t *testing.T) {
-	// Upload session creation must NOT include an If-Match header.
-	// The eTag can change during session creation itself (server-side race),
-	// causing an immediate 412 Precondition Failed that cascades into 416 errors.
+func TestCreateUploadSessionForItem_NoConditionWithoutETag(t *testing.T) {
+	// A caller with no preflight eTag sends no If-Match at all, rather than
+	// an empty condition.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Empty(t, r.Header.Get("If-Match"),
-			"CreateUploadSession must not send If-Match header")
+			"no eTag, no If-Match")
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -1639,8 +1614,8 @@ func TestCreateUploadSession_NoIfMatchHeader(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	_, err := client.CreateUploadSession(
-		t.Context(), driveid.New("d"), "parent", "file.bin", 10485760, time.Time{},
+	_, err := client.CreateUploadSessionForItem(
+		t.Context(), driveid.New("d"), "item-123", "", 10485760, time.Time{},
 	)
 	require.NoError(t, err)
 }
@@ -1674,7 +1649,11 @@ func TestUpload_ChunkedCancelsSession_CanceledContext(t *testing.T) {
 	}))
 	defer chunkSrv.Close()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveCreateFile(t, w, r, "cancel-created") {
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		writeTestResponsef(t, w, `{
@@ -1695,45 +1674,24 @@ func TestUpload_ChunkedCancelsSession_CanceledContext(t *testing.T) {
 }
 
 // Validates: R-5.6.7
-func TestUpload_ZeroByte_UsesSimple(t *testing.T) {
-	// Zero-byte files must use simple PUT upload, not create an upload session.
-	// The upload session API requires at least one non-empty fragment.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPut, r.Method,
-			"zero-byte upload should use PUT (simple upload)")
-		assert.Contains(t, r.URL.Path, "/content",
-			"zero-byte upload should target /content endpoint")
-		assert.NotContains(t, r.URL.Path, "createUploadSession",
-			"zero-byte upload must not create an upload session")
-
-		body, err := io.ReadAll(r.Body)
-		if !assert.NoError(t, err) {
-			return
-		}
-		assert.Empty(t, body, "zero-byte upload body should be empty")
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		writeTestResponse(t, w, `{
-			"id": "zero-byte-item",
-			"name": "empty.txt",
-			"size": 0,
-			"createdDateTime": "2024-06-01T12:00:00Z",
-			"lastModifiedDateTime": "2024-06-01T12:00:00Z",
-			"parentReference": {"id": "parent", "driveId": "d"},
-			"file": {"mimeType": "text/plain"}
-		}`)
-	}))
+func TestUpload_ZeroByteIsOneCreateByBody(t *testing.T) {
+	// A zero-byte file is the empty item the create makes: no session (which
+	// needs a non-empty fragment) and no content PUT (L-01).
+	rec := &sessionUploadRecorder{}
+	srv := newSessionUploadServer(t, rec, http.StatusOK)
 	defer srv.Close()
 
-	client := newTestClient(t, srv.URL)
-	item, err := client.Upload(
+	item, err := newTestClient(t, srv.URL).Upload(
 		t.Context(), driveid.New("d"), "parent", "empty.txt",
 		bytes.NewReader(nil), 0, time.Time{}, nil,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "zero-byte-item", item.ID)
-	assert.Equal(t, int64(0), item.Size)
+	assert.Equal(t, "small-item", item.ID)
+	assert.Len(t, rec.createBodies, 1)
+	assert.Empty(t, rec.sessionBodies)
+	assert.Zero(t, rec.simplePuts)
+	assert.Zero(t, rec.patches)
+	assert.Empty(t, rec.other)
 }
 
 // Validates: R-5.6.8, R-2.16.1
@@ -1743,7 +1701,7 @@ func TestUpload_NoPostUploadMetadataQuery(t *testing.T) {
 	// values. The upload completion response itself contains the correct metadata.
 	var requestCount atomic.Int32
 
-	content := []byte{} // zero-byte: the one route that answers with one request
+	content := []byte{} // zero-byte: the create is the whole upload
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
@@ -1775,7 +1733,7 @@ func TestUpload_NoPostUploadMetadataQuery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "no-requery-item", item.ID)
 	assert.Equal(t, int32(1), requestCount.Load(),
-		"only 1 request (the PUT upload) should be made — no GET for metadata")
+		"only 1 request (the create) should be made — no GET for metadata")
 }
 
 func TestQueryUploadSession_RetriesOn429(t *testing.T) {
@@ -1866,11 +1824,8 @@ func TestSimpleUpload_RetryAfter503ResendsFullBody(t *testing.T) {
 		name   string
 		upload func(*Client) (*Item, error)
 	}{
-		{name: "CreateByParent", upload: func(c *Client) (*Item, error) {
-			return c.SimpleUpload(t.Context(), driveid.New("d"), "parent", "a.txt", source(), int64(len(content)))
-		}},
 		{name: "OverwriteByID", upload: func(c *Client) (*Item, error) {
-			return c.SimpleUploadToItem(t.Context(), driveid.New("d"), "item-1", source(), int64(len(content)))
+			return c.SimpleUploadToItem(t.Context(), driveid.New("d"), "item-1", "", source(), int64(len(content)))
 		}},
 	}
 

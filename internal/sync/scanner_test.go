@@ -299,6 +299,58 @@ func TestDetectCaseCollisions_BaselineCrossCheck(t *testing.T) {
 	assert.Contains(t, collisions[0].Detail, "File.txt", "detail should name the synced file")
 }
 
+// Validates: R-2.12.3
+func TestDetectCaseCollisions_FullCaseFoldingCollides(t *testing.T) {
+	t.Parallel()
+
+	// Manual test: STRASSE.txt uploaded over straße.txt because ToLower
+	// does not fold ß to ss, while OneDrive treats them as one name.
+	events := []changeEvent{
+		{Path: "stra\u00dfe.txt", Name: "stra\u00dfe.txt", Type: changeCreate},
+		{Path: "STRASSE.txt", Name: "STRASSE.txt", Type: changeCreate},
+	}
+
+	clean, collisions := detectCaseCollisions(events, nil, nil)
+	assert.Empty(t, clean)
+	require.Len(t, collisions, 2)
+}
+
+// Validates: R-2.12.3
+func TestDetectCaseCollisions_EmojiOnlyDifferenceCollidesAndNamesBothFiles(t *testing.T) {
+	t.Parallel()
+
+	// Manual test: a.txt retried "graph: conflict" forever against a synced
+	// a😀.txt, because OneDrive ignores the emoji when comparing names.
+	baseline := newBaselineForTest([]*BaselineEntry{
+		{Path: "a\U0001F600.txt", DriveID: driveid.New("d"), ItemID: "id1"},
+	})
+	events := []changeEvent{{Path: "a.txt", Name: "a.txt", Type: changeCreate}}
+
+	clean, collisions := detectCaseCollisions(events, baseline, nil)
+	assert.Empty(t, clean)
+	require.Len(t, collisions, 1)
+	assert.Equal(t, "a.txt", collisions[0].Path)
+	assert.Contains(t, collisions[0].Detail, `"a.txt"`)
+	assert.Contains(t, collisions[0].Detail, "\"a\U0001F600.txt\"")
+	assert.Contains(t, collisions[0].Detail, "emoji")
+}
+
+// Validates: R-2.12.3
+func TestDetectCaseCollisions_KelvinSignAndMicroSignAreDistinctNames(t *testing.T) {
+	t.Parallel()
+
+	events := []changeEvent{
+		{Path: "\u212a.txt", Name: "\u212a.txt", Type: changeCreate},
+		{Path: "K.txt", Name: "K.txt", Type: changeCreate},
+		{Path: "\u00b5.txt", Name: "\u00b5.txt", Type: changeCreate},
+		{Path: "\u039c.txt", Name: "\u039c.txt", Type: changeCreate},
+	}
+
+	clean, collisions := detectCaseCollisions(events, nil, nil)
+	assert.Len(t, clean, 4)
+	assert.Empty(t, collisions)
+}
+
 // Validates: R-2.12.1
 func TestDetectCaseCollisions_CaseOnlyRenameIsNotACollision(t *testing.T) {
 	t.Parallel()

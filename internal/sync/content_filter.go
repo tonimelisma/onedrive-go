@@ -129,7 +129,7 @@ func (f contentFilter) isIgnored(path string, isDir bool) bool {
 
 	parts := strings.Split(path, "/")
 	for _, part := range parts {
-		if driveops.IsOwnedTransferArtifactName(part) {
+		if driveops.IsOwnedTransferArtifactName(part) || isSpellingRenameArtifactName(part) {
 			return true
 		}
 	}
@@ -295,4 +295,17 @@ func isSQLiteSidecarName(lower string) bool {
 	}
 
 	return false
+}
+
+// spellingRenameArtifactPrefix starts the temporary sibling of a
+// spelling-only local rename (executor renameLocal).
+const spellingRenameArtifactPrefix = ".onedrive-go.spelling."
+
+// isSpellingRenameArtifactName reports the temporary sibling of a
+// spelling-only local rename. It is excluded whatever the filter settings,
+// like download partials, so a crash between its two renames never syncs it;
+// unlike partials it is never deleted by cleanup, because it holds a user's
+// file.
+func isSpellingRenameArtifactName(name string) bool {
+	return strings.HasPrefix(name, spellingRenameArtifactPrefix)
 }

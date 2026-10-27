@@ -2322,11 +2322,13 @@ func TestUploadFile_SmallFileFinalFragmentFailureAdoptsCommittedItem(t *testing.
 type tmItemSessionUploader struct {
 	tmMockUploader
 	createForItem func()
+	ifMatches     []string
 }
 
 func (m *tmItemSessionUploader) CreateUploadSessionForItem(
-	_ context.Context, _ driveid.ID, _ string, _ int64, _ time.Time,
+	_ context.Context, _ driveid.ID, _, ifMatch string, _ int64, _ time.Time,
 ) (*graph.UploadSession, error) {
+	m.ifMatches = append(m.ifMatches, ifMatch)
 	if m.createForItem != nil {
 		m.createForItem()
 	}
@@ -2335,7 +2337,7 @@ func (m *tmItemSessionUploader) CreateUploadSessionForItem(
 }
 
 func (m *tmItemSessionUploader) UploadToItem(
-	_ context.Context, _ driveid.ID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc,
+	_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc,
 ) (*graph.Item, error) {
 	return nil, errors.New("UploadToItem not mocked")
 }
@@ -2698,4 +2700,25 @@ func TestTransferManager_EmptyHashedItemNeverAcceptsIdenticalWrongBodies(t *test
 	require.ErrorIs(t, err, ErrDownloadIntegrity)
 	assert.Equal(t, 3, attempts)
 	assert.NoFileExists(t, targetPath)
+}
+
+// Validates: R-5.6.2
+func TestUploadFileToItem_PassesTheCallersIfMatchToTheSession(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	localPath, data, hash := sessionTestFile(t, dir)
+
+	ul := &tmItemSessionUploader{tmMockUploader: tmMockUploader{
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{ID: "item-1", Size: int64(len(data)), QuickXorHash: hash}, nil
+		},
+	}}
+	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
+
+	_, err := tm.UploadFileToItem(t.Context(), driveid.New("d1"), "item-1", localPath, UploadOpts{IfMatch: `"live"`})
+	require.NoError(t, err)
+	assert.Equal(t, []string{`"live"`}, ul.ifMatches,
+		"an overwrite must be conditional on the eTag the caller's preflight saw")
 }
