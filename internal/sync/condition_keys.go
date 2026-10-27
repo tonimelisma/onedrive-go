@@ -19,6 +19,7 @@ const (
 	ConditionPathTooLong            ConditionKey = "path_too_long"
 	ConditionFileTooLarge           ConditionKey = "file_too_large"
 	ConditionCaseCollision          ConditionKey = "case_collision"
+	ConditionRemoteNameTwin         ConditionKey = "remote_name_twin"
 	ConditionDiskFull               ConditionKey = "disk_full"
 	ConditionHashError              ConditionKey = "hash_error"
 	ConditionFileTooLargeForSpace   ConditionKey = "file_too_large_for_space"
@@ -110,6 +111,7 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionPathTooLong,
 		ConditionFileTooLarge,
 		ConditionCaseCollision,
+		ConditionRemoteNameTwin,
 		ConditionDiskFull,
 		ConditionHashError,
 		ConditionFileTooLargeForSpace,
@@ -158,6 +160,7 @@ func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
 		{issueType: issuePathTooLong, key: ConditionPathTooLong},
 		{issueType: issueFileTooLarge, key: ConditionFileTooLarge},
 		{issueType: issueCaseCollision, key: ConditionCaseCollision},
+		{issueType: issueRemoteNameTwin, key: ConditionRemoteNameTwin},
 		{issueType: issueDiskFull, key: ConditionDiskFull},
 		{issueType: issueHashPanic, key: ConditionHashError},
 		{issueType: issueFileTooLargeForSpace, key: ConditionFileTooLargeForSpace},

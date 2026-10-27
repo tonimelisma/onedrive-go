@@ -98,6 +98,9 @@ func (s *SyncStore) commitObservationTx(
 			return processErr
 		}
 	}
+	if twinErr := s.reconcileRemoteTwinIssuesTx(ctx, tx); twinErr != nil {
+		return twinErr
+	}
 
 	if newToken != "" {
 		state.Cursor = newToken
@@ -115,6 +118,11 @@ func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 		if item.IsDeleted {
 			return nil
 		}
+		stored, err := s.storedPathForObservedItem(ctx, tx, item)
+		if err != nil {
+			return err
+		}
+		item.Path = stored
 		return s.insertRemoteState(ctx, tx, item)
 	}
 
@@ -127,9 +135,19 @@ func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 			// Left behind, a child that was never downloaded stayed in
 			// remote_state forever: status showed "Remote changes: 1 item"
 			// and "Syncing" for a folder that no longer existed.
-			return deleteRemoteStateSubtreeTx(ctx, tx, existing.Path)
+			if err := deleteRemoteStateSubtreeTx(ctx, tx, existing.Path); err != nil {
+				return err
+			}
 		}
-		return nil
+		return promoteRemoteTwinTx(ctx, tx, existing.Path)
+	}
+
+	if item.Path != "" {
+		stored, err := s.storedPathForObservedItem(ctx, tx, item)
+		if err != nil {
+			return err
+		}
+		item.Path = stored
 	}
 
 	changed := observedRemoteStateUpdate(existing, item)
@@ -147,7 +165,15 @@ func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 	// children look moved back on OneDrive, and sync moved them back into a
 	// re-created old folder.
 	if existing.ItemType == ItemTypeFolder && item.Path != "" && item.Path != existing.Path {
-		return repathSubtreeTx(ctx, tx, "remote_state", existing.Path, item.Path)
+		if err := repathSubtreeTx(ctx, tx, "remote_state", existing.Path, item.Path); err != nil {
+			return err
+		}
+		if err := keepRemoteTwinsAtHolderPathTx(ctx, tx, existing.Path, item.Path); err != nil {
+			return err
+		}
+	}
+	if item.Path != "" && item.Path != existing.Path {
+		return promoteRemoteTwinTx(ctx, tx, existing.Path)
 	}
 
 	return nil
@@ -210,11 +236,16 @@ func (s *SyncStore) ForgetRemoteItem(ctx context.Context, itemID string) (err er
 
 // deleteRemoteStateSubtreeTx removes every remote_state row strictly below
 // folderPath.
+// deleteRemoteStateSubtreeTx deletes the rows below a deleted folder, except
+// remote twins shadowed at the folder's own path: they are its siblings and
+// one of them takes the freed path (promoteRemoteTwinTx).
 func deleteRemoteStateSubtreeTx(ctx context.Context, tx sqlTxRunner, folderPath string) error {
 	descendantPrefix := folderPath + "/"
+	twinPrefix := folderPath + "/" + remoteTwinShadowMarker
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM remote_state WHERE substr(path, 1, length(?)) = ? COLLATE BINARY`,
-		descendantPrefix, descendantPrefix,
+		`DELETE FROM remote_state WHERE substr(path, 1, length(?)) = ? COLLATE BINARY
+			AND substr(path, 1, length(?)) != ? COLLATE BINARY`,
+		descendantPrefix, descendantPrefix, twinPrefix, twinPrefix,
 	); err != nil {
 		return fmt.Errorf("sync: deleting remote_state below deleted folder %s: %w", folderPath, err)
 	}
@@ -261,7 +292,7 @@ func (s *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item 
 		nullString(item.ETag),
 	)
 	if err != nil {
-		return fmt.Errorf("sync: inserting remote_state for %s: %w", item.Path, err)
+		return fmt.Errorf("sync: inserting remote_state for item %s at %s: %w", item.ItemID, item.Path, err)
 	}
 
 	return nil
@@ -280,7 +311,7 @@ func (s *SyncStore) updateRemoteStateFromObs(
 		item.ItemID,
 	)
 	if err != nil {
-		return fmt.Errorf("sync: updating remote_state for %s: %w", item.Path, err)
+		return fmt.Errorf("sync: updating remote_state for item %s to %s: %w", item.ItemID, item.Path, err)
 	}
 
 	return nil

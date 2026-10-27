@@ -297,8 +297,18 @@ func (c *itemConverter) resolveMissingAncestors(
 
 	for i := range items {
 		item := &items[i]
-		if item.IsDeleted || item.IsRoot || item.ID == "" {
+		if item.IsRoot || item.ID == "" {
 			continue
+		}
+		// A delete of a synced item takes its path from the baseline. One the
+		// baseline never held may still have a remote_state row (a file never
+		// downloaded, a held remote twin), and without a placed path the
+		// delete was dropped, leaving that row, and a twin issue with it, in
+		// place until the next full rescan.
+		if item.IsDeleted {
+			if _, synced := c.Baseline.GetByID(item.ID); synced {
+				continue
+			}
 		}
 
 		c.resolveAncestorChain(ctx, item.ParentID, resolveParentDriveID(item, c.resolveItemDriveID(item)), inflight)

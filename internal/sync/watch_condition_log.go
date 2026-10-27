@@ -100,6 +100,7 @@ func conditionLabels() map[ConditionKey]string {
 		ConditionPathTooLong:            "with paths too long for OneDrive",
 		ConditionFileTooLarge:           "too large for OneDrive",
 		ConditionCaseCollision:          "whose names differ only in case",
+		ConditionRemoteNameTwin:         "that OneDrive keeps as two items under one name here",
 		ConditionLocalReadDenied:        "that cannot be read locally",
 		ConditionLocalWriteDenied:       "that cannot be written locally",
 		ConditionRemoteWriteDenied:      "in read-only shared folders",
