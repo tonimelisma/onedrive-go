@@ -884,6 +884,11 @@ func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 		slog.String("sync_root", syncRoot),
 	)
 
+	// Watch can run again after a fallback period: registrations and the
+	// stop reason belong to the previous watcher.
+	o.watchedDirs = watchRegistry{}
+	o.watchUnavailable = nil
+
 	watcher, err := o.watcherFactory()
 	if err != nil {
 		if cause, ok := classifyWatcherCreateError(err); ok {

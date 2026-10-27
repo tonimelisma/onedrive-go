@@ -521,3 +521,111 @@ func TestCancelRecoveryScan_StaleTimerFiringIsIgnored(t *testing.T) {
 	gen := <-obs.recoveryScanDue
 	assert.False(t, obs.takeRecoveryScanDue(gen), "a token from a canceled timer does not trigger a scan")
 }
+
+func newFallbackTestEngine(t *testing.T) (*testEngine, *debugEventRecorder, *manualClock) {
+	t.Helper()
+
+	driveID := driveid.New(engineTestDriveID)
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+			}, "token-1"), nil
+		},
+	}
+	eng, syncRoot := newTestEngine(t, mock)
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "subdir"), 0o750))
+	recorder := attachDebugEventRecorder(eng)
+	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
+	installManualClockForTestEngine(eng, clock)
+
+	return eng, recorder, clock
+}
+
+func runWatchInBackground(t *testing.T, eng *testEngine) (context.CancelFunc, <-chan error) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOptions{
+			PollInterval: time.Hour,
+			Debounce:     5 * time.Millisecond,
+		})
+	}()
+
+	return cancel, done
+}
+
+func stopWatch(t *testing.T, cancel context.CancelFunc, done <-chan error) {
+	t.Helper()
+
+	cancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "RunWatch did not return after cancellation")
+	}
+}
+
+// Validates: R-2.8.12
+func TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval(t *testing.T) {
+	t.Parallel()
+
+	eng, recorder, clock := newFallbackTestEngine(t)
+	eng.localWatcherFactory = func() (fsWatcher, error) { return newEnospcWatcher(1), nil }
+	tickerCreated := installTickerCreatedSignal(eng, localWatchHealthySafetyScanInterval)
+
+	cancel, done := runWatchInBackground(t, eng)
+
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverFallbackStarted
+	}, "fallback started")
+	// Before the fix the first fallback scan came an hour later, and the
+	// hashes and recovery scan the stopped watcher had pending were lost.
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverFallbackScanned
+	}, "immediate fallback scan")
+
+	waitForSignal(t, tickerCreated, "fallback scans run at the safety-scan interval, not hourly")
+	clock.Advance(localWatchHealthySafetyScanInterval)
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverFallbackScanned
+	}, "scan at the safety-scan interval")
+
+	stopWatch(t, cancel, done)
+}
+
+// Validates: R-2.8.12
+func TestRunWatch_WatchFallbackRetriesTheWatcher(t *testing.T) {
+	t.Parallel()
+
+	eng, recorder, clock := newFallbackTestEngine(t)
+	recovered := newSignalingWatcher()
+	var factoryCalls atomic.Int64
+	eng.localWatcherFactory = func() (fsWatcher, error) {
+		if factoryCalls.Add(1) == 1 {
+			return newEnospcWatcher(1), nil
+		}
+		return recovered, nil
+	}
+	retryArmed := installAfterFuncCreatedSignal(eng, localWatchRetryInitialDelay)
+
+	cancel, done := runWatchInBackground(t, eng)
+
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverFallbackStarted
+	}, "fallback started")
+	waitForSignal(t, retryArmed, "a watcher retry is scheduled")
+
+	// The limit was transient. Before the fix the session stayed degraded.
+	clock.Advance(localWatchRetryInitialDelay)
+	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverFallbackStopped
+	}, "fallback ends for the retry")
+	waitForSignal(t, recovered.Added(), "the retried watcher is established")
+	assert.Equal(t, int64(2), factoryCalls.Load())
+
+	stopWatch(t, cancel, done)
+}

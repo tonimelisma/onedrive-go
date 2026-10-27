@@ -841,7 +841,7 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	eng.localWatcherFactory = func() (fsWatcher, error) {
 		return watcher, nil
 	}
-	degradedInterval := localWatchDegradedFullScanInterval
+	degradedInterval := localWatchHealthySafetyScanInterval
 	tickerCreated := installTickerCreatedSignal(eng, degradedInterval)
 
 	ctx, cancel := context.WithCancel(t.Context())
