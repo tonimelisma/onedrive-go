@@ -57,7 +57,7 @@ func (flow *engineFlow) observeMountRootRemote(
 			eng.mountRootDeltaFallbackReported.Store(false)
 			events := convertMountRootItems(ctx, items, eng.remoteRootItemID, eng.driveID, bl, eng.logger, eng.itemsClient)
 			if fullReconcile {
-				events = append(events, detectMountRootOrphans(items, eng.driveID, bl)...)
+				events = append(events, eng.confirmMountRootOrphans(ctx, items, detectMountRootOrphans(items, eng.driveID, bl))...)
 			}
 
 			return events, newToken, remoteObservationModeDelta, nil
@@ -91,9 +91,12 @@ func (flow *engineFlow) observeMountRootRemote(
 	if err != nil {
 		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: mount-root recursive listing: %w", err)
 	}
+	if err := validateMountRootListingParents(items, eng.remoteRootItemID); err != nil {
+		return nil, "", remoteObservationModeEnumerate, err
+	}
 
 	events := convertMountRootItems(ctx, items, eng.remoteRootItemID, eng.driveID, bl, eng.logger, eng.itemsClient)
-	events = append(events, detectMountRootOrphans(items, eng.driveID, bl)...)
+	events = append(events, eng.confirmMountRootOrphans(ctx, items, detectMountRootOrphans(items, eng.driveID, bl))...)
 
 	return events, "", remoteObservationModeEnumerate, nil
 }
@@ -123,6 +126,76 @@ func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Ba
 	}
 
 	return findBaselineOrphans(bl, seen, remoteDriveID, "")
+}
+
+// validateMountRootListingParents rejects a recursive listing whose items do
+// not hang off the listed folder: every item's parent must be the mount root
+// or a folder the same listing returned. A page that answered for another
+// folder, or a child whose folder the listing skipped, means the listing is
+// not a picture of the mount, and absence from it proves nothing (D-009).
+func validateMountRootListingParents(items []graph.Item, remoteRootItemID string) error {
+	folders := make(map[string]struct{}, len(items)+1)
+	folders[remoteRootItemID] = struct{}{}
+	for i := range items {
+		if items[i].IsFolder || items[i].IsRoot {
+			folders[items[i].ID] = struct{}{}
+		}
+	}
+	for i := range items {
+		if items[i].ID == remoteRootItemID || items[i].ParentID == "" {
+			continue
+		}
+		if _, ok := folders[items[i].ParentID]; !ok {
+			return fmt.Errorf("%w: shared folder listing returned %q under a folder it did not list",
+				errRemoteObservationIncomplete, items[i].Name)
+		}
+	}
+
+	return nil
+}
+
+// confirmMountRootOrphans keeps only the synthesized deletes a live lookup
+// confirms. One enumeration of a shared folder (/children pages, or a folder
+// delta) is not proof of absence: Graph omits items transiently, and a delete
+// synthesized from that omission removes the local copy, which the next
+// listing then downloads again (D-009). An item is gone when GetItem answers
+// 404 or a deleted facet, or when it now lives outside the mount; an item
+// still inside, or one the lookup could not settle, is left for the next
+// listing.
+func (e *Engine) confirmMountRootOrphans(ctx context.Context, listed []graph.Item, orphans []changeEvent) []changeEvent {
+	if len(orphans) == 0 || e.itemsClient == nil {
+		return orphans
+	}
+
+	inside := make(map[string]struct{}, len(listed)+1)
+	inside[e.remoteRootItemID] = struct{}{}
+	for i := range listed {
+		inside[listed[i].ID] = struct{}{}
+	}
+
+	confirmed := make([]changeEvent, 0, len(orphans))
+	for i := range orphans {
+		orphan := orphans[i]
+		live, err := e.itemsClient.GetItem(ctx, e.driveID, orphan.ItemID)
+		switch {
+		case errors.Is(err, graph.ErrNotFound):
+			confirmed = append(confirmed, orphan)
+		case err != nil:
+			e.logger.Debug("could not confirm a shared-folder item is gone; keeping it until the next listing",
+				slog.String("path", orphan.Path), slog.String("error", err.Error()))
+		case live.IsDeleted:
+			confirmed = append(confirmed, orphan)
+		default:
+			if _, stillInside := inside[live.ParentID]; stillInside {
+				e.logger.Debug("shared-folder listing omitted a live item; not deleting it",
+					slog.String("path", orphan.Path), slog.String("item_id", orphan.ItemID))
+				continue
+			}
+			confirmed = append(confirmed, orphan)
+		}
+	}
+
+	return confirmed
 }
 
 func (flow *engineFlow) commitObservedItems(

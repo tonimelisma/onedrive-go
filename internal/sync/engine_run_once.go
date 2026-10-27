@@ -289,20 +289,18 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	}
 	obs.SetShortcutTopology(eng.shortcutNamespaceID, eng.protectedRoots)
 
-	// Full enumeration: empty token returns ALL items as create/modify events.
-	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, "")
+	// Full enumeration: empty token returns ALL items as create/modify
+	// events, plus the raw ID of every live item Graph returned. The seen set
+	// is the raw IDs: an item the converter dropped was still enumerated, and
+	// building seen from events synthesized a delete for it (D-008).
+	events, token, topology, seen, err := obs.FullEnumerationWithShortcutTopology(ctx)
 	if err != nil {
 		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: full remote refresh delta: %w", err)
 	}
-
-	// Build seen set from all non-deleted events in the full enumeration.
-	seen := make(map[string]struct{}, len(events))
 	for i := range events {
-		if events[i].IsDeleted {
-			continue
+		if !events[i].IsDeleted && events[i].ItemID != "" {
+			seen[events[i].ItemID] = struct{}{}
 		}
-
-		seen[events[i].ItemID] = struct{}{}
 	}
 
 	// Detect orphans: baseline entries whose ItemID is not in the seen set.

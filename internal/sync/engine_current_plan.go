@@ -237,6 +237,9 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 	if topology.NamespaceID == "" {
 		topology.NamespaceID = flow.engine.shortcutNamespaceID
 	}
+	if err := flow.engine.confirmShortcutCompleteOmissions(ctx, &topology); err != nil {
+		return err
+	}
 	remoteChanged := topology.shouldApply()
 	if remoteChanged {
 		if _, err := flow.deps.store.applyShortcutTopology(ctx, topology); err != nil {
