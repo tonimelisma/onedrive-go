@@ -228,10 +228,11 @@ func (e *Engine) confirmEnumerationOrphans(
 const mountAncestorLookupLimit = 64
 
 // liveItemLeftMount reports whether a live item's ancestors provably lead
-// outside the mount: the walk reaches a drive root or a parentless item
-// without passing through the mount. An empty or unresolvable parent, a
-// failed lookup or a walk that is too deep proves nothing, and the item is
-// treated as still inside.
+// outside the mount: the parent walk reaches a drive root without passing
+// through the mount. Anything less proves nothing and the item is treated as
+// still inside: an empty parent anywhere on the walk (the item itself or an
+// ancestor), a lookup that fails or finds a deleted parent, or a walk deeper
+// than mountAncestorLookupLimit.
 func (e *Engine) liveItemLeftMount(ctx context.Context, live *graph.Item, inside map[string]struct{}) bool {
 	parentID := live.ParentID
 	for range mountAncestorLookupLimit {

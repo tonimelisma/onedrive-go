@@ -222,6 +222,9 @@ func resolveSyncRootPath(syncRoot string) (string, error) {
 func CountSyncFolderFiles(syncDir string) (int, error) {
 	tree, err := synctree.Open(syncDir)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
 		return 0, fmt.Errorf("opening sync folder: %w", err)
 	}
 	files := 0

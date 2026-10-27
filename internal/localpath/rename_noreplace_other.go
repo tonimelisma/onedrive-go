@@ -3,5 +3,5 @@
 package localpath
 
 func renameNoReplace(src, dst string) error {
-	return linkThenUnlink(src, dst)
+	return linkOrCopyNoReplace(src, dst, defaultNoReplaceOps())
 }

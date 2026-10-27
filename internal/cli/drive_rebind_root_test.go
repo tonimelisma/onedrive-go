@@ -98,3 +98,30 @@ func TestRunDriveRebindRoot_RequiresConfirmationWithoutYes(t *testing.T) {
 	assert.Contains(t, err.Error(), "requires confirmation")
 	assert.Contains(t, out.String(), "remembers 0 files", "the counts are shown before asking")
 }
+
+// Validates: R-6.2.12
+func TestRunDriveRebindRoot_UnreadableStateStillRebindsWithYes(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:rebind@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+	statePath := config.DriveStatePath(cid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
+	require.NoError(t, os.WriteFile(statePath, []byte("not a sqlite database"), 0o600))
+
+	var out bytes.Buffer
+	cc := &CLIContext{
+		Flags:        CLIFlags{Drive: []string{cid.String()}},
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		CfgPath:      cfgPath,
+	}
+
+	err := runDriveRebindRootWithInput(t.Context(), cc, bytes.NewBufferString(""), true)
+	assert.Contains(t, out.String(), "remembers an unknown number of files")
+	if err != nil {
+		assert.NotContains(t, err.Error(), "read sync state", "an unreadable count must not block the rebind")
+	}
+}

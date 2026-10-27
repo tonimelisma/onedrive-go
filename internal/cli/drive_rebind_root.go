@@ -53,9 +53,12 @@ func runDriveRebindRootWithInput(ctx context.Context, cc *CLIContext, stdin io.R
 
 	drive := cfg.Drives[cid]
 	syncDir := config.EffectiveSyncDir(cfg, cid, drive.SyncDir, cc.Logger)
+	// An unreadable state is exactly when a rebind may be needed, so it is
+	// not a reason to refuse; the count is shown as unknown.
 	synced, err := syncengine.SyncedFileCount(ctx, dbPath, cc.Logger)
 	if err != nil {
-		return fmt.Errorf("read sync state: %w", err)
+		cc.Logger.Debug("could not read the sync state to count synced files", "error", err.Error())
+		synced = unknownFileCount
 	}
 	present, countErr := syncengine.CountSyncFolderFiles(syncDir)
 	if countErr != nil {
@@ -78,7 +81,11 @@ func runDriveRebindRootWithInput(ctx context.Context, cc *CLIContext, stdin io.R
 	return writef(cc.Output(), "The next sync for %s will use the folder now at its sync path.\n", cid.String())
 }
 
-// driveRebindRootJSONOutput is `drive rebind-root --json`.
+// unknownFileCount marks a synced-file count the state could not provide.
+const unknownFileCount = -1
+
+// driveRebindRootJSONOutput is `drive rebind-root --json`. synced_files is
+// -1 when the sync state could not be read.
 type driveRebindRootJSONOutput struct {
 	Drive         string `json:"drive"`
 	Rebound       bool   `json:"rebound"`
@@ -99,8 +106,12 @@ func confirmRebindRootIntent(
 	present int,
 	yes bool,
 ) error {
-	if err := writef(output, "Sync state for %s remembers %d files; %s holds %d files now.\n",
-		drive, synced, syncDir, present); err != nil {
+	remembered := fmt.Sprintf("%d", synced)
+	if synced == unknownFileCount {
+		remembered = "an unknown number of"
+	}
+	if err := writef(output, "Sync state for %s remembers %s files; %s holds %d files now.\n",
+		drive, remembered, syncDir, present); err != nil {
 		return err
 	}
 	if yes {

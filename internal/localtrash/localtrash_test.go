@@ -200,3 +200,52 @@ func TestTrash_RestoreRefusesSymlinkedAncestor(t *testing.T) {
 	assert.Contains(t, err.Error(), "symbolic link")
 	assert.NoFileExists(t, filepath.Join(outside, "a.txt"))
 }
+
+// Validates: R-6.4.9
+func TestTrash_CrossFilesystemRestoreKeepsModeAndTime(t *testing.T) {
+	t.Parallel()
+
+	trash := Open(t.TempDir(), nil)
+	trash.renameNoReplace = func(src, dst string) error {
+		return &os.LinkError{Op: "rename", Old: src, New: dst, Err: syscall.EXDEV}
+	}
+	syncRoot := t.TempDir()
+	entry := putEntry(t, trash, syncRoot, "a.txt", "content\n")
+	modTime := time.Date(2025, 5, 6, 7, 8, 9, 0, time.UTC)
+	itemPath := filepath.Join(trash.Dir(), entry.ID, "item")
+	require.NoError(t, os.Chmod(itemPath, 0o640)) //nolint:gosec // a mode the restore must keep
+	require.NoError(t, os.Chtimes(itemPath, modTime, modTime))
+
+	target, err := trash.Restore(entry.ID)
+	require.NoError(t, err)
+
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o640), info.Mode().Perm())
+	assert.True(t, info.ModTime().Equal(modTime))
+}
+
+// Validates: R-6.4.9
+func TestTrash_UncheckableItemIsNeverPurged(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	t.Parallel()
+
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	trash := Open(dir, func() time.Time { return now })
+	placement, err := trash.Reserve(t.TempDir(), "a.txt", ReasonDeleted)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(placement.ItemPath, []byte("x"), 0o600))
+	entryDir := filepath.Dir(placement.ItemPath)
+	// Without search permission the item cannot be stat'ed: unknown, so kept.
+	require.NoError(t, os.Chmod(entryDir, 0o600))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(entryDir, 0o700)) }) //nolint:gosec // restores permissions
+
+	now = now.Add(2 * incompletePlacementGrace)
+	_, err = trash.Purge()
+	require.NoError(t, os.Chmod(entryDir, 0o700)) //nolint:gosec // restores permissions before checking
+	_ = err
+	assert.FileExists(t, placement.ItemPath, "an entry whose file cannot be checked is never purged as empty")
+}

@@ -44,18 +44,22 @@ import (
 const Retention = 30 * 24 * time.Hour
 
 const (
-	itemName       = "item"
-	entryFileName  = "entry.json"
-	dirPerm        = 0o700
-	filePerm       = 0o600
-	idRandomBytes  = 4
-	idTimeLayout   = "20060102T150405.000000000Z"
-	stateDBSuffix  = ".db"
-	trashDirName   = "trash"
-	entryTempGlob  = ".entry-*"
-	copyTempGlob   = ".onedrive-go-restore-*"
-	maxListEntries = 1 << 20
-	parentDirName  = ".."
+	itemName      = "item"
+	entryFileName = "entry.json"
+	dirPerm       = 0o700
+	filePerm      = 0o600
+	idRandomBytes = 4
+	idTimeLayout  = "20060102T150405.000000000Z"
+	stateDBSuffix = ".db"
+	trashDirName  = "trash"
+	entryTempGlob = ".entry-*"
+	// copyTempGlob names a cross-filesystem restore copy beside its target.
+	// IsRestoreArtifactName recognizes it so sync never observes or uploads
+	// one left behind by a crash.
+	copyTempGlob          = restoreArtifactPrefix + "*"
+	restoreArtifactPrefix = ".onedrive-go-restore-"
+	maxListEntries        = 1 << 20
+	parentDirName         = ".."
 
 	// incompletePlacementGrace is how old a reservation without a file must
 	// be before Purge treats it as crash debris rather than a placement a
@@ -116,6 +120,12 @@ type Trash struct {
 	// renameNoReplace moves a file without replacing anything at the
 	// destination; a seam so tests can model a cross-filesystem restore.
 	renameNoReplace func(src, dst string) error
+}
+
+// IsRestoreArtifactName reports whether name is a temporary copy a restore
+// writes beside its target.
+func IsRestoreArtifactName(name string) bool {
+	return strings.HasPrefix(name, restoreArtifactPrefix)
 }
 
 // DirForStatePath returns the trash directory of the drive whose sync state
@@ -264,7 +274,9 @@ func (t *Trash) scanEntry(dirEntry os.DirEntry) scannedEntry {
 	id := dirEntry.Name()
 	itemPath := filepath.Join(t.dir, id, itemName)
 	found := scannedEntry{reservedAt: reservedAt(dirEntry)}
-	if _, err := localpath.Lstat(itemPath); err == nil {
+	// Only a definite "not there" is no item: an entry whose file cannot be
+	// checked is never purged as empty.
+	if _, err := localpath.Lstat(itemPath); err == nil || !errors.Is(err, os.ErrNotExist) {
 		found.hasItem = true
 	}
 	entry, ok := t.readRecord(id)
@@ -361,7 +373,10 @@ func (t *Trash) Restore(id string) (string, error) {
 func (t *Trash) findEntry(id string) (*scannedEntry, error) {
 	dirEntries, err := localpath.ReadDir(t.dir)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrEntryNotFound, id)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", ErrEntryNotFound, id)
+		}
+		return nil, fmt.Errorf("reading trash: %w", err)
 	}
 	for _, dirEntry := range dirEntries {
 		if dirEntry.Name() != id || !dirEntry.IsDir() {
@@ -382,7 +397,9 @@ func (t *Trash) findEntry(id string) (*scannedEntry, error) {
 func (t *Trash) moveNoReplace(itemPath, target string) error {
 	err := t.renameNoReplace(itemPath, target)
 	switch {
-	case err == nil:
+	case err == nil, errors.Is(err, localpath.ErrSourceNotRemoved):
+		// The file is at target; a source left in the entry goes with the
+		// entry directory.
 		return nil
 	case errors.Is(err, localpath.ErrTargetExists):
 		return fmt.Errorf("%w: %s", ErrRestoreTargetExists, target)
@@ -395,6 +412,14 @@ func (t *Trash) moveNoReplace(itemPath, target string) error {
 		return err
 	}
 	if err := localpath.RenameNoReplace(temp, target); err != nil {
+		if errors.Is(err, localpath.ErrSourceNotRemoved) {
+			// In place; the temporary copy is a leftover, removed best effort.
+			_ = localpath.Remove(temp) //nolint:errcheck // the restore succeeded; a leftover copy is harmless
+			if removeErr := localpath.Remove(itemPath); removeErr != nil {
+				return fmt.Errorf("removing the trashed copy after restoring %s: %w", target, removeErr)
+			}
+			return nil
+		}
 		removeErr := localpath.Remove(temp)
 		if errors.Is(err, localpath.ErrTargetExists) {
 			return errors.Join(fmt.Errorf("%w: %s", ErrRestoreTargetExists, target), removeErr)
@@ -433,8 +458,18 @@ func copyToSibling(src, target string) (tempPath string, err error) {
 	if err = out.Sync(); err != nil {
 		return "", fmt.Errorf("syncing restore copy: %w", err)
 	}
+	info, err := in.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stating trashed file: %w", err)
+	}
+	if err = out.Chmod(info.Mode().Perm()); err != nil {
+		return "", fmt.Errorf("setting restore copy permissions: %w", err)
+	}
 	if err = out.Close(); err != nil {
 		return "", fmt.Errorf("closing restore copy: %w", err)
+	}
+	if err = localpath.Chtimes(tempPath, info.ModTime(), info.ModTime()); err != nil {
+		return "", fmt.Errorf("setting restore copy times: %w", err)
 	}
 	return tempPath, nil
 }

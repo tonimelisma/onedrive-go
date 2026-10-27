@@ -144,11 +144,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		cfg.Logger,
 		cfg.PathConvergence,
 	)
-	refusalHint := ""
-	if cfg.ExpectedSyncRootIdentity == nil {
-		refusalHint = errSyncRootRebindHint
-	}
-	rootIdentity := newSyncRootIdentity(syncRootBinding, refusalHint)
+	rootIdentity := newSyncRootIdentity(syncRootBinding, syncRootRefusalHint(cfg))
 	trash := configureEngineExecutor(execCfg, cfg, bm, rootIdentity)
 
 	// Construct sessionStore and TransferManager together so the TM is
@@ -250,6 +246,15 @@ func closeEngineSyncStoreOnStartupFailure(
 			)
 		}
 	}
+}
+
+// syncRootRefusalHint is the rebind hint for a primary root; a shortcut
+// child's identity is the parent's to change, so it gets none.
+func syncRootRefusalHint(cfg *engineInputs) string {
+	if cfg.ExpectedSyncRootIdentity != nil {
+		return ""
+	}
+	return errSyncRootRebindHint
 }
 
 // configureEngineExecutor installs the mount-owned executor policy: the remote

@@ -304,3 +304,21 @@ func TestClearSyncRootIdentity_ForgetsRecordedMountPoints(t *testing.T) {
 	assert.Empty(t, flags, "a rebind accepts the folder as it is now")
 	assert.Contains(t, vanishedMountSkippedItem("nas").Detail, "drive rebind-root")
 }
+
+// Validates: R-6.4.9
+func TestContentFilter_RestoreCopiesAreNeverObserved(t *testing.T) {
+	t.Parallel()
+
+	filter := newContentFilter(ContentFilterConfig{})
+	assert.False(t, filter.Visible("Docs/.onedrive-go-restore-123", ItemTypeFile))
+	assert.False(t, filter.Visible("Docs/.onedrive-go.0123456789abcdef.detach", ItemTypeFile))
+}
+
+// Validates: R-6.2.12
+func TestCountSyncFolderFiles_MissingFolderHoldsNoFiles(t *testing.T) {
+	t.Parallel()
+
+	count, err := CountSyncFolderFiles(filepath.Join(t.TempDir(), "missing"))
+	require.NoError(t, err)
+	assert.Zero(t, count)
+}

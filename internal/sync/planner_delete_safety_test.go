@@ -130,3 +130,27 @@ func TestDeleteSafetyHold_ConfirmReleasesExactlyTheHeldSet(t *testing.T) {
 		assert.NotEqual(t, "f000.txt", plan.Actions[i].Path, "a confirmation is bound to the item it held")
 	}
 }
+
+// Validates: R-6.2.5
+func TestDeleteSafetyHold_HeldRowWithoutItemIDDoesNotApproveAKnownItem(t *testing.T) {
+	t.Parallel()
+
+	var actions []Action
+	var approved []heldDelete
+	for i := range 60 {
+		action := remoteDeleteAction(fmt.Sprintf("f%03d.txt", i), ItemTypeFile)
+		actions = append(actions, action)
+		approved = append(approved, heldDelete{Path: action.Path, Side: deleteSafetySideRemote})
+	}
+	plan := planOf(actions...)
+
+	require.NoError(t, applyDeleteSafetyHold(plan, &deleteSafetyInput{
+		Baseline:  baselineWithItems(t, 100, 0),
+		LocalRows: []localStateRow{{Path: "keep.txt", ItemType: ItemTypeFile}},
+		Approved:  approved,
+	}))
+
+	assert.Empty(t, plan.Actions, "a held row that names no item cannot vouch for a delete that does")
+	require.Len(t, plan.HeldDeletes, 60)
+	assert.Equal(t, "id-f000.txt", plan.HeldDeletes[0].ItemID, "held rows record the item ID")
+}

@@ -78,15 +78,15 @@ func (s *SyncStore) ReplaceLocalStateBindingRoot(
 		err = finalizeTxRollback(err, tx, "sync: rollback local_state transaction")
 	}()
 
-	if err := replaceLocalStateTx(ctx, tx, rows); err != nil {
-		return nil, err
+	if replaceErr := replaceLocalStateTx(ctx, tx, rows); replaceErr != nil {
+		return nil, replaceErr
 	}
 	backfilled, backfillErr := backfillBaselineIdentityTx(ctx, tx)
 	if backfillErr != nil {
 		return nil, backfillErr
 	}
-	if err := markLocalTruthCompleteTx(ctx, tx); err != nil {
-		return nil, err
+	if markErr := markLocalTruthCompleteTx(ctx, tx); markErr != nil {
+		return nil, markErr
 	}
 	if bind != nil {
 		if bound, err = bindSyncRootIdentityTx(ctx, tx, *bind); err != nil {

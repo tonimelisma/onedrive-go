@@ -139,7 +139,10 @@ func approvedDeleteIndexes(actions []Action, approved []heldDelete) map[int]stru
 		if !ok {
 			continue
 		}
-		if held.ItemID != "" && actions[i].ItemID != "" && held.ItemID != actions[i].ItemID {
+		// A confirmation names an item. When the delete knows its item, the
+		// held row must name the same one; a row without an ID approves only
+		// a delete that has none either.
+		if actions[i].ItemID != "" && held.ItemID != actions[i].ItemID {
 			continue
 		}
 		indexes[i] = struct{}{}
