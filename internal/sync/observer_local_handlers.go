@@ -80,14 +80,9 @@ func (o *localObserver) watchLoop(
 			o.armRecoveryScan()
 
 		case gen := <-o.recoveryScanDue:
-			if !o.takeRecoveryScanDue(gen) {
-				continue
-			}
-			o.logger.Debug("running recovery scan after missed local changes")
-			if err := o.rescanUnlessRootGone(ctx, tree, events); err != nil {
+			if err := o.runDueRecoveryScan(ctx, tree, events, gen); err != nil {
 				return err
 			}
-			o.finishRecoveryScan()
 
 		case watchErr, ok := <-watcher.Errors():
 			if !ok {
@@ -166,6 +161,24 @@ func (o *localObserver) rewatchUnwatchedDirectories(tree *synctree.Root, rows []
 		o.watchedDirs.add(fsPath, info)
 		added++
 	}
+}
+
+// runDueRecoveryScan runs the recovery scan a fired timer asked for, unless
+// the timer's generation is stale.
+func (o *localObserver) runDueRecoveryScan(
+	ctx context.Context, tree *synctree.Root, events chan<- changeEvent, gen uint64,
+) error {
+	if !o.takeRecoveryScanDue(gen) {
+		return nil
+	}
+
+	o.logger.Debug("running recovery scan after missed local changes")
+	if err := o.rescanUnlessRootGone(ctx, tree, events); err != nil {
+		return err
+	}
+	o.finishRecoveryScan()
+
+	return nil
 }
 
 // rescanUnlessRootGone runs a full rescan, or reports the sync root gone
@@ -385,45 +398,7 @@ func (o *localObserver) handleCreate(
 	}
 
 	if info.IsDir() {
-		ev.ItemType = ItemTypeFolder
-
-		// A Create for a directory already registered with the same
-		// identity is a duplicate (fsnotify's event racing the new-directory
-		// scan, or a directory that left and came back as the same inode):
-		// its watches are valid, so its subtree is not dropped, re-added and
-		// re-hashed.
-		if o.isRegisteredSameDirectory(fsPath, info) {
-			o.TrySend(ctx, events, &ev)
-			o.updateDirNameCache(filepath.Dir(fsPath), name)
-			return
-		}
-
-		// A directory created at a path that still has watched descendants
-		// replaced one that was deleted or moved away while watched: the
-		// delete event was ignored because the path exists again, or has not
-		// arrived yet. Those descendant registrations belong to the old
-		// inodes, so they are dropped before the new tree is registered; the
-		// scan below re-adds whatever the new directory holds.
-		o.forgetWatchedDescendants(watcher, fsPath, dbRelPath)
-
-		if addErr := watcher.Add(fsPath); addErr != nil {
-			o.reportWatchAddFailure("failed to add watch on new directory", dbRelPath, addErr)
-		} else {
-			o.watchedDirs.add(fsPath, info)
-		}
-
-		// The directory's own row goes out before its contents are scanned.
-		// When it is the destination half of a folder rename, its identity
-		// pairs the move; emitting it only after hashing a large tree left
-		// the replan seeing just the delete half (D-080).
-		o.TrySend(ctx, events, &ev)
-		o.updateDirNameCache(filepath.Dir(fsPath), name)
-
-		// Scan directory contents for files created before the watch was
-		// registered. Duplicates from fsnotify are harmless — the buffer's
-		// per-path deduplication handles them.
-		o.scanNewDirectory(ctx, tree, fsPath, dbRelPath, watcher, events)
-
+		o.handleDirectoryCreate(ctx, tree, fsPath, dbRelPath, name, info, &ev, watcher, events)
 		return
 	}
 
@@ -439,6 +414,53 @@ func (o *localObserver) handleCreate(
 
 	// Update directory name cache so subsequent collision checks see this entry.
 	o.updateDirNameCache(filepath.Dir(fsPath), name)
+}
+
+// handleDirectoryCreate registers and emits a created directory, then scans
+// what it already holds.
+func (o *localObserver) handleDirectoryCreate(
+	ctx context.Context, tree *synctree.Root,
+	fsPath, dbRelPath, name string, info os.FileInfo,
+	ev *changeEvent, watcher fsWatcher, events chan<- changeEvent,
+) {
+	ev.ItemType = ItemTypeFolder
+
+	// A Create for a directory already registered with the same
+	// identity is a duplicate (fsnotify's event racing the new-directory
+	// scan, or a directory that left and came back as the same inode):
+	// its watches are valid, so its subtree is not dropped, re-added and
+	// re-hashed.
+	if o.isRegisteredSameDirectory(fsPath, info) {
+		o.TrySend(ctx, events, ev)
+		o.updateDirNameCache(filepath.Dir(fsPath), name)
+		return
+	}
+
+	// A directory created at a path that still has watched descendants
+	// replaced one that was deleted or moved away while watched: the
+	// delete event was ignored because the path exists again, or has not
+	// arrived yet. Those descendant registrations belong to the old
+	// inodes, so they are dropped before the new tree is registered; the
+	// scan below re-adds whatever the new directory holds.
+	o.forgetWatchedDescendants(watcher, fsPath, dbRelPath)
+
+	if addErr := watcher.Add(fsPath); addErr != nil {
+		o.reportWatchAddFailure("failed to add watch on new directory", dbRelPath, addErr)
+	} else {
+		o.watchedDirs.add(fsPath, info)
+	}
+
+	// The directory's own row goes out before its contents are scanned.
+	// When it is the destination half of a folder rename, its identity
+	// pairs the move; emitting it only after hashing a large tree left
+	// the replan seeing just the delete half (D-080).
+	o.TrySend(ctx, events, ev)
+	o.updateDirNameCache(filepath.Dir(fsPath), name)
+
+	// Scan directory contents for files created before the watch was
+	// registered. Duplicates from fsnotify are harmless — the buffer's
+	// per-path deduplication handles them.
+	o.scanNewDirectory(ctx, tree, fsPath, dbRelPath, watcher, events)
 }
 
 // watchCreateHash returns the content hash for a file a watch create (or a
