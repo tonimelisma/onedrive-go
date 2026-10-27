@@ -83,18 +83,31 @@ const watchCreateEMFILECause = watchCauseInstanceLimit
 // descriptor counted against max_user_watches, not an open file.
 func watchDescriptorBudget() int { return 0 }
 
-// remoteFilesystemMagics names the statfs f_type values of network and FUSE
-// filesystems, whose changes made by other clients raise no inotify events.
-var remoteFilesystemMagics = map[uint32]string{
-	unix.NFS_SUPER_MAGIC:  "nfs",
-	unix.SMB_SUPER_MAGIC:  "smb",
-	unix.CIFS_SUPER_MAGIC: "cifs",
-	unix.SMB2_SUPER_MAGIC: "smb2",
-	unix.FUSE_SUPER_MAGIC: "fuse",
-	unix.V9FS_MAGIC:       "9p",
-	unix.CEPH_SUPER_MAGIC: "ceph",
-	unix.AFS_SUPER_MAGIC:  "afs",
-	unix.CODA_SUPER_MAGIC: "coda",
+// remoteFilesystemName names the statfs f_type magic of a network or FUSE
+// filesystem, whose changes made by other clients raise no inotify events.
+func remoteFilesystemName(magic uint32) (string, bool) {
+	switch magic {
+	case unix.NFS_SUPER_MAGIC:
+		return "nfs", true
+	case unix.SMB_SUPER_MAGIC:
+		return "smb", true
+	case unix.CIFS_SUPER_MAGIC:
+		return "cifs", true
+	case unix.SMB2_SUPER_MAGIC:
+		return "smb2", true
+	case unix.FUSE_SUPER_MAGIC:
+		return "fuse", true
+	case unix.V9FS_MAGIC:
+		return "9p", true
+	case unix.CEPH_SUPER_MAGIC:
+		return "ceph", true
+	case unix.AFS_SUPER_MAGIC:
+		return "afs", true
+	case unix.CODA_SUPER_MAGIC:
+		return "coda", true
+	default:
+		return "", false
+	}
 }
 
 // localFilesystemKind identifies the filesystem holding path from statfs.
@@ -106,7 +119,7 @@ func localFilesystemKind(path string) (filesystemInfo, error) {
 
 	// f_type is int64 on amd64 and int32 on 32-bit platforms; the magic
 	// numbers are 32-bit, so compare the low 32 bits.
-	if kind, ok := remoteFilesystemMagics[uint32(stat.Type)]; ok { //nolint:gosec // truncation to the 32-bit magic is intended
+	if kind, ok := remoteFilesystemName(uint32(stat.Type)); ok {
 		return filesystemInfo{kind: kind, remote: true}, nil
 	}
 

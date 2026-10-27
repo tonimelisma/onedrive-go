@@ -1160,10 +1160,6 @@ func observedKindFromItemType(itemType ItemType) observedKind {
 // post-stat detects changes that occurred during hashing. The caller's earlier
 // stat cannot substitute because time may pass between the caller's stat and
 // the hash operation.
-func computeStableHash(fsPath string) (string, error) {
-	return computeStableHashWith(fsPath, driveops.ComputeQuickXorHash)
-}
-
 func computeStableHashWith(fsPath string, hashFunc func(string) (string, error)) (string, error) {
 	pre, err := trustedStat(fsPath)
 	if err != nil {

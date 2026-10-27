@@ -81,72 +81,87 @@ func (o *localObserver) watchLoop(
 
 		case <-o.recoveryScanDue:
 			o.recoveryScanTimer = nil
-			if !syncRootExists(syncRoot) {
-				o.logger.Debug("sync root deleted, stopping watch",
-					slog.String("sync_root", syncRoot))
-
-				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
-			}
-
 			o.logger.Debug("running recovery scan after missed local changes")
-			o.runSafetyScan(ctx, tree, events)
+			if err := o.rescanUnlessRootGone(ctx, tree, events); err != nil {
+				return err
+			}
 
 		case watchErr, ok := <-watcher.Errors():
 			if !ok {
 				return nil
 			}
 
-			// Self-healing: local truth is marked for a rescan. The first
-			// error of a streak is Info; repeats under sustained kernel
-			// queue overflow are Debug.
-			delay := errBackoff.Next()
-			watcherErrLevel := slog.LevelDebug
-			if errBackoff.Consecutive() <= 1 {
-				watcherErrLevel = slog.LevelInfo
-			}
-			msg := "filesystem watcher error; rescanning the sync folder"
-			if errors.Is(watchErr, fsnotify.ErrEventOverflow) {
-				// IN_Q_OVERFLOW: the kernel discarded events, so changes
-				// are known to be missing, not merely possible.
-				msg = "too many local changes at once for the system to report; rescanning the sync folder"
-			}
-			o.logger.Log(ctx, watcherErrLevel, msg,
-				slog.String("error", watchErr.Error()),
-				slog.Duration("backoff", delay),
-			)
-			o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryWatcherError)
-			o.armRecoveryScan()
-
-			// Exponential backoff prevents tight loop under sustained errors
-			// (e.g., kernel buffer overflow).
-			if sleepErr := o.clock.Sleep(ctx, delay); sleepErr != nil {
-				return nil
-			}
-
-			// After watcher error, check if sync root still exists (B-113).
-			// A deleted root means the watcher is watching nothing.
-			if !syncRootExists(syncRoot) {
-				// Debug: the returned error is reported once by the watch
-				// runtime.
-				o.logger.Debug("sync root deleted, stopping watch",
-					slog.String("sync_root", syncRoot))
-
-				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
+			if stop, err := o.handleWatcherError(ctx, watchErr, errBackoff, syncRoot); stop {
+				return err
 			}
 
 		case <-tickCh:
-			// Check if sync root still exists before running safety scan (B-113).
-			if !syncRootExists(syncRoot) {
-				o.logger.Debug("sync root deleted, stopping watch",
-					slog.String("sync_root", syncRoot))
-
-				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
+			if err := o.rescanUnlessRootGone(ctx, tree, events); err != nil {
+				return err
 			}
-
-			o.runSafetyScan(ctx, tree, events)
 			errBackoff.Reset()
 		}
 	}
+}
+
+// rescanUnlessRootGone runs a full rescan, or reports the sync root gone
+// (B-113): a deleted root means the watcher is watching nothing.
+func (o *localObserver) rescanUnlessRootGone(ctx context.Context, tree *synctree.Root, events chan<- changeEvent) error {
+	if !syncRootExists(tree.Path()) {
+		// Debug: the returned error is reported once by the watch runtime.
+		o.logger.Debug("sync root deleted, stopping watch",
+			slog.String("sync_root", tree.Path()))
+
+		return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
+	}
+
+	o.runSafetyScan(ctx, tree, events)
+	return nil
+}
+
+// handleWatcherError marks local truth suspect, arms a recovery rescan and
+// backs off. It reports stop=true when the watch loop must return err (nil
+// on shutdown).
+func (o *localObserver) handleWatcherError(
+	ctx context.Context, watchErr error, errBackoff *retry.Backoff, syncRoot string,
+) (bool, error) {
+	// Self-healing: local truth is marked for a rescan. The first error of a
+	// streak is Info; repeats under sustained kernel queue overflow are Debug.
+	delay := errBackoff.Next()
+	watcherErrLevel := slog.LevelDebug
+	if errBackoff.Consecutive() <= 1 {
+		watcherErrLevel = slog.LevelInfo
+	}
+	msg := "filesystem watcher error; rescanning the sync folder"
+	if errors.Is(watchErr, fsnotify.ErrEventOverflow) {
+		// IN_Q_OVERFLOW: the kernel discarded events, so changes are known
+		// to be missing, not merely possible.
+		msg = "too many local changes at once for the system to report; rescanning the sync folder"
+	}
+	o.logger.Log(ctx, watcherErrLevel, msg,
+		slog.String("error", watchErr.Error()),
+		slog.Duration("backoff", delay),
+	)
+	o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryWatcherError)
+	o.armRecoveryScan()
+
+	// Exponential backoff prevents a tight loop under sustained errors
+	// (e.g., kernel buffer overflow).
+	if sleepErr := o.clock.Sleep(ctx, delay); sleepErr != nil {
+		// The sleep ends early only on cancellation, which is shutdown, a
+		// clean stop rather than a watch failure.
+		return true, nil //nolint:nilerr // cancellation is a clean stop
+	}
+
+	// After a watcher error, check that the sync root still exists (B-113).
+	if !syncRootExists(syncRoot) {
+		o.logger.Debug("sync root deleted, stopping watch",
+			slog.String("sync_root", syncRoot))
+
+		return true, fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
+	}
+
+	return false, nil
 }
 
 // HandleFsEvent processes a single fsnotify event and sends the appropriate

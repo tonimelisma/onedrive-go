@@ -46,27 +46,25 @@ func watchDescriptorBudget() int {
 		return 0
 	}
 
-	current := uint64(limit.Cur) //nolint:gosec,unconvert // Cur is uint64 on darwin, int64 on freebsd; both are non-negative limits
+	current := uint64(limit.Cur) //nolint:unconvert,nolintlint // Cur is uint64 on darwin but int64 on freebsd
 	budget := current / watchDescriptorFraction
 	if budget == 0 || budget > maxWatchDescriptorBudget {
 		budget = maxWatchDescriptorBudget
 	}
 
-	return int(budget) //nolint:gosec // bounded by maxWatchDescriptorBudget above
+	return int(budget)
 }
 
-// remoteFilesystemTypes names the statfs f_fstypename values of network and
-// FUSE filesystems, whose changes made by other clients raise no kqueue
-// events.
-var remoteFilesystemTypes = map[string]bool{
-	"nfs":     true,
-	"smbfs":   true,
-	"afpfs":   true,
-	"webdav":  true,
-	"cifs":    true,
-	"macfuse": true,
-	"osxfuse": true,
-	"fusefs":  true,
+// isRemoteFilesystemType reports whether a statfs f_fstypename names a
+// network or FUSE filesystem, whose changes made by other clients raise no
+// kqueue events.
+func isRemoteFilesystemType(kind string) bool {
+	switch kind {
+	case "nfs", "smbfs", "afpfs", "webdav", "cifs", "macfuse", "osxfuse", "fusefs":
+		return true
+	default:
+		return strings.HasPrefix(kind, "fuse")
+	}
 }
 
 // localFilesystemKind identifies the filesystem holding path from statfs.
@@ -76,15 +74,6 @@ func localFilesystemKind(path string) (filesystemInfo, error) {
 		return filesystemInfo{}, fmt.Errorf("statfs %s: %w", path, err)
 	}
 
-	var name strings.Builder
-	for _, c := range stat.Fstypename {
-		if c == 0 {
-			break
-		}
-		name.WriteByte(byte(c))
-	}
-	kind := name.String()
-	remote := remoteFilesystemTypes[kind] || strings.HasPrefix(kind, "fuse")
-
-	return filesystemInfo{kind: kind, remote: remote}, nil
+	kind := unix.ByteSliceToString(stat.Fstypename[:])
+	return filesystemInfo{kind: kind, remote: isRemoteFilesystemType(kind)}, nil
 }
