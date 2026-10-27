@@ -86,3 +86,25 @@ func TestReplaceLocalState_WritesOnlyTheDifference(t *testing.T) {
 	require.NoError(t, err)
 	assert.ElementsMatch(t, next, got, "the stored snapshot equals the new one")
 }
+
+// Validates: R-2.8.17
+func TestReplaceLocalState_RestoringCompleteTruthReportsChange(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	require.NoError(t, store.ReplaceLocalState(ctx, localSnapshotRows()))
+	require.NoError(t, store.MarkLocalTruthSuspect(ctx, localTruthRecoveryWatcherError))
+
+	changed, err := store.ReplaceLocalStateReportingChange(ctx, localSnapshotRows())
+	require.NoError(t, err)
+	assert.True(t, changed, "work held while local truth was suspect must replan once truth is complete again")
+
+	state, err := store.ReadObservationState(ctx)
+	require.NoError(t, err)
+	assert.True(t, state.LocalTruthComplete)
+
+	changed, err = store.ReplaceLocalStateReportingChange(ctx, localSnapshotRows())
+	require.NoError(t, err)
+	assert.False(t, changed, "an unchanged snapshot over complete truth is still no change")
+}

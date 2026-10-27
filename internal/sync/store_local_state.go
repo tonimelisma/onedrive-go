@@ -106,9 +106,13 @@ func (s *SyncStore) replaceLocalState(
 	if backfillErr != nil {
 		return false, nil, backfillErr
 	}
-	if markErr := markLocalTruthCompleteTx(ctx, tx); markErr != nil {
+	becameComplete, markErr := markLocalTruthCompleteTx(ctx, tx)
+	if markErr != nil {
 		return false, nil, markErr
 	}
+	// Restoring complete local truth is a change even when no row moved:
+	// work held or superseded while truth was suspect needs a replan.
+	changed = changed || becameComplete
 	if bind != nil {
 		if bound, err = bindSyncRootIdentityTx(ctx, tx, *bind); err != nil {
 			return false, nil, err
@@ -361,19 +365,23 @@ func deleteLocalStatePrefixTx(ctx context.Context, tx sqlTxRunner, prefix string
 	return nil
 }
 
-func markLocalTruthCompleteTx(ctx context.Context, tx sqlTxRunner) error {
+// markLocalTruthCompleteTx marks local truth complete and reports whether it
+// was not complete before.
+func markLocalTruthCompleteTx(ctx context.Context, tx sqlTxRunner) (bool, error) {
 	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if state.LocalTruthComplete && state.LocalTruthRecoveryReason == "" {
 		// Already complete: rewriting the row would be one more write per
 		// safety scan with nothing to record.
-		return nil
+		return false, nil
 	}
+	wasComplete := state.LocalTruthComplete
 	state.LocalTruthComplete = true
 	state.LocalTruthRecoveryReason = ""
-	return writeObservationStateToTx(ctx, tx, state)
+
+	return !wasComplete, writeObservationStateToTx(ctx, tx, state)
 }
 
 func listLocalStateRows(ctx context.Context, runner sqlTxRunner) ([]localStateRow, error) {
