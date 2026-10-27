@@ -39,24 +39,29 @@ type Engine struct {
 	syncTree        *synctree.Root
 	// rootLock holds the sync root for the engine's lifetime (R-2.9.5).
 	rootLock                 *syncRootLock
-	expectedSyncRootIdentity *synctree.FileIdentity
-	driveID                  driveid.ID
-	driveType                string
-	remoteRootItemID         string
-	remoteRootDeltaCapable   bool
-	logger                   *slog.Logger
-	perfCollector            *perf.Collector
-	sessionStore             *driveops.SessionStore // for CleanStale() housekeeping
-	transferWorkers          int                    // goroutine count for the worker pool
-	checkWorkers             int                    // goroutine limit for parallel file hashing
-	contentFilter            ContentFilterConfig
-	protectedRoots           []ProtectedRoot
-	localRules               LocalObservationRules
-	shortcutNamespaceID      string
-	shortcutChildWorkSink    ShortcutChildWorkSink
-	enableWebsocket          bool
-	minFreeSpace             int64 // startup disk-scope revalidation threshold
-	diskAvailableFn          func(string) (uint64, error)
+	expectedSyncRootIdentity *synctree.RootIdentity
+	// syncRootBindPending is set while a primary engine still has to record
+	// expectedSyncRootIdentity in its store; the first committed local
+	// snapshot clears it. Atomic because one-shot and watch commits can run on
+	// different goroutines.
+	syncRootBindPending    atomic.Bool
+	driveID                driveid.ID
+	driveType              string
+	remoteRootItemID       string
+	remoteRootDeltaCapable bool
+	logger                 *slog.Logger
+	perfCollector          *perf.Collector
+	sessionStore           *driveops.SessionStore // for CleanStale() housekeeping
+	transferWorkers        int                    // goroutine count for the worker pool
+	checkWorkers           int                    // goroutine limit for parallel file hashing
+	contentFilter          ContentFilterConfig
+	protectedRoots         []ProtectedRoot
+	localRules             LocalObservationRules
+	shortcutNamespaceID    string
+	shortcutChildWorkSink  ShortcutChildWorkSink
+	enableWebsocket        bool
+	minFreeSpace           int64 // startup disk-scope revalidation threshold
+	diskAvailableFn        func(string) (uint64, error)
 
 	// Test/debug-only invariant checks. Production keeps this disabled;
 	// tests enable it to catch lifecycle and scope regressions immediately.
@@ -122,11 +127,15 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
 	defer closeEngineSyncStoreOnStartupFailure(ctx, cfg.Logger, bm, &storeOwnedByEngine)()
-	syncTree, err := openSyncTreeWithExpectedIdentity(cfg.SyncRoot, cfg.ExpectedSyncRootIdentity)
+	syncTree, err := openSyncTree(cfg.SyncRoot)
 	if err != nil {
 		return nil, fmt.Errorf("sync: opening sync tree: %w", err)
 	}
 	warnAboutForeignSyncClients(cfg.SyncRoot, cfg.Logger)
+	syncRootBinding, err := resolveExpectedSyncRoot(ctx, bm, syncTree, cfg.ExpectedSyncRootIdentity)
+	if err != nil {
+		return nil, err
+	}
 
 	execCfg := newExecutorConfig(
 		cfg.Items,
@@ -170,7 +179,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		syncRoot:                 cfg.SyncRoot,
 		syncTree:                 syncTree,
 		rootLock:                 rootLock,
-		expectedSyncRootIdentity: cloneFileIdentity(cfg.ExpectedSyncRootIdentity),
+		expectedSyncRootIdentity: syncRootBinding.expected,
 		driveID:                  cfg.DriveID,
 		driveType:                cfg.DriveType,
 		remoteRootItemID:         cfg.RemoteRootItemID,
@@ -195,6 +204,8 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 			return newSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
 		},
 	}
+
+	e.syncRootBindPending.Store(syncRootBinding.bindPending)
 
 	if err := e.refreshProtectedRootsFromStore(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading parent shortcut protected roots: %w", err)
@@ -241,18 +252,30 @@ func closeEngineSyncStoreOnStartupFailure(
 	}
 }
 
-func openSyncTreeWithExpectedIdentity(
-	syncRoot string,
-	expected *synctree.FileIdentity,
-) (*synctree.Root, error) {
-	syncTree, err := synctree.Open(syncRoot)
+func openSyncTree(syncRoot string) (*synctree.Root, error) {
+	resolved, err := resolveSyncRootPath(syncRoot)
+	if err != nil {
+		return nil, err
+	}
+	syncTree, err := synctree.Open(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("opening sync tree: %w", err)
 	}
-	if err := validateExpectedSyncRootIdentity(syncTree, expected); err != nil {
-		return nil, err
-	}
 	return syncTree, nil
+}
+
+// bindSyncRootIdentityAfterCommit records the startup fingerprint of the sync
+// folder once a local snapshot of it has been committed. Later starts refuse a
+// folder that does not match it.
+func (e *Engine) bindSyncRootIdentityAfterCommit(ctx context.Context) error {
+	if e == nil || e.expectedSyncRootIdentity == nil || !e.syncRootBindPending.Load() {
+		return nil
+	}
+	if err := e.baseline.BindSyncRootIdentity(ctx, *e.expectedSyncRootIdentity); err != nil {
+		return fmt.Errorf("sync: recording sync folder identity: %w", err)
+	}
+	e.syncRootBindPending.Store(false)
+	return nil
 }
 
 func (e *Engine) collector() *perf.Collector {

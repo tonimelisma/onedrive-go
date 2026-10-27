@@ -41,6 +41,10 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 		"local_truth_complete",
 		"local_truth_recovery_reason",
 		"next_full_remote_refresh_at",
+		"sync_root_bound",
+		"sync_root_device",
+		"sync_root_inode",
+		"sync_root_fsid",
 	}, columns)
 
 	state, err := store.ReadObservationState(ctx)

@@ -4,7 +4,7 @@ GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/
 
 LAYER: 2
 
-Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified]
+Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified]
 
 ## Overview
 
@@ -58,6 +58,7 @@ except that the type had once been public.
 
 | Behavior | Evidence |
 | --- | --- |
+| A full scan refuses a sync folder that is not the one the state was built from (replaced, an emptied mount point, a re-pointed root symlink) and a sync folder that cannot be read, rather than reading either as deletions; every engine validates against an expected identity, parent-issued for shortcut children and store-recorded for primary roots. | `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestRunOnce_EmptiedMountPointPlansNoRemoteDeletes`, `TestEngine_SymlinkedSyncDirRepointedIsRefused`, `TestRunOnce_SyncRootReplacedWhileEngineRunsIsRefused`, `TestFullScan_RootReadDirEIOReturnsError` |
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly, including filesystem identity for files and directories when available. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestFullScan_StoresFilesystemIdentityForFilesAndDirectories`, `TestFullScan_NosyncMarkerDoesNotGuardSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
 | Watch-mode local observation emits scoped engine-applied batches: exact file rows, directory-prefix deletes, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesExactPath`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
 | Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child work commands to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |

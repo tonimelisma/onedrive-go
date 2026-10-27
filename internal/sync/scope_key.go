@@ -258,7 +258,10 @@ func (sk ScopeKey) BlocksAction(
 }
 
 func scopePathMatches(path, boundary string) bool {
-	if boundary == "" {
+	// "." is how a rooted-relative path spells the sync root itself. A boundary
+	// there covers everything; matching nothing would let every path under an
+	// unreadable root read as deleted (D-005).
+	if boundary == "" || boundary == "." {
 		return true
 	}
 

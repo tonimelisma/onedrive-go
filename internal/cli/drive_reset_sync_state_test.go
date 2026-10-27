@@ -163,7 +163,7 @@ func TestEnsureNoLiveStateResetOwner_AllowsUnmanagedActiveOwner(t *testing.T) {
 		http.Error(w, "unexpected mutation", http.StatusInternalServerError)
 	})
 
-	err := ensureNoLiveStateResetOwner(t.Context(), driveid.MustCanonicalID("personal:reset@example.com"))
+	err := ensureNoLiveSyncOwner(t.Context(), driveid.MustCanonicalID("personal:reset@example.com"), "reset sync state")
 	require.NoError(t, err)
 }
 
@@ -176,7 +176,7 @@ func TestEnsureNoLiveStateResetOwner_ProbeFailureReturnsError(t *testing.T) {
 		http.Error(w, "unexpected mutation", http.StatusInternalServerError)
 	})
 
-	err := ensureNoLiveStateResetOwner(t.Context(), driveid.MustCanonicalID("personal:reset@example.com"))
+	err := ensureNoLiveSyncOwner(t.Context(), driveid.MustCanonicalID("personal:reset@example.com"), "reset sync state")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "probe control owner")
 }

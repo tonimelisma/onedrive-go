@@ -374,6 +374,13 @@ func (o *localObserver) makeWalkFunc(
 	syncRoot := tree.Path()
 
 	return func(fsPath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil && fsPath == syncRoot {
+			// The sync folder itself could not be read (EIO on a dying disk,
+			// a stale network mount). A read boundary would be recorded at
+			// ".", which no path lies under, so every synced file would look
+			// deleted. Nothing about the tree is known: stop the scan (D-005).
+			return fmt.Errorf("%w: reading the sync folder: %w", ErrMountRootUnavailable, walkErr)
+		}
 		if walkErr != nil {
 			// Debug: a persistent unreadable folder would warn on every
 			// scan; the skipped item below is the single user-facing report.

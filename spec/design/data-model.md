@@ -201,6 +201,8 @@ identity and cadence:
 - `content_drive_id`
 - `cursor`
 - `next_full_remote_refresh_at`
+- `sync_root_bound`, `sync_root_device`, `sync_root_inode`, `sync_root_fsid`:
+  the fingerprint of the local sync folder this state was built from
 
 The cursor is committed atomically with the corresponding remote observation
 writes. The stored next-refresh deadline makes periodic remote full-refresh
@@ -224,6 +226,16 @@ SQLite.
 `content_drive_id` identifies the remote drive for the mounted content root that
 owns the DB and cursor. It does not replace the per-row
 `remote_state.drive_id` authority.
+
+The sync-folder fingerprint is recorded with the first committed local
+snapshot (never by a dry run) and is never overwritten by a scan. Engine
+startup and every full scan compare the folder at the sync path against it: the
+inode must match, and the filesystem by `statfs` fsid when both sides have one
+(the device number of the same disk can change between boots), otherwise by
+device number. A mismatch is `ErrMountRootUnavailable`, so an unmounted disk,
+a wiped folder or a re-pointed symlink is refused instead of scanned as a
+deletion of everything. `drive rebind-root` clears the fingerprint so the next
+start binds the folder now there (R-6.2.12).
 
 ## Schema Discipline
 

@@ -74,7 +74,7 @@ func runDriveResetSyncStateWithInput(
 		return fmt.Errorf("drive %q not found in config", driveSelector)
 	}
 
-	if err := ensureNoLiveStateResetOwner(ctx, cid); err != nil {
+	if err := ensureNoLiveSyncOwner(ctx, cid, "reset sync state"); err != nil {
 		return err
 	}
 
@@ -109,7 +109,9 @@ type driveResetSyncStateJSONOutput struct {
 	Reset bool   `json:"reset"`
 }
 
-func ensureNoLiveStateResetOwner(ctx context.Context, canonicalID driveid.CanonicalID) error {
+// ensureNoLiveSyncOwner refuses an offline state mutation (named by action)
+// while a sync owner holds the drive: the owner's next commit would race it.
+func ensureNoLiveSyncOwner(ctx context.Context, canonicalID driveid.CanonicalID, action string) error {
 	probe, err := probeControlOwner(ctx)
 	if err != nil && probe.state == controlOwnerStateProbeFailed {
 		return fmt.Errorf("probe control owner: %w", err)
@@ -124,7 +126,8 @@ func ensureNoLiveStateResetOwner(ctx context.Context, canonicalID driveid.Canoni
 	for _, drive := range probe.client.status.Mounts {
 		if strings.EqualFold(drive, canonicalID.String()) {
 			return fmt.Errorf(
-				"cannot reset sync state while a sync owner is active for %s (owner mode: %s); stop sync first",
+				"cannot %s while a sync owner is active for %s (owner mode: %s); stop sync first",
+				action,
 				canonicalID,
 				probe.client.ownerMode(),
 			)

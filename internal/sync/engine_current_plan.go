@@ -384,7 +384,7 @@ func (flow *engineFlow) commitCurrentLocalSnapshot(
 		return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
 	}
 
-	return nil
+	return flow.engine.bindSyncRootIdentityAfterCommit(ctx)
 }
 
 func (flow *engineFlow) loadDryRunCurrentObservation(

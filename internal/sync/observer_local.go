@@ -160,7 +160,7 @@ type localObserver struct {
 	filterConfig        ContentFilterConfig
 	protectedRoots      []ProtectedRoot
 	observationRules    LocalObservationRules
-	expectedRootID      *synctree.FileIdentity
+	expectedRootID      *synctree.RootIdentity
 	protectedRootEvents protectedRootEventSink
 	watcherFactory      func() (fsWatcher, error)
 	droppedEvents       atomic.Int64 // events dropped by TrySend due to full channel
@@ -269,7 +269,7 @@ func (o *localObserver) SetObservationRules(rules LocalObservationRules) {
 	o.observationRules = rules
 }
 
-func (o *localObserver) SetExpectedRootIdentity(identity *synctree.FileIdentity) {
+func (o *localObserver) SetExpectedRootIdentity(identity *synctree.RootIdentity) {
 	if identity == nil {
 		o.expectedRootID = nil
 		return

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 const (
@@ -15,7 +16,11 @@ const (
 				cursor,
 				next_full_remote_refresh_at,
 				local_truth_complete,
-				local_truth_recovery_reason
+				local_truth_recovery_reason,
+				sync_root_bound,
+				sync_root_device,
+				sync_root_inode,
+				sync_root_fsid
 			FROM observation_state
 			LIMIT 1`
 	sqlEnsureObservationStateRow = `INSERT INTO observation_state
@@ -34,6 +39,10 @@ type observationState struct {
 	NextFullRemoteRefreshAt  int64
 	LocalTruthComplete       bool
 	LocalTruthRecoveryReason string
+	// SyncRootIdentity is the fingerprint of the local folder this state was
+	// built against, recorded with the first committed local snapshot. Nil
+	// until then, and again after an explicit rebind.
+	SyncRootIdentity *synctree.RootIdentity
 }
 
 const (
@@ -120,6 +129,10 @@ func (s *SyncStore) ReadObservationState(ctx context.Context) (*observationState
 		contentDriveID string
 		state          observationState
 		localComplete  int
+		rootBound      int
+		rootDevice     int64
+		rootInode      int64
+		rootFSID       int64
 	)
 
 	if err := s.db.QueryRowContext(ctx, sqlReadObservationState).Scan(
@@ -128,10 +141,15 @@ func (s *SyncStore) ReadObservationState(ctx context.Context) (*observationState
 		&state.NextFullRemoteRefreshAt,
 		&localComplete,
 		&state.LocalTruthRecoveryReason,
+		&rootBound,
+		&rootDevice,
+		&rootInode,
+		&rootFSID,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
 	state.LocalTruthComplete = localComplete != 0
+	state.SyncRootIdentity = syncRootIdentityFromColumns(rootBound, rootDevice, rootInode, rootFSID)
 
 	if contentDriveID != "" {
 		state.ContentDriveID = driveid.New(contentDriveID)
@@ -301,6 +319,10 @@ func readObservationStateFromTx(
 		contentDriveID string
 		state          observationState
 		localComplete  int
+		rootBound      int
+		rootDevice     int64
+		rootInode      int64
+		rootFSID       int64
 	)
 
 	if err := tx.QueryRowContext(ctx, sqlReadObservationState).Scan(
@@ -309,10 +331,15 @@ func readObservationStateFromTx(
 		&state.NextFullRemoteRefreshAt,
 		&localComplete,
 		&state.LocalTruthRecoveryReason,
+		&rootBound,
+		&rootDevice,
+		&rootInode,
+		&rootFSID,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
 	state.LocalTruthComplete = localComplete != 0
+	state.SyncRootIdentity = syncRootIdentityFromColumns(rootBound, rootDevice, rootInode, rootFSID)
 
 	if contentDriveID != "" {
 		state.ContentDriveID = driveid.New(contentDriveID)
@@ -369,24 +396,68 @@ func writeObservationStateToTx(
 	tx sqlTxRunner,
 	state *observationState,
 ) error {
+	rootIdentity := state.SyncRootIdentity
+	if rootIdentity == nil {
+		rootIdentity = &synctree.RootIdentity{}
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM observation_state`); err != nil {
 		return fmt.Errorf("sync: clearing observation_state before write: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO observation_state
-			(content_drive_id, cursor, next_full_remote_refresh_at, local_truth_complete, local_truth_recovery_reason)
-		VALUES (?, ?, ?, ?, ?)`,
+			(content_drive_id, cursor, next_full_remote_refresh_at, local_truth_complete, local_truth_recovery_reason,
+			 sync_root_bound, sync_root_device, sync_root_inode, sync_root_fsid)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		state.ContentDriveID.String(),
 		state.Cursor,
 		state.NextFullRemoteRefreshAt,
 		boolInt(state.LocalTruthComplete),
 		state.LocalTruthRecoveryReason,
+		boolInt(state.SyncRootIdentity != nil),
+		int64(rootIdentity.Device),       //nolint:gosec // SQLite INTEGER stores the uint64 bit pattern
+		int64(rootIdentity.Inode),        //nolint:gosec // SQLite INTEGER stores the uint64 bit pattern
+		int64(rootIdentity.FileSystemID), //nolint:gosec // SQLite INTEGER stores the uint64 bit pattern
 	); err != nil {
 		return fmt.Errorf("sync: writing observation_state: %w", err)
 	}
 
 	return nil
+}
+
+func syncRootIdentityFromColumns(bound int, device, inode, fsid int64) *synctree.RootIdentity {
+	if bound == 0 {
+		return nil
+	}
+
+	return &synctree.RootIdentity{
+		Device:       uint64(device), //nolint:gosec // restores the stored uint64 bit pattern
+		Inode:        uint64(inode),  //nolint:gosec // restores the stored uint64 bit pattern
+		FileSystemID: uint64(fsid),   //nolint:gosec // restores the stored uint64 bit pattern
+	}
+}
+
+// BindSyncRootIdentity records the fingerprint of the local folder this state
+// belongs to. It never overwrites an existing binding: replacing it is the
+// explicit rebind decision (ClearSyncRootIdentity), never a side effect of a
+// scan that may itself be looking at the wrong folder.
+func (s *SyncStore) BindSyncRootIdentity(ctx context.Context, identity synctree.RootIdentity) error {
+	return s.updateObservationState(ctx, func(state *observationState) {
+		if state.SyncRootIdentity != nil {
+			return
+		}
+		bound := identity
+		state.SyncRootIdentity = &bound
+	})
+}
+
+// ClearSyncRootIdentity forgets the recorded sync-folder fingerprint, so the
+// next engine start binds the folder it finds. It is the explicit rebind the
+// user asks for after moving or restoring the sync folder on purpose.
+func (s *SyncStore) ClearSyncRootIdentity(ctx context.Context) error {
+	return s.updateObservationState(ctx, func(state *observationState) {
+		state.SyncRootIdentity = nil
+	})
 }
 
 func (s *SyncStore) MarkLocalTruthSuspect(ctx context.Context, reason string) error {

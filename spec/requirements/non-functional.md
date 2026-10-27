@@ -29,6 +29,8 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.2.8: File operations (ls, get, put, rm, mkdir, stat, mv, cp) shall work independently of sync state — no sync database involved. [verified]
 - R-6.2.10: When a transfer connection stalls without context cancellation, the system shall enforce a per-transfer timeout or connection-level deadline to prevent indefinite hangs. [verified]
 - R-6.2.11: (S9) The system shall never conclude that a local and a remote copy hold the same content without comparing content hashes from both sides. When either side has no hash, equal size shall not be treated as evidence of equality, and the paths shall be reconciled rather than recorded as agreeing. [verified]
+- R-6.2.12: (S10) Each sync state shall be bound to the identity of the local sync folder it was built from, recorded with the first committed local snapshot. When the folder at the sync path no longer matches (replaced, an unmounted disk's empty mount point, a root symlink re-pointed elsewhere), the system shall refuse to scan or plan that drive, naming `drive rebind-root` as the explicit way to accept the new folder. [verified]
+- R-6.2.13: (S11) A read failure on the sync folder itself shall stop the scan as an unavailable sync folder; it shall never be recorded as a read boundary that covers no path, which would make every synced file look deleted. [verified]
 
 ## R-6.3 Process Model [verified]
 

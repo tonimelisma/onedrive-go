@@ -19,7 +19,11 @@ const (
 	//
 	// Generation 18 adds pending_creates: new files whose empty item exists on
 	// OneDrive while their content upload has not committed (R-5.6.15).
-	currentSyncStoreGeneration = 18
+	//
+	// Generation 19 records the sync folder's fingerprint in observation_state,
+	// so a replaced or unmounted folder is refused instead of scanned as a
+	// mass deletion.
+	currentSyncStoreGeneration = 19
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -52,7 +56,11 @@ CREATE TABLE IF NOT EXISTS observation_state (
     cursor                      TEXT    NOT NULL DEFAULT '',
     next_full_remote_refresh_at INTEGER NOT NULL DEFAULT 0,
     local_truth_complete        INTEGER NOT NULL DEFAULT 0 CHECK(local_truth_complete IN (0, 1)),
-    local_truth_recovery_reason TEXT    NOT NULL DEFAULT ''
+    local_truth_recovery_reason TEXT    NOT NULL DEFAULT '',
+    sync_root_bound             INTEGER NOT NULL DEFAULT 0 CHECK(sync_root_bound IN (0, 1)),
+    sync_root_device            INTEGER NOT NULL DEFAULT 0,
+    sync_root_inode             INTEGER NOT NULL DEFAULT 0,
+    sync_root_fsid              INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS pending_creates (
@@ -169,6 +177,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 		"observation_state": {
 			"content_drive_id", "cursor", "next_full_remote_refresh_at",
 			"local_truth_complete", "local_truth_recovery_reason",
+			"sync_root_bound", "sync_root_device", "sync_root_inode", "sync_root_fsid",
 		},
 		"remote_state": {
 			"drive_id", "item_id", "path", "item_type", "hash", "size", "mtime", "etag",
