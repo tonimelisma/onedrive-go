@@ -47,6 +47,7 @@ type RetryWorkFailure struct {
 type observedItem struct {
 	DriveID   driveid.ID
 	ItemID    string
+	ParentID  string // places the children of a shadowed remote twin (store_remote_twins.go)
 	Path      string
 	ItemType  ItemType
 	Hash      string

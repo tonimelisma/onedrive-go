@@ -124,7 +124,7 @@ func observationIssueBlocksLocalTruth(issueType string) bool {
 }
 
 func observationIssueBlocksRemoteTruth(issueType string) bool {
-	return issueType == issueRemoteReadDenied
+	return issueType == issueRemoteReadDenied || issueType == issueRemoteNameTwin
 }
 
 func truthReadBoundaryIssues(observationIssues []ObservationIssueRow, local bool) []ObservationIssueRow {
@@ -137,7 +137,7 @@ func truthReadBoundaryIssues(observationIssues []ObservationIssueRow, local bool
 		switch {
 		case local && observationIssues[i].ScopeKey.IsPermLocalRead():
 			boundaries = append(boundaries, observationIssues[i])
-		case !local && observationIssues[i].ScopeKey.IsPermRemoteRead():
+		case !local && (observationIssues[i].ScopeKey.IsPermRemoteRead() || observationIssues[i].IssueType == issueRemoteNameTwin):
 			boundaries = append(boundaries, observationIssues[i])
 		}
 	}
@@ -154,6 +154,10 @@ func mostSpecificObservationReadBoundary(
 
 	for i := range boundaries {
 		scopePath := boundaries[i].ScopeKey.CoveredPath()
+		if boundaries[i].IssueType == issueRemoteNameTwin {
+			// A remote twin blocks its path and subtree; it has no scope key.
+			scopePath = boundaries[i].Path
+		}
 		if !scopePathMatches(path, scopePath) {
 			continue
 		}

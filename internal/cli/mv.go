@@ -13,6 +13,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 func newMvCmd() *cobra.Command {
@@ -234,15 +235,20 @@ func moveTargetPath(destPath string, dest destInfo) string {
 }
 
 // isWithinRemotePath reports whether target is root or inside it, comparing
-// case-insensitively like OneDrive does.
+// segments under OneDrive's name equivalence (namekey).
 func isWithinRemotePath(target, root string) bool {
-	t := strings.ToLower(driveops.CleanRemotePath(target))
-	r := strings.ToLower(driveops.CleanRemotePath(root))
+	r := driveops.CleanRemotePath(root)
 	if r == "" {
 		return true
 	}
 
-	return t == r || strings.HasPrefix(t, r+"/")
+	targetSegments := strings.Split(driveops.CleanRemotePath(target), "/")
+	rootSegments := strings.Split(r, "/")
+	if len(targetSegments) < len(rootSegments) {
+		return false
+	}
+
+	return namekey.EqualPath(strings.Join(targetSegments[:len(rootSegments)], "/"), r)
 }
 
 // joinDisplayPath names child inside the remote folder dir with the leading

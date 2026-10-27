@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -75,31 +76,69 @@ func (e *executor) remoteSourcePreconditionETag(
 	// Already at the destination with the same identity and content: moving
 	// it (or the parent that carried it) churned its eTag, so eTag is not
 	// compared here.
-	if e.remoteMoveAlreadyApplied(action, row, planned) {
+	if e.remoteMoveAlreadyApplied(action, item, row, planned) {
 		return item.ETag, errRemoteMoveAlreadyApplied
 	}
 	if planned != nil && !remoteRowMatchesLivePreconditionForAction(action, row, planned) {
 		return "", stalePreconditionError("%s remote item %s changed since planning", op, action.ItemID)
 	}
-	if expectedPath := e.expectedRemotePreconditionPath(action); expectedPath != "" &&
-		row.Path != "" && row.Path != expectedPath {
-		return "", stalePreconditionError("%s remote item %s moved to %s", op, action.ItemID, row.Path)
+	if expectedPath := e.expectedRemotePreconditionPath(action); expectedPath != "" {
+		if at, known := e.remoteItemIsAt(item, expectedPath); known && !at {
+			return "", stalePreconditionError("%s remote item %s moved from %s", op, action.ItemID, expectedPath)
+		}
 	}
 
 	return item.ETag, nil
 }
 
-func (e *executor) remoteMoveAlreadyApplied(action *Action, row *remoteStateRow, planned *remoteState) bool {
-	if action.Type != ActionRemoteMove || row.Path == "" || row.Path != action.Path {
+func (e *executor) remoteMoveAlreadyApplied(action *Action, item *graph.Item, row *remoteStateRow, planned *remoteState) bool {
+	if action.Type != ActionRemoteMove {
 		return false
 	}
-	// Mount-root engines cannot compare Graph paths; see
+	// Mount-root engines plan in another coordinate system; see
 	// expectedRemotePreconditionPath.
 	if e.expectedRemotePreconditionPath(action) == "" {
 		return false
 	}
+	if at, known := e.remoteItemIsAt(item, action.Path); !known || !at {
+		return false
+	}
 
 	return planned == nil || remoteRowMatchesLivePrecondition(row, planned, false)
+}
+
+// remoteItemIsAt reports whether a live item sits at relPath: relPath's name
+// in NFC, under the parent the baseline records for relPath's folder. When
+// the baseline does not know that parent, the item's verbatim
+// parentReference.path decides (the drive root for a top-level path). known
+// is false when neither can be established, and callers then skip the check.
+//
+// The location used to be a path rebuilt from a URL-decoded
+// parentReference.path; L-32 showed Graph does not encode it, so a folder
+// literally named "a%20b" read as "a b", and a remote NFD spelling (L-04)
+// as a move.
+func (e *executor) remoteItemIsAt(item *graph.Item, relPath string) (at, known bool) {
+	if item == nil || item.Name == "" {
+		return false, false
+	}
+	if nfcNormalize(item.Name) != nfcNormalize(slashpath.Base(relPath)) {
+		return false, true
+	}
+
+	parentDir := slashpath.Dir(relPath)
+	if parentDir == "." {
+		parentDir = ""
+	}
+	if parentDir != "" && item.ParentID != "" {
+		if parent, ok := e.baseline.GetByPath(parentDir); ok && parent.ItemID != "" {
+			return item.ParentID == parent.ItemID, true
+		}
+	}
+	if !item.ParentPathKnown {
+		return false, false
+	}
+
+	return nfcNormalize(item.ParentPath) == nfcNormalize(parentDir), true
 }
 
 func remoteRowMatchesLivePreconditionForAction(action *Action, row *remoteStateRow, planned *remoteState) bool {
@@ -202,12 +241,17 @@ func remoteStateRowFromGraphItem(item *graph.Item) *remoteStateRow {
 		return nil
 	}
 
+	// NFC, like every path observation stores: OneDrive keeps a name in the
+	// NFD spelling it was uploaded with and refuses to rename it to its NFC
+	// spelling (L-04), so a raw comparison with the NFC action path read an
+	// unchanged NFD item as "moved" and superseded the action forever (D-027).
 	path := ""
 	if item.ParentPathKnown {
 		path = item.Name
 		if item.ParentPath != "" {
 			path = slashpath.Join(item.ParentPath, item.Name)
 		}
+		path = nfcNormalize(path)
 	}
 
 	resolvedType := ItemTypeFile
@@ -461,7 +505,7 @@ func (e *executor) validateLocalMovePrecondition(action *Action) error {
 		}
 		return normalizeSyncTreePathError(err)
 	}
-	if err := e.validateLocalMoveDestinationAbsent(action); err != nil {
+	if err := e.validateLocalMoveDestinationAbsent(action, source, info); err != nil {
 		return err
 	}
 
@@ -496,9 +540,18 @@ func localMoveSourcePath(action *Action) string {
 	return action.Path
 }
 
-func (e *executor) validateLocalMoveDestinationAbsent(action *Action) error {
-	_, destErr := e.syncTree.Lstat(action.Path)
+// validateLocalMoveDestinationAbsent refuses a move onto an existing entry,
+// except the source itself: on a case-insensitive or normalization-insensitive
+// volume (macOS by default) a remote case-only or Unicode-form-only rename
+// finds its destination already "present" as the same inode, and refusing it
+// left the rename stale on every pass forever (D-031).
+func (e *executor) validateLocalMoveDestinationAbsent(action *Action, source string, sourceInfo os.FileInfo) error {
+	destInfo, destErr := e.syncTree.Lstat(action.Path)
 	if destErr == nil {
+		if isLocalSpellingOnlyMove(source, action.Path) && os.SameFile(sourceInfo, destInfo) {
+			return nil
+		}
+
 		return stalePreconditionError("local move destination %s already exists", action.Path)
 	}
 	if !errors.Is(destErr, os.ErrNotExist) {
@@ -658,4 +711,11 @@ func (e *executor) refuseLiveDatabaseTarget(path string) error {
 	}
 
 	return nil
+}
+
+// isLocalSpellingOnlyMove reports a move that changes only the spelling of a
+// name under OneDrive's equivalence (case, Unicode form): the same OneDrive
+// name, a different local one.
+func isLocalSpellingOnlyMove(oldPath, newPath string) bool {
+	return oldPath != newPath && namekey.EqualPath(oldPath, newPath)
 }

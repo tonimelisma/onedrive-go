@@ -7,54 +7,20 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// SimpleUpload uploads a file up to 4 MB using a single PUT request.
-// For larger files, use CreateUploadSession + UploadChunk.
-// The content is sent with application/octet-stream content type. content is
-// an io.ReaderAt so every attempt of the request can resend all size bytes.
-func (c *Client) SimpleUpload(
-	ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64,
-) (*Item, error) {
-	c.logger.Debug("simple upload",
-		slog.String("drive_id", driveID.String()),
-		slog.String("parent_id", parentID),
-		slog.String("name", name),
-		slog.Int64("size", size),
-	)
-
-	// Explicit conflictBehavior=replace prevents reliance on undocumented API
-	// defaults. CreateUploadSession passes this in the JSON body; SimpleUpload
-	// must use a query parameter since the body is the raw file content.
-	path := fmt.Sprintf("/drives/%s/items/%s:/%s:/content?@microsoft.graph.conflictBehavior=replace", driveID, parentID, url.PathEscape(name))
-
-	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", content, size)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
-
-	item, hasItem, err := c.decodeItemBody(resp.Body, "simple upload")
-	if err != nil {
-		return nil, err
-	}
-
-	if !hasItem {
-		return nil, ErrUploadCompletedWithoutItem
-	}
-
-	return item, nil
-}
-
 // SimpleUploadToItem overwrites an existing file by item ID using a single PUT
 // request. Files larger than 4 MiB should use UploadToItem or
 // CreateUploadSessionForItem.
+//
+// A non-empty ifMatch makes the overwrite conditional: Graph answers 412
+// (ErrPreconditionFailed) when the item changed after the caller's
+// preflight (L-02), instead of replacing another writer's edit.
 func (c *Client) SimpleUploadToItem(
-	ctx context.Context, driveID driveid.ID, itemID string, content io.ReaderAt, size int64,
+	ctx context.Context, driveID driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64,
 ) (*Item, error) {
 	c.logger.Debug("simple upload existing item",
 		slog.String("drive_id", driveID.String()),
@@ -64,7 +30,7 @@ func (c *Client) SimpleUploadToItem(
 
 	path := fmt.Sprintf("/drives/%s/items/%s/content", driveID, itemID)
 
-	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", content, size)
+	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", content, size, ifMatch)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +156,7 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, bool, error) {
 // went out chunked and a retry after a 5xx sent the already-drained reader:
 // zero bytes, which replaced the online file with an empty one (D-033).
 func (c *Client) doRawUpload(
-	ctx context.Context, method, path, contentType string, content io.ReaderAt, size int64,
+	ctx context.Context, method, path, contentType string, content io.ReaderAt, size int64, ifMatch string,
 ) (*http.Response, error) {
 	url := c.baseURL + path
 
@@ -218,6 +184,9 @@ func (c *Client) doRawUpload(
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("User-Agent", c.userAgent)
+	if ifMatch != "" {
+		req.Header.Set("If-Match", ifMatch)
+	}
 
 	resp, err := c.dispatchRequest(req)
 	if err != nil {
@@ -275,45 +244,20 @@ func replayableUploadBody(content io.ReaderAt, size int64) io.Reader {
 	return io.NewSectionReader(content, 0, size)
 }
 
-// Upload creates a file under parentID. Every non-empty file goes through an
-// upload session whose create request carries fileSystemInfo, so content and
-// modified time land in one version. The simple PUT plus mtime PATCH this
-// replaced made two versions per upload on Personal as well as Business (live
-// probe 7) for the same request count, and a PATCH failure failed an upload
-// whose content had already landed (D-034). Only a zero-byte file, which a
-// session cannot carry, is still PUT and then PATCHed. The session lifecycle
-// (create, chunk loop, cancel-on-error) is fully encapsulated. content must be
-// an io.ReaderAt so that retries can re-read from arbitrary offsets. progress
-// may be nil.
-//
-// A zero-byte upload whose content landed but whose mtime PATCH failed
-// returns the uploaded item together with a *MtimeNotAppliedError.
-func (c *Client) Upload(
-	ctx context.Context, driveID driveid.ID, parentID, name string,
-	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
-) (*Item, error) {
-	if size == 0 {
-		item, err := c.SimpleUpload(ctx, driveID, parentID, name, content, size)
-		if err != nil {
-			return nil, err
-		}
-
-		return c.finalizeSimpleUpload(ctx, driveID, item, mtime)
-	}
-
-	return c.chunkedUploadEncapsulated(ctx, driveID, parentID, name, content, size, mtime, progress)
-}
-
 // UploadToItem overwrites an existing file by item ID. Like Upload, every
 // non-empty overwrite goes through a session carrying fileSystemInfo and only
 // a zero-byte overwrite is PUT and then PATCHed, with the same
 // *MtimeNotAppliedError contract.
+//
+// A non-empty ifMatch (the eTag the caller's preflight read) makes the
+// overwrite conditional on both routes (L-02): a remote edit after the
+// preflight answers 412 instead of being replaced.
 func (c *Client) UploadToItem(
-	ctx context.Context, driveID driveid.ID, itemID string,
+	ctx context.Context, driveID driveid.ID, itemID, ifMatch string,
 	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
 ) (*Item, error) {
 	if size == 0 {
-		item, err := c.SimpleUploadToItem(ctx, driveID, itemID, content, size)
+		item, err := c.SimpleUploadToItem(ctx, driveID, itemID, ifMatch, content, size)
 		if err != nil {
 			return nil, err
 		}
@@ -321,7 +265,7 @@ func (c *Client) UploadToItem(
 		return c.finalizeSimpleUpload(ctx, driveID, item, mtime)
 	}
 
-	return c.chunkedUploadToExistingItem(ctx, driveID, itemID, content, size, mtime, progress)
+	return c.chunkedUploadToExistingItem(ctx, driveID, itemID, ifMatch, content, size, mtime, progress)
 }
 
 // MtimeNotAppliedError reports a zero-byte upload whose content landed but
@@ -369,44 +313,13 @@ func (c *Client) finalizeSimpleUpload(
 	return patched, nil
 }
 
-// chunkedUploadEncapsulated creates an upload session, uploads all chunks,
-// and cancels the session on any error. Fully encapsulates session lifecycle.
-func (c *Client) chunkedUploadEncapsulated(
-	ctx context.Context, driveID driveid.ID, parentID, name string,
-	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
-) (*Item, error) {
-	session, err := c.CreateUploadSession(ctx, driveID, parentID, name, size, mtime)
-	if err != nil {
-		return nil, err
-	}
-
-	item, err := c.uploadAllChunks(ctx, session, content, size, progress)
-	if err != nil {
-		// Best-effort cancel — detach from cancellation so the upload session is
-		// cleaned up even when the request context has already been canceled.
-		cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
-		defer cancel()
-
-		cancelErr := c.CancelUploadSession(cancelCtx, session)
-		if cancelErr != nil {
-			// Best-effort cleanup the user cannot act on; the upload error
-			// returned below is the report.
-			c.logger.Debug("failed to cancel upload session after error",
-				slog.String("error", cancelErr.Error()),
-			)
-		}
-
-		return nil, err
-	}
-
-	return item, nil
-}
-
+// chunkedUploadToExistingItem uploads content through a session on itemID
+// (conditional on ifMatch when set) and cancels the session on any error.
 func (c *Client) chunkedUploadToExistingItem(
-	ctx context.Context, driveID driveid.ID, itemID string,
+	ctx context.Context, driveID driveid.ID, itemID, ifMatch string,
 	content io.ReaderAt, size int64, mtime time.Time, progress ProgressFunc,
 ) (*Item, error) {
-	session, err := c.CreateUploadSessionForItem(ctx, driveID, itemID, size, mtime)
+	session, err := c.CreateUploadSessionForItem(ctx, driveID, itemID, ifMatch, size, mtime)
 	if err != nil {
 		return nil, err
 	}
@@ -568,7 +481,7 @@ func IsFinalFragmentUncertain(err error) bool {
 }
 
 // UploadFromSession uploads all chunks for an existing upload session.
-// Unlike chunkedUploadEncapsulated, the caller manages session lifecycle
+// Unlike chunkedUploadToExistingItem, the caller manages session lifecycle
 // including cancellation on permanent failure. This allows callers to persist
 // session state for resume across process restarts.
 func (c *Client) UploadFromSession(

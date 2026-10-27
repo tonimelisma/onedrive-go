@@ -1,11 +1,13 @@
 package graph
 
 import (
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func assertNormalizedItems(
@@ -19,66 +21,33 @@ func assertNormalizedItems(
 }
 
 // Validates: R-6.7.8
-func TestDecodeURLEncodedNames(t *testing.T) {
-	items := []Item{
-		{ID: "item-1", Name: "my%20file.txt"},
-		{ID: "item-2", Name: "normal.txt"},
-		{ID: "item-3", Name: "path%2Fslash.txt"},
-		{ID: "item-4", Name: "%E6%97%A5%E6%9C%AC%E8%AA%9E.txt"},
+func TestNormalize_NamesArePassedThroughVerbatim(t *testing.T) {
+	// Live probe (Personal, 2026-10-25): create, GET, /children and /delta all
+	// return these names literally. Decoding them renamed user files
+	// (`a%20b.txt` became `a b.txt`) and invented subfolders (`x%2Fy`).
+	names := []string{
+		"a%20b.txt",
+		"100%25.txt",
+		"test%46.txt",
+		"x%2Fy",
+		"%%",
+		"100%",
+		"%E6%97%A5%E6%9C%AC%E8%AA%9E.txt",
+		"plus+sign.txt",
+		"bad%zzname.txt",
 	}
 
-	assertNormalizedItems(t, items, []Item{
-		{ID: "item-1", Name: "my file.txt"},
-		{ID: "item-2", Name: "normal.txt"},
-		{ID: "item-3", Name: "path/slash.txt"},
-		{ID: "item-4", Name: "日本語.txt"},
-	}, decodeURLEncodedNames)
-}
-
-func TestDecodeURLEncodedNames_NoEncoding(t *testing.T) {
-	items := []Item{
-		{ID: "item-1", Name: "plain.txt"},
-		{ID: "item-2", Name: "also plain.txt"},
+	items := make([]Item, 0, len(names))
+	for i, name := range names {
+		items = append(items, Item{ID: fmt.Sprintf("item-%d", i), Name: name, ParentID: "root"})
 	}
 
-	result := decodeURLEncodedNames(items, testNoopLogger())
+	result := normalizeDeltaItems(items, testNoopLogger())
 
-	assert.Len(t, result, 2)
-	assert.Equal(t, "plain.txt", result[0].Name)
-	assert.Equal(t, "also plain.txt", result[1].Name)
-}
-
-func TestDecodeURLEncodedNames_Empty(t *testing.T) {
-	result := decodeURLEncodedNames([]Item{}, testNoopLogger())
-	assert.Empty(t, result)
-}
-
-func TestDecodeURLEncodedNames_InvalidEscapeKept(t *testing.T) {
-	// A malformed percent-encoding like "%zz" should keep the original name.
-	items := []Item{
-		{ID: "item-1", Name: "bad%zzname.txt"},
+	require.Len(t, result, len(names))
+	for i, name := range names {
+		assert.Equal(t, name, result[i].Name)
 	}
-
-	result := decodeURLEncodedNames(items, testNoopLogger())
-
-	assert.Len(t, result, 1)
-	assert.Equal(t, "bad%zzname.txt", result[0].Name)
-}
-
-func TestNormalizeListedItems_DecodesNamesAndKeepsPackages(t *testing.T) {
-	items := []Item{
-		{ID: "file-1", Name: "doc%20one.txt", IsPackage: false},
-		{ID: "pkg-1", Name: "Notebook%20One", IsPackage: true},
-	}
-
-	result := normalizeListedItems(items, testNoopLogger())
-
-	assert.Len(t, result, 2)
-	assert.Equal(t, "file-1", result[0].ID)
-	assert.Equal(t, "doc one.txt", result[0].Name)
-	assert.Equal(t, "pkg-1", result[1].ID)
-	assert.Equal(t, "Notebook One", result[1].Name)
-	assert.True(t, result[1].IsPackage)
 }
 
 func TestClearDeletedHashes(t *testing.T) {
@@ -250,9 +219,9 @@ func TestNormalizeDeltaItems_FullPipeline(t *testing.T) {
 			assert.Equal(t, "v2-of-file", item.Name)
 		}
 
-		// Verify URL decoding was applied (step 0).
+		// Names are opaque: the percent sequence is part of the name.
 		if item.ID == "create-1" {
-			assert.Equal(t, "new file.txt", item.Name)
+			assert.Equal(t, "new%20file.txt", item.Name)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // moveScenarioRemote is a small in-memory OneDrive for multi-pass engine
@@ -26,10 +28,10 @@ import (
 //     changed), never its unchanged descendants. A fake that returned the
 //     whole tree on every call hid two engine bugs that left descendants at
 //     stale remote paths.
-//   - Names are unique per folder case-insensitively. Uploads replace an
-//     existing file of that name in place (same item ID), and an upload onto
-//     a folder's name fails as Graph's 501 does. Folder creates and moves onto
-//     a taken name fail with 409.
+//   - Names are unique per folder under OneDrive's equivalence (namekey).
+//     A create (upload of a new file, folder create) or move onto a taken
+//     name fails with 409, as the client's create by body with
+//     conflictBehavior=fail does; an overwrite by ID honors If-Match.
 //   - Deleting a folder deletes its subtree.
 //   - A folder's eTag changes whenever anything beneath it changes, but delta
 //     keeps reporting the eTag recorded when the folder was created (see
@@ -54,10 +56,12 @@ type moveScenarioRemote struct {
 	changedAt  map[string]int
 	tombstones map[string]deletedScenarioItem
 
-	uploads       int
-	folderCreates []string
-	deletes       []string
-	moves         []string
+	uploads int
+	// interruptCreates stops every create after its empty item exists.
+	interruptCreates bool
+	folderCreates    []string
+	deletes          []string
+	moves            []string
 }
 
 type deletedScenarioItem struct {
@@ -112,7 +116,7 @@ func (r *moveScenarioRemote) nextID(prefix string) string {
 // compares names: case-insensitively.
 func (r *moveScenarioRemote) childNamed(parentID, name string) (*graph.Item, bool) {
 	for _, item := range r.items {
-		if item.ParentID == parentID && strings.EqualFold(item.Name, name) {
+		if item.ParentID == parentID && namekey.Equal(item.Name, name) {
 			return item, true
 		}
 	}
@@ -395,6 +399,9 @@ func (r *moveScenarioRemote) client(t *testing.T) *engineMockClient {
 		getItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
 			return r.getItemByPath(remotePath)
 		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, parentID string) ([]graph.Item, error) {
+			return r.listChildren(parentID), nil
+		},
 		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
 			return r.download(itemID, w)
 		},
@@ -412,12 +419,30 @@ func (r *moveScenarioRemote) client(t *testing.T) *engineMockClient {
 		) (*graph.Item, error) {
 			return r.upload(t, parentID, name, content, size)
 		},
-		uploadToItemFn: func(
-			_ context.Context, _ driveid.ID, itemID string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc,
+		uploadCreatingFn: func(
+			_ context.Context, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
 		) (*graph.Item, error) {
-			return r.uploadToItem(t, itemID, content, size)
+			return r.uploadCreating(t, parentID, name, content, size, onCreated)
+		},
+		uploadToItemFn: func(
+			_ context.Context, _ driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc,
+		) (*graph.Item, error) {
+			return r.uploadToItem(t, itemID, ifMatch, content, size)
 		},
 	}
+}
+
+func (r *moveScenarioRemote) listChildren(parentID string) []graph.Item {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var children []graph.Item
+	for _, item := range r.items {
+		if item.ParentID == parentID {
+			children = append(children, *item)
+		}
+	}
+
+	return children
 }
 
 func (r *moveScenarioRemote) getItem(itemID string) (*graph.Item, error) {
@@ -506,8 +531,9 @@ func (r *moveScenarioRemote) deleteItem(itemID string) error {
 	return nil
 }
 
-// upload follows conflictBehavior=replace: an existing file of that name
-// keeps its item; a folder of that name refuses the bytes with Graph's 501.
+// upload follows the client's create by body with conflictBehavior=fail
+// (R-5.6.14): any item OneDrive treats as having that name, file or folder,
+// refuses the create with 409 nameAlreadyExists (live probe L-01).
 func (r *moveScenarioRemote) upload(t *testing.T, parentID, name string, content io.ReaderAt, size int64) (*graph.Item, error) {
 	t.Helper()
 	data, err := readScenarioUpload(content, size)
@@ -517,15 +543,8 @@ func (r *moveScenarioRemote) upload(t *testing.T, parentID, name string, content
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.uploads++
-	if existing, exists := r.childNamed(parentID, name); exists {
-		if existing.IsFolder {
-			return nil, &graph.GraphError{
-				StatusCode: 501, Message: "Cannot upload content to an item representing a folder.", Err: graph.ErrServerError,
-			}
-		}
-		r.setContent(t, existing.ID, data)
-		copied := *r.items[existing.ID]
-		return &copied, nil
+	if _, exists := r.childNamed(parentID, name); exists {
+		return nil, scenarioNameConflict()
 	}
 	id := r.nextID("uploaded")
 	r.addFile(t, id, parentID, name, data)
@@ -533,7 +552,51 @@ func (r *moveScenarioRemote) upload(t *testing.T, parentID, name string, content
 	return &copied, nil
 }
 
-func (r *moveScenarioRemote) uploadToItem(t *testing.T, itemID string, content io.ReaderAt, size int64) (*graph.Item, error) {
+// uploadCreating follows the client's two-step create (R-5.6.14): an empty
+// item with conflictBehavior=fail, the hook, then the content by ID. With
+// interruptCreates set it stops after the hook, as a process killed mid-upload
+// would, leaving the empty item behind.
+func (r *moveScenarioRemote) uploadCreating(
+	t *testing.T, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
+) (*graph.Item, error) {
+	t.Helper()
+	data, err := readScenarioUpload(content, size)
+	if err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	if _, exists := r.childNamed(parentID, name); exists {
+		r.mu.Unlock()
+		return nil, scenarioNameConflict()
+	}
+	r.uploads++
+	id := r.nextID("created")
+	r.addFile(t, id, parentID, name, "")
+	created := *r.items[id]
+	interrupt := r.interruptCreates
+	r.mu.Unlock()
+
+	if onCreated != nil {
+		if hookErr := onCreated(&created); hookErr != nil {
+			return nil, &graph.CreatedItemError{Item: &created, Err: hookErr}
+		}
+	}
+	if interrupt {
+		return nil, &graph.CreatedItemError{Item: &created, Err: errors.New("connection reset by peer")}
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if data != "" {
+		r.setContent(t, id, data)
+	}
+	copied := *r.items[id]
+	return &copied, nil
+}
+
+// uploadToItem honors If-Match like Graph does (live probe L-02).
+func (r *moveScenarioRemote) uploadToItem(t *testing.T, itemID, ifMatch string, content io.ReaderAt, size int64) (*graph.Item, error) {
 	t.Helper()
 	data, err := readScenarioUpload(content, size)
 	if err != nil {
@@ -541,8 +604,12 @@ func (r *moveScenarioRemote) uploadToItem(t *testing.T, itemID string, content i
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.items[itemID]; !ok {
+	item, ok := r.items[itemID]
+	if !ok {
 		return nil, graph.ErrNotFound
+	}
+	if ifMatch != "" && item.ETag != ifMatch {
+		return nil, &graph.GraphError{StatusCode: 412, Code: "resourceModified", Err: graph.ErrPreconditionFailed}
 	}
 	r.uploads++
 	r.setContent(t, itemID, data)

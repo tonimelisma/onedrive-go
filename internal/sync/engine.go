@@ -138,6 +138,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		cfg.PathConvergence,
 	)
 	execCfg.SetRemoteRootItemID(cfg.RemoteRootItemID)
+	execCfg.SetPendingCreates(bm)
 	execCfg.SetContentFilter(cfg.ContentFilter)
 
 	// Construct sessionStore and TransferManager together so the TM is

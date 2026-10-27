@@ -1,0 +1,510 @@
+# OneDrive Personal name equivalence, live probe M-1 (probe10*.py), 2026-10-26.
+# Each pair was created as two files "pNNNN-<a>.t" and "pNNNN-<b>.t" with
+# conflictBehavior=fail in one folder: 409 on the second create = SAME.
+# kind	a	b	verdict  (code points, space separated; "(empty)" = nothing)
+fold	U+00B5	U+03BC	different
+fold	U+00DF	U+0073 U+0073	SAME
+fold	U+0149	U+02BC U+006E	different
+fold	U+017F	U+0073	different
+fold	U+01F0	U+006A U+030C	SAME
+singleton	U+0340	U+0300	different
+singleton	U+0341	U+0301	different
+singleton	U+0343	U+0313	different
+exclusion	U+0344	U+0308 U+0301	different
+fold	U+0345	U+03B9	different
+singleton	U+0374	U+02B9	different
+singleton	U+037E	U+003B	different
+singleton	U+0387	U+00B7	different
+fold	U+0390	U+03B9 U+0308 U+0301	different
+fold	U+03B0	U+03C5 U+0308 U+0301	different
+fold	U+03C2	U+03C3	SAME
+fold	U+03D0	U+03B2	different
+fold	U+03D1	U+03B8	different
+fold	U+03D5	U+03C6	different
+fold	U+03D6	U+03C0	different
+fold	U+03F0	U+03BA	different
+fold	U+03F1	U+03C1	different
+fold	U+03F5	U+03B5	different
+fold	U+0587	U+0565 U+0582	different
+exclusion	U+0958	U+0915 U+093C	SAME
+exclusion	U+0959	U+0916 U+093C	SAME
+exclusion	U+095A	U+0917 U+093C	SAME
+exclusion	U+095B	U+091C U+093C	SAME
+exclusion	U+095C	U+0921 U+093C	SAME
+exclusion	U+095D	U+0922 U+093C	SAME
+exclusion	U+095E	U+092B U+093C	SAME
+exclusion	U+095F	U+092F U+093C	SAME
+exclusion	U+09DC	U+09A1 U+09BC	SAME
+exclusion	U+09DD	U+09A2 U+09BC	SAME
+exclusion	U+09DF	U+09AF U+09BC	SAME
+exclusion	U+0A33	U+0A32 U+0A3C	different
+exclusion	U+0A36	U+0A38 U+0A3C	different
+exclusion	U+0A59	U+0A16 U+0A3C	SAME
+exclusion	U+0A5A	U+0A17 U+0A3C	SAME
+exclusion	U+0A5B	U+0A1C U+0A3C	SAME
+exclusion	U+0A5E	U+0A2B U+0A3C	SAME
+exclusion	U+0B5C	U+0B21 U+0B3C	SAME
+exclusion	U+0B5D	U+0B22 U+0B3C	SAME
+exclusion	U+0F43	U+0F42 U+0FB7	SAME
+exclusion	U+0F4D	U+0F4C U+0FB7	SAME
+exclusion	U+0F52	U+0F51 U+0FB7	SAME
+exclusion	U+0F57	U+0F56 U+0FB7	SAME
+exclusion	U+0F5C	U+0F5B U+0FB7	SAME
+exclusion	U+0F69	U+0F40 U+0FB5	SAME
+exclusion	U+0F73	U+0F71 U+0F72	SAME
+exclusion	U+0F75	U+0F71 U+0F74	SAME
+exclusion	U+0F76	U+0FB2 U+0F80	SAME
+exclusion	U+0F78	U+0FB3 U+0F80	SAME
+exclusion	U+0F81	U+0F71 U+0F80	SAME
+exclusion	U+0F93	U+0F92 U+0FB7	SAME
+exclusion	U+0F9D	U+0F9C U+0FB7	SAME
+exclusion	U+0FA2	U+0FA1 U+0FB7	SAME
+exclusion	U+0FA7	U+0FA6 U+0FB7	SAME
+exclusion	U+0FAC	U+0FAB U+0FB7	SAME
+exclusion	U+0FB9	U+0F90 U+0FB5	SAME
+lower	U+13A0	U+AB70	SAME
+lower	U+13A1	U+AB71	SAME
+lower	U+13A2	U+AB72	SAME
+lower	U+13A3	U+AB73	SAME
+lower	U+13A4	U+AB74	SAME
+lower	U+13A5	U+AB75	SAME
+lower	U+13A6	U+AB76	SAME
+lower	U+13A7	U+AB77	SAME
+lower	U+13A8	U+AB78	SAME
+lower	U+13A9	U+AB79	SAME
+lower	U+13AA	U+AB7A	SAME
+lower	U+13AB	U+AB7B	SAME
+lower	U+13AC	U+AB7C	SAME
+lower	U+13AD	U+AB7D	SAME
+lower	U+13AE	U+AB7E	SAME
+lower	U+13AF	U+AB7F	SAME
+lower	U+13B0	U+AB80	SAME
+lower	U+13B1	U+AB81	SAME
+lower	U+13B2	U+AB82	SAME
+lower	U+13B3	U+AB83	SAME
+lower	U+13B4	U+AB84	SAME
+lower	U+13B5	U+AB85	SAME
+lower	U+13B6	U+AB86	SAME
+lower	U+13B7	U+AB87	SAME
+lower	U+13B8	U+AB88	SAME
+lower	U+13B9	U+AB89	SAME
+lower	U+13BA	U+AB8A	SAME
+lower	U+13BB	U+AB8B	SAME
+lower	U+13BC	U+AB8C	SAME
+lower	U+13BD	U+AB8D	SAME
+lower	U+13BE	U+AB8E	SAME
+lower	U+13BF	U+AB8F	SAME
+lower	U+13C0	U+AB90	SAME
+lower	U+13C1	U+AB91	SAME
+lower	U+13C2	U+AB92	SAME
+lower	U+13C3	U+AB93	SAME
+lower	U+13C4	U+AB94	SAME
+lower	U+13C5	U+AB95	SAME
+lower	U+13C6	U+AB96	SAME
+lower	U+13C7	U+AB97	SAME
+lower	U+13C8	U+AB98	SAME
+lower	U+13C9	U+AB99	SAME
+lower	U+13CA	U+AB9A	SAME
+lower	U+13CB	U+AB9B	SAME
+lower	U+13CC	U+AB9C	SAME
+lower	U+13CD	U+AB9D	SAME
+lower	U+13CE	U+AB9E	SAME
+lower	U+13CF	U+AB9F	SAME
+lower	U+13D0	U+ABA0	SAME
+lower	U+13D1	U+ABA1	SAME
+lower	U+13D2	U+ABA2	SAME
+lower	U+13D3	U+ABA3	SAME
+lower	U+13D4	U+ABA4	SAME
+lower	U+13D5	U+ABA5	SAME
+lower	U+13D6	U+ABA6	SAME
+lower	U+13D7	U+ABA7	SAME
+lower	U+13D8	U+ABA8	SAME
+lower	U+13D9	U+ABA9	SAME
+lower	U+13DA	U+ABAA	SAME
+lower	U+13DB	U+ABAB	SAME
+lower	U+13DC	U+ABAC	SAME
+lower	U+13DD	U+ABAD	SAME
+lower	U+13DE	U+ABAE	SAME
+lower	U+13DF	U+ABAF	SAME
+lower	U+13E0	U+ABB0	SAME
+lower	U+13E1	U+ABB1	SAME
+lower	U+13E2	U+ABB2	SAME
+lower	U+13E3	U+ABB3	SAME
+lower	U+13E4	U+ABB4	SAME
+lower	U+13E5	U+ABB5	SAME
+lower	U+13E6	U+ABB6	SAME
+lower	U+13E7	U+ABB7	SAME
+lower	U+13E8	U+ABB8	SAME
+lower	U+13E9	U+ABB9	SAME
+lower	U+13EA	U+ABBA	SAME
+lower	U+13EB	U+ABBB	SAME
+lower	U+13EC	U+ABBC	SAME
+lower	U+13ED	U+ABBD	SAME
+lower	U+13EE	U+ABBE	SAME
+lower	U+13EF	U+ABBF	SAME
+lower	U+13F0	U+13F8	SAME
+lower	U+13F1	U+13F9	SAME
+lower	U+13F2	U+13FA	SAME
+lower	U+13F3	U+13FB	SAME
+lower	U+13F4	U+13FC	SAME
+lower	U+13F5	U+13FD	SAME
+fold	U+13F8	U+13F0	SAME
+fold	U+13F9	U+13F1	SAME
+fold	U+13FA	U+13F2	SAME
+fold	U+13FB	U+13F3	SAME
+fold	U+13FC	U+13F4	SAME
+fold	U+13FD	U+13F5	SAME
+fold	U+1C80	U+0432	different
+fold	U+1C81	U+0434	different
+fold	U+1C82	U+043E	different
+fold	U+1C83	U+0441	different
+fold	U+1C84	U+0442	different
+fold	U+1C85	U+0442	different
+fold	U+1C86	U+044A	different
+fold	U+1C87	U+0463	different
+fold	U+1C88	U+A64B	SAME
+fold	U+1E96	U+0068 U+0331	different
+fold	U+1E97	U+0074 U+0308	SAME
+fold	U+1E98	U+0077 U+030A	SAME
+fold	U+1E99	U+0079 U+030A	SAME
+fold	U+1E9A	U+0061 U+02BE	different
+fold	U+1E9B	U+1E61	different
+fold	U+1E9E	U+0073 U+0073	different
+lower	U+1E9E	U+00DF	different
+fold	U+1F50	U+03C5 U+0313	different
+fold	U+1F52	U+03C5 U+0313 U+0300	different
+fold	U+1F54	U+03C5 U+0313 U+0301	different
+fold	U+1F56	U+03C5 U+0313 U+0342	different
+singleton	U+1F71	U+03AC	different
+singleton	U+1F73	U+03AD	different
+singleton	U+1F75	U+03AE	different
+singleton	U+1F77	U+03AF	different
+singleton	U+1F79	U+03CC	different
+singleton	U+1F7B	U+03CD	different
+singleton	U+1F7D	U+03CE	different
+fold	U+1F80	U+1F00 U+03B9	different
+fold	U+1F81	U+1F01 U+03B9	different
+fold	U+1F82	U+1F02 U+03B9	different
+fold	U+1F83	U+1F03 U+03B9	different
+fold	U+1F84	U+1F04 U+03B9	different
+fold	U+1F85	U+1F05 U+03B9	different
+fold	U+1F86	U+1F06 U+03B9	different
+fold	U+1F87	U+1F07 U+03B9	different
+fold	U+1F88	U+1F00 U+03B9	different
+lower	U+1F88	U+1F80	SAME
+fold	U+1F89	U+1F01 U+03B9	different
+lower	U+1F89	U+1F81	SAME
+fold	U+1F8A	U+1F02 U+03B9	different
+lower	U+1F8A	U+1F82	SAME
+fold	U+1F8B	U+1F03 U+03B9	different
+lower	U+1F8B	U+1F83	SAME
+fold	U+1F8C	U+1F04 U+03B9	different
+lower	U+1F8C	U+1F84	SAME
+fold	U+1F8D	U+1F05 U+03B9	different
+lower	U+1F8D	U+1F85	SAME
+fold	U+1F8E	U+1F06 U+03B9	different
+lower	U+1F8E	U+1F86	SAME
+fold	U+1F8F	U+1F07 U+03B9	different
+lower	U+1F8F	U+1F87	SAME
+fold	U+1F90	U+1F20 U+03B9	different
+fold	U+1F91	U+1F21 U+03B9	different
+fold	U+1F92	U+1F22 U+03B9	different
+fold	U+1F93	U+1F23 U+03B9	different
+fold	U+1F94	U+1F24 U+03B9	different
+fold	U+1F95	U+1F25 U+03B9	different
+fold	U+1F96	U+1F26 U+03B9	different
+fold	U+1F97	U+1F27 U+03B9	different
+fold	U+1F98	U+1F20 U+03B9	different
+lower	U+1F98	U+1F90	SAME
+fold	U+1F99	U+1F21 U+03B9	different
+lower	U+1F99	U+1F91	SAME
+fold	U+1F9A	U+1F22 U+03B9	different
+lower	U+1F9A	U+1F92	SAME
+fold	U+1F9B	U+1F23 U+03B9	different
+lower	U+1F9B	U+1F93	SAME
+fold	U+1F9C	U+1F24 U+03B9	different
+lower	U+1F9C	U+1F94	SAME
+fold	U+1F9D	U+1F25 U+03B9	different
+lower	U+1F9D	U+1F95	SAME
+fold	U+1F9E	U+1F26 U+03B9	different
+lower	U+1F9E	U+1F96	SAME
+fold	U+1F9F	U+1F27 U+03B9	different
+lower	U+1F9F	U+1F97	SAME
+fold	U+1FA0	U+1F60 U+03B9	different
+fold	U+1FA1	U+1F61 U+03B9	different
+fold	U+1FA2	U+1F62 U+03B9	different
+fold	U+1FA3	U+1F63 U+03B9	different
+fold	U+1FA4	U+1F64 U+03B9	different
+fold	U+1FA5	U+1F65 U+03B9	different
+fold	U+1FA6	U+1F66 U+03B9	different
+fold	U+1FA7	U+1F67 U+03B9	different
+fold	U+1FA8	U+1F60 U+03B9	different
+lower	U+1FA8	U+1FA0	SAME
+fold	U+1FA9	U+1F61 U+03B9	different
+lower	U+1FA9	U+1FA1	SAME
+fold	U+1FAA	U+1F62 U+03B9	different
+lower	U+1FAA	U+1FA2	SAME
+fold	U+1FAB	U+1F63 U+03B9	different
+lower	U+1FAB	U+1FA3	SAME
+fold	U+1FAC	U+1F64 U+03B9	different
+lower	U+1FAC	U+1FA4	SAME
+fold	U+1FAD	U+1F65 U+03B9	different
+lower	U+1FAD	U+1FA5	SAME
+fold	U+1FAE	U+1F66 U+03B9	different
+lower	U+1FAE	U+1FA6	SAME
+fold	U+1FAF	U+1F67 U+03B9	different
+lower	U+1FAF	U+1FA7	SAME
+fold	U+1FB2	U+1F70 U+03B9	different
+fold	U+1FB3	U+03B1 U+03B9	different
+fold	U+1FB4	U+03AC U+03B9	different
+fold	U+1FB6	U+03B1 U+0342	different
+fold	U+1FB7	U+03B1 U+0342 U+03B9	different
+singleton	U+1FBB	U+0386	different
+fold	U+1FBC	U+03B1 U+03B9	different
+lower	U+1FBC	U+1FB3	SAME
+fold	U+1FBE	U+03B9	different
+singleton	U+1FBE	U+03B9	different
+fold	U+1FC2	U+1F74 U+03B9	different
+fold	U+1FC3	U+03B7 U+03B9	different
+fold	U+1FC4	U+03AE U+03B9	different
+fold	U+1FC6	U+03B7 U+0342	different
+fold	U+1FC7	U+03B7 U+0342 U+03B9	different
+singleton	U+1FC9	U+0388	different
+singleton	U+1FCB	U+0389	different
+fold	U+1FCC	U+03B7 U+03B9	different
+lower	U+1FCC	U+1FC3	SAME
+fold	U+1FD2	U+03B9 U+0308 U+0300	different
+fold	U+1FD3	U+03B9 U+0308 U+0301	different
+singleton	U+1FD3	U+0390	different
+fold	U+1FD6	U+03B9 U+0342	different
+fold	U+1FD7	U+03B9 U+0308 U+0342	different
+singleton	U+1FDB	U+038A	different
+fold	U+1FE2	U+03C5 U+0308 U+0300	different
+fold	U+1FE3	U+03C5 U+0308 U+0301	different
+singleton	U+1FE3	U+03B0	different
+fold	U+1FE4	U+03C1 U+0313	different
+fold	U+1FE6	U+03C5 U+0342	different
+fold	U+1FE7	U+03C5 U+0308 U+0342	different
+singleton	U+1FEB	U+038E	different
+singleton	U+1FEE	U+0385	different
+singleton	U+1FEF	U+0060	different
+fold	U+1FF2	U+1F7C U+03B9	different
+fold	U+1FF3	U+03C9 U+03B9	different
+fold	U+1FF4	U+03CE U+03B9	different
+fold	U+1FF6	U+03C9 U+0342	different
+fold	U+1FF7	U+03C9 U+0342 U+03B9	different
+singleton	U+1FF9	U+038C	different
+singleton	U+1FFB	U+038F	different
+fold	U+1FFC	U+03C9 U+03B9	different
+lower	U+1FFC	U+1FF3	SAME
+singleton	U+1FFD	U+00B4	different
+singleton	U+2000	U+2002	different
+singleton	U+2001	U+2003	different
+singleton	U+2126	U+03A9	different
+singleton	U+212A	U+004B	different
+singleton	U+212B	U+00C5	SAME
+singleton	U+2329	U+3008	different
+singleton	U+232A	U+3009	different
+exclusion	U+2ADC	U+2ADD U+0338	different
+fold	U+AB70	U+13A0	SAME
+fold	U+AB71	U+13A1	SAME
+fold	U+AB72	U+13A2	SAME
+fold	U+AB73	U+13A3	SAME
+fold	U+AB74	U+13A4	SAME
+fold	U+AB75	U+13A5	SAME
+fold	U+AB76	U+13A6	SAME
+fold	U+AB77	U+13A7	SAME
+fold	U+AB78	U+13A8	SAME
+fold	U+AB79	U+13A9	SAME
+fold	U+AB7A	U+13AA	SAME
+fold	U+AB7B	U+13AB	SAME
+fold	U+AB7C	U+13AC	SAME
+fold	U+AB7D	U+13AD	SAME
+fold	U+AB7E	U+13AE	SAME
+fold	U+AB7F	U+13AF	SAME
+fold	U+AB80	U+13B0	SAME
+fold	U+AB81	U+13B1	SAME
+fold	U+AB82	U+13B2	SAME
+fold	U+AB83	U+13B3	SAME
+fold	U+AB84	U+13B4	SAME
+fold	U+AB85	U+13B5	SAME
+fold	U+AB86	U+13B6	SAME
+fold	U+AB87	U+13B7	SAME
+fold	U+AB88	U+13B8	SAME
+fold	U+AB89	U+13B9	SAME
+fold	U+AB8A	U+13BA	SAME
+fold	U+AB8B	U+13BB	SAME
+fold	U+AB8C	U+13BC	SAME
+fold	U+AB8D	U+13BD	SAME
+fold	U+AB8E	U+13BE	SAME
+fold	U+AB8F	U+13BF	SAME
+fold	U+AB90	U+13C0	SAME
+fold	U+AB91	U+13C1	SAME
+fold	U+AB92	U+13C2	SAME
+fold	U+AB93	U+13C3	SAME
+fold	U+AB94	U+13C4	SAME
+fold	U+AB95	U+13C5	SAME
+fold	U+AB96	U+13C6	SAME
+fold	U+AB97	U+13C7	SAME
+fold	U+AB98	U+13C8	SAME
+fold	U+AB99	U+13C9	SAME
+fold	U+AB9A	U+13CA	SAME
+fold	U+AB9B	U+13CB	SAME
+fold	U+AB9C	U+13CC	SAME
+fold	U+AB9D	U+13CD	SAME
+fold	U+AB9E	U+13CE	SAME
+fold	U+AB9F	U+13CF	SAME
+fold	U+ABA0	U+13D0	SAME
+fold	U+ABA1	U+13D1	SAME
+fold	U+ABA2	U+13D2	SAME
+fold	U+ABA3	U+13D3	SAME
+fold	U+ABA4	U+13D4	SAME
+fold	U+ABA5	U+13D5	SAME
+fold	U+ABA6	U+13D6	SAME
+fold	U+ABA7	U+13D7	SAME
+fold	U+ABA8	U+13D8	SAME
+fold	U+ABA9	U+13D9	SAME
+fold	U+ABAA	U+13DA	SAME
+fold	U+ABAB	U+13DB	SAME
+fold	U+ABAC	U+13DC	SAME
+fold	U+ABAD	U+13DD	SAME
+fold	U+ABAE	U+13DE	SAME
+fold	U+ABAF	U+13DF	SAME
+fold	U+ABB0	U+13E0	SAME
+fold	U+ABB1	U+13E1	SAME
+fold	U+ABB2	U+13E2	SAME
+fold	U+ABB3	U+13E3	SAME
+fold	U+ABB4	U+13E4	SAME
+fold	U+ABB5	U+13E5	SAME
+fold	U+ABB6	U+13E6	SAME
+fold	U+ABB7	U+13E7	SAME
+fold	U+ABB8	U+13E8	SAME
+fold	U+ABB9	U+13E9	SAME
+fold	U+ABBA	U+13EA	SAME
+fold	U+ABBB	U+13EB	SAME
+fold	U+ABBC	U+13EC	SAME
+fold	U+ABBD	U+13ED	SAME
+fold	U+ABBE	U+13EE	SAME
+fold	U+ABBF	U+13EF	SAME
+singleton-cjk	U+F900	U+8C48	different
+singleton-cjk	U+F901	U+66F4	different
+singleton-cjk	U+F902	U+8ECA	different
+singleton-cjk	U+F903	U+8CC8	different
+singleton-cjk	U+F904	U+6ED1	different
+singleton-cjk	U+F905	U+4E32	different
+singleton-cjk	U+F906	U+53E5	different
+singleton-cjk	U+F907	U+9F9C	different
+singleton-cjk	U+F908	U+9F9C	different
+singleton-cjk	U+F909	U+5951	different
+singleton-cjk	U+F90A	U+91D1	different
+singleton-cjk	U+F90B	U+5587	different
+singleton-cjk	U+F90C	U+5948	different
+singleton-cjk	U+F90D	U+61F6	different
+singleton-cjk	U+F90E	U+7669	different
+singleton-cjk	U+F90F	U+7F85	different
+singleton-cjk	U+F910	U+863F	different
+singleton-cjk	U+F911	U+87BA	different
+singleton-cjk	U+F912	U+88F8	different
+singleton-cjk	U+F913	U+908F	different
+fold	U+FB00	U+0066 U+0066	SAME
+fold	U+FB01	U+0066 U+0069	SAME
+fold	U+FB02	U+0066 U+006C	SAME
+fold	U+FB03	U+0066 U+0066 U+0069	SAME
+fold	U+FB04	U+0066 U+0066 U+006C	SAME
+fold	U+FB05	U+0073 U+0074	different
+fold	U+FB06	U+0073 U+0074	SAME
+fold	U+FB13	U+0574 U+0576	different
+fold	U+FB14	U+0574 U+0565	different
+fold	U+FB15	U+0574 U+056B	different
+fold	U+FB16	U+057E U+0576	different
+fold	U+FB17	U+0574 U+056D	different
+exclusion	U+FB1D	U+05D9 U+05B4	different
+exclusion	U+FB1F	U+05F2 U+05B7	different
+exclusion	U+FB2A	U+05E9 U+05C1	different
+exclusion	U+FB2B	U+05E9 U+05C2	different
+exclusion	U+FB2C	U+05E9 U+05BC U+05C1	different
+exclusion	U+FB2D	U+05E9 U+05BC U+05C2	different
+exclusion	U+FB2E	U+05D0 U+05B7	different
+exclusion	U+FB2F	U+05D0 U+05B8	different
+exclusion	U+FB30	U+05D0 U+05BC	different
+exclusion	U+FB31	U+05D1 U+05BC	different
+exclusion	U+FB32	U+05D2 U+05BC	different
+exclusion	U+FB33	U+05D3 U+05BC	different
+exclusion	U+FB34	U+05D4 U+05BC	different
+exclusion	U+FB35	U+05D5 U+05BC	different
+exclusion	U+FB36	U+05D6 U+05BC	different
+exclusion	U+FB38	U+05D8 U+05BC	different
+exclusion	U+FB39	U+05D9 U+05BC	different
+exclusion	U+FB3A	U+05DA U+05BC	different
+exclusion	U+FB3B	U+05DB U+05BC	different
+exclusion	U+FB3C	U+05DC U+05BC	different
+exclusion	U+FB3E	U+05DE U+05BC	different
+exclusion	U+FB40	U+05E0 U+05BC	different
+exclusion	U+FB41	U+05E1 U+05BC	different
+exclusion	U+FB43	U+05E3 U+05BC	different
+exclusion	U+FB44	U+05E4 U+05BC	different
+exclusion	U+FB46	U+05E6 U+05BC	different
+exclusion	U+FB47	U+05E7 U+05BC	different
+exclusion	U+FB48	U+05E8 U+05BC	different
+exclusion	U+FB49	U+05E9 U+05BC	different
+exclusion	U+FB4A	U+05EA U+05BC	different
+exclusion	U+FB4B	U+05D5 U+05B9	different
+exclusion	U+FB4C	U+05D1 U+05BF	different
+exclusion	U+FB4D	U+05DB U+05BF	different
+exclusion	U+FB4E	U+05E4 U+05BF	different
+ignorable	U+0078 U+200D	U+0078	SAME
+ignorable-alone	U+200D	(empty)	SAME
+ignorable	U+0078 U+200C	U+0078	different
+ignorable-alone	U+200C	(empty)	different
+ignorable	U+0078 U+200B	U+0078	different
+ignorable-alone	U+200B	(empty)	different
+ignorable	U+0078 U+00AD	U+0078	different
+ignorable-alone	U+00AD	(empty)	different
+ignorable	U+0078 U+180B	U+0078	SAME
+ignorable-alone	U+180B	(empty)	SAME
+ignorable	U+0078 U+180C	U+0078	SAME
+ignorable-alone	U+180C	(empty)	SAME
+ignorable	U+0078 U+180D	U+0078	SAME
+ignorable-alone	U+180D	(empty)	SAME
+ignorable	U+0078 U+2060	U+0078	SAME
+ignorable-alone	U+2060	(empty)	SAME
+ignorable	U+0078 U+2061	U+0078	SAME
+ignorable-alone	U+2061	(empty)	SAME
+ignorable	U+0078 U+2062	U+0078	SAME
+ignorable-alone	U+2062	(empty)	SAME
+ignorable	U+0078 U+2063	U+0078	SAME
+ignorable-alone	U+2063	(empty)	SAME
+ignorable	U+0078 U+2064	U+0078	SAME
+ignorable-alone	U+2064	(empty)	SAME
+ignorable	U+0078 U+FE00	U+0078	SAME
+ignorable-alone	U+FE00	(empty)	SAME
+ignorable	U+0078 U+FE01	U+0078	SAME
+ignorable-alone	U+FE01	(empty)	SAME
+ignorable	U+0078 U+FE02	U+0078	SAME
+ignorable-alone	U+FE02	(empty)	SAME
+ignorable	U+0078 U+FE03	U+0078	SAME
+ignorable-alone	U+FE03	(empty)	SAME
+ignorable	U+0078 U+FE04	U+0078	SAME
+ignorable-alone	U+FE04	(empty)	SAME
+ignorable	U+0078 U+FE05	U+0078	SAME
+ignorable-alone	U+FE05	(empty)	SAME
+ignorable	U+0078 U+FE06	U+0078	SAME
+ignorable-alone	U+FE06	(empty)	SAME
+ignorable	U+0078 U+FE07	U+0078	SAME
+ignorable-alone	U+FE07	(empty)	SAME
+ignorable	U+0078 U+FE08	U+0078	SAME
+ignorable-alone	U+FE08	(empty)	SAME
+ignorable	U+0078 U+FE09	U+0078	SAME
+ignorable-alone	U+FE09	(empty)	SAME
+ignorable	U+0078 U+FE0A	U+0078	SAME
+ignorable-alone	U+FE0A	(empty)	SAME
+ignorable	U+0078 U+FE0B	U+0078	SAME
+ignorable-alone	U+FE0B	(empty)	SAME
+ignorable	U+0078 U+FE0C	U+0078	SAME
+ignorable-alone	U+FE0C	(empty)	SAME
+ignorable	U+0078 U+FE0D	U+0078	SAME
+ignorable-alone	U+FE0D	(empty)	SAME
+ignorable	U+0078 U+FE0E	U+0078	SAME
+ignorable-alone	U+FE0E	(empty)	SAME
+ignorable	U+0078 U+FE0F	U+0078	SAME
+ignorable-alone	U+FE0F	(empty)	SAME

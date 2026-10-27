@@ -1439,8 +1439,8 @@ func TestBaseline_GetByPath(t *testing.T) {
 		ByPath: map[string]*BaselineEntry{
 			"docs/readme.md": {Path: "docs/readme.md", ItemID: "item1", DriveID: driveid.New("d1")},
 		},
-		ByID:       make(map[string]*BaselineEntry),
-		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
+		ByID:         make(map[string]*BaselineEntry),
+		ByDirNameKey: make(map[DirNameKey][]*BaselineEntry),
 	}
 
 	entry, ok := b.GetByPath("docs/readme.md")
@@ -1459,9 +1459,9 @@ func TestBaseline_GetByID(t *testing.T) {
 	entry := &BaselineEntry{Path: "test.txt", ItemID: "item1", DriveID: driveID}
 
 	b := &Baseline{
-		ByPath:     make(map[string]*BaselineEntry),
-		ByID:       map[string]*BaselineEntry{"item1": entry},
-		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
+		ByPath:       make(map[string]*BaselineEntry),
+		ByID:         map[string]*BaselineEntry{"item1": entry},
+		ByDirNameKey: make(map[DirNameKey][]*BaselineEntry),
 	}
 
 	got, ok := b.GetByID("item1")
@@ -1477,9 +1477,9 @@ func TestBaseline_Put(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		ByPath:     make(map[string]*BaselineEntry),
-		ByID:       make(map[string]*BaselineEntry),
-		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
+		ByPath:       make(map[string]*BaselineEntry),
+		ByID:         make(map[string]*BaselineEntry),
+		ByDirNameKey: make(map[DirNameKey][]*BaselineEntry),
 	}
 
 	entry := &BaselineEntry{
@@ -1509,9 +1509,9 @@ func TestBaseline_Put_ReplacesStaleID(t *testing.T) {
 	oldEntry := &BaselineEntry{Path: "file.txt", DriveID: driveID, ItemID: "old-id"}
 
 	b := &Baseline{
-		ByPath:     map[string]*BaselineEntry{"file.txt": oldEntry},
-		ByID:       map[string]*BaselineEntry{"old-id": oldEntry},
-		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
+		ByPath:       map[string]*BaselineEntry{"file.txt": oldEntry},
+		ByID:         map[string]*BaselineEntry{"old-id": oldEntry},
+		ByDirNameKey: make(map[DirNameKey][]*BaselineEntry),
 	}
 
 	// Put a new entry at the same path but different item_id.
@@ -1542,9 +1542,9 @@ func TestBaseline_Delete(t *testing.T) {
 	entry := &BaselineEntry{Path: "delete-me.txt", DriveID: driveID, ItemID: "item-del"}
 
 	b := &Baseline{
-		ByPath:     map[string]*BaselineEntry{"delete-me.txt": entry},
-		ByID:       map[string]*BaselineEntry{"item-del": entry},
-		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
+		ByPath:       map[string]*BaselineEntry{"delete-me.txt": entry},
+		ByID:         map[string]*BaselineEntry{"item-del": entry},
+		ByDirNameKey: make(map[DirNameKey][]*BaselineEntry),
 	}
 
 	b.Delete("delete-me.txt")
@@ -1568,8 +1568,8 @@ func TestBaseline_Len(t *testing.T) {
 			"a.txt": {Path: "a.txt"},
 			"b.txt": {Path: "b.txt"},
 		},
-		ByID:       make(map[string]*BaselineEntry),
-		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
+		ByID:         make(map[string]*BaselineEntry),
+		ByDirNameKey: make(map[DirNameKey][]*BaselineEntry),
 	}
 
 	assert.Equal(t, 2, b.Len())
@@ -1584,8 +1584,8 @@ func TestBaseline_ForEachPath(t *testing.T) {
 			"a.txt": {Path: "a.txt", ItemID: "i1"},
 			"b.txt": {Path: "b.txt", ItemID: "i2"},
 		},
-		ByID:       make(map[string]*BaselineEntry),
-		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
+		ByID:         make(map[string]*BaselineEntry),
+		ByDirNameKey: make(map[DirNameKey][]*BaselineEntry),
 	}
 
 	paths := make(map[string]bool)
@@ -1603,9 +1603,9 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
 	b := &Baseline{
-		ByPath:     make(map[string]*BaselineEntry),
-		ByID:       make(map[string]*BaselineEntry),
-		ByDirLower: make(map[DirLowerKey][]*BaselineEntry),
+		ByPath:       make(map[string]*BaselineEntry),
+		ByID:         make(map[string]*BaselineEntry),
+		ByDirNameKey: make(map[DirNameKey][]*BaselineEntry),
 	}
 
 	// Seed some entries.

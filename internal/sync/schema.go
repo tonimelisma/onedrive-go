@@ -16,7 +16,10 @@ const (
 	// Generation 17 adds local truth confidence fields to observation_state so
 	// incremental watch commits can distinguish complete local truth from a
 	// suspect snapshot that needs a full local refresh.
-	currentSyncStoreGeneration = 17
+	//
+	// Generation 18 adds pending_creates: new files whose empty item exists on
+	// OneDrive while their content upload has not committed (R-5.6.15).
+	currentSyncStoreGeneration = 18
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -51,6 +54,18 @@ CREATE TABLE IF NOT EXISTS observation_state (
     local_truth_complete        INTEGER NOT NULL DEFAULT 0 CHECK(local_truth_complete IN (0, 1)),
     local_truth_recovery_reason TEXT    NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS pending_creates (
+    item_id       TEXT    NOT NULL PRIMARY KEY,
+    drive_id      TEXT    NOT NULL DEFAULT '',
+    path          TEXT    NOT NULL,
+    parent_id     TEXT    NOT NULL DEFAULT '',
+    created_etag  TEXT    NOT NULL DEFAULT '',
+    local_size    INTEGER NOT NULL DEFAULT 0,
+    local_hash    TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_creates_path ON pending_creates(path);
 
 CREATE TABLE IF NOT EXISTS remote_state (
     drive_id      TEXT    NOT NULL DEFAULT '',
@@ -157,6 +172,9 @@ func canonicalSyncStoreColumns() map[string][]string {
 		},
 		"remote_state": {
 			"drive_id", "item_id", "path", "item_type", "hash", "size", "mtime", "etag",
+		},
+		"pending_creates": {
+			"item_id", "drive_id", "path", "parent_id", "created_etag", "local_size", "local_hash",
 		},
 		"local_state": {
 			"path", "item_type", "hash", "size", "mtime",

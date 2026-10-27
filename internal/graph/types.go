@@ -45,11 +45,13 @@ const ChildCountUnknown = -1
 // Item represents a OneDrive drive item (file, folder, or package).
 // Fields are normalized from the Graph API response — callers never see raw API data.
 type Item struct {
-	ID                string
-	Name              string
-	DriveID           driveid.ID // normalized: lowercase, zero-padded (Graph API casing is inconsistent)
-	ParentID          string
-	ParentPath        string     // decoded root-relative parent path from parentReference.path; empty for root/unknown
+	ID       string
+	Name     string
+	DriveID  driveid.ID // normalized: lowercase, zero-padded (Graph API casing is inconsistent)
+	ParentID string
+	// ParentPath is the verbatim root-relative parent path from
+	// parentReference.path (not URL-encoded, L-32); empty for root/unknown.
+	ParentPath        string
 	ParentPathKnown   bool       // true when parentReference.path was present and valid, including root
 	ParentDriveID     driveid.ID // drive containing parent (for cross-drive references)
 	ParentDriveType   string     // parentReference.driveType: "personal", "business", "documentLibrary"; empty when Graph omits it
@@ -123,6 +125,11 @@ type Organization struct {
 type UploadSession struct {
 	UploadURL      UploadURL // pre-authenticated, ephemeral; redacted via LogValue (B-315)
 	ExpirationTime time.Time
+	// ItemID is the item the session writes. CreatedETag is set when the
+	// session belongs to a file this client just created (CreateUploadSession):
+	// the eTag of that empty item, which a cleanup or a resume can condition on.
+	ItemID      string
+	CreatedETag string
 }
 
 // UploadSessionStatus represents the current state of a resumable upload session.

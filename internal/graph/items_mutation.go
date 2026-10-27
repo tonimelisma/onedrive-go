@@ -9,10 +9,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -65,7 +65,6 @@ func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID,
 	}
 
 	item := dir.toItem(c.logger)
-	normalizeSingleItem(&item, c.logger)
 
 	return &item, nil
 }
@@ -136,7 +135,7 @@ func findCreatedFolder(children []Item, name string) (Item, bool) {
 			return child, true
 		}
 
-		if strings.EqualFold(child.Name, name) {
+		if namekey.Equal(child.Name, name) {
 			if hasFoldedMatch {
 				return Item{}, false
 			}
@@ -208,7 +207,6 @@ func (c *Client) MoveItemIfMatch(
 	}
 
 	item := dir.toItem(c.logger)
-	normalizeSingleItem(&item, c.logger)
 
 	return &item, nil
 }
@@ -310,7 +308,6 @@ func (c *Client) decodeItemBody(body io.Reader, desc string) (item *Item, hasIte
 	}
 
 	decoded := dir.toItem(c.logger)
-	normalizeSingleItem(&decoded, c.logger)
 
 	return &decoded, true, nil
 }

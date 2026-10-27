@@ -88,7 +88,7 @@ func installDryRunContentMutationGuards(t *testing.T, mock *engineMockClient) *a
 		fail("Upload")
 		return nil, fmt.Errorf("dry-run content mutator called: Upload")
 	}
-	mock.uploadToItemFn = func(_ context.Context, _ driveid.ID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+	mock.uploadToItemFn = func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 		fail("UploadToItem")
 		return nil, fmt.Errorf("dry-run content mutator called: UploadToItem")
 	}

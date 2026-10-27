@@ -104,7 +104,7 @@ func TestVerifyBaseline_AllMatch(t *testing.T) {
 				ItemType: syncengine.ItemTypeFile, LocalHash: hash, LocalSize: int64(len(content)), LocalSizeKnown: true,
 			},
 		},
-		ByDirLower: make(map[syncengine.DirLowerKey][]*syncengine.BaselineEntry),
+		ByDirNameKey: make(map[syncengine.DirNameKey][]*syncengine.BaselineEntry),
 	}
 
 	tree, err := synctree.Open(dir)
@@ -131,7 +131,7 @@ func TestVerifyBaseline_MissingFile(t *testing.T) {
 				ItemType: syncengine.ItemTypeFile, LocalHash: "somehash", LocalSize: 100, LocalSizeKnown: true,
 			},
 		},
-		ByDirLower: make(map[syncengine.DirLowerKey][]*syncengine.BaselineEntry),
+		ByDirNameKey: make(map[syncengine.DirNameKey][]*syncengine.BaselineEntry),
 	}
 
 	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
@@ -159,7 +159,7 @@ func TestVerifyBaseline_HashMismatch(t *testing.T) {
 				ItemType: syncengine.ItemTypeFile, LocalHash: "wrong-hash", LocalSize: int64(len(content)), LocalSizeKnown: true,
 			},
 		},
-		ByDirLower: make(map[syncengine.DirLowerKey][]*syncengine.BaselineEntry),
+		ByDirNameKey: make(map[syncengine.DirNameKey][]*syncengine.BaselineEntry),
 	}
 
 	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
@@ -179,8 +179,8 @@ func TestVerifyBaseline_EmptyBaseline(t *testing.T) {
 	require.NoError(t, err)
 
 	bl := &syncengine.Baseline{
-		ByPath:     make(map[string]*syncengine.BaselineEntry),
-		ByDirLower: make(map[syncengine.DirLowerKey][]*syncengine.BaselineEntry),
+		ByPath:       make(map[string]*syncengine.BaselineEntry),
+		ByDirNameKey: make(map[syncengine.DirNameKey][]*syncengine.BaselineEntry),
 	}
 
 	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
@@ -212,7 +212,7 @@ func TestVerifyBaseline_SkipsFolders(t *testing.T) {
 				ItemType: syncengine.ItemTypeFile, LocalHash: hash, LocalSize: int64(len(content)), LocalSizeKnown: true,
 			},
 		},
-		ByDirLower: make(map[syncengine.DirLowerKey][]*syncengine.BaselineEntry),
+		ByDirNameKey: make(map[syncengine.DirNameKey][]*syncengine.BaselineEntry),
 	}
 
 	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
@@ -239,7 +239,7 @@ func TestVerifyBaseline_SizeMismatch(t *testing.T) {
 				ItemType: syncengine.ItemTypeFile, LocalHash: "somehash", LocalSize: 99999, LocalSizeKnown: true,
 			},
 		},
-		ByDirLower: make(map[syncengine.DirLowerKey][]*syncengine.BaselineEntry),
+		ByDirNameKey: make(map[syncengine.DirNameKey][]*syncengine.BaselineEntry),
 	}
 
 	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())

@@ -54,6 +54,11 @@ type SessionRecord struct {
 	// before it was invalidated, not expired (L-02). Zero for records
 	// written before it was kept.
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
+	// ItemID and CreatedETag name the item a create's session writes: the
+	// empty item the create made, and its eTag then. A resume, an adoption
+	// lookup and a later overwrite by ID use them instead of a name lookup.
+	ItemID      string `json:"item_id,omitempty"`
+	CreatedETag string `json:"created_etag,omitempty"`
 }
 
 // UnmarshalJSON implements custom unmarshaling to support both the old

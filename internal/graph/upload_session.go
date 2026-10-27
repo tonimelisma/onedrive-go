@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -17,50 +16,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// CreateUploadSession creates a resumable upload session for a file.
-// The returned UploadSession contains a pre-authenticated upload URL.
-// When mtime is non-zero, fileSystemInfo is included in the request to
-// preserve the local modification timestamp on the server.
-func (c *Client) CreateUploadSession(
-	ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time,
-) (*UploadSession, error) {
-	c.logger.Debug("creating upload session",
-		slog.String("drive_id", driveID.String()),
-		slog.String("parent_id", parentID),
-		slog.String("name", name),
-		slog.Int64("size", size),
-	)
-
-	path := fmt.Sprintf("/drives/%s/items/%s:/%s:/createUploadSession", driveID, parentID, url.PathEscape(name))
-
-	item := uploadSessionItem{ConflictBehavior: "replace", FileSystemInfo: c.newFileSystemInfo(mtime)}
-
-	reqBody := createUploadSessionRequest{Item: item}
-
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("graph: marshaling upload session request: %w", err)
-	}
-
-	resp, err := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
-		name:   QuirkUploadSessionCreateTransient404,
-		policy: c.policies.uploadSessionCreate,
-		match:  isTransientUploadSessionCreateError,
-	}, func() (*http.Response, error) {
-		return c.do(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes))
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
-
-	return c.parseUploadSessionResponse(resp)
-}
-
 // CreateUploadSessionForItem creates a resumable upload session that overwrites
-// an existing file identified by item ID.
+// an existing file identified by item ID. A non-empty ifMatch makes the
+// session conditional: Graph answers 412 when the item no longer has that
+// eTag (L-02), and a session whose item changes later answers its next
+// fragment with 404. A 412 is returned as ErrPreconditionFailed, never
+// retried without the condition: an older report says some drives change
+// the eTag during session creation itself, but Business is unprobed and an
+// unconditional retry could overwrite a concurrent edit.
 func (c *Client) CreateUploadSessionForItem(
-	ctx context.Context, driveID driveid.ID, itemID string, size int64, mtime time.Time,
+	ctx context.Context, driveID driveid.ID, itemID, ifMatch string, size int64, mtime time.Time,
 ) (*UploadSession, error) {
 	c.logger.Debug("creating upload session for existing item",
 		slog.String("drive_id", driveID.String()),
@@ -79,13 +44,19 @@ func (c *Client) CreateUploadSessionForItem(
 		return nil, fmt.Errorf("graph: marshaling upload session request: %w", err)
 	}
 
-	resp, err := c.do(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes))
+	resp, err := c.doRequest(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes), ifMatchHeaders(ifMatch))
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
-	return c.parseUploadSessionResponse(resp)
+	session, err := c.parseUploadSessionResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+	session.ItemID = itemID
+
+	return session, nil
 }
 
 // CancelUploadSession cancels an in-progress upload session.
