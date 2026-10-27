@@ -478,8 +478,11 @@ func TestExecutor_LocalMove_SpellingOnlyRenameOntoSameInodeIsAllowed(t *testing.
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := newExecution(cfg, emptyBaseline())
 
+	coexist := namesCoexist(t, "edit.txt", "EDIT.txt")
 	writeExecTestFile(t, syncRoot, "edit.txt", "content")
-	require.NoError(t, os.Link(filepath.Join(syncRoot, "edit.txt"), filepath.Join(syncRoot, "EDIT.txt")))
+	if coexist {
+		require.NoError(t, os.Link(filepath.Join(syncRoot, "edit.txt"), filepath.Join(syncRoot, "EDIT.txt")))
+	}
 
 	action := &Action{
 		Type:    ActionLocalMove,
@@ -497,6 +500,7 @@ func TestExecutor_LocalMove_SpellingOnlyRenameOntoDifferentFileIsStale(t *testin
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := newExecution(cfg, emptyBaseline())
+	skipUnlessNamesCoexist(t, "edit.txt", "EDIT.txt")
 
 	writeExecTestFile(t, syncRoot, "edit.txt", "content")
 	writeExecTestFile(t, syncRoot, "EDIT.txt", "other content")

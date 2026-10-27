@@ -22,6 +22,7 @@ func TestRunOnce_FullCaseFoldingVariantNeverOverwritesTheSyncedFile(t *testing.T
 	remote.addFile(t, "item-strasse", "root", "straße.txt", "original\n")
 
 	eng, syncRoot := newTestEngine(t, remote.client(t))
+	skipUnlessNamesCoexist(t, "straße.txt", "STRASSE.txt")
 	runScenarioPass(t, eng)
 	require.FileExists(t, filepath.Join(syncRoot, "straße.txt"))
 
