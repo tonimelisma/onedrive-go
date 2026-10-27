@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS held_deletes (
     side       TEXT    NOT NULL CHECK(side IN ('local', 'remote')),
     reason     TEXT    NOT NULL DEFAULT '',
     item_type  TEXT    NOT NULL DEFAULT 'file',
+    item_id    TEXT    NOT NULL DEFAULT '',
     PRIMARY KEY (path, side)
 );
 
@@ -198,7 +199,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"item_id", "drive_id", "path", "parent_id", "created_etag", "local_size", "local_hash",
 		},
 		"held_deletes": {
-			"path", "side", "reason", "item_type",
+			"path", "side", "reason", "item_type", "item_id",
 		},
 		"local_state": {
 			"path", "item_type", "hash", "size", "mtime",

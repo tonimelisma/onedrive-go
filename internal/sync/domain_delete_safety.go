@@ -28,6 +28,9 @@ type heldDelete struct {
 	Side     deleteSafetySide
 	Reason   deleteSafetyReason
 	ItemType ItemType
+	// ItemID binds a confirmation to the item that was held, so the same
+	// path holding a different item later is not covered by it.
+	ItemID string
 }
 
 func deleteSafetySideFor(deleteType actionType) deleteSafetySide {

@@ -78,7 +78,7 @@ intent; multisync receives only that child work intent.
 | Locally deleted or unpaired moved folders are deleted on OneDrive after their descendants, never re-created locally; identity-paired folder moves are one remote move. | `TestQueryReconciliationState_FolderDecisionMatrix`, `TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes`, `TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildMoves`, `TestRunOnce_LocalFolderDeleteDeletesRemoteFolder`, `TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource` |
 | Remote moves applied locally carry the source baseline and do not re-upload unchanged content. | `TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline`, `TestRunOnce_RemoteRenameAppliedLocallyDoesNotReupload` |
 | Type changes on either side are replacements ordered delete-then-create, never a silent stall. | `TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem`, `TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem`, `TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem`, `TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem`, `TestRunOnce_LocalFileReplacedByFolderConverges` |
-| Deletes toward one side are held for confirmation when the other side is empty while the baseline holds files, or when they exceed max(50, 30% of baseline files); moves never count, non-delete work continues, and `sync --confirm-deletes` releases them. | `TestPlanner_MassRemoteDeleteIsHeldForConfirmation`, `TestPlanner_MassLocalDeleteAfterAnomalousFullRefreshIsHeld`, `TestPlanner_EmptiedLocalSideHoldsEvenFewDeletes`, `TestPlanner_DeleteGuardBelowThresholdProceeds`, `TestPlanner_DeleteGuardIgnoresMoves` |
+| Deletes toward one side are held for confirmation when the other side is empty while the baseline holds files, or when they exceed max(50, 30% of baseline files); moves never count, non-delete work continues, and `sync --confirm-deletes` releases them. | `TestPlanner_MassRemoteDeleteIsHeldForConfirmation`, `TestPlanner_MassLocalDeleteAfterAnomalousFullRefreshIsHeld`, `TestPlanner_EmptiedLocalSideHoldsEvenFewDeletes`, `TestPlanner_DeleteGuardBelowThresholdProceeds`, `TestPlanner_DeleteGuardIgnoresMoves`, `TestDeleteSafetyHold_FolderDeletesCountTowardThreshold`, `TestDeleteSafetyHold_LostAndFoundDoesNotMakeASideNonEmpty`, `TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`, `TestDeleteSafetyHold_ConfirmReleasesExactlyTheHeldSet`, `TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked` |
 | Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/planner_actions_test.go`, `internal/sync/planner_dependency_test.go` |
 | Planner decisions stay row-driven and action-shaped across conflict and folder-parent preservation cases. | `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_DownloadOnlyKeepsParentDeleteWhenEditedChildUploadDeferred`, `internal/sync/store_planner_visible_test.go` |
 
@@ -350,10 +350,13 @@ restored folder without its contents, a complete but anomalous remote
 enumeration). So, per direction (product decision P-1):
 
 - **structural**: when the planner-visible snapshot of one side has no
-  non-root entries while the baseline holds files, every delete toward the
-  other side is held, however few;
-- **proportional**: when more than `max(50, 30% of baseline files)` file
-  deletes go toward one side, all deletes toward that side are held.
+  non-root entries while the baseline holds items, every delete toward the
+  other side is held, however few; `lost+found` (an ext mount root keeps one
+  even when the disk is otherwise gone) and the client's own artifacts do not
+  count as entries;
+- **proportional**: when more than `max(50, 30% of baseline items)` deletes,
+  files and folders alike, go toward one side, all deletes toward that side
+  are held.
 
 Moves never count. A held delete is removed from the plan together with
 every action that depends on it, directly or transitively (the create half of
@@ -364,7 +367,10 @@ The hold is re-derived from current truth on every plan, so it stays while
 the evidence is unchanged and lifts by itself when the user restores the
 files. The engine records the held deletes in `held_deletes` for `status`
 (condition `deletes_held`, scope `delete_safety:{local|remote}`) and in the
-pass report. `sync --confirm-deletes` (one-shot only) plans without the hold.
+pass report. `sync --confirm-deletes` (one-shot only) releases exactly the
+recorded held set, matched by path, side and item ID; the rules are then
+applied to every other delete in that pass, so a batch that appeared after the
+user looked is held again rather than waved through.
 The thresholds are fixed policy, not configuration (R-6.4.3).
 
 ## Directional Suppression

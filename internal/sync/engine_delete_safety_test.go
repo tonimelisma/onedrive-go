@@ -241,3 +241,31 @@ func TestRunOnce_DownloadOverwriteKeepsPreviousVersionInTrash(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "keep\n", string(old), "the replaced version is recoverable")
 }
+
+// Validates: R-6.2.5, R-6.4.2
+func TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked(t *testing.T) {
+	t.Parallel()
+
+	remote := seedDeleteSafetyRemote(t, 200)
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	for i := range 70 {
+		require.NoError(t, os.Remove(deleteSafetyFilePath(syncRoot, i)))
+	}
+	report := runScenarioPass(t, eng)
+	require.Equal(t, 70, report.HeldRemoteDeletes, "70 of 203 synced items is above max(50, 61)")
+
+	// After the user saw "70 held" and before confirming, 70 more go.
+	for i := 70; i < 140; i++ {
+		require.NoError(t, os.Remove(deleteSafetyFilePath(syncRoot, i)))
+	}
+	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: true})
+	require.NoError(t, err)
+
+	assert.Len(t, remote.deletes, 70, "only the confirmed set is deleted on OneDrive")
+	assert.Equal(t, 70, report.HeldRemoteDeletes, "the new batch is judged again and held")
+	held := readHeldDeletes(t, eng)
+	require.Len(t, held, 70)
+	assert.Equal(t, "Docs/f071.txt", held[0].Path)
+}

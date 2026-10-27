@@ -592,11 +592,18 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
+	var approved []heldDelete
+	if opts.ConfirmDeletes {
+		approved, err = flow.engine.baseline.listHeldDeletes(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("sync: reading the held deletes to confirm: %w", err)
+		}
+	}
 	if err := applyDeleteSafetyHold(plan, &deleteSafetyInput{
 		Baseline:   planningBaseline(&observation.inputs, bl),
 		LocalRows:  observation.inputs.localRows,
 		RemoteRows: observation.inputs.remoteRows,
-		Confirmed:  opts.ConfirmDeletes,
+		Approved:   approved,
 	}); err != nil {
 		return nil, fmt.Errorf("sync: holding unconfirmed deletes: %w", err)
 	}

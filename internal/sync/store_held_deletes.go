@@ -13,13 +13,14 @@ type HeldDeleteRow struct {
 	Side     string
 	Reason   string
 	ItemType ItemType
+	ItemID   string
 }
 
 // ReplaceHeldDeletes records the current plan's held deletes, replacing the
-// previous plan's. The hold is re-derived from current truth on every plan,
-// so the table is a read-side projection for status, never planner input:
-// an empty list (the hold released, confirmed, or no longer warranted)
-// clears it.
+// previous plan's. The hold is re-derived from current truth on every plan;
+// the table is what `status` shows and the exact set a later
+// `sync --confirm-deletes` approves. An empty list (the hold released,
+// confirmed, or no longer warranted) clears it.
 func (s *SyncStore) ReplaceHeldDeletes(ctx context.Context, held []heldDelete) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
@@ -34,8 +35,8 @@ func (s *SyncStore) ReplaceHeldDeletes(ctx context.Context, held []heldDelete) (
 	}
 	for i := range held {
 		if _, err = tx.ExecContext(ctx,
-			`INSERT OR REPLACE INTO held_deletes (path, side, reason, item_type) VALUES (?, ?, ?, ?)`,
-			held[i].Path, string(held[i].Side), string(held[i].Reason), held[i].ItemType.String(),
+			`INSERT OR REPLACE INTO held_deletes (path, side, reason, item_type, item_id) VALUES (?, ?, ?, ?, ?)`,
+			held[i].Path, string(held[i].Side), string(held[i].Reason), held[i].ItemType.String(), held[i].ItemID,
 		); err != nil {
 			return fmt.Errorf("sync: recording held delete %s: %w", held[i].Path, err)
 		}
@@ -50,7 +51,7 @@ func (s *SyncStore) ReplaceHeldDeletes(ctx context.Context, held []heldDelete) (
 
 func queryHeldDeleteRowsWithRunner(ctx context.Context, runner sqlTxRunner) ([]HeldDeleteRow, error) {
 	rows, err := runner.QueryContext(ctx,
-		`SELECT path, side, reason, item_type FROM held_deletes ORDER BY side, path`)
+		`SELECT path, side, reason, item_type, item_id FROM held_deletes ORDER BY side, path`)
 	if err != nil {
 		return nil, fmt.Errorf("query held deletes: %w", err)
 	}
@@ -62,7 +63,7 @@ func queryHeldDeleteRowsWithRunner(ctx context.Context, runner sqlTxRunner) ([]H
 			row      HeldDeleteRow
 			itemType string
 		)
-		if err := rows.Scan(&row.Path, &row.Side, &row.Reason, &itemType); err != nil {
+		if err := rows.Scan(&row.Path, &row.Side, &row.Reason, &itemType, &row.ItemID); err != nil {
 			return nil, fmt.Errorf("scan held delete: %w", err)
 		}
 		parsed, parseErr := parseItemType(itemType)
@@ -77,4 +78,24 @@ func queryHeldDeleteRowsWithRunner(ctx context.Context, runner sqlTxRunner) ([]H
 	}
 
 	return result, nil
+}
+
+// listHeldDeletes returns the recorded held set, the deletes a
+// `sync --confirm-deletes` pass may release.
+func (s *SyncStore) listHeldDeletes(ctx context.Context) ([]heldDelete, error) {
+	rows, err := queryHeldDeleteRowsWithRunner(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	held := make([]heldDelete, 0, len(rows))
+	for i := range rows {
+		held = append(held, heldDelete{
+			Path:     rows[i].Path,
+			Side:     deleteSafetySide(rows[i].Side),
+			Reason:   deleteSafetyReason(rows[i].Reason),
+			ItemType: rows[i].ItemType,
+			ItemID:   rows[i].ItemID,
+		})
+	}
+	return held, nil
 }

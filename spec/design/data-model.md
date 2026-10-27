@@ -261,9 +261,10 @@ accepted; the delete-safety hold (R-6.2.5) is then the guard.
 
 `held_deletes` lists the deletes the delete-safety hold kept out of the most
 recent live plan: `path`, `side` (`local` or `remote`, where the delete would
-remove content), `reason` (`side_vanished` or `too_many`) and `item_type`.
-It is a read-side projection for `status`, replaced on every live plan and
-never planner input; the planner re-derives the hold from current truth.
+remove content), `reason` (`side_vanished` or `too_many`), `item_type` and
+`item_id`. `sync --confirm-deletes` releases exactly these rows.
+It is replaced on every live plan; the planner re-derives the hold from
+current truth and reads the table only as the set a confirmation approves.
 
 ## Schema Discipline
 

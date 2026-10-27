@@ -14,8 +14,9 @@ type (
 	RunOptions struct {
 		DryRun        bool
 		FullReconcile bool // when true, runs a full delta enumeration + orphan detection
-		// ConfirmDeletes releases the delete-safety hold for this pass: the
-		// deletes it would hold run instead (`sync --confirm-deletes`).
+		// ConfirmDeletes releases the deletes the delete-safety hold
+		// recorded before this pass (`sync --confirm-deletes`); deletes that
+		// appeared since are judged by the hold again.
 		ConfirmDeletes bool
 	}
 	WatchOptions struct {
