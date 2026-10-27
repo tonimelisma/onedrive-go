@@ -10,7 +10,6 @@ import (
 )
 
 const (
-	sqlDeleteLocalState = `DELETE FROM local_state`
 	sqlInsertLocalState = `INSERT OR REPLACE INTO local_state
 		(path, item_type, hash, size, mtime, local_device, local_inode, local_has_identity)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
@@ -56,8 +55,19 @@ func (s *SyncStore) ReplaceLocalState(
 	ctx context.Context,
 	rows []localStateRow,
 ) error {
-	_, err := s.ReplaceLocalStateBindingRoot(ctx, rows, nil, nil)
+	_, _, err := s.replaceLocalState(ctx, rows, nil, nil)
 	return err
+}
+
+// ReplaceLocalStateReportingChange is ReplaceLocalState for callers that need
+// to know whether the snapshot differed from the stored one: the watch
+// runtime replans only when a periodic safety scan found a difference.
+func (s *SyncStore) ReplaceLocalStateReportingChange(
+	ctx context.Context,
+	rows []localStateRow,
+) (bool, error) {
+	changed, _, err := s.replaceLocalState(ctx, rows, nil, nil)
+	return changed, err
 }
 
 // ReplaceLocalStateBindingRoot replaces local_state and, when bind is not
@@ -70,44 +80,55 @@ func (s *SyncStore) ReplaceLocalStateBindingRoot(
 	bind *synctree.RootIdentity,
 	crossedMounts []string,
 ) (bound *synctree.RootIdentity, err error) {
+	_, bound, err = s.replaceLocalState(ctx, rows, bind, crossedMounts)
+	return bound, err
+}
+
+func (s *SyncStore) replaceLocalState(
+	ctx context.Context,
+	rows []localStateRow,
+	bind *synctree.RootIdentity,
+	crossedMounts []string,
+) (changed bool, bound *synctree.RootIdentity, err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return nil, fmt.Errorf("sync: beginning local_state transaction: %w", err)
+		return false, nil, fmt.Errorf("sync: beginning local_state transaction: %w", err)
 	}
 	defer func() {
 		err = finalizeTxRollback(err, tx, "sync: rollback local_state transaction")
 	}()
 
-	if replaceErr := replaceLocalStateTx(ctx, tx, rows); replaceErr != nil {
-		return nil, replaceErr
+	changed, err = replaceLocalStateTx(ctx, tx, rows)
+	if err != nil {
+		return false, nil, err
 	}
 	backfilled, backfillErr := backfillBaselineIdentityTx(ctx, tx)
 	if backfillErr != nil {
-		return nil, backfillErr
+		return false, nil, backfillErr
 	}
 	if markErr := markLocalTruthCompleteTx(ctx, tx); markErr != nil {
-		return nil, markErr
+		return false, nil, markErr
 	}
 	if bind != nil {
 		if bound, err = bindSyncRootIdentityTx(ctx, tx, *bind); err != nil {
-			return nil, err
+			return false, nil, err
 		}
 	}
 	if err := recordMountBoundariesTx(ctx, tx, crossedMounts); err != nil {
-		return nil, err
+		return false, nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("sync: committing local_state transaction: %w", err)
+		return false, nil, fmt.Errorf("sync: committing local_state transaction: %w", err)
 	}
 
 	if backfilled > 0 {
 		if err := s.reloadBaselineCache(ctx); err != nil {
-			return nil, fmt.Errorf("sync: reloading baseline cache after identity backfill: %w", err)
+			return false, nil, fmt.Errorf("sync: reloading baseline cache after identity backfill: %w", err)
 		}
 	}
 
-	return bound, nil
+	return changed, bound, nil
 }
 
 // backfillBaselineIdentityTx attaches the full snapshot's filesystem identity
@@ -242,16 +263,50 @@ func (s *SyncStore) applyLocalStatePatch(
 	return nil
 }
 
+// replaceLocalStateTx makes local_state equal rows by writing only the
+// difference, and reports whether anything changed.
+//
+// It used to delete every row and re-insert the snapshot. Watch mode applies
+// a full snapshot at every five-minute safety scan, so an idle 100k-file tree
+// rewrote 100k rows (and their index entries and WAL pages) every five
+// minutes, gigabytes a day of SSD wear for no change (D-081a).
 func replaceLocalStateTx(
 	ctx context.Context,
 	tx sqlTxRunner,
 	rows []localStateRow,
-) error {
-	if _, err := tx.ExecContext(ctx, sqlDeleteLocalState); err != nil {
-		return fmt.Errorf("sync: deleting local_state rows: %w", err)
+) (bool, error) {
+	current, err := listLocalStateRows(ctx, tx)
+	if err != nil {
+		return false, err
 	}
 
-	return upsertLocalStateRowsTx(ctx, tx, rows)
+	stored := make(map[string]localStateRow, len(current))
+	for i := range current {
+		stored[current[i].Path] = current[i]
+	}
+
+	changed := false
+	for i := range rows {
+		if old, ok := stored[rows[i].Path]; ok {
+			delete(stored, rows[i].Path)
+			if old == rows[i] {
+				continue
+			}
+		}
+		if err := upsertLocalStateRowTx(ctx, tx, rows[i]); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+
+	for path := range stored {
+		if err := deleteLocalStatePathTx(ctx, tx, path); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+
+	return changed, nil
 }
 
 func upsertLocalStateRowsTx(ctx context.Context, tx sqlTxRunner, rows []localStateRow) error {
@@ -310,6 +365,11 @@ func markLocalTruthCompleteTx(ctx context.Context, tx sqlTxRunner) error {
 	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
+	}
+	if state.LocalTruthComplete && state.LocalTruthRecoveryReason == "" {
+		// Already complete: rewriting the row would be one more write per
+		// safety scan with nothing to record.
+		return nil
 	}
 	state.LocalTruthComplete = true
 	state.LocalTruthRecoveryReason = ""
