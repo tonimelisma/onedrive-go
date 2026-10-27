@@ -23,6 +23,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -105,6 +107,67 @@ func (o *localObserver) watchLoop(
 	}
 }
 
+// maxRewatchPerScan bounds how many missing watches one full scan re-adds, so
+// a scan after a large unwatched tree appeared does not stall the watch loop
+// on thousands of Add calls; the rest are added by later scans.
+const maxRewatchPerScan = 256
+
+// rewatchUnwatchedDirectories adds watches for directories a full scan found
+// that have none. Event-driven registration misses directories created while
+// events were lost (a queue overflow) and directories whose Add failed
+// (ENOSPC, ENOMEM, EACCES); before this they stayed unwatched for the rest of
+// the session, every change in them waiting for the next safety scan. A
+// failed Add is not remembered: the next full scan tries again. A resource
+// limit ends the pass early.
+func (o *localObserver) rewatchUnwatchedDirectories(tree *synctree.Root, rows []localStateRow) {
+	if o.activeWatcher == nil || tree == nil {
+		return
+	}
+
+	dirs := []string{"."}
+	for i := range rows {
+		if rows[i].ItemType == ItemTypeFolder {
+			dirs = append(dirs, rows[i].Path)
+		}
+	}
+	// Parents before children: a child's events only arrive once its
+	// parent is watched.
+	slices.SortFunc(dirs, func(a, b string) int {
+		if depth := strings.Count(a, "/") - strings.Count(b, "/"); depth != 0 {
+			return depth
+		}
+		return strings.Compare(a, b)
+	})
+
+	added := 0
+	for _, rel := range dirs {
+		if added >= maxRewatchPerScan {
+			return
+		}
+		fsPath := tree.Path()
+		if rel != "." {
+			fsPath = filepath.Join(fsPath, filepath.FromSlash(rel))
+		}
+		if o.watchedDirs.has(fsPath) {
+			continue
+		}
+
+		if addErr := o.activeWatcher.Add(fsPath); addErr != nil {
+			o.reportWatchAddFailure("failed to re-add watch after full scan", rel, addErr)
+			if _, isLimit := classifyWatchAddError(addErr); isLimit {
+				return
+			}
+			continue
+		}
+		info, _, statErr := statObservedPath(fsPath)
+		if statErr != nil {
+			info = nil
+		}
+		o.watchedDirs.add(fsPath, info)
+		added++
+	}
+}
+
 // rescanUnlessRootGone runs a full rescan, or reports the sync root gone
 // (B-113): a deleted root means the watcher is watching nothing.
 func (o *localObserver) rescanUnlessRootGone(ctx context.Context, tree *synctree.Root, events chan<- changeEvent) error {
@@ -117,6 +180,10 @@ func (o *localObserver) rescanUnlessRootGone(ctx context.Context, tree *synctree
 	}
 
 	o.runSafetyScan(ctx, tree, events)
+	if o.watchUnavailable != nil {
+		return o.watchUnavailable
+	}
+
 	return nil
 }
 
@@ -1251,6 +1318,7 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 	}
 	o.safetyScanFailing = false
 
+	o.rewatchUnwatchedDirectories(tree, result.Rows)
 	o.TrySendFullLocalSnapshot(ctx, result)
 
 	for i := range result.Events {

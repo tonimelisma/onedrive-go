@@ -629,3 +629,80 @@ func TestRunWatch_WatchFallbackRetriesTheWatcher(t *testing.T) {
 
 	stopWatch(t, cancel, done)
 }
+
+func (w *addErrWatcher) addedPaths() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return append([]string(nil), w.added...)
+}
+
+// Validates: R-2.8.13
+func TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	watcher := newAddErrWatcher(nil, nil)
+	timers := make(chan capturedTimer, 4)
+	obs := newWatchTestObserver(t, &watcher.mockFsWatcher, watchObserverTestOptions{
+		AfterFunc: func(delay time.Duration, fn func()) syncTimer {
+			timers <- capturedTimer{delay: delay, fn: fn}
+			return noopSyncTimer{}
+		},
+	})
+	obs.watcherFactory = func() (fsWatcher, error) { return watcher, nil }
+	batches := make(chan localObservationBatch, 8)
+	obs.SetLocalObservationBatchChannel(batches)
+
+	cancel, done := startMockWatch(t, obs, &watcher.mockFsWatcher, dir, make(chan changeEvent, 10))
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	// The kernel dropped the Create for this directory.
+	missed := filepath.Join(dir, "created-during-overflow")
+	require.NoError(t, os.MkdirAll(filepath.Join(missed, "inner"), 0o700))
+	watcher.errs <- fsnotify.ErrEventOverflow
+
+	assert.True(t, receiveBatch(t, batches, "suspect marker").markSuspect)
+	var timer capturedTimer
+	select {
+	case timer = <-timers:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "an overflow must arm a recovery rescan")
+	}
+	timer.fn()
+	require.True(t, receiveBatch(t, batches, "recovery snapshot").fullSnapshot)
+
+	// Before the fix the directory stayed unwatched for the whole session.
+	assert.Contains(t, watcher.addedPaths(), missed, "the recovery scan watches the directory it found")
+	assert.Contains(t, watcher.addedPaths(), filepath.Join(missed, "inner"))
+}
+
+// Validates: R-2.8.13
+func TestRewatchUnwatchedDirectories_FailedAddIsRetriedAtNextScan(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	flaky := filepath.Join(dir, "flaky")
+	require.NoError(t, os.Mkdir(flaky, 0o700))
+	failures := 1
+	watcher := newAddErrWatcher(syscall.ENOSPC, func(name string) bool {
+		if name == flaky && failures > 0 {
+			failures--
+			return true
+		}
+		return false
+	})
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.activeWatcher = watcher
+	tree := mustOpenSyncTree(t, dir)
+	rows := []localStateRow{{Path: "flaky", ItemType: ItemTypeFolder}}
+
+	obs.rewatchUnwatchedDirectories(tree, rows)
+	require.NotContains(t, obs.watchedDirs.paths(), flaky, "the watch limit refused it this time")
+
+	obs.rewatchUnwatchedDirectories(tree, rows)
+	assert.Contains(t, obs.watchedDirs.paths(), flaky, "a failed Add is retried at the next full scan")
+}

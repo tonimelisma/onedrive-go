@@ -508,6 +508,15 @@ type localObserver struct {
 	reportedWatchCauses map[watchUnavailableCause]struct{}
 	safetyScanFailing   bool
 
+	// activeWatcher is the watcher of the running Watch call, so full scans
+	// can re-add watches the event path missed. Watch-loop goroutine only;
+	// nil outside Watch.
+	activeWatcher fsWatcher
+
+	// rootFilesystemChecked keeps the root-filesystem warning to one per
+	// observer when Watch is re-entered after a fallback period.
+	rootFilesystemChecked bool
+
 	// watchUnavailable is set by an event handler when a mid-session watch
 	// failure means watching must stop (kqueue ran out of descriptors). The
 	// watch loop returns it so the runtime falls back to periodic scans and
@@ -902,9 +911,15 @@ func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 	defer o.cancelPendingTimers()
 	defer o.cancelRecoveryScan()
 
+	o.activeWatcher = watcher
+	defer func() { o.activeWatcher = nil }()
+
 	// Pre-flight capacity check (Linux only; no-op on other platforms).
 	checkInotifyCapacity(o.EstimateDirCount(), o.logger)
-	o.adaptToRootFilesystem(syncRoot)
+	if !o.rootFilesystemChecked {
+		o.rootFilesystemChecked = true
+		o.adaptToRootFilesystem(syncRoot)
+	}
 
 	// Walk the sync root to add watches on all existing directories.
 	if walkErr := o.AddWatchesRecursive(ctx, watcher, tree); walkErr != nil {
@@ -918,6 +933,9 @@ func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 		// that window is observed here; subsequent changes are covered by the
 		// installed watcher or the periodic safety scan.
 		o.runSafetyScan(ctx, tree, events)
+		if o.watchUnavailable != nil {
+			return o.watchUnavailable
+		}
 	}
 
 	return o.watchLoop(ctx, watcher, tree, events)
