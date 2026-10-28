@@ -246,10 +246,17 @@ lessons:
 4. `spec/reference/live-recurring-families.md`
 5. `spec/reference/onedrive-glossary.md`
 6. `spec/reference/sync-ecosystem.md`
+7. `spec/reference/live-probes.md`
+8. `spec/reference/rearchitecture-candidates.md`
 
 For live failures, read `live-incidents.md` first to find the chronology and
 matching evidence. Then use `live-recurring-families.md` to open the current
 repo policy for that family without replaying the whole ledger.
+
+`live-probes.md` records every direct Graph probe the code and specs cite by
+ID (L-01, M-1 and so on). `rearchitecture-candidates.md` lists the structural
+changes the hardening work pointed to, each with how to research it before
+committing to it.
 
 This step is what keeps a new developer from treating Graph, OneDrive, and live
 sync behavior as a clean-room abstraction.

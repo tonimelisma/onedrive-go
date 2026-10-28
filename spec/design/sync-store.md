@@ -325,7 +325,7 @@ Administrative write helpers are split by authority:
 
 A new file is created as an empty item first and filled by ID second; until
 the content commits, that empty item is a real OneDrive file (and a
-path-routed upload session makes one too, L-30). Seen by the next pass without
+path-routed upload session makes one too, L-34). Seen by the next pass without
 memory of who made it, it was a create_conflict: the user's file was renamed
 to a conflict copy and the empty file downloaded. `pending_creates`
 (generation 18, `store_pending_creates.go`) is that memory: the executor

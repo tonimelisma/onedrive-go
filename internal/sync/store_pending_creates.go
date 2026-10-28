@@ -11,7 +11,7 @@ import (
 
 // A new file is created on OneDrive in two steps: an empty item first, then
 // its content (create by body, R-5.6.14; a path-routed upload session makes
-// the same visible 0-byte item, L-30). Until the content commits, that empty
+// the same visible 0-byte item, L-34). Until the content commits, that empty
 // item is a real OneDrive file. Seen by the next pass without memory of who
 // made it, it was a create_conflict: the user's file was renamed to a
 // conflict copy and the empty file downloaded in its place.
