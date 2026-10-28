@@ -165,6 +165,7 @@ type modelRun struct {
 	remote   *moveScenarioRemote
 	eng      *testEngine
 	syncRoot string
+	harness  *syncHarness
 	writes   int
 	log      []string
 
@@ -180,10 +181,11 @@ func runModelScenario(t *testing.T, seed uint64) *modelRun {
 
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
 	remote.shuffleDelta(seed)
-	eng, syncRoot := newTestEngine(t, remote.client(t))
+	h := newSyncHarness(t, remote)
+	eng := h.eng
 	run := &modelRun{
 		t: t, seed: seed, rng: rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)), //nolint:gosec // deterministic test RNG
-		remote: remote, eng: eng, syncRoot: syncRoot,
+		remote: remote, eng: eng, syncRoot: h.syncRoot, harness: h,
 	}
 	order := eng.dispatchOrder
 	if order == nil {
@@ -218,12 +220,14 @@ func runModelScenario(t *testing.T, seed uint64) *modelRun {
 		}
 
 		label := fmt.Sprintf("batch %d", batch)
+		h.beginRound(t)
 		run.syncUntilQuiet(label)
 		converged := run.requireConverged(label)
 		run.requireWrittenContentSurvives(label, edits, converged)
 		run.requireUntouchedFilesUnchanged(label, before, edits, converged)
-		requireScenarioQuietPlan(t, eng)
-		run.requireNothingWedged(label)
+		if !assertSyncInvariants(t, h) {
+			require.FailNow(t, "sync invariants violated", "%s: %s", label, run.failureContext())
+		}
 		run.record("%s converged: %v", label, modelPaths(converged))
 	}
 
@@ -245,16 +249,6 @@ func (r *modelRun) recordDispatch(frontier []*trackedAction) {
 	for _, ta := range frontier {
 		r.record("dispatch %s %s <- %s", ta.Action.Type, ta.Action.Path, ta.Action.OldPath)
 	}
-}
-
-// requireNothingWedged checks that nothing is left in retry_work, where a
-// failing or wedged (D-059d) action would wait: a converged model must never
-// need the safety net.
-func (r *modelRun) requireNothingWedged(label string) {
-	var pending int
-	require.NoError(r.t, r.eng.baseline.rawDB().QueryRowContext(r.t.Context(),
-		`SELECT COUNT(*) FROM retry_work`).Scan(&pending))
-	assert.Zero(r.t, pending, "%s: work is parked in retry_work after convergence; %s", label, r.failureContext())
 }
 
 func (r *modelRun) logf(format string, args ...any) {

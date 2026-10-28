@@ -63,7 +63,8 @@ func TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource(t 
 	remote.addFile(t, "item-leaf", "item-still", "leaf.md", "leaf\n")
 	remote.addFolder("item-target", "root", "ünïcødé 日本語 🎉")
 
-	eng, syncRoot := newTestEngine(t, remote.client(t))
+	h := newSyncHarness(t, remote)
+	eng, syncRoot := h.eng, h.syncRoot
 	runScenarioPass(t, eng)
 	require.FileExists(t, filepath.Join(syncRoot, "deep", "er", "still deeper", "leaf.md"))
 
@@ -72,6 +73,7 @@ func TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource(t 
 		filepath.Join(syncRoot, "ünïcødé 日本語 🎉", "moved-deep"),
 	))
 
+	h.beginRound(t)
 	runScenarioPass(t, eng)
 
 	assert.Equal(t, []string{"item-deep->moved-deep"}, remote.moves, "one remote folder move carries the subtree")
@@ -87,7 +89,7 @@ func TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource(t 
 			"ünïcødé 日本語 🎉/moved-deep", "ünïcødé 日本語 🎉/moved-deep/er",
 			"ünïcødé 日本語 🎉/moved-deep/er/still deeper", "ünïcødé 日本語 🎉/moved-deep/er/still deeper/leaf.md",
 		})
-	requireScenarioQuietPlan(t, eng)
+	assertSyncInvariants(t, h)
 
 	// A converged pass afterwards must be quiet.
 	report := runScenarioPass(t, eng)
@@ -336,12 +338,14 @@ func TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift(t *testing.T
 	// which the delete-safety hold would hold for confirmation instead.
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 
-	eng, syncRoot := newTestEngine(t, remote.client(t))
+	h := newSyncHarness(t, remote)
+	eng, syncRoot := h.eng, h.syncRoot
 	runScenarioPass(t, eng)
 	require.FileExists(t, filepath.Join(syncRoot, "probe", "len", "f.txt"))
 
 	// Deleted on OneDrive: the next delta reports only the folder's tombstone.
 	remote.deleteRemotely("item-probe")
+	h.beginRound(t)
 	runScenarioPass(t, eng)
 
 	assert.NoDirExists(t, filepath.Join(syncRoot, "probe"))
@@ -349,7 +353,7 @@ func TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift(t *testing.T
 	require.NoError(t, eng.baseline.rawDB().QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM remote_state WHERE path LIKE 'probe%'`).Scan(&leftover))
 	assert.Zero(t, leftover, "no remote_state rows survive under a deleted folder")
-	requireScenarioQuietPlan(t, eng)
+	assertSyncInvariants(t, h)
 }
 
 // Validates: R-2.17.2, R-2.15.3
@@ -369,12 +373,14 @@ func TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally(t *testing.T
 	remote.addFile(t, "item-moved", "root", "moved.txt", "moved\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 
-	eng, syncRoot := newTestEngine(t, remote.client(t))
+	h := newSyncHarness(t, remote)
+	eng, syncRoot := h.eng, h.syncRoot
 	runScenarioPass(t, eng)
 	require.FileExists(t, filepath.Join(syncRoot, "moved.txt"))
 
 	remote.move("item-moved", "item-bin", "moved.txt")
 	remote.deleteRemotely("item-bin")
+	h.beginRound(t)
 	runScenarioPass(t, eng)
 	runScenarioPass(t, eng)
 
@@ -385,7 +391,7 @@ func TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally(t *testing.T
 	require.NoError(t, eng.baseline.rawDB().QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM remote_state WHERE item_id = 'item-moved'`).Scan(&ghosts))
 	assert.Zero(t, ghosts, "no remote_state row survives for an item deleted with its new parent")
-	requireScenarioQuietPlan(t, eng)
+	assertSyncInvariants(t, h)
 }
 
 // Validates: R-2.17.4, R-2.17.10
@@ -402,7 +408,8 @@ func TestRunOnce_RemoteFileReplacedByNonEmptyFolderWithLocalEditKeepsBoth(t *tes
 	remote.addFile(t, "item-shape", "root", "shape", "file\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 
-	eng, syncRoot := newTestEngine(t, remote.client(t))
+	h := newSyncHarness(t, remote)
+	eng, syncRoot := h.eng, h.syncRoot
 	runScenarioPass(t, eng)
 
 	writeLocalFile(t, syncRoot, "shape", "edited locally\n")
@@ -411,6 +418,7 @@ func TestRunOnce_RemoteFileReplacedByNonEmptyFolderWithLocalEditKeepsBoth(t *tes
 	remote.addFile(t, "item-inner", "item-shape-dir", "inner.txt", "inner\n")
 
 	for range 3 {
+		h.beginRound(t)
 		runScenarioPass(t, eng)
 	}
 
@@ -419,7 +427,7 @@ func TestRunOnce_RemoteFileReplacedByNonEmptyFolderWithLocalEditKeepsBoth(t *tes
 	assert.Equal(t, "inner\n", tree["shape/inner.txt"])
 	assert.Contains(t, modelContents(tree), "edited locally\n", "the local edit survives")
 	assert.FileExists(t, filepath.Join(syncRoot, "shape", "inner.txt"))
-	requireScenarioQuietPlan(t, eng)
+	assertSyncInvariants(t, h)
 }
 
 // Validates: R-2.17.4, R-2.17.10
@@ -598,11 +606,13 @@ func TestRunOnce_RemoteMoveChainIntoVacatedPathConverges(t *testing.T) {
 	remote.addFile(t, "item-inside", "item-c", "inside.txt", "inside\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 
-	eng, syncRoot := newTestEngine(t, remote.client(t))
+	h := newSyncHarness(t, remote)
+	eng, syncRoot := h.eng, h.syncRoot
 	runScenarioPass(t, eng)
 
 	remote.move("item-b", "item-c", "renamed-b.txt")
 	remote.move("item-inside", "root", "b.txt")
+	h.beginRound(t)
 	runScenarioPass(t, eng)
 	runScenarioPass(t, eng)
 
@@ -613,7 +623,7 @@ func TestRunOnce_RemoteMoveChainIntoVacatedPathConverges(t *testing.T) {
 	requireScenarioLocalFile(t, syncRoot, "c/renamed-b.txt", "b\n")
 	assert.NoFileExists(t, filepath.Join(syncRoot, "c", "inside.txt"))
 	assert.Zero(t, remote.uploads, "nothing is uploaded back")
-	requireScenarioQuietPlan(t, eng)
+	assertSyncInvariants(t, h)
 }
 
 func requireScenarioLocalFile(t *testing.T, syncRoot, rel, want string) {

@@ -33,7 +33,9 @@ import (
 //     A create (upload of a new file, folder create) or move onto a taken
 //     name fails with 409, as the client's create by body with
 //     conflictBehavior=fail does; an overwrite by ID honors If-Match.
-//   - Deleting a folder deletes its subtree.
+//   - Deleting a folder deletes its subtree, and a deleted file's content
+//     goes to the recycle bin; an overwrite keeps the replaced content as a
+//     version. Together they are the no-loss oracle (assertSyncInvariants).
 //   - A folder's eTag changes whenever anything beneath it changes, but delta
 //     keeps reporting the eTag recorded when the folder was created (see
 //     observedFolderETags).
@@ -63,6 +65,11 @@ type moveScenarioRemote struct {
 
 	// deltaRand, when set, shuffles every delta page (shuffleDelta).
 	deltaRand *rand.Rand
+
+	// recycled and versions hold every file content OneDrive still keeps
+	// after a delete or an overwrite.
+	recycled []string
+	versions []string
 
 	uploads int
 	// interruptCreates stops every create after its empty item exists.
@@ -151,6 +158,9 @@ func (r *moveScenarioRemote) addFile(t *testing.T, id, parentID, name, content s
 func (r *moveScenarioRemote) setContent(t *testing.T, id, content string) {
 	t.Helper()
 	item := r.items[id]
+	if previous, ok := r.contents[id]; ok && previous != content {
+		r.versions = append(r.versions, previous)
+	}
 	item.Size = int64(len(content))
 	item.QuickXorHash = hashContentQuickXor(t, content)
 	item.ETag = r.nextETag()
@@ -197,6 +207,7 @@ func (r *moveScenarioRemote) remove(id string) {
 	for _, childID := range r.childIDs(id) {
 		r.removeUnreported(childID)
 	}
+	r.recycle(id)
 	delete(r.items, id)
 	delete(r.changedAt, id)
 	r.changeSeq++
@@ -209,8 +220,26 @@ func (r *moveScenarioRemote) removeUnreported(id string) {
 	for _, childID := range r.childIDs(id) {
 		r.removeUnreported(childID)
 	}
+	r.recycle(id)
 	delete(r.items, id)
 	delete(r.changedAt, id)
+}
+
+// recycle moves a deleted file's content to the recycle bin.
+func (r *moveScenarioRemote) recycle(id string) {
+	if content, ok := r.contents[id]; ok {
+		r.recycled = append(r.recycled, content)
+		delete(r.contents, id)
+	}
+}
+
+// retainedContents is every file content OneDrive keeps outside the live
+// tree: the recycle bin and version history.
+func (r *moveScenarioRemote) retainedContents() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append(append([]string(nil), r.recycled...), r.versions...)
 }
 
 func (r *moveScenarioRemote) childIDs(parentID string) []string {
