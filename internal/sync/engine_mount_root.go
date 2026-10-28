@@ -40,7 +40,8 @@ func (flow *engineFlow) observeMountRootRemote(
 ) (mountRootObservation, error) {
 	eng := flow.engine
 	if !eng.hasRemoteMountRoot() {
-		return mountRootObservation{mode: remoteObservationModeEnumerate}, fmt.Errorf("sync: mount-root observation requires a remote root item ID")
+		return mountRootObservation{mode: remoteObservationModeEnumerate},
+			fmt.Errorf("sync: mount-root observation requires a remote root item ID")
 	}
 
 	if eng.preferredMountRootObservationMode() == remoteObservationModeDelta {
@@ -99,7 +100,8 @@ func (flow *engineFlow) observeMountRootRemote(
 	}
 
 	if eng.recursiveLister == nil {
-		return mountRootObservation{mode: remoteObservationModeEnumerate}, fmt.Errorf("sync: recursive lister not available for mount root %s", eng.remoteRootItemID)
+		return mountRootObservation{mode: remoteObservationModeEnumerate},
+			fmt.Errorf("sync: recursive lister not available for mount root %s", eng.remoteRootItemID)
 	}
 
 	items, err := eng.recursiveLister.ListChildrenRecursive(ctx, eng.driveID, eng.remoteRootItemID)
