@@ -370,25 +370,34 @@ func (c *itemConverter) resolveAncestorChain(
 		if _, unreachable := c.unreachableParents[parentID]; unreachable {
 			return
 		}
-		if carried, ok := c.carriedAncestors[parentID]; ok {
-			c.registerInflight(&carried, inflight)
-			continue
-		}
-		if c.ancestorFetches >= maxAncestorFetchesPerWindow || ctx.Err() != nil {
+		ancestor, ok := c.readAncestor(ctx, parentID, parentDriveID)
+		if !ok {
 			return
 		}
-
-		c.ancestorFetches++
-		ancestor, err := c.Items.GetItem(ctx, parentDriveID, parentID)
-		if err != nil || ancestor == nil || ancestor.ID == "" {
-			c.recordAncestorFetchFailure(parentID, parentDriveID, err)
-
-			return
-		}
-
-		c.carryAncestor(ancestor)
 		c.registerInflight(ancestor, inflight)
 	}
+}
+
+// readAncestor returns a missing ancestor carried from an earlier attempt at
+// this window, or reads it by ID while the window's budget lasts.
+func (c *itemConverter) readAncestor(ctx context.Context, parentID string, parentDriveID driveid.ID) (*graph.Item, bool) {
+	if carried, ok := c.carriedAncestors[parentID]; ok {
+		return &carried, true
+	}
+	if c.ancestorFetches >= maxAncestorFetchesPerWindow || ctx.Err() != nil {
+		return nil, false
+	}
+
+	c.ancestorFetches++
+	ancestor, err := c.Items.GetItem(ctx, parentDriveID, parentID)
+	if err != nil || ancestor == nil || ancestor.ID == "" {
+		c.recordAncestorFetchFailure(parentID, parentDriveID, err)
+
+		return nil, false
+	}
+	c.carryAncestor(ancestor)
+
+	return ancestor, true
 }
 
 func (c *itemConverter) carryAncestor(ancestor *graph.Item) {
@@ -519,10 +528,7 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 		return nil
 	}
 
-	// OneNote/package items and bundles (albums) are valid Graph objects,
-	// but they are compound provider objects rather than normal file/folder
-	// content sync can manage (R-2.4.16).
-	if item.IsPackage || item.IsBundle || c.isDescendantOfPackage(item, inflight) {
+	if c.isCompoundProviderItem(item, inflight) {
 		c.Logger.Debug("skipping package item",
 			slog.String("item_id", item.ID),
 			slog.String("name", item.Name),
@@ -551,6 +557,13 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 	}
 
 	return c.classifyAndConvert(item, inflight, itemDriveID, existing)
+}
+
+// isCompoundProviderItem reports OneNote/package items, bundles (albums) and
+// their descendants: valid Graph objects, but compound provider objects
+// rather than normal file/folder content sync can manage (R-2.4.16).
+func (c *itemConverter) isCompoundProviderItem(item *graph.Item, inflight map[string]inflightParent) bool {
+	return item.IsPackage || item.IsBundle || c.isDescendantOfPackage(item, inflight)
 }
 
 // hasUnmaterializableName reports, with a warning, an item whose Graph name
@@ -706,12 +719,7 @@ func (c *itemConverter) classifyAndConvert(
 		CTag:      item.CTag,
 		IsDeleted: item.IsDeleted,
 	}
-	if item.Size < 0 {
-		// Graph has reported negative sizes; one is not a size (R-2.4.16).
-		ev.Size = 0
-		ev.SizeUnknown = true
-	}
-	if !item.IsDeleted && item.TypeFacetMissing && !c.applyBaselineKind(&ev, item, existing) {
+	if !c.normalizeRemoteFacts(&ev, item, existing) {
 		return nil
 	}
 
@@ -773,6 +781,21 @@ func (c *itemConverter) classifyAndConvert(
 	}
 
 	return &ev
+}
+
+// normalizeRemoteFacts repairs facts Graph reports badly (R-2.4.16): a
+// negative size is unknown, and a missing type facet takes the baseline's
+// kind. It reports false when the item cannot be classified at all.
+func (c *itemConverter) normalizeRemoteFacts(ev *changeEvent, item *graph.Item, existing *BaselineEntry) bool {
+	if item.Size < 0 {
+		ev.Size = 0
+		ev.SizeUnknown = true
+	}
+	if item.IsDeleted || !item.TypeFacetMissing {
+		return true
+	}
+
+	return c.applyBaselineKind(ev, item, existing)
 }
 
 // applyBaselineKind settles the kind of an item delta reported without any

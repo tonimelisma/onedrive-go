@@ -136,7 +136,7 @@ func TestFullDelta_SavedTokenRejectedTwiceIsCursorUnusable(t *testing.T) {
 
 			require.Error(t, err)
 			if !tt.unusable {
-				assert.NotErrorIs(t, err, errDeltaExpired)
+				require.NotErrorIs(t, err, errDeltaExpired)
 				assert.Len(t, fetcher.seen(), 1, "not retried as a cursor problem")
 				return
 			}

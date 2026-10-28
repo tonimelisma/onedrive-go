@@ -395,8 +395,8 @@ func TestFullScan_ContentChangedWithRestoredMtimeIsDetected(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	original := "original content"
-	edited := "EDITED! content!"
+	original := "synced version!!"
+	edited := "EDITED version!!"
 	require.Len(t, edited, len(original))
 	writeTestFile(t, dir, "doc.txt", original)
 	fileTime := time.Now().Add(-time.Hour)
@@ -427,8 +427,8 @@ func TestFullScan_IdentityChangeForcesRehash(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	original := "original content"
-	replaced := "replaced content"
+	original := "the synced file!"
+	replaced := "a replacement!!!"
 	require.Len(t, replaced, len(original))
 	writeTestFile(t, dir, "doc.txt", original)
 	fileTime := time.Now().Add(-time.Hour)

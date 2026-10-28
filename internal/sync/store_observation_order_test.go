@@ -164,7 +164,7 @@ func TestCommitObservation_WindowResultIsOrderIndependent(t *testing.T) {
 
 	driveID := driveid.New(testDriveID)
 	const fileCount = 8
-	rng := rand.New(rand.NewPCG(20261028, 1))
+	rng := rand.New(rand.NewPCG(20261028, 1)) //nolint:gosec // deterministic test permutations, not security
 
 	for round := range 40 {
 		// Start: files f0..f7 at n0..n7 plus a folder with one child.

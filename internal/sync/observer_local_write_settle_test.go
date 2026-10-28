@@ -129,7 +129,7 @@ func TestHandleCreate_RenameThatMovedCtimeDefersTheHash(t *testing.T) {
 	oldPath := writeTestFile(t, dir, "original.bin", "content the baseline hashed")
 	before, err := os.Stat(oldPath)
 	require.NoError(t, err)
-	synced := syncedFileAt(t, "original.bin", before, before.Size(), "synced-hash")
+	synced := syncedFileAt(t, "original.bin", before, before.Size(), "hash-before-rename")
 	baseline := baselineWith(synced)
 
 	// The kernel moves ctime on rename, and ctime cannot tell a rename from

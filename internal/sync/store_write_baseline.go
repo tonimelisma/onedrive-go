@@ -402,7 +402,7 @@ func (s *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 // RefreshLocalBaseline updates the local-side comparison tuple for one path
 // while preserving any existing remote-side metadata. If a matching
 // remote_state row exists, it is marked synced in the same transaction.
-func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh localBaselineRefresh) (err error) {
+func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBaselineRefresh) (err error) {
 	if s.baseline == nil {
 		if _, loadErr := s.Load(ctx); loadErr != nil {
 			return fmt.Errorf("sync: loading baseline before refresh local baseline: %w", loadErr)

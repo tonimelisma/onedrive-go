@@ -1090,7 +1090,7 @@ func createCorruptRemoteStateDB(t *testing.T, dbPath string) {
 	require.NoError(t, db.QueryRowContext(t.Context(), `PRAGMA page_size`).Scan(&pageSize))
 	require.NoError(t, store.Close(t.Context()))
 
-	file, err := os.OpenFile(dbPath, os.O_RDWR, 0)
+	file, err := os.OpenFile(dbPath, os.O_RDWR, 0) //nolint:gosec // test damages its own temp DB
 	require.NoError(t, err)
 	// 0x00 is not a valid b-tree page type (2, 5, 10 and 13 are).
 	_, err = file.WriteAt([]byte{0x00}, (rootPage-1)*pageSize)

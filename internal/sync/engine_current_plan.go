@@ -336,7 +336,7 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 	if err != nil {
 		if errors.Is(err, errDeltaExpired) {
 			// The caller recovers through the full refresh with orphan
-			// detection (R-2.15.3); keep the resync flavour in the chain.
+			// detection (R-2.15.3); keep the resync flavor in the chain.
 			return nil, "", shortcutTopologyBatch{}, err
 		}
 		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: observing remote delta: %w", err)

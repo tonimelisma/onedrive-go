@@ -16,7 +16,7 @@ import (
 )
 
 // deltaGone is the 410 OneDrive answers for an expired delta token, with the
-// resync flavour as its inner code ("" for a bare 410).
+// resync flavor as its inner code ("" for a bare 410).
 func deltaGone(innerCode string) error {
 	graphErr := &graph.GraphError{StatusCode: 410, Code: "resyncRequired", Err: graph.ErrGone}
 	if innerCode != "" {
@@ -82,7 +82,7 @@ func TestRunOnce_DeltaExpiredUploadDifferencesKeepsAndReuploadsLocal(t *testing.
 		gone error
 	}{
 		{name: "upload differences", gone: deltaGone("resyncChangesUploadDifferences")},
-		{name: "unknown flavour", gone: deltaGone("")},
+		{name: "unknown flavor", gone: deltaGone("")},
 		{name: "bare 410", gone: graph.ErrGone},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -114,7 +114,7 @@ func TestRunOnce_DeltaExpiredUploadDifferencesKeepsAndReuploadsLocal(t *testing.
 }
 
 // Validates: R-2.15.3
-func TestMountRootEvents_ResyncFlavourDecidesWhatAnOrphanMeans(t *testing.T) {
+func TestMountRootEvents_ResyncFlavorDecidesWhatAnOrphanMeans(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -148,7 +148,7 @@ func TestMountRootEvents_ResyncFlavourDecidesWhatAnOrphanMeans(t *testing.T) {
 }
 
 // Validates: R-2.15.3
-func TestNewDeltaExpiredError_ParsesTheResyncFlavour(t *testing.T) {
+func TestNewDeltaExpiredError_ParsesTheResyncFlavor(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, resyncKindApplyDifferences, resyncKindOf(newDeltaExpiredError(deltaGone("resyncChangesApplyDifferences"))))
@@ -221,7 +221,7 @@ func TestWatch_DeltaExpiredRecoversThroughTheFullRefresh(t *testing.T) {
 		done <- obs.Watch(ctx, "expired-token", batches, time.Hour, nil, nil)
 	}()
 
-	assert.Equal(t, resyncKindUploadDifferences, <-recovered, "the resync flavour reaches the full refresh")
+	assert.Equal(t, resyncKindUploadDifferences, <-recovered, "the resync flavor reaches the full refresh")
 	emitted := <-events
 	assert.True(t, emitted.ReuploadLocal, "the full refresh's batch, orphans included, is what watch emits")
 	require.Eventually(t, func() bool { return obs.CurrentDeltaToken() == "token-after-full-refresh" },

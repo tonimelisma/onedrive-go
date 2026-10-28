@@ -414,7 +414,7 @@ means:
 - `resyncChangesApplyDifferences`: OneDrive's view is current, an orphan was
   deleted, and the local delete goes through the delete-safety hold (D-002)
   like any other;
-- `resyncChangesUploadDifferences`, or no recognised code: OneDrive asks for
+- `resyncChangesUploadDifferences`, or no recognized code: OneDrive asks for
   the items it did not return to be uploaded again. The orphan's remote row
   goes and so do its baseline rows (`ReuploadLocal`), so a surviving local copy
   plans as an upload. It is never a local delete.
@@ -423,7 +423,7 @@ A full refresh this client starts on its own schedule is apply-differences.
 
 | Behavior | Evidence |
 | --- | --- |
-| An expired delta token (410) recovers through the full refresh with orphan detection in one-shot and watch runs, and the resync flavour decides what an orphan means: apply-differences deletes it, upload-differences or an unknown flavour forgets its synced agreement so the local copy is uploaded again (R-2.15.3). | `TestRunOnce_DeltaExpiredRecoverySynthesizesMissedDeletes`, `TestRunOnce_DeltaExpiredUploadDifferencesKeepsAndReuploadsLocal`, `TestWatch_DeltaExpiredRecoversThroughTheFullRefresh`, `TestMountRootEvents_ResyncFlavourDecidesWhatAnOrphanMeans`, `TestNewDeltaExpiredError_ParsesTheResyncFlavour` |
+| An expired delta token (410) recovers through the full refresh with orphan detection in one-shot and watch runs, and the resync flavor decides what an orphan means: apply-differences deletes it, upload-differences or an unknown flavor forgets its synced agreement so the local copy is uploaded again (R-2.15.3). | `TestRunOnce_DeltaExpiredRecoverySynthesizesMissedDeletes`, `TestRunOnce_DeltaExpiredUploadDifferencesKeepsAndReuploadsLocal`, `TestWatch_DeltaExpiredRecoversThroughTheFullRefresh`, `TestMountRootEvents_ResyncFlavorDecidesWhatAnOrphanMeans`, `TestNewDeltaExpiredError_ParsesTheResyncFlavor` |
 | A full refresh never treats an enumerated item as gone, shared-folder orphans need a live 404/deleted/moved-out answer, a listing with an unlisted parent is incomplete, and an omitted shortcut drains only on a confirmed removal. | `TestFullRefresh_ItemTheConverterSkipsIsNotSynthesizedAsDelete`, `TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing`, `TestValidateMountRootListingParents_ChildUnderUnlistedFolderAbortsListing`, `TestApplyShortcutRootCompleteOmission_ConfirmedLiveBindingStaysActive`, `TestFullRefresh_OrphanStillLiveOnOneDriveIsNotDeleted` |
 
 If watch mode shortens `observation_state.next_full_remote_refresh_at` after

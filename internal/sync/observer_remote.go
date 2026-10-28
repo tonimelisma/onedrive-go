@@ -765,7 +765,7 @@ func (g *deltaLoopGuard) next(nextToken string, pageItems []graph.Item) *deltaEx
 //
 // Registering every item before any is classified (B-281) matters because the
 // Graph API does not guarantee parent-before-child ordering, within a page or
-// across pages: vault and package descendants are recognised, and paths
+// across pages: vault and package descendants are recognized, and paths
 // materialized, only once their ancestors are known.
 func (o *remoteObserver) fetchPage(
 	ctx context.Context, token string, page int, inflight map[string]inflightParent,

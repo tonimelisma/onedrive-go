@@ -46,7 +46,7 @@ var errDeltaExpired = errors.New("OneDrive change history expired")
 type resyncKind int
 
 const (
-	// resyncKindUnknown is a 410 without a recognised flavour. It is
+	// resyncKindUnknown is a 410 without a recognized flavor. It is
 	// treated like resyncKindUploadDifferences: when unsure, never delete.
 	resyncKindUnknown resyncKind = iota
 	// resyncKindApplyDifferences: the server's view is current; an item it
@@ -57,7 +57,7 @@ const (
 	resyncKindUploadDifferences
 )
 
-// Graph's inner codes for the two resync flavours.
+// Graph's inner codes for the two resync flavors.
 const (
 	graphCodeResyncApplyDifferences  = "resyncChangesApplyDifferences"
 	graphCodeResyncUploadDifferences = "resyncChangesUploadDifferences"
@@ -69,7 +69,7 @@ func (k resyncKind) orphansAreDeletes() bool {
 	return k == resyncKindApplyDifferences
 }
 
-// deltaExpiredError is errDeltaExpired with the resync flavour the 410 named.
+// deltaExpiredError is errDeltaExpired with the resync flavor the 410 named.
 // It also carries this client's own "cursor unusable" decision (R-2.15.2): a
 // change list that loops or a token OneDrive keeps refusing is recovered
 // exactly like a 410, and reason then says why.
@@ -114,7 +114,7 @@ func (e *deltaExpiredError) Is(target error) bool { return target == errDeltaExp
 
 func (e *deltaExpiredError) Unwrap() error { return e.cause }
 
-// resyncKindOf returns the flavour of an expired-delta error, or
+// resyncKindOf returns the flavor of an expired-delta error, or
 // resyncKindUnknown when err does not carry one.
 func resyncKindOf(err error) resyncKind {
 	var expired *deltaExpiredError

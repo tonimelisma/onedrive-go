@@ -100,7 +100,7 @@ Important properties:
   the same deletes on every poll indefinitely
   (`TestWatch_OnlyUnrecoverableDeletes_AdvancesToken`)
 - HTTP 410 delta expiry is surfaced as `deltaExpiredError`, which carries the
-  resync flavour from the error's inner code; recovery is the engine's full
+  resync flavor from the error's inner code; recovery is the engine's full
   refresh with orphan detection, in watch mode too (`SetDeltaExpiredRecovery`,
   `sync-engine.md` "An Expired Token Is A Full Refresh", R-2.15.3)
 - a cursor the client cannot continue takes the same recovery, through
