@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"slices"
+	"strings"
 	stdsync "sync"
 	"sync/atomic"
 	"time"
@@ -19,9 +22,14 @@ import (
 // Constants for the remote observer (satisfy mnd linter).
 const (
 	maxDeltaPaginationGuard = 10000
-	maxPathDepth            = 256
-	MinPollInterval         = 30 * time.Second
-	specialFolderVault      = "vault" // Graph API personal vault folder name
+	// cursorServerErrorResetAfter is how long one delta token may keep
+	// failing with 5xx in watch mode before it is treated as unusable and
+	// the drive is re-enumerated (R-2.15.2). Graph outages are shorter; a
+	// token stuck on a server fault never recovers on its own.
+	cursorServerErrorResetAfter = 6 * time.Hour
+	maxPathDepth                = 256
+	MinPollInterval             = 30 * time.Second
+	specialFolderVault          = "vault" // Graph API personal vault folder name
 )
 
 type watchStepResult struct {
@@ -203,8 +211,9 @@ func (o *remoteObserver) fullDelta(
 		}()
 	}
 
+	loop := newDeltaLoopGuard(savedToken)
 	for page := range maxDeltaPaginationGuard {
-		pageEvents, pageItems, newToken, done, err := o.fetchPage(ctx, token, page, inflight, enumerated)
+		pageEvents, pageItems, newToken, done, err := o.fetchPageRetryingRejection(ctx, token, page, inflight, enumerated)
 		if err != nil {
 			o.stats.errors.Add(1)
 
@@ -250,6 +259,13 @@ func (o *remoteObserver) fullDelta(
 			return events, newToken, topology, windowItems, nil
 		}
 
+		if loopErr := loop.next(newToken, pageEvents); loopErr != nil {
+			o.stats.errors.Add(1)
+			o.logger.Warn("OneDrive's change list loops; rescanning the whole drive",
+				slog.String("reason", loopErr.reason), slog.Int("pages_fetched", page+1))
+
+			return nil, "", shortcutTopologyBatch{}, 0, loopErr
+		}
 		token = newToken
 	}
 
@@ -296,6 +312,7 @@ func (o *remoteObserver) Watch(
 	bo := retry.NewBackoff(retry.WatchRemotePolicy())
 	bo.SetMaxOverride(interval)
 	var outage pollOutageLog
+	var stuck cursorServerErrorTracker
 
 	for {
 		drainWakeSignals(wakeCh)
@@ -303,6 +320,12 @@ func (o *remoteObserver) Watch(
 		token := o.CurrentDeltaToken()
 
 		polledEvents, newToken, topology, windowItems, err := o.fullDelta(ctx, token, nil)
+		if stuck.observe(o.clock.Now(), token, err) {
+			o.logger.Warn("OneDrive has failed every check of the saved change-list position for hours; rescanning the whole drive",
+				slog.Duration("failing_for", cursorServerErrorResetAfter),
+				slog.String("error", err.Error()))
+			err = newCursorUnusableError("OneDrive kept failing the saved position", err)
+		}
 		if err != nil && errors.Is(err, errDeltaExpired) && o.recoverExpiredDelta != nil {
 			result := o.recoverExpiredDeltaInWatch(ctx, batches, resyncKindOf(err), interval, bo, &outage, wakeCh)
 			if result.err != nil {
@@ -383,6 +406,32 @@ func (o *remoteObserver) handleWatchBatch(
 	bo.Reset()
 
 	return o.sleepWatch(ctx, interval, "interval", wakeCh)
+}
+
+// cursorServerErrorTracker measures how long one saved delta token has been
+// failing with 5xx without a success in between.
+type cursorServerErrorTracker struct {
+	since time.Time
+}
+
+// observe records one poll result and reports whether the token has now
+// failed with 5xx for cursorServerErrorResetAfter. Any other result, or a
+// poll without a saved token, restarts the measurement.
+func (t *cursorServerErrorTracker) observe(now time.Time, token string, err error) bool {
+	if token == "" || err == nil || !errors.Is(err, graph.ErrServerError) {
+		t.since = time.Time{}
+		return false
+	}
+	if t.since.IsZero() {
+		t.since = now
+		return false
+	}
+	if now.Sub(t.since) < cursorServerErrorResetAfter {
+		return false
+	}
+
+	t.since = time.Time{}
+	return true
 }
 
 // recoverExpiredDeltaInWatch runs the engine's full refresh for an expired
@@ -610,6 +659,94 @@ func timeSleep(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// fetchPageRetryingRejection fetches one page and retries it once when
+// OneDrive refuses the token with a non-transient 4xx. A token refused twice
+// is unusable (R-2.15.2): retrying it every poll never succeeds, so it takes
+// the expired-token recovery instead.
+func (o *remoteObserver) fetchPageRetryingRejection(
+	ctx context.Context, token string, page int, inflight map[string]inflightParent,
+	enumerated map[string]struct{},
+) ([]changeEvent, int, string, bool, error) {
+	events, items, next, done, err := o.fetchPage(ctx, token, page, inflight, enumerated)
+	if err == nil || token == "" || !isCursorRejection(err) {
+		return events, items, next, done, err
+	}
+
+	o.logger.Debug("OneDrive refused the change-list token; retrying it once",
+		slog.Int("page", page), slog.String("error", err.Error()))
+	events, items, next, done, err = o.fetchPage(ctx, token, page, inflight, enumerated)
+	if err == nil || !isCursorRejection(err) {
+		return events, items, next, done, err
+	}
+
+	o.logger.Warn("OneDrive keeps refusing the saved change-list position; rescanning the whole drive",
+		slog.String("error", err.Error()))
+
+	return nil, 0, "", false, newCursorUnusableError("OneDrive refused the saved position twice", err)
+}
+
+// isCursorRejection reports whether a delta fetch failed with a 4xx that
+// says the request itself, the token, is bad: not sign-in (401), permission
+// (403), timeout (408), expiry (410, handled as such), lock (423) or
+// throttling (429).
+func isCursorRejection(err error) bool {
+	if errors.Is(err, errDeltaExpired) {
+		return false
+	}
+	var graphErr *graph.GraphError
+	if !errors.As(err, &graphErr) {
+		return false
+	}
+	switch graphErr.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusRequestTimeout,
+		http.StatusGone, http.StatusLocked, http.StatusTooManyRequests:
+		return false
+	default:
+		return graphErr.StatusCode >= http.StatusBadRequest && graphErr.StatusCode < http.StatusInternalServerError
+	}
+}
+
+// deltaLoopGuard notices a change list that leads back on itself: a nextLink
+// already fetched in this window, or a non-empty page whose item IDs repeat
+// an earlier page exactly. Followed, such a list ran to the 10,000-page guard
+// with every item buffered in memory (R-2.15.2).
+type deltaLoopGuard struct {
+	tokens map[string]struct{}
+	pages  map[string]struct{}
+}
+
+func newDeltaLoopGuard(savedToken string) *deltaLoopGuard {
+	guard := &deltaLoopGuard{tokens: map[string]struct{}{}, pages: map[string]struct{}{}}
+	if savedToken != "" {
+		guard.tokens[savedToken] = struct{}{}
+	}
+
+	return guard
+}
+
+func (g *deltaLoopGuard) next(nextToken string, pageEvents []changeEvent) *deltaExpiredError {
+	if _, seen := g.tokens[nextToken]; seen {
+		return newCursorUnusableError("a page links back to an earlier page", nil)
+	}
+	g.tokens[nextToken] = struct{}{}
+
+	if len(pageEvents) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(pageEvents))
+	for i := range pageEvents {
+		ids = append(ids, pageEvents[i].ItemID)
+	}
+	slices.Sort(ids)
+	fingerprint := strings.Join(ids, "\x00")
+	if _, seen := g.pages[fingerprint]; seen {
+		return newCursorUnusableError("a page repeats the items of an earlier page", nil)
+	}
+	g.pages[fingerprint] = struct{}{}
+
+	return nil
 }
 
 // fetchPage fetches a single delta page, processes items, and returns events.

@@ -70,9 +70,21 @@ func (k resyncKind) orphansAreDeletes() bool {
 }
 
 // deltaExpiredError is errDeltaExpired with the resync flavour the 410 named.
+// It also carries this client's own "cursor unusable" decision (R-2.15.2): a
+// change list that loops or a token OneDrive keeps refusing is recovered
+// exactly like a 410, and reason then says why.
 type deltaExpiredError struct {
-	kind  resyncKind
-	cause error
+	kind   resyncKind
+	cause  error
+	reason string
+}
+
+// newCursorUnusableError is the recovery this client decides on for a delta
+// cursor it cannot continue. It is a full refresh like any other the client
+// starts, so confirmed orphans are deletes (subject to the delete-safety
+// hold).
+func newCursorUnusableError(reason string, cause error) *deltaExpiredError {
+	return &deltaExpiredError{kind: resyncKindApplyDifferences, cause: cause, reason: reason}
 }
 
 func newDeltaExpiredError(cause error) *deltaExpiredError {
@@ -90,7 +102,13 @@ func newDeltaExpiredError(cause error) *deltaExpiredError {
 	return &deltaExpiredError{kind: kind, cause: cause}
 }
 
-func (e *deltaExpiredError) Error() string { return errDeltaExpired.Error() }
+func (e *deltaExpiredError) Error() string {
+	if e.reason != "" {
+		return "OneDrive change list cannot be continued: " + e.reason
+	}
+
+	return errDeltaExpired.Error()
+}
 
 func (e *deltaExpiredError) Is(target error) bool { return target == errDeltaExpired }
 

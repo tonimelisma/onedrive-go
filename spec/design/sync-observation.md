@@ -4,7 +4,7 @@ GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/
 
 LAYER: 2
 
-Implements: R-2.1.2 [verified], R-2.2.4 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.8.20 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
+Implements: R-2.1.2 [verified], R-2.2.4 [verified], R-2.15.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.8.20 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
 
 ## Overview
 
@@ -74,6 +74,7 @@ except that the type had once been public.
 | On kqueue platforms watch setup projects its descriptor use (watched directories plus their entries) and falls back to periodic scans above half the open-file limit. | `TestAddWatchesRecursive_OverDescriptorBudgetFallsBackBeforeExhaustingFiles`, `TestAddWatchesRecursive_WithinDescriptorBudgetWatches`, `TestAddWatchesRecursive_DescriptorProjectionCountsSubdirectoriesOnce` |
 | A network or FUSE sync root is identified with statfs, warned about once, and rescanned every two minutes. | `TestWatch_NetworkRootShortensSafetyScanInterval`, `TestAdaptToRootFilesystem_LocalRootKeepsInterval`, `TestAdaptToRootFilesystem_NonDefaultIntervalIsNeverOverridden`, `TestMountFilesystemType_DistinguishesFuseblkFromNetworkFuse`, `TestLocalFilesystemKind_ReadsTheRealFilesystem` |
 | The replan debounce is bounded by a max wait that later observations do not push back. | `TestDirtyBuffer_FlushDebounced_ContinuousSignalsFlushAtMaxWait`, `TestDirtyMaxWait_ScalesWithLongDebounce` |
+| A delta cursor that loops, is refused twice with a non-transient 4xx, or fails with 5xx for hours in watch mode is recovered through the full refresh; a single refusal is retried, empty pages with a nextLink continue, and a transient failure keeps the token (R-2.15.2). | `TestFullDelta_RepeatedNextLinkIsCursorUnusable`, `TestFullDelta_RepeatedPageItemsIsCursorUnusable`, `TestFullDelta_EmptyPageWithNextLinkContinues`, `TestFullDelta_SavedTokenRejectedTwiceIsCursorUnusable`, `TestFullDelta_OneRejectionOfASavedTokenIsRetried`, `TestWatch_TransientErrorRetriesAndKeepsToken`, `TestWatch_SustainedServerErrorsOnTheCursorResetIt`, `TestRunOnce_SavedTokenOneDriveKeepsRefusingIsReenumerated` |
 | Local watch prefiltering keeps unknown-kind include-root and include-ancestor events observable until stat/type-aware observation can decide the exact item kind. | `TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths` |
 
 ## Remote Observation
@@ -100,6 +101,15 @@ Important properties:
   resync flavour from the error's inner code; recovery is the engine's full
   refresh with orphan detection, in watch mode too (`SetDeltaExpiredRecovery`,
   `sync-engine.md` "An Expired Token Is A Full Refresh", R-2.15.3)
+- a cursor the client cannot continue takes the same recovery, through
+  `newCursorUnusableError` (R-2.15.2): `deltaLoopGuard` stops a window whose
+  nextLink returns to a page already fetched or whose non-empty page repeats
+  an earlier page's items (followed, such a list ran to the 10,000-page guard
+  with every item in memory); `fetchPageRetryingRejection` retries a token
+  refused with a non-transient 4xx once and gives up on the second refusal;
+  and watch mode's `cursorServerErrorTracker` gives up on a token that has
+  failed with 5xx for `cursorServerErrorResetAfter` (6 h). Every other failure
+  keeps the token and backs off
 - sparse delta items recover omitted name/parent data from baseline when
   possible, and missing parent IDs trigger one best-effort item-by-ID enrich
   before baseline fallback

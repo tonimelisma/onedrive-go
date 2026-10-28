@@ -232,3 +232,38 @@ func TestWatch_DeltaExpiredRecoversThroughTheFullRefresh(t *testing.T) {
 	assert.Equal(t, []string{"expired-token"}, fetcher.seen(),
 		"watch never re-enumerates on its own, without orphan detection")
 }
+
+// Validates: R-2.15.2
+func TestRunOnce_SavedTokenOneDriveKeepsRefusingIsReenumerated(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFile(t, "item-keep", "root", "keep.txt", "kept")
+	remote.addFile(t, "item-gone", "root", "gone.txt", "deleted online")
+	refused := &graph.GraphError{StatusCode: 400, Code: "invalidRequest", Err: graph.ErrBadRequest}
+	client, refuse := expiringScenarioClient(t, remote, refused)
+	serve := client.deltaFn
+	refusals := 0
+	client.deltaFn = func(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
+		if *refuse && token != "" {
+			refusals++
+			return nil, refused
+		}
+		return serve(ctx, driveID, token)
+	}
+	eng, syncRoot := newTestEngine(t, client)
+	require.Equal(t, 2, runScenarioPass(t, eng).Downloads)
+
+	remote.removeUnreported("item-gone")
+	*refuse = true
+
+	// The token used to be retried on every run and the drive never synced
+	// again; now the second refusal re-enumerates, orphans included.
+	report := runScenarioPass(t, eng)
+	assert.Equal(t, 2, refusals, "refused twice, then not asked again")
+	assert.Equal(t, 1, report.LocalDeletes, "%+v", report)
+	assert.NoFileExists(t, filepath.Join(syncRoot, "gone.txt"))
+
+	*refuse = false
+	requireScenarioQuietPlan(t, eng)
+}
