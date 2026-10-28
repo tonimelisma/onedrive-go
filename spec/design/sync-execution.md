@@ -102,7 +102,11 @@ that no longer matches the planner's `Action.MovedLocal`, or occupied remote mov
 destination supersedes the old move before side effects. Another item at a local
 move's remote source path is a chain or swap that took the vacated path, not the
 move undone; superseding on it wedged the chain on every pass
-(`TestRunOnce_RemoteMoveChainIntoVacatedPathConverges`).
+(`TestRunOnce_RemoteMoveChainIntoVacatedPathConverges`). A local move source with a new
+inode that still holds the synced content (size and hash) is the synced item
+(D-057), in worker-start freshness and in the executor alike: a folder rebuilt
+with the same files gave each a new inode, and every move of them superseded
+forever (`TestRunOnce_RemoteRenameInsideLocallyRecreatedFolderConverges`).
 
 A remote move whose live preflight finds the item already at the planned
 destination, with the same identity and content, is done rather than stale

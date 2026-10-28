@@ -467,12 +467,26 @@ func localRowMatchesPlanned(row *localStateRow, planned *localState) bool {
 
 // localRowIsBaselineItem reports whether a local row is still the synced item:
 // the same type and, when both sides know it, the same filesystem identity.
+// A file with a new identity whose content is provably the synced content is
+// the synced item too: identity is a pairing hint, never a change signal
+// (D-057). A folder rebuilt with the same files gives each a new inode, and
+// requiring the old one superseded every move of them forever.
 func localRowIsBaselineItem(row *localStateRow, baseline *BaselineEntry) bool {
 	if row == nil || baseline == nil {
 		return row == nil && baseline == nil
 	}
+	if row.ItemType != baseline.ItemType {
+		return false
+	}
 
-	return row.ItemType == baseline.ItemType && localRowIdentityMatchesBaseline(row, baseline)
+	return localRowIdentityMatchesBaseline(row, baseline) || localRowHoldsBaselineContent(row, baseline)
+}
+
+// localRowHoldsBaselineContent reports whether a local file provably holds
+// the synced content: both hashes known and equal, and the same size.
+func localRowHoldsBaselineContent(row *localStateRow, baseline *BaselineEntry) bool {
+	return row.ItemType == ItemTypeFile && row.Hash != "" && row.Hash == baseline.LocalHash &&
+		(!baseline.LocalSizeKnown || row.Size == baseline.LocalSize)
 }
 
 func localRowIdentityMatchesBaseline(row *localStateRow, baseline *BaselineEntry) bool {

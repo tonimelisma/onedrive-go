@@ -711,3 +711,34 @@ func TestRunOnce_LocalDeleteInsideFolderRenamedOnlineIsNotUndone(t *testing.T) {
 	requireScenarioLocalFile(t, h.syncRoot, "g/y.txt", "Y\n")
 	assertSyncInvariants(t, h)
 }
+
+// Validates: R-2.17.1
+//
+// The user rebuilt a folder (same names and content, new inodes) while
+// OneDrive renamed a file in it. The file's new inode is not a change
+// (D-057), yet the local move applying the rename checked the source by
+// inode alone, read it as a different item, and was superseded on every
+// pass (model test, folder recreate with a remote swap).
+func TestRunOnce_RemoteRenameInsideLocallyRecreatedFolderConverges(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("item-docs", "root", "docs")
+	remote.addFile(t, "item-c", "item-docs", "c.md", "C\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	docs := filepath.Join(h.syncRoot, "docs")
+	require.NoError(t, os.RemoveAll(docs))
+	require.NoError(t, os.Mkdir(docs, 0o750))
+	writeLocalFile(t, h.syncRoot, filepath.Join("docs", "c.md"), "C\n")
+	remote.moveAt(t, "docs/c.md", "docs/d.md")
+	runScenarioPass(t, h.eng)
+	runScenarioPass(t, h.eng)
+
+	requireScenarioLocalFile(t, h.syncRoot, "docs/d.md", "C\n")
+	assert.NoFileExists(t, filepath.Join(docs, "c.md"))
+	assertSyncInvariants(t, h)
+}

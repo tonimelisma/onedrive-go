@@ -216,6 +216,7 @@ var runOnceScenarios = []func(*testing.T){
 	TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass,
 	TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit,
 	TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads,
+	TestRunOnce_RemoteRenameInsideLocallyRecreatedFolderConverges,
 	TestRunOnce_RemoteRenameAppliedLocallyDoesNotReupload,
 	TestRunOnce_RemoteTwinOfASyncedFileKeepsTheLocalFile,
 	TestRunOnce_RemoteTwinsAreHeldAndTheDriveKeepsSyncing,
