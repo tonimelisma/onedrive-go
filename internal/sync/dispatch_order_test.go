@@ -240,6 +240,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_RenameAndRecreateMovesThenCreates,
 		TestRunOnce_RenumberedDeviceTransfersNothing,
 		TestRunOnce_SameRenameOnBothSidesStillAppliesTheRemoteEdit,
+		TestRunOnce_MountRootUndecidedOrphanPullsTheNextRescanForward,
 		TestRunOnce_LostMoveAnswerAfterARemoteEditStillAppliesTheEdit,
 		TestRunOnce_SavedTokenOneDriveKeepsRefusingIsReenumerated,
 		TestRunOnce_SharePointRootFormsRecordsActionableFailure,
