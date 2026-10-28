@@ -64,6 +64,42 @@ func TestComposeMoves_RotationParksOneItemAndMovesTheRest(t *testing.T) {
 	assert.Equal(t, map[string]bool{"c": true}, c.deferred, "the parked item finishes next pass")
 }
 
+// Validates: R-2.17.1
+//
+// The user renamed d/50%.txt to d/50%.Txt (case only) while OneDrive swapped
+// it with d/a+b.txt. The move of a+b.txt onto d/50%.txt was emitted while
+// 50%.Txt still sat there: two names one folder may not hold side by side
+// under OneDrive's comparison. Observation then skipped 50%.Txt as a
+// collision and the item downloaded a second time (model test seed 27). A
+// destination is free only when no other entry holds it under OneDrive's
+// name folding.
+func TestComposeMoves_DestinationFreeUnderNameFolding(t *testing.T) {
+	t.Parallel()
+
+	c := composeForTest(
+		composeNode("p", ItemTypeFile, "d/50%.txt", "d/50%.Txt", "d/a+b.txt"),
+		composeNode("q", ItemTypeFile, "d/a+b.txt", "d/a+b.txt", "d/50%.txt"),
+	)
+
+	held := map[string]string{}
+	for _, n := range []moveNode{
+		composeNode("p", ItemTypeFile, "", "d/50%.Txt", ""),
+		composeNode("q", ItemTypeFile, "", "d/a+b.txt", ""),
+	} {
+		held[foldMovePath(n.paths[moveCoordLocal])] = n.key
+	}
+	for _, move := range c.moves {
+		if move.side != moveCoordLocal {
+			continue
+		}
+		occupant, taken := held[foldMovePath(move.newPath)]
+		assert.False(t, taken && occupant != move.key, "%s -> %s lands on %s's name", move.oldPath, move.newPath, occupant)
+		delete(held, foldMovePath(move.oldPath))
+		held[foldMovePath(move.newPath)] = move.key
+	}
+	assert.NotEmpty(t, c.moves)
+}
+
 // Validates: R-2.17.6
 func TestComposeMoves_OneSidedRenamesMoveTheOtherSide(t *testing.T) {
 	t.Parallel()

@@ -193,6 +193,7 @@ var runOnceScenarios = []func(*testing.T){
 	TestRunOnce_LocalFolderRenameWithChildRenameConvergesInOnePass,
 	TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth,
 	TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges,
+	TestRunOnce_LocalRenameWhileOneDriveSwapsItConverges,
 	TestRunOnce_LocalRenameKeepsTheRemoteModificationTime,
 	TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit,
 	TestRunOnce_MountRootDeltaIncapableSkipsFolderDelta,

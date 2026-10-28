@@ -868,3 +868,38 @@ func TestRunOnce_RemoteMoveOfAFileTheUserReplacedLocallyKeepsBoth(t *testing.T) 
 	requireScenarioLocalFile(t, h.syncRoot, "f/x.txt", "a new local file\n")
 	assertSyncInvariants(t, h)
 }
+
+// Validates: R-2.17.1, R-2.17.6
+//
+// The user renamed p.txt to r.txt while OneDrive swapped p.txt and q.txt.
+// OneDrive's name wins a divergent rename, so r.txt should become q.txt, but
+// q.txt was the baseline path of the other swapped file, and composition
+// accepted an item's remote position only at a path no synced item held. The
+// renamed file had no remote position, nothing moved it, and the trees never
+// converged (model test seed 27, with a case-only local rename). The item ID
+// proves where OneDrive holds the item; a path another synced item is moving
+// away from is a valid position.
+func TestRunOnce_LocalRenameWhileOneDriveSwapsItConverges(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFile(t, "item-p", "root", "p.txt", "P\n")
+	remote.addFile(t, "item-q", "root", "q.txt", "Q\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "p.txt"), filepath.Join(h.syncRoot, "r.txt")))
+	remote.moveAt(t, "p.txt", "swap.txt")
+	remote.moveAt(t, "q.txt", "p.txt")
+	remote.moveAt(t, "swap.txt", "q.txt")
+	for range 3 {
+		runScenarioPass(t, h.eng)
+	}
+
+	requireScenarioLocalFile(t, h.syncRoot, "q.txt", "P\n")
+	requireScenarioLocalFile(t, h.syncRoot, "p.txt", "Q\n")
+	assert.NoFileExists(t, filepath.Join(h.syncRoot, "r.txt"))
+	assertSyncInvariants(t, h)
+}

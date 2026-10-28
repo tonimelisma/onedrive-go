@@ -533,6 +533,10 @@ type moveEmitter struct {
 	*moveComposer
 	state  map[string]moveEmitState
 	result moveComposition
+	// foldedByPath and foldedOccupied index the snapshot by folded path,
+	// built on first use (occupantAt, occupiedFolded).
+	foldedByPath   [moveCoordCount]map[string]string
+	foldedOccupied [moveCoordCount]map[string]bool
 }
 
 func (c *moveComposer) emit() moveComposition {
@@ -664,7 +668,7 @@ func (e *moveEmitter) blockingPendingMove(key string, side moveCoord) (string, b
 		sameLocation(e.location(n, side), e.target[key]) {
 		return "", false
 	}
-	occupant, isNode := e.byPath[side][e.snapshotPath(side, e.targetPath(key))]
+	occupant, isNode := e.occupantAt(side, e.snapshotPath(side, e.targetPath(key)))
 	if !isNode || occupant == key {
 		return "", false
 	}
@@ -906,8 +910,8 @@ func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath strin
 		occupied = e.occupancy.remote
 	}
 	snapshotPath := e.snapshotPath(side, newPath)
-	occupant, isNode := e.byPath[side][snapshotPath]
-	if !isNode && !occupied[snapshotPath] {
+	occupant, isNode := e.occupantAt(side, snapshotPath)
+	if !isNode && !e.occupiedFolded(side, occupied, snapshotPath) {
 		return true, moveDisplaceNever
 	}
 	if isNode && occupant == n.key {
@@ -915,7 +919,7 @@ func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath strin
 	}
 	for i := range e.result.moves {
 		earlier := &e.result.moves[i]
-		if earlier.side == side && e.nodes[earlier.key].paths[side] == snapshotPath {
+		if earlier.side == side && foldMovePath(e.nodes[earlier.key].paths[side]) == foldMovePath(snapshotPath) {
 			return true, moveDisplaceNever
 		}
 	}
@@ -926,6 +930,40 @@ func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath strin
 	}
 
 	return false, moveDisplaceNever
+}
+
+// occupantAt is the composed item holding p on side, compared as OneDrive
+// compares names: one folder cannot hold two names that fold together, so an
+// item at d/50%.Txt occupies d/50%.txt too. An exact match wins.
+func (e *moveEmitter) occupantAt(side moveCoord, p string) (string, bool) {
+	if key, ok := e.byPath[side][p]; ok {
+		return key, true
+	}
+	if e.foldedByPath[side] == nil {
+		e.foldedByPath[side] = make(map[string]string, len(e.byPath[side]))
+		for held, key := range e.byPath[side] {
+			e.foldedByPath[side][foldMovePath(held)] = key
+		}
+	}
+	key, ok := e.foldedByPath[side][foldMovePath(p)]
+
+	return key, ok
+}
+
+// occupiedFolded reports whether the snapshot holds p on side under
+// OneDrive's name folding.
+func (e *moveEmitter) occupiedFolded(side moveCoord, occupied map[string]bool, p string) bool {
+	if occupied[p] {
+		return true
+	}
+	if e.foldedOccupied[side] == nil {
+		e.foldedOccupied[side] = make(map[string]bool, len(occupied))
+		for held := range occupied {
+			e.foldedOccupied[side][foldMovePath(held)] = true
+		}
+	}
+
+	return e.foldedOccupied[side][foldMovePath(p)]
 }
 
 // snapshotPath maps a path as it will be when a move runs back to the
@@ -1110,6 +1148,12 @@ func composedRemotePosition(
 	}
 	switch {
 	case at.ComparisonKind == "remote_move_shadowed":
+		return row.Path
+	// The path is another synced item's, which OneDrive moved away (a swap
+	// or a chain): the item ID proves this item now sits there, and the
+	// path's own item is composed too. Without it a local rename of an item
+	// OneDrive swapped had no remote position and was copied, not moved.
+	case at.ComparisonKind == "remote_move_source" && at.RemoteItemID == entry.ItemID:
 		return row.Path
 	case at.ComparisonKind == "local_move_dest" && row.Path == localPosition:
 		return row.Path
