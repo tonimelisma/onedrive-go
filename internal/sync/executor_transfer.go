@@ -99,6 +99,10 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 		)
 	}
 
+	if crashErr := e.reachCrashPoint(crashPointDownloadRenamed); crashErr != nil {
+		return e.failedOutcomeWithFailure(action, ActionDownload, crashErr, action.Path, permissionCapabilityUnknown)
+	}
+
 	outcome := e.downloadOutcome(action, driveID, result.LocalHash, result.EffectiveRemoteHash, result.Size)
 	return outcome
 }
@@ -248,6 +252,10 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 				uploadTransferFailureCapability(err),
 			)
 		}
+	}
+
+	if crashErr := e.reachCrashPoint(crashPointUploadRemoteDone); crashErr != nil {
+		return e.failedOutcomeWithFailure(action, ActionUpload, crashErr, action.Path, permissionCapabilityUnknown)
 	}
 
 	e.confirmRemotePathVisible(ctx, action)

@@ -44,8 +44,22 @@ func (flow *engineFlow) startRuntimeStage(
 // reduceReadyFrontierStage owns the runtime handoff from "actions now ready"
 // to "worker-dispatchable frontier". It keeps publication-only work on the
 // engine side, releases already-due held retry/trial work, and re-runs
-// publication drain on any newly released frontier.
+// publication drain on any newly released frontier. Every frontier leaves
+// through the engine's dispatch order.
 func (flow *engineFlow) reduceReadyFrontierStage(
+	ctx context.Context,
+	bl *Baseline,
+	ready []*trackedAction,
+) ([]*trackedAction, error) {
+	frontier, err := flow.reduceReadyFrontier(ctx, bl, ready)
+	if flow.engine.dispatchOrder != nil && len(frontier) > 1 {
+		frontier = flow.engine.dispatchOrder(frontier)
+	}
+
+	return frontier, err
+}
+
+func (flow *engineFlow) reduceReadyFrontier(
 	ctx context.Context,
 	bl *Baseline,
 	ready []*trackedAction,

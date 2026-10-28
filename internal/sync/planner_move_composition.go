@@ -3,7 +3,9 @@ package sync
 import (
 	"path"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
@@ -532,6 +534,10 @@ type moveEmitter struct {
 	*moveComposer
 	state  map[string]moveEmitState
 	result moveComposition
+	// foldedByPath and foldedOccupied index the snapshot by folded path,
+	// built on first use (occupantAt, occupiedFolded).
+	foldedByPath   [moveCoordCount]map[string]string
+	foldedOccupied [moveCoordCount]map[string]bool
 }
 
 func (c *moveComposer) emit() moveComposition {
@@ -554,16 +560,8 @@ func (c *moveComposer) emit() moveComposition {
 	})
 
 	for range len(order) + 1 {
-		progressed := false
-		for _, key := range order {
-			if e.state[key] != moveEmitPending {
-				continue
-			}
-			if e.resolve(key) {
-				progressed = true
-			}
-		}
-		if !progressed {
+		e.resolvePending(order)
+		if !e.parkOneOccupancyCycle(order) {
 			break
 		}
 	}
@@ -575,6 +573,169 @@ func (c *moveComposer) emit() moveComposition {
 	e.result.notices = append(c.notices, e.result.notices...)
 
 	return e.result
+}
+
+// resolvePending resolves pending items until a sweep makes no progress.
+func (e *moveEmitter) resolvePending(order []string) {
+	for range len(order) + 1 {
+		progressed := false
+		for _, key := range order {
+			if e.state[key] != moveEmitPending {
+				continue
+			}
+			if e.resolve(key) {
+				progressed = true
+			}
+		}
+		if !progressed {
+			return
+		}
+	}
+}
+
+// moveSwapInfix names the temporary path a parked item waits at.
+const moveSwapInfix = ".swap-"
+
+// moveNameMaxBytes is the longest name a local filesystem stores (NAME_MAX).
+// A parking name cuts its stem to fit the infix: a swap of two names at the
+// limit otherwise parked at a name the rename refused.
+const moveNameMaxBytes = 255
+
+// truncateNameBytes cuts s to at most limit bytes on a character boundary.
+func truncateNameBytes(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(s) <= limit {
+		return s
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+
+	return s[:cut]
+}
+
+// parkOneOccupancyCycle breaks one cycle of moves that each wait for the
+// next to vacate its destination: a swap of two names (a→b, b→a) or a longer
+// rotation. Every such move waits for a free destination, so none was ever
+// emitted and the items never converged. The first item of the cycle moves to
+// a free temporary name beside its source, as a user swapping two names would;
+// that vacates its path for the rest of the cycle, which then resolves in this
+// plan, and the parked item reaches its target on the next pass. It reports
+// whether it parked an item.
+func (e *moveEmitter) parkOneOccupancyCycle(order []string) bool {
+	for _, key := range order {
+		if e.state[key] != moveEmitPending {
+			continue
+		}
+		side, ok := e.occupancyCycleSide(key)
+		if !ok {
+			continue
+		}
+		n := e.nodes[key]
+		parking := e.freeParkingPath(n.paths[side])
+		if parking == "" {
+			continue
+		}
+		move := composedMove{
+			key:       key,
+			side:      side,
+			oldPath:   n.paths[side],
+			newPath:   parking,
+			localPath: n.paths[moveCoordLocal],
+		}
+		if side == moveCoordLocal {
+			move.remotePath = n.paths[moveCoordRemote]
+		}
+		e.result.moves = append(e.result.moves, move)
+		e.deferNode(key)
+
+		return true
+	}
+
+	return false
+}
+
+// occupancyCycleSide reports the side on which key's move waits on a cycle of
+// pending moves, each blocked by the next one's source.
+func (e *moveEmitter) occupancyCycleSide(key string) (moveCoord, bool) {
+	if e.parentState(key) != moveEmitSettled || e.unresolvable[key] {
+		return 0, false
+	}
+	for _, side := range []moveCoord{moveCoordLocal, moveCoordRemote} {
+		seen := map[string]bool{}
+		for current := key; !seen[current]; {
+			seen[current] = true
+			next, blocked := e.blockingPendingMove(current, side)
+			if !blocked {
+				break
+			}
+			if next == key {
+				return side, true
+			}
+			current = next
+		}
+	}
+
+	return 0, false
+}
+
+// blockingPendingMove reports the pending item whose source holds the
+// destination of key's move on side, when that item must move on side too.
+func (e *moveEmitter) blockingPendingMove(key string, side moveCoord) (string, bool) {
+	n := e.nodes[key]
+	if n == nil || e.state[key] != moveEmitPending || !n.present(side) ||
+		sameLocation(e.location(n, side), e.target[key]) {
+		return "", false
+	}
+	occupant, isNode := e.occupantAt(side, e.snapshotPath(side, e.targetPath(key)))
+	if !isNode || occupant == key {
+		return "", false
+	}
+
+	return occupant, true
+}
+
+// freeParkingPath is a sibling of p that no side holds and no move of this
+// plan targets, compared as OneDrive compares names.
+func (e *moveEmitter) freeParkingPath(p string) string {
+	dir, name := path.Dir(p), path.Base(p)
+	if dir == "." {
+		dir = ""
+	}
+	ext := path.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	taken := e.takenPathsFolded()
+	for i := 1; i <= len(e.keys)+1; i++ {
+		suffix := moveSwapInfix + strconv.Itoa(i) + ext
+		candidate := joinMovePath(dir, truncateNameBytes(stem, moveNameMaxBytes-len(suffix))+suffix)
+		if !taken[foldMovePath(candidate)] {
+			return candidate
+		}
+	}
+
+	return ""
+}
+
+func (e *moveEmitter) takenPathsFolded() map[string]bool {
+	taken := make(map[string]bool, len(e.occupancy.local)+len(e.occupancy.remote))
+	for _, occupied := range []map[string]bool{e.occupancy.local, e.occupancy.remote} {
+		for p := range occupied {
+			taken[foldMovePath(p)] = true
+		}
+	}
+	for coord := range moveCoordCount {
+		for p := range e.byPath[coord] {
+			taken[foldMovePath(p)] = true
+		}
+	}
+	for i := range e.result.moves {
+		taken[foldMovePath(e.result.moves[i].newPath)] = true
+	}
+
+	return taken
 }
 
 // parentState is the emit state of whatever an item's target position hangs
@@ -673,6 +834,11 @@ func (e *moveEmitter) resolve(key string) bool {
 		}
 		move, ok := e.planMove(n, side, newPath)
 		if !ok {
+			if _, waits := e.blockingPendingMove(key, side); waits {
+				// The destination's occupant has a move of its own still
+				// to decide; it may vacate the path (parkOneOccupancyCycle).
+				return false
+			}
 			e.deferNode(key)
 			return true
 		}
@@ -767,8 +933,8 @@ func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath strin
 		occupied = e.occupancy.remote
 	}
 	snapshotPath := e.snapshotPath(side, newPath)
-	occupant, isNode := e.byPath[side][snapshotPath]
-	if !isNode && !occupied[snapshotPath] {
+	occupant, isNode := e.occupantAt(side, snapshotPath)
+	if !isNode && !e.occupiedFolded(side, occupied, snapshotPath) {
 		return true, moveDisplaceNever
 	}
 	if isNode && occupant == n.key {
@@ -776,7 +942,7 @@ func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath strin
 	}
 	for i := range e.result.moves {
 		earlier := &e.result.moves[i]
-		if earlier.side == side && e.nodes[earlier.key].paths[side] == snapshotPath {
+		if earlier.side == side && foldMovePath(e.nodes[earlier.key].paths[side]) == foldMovePath(snapshotPath) {
 			return true, moveDisplaceNever
 		}
 	}
@@ -787,6 +953,40 @@ func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath strin
 	}
 
 	return false, moveDisplaceNever
+}
+
+// occupantAt is the composed item holding p on side, compared as OneDrive
+// compares names: one folder cannot hold two names that fold together, so an
+// item at d/50%.Txt occupies d/50%.txt too. An exact match wins.
+func (e *moveEmitter) occupantAt(side moveCoord, p string) (string, bool) {
+	if key, ok := e.byPath[side][p]; ok {
+		return key, true
+	}
+	if e.foldedByPath[side] == nil {
+		e.foldedByPath[side] = make(map[string]string, len(e.byPath[side]))
+		for held, key := range e.byPath[side] {
+			e.foldedByPath[side][foldMovePath(held)] = key
+		}
+	}
+	key, ok := e.foldedByPath[side][foldMovePath(p)]
+
+	return key, ok
+}
+
+// occupiedFolded reports whether the snapshot holds p on side under
+// OneDrive's name folding.
+func (e *moveEmitter) occupiedFolded(side moveCoord, occupied map[string]bool, p string) bool {
+	if occupied[p] {
+		return true
+	}
+	if e.foldedOccupied[side] == nil {
+		e.foldedOccupied[side] = make(map[string]bool, len(occupied))
+		for held := range occupied {
+			e.foldedOccupied[side][foldMovePath(held)] = true
+		}
+	}
+
+	return e.foldedOccupied[side][foldMovePath(p)]
 }
 
 // snapshotPath maps a path as it will be when a move runs back to the
@@ -928,11 +1128,27 @@ func composedLocalPosition(cmp *sQLiteComparisonRow, view *pathView) string {
 	if cmp.ComparisonKind == comparisonKindLocalMoveSource && cmp.LocalMoveTarget != "" {
 		return cmp.LocalMoveTarget
 	}
-	if view.Local != nil && view.Local.ItemType == view.Baseline.ItemType {
+	if view.Local != nil && localEntryIsBaselineItem(view.Local, view.Baseline) {
 		return cmp.Path
 	}
 
 	return ""
+}
+
+// localEntryIsBaselineItem applies the source check a local move's freshness
+// and executor make (localRowIsBaselineItem) to a planner view, so
+// composition never plans a move of an entry they would refuse: a file
+// replaced at the path by a different one (new identity, other content) is a
+// new local entry, and its move was superseded on every pass.
+func localEntryIsBaselineItem(local *localState, baseline *BaselineEntry) bool {
+	return localRowIsBaselineItem(&localStateRow{
+		ItemType:         local.ItemType,
+		Hash:             local.Hash,
+		Size:             local.Size,
+		LocalDevice:      local.LocalDevice,
+		LocalInode:       local.LocalInode,
+		LocalHasIdentity: local.LocalHasIdentity,
+	}, baseline)
 }
 
 func composedRemotePosition(
@@ -955,6 +1171,12 @@ func composedRemotePosition(
 	}
 	switch {
 	case at.ComparisonKind == "remote_move_shadowed":
+		return row.Path
+	// The path is another synced item's, which OneDrive moved away (a swap
+	// or a chain): the item ID proves this item now sits there, and the
+	// path's own item is composed too. Without it a local rename of an item
+	// OneDrive swapped had no remote position and was copied, not moved.
+	case at.ComparisonKind == "remote_move_source" && at.RemoteItemID == entry.ItemID:
 		return row.Path
 	case at.ComparisonKind == "local_move_dest" && row.Path == localPosition:
 		return row.Path

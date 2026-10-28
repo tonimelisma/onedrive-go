@@ -1,7 +1,9 @@
 package sync
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,6 +45,85 @@ func composedMovesBySide(c *moveComposition, side moveCoord) []string {
 	}
 
 	return out
+}
+
+// Validates: R-2.17.1
+//
+// A rotation of three names online (a->b, b->c, c->a) parks one item beside
+// its source so the others can move into the freed paths in order; the parked
+// item reaches its target on the next pass.
+func TestComposeMoves_RotationParksOneItemAndMovesTheRest(t *testing.T) {
+	t.Parallel()
+
+	c := composeForTest(
+		composeNode("a", ItemTypeFile, "a.txt", "a.txt", "b.txt"),
+		composeNode("b", ItemTypeFile, "b.txt", "b.txt", "c.txt"),
+		composeNode("c", ItemTypeFile, "c.txt", "c.txt", "a.txt"),
+	)
+
+	assert.Equal(t, []string{"c.txt->c.swap-1.txt", "b.txt->c.txt", "a.txt->b.txt"}, composedMovesBySide(&c, moveCoordLocal))
+	assert.Empty(t, composedMovesBySide(&c, moveCoordRemote))
+	assert.Equal(t, map[string]bool{"c": true}, c.deferred, "the parked item finishes next pass")
+}
+
+// Validates: R-2.17.1
+//
+// The user renamed d/50%.txt to d/50%.Txt (case only) while OneDrive swapped
+// it with d/a+b.txt. The move of a+b.txt onto d/50%.txt was emitted while
+// 50%.Txt still sat there: two names one folder may not hold side by side
+// under OneDrive's comparison. Observation then skipped 50%.Txt as a
+// collision and the item downloaded a second time (model test seed 27). A
+// destination is free only when no other entry holds it under OneDrive's
+// name folding.
+func TestComposeMoves_DestinationFreeUnderNameFolding(t *testing.T) {
+	t.Parallel()
+
+	c := composeForTest(
+		composeNode("p", ItemTypeFile, "d/50%.txt", "d/50%.Txt", "d/a+b.txt"),
+		composeNode("q", ItemTypeFile, "d/a+b.txt", "d/a+b.txt", "d/50%.txt"),
+	)
+
+	held := map[string]string{}
+	for _, n := range []moveNode{
+		composeNode("p", ItemTypeFile, "", "d/50%.Txt", ""),
+		composeNode("q", ItemTypeFile, "", "d/a+b.txt", ""),
+	} {
+		held[foldMovePath(n.paths[moveCoordLocal])] = n.key
+	}
+	for _, move := range c.moves {
+		if move.side != moveCoordLocal {
+			continue
+		}
+		occupant, taken := held[foldMovePath(move.newPath)]
+		assert.False(t, taken && occupant != move.key, "%s -> %s lands on %s's name", move.oldPath, move.newPath, occupant)
+		delete(held, foldMovePath(move.oldPath))
+		held[foldMovePath(move.newPath)] = move.key
+	}
+	assert.NotEmpty(t, c.moves)
+}
+
+// Validates: R-2.17.1
+//
+// A swap of two names at the 255-byte limit parks one at a name that still
+// fits: the stem is cut, on a character boundary, to make room for the
+// .swap-N infix.
+func TestComposeMoves_ParkingNameFitsTheNameLimit(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("é", 125) // 250 bytes
+	a, b := long+"a.txt", long+"b.txt"
+	require.Len(t, a, 255)
+	c := composeForTest(
+		composeNode("a", ItemTypeFile, a, a, b),
+		composeNode("b", ItemTypeFile, b, b, a),
+	)
+
+	require.NotEmpty(t, c.moves)
+	for _, move := range c.moves {
+		assert.LessOrEqual(t, len(move.newPath), 255, move.newPath)
+		assert.True(t, utf8.ValidString(move.newPath), move.newPath)
+	}
+	assert.Contains(t, c.moves[0].newPath, moveSwapInfix)
 }
 
 // Validates: R-2.17.6
@@ -233,6 +314,55 @@ func TestBuildDependencies_NestedMoveEdges(t *testing.T) {
 	assert.Equal(t, []int{5}, deps[6])
 	assert.Empty(t, deps[1])
 	require.NoError(t, detectDependencyCycle(deps))
+}
+
+// Validates: R-2.17.6
+//
+// A file moved away from a path that a new folder takes (OneDrive moved the
+// file and created a folder there): work under the old path belongs to the
+// new folder, so it waits for the move instead of the move waiting for it.
+// Ordered the other way, the download into the folder failed against the
+// file still in place, and the move that would clear it never ran (model
+// test: remote swap, then a remote file replaced by a folder).
+func TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove(t *testing.T) {
+	t.Parallel()
+
+	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	actions := []Action{
+		{Type: ActionLocalMove, OldPath: "r.txt", Path: "b.txt", View: file}, // 0
+		{Type: ActionDownload, Path: "r.txt/inside.txt", View: file},         // 1
+	}
+
+	deps := buildDependencies(actions)
+
+	assert.Empty(t, deps[0], "a file has nothing under it to wait for")
+	assert.Equal(t, []int{0}, deps[1], "the new folder's content lands after the file leaves")
+	require.NoError(t, detectDependencyCycle(deps))
+}
+
+// Validates: R-2.17.1, R-2.8.11
+//
+// The user moved folder q to docs and re-created q, while OneDrive deleted
+// q/x. The cleanup of q/x waited for the re-created q (parent folder create),
+// the create waited for the move vacating q, and the move waited for the
+// cleanup under its source: a cycle, so all three were dropped every pass
+// and docs never reached OneDrive (model test seed 38). Removing an entry
+// never needs its parent created.
+func TestBuildDependencies_DeleteUnderARecreatedFolderDoesNotWaitForTheCreate(t *testing.T) {
+	t.Parallel()
+
+	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	actions := []Action{
+		{Type: ActionRemoteMove, OldPath: "q", Path: "docs", View: folder}, // 0
+		{Type: ActionFolderCreate, Path: "q", CreateSide: CreateRemote},    // 1: re-created at 0's old path
+		{Type: ActionCleanup, Path: "q/x", View: folder},                   // 2: gone online, moved locally
+	}
+
+	deps := buildDependencies(actions)
+
+	require.NoError(t, detectDependencyCycle(deps))
+	assert.Equal(t, []int{0}, deps[1], "the re-created folder waits for the move")
+	assert.NotContains(t, deps[2], 1, "a cleanup does not wait for a folder create")
 }
 
 // Validates: R-2.8.11

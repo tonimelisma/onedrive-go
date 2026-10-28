@@ -62,6 +62,10 @@ func (s *SyncStore) commitObservation(
 		err = commitErr
 		return err
 	}
+	if crashErr := s.reachCrashPoint(crashPointCommitObservation); crashErr != nil {
+		err = crashErr
+		return err
+	}
 
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing observation transaction: %w", err)

@@ -18,6 +18,7 @@ func (batch *remoteObservationBatch) deferredProgress() *remoteObservationBatch 
 	if batch == nil ||
 		(batch.cursorToken == "" &&
 			!batch.markFullRemoteRefresh &&
+			!batch.fullRefreshDueSoon &&
 			batch.observationMode != remoteObservationModeEnumerate) {
 		return nil
 	}
@@ -74,6 +75,7 @@ func primaryObservationCursorToken(
 
 func buildPrimaryWatchBatch(
 	engine *Engine,
+	bl *Baseline,
 	primaryEvents []changeEvent,
 	newToken string,
 ) remoteObservationBatch {
@@ -85,6 +87,7 @@ func buildPrimaryWatchBatch(
 		false,
 		newRemoteObservationFindingsBatch(),
 	)
+	batch.fullRefreshDueSoon = deltaWindowDeletesSyncedFolder(bl, primaryEvents)
 	batch.source = remoteObservationBatchPrimaryWatch
 	batch.applyAck = make(chan error, 1)
 
@@ -147,8 +150,38 @@ func (flow *engineFlow) executeDriveRootObservation(
 		false,
 		newRemoteObservationFindingsBatch(),
 	)
+	batch.fullRefreshDueSoon = deltaWindowDeletesSyncedFolder(bl, events)
 	batch.shortcutTopology = topology
 	return batch, err
+}
+
+// deltaWindowDeletesSyncedFolder reports whether an incremental delta window
+// deleted a folder the baseline holds. Delta reports a deleted folder alone,
+// never its descendants (R-2.17.2), and that silence also covers an item moved
+// into the folder in the same window: the move is part of a subtree delta
+// never repeats, so the item's row stays at its old path as a ghost and its
+// synced local copy is never deleted. Only a full enumeration can see that
+// such an item is gone, so the folder's tombstone makes the full refresh due
+// within fullRefreshAfterFolderDeleteDelay; its orphans are confirmed by ID
+// before anything is deleted (confirmEnumerationOrphans).
+//
+// A folder this client deleted itself is no longer in the baseline when its
+// tombstone echoes back, so propagating a local folder delete does not cost a
+// full enumeration.
+func deltaWindowDeletesSyncedFolder(bl *Baseline, events []changeEvent) bool {
+	if bl == nil {
+		return false
+	}
+	for i := range events {
+		if !events[i].IsDeleted || events[i].ItemID == "" {
+			continue
+		}
+		if entry, ok := bl.GetByID(events[i].ItemID); ok && entry.ItemType == ItemTypeFolder {
+			return true
+		}
+	}
+
+	return false
 }
 
 // executeDriveRootFullObservation runs the full refresh with orphan detection
