@@ -424,9 +424,9 @@ func (r *moveScenarioRemote) delta(token string) *graph.DeltaPage {
 			changes = append(changes, change{seq: seq, item: r.reported(id)})
 		}
 	}
-	for id, tombstone := range r.tombstones {
-		if tombstone.seq > since {
-			changes = append(changes, change{seq: tombstone.seq, item: r.tombstones[id].item})
+	for id := range r.tombstones {
+		if r.tombstones[id].seq > since {
+			changes = append(changes, change{seq: r.tombstones[id].seq, item: r.tombstones[id].item})
 		}
 	}
 	sort.Slice(changes, func(i, j int) bool {
@@ -738,8 +738,8 @@ func (r *moveScenarioRemote) clone() *moveScenarioRemote {
 	for id, seq := range r.changedAt {
 		c.changedAt[id] = seq
 	}
-	for id, tombstone := range r.tombstones {
-		c.tombstones[id] = tombstone
+	for id := range r.tombstones {
+		c.tombstones[id] = r.tombstones[id]
 	}
 
 	return c

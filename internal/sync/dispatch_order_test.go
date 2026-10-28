@@ -95,6 +95,8 @@ func parseDispatchOrder(t *testing.T, name string) func([]*trackedAction) []*tra
 
 // registeredDispatchOrders maps a test name to the order engines built under
 // it (or its subtests) use.
+//
+//nolint:gochecknoglobals // a registry test engines consult by test name; newTestEngine has no other way to learn its test's order
 var registeredDispatchOrders stdsync.Map
 
 // runUnderDispatchOrder runs fn as t with every engine it builds dispatching
@@ -115,7 +117,9 @@ func applyRegisteredDispatchOrder(t *testing.T, eng *Engine) {
 	order := os.Getenv(dispatchOrderEnv)
 	for name := t.Name(); name != ""; name = parentTestName(name) {
 		if registered, ok := registeredDispatchOrders.Load(name); ok {
-			order, _ = registered.(string)
+			if name, isString := registered.(string); isString {
+				order = name
+			}
 			break
 		}
 	}
@@ -139,116 +143,120 @@ func parentTestName(name string) string {
 // which has its own determinism check. TestReverseDispatch_RunOnceScenariosPass
 // runs each once with the frontier reversed on one worker, and
 // TestReverseDispatchTable_ListsEveryRunOnceScenario keeps the list complete.
-var runOnceScenarios = []func(*testing.T){
-	TestRunOnce_AcceptedServerTransformIsNotDownloadedAgain,
-	TestRunOnce_ActivityHookNamesEachCompletedFile,
-	TestRunOnce_BaselineUpdatedAfterRun,
-	TestRunOnce_Bidirectional_FullRun,
-	TestRunOnce_BothSidesRenamedIdenticallyConverges,
-	TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending,
-	TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked,
-	TestRunOnce_ContextCancellation,
-	TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth,
-	TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth,
-	TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting,
-	TestRunOnce_DeltaExpired_AutoRetry,
-	TestRunOnce_DeltaExpiredRecoverySynthesizesMissedDeletes,
-	TestRunOnce_DeltaExpiredUploadDifferencesKeepsAndReuploadsLocal,
-	TestRunOnce_DeltaTokenCommittedWithObservations,
-	TestRunOnce_DeltaTokenPersisted,
-	TestRunOnce_DivergentRenameConvergesInTwoPasses,
-	TestRunOnce_DownloadOnly_DefersEditDeleteRecreateUpload,
-	TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged,
-	TestRunOnce_DownloadOnly_ObservesLocalScanButSuppressesUploads,
-	TestRunOnce_DownloadOverwriteKeepsPreviousVersionInTrash,
-	TestRunOnce_DryRunActivityListsPlannedActions,
-	TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken,
-	TestRunOnce_DryRun_NoExecution,
-	TestRunOnce_EmojiOnlyVariantIsACollisionNotAnEndlessConflict,
-	TestRunOnce_EmptiedMountPointPlansNoRemoteDeletes,
-	TestRunOnce_EmptyPlan_NoPanic,
-	TestRunOnce_ExecutorPartialFailure,
-	TestRunOnce_FailedActionsRemainInReportErrorsAfterSummaryLogging,
-	TestRunOnce_FolderDeletedAndRestoredLocallyTransfersNothing,
-	TestRunOnce_FolderReplacedByFilesOnBothSidesKeepsBoth,
-	TestRunOnce_FileReplacedByFoldersOnBothSidesMergesThem,
-	TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem,
-	TestRunOnce_FollowSymlinks_UploadsFileInsideDirectoryAliasOutsideRoot,
-	TestRunOnce_FullCaseFoldingVariantNeverOverwritesTheSyncedFile,
-	TestRunOnce_FullRescanDropsUnsyncedRemoteStateOrphans,
-	TestRunOnce_FullRescanWithEveryFolderReboundPlansNoTransfers,
-	TestRunOnce_FullRescanWithItemReplacedAtSamePath,
-	TestRunOnce_HardLinkUploadsAsANewFile,
-	TestRunOnce_InPlaceEditWithRestoredMtimeConflictsWithRemoteEdit,
-	TestRunOnce_InPlaceEditWithRestoredMtimeUploads,
-	TestRunOnce_InterruptedCreateFinishesIntoItsOwnPlaceholder,
-	TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally,
-	TestRunOnce_LocalDeleteInsideFolderRenamedOnlineIsNotUndone,
-	TestRunOnce_LegacyFolderBaselineGainsIdentityAndMovesAsOne,
-	TestRunOnce_LocalFileReplacedByFolderConverges,
-	TestRunOnce_LocalFolderDeleteDeletesRemoteFolder,
-	TestRunOnce_LocalFolderDeleteKeepsRemoteChildAddedAfterObservation,
-	TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource,
-	TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn,
-	TestRunOnce_LocalFolderRenameWithChildRenameConvergesInOnePass,
-	TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth,
-	TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges,
-	TestRunOnce_LocalRenameWhileOneDriveSwapsItConverges,
-	TestRunOnce_LocalRenameKeepsTheRemoteModificationTime,
-	TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit,
-	TestRunOnce_MountRootDeltaIncapableSkipsFolderDelta,
-	TestRunOnce_MountRootEnumerateStillPersistsFullReconcileCadenceWithoutToken,
-	TestRunOnce_MountRootUsesScopedDeltaAndToken,
-	TestRunOnce_NoChanges,
-	TestRunOnce_PersistsLocalSnapshotAndConvergedSQLiteReconciliation,
-	TestRunOnce_PlaceholderOfACreateWhoseFileWasDeletedIsRemoved,
-	TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta,
-	TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta,
-	TestRunOnce_RemoteDeleteAfterRebindingInTheSameEngineSucceeds,
-	TestRunOnce_RemoteDeleteOfALocallyRecreatedFolderKeepsIt,
-	TestRunOnce_RemoteDeleteMovesLocalFileToTrash,
-	TestRunOnce_RemoteDeleteInsideFolderRenamedLocallyIsNotUndone,
-	TestRunOnce_RemoteReplaceInsideFolderRenamedLocallyConverges,
-	TestRunOnce_RemoteFileReplacedByNonEmptyFolderWithLocalEditKeepsBoth,
-	TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift,
-	TestRunOnce_RemoteFolderDeleteWithIgnoredLocalFileConverges,
-	TestRunOnce_RemoteFolderRenameMovesExistingChildrenOnce,
-	TestRunOnce_RemoteFolderRenameWithChildRenameAndMoveInConverges,
-	TestRunOnce_RemoteFolderRenameWithNewSubfolderConverges,
-	TestRunOnce_RemoteFolderReplacedByFileWithLocalChildEditsKeepsBoth,
-	TestRunOnce_RemoteHierarchyInversionConverges,
-	TestRunOnce_RemoteMoveChainIntoVacatedPathConverges,
-	TestRunOnce_RemoteMoveOfAFileTheUserReplacedLocallyKeepsBoth,
-	TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting,
-	TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass,
-	TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit,
-	TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads,
-	TestRunOnce_RemoteRenameInsideLocallyRecreatedFolderConverges,
-	TestRunOnce_RemoteReplaceOfALocallyRecreatedFolderKeepsBoth,
-	TestRunOnce_RemoteRenameAppliedLocallyDoesNotReupload,
-	TestRunOnce_RemoteTwinOfASyncedFileKeepsTheLocalFile,
-	TestRunOnce_RemoteTwinsAreHeldAndTheDriveKeepsSyncing,
-	TestRunOnce_RenameAndRecreateMovesThenCreates,
-	TestRunOnce_RenumberedDeviceTransfersNothing,
-	TestRunOnce_SavedTokenOneDriveKeepsRefusingIsReenumerated,
-	TestRunOnce_SharePointRootFormsRecordsActionableFailure,
-	TestRunOnce_SyncedItemsMadeUnrepresentableAreNotDeletedOnline,
-	TestRunOnce_SwapOfTwoNamesConverges,
-	TestRunOnce_SyncRootReplacedWhileEngineRunsIsRefused,
-	TestRunOnce_TimestampOnlyLocalChangeRefreshesBaselineWithoutTransfer,
-	TestRunOnce_TransfersRecordLocalCtimeAndIdentity,
-	TestRunOnce_UnmountedNestedDiskWithFewFilesIsNotDeleted,
-	TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableCollision,
-	TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurableCollision,
-	TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta,
-	TestRunOnce_UploadOnly_StillObservesRemoteDelta,
+//
+//nolint:funlen // one scenario per line
+func runOnceScenarios() []func(*testing.T) {
+	return []func(*testing.T){
+		TestRunOnce_AcceptedServerTransformIsNotDownloadedAgain,
+		TestRunOnce_ActivityHookNamesEachCompletedFile,
+		TestRunOnce_BaselineUpdatedAfterRun,
+		TestRunOnce_Bidirectional_FullRun,
+		TestRunOnce_BothSidesRenamedIdenticallyConverges,
+		TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending,
+		TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked,
+		TestRunOnce_ContextCancellation,
+		TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth,
+		TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth,
+		TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting,
+		TestRunOnce_DeltaExpired_AutoRetry,
+		TestRunOnce_DeltaExpiredRecoverySynthesizesMissedDeletes,
+		TestRunOnce_DeltaExpiredUploadDifferencesKeepsAndReuploadsLocal,
+		TestRunOnce_DeltaTokenCommittedWithObservations,
+		TestRunOnce_DeltaTokenPersisted,
+		TestRunOnce_DivergentRenameConvergesInTwoPasses,
+		TestRunOnce_DownloadOnly_DefersEditDeleteRecreateUpload,
+		TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged,
+		TestRunOnce_DownloadOnly_ObservesLocalScanButSuppressesUploads,
+		TestRunOnce_DownloadOverwriteKeepsPreviousVersionInTrash,
+		TestRunOnce_DryRunActivityListsPlannedActions,
+		TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken,
+		TestRunOnce_DryRun_NoExecution,
+		TestRunOnce_EmojiOnlyVariantIsACollisionNotAnEndlessConflict,
+		TestRunOnce_EmptiedMountPointPlansNoRemoteDeletes,
+		TestRunOnce_EmptyPlan_NoPanic,
+		TestRunOnce_ExecutorPartialFailure,
+		TestRunOnce_FailedActionsRemainInReportErrorsAfterSummaryLogging,
+		TestRunOnce_FolderDeletedAndRestoredLocallyTransfersNothing,
+		TestRunOnce_FolderReplacedByFilesOnBothSidesKeepsBoth,
+		TestRunOnce_FileReplacedByFoldersOnBothSidesMergesThem,
+		TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem,
+		TestRunOnce_FollowSymlinks_UploadsFileInsideDirectoryAliasOutsideRoot,
+		TestRunOnce_FullCaseFoldingVariantNeverOverwritesTheSyncedFile,
+		TestRunOnce_FullRescanDropsUnsyncedRemoteStateOrphans,
+		TestRunOnce_FullRescanWithEveryFolderReboundPlansNoTransfers,
+		TestRunOnce_FullRescanWithItemReplacedAtSamePath,
+		TestRunOnce_HardLinkUploadsAsANewFile,
+		TestRunOnce_InPlaceEditWithRestoredMtimeConflictsWithRemoteEdit,
+		TestRunOnce_InPlaceEditWithRestoredMtimeUploads,
+		TestRunOnce_InterruptedCreateFinishesIntoItsOwnPlaceholder,
+		TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally,
+		TestRunOnce_LocalDeleteInsideFolderRenamedOnlineIsNotUndone,
+		TestRunOnce_LegacyFolderBaselineGainsIdentityAndMovesAsOne,
+		TestRunOnce_LocalFileReplacedByFolderConverges,
+		TestRunOnce_LocalFolderDeleteDeletesRemoteFolder,
+		TestRunOnce_LocalFolderDeleteKeepsRemoteChildAddedAfterObservation,
+		TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource,
+		TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn,
+		TestRunOnce_LocalFolderRenameWithChildRenameConvergesInOnePass,
+		TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth,
+		TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges,
+		TestRunOnce_LocalRenameWhileOneDriveSwapsItConverges,
+		TestRunOnce_LocalRenameKeepsTheRemoteModificationTime,
+		TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit,
+		TestRunOnce_MountRootDeltaIncapableSkipsFolderDelta,
+		TestRunOnce_MountRootEnumerateStillPersistsFullReconcileCadenceWithoutToken,
+		TestRunOnce_MountRootUsesScopedDeltaAndToken,
+		TestRunOnce_NoChanges,
+		TestRunOnce_PersistsLocalSnapshotAndConvergedSQLiteReconciliation,
+		TestRunOnce_PlaceholderOfACreateWhoseFileWasDeletedIsRemoved,
+		TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta,
+		TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta,
+		TestRunOnce_RemoteDeleteAfterRebindingInTheSameEngineSucceeds,
+		TestRunOnce_RemoteDeleteOfALocallyRecreatedFolderKeepsIt,
+		TestRunOnce_RemoteDeleteMovesLocalFileToTrash,
+		TestRunOnce_RemoteDeleteInsideFolderRenamedLocallyIsNotUndone,
+		TestRunOnce_RemoteReplaceInsideFolderRenamedLocallyConverges,
+		TestRunOnce_RemoteFileReplacedByNonEmptyFolderWithLocalEditKeepsBoth,
+		TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift,
+		TestRunOnce_RemoteFolderDeleteWithIgnoredLocalFileConverges,
+		TestRunOnce_RemoteFolderRenameMovesExistingChildrenOnce,
+		TestRunOnce_RemoteFolderRenameWithChildRenameAndMoveInConverges,
+		TestRunOnce_RemoteFolderRenameWithNewSubfolderConverges,
+		TestRunOnce_RemoteFolderReplacedByFileWithLocalChildEditsKeepsBoth,
+		TestRunOnce_RemoteHierarchyInversionConverges,
+		TestRunOnce_RemoteMoveChainIntoVacatedPathConverges,
+		TestRunOnce_RemoteMoveOfAFileTheUserReplacedLocallyKeepsBoth,
+		TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting,
+		TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass,
+		TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit,
+		TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads,
+		TestRunOnce_RemoteRenameInsideLocallyRecreatedFolderConverges,
+		TestRunOnce_RemoteReplaceOfALocallyRecreatedFolderKeepsBoth,
+		TestRunOnce_RemoteRenameAppliedLocallyDoesNotReupload,
+		TestRunOnce_RemoteTwinOfASyncedFileKeepsTheLocalFile,
+		TestRunOnce_RemoteTwinsAreHeldAndTheDriveKeepsSyncing,
+		TestRunOnce_RenameAndRecreateMovesThenCreates,
+		TestRunOnce_RenumberedDeviceTransfersNothing,
+		TestRunOnce_SavedTokenOneDriveKeepsRefusingIsReenumerated,
+		TestRunOnce_SharePointRootFormsRecordsActionableFailure,
+		TestRunOnce_SyncedItemsMadeUnrepresentableAreNotDeletedOnline,
+		TestRunOnce_SwapOfTwoNamesConverges,
+		TestRunOnce_SyncRootReplacedWhileEngineRunsIsRefused,
+		TestRunOnce_TimestampOnlyLocalChangeRefreshesBaselineWithoutTransfer,
+		TestRunOnce_TransfersRecordLocalCtimeAndIdentity,
+		TestRunOnce_UnmountedNestedDiskWithFewFilesIsNotDeleted,
+		TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableCollision,
+		TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurableCollision,
+		TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta,
+		TestRunOnce_UploadOnly_StillObservesRemoteDelta,
+	}
 }
 
 // Validates: R-2.17.1, R-6.8.9
 func TestReverseDispatch_RunOnceScenariosPass(t *testing.T) {
 	t.Parallel()
 
-	for _, scenario := range runOnceScenarios {
+	for _, scenario := range runOnceScenarios() {
 		name := testFuncName(scenario)
 		t.Run(name, func(t *testing.T) {
 			runUnderDispatchOrder(t, "reverse", scenario)
@@ -261,7 +269,7 @@ func TestReverseDispatchTable_ListsEveryRunOnceScenario(t *testing.T) {
 	t.Parallel()
 
 	listed := map[string]bool{}
-	for _, scenario := range runOnceScenarios {
+	for _, scenario := range runOnceScenarios() {
 		listed[testFuncName(scenario)] = true
 	}
 

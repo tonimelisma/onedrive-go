@@ -44,7 +44,7 @@ func virtualWait(d time.Duration) {
 func TestDirtyBuffer_VirtualTime_FlushesOneQuietPeriodAfterTheLastSignal(t *testing.T) {
 	t.Parallel()
 
-	inVirtualTime(t, func(t *testing.T) {
+	inVirtualTime(t, func(t *testing.T) { //nolint:thelper // a test body run in a synctest bubble, like a t.Run subtest
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
@@ -73,7 +73,7 @@ func TestDirtyBuffer_VirtualTime_FlushesOneQuietPeriodAfterTheLastSignal(t *test
 func TestDirtyBuffer_VirtualTime_ContinuousSignalsFlushAtExactlyTheMaxWait(t *testing.T) {
 	t.Parallel()
 
-	inVirtualTime(t, func(t *testing.T) {
+	inVirtualTime(t, func(t *testing.T) { //nolint:thelper // a test body run in a synctest bubble, like a t.Run subtest
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
@@ -110,7 +110,7 @@ func TestDirtyBuffer_VirtualTime_ContinuousSignalsFlushAtExactlyTheMaxWait(t *te
 func TestHandleWrite_VirtualTime_RapidWritesCoalesceIntoOneHash(t *testing.T) {
 	t.Parallel()
 
-	inVirtualTime(t, func(t *testing.T) {
+	inVirtualTime(t, func(t *testing.T) { //nolint:thelper // a test body run in a synctest bubble, like a t.Run subtest
 		dir := t.TempDir()
 		filePath := writeTestFile(t, dir, "rapid.txt", "v1")
 		baseline := baselineWith(&BaselineEntry{
@@ -159,7 +159,7 @@ func TestHandleWrite_VirtualTime_RapidWritesCoalesceIntoOneHash(t *testing.T) {
 func TestWatch_VirtualTime_SafetyScanFindsAMissedFileAtItsInterval(t *testing.T) {
 	t.Parallel()
 
-	inVirtualTime(t, func(t *testing.T) {
+	inVirtualTime(t, func(t *testing.T) { //nolint:thelper // a test body run in a synctest bubble, like a t.Run subtest
 		dir := t.TempDir()
 		mockWatcher := newMockFsWatcher()
 		obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})

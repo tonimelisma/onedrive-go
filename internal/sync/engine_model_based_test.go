@@ -288,7 +288,7 @@ func runModelScenarioWith(t *testing.T, seed uint64, crashes bool) *modelRun {
 		if !assertSyncInvariants(t, h) {
 			require.FailNow(t, "sync invariants violated", "%s: %s", label, run.failureContext())
 		}
-		run.record("%s converged: %v", label, modelPaths(converged))
+		run.recordf("%s converged: %v", label, modelPaths(converged))
 	}
 
 	return run
@@ -358,7 +358,7 @@ func (r *modelRun) recoverFrom(capture *crashCapture, label string) *syncHarness
 // from the wall clock and so differs between two runs of one seed.
 var modelConflictStamp = regexp.MustCompile(`\.conflict-\d{8}-\d{6}`)
 
-func (r *modelRun) record(format string, args ...any) {
+func (r *modelRun) recordf(format string, args ...any) {
 	line := modelConflictStamp.ReplaceAllString(fmt.Sprintf(format, args...), ".conflict-STAMP")
 	r.transcriptMu.Lock()
 	defer r.transcriptMu.Unlock()
@@ -367,7 +367,7 @@ func (r *modelRun) record(format string, args ...any) {
 
 func (r *modelRun) recordDispatch(frontier []*trackedAction) {
 	for _, ta := range frontier {
-		r.record("dispatch %s %s <- %s", ta.Action.Type, ta.Action.Path, ta.Action.OldPath)
+		r.recordf("dispatch %s %s <- %s", ta.Action.Type, ta.Action.Path, ta.Action.OldPath)
 	}
 }
 

@@ -386,7 +386,7 @@ func (r *modelRun) caseVariantCreate(label string) []modelEdit {
 	r.logf("case variants: local create %s, remote create %s", name, variant)
 
 	r.afterFirstPass = func() []modelEdit {
-		data, err := os.ReadFile(r.localAbs(name)) //nolint:gosec // test reads its own temp tree
+		data, err := os.ReadFile(r.localAbs(name))
 		require.NoError(r.t, err, "%s: the local case variant %s must survive the collision; %s", label, name, r.failureContext())
 		assert.Equal(r.t, localContent, string(data), "%s: the local case variant %s was overwritten; %s", label, name, r.failureContext())
 		resolved := r.freeResolvedName(name)

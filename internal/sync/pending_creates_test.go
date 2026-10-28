@@ -235,6 +235,6 @@ func TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurab
 	creates := len(remote.folderCreates)
 	report, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
-	assert.Equal(t, creates, len(remote.folderCreates), "held with backoff, not retried as is on the next pass")
+	assert.Len(t, remote.folderCreates, creates, "held with backoff, not retried as is on the next pass")
 	assert.Zero(t, report.Failed+report.Succeeded, "nothing ran while the collision stands: %+v", report)
 }

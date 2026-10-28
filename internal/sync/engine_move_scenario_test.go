@@ -616,9 +616,9 @@ func TestRunOnce_RemoteMoveChainIntoVacatedPathConverges(t *testing.T) {
 	runScenarioPass(t, eng)
 	runScenarioPass(t, eng)
 
-	assert.Equal(t, remote.tree(), map[string]string{
+	assert.Equal(t, map[string]string{
 		"b.txt": "inside\n", "c": "/", "c/renamed-b.txt": "b\n", "keep.txt": "keep\n",
-	})
+	}, remote.tree())
 	requireScenarioLocalFile(t, syncRoot, "b.txt", "inside\n")
 	requireScenarioLocalFile(t, syncRoot, "c/renamed-b.txt", "b\n")
 	assert.NoFileExists(t, filepath.Join(syncRoot, "c", "inside.txt"))

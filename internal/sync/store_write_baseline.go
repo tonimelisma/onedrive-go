@@ -389,7 +389,8 @@ func (s *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 	if applyErr := applySingleMutation(ctx, tx, outcome); applyErr != nil {
 		return applyErr
 	}
-	if err = s.reachCrashPoint(crashPointCommitOutcome); err != nil {
+	if crashErr := s.reachCrashPoint(crashPointCommitOutcome); crashErr != nil {
+		err = crashErr
 		return err
 	}
 

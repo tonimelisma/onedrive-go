@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"database/sql"
 	"fmt"
 	"io/fs"
 	"os"
@@ -127,11 +128,7 @@ func assertStoreIntegrity(t *testing.T, eng *testEngine) bool {
 	require.NoError(t, db.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&integrity))
 	ok := assert.Equal(t, "ok", integrity, "invariant: PRAGMA integrity_check")
 
-	rows, err := db.QueryContext(ctx, `PRAGMA foreign_key_check`)
-	require.NoError(t, err)
-	ok = assert.False(t, rows.Next(), "invariant: PRAGMA foreign_key_check is clean") && ok
-	require.NoError(t, rows.Close())
-	require.NoError(t, rows.Err())
+	ok = assertForeignKeysClean(t, db) && ok
 
 	for _, query := range []struct{ what, sql string }{
 		{"rows parked at :park: paths", `SELECT
@@ -152,6 +149,18 @@ func assertStoreIntegrity(t *testing.T, eng *testEngine) bool {
 	}
 
 	return ok
+}
+
+func assertForeignKeysClean(t *testing.T, db *sql.DB) bool {
+	t.Helper()
+
+	rows, err := db.QueryContext(t.Context(), `PRAGMA foreign_key_check`)
+	require.NoError(t, err)
+	defer rows.Close()
+	clean := assert.False(t, rows.Next(), "invariant: PRAGMA foreign_key_check is clean")
+	require.NoError(t, rows.Err())
+
+	return clean
 }
 
 func assertNoStrayArtifacts(t *testing.T, h *syncHarness, local map[string]string) bool {
@@ -205,8 +214,11 @@ func readTreeContents(t *testing.T, root string, withFolders bool) map[string]st
 			return err
 		}
 		rel, relErr := filepath.Rel(root, p)
-		if relErr != nil || rel == "." {
-			return relErr
+		if relErr != nil {
+			return fmt.Errorf("relative path of %s: %w", p, relErr)
+		}
+		if rel == "." {
+			return nil
 		}
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
@@ -220,7 +232,7 @@ func readTreeContents(t *testing.T, root string, withFolders bool) map[string]st
 		}
 		data, readErr := os.ReadFile(p) //nolint:gosec // test reads its own temp tree
 		if readErr != nil {
-			return readErr
+			return fmt.Errorf("read %s: %w", p, readErr)
 		}
 		out[rel] = string(data)
 		return nil
@@ -231,6 +243,24 @@ func readTreeContents(t *testing.T, root string, withFolders bool) map[string]st
 	require.NoError(t, err)
 
 	return out
+}
+
+func syncStateRows(t *testing.T, eng *testEngine, query string) string {
+	t.Helper()
+
+	rows, err := eng.baseline.rawDB().QueryContext(t.Context(), query)
+	require.NoError(t, err)
+	defer rows.Close()
+	var out strings.Builder
+	for rows.Next() {
+		var p, id, kind, hash string
+		var inode int64
+		require.NoError(t, rows.Scan(&p, &id, &kind, &hash, &inode))
+		fmt.Fprintf(&out, "\n    %s %s %s %.8s ino=%d", p, id, kind, hash, inode)
+	}
+	require.NoError(t, rows.Err())
+
+	return out.String()
 }
 
 // syncStateDump renders the baseline, remote_state and local_state rows for a
@@ -244,17 +274,8 @@ func syncStateDump(t *testing.T, eng *testEngine) string {
 		{"remote_state", `SELECT path, item_id, item_type, COALESCE(hash, ''), 0 FROM remote_state ORDER BY path`},
 		{"local_state", `SELECT path, '', item_type, COALESCE(hash, ''), local_inode FROM local_state ORDER BY path`},
 	} {
-		rows, err := eng.baseline.rawDB().QueryContext(t.Context(), q.sql)
-		require.NoError(t, err)
 		out.WriteString("\n  " + q.name + ":")
-		for rows.Next() {
-			var p, id, kind, hash string
-			var inode int64
-			require.NoError(t, rows.Scan(&p, &id, &kind, &hash, &inode))
-			fmt.Fprintf(&out, "\n    %s %s %s %.8s ino=%d", p, id, kind, hash, inode)
-		}
-		require.NoError(t, rows.Err())
-		require.NoError(t, rows.Close())
+		out.WriteString(syncStateRows(t, eng, q.sql))
 	}
 
 	return out.String()

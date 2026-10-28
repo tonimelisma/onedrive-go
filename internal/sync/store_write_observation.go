@@ -62,7 +62,8 @@ func (s *SyncStore) commitObservation(
 		err = commitErr
 		return err
 	}
-	if err = s.reachCrashPoint(crashPointCommitObservation); err != nil {
+	if crashErr := s.reachCrashPoint(crashPointCommitObservation); crashErr != nil {
+		err = crashErr
 		return err
 	}
 

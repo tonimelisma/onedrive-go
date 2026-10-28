@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"io"
@@ -25,7 +26,7 @@ import (
 //
 // The power-loss variant keeps only the main database file: whatever was
 // committed to the write-ahead log since the last checkpoint is gone, as
-// after a disk that never honoured the fsyncs, or a restore from a copy taken
+// after a disk that never honored the fsyncs, or a restore from a copy taken
 // without the WAL. The state is then older than both trees.
 //
 // The snapshot is a copy, so every entry has a new inode. The copy records
@@ -89,7 +90,8 @@ func (c *crashCapture) captureDatabase() error {
 		return fmt.Errorf("open state for snapshot: %w", err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`VACUUM INTO ?`, dst); err != nil {
+	// The hook has no context of its own; the snapshot is one local read.
+	if _, err := db.ExecContext(context.Background(), `VACUUM INTO ?`, dst); err != nil {
 		return fmt.Errorf("snapshot state: %w", err)
 	}
 
@@ -100,98 +102,138 @@ func (c *crashCapture) captureDatabase() error {
 // its WAL, keeping modes, mtimes and hard links, and returns which new
 // identity each old one became.
 func copyTreePreservingLinks(root, dst string) (map[synctree.FileIdentity]synctree.FileIdentity, error) {
-	identities := map[synctree.FileIdentity]synctree.FileIdentity{}
-	firstPath := map[synctree.FileIdentity]string{}
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, relErr := filepath.Rel(root, p)
-		if relErr != nil {
-			return relErr
-		}
-		if base := filepath.Base(rel); rel != "." && (base == crashTestDBName || base == crashTestDBName+"-wal" || base == crashTestDBName+"-shm") {
-			return nil
-		}
-		info, infoErr := d.Info()
-		if infoErr != nil {
-			return infoErr
-		}
-		target := filepath.Join(dst, rel)
-		old, _ := synctree.IdentityFromFileInfo(info)
-		switch {
-		case d.IsDir():
-			if rel != "." {
-				if mkErr := os.Mkdir(target, info.Mode().Perm()); mkErr != nil {
-					return mkErr
-				}
-			}
-		case !info.Mode().IsRegular():
-			return nil
-		case firstPath[old] != "":
-			return os.Link(firstPath[old], target)
-		default:
-			if copyErr := copyFileContent(p, target); copyErr != nil {
-				return copyErr
-			}
-			if timeErr := os.Chtimes(target, info.ModTime(), info.ModTime()); timeErr != nil {
-				return timeErr
-			}
-			firstPath[old] = target
-		}
-		newInfo, statErr := os.Lstat(target)
-		if statErr != nil {
-			return statErr
-		}
-		if renewed, ok := synctree.IdentityFromFileInfo(newInfo); ok {
-			identities[old] = renewed
-		}
-		return nil
-	})
-	if err != nil {
+	c := &treeCopier{
+		root: root, dst: dst,
+		identities: map[synctree.FileIdentity]synctree.FileIdentity{},
+		firstPath:  map[synctree.FileIdentity]string{},
+	}
+	if err := filepath.WalkDir(root, c.visit); err != nil {
 		return nil, fmt.Errorf("copy %s: %w", root, err)
 	}
 	// Folder mtimes changed as their children were copied in.
-	return identities, restoreDirTimes(root, dst)
+	if err := filepath.WalkDir(root, c.restoreDirTime); err != nil {
+		return nil, fmt.Errorf("restore folder times under %s: %w", dst, err)
+	}
+
+	return c.identities, nil
 }
 
-func restoreDirTimes(root, dst string) error {
-	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || !d.IsDir() {
+type treeCopier struct {
+	root, dst  string
+	identities map[synctree.FileIdentity]synctree.FileIdentity
+	firstPath  map[synctree.FileIdentity]string
+}
+
+func isCrashTestStateFile(rel string) bool {
+	base := filepath.Base(rel)
+	return rel != "." && (base == crashTestDBName || base == crashTestDBName+"-wal" || base == crashTestDBName+"-shm")
+}
+
+func (c *treeCopier) visit(p string, d fs.DirEntry, walkErr error) error {
+	if walkErr != nil {
+		return walkErr
+	}
+	rel, err := filepath.Rel(c.root, p)
+	if err != nil {
+		return fmt.Errorf("relative path of %s: %w", p, err)
+	}
+	if isCrashTestStateFile(rel) {
+		return nil
+	}
+	info, err := d.Info()
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", p, err)
+	}
+	target := filepath.Join(c.dst, rel)
+	old, _ := synctree.IdentityFromFileInfo(info)
+	if copyErr := c.copyEntry(p, target, rel, info, old); copyErr != nil {
+		return copyErr
+	}
+	if !info.IsDir() && !info.Mode().IsRegular() {
+		return nil
+	}
+	copied, err := os.Lstat(target)
+	if err != nil {
+		return fmt.Errorf("stat copy %s: %w", target, err)
+	}
+	if renewed, ok := synctree.IdentityFromFileInfo(copied); ok {
+		c.identities[old] = renewed
+	}
+
+	return nil
+}
+
+func (c *treeCopier) copyEntry(p, target, rel string, info fs.FileInfo, old synctree.FileIdentity) error {
+	switch {
+	case info.IsDir():
+		if rel == "." {
+			return nil
+		}
+		if err := os.Mkdir(target, info.Mode().Perm()); err != nil {
+			return fmt.Errorf("create %s: %w", target, err)
+		}
+	case !info.Mode().IsRegular():
+		return nil
+	case c.firstPath[old] != "":
+		if err := os.Link(c.firstPath[old], target); err != nil {
+			return fmt.Errorf("link %s: %w", target, err)
+		}
+	default:
+		if err := copyFileContent(p, target); err != nil {
 			return err
 		}
-		rel, relErr := filepath.Rel(root, p)
-		if relErr != nil {
-			return relErr
+		if err := os.Chtimes(target, info.ModTime(), info.ModTime()); err != nil {
+			return fmt.Errorf("set times of %s: %w", target, err)
 		}
-		info, infoErr := d.Info()
-		if infoErr != nil {
-			return infoErr
-		}
-		return os.Chtimes(filepath.Join(dst, rel), info.ModTime(), info.ModTime())
-	})
+		c.firstPath[old] = target
+	}
+
+	return nil
 }
 
-func copyFileContent(src, dst string) error {
+func (c *treeCopier) restoreDirTime(p string, d fs.DirEntry, walkErr error) error {
+	if walkErr != nil || !d.IsDir() {
+		return walkErr
+	}
+	rel, err := filepath.Rel(c.root, p)
+	if err != nil {
+		return fmt.Errorf("relative path of %s: %w", p, err)
+	}
+	info, err := d.Info()
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", p, err)
+	}
+	if err := os.Chtimes(filepath.Join(c.dst, rel), info.ModTime(), info.ModTime()); err != nil {
+		return fmt.Errorf("set times of %s: %w", rel, err)
+	}
+
+	return nil
+}
+
+func copyFileContent(src, dst string) (err error) {
 	in, err := os.Open(src) //nolint:gosec // test copies its own temp tree
 	if err != nil {
-		return err
+		return fmt.Errorf("open %s: %w", src, err)
 	}
 	defer in.Close()
 	info, err := in.Stat()
 	if err != nil {
-		return err
+		return fmt.Errorf("stat %s: %w", src, err)
 	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm()) //nolint:gosec // test copies its own temp tree
 	if err != nil {
-		return err
+		return fmt.Errorf("create %s: %w", dst, err)
 	}
+	defer func() {
+		if closeErr := out.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close %s: %w", dst, closeErr)
+		}
+	}()
 	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
+		return fmt.Errorf("copy %s: %w", src, err)
 	}
 
-	return out.Close()
+	return nil
 }
 
 // reopen rewrites the snapshot's recorded identities to the copy's, rebinds
@@ -205,12 +247,15 @@ func (c *crashCapture) reopen(t *testing.T) *syncHarness {
 	dbPath := filepath.Join(c.dstDir, crashTestDBName)
 	db, err := sql.Open("sqlite", "file:"+dbPath)
 	require.NoError(t, err)
-	for _, table := range []string{"baseline", "local_state"} {
+	for _, update := range []string{
+		`UPDATE baseline SET local_device = ?, local_inode = ?
+			WHERE local_has_identity = 1 AND local_device = ? AND local_inode = ?`,
+		`UPDATE local_state SET local_device = ?, local_inode = ?
+			WHERE local_has_identity = 1 AND local_device = ? AND local_inode = ?`,
+	} {
 		for old, renewed := range c.identities {
-			_, err := db.ExecContext(t.Context(),
-				`UPDATE `+table+` SET local_device = ?, local_inode = ?
-				WHERE local_has_identity = 1 AND local_device = ? AND local_inode = ?`,
-				int64(renewed.Device), int64(renewed.Inode), int64(old.Device), int64(old.Inode)) //nolint:gosec // identities fit the stored columns
+			_, err := db.ExecContext(t.Context(), update,
+				int64(renewed.Device), int64(renewed.Inode), int64(old.Device), int64(old.Inode))
 			require.NoError(t, err)
 		}
 	}
