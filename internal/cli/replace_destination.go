@@ -47,7 +47,7 @@ func replaceDestination(
 	}
 
 	asideName := asideNameFor(dest.newName, now)
-	if _, err := session.MoveItem(ctx, dest.existingID, "", asideName); err != nil {
+	if _, err := session.MoveItem(ctx, dest.existingID, "", asideName, dest.existingModified); err != nil {
 		return newRemoteOpError("setting aside existing", destPath, err)
 	}
 
@@ -61,7 +61,7 @@ func replaceDestination(
 		}
 		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 		defer cancel()
-		if _, restoreErr := session.MoveItem(restoreCtx, dest.existingID, "", dest.newName); restoreErr != nil {
+		if _, restoreErr := session.MoveItem(restoreCtx, dest.existingID, "", dest.newName, dest.existingModified); restoreErr != nil {
 			return errors.Join(err, fmt.Errorf(
 				"the original %s is kept on OneDrive as %q; restoring its name failed: %w",
 				destPath, asideName, restoreErr))

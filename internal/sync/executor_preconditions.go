@@ -9,6 +9,7 @@ import (
 	slashpath "path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -61,36 +62,56 @@ func (e *executor) remoteSourcePreconditionETag(
 	action *Action,
 	op string,
 ) (string, error) {
+	live, err := e.remoteSourcePrecondition(ctx, driveID, action, op)
+	return live.eTag, err
+}
+
+// liveRemoteSource is what a passed remote source preflight learned about the
+// item. Both fields are empty when the action names no item.
+type liveRemoteSource struct {
+	eTag     string
+	modified time.Time
+}
+
+// remoteSourcePrecondition checks the planned remote source against the live
+// item. errRemoteMoveAlreadyApplied still carries the live facts.
+func (e *executor) remoteSourcePrecondition(
+	ctx context.Context,
+	driveID driveid.ID,
+	action *Action,
+	op string,
+) (liveRemoteSource, error) {
 	if action == nil || action.ItemID == "" {
-		return "", nil
+		return liveRemoteSource{}, nil
 	}
 
 	item, err := e.items.GetItem(ctx, driveID, action.ItemID)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotFound) {
-			return "", &remoteItemGoneError{op: op, itemID: action.ItemID, role: "item"}
+			return liveRemoteSource{}, &remoteItemGoneError{op: op, itemID: action.ItemID, role: "item"}
 		}
-		return "", fmt.Errorf("checking remote %s precondition for %s: %w", op, action.Path, err)
+		return liveRemoteSource{}, fmt.Errorf("checking remote %s precondition for %s: %w", op, action.Path, err)
 	}
 
+	live := liveRemoteSource{eTag: item.ETag, modified: item.ModifiedAt}
 	row := remoteStateRowFromGraphItem(item)
 	planned := plannedRemoteStateForPrecondition(action)
 	// Already at the destination with the same identity and content: moving
 	// it (or the parent that carried it) churned its eTag, so eTag is not
 	// compared here.
 	if e.remoteMoveAlreadyApplied(action, item, row, planned) {
-		return item.ETag, errRemoteMoveAlreadyApplied
+		return live, errRemoteMoveAlreadyApplied
 	}
 	if planned != nil && !remoteRowMatchesLivePreconditionForAction(action, row, planned) {
-		return "", stalePreconditionError("%s remote item %s changed since planning", op, action.ItemID)
+		return liveRemoteSource{}, stalePreconditionError("%s remote item %s changed since planning", op, action.ItemID)
 	}
 	if expectedPath := e.expectedRemotePreconditionPath(action); expectedPath != "" {
 		if at, known := e.remoteItemIsAt(item, expectedPath); known && !at {
-			return "", stalePreconditionError("%s remote item %s moved from %s", op, action.ItemID, expectedPath)
+			return liveRemoteSource{}, stalePreconditionError("%s remote item %s moved from %s", op, action.ItemID, expectedPath)
 		}
 	}
 
-	return item.ETag, nil
+	return live, nil
 }
 
 func (e *executor) remoteMoveAlreadyApplied(action *Action, item *graph.Item, row *remoteStateRow, planned *remoteState) bool {

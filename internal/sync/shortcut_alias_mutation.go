@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
@@ -27,7 +28,9 @@ func (e *Engine) applyShortcutAliasMutation(ctx context.Context, mutation shortc
 		if mutation.LocalAlias == "" {
 			return fmt.Errorf("sync: shortcut alias rename requires local alias")
 		}
-		if _, err := e.itemsClient.MoveItem(ctx, e.driveID, mutation.BindingItemID, "", mutation.LocalAlias); err != nil {
+		// No time to keep: a shortcut's own modification time is never
+		// compared or synced.
+		if _, err := e.itemsClient.MoveItem(ctx, e.driveID, mutation.BindingItemID, "", mutation.LocalAlias, time.Time{}); err != nil {
 			return fmt.Errorf("sync: rename shortcut alias: %w", err)
 		}
 		return e.recordShortcutAliasRename(ctx, mutation)

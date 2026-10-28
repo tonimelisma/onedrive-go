@@ -107,6 +107,23 @@ response already returned a concrete item ID. Runtime policy: the graph
 boundary owns a short exact retry for the post-simple-upload mtime PATCH only;
 the rest of the system still treats simple-upload finalization as one outcome.
 
+### A Rename Resets The Modification Time (Personal, Probed)
+
+Live probe L-09: a PATCH that changes an item's `name` sets both the top-level
+`lastModifiedDateTime` and `fileSystemInfo.lastModifiedDateTime` to the time of
+the rename; `createdDateTime` is unchanged. A move to another parent did not
+change it again, and renaming a parent folder leaves its children's times
+alone (their eTag changes, their cTag does not). A PATCH that carries `name`
+(or `parentReference`) together with `fileSystemInfo` keeps the sent time.
+
+Runtime policy: every move or rename the client makes carries the item's
+current modification time in the same PATCH (`graph.MoveOptions.KeepModified`,
+`MoveItem`'s `keepModified`). The sync executor takes it from the live item its
+move preflight already read; `mv` from the resolved source, and `--force` from
+the destination it sets aside and may restore (D-150, R-2.17.5, R-1.7.4). A
+rename made in the OneDrive web UI still resets the time; the hash is unchanged,
+so the comparison treats it as a metadata-only change, not new content.
+
 ## Delta Response Quirks
 
 ## Socket.IO Watch Endpoint Shape

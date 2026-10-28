@@ -289,7 +289,10 @@ classified a mutation that had succeeded as retry work (D-047, R-6.7.33,
 returns `ErrUploadCompletedWithoutItem`, because a create has no ID to read
 back; the transfer layer looks it up. Items carry `parentReference.driveType`
 as `ParentDriveType`. `MoveItemIfMatch` still decodes strictly; its echo
-check belongs with the move-outcome work.
+check belongs with the move-outcome work. Moves take `MoveOptions`
+(`IfMatch`, `KeepModified`): a rename otherwise resets the item's modification
+time, so callers pass the time they already know and it rides in the same
+PATCH (L-09, D-150).
 
 Every non-empty upload, create or overwrite, goes through an upload session
 whose creation carries `fileSystemInfo`, so content and mtime land in one

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -65,7 +66,9 @@ func (m *testMockItemClient) CreateFolder(ctx context.Context, driveID driveid.I
 	return nil, fmt.Errorf("CreateFolder not mocked")
 }
 
-func (m *testMockItemClient) MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error) {
+func (m *testMockItemClient) MoveItem(
+	ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string, _ time.Time,
+) (*graph.Item, error) {
 	if m.moveItemIfMatchFn != nil {
 		return m.moveItemIfMatchFn(ctx, driveID, itemID, newParentID, newName, "")
 	}
@@ -82,10 +85,10 @@ func (m *testMockItemClient) MoveItemIfMatch(
 	itemID string,
 	newParentID string,
 	newName string,
-	ifMatch string,
+	opts graph.MoveOptions,
 ) (*graph.Item, error) {
 	if m.moveItemIfMatchFn != nil {
-		return m.moveItemIfMatchFn(ctx, driveID, itemID, newParentID, newName, ifMatch)
+		return m.moveItemIfMatchFn(ctx, driveID, itemID, newParentID, newName, opts.IfMatch)
 	}
 	if m.moveItemFn != nil {
 		return m.moveItemFn(ctx, driveID, itemID, newParentID, newName)

@@ -46,6 +46,10 @@ type destInfo struct {
 	newName    string
 	existingID string // non-empty when force=true and dest is an existing file
 	destIsDir  bool   // true when dest resolved to an existing folder
+
+	// existingModified is the existing file's modification time, kept when it
+	// is renamed aside and back.
+	existingModified time.Time
 }
 
 // resolveDest resolves a destination path to a destInfo.
@@ -73,7 +77,9 @@ func resolveDest(
 				return destInfo{}, fmt.Errorf("destination %q has no parent reference; cannot overwrite", destPath)
 			}
 
-			return destInfo{parentID: item.ParentID, newName: item.Name, existingID: item.ID}, nil
+			return destInfo{
+				parentID: item.ParentID, newName: item.Name, existingID: item.ID, existingModified: item.ModifiedAt,
+			}, nil
 		}
 
 		return destInfo{}, fmt.Errorf("destination %q already exists (file); use --force to overwrite", destPath)
@@ -202,7 +208,7 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 
 	err = replaceDestination(ctx, cc, session, destPath, replaced, time.Now(), func() error {
 		var moveErr error
-		moved, moveErr = session.MoveItem(ctx, sourceItem.ID, moveParentID, moveName)
+		moved, moveErr = session.MoveItem(ctx, sourceItem.ID, moveParentID, moveName, sourceItem.ModifiedAt)
 		if moveErr != nil {
 			return newRemoteOpError("moving", sourcePath, moveErr)
 		}

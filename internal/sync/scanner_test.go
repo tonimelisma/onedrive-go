@@ -589,6 +589,18 @@ func TestDetectCaseCollisions_ChildInMultiGroup_NoDuplicate(t *testing.T) {
 	assert.Len(t, collisions, 4, "all 4 events should be skipped")
 }
 
+// Validates: R-2.12.3
+func TestCollisionDetail_SaysTheNamesAreOneAndWhatToDo(t *testing.T) {
+	t.Parallel()
+
+	// Manual test: "conflicts with synced file straße.txt" said neither why
+	// STRASSE.txt collides nor what to do about it.
+	detail := collisionDetail("conflicts with synced file", "STRASSE.txt", []string{"straße.txt"})
+	assert.Equal(t,
+		`conflicts with synced file straße.txt: OneDrive treats "STRASSE.txt" and "straße.txt" as the same name; rename one of them`,
+		detail)
+}
+
 // Validates: R-2.12.1
 func TestDetectCaseCollisions_UnicodeFormTwinsReportOnceWithClearReason(t *testing.T) {
 	t.Parallel()

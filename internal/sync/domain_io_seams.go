@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -29,8 +30,10 @@ type itemClient interface {
 	GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
 	ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
 	CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
-	MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
-	MoveItemIfMatch(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName, ifMatch string) (*graph.Item, error)
+	MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string, keepModified time.Time) (*graph.Item, error)
+	MoveItemIfMatch(
+		ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string, opts graph.MoveOptions,
+	) (*graph.Item, error)
 	DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
 	DeleteItemIfMatch(ctx context.Context, driveID driveid.ID, itemID, ifMatch string) error
 	PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error

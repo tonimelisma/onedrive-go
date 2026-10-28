@@ -66,6 +66,7 @@ When the user runs `mv <src> <dst>`, the system shall perform a server-side move
 - R-1.7.1: When `--json` is passed, the system shall output structured JSON with source, destination, and item ID. [verified]
 - R-1.7.2: When `mv` reports success, the destination path shall already be readable by an immediate follow-on CLI path lookup. [verified]
 - R-1.7.3: `mv` shall refuse to move a folder into itself or its own subtree before sending any request, including the `--force` replacement of an existing destination. `mv`, `cp` and `mkdir` shall print remote paths with a leading `/`. [verified]
+- R-1.7.4: `mv` shall keep the moved item's modification time, and `--force` shall keep the replaced destination's modification time while it is set aside and when its name is restored. [verified]
 
 ## R-1.8 Copy (`cp`) [verified]
 

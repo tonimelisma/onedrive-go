@@ -405,8 +405,10 @@ func (r *moveScenarioRemote) client(t *testing.T) *engineMockClient {
 		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
 			return r.download(itemID, w)
 		},
-		moveItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, newParentID, newName, _ string) (*graph.Item, error) {
-			return r.moveItem(itemID, newParentID, newName)
+		moveItemOptsFn: func(
+			_ context.Context, _ driveid.ID, itemID, newParentID, newName string, opts graph.MoveOptions,
+		) (*graph.Item, error) {
+			return r.moveItem(itemID, newParentID, newName, opts.KeepModified)
 		},
 		createFolderFn: func(_ context.Context, _ driveid.ID, parentID, name string) (*graph.Item, error) {
 			return r.createFolder(parentID, name)
@@ -485,7 +487,13 @@ func scenarioNameConflict() error {
 	return &graph.GraphError{StatusCode: 409, Message: "Name already exists", Err: graph.ErrConflict}
 }
 
-func (r *moveScenarioRemote) moveItem(itemID, newParentID, newName string) (*graph.Item, error) {
+// scenarioRenameTime is the "now" a rename without a modification time to
+// keep stamps on the item, as OneDrive does (L-09).
+func scenarioRenameTime() time.Time {
+	return time.Date(2026, 10, 25, 20, 55, 50, 0, time.UTC)
+}
+
+func (r *moveScenarioRemote) moveItem(itemID, newParentID, newName string, keepModified time.Time) (*graph.Item, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	item, ok := r.items[itemID]
@@ -500,6 +508,12 @@ func (r *moveScenarioRemote) moveItem(itemID, newParentID, newName string) (*gra
 	}
 	if taken, exists := r.childNamed(newParentID, newName); exists && taken.ID != itemID {
 		return nil, scenarioNameConflict()
+	}
+	switch {
+	case !keepModified.IsZero():
+		item.ModifiedAt = keepModified
+	case newName != item.Name:
+		item.ModifiedAt = scenarioRenameTime()
 	}
 	r.moveLocked(itemID, newParentID, newName)
 	r.moves = append(r.moves, itemID+"->"+newName)

@@ -45,6 +45,10 @@ type fakeGraphItem struct {
 	Modified string
 }
 
+// fakeGraphRenameTime is the modification time a rename without
+// fileSystemInfo leaves on an item.
+const fakeGraphRenameTime = "2026-10-25T20:55:50Z"
+
 // fakeGraphMoveBody is the PATCH (move/rename) and POST copy request body.
 //
 //nolint:tagliatelle // Graph's wire format is camelCase.
@@ -363,14 +367,20 @@ func (f *fakeGraphDrive) serveMove(req fakeGraphRequest) {
 		<-req.r.Context().Done()
 		return
 	}
+	renamed := body.Name != "" && body.Name != req.item.Name
 	if body.Name != "" {
 		req.item.Name = body.Name
 	}
 	if body.ParentReference.ID != "" {
 		req.item.ParentID = body.ParentReference.ID
 	}
-	if body.FileSystemInfo.LastModifiedDateTime != "" {
+	switch {
+	case body.FileSystemInfo.LastModifiedDateTime != "":
 		req.item.Modified = body.FileSystemInfo.LastModifiedDateTime
+	case renamed:
+		// OneDrive stamps a rename's time on the item unless the PATCH
+		// carries fileSystemInfo (L-09).
+		req.item.Modified = fakeGraphRenameTime
 	}
 	f.writeJSON(req.w, http.StatusOK, f.itemJSON(req.item))
 }
