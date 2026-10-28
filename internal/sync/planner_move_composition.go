@@ -1292,27 +1292,30 @@ func createSide(action *Action) (moveCoord, bool) {
 	}
 }
 
-// dropTransfersOfComposedMoves removes reconciliation transfers of an item
-// that composition moves: OneDrive moved it onto a path that held another
-// synced item, so SQLite sees a changed item at the destination and plans a
-// download (or a conflict) there. Composition moves the local copy instead;
-// downloading as well left the source behind, and the next pass uploaded it
-// as a spurious duplicate (D-058).
-func dropTransfersOfComposedMoves(actions []Action, composition *moveComposition) []Action {
-	movedLocally := map[string]bool{}
+// dropReconciliationOfComposedMoves removes reconciliation work for an item
+// that composition moves this pass. OneDrive moved it onto a path that held
+// another synced item, so SQLite reconciles the destination as that item
+// changed: a download (or a conflict) when the content differs, which left the
+// source behind to be uploaded again as a duplicate (D-058), or, when the
+// content is identical and only the eTag moved, a metadata baseline update that
+// recorded the moved item at the destination with the replaced file's local
+// identity. Composition's move publishes the destination itself.
+func dropReconciliationOfComposedMoves(actions []Action, composition *moveComposition) []Action {
+	moved := map[moveCoord]map[string]bool{moveCoordLocal: {}, moveCoordRemote: {}}
 	for i := range composition.moves {
-		if composition.moves[i].side == moveCoordLocal {
-			movedLocally[composition.moves[i].key] = true
-		}
+		moved[composition.moves[i].side][composition.moves[i].key] = true
 	}
-	if len(movedLocally) == 0 {
+	if len(moved[moveCoordLocal]) == 0 && len(moved[moveCoordRemote]) == 0 {
 		return actions
 	}
 
 	kept := actions[:0:0]
 	for i := range actions {
 		action := &actions[i]
-		if movedLocally[action.ItemID] && (action.Type == ActionDownload || action.Type == ActionConflictCopy) {
+		switch {
+		case action.Type == ActionBaselineUpdate && (moved[moveCoordLocal][action.ItemID] || moved[moveCoordRemote][action.ItemID]):
+			continue
+		case moved[moveCoordLocal][action.ItemID] && (action.Type == ActionDownload || action.Type == ActionConflictCopy):
 			continue
 		}
 		kept = append(kept, *action)

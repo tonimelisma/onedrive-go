@@ -75,7 +75,7 @@ func (p *planner) PlanCurrentState(
 
 		allActions = append(allActions, actions...)
 	}
-	allActions = dropTransfersOfComposedMoves(allActions, &composition)
+	allActions = dropReconciliationOfComposedMoves(allActions, &composition)
 	allActions = append(allActions, buildComposedMoveActions(&composition, &moveInputs, views, baseline)...)
 
 	normalizedActions := normalizeCurrentPlanActions(allActions, remoteToLocalFolderPrefixes(moveInputs.nodes), mode)

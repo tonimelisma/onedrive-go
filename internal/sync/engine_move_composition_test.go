@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // Validates: R-2.17.6
@@ -473,4 +474,47 @@ func TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit(t *testing.T) {
 	assert.Equal(t, "alpha\n", tree["b.txt"])
 	assert.NotContains(t, tree, "a.txt")
 	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.9
+//
+// A replacing remote move onto a file with identical content: SQLite sees the
+// destination unchanged with a new eTag and plans a metadata baseline update
+// for it, recording the moved item at the destination with the replaced
+// file's local identity. Composition moves the item there itself; the
+// competing publication is dropped, so one pass leaves the baseline exactly
+// as the disk is.
+func TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFile(t, "item-a", "root", "a.txt", "same\n")
+	remote.addFile(t, "item-b", "root", "b.txt", "same\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	remote.deleteRemotely("item-b")
+	remote.move("item-a", "root", "b.txt")
+
+	report := runScenarioPass(t, eng)
+	assert.Equal(t, 1, report.Moves)
+	assert.Zero(t, report.BaselineUpdates, "no competing publication for the destination")
+	assert.NoFileExists(t, filepath.Join(syncRoot, "a.txt"))
+	assert.Equal(t, map[string]string{"b.txt": "same\n", "keep.txt": "keep\n"}, remote.tree())
+
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+	entry, ok := bl.GetByPath("b.txt")
+	require.True(t, ok)
+	assert.Equal(t, "item-a", entry.ItemID)
+	info, err := os.Lstat(filepath.Join(syncRoot, "b.txt"))
+	require.NoError(t, err)
+	identity, ok := synctree.IdentityFromFileInfo(info)
+	require.True(t, ok)
+	assert.Equal(t, identity.Inode, entry.LocalInode, "the baseline records the moved file's identity")
+	requireScenarioQuietPlan(t, eng)
+	assert.Zero(t, remote.uploads)
 }
