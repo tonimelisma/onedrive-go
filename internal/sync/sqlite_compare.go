@@ -578,6 +578,11 @@ reconciliation_state AS (
 			-- normalization, which rewrites this delete into a local re-create.
 			WHEN comparison_kind = 'local_missing' AND remote_changed = 0 AND remote_item_replaced = 0 THEN 'remote_delete'
 			WHEN comparison_kind = 'local_missing' THEN 'download'
+			-- A folder re-created locally (a new filesystem identity) is a
+			-- new local entry, not the synced folder OneDrive deleted: a
+			-- local folder delete refuses it (R-2.8.10) and was superseded
+			-- on every pass, so it is created online again.
+			WHEN comparison_kind = 'remote_missing' AND item_type = 'folder' AND local_item_replaced = 1 THEN 'folder_create_remote'
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 0 THEN 'local_delete'
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 1 THEN 'conflict_edit_delete'
 			WHEN comparison_kind = 'diverged' AND local_changed = 1 AND remote_changed = 0 THEN 'upload'

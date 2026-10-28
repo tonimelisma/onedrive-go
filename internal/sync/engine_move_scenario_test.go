@@ -967,3 +967,34 @@ func TestRunOnce_RemoteReplaceInsideFolderRenamedLocallyConverges(t *testing.T) 
 	requireScenarioLocalFile(t, h.syncRoot, "f/x.txt/inside.txt", "inside\n")
 	assertSyncInvariants(t, h)
 }
+
+// Validates: R-2.8.10, R-2.17.2
+//
+// OneDrive deleted folder q/x while the user re-created it locally (new
+// inode). The plan read the local folder as unchanged and deleted it, but a
+// local folder delete refuses a folder whose identity changed (R-2.8.10), so
+// it was superseded on every pass (model test seed 99). A re-created folder
+// is a new local entry: it is created on OneDrive again.
+func TestRunOnce_RemoteDeleteOfALocallyRecreatedFolderKeepsIt(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("item-q", "root", "q")
+	remote.addFolder("item-x", "item-q", "x")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	x := filepath.Join(h.syncRoot, "q", "x")
+	require.NoError(t, os.Remove(x))
+	require.NoError(t, os.Mkdir(x, 0o750))
+	remote.deleteAt(t, "q/x")
+	for range 3 {
+		runScenarioPass(t, h.eng)
+	}
+
+	assert.DirExists(t, x)
+	assert.Equal(t, modelFolderSentinel, remote.tree()["q/x"], "the re-created folder is on OneDrive again")
+	assertSyncInvariants(t, h)
+}

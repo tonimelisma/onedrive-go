@@ -205,6 +205,7 @@ var runOnceScenarios = []func(*testing.T){
 	TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta,
 	TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta,
 	TestRunOnce_RemoteDeleteAfterRebindingInTheSameEngineSucceeds,
+	TestRunOnce_RemoteDeleteOfALocallyRecreatedFolderKeepsIt,
 	TestRunOnce_RemoteDeleteMovesLocalFileToTrash,
 	TestRunOnce_RemoteDeleteInsideFolderRenamedLocallyIsNotUndone,
 	TestRunOnce_RemoteReplaceInsideFolderRenamedLocallyConverges,
