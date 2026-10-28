@@ -561,8 +561,14 @@ func TestExecutor_LocalMove_SourceMissing(t *testing.T) {
 	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
 }
 
-// Validates: R-2.8.10
-func TestExecutor_LocalMove_SourceChangedReturnsStalePrecondition(t *testing.T) {
+// Validates: R-2.8.10, R-2.17.7
+//
+// OneDrive renamed a file the user edited locally (D-053). The rename still
+// applies and carries the local bytes; the outcome keeps the baseline's
+// content facts, so the next pass sees the local edit at the new name and
+// uploads it. Refusing the move superseded it on every pass and stranded the
+// edit under the old name.
+func TestExecutor_LocalMove_LocallyEditedSourceStillMovesAndKeepsTheEditPending(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
@@ -579,16 +585,48 @@ func TestExecutor_LocalMove_SourceChangedReturnsStalePrecondition(t *testing.T) 
 			Baseline: &BaselineEntry{
 				Path:      "old-name.txt",
 				ItemType:  ItemTypeFile,
-				LocalHash: "old-hash-that-wont-match",
+				LocalHash: "hash-before-the-local-edit",
 			},
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeSuccess(t, &o)
+	assert.NoFileExists(t, filepath.Join(syncRoot, "old-name.txt"))
+	data, err := os.ReadFile(filepath.Join(syncRoot, "new-name.txt")) //nolint:gosec // test reads its own temp tree
+	require.NoError(t, err)
+	assert.Equal(t, "new content", string(data), "the rename carries the local edit")
+	assert.Equal(t, "hash-before-the-local-edit", o.LocalHash,
+		"the outcome must not claim the edit is synced")
+}
+
+// Validates: R-2.8.10
+//
+// A local move never fabricates its destination's parent (D-054): planning
+// orders it after whatever puts the parent in place, so a missing parent is
+// stale truth, not something to create.
+func TestExecutor_LocalMove_MissingDestinationParentIsStale(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+	writeExecTestFile(t, syncRoot, "a.txt", "a")
+
+	action := &Action{
+		Type:    ActionLocalMove,
+		Path:    "missing-parent/a.txt",
+		OldPath: "a.txt",
+		View: &pathView{
+			Path:     "missing-parent/a.txt",
+			Baseline: &BaselineEntry{Path: "a.txt", ItemType: ItemTypeFile},
 		},
 	}
 
 	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
-	assert.FileExists(t, filepath.Join(syncRoot, "old-name.txt"))
-	assert.NoFileExists(t, filepath.Join(syncRoot, "new-name.txt"))
+	assert.FileExists(t, filepath.Join(syncRoot, "a.txt"))
+	assert.NoDirExists(t, filepath.Join(syncRoot, "missing-parent"))
 }
 
 // Validates: R-2.8.10
@@ -2970,9 +3008,16 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 				ETag:     "etag-move",
 				ItemType: ItemTypeFile,
 			},
+			// What sat at the destination before the move (here a file the
+			// move replaces) is not the moved item's local truth.
 			Local: &localState{
-				Hash:  "localhash",
-				Mtime: 9876543210,
+				Hash:  "replaced-hash",
+				Mtime: 1,
+			},
+			Baseline: &BaselineEntry{
+				ItemType:   ItemTypeFile,
+				LocalHash:  "localhash",
+				LocalMtime: 9876543210,
 			},
 		},
 	}
@@ -2984,7 +3029,7 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 	assert.Equal(t, int64(42), o.RemoteSize)
 	assert.True(t, o.RemoteSizeKnown)
 	assert.Equal(t, "etag-move", o.ETag)
-	assert.Equal(t, "localhash", o.LocalHash)
+	assert.Equal(t, "localhash", o.LocalHash, "the rename preserves the source's synced content")
 	assert.Equal(t, int64(9876543210), o.LocalMtime)
 	assert.Equal(t, ItemTypeFile, o.ItemType)
 }
@@ -3349,6 +3394,7 @@ func TestExecutor_LocalMove_PublishesSourceBaselineLocalHalf(t *testing.T) {
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	e := newExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "renamed.txt", "hi")
+	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "sub"), 0o750))
 	baseline := moveTestFileBaseline(t, e, syncRoot, "renamed.txt")
 
 	// A server-side rename with unchanged content: only path and eTag move.
@@ -3639,4 +3685,114 @@ func TestExecutor_RemoteMove_ItemAlreadyAtDestinationSucceedsWithoutMoving(t *te
 	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, "movedst/inner", o.Path)
 	assert.Equal(t, `"etag-after-parent-move"`, o.ETag)
+}
+
+// Validates: R-2.17.9
+//
+// A local move that replaces its destination (OneDrive moved an item over a
+// file it deleted) replaces only the version the plan saw; a destination that
+// changed since planning is stale and stays untouched.
+func TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		destination string
+		wantReplace bool
+	}{
+		{name: "unchanged destination is replaced", destination: "bravo\n", wantReplace: true},
+		{name: "changed destination is stale", destination: "edited after planning\n", wantReplace: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+			e := newExecution(cfg, emptyBaseline())
+			writeExecTestFile(t, syncRoot, "a.txt", "alpha\n")
+			writeExecTestFile(t, syncRoot, "b.txt", "bravo\n")
+			plannedHash, err := e.hashFunc(filepath.Join(syncRoot, "b.txt"))
+			require.NoError(t, err)
+			info, err := os.Stat(filepath.Join(syncRoot, "b.txt"))
+			require.NoError(t, err)
+			if tc.destination != "bravo\n" {
+				writeExecTestFile(t, syncRoot, "b.txt", tc.destination)
+			}
+
+			action := &Action{
+				Type:               ActionLocalMove,
+				Path:               "b.txt",
+				OldPath:            "a.txt",
+				ReplaceLocalTarget: true,
+				View: &pathView{
+					Path:     "b.txt",
+					Local:    &localState{ItemType: ItemTypeFile, Hash: plannedHash, Size: info.Size()},
+					Baseline: &BaselineEntry{Path: "a.txt", ItemType: ItemTypeFile},
+				},
+			}
+
+			o := e.ExecuteMove(t.Context(), action)
+			data, readErr := os.ReadFile(filepath.Join(syncRoot, "b.txt")) //nolint:gosec // test reads its own temp tree
+			require.NoError(t, readErr)
+			if tc.wantReplace {
+				requireOutcomeSuccess(t, &o)
+				assert.Equal(t, "alpha\n", string(data))
+				assert.NoFileExists(t, filepath.Join(syncRoot, "a.txt"))
+				return
+			}
+			requireOutcomeFailure(t, &o)
+			require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+			assert.Equal(t, tc.destination, string(data), "a changed destination is never replaced")
+			assert.FileExists(t, filepath.Join(syncRoot, "a.txt"))
+		})
+	}
+}
+
+// Validates: R-2.17.10
+//
+// A directory's conflict copy is a rename of the directory to a free
+// conflict name (D-059a). It used to be renamed onto a placeholder file and
+// failed with ENOTDIR on every pass.
+func TestExecutor_ConflictCopy_DirectorySourceIsRenamed(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+	writeExecTestFile(t, syncRoot, filepath.Join("thing", "child.txt"), "child")
+
+	o := e.ExecuteConflictCopy(t.Context(), &Action{Type: ActionConflictCopy, Path: "thing", View: &pathView{Path: "thing"}})
+	requireOutcomeSuccess(t, &o)
+
+	assert.NoDirExists(t, filepath.Join(syncRoot, "thing"))
+	assert.Contains(t, o.OldPath, "thing.conflict-")
+	assert.FileExists(t, filepath.Join(syncRoot, o.OldPath, "child.txt"))
+}
+
+// Validates: R-2.17.10
+//
+// A directory's conflict copy never lands on something already at its name:
+// an empty directory the user (or another copy) made at the first candidate
+// survives, and the copy takes the next ordinal. A plain rename would have
+// replaced the empty directory silently.
+func TestExecutor_ConflictCopy_DirectoryNeverReplacesAnEmptyDirectoryAtItsName(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	fixed := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	cfg.SetNowFunc(func() time.Time { return fixed })
+	e := newExecution(cfg, emptyBaseline())
+	writeExecTestFile(t, syncRoot, filepath.Join("thing", "child.txt"), "child")
+	firstCandidate := conflictCopyDirPathWithOrdinal(filepath.Join(syncRoot, "thing"), fixed, 1)
+	require.NoError(t, os.Mkdir(firstCandidate, 0o700))
+	marker := filepath.Join(firstCandidate, ".keep")
+
+	o := e.ExecuteConflictCopy(t.Context(), &Action{Type: ActionConflictCopy, Path: "thing", View: &pathView{Path: "thing"}})
+	requireOutcomeSuccess(t, &o)
+
+	assert.DirExists(t, firstCandidate, "the existing empty directory survives")
+	assert.NoFileExists(t, marker)
+	entries, err := os.ReadDir(firstCandidate)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "nothing was renamed onto it")
+	assert.Equal(t, filepath.Base(conflictCopyDirPathWithOrdinal(filepath.Join(syncRoot, "thing"), fixed, 2)), filepath.Base(o.OldPath))
+	assert.FileExists(t, filepath.Join(syncRoot, o.OldPath, "child.txt"))
 }

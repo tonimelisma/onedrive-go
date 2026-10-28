@@ -454,12 +454,25 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 		)
 	}
 
-	// Ensure parent directory exists.
-	if err := e.syncTree.MkdirAll(filepath.Dir(action.Path), localDirPerms); err != nil {
+	// The parent must already exist. Planning orders a move after whatever
+	// creates or moves its target parent (D-054); fabricating a missing parent
+	// here hid ordering bugs and left stray folders that the next pass
+	// uploaded.
+	if err := e.validateLocalMoveParentExists(action); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionLocalMove,
-			fmt.Errorf("creating parent for move target %s: %w", action.Path, normalizeSyncTreePathError(err)),
+			err,
+			action.Path,
+			permissionCapabilityLocalWrite,
+		)
+	}
+
+	if err := e.clearLocalMoveDestination(action); err != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionLocalMove,
+			err,
 			action.Path,
 			permissionCapabilityLocalWrite,
 		)
@@ -848,7 +861,13 @@ func (e *executor) moveOutcome(action *Action) actionOutcome {
 		}
 	}
 
+	// A local move's view describes what sat at the destination before the
+	// move (normally nothing, or the file it replaces); the moved item's local
+	// half is the source baseline's, which the rename preserves.
 	local := action.View.Local
+	if action.Type == ActionLocalMove {
+		local = nil
+	}
 	if action.Type == ActionRemoteMove && action.MovedLocal != nil {
 		local = action.MovedLocal
 	}
@@ -880,20 +899,6 @@ func plannedRemoteItemType(action *Action) ItemType {
 	}
 
 	return resolveItemType(action.View)
-}
-
-// remoteContentDiffersFromBaseline reports whether remote content facts prove
-// the item's content changed since the baseline. eTag and mtime churn alone
-// (a Graph move rewrites both) are not content changes.
-func remoteContentDiffersFromBaseline(remote *remoteState, baseline *BaselineEntry) bool {
-	if remote == nil || baseline == nil || baseline.ItemType != ItemTypeFile {
-		return false
-	}
-	if remote.Hash != "" && baseline.RemoteHash != "" && remote.Hash != baseline.RemoteHash {
-		return true
-	}
-
-	return baseline.RemoteSizeKnown && remote.Size != baseline.RemoteSize
 }
 
 func fillOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {

@@ -61,10 +61,13 @@ const (
 	modelOpDelete            = "delete"
 	modelOpMove              = "move"
 	modelOpMakeFolder        = "mkdir"
+	modelOpReplace           = "replace"
+	modelReplaceChildName    = "inside.txt"
+	modelMirroredMoveOdds    = 3
 	modelNotConvergedMessage = "sync did not converge"
 )
 
-// Validates: R-2.3.1, R-2.17.1, R-2.17.2, R-2.17.3
+// Validates: R-2.3.1, R-2.17.1, R-2.17.2, R-2.17.3, R-2.17.6, R-2.17.7, R-2.17.8
 func TestRunOnce_RandomizedBidirectionalEditsConverge(t *testing.T) {
 	t.Parallel()
 
@@ -162,6 +165,9 @@ func runModelScenario(t *testing.T, seed uint64) {
 				edits = append(edits, edit)
 			}
 		}
+		if run.rng.IntN(modelMirroredMoveOdds) == 0 {
+			edits = append(edits, run.mirroredMove()...)
+		}
 
 		label := fmt.Sprintf("batch %d", batch)
 		run.syncUntilQuiet(label)
@@ -169,7 +175,18 @@ func runModelScenario(t *testing.T, seed uint64) {
 		run.requireWrittenContentSurvives(label, edits, converged)
 		run.requireUntouchedFilesUnchanged(label, before, edits, converged)
 		requireScenarioQuietPlan(t, eng)
+		run.requireNothingWedged(label)
 	}
+}
+
+// requireNothingWedged checks that nothing is left in retry_work, where a
+// failing or wedged (D-059d) action would wait: a converged model must never
+// need the safety net.
+func (r *modelRun) requireNothingWedged(label string) {
+	var pending int
+	require.NoError(r.t, r.eng.baseline.rawDB().QueryRowContext(r.t.Context(),
+		`SELECT COUNT(*) FROM retry_work`).Scan(&pending))
+	assert.Zero(r.t, pending, "%s: work is parked in retry_work after convergence; %s", label, r.failureContext())
 }
 
 func (r *modelRun) logf(format string, args ...any) {
@@ -383,7 +400,9 @@ func (r *modelRun) newPathIn(folders []string, pool string, tree map[string]stri
 
 func (r *modelRun) localEdit() (modelEdit, bool) {
 	tree := r.localTree()
-	switch r.pick([]string{modelOpCreateFile, modelOpEditFile, modelOpDelete, modelOpMove, modelOpMakeFolder}) {
+	switch r.pick([]string{modelOpCreateFile, modelOpEditFile, modelOpDelete, modelOpMove, modelOpMakeFolder, modelOpReplace}) {
+	case modelOpReplace:
+		return r.localReplace(tree)
 	case modelOpCreateFile:
 		p := r.newPathIn(r.localFolders(), modelFileNamePool, tree)
 		if p == "" {
@@ -439,7 +458,9 @@ func (r *modelRun) localMove(tree map[string]string) (modelEdit, bool) {
 
 func (r *modelRun) remoteEdit() (modelEdit, bool) {
 	tree := r.remote.tree()
-	switch r.pick([]string{modelOpCreateFile, modelOpEditFile, modelOpDelete, modelOpMove, modelOpMakeFolder}) {
+	switch r.pick([]string{modelOpCreateFile, modelOpEditFile, modelOpDelete, modelOpMove, modelOpMakeFolder, modelOpReplace}) {
+	case modelOpReplace:
+		return r.remoteReplace(tree)
 	case modelOpCreateFile:
 		p := r.newPathIn(modelFoldersOf(tree), modelFileNamePool, tree)
 		if p == "" {
@@ -482,6 +503,83 @@ func (r *modelRun) remoteEdit() (modelEdit, bool) {
 		r.remote.mkdirAt(r.t, p)
 		r.logf("remote mkdir %s", p)
 		return modelEdit{side: modelRemoteSide, kind: modelOpMakeFolder, path: p}, true
+	}
+}
+
+// localReplace changes an entry's type in place: a file becomes a folder with
+// one new file in it, a folder (with its subtree) becomes a file.
+func (r *modelRun) localReplace(tree map[string]string) (modelEdit, bool) {
+	p := r.pick(append(modelEntriesOf(tree, false), modelEntriesOf(tree, true)...))
+	if p == "" {
+		return modelEdit{}, false
+	}
+	abs := filepath.Join(r.syncRoot, filepath.FromSlash(p))
+	require.NoError(r.t, os.RemoveAll(abs))
+	content := r.nextContent(modelLocalSide)
+	if tree[p] == modelFolderSentinel {
+		writeLocalFile(r.t, r.syncRoot, filepath.FromSlash(p), content)
+	} else {
+		writeLocalFile(r.t, r.syncRoot, filepath.FromSlash(path.Join(p, modelReplaceChildName)), content)
+	}
+	r.logf("local replace %s", p)
+
+	return modelEdit{side: modelLocalSide, kind: modelOpReplace, path: p, content: content}, true
+}
+
+func (r *modelRun) remoteReplace(tree map[string]string) (modelEdit, bool) {
+	p := r.pick(append(modelEntriesOf(tree, false), modelEntriesOf(tree, true)...))
+	if p == "" {
+		return modelEdit{}, false
+	}
+	r.remote.deleteAt(r.t, p)
+	content := r.nextContent(modelRemoteSide)
+	if tree[p] == modelFolderSentinel {
+		r.remote.putFileAt(r.t, p, content)
+	} else {
+		r.remote.mkdirAt(r.t, p)
+		r.remote.putFileAt(r.t, path.Join(p, modelReplaceChildName), content)
+	}
+	r.logf("remote replace %s", p)
+
+	return modelEdit{side: modelRemoteSide, kind: modelOpReplace, path: p, content: content}, true
+}
+
+// mirroredMove makes the same rename on both sides, as two devices (or a
+// crash after a move ran on one side, D-050) would. Only entries both sides
+// still hold at the same path qualify.
+func (r *modelRun) mirroredMove() []modelEdit {
+	local := r.localTree()
+	remote := r.remote.tree()
+	shared := map[string]string{}
+	for p, content := range local {
+		if remote[p] == content || (content == modelFolderSentinel && remote[p] == modelFolderSentinel) {
+			shared[p] = content
+		}
+	}
+	from, to, ok := r.pickMove(shared)
+	if !ok {
+		return nil
+	}
+	for p := range local {
+		if strings.EqualFold(p, to) {
+			return nil
+		}
+	}
+	for p := range remote {
+		if strings.EqualFold(p, to) {
+			return nil
+		}
+	}
+	require.NoError(r.t, os.Rename(
+		filepath.Join(r.syncRoot, filepath.FromSlash(from)),
+		filepath.Join(r.syncRoot, filepath.FromSlash(to)),
+	))
+	r.remote.moveAt(r.t, from, to)
+	r.logf("both move %s -> %s", from, to)
+
+	return []modelEdit{
+		{side: modelLocalSide, kind: modelOpMove, path: from, to: to},
+		{side: modelRemoteSide, kind: modelOpMove, path: from, to: to},
 	}
 }
 

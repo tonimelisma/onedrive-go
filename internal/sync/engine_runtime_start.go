@@ -68,6 +68,7 @@ func (flow *engineFlow) reduceReadyFrontierStage(
 }
 
 func (flow *engineFlow) registerPlanActions(plan *actionPlan) []*trackedAction {
+	flow.pruneSupersedeStreaks(plan)
 	if flow.sched.graph == nil || plan == nil || len(plan.Actions) == 0 {
 		return nil
 	}

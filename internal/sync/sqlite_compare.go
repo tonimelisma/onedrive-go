@@ -66,6 +66,16 @@ local_move_candidates AS (
 	WHERE NOT EXISTS (SELECT 1 FROM baseline target WHERE target.path = l.path)
 		AND EXISTS (SELECT 1 FROM remote_state rs WHERE rs.item_id = b.item_id)
 		AND NOT EXISTS (SELECT 1 FROM remote_state occupied WHERE occupied.path = l.path AND occupied.item_id <> b.item_id)
+		-- The item has not left its baseline path while that path still
+		-- holds its identity: a second name for the same inode is a hard
+		-- link, which uploads as a new file, never as a move (D-056).
+		AND NOT EXISTS (
+			SELECT 1 FROM local_state src
+			WHERE src.path = b.path
+				AND src.local_has_identity = 1
+				AND src.local_device = b.local_device
+				AND src.local_inode = b.local_inode
+		)
 	UNION ALL
 	SELECT
 		b.path AS source_path,
@@ -79,6 +89,9 @@ local_move_candidates AS (
 		AND NULLIF(l.hash, '') = NULLIF(b.local_hash, '')
 	WHERE b.local_hash IS NOT NULL
 		AND b.local_hash <> ''
+		-- Without identity, content alone cannot tell a move from a copy: the
+		-- source must be gone.
+		AND NOT EXISTS (SELECT 1 FROM local_state src WHERE src.path = b.path)
 		AND NOT EXISTS (SELECT 1 FROM baseline target WHERE target.path = l.path)
 		AND EXISTS (SELECT 1 FROM remote_state rs WHERE rs.item_id = b.item_id)
 		AND NOT EXISTS (SELECT 1 FROM remote_state occupied WHERE occupied.path = l.path AND occupied.item_id <> b.item_id)
@@ -110,7 +123,12 @@ remote_move_sources AS (
 		r.path AS target_path
 	FROM baseline b
 	JOIN remote_state r ON r.item_id = b.item_id AND r.path <> b.path
-	WHERE EXISTS (SELECT 1 FROM local_state ls WHERE ls.path = b.path)
+	-- The local source must still be the item: a type change at the source
+	-- is a replacement, not something a rename could carry.
+	WHERE EXISTS (
+			SELECT 1 FROM local_state ls
+			WHERE ls.path = b.path AND COALESCE(ls.item_type, '') = COALESCE(b.item_type, '')
+		)
 		-- A destination the other side filled with something else in the
 		-- meantime is not a move target: the source plays out as a delete
 		-- (hash-verified, recoverable) and the destination as a create/create
@@ -140,8 +158,13 @@ remote_move_targets AS (
 ),
 `
 
-	sqlQueryComparisonState = sqlLocalAndRemoteMoveCTEs + `
-comparison_state AS (
+	// sqlComparisonStateCTEs is the one definition of the comparison facts and
+	// the per-path comparison kind. QueryComparisonState and
+	// QueryReconciliationState both read it, on the live tables and on the
+	// planner-visible scratch tables alike (sqlQueryForStateTables), so a fact
+	// such as "local changed" can never mean two things in two queries.
+	sqlComparisonStateCTEs = sqlLocalAndRemoteMoveCTEs + `
+comparison_flags AS (
 	SELECT
 		p.path,
 		COALESCE(b.item_id, '') AS baseline_item_id,
@@ -150,205 +173,112 @@ comparison_state AS (
 		CASE WHEN b.path IS NOT NULL THEN 1 ELSE 0 END AS baseline_present,
 		CASE WHEN l.path IS NOT NULL THEN 1 ELSE 0 END AS local_present,
 		CASE WHEN r.path IS NOT NULL THEN 1 ELSE 0 END AS remote_present,
+		-- Filesystem identity is a pairing hint, never a change signal
+		-- (D-057). A folder has no content, so a new inode at its path (rm -rf
+		-- and restore, a device renumbered after reboot) changes nothing; a
+		-- file with a new inode changed only if its content did, and content
+		-- without a hash on both sides is not proof of equality. Either way
+		-- metadata_drift republishes the new identity.
 		CASE
 			WHEN b.path IS NULL OR l.path IS NULL THEN 0
 			WHEN COALESCE(b.item_type, '') <> COALESCE(l.item_type, '') THEN 1
+			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
 			WHEN COALESCE(b.local_has_identity, 0) = 1 AND COALESCE(l.local_has_identity, 0) = 1
 				AND (
 					COALESCE(b.local_device, 0) <> COALESCE(l.local_device, 0)
 					OR COALESCE(b.local_inode, 0) <> COALESCE(l.local_inode, 0)
-				) THEN 1
-			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
+				) THEN
+				CASE
+					WHEN COALESCE(b.local_hash, '') <> '' AND COALESCE(l.hash, '') <> ''
+						AND b.local_hash = l.hash
+						AND COALESCE(b.local_size, 0) = COALESCE(l.size, 0) THEN 0
+					ELSE 1
+				END
 			WHEN COALESCE(b.local_hash, '') <> '' OR COALESCE(l.hash, '') <> '' THEN
 				CASE WHEN COALESCE(b.local_hash, '') <> COALESCE(l.hash, '') THEN 1 ELSE 0 END
 			WHEN COALESCE(b.local_size, 0) <> COALESCE(l.size, 0) THEN 1
 			WHEN COALESCE(b.local_mtime, 0) <> COALESCE(l.mtime, 0) THEN 1
 			ELSE 0
 		END AS local_changed,
+		-- Remote content is compared by hash only when both sides carry one.
+		-- OneDrive omits the hash for some items (zero-byte files on
+		-- Business, some Office-for-web saves), and a hash that is known on
+		-- one side only is no evidence of an edit (D-059b): size and eTag
+		-- decide, so a lost hash is unknown rather than changed.
 		CASE
 			WHEN b.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(b.item_type, '') <> COALESCE(r.item_type, '') THEN 1
 			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
-			WHEN COALESCE(b.remote_hash, '') <> '' OR COALESCE(r.hash, '') <> '' THEN
-				CASE WHEN COALESCE(b.remote_hash, '') <> COALESCE(r.hash, '') THEN 1 ELSE 0 END
+			WHEN COALESCE(b.remote_hash, '') <> '' AND COALESCE(r.hash, '') <> '' THEN
+				CASE WHEN b.remote_hash <> r.hash THEN 1 ELSE 0 END
 			WHEN COALESCE(b.remote_size, 0) <> COALESCE(r.size, 0) THEN 1
-			WHEN COALESCE(b.remote_mtime, 0) <> COALESCE(r.mtime, 0) THEN 1
+			WHEN COALESCE(b.remote_hash, '') = '' AND COALESCE(r.hash, '') = ''
+				AND COALESCE(b.remote_mtime, 0) <> COALESCE(r.mtime, 0) THEN 1
 			WHEN COALESCE(b.etag, '') <> COALESCE(r.etag, '') THEN 1
 			ELSE 0
 		END AS remote_changed,
+		-- The item at the remote path is not the item the baseline recorded
+		-- there: deleted and re-created online, or restored under a new ID.
 		CASE
-			WHEN l.path IS NULL OR r.path IS NULL THEN 0
-			WHEN COALESCE(l.item_type, '') <> COALESCE(r.item_type, '') THEN 0
-			WHEN COALESCE(l.item_type, '') = 'folder' THEN 1
-			-- Equality must be proven, never assumed. A missing hash on either
-			-- side makes matching sizes meaningless: two different files of the
-			-- same length would compare equal. Both halves are reachable --
-			-- the scanner stores an empty hash when hashing fails, and
-			-- driveops.SelectHash returns "" when Graph supplies no hash at all
-			-- (B-021) -- and the result was a baseline update recording an
-			-- agreement that never existed.
-			WHEN COALESCE(l.hash, '') = '' OR COALESCE(r.hash, '') = '' THEN 0
-			WHEN COALESCE(l.hash, '') <> COALESCE(r.hash, '') THEN 0
-			WHEN COALESCE(l.size, 0) <> COALESCE(r.size, 0) THEN 0
-			ELSE 1
-		END AS current_equal,
-		COALESCE(lms.target_path, '') AS local_move_target,
-		COALESCE(lmt.source_path, '') AS local_move_source,
-		COALESCE(lms.candidate_count, lmt.candidate_count, 0) AS local_move_candidate_count,
-		COALESCE(rms.target_path, '') AS remote_move_target,
-		COALESCE(rmt.source_path, '') AS remote_move_source,
-		CASE
-			WHEN b.path IS NOT NULL AND l.path IS NULL AND COALESCE(lms.candidate_count, 0) = 1 THEN 'local_move_source'
-			WHEN b.path IS NOT NULL AND l.path IS NULL AND r.path IS NULL THEN 'both_missing'
-			WHEN l.path IS NOT NULL AND b.path IS NULL AND lmt.source_path <> '' AND lmt.candidate_count = 1 THEN 'local_move_dest'
-			WHEN b.path IS NOT NULL AND rms.target_path <> '' THEN 'remote_move_source'
-			WHEN r.path IS NOT NULL AND b.path IS NULL AND rmt.source_path <> '' THEN 'remote_move_dest'
-			WHEN b.path IS NULL AND l.path IS NOT NULL AND r.path IS NULL THEN 'local_only_create'
-			WHEN b.path IS NULL AND l.path IS NULL AND r.path IS NOT NULL AND rmsh.path IS NOT NULL THEN 'remote_move_shadowed'
-			WHEN b.path IS NULL AND l.path IS NULL AND r.path IS NOT NULL THEN 'remote_only_create'
-			WHEN b.path IS NULL AND l.path IS NOT NULL AND r.path IS NOT NULL AND (
-				COALESCE(l.item_type, '') = COALESCE(r.item_type, '')
-				AND (
-					COALESCE(l.item_type, '') = 'folder'
-					OR (
-						-- See current_equal: a hash-less side cannot prove the
-						-- two copies converged, so equal_again must not fire.
-						COALESCE(l.hash, '') <> ''
-						AND COALESCE(l.hash, '') = COALESCE(r.hash, '')
-						AND COALESCE(l.size, 0) = COALESCE(r.size, 0)
-					)
-				)
-			) THEN 'create_equal'
-			WHEN b.path IS NULL AND l.path IS NOT NULL AND r.path IS NOT NULL THEN 'create_conflict'
-			WHEN b.path IS NOT NULL AND l.path IS NOT NULL AND r.path IS NOT NULL AND
-				(
-					COALESCE(b.item_type, '') = COALESCE(l.item_type, '')
-					AND (
-						COALESCE(b.local_has_identity, 0) = 0
-						OR COALESCE(l.local_has_identity, 0) = 0
-						OR (
-							COALESCE(b.local_device, 0) = COALESCE(l.local_device, 0)
-							AND COALESCE(b.local_inode, 0) = COALESCE(l.local_inode, 0)
-						)
-					)
-					AND (
-						COALESCE(b.item_type, '') = 'folder'
-						OR (
-							COALESCE(b.local_hash, '') = COALESCE(l.hash, '')
-							AND COALESCE(b.local_size, 0) = COALESCE(l.size, 0)
-							AND COALESCE(b.local_mtime, 0) = COALESCE(l.mtime, 0)
-						)
-					)
-				) AND (
-					COALESCE(b.item_type, '') = COALESCE(r.item_type, '')
-					AND (
-						COALESCE(b.item_type, '') = 'folder'
-						OR (
-							COALESCE(b.remote_hash, '') = COALESCE(r.hash, '')
-							AND COALESCE(b.remote_size, 0) = COALESCE(r.size, 0)
-							AND COALESCE(b.remote_mtime, 0) = COALESCE(r.mtime, 0)
-							AND COALESCE(b.etag, '') = COALESCE(r.etag, '')
-						)
-					)
-				) THEN 'unchanged'
-			WHEN b.path IS NOT NULL AND l.path IS NOT NULL AND r.path IS NOT NULL AND (
-				COALESCE(l.item_type, '') = COALESCE(r.item_type, '')
-				AND (
-					COALESCE(l.item_type, '') = 'folder'
-					OR (
-						-- See current_equal: a hash-less side cannot prove the
-						-- two copies converged, so equal_again must not fire.
-						COALESCE(l.hash, '') <> ''
-						AND COALESCE(l.hash, '') = COALESCE(r.hash, '')
-						AND COALESCE(l.size, 0) = COALESCE(r.size, 0)
-					)
-				)
-				AND (
-					COALESCE(b.item_type, '') <> COALESCE(r.item_type, '')
-					OR (
-						COALESCE(b.item_type, '') <> 'folder'
-						AND (
-							COALESCE(b.remote_hash, '') <> COALESCE(r.hash, '')
-							OR COALESCE(b.remote_size, 0) <> COALESCE(r.size, 0)
-							OR COALESCE(b.remote_mtime, 0) <> COALESCE(r.mtime, 0)
-							OR COALESCE(b.etag, '') <> COALESCE(r.etag, '')
-						)
-					)
-				)
-			) THEN 'equal_again'
-			WHEN b.path IS NOT NULL AND l.path IS NULL AND r.path IS NOT NULL THEN 'local_missing'
-			WHEN b.path IS NOT NULL AND l.path IS NOT NULL AND r.path IS NULL THEN 'remote_missing'
-			WHEN b.path IS NOT NULL AND l.path IS NOT NULL AND r.path IS NOT NULL THEN 'diverged'
-			ELSE 'unknown'
-		END AS comparison_kind
-	FROM all_paths p
-	LEFT JOIN baseline b ON b.path = p.path
-	LEFT JOIN local_state l ON l.path = p.path
-	LEFT JOIN remote_state r ON r.path = p.path
-	LEFT JOIN local_move_sources lms ON lms.source_path = p.path
-	LEFT JOIN local_move_targets lmt ON lmt.target_path = p.path
-	LEFT JOIN remote_move_sources rms ON rms.source_path = p.path
-	LEFT JOIN remote_move_targets rmt ON rmt.target_path = p.path
-	LEFT JOIN remote_move_shadowed rmsh ON rmsh.path = p.path
-)
-SELECT
-	path,
-	baseline_item_id,
-	remote_item_id,
-	item_type,
-	baseline_present,
-	local_present,
-	remote_present,
-	local_changed,
-	remote_changed,
-	current_equal,
-	local_move_target,
-	local_move_source,
-	local_move_candidate_count,
-	remote_move_target,
-	remote_move_source,
-	comparison_kind
-FROM comparison_state
-ORDER BY path`
-
-	sqlQueryReconciliationState = sqlLocalAndRemoteMoveCTEs + `
-comparison_flags AS (
-	SELECT
-		p.path,
-		COALESCE(b.item_type, l.item_type, r.item_type, '') AS item_type,
-		CASE WHEN b.path IS NOT NULL THEN 1 ELSE 0 END AS baseline_present,
-		CASE WHEN l.path IS NOT NULL THEN 1 ELSE 0 END AS local_present,
-		CASE WHEN r.path IS NOT NULL THEN 1 ELSE 0 END AS remote_present,
+			WHEN b.path IS NULL OR r.path IS NULL THEN 0
+			WHEN COALESCE(b.item_id, '') <> COALESCE(r.item_id, '') THEN 1
+			ELSE 0
+		END AS remote_item_replaced,
+		-- The entry at the baseline path is not the synced item: renamed away
+		-- and a new entry created in its place (D-056).
 		CASE
 			WHEN b.path IS NULL OR l.path IS NULL THEN 0
-			WHEN COALESCE(b.item_type, '') <> COALESCE(l.item_type, '') THEN 1
 			WHEN COALESCE(b.local_has_identity, 0) = 1 AND COALESCE(l.local_has_identity, 0) = 1
 				AND (
 					COALESCE(b.local_device, 0) <> COALESCE(l.local_device, 0)
 					OR COALESCE(b.local_inode, 0) <> COALESCE(l.local_inode, 0)
 				) THEN 1
-			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
-			WHEN COALESCE(b.local_hash, '') <> '' OR COALESCE(l.hash, '') <> '' THEN
-				CASE WHEN COALESCE(b.local_hash, '') <> COALESCE(l.hash, '') THEN 1 ELSE 0 END
-			WHEN COALESCE(b.local_size, 0) <> COALESCE(l.size, 0) THEN 1
-			WHEN COALESCE(b.local_mtime, 0) <> COALESCE(l.mtime, 0) THEN 1
 			ELSE 0
-		END AS local_changed,
+		END AS local_item_replaced,
+		-- A folder has no content of its own, so whether it "changed" on a
+		-- side is whether anything below it did: a new entry, or one that
+		-- differs from its baseline (D-059). Only asked where it decides
+		-- something, a folder the other side replaced with a file.
 		CASE
-			WHEN b.path IS NULL OR r.path IS NULL THEN 0
-			WHEN COALESCE(b.item_type, '') <> COALESCE(r.item_type, '') THEN 1
-			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
-			WHEN COALESCE(b.remote_hash, '') <> '' OR COALESCE(r.hash, '') <> '' THEN
-				CASE WHEN COALESCE(b.remote_hash, '') <> COALESCE(r.hash, '') THEN 1 ELSE 0 END
-			WHEN COALESCE(b.remote_size, 0) <> COALESCE(r.size, 0) THEN 1
-			WHEN COALESCE(b.remote_mtime, 0) <> COALESCE(r.mtime, 0) THEN 1
-			WHEN COALESCE(b.etag, '') <> COALESCE(r.etag, '') THEN 1
+			WHEN b.path IS NULL OR COALESCE(b.item_type, '') <> 'folder'
+				OR COALESCE(l.item_type, '') <> 'folder'
+				OR r.path IS NULL OR COALESCE(r.item_type, '') = 'folder' THEN 0
+			WHEN EXISTS (
+				SELECT 1 FROM local_state ld
+				WHERE ld.path > b.path || '/' AND ld.path < b.path || '0'
+					AND NOT EXISTS (
+						SELECT 1 FROM baseline bd
+						WHERE bd.path = ld.path
+							AND COALESCE(bd.item_type, '') = COALESCE(ld.item_type, '')
+							AND (COALESCE(ld.item_type, '') = 'folder' OR COALESCE(bd.local_hash, '') = COALESCE(ld.hash, ''))
+					)
+			) THEN 1
 			ELSE 0
-		END AS remote_changed,
+		END AS local_subtree_changed,
+		CASE
+			WHEN b.path IS NULL OR COALESCE(b.item_type, '') <> 'folder'
+				OR COALESCE(r.item_type, '') <> 'folder'
+				OR l.path IS NULL OR COALESCE(l.item_type, '') = 'folder' THEN 0
+			WHEN EXISTS (
+				SELECT 1 FROM remote_state rd
+				WHERE rd.path > b.path || '/' AND rd.path < b.path || '0'
+					AND NOT EXISTS (
+						SELECT 1 FROM baseline bd
+						WHERE bd.path = rd.path
+							AND bd.item_id = rd.item_id
+							AND (COALESCE(rd.item_type, '') = 'folder' OR COALESCE(bd.remote_hash, '') = COALESCE(rd.hash, ''))
+					)
+			) THEN 1
+			ELSE 0
+		END AS remote_subtree_changed,
 		CASE
 			WHEN l.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(l.item_type, '') <> COALESCE(r.item_type, '') THEN 0
 			WHEN COALESCE(l.item_type, '') = 'folder' THEN 1
+			-- A zero-byte file has no content to disagree about, and OneDrive
+			-- may carry no hash for one (D-059b): two known empty sizes prove
+			-- equality where hashes cannot.
+			WHEN l.size = 0 AND r.size = 0 THEN 1
 			-- Equality must be proven, never assumed. A missing hash on either
 			-- side makes matching sizes meaningless: two different files of the
 			-- same length would compare equal. Both halves are reachable --
@@ -389,6 +319,14 @@ comparison_flags AS (
 			-- it, or uploads into it target the dead ID forever (R-2.10.49).
 			WHEN COALESCE(b.item_type, '') = 'folder' AND COALESCE(r.item_type, '') = 'folder'
 				AND COALESCE(b.item_id, '') <> COALESCE(r.item_id, '') THEN 1
+			-- A new filesystem identity over unchanged content (D-057): the
+			-- baseline must learn it, or the scanner's fast path never trusts
+			-- the recorded hash again and a later rename cannot pair.
+			WHEN COALESCE(b.local_has_identity, 0) = 1 AND COALESCE(l.local_has_identity, 0) = 1
+				AND (
+					COALESCE(b.local_device, 0) <> COALESCE(l.local_device, 0)
+					OR COALESCE(b.local_inode, 0) <> COALESCE(l.local_inode, 0)
+				) THEN 1
 			WHEN COALESCE(b.item_type, '') <> 'file' THEN 0
 			WHEN COALESCE(b.local_mtime, 0) <> COALESCE(l.mtime, 0)
 				OR COALESCE(b.local_ctime, 0) <> COALESCE(l.ctime, 0)
@@ -411,6 +349,8 @@ comparison_flags AS (
 comparison_state AS (
 	SELECT
 		path,
+		baseline_item_id,
+		remote_item_id,
 		item_type,
 		baseline_present,
 		local_present,
@@ -428,9 +368,16 @@ comparison_state AS (
 		local_type_changed,
 		remote_type_changed,
 		remote_move_shadowed,
+		remote_item_replaced,
+		local_item_replaced,
+		local_subtree_changed,
+		remote_subtree_changed,
 		metadata_drift,
 		CASE
-			WHEN baseline_present = 1 AND local_present = 0 AND local_move_candidate_count = 1 THEN 'local_move_source'
+			-- The synced item moved; a new entry at its old path (rename and
+			-- recreate) is planned as a create by move composition.
+			WHEN baseline_present = 1 AND local_move_candidate_count = 1 AND local_move_target <> ''
+				AND (local_present = 0 OR local_item_replaced = 1) THEN 'local_move_source'
 			WHEN baseline_present = 1 AND local_present = 0 AND remote_present = 0 THEN 'both_missing'
 			WHEN local_present = 1 AND baseline_present = 0 AND local_move_source <> '' AND local_move_candidate_count = 1 THEN 'local_move_dest'
 			WHEN baseline_present = 1 AND remote_move_target <> '' THEN 'remote_move_source'
@@ -448,7 +395,31 @@ comparison_state AS (
 			ELSE 'unknown'
 		END AS comparison_kind
 	FROM comparison_flags
-),
+)
+`
+
+	sqlQueryComparisonState = sqlComparisonStateCTEs + `
+SELECT
+	path,
+	baseline_item_id,
+	remote_item_id,
+	item_type,
+	baseline_present,
+	local_present,
+	remote_present,
+	local_changed,
+	remote_changed,
+	current_equal,
+	local_move_target,
+	local_move_source,
+	local_move_candidate_count,
+	remote_move_target,
+	remote_move_source,
+	comparison_kind
+FROM comparison_state
+ORDER BY path`
+
+	sqlQueryReconciliationState = sqlComparisonStateCTEs + `,
 reconciliation_state AS (
 	SELECT
 		path,
@@ -464,11 +435,25 @@ reconciliation_state AS (
 			-- "downloaded" as the baseline's type. When the other side also
 			-- changed, local wins: the replaced OneDrive item goes to the
 			-- recycle bin, whereas replacing local truth would destroy it.
+			-- Different types with changes on both sides (a local edit of
+			-- the file OneDrive replaced with a folder, a remote edit inside
+			-- the folder the user replaced with a file, ...) keep both: the
+			-- local entry becomes a conflict copy and OneDrive's item takes
+			-- the path. Replacing either side would delete the other's
+			-- content (D-059).
+			WHEN comparison_kind = 'diverged' AND local_item_type <> remote_item_type
+				AND (local_changed = 1 OR local_subtree_changed = 1)
+				AND (remote_changed = 1 OR remote_subtree_changed = 1) THEN 'conflict_keep_both'
 			WHEN comparison_kind = 'diverged' AND local_changed = 1
 				AND (local_type_changed = 1 OR remote_type_changed = 1) THEN 'replace_remote'
 			WHEN comparison_kind = 'diverged' AND remote_type_changed = 1 THEN 'replace_local'
 			WHEN comparison_kind = 'remote_missing' AND local_type_changed = 1 AND local_item_type = 'folder' THEN 'folder_create_remote'
-			WHEN comparison_kind = 'local_missing' AND remote_type_changed = 1 AND remote_item_type = 'folder' THEN 'folder_create_local'
+			-- A folder deleted locally while OneDrive replaced it (a new item
+			-- at the same path, or a new type) is not the folder the user
+			-- deleted: re-create it locally. Planned as a delete it would
+			-- remove the new item and its content online.
+			WHEN comparison_kind = 'local_missing' AND remote_item_type = 'folder'
+				AND (remote_type_changed = 1 OR remote_item_replaced = 1) THEN 'folder_create_local'
 			WHEN comparison_kind = 'both_missing' THEN 'baseline_remove'
 			WHEN comparison_kind = 'local_move_source' THEN 'local_move'
 			WHEN comparison_kind = 'local_move_dest' THEN 'local_move'
@@ -493,8 +478,8 @@ reconciliation_state AS (
 			-- pairing) is deleted on OneDrive exactly like a file. Remote-only
 			-- descendants that still need the folder are protected by action
 			-- normalization, which rewrites this delete into a local re-create.
-			WHEN comparison_kind = 'local_missing' AND remote_changed = 0 THEN 'remote_delete'
-			WHEN comparison_kind = 'local_missing' AND remote_changed = 1 THEN 'download'
+			WHEN comparison_kind = 'local_missing' AND remote_changed = 0 AND remote_item_replaced = 0 THEN 'remote_delete'
+			WHEN comparison_kind = 'local_missing' THEN 'download'
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 0 THEN 'local_delete'
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 1 THEN 'conflict_edit_delete'
 			WHEN comparison_kind = 'diverged' AND local_changed = 1 AND remote_changed = 0 THEN 'upload'

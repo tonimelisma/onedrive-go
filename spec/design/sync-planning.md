@@ -1,6 +1,6 @@
 # Sync Planning
 
-GOVERNS: internal/sync/planner.go, internal/sync/planner_actions.go, internal/sync/planner_delete_safety.go, internal/sync/planner_truth_overlay.go
+GOVERNS: internal/sync/planner.go, internal/sync/planner_actions.go, internal/sync/planner_move_composition.go, internal/sync/planner_delete_safety.go, internal/sync/planner_truth_overlay.go
 
 LAYER: 2
 
@@ -72,13 +72,20 @@ intent; multisync receives only that child work intent.
 | Behavior | Evidence |
 | --- | --- |
 | Local/remote equality is never inferred from size alone: a missing hash on either side forces reconciliation instead of a baseline update recording unproven agreement. | `TestPlanCurrentState_HashlessSameSizeIsNotTreatedAsEqual`, `TestPlanCurrentState_HashOnOneSideOnlyIsNotTreatedAsEqual`, `TestPlanCurrentState_MatchingHashesStillCompareEqual` |
+| The comparison facts are defined once (one shared CTE) for the comparison and reconciliation queries. Filesystem identity never signals a content change: a folder or a same-hash file with a new identity is a baseline update, and a folder is never an upload or download (R-2.2.6). A missing remote hash is unknown, not changed, and two empty files are equal (R-2.2.7). A locally deleted folder that OneDrive replaced with a new item is re-created locally, not deleted (R-2.10.49). | `TestQueryReconciliationState_IdentityChangeAtSamePathIsNotAnEdit`, `TestRunOnce_RenumberedDeviceTransfersNothing`, `TestRunOnce_FolderDeletedAndRestoredLocallyTransfersNothing`, `TestBuildActionsForReconciliation_RefusesFolderTransfers`, `TestQueryReconciliationState_MissingRemoteHashIsUnknownNotChanged`, `TestPlanCurrentState_HashlessZeroByteBothSidesIsEqual`, `TestPlanCurrentState_HashlessNonEmptyCreateIsStillAConflict`, `TestQueryReconciliationState_LocallyDeletedFolderReplacedOnlineIsRecreatedLocally` |
 | Conflict reconciliation rows expand into concrete actions for edit/edit, create/create, and edit/delete cases. | `TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_ExpandsCreateCreateConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID` |
 | Folder-delete descendants are reconciled by SQLite after planner-visible pruning, with parent availability preserved only when descendant work requires it. | `TestReplacePlannerVisibleStateTx_PrunesRemoteDescendantsWhenBaselineFolderMissingRemotely`, `TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMissingLocally`, `TestPlannerPlanCurrentState_RemoteParentDeletePlansDescendantLocalDeleteThroughSQLite`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_LocalParentDeleteCreatesParentForChangedRemoteChild`, `TestPlannerPlanCurrentState_BothParentSidesDeletedCleansUpDescendantsThroughSQLite` |
 | A file move needs content corroboration beyond inode identity; identity without it is delete + create, and unhashed moves carry the destination's observed truth. | `TestQueryReconciliationState_LocalFileMoveRequiresContentCorroboration`, `TestQueryReconciliationState_LocalFileMoveIdentityWithoutContentIsNotAMove`, `TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate`, `TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads`, `TestActionFreshness_LocalOriginMoveRejectsChangedDestination` |
 | Locally deleted or unpaired moved folders are deleted on OneDrive after their descendants, never re-created locally; identity-paired folder moves are one remote move. | `TestQueryReconciliationState_FolderDecisionMatrix`, `TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes`, `TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildMoves`, `TestRunOnce_LocalFolderDeleteDeletesRemoteFolder`, `TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource` |
+| Moves are composed per item (R-2.17.6): the same rename on both sides only re-keys the baseline and keeps either side's edit pending; divergent renames keep OneDrive's name; cross moves that would nest folders keep the OneDrive move; collisions undo the local claim; moves order against each other and their surroundings, a local move never fabricates its parent, and a pass that cannot order a move defers it. | `TestComposeMoves_OneSidedRenamesMoveTheOtherSide`, `TestComposeMoves_SameRenameOnBothSidesOnlyRekeysTheBaseline`, `TestComposeMoves_DivergentRenameKeepsTheOneDriveName`, `TestComposeMoves_CrossMoveCycleKeepsTheRemoteMove`, `TestComposeMoves_DescendantRenameInsideRenamedFolder`, `TestComposeMoves_RemoteHierarchyInversionOrdersLocalMoves`, `TestComposeMoves_LocalMoveIntoRemotelyRenamedFolder`, `TestComposeMoves_OccupiedDestinationDefers`, `TestComposeMoves_FrozenItemsAndTheirSubtreesDoNotMove`, `TestBuildDependencies_NestedMoveEdges`, `TestRunOnce_BothSidesRenamedIdenticallyConverges`, `TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending`, `TestRunOnce_DivergentRenameConvergesInTwoPasses`, `TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting`, `TestRunOnce_RemoteHierarchyInversionConverges`, `TestRunOnce_RemoteFolderRenameWithChildRenameAndMoveInConverges`, `TestRunOnce_LocalFolderRenameWithChildRenameConvergesInOnePass`, `TestRunOnce_RemoteFolderRenameWithNewSubfolderConverges`, `TestExecutor_LocalMove_MissingDestinationParentIsStale`, `TestRunOnce_RandomizedBidirectionalEditsConverge` |
+| A remote move of a locally edited file moves the local copy with its edit and uploads the edit afterwards (R-2.17.7); a local rename racing a remote edit downloads the edit (R-2.17.3). | `TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads`, `TestExecutor_LocalMove_LocallyEditedSourceStillMovesAndKeepsTheEditPending`, `TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit` |
+| A remote move over a file OneDrive deleted moves the local copy onto it, replacing a verified unchanged file or conflict-copying an edited one, and never re-uploads the moved item (R-2.17.9). | `TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting`, `TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit`, `TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination`, `TestExecutor_LocalMove_StaleSourceLeavesTheReplacedDestinationInPlace`, `TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass` |
+| Move pairing requires the item to have left its baseline path: hard links and copies are new files, rename-and-recreate is a move plus a create (R-2.17.8). | `TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated`, `TestRunOnce_HardLinkUploadsAsANewFile`, `TestRunOnce_RenameAndRecreateMovesThenCreates` |
 | Remote moves applied locally carry the source baseline and do not re-upload unchanged content. | `TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline`, `TestRunOnce_RemoteRenameAppliedLocallyDoesNotReupload` |
-| Type changes on either side are replacements ordered delete-then-create, never a silent stall. | `TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem`, `TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem`, `TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem`, `TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem`, `TestRunOnce_LocalFileReplacedByFolderConverges` |
+| Type changes with content on both sides keep both (`conflict_keep_both`, and type-mismatched create/create): a type-aware conflict copy of the local entry, then OneDrive's item at the path; a folder's change includes its subtree; nothing below the path is deleted on either side (R-2.17.10). | `TestRunOnce_RemoteFileReplacedByNonEmptyFolderWithLocalEditKeepsBoth`, `TestRunOnce_RemoteFolderReplacedByFileWithLocalChildEditsKeepsBoth`, `TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth`, `TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth`, `TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth`, `TestExecutor_ConflictCopy_DirectorySourceIsRenamed`, `TestExecutor_ConflictCopy_DirectoryNeverReplacesAnEmptyDirectoryAtItsName` |
+| Type changes on either side are replacements ordered delete-then-create, never a silent stall. | `TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem`, `TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem`, `TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem`, `TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem`, `TestRunOnce_LocalFileReplacedByFolderConverges`, `TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges` |
 | Deletes toward one side are held for confirmation when the other side is empty while the baseline holds files, or when they exceed max(50, 30% of baseline files); moves never count, non-delete work continues, and `sync --confirm-deletes` releases them. | `TestPlanner_MassRemoteDeleteIsHeldForConfirmation`, `TestPlanner_MassLocalDeleteAfterAnomalousFullRefreshIsHeld`, `TestPlanner_EmptiedLocalSideHoldsEvenFewDeletes`, `TestPlanner_DeleteGuardBelowThresholdProceeds`, `TestPlanner_DeleteGuardIgnoresMoves`, `TestDeleteSafetyHold_FolderDeletesCountTowardThreshold`, `TestDeleteSafetyHold_LostAndFoundDoesNotMakeASideNonEmpty`, `TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`, `TestDeleteSafetyHold_ConfirmReleasesExactlyTheHeldSet`, `TestDeleteSafetyHold_HeldRowWithoutItemIDDoesNotApproveAKnownItem`, `TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked` |
+| A dependency cycle drops only its members and their dependents; the rest of the plan runs (R-2.8.11). | `TestIsolateDependencyCycles_KeepsUnrelatedWork` |
 | Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/planner_actions_test.go`, `internal/sync/planner_dependency_test.go` |
 | Planner decisions stay row-driven and action-shaped across conflict and folder-parent preservation cases. | `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_DownloadOnlyKeepsParentDeleteWhenEditedChildUploadDeferred`, `internal/sync/store_planner_visible_test.go` |
 
@@ -127,14 +134,18 @@ same derivation rather than a second planner-shaped helper.
    derived status.
 7. Emit the current runtime action set from reconciliation rows, including
    conflict expansion into concrete actions.
-8. Normalize the action set: omit descendant remote-move actions already covered
-   by a folder move sent to Graph, and preserve a deleted parent folder only
-   when runnable descendant actions in the current sync mode need that parent to
-   exist.
+8. Compose moves per item (`planner_move_composition.go`) and normalize the
+   action set: preserve a deleted parent folder only when runnable descendant
+   actions in the current sync mode need that parent to exist, then rebase
+   remote-origin local writes to where folders sit locally and new local
+   content under a folder this plan renames locally to the folder's new path.
 9. Partition the normalized action set into admitted work and mode-deferred
    counts.
-10. Bind ordinary actions to the engine's mounted drive/root context, build
-    dependency edges, and reject dependency cycles.
+10. Bind ordinary actions to the engine's mounted drive/root context and build
+    dependency edges. A dependency cycle drops only the actions on it and the
+    actions waiting on them, logged as an error (`isolateDependencyCycles`,
+    R-2.8.11, D-059c); it used to abort the whole plan, so one bad pair of
+    actions stopped every other change from syncing.
 
 ## File Decisions
 
@@ -229,6 +240,29 @@ went stale, execution reports that stale precondition and returns control to
 the engine; the next plan rebuild is still the only place that may emit the
 concrete edit/delete upload.
 
+## Comparison Facts
+
+`sqlComparisonStateCTEs` in `sqlite_compare.go` is the one definition of the
+per-path facts (`local_changed`, `remote_changed`, `current_equal`,
+`metadata_drift`, ...) and of the comparison kind. The comparison and
+reconciliation queries both select from it, on the live tables and on the
+planner-visible scratch tables, so a fact cannot mean two things in two queries
+(the comparison query once classified `unchanged` by size and mtime where the
+reconciliation query used hashes).
+
+Remote content is compared by hash only when both the baseline and the current
+item carry one (R-2.2.7). OneDrive omits hashes for zero-byte files on Business
+and for some Office-for-web saves; a hash known on one side only falls back to
+size and eTag, so a lost hash is unknown rather than an edit (which used to
+download the file again, or conflict with a local edit). Two files whose known
+sizes are both zero are equal, so an empty file present on both sides without a
+baseline is a baseline update, not a create/create conflict copy.
+
+`remote_item_replaced` marks a baseline path whose remote item now has another
+ID. A folder deleted locally while OneDrive replaced it is re-created locally
+(`folder_create_local`) rather than deleted online: the new item is not the
+folder the user deleted, and a delete would remove it with its content.
+
 ## Folder And Move Semantics
 
 Folder decisions are symmetric with file decisions. When Graph delta reports a
@@ -290,16 +324,45 @@ A local-origin move carries the destination's planned local truth as
 planning, and the move outcome publishes exactly that truth. A remote move
 applied locally carries the source's baseline in its view, so the precondition
 validates the source and the outcome keeps its local facts (R-2.17.3).
-Identity mismatch at the same path is treated as replacement or delete/create
-truth, not as a move.
+Identity mismatch at the same path is never a move, and never by itself a
+change (R-2.2.6): identity is a pairing hint. A folder with a new identity, or a
+file with a new identity whose hash and size equal the baseline's, is a
+`baseline_update` that records the new identity; a file whose content differs or
+cannot be proven equal (no hash on one side) is an ordinary edit. Before, every
+identity change set `local_changed`: a folder removed and restored planned an
+upload of a directory that failed every pass, and a device renumbered after a
+reboot re-uploaded every file. `buildActionsForReconciliation` refuses a folder
+upload or download as a comparison bug (logged, row dropped) so one bad row
+cannot wedge the plan.
 
 A type change (file <-> folder) at one path is a replacement (R-2.17.4):
 `replace_remote` emits `ActionRemoteDelete` of the old item and then a remote
 folder create or a new-item upload; `replace_local` emits `ActionLocalDelete`
 and then a local folder create or a download that requires a missing target.
-The create depends on the same-path delete. When both sides changed and either
-changed type, local wins (`replace_remote`), because a replaced OneDrive item
-survives in the recycle bin while replaced local truth would be gone. Delete
+The create depends on the same-path delete. When the two sides now hold
+different types and both changed (R-2.17.10, D-059) the result is
+`conflict_keep_both`: the local entry, file or folder, becomes a conflict copy,
+and OneDrive's item takes the path (a folder is created locally, a file
+downloaded into the vacated target). A folder counts as changed when anything
+below it is new or differs from its baseline (`local_subtree_changed`,
+`remote_subtree_changed`, computed only for a folder the other side replaced
+with a file). Before, local won: a local edit inside a folder OneDrive replaced
+with a file was deleted with the folder, a remote edit inside a folder the user
+replaced with a file went with the remote delete, and a remote folder's children
+wedged against a local file still at the path. `trimKeepBothDescendants` keeps
+below the path only OneDrive content arriving into the folder that takes it
+(turning the remote deletes of its unchanged children into local restores) and
+baseline cleanup; work addressed at the renamed local entry is replanned next
+pass. A create/create conflict between a folder and a file expands the same way
+(D-059a), and a directory's conflict copy is a plain rename to a free
+`name.conflict-<timestamp>` with a no-replace rename (renameat2
+`RENAME_NOREPLACE` / `renamex_np` `RENAME_EXCL`; a plain rename would replace an
+empty directory at the name, and a placeholder cannot be renamed onto without
+being replaced). When only one side changed, local wins as before
+(`replace_remote`), because a replaced OneDrive item survives in the recycle
+bin. A remote delete under a folder the user replaced with a file treats the
+path as absent (nothing can exist below a file); its local-absence check used to
+fail on the non-folder parent and held the folder's delete forever. Delete
 ordering and parent preservation use the deleted side's type
 (`deletedItemType`), since the two sides disagree across a type change. Moves that cross drive ownership are
 decomposed into delete + upload because Graph move cannot cross drive
@@ -317,11 +380,88 @@ path. Move-to-move edges are skipped: two moves that trade case-variant names
 would otherwise wait on each other, and a blocked rename fails on its name
 conflict and is retried.
 
-Local folder moves execute as `ActionRemoteMove` work. Graph applies a folder
-move to unchanged descendants, so descendant `ActionRemoteMove` entries whose
-old/new suffixes are exactly covered by the folder move are omitted from the
-executable action set. Descendant renames or content work that are not covered
-by the folder move remain explicit actions.
+### Move Composition
+
+SQLite proves where each synced item sits now (identity pairing locally, item
+ID remotely); `composeMoves` decides where it ends up (R-2.17.6). It works on
+locations, an item's parent and name on each side, because a path is the
+composition of every ancestor's move: composing path by path planned a remote
+move whose source the local side had already moved (D-051), superseded the same
+rename made on both sides forever (D-050), and moved two folders into each
+other (D-055). An item whose location changed on a side was relocated there;
+one that only follows a moved parent needs no move of its own, which is why no
+descendant move is ever emitted for a folder move.
+
+The target is the relocating side's location. When both sides relocated an
+item: to the same place, nothing moves and a publication-only
+`ActionBaselineUpdate` with `OldPath` re-keys the baseline row and its subtree,
+keeping the content facts of a side that also edited the item so the edit is
+still transferred; to different places, OneDrive's location wins (policy P-6,
+chosen because neither choice loses data and remote-wins needs no remote
+mutation) and the local copy is moved there, with an Info notice. A cycle in the
+target tree (local A→B/A while OneDrive moved B→A/B) undoes the local
+relocations on it, so local follows OneDrive and no folder nests in itself. Two
+items claiming one target path (namekey-folded), or a local claim landing where
+OneDrive created a new item, undo the local claim the same way. Undoing only
+ever restores OneDrive's locations, so the loop ends with the remote tree.
+
+Emission is conservative and in pass-local coordinates. A move is emitted only
+when its target parent is in place or is placed by a move earlier in the same
+plan, its destination is free in the snapshot or vacated by an earlier move,
+and its source is not displaced by a move that runs first. OneDrive moves are
+rebased through an ancestor's committed move (remote_state and the baseline
+follow it). Local moves are not, because `local_state` is observation-owned:
+a local child move runs inside its folder before the folder moves, or waits a
+pass. Anything that cannot be ordered is deferred, with a Debug notice, and the
+next pass, which observes the moves this one made, plans it simply; the
+shallowest pending item is always ready, so every pass progresses. Items whose
+paths touch unavailable truth are frozen with their subtree. Creates that would
+land on a path a composed item still holds this pass are dropped until the item
+has moved. A remote move whose local copy sits elsewhere in the snapshot carries
+`MovedLocalPath`, and a local move ordered before its folder's move carries
+`MovedRemotePath`, so freshness reads the snapshot where the item is.
+
+A remote move of a locally edited file is still applied (R-2.17.7): the local
+move source must be the same item (type and identity) but its content may
+differ; the rename carries the bytes, the outcome keeps the baseline's content
+facts, and the next pass uploads the edit as the same item. A move outcome
+re-paths the baseline subtree from the row's own previous path (looked up by
+item ID), not from `OldPath`, which for a local copy moved to OneDrive's name is
+a path the baseline never held.
+
+Move pairing requires the item to have left its baseline path (R-2.17.8): an
+identity pair is refused while the baseline path still holds the baseline
+identity (a hard link), a hash pair while the baseline path still exists (a copy
+without identity). When the baseline path holds a new entry (rename and
+recreate), SQLite still reports `local_move_source` and composition also plans
+the new entry as an upload or remote folder create that waits for the remote
+move to vacate the path. Swaps and rotations are deliberately not paired: the
+paths keep their items and exchange content, which is the same end state
+without a temporary name.
+
+A remote move onto the path of a synced file OneDrive deleted (a replacing
+move, D-058) used to be planned as a download at the destination, which left
+the source behind to be uploaded again as a duplicate. The destination's
+baseline item now gives way (`moveDisplacement`) when it no longer exists
+online: a file whose local copy is provably the synced version is replaced by
+the local move (`Action.ReplaceLocalTarget`; the executor re-verifies it through
+the descriptor it keeps in the trash, P-4), an edited one is renamed to a
+conflict copy first and uploaded later as a new file, and anything else (a
+folder, unknown content) makes the move wait. Reconciliation downloads and
+conflict copies of an item composition moves locally are dropped, and so is a
+metadata baseline update of a moved item (identical content at the destination,
+new eTag), which recorded the replaced file's local identity for the moved item.
+
+`buildDependencies` orders moves by the paths they carry (`addMoveDeps`): work
+at or below a move's destination runs after it; a move onto a path another move
+of the same side vacates waits for it; a move waits for same-side moves out of
+its source, for local writes under a local move's source and for remote deletes
+under a remote move's source; a create at the path a move vacates waits for the
+move; the delete of a destination's old occupant runs first. `ExecuteLocalMove`
+requires the destination's parent to exist and reports a missing one as stale
+instead of creating it (D-054). A local folder create's outcome never moves the
+item in `remote_state` (it may run at a local path that differs from OneDrive's
+until a parent's local move commits).
 
 ## Mount-Local Planning
 
