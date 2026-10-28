@@ -82,3 +82,23 @@ func TestApplySupersededCompletion_ParksTheSameActionAfterAStreak(t *testing.T) 
 	assert.Greater(t, rows[0].NextRetryAt, time.Now().UnixNano(), "the wedged action waits for its backoff")
 	assert.Positive(t, signals.retry, "watch arms the retry timer for the parked action")
 }
+
+// Validates: R-2.8.11
+//
+// Only consecutive supersedes park an action: a plan that no longer contains
+// the action forgets its streak, so supersedes spread over a long watch
+// session never add up to a wedge.
+func TestPruneSupersedeStreaks_ForgetsActionsTheNewPlanLacks(t *testing.T) {
+	t.Parallel()
+
+	flow := &engineFlow{supersedeStreaks: make(map[string]int)}
+	kept := &actionCompletion{ActionType: ActionUpload, Path: "kept.txt"}
+	dropped := &actionCompletion{ActionType: ActionRemoteMove, OldPath: "a", Path: "b"}
+	flow.recordSupersede(kept)
+	flow.recordSupersede(dropped)
+
+	flow.pruneSupersedeStreaks(&actionPlan{Actions: []Action{{Type: ActionUpload, Path: "kept.txt"}}})
+
+	assert.Equal(t, 1, flow.supersedeStreaks[supersedeStreakKey(kept)])
+	assert.NotContains(t, flow.supersedeStreaks, supersedeStreakKey(dropped))
+}

@@ -33,6 +33,11 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 	decision := classifyResult(r)
 	current := flow.sched.trackedActionForCompletion(r)
 	flow.engine.emitActivity(r, decision.Class)
+	if decision.Class != errclass.ClassSuperseded {
+		// The action ran: whatever came of it, its supersedes were not
+		// consecutive, so a wedge streak (D-059d) starts over.
+		flow.clearSupersedeStreak(r)
+	}
 
 	var (
 		dispatched []*trackedAction
@@ -664,6 +669,27 @@ func (flow *engineFlow) recordSupersede(r *actionCompletion) int {
 	}
 
 	return streak
+}
+
+// pruneSupersedeStreaks forgets the streaks of actions a new plan no longer
+// contains: a plan that dropped the action means its supersedes were not
+// consecutive, so it cannot be wedged.
+func (flow *engineFlow) pruneSupersedeStreaks(plan *actionPlan) {
+	if len(flow.supersedeStreaks) == 0 {
+		return
+	}
+	planned := map[string]bool{}
+	if plan != nil {
+		for i := range plan.Actions {
+			action := &plan.Actions[i]
+			planned[supersedeStreakKey(&actionCompletion{ActionType: action.Type, OldPath: action.OldPath, Path: action.Path})] = true
+		}
+	}
+	for key := range flow.supersedeStreaks {
+		if !planned[key] {
+			delete(flow.supersedeStreaks, key)
+		}
+	}
 }
 
 func (flow *engineFlow) clearSupersedeStreak(r *actionCompletion) {
