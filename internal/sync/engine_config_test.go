@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -310,4 +311,22 @@ func TestNewEngine_PropagatesPathConvergence(t *testing.T) {
 	})
 	require.True(t, outcome.Success, "expected remote folder create to succeed: %v", outcome.Error)
 	assert.Equal(t, []string{"photos"}, pathConvergence.waitCalls)
+}
+
+// Validates: R-6.8.9
+//
+// The engine's clock is the one time capability (domain_clock.go), yet its
+// store and executor each kept time.Now. A retry the store scheduled by the
+// wall clock was always due by an engine clock running ahead of it, so a
+// failing action was retried in a hot loop inside one pass (found when the
+// model test advanced its engine clock between passes).
+func TestEngine_StoreAndExecutorTellTheEngineClocksTime(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	clock := newManualClock(time.Date(2031, 3, 4, 5, 6, 7, 0, time.UTC))
+	installManualClockForTestEngine(eng, clock)
+
+	assert.Equal(t, clock.Now(), eng.baseline.nowFunc(), "store")
+	assert.Equal(t, clock.Now(), eng.execCfg.nowFunc(), "executor")
 }

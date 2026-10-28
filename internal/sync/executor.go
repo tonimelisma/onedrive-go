@@ -51,6 +51,11 @@ type executorConfig struct {
 	// driveops.WithDiskCheck when constructing the TransferManager.
 	transferMgr *driveops.TransferManager
 
+	// crashAt, when set, is called at each crash point (crash_points.go):
+	// an error stops the operation there as a crash would (D-091).
+	// Test-only; nil in production.
+	crashAt func(point string) error
+
 	// Injectable for testing.
 	nowFunc  func() time.Time
 	hashFunc func(filePath string) (string, error)
@@ -343,6 +348,15 @@ func (e *executor) adoptExistingRemoteFolder(
 			return &children[i], nil
 		}
 	}
+	// A sibling spelled differently that OneDrive treats as the same name
+	// is a durable name collision for the user, as for an upload; as a
+	// stale precondition it was replanned and refused on every pass.
+	for i := range children {
+		if children[i].ID != "" && namekey.Equal(children[i].Name, name) &&
+			nfcNormalize(children[i].Name) != nfcNormalize(name) {
+			return nil, &remoteNameTakenError{localName: name, remoteName: children[i].Name, err: conflictErr}
+		}
+	}
 
 	return nil, stalePreconditionError("folder create %s: OneDrive already has another item with this name", name)
 }
@@ -488,6 +502,10 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 		)
 	}
 
+	if err := e.reachCrashPoint(crashPointLocalMoveDone); err != nil {
+		return e.failedOutcomeWithFailure(action, ActionLocalMove, err, action.Path, permissionCapabilityUnknown)
+	}
+
 	e.logger.Debug("local move complete", slog.String("from", action.OldPath), slog.String("to", action.Path))
 
 	return e.moveOutcome(action)
@@ -620,6 +638,10 @@ func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) action
 			action.OldPath,
 			inferFailureCapabilityFromError(err, permissionCapabilityUnknown, permissionCapabilityRemoteWrite),
 		)
+	}
+
+	if crashErr := e.reachCrashPoint(crashPointRemoteMoveDone); crashErr != nil {
+		return e.failedOutcomeWithFailure(action, ActionRemoteMove, crashErr, action.OldPath, permissionCapabilityUnknown)
 	}
 
 	e.logger.Debug("remote move complete",
@@ -946,4 +968,13 @@ func fillRemoteOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {
 	if o.ETag == "" {
 		o.ETag = baseline.ETag
 	}
+}
+
+// reachCrashPoint calls the crash hook at point (crash_points.go).
+func (cfg *executorConfig) reachCrashPoint(point string) error {
+	if cfg == nil || cfg.crashAt == nil {
+		return nil
+	}
+
+	return cfg.crashAt(point)
 }

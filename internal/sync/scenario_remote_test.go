@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"path"
 	"sort"
 	"strings"
@@ -32,10 +33,16 @@ import (
 //     A create (upload of a new file, folder create) or move onto a taken
 //     name fails with 409, as the client's create by body with
 //     conflictBehavior=fail does; an overwrite by ID honors If-Match.
-//   - Deleting a folder deletes its subtree.
+//   - Deleting a folder deletes its subtree, and a deleted file's content
+//     goes to the recycle bin; an overwrite keeps the replaced content as a
+//     version. Together they are the no-loss oracle (assertSyncInvariants).
 //   - A folder's eTag changes whenever anything beneath it changes, but delta
 //     keeps reporting the eTag recorded when the folder was created (see
 //     observedFolderETags).
+//   - Delta pages are deterministic: an incremental page lists changes in
+//     the order they happened, a full one by item ID after the root. With
+//     shuffleDelta the order is a seeded permutation instead (D-090), as
+//     Graph promises no order within a window.
 type moveScenarioRemote struct {
 	mu       stdsync.Mutex
 	driveID  driveid.ID
@@ -55,6 +62,17 @@ type moveScenarioRemote struct {
 	changeSeq  int
 	changedAt  map[string]int
 	tombstones map[string]deletedScenarioItem
+
+	// deltaRand, when set, shuffles every delta page (shuffleDelta).
+	deltaRand *rand.Rand
+	// fullDeltaAt records when each full enumeration (delta without a
+	// token) was served.
+	fullDeltaAt []time.Time
+
+	// recycled and versions hold every file content OneDrive still keeps
+	// after a delete or an overwrite.
+	recycled []string
+	versions []string
 
 	uploads int
 	// interruptCreates stops every create after its empty item exists.
@@ -143,6 +161,9 @@ func (r *moveScenarioRemote) addFile(t *testing.T, id, parentID, name, content s
 func (r *moveScenarioRemote) setContent(t *testing.T, id, content string) {
 	t.Helper()
 	item := r.items[id]
+	if previous, ok := r.contents[id]; ok && previous != content {
+		r.versions = append(r.versions, previous)
+	}
 	item.Size = int64(len(content))
 	item.QuickXorHash = hashContentQuickXor(t, content)
 	item.ETag = r.nextETag()
@@ -189,6 +210,7 @@ func (r *moveScenarioRemote) remove(id string) {
 	for _, childID := range r.childIDs(id) {
 		r.removeUnreported(childID)
 	}
+	r.recycle(id)
 	delete(r.items, id)
 	delete(r.changedAt, id)
 	r.changeSeq++
@@ -201,8 +223,26 @@ func (r *moveScenarioRemote) removeUnreported(id string) {
 	for _, childID := range r.childIDs(id) {
 		r.removeUnreported(childID)
 	}
+	r.recycle(id)
 	delete(r.items, id)
 	delete(r.changedAt, id)
+}
+
+// recycle moves a deleted file's content to the recycle bin.
+func (r *moveScenarioRemote) recycle(id string) {
+	if content, ok := r.contents[id]; ok {
+		r.recycled = append(r.recycled, content)
+		delete(r.contents, id)
+	}
+}
+
+// retainedContents is every file content OneDrive keeps outside the live
+// tree: the recycle bin and version history.
+func (r *moveScenarioRemote) retainedContents() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append(append([]string(nil), r.recycled...), r.versions...)
 }
 
 func (r *moveScenarioRemote) childIDs(parentID string) []string {
@@ -317,17 +357,32 @@ func (r *moveScenarioRemote) moveAt(t *testing.T, fromPath, toPath string) {
 	r.moveLocked(item.ID, parent.ID, path.Base(toPath))
 }
 
+// shuffleDelta makes every later delta page a seeded permutation.
+func (r *moveScenarioRemote) shuffleDelta(seed uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deltaRand = rand.New(rand.NewPCG(seed, seed^0x2545f4914f6cdd1d)) //nolint:gosec // deterministic test RNG
+}
+
+func (r *moveScenarioRemote) shuffleLocked(items []graph.Item) {
+	if r.deltaRand == nil {
+		return
+	}
+	r.deltaRand.Shuffle(len(items), func(i, j int) { items[i], items[j] = items[j], items[i] })
+}
+
 func (r *moveScenarioRemote) snapshot() []graph.Item {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := []graph.Item{*r.items["root"]}
+	var rest []graph.Item
 	for _, id := range r.sortedIDs() {
 		if id == "root" {
 			continue
 		}
-		out = append(out, r.reported(id))
+		rest = append(rest, r.reported(id))
 	}
-	return out
+	r.shuffleLocked(rest)
+	return append([]graph.Item{*r.items["root"]}, rest...)
 }
 
 func (r *moveScenarioRemote) sortedIDs() []string {
@@ -357,22 +412,40 @@ func (r *moveScenarioRemote) delta(token string) *graph.DeltaPage {
 	next := fmt.Sprintf("seq-%d", r.changeSeq)
 	r.mu.Unlock()
 	if !incremental {
+		r.mu.Lock()
+		r.fullDeltaAt = append(r.fullDeltaAt, time.Now())
+		r.mu.Unlock()
 		return deltaPageWithItems(r.snapshot(), next)
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var items []graph.Item
+	type change struct {
+		seq  int
+		item graph.Item
+	}
+	var changes []change
 	for _, id := range r.sortedIDs() {
 		if seq, ok := r.changedAt[id]; ok && seq > since {
-			items = append(items, r.reported(id))
+			changes = append(changes, change{seq: seq, item: r.reported(id)})
 		}
 	}
 	for id := range r.tombstones {
 		if r.tombstones[id].seq > since {
-			items = append(items, r.tombstones[id].item)
+			changes = append(changes, change{seq: r.tombstones[id].seq, item: r.tombstones[id].item})
 		}
 	}
+	sort.Slice(changes, func(i, j int) bool {
+		if changes[i].seq != changes[j].seq {
+			return changes[i].seq < changes[j].seq
+		}
+		return changes[i].item.ID < changes[j].item.ID
+	})
+	items := make([]graph.Item, 0, len(changes))
+	for i := range changes {
+		items = append(items, changes[i].item)
+	}
+	r.shuffleLocked(items)
 
 	return deltaPageWithItems(items, next)
 }
@@ -438,10 +511,8 @@ func (r *moveScenarioRemote) listChildren(parentID string) []graph.Item {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var children []graph.Item
-	for _, item := range r.items {
-		if item.ParentID == parentID {
-			children = append(children, *item)
-		}
+	for _, id := range r.childIDs(parentID) {
+		children = append(children, *r.items[id])
 	}
 
 	return children
@@ -638,4 +709,44 @@ func readScenarioUpload(content io.ReaderAt, size int64) (string, error) {
 	}
 
 	return string(data), nil
+}
+
+// clone is an independent copy of the drive as it is now, recycle bin,
+// versions and change log included: the OneDrive a crashed client meets when
+// it starts again (crash_points_test.go).
+func (r *moveScenarioRemote) clone() *moveScenarioRemote {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	c := &moveScenarioRemote{
+		driveID:             r.driveID,
+		items:               make(map[string]*graph.Item, len(r.items)),
+		contents:            make(map[string]string, len(r.contents)),
+		etagSeq:             r.etagSeq,
+		idSeq:               r.idSeq,
+		observedFolderETags: make(map[string]string, len(r.observedFolderETags)),
+		changeSeq:           r.changeSeq,
+		changedAt:           make(map[string]int, len(r.changedAt)),
+		tombstones:          make(map[string]deletedScenarioItem, len(r.tombstones)),
+		recycled:            append([]string(nil), r.recycled...),
+		versions:            append([]string(nil), r.versions...),
+	}
+	for id, item := range r.items {
+		copied := *item
+		c.items[id] = &copied
+	}
+	for id, content := range r.contents {
+		c.contents[id] = content
+	}
+	for id, etag := range r.observedFolderETags {
+		c.observedFolderETags[id] = etag
+	}
+	for id, seq := range r.changedAt {
+		c.changedAt[id] = seq
+	}
+	for id := range r.tombstones {
+		c.tombstones[id] = r.tombstones[id]
+	}
+
+	return c
 }

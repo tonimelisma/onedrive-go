@@ -113,12 +113,13 @@ func TestExecutor_CreateRemoteFolder_ConflictAdoptsTheSameNamedFolder(t *testing
 	assert.Equal(t, "existing-folder", o.ItemID)
 }
 
-// Validates: R-5.6.14
-func TestExecutor_CreateRemoteFolder_ConflictWithAnotherSpellingIsStale(t *testing.T) {
+// Validates: R-5.6.14, R-2.12.2
+func TestExecutor_CreateRemoteFolder_ConflictWithAnotherSpellingIsADurableCollision(t *testing.T) {
 	t.Parallel()
 
 	// "Photos" is the same OneDrive name as "photos" but not this folder's
-	// spelling: the planner decides, the executor does not merge them.
+	// spelling: the executor does not merge them, and the user has to rename
+	// one, as for an upload (remoteNameTakenError).
 	items := &executorMockItemClient{
 		createFolderFn: func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
 			return nil, &graph.GraphError{StatusCode: http.StatusConflict, Code: "nameAlreadyExists", Err: graph.ErrConflict}
@@ -134,5 +135,7 @@ func TestExecutor_CreateRemoteFolder_ConflictWithAnotherSpellingIsStale(t *testi
 		Type: ActionFolderCreate, Path: "photos", CreateSide: CreateRemote, View: &pathView{Path: "photos"},
 	})
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	var taken *remoteNameTakenError
+	require.ErrorAs(t, o.Error, &taken)
+	assert.NotErrorIs(t, o.Error, errActionPreconditionChanged, "not a precondition the next plan can fix")
 }

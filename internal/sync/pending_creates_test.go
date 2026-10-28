@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -180,6 +181,8 @@ func TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableColl
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
 	remote.addFile(t, "remote-strasse", "root", "straße.txt", "theirs\n")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
+	clock := newManualClock(time.Now())
+	installManualClockForTestEngine(eng, clock)
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "STRASSE.txt"), []byte("mine\n"), 0o600))
 
 	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
@@ -193,9 +196,11 @@ func TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableColl
 		"the failure names both the local and the remote name: %s", joined)
 
 	uploads := remote.uploads
-	_, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	clock.Advance(durableCollisionRecheckDelay / 2)
+	report, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, uploads, remote.uploads, "held with backoff, not retried as is on the next pass")
+	assert.Zero(t, report.Failed+report.Succeeded, "nothing ran while the collision stands: %+v", report)
 	assert.Equal(t, "theirs\n", remote.tree()["straße.txt"])
 }
 
@@ -205,4 +210,42 @@ func expireRetryWork(t *testing.T, eng *testEngine) {
 
 	_, err := eng.baseline.rawDB().ExecContext(t.Context(), `UPDATE retry_work SET next_retry_at = 1`)
 	require.NoError(t, err)
+}
+
+// Validates: R-2.12.1, R-2.12.2
+//
+// A folder create onto a name OneDrive holds spelled differently is the same
+// durable collision as an upload's: the user renamed nothing, so retrying it
+// is pointless. It was a superseded precondition instead, so every pass
+// planned and refused it again (model test seed 95: OneDrive re-created
+// docs as Docs while the user kept editing inside docs).
+func TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurableCollision(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("remote-docs", "root", "Docs")
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	clock := newManualClock(time.Now())
+	installManualClockForTestEngine(eng, clock)
+	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "docs"), 0o750))
+
+	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	require.NoError(t, err)
+	require.Equal(t, 1, report.Failed)
+	joined := ""
+	for _, e := range report.Errors {
+		joined += e.Error() + "\n"
+	}
+	assert.True(t, strings.Contains(joined, `"Docs"`) && strings.Contains(joined, `"docs"`),
+		"the failure names both the local and the remote name: %s", joined)
+
+	creates := len(remote.folderCreates)
+	// A pass a few seconds later, however long the first one took (over a
+	// second under -race, which outlasted the transient retry curve's first
+	// step and retried the collision).
+	clock.Advance(durableCollisionRecheckDelay / 2)
+	report, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	require.NoError(t, err)
+	assert.Len(t, remote.folderCreates, creates, "held with backoff, not retried as is on the next pass")
+	assert.Zero(t, report.Failed+report.Succeeded, "nothing ran while the collision stands: %+v", report)
 }

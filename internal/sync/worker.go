@@ -43,6 +43,10 @@ type workerPool struct {
 	// authorities; observation-owned issues are written by observation passes.
 	completions chan actionCompletion
 
+	// serialize runs exactly one worker, below the minWorkers floor, so a
+	// test's dispatch order is also the execution order (D-090).
+	serialize bool
+
 	cancel    context.CancelFunc
 	wg        stdsync.WaitGroup
 	closeOnce stdsync.Once
@@ -85,6 +89,9 @@ func newWorkerPool(
 func (wp *workerPool) Start(ctx context.Context, total int) {
 	if total < minWorkers {
 		total = minWorkers
+	}
+	if wp.serialize {
+		total = 1
 	}
 
 	ctx, wp.cancel = context.WithCancel(ctx)

@@ -96,10 +96,20 @@ identity and content facts. Executable actions must carry planner view truth;
 missing planner view data is an internal validation error once committed truth
 is authoritative, not a reason to skip stale work checks. Move actions
 additionally check the source/destination peer path that is not represented by
-the main `pathView`, so a changed local source, reappeared remote source,
-missing local move destination, a local move destination that no longer matches
-the planner's `Action.MovedLocal`, or occupied remote move destination
-supersedes the old move before side effects.
+the main `pathView`, so a changed local source, a remote move source the moved
+item itself is back at, missing local move destination, a local move destination
+that no longer matches the planner's `Action.MovedLocal`, or occupied remote move
+destination supersedes the old move before side effects. Another item at a local
+move's remote source path is a chain or swap that took the vacated path, not the
+move undone; superseding on it wedged the chain on every pass
+(`TestRunOnce_RemoteMoveChainIntoVacatedPathConverges`). A local move source with a new
+inode that still holds the synced content (size and hash) is the synced item
+(D-057), in worker-start freshness and in the executor alike: a folder rebuilt
+with the same files gave each a new inode, and every move of them superseded
+forever (`TestRunOnce_RemoteRenameInsideLocallyRecreatedFolderConverges`). SQLite's remote-move pairing and
+move composition apply the same test, so a file replaced at the path by a
+different one (new inode, other content) is a new local entry, never the
+source of a planned move (`TestRunOnce_RemoteMoveOfAFileTheUserReplacedLocallyKeepsBoth`).
 
 A remote move whose live preflight finds the item already at the planned
 destination, with the same identity and content, is done rather than stale
@@ -154,7 +164,12 @@ the same name (`remoteNameTakenError`, classified as `case_collision` with
 backoff, naming both names;
 `TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableCollision`),
 or as a stale precondition when the same spelling exists or nothing is
-visible yet.
+visible yet. A remote folder create resolves its 409 the same way: an
+existing folder of the same spelling is adopted, a differently spelled
+sibling is the same durable collision (as a stale precondition it was
+replanned and refused on every pass;
+`TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurableCollision`,
+`TestExecutor_CreateRemoteFolder_ConflictWithAnotherSpellingIsADurableCollision`).
 
 A spelling-only local move (the old and new names are one OneDrive name:
 case or Unicode form) accepts a destination that is the source's own inode,

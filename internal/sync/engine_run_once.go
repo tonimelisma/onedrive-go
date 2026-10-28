@@ -151,6 +151,7 @@ func (r *oneShotRunner) executePreparedPlan(
 
 	pool := newWorkerPool(r.engine.execCfg, r.sched.dispatchCh, r.deps.store, r.deps.logger, len(plan.Actions))
 	pool.perfCollector = r.engine.collector()
+	pool.serialize = r.engine.serializeWorkers
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	pool.Start(runCtx, r.engine.transferWorkers)
@@ -250,6 +251,21 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 			return false, fmt.Errorf("sync: marking full remote refresh: %w", err)
 		}
 		return false, nil
+	}
+	if observation.fullRefreshDueSoon {
+		deadlineChanged, err := flow.deps.store.ClampFullRemoteRefreshDeadline(
+			ctx,
+			flow.engine.driveID,
+			// Deferred, not now: one burst of folder deletions shares one
+			// enumeration, and a deadline only ever moves earlier, so
+			// refreshes stay this far apart.
+			flow.deps.now().Add(fullRefreshAfterFolderDeleteDelay),
+		)
+		if err != nil {
+			return false, fmt.Errorf("sync: pulling full remote refresh forward: %w", err)
+		}
+
+		return deadlineChanged, nil
 	}
 	if observation.observationMode == remoteObservationModeEnumerate {
 		deadlineChanged, err := flow.deps.store.ClampFullRemoteRefreshDeadline(

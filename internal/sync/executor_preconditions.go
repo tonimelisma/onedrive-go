@@ -693,7 +693,33 @@ func (e *executor) validateLocalDeleteFolderPrecondition(action *Action, relPath
 		return normalizeSyncTreePathError(err)
 	}
 
-	return e.validateLocalSourceAgainstBaseline("local delete", relPath, info, action.View.Baseline)
+	if !info.IsDir() || action.View.Baseline.ItemType != ItemTypeFolder || action.View.Local == nil {
+		return e.validateLocalSourceAgainstBaseline("local delete", relPath, info, action.View.Baseline)
+	}
+
+	// A folder is checked against the folder the plan saw, not the
+	// baseline's identity: the planner already decided, by content, that
+	// a folder with a new inode (rebuilt, restored, its disk renumbered)
+	// is the synced one with nothing changed below it (D-057). Checking
+	// the baseline identity refused that decision on every pass. What
+	// R-2.8.10 guards against, a different folder swapped in after
+	// planning, still fails here.
+	return e.validateLocalFolderIdentityAgainstPlan("local delete", relPath, action.View.Local)
+}
+
+func (e *executor) validateLocalFolderIdentityAgainstPlan(op, source string, planned *localState) error {
+	if !planned.LocalHasIdentity {
+		return nil
+	}
+	identity, err := e.syncTree.IdentityNoFollow(source)
+	if err == nil && !synctree.SameIdentity(identity, synctree.FileIdentity{
+		Device: planned.LocalDevice,
+		Inode:  planned.LocalInode,
+	}) {
+		return stalePreconditionError("%s source %s changed identity since planning", op, source)
+	}
+
+	return nil
 }
 
 func localMoveSourcePath(action *Action) string {
@@ -782,8 +808,30 @@ func (e *executor) validateLocalMoveSourceAgainstBaseline(
 	if info.IsDir() != (baseline.ItemType == ItemTypeFolder) {
 		return stalePreconditionError("local move source %s changed type", source)
 	}
+	identityErr := e.validateLocalSourceIdentity("local move", source, baseline)
+	if identityErr == nil || info.IsDir() || !e.localFileHoldsBaselineContent(source, info, baseline) {
+		return identityErr
+	}
 
-	return e.validateLocalSourceIdentity("local move", source, baseline)
+	// A file with a new inode that still holds the synced content is the
+	// synced item (D-057): a folder rebuilt with the same files gives each
+	// one a new inode, and refusing them wedged every move of them.
+	return nil
+}
+
+// localFileHoldsBaselineContent reports whether the file at source provably
+// holds the synced content: the baseline's size and local hash.
+func (e *executor) localFileHoldsBaselineContent(source string, info os.FileInfo, baseline *BaselineEntry) bool {
+	if baseline.LocalHash == "" || (baseline.LocalSizeKnown && info.Size() != baseline.LocalSize) {
+		return false
+	}
+	absPath, err := e.syncTree.Abs(source)
+	if err != nil {
+		return false
+	}
+	currentHash, err := e.hashFunc(absPath)
+
+	return err == nil && currentHash == baseline.LocalHash
 }
 
 func (e *executor) validateLocalSourceIdentity(op string, source string, baseline *BaselineEntry) error {
