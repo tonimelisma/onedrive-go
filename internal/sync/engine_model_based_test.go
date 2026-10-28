@@ -332,9 +332,12 @@ func (r *modelRun) syncUntilQuiet(label string) []modelEdit {
 				report.FolderCreates, report.Moves, report.Succeeded, report.Failed, report.Errors,
 				modelPaths(r.localTree()), modelPaths(r.remote.tree()))
 		}
-		if changed == 0 && report.Failed == 0 {
+		// The user renames what the engine reports as a name collision,
+		// once the pass is quiet or the collision is what failed.
+		quiet := changed == 0 && report.Failed == 0
+		if quiet || (report.Failed > 0 && pass > 1) {
 			resolved := r.resolveNameCollisions()
-			if len(resolved) == 0 {
+			if quiet && len(resolved) == 0 {
 				return userEdits
 			}
 			userEdits = append(userEdits, resolved...)
