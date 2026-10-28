@@ -803,3 +803,34 @@ func TestRunOnce_FileReplacedByFoldersOnBothSidesMergesThem(t *testing.T) {
 	requireScenarioLocalFile(t, h.syncRoot, "docs/remote.txt", "remote\n")
 	assertSyncInvariants(t, h)
 }
+
+// Validates: R-2.8.10, R-2.17.10
+//
+// OneDrive replaced a synced folder with a file while the user re-created the
+// folder locally (same name, new inode). The plan read the local folder as
+// unchanged and deleted it to make way for the file, but a local delete
+// refuses a folder whose identity changed (R-2.8.10), so it was superseded
+// on every pass (model test: local recreate folder, remote replace). A
+// re-created entry is a new local item: both are kept.
+func TestRunOnce_RemoteReplaceOfALocallyRecreatedFolderKeepsBoth(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("item-docs", "root", "docs")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	docs := filepath.Join(h.syncRoot, "docs")
+	require.NoError(t, os.Remove(docs))
+	require.NoError(t, os.Mkdir(docs, 0o750))
+	remote.deleteAt(t, "docs")
+	remote.putFileAt(t, "docs", "remote file\n")
+	for range 3 {
+		runScenarioPass(t, h.eng)
+	}
+
+	requireScenarioLocalFile(t, h.syncRoot, "docs", "remote file\n")
+	assertSyncInvariants(t, h)
+}

@@ -468,8 +468,12 @@ reconciliation_state AS (
 			-- local entry becomes a conflict copy and OneDrive's item takes
 			-- the path. Replacing either side would delete the other's
 			-- content (D-059).
+			-- An entry re-created at the path (a new filesystem identity)
+			-- counts as a local change here: replacing it would need a local
+			-- delete, which refuses an entry whose identity changed
+			-- (R-2.8.10) and was superseded on every pass.
 			WHEN comparison_kind = 'diverged' AND local_item_type <> remote_item_type
-				AND (local_changed = 1 OR local_subtree_changed = 1)
+				AND (local_changed = 1 OR local_subtree_changed = 1 OR local_item_replaced = 1)
 				AND (remote_changed = 1 OR remote_subtree_changed = 1) THEN 'conflict_keep_both'
 			-- Both sides replaced the item with the same new type: two
 			-- creates at one path, not a type change one side wins. Planned
