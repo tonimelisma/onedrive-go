@@ -562,6 +562,15 @@ func (s *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation
 	case baselineMutationNoop:
 		return nil
 	case baselineMutationUpsert:
+		if prev, ok := s.baseline.GetByPath(o.Path); ok && o.ItemType == ItemTypeFolder && prev.ItemID != o.ItemID {
+			// A folder rebound to a new item (R-2.10.49): commitUpsert also
+			// moved its children's parent_id, which a single Put cannot
+			// mirror. Rebinds are rare, so the cache is rebuilt.
+			if err := s.reloadBaselineCache(ctx); err != nil {
+				return fmt.Errorf("sync: reloading baseline cache after folder rebind: %w", err)
+			}
+			return nil
+		}
 		s.baseline.Put(mutationToEntry(o))
 	case baselineMutationDelete:
 		s.baseline.Delete(o.Path)

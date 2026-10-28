@@ -117,3 +117,33 @@ func TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate(
 	require.Len(t, rows, 1)
 	assert.Equal(t, "baseline_update", rows[0].ReconciliationKind)
 }
+
+// Validates: R-2.10.49
+func TestCommitMutation_FolderRebindUpdatesCachedChildren(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(engineTestDriveID)
+	_, err := mgr.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, parent_id, item_type) VALUES
+			('photos-1', 'Photos', 'root', 'folder'),
+			('pic-1', 'Photos/a.jpg', 'photos-1', 'file')`)
+	require.NoError(t, err)
+	bl, err := mgr.Load(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.CommitMutation(ctx, &BaselineMutation{
+		Action: ActionBaselineUpdate, Success: true, Path: "Photos", DriveID: driveID,
+		ItemID: "photos-2", ParentID: "root", ItemType: ItemTypeFolder,
+	}))
+
+	child, found := bl.GetByPath("Photos/a.jpg")
+	require.True(t, found)
+	assert.Equal(t, "photos-2", child.ParentID, "the cached child follows its folder's new ID")
+	folder, found := bl.GetByID("photos-2")
+	require.True(t, found)
+	assert.Equal(t, "Photos", folder.Path)
+	_, stale := bl.GetByID("photos-1")
+	assert.False(t, stale, "the dead ID is gone from the cache")
+}
