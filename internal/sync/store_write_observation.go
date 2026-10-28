@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -202,13 +203,19 @@ func remoteParkPath(itemID string) string {
 
 // parkedRemoteRow is a row moved to its parking path, with the path it held.
 type parkedRemoteRow struct {
-	itemID  string
-	oldPath string
+	itemID   string
+	oldPath  string
+	itemType ItemType
 }
 
 // parkMovingRemoteRowsTx parks every live item of the window whose row holds
 // a real path other than the one it is reported at. A shadowed twin holds no
 // real path, so it has nothing to free and is not parked.
+//
+// Every row's path is read before anything is parked: a child of a folder
+// parked first already sits at :park:<folder>/<child>, and recording that as
+// its old path stranded the child at a parked path whenever the window did
+// not place it.
 func (s *SyncStore) parkMovingRemoteRowsTx(
 	ctx context.Context, tx sqlTxRunner, window []*observedItem,
 ) ([]parkedRemoteRow, error) {
@@ -221,26 +228,37 @@ func (s *SyncStore) parkMovingRemoteRowsTx(
 		if existing == nil || existing.Path == item.Path || remoteTwinShadowParent(existing.Path) != "" {
 			continue
 		}
-		parkPath := remoteParkPath(item.ItemID)
-		if _, err := tx.ExecContext(ctx, `UPDATE remote_state SET path = ? WHERE item_id = ?`, parkPath, item.ItemID); err != nil {
-			return nil, fmt.Errorf("sync: parking remote item %s from %s: %w", item.ItemID, existing.Path, err)
+		parked = append(parked, parkedRemoteRow{itemID: item.ItemID, oldPath: existing.Path, itemType: existing.ItemType})
+	}
+
+	for _, p := range parked {
+		// The current path differs from oldPath when a parked ancestor
+		// carried the row along.
+		current := s.scanRemoteStateRow(ctx, tx, "", p.itemID)
+		if current == nil {
+			continue
 		}
-		if existing.ItemType == ItemTypeFolder {
-			if err := repathSubtreeTx(ctx, tx, "remote_state", existing.Path, parkPath); err != nil {
+		parkPath := remoteParkPath(p.itemID)
+		if _, err := tx.ExecContext(ctx, `UPDATE remote_state SET path = ? WHERE item_id = ?`, parkPath, p.itemID); err != nil {
+			return nil, fmt.Errorf("sync: parking remote item %s from %s: %w", p.itemID, p.oldPath, err)
+		}
+		if p.itemType == ItemTypeFolder {
+			if err := repathSubtreeTx(ctx, tx, "remote_state", current.Path, parkPath); err != nil {
 				return nil, err
 			}
-			if err := keepRemoteTwinsAtHolderPathTx(ctx, tx, existing.Path, parkPath); err != nil {
+			if err := keepRemoteTwinsAtHolderPathTx(ctx, tx, current.Path, parkPath); err != nil {
 				return nil, err
 			}
 		}
-		parked = append(parked, parkedRemoteRow{itemID: item.ItemID, oldPath: existing.Path})
 	}
 
 	return parked, nil
 }
 
 // restoreParkedRemoteRowsTx returns a parked row the window did not place to
-// its old path, then offers every path parking freed to a shadowed twin.
+// where it now belongs -- its old path, under the current path of the
+// nearest parked ancestor the window did place -- then offers every path
+// parking freed to a shadowed twin. No parked path may outlive the window.
 func (s *SyncStore) restoreParkedRemoteRowsTx(ctx context.Context, tx sqlTxRunner, parked []parkedRemoteRow) error {
 	for _, p := range parked {
 		row := s.scanRemoteStateRow(ctx, tx, "", p.itemID)
@@ -248,7 +266,7 @@ func (s *SyncStore) restoreParkedRemoteRowsTx(ctx context.Context, tx sqlTxRunne
 			continue
 		}
 		back := observedItem{
-			DriveID: row.DriveID, ItemID: row.ItemID, Path: p.oldPath, ItemType: row.ItemType,
+			DriveID: row.DriveID, ItemID: row.ItemID, Path: s.restoredParkPath(ctx, tx, p, parked), ItemType: row.ItemType,
 			Hash: row.Hash, Size: row.Size, SizeUnknown: !row.SizeKnown, Mtime: row.Mtime, ETag: row.ETag,
 		}
 		if err := s.processObservedItem(ctx, tx, &back); err != nil {
@@ -261,7 +279,50 @@ func (s *SyncStore) restoreParkedRemoteRowsTx(ctx context.Context, tx sqlTxRunne
 		}
 	}
 
-	return nil
+	return requireNoParkedRemoteRowsTx(ctx, tx)
+}
+
+// restoredParkPath is p's old path re-rooted under the current path of its
+// nearest parked ancestor, which the window may have moved.
+func (s *SyncStore) restoredParkPath(ctx context.Context, tx sqlTxRunner, p parkedRemoteRow, parked []parkedRemoteRow) string {
+	var ancestor *parkedRemoteRow
+	for i := range parked {
+		q := &parked[i]
+		if q.itemID == p.itemID || !strings.HasPrefix(p.oldPath, q.oldPath+"/") {
+			continue
+		}
+		if ancestor == nil || len(q.oldPath) > len(ancestor.oldPath) {
+			ancestor = q
+		}
+	}
+	if ancestor == nil {
+		return p.oldPath
+	}
+	row := s.scanRemoteStateRow(ctx, tx, "", ancestor.itemID)
+	if row == nil || strings.HasPrefix(row.Path, remoteParkMarker) {
+		return p.oldPath
+	}
+
+	return row.Path + strings.TrimPrefix(p.oldPath, ancestor.oldPath)
+}
+
+// requireNoParkedRemoteRowsTx fails the observation transaction when a
+// parked row survived the window: committed, it would hold a path no real
+// item has, and the item would read as gone from its real path.
+func requireNoParkedRemoteRowsTx(ctx context.Context, tx sqlTxRunner) error {
+	var parkedPath string
+	err := tx.QueryRowContext(ctx,
+		`SELECT path FROM remote_state WHERE substr(path, 1, length(?)) = ? COLLATE BINARY LIMIT 1`,
+		remoteParkMarker, remoteParkMarker,
+	).Scan(&parkedPath)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("sync: checking for parked remote rows: %w", err)
+	default:
+		return fmt.Errorf("sync: observation window left remote row parked at %s", parkedPath)
+	}
 }
 
 // processObservedItemWithPlaceholders applies pending-create recognition

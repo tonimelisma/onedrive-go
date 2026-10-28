@@ -270,3 +270,47 @@ func TestCommitObservation_RepeatedItemInOneWindowUsesItsLastObservation(t *test
 	assert.Equal(t, map[string]string{"a": "c.txt", "b": "a.txt"}, remoteStatePathsByID(t, mgr))
 	requireNoTransientTwins(t, mgr, logs)
 }
+
+// A child inside a parked folder that the window reports too, but then does
+// not place (a stale echo of our own placeholder), used to be "restored" to
+// its parked path :park:<folder>/<child> and stay there for good. It goes
+// back under its folder's current path, and no parked path ever survives a
+// window.
+//
+// Validates: R-2.12.7
+func TestCommitObservation_UnplacedChildOfAParkedFolderFollowsTheFolder(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+	mgr, _ := orderTestStore(t)
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+		obsFolder("p", "P"), obsFile("c", "P/c.txt"),
+	}, "t1", driveID))
+	// c is our own upload: the baseline holds its content, and the pending
+	// create remembers the empty placeholder's eTag.
+	_, err := mgr.rawDB().ExecContext(t.Context(), `
+		INSERT INTO baseline (item_id, path, parent_id, item_type, remote_size) VALUES ('c', 'P/c.txt', 'p', 'file', 5);
+		INSERT INTO pending_creates (item_id, drive_id, path, parent_id, created_etag) VALUES ('c', '', 'P/c.txt', 'p', 'placeholder-etag')`)
+	require.NoError(t, err)
+
+	stalePlaceholder := obsFile("c", "Q/c.txt")
+	stalePlaceholder.Size = 0
+	stalePlaceholder.ETag = "placeholder-etag"
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+		obsFolder("p", "Q"), stalePlaceholder,
+	}, "t2", driveID))
+
+	assert.Equal(t, map[string]string{"p": "Q", "c": "Q/c.txt"}, remoteStatePathsByID(t, mgr))
+}
+
+// Validates: R-2.12.7
+func TestRequireNoParkedRemoteRows_FailsTheWindow(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	_, err := mgr.rawDB().ExecContext(t.Context(),
+		`INSERT INTO remote_state (drive_id, item_id, path, item_type) VALUES ('', 'x', ':park:x', 'file')`)
+	require.NoError(t, err)
+
+	require.Error(t, requireNoParkedRemoteRowsTx(t.Context(), mgr.rawDB()))
+}
