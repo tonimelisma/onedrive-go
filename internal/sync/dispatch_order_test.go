@@ -170,6 +170,8 @@ var runOnceScenarios = []func(*testing.T){
 	TestRunOnce_ExecutorPartialFailure,
 	TestRunOnce_FailedActionsRemainInReportErrorsAfterSummaryLogging,
 	TestRunOnce_FolderDeletedAndRestoredLocallyTransfersNothing,
+	TestRunOnce_FolderReplacedByFilesOnBothSidesKeepsBoth,
+	TestRunOnce_FileReplacedByFoldersOnBothSidesMergesThem,
 	TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem,
 	TestRunOnce_FollowSymlinks_UploadsFileInsideDirectoryAliasOutsideRoot,
 	TestRunOnce_FullCaseFoldingVariantNeverOverwritesTheSyncedFile,

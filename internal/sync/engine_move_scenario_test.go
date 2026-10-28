@@ -742,3 +742,64 @@ func TestRunOnce_RemoteRenameInsideLocallyRecreatedFolderConverges(t *testing.T)
 	assert.NoFileExists(t, filepath.Join(docs, "c.md"))
 	assertSyncInvariants(t, h)
 }
+
+// Validates: R-2.17.4, R-2.17.10
+//
+// Both sides replaced a synced folder with a file, each with its own
+// content. The plan read it as a local type change that wins (delete the
+// OneDrive item, upload the local file), but the remote delete refuses to
+// run while the path exists locally, so it was superseded on every pass (model
+// test: local replace and remote replace of one folder). Two files that both
+// replaced the folder are a create/create conflict: both are kept.
+func TestRunOnce_FolderReplacedByFilesOnBothSidesKeepsBoth(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("item-docs", "root", "docs")
+	remote.addFile(t, "item-in", "item-docs", "in.txt", "in\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	require.NoError(t, os.RemoveAll(filepath.Join(h.syncRoot, "docs")))
+	writeLocalFile(t, h.syncRoot, "docs", "local file\n")
+	remote.deleteAt(t, "docs")
+	remote.putFileAt(t, "docs", "remote file\n")
+	for range 3 {
+		runScenarioPass(t, h.eng)
+	}
+
+	contents := modelContents(harnessLocalTree(t, h.syncRoot))
+	assert.Contains(t, contents, "local file\n")
+	assert.Contains(t, contents, "remote file\n")
+	assertSyncInvariants(t, h)
+}
+
+// Validates: R-2.17.4
+//
+// Both sides replaced a synced file with a folder: the two folders are one,
+// and what each side put in it syncs to the other.
+func TestRunOnce_FileReplacedByFoldersOnBothSidesMergesThem(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFile(t, "item-docs", "root", "docs", "was a file\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, "docs")))
+	writeLocalFile(t, h.syncRoot, filepath.Join("docs", "local.txt"), "local\n")
+	remote.deleteAt(t, "docs")
+	remote.mkdirAt(t, "docs")
+	remote.putFileAt(t, "docs/remote.txt", "remote\n")
+	for range 3 {
+		runScenarioPass(t, h.eng)
+	}
+
+	requireScenarioLocalFile(t, h.syncRoot, "docs/local.txt", "local\n")
+	requireScenarioLocalFile(t, h.syncRoot, "docs/remote.txt", "remote\n")
+	assertSyncInvariants(t, h)
+}
