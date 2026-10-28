@@ -235,3 +235,48 @@ func TestWatch_SustainedServerErrorsOnTheCursorResetIt(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, clock.Now().Sub(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)), cursorServerErrorResetAfter)
 }
+
+// A recovery that fails the same way every time (its own token-less
+// enumeration loops, or every fresh token is refused) must back off and
+// respect a minimum spacing, never re-enumerate the drive in a hot loop.
+//
+// Validates: R-2.15.2, R-2.15.3
+func TestWatch_RepeatedlyFailingRecoveryBacksOff(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &scriptedDeltaFetcher{answer: func(int, string) (*graph.DeltaPage, error) {
+		return nil, deltaGone("resyncChangesApplyDifferences")
+	}}
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock := newManualClock(start)
+	var slept time.Duration
+	obs.clock = &observerTestClock{syncClock: clock, sleep: func(_ context.Context, delay time.Duration) error {
+		slept += delay
+		clock.Advance(delay)
+		return nil
+	}}
+	const attempts = 5
+	var recoveredAt []time.Time
+	obs.SetDeltaExpiredRecovery(func(context.Context, resyncKind) (remoteObservationBatch, error) {
+		recoveredAt = append(recoveredAt, clock.Now())
+		if len(recoveredAt) == attempts {
+			cancel()
+		}
+		return remoteObservationBatch{}, newCursorUnusableError("a page links back to an earlier page", nil)
+	})
+	batches := make(chan remoteObservationBatch, 4)
+	_ = startTestRemoteBatchDrain(ctx, batches, nil)
+
+	require.NoError(t, obs.Watch(ctx, "expired", batches, time.Minute, nil, nil))
+
+	require.Len(t, recoveredAt, attempts)
+	for i := 1; i < attempts; i++ {
+		assert.GreaterOrEqual(t, recoveredAt[i].Sub(recoveredAt[i-1]), expiredDeltaRecoveryMinInterval,
+			"recovery %d ran too soon after the last one", i)
+	}
+	assert.Positive(t, slept, "a failed recovery sleeps")
+	assert.Len(t, fetcher.seen(), attempts, "the expired token is re-polled once per recovery, not in a loop")
+}

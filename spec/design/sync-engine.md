@@ -406,7 +406,12 @@ later): one-shot drive-root observation falls through to
 `executeDriveRootFullObservation`, watch mode's remote observer calls the same
 function through `SetDeltaExpiredRecovery` and continues from its token, and
 mount-root delta re-lists with orphan detection. The recovery is marked as a
-full refresh, so the cadence restarts from it (R-2.15.3).
+full refresh, so the cadence restarts from it (R-2.15.3). In watch mode a recovery
+that fails backs off like any failed poll and keeps the expired token, and
+recoveries are at least `expiredDeltaRecoveryMinInterval` (15 min) apart, so
+one that fails the same way every time cannot re-enumerate the drive in a hot
+loop (`TestWatch_RepeatedlyFailingRecoveryBacksOff`). One-shot runs never
+reset a token on sustained 5xx; only watch mode measures that.
 
 The 410's inner code (`newDeltaExpiredError`) decides what a confirmed orphan
 means:

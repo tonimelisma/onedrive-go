@@ -27,9 +27,14 @@ const (
 	// the drive is re-enumerated (R-2.15.2). Graph outages are shorter; a
 	// token stuck on a server fault never recovers on its own.
 	cursorServerErrorResetAfter = 6 * time.Hour
-	maxPathDepth                = 256
-	MinPollInterval             = 30 * time.Second
-	specialFolderVault          = "vault" // Graph API personal vault folder name
+	// expiredDeltaRecoveryMinInterval spaces whole-drive recoveries in watch
+	// mode. A recovery that fails the same way each time (its own
+	// enumeration loops, every fresh token is refused) would otherwise
+	// re-enumerate the drive back to back.
+	expiredDeltaRecoveryMinInterval = 15 * time.Minute
+	maxPathDepth                    = 256
+	MinPollInterval                 = 30 * time.Second
+	specialFolderVault              = "vault" // Graph API personal vault folder name
 )
 
 type watchStepResult struct {
@@ -320,6 +325,7 @@ func (o *remoteObserver) Watch(
 	bo.SetMaxOverride(interval)
 	var outage pollOutageLog
 	var stuck cursorServerErrorTracker
+	var lastRecovery time.Time
 
 	for {
 		drainWakeSignals(wakeCh)
@@ -334,7 +340,7 @@ func (o *remoteObserver) Watch(
 			err = newCursorUnusableError("OneDrive kept failing the saved position", err)
 		}
 		if err != nil && errors.Is(err, errDeltaExpired) && o.recoverExpiredDelta != nil {
-			result := o.recoverExpiredDeltaInWatch(ctx, batches, resyncKindOf(err), interval, bo, &outage, wakeCh)
+			result := o.recoverExpiredDeltaInWatch(ctx, batches, resyncKindOf(err), interval, bo, &outage, &lastRecovery, wakeCh)
 			if result.err != nil {
 				return result.err
 			}
@@ -452,14 +458,27 @@ func (o *remoteObserver) recoverExpiredDeltaInWatch(
 	interval time.Duration,
 	bo *retry.Backoff,
 	outage *pollOutageLog,
+	lastRecovery *time.Time,
 	wakeCh <-chan struct{},
 ) watchStepResult {
+	// Recoveries are spaced: one that fails the same way every time must not
+	// re-enumerate the whole drive back to back. Wake signals do not shorten
+	// this wait.
+	if !lastRecovery.IsZero() {
+		if wait := expiredDeltaRecoveryMinInterval - o.clock.Now().Sub(*lastRecovery); wait > 0 {
+			if result := o.sleepForWatch(ctx, wait, "recovery spacing"); result.stop || result.err != nil {
+				return result
+			}
+		}
+	}
+	*lastRecovery = o.clock.Now()
+
 	// Info: self-healing, the full refresh re-enumerates the drive.
 	o.logger.Info("OneDrive change history expired; rescanning the whole drive (this may take a while)")
 
 	batch, err := o.recoverExpiredDelta(ctx, kind)
 	if err != nil {
-		return o.handleWatchPollError(ctx, bo, outage, fmt.Errorf("recover expired OneDrive change history: %w", err), wakeCh)
+		return o.backOffAfterFailedRecovery(ctx, bo, outage, err, wakeCh)
 	}
 	if emitErr := o.emitWatchBatch(ctx, batches, &batch); emitErr != nil {
 		if watchShouldStop(ctx, emitErr) {
@@ -472,6 +491,35 @@ func (o *remoteObserver) recoverExpiredDeltaInWatch(
 	bo.Reset()
 
 	return o.sleepWatch(ctx, interval, "interval", wakeCh)
+}
+
+// backOffAfterFailedRecovery waits out the backoff after a recovery failed.
+// The expired token is kept, so the next poll answers 410 again and the
+// recovery is retried; the failure is never treated as a fresh expiry, which
+// reset the token and the backoff and spun the loop with no wait at all.
+func (o *remoteObserver) backOffAfterFailedRecovery(
+	ctx context.Context,
+	bo *retry.Backoff,
+	outage *pollOutageLog,
+	err error,
+	wakeCh <-chan struct{},
+) watchStepResult {
+	if watchShouldStop(ctx, err) {
+		return watchStepResult{stop: true}
+	}
+
+	delay := bo.Next()
+	outage.failed(o.logger, "Can't rescan OneDrive after its change history expired; retrying",
+		fmt.Errorf("recover expired OneDrive change history: %w", err), delay,
+		slog.Int("consecutive_errors", bo.Consecutive()),
+	)
+
+	result := o.sleepWatch(ctx, delay, "recovery backoff", wakeCh)
+	if result.stop || result.err != nil {
+		return result
+	}
+
+	return watchStepResult{}
 }
 
 func (o *remoteObserver) handleWatchPollError(
