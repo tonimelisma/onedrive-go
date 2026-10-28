@@ -1017,63 +1017,11 @@ func buildComposedMoveActions(
 			continue
 		}
 		remote := viewAt(node.paths[moveCoordRemote]).Remote
-
 		if move.side == moveCoordLocal {
-			view := &pathView{
-				Path:        move.newPath,
-				Remote:      remote,
-				Local:       viewAt(move.newPath).Local,
-				Baseline:    entry,
-				TruthStatus: viewAt(move.newPath).TruthStatus,
-			}
-			action := makeAction(ActionLocalMove, view)
-			action.OldPath = move.oldPath
-			action.MovedRemotePath = move.remotePath
-			switch move.displaced {
-			case moveDisplaceReplace:
-				action.ReplaceLocalTarget = true
-			case moveDisplaceConflictCopy:
-				// The edit leaves first (buildDependencies orders the move
-				// after the copy at its destination).
-				copyView := *viewAt(move.newPath)
-				actions = append(actions, makeConflictCopyAction(&copyView))
-			case moveDisplaceNever:
-			}
-			actions = append(actions, action)
+			actions = append(actions, composedLocalMoveActions(move, entry, remote, viewAt)...)
 			continue
 		}
-
-		movedLocal := viewAt(move.localPath).Local
-		view := &pathView{
-			Path:        move.oldPath,
-			Remote:      remote,
-			Local:       viewAt(move.oldPath).Local,
-			Baseline:    entry,
-			TruthStatus: viewAt(move.oldPath).TruthStatus,
-		}
-		action := makeAction(ActionRemoteMove, view)
-		action.OldPath = move.oldPath
-		action.Path = move.newPath
-		action.MovedLocal = movedLocal
-		if move.localPath != move.newPath {
-			action.MovedLocalPath = move.localPath
-		}
-		actions = append(actions, action)
-
-		// A move whose content could not be proven unchanged (no hash) also
-		// uploads what now sits at the destination. Only when the item is
-		// already there locally: the upload reads local truth at its path.
-		if move.localPath == move.newPath && localFileDiffersFromBaseline(movedLocal, entry) {
-			uploadView := &pathView{
-				Path:        move.newPath,
-				Local:       movedLocal,
-				Remote:      remote,
-				Baseline:    entry,
-				TruthStatus: viewAt(move.newPath).TruthStatus,
-			}
-			upload := makeAction(ActionUpload, uploadView)
-			actions = append(actions, upload)
-		}
+		actions = append(actions, composedRemoteMoveActions(move, entry, remote, viewAt)...)
 	}
 
 	actions = append(actions, recreatedSourceCreates(composition, inputs, nodeByKey, viewAt)...)
@@ -1115,6 +1063,69 @@ func localFileDiffersFromBaseline(local *localState, baseline *BaselineEntry) bo
 	}
 
 	return baseline.LocalMtime != local.Mtime
+}
+
+// composedLocalMoveActions builds a remote-origin local move, preceded by the
+// conflict copy of an edited file it displaces (buildDependencies orders the
+// move after the copy at its destination).
+func composedLocalMoveActions(move *composedMove, entry *BaselineEntry, remote *remoteState, viewAt func(string) *pathView) []Action {
+	view := &pathView{
+		Path:        move.newPath,
+		Remote:      remote,
+		Local:       viewAt(move.newPath).Local,
+		Baseline:    entry,
+		TruthStatus: viewAt(move.newPath).TruthStatus,
+	}
+	action := makeAction(ActionLocalMove, view)
+	action.OldPath = move.oldPath
+	action.MovedRemotePath = move.remotePath
+
+	switch move.displaced {
+	case moveDisplaceReplace:
+		action.ReplaceLocalTarget = true
+	case moveDisplaceConflictCopy:
+		copyView := *viewAt(move.newPath)
+		return []Action{makeConflictCopyAction(&copyView), action}
+	case moveDisplaceNever:
+	}
+
+	return []Action{action}
+}
+
+// composedRemoteMoveActions builds a local-origin remote move. A move whose
+// content could not be proven unchanged (no hash) also uploads what now sits
+// at the destination, but only when the item is already there locally: the
+// upload reads local truth at its path.
+func composedRemoteMoveActions(move *composedMove, entry *BaselineEntry, remote *remoteState, viewAt func(string) *pathView) []Action {
+	movedLocal := viewAt(move.localPath).Local
+	view := &pathView{
+		Path:        move.oldPath,
+		Remote:      remote,
+		Local:       viewAt(move.oldPath).Local,
+		Baseline:    entry,
+		TruthStatus: viewAt(move.oldPath).TruthStatus,
+	}
+	action := makeAction(ActionRemoteMove, view)
+	action.OldPath = move.oldPath
+	action.Path = move.newPath
+	action.MovedLocal = movedLocal
+	if move.localPath != move.newPath {
+		action.MovedLocalPath = move.localPath
+	}
+	actions := []Action{action}
+
+	if move.localPath == move.newPath && localFileDiffersFromBaseline(movedLocal, entry) {
+		uploadView := &pathView{
+			Path:        move.newPath,
+			Local:       movedLocal,
+			Remote:      remote,
+			Baseline:    entry,
+			TruthStatus: viewAt(move.newPath).TruthStatus,
+		}
+		actions = append(actions, makeAction(ActionUpload, uploadView))
+	}
+
+	return actions
 }
 
 // recreatedSourceCreates plans the new local entry at a path the synced item
@@ -1172,6 +1183,32 @@ func recreatedSourceCreates(
 // under it never ran. Next pass the item has moved and the create is planned
 // again.
 func dropCreatesOntoComposedItems(actions []Action, inputs *moveInputs, composition *moveComposition) []Action {
+	heldBy := pathsHeldByUnmovedItems(inputs, composition)
+	vacated := pathsVacatedByPlan(actions)
+
+	kept := actions[:0:0]
+	for i := range actions {
+		action := &actions[i]
+		side, isCreate := createSide(action)
+		if !isCreate {
+			kept = append(kept, *action)
+			continue
+		}
+		if holder, held := heldBy[side][action.Path]; held && holder != action.ItemID {
+			continue
+		}
+		if action.Path != actionViewPath(action) && rebasedCreateBlocked(action.Path, side, &inputs.occupancy, vacated[side]) {
+			continue
+		}
+		kept = append(kept, *action)
+	}
+
+	return kept
+}
+
+// pathsHeldByUnmovedItems maps, per side, the paths composed items still hold
+// this pass (no move of theirs on that side) to their keys.
+func pathsHeldByUnmovedItems(inputs *moveInputs, composition *moveComposition) map[moveCoord]map[string]string {
 	movedOn := map[moveCoord]map[string]bool{moveCoordLocal: {}, moveCoordRemote: {}}
 	for i := range composition.moves {
 		movedOn[composition.moves[i].side][composition.moves[i].key] = true
@@ -1185,12 +1222,17 @@ func dropCreatesOntoComposedItems(actions []Action, inputs *moveInputs, composit
 			continue
 		}
 		for _, side := range []moveCoord{moveCoordLocal, moveCoordRemote} {
-			if n.present(side) && !movedOn[side][n.key] {
+			if !movedOn[side][n.key] {
 				heldBy[side][n.paths[side]] = n.key
 			}
 		}
 	}
 
+	return heldBy
+}
+
+// pathsVacatedByPlan reports, per side, the paths an action of the plan frees.
+func pathsVacatedByPlan(actions []Action) map[moveCoord]map[string]bool {
 	vacated := map[moveCoord]map[string]bool{moveCoordLocal: {}, moveCoordRemote: {}}
 	for i := range actions {
 		switch actions[i].Type {
@@ -1206,21 +1248,7 @@ func dropCreatesOntoComposedItems(actions []Action, inputs *moveInputs, composit
 		}
 	}
 
-	kept := actions[:0:0]
-	for i := range actions {
-		action := &actions[i]
-		side, isCreate := createSide(action)
-		if holder, held := heldBy[side][action.Path]; isCreate && held && holder != action.ItemID {
-			continue
-		}
-		if isCreate && action.Path != actionViewPath(action) &&
-			rebasedCreateBlocked(action.Path, side, &inputs.occupancy, vacated[side]) {
-			continue
-		}
-		kept = append(kept, *action)
-	}
-
-	return kept
+	return vacated
 }
 
 // rebasedCreateBlocked reports a create that a rebase moved onto a path the

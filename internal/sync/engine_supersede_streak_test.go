@@ -53,7 +53,7 @@ func TestSupersedeParkDelay_DoublesToACap(t *testing.T) {
 //
 // Ordinary supersedes keep no retry work; the same action superseded
 // supersedeParkThreshold times in a row is parked in retry_work with a future
-// retry time, which admission honours, so watch mode stops replanning it hot
+// retry time, which admission honors, so watch mode stops replanning it hot
 // (D-059d).
 func TestApplySupersededCompletion_ParksTheSameActionAfterAStreak(t *testing.T) {
 	t.Parallel()

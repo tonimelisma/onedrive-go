@@ -435,19 +435,7 @@ func buildKeepBothActions(view *pathView) []Action {
 // local side "lost" would delete OneDrive content the keep-both keeps. The next
 // pass plans the conflict copy's content as new.
 func trimKeepBothDescendants(actions []Action) []Action {
-	var keepBoth []string
-	remoteFolder := map[string]bool{}
-	for i := range actions {
-		action := &actions[i]
-		if action.Type != ActionConflictCopy || action.View == nil || action.View.Local == nil || action.View.Remote == nil {
-			continue
-		}
-		if action.View.Local.ItemType == action.View.Remote.ItemType {
-			continue
-		}
-		keepBoth = append(keepBoth, action.Path)
-		remoteFolder[action.Path] = action.View.Remote.ItemType == ItemTypeFolder
-	}
+	keepBoth := keepBothPaths(actions)
 	if len(keepBoth) == 0 {
 		return actions
 	}
@@ -455,34 +443,62 @@ func trimKeepBothDescendants(actions []Action) []Action {
 	kept := actions[:0:0]
 	for i := range actions {
 		action := &actions[i]
-		under := ""
-		for _, p := range keepBoth {
-			if strings.HasPrefix(action.Path, p+"/") {
-				under = p
-				break
-			}
-		}
-		if under == "" || action.Type == ActionCleanup {
+		remoteIsFolder, under := keepBothAncestor(action.Path, keepBoth)
+		if !under || action.Type == ActionCleanup {
 			kept = append(kept, *action)
 			continue
 		}
-		if !remoteFolder[under] {
-			continue
-		}
-		arrives := action.Type == ActionDownload || (action.Type == ActionFolderCreate && action.CreateSide == createLocal)
-		if arrives {
-			kept = append(kept, *action)
-			continue
-		}
-		// An unchanged child of the folder OneDrive keeps looks deleted
-		// locally (the local entry at the path was a file): it is restored,
-		// not deleted online.
-		if action.Type == ActionRemoteDelete && action.View != nil && action.View.Remote != nil {
-			kept = append(kept, restoreRemoteChild(action.View))
+		if replacement, keep := keepBothDescendantAction(action, remoteIsFolder); keep {
+			kept = append(kept, replacement)
 		}
 	}
 
 	return kept
+}
+
+// keepBothPaths maps each keep-both path (a conflict copy between entries of
+// different types) to whether OneDrive's item there is a folder.
+func keepBothPaths(actions []Action) map[string]bool {
+	keepBoth := map[string]bool{}
+	for i := range actions {
+		action := &actions[i]
+		if action.Type != ActionConflictCopy || action.View == nil || action.View.Local == nil || action.View.Remote == nil {
+			continue
+		}
+		if action.View.Local.ItemType != action.View.Remote.ItemType {
+			keepBoth[action.Path] = action.View.Remote.ItemType == ItemTypeFolder
+		}
+	}
+
+	return keepBoth
+}
+
+func keepBothAncestor(p string, keepBoth map[string]bool) (remoteIsFolder bool, under bool) {
+	for dir := path.Dir(p); dir != "." && dir != "/"; dir = path.Dir(dir) {
+		if isFolder, ok := keepBoth[dir]; ok {
+			return isFolder, true
+		}
+	}
+
+	return false, false
+}
+
+// keepBothDescendantAction decides one action below a keep-both path: content
+// arriving into OneDrive's folder stays, and an unchanged child of that folder
+// that looks deleted locally (the local entry at the path was a file) is
+// restored, not deleted online. Anything else waits for the next pass.
+func keepBothDescendantAction(action *Action, remoteIsFolder bool) (Action, bool) {
+	if !remoteIsFolder {
+		return Action{}, false
+	}
+	if action.Type == ActionDownload || (action.Type == ActionFolderCreate && action.CreateSide == createLocal) {
+		return *action, true
+	}
+	if action.Type == ActionRemoteDelete && action.View != nil && action.View.Remote != nil {
+		return restoreRemoteChild(action.View), true
+	}
+
+	return Action{}, false
 }
 
 func restoreRemoteChild(view *pathView) Action {
