@@ -888,11 +888,11 @@ func TestRoot_CreateFailureKeepsItsErrno(t *testing.T) {
 
 			_, err = root.OpenFile("new.partial", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 			require.ErrorIs(t, err, errno)
-			assert.NotErrorIs(t, err, os.ErrNotExist)
+			require.NotErrorIs(t, err, os.ErrNotExist)
 
 			err = root.MkdirAll("new-folder", 0o700)
 			require.ErrorIs(t, err, errno)
-			assert.NotErrorIs(t, err, os.ErrNotExist)
+			require.NotErrorIs(t, err, os.ErrNotExist)
 		})
 	}
 }

@@ -50,9 +50,10 @@ func (m matrixSide) content() string {
 		return "content B"
 	case matrixC:
 		return "content C"
-	default:
-		return ""
+	case matrixAbsent, matrixFolder:
 	}
+
+	return ""
 }
 
 // matrixCell builds one cell: the baseline's item (A or a folder) and each
@@ -93,7 +94,7 @@ func (s *pmState) setSide(isLocal bool, p string, baseline, want matrixSide) {
 	default:
 		item := pmItem{folder: want == matrixFolder, content: want.content()}
 		if isLocal {
-			item.inode = uint64(s.next()) //nolint:gosec // small counter
+			item.inode = uint64(s.next())
 		} else {
 			item.id = fmt.Sprintf("item-%d", s.next())
 			item.etag = s.next()

@@ -90,7 +90,7 @@ func (s *pmState) logf(format string, args ...any) {
 // addSynced puts an entry on both sides and in the baseline.
 func (s *pmState) addSynced(p string, folder bool, content string) {
 	id := "item-" + strconv.Itoa(s.next())
-	inode := uint64(s.next()) //nolint:gosec // small positive counter
+	inode := uint64(s.next())
 	etag := s.next()
 	s.remote[p] = pmItem{id: id, folder: folder, content: content, etag: etag}
 	s.local[p] = pmItem{folder: folder, content: content, inode: inode}
@@ -184,7 +184,7 @@ func (s *pmState) plan() *actionPlan {
 			nullString(s.hash(row.folder, row.localContent)), nullString(s.hash(row.folder, row.remoteContent)),
 			int64(len(row.localContent)), int64(len(row.remoteContent)),
 			pmMtime(row.localContent), pmMtime(row.remoteContent),
-			pmMtime(row.localContent), plannerModelLocalDevice, int64(row.inode), 1, //nolint:gosec // small counter
+			pmMtime(row.localContent), plannerModelLocalDevice, int64(row.inode), 1,
 			"etag-"+strconv.Itoa(row.etag),
 		)
 		require.NoError(t, err)
@@ -268,35 +268,11 @@ func (s *pmState) apply(plan *actionPlan) {
 }
 
 func (s *pmState) applyAction(a *Action) {
-	t := s.t
 	switch a.Type {
 	case ActionDownload:
-		// By ID, as Graph serves it: the item may still sit at another path
-		// a later move of this plan puts right.
-		_, src, ok := s.remoteItem(a)
-		require.True(t, ok && !src.folder, "download of %s: no remote file", a.Path)
-		inode := uint64(s.next()) //nolint:gosec // small counter
-		s.local[a.Path] = pmItem{content: src.content, inode: inode}
-		s.baseline[a.Path] = pmSynced{id: src.id, localContent: src.content, remoteContent: src.content, inode: inode, etag: src.etag}
+		s.download(a)
 	case ActionUpload:
-		src, ok := s.local[a.Path]
-		require.True(t, ok && !src.folder, "upload of %s: no local file", a.Path)
-		etag := s.next()
-		// An overwrite goes to the item by ID, wherever it is; a create
-		// makes a new item at the path.
-		at, existing, found := s.remoteItem(a)
-		id := existing.id
-		if a.ItemID == "" || !found {
-			if _, taken := s.remote[a.Path]; taken {
-				// A create never replaces (409, R-5.6.14): the action
-				// fails and the next plan sees what took the name.
-				s.logf("    409: %s is taken on OneDrive", a.Path)
-				return
-			}
-			at, id = a.Path, "item-"+strconv.Itoa(s.next())
-		}
-		s.remote[at] = pmItem{id: id, content: src.content, etag: etag}
-		s.baseline[a.Path] = pmSynced{id: id, localContent: src.content, remoteContent: src.content, inode: src.inode, etag: etag}
+		s.upload(a)
 	case ActionLocalDelete:
 		s.deleteTree(s.local, a.Path)
 		deleteSyncedTree(s.baseline, a.Path)
@@ -309,20 +285,12 @@ func (s *pmState) applyAction(a *Action) {
 		moveTree(s.local, a.OldPath, a.Path)
 		moveTree(s.baseline, a.OldPath, a.Path)
 	case ActionRemoteMove:
-		at, _, found := s.remoteItem(a)
-		require.True(t, found, "remote move to %s: no remote item %s", a.Path, a.ItemID)
-		if _, taken := s.remote[a.Path]; taken && at != a.Path {
-			s.logf("    409: %s is taken on OneDrive", a.Path)
-			return
-		}
-		moveTree(s.remote, at, a.Path)
-		s.bumpRemote(a.Path)
-		moveTree(s.baseline, a.OldPath, a.Path)
+		s.remoteMove(a)
 	case ActionFolderCreate:
 		s.createFolder(a)
 	case ActionConflictCopy:
 		src, ok := s.local[a.Path]
-		require.True(t, ok, "conflict copy of %s: no local entry", a.Path)
+		require.True(s.t, ok, "conflict copy of %s: no local entry", a.Path)
 		copyPath := conflictModelPath(a.Path, s.next())
 		delete(s.local, a.Path)
 		s.local[copyPath] = src
@@ -331,6 +299,48 @@ func (s *pmState) applyAction(a *Action) {
 	case ActionCleanup:
 		delete(s.baseline, a.Path)
 	}
+}
+
+// download fetches by ID, as Graph serves it: the item may still sit at
+// another path a later move of this plan puts right.
+func (s *pmState) download(a *Action) {
+	_, src, ok := s.remoteItem(a)
+	require.True(s.t, ok && !src.folder, "download of %s: no remote file", a.Path)
+	inode := uint64(s.next())
+	s.local[a.Path] = pmItem{content: src.content, inode: inode}
+	s.baseline[a.Path] = pmSynced{id: src.id, localContent: src.content, remoteContent: src.content, inode: inode, etag: src.etag}
+}
+
+// upload overwrites the item by ID, wherever it is, or creates a new item at
+// the path; a create never replaces (409, R-5.6.14), so onto a taken name the
+// action fails and the next plan sees what took it.
+func (s *pmState) upload(a *Action) {
+	src, ok := s.local[a.Path]
+	require.True(s.t, ok && !src.folder, "upload of %s: no local file", a.Path)
+	etag := s.next()
+	at, existing, found := s.remoteItem(a)
+	id := existing.id
+	if a.ItemID == "" || !found {
+		if _, taken := s.remote[a.Path]; taken {
+			s.logf("    409: %s is taken on OneDrive", a.Path)
+			return
+		}
+		at, id = a.Path, "item-"+strconv.Itoa(s.next())
+	}
+	s.remote[at] = pmItem{id: id, content: src.content, etag: etag}
+	s.baseline[a.Path] = pmSynced{id: id, localContent: src.content, remoteContent: src.content, inode: src.inode, etag: etag}
+}
+
+func (s *pmState) remoteMove(a *Action) {
+	at, _, found := s.remoteItem(a)
+	require.True(s.t, found, "remote move to %s: no remote item %s", a.Path, a.ItemID)
+	if _, taken := s.remote[a.Path]; taken && at != a.Path {
+		s.logf("    409: %s is taken on OneDrive", a.Path)
+		return
+	}
+	moveTree(s.remote, at, a.Path)
+	s.bumpRemote(a.Path)
+	moveTree(s.baseline, a.OldPath, a.Path)
 }
 
 // remoteItem finds the remote item an action names: by its ID when it has
@@ -372,7 +382,7 @@ func (s *pmState) createFolder(a *Action) {
 	} else {
 		require.True(s.t, remoteOK && remote.folder, "local folder create %s: no remote folder", a.Path)
 		if !localOK {
-			local = pmItem{folder: true, inode: uint64(s.next())} //nolint:gosec // small counter
+			local = pmItem{folder: true, inode: uint64(s.next())}
 			s.local[a.Path] = local
 		}
 	}
@@ -491,87 +501,114 @@ func (r *pmRun) content(sideName string) string {
 
 // mutate makes one random edit on a side, as a user or another device would.
 func (r *pmRun) mutate(sideName string, side map[string]pmItem, isLocal bool) {
-	newEntry := func(folder bool, content string) pmItem {
-		if isLocal {
-			return pmItem{folder: folder, content: content, inode: uint64(r.next())} //nolint:gosec // small counter
-		}
-
-		return pmItem{id: "item-" + strconv.Itoa(r.next()), folder: folder, content: content, etag: r.next()}
-	}
+	e := pmSideEdit{run: r, name: sideName, side: side, isLocal: isLocal}
 	entries := sortedKeys(side)
 	switch r.rng.IntN(6) {
 	case 0: // create a file
 		if p := r.freePath(side, plannerModelFileNames); p != "" {
 			content := r.content(sideName)
-			side[p] = newEntry(false, content)
-			r.logf("%s create %s", sideName, p)
-			r.written = append(r.written, modelEdit{side: sideName, kind: modelOpCreateFile, path: p, content: content})
+			side[p] = e.newEntry(false, content)
+			e.record(modelOpCreateFile, p, "", content)
 		}
-	case 1: // edit a file
-		p := r.pick(entries)
-		if item, ok := side[p]; ok && !item.folder {
-			item.content = r.content(sideName)
-			if !isLocal {
-				item.etag = r.next()
-			}
-			side[p] = item
-			r.logf("%s edit %s", sideName, p)
-			r.written = append(r.written, modelEdit{side: sideName, kind: modelOpEditFile, path: p, content: item.content})
-		}
+	case 1:
+		e.edit(r.pick(entries))
 	case 2: // delete an entry and its subtree
 		if p := r.pick(entries); p != "" {
 			r.deleteTree(side, p)
-			r.logf("%s delete %s", sideName, p)
-			r.written = append(r.written, modelEdit{side: sideName, kind: modelOpDelete, path: p})
+			e.record(modelOpDelete, p, "", "")
 		}
-	case 3: // move or rename an entry
-		from := r.pick(entries)
-		if from == "" {
-			return
-		}
-		pool := plannerModelFileNames
-		if side[from].folder {
-			pool = plannerModelFolderNames
-		}
-		to := r.freePath(side, pool+" moved-"+path.Base(from))
-		if to == "" || to == from || strings.HasPrefix(to, from+"/") {
-			return
-		}
-		if _, parentOK := side[path.Dir(to)]; path.Dir(to) != "." && !parentOK {
-			return
-		}
-		moveTree(side, from, to)
-		if !isLocal {
-			// A move gives the item a new eTag; its children keep theirs.
-			moved := side[to]
-			moved.etag = r.next()
-			side[to] = moved
-		}
-		r.logf("%s move %s -> %s", sideName, from, to)
-		r.written = append(r.written, modelEdit{side: sideName, kind: modelOpMove, path: from, to: to})
+	case 3:
+		e.move(r.pick(entries))
 	case 4: // make a folder
 		if p := r.freePath(side, plannerModelFolderNames); p != "" {
-			side[p] = newEntry(true, "")
-			r.logf("%s mkdir %s", sideName, p)
-			r.written = append(r.written, modelEdit{side: sideName, kind: modelOpMakeFolder, path: p})
+			side[p] = e.newEntry(true, "")
+			e.record(modelOpMakeFolder, p, "", "")
 		}
-	default: // replace an entry with one of the other type
-		p := r.pick(entries)
-		if p == "" {
-			return
-		}
-		wasFolder := side[p].folder
-		r.deleteTree(side, p)
-		content := r.content(sideName)
-		if wasFolder {
-			side[p] = newEntry(false, content)
-		} else {
-			side[p] = newEntry(true, "")
-			side[path.Join(p, "inside.txt")] = newEntry(false, content)
-		}
-		r.logf("%s replace %s", sideName, p)
-		r.written = append(r.written, modelEdit{side: sideName, kind: modelOpReplace, path: p, content: content})
+	default:
+		e.replace(r.pick(entries))
 	}
+}
+
+// pmSideEdit is one random edit on one side of the planner model.
+type pmSideEdit struct {
+	run     *pmRun
+	name    string
+	side    map[string]pmItem
+	isLocal bool
+}
+
+func (e pmSideEdit) newEntry(folder bool, content string) pmItem {
+	if e.isLocal {
+		return pmItem{folder: folder, content: content, inode: uint64(e.run.next())}
+	}
+
+	return pmItem{id: "item-" + strconv.Itoa(e.run.next()), folder: folder, content: content, etag: e.run.next()}
+}
+
+func (e pmSideEdit) record(kind, p, to, content string) {
+	if to != "" {
+		e.run.logf("%s %s %s -> %s", e.name, kind, p, to)
+	} else {
+		e.run.logf("%s %s %s", e.name, kind, p)
+	}
+	e.run.written = append(e.run.written, modelEdit{side: e.name, kind: kind, path: p, to: to, content: content})
+}
+
+// edit rewrites a file in place.
+func (e pmSideEdit) edit(p string) {
+	item, ok := e.side[p]
+	if !ok || item.folder {
+		return
+	}
+	item.content = e.run.content(e.name)
+	if !e.isLocal {
+		item.etag = e.run.next()
+	}
+	e.side[p] = item
+	e.record(modelOpEditFile, p, "", item.content)
+}
+
+// move renames an entry or moves it into another folder.
+func (e pmSideEdit) move(from string) {
+	if from == "" {
+		return
+	}
+	pool := plannerModelFileNames
+	if e.side[from].folder {
+		pool = plannerModelFolderNames
+	}
+	to := e.run.freePath(e.side, pool+" moved-"+path.Base(from))
+	if to == "" || to == from || strings.HasPrefix(to, from+"/") {
+		return
+	}
+	if _, parentOK := e.side[path.Dir(to)]; path.Dir(to) != "." && !parentOK {
+		return
+	}
+	moveTree(e.side, from, to)
+	if !e.isLocal {
+		// A move gives the item a new eTag; its children keep theirs.
+		moved := e.side[to]
+		moved.etag = e.run.next()
+		e.side[to] = moved
+	}
+	e.record(modelOpMove, from, to, "")
+}
+
+// replace swaps an entry for one of the other type.
+func (e pmSideEdit) replace(p string) {
+	if p == "" {
+		return
+	}
+	wasFolder := e.side[p].folder
+	e.run.deleteTree(e.side, p)
+	content := e.run.content(e.name)
+	if wasFolder {
+		e.side[p] = e.newEntry(false, content)
+	} else {
+		e.side[p] = e.newEntry(true, "")
+		e.side[path.Join(p, "inside.txt")] = e.newEntry(false, content)
+	}
+	e.record(modelOpReplace, p, "", content)
 }
 
 func plannerModelSeeds(t *testing.T) []uint64 {

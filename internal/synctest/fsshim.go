@@ -72,7 +72,7 @@ func (r ErrnoRule) matches(op FSOp, name string) bool {
 // (EACCES), a failing disk (EIO) or a name the filesystem cannot hold
 // (ENAMETOOLONG) would. Rules can change between passes.
 type ErrnoShim struct {
-	mu    sync.Mutex
+	mu    sync.Mutex // guards rules and hits
 	rules []ErrnoRule
 	hits  int
 }

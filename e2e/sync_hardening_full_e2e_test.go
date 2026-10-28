@@ -72,8 +72,11 @@ func contentTree(t *testing.T, root string) map[string]string {
 			return err
 		}
 		rel, relErr := filepath.Rel(root, p)
-		if relErr != nil || rel == "." {
-			return relErr
+		if relErr != nil {
+			return fmt.Errorf("relative path of %s: %w", p, relErr)
+		}
+		if rel == "." {
+			return nil
 		}
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
@@ -82,7 +85,7 @@ func contentTree(t *testing.T, root string) map[string]string {
 		}
 		data, readErr := os.ReadFile(p) //nolint:gosec // the test's own sync dir
 		if readErr != nil {
-			return readErr
+			return fmt.Errorf("read %s: %w", p, readErr)
 		}
 		tree[rel] = string(data)
 		return nil
@@ -183,7 +186,7 @@ func namingCorpus() []string {
 		"50% off.txt", "a+b.txt", "%20literal.txt", "$cost.txt", "#hash.txt", "semi;colon.txt",
 		"v1.0", "root", "delta", "children", "content",
 		"straße.txt", "café nfc.txt", "café nfd.txt",
-		"\U0001F469‍\U0001F4BB team.txt", "double  space.txt", "Test：1.jpg",
+		"\U0001F469\u200D\U0001F4BB team.txt", "double  space.txt", "Test：1.jpg",
 		"日本語/ファイル.txt",
 	}
 }
@@ -328,7 +331,7 @@ func TestE2E_Sync_LargeFileBetweenClients(t *testing.T) {
 	assert.Equal(t, sha256.Sum256(data), sha256.Sum256(got), "the downloaded copy is byte-identical")
 
 	edited := bytes.Clone(data)
-	copy(edited[len(edited)/2:], []byte("edited in the middle by B"))
+	copy(edited[len(edited)/2:], "edited in the middle by B")
 	require.NoError(t, os.WriteFile(filepath.Join(dirB, "large.bin"), edited, 0o600))
 	runCLIWithConfig(t, cfgB, envB, "sync")
 	syncUntil(t, cfgA, envA, "A downloads B's edit", func() bool {

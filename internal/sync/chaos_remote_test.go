@@ -58,7 +58,7 @@ const (
 type chaosGraph struct {
 	seed uint64
 
-	mu    stdsync.Mutex
+	mu    stdsync.Mutex // guards storm, calls, pages, pageSeq and faults
 	storm bool
 	// calls numbers the calls per operation and key, so each call's faults
 	// come from its own seeded stream: the same seed injects the same faults

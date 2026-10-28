@@ -63,7 +63,7 @@ func TestCaseInsensitive_VariantNamesAreTheStoredEntry(t *testing.T) {
 	writeTreeFile(t, tree, "docs/README.txt", "second")
 	assert.Equal(t, []string{"Docs"}, storedNames(t, dir))
 	assert.Equal(t, []string{"Readme.txt"}, storedNames(t, filepath.Join(dir, "Docs")), "creating a variant opens the stored entry")
-	data, err := os.ReadFile(filepath.Join(dir, "Docs", "Readme.txt"))
+	data, err := os.ReadFile(filepath.Join(dir, "Docs", "Readme.txt")) //nolint:gosec // the test's own temp tree
 	require.NoError(t, err)
 	assert.Equal(t, "second", string(data))
 
@@ -98,7 +98,7 @@ func TestCaseInsensitive_RenameRespellsOrReplaces(t *testing.T) {
 	writeTreeFile(t, tree, "other.txt", "other")
 	require.NoError(t, tree.Rename("other.txt", "edit.TXT"))
 	assert.Equal(t, []string{"edit.TXT"}, storedNames(t, dir), "a rename onto another entry's variant replaces it")
-	data, err := os.ReadFile(filepath.Join(dir, "edit.TXT"))
+	data, err := os.ReadFile(filepath.Join(dir, "edit.TXT")) //nolint:gosec // the test's own temp tree
 	require.NoError(t, err)
 	assert.Equal(t, "other", string(data))
 }

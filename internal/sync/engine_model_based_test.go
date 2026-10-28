@@ -448,13 +448,7 @@ func (r *modelRun) syncUntilQuiet(label string) []modelEdit {
 	}
 	checkWipe := true
 	for pass := 1; pass <= modelMaxSyncPasses+stormPasses; pass++ {
-		if pass > 1 {
-			r.clock.advance(modelPassInterval)
-		}
-		storm := pass <= stormPasses
-		if r.chaos != nil {
-			r.chaos.setStorm(storm)
-		}
+		storm := r.startPass(pass, stormPasses)
 		report, err := r.eng.RunOnce(r.t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: confirm})
 		if storm && err != nil {
 			// A fault the storm injected into observation fails the pass
@@ -469,11 +463,7 @@ func (r *modelRun) syncUntilQuiet(label string) []modelEdit {
 		userEdits = append(userEdits, r.takeConcurrentEdits()...)
 		held := report.HeldLocalDeletes + report.HeldRemoteDeletes
 		confirm = held > 0
-		// A baseline update can be half of a change: the same rename on both
-		// sides is rekeyed in one pass and its content reconciled in the
-		// next, so a pass that only updated the baseline is not quiet.
-		changed := report.Uploads + report.Downloads + report.LocalDeletes + report.RemoteDeletes +
-			report.FolderCreates + report.Moves + report.BaselineUpdates + held
+		changed := modelPassChanges(report)
 		if storm {
 			// Only a calm pass may end the loop.
 			changed++
@@ -488,12 +478,7 @@ func (r *modelRun) syncUntilQuiet(label string) []modelEdit {
 			r.afterFirstPass = nil
 			changed++
 		}
-		if os.Getenv(modelTraceEnv) != "" {
-			r.t.Logf("%s pass %d: up=%d down=%d ldel=%d rdel=%d mkdir=%d mv=%d ok=%d failed=%d errors=%v\n  local:  %v\n  remote: %v",
-				label, pass, report.Uploads, report.Downloads, report.LocalDeletes, report.RemoteDeletes,
-				report.FolderCreates, report.Moves, report.Succeeded, report.Failed, report.Errors,
-				modelPaths(r.localTree()), modelPaths(r.remote.tree()))
-		}
+		r.tracePass(label, pass, report)
 		// The user renames what the engine reports as a name collision,
 		// once the pass is quiet or the collision is what failed.
 		quiet := changed == 0 && report.Failed == 0
@@ -509,6 +494,39 @@ func (r *modelRun) syncUntilQuiet(label string) []modelEdit {
 		label, modelMaxSyncPasses, r.failureContext(), syncStateDump(r.t, r.eng))
 
 	return userEdits
+}
+
+// startPass moves the clock to the pass and sets the chaos layer's storm,
+// reporting whether this pass runs in one.
+func (r *modelRun) startPass(pass, stormPasses int) bool {
+	if pass > 1 {
+		r.clock.advance(modelPassInterval)
+	}
+	storm := pass <= stormPasses
+	if r.chaos != nil {
+		r.chaos.setStorm(storm)
+	}
+
+	return storm
+}
+
+// modelPassChanges is how much a pass changed. A baseline update can be half
+// of a change: the same rename on both sides is rekeyed in one pass and its
+// content reconciled in the next, so a pass that only updated the baseline
+// is not quiet. Held deletes count too: the next pass confirms them.
+func modelPassChanges(report *Report) int {
+	return report.Uploads + report.Downloads + report.LocalDeletes + report.RemoteDeletes +
+		report.FolderCreates + report.Moves + report.BaselineUpdates + report.HeldLocalDeletes + report.HeldRemoteDeletes
+}
+
+func (r *modelRun) tracePass(label string, pass int, report *Report) {
+	if os.Getenv(modelTraceEnv) == "" {
+		return
+	}
+	r.t.Logf("%s pass %d: up=%d down=%d ldel=%d rdel=%d mkdir=%d mv=%d ok=%d failed=%d errors=%v\n  local:  %v\n  remote: %v",
+		label, pass, report.Uploads, report.Downloads, report.LocalDeletes, report.RemoteDeletes,
+		report.FolderCreates, report.Moves, report.Succeeded, report.Failed, report.Errors,
+		modelPaths(r.localTree()), modelPaths(r.remote.tree()))
 }
 
 // modelPassInterval is how much later the model's user runs each further

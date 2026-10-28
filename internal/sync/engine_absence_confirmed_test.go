@@ -262,12 +262,13 @@ func TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward(t *testing.T) {
 	t.Parallel()
 
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
-	remote.addFile(t, "item-a", "root", "a.txt", "file\n")
+	const fileID = "item-a"
+	remote.addFile(t, fileID, "root", "a.txt", "file\n")
 	client := remote.client(t)
 	getItem := client.getItemFn
 	failLookup := false
 	client.getItemFn = func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
-		if failLookup && itemID == "item-a" {
+		if failLookup && itemID == fileID {
 			return nil, &graph.GraphError{StatusCode: http.StatusServiceUnavailable, Err: graph.ErrServerError}
 		}
 		return getItem(ctx, driveID, itemID)
