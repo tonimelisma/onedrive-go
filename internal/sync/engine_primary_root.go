@@ -1,6 +1,9 @@
 package sync
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 func (batch *remoteObservationBatch) hasObservationFindings() bool {
 	if batch == nil {
@@ -114,31 +117,17 @@ func (flow *engineFlow) executeDriveRootObservation(
 	fullReconcile bool,
 ) (remoteObservationBatch, error) {
 	if fullReconcile {
-		events, token, topology, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl)
-		if err != nil && isObservationRemoteReadDenied(err) {
-			return buildRemoteObservationBatch(
-				flow.engine,
-				remoteObservationModeDelta,
-				nil,
-				"",
-				false,
-				rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID),
-			), nil
-		}
-
-		batch := buildRemoteObservationBatch(
-			flow.engine,
-			remoteObservationModeDelta,
-			events,
-			token,
-			true,
-			newRemoteObservationFindingsBatch(),
-		)
-		batch.shortcutTopology = topology
-		return batch, err
+		return flow.executeDriveRootFullObservation(ctx, bl, resyncKindApplyDifferences)
 	}
 
 	events, token, topology, err := flow.observeRemoteWithShortcutTopology(ctx, bl)
+	if errors.Is(err, errDeltaExpired) {
+		// Info: self-healing. Recovery is a full refresh with orphan
+		// detection, not a bare re-enumeration: a delete that happened while
+		// the token aged out is in no delta window (R-2.15.3).
+		flow.engine.logger.Info("OneDrive change history expired; rescanning the whole drive (this may take a while)")
+		return flow.executeDriveRootFullObservation(ctx, bl, resyncKindOf(err))
+	}
 	if err != nil && isObservationRemoteReadDenied(err) {
 		return buildRemoteObservationBatch(
 			flow.engine,
@@ -156,6 +145,37 @@ func (flow *engineFlow) executeDriveRootObservation(
 		events,
 		token,
 		false,
+		newRemoteObservationFindingsBatch(),
+	)
+	batch.shortcutTopology = topology
+	return batch, err
+}
+
+// executeDriveRootFullObservation runs the full refresh with orphan detection
+// and marks it as one, which also restarts the full-refresh cadence.
+func (flow *engineFlow) executeDriveRootFullObservation(
+	ctx context.Context,
+	bl *Baseline,
+	kind resyncKind,
+) (remoteObservationBatch, error) {
+	events, token, topology, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl, kind)
+	if err != nil && isObservationRemoteReadDenied(err) {
+		return buildRemoteObservationBatch(
+			flow.engine,
+			remoteObservationModeDelta,
+			nil,
+			"",
+			false,
+			rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID),
+		), nil
+	}
+
+	batch := buildRemoteObservationBatch(
+		flow.engine,
+		remoteObservationModeDelta,
+		events,
+		token,
+		true,
 		newRemoteObservationFindingsBatch(),
 	)
 	batch.shortcutTopology = topology

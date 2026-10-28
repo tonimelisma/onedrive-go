@@ -45,36 +45,49 @@ type changeEvent struct {
 	ItemType ItemType
 	Name     string // verbatim from Graph, NFC-normalized
 	Size     int64
+	// SizeUnknown marks a remote size Graph reported as negative: it is
+	// stored as unknown (NULL), never as a size (R-2.4.16).
+	SizeUnknown bool
 	// Hash is a QuickXorHash (base64) on both sides: driveops.SelectHash
 	// returns only QuickXor, so a remote item with SHA digests alone is
 	// hashless here, never compared against a local QuickXor. Empty for
 	// folders.
 	Hash             string
 	Mtime            int64 // Unix nanoseconds
+	LocalCtime       int64 // local inode change time, files only; zero means unknown
 	LocalDevice      uint64
 	LocalInode       uint64
 	LocalHasIdentity bool
 	ETag             string // remote only
 	CTag             string // remote only
 	IsDeleted        bool
+	// ReuploadLocal marks a synthesized remote delete for an item a resync
+	// asked to be uploaded again (R-2.15.3): its synced agreement is
+	// forgotten, so a surviving local copy is a new upload, never a delete.
+	ReuploadLocal bool
 }
 
 // BaselineEntry represents the confirmed synced state of a single path.
 // This is the ONLY durable per-item state in the system.
 type BaselineEntry struct {
-	Path             string
-	DriveID          driveid.ID
-	ItemID           string
-	ParentID         string
-	ItemType         ItemType
-	LocalHash        string // per-side: handles SharePoint enrichment natively
-	RemoteHash       string // for normal files, LocalHash == RemoteHash
-	LocalSize        int64
-	LocalSizeKnown   bool
-	RemoteSize       int64
-	RemoteSizeKnown  bool
-	LocalMtime       int64 // local mtime at sync time (Unix nanoseconds)
-	RemoteMtime      int64 // remote mtime at sync time; zero means unknown
+	Path            string
+	DriveID         driveid.ID
+	ItemID          string
+	ParentID        string
+	ItemType        ItemType
+	LocalHash       string // per-side: handles SharePoint enrichment natively
+	RemoteHash      string // for normal files, LocalHash == RemoteHash
+	LocalSize       int64
+	LocalSizeKnown  bool
+	RemoteSize      int64
+	RemoteSizeKnown bool
+	LocalMtime      int64 // local mtime at sync time (Unix nanoseconds)
+	RemoteMtime     int64 // remote mtime at sync time; zero means unknown
+	// LocalCtime is the local inode change time at sync time (Unix
+	// nanoseconds); zero means unknown. The hash fast path requires it
+	// unchanged, because an in-place edit can restore the old mtime but
+	// never the old ctime (R-2.2.4).
+	LocalCtime       int64
 	LocalDevice      uint64
 	LocalInode       uint64
 	LocalHasIdentity bool
@@ -337,6 +350,7 @@ type localState struct {
 	Size             int64
 	Hash             string
 	Mtime            int64
+	LocalCtime       int64 // inode change time (files only); zero means unknown
 	LocalDevice      uint64
 	LocalInode       uint64
 	LocalHasIdentity bool

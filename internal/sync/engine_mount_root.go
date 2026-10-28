@@ -42,7 +42,9 @@ func (flow *engineFlow) observeMountRootRemote(
 		}
 
 		items, newToken, err := eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, eng.remoteRootItemID, token)
+		orphanKind := resyncKindApplyDifferences
 		if err != nil && errors.Is(err, graph.ErrGone) && !fullReconcile {
+			orphanKind = newDeltaExpiredError(err).kind
 			// Self-healing: the next call re-enumerates the shared folder from
 			// scratch, so nothing needs the user's attention.
 			eng.logger.Info("Change history for a shared folder expired; rescanning the folder",
@@ -55,7 +57,7 @@ func (flow *engineFlow) observeMountRootRemote(
 		}
 		if err == nil {
 			eng.mountRootDeltaFallbackReported.Store(false)
-			events := eng.mountRootEvents(ctx, items, bl, fullReconcile)
+			events := eng.mountRootEvents(ctx, items, bl, fullReconcile, orphanKind)
 
 			return events, newToken, remoteObservationModeDelta, nil
 		}
@@ -92,17 +94,25 @@ func (flow *engineFlow) observeMountRootRemote(
 		return nil, "", remoteObservationModeEnumerate, err
 	}
 
-	events := eng.mountRootEvents(ctx, items, bl, true)
+	events := eng.mountRootEvents(ctx, items, bl, true, resyncKindApplyDifferences)
 
 	return events, "", remoteObservationModeEnumerate, nil
 }
 
 // mountRootEvents converts a mount-root enumeration, adding confirmed orphan
-// deletes when the enumeration was complete.
-func (e *Engine) mountRootEvents(ctx context.Context, items []graph.Item, bl *Baseline, complete bool) []changeEvent {
+// deletes when the enumeration was complete. kind is the resync that forced
+// the enumeration, if any: unless it applies differences, confirmed orphans
+// are re-uploads, not deletes (R-2.15.3).
+func (e *Engine) mountRootEvents(
+	ctx context.Context, items []graph.Item, bl *Baseline, complete bool, kind resyncKind,
+) []changeEvent {
 	events := convertMountRootItems(ctx, items, e.remoteRootItemID, e.driveID, bl, e.logger, e.itemsClient)
 	if complete {
-		events = append(events, e.confirmMountRootOrphans(ctx, items, detectMountRootOrphans(items, e.driveID, bl))...)
+		orphans := e.confirmMountRootOrphans(ctx, items, detectMountRootOrphans(items, e.driveID, bl))
+		if !kind.orphansAreDeletes() {
+			markOrphansForReupload(orphans)
+		}
+		events = append(events, orphans...)
 	}
 	return events
 }

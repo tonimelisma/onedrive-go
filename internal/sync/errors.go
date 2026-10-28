@@ -1,6 +1,10 @@
 package sync
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/tonimelisma/onedrive-go/internal/graph"
+)
 
 // Sentinel texts are user words without a package prefix: the sync console
 // prints the innermost error of a chain as a failure's reason, and wrappers
@@ -35,6 +39,91 @@ var errLocalWatchUnavailable = errors.New("local change watching unavailable")
 // errDeltaExpired indicates the saved delta token has expired and a full
 // resync is required. Returned when the Graph API responds with HTTP 410.
 var errDeltaExpired = errors.New("OneDrive change history expired")
+
+// resyncKind is the recovery OneDrive asks for with a 410 (R-2.15.3). It
+// decides what an item the following full enumeration no longer returns
+// means.
+type resyncKind int
+
+const (
+	// resyncKindUnknown is a 410 without a recognized flavor. It is
+	// treated like resyncKindUploadDifferences: when unsure, never delete.
+	resyncKindUnknown resyncKind = iota
+	// resyncKindApplyDifferences: the server's view is current; an item it
+	// no longer returns was deleted, and the local copy may follow.
+	resyncKindApplyDifferences
+	// resyncKindUploadDifferences: the server lost changes; local items it
+	// did not return are to be uploaded again, never deleted.
+	resyncKindUploadDifferences
+)
+
+// Graph's inner codes for the two resync flavors.
+const (
+	graphCodeResyncApplyDifferences  = "resyncChangesApplyDifferences"
+	graphCodeResyncUploadDifferences = "resyncChangesUploadDifferences"
+)
+
+// orphansAreDeletes reports whether the enumeration that follows this resync
+// may turn a confirmed-missing synced item into a delete.
+func (k resyncKind) orphansAreDeletes() bool {
+	return k == resyncKindApplyDifferences
+}
+
+// deltaExpiredError is errDeltaExpired with the resync flavor the 410 named.
+// It also carries this client's own "cursor unusable" decision (R-2.15.2): a
+// change list that loops or a token OneDrive keeps refusing is recovered
+// exactly like a 410, and reason then says why.
+type deltaExpiredError struct {
+	kind   resyncKind
+	cause  error
+	reason string
+}
+
+// newCursorUnusableError is the recovery this client decides on for a delta
+// cursor it cannot continue. It is a full refresh like any other the client
+// starts, so confirmed orphans are deletes (subject to the delete-safety
+// hold).
+func newCursorUnusableError(reason string, cause error) *deltaExpiredError {
+	return &deltaExpiredError{kind: resyncKindApplyDifferences, cause: cause, reason: reason}
+}
+
+func newDeltaExpiredError(cause error) *deltaExpiredError {
+	kind := resyncKindUnknown
+	var graphErr *graph.GraphError
+	if errors.As(cause, &graphErr) {
+		switch {
+		case graphErr.HasCode(graphCodeResyncApplyDifferences):
+			kind = resyncKindApplyDifferences
+		case graphErr.HasCode(graphCodeResyncUploadDifferences):
+			kind = resyncKindUploadDifferences
+		}
+	}
+
+	return &deltaExpiredError{kind: kind, cause: cause}
+}
+
+func (e *deltaExpiredError) Error() string {
+	if e.reason != "" {
+		return "OneDrive change list cannot be continued: " + e.reason
+	}
+
+	return errDeltaExpired.Error()
+}
+
+func (e *deltaExpiredError) Is(target error) bool { return target == errDeltaExpired }
+
+func (e *deltaExpiredError) Unwrap() error { return e.cause }
+
+// resyncKindOf returns the flavor of an expired-delta error, or
+// resyncKindUnknown when err does not carry one.
+func resyncKindOf(err error) resyncKind {
+	var expired *deltaExpiredError
+	if errors.As(err, &expired) {
+		return expired.kind
+	}
+
+	return resyncKindUnknown
+}
 
 // errRemoteObservationIncomplete is returned when remote observation cannot
 // materialize a provider item safely enough to advance the delta cursor.

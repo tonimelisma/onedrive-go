@@ -20,6 +20,7 @@ type BaselineMutation struct {
 	RemoteHash            string
 	LocalSize             int64
 	LocalSizeKnown        bool
+	LocalCtime            int64
 	LocalDevice           uint64
 	LocalInode            uint64
 	LocalHasIdentity      bool

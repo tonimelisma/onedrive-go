@@ -113,6 +113,12 @@ All API quirks handled at the graph boundary — downstream code never sees them
 - Paginated non-delta item surfaces (`ListChildren`, drive search) keep
   provider-visible package items. Sync-only package suppression is owned by
   `internal/sync/item_converter.go`, not by the Graph client.
+- An item's kind is reported, never defaulted: `Item.IsBundle` decodes the
+  `bundle` facet (albums), and `Item.TypeFacetMissing` marks a non-deleted
+  item with none of the file, folder, root, package, bundle or remoteItem
+  facets, which sparse delta updates can be. Callers decide what an unknown
+  kind means (`internal/sync` keeps the baseline kind, R-2.4.16);
+  `TestToItem_BundleAndMissingTypeFacet`.
 - Delta deletion reordering (deletions before creations within each page)
 - Missing field recovery (name, size for deleted items)
 - Timestamp validation that preserves unknown timestamps as zero time instead of fabricating a replacement, including `null`, missing, invalid, and out-of-range wire values

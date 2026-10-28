@@ -4,7 +4,7 @@ GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/
 
 LAYER: 2
 
-Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.8.20 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
+Implements: R-2.1.2 [verified], R-2.2.4 [verified], R-2.15.2 [verified], R-2.15.4 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.4.16 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.8.20 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
 
 ## Overview
 
@@ -68,11 +68,15 @@ except that the type had once been public.
 | A watcher that cannot be created or extended because of an operating-system limit (inotify watches or instances, open files, kernel memory) degrades to periodic full scans with one warning naming the limit and its fix; a descriptor-limit failure after startup stops watching so the watcher's descriptors are released. | `TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable`, `TestClassifyWatcherCreateError_ResourceLimits`, `TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable`, `TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan`, `TestWatch_NewDirectoryEMFILEStopsWatchingForFallback`, `TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval`, `TestRunWatch_WatchFallbackRetriesTheWatcher` |
 | Known-missed local changes (kernel queue overflow, watcher errors, dropped batches or hash requests) arm one coalesced recovery rescan instead of waiting for the periodic safety scan. | `TestWatch_EventOverflowRunsRecoveryScan`, `TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan`, `TestRecoveryScanDelay_ScalesWithScanDurationAndBacksOffUnderStorm`, `TestCancelRecoveryScan_StaleTimerFiringIsIgnored`, `TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan`, `TestRewatchUnwatchedDirectories_FailedAddIsRetriedAtNextScan`, `TestTrySendLocalObservationBatch_DropRequestsRecoveryScan` |
 | A deleted or renamed-away directory drops the watches of its whole subtree, deepest first, so the re-added tree reports its new paths. | `TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst`, `TestWatch_RenamedDirectoryDescendantEventsUseNewPath`, `TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches`, `TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree`, `TestWatchRegistry_SubtreeLookupFollowsTheIndexAndUnlinksEmptyBranches` |
-| The destination half of a rename is observed without waiting on a content read: an identity match reuses the synced hash when size and mtime are unchanged, otherwise the row goes out with an unknown hash and the hash follows; a created directory's row precedes its contents. | `TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing`, `TestHandleCreate_RenamedUnchangedFileReusesSyncedHash`, `TestHandleCreate_ReusedInodeWhileSyncedPathExistsIsHashed`, `TestHandleCreate_DirectoryRowPrecedesItsContents` |
+| The destination half of a rename is observed without waiting on a content read: an identity match reuses the synced hash when size and mtime are unchanged, otherwise the row goes out with an unknown hash and the hash follows; a created directory's row precedes its contents. | `TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing`, `TestHandleCreate_RenamedUnchangedFileReusesSyncedHash`, `TestHandleCreate_RenameThatMovedCtimeDefersTheHash`, `TestHandleCreate_ReusedInodeWhileSyncedPathExistsIsHashed`, `TestHandleCreate_DirectoryRowPrecedesItsContents` |
+| The hash fast path trusts the baseline hash only when size, full-precision mtime, ctime and (device, inode) all match and the file is outside the racily-clean window; an in-place edit with a restored mtime and a different file renamed over the synced one are re-read, and transfers record ctime and identity so the fast path applies after them (R-2.2.4). | `TestFullScan_ContentChangedWithRestoredMtimeIsDetected`, `TestFullScan_IdentityChangeForcesRehash`, `TestFullScan_SubsecondMtimeDifferenceForcesRehash`, `TestFullScan_UnchangedFileWithMatchingIdentityAndCtimeSkipsHash`, `TestCanReuseBaselineHash_CtimeOrIdentityMismatchRequiresHash`, `TestCanReuseBaselineHash_SubsecondMtimeDifferenceRequiresHash`, `TestRunOnce_InPlaceEditWithRestoredMtimeUploads`, `TestRunOnce_InPlaceEditWithRestoredMtimeConflictsWithRemoteEdit`, `TestRunOnce_TransfersRecordLocalCtimeAndIdentity` |
 | Write coalescing hashes a continuously written file within a bounded wait, and backs off exponentially for a file that never settles. | `TestScheduleWriteHash_ContinuousWritesHashWithinMaxWait`, `TestWatch_ContinuouslyWrittenFileBacksOff`, `TestHashAndEmit_StillChangingAtRetryCapStaysPendingWithoutEmptyHash`, `TestPruneWriteChurn_DropsSettledPaths` |
 | On kqueue platforms watch setup projects its descriptor use (watched directories plus their entries) and falls back to periodic scans above half the open-file limit. | `TestAddWatchesRecursive_OverDescriptorBudgetFallsBackBeforeExhaustingFiles`, `TestAddWatchesRecursive_WithinDescriptorBudgetWatches`, `TestAddWatchesRecursive_DescriptorProjectionCountsSubdirectoriesOnce` |
 | A network or FUSE sync root is identified with statfs, warned about once, and rescanned every two minutes. | `TestWatch_NetworkRootShortensSafetyScanInterval`, `TestAdaptToRootFilesystem_LocalRootKeepsInterval`, `TestAdaptToRootFilesystem_NonDefaultIntervalIsNeverOverridden`, `TestMountFilesystemType_DistinguishesFuseblkFromNetworkFuse`, `TestLocalFilesystemKind_ReadsTheRealFilesystem` |
 | The replan debounce is bounded by a max wait that later observations do not push back. | `TestDirtyBuffer_FlushDebounced_ContinuousSignalsFlushAtMaxWait`, `TestDirtyMaxWait_ScalesWithLongDebounce` |
+| A delta cursor that loops, is refused twice with a non-transient 4xx, or fails with 5xx for hours in watch mode is recovered through the full refresh; a single refusal is retried, empty pages with a nextLink continue, and a transient failure keeps the token (R-2.15.2). | `TestFullDelta_RepeatedNextLinkIsCursorUnusable`, `TestFullDelta_RepeatedPageItemsIsCursorUnusable`, `TestFullDelta_EmptyPageWithNextLinkContinues`, `TestFullDelta_SavedTokenRejectedTwiceIsCursorUnusable`, `TestFullDelta_OneRejectionOfASavedTokenIsRetried`, `TestWatch_TransientErrorRetriesAndKeepsToken`, `TestWatch_SustainedServerErrorsOnTheCursorResetIt`, `TestRunOnce_SavedTokenOneDriveKeepsRefusingIsReenumerated` |
+| Items delta reports without a type facet keep their baseline kind or are re-read once and otherwise skipped; bundles and their children are skipped; a negative size is unknown (R-2.4.16). | `TestFullDelta_FacetlessUpdateOfABaselineFolderKeepsItsType`, `TestFullDelta_FacetlessNewItemIsReadOnceOrSkipped`, `TestFullDelta_BundleAndItsChildrenAreSkipped`, `TestFullDelta_NegativeSizeIsUnknown`, `TestToItem_BundleAndMissingTypeFacet` |
+| Child-before-parent windows resolve from the window itself without reads, and a window needing more ancestor reads than one budget completes on replay without re-reading (R-2.15.4). | `TestFullDelta_CrossPageChildBeforeParentResolvesWithoutFetch`, `TestFullDelta_ManyOrphansCompleteAcrossReplaysWithoutRefetching` |
 | Local watch prefiltering keeps unknown-kind include-root and include-ancestor events observable until stat/type-aware observation can decide the exact item kind. | `TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths` |
 
 ## Remote Observation
@@ -95,7 +99,19 @@ Important properties:
   Treating that as an empty window kept the old token, so watch mode replayed
   the same deletes on every poll indefinitely
   (`TestWatch_OnlyUnrecoverableDeletes_AdvancesToken`)
-- HTTP 410 delta expiry is surfaced as a restart/re-enumerate condition
+- HTTP 410 delta expiry is surfaced as `deltaExpiredError`, which carries the
+  resync flavor from the error's inner code; recovery is the engine's full
+  refresh with orphan detection, in watch mode too (`SetDeltaExpiredRecovery`,
+  `sync-engine.md` "An Expired Token Is A Full Refresh", R-2.15.3)
+- a cursor the client cannot continue takes the same recovery, through
+  `newCursorUnusableError` (R-2.15.2): `deltaLoopGuard` stops a window whose
+  nextLink returns to a page already fetched or whose non-empty page repeats
+  an earlier page's items (followed, such a list ran to the 10,000-page guard
+  with every item in memory); `fetchPageRetryingRejection` retries a token
+  refused with a non-transient 4xx once and gives up on the second refusal;
+  and watch mode's `cursorServerErrorTracker` gives up on a token that has
+  failed with 5xx for `cursorServerErrorResetAfter` (6 h). Every other failure
+  keeps the token and backs off
 - sparse delta items recover omitted name/parent data from baseline when
   possible, and missing parent IDs trigger one best-effort item-by-ID enrich
   before baseline fallback
@@ -179,7 +195,18 @@ It owns:
   or known shortcut target fields
 - path reconstruction from parent chains
 - move detection against baseline
-- sync-only suppression of Graph package/OneNote items
+- sync-only suppression of Graph package/OneNote items and of bundles
+  (albums), with their descendants (R-2.4.16)
+- kind without guessing (R-2.4.16): a non-deleted item with none of the file,
+  folder, root, package, bundle or remoteItem facets
+  (`graph.Item.TypeFacetMissing`) keeps its baseline kind, and for a file its
+  baseline content facts, since a facetless update carries no hashes; without
+  a baseline it gets one `GetItem` re-read through the sparse-item enrich and
+  is skipped if that still does not say. Read as a file by default, a sparse
+  update of a synced folder planned a folder-to-file type change that deleted
+  the local folder
+- a negative size is stored as unknown (`SizeUnknown`, a NULL
+  `remote_state.size`), never as a size
 - sync-only suppression of Personal Vault content
 - malformed sparse-item rejection, including names that cannot be one local
   path segment (`.`, `..`, `/`, NUL, invalid UTF-8): the item and its
@@ -212,6 +239,13 @@ Sparse parent recovery is intentionally layered:
   folder, or a folder whose own download has not succeeded yet), read each
   missing ancestor by ID with `GetItem` and register it as path context only
   (never as an event), bounded per window by `maxAncestorFetchesPerWindow`.
+  The whole window is collected before anything is classified, so the budget
+  is spent only on ancestors no page of the window carries: resolved page by
+  page, a child that arrived pages before its folder spent a read on it, and
+  a large window exhausted the budget and replayed identically forever.
+  Ancestors read in a window that stays incomplete are carried to its replay
+  (`carriedAncestors`, forgotten once a window completes), so a window that
+  needs more reads than one budget completes after a few replays (R-2.15.4)
   A fetched ancestor carries its vault and package flags, so a child inside
   the Personal Vault or a OneNote package is still skipped exactly as if that
   ancestor had been in the window (`TestWatch_OrphanUnderFetchedVaultStaysExcluded`,
@@ -315,7 +349,40 @@ still exists the inode was freed and reused by unrelated content, which is
 hashed like any create -- reuses that file's synced hash when size and mtime
 are unchanged (no read at all, so a renamed tree is not re-read), and otherwise
 is emitted at once with an unknown hash -- move pairing accepts an unknown hash
-on equal mtime -- and hashed through the deferred-hash path. A created
+on equal mtime -- and hashed through the deferred-hash path. "Unchanged" is the
+full R-2.2.4 rule, ctime included, and the kernel moves a file's ctime when the
+file itself is renamed, so a renamed single file takes the deferred-hash path;
+a renamed directory leaves its children's ctimes alone, so its tree is still
+not re-read.
+
+### Hash Reuse Trusts Only Exact Local Facts
+
+`canReuseBaselineHash` (`local_hash_reuse.go`) is the one rule the full scan
+and the watch create path use to skip reading a file (R-2.2.2, R-2.2.4). The
+baseline hash is trusted only when size, mtime at full nanosecond precision,
+ctime and (device, inode) all equal the baseline, and both mtime and ctime are
+at least a second older than the scan start (the racily-clean guard; Linux
+stamps ctime from a coarse clock, so two writes in one tick share it).
+
+- Whole-second truncation (R-6.7.15) is for comparing a local time with
+  OneDrive's wire value. Every value compared here is a local observation, and
+  truncating them hid sub-second edits.
+- ctime is the only timestamp no unprivileged call can set back. `cp -p`,
+  `touch -r`, `rsync -t --inplace` and mmap writes followed by `utimes` restore
+  size and mtime but move ctime. The stale hash used to be reused, written to
+  `local_state`, and made permanent by the `baseline_update` that followed;
+  a later remote edit then downloaded over the unsynced edit.
+- Identity catches a different file renamed over the synced one with the same
+  size and mtime.
+- A baseline with no ctime or identity proves nothing and is re-read.
+- Rows record ctime for regular files only: a folder's ctime moves with every
+  child. The ctime a row carries is always stated before the content is read
+  (walk stat, watch stat, `computeStableHashWith` pre-stat, which also rejects a
+  read during which ctime moved), so a write racing the read leaves a newer
+  ctime and forces the next re-read rather than hiding behind the recorded one.
+- A rolling re-verify budget (P-12) is not implemented: content that changes
+  without any metadata change (bit rot) is still only caught when something
+  else forces a read. A created
 directory's own row is emitted before its contents are scanned.
 
 Write coalescing (B-107) restarts a path's quiet-period timer on every write,

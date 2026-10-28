@@ -273,13 +273,20 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 // delta. Returns all events (creates/modifies from the full enumeration +
 // synthesized deletes for orphans) and the new delta token.
 func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]changeEvent, string, error) {
-	events, token, _, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl)
+	events, token, _, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl, resyncKindApplyDifferences)
 	return events, token, err
 }
 
+// observeRemoteFullWithShortcutTopology is the one full-enumeration path with
+// orphan detection: the periodic and requested full refreshes and every
+// expired-delta recovery use it (R-2.15.3). kind says what a confirmed orphan
+// means. A refresh this client chose is resyncKindApplyDifferences: an item
+// OneDrive no longer has was deleted. A resync that asked for local items to
+// be uploaded again, or did not say, turns orphans into re-uploads instead.
 func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	ctx context.Context,
 	bl *Baseline,
+	kind resyncKind,
 ) ([]changeEvent, string, shortcutTopologyBatch, error) {
 	eng := flow.engine
 	obs := newRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
@@ -319,14 +326,30 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	// A complete enumeration that omits an item is not proof it is gone
 	// (Graph omits items transiently); only a live 404 or deleted facet is.
 	orphans = eng.confirmEnumerationOrphans(ctx, orphans, nil)
+	if !kind.orphansAreDeletes() {
+		markOrphansForReupload(orphans)
+	}
 	if len(orphans) > 0 {
 		events = append(events, orphans...)
 	}
 
-	eng.logger.Info(fmt.Sprintf("Full OneDrive rescan complete: %d synced items no longer exist online", len(orphans)),
+	summary := fmt.Sprintf("Full OneDrive rescan complete: %d synced items no longer exist online", len(orphans))
+	if !kind.orphansAreDeletes() && len(orphans) > 0 {
+		summary = fmt.Sprintf("Full OneDrive rescan complete: %d items OneDrive no longer has will be uploaded again", len(orphans))
+	}
+	eng.logger.Info(summary,
 		slog.Int("total_events", len(events)),
 		slog.Int("orphans", len(orphans)),
 	)
 
 	return events, token, topology, nil
+}
+
+// markOrphansForReupload turns confirmed orphans into re-uploads: their
+// remote rows go, and so does their synced agreement, so a surviving local
+// copy plans as an upload rather than a local delete (R-2.15.3).
+func markOrphansForReupload(orphans []changeEvent) {
+	for i := range orphans {
+		orphans[i].ReuploadLocal = true
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
@@ -357,37 +359,157 @@ func TestFullScan_MtimeSizeFastPath(t *testing.T) {
 	assert.Empty(t, result.Events, "fast path should skip unchanged file")
 }
 
-// Validates: R-6.7.15
-func TestFullScan_SameSecondSubsecondDifferenceSkipsFalseModify(t *testing.T) {
+// Validates: R-2.2.4, R-6.7.15
+func TestFullScan_SubsecondMtimeDifferenceForcesRehash(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	content := "whole-second-stable"
+	content := "subsecond-stable"
 	writeTestFile(t, dir, "stable.txt", content)
 
 	fileTime := time.Now().Add(-time.Hour).UTC().Truncate(time.Second).Add(200 * time.Millisecond)
 	require.NoError(t, os.Chtimes(filepath.Join(dir, "stable.txt"), fileTime, fileTime), "Chtimes")
 
-	info, err := os.Stat(filepath.Join(dir, "stable.txt"))
-	require.NoError(t, err, "Stat")
+	entry := baselineEntryFromFile(t, dir, "stable.txt", hashContent(t, content))
+	// Same whole second, different nanoseconds: local mtimes are local
+	// observations, so they compare at full precision (R-6.7.15 truncates
+	// only against OneDrive's whole-second values).
+	entry.LocalMtime = fileTime.Add(700 * time.Millisecond).UnixNano()
 
-	baseline := baselineWith(&BaselineEntry{
-		Path: "stable.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: ItemTypeFile, LocalHash: hashContent(t, content),
-		LocalSize: info.Size(), LocalSizeKnown: true,
-		LocalMtime: fileTime.Add(700 * time.Millisecond).UnixNano(),
-	})
-
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.hashFunc = func(string) (string, error) {
-		return "", errors.New("hash function should not run for same-second timestamp drift")
+	var hashCalls atomic.Int32
+	obs := newLocalObserver(baselineWith(entry), synctest.TestLogger(t), 0)
+	obs.hashFunc = func(path string) (string, error) {
+		hashCalls.Add(1)
+		return driveops.ComputeQuickXorHash(path)
 	}
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
-	assert.Empty(t, result.Events, "same-second fractional drift should not emit ChangeModify")
-	assert.Empty(t, result.Skipped, "same-second fractional drift should not force a fallback hash path")
+	assert.Equal(t, int32(1), hashCalls.Load(), "a sub-second mtime difference must re-read the file")
+	assert.Empty(t, result.Events, "re-read content equal to the baseline is not a change")
+}
+
+// Validates: R-2.2.4
+func TestFullScan_ContentChangedWithRestoredMtimeIsDetected(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	original := "synced version!!"
+	edited := "EDITED version!!"
+	require.Len(t, edited, len(original))
+	writeTestFile(t, dir, "doc.txt", original)
+	fileTime := time.Now().Add(-time.Hour)
+	fsPath := filepath.Join(dir, "doc.txt")
+	require.NoError(t, os.Chtimes(fsPath, fileTime, fileTime))
+	entry := baselineEntryFromFile(t, dir, "doc.txt", hashContent(t, original))
+
+	// `cp -p`, `touch -r` and `rsync -t --inplace` rewrite the bytes in place
+	// and then restore the old mtime exactly. Only ctime records the write.
+	require.NoError(t, os.WriteFile(fsPath, []byte(edited), 0o600))
+	require.NoError(t, os.Chtimes(fsPath, fileTime, fileTime))
+	info, err := os.Stat(fsPath)
+	require.NoError(t, err)
+	require.Equal(t, entry.LocalMtime, info.ModTime().UnixNano(), "mtime restored exactly")
+	require.Equal(t, entry.LocalSize, info.Size(), "same size")
+
+	obs := newLocalObserver(baselineWith(entry), synctest.TestLogger(t), 0)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	require.NoError(t, err, "FullScan")
+
+	require.Len(t, result.Events, 1, "an in-place edit with a restored mtime is a change")
+	assert.Equal(t, ChangeModify, result.Events[0].Type)
+	assert.Equal(t, hashContent(t, edited), result.Events[0].Hash)
+}
+
+// Validates: R-2.2.4
+func TestFullScan_IdentityChangeForcesRehash(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	original := "the synced file!"
+	replaced := "a replacement!!!"
+	require.Len(t, replaced, len(original))
+	writeTestFile(t, dir, "doc.txt", original)
+	fileTime := time.Now().Add(-time.Hour)
+	fsPath := filepath.Join(dir, "doc.txt")
+	require.NoError(t, os.Chtimes(fsPath, fileTime, fileTime))
+	entry := baselineEntryFromFile(t, dir, "doc.txt", hashContent(t, original))
+
+	// A different file with the same size and mtime is renamed over the
+	// synced one. Its inode differs, so the baseline hash says nothing about
+	// it. The baseline ctime is copied from the new file, so only the
+	// identity rule can force the re-read.
+	writeTestFile(t, dir, "incoming.tmp", replaced)
+	incoming := filepath.Join(dir, "incoming.tmp")
+	require.NoError(t, os.Chtimes(incoming, fileTime, fileTime))
+	require.NoError(t, os.Rename(incoming, fsPath))
+	info, err := os.Lstat(fsPath)
+	require.NoError(t, err)
+	ctime, ok := synctree.ChangeTimeFromFileInfo(info)
+	require.True(t, ok)
+	entry.LocalCtime = ctime
+	identity, ok := synctree.IdentityFromFileInfo(info)
+	require.True(t, ok)
+	require.NotEqual(t, entry.LocalInode, identity.Inode, "the replacement is a new inode")
+
+	obs := newLocalObserver(baselineWith(entry), synctest.TestLogger(t), 0)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	require.NoError(t, err, "FullScan")
+
+	require.Len(t, result.Events, 1, "a new inode at the path must be re-read")
+	assert.Equal(t, hashContent(t, replaced), result.Events[0].Hash)
+}
+
+// Validates: R-2.2.2, R-2.2.4
+func TestFullScan_UnchangedFileWithMatchingIdentityAndCtimeSkipsHash(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	content := "untouched"
+	writeTestFile(t, dir, "keep.txt", content)
+	fileTime := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(filepath.Join(dir, "keep.txt"), fileTime, fileTime))
+	entry := baselineEntryFromFile(t, dir, "keep.txt", hashContent(t, content))
+
+	obs := newLocalObserver(baselineWith(entry), synctest.TestLogger(t), 0)
+	// ctime cannot be set into the past, so the scan clock moves past the
+	// racily-clean window instead.
+	obs.clock = newManualClock(time.Now().Add(2 * time.Second))
+	obs.hashFunc = func(string) (string, error) {
+		return "", errors.New("hash function must not run for an untouched file")
+	}
+
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	require.NoError(t, err, "FullScan")
+	assert.Empty(t, result.Events)
+	assert.Empty(t, result.Skipped)
+	require.Len(t, result.Rows, 1)
+	assert.Equal(t, entry.LocalCtime, result.Rows[0].Ctime, "the snapshot row carries ctime")
+}
+
+// baselineEntryFromFile builds a synced baseline entry from the file's
+// current metadata, as a download or upload outcome records it.
+func baselineEntryFromFile(t *testing.T, dir, rel, hash string) *BaselineEntry {
+	t.Helper()
+
+	info, err := os.Lstat(filepath.Join(dir, rel))
+	require.NoError(t, err)
+	identity, ok := synctree.IdentityFromFileInfo(info)
+	require.True(t, ok)
+	ctime, ok := synctree.ChangeTimeFromFileInfo(info)
+	require.True(t, ok)
+
+	return &BaselineEntry{
+		Path: rel, DriveID: driveid.New("d"), ItemID: "id-" + rel,
+		ItemType: ItemTypeFile, LocalHash: hash,
+		LocalSize: info.Size(), LocalSizeKnown: true,
+		LocalMtime:       info.ModTime().UnixNano(),
+		LocalCtime:       ctime,
+		LocalDevice:      identity.Device,
+		LocalInode:       identity.Inode,
+		LocalHasIdentity: true,
+	}
 }
 
 func TestFullScan_RacilyCleanForcesHash(t *testing.T) {

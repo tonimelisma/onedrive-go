@@ -334,17 +334,12 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, savedToken)
 	if err != nil {
-		if !errors.Is(err, errDeltaExpired) {
-			return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: observing remote delta: %w", err)
+		if errors.Is(err, errDeltaExpired) {
+			// The caller recovers through the full refresh with orphan
+			// detection (R-2.15.3); keep the resync flavor in the chain.
+			return nil, "", shortcutTopologyBatch{}, err
 		}
-
-		// Info: self-healing, the next call re-enumerates from scratch.
-		eng.logger.Info("OneDrive change history expired; rescanning the whole drive (this may take a while)")
-
-		events, token, topology, err = obs.FullDeltaWithShortcutTopology(ctx, "")
-		if err != nil {
-			return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: full resync after delta expiry: %w", err)
-		}
+		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: observing remote delta: %w", err)
 	}
 
 	return events, token, topology, nil

@@ -396,6 +396,7 @@ func (o *localObserver) handleCreate(
 		ev.LocalInode = identity.Inode
 		ev.LocalHasIdentity = true
 	}
+	ev.LocalCtime = fileChangeTime(info)
 
 	if info.IsDir() {
 		o.handleDirectoryCreate(ctx, tree, fsPath, dbRelPath, name, info, &ev, watcher, events)
@@ -630,6 +631,7 @@ func (o *localObserver) scanNewDirectoryEntry(
 		fileEv.LocalInode = identity.Inode
 		fileEv.LocalHasIdentity = true
 	}
+	fileEv.LocalCtime = fileChangeTime(info)
 
 	o.TrySend(ctx, events, &fileEv)
 }
@@ -1035,6 +1037,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		ev.LocalInode = identity.Inode
 		ev.LocalHasIdentity = true
 	}
+	ev.LocalCtime = fileChangeTime(info)
 
 	o.recordWriteEmit(req.DbRelPath, hash)
 	o.TrySend(ctx, events, &ev)

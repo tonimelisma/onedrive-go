@@ -45,16 +45,21 @@ type RetryWorkFailure struct {
 // observedItem represents a single item from a delta API response, ready
 // for CommitObservation to process against existing remote_state.
 type observedItem struct {
-	DriveID   driveid.ID
-	ItemID    string
-	ParentID  string // places the children of a shadowed remote twin (store_remote_twins.go)
-	Path      string
-	ItemType  ItemType
-	Hash      string
-	Size      int64
-	Mtime     int64
-	ETag      string
-	IsDeleted bool
+	DriveID  driveid.ID
+	ItemID   string
+	ParentID string // places the children of a shadowed remote twin (store_remote_twins.go)
+	Path     string
+	ItemType ItemType
+	Hash     string
+	Size     int64
+	// SizeUnknown stores the size as NULL (R-2.4.16).
+	SizeUnknown bool
+	Mtime       int64
+	ETag        string
+	IsDeleted   bool
+	// ReuploadLocal also forgets the deleted item's baseline rows, subtree
+	// included, so its local copy plans as an upload (R-2.15.3).
+	ReuploadLocal bool
 }
 
 // remoteStateRow represents a row from the remote_state table.
@@ -79,6 +84,7 @@ type localStateRow struct {
 	Hash             string
 	Size             int64
 	Mtime            int64
+	Ctime            int64 // inode change time (Unix nanoseconds); zero means unknown
 	LocalDevice      uint64
 	LocalInode       uint64
 	LocalHasIdentity bool

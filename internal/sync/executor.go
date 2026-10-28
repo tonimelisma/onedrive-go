@@ -408,6 +408,7 @@ func (e *executor) createRemoteFolder(ctx context.Context, action *Action) actio
 	// The folder already exists locally; its observed identity is what lets a
 	// later local rename of it pair as one move instead of delete + create.
 	if action.View != nil && action.View.Local != nil {
+		o.LocalCtime = action.View.Local.LocalCtime
 		o.LocalDevice = action.View.Local.LocalDevice
 		o.LocalInode = action.View.Local.LocalInode
 		o.LocalHasIdentity = action.View.Local.LocalHasIdentity
@@ -770,19 +771,26 @@ func (e *executor) folderOutcome(action *Action) actionOutcome {
 	return o
 }
 
-// observeLocalIdentity records the filesystem identity of the entry this
-// executor just materialized at o.Path, so a later local rename of it can pair
-// as a move. The identity is always marked observed: an entry the executor
-// just (re)created must never inherit a stale baseline identity, so a failed
-// lookup records "no identity" rather than falling back.
+// observeLocalIdentity records the filesystem identity and ctime of the entry
+// this executor just materialized at o.Path, so a later local rename of it can
+// pair as a move and the next scan can trust the recorded hash (R-2.2.4). The
+// identity is always marked observed: an entry the executor just (re)created
+// must never inherit a stale baseline identity or ctime, so a failed lookup
+// records "unknown" rather than falling back, and unknown forces a re-read.
 func (e *executor) observeLocalIdentity(o *actionOutcome) {
 	o.LocalIdentityObserved = true
-	identity, err := e.syncTree.IdentityNoFollow(o.Path)
+	o.LocalCtime = 0
+	info, err := e.syncTree.Lstat(o.Path)
 	if err != nil {
 		e.logger.Debug("local identity unavailable after materializing entry",
 			slog.String("path", o.Path),
 			slog.String("error", err.Error()),
 		)
+		return
+	}
+	o.LocalCtime = fileChangeTime(info)
+	identity, ok := synctree.IdentityFromFileInfo(info)
+	if !ok {
 		return
 	}
 	o.LocalDevice = identity.Device
@@ -849,6 +857,7 @@ func (e *executor) moveOutcome(action *Action) actionOutcome {
 		o.LocalSize = local.Size
 		o.LocalSizeKnown = true
 		o.LocalMtime = local.Mtime
+		o.LocalCtime = local.LocalCtime
 		o.LocalDevice = local.LocalDevice
 		o.LocalInode = local.LocalInode
 		o.LocalHasIdentity = local.LocalHasIdentity
@@ -903,6 +912,7 @@ func fillOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {
 		o.LocalMtime = baseline.LocalMtime
 	}
 	if !o.LocalIdentityObserved {
+		o.LocalCtime = baseline.LocalCtime
 		o.LocalDevice = baseline.LocalDevice
 		o.LocalInode = baseline.LocalInode
 		o.LocalHasIdentity = baseline.LocalHasIdentity

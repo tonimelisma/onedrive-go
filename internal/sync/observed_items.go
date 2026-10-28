@@ -55,15 +55,17 @@ func appendObservedEvent(
 	}
 
 	return append(items, observedItem{
-		DriveID:   ev.DriveID,
-		ItemID:    ev.ItemID,
-		ParentID:  ev.ParentID,
-		Path:      ev.Path,
-		ItemType:  ev.ItemType,
-		Hash:      ev.Hash,
-		Size:      ev.Size,
-		Mtime:     ev.Mtime,
-		ETag:      ev.ETag,
-		IsDeleted: ev.IsDeleted,
+		DriveID:       ev.DriveID,
+		ItemID:        ev.ItemID,
+		ParentID:      ev.ParentID,
+		Path:          ev.Path,
+		ItemType:      ev.ItemType,
+		Hash:          ev.Hash,
+		Size:          ev.Size,
+		SizeUnknown:   ev.SizeUnknown,
+		Mtime:         ev.Mtime,
+		ETag:          ev.ETag,
+		IsDeleted:     ev.IsDeleted,
+		ReuploadLocal: ev.ReuploadLocal,
 	})
 }
