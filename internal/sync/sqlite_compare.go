@@ -522,12 +522,11 @@ reconciliation_state AS (
 			-- local entry becomes a conflict copy and OneDrive's item takes
 			-- the path. Replacing either side would delete the other's
 			-- content (D-059).
-			-- An entry re-created at the path (a new filesystem identity)
-			-- counts as a local change here: replacing it would need a local
-			-- delete, which refuses an entry whose identity changed
-			-- (R-2.8.10) and was superseded on every pass.
+			-- A new filesystem identity alone is not a local change
+			-- (D-057): a rebuilt or renumbered folder whose subtree is
+			-- unchanged gives way like any other.
 			WHEN comparison_kind = 'diverged' AND local_item_type <> remote_item_type
-				AND (local_changed = 1 OR local_subtree_changed = 1 OR local_item_replaced = 1)
+				AND (local_changed = 1 OR local_subtree_changed = 1)
 				AND (remote_changed = 1 OR remote_subtree_changed = 1) THEN 'conflict_keep_both'
 			-- Both sides replaced the item with the same new type: two
 			-- creates at one path, not a type change one side wins. Planned
@@ -578,11 +577,10 @@ reconciliation_state AS (
 			-- normalization, which rewrites this delete into a local re-create.
 			WHEN comparison_kind = 'local_missing' AND remote_changed = 0 AND remote_item_replaced = 0 THEN 'remote_delete'
 			WHEN comparison_kind = 'local_missing' THEN 'download'
-			-- A folder re-created locally (a new filesystem identity) is a
-			-- new local entry, not the synced folder OneDrive deleted: a
-			-- local folder delete refuses it (R-2.8.10) and was superseded
-			-- on every pass, so it is created online again.
-			WHEN comparison_kind = 'remote_missing' AND item_type = 'folder' AND local_item_replaced = 1 THEN 'folder_create_remote'
+			-- A folder with a new filesystem identity but nothing changed
+			-- below it (rebuilt, restored from a copy, or its disk
+			-- renumbered) accepts OneDrive's delete too (D-057). Anything new
+			-- or changed below it is kept by the descendants' own rows.
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 0 THEN 'local_delete'
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 1 THEN 'conflict_edit_delete'
 			WHEN comparison_kind = 'diverged' AND local_changed = 1 AND remote_changed = 0 THEN 'upload'

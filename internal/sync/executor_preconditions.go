@@ -693,7 +693,33 @@ func (e *executor) validateLocalDeleteFolderPrecondition(action *Action, relPath
 		return normalizeSyncTreePathError(err)
 	}
 
-	return e.validateLocalSourceAgainstBaseline("local delete", relPath, info, action.View.Baseline)
+	if !info.IsDir() || action.View.Baseline.ItemType != ItemTypeFolder || action.View.Local == nil {
+		return e.validateLocalSourceAgainstBaseline("local delete", relPath, info, action.View.Baseline)
+	}
+
+	// A folder is checked against the folder the plan saw, not the
+	// baseline's identity: the planner already decided, by content, that
+	// a folder with a new inode (rebuilt, restored, its disk renumbered)
+	// is the synced one with nothing changed below it (D-057). Checking
+	// the baseline identity refused that decision on every pass. What
+	// R-2.8.10 guards against, a different folder swapped in after
+	// planning, still fails here.
+	return e.validateLocalFolderIdentityAgainstPlan("local delete", relPath, action.View.Local)
+}
+
+func (e *executor) validateLocalFolderIdentityAgainstPlan(op, source string, planned *localState) error {
+	if !planned.LocalHasIdentity {
+		return nil
+	}
+	identity, err := e.syncTree.IdentityNoFollow(source)
+	if err == nil && !synctree.SameIdentity(identity, synctree.FileIdentity{
+		Device: planned.LocalDevice,
+		Inode:  planned.LocalInode,
+	}) {
+		return stalePreconditionError("%s source %s changed identity since planning", op, source)
+	}
+
+	return nil
 }
 
 func localMoveSourcePath(action *Action) string {

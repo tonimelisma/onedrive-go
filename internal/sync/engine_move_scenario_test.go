@@ -807,12 +807,13 @@ func TestRunOnce_FileReplacedByFoldersOnBothSidesMergesThem(t *testing.T) {
 // Validates: R-2.8.10, R-2.17.10
 //
 // OneDrive replaced a synced folder with a file while the user re-created the
-// folder locally (same name, new inode). The plan read the local folder as
-// unchanged and deleted it to make way for the file, but a local delete
-// refuses a folder whose identity changed (R-2.8.10), so it was superseded
-// on every pass (model test: local recreate folder, remote replace). A
-// re-created entry is a new local item: both are kept.
-func TestRunOnce_RemoteReplaceOfALocallyRecreatedFolderKeepsBoth(t *testing.T) {
+// folder locally (same name, new inode, nothing in it). The plan read the
+// local folder as unchanged and deleted it to make way for the file, but the
+// local delete checked the baseline's inode and refused it on every pass
+// (model test: local recreate folder, remote replace). Nothing below the
+// folder changed (D-057), so OneDrive's file takes the path; the delete now
+// checks the folder the plan saw (R-2.8.10).
+func TestRunOnce_RemoteReplaceOfALocallyRecreatedFolderConverges(t *testing.T) {
 	t.Parallel()
 
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
@@ -971,11 +972,12 @@ func TestRunOnce_RemoteReplaceInsideFolderRenamedLocallyConverges(t *testing.T) 
 // Validates: R-2.8.10, R-2.17.2
 //
 // OneDrive deleted folder q/x while the user re-created it locally (new
-// inode). The plan read the local folder as unchanged and deleted it, but a
-// local folder delete refuses a folder whose identity changed (R-2.8.10), so
-// it was superseded on every pass (model test seed 99). A re-created folder
-// is a new local entry: it is created on OneDrive again.
-func TestRunOnce_RemoteDeleteOfALocallyRecreatedFolderKeepsIt(t *testing.T) {
+// inode, nothing in it). The plan read the local folder as unchanged and
+// deleted it, but the local folder delete checked the baseline's inode and
+// refused it on every pass (model test seed 99). Nothing below it changed
+// (D-057), so OneDrive's delete is accepted; the delete now checks the folder
+// the plan saw (R-2.8.10).
+func TestRunOnce_RemoteDeleteOfALocallyRecreatedEmptyFolderIsApplied(t *testing.T) {
 	t.Parallel()
 
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
@@ -994,7 +996,75 @@ func TestRunOnce_RemoteDeleteOfALocallyRecreatedFolderKeepsIt(t *testing.T) {
 		runScenarioPass(t, h.eng)
 	}
 
-	assert.DirExists(t, x)
-	assert.Equal(t, modelFolderSentinel, remote.tree()["q/x"], "the re-created folder is on OneDrive again")
+	assert.NoDirExists(t, x)
+	assert.NotContains(t, remote.tree(), "q/x", "the deleted folder is not re-created online")
+	assertSyncInvariants(t, h)
+}
+
+// Validates: R-2.8.10, R-2.17.2
+//
+// OneDrive deleted folder X while the user restored X locally from a copy:
+// the same bytes, new inodes and new mtimes. Identity is a pairing hint,
+// never a change signal (D-057), so nothing under X changed locally and
+// OneDrive's delete is accepted: the restored copies go to the local trash.
+// The planner and the executor must agree on that. The planner read the
+// files as unchanged but the re-created folder as a new entry, re-created it
+// online and left it empty; with the folder read as unchanged too, the
+// executor's folder delete refused it for its new inode, every pass.
+func TestRunOnce_RemoteFolderDeleteAcceptsAContentIdenticalLocalRestore(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("item-x", "root", "X")
+	remote.addFile(t, "item-a", "item-x", "a.txt", "A\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	require.NoError(t, os.RemoveAll(filepath.Join(h.syncRoot, "X")))
+	require.NoError(t, os.Mkdir(filepath.Join(h.syncRoot, "X"), 0o750))
+	writeLocalFile(t, h.syncRoot, filepath.Join("X", "a.txt"), "A\n")
+	remote.deleteAt(t, "X")
+	for range 3 {
+		runScenarioPass(t, h.eng)
+	}
+
+	assert.NoDirExists(t, filepath.Join(h.syncRoot, "X"), "OneDrive's delete is accepted")
+	assert.NotContains(t, remote.tree(), "X", "the folder is not re-created online")
+	assert.Contains(t, harnessTrashContents(t, h.eng), "A\n", "the restored copy is kept in the local trash")
+	assertSyncInvariants(t, h)
+}
+
+// Validates: R-2.8.10, R-2.17.2
+//
+// The disk holding the sync folder was renumbered (a new device number after a
+// reboot, every inode the same) and OneDrive deleted folder d. The new device
+// number is not a change (D-057): the delete reaches the local side. It was
+// read as a re-created folder and created on OneDrive again.
+func TestRunOnce_RemoteFolderDeleteAfterDeviceRenumberingIsApplied(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("item-d", "root", "d")
+	remote.addFile(t, "item-in", "item-d", "in.txt", "in\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	// The state recorded the old device number; the scan sees the new one.
+	_, err := h.eng.baseline.rawDB().ExecContext(t.Context(),
+		`UPDATE baseline SET local_device = local_device + 1 WHERE local_has_identity = 1`)
+	require.NoError(t, err)
+	require.NoError(t, h.eng.baseline.reloadBaselineCache(t.Context()))
+
+	h.beginRound(t)
+	remote.deleteAt(t, "d")
+	for range 3 {
+		runScenarioPass(t, h.eng)
+	}
+
+	assert.NoDirExists(t, filepath.Join(h.syncRoot, "d"))
+	assert.NotContains(t, remote.tree(), "d", "the deleted folder is not re-created online")
 	assertSyncInvariants(t, h)
 }
