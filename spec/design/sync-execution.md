@@ -164,7 +164,12 @@ the same name (`remoteNameTakenError`, classified as `case_collision` with
 backoff, naming both names;
 `TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableCollision`),
 or as a stale precondition when the same spelling exists or nothing is
-visible yet.
+visible yet. A remote folder create resolves its 409 the same way: an
+existing folder of the same spelling is adopted, a differently spelled
+sibling is the same durable collision (as a stale precondition it was
+replanned and refused on every pass;
+`TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurableCollision`,
+`TestExecutor_CreateRemoteFolder_ConflictWithAnotherSpellingIsADurableCollision`).
 
 A spelling-only local move (the old and new names are one OneDrive name:
 case or Unicode form) accepts a destination that is the source's own inode,

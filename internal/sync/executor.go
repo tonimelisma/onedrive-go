@@ -343,6 +343,15 @@ func (e *executor) adoptExistingRemoteFolder(
 			return &children[i], nil
 		}
 	}
+	// A sibling spelled differently that OneDrive treats as the same name
+	// is a durable name collision for the user, as for an upload; as a
+	// stale precondition it was replanned and refused on every pass.
+	for i := range children {
+		if children[i].ID != "" && namekey.Equal(children[i].Name, name) &&
+			nfcNormalize(children[i].Name) != nfcNormalize(name) {
+			return nil, &remoteNameTakenError{localName: name, remoteName: children[i].Name, err: conflictErr}
+		}
+	}
 
 	return nil, stalePreconditionError("folder create %s: OneDrive already has another item with this name", name)
 }

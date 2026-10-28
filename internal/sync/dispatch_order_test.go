@@ -238,6 +238,7 @@ var runOnceScenarios = []func(*testing.T){
 	TestRunOnce_TransfersRecordLocalCtimeAndIdentity,
 	TestRunOnce_UnmountedNestedDiskWithFewFilesIsNotDeleted,
 	TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableCollision,
+	TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurableCollision,
 	TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta,
 	TestRunOnce_UploadOnly_StillObservesRemoteDelta,
 }
