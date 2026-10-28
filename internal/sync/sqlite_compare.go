@@ -155,36 +155,65 @@ comparison_flags AS (
 		CASE WHEN b.path IS NOT NULL THEN 1 ELSE 0 END AS baseline_present,
 		CASE WHEN l.path IS NOT NULL THEN 1 ELSE 0 END AS local_present,
 		CASE WHEN r.path IS NOT NULL THEN 1 ELSE 0 END AS remote_present,
+		-- Filesystem identity is a pairing hint, never a change signal
+		-- (D-057). A folder has no content, so a new inode at its path (rm -rf
+		-- and restore, a device renumbered after reboot) changes nothing; a
+		-- file with a new inode changed only if its content did, and content
+		-- without a hash on both sides is not proof of equality. Either way
+		-- metadata_drift republishes the new identity.
 		CASE
 			WHEN b.path IS NULL OR l.path IS NULL THEN 0
 			WHEN COALESCE(b.item_type, '') <> COALESCE(l.item_type, '') THEN 1
+			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
 			WHEN COALESCE(b.local_has_identity, 0) = 1 AND COALESCE(l.local_has_identity, 0) = 1
 				AND (
 					COALESCE(b.local_device, 0) <> COALESCE(l.local_device, 0)
 					OR COALESCE(b.local_inode, 0) <> COALESCE(l.local_inode, 0)
-				) THEN 1
-			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
+				) THEN
+				CASE
+					WHEN COALESCE(b.local_hash, '') <> '' AND COALESCE(l.hash, '') <> ''
+						AND b.local_hash = l.hash
+						AND COALESCE(b.local_size, 0) = COALESCE(l.size, 0) THEN 0
+					ELSE 1
+				END
 			WHEN COALESCE(b.local_hash, '') <> '' OR COALESCE(l.hash, '') <> '' THEN
 				CASE WHEN COALESCE(b.local_hash, '') <> COALESCE(l.hash, '') THEN 1 ELSE 0 END
 			WHEN COALESCE(b.local_size, 0) <> COALESCE(l.size, 0) THEN 1
 			WHEN COALESCE(b.local_mtime, 0) <> COALESCE(l.mtime, 0) THEN 1
 			ELSE 0
 		END AS local_changed,
+		-- Remote content is compared by hash only when both sides carry one.
+		-- OneDrive omits the hash for some items (zero-byte files on
+		-- Business, some Office-for-web saves), and a hash that is known on
+		-- one side only is no evidence of an edit (D-059b): size and eTag
+		-- decide, so a lost hash is unknown rather than changed.
 		CASE
 			WHEN b.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(b.item_type, '') <> COALESCE(r.item_type, '') THEN 1
 			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
-			WHEN COALESCE(b.remote_hash, '') <> '' OR COALESCE(r.hash, '') <> '' THEN
-				CASE WHEN COALESCE(b.remote_hash, '') <> COALESCE(r.hash, '') THEN 1 ELSE 0 END
+			WHEN COALESCE(b.remote_hash, '') <> '' AND COALESCE(r.hash, '') <> '' THEN
+				CASE WHEN b.remote_hash <> r.hash THEN 1 ELSE 0 END
 			WHEN COALESCE(b.remote_size, 0) <> COALESCE(r.size, 0) THEN 1
-			WHEN COALESCE(b.remote_mtime, 0) <> COALESCE(r.mtime, 0) THEN 1
+			WHEN COALESCE(b.remote_hash, '') = '' AND COALESCE(r.hash, '') = ''
+				AND COALESCE(b.remote_mtime, 0) <> COALESCE(r.mtime, 0) THEN 1
 			WHEN COALESCE(b.etag, '') <> COALESCE(r.etag, '') THEN 1
 			ELSE 0
 		END AS remote_changed,
+		-- The item at the remote path is not the item the baseline recorded
+		-- there: deleted and re-created online, or restored under a new ID.
+		CASE
+			WHEN b.path IS NULL OR r.path IS NULL THEN 0
+			WHEN COALESCE(b.item_id, '') <> COALESCE(r.item_id, '') THEN 1
+			ELSE 0
+		END AS remote_item_replaced,
 		CASE
 			WHEN l.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(l.item_type, '') <> COALESCE(r.item_type, '') THEN 0
 			WHEN COALESCE(l.item_type, '') = 'folder' THEN 1
+			-- A zero-byte file has no content to disagree about, and OneDrive
+			-- may carry no hash for one (D-059b): two known empty sizes prove
+			-- equality where hashes cannot.
+			WHEN l.size = 0 AND r.size = 0 THEN 1
 			-- Equality must be proven, never assumed. A missing hash on either
 			-- side makes matching sizes meaningless: two different files of the
 			-- same length would compare equal. Both halves are reachable --
@@ -225,6 +254,14 @@ comparison_flags AS (
 			-- it, or uploads into it target the dead ID forever (R-2.10.49).
 			WHEN COALESCE(b.item_type, '') = 'folder' AND COALESCE(r.item_type, '') = 'folder'
 				AND COALESCE(b.item_id, '') <> COALESCE(r.item_id, '') THEN 1
+			-- A new filesystem identity over unchanged content (D-057): the
+			-- baseline must learn it, or the scanner's fast path never trusts
+			-- the recorded hash again and a later rename cannot pair.
+			WHEN COALESCE(b.local_has_identity, 0) = 1 AND COALESCE(l.local_has_identity, 0) = 1
+				AND (
+					COALESCE(b.local_device, 0) <> COALESCE(l.local_device, 0)
+					OR COALESCE(b.local_inode, 0) <> COALESCE(l.local_inode, 0)
+				) THEN 1
 			WHEN COALESCE(b.item_type, '') <> 'file' THEN 0
 			WHEN COALESCE(b.local_mtime, 0) <> COALESCE(l.mtime, 0)
 				OR COALESCE(b.local_ctime, 0) <> COALESCE(l.ctime, 0)
@@ -266,6 +303,7 @@ comparison_state AS (
 		local_type_changed,
 		remote_type_changed,
 		remote_move_shadowed,
+		remote_item_replaced,
 		metadata_drift,
 		CASE
 			WHEN baseline_present = 1 AND local_present = 0 AND local_move_candidate_count = 1 THEN 'local_move_source'
@@ -330,7 +368,12 @@ reconciliation_state AS (
 				AND (local_type_changed = 1 OR remote_type_changed = 1) THEN 'replace_remote'
 			WHEN comparison_kind = 'diverged' AND remote_type_changed = 1 THEN 'replace_local'
 			WHEN comparison_kind = 'remote_missing' AND local_type_changed = 1 AND local_item_type = 'folder' THEN 'folder_create_remote'
-			WHEN comparison_kind = 'local_missing' AND remote_type_changed = 1 AND remote_item_type = 'folder' THEN 'folder_create_local'
+			-- A folder deleted locally while OneDrive replaced it (a new item
+			-- at the same path, or a new type) is not the folder the user
+			-- deleted: re-create it locally. Planned as a delete it would
+			-- remove the new item and its content online.
+			WHEN comparison_kind = 'local_missing' AND remote_item_type = 'folder'
+				AND (remote_type_changed = 1 OR remote_item_replaced = 1) THEN 'folder_create_local'
 			WHEN comparison_kind = 'both_missing' THEN 'baseline_remove'
 			WHEN comparison_kind = 'local_move_source' THEN 'local_move'
 			WHEN comparison_kind = 'local_move_dest' THEN 'local_move'
@@ -355,8 +398,8 @@ reconciliation_state AS (
 			-- pairing) is deleted on OneDrive exactly like a file. Remote-only
 			-- descendants that still need the folder are protected by action
 			-- normalization, which rewrites this delete into a local re-create.
-			WHEN comparison_kind = 'local_missing' AND remote_changed = 0 THEN 'remote_delete'
-			WHEN comparison_kind = 'local_missing' AND remote_changed = 1 THEN 'download'
+			WHEN comparison_kind = 'local_missing' AND remote_changed = 0 AND remote_item_replaced = 0 THEN 'remote_delete'
+			WHEN comparison_kind = 'local_missing' THEN 'download'
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 0 THEN 'local_delete'
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 1 THEN 'conflict_edit_delete'
 			WHEN comparison_kind = 'diverged' AND local_changed = 1 AND remote_changed = 0 THEN 'upload'

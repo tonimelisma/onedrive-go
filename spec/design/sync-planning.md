@@ -72,6 +72,7 @@ intent; multisync receives only that child work intent.
 | Behavior | Evidence |
 | --- | --- |
 | Local/remote equality is never inferred from size alone: a missing hash on either side forces reconciliation instead of a baseline update recording unproven agreement. | `TestPlanCurrentState_HashlessSameSizeIsNotTreatedAsEqual`, `TestPlanCurrentState_HashOnOneSideOnlyIsNotTreatedAsEqual`, `TestPlanCurrentState_MatchingHashesStillCompareEqual` |
+| The comparison facts are defined once (one shared CTE) for the comparison and reconciliation queries. Filesystem identity never signals a content change: a folder or a same-hash file with a new identity is a baseline update, and a folder is never an upload or download (R-2.2.6). A missing remote hash is unknown, not changed, and two empty files are equal (R-2.2.7). A locally deleted folder that OneDrive replaced with a new item is re-created locally, not deleted (R-2.10.49). | `TestQueryReconciliationState_IdentityChangeAtSamePathIsNotAnEdit`, `TestRunOnce_RenumberedDeviceTransfersNothing`, `TestRunOnce_FolderDeletedAndRestoredLocallyTransfersNothing`, `TestBuildActionsForReconciliation_RefusesFolderTransfers`, `TestQueryReconciliationState_MissingRemoteHashIsUnknownNotChanged`, `TestPlanCurrentState_HashlessZeroByteBothSidesIsEqual`, `TestPlanCurrentState_HashlessNonEmptyCreateIsStillAConflict`, `TestQueryReconciliationState_LocallyDeletedFolderReplacedOnlineIsRecreatedLocally` |
 | Conflict reconciliation rows expand into concrete actions for edit/edit, create/create, and edit/delete cases. | `TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_ExpandsCreateCreateConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID` |
 | Folder-delete descendants are reconciled by SQLite after planner-visible pruning, with parent availability preserved only when descendant work requires it. | `TestReplacePlannerVisibleStateTx_PrunesRemoteDescendantsWhenBaselineFolderMissingRemotely`, `TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMissingLocally`, `TestPlannerPlanCurrentState_RemoteParentDeletePlansDescendantLocalDeleteThroughSQLite`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_LocalParentDeleteCreatesParentForChangedRemoteChild`, `TestPlannerPlanCurrentState_BothParentSidesDeletedCleansUpDescendantsThroughSQLite` |
 | A file move needs content corroboration beyond inode identity; identity without it is delete + create, and unhashed moves carry the destination's observed truth. | `TestQueryReconciliationState_LocalFileMoveRequiresContentCorroboration`, `TestQueryReconciliationState_LocalFileMoveIdentityWithoutContentIsNotAMove`, `TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate`, `TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads`, `TestActionFreshness_LocalOriginMoveRejectsChangedDestination` |
@@ -229,6 +230,29 @@ went stale, execution reports that stale precondition and returns control to
 the engine; the next plan rebuild is still the only place that may emit the
 concrete edit/delete upload.
 
+## Comparison Facts
+
+`sqlComparisonStateCTEs` in `sqlite_compare.go` is the one definition of the
+per-path facts (`local_changed`, `remote_changed`, `current_equal`,
+`metadata_drift`, ...) and of the comparison kind. The comparison and
+reconciliation queries both select from it, on the live tables and on the
+planner-visible scratch tables, so a fact cannot mean two things in two queries
+(the comparison query once classified `unchanged` by size and mtime where the
+reconciliation query used hashes).
+
+Remote content is compared by hash only when both the baseline and the current
+item carry one (R-2.2.7). OneDrive omits hashes for zero-byte files on Business
+and for some Office-for-web saves; a hash known on one side only falls back to
+size and eTag, so a lost hash is unknown rather than an edit (which used to
+download the file again, or conflict with a local edit). Two files whose known
+sizes are both zero are equal, so an empty file present on both sides without a
+baseline is a baseline update, not a create/create conflict copy.
+
+`remote_item_replaced` marks a baseline path whose remote item now has another
+ID. A folder deleted locally while OneDrive replaced it is re-created locally
+(`folder_create_local`) rather than deleted online: the new item is not the
+folder the user deleted, and a delete would remove it with its content.
+
 ## Folder And Move Semantics
 
 Folder decisions are symmetric with file decisions. When Graph delta reports a
@@ -290,8 +314,16 @@ A local-origin move carries the destination's planned local truth as
 planning, and the move outcome publishes exactly that truth. A remote move
 applied locally carries the source's baseline in its view, so the precondition
 validates the source and the outcome keeps its local facts (R-2.17.3).
-Identity mismatch at the same path is treated as replacement or delete/create
-truth, not as a move.
+Identity mismatch at the same path is never a move, and never by itself a
+change (R-2.2.6): identity is a pairing hint. A folder with a new identity, or a
+file with a new identity whose hash and size equal the baseline's, is a
+`baseline_update` that records the new identity; a file whose content differs or
+cannot be proven equal (no hash on one side) is an ordinary edit. Before, every
+identity change set `local_changed`: a folder removed and restored planned an
+upload of a directory that failed every pass, and a device renumbered after a
+reboot re-uploaded every file. `buildActionsForReconciliation` refuses a folder
+upload or download as a comparison bug (logged, row dropped) so one bad row
+cannot wedge the plan.
 
 A type change (file <-> folder) at one path is a replacement (R-2.17.4):
 `replace_remote` emits `ActionRemoteDelete` of the old item and then a remote

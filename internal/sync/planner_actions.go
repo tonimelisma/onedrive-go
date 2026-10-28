@@ -1,12 +1,18 @@
 package sync
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
 	"sort"
 	"strings"
 )
+
+// errFolderTransferPlanned reports a reconciliation row that maps a folder to
+// a content transfer. Folders are created, moved or deleted, never uploaded
+// or downloaded (D-057); a row that says otherwise is a comparison bug.
+var errFolderTransferPlanned = errors.New("sync: folder planned as a content transfer")
 
 // PlanCurrentState builds the current actionable set from SQLite-owned
 // comparison and reconciliation rows plus the current durable snapshots. SQLite
@@ -48,6 +54,17 @@ func (p *planner) PlanCurrentState(
 		}
 
 		actions, err := buildActionsForReconciliation(&rec, cmp, views)
+		if errors.Is(err, errFolderTransferPlanned) {
+			// A comparison bug, not a user state: transferring a directory
+			// as file content can only fail and be replanned forever. The
+			// rest of the plan stays runnable.
+			p.logger.Error("planner dropped an impossible folder transfer",
+				slog.String("path", rec.Path),
+				slog.String("reconciliation", rec.ReconciliationKind),
+				slog.String("error", err.Error()),
+			)
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -385,8 +402,14 @@ func buildActionsForReconciliation(
 	case "folder_create_remote":
 		return []Action{makeFolderCreate(view, CreateRemote)}, nil
 	case "upload":
+		if view.Local != nil && view.Local.ItemType == ItemTypeFolder {
+			return nil, fmt.Errorf("%w: upload of local folder %s", errFolderTransferPlanned, rec.Path)
+		}
 		return []Action{makeAction(ActionUpload, view)}, nil
 	case "download":
+		if view.Remote != nil && view.Remote.ItemType == ItemTypeFolder {
+			return nil, fmt.Errorf("%w: download of remote folder %s", errFolderTransferPlanned, rec.Path)
+		}
 		return []Action{makeAction(ActionDownload, view)}, nil
 	case strLocalDelete:
 		return []Action{makeAction(ActionLocalDelete, view)}, nil
