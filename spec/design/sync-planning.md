@@ -79,6 +79,7 @@ intent; multisync receives only that child work intent.
 | Locally deleted or unpaired moved folders are deleted on OneDrive after their descendants, never re-created locally; identity-paired folder moves are one remote move. | `TestQueryReconciliationState_FolderDecisionMatrix`, `TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes`, `TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildMoves`, `TestRunOnce_LocalFolderDeleteDeletesRemoteFolder`, `TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource` |
 | Moves are composed per item (R-2.17.6): the same rename on both sides only re-keys the baseline and keeps either side's edit pending; divergent renames keep OneDrive's name; cross moves that would nest folders keep the OneDrive move; collisions undo the local claim; moves order against each other and their surroundings, a local move never fabricates its parent, and a pass that cannot order a move defers it. | `TestComposeMoves_OneSidedRenamesMoveTheOtherSide`, `TestComposeMoves_SameRenameOnBothSidesOnlyRekeysTheBaseline`, `TestComposeMoves_DivergentRenameKeepsTheOneDriveName`, `TestComposeMoves_CrossMoveCycleKeepsTheRemoteMove`, `TestComposeMoves_DescendantRenameInsideRenamedFolder`, `TestComposeMoves_RemoteHierarchyInversionOrdersLocalMoves`, `TestComposeMoves_LocalMoveIntoRemotelyRenamedFolder`, `TestComposeMoves_OccupiedDestinationDefers`, `TestComposeMoves_FrozenItemsAndTheirSubtreesDoNotMove`, `TestBuildDependencies_NestedMoveEdges`, `TestRunOnce_BothSidesRenamedIdenticallyConverges`, `TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending`, `TestRunOnce_DivergentRenameConvergesInTwoPasses`, `TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting`, `TestRunOnce_RemoteHierarchyInversionConverges`, `TestRunOnce_RemoteFolderRenameWithChildRenameAndMoveInConverges`, `TestRunOnce_LocalFolderRenameWithChildRenameConvergesInOnePass`, `TestRunOnce_RemoteFolderRenameWithNewSubfolderConverges`, `TestExecutor_LocalMove_MissingDestinationParentIsStale`, `TestRunOnce_RandomizedBidirectionalEditsConverge` |
 | A remote move of a locally edited file moves the local copy with its edit and uploads the edit afterwards (R-2.17.7); a local rename racing a remote edit downloads the edit (R-2.17.3). | `TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads`, `TestExecutor_LocalMove_LocallyEditedSourceStillMovesAndKeepsTheEditPending`, `TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit` |
+| A remote move over a file OneDrive deleted moves the local copy onto it, replacing a verified unchanged file or conflict-copying an edited one, and never re-uploads the moved item (R-2.17.9). | `TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting`, `TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit`, `TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination` |
 | Move pairing requires the item to have left its baseline path: hard links and copies are new files, rename-and-recreate is a move plus a create (R-2.17.8). | `TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated`, `TestRunOnce_HardLinkUploadsAsANewFile`, `TestRunOnce_RenameAndRecreateMovesThenCreates` |
 | Remote moves applied locally carry the source baseline and do not re-upload unchanged content. | `TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline`, `TestRunOnce_RemoteRenameAppliedLocallyDoesNotReupload` |
 | Type changes on either side are replacements ordered delete-then-create, never a silent stall. | `TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem`, `TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem`, `TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem`, `TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem`, `TestRunOnce_LocalFileReplacedByFolderConverges` |
@@ -411,6 +412,17 @@ the new entry as an upload or remote folder create that waits for the remote
 move to vacate the path. Swaps and rotations are deliberately not paired: the
 paths keep their items and exchange content, which is the same end state
 without a temporary name.
+
+A remote move onto the path of a synced file OneDrive deleted (a replacing
+move, D-058) used to be planned as a download at the destination, which left
+the source behind to be uploaded again as a duplicate. The destination's
+baseline item now gives way (`moveDisplacement`) when it no longer exists
+online: a file whose local copy is provably the synced version is replaced by
+the local move (`Action.ReplaceLocalTarget`; the executor re-verifies it through
+the descriptor it keeps in the trash, P-4), an edited one is renamed to a
+conflict copy first and uploaded later as a new file, and anything else (a
+folder, unknown content) makes the move wait. Reconciliation downloads and
+conflict copies of an item composition moves locally are dropped.
 
 `buildDependencies` orders moves by the paths they carry (`addMoveDeps`): work
 at or below a move's destination runs after it; a move onto a path another move

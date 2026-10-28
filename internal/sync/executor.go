@@ -851,7 +851,13 @@ func (e *executor) moveOutcome(action *Action) actionOutcome {
 		}
 	}
 
+	// A local move's view describes what sat at the destination before the
+	// move (normally nothing, or the file it replaces); the moved item's local
+	// half is the source baseline's, which the rename preserves.
 	local := action.View.Local
+	if action.Type == ActionLocalMove {
+		local = nil
+	}
 	if action.Type == ActionRemoteMove && action.MovedLocal != nil {
 		local = action.MovedLocal
 	}

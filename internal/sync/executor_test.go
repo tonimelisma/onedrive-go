@@ -3008,9 +3008,16 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 				ETag:     "etag-move",
 				ItemType: ItemTypeFile,
 			},
+			// What sat at the destination before the move (here a file the
+			// move replaces) is not the moved item's local truth.
 			Local: &localState{
-				Hash:  "localhash",
-				Mtime: 9876543210,
+				Hash:  "replaced-hash",
+				Mtime: 1,
+			},
+			Baseline: &BaselineEntry{
+				ItemType:   ItemTypeFile,
+				LocalHash:  "localhash",
+				LocalMtime: 9876543210,
 			},
 		},
 	}
@@ -3022,7 +3029,7 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 	assert.Equal(t, int64(42), o.RemoteSize)
 	assert.True(t, o.RemoteSizeKnown)
 	assert.Equal(t, "etag-move", o.ETag)
-	assert.Equal(t, "localhash", o.LocalHash)
+	assert.Equal(t, "localhash", o.LocalHash, "the rename preserves the source's synced content")
 	assert.Equal(t, int64(9876543210), o.LocalMtime)
 	assert.Equal(t, ItemTypeFile, o.ItemType)
 }
@@ -3678,4 +3685,64 @@ func TestExecutor_RemoteMove_ItemAlreadyAtDestinationSucceedsWithoutMoving(t *te
 	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, "movedst/inner", o.Path)
 	assert.Equal(t, `"etag-after-parent-move"`, o.ETag)
+}
+
+// Validates: R-2.17.9
+//
+// A local move that replaces its destination (OneDrive moved an item over a
+// file it deleted) replaces only the version the plan saw; a destination that
+// changed since planning is stale and stays untouched.
+func TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		destination string
+		wantReplace bool
+	}{
+		{name: "unchanged destination is replaced", destination: "bravo\n", wantReplace: true},
+		{name: "changed destination is stale", destination: "edited after planning\n", wantReplace: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+			e := newExecution(cfg, emptyBaseline())
+			writeExecTestFile(t, syncRoot, "a.txt", "alpha\n")
+			writeExecTestFile(t, syncRoot, "b.txt", "bravo\n")
+			plannedHash, err := e.hashFunc(filepath.Join(syncRoot, "b.txt"))
+			require.NoError(t, err)
+			info, err := os.Stat(filepath.Join(syncRoot, "b.txt"))
+			require.NoError(t, err)
+			if tc.destination != "bravo\n" {
+				writeExecTestFile(t, syncRoot, "b.txt", tc.destination)
+			}
+
+			action := &Action{
+				Type:               ActionLocalMove,
+				Path:               "b.txt",
+				OldPath:            "a.txt",
+				ReplaceLocalTarget: true,
+				View: &pathView{
+					Path:     "b.txt",
+					Local:    &localState{ItemType: ItemTypeFile, Hash: plannedHash, Size: info.Size()},
+					Baseline: &BaselineEntry{Path: "a.txt", ItemType: ItemTypeFile},
+				},
+			}
+
+			o := e.ExecuteMove(t.Context(), action)
+			data, readErr := os.ReadFile(filepath.Join(syncRoot, "b.txt")) //nolint:gosec // test reads its own temp tree
+			require.NoError(t, readErr)
+			if tc.wantReplace {
+				requireOutcomeSuccess(t, &o)
+				assert.Equal(t, "alpha\n", string(data))
+				assert.NoFileExists(t, filepath.Join(syncRoot, "a.txt"))
+				return
+			}
+			requireOutcomeFailure(t, &o)
+			require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+			assert.Equal(t, tc.destination, string(data), "a changed destination is never replaced")
+			assert.FileExists(t, filepath.Join(syncRoot, "a.txt"))
+		})
+	}
 }

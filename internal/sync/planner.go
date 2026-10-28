@@ -475,7 +475,7 @@ func addMoveDeps(deps []int, idx int, a *Action, actions []Action) []int {
 			deps = append(deps, otherIdx)
 			continue
 		}
-		if isMoveAction(a) && isDeleteAction(other) && other.Path == a.Path {
+		if isMoveAction(a) && (isDeleteAction(other) || other.Type == ActionConflictCopy) && other.Path == a.Path {
 			// The old occupant of the destination leaves first.
 			deps = append(deps, otherIdx)
 		}
@@ -503,7 +503,7 @@ func movePrecedes(move, a *Action) bool {
 // underMoveDestination reports whether a works at or below move's
 // destination.
 func underMoveDestination(a, move *Action) bool {
-	if a.Path == move.Path && !isMoveAction(a) && !isDeleteAction(a) {
+	if a.Path == move.Path && !isMoveAction(a) && !isDeleteAction(a) && a.Type != ActionConflictCopy {
 		return true
 	}
 	if strings.HasPrefix(a.Path, move.Path+"/") {

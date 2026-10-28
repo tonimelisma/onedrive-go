@@ -61,7 +61,24 @@ type moveNode struct {
 	key      string
 	itemType ItemType
 	paths    [moveCoordCount]string
+	// displace says what a move of another item onto this node's local path
+	// may do with it once OneDrive no longer holds this item (D-058).
+	displace moveDisplacement
 }
+
+// moveDisplacement is how an entry at a local move's destination gives way.
+type moveDisplacement int
+
+const (
+	// moveDisplaceNever: the entry is a live synced item; the move waits.
+	moveDisplaceNever moveDisplacement = iota
+	// moveDisplaceReplace: the item is gone online and its local copy is the
+	// synced version, verified again (and kept in the trash) when replaced.
+	moveDisplaceReplace
+	// moveDisplaceConflictCopy: gone online but edited locally; the edit is
+	// renamed to a conflict copy first and uploaded as a new file.
+	moveDisplaceConflictCopy
+)
 
 func (n *moveNode) present(coord moveCoord) bool { return n.paths[coord] != "" }
 
@@ -96,6 +113,8 @@ type composedMove struct {
 	oldPath   string
 	newPath   string
 	localPath string
+	// displaced is what happens to the entry the move lands on locally.
+	displaced moveDisplacement
 	// remotePath is set for a local move that runs before an ancestor's local
 	// move: OneDrive holds the item at its final path, not at newPath.
 	remotePath string
@@ -422,7 +441,10 @@ func (c *moveComposer) findTargetCollision() []string {
 	byTarget := make(map[string][]string, len(c.keys))
 	hasLocalOrigin := false
 	for _, key := range c.keys {
-		if c.unresolvable[key] {
+		// An item present on one side only is a create or delete SQLite
+		// plans; where it sits is checked as occupancy when a move lands on
+		// it, not as a competing claim.
+		if c.unresolvable[key] || !c.isMoveParticipant(c.nodes[key]) {
 			continue
 		}
 		folded := foldMovePath(c.targetPath(key))
@@ -702,7 +724,8 @@ func (e *moveEmitter) planMove(n *moveNode, side moveCoord, newPath string) (com
 	if oldPath == newPath {
 		return composedMove{}, false
 	}
-	if !e.destinationFree(n, side, newPath) {
+	free, displaced := e.destinationFree(n, side, newPath)
+	if !free {
 		return composedMove{}, false
 	}
 
@@ -713,6 +736,7 @@ func (e *moveEmitter) planMove(n *moveNode, side moveCoord, newPath string) (com
 		newPath:    newPath,
 		localPath:  n.paths[moveCoordLocal],
 		remotePath: remotePath,
+		displaced:  displaced,
 	}, true
 }
 
@@ -730,7 +754,11 @@ func (e *moveEmitter) localParentPresent(n *moveNode, dir string) bool {
 
 // destinationFree reports whether newPath is free on side when the move runs:
 // empty in the snapshot, or vacated by a move earlier in this plan.
-func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath string) bool {
+//
+// A local destination may also hold a synced item OneDrive no longer has (it
+// moved a.txt over b.txt, replacing b): that entry gives way as its
+// displacement says, and the move is planned with it.
+func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath string) (bool, moveDisplacement) {
 	occupied := e.occupancy.local
 	if side == moveCoordRemote {
 		occupied = e.occupancy.remote
@@ -738,19 +766,24 @@ func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath strin
 	snapshotPath := e.snapshotPath(side, newPath)
 	occupant, isNode := e.byPath[side][snapshotPath]
 	if !isNode && !occupied[snapshotPath] {
-		return true
+		return true, moveDisplaceNever
 	}
 	if isNode && occupant == n.key {
-		return true
+		return true, moveDisplaceNever
 	}
 	for i := range e.result.moves {
 		earlier := &e.result.moves[i]
 		if earlier.side == side && e.nodes[earlier.key].paths[side] == snapshotPath {
-			return true
+			return true, moveDisplaceNever
+		}
+	}
+	if isNode && side == moveCoordLocal && snapshotPath == newPath {
+		if displace := e.nodes[occupant].displace; displace != moveDisplaceNever {
+			return true, displace
 		}
 	}
 
-	return false
+	return false, moveDisplaceNever
 }
 
 // snapshotPath maps a path as it will be when a move runs back to the
@@ -818,6 +851,7 @@ func moveCompositionInputs(
 		node.paths[moveCoordBaseline] = cmp.Path
 		node.paths[moveCoordLocal] = composedLocalPosition(cmp, view)
 		node.paths[moveCoordRemote] = composedRemotePosition(cmp, entry, remoteByID, cmpByPath, node.paths[moveCoordLocal])
+		node.displace = composedDisplacement(&node, entry, view, remoteByID)
 		if moveNodeTouchesUnavailableTruth(&node, views) {
 			frozen[node.key] = true
 		}
@@ -859,6 +893,28 @@ func moveNodeTouchesUnavailableTruth(node *moveNode, views map[string]*pathView)
 	}
 
 	return false
+}
+
+// composedDisplacement decides whether a synced file OneDrive no longer has
+// may give way to another item moved onto its local path: replaced when its
+// local copy is provably the synced version, renamed to a conflict copy when
+// it was edited, never otherwise (a folder, unknown content, or an item that
+// still exists online somewhere).
+func composedDisplacement(node *moveNode, entry *BaselineEntry, view *pathView, remoteByID map[string]*remoteStateRow) moveDisplacement {
+	if node.paths[moveCoordLocal] != node.paths[moveCoordBaseline] || entry.ItemType != ItemTypeFile || view.Local == nil {
+		return moveDisplaceNever
+	}
+	if _, stillOnline := remoteByID[entry.ItemID]; stillOnline {
+		return moveDisplaceNever
+	}
+	if view.Local.Hash == "" || entry.LocalHash == "" {
+		return moveDisplaceNever
+	}
+	if view.Local.Hash != entry.LocalHash {
+		return moveDisplaceConflictCopy
+	}
+
+	return moveDisplaceReplace
 }
 
 func composedLocalPosition(cmp *sQLiteComparisonRow, view *pathView) string {
@@ -966,6 +1022,16 @@ func buildComposedMoveActions(
 			action := makeAction(ActionLocalMove, view)
 			action.OldPath = move.oldPath
 			action.MovedRemotePath = move.remotePath
+			switch move.displaced {
+			case moveDisplaceReplace:
+				action.ReplaceLocalTarget = true
+			case moveDisplaceConflictCopy:
+				// The edit leaves first (buildDependencies orders the move
+				// after the copy at its destination).
+				copyView := *viewAt(move.newPath)
+				actions = append(actions, makeConflictCopyAction(&copyView))
+			case moveDisplaceNever:
+			}
 			actions = append(actions, action)
 			continue
 		}
@@ -1149,4 +1215,33 @@ func createSide(action *Action) (moveCoord, bool) {
 	default:
 		return moveCoordBaseline, false
 	}
+}
+
+// dropTransfersOfComposedMoves removes reconciliation transfers of an item
+// that composition moves: OneDrive moved it onto a path that held another
+// synced item, so SQLite sees a changed item at the destination and plans a
+// download (or a conflict) there. Composition moves the local copy instead;
+// downloading as well left the source behind, and the next pass uploaded it
+// as a spurious duplicate (D-058).
+func dropTransfersOfComposedMoves(actions []Action, composition *moveComposition) []Action {
+	movedLocally := map[string]bool{}
+	for i := range composition.moves {
+		if composition.moves[i].side == moveCoordLocal {
+			movedLocally[composition.moves[i].key] = true
+		}
+	}
+	if len(movedLocally) == 0 {
+		return actions
+	}
+
+	kept := actions[:0:0]
+	for i := range actions {
+		action := &actions[i]
+		if movedLocally[action.ItemID] && (action.Type == ActionDownload || action.Type == ActionConflictCopy) {
+			continue
+		}
+		kept = append(kept, *action)
+	}
+
+	return kept
 }

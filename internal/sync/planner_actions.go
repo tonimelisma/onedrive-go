@@ -49,7 +49,7 @@ func (p *planner) PlanCurrentState(
 	composition := composeMoves(moveInputs.nodes, moveInputs.occupancy, moveInputs.frozen)
 	logMoveNotices(p.logger, composition.notices)
 
-	allActions := buildComposedMoveActions(&composition, &moveInputs, views, baseline)
+	var allActions []Action
 	for i := range reconciliations {
 		rec := reconciliations[i]
 		cmp, ok := comparisonByPath[rec.Path]
@@ -75,6 +75,8 @@ func (p *planner) PlanCurrentState(
 
 		allActions = append(allActions, actions...)
 	}
+	allActions = dropTransfersOfComposedMoves(allActions, &composition)
+	allActions = append(allActions, buildComposedMoveActions(&composition, &moveInputs, views, baseline)...)
 
 	normalizedActions := normalizeCurrentPlanActions(allActions, remoteToLocalFolderPrefixes(moveInputs.nodes), mode)
 	normalizedActions = dropCreatesOntoComposedItems(normalizedActions, &moveInputs, &composition)

@@ -74,6 +74,11 @@ type Action struct {
 	// move (ActionLocalMove) when that is not Path: a child renamed inside a
 	// folder before an OneDrive rename of the folder is applied locally.
 	MovedRemotePath string
+	// ReplaceLocalTarget lets a remote-origin local move replace the entry
+	// planned at its destination (View.Local): a synced file OneDrive no
+	// longer has, which the move verifies against that plan, keeps in the
+	// trash, and then replaces (D-058).
+	ReplaceLocalTarget bool
 }
 
 // ThrottleTargetKey returns the narrowest remote boundary that can be blocked

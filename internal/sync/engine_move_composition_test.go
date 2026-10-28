@@ -405,3 +405,72 @@ func TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit(t *testing.T) {
 	assert.Zero(t, remote.uploads)
 	requireScenarioQuietPlan(t, eng)
 }
+
+// Validates: R-2.17.9
+//
+// OneDrive moved a.txt over b.txt, replacing it (D-058). The local copy of
+// a.txt moves onto b.txt, whose old local copy is unchanged and therefore
+// replaced; nothing is uploaded, so a.txt is not resurrected online as a
+// spurious duplicate.
+func TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
+	remote.addFile(t, "item-b", "root", "b.txt", "bravo\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	remote.deleteRemotely("item-b")
+	remote.move("item-a", "root", "b.txt")
+
+	runScenarioPass(t, eng)
+	runScenarioPass(t, eng)
+
+	assert.Equal(t, map[string]string{"b.txt": "alpha\n", "keep.txt": "keep\n"}, remote.tree())
+	assert.NoFileExists(t, filepath.Join(syncRoot, "a.txt"))
+	data, err := os.ReadFile(filepath.Join(syncRoot, "b.txt")) //nolint:gosec // test reads its own temp tree
+	require.NoError(t, err)
+	assert.Equal(t, "alpha\n", string(data))
+	assert.Zero(t, remote.uploads, "the moved file must not be uploaded again")
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.9
+//
+// The same replacing move when the user had edited the replaced b.txt: the
+// edit is kept (as a conflict copy) instead of being overwritten.
+func TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
+	remote.addFile(t, "item-b", "root", "b.txt", "bravo\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	writeLocalFile(t, syncRoot, "b.txt", "edited bravo\n")
+	remote.deleteRemotely("item-b")
+	remote.move("item-a", "root", "b.txt")
+
+	for range 3 {
+		runScenarioPass(t, eng)
+	}
+
+	tree := remote.tree()
+	var contents []string
+	for _, content := range tree {
+		contents = append(contents, content)
+	}
+	assert.Contains(t, contents, "edited bravo\n", "the local edit survives online")
+	assert.Contains(t, contents, "alpha\n")
+	assert.Equal(t, "alpha\n", tree["b.txt"])
+	assert.NotContains(t, tree, "a.txt")
+	requireScenarioQuietPlan(t, eng)
+}
