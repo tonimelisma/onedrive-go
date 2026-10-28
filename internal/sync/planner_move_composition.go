@@ -3,6 +3,7 @@ package sync
 import (
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
@@ -554,16 +555,8 @@ func (c *moveComposer) emit() moveComposition {
 	})
 
 	for range len(order) + 1 {
-		progressed := false
-		for _, key := range order {
-			if e.state[key] != moveEmitPending {
-				continue
-			}
-			if e.resolve(key) {
-				progressed = true
-			}
-		}
-		if !progressed {
+		e.resolvePending(order)
+		if !e.parkOneOccupancyCycle(order) {
 			break
 		}
 	}
@@ -575,6 +568,147 @@ func (c *moveComposer) emit() moveComposition {
 	e.result.notices = append(c.notices, e.result.notices...)
 
 	return e.result
+}
+
+// resolvePending resolves pending items until a sweep makes no progress.
+func (e *moveEmitter) resolvePending(order []string) {
+	for range len(order) + 1 {
+		progressed := false
+		for _, key := range order {
+			if e.state[key] != moveEmitPending {
+				continue
+			}
+			if e.resolve(key) {
+				progressed = true
+			}
+		}
+		if !progressed {
+			return
+		}
+	}
+}
+
+// moveSwapInfix names the temporary path a parked item waits at.
+const moveSwapInfix = ".swap-"
+
+// parkOneOccupancyCycle breaks one cycle of moves that each wait for the
+// next to vacate its destination: a swap of two names (a→b, b→a) or a longer
+// rotation. Every such move waits for a free destination, so none was ever
+// emitted and the items never converged. The first item of the cycle moves to
+// a free temporary name beside its source, as a user swapping two names would;
+// that vacates its path for the rest of the cycle, which then resolves in this
+// plan, and the parked item reaches its target on the next pass. It reports
+// whether it parked an item.
+func (e *moveEmitter) parkOneOccupancyCycle(order []string) bool {
+	for _, key := range order {
+		if e.state[key] != moveEmitPending {
+			continue
+		}
+		side, ok := e.occupancyCycleSide(key)
+		if !ok {
+			continue
+		}
+		n := e.nodes[key]
+		parking := e.freeParkingPath(n.paths[side])
+		if parking == "" {
+			continue
+		}
+		move := composedMove{
+			key:       key,
+			side:      side,
+			oldPath:   n.paths[side],
+			newPath:   parking,
+			localPath: n.paths[moveCoordLocal],
+		}
+		if side == moveCoordLocal {
+			move.remotePath = n.paths[moveCoordRemote]
+		}
+		e.result.moves = append(e.result.moves, move)
+		e.deferNode(key)
+
+		return true
+	}
+
+	return false
+}
+
+// occupancyCycleSide reports the side on which key's move waits on a cycle of
+// pending moves, each blocked by the next one's source.
+func (e *moveEmitter) occupancyCycleSide(key string) (moveCoord, bool) {
+	if e.parentState(key) != moveEmitSettled || e.unresolvable[key] {
+		return 0, false
+	}
+	for _, side := range []moveCoord{moveCoordLocal, moveCoordRemote} {
+		seen := map[string]bool{}
+		for current := key; !seen[current]; {
+			seen[current] = true
+			next, blocked := e.blockingPendingMove(current, side)
+			if !blocked {
+				break
+			}
+			if next == key {
+				return side, true
+			}
+			current = next
+		}
+	}
+
+	return 0, false
+}
+
+// blockingPendingMove reports the pending item whose source holds the
+// destination of key's move on side, when that item must move on side too.
+func (e *moveEmitter) blockingPendingMove(key string, side moveCoord) (string, bool) {
+	n := e.nodes[key]
+	if n == nil || e.state[key] != moveEmitPending || !n.present(side) ||
+		sameLocation(e.location(n, side), e.target[key]) {
+		return "", false
+	}
+	occupant, isNode := e.byPath[side][e.snapshotPath(side, e.targetPath(key))]
+	if !isNode || occupant == key {
+		return "", false
+	}
+
+	return occupant, true
+}
+
+// freeParkingPath is a sibling of p that no side holds and no move of this
+// plan targets, compared as OneDrive compares names.
+func (e *moveEmitter) freeParkingPath(p string) string {
+	dir, name := path.Dir(p), path.Base(p)
+	if dir == "." {
+		dir = ""
+	}
+	ext := path.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	taken := e.takenPathsFolded()
+	for i := 1; i <= len(e.keys)+1; i++ {
+		candidate := joinMovePath(dir, stem+moveSwapInfix+strconv.Itoa(i)+ext)
+		if !taken[foldMovePath(candidate)] {
+			return candidate
+		}
+	}
+
+	return ""
+}
+
+func (e *moveEmitter) takenPathsFolded() map[string]bool {
+	taken := make(map[string]bool, len(e.occupancy.local)+len(e.occupancy.remote))
+	for _, occupied := range []map[string]bool{e.occupancy.local, e.occupancy.remote} {
+		for p := range occupied {
+			taken[foldMovePath(p)] = true
+		}
+	}
+	for coord := range moveCoordCount {
+		for p := range e.byPath[coord] {
+			taken[foldMovePath(p)] = true
+		}
+	}
+	for i := range e.result.moves {
+		taken[foldMovePath(e.result.moves[i].newPath)] = true
+	}
+
+	return taken
 }
 
 // parentState is the emit state of whatever an item's target position hangs
@@ -673,6 +807,11 @@ func (e *moveEmitter) resolve(key string) bool {
 		}
 		move, ok := e.planMove(n, side, newPath)
 		if !ok {
+			if _, waits := e.blockingPendingMove(key, side); waits {
+				// The destination's occupant has a move of its own still
+				// to decide; it may vacate the path (parkOneOccupancyCycle).
+				return false
+			}
 			e.deferNode(key)
 			return true
 		}

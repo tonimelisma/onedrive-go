@@ -45,6 +45,25 @@ func composedMovesBySide(c *moveComposition, side moveCoord) []string {
 	return out
 }
 
+// Validates: R-2.17.1
+//
+// A rotation of three names online (a->b, b->c, c->a) parks one item beside
+// its source so the others can move into the freed paths in order; the parked
+// item reaches its target on the next pass.
+func TestComposeMoves_RotationParksOneItemAndMovesTheRest(t *testing.T) {
+	t.Parallel()
+
+	c := composeForTest(
+		composeNode("a", ItemTypeFile, "a.txt", "a.txt", "b.txt"),
+		composeNode("b", ItemTypeFile, "b.txt", "b.txt", "c.txt"),
+		composeNode("c", ItemTypeFile, "c.txt", "c.txt", "a.txt"),
+	)
+
+	assert.Equal(t, []string{"c.txt->c.swap-1.txt", "b.txt->c.txt", "a.txt->b.txt"}, composedMovesBySide(&c, moveCoordLocal))
+	assert.Empty(t, composedMovesBySide(&c, moveCoordRemote))
+	assert.Equal(t, map[string]bool{"c": true}, c.deferred, "the parked item finishes next pass")
+}
+
 // Validates: R-2.17.6
 func TestComposeMoves_OneSidedRenamesMoveTheOtherSide(t *testing.T) {
 	t.Parallel()

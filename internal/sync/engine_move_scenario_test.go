@@ -633,3 +633,50 @@ func requireScenarioLocalFile(t *testing.T, syncRoot, rel, want string) {
 	require.NoError(t, err)
 	assert.Equal(t, want, string(data), rel)
 }
+
+// Validates: R-2.17.1
+//
+// Two synced files swapped names on one side (through a temporary name, as a
+// user does). Online, each local move waited for the other to vacate its
+// destination, so neither was ever planned and the swap never reached the
+// local side (model test, remote swap operation). One item now parks at a
+// temporary name beside its source, the other moves into the freed path, and
+// the parked one follows on the next pass. A local swap is not paired as moves
+// (a destination that is a synced path never pairs) and converges as two
+// content uploads instead.
+func TestRunOnce_SwapOfTwoNamesConverges(t *testing.T) {
+	t.Parallel()
+
+	for _, swapSide := range []string{modelLocalSide, modelRemoteSide} {
+		t.Run(swapSide, func(t *testing.T) {
+			t.Parallel()
+
+			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote.addFile(t, "item-a", "root", "a.txt", "A\n")
+			remote.addFile(t, "item-b", "root", "b.txt", "B\n")
+			remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+			h := newSyncHarness(t, remote)
+			runScenarioPass(t, h.eng)
+
+			h.beginRound(t)
+			if swapSide == modelLocalSide {
+				for _, step := range [][2]string{{"a.txt", "swap.txt"}, {"b.txt", "a.txt"}, {"swap.txt", "b.txt"}} {
+					require.NoError(t, os.Rename(filepath.Join(h.syncRoot, step[0]), filepath.Join(h.syncRoot, step[1])))
+				}
+			} else {
+				remote.moveAt(t, "a.txt", "swap.txt")
+				remote.moveAt(t, "b.txt", "a.txt")
+				remote.moveAt(t, "swap.txt", "b.txt")
+			}
+			runScenarioPass(t, h.eng)
+			runScenarioPass(t, h.eng)
+
+			requireScenarioLocalFile(t, h.syncRoot, "a.txt", "B\n")
+			requireScenarioLocalFile(t, h.syncRoot, "b.txt", "A\n")
+			if swapSide == modelRemoteSide {
+				assert.Zero(t, remote.uploads, "a swap online moves names locally, it transfers nothing")
+			}
+			assertSyncInvariants(t, h)
+		})
+	}
+}
