@@ -557,10 +557,43 @@ func (flow *engineFlow) applyResultPersistence(
 	case persistNone:
 		return nil
 	case persistRetryWork:
-		return flow.recordRetryWork(ctx, decision, r, retry.ReconcilePolicy().Delay)
+		return flow.recordRetryWork(ctx, decision, r, retryDelayForCondition(decision.ConditionType))
 	default:
 		panic(fmt.Sprintf("unknown failure persistence mode %d", decision.Persistence))
 	}
+}
+
+// durableCollisionRecheckDelay is the first wait before a create refused by
+// a name collision is tried again (retryDelayForCondition).
+const durableCollisionRecheckDelay = 30 * time.Second
+
+// retryDelayForCondition is the backoff curve for retry work of a condition.
+// A transient failure follows the reconcile curve, which starts at one
+// second. A name collision does not clear by itself: the user renames one of
+// the two names, or the other one goes away online. On the one-second curve
+// it was "held" only while the next pass began within a second of the
+// failure, so a slower pass (over a second under -race) or a watch replan
+// retried the refused create again and again. It waits from
+// durableCollisionRecheckDelay, doubling to an hour; a rename plans new work
+// that this row does not hold.
+func retryDelayForCondition(condition string) func(int) time.Duration {
+	if condition == issueCaseCollision {
+		return durableCollisionRetryDelay
+	}
+
+	return retry.ReconcilePolicy().Delay
+}
+
+func durableCollisionRetryDelay(attempt int) time.Duration {
+	delay := durableCollisionRecheckDelay
+	for range attempt {
+		delay *= 2
+		if delay >= time.Hour {
+			return time.Hour
+		}
+	}
+
+	return delay
 }
 
 // supersedeParkThreshold is how many consecutive identical supersedes of one
