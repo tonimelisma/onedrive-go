@@ -716,7 +716,10 @@ func (e *executor) validateLocalMoveDestinationAbsent(action *Action, source str
 			return nil
 		}
 		if action.ReplaceLocalTarget {
-			return e.clearReplacedLocalMoveTarget(action, destInfo)
+			// Cleared last, by clearLocalMoveDestination, once every other
+			// precondition held: a move superseded after its destination left
+			// would have displaced the file for nothing.
+			return nil
 		}
 
 		return stalePreconditionError("local move destination %s already exists", action.Path)
@@ -734,6 +737,23 @@ func (e *executor) validateLocalMoveDestinationAbsent(action *Action, source str
 // the move outcome keeps the baseline's content facts, and the next pass
 // uploads the local edit at the destination. Requiring unchanged content
 // superseded the remote move on every pass and stranded the edit.
+// clearLocalMoveDestination makes way for a replacing local move immediately
+// before its rename, after the source and the parent were validated.
+func (e *executor) clearLocalMoveDestination(action *Action) error {
+	if !action.ReplaceLocalTarget {
+		return nil
+	}
+	destInfo, err := e.syncTree.Lstat(action.Path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return normalizeSyncTreePathError(err)
+	}
+
+	return e.clearReplacedLocalMoveTarget(action, destInfo)
+}
+
 // clearReplacedLocalMoveTarget makes way for a move that replaces the file at
 // its destination (D-058): the file must still be exactly the version the plan
 // saw (a regular file with its observed hash, metadata and ctime), and is kept

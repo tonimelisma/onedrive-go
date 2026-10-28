@@ -208,3 +208,52 @@ func TestExecutor_Download_LocalContentDiffersFromBaselineIsSuperseded(t *testin
 		})
 	}
 }
+
+// Validates: R-2.17.9
+//
+// A replacing local move checks its source before it touches the destination.
+// A source that is no longer the synced item supersedes the move, and the
+// verified file at the destination stays where it is instead of having been
+// moved to the trash first for a move that then never ran.
+func TestExecutor_LocalMove_StaleSourceLeavesTheReplacedDestinationInPlace(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	trash := localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
+	cfg.SetTrash(trash)
+	e := newExecution(cfg, emptyBaseline())
+	writeExecTestFile(t, syncRoot, "a.txt", "alpha\n")
+	writeExecTestFile(t, syncRoot, "b.txt", "bravo\n")
+	plannedHash, err := e.hashFunc(filepath.Join(syncRoot, "b.txt"))
+	require.NoError(t, err)
+	info, err := os.Stat(filepath.Join(syncRoot, "b.txt"))
+	require.NoError(t, err)
+	source, err := e.syncTree.IdentityNoFollow("a.txt")
+	require.NoError(t, err)
+
+	action := &Action{
+		Type:               ActionLocalMove,
+		Path:               "b.txt",
+		OldPath:            "a.txt",
+		ReplaceLocalTarget: true,
+		View: &pathView{
+			Path:  "b.txt",
+			Local: &localState{ItemType: ItemTypeFile, Hash: plannedHash, Size: info.Size()},
+			// The synced item had another inode: a.txt is not it any more.
+			Baseline: &BaselineEntry{
+				Path: "a.txt", ItemType: ItemTypeFile,
+				LocalDevice: source.Device, LocalInode: source.Inode + 1, LocalHasIdentity: true,
+			},
+		},
+	}
+
+	o := e.ExecuteMove(t.Context(), action)
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	data, err := os.ReadFile(filepath.Join(syncRoot, "b.txt")) //nolint:gosec // test reads its own temp tree
+	require.NoError(t, err)
+	assert.Equal(t, "bravo\n", string(data), "the destination is untouched")
+	entries, err := trash.List()
+	require.NoError(t, err)
+	assert.Empty(t, entries, "nothing went to the trash for a move that did not run")
+}

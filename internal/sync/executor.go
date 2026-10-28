@@ -468,6 +468,16 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 		)
 	}
 
+	if err := e.clearLocalMoveDestination(action); err != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionLocalMove,
+			err,
+			action.Path,
+			permissionCapabilityLocalWrite,
+		)
+	}
+
 	if err := e.renameLocal(action.OldPath, action.Path); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
