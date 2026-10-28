@@ -23,7 +23,7 @@ type inflightParent struct {
 	ParentDriveID driveid.ID // drive containing this item's parent
 	IsRoot        bool
 	IsVault       bool // true for Personal Vault folder (B-271)
-	IsPackage     bool // true for OneNote and other package items, which sync never manages
+	IsPackage     bool // true for packages (OneNote) and bundles (albums), which sync never manages
 
 	// HasUnmaterializableName marks a folder whose Graph name cannot be one
 	// local path segment (see unmaterializableRemoteNameReason). Its children
@@ -218,10 +218,15 @@ func (c *itemConverter) shouldEnrichSparseRemoteItem(item *graph.Item) bool {
 	}
 
 	if c.Baseline == nil {
-		return item.ParentID == ""
+		return item.ParentID == "" || item.TypeFacetMissing
 	}
 
 	existing, found := c.Baseline.GetByID(item.ID)
+	if item.TypeFacetMissing && !found {
+		// One re-read for an item whose kind delta did not say and the
+		// baseline cannot supply (R-2.4.16).
+		return true
+	}
 	return item.ParentID == "" && (!found || existing.ParentID == "")
 }
 
@@ -267,6 +272,17 @@ func mergeSparseRemoteItem(dst *graph.Item, enriched *graph.Item) {
 	}
 	if !dst.IsFolder {
 		dst.IsFolder = enriched.IsFolder
+	}
+	if dst.TypeFacetMissing && !enriched.TypeFacetMissing {
+		// The re-read says what the item is: take its kind and content facts.
+		dst.TypeFacetMissing = false
+		dst.IsFolder = enriched.IsFolder
+		dst.IsPackage = enriched.IsPackage
+		dst.IsBundle = enriched.IsBundle
+		dst.QuickXorHash = enriched.QuickXorHash
+		dst.SHA1Hash = enriched.SHA1Hash
+		dst.SHA256Hash = enriched.SHA256Hash
+		dst.Size = enriched.Size
 	}
 }
 
@@ -402,7 +418,7 @@ func (c *itemConverter) registerInflight(item *graph.Item, inflight map[string]i
 		ParentDriveID: parentDriveID,
 		IsRoot:        item.IsRoot,
 		IsVault:       item.SpecialFolderName == specialFolderVault,
-		IsPackage:     item.IsPackage,
+		IsPackage:     item.IsPackage || item.IsBundle,
 
 		HasUnmaterializableName: name != "" && unmaterializableRemoteNameReason(name) != "",
 	}
@@ -465,9 +481,10 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 		return nil
 	}
 
-	// OneNote/package items are valid Graph objects, but they are compound
-	// provider objects rather than normal file/folder content sync can manage.
-	if item.IsPackage || c.isDescendantOfPackage(item, inflight) {
+	// OneNote/package items and bundles (albums) are valid Graph objects,
+	// but they are compound provider objects rather than normal file/folder
+	// content sync can manage (R-2.4.16).
+	if item.IsPackage || item.IsBundle || c.isDescendantOfPackage(item, inflight) {
 		c.Logger.Debug("skipping package item",
 			slog.String("item_id", item.ID),
 			slog.String("name", item.Name),
@@ -651,6 +668,14 @@ func (c *itemConverter) classifyAndConvert(
 		CTag:      item.CTag,
 		IsDeleted: item.IsDeleted,
 	}
+	if item.Size < 0 {
+		// Graph has reported negative sizes; one is not a size (R-2.4.16).
+		ev.Size = 0
+		ev.SizeUnknown = true
+	}
+	if !item.IsDeleted && item.TypeFacetMissing && !c.applyBaselineKind(&ev, item, existing) {
+		return nil
+	}
 
 	switch {
 	case item.IsDeleted:
@@ -710,6 +735,32 @@ func (c *itemConverter) classifyAndConvert(
 	}
 
 	return &ev
+}
+
+// applyBaselineKind settles the kind of an item delta reported without any
+// type facet (R-2.4.16). Read as a file by default, a sparse update of a
+// synced folder planned a folder-to-file type change that deleted the local
+// folder. The baseline's kind is kept, and for a file so are its content
+// facts, because an update without a file facet carries no hashes: it is not
+// evidence the content changed. Without a baseline (and after the one re-read
+// enrichSparseParentRefs makes) the kind is unknown and the item is skipped.
+func (c *itemConverter) applyBaselineKind(ev *changeEvent, item *graph.Item, existing *BaselineEntry) bool {
+	if existing == nil {
+		c.Logger.Debug("skipping remote item that does not say whether it is a file or a folder",
+			slog.String("item_id", item.ID),
+			slog.String("name", item.Name),
+		)
+		return false
+	}
+
+	ev.ItemType = existing.ItemType
+	if existing.ItemType == ItemTypeFile && ev.Hash == "" {
+		ev.Hash = existing.RemoteHash
+		ev.Size = existing.RemoteSize
+		ev.SizeUnknown = !existing.RemoteSizeKnown
+	}
+
+	return true
 }
 
 func effectiveItemName(item *graph.Item, existing *BaselineEntry) string {

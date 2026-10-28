@@ -287,14 +287,20 @@ func remoteStateRowFromGraphItem(item *graph.Item) *remoteStateRow {
 		mtime = item.ModifiedAt.UnixNano()
 	}
 
+	// A negative size is not a size (R-2.4.16).
+	size, sizeKnown := item.Size, item.Size >= 0
+	if !sizeKnown {
+		size = 0
+	}
+
 	return &remoteStateRow{
 		DriveID:   item.DriveID,
 		ItemID:    item.ID,
 		Path:      path,
 		ItemType:  resolvedType,
 		Hash:      driveops.SelectHash(item),
-		Size:      item.Size,
-		SizeKnown: true,
+		Size:      size,
+		SizeKnown: sizeKnown,
 		Mtime:     mtime,
 		ETag:      item.ETag,
 	}

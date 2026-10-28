@@ -51,17 +51,22 @@ type Item struct {
 	ParentID string
 	// ParentPath is the verbatim root-relative parent path from
 	// parentReference.path (not URL-encoded, L-32); empty for root/unknown.
-	ParentPath        string
-	ParentPathKnown   bool       // true when parentReference.path was present and valid, including root
-	ParentDriveID     driveid.ID // drive containing parent (for cross-drive references)
-	ParentDriveType   string     // parentReference.driveType: "personal", "business", "documentLibrary"; empty when Graph omits it
-	Size              int64
-	ETag              string
-	CTag              string
-	IsFolder          bool
-	IsRoot            bool // drive root folder (root facet present in API response)
-	IsDeleted         bool
-	IsPackage         bool // OneNote packages — sync should skip these
+	ParentPath      string
+	ParentPathKnown bool       // true when parentReference.path was present and valid, including root
+	ParentDriveID   driveid.ID // drive containing parent (for cross-drive references)
+	ParentDriveType string     // parentReference.driveType: "personal", "business", "documentLibrary"; empty when Graph omits it
+	Size            int64
+	ETag            string
+	CTag            string
+	IsFolder        bool
+	IsRoot          bool // drive root folder (root facet present in API response)
+	IsDeleted       bool
+	IsPackage       bool // OneNote packages — sync should skip these
+	IsBundle        bool // bundle facet (photo albums and other collections) — sync skips these too
+	// TypeFacetMissing marks a non-deleted item that carries none of the
+	// facets that say what it is (file, folder, root, package, bundle,
+	// remoteItem). Its kind is unknown, never "file" by default.
+	TypeFacetMissing  bool
 	MalwareDetected   bool // malware facet present: OneDrive flagged the content and will not serve it
 	MimeType          string
 	QuickXorHash      string // base64-encoded

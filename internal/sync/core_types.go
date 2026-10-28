@@ -45,6 +45,9 @@ type changeEvent struct {
 	ItemType ItemType
 	Name     string // verbatim from Graph, NFC-normalized
 	Size     int64
+	// SizeUnknown marks a remote size Graph reported as negative: it is
+	// stored as unknown (NULL), never as a size (R-2.4.16).
+	SizeUnknown bool
 	// Hash is a QuickXorHash (base64) on both sides: driveops.SelectHash
 	// returns only QuickXor, so a remote item with SHA digests alone is
 	// hashless here, never compared against a local QuickXor. Empty for

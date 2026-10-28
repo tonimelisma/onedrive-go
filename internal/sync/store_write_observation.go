@@ -249,7 +249,7 @@ func (s *SyncStore) restoreParkedRemoteRowsTx(ctx context.Context, tx sqlTxRunne
 		}
 		back := observedItem{
 			DriveID: row.DriveID, ItemID: row.ItemID, Path: p.oldPath, ItemType: row.ItemType,
-			Hash: row.Hash, Size: row.Size, Mtime: row.Mtime, ETag: row.ETag,
+			Hash: row.Hash, Size: row.Size, SizeUnknown: !row.SizeKnown, Mtime: row.Mtime, ETag: row.ETag,
 		}
 		if err := s.processObservedItem(ctx, tx, &back); err != nil {
 			return err
@@ -540,6 +540,7 @@ func observedRemoteStateUpdate(
 		item.ItemType != existing.ItemType ||
 		item.Hash != existing.Hash ||
 		item.Size != existing.Size ||
+		item.SizeUnknown == existing.SizeKnown ||
 		item.Mtime != existing.Mtime ||
 		item.ETag != existing.ETag
 }
@@ -564,7 +565,7 @@ func (s *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item 
 		item.DriveID.String(),
 		item.ItemID, item.Path,
 		item.ItemType,
-		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
+		nullString(item.Hash), nullKnownInt64(item.Size, !item.SizeUnknown), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
 	)
 	if err != nil {
@@ -582,7 +583,7 @@ func (s *SyncStore) updateRemoteStateFromObs(
 	_, err := tx.ExecContext(ctx, sqlUpdateRemoteState,
 		item.DriveID.String(),
 		item.Path, item.ItemType,
-		nullString(item.Hash), nullKnownInt64(item.Size, true), nullOptionalInt64(item.Mtime),
+		nullString(item.Hash), nullKnownInt64(item.Size, !item.SizeUnknown), nullOptionalInt64(item.Mtime),
 		nullString(item.ETag),
 		item.ItemID,
 	)
