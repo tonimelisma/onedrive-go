@@ -1054,6 +1054,50 @@ func TestNewEngine_RequiresResetForUnsupportedStoreGeneration(t *testing.T) {
 	assert.Equal(t, StateStoreIncompatibleReasonIncompatibleSchema, resetErr.Reason)
 }
 
+// Validates: R-2.5.5, R-2.5.8
+func TestNewEngine_RequiresResetForCorruptStateDB(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	createCorruptRemoteStateDB(t, dbPath)
+
+	resetErr := requireIncompatibleStoreEngineError(t, dbPath)
+	assert.Equal(t, StateStoreIncompatibleReasonCorrupt, resetErr.Reason)
+	assert.Contains(t, resetErr.Error(), "damaged")
+	require.Error(t, resetErr.Cause)
+}
+
+// createCorruptRemoteStateDB writes a canonical state DB with enough
+// remote_state rows to give the table its own b-tree pages, then overwrites
+// the page-type byte of the table's root page. The schema page stays intact,
+// so only an integrity check notices the damage.
+func createCorruptRemoteStateDB(t *testing.T, dbPath string) {
+	t.Helper()
+
+	store, err := NewSyncStore(t.Context(), dbPath, testLogger(t))
+	require.NoError(t, err)
+	db := store.rawDB()
+	for i := range 200 {
+		_, err = db.ExecContext(t.Context(),
+			`INSERT INTO remote_state (drive_id, item_id, path, item_type) VALUES ('d', ?, ?, 'file')`,
+			fmt.Sprintf("item-%04d", i), fmt.Sprintf("dir/file-%04d.txt", i))
+		require.NoError(t, err)
+	}
+
+	var rootPage, pageSize int64
+	require.NoError(t, db.QueryRowContext(t.Context(),
+		`SELECT rootpage FROM sqlite_master WHERE type = 'table' AND name = 'remote_state'`).Scan(&rootPage))
+	require.NoError(t, db.QueryRowContext(t.Context(), `PRAGMA page_size`).Scan(&pageSize))
+	require.NoError(t, store.Close(t.Context()))
+
+	file, err := os.OpenFile(dbPath, os.O_RDWR, 0)
+	require.NoError(t, err)
+	// 0x00 is not a valid b-tree page type (2, 5, 10 and 13 are).
+	_, err = file.WriteAt([]byte{0x00}, (rootPage-1)*pageSize)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+}
+
 func createUnsupportedGenerationStateDB(t *testing.T, dbPath string) {
 	t.Helper()
 

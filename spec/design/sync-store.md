@@ -4,7 +4,7 @@ GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/
 
 LAYER: 1
 
-Implements: R-2.5 [designed], R-2.5.7 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
+Implements: R-2.5 [designed], R-2.5.7 [verified], R-2.5.8 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
 ## Verification Counts Only What It Compared
 
@@ -118,6 +118,7 @@ and every other significant type in the tree already matched its own name
 | Dry-run current-plan scratch stores are temporary SQLite stores seeded from committed truth and removed after preview planning. | `TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp` |
 | Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens; shortcut status leaves the store through sync-owned status views instead of raw shortcut-root rows. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestBuildChildStatusMount_RendersLifecycleState` |
 | The baseline cache stays the one object callers hold across full rebuilds, and planning uses the baseline of its own comparison snapshot. | `TestCommitMutation_FolderMoveKeepsHeldBaselinePointerCurrent`, `TestPlanning_UsesBaselineFromTheComparisonSnapshot` |
+| Engine startup refuses a state DB that fails `PRAGMA quick_check` with the `corrupt` reason and reset guidance, instead of planning from a damaged `remote_state` (R-2.5.8). | `TestNewEngine_RequiresResetForCorruptStateDB` |
 | A successful upload, download, folder create or move without a remote item ID is refused, because `item_id` is the baseline's primary key (R-2.5.7). | `TestCommitMutation_EmptyItemIDFails` |
 | A folder move re-paths its subtree's baseline rows in the move transaction and in the cache. | `TestCommitMutation_FolderMoveRepathsSubtree`, `TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn` |
 | Local filesystem identity is persisted as generic truth for files and directories in `local_state` and `baseline`, allowing local move detection without shortcut-specific sibling scans; a full scan backfills identity onto baseline rows that predate it when the item is provably unchanged. | `TestReplaceLocalState_PersistsFilesystemIdentity`, `TestReplaceLocalState_BackfillsBaselineIdentityForUnchangedItems`, `TestRunOnce_LegacyFolderBaselineGainsIdentityAndMovesAsOne`, `TestCommitMutation_PersistsLocalFilesystemIdentity`, `TestQueryReconciliationState_LocalFolderMoveUsesFilesystemIdentity` |
@@ -462,7 +463,13 @@ remote folder as drift on a converged drive (R-2.10.48).
 Two store-owned helpers isolate DB lifecycle policy:
 
 - `store_compatibility.go` opens an existing DB non-mutating, classifies
-  unreadable or unsupported stores, and returns typed incompatible-store errors
+  unreadable or unsupported stores, and returns typed incompatible-store errors.
+  After a successful open it runs `PRAGMA quick_check`; a finding other than
+  `ok`, or `SQLITE_CORRUPT` while the schema is read, is the `corrupt` reason
+  with the same reset guidance (R-2.5.8). A damaged `remote_state` b-tree can
+  hide rows, and a hidden row reads as a remote delete, so startup refuses the
+  DB instead of planning from it. `quick_check` skips `integrity_check`'s
+  index cross-check, which keeps it linear and cheap enough for every open
 - `store_reset.go` deletes one drive's DB file family and recreates a fresh
   canonical DB in place
 
