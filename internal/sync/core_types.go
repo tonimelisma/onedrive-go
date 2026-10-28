@@ -178,6 +178,12 @@ func (b *Baseline) Put(entry *BaselineEntry) {
 			delete(b.ByID, old.ItemID)
 		}
 	}
+	// The same item at a new path leaves its old path, exactly as the
+	// item_id-keyed SQL row does; otherwise the cache kept a ghost entry at
+	// the old path.
+	if old, ok := b.ByID[entry.ItemID]; ok && old.Path != entry.Path {
+		b.deleteLocked(old.Path)
+	}
 
 	b.ByPath[entry.Path] = entry
 	b.ByID[entry.ItemID] = entry
@@ -206,6 +212,11 @@ func (b *Baseline) Delete(path string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	b.deleteLocked(path)
+}
+
+// deleteLocked is Delete for a caller holding mu.
+func (b *Baseline) deleteLocked(path string) {
 	if entry, ok := b.ByPath[path]; ok {
 		delete(b.ByID, entry.ItemID)
 	}
@@ -415,4 +426,38 @@ type pathView struct {
 	Local       *localState    // nil = absent from current local snapshot
 	Baseline    *BaselineEntry // nil = never synced
 	TruthStatus pathTruthStatus
+}
+
+// remoteContentDiffersFromBaseline reports whether remote content facts prove
+// the item's content changed since the baseline. eTag and mtime churn alone
+// (a Graph move rewrites both) are not content changes.
+func remoteContentDiffersFromBaseline(remote *remoteState, baseline *BaselineEntry) bool {
+	if remote == nil || baseline == nil || baseline.ItemType != ItemTypeFile {
+		return false
+	}
+	if remote.Hash != "" && baseline.RemoteHash != "" && remote.Hash != baseline.RemoteHash {
+		return true
+	}
+
+	return baseline.RemoteSizeKnown && remote.Size != baseline.RemoteSize
+}
+
+// localFileDiffersFromBaseline reports whether a local file's content facts
+// show it changed since the baseline: the hash when either side has one,
+// otherwise size, then modification time.
+func localFileDiffersFromBaseline(local *localState, baseline *BaselineEntry) bool {
+	if local == nil || baseline == nil {
+		return false
+	}
+	if baseline.ItemType != ItemTypeFile || local.ItemType != ItemTypeFile {
+		return false
+	}
+	if baseline.LocalHash != "" || local.Hash != "" {
+		return baseline.LocalHash != local.Hash
+	}
+	if baseline.LocalSizeKnown && baseline.LocalSize != local.Size {
+		return true
+	}
+
+	return baseline.LocalMtime != local.Mtime
 }

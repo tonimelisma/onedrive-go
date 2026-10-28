@@ -336,6 +336,9 @@ func publicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*
 		}
 
 		fillMutationFromBaselineDefaults(mutation, action.View.Baseline)
+		if action.OldPath != "" && action.OldPath != action.Path {
+			keepPendingContentAcrossRekey(mutation, action.View)
+		}
 
 		if mutation.ItemType == ItemTypeFile && action.View.Baseline != nil && action.View.Baseline.ItemType != ItemTypeFile {
 			mutation.ItemType = action.View.Baseline.ItemType
@@ -487,6 +490,18 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 	return nil
 }
 
+// classifyMutation is classifyBaselineMutation for one outcome: a
+// publication-only baseline update that carries an old path re-keys the row
+// where both sides already hold the item (D-050), which is a move of the
+// baseline row and its subtree.
+func classifyMutation(o *BaselineMutation) (baselineMutationKind, error) {
+	if o.Action == ActionBaselineUpdate && o.OldPath != "" && o.OldPath != o.Path {
+		return baselineMutationMove, nil
+	}
+
+	return classifyBaselineMutation(o.Action)
+}
+
 func classifyBaselineMutation(action actionType) (baselineMutationKind, error) {
 	switch action {
 	case ActionConflictCopy:
@@ -508,7 +523,7 @@ var errMutationWithoutItemID = errors.New("mutation outcome has no item ID")
 
 // applySingleMutation dispatches a single mutation to the appropriate DB helper.
 func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
-	mutation, err := classifyBaselineMutation(o.Action)
+	mutation, err := classifyMutation(o)
 	if err != nil {
 		return err
 	}
@@ -543,7 +558,7 @@ func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutatio
 // updateBaselineCache applies a single outcome to the in-memory baseline,
 // keeping the cache consistent without a full DB reload.
 func (s *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation) error {
-	mutation, err := classifyBaselineMutation(o.Action)
+	mutation, err := classifyMutation(o)
 	if err != nil {
 		s.logger.Debug("baseline cache classification failed, reloading cache from database",
 			slog.String("path", o.Path),
@@ -583,7 +598,10 @@ func (s *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation
 			}
 			return nil
 		}
-		s.baseline.Delete(o.OldPath)
+		// Put drops the item's previous path itself. OldPath is a path in the
+		// moving side's coordinates, which can name another item's baseline
+		// row (a divergent rename moves the local copy from a path the
+		// baseline never recorded for this item).
 		s.baseline.Put(mutationToEntry(o))
 	}
 
@@ -739,6 +757,16 @@ func commitDelete(ctx context.Context, tx sqlTxRunner, path string) error {
 // PK, a move is a single UPDATE (not DELETE+INSERT) — the row identity
 // (item_id) doesn't change, only the path does.
 func commitMove(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
+	// The baseline row is the item, keyed by item_id; where it sat before is
+	// read from it, not from OldPath. OldPath is the moving side's path, and
+	// for a local copy moved to OneDrive's name after a divergent rename it is
+	// a path the baseline never recorded for this item.
+	var previousPath string
+	err := tx.QueryRowContext(ctx, `SELECT path FROM baseline WHERE item_id = ?`, o.ItemID).Scan(&previousPath)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("sync: reading baseline path of moved item %s: %w", o.ItemID, err)
+	}
+
 	// Upsert handles both the path update and all other field updates.
 	// The ON CONFLICT(item_id) clause matches the existing row
 	// and updates path + all mutable fields atomically.
@@ -750,12 +778,14 @@ func commitMove(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error 
 	}
 
 	// A folder move moves its whole subtree, on OneDrive and on disk alike,
-	// and the planner omits the descendant moves it covers. The descendants'
-	// baseline rows must follow in the same transaction; left at the old
-	// paths, every child looked like a fresh move whose source had vanished
-	// and was superseded on every replan.
-	if err := repathSubtreeTx(ctx, tx, "baseline", o.OldPath, o.Path); err != nil {
-		return err
+	// and the planner emits no move for descendants that only follow it. The
+	// descendants' baseline rows must follow in the same transaction; left at
+	// the old paths, every child looked like a fresh move whose source had
+	// vanished and was superseded on every replan.
+	if previousPath != "" && previousPath != o.Path {
+		if err := repathSubtreeTx(ctx, tx, "baseline", previousPath, o.Path); err != nil {
+			return err
+		}
 	}
 	if o.Action == ActionRemoteMove {
 		// The local-origin move just moved the remote subtree; remote
@@ -795,7 +825,26 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 	}
 
 	switch o.Action {
-	case ActionUpload, ActionFolderCreate:
+	case ActionFolderCreate:
+		// A folder created online is new remote truth. A folder created
+		// locally mirrors an item remote_state already holds, at the path
+		// OneDrive reports; the local path the create used can differ (a
+		// parent that sits elsewhere locally until its own move runs), and
+		// writing it here moved the item in remote_state to a path OneDrive
+		// never had.
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO remote_state (
+				drive_id, item_id, path, item_type, hash, size, mtime, etag
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(item_id) DO NOTHING`,
+			o.DriveID.String(), o.ItemID, o.Path, o.ItemType,
+			nullString(o.RemoteHash), nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown), nullOptionalInt64(o.RemoteMtime),
+			nullString(o.ETag),
+		)
+		if err != nil {
+			return fmt.Errorf("sync: recording remote_state for folder create %s: %w", o.Path, err)
+		}
+	case ActionUpload:
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO remote_state (
 				drive_id, item_id, path, item_type, hash, size, mtime, etag
@@ -947,4 +996,30 @@ func baselineEntriesEqual(a, b *BaselineEntry) bool {
 		a.LocalInode == b.LocalInode &&
 		a.LocalHasIdentity == b.LocalHasIdentity &&
 		a.ItemID == b.ItemID
+}
+
+// keepPendingContentAcrossRekey makes a baseline re-key publish only the path
+// (D-050, as a move outcome does). Both sides hold the item at the new path,
+// but either may also have edited it; recording that content as synced would
+// lose the edit silently, so a side whose content differs from the baseline
+// keeps the baseline's content facts and the next pass transfers it.
+func keepPendingContentAcrossRekey(mutation *BaselineMutation, view *pathView) {
+	baseline := view.Baseline
+	if baseline == nil {
+		return
+	}
+	if remoteContentDiffersFromBaseline(view.Remote, baseline) {
+		mutation.ETag = baseline.ETag
+		mutation.RemoteHash = baseline.RemoteHash
+		mutation.RemoteSize = baseline.RemoteSize
+		mutation.RemoteSizeKnown = baseline.RemoteSizeKnown
+		mutation.RemoteMtime = baseline.RemoteMtime
+	}
+	if localFileDiffersFromBaseline(view.Local, baseline) {
+		mutation.LocalHash = baseline.LocalHash
+		mutation.LocalSize = baseline.LocalSize
+		mutation.LocalSizeKnown = baseline.LocalSizeKnown
+		mutation.LocalMtime = baseline.LocalMtime
+		mutation.LocalCtime = baseline.LocalCtime
+	}
 }

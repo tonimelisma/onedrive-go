@@ -351,3 +351,195 @@ func TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift(t *testing.T
 	assert.Zero(t, leftover, "no remote_state rows survive under a deleted folder")
 	requireScenarioQuietPlan(t, eng)
 }
+
+// Validates: R-2.17.4, R-2.17.10
+//
+// OneDrive replaced a file with a populated folder while the user edited the
+// file (D-059). Both survive: the local edit as a conflict copy that is then
+// uploaded, the new folder with its content locally. Before, local won and the
+// folder's descendants wedged against the file still at its path.
+func TestRunOnce_RemoteFileReplacedByNonEmptyFolderWithLocalEditKeepsBoth(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFile(t, "item-shape", "root", "shape", "file\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	writeLocalFile(t, syncRoot, "shape", "edited locally\n")
+	remote.deleteRemotely("item-shape")
+	remote.addFolder("item-shape-dir", "root", "shape")
+	remote.addFile(t, "item-inner", "item-shape-dir", "inner.txt", "inner\n")
+
+	for range 3 {
+		runScenarioPass(t, eng)
+	}
+
+	tree := remote.tree()
+	assert.Equal(t, "/", tree["shape"])
+	assert.Equal(t, "inner\n", tree["shape/inner.txt"])
+	assert.Contains(t, modelContents(tree), "edited locally\n", "the local edit survives")
+	assert.FileExists(t, filepath.Join(syncRoot, "shape", "inner.txt"))
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.4, R-2.17.10
+//
+// OneDrive replaced a folder with a file while the user edited a file inside
+// the folder: the local folder and its edit survive as a conflict copy, the
+// new file takes the path.
+func TestRunOnce_RemoteFolderReplacedByFileWithLocalChildEditsKeepsBoth(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFolder("item-dir", "root", "shape")
+	remote.addFile(t, "item-child", "item-dir", "child.txt", "child\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	writeLocalFile(t, syncRoot, filepath.Join("shape", "child.txt"), "edited child\n")
+	remote.deleteRemotely("item-dir")
+	remote.addFile(t, "item-shape-file", "root", "shape", "now a file\n")
+
+	for range 3 {
+		runScenarioPass(t, eng)
+	}
+
+	tree := remote.tree()
+	assert.Equal(t, "now a file\n", tree["shape"])
+	assert.Contains(t, modelContents(tree), "edited child\n", "the edit inside the replaced folder survives")
+	data, err := os.ReadFile(filepath.Join(syncRoot, "shape")) //nolint:gosec // test reads its own temp tree
+	require.NoError(t, err)
+	assert.Equal(t, "now a file\n", string(data))
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.4, R-2.17.10
+//
+// The user replaced a folder with a file while OneDrive edited a file inside
+// the folder (GEN-079(b), P-7): the remote edit is not deleted with the
+// folder. Local loses the path: its file becomes a conflict copy and the
+// folder with the edit comes back.
+func TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFolder("item-dir", "root", "shape")
+	remote.addFile(t, "item-child", "item-dir", "child.txt", "child\n")
+	remote.addFile(t, "item-other", "item-dir", "other.txt", "other\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	require.NoError(t, os.RemoveAll(filepath.Join(syncRoot, "shape")))
+	writeLocalFile(t, syncRoot, "shape", "now a local file\n")
+	remote.setContent(t, "item-child", "edited online\n")
+
+	for range 3 {
+		runScenarioPass(t, eng)
+	}
+
+	tree := remote.tree()
+	assert.Equal(t, "edited online\n", tree["shape/child.txt"], "the remote edit is never deleted")
+	assert.Equal(t, "other\n", tree["shape/other.txt"])
+	assert.Contains(t, modelContents(tree), "now a local file\n", "the local file survives")
+	assert.Empty(t, remote.deletes)
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.3.1, R-2.17.10
+//
+// A create/create conflict between a local folder and a remote file (D-059a):
+// the conflict copy of a directory is reserved as a directory, so the rename
+// succeeds instead of failing with ENOTDIR on every pass.
+func TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+
+	writeLocalFile(t, syncRoot, filepath.Join("thing", "local.txt"), "local child\n")
+	remote.addFile(t, "item-thing", "root", "thing", "remote file\n")
+
+	for range 3 {
+		runScenarioPass(t, eng)
+	}
+
+	tree := remote.tree()
+	assert.Equal(t, "remote file\n", tree["thing"])
+	assert.Contains(t, modelContents(tree), "local child\n")
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.3.1, R-2.17.10
+//
+// The mirror: a local file against a remote folder. The local file is kept as
+// a conflict copy and the folder is created locally, not "downloaded".
+func TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+
+	writeLocalFile(t, syncRoot, "thing", "local file\n")
+	remote.addFolder("item-thing", "root", "thing")
+	remote.addFile(t, "item-child", "item-thing", "child.txt", "remote child\n")
+
+	for range 3 {
+		runScenarioPass(t, eng)
+	}
+
+	tree := remote.tree()
+	assert.Equal(t, "/", tree["thing"])
+	assert.Equal(t, "remote child\n", tree["thing/child.txt"])
+	assert.Contains(t, modelContents(tree), "local file\n")
+	assert.FileExists(t, filepath.Join(syncRoot, "thing", "child.txt"))
+	requireScenarioQuietPlan(t, eng)
+}
+
+func modelContents(tree map[string]string) []string {
+	contents := make([]string, 0, len(tree))
+	for _, content := range tree {
+		contents = append(contents, content)
+	}
+
+	return contents
+}
+
+// Validates: R-2.17.4
+//
+// A populated folder replaced locally by a file converges (found by the
+// model test's type-change operation): the deletes of the folder's children
+// ran a local-absence check that failed on "parent folder is not a folder",
+// so the folder delete waiting for them never ran. Below a local file nothing
+// can exist, so the children are absent.
+func TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFolder("item-dir", "root", "photos")
+	remote.addFile(t, "item-a", "item-dir", "a.txt", "a\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	require.NoError(t, os.RemoveAll(filepath.Join(syncRoot, "photos")))
+	writeLocalFile(t, syncRoot, "photos", "now a file\n")
+
+	runScenarioPass(t, eng)
+
+	assert.Equal(t, map[string]string{"photos": "now a file\n", "keep.txt": "keep\n"}, remote.tree())
+	requireScenarioQuietPlan(t, eng)
+}
