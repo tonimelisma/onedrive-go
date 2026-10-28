@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -230,4 +231,31 @@ func readTreeContents(t *testing.T, root string, withFolders bool) map[string]st
 	require.NoError(t, err)
 
 	return out
+}
+
+// syncStateDump renders the baseline, remote_state and local_state rows for a
+// failure message: a non-converging seed is diagnosed from these three views.
+func syncStateDump(t *testing.T, eng *testEngine) string {
+	t.Helper()
+
+	var out strings.Builder
+	for _, q := range []struct{ name, sql string }{
+		{"baseline", `SELECT path, item_id, item_type, COALESCE(local_hash, ''), local_inode FROM baseline ORDER BY path`},
+		{"remote_state", `SELECT path, item_id, item_type, COALESCE(hash, ''), 0 FROM remote_state ORDER BY path`},
+		{"local_state", `SELECT path, '', item_type, COALESCE(hash, ''), local_inode FROM local_state ORDER BY path`},
+	} {
+		rows, err := eng.baseline.rawDB().QueryContext(t.Context(), q.sql)
+		require.NoError(t, err)
+		out.WriteString("\n  " + q.name + ":")
+		for rows.Next() {
+			var p, id, kind, hash string
+			var inode int64
+			require.NoError(t, rows.Scan(&p, &id, &kind, &hash, &inode))
+			fmt.Fprintf(&out, "\n    %s %s %s %.8s ino=%d", p, id, kind, hash, inode)
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+	}
+
+	return out.String()
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	stdsync "sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,7 +34,12 @@ import (
 //  4. Quiescence: once converged, the next plan is empty.
 //
 // Failures print the seed; rerun one with ONEDRIVE_GO_MODEL_SEED=<seed> and
-// widen the search with ONEDRIVE_GO_MODEL_SEEDS=<count>.
+// widen the search with ONEDRIVE_GO_MODEL_SEEDS=<count>, starting at
+// ONEDRIVE_GO_MODEL_SEED_START=<seed> (default 1). The default run is
+// modelDefaultSeeds, cheap enough for every CI run; a nightly or local search
+// sets the count. Each seed that found a bug is kept as a named scenario test
+// (engine_move_scenario_test.go), because adding operations renumbers what a
+// seed does.
 //
 // A seed replays exactly (D-090): the engine dispatches each ready frontier in
 // an order shuffled by the seed on one worker, and the fake OneDrive shuffles
@@ -58,12 +64,13 @@ const (
 	modelFolderSentinel      = "/"
 	modelSeedEnv             = "ONEDRIVE_GO_MODEL_SEED"
 	modelSeedCountEnv        = "ONEDRIVE_GO_MODEL_SEEDS"
+	modelSeedStartEnv        = "ONEDRIVE_GO_MODEL_SEED_START"
 	modelTraceEnv            = "ONEDRIVE_GO_MODEL_TRACE"
 	modelConflictMarker      = ".conflict-"
 	modelLocalSide           = "local"
 	modelRemoteSide          = "remote"
-	modelFileNamePool        = "a.txt b.txt c.md"
-	modelFolderNamePool      = "docs photos x"
+	modelFileNamePool        = "a.txt b.txt c.md 50%.txt a+b.txt"
+	modelFolderNamePool      = "docs photos x q%20r"
 	modelOpCreateFile        = "create-file"
 	modelOpEditFile          = "edit-file"
 	modelOpDelete            = "delete"
@@ -127,9 +134,15 @@ func modelSeeds(t *testing.T) []uint64 {
 		require.NoError(t, err, modelSeedCountEnv)
 		count = parsed
 	}
+	start := uint64(1)
+	if raw := os.Getenv(modelSeedStartEnv); raw != "" {
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		require.NoError(t, err, modelSeedStartEnv)
+		start = parsed
+	}
 	seeds := make([]uint64, count)
 	for i := range seeds {
-		seeds[i] = uint64(i + 1)
+		seeds[i] = start + uint64(i)
 	}
 
 	return seeds
@@ -169,6 +182,20 @@ type modelRun struct {
 	writes   int
 	log      []string
 
+	// caseSensitive gates the operations only a case-sensitive local
+	// filesystem can express.
+	caseSensitive bool
+	// expectHoldOf is the side a wipe emptied: the next pass must hold the
+	// deletes it would propagate.
+	expectHoldOf string
+	// afterFirstPass is a user's response to what the first pass did (a
+	// collision to rename); its edits join the batch's.
+	afterFirstPass func() []modelEdit
+	// clock is the engine's clock, a passage of time ahead of the wall clock
+	// that grows by modelPassInterval before every pass after a batch's
+	// first.
+	clock *modelClock
+
 	// transcript is every dispatched action and every converged tree, in
 	// order, with conflict-copy timestamps masked: two runs of one seed must
 	// produce the same transcript.
@@ -186,7 +213,10 @@ func runModelScenario(t *testing.T, seed uint64) *modelRun {
 	run := &modelRun{
 		t: t, seed: seed, rng: rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)), //nolint:gosec // deterministic test RNG
 		remote: remote, eng: eng, syncRoot: h.syncRoot, harness: h,
+		caseSensitive: localFSIsCaseSensitive(t.TempDir()),
+		clock:         &modelClock{},
 	}
+	eng.clock = run.clock
 	order := eng.dispatchOrder
 	if order == nil {
 		order = dispatchOrderShuffle(seed)
@@ -203,25 +233,11 @@ func runModelScenario(t *testing.T, seed uint64) *modelRun {
 	run.requireConverged("initial")
 
 	for batch := 1; batch <= modelBatches; batch++ {
-		before := run.localTree()
-		var edits []modelEdit
-		for range run.rng.IntN(modelMaxOpsPerSide + 1) {
-			if edit, ok := run.localEdit(); ok {
-				edits = append(edits, edit)
-			}
-		}
-		for range run.rng.IntN(modelMaxOpsPerSide + 1) {
-			if edit, ok := run.remoteEdit(); ok {
-				edits = append(edits, edit)
-			}
-		}
-		if run.rng.IntN(modelMirroredMoveOdds) == 0 {
-			edits = append(edits, run.mirroredMove()...)
-		}
-
 		label := fmt.Sprintf("batch %d", batch)
+		before := run.localTree()
 		h.beginRound(t)
-		run.syncUntilQuiet(label)
+		edits := run.applyBatchEdits(label)
+		edits = append(edits, run.syncUntilQuiet(label)...)
 		converged := run.requireConverged(label)
 		run.requireWrittenContentSurvives(label, edits, converged)
 		run.requireUntouchedFilesUnchanged(label, before, edits, converged)
@@ -289,15 +305,27 @@ func (r *modelRun) seedInitialTree() {
 // the delete-safety hold. The model plays a user who confirms: a pass that
 // held deletes is followed by a `--confirm-deletes` pass, and the held pass
 // itself counts as a change so the loop keeps going.
-func (r *modelRun) syncUntilQuiet(label string) {
+func (r *modelRun) syncUntilQuiet(label string) []modelEdit {
 	confirm := false
+	var userEdits []modelEdit
 	for pass := 1; pass <= modelMaxSyncPasses; pass++ {
+		if pass > 1 {
+			r.clock.advance(modelPassInterval)
+		}
 		report, err := r.eng.RunOnce(r.t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: confirm})
 		require.NoError(r.t, err, "%s pass %d: %s", label, pass, r.failureContext())
 		held := report.HeldLocalDeletes + report.HeldRemoteDeletes
 		confirm = held > 0
 		changed := report.Uploads + report.Downloads + report.LocalDeletes + report.RemoteDeletes +
 			report.FolderCreates + report.Moves + held
+		if pass == 1 {
+			r.requireWipeHeld(label, report)
+			if r.afterFirstPass != nil {
+				userEdits = append(userEdits, r.afterFirstPass()...)
+				r.afterFirstPass = nil
+				changed++
+			}
+		}
 		if os.Getenv(modelTraceEnv) != "" {
 			r.t.Logf("%s pass %d: up=%d down=%d ldel=%d rdel=%d mkdir=%d mv=%d ok=%d failed=%d errors=%v\n  local:  %v\n  remote: %v",
 				label, pass, report.Uploads, report.Downloads, report.LocalDeletes, report.RemoteDeletes,
@@ -305,17 +333,64 @@ func (r *modelRun) syncUntilQuiet(label string) {
 				modelPaths(r.localTree()), modelPaths(r.remote.tree()))
 		}
 		if changed == 0 && report.Failed == 0 {
-			return
+			resolved := r.resolveNameCollisions()
+			if len(resolved) == 0 {
+				return userEdits
+			}
+			userEdits = append(userEdits, resolved...)
 		}
 	}
-	require.Failf(r.t, modelNotConvergedMessage, "%s: still changing after %d passes; %s",
-		label, modelMaxSyncPasses, r.failureContext())
+	require.Failf(r.t, modelNotConvergedMessage, "%s: still changing after %d passes; %s\nstate:%s",
+		label, modelMaxSyncPasses, r.failureContext(), syncStateDump(r.t, r.eng))
+
+	return userEdits
+}
+
+// modelPassInterval is how much later the model's user runs each further
+// pass of a batch: past the longest retry backoff (one hour), so work an
+// earlier pass failed is due again, as it would be by the time a user, or
+// watch mode, syncs next. Without it a retry held by its backoff read as
+// non-convergence after eight instant passes.
+const modelPassInterval = time.Hour + time.Minute
+
+// modelClock is the wall clock plus an offset the model advances.
+type modelClock struct {
+	realClock
+	mu     stdsync.Mutex
+	offset time.Duration
+}
+
+func (c *modelClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return time.Now().Add(c.offset)
+}
+
+func (c *modelClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.offset += d
+}
+
+// requireWipeHeld checks that the first pass after a side was wiped held the
+// deletes instead of propagating them (D-002).
+func (r *modelRun) requireWipeHeld(label string, report *Report) {
+	switch r.expectHoldOf {
+	case modelLocalSide:
+		require.Positive(r.t, report.HeldRemoteDeletes, "%s: a wiped local side must hold the OneDrive deletes; %s", label, r.failureContext())
+	case modelRemoteSide:
+		require.Positive(r.t, report.HeldLocalDeletes, "%s: a wiped OneDrive must hold the local deletes; %s", label, r.failureContext())
+	}
+	r.expectHoldOf = ""
 }
 
 func (r *modelRun) requireConverged(label string) map[string]string {
 	local := r.localTree()
 	remote := r.remote.tree()
-	require.Equal(r.t, remote, local, "%s: local and OneDrive differ; %s", label, r.failureContext())
+	if !assert.Equal(r.t, remote, local, "%s: local and OneDrive differ; %s", label, r.failureContext()) {
+		require.FailNow(r.t, modelNotConvergedMessage, "state:%s", syncStateDump(r.t, r.eng))
+	}
 
 	return local
 }
@@ -460,9 +535,10 @@ func (r *modelRun) newPathIn(folders []string, pool string, tree map[string]stri
 	return candidate
 }
 
-func (r *modelRun) localEdit() (modelEdit, bool) {
-	tree := r.localTree()
-	switch r.pick([]string{modelOpCreateFile, modelOpEditFile, modelOpDelete, modelOpMove, modelOpMakeFolder, modelOpReplace}) {
+// localBasicEdit is one of the original local operations: create, edit,
+// delete, move, mkdir or a type change.
+func (r *modelRun) localBasicEdit(kind string, tree map[string]string) (modelEdit, bool) {
+	switch kind {
 	case modelOpReplace:
 		return r.localReplace(tree)
 	case modelOpCreateFile:
@@ -474,15 +550,6 @@ func (r *modelRun) localEdit() (modelEdit, bool) {
 		writeLocalFile(r.t, r.syncRoot, filepath.FromSlash(p), content)
 		r.logf("local create %s", p)
 		return modelEdit{side: modelLocalSide, kind: modelOpCreateFile, path: p, content: content}, true
-	case modelOpEditFile:
-		p := r.pick(modelEntriesOf(tree, false))
-		if p == "" {
-			return modelEdit{}, false
-		}
-		content := r.nextContent(modelLocalSide)
-		writeLocalFile(r.t, r.syncRoot, filepath.FromSlash(p), content)
-		r.logf("local edit %s", p)
-		return modelEdit{side: modelLocalSide, kind: modelOpEditFile, path: p, content: content}, true
 	case modelOpDelete:
 		p := r.pick(append(modelEntriesOf(tree, false), modelEntriesOf(tree, true)...))
 		if p == "" {
@@ -518,9 +585,9 @@ func (r *modelRun) localMove(tree map[string]string) (modelEdit, bool) {
 	return modelEdit{side: modelLocalSide, kind: modelOpMove, path: from, to: to}, true
 }
 
-func (r *modelRun) remoteEdit() (modelEdit, bool) {
-	tree := r.remote.tree()
-	switch r.pick([]string{modelOpCreateFile, modelOpEditFile, modelOpDelete, modelOpMove, modelOpMakeFolder, modelOpReplace}) {
+// remoteBasicEdit is one of the original remote operations.
+func (r *modelRun) remoteBasicEdit(kind string, tree map[string]string) (modelEdit, bool) {
+	switch kind {
 	case modelOpReplace:
 		return r.remoteReplace(tree)
 	case modelOpCreateFile:
@@ -533,14 +600,7 @@ func (r *modelRun) remoteEdit() (modelEdit, bool) {
 		r.logf("remote create %s", p)
 		return modelEdit{side: modelRemoteSide, kind: modelOpCreateFile, path: p, content: content}, true
 	case modelOpEditFile:
-		p := r.pick(modelEntriesOf(tree, false))
-		if p == "" {
-			return modelEdit{}, false
-		}
-		content := r.nextContent(modelRemoteSide)
-		r.remote.putFileAt(r.t, p, content)
-		r.logf("remote edit %s", p)
-		return modelEdit{side: modelRemoteSide, kind: modelOpEditFile, path: p, content: content}, true
+		return r.remoteEditFile(tree)
 	case modelOpDelete:
 		p := r.pick(append(modelEntriesOf(tree, false), modelEntriesOf(tree, true)...))
 		if p == "" {
