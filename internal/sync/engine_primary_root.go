@@ -191,7 +191,7 @@ func (flow *engineFlow) executeDriveRootFullObservation(
 	bl *Baseline,
 	kind resyncKind,
 ) (remoteObservationBatch, error) {
-	events, token, topology, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl, kind)
+	full, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl, kind)
 	if err != nil && isObservationRemoteReadDenied(err) {
 		return buildRemoteObservationBatch(
 			flow.engine,
@@ -206,12 +206,13 @@ func (flow *engineFlow) executeDriveRootFullObservation(
 	batch := buildRemoteObservationBatch(
 		flow.engine,
 		remoteObservationModeDelta,
-		events,
-		token,
+		full.events,
+		full.token,
 		true,
 		newRemoteObservationFindingsBatch(),
 	)
-	batch.shortcutTopology = topology
+	batch.shortcutTopology = full.topology
+	batch.fullRefreshDueSoon = full.orphansUndecided
 	return batch, err
 }
 

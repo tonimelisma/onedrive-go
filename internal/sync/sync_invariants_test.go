@@ -49,7 +49,15 @@ type syncHarness struct {
 func newSyncHarness(t *testing.T, remote *moveScenarioRemote) *syncHarness {
 	t.Helper()
 
-	eng, syncRoot := newTestEngine(t, remote.client(t))
+	return newSyncHarnessWithClient(t, remote, remote.client(t))
+}
+
+// newSyncHarnessWithClient syncs with remote through client, a wrapper of
+// remote's own client (the chaos layer).
+func newSyncHarnessWithClient(t *testing.T, remote *moveScenarioRemote, client *engineMockClient) *syncHarness {
+	t.Helper()
+
+	eng, syncRoot := newTestEngine(t, client)
 
 	return &syncHarness{eng: eng, remote: remote, syncRoot: syncRoot}
 }
@@ -256,7 +264,7 @@ func syncStateRows(t *testing.T, eng *testEngine, query string) string {
 		var p, id, kind, hash string
 		var inode int64
 		require.NoError(t, rows.Scan(&p, &id, &kind, &hash, &inode))
-		fmt.Fprintf(&out, "\n    %s %s %s %.8s ino=%d", p, id, kind, hash, inode)
+		fmt.Fprintf(&out, "\n    %s %s %s %s ino=%d", p, id, kind, hash, inode)
 	}
 	require.NoError(t, rows.Err())
 
@@ -270,9 +278,10 @@ func syncStateDump(t *testing.T, eng *testEngine) string {
 
 	var out strings.Builder
 	for _, q := range []struct{ name, sql string }{
-		{"baseline", `SELECT path, item_id, item_type, COALESCE(local_hash, ''), local_inode FROM baseline ORDER BY path`},
+		{"baseline", `SELECT path, item_id, item_type, COALESCE(local_hash, '') || ' / ' || COALESCE(remote_hash, ''), local_inode FROM baseline ORDER BY path`},
 		{"remote_state", `SELECT path, item_id, item_type, COALESCE(hash, ''), 0 FROM remote_state ORDER BY path`},
 		{"local_state", `SELECT path, '', item_type, COALESCE(hash, ''), local_inode FROM local_state ORDER BY path`},
+		{"pending_creates", `SELECT path, item_id, created_etag, local_hash, local_size FROM pending_creates ORDER BY path`},
 	} {
 		out.WriteString("\n  " + q.name + ":")
 		out.WriteString(syncStateRows(t, eng, q.sql))

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -246,4 +247,50 @@ func TestFullRefresh_OrphanStillLiveOnOneDriveIsNotDeleted(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.FileExists(t, filepath.Join(syncRoot, "a.txt"), "an item a live lookup still finds is not deleted")
+}
+
+// Validates: R-2.15.3, R-6.2.2
+//
+// A full rescan whose lookup of a missing item failed keeps the item, as it
+// must: absence is not proof. But the rescan also saves a fresh delta
+// position, which never reports that item again, so only the next full rescan
+// can judge it, and that was a day away: until then a file OneDrive replaced
+// by a folder stayed in the remote mirror, the folder was shown as a name
+// twin, and its contents were not synced (chaos Graph layer, D-092, seed 4).
+// An undecided orphan pulls the next full rescan forward.
+func TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFile(t, "item-a", "root", "a.txt", "file\n")
+	client := remote.client(t)
+	getItem := client.getItemFn
+	failLookup := false
+	client.getItemFn = func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
+		if failLookup && itemID == "item-a" {
+			return nil, &graph.GraphError{StatusCode: http.StatusServiceUnavailable, Err: graph.ErrServerError}
+		}
+		return getItem(ctx, driveID, itemID)
+	}
+	h := newSyncHarnessWithClient(t, remote, client)
+	clock := &modelClock{}
+	h.eng.clock = clock
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	remote.deleteAt(t, "a.txt")
+	remote.mkdirAt(t, "a.txt")
+	remote.putFileAt(t, "a.txt/inside.txt", "inside\n")
+	failLookup = true
+	_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{FullReconcile: true})
+	require.NoError(t, err)
+	failLookup = false
+
+	clock.advance(fullRefreshAfterFolderDeleteDelay + time.Minute)
+	for range 2 {
+		runScenarioPass(t, h.eng)
+	}
+
+	requireScenarioLocalFile(t, h.syncRoot, "a.txt/inside.txt", "inside\n")
+	assertSyncInvariants(t, h)
 }

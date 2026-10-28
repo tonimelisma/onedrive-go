@@ -185,7 +185,11 @@ func (e *Engine) confirmMountRootOrphans(ctx context.Context, listed []graph.Ite
 		inside[listed[i].ID] = struct{}{}
 	}
 
-	return e.confirmEnumerationOrphans(ctx, orphans, inside)
+	// An undecided orphan stays for the next listing, which a mount root's
+	// enumeration repeats every pass anyway.
+	confirmed, _ := e.confirmEnumerationOrphans(ctx, orphans, inside)
+
+	return confirmed
 }
 
 // confirmEnumerationOrphans looks up each delete a complete enumeration
@@ -193,17 +197,19 @@ func (e *Engine) confirmMountRootOrphans(ctx context.Context, listed []graph.Ite
 // drive-root enumeration, where any live item is still in scope; for a mount
 // root it holds the mount root and every item the listing returned. An
 // unconfirmed orphan produces no event, so its local copy stays and the next
-// complete enumeration judges it again.
+// complete enumeration judges it again. undecided reports an orphan whose
+// lookup failed: unlike one found live, it still needs that judgement, and
+// soon (observeRemoteFullWithShortcutTopology).
 func (e *Engine) confirmEnumerationOrphans(
 	ctx context.Context,
 	orphans []changeEvent,
 	inside map[string]struct{},
-) []changeEvent {
+) (confirmed []changeEvent, undecided bool) {
 	if len(orphans) == 0 || e.itemsClient == nil {
-		return orphans
+		return orphans, false
 	}
 
-	confirmed := make([]changeEvent, 0, len(orphans))
+	confirmed = make([]changeEvent, 0, len(orphans))
 	for i := range orphans {
 		orphan := orphans[i]
 		live, err := e.itemsClient.GetItem(ctx, e.driveID, orphan.ItemID)
@@ -211,6 +217,7 @@ func (e *Engine) confirmEnumerationOrphans(
 		case errors.Is(err, graph.ErrNotFound):
 			confirmed = append(confirmed, orphan)
 		case err != nil:
+			undecided = true
 			e.logger.Debug("could not confirm an item missing from a listing is gone; keeping it",
 				slog.String("path", orphan.Path), slog.String("error", err.Error()))
 		case live == nil:
@@ -230,7 +237,7 @@ func (e *Engine) confirmEnumerationOrphans(
 		}
 	}
 
-	return confirmed
+	return confirmed, undecided
 }
 
 // mountAncestorLookupLimit bounds the parent walk that proves an item left

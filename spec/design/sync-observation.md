@@ -111,6 +111,11 @@ Important properties:
   (`TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally`,
   `TestHandleRemoteObservationBatch_SyncedFolderTombstonePullsFullRefreshForward`,
   `TestRunOnce_VirtualTime_FolderDeletesSpaceFullRefreshes`)
+- a full refresh whose lookup of an orphan failed keeps the item (absence is
+  not proof) and makes the next full refresh due within the same 15 minutes:
+  the delta position saved with the refresh never reports that item again,
+  so the next refresh, not a day-later one, has to judge it
+  (`TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward`)
 - HTTP 410 delta expiry is surfaced as `deltaExpiredError`, which carries the
   resync flavor from the error's inner code; recovery is the engine's full
   refresh with orphan detection, in watch mode too (`SetDeltaExpiredRecovery`,

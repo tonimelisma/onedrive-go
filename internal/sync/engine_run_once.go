@@ -250,7 +250,9 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 		); err != nil {
 			return false, fmt.Errorf("sync: marking full remote refresh: %w", err)
 		}
-		return false, nil
+		if !observation.fullRefreshDueSoon {
+			return false, nil
+		}
 	}
 	if observation.fullRefreshDueSoon {
 		deadlineChanged, err := flow.deps.store.ClampFullRemoteRefreshDeadline(
@@ -289,8 +291,21 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 // delta. Returns all events (creates/modifies from the full enumeration +
 // synthesized deletes for orphans) and the new delta token.
 func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]changeEvent, string, error) {
-	events, token, _, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl, resyncKindApplyDifferences)
-	return events, token, err
+	full, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl, resyncKindApplyDifferences)
+	return full.events, full.token, err
+}
+
+// fullRemoteObservation is what a full enumeration with orphan detection
+// observed.
+type fullRemoteObservation struct {
+	events   []changeEvent
+	token    string
+	topology shortcutTopologyBatch
+	// orphansUndecided reports an item missing from the enumeration whose
+	// lookup failed. It is kept, not deleted, but the delta position saved
+	// with this enumeration will never report it again: only another full
+	// enumeration can, so the next one is due soon rather than in a day.
+	orphansUndecided bool
 }
 
 // observeRemoteFullWithShortcutTopology is the one full-enumeration path with
@@ -303,12 +318,12 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	ctx context.Context,
 	bl *Baseline,
 	kind resyncKind,
-) ([]changeEvent, string, shortcutTopologyBatch, error) {
+) (fullRemoteObservation, error) {
 	eng := flow.engine
 	obs := newRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 	obs.SetItemClient(eng.itemsClient)
 	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
-		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
+		return fullRemoteObservation{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
 	obs.SetShortcutTopology(eng.shortcutNamespaceID, eng.protectedRoots)
 
@@ -318,7 +333,7 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	// building seen from events synthesized a delete for it (D-008).
 	events, token, topology, seen, err := obs.FullEnumerationWithShortcutTopology(ctx)
 	if err != nil {
-		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: full remote refresh delta: %w", err)
+		return fullRemoteObservation{}, fmt.Errorf("sync: full remote refresh delta: %w", err)
 	}
 	for i := range events {
 		if !events[i].IsDeleted && events[i].ItemID != "" {
@@ -335,13 +350,13 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	// phantom remote change, and the baseline scan above never sees it.
 	remoteRows, err := eng.baseline.ListRemoteState(ctx)
 	if err != nil {
-		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: listing remote state for full refresh: %w", err)
+		return fullRemoteObservation{}, fmt.Errorf("sync: listing remote state for full refresh: %w", err)
 	}
 	orphans = append(orphans, findRemoteStateOrphans(remoteRows, seen, orphans, eng.driveID)...)
 
 	// A complete enumeration that omits an item is not proof it is gone
 	// (Graph omits items transiently); only a live 404 or deleted facet is.
-	orphans = eng.confirmEnumerationOrphans(ctx, orphans, nil)
+	orphans, undecided := eng.confirmEnumerationOrphans(ctx, orphans, nil)
 	if !kind.orphansAreDeletes() {
 		markOrphansForReupload(orphans)
 	}
@@ -358,7 +373,7 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 		slog.Int("orphans", len(orphans)),
 	)
 
-	return events, token, topology, nil
+	return fullRemoteObservation{events: events, token: token, topology: topology, orphansUndecided: undecided}, nil
 }
 
 // markOrphansForReupload turns confirmed orphans into re-uploads: their
