@@ -261,11 +261,11 @@ func actionRequiresParentFolder(actionType actionType) bool {
 // Returns deps where deps[i] contains the indices that action i depends on.
 // Rules: (1) folder create before any action in that subtree,
 // (2) child delete/cleanup before parent folder delete,
-// (3) move target parent must exist first, (4) a folder delete waits for
-// same-side moves that carry descendants out of it, (5) the create half of a
-// type-change replacement waits for the delete at the same path, (6) a remote
-// create waits for the remote delete or move-away of a sibling whose name
-// differs only in case.
+// (3) moves order against each other and against the work around them
+// (addMoveDeps), (4) a folder delete waits for same-side moves that carry
+// descendants out of it, (5) the create half of a type-change replacement
+// waits for the delete at the same path, (6) a remote create waits for the
+// remote delete or move-away of a sibling whose name differs only in case.
 func buildDependencies(actions []Action) [][]int {
 	deps := make([][]int, len(actions))
 
@@ -296,7 +296,7 @@ func buildDependencies(actions []Action) [][]int {
 		deps[i] = addConflictCopyDep(deps[i], i, &actions[i], conflictCopyIdx)
 		deps[i] = addChildDeleteDeps(deps[i], i, &actions[i], deleteIdx)
 		deps[i] = addSamePathReplacementDep(deps[i], i, &actions[i], deleteIdx)
-		deps[i] = addRemoteMoveDeps(deps[i], i, &actions[i], actions)
+		deps[i] = addMoveDeps(deps[i], i, &actions[i], actions)
 		deps[i] = addMoveOutOfDeletedFolderDeps(deps[i], i, &actions[i], actions)
 		deps[i] = addRemoteCaseVariantDeps(deps[i], i, &actions[i], actions)
 		// Sort dependency indices for reproducible ordering (B-154).
@@ -446,26 +446,121 @@ func addRemoteCaseVariantDeps(deps []int, idx int, a *Action, actions []Action) 
 	return deps
 }
 
-func addRemoteMoveDeps(deps []int, idx int, a *Action, actions []Action) []int {
-	if a.Type == ActionRemoteMove || a.Type == ActionLocalDelete || a.Type == ActionRemoteDelete || a.Type == ActionCleanup {
-		return deps
-	}
-
-	for moveIdx := range actions {
-		move := &actions[moveIdx]
-		if moveIdx == idx || move.Type != ActionRemoteMove {
+// addMoveDeps orders moves (D-054). Move composition emits a move only when
+// these rules give it a consistent place in the plan
+// (planner_move_composition.go), and every rule is expressed in the paths the
+// actions carry:
+//   - work at or under a move's destination runs after the move: the target
+//     parent must exist, and a move composed into a folder an earlier move
+//     places waits for it;
+//   - a move onto the path another move of the same side vacates waits for it;
+//   - a move waits for the work under its source that does not follow it to
+//     its destination (children leave first, and writes addressed at the old
+//     path land before the folder moves away).
+//
+// Before, only remote moves ordered anything, local moves fabricated their
+// missing parents with MkdirAll, and a child moved into a folder renamed in
+// the same plan created a stray copy of the folder.
+func addMoveDeps(deps []int, idx int, a *Action, actions []Action) []int {
+	for otherIdx := range actions {
+		if otherIdx == idx {
 			continue
 		}
-		if move.Path == a.Path {
-			deps = append(deps, moveIdx)
+		other := &actions[otherIdx]
+		if isMoveAction(other) && movePrecedes(other, a) {
+			deps = append(deps, otherIdx)
 			continue
 		}
-		if resolveItemType(move.View) == ItemTypeFolder && strings.HasPrefix(a.Path, move.Path+"/") {
-			deps = append(deps, moveIdx)
+		if isMoveAction(a) && underMoveSource(other, a) && !underMoveDestination(other, a) {
+			deps = append(deps, otherIdx)
+			continue
+		}
+		if isMoveAction(a) && isDeleteAction(other) && other.Path == a.Path {
+			// The old occupant of the destination leaves first.
+			deps = append(deps, otherIdx)
 		}
 	}
 
 	return deps
+}
+
+func isDeleteAction(a *Action) bool {
+	return a.Type == ActionLocalDelete || a.Type == ActionRemoteDelete || a.Type == ActionCleanup
+}
+
+func isMoveAction(a *Action) bool {
+	return a.Type == ActionLocalMove || a.Type == ActionRemoteMove
+}
+
+// movePrecedes reports whether move must run before a.
+func movePrecedes(move, a *Action) bool {
+	if underMoveDestination(a, move) || createsAtVacatedSource(a, move) {
+		return true
+	}
+	return isMoveAction(a) && a.Type == move.Type && a.Path == move.OldPath
+}
+
+// underMoveDestination reports whether a works at or below move's
+// destination.
+func underMoveDestination(a, move *Action) bool {
+	if a.Path == move.Path && !isMoveAction(a) && !isDeleteAction(a) {
+		return true
+	}
+	if strings.HasPrefix(a.Path, move.Path+"/") {
+		return true
+	}
+
+	return isMoveAction(a) && strings.HasPrefix(a.OldPath, move.Path+"/")
+}
+
+// underMoveSource reports whether a works strictly below move's source in
+// the coordinates the move vacates: a move on the same side by its source; for
+// a local move, local writes (rebased to where the folder sits locally now);
+// for a remote move, remote deletes addressed at the item's old remote path.
+// Local creates under a remote move's old path belong to a new local entry
+// there (rename and recreate), not to the moved item, so they do not hold it.
+func underMoveSource(a, move *Action) bool {
+	if move.OldPath == "" || !strings.HasPrefix(movedSourcePath(a, move), move.OldPath+"/") {
+		return false
+	}
+	switch {
+	case a.Type == move.Type:
+		return true
+	case isMoveAction(a):
+		return false
+	case move.Type == ActionLocalMove:
+		return writesLocally(a)
+	default:
+		return a.Type == ActionRemoteDelete || a.Type == ActionCleanup
+	}
+}
+
+func movedSourcePath(a, move *Action) string {
+	if a.Type == move.Type {
+		return a.OldPath
+	}
+
+	return a.Path
+}
+
+// createsAtVacatedSource reports a create of a new item at the path a move
+// vacates on the create's side: it must wait for the move (a new local entry
+// at a remotely moved item's old path, D-056).
+func createsAtVacatedSource(a, move *Action) bool {
+	if a.Path != move.OldPath || move.OldPath == "" {
+		return false
+	}
+	switch move.Type {
+	case ActionRemoteMove:
+		return a.Type == ActionUpload || (a.Type == ActionFolderCreate && a.CreateSide == CreateRemote)
+	case ActionLocalMove:
+		return a.Type == ActionDownload || (a.Type == ActionFolderCreate && a.CreateSide == createLocal)
+	case ActionDownload, ActionUpload, ActionLocalDelete, ActionRemoteDelete,
+		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
+		return false
+	default:
+		return false
+	}
 }
 
 // countByType counts actions grouped by ActionType. Exported for use by the

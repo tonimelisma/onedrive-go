@@ -659,6 +659,27 @@ func (e *executor) validateLocalMovePrecondition(action *Action) error {
 	return e.validateLocalMoveSourceAgainstBaseline(source, info, action.View.Baseline)
 }
 
+// validateLocalMoveParentExists requires the destination's parent directory to
+// exist already.
+func (e *executor) validateLocalMoveParentExists(action *Action) error {
+	parent := filepath.Dir(action.Path)
+	if parent == "." || parent == "" {
+		return nil
+	}
+	info, err := e.syncTree.Lstat(parent)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return stalePreconditionError("local move destination parent %s is missing", parent)
+		}
+		return normalizeSyncTreePathError(err)
+	}
+	if !info.IsDir() {
+		return stalePreconditionError("local move destination parent %s is not a directory", parent)
+	}
+
+	return nil
+}
+
 func (e *executor) validateLocalDeleteFolderPrecondition(action *Action, relPath string) error {
 	if action == nil || action.View == nil || action.View.Baseline == nil {
 		return nil
@@ -704,12 +725,37 @@ func (e *executor) validateLocalMoveDestinationAbsent(action *Action, source str
 	return nil
 }
 
+// validateLocalMoveSourceAgainstBaseline requires the source to still be the
+// synced item: the same type and, when known, the same filesystem identity.
+// Its content may have changed (D-053): a rename carries the bytes unchanged,
+// the move outcome keeps the baseline's content facts, and the next pass
+// uploads the local edit at the destination. Requiring unchanged content
+// superseded the remote move on every pass and stranded the edit.
 func (e *executor) validateLocalMoveSourceAgainstBaseline(
 	source string,
 	info os.FileInfo,
 	baseline *BaselineEntry,
 ) error {
-	return e.validateLocalSourceAgainstBaseline("local move", source, info, baseline)
+	if info.IsDir() != (baseline.ItemType == ItemTypeFolder) {
+		return stalePreconditionError("local move source %s changed type", source)
+	}
+
+	return e.validateLocalSourceIdentity("local move", source, baseline)
+}
+
+func (e *executor) validateLocalSourceIdentity(op string, source string, baseline *BaselineEntry) error {
+	if !baseline.LocalHasIdentity {
+		return nil
+	}
+	identity, err := e.syncTree.IdentityNoFollow(source)
+	if err == nil && !synctree.SameIdentity(identity, synctree.FileIdentity{
+		Device: baseline.LocalDevice,
+		Inode:  baseline.LocalInode,
+	}) {
+		return stalePreconditionError("%s source %s changed identity", op, source)
+	}
+
+	return nil
 }
 
 func (e *executor) validateLocalSourceAgainstBaseline(
@@ -746,17 +792,7 @@ func (e *executor) validateLocalSourceAgainstBaseline(
 			}
 		}
 	}
-	if baseline.LocalHasIdentity {
-		identity, identityErr := e.syncTree.IdentityNoFollow(source)
-		if identityErr == nil && !synctree.SameIdentity(identity, synctree.FileIdentity{
-			Device: baseline.LocalDevice,
-			Inode:  baseline.LocalInode,
-		}) {
-			return stalePreconditionError("%s source %s changed identity", op, source)
-		}
-	}
-
-	return nil
+	return e.validateLocalSourceIdentity(op, source, baseline)
 }
 
 // symlinkBoundaryForPath reports the first component of relPath, the final

@@ -66,6 +66,16 @@ local_move_candidates AS (
 	WHERE NOT EXISTS (SELECT 1 FROM baseline target WHERE target.path = l.path)
 		AND EXISTS (SELECT 1 FROM remote_state rs WHERE rs.item_id = b.item_id)
 		AND NOT EXISTS (SELECT 1 FROM remote_state occupied WHERE occupied.path = l.path AND occupied.item_id <> b.item_id)
+		-- The item has not left its baseline path while that path still
+		-- holds its identity: a second name for the same inode is a hard
+		-- link, which uploads as a new file, never as a move (D-056).
+		AND NOT EXISTS (
+			SELECT 1 FROM local_state src
+			WHERE src.path = b.path
+				AND src.local_has_identity = 1
+				AND src.local_device = b.local_device
+				AND src.local_inode = b.local_inode
+		)
 	UNION ALL
 	SELECT
 		b.path AS source_path,
@@ -79,6 +89,9 @@ local_move_candidates AS (
 		AND NULLIF(l.hash, '') = NULLIF(b.local_hash, '')
 	WHERE b.local_hash IS NOT NULL
 		AND b.local_hash <> ''
+		-- Without identity, content alone cannot tell a move from a copy: the
+		-- source must be gone.
+		AND NOT EXISTS (SELECT 1 FROM local_state src WHERE src.path = b.path)
 		AND NOT EXISTS (SELECT 1 FROM baseline target WHERE target.path = l.path)
 		AND EXISTS (SELECT 1 FROM remote_state rs WHERE rs.item_id = b.item_id)
 		AND NOT EXISTS (SELECT 1 FROM remote_state occupied WHERE occupied.path = l.path AND occupied.item_id <> b.item_id)
@@ -110,7 +123,12 @@ remote_move_sources AS (
 		r.path AS target_path
 	FROM baseline b
 	JOIN remote_state r ON r.item_id = b.item_id AND r.path <> b.path
-	WHERE EXISTS (SELECT 1 FROM local_state ls WHERE ls.path = b.path)
+	-- The local source must still be the item: a type change at the source
+	-- is a replacement, not something a rename could carry.
+	WHERE EXISTS (
+			SELECT 1 FROM local_state ls
+			WHERE ls.path = b.path AND COALESCE(ls.item_type, '') = COALESCE(b.item_type, '')
+		)
 		-- A destination the other side filled with something else in the
 		-- meantime is not a move target: the source plays out as a delete
 		-- (hash-verified, recoverable) and the destination as a create/create
@@ -206,6 +224,17 @@ comparison_flags AS (
 			WHEN COALESCE(b.item_id, '') <> COALESCE(r.item_id, '') THEN 1
 			ELSE 0
 		END AS remote_item_replaced,
+		-- The entry at the baseline path is not the synced item: renamed away
+		-- and a new entry created in its place (D-056).
+		CASE
+			WHEN b.path IS NULL OR l.path IS NULL THEN 0
+			WHEN COALESCE(b.local_has_identity, 0) = 1 AND COALESCE(l.local_has_identity, 0) = 1
+				AND (
+					COALESCE(b.local_device, 0) <> COALESCE(l.local_device, 0)
+					OR COALESCE(b.local_inode, 0) <> COALESCE(l.local_inode, 0)
+				) THEN 1
+			ELSE 0
+		END AS local_item_replaced,
 		CASE
 			WHEN l.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(l.item_type, '') <> COALESCE(r.item_type, '') THEN 0
@@ -304,9 +333,13 @@ comparison_state AS (
 		remote_type_changed,
 		remote_move_shadowed,
 		remote_item_replaced,
+		local_item_replaced,
 		metadata_drift,
 		CASE
-			WHEN baseline_present = 1 AND local_present = 0 AND local_move_candidate_count = 1 THEN 'local_move_source'
+			-- The synced item moved; a new entry at its old path (rename and
+			-- recreate) is planned as a create by move composition.
+			WHEN baseline_present = 1 AND local_move_candidate_count = 1 AND local_move_target <> ''
+				AND (local_present = 0 OR local_item_replaced = 1) THEN 'local_move_source'
 			WHEN baseline_present = 1 AND local_present = 0 AND remote_present = 0 THEN 'both_missing'
 			WHEN local_present = 1 AND baseline_present = 0 AND local_move_source <> '' AND local_move_candidate_count = 1 THEN 'local_move_dest'
 			WHEN baseline_present = 1 AND remote_move_target <> '' THEN 'remote_move_source'

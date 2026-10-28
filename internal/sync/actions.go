@@ -64,6 +64,16 @@ type Action struct {
 	// now sits at the destination. Freshness checks the destination against
 	// it, and the move outcome publishes it as the baseline's local half.
 	MovedLocal *localState
+	// MovedLocalPath is where MovedLocal sits in the local snapshot when that
+	// is not Path: a move composed under a parent that an earlier move of the
+	// same plan puts in place (planner_move_composition.go). local_state is
+	// observation-owned and does not follow the plan's own moves, so
+	// freshness reads the moved item there.
+	MovedLocalPath string
+	// MovedRemotePath is where remote_state holds the item of a remote-origin
+	// move (ActionLocalMove) when that is not Path: a child renamed inside a
+	// folder before an OneDrive rename of the folder is applied locally.
+	MovedRemotePath string
 }
 
 // ThrottleTargetKey returns the narrowest remote boundary that can be blocked

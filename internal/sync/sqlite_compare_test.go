@@ -465,3 +465,69 @@ func TestQueryReconciliationState_LocallyDeletedFolderReplacedOnlineIsRecreatedL
 	require.NoError(t, err)
 	assert.Equal(t, "folder_create_local", reconciliationKindsByPath(reconciliationRows)["shared"])
 }
+
+// Validates: R-2.17.8
+//
+// Move pairing asks whether the item left its baseline path (D-056). A second
+// name for the same inode (a hard link) or a copy of an identity-less file
+// leaves the source in place and is a new file; a rename followed by a new
+// entry at the old name is a move plus a create.
+func TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (
+			item_id, path, item_type, local_hash, remote_hash,
+			local_size, remote_size, local_mtime, remote_mtime,
+			local_device, local_inode, local_has_identity
+		)
+		VALUES
+			('item-linked', 'linked.txt', 'file', 'h1', 'h1', 3, 3, 1, 1, 9, 1, 1),
+			('item-copied', 'copied.txt', 'file', 'h2', 'h2', 3, 3, 1, 1, 0, 0, 0),
+			('item-recreated', 'recreated.txt', 'file', 'h3', 'h3', 3, 3, 1, 1, 9, 3, 1),
+			('item-dir', 'dir', 'folder', NULL, NULL, NULL, NULL, NULL, NULL, 9, 4, 1)`)
+	require.NoError(t, err)
+
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO local_state (path, item_type, hash, size, mtime, local_device, local_inode, local_has_identity)
+		VALUES
+			('linked.txt', 'file', 'h1', 3, 1, 9, 1, 1),
+			('hard-link.txt', 'file', 'h1', 3, 1, 9, 1, 1),
+			('copied.txt', 'file', 'h2', 3, 1, 0, 0, 0),
+			('copy.txt', 'file', 'h2', 3, 1, 0, 0, 0),
+			('recreated.txt', 'file', 'fresh', 5, 2, 9, 30, 1),
+			('renamed.txt', 'file', 'h3', 3, 1, 9, 3, 1),
+			('dir', 'folder', NULL, NULL, NULL, 9, 40, 1),
+			('renamed-dir', 'folder', NULL, NULL, NULL, 9, 4, 1)`)
+	require.NoError(t, err)
+
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+		VALUES
+			('item-linked', 'linked.txt', 'file', 'h1', 3, 1),
+			('item-copied', 'copied.txt', 'file', 'h2', 3, 1),
+			('item-recreated', 'recreated.txt', 'file', 'h3', 3, 1),
+			('item-dir', 'dir', 'folder', NULL, NULL, NULL)`)
+	require.NoError(t, err)
+
+	comparisonRows, err := store.QueryComparisonState(ctx)
+	require.NoError(t, err)
+	kinds := comparisonKindsByPath(comparisonRows)
+	assert.Equal(t, "unchanged", kinds["linked.txt"], "a hard link leaves the synced name in place")
+	assert.Equal(t, "local_only_create", kinds["hard-link.txt"])
+	assert.Equal(t, "unchanged", kinds["copied.txt"])
+	assert.Equal(t, "local_only_create", kinds["copy.txt"])
+	assert.Equal(t, "local_move_source", kinds["recreated.txt"], "renamed away, then recreated")
+	assert.Equal(t, "local_move_dest", kinds["renamed.txt"])
+	assert.Equal(t, "local_move_source", kinds["dir"], "a folder renamed away with a new folder at its name")
+	assert.Equal(t, "local_move_dest", kinds["renamed-dir"])
+
+	reconciliationRows, err := store.QueryReconciliationState(ctx)
+	require.NoError(t, err)
+	got := reconciliationKindsByPath(reconciliationRows)
+	assert.Equal(t, "upload", got["hard-link.txt"])
+	assert.Equal(t, "upload", got["copy.txt"])
+}

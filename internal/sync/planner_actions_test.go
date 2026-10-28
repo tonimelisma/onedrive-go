@@ -146,46 +146,6 @@ func TestPlannerPlanCurrentState_LocalFolderMoveByIdentityPlansSingleRemoteMove(
 	assert.Equal(t, "Renamed Projects", plan.Actions[0].Path)
 }
 
-// Validates: R-2.1.3, R-2.1.4
-func TestOmitDescendantRemoteMovesCoveredByFolderMoves_KeepsDescendantRename(t *testing.T) {
-	t.Parallel()
-
-	actions := []Action{
-		{
-			Type:    ActionRemoteMove,
-			OldPath: "Projects",
-			Path:    "Archive",
-			View: &pathView{
-				Local: &localState{ItemType: ItemTypeFolder},
-			},
-		},
-		{
-			Type:    ActionRemoteMove,
-			OldPath: "Projects/kept.txt",
-			Path:    "Archive/kept.txt",
-			View: &pathView{
-				Local: &localState{ItemType: ItemTypeFile},
-			},
-		},
-		{
-			Type:    ActionRemoteMove,
-			OldPath: "Projects/old.txt",
-			Path:    "Archive/new.txt",
-			View: &pathView{
-				Local: &localState{ItemType: ItemTypeFile},
-			},
-		},
-	}
-
-	normalized := omitDescendantRemoteMoveActionsCoveredByGraphFolderMoves(actions)
-
-	require.Len(t, normalized, 2)
-	assert.Equal(t, "Projects", normalized[0].OldPath)
-	assert.Equal(t, "Projects/old.txt", normalized[1].OldPath)
-	assert.Equal(t, "Archive/new.txt", normalized[1].Path)
-	assert.Len(t, actions, 3, "normalization should not mutate the caller's action slice")
-}
-
 // Validates: R-2.17.1
 func TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate(t *testing.T) {
 	t.Parallel()

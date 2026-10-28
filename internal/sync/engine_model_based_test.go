@@ -64,7 +64,7 @@ const (
 	modelNotConvergedMessage = "sync did not converge"
 )
 
-// Validates: R-2.3.1, R-2.17.1, R-2.17.2, R-2.17.3
+// Validates: R-2.3.1, R-2.17.1, R-2.17.2, R-2.17.3, R-2.17.6, R-2.17.7, R-2.17.8
 func TestRunOnce_RandomizedBidirectionalEditsConverge(t *testing.T) {
 	t.Parallel()
 

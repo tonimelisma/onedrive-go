@@ -1,6 +1,6 @@
 # Sync Planning
 
-GOVERNS: internal/sync/planner.go, internal/sync/planner_actions.go, internal/sync/planner_delete_safety.go, internal/sync/planner_truth_overlay.go
+GOVERNS: internal/sync/planner.go, internal/sync/planner_actions.go, internal/sync/planner_move_composition.go, internal/sync/planner_delete_safety.go, internal/sync/planner_truth_overlay.go
 
 LAYER: 2
 
@@ -77,6 +77,9 @@ intent; multisync receives only that child work intent.
 | Folder-delete descendants are reconciled by SQLite after planner-visible pruning, with parent availability preserved only when descendant work requires it. | `TestReplacePlannerVisibleStateTx_PrunesRemoteDescendantsWhenBaselineFolderMissingRemotely`, `TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMissingLocally`, `TestPlannerPlanCurrentState_RemoteParentDeletePlansDescendantLocalDeleteThroughSQLite`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_LocalParentDeleteCreatesParentForChangedRemoteChild`, `TestPlannerPlanCurrentState_BothParentSidesDeletedCleansUpDescendantsThroughSQLite` |
 | A file move needs content corroboration beyond inode identity; identity without it is delete + create, and unhashed moves carry the destination's observed truth. | `TestQueryReconciliationState_LocalFileMoveRequiresContentCorroboration`, `TestQueryReconciliationState_LocalFileMoveIdentityWithoutContentIsNotAMove`, `TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate`, `TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads`, `TestActionFreshness_LocalOriginMoveRejectsChangedDestination` |
 | Locally deleted or unpaired moved folders are deleted on OneDrive after their descendants, never re-created locally; identity-paired folder moves are one remote move. | `TestQueryReconciliationState_FolderDecisionMatrix`, `TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes`, `TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildMoves`, `TestRunOnce_LocalFolderDeleteDeletesRemoteFolder`, `TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource` |
+| Moves are composed per item (R-2.17.6): the same rename on both sides only re-keys the baseline and keeps either side's edit pending; divergent renames keep OneDrive's name; cross moves that would nest folders keep the OneDrive move; collisions undo the local claim; moves order against each other and their surroundings, a local move never fabricates its parent, and a pass that cannot order a move defers it. | `TestComposeMoves_OneSidedRenamesMoveTheOtherSide`, `TestComposeMoves_SameRenameOnBothSidesOnlyRekeysTheBaseline`, `TestComposeMoves_DivergentRenameKeepsTheOneDriveName`, `TestComposeMoves_CrossMoveCycleKeepsTheRemoteMove`, `TestComposeMoves_DescendantRenameInsideRenamedFolder`, `TestComposeMoves_RemoteHierarchyInversionOrdersLocalMoves`, `TestComposeMoves_LocalMoveIntoRemotelyRenamedFolder`, `TestComposeMoves_OccupiedDestinationDefers`, `TestComposeMoves_FrozenItemsAndTheirSubtreesDoNotMove`, `TestBuildDependencies_NestedMoveEdges`, `TestRunOnce_BothSidesRenamedIdenticallyConverges`, `TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending`, `TestRunOnce_DivergentRenameConvergesInTwoPasses`, `TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting`, `TestRunOnce_RemoteHierarchyInversionConverges`, `TestRunOnce_RemoteFolderRenameWithChildRenameAndMoveInConverges`, `TestRunOnce_LocalFolderRenameWithChildRenameConvergesInOnePass`, `TestRunOnce_RemoteFolderRenameWithNewSubfolderConverges`, `TestExecutor_LocalMove_MissingDestinationParentIsStale`, `TestRunOnce_RandomizedBidirectionalEditsConverge` |
+| A remote move of a locally edited file moves the local copy with its edit and uploads the edit afterwards (R-2.17.7); a local rename racing a remote edit downloads the edit (R-2.17.3). | `TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads`, `TestExecutor_LocalMove_LocallyEditedSourceStillMovesAndKeepsTheEditPending`, `TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit` |
+| Move pairing requires the item to have left its baseline path: hard links and copies are new files, rename-and-recreate is a move plus a create (R-2.17.8). | `TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated`, `TestRunOnce_HardLinkUploadsAsANewFile`, `TestRunOnce_RenameAndRecreateMovesThenCreates` |
 | Remote moves applied locally carry the source baseline and do not re-upload unchanged content. | `TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline`, `TestRunOnce_RemoteRenameAppliedLocallyDoesNotReupload` |
 | Type changes on either side are replacements ordered delete-then-create, never a silent stall. | `TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem`, `TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem`, `TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem`, `TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem`, `TestRunOnce_LocalFileReplacedByFolderConverges` |
 | Deletes toward one side are held for confirmation when the other side is empty while the baseline holds files, or when they exceed max(50, 30% of baseline files); moves never count, non-delete work continues, and `sync --confirm-deletes` releases them. | `TestPlanner_MassRemoteDeleteIsHeldForConfirmation`, `TestPlanner_MassLocalDeleteAfterAnomalousFullRefreshIsHeld`, `TestPlanner_EmptiedLocalSideHoldsEvenFewDeletes`, `TestPlanner_DeleteGuardBelowThresholdProceeds`, `TestPlanner_DeleteGuardIgnoresMoves`, `TestDeleteSafetyHold_FolderDeletesCountTowardThreshold`, `TestDeleteSafetyHold_LostAndFoundDoesNotMakeASideNonEmpty`, `TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`, `TestDeleteSafetyHold_ConfirmReleasesExactlyTheHeldSet`, `TestDeleteSafetyHold_HeldRowWithoutItemIDDoesNotApproveAKnownItem`, `TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked` |
@@ -128,10 +131,11 @@ same derivation rather than a second planner-shaped helper.
    derived status.
 7. Emit the current runtime action set from reconciliation rows, including
    conflict expansion into concrete actions.
-8. Normalize the action set: omit descendant remote-move actions already covered
-   by a folder move sent to Graph, and preserve a deleted parent folder only
-   when runnable descendant actions in the current sync mode need that parent to
-   exist.
+8. Compose moves per item (`planner_move_composition.go`) and normalize the
+   action set: preserve a deleted parent folder only when runnable descendant
+   actions in the current sync mode need that parent to exist, then rebase
+   remote-origin local writes to where folders sit locally and new local
+   content under a folder this plan renames locally to the folder's new path.
 9. Partition the normalized action set into admitted work and mode-deferred
    counts.
 10. Bind ordinary actions to the engine's mounted drive/root context, build
@@ -349,11 +353,75 @@ path. Move-to-move edges are skipped: two moves that trade case-variant names
 would otherwise wait on each other, and a blocked rename fails on its name
 conflict and is retried.
 
-Local folder moves execute as `ActionRemoteMove` work. Graph applies a folder
-move to unchanged descendants, so descendant `ActionRemoteMove` entries whose
-old/new suffixes are exactly covered by the folder move are omitted from the
-executable action set. Descendant renames or content work that are not covered
-by the folder move remain explicit actions.
+### Move Composition
+
+SQLite proves where each synced item sits now (identity pairing locally, item
+ID remotely); `composeMoves` decides where it ends up (R-2.17.6). It works on
+locations, an item's parent and name on each side, because a path is the
+composition of every ancestor's move: composing path by path planned a remote
+move whose source the local side had already moved (D-051), superseded the same
+rename made on both sides forever (D-050), and moved two folders into each
+other (D-055). An item whose location changed on a side was relocated there;
+one that only follows a moved parent needs no move of its own, which is why no
+descendant move is ever emitted for a folder move.
+
+The target is the relocating side's location. When both sides relocated an
+item: to the same place, nothing moves and a publication-only
+`ActionBaselineUpdate` with `OldPath` re-keys the baseline row and its subtree,
+keeping the content facts of a side that also edited the item so the edit is
+still transferred; to different places, OneDrive's location wins (policy P-6,
+chosen because neither choice loses data and remote-wins needs no remote
+mutation) and the local copy is moved there, with an Info notice. A cycle in the
+target tree (local A→B/A while OneDrive moved B→A/B) undoes the local
+relocations on it, so local follows OneDrive and no folder nests in itself. Two
+items claiming one target path (namekey-folded), or a local claim landing where
+OneDrive created a new item, undo the local claim the same way. Undoing only
+ever restores OneDrive's locations, so the loop ends with the remote tree.
+
+Emission is conservative and in pass-local coordinates. A move is emitted only
+when its target parent is in place or is placed by a move earlier in the same
+plan, its destination is free in the snapshot or vacated by an earlier move,
+and its source is not displaced by a move that runs first. OneDrive moves are
+rebased through an ancestor's committed move (remote_state and the baseline
+follow it). Local moves are not, because `local_state` is observation-owned:
+a local child move runs inside its folder before the folder moves, or waits a
+pass. Anything that cannot be ordered is deferred, with a Debug notice, and the
+next pass, which observes the moves this one made, plans it simply; the
+shallowest pending item is always ready, so every pass progresses. Items whose
+paths touch unavailable truth are frozen with their subtree. Creates that would
+land on a path a composed item still holds this pass are dropped until the item
+has moved. A remote move whose local copy sits elsewhere in the snapshot carries
+`MovedLocalPath`, and a local move ordered before its folder's move carries
+`MovedRemotePath`, so freshness reads the snapshot where the item is.
+
+A remote move of a locally edited file is still applied (R-2.17.7): the local
+move source must be the same item (type and identity) but its content may
+differ; the rename carries the bytes, the outcome keeps the baseline's content
+facts, and the next pass uploads the edit as the same item. A move outcome
+re-paths the baseline subtree from the row's own previous path (looked up by
+item ID), not from `OldPath`, which for a local copy moved to OneDrive's name is
+a path the baseline never held.
+
+Move pairing requires the item to have left its baseline path (R-2.17.8): an
+identity pair is refused while the baseline path still holds the baseline
+identity (a hard link), a hash pair while the baseline path still exists (a copy
+without identity). When the baseline path holds a new entry (rename and
+recreate), SQLite still reports `local_move_source` and composition also plans
+the new entry as an upload or remote folder create that waits for the remote
+move to vacate the path. Swaps and rotations are deliberately not paired: the
+paths keep their items and exchange content, which is the same end state
+without a temporary name.
+
+`buildDependencies` orders moves by the paths they carry (`addMoveDeps`): work
+at or below a move's destination runs after it; a move onto a path another move
+of the same side vacates waits for it; a move waits for same-side moves out of
+its source, for local writes under a local move's source and for remote deletes
+under a remote move's source; a create at the path a move vacates waits for the
+move; the delete of a destination's old occupant runs first. `ExecuteLocalMove`
+requires the destination's parent to exist and reports a missing one as stale
+instead of creating it (D-054). A local folder create's outcome never moves the
+item in `remote_state` (it may run at a local path that differs from OneDrive's
+until a parent's local move commits).
 
 ## Mount-Local Planning
 

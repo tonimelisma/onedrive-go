@@ -45,7 +45,11 @@ func (p *planner) PlanCurrentState(
 		return nil, err
 	}
 
-	allActions := make([]Action, 0, len(reconciliations))
+	moveInputs := moveCompositionInputs(comparisons, views, remoteRows, localRows)
+	composition := composeMoves(moveInputs.nodes, moveInputs.occupancy, moveInputs.frozen)
+	logMoveNotices(p.logger, composition.notices)
+
+	allActions := buildComposedMoveActions(&composition, &moveInputs, views, baseline)
 	for i := range reconciliations {
 		rec := reconciliations[i]
 		cmp, ok := comparisonByPath[rec.Path]
@@ -72,7 +76,8 @@ func (p *planner) PlanCurrentState(
 		allActions = append(allActions, actions...)
 	}
 
-	normalizedActions := normalizeCurrentPlanActions(allActions, mode)
+	normalizedActions := normalizeCurrentPlanActions(allActions, remoteToLocalFolderPrefixes(moveInputs.nodes), mode)
+	normalizedActions = dropCreatesOntoComposedItems(normalizedActions, &moveInputs, &composition)
 	admitted, deferred := partitionCurrentActionsForMode(normalizedActions, mode)
 	bindMountContext(admitted, mount)
 
@@ -95,61 +100,24 @@ func (p *planner) PlanCurrentState(
 // normalizeCurrentPlanActions keeps SQL as structural authority, then applies
 // action-only execution semantics that cannot be represented by a single path's
 // reconciliation row.
-func normalizeCurrentPlanActions(actions []Action, mode SyncMode) []Action {
-	actions = omitDescendantRemoteMoveActionsCoveredByGraphFolderMoves(actions)
-	actions = rebaseLocalWritesThroughLocalFolderMoves(actions)
-	actions = omitDescendantLocalMovesCoveredByLocalFolderMoves(actions)
-	return preserveParentFoldersForRunnableDescendants(actions, mode)
+//
+// Parent preservation runs first: it matches descendants by the paths SQLite
+// reconciled them at, which are consistent with each other; the rebases then
+// move whole subtrees, preserved parents included, to where they execute.
+func normalizeCurrentPlanActions(actions []Action, remoteToLocal []graphFolderMoveBoundary, mode SyncMode) []Action {
+	actions = preserveParentFoldersForRunnableDescendants(actions, mode)
+	actions = rebaseLocalWritesToLocalFolderPositions(actions, remoteToLocal)
+	return rebaseRemoteCreatesThroughLocalFolderMoves(actions)
 }
 
-// rebaseLocalWritesThroughLocalFolderMoves composes the two sides' moves. A
-// remote-origin action that writes locally carries remote paths, but a folder
-// the user renamed locally in the same plan no longer exists at its old local
-// path: OneDrive moving photos into docs/x while docs was renamed locally to
-// renamed-docs must land at renamed-docs/x. Applied at the old path, the move
-// re-created docs/ locally, and the next pass uploaded the stray folders.
-// Remote-side writes need no rebasing: they address parents by item ID.
-func rebaseLocalWritesThroughLocalFolderMoves(actions []Action) []Action {
-	var folderMoves []graphFolderMoveBoundary
-	for i := range actions {
-		action := &actions[i]
-		if action.Type != ActionRemoteMove || resolveItemType(action.View) != ItemTypeFolder || action.OldPath == "" {
-			continue
-		}
-		folderMoves = append(folderMoves, graphFolderMoveBoundary{
-			oldPrefix: action.OldPath + "/",
-			newPrefix: action.Path + "/",
-		})
-	}
-	if len(folderMoves) == 0 {
-		return actions
-	}
-	// The deepest moved folder decides, so nested renames compose.
-	sort.Slice(folderMoves, func(i, j int) bool {
-		return len(folderMoves[i].oldPrefix) > len(folderMoves[j].oldPrefix)
-	})
-
-	rebased := make([]Action, len(actions))
-	copy(rebased, actions)
-	for i := range rebased {
-		if !writesLocally(&rebased[i]) {
-			continue
-		}
-		rebased[i].Path = rebaseThroughFolderMoves(rebased[i].Path, folderMoves)
-		rebased[i].OldPath = rebaseThroughFolderMoves(rebased[i].OldPath, folderMoves)
-	}
-
-	return rebased
-}
-
-// omitDescendantLocalMovesCoveredByLocalFolderMoves is the local mirror of
-// omitDescendantRemoteMoveActionsCoveredByGraphFolderMoves. A folder moved on
-// OneDrive arrives with its descendants' new remote paths, so each child also
-// pairs as a remote move; renaming the folder locally already carries every
-// child with an unchanged suffix. Left in, a child move could run first,
-// create the folder's destination, and make the folder move fail on a taken
-// path forever.
-func omitDescendantLocalMovesCoveredByLocalFolderMoves(actions []Action) []Action {
+// rebaseRemoteCreatesThroughLocalFolderMoves moves new local content under a
+// folder this plan renames locally (OneDrive renamed it) to the folder's new
+// path. The upload or remote folder create resolves its OneDrive parent from
+// the baseline, which knows the folder only at its new path once the local
+// move commits; addressed at the old local path it failed on every pass and
+// held the folder's move behind it. It now runs after the move. Its view keeps
+// the snapshot path, which is where freshness finds its local truth.
+func rebaseRemoteCreatesThroughLocalFolderMoves(actions []Action) []Action {
 	var folderMoves []graphFolderMoveBoundary
 	for i := range actions {
 		action := &actions[i]
@@ -164,33 +132,49 @@ func omitDescendantLocalMovesCoveredByLocalFolderMoves(actions []Action) []Actio
 	if len(folderMoves) == 0 {
 		return actions
 	}
+	sort.Slice(folderMoves, func(i, j int) bool {
+		return len(folderMoves[i].oldPrefix) > len(folderMoves[j].oldPrefix)
+	})
 
-	kept := make([]Action, 0, len(actions))
-	for i := range actions {
-		action := actions[i]
-		if action.Type == ActionLocalMove && moveCoveredByFolderMove(action.OldPath, action.Path, folderMoves) {
-			continue
+	rebased := make([]Action, len(actions))
+	copy(rebased, actions)
+	for i := range rebased {
+		action := &rebased[i]
+		isRemoteCreate := action.Type == ActionUpload ||
+			(action.Type == ActionFolderCreate && action.CreateSide == CreateRemote)
+		if isRemoteCreate {
+			action.Path = rebaseThroughFolderMoves(action.Path, folderMoves)
 		}
-		kept = append(kept, action)
 	}
 
-	return kept
+	return rebased
 }
 
-func moveCoveredByFolderMove(oldPath, newPath string, folderMoves []graphFolderMoveBoundary) bool {
-	if oldPath == "" {
-		return false
-	}
-	for _, move := range folderMoves {
-		if !strings.HasPrefix(oldPath, move.oldPrefix) || !strings.HasPrefix(newPath, move.newPrefix) {
-			continue
-		}
-		if strings.TrimPrefix(oldPath, move.oldPrefix) == strings.TrimPrefix(newPath, move.newPrefix) {
-			return true
-		}
+// rebaseLocalWritesToLocalFolderPositions makes remote-origin local writes
+// address the local tree as it is. They carry remote paths, but a folder that
+// sits elsewhere locally (renamed by the user, or renamed online and not yet
+// moved here) does not exist at its remote path: OneDrive creating photos/x
+// inside docs while docs was renamed locally to renamed-docs must land at
+// renamed-docs/x. Applied at the remote path, the write re-created docs/
+// locally, and the next pass uploaded the stray folder. Moves are already
+// composed (planner_move_composition.go), and a local move waits for the
+// writes under its source, so the rebased writes run before it. Remote-side
+// writes need no rebasing: they address parents by item ID.
+func rebaseLocalWritesToLocalFolderPositions(actions []Action, remoteToLocal []graphFolderMoveBoundary) []Action {
+	if len(remoteToLocal) == 0 {
+		return actions
 	}
 
-	return false
+	rebased := make([]Action, len(actions))
+	copy(rebased, actions)
+	for i := range rebased {
+		if rebased[i].Type == ActionLocalMove || !writesLocally(&rebased[i]) {
+			continue
+		}
+		rebased[i].Path = rebaseThroughFolderMoves(rebased[i].Path, remoteToLocal)
+	}
+
+	return rebased
 }
 
 // writesLocally reports remote-origin actions that apply OneDrive's state to
@@ -221,58 +205,36 @@ func rebaseThroughFolderMoves(p string, folderMoves []graphFolderMoveBoundary) s
 	return p
 }
 
+// graphFolderMoveBoundary maps a folder's subtree from one path prefix to
+// another.
 type graphFolderMoveBoundary struct {
 	oldPrefix string
 	newPrefix string
 }
 
-func omitDescendantRemoteMoveActionsCoveredByGraphFolderMoves(actions []Action) []Action {
-	var folderMoves []graphFolderMoveBoundary
-	for i := range actions {
-		action := actions[i]
-		if action.Type != ActionRemoteMove || resolveItemType(action.View) != ItemTypeFolder || action.OldPath == "" {
-			continue
+// logMoveNotices reports composition decisions a user may want to know about.
+func logMoveNotices(logger *slog.Logger, notices []moveNotice) {
+	if logger == nil {
+		return
+	}
+	for i := range notices {
+		n := &notices[i]
+		attrs := []any{
+			slog.String("path", n.baselinePath),
+			slog.String("local_path", n.localPath),
+			slog.String("remote_path", n.remotePath),
 		}
-		folderMoves = append(folderMoves, graphFolderMoveBoundary{
-			oldPrefix: action.OldPath + "/",
-			newPrefix: action.Path + "/",
-		})
-	}
-	if len(folderMoves) == 0 {
-		return append([]Action(nil), actions...)
-	}
-
-	normalized := make([]Action, 0, len(actions))
-	for i := range actions {
-		action := actions[i]
-		if descendantRemoteMoveActionCoveredByGraphFolderMove(action, folderMoves) {
-			continue
-		}
-		normalized = append(normalized, action)
-	}
-
-	return normalized
-}
-
-// descendantRemoteMoveActionCoveredByGraphFolderMove recognizes Graph's folder
-// move side effect: a folder move sent to Graph already moves unchanged
-// descendants with the same suffix under the new folder path.
-func descendantRemoteMoveActionCoveredByGraphFolderMove(action Action, folderMoves []graphFolderMoveBoundary) bool {
-	if action.Type != ActionRemoteMove || action.OldPath == "" {
-		return false
-	}
-	for _, move := range folderMoves {
-		if !strings.HasPrefix(action.OldPath, move.oldPrefix) || !strings.HasPrefix(action.Path, move.newPrefix) {
-			continue
-		}
-		oldSuffix := strings.TrimPrefix(action.OldPath, move.oldPrefix)
-		newSuffix := strings.TrimPrefix(action.Path, move.newPrefix)
-		if oldSuffix == newSuffix {
-			return true
+		switch n.kind {
+		case moveNoticeDivergentRename:
+			logger.Info("Renamed differently on both sides; keeping the OneDrive name and moving the local copy", attrs...)
+		case moveNoticeCycle:
+			logger.Info("Moves on both sides would nest the folders inside each other; keeping the OneDrive move", attrs...)
+		case moveNoticeCollision:
+			logger.Info("A local move collides with another item's place; keeping the OneDrive location", attrs...)
+		case moveNoticeDeferred:
+			logger.Debug("move waits for the next pass", append(attrs, slog.String("target_path", n.targetPath))...)
 		}
 	}
-
-	return false
 }
 
 func comparisonPaths(rows []sQLiteComparisonRow) []string {
@@ -435,10 +397,9 @@ func buildActionsForReconciliation(
 		return buildReplaceRemoteActions(view), nil
 	case "replace_local":
 		return buildReplaceLocalActions(view), nil
-	case strLocalMove:
-		return buildLocalMoveReconciliationActions(rec, cmp, view, views)
-	case strRemoteMove:
-		return buildRemoteMoveReconciliationActions(rec, cmp, view, views)
+	case strLocalMove, strRemoteMove:
+		// Moves are composed per item (planner_move_composition.go).
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("sync: unsupported reconciliation kind %q for %s", rec.ReconciliationKind, rec.Path)
 	}
@@ -499,108 +460,6 @@ func buildReplaceLocalActions(view *pathView) []Action {
 	download.RequireMissingLocalTarget = true
 
 	return []Action{deleteAction, download}
-}
-
-func buildLocalMoveReconciliationActions(
-	rec *sQLiteReconciliationRow,
-	cmp *sQLiteComparisonRow,
-	view *pathView,
-	views map[string]*pathView,
-) ([]Action, error) {
-	if cmp.ComparisonKind != "local_move_source" {
-		return nil, nil
-	}
-	if rec.LocalMoveTarget == "" {
-		return nil, fmt.Errorf("sync: local_move source %q missing target path", rec.Path)
-	}
-
-	action := makeAction(ActionRemoteMove, view)
-	action.OldPath = rec.Path
-	action.Path = rec.LocalMoveTarget
-	if targetView := views[rec.LocalMoveTarget]; targetView != nil {
-		action.MovedLocal = targetView.Local
-	}
-
-	actions := []Action{action}
-	if upload := localMoveContentUpdateAfterMove(rec.LocalMoveTarget, view, views); upload != nil {
-		actions = append(actions, *upload)
-	}
-
-	return actions, nil
-}
-
-func localMoveContentUpdateAfterMove(
-	targetPath string,
-	sourceView *pathView,
-	views map[string]*pathView,
-) *Action {
-	if sourceView == nil || sourceView.Baseline == nil || sourceView.Baseline.ItemType != ItemTypeFile {
-		return nil
-	}
-	targetView := views[targetPath]
-	if targetView == nil || targetView.Local == nil {
-		return nil
-	}
-	if !localFileDiffersFromBaseline(targetView.Local, sourceView.Baseline) {
-		return nil
-	}
-
-	updateView := *targetView
-	updateView.Baseline = sourceView.Baseline
-	updateView.Remote = sourceView.Remote
-	action := makeAction(ActionUpload, &updateView)
-	action.Path = targetPath
-
-	return &action
-}
-
-func localFileDiffersFromBaseline(local *localState, baseline *BaselineEntry) bool {
-	if local == nil || baseline == nil {
-		return false
-	}
-	if baseline.ItemType != ItemTypeFile || local.ItemType != ItemTypeFile {
-		return false
-	}
-	if baseline.LocalHash != "" || local.Hash != "" {
-		return baseline.LocalHash != local.Hash
-	}
-	if baseline.LocalSizeKnown && baseline.LocalSize != local.Size {
-		return true
-	}
-
-	return baseline.LocalMtime != local.Mtime
-}
-
-// buildRemoteMoveReconciliationActions turns a remote move into a local
-// rename. The destination path has no baseline row of its own, so the action
-// view carries the source's baseline: executor preconditions and freshness
-// validate the local source against it, and the move outcome republishes its
-// local half at the destination. Without it the moved row would lose its
-// local hash and identity, and the next scan would re-upload unchanged content.
-func buildRemoteMoveReconciliationActions(
-	rec *sQLiteReconciliationRow,
-	cmp *sQLiteComparisonRow,
-	view *pathView,
-	views map[string]*pathView,
-) ([]Action, error) {
-	if cmp.ComparisonKind != "remote_move_dest" {
-		return nil, nil
-	}
-	if rec.RemoteMoveSource == "" {
-		return nil, fmt.Errorf("sync: remote_move destination %q missing source path", rec.Path)
-	}
-
-	moveView := view
-	if sourceView := views[rec.RemoteMoveSource]; sourceView != nil && sourceView.Baseline != nil && view.Baseline == nil {
-		withSource := *view
-		withSource.Baseline = sourceView.Baseline
-		moveView = &withSource
-	}
-
-	action := makeAction(ActionLocalMove, moveView)
-	action.OldPath = rec.RemoteMoveSource
-
-	return []Action{action}, nil
 }
 
 func partitionCurrentActionsForMode(actions []Action, mode SyncMode) ([]Action, DeferredCounts) {

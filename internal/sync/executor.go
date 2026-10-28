@@ -454,12 +454,15 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 		)
 	}
 
-	// Ensure parent directory exists.
-	if err := e.syncTree.MkdirAll(filepath.Dir(action.Path), localDirPerms); err != nil {
+	// The parent must already exist. Planning orders a move after whatever
+	// creates or moves its target parent (D-054); fabricating a missing parent
+	// here hid ordering bugs and left stray folders that the next pass
+	// uploaded.
+	if err := e.validateLocalMoveParentExists(action); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionLocalMove,
-			fmt.Errorf("creating parent for move target %s: %w", action.Path, normalizeSyncTreePathError(err)),
+			err,
 			action.Path,
 			permissionCapabilityLocalWrite,
 		)

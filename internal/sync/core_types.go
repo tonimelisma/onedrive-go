@@ -178,6 +178,12 @@ func (b *Baseline) Put(entry *BaselineEntry) {
 			delete(b.ByID, old.ItemID)
 		}
 	}
+	// The same item at a new path leaves its old path, exactly as the
+	// item_id-keyed SQL row does; otherwise the cache kept a ghost entry at
+	// the old path.
+	if old, ok := b.ByID[entry.ItemID]; ok && old.Path != entry.Path {
+		b.deleteLocked(old.Path)
+	}
 
 	b.ByPath[entry.Path] = entry
 	b.ByID[entry.ItemID] = entry
@@ -206,6 +212,11 @@ func (b *Baseline) Delete(path string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	b.deleteLocked(path)
+}
+
+// deleteLocked is Delete for a caller holding mu.
+func (b *Baseline) deleteLocked(path string) {
 	if entry, ok := b.ByPath[path]; ok {
 		delete(b.ByID, entry.ItemID)
 	}
