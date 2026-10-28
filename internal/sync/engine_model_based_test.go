@@ -63,6 +63,7 @@ const (
 	modelOpMakeFolder        = "mkdir"
 	modelOpReplace           = "replace"
 	modelReplaceChildName    = "inside.txt"
+	modelMirroredMoveOdds    = 3
 	modelNotConvergedMessage = "sync did not converge"
 )
 
@@ -163,6 +164,9 @@ func runModelScenario(t *testing.T, seed uint64) {
 			if edit, ok := run.remoteEdit(); ok {
 				edits = append(edits, edit)
 			}
+		}
+		if run.rng.IntN(modelMirroredMoveOdds) == 0 {
+			edits = append(edits, run.mirroredMove()...)
 		}
 
 		label := fmt.Sprintf("batch %d", batch)
@@ -538,6 +542,45 @@ func (r *modelRun) remoteReplace(tree map[string]string) (modelEdit, bool) {
 	r.logf("remote replace %s", p)
 
 	return modelEdit{side: modelRemoteSide, kind: modelOpReplace, path: p, content: content}, true
+}
+
+// mirroredMove makes the same rename on both sides, as two devices (or a
+// crash after a move ran on one side, D-050) would. Only entries both sides
+// still hold at the same path qualify.
+func (r *modelRun) mirroredMove() []modelEdit {
+	local := r.localTree()
+	remote := r.remote.tree()
+	shared := map[string]string{}
+	for p, content := range local {
+		if remote[p] == content || (content == modelFolderSentinel && remote[p] == modelFolderSentinel) {
+			shared[p] = content
+		}
+	}
+	from, to, ok := r.pickMove(shared)
+	if !ok {
+		return nil
+	}
+	for p := range local {
+		if strings.EqualFold(p, to) {
+			return nil
+		}
+	}
+	for p := range remote {
+		if strings.EqualFold(p, to) {
+			return nil
+		}
+	}
+	require.NoError(r.t, os.Rename(
+		filepath.Join(r.syncRoot, filepath.FromSlash(from)),
+		filepath.Join(r.syncRoot, filepath.FromSlash(to)),
+	))
+	r.remote.moveAt(r.t, from, to)
+	r.logf("both move %s -> %s", from, to)
+
+	return []modelEdit{
+		{side: modelLocalSide, kind: modelOpMove, path: from, to: to},
+		{side: modelRemoteSide, kind: modelOpMove, path: from, to: to},
+	}
 }
 
 // pickMove chooses an existing entry and a free destination outside its own
