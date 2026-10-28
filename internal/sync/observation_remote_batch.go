@@ -18,6 +18,10 @@ type remoteObservationBatch struct {
 	emitted               []changeEvent
 	cursorToken           string
 	markFullRemoteRefresh bool
+	// fullRefreshDueNow pulls the full remote refresh forward to now: the
+	// window holds a fact only a full enumeration can complete
+	// (deltaWindowDeletesSyncedFolder).
+	fullRefreshDueNow     bool
 	findings              ObservationFindingsBatch
 	shortcutTopology      shortcutTopologyBatch
 	armFullRefreshTimer   bool

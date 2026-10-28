@@ -251,6 +251,18 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 		}
 		return false, nil
 	}
+	if observation.fullRefreshDueNow {
+		deadlineChanged, err := flow.deps.store.ClampFullRemoteRefreshDeadline(
+			ctx,
+			flow.engine.driveID,
+			flow.deps.now(),
+		)
+		if err != nil {
+			return false, fmt.Errorf("sync: pulling full remote refresh forward: %w", err)
+		}
+
+		return deadlineChanged, nil
+	}
 	if observation.observationMode == remoteObservationModeEnumerate {
 		deadlineChanged, err := flow.deps.store.ClampFullRemoteRefreshDeadline(
 			ctx,

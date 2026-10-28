@@ -352,6 +352,42 @@ func TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift(t *testing.T
 	requireScenarioQuietPlan(t, eng)
 }
 
+// Validates: R-2.17.2, R-2.15.3
+//
+// An item moved into a folder that is then deleted online, both between two
+// observations, is in no delta window: delta reports the deleted folder
+// alone, and the item's move is part of a subtree delta never repeats. Its
+// remote_state row stayed at the old path as a ghost, so the synced local
+// copy was never deleted (model test seed 28). The folder's tombstone makes
+// the next pass a full refresh, whose orphans are confirmed by ID.
+func TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFolder("item-bin", "root", "bin")
+	remote.addFile(t, "item-moved", "root", "moved.txt", "moved\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+	require.FileExists(t, filepath.Join(syncRoot, "moved.txt"))
+
+	remote.move("item-moved", "item-bin", "moved.txt")
+	remote.deleteRemotely("item-bin")
+	runScenarioPass(t, eng)
+	runScenarioPass(t, eng)
+
+	assert.NoDirExists(t, filepath.Join(syncRoot, "bin"))
+	assert.NoFileExists(t, filepath.Join(syncRoot, "moved.txt"), "the moved item was deleted with the folder")
+	assert.FileExists(t, filepath.Join(syncRoot, "keep.txt"))
+	var ghosts int
+	require.NoError(t, eng.baseline.rawDB().QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM remote_state WHERE item_id = 'item-moved'`).Scan(&ghosts))
+	assert.Zero(t, ghosts, "no remote_state row survives for an item deleted with its new parent")
+	requireScenarioQuietPlan(t, eng)
+}
+
 // Validates: R-2.17.4, R-2.17.10
 //
 // OneDrive replaced a file with a populated folder while the user edited the

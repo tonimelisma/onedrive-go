@@ -70,7 +70,7 @@ func TestHandleRemoteObservationBatch_EmptyCompleteTopologyApplyFailureDoesNotCo
 		return applyErr
 	}
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, "cursor-empty-complete")
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, nil, "cursor-empty-complete")
 	batch.cursorToken = "cursor-empty-complete"
 	batch.shortcutTopology = shortcutTopologyBatch{
 		NamespaceID: "personal:owner@example.com",
@@ -90,7 +90,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCommitsObservedRowsAndCursor(t
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, []changeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, []changeEvent{
 		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -114,7 +114,7 @@ func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *te
 	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 	ctx := t.Context()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, []changeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, []changeEvent{
 		testRemoteCreateEvent("hidden/remote.txt", "item-hidden", eng.driveID.String()),
 	}, "cursor-hidden")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -306,7 +306,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchClearsRemoteReadDeniedFindings
 	findings := rootRemoteReadDeniedObservationFindingsBatch(eng.driveID)
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &findings, eng.nowFunc()))
 
-	batch := buildPrimaryWatchBatch(eng.Engine, []changeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, []changeEvent{
 		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -332,7 +332,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCanceledContextReturnsCommitEr
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, []changeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, []changeEvent{
 		testRemoteCreateEvent("primary-canceled.txt", "item-canceled", eng.driveID.String()),
 	}, "cursor-canceled")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -351,7 +351,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchReconcileFailureIsFatal(t *tes
 	ctx := t.Context()
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, "")
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, nil, "")
 	batch.findings = rootRemoteReadDeniedObservationFindingsBatch(eng.driveID)
 
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -435,7 +435,7 @@ func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationR
 	}
 	rt.scopes.upsertActiveScope(serviceScope)
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, "")
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, nil, "")
 	batch.findings = rootRemoteReadDeniedObservationFindingsBatch(eng.driveID)
 	require.NoError(t, rt.handleRemoteObservationBatch(ctx, &batch))
 
@@ -448,4 +448,52 @@ func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationR
 	runtime, err := rt.runSteadyStateCurrentPlan(ctx, bl, SyncBidirectional)
 	require.NoError(t, err)
 	assert.Empty(t, runtime.Plan.Actions, "read-denied observation findings should suppress planning without reloading active scopes")
+}
+
+// Validates: R-2.17.2, R-2.15.3
+//
+// A watch-mode delta that deletes a synced folder makes the full refresh due
+// at once, since delta never reports an item moved into the folder in the
+// same window. The tombstone echo of a folder this client deleted (no longer
+// in the baseline) does not.
+func TestHandleRemoteObservationBatch_SyncedFolderTombstonePullsFullRefreshForward(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		inBase   bool
+		wantPull bool
+	}{
+		{name: "synced folder", inBase: true, wantPull: true},
+		{name: "own delete echo", inBase: false, wantPull: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			eng, _ := newTestEngine(t, &engineMockClient{})
+			setupWatchEngine(t, eng)
+			rt := testWatchRuntime(t, eng)
+			ctx := t.Context()
+			now := eng.nowFunc()
+			require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, eng.driveID, now, remoteObservationModeDelta))
+
+			bl := NewBaselineForTest(nil)
+			if tc.inBase {
+				bl.Put(&BaselineEntry{Path: "bin", DriveID: eng.driveID, ItemID: "item-bin", ParentID: "root", ItemType: ItemTypeFolder})
+			}
+			batch := buildPrimaryWatchBatch(eng.Engine, bl, []changeEvent{{
+				Source: sourceRemote, Type: ChangeDelete, Path: "bin", ItemID: "item-bin", ParentID: "root",
+				DriveID: eng.driveID, ItemType: ItemTypeFile, IsDeleted: true,
+			}}, "cursor-after-delete")
+			require.NoError(t, rt.handleRemoteObservationBatch(ctx, &batch))
+
+			state, err := eng.baseline.ReadObservationState(ctx)
+			require.NoError(t, err)
+			if tc.wantPull {
+				assert.Less(t, state.NextFullRemoteRefreshAt, now.Add(time.Hour).UnixNano(), "the full refresh is due now, not in 24 h")
+				return
+			}
+			assert.Equal(t, now.Add(fullRemoteRefreshInterval).UnixNano(), state.NextFullRemoteRefreshAt)
+		})
+	}
 }
