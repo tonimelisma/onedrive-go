@@ -903,3 +903,67 @@ func TestRunOnce_LocalRenameWhileOneDriveSwapsItConverges(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(h.syncRoot, "r.txt"))
 	assertSyncInvariants(t, h)
 }
+
+// Validates: R-2.17.1, R-2.17.2
+//
+// The user renamed folder d to e while OneDrive deleted d/x.txt. x.txt only
+// followed its folder locally, so OneDrive's delete must reach e/x.txt once
+// the folder rename reaches OneDrive. Its baseline path held nothing on
+// either side, so the baseline row was dropped as gone from both, and the
+// local copy then read as a new file and was uploaded: the delete was undone
+// (model test seed 31, where OneDrive replaced the file with a folder).
+func TestRunOnce_RemoteDeleteInsideFolderRenamedLocallyIsNotUndone(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("item-d", "root", "d")
+	remote.addFile(t, "item-x", "item-d", "x.txt", "X\n")
+	remote.addFile(t, "item-y", "item-d", "y.txt", "Y\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "d"), filepath.Join(h.syncRoot, "e")))
+	remote.deleteAt(t, "d/x.txt")
+	for range 3 {
+		runScenarioPass(t, h.eng)
+	}
+
+	assert.NoFileExists(t, filepath.Join(h.syncRoot, "e", "x.txt"), "OneDrive's delete is not undone")
+	assert.NotContains(t, remote.tree(), "e/x.txt", "the file is not uploaded again")
+	requireScenarioLocalFile(t, h.syncRoot, "e/y.txt", "Y\n")
+	assertSyncInvariants(t, h)
+}
+
+// Validates: R-2.17.1, R-2.17.4
+//
+// As above, but OneDrive also renamed d to f (its name wins) and replaced
+// x.txt with a folder holding a file. The new folder's download was rebased into the local folder before it moved,
+// onto the old x.txt still in the way, failed, and held the folder move
+// that would have resolved it, on every pass (model test seed 31). It now
+// waits for the folder move too, and the next pass replaces the unchanged
+// local file with OneDrive's folder.
+func TestRunOnce_RemoteReplaceInsideFolderRenamedLocallyConverges(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("item-d", "root", "d")
+	remote.addFile(t, "item-x", "item-d", "x.txt", "X\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "d"), filepath.Join(h.syncRoot, "e")))
+	remote.moveAt(t, "d", "f")
+	remote.deleteAt(t, "f/x.txt")
+	remote.mkdirAt(t, "f/x.txt")
+	remote.putFileAt(t, "f/x.txt/inside.txt", "inside\n")
+	for range 4 {
+		runScenarioPass(t, h.eng)
+	}
+
+	requireScenarioLocalFile(t, h.syncRoot, "f/x.txt/inside.txt", "inside\n")
+	assertSyncInvariants(t, h)
+}

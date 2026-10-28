@@ -191,8 +191,33 @@ followed_ancestor_deletes AS (
 			WHERE la.path = anc.path AND COALESCE(la.item_type, '') = 'folder'
 		)
 ),
+-- The mirror case: an item OneDrive deleted whose local copy only followed a
+-- folder the user renamed. The folder's move reaches OneDrive and re-paths
+-- the baseline row, and the next pass deletes the local copy (or, if it was
+-- edited, keeps it) like any other. Until then the local copy is not a new
+-- file to upload (that undid OneDrive's delete) and the baseline path is not
+-- gone from both sides.
+followed_local_ancestor_deletes AS (
+	SELECT
+		b.path AS baseline_path,
+		l.path AS local_path,
+		-- Where the item would sit online under the ancestor: whatever
+		-- OneDrive created there waits too, or its writes are rebased into
+		-- the moving folder onto the local copy still in the way.
+		ra.path || substr(b.path, length(lms.source_path) + 1) AS remote_equivalent
+	FROM baseline b
+	JOIN local_move_sources lms
+		ON lms.candidate_count = 1
+		AND substr(b.path, 1, length(lms.source_path) + 1) = lms.source_path || '/'
+	JOIN baseline anc ON anc.path = lms.source_path AND COALESCE(anc.item_type, '') = 'folder'
+	JOIN local_state l
+		ON l.path = lms.target_path || substr(b.path, length(lms.source_path) + 1)
+		AND COALESCE(l.item_type, '') = COALESCE(b.item_type, '')
+	JOIN remote_state ra ON ra.item_id = anc.item_id
+	WHERE NOT EXISTS (SELECT 1 FROM remote_state rs WHERE rs.item_id = b.item_id)
+		AND NOT EXISTS (SELECT 1 FROM local_state ls WHERE ls.path = b.path)
+),
 `
-
 	// sqlComparisonStateCTEs is the one definition of the comparison facts and
 	// the per-path comparison kind. QueryComparisonState and
 	// QueryReconciliationState both read it, on the live tables and on the
@@ -344,7 +369,14 @@ comparison_flags AS (
 			ELSE 0
 		END AS remote_type_changed,
 		CASE WHEN rmsh.path IS NOT NULL OR fad_remote.remote_path IS NOT NULL THEN 1 ELSE 0 END AS remote_move_shadowed,
-		CASE WHEN fad_baseline.baseline_path IS NOT NULL THEN 1 ELSE 0 END AS local_delete_awaits_ancestor_move,
+		CASE WHEN fad_baseline.baseline_path IS NOT NULL OR flad_baseline.baseline_path IS NOT NULL
+			THEN 1 ELSE 0 END AS delete_awaits_ancestor_move,
+		CASE WHEN flad_local.local_path IS NOT NULL THEN 1 ELSE 0 END AS local_copy_awaits_ancestor_move,
+		CASE WHEN EXISTS (
+			SELECT 1 FROM followed_local_ancestor_deletes flad_remote
+			WHERE p.path = flad_remote.remote_equivalent
+				OR substr(p.path, 1, length(flad_remote.remote_equivalent) + 1) = flad_remote.remote_equivalent || '/'
+		) THEN 1 ELSE 0 END AS remote_create_awaits_ancestor_move,
 		-- File content the change tests call unchanged can still carry new
 		-- metadata (touch, tar, rsync, chmod: same bytes, new mtime or ctime; or a new remote
 		-- mtime or eTag over the same hash).
@@ -383,6 +415,8 @@ comparison_flags AS (
 	LEFT JOIN remote_move_shadowed rmsh ON rmsh.path = p.path
 	LEFT JOIN followed_ancestor_deletes fad_remote ON fad_remote.remote_path = p.path
 	LEFT JOIN followed_ancestor_deletes fad_baseline ON fad_baseline.baseline_path = p.path
+	LEFT JOIN followed_local_ancestor_deletes flad_baseline ON flad_baseline.baseline_path = p.path
+	LEFT JOIN followed_local_ancestor_deletes flad_local ON flad_local.local_path = p.path
 ),
 comparison_state AS (
 	SELECT
@@ -406,7 +440,9 @@ comparison_state AS (
 		local_type_changed,
 		remote_type_changed,
 		remote_move_shadowed,
-		local_delete_awaits_ancestor_move,
+		delete_awaits_ancestor_move,
+		local_copy_awaits_ancestor_move,
+		remote_create_awaits_ancestor_move,
 		remote_item_replaced,
 		local_item_replaced,
 		local_subtree_changed,
@@ -418,13 +454,17 @@ comparison_state AS (
 			WHEN baseline_present = 1 AND local_move_candidate_count = 1 AND local_move_target <> ''
 				AND (local_present = 0 OR local_item_replaced = 1) THEN 'local_move_source'
 			WHEN baseline_present = 1 AND local_present = 0 AND remote_present = 0
-				AND local_delete_awaits_ancestor_move = 1 THEN 'local_delete_awaits_ancestor_move'
+				AND delete_awaits_ancestor_move = 1 THEN 'delete_awaits_ancestor_move'
 			WHEN baseline_present = 1 AND local_present = 0 AND remote_present = 0 THEN 'both_missing'
 			WHEN local_present = 1 AND baseline_present = 0 AND local_move_source <> '' AND local_move_candidate_count = 1 THEN 'local_move_dest'
 			WHEN baseline_present = 1 AND remote_move_target <> '' THEN 'remote_move_source'
 			WHEN remote_present = 1 AND baseline_present = 0 AND remote_move_source <> '' THEN 'remote_move_dest'
+			WHEN baseline_present = 0 AND local_present = 1 AND remote_present = 0
+				AND local_copy_awaits_ancestor_move = 1 THEN 'delete_awaits_ancestor_move'
 			WHEN baseline_present = 0 AND local_present = 1 AND remote_present = 0 THEN 'local_only_create'
 			WHEN baseline_present = 0 AND local_present = 0 AND remote_present = 1 AND remote_move_shadowed = 1 THEN 'remote_move_shadowed'
+			WHEN baseline_present = 0 AND local_present = 0 AND remote_present = 1
+				AND remote_create_awaits_ancestor_move = 1 THEN 'delete_awaits_ancestor_move'
 			WHEN baseline_present = 0 AND local_present = 0 AND remote_present = 1 THEN 'remote_only_create'
 			WHEN baseline_present = 0 AND local_present = 1 AND remote_present = 1 AND current_equal = 1 THEN 'create_equal'
 			WHEN baseline_present = 0 AND local_present = 1 AND remote_present = 1 THEN 'create_conflict'
@@ -519,8 +559,9 @@ reconciliation_state AS (
 			-- carries the item, so the remote copy is not a new download.
 			WHEN comparison_kind = 'remote_move_shadowed' THEN 'noop'
 			-- Planned as a remote delete next pass, once the ancestor's local
-			-- move has re-pathed the baseline (followed_ancestor_deletes).
-			WHEN comparison_kind = 'local_delete_awaits_ancestor_move' THEN 'noop'
+			-- move has re-pathed the baseline (followed_ancestor_deletes,
+			-- followed_local_ancestor_deletes).
+			WHEN comparison_kind = 'delete_awaits_ancestor_move' THEN 'noop'
 			WHEN comparison_kind = 'remote_only_create' AND item_type = 'folder' THEN 'folder_create_local'
 			WHEN comparison_kind = 'remote_only_create' THEN 'download'
 			WHEN comparison_kind = 'create_equal' THEN 'baseline_update'
