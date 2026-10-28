@@ -185,25 +185,16 @@ func (flow *engineFlow) rearmOrDiscardScope(ctx context.Context, scopeKey ScopeK
 	return nil
 }
 
-// feedScopeDetection feeds an action completion into scope detection sliding
-// windows. If a threshold is crossed, creates a block scope. Called directly
-// from the normal applyRuntimeCompletionStage switch — never called for trial
-// results because a live scope already owns the blocker lifecycle.
-func (flow *engineFlow) feedScopeDetection(ctx context.Context, r *actionCompletion) error {
-	if flow.scopes.state == nil {
-		return nil
+// detectScope feeds an action completion into scope detection's sliding
+// windows and reports whether it calls for a block scope. The caller
+// persists the completion's work blocked under that scope before activating
+// it (persistFailureWithScopeEffects).
+func (flow *engineFlow) detectScope(r *actionCompletion) scopeUpdateResult {
+	if flow.scopes.state == nil || r.HTTPStatus == 0 {
+		return scopeUpdateResult{}
 	}
 
-	if r.HTTPStatus == 0 {
-		return nil
-	}
-
-	sr := flow.scopes.state.UpdateScope(r)
-	if sr.Block {
-		return flow.applyBlockScope(ctx, sr)
-	}
-
-	return nil
+	return flow.scopes.state.UpdateScope(r)
 }
 
 // applyBlockScope persists and activates a new block scope using the same
