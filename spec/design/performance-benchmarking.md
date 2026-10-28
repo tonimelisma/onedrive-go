@@ -649,3 +649,18 @@ This work is intentionally staged.
 - Cross-app comparisons must compare like with like. If another app lacks a
   feature or safety invariant that `onedrive-go` enforces, the methodology must
   call that out instead of silently treating all elapsed time as equivalent.
+
+## Comparison SQL Micro-Benchmarks
+
+`BenchmarkComparisonQueries` (`internal/sync/sqlite_compare_bench_test.go`)
+times `QueryComparisonState` plus `QueryReconciliationState`, the two queries
+every plan runs, over synced trees of 10k and 100k items in folders of 100:
+a quiet tree, a OneDrive rename of a folder holding half the items (the
+`followed_ancestor_deletes` shape) and the same rename made locally (the
+`local_move_candidates` / `followed_local_ancestor_deletes` shape). First
+measurement, 2026-10-28, 2-core host under modernc SQLite, one iteration
+each: 10k steady 2.3 s, remote rename 3.1 s, local rename 57 s; 100k steady
+22 s, remote rename 117 s, local rename over ten minutes (skipped unless
+`ONEDRIVE_GO_BENCH_SLOW=1`). The local-rename cost grows with moved items
+times baseline rows and is the first optimization target; it is not yet in
+any benchmark scenario's budget.
