@@ -4,7 +4,7 @@ GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/
 
 LAYER: 1
 
-Implements: R-2.5 [designed], R-2.5.7 [verified], R-2.5.8 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.12.7 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
+Implements: R-2.5 [designed], R-2.5.7 [verified], R-2.5.8 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.12.7 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.10.49 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
 ## Verification Counts Only What It Compared
 
@@ -118,6 +118,7 @@ and every other significant type in the tree already matched its own name
 | Dry-run current-plan scratch stores are temporary SQLite stores seeded from committed truth and removed after preview planning. | `TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp` |
 | Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens; shortcut status leaves the store through sync-owned status views instead of raw shortcut-root rows. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestBuildChildStatusMount_RendersLifecycleState` |
 | The baseline cache stays the one object callers hold across full rebuilds, and planning uses the baseline of its own comparison snapshot. | `TestCommitMutation_FolderMoveKeepsHeldBaselinePointerCurrent`, `TestPlanning_UsesBaselineFromTheComparisonSnapshot` |
+| A folder re-created online (new item ID, same path) rebinds the baseline and its children's parent, and uploads land in the live folder; a full rescan where every item has a new ID plans no transfers (R-2.10.49). | `TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate`, `TestCommitMutation_FolderReboundAtSamePathRebindsItsChildren`, `TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem`, `TestRunOnce_FullRescanWithEveryFolderReboundPlansNoTransfers` |
 | One observation window converges to the same remote_state whatever its order: swaps, renames onto a freed name, create-before-move-away, delete and re-create across pages, a folder moved out of a deleted folder, and a full rescan's late orphan delete raise no remote name twin (R-2.12.7). | `TestCommitObservation_PathSwapInOneWindow`, `TestCommitObservation_CreateAtPathBeforeOccupantRenamedAway`, `TestCommitObservation_DeleteAndRecreateSamePathAcrossPages`, `TestCommitObservation_FolderMovedOutOfADeletedFolderKeepsItsSubtree`, `TestCommitObservation_RepeatedItemInOneWindowUsesItsLastObservation`, `TestCommitObservation_SubtreeRepathOntoAHeldPathKeepsBothApart`, `TestCommitObservation_WindowResultIsOrderIndependent`, `TestRunOnce_FullRescanWithItemReplacedAtSamePath` |
 | Engine startup refuses a state DB that fails `PRAGMA quick_check` with the `corrupt` reason and reset guidance, instead of planning from a damaged `remote_state` (R-2.5.8). | `TestNewEngine_RequiresResetForCorruptStateDB` |
 | A successful upload, download, folder create or move without a remote item ID is refused, because `item_id` is the baseline's primary key (R-2.5.7). | `TestCommitMutation_EmptyItemIDFails` |
@@ -484,6 +485,16 @@ content test as the planner's `remote_changed` in `sqlite_compare.go`: folders
 differ only by path or type, and a file's hash decides whenever either side has
 one. Baseline stores no folder mtime, so comparing folder times counted every
 remote folder as drift on a converged drive (R-2.10.48).
+
+A folder's item ID is the one folder fact that is not content but must still
+reach the baseline: `metadata_drift` is 1 for a folder present on all three
+sides whose remote item ID differs from the baseline's, so an `unchanged`
+folder becomes a publication-only `baseline_update` that rebinds it, and
+`commitUpsert` moves the children's `parent_id` from the dead item to the new
+one (R-2.10.49). Without it, uploads into a folder deleted and re-created
+online targeted the dead ID forever. A folder missing locally whose remote ID
+changed is still classified by `remote_changed`, which ignores folder IDs;
+that case belongs to the comparison-facts work, not this rule.
 
 ## State-DB Diagnosis And Reset
 

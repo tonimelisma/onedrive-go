@@ -670,6 +670,18 @@ func mutationFromActionOutcome(o *actionOutcome) *BaselineMutation {
 // server-side delete+recreate assigns a new item_id for an existing path
 // by removing the stale row first (prevents UNIQUE constraint violation on path).
 func commitUpsert(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
+	// A folder rebound to a new item at the same path (R-2.10.49) takes its
+	// children with it: their parent_id named the dead item.
+	if o.ItemType == ItemTypeFolder {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE baseline SET parent_id = ?
+			WHERE parent_id IN (SELECT item_id FROM baseline WHERE path = ? AND item_id <> ?)`,
+			o.ItemID, o.Path, o.ItemID,
+		); err != nil {
+			return fmt.Errorf("sync: rebinding children of %s: %w", o.Path, err)
+		}
+	}
+
 	// Remove any stale baseline row at the same path but different identity.
 	// This happens when the server assigns a new item_id for a path that
 	// was previously tracked under a different ID (delete+recreate, or
