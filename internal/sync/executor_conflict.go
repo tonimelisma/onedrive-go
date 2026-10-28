@@ -8,9 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // conflictCopyReservationPerm is the mode of the placeholder that claims a
@@ -262,11 +263,14 @@ func ConflictStemExt(name string) (string, string) {
 const conflictCopyDirAttempts = 100
 
 // executeDirectoryConflictCopy renames a directory to a unique conflict-copy
-// name. Unlike a file it needs no placeholder, because renaming a directory
-// cannot destroy anything at the destination: onto a file it fails with
-// ENOTDIR, onto a non-empty directory with ENOTEMPTY, and the rooted rename
-// refuses an existing directory with EEXIST (it would otherwise replace only
-// an empty one). Trying candidate names in order therefore never loses data.
+// name with a no-replace rename (renameat2 RENAME_NOREPLACE on Linux,
+// renamex_np RENAME_EXCL on macOS): an entry that already holds a candidate
+// name, an empty directory included, is never replaced, and the next ordinal
+// is tried. A plain rename(2) atomically replaces an empty directory at the
+// destination, and a placeholder cannot help: the directory cannot be renamed
+// onto a reserved name without replacing it. The source's ancestors were
+// checked for symlinks by ExecuteConflictCopy, and the candidate sits beside
+// the source.
 func (e *executor) executeDirectoryConflictCopy(action *Action, absPath string) actionOutcome {
 	now := e.nowFunc()
 	for ordinal := 1; ordinal <= conflictCopyDirAttempts; ordinal++ {
@@ -277,7 +281,7 @@ func (e *executor) executeDirectoryConflictCopy(action *Action, absPath string) 
 				fmt.Errorf("relativizing conflict copy path %s: %w", filepath.Base(candidate), normalizeSyncTreePathError(err)),
 				action.Path, permissionCapabilityLocalWrite)
 		}
-		renameErr := e.syncTree.Rename(action.Path, rel)
+		renameErr := localpath.RenameNoReplace(absPath, candidate)
 		if renameErr == nil {
 			e.logger.Debug("saved conflict copy",
 				slog.String("path", action.Path),
@@ -292,12 +296,12 @@ func (e *executor) executeDirectoryConflictCopy(action *Action, absPath string) 
 				ItemID:  action.ItemID,
 			}
 		}
-		if errors.Is(renameErr, os.ErrExist) || errors.Is(renameErr, syscall.ENOTDIR) || errors.Is(renameErr, syscall.ENOTEMPTY) {
+		if errors.Is(renameErr, localpath.ErrTargetExists) {
 			continue
 		}
 
 		return e.failedOutcomeWithFailure(action, ActionConflictCopy,
-			fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(candidate), normalizeSyncTreePathError(renameErr)),
+			fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(candidate), renameErr),
 			action.Path, permissionCapabilityLocalWrite)
 	}
 

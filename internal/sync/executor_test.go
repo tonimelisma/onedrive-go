@@ -3766,3 +3766,33 @@ func TestExecutor_ConflictCopy_DirectorySourceIsRenamed(t *testing.T) {
 	assert.Contains(t, o.OldPath, "thing.conflict-")
 	assert.FileExists(t, filepath.Join(syncRoot, o.OldPath, "child.txt"))
 }
+
+// Validates: R-2.17.10
+//
+// A directory's conflict copy never lands on something already at its name:
+// an empty directory the user (or another copy) made at the first candidate
+// survives, and the copy takes the next ordinal. A plain rename would have
+// replaced the empty directory silently.
+func TestExecutor_ConflictCopy_DirectoryNeverReplacesAnEmptyDirectoryAtItsName(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	fixed := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	cfg.SetNowFunc(func() time.Time { return fixed })
+	e := newExecution(cfg, emptyBaseline())
+	writeExecTestFile(t, syncRoot, filepath.Join("thing", "child.txt"), "child")
+	firstCandidate := conflictCopyDirPathWithOrdinal(filepath.Join(syncRoot, "thing"), fixed, 1)
+	require.NoError(t, os.Mkdir(firstCandidate, 0o700))
+	marker := filepath.Join(firstCandidate, ".keep")
+
+	o := e.ExecuteConflictCopy(t.Context(), &Action{Type: ActionConflictCopy, Path: "thing", View: &pathView{Path: "thing"}})
+	requireOutcomeSuccess(t, &o)
+
+	assert.DirExists(t, firstCandidate, "the existing empty directory survives")
+	assert.NoFileExists(t, marker)
+	entries, err := os.ReadDir(firstCandidate)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "nothing was renamed onto it")
+	assert.Equal(t, filepath.Base(conflictCopyDirPathWithOrdinal(filepath.Join(syncRoot, "thing"), fixed, 2)), filepath.Base(o.OldPath))
+	assert.FileExists(t, filepath.Join(syncRoot, o.OldPath, "child.txt"))
+}
