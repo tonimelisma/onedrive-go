@@ -680,3 +680,34 @@ func TestRunOnce_SwapOfTwoNamesConverges(t *testing.T) {
 		})
 	}
 }
+
+// Validates: R-2.17.1, R-2.17.2
+//
+// The user deleted f/x.txt while OneDrive renamed f to g. x.txt only followed
+// its folder online, so its local delete must reach OneDrive once the folder
+// rename is applied locally. Its remote path no longer matched the baseline
+// path, so it was read as a new file at g/x.txt and downloaded again: the
+// delete was undone (model test, case-only folder rename on OneDrive with a
+// local delete below it).
+func TestRunOnce_LocalDeleteInsideFolderRenamedOnlineIsNotUndone(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("item-f", "root", "f")
+	remote.addFile(t, "item-x", "item-f", "x.txt", "X\n")
+	remote.addFile(t, "item-y", "item-f", "y.txt", "Y\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, "f", "x.txt")))
+	remote.moveAt(t, "f", "g")
+	runScenarioPass(t, h.eng)
+	runScenarioPass(t, h.eng)
+
+	assert.NoFileExists(t, filepath.Join(h.syncRoot, "g", "x.txt"), "the local delete is not undone")
+	assert.NotContains(t, remote.tree(), "g/x.txt", "the local delete reaches OneDrive")
+	requireScenarioLocalFile(t, h.syncRoot, "g/y.txt", "Y\n")
+	assertSyncInvariants(t, h)
+}

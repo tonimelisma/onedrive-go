@@ -156,6 +156,27 @@ remote_move_targets AS (
 		source_path
 	FROM remote_move_sources
 ),
+-- An item deleted locally that OneDrive only carried along with a moved
+-- ancestor: relative to that ancestor it sits where the baseline has it. The
+-- ancestor is still local, so its local move re-paths the baseline row and
+-- the next pass plans the delete like any other. Until then neither path is
+-- a fact of its own: the remote one is not a new file to download (that
+-- undid the user's delete) and the baseline one is not gone from both sides.
+followed_ancestor_deletes AS (
+	SELECT
+		b.path AS baseline_path,
+		r.path AS remote_path
+	FROM baseline b
+	JOIN remote_state r ON r.item_id = b.item_id AND r.path <> b.path
+	JOIN baseline anc ON substr(b.path, 1, length(anc.path) + 1) = anc.path || '/'
+	JOIN remote_state ra ON ra.item_id = anc.item_id AND ra.path <> anc.path
+	WHERE r.path = ra.path || substr(b.path, length(anc.path) + 1)
+		AND NOT EXISTS (SELECT 1 FROM local_state ls WHERE ls.path = b.path)
+		AND EXISTS (
+			SELECT 1 FROM local_state la
+			WHERE la.path = anc.path AND COALESCE(la.item_type, '') = 'folder'
+		)
+),
 `
 
 	// sqlComparisonStateCTEs is the one definition of the comparison facts and
@@ -308,7 +329,8 @@ comparison_flags AS (
 				AND COALESCE(b.item_type, '') <> COALESCE(r.item_type, '') THEN 1
 			ELSE 0
 		END AS remote_type_changed,
-		CASE WHEN rmsh.path IS NOT NULL THEN 1 ELSE 0 END AS remote_move_shadowed,
+		CASE WHEN rmsh.path IS NOT NULL OR fad_remote.remote_path IS NOT NULL THEN 1 ELSE 0 END AS remote_move_shadowed,
+		CASE WHEN fad_baseline.baseline_path IS NOT NULL THEN 1 ELSE 0 END AS local_delete_awaits_ancestor_move,
 		-- File content the change tests call unchanged can still carry new
 		-- metadata (touch, tar, rsync, chmod: same bytes, new mtime or ctime; or a new remote
 		-- mtime or eTag over the same hash).
@@ -345,6 +367,8 @@ comparison_flags AS (
 	LEFT JOIN remote_move_sources rms ON rms.source_path = p.path
 	LEFT JOIN remote_move_targets rmt ON rmt.target_path = p.path
 	LEFT JOIN remote_move_shadowed rmsh ON rmsh.path = p.path
+	LEFT JOIN followed_ancestor_deletes fad_remote ON fad_remote.remote_path = p.path
+	LEFT JOIN followed_ancestor_deletes fad_baseline ON fad_baseline.baseline_path = p.path
 ),
 comparison_state AS (
 	SELECT
@@ -368,6 +392,7 @@ comparison_state AS (
 		local_type_changed,
 		remote_type_changed,
 		remote_move_shadowed,
+		local_delete_awaits_ancestor_move,
 		remote_item_replaced,
 		local_item_replaced,
 		local_subtree_changed,
@@ -378,6 +403,8 @@ comparison_state AS (
 			-- recreate) is planned as a create by move composition.
 			WHEN baseline_present = 1 AND local_move_candidate_count = 1 AND local_move_target <> ''
 				AND (local_present = 0 OR local_item_replaced = 1) THEN 'local_move_source'
+			WHEN baseline_present = 1 AND local_present = 0 AND remote_present = 0
+				AND local_delete_awaits_ancestor_move = 1 THEN 'local_delete_awaits_ancestor_move'
 			WHEN baseline_present = 1 AND local_present = 0 AND remote_present = 0 THEN 'both_missing'
 			WHEN local_present = 1 AND baseline_present = 0 AND local_move_source <> '' AND local_move_candidate_count = 1 THEN 'local_move_dest'
 			WHEN baseline_present = 1 AND remote_move_target <> '' THEN 'remote_move_source'
@@ -464,6 +491,9 @@ reconciliation_state AS (
 			-- The local side moved this item too; its local move wins and
 			-- carries the item, so the remote copy is not a new download.
 			WHEN comparison_kind = 'remote_move_shadowed' THEN 'noop'
+			-- Planned as a remote delete next pass, once the ancestor's local
+			-- move has re-pathed the baseline (followed_ancestor_deletes).
+			WHEN comparison_kind = 'local_delete_awaits_ancestor_move' THEN 'noop'
 			WHEN comparison_kind = 'remote_only_create' AND item_type = 'folder' THEN 'folder_create_local'
 			WHEN comparison_kind = 'remote_only_create' THEN 'download'
 			WHEN comparison_kind = 'create_equal' THEN 'baseline_update'
