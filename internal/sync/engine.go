@@ -217,6 +217,11 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	}
 
 	e.permHandler = newEnginePermissionHandler(e, cfg, syncTree)
+	// One clock: the store's retry and trial schedule and the executor's
+	// timestamps read the engine clock, or a retry scheduled by one clock is
+	// judged due by another.
+	bm.setNowFunc(e.nowFunc)
+	execCfg.SetNowFunc(e.nowFunc)
 
 	storeOwnedByEngine = true
 	return e, nil
