@@ -239,6 +239,8 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_RemoteTwinsAreHeldAndTheDriveKeepsSyncing,
 		TestRunOnce_RenameAndRecreateMovesThenCreates,
 		TestRunOnce_RenumberedDeviceTransfersNothing,
+		TestRunOnce_SameRenameOnBothSidesStillAppliesTheRemoteEdit,
+		TestRunOnce_LostMoveAnswerAfterARemoteEditStillAppliesTheEdit,
 		TestRunOnce_SavedTokenOneDriveKeepsRefusingIsReenumerated,
 		TestRunOnce_SharePointRootFormsRecordsActionableFailure,
 		TestRunOnce_SyncedItemsMadeUnrepresentableAreNotDeletedOnline,
