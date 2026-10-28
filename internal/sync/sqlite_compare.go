@@ -96,7 +96,7 @@ local_move_candidates AS (
 		AND EXISTS (SELECT 1 FROM remote_state rs WHERE rs.item_id = b.item_id)
 		AND NOT EXISTS (SELECT 1 FROM remote_state occupied WHERE occupied.path = l.path AND occupied.item_id <> b.item_id)
 ),
-local_move_sources AS (
+local_move_sources AS MATERIALIZED (
 	SELECT
 		source_path,
 		MIN(target_path) AS target_path,
@@ -104,9 +104,13 @@ local_move_sources AS (
 	FROM local_move_candidates
 	GROUP BY source_path
 ),
-local_move_targets AS (
+-- The per-path join on target_path must be able to use an index. MIN()
+-- strips the column's TEXT affinity, and a join key without affinity gets no
+-- automatic index: every path scanned every move, so a local folder rename
+-- cost moved items x paths (57 s at 10k items). The CAST restores it.
+local_move_targets AS MATERIALIZED (
 	SELECT
-		target_path,
+		CAST(target_path AS TEXT) AS target_path,
 		source_path,
 		candidate_count
 	FROM local_move_sources
@@ -180,10 +184,12 @@ followed_ancestor_deletes AS (
 	SELECT
 		b.path AS baseline_path,
 		r.path AS remote_path
-	FROM baseline b
-	JOIN remote_state r ON r.item_id = b.item_id AND r.path <> b.path
-	JOIN baseline anc ON substr(b.path, 1, length(anc.path) + 1) = anc.path || '/'
+	FROM baseline anc
 	JOIN remote_state ra ON ra.item_id = anc.item_id AND ra.path <> anc.path
+	-- A path range rather than a prefix expression, so the baseline path
+	-- index finds the ancestor's descendants ('0' sorts right after '/').
+	JOIN baseline b ON b.path > anc.path || '/' AND b.path < anc.path || '0'
+	JOIN remote_state r ON r.item_id = b.item_id AND r.path <> b.path
 	WHERE r.path = ra.path || substr(b.path, length(anc.path) + 1)
 		AND NOT EXISTS (SELECT 1 FROM local_state ls WHERE ls.path = b.path)
 		AND EXISTS (
@@ -197,7 +203,7 @@ followed_ancestor_deletes AS (
 -- edited, keeps it) like any other. Until then the local copy is not a new
 -- file to upload (that undid OneDrive's delete) and the baseline path is not
 -- gone from both sides.
-followed_local_ancestor_deletes AS (
+followed_local_ancestor_deletes AS MATERIALIZED (
 	SELECT
 		b.path AS baseline_path,
 		l.path AS local_path,
@@ -208,7 +214,7 @@ followed_local_ancestor_deletes AS (
 	FROM baseline b
 	JOIN local_move_sources lms
 		ON lms.candidate_count = 1
-		AND substr(b.path, 1, length(lms.source_path) + 1) = lms.source_path || '/'
+		AND b.path > lms.source_path || '/' AND b.path < lms.source_path || '0'
 	JOIN baseline anc ON anc.path = lms.source_path AND COALESCE(anc.item_type, '') = 'folder'
 	JOIN local_state l
 		ON l.path = lms.target_path || substr(b.path, length(lms.source_path) + 1)
@@ -216,6 +222,18 @@ followed_local_ancestor_deletes AS (
 	JOIN remote_state ra ON ra.item_id = anc.item_id
 	WHERE NOT EXISTS (SELECT 1 FROM remote_state rs WHERE rs.item_id = b.item_id)
 		AND NOT EXISTS (SELECT 1 FROM local_state ls WHERE ls.path = b.path)
+),
+-- The OneDrive paths at or under a followed local ancestor delete's remote
+-- equivalent: what OneDrive created there waits for the ancestor's move.
+-- Computed once as a set (a path range per row, on the remote path index);
+-- asked per path as a correlated prefix test it re-ran the whole CTE for
+-- every path.
+followed_local_ancestor_remote_paths AS MATERIALIZED (
+	SELECT DISTINCT r.path
+	FROM followed_local_ancestor_deletes f
+	JOIN remote_state r
+		ON r.path = f.remote_equivalent
+		OR (r.path > f.remote_equivalent || '/' AND r.path < f.remote_equivalent || '0')
 ),
 `
 	// sqlComparisonStateCTEs is the one definition of the comparison facts and
@@ -372,11 +390,7 @@ comparison_flags AS (
 		CASE WHEN fad_baseline.baseline_path IS NOT NULL OR flad_baseline.baseline_path IS NOT NULL
 			THEN 1 ELSE 0 END AS delete_awaits_ancestor_move,
 		CASE WHEN flad_local.local_path IS NOT NULL THEN 1 ELSE 0 END AS local_copy_awaits_ancestor_move,
-		CASE WHEN EXISTS (
-			SELECT 1 FROM followed_local_ancestor_deletes flad_remote
-			WHERE p.path = flad_remote.remote_equivalent
-				OR substr(p.path, 1, length(flad_remote.remote_equivalent) + 1) = flad_remote.remote_equivalent || '/'
-		) THEN 1 ELSE 0 END AS remote_create_awaits_ancestor_move,
+		CASE WHEN flad_remote.path IS NOT NULL THEN 1 ELSE 0 END AS remote_create_awaits_ancestor_move,
 		-- File content the change tests call unchanged can still carry new
 		-- metadata (touch, tar, rsync, chmod: same bytes, new mtime or ctime; or a new remote
 		-- mtime or eTag over the same hash).
@@ -417,6 +431,7 @@ comparison_flags AS (
 	LEFT JOIN followed_ancestor_deletes fad_baseline ON fad_baseline.baseline_path = p.path
 	LEFT JOIN followed_local_ancestor_deletes flad_baseline ON flad_baseline.baseline_path = p.path
 	LEFT JOIN followed_local_ancestor_deletes flad_local ON flad_local.local_path = p.path
+	LEFT JOIN followed_local_ancestor_remote_paths flad_remote ON flad_remote.path = p.path
 ),
 comparison_state AS (
 	SELECT

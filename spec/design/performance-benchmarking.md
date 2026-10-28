@@ -657,10 +657,22 @@ times `QueryComparisonState` plus `QueryReconciliationState`, the two queries
 every plan runs, over synced trees of 10k and 100k items in folders of 100:
 a quiet tree, a OneDrive rename of a folder holding half the items (the
 `followed_ancestor_deletes` shape) and the same rename made locally (the
-`local_move_candidates` / `followed_local_ancestor_deletes` shape). First
-measurement, 2026-10-28, 2-core host under modernc SQLite, one iteration
-each: 10k steady 2.3 s, remote rename 3.1 s, local rename 57 s; 100k steady
-22 s, remote rename 117 s, local rename over ten minutes (skipped unless
-`ONEDRIVE_GO_BENCH_SLOW=1`). The local-rename cost grows with moved items
-times baseline rows and is the first optimization target; it is not yet in
-any benchmark scenario's budget.
+`local_move_candidates` / `followed_local_ancestor_deletes` shape). Measured
+on a 2-core host under modernc SQLite, one iteration each:
+
+| Items | Quiet | Remote rename | Local rename |
+| --- | --- | --- | --- |
+| 10k, before | 2.3 s | 3.1 s | 57 s |
+| 10k, after | 2.0 s | 2.1 s | 2.8 s |
+| 100k, before | 22 s | 117 s | over 10 min |
+| 100k, after | 23 s | 23 s | 24 s |
+
+Before: `local_move_targets` took `MIN(target_path)` from an aggregate, which
+has no column affinity, so its per-path join key got no automatic index and
+every path scanned every move (moved items x paths, present since local move
+pairing landed); and `followed_ancestor_deletes` joined descendants on a
+`substr()` prefix expression instead of an indexed path range. After: the key
+is cast back to TEXT, prefix joins are `path > p || '/' AND path < p || '0'`
+ranges, and the followed-ancestor sets are materialized once instead of
+re-evaluated per path. A rename now costs about a quiet pass; the quiet pass
+itself (about 11 s per query at 100k items) is the next target.

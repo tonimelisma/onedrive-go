@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"fmt"
-	"os"
 	"strconv"
 	"testing"
 
@@ -24,10 +23,7 @@ import (
 // Run with: go test ./internal/sync -run '^$' -bench 'BenchmarkComparisonQueries/items=10000/' -benchtime 1x
 // (the pattern is a regexp: items=10000/ also matches items=100000/).
 
-const (
-	benchFilesPerFolder = 100
-	benchSlowEnv        = "ONEDRIVE_GO_BENCH_SLOW"
-)
+const benchFilesPerFolder = 100
 
 type comparisonBenchShape string
 
@@ -41,12 +37,6 @@ func BenchmarkComparisonQueries(b *testing.B) {
 	for _, items := range []int{10_000, 100_000} {
 		for _, shape := range []comparisonBenchShape{benchShapeSteady, benchShapeRemoteRename, benchShapeLocalRename} {
 			b.Run(fmt.Sprintf("items=%d/%s", items, shape), func(b *testing.B) {
-				if items > 10_000 && shape == benchShapeLocalRename && os.Getenv(benchSlowEnv) == "" {
-					// Measured above ten minutes per plan on a 2-core host
-					// (10k items took 57 s): the local-move CTEs grow with
-					// moved items times baseline rows.
-					b.Skipf("set %s=1 to run (over ten minutes)", benchSlowEnv)
-				}
 				store := newTestStore(b)
 				seedComparisonBench(b, store, items, shape)
 				ctx := b.Context()
