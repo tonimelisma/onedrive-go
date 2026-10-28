@@ -1,7 +1,9 @@
 package sync
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -98,6 +100,30 @@ func TestComposeMoves_DestinationFreeUnderNameFolding(t *testing.T) {
 		held[foldMovePath(move.newPath)] = move.key
 	}
 	assert.NotEmpty(t, c.moves)
+}
+
+// Validates: R-2.17.1
+//
+// A swap of two names at the 255-byte limit parks one at a name that still
+// fits: the stem is cut, on a character boundary, to make room for the
+// .swap-N infix.
+func TestComposeMoves_ParkingNameFitsTheNameLimit(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("é", 125) // 250 bytes
+	a, b := long+"a.txt", long+"b.txt"
+	require.Len(t, a, 255)
+	c := composeForTest(
+		composeNode("a", ItemTypeFile, a, a, b),
+		composeNode("b", ItemTypeFile, b, b, a),
+	)
+
+	require.NotEmpty(t, c.moves)
+	for _, move := range c.moves {
+		assert.LessOrEqual(t, len(move.newPath), 255, move.newPath)
+		assert.True(t, utf8.ValidString(move.newPath), move.newPath)
+	}
+	assert.Contains(t, c.moves[0].newPath, moveSwapInfix)
 }
 
 // Validates: R-2.17.6

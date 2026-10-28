@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
@@ -595,6 +596,27 @@ func (e *moveEmitter) resolvePending(order []string) {
 // moveSwapInfix names the temporary path a parked item waits at.
 const moveSwapInfix = ".swap-"
 
+// moveNameMaxBytes is the longest name a local filesystem stores (NAME_MAX).
+// A parking name cuts its stem to fit the infix: a swap of two names at the
+// limit otherwise parked at a name the rename refused.
+const moveNameMaxBytes = 255
+
+// truncateNameBytes cuts s to at most limit bytes on a character boundary.
+func truncateNameBytes(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(s) <= limit {
+		return s
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+
+	return s[:cut]
+}
+
 // parkOneOccupancyCycle breaks one cycle of moves that each wait for the
 // next to vacate its destination: a swap of two names (a→b, b→a) or a longer
 // rotation. Every such move waits for a free destination, so none was ever
@@ -687,7 +709,8 @@ func (e *moveEmitter) freeParkingPath(p string) string {
 	stem := strings.TrimSuffix(name, ext)
 	taken := e.takenPathsFolded()
 	for i := 1; i <= len(e.keys)+1; i++ {
-		candidate := joinMovePath(dir, stem+moveSwapInfix+strconv.Itoa(i)+ext)
+		suffix := moveSwapInfix + strconv.Itoa(i) + ext
+		candidate := joinMovePath(dir, truncateNameBytes(stem, moveNameMaxBytes-len(suffix))+suffix)
 		if !taken[foldMovePath(candidate)] {
 			return candidate
 		}
