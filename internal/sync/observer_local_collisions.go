@@ -21,13 +21,25 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// readDirForCollisionCheck lists dirPath through tree when there is one.
+// readDirForCollisionCheck lists dirPath through tree when there is one. A
+// directory the tree refuses, such as one reached through a followed symlink
+// (R-2.4.6) whose target lies outside the sync root, is listed through
+// localpath, as observation reads followed paths: refusing it left its new
+// files unchecked for collisions in watch mode. The listing is read-only, so
+// the fallback cannot write outside the root.
+//
+// A listing that fails both ways makes the caller report no collision (fail
+// open), as it always has: the event's own handling meets the same failure,
+// and the full scan's DetectCaseCollisions, which is authoritative, judges
+// the directory again.
 func readDirForCollisionCheck(tree *synctree.Root, dirPath string) ([]os.DirEntry, error) {
-	if tree == nil {
-		return localpath.ReadDir(dirPath) //nolint:wrapcheck // localpath names the path
+	if tree != nil {
+		if entries, err := tree.ReadDirAbs(dirPath); err == nil {
+			return entries, nil
+		}
 	}
 
-	return tree.ReadDirAbs(dirPath) //nolint:wrapcheck // synctree names the path
+	return localpath.ReadDir(dirPath) //nolint:wrapcheck // localpath names the path
 }
 
 // buildPeerRelPath constructs the db-relative path for a collision peer
