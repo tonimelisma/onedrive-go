@@ -191,6 +191,7 @@ func (rt *watchRuntime) initWatchInfra(
 
 	pool := newWorkerPool(rt.engine.execCfg, rt.sched.dispatchCh, rt.deps.store, rt.deps.logger, watchCompletionBuf)
 	pool.perfCollector = rt.engine.collector()
+	pool.serialize = rt.engine.serializeWorkers
 	pool.Start(ctx, rt.engine.transferWorkers)
 
 	// DirtyBuffer is the watch scheduler boundary. Observation marks coarse

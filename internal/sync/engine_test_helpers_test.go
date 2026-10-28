@@ -358,6 +358,7 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 	})
 	require.NoError(t, err, "NewEngine")
 	eng.assertInvariants = true
+	applyRegisteredDispatchOrder(t, eng)
 	flow := newEngineFlow(eng)
 	testEng := &testEngine{
 		Engine: eng,
@@ -423,6 +424,7 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 	})
 	require.NoError(t, err, "NewEngine")
 	eng.assertInvariants = true
+	applyRegisteredDispatchOrder(t, eng)
 	flow := newEngineFlow(eng)
 	testEng := &testEngine{
 		Engine: eng,

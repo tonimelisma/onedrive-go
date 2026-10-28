@@ -72,6 +72,15 @@ type Engine struct {
 	debugEventHook   func(DebugEvent)
 	activityHook     func(Activity)
 
+	// dispatchOrder reorders every ready frontier before it is dispatched
+	// (D-090). Tests run scenarios forward, reversed or in a seeded shuffle
+	// so a bug that depends on dispatch order cannot pass by timing; nil, as
+	// in production, keeps the dependency graph's order.
+	dispatchOrder func([]*trackedAction) []*trackedAction
+	// serializeWorkers runs one worker instead of the pool, so with a
+	// dispatch order execution is deterministic. Test-only.
+	serializeWorkers bool
+
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
 	// inotify watch limit exhaustion (ENOSPC).
