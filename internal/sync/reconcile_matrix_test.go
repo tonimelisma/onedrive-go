@@ -121,9 +121,10 @@ func renderMatrixPlan(plan *actionPlan) string {
 
 // Validates: R-2.3.1, R-2.2.7, R-2.17.1
 //
-// With ONEDRIVE_GO_RECONCILE_CONVERGE=1 each single-path cell is also run to
-// convergence on the pure model and checked against the reference planner
-// (requireReferenceConvergence).
+// Every single-path cell's plan is also checked for safety against the
+// reference planner (assertPlanKeepsReferenceContent); with
+// ONEDRIVE_GO_RECONCILE_CONVERGE=1 each is instead run to convergence and must
+// end at exactly the reference's content (requireReferenceConvergence).
 func TestReconcileMatrix_Golden(t *testing.T) {
 	t.Parallel()
 
@@ -141,6 +142,8 @@ func TestReconcileMatrix_Golden(t *testing.T) {
 				fmt.Fprintf(&out, "%-3s | %-3s | %-3s -> %s\n", baseline, local, remote, renderMatrixPlan(plan))
 				if converge {
 					requireReferenceConvergence(t, s, plan, baseline, local, remote)
+				} else {
+					assertPlanKeepsReferenceContent(t, s, plan, baseline, local, remote)
 				}
 			}
 		}
@@ -231,6 +234,28 @@ func referenceSurvivors(baseline, local, remote matrixSide) map[string]bool {
 	}
 
 	return survivors
+}
+
+// assertPlanKeepsReferenceContent is the default-run check of a cell's plan,
+// cheap because it plans nothing more: applied once to the pure model, the
+// plan may not take from both sides any content the reference planner says
+// must survive (a conflict copy or a download keeps it; a delete of the only
+// copy loses it). The golden file pins what the plan is; this pins that it is
+// safe.
+func assertPlanKeepsReferenceContent(t *testing.T, s *pmState, plan *actionPlan, baseline, local, remote matrixSide) {
+	t.Helper()
+
+	s.apply(plan)
+	kept := map[string]bool{}
+	for _, view := range []map[string]string{pmView(s.local), pmView(s.remote)} {
+		for _, content := range view {
+			kept[content] = true
+		}
+	}
+	for content := range referenceSurvivors(baseline, local, remote) {
+		assert.True(t, kept[content], "%s|%s|%s: the plan loses %q:\n  %s",
+			baseline, local, remote, content, strings.Join(s.log, "\n  "))
+	}
 }
 
 // requireReferenceConvergence is the differential test against the
