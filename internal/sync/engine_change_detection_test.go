@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,4 +107,40 @@ func TestRunOnce_TransfersRecordLocalCtimeAndIdentity(t *testing.T) {
 		assert.True(t, entry.LocalHasIdentity, "%s baseline identity", name)
 		assert.True(t, canReuseBaselineHash(info, entry, ctime+2*nanosPerSecond), "%s fast path applies", name)
 	}
+}
+
+// A full rescan lists the replacement at the path and only afterwards
+// synthesizes the old item's orphan delete. The replacement must simply take
+// the path, without passing through a remote name twin.
+//
+// Validates: R-2.12.7, R-2.17.2
+func TestRunOnce_FullRescanWithItemReplacedAtSamePath(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFile(t, "item-old", "root", "doc.txt", "old version")
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	require.Equal(t, 1, runScenarioPass(t, eng).Downloads)
+
+	// Replaced on OneDrive by a new item at the same name, and the old one's
+	// delete never reaches delta.
+	remote.removeUnreported("item-old")
+	remote.addFile(t, "item-new", "root", "doc.txt", "new version")
+	logs := &syncLockedBuffer{}
+	eng.baseline.logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{FullReconcile: true})
+	require.NoError(t, err)
+	require.Zero(t, report.Failed, "errors: %v", report.Errors)
+
+	got, err := localpath.ReadFile(filepath.Join(syncRoot, "doc.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "new version", string(got))
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+	entry, found := bl.GetByPath("doc.txt")
+	require.True(t, found)
+	assert.Equal(t, "item-new", entry.ItemID)
+	assert.Empty(t, twinIssuePaths(t, eng.baseline))
+	assert.NotContains(t, logs.String(), "two items", "a replacement is not a name twin")
 }

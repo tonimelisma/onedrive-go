@@ -2,6 +2,7 @@
 //
 // Contents:
 //   - CommitObservation:        atomically persist remote mirror state + advance observation cursor
+//   - applyObservationWindowTx: apply one window order-independently (park, delete, place)
 //   - processObservedItem:      handle single observed item within transaction
 //   - scanRemoteStateRow:       read one remote_state row
 //   - insertRemoteState:        insert new remote_state row
@@ -92,14 +93,14 @@ func (s *SyncStore) commitObservationTx(
 		driveID = state.ContentDriveID
 	}
 
-	var adopted []*BaselineEntry
 	for i := range events {
 		if events[i].DriveID.IsZero() && !driveID.IsZero() {
 			events[i].DriveID = driveID
 		}
-		if processErr := s.processObservedItemWithPlaceholders(ctx, tx, &events[i], &adopted); processErr != nil {
-			return nil, processErr
-		}
+	}
+	adopted, err := s.applyObservationWindowTx(ctx, tx, events)
+	if err != nil {
+		return nil, err
 	}
 	if twinErr := s.reconcileRemoteTwinIssuesTx(ctx, tx); twinErr != nil {
 		return nil, twinErr
@@ -112,6 +113,150 @@ func (s *SyncStore) commitObservationTx(
 		}
 	}
 	return adopted, nil
+}
+
+// applyObservationWindowTx applies one observation window as one set of
+// facts, so the result does not depend on the order its items arrive in
+// (R-2.12.7, D-060). Delta reports a swap, a rename over a name another item
+// gives up, or a delete and re-create at one path in any order, and across
+// pages; applied item by item, a newcomer could reach a path its occupant had
+// not left yet. remote_state.path is UNIQUE, so the newcomer was stored as a
+// remote name twin and the user was warned about two items that were really
+// one window's moves.
+//
+//  1. Every live item whose row changes path is parked first, subtree
+//     included, at a path no real item can hold, which frees its old path.
+//     Parking before the deletes also lifts a child that moved out of a
+//     deleted folder clear of the folder's subtree delete.
+//  2. Tombstones (and synthesized orphan deletes) are applied.
+//  3. Live items are applied in window order and take their final paths.
+//     Only a path still held by a row outside this window's moves makes a
+//     newcomer a twin, which is then a real one (store_remote_twins.go).
+//  4. A parked row the window did not place (a stale placeholder echo) goes
+//     back to its old path, and every path freed by parking is offered to a
+//     twin shadowed at it.
+//
+// Only the last observation of an item in the window counts: each one is a
+// full snapshot of the item, so an earlier one is superseded, not a step.
+func (s *SyncStore) applyObservationWindowTx(
+	ctx context.Context, tx sqlTxRunner, events []observedItem,
+) ([]*BaselineEntry, error) {
+	window := latestObservationPerItem(events)
+
+	parked, err := s.parkMovingRemoteRowsTx(ctx, tx, window)
+	if err != nil {
+		return nil, err
+	}
+
+	var adopted []*BaselineEntry
+	for _, deletes := range []bool{true, false} {
+		for _, item := range window {
+			if item.IsDeleted != deletes {
+				continue
+			}
+			if processErr := s.processObservedItemWithPlaceholders(ctx, tx, item, &adopted); processErr != nil {
+				return nil, processErr
+			}
+		}
+	}
+
+	if err := s.restoreParkedRemoteRowsTx(ctx, tx, parked); err != nil {
+		return nil, err
+	}
+
+	return adopted, nil
+}
+
+// latestObservationPerItem returns the window's items with only the last
+// observation of each item ID, in the position of that last observation.
+func latestObservationPerItem(events []observedItem) []*observedItem {
+	last := make(map[string]int, len(events))
+	for i := range events {
+		last[events[i].ItemID] = i
+	}
+
+	window := make([]*observedItem, 0, len(last))
+	for i := range events {
+		if last[events[i].ItemID] == i {
+			window = append(window, &events[i])
+		}
+	}
+
+	return window
+}
+
+// remoteParkMarker starts the stored path of a row parked while one
+// observation window is applied. ':' is forbidden in OneDrive names, so no
+// real stored path can start with it, and a parked row never outlives the
+// transaction that parked it.
+const remoteParkMarker = ":park:"
+
+func remoteParkPath(itemID string) string {
+	return remoteParkMarker + itemID
+}
+
+// parkedRemoteRow is a row moved to its parking path, with the path it held.
+type parkedRemoteRow struct {
+	itemID  string
+	oldPath string
+}
+
+// parkMovingRemoteRowsTx parks every live item of the window whose row holds
+// a real path other than the one it is reported at. A shadowed twin holds no
+// real path, so it has nothing to free and is not parked.
+func (s *SyncStore) parkMovingRemoteRowsTx(
+	ctx context.Context, tx sqlTxRunner, window []*observedItem,
+) ([]parkedRemoteRow, error) {
+	var parked []parkedRemoteRow
+	for _, item := range window {
+		if item.IsDeleted || item.Path == "" {
+			continue
+		}
+		existing := s.scanRemoteStateRow(ctx, tx, item.DriveID.String(), item.ItemID)
+		if existing == nil || existing.Path == item.Path || remoteTwinShadowParent(existing.Path) != "" {
+			continue
+		}
+		parkPath := remoteParkPath(item.ItemID)
+		if _, err := tx.ExecContext(ctx, `UPDATE remote_state SET path = ? WHERE item_id = ?`, parkPath, item.ItemID); err != nil {
+			return nil, fmt.Errorf("sync: parking remote item %s from %s: %w", item.ItemID, existing.Path, err)
+		}
+		if existing.ItemType == ItemTypeFolder {
+			if err := repathSubtreeTx(ctx, tx, "remote_state", existing.Path, parkPath); err != nil {
+				return nil, err
+			}
+			if err := keepRemoteTwinsAtHolderPathTx(ctx, tx, existing.Path, parkPath); err != nil {
+				return nil, err
+			}
+		}
+		parked = append(parked, parkedRemoteRow{itemID: item.ItemID, oldPath: existing.Path})
+	}
+
+	return parked, nil
+}
+
+// restoreParkedRemoteRowsTx returns a parked row the window did not place to
+// its old path, then offers every path parking freed to a shadowed twin.
+func (s *SyncStore) restoreParkedRemoteRowsTx(ctx context.Context, tx sqlTxRunner, parked []parkedRemoteRow) error {
+	for _, p := range parked {
+		row := s.scanRemoteStateRow(ctx, tx, "", p.itemID)
+		if row == nil || row.Path != remoteParkPath(p.itemID) {
+			continue
+		}
+		back := observedItem{
+			DriveID: row.DriveID, ItemID: row.ItemID, Path: p.oldPath, ItemType: row.ItemType,
+			Hash: row.Hash, Size: row.Size, Mtime: row.Mtime, ETag: row.ETag,
+		}
+		if err := s.processObservedItem(ctx, tx, &back); err != nil {
+			return err
+		}
+	}
+	for _, p := range parked {
+		if err := promoteRemoteTwinTx(ctx, tx, p.oldPath); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // processObservedItemWithPlaceholders applies pending-create recognition
