@@ -65,7 +65,9 @@ rebuildable runtime facts:
 converged state for one item:
 
 - identity: `item_id`, `parent_id`, `path`, `item_type`
-- local comparison facts: `local_hash`, `local_size`, `local_mtime`
+- local comparison facts: `local_hash`, `local_size`, `local_mtime`,
+  `local_ctime` (the inode change time; the hash fast path requires it
+  unchanged, R-2.2.4; `0` means unknown and forces a re-read)
 - last-synced local filesystem identity: `local_device`, `local_inode`,
   `local_has_identity`
 - remote comparison facts: `remote_hash`, `remote_size`, `remote_mtime`,
@@ -111,7 +113,8 @@ rescan.
 `local_state` is the durable mirror of the latest admissible local snapshot:
 
 - identity/materialization: `path`, `item_type`
-- local facts: `hash`, `size`, `mtime`
+- local facts: `hash`, `size`, `mtime`, `ctime` (regular files only; `0` for
+  folders and when unknown)
 - current filesystem identity: `local_device`, `local_inode`,
   `local_has_identity`
 

@@ -79,6 +79,7 @@ type localStateRow struct {
 	Hash             string
 	Size             int64
 	Mtime            int64
+	Ctime            int64 // inode change time (Unix nanoseconds); zero means unknown
 	LocalDevice      uint64
 	LocalInode       uint64
 	LocalHasIdentity bool

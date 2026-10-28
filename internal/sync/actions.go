@@ -110,6 +110,7 @@ type actionOutcome struct {
 	RemoteHash            string
 	LocalSize             int64
 	LocalSizeKnown        bool
+	LocalCtime            int64 // local inode change time; recorded with identity
 	LocalDevice           uint64
 	LocalInode            uint64
 	LocalHasIdentity      bool

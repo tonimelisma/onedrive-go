@@ -18,6 +18,8 @@ When the same file has been modified on both the local filesystem and OneDrive s
 - R-2.2.1: The system shall use content hash comparison (QuickXorHash) against the baseline as the primary conflict signal. [verified]
 - R-2.2.2: The system shall use mtime as a fast-path optimization (skip hashing when timestamps match baseline). [verified]
 - R-2.2.3: When only an item's metadata changed (for example `touch` gives a file a new mtime with the same content), the system shall transfer nothing and shall record the new metadata in the baseline, so the R-2.2.2 fast path applies again instead of re-hashing the file on every scan. [verified]
+- R-2.2.4: The R-2.2.2 fast path shall trust a file's baseline hash only when its size, its full-precision local mtime, its inode change time (ctime) and its filesystem identity (device, inode) all equal what the baseline recorded, and the file is outside the racily-clean window by both mtime and ctime. Local timestamps compared with local timestamps are never truncated. An in-place edit that restores the old mtime (`cp -p`, `touch -r`, `rsync -t --inplace`) still moves ctime, and a different file renamed over the synced one has a different identity, so both are re-read instead of being taken for the synced content. A baseline without ctime or identity is re-read. [verified]
+- R-2.2.5: Before a download replaces an existing local file, the file shall be hashed and its hash required to equal the hash of the version the plan observed, or the baseline's local hash when the plan has none; a mismatch, or a ctime that moved since the observation, supersedes the download, so an unsynced local edit is never overwritten. [verified]
 
 ## R-2.3 Conflict Handling [verified]
 

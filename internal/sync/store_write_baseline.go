@@ -34,14 +34,14 @@ import (
 const (
 	sqlLoadBaseline = `SELECT item_id, path, parent_id, item_type,
 		local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime,
-		local_device, local_inode, local_has_identity, etag
+		local_ctime, local_device, local_inode, local_has_identity, etag
 		FROM baseline`
 
 	sqlUpsertBaseline = `INSERT INTO baseline
 		(item_id, path, parent_id, item_type, local_hash, remote_hash,
 		 local_size, remote_size, local_mtime, remote_mtime,
-		 local_device, local_inode, local_has_identity, etag)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 local_ctime, local_device, local_inode, local_has_identity, etag)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(item_id) DO UPDATE SET
 		 path = excluded.path,
 		 parent_id = excluded.parent_id,
@@ -52,6 +52,7 @@ const (
 		 remote_size = excluded.remote_size,
 		 local_mtime = excluded.local_mtime,
 		 remote_mtime = excluded.remote_mtime,
+		 local_ctime = excluded.local_ctime,
 		 local_device = excluded.local_device,
 		 local_inode = excluded.local_inode,
 		 local_has_identity = excluded.local_has_identity,
@@ -71,6 +72,7 @@ type localBaselineRefresh struct {
 	LocalSize        int64
 	LocalSizeKnown   bool
 	LocalMtime       int64
+	LocalCtime       int64
 	LocalDevice      uint64
 	LocalInode       uint64
 	LocalHasIdentity bool
@@ -173,7 +175,7 @@ func scanBaselineRow(rows *sql.Rows, contentDriveID driveid.ID) (*BaselineEntry,
 	err := rows.Scan(
 		&e.ItemID, &e.Path, &parentID, &e.ItemType,
 		&localHash, &remoteHash, &localSize, &remoteSize, &localMtime, &remoteMtime,
-		&localDevice, &localInode, &localHasIdentity, &etag,
+		&e.LocalCtime, &localDevice, &localInode, &localHasIdentity, &etag,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sync: scanning baseline row: %w", err)
@@ -269,6 +271,7 @@ func fillMutationFromBaselineDefaults(mutation *BaselineMutation, baseline *Base
 		mutation.LocalMtime = baseline.LocalMtime
 	}
 	if !mutation.LocalIdentityObserved {
+		mutation.LocalCtime = baseline.LocalCtime
 		mutation.LocalDevice = baseline.LocalDevice
 		mutation.LocalInode = baseline.LocalInode
 		mutation.LocalHasIdentity = baseline.LocalHasIdentity
@@ -325,6 +328,7 @@ func publicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*
 			mutation.LocalSize = action.View.Local.Size
 			mutation.LocalSizeKnown = true
 			mutation.LocalMtime = action.View.Local.Mtime
+			mutation.LocalCtime = action.View.Local.LocalCtime
 			mutation.LocalDevice = action.View.Local.LocalDevice
 			mutation.LocalInode = action.View.Local.LocalInode
 			mutation.LocalHasIdentity = action.View.Local.LocalHasIdentity
@@ -419,6 +423,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh localBasel
 		LocalSize:        refresh.LocalSize,
 		LocalSizeKnown:   refresh.LocalSizeKnown,
 		LocalMtime:       refresh.LocalMtime,
+		LocalCtime:       refresh.LocalCtime,
 		LocalDevice:      refresh.LocalDevice,
 		LocalInode:       refresh.LocalInode,
 		LocalHasIdentity: refresh.LocalHasIdentity,
@@ -463,6 +468,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh localBasel
 		nullKnownInt64(entry.RemoteSize, entry.RemoteSizeKnown),
 		nullOptionalInt64(entry.LocalMtime),
 		nullOptionalInt64(entry.RemoteMtime),
+		entry.LocalCtime,
 		int64(entry.LocalDevice),
 		int64(entry.LocalInode),
 		boolInt(entry.LocalHasIdentity),
@@ -617,6 +623,7 @@ func mutationToEntry(o *BaselineMutation) *BaselineEntry {
 		RemoteSizeKnown:  o.RemoteSizeKnown,
 		LocalMtime:       o.LocalMtime,
 		RemoteMtime:      o.RemoteMtime,
+		LocalCtime:       o.LocalCtime,
 		LocalDevice:      o.LocalDevice,
 		LocalInode:       o.LocalInode,
 		LocalHasIdentity: o.LocalHasIdentity,
@@ -649,6 +656,7 @@ func mutationFromActionOutcome(o *actionOutcome) *BaselineMutation {
 		RemoteSizeKnown:       o.RemoteSizeKnown,
 		LocalMtime:            o.LocalMtime,
 		RemoteMtime:           o.RemoteMtime,
+		LocalCtime:            o.LocalCtime,
 		LocalDevice:           o.LocalDevice,
 		LocalInode:            o.LocalInode,
 		LocalHasIdentity:      o.LocalHasIdentity,
@@ -683,6 +691,7 @@ func commitUpsert(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) erro
 		nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown),
 		nullOptionalInt64(o.LocalMtime),
 		nullOptionalInt64(o.RemoteMtime),
+		o.LocalCtime,
 		int64(o.LocalDevice),
 		int64(o.LocalInode),
 		boolInt(o.LocalHasIdentity),
@@ -912,6 +921,7 @@ func baselineEntriesEqual(a, b *BaselineEntry) bool {
 		a.RemoteSizeKnown == b.RemoteSizeKnown &&
 		a.LocalMtime == b.LocalMtime &&
 		a.RemoteMtime == b.RemoteMtime &&
+		a.LocalCtime == b.LocalCtime &&
 		a.LocalDevice == b.LocalDevice &&
 		a.LocalInode == b.LocalInode &&
 		a.LocalHasIdentity == b.LocalHasIdentity &&

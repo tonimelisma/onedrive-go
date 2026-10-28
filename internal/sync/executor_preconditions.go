@@ -369,6 +369,9 @@ func (e *executor) validateUploadSourcePrecondition(action *Action) error {
 	if planned.Mtime != 0 && info.ModTime().UnixNano() != planned.Mtime {
 		return stalePreconditionError("upload source %s changed mtime", action.Path)
 	}
+	if plannedCtimeChanged(planned, info) {
+		return stalePreconditionError("upload source %s changed since it was observed", action.Path)
+	}
 	if planned.LocalHasIdentity {
 		identity, identityOK := synctree.IdentityFromFileInfo(info)
 		if identityOK && !synctree.SameIdentity(identity, synctree.FileIdentity{
@@ -493,7 +496,7 @@ func (e *executor) validateExistingDownloadTarget(action *Action, info os.FileIn
 	if err := validateDownloadTargetMetadata(action, info, planned); err != nil {
 		return err
 	}
-	if planned.Hash != "" {
+	if expected := expectedDownloadTargetHash(action, planned); expected != "" {
 		absPath, absErr := e.syncTree.Abs(action.Path)
 		if absErr != nil {
 			return normalizeSyncTreePathError(absErr)
@@ -502,12 +505,30 @@ func (e *executor) validateExistingDownloadTarget(action *Action, info os.FileIn
 		if hashErr != nil {
 			return fmt.Errorf("hashing download target %s: %w", action.Path, hashErr)
 		}
-		if currentHash != planned.Hash {
+		if currentHash != expected {
 			return stalePreconditionError("download target %s changed hash", action.Path)
 		}
 	}
 
 	return nil
+}
+
+// expectedDownloadTargetHash is the content a download may replace: the
+// version the plan observed, or, when the plan carries no hash for it, the
+// synced version in the baseline (R-2.2.5). Metadata alone never proves a
+// file is the synced version: an in-place edit can keep size and mtime.
+func expectedDownloadTargetHash(action *Action, planned *localState) string {
+	if planned != nil && planned.Hash != "" {
+		return planned.Hash
+	}
+	if action == nil || action.View == nil || action.View.Baseline == nil {
+		return ""
+	}
+	if action.View.Baseline.ItemType != ItemTypeFile {
+		return ""
+	}
+
+	return action.View.Baseline.LocalHash
 }
 
 // validateDownloadTargetMetadata is the cheap half of the overwrite check:
@@ -522,8 +543,23 @@ func validateDownloadTargetMetadata(action *Action, info os.FileInfo, planned *l
 	if planned.Mtime != 0 && info.ModTime().UnixNano() != planned.Mtime {
 		return stalePreconditionError("download target %s changed mtime", action.Path)
 	}
+	if plannedCtimeChanged(planned, info) {
+		return stalePreconditionError("download target %s changed since it was observed", action.Path)
+	}
 
 	return nil
+}
+
+// plannedCtimeChanged reports whether the file's inode change time moved since
+// the observation the plan used. An in-place edit that restored size and mtime
+// still moves ctime (R-2.2.4). An unknown planned ctime proves nothing.
+func plannedCtimeChanged(planned *localState, info os.FileInfo) bool {
+	if planned == nil || planned.LocalCtime == 0 {
+		return false
+	}
+	current := fileChangeTime(info)
+
+	return current != 0 && current != planned.LocalCtime
 }
 
 // validateDownloadTargetBeforeReplace runs just before a finished download is
@@ -557,14 +593,15 @@ func (e *executor) downloadTargetVerifier(action *Action, planned *localState) s
 		if metaErr := validateDownloadTargetMetadata(action, current, planned); metaErr != nil {
 			return metaErr
 		}
-		if planned.Hash == "" {
+		expected := expectedDownloadTargetHash(action, planned)
+		if expected == "" {
 			return nil
 		}
 		currentHash, hashErr := e.hashReader(f)
 		if hashErr != nil {
 			return fmt.Errorf("hashing download target %s: %w", action.Path, hashErr)
 		}
-		if currentHash != planned.Hash {
+		if currentHash != expected {
 			return stalePreconditionError("download target %s changed hash", action.Path)
 		}
 		return nil

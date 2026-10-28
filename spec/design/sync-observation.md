@@ -4,7 +4,7 @@ GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/
 
 LAYER: 2
 
-Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.8.20 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
+Implements: R-2.1.2 [verified], R-2.2.4 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.8.20 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
 
 ## Overview
 
@@ -68,7 +68,8 @@ except that the type had once been public.
 | A watcher that cannot be created or extended because of an operating-system limit (inotify watches or instances, open files, kernel memory) degrades to periodic full scans with one warning naming the limit and its fix; a descriptor-limit failure after startup stops watching so the watcher's descriptors are released. | `TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable`, `TestClassifyWatcherCreateError_ResourceLimits`, `TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable`, `TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan`, `TestWatch_NewDirectoryEMFILEStopsWatchingForFallback`, `TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval`, `TestRunWatch_WatchFallbackRetriesTheWatcher` |
 | Known-missed local changes (kernel queue overflow, watcher errors, dropped batches or hash requests) arm one coalesced recovery rescan instead of waiting for the periodic safety scan. | `TestWatch_EventOverflowRunsRecoveryScan`, `TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan`, `TestRecoveryScanDelay_ScalesWithScanDurationAndBacksOffUnderStorm`, `TestCancelRecoveryScan_StaleTimerFiringIsIgnored`, `TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan`, `TestRewatchUnwatchedDirectories_FailedAddIsRetriedAtNextScan`, `TestTrySendLocalObservationBatch_DropRequestsRecoveryScan` |
 | A deleted or renamed-away directory drops the watches of its whole subtree, deepest first, so the re-added tree reports its new paths. | `TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst`, `TestWatch_RenamedDirectoryDescendantEventsUseNewPath`, `TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches`, `TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree`, `TestWatchRegistry_SubtreeLookupFollowsTheIndexAndUnlinksEmptyBranches` |
-| The destination half of a rename is observed without waiting on a content read: an identity match reuses the synced hash when size and mtime are unchanged, otherwise the row goes out with an unknown hash and the hash follows; a created directory's row precedes its contents. | `TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing`, `TestHandleCreate_RenamedUnchangedFileReusesSyncedHash`, `TestHandleCreate_ReusedInodeWhileSyncedPathExistsIsHashed`, `TestHandleCreate_DirectoryRowPrecedesItsContents` |
+| The destination half of a rename is observed without waiting on a content read: an identity match reuses the synced hash when size and mtime are unchanged, otherwise the row goes out with an unknown hash and the hash follows; a created directory's row precedes its contents. | `TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing`, `TestHandleCreate_RenamedUnchangedFileReusesSyncedHash`, `TestHandleCreate_RenameThatMovedCtimeDefersTheHash`, `TestHandleCreate_ReusedInodeWhileSyncedPathExistsIsHashed`, `TestHandleCreate_DirectoryRowPrecedesItsContents` |
+| The hash fast path trusts the baseline hash only when size, full-precision mtime, ctime and (device, inode) all match and the file is outside the racily-clean window; an in-place edit with a restored mtime and a different file renamed over the synced one are re-read, and transfers record ctime and identity so the fast path applies after them (R-2.2.4). | `TestFullScan_ContentChangedWithRestoredMtimeIsDetected`, `TestFullScan_IdentityChangeForcesRehash`, `TestFullScan_SubsecondMtimeDifferenceForcesRehash`, `TestFullScan_UnchangedFileWithMatchingIdentityAndCtimeSkipsHash`, `TestCanReuseBaselineHash_CtimeOrIdentityMismatchRequiresHash`, `TestCanReuseBaselineHash_SubsecondMtimeDifferenceRequiresHash`, `TestRunOnce_InPlaceEditWithRestoredMtimeUploads`, `TestRunOnce_InPlaceEditWithRestoredMtimeConflictsWithRemoteEdit`, `TestRunOnce_TransfersRecordLocalCtimeAndIdentity` |
 | Write coalescing hashes a continuously written file within a bounded wait, and backs off exponentially for a file that never settles. | `TestScheduleWriteHash_ContinuousWritesHashWithinMaxWait`, `TestWatch_ContinuouslyWrittenFileBacksOff`, `TestHashAndEmit_StillChangingAtRetryCapStaysPendingWithoutEmptyHash`, `TestPruneWriteChurn_DropsSettledPaths` |
 | On kqueue platforms watch setup projects its descriptor use (watched directories plus their entries) and falls back to periodic scans above half the open-file limit. | `TestAddWatchesRecursive_OverDescriptorBudgetFallsBackBeforeExhaustingFiles`, `TestAddWatchesRecursive_WithinDescriptorBudgetWatches`, `TestAddWatchesRecursive_DescriptorProjectionCountsSubdirectoriesOnce` |
 | A network or FUSE sync root is identified with statfs, warned about once, and rescanned every two minutes. | `TestWatch_NetworkRootShortensSafetyScanInterval`, `TestAdaptToRootFilesystem_LocalRootKeepsInterval`, `TestAdaptToRootFilesystem_NonDefaultIntervalIsNeverOverridden`, `TestMountFilesystemType_DistinguishesFuseblkFromNetworkFuse`, `TestLocalFilesystemKind_ReadsTheRealFilesystem` |
@@ -315,7 +316,40 @@ still exists the inode was freed and reused by unrelated content, which is
 hashed like any create -- reuses that file's synced hash when size and mtime
 are unchanged (no read at all, so a renamed tree is not re-read), and otherwise
 is emitted at once with an unknown hash -- move pairing accepts an unknown hash
-on equal mtime -- and hashed through the deferred-hash path. A created
+on equal mtime -- and hashed through the deferred-hash path. "Unchanged" is the
+full R-2.2.4 rule, ctime included, and the kernel moves a file's ctime when the
+file itself is renamed, so a renamed single file takes the deferred-hash path;
+a renamed directory leaves its children's ctimes alone, so its tree is still
+not re-read.
+
+### Hash Reuse Trusts Only Exact Local Facts
+
+`canReuseBaselineHash` (`local_hash_reuse.go`) is the one rule the full scan
+and the watch create path use to skip reading a file (R-2.2.2, R-2.2.4). The
+baseline hash is trusted only when size, mtime at full nanosecond precision,
+ctime and (device, inode) all equal the baseline, and both mtime and ctime are
+at least a second older than the scan start (the racily-clean guard; Linux
+stamps ctime from a coarse clock, so two writes in one tick share it).
+
+- Whole-second truncation (R-6.7.15) is for comparing a local time with
+  OneDrive's wire value. Every value compared here is a local observation, and
+  truncating them hid sub-second edits.
+- ctime is the only timestamp no unprivileged call can set back. `cp -p`,
+  `touch -r`, `rsync -t --inplace` and mmap writes followed by `utimes` restore
+  size and mtime but move ctime. The stale hash used to be reused, written to
+  `local_state`, and made permanent by the `baseline_update` that followed;
+  a later remote edit then downloaded over the unsynced edit.
+- Identity catches a different file renamed over the synced one with the same
+  size and mtime.
+- A baseline with no ctime or identity proves nothing and is re-read.
+- Rows record ctime for regular files only: a folder's ctime moves with every
+  child. The ctime a row carries is always stated before the content is read
+  (walk stat, watch stat, `computeStableHashWith` pre-stat, which also rejects a
+  read during which ctime moved), so a write racing the read leaves a newer
+  ctime and forces the next re-read rather than hiding behind the recorded one.
+- A rolling re-verify budget (P-12) is not implemented: content that changes
+  without any metadata change (bit rot) is still only caught when something
+  else forces a read. A created
 directory's own row is emitted before its contents are scanned.
 
 Write coalescing (B-107) restarts a path's quiet-period timer on every write,

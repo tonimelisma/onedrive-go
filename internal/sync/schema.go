@@ -25,7 +25,11 @@ const (
 	// mass deletion, and adds held_deletes, the deletes the delete-safety
 	// hold keeps for confirmation, and mount_boundaries, the folders a scan
 	// crossed into another filesystem under cross_filesystems.
-	currentSyncStoreGeneration = 19
+	//
+	// Generation 20 records the local inode change time (baseline.local_ctime,
+	// local_state.ctime) so the hash fast path can see an in-place edit that
+	// restored the old mtime (R-2.2.4).
+	currentSyncStoreGeneration = 20
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -45,6 +49,7 @@ CREATE TABLE IF NOT EXISTS baseline (
     remote_size     INTEGER,
     local_mtime     INTEGER,
     remote_mtime    INTEGER,
+    local_ctime     INTEGER NOT NULL DEFAULT 0,
     local_device    INTEGER NOT NULL DEFAULT 0,
     local_inode     INTEGER NOT NULL DEFAULT 0,
     local_has_identity INTEGER NOT NULL DEFAULT 0 CHECK(local_has_identity IN (0, 1)),
@@ -111,6 +116,7 @@ CREATE TABLE IF NOT EXISTS local_state (
     hash       TEXT,
     size       INTEGER,
     mtime      INTEGER,
+    ctime      INTEGER NOT NULL DEFAULT 0,
     local_device INTEGER NOT NULL DEFAULT 0,
     local_inode  INTEGER NOT NULL DEFAULT 0,
     local_has_identity INTEGER NOT NULL DEFAULT 0 CHECK(local_has_identity IN (0, 1))
@@ -188,7 +194,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 		},
 		"baseline": {
 			"item_id", "path", "parent_id", "item_type", "local_hash", "remote_hash",
-			"local_size", "remote_size", "local_mtime", "remote_mtime",
+			"local_size", "remote_size", "local_mtime", "remote_mtime", "local_ctime",
 			"local_device", "local_inode", "local_has_identity", "etag",
 		},
 		"observation_state": {
@@ -210,7 +216,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"path", "side", "reason", "item_type", "item_id",
 		},
 		"local_state": {
-			"path", "item_type", "hash", "size", "mtime",
+			"path", "item_type", "hash", "size", "mtime", "ctime",
 			"local_device", "local_inode", "local_has_identity",
 		},
 		"retry_work": {

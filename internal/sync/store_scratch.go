@@ -16,8 +16,8 @@ const (
 	sqlInsertScratchBaseline = `INSERT INTO baseline
 		(item_id, path, parent_id, item_type, local_hash, remote_hash,
 		 local_size, remote_size, local_mtime, remote_mtime,
-		 local_device, local_inode, local_has_identity, etag)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 local_ctime, local_device, local_inode, local_has_identity, etag)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	sqlListScratchRemoteState = `SELECT ` + sqlSelectRemoteStateCols + `
 		FROM remote_state
 		ORDER BY path`
@@ -186,6 +186,7 @@ func insertScratchBaselineEntries(
 			nullKnownInt64(entry.RemoteSize, entry.RemoteSizeKnown),
 			nullOptionalInt64(entry.LocalMtime),
 			nullOptionalInt64(entry.RemoteMtime),
+			entry.LocalCtime,
 			int64(entry.LocalDevice),
 			int64(entry.LocalInode),
 			boolInt(entry.LocalHasIdentity),

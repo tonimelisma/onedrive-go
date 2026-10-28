@@ -39,10 +39,13 @@ func syncedFileAt(t *testing.T, path string, info os.FileInfo, size int64, hash 
 
 	identity, ok := synctree.IdentityFromFileInfo(info)
 	require.True(t, ok, "test needs filesystem identity")
+	ctime, ok := synctree.ChangeTimeFromFileInfo(info)
+	require.True(t, ok, "test needs ctime")
 
 	return &BaselineEntry{
 		Path: path, DriveID: driveid.New("d"), ItemID: "item-" + path, ItemType: ItemTypeFile,
 		LocalHash: hash, LocalSize: size, LocalSizeKnown: true, LocalMtime: info.ModTime().UnixNano(),
+		LocalCtime:  ctime,
 		LocalDevice: identity.Device, LocalInode: identity.Inode, LocalHasIdentity: true,
 	}
 }
@@ -116,6 +119,44 @@ func TestHandleCreate_RenamedUnchangedFileReusesSyncedHash(t *testing.T) {
 	assert.Equal(t, "synced-hash", ev.Hash, "same inode, size and mtime: the synced hash is reused")
 	assert.Zero(t, hashCalls.Load(), "a renamed file is not re-read")
 	assert.Empty(t, obs.PendingTimers, "nothing left to hash")
+}
+
+// Validates: R-2.8.15, R-2.2.4
+func TestHandleCreate_RenameThatMovedCtimeDefersTheHash(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	oldPath := writeTestFile(t, dir, "original.bin", "content the baseline hashed")
+	before, err := os.Stat(oldPath)
+	require.NoError(t, err)
+	synced := syncedFileAt(t, "original.bin", before, before.Size(), "synced-hash")
+	baseline := baselineWith(synced)
+
+	// The kernel moves ctime on rename, and ctime cannot tell a rename from
+	// an in-place edit that restored the mtime, so the synced hash is not
+	// trusted. The row still goes out at once for move pairing; only the
+	// read is deferred.
+	fsPath := filepath.Join(dir, "renamed.bin")
+	require.NoError(t, os.Rename(oldPath, fsPath))
+	after, err := os.Stat(fsPath)
+	require.NoError(t, err)
+	ctimeAfter, ok := synctree.ChangeTimeFromFileInfo(after)
+	require.True(t, ok)
+	require.NotEqual(t, synced.LocalCtime, ctimeAfter, "Linux and macOS move ctime on rename")
+
+	clock := newManualClock(after.ModTime().Add(time.Hour))
+	var hashCalls atomic.Int64
+	obs := newSettleTestObserver(t, baseline, clock, &hashCalls)
+	events := make(chan changeEvent, 10)
+
+	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), fsPath, "renamed.bin", "renamed.bin", newMockFsWatcher(), events)
+
+	require.Len(t, events, 1)
+	ev := <-events
+	assert.Empty(t, ev.Hash, "the synced hash is not reused across a ctime change")
+	assert.True(t, ev.LocalHasIdentity, "identity still pairs the move")
+	assert.Zero(t, hashCalls.Load(), "no synchronous read on the create path")
+	assert.Contains(t, obs.PendingTimers, "renamed.bin", "the read follows as a deferred hash")
 }
 
 // Validates: R-2.8.15
