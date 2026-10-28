@@ -162,6 +162,39 @@ func TestEngineFlow_ProcessNormalDecision_ServiceRetryAfterBlocksTheTriggeringWo
 	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
 }
 
+// Validates: R-2.10.5
+//
+// A scope-blocking decision names its scope twice, as the scope it blocks
+// (ScopeKey) and as the evidence the retry row records (ScopeEvidence).
+// Classification sets them equal; if a decision ever carried two different
+// keys, the row was blocked under the evidence while the scope activated was
+// the other one, a block scope with no blocked work. The row now follows the
+// scope that is activated.
+func TestEngineFlow_ProcessNormalDecision_BlockedRowFollowsTheActivatedScope(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+
+	_, err := flow.applyNormalCompletionDecision(t.Context(), &resultDecision{
+		Class:         errclass.ClassScopeBlockingTransient,
+		ScopeKey:      SKDiskLocal(),
+		ScopeEvidence: SKService(),
+		Persistence:   persistRetryWork,
+		TrialHint:     trialHintExtendOnMatchingScope,
+		ConditionType: issueDiskFull,
+	}, nil, &actionCompletion{Path: "full.bin", ActionType: ActionDownload, ErrMsg: "no space"}, nil)
+	require.NoError(t, err)
+
+	assert.True(t, rt.scopes.hasActiveScope(SKDiskLocal()))
+	rows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, rows, 1)
+	assert.Equal(t, SKDiskLocal(), rows[0].ScopeKey)
+	assert.True(t, rows[0].Blocked)
+	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
+}
+
 // Validates: R-2.10.28, R-2.10.29
 //
 // The outage failure that crosses the service window's threshold activates

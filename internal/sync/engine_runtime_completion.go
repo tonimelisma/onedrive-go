@@ -312,6 +312,18 @@ func (flow *engineFlow) persistFailureWithScopeEffects(
 	return true, persistAs, err
 }
 
+// retryWorkScope is the scope a failure's retry row records. Blocked work is
+// recorded under the scope its decision blocks (ScopeKey), the scope that is
+// activated, so the two can never name different scopes; other work records
+// its evidence, which a later activation of that scope may block.
+func (decision *resultDecision) retryWorkScope() ScopeKey {
+	if decision.Class == errclass.ClassScopeBlockingTransient && !decision.ScopeKey.IsZero() {
+		return decision.ScopeKey
+	}
+
+	return decision.ScopeEvidence
+}
+
 // decisionBlockedUnder is decision as work blocked under scopeKey: the
 // failure that activates a scope is that scope's first blocked work.
 func decisionBlockedUnder(decision *resultDecision, scopeKey ScopeKey) *resultDecision {
@@ -528,7 +540,7 @@ func (flow *engineFlow) recordRetryWork(
 	r *actionCompletion,
 	delayFn func(int) time.Duration,
 ) error {
-	scopeKey := decision.ScopeEvidence
+	scopeKey := decision.retryWorkScope()
 	blocked := flow.retryWorkShouldBeBlocked(decision.Class, scopeKey)
 
 	if decision.Class == errclass.ClassActionable {
