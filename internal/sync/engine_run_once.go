@@ -252,11 +252,14 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 		}
 		return false, nil
 	}
-	if observation.fullRefreshDueNow {
+	if observation.fullRefreshDueSoon {
 		deadlineChanged, err := flow.deps.store.ClampFullRemoteRefreshDeadline(
 			ctx,
 			flow.engine.driveID,
-			flow.deps.now(),
+			// Deferred, not now: one burst of folder deletions shares one
+			// enumeration, and a deadline only ever moves earlier, so
+			// refreshes stay this far apart.
+			flow.deps.now().Add(fullRefreshAfterFolderDeleteDelay),
 		)
 		if err != nil {
 			return false, fmt.Errorf("sync: pulling full remote refresh forward: %w", err)

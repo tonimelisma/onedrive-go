@@ -65,6 +65,9 @@ type moveScenarioRemote struct {
 
 	// deltaRand, when set, shuffles every delta page (shuffleDelta).
 	deltaRand *rand.Rand
+	// fullDeltaAt records when each full enumeration (delta without a
+	// token) was served.
+	fullDeltaAt []time.Time
 
 	// recycled and versions hold every file content OneDrive still keeps
 	// after a delete or an overwrite.
@@ -409,6 +412,9 @@ func (r *moveScenarioRemote) delta(token string) *graph.DeltaPage {
 	next := fmt.Sprintf("seq-%d", r.changeSeq)
 	r.mu.Unlock()
 	if !incremental {
+		r.mu.Lock()
+		r.fullDeltaAt = append(r.fullDeltaAt, time.Now())
+		r.mu.Unlock()
 		return deltaPageWithItems(r.snapshot(), next)
 	}
 

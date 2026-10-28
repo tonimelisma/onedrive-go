@@ -18,7 +18,7 @@ func (batch *remoteObservationBatch) deferredProgress() *remoteObservationBatch 
 	if batch == nil ||
 		(batch.cursorToken == "" &&
 			!batch.markFullRemoteRefresh &&
-			!batch.fullRefreshDueNow &&
+			!batch.fullRefreshDueSoon &&
 			batch.observationMode != remoteObservationModeEnumerate) {
 		return nil
 	}
@@ -87,7 +87,7 @@ func buildPrimaryWatchBatch(
 		false,
 		newRemoteObservationFindingsBatch(),
 	)
-	batch.fullRefreshDueNow = deltaWindowDeletesSyncedFolder(bl, primaryEvents)
+	batch.fullRefreshDueSoon = deltaWindowDeletesSyncedFolder(bl, primaryEvents)
 	batch.source = remoteObservationBatchPrimaryWatch
 	batch.applyAck = make(chan error, 1)
 
@@ -150,7 +150,7 @@ func (flow *engineFlow) executeDriveRootObservation(
 		false,
 		newRemoteObservationFindingsBatch(),
 	)
-	batch.fullRefreshDueNow = deltaWindowDeletesSyncedFolder(bl, events)
+	batch.fullRefreshDueSoon = deltaWindowDeletesSyncedFolder(bl, events)
 	batch.shortcutTopology = topology
 	return batch, err
 }
@@ -162,8 +162,8 @@ func (flow *engineFlow) executeDriveRootObservation(
 // never repeats, so the item's row stays at its old path as a ghost and its
 // synced local copy is never deleted. Only a full enumeration can see that
 // such an item is gone, so the folder's tombstone makes the full refresh due
-// at once; its orphans are confirmed by ID before anything is deleted
-// (confirmEnumerationOrphans).
+// within fullRefreshAfterFolderDeleteDelay; its orphans are confirmed by ID
+// before anything is deleted (confirmEnumerationOrphans).
 //
 // A folder this client deleted itself is no longer in the baseline when its
 // tombstone echoes back, so propagating a local folder delete does not cost a

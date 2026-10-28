@@ -100,14 +100,17 @@ Important properties:
   the same deletes on every poll indefinitely
   (`TestWatch_OnlyUnrecoverableDeletes_AdvancesToken`)
 - an incremental window that deletes a folder the baseline holds makes the
-  full refresh due at once (`deltaWindowDeletesSyncedFolder`). Delta reports a
+  full refresh due within 15 minutes (`deltaWindowDeletesSyncedFolder`,
+  `fullRefreshAfterFolderDeleteDelay`; deferred so a burst of folder deletions
+  shares one enumeration and refreshes stay that far apart). Delta reports a
   deleted folder alone (R-2.17.2), and that also hides an item moved into the
   folder in the same window: its row stayed at the old path as a ghost and its
   synced local copy was never deleted. The full refresh's orphans are confirmed
   by ID before anything is deleted. The echo of a folder this client deleted
   is no longer in the baseline and costs nothing
   (`TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally`,
-  `TestHandleRemoteObservationBatch_SyncedFolderTombstonePullsFullRefreshForward`)
+  `TestHandleRemoteObservationBatch_SyncedFolderTombstonePullsFullRefreshForward`,
+  `TestRunOnce_VirtualTime_FolderDeletesSpaceFullRefreshes`)
 - HTTP 410 delta expiry is surfaced as `deltaExpiredError`, which carries the
   resync flavor from the error's inner code; recovery is the engine's full
   refresh with orphan detection, in watch mode too (`SetDeltaExpiredRecovery`,

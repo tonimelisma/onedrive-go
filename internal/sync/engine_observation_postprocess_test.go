@@ -453,7 +453,7 @@ func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationR
 // Validates: R-2.17.2, R-2.15.3
 //
 // A watch-mode delta that deletes a synced folder makes the full refresh due
-// at once, since delta never reports an item moved into the folder in the
+// within fullRefreshAfterFolderDeleteDelay, since delta never reports an item moved into the folder in the
 // same window. The tombstone echo of a folder this client deleted (no longer
 // in the baseline) does not.
 func TestHandleRemoteObservationBatch_SyncedFolderTombstonePullsFullRefreshForward(t *testing.T) {
@@ -490,7 +490,9 @@ func TestHandleRemoteObservationBatch_SyncedFolderTombstonePullsFullRefreshForwa
 			state, err := eng.baseline.ReadObservationState(ctx)
 			require.NoError(t, err)
 			if tc.wantPull {
-				assert.Less(t, state.NextFullRemoteRefreshAt, now.Add(time.Hour).UnixNano(), "the full refresh is due now, not in 24 h")
+				assert.Less(t, state.NextFullRemoteRefreshAt, now.Add(time.Hour).UnixNano(), "the full refresh is due soon, not in 24 h")
+				assert.GreaterOrEqual(t, state.NextFullRemoteRefreshAt, now.Add(fullRefreshAfterFolderDeleteDelay).UnixNano(),
+					"but deferred, so a burst of folder deletions shares one enumeration")
 				return
 			}
 			assert.Equal(t, now.Add(fullRemoteRefreshInterval).UnixNano(), state.NextFullRemoteRefreshAt)

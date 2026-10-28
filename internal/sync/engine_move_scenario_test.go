@@ -363,7 +363,7 @@ func TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift(t *testing.T
 // alone, and the item's move is part of a subtree delta never repeats. Its
 // remote_state row stayed at the old path as a ghost, so the synced local
 // copy was never deleted (model test seed 28). The folder's tombstone makes
-// the next pass a full refresh, whose orphans are confirmed by ID.
+// a full refresh due shortly after, whose orphans are confirmed by ID.
 func TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally(t *testing.T) {
 	t.Parallel()
 
@@ -378,10 +378,13 @@ func TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally(t *testing.T
 	runScenarioPass(t, eng)
 	require.FileExists(t, filepath.Join(syncRoot, "moved.txt"))
 
+	clock := newManualClock(time.Now())
+	installManualClockForTestEngine(eng, clock)
 	remote.move("item-moved", "item-bin", "moved.txt")
 	remote.deleteRemotely("item-bin")
 	h.beginRound(t)
 	runScenarioPass(t, eng)
+	clock.Advance(fullRefreshAfterFolderDeleteDelay)
 	runScenarioPass(t, eng)
 
 	assert.NoDirExists(t, filepath.Join(syncRoot, "bin"))
