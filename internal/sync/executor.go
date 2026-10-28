@@ -536,7 +536,8 @@ const localSpellingRenameAttempts = 10
 func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) actionOutcome {
 	driveID := e.resolveDriveID(action)
 
-	sourceETag, sourcePreconditionErr := e.remoteSourcePreconditionETag(ctx, driveID, action, "remote move")
+	live, sourcePreconditionErr := e.remoteSourcePrecondition(ctx, driveID, action, "remote move")
+	sourceETag := live.eTag
 	if errors.Is(sourcePreconditionErr, errRemoteMoveAlreadyApplied) {
 		// Already where the plan wants it (an earlier attempt or a parent
 		// folder move got there first): record the move instead of
@@ -581,7 +582,12 @@ func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) action
 		sourceETag = ""
 	}
 
-	item, err := e.items.MoveItemIfMatch(ctx, driveID, action.ItemID, newParentID, newName, sourceETag)
+	// The live modification time rides along: a rename on OneDrive otherwise
+	// resets it to now, and the next comparison would see a change (D-150).
+	item, err := e.items.MoveItemIfMatch(ctx, driveID, action.ItemID, newParentID, newName, graph.MoveOptions{
+		IfMatch:      sourceETag,
+		KeepModified: live.modified,
+	})
 	if err != nil {
 		if errors.Is(err, graph.ErrPreconditionFailed) {
 			return e.failedOutcomeWithFailure(

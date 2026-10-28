@@ -84,6 +84,54 @@ func TestCpForce_SuccessReplacesAndKeepsSourceMtime(t *testing.T) {
 	}
 }
 
+// Validates: R-1.7.4
+func TestMv_RenameKeepsTheModificationTime(t *testing.T) {
+	t.Parallel()
+
+	cc, fake := jsonContractFileContext(t)
+	fake.addFile("a.txt", "content")
+	fake.mu.Lock()
+	fake.byPath("/a.txt").Modified = "2005-05-05T05:05:05Z"
+	fake.mu.Unlock()
+
+	_, err := runDetachedLeaf(t, freshLeaf(t, newMvCmd()), cc, "/a.txt", "/b.txt")
+	require.NoError(t, err)
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	moved := fake.byPath("/b.txt")
+	require.NotNil(t, moved)
+	assert.Equal(t, "2005-05-05T05:05:05Z", moved.Modified, "a rename must not stamp its own time on the file")
+}
+
+// Validates: R-1.7.4, R-1.8.2
+func TestMvForce_RestoredDestinationKeepsItsModificationTime(t *testing.T) {
+	t.Parallel()
+
+	cc, fake := jsonContractFileContext(t)
+	fake.addFile("dst.txt", "precious")
+	fake.mu.Lock()
+	existing := fake.byPath("/dst.txt")
+	existing.Modified = "2010-10-10T10:10:10Z"
+	fake.mu.Unlock()
+	session, err := cc.Session(t.Context())
+	require.NoError(t, err)
+
+	err = replaceDestination(t.Context(), cc, session, "/dst.txt",
+		destInfo{
+			parentID: fakeGraphRootID, newName: "dst.txt", existingID: existing.ID,
+			existingModified: time.Date(2010, 10, 10, 10, 10, 10, 0, time.UTC),
+		}, time.Now(),
+		func() error { return errors.New("the move failed") })
+	require.Error(t, err)
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	restored := fake.byPath("/dst.txt")
+	require.NotNil(t, restored, "the original gets its name back")
+	assert.Equal(t, "2010-10-10T10:10:10Z", restored.Modified, "setting aside and restoring must keep its modification time")
+}
+
 // Validates: R-1.8.2
 func TestMvForce_ReplacesWithoutDeletingFirst(t *testing.T) {
 	t.Parallel()

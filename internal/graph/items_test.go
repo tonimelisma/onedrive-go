@@ -848,11 +848,74 @@ func TestMoveItem_MoveAndRename(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "new-parent", "renamed.txt")
+	item, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "new-parent", "renamed.txt", time.Time{})
 	require.NoError(t, err)
 
 	assert.Equal(t, "renamed.txt", item.Name)
 	assert.Equal(t, "new-parent", item.ParentID)
+}
+
+// Validates: R-2.17.5, R-1.7.4
+func TestMoveItem_RenameSendsTheModificationTimeToKeep(t *testing.T) {
+	// L-09: a rename resets the item's modification time to now unless the
+	// same PATCH carries fileSystemInfo.
+	keep := time.Date(2005, 5, 5, 5, 5, 5, 0, time.UTC)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		var req struct {
+			Name           string `json:"name"`
+			FileSystemInfo *struct {
+				LastModifiedDateTime string `json:"lastModifiedDateTime"`
+			} `json:"fileSystemInfo"`
+		}
+		if !assert.NoError(t, json.Unmarshal(body, &req)) {
+			return
+		}
+		assert.Equal(t, "new-name.txt", req.Name)
+		if assert.NotNil(t, req.FileSystemInfo, "the rename must carry the modification time") {
+			assert.Equal(t, "2005-05-05T05:05:05Z", req.FileSystemInfo.LastModifiedDateTime)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, `{
+			"id": "item-1",
+			"name": "new-name.txt",
+			"fileSystemInfo": {"lastModifiedDateTime": "2005-05-05T05:05:05Z"},
+			"parentReference": {"id": "old-parent", "driveId": "d"}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	item, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "", "new-name.txt", keep)
+	require.NoError(t, err)
+	assert.True(t, item.ModifiedAt.Equal(keep))
+}
+
+// Validates: R-2.17.5
+func TestMoveItem_WithoutATimeSendsNoFileSystemInfo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			return
+		}
+		assert.NotContains(t, string(body), "fileSystemInfo")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		writeTestResponse(t, w, `{"id": "item-1", "name": "n.txt", "parentReference": {"id": "p", "driveId": "d"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "", "n.txt", time.Time{})
+	require.NoError(t, err)
 }
 
 func TestMoveItem_RenameOnly(t *testing.T) {
@@ -884,7 +947,7 @@ func TestMoveItem_RenameOnly(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "", "new-name.txt")
+	item, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "", "new-name.txt", time.Time{})
 	require.NoError(t, err)
 
 	assert.Equal(t, "new-name.txt", item.Name)
@@ -924,7 +987,7 @@ func TestMoveItem_MoveOnly(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "new-parent", "")
+	item, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "new-parent", "", time.Time{})
 	require.NoError(t, err)
 
 	assert.Equal(t, "new-parent", item.ParentID)
@@ -933,14 +996,14 @@ func TestMoveItem_MoveOnly(t *testing.T) {
 
 func TestMoveItem_BothEmpty(t *testing.T) {
 	client := newTestClient(t, "http://localhost")
-	_, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "", "")
+	_, err := client.MoveItem(t.Context(), driveid.New("d"), "item-1", "", "", time.Time{})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrMoveNoChanges)
 }
 
 func TestMoveItem_NotFound(t *testing.T) {
 	assertGraphCallError(t, http.StatusNotFound, "req-move-404", "itemNotFound", func(client *Client) error {
-		_, err := client.MoveItem(t.Context(), driveid.New("d"), "nonexistent", "new-parent", "")
+		_, err := client.MoveItem(t.Context(), driveid.New("d"), "nonexistent", "new-parent", "", time.Time{})
 		return err
 	}, ErrNotFound)
 }
@@ -964,7 +1027,7 @@ func TestMoveItemIfMatch_SendsIfMatchHeader(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	item, err := client.MoveItemIfMatch(t.Context(), driveid.New("d"), "item-1", "new-parent", "renamed.txt", `"etag-current"`)
+	item, err := client.MoveItemIfMatch(t.Context(), driveid.New("d"), "item-1", "new-parent", "renamed.txt", MoveOptions{IfMatch: `"etag-current"`})
 	require.NoError(t, err)
 	assert.Equal(t, "item-1", item.ID)
 	assert.Equal(t, `"etag-next"`, item.ETag)
@@ -973,7 +1036,7 @@ func TestMoveItemIfMatch_SendsIfMatchHeader(t *testing.T) {
 // Validates: R-2.8.10
 func TestMoveItemIfMatch_PreconditionFailed(t *testing.T) {
 	assertGraphCallError(t, http.StatusPreconditionFailed, "req-move-412", "preconditionFailed", func(client *Client) error {
-		_, err := client.MoveItemIfMatch(t.Context(), driveid.New("d"), "item-1", "new-parent", "", `"etag-current"`)
+		_, err := client.MoveItemIfMatch(t.Context(), driveid.New("d"), "item-1", "new-parent", "", MoveOptions{IfMatch: `"etag-current"`})
 		return err
 	}, ErrPreconditionFailed)
 }

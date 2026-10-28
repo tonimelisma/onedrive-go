@@ -1014,10 +1014,10 @@ func appendSingleGroupCollision(
 	return collisions
 }
 
-// collisionDetail names the other colliding file(s). When the names differ in
-// characters OneDrive ignores when comparing names (emoji and anything else
-// beyond U+FFFF), the visible difference would leave the user puzzled about
-// why `a.txt` and `a😀.txt` collide, so the detail names both and says why.
+// collisionDetail names the other colliding file(s) and what to do. When the
+// names differ in characters OneDrive ignores when comparing names (emoji and
+// anything else beyond U+FFFF), the visible difference would leave the user
+// puzzled about why `a.txt` and `a😀.txt` collide, so the detail says why.
 func collisionDetail(prefix, name string, others []string) string {
 	detail := prefix + " " + strings.Join(others, ", ")
 	for _, other := range others {
@@ -1027,7 +1027,11 @@ func collisionDetail(prefix, name string, others []string) string {
 		}
 	}
 
-	return detail
+	if len(others) == 0 {
+		return detail
+	}
+
+	return fmt.Sprintf("%s: OneDrive treats %q and %q as the same name; rename one of them", detail, name, others[0])
 }
 
 // appendMultiGroupCollisions handles SkippedItem construction for groups with

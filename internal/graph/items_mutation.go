@@ -152,21 +152,35 @@ func findCreatedFolder(children []Item, name string) (Item, bool) {
 // and newName empty — at least one must be specified.
 var ErrMoveNoChanges = errors.New("graph: MoveItem requires at least one of newParentID or newName")
 
-// MoveItem moves and/or renames an item. At least one of newParentID or newName must be non-empty.
-func (c *Client) MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*Item, error) {
-	return c.MoveItemIfMatch(ctx, driveID, itemID, newParentID, newName, "")
+// MoveOptions qualifies a move or rename.
+type MoveOptions struct {
+	// IfMatch, when non-empty, makes Graph reject the mutation if the item
+	// changed after the caller's live preflight.
+	IfMatch string
+
+	// KeepModified, when non-zero, is sent as the item's modification time in
+	// the same PATCH. A rename on OneDrive otherwise resets it to the time of
+	// the rename (L-09); a PATCH that carries it keeps it.
+	KeepModified time.Time
 }
 
-// MoveItemIfMatch moves and/or renames an item, adding If-Match when ifMatch
-// is non-empty so Graph rejects the mutation if the item changed after the
-// caller's live preflight.
+// MoveItem moves and/or renames an item. At least one of newParentID or
+// newName must be non-empty. keepModified is the item's current modification
+// time, so a rename does not reset it; zero leaves it to OneDrive.
+func (c *Client) MoveItem(
+	ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string, keepModified time.Time,
+) (*Item, error) {
+	return c.MoveItemIfMatch(ctx, driveID, itemID, newParentID, newName, MoveOptions{KeepModified: keepModified})
+}
+
+// MoveItemIfMatch moves and/or renames an item as opts qualify.
 func (c *Client) MoveItemIfMatch(
 	ctx context.Context,
 	driveID driveid.ID,
 	itemID string,
 	newParentID string,
 	newName string,
-	ifMatch string,
+	opts MoveOptions,
 ) (*Item, error) {
 	if newParentID == "" && newName == "" {
 		return nil, ErrMoveNoChanges
@@ -177,6 +191,7 @@ func (c *Client) MoveItemIfMatch(
 		slog.String("item_id", itemID),
 		slog.String("new_parent_id", newParentID),
 		slog.String("new_name", newName),
+		slog.Time("keep_modified", opts.KeepModified),
 	)
 
 	path := fmt.Sprintf("/drives/%s/items/%s", driveID, itemID)
@@ -190,13 +205,22 @@ func (c *Client) MoveItemIfMatch(
 		req.Name = newName
 	}
 
+	var sent time.Time
+	if !opts.KeepModified.IsZero() {
+		sent = c.sendableMtime(opts.KeepModified)
+		req.FileSystemInfo = c.newFileSystemInfo(sent)
+	}
+
 	bodyBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("graph: marshaling move request: %w", err)
 	}
 
-	resp, err := c.doRequest(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes), ifMatchHeaders(ifMatch))
+	resp, err := c.doRequest(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes), ifMatchHeaders(opts.IfMatch))
 	if err != nil {
+		if !sent.IsZero() {
+			return nil, relabelTimestampRangeError(err, sent)
+		}
 		return nil, err
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
