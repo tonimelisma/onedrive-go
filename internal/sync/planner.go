@@ -307,7 +307,13 @@ func buildDependencies(actions []Action) [][]int {
 }
 
 // addParentFolderDep adds a dependency on a parent folder create if present.
+// A delete or cleanup removes an entry of the old item at that path and
+// never needs the parent created; waiting on a re-created parent closed a
+// cycle with the move that vacates it (a folder moved and re-created).
 func addParentFolderDep(deps []int, idx int, a *Action, folderCreateIdx map[string]int) []int {
+	if isDeleteAction(a) {
+		return deps
+	}
 	parentDir := filepath.Dir(a.Path)
 	if parentDir == "." || parentDir == "" {
 		return deps

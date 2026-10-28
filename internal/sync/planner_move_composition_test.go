@@ -314,6 +314,31 @@ func TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove(t *testing.
 	require.NoError(t, detectDependencyCycle(deps))
 }
 
+// Validates: R-2.17.1, R-2.8.11
+//
+// The user moved folder q to docs and re-created q, while OneDrive deleted
+// q/x. The cleanup of q/x waited for the re-created q (parent folder create),
+// the create waited for the move vacating q, and the move waited for the
+// cleanup under its source: a cycle, so all three were dropped every pass
+// and docs never reached OneDrive (model test seed 38). Removing an entry
+// never needs its parent created.
+func TestBuildDependencies_DeleteUnderARecreatedFolderDoesNotWaitForTheCreate(t *testing.T) {
+	t.Parallel()
+
+	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	actions := []Action{
+		{Type: ActionRemoteMove, OldPath: "q", Path: "docs", View: folder}, // 0
+		{Type: ActionFolderCreate, Path: "q", CreateSide: CreateRemote},    // 1: re-created at 0's old path
+		{Type: ActionCleanup, Path: "q/x", View: folder},                   // 2: gone online, moved locally
+	}
+
+	deps := buildDependencies(actions)
+
+	require.NoError(t, detectDependencyCycle(deps))
+	assert.Equal(t, []int{0}, deps[1], "the re-created folder waits for the move")
+	assert.NotContains(t, deps[2], 1, "a cleanup does not wait for a folder create")
+}
+
 // Validates: R-2.8.11
 //
 // A dependency cycle drops only the actions on it and their dependents
