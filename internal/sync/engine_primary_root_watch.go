@@ -31,6 +31,17 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	remoteObs := newRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.deps.logger)
 	remoteObs.SetItemClient(rt.engine.itemsClient)
 	remoteObs.SetShortcutTopology(rt.engine.shortcutNamespaceID, rt.engine.protectedRoots)
+	remoteObs.SetDeltaExpiredRecovery(func(ctx context.Context, kind resyncKind) (remoteObservationBatch, error) {
+		batch, err := rt.executeDriveRootFullObservation(ctx, bl, kind)
+		if err != nil {
+			return remoteObservationBatch{}, err
+		}
+		batch.source = remoteObservationBatchPrimaryWatch
+		batch.armFullRefreshTimer = true
+		batch.applyAck = make(chan error, 1)
+
+		return batch, nil
+	})
 	rt.resources.remoteObs = remoteObs
 	wakeCh := rt.startSocketIOWakeSource(ctx)
 

@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -129,4 +130,81 @@ func TestFullScan_LeftoverSetAsideFileIsReportedNotDeleted(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "the leftover is reported as a durable issue naming its path: %+v", issues)
+}
+
+// A download may replace a local file only when that file is still the
+// synced version. The plan's local hash is checked when it has one; when it
+// has none, the baseline's local hash stands in, so an edit that kept size and
+// mtime (a `cp -p` or `touch -r` edit) is never overwritten (D-066).
+//
+// Validates: R-2.2.5
+func TestExecutor_Download_LocalContentDiffersFromBaselineIsSuperseded(t *testing.T) {
+	t.Parallel()
+
+	const (
+		synced = "synced version"
+		edited = "EDITED version"
+		remote = "remote version"
+	)
+	for _, tt := range []struct {
+		name        string
+		withTrash   bool
+		plannedHash bool
+	}{
+		{name: "planned hash, no trash", plannedHash: true},
+		{name: "planned hash, trash", plannedHash: true, withTrash: true},
+		{name: "no planned hash, no trash"},
+		{name: "no planned hash, trash", withTrash: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dl := &executorMockDownloader{
+				downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+					n, err := w.Write([]byte(remote))
+					return int64(n), err
+				},
+			}
+			cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
+			if tt.withTrash {
+				cfg.SetTrash(localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil))
+			}
+			target := writeExecTestFile(t, syncRoot, "doc.txt", edited)
+			info, err := os.Stat(target)
+			require.NoError(t, err)
+
+			syncedHash := testQuickXor(synced)
+			planned := &localState{ItemType: ItemTypeFile, Size: info.Size(), Mtime: info.ModTime().UnixNano()}
+			if tt.plannedHash {
+				// The scan reused the stale baseline hash for the edited file.
+				planned.Hash = syncedHash
+			}
+			action := &Action{
+				Type:    ActionDownload,
+				Path:    "doc.txt",
+				ItemID:  "item-doc",
+				DriveID: driveid.New(synctest.TestDriveID),
+				View: &pathView{
+					Local: planned,
+					Remote: &remoteState{
+						ItemID: "item-doc", ItemType: ItemTypeFile, Hash: testQuickXor(remote),
+						Size: int64(len(remote)), Mtime: 1,
+					},
+					Baseline: &BaselineEntry{
+						Path: "doc.txt", ItemID: "item-doc", ItemType: ItemTypeFile,
+						LocalHash: syncedHash, LocalSize: info.Size(), LocalSizeKnown: true,
+						LocalMtime: info.ModTime().UnixNano(),
+					},
+				},
+			}
+
+			o := newExecution(cfg, emptyBaseline()).ExecuteDownload(t.Context(), action)
+
+			requireOutcomeFailure(t, &o)
+			require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+			data, err := os.ReadFile(target) //nolint:gosec // test reads its own temp tree
+			require.NoError(t, err)
+			assert.Equal(t, edited, string(data), "the unsynced local edit survives")
+		})
+	}
 }

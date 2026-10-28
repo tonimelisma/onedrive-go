@@ -9,109 +9,96 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
+// hashReuseFixture writes a file whose mtime is in the past and returns its
+// info, a baseline entry recording exactly that file, and the latest of its
+// mtime and ctime (ctime is always "now" and cannot be set back).
+func hashReuseFixture(t *testing.T, name string) (os.FileInfo, *BaselineEntry, int64) {
+	t.Helper()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, name)
+	baseTime := time.Date(2025, 1, 1, 0, 0, 0, int((200 * time.Millisecond).Nanoseconds()), time.UTC)
+	require.NoError(t, os.WriteFile(path, []byte("stable content"), 0o600))
+	require.NoError(t, os.Chtimes(path, baseTime, baseTime))
+
+	info, err := os.Lstat(path)
+	require.NoError(t, err)
+	entry := baselineEntryFromFile(t, dir, name, "cached-hash")
+	ctime, ok := synctree.ChangeTimeFromFileInfo(info)
+	require.True(t, ok)
+
+	return info, entry, max(info.ModTime().UnixNano(), ctime)
+}
+
+// Validates: R-2.2.2, R-2.2.4
 func TestCanReuseBaselineHash_MetadataMatchOutsideRacilyCleanWindow(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name      string
-		path      string
 		nowOffset int64
 		wantReuse bool
 	}{
-		{
-			name:      "metadata_match_outside_racily_clean_window",
-			path:      "stable.txt",
-			nowOffset: nanosPerSecond + 1,
-			wantReuse: true,
-		},
-		{
-			name:      "racily_clean_forces_hash",
-			path:      "racy.txt",
-			nowOffset: nanosPerSecond - 1,
-			wantReuse: false,
-		},
+		{name: "metadata_match_outside_racily_clean_window", nowOffset: nanosPerSecond + 1, wantReuse: true},
+		{name: "racily_clean_forces_hash", nowOffset: nanosPerSecond - 1, wantReuse: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, tt.path)
-			content := []byte("stable content")
-			baseTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+			t.Parallel()
 
-			require.NoError(t, os.WriteFile(path, content, 0o600))
-			require.NoError(t, os.Chtimes(path, baseTime, baseTime))
-
-			info, err := os.Stat(path)
-			require.NoError(t, err)
-
-			assert.Equal(t, tt.wantReuse, canReuseBaselineHash(info, &BaselineEntry{
-				Path:           tt.path,
-				DriveID:        driveid.New("d"),
-				ItemID:         "i1",
-				ItemType:       ItemTypeFile,
-				LocalHash:      "cached-hash",
-				LocalSize:      info.Size(),
-				LocalSizeKnown: true,
-				LocalMtime:     info.ModTime().UnixNano(),
-			}, info.ModTime().UnixNano()+tt.nowOffset))
+			info, entry, latest := hashReuseFixture(t, "stable.txt")
+			assert.Equal(t, tt.wantReuse, canReuseBaselineHash(info, entry, latest+tt.nowOffset))
 		})
 	}
 }
 
-// Validates: R-6.7.15
-func TestCanReuseBaselineHash_SameSecondSubsecondDifferenceStillMatches(t *testing.T) {
+// Validates: R-2.2.4, R-6.7.15
+func TestCanReuseBaselineHash_SubsecondMtimeDifferenceRequiresHash(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "same-second.txt")
-	content := []byte("stable content")
-	fileTime := time.Date(2025, 1, 1, 0, 0, 0, int((200 * time.Millisecond).Nanoseconds()), time.UTC)
+	info, entry, latest := hashReuseFixture(t, "same-second.txt")
+	// Same whole second, different nanoseconds. Local mtimes are compared at
+	// full precision; only comparisons with OneDrive values truncate.
+	entry.LocalMtime = info.ModTime().Add(700 * time.Millisecond).UnixNano()
 
-	require.NoError(t, os.WriteFile(path, content, 0o600))
-	require.NoError(t, os.Chtimes(path, fileTime, fileTime))
+	assert.False(t, canReuseBaselineHash(info, entry, latest+nanosPerSecond+1))
+}
 
-	info, err := os.Stat(path)
-	require.NoError(t, err)
+// Validates: R-2.2.4
+func TestCanReuseBaselineHash_CtimeOrIdentityMismatchRequiresHash(t *testing.T) {
+	t.Parallel()
 
-	baselineTime := fileTime.Add(700 * time.Millisecond)
-	assert.True(t, canReuseBaselineHash(info, &BaselineEntry{
-		Path:           "same-second.txt",
-		DriveID:        driveid.New("d"),
-		ItemID:         "i1",
-		ItemType:       ItemTypeFile,
-		LocalHash:      "cached-hash",
-		LocalSize:      info.Size(),
-		LocalSizeKnown: true,
-		LocalMtime:     baselineTime.UnixNano(),
-	}, info.ModTime().UnixNano()+nanosPerSecond+1))
+	tests := []struct {
+		name   string
+		mutate func(*BaselineEntry)
+	}{
+		{name: "ctime_changed", mutate: func(e *BaselineEntry) { e.LocalCtime-- }},
+		{name: "ctime_unknown", mutate: func(e *BaselineEntry) { e.LocalCtime = 0 }},
+		{name: "inode_changed", mutate: func(e *BaselineEntry) { e.LocalInode++ }},
+		{name: "device_changed", mutate: func(e *BaselineEntry) { e.LocalDevice++ }},
+		{name: "identity_unknown", mutate: func(e *BaselineEntry) { e.LocalHasIdentity = false }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			info, entry, latest := hashReuseFixture(t, "doc.txt")
+			tt.mutate(entry)
+			assert.False(t, canReuseBaselineHash(info, entry, latest+nanosPerSecond+1))
+		})
+	}
 }
 
 func TestCanReuseBaselineHash_MetadataMismatchRequiresHash(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "changed.txt")
-	content := []byte("stable content")
-	oldTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	info, entry, latest := hashReuseFixture(t, "changed.txt")
+	entry.LocalSize = info.Size() + 1
 
-	require.NoError(t, os.WriteFile(path, content, 0o600))
-	require.NoError(t, os.Chtimes(path, oldTime, oldTime))
-
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-
-	assert.False(t, canReuseBaselineHash(info, &BaselineEntry{
-		Path:           "changed.txt",
-		DriveID:        driveid.New("d"),
-		ItemID:         "i1",
-		ItemType:       ItemTypeFile,
-		LocalHash:      "cached-hash",
-		LocalSize:      info.Size() + 1,
-		LocalSizeKnown: true,
-		LocalMtime:     info.ModTime().UnixNano(),
-	}, info.ModTime().UnixNano()+nanosPerSecond+1))
+	assert.False(t, canReuseBaselineHash(info, entry, latest+nanosPerSecond+1))
 }

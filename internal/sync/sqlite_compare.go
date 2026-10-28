@@ -380,12 +380,18 @@ comparison_flags AS (
 		END AS remote_type_changed,
 		CASE WHEN rmsh.path IS NOT NULL THEN 1 ELSE 0 END AS remote_move_shadowed,
 		-- File content the change tests call unchanged can still carry new
-		-- metadata (touch, tar, rsync: same bytes, new mtime; or a new remote
+		-- metadata (touch, tar, rsync, chmod: same bytes, new mtime or ctime; or a new remote
 		-- mtime or eTag over the same hash).
 		CASE
 			WHEN b.path IS NULL OR l.path IS NULL OR r.path IS NULL THEN 0
+			-- A folder deleted and re-created online (or restored with a new
+			-- ID) at the same path is a new item: the baseline must rebind to
+			-- it, or uploads into it target the dead ID forever (R-2.10.49).
+			WHEN COALESCE(b.item_type, '') = 'folder' AND COALESCE(r.item_type, '') = 'folder'
+				AND COALESCE(b.item_id, '') <> COALESCE(r.item_id, '') THEN 1
 			WHEN COALESCE(b.item_type, '') <> 'file' THEN 0
 			WHEN COALESCE(b.local_mtime, 0) <> COALESCE(l.mtime, 0)
+				OR COALESCE(b.local_ctime, 0) <> COALESCE(l.ctime, 0)
 				OR COALESCE(b.local_size, 0) <> COALESCE(l.size, 0)
 				OR COALESCE(b.remote_mtime, 0) <> COALESCE(r.mtime, 0)
 				OR COALESCE(b.remote_size, 0) <> COALESCE(r.size, 0)

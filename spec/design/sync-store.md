@@ -4,7 +4,7 @@ GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/
 
 LAYER: 1
 
-Implements: R-2.5 [designed], R-2.5.7 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
+Implements: R-2.5 [designed], R-2.5.7 [verified], R-2.5.8 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.12.7 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.10.49 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
 ## Verification Counts Only What It Compared
 
@@ -118,6 +118,9 @@ and every other significant type in the tree already matched its own name
 | Dry-run current-plan scratch stores are temporary SQLite stores seeded from committed truth and removed after preview planning. | `TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp` |
 | Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens; shortcut status leaves the store through sync-owned status views instead of raw shortcut-root rows. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestBuildChildStatusMount_RendersLifecycleState` |
 | The baseline cache stays the one object callers hold across full rebuilds, and planning uses the baseline of its own comparison snapshot. | `TestCommitMutation_FolderMoveKeepsHeldBaselinePointerCurrent`, `TestPlanning_UsesBaselineFromTheComparisonSnapshot` |
+| A folder re-created online (new item ID, same path) rebinds the baseline and its children's parent, and uploads land in the live folder; a full rescan where every item has a new ID plans no transfers (R-2.10.49). | `TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate`, `TestCommitMutation_FolderReboundAtSamePathRebindsItsChildren`, `TestCommitMutation_FolderRebindUpdatesCachedChildren`, `TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem`, `TestRunOnce_FullRescanWithEveryFolderReboundPlansNoTransfers` |
+| One observation window converges to the same remote_state whatever its order: swaps, renames onto a freed name, create-before-move-away, delete and re-create across pages, a folder moved out of a deleted folder, and a full rescan's late orphan delete raise no remote name twin (R-2.12.7). | `TestCommitObservation_PathSwapInOneWindow`, `TestCommitObservation_CreateAtPathBeforeOccupantRenamedAway`, `TestCommitObservation_DeleteAndRecreateSamePathAcrossPages`, `TestCommitObservation_FolderMovedOutOfADeletedFolderKeepsItsSubtree`, `TestCommitObservation_RepeatedItemInOneWindowUsesItsLastObservation`, `TestCommitObservation_SubtreeRepathOntoAHeldPathKeepsBothApart`, `TestCommitObservation_WindowResultIsOrderIndependent`, `TestCommitObservation_UnplacedChildOfAParkedFolderFollowsTheFolder`, `TestRequireNoParkedRemoteRows_FailsTheWindow`, `TestRunOnce_FullRescanWithItemReplacedAtSamePath` |
+| Engine startup refuses a state DB that fails `PRAGMA quick_check` with the `corrupt` reason and reset guidance, instead of planning from a damaged `remote_state`; a check that fails for any other reason is an ordinary failure (R-2.5.8). | `TestNewEngine_RequiresResetForCorruptStateDB`, `TestIntegrityCheckFailure_OnlyDamageIsCorrupt`, `TestCheckStoreIntegrity_CanceledCheckIsNotDamage` |
 | A successful upload, download, folder create or move without a remote item ID is refused, because `item_id` is the baseline's primary key (R-2.5.7). | `TestCommitMutation_EmptyItemIDFails` |
 | A folder move re-paths its subtree's baseline rows in the move transaction and in the cache. | `TestCommitMutation_FolderMoveRepathsSubtree`, `TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn` |
 | Local filesystem identity is persisted as generic truth for files and directories in `local_state` and `baseline`, allowing local move detection without shortcut-specific sibling scans; a full scan backfills identity onto baseline rows that predate it when the item is provably unchanged. | `TestReplaceLocalState_PersistsFilesystemIdentity`, `TestReplaceLocalState_BackfillsBaselineIdentityForUnchangedItems`, `TestRunOnce_LegacyFolderBaselineGainsIdentityAndMovesAsOne`, `TestCommitMutation_PersistsLocalFilesystemIdentity`, `TestQueryReconciliationState_LocalFolderMoveUsesFilesystemIdentity` |
@@ -360,6 +363,36 @@ name simply moves there (R-2.12.6,
 `TestRunOnce_RemoteTwinsAreHeldAndTheDriveKeepsSyncing`). Insert and update
 failures name the item ID and path.
 
+### One window, one set of facts
+
+Twins must be real: two items that still claim one stored path once the
+whole window is applied. Applied item by item, a window made ordinary moves
+look like twins whenever the newcomer arrived before its path's occupant left
+(a swap, save-as-new-then-rename, delete and re-create across pages, or a full
+rescan's orphan delete synthesized after the replacement), and every such
+window warned the user about "two items". A tombstone applied before a move
+out of the deleted folder also took the moved folder's unreported children
+with the folder's subtree delete, and those files then read as deleted on
+OneDrive. `applyObservationWindowTx` (R-2.12.7) therefore:
+
+1. keeps only the last observation of each item (each is a full snapshot);
+2. parks every live item whose row holds a real path other than the one it
+   is reported at at `:park:<itemID>`, subtree included (shadowed twins hold
+   no real path and are not parked);
+3. applies tombstones and orphan deletes, then live items in window order;
+4. returns any parked row the window did not place to its old path,
+   re-rooted under the current path of its nearest parked ancestor (old paths
+   are read before anything is parked, so a child carried along by its
+   parked folder records its real path), offers every path parking freed to
+   a twin shadowed at it, and fails the transaction if any `:park:` path is
+   left (`requireNoParkedRemoteRowsTx`).
+
+A newcomer whose path is still held after step 3's predecessors is a real
+twin and takes the twin path above. The spec's alternative, deleting a row
+outside the window that holds a newcomer's path as stale, was not taken: a
+genuine canonically equivalent twin is exactly such a row, and deleting it
+would read as a remote delete and plan a local one.
+
 ## Read Responsibilities
 
 Read-only store helpers are intentionally narrow:
@@ -457,12 +490,32 @@ differ only by path or type, and a file's hash decides whenever either side has
 one. Baseline stores no folder mtime, so comparing folder times counted every
 remote folder as drift on a converged drive (R-2.10.48).
 
+A folder's item ID is the one folder fact that is not content but must still
+reach the baseline: `metadata_drift` is 1 for a folder present on all three
+sides whose remote item ID differs from the baseline's, so an `unchanged`
+folder becomes a publication-only `baseline_update` that rebinds it, and
+`commitUpsert` moves the children's `parent_id` from the dead item to the new
+one (R-2.10.49); the baseline cache is rebuilt after such a rebind so cached
+children carry the new parent too. Without it, uploads into a folder deleted and re-created
+online targeted the dead ID forever. A folder missing locally whose remote ID
+changed is still classified by `remote_changed`, which ignores folder IDs;
+that case belongs to the comparison-facts work, not this rule.
+
 ## State-DB Diagnosis And Reset
 
 Two store-owned helpers isolate DB lifecycle policy:
 
 - `store_compatibility.go` opens an existing DB non-mutating, classifies
-  unreadable or unsupported stores, and returns typed incompatible-store errors
+  unreadable or unsupported stores, and returns typed incompatible-store errors.
+  After a successful open it runs `PRAGMA quick_check`; a finding other than
+  `ok`, or `SQLITE_CORRUPT` while the schema is read, is the `corrupt` reason
+  with the same reset guidance (R-2.5.8). A damaged `remote_state` b-tree can
+  hide rows, and a hidden row reads as a remote delete, so startup refuses the
+  DB instead of planning from it. `quick_check` skips `integrity_check`'s
+  index cross-check, which keeps it linear and cheap enough for every open.
+  Only damage is `corrupt`: a check that fails for another reason (a
+  canceled context, `SQLITE_BUSY`, an I/O or scan error) is an ordinary
+  startup failure, never a reason to reset (`integrityCheckFailure`)
 - `store_reset.go` deletes one drive's DB file family and recreates a fresh
   canonical DB in place
 

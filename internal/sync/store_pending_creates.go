@@ -171,7 +171,7 @@ func adoptPlaceholderTx(
 		entry.ItemID, entry.Path, nullString(entry.ParentID), entry.ItemType,
 		nullString(entry.LocalHash), nullString(entry.RemoteHash),
 		int64(0), int64(0), nil, nullOptionalInt64(entry.RemoteMtime),
-		0, 0, 0, nullString(entry.ETag),
+		0, 0, 0, 0, nullString(entry.ETag),
 	); err != nil {
 		return fmt.Errorf("sync: adopting placeholder %s at %s: %w", item.ItemID, item.Path, err)
 	}

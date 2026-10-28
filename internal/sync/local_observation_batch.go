@@ -50,6 +50,7 @@ func localStateRowFromEvent(event *changeEvent) localStateRow {
 		Hash:             event.Hash,
 		Size:             event.Size,
 		Mtime:            event.Mtime,
+		Ctime:            event.LocalCtime,
 		LocalDevice:      event.LocalDevice,
 		LocalInode:       event.LocalInode,
 		LocalHasIdentity: event.LocalHasIdentity,

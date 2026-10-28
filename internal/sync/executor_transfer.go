@@ -393,6 +393,7 @@ func (e *executor) uploadOutcome(
 		ETag:            result.Item.ETag,
 	}
 	if action.View != nil && action.View.Local != nil {
+		outcome.LocalCtime = action.View.Local.LocalCtime
 		outcome.LocalDevice = action.View.Local.LocalDevice
 		outcome.LocalInode = action.View.Local.LocalInode
 		outcome.LocalHasIdentity = action.View.Local.LocalHasIdentity

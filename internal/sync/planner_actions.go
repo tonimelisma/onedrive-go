@@ -605,6 +605,7 @@ func localStateFromSnapshotRow(row *localStateRow) *localState {
 		Size:             row.Size,
 		Hash:             row.Hash,
 		Mtime:            row.Mtime,
+		LocalCtime:       row.Ctime,
 		LocalDevice:      row.LocalDevice,
 		LocalInode:       row.LocalInode,
 		LocalHasIdentity: row.LocalHasIdentity,

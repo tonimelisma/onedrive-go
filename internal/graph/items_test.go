@@ -1118,6 +1118,34 @@ func TestToItem_DeletedItem_EmptyModifiedTimestampStaysUnknown(t *testing.T) {
 	assert.True(t, item.ModifiedAt.IsZero(), "deleted item with empty modified timestamp should stay unknown")
 }
 
+// Validates: R-2.4.16
+func TestToItem_BundleAndMissingTypeFacet(t *testing.T) {
+	t.Parallel()
+
+	bundle := (&driveItemResponse{
+		ID: "album", Name: "Holiday", ParentReference: &parentRef{ID: "p", DriveID: "d"},
+		Bundle: ptrRawMsg(json.RawMessage(`{"album":{}}`)),
+	}).toItem(testNoopLogger())
+	assert.True(t, bundle.IsBundle)
+	assert.False(t, bundle.TypeFacetMissing)
+
+	sparse := (&driveItemResponse{
+		ID: "sparse", Name: "Photos", ParentReference: &parentRef{ID: "p", DriveID: "d"},
+	}).toItem(testNoopLogger())
+	assert.True(t, sparse.TypeFacetMissing, "no facet says what the item is")
+	assert.False(t, sparse.IsFolder)
+
+	for name, resp := range map[string]*driveItemResponse{
+		"file":     {ID: "f", File: &fileFacet{}},
+		"folder":   {ID: "d", Folder: &folderFacet{}},
+		"package":  {ID: "k", Package: ptrRawMsg(json.RawMessage(`{"type":"oneNote"}`))},
+		"deleted":  {ID: "x", Deleted: ptrRawMsg(json.RawMessage(`{}`))},
+		"shortcut": {ID: "s", RemoteItem: &remoteItemFacet{ID: "r"}},
+	} {
+		assert.False(t, resp.toItem(testNoopLogger()).TypeFacetMissing, name)
+	}
+}
+
 func TestToItem_RootFacet(t *testing.T) {
 	dir := &driveItemResponse{
 		ID:                   "root-item",

@@ -23,7 +23,7 @@ type inflightParent struct {
 	ParentDriveID driveid.ID // drive containing this item's parent
 	IsRoot        bool
 	IsVault       bool // true for Personal Vault folder (B-271)
-	IsPackage     bool // true for OneNote and other package items, which sync never manages
+	IsPackage     bool // true for packages (OneNote) and bundles (albums), which sync never manages
 
 	// HasUnmaterializableName marks a folder whose Graph name cannot be one
 	// local path segment (see unmaterializableRemoteNameReason). Its children
@@ -83,7 +83,19 @@ type itemConverter struct {
 	// item is unplaceable for now, and the window is replayed; one whose
 	// enrichment succeeded and still has no parent is skipped for good.
 	sparseEnrichFailed map[string]struct{}
+
+	// carriedAncestors are the ancestors resolveAncestorChain read by ID in
+	// windows that did not complete. A replay of the same window reuses them
+	// without spending its fetch budget, so a window that needs more reads
+	// than one budget allows still completes after a few replays instead of
+	// failing the same way forever (R-2.15.4). They are path context only and
+	// are forgotten once a window completes (forgetCarriedAncestors), so a
+	// later window never places an item under a stale ancestor.
+	carriedAncestors map[string]graph.Item
 }
+
+// maxCarriedAncestors bounds carriedAncestors.
+const maxCarriedAncestors = 50 * maxAncestorFetchesPerWindow
 
 // maxAncestorFetchesPerWindow bounds the item-by-ID reads one delta window may
 // spend resolving parents that are neither in the window nor in the baseline.
@@ -135,6 +147,9 @@ func (c *itemConverter) ConvertItems(ctx context.Context, items []graph.Item) []
 		if ev := c.ClassifyItem(&items[i], inflight); ev != nil {
 			events = append(events, *ev)
 		}
+	}
+	if !c.observationIncomplete() {
+		c.forgetCarriedAncestors()
 	}
 
 	return events
@@ -218,10 +233,15 @@ func (c *itemConverter) shouldEnrichSparseRemoteItem(item *graph.Item) bool {
 	}
 
 	if c.Baseline == nil {
-		return item.ParentID == ""
+		return item.ParentID == "" || item.TypeFacetMissing
 	}
 
 	existing, found := c.Baseline.GetByID(item.ID)
+	if item.TypeFacetMissing && !found {
+		// One re-read for an item whose kind delta did not say and the
+		// baseline cannot supply (R-2.4.16).
+		return true
+	}
 	return item.ParentID == "" && (!found || existing.ParentID == "")
 }
 
@@ -267,6 +287,17 @@ func mergeSparseRemoteItem(dst *graph.Item, enriched *graph.Item) {
 	}
 	if !dst.IsFolder {
 		dst.IsFolder = enriched.IsFolder
+	}
+	if dst.TypeFacetMissing && !enriched.TypeFacetMissing {
+		// The re-read says what the item is: take its kind and content facts.
+		dst.TypeFacetMissing = false
+		dst.IsFolder = enriched.IsFolder
+		dst.IsPackage = enriched.IsPackage
+		dst.IsBundle = enriched.IsBundle
+		dst.QuickXorHash = enriched.QuickXorHash
+		dst.SHA1Hash = enriched.SHA1Hash
+		dst.SHA256Hash = enriched.SHA256Hash
+		dst.Size = enriched.Size
 	}
 }
 
@@ -339,19 +370,51 @@ func (c *itemConverter) resolveAncestorChain(
 		if _, unreachable := c.unreachableParents[parentID]; unreachable {
 			return
 		}
-		if c.ancestorFetches >= maxAncestorFetchesPerWindow || ctx.Err() != nil {
+		ancestor, ok := c.readAncestor(ctx, parentID, parentDriveID)
+		if !ok {
 			return
 		}
-
-		c.ancestorFetches++
-		ancestor, err := c.Items.GetItem(ctx, parentDriveID, parentID)
-		if err != nil || ancestor == nil || ancestor.ID == "" {
-			c.recordAncestorFetchFailure(parentID, parentDriveID, err)
-
-			return
-		}
-
 		c.registerInflight(ancestor, inflight)
+	}
+}
+
+// readAncestor returns a missing ancestor carried from an earlier attempt at
+// this window, or reads it by ID while the window's budget lasts.
+func (c *itemConverter) readAncestor(ctx context.Context, parentID string, parentDriveID driveid.ID) (*graph.Item, bool) {
+	if carried, ok := c.carriedAncestors[parentID]; ok {
+		return &carried, true
+	}
+	if c.ancestorFetches >= maxAncestorFetchesPerWindow || ctx.Err() != nil {
+		return nil, false
+	}
+
+	c.ancestorFetches++
+	ancestor, err := c.Items.GetItem(ctx, parentDriveID, parentID)
+	if err != nil || ancestor == nil || ancestor.ID == "" {
+		c.recordAncestorFetchFailure(parentID, parentDriveID, err)
+
+		return nil, false
+	}
+	c.carryAncestor(ancestor)
+
+	return ancestor, true
+}
+
+func (c *itemConverter) carryAncestor(ancestor *graph.Item) {
+	if c.carriedAncestors == nil {
+		c.carriedAncestors = make(map[string]graph.Item)
+	}
+	if len(c.carriedAncestors) >= maxCarriedAncestors {
+		return
+	}
+	c.carriedAncestors[ancestor.ID] = *ancestor
+}
+
+// forgetCarriedAncestors drops the ancestors carried for replays; a window
+// completed, so nothing replays it.
+func (c *itemConverter) forgetCarriedAncestors() {
+	if c != nil {
+		c.carriedAncestors = nil
 	}
 }
 
@@ -402,7 +465,7 @@ func (c *itemConverter) registerInflight(item *graph.Item, inflight map[string]i
 		ParentDriveID: parentDriveID,
 		IsRoot:        item.IsRoot,
 		IsVault:       item.SpecialFolderName == specialFolderVault,
-		IsPackage:     item.IsPackage,
+		IsPackage:     item.IsPackage || item.IsBundle,
 
 		HasUnmaterializableName: name != "" && unmaterializableRemoteNameReason(name) != "",
 	}
@@ -465,9 +528,7 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 		return nil
 	}
 
-	// OneNote/package items are valid Graph objects, but they are compound
-	// provider objects rather than normal file/folder content sync can manage.
-	if item.IsPackage || c.isDescendantOfPackage(item, inflight) {
+	if c.isCompoundProviderItem(item, inflight) {
 		c.Logger.Debug("skipping package item",
 			slog.String("item_id", item.ID),
 			slog.String("name", item.Name),
@@ -496,6 +557,13 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 	}
 
 	return c.classifyAndConvert(item, inflight, itemDriveID, existing)
+}
+
+// isCompoundProviderItem reports OneNote/package items, bundles (albums) and
+// their descendants: valid Graph objects, but compound provider objects
+// rather than normal file/folder content sync can manage (R-2.4.16).
+func (c *itemConverter) isCompoundProviderItem(item *graph.Item, inflight map[string]inflightParent) bool {
+	return item.IsPackage || item.IsBundle || c.isDescendantOfPackage(item, inflight)
 }
 
 // hasUnmaterializableName reports, with a warning, an item whose Graph name
@@ -651,6 +719,9 @@ func (c *itemConverter) classifyAndConvert(
 		CTag:      item.CTag,
 		IsDeleted: item.IsDeleted,
 	}
+	if !c.normalizeRemoteFacts(&ev, item, existing) {
+		return nil
+	}
 
 	switch {
 	case item.IsDeleted:
@@ -710,6 +781,47 @@ func (c *itemConverter) classifyAndConvert(
 	}
 
 	return &ev
+}
+
+// normalizeRemoteFacts repairs facts Graph reports badly (R-2.4.16): a
+// negative size is unknown, and a missing type facet takes the baseline's
+// kind. It reports false when the item cannot be classified at all.
+func (c *itemConverter) normalizeRemoteFacts(ev *changeEvent, item *graph.Item, existing *BaselineEntry) bool {
+	if item.Size < 0 {
+		ev.Size = 0
+		ev.SizeUnknown = true
+	}
+	if item.IsDeleted || !item.TypeFacetMissing {
+		return true
+	}
+
+	return c.applyBaselineKind(ev, item, existing)
+}
+
+// applyBaselineKind settles the kind of an item delta reported without any
+// type facet (R-2.4.16). Read as a file by default, a sparse update of a
+// synced folder planned a folder-to-file type change that deleted the local
+// folder. The baseline's kind is kept, and for a file so are its content
+// facts, because an update without a file facet carries no hashes: it is not
+// evidence the content changed. Without a baseline (and after the one re-read
+// enrichSparseParentRefs makes) the kind is unknown and the item is skipped.
+func (c *itemConverter) applyBaselineKind(ev *changeEvent, item *graph.Item, existing *BaselineEntry) bool {
+	if existing == nil {
+		c.Logger.Debug("skipping remote item that does not say whether it is a file or a folder",
+			slog.String("item_id", item.ID),
+			slog.String("name", item.Name),
+		)
+		return false
+	}
+
+	ev.ItemType = existing.ItemType
+	if existing.ItemType == ItemTypeFile && ev.Hash == "" {
+		ev.Hash = existing.RemoteHash
+		ev.Size = existing.RemoteSize
+		ev.SizeUnknown = !existing.RemoteSizeKnown
+	}
+
+	return true
 }
 
 func effectiveItemName(item *graph.Item, existing *BaselineEntry) string {

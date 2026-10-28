@@ -4,7 +4,7 @@ GOVERNS: internal/sync/action_freshness.go, internal/sync/active_scopes.go, inte
 
 LAYER: 3
 
-Implements: R-2.3.1 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified]
+Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified]
 
 ## Overview
 
@@ -36,6 +36,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 
 | Behavior | Evidence |
 | --- | --- |
+| A download replaces an existing local file only when its content hashes to the planned version, or to the baseline's local hash when the plan has no hash, so an unsynced edit that kept size and mtime survives (R-2.2.5). | `TestExecutor_Download_LocalContentDiffersFromBaselineIsSuperseded` |
 | A remote move whose item already sits at the destination succeeds without a Graph call. | `TestExecutor_RemoteMove_ItemAlreadyAtDestinationSucceedsWithoutMoving` |
 | Folder eTag churn from descendant changes neither supersedes a folder move nor conditions it, while a file's eTag mismatch still supersedes. | `TestExecutor_RemoteMove_FolderETagChurnFromChildrenDoesNotSupersede`, `TestExecutor_RemoteMove_FileETagMismatchStillSupersedes`, `TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn` |
 | Move outcomes publish observed or proven local facts, keep a pending remote edit visible, and folder creates record local filesystem identity. | `TestExecutor_LocalMove_PublishesSourceBaselineLocalHalf`, `TestExecutor_LocalMove_RemoteEditKeepsBaselineRemoteContent`, `TestExecutor_RemoteMove_PublishesObservedDestinationLocalTruth`, `TestExecutor_CreateLocalFolder_RecordsFilesystemIdentity`, `TestExecutor_CreateRemoteFolder_RecordsObservedLocalIdentity` |
@@ -464,6 +465,15 @@ descriptor it hard-links (or copies) into the trash. One-shot housekeeping and
 the watch maintenance tick (at most hourly) purge, and `onedrive-go trash
 list/restore/empty` exposes the trash. Without a trash (executor-only tests)
 the verified inode is removed with `RemoveVerifiedRegularFile` instead.
+
+Both download-target checks hash the existing file and compare it with
+`expectedDownloadTargetHash`: the hash of the version the plan observed, or,
+when the plan carries none, the baseline's local hash (R-2.2.5). Size, mtime
+and identity alone never prove the file is the synced version, because an
+in-place edit can keep all three; ctime is checked too
+(`plannedCtimeChanged`), and the upload source precondition applies the same
+ctime check, so a file rewritten after it was observed is re-observed instead
+of transferred.
 
 Directory delete also preserves non-disposable local content by refusing to
 remove directories blocked by non-disposable children. Folder removal uses the

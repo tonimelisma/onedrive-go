@@ -11,14 +11,14 @@ import (
 
 const (
 	sqlInsertLocalState = `INSERT OR REPLACE INTO local_state
-		(path, item_type, hash, size, mtime, local_device, local_inode, local_has_identity)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		(path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_has_identity)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	sqlListLocalState = `SELECT
-		path, item_type, hash, size, mtime, local_device, local_inode, local_has_identity
+		path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_has_identity
 		FROM local_state
 		ORDER BY path`
 	sqlSelectLocalStateByPath = `SELECT
-		path, item_type, hash, size, mtime, local_device, local_inode, local_has_identity
+		path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_has_identity
 		FROM local_state
 		WHERE path = ?`
 
@@ -330,6 +330,7 @@ func upsertLocalStateRowTx(ctx context.Context, tx sqlTxRunner, row localStateRo
 		nullString(row.Hash),
 		nullKnownInt64(row.Size, true),
 		nullOptionalInt64(row.Mtime),
+		row.Ctime,
 		int64(row.LocalDevice),
 		int64(row.LocalInode),
 		boolInt(row.LocalHasIdentity),
@@ -412,6 +413,7 @@ func listLocalStateRowsWithQuery(ctx context.Context, runner sqlTxRunner, query 
 			&hash,
 			&size,
 			&mtime,
+			&row.Ctime,
 			&localDevice,
 			&localInode,
 			&localHasIdentity,
@@ -458,6 +460,7 @@ func scanLocalStateRow(
 		&hash,
 		&size,
 		&mtime,
+		&row.Ctime,
 		&localDevice,
 		&localInode,
 		&localHasIdentity,

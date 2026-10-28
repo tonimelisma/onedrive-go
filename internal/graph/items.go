@@ -67,6 +67,7 @@ type driveItemResponse struct {
 	Root                 *json.RawMessage     `json:"root"`
 	Deleted              *json.RawMessage     `json:"deleted"`
 	Package              *json.RawMessage     `json:"package"`
+	Bundle               *json.RawMessage     `json:"bundle"`
 	Malware              *json.RawMessage     `json:"malware"`
 	DownloadURL          string               `json:"@microsoft.graph.downloadUrl"`
 	SpecialFolder        *specialFolderFacet  `json:"specialFolder"`
@@ -170,6 +171,12 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 		IsRoot:    d.Root != nil,
 		IsDeleted: d.Deleted != nil,
 		IsPackage: d.Package != nil,
+		IsBundle:  d.Bundle != nil,
+		// Delta may send a sparse update without the facet that says what the
+		// item is; without this flag it read as a file, and a folder's sparse
+		// update planned a folder-to-file type change (D-064).
+		TypeFacetMissing: d.Deleted == nil && d.File == nil && d.Folder == nil && d.Root == nil &&
+			d.Package == nil && d.Bundle == nil && d.RemoteItem == nil,
 		// The facet's body (a description) is advisory; its presence is
 		// the documented signal that OneDrive's scan flagged the content.
 		MalwareDetected: d.Malware != nil,

@@ -30,7 +30,6 @@ import (
 	"strings"
 	stdsync "sync"
 	"sync/atomic"
-	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -84,6 +83,7 @@ type hashJob struct {
 	name             string
 	size             int64
 	mtime            int64
+	ctime            int64
 	localDevice      uint64
 	localInode       uint64
 	localHasIdentity bool
@@ -135,7 +135,7 @@ func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scan
 	var skippedEntries atomic.Int64
 	observed := make(map[string]bool)
 	currentRows := make(map[string]localStateRow)
-	scanStartNano := time.Now().UnixNano()
+	scanStartNano := o.clock.Now().UnixNano()
 	dirStack := rootObservedDirStack(syncRoot, o.logger)
 
 	walkFn := o.makeWalkFunc(
@@ -335,6 +335,7 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 						Hash:             hash,
 						Size:             job.size,
 						Mtime:            job.mtime,
+						Ctime:            job.ctime,
 						LocalDevice:      job.localDevice,
 						LocalInode:       job.localInode,
 						LocalHasIdentity: job.localHasIdentity,
@@ -369,6 +370,7 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 				Hash:             hash,
 				Size:             job.size,
 				Mtime:            job.mtime,
+				Ctime:            job.ctime,
 				LocalDevice:      job.localDevice,
 				LocalInode:       job.localInode,
 				LocalHasIdentity: job.localHasIdentity,
@@ -647,6 +649,7 @@ func (o *localObserver) processObservedInfo(
 	case observedKindFile:
 		row.ItemType = ItemTypeFile
 		row.Size = info.Size()
+		row.Ctime = fileChangeTime(info)
 		currentRows[dbRelPath] = row
 	case observedKindUnknown:
 		return fmt.Errorf("walk observed entry %s: unknown observed kind", dbRelPath)
@@ -695,6 +698,7 @@ func (o *localObserver) classifyObservedInfo(
 				name:             name,
 				size:             info.Size(),
 				mtime:            info.ModTime().UnixNano(),
+				ctime:            observedRow.Ctime,
 				localDevice:      observedRow.LocalDevice,
 				localInode:       observedRow.LocalInode,
 				localHasIdentity: observedRow.LocalHasIdentity,
@@ -739,6 +743,7 @@ func (o *localObserver) detectFileContentChange(
 			Hash:             base.LocalHash,
 			Size:             currentSize,
 			Mtime:            currentMtime,
+			Ctime:            observedRow.Ctime,
 			LocalDevice:      observedRow.LocalDevice,
 			LocalInode:       observedRow.LocalInode,
 			LocalHasIdentity: observedRow.LocalHasIdentity,
@@ -747,8 +752,8 @@ func (o *localObserver) detectFileContentChange(
 		return nil
 	}
 
-	if base.LocalSizeKnown && currentSize == base.LocalSize && sameOneDriveComparableMtime(currentMtime, base.LocalMtime) {
-		o.logger.Debug("racily clean file, forcing hash check",
+	if base.LocalSizeKnown && currentSize == base.LocalSize && currentMtime == base.LocalMtime {
+		o.logger.Debug("size and mtime match but ctime, identity or the racily-clean window force a hash check",
 			slog.String("path", dbRelPath))
 	}
 
@@ -759,6 +764,7 @@ func (o *localObserver) detectFileContentChange(
 		name:             name,
 		size:             currentSize,
 		mtime:            currentMtime,
+		ctime:            observedRow.Ctime,
 		localDevice:      observedRow.LocalDevice,
 		localInode:       observedRow.LocalInode,
 		localHasIdentity: observedRow.LocalHasIdentity,
@@ -1184,7 +1190,10 @@ func computeStableHashWith(fsPath string, hashFunc func(string) (string, error))
 		return "", fmt.Errorf("stat after hashing: %w", err)
 	}
 
-	if pre.Size() != post.Size() || pre.ModTime() != post.ModTime() {
+	// ctime too: an in-place rewrite that restores the old mtime during the
+	// read leaves size and mtime equal, and the hash would describe neither
+	// version (R-2.2.4).
+	if pre.Size() != post.Size() || pre.ModTime() != post.ModTime() || fileChangeTime(pre) != fileChangeTime(post) {
 		return "", errFileChangedDuringHash
 	}
 
