@@ -152,13 +152,16 @@ func (flow *engineFlow) applySupersededCompletion(
 	r *actionCompletion,
 	depGraphReason string,
 ) error {
-	if err := flow.clearRetryWorkOnSuperseded(ctx, r, current); err != nil {
-		return err
-	}
 	if err := flow.forgetRemoteItemProvenGone(ctx, r); err != nil {
 		return err
 	}
-	flow.recordSupersede(r)
+	if streak := flow.recordSupersede(r); streak >= supersedeParkThreshold {
+		if err := flow.parkWedgedAction(ctx, r, current); err != nil {
+			return err
+		}
+	} else if err := flow.clearRetryWorkOnSuperseded(ctx, r, current); err != nil {
+		return err
+	}
 
 	actionID := int64(0)
 	if r != nil {
@@ -555,6 +558,57 @@ func (flow *engineFlow) applyResultPersistence(
 	}
 }
 
+// supersedeParkThreshold is how many consecutive identical supersedes of one
+// action make it wedged (D-059d). Below it a supersede replans at once and
+// keeps no retry work (R-2.8.9), as truth moving on between planning and
+// execution should. From it on the action is parked in retry_work with
+// exponential backoff: a precondition that can never hold costs one attempt
+// per backoff step instead of a hot replan loop in watch mode, the parked
+// action shows in status as a retrying item, and the park outlives the run.
+const supersedeParkThreshold = supersedeStreakWarnThreshold
+
+const (
+	supersedeParkBaseDelay = 30 * time.Second
+	supersedeParkMaxDelay  = time.Hour
+)
+
+// supersedeParkDelay is the backoff after the attempt-th park (0-based) of
+// one wedged action: doubling from the base to a cap.
+func supersedeParkDelay(attempt int) time.Duration {
+	delay := supersedeParkBaseDelay
+	for range attempt {
+		delay *= 2
+		if delay >= supersedeParkMaxDelay {
+			return supersedeParkMaxDelay
+		}
+	}
+
+	return delay
+}
+
+// parkWedgedAction persists a wedged action in retry_work, the durable owner
+// of per-action retry timing. The row is keyed by the action, so a replan that
+// plans something else prunes it and a success resolves it.
+func (flow *engineFlow) parkWedgedAction(ctx context.Context, r *actionCompletion, current *trackedAction) error {
+	work := retryWorkKeyForCompletion(r)
+	if current != nil {
+		work = retryWorkKeyForAction(&current.Action)
+	}
+	row, err := flow.deps.store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{Work: work}, supersedeParkDelay)
+	if err != nil {
+		return fmt.Errorf("park wedged action %s: %w", r.Path, err)
+	}
+	if row == nil {
+		return fmt.Errorf("park wedged action %s: missing persisted row", r.Path)
+	}
+	if flow.retries.rowsByKey != nil {
+		flow.retries.rowsByKey[row.WorkKey()] = *row
+	}
+	flow.signals.armRetryTimer()
+
+	return nil
+}
+
 // supersedeStreakWarnThreshold is how many consecutive supersedes of the same
 // action make the stall visible at Warn. One or two are ordinary: truth moved
 // on between planning and execution and the replan absorbs it.
@@ -567,9 +621,9 @@ func supersedeStreakKey(r *actionCompletion) string {
 // recordSupersede logs every superseded completion at Debug and warns once
 // when the same action keeps being superseded, so a precondition that can
 // never hold is visible instead of a silent stall.
-func (flow *engineFlow) recordSupersede(r *actionCompletion) {
+func (flow *engineFlow) recordSupersede(r *actionCompletion) int {
 	if r == nil || flow.supersedeStreaks == nil {
-		return
+		return 0
 	}
 	key := supersedeStreakKey(r)
 	flow.supersedeStreaks[key]++
@@ -581,7 +635,7 @@ func (flow *engineFlow) recordSupersede(r *actionCompletion) {
 	}
 	logger := flow.deps.logger
 	if logger == nil {
-		return
+		return streak
 	}
 	logger.Debug("action superseded; replanning",
 		slog.String("action", r.ActionType.String()),
@@ -606,8 +660,10 @@ func (flow *engineFlow) recordSupersede(r *actionCompletion) {
 			slog.Int("supersede_streak", streak),
 			slog.String("error_detail", reason),
 		)
-		logger.Warn("A planned change keeps going stale before it can run; sync will keep retrying it", attrs...)
+		logger.Warn("A planned change keeps going stale before it can run; sync parks it and retries with backoff", attrs...)
 	}
+
+	return streak
 }
 
 func (flow *engineFlow) clearSupersedeStreak(r *actionCompletion) {

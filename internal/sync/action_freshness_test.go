@@ -230,7 +230,12 @@ func TestWorkerStartFreshness_LocalDeleteMissingIsSupersededBeforeExecution(t *t
 }
 
 // Validates: R-2.8.9
-func TestWorkerStartFreshness_LocalMoveSourceChangedIsSupersededBeforeExecution(t *testing.T) {
+//
+// The source of a remote-origin local move must still be the synced item.
+// Its content may have changed (D-053: the rename carries the edit, which is
+// uploaded next), but a different file at the source path (another identity)
+// is not the item OneDrive moved.
+func TestWorkerStartFreshness_LocalMoveSourceReplacedIsSupersededBeforeExecution(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -238,10 +243,13 @@ func TestWorkerStartFreshness_LocalMoveSourceChangedIsSupersededBeforeExecution(
 	remoteDriveID := driveid.New(testDriveID)
 
 	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
-		Path:     "old.txt",
-		ItemType: ItemTypeFile,
-		Hash:     "changed",
-		Size:     7,
+		Path:             "old.txt",
+		ItemType:         ItemTypeFile,
+		Hash:             "changed",
+		Size:             7,
+		LocalDevice:      1,
+		LocalInode:       99,
+		LocalHasIdentity: true,
 	}}))
 	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
 		DriveID:  remoteDriveID,
@@ -275,9 +283,12 @@ func TestWorkerStartFreshness_LocalMoveSourceChangedIsSupersededBeforeExecution(
 					DriveID:        remoteDriveID,
 					ItemID:         "remote-1",
 					ItemType:       ItemTypeFile,
-					LocalHash:      "planned",
-					LocalSize:      7,
-					LocalSizeKnown: true,
+					LocalHash:        "planned",
+					LocalSize:        7,
+					LocalSizeKnown:   true,
+					LocalDevice:      1,
+					LocalInode:       2,
+					LocalHasIdentity: true,
 				},
 			},
 		},

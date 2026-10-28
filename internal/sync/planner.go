@@ -574,6 +574,123 @@ func countByType(actions []Action) map[actionType]int {
 	return counts
 }
 
+// isolateDependencyCycles builds the dependency graph and removes any actions
+// that sit on a dependency cycle, together with everything that waits on them
+// (D-059c). A cycle is a planner bug, but it used to abort the whole plan, so
+// one bad pair of actions stopped every other change from syncing. The rest
+// of the plan runs; the next pass replans the removed work from current truth.
+func isolateDependencyCycles(actions []Action, logger *slog.Logger) ([]Action, [][]int) {
+	for {
+		deps := buildDependencies(actions)
+		onCycle := dependencyCycleMembers(deps)
+		if len(onCycle) == 0 {
+			return actions, deps
+		}
+
+		dropped := withDependents(onCycle, deps)
+		kept := make([]Action, 0, len(actions)-len(dropped))
+		for i := range actions {
+			if !dropped[i] {
+				kept = append(kept, actions[i])
+				continue
+			}
+			if logger != nil && onCycle[i] {
+				logger.Error("planner dropped an action caught in a dependency cycle; it is replanned next pass",
+					slog.String("action", actions[i].Type.String()),
+					slog.String("path", actions[i].Path),
+					slog.String("old_path", actions[i].OldPath),
+				)
+			}
+		}
+		actions = kept
+	}
+}
+
+// dependencyCycleMembers returns the actions on a dependency cycle: members of
+// a strongly connected component with more than one action, or depending on
+// themselves (Tarjan's algorithm).
+func dependencyCycleMembers(deps [][]int) map[int]bool {
+	index := make([]int, len(deps))
+	low := make([]int, len(deps))
+	onStack := make([]bool, len(deps))
+	for i := range index {
+		index[i] = -1
+	}
+	var stack []int
+	next := 0
+	members := map[int]bool{}
+
+	var visit func(v int)
+	visit = func(v int) {
+		index[v], low[v] = next, next
+		next++
+		stack = append(stack, v)
+		onStack[v] = true
+		for _, w := range deps[v] {
+			switch {
+			case w == v:
+				members[v] = true
+			case index[w] < 0:
+				visit(w)
+				low[v] = min(low[v], low[w])
+			case onStack[w]:
+				low[v] = min(low[v], index[w])
+			}
+		}
+		if low[v] != index[v] {
+			return
+		}
+		var component []int
+		for {
+			w := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			onStack[w] = false
+			component = append(component, w)
+			if w == v {
+				break
+			}
+		}
+		if len(component) > 1 {
+			for _, w := range component {
+				members[w] = true
+			}
+		}
+	}
+	for v := range deps {
+		if index[v] < 0 {
+			visit(v)
+		}
+	}
+
+	return members
+}
+
+// withDependents extends roots with every action that depends on one of them,
+// directly or transitively.
+func withDependents(roots map[int]bool, deps [][]int) map[int]bool {
+	dropped := make(map[int]bool, len(roots))
+	for v := range roots {
+		dropped[v] = true
+	}
+	for changed := true; changed; {
+		changed = false
+		for v := range deps {
+			if dropped[v] {
+				continue
+			}
+			for _, w := range deps[v] {
+				if dropped[w] {
+					dropped[v] = true
+					changed = true
+					break
+				}
+			}
+		}
+	}
+
+	return dropped
+}
+
 // detectDependencyCycle performs a DFS to check for cycles in the dependency
 // graph. Returns ErrDependencyCycle if any cycle is found. Uses standard
 // white/gray/black three-color marking (B-313).

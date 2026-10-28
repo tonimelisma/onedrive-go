@@ -234,3 +234,27 @@ func TestBuildDependencies_NestedMoveEdges(t *testing.T) {
 	assert.Empty(t, deps[1])
 	require.NoError(t, detectDependencyCycle(deps))
 }
+
+// Validates: R-2.8.11
+//
+// A dependency cycle drops only the actions on it and their dependents
+// (D-059c); it used to abort the whole plan, so one bad pair stopped every
+// other change from syncing.
+func TestIsolateDependencyCycles_KeepsUnrelatedWork(t *testing.T) {
+	t.Parallel()
+
+	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	actions := []Action{
+		// Two local moves that vacate each other's destination: a cycle.
+		{Type: ActionLocalMove, OldPath: "a.txt", Path: "b.txt", View: file},
+		{Type: ActionLocalMove, OldPath: "b.txt", Path: "a.txt", View: file},
+		{Type: ActionUpload, Path: "unrelated.txt", View: &pathView{Path: "unrelated.txt"}},
+	}
+	require.Error(t, detectDependencyCycle(buildDependencies(actions)), "the fixture must contain a cycle")
+
+	kept, deps := isolateDependencyCycles(actions, nil)
+
+	require.Len(t, kept, 1)
+	assert.Equal(t, "unrelated.txt", kept[0].Path)
+	require.NoError(t, detectDependencyCycle(deps))
+}

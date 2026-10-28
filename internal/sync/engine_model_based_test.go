@@ -171,7 +171,18 @@ func runModelScenario(t *testing.T, seed uint64) {
 		run.requireWrittenContentSurvives(label, edits, converged)
 		run.requireUntouchedFilesUnchanged(label, before, edits, converged)
 		requireScenarioQuietPlan(t, eng)
+		run.requireNothingWedged(label)
 	}
+}
+
+// requireNothingWedged checks that nothing is left in retry_work, where a
+// failing or wedged (D-059d) action would wait: a converged model must never
+// need the safety net.
+func (r *modelRun) requireNothingWedged(label string) {
+	var pending int
+	require.NoError(r.t, r.eng.baseline.rawDB().QueryRowContext(r.t.Context(),
+		`SELECT COUNT(*) FROM retry_work`).Scan(&pending))
+	assert.Zero(r.t, pending, "%s: work is parked in retry_work after convergence; %s", label, r.failureContext())
 }
 
 func (r *modelRun) logf(format string, args ...any) {

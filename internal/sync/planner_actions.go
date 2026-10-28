@@ -83,10 +83,7 @@ func (p *planner) PlanCurrentState(
 	admitted, deferred := partitionCurrentActionsForMode(normalizedActions, mode)
 	bindMountContext(admitted, mount)
 
-	deps := buildDependencies(admitted)
-	if err := detectDependencyCycle(deps); err != nil {
-		return nil, err
-	}
+	admitted, deps := isolateDependencyCycles(admitted, p.logger)
 
 	plan := &actionPlan{
 		Actions:        admitted,
