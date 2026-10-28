@@ -901,20 +901,6 @@ func plannedRemoteItemType(action *Action) ItemType {
 	return resolveItemType(action.View)
 }
 
-// remoteContentDiffersFromBaseline reports whether remote content facts prove
-// the item's content changed since the baseline. eTag and mtime churn alone
-// (a Graph move rewrites both) are not content changes.
-func remoteContentDiffersFromBaseline(remote *remoteState, baseline *BaselineEntry) bool {
-	if remote == nil || baseline == nil || baseline.ItemType != ItemTypeFile {
-		return false
-	}
-	if remote.Hash != "" && baseline.RemoteHash != "" && remote.Hash != baseline.RemoteHash {
-		return true
-	}
-
-	return baseline.RemoteSizeKnown && remote.Size != baseline.RemoteSize
-}
-
 func fillOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {
 	if baseline == nil {
 		return

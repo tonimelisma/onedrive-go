@@ -1048,23 +1048,6 @@ func buildComposedMoveActions(
 	return actions
 }
 
-func localFileDiffersFromBaseline(local *localState, baseline *BaselineEntry) bool {
-	if local == nil || baseline == nil {
-		return false
-	}
-	if baseline.ItemType != ItemTypeFile || local.ItemType != ItemTypeFile {
-		return false
-	}
-	if baseline.LocalHash != "" || local.Hash != "" {
-		return baseline.LocalHash != local.Hash
-	}
-	if baseline.LocalSizeKnown && baseline.LocalSize != local.Size {
-		return true
-	}
-
-	return baseline.LocalMtime != local.Mtime
-}
-
 // composedLocalMoveActions builds a remote-origin local move, preceded by the
 // conflict copy of an edited file it displaces (buildDependencies orders the
 // move after the copy at its destination).

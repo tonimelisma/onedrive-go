@@ -418,17 +418,6 @@ func movePeerPath(action *Action) (string, bool) {
 	return "", false
 }
 
-func actionViewPath(action *Action) string {
-	if action != nil && action.View != nil && action.View.Path != "" {
-		return action.View.Path
-	}
-	if action != nil {
-		return action.Path
-	}
-
-	return ""
-}
-
 func expectedRemoteIdentityPath(action *Action) string {
 	if action == nil {
 		return ""

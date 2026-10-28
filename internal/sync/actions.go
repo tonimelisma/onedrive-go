@@ -136,3 +136,15 @@ type actionOutcome struct {
 	RemoteMtime           int64 // remote mtime at sync time; zero means unknown
 	ETag                  string
 }
+
+// actionViewPath is the path an action's view describes, else its own path.
+func actionViewPath(action *Action) string {
+	if action != nil && action.View != nil && action.View.Path != "" {
+		return action.View.Path
+	}
+	if action != nil {
+		return action.Path
+	}
+
+	return ""
+}
