@@ -1118,7 +1118,7 @@ OneDrive refuses a second sibling whose name it considers equal (409 `nameAlread
 
 `internal/namekey` encodes this as explicit tables, and its tests replay every probed pair (`internal/namekey/testdata/probe-m1-personal.tsv`). Because the sync store keys paths in NFC, siblings that are different on OneDrive but NFC-equal (U+FB2A next to U+05E9 U+05C1) are "remote twins" for this client (R-2.12.6). Business is unprobed.
 
-### Path-Routed Upload Sessions Create A Visible Placeholder (L-30, L-31)
+### Path-Routed Upload Sessions Create A Visible Placeholder (L-34, L-35)
 
 A path-routed `createUploadSession` on Personal makes a visible 0-byte item at once, with the empty-content QuickXor (`AAAA…`) and eTag `",1"`; the commit keeps the same item ID and moves the eTag to `",2"`. Another writer's create of a case variant during the session gets 409, and a session for an existing name with `conflictBehavior=fail` answers 409 `nameAlreadyExists` at creation. So any interrupted session upload, not only the create-by-body path, can leave an empty item behind: sync records a pending create before the content step and treats such a placeholder as its own (R-5.6.15). Path-routed sessions also fail with 400 for names of 300 characters or more (250 works), which is one more reason new files are created by body.
 
@@ -1138,9 +1138,8 @@ normally, and stored names keep the astral characters.
 So two local files that differ only in emoji (or Extension B ideographs) map
 to one OneDrive item, and uploading the second replaces the first. A
 namespace key must drop code points above U+FFFF before case folding and NFC
-normalization. The client's collision detection does not do this yet; it is
-tracked with the other naming fixes (see `onedrive-sync-behavior.md`
-"Case-Insensitive Namespace").
+normalization. `internal/namekey` does this (L-30, R-2.12.3), so such a pair
+is held as a local name collision that names both files.
 
 Other fold results from the same probes: `ǅ`/`ǆ` and `ﬁle`/`FILE` collide,
 while Kelvin `K` (U+212A) vs `K`, U+732A vs U+FA16, and `µ` (U+00B5) vs `Μ`
