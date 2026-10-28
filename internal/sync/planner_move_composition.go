@@ -162,6 +162,9 @@ type moveComposition struct {
 type moveOccupancy struct {
 	local  map[string]bool
 	remote map[string]bool
+	// remoteFiles holds the remote paths that are files, which nothing can
+	// be created under.
+	remoteFiles map[string]bool
 }
 
 type moveComposer struct {
@@ -871,12 +874,16 @@ const comparisonKindLocalMoveSource = "local_move_source"
 func indexMoveSnapshot(remoteRows []remoteStateRow, localRows []localStateRow) (map[string]*remoteStateRow, moveOccupancy) {
 	remoteByID := make(map[string]*remoteStateRow, len(remoteRows))
 	occupancy := moveOccupancy{
-		local:  make(map[string]bool, len(localRows)),
-		remote: make(map[string]bool, len(remoteRows)),
+		local:       make(map[string]bool, len(localRows)),
+		remote:      make(map[string]bool, len(remoteRows)),
+		remoteFiles: make(map[string]bool, len(remoteRows)),
 	}
 	for i := range remoteRows {
 		remoteByID[remoteRows[i].ItemID] = &remoteRows[i]
 		occupancy.remote[remoteRows[i].Path] = true
+		if remoteRows[i].ItemType != ItemTypeFolder {
+			occupancy.remoteFiles[remoteRows[i].Path] = true
+		}
 	}
 	for i := range localRows {
 		occupancy.local[localRows[i].Path] = true
@@ -1184,6 +1191,21 @@ func dropCreatesOntoComposedItems(actions []Action, inputs *moveInputs, composit
 		}
 	}
 
+	vacated := map[moveCoord]map[string]bool{moveCoordLocal: {}, moveCoordRemote: {}}
+	for i := range actions {
+		switch actions[i].Type {
+		case ActionLocalMove:
+			vacated[moveCoordLocal][actions[i].OldPath] = true
+		case ActionConflictCopy, ActionLocalDelete:
+			vacated[moveCoordLocal][actions[i].Path] = true
+		case ActionRemoteMove:
+			vacated[moveCoordRemote][actions[i].OldPath] = true
+		case ActionRemoteDelete:
+			vacated[moveCoordRemote][actions[i].Path] = true
+		case ActionDownload, ActionUpload, ActionFolderCreate, ActionBaselineUpdate, ActionCleanup:
+		}
+	}
+
 	kept := actions[:0:0]
 	for i := range actions {
 		action := &actions[i]
@@ -1191,10 +1213,35 @@ func dropCreatesOntoComposedItems(actions []Action, inputs *moveInputs, composit
 		if holder, held := heldBy[side][action.Path]; isCreate && held && holder != action.ItemID {
 			continue
 		}
+		if isCreate && action.Path != actionViewPath(action) &&
+			rebasedCreateBlocked(action.Path, side, &inputs.occupancy, vacated[side]) {
+			continue
+		}
 		kept = append(kept, *action)
 	}
 
 	return kept
+}
+
+// rebasedCreateBlocked reports a create that a rebase moved onto a path the
+// snapshot already holds on that side (and that nothing in the plan vacates),
+// or below a remote file. Its SQLite row reconciled other coordinates: an item
+// that only followed a folder moved on the other side, a new local folder in
+// place of a file OneDrive kept, ... Run, it failed on every pass and held the
+// folder move behind it; the next pass, with the folder moved, reconciles the
+// path as one.
+func rebasedCreateBlocked(p string, side moveCoord, occupancy *moveOccupancy, vacated map[string]bool) bool {
+	occupied := occupancy.local
+	if side == moveCoordRemote {
+		occupied = occupancy.remote
+		for dir := path.Dir(p); dir != "." && dir != "/"; dir = path.Dir(dir) {
+			if occupancy.remoteFiles[dir] {
+				return true
+			}
+		}
+	}
+
+	return occupied[p] && !vacated[p]
 }
 
 // createSide reports which side an action creates an entry on.

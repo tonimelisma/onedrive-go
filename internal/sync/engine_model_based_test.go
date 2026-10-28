@@ -61,6 +61,8 @@ const (
 	modelOpDelete            = "delete"
 	modelOpMove              = "move"
 	modelOpMakeFolder        = "mkdir"
+	modelOpReplace           = "replace"
+	modelReplaceChildName    = "inside.txt"
 	modelNotConvergedMessage = "sync did not converge"
 )
 
@@ -383,7 +385,9 @@ func (r *modelRun) newPathIn(folders []string, pool string, tree map[string]stri
 
 func (r *modelRun) localEdit() (modelEdit, bool) {
 	tree := r.localTree()
-	switch r.pick([]string{modelOpCreateFile, modelOpEditFile, modelOpDelete, modelOpMove, modelOpMakeFolder}) {
+	switch r.pick([]string{modelOpCreateFile, modelOpEditFile, modelOpDelete, modelOpMove, modelOpMakeFolder, modelOpReplace}) {
+	case modelOpReplace:
+		return r.localReplace(tree)
 	case modelOpCreateFile:
 		p := r.newPathIn(r.localFolders(), modelFileNamePool, tree)
 		if p == "" {
@@ -439,7 +443,9 @@ func (r *modelRun) localMove(tree map[string]string) (modelEdit, bool) {
 
 func (r *modelRun) remoteEdit() (modelEdit, bool) {
 	tree := r.remote.tree()
-	switch r.pick([]string{modelOpCreateFile, modelOpEditFile, modelOpDelete, modelOpMove, modelOpMakeFolder}) {
+	switch r.pick([]string{modelOpCreateFile, modelOpEditFile, modelOpDelete, modelOpMove, modelOpMakeFolder, modelOpReplace}) {
+	case modelOpReplace:
+		return r.remoteReplace(tree)
 	case modelOpCreateFile:
 		p := r.newPathIn(modelFoldersOf(tree), modelFileNamePool, tree)
 		if p == "" {
@@ -483,6 +489,44 @@ func (r *modelRun) remoteEdit() (modelEdit, bool) {
 		r.logf("remote mkdir %s", p)
 		return modelEdit{side: modelRemoteSide, kind: modelOpMakeFolder, path: p}, true
 	}
+}
+
+// localReplace changes an entry's type in place: a file becomes a folder with
+// one new file in it, a folder (with its subtree) becomes a file.
+func (r *modelRun) localReplace(tree map[string]string) (modelEdit, bool) {
+	p := r.pick(append(modelEntriesOf(tree, false), modelEntriesOf(tree, true)...))
+	if p == "" {
+		return modelEdit{}, false
+	}
+	abs := filepath.Join(r.syncRoot, filepath.FromSlash(p))
+	require.NoError(r.t, os.RemoveAll(abs))
+	content := r.nextContent(modelLocalSide)
+	if tree[p] == modelFolderSentinel {
+		writeLocalFile(r.t, r.syncRoot, filepath.FromSlash(p), content)
+	} else {
+		writeLocalFile(r.t, r.syncRoot, filepath.FromSlash(path.Join(p, modelReplaceChildName)), content)
+	}
+	r.logf("local replace %s", p)
+
+	return modelEdit{side: modelLocalSide, kind: modelOpReplace, path: p, content: content}, true
+}
+
+func (r *modelRun) remoteReplace(tree map[string]string) (modelEdit, bool) {
+	p := r.pick(append(modelEntriesOf(tree, false), modelEntriesOf(tree, true)...))
+	if p == "" {
+		return modelEdit{}, false
+	}
+	r.remote.deleteAt(r.t, p)
+	content := r.nextContent(modelRemoteSide)
+	if tree[p] == modelFolderSentinel {
+		r.remote.putFileAt(r.t, p, content)
+	} else {
+		r.remote.mkdirAt(r.t, p)
+		r.remote.putFileAt(r.t, path.Join(p, modelReplaceChildName), content)
+	}
+	r.logf("remote replace %s", p)
+
+	return modelEdit{side: modelRemoteSide, kind: modelOpReplace, path: p, content: content}, true
 }
 
 // pickMove chooses an existing entry and a free destination outside its own

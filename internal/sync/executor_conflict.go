@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -41,6 +42,17 @@ func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) action
 			action.Path,
 			permissionCapabilityLocalWrite,
 		)
+	}
+
+	// A directory cannot take a placeholder file's name: the rename failed
+	// with ENOTDIR on every pass (D-059a).
+	sourceIsDir := false
+	if info, statErr := e.syncTree.Lstat(action.Path); statErr == nil {
+		sourceIsDir = info.IsDir()
+	}
+
+	if sourceIsDir {
+		return e.executeDirectoryConflictCopy(action, absPath)
 	}
 
 	conflictPath, conflictRel, err := e.reserveUniqueConflictCopyPath(absPath)
@@ -168,9 +180,19 @@ func conflictCopyPath(absPath string, now time.Time) string {
 // a long name was unwritable and blocked the download on every pass (D-030).
 // An extension too long to leave room for the marker is trimmed too.
 func conflictCopyPathWithOrdinal(absPath string, now time.Time, ordinal int) string {
-	dir := filepath.Dir(absPath)
 	stem, ext := ConflictStemExt(filepath.Base(absPath))
 
+	return composeConflictCopyPath(filepath.Dir(absPath), stem, ext, now, ordinal)
+}
+
+// conflictCopyDirPathWithOrdinal names a directory's conflict copy. A
+// directory has no extension, so a dot in its name stays in the stem:
+// "photos.2024" -> "photos.2024.conflict-20260101-120000".
+func conflictCopyDirPathWithOrdinal(absPath string, now time.Time, ordinal int) string {
+	return composeConflictCopyPath(filepath.Dir(absPath), filepath.Base(absPath), "", now, ordinal)
+}
+
+func composeConflictCopyPath(dir, stem, ext string, now time.Time, ordinal int) string {
 	suffix := ".conflict-" + now.Format("20060102-150405")
 	if ordinal > 1 {
 		suffix += fmt.Sprintf("-%d", ordinal)
@@ -233,4 +255,52 @@ func ConflictStemExt(name string) (string, string) {
 	stem := name[:len(name)-len(ext)]
 
 	return stem, ext
+}
+
+// conflictCopyDirAttempts bounds the same-second names tried for a directory's
+// conflict copy.
+const conflictCopyDirAttempts = 100
+
+// executeDirectoryConflictCopy renames a directory to a unique conflict-copy
+// name. Unlike a file it needs no placeholder, because renaming a directory
+// cannot destroy anything at the destination: onto a file it fails with
+// ENOTDIR, onto a non-empty directory with ENOTEMPTY, and the rooted rename
+// refuses an existing directory with EEXIST (it would otherwise replace only
+// an empty one). Trying candidate names in order therefore never loses data.
+func (e *executor) executeDirectoryConflictCopy(action *Action, absPath string) actionOutcome {
+	now := e.nowFunc()
+	for ordinal := 1; ordinal <= conflictCopyDirAttempts; ordinal++ {
+		candidate := conflictCopyDirPathWithOrdinal(absPath, now, ordinal)
+		rel, err := e.syncTree.Rel(candidate)
+		if err != nil {
+			return e.failedOutcomeWithFailure(action, ActionConflictCopy,
+				fmt.Errorf("relativizing conflict copy path %s: %w", filepath.Base(candidate), normalizeSyncTreePathError(err)),
+				action.Path, permissionCapabilityLocalWrite)
+		}
+		renameErr := e.syncTree.Rename(action.Path, rel)
+		if renameErr == nil {
+			e.logger.Debug("saved conflict copy",
+				slog.String("path", action.Path),
+				slog.String("conflict_copy", filepath.Base(candidate)),
+			)
+			return actionOutcome{
+				Action:  ActionConflictCopy,
+				Success: true,
+				Path:    action.Path,
+				OldPath: rel,
+				DriveID: e.resolveDriveID(action),
+				ItemID:  action.ItemID,
+			}
+		}
+		if errors.Is(renameErr, os.ErrExist) || errors.Is(renameErr, syscall.ENOTDIR) || errors.Is(renameErr, syscall.ENOTEMPTY) {
+			continue
+		}
+
+		return e.failedOutcomeWithFailure(action, ActionConflictCopy,
+			fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(candidate), normalizeSyncTreePathError(renameErr)),
+			action.Path, permissionCapabilityLocalWrite)
+	}
+
+	return e.failedOutcomeWithFailure(action, ActionConflictCopy,
+		fmt.Errorf("no free conflict copy name for %s", action.Path), action.Path, permissionCapabilityLocalWrite)
 }

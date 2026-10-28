@@ -3746,3 +3746,23 @@ func TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination(t *testing.T) {
 		})
 	}
 }
+
+// Validates: R-2.17.10
+//
+// A directory's conflict copy is a rename of the directory to a free
+// conflict name (D-059a). It used to be renamed onto a placeholder file and
+// failed with ENOTDIR on every pass.
+func TestExecutor_ConflictCopy_DirectorySourceIsRenamed(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+	writeExecTestFile(t, syncRoot, filepath.Join("thing", "child.txt"), "child")
+
+	o := e.ExecuteConflictCopy(t.Context(), &Action{Type: ActionConflictCopy, Path: "thing", View: &pathView{Path: "thing"}})
+	requireOutcomeSuccess(t, &o)
+
+	assert.NoDirExists(t, filepath.Join(syncRoot, "thing"))
+	assert.Contains(t, o.OldPath, "thing.conflict-")
+	assert.FileExists(t, filepath.Join(syncRoot, o.OldPath, "child.txt"))
+}

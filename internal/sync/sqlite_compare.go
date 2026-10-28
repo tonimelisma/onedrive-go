@@ -235,6 +235,42 @@ comparison_flags AS (
 				) THEN 1
 			ELSE 0
 		END AS local_item_replaced,
+		-- A folder has no content of its own, so whether it "changed" on a
+		-- side is whether anything below it did: a new entry, or one that
+		-- differs from its baseline (D-059). Only asked where it decides
+		-- something, a folder the other side replaced with a file.
+		CASE
+			WHEN b.path IS NULL OR COALESCE(b.item_type, '') <> 'folder'
+				OR COALESCE(l.item_type, '') <> 'folder'
+				OR r.path IS NULL OR COALESCE(r.item_type, '') = 'folder' THEN 0
+			WHEN EXISTS (
+				SELECT 1 FROM local_state ld
+				WHERE ld.path > b.path || '/' AND ld.path < b.path || '0'
+					AND NOT EXISTS (
+						SELECT 1 FROM baseline bd
+						WHERE bd.path = ld.path
+							AND COALESCE(bd.item_type, '') = COALESCE(ld.item_type, '')
+							AND (COALESCE(ld.item_type, '') = 'folder' OR COALESCE(bd.local_hash, '') = COALESCE(ld.hash, ''))
+					)
+			) THEN 1
+			ELSE 0
+		END AS local_subtree_changed,
+		CASE
+			WHEN b.path IS NULL OR COALESCE(b.item_type, '') <> 'folder'
+				OR COALESCE(r.item_type, '') <> 'folder'
+				OR l.path IS NULL OR COALESCE(l.item_type, '') = 'folder' THEN 0
+			WHEN EXISTS (
+				SELECT 1 FROM remote_state rd
+				WHERE rd.path > b.path || '/' AND rd.path < b.path || '0'
+					AND NOT EXISTS (
+						SELECT 1 FROM baseline bd
+						WHERE bd.path = rd.path
+							AND bd.item_id = rd.item_id
+							AND (COALESCE(rd.item_type, '') = 'folder' OR COALESCE(bd.remote_hash, '') = COALESCE(rd.hash, ''))
+					)
+			) THEN 1
+			ELSE 0
+		END AS remote_subtree_changed,
 		CASE
 			WHEN l.path IS NULL OR r.path IS NULL THEN 0
 			WHEN COALESCE(l.item_type, '') <> COALESCE(r.item_type, '') THEN 0
@@ -334,6 +370,8 @@ comparison_state AS (
 		remote_move_shadowed,
 		remote_item_replaced,
 		local_item_replaced,
+		local_subtree_changed,
+		remote_subtree_changed,
 		metadata_drift,
 		CASE
 			-- The synced item moved; a new entry at its old path (rename and
@@ -397,6 +435,15 @@ reconciliation_state AS (
 			-- "downloaded" as the baseline's type. When the other side also
 			-- changed, local wins: the replaced OneDrive item goes to the
 			-- recycle bin, whereas replacing local truth would destroy it.
+			-- Different types with changes on both sides (a local edit of
+			-- the file OneDrive replaced with a folder, a remote edit inside
+			-- the folder the user replaced with a file, ...) keep both: the
+			-- local entry becomes a conflict copy and OneDrive's item takes
+			-- the path. Replacing either side would delete the other's
+			-- content (D-059).
+			WHEN comparison_kind = 'diverged' AND local_item_type <> remote_item_type
+				AND (local_changed = 1 OR local_subtree_changed = 1)
+				AND (remote_changed = 1 OR remote_subtree_changed = 1) THEN 'conflict_keep_both'
 			WHEN comparison_kind = 'diverged' AND local_changed = 1
 				AND (local_type_changed = 1 OR remote_type_changed = 1) THEN 'replace_remote'
 			WHEN comparison_kind = 'diverged' AND remote_type_changed = 1 THEN 'replace_local'

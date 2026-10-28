@@ -323,7 +323,7 @@ func addParentFolderDep(deps []int, idx int, a *Action, folderCreateIdx map[stri
 }
 
 func addConflictCopyDep(deps []int, idx int, a *Action, conflictCopyIdx map[string]int) []int {
-	if a.Type != ActionDownload {
+	if a.Type != ActionDownload && (a.Type != ActionFolderCreate || a.CreateSide != createLocal) {
 		return deps
 	}
 

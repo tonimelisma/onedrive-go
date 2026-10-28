@@ -82,7 +82,8 @@ intent; multisync receives only that child work intent.
 | A remote move over a file OneDrive deleted moves the local copy onto it, replacing a verified unchanged file or conflict-copying an edited one, and never re-uploads the moved item (R-2.17.9). | `TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting`, `TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit`, `TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination` |
 | Move pairing requires the item to have left its baseline path: hard links and copies are new files, rename-and-recreate is a move plus a create (R-2.17.8). | `TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated`, `TestRunOnce_HardLinkUploadsAsANewFile`, `TestRunOnce_RenameAndRecreateMovesThenCreates` |
 | Remote moves applied locally carry the source baseline and do not re-upload unchanged content. | `TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline`, `TestRunOnce_RemoteRenameAppliedLocallyDoesNotReupload` |
-| Type changes on either side are replacements ordered delete-then-create, never a silent stall. | `TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem`, `TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem`, `TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem`, `TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem`, `TestRunOnce_LocalFileReplacedByFolderConverges` |
+| Type changes with content on both sides keep both (`conflict_keep_both`, and type-mismatched create/create): a type-aware conflict copy of the local entry, then OneDrive's item at the path; a folder's change includes its subtree; nothing below the path is deleted on either side (R-2.17.10). | `TestRunOnce_RemoteFileReplacedByNonEmptyFolderWithLocalEditKeepsBoth`, `TestRunOnce_RemoteFolderReplacedByFileWithLocalChildEditsKeepsBoth`, `TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth`, `TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth`, `TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth`, `TestExecutor_ConflictCopy_DirectorySourceIsRenamed` |
+| Type changes on either side are replacements ordered delete-then-create, never a silent stall. | `TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem`, `TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem`, `TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem`, `TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem`, `TestRunOnce_LocalFileReplacedByFolderConverges`, `TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges` |
 | Deletes toward one side are held for confirmation when the other side is empty while the baseline holds files, or when they exceed max(50, 30% of baseline files); moves never count, non-delete work continues, and `sync --confirm-deletes` releases them. | `TestPlanner_MassRemoteDeleteIsHeldForConfirmation`, `TestPlanner_MassLocalDeleteAfterAnomalousFullRefreshIsHeld`, `TestPlanner_EmptiedLocalSideHoldsEvenFewDeletes`, `TestPlanner_DeleteGuardBelowThresholdProceeds`, `TestPlanner_DeleteGuardIgnoresMoves`, `TestDeleteSafetyHold_FolderDeletesCountTowardThreshold`, `TestDeleteSafetyHold_LostAndFoundDoesNotMakeASideNonEmpty`, `TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`, `TestDeleteSafetyHold_ConfirmReleasesExactlyTheHeldSet`, `TestDeleteSafetyHold_HeldRowWithoutItemIDDoesNotApproveAKnownItem`, `TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked` |
 | Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/planner_actions_test.go`, `internal/sync/planner_dependency_test.go` |
 | Planner decisions stay row-driven and action-shaped across conflict and folder-parent preservation cases. | `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_DownloadOnlyKeepsParentDeleteWhenEditedChildUploadDeferred`, `internal/sync/store_planner_visible_test.go` |
@@ -334,9 +335,28 @@ A type change (file <-> folder) at one path is a replacement (R-2.17.4):
 `replace_remote` emits `ActionRemoteDelete` of the old item and then a remote
 folder create or a new-item upload; `replace_local` emits `ActionLocalDelete`
 and then a local folder create or a download that requires a missing target.
-The create depends on the same-path delete. When both sides changed and either
-changed type, local wins (`replace_remote`), because a replaced OneDrive item
-survives in the recycle bin while replaced local truth would be gone. Delete
+The create depends on the same-path delete. When the two sides now hold
+different types and both changed (R-2.17.10, D-059) the result is
+`conflict_keep_both`: the local entry, file or folder, becomes a conflict copy,
+and OneDrive's item takes the path (a folder is created locally, a file
+downloaded into the vacated target). A folder counts as changed when anything
+below it is new or differs from its baseline (`local_subtree_changed`,
+`remote_subtree_changed`, computed only for a folder the other side replaced
+with a file). Before, local won: a local edit inside a folder OneDrive replaced
+with a file was deleted with the folder, a remote edit inside a folder the user
+replaced with a file went with the remote delete, and a remote folder's children
+wedged against a local file still at the path. `trimKeepBothDescendants` keeps
+below the path only OneDrive content arriving into the folder that takes it
+(turning the remote deletes of its unchanged children into local restores) and
+baseline cleanup; work addressed at the renamed local entry is replanned next
+pass. A create/create conflict between a folder and a file expands the same way
+(D-059a), and a directory's conflict copy is a plain rename to a free
+`name.conflict-<timestamp>` (no placeholder file, which a directory cannot be
+renamed onto). When only one side changed, local wins as before
+(`replace_remote`), because a replaced OneDrive item survives in the recycle
+bin. A remote delete under a folder the user replaced with a file treats the
+path as absent (nothing can exist below a file); its local-absence check used to
+fail on the non-folder parent and held the folder's delete forever. Delete
 ordering and parent preservation use the deleted side's type
 (`deletedItemType`), since the two sides disagree across a type change. Moves that cross drive ownership are
 decomposed into delete + upload because Graph move cannot cross drive

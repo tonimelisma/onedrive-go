@@ -471,7 +471,10 @@ func (e *executor) validateRemoteDeleteLocalAbsence(action *Action) error {
 
 	info, err := e.syncTree.Lstat(action.Path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) || e.hasRegularFileAncestor(action.Path) {
+			// Below a file nothing can exist: the folder that held this
+			// child was replaced locally by a file (a type change), and the
+			// child is as absent as it gets.
 			return nil
 		}
 		return normalizeSyncTreePathError(err)
@@ -490,6 +493,28 @@ func (e *executor) validateRemoteDeleteLocalAbsence(action *Action) error {
 	}
 
 	return stalePreconditionError("remote delete source %s exists locally again", action.Path)
+}
+
+// hasRegularFileAncestor reports whether a parent component of relPath is a
+// regular file (not a link), checked from the sync root down.
+func (e *executor) hasRegularFileAncestor(relPath string) bool {
+	parts := strings.Split(filepath.Clean(relPath), string(filepath.Separator))
+	current := ""
+	for _, part := range parts[:len(parts)-1] {
+		current = filepath.Join(current, part)
+		info, err := e.syncTree.Lstat(current)
+		if err != nil {
+			return false
+		}
+		if info.Mode().IsRegular() {
+			return true
+		}
+		if !info.IsDir() {
+			return false
+		}
+	}
+
+	return false
 }
 
 func (e *executor) exactLocalNameExists(relPath string) bool {

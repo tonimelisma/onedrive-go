@@ -107,6 +107,7 @@ func (p *planner) PlanCurrentState(
 // reconciled them at, which are consistent with each other; the rebases then
 // move whole subtrees, preserved parents included, to where they execute.
 func normalizeCurrentPlanActions(actions []Action, remoteToLocal []graphFolderMoveBoundary, mode SyncMode) []Action {
+	actions = trimKeepBothDescendants(actions)
 	actions = preserveParentFoldersForRunnableDescendants(actions, mode)
 	actions = rebaseLocalWritesToLocalFolderPositions(actions, remoteToLocal)
 	return rebaseRemoteCreatesThroughLocalFolderMoves(actions)
@@ -391,10 +392,15 @@ func buildActionsForReconciliation(
 			makeCreateUploadAction(view),
 		}, nil
 	case "conflict_create_create":
+		if view.Local != nil && view.Remote != nil && view.Local.ItemType != view.Remote.ItemType {
+			return buildKeepBothActions(view), nil
+		}
 		return []Action{
 			makeConflictCopyAction(view),
 			makeDownloadAfterConflictCopyAction(view),
 		}, nil
+	case "conflict_keep_both":
+		return buildKeepBothActions(view), nil
 	case "replace_remote":
 		return buildReplaceRemoteActions(view), nil
 	case "replace_local":
@@ -405,6 +411,91 @@ func buildActionsForReconciliation(
 	default:
 		return nil, fmt.Errorf("sync: unsupported reconciliation kind %q for %s", rec.ReconciliationKind, rec.Path)
 	}
+}
+
+// buildKeepBothActions resolves a conflict between entries of different types
+// at one path (D-059, D-059a): the local entry, file or folder, is renamed to
+// a conflict copy (uploaded later as new content), then OneDrive's item takes
+// the path as what it is: a folder is created locally, a file downloaded into
+// the now-missing target. No content of either side is deleted.
+// trimKeepBothDescendants removes the planned work below the path that the
+// rename invalidates.
+func buildKeepBothActions(view *pathView) []Action {
+	actions := []Action{makeConflictCopyAction(view)}
+	if view.Remote != nil && view.Remote.ItemType == ItemTypeFolder {
+		return append(actions, makeFolderCreate(view, createLocal))
+	}
+
+	return append(actions, makeDownloadAfterConflictCopyAction(view))
+}
+
+// trimKeepBothDescendants keeps, below a keep-both path, only OneDrive's
+// content arriving into the folder that takes the path (downloads and local
+// folder creates, plus restores of the children that looked deleted locally)
+// and baseline cleanup. Everything else there addressed the local entry the
+// conflict copy moves away: uploads and local deletes of its children would run
+// against paths that no longer hold them, and remote deletes of children the
+// local side "lost" would delete OneDrive content the keep-both keeps. The next
+// pass plans the conflict copy's content as new.
+func trimKeepBothDescendants(actions []Action) []Action {
+	var keepBoth []string
+	remoteFolder := map[string]bool{}
+	for i := range actions {
+		action := &actions[i]
+		if action.Type != ActionConflictCopy || action.View == nil || action.View.Local == nil || action.View.Remote == nil {
+			continue
+		}
+		if action.View.Local.ItemType == action.View.Remote.ItemType {
+			continue
+		}
+		keepBoth = append(keepBoth, action.Path)
+		remoteFolder[action.Path] = action.View.Remote.ItemType == ItemTypeFolder
+	}
+	if len(keepBoth) == 0 {
+		return actions
+	}
+
+	kept := actions[:0:0]
+	for i := range actions {
+		action := &actions[i]
+		under := ""
+		for _, p := range keepBoth {
+			if strings.HasPrefix(action.Path, p+"/") {
+				under = p
+				break
+			}
+		}
+		if under == "" || action.Type == ActionCleanup {
+			kept = append(kept, *action)
+			continue
+		}
+		if !remoteFolder[under] {
+			continue
+		}
+		arrives := action.Type == ActionDownload || (action.Type == ActionFolderCreate && action.CreateSide == createLocal)
+		if arrives {
+			kept = append(kept, *action)
+			continue
+		}
+		// An unchanged child of the folder OneDrive keeps looks deleted
+		// locally (the local entry at the path was a file): it is restored,
+		// not deleted online.
+		if action.Type == ActionRemoteDelete && action.View != nil && action.View.Remote != nil {
+			kept = append(kept, restoreRemoteChild(action.View))
+		}
+	}
+
+	return kept
+}
+
+func restoreRemoteChild(view *pathView) Action {
+	if view.Remote.ItemType == ItemTypeFolder {
+		return makeFolderCreate(view, createLocal)
+	}
+	download := makeAction(ActionDownload, view)
+	download.RequireMissingLocalTarget = true
+
+	return download
 }
 
 // buildReplaceRemoteActions replaces the OneDrive item at a path whose local
