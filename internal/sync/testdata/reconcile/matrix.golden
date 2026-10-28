@@ -1,0 +1,102 @@
+# baseline | local | remote -> plan (one path; files A/B/C, dir = folder, - = absent)
+-   | -   | -   -> (quiet)
+-   | -   | A   -> download doc
+-   | -   | B   -> download doc
+-   | -   | C   -> download doc
+-   | -   | dir -> folder_create doc (local)
+-   | A   | -   -> upload doc
+-   | A   | A   -> baseline_update doc
+-   | A   | B   -> conflict_copy doc; download doc
+-   | A   | C   -> conflict_copy doc; download doc
+-   | A   | dir -> conflict_copy doc; folder_create doc (local)
+-   | B   | -   -> upload doc
+-   | B   | A   -> conflict_copy doc; download doc
+-   | B   | B   -> baseline_update doc
+-   | B   | C   -> conflict_copy doc; download doc
+-   | B   | dir -> conflict_copy doc; folder_create doc (local)
+-   | C   | -   -> upload doc
+-   | C   | A   -> conflict_copy doc; download doc
+-   | C   | B   -> conflict_copy doc; download doc
+-   | C   | C   -> baseline_update doc
+-   | C   | dir -> conflict_copy doc; folder_create doc (local)
+-   | dir | -   -> folder_create doc (remote)
+-   | dir | A   -> conflict_copy doc; download doc
+-   | dir | B   -> conflict_copy doc; download doc
+-   | dir | C   -> conflict_copy doc; download doc
+-   | dir | dir -> baseline_update doc
+A   | -   | -   -> cleanup doc
+A   | -   | A   -> remote_delete doc
+A   | -   | B   -> download doc
+A   | -   | C   -> download doc
+A   | -   | dir -> folder_create doc (local)
+A   | A   | -   -> local_delete doc
+A   | A   | A   -> (quiet)
+A   | A   | B   -> download doc
+A   | A   | C   -> download doc
+A   | A   | dir -> folder_create doc (local); local_delete doc
+A   | B   | -   -> upload doc
+A   | B   | A   -> upload doc
+A   | B   | B   -> baseline_update doc
+A   | B   | C   -> conflict_copy doc; download doc
+A   | B   | dir -> conflict_copy doc; folder_create doc (local)
+A   | C   | -   -> upload doc
+A   | C   | A   -> upload doc
+A   | C   | B   -> conflict_copy doc; download doc
+A   | C   | C   -> baseline_update doc
+A   | C   | dir -> conflict_copy doc; folder_create doc (local)
+A   | dir | -   -> folder_create doc (remote)
+A   | dir | A   -> folder_create doc (remote); remote_delete doc
+A   | dir | B   -> conflict_copy doc; download doc
+A   | dir | C   -> conflict_copy doc; download doc
+A   | dir | dir -> baseline_update doc
+dir | -   | -   -> cleanup doc
+dir | -   | A   -> download doc
+dir | -   | B   -> download doc
+dir | -   | C   -> download doc
+dir | -   | dir -> remote_delete doc
+dir | A   | -   -> upload doc
+dir | A   | A   -> baseline_update doc
+dir | A   | B   -> conflict_copy doc; download doc
+dir | A   | C   -> conflict_copy doc; download doc
+dir | A   | dir -> remote_delete doc; upload doc
+dir | B   | -   -> upload doc
+dir | B   | A   -> conflict_copy doc; download doc
+dir | B   | B   -> baseline_update doc
+dir | B   | C   -> conflict_copy doc; download doc
+dir | B   | dir -> remote_delete doc; upload doc
+dir | C   | -   -> upload doc
+dir | C   | A   -> conflict_copy doc; download doc
+dir | C   | B   -> conflict_copy doc; download doc
+dir | C   | C   -> baseline_update doc
+dir | C   | dir -> remote_delete doc; upload doc
+dir | dir | -   -> local_delete doc
+dir | dir | A   -> download doc; local_delete doc
+dir | dir | B   -> download doc; local_delete doc
+dir | dir | C   -> download doc; local_delete doc
+dir | dir | dir -> (quiet)
+
+# moves: baseline file A at doc; where each side holds it now
+local unchanged        | remote unchanged        -> (quiet)
+local unchanged        | remote moved doc2       -> local_move doc2 <- doc
+local unchanged        | remote moved doc3       -> local_move doc3 <- doc
+local unchanged        | remote edited           -> download doc
+local unchanged        | remote moved+edit doc3  -> local_move doc3 <- doc
+local unchanged        | remote deleted          -> local_delete doc
+local moved doc2       | remote unchanged        -> remote_move doc2 <- doc
+local moved doc2       | remote moved doc2       -> baseline_update doc2 <- doc
+local moved doc2       | remote moved doc3       -> local_move doc3 <- doc2
+local moved doc2       | remote edited           -> remote_move doc2 <- doc
+local moved doc2       | remote moved+edit doc3  -> local_move doc3 <- doc2
+local moved doc2       | remote deleted          -> cleanup doc; upload doc2
+local moved+edit doc2  | remote unchanged        -> remote_delete doc; upload doc2
+local moved+edit doc2  | remote moved doc2       -> cleanup doc; conflict_copy doc2; download doc2
+local moved+edit doc2  | remote moved doc3       -> cleanup doc; download doc3; upload doc2
+local moved+edit doc2  | remote edited           -> download doc; upload doc2
+local moved+edit doc2  | remote moved+edit doc3  -> cleanup doc; download doc3; upload doc2
+local moved+edit doc2  | remote deleted          -> cleanup doc; upload doc2
+local deleted          | remote unchanged        -> remote_delete doc
+local deleted          | remote moved doc2       -> cleanup doc; download doc2
+local deleted          | remote moved doc3       -> cleanup doc; download doc3
+local deleted          | remote edited           -> download doc
+local deleted          | remote moved+edit doc3  -> cleanup doc; download doc3
+local deleted          | remote deleted          -> cleanup doc
