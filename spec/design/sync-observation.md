@@ -4,7 +4,7 @@ GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/
 
 LAYER: 2
 
-Implements: R-2.1.2 [verified], R-2.2.4 [verified], R-2.15.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.4.16 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.8.20 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
+Implements: R-2.1.2 [verified], R-2.2.4 [verified], R-2.15.2 [verified], R-2.15.4 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.4.16 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.8.20 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
 
 ## Overview
 
@@ -76,6 +76,7 @@ except that the type had once been public.
 | The replan debounce is bounded by a max wait that later observations do not push back. | `TestDirtyBuffer_FlushDebounced_ContinuousSignalsFlushAtMaxWait`, `TestDirtyMaxWait_ScalesWithLongDebounce` |
 | A delta cursor that loops, is refused twice with a non-transient 4xx, or fails with 5xx for hours in watch mode is recovered through the full refresh; a single refusal is retried, empty pages with a nextLink continue, and a transient failure keeps the token (R-2.15.2). | `TestFullDelta_RepeatedNextLinkIsCursorUnusable`, `TestFullDelta_RepeatedPageItemsIsCursorUnusable`, `TestFullDelta_EmptyPageWithNextLinkContinues`, `TestFullDelta_SavedTokenRejectedTwiceIsCursorUnusable`, `TestFullDelta_OneRejectionOfASavedTokenIsRetried`, `TestWatch_TransientErrorRetriesAndKeepsToken`, `TestWatch_SustainedServerErrorsOnTheCursorResetIt`, `TestRunOnce_SavedTokenOneDriveKeepsRefusingIsReenumerated` |
 | Items delta reports without a type facet keep their baseline kind or are re-read once and otherwise skipped; bundles and their children are skipped; a negative size is unknown (R-2.4.16). | `TestFullDelta_FacetlessUpdateOfABaselineFolderKeepsItsType`, `TestFullDelta_FacetlessNewItemIsReadOnceOrSkipped`, `TestFullDelta_BundleAndItsChildrenAreSkipped`, `TestFullDelta_NegativeSizeIsUnknown`, `TestToItem_BundleAndMissingTypeFacet` |
+| Child-before-parent windows resolve from the window itself without reads, and a window needing more ancestor reads than one budget completes on replay without re-reading (R-2.15.4). | `TestFullDelta_CrossPageChildBeforeParentResolvesWithoutFetch`, `TestFullDelta_ManyOrphansCompleteAcrossReplaysWithoutRefetching` |
 | Local watch prefiltering keeps unknown-kind include-root and include-ancestor events observable until stat/type-aware observation can decide the exact item kind. | `TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths` |
 
 ## Remote Observation
@@ -238,6 +239,13 @@ Sparse parent recovery is intentionally layered:
   folder, or a folder whose own download has not succeeded yet), read each
   missing ancestor by ID with `GetItem` and register it as path context only
   (never as an event), bounded per window by `maxAncestorFetchesPerWindow`.
+  The whole window is collected before anything is classified, so the budget
+  is spent only on ancestors no page of the window carries: resolved page by
+  page, a child that arrived pages before its folder spent a read on it, and
+  a large window exhausted the budget and replayed identically forever.
+  Ancestors read in a window that stays incomplete are carried to its replay
+  (`carriedAncestors`, forgotten once a window completes), so a window that
+  needs more reads than one budget completes after a few replays (R-2.15.4)
   A fetched ancestor carries its vault and package flags, so a child inside
   the Personal Vault or a OneNote package is still skipped exactly as if that
   ancestor had been in the window (`TestWatch_OrphanUnderFetchedVaultStaysExcluded`,

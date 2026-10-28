@@ -212,20 +212,20 @@ func (o *remoteObserver) fullDelta(
 	}
 
 	loop := newDeltaLoopGuard(savedToken)
+	// The whole window is collected before anything is classified: a child
+	// can arrive pages before its parent, and resolving it page by page spent
+	// the window's GetItem budget on ancestors the window itself carried
+	// (R-2.15.4).
+	var window []graph.Item
 	for page := range maxDeltaPaginationGuard {
-		pageEvents, pageItems, newToken, done, err := o.fetchPageRetryingRejection(ctx, token, page, inflight, enumerated)
+		pageRaw, pageItems, newToken, done, err := o.fetchPageRetryingRejection(ctx, token, page, inflight, enumerated)
 		if err != nil {
 			o.stats.errors.Add(1)
 
 			return nil, "", shortcutTopologyBatch{}, 0, err
 		}
-		if o.Converter.observationIncomplete() {
-			o.stats.errors.Add(1)
 
-			return nil, "", shortcutTopologyBatch{}, 0, errRemoteObservationIncomplete
-		}
-
-		events = append(events, pageEvents...)
+		window = append(window, pageRaw...)
 		windowItems += pageItems
 
 		// Periodic progress logging for long-running enumerations (100K+ item
@@ -234,13 +234,20 @@ func (o *remoteObserver) fullDelta(
 		if !done && time.Since(lastProgressLog) >= 30*time.Second {
 			o.logger.Info("remote observer delta enumeration in progress",
 				slog.Int("pages_fetched", page+1),
-				slog.Int("events_so_far", len(events)),
+				slog.Int("items_so_far", len(window)),
 			)
 
 			lastProgressLog = time.Now()
 		}
 
 		if done {
+			events = o.classifyWindow(ctx, window, inflight)
+			if o.Converter.observationIncomplete() {
+				o.stats.errors.Add(1)
+
+				return nil, "", shortcutTopologyBatch{}, 0, errRemoteObservationIncomplete
+			}
+			o.Converter.forgetCarriedAncestors()
 			o.recordActivity()
 			o.stats.pollsCompleted.Add(1)
 			o.stats.eventsEmitted.Add(int64(len(events)))
@@ -259,7 +266,7 @@ func (o *remoteObserver) fullDelta(
 			return events, newToken, topology, windowItems, nil
 		}
 
-		if loopErr := loop.next(newToken, pageEvents); loopErr != nil {
+		if loopErr := loop.next(newToken, pageRaw); loopErr != nil {
 			o.stats.errors.Add(1)
 			o.logger.Warn("OneDrive's change list loops; rescanning the whole drive",
 				slog.String("reason", loopErr.reason), slog.Int("pages_fetched", page+1))
@@ -668,7 +675,7 @@ func timeSleep(ctx context.Context, d time.Duration) error {
 func (o *remoteObserver) fetchPageRetryingRejection(
 	ctx context.Context, token string, page int, inflight map[string]inflightParent,
 	enumerated map[string]struct{},
-) ([]changeEvent, int, string, bool, error) {
+) ([]graph.Item, int, string, bool, error) {
 	events, items, next, done, err := o.fetchPage(ctx, token, page, inflight, enumerated)
 	if err == nil || token == "" || !isCursorRejection(err) {
 		return events, items, next, done, err
@@ -726,18 +733,20 @@ func newDeltaLoopGuard(savedToken string) *deltaLoopGuard {
 	return guard
 }
 
-func (g *deltaLoopGuard) next(nextToken string, pageEvents []changeEvent) *deltaExpiredError {
+func (g *deltaLoopGuard) next(nextToken string, pageItems []graph.Item) *deltaExpiredError {
 	if _, seen := g.tokens[nextToken]; seen {
 		return newCursorUnusableError("a page links back to an earlier page", nil)
 	}
 	g.tokens[nextToken] = struct{}{}
 
-	if len(pageEvents) == 0 {
-		return nil
+	ids := make([]string, 0, len(pageItems))
+	for i := range pageItems {
+		if !pageItems[i].IsRoot {
+			ids = append(ids, pageItems[i].ID)
+		}
 	}
-	ids := make([]string, 0, len(pageEvents))
-	for i := range pageEvents {
-		ids = append(ids, pageEvents[i].ItemID)
+	if len(ids) == 0 {
+		return nil
 	}
 	slices.Sort(ids)
 	fingerprint := strings.Join(ids, "\x00")
@@ -749,18 +758,19 @@ func (g *deltaLoopGuard) next(nextToken string, pageEvents []changeEvent) *delta
 	return nil
 }
 
-// fetchPage fetches a single delta page, processes items, and returns events.
+// fetchPage fetches a single delta page and registers its items in inflight.
 // Returns done=true with the DeltaLink when the final page is reached, or
-// done=false with NextLink for continued pagination.
+// done=false with NextLink for continued pagination. Classification waits for
+// the whole window (classifyWindow).
 //
-// Two-pass processing (B-281): the Graph API does not guarantee parent-before-
-// child ordering within a delta page. Pass 1 registers ALL items in the
-// inflight map so that pass 2 can correctly classify vault descendants even
-// when the child appears before its vault parent in the response.
+// Registering every item before any is classified (B-281) matters because the
+// Graph API does not guarantee parent-before-child ordering, within a page or
+// across pages: vault and package descendants are recognised, and paths
+// materialized, only once their ancestors are known.
 func (o *remoteObserver) fetchPage(
 	ctx context.Context, token string, page int, inflight map[string]inflightParent,
 	enumerated map[string]struct{},
-) (events []changeEvent, items int, next string, done bool, err error) {
+) (raw []graph.Item, items int, next string, done bool, err error) {
 	dp, err := o.fetcher.Delta(ctx, o.driveID, token)
 	if err != nil {
 		if errors.Is(err, graph.ErrGone) {
@@ -772,35 +782,43 @@ func (o *remoteObserver) fetchPage(
 
 	o.Converter.enrichSparseParentRefs(ctx, dp.Items)
 
-	// Pass 1: register all items in inflight so parent-chain walks
-	// in pass 2 see every item regardless of arrival order.
 	for i := range dp.Items {
 		o.Converter.registerInflight(&dp.Items[i], inflight)
-	}
-	o.Converter.resolveMissingAncestors(ctx, dp.Items, inflight)
-
-	// Pass 2: classify and emit events (inflight map is fully populated).
-	for i := range dp.Items {
 		if !dp.Items[i].IsRoot {
 			items++
 		}
 		if enumerated != nil && !dp.Items[i].IsDeleted && dp.Items[i].ID != "" {
 			enumerated[dp.Items[i].ID] = struct{}{}
 		}
-		if ev := o.Converter.ClassifyItem(&dp.Items[i], inflight); ev != nil {
-			events = append(events, *ev)
-		}
 	}
 
 	if dp.DeltaLink != "" {
-		return events, items, dp.DeltaLink, true, nil
+		return dp.Items, items, dp.DeltaLink, true, nil
 	}
 
 	if dp.NextLink == "" {
 		return nil, 0, "", false, fmt.Errorf("sync: delta page %d has neither NextLink nor DeltaLink", page)
 	}
 
-	return events, items, dp.NextLink, false, nil
+	return dp.Items, items, dp.NextLink, false, nil
+}
+
+// classifyWindow resolves the ancestors the whole window still lacks, then
+// classifies every item. The GetItem budget is spent only on items no page of
+// the window and no baseline row can place (R-2.15.4).
+func (o *remoteObserver) classifyWindow(
+	ctx context.Context, window []graph.Item, inflight map[string]inflightParent,
+) []changeEvent {
+	o.Converter.resolveMissingAncestors(ctx, window, inflight)
+
+	var events []changeEvent
+	for i := range window {
+		if ev := o.Converter.ClassifyItem(&window[i], inflight); ev != nil {
+			events = append(events, *ev)
+		}
+	}
+
+	return events
 }
 
 // waitText renders a retry delay or interval in human units for console

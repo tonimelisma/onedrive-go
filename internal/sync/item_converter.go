@@ -83,7 +83,19 @@ type itemConverter struct {
 	// item is unplaceable for now, and the window is replayed; one whose
 	// enrichment succeeded and still has no parent is skipped for good.
 	sparseEnrichFailed map[string]struct{}
+
+	// carriedAncestors are the ancestors resolveAncestorChain read by ID in
+	// windows that did not complete. A replay of the same window reuses them
+	// without spending its fetch budget, so a window that needs more reads
+	// than one budget allows still completes after a few replays instead of
+	// failing the same way forever (R-2.15.4). They are path context only and
+	// are forgotten once a window completes (forgetCarriedAncestors), so a
+	// later window never places an item under a stale ancestor.
+	carriedAncestors map[string]graph.Item
 }
+
+// maxCarriedAncestors bounds carriedAncestors.
+const maxCarriedAncestors = 50 * maxAncestorFetchesPerWindow
 
 // maxAncestorFetchesPerWindow bounds the item-by-ID reads one delta window may
 // spend resolving parents that are neither in the window nor in the baseline.
@@ -135,6 +147,9 @@ func (c *itemConverter) ConvertItems(ctx context.Context, items []graph.Item) []
 		if ev := c.ClassifyItem(&items[i], inflight); ev != nil {
 			events = append(events, *ev)
 		}
+	}
+	if !c.observationIncomplete() {
+		c.forgetCarriedAncestors()
 	}
 
 	return events
@@ -355,6 +370,10 @@ func (c *itemConverter) resolveAncestorChain(
 		if _, unreachable := c.unreachableParents[parentID]; unreachable {
 			return
 		}
+		if carried, ok := c.carriedAncestors[parentID]; ok {
+			c.registerInflight(&carried, inflight)
+			continue
+		}
 		if c.ancestorFetches >= maxAncestorFetchesPerWindow || ctx.Err() != nil {
 			return
 		}
@@ -367,7 +386,26 @@ func (c *itemConverter) resolveAncestorChain(
 			return
 		}
 
+		c.carryAncestor(ancestor)
 		c.registerInflight(ancestor, inflight)
+	}
+}
+
+func (c *itemConverter) carryAncestor(ancestor *graph.Item) {
+	if c.carriedAncestors == nil {
+		c.carriedAncestors = make(map[string]graph.Item)
+	}
+	if len(c.carriedAncestors) >= maxCarriedAncestors {
+		return
+	}
+	c.carriedAncestors[ancestor.ID] = *ancestor
+}
+
+// forgetCarriedAncestors drops the ancestors carried for replays; a window
+// completed, so nothing replays it.
+func (c *itemConverter) forgetCarriedAncestors() {
+	if c != nil {
+		c.carriedAncestors = nil
 	}
 }
 
