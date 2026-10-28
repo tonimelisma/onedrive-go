@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"path"
 	"sort"
 	"strings"
@@ -36,6 +37,10 @@ import (
 //   - A folder's eTag changes whenever anything beneath it changes, but delta
 //     keeps reporting the eTag recorded when the folder was created (see
 //     observedFolderETags).
+//   - Delta pages are deterministic: an incremental page lists changes in
+//     the order they happened, a full one by item ID after the root. With
+//     shuffleDelta the order is a seeded permutation instead (D-090), as
+//     Graph promises no order within a window.
 type moveScenarioRemote struct {
 	mu       stdsync.Mutex
 	driveID  driveid.ID
@@ -55,6 +60,9 @@ type moveScenarioRemote struct {
 	changeSeq  int
 	changedAt  map[string]int
 	tombstones map[string]deletedScenarioItem
+
+	// deltaRand, when set, shuffles every delta page (shuffleDelta).
+	deltaRand *rand.Rand
 
 	uploads int
 	// interruptCreates stops every create after its empty item exists.
@@ -317,17 +325,32 @@ func (r *moveScenarioRemote) moveAt(t *testing.T, fromPath, toPath string) {
 	r.moveLocked(item.ID, parent.ID, path.Base(toPath))
 }
 
+// shuffleDelta makes every later delta page a seeded permutation.
+func (r *moveScenarioRemote) shuffleDelta(seed uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deltaRand = rand.New(rand.NewPCG(seed, seed^0x2545f4914f6cdd1d)) //nolint:gosec // deterministic test RNG
+}
+
+func (r *moveScenarioRemote) shuffleLocked(items []graph.Item) {
+	if r.deltaRand == nil {
+		return
+	}
+	r.deltaRand.Shuffle(len(items), func(i, j int) { items[i], items[j] = items[j], items[i] })
+}
+
 func (r *moveScenarioRemote) snapshot() []graph.Item {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := []graph.Item{*r.items["root"]}
+	var rest []graph.Item
 	for _, id := range r.sortedIDs() {
 		if id == "root" {
 			continue
 		}
-		out = append(out, r.reported(id))
+		rest = append(rest, r.reported(id))
 	}
-	return out
+	r.shuffleLocked(rest)
+	return append([]graph.Item{*r.items["root"]}, rest...)
 }
 
 func (r *moveScenarioRemote) sortedIDs() []string {
@@ -362,17 +385,32 @@ func (r *moveScenarioRemote) delta(token string) *graph.DeltaPage {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var items []graph.Item
+	type change struct {
+		seq  int
+		item graph.Item
+	}
+	var changes []change
 	for _, id := range r.sortedIDs() {
 		if seq, ok := r.changedAt[id]; ok && seq > since {
-			items = append(items, r.reported(id))
+			changes = append(changes, change{seq: seq, item: r.reported(id)})
 		}
 	}
-	for id := range r.tombstones {
-		if r.tombstones[id].seq > since {
-			items = append(items, r.tombstones[id].item)
+	for id, tombstone := range r.tombstones {
+		if tombstone.seq > since {
+			changes = append(changes, change{seq: tombstone.seq, item: r.tombstones[id].item})
 		}
 	}
+	sort.Slice(changes, func(i, j int) bool {
+		if changes[i].seq != changes[j].seq {
+			return changes[i].seq < changes[j].seq
+		}
+		return changes[i].item.ID < changes[j].item.ID
+	})
+	items := make([]graph.Item, 0, len(changes))
+	for i := range changes {
+		items = append(items, changes[i].item)
+	}
+	r.shuffleLocked(items)
 
 	return deltaPageWithItems(items, next)
 }
@@ -438,10 +476,8 @@ func (r *moveScenarioRemote) listChildren(parentID string) []graph.Item {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var children []graph.Item
-	for _, item := range r.items {
-		if item.ParentID == parentID {
-			children = append(children, *item)
-		}
+	for _, id := range r.childIDs(parentID) {
+		children = append(children, *r.items[id])
 	}
 
 	return children

@@ -6,9 +6,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	stdsync "sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,6 +34,12 @@ import (
 //
 // Failures print the seed; rerun one with ONEDRIVE_GO_MODEL_SEED=<seed> and
 // widen the search with ONEDRIVE_GO_MODEL_SEEDS=<count>.
+//
+// A seed replays exactly (D-090): the engine dispatches each ready frontier in
+// an order shuffled by the seed on one worker, and the fake OneDrive shuffles
+// its delta pages by the seed, so the order-dependent bugs a pool of workers
+// hit only by timing are explored deliberately and reproduced on rerun.
+// TestModel_SameSeedReplaysIdentically holds that promise.
 //
 // Under -race the default drops to modelRaceSeeds. The race detector makes each
 // seed 1-2 minutes on a 2-core host (4 seeds measured 204 s), and 12 pushed
@@ -75,6 +83,29 @@ func TestRunOnce_RandomizedBidirectionalEditsConverge(t *testing.T) {
 		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
 			runModelScenario(t, seed)
+		})
+	}
+}
+
+// Validates: R-2.3.1
+//
+// The same seed twice gives the same actions in the same order and the same
+// trees (D-090): a failing seed is a reproducible bug, not a flake.
+func TestModel_SameSeedReplaysIdentically(t *testing.T) {
+	t.Parallel()
+
+	for _, seed := range []uint64{3, 28} {
+		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
+			t.Parallel()
+
+			var transcripts [2][]string
+			for i := range transcripts {
+				t.Run("run="+strconv.Itoa(i+1), func(t *testing.T) {
+					transcripts[i] = runModelScenario(t, seed).transcript
+				})
+			}
+			require.NotEmpty(t, transcripts[0])
+			assert.Equal(t, transcripts[0], transcripts[1], "two runs of seed %d diverged", seed)
 		})
 	}
 }
@@ -136,16 +167,33 @@ type modelRun struct {
 	syncRoot string
 	writes   int
 	log      []string
+
+	// transcript is every dispatched action and every converged tree, in
+	// order, with conflict-copy timestamps masked: two runs of one seed must
+	// produce the same transcript.
+	transcriptMu stdsync.Mutex
+	transcript   []string
 }
 
-func runModelScenario(t *testing.T, seed uint64) {
+func runModelScenario(t *testing.T, seed uint64) *modelRun {
 	t.Helper()
 
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.shuffleDelta(seed)
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	run := &modelRun{
 		t: t, seed: seed, rng: rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)), //nolint:gosec // deterministic test RNG
 		remote: remote, eng: eng, syncRoot: syncRoot,
+	}
+	order := eng.dispatchOrder
+	if order == nil {
+		order = dispatchOrderShuffle(seed)
+	}
+	eng.serializeWorkers = true
+	eng.dispatchOrder = func(frontier []*trackedAction) []*trackedAction {
+		frontier = order(frontier)
+		run.recordDispatch(frontier)
+		return frontier
 	}
 
 	run.seedInitialTree()
@@ -176,6 +224,26 @@ func runModelScenario(t *testing.T, seed uint64) {
 		run.requireUntouchedFilesUnchanged(label, before, edits, converged)
 		requireScenarioQuietPlan(t, eng)
 		run.requireNothingWedged(label)
+		run.record("%s converged: %v", label, modelPaths(converged))
+	}
+
+	return run
+}
+
+// modelConflictStamp is the timestamp in a conflict copy's name, which comes
+// from the wall clock and so differs between two runs of one seed.
+var modelConflictStamp = regexp.MustCompile(`\.conflict-\d{8}-\d{6}`)
+
+func (r *modelRun) record(format string, args ...any) {
+	line := modelConflictStamp.ReplaceAllString(fmt.Sprintf(format, args...), ".conflict-STAMP")
+	r.transcriptMu.Lock()
+	defer r.transcriptMu.Unlock()
+	r.transcript = append(r.transcript, line)
+}
+
+func (r *modelRun) recordDispatch(frontier []*trackedAction) {
+	for _, ta := range frontier {
+		r.record("dispatch %s %s <- %s", ta.Action.Type, ta.Action.Path, ta.Action.OldPath)
 	}
 }
 
