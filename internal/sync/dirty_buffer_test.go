@@ -161,3 +161,62 @@ func fireDirtyDebounceUntilBatch(t *testing.T, timer *fakeDirtyDebounceTimer, ou
 		}
 	}
 }
+
+// Validates: R-2.8.20
+func TestDirtyBuffer_FlushDebounced_ContinuousSignalsFlushAtMaxWait(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	buf := newDirtyBuffer(synctest.TestLogger(t))
+	quiet := newFakeDirtyDebounceTimer()
+	deadline := newFakeDirtyDebounceTimer()
+	var deadlineDelay time.Duration
+	buf.newTimer = func(time.Duration) debounceTimer { return quiet }
+	buf.newDeadlineTimer = func(delay time.Duration) debounceTimer {
+		deadlineDelay = delay
+		return deadline
+	}
+	out := buf.FlushDebounced(ctx, time.Second)
+
+	waitReset := func(timer *fakeDirtyDebounceTimer, what string) {
+		t.Helper()
+		select {
+		case <-timer.resetCh:
+		case <-time.After(dirtyBufferTestTimeout):
+			require.Fail(t, "timed out waiting for "+what)
+		}
+	}
+
+	// Observations keep arriving: each restarts the quiet period, which
+	// therefore never elapses. Only the first arms the deadline.
+	buf.MarkDirty()
+	waitReset(quiet, "quiet-period reset")
+	waitReset(deadline, "deadline armed")
+	buf.MarkDirty()
+	waitReset(quiet, "second quiet-period reset")
+	buf.MarkFullRefresh()
+	waitReset(quiet, "third quiet-period reset")
+
+	assert.Equal(t, 1, deadline.resetCountSnapshot(), "later observations do not push the deadline back")
+	assert.Equal(t, dirtyMaxWait(time.Second), deadlineDelay)
+
+	// Before the fix the batch waited for a quiet period that sustained
+	// churn never allows.
+	deadline.Fire()
+	select {
+	case batch := <-out:
+		assert.True(t, batch.FullRefresh)
+	case <-time.After(dirtyBufferTestTimeout):
+		require.Fail(t, "continuous observations must still flush at the max wait")
+	}
+}
+
+// Validates: R-2.8.20
+func TestDirtyMaxWait_ScalesWithLongDebounce(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, minDirtyMaxWait, dirtyMaxWait(5*time.Second))
+	assert.Equal(t, 6*time.Minute, dirtyMaxWait(time.Minute))
+}

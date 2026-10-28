@@ -65,12 +65,33 @@ type dirtyBuffer struct {
 	notify      chan struct{}
 	logger      *slog.Logger
 	newTimer    func(time.Duration) debounceTimer
+	// newDeadlineTimer builds the max-wait timer; a separate seam so tests
+	// can drive the quiet-period timer and the deadline independently.
+	newDeadlineTimer func(time.Duration) debounceTimer
+}
+
+// minDirtyMaxWait is the floor of the longest a dirty signal waits for a
+// replan while new observations keep arriving (see dirtyMaxWait).
+const minDirtyMaxWait = 30 * time.Second
+
+// dirtyMaxWaitDebounceFactor scales the max wait with a long configured
+// debounce, so the deadline never undercuts the quiet period it bounds.
+const dirtyMaxWaitDebounceFactor = 6
+
+// dirtyMaxWait bounds how long continuous observations can postpone a
+// replan. The debounce alone is trailing: each observation restarted it, so
+// sustained local churn (a log written every two seconds, a long build)
+// postponed every replan indefinitely, and with it every remote change the
+// poller had already committed and every other local change (R-2.8.20).
+func dirtyMaxWait(debounce time.Duration) time.Duration {
+	return max(minDirtyMaxWait, dirtyMaxWaitDebounceFactor*debounce)
 }
 
 func newDirtyBuffer(logger *slog.Logger) *dirtyBuffer {
 	return &dirtyBuffer{
-		logger:   logger,
-		newTimer: newRealDebounceTimer,
+		logger:           logger,
+		newTimer:         newRealDebounceTimer,
+		newDeadlineTimer: newRealDebounceTimer,
 	}
 }
 
@@ -124,29 +145,49 @@ func (b *dirtyBuffer) FlushDebounced(ctx context.Context, debounce time.Duration
 	return out
 }
 
+// armedTimer is a debounceTimer plus whether it is armed, so stopping it
+// can drain a tick that fired but was not received.
+type armedTimer struct {
+	timer  debounceTimer
+	active bool
+}
+
+func (a *armedTimer) stop() {
+	if a.active && !a.timer.Stop() {
+		select {
+		case <-a.timer.Chan():
+		default:
+		}
+	}
+	a.active = false
+}
+
+func (a *armedTimer) restart(delay time.Duration) {
+	a.stop()
+	a.timer.Reset(delay)
+	a.active = true
+}
+
 func (b *dirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- dirtyBatch) {
 	defer close(out)
 
-	timer := b.newTimer(debounce)
-	timer.Stop()
-	defer timer.Stop()
+	quiet := &armedTimer{timer: b.newTimer(debounce)}
+	quiet.timer.Stop()
+	defer quiet.timer.Stop()
 
-	timerActive := false
+	maxWait := dirtyMaxWait(debounce)
+	newDeadline := b.newDeadlineTimer
+	if newDeadline == nil {
+		newDeadline = newRealDebounceTimer
+	}
+	deadline := &armedTimer{timer: newDeadline(maxWait)}
+	deadline.timer.Stop()
+	defer deadline.timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			if batch := b.FlushImmediate(); batch != nil {
-				select {
-				case out <- *batch:
-				default:
-					// Debug: only reachable on shutdown; the next start
-					// rescans, so the dropped batch loses nothing.
-					b.logger.Debug("dirty buffer final drain discarded: output channel full",
-						slog.Bool("full_refresh", batch.FullRefresh),
-					)
-				}
-			}
+			b.finalDrain(out)
 			return
 
 		case _, ok := <-b.notify:
@@ -154,27 +195,61 @@ func (b *dirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, 
 				return
 			}
 
-			if timerActive && !timer.Stop() {
-				select {
-				case <-timer.Chan():
-				default:
-				}
+			quiet.restart(debounce)
+			// The deadline starts with the first signal of a batch and is
+			// not restarted by later ones.
+			if !deadline.active {
+				deadline.restart(maxWait)
 			}
 
-			timer.Reset(debounce)
-			timerActive = true
+		case <-quiet.timer.Chan():
+			quiet.active = false
+			deadline.stop()
+			if !b.flushTo(ctx, out) {
+				return
+			}
 
-		case <-timer.Chan():
-			timerActive = false
-
-			if batch := b.FlushImmediate(); batch != nil {
-				select {
-				case out <- *batch:
-				case <-ctx.Done():
-					return
-				}
+		case <-deadline.timer.Chan():
+			deadline.active = false
+			quiet.stop()
+			if !b.flushTo(ctx, out) {
+				return
 			}
 		}
+	}
+}
+
+// flushTo hands the pending batch, if any, to out. It reports false when the
+// context ended first.
+func (b *dirtyBuffer) flushTo(ctx context.Context, out chan<- dirtyBatch) bool {
+	batch := b.FlushImmediate()
+	if batch == nil {
+		return true
+	}
+
+	select {
+	case out <- *batch:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// finalDrain hands a last pending batch to out on shutdown without blocking.
+func (b *dirtyBuffer) finalDrain(out chan<- dirtyBatch) {
+	batch := b.FlushImmediate()
+	if batch == nil {
+		return
+	}
+
+	select {
+	case out <- *batch:
+	default:
+		// Debug: only reachable on shutdown; the next start rescans, so the
+		// dropped batch loses nothing.
+		b.logger.Debug("dirty buffer final drain discarded: output channel full",
+			slog.Bool("full_refresh", batch.FullRefresh),
+		)
 	}
 }
 

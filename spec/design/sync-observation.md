@@ -4,7 +4,7 @@ GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/
 
 LAYER: 2
 
-Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
+Implements: R-2.1.2 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.8.20 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
 
 ## Overview
 
@@ -65,6 +65,14 @@ except that the type had once been public.
 | Watch-mode local observation emits scoped engine-applied batches: exact file rows, directory-prefix deletes, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesExactPath`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
 | Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child work commands to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
+| A watcher that cannot be created or extended because of an operating-system limit (inotify watches or instances, open files, kernel memory) degrades to periodic full scans with one warning naming the limit and its fix; a descriptor-limit failure after startup stops watching so the watcher's descriptors are released. | `TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable`, `TestClassifyWatcherCreateError_ResourceLimits`, `TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable`, `TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan`, `TestWatch_NewDirectoryEMFILEStopsWatchingForFallback`, `TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval`, `TestRunWatch_WatchFallbackRetriesTheWatcher` |
+| Known-missed local changes (kernel queue overflow, watcher errors, dropped batches or hash requests) arm one coalesced recovery rescan instead of waiting for the periodic safety scan. | `TestWatch_EventOverflowRunsRecoveryScan`, `TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan`, `TestRecoveryScanDelay_ScalesWithScanDurationAndBacksOffUnderStorm`, `TestCancelRecoveryScan_StaleTimerFiringIsIgnored`, `TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan`, `TestRewatchUnwatchedDirectories_FailedAddIsRetriedAtNextScan`, `TestTrySendLocalObservationBatch_DropRequestsRecoveryScan` |
+| A deleted or renamed-away directory drops the watches of its whole subtree, deepest first, so the re-added tree reports its new paths. | `TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst`, `TestWatch_RenamedDirectoryDescendantEventsUseNewPath`, `TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches`, `TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree`, `TestWatchRegistry_SubtreeLookupFollowsTheIndexAndUnlinksEmptyBranches` |
+| The destination half of a rename is observed without waiting on a content read: an identity match reuses the synced hash when size and mtime are unchanged, otherwise the row goes out with an unknown hash and the hash follows; a created directory's row precedes its contents. | `TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing`, `TestHandleCreate_RenamedUnchangedFileReusesSyncedHash`, `TestHandleCreate_ReusedInodeWhileSyncedPathExistsIsHashed`, `TestHandleCreate_DirectoryRowPrecedesItsContents` |
+| Write coalescing hashes a continuously written file within a bounded wait, and backs off exponentially for a file that never settles. | `TestScheduleWriteHash_ContinuousWritesHashWithinMaxWait`, `TestWatch_ContinuouslyWrittenFileBacksOff`, `TestHashAndEmit_StillChangingAtRetryCapStaysPendingWithoutEmptyHash`, `TestPruneWriteChurn_DropsSettledPaths` |
+| On kqueue platforms watch setup projects its descriptor use (watched directories plus their entries) and falls back to periodic scans above half the open-file limit. | `TestAddWatchesRecursive_OverDescriptorBudgetFallsBackBeforeExhaustingFiles`, `TestAddWatchesRecursive_WithinDescriptorBudgetWatches`, `TestAddWatchesRecursive_DescriptorProjectionCountsSubdirectoriesOnce` |
+| A network or FUSE sync root is identified with statfs, warned about once, and rescanned every two minutes. | `TestWatch_NetworkRootShortensSafetyScanInterval`, `TestAdaptToRootFilesystem_LocalRootKeepsInterval`, `TestAdaptToRootFilesystem_NonDefaultIntervalIsNeverOverridden`, `TestMountFilesystemType_DistinguishesFuseblkFromNetworkFuse`, `TestLocalFilesystemKind_ReadsTheRealFilesystem` |
+| The replan debounce is bounded by a max wait that later observations do not push back. | `TestDirtyBuffer_FlushDebounced_ContinuousSignalsFlushAtMaxWait`, `TestDirtyMaxWait_ScalesWithLongDebounce` |
 | Local watch prefiltering keeps unknown-kind include-root and include-ancestor events observable until stat/type-aware observation can decide the exact item kind. | `TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths` |
 
 ## Remote Observation
@@ -262,13 +270,109 @@ delete for the removed directory. Safety scans emit a full local snapshot
 replacement and clear any suspect-local-truth marker after the engine commits
 the replacement.
 
+Watch registration is bookkept per directory in `watchedDirs`, a
+`watchRegistry` that records each directory's identity (device and inode) at
+registration and indexes registrations by parent, so a directory's registered
+subtree is found in time proportional to that subtree. A Create for a
+directory already registered with the same identity is a duplicate (fsnotify's
+event racing the new-directory scan); it emits the directory's row but does
+not drop, re-add or re-scan the subtree. When a watched
+directory is deleted or renamed away, the observer removes the watch on it and
+on every watched directory beneath it, deepest first. inotify watches follow the
+inode while fsnotify keys registrations by path, so leaving descendant watches
+in place made a renamed tree keep reporting its old paths after it was re-added,
+and a tree moved out of the sync root keep reporting changes as if it were
+still inside. A directory created where watched descendants are still
+registered replaced one that vanished while watched (its delete event is
+ignored when the path exists again), so those stale registrations are dropped
+before the new tree is registered.
+
+When the operating system cannot provide the watches -- inotify watch limit
+(ENOSPC), inotify instance or open-file limit at creation (EMFILE, ENFILE),
+kernel memory (ENOMEM) -- the observer returns a `localWatchUnavailableError`
+carrying the cause, and the watch runtime falls back to full scans with one
+warning per cause that names the limit and its fix. The fallback scans at once
+(the stopped watcher's pending hashes and recovery scan are gone with it), then
+at the safety-scan interval, and retries the watcher after
+`localWatchRetryInitialDelay` (10 minutes), doubling to
+`localWatchRetryMaxDelay` (an hour) while the limit persists; a watcher that
+then ran for an hour or more before failing again starts a fresh episode.
+`Watch` resets its registrations and stop reason on every call, so it can be
+re-entered after a fallback period. The same applies to a
+descriptor-limit failure on a new folder after startup, because on kqueue every
+watched directory holds a descriptor and keeping them starves hashing,
+transfers and SQLite. A watch or memory limit hit for a new folder after
+startup leaves existing watches healthy: it warns once per cause and the
+safety scan covers that folder.
+
+A rename arrives as the delete of the old path, sent at once, and a create of
+the new one. File creates are normally hashed in the watch loop before their
+row is emitted; for the destination of a rename that read could outlast the
+replan debounce, and the replan then saw only the delete and planned a remote
+delete instead of a move. So a created file whose filesystem identity matches a
+synced file at another path -- and only when that path is confirmed gone; if it
+still exists the inode was freed and reused by unrelated content, which is
+hashed like any create -- reuses that file's synced hash when size and mtime
+are unchanged (no read at all, so a renamed tree is not re-read), and otherwise
+is emitted at once with an unknown hash -- move pairing accepts an unknown hash
+on equal mtime -- and hashed through the deferred-hash path. A created
+directory's own row is emitted before its contents are scanned.
+
+Write coalescing (B-107) restarts a path's quiet-period timer on every write,
+but never past `maxWriteCoalesceWait` (30 s) after the first pending write, so a
+file written more often than the quiet period is still observed. A path that
+emits `unstableWriteEmits` content changes within `unstableWriteWindow` is
+unstable: its next hash waits `unstableWriteInitialBackoff`, and every later
+emit whose hash differs from the previous emit doubles the wait up to
+`unstableWriteMaxBackoff`; writes during the wait do not restart it. A file
+still changing after `maxCoalesceRetries` re-hashes is not emitted with an
+empty hash (that would only plan an upload of a file in mid-write); it stays
+pending with an escalated backoff.
+The first time a path becomes unstable the observer logs one Info line that
+suggests excluding it. The per-path history is watch-loop state, reset when the
+path goes quiet and pruned at safety scans.
+
+fsnotify has no FSEvents backend: on macOS and FreeBSD it uses kqueue, which
+holds an open descriptor for every watched directory and every file inside one.
+Watch setup therefore counts the entries of each directory it watches (a
+watched subdirectory reuses its entry's descriptor, so it is counted once) and
+stops with `watchCauseDescriptorBudget` once those entries plus the root exceed
+`watchDescriptorBudget()`, half of `RLIMIT_NOFILE` (zero, meaning no budget,
+on Linux, where inotify watches are not open files). The runtime then falls
+back to periodic full scans. An FSEvents watcher behind `fsWatcher` is the
+durable fix and is planned separately (P-15).
+
+At watch start the observer identifies the sync root's filesystem with statfs
+(`localFilesystemKind`, in the platform files). Changes that reach a network or
+FUSE filesystem without going through this kernel raise no local events, so on
+such a root it warns once and, when the safety-scan interval is the default,
+shortens it to `networkSafetyScanInterval` (2 minutes); a non-default interval
+is left alone. statfs reports one magic for all FUSE mounts, so on Linux the
+mount table (`/proc/self/mountinfo`) tells a block-backed `fuseblk` driver
+for a local disk (ntfs-3g, exfat-fuse), which is treated as local, from a
+network FUSE server such as `fuse.sshfs`.
+
 Raw fsnotify events are not a durable journal. They only choose the observation
 scope. The observer performs normal filesystem reads for that scope, emits a
 batch, and the watch loop applies that batch to SQLite. If the observer drops a
 local observation batch, drops a delayed hash request, sees a watcher error, or
 cannot complete a safety scan, the watch runtime marks
 `observation_state.local_truth_complete=false` with a recovery reason and
-schedules a normal dirty replan/full local refresh. Local-state absence is
+schedules a normal dirty replan/full local refresh. The observer itself
+arms one recovery rescan after the first such signal; further signals coalesce
+into it and any full scan that starts disarms it (a generation number makes a
+timer that fires after Stop harmless). The delay is at least
+`recoveryScanDelay` (10 s) and twice the last full scan's duration, doubles
+while requests keep arriving before the previous delay has passed since the
+last recovery scan ended, and is capped at the safety-scan interval, so a
+sustained event storm on a large tree cannot keep the observer rescanning back
+to back, and missed changes are still observed well before the safety scan.
+Every full scan in a running watch then re-adds watches for scanned
+directories missing from `watchedDirs`, parents first and at most
+`maxRewatchPerScan` per scan: event-driven registration misses directories
+created while events were lost and directories whose `Add` failed, which
+otherwise stayed unwatched for the session. A failed `Add` is not remembered,
+so the next full scan tries again; a resource limit ends the pass early. Local-state absence is
 therefore only trustworthy to later stale-work validation when local truth is
 marked complete.
 
@@ -425,6 +529,10 @@ debounce window as the rename's delete half.
 
 - debounce bursts of local or remote dirty signals
 - wait 5 seconds from the last local or remote observation before triggering replanning by default
+- but never longer than `dirtyMaxWait` (30 seconds, or six debounce periods
+  when the debounce is configured longer) from the first unflushed signal: a
+  trailing debounce alone let sustained local churn postpone every replan, and
+  with it every remote change, indefinitely
 - keep one pending coarse dirty signal plus a full-refresh bit
 - flush deterministically on shutdown/final drain
 
