@@ -96,10 +96,13 @@ identity and content facts. Executable actions must carry planner view truth;
 missing planner view data is an internal validation error once committed truth
 is authoritative, not a reason to skip stale work checks. Move actions
 additionally check the source/destination peer path that is not represented by
-the main `pathView`, so a changed local source, reappeared remote source,
-missing local move destination, a local move destination that no longer matches
-the planner's `Action.MovedLocal`, or occupied remote move destination
-supersedes the old move before side effects.
+the main `pathView`, so a changed local source, a remote move source the moved
+item itself is back at, missing local move destination, a local move destination
+that no longer matches the planner's `Action.MovedLocal`, or occupied remote move
+destination supersedes the old move before side effects. Another item at a local
+move's remote source path is a chain or swap that took the vacated path, not the
+move undone; superseding on it wedged the chain on every pass
+(`TestRunOnce_RemoteMoveChainIntoVacatedPathConverges`).
 
 A remote move whose live preflight finds the item already at the planned
 destination, with the same identity and content, is done rather than stale

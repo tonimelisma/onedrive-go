@@ -308,7 +308,11 @@ func evaluateLocalMoveEndpointFreshness(action *Action, inputs actionFreshnessIn
 			return staleLocalAction("%s local move source is no longer the synced item", action.OldPath)
 		}
 	}
-	if inputs.RemoteTruthKnown && action.OldPath != "" && inputs.RemoteAtMovePeerFound {
+	// The moved item back at its old path means the remote move was undone.
+	// Another item there is a chain or a swap: it took the path the move gave
+	// up and plans its own move into it once this one has vacated it.
+	if inputs.RemoteTruthKnown && action.OldPath != "" && inputs.RemoteAtMovePeerFound &&
+		(inputs.RemoteAtMovePeer == nil || inputs.RemoteAtMovePeer.ItemID == action.ItemID) {
 		return staleRemoteAction("%s remote move source reappeared in current remote truth", action.OldPath)
 	}
 

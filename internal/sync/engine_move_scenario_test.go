@@ -579,3 +579,47 @@ func TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges(t *testing.T) {
 	assert.Equal(t, map[string]string{"photos": "now a file\n", "keep.txt": "keep\n"}, remote.tree())
 	requireScenarioQuietPlan(t, eng)
 }
+
+// Validates: R-2.17.1
+//
+// Online, b.txt moved into c/ and another file then took the path b.txt
+// gave up. The local move of b.txt checked only that nothing was at b.txt on
+// OneDrive any more, read the newcomer as the source moving back, and was
+// superseded on every pass: the chain never converged (model test seed 28,
+// batch 5). The source is stale only when the item at its old path is the
+// moved item itself.
+func TestRunOnce_RemoteMoveChainIntoVacatedPathConverges(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFolder("item-c", "root", "c")
+	remote.addFile(t, "item-b", "root", "b.txt", "b\n")
+	remote.addFile(t, "item-inside", "item-c", "inside.txt", "inside\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	remote.move("item-b", "item-c", "renamed-b.txt")
+	remote.move("item-inside", "root", "b.txt")
+	runScenarioPass(t, eng)
+	runScenarioPass(t, eng)
+
+	assert.Equal(t, remote.tree(), map[string]string{
+		"b.txt": "inside\n", "c": "/", "c/renamed-b.txt": "b\n", "keep.txt": "keep\n",
+	})
+	requireScenarioLocalFile(t, syncRoot, "b.txt", "inside\n")
+	requireScenarioLocalFile(t, syncRoot, "c/renamed-b.txt", "b\n")
+	assert.NoFileExists(t, filepath.Join(syncRoot, "c", "inside.txt"))
+	assert.Zero(t, remote.uploads, "nothing is uploaded back")
+	requireScenarioQuietPlan(t, eng)
+}
+
+func requireScenarioLocalFile(t *testing.T, syncRoot, rel, want string) {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(syncRoot, filepath.FromSlash(rel))) //nolint:gosec // test reads its own temp tree
+	require.NoError(t, err)
+	assert.Equal(t, want, string(data), rel)
+}
