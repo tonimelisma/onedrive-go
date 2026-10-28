@@ -465,6 +465,33 @@ type pmRun struct {
 	rng     *rand.Rand
 	seed    uint64
 	written []modelEdit
+	// mustSurvive is the written content sync must keep: pmWrittenStillHeld.
+	mustSurvive []modelEdit
+}
+
+// pmWrittenStillHeld is the written content its own side still holds once
+// the edits are done, wherever it now sits: a later rename or move of the
+// file or a folder above it carries the content along and must not excuse
+// losing it, while a later edit, delete or replacement on the same side
+// legitimately removed it. Judging by path instead ("did the side touch this
+// path again?") let an edit followed by a rename go unchecked.
+func pmWrittenStillHeld(written []modelEdit, local, remote map[string]pmItem) []modelEdit {
+	held := map[string]map[string]bool{modelLocalSide: {}, modelRemoteSide: {}}
+	for side, items := range map[string]map[string]pmItem{modelLocalSide: local, modelRemoteSide: remote} {
+		for _, item := range items {
+			if !item.folder {
+				held[side][item.content] = true
+			}
+		}
+	}
+	var survive []modelEdit
+	for _, edit := range written {
+		if edit.content != "" && held[edit.side][edit.content] {
+			survive = append(survive, edit)
+		}
+	}
+
+	return survive
 }
 
 func (r *pmRun) pick(options []string) string {
@@ -668,6 +695,7 @@ func runPlannerModel(t *testing.T, seed uint64) {
 		r.mutate(modelLocalSide, r.local, true)
 		r.mutate(modelRemoteSide, r.remote, false)
 	}
+	r.mustSurvive = pmWrittenStillHeld(r.written, r.local, r.remote)
 
 	failure := func() string {
 		return fmt.Sprintf("seed %d (rerun with %s=%d):\n  %s", seed, plannerModelSeedEnv, seed, strings.Join(r.log, "\n  "))
@@ -687,10 +715,34 @@ func runPlannerModel(t *testing.T, seed uint64) {
 	for _, content := range local {
 		present[content] = true
 	}
-	for i, edit := range r.written {
-		if edit.content == "" || modelOverwrittenLater(r.written, i) {
-			continue
-		}
+	for _, edit := range r.mustSurvive {
 		assert.True(t, present[edit.content], "%s %s of %s was lost; %s", edit.side, edit.kind, edit.path, failure())
 	}
+}
+
+// Validates: R-2.3.1
+//
+// The oracle follows content, not paths: an edit followed by a rename of the
+// file (or its folder) must survive at the new name; an edit followed by a
+// delete or another edit need not.
+func TestPMWrittenStillHeld_FollowsContentThroughMoves(t *testing.T) {
+	t.Parallel()
+
+	written := []modelEdit{
+		{side: modelLocalSide, kind: modelOpEditFile, path: "d/a.txt", content: "edited then renamed"},
+		{side: modelLocalSide, kind: modelOpMove, path: "d", to: "e"},
+		{side: modelLocalSide, kind: modelOpEditFile, path: "b.txt", content: "edited then deleted"},
+		{side: modelLocalSide, kind: modelOpDelete, path: "b.txt"},
+		{side: modelRemoteSide, kind: modelOpEditFile, path: "c.txt", content: "overwritten"},
+		{side: modelRemoteSide, kind: modelOpEditFile, path: "c.txt", content: "final"},
+	}
+	local := map[string]pmItem{"e": {folder: true}, "e/a.txt": {content: "edited then renamed"}}
+	remote := map[string]pmItem{"c.txt": {content: "final"}}
+
+	var contents []string
+	for _, edit := range pmWrittenStillHeld(written, local, remote) {
+		contents = append(contents, edit.content)
+	}
+	assert.Equal(t, []string{"edited then renamed", "final"}, contents)
+	assert.True(t, modelOverwrittenLater(written, 0), "the path rule this replaces excused the renamed edit")
 }
