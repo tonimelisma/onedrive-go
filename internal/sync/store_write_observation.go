@@ -66,6 +66,11 @@ func (s *SyncStore) commitObservation(
 		return fmt.Errorf("sync: committing observation transaction: %w", err)
 	}
 	s.cacheAdoptedPlaceholders(adopted)
+	if windowForgetsBaseline(events) {
+		if reloadErr := s.reloadBaselineCache(ctx); reloadErr != nil {
+			return reloadErr
+		}
+	}
 
 	s.logger.Debug("observations committed",
 		slog.Int("items", len(events)),
@@ -313,13 +318,16 @@ func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 
 	if existing == nil {
 		if item.IsDeleted {
-			return nil
+			return forgetBaselineForReuploadTx(ctx, tx, item)
 		}
 		return s.insertObservedRemoteState(ctx, tx, item)
 	}
 
 	if item.IsDeleted {
-		return deleteObservedRemoteStateTree(ctx, tx, item, existing)
+		if err := deleteObservedRemoteStateTree(ctx, tx, item, existing); err != nil {
+			return err
+		}
+		return forgetBaselineForReuploadTx(ctx, tx, item)
 	}
 
 	if item.Path != "" {
@@ -339,6 +347,57 @@ func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 	}
 
 	return followObservedPathChangeTx(ctx, tx, existing, item)
+}
+
+// windowForgetsBaseline reports whether the window forgets synced agreement
+// for some item, which the in-memory baseline must then follow.
+func windowForgetsBaseline(events []observedItem) bool {
+	for i := range events {
+		if events[i].IsDeleted && events[i].ReuploadLocal {
+			return true
+		}
+	}
+
+	return false
+}
+
+// forgetBaselineForReuploadTx drops the baseline rows of a deleted item a
+// resync asked to be uploaded again, its subtree included. Without them the
+// planner reads a surviving local copy as a new local item and uploads it;
+// with them it read as "deleted on OneDrive" and planned a local delete
+// (R-2.15.3).
+func forgetBaselineForReuploadTx(ctx context.Context, tx sqlTxRunner, item *observedItem) error {
+	if !item.IsDeleted || !item.ReuploadLocal {
+		return nil
+	}
+
+	var (
+		basePath string
+		itemType string
+	)
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT path, item_type FROM baseline WHERE item_id = ?`, item.ItemID,
+	).Scan(&basePath, &itemType); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("sync: reading baseline of %s to re-upload: %w", item.ItemID, err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM baseline WHERE item_id = ?`, item.ItemID); err != nil {
+		return fmt.Errorf("sync: forgetting baseline of %s to re-upload: %w", basePath, err)
+	}
+	if itemType != ItemTypeFolder.String() {
+		return nil
+	}
+	prefix := basePath + "/"
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM baseline WHERE substr(path, 1, length(?)) = ? COLLATE BINARY`, prefix, prefix,
+	); err != nil {
+		return fmt.Errorf("sync: forgetting baseline below %s to re-upload: %w", basePath, err)
+	}
+
+	return nil
 }
 
 // deleteObservedRemoteStateTree removes a deleted item's row and, for a

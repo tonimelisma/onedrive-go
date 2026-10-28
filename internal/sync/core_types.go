@@ -58,6 +58,10 @@ type changeEvent struct {
 	ETag             string // remote only
 	CTag             string // remote only
 	IsDeleted        bool
+	// ReuploadLocal marks a synthesized remote delete for an item a resync
+	// asked to be uploaded again (R-2.15.3): its synced agreement is
+	// forgotten, so a surviving local copy is a new upload, never a delete.
+	ReuploadLocal bool
 }
 
 // BaselineEntry represents the confirmed synced state of a single path.

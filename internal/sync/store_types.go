@@ -55,6 +55,9 @@ type observedItem struct {
 	Mtime     int64
 	ETag      string
 	IsDeleted bool
+	// ReuploadLocal also forgets the deleted item's baseline rows, subtree
+	// included, so its local copy plans as an upload (R-2.15.3).
+	ReuploadLocal bool
 }
 
 // remoteStateRow represents a row from the remote_state table.

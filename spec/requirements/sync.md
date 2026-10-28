@@ -217,6 +217,7 @@ The system shall validate filenames against OneDrive naming restrictions before 
 ## R-2.15 Delta Checkpoint Integrity [verified]
 
 - R-2.15.1: The system shall track individual delayed work independently of the delta token, since the delta checkpoint only appears on the final page and cannot be partially committed. [designed]
+- R-2.15.3: When OneDrive answers a saved delta token with HTTP 410, recovery shall be a full remote refresh with orphan detection (absence confirmed per item), in one-shot and watch runs alike, and shall count as a full refresh for the refresh cadence. When the 410 asks to apply differences (`resyncChangesApplyDifferences`), a confirmed orphan is a remote delete. When it asks to upload differences (`resyncChangesUploadDifferences`) or names neither, a confirmed orphan's synced agreement is forgotten so its local copy is uploaded again; it is never deleted locally. [verified]
 
 ## R-2.16 Eventual Consistency [verified]
 

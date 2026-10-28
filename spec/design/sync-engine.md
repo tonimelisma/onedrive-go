@@ -4,7 +4,7 @@ GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/
 
 LAYER: 4
 
-Implements: R-2.1 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified]
+Implements: R-2.1 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified]
 
 ## Overview
 
@@ -396,8 +396,34 @@ A full remote refresh deletes what a complete enumeration did not return, so
   and lets it drain only on a 404, a deleted facet, or a changed target
   (D-007).
 
+### An Expired Token Is A Full Refresh
+
+A 410 means a stretch of changes will never be reported, deletes included. So
+every recovery is the full refresh above, not a bare token-less enumeration
+(which re-listed the drive but synthesized no orphans, so a delete made while
+the token aged out was missed until the next scheduled refresh, up to a day
+later): one-shot drive-root observation falls through to
+`executeDriveRootFullObservation`, watch mode's remote observer calls the same
+function through `SetDeltaExpiredRecovery` and continues from its token, and
+mount-root delta re-lists with orphan detection. The recovery is marked as a
+full refresh, so the cadence restarts from it (R-2.15.3).
+
+The 410's inner code (`newDeltaExpiredError`) decides what a confirmed orphan
+means:
+
+- `resyncChangesApplyDifferences`: OneDrive's view is current, an orphan was
+  deleted, and the local delete goes through the delete-safety hold (D-002)
+  like any other;
+- `resyncChangesUploadDifferences`, or no recognised code: OneDrive asks for
+  the items it did not return to be uploaded again. The orphan's remote row
+  goes and so do its baseline rows (`ReuploadLocal`), so a surviving local copy
+  plans as an upload. It is never a local delete.
+
+A full refresh this client starts on its own schedule is apply-differences.
+
 | Behavior | Evidence |
 | --- | --- |
+| An expired delta token (410) recovers through the full refresh with orphan detection in one-shot and watch runs, and the resync flavour decides what an orphan means: apply-differences deletes it, upload-differences or an unknown flavour forgets its synced agreement so the local copy is uploaded again (R-2.15.3). | `TestRunOnce_DeltaExpiredRecoverySynthesizesMissedDeletes`, `TestRunOnce_DeltaExpiredUploadDifferencesKeepsAndReuploadsLocal`, `TestWatch_DeltaExpiredRecoversThroughTheFullRefresh`, `TestMountRootEvents_ResyncFlavourDecidesWhatAnOrphanMeans`, `TestNewDeltaExpiredError_ParsesTheResyncFlavour` |
 | A full refresh never treats an enumerated item as gone, shared-folder orphans need a live 404/deleted/moved-out answer, a listing with an unlisted parent is incomplete, and an omitted shortcut drains only on a confirmed removal. | `TestFullRefresh_ItemTheConverterSkipsIsNotSynthesizedAsDelete`, `TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing`, `TestValidateMountRootListingParents_ChildUnderUnlistedFolderAbortsListing`, `TestApplyShortcutRootCompleteOmission_ConfirmedLiveBindingStaysActive`, `TestFullRefresh_OrphanStillLiveOnOneDriveIsNotDeleted` |
 
 If watch mode shortens `observation_state.next_full_remote_refresh_at` after

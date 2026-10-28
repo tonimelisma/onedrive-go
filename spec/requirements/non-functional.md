@@ -106,7 +106,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.7.2: The system shall normalize driveId values across all endpoints to a canonical form. [verified]
 - R-6.7.3: The system shall track items by ID and reconstruct paths from parent chains. When both the parent-ID chain and `parentReference.path` can place an item, the ID chain wins. The executor's live preflight likewise checks a live item's location by parent ID plus NFC name, not by a path rebuilt from `parentReference.path`. [verified]
 - R-6.7.4: The system shall detect server-side file modification after upload (SharePoint enrichment) and not re-upload. [verified]
-- R-6.7.5: The system shall handle HTTP 410 (delta token expiry) with full re-enumeration. [verified]
+- R-6.7.5: The system shall handle HTTP 410 (delta token expiry) with full re-enumeration, including orphan detection (R-2.15.3). [verified]
 - R-6.7.6: The system shall enforce upload chunk alignment to 320 KiB boundaries. [verified]
 - R-6.7.7: The system shall not compare hashes for deleted items. [verified]
 - R-6.7.8: The system shall treat item names in API responses as opaque and pass them through verbatim, never URL-decoding them. [verified]

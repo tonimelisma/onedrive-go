@@ -64,6 +64,20 @@ type remoteObserver struct {
 
 	// stats tracks observer-level metrics (B-127).
 	stats observerCounters
+
+	// recoverExpiredDelta, when set, replaces Watch's bare re-enumeration
+	// after a 410 with the engine's full refresh, the only path that also
+	// finds the deletes the expired window lost (R-2.15.3). It returns the
+	// batch to emit; the batch's cursor token becomes the watch token.
+	recoverExpiredDelta deltaExpiredRecovery
+}
+
+// deltaExpiredRecovery runs a full refresh for an expired delta token.
+type deltaExpiredRecovery func(ctx context.Context, kind resyncKind) (remoteObservationBatch, error)
+
+// SetDeltaExpiredRecovery wires the full refresh Watch runs after a 410.
+func (o *remoteObserver) SetDeltaExpiredRecovery(recovery deltaExpiredRecovery) {
+	o.recoverExpiredDelta = recovery
 }
 
 // observerCounters holds atomic counters for observer metrics (B-127).
@@ -248,9 +262,11 @@ func (o *remoteObserver) fullDelta(
 // The optional batch handler lets the engine own watch-mode commit/scope policy
 // without mutating RemoteObserver after construction. On transient errors, it
 // applies exponential backoff (starting at 5s, capped at the poll interval).
-// On ErrDeltaExpired (410), it resets the token and retries with a full
-// resync. The delta token is tracked internally — use CurrentDeltaToken() to
-// read the latest value.
+// On ErrDeltaExpired (410), it runs the engine's full refresh through the
+// recovery set with SetDeltaExpiredRecovery (orphan detection included) and
+// continues from its token; without one it resets the token and re-enumerates.
+// The delta token is tracked internally — use CurrentDeltaToken() to read the
+// latest value.
 func (o *remoteObserver) Watch(
 	ctx context.Context,
 	savedToken string,
@@ -287,6 +303,17 @@ func (o *remoteObserver) Watch(
 		token := o.CurrentDeltaToken()
 
 		polledEvents, newToken, topology, windowItems, err := o.fullDelta(ctx, token, nil)
+		if err != nil && errors.Is(err, errDeltaExpired) && o.recoverExpiredDelta != nil {
+			result := o.recoverExpiredDeltaInWatch(ctx, batches, resyncKindOf(err), interval, bo, &outage, wakeCh)
+			if result.err != nil {
+				return result.err
+			}
+			if result.stop {
+				return nil
+			}
+
+			continue
+		}
 		if err != nil {
 			result := o.handleWatchPollError(ctx, bo, &outage, err, wakeCh)
 			if result.err != nil {
@@ -353,6 +380,39 @@ func (o *remoteObserver) handleWatchBatch(
 	}
 
 	o.setDeltaToken(newToken)
+	bo.Reset()
+
+	return o.sleepWatch(ctx, interval, "interval", wakeCh)
+}
+
+// recoverExpiredDeltaInWatch runs the engine's full refresh for an expired
+// token, emits its batch, and continues from the token it produced. A failed
+// refresh keeps the expired token, so the next poll answers 410 again and the
+// recovery is retried after the usual backoff.
+func (o *remoteObserver) recoverExpiredDeltaInWatch(
+	ctx context.Context,
+	batches chan<- remoteObservationBatch,
+	kind resyncKind,
+	interval time.Duration,
+	bo *retry.Backoff,
+	outage *pollOutageLog,
+	wakeCh <-chan struct{},
+) watchStepResult {
+	// Info: self-healing, the full refresh re-enumerates the drive.
+	o.logger.Info("OneDrive change history expired; rescanning the whole drive (this may take a while)")
+
+	batch, err := o.recoverExpiredDelta(ctx, kind)
+	if err != nil {
+		return o.handleWatchPollError(ctx, bo, outage, fmt.Errorf("recover expired OneDrive change history: %w", err), wakeCh)
+	}
+	if emitErr := o.emitWatchBatch(ctx, batches, &batch); emitErr != nil {
+		if watchShouldStop(ctx, emitErr) {
+			return watchStepResult{stop: true}
+		}
+		return watchStepResult{err: emitErr}
+	}
+
+	o.setDeltaToken(batch.cursorToken)
 	bo.Reset()
 
 	return o.sleepWatch(ctx, interval, "interval", wakeCh)
@@ -567,7 +627,7 @@ func (o *remoteObserver) fetchPage(
 	dp, err := o.fetcher.Delta(ctx, o.driveID, token)
 	if err != nil {
 		if errors.Is(err, graph.ErrGone) {
-			return nil, 0, "", false, errDeltaExpired
+			return nil, 0, "", false, newDeltaExpiredError(err)
 		}
 
 		return nil, 0, "", false, fmt.Errorf("sync: fetching delta page %d: %w", page, err)

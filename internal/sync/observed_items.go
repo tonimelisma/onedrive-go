@@ -65,5 +65,7 @@ func appendObservedEvent(
 		Mtime:     ev.Mtime,
 		ETag:      ev.ETag,
 		IsDeleted: ev.IsDeleted,
+
+		ReuploadLocal: ev.ReuploadLocal,
 	})
 }

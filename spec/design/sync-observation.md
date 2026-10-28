@@ -96,7 +96,10 @@ Important properties:
   Treating that as an empty window kept the old token, so watch mode replayed
   the same deletes on every poll indefinitely
   (`TestWatch_OnlyUnrecoverableDeletes_AdvancesToken`)
-- HTTP 410 delta expiry is surfaced as a restart/re-enumerate condition
+- HTTP 410 delta expiry is surfaced as `deltaExpiredError`, which carries the
+  resync flavour from the error's inner code; recovery is the engine's full
+  refresh with orphan detection, in watch mode too (`SetDeltaExpiredRecovery`,
+  `sync-engine.md` "An Expired Token Is A Full Refresh", R-2.15.3)
 - sparse delta items recover omitted name/parent data from baseline when
   possible, and missing parent IDs trigger one best-effort item-by-ID enrich
   before baseline fallback
