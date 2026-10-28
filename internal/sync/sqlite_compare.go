@@ -140,181 +140,17 @@ remote_move_targets AS (
 ),
 `
 
-	sqlQueryComparisonState = sqlLocalAndRemoteMoveCTEs + `
-comparison_state AS (
+	// sqlComparisonStateCTEs is the one definition of the comparison facts and
+	// the per-path comparison kind. QueryComparisonState and
+	// QueryReconciliationState both read it, on the live tables and on the
+	// planner-visible scratch tables alike (sqlQueryForStateTables), so a fact
+	// such as "local changed" can never mean two things in two queries.
+	sqlComparisonStateCTEs = sqlLocalAndRemoteMoveCTEs + `
+comparison_flags AS (
 	SELECT
 		p.path,
 		COALESCE(b.item_id, '') AS baseline_item_id,
 		COALESCE(r.item_id, '') AS remote_item_id,
-		COALESCE(b.item_type, l.item_type, r.item_type, '') AS item_type,
-		CASE WHEN b.path IS NOT NULL THEN 1 ELSE 0 END AS baseline_present,
-		CASE WHEN l.path IS NOT NULL THEN 1 ELSE 0 END AS local_present,
-		CASE WHEN r.path IS NOT NULL THEN 1 ELSE 0 END AS remote_present,
-		CASE
-			WHEN b.path IS NULL OR l.path IS NULL THEN 0
-			WHEN COALESCE(b.item_type, '') <> COALESCE(l.item_type, '') THEN 1
-			WHEN COALESCE(b.local_has_identity, 0) = 1 AND COALESCE(l.local_has_identity, 0) = 1
-				AND (
-					COALESCE(b.local_device, 0) <> COALESCE(l.local_device, 0)
-					OR COALESCE(b.local_inode, 0) <> COALESCE(l.local_inode, 0)
-				) THEN 1
-			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
-			WHEN COALESCE(b.local_hash, '') <> '' OR COALESCE(l.hash, '') <> '' THEN
-				CASE WHEN COALESCE(b.local_hash, '') <> COALESCE(l.hash, '') THEN 1 ELSE 0 END
-			WHEN COALESCE(b.local_size, 0) <> COALESCE(l.size, 0) THEN 1
-			WHEN COALESCE(b.local_mtime, 0) <> COALESCE(l.mtime, 0) THEN 1
-			ELSE 0
-		END AS local_changed,
-		CASE
-			WHEN b.path IS NULL OR r.path IS NULL THEN 0
-			WHEN COALESCE(b.item_type, '') <> COALESCE(r.item_type, '') THEN 1
-			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
-			WHEN COALESCE(b.remote_hash, '') <> '' OR COALESCE(r.hash, '') <> '' THEN
-				CASE WHEN COALESCE(b.remote_hash, '') <> COALESCE(r.hash, '') THEN 1 ELSE 0 END
-			WHEN COALESCE(b.remote_size, 0) <> COALESCE(r.size, 0) THEN 1
-			WHEN COALESCE(b.remote_mtime, 0) <> COALESCE(r.mtime, 0) THEN 1
-			WHEN COALESCE(b.etag, '') <> COALESCE(r.etag, '') THEN 1
-			ELSE 0
-		END AS remote_changed,
-		CASE
-			WHEN l.path IS NULL OR r.path IS NULL THEN 0
-			WHEN COALESCE(l.item_type, '') <> COALESCE(r.item_type, '') THEN 0
-			WHEN COALESCE(l.item_type, '') = 'folder' THEN 1
-			-- Equality must be proven, never assumed. A missing hash on either
-			-- side makes matching sizes meaningless: two different files of the
-			-- same length would compare equal. Both halves are reachable --
-			-- the scanner stores an empty hash when hashing fails, and
-			-- driveops.SelectHash returns "" when Graph supplies no hash at all
-			-- (B-021) -- and the result was a baseline update recording an
-			-- agreement that never existed.
-			WHEN COALESCE(l.hash, '') = '' OR COALESCE(r.hash, '') = '' THEN 0
-			WHEN COALESCE(l.hash, '') <> COALESCE(r.hash, '') THEN 0
-			WHEN COALESCE(l.size, 0) <> COALESCE(r.size, 0) THEN 0
-			ELSE 1
-		END AS current_equal,
-		COALESCE(lms.target_path, '') AS local_move_target,
-		COALESCE(lmt.source_path, '') AS local_move_source,
-		COALESCE(lms.candidate_count, lmt.candidate_count, 0) AS local_move_candidate_count,
-		COALESCE(rms.target_path, '') AS remote_move_target,
-		COALESCE(rmt.source_path, '') AS remote_move_source,
-		CASE
-			WHEN b.path IS NOT NULL AND l.path IS NULL AND COALESCE(lms.candidate_count, 0) = 1 THEN 'local_move_source'
-			WHEN b.path IS NOT NULL AND l.path IS NULL AND r.path IS NULL THEN 'both_missing'
-			WHEN l.path IS NOT NULL AND b.path IS NULL AND lmt.source_path <> '' AND lmt.candidate_count = 1 THEN 'local_move_dest'
-			WHEN b.path IS NOT NULL AND rms.target_path <> '' THEN 'remote_move_source'
-			WHEN r.path IS NOT NULL AND b.path IS NULL AND rmt.source_path <> '' THEN 'remote_move_dest'
-			WHEN b.path IS NULL AND l.path IS NOT NULL AND r.path IS NULL THEN 'local_only_create'
-			WHEN b.path IS NULL AND l.path IS NULL AND r.path IS NOT NULL AND rmsh.path IS NOT NULL THEN 'remote_move_shadowed'
-			WHEN b.path IS NULL AND l.path IS NULL AND r.path IS NOT NULL THEN 'remote_only_create'
-			WHEN b.path IS NULL AND l.path IS NOT NULL AND r.path IS NOT NULL AND (
-				COALESCE(l.item_type, '') = COALESCE(r.item_type, '')
-				AND (
-					COALESCE(l.item_type, '') = 'folder'
-					OR (
-						-- See current_equal: a hash-less side cannot prove the
-						-- two copies converged, so equal_again must not fire.
-						COALESCE(l.hash, '') <> ''
-						AND COALESCE(l.hash, '') = COALESCE(r.hash, '')
-						AND COALESCE(l.size, 0) = COALESCE(r.size, 0)
-					)
-				)
-			) THEN 'create_equal'
-			WHEN b.path IS NULL AND l.path IS NOT NULL AND r.path IS NOT NULL THEN 'create_conflict'
-			WHEN b.path IS NOT NULL AND l.path IS NOT NULL AND r.path IS NOT NULL AND
-				(
-					COALESCE(b.item_type, '') = COALESCE(l.item_type, '')
-					AND (
-						COALESCE(b.local_has_identity, 0) = 0
-						OR COALESCE(l.local_has_identity, 0) = 0
-						OR (
-							COALESCE(b.local_device, 0) = COALESCE(l.local_device, 0)
-							AND COALESCE(b.local_inode, 0) = COALESCE(l.local_inode, 0)
-						)
-					)
-					AND (
-						COALESCE(b.item_type, '') = 'folder'
-						OR (
-							COALESCE(b.local_hash, '') = COALESCE(l.hash, '')
-							AND COALESCE(b.local_size, 0) = COALESCE(l.size, 0)
-							AND COALESCE(b.local_mtime, 0) = COALESCE(l.mtime, 0)
-						)
-					)
-				) AND (
-					COALESCE(b.item_type, '') = COALESCE(r.item_type, '')
-					AND (
-						COALESCE(b.item_type, '') = 'folder'
-						OR (
-							COALESCE(b.remote_hash, '') = COALESCE(r.hash, '')
-							AND COALESCE(b.remote_size, 0) = COALESCE(r.size, 0)
-							AND COALESCE(b.remote_mtime, 0) = COALESCE(r.mtime, 0)
-							AND COALESCE(b.etag, '') = COALESCE(r.etag, '')
-						)
-					)
-				) THEN 'unchanged'
-			WHEN b.path IS NOT NULL AND l.path IS NOT NULL AND r.path IS NOT NULL AND (
-				COALESCE(l.item_type, '') = COALESCE(r.item_type, '')
-				AND (
-					COALESCE(l.item_type, '') = 'folder'
-					OR (
-						-- See current_equal: a hash-less side cannot prove the
-						-- two copies converged, so equal_again must not fire.
-						COALESCE(l.hash, '') <> ''
-						AND COALESCE(l.hash, '') = COALESCE(r.hash, '')
-						AND COALESCE(l.size, 0) = COALESCE(r.size, 0)
-					)
-				)
-				AND (
-					COALESCE(b.item_type, '') <> COALESCE(r.item_type, '')
-					OR (
-						COALESCE(b.item_type, '') <> 'folder'
-						AND (
-							COALESCE(b.remote_hash, '') <> COALESCE(r.hash, '')
-							OR COALESCE(b.remote_size, 0) <> COALESCE(r.size, 0)
-							OR COALESCE(b.remote_mtime, 0) <> COALESCE(r.mtime, 0)
-							OR COALESCE(b.etag, '') <> COALESCE(r.etag, '')
-						)
-					)
-				)
-			) THEN 'equal_again'
-			WHEN b.path IS NOT NULL AND l.path IS NULL AND r.path IS NOT NULL THEN 'local_missing'
-			WHEN b.path IS NOT NULL AND l.path IS NOT NULL AND r.path IS NULL THEN 'remote_missing'
-			WHEN b.path IS NOT NULL AND l.path IS NOT NULL AND r.path IS NOT NULL THEN 'diverged'
-			ELSE 'unknown'
-		END AS comparison_kind
-	FROM all_paths p
-	LEFT JOIN baseline b ON b.path = p.path
-	LEFT JOIN local_state l ON l.path = p.path
-	LEFT JOIN remote_state r ON r.path = p.path
-	LEFT JOIN local_move_sources lms ON lms.source_path = p.path
-	LEFT JOIN local_move_targets lmt ON lmt.target_path = p.path
-	LEFT JOIN remote_move_sources rms ON rms.source_path = p.path
-	LEFT JOIN remote_move_targets rmt ON rmt.target_path = p.path
-	LEFT JOIN remote_move_shadowed rmsh ON rmsh.path = p.path
-)
-SELECT
-	path,
-	baseline_item_id,
-	remote_item_id,
-	item_type,
-	baseline_present,
-	local_present,
-	remote_present,
-	local_changed,
-	remote_changed,
-	current_equal,
-	local_move_target,
-	local_move_source,
-	local_move_candidate_count,
-	remote_move_target,
-	remote_move_source,
-	comparison_kind
-FROM comparison_state
-ORDER BY path`
-
-	sqlQueryReconciliationState = sqlLocalAndRemoteMoveCTEs + `
-comparison_flags AS (
-	SELECT
-		p.path,
 		COALESCE(b.item_type, l.item_type, r.item_type, '') AS item_type,
 		CASE WHEN b.path IS NOT NULL THEN 1 ELSE 0 END AS baseline_present,
 		CASE WHEN l.path IS NOT NULL THEN 1 ELSE 0 END AS local_present,
@@ -411,6 +247,8 @@ comparison_flags AS (
 comparison_state AS (
 	SELECT
 		path,
+		baseline_item_id,
+		remote_item_id,
 		item_type,
 		baseline_present,
 		local_present,
@@ -448,7 +286,31 @@ comparison_state AS (
 			ELSE 'unknown'
 		END AS comparison_kind
 	FROM comparison_flags
-),
+)
+`
+
+	sqlQueryComparisonState = sqlComparisonStateCTEs + `
+SELECT
+	path,
+	baseline_item_id,
+	remote_item_id,
+	item_type,
+	baseline_present,
+	local_present,
+	remote_present,
+	local_changed,
+	remote_changed,
+	current_equal,
+	local_move_target,
+	local_move_source,
+	local_move_candidate_count,
+	remote_move_target,
+	remote_move_source,
+	comparison_kind
+FROM comparison_state
+ORDER BY path`
+
+	sqlQueryReconciliationState = sqlComparisonStateCTEs + `,
 reconciliation_state AS (
 	SELECT
 		path,
