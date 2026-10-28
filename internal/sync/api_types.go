@@ -86,4 +86,8 @@ type engineInputs struct {
 	// rootLockFlock replaces syscall.Flock for the sync root lock; nil in
 	// production. Tests inject unsupported-filesystem errnos through it.
 	rootLockFlock func(fd int, how int) error
+	// interposeSyncTree wraps the sync tree's filesystem handle; nil in
+	// production. Tests put an emulated filesystem under the engine through
+	// it: a case-insensitive volume, injected errno (D-094).
+	interposeSyncTree func(synctree.Handle) synctree.Handle
 }

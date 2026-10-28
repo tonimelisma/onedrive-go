@@ -21,6 +21,15 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
+// readDirForCollisionCheck lists dirPath through tree when there is one.
+func readDirForCollisionCheck(tree *synctree.Root, dirPath string) ([]os.DirEntry, error) {
+	if tree == nil {
+		return localpath.ReadDir(dirPath) //nolint:wrapcheck // localpath names the path
+	}
+
+	return tree.ReadDirAbs(dirPath) //nolint:wrapcheck // synctree names the path
+}
+
 // buildPeerRelPath constructs the db-relative path for a collision peer
 // given the current file's dbRelPath and the colliding file's name.
 func (o *localObserver) buildPeerRelPath(dbRelPath, collidingName string) string {
@@ -34,17 +43,19 @@ func (o *localObserver) buildPeerRelPath(dbRelPath, collidingName string) string
 
 // HasCaseCollisionCached checks if name collides with an existing sibling
 // using a per-directory name cache (filesystem) and the baseline (synced
-// files). Falls back to synctree.ReadDirAbs on cache miss. The dbDir parameter is
-// the db-relative directory path used for baseline cross-check.
+// files). A cache miss lists the directory through the sync tree, so it sees
+// the filesystem every other sync-tree operation sees (D-094); without a tree
+// (a caller outside the engine) it lists the path directly. The dbDir
+// parameter is the db-relative directory path used for baseline cross-check.
 // Single-goroutine (watchLoop) access — no mutex needed.
-func (o *localObserver) HasCaseCollisionCached(_ *synctree.Root, dirPath, name, dbDir string) (string, bool) {
+func (o *localObserver) HasCaseCollisionCached(tree *synctree.Root, dirPath, name, dbDir string) (string, bool) {
 	if o.DirNameCache == nil {
 		o.DirNameCache = make(map[string]map[string][]string)
 	}
 
 	cache, ok := o.DirNameCache[dirPath]
 	if !ok {
-		entries, err := localpath.ReadDir(dirPath)
+		entries, err := readDirForCollisionCheck(tree, dirPath)
 		if err != nil {
 			return "", false
 		}
