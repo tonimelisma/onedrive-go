@@ -251,6 +251,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurableCollision,
 		TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta,
 		TestRunOnce_UploadOnly_StillObservesRemoteDelta,
+		TestRunOnce_VirtualTime_FolderDeletesSpaceFullRefreshes,
 	}
 }
 
