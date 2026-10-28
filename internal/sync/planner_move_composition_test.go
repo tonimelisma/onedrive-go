@@ -254,6 +254,30 @@ func TestBuildDependencies_NestedMoveEdges(t *testing.T) {
 	require.NoError(t, detectDependencyCycle(deps))
 }
 
+// Validates: R-2.17.6
+//
+// A file moved away from a path that a new folder takes (OneDrive moved the
+// file and created a folder there): work under the old path belongs to the
+// new folder, so it waits for the move instead of the move waiting for it.
+// Ordered the other way, the download into the folder failed against the
+// file still in place, and the move that would clear it never ran (model
+// test: remote swap, then a remote file replaced by a folder).
+func TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove(t *testing.T) {
+	t.Parallel()
+
+	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	actions := []Action{
+		{Type: ActionLocalMove, OldPath: "r.txt", Path: "b.txt", View: file}, // 0
+		{Type: ActionDownload, Path: "r.txt/inside.txt", View: file},         // 1
+	}
+
+	deps := buildDependencies(actions)
+
+	assert.Empty(t, deps[0], "a file has nothing under it to wait for")
+	assert.Equal(t, []int{0}, deps[1], "the new folder's content lands after the file leaves")
+	require.NoError(t, detectDependencyCycle(deps))
+}
+
 // Validates: R-2.8.11
 //
 // A dependency cycle drops only the actions on it and their dependents

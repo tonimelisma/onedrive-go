@@ -519,8 +519,12 @@ func underMoveDestination(a, move *Action) bool {
 // for a remote move, remote deletes addressed at the item's old remote path.
 // Local creates under a remote move's old path belong to a new local entry
 // there (rename and recreate), not to the moved item, so they do not hold it.
+//
+// A moved file has nothing below it: work under its old path belongs to the
+// folder that takes the path, and waits for the move (createsAtVacatedSource).
 func underMoveSource(a, move *Action) bool {
-	if move.OldPath == "" || !strings.HasPrefix(movedSourcePath(a, move), move.OldPath+"/") {
+	if move.OldPath == "" || !movedItemIsFolder(move) ||
+		!strings.HasPrefix(movedSourcePath(a, move), move.OldPath+"/") {
 		return false
 	}
 	switch {
@@ -544,10 +548,14 @@ func movedSourcePath(a, move *Action) string {
 }
 
 // createsAtVacatedSource reports a create of a new item at the path a move
-// vacates on the create's side: it must wait for the move (a new local entry
+// vacates on the create's side, or below it when the moved item is a file and
+// a new folder takes its path: it must wait for the move (a new local entry
 // at a remotely moved item's old path, D-056).
 func createsAtVacatedSource(a, move *Action) bool {
-	if a.Path != move.OldPath || move.OldPath == "" {
+	if move.OldPath == "" {
+		return false
+	}
+	if a.Path != move.OldPath && (movedItemIsFolder(move) || !strings.HasPrefix(a.Path, move.OldPath+"/")) {
 		return false
 	}
 	switch move.Type {
@@ -561,6 +569,16 @@ func createsAtVacatedSource(a, move *Action) bool {
 	default:
 		return false
 	}
+}
+
+// movedItemIsFolder reports whether a move carries a folder, by the synced
+// item it moves.
+func movedItemIsFolder(move *Action) bool {
+	if move.View != nil && move.View.Baseline != nil {
+		return move.View.Baseline.ItemType == ItemTypeFolder
+	}
+
+	return actionItemType(move) == ItemTypeFolder
 }
 
 // countByType counts actions grouped by ActionType. Exported for use by the
