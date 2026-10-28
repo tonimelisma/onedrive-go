@@ -58,6 +58,7 @@ const (
 	modelMaxOpsPerSide       = 3
 	modelMaxSyncPasses       = 8
 	modelDefaultSeeds        = 12
+	modelCrashSeedCount      = 4
 	modelRaceSeeds           = 2
 	modelInitialFolders      = 3
 	modelInitialFiles        = 5
@@ -115,6 +116,41 @@ func TestModel_SameSeedReplaysIdentically(t *testing.T) {
 			assert.Equal(t, transcripts[0], transcripts[1], "two runs of seed %d diverged", seed)
 		})
 	}
+}
+
+// Validates: R-6.8.9
+//
+// Every batch of a few seeds also crashes at a crash point the seed picks
+// (D-091), sometimes losing the WAL too, and sync must converge from what the
+// crash left with every model check and invariant holding.
+func TestModel_CrashAtSeededPointsRecovers(t *testing.T) {
+	t.Parallel()
+
+	for _, seed := range modelCrashSeeds(t) {
+		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
+			t.Parallel()
+			runModelScenarioWith(t, seed, true)
+		})
+	}
+}
+
+// modelCrashSeeds is the crash run's seeds: the ones the environment names,
+// else the first modelCrashSeedCount (one under -race).
+func modelCrashSeeds(t *testing.T) []uint64 {
+	t.Helper()
+
+	seeds := modelSeeds(t)
+	if os.Getenv(modelSeedEnv) != "" || os.Getenv(modelSeedCountEnv) != "" {
+		return seeds
+	}
+	limit := modelCrashSeedCount
+	if raceDetectorEnabled {
+		// The race run is for data races, which one seed exercises; see
+		// modelRaceSeeds.
+		limit = 1
+	}
+
+	return seeds[:min(limit, len(seeds))]
 }
 
 func modelSeeds(t *testing.T) []uint64 {
@@ -206,27 +242,27 @@ type modelRun struct {
 func runModelScenario(t *testing.T, seed uint64) *modelRun {
 	t.Helper()
 
+	return runModelScenarioWith(t, seed, false)
+}
+
+// runModelScenarioWith runs one seed. With crashes set, every batch also
+// crashes at a crash point chosen by the seed (D-091): sync continues on a
+// fresh engine opened on what the crash left, and the batch's checks apply
+// to it.
+func runModelScenarioWith(t *testing.T, seed uint64, crashes bool) *modelRun {
+	t.Helper()
+
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
 	remote.shuffleDelta(seed)
 	h := newSyncHarness(t, remote)
-	eng := h.eng
 	run := &modelRun{
 		t: t, seed: seed, rng: rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)), //nolint:gosec // deterministic test RNG
-		remote: remote, eng: eng, syncRoot: h.syncRoot, harness: h,
+		remote: remote, syncRoot: h.syncRoot, harness: h,
 		caseSensitive: localFSIsCaseSensitive(t.TempDir()),
 		clock:         &modelClock{},
 	}
-	eng.clock = run.clock
-	order := eng.dispatchOrder
-	if order == nil {
-		order = dispatchOrderShuffle(seed)
-	}
-	eng.serializeWorkers = true
-	eng.dispatchOrder = func(frontier []*trackedAction) []*trackedAction {
-		frontier = order(frontier)
-		run.recordDispatch(frontier)
-		return frontier
-	}
+	run.adoptEngine(h.eng)
+	crashRng := rand.New(rand.NewPCG(seed^0xc2b2ae3d27d4eb4f, seed)) //nolint:gosec // deterministic test RNG
 
 	run.seedInitialTree()
 	run.syncUntilQuiet("initial")
@@ -237,7 +273,15 @@ func runModelScenario(t *testing.T, seed uint64) *modelRun {
 		before := run.localTree()
 		h.beginRound(t)
 		edits := run.applyBatchEdits(label)
+		var capture *crashCapture
+		if crashes {
+			capture = run.armCrash(crashRng)
+		}
 		edits = append(edits, run.syncUntilQuiet(label)...)
+		if capture != nil && capture.captured {
+			h = run.recoverFrom(capture, label)
+			edits = append(edits, run.syncUntilQuiet(label+" after the crash")...)
+		}
 		converged := run.requireConverged(label)
 		run.requireWrittenContentSurvives(label, edits, converged)
 		run.requireUntouchedFilesUnchanged(label, before, edits, converged)
@@ -248,6 +292,66 @@ func runModelScenario(t *testing.T, seed uint64) *modelRun {
 	}
 
 	return run
+}
+
+// adoptEngine makes eng the model's engine: the model's clock, one worker,
+// and the seed's dispatch order, recorded.
+func (r *modelRun) adoptEngine(eng *testEngine) {
+	r.eng = eng
+	eng.clock = r.clock
+	order := eng.dispatchOrder
+	if order == nil {
+		order = dispatchOrderShuffle(r.seed)
+	}
+	eng.serializeWorkers = true
+	eng.dispatchOrder = func(frontier []*trackedAction) []*trackedAction {
+		frontier = order(frontier)
+		r.recordDispatch(frontier)
+		return frontier
+	}
+}
+
+// armCrash installs a capture at a crash point the seed picks, half the time
+// with power loss (everything since a checkpoint taken now is lost).
+func (r *modelRun) armCrash(rng *rand.Rand) *crashCapture {
+	points := []string{
+		crashPointRemoteMoveDone, crashPointLocalMoveDone, crashPointUploadRemoteDone,
+		crashPointDownloadRenamed, crashPointCommitObservation, crashPointCommitOutcome,
+	}
+	capture := &crashCapture{
+		point:     points[rng.IntN(len(points))],
+		powerLoss: rng.IntN(2) == 0,
+		srcDir:    filepath.Dir(r.syncRoot),
+		dstDir:    r.t.TempDir(),
+		remote:    r.remote,
+	}
+	if capture.powerLoss {
+		_, err := r.eng.baseline.rawDB().ExecContext(r.t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+		require.NoError(r.t, err)
+	}
+	r.eng.execCfg.crashAt = capture.hook
+	r.eng.baseline.crashAt = capture.hook
+
+	return capture
+}
+
+// recoverFrom continues the run on a fresh engine opened on what the crash
+// left behind.
+func (r *modelRun) recoverFrom(capture *crashCapture, label string) *syncHarness {
+	kind := "crash"
+	if capture.powerLoss {
+		kind = "power loss"
+	}
+	r.logf("%s: %s at %s; a fresh engine opens what it left", label, kind, capture.point)
+	held := r.harness.held
+	recovered := capture.reopen(r.t)
+	recovered.held = held
+	r.harness = recovered
+	r.remote = recovered.remote
+	r.syncRoot = recovered.syncRoot
+	r.adoptEngine(recovered.eng)
+
+	return recovered
 }
 
 // modelConflictStamp is the timestamp in a conflict copy's name, which comes
