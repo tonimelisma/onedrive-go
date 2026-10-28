@@ -106,7 +106,10 @@ move undone; superseding on it wedged the chain on every pass
 inode that still holds the synced content (size and hash) is the synced item
 (D-057), in worker-start freshness and in the executor alike: a folder rebuilt
 with the same files gave each a new inode, and every move of them superseded
-forever (`TestRunOnce_RemoteRenameInsideLocallyRecreatedFolderConverges`).
+forever (`TestRunOnce_RemoteRenameInsideLocallyRecreatedFolderConverges`). SQLite's remote-move pairing and
+move composition apply the same test, so a file replaced at the path by a
+different one (new inode, other content) is a new local entry, never the
+source of a planned move (`TestRunOnce_RemoteMoveOfAFileTheUserReplacedLocallyKeepsBoth`).
 
 A remote move whose live preflight finds the item already at the planned
 destination, with the same identity and content, is done rather than stale

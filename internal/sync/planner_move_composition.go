@@ -1067,11 +1067,27 @@ func composedLocalPosition(cmp *sQLiteComparisonRow, view *pathView) string {
 	if cmp.ComparisonKind == comparisonKindLocalMoveSource && cmp.LocalMoveTarget != "" {
 		return cmp.LocalMoveTarget
 	}
-	if view.Local != nil && view.Local.ItemType == view.Baseline.ItemType {
+	if view.Local != nil && localEntryIsBaselineItem(view.Local, view.Baseline) {
 		return cmp.Path
 	}
 
 	return ""
+}
+
+// localEntryIsBaselineItem applies the source check a local move's freshness
+// and executor make (localRowIsBaselineItem) to a planner view, so
+// composition never plans a move of an entry they would refuse: a file
+// replaced at the path by a different one (new identity, other content) is a
+// new local entry, and its move was superseded on every pass.
+func localEntryIsBaselineItem(local *localState, baseline *BaselineEntry) bool {
+	return localRowIsBaselineItem(&localStateRow{
+		ItemType:         local.ItemType,
+		Hash:             local.Hash,
+		Size:             local.Size,
+		LocalDevice:      local.LocalDevice,
+		LocalInode:       local.LocalInode,
+		LocalHasIdentity: local.LocalHasIdentity,
+	}, baseline)
 }
 
 func composedRemotePosition(

@@ -834,3 +834,37 @@ func TestRunOnce_RemoteReplaceOfALocallyRecreatedFolderKeepsBoth(t *testing.T) {
 	requireScenarioLocalFile(t, h.syncRoot, "docs", "remote file\n")
 	assertSyncInvariants(t, h)
 }
+
+// Validates: R-2.17.1, R-2.8.10
+//
+// OneDrive moved f/x.txt out of f while the user rebuilt f locally with a
+// different x.txt (new inode, new content). Move composition took the entry at
+// the old path for the synced item and planned its local move, which the
+// source check rightly refused as a different item, on every pass (model
+// test: local folder recreate, then remote move while local edits). The
+// entry is a new local file: OneDrive's moved item downloads at its new path
+// and the local file uploads at the old one.
+func TestRunOnce_RemoteMoveOfAFileTheUserReplacedLocallyKeepsBoth(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("item-f", "root", "f")
+	remote.addFile(t, "item-x", "item-f", "x.txt", "synced\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	// Written beside it and renamed over it, so the new file cannot reuse the
+	// old inode.
+	writeLocalFile(t, h.syncRoot, filepath.Join("f", "x.new"), "a new local file\n")
+	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "f", "x.new"), filepath.Join(h.syncRoot, "f", "x.txt")))
+	remote.moveAt(t, "f/x.txt", "x.txt")
+	for range 3 {
+		runScenarioPass(t, h.eng)
+	}
+
+	requireScenarioLocalFile(t, h.syncRoot, "x.txt", "synced\n")
+	requireScenarioLocalFile(t, h.syncRoot, "f/x.txt", "a new local file\n")
+	assertSyncInvariants(t, h)
+}

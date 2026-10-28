@@ -214,6 +214,7 @@ var runOnceScenarios = []func(*testing.T){
 	TestRunOnce_RemoteFolderReplacedByFileWithLocalChildEditsKeepsBoth,
 	TestRunOnce_RemoteHierarchyInversionConverges,
 	TestRunOnce_RemoteMoveChainIntoVacatedPathConverges,
+	TestRunOnce_RemoteMoveOfAFileTheUserReplacedLocallyKeepsBoth,
 	TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting,
 	TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass,
 	TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit,

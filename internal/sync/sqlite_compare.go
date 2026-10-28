@@ -124,10 +124,24 @@ remote_move_sources AS (
 	FROM baseline b
 	JOIN remote_state r ON r.item_id = b.item_id AND r.path <> b.path
 	-- The local source must still be the item: a type change at the source
-	-- is a replacement, not something a rename could carry.
+	-- is a replacement, not something a rename could carry, and so is an
+	-- entry with another filesystem identity unless it is a file that
+	-- provably holds the synced content. This is the test the local move's
+	-- freshness and executor apply (localRowIsBaselineItem); pairing more
+	-- planned a move they refused on every pass.
 	WHERE EXISTS (
 			SELECT 1 FROM local_state ls
 			WHERE ls.path = b.path AND COALESCE(ls.item_type, '') = COALESCE(b.item_type, '')
+				AND (
+					COALESCE(b.local_has_identity, 0) = 0
+					OR COALESCE(ls.local_has_identity, 0) = 0
+					OR (ls.local_device = b.local_device AND ls.local_inode = b.local_inode)
+					OR (
+						COALESCE(ls.item_type, '') = 'file'
+						AND COALESCE(ls.hash, '') <> '' AND ls.hash = b.local_hash
+						AND (b.local_size IS NULL OR ls.size = b.local_size)
+					)
+				)
 		)
 		-- A destination the other side filled with something else in the
 		-- meantime is not a move target: the source plays out as a delete
