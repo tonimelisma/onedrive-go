@@ -1,6 +1,6 @@
 # Sync Execution
 
-GOVERNS: internal/sync/action_freshness.go, internal/sync/active_scopes.go, internal/sync/dep_graph.go, internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_preconditions.go, internal/sync/executor_transfer.go, internal/sync/scope.go, internal/sync/worker.go
+GOVERNS: internal/sync/action_freshness.go, internal/sync/crash_points.go, internal/sync/active_scopes.go, internal/sync/dep_graph.go, internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_preconditions.go, internal/sync/executor_transfer.go, internal/sync/scope.go, internal/sync/worker.go
 
 LAYER: 3
 

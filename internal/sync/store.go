@@ -68,6 +68,10 @@ type SyncStore struct {
 	baselineMu stdsync.Mutex // guards baseline cache (Load is called from multiple workers)
 	logger     *slog.Logger
 	nowFunc    func() time.Time // injectable for deterministic tests
+	// crashAt, when set, is called at each crash point before a commit
+	// (crash_points.go): an error rolls the transaction back as a crash
+	// would. Test-only; nil in production.
+	crashAt func(point string) error
 
 	// contentDriveMu guards cachedContentDriveID only.
 	contentDriveMu       stdsync.RWMutex

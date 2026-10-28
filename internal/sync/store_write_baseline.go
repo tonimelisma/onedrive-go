@@ -389,6 +389,9 @@ func (s *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 	if applyErr := applySingleMutation(ctx, tx, outcome); applyErr != nil {
 		return applyErr
 	}
+	if err = s.reachCrashPoint(crashPointCommitOutcome); err != nil {
+		return err
+	}
 
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing outcome transaction: %w", err)

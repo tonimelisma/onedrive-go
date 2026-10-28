@@ -327,7 +327,15 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*testEngine, string) {
 func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMockClient) (*testEngine, string) {
 	t.Helper()
 
-	tmpDir := t.TempDir()
+	return newTestEngineInDir(t, ctx, mock, t.TempDir())
+}
+
+// newTestEngineInDir builds a test engine on tmpDir's data, test.db and sync,
+// creating whichever are missing: a fresh directory gives a fresh engine, one
+// an earlier engine left behind reopens its state (crash recovery tests).
+func newTestEngineInDir(t *testing.T, ctx context.Context, mock *engineMockClient, tmpDir string) (*testEngine, string) {
+	t.Helper()
+
 	dataDir := filepath.Join(tmpDir, "data")
 	dbPath := filepath.Join(tmpDir, "test.db")
 	syncRoot := filepath.Join(tmpDir, "sync")

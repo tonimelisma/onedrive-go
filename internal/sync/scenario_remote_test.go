@@ -704,3 +704,43 @@ func readScenarioUpload(content io.ReaderAt, size int64) (string, error) {
 
 	return string(data), nil
 }
+
+// clone is an independent copy of the drive as it is now, recycle bin,
+// versions and change log included: the OneDrive a crashed client meets when
+// it starts again (crash_points_test.go).
+func (r *moveScenarioRemote) clone() *moveScenarioRemote {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	c := &moveScenarioRemote{
+		driveID:             r.driveID,
+		items:               make(map[string]*graph.Item, len(r.items)),
+		contents:            make(map[string]string, len(r.contents)),
+		etagSeq:             r.etagSeq,
+		idSeq:               r.idSeq,
+		observedFolderETags: make(map[string]string, len(r.observedFolderETags)),
+		changeSeq:           r.changeSeq,
+		changedAt:           make(map[string]int, len(r.changedAt)),
+		tombstones:          make(map[string]deletedScenarioItem, len(r.tombstones)),
+		recycled:            append([]string(nil), r.recycled...),
+		versions:            append([]string(nil), r.versions...),
+	}
+	for id, item := range r.items {
+		copied := *item
+		c.items[id] = &copied
+	}
+	for id, content := range r.contents {
+		c.contents[id] = content
+	}
+	for id, etag := range r.observedFolderETags {
+		c.observedFolderETags[id] = etag
+	}
+	for id, seq := range r.changedAt {
+		c.changedAt[id] = seq
+	}
+	for id, tombstone := range r.tombstones {
+		c.tombstones[id] = tombstone
+	}
+
+	return c
+}

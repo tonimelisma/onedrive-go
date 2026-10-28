@@ -51,6 +51,11 @@ type executorConfig struct {
 	// driveops.WithDiskCheck when constructing the TransferManager.
 	transferMgr *driveops.TransferManager
 
+	// crashAt, when set, is called at each crash point (crash_points.go):
+	// an error stops the operation there as a crash would (D-091).
+	// Test-only; nil in production.
+	crashAt func(point string) error
+
 	// Injectable for testing.
 	nowFunc  func() time.Time
 	hashFunc func(filePath string) (string, error)
@@ -497,6 +502,10 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 		)
 	}
 
+	if err := e.reachCrashPoint(crashPointLocalMoveDone); err != nil {
+		return e.failedOutcomeWithFailure(action, ActionLocalMove, err, action.Path, permissionCapabilityUnknown)
+	}
+
 	e.logger.Debug("local move complete", slog.String("from", action.OldPath), slog.String("to", action.Path))
 
 	return e.moveOutcome(action)
@@ -629,6 +638,10 @@ func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) action
 			action.OldPath,
 			inferFailureCapabilityFromError(err, permissionCapabilityUnknown, permissionCapabilityRemoteWrite),
 		)
+	}
+
+	if crashErr := e.reachCrashPoint(crashPointRemoteMoveDone); crashErr != nil {
+		return e.failedOutcomeWithFailure(action, ActionRemoteMove, crashErr, action.OldPath, permissionCapabilityUnknown)
 	}
 
 	e.logger.Debug("remote move complete",
