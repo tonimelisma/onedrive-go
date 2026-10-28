@@ -112,10 +112,18 @@ Important properties:
   `TestHandleRemoteObservationBatch_SyncedFolderTombstonePullsFullRefreshForward`,
   `TestRunOnce_VirtualTime_FolderDeletesSpaceFullRefreshes`)
 - a full refresh whose lookup of an orphan failed keeps the item (absence is
-  not proof) and makes the next full refresh due within the same 15 minutes:
-  the delta position saved with the refresh never reports that item again,
-  so the next refresh, not a day-later one, has to judge it
-  (`TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward`)
+  not proof) and brings the next full refresh forward: the delta position
+  saved with the refresh never reports that item again, so the next refresh,
+  not a day-later one, has to judge it. The delay starts at 15 minutes and
+  doubles per consecutive undecided refresh up to the daily cadence
+  (`observation_state.undecided_refresh_streak`), so a lookup that keeps
+  failing does not re-enumerate the drive every 15 minutes forever; a refresh
+  that decides every orphan resets it. A shared-folder mount's complete
+  folder delta does the same; a mount listed in full every pass needs nothing,
+  as the next listing judges the orphan again
+  (`TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward`,
+  `TestFullRefresh_PermanentlyUndecidedOrphanBacksOff`,
+  `TestRunOnce_MountRootUndecidedOrphanPullsTheNextRescanForward`)
 - HTTP 410 delta expiry is surfaced as `deltaExpiredError`, which carries the
   resync flavor from the error's inner code; recovery is the engine's full
   refresh with orphan detection, in watch mode too (`SetDeltaExpiredRecovery`,

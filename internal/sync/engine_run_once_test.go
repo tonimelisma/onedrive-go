@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1595,4 +1597,80 @@ func TestRunOnce_FullRescanDropsUnsyncedRemoteStateOrphans(t *testing.T) {
 	require.NoError(t, eng.baseline.rawDB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM remote_state WHERE item_id = 'ghost'`).Scan(&count))
 	assert.Zero(t, count, "a full rescan that no longer lists an item drops its remote_state row")
+}
+
+// Validates: R-2.15.3, R-6.2.2
+//
+// A shared-folder mount syncing by folder delta has the drive root's problem:
+// a complete enumeration that keeps an orphan it could not confirm saves a
+// position that never reports the orphan again. The next complete
+// enumeration is pulled forward on the undecided-refresh backoff here too.
+func TestRunOnce_MountRootUndecidedOrphanPullsTheNextRescanForward(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	dataHash := hashContentQuickXor(t, "data")
+	both, failLookup := true, false
+	item := func(id, name string) graph.Item {
+		return graph.Item{ID: id, Name: name, ParentID: "mount-root-root", DriveID: driveID, Size: 4, QuickXorHash: dataHash}
+	}
+	mock := &engineMockClient{
+		folderDeltaFn: func(_ context.Context, _ driveid.ID, _, _ string) ([]graph.Item, string, error) {
+			items := []graph.Item{item("remote-keep", "keep.txt")}
+			if both {
+				items = append(items, item("remote-gone", "gone.txt"))
+			}
+			return items, "scoped-token", nil
+		},
+		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			if itemID == "remote-gone" && failLookup {
+				return nil, &graph.GraphError{StatusCode: http.StatusServiceUnavailable, Err: graph.ErrServerError}
+			}
+			found := item(itemID, strings.TrimPrefix(itemID, "remote-")+".txt")
+			return &found, nil
+		},
+		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write([]byte("data"))
+			return int64(n), err
+		},
+	}
+
+	tmpDir := t.TempDir()
+	syncRoot := filepath.Join(tmpDir, "sync")
+	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
+	eng, err := newEngine(t.Context(), &engineInputs{
+		DBPath:                 filepath.Join(tmpDir, "test.db"),
+		SyncRoot:               syncRoot,
+		DriveID:                driveID,
+		RemoteRootItemID:       "mount-root-root",
+		RemoteRootDeltaCapable: true,
+		Fetcher:                mock,
+		Items:                  mock,
+		Downloads:              mock,
+		Uploads:                mock,
+		FolderDelta:            mock,
+		RecursiveLister:        mock,
+		PermChecker:            mock,
+		Logger:                 testLogger(t),
+	})
+	require.NoError(t, err)
+	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
+	installManualClock(eng, clock)
+	t.Cleanup(func() {
+		assert.NoError(t, eng.Close(t.Context()))
+	})
+
+	_, err = eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
+	require.NoError(t, err)
+
+	both, failLookup = false, true
+	_, err = eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{FullReconcile: true})
+	require.NoError(t, err)
+
+	state, err := eng.baseline.ReadObservationState(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, state.UndecidedRefreshStreak)
+	assert.LessOrEqual(t, state.NextFullRemoteRefreshAt, clock.Now().Add(fullRefreshAfterFolderDeleteDelay).UnixNano(),
+		"the next complete enumeration is pulled forward")
+	assert.FileExists(t, filepath.Join(syncRoot, "gone.txt"), "an undecided orphan is kept")
 }

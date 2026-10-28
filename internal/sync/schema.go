@@ -29,7 +29,11 @@ const (
 	// Generation 20 records the local inode change time (baseline.local_ctime,
 	// local_state.ctime) so the hash fast path can see an in-place edit that
 	// restored the old mtime (R-2.2.4).
-	currentSyncStoreGeneration = 20
+	//
+	// Generation 21 counts consecutive full refreshes that left an orphan
+	// undecided (observation_state.undecided_refresh_streak), so the refresh
+	// it pulls forward backs off instead of re-enumerating every 15 minutes.
+	currentSyncStoreGeneration = 21
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -69,7 +73,8 @@ CREATE TABLE IF NOT EXISTS observation_state (
     sync_root_inode             INTEGER NOT NULL DEFAULT 0,
     sync_root_fsid              INTEGER NOT NULL DEFAULT 0,
     sync_root_token             TEXT    NOT NULL DEFAULT '',
-    sync_root_rebind            INTEGER NOT NULL DEFAULT 0 CHECK(sync_root_rebind IN (0, 1))
+    sync_root_rebind            INTEGER NOT NULL DEFAULT 0 CHECK(sync_root_rebind IN (0, 1)),
+    undecided_refresh_streak    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS pending_creates (
@@ -201,7 +206,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"content_drive_id", "cursor", "next_full_remote_refresh_at",
 			"local_truth_complete", "local_truth_recovery_reason",
 			"sync_root_bound", "sync_root_device", "sync_root_inode", "sync_root_fsid",
-			"sync_root_token", "sync_root_rebind",
+			"sync_root_token", "sync_root_rebind", "undecided_refresh_streak",
 		},
 		"remote_state": {
 			"drive_id", "item_id", "path", "item_type", "hash", "size", "mtime", "etag",

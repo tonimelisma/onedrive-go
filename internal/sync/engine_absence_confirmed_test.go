@@ -121,7 +121,7 @@ func TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing(t *te
 		{ItemID: "unresolvable", Path: "g.txt", Type: ChangeDelete, IsDeleted: true},
 	}
 
-	confirmed := eng.confirmMountRootOrphans(t.Context(), listed, orphans)
+	confirmed, _ := eng.confirmMountRootOrphans(t.Context(), listed, orphans)
 
 	var ids []string
 	for i := range confirmed {
@@ -294,4 +294,81 @@ func TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward(t *testing.T) {
 
 	requireScenarioLocalFile(t, h.syncRoot, "a.txt/inside.txt", "inside\n")
 	assertSyncInvariants(t, h)
+}
+
+// Validates: R-2.15.3, R-6.2.2
+//
+// An orphan whose lookup never succeeds must not cost a whole-drive
+// enumeration every 15 minutes forever: the pulled-forward refresh backs off
+// while the orphan stays undecided (doubling from 15 minutes towards the
+// daily cadence), and once a refresh decides it the normal cadence returns.
+func TestFullRefresh_PermanentlyUndecidedOrphanBacksOff(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	const fileID = "item-a"
+	remote.addFile(t, fileID, "root", "a.txt", "file\n")
+	// Other content, so the one delete is not an emptied side the
+	// delete-safety hold would keep for confirmation.
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	client := remote.client(t)
+	getItem := client.getItemFn
+	failLookup := false
+	client.getItemFn = func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
+		if failLookup && itemID == fileID {
+			return nil, &graph.GraphError{StatusCode: http.StatusServiceUnavailable, Err: graph.ErrServerError}
+		}
+		return getItem(ctx, driveID, itemID)
+	}
+	h := newSyncHarnessWithClient(t, remote, client)
+	clock := &modelClock{}
+	h.eng.clock = clock
+	runScenarioPass(t, h.eng)
+
+	remote.deleteAt(t, "a.txt")
+	failLookup = true
+	_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{FullReconcile: true})
+	require.NoError(t, err)
+
+	// Six and a half hours of passes every 16 minutes: refreshes are due
+	// 15, 30, 60, 120 and 240 minutes apart, so at most five run (without
+	// the backoff, one every pass: 24).
+	before := remote.fullDeltaCount()
+	const passes = 24
+	for range passes {
+		clock.advance(fullRefreshAfterFolderDeleteDelay + time.Minute)
+		_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		require.NoError(t, err)
+	}
+	backedOff := remote.fullDeltaCount() - before
+	assert.GreaterOrEqual(t, backedOff, 3, "the undecided orphan is still re-checked")
+	assert.LessOrEqual(t, backedOff, 5, "the re-checks back off")
+
+	// The lookup recovers: the next due refresh (at most eight hours on)
+	// decides the orphan, and the daily cadence returns.
+	failLookup = false
+	for range 2 * passes {
+		clock.advance(fullRefreshAfterFolderDeleteDelay + time.Minute)
+		_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		require.NoError(t, err)
+	}
+	assert.NoFileExists(t, filepath.Join(h.syncRoot, "a.txt"), "the decided orphan is applied")
+	settled := remote.fullDeltaCount()
+	for range passes {
+		clock.advance(fullRefreshAfterFolderDeleteDelay + time.Minute)
+		_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		require.NoError(t, err)
+	}
+	assert.Equal(t, settled, remote.fullDeltaCount(), "no early refresh once nothing is undecided")
+}
+
+// Validates: R-2.15.3
+func TestUndecidedRefreshDelay_DoublesToTheDailyCadence(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 15*time.Minute, undecidedRefreshDelay(1))
+	assert.Equal(t, 30*time.Minute, undecidedRefreshDelay(2))
+	assert.Equal(t, 2*time.Hour, undecidedRefreshDelay(4))
+	assert.Equal(t, fullRemoteRefreshInterval, undecidedRefreshDelay(8))
+	assert.Equal(t, fullRemoteRefreshInterval, undecidedRefreshDelay(1000))
 }

@@ -140,7 +140,7 @@ func TestMountRootEvents_ResyncFlavorDecidesWhatAnOrphanMeans(t *testing.T) {
 		{kind: resyncKindUploadDifferences, wantReupload: true},
 		{kind: resyncKindUnknown, wantReupload: true},
 	} {
-		events := eng.mountRootEvents(t.Context(), nil, bl, true, tt.kind)
+		events, _ := eng.mountRootEvents(t.Context(), nil, bl, true, tt.kind)
 		require.Len(t, events, 1, "kind %d", tt.kind)
 		assert.True(t, events[0].IsDeleted)
 		assert.Equal(t, tt.wantReupload, events[0].ReuploadLocal, "kind %d", tt.kind)

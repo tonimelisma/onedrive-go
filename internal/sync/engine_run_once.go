@@ -250,8 +250,18 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 		); err != nil {
 			return false, fmt.Errorf("sync: marking full remote refresh: %w", err)
 		}
+		// An orphan the refresh could not confirm needs another full
+		// enumeration (the saved delta position never reports it again),
+		// sooner than the normal cadence but backing off while it stays
+		// undecided.
+		deadlineChanged, err := flow.deps.store.RecordFullRefreshOrphans(
+			ctx, flow.engine.driveID, flow.deps.now(), observation.orphansUndecided,
+		)
+		if err != nil {
+			return false, fmt.Errorf("sync: recording undecided orphans: %w", err)
+		}
 		if !observation.fullRefreshDueSoon {
-			return false, nil
+			return deadlineChanged, nil
 		}
 	}
 	if observation.fullRefreshDueSoon {

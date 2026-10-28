@@ -358,6 +358,14 @@ func (r *moveScenarioRemote) moveAt(t *testing.T, fromPath, toPath string) {
 	r.moveLocked(item.ID, parent.ID, path.Base(toPath))
 }
 
+// fullDeltaCount is how many full enumerations delta has served.
+func (r *moveScenarioRemote) fullDeltaCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return len(r.fullDeltaAt)
+}
+
 // shuffleDelta makes every later delta page a seeded permutation.
 func (r *moveScenarioRemote) shuffleDelta(seed uint64) {
 	r.mu.Lock()
