@@ -87,15 +87,16 @@ func openEngineSyncStore(ctx context.Context, dbPath string, logger *slog.Logger
 			return store, nil
 		}
 		if closeErr := store.Close(ctx); closeErr != nil {
-			logger.Warn("close damaged sync store", slog.String("db_path", dbPath), slog.String("error", closeErr.Error()))
+			logger.Warn("close sync store after a failed integrity check",
+				slog.String("db_path", dbPath), slog.String("error", closeErr.Error()))
 		}
-		logger.Error("sync state DB failed its integrity check",
-			slog.String("db_path", dbPath), slog.String("error", checkErr.Error()))
+		failure := integrityCheckFailure(checkErr)
+		if IsStateStoreIncompatible(failure) {
+			logger.Error("sync state DB failed its integrity check",
+				slog.String("db_path", dbPath), slog.String("error", checkErr.Error()))
+		}
 
-		return nil, &StateStoreIncompatibleError{
-			Reason: StateStoreIncompatibleReasonCorrupt,
-			Cause:  checkErr,
-		}
+		return nil, failure
 	}
 	if !stateDBFamilyExists(dbPath) {
 		return nil, err
@@ -154,10 +155,35 @@ func checkStoreIntegrity(ctx context.Context, store *SyncStore) error {
 		return fmt.Errorf("read sync store quick_check result: %w", err)
 	}
 	if len(findings) > 0 {
-		return fmt.Errorf("sync store quick_check: %s", strings.Join(findings, "; "))
+		return &quickCheckFindingsError{findings: findings}
 	}
 
 	return nil
+}
+
+// quickCheckFindingsError is quick_check reporting damage: the only check
+// result, besides SQLITE_CORRUPT, that means the file is damaged.
+type quickCheckFindingsError struct {
+	findings []string
+}
+
+func (e *quickCheckFindingsError) Error() string {
+	return "sync store quick_check: " + strings.Join(e.findings, "; ")
+}
+
+// integrityCheckFailure maps a failed integrity check to what startup
+// reports. Damage (quick_check findings, SQLITE_CORRUPT) is the corrupt
+// store-incompatible error with its reset guidance. Anything else -- a
+// canceled context, SQLITE_BUSY, an I/O or scan error -- says nothing about
+// the file and is returned as an ordinary failure, so a transient problem
+// never steers the user to delete their sync state.
+func integrityCheckFailure(err error) error {
+	var findings *quickCheckFindingsError
+	if errors.As(err, &findings) || isSQLiteCorruption(err) {
+		return &StateStoreIncompatibleError{Reason: StateStoreIncompatibleReasonCorrupt, Cause: err}
+	}
+
+	return fmt.Errorf("check the sync state DB: %w", err)
 }
 
 // isSQLiteCorruption reports whether err carries SQLITE_CORRUPT, which SQLite

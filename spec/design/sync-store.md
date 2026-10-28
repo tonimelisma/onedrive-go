@@ -120,7 +120,7 @@ and every other significant type in the tree already matched its own name
 | The baseline cache stays the one object callers hold across full rebuilds, and planning uses the baseline of its own comparison snapshot. | `TestCommitMutation_FolderMoveKeepsHeldBaselinePointerCurrent`, `TestPlanning_UsesBaselineFromTheComparisonSnapshot` |
 | A folder re-created online (new item ID, same path) rebinds the baseline and its children's parent, and uploads land in the live folder; a full rescan where every item has a new ID plans no transfers (R-2.10.49). | `TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate`, `TestCommitMutation_FolderReboundAtSamePathRebindsItsChildren`, `TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem`, `TestRunOnce_FullRescanWithEveryFolderReboundPlansNoTransfers` |
 | One observation window converges to the same remote_state whatever its order: swaps, renames onto a freed name, create-before-move-away, delete and re-create across pages, a folder moved out of a deleted folder, and a full rescan's late orphan delete raise no remote name twin (R-2.12.7). | `TestCommitObservation_PathSwapInOneWindow`, `TestCommitObservation_CreateAtPathBeforeOccupantRenamedAway`, `TestCommitObservation_DeleteAndRecreateSamePathAcrossPages`, `TestCommitObservation_FolderMovedOutOfADeletedFolderKeepsItsSubtree`, `TestCommitObservation_RepeatedItemInOneWindowUsesItsLastObservation`, `TestCommitObservation_SubtreeRepathOntoAHeldPathKeepsBothApart`, `TestCommitObservation_WindowResultIsOrderIndependent`, `TestRunOnce_FullRescanWithItemReplacedAtSamePath` |
-| Engine startup refuses a state DB that fails `PRAGMA quick_check` with the `corrupt` reason and reset guidance, instead of planning from a damaged `remote_state` (R-2.5.8). | `TestNewEngine_RequiresResetForCorruptStateDB` |
+| Engine startup refuses a state DB that fails `PRAGMA quick_check` with the `corrupt` reason and reset guidance, instead of planning from a damaged `remote_state`; a check that fails for any other reason is an ordinary failure (R-2.5.8). | `TestNewEngine_RequiresResetForCorruptStateDB`, `TestIntegrityCheckFailure_OnlyDamageIsCorrupt`, `TestCheckStoreIntegrity_CanceledCheckIsNotDamage` |
 | A successful upload, download, folder create or move without a remote item ID is refused, because `item_id` is the baseline's primary key (R-2.5.7). | `TestCommitMutation_EmptyItemIDFails` |
 | A folder move re-paths its subtree's baseline rows in the move transaction and in the cache. | `TestCommitMutation_FolderMoveRepathsSubtree`, `TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn` |
 | Local filesystem identity is persisted as generic truth for files and directories in `local_state` and `baseline`, allowing local move detection without shortcut-specific sibling scans; a full scan backfills identity onto baseline rows that predate it when the item is provably unchanged. | `TestReplaceLocalState_PersistsFilesystemIdentity`, `TestReplaceLocalState_BackfillsBaselineIdentityForUnchangedItems`, `TestRunOnce_LegacyFolderBaselineGainsIdentityAndMovesAsOne`, `TestCommitMutation_PersistsLocalFilesystemIdentity`, `TestQueryReconciliationState_LocalFolderMoveUsesFilesystemIdentity` |
@@ -507,7 +507,10 @@ Two store-owned helpers isolate DB lifecycle policy:
   with the same reset guidance (R-2.5.8). A damaged `remote_state` b-tree can
   hide rows, and a hidden row reads as a remote delete, so startup refuses the
   DB instead of planning from it. `quick_check` skips `integrity_check`'s
-  index cross-check, which keeps it linear and cheap enough for every open
+  index cross-check, which keeps it linear and cheap enough for every open.
+  Only damage is `corrupt`: a check that fails for another reason (a
+  canceled context, `SQLITE_BUSY`, an I/O or scan error) is an ordinary
+  startup failure, never a reason to reset (`integrityCheckFailure`)
 - `store_reset.go` deletes one drive's DB file family and recreates a fresh
   canonical DB in place
 
