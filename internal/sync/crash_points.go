@@ -4,8 +4,9 @@ package sync
 // that instant leaves its effects half recorded: the mutation done on one
 // side, the state database not yet told. A test hook (executorConfig.crashAt,
 // SyncStore.crashAt) is called at each one; production leaves both nil, and
-// reachCrashPoint is then a no-op. Recovery from every point must converge
-// with nothing lost when a fresh engine reopens the same database and tree.
+// each type's reachCrashPoint is then a no-op. Recovery from every point must
+// converge with nothing lost when a fresh engine reopens the same database and
+// tree.
 const (
 	// crashPointRemoteMoveDone: OneDrive moved the item; the outcome is not
 	// committed.
@@ -26,19 +27,3 @@ const (
 	// transaction is not committed.
 	crashPointCommitOutcome = "store.commit_outcome"
 )
-
-func (cfg *executorConfig) reachCrashPoint(point string) error {
-	if cfg == nil || cfg.crashAt == nil {
-		return nil
-	}
-
-	return cfg.crashAt(point)
-}
-
-func (s *SyncStore) reachCrashPoint(point string) error {
-	if s == nil || s.crashAt == nil {
-		return nil
-	}
-
-	return s.crashAt(point)
-}

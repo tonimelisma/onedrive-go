@@ -969,3 +969,12 @@ func fillRemoteOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {
 		o.ETag = baseline.ETag
 	}
 }
+
+// reachCrashPoint calls the crash hook at point (crash_points.go).
+func (cfg *executorConfig) reachCrashPoint(point string) error {
+	if cfg == nil || cfg.crashAt == nil {
+		return nil
+	}
+
+	return cfg.crashAt(point)
+}

@@ -218,3 +218,12 @@ func nullKnownInt64(n int64, known bool) sql.NullInt64 {
 
 	return sql.NullInt64{Int64: n, Valid: true}
 }
+
+// reachCrashPoint calls the crash hook at point (crash_points.go).
+func (s *SyncStore) reachCrashPoint(point string) error {
+	if s == nil || s.crashAt == nil {
+		return nil
+	}
+
+	return s.crashAt(point)
+}
