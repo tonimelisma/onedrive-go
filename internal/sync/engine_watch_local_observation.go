@@ -1,10 +1,6 @@
 package sync
 
-import (
-	"context"
-	"slices"
-	"strings"
-)
+import "context"
 
 func (rt *watchRuntime) handleWatchLocalObservationBatch(
 	ctx context.Context,
@@ -42,16 +38,14 @@ func (rt *watchRuntime) applyLocalObservationBatch(
 	}
 
 	if batch.fullSnapshot {
-		currentRows, err := rt.deps.store.ListLocalState(ctx)
+		// The store writes only the rows that differ, so an idle safety
+		// scan costs no row writes (D-081a).
+		changed, err := rt.deps.store.ReplaceLocalStateReportingChange(ctx, batch.rows)
 		if err != nil {
 			return false, err
 		}
-		changed := batch.dirty || !sameLocalStateRows(currentRows, batch.rows)
-		if err := rt.deps.store.ReplaceLocalState(ctx, batch.rows); err != nil {
-			return false, err
-		}
 		rt.engine.collector().RecordLocalObservationFullSnapshotReplacement()
-		return changed, nil
+		return batch.dirty || changed, nil
 	}
 
 	changed := batch.dirty ||
@@ -77,20 +71,4 @@ func (rt *watchRuntime) applyLocalObservationBatch(
 	)
 
 	return true, nil
-}
-
-func sameLocalStateRows(a []localStateRow, b []localStateRow) bool {
-	if len(a) != len(b) {
-		return false
-	}
-
-	left := append([]localStateRow(nil), a...)
-	right := append([]localStateRow(nil), b...)
-	slices.SortFunc(left, compareLocalStateRowsByPath)
-	slices.SortFunc(right, compareLocalStateRowsByPath)
-	return slices.Equal(left, right)
-}
-
-func compareLocalStateRowsByPath(a localStateRow, b localStateRow) int {
-	return strings.Compare(a.Path, b.Path)
 }

@@ -26,9 +26,11 @@ var errActionPreconditionChanged = errors.New("file changed while it was being s
 // or become inaccessible while a watch was running.
 var errSyncRootDeleted = errors.New("it was deleted or can't be read")
 
-// errWatchLimitExhausted is returned when the inotify watch limit is
-// exhausted (Linux ENOSPC). The engine falls back to periodic full scans.
-var errWatchLimitExhausted = errors.New("inotify watch limit reached")
+// errLocalWatchUnavailable is matched (through localWatchUnavailableError)
+// when the operating system cannot give watch mode the watches it needs: the
+// inotify watch or instance limit, the open-file limit, kernel memory, or the
+// kqueue descriptor budget. The engine falls back to periodic full scans.
+var errLocalWatchUnavailable = errors.New("local change watching unavailable")
 
 // errDeltaExpired indicates the saved delta token has expired and a full
 // resync is required. Returned when the Graph API responds with HTTP 410.

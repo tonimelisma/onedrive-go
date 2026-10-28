@@ -326,13 +326,14 @@ func TestLoadCurrentInputsStageTx_ReadsSnapshotWritesFromProvidedTransaction(t *
 		require.NoError(t, tx.Rollback())
 	}()
 
-	require.NoError(t, replaceLocalStateTx(ctx, tx, []localStateRow{{
+	_, err = replaceLocalStateTx(ctx, tx, []localStateRow{{
 		Path:     "tx-only.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash",
 		Size:     4,
 		Mtime:    5,
-	}}))
+	}})
+	require.NoError(t, err)
 
 	inputs, err := flow.loadCurrentInputsTx(ctx, eng.baseline, tx, eng.driveID)
 	require.NoError(t, err)

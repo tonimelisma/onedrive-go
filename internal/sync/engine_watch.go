@@ -34,7 +34,10 @@ const (
 
 const (
 	localWatchHealthySafetyScanInterval = 5 * time.Minute
-	localWatchDegradedFullScanInterval  = time.Hour
+	// While watching is unavailable, establishing it is retried after
+	// localWatchRetryInitialDelay, doubling to localWatchRetryMaxDelay.
+	localWatchRetryInitialDelay = 10 * time.Minute
+	localWatchRetryMaxDelay     = time.Hour
 )
 
 // quiescenceLogInterval is how often bootstrapSync logs while waiting
@@ -417,24 +420,67 @@ func (rt *watchRuntime) startLocalObserver(
 		defer close(protectedRootEvents)
 		defer recoverObserverPanic(rt.deps.logger, observerNameLocal, errs)
 
-		watchErr := localObs.Watch(ctx, rt.engine.syncTree, nil)
-		if errors.Is(watchErr, errWatchLimitExhausted) {
-			rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
-			rt.deps.logger.Warn("Too many folders to watch for changes (system inotify limit reached). "+
-				"Local changes will be noticed every "+waitText(localWatchDegradedFullScanInterval)+
-				" instead of at once. To fix: sudo sysctl -w fs.inotify.max_user_watches=524288",
-				slog.Duration("scan_interval", localWatchDegradedFullScanInterval),
-			)
+		errs <- rt.watchLocalWithFallback(ctx, localObs)
+	}()
+}
 
-			rt.runPeriodicFullScan(ctx, localObs, rt.engine.syncTree, nil, localWatchDegradedFullScanInterval)
-			rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal})
-			errs <- nil // clean exit after context cancel
+// watchLocalWithFallback runs the local watcher and, while the operating
+// system cannot provide the watches it needs, falls back to periodic full
+// scans and retries the watcher with backoff. It returns the observer's exit
+// error, or nil on shutdown.
+//
+// The fallback used to scan hourly for the rest of the session: a transient
+// limit (another program briefly holding inotify instances or descriptors)
+// degraded the session forever, the first scan came an hour late, and the
+// write-coalescing hashes and recovery scan the stopped watcher had pending
+// were simply lost. Now the fallback scans at once, then at the normal
+// safety-scan interval, and tries to watch again after 10 minutes, doubling
+// to an hour while the limit persists.
+func (rt *watchRuntime) watchLocalWithFallback(ctx context.Context, localObs *localObserver) error {
+	tree := rt.engine.syncTree
+	retryDelay := localWatchRetryInitialDelay
+	var warnedCause watchUnavailableCause
 
-			return
+	for {
+		watchStart := rt.deps.now()
+		watchErr := localObs.Watch(ctx, tree, nil)
+		cause, ok := watchUnavailableCauseOf(watchErr)
+		if !ok {
+			return observerExitError(observerNameLocal, watchErr)
+		}
+		if rt.deps.since(watchStart) >= localWatchRetryMaxDelay {
+			// Watching worked for a long stretch before failing again: this
+			// is a new episode, not a persisting limit.
+			retryDelay = localWatchRetryInitialDelay
 		}
 
-		errs <- observerExitError(observerNameLocal, watchErr)
-	}()
+		interval := localObs.effectiveSafetyScanInterval()
+		rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal})
+		if cause != warnedCause {
+			warnedCause = cause
+			rt.deps.logger.Warn("Cannot watch the sync folder for changes ("+watchUnavailableReason(cause)+"). "+
+				"Local changes will be noticed every "+waitText(interval)+
+				" instead of at once; watching will be retried. To fix: "+watchUnavailableFix(cause),
+				slog.Duration("scan_interval", interval),
+				slog.Duration("retry_after", retryDelay),
+				slog.String("error", watchErr.Error()),
+			)
+		} else {
+			rt.deps.logger.Debug("watching the sync folder is still unavailable",
+				slog.Duration("retry_after", retryDelay),
+				slog.String("error", watchErr.Error()),
+			)
+		}
+
+		retryDue := rt.runPeriodicFullScan(ctx, localObs, tree, nil, interval, retryDelay)
+		rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal})
+		if !retryDue {
+			return nil // clean exit after context cancel
+		}
+
+		retryDelay = min(2*retryDelay, localWatchRetryMaxDelay)
+		rt.deps.logger.Info("retrying to watch the sync folder for changes")
+	}
 }
 
 func (rt *watchRuntime) startRemoteObserver(
@@ -534,22 +580,36 @@ func (rt *watchRuntime) emitSocketIOLifecycleEvent(event socketIOLifecycleEvent)
 	rt.deps.emit(debugEvent)
 }
 
-// runPeriodicFullScan runs periodic full filesystem scans as a fallback when
-// inotify watch limits are exhausted. Blocks until the context is canceled.
-// Each scan's events are forwarded to the events channel via trySend.
+// runPeriodicFullScan runs full filesystem scans while watching is
+// unavailable: one at once (it also covers whatever the stopped watcher had
+// pending), then every interval. It returns true when retryAfter has passed
+// and the caller should try to watch again, false when the context ended.
 func (rt *watchRuntime) runPeriodicFullScan(
 	ctx context.Context, obs *localObserver, tree *synctree.Root,
-	events chan<- changeEvent, interval time.Duration,
-) {
+	events chan<- changeEvent, interval time.Duration, retryAfter time.Duration,
+) bool {
 	ticker := rt.deps.clock.NewTicker(interval)
 	defer stopTicker(ticker)
 
+	retryCh := make(chan struct{}, 1)
+	retryTimer := rt.deps.clock.AfterFunc(retryAfter, func() {
+		select {
+		case retryCh <- struct{}{}:
+		default:
+		}
+	})
+	defer retryTimer.Stop()
+
 	rt.deps.logger.Info("periodic full scan fallback started",
 		slog.Duration("interval", interval),
+		slog.Duration("retry_after", retryAfter),
 	)
 
 	// scanFailing keeps a persistent scan failure to one Warn per streak.
 	scanFailing := false
+	if !rt.runFallbackScan(ctx, obs, tree, events, &scanFailing) {
+		return false
+	}
 	for {
 		select {
 		case <-tickerChan(ticker):
@@ -557,45 +617,61 @@ func (rt *watchRuntime) runPeriodicFullScan(
 			// when multiple drives fire periodic scans simultaneously.
 			if jitter := interval / periodicScanJitterDivisor; jitter > 0 {
 				if err := rt.deps.clock.Sleep(ctx, rt.deps.clock.Jitter(jitter)); err != nil {
-					return
+					return false
 				}
 			}
-
-			result, err := obs.FullScan(ctx, tree)
-			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-
-				level := slog.LevelDebug
-				if !scanFailing {
-					level = slog.LevelWarn
-				}
-				scanFailing = true
-				rt.deps.logger.Log(ctx, level, "Could not rescan the sync folder; will retry",
-					slog.String("error", err.Error()),
-				)
-
-				continue
+			if !rt.runFallbackScan(ctx, obs, tree, events, &scanFailing) {
+				return false
 			}
-			scanFailing = false
-
-			obs.TrySendFullLocalSnapshot(ctx, result)
-
-			// Forward events only — skipped items are logged at DEBUG.
-			// The primary scan and safety scan handle persisting observation issues.
-			for i := range result.Events {
-				obs.TrySendChangeEventOnly(ctx, events, &result.Events[i])
-			}
-
-			if len(result.Skipped) > 0 {
-				rt.deps.logger.Debug("periodic scan: skipped items",
-					slog.Int("count", len(result.Skipped)))
-			}
+		case <-retryCh:
+			return true
 		case <-ctx.Done():
-			return
+			return false
 		}
 	}
+}
+
+// runFallbackScan runs one full scan and hands its snapshot to the runtime.
+// It returns false when the context ended.
+func (rt *watchRuntime) runFallbackScan(
+	ctx context.Context, obs *localObserver, tree *synctree.Root,
+	events chan<- changeEvent, scanFailing *bool,
+) bool {
+	result, err := obs.FullScan(ctx, tree)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false
+		}
+
+		level := slog.LevelDebug
+		if !*scanFailing {
+			level = slog.LevelWarn
+		}
+		*scanFailing = true
+		rt.deps.logger.Log(ctx, level, "Could not rescan the sync folder; will retry",
+			slog.String("error", err.Error()),
+		)
+		obs.TrySendLocalTruthSuspect(ctx, localTruthRecoveryFullScanFailed)
+
+		return true
+	}
+	*scanFailing = false
+
+	obs.TrySendFullLocalSnapshot(ctx, result)
+
+	// Forward events only — skipped items are logged at DEBUG.
+	// The primary scan and safety scan handle persisting observation issues.
+	for i := range result.Events {
+		obs.TrySendChangeEventOnly(ctx, events, &result.Events[i])
+	}
+
+	if len(result.Skipped) > 0 {
+		rt.deps.logger.Debug("periodic scan: skipped items",
+			slog.Int("count", len(result.Skipped)))
+	}
+	rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverFallbackScanned, Observer: engineDebugObserverLocal})
+
+	return true
 }
 
 // resolvePollInterval returns the configured poll interval or the default.

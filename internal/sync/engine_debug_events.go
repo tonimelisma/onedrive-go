@@ -17,6 +17,7 @@ const (
 	engineDebugEventObserverExited                      engineDebugEventType = "observer_exited"
 	engineDebugEventObserverFallbackStarted             engineDebugEventType = "observer_fallback_started"
 	engineDebugEventObserverFallbackStopped             engineDebugEventType = "observer_fallback_stopped"
+	engineDebugEventObserverFallbackScanned             engineDebugEventType = "observer_fallback_scanned"
 	engineDebugEventWatchStopped                        engineDebugEventType = "watch_stopped"
 	engineDebugEventShutdownStarted                     engineDebugEventType = "shutdown_started"
 	engineDebugEventRetryTimerArmed                     engineDebugEventType = "retry_timer_armed"

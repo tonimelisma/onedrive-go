@@ -23,6 +23,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -44,10 +46,7 @@ func (o *localObserver) watchLoop(
 	ctx context.Context, watcher fsWatcher, tree *synctree.Root, events chan<- changeEvent,
 ) error {
 	syncRoot := tree.Path()
-	interval := o.safetyScanInterval
-	if interval == 0 {
-		interval = safetyScanInterval
-	}
+	interval := o.effectiveSafetyScanInterval()
 
 	ticker := o.clock.NewTicker(interval)
 	defer stopTicker(ticker)
@@ -66,6 +65,9 @@ func (o *localObserver) watchLoop(
 			}
 
 			o.HandleFsEvent(ctx, fsEvent, watcher, tree, events)
+			if o.watchUnavailable != nil {
+				return o.watchUnavailable
+			}
 
 			// Successful event resets error backoff.
 			errBackoff.Reset()
@@ -74,55 +76,173 @@ func (o *localObserver) watchLoop(
 			// Deferred hash from write coalesce timer (B-107).
 			o.HashAndEmit(ctx, tree, req, events)
 
+		case <-o.recoveryScanRequests:
+			o.armRecoveryScan()
+
+		case gen := <-o.recoveryScanDue:
+			if err := o.runDueRecoveryScan(ctx, tree, events, gen); err != nil {
+				return err
+			}
+
 		case watchErr, ok := <-watcher.Errors():
 			if !ok {
 				return nil
 			}
 
-			// Self-healing: local truth is marked for a rescan. The first
-			// error of a streak is Info; repeats under sustained kernel
-			// queue overflow are Debug.
-			delay := errBackoff.Next()
-			watcherErrLevel := slog.LevelDebug
-			if errBackoff.Consecutive() <= 1 {
-				watcherErrLevel = slog.LevelInfo
-			}
-			o.logger.Log(ctx, watcherErrLevel, "filesystem watcher error; rescanning the sync folder",
-				slog.String("error", watchErr.Error()),
-				slog.Duration("backoff", delay),
-			)
-			o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryWatcherError)
-
-			// Exponential backoff prevents tight loop under sustained errors
-			// (e.g., kernel buffer overflow).
-			if sleepErr := o.clock.Sleep(ctx, delay); sleepErr != nil {
-				return nil
-			}
-
-			// After watcher error, check if sync root still exists (B-113).
-			// A deleted root means the watcher is watching nothing.
-			if !syncRootExists(syncRoot) {
-				// Debug: the returned error is reported once by the watch
-				// runtime.
-				o.logger.Debug("sync root deleted, stopping watch",
-					slog.String("sync_root", syncRoot))
-
-				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
+			if stop, err := o.handleWatcherError(ctx, watchErr, errBackoff, syncRoot); stop {
+				return err
 			}
 
 		case <-tickCh:
-			// Check if sync root still exists before running safety scan (B-113).
-			if !syncRootExists(syncRoot) {
-				o.logger.Debug("sync root deleted, stopping watch",
-					slog.String("sync_root", syncRoot))
-
-				return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
+			if err := o.rescanUnlessRootGone(ctx, tree, events); err != nil {
+				return err
 			}
-
-			o.runSafetyScan(ctx, tree, events)
 			errBackoff.Reset()
 		}
 	}
+}
+
+// maxRewatchPerScan bounds how many missing watches one full scan re-adds, so
+// a scan after a large unwatched tree appeared does not stall the watch loop
+// on thousands of Add calls; the rest are added by later scans.
+const maxRewatchPerScan = 256
+
+// rewatchUnwatchedDirectories adds watches for directories a full scan found
+// that have none. Event-driven registration misses directories created while
+// events were lost (a queue overflow) and directories whose Add failed
+// (ENOSPC, ENOMEM, EACCES); before this they stayed unwatched for the rest of
+// the session, every change in them waiting for the next safety scan. A
+// failed Add is not remembered: the next full scan tries again. A resource
+// limit ends the pass early.
+func (o *localObserver) rewatchUnwatchedDirectories(tree *synctree.Root, rows []localStateRow) {
+	if o.activeWatcher == nil || tree == nil {
+		return
+	}
+
+	dirs := []string{"."}
+	for i := range rows {
+		if rows[i].ItemType == ItemTypeFolder {
+			dirs = append(dirs, rows[i].Path)
+		}
+	}
+	// Parents before children: a child's events only arrive once its
+	// parent is watched.
+	slices.SortFunc(dirs, func(a, b string) int {
+		if depth := strings.Count(a, "/") - strings.Count(b, "/"); depth != 0 {
+			return depth
+		}
+		return strings.Compare(a, b)
+	})
+
+	added := 0
+	for _, rel := range dirs {
+		if added >= maxRewatchPerScan {
+			return
+		}
+		fsPath := tree.Path()
+		if rel != "." {
+			fsPath = filepath.Join(fsPath, filepath.FromSlash(rel))
+		}
+		if o.watchedDirs.has(fsPath) {
+			continue
+		}
+
+		if addErr := o.activeWatcher.Add(fsPath); addErr != nil {
+			o.reportWatchAddFailure("failed to re-add watch after full scan", rel, addErr)
+			if _, isLimit := classifyWatchAddError(addErr); isLimit {
+				return
+			}
+			continue
+		}
+		info, _, statErr := statObservedPath(fsPath)
+		if statErr != nil {
+			info = nil
+		}
+		o.watchedDirs.add(fsPath, info)
+		added++
+	}
+}
+
+// runDueRecoveryScan runs the recovery scan a fired timer asked for, unless
+// the timer's generation is stale.
+func (o *localObserver) runDueRecoveryScan(
+	ctx context.Context, tree *synctree.Root, events chan<- changeEvent, gen uint64,
+) error {
+	if !o.takeRecoveryScanDue(gen) {
+		return nil
+	}
+
+	o.logger.Debug("running recovery scan after missed local changes")
+	if err := o.rescanUnlessRootGone(ctx, tree, events); err != nil {
+		return err
+	}
+	o.finishRecoveryScan()
+
+	return nil
+}
+
+// rescanUnlessRootGone runs a full rescan, or reports the sync root gone
+// (B-113): a deleted root means the watcher is watching nothing.
+func (o *localObserver) rescanUnlessRootGone(ctx context.Context, tree *synctree.Root, events chan<- changeEvent) error {
+	if !syncRootExists(tree.Path()) {
+		// Debug: the returned error is reported once by the watch runtime.
+		o.logger.Debug("sync root deleted, stopping watch",
+			slog.String("sync_root", tree.Path()))
+
+		return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
+	}
+
+	o.runSafetyScan(ctx, tree, events)
+	if o.watchUnavailable != nil {
+		return o.watchUnavailable
+	}
+
+	return nil
+}
+
+// handleWatcherError marks local truth suspect, arms a recovery rescan and
+// backs off. It reports stop=true when the watch loop must return err (nil
+// on shutdown).
+func (o *localObserver) handleWatcherError(
+	ctx context.Context, watchErr error, errBackoff *retry.Backoff, syncRoot string,
+) (bool, error) {
+	// Self-healing: local truth is marked for a rescan. The first error of a
+	// streak is Info; repeats under sustained kernel queue overflow are Debug.
+	delay := errBackoff.Next()
+	watcherErrLevel := slog.LevelDebug
+	if errBackoff.Consecutive() <= 1 {
+		watcherErrLevel = slog.LevelInfo
+	}
+	msg := "filesystem watcher error; rescanning the sync folder"
+	if errors.Is(watchErr, fsnotify.ErrEventOverflow) {
+		// IN_Q_OVERFLOW: the kernel discarded events, so changes are known
+		// to be missing, not merely possible.
+		msg = "too many local changes at once for the system to report; rescanning the sync folder"
+	}
+	o.logger.Log(ctx, watcherErrLevel, msg,
+		slog.String("error", watchErr.Error()),
+		slog.Duration("backoff", delay),
+	)
+	o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryWatcherError)
+	o.armRecoveryScan()
+
+	// Exponential backoff prevents a tight loop under sustained errors
+	// (e.g., kernel buffer overflow).
+	if sleepErr := o.clock.Sleep(ctx, delay); sleepErr != nil {
+		// The sleep ends early only on cancellation, which is shutdown, a
+		// clean stop rather than a watch failure.
+		return true, nil //nolint:nilerr // cancellation is a clean stop
+	}
+
+	// After a watcher error, check that the sync root still exists (B-113).
+	if !syncRootExists(syncRoot) {
+		o.logger.Debug("sync root deleted, stopping watch",
+			slog.String("sync_root", syncRoot))
+
+		return true, fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
+	}
+
+	return false, nil
 }
 
 // HandleFsEvent processes a single fsnotify event and sends the appropriate
@@ -278,35 +398,121 @@ func (o *localObserver) handleCreate(
 	}
 
 	if info.IsDir() {
-		ev.ItemType = ItemTypeFolder
-
-		if addErr := watcher.Add(fsPath); addErr != nil {
-			o.reportWatchAddFailure("failed to add watch on new directory", dbRelPath, addErr)
-		} else {
-			if o.watchedDirs == nil {
-				o.watchedDirs = make(map[string]struct{})
-			}
-			o.watchedDirs[filepath.Clean(fsPath)] = struct{}{}
-		}
-
-		// Scan directory contents for files created before the watch was
-		// registered. Duplicates from fsnotify are harmless — the buffer's
-		// per-path deduplication handles them.
-		o.scanNewDirectory(ctx, tree, fsPath, dbRelPath, watcher, events)
-	} else {
-		// Stage 2 observation filter: file size check (requires stat).
-		if o.IsOversizedFile(info.Size(), dbRelPath) {
-			return
-		}
-
-		ev.ItemType = ItemTypeFile
-		ev.Hash = o.stableHashOrEmpty(fsPath, dbRelPath)
+		o.handleDirectoryCreate(ctx, tree, fsPath, dbRelPath, name, info, &ev, watcher, events)
+		return
 	}
+
+	// Stage 2 observation filter: file size check (requires stat).
+	if o.IsOversizedFile(info.Size(), dbRelPath) {
+		return
+	}
+
+	ev.ItemType = ItemTypeFile
+	ev.Hash = o.watchCreateHash(tree, fsPath, dbRelPath, name, info)
 
 	o.TrySend(ctx, events, &ev)
 
 	// Update directory name cache so subsequent collision checks see this entry.
 	o.updateDirNameCache(filepath.Dir(fsPath), name)
+}
+
+// handleDirectoryCreate registers and emits a created directory, then scans
+// what it already holds.
+func (o *localObserver) handleDirectoryCreate(
+	ctx context.Context, tree *synctree.Root,
+	fsPath, dbRelPath, name string, info os.FileInfo,
+	ev *changeEvent, watcher fsWatcher, events chan<- changeEvent,
+) {
+	ev.ItemType = ItemTypeFolder
+
+	// A Create for a directory already registered with the same
+	// identity is a duplicate (fsnotify's event racing the new-directory
+	// scan, or a directory that left and came back as the same inode):
+	// its watches are valid, so its subtree is not dropped, re-added and
+	// re-hashed.
+	if o.isRegisteredSameDirectory(fsPath, info) {
+		o.TrySend(ctx, events, ev)
+		o.updateDirNameCache(filepath.Dir(fsPath), name)
+		return
+	}
+
+	// A directory created at a path that still has watched descendants
+	// replaced one that was deleted or moved away while watched: the
+	// delete event was ignored because the path exists again, or has not
+	// arrived yet. Those descendant registrations belong to the old
+	// inodes, so they are dropped before the new tree is registered; the
+	// scan below re-adds whatever the new directory holds.
+	o.forgetWatchedDescendants(watcher, fsPath, dbRelPath)
+
+	if addErr := watcher.Add(fsPath); addErr != nil {
+		o.reportWatchAddFailure("failed to add watch on new directory", dbRelPath, addErr)
+	} else {
+		o.watchedDirs.add(fsPath, info)
+	}
+
+	// The directory's own row goes out before its contents are scanned.
+	// When it is the destination half of a folder rename, its identity
+	// pairs the move; emitting it only after hashing a large tree left
+	// the replan seeing just the delete half (D-080).
+	o.TrySend(ctx, events, ev)
+	o.updateDirNameCache(filepath.Dir(fsPath), name)
+
+	// Scan directory contents for files created before the watch was
+	// registered. Duplicates from fsnotify are harmless — the buffer's
+	// per-path deduplication handles them.
+	o.scanNewDirectory(ctx, tree, fsPath, dbRelPath, watcher, events)
+}
+
+// watchCreateHash returns the content hash for a file a watch create (or a
+// new-directory scan) observed, without letting a long read hold back the
+// row of a moved file.
+//
+// A rename is observed as the delete of the old path, sent at once, and a
+// create of the new path. Hashing the new path synchronously meant a large
+// file's row reached the runtime only after the read finished; once that
+// took longer than the replan debounce, the replan saw only the delete half
+// and planned a remote delete instead of a move, losing the item's identity,
+// versions and sharing (D-080). So when the file's filesystem identity
+// matches a synced item at another path:
+//   - unchanged size and mtime mean the same content: the synced hash is
+//     reused and no read happens at all (a renamed tree is not re-read);
+//   - otherwise the row goes out now with an unknown hash, which the move
+//     pairing accepts on equal mtime, and the hash follows as a deferred
+//     hash request.
+//
+// Every other create is hashed synchronously, as before: an unknown hash
+// there could only make a replan plan an upload or a conflict copy early.
+func (o *localObserver) watchCreateHash(tree *synctree.Root, fsPath, dbRelPath, name string, info os.FileInfo) string {
+	if identity, ok := synctree.IdentityFromFileInfo(info); ok && !hasOtherHardLinks(info) {
+		entry := o.watchIdentityIndex().baselineEntryWithIdentity(o.baseline, identity)
+		// An identity match is only a move when the synced path is gone.
+		// If it still exists the inode was freed and reused (the synced
+		// file was replaced and the index is stale): the new file is
+		// unrelated content and is hashed like any create.
+		if entry != nil && entry.Path != dbRelPath && entry.ItemType == ItemTypeFile &&
+			syncedPathGone(tree, entry.Path) {
+			if canReuseBaselineHash(info, entry, o.clock.Now().UnixNano()) {
+				return entry.LocalHash
+			}
+
+			o.writeChurnFor(dbRelPath, o.clock.Now()).firstPendingAt = o.clock.Now()
+			o.scheduleDeferredHash(fsPath, dbRelPath, name, 0, o.writeCooldown())
+			return ""
+		}
+	}
+
+	return o.stableHashOrEmpty(fsPath, dbRelPath)
+}
+
+// syncedPathGone reports whether the synced path is confirmed absent now.
+// Any other answer (present, or unreadable) is not proof of a move.
+func syncedPathGone(tree *synctree.Root, dbRelPath string) bool {
+	if tree == nil {
+		return false
+	}
+	_, err := tree.Lstat(dbRelPath)
+
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // stableHashOrEmpty computes a stable hash for a file, returning an empty
@@ -315,7 +521,7 @@ func (o *localObserver) handleCreate(
 // with empty hashes on failure because Create events and directory scans
 // have no guaranteed follow-up event (B-203).
 func (o *localObserver) stableHashOrEmpty(fsPath, dbRelPath string) string {
-	hash, err := computeStableHash(fsPath)
+	hash, err := computeStableHashWith(fsPath, o.hashFunc)
 	if err != nil {
 		if errors.Is(err, errFileChangedDuringHash) {
 			o.logger.Debug("file metadata still settling, emitting with empty hash",
@@ -416,7 +622,7 @@ func (o *localObserver) scanNewDirectoryEntry(
 		Name:     entryName,
 		ItemType: ItemTypeFile,
 		Size:     info.Size(),
-		Hash:     o.stableHashOrEmpty(entryFsPath, entryRelPath),
+		Hash:     o.watchCreateHash(tree, entryFsPath, entryRelPath, entryName, info),
 		Mtime:    info.ModTime().UnixNano(),
 	}
 	if identity, ok := synctree.IdentityFromFileInfo(info); ok {
@@ -477,13 +683,14 @@ func (o *localObserver) scanNewDirectoryChildDir(
 	watcher fsWatcher,
 	events chan<- changeEvent,
 ) {
+	info, _, statErr := statObservedPath(entryFsPath)
 	if addErr := watcher.Add(entryFsPath); addErr != nil {
 		o.reportWatchAddFailure("failed to add watch on nested directory", entryRelPath, addErr)
 	} else {
-		if o.watchedDirs == nil {
-			o.watchedDirs = make(map[string]struct{})
+		if statErr != nil {
+			info = nil
 		}
-		o.watchedDirs[filepath.Clean(entryFsPath)] = struct{}{}
+		o.watchedDirs.add(entryFsPath, info)
 	}
 
 	dirEv := changeEvent{
@@ -493,7 +700,7 @@ func (o *localObserver) scanNewDirectoryChildDir(
 		Name:     entryName,
 		ItemType: ItemTypeFolder,
 	}
-	if info, _, err := statObservedPath(entryFsPath); err == nil {
+	if statErr == nil {
 		dirEv.Size = info.Size()
 		dirEv.Mtime = info.ModTime().UnixNano()
 		if identity, ok := synctree.IdentityFromFileInfo(info); ok {
@@ -543,31 +750,198 @@ func (o *localObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 		return // FIFOs, sockets and devices are never synced (see processObservedInfo).
 	}
 
-	cooldown := o.writeCoalesceCooldown
-	if cooldown == 0 {
-		cooldown = defaultWriteCoalesceCooldown
+	o.scheduleWriteHash(fsPath, dbRelPath, name)
+}
+
+// scheduleWriteHash (re)arms the coalescing timer for a written file.
+//
+// Each Write restarts the quiet-period timer (B-107), so an IDE's burst of
+// saves costs one hash. Two limits keep that from going wrong:
+//   - a path is hashed at most maxWriteCoalesceWait after its first pending
+//     write: a file written more often than the quiet period used to restart
+//     the timer forever and was never observed between safety scans;
+//   - a path that keeps producing new content is marked unstable and backs
+//     off exponentially (D-081b): without it a log or database written every
+//     second was hashed, uploaded and superseded every second.
+func (o *localObserver) scheduleWriteHash(fsPath, dbRelPath, name string) {
+	now := o.clock.Now()
+	churn := o.writeChurnFor(dbRelPath, now)
+
+	if timer, pending := o.PendingTimers[dbRelPath]; pending {
+		if churn.backoff > 0 || now.Sub(churn.firstPendingAt) >= maxWriteCoalesceWait {
+			// Keep the armed deadline: the hash happens on schedule even
+			// while writes continue.
+			return
+		}
+		// Restart the quiet period but keep firstPendingAt: the window
+		// stays open.
+		timer.Stop()
+		delete(o.PendingTimers, dbRelPath)
+	} else {
+		churn.firstPendingAt = now
 	}
 
-	// Cancel existing timer for this path (B-107 coalescing).
-	o.cancelPendingTimer(dbRelPath)
+	delay := o.writeCooldown()
+	if churn.backoff > delay {
+		delay = churn.backoff
+	}
 
-	// Schedule deferred hash after cooldown. Timer callback sends to
-	// hashRequests channel (non-blocking); watchLoop picks it up via select.
+	o.scheduleDeferredHash(fsPath, dbRelPath, name, 0, delay)
+}
+
+func (o *localObserver) writeCooldown() time.Duration {
+	if o.writeCoalesceCooldown == 0 {
+		return defaultWriteCoalesceCooldown
+	}
+
+	return o.writeCoalesceCooldown
+}
+
+// scheduleDeferredHash arms a timer that hands a hash request to the watch
+// loop. Timer callbacks must not block or touch watch-loop state, so a full
+// channel drops the request and asks for a recovery rescan instead.
+func (o *localObserver) scheduleDeferredHash(fsPath, dbRelPath, name string, retries int, delay time.Duration) {
 	req := hashRequest{
 		FsPath:    fsPath,
 		DbRelPath: dbRelPath,
 		Name:      name,
+		Retries:   retries,
 	}
-	timer := o.clock.AfterFunc(cooldown, func() {
+	requests := o.HashRequests
+	timer := o.clock.AfterFunc(delay, func() {
 		select {
-		case o.HashRequests <- req:
+		case requests <- req:
 		default:
 			o.droppedRetries.Add(1)
-			o.logger.Debug("hash request dropped, channel full (safety scan will catch up)",
-				slog.String("path", dbRelPath))
+			o.requestRecoveryScan()
+			o.logger.Debug("hash request dropped, channel full (recovery scan will catch up)",
+				slog.String("path", dbRelPath),
+				slog.Int("retry", retries))
 		}
 	})
 	o.recordPendingTimer(dbRelPath, timer)
+}
+
+// pathWriteChurn is the write history of one path, used to keep a file that
+// never stops changing from being re-hashed and re-uploaded on every write.
+// Watch-loop goroutine only.
+type pathWriteChurn struct {
+	// firstPendingAt is when the current coalescing window opened; zero
+	// when no hash is pending for the path.
+	firstPendingAt time.Time
+	// windowStart and emits count content changes emitted recently.
+	windowStart time.Time
+	emits       int
+	lastEmit    time.Time
+	// lastHash is the hash last emitted, so a re-emit of unchanged content
+	// does not count as churn.
+	lastHash string
+	// backoff is the minimum delay before the next hash; zero while the
+	// path is stable.
+	backoff time.Duration
+	warned  bool
+}
+
+// writeChurnFor returns the churn record for path, forgetting a path that has
+// been quiet long enough to count as stable again.
+func (o *localObserver) writeChurnFor(path string, now time.Time) *pathWriteChurn {
+	if o.writeChurn == nil {
+		o.writeChurn = make(map[string]*pathWriteChurn)
+	}
+
+	churn, ok := o.writeChurn[path]
+	if ok && churn.firstPendingAt.IsZero() && churn.isQuiet(now) {
+		if churn.backoff > 0 {
+			o.logger.Debug("file settled; watching it normally again", slog.String("path", path))
+		}
+		ok = false
+	}
+	if !ok {
+		churn = &pathWriteChurn{}
+		o.writeChurn[path] = churn
+	}
+
+	return churn
+}
+
+// isQuiet reports whether no change was emitted for long enough that the
+// path no longer counts as unstable: twice its current backoff, and at least
+// the window that detects instability.
+func (c *pathWriteChurn) isQuiet(now time.Time) bool {
+	quiet := max(unstableWriteWindow, 2*c.backoff)
+	return c.lastEmit.IsZero() || now.Sub(c.lastEmit) >= quiet
+}
+
+// recordWriteEmit notes that a file's content was emitted with hash.
+//
+// A stable path becomes unstable after unstableWriteEmits changes within
+// unstableWriteWindow. From then on every emit of content that differs from
+// the previous emit doubles the backoff, up to unstableWriteMaxBackoff. (A
+// window count alone could never double it: with a one-minute backoff three
+// emits never fit in the two-minute window, so it stayed pinned at the
+// initial value.) writeChurnFor resets the path once it has been quiet for
+// twice its backoff.
+func (o *localObserver) recordWriteEmit(path, hash string) {
+	now := o.clock.Now()
+	churn := o.writeChurnFor(path, now)
+	contentChanged := churn.lastEmit.IsZero() || hash == "" || hash != churn.lastHash
+	churn.lastEmit = now
+	churn.lastHash = hash
+
+	if churn.backoff > 0 {
+		if contentChanged {
+			o.escalateWriteBackoff(path, churn)
+		}
+		return
+	}
+
+	if churn.windowStart.IsZero() || now.Sub(churn.windowStart) > unstableWriteWindow {
+		churn.windowStart = now
+		churn.emits = 0
+	}
+	churn.emits++
+	if churn.emits >= unstableWriteEmits {
+		churn.windowStart = now
+		churn.emits = 0
+		o.escalateWriteBackoff(path, churn)
+	}
+}
+
+// escalateWriteBackoff marks path unstable, or doubles its backoff, up to the
+// cap, and says so once per path.
+func (o *localObserver) escalateWriteBackoff(path string, churn *pathWriteChurn) {
+	churn.backoff = min(max(2*churn.backoff, unstableWriteInitialBackoff), unstableWriteMaxBackoff)
+	if churn.warned {
+		return
+	}
+
+	churn.warned = true
+	// Info: self-managing; the file still syncs, only less often.
+	o.logger.Info("A file keeps changing; it will be uploaded less often until it settles. "+
+		"If it is a log or database, consider excluding it with ignored_paths",
+		slog.String("path", path),
+		slog.Duration("next_check_after", churn.backoff),
+	)
+}
+
+// deferStillChangingHash re-arms the hash of a file that kept changing
+// through every coalescing retry, after an escalated backoff.
+func (o *localObserver) deferStillChangingHash(req hashRequest) {
+	now := o.clock.Now()
+	churn := o.writeChurnFor(req.DbRelPath, now)
+	o.escalateWriteBackoff(req.DbRelPath, churn)
+	churn.firstPendingAt = now
+	o.scheduleDeferredHash(req.FsPath, req.DbRelPath, req.Name, 0, churn.backoff)
+}
+
+// pruneWriteChurn drops records of paths that are stable and idle, so the
+// map does not grow with every file ever written in a long session.
+func (o *localObserver) pruneWriteChurn(now time.Time) {
+	for path, churn := range o.writeChurn {
+		if churn.firstPendingAt.IsZero() && churn.isQuiet(now) {
+			delete(o.writeChurn, path)
+		}
+	}
 }
 
 // HashAndEmit is called from the watchLoop when a write coalesce timer fires.
@@ -617,24 +991,28 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		return
 	}
 
-	hash, err := computeStableHash(req.FsPath)
+	hash, err := computeStableHashWith(req.FsPath, o.hashFunc)
 	if err != nil {
 		if o.retryDeferredHashOnChange(req, err) {
 			return
 		}
 
-		// Distinguish retry exhaustion from generic hash failures for
-		// observability — helps diagnose continuously-written files.
 		if errors.Is(err, errFileChangedDuringHash) {
-			o.logger.Debug("hash retries exhausted, emitting with empty hash",
+			// Still being written after every retry. An empty-hash row
+			// would only plan an upload of a file in mid-write, so the path
+			// stays pending: it is marked unstable and checked again after
+			// the backoff.
+			o.logger.Debug("hash retries exhausted; file still changing, checking again after backoff",
 				slog.String("path", req.DbRelPath),
 				slog.Int("retries", req.Retries),
 				slog.Int("max_retries", maxCoalesceRetries),
 			)
-		} else {
-			o.logger.Debug("hash failed for deferred write, emitting with empty hash",
-				slog.String("path", req.DbRelPath), slog.String("error", err.Error()))
+			o.deferStillChangingHash(req)
+			return
 		}
+
+		o.logger.Debug("hash failed for deferred write, emitting with empty hash",
+			slog.String("path", req.DbRelPath), slog.String("error", err.Error()))
 	} else {
 		// Check baseline — if hash matches, the write was a no-op.
 		if existing, ok := o.baseline.GetByPath(req.DbRelPath); ok && existing.LocalHash == hash {
@@ -658,11 +1036,15 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		ev.LocalHasIdentity = true
 	}
 
+	o.recordWriteEmit(req.DbRelPath, hash)
 	o.TrySend(ctx, events, &ev)
 }
 
 func (o *localObserver) prepareDeferredHashRequest(req hashRequest) hashRequest {
 	delete(o.PendingTimers, req.DbRelPath)
+	if churn, ok := o.writeChurn[req.DbRelPath]; ok {
+		churn.firstPendingAt = time.Time{}
+	}
 
 	return req
 }
@@ -676,24 +1058,7 @@ func (o *localObserver) retryDeferredHashOnChange(req hashRequest, err error) bo
 		slog.String("path", req.DbRelPath),
 		slog.Int("retry", req.Retries+1))
 
-	cooldown := o.writeCoalesceCooldown
-	if cooldown == 0 {
-		cooldown = defaultWriteCoalesceCooldown
-	}
-
-	retryReq := req
-	retryReq.Retries++
-	timer := o.clock.AfterFunc(cooldown, func() {
-		select {
-		case o.HashRequests <- retryReq:
-		default:
-			o.droppedRetries.Add(1)
-			o.logger.Debug("hash retry dropped, channel full (safety scan will catch up)",
-				slog.String("path", req.DbRelPath),
-				slog.Int("retry", retryReq.Retries))
-		}
-	})
-	o.recordPendingTimer(req.DbRelPath, timer)
+	o.scheduleDeferredHash(req.FsPath, req.DbRelPath, req.Name, req.Retries+1, o.writeCooldown())
 
 	return true
 }
@@ -759,7 +1124,7 @@ func (o *localObserver) HandleDelete(
 
 	if existing, ok := o.baseline.GetByPath(dbRelPath); ok {
 		resolvedType = existing.ItemType
-	} else if _, ok := o.watchedDirs[filepath.Clean(fsPath)]; ok {
+	} else if o.watchedDirs.has(fsPath) {
 		resolvedType = ItemTypeFolder
 	}
 
@@ -769,14 +1134,7 @@ func (o *localObserver) HandleDelete(
 	// Uses fsPath directly instead of reconstructing from syncRoot + dbRelPath
 	// to avoid NFC/NFD mismatch on macOS HFS+ (B-312).
 	if resolvedType == ItemTypeFolder {
-		if rmErr := watcher.Remove(fsPath); rmErr != nil {
-			o.logger.Debug("watch removal for deleted directory",
-				slog.String("path", dbRelPath),
-				slog.String("error", rmErr.Error()),
-			)
-		}
-
-		delete(o.watchedDirs, filepath.Clean(fsPath))
+		o.forgetWatchedSubtree(watcher, fsPath, dbRelPath)
 	}
 
 	ev := changeEvent{
@@ -862,25 +1220,92 @@ func localPathStillPresent(tree *synctree.Root, dbRelPath, fsPath string) bool {
 	return false
 }
 
+// forgetWatchedSubtree removes the watch on a deleted or renamed-away
+// directory and on every watched directory beneath it, deepest first.
+//
+// Removing only the directory's own watch was wrong after a rename (D-077):
+// inotify watches follow the inode, and fsnotify keys its registrations by
+// path, so a descendant watch kept its old path. When the renamed tree was
+// re-added under its new name, fsnotify's register found the existing
+// descriptor and returned the old registration, and every later event under
+// the moved tree carried the old path (and a tree moved out of the sync root
+// kept reporting changes as if it were still inside). Dropping the whole
+// subtree makes the re-add register fresh paths.
+func (o *localObserver) forgetWatchedSubtree(watcher fsWatcher, fsPath, dbRelPath string) {
+	o.forgetWatchedDescendants(watcher, fsPath, dbRelPath)
+
+	// The directory itself is removed by its original event path, not the
+	// cleaned map key: on macOS HFS+ the NFD spelling must match what
+	// fsnotify registered (B-312). Linux inotify auto-cleans a deleted
+	// directory, but macOS kqueue may not (B-112).
+	o.removeWatch(watcher, fsPath, dbRelPath)
+}
+
+// forgetWatchedDescendants removes every watch strictly beneath fsPath,
+// deepest first.
+func (o *localObserver) forgetWatchedDescendants(watcher fsWatcher, fsPath, dbRelPath string) {
+	for _, watched := range o.watchedDirs.descendants(fsPath) {
+		o.removeWatch(watcher, watched, dbRelPath)
+	}
+}
+
+// isRegisteredSameDirectory reports whether fsPath is already watched as the
+// same directory (same device and inode) that info describes.
+func (o *localObserver) isRegisteredSameDirectory(fsPath string, info os.FileInfo) bool {
+	registered, ok := o.watchedDirs.get(fsPath)
+	if !ok || !registered.hasIdentity {
+		return false
+	}
+	identity, ok := synctree.IdentityFromFileInfo(info)
+
+	return ok && identity == registered.identity
+}
+
+func (o *localObserver) removeWatch(watcher fsWatcher, fsPath, dbRelPath string) {
+	if rmErr := watcher.Remove(fsPath); rmErr != nil {
+		// Debug: the kernel often removed the watch already (benign).
+		o.logger.Debug("watch removal for deleted directory",
+			slog.String("path", dbRelPath),
+			slog.String("watch", fsPath),
+			slog.String("error", rmErr.Error()),
+		)
+	}
+
+	o.watchedDirs.remove(fsPath)
+}
+
 // reportWatchAddFailure reports a directory the watcher could not add. Once
-// the inotify limit is reached every new directory fails the same way, so
-// the limit is warned once with the fix; other failures are per-directory
-// Debug lines (the safety scan still covers those folders).
+// a resource limit is reached every new directory fails the same way, so each
+// cause is warned once with its fix; other failures are per-directory Debug
+// lines (the safety scan still covers those folders). A descriptor-limit
+// failure also records watchUnavailable so the watch loop stops watching.
 func (o *localObserver) reportWatchAddFailure(msg, dbRelPath string, addErr error) {
-	if isWatchLimitError(addErr) {
-		if !o.watchLimitReported {
-			o.watchLimitReported = true
-			o.logger.Warn("Too many folders to watch for changes (system inotify limit reached); "+
-				"changes in new folders will be noticed only by the periodic rescan. "+
-				"To fix: sudo sysctl -w fs.inotify.max_user_watches=524288",
-				slog.String("path", dbRelPath),
-			)
+	cause, ok := classifyWatchAddError(addErr)
+	if !ok {
+		o.logger.Debug(msg, slog.String("path", dbRelPath), slog.String("error", addErr.Error()))
+		return
+	}
+
+	if watchCauseStopsWatching(cause) {
+		if o.watchUnavailable == nil {
+			o.watchUnavailable = &localWatchUnavailableError{cause: cause, err: addErr}
 		}
 
 		return
 	}
 
-	o.logger.Debug(msg, slog.String("path", dbRelPath), slog.String("error", addErr.Error()))
+	if _, reported := o.reportedWatchCauses[cause]; reported {
+		return
+	}
+	if o.reportedWatchCauses == nil {
+		o.reportedWatchCauses = make(map[watchUnavailableCause]struct{})
+	}
+	o.reportedWatchCauses[cause] = struct{}{}
+	o.logger.Warn("Cannot watch new folders for changes ("+watchUnavailableReason(cause)+"); "+
+		"changes in new folders will be noticed only by the periodic rescan. "+
+		"To fix: "+watchUnavailableFix(cause),
+		slog.String("path", dbRelPath),
+	)
 }
 
 // runSafetyScan performs a full filesystem scan as a safety net, sending any
@@ -890,9 +1315,15 @@ func (o *localObserver) reportWatchAddFailure(msg, dbRelPath string, addErr erro
 func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, events chan<- changeEvent) {
 	o.logger.Debug("running safety scan")
 
-	start := time.Now()
+	// This scan reads the whole tree, so it covers anything a pending
+	// recovery scan was armed for. Requests made after this point (a batch
+	// this scan fails to deliver) re-arm it.
+	o.cancelRecoveryScan()
+
+	start := o.clock.Now()
 
 	result, err := o.FullScan(ctx, tree)
+	o.lastFullScanDuration = o.clock.Now().Sub(start)
 	if err != nil {
 		switch {
 		case ctx.Err() != nil:
@@ -909,6 +1340,7 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 	}
 	o.safetyScanFailing = false
 
+	o.rewatchUnwatchedDirectories(tree, result.Rows)
 	o.TrySendFullLocalSnapshot(ctx, result)
 
 	for i := range result.Events {
@@ -939,12 +1371,13 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 	o.DirNameCache = make(map[string]map[string][]string)
 	o.CollisionPeers = make(map[string]map[string]struct{})
 	o.RecentLocalDeletes = make(map[string]struct{})
+	o.pruneWriteChurn(o.clock.Now())
 	if o.afterSafetyScan != nil {
 		o.afterSafetyScan()
 	}
 
 	// Log timing and resource counts for operational visibility (B-101).
-	elapsed := time.Since(start)
+	elapsed := o.lastFullScanDuration
 	o.logger.Info("safety scan complete",
 		slog.Duration("elapsed", elapsed),
 		slog.Int("events", len(result.Events)),
