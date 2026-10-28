@@ -340,7 +340,15 @@ anything else drops the record (R-5.6.15,
 `TestCommitObservation_OwnPlaceholderIsAdoptedAsEmptySyncedContent`,
 `TestCommitObservation_PlaceholderStateSeenAfterTheCommitIsNotARemoteChange`,
 `TestRunOnce_InterruptedCreateFinishesIntoItsOwnPlaceholder`). Adopted rows
-are put into the in-memory baseline after the commit.
+are put into the in-memory baseline after the commit. A baseline row at the
+placeholder's path whose item OneDrive no longer holds there (deleted, or
+moved away, often in the same window: a folder replaced by a file, a file
+renamed online while edited here) does not block adoption: the create could
+only succeed because OneDrive had freed the name, so that row is dropped and
+the item, if it lives on elsewhere, reads as a new remote item
+(`TestCommitObservation_PlaceholderReplacesTheBaselineOfAnItemOneDriveDeleted`,
+`TestCommitObservation_PlaceholderReplacesTheBaselineOfAnItemMovedAway`,
+`TestCommitObservation_PlaceholderDoesNotDisplaceALiveBaselineItem`).
 
 ### Remote twins
 

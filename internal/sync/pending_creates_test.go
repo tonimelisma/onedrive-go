@@ -55,6 +55,122 @@ func TestCommitObservation_OwnPlaceholderIsAdoptedAsEmptySyncedContent(t *testin
 }
 
 // Validates: R-5.6.15
+//
+// A folder replaced by a file: the folder's delete went through on OneDrive
+// (its answer lost) and the file's create stopped after the empty item. The
+// window that reports both still finds the folder's baseline row at the path,
+// which only says what was synced, not what OneDrive holds. Treated as the
+// path's occupant, it kept the placeholder from being adopted: the user's
+// file became a conflict copy and the empty item was downloaded in its place
+// (found by the chaos Graph layer, D-092).
+func TestCommitObservation_PlaceholderReplacesTheBaselineOfAnItemOneDriveDeleted(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	driveID := driveid.New(testDriveID)
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+		DriveID: driveID, ItemID: "folder", ParentID: "root", Path: "doc", ItemType: ItemTypeFolder, ETag: `"f,1"`,
+	}}, "t1", driveID))
+	_, err := mgr.rawDB().ExecContext(t.Context(), `INSERT INTO baseline
+		(item_id, path, parent_id, item_type, etag) VALUES ('folder', 'doc', 'root', 'folder', '"f,1"')`)
+	require.NoError(t, err)
+	require.NoError(t, mgr.RecordPendingCreate(t.Context(), &PendingCreate{
+		ItemID: "placeholder", DriveID: driveID, Path: "doc", ParentID: "root", CreatedETag: `"p,1"`,
+		LocalSize: 7, LocalHash: "local-hash",
+	}))
+
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+		{
+			DriveID: driveID, ItemID: "placeholder", ParentID: "root", Path: "doc", ItemType: ItemTypeFile,
+			Hash: emptyQuickXor, Size: 0, ETag: `"p,1"`,
+		},
+		{DriveID: driveID, ItemID: "folder", ParentID: "root", Path: "doc", ItemType: ItemTypeFolder, IsDeleted: true},
+	}, "t2", driveID))
+
+	path, localSize, found := readBaselineRow(t, mgr, "placeholder")
+	require.True(t, found, "the placeholder is adopted")
+	assert.Equal(t, "doc", path)
+	assert.Zero(t, localSize)
+	_, _, folderFound := readBaselineRow(t, mgr, "folder")
+	assert.False(t, folderFound, "the deleted folder no longer holds the path")
+}
+
+// Validates: R-5.6.15
+//
+// A file renamed online while edited here: the edit is created as a new file
+// at the old name, and the create stops after the empty item. The renamed
+// item's baseline row still holds the old name, which OneDrive had freed;
+// the placeholder is adopted there, and the renamed item stays in
+// remote_state at its new name (chaos Graph layer, D-092, seed 15).
+func TestCommitObservation_PlaceholderReplacesTheBaselineOfAnItemMovedAway(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	driveID := driveid.New(testDriveID)
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+		DriveID: driveID, ItemID: "moved", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
+		Hash: "h", Size: 3, ETag: `"m,1"`,
+	}}, "t1", driveID))
+	_, err := mgr.rawDB().ExecContext(t.Context(), `INSERT INTO baseline
+		(item_id, path, parent_id, item_type, local_hash, remote_hash, local_size, remote_size, etag)
+		VALUES ('moved', 'doc.txt', 'root', 'file', 'h', 'h', 3, 3, '"m,1"')`)
+	require.NoError(t, err)
+	require.NoError(t, mgr.RecordPendingCreate(t.Context(), &PendingCreate{
+		ItemID: "placeholder", DriveID: driveID, Path: "doc.txt", ParentID: "root", CreatedETag: `"p,1"`,
+	}))
+
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+		{
+			DriveID: driveID, ItemID: "placeholder", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
+			Hash: emptyQuickXor, Size: 0, ETag: `"p,1"`,
+		},
+		{
+			DriveID: driveID, ItemID: "moved", ParentID: "root", Path: "renamed.txt", ItemType: ItemTypeFile,
+			Hash: "h", Size: 3, ETag: `"m,2"`,
+		},
+	}, "t2", driveID))
+
+	path, _, found := readBaselineRow(t, mgr, "placeholder")
+	require.True(t, found, "the placeholder is adopted")
+	assert.Equal(t, "doc.txt", path)
+	_, _, movedFound := readBaselineRow(t, mgr, "moved")
+	assert.False(t, movedFound, "the moved item no longer holds the old name")
+}
+
+// Validates: R-5.6.15
+//
+// A baseline row whose item OneDrive still holds keeps the path: the
+// placeholder is not adopted over it.
+func TestCommitObservation_PlaceholderDoesNotDisplaceALiveBaselineItem(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	driveID := driveid.New(testDriveID)
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+		DriveID: driveID, ItemID: "live", ParentID: "root", Path: "doc", ItemType: ItemTypeFile,
+		Hash: "h", Size: 3, ETag: `"l,1"`,
+	}}, "t1", driveID))
+	_, err := mgr.rawDB().ExecContext(t.Context(), `INSERT INTO baseline
+		(item_id, path, parent_id, item_type, local_hash, remote_hash, local_size, remote_size, etag)
+		VALUES ('live', 'doc', 'root', 'file', 'h', 'h', 3, 3, '"l,1"')`)
+	require.NoError(t, err)
+	require.NoError(t, mgr.RecordPendingCreate(t.Context(), &PendingCreate{
+		ItemID: "placeholder", DriveID: driveID, Path: "doc", ParentID: "root", CreatedETag: `"p,1"`,
+	}))
+
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+		DriveID: driveID, ItemID: "placeholder", ParentID: "root", Path: "doc", ItemType: ItemTypeFile,
+		Hash: emptyQuickXor, Size: 0, ETag: `"p,1"`,
+	}}, "t2", driveID))
+
+	_, _, found := readBaselineRow(t, mgr, "placeholder")
+	assert.False(t, found)
+	path, _, liveFound := readBaselineRow(t, mgr, "live")
+	require.True(t, liveFound)
+	assert.Equal(t, "doc", path)
+}
+
+// Validates: R-5.6.15
 func TestCommitObservation_PlaceholderStateSeenAfterTheCommitIsNotARemoteChange(t *testing.T) {
 	t.Parallel()
 
