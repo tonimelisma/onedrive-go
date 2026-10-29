@@ -80,7 +80,7 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	}
 
 	assert.Equal(t,
-		[]string{"test", "-race", "-coverprofile=" + filepath.Join(repoRoot, "cover.out"), "./..."},
+		[]string{"test", "-race", "-timeout=" + unitTestTimeout, "-coverprofile=" + filepath.Join(repoRoot, "cover.out"), "./..."},
 		runner.runCommands[cmdUnitTests].args,
 	)
 	assert.Equal(t, "test", runner.runCommands[cmdE2EFullCompile].args[0])

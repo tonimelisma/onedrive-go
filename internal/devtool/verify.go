@@ -550,6 +550,11 @@ func runUnitTests(
 		"go",
 		"test",
 		"-race",
+		// Explicit, not go test's 10-minute default: internal/sync under
+		// -race on a CI macOS runner came within seconds of the default and
+		// then past it. A deadline with headroom fails a real hang, not a
+		// slow runner.
+		"-timeout="+unitTestTimeout,
 		"-coverprofile="+coverageFile,
 		"./...",
 	); err != nil {
@@ -558,6 +563,9 @@ func runUnitTests(
 
 	return nil
 }
+
+// unitTestTimeout is go test's per-package deadline in the verify profiles.
+const unitTestTimeout = "20m"
 
 func runCoverageGate(
 	ctx context.Context,
