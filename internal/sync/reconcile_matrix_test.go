@@ -26,6 +26,9 @@ var updateGolden = flag.Bool("update", false, "rewrite golden files from current
 const (
 	reconcileMatrixGolden = "testdata/reconcile/matrix.golden"
 	reconcileConvergeEnv  = "ONEDRIVE_GO_RECONCILE_CONVERGE"
+	// reconcileMatrixRaceStride picks the cells a -race run plans: every
+	// fifth of the 99, about twenty, spread over every section.
+	reconcileMatrixRaceStride = 5
 )
 
 // matrixSide is one side's state at the matrix path: absent, a file with
@@ -131,15 +134,30 @@ func TestReconcileMatrix_Golden(t *testing.T) {
 	// Each plan compiles the comparison SQL (about 0.1 s here), so running
 	// every cell to convergence triples the cost: on demand only.
 	converge := os.Getenv(reconcileConvergeEnv) != ""
+	// Under -race every plan costs several times more, and the race detector
+	// learns nothing more from the hundredth cell than from the tenth: a
+	// fixed subset (every reconcileMatrixRaceStride-th cell) is planned, each
+	// line checked against the golden file and for safety.
+	subset := raceDetectorEnabled && !*updateGolden && !converge
+	cell := 0
 	var out strings.Builder
+	var checked []string
+	emit := func(line string) {
+		out.WriteString(line)
+		checked = append(checked, line)
+	}
 	out.WriteString("# baseline | local | remote -> plan (one path; files A/B/C, dir = folder, - = absent)\n")
 	sides := []matrixSide{matrixAbsent, matrixA, matrixB, matrixC, matrixFolder}
 	for _, baseline := range []matrixSide{matrixAbsent, matrixA, matrixFolder} {
 		for _, local := range sides {
 			for _, remote := range sides {
+				cell++
+				if subset && cell%reconcileMatrixRaceStride != 0 {
+					continue
+				}
 				s := matrixCell(t, baseline, local, remote)
 				plan := s.plan()
-				fmt.Fprintf(&out, "%-3s | %-3s | %-3s -> %s\n", baseline, local, remote, renderMatrixPlan(plan))
+				emit(fmt.Sprintf("%-3s | %-3s | %-3s -> %s\n", baseline, local, remote, renderMatrixPlan(plan)))
 				if converge {
 					requireReferenceConvergence(t, s, plan, baseline, local, remote)
 				} else {
@@ -152,14 +170,26 @@ func TestReconcileMatrix_Golden(t *testing.T) {
 	out.WriteString("\n# moves: baseline file A at doc; where each side holds it now\n")
 	for _, local := range moveMatrixLocal() {
 		for _, remote := range moveMatrixRemote() {
+			cell++
+			if subset && cell%reconcileMatrixRaceStride != 0 {
+				continue
+			}
 			s := newPMState(t)
 			s.addSynced(matrixPath, false, matrixA.content())
 			local.apply(s, true)
 			remote.apply(s, false)
-			fmt.Fprintf(&out, "local %-16s | remote %-16s -> %s\n", local.name, remote.name, renderMatrixPlan(s.plan()))
+			emit(fmt.Sprintf("local %-16s | remote %-16s -> %s\n", local.name, remote.name, renderMatrixPlan(s.plan())))
 		}
 	}
 
+	if subset {
+		golden, err := os.ReadFile(filepath.FromSlash(reconcileMatrixGolden))
+		require.NoError(t, err)
+		for _, line := range checked {
+			assert.Contains(t, string(golden), line, "reconciliation decision changed")
+		}
+		return
+	}
 	requireGolden(t, reconcileMatrixGolden, out.String())
 }
 

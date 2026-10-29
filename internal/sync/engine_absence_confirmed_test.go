@@ -330,22 +330,26 @@ func TestFullRefresh_PermanentlyUndecidedOrphanBacksOff(t *testing.T) {
 	_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{FullReconcile: true})
 	require.NoError(t, err)
 
-	// Six and a half hours of passes every 16 minutes: refreshes are due
-	// 15, 30, 60, 120 and 240 minutes apart, so at most five run (without
-	// the backoff, one every pass: 24).
+	// Passes every 16 minutes: refreshes are due 15, 30, 60, 120 and 240
+	// minutes apart, so six and a half hours (24 passes) run at most five
+	// and an hour and a half (6, the -race run, where a pass costs seconds)
+	// at most three; without the backoff, one every pass.
 	before := remote.fullDeltaCount()
-	const passes = 24
+	passes, minRefreshes, maxRefreshes := 24, 3, 5
+	if raceDetectorEnabled {
+		passes, minRefreshes, maxRefreshes = 6, 2, 3
+	}
 	for range passes {
 		clock.advance(fullRefreshAfterFolderDeleteDelay + time.Minute)
 		_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 	}
 	backedOff := remote.fullDeltaCount() - before
-	assert.GreaterOrEqual(t, backedOff, 3, "the undecided orphan is still re-checked")
-	assert.LessOrEqual(t, backedOff, 5, "the re-checks back off")
+	assert.GreaterOrEqual(t, backedOff, minRefreshes, "the undecided orphan is still re-checked")
+	assert.LessOrEqual(t, backedOff, maxRefreshes, "the re-checks back off")
 
-	// The lookup recovers: the next due refresh (at most eight hours on)
-	// decides the orphan, and the daily cadence returns.
+	// The lookup recovers: the next due refresh (at most twice the last
+	// delay on) decides the orphan, and the daily cadence returns.
 	failLookup = false
 	for range 2 * passes {
 		clock.advance(fullRefreshAfterFolderDeleteDelay + time.Minute)

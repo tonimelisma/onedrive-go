@@ -479,7 +479,11 @@ func TestModel_ChaosGraphConverges(t *testing.T) {
 	for _, seed := range chaosSeeds(t) {
 		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
-			run := runModelScenarioWith(t, seed, modelOptions{chaos: true})
+			opts := modelOptions{chaos: true}
+			if raceDetectorEnabled {
+				opts.batches = modelRaceBatches
+			}
+			run := runModelScenarioWith(t, seed, opts)
 			require.Positive(t, run.chaos.faultCount(), "the storm injected no fault")
 			t.Logf("seed %d faults: %s", seed, run.chaos.faultSummary())
 		})

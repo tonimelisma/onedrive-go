@@ -647,6 +647,11 @@ func plannerModelSeeds(t *testing.T) []uint64 {
 		return []uint64{seed}
 	}
 	count := plannerModelDefaultSeeds
+	if raceDetectorEnabled {
+		// The planner model is single-goroutine apart from the store; one
+		// seed covers what the race detector can find (see modelRaceSeeds).
+		count = 1
+	}
 	if raw := os.Getenv(plannerModelSeedsEnv); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		require.NoError(t, err, plannerModelSeedsEnv)

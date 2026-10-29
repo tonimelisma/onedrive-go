@@ -54,7 +54,10 @@ import (
 // breadth belongs to non-race runs and to ONEDRIVE_GO_MODEL_SEEDS.
 
 const (
-	modelBatches             = 6
+	modelBatches = 6
+	// modelRaceBatches is the batch count of the replay and chaos runs under
+	// -race, where one batch costs about 25 s on a 2-core host.
+	modelRaceBatches         = 2
 	modelMaxOpsPerSide       = 3
 	modelMaxSyncPasses       = 8
 	modelDefaultSeeds        = 12
@@ -105,14 +108,22 @@ func TestRunOnce_RandomizedBidirectionalEditsConverge(t *testing.T) {
 func TestModel_SameSeedReplaysIdentically(t *testing.T) {
 	t.Parallel()
 
-	for _, seed := range []uint64{3, 28} {
+	seeds := []uint64{3, 28}
+	replayBatches := 0
+	if raceDetectorEnabled {
+		// Determinism does not depend on the race detector; one seed over
+		// fewer batches keeps the race run within go test's package timeout
+		// (see modelRaceSeeds).
+		seeds, replayBatches = seeds[:1], modelRaceBatches
+	}
+	for _, seed := range seeds {
 		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
 
 			var transcripts [2][]string
 			for i := range transcripts {
 				t.Run("run="+strconv.Itoa(i+1), func(t *testing.T) {
-					transcripts[i] = runModelScenario(t, seed).transcript
+					transcripts[i] = runModelScenarioWith(t, seed, modelOptions{batches: replayBatches}).transcript
 				})
 			}
 			require.NotEmpty(t, transcripts[0])
@@ -264,6 +275,8 @@ type modelOptions struct {
 	// fake OneDrive: the first modelChaosPasses passes of every batch run in
 	// a storm of seeded faults, the rest in calm.
 	chaos bool
+	// batches overrides modelBatches; zero keeps it.
+	batches int
 }
 
 // runModelScenarioWith runs one seed under opts.
@@ -298,7 +311,11 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 	initial := run.requireConverged("initial")
 	run.requireWrittenContentSurvives("initial", initialEdits, initial)
 
-	for batch := 1; batch <= modelBatches; batch++ {
+	batches := modelBatches
+	if opts.batches > 0 {
+		batches = opts.batches
+	}
+	for batch := 1; batch <= batches; batch++ {
 		label := fmt.Sprintf("batch %d", batch)
 		before := run.localTree()
 		h.beginRound(t)
