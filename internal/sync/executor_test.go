@@ -491,7 +491,7 @@ func TestExecutor_LocalMove_SpellingOnlyRenameOntoSameInodeIsAllowed(t *testing.
 		View:    &pathView{Path: "EDIT.txt"},
 	}
 
-	require.NoError(t, e.validateLocalMovePrecondition(action))
+	require.NoError(t, e.validateLocalMovePrecondition(action, action.OldPath, action.Path))
 }
 
 // Validates: R-2.12.4
@@ -512,7 +512,7 @@ func TestExecutor_LocalMove_SpellingOnlyRenameOntoDifferentFileIsStale(t *testin
 		View:    &pathView{Path: "EDIT.txt"},
 	}
 
-	require.ErrorIs(t, e.validateLocalMovePrecondition(action), errActionPreconditionChanged)
+	require.ErrorIs(t, e.validateLocalMovePrecondition(action, action.OldPath, action.Path), errActionPreconditionChanged)
 }
 
 // Validates: R-2.12.4

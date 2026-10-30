@@ -191,7 +191,7 @@ func namingCorpus() []string {
 	}
 }
 
-// Validates: R-2.11.4, R-2.12.2, R-2.12.3
+// Validates: R-2.11.4, R-2.12.2, R-2.12.3, R-2.13.2
 //
 // Each corpus name uploads, comes back from OneDrive's listing as itself (up
 // to Unicode form), arrives under its own name on a second client, and a

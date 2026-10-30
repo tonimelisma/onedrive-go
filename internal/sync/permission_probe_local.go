@@ -42,7 +42,10 @@ func (ph *permissionHandler) handleLocalPermission(
 
 	ph.rootInaccessibleReported.Store(false)
 
-	absPath, absErr := ph.syncTree.Abs(r.Path)
+	// Probed by the spelling on disk, which on a byte-exact filesystem can
+	// differ from the stored NFC path (R-2.13.2); the boundary found is
+	// reported back in the stored form.
+	absPath, absErr := ph.syncTree.Abs(ph.syncTree.Spelling(r.Path))
 	if absErr != nil {
 		ph.logger.Debug("handleLocalPermission: failed to resolve sync-tree path",
 			slog.String("path", r.Path),
@@ -84,7 +87,7 @@ func (ph *permissionHandler) handleLocalPermission(
 	}
 
 	return ph.localDirectoryPermissionEvidence(
-		relBoundary,
+		storedPathOf(relBoundary),
 		r.Path,
 		r.ActionType,
 		issueType,
@@ -163,7 +166,7 @@ func (ph *permissionHandler) readOnlyFilesystemEvidence(r *actionCompletion) per
 		LastError:   "the local filesystem is read-only",
 	}
 
-	absPath, err := ph.syncTree.Abs(r.Path)
+	absPath, err := ph.syncTree.Abs(ph.syncTree.Spelling(r.Path))
 	if err != nil {
 		return fileEvidence
 	}
@@ -200,9 +203,15 @@ func (ph *permissionHandler) readOnlyFilesystemEvidence(r *actionCompletion) per
 
 	return permissionEvidence{
 		Kind:         permissionEvidenceBoundaryDenied,
-		BoundaryPath: relBoundary,
+		BoundaryPath: storedPathOf(relBoundary),
 		TriggerPath:  r.Path,
 		IssueType:    issueLocalReadOnly,
 		LastError:    "the local filesystem is read-only",
 	}
+}
+
+// storedPathOf turns a rooted path as spelled on disk into the form sync
+// stores paths in: slash-separated NFC (R-2.13.1).
+func storedPathOf(rel string) string {
+	return nfcNormalize(filepath.ToSlash(rel))
 }

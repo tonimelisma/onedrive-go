@@ -61,11 +61,13 @@ func findNonDisposable(tree *synctree.Root, dirPath string, isDisposable func(st
 // for files, verifies hash before delete; mismatch keeps the local file and
 // recreates the remote copy instead of deleting newer content.
 func (e *executor) ExecuteLocalDelete(ctx context.Context, action *Action) actionOutcome {
-	if boundary, ok, err := e.symlinkBoundaryForPath(action.Path); err != nil {
+	// The entry is removed by its spelling on disk (R-2.13.2).
+	local := e.syncTree.Spelling(action.Path)
+	if boundary, ok, err := e.symlinkBoundaryForPath(local); err != nil {
 		return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(err))
 	} else if ok {
-		cleanActionPath := slashpath.Clean(filepath.ToSlash(action.Path))
-		if boundary != cleanActionPath {
+		cleanLocalPath := slashpath.Clean(filepath.ToSlash(local))
+		if boundary != cleanLocalPath {
 			return e.failedOutcome(action, ActionLocalDelete,
 				fmt.Errorf("won't delete %s: %s is a symbolic link, and sync never deletes through one", action.Path, boundary))
 		}
@@ -73,7 +75,7 @@ func (e *executor) ExecuteLocalDelete(ctx context.Context, action *Action) actio
 		return e.DeleteLocalSymlink(action, boundary)
 	}
 
-	info, err := e.syncTree.Stat(action.Path)
+	info, err := e.syncTree.Stat(local)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return e.failedOutcomeWithFailure(
@@ -88,7 +90,7 @@ func (e *executor) ExecuteLocalDelete(ctx context.Context, action *Action) actio
 		return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(err))
 	}
 
-	absPath, err := e.syncTree.Abs(action.Path)
+	absPath, err := e.syncTree.Abs(local)
 	if err != nil {
 		return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(err))
 	}
@@ -97,7 +99,7 @@ func (e *executor) ExecuteLocalDelete(ctx context.Context, action *Action) actio
 		return e.DeleteLocalFolder(action, absPath)
 	}
 
-	return e.DeleteLocalFile(action)
+	return e.DeleteLocalFile(action, local)
 }
 
 func (e *executor) DeleteLocalSymlink(action *Action, relPath string) actionOutcome {
@@ -192,13 +194,13 @@ func (e *executor) DeleteLocalFolder(action *Action, absPath string) actionOutco
 // editor's atomic save) is left in place and the delete is superseded. A
 // mismatch means the file changed after planning; the executor keeps it and
 // returns a stale-precondition failure so the engine replans from current
-// truth.
-func (e *executor) DeleteLocalFile(action *Action) actionOutcome {
+// truth. local is the file's rooted spelling on disk.
+func (e *executor) DeleteLocalFile(action *Action, local string) actionOutcome {
 	verify := func(f *os.File, info os.FileInfo) error {
 		return e.verifyLocalDeleteContent(action, f, info)
 	}
 
-	if err := e.removeVerifiedLocalFile(action.Path, verify); err != nil {
+	if err := e.removeVerifiedLocalFile(local, verify); err != nil {
 		if errors.Is(err, errActionPreconditionChanged) || errors.Is(err, synctree.ErrDetachRaced) {
 			// Debug: the returned precondition error supersedes the action
 			// and the engine replans; nothing is asked of the user.
@@ -469,9 +471,13 @@ func (e *executor) validateRemoteDeleteLocalAbsence(action *Action) error {
 		return err
 	}
 
-	info, err := e.syncTree.Lstat(action.Path)
+	// Absence is judged by the spelling on disk: on a byte-exact filesystem
+	// an NFD-named file that came back is missing only under its stored NFC
+	// spelling (R-2.13.2).
+	local := e.syncTree.Spelling(action.Path)
+	info, err := e.syncTree.Lstat(local)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || e.hasRegularFileAncestor(action.Path) {
+		if errors.Is(err, os.ErrNotExist) || e.hasRegularFileAncestor(local) {
 			// Below a file nothing can exist: the folder that held this
 			// child was replaced locally by a file (a type change), and the
 			// child is as absent as it gets.
@@ -488,7 +494,7 @@ func (e *executor) validateRemoteDeleteLocalAbsence(action *Action) error {
 	}
 	// On a case-insensitive volume, Lstat also finds a differently-cased
 	// name, which is the rename this delete belongs to.
-	if !e.exactLocalNameExists(action.Path) {
+	if !e.exactLocalNameExists(local) {
 		return nil
 	}
 

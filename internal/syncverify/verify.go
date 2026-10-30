@@ -17,6 +17,9 @@ import (
 )
 
 type verifyRoot interface {
+	// Spelling resolves a stored NFC path to the entry's spelling on disk
+	// (R-2.13.2).
+	Spelling(rel string) string
 	Stat(rel string) (os.FileInfo, error)
 	Abs(rel string) (string, error)
 }
@@ -121,7 +124,10 @@ func verifyEntry(
 	computeHash hashComputer,
 	logger *slog.Logger,
 ) Result {
-	info, err := tree.Stat(relPath)
+	// The baseline path is NFC; on a byte-exact filesystem an NFD-named file
+	// is found only by its own spelling.
+	local := tree.Spelling(relPath)
+	info, err := tree.Stat(local)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Result{
@@ -156,7 +162,7 @@ func verifyEntry(
 		return Result{Path: entry.Path, Status: VerifyUnverifiable}
 	}
 
-	absPath, err := tree.Abs(relPath)
+	absPath, err := tree.Abs(local)
 	if err != nil {
 		logger.Debug("verify: rooted path failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
 

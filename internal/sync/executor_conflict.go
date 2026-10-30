@@ -24,7 +24,11 @@ const conflictCopyReservationPerm = 0o600
 // current-state planner schedules any follow-up download/upload action
 // separately.
 func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) actionOutcome {
-	if err := e.validateNoSymlinkBoundary(action.Path, "conflict-copy"); err != nil {
+	// The file is renamed from its spelling on disk; the copy is a new entry,
+	// named from the stored name inside the parents' spellings on disk
+	// (R-2.13.2).
+	source := e.syncTree.Spelling(action.Path)
+	if err := e.validateNoSymlinkBoundary(source, "conflict-copy"); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionConflictCopy,
@@ -34,7 +38,17 @@ func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) action
 		)
 	}
 
-	absPath, err := e.syncTree.Abs(action.Path)
+	sourceAbs, err := e.syncTree.Abs(source)
+	if err != nil {
+		return e.failedOutcomeWithFailure(
+			action,
+			ActionConflictCopy,
+			normalizeSyncTreePathError(err),
+			action.Path,
+			permissionCapabilityLocalWrite,
+		)
+	}
+	namingAbs, err := e.syncTree.Abs(e.syncTree.SpellingOfParent(action.Path))
 	if err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
@@ -48,20 +62,20 @@ func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) action
 	// A directory cannot take a placeholder file's name: the rename failed
 	// with ENOTDIR on every pass (D-059a).
 	sourceIsDir := false
-	if info, statErr := e.syncTree.Lstat(action.Path); statErr == nil {
+	if info, statErr := e.syncTree.Lstat(source); statErr == nil {
 		sourceIsDir = info.IsDir()
 	}
 
 	if sourceIsDir {
-		return e.executeDirectoryConflictCopy(action, absPath)
+		return e.executeDirectoryConflictCopy(action, sourceAbs, namingAbs)
 	}
 
-	conflictPath, conflictRel, err := e.reserveUniqueConflictCopyPath(absPath)
+	conflictPath, conflictRel, err := e.reserveUniqueConflictCopyPath(namingAbs)
 	if err != nil {
 		return e.failedOutcomeWithFailure(action, ActionConflictCopy, err, action.Path, permissionCapabilityLocalWrite)
 	}
 
-	if err := e.syncTree.Rename(action.Path, conflictRel); err != nil {
+	if err := e.syncTree.Rename(source, conflictRel); err != nil {
 		e.releaseConflictCopyReservation(conflictRel)
 
 		if errors.Is(err, os.ErrNotExist) {
@@ -270,18 +284,19 @@ const conflictCopyDirAttempts = 100
 // destination, and a placeholder cannot help: the directory cannot be renamed
 // onto a reserved name without replacing it. The source's ancestors were
 // checked for symlinks by ExecuteConflictCopy, and the candidate sits beside
-// the source.
-func (e *executor) executeDirectoryConflictCopy(action *Action, absPath string) actionOutcome {
+// the source. sourceAbs is the directory as spelled on disk; namingAbs is the
+// path its copy's name is derived from (the stored name, R-2.13.2).
+func (e *executor) executeDirectoryConflictCopy(action *Action, sourceAbs, namingAbs string) actionOutcome {
 	now := e.nowFunc()
 	for ordinal := 1; ordinal <= conflictCopyDirAttempts; ordinal++ {
-		candidate := conflictCopyDirPathWithOrdinal(absPath, now, ordinal)
+		candidate := conflictCopyDirPathWithOrdinal(namingAbs, now, ordinal)
 		rel, err := e.syncTree.Rel(candidate)
 		if err != nil {
 			return e.failedOutcomeWithFailure(action, ActionConflictCopy,
 				fmt.Errorf("relativizing conflict copy path %s: %w", filepath.Base(candidate), normalizeSyncTreePathError(err)),
 				action.Path, permissionCapabilityLocalWrite)
 		}
-		renameErr := localpath.RenameNoReplace(absPath, candidate)
+		renameErr := localpath.RenameNoReplace(sourceAbs, candidate)
 		if renameErr == nil {
 			e.logger.Debug("saved conflict copy",
 				slog.String("path", action.Path),
