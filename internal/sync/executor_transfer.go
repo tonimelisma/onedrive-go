@@ -26,10 +26,12 @@ const maxHashRetries = 2
 // ExecuteDownload downloads a remote file via TransferManager with .partial
 // safety, hash verification with retry, and atomic rename.
 func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOutcome {
+	target := e.downloadTargetSpelling(action)
+
 	// The download itself runs through the rooted sync tree, which refuses
 	// any escape; this check additionally refuses writing through a
 	// symlinked folder that stays inside the root.
-	if err := e.validateNoSymlinkBoundary(action.Path, "download"); err != nil {
+	if err := e.validateNoSymlinkBoundary(target, "download"); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionDownload,
@@ -51,7 +53,7 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 			permissionCapabilityRemoteRead,
 		)
 	}
-	targetPreconditionErr := e.validateDownloadTargetPrecondition(action)
+	targetPreconditionErr := e.validateDownloadTargetPrecondition(action, target)
 	if targetPreconditionErr != nil {
 		return e.failedOutcomeWithFailure(
 			action,
@@ -70,9 +72,9 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 		Target:         syncDownloadTarget{tree: e.syncTree},
 		ValidateTargetBeforeRename: func() error {
 			if preserved {
-				return e.validateDownloadTargetPrecondition(action)
+				return e.validateDownloadTargetPrecondition(action, target)
 			}
-			if err := e.validateDownloadTargetBeforeReplace(action); err != nil {
+			if err := e.validateDownloadTargetBeforeReplace(action, target); err != nil {
 				return err
 			}
 			preserved = true
@@ -88,7 +90,7 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 		opts.RemoteETag = action.View.Remote.ETag
 	}
 
-	result, err := e.transferMgr.DownloadToFile(ctx, driveID, action.ItemID, action.Path, opts)
+	result, err := e.transferMgr.DownloadToFile(ctx, driveID, action.ItemID, target, opts)
 	if err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
@@ -103,13 +105,28 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 		return e.failedOutcomeWithFailure(action, ActionDownload, crashErr, action.Path, permissionCapabilityUnknown)
 	}
 
-	outcome := e.downloadOutcome(action, driveID, result.LocalHash, result.EffectiveRemoteHash, result.Size)
+	outcome := e.downloadOutcome(action, target, driveID, result.LocalHash, result.EffectiveRemoteHash, result.Size)
 	return outcome
 }
 
-// downloadOutcome builds a successful ActionOutcome after download.
+// downloadTargetSpelling is the rooted path a download writes. A download over
+// an existing file replaces that file by its spelling on disk, which on a
+// byte-exact filesystem can differ from the stored NFC path; writing the
+// stored spelling would leave a second, NFC-named file beside it (R-2.13.2).
+// A new file is written under the stored spelling inside its parent folders'
+// spellings on disk, and its own folder is not listed to find it.
+func (e *executor) downloadTargetSpelling(action *Action) string {
+	if plannedLocalState(action) != nil {
+		return e.syncTree.Spelling(action.Path)
+	}
+
+	return e.syncTree.SpellingOfParent(action.Path)
+}
+
+// downloadOutcome builds a successful ActionOutcome after a download wrote
+// target, the rooted spelling on disk of action.Path.
 func (e *executor) downloadOutcome(
-	action *Action, driveID driveid.ID, localHash, remoteHash string, size int64,
+	action *Action, target string, driveID driveid.ID, localHash, remoteHash string, size int64,
 ) actionOutcome {
 	o := actionOutcome{
 		Action:          ActionDownload,
@@ -140,11 +157,11 @@ func (e *executor) downloadOutcome(
 	// not the mtime that was asked for: a filesystem with coarse timestamps
 	// (FAT, SMB, some FUSE mounts) stores a rounded time, and recording the
 	// intended one made every later scan see a local change (D-046).
-	if info, statErr := e.syncTree.Stat(action.Path); statErr == nil {
+	if info, statErr := e.syncTree.Stat(target); statErr == nil {
 		o.LocalMtime = info.ModTime().UnixNano()
 	}
 	o.ParentID = e.resolvedParentIDForOutcome(action, nil)
-	e.observeLocalIdentity(&o)
+	e.observeLocalIdentity(&o, target)
 
 	return o
 }
@@ -170,17 +187,13 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 			permissionCapabilityRemoteRead,
 		)
 	}
-	if sourceErr := e.validateUploadSourcePrecondition(action); sourceErr != nil {
-		return e.failedOutcomeWithFailure(
-			action,
-			ActionUpload,
-			sourceErr,
-			action.Path,
-			permissionCapabilityLocalRead,
-		)
+	// Read by its spelling on disk, not the stored NFC path (R-2.13.2).
+	source := e.syncTree.Spelling(action.Path)
+	if sourceErr := e.validateUploadSourcePrecondition(action, source); sourceErr != nil {
+		return e.failedOutcomeWithFailure(action, ActionUpload, sourceErr, action.Path, permissionCapabilityLocalRead)
 	}
 
-	localPath, err := e.syncTree.Abs(action.Path)
+	localPath, err := e.syncTree.Abs(source)
 	if err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
@@ -201,7 +214,7 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 		// while a long upload runs answers 412 instead of being replaced
 		// (D-022, L-02). Not the planned eTag: a planned remote move bumps it
 		// before this content upload.
-		opts := e.uploadOpts(action)
+		opts := e.uploadOpts(action, source)
 		opts.IfMatch = liveETag
 		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, action.ItemID, localPath, opts)
 		err = uploadTransferError(err)
@@ -236,11 +249,11 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 		}
 
 		name := filepath.Base(action.Path)
-		opts := e.uploadOpts(action)
+		opts := e.uploadOpts(action, source)
 		opts.OnCreated = e.recordPendingCreate(ctx, action, driveID, parentID)
 		result, err = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, opts)
 		if errors.Is(err, graph.ErrConflict) {
-			result, err = e.resolveCreateConflict(ctx, action, driveID, parentID, localPath, err)
+			result, err = e.resolveCreateConflict(ctx, action, driveID, parentID, source, localPath, err)
 		}
 		err = uploadTransferError(err)
 		if err != nil {
@@ -410,7 +423,9 @@ func (e *executor) uploadOutcome(
 	return outcome
 }
 
-func (e *executor) uploadOpts(action *Action) driveops.UploadOpts {
+// uploadOpts are the transfer options of action's upload, whose source is the
+// rooted path source (its spelling on disk).
+func (e *executor) uploadOpts(action *Action, source string) driveops.UploadOpts {
 	plannedETag := ""
 	if action.View != nil && action.View.Remote != nil {
 		plannedETag = action.View.Remote.ETag
@@ -428,7 +443,7 @@ func (e *executor) uploadOpts(action *Action) driveops.UploadOpts {
 			)
 		},
 		ValidateSourceBeforeRead: func() error {
-			return e.validateUploadSourcePrecondition(action)
+			return e.validateUploadSourcePrecondition(action, source)
 		},
 	}
 }
@@ -497,7 +512,7 @@ func (e *executor) recordPendingCreate(
 //   - The same spelling (another device created it meanwhile), or nothing
 //     visible yet: stale, so the replan sees the remote item and keeps both.
 func (e *executor) resolveCreateConflict(
-	ctx context.Context, action *Action, driveID driveid.ID, parentID, localPath string, conflictErr error,
+	ctx context.Context, action *Action, driveID driveid.ID, parentID, source, localPath string, conflictErr error,
 ) (*driveops.UploadResult, error) {
 	if e.pendingCreates != nil {
 		pending, found, err := e.pendingCreates.PendingCreateAt(ctx, action.Path)
@@ -507,7 +522,7 @@ func (e *executor) resolveCreateConflict(
 		if found {
 			if item, getErr := e.items.GetItem(ctx, driveID, pending.ItemID); getErr == nil &&
 				item.Size == 0 && item.ETag == pending.CreatedETag {
-				opts := e.uploadOpts(action)
+				opts := e.uploadOpts(action, source)
 				opts.IfMatch = pending.CreatedETag
 				return e.transferMgr.UploadFileToItem(ctx, driveID, pending.ItemID, localPath, opts) //nolint:wrapcheck // driveops names the file
 			}

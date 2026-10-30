@@ -255,6 +255,12 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta,
 		TestRunOnce_UploadOnly_StillObservesRemoteDelta,
 		TestRunOnce_VirtualTime_FolderDeletesSpaceFullRefreshes,
+		TestRunOnce_LocalNFDNamedFileUploadsInOnePass,
+		TestRunOnce_RemoteEditReplacesTheNFDNamedLocalFile,
+		TestRunOnce_RemoteDeleteRemovesTheNFDNamedLocalFile,
+		TestRunOnce_RemoteMoveMovesTheNFDNamedLocalFile,
+		TestRunOnce_NFDNamedLocalFolderReceivesAdditionsAndIsDeleted,
+		TestRunOnce_ConflictingEditsOfAnNFDNamedFileKeepBoth,
 	}
 }
 

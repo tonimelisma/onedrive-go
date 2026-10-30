@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -33,6 +34,8 @@ func (t fakeVerifyTree) Stat(rel string) (os.FileInfo, error) {
 
 	return t.statFn(rel)
 }
+
+func (t fakeVerifyTree) Spelling(rel string) string { return rel }
 
 func (t fakeVerifyTree) Abs(rel string) (string, error) {
 	if t.absFn == nil {
@@ -446,4 +449,38 @@ func TestVerifyBaseline_ClassifiesHashComputationErrorsAsUnreadable(t *testing.T
 	assert.Equal(t, "expected-hash", report.Mismatches[0].Expected)
 	assert.Equal(t, "hash reader failed", report.Mismatches[0].Reason)
 	assert.Empty(t, report.Mismatches[0].Actual, "an I/O error is not a hash")
+}
+
+// Validates: R-2.7, R-2.13.2
+//
+// A baseline path is NFC; a file whose name is NFD on disk is verified by
+// its own spelling, not reported missing. macOS finds either spelling, so
+// the premise only holds on byte-exact filesystems.
+func TestVerifyBaseline_FindsAnNFDNamedFile(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "darwin" {
+		t.Skip("macOS volumes are normalization-insensitive")
+	}
+
+	dir := t.TempDir()
+	content := "nfd verify"
+	writeTestFile(t, dir, filepath.Join("café", "café.txt"), content)
+	stored := "café/café.txt"
+	bl := &syncengine.Baseline{
+		ByPath: map[string]*syncengine.BaselineEntry{
+			stored: {
+				Path: stored, DriveID: driveid.New("d"), ItemID: "i1",
+				ItemType: syncengine.ItemTypeFile, LocalHash: hashContent(t, content),
+				LocalSize: int64(len(content)), LocalSizeKnown: true,
+			},
+		},
+		ByDirNameKey: make(map[syncengine.DirNameKey][]*syncengine.BaselineEntry),
+	}
+	tree, err := synctree.Open(dir)
+	require.NoError(t, err)
+
+	report, err := VerifyBaseline(t.Context(), bl, tree, newTestLogger())
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Verified)
+	assert.Empty(t, report.Mismatches)
 }

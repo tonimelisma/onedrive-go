@@ -139,9 +139,11 @@ func (o *localObserver) rewatchUnwatchedDirectories(tree *synctree.Root, rows []
 		if added >= maxRewatchPerScan {
 			return
 		}
+		// Rows carry the stored NFC path; the watch is registered on the
+		// spelling on disk, as the walk registered it (R-2.13.2).
 		fsPath := tree.Path()
 		if rel != "." {
-			fsPath = filepath.Join(fsPath, filepath.FromSlash(rel))
+			fsPath = filepath.Join(fsPath, tree.Spelling(filepath.FromSlash(rel)))
 		}
 		if o.watchedDirs.has(fsPath) {
 			continue
@@ -505,13 +507,14 @@ func (o *localObserver) watchCreateHash(tree *synctree.Root, fsPath, dbRelPath, 
 	return o.stableHashOrEmpty(fsPath, dbRelPath)
 }
 
-// syncedPathGone reports whether the synced path is confirmed absent now.
-// Any other answer (present, or unreadable) is not proof of a move.
+// syncedPathGone reports whether the synced path is confirmed absent now,
+// under any spelling on disk of the stored path (R-2.13.2). Any other answer
+// (present, or unreadable) is not proof of a move.
 func syncedPathGone(tree *synctree.Root, dbRelPath string) bool {
 	if tree == nil {
 		return false
 	}
-	_, err := tree.Lstat(dbRelPath)
+	_, err := tree.Lstat(tree.Spelling(dbRelPath))
 
 	return errors.Is(err, fs.ErrNotExist)
 }
@@ -1202,14 +1205,22 @@ func (o *localObserver) watchIdentityIndex() *scanAvailability {
 // localPathStillPresent reports whether the exact name at fsPath exists. On a
 // case-insensitive volume Lstat also finds a differently-cased sibling, which
 // is the other half of a case-only rename, so the parent listing decides.
+//
+// The event's own path is the one looked up, not the stored NFC dbRelPath:
+// on a byte-exact filesystem an NFD-named file is absent under its NFC
+// spelling, and an atomic save of it read as a delete (R-2.13.2).
 func localPathStillPresent(tree *synctree.Root, dbRelPath, fsPath string) bool {
 	if tree == nil {
 		return false
 	}
-	if _, err := tree.Lstat(dbRelPath); err != nil {
+	rel, err := tree.Rel(fsPath)
+	if err != nil {
+		rel = tree.Spelling(dbRelPath)
+	}
+	if _, statErr := tree.Lstat(rel); statErr != nil {
 		return false
 	}
-	entries, err := tree.ReadDir(filepath.Dir(dbRelPath))
+	entries, err := tree.ReadDir(filepath.Dir(rel))
 	if err != nil {
 		return false
 	}

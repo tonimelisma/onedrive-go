@@ -271,7 +271,11 @@ func (e *executor) ExecuteFolderCreate(ctx context.Context, action *Action) acti
 
 // createLocalFolder creates a directory on the local filesystem.
 func (e *executor) createLocalFolder(action *Action) actionOutcome {
-	if err := e.validateNoSymlinkBoundary(action.Path, "create folder"); err != nil {
+	// The stored name inside its parents' spellings on disk (R-2.13.2):
+	// creating the stored spelling of an NFD-named parent would make a
+	// second, NFC-named parent beside it.
+	folder := e.syncTree.SpellingOfParent(action.Path)
+	if err := e.validateNoSymlinkBoundary(folder, "create folder"); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionFolderCreate,
@@ -281,7 +285,7 @@ func (e *executor) createLocalFolder(action *Action) actionOutcome {
 		)
 	}
 
-	if err := e.syncTree.MkdirAll(action.Path, localDirPerms); err != nil {
+	if err := e.syncTree.MkdirAll(folder, localDirPerms); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionFolderCreate,
@@ -294,7 +298,7 @@ func (e *executor) createLocalFolder(action *Action) actionOutcome {
 	// Set mtime from remote if available.
 	if action.View != nil && action.View.Remote != nil && action.View.Remote.Mtime != 0 {
 		mtime := time.Unix(0, action.View.Remote.Mtime)
-		if err := e.syncTree.Chtimes(action.Path, mtime, mtime); err != nil {
+		if err := e.syncTree.Chtimes(folder, mtime, mtime); err != nil {
 			// Debug: the folder exists; some filesystems (SMB, FUSE) refuse
 			// directory times, which would otherwise warn once per folder.
 			e.logger.Debug("failed to set folder mtime", slog.String("path", action.Path), slog.String("error", err.Error()))
@@ -303,7 +307,7 @@ func (e *executor) createLocalFolder(action *Action) actionOutcome {
 
 	e.logger.Debug("created local folder", slog.String("path", action.Path))
 
-	return e.folderOutcome(action)
+	return e.folderOutcome(action, folder)
 }
 
 func (e *executor) resolvedParentIDForOutcome(action *Action, item *graph.Item) string {
@@ -443,10 +447,17 @@ func (e *executor) ExecuteMove(ctx context.Context, action *Action) actionOutcom
 
 // ExecuteLocalMove renames a local file/folder.
 func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
+	// Both endpoints are addressed by their spelling on disk (R-2.13.2): the
+	// source and the destination's existing parents, and an existing
+	// destination the move replaces. A destination that does not exist yet
+	// keeps the stored name.
+	source := e.syncTree.Spelling(action.OldPath)
+	dest := e.syncTree.Spelling(action.Path)
+
 	// Both endpoints matter: an unchecked destination would still create
 	// parent directories outside the sync root, and rename replaces whatever
 	// sits at the destination.
-	for _, endpoint := range []string{action.OldPath, action.Path} {
+	for _, endpoint := range []string{source, dest} {
 		if err := e.validateNoSymlinkBoundary(endpoint, "move"); err != nil {
 			return e.failedOutcomeWithFailure(
 				action,
@@ -458,7 +469,7 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 		}
 	}
 
-	if err := e.validateLocalMovePrecondition(action); err != nil {
+	if err := e.validateLocalMovePrecondition(action, source, dest); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionLocalMove,
@@ -472,7 +483,7 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 	// creates or moves its target parent (D-054); fabricating a missing parent
 	// here hid ordering bugs and left stray folders that the next pass
 	// uploaded.
-	if err := e.validateLocalMoveParentExists(action); err != nil {
+	if err := e.validateLocalMoveParentExists(dest); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionLocalMove,
@@ -482,7 +493,7 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 		)
 	}
 
-	if err := e.clearLocalMoveDestination(action); err != nil {
+	if err := e.clearLocalMoveDestination(action, dest); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionLocalMove,
@@ -492,7 +503,7 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 		)
 	}
 
-	if err := e.renameLocal(action.OldPath, action.Path); err != nil {
+	if err := e.renameLocal(source, dest, isLocalSpellingOnlyMove(action.OldPath, action.Path)); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionLocalMove,
@@ -511,18 +522,20 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 	return e.moveOutcome(action)
 }
 
-// renameLocal renames within the sync tree. A spelling-only rename is tried
-// directly first: Linux filesystems and APFS store the new spelling that way.
-// Only when the stored spelling did not change (a case-insensitive volume
-// that treats the rename as a no-op) does it go through a temporary sibling,
-// named so that local observation always excludes it
-// (isSpellingRenameArtifactName): a crash between the two renames must not
-// leave a file that syncs under the temporary name.
-func (e *executor) renameLocal(oldPath, newPath string) error {
+// renameLocal renames within the sync tree, between rooted paths spelled as
+// on disk. A spelling-only rename (spellingOnly: the stored paths differ only
+// under OneDrive's name equivalence) is tried directly first: Linux
+// filesystems and APFS store the new spelling that way. Only when the stored
+// spelling did not change (a case-insensitive volume that treats the rename
+// as a no-op) does it go through a temporary sibling, named so that local
+// observation always excludes it (isSpellingRenameArtifactName): a crash
+// between the two renames must not leave a file that syncs under the
+// temporary name.
+func (e *executor) renameLocal(oldPath, newPath string, spellingOnly bool) error {
 	if err := e.syncTree.Rename(oldPath, newPath); err != nil {
 		return err //nolint:wrapcheck // synctree names both paths
 	}
-	if !isLocalSpellingOnlyMove(oldPath, newPath) {
+	if !spellingOnly {
 		return nil
 	}
 
@@ -785,8 +798,9 @@ func inferFailureCapabilityFromError(
 	}
 }
 
-// folderOutcome builds a successful ActionOutcome for a local folder create.
-func (e *executor) folderOutcome(action *Action) actionOutcome {
+// folderOutcome builds a successful ActionOutcome for a local folder create
+// of folder, the rooted spelling on disk of action.Path.
+func (e *executor) folderOutcome(action *Action, folder string) actionOutcome {
 	o := actionOutcome{
 		Action:   ActionFolderCreate,
 		Success:  true,
@@ -801,7 +815,7 @@ func (e *executor) folderOutcome(action *Action) actionOutcome {
 		o.ItemID = action.View.Remote.ItemID
 		o.ETag = action.View.Remote.ETag
 	}
-	e.observeLocalIdentity(&o)
+	e.observeLocalIdentity(&o, folder)
 
 	return o
 }
@@ -812,10 +826,11 @@ func (e *executor) folderOutcome(action *Action) actionOutcome {
 // identity is always marked observed: an entry the executor just (re)created
 // must never inherit a stale baseline identity or ctime, so a failed lookup
 // records "unknown" rather than falling back, and unknown forces a re-read.
-func (e *executor) observeLocalIdentity(o *actionOutcome) {
+// local is the entry's rooted spelling on disk (R-2.13.2).
+func (e *executor) observeLocalIdentity(o *actionOutcome, local string) {
 	o.LocalIdentityObserved = true
 	o.LocalCtime = 0
-	info, err := e.syncTree.Lstat(o.Path)
+	info, err := e.syncTree.Lstat(local)
 	if err != nil {
 		e.logger.Debug("local identity unavailable after materializing entry",
 			slog.String("path", o.Path),

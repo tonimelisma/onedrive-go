@@ -346,12 +346,14 @@ func (e *executor) expectedRemotePreconditionPath(action *Action) string {
 	return actionViewPath(action)
 }
 
-func (e *executor) validateUploadSourcePrecondition(action *Action) error {
+// validateUploadSourcePrecondition requires the file at source, the rooted
+// spelling on disk of action.Path, to still be the file the plan observed.
+func (e *executor) validateUploadSourcePrecondition(action *Action, source string) error {
 	if action == nil {
 		return nil
 	}
 
-	info, err := e.uploadSourceInfo(action.Path)
+	info, err := e.uploadSourceInfo(source)
 	if err != nil {
 		return err
 	}
@@ -448,18 +450,20 @@ func expectedUploadHash(action *Action) string {
 	return action.View.Local.Hash
 }
 
-func (e *executor) validateDownloadTargetPrecondition(action *Action) error {
+// validateDownloadTargetPrecondition requires target, the rooted path the
+// download writes (downloadTargetSpelling), to still hold what the plan saw.
+func (e *executor) validateDownloadTargetPrecondition(action *Action, target string) error {
 	if action == nil {
 		return nil
 	}
 
-	info, err := e.syncTree.Lstat(action.Path)
+	info, err := e.syncTree.Lstat(target)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// A live -wal or -journal with no main file is a database the
 			// application is mid-way through creating or replacing: writing
 			// a downloaded main file beside it corrupts it just the same.
-			if dbErr := e.refuseLiveDatabaseTarget(action.Path); dbErr != nil {
+			if dbErr := e.refuseLiveDatabaseTarget(target); dbErr != nil {
 				return dbErr
 			}
 			if action.View == nil || action.View.Local == nil || actionClearsLocalBeforeDownload(action) {
@@ -474,7 +478,7 @@ func (e *executor) validateDownloadTargetPrecondition(action *Action) error {
 		return stalePreconditionError("download target %s appeared", action.Path)
 	}
 
-	if err := e.refuseLiveDatabaseTarget(action.Path); err != nil {
+	if err := e.refuseLiveDatabaseTarget(target); err != nil {
 		return err
 	}
 
@@ -483,7 +487,7 @@ func (e *executor) validateDownloadTargetPrecondition(action *Action) error {
 		return stalePreconditionError("download target %s appeared", action.Path)
 	}
 
-	return e.validateExistingDownloadTarget(action, info, planned)
+	return e.validateExistingDownloadTarget(action, target, info, planned)
 }
 
 func actionClearsLocalBeforeDownload(action *Action) bool {
@@ -498,12 +502,12 @@ func plannedLocalState(action *Action) *localState {
 	return action.View.Local
 }
 
-func (e *executor) validateExistingDownloadTarget(action *Action, info os.FileInfo, planned *localState) error {
+func (e *executor) validateExistingDownloadTarget(action *Action, target string, info os.FileInfo, planned *localState) error {
 	if err := validateDownloadTargetMetadata(action, info, planned); err != nil {
 		return err
 	}
 	if expected := expectedDownloadTargetHash(action, planned); expected != "" {
-		absPath, absErr := e.syncTree.Abs(action.Path)
+		absPath, absErr := e.syncTree.Abs(target)
 		if absErr != nil {
 			return normalizeSyncTreePathError(absErr)
 		}
@@ -573,15 +577,15 @@ func plannedCtimeChanged(planned *localState, info os.FileInfo) bool {
 // through the descriptor of the inode that is then preserved in the trash, so
 // the version kept is exactly the version checked (D-010, P-4); the rename
 // that follows can no longer lose the content it replaces.
-func (e *executor) validateDownloadTargetBeforeReplace(action *Action) error {
+func (e *executor) validateDownloadTargetBeforeReplace(action *Action, target string) error {
 	if e.trash == nil {
-		return e.validateDownloadTargetPrecondition(action)
+		return e.validateDownloadTargetPrecondition(action, target)
 	}
-	info, err := e.syncTree.Lstat(action.Path)
+	info, err := e.syncTree.Lstat(target)
 	if err != nil || !info.Mode().IsRegular() || actionClearsLocalBeforeDownload(action) {
-		return e.validateDownloadTargetPrecondition(action)
+		return e.validateDownloadTargetPrecondition(action, target)
 	}
-	if dbErr := e.refuseLiveDatabaseTarget(action.Path); dbErr != nil {
+	if dbErr := e.refuseLiveDatabaseTarget(target); dbErr != nil {
 		return dbErr
 	}
 	planned := plannedLocalState(action)
@@ -589,7 +593,7 @@ func (e *executor) validateDownloadTargetBeforeReplace(action *Action) error {
 		return stalePreconditionError("download target %s appeared", action.Path)
 	}
 
-	return e.preserveReplacedDownloadTarget(action, e.downloadTargetVerifier(action, planned))
+	return e.preserveReplacedDownloadTarget(action, target, e.downloadTargetVerifier(action, planned))
 }
 
 // downloadTargetVerifier checks, through the open descriptor, that the file a
@@ -614,14 +618,14 @@ func (e *executor) downloadTargetVerifier(action *Action, planned *localState) s
 	}
 }
 
-// preserveReplacedDownloadTarget keeps the verified version of a download's
-// target in the trash before the download replaces it.
-func (e *executor) preserveReplacedDownloadTarget(action *Action, verify synctree.VerifyFunc) error {
-	placement, err := e.trash.Reserve(e.syncTree.Path(), action.Path, localtrash.ReasonReplaced)
+// preserveReplacedDownloadTarget keeps the verified version of the file at
+// target (rooted, spelled as on disk) in the trash before it is replaced.
+func (e *executor) preserveReplacedDownloadTarget(action *Action, target string, verify synctree.VerifyFunc) error {
+	placement, err := e.trash.Reserve(e.syncTree.Path(), target, localtrash.ReasonReplaced)
 	if err != nil {
 		return fmt.Errorf("keeping the replaced version of %s: %w", action.Path, err)
 	}
-	if err := e.syncTree.PreserveRegularFile(action.Path, verify, placement.ItemPath); err != nil {
+	if err := e.syncTree.PreserveRegularFile(target, verify, placement.ItemPath); err != nil {
 		if abandonErr := placement.Abandon(); abandonErr != nil {
 			e.logger.Debug("could not remove unused trash entry",
 				slog.String("path", action.Path), slog.String("error", abandonErr.Error()))
@@ -631,24 +635,25 @@ func (e *executor) preserveReplacedDownloadTarget(action *Action, verify synctre
 		}
 		return fmt.Errorf("keeping the replaced version of %s: %w", action.Path, err)
 	}
-	e.commitTrashPlacement(action.Path, placement)
+	e.commitTrashPlacement(target, placement)
 
 	return nil
 }
 
-func (e *executor) validateLocalMovePrecondition(action *Action) error {
+// validateLocalMovePrecondition checks a local move between source and dest,
+// the rooted spellings on disk of action.OldPath and action.Path.
+func (e *executor) validateLocalMovePrecondition(action *Action, source, dest string) error {
 	if action == nil {
 		return nil
 	}
-	source := localMoveSourcePath(action)
 	info, err := e.syncTree.Lstat(source)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return stalePreconditionError("local move source %s is missing", source)
+			return stalePreconditionError("local move source %s is missing", localMoveSourcePath(action))
 		}
 		return normalizeSyncTreePathError(err)
 	}
-	if err := e.validateLocalMoveDestinationAbsent(action, source, info); err != nil {
+	if err := e.validateLocalMoveDestinationAbsent(action, dest, info); err != nil {
 		return err
 	}
 
@@ -659,10 +664,10 @@ func (e *executor) validateLocalMovePrecondition(action *Action) error {
 	return e.validateLocalMoveSourceAgainstBaseline(source, info, action.View.Baseline)
 }
 
-// validateLocalMoveParentExists requires the destination's parent directory to
-// exist already.
-func (e *executor) validateLocalMoveParentExists(action *Action) error {
-	parent := filepath.Dir(action.Path)
+// validateLocalMoveParentExists requires the parent directory of dest (rooted,
+// spelled as on disk) to exist already.
+func (e *executor) validateLocalMoveParentExists(dest string) error {
+	parent := filepath.Dir(dest)
 	if parent == "." || parent == "" {
 		return nil
 	}
@@ -734,11 +739,12 @@ func localMoveSourcePath(action *Action) string {
 // except the source itself: on a case-insensitive or normalization-insensitive
 // volume (macOS by default) a remote case-only or Unicode-form-only rename
 // finds its destination already "present" as the same inode, and refusing it
-// left the rename stale on every pass forever (D-031).
-func (e *executor) validateLocalMoveDestinationAbsent(action *Action, source string, sourceInfo os.FileInfo) error {
-	destInfo, destErr := e.syncTree.Lstat(action.Path)
+// left the rename stale on every pass forever (D-031). dest is the rooted
+// spelling on disk of action.Path.
+func (e *executor) validateLocalMoveDestinationAbsent(action *Action, dest string, sourceInfo os.FileInfo) error {
+	destInfo, destErr := e.syncTree.Lstat(dest)
 	if destErr == nil {
-		if isLocalSpellingOnlyMove(source, action.Path) && os.SameFile(sourceInfo, destInfo) {
+		if isLocalSpellingOnlyMove(localMoveSourcePath(action), action.Path) && os.SameFile(sourceInfo, destInfo) {
 			return nil
 		}
 		if action.ReplaceLocalTarget {
@@ -765,11 +771,11 @@ func (e *executor) validateLocalMoveDestinationAbsent(action *Action, source str
 // superseded the remote move on every pass and stranded the edit.
 // clearLocalMoveDestination makes way for a replacing local move immediately
 // before its rename, after the source and the parent were validated.
-func (e *executor) clearLocalMoveDestination(action *Action) error {
+func (e *executor) clearLocalMoveDestination(action *Action, dest string) error {
 	if !action.ReplaceLocalTarget {
 		return nil
 	}
-	destInfo, err := e.syncTree.Lstat(action.Path)
+	destInfo, err := e.syncTree.Lstat(dest)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -777,7 +783,7 @@ func (e *executor) clearLocalMoveDestination(action *Action) error {
 		return normalizeSyncTreePathError(err)
 	}
 
-	return e.clearReplacedLocalMoveTarget(action, destInfo)
+	return e.clearReplacedLocalMoveTarget(action, dest, destInfo)
 }
 
 // clearReplacedLocalMoveTarget makes way for a move that replaces the file at
@@ -785,19 +791,19 @@ func (e *executor) clearLocalMoveDestination(action *Action) error {
 // saw (a regular file with its observed hash, metadata and ctime), and is kept
 // in the trash when one is configured, verified through the descriptor that is
 // preserved. Without a trash the verified file is replaced by the rename.
-func (e *executor) clearReplacedLocalMoveTarget(action *Action, destInfo os.FileInfo) error {
+func (e *executor) clearReplacedLocalMoveTarget(action *Action, dest string, destInfo os.FileInfo) error {
 	planned := plannedLocalState(action)
 	if !destInfo.Mode().IsRegular() || planned == nil || planned.Hash == "" {
 		return stalePreconditionError("local move destination %s already exists", action.Path)
 	}
-	if err := e.refuseLiveDatabaseTarget(action.Path); err != nil {
+	if err := e.refuseLiveDatabaseTarget(dest); err != nil {
 		return err
 	}
 	if e.trash == nil {
-		return e.validateExistingDownloadTarget(action, destInfo, planned)
+		return e.validateExistingDownloadTarget(action, dest, destInfo, planned)
 	}
 
-	return e.preserveReplacedDownloadTarget(action, e.downloadTargetVerifier(action, planned))
+	return e.preserveReplacedDownloadTarget(action, dest, e.downloadTargetVerifier(action, planned))
 }
 
 func (e *executor) validateLocalMoveSourceAgainstBaseline(

@@ -4,7 +4,7 @@ GOVERNS: internal/sync/action_freshness.go, internal/sync/active_scopes.go, inte
 
 LAYER: 3
 
-Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified]
+Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified]
 
 ## Overview
 
@@ -48,6 +48,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Local deletes and download overwrites act only on the inode they verified, keep a file replaced mid-check, and put what they remove or replace in the drive's local trash. | `TestDeleteLocalFile_MovesTheFileToTheTrash`, `TestDeleteLocalFile_FileReplacedMidHashSurvives`, `TestDetachRegularFile_FileReplacedDuringVerifyIsKept`, `TestRunOnce_RemoteDeleteMovesLocalFileToTrash`, `TestRunOnce_DownloadOverwriteKeepsPreviousVersionInTrash`, `TestDetachRegularFile_InPlaceWriteAfterVerifyIsKept`, `TestCopyVerified_WriteDuringCopyDiscardsTheCopy`, `TestTrash_CrashBetweenMoveAndCommitIsRecoverable`, `TestTrash_FailedCommitLeavesARecoverablePendingEntry`, `TestTrash_OrphanItemIsListedAndKept`, `TestTrash_RestoreAcrossFilesystemsCopies`, `TestTrash_RestoreRefusesSymlinkedAncestor`, `TestFullScan_LeftoverSetAsideFileIsReportedNotDeleted`, `TestTrash_CrossFilesystemRestoreKeepsModeAndTime`, `TestTrash_UncheckableItemIsNeverPurged`, `TestLinkOrCopyNoReplace_FilesystemWithoutHardLinksCopies`, `TestLinkOrCopyNoReplace_SourceThatCannotBeRemovedIsReportedAfterSuccess` |
 | A recursive remote folder delete refuses to take descendants sync never saw or that changed online; a remote delete re-checks local absence and the sync folder identity; a local folder delete over only ignored children converges. | `TestExecuteRemoteDelete_FolderWithUnobservedChildIsStale`, `TestExecuteRemoteDelete_FolderWithOnlySyncedUnchangedChildrenRuns`, `TestExecuteRemoteDelete_FolderChildChangedOnlyInETagOrSizeIsStale`, `TestExecuteRemoteDelete_FolderOverListingCapIsDurableIssueNotStale`, `TestRunOnce_LocalFolderDeleteKeepsRemoteChildAddedAfterObservation`, `TestExecuteRemoteDelete_LocalPathReappearedIsSuperseded`, `TestDeleteLocalFolder_OnlyIgnoredChildrenConverges`, `TestRunOnce_RemoteFolderDeleteWithIgnoredLocalFileConverges` |
 | Executor live preconditions reject stale work at the side-effect boundary without mutating local or remote state. | `TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure`, `TestExecutor_RemoteDelete_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_RemoteDelete_WrongDrivePreflightReturnsStalePrecondition`, `TestExecutor_RemoteDelete_StalePathPreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_StaleSourcePreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_CreateRemoteFolder_MissingParentPreflightReturnsStalePrecondition`, `TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition`, `TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition`, `TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStalePrecondition`, `TestExecutor_Download_MountRootAllowsGraphDriveRootPath`, `TestExecutor_LocalMove_MissingDestinationParentIsStale`, `TestExecutor_LocalMove_LocallyEditedSourceStillMovesAndKeepsTheEditPending`, `TestExecutor_LocalMove_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition` |
+| On a byte-exact filesystem every local operation addresses an existing entry by its spelling on disk: an NFD-named file uploads in one pass, a remote edit replaces it in place, a remote delete, rename or move removes or moves it, a conflict copy preserves it, an NFD-named folder receives remote additions inside itself and is deleted, a remote delete is superseded when the NFD-named file is back, and the permission probe reports the stored boundary (R-2.13.2). | `TestRunOnce_LocalNFDNamedFileUploadsInOnePass`, `TestRunOnce_RemoteEditReplacesTheNFDNamedLocalFile`, `TestRunOnce_RemoteDeleteRemovesTheNFDNamedLocalFile`, `TestRunOnce_RemoteMoveMovesTheNFDNamedLocalFile`, `TestRunOnce_ConflictingEditsOfAnNFDNamedFileKeepBoth`, `TestRunOnce_NFDNamedLocalFolderReceivesAdditionsAndIsDeleted`, `TestExecuteRemoteDelete_NFDNamedLocalFileBackIsSuperseded`, `TestPermHandler_HandleLocalPermission_ProbesTheNFDNamedFolder` |
 | Workers preserve executor failure capability on completions and record worker-start/live-precondition superseded counters by local-vs-remote source. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_RemoteDownloadMismatchRecordsRemoteTruthCounter`, `TestWorkerPool_SendResultCountsLivePreconditionSupersededByCapability`, `TestWorkerPool_SendResultDoesNotGuessLivePreconditionSourceWithoutCapability` |
 | A worker commits a successful action's outcome on a context detached from the pool's cancellation and bounded by `outcomeCommitTimeout`, so a shutdown landing between the transfer and its commit still records the finished work. | `TestWorkerPool_CommitsCompletedOutcomeAfterPoolCancellation` |
 | Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork` |
@@ -430,6 +431,36 @@ Execution-time validation is always-on where it matters. Upload overwrite
 preflight and similar validation-before-mutate checks are executor-owned and
 apply in both one-shot and watch mode; they are not gated on a watch-only
 policy flag.
+
+### Local spelling on disk
+
+Every stored path is NFC (R-2.13.1). On macOS the filesystem finds an entry
+by either Unicode spelling, but a byte-exact filesystem (Linux ext4, the CI
+runners) answers ENOENT for the NFC spelling of an entry whose name on disk
+is NFD. Before R-2.13.2 an NFD-named local file was never uploaded: each pass
+superseded the upload as "upload source ... is missing" and reported success.
+
+The executor therefore turns the action's stored path into a rooted path
+spelled as on disk once, at the start of each local operation, and uses that
+path for every filesystem call of the action; outcomes, logs and messages
+keep the stored path. The resolution is `synctree.Root.Spelling` (see
+`system.md`):
+
+- an existing entry (`Spelling`): the upload source, a download over an
+  existing file (`downloadTargetSpelling`, chosen when the plan saw a local
+  file), a local delete, both endpoints of a local move (an existing
+  destination is what a replacing move replaces), a conflict copy's source,
+  and a remote delete's local-absence check;
+- a new entry (`SpellingOfParent`): a download of a new file, a local folder
+  create and a conflict copy's name are written under the stored name inside
+  their parents' spellings on disk, and the new entry's own folder is never
+  listed for it, so a large initial download does not read its folder once
+  per file.
+
+Absolute paths for transfers and hashing (`driveops` opens upload sources and
+hashes through `localpath` by absolute path) come from `Abs` of the resolved
+path, so they bypass nothing. The local permission probe stats the resolved
+path and reports the boundary it finds in the stored form.
 
 ### Local deletes
 

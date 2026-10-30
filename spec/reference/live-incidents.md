@@ -40,6 +40,7 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261029-01 | NFD-named local file was never uploaded on Linux while sync reported success | fixed | product bug | 2026-10-29 | no |
 | LI-20261024-01 | Overlapping live E2E runs against one test account failed each other | fixed | CI configuration | 2026-10-24 | no |
 | LI-20260830-01 | Watch shutdown test intermittently saw watch mode stop before it began draining | fixed | product bug | 2026-08-31 | yes |
 | LI-20260823-01 | Graph returned `serviceReadOnly` on `/me/drives` for every test account | mitigated | provider outage | 2026-08-23 | no |
@@ -83,6 +84,41 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20261029-01: NFD-named local file was never uploaded on Linux while sync reported success
+
+First seen: 2026-10-29
+Last seen: 2026-10-29
+Area: `internal/sync` executor and observer, `internal/synctree`
+Suite / test: `TestE2E_Sync_NamingCorpusRoundtrip` (`e2e_full`)
+Classification: product bug
+Status: fixed
+Recurring: no
+Summary: On the Linux runner the corpus file `café nfd.txt`, written with
+`e` + U+0301, never reached OneDrive. Every pass logged at DEBUG
+`action failed action=upload path="corpus/café nfd.txt" error="file changed
+while it was being synced: upload source corpus/café nfd.txt is missing"` and
+`action superseded; replanning`, and the sync ended successfully, so the user
+was never told.
+
+Evidence:
+- Every stored path is NFC (R-2.13.1). ext4 compares names byte for byte, so
+  the NFC spelling of an NFD-named file answers ENOENT; macOS volumes find
+  either spelling, which is why the behavior only showed on Linux.
+- The emulated case-insensitive volume (`internal/synctest.CaseInsensitive`)
+  folds NFC and NFD like macOS, so no unit test reproduced it;
+  `TestRunOnce_LocalNFDNamedFileUploadsInOnePass` on the real filesystem did.
+- The same mismatch affected every operation on an existing local entry: a
+  download over the file would have written an NFC sibling, local deletes,
+  moves and conflict copies saw the file as already absent, NFD-named folders
+  got an NFC twin for remote additions, watch re-checks read an atomic save
+  as a delete, and `verify` reported the file missing.
+
+Fix: `synctree.Root.Spelling` resolves a stored path to the spelling on disk
+(exact path first, then one listing per missing component, an ambiguous
+match resolving nothing), and every local operation on an existing entry
+uses it (R-2.13.2). Canonical policy: `spec/design/system.md` (synctree
+spelling) and `spec/design/sync-execution.md` (Local spelling on disk).
 
 ## LI-20261024-01: Overlapping live E2E runs against one test account failed each other
 

@@ -211,7 +211,7 @@ func TestFullScan_StoresFilesystemIdentityForFilesAndDirectories(t *testing.T) {
 
 	const linuxGOOS = "linux"
 	switch runtime.GOOS {
-	case "darwin", linuxGOOS:
+	case darwinGOOS, linuxGOOS:
 	default:
 		t.Skip("filesystem identity is only expected on Unix-like supported platforms")
 	}
