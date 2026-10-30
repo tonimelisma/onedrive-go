@@ -158,7 +158,7 @@ func (r *e2eTimingRecorder) summaryPath() string {
 }
 
 func appendTimingEvent(path string, event e2eTimingEvent) (err error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // a recorder file under the suite's own E2E log dir
 	if err != nil {
 		return fmt.Errorf("open timing events %s: %w", path, err)
 	}
@@ -177,17 +177,23 @@ func appendTimingEvent(path string, event e2eTimingEvent) (err error) {
 }
 
 func loadTimingEvents(path string) ([]e2eTimingEvent, error) {
-	f, err := os.Open(path)
+	return loadNDJSONEvents[e2eTimingEvent](path, "timing")
+}
+
+// loadNDJSONEvents reads a recorder's newline-delimited JSON event log. A
+// missing log is an empty one; kind names the recorder in error messages.
+func loadNDJSONEvents[T any](path, kind string) ([]T, error) {
+	f, err := os.Open(path) //nolint:gosec // a recorder file under the suite's own E2E log dir
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 
-		return nil, fmt.Errorf("open timing events %s: %w", path, err)
+		return nil, fmt.Errorf("open %s events %s: %w", kind, path, err)
 	}
 	defer f.Close()
 
-	events := make([]e2eTimingEvent, 0)
+	events := make([]T, 0)
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -195,15 +201,15 @@ func loadTimingEvents(path string) ([]e2eTimingEvent, error) {
 			continue
 		}
 
-		var event e2eTimingEvent
+		var event T
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			return nil, fmt.Errorf("decode timing event: %w", err)
+			return nil, fmt.Errorf("decode %s event: %w", kind, err)
 		}
 
 		events = append(events, event)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan timing events: %w", err)
+		return nil, fmt.Errorf("scan %s events: %w", kind, err)
 	}
 
 	return events, nil
@@ -304,8 +310,7 @@ func formatTimingDebugLine(event e2eTimingEvent) string {
 func readTimingSummaryFile(t *testing.T, path string) e2eTimingSummary {
 	t.Helper()
 
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
+	data := mustReadFile(t, path)
 
 	var summary e2eTimingSummary
 	require.NoError(t, json.Unmarshal(data, &summary))
@@ -406,8 +411,7 @@ func TestE2ETimingRecorderAppendsDebugLogLine(t *testing.T) {
 		Outcome:     timingOutcomeSuccess,
 	}))
 
-	data, err := os.ReadFile(filepath.Join(dir, sanitizeTestName("TestTimingDebug")+".log"))
-	require.NoError(t, err)
+	data := mustReadFile(t, filepath.Join(dir, sanitizeTestName("TestTimingDebug")+".log"))
 	assert.Contains(t, string(data), "TIMING kind=remote_write_visibility")
 	assert.Contains(t, string(data), "cmd=stat /timing.txt")
 }

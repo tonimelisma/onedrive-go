@@ -350,7 +350,9 @@ func TestE2E_RecycleBinRoundtrip(t *testing.T) {
 	var foundID string
 	for _, item := range rbItems {
 		if name, nameOK := item["name"].(string); nameOK && name == "recycle-test.txt" {
-			foundID, _ = item["id"].(string)
+			id, idOK := item["id"].(string)
+			require.Truef(t, idOK, "recycle bin item id should be a string, got %T", item["id"])
+			foundID = id
 		}
 	}
 	require.NotEmpty(t, foundID, "should find recycle-test.txt in recycle bin list")
@@ -468,20 +470,28 @@ func TestE2E_Mv_JSON(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
+	assertMoveOrCopyJSON(t, "mv", "e2e-mv-json", "a.txt", "b.txt", "mv json content")
+}
+
+// assertMoveOrCopyJSON runs `<verb> --json` on a fresh remote file and checks
+// that the JSON result names the source, the destination and the item id.
+func assertMoveOrCopyJSON(t *testing.T, verb, folderPrefix, srcName, dstName, content string) {
+	t.Helper()
+
 	cfgPath := writeMinimalConfig(t)
 
-	testFolder := fmt.Sprintf("e2e-mv-json-%d", time.Now().UnixNano())
+	testFolder := fmt.Sprintf("%s-%d", folderPrefix, time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
-	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/a.txt", "mv json content")
-	waitForRemoteReadContains(t, cfgPath, nil, "", "a.txt", pollTimeout, "ls", "/"+testFolder)
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/"+srcName, content)
+	waitForRemoteReadContains(t, cfgPath, nil, "", srcName, pollTimeout, "ls", "/"+testFolder)
 
-	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "mv", "--json", "/"+testFolder+"/a.txt", "/"+testFolder+"/b.txt")
+	stdout, _ := runCLIWithConfig(t, cfgPath, nil, verb, "--json", "/"+testFolder+"/"+srcName, "/"+testFolder+"/"+dstName)
 
 	var result map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &result),
-		"mv --json should produce valid JSON, got: %s", stdout)
+		"%s --json should produce valid JSON, got: %s", verb, stdout)
 	assert.Contains(t, result, "source", "JSON should have source field")
 	assert.Contains(t, result, "destination", "JSON should have destination field")
 	assert.Contains(t, result, "id", "JSON should have id field")
@@ -563,23 +573,7 @@ func TestE2E_Cp_JSON(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
-	cfgPath := writeMinimalConfig(t)
-
-	testFolder := fmt.Sprintf("e2e-cp-json-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
-	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/j.txt", "cp json")
-	waitForRemoteReadContains(t, cfgPath, nil, "", "j.txt", pollTimeout, "ls", "/"+testFolder)
-
-	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "cp", "--json", "/"+testFolder+"/j.txt", "/"+testFolder+"/j-copy.txt")
-
-	var result map[string]interface{}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &result),
-		"cp --json should produce valid JSON, got: %s", stdout)
-	assert.Contains(t, result, "source", "JSON should have source field")
-	assert.Contains(t, result, "destination", "JSON should have destination field")
-	assert.Contains(t, result, "id", "JSON should have id field")
+	assertMoveOrCopyJSON(t, "cp", "e2e-cp-json", "j.txt", "j-copy.txt", "cp json")
 }
 
 // Validates: R-1.7
@@ -606,24 +600,7 @@ func TestE2E_Mv_ForceOverwrite(t *testing.T) {
 	registerLogDump(t)
 
 	cfgPath := writeMinimalConfig(t)
-
-	testFolder := fmt.Sprintf("e2e-mv-force-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	// Create folder, source file, and existing destination file.
-	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
-	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/src.txt", "new content")
-	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/dst.txt", "old content")
-	waitForRemoteReadContains(t, cfgPath, nil, "", "src.txt", pollTimeout, "ls", "/"+testFolder)
-	waitForRemoteReadContains(t, cfgPath, nil, "", "dst.txt", pollTimeout, "ls", "/"+testFolder)
-
-	// mv without --force should fail (destination already exists).
-	output := runCLIWithConfigExpectError(t, cfgPath, nil, "mv", "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
-	assert.Contains(t, output, "already exists", "mv without --force should report destination exists")
-
-	// mv --force should succeed and overwrite.
-	_, stderr := runCLIWithConfig(t, cfgPath, nil, "mv", "--force", "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
-	assert.Contains(t, stderr, "Moved", "mv --force should confirm the move")
+	testFolder := runForceOverwrite(t, cfgPath, "mv", "e2e-mv-force", "new content", "Moved", "move")
 
 	// Verify destination has source content and source is gone.
 	content := getRemoteFile(t, cfgPath, nil, "/"+testFolder+"/dst.txt")
@@ -642,24 +619,7 @@ func TestE2E_Cp_ForceOverwrite(t *testing.T) {
 	registerLogDump(t)
 
 	cfgPath := writeMinimalConfig(t)
-
-	testFolder := fmt.Sprintf("e2e-cp-force-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	// Create folder, source file, and existing destination file.
-	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
-	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/src.txt", "copied content")
-	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/dst.txt", "old content")
-	waitForRemoteReadContains(t, cfgPath, nil, "", "src.txt", pollTimeout, "ls", "/"+testFolder)
-	waitForRemoteReadContains(t, cfgPath, nil, "", "dst.txt", pollTimeout, "ls", "/"+testFolder)
-
-	// cp without --force should fail (destination already exists).
-	output := runCLIWithConfigExpectError(t, cfgPath, nil, "cp", "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
-	assert.Contains(t, output, "already exists", "cp without --force should report destination exists")
-
-	// cp --force should succeed and overwrite.
-	_, stderr := runCLIWithConfig(t, cfgPath, nil, "cp", "--force", "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
-	assert.Contains(t, stderr, "Copied", "cp --force should confirm the copy")
+	testFolder := runForceOverwrite(t, cfgPath, "cp", "e2e-cp-force", "copied content", "Copied", "copy")
 
 	// Verify destination has source content and source still exists (it's a copy).
 	content := getRemoteFile(t, cfgPath, nil, "/"+testFolder+"/dst.txt")
@@ -668,6 +628,33 @@ func TestE2E_Cp_ForceOverwrite(t *testing.T) {
 	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
 	assert.Contains(t, stdout, "src.txt", "source should still exist after copy")
 	assert.Contains(t, stdout, "dst.txt", "destination should exist")
+}
+
+// runForceOverwrite creates a remote folder holding src.txt (srcContent) and
+// an existing dst.txt, then checks that `<verb> src dst` refuses to overwrite
+// without --force and succeeds with it. It returns the folder name.
+func runForceOverwrite(t *testing.T, cfgPath, verb, folderPrefix, srcContent, confirmation, noun string) string {
+	t.Helper()
+
+	testFolder := fmt.Sprintf("%s-%d", folderPrefix, time.Now().UnixNano())
+	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
+
+	// Create folder, source file, and existing destination file.
+	runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/src.txt", srcContent)
+	putRemoteFile(t, cfgPath, nil, "/"+testFolder+"/dst.txt", "old content")
+	waitForRemoteReadContains(t, cfgPath, nil, "", "src.txt", pollTimeout, "ls", "/"+testFolder)
+	waitForRemoteReadContains(t, cfgPath, nil, "", "dst.txt", pollTimeout, "ls", "/"+testFolder)
+
+	// Without --force the command should fail (destination already exists).
+	output := runCLIWithConfigExpectError(t, cfgPath, nil, verb, "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
+	assert.Contains(t, output, "already exists", "%s without --force should report destination exists", verb)
+
+	// With --force it should succeed and overwrite.
+	_, stderr := runCLIWithConfig(t, cfgPath, nil, verb, "--force", "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
+	assert.Contains(t, stderr, confirmation, "%s --force should confirm the %s", verb, noun)
+
+	return testFolder
 }
 
 // ---------------------------------------------------------------------------

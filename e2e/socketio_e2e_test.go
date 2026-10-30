@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -36,17 +35,7 @@ func (sb *fastSyncBuffer) String() string {
 	return string(sb.buf)
 }
 
-func containsAny(output string, targets ...string) bool {
-	for _, target := range targets {
-		if strings.Contains(output, target) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func startFastDaemon(t *testing.T, cfgPath string, env map[string]string, args ...string) (*exec.Cmd, *fastSyncBuffer) {
+func startFastDaemon(t *testing.T, cfgPath string, env map[string]string, args ...string) *exec.Cmd {
 	t.Helper()
 
 	daemonArgs := []string{"--config", cfgPath, "--debug"}
@@ -54,23 +43,19 @@ func startFastDaemon(t *testing.T, cfgPath string, env map[string]string, args .
 
 	env, eventsPath := ensureDebugEvents(t, env)
 	cmd := makeCmd(daemonArgs, env)
-	var stdout fastSyncBuffer
-	stderr := &fastSyncBuffer{}
+	var stdout, stderr fastSyncBuffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = stderr
+	cmd.Stderr = &stderr
 
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
-		}
+		stopDaemon(t, cmd)
 
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
-	waitForDaemonReady(t, eventsPath, 30*time.Second)
-	return cmd, stderr
+	waitForDaemonReady(t, eventsPath)
+	return cmd
 }
 
 // Validates: R-2.8.5
@@ -85,7 +70,7 @@ func TestE2E_SyncWatch_WebsocketDisabledLongPollRegression(t *testing.T) {
 	testFolder := fmt.Sprintf("e2e-watch-nowebsocket-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	daemon, _ := startFastDaemon(t, cfgPath, env,
+	daemon := startFastDaemon(t, cfgPath, env,
 		"--drive", drive, "sync", "--watch", "--upload-only")
 
 	localDir := filepath.Join(syncDir, testFolder)
@@ -93,12 +78,12 @@ func TestE2E_SyncWatch_WebsocketDisabledLongPollRegression(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "upload.txt"),
 		[]byte("websocket disabled regression\n"),
-		0o644,
+		0o600,
 	))
 
 	waitForRemoteReadContains(t, opsCfgPath, nil, "", "upload.txt", 3*time.Minute, "stat", "/"+testFolder+"/upload.txt")
 
 	require.NoError(t, daemon.Process.Signal(syscall.SIGTERM))
-	_ = daemon.Wait()
+	waitForDaemonExit(t, daemon)
 	assertNoSocketIOConnected(t, eventsPath)
 }

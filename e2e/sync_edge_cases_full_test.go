@@ -242,7 +242,7 @@ func TestE2E_Sync_TransferWorkersConfig(t *testing.T) {
 		require.NoError(t, os.WriteFile(
 			filepath.Join(localDir, name),
 			[]byte(fmt.Sprintf("content %d", i)),
-			0o644,
+			0o600,
 		))
 	}
 

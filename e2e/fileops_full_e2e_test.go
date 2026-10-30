@@ -5,7 +5,6 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -32,25 +31,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 	})
 
 	t.Run("status_json", func(t *testing.T) {
-		stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
-			t, cfgPath, nil, drive, transientGraphRetryTimeout, "status", "--json",
-		)
-
-		var out struct {
-			Accounts []struct {
-				Drives []struct {
-					Name    string                 `json:"name"`
-					Folder  string                 `json:"folder"`
-					State   string                 `json:"state"`
-					Storage map[string]interface{} `json:"storage"`
-				} `json:"drives"`
-			} `json:"accounts"`
-		}
-		require.NoError(t, json.Unmarshal([]byte(stdout), &out))
-		require.NotEmpty(t, out.Accounts)
-		require.NotEmpty(t, out.Accounts[0].Drives)
-		assert.NotEmpty(t, out.Accounts[0].Drives[0].Name)
-		assert.NotEmpty(t, out.Accounts[0].Drives[0].Folder)
+		assertRoundTripStatusJSON(t, cfgPath)
 	})
 
 	t.Run("ls_root", func(t *testing.T) {
@@ -64,15 +45,9 @@ func TestE2E_RoundTrip(t *testing.T) {
 	})
 
 	t.Run("put", func(t *testing.T) {
-		tmpFile, err := os.CreateTemp("", "e2e-upload-*")
-		require.NoError(t, err)
-		defer os.Remove(tmpFile.Name())
+		uploadPath := writeTempContentFile(t, string(testContent))
 
-		_, err = tmpFile.Write(testContent)
-		require.NoError(t, err)
-		require.NoError(t, tmpFile.Close())
-
-		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", tmpFile.Name(), "/"+testFile)
+		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", uploadPath, "/"+testFile)
 		assert.Contains(t, stderr, "Uploaded")
 	})
 
@@ -93,8 +68,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "get", "/"+testFile, localPath)
 		assert.Contains(t, stderr, "Downloaded")
 
-		downloaded, err := os.ReadFile(localPath)
-		require.NoError(t, err)
+		downloaded := mustReadFile(t, localPath)
 		assert.Equal(t, testContent, downloaded)
 	})
 
@@ -113,16 +87,10 @@ func TestE2E_RoundTrip(t *testing.T) {
 	})
 
 	t.Run("rm_permanent", func(t *testing.T) {
-		tmpFile, err := os.CreateTemp("", "e2e-perm-*")
-		require.NoError(t, err)
-		defer os.Remove(tmpFile.Name())
-
-		_, err = tmpFile.Write([]byte("permanent delete test\n"))
-		require.NoError(t, err)
-		require.NoError(t, tmpFile.Close())
+		uploadPath := writeTempContentFile(t, "permanent delete test\n")
 
 		permFile := testFolder + "/perm-test.txt"
-		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", tmpFile.Name(), "/"+permFile)
+		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", uploadPath, "/"+permFile)
 		assert.Contains(t, stderr, "Uploaded")
 
 		waitForRemoteExactStatVisible(t, cfgPath, nil, drive, "/"+permFile)
@@ -134,7 +102,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 
 	t.Run("status_text", func(t *testing.T) {
 		stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
-			t, cfgPath, nil, drive, transientGraphRetryTimeout, "status",
+			t, cfgPath, nil, drive, "status",
 		)
 
 		email := strings.SplitN(drive, ":", 2)[1]
@@ -143,12 +111,38 @@ func TestE2E_RoundTrip(t *testing.T) {
 
 	t.Run("status", func(t *testing.T) {
 		stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
-			t, cfgPath, nil, drive, transientGraphRetryTimeout, "status",
+			t, cfgPath, nil, drive, "status",
 		)
 		assert.Contains(t, stdout, "Folder:", "status should show the configured drive folder")
 		assert.NotContains(t, stdout, "Auth:", "healthy status should not show auth state")
 		assert.NotContains(t, stdout, "No active conditions.", "healthy status should not print empty issue sections")
 	})
+}
+
+// assertRoundTripStatusJSON checks that status --json reports the primary
+// drive with a name and a sync folder.
+func assertRoundTripStatusJSON(t *testing.T, cfgPath string) {
+	t.Helper()
+
+	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
+		t, cfgPath, nil, drive, "status", "--json",
+	)
+
+	var out struct {
+		Accounts []struct {
+			Drives []struct {
+				Name    string                 `json:"name"`
+				Folder  string                 `json:"folder"`
+				State   string                 `json:"state"`
+				Storage map[string]interface{} `json:"storage"`
+			} `json:"drives"`
+		} `json:"accounts"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &out))
+	require.NotEmpty(t, out.Accounts)
+	require.NotEmpty(t, out.Accounts[0].Drives)
+	assert.NotEmpty(t, out.Accounts[0].Drives[0].Name)
+	assert.NotEmpty(t, out.Accounts[0].Drives[0].Folder)
 }
 
 func TestE2E_ErrorCases(t *testing.T) {
@@ -231,15 +225,9 @@ func TestE2E_QuietFlag(t *testing.T) {
 
 		runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
 
-		tmpFile, err := os.CreateTemp("", "e2e-quiet-*")
-		require.NoError(t, err)
-		defer os.Remove(tmpFile.Name())
+		uploadPath := writeTempContentFile(t, "quiet test content\n")
 
-		_, err = tmpFile.Write([]byte("quiet test content\n"))
-		require.NoError(t, err)
-		require.NoError(t, tmpFile.Close())
-
-		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", "--quiet", tmpFile.Name(), remotePath)
+		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", "--quiet", uploadPath, remotePath)
 		assert.Empty(t, stderr, "expected no stderr output with --quiet flag")
 	})
 }

@@ -17,29 +17,32 @@ import (
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
-// testDataDir holds the path to the isolated data directory containing the
-// test token file. Set by TestMain, used by writeSyncConfig for per-test
-// token copying.
-var testDataDir string
-
-// realHomeDir holds the original HOME directory before TestMain overrides it.
-// Used by isolation tests to verify env overrides are in effect.
-var realHomeDir string
-
-// realGoPath/realGoModCache/realGoCache capture the host Go toolchain cache
-// locations before HOME is redirected for app-state isolation. E2E builds the
-// CLI binary inside TestMain, so preserving these caches avoids re-downloading
-// modules into a temp home on every isolated run.
+// Isolation state captured by setupIsolation, which runs from TestMain.
+//
+//nolint:gochecknoglobals // TestMain can hand suite setup to tests only through package variables.
 var (
+	// testDataDir holds the path to the isolated data directory containing the
+	// test token file. Set by TestMain, used by writeSyncConfig for per-test
+	// token copying.
+	testDataDir string
+
+	// realHomeDir holds the original HOME directory before TestMain overrides it.
+	// Used by isolation tests to verify env overrides are in effect.
+	realHomeDir string
+
+	// realGoPath/realGoModCache/realGoCache capture the host Go toolchain cache
+	// locations before HOME is redirected for app-state isolation. E2E builds the
+	// CLI binary inside TestMain, so preserving these caches avoids re-downloading
+	// modules into a temp home on every isolated run.
 	realGoPath     string
 	realGoModCache string
 	realGoCache    string
-)
 
-// testCredentialDir holds the path to the root .testdata/ credential bundle
-// (repo-root-relative). Tokens, catalog, and config are read from here, never
-// from production dirs.
-var testCredentialDir string
+	// testCredentialDir holds the path to the root .testdata/ credential bundle
+	// (repo-root-relative). Tokens, catalog, and config are read from here, never
+	// from production dirs.
+	testCredentialDir string
+)
 
 // validateTestData checks that .testdata/ has the expected structure before
 // tests start. Catches bootstrap failures with actionable error messages.
@@ -50,7 +53,7 @@ func validateTestData(credDir, driveID string) {
 	tokenName := testutil.TokenFileName(driveID)
 	tokenPath := filepath.Join(credDir, tokenName)
 
-	data, err := os.ReadFile(tokenPath)
+	data, err := os.ReadFile(tokenPath) //nolint:gosec // token file inside the repo's own .testdata credential bundle
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: cannot read token file %s: %v\n", tokenPath, err)
 		fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")
@@ -90,28 +93,14 @@ func setupIsolation() func() {
 	}
 
 	realHomeDir = home
-	realGoPath = build.Default.GOPATH
-	realGoModCache = os.Getenv("GOMODCACHE")
-	if realGoModCache == "" && realGoPath != "" {
-		realGoModCache = filepath.Join(realGoPath, "pkg", "mod")
-	}
-	realGoCache = os.Getenv("GOCACHE")
-	if realGoCache == "" {
-		userCacheDir, cacheErr := os.UserCacheDir()
-		if cacheErr != nil {
-			fmt.Fprintf(os.Stderr, "FATAL: cannot determine go build cache dir: %v\n", cacheErr)
-			os.Exit(1)
-		}
-
-		realGoCache = filepath.Join(userCacheDir, "go-build")
-	}
+	captureGoToolchainCaches()
 	moduleRoot := findModuleRoot()
 	testCredentialDir = testutil.FindTestCredentialDir(moduleRoot)
 	validateTestData(testCredentialDir, drive)
 
 	// Unset app-specific env vars that could leak production paths.
-	os.Unsetenv("ONEDRIVE_GO_CONFIG")
-	os.Unsetenv("ONEDRIVE_GO_DRIVE")
+	mustUnsetenv("ONEDRIVE_GO_CONFIG")
+	mustUnsetenv("ONEDRIVE_GO_DRIVE")
 
 	tempRoot, err := os.MkdirTemp("", "onedrive-e2e-isolation-*")
 	if err != nil {
@@ -131,19 +120,13 @@ func setupIsolation() func() {
 		}
 	}
 
-	os.Setenv("HOME", tempHome)
-	os.Setenv("XDG_CONFIG_HOME", tempConfig)
-	os.Setenv("XDG_DATA_HOME", tempData)
-	os.Setenv("XDG_CACHE_HOME", tempCache)
-	if realGoPath != "" {
-		os.Setenv("GOPATH", realGoPath)
-	}
-	if realGoModCache != "" {
-		os.Setenv("GOMODCACHE", realGoModCache)
-	}
-	if realGoCache != "" {
-		os.Setenv("GOCACHE", realGoCache)
-	}
+	mustSetenv("HOME", tempHome)
+	mustSetenv("XDG_CONFIG_HOME", tempConfig)
+	mustSetenv("XDG_DATA_HOME", tempData)
+	mustSetenv("XDG_CACHE_HOME", tempCache)
+	setenvIfNotEmpty("GOPATH", realGoPath)
+	setenvIfNotEmpty("GOMODCACHE", realGoModCache)
+	setenvIfNotEmpty("GOCACHE", realGoCache)
 
 	// Copy the root .testdata credential bundle into isolated config/data dirs.
 	appDataDir := filepath.Join(tempData, "onedrive-go")
@@ -175,20 +158,79 @@ func setupIsolation() func() {
 	return func() {
 		// Preserve rotated tokens: copy back from temp to .testdata/.
 		for _, did := range driveIDs {
-			tok := testutil.TokenFileName(did)
-			rotatedPath := filepath.Join(appDataDir, tok)
-			if _, statErr := os.Stat(rotatedPath); statErr == nil {
-				origPath := filepath.Join(testCredentialDir, tok)
-				data, readErr := os.ReadFile(rotatedPath)
-				if readErr != nil {
-					fmt.Fprintf(os.Stderr, "WARNING: cannot read rotated token %s: %v\n", rotatedPath, readErr)
-				} else if writeErr := os.WriteFile(origPath, data, 0o600); writeErr != nil {
-					fmt.Fprintf(os.Stderr, "WARNING: cannot write rotated token back to %s: %v\n", origPath, writeErr)
-				}
-			}
+			copyRotatedTokenBack(appDataDir, testutil.TokenFileName(did))
 		}
 
-		os.RemoveAll(tempRoot)
+		if rmErr := os.RemoveAll(tempRoot); rmErr != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: cannot remove isolation temp dir %s: %v\n", tempRoot, rmErr)
+		}
+	}
+}
+
+// captureGoToolchainCaches records the host Go toolchain cache locations
+// before HOME is redirected, so the isolated build reuses them.
+func captureGoToolchainCaches() {
+	realGoPath = build.Default.GOPATH
+	realGoModCache = os.Getenv("GOMODCACHE")
+	if realGoModCache == "" && realGoPath != "" {
+		realGoModCache = filepath.Join(realGoPath, "pkg", "mod")
+	}
+	realGoCache = os.Getenv("GOCACHE")
+	if realGoCache == "" {
+		userCacheDir, cacheErr := os.UserCacheDir()
+		if cacheErr != nil {
+			fmt.Fprintf(os.Stderr, "FATAL: cannot determine go build cache dir: %v\n", cacheErr)
+			os.Exit(1)
+		}
+
+		realGoCache = filepath.Join(userCacheDir, "go-build")
+	}
+}
+
+// copyRotatedTokenBack copies a token the CLI may have rotated during the run
+// from the isolated data dir back into .testdata/, so the next run starts
+// from the newest refresh token.
+func copyRotatedTokenBack(appDataDir, tokenName string) {
+	rotatedPath := filepath.Join(appDataDir, tokenName)
+	if _, statErr := os.Stat(rotatedPath); statErr != nil {
+		return
+	}
+
+	origPath := filepath.Join(testCredentialDir, tokenName)
+	data, readErr := os.ReadFile(rotatedPath) //nolint:gosec // token file inside the suite's own isolation temp dir
+	if readErr != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: cannot read rotated token %s: %v\n", rotatedPath, readErr)
+		return
+	}
+
+	//nolint:gosec // writes back into the repo's own .testdata credential bundle
+	if writeErr := os.WriteFile(origPath, data, 0o600); writeErr != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: cannot write rotated token back to %s: %v\n", origPath, writeErr)
+	}
+}
+
+// mustSetenv sets an isolation env var, exiting the process if it cannot:
+// a half-applied isolation must never reach the tests.
+func mustSetenv(key, value string) {
+	if err := os.Setenv(key, value); err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: setting %s: %v\n", key, err)
+		os.Exit(1)
+	}
+}
+
+// setenvIfNotEmpty sets key only when value is known.
+func setenvIfNotEmpty(key, value string) {
+	if value != "" {
+		mustSetenv(key, value)
+	}
+}
+
+// mustUnsetenv clears an env var that could leak production paths, exiting
+// the process if it cannot.
+func mustUnsetenv(key string) {
+	if err := os.Unsetenv(key); err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: unsetting %s: %v\n", key, err)
+		os.Exit(1)
 	}
 }
 
@@ -225,7 +267,10 @@ func verifyIsolation(tempRoot string) {
 	// sufficient for E2E since all path resolution starts with the env var.
 
 	// 3. os.UserHomeDir() must return temp home.
-	homeDir, _ := os.UserHomeDir()
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		crash("UserHomeDir() failed: " + err.Error())
+	}
 	if !strings.HasPrefix(homeDir, tempRoot) {
 		crash("UserHomeDir() returns " + homeDir + " (not under temp)")
 	}
@@ -300,7 +345,7 @@ func TestIsolation_ConfigInTempDir(t *testing.T) {
 	require.NotEmpty(t, configDir)
 
 	configPath := filepath.Join(configDir, "onedrive-go", "config.toml")
-	_, err := os.Stat(configPath)
+	_, err := os.Stat(configPath) //nolint:gosec // XDG_CONFIG_HOME was pointed at the suite's own temp dir by TestMain
 	assert.NoError(t, err, "config.toml should exist at %s", configPath)
 }
 

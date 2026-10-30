@@ -119,7 +119,7 @@ func TestE2E_DriveList_StaleStateDB(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "stale-test.txt"),
-		[]byte("stale db test\n"), 0o644))
+		[]byte("stale db test\n"), 0o600))
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 

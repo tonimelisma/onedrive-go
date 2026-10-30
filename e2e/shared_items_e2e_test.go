@@ -34,7 +34,7 @@ func TestE2E_Shared_FileDiscoveryAndSelectorRoundTrip(t *testing.T) {
 	originalContent := getSharedTargetContent(t, cfgPath, env, fixture.FileItem.Selector)
 	restoreFile := writeTempContentFile(t, originalContent)
 	t.Cleanup(func() {
-		_, _, _ = runCLICore(t, cfgPath, env, "", "put", restoreFile, fixture.FileItem.Selector)
+		runCLIBestEffort(t, cfgPath, env, "", "put", restoreFile, fixture.FileItem.Selector)
 	})
 
 	updatedContent := fmt.Sprintf("shared-selector-update-%d\n", time.Now().UnixNano())
@@ -126,7 +126,6 @@ func TestE2E_Shared_FolderNameDriveAdd_HonorsAccountFilter(t *testing.T) {
 		cfgPath,
 		env,
 		"",
-		transientGraphRetryTimeout,
 		"--account",
 		folderFixture.RecipientEmail,
 		"shared",
@@ -138,7 +137,7 @@ func TestE2E_Shared_FolderNameDriveAdd_HonorsAccountFilter(t *testing.T) {
 
 	var discoverable bool
 	for i := range listing.Items {
-		if listing.Items[i].Type != "folder" {
+		if listing.Items[i].Type != sharedItemTypeFolder {
 			continue
 		}
 		if listing.Items[i].RemoteDriveID != folderFixture.FolderItem.RemoteDriveID {
@@ -155,7 +154,7 @@ func TestE2E_Shared_FolderNameDriveAdd_HonorsAccountFilter(t *testing.T) {
 		t.Skip("live shared discovery did not expose the writable shared-folder fixture by name on this run")
 	}
 
-	waitForSharedFolderNameDriveAdd(t, cfgPath, env, folderFixture)
+	waitForSharedFolderNameDriveAdd(t, cfgPath, env, &folderFixture)
 
 	stdout, _ = runCLIWithoutDrive(t, cfgPath, env, "drive", "list", "--json")
 	var parsed driveListE2EOutput

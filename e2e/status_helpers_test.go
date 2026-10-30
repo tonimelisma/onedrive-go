@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -91,41 +90,29 @@ func runStatusAllowError(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	args ...string,
 ) (statusJSON, string, string, error) {
 	t.Helper()
 
-	statusArgs := append([]string{"status"}, args...)
-	statusArgs = append(statusArgs, "--json")
-	stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, statusArgs...)
-	if err != nil {
-		return statusJSON{}, stdout, stderr, err
-	}
-
-	var output statusJSON
-	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
-		return statusJSON{}, stdout, stderr, fmt.Errorf("decode status json: %w", err)
-	}
-	if err := validateStatusJSONContract(output); err != nil {
-		return statusJSON{}, stdout, stderr, err
-	}
-
-	return output, stdout, stderr, nil
+	stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, "status", "--json")
+	return decodeStatusJSONResult(stdout, stderr, err)
 }
 
 func runStatusAllDrivesAllowError(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	args ...string,
 ) (statusJSON, string, string, error) {
 	t.Helper()
 
-	statusArgs := append([]string{"status"}, args...)
-	statusArgs = append(statusArgs, "--json")
-	stdout, stderr, err := runCLIWithConfigAllDrivesAllowError(t, cfgPath, env, statusArgs...)
-	if err != nil {
-		return statusJSON{}, stdout, stderr, err
+	stdout, stderr, err := runCLIWithConfigAllDrivesAllowError(t, cfgPath, env, "status", "--json")
+	return decodeStatusJSONResult(stdout, stderr, err)
+}
+
+// decodeStatusJSONResult decodes and contract-checks one `status --json` run,
+// passing the raw output through for failure messages.
+func decodeStatusJSONResult(stdout, stderr string, runErr error) (statusJSON, string, string, error) {
+	if runErr != nil {
+		return statusJSON{}, stdout, stderr, runErr
 	}
 
 	var output statusJSON
@@ -162,19 +149,19 @@ func validateStatusJSONContract(status statusJSON) error {
 	return nil
 }
 
-func readStatus(t *testing.T, cfgPath string, env map[string]string, args ...string) statusJSON {
+func readStatus(t *testing.T, cfgPath string, env map[string]string) statusJSON {
 	t.Helper()
 
-	output, stdout, stderr, err := runStatusAllowError(t, cfgPath, env, args...)
+	output, stdout, stderr, err := runStatusAllowError(t, cfgPath, env)
 	require.NoErrorf(t, err, "status command failed\nstdout: %s\nstderr: %s", stdout, stderr)
 
 	return output
 }
 
-func readStatusAllDrives(t *testing.T, cfgPath string, env map[string]string, args ...string) statusJSON {
+func readStatusAllDrives(t *testing.T, cfgPath string, env map[string]string) statusJSON {
 	t.Helper()
 
-	output, stdout, stderr, err := runStatusAllDrivesAllowError(t, cfgPath, env, args...)
+	output, stdout, stderr, err := runStatusAllDrivesAllowError(t, cfgPath, env)
 	require.NoErrorf(t, err, "status command failed\nstdout: %s\nstderr: %s", stdout, stderr)
 
 	return output
@@ -270,9 +257,7 @@ func findStatusDriveJSON(status statusJSON, identity string) (statusDriveJSON, b
 		if email != "" && status.Accounts[i].Email != email {
 			continue
 		}
-		for j := range status.Accounts[i].Drives {
-			candidates = append(candidates, status.Accounts[i].Drives[j])
-		}
+		candidates = append(candidates, status.Accounts[i].Drives...)
 	}
 
 	if len(candidates) == 1 && !isStatusChildIdentity(identity) {
@@ -363,10 +348,10 @@ func requireStatusDrive(
 	return requireStatusDriveByIdentity(t, status, canonicalID)
 }
 
-func readStatusSyncState(t *testing.T, cfgPath string, env map[string]string, args ...string) statusSyncStateJSON {
+func readStatusSyncState(t *testing.T, cfgPath string, env map[string]string) statusSyncStateJSON {
 	t.Helper()
 
-	return readStatusSyncStateForDrive(t, cfgPath, env, resolveDriveSelection(env, ""), args...)
+	return readStatusSyncStateForDrive(t, cfgPath, env, resolveDriveSelection(env, ""))
 }
 
 func readStatusSyncStateForDrive(
@@ -374,73 +359,11 @@ func readStatusSyncStateForDrive(
 	cfgPath string,
 	env map[string]string,
 	canonicalID string,
-	args ...string,
 ) statusSyncStateJSON {
 	t.Helper()
 
-	status := readStatus(t, cfgPath, env, args...)
+	status := readStatus(t, cfgPath, env)
 	driveStatus := requireStatusDriveByIdentity(t, status, canonicalID)
 	require.NotNil(t, driveStatus.SyncState, "expected sync_state for %s", canonicalID)
 	return *driveStatus.SyncState
-}
-
-func pollStatusSyncState(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	timeout time.Duration,
-	ready func(statusSyncStateJSON) bool,
-	args ...string,
-) statusSyncStateJSON {
-	return pollStatusSyncStateForDrive(t, cfgPath, env, resolveDriveSelection(env, ""), timeout, ready, args...)
-}
-
-func pollStatusSyncStateForDrive(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	canonicalID string,
-	timeout time.Duration,
-	ready func(statusSyncStateJSON) bool,
-	args ...string,
-) statusSyncStateJSON {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	var lastStatus statusSyncStateJSON
-	var lastStdout string
-	var lastStderr string
-	var lastErr error
-
-	for attempt := 0; ; attempt++ {
-		status, stdout, stderr, err := runStatusAllowError(t, cfgPath, env, args...)
-		lastStdout = stdout
-		lastStderr = stderr
-		lastErr = err
-		if err == nil {
-			driveStatus := requireStatusDriveByIdentity(t, status, canonicalID)
-			if driveStatus.SyncState != nil {
-				lastStatus = *driveStatus.SyncState
-				if ready(lastStatus) {
-					return lastStatus
-				}
-			}
-		}
-
-		if time.Now().After(deadline) {
-			require.Failf(
-				t,
-				"pollStatusSyncState: timed out",
-				"after %v waiting for status predicate with args %v\nlast error: %v\nlast status: %+v\nlast stdout: %s\nlast stderr: %s",
-				timeout,
-				args,
-				lastErr,
-				lastStatus,
-				lastStdout,
-				lastStderr,
-			)
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
 }

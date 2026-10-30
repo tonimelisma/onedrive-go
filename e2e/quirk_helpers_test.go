@@ -108,11 +108,11 @@ func newE2EQuirkRecorder(logDir string) (*e2eQuirkRecorder, error) {
 	return recorder, nil
 }
 
-func (r *e2eQuirkRecorder) record(event e2eQuirkEvent) error {
+func (r *e2eQuirkRecorder) record(event *e2eQuirkEvent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.events = append(r.events, event)
+	r.events = append(r.events, *event)
 	if err := appendQuirkEvent(r.eventsPath(), event); err != nil {
 		return err
 	}
@@ -142,8 +142,8 @@ func (r *e2eQuirkRecorder) summaryPath() string {
 	return filepath.Join(r.logDir, quirkSummaryFileName)
 }
 
-func appendQuirkEvent(path string, event e2eQuirkEvent) (err error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+func appendQuirkEvent(path string, event *e2eQuirkEvent) (err error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // a recorder file under the suite's own E2E log dir
 	if err != nil {
 		return fmt.Errorf("open quirk events %s: %w", path, err)
 	}
@@ -162,39 +162,10 @@ func appendQuirkEvent(path string, event e2eQuirkEvent) (err error) {
 }
 
 func loadQuirkEvents(path string) ([]e2eQuirkEvent, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-
-		return nil, fmt.Errorf("open quirk events %s: %w", path, err)
-	}
-	defer f.Close()
-
-	events := make([]e2eQuirkEvent, 0)
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		var event e2eQuirkEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			return nil, fmt.Errorf("decode quirk event: %w", err)
-		}
-
-		events = append(events, event)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan quirk events: %w", err)
-	}
-
-	return events, nil
+	return loadNDJSONEvents[e2eQuirkEvent](path, "quirk")
 }
 
-func recordQuirkEvent(t *testing.T, event e2eQuirkEvent) {
+func recordQuirkEvent(t *testing.T, event *e2eQuirkEvent) {
 	t.Helper()
 
 	if suiteQuirkRecorder == nil {
@@ -230,7 +201,7 @@ func recordCLIQuirkEvents(t *testing.T, args []string, stderr string, cmdErr err
 			}
 		}
 
-		recordQuirkEvent(t, e2eQuirkEvent{
+		recordQuirkEvent(t, &e2eQuirkEvent{
 			Phase:         quirkPhaseCLICommand,
 			TestName:      t.Name(),
 			Operation:     strings.Join(args, " "),
@@ -297,7 +268,7 @@ func recordAuthPreflightDecisionEvent(
 		finalError = finalErr.Error()
 	}
 
-	recordQuirkEvent(t, e2eQuirkEvent{
+	recordQuirkEvent(t, &e2eQuirkEvent{
 		Phase:         quirkPhaseAuthPreflight,
 		TestName:      t.Name(),
 		Operation:     fmt.Sprintf("GET %s drive=%s", endpoint, driveID),
@@ -325,7 +296,7 @@ func recordLiveProviderRecurrenceEvent(
 		return
 	}
 
-	recordQuirkEvent(t, e2eQuirkEvent{
+	recordQuirkEvent(t, &e2eQuirkEvent{
 		Phase:         quirkPhaseFixtureSeed,
 		TestName:      t.Name(),
 		Operation:     operation,
@@ -434,8 +405,7 @@ func uniqueInts(values []int) []int {
 func readQuirkSummaryFile(t *testing.T, path string) e2eQuirkSummary {
 	t.Helper()
 
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
+	data := mustReadFile(t, path)
 
 	var summary e2eQuirkSummary
 	require.NoError(t, json.Unmarshal(data, &summary))
@@ -446,7 +416,7 @@ func TestE2EQuirkRecorderWritesSummaryAndLoadsExistingEventsAcrossProcesses(t *t
 	dir := t.TempDir()
 	first, err := newE2EQuirkRecorder(dir)
 	require.NoError(t, err)
-	require.NoError(t, first.record(e2eQuirkEvent{
+	require.NoError(t, first.record(&e2eQuirkEvent{
 		Phase:         quirkPhaseCLICommand,
 		TestName:      "TestOne",
 		Operation:     "drive list",
@@ -462,7 +432,7 @@ func TestE2EQuirkRecorderWritesSummaryAndLoadsExistingEventsAcrossProcesses(t *t
 	second, err := newE2EQuirkRecorder(dir)
 	require.NoError(t, err)
 	require.Len(t, second.events, 1)
-	require.NoError(t, second.record(e2eQuirkEvent{
+	require.NoError(t, second.record(&e2eQuirkEvent{
 		Phase:         quirkPhaseAuthPreflight,
 		TestName:      "TestTwo",
 		Operation:     "GET /me/drives drive=personal:test@example.com",
@@ -491,10 +461,8 @@ func TestRecordCLIQuirkEventsParsesStructuredJSONLogs(t *testing.T) {
 	require.NoError(t, err)
 	installSuiteQuirkRecorderForTest(t, recorder)
 
-	stderr := strings.Join([]string{
-		`{"time":"2026-04-10T23:56:11.987283-07:00","level":"WARN","msg":"graph quirk retry exhausted","graph_quirk":"download-metadata-transient-404","graph_quirk_attempt_count":4,"graph_quirk_attempts":[{"attempt":1,"statusCode":404,"graphCode":"itemNotFound","requestId":"req-1"},{"attempt":2,"statusCode":404,"graphCode":"itemNotFound","requestId":"req-2"}],"error":"graph: HTTP 404"}`,
-		`plain stderr`,
-	}, "\n")
+	stderr := `{"time":"2026-04-10T23:56:11.987283-07:00","level":"WARN","msg":"graph quirk retry exhausted","graph_quirk":"download-metadata-transient-404","graph_quirk_attempt_count":4,"graph_quirk_attempts":[{"attempt":1,"statusCode":404,"graphCode":"itemNotFound","requestId":"req-1"},{"attempt":2,"statusCode":404,"graphCode":"itemNotFound","requestId":"req-2"}],"error":"graph: HTTP 404"}` + "\n" +
+		`plain stderr`
 
 	recordCLIQuirkEvents(t, []string{"--debug", "sync"}, stderr, assert.AnError)
 

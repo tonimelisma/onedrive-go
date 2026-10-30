@@ -45,6 +45,9 @@ func startDaemon(
 	return h.Cmd
 }
 
+// remoteConflictContent is the remote side of the watch-mode conflict test.
+const remoteConflictContent = "remote conflict version"
+
 // startDaemonWithStderr is like startDaemon but also returns the stderr buffer
 // for tests that need to poll daemon output.
 func startDaemonWithStderr(
@@ -66,15 +69,12 @@ func startDaemonWithStderr(
 	require.NoError(t, cmd.Start(), "failed to start daemon")
 
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
-		}
+		stopDaemon(t, cmd)
 
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
-	waitForDaemonReady(t, eventsPath, 30*time.Second)
+	waitForDaemonReady(t, eventsPath)
 
 	return &daemonHandle{Cmd: cmd, Stderr: stderr, EventsPath: eventsPath}
 }
@@ -107,11 +107,10 @@ func TestE2E_SyncWatch_RemoteToLocal(t *testing.T) {
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	waitForDaemonExit(t, cmd)
 
 	// Verify content persisted.
-	data, err := os.ReadFile(localPath)
-	require.NoError(t, err)
+	data := mustReadFile(t, localPath)
 	assert.Equal(t, "from remote", string(data))
 }
 
@@ -135,7 +134,7 @@ func TestE2E_SyncWatch_Bidirectional(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "local-to-remote.txt"),
 		[]byte("from local"),
-		0o644,
+		0o600,
 	))
 
 	// Poll until file appears remotely.
@@ -150,7 +149,7 @@ func TestE2E_SyncWatch_Bidirectional(t *testing.T) {
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	waitForDaemonExit(t, cmd)
 }
 
 // TestE2E_SyncWatch_ConflictDuringWatch starts a bidirectional daemon, creates
@@ -188,7 +187,7 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	// Modify remote FIRST: put a new version and confirm it propagated via
 	// stat. This ensures the delta feed has the remote change before we
 	// trigger local fsnotify.
-	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/conflict-watch.txt", "remote conflict version")
+	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/conflict-watch.txt", remoteConflictContent)
 
 	// Give delta time to pick up the remote change before triggering local.
 	sleepForLiveTestPropagation(5 * time.Second)
@@ -208,17 +207,17 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 			return false
 		}
 
-		localData, err := os.ReadFile(filePath)
-		if err != nil || string(localData) != "remote conflict version" {
+		localData, err := os.ReadFile(filePath) //nolint:gosec // a file inside the test's own sync dir
+		if err != nil || string(localData) != remoteConflictContent {
 			return false
 		}
 
-		return getRemoteFile(t, cfgPath, env, remotePath) == "remote conflict version"
+		return getRemoteFile(t, cfgPath, env, remotePath) == remoteConflictContent
 	}, daemonPollTimeout, time.Second, "watch mode should preserve both versions for edit-edit conflicts")
 
 	// Graceful shutdown.
 	require.NoError(t, h.Cmd.Process.Signal(syscall.SIGTERM))
-	_ = h.Cmd.Wait()
+	waitForDaemonExit(t, h.Cmd)
 }
 
 // TestE2E_SyncWatch_FileModification starts an upload-only daemon, creates
@@ -275,7 +274,7 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 
 	// Graceful shutdown.
 	require.NoError(t, h.Cmd.Process.Signal(syscall.SIGTERM))
-	_ = h.Cmd.Wait()
+	waitForDaemonExit(t, h.Cmd)
 }
 
 // TestE2E_SyncWatch_FileDeletion starts an upload-only daemon, creates a file,
@@ -318,7 +317,7 @@ func TestE2E_SyncWatch_FileDeletion(t *testing.T) {
 
 	// Graceful shutdown.
 	require.NoError(t, h.Cmd.Process.Signal(syscall.SIGTERM))
-	_ = h.Cmd.Wait()
+	waitForDaemonExit(t, h.Cmd)
 }
 
 // TestE2E_SyncWatch_FolderCreation starts an upload-only daemon and creates
@@ -341,7 +340,7 @@ func TestE2E_SyncWatch_FolderCreation(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "deep.txt"),
 		[]byte("deeply nested content"),
-		0o644,
+		0o600,
 	))
 
 	// Poll until the deep file appears remotely.
@@ -349,7 +348,7 @@ func TestE2E_SyncWatch_FolderCreation(t *testing.T) {
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	waitForDaemonExit(t, cmd)
 }
 
 // TestE2E_SyncWatch_MultipleFiles starts an upload-only daemon and creates
@@ -375,7 +374,7 @@ func TestE2E_SyncWatch_MultipleFiles(t *testing.T) {
 		require.NoError(t, os.WriteFile(
 			filepath.Join(localDir, name),
 			[]byte(fmt.Sprintf("multi content %d", i)),
-			0o644,
+			0o600,
 		))
 	}
 
@@ -387,7 +386,7 @@ func TestE2E_SyncWatch_MultipleFiles(t *testing.T) {
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	waitForDaemonExit(t, cmd)
 }
 
 // TestE2E_SyncWatch_LargeFile starts an upload-only daemon and creates a
@@ -425,13 +424,12 @@ func TestE2E_SyncWatch_LargeFile(t *testing.T) {
 	downloadPath := filepath.Join(downloadDir, "large-watch.bin")
 	runCLIWithConfig(t, cfgPath, env, "get", remotePath, downloadPath)
 
-	downloaded, err := os.ReadFile(downloadPath)
-	require.NoError(t, err)
+	downloaded := mustReadFile(t, downloadPath)
 	assert.Equal(t, data, downloaded, "downloaded content should match uploaded data")
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	waitForDaemonExit(t, cmd)
 }
 
 // TestE2E_SyncWatch_RapidChurn starts an upload-only daemon, rapidly modifies
@@ -479,7 +477,7 @@ func TestE2E_SyncWatch_RapidChurn(t *testing.T) {
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	waitForDaemonExit(t, cmd)
 }
 
 // TestE2E_SyncWatch_GracefulShutdown verifies that after daemon shutdown,
@@ -503,7 +501,7 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "before-shutdown.txt"),
 		[]byte("synced by daemon"),
-		0o644,
+		0o600,
 	))
 
 	remotePath := "/" + testFolder + "/before-shutdown.txt"
@@ -520,7 +518,7 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "after-shutdown.txt"),
 		[]byte("one-shot upload"),
-		0o644,
+		0o600,
 	))
 
 	// Run one-shot sync.
@@ -561,7 +559,7 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "paused-file.txt"),
 		[]byte("created during pause"),
-		0o644,
+		0o600,
 	))
 
 	// Bounded negative check: confirm file not remote while paused.
@@ -586,5 +584,5 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	waitForDaemonExit(t, cmd)
 }

@@ -139,12 +139,12 @@ func TestE2E_Sync_MultiDriveReport(t *testing.T) {
 	localDir1 := filepath.Join(syncDir1, testFolder1)
 	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir1, "multi1.txt"), []byte("drive 1 content"), 0o644))
+		filepath.Join(localDir1, "multi1.txt"), []byte("drive 1 content"), 0o600))
 
 	localDir2 := filepath.Join(syncDir2, testFolder2)
 	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir2, "multi2.txt"), []byte("drive 2 content"), 0o644))
+		filepath.Join(localDir2, "multi2.txt"), []byte("drive 2 content"), 0o600))
 
 	t.Cleanup(func() {
 		cleanupRemoteFolder(t, testFolder1)

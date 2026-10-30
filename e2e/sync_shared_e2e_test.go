@@ -70,7 +70,7 @@ func TestE2E_SharedFolder_RemoteMutationSyncsToRecipient(t *testing.T) {
 	localPath := filepath.Join(syncDir, remoteName)
 
 	t.Cleanup(func() {
-		_, _, _ = runCLICore(t, cfgPath, env, fixture.FolderItem.Selector, "rm", remotePath)
+		runCLIBestEffort(t, cfgPath, env, fixture.FolderItem.Selector, "rm", remotePath)
 	})
 
 	runCLIWithConfigForDrive(t, cfgPath, env, fixture.FolderItem.Selector, "put", contentFile, remotePath)
@@ -81,7 +81,7 @@ func TestE2E_SharedFolder_RemoteMutationSyncsToRecipient(t *testing.T) {
 			return false
 		}
 
-		data, err := os.ReadFile(localPath)
+		data, err := os.ReadFile(localPath) //nolint:gosec // a file inside the test's own sync dir
 		return err == nil && string(data) == expectedContent
 	}, pollTimeout, 2*time.Second)
 }
@@ -102,14 +102,14 @@ func TestE2E_SharedFolder_RecipientSyncTwice_Idempotent(t *testing.T) {
 	localPath := filepath.Join(syncDir, remoteName)
 
 	t.Cleanup(func() {
-		_, _, _ = runCLICore(t, cfgPath, env, fixture.FolderItem.Selector, "rm", remotePath)
+		runCLIBestEffort(t, cfgPath, env, fixture.FolderItem.Selector, "rm", remotePath)
 	})
 
 	runCLIWithConfigForDrive(t, cfgPath, env, fixture.FolderItem.Selector, "put", contentFile, remotePath)
 
 	require.Eventually(t, func() bool {
 		_, _ = runCLIWithConfigForDrive(t, cfgPath, env, fixture.FolderItem.Selector, "sync", "--download-only")
-		data, err := os.ReadFile(localPath)
+		data, err := os.ReadFile(localPath) //nolint:gosec // a file inside the test's own sync dir
 		return err == nil && string(data) == expectedContent
 	}, pollTimeout, 2*time.Second)
 

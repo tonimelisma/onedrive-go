@@ -427,31 +427,6 @@ func waitForRemoteDeleteDisappearance(
 	)
 }
 
-func waitForRemoteScopeTransition(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	driveID string,
-	expected string,
-	args ...string,
-) (string, string) {
-	t.Helper()
-
-	return pollRemoteEventually(
-		t,
-		cfgPath,
-		env,
-		driveID,
-		remoteScopeTransitionTimeout,
-		timingKindRemoteScopeTransition,
-		fmt.Sprintf("remote scope transition for %q", expected),
-		func(stdout, _ string, err error) bool {
-			return err == nil && strings.Contains(stdout, expected)
-		},
-		args...,
-	)
-}
-
 // getRemoteFile downloads a remote file and returns its content as a string.
 // cfgPath must point to a valid config with the drive section; env overrides
 // (if non-nil) are forwarded to the CLI child process.
@@ -491,7 +466,7 @@ func getRemoteFileForDrive(
 		localPath,
 	)
 
-	data, readErr := os.ReadFile(localPath)
+	data, readErr := os.ReadFile(localPath) //nolint:gosec // the file the CLI just downloaded into the test's own temp dir
 	require.NoError(t, readErr)
 	return string(data)
 }

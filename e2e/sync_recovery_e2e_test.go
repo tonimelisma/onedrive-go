@@ -44,7 +44,7 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 		require.NoError(t, os.WriteFile(
 			filepath.Join(localDir, name),
 			[]byte(fmt.Sprintf("delta content %d", i)),
-			0o644,
+			0o600,
 		))
 	}
 
@@ -74,7 +74,7 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 				return false
 			}
 
-			downloaded, readErr := os.ReadFile(newFilePath)
+			downloaded, readErr := os.ReadFile(newFilePath) //nolint:gosec // a file inside the test's own sync dir
 			if readErr != nil {
 				return false
 			}
@@ -114,7 +114,7 @@ func TestE2E_Sync_CrashRecoveryIdempotent(t *testing.T) {
 		require.NoError(t, os.WriteFile(
 			filepath.Join(localDir, name),
 			[]byte(fmt.Sprintf("crash content %d", i)),
-			0o644,
+			0o600,
 		))
 	}
 
@@ -131,7 +131,7 @@ func TestE2E_Sync_CrashRecoveryIdempotent(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "crash-new.txt"),
 		[]byte("new local file"),
-		0o644,
+		0o600,
 	))
 
 	// Bidirectional sync — applies deletes + upload.
@@ -196,11 +196,10 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 	assert.Contains(t, attempt.Stdout, "downloads")
 	assert.Contains(t, attempt.Stdout, "local deletes")
 
-	editData, err := os.ReadFile(remoteEditPath)
-	require.NoError(t, err)
+	editData := mustReadFile(t, remoteEditPath)
 	assert.Equal(t, "original remote edit", string(editData))
 
-	_, err = os.Stat(remoteDeletePath)
+	_, err := os.Stat(remoteDeletePath)
 	require.NoError(t, err)
 
 	// The next download-only run should settle the already-observed remote
@@ -216,13 +215,13 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 				return false
 			}
 
-			editData, err := os.ReadFile(remoteEditPath)
-			if err != nil || string(editData) != "updated from remote" {
+			current, readErr := os.ReadFile(remoteEditPath) //nolint:gosec // a file inside the test's own sync dir
+			if readErr != nil || string(current) != "updated from remote" {
 				return false
 			}
 
-			_, err = os.Stat(remoteDeletePath)
-			return os.IsNotExist(err)
+			_, statErr := os.Stat(remoteDeletePath)
+			return os.IsNotExist(statErr)
 		},
 		"--download-only",
 	)
@@ -231,12 +230,11 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 	assert.Contains(t, attempt.Stdout, "Downloaded "+testFolder+"/remote-edit.txt")
 	assert.Contains(t, attempt.Stdout, "Deleted locally "+testFolder+"/remote-delete.txt")
 
-	editData, err = os.ReadFile(remoteEditPath)
-	require.NoError(t, err)
+	editData = mustReadFile(t, remoteEditPath)
 	assert.Equal(t, "updated from remote", string(editData))
 
 	_, err = os.Stat(remoteDeletePath)
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorIs(t, err, os.ErrNotExist)
 
 	snapshot := snapshotLocalTree(t, localDir)
 	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
@@ -290,11 +288,9 @@ func TestE2E_Sync_DriveRemovePurgeResetsState(t *testing.T) {
 		"sync after purge should re-enumerate and re-download the removed local files")
 
 	// Verify files re-downloaded locally.
-	dataA, err := os.ReadFile(filepath.Join(localDir, "purge-a.txt"))
-	require.NoError(t, err)
+	dataA := mustReadFile(t, filepath.Join(localDir, "purge-a.txt"))
 	assert.Equal(t, "purge a", string(dataA))
 
-	dataB, err := os.ReadFile(filepath.Join(localDir, "purge-b.txt"))
-	require.NoError(t, err)
+	dataB := mustReadFile(t, filepath.Join(localDir, "purge-b.txt"))
 	assert.Equal(t, "purge b", string(dataB))
 }

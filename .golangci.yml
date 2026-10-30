@@ -1,8 +1,15 @@
 version: "2"
 
 run:
-  timeout: 5m
+  # The e2e and integration code roughly doubles what is analyzed; a 2-core
+  # machine needs more than 5 minutes for a cold whole-repo run.
+  timeout: 15m
   modules-download-mode: readonly
+  # Live-test code is build-tagged; without these tags lint never sees it.
+  build-tags:
+    - e2e
+    - e2e_full
+    - integration
 
 formatters:
   enable:

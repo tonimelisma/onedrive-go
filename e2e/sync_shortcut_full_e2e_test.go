@@ -9,7 +9,6 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -141,7 +140,7 @@ func TestE2E_Shortcut_MoveReusesChildMountState(t *testing.T) {
 	currentRemotePath := originalRemotePath
 	t.Cleanup(func() {
 		restoreRemoteShortcutPath(t, cfgPath, env, fixture.ParentDrive, &currentRemotePath, originalRemotePath)
-		_, _, _ = runCLICore(t, cfgPath, env, fixture.ParentDrive, "rm", "-r", containerRemotePath)
+		runCLIBestEffort(t, cfgPath, env, fixture.ParentDrive, "rm", "-r", containerRemotePath)
 	})
 
 	mkdirRemoteFolderForDrive(t, cfgPath, env, fixture.ParentDrive, containerRemotePath)
@@ -182,7 +181,7 @@ func TestE2E_Shortcut_WritableUploadSyncsToSharedTarget(t *testing.T) {
 
 	opsCfgPath, opsEnv := writeShortcutSharedDriveConfig(t, fixture)
 	t.Cleanup(func() {
-		_, _, _ = runCLICore(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, "rm", remotePath)
+		runCLIBestEffort(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, "rm", remotePath)
 	})
 
 	out, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
@@ -230,7 +229,7 @@ func TestE2E_Shortcut_LocalRootCollisionSkipsChildButParentCompletes(t *testing.
 	parentRemotePath := "/" + parentName
 	require.NoError(t, os.WriteFile(filepath.Join(syncDir, parentName), []byte("parent still syncs\n"), 0o600))
 	t.Cleanup(func() {
-		_, _, _ = runCLICore(t, cfgPath, env, fixture.ParentDrive, "rm", parentRemotePath)
+		runCLIBestEffort(t, cfgPath, env, fixture.ParentDrive, "rm", parentRemotePath)
 	})
 
 	out, stderr, err := runCLICore(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
@@ -260,11 +259,11 @@ func TestE2E_Shortcut_WatchLocalUploadSyncsToSharedTarget(t *testing.T) {
 	remoteName := fmt.Sprintf("shortcut-watch-local-%d.txt", time.Now().UnixNano())
 	remotePath := "/" + remoteName
 	t.Cleanup(func() {
-		_, _, _ = runCLICore(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, "rm", remotePath)
+		runCLIBestEffort(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, "rm", remotePath)
 	})
 
 	eventsPath := withShortcutWatchDaemon(t, cfgPath, env, fixture.ParentDrive, "--upload-only")
-	waitForDaemonReady(t, eventsPath, 30*time.Second)
+	waitForDaemonReady(t, eventsPath)
 
 	localPath := filepath.Join(syncDir, fixture.ShortcutName, remoteName)
 	require.NoError(t, os.WriteFile(localPath, []byte("watch local shortcut upload\n"), 0o600))
@@ -289,17 +288,17 @@ func TestE2E_Shortcut_WatchRemoteWakeUpdatesChildRoot(t *testing.T) {
 	expectedContent := fmt.Sprintf("watch remote shortcut wake %d\n", time.Now().UnixNano())
 	contentFile := writeTempContentFile(t, expectedContent)
 	t.Cleanup(func() {
-		_, _, _ = runCLICore(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, "rm", remotePath)
+		runCLIBestEffort(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, "rm", remotePath)
 	})
 
 	eventsPath := withShortcutWatchDaemon(t, cfgPath, env, fixture.ParentDrive, "--download-only")
-	waitForDaemonReady(t, eventsPath, 30*time.Second)
+	waitForDaemonReady(t, eventsPath)
 
 	runCLIWithConfigForDrive(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, "put", contentFile, remotePath)
 
 	localPath := filepath.Join(syncDir, fixture.ShortcutName, remoteName)
 	require.Eventually(t, func() bool {
-		data, err := os.ReadFile(localPath)
+		data, err := os.ReadFile(localPath) //nolint:gosec // a file inside the test's own sync dir
 		return err == nil && string(data) == expectedContent
 	}, 3*time.Minute, 2*time.Second)
 }
@@ -308,7 +307,7 @@ func syncShortcutDownloadUntilProjected(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 	syncDir string,
 	relativeLocalPath string,
 ) shortcutChildE2ERecord {
@@ -346,7 +345,7 @@ func syncShortcutDownloadUntilProjected(
 	}
 }
 
-func writeShortcutSharedDriveConfig(t *testing.T, fixture resolvedShortcutFixture) (string, map[string]string) {
+func writeShortcutSharedDriveConfig(t *testing.T, fixture *resolvedShortcutFixture) (string, map[string]string) {
 	t.Helper()
 
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, t.TempDir())
@@ -379,10 +378,7 @@ func withShortcutWatchDaemon(
 
 	require.NoError(t, cmd.Start(), "failed to start shortcut watch daemon")
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
-		}
+		stopDaemon(t, cmd)
 
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
@@ -393,7 +389,7 @@ func withShortcutWatchDaemon(
 func requireShortcutChildAtPath(
 	t *testing.T,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 	relativeLocalPath string,
 ) shortcutChildE2ERecord {
 	t.Helper()
@@ -418,7 +414,7 @@ func requireShortcutChildAtPath(
 func findShortcutChildAtPath(
 	t *testing.T,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 	relativeLocalPath string,
 ) (shortcutChildE2ERecord, bool) {
 	t.Helper()

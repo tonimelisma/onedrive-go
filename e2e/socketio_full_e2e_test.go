@@ -57,7 +57,7 @@ func TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart(t *testing.T) {
 	assert.Less(t, time.Since(start), 2*time.Minute, "remote change should arrive well before the 5-minute fallback poll")
 
 	require.NoError(t, h.Cmd.Process.Signal(syscall.SIGTERM))
-	_ = h.Cmd.Wait()
+	waitForDaemonExit(t, h.Cmd)
 
 	env2, eventsPath2 := withSocketIODebugEvents(t, env)
 	h2 := startDaemonWithStderr(t, cfgPath, env2,
@@ -81,5 +81,5 @@ func TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart(t *testing.T) {
 	assert.Less(t, time.Since(restartStart), 2*time.Minute, "post-restart remote change should still arrive well before fallback polling")
 
 	require.NoError(t, h2.Cmd.Process.Signal(syscall.SIGTERM))
-	_ = h2.Cmd.Wait()
+	waitForDaemonExit(t, h2.Cmd)
 }

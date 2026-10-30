@@ -13,15 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func recipientEmailFromDriveID(t *testing.T, driveID string) string {
-	t.Helper()
-
-	email, err := recipientEmailFromCanonicalDriveID(driveID)
-	require.NoError(t, err)
-
-	return email
-}
-
 func recipientEmailFromCanonicalDriveID(driveID string) (string, error) {
 	parts := strings.SplitN(driveID, ":", 2)
 	if len(parts) != 2 || parts[1] == "" {
@@ -29,19 +20,6 @@ func recipientEmailFromCanonicalDriveID(driveID string) (string, error) {
 	}
 
 	return parts[1], nil
-}
-
-func configuredDriveIDForRecipient(t *testing.T, recipientEmail string) string {
-	t.Helper()
-
-	driveID, ok := liveConfig.DriveIDForEmail(recipientEmail)
-	require.Truef(t, ok,
-		"shared fixture recipient %q does not match any configured drive (%v)",
-		recipientEmail,
-		liveConfig.CandidateDriveIDs(),
-	)
-
-	return driveID
 }
 
 // writeSyncConfigForDriveID creates a per-test config pointing to the given
