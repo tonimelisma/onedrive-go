@@ -649,3 +649,30 @@ This work is intentionally staged.
 - Cross-app comparisons must compare like with like. If another app lacks a
   feature or safety invariant that `onedrive-go` enforces, the methodology must
   call that out instead of silently treating all elapsed time as equivalent.
+
+## Comparison SQL Micro-Benchmarks
+
+`BenchmarkComparisonQueries` (`internal/sync/sqlite_compare_bench_test.go`)
+times `QueryComparisonState` plus `QueryReconciliationState`, the two queries
+every plan runs, over synced trees of 10k and 100k items in folders of 100:
+a quiet tree, a OneDrive rename of a folder holding half the items (the
+`followed_ancestor_deletes` shape) and the same rename made locally (the
+`local_move_candidates` / `followed_local_ancestor_deletes` shape). Measured
+on a 2-core host under modernc SQLite, one iteration each:
+
+| Items | Quiet | Remote rename | Local rename |
+| --- | --- | --- | --- |
+| 10k, before | 2.3 s | 3.1 s | 57 s |
+| 10k, after | 2.0 s | 2.1 s | 2.8 s |
+| 100k, before | 22 s | 117 s | over 10 min |
+| 100k, after | 23 s | 23 s | 24 s |
+
+Before: `local_move_targets` took `MIN(target_path)` from an aggregate, which
+has no column affinity, so its per-path join key got no automatic index and
+every path scanned every move (moved items x paths, present since local move
+pairing landed); and `followed_ancestor_deletes` joined descendants on a
+`substr()` prefix expression instead of an indexed path range. After: the key
+is cast back to TEXT, prefix joins are `path > p || '/' AND path < p || '0'`
+ranges, and the followed-ancestor sets are materialized once instead of
+re-evaluated per path. A rename now costs about a quiet pass; the quiet pass
+itself (about 11 s per query at 100k items) is the next target.

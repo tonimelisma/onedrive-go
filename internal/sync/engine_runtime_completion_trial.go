@@ -51,56 +51,65 @@ func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 	if err != nil {
 		return err
 	}
-	if reclassified {
-		if err := flow.holdActionFromPersistedRetryState(current, retryWorkKeyForCompletion(r)); err != nil {
-			return err
-		}
-	} else {
-		persisted, err := flow.applyTrialRetryFallback(ctx, current, decision, r)
-		if err != nil {
-			return err
-		}
-		if shouldTransitionTrialFallbackScope(decision) {
-			if err := flow.transitionTrialScopeToPersistedBlock(
-				ctx,
-				trialScopeKey,
-				decision.ScopeKey,
-				decision.ConditionType,
-				r.RetryAfter,
-			); err != nil {
-				return err
-			}
-			flow.armFailureTimers(decision, persisted)
-			return nil
-		}
-		if err := flow.rearmOrDiscardScope(ctx, trialScopeKey); err != nil {
-			return err
-		}
-		if err := flow.applyPersistedFailureScopeEffects(ctx, decision, r, persisted); err != nil {
-			return err
-		}
-		flow.armFailureTimers(decision, persisted)
-		return nil
+	if !reclassified {
+		return flow.applyTrialRetryFallback(ctx, current, decision, r, trialScopeKey)
+	}
+	if err := flow.holdActionFromPersistedRetryState(current, retryWorkKeyForCompletion(r)); err != nil {
+		return err
 	}
 
 	return flow.rearmOrDiscardScope(ctx, trialScopeKey)
 }
 
+// applyTrialRetryFallback persists a failed trial as retry work. When the
+// failure names a block scope of its own (a scope-blocking answer, or one that
+// scope detection turns into a block), the work is persisted blocked under
+// that scope and the trial's scope transitions to it in one step, which
+// discards the trial's scope if the trial was its only blocked work: checked
+// between the two, either order left a block scope without blocked work
+// (found by the chaos Graph layer, D-092). Otherwise the trial's scope is
+// rearmed or discarded.
 func (flow *engineFlow) applyTrialRetryFallback(
 	ctx context.Context,
 	current *trackedAction,
 	decision *resultDecision,
 	r *actionCompletion,
-) (bool, error) {
+	trialScopeKey ScopeKey,
+) error {
 	if decision.Persistence != persistRetryWork {
-		return false, fmt.Errorf("trial retry fallback for %s: missing retry_work persistence", r.Path)
-	}
-	persisted, err := flow.persistAndHoldFailure(ctx, current, decision, r)
-	if err != nil {
-		return false, err
+		return fmt.Errorf("trial retry fallback for %s: missing retry_work persistence", r.Path)
 	}
 
-	return persisted, nil
+	persistAs := decision
+	target := scopeUpdateResult{}
+	if shouldTransitionTrialFallbackScope(decision) {
+		target = scopeUpdateResult{
+			Block:         true,
+			ScopeKey:      decision.ScopeKey,
+			ConditionType: decision.ConditionType,
+			RetryAfter:    r.RetryAfter,
+		}
+	} else if detected := flow.detectFailureScope(decision, r); detected.Block {
+		persistAs = decisionBlockedUnder(decision, detected.ScopeKey)
+		target = detected
+	}
+
+	persisted, err := flow.persistAndHoldFailure(ctx, current, persistAs, r)
+	if err != nil {
+		return err
+	}
+	if target.Block {
+		if err := flow.transitionTrialScopeToPersistedBlock(
+			ctx, trialScopeKey, target.ScopeKey, target.ConditionType, target.RetryAfter,
+		); err != nil {
+			return err
+		}
+	} else if err := flow.rearmOrDiscardScope(ctx, trialScopeKey); err != nil {
+		return err
+	}
+	flow.armFailureTimers(persistAs, persisted)
+
+	return nil
 }
 
 func shouldTransitionTrialFallbackScope(decision *resultDecision) bool {

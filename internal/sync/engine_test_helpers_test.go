@@ -19,6 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
@@ -336,6 +337,28 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 func newTestEngineInDir(t *testing.T, ctx context.Context, mock *engineMockClient, tmpDir string) (*testEngine, string) {
 	t.Helper()
 
+	return newTestEngineInDirWith(t, ctx, mock, tmpDir, nil)
+}
+
+// newTestEngineOnFS builds a test engine whose sync tree runs through
+// interpose: an emulated filesystem (internal/synctest, D-094).
+func newTestEngineOnFS(
+	t *testing.T, mock *engineMockClient, interpose func(synctree.Handle) synctree.Handle,
+) (*testEngine, string) {
+	t.Helper()
+
+	return newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), func(inputs *engineInputs) {
+		inputs.interposeSyncTree = interpose
+	})
+}
+
+// newTestEngineInDirWith is newTestEngineInDir with a last word on the
+// engine's inputs.
+func newTestEngineInDirWith(
+	t *testing.T, ctx context.Context, mock *engineMockClient, tmpDir string, configure func(*engineInputs),
+) (*testEngine, string) {
+	t.Helper()
+
 	dataDir := filepath.Join(tmpDir, "data")
 	dbPath := filepath.Join(tmpDir, "test.db")
 	syncRoot := filepath.Join(tmpDir, "sync")
@@ -347,7 +370,7 @@ func newTestEngineInDir(t *testing.T, ctx context.Context, mock *engineMockClien
 	driveID := driveid.New(engineTestDriveID)
 	accountEmail := engineTestEmail
 
-	eng, err := newEngine(ctx, &engineInputs{
+	inputs := &engineInputs{
 		DBPath:          dbPath,
 		SyncRoot:        syncRoot,
 		DataDir:         dataDir,
@@ -363,7 +386,11 @@ func newTestEngineInDir(t *testing.T, ctx context.Context, mock *engineMockClien
 		RecursiveLister: mock,
 		PermChecker:     mock,
 		Logger:          logger,
-	})
+	}
+	if configure != nil {
+		configure(inputs)
+	}
+	eng, err := newEngine(ctx, inputs)
 	require.NoError(t, err, "NewEngine")
 	eng.assertInvariants = true
 	applyRegisteredDispatchOrder(t, eng)

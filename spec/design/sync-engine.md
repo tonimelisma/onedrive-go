@@ -179,6 +179,24 @@ Permission timing follows the engine-owned runtime decision, not the probe:
   path; trial reclassification reuses that same fallback instead of treating
   inconclusive permission probes as fatal runtime errors
 
+Every persisted block scope has blocked `retry_work` under it, and the
+transitions keep that true at each step (found by the chaos Graph layer,
+D-092):
+
+- scope detection runs before a failure is persisted, so the failure that
+  activates a scope (a 429, a 503 with Retry-After, or the failure that
+  crosses the service window) is recorded once, blocked under that scope, as
+  its first trial candidate
+  (`TestEngineFlow_ProcessNormalDecision_ServiceRetryAfterBlocksTheTriggeringWork`,
+  `TestEngineFlow_ProcessNormalDecision_ServiceWindowBlocksTheCrossingWork`)
+- a failed trial whose failure names a scope of its own moves its work there
+  and transitions the trial's scope in one step, discarding it if that was
+  its only blocked work
+  (`TestEngineFlow_ProcessTrialDecision_ServiceRetryAfterMovesTheTrialsOnlyWork`)
+- admission that re-homes a scope's trial under a higher-priority scope
+  discards the scope it left when nothing is blocked under it any more
+  (`TestEngineFlow_AdmitReady_RehomedWorkDoesNotStrandItsOldScope`)
+
 ## Run State Is Split By Authority
 
 `engineFlow`'s mutable state lives in four owners, each answering one question

@@ -54,7 +54,10 @@ import (
 // breadth belongs to non-race runs and to ONEDRIVE_GO_MODEL_SEEDS.
 
 const (
-	modelBatches             = 6
+	modelBatches = 6
+	// modelRaceBatches is the batch count of the replay and chaos runs under
+	// -race, where one batch costs about 25 s on a 2-core host.
+	modelRaceBatches         = 2
 	modelMaxOpsPerSide       = 3
 	modelMaxSyncPasses       = 8
 	modelDefaultSeeds        = 12
@@ -78,9 +81,12 @@ const (
 	modelOpMove              = "move"
 	modelOpMakeFolder        = "mkdir"
 	modelOpReplace           = "replace"
+	modelOpConcurrentWrite   = "concurrent-write"
 	modelReplaceChildName    = "inside.txt"
 	modelMirroredMoveOdds    = 3
 	modelNotConvergedMessage = "sync did not converge"
+	// modelChaosPasses is how many passes of a chaos batch run in a storm.
+	modelChaosPasses = 3
 )
 
 // Validates: R-2.3.1, R-2.17.1, R-2.17.2, R-2.17.3, R-2.17.6, R-2.17.7, R-2.17.8
@@ -102,14 +108,22 @@ func TestRunOnce_RandomizedBidirectionalEditsConverge(t *testing.T) {
 func TestModel_SameSeedReplaysIdentically(t *testing.T) {
 	t.Parallel()
 
-	for _, seed := range []uint64{3, 28} {
+	seeds := []uint64{3, 28}
+	replayBatches := 0
+	if raceDetectorEnabled {
+		// Determinism does not depend on the race detector; one seed over
+		// fewer batches keeps the race run within go test's package timeout
+		// (see modelRaceSeeds).
+		seeds, replayBatches = seeds[:1], modelRaceBatches
+	}
+	for _, seed := range seeds {
 		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
 
 			var transcripts [2][]string
 			for i := range transcripts {
 				t.Run("run="+strconv.Itoa(i+1), func(t *testing.T) {
-					transcripts[i] = runModelScenario(t, seed).transcript
+					transcripts[i] = runModelScenarioWith(t, seed, modelOptions{batches: replayBatches}).transcript
 				})
 			}
 			require.NotEmpty(t, transcripts[0])
@@ -129,7 +143,7 @@ func TestModel_CrashAtSeededPointsRecovers(t *testing.T) {
 	for _, seed := range modelCrashSeeds(t) {
 		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
-			runModelScenarioWith(t, seed, true)
+			runModelScenarioWith(t, seed, modelOptions{crashes: true})
 		})
 	}
 }
@@ -232,6 +246,12 @@ type modelRun struct {
 	// first.
 	clock *modelClock
 
+	// chaos, when set, is the chaos Graph layer between the engine and the
+	// fake; concurrentEdits are the edits its other client made.
+	chaos           *chaosGraph
+	concurrentMu    stdsync.Mutex
+	concurrentEdits []modelEdit
+
 	// transcript is every dispatched action and every converged tree, in
 	// order, with conflict-copy timestamps masked: two runs of one seed must
 	// produce the same transcript.
@@ -242,33 +262,60 @@ type modelRun struct {
 func runModelScenario(t *testing.T, seed uint64) *modelRun {
 	t.Helper()
 
-	return runModelScenarioWith(t, seed, false)
+	return runModelScenarioWith(t, seed, modelOptions{})
 }
 
-// runModelScenarioWith runs one seed. With crashes set, every batch also
-// crashes at a crash point chosen by the seed (D-091): sync continues on a
-// fresh engine opened on what the crash left, and the batch's checks apply
-// to it.
-func runModelScenarioWith(t *testing.T, seed uint64, crashes bool) *modelRun {
+// modelOptions are the stresses a model run adds to its random edits.
+type modelOptions struct {
+	// crashes makes every batch crash at a crash point chosen by the seed
+	// (D-091): sync continues on a fresh engine opened on what the crash
+	// left, and the batch's checks apply to it.
+	crashes bool
+	// chaos puts the chaos Graph layer (D-092) between the engine and the
+	// fake OneDrive: the first modelChaosPasses passes of every batch run in
+	// a storm of seeded faults, the rest in calm.
+	chaos bool
+	// batches overrides modelBatches; zero keeps it.
+	batches int
+}
+
+// runModelScenarioWith runs one seed under opts.
+func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRun {
 	t.Helper()
 
+	crashes := opts.crashes
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
 	remote.shuffleDelta(seed)
-	h := newSyncHarness(t, remote)
+	client := remote.client(t)
+	var chaos *chaosGraph
+	if opts.chaos {
+		chaos = newChaosGraph(seed)
+		client = chaos.wrap(client)
+	}
+	h := newSyncHarnessWithClient(t, remote, client)
 	run := &modelRun{
 		t: t, seed: seed, rng: rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)), //nolint:gosec // deterministic test RNG
 		remote: remote, syncRoot: h.syncRoot, harness: h,
 		caseSensitive: localFSIsCaseSensitive(t.TempDir()),
 		clock:         &modelClock{},
+		chaos:         chaos,
+	}
+	if chaos != nil {
+		chaos.concurrentWrite = run.concurrentRemoteWrite
 	}
 	run.adoptEngine(h.eng)
 	crashRng := rand.New(rand.NewPCG(seed^0xc2b2ae3d27d4eb4f, seed)) //nolint:gosec // deterministic test RNG
 
 	run.seedInitialTree()
-	run.syncUntilQuiet("initial")
-	run.requireConverged("initial")
+	initialEdits := run.syncUntilQuiet("initial")
+	initial := run.requireConverged("initial")
+	run.requireWrittenContentSurvives("initial", initialEdits, initial)
 
-	for batch := 1; batch <= modelBatches; batch++ {
+	batches := modelBatches
+	if opts.batches > 0 {
+		batches = opts.batches
+	}
+	for batch := 1; batch <= batches; batch++ {
 		label := fmt.Sprintf("batch %d", batch)
 		before := run.localTree()
 		h.beginRound(t)
@@ -286,7 +333,7 @@ func runModelScenarioWith(t *testing.T, seed uint64, crashes bool) *modelRun {
 		run.requireWrittenContentSurvives(label, edits, converged)
 		run.requireUntouchedFilesUnchanged(label, before, edits, converged)
 		if !assertSyncInvariants(t, h) {
-			require.FailNow(t, "sync invariants violated", "%s: %s", label, run.failureContext())
+			require.FailNow(t, "sync invariants violated", "%s: %s\nstate:%s", label, run.failureContext(), syncStateDump(t, run.eng))
 		}
 		run.recordf("%s converged: %v", label, modelPaths(converged))
 	}
@@ -412,30 +459,43 @@ func (r *modelRun) seedInitialTree() {
 func (r *modelRun) syncUntilQuiet(label string) []modelEdit {
 	confirm := false
 	var userEdits []modelEdit
-	for pass := 1; pass <= modelMaxSyncPasses; pass++ {
-		if pass > 1 {
-			r.clock.advance(modelPassInterval)
-		}
+	stormPasses := 0
+	if r.chaos != nil {
+		stormPasses = modelChaosPasses
+	}
+	checkWipe := true
+	for pass := 1; pass <= modelMaxSyncPasses+stormPasses; pass++ {
+		storm := r.startPass(pass, stormPasses)
 		report, err := r.eng.RunOnce(r.t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: confirm})
+		if storm && err != nil {
+			// A fault the storm injected into observation fails the pass
+			// before it plans; the next pass starts over.
+			r.logf("%s pass %d (storm): %v", label, pass, err)
+			userEdits = append(userEdits, r.takeConcurrentEdits()...)
+			continue
+		}
 		require.NoError(r.t, err, "%s pass %d: %s", label, pass, r.failureContext())
+		// Another client's writes during the pass come before the user's
+		// response to it.
+		userEdits = append(userEdits, r.takeConcurrentEdits()...)
 		held := report.HeldLocalDeletes + report.HeldRemoteDeletes
 		confirm = held > 0
-		changed := report.Uploads + report.Downloads + report.LocalDeletes + report.RemoteDeletes +
-			report.FolderCreates + report.Moves + held
-		if pass == 1 {
+		changed := modelPassChanges(report)
+		if storm {
+			// Only a calm pass may end the loop.
+			changed++
+		}
+		if checkWipe {
+			// The first pass that observed both sides must hold a wipe.
+			checkWipe = false
 			r.requireWipeHeld(label, report)
-			if r.afterFirstPass != nil {
-				userEdits = append(userEdits, r.afterFirstPass()...)
-				r.afterFirstPass = nil
-				changed++
-			}
 		}
-		if os.Getenv(modelTraceEnv) != "" {
-			r.t.Logf("%s pass %d: up=%d down=%d ldel=%d rdel=%d mkdir=%d mv=%d ok=%d failed=%d errors=%v\n  local:  %v\n  remote: %v",
-				label, pass, report.Uploads, report.Downloads, report.LocalDeletes, report.RemoteDeletes,
-				report.FolderCreates, report.Moves, report.Succeeded, report.Failed, report.Errors,
-				modelPaths(r.localTree()), modelPaths(r.remote.tree()))
+		if r.afterFirstPass != nil {
+			userEdits = append(userEdits, r.afterFirstPass()...)
+			r.afterFirstPass = nil
+			changed++
 		}
+		r.tracePass(label, pass, report)
 		// The user renames what the engine reports as a name collision,
 		// once the pass is quiet or the collision is what failed.
 		quiet := changed == 0 && report.Failed == 0
@@ -451,6 +511,39 @@ func (r *modelRun) syncUntilQuiet(label string) []modelEdit {
 		label, modelMaxSyncPasses, r.failureContext(), syncStateDump(r.t, r.eng))
 
 	return userEdits
+}
+
+// startPass moves the clock to the pass and sets the chaos layer's storm,
+// reporting whether this pass runs in one.
+func (r *modelRun) startPass(pass, stormPasses int) bool {
+	if pass > 1 {
+		r.clock.advance(modelPassInterval)
+	}
+	storm := pass <= stormPasses
+	if r.chaos != nil {
+		r.chaos.setStorm(storm)
+	}
+
+	return storm
+}
+
+// modelPassChanges is how much a pass changed. A baseline update can be half
+// of a change: the same rename on both sides is rekeyed in one pass and its
+// content reconciled in the next, so a pass that only updated the baseline
+// is not quiet. Held deletes count too: the next pass confirms them.
+func modelPassChanges(report *Report) int {
+	return report.Uploads + report.Downloads + report.LocalDeletes + report.RemoteDeletes +
+		report.FolderCreates + report.Moves + report.BaselineUpdates + report.HeldLocalDeletes + report.HeldRemoteDeletes
+}
+
+func (r *modelRun) tracePass(label string, pass int, report *Report) {
+	if os.Getenv(modelTraceEnv) == "" {
+		return
+	}
+	r.t.Logf("%s pass %d: up=%d down=%d ldel=%d rdel=%d mkdir=%d mv=%d ok=%d failed=%d errors=%v\n  local:  %v\n  remote: %v",
+		label, pass, report.Uploads, report.Downloads, report.LocalDeletes, report.RemoteDeletes,
+		report.FolderCreates, report.Moves, report.Succeeded, report.Failed, report.Errors,
+		modelPaths(r.localTree()), modelPaths(r.remote.tree()))
 }
 
 // modelPassInterval is how much later the model's user runs each further
@@ -487,6 +580,12 @@ func (r *modelRun) requireWipeHeld(label string, report *Report) {
 	case modelLocalSide:
 		require.Positive(r.t, report.HeldRemoteDeletes, "%s: a wiped local side must hold the OneDrive deletes; %s", label, r.failureContext())
 	case modelRemoteSide:
+		if r.chaos != nil && report.HeldLocalDeletes == 0 && report.LocalDeletes == 0 && report.Uploads > 0 {
+			// The pass that saw the wipe resynced after a 410: what OneDrive
+			// no longer has is uploaded again rather than deleted locally
+			// (R-2.15.3), which loses nothing either.
+			break
+		}
 		require.Positive(r.t, report.HeldLocalDeletes, "%s: a wiped OneDrive must hold the local deletes; %s", label, r.failureContext())
 	}
 	r.expectHoldOf = ""
@@ -509,9 +608,22 @@ func (r *modelRun) requireWrittenContentSurvives(label string, edits []modelEdit
 	for _, content := range converged {
 		present[content] = true
 	}
+	var retained map[string]bool
 	for i, edit := range edits {
 		if edit.content == "" || modelOverwrittenLater(edits, i) {
 			continue
+		}
+		if !present[edit.content] && r.chaos != nil {
+			// Another client writing mid-pass (to this item, or to the item
+			// after a move) supersedes content on OneDrive, which keeps it
+			// as a version: kept, not lost. Without the chaos layer nobody
+			// else writes, and the converged trees must hold it.
+			if retained == nil {
+				retained = r.retainedContents()
+			}
+			if retained[edit.content] {
+				continue
+			}
 		}
 		assert.True(r.t, present[edit.content],
 			"%s: %s %s of %s was lost; %s", label, edit.side, edit.kind, edit.path, r.failureContext())
@@ -531,6 +643,20 @@ func modelOverwrittenLater(edits []modelEdit, i int) bool {
 	}
 
 	return false
+}
+
+// retainedContents is every content kept outside both trees: OneDrive's
+// recycle bin and version history, and the local trash.
+func (r *modelRun) retainedContents() map[string]bool {
+	retained := map[string]bool{}
+	for _, content := range r.remote.retainedContents() {
+		retained[content] = true
+	}
+	for _, content := range harnessTrashContents(r.t, r.eng) {
+		retained[content] = true
+	}
+
+	return retained
 }
 
 // requireUntouchedFilesUnchanged checks invariant 3.

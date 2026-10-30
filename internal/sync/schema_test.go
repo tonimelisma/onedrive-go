@@ -49,6 +49,7 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 		"sync_root_fsid",
 		"sync_root_token",
 		"sync_root_rebind",
+		"undecided_refresh_streak",
 	}, columns)
 
 	state, err := store.ReadObservationState(ctx)

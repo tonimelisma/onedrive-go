@@ -215,5 +215,30 @@ func (flow *engineFlow) persistHeldScopeDecision(
 	if work == (RetryWorkKey{}) {
 		work = retryWorkKeyForAction(&ta.Action)
 	}
-	return flow.persistBlockedRetryWork(ctx, work, decision.ScopeKey)
+	if err := flow.persistBlockedRetryWork(ctx, work, decision.ScopeKey); err != nil {
+		return err
+	}
+	if !ok || !row.Blocked || row.ScopeKey.IsZero() || row.ScopeKey == decision.ScopeKey {
+		return nil
+	}
+
+	// The work left the scope it was blocked under: a trial of that scope
+	// that a higher-priority scope also blocks. Left with no blocked work, the
+	// old scope is dead state with nothing to trial; it is discarded, and the
+	// failure that made it is detected again if it persists.
+	return flow.discardScopeWithoutBlockedWork(ctx, row.ScopeKey)
+}
+
+// discardScopeWithoutBlockedWork discards an active scope that no blocked
+// retry work names any more.
+func (flow *engineFlow) discardScopeWithoutBlockedWork(ctx context.Context, scopeKey ScopeKey) error {
+	if !flow.scopes.hasActiveScope(scopeKey) {
+		return nil
+	}
+	hasBlockedWork, err := flow.scopeHasBlockedRetryWork(ctx, scopeKey)
+	if err != nil || hasBlockedWork {
+		return err
+	}
+
+	return flow.discardScope(ctx, scopeKey)
 }

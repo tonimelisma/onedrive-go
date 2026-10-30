@@ -422,6 +422,10 @@ func (r *modelRun) resolveNameCollisions() []modelEdit {
 	local, remote := r.localTree(), r.remote.tree()
 	var edits []modelEdit
 	for _, p := range append(modelEntriesOf(local, false), modelEntriesOf(local, true)...) {
+		if _, exists := local[p]; !exists {
+			// Inside a folder renamed earlier in this loop.
+			continue
+		}
 		if _, synced := remote[p]; synced || !r.collidesUnderFolding(p, local, remote) {
 			continue
 		}

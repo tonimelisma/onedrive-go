@@ -368,6 +368,52 @@ func TestEngineFlow_AdmitReady_BlocksNormalActionUnderActiveScope(t *testing.T) 
 }
 
 // Validates: R-2.10.5
+//
+// A scope's trial that a higher-priority scope also blocks is held under that
+// scope instead, and its work moves there; the scope it left, with no blocked
+// work remaining, is discarded rather than left as dead state that fails the
+// persisted invariants (found by the chaos Graph layer, D-092).
+func TestEngineFlow_AdmitReady_RehomedWorkDoesNotStrandItsOldScope(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+
+	setTestBlockScope(t, eng, &BlockScope{Key: SKService()})
+	setTestBlockScope(t, eng, &BlockScope{Key: testThrottleScope()})
+	movedKey := testRetryWorkKey("moved.txt", "", ActionDownload)
+	moved, err := eng.baseline.RecordBlockedRetryWork(t.Context(), movedKey, SKService())
+	require.NoError(t, err)
+	flow.retries.rowsByKey[movedKey] = *moved
+	_, err = eng.baseline.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("other.txt", "", ActionDownload), testThrottleScope())
+	require.NoError(t, err)
+	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
+
+	ready := rt.sched.graph.Add(&Action{
+		Type:    ActionDownload,
+		Path:    "moved.txt",
+		DriveID: eng.driveID,
+		View:    &pathView{Path: "moved.txt"},
+	}, 1, nil)
+	require.NotNil(t, ready)
+	ready.IsTrial = true
+	ready.TrialScopeKey = SKService()
+	require.Equal(t, testThrottleScope(), rt.scopes.findBlockingScope(ready), "the throttle scope outranks the service scope")
+
+	dispatched, err := flow.admitReady(t.Context(), []*trackedAction{ready})
+	require.NoError(t, err)
+
+	assert.Empty(t, dispatched)
+	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
+	assert.False(t, rt.scopes.hasActiveScope(SKService()), "the emptied service scope is discarded")
+	for _, row := range listRetryWorkForTest(t, eng.baseline, t.Context()) {
+		assert.Equal(t, testThrottleScope(), row.ScopeKey, "%s", row.Path)
+		assert.True(t, row.Blocked, "%s", row.Path)
+	}
+}
+
+// Validates: R-2.10.5
 func TestEngineFlow_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenScopeNoLongerMatches(t *testing.T) {
 	t.Parallel()
 

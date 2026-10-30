@@ -145,6 +145,12 @@ func fullE2ESerialSyncTestNames() []string {
 		"TestE2E_Sync_NestedDeletion",
 		"TestE2E_Sync_IdempotentReSync",
 		"TestE2E_Sync_CrashRecoveryIdempotent",
+		"TestE2E_Sync_FolderMovesBothWays",
+		"TestE2E_Sync_CrossMoves",
+		"TestE2E_Sync_NamingCorpusRoundtrip",
+		"TestE2E_Sync_TwoWriters",
+		"TestE2E_Sync_LargeFileBetweenClients",
+		"TestE2E_Sync_TypeChangesBothWays",
 		"TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta",
 	}
 }

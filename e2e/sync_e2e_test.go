@@ -91,12 +91,78 @@ func writeIsolatedSharedRootSyncConfigWithOptions(
 ) (string, map[string]string) {
 	t.Helper()
 
+	cfgPath, env, _ := writeIsolatedSharedRootWriterConfig(t, syncDir, extraTOML, nil)
+
+	return cfgPath, env
+}
+
+// isolatedSharedRoot is a fresh remote folder synced as a shared root: its
+// canonical drive ID, owning remote drive and folder name.
+type isolatedSharedRoot struct {
+	canonicalID   string
+	ownerEmail    string
+	remoteDriveID string
+	folder        string
+}
+
+// writeIsolatedSharedRootWriterConfig writes a per-writer config (its own
+// data dir, state and home) syncing syncDir with an isolated shared root:
+// root, or a fresh one when root is nil. A second call with the first's root
+// is a second client on the same folder (the two-writer tests).
+func writeIsolatedSharedRootWriterConfig(
+	t *testing.T,
+	syncDir string,
+	extraTOML string,
+	root *isolatedSharedRoot,
+) (string, map[string]string, *isolatedSharedRoot) {
+	t.Helper()
+
 	perTestData := t.TempDir()
 	perTestHome := t.TempDir()
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
 	require.NoError(t, os.MkdirAll(perTestDataDir, 0o700))
 	copyTokenFile(t, testDataDir, perTestDataDir)
+
+	if root == nil {
+		root = createIsolatedSharedRoot(t, perTestDataDir)
+	}
+
+	require.NoError(t, config.UpdateCatalogForDataDir(perTestDataDir, func(catalog *config.Catalog) error {
+		catalog.UpsertDrive(&config.CatalogDrive{
+			CanonicalID:           root.canonicalID,
+			OwnerAccountCanonical: drive,
+			DriveType:             driveid.DriveTypeShared,
+			DisplayName:           root.folder,
+			SharedOwnerEmail:      root.ownerEmail,
+			RemoteDriveID:         root.remoteDriveID,
+		})
+		return nil
+	}))
+
+	content := fmt.Sprintf(`%s["%s"]
+sync_dir = %q
+`, extraTOML, root.canonicalID, syncDir)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
+
+	env := map[string]string{
+		"XDG_DATA_HOME":     perTestData,
+		"HOME":              perTestHome,
+		"ONEDRIVE_GO_DRIVE": root.canonicalID,
+	}
+
+	waitForSharedRootListingVisible(t, cfgPath, env, root.canonicalID)
+
+	return cfgPath, env, root
+}
+
+// createIsolatedSharedRoot makes a fresh remote folder, removed when the
+// test ends, and resolves its shared-root identity through the catalog in
+// dataDir.
+func createIsolatedSharedRoot(t *testing.T, dataDir string) *isolatedSharedRoot {
+	t.Helper()
 
 	rootFolder := fmt.Sprintf("e2e-sync-root-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanupRemoteFolder(t, rootFolder) })
@@ -112,7 +178,7 @@ func writeIsolatedSharedRootSyncConfigWithOptions(
 	ownerCID, err := driveid.NewCanonicalID(drive)
 	require.NoError(t, err)
 
-	catalog, err := config.LoadCatalogForDataDir(perTestDataDir)
+	catalog, err := config.LoadCatalogForDataDir(dataDir)
 	require.NoError(t, err)
 
 	ownerDrive, found := catalog.DriveByCanonicalID(ownerCID)
@@ -122,34 +188,12 @@ func writeIsolatedSharedRootSyncConfigWithOptions(
 	sharedCID, err := driveid.ConstructShared(ownerCID.Email(), ownerDrive.RemoteDriveID, stat.ID)
 	require.NoError(t, err)
 
-	require.NoError(t, config.UpdateCatalogForDataDir(perTestDataDir, func(catalog *config.Catalog) error {
-		catalog.UpsertDrive(&config.CatalogDrive{
-			CanonicalID:           sharedCID.String(),
-			OwnerAccountCanonical: drive,
-			DriveType:             driveid.DriveTypeShared,
-			DisplayName:           rootFolder,
-			SharedOwnerEmail:      ownerCID.Email(),
-			RemoteDriveID:         ownerDrive.RemoteDriveID,
-		})
-		return nil
-	}))
-
-	content := fmt.Sprintf(`%s["%s"]
-sync_dir = %q
-`, extraTOML, sharedCID.String(), syncDir)
-
-	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
-
-	env := map[string]string{
-		"XDG_DATA_HOME":     perTestData,
-		"HOME":              perTestHome,
-		"ONEDRIVE_GO_DRIVE": sharedCID.String(),
+	return &isolatedSharedRoot{
+		canonicalID:   sharedCID.String(),
+		ownerEmail:    ownerCID.Email(),
+		remoteDriveID: ownerDrive.RemoteDriveID,
+		folder:        rootFolder,
 	}
-
-	waitForSharedRootListingVisible(t, cfgPath, env, sharedCID.String())
-
-	return cfgPath, env
 }
 
 func verifyBaselineReport(t *testing.T, cfgPath string, env map[string]string) (*syncverify.Report, error) {

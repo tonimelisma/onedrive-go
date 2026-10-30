@@ -21,7 +21,11 @@ type remoteObservationBatch struct {
 	// fullRefreshDueSoon pulls the full remote refresh forward to
 	// fullRefreshAfterFolderDeleteDelay from now: the window holds a fact
 	// only a full enumeration can complete (deltaWindowDeletesSyncedFolder).
-	fullRefreshDueSoon    bool
+	fullRefreshDueSoon bool
+	// orphansUndecided marks a full refresh that kept an orphan it could not
+	// confirm: the next one is due on the undecided-refresh backoff
+	// (SyncStore.RecordFullRefreshOrphans).
+	orphansUndecided      bool
 	findings              ObservationFindingsBatch
 	shortcutTopology      shortcutTopologyBatch
 	armFullRefreshTimer   bool

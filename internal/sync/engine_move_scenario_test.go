@@ -1,7 +1,9 @@
 package sync
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 // requireScenarioBaselineMoved asserts a folder move re-pathed the subtree's
@@ -1069,5 +1072,73 @@ func TestRunOnce_RemoteFolderDeleteAfterDeviceRenumberingIsApplied(t *testing.T)
 
 	assert.NoDirExists(t, filepath.Join(h.syncRoot, "d"))
 	assert.NotContains(t, remote.tree(), "d", "the deleted folder is not re-created online")
+	assertSyncInvariants(t, h)
+}
+
+// Validates: R-2.17.1, R-2.17.2
+//
+// The same rename on both sides while OneDrive also edited the file: one
+// pass rekeys the baseline to the shared new name, the next downloads the
+// edit. A model loop that read a baseline-update-only pass as quiet stopped
+// between the two (chaos Graph layer, D-092, seed 35).
+func TestRunOnce_SameRenameOnBothSidesStillAppliesTheRemoteEdit(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("item-q", "root", "q")
+	remote.addFile(t, "item-a", "item-q", "a.txt", "before\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	remote.putFileAt(t, "q/a.txt", "edited online\n")
+	remote.moveAt(t, "q/a.txt", "a.txt")
+	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "q", "a.txt"), filepath.Join(h.syncRoot, "a.txt")))
+	for range 2 {
+		runScenarioPass(t, h.eng)
+	}
+
+	requireScenarioLocalFile(t, h.syncRoot, "a.txt", "edited online\n")
+	assertSyncInvariants(t, h)
+}
+
+// Validates: R-2.17.1, R-2.17.2
+//
+// As above, with the client's own move carrying the rename to OneDrive and
+// its answer lost (a 504 after the move took effect).
+func TestRunOnce_LostMoveAnswerAfterARemoteEditStillAppliesTheEdit(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("item-q", "root", "q")
+	remote.addFile(t, "item-a", "item-q", "a.txt", "before\n")
+	client := remote.client(t)
+	move := client.moveItemOptsFn
+	lost := false
+	client.moveItemOptsFn = func(
+		ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string, opts graph.MoveOptions,
+	) (*graph.Item, error) {
+		item, err := move(ctx, driveID, itemID, newParentID, newName, opts)
+		if err == nil && !lost {
+			lost = true
+			return nil, &graph.GraphError{StatusCode: http.StatusGatewayTimeout, Err: graph.ErrServerError}
+		}
+		return item, err
+	}
+	h := newSyncHarnessWithClient(t, remote, client)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	remote.putFileAt(t, "q/a.txt", "edited online\n")
+	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "q", "a.txt"), filepath.Join(h.syncRoot, "a.txt")))
+	report, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+	require.True(t, lost, "the move ran and lost its answer")
+	require.Equal(t, 1, report.Failed)
+	for range 2 {
+		runScenarioPass(t, h.eng)
+	}
+
+	requireScenarioLocalFile(t, h.syncRoot, "a.txt", "edited online\n")
 	assertSyncInvariants(t, h)
 }

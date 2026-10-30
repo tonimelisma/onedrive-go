@@ -22,7 +22,8 @@ const (
 				sync_root_inode,
 				sync_root_fsid,
 				sync_root_token,
-				sync_root_rebind
+				sync_root_rebind,
+				undecided_refresh_streak
 			FROM observation_state
 			LIMIT 1`
 	sqlEnsureObservationStateRow = `INSERT INTO observation_state
@@ -49,6 +50,9 @@ type observationState struct {
 	// may bind whatever folder is at the sync path even though the baseline
 	// is not empty. Cleared by the bind.
 	SyncRootRebind bool
+	// UndecidedRefreshStreak counts consecutive full refreshes that kept an
+	// orphan they could not confirm; it sets how soon the next one runs.
+	UndecidedRefreshStreak int
 }
 
 const (
@@ -155,6 +159,7 @@ func (s *SyncStore) ReadObservationState(ctx context.Context) (*observationState
 		&rootFSID,
 		&rootToken,
 		&rootRebind,
+		&state.UndecidedRefreshStreak,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
@@ -228,6 +233,57 @@ func (s *SyncStore) MarkFullRemoteRefresh(
 			applyRemoteRefreshSchedule(state, at, mode)
 		},
 	)
+}
+
+// RecordFullRefreshOrphans records whether a full refresh left an orphan it
+// could not confirm, after MarkFullRemoteRefresh. An undecided orphan makes
+// the next full refresh due after undecidedRefreshDelay of the streak of such
+// refreshes, so a lookup that keeps failing does not re-enumerate the drive
+// every 15 minutes forever; a refresh that decides every orphan ends the
+// streak. It reports whether the deadline moved.
+func (s *SyncStore) RecordFullRefreshOrphans(
+	ctx context.Context,
+	driveID driveid.ID,
+	at time.Time,
+	undecided bool,
+) (bool, error) {
+	changed := false
+	err := s.markObservationRefresh(
+		ctx,
+		driveID,
+		"sync: beginning undecided-orphan refresh transaction",
+		"sync: rollback undecided-orphan refresh transaction",
+		"sync: committing undecided-orphan refresh transaction",
+		func(state *observationState) {
+			if !undecided {
+				state.UndecidedRefreshStreak = 0
+				return
+			}
+			state.UndecidedRefreshStreak++
+			deadline := at.Add(undecidedRefreshDelay(state.UndecidedRefreshStreak)).UnixNano()
+			if state.NextFullRemoteRefreshAt == 0 || state.NextFullRemoteRefreshAt > deadline {
+				state.NextFullRemoteRefreshAt = deadline
+				changed = true
+			}
+		},
+	)
+
+	return changed, err
+}
+
+// undecidedRefreshDelay is how soon a full refresh follows the streak-th
+// consecutive one that left an orphan undecided: fullRefreshAfterFolderDeleteDelay,
+// doubling per refresh, up to the normal cadence.
+func undecidedRefreshDelay(streak int) time.Duration {
+	delay := fullRefreshAfterFolderDeleteDelay
+	for range streak - 1 {
+		delay *= 2
+		if delay >= fullRemoteRefreshInterval {
+			return fullRemoteRefreshInterval
+		}
+	}
+
+	return delay
 }
 
 func (s *SyncStore) ClampFullRemoteRefreshDeadline(
@@ -350,6 +406,7 @@ func readObservationStateFromTx(
 		&rootFSID,
 		&rootToken,
 		&rootRebind,
+		&state.UndecidedRefreshStreak,
 	); err != nil {
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
@@ -423,8 +480,9 @@ func writeObservationStateToTx(
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO observation_state
 			(content_drive_id, cursor, next_full_remote_refresh_at, local_truth_complete, local_truth_recovery_reason,
-			 sync_root_bound, sync_root_device, sync_root_inode, sync_root_fsid, sync_root_token, sync_root_rebind)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 sync_root_bound, sync_root_device, sync_root_inode, sync_root_fsid, sync_root_token, sync_root_rebind,
+			 undecided_refresh_streak)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		state.ContentDriveID.String(),
 		state.Cursor,
 		state.NextFullRemoteRefreshAt,
@@ -436,6 +494,7 @@ func writeObservationStateToTx(
 		int64(rootIdentity.FileSystemID),
 		rootIdentity.Token,
 		boolInt(state.SyncRootRebind),
+		state.UndecidedRefreshStreak,
 	); err != nil {
 		return fmt.Errorf("sync: writing observation_state: %w", err)
 	}
