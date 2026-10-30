@@ -131,17 +131,14 @@ func isBusinessLikeDrive(item *graph.Item) bool {
 	return strings.HasPrefix(item.DriveID.String(), businessDriveIDPrefix)
 }
 
-// settleUploadedItem turns an upload call's answer into a verified item.
-// A completion that carried no item is looked up at the target, because the
-// content has landed; an item that does not match what was sent is read back
-// once (server processing can briefly show pre-commit facts) and the upload
-// fails if it still does not match.
 // settleUncertainFinalFragment handles an upload whose last fragment may
 // have committed: the encapsulated small-file session canceled itself, but
 // the item is adopted if it is provably ours (D-036). When it is not, and the
 // create made it, the content provably did not land: the empty item is
-// removed now, conditional on its creation eTag, which only matches while it
-// is still the untouched placeholder.
+// removed now, conditional on the eTag the lookup just read while it was
+// still empty. The creation eTag no longer matches by then: opening and
+// canceling the session moved it, so that delete always failed with 412 and
+// left the placeholder behind.
 func (tm *TransferManager) settleUncertainFinalFragment(
 	ctx context.Context, target uploadTarget, sent uploadedContent, created *graph.CreatedItemError, uploadErr error,
 ) (*graph.Item, error) {
@@ -152,13 +149,18 @@ func (tm *TransferManager) settleUncertainFinalFragment(
 	if adopted {
 		return landed, nil
 	}
-	if created != nil && created.Item != nil {
-		tm.removePlaceholder(ctx, target.driveID, created.Item.ID, created.Item.ETag)
+	if created != nil && created.Item != nil && landed != nil && landed.ID == created.Item.ID {
+		tm.removeEmptyPlaceholder(ctx, target.driveID, landed)
 	}
 
 	return nil, uploadErr
 }
 
+// settleUploadedItem turns an upload call's answer into a verified item.
+// A completion that carried no item is looked up at the target, because the
+// content has landed; an item that does not match what was sent is read back
+// once (server processing can briefly show pre-commit facts) and the upload
+// fails if it still does not match.
 func (tm *TransferManager) settleUploadedItem(
 	ctx context.Context, target uploadTarget, sent uploadedContent, localPath string, item *graph.Item, uploadErr error,
 ) (*graph.Item, error) {

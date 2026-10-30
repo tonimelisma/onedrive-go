@@ -308,9 +308,11 @@ fresh-parent `404 itemNotFound` with `UploadSessionCreatePolicy()`; a
 read-only shared folder answers it with the correct `403`, which is not
 retried. A create never replaces: 409 `nameAlreadyExists` is `ErrConflict`
 (`TestUpload_ExistingNameIsNeverReplaced`). When the content step fails
-before its final fragment the created empty item is deleted again with
-`If-Match` on its creation eTag
-(`TestUpload_FailedContentStepRemovesItsEmptyItemConditionally`).
+before its final fragment the created empty item is read back and deleted
+again while still empty, with `If-Match` on the eTag just read: an upload
+session opened on the empty item moves its eTag although no content landed
+(`TestUpload_FailedContentStepRemovesItsEmptyItemConditionally`,
+`TestUpload_FailedContentStepRemovesItsEmptyItemByItsCurrentETag`).
 
 Overwrites by item ID take the caller's preflight eTag as `If-Match` on both
 routes (R-5.6.2, D-022, `TestUploadToItem_OverwriteIsConditionalOnBothRoutes`);

@@ -110,6 +110,52 @@ func TestUploadFile_UncertainFinalFragmentThatDidNotLandRemovesThePlaceholder(t 
 }
 
 // Validates: R-5.6.15
+//
+// Opening and canceling the session moves the empty item's eTag (live, e2e
+// TestE2E_SyncWatch_FileModification). The delete conditional on the
+// creation eTag then always failed with 412 and left the placeholder; it is
+// conditional on the eTag the lookup just read, and only while still empty.
+func TestUploadFile_UncertainFinalFragmentRemovesThePlaceholderByItsCurrentETag(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		current *graph.Item
+		deleted []string
+	}{
+		{
+			name:    "still empty under a moved eTag",
+			current: &graph.Item{ID: "new-item", ETag: `"c,3"`, QuickXorHash: tmHashBytes(nil)},
+			deleted: []string{`new-item@"c,3"`},
+		},
+		{
+			name:    "someone else's content landed",
+			current: &graph.Item{ID: "new-item", ETag: `"c,4"`, Size: 5, QuickXorHash: tmHashBytes([]byte("other"))},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ul := &tmCreatingUploader{
+				created:    &graph.Item{ID: "new-item", ETag: `"c,1"`},
+				contentErr: &graph.FinalFragmentError{Err: errors.New("connection reset")},
+				tmMockUploader: tmMockUploader{
+					getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+						return tc.current, nil
+					},
+				},
+			}
+			tm := newTestTM(&tmSimpleDownloader{}, ul, nil)
+
+			_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent", "new.txt",
+				writeCreateTestFile(t, []byte("content")), UploadOpts{OnCreated: func(string, string) error { return nil }})
+			require.Error(t, err)
+			assert.Equal(t, tc.deleted, ul.deletedIfMatch)
+		})
+	}
+}
+
+// Validates: R-5.6.15
 func TestSessionUpload_RetryOfAnInterruptedCreateReusesItsItem(t *testing.T) {
 	t.Parallel()
 

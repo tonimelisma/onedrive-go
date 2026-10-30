@@ -111,6 +111,36 @@ func TestUpload_FailedContentStepRemovesItsEmptyItemConditionally(t *testing.T) 
 	assert.Equal(t, []string{createdFileETag}, rec.deleteIfMatch)
 }
 
+// Validates: R-5.6.14
+//
+// An upload session opened on the empty item moves its eTag although no
+// content landed (live, e2e TestE2E_SyncWatch_FileModification). Conditional
+// on the creation eTag, the delete failed with 412 and the placeholder stayed;
+// it is conditional on the eTag read back, and only while the item is empty.
+func TestUpload_FailedContentStepRemovesItsEmptyItemByItsCurrentETag(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		size    int
+		deleted []string
+	}{
+		{name: "still empty under a moved eTag", deleted: []string{`"moved-etag"`}},
+		{name: "content landed meanwhile", size: 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &sessionUploadRecorder{currentETag: `"moved-etag"`, currentSize: tc.size}
+			srv := newSessionUploadServer(t, rec, http.StatusForbidden)
+			defer srv.Close()
+
+			content := []byte("blocked")
+			_, err := newTestClient(t, srv.URL).Upload(t.Context(), driveid.New("d"), "parent", "blocked.txt",
+				bytes.NewReader(content), int64(len(content)), time.Time{}, nil)
+			require.ErrorIs(t, err, ErrForbidden)
+
+			assert.Equal(t, tc.deleted, rec.deleteIfMatch)
+		})
+	}
+}
+
 // Validates: R-5.6.2
 func TestUploadToItem_OverwriteIsConditionalOnBothRoutes(t *testing.T) {
 	tests := []struct {
