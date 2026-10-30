@@ -315,7 +315,7 @@ func TestE2E_Status_LiveOverlay_ConfigTolerance(t *testing.T) {
 	}
 
 	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
-		t, cfgPath, env, "", transientGraphRetryTimeout, "status", "--json",
+		t, cfgPath, env, "", "status", "--json",
 	)
 
 	var result struct {
@@ -374,7 +374,7 @@ func TestE2E_Status_PersonalAccountShowsSinglePersonalLiveDrive(t *testing.T) {
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
-		t, cfgPath, env, "", transientGraphRetryTimeout, "status", "--json",
+		t, cfgPath, env, "", "status", "--json",
 	)
 
 	var result struct {

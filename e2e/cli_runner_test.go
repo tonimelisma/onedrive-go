@@ -76,6 +76,24 @@ func runCLICore(
 	return stdout, stderr, err
 }
 
+// runCLIBestEffort runs a CLI command whose failure must not fail the test:
+// a cleanup, or a step whose outcome the test asserts by other means. A
+// failure is logged so the CI output still shows it.
+func runCLIBestEffort(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	args ...string,
+) {
+	t.Helper()
+
+	stdout, stderr, err := runCLICore(t, cfgPath, env, driveID, args...)
+	if err != nil {
+		t.Logf("best-effort CLI command %v failed: %v\nstdout: %s\nstderr: %s", args, err, stdout, stderr)
+	}
+}
+
 // runCLIWithConfig runs the CLI binary with a custom config file.
 // env overrides (if non-nil) are applied to the child process environment.
 func runCLIWithConfig(

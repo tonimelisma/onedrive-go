@@ -30,7 +30,7 @@ func TestE2E_FixturePreflight_Full(t *testing.T) {
 	assert.Equal(t, liveConfig.Fixtures.WritableShortcutName, writableShortcut.ShortcutName)
 	assert.Equal(t, liveConfig.Fixtures.ReadOnlyShortcutName, readOnlyShortcut.ShortcutName)
 
-	shortcutFixtures := []resolvedShortcutFixture{writableShortcut, readOnlyShortcut}
+	shortcutFixtures := []*resolvedShortcutFixture{writableShortcut, readOnlyShortcut}
 	for _, fixture := range shortcutFixtures {
 		cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, t.TempDir())
 		requireSharedListContainsShortcutFixture(t, cfgPath, env, fixture)

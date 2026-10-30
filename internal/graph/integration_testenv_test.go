@@ -16,18 +16,24 @@ import (
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
-// integrationRealHomeDir holds the original HOME directory before TestMain
-// overrides it. Used by isolation tests.
-var integrationRealHomeDir string
+// Isolation state captured by setupIntegrationIsolation, which runs from TestMain.
+//
+//nolint:gochecknoglobals // TestMain can hand suite setup to tests only through package variables.
+var (
+	// integrationRealHomeDir holds the original HOME directory before TestMain
+	// overrides it. Used by isolation tests.
+	integrationRealHomeDir string
 
-// integrationTestCredentialDir holds the path to .testdata/.
-var integrationTestCredentialDir string
+	// integrationTestCredentialDir holds the path to .testdata/.
+	integrationTestCredentialDir string
+)
 
 // validateIntegrationTestData checks that .testdata/ has the expected structure.
 func validateIntegrationTestData(credDir, driveID string) {
 	tokenName := testutil.TokenFileName(driveID)
 	tokenPath := filepath.Join(credDir, tokenName)
 
+	//nolint:gosec // token file inside the repo's own .testdata credential bundle
 	if _, err := os.Stat(tokenPath); err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: token file not found at %s: %v\n", tokenPath, err)
 		fmt.Fprintln(os.Stderr, "Re-run scripts/bootstrap-test-credentials.sh.")
@@ -69,8 +75,8 @@ func setupIntegrationIsolation() func() {
 	validateIntegrationTestData(integrationTestCredentialDir, drive)
 
 	// Unset app-specific env vars that could leak production paths.
-	os.Unsetenv("ONEDRIVE_GO_CONFIG")
-	os.Unsetenv("ONEDRIVE_GO_DRIVE")
+	mustUnsetenvIntegration("ONEDRIVE_GO_CONFIG")
+	mustUnsetenvIntegration("ONEDRIVE_GO_DRIVE")
 
 	tempRoot, err := os.MkdirTemp("", "onedrive-integration-isolation-*")
 	if err != nil {
@@ -90,10 +96,10 @@ func setupIntegrationIsolation() func() {
 		}
 	}
 
-	os.Setenv("HOME", tempHome)
-	os.Setenv("XDG_CONFIG_HOME", tempConfig)
-	os.Setenv("XDG_DATA_HOME", tempData)
-	os.Setenv("XDG_CACHE_HOME", tempCache)
+	mustSetenvIntegration("HOME", tempHome)
+	mustSetenvIntegration("XDG_CONFIG_HOME", tempConfig)
+	mustSetenvIntegration("XDG_DATA_HOME", tempData)
+	mustSetenvIntegration("XDG_CACHE_HOME", tempCache)
 
 	// Copy token file from .testdata/ to isolated data dir.
 	appDataDir := filepath.Join(tempData, "onedrive-go")
@@ -133,18 +139,52 @@ func setupIntegrationIsolation() func() {
 
 	return func() {
 		// Preserve rotated token: copy back from temp to .testdata/.
-		rotatedPath := filepath.Join(appDataDir, tokenName)
-		if _, statErr := os.Stat(rotatedPath); statErr == nil {
-			origPath := filepath.Join(integrationTestCredentialDir, tokenName)
-			data, readErr := os.ReadFile(rotatedPath)
-			if readErr != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: cannot read rotated token %s: %v\n", rotatedPath, readErr)
-			} else if writeErr := os.WriteFile(origPath, data, 0o600); writeErr != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: cannot write rotated token back to %s: %v\n", origPath, writeErr)
-			}
-		}
+		copyRotatedIntegrationTokenBack(appDataDir, tokenName)
 
-		os.RemoveAll(tempRoot)
+		if rmErr := os.RemoveAll(tempRoot); rmErr != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: cannot remove isolation temp dir %s: %v\n", tempRoot, rmErr)
+		}
+	}
+}
+
+// copyRotatedIntegrationTokenBack copies a token rotated during the run from
+// the isolated data dir back into .testdata/, so the next run starts from the
+// newest refresh token.
+func copyRotatedIntegrationTokenBack(appDataDir, tokenName string) {
+	rotatedPath := filepath.Join(appDataDir, tokenName)
+	//nolint:gosec // token file inside the suite's own isolation temp dir
+	if _, statErr := os.Stat(rotatedPath); statErr != nil {
+		return
+	}
+
+	origPath := filepath.Join(integrationTestCredentialDir, tokenName)
+	data, readErr := os.ReadFile(rotatedPath) //nolint:gosec // token file inside the suite's own isolation temp dir
+	if readErr != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: cannot read rotated token %s: %v\n", rotatedPath, readErr)
+		return
+	}
+
+	//nolint:gosec // writes back into the repo's own .testdata credential bundle
+	if writeErr := os.WriteFile(origPath, data, 0o600); writeErr != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: cannot write rotated token back to %s: %v\n", origPath, writeErr)
+	}
+}
+
+// mustSetenvIntegration sets an isolation env var, exiting the process if it
+// cannot: a half-applied isolation must never reach the tests.
+func mustSetenvIntegration(key, value string) {
+	if err := os.Setenv(key, value); err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: setting %s: %v\n", key, err)
+		os.Exit(1)
+	}
+}
+
+// mustUnsetenvIntegration clears an env var that could leak production paths,
+// exiting the process if it cannot.
+func mustUnsetenvIntegration(key string) {
+	if err := os.Unsetenv(key); err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: unsetting %s: %v\n", key, err)
+		os.Exit(1)
 	}
 }
 
@@ -186,7 +226,10 @@ func verifyIntegrationIsolation(tempRoot string) {
 	}
 
 	// 4. os.UserHomeDir() must return temp home.
-	homeDir, _ := os.UserHomeDir()
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		crash("UserHomeDir() failed: " + err.Error())
+	}
 	if !strings.HasPrefix(homeDir, tempRoot) {
 		crash("UserHomeDir() returns " + homeDir + " (not under temp)")
 	}

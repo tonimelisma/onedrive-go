@@ -212,7 +212,7 @@ func TestE2E_Sync_NamingCorpusRoundtrip(t *testing.T) {
 	writeLocal(t, syncDir, "cases/Mixed.txt", "upper")
 	writeLocal(t, syncDir, "cases/mixed.txt", "lower")
 
-	_, _, _ = runCLIWithConfigAllowError(t, cfgPath, env, "sync", "--upload-only")
+	runCLIBestEffort(t, cfgPath, env, resolveDriveSelection(env, ""), "sync", "--upload-only")
 	waitForRemoteReadContains(t, cfgPath, env, "", "children", pollTimeout, "ls", "/corpus")
 
 	listed := map[string]bool{}
@@ -232,7 +232,7 @@ func TestE2E_Sync_NamingCorpusRoundtrip(t *testing.T) {
 	// Download direction: the same names arriving from OneDrive.
 	otherDir := t.TempDir()
 	otherCfg, otherEnv, _ := writeIsolatedSharedRootWriterConfig(t, otherDir, "", root)
-	_, _, _ = runCLIWithConfigAllowError(t, otherCfg, otherEnv, "sync", "--download-only")
+	runCLIBestEffort(t, otherCfg, otherEnv, resolveDriveSelection(otherEnv, ""), "sync", "--download-only")
 	downloaded := contentTree(t, filepath.Join(otherDir, "corpus"))
 	for i, name := range namingCorpus() {
 		found := false
@@ -326,8 +326,7 @@ func TestE2E_Sync_LargeFileBetweenClients(t *testing.T) {
 	dirB := t.TempDir()
 	cfgB, envB, _ := writeIsolatedSharedRootWriterConfig(t, dirB, "", root)
 	runCLIWithConfig(t, cfgB, envB, "sync", "--download-only")
-	got, err := os.ReadFile(filepath.Join(dirB, "large.bin"))
-	require.NoError(t, err)
+	got := mustReadFile(t, filepath.Join(dirB, "large.bin"))
 	assert.Equal(t, sha256.Sum256(data), sha256.Sum256(got), "the downloaded copy is byte-identical")
 
 	edited := bytes.Clone(data)
@@ -335,7 +334,7 @@ func TestE2E_Sync_LargeFileBetweenClients(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dirB, "large.bin"), edited, 0o600))
 	runCLIWithConfig(t, cfgB, envB, "sync")
 	syncUntil(t, cfgA, envA, "A downloads B's edit", func() bool {
-		back, readErr := os.ReadFile(filepath.Join(dirA, "large.bin"))
+		back, readErr := os.ReadFile(filepath.Join(dirA, "large.bin")) //nolint:gosec // a file inside the test's own sync dir
 		return readErr == nil && bytes.Equal(back, edited)
 	})
 }

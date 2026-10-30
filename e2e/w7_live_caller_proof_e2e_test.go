@@ -74,8 +74,53 @@ func TestE2E_Logout_PreservesOfflineAccountCatalog(t *testing.T) {
 	tokenPath := filepath.Join(dataHome, "onedrive-go", testutil.TokenFileName(drive))
 	catalogPath := catalogPathForDataHome(dataHome)
 
+	requireReadyAccountBeforeLogout(t, cfgPath, env, email)
+
+	stdout, stderr, err := runCLICore(t, cfgPath, env, "", "logout")
+	require.NoErrorf(t, err, "logout should succeed\nstdout: %s\nstderr: %s", stdout, stderr)
+	combinedLogout := stdout + stderr
+	assert.Contains(t, combinedLogout, "Token removed")
+	assert.Contains(t, combinedLogout, "State databases kept")
+	assert.Contains(t, combinedLogout, "Sync directories untouched")
+
+	_, tokenErr := os.Stat(tokenPath)
+	assert.True(t, os.IsNotExist(tokenErr), "logout should remove the token file")
+
+	_, catalogErr := os.Stat(catalogPath)
+	require.NoError(t, catalogErr, "logout should preserve the managed catalog")
+
+	cfgBytes := mustReadFile(t, cfgPath)
+	assert.NotContains(t, string(cfgBytes), drive, "logout should remove the drive config section")
+
+	stdout, stderr, err = runCLICore(t, cfgPath, env, "", "status", "--json")
+	require.NoErrorf(t, err, "offline status should still succeed after logout\nstdout: %s\nstderr: %s", stdout, stderr)
+
+	var statusAfterLogout w7LiveStatusOutput
+	require.NoError(t, json.Unmarshal([]byte(stdout), &statusAfterLogout))
+	var loggedOutAccountFound bool
+	for i := range statusAfterLogout.Accounts {
+		account := statusAfterLogout.Accounts[i]
+		if account.Email != email {
+			continue
+		}
+
+		loggedOutAccountFound = true
+		require.NotNil(t, account.SignInRequired)
+		assert.Contains(t, account.SignInRequired.Action, "login")
+		assert.Empty(t, account.Drives)
+	}
+	assert.True(t, loggedOutAccountFound, "status should retain the logged-out account in the offline catalog view")
+
+	assertDriveListRequiresLoginAfterLogout(t, cfgPath, env, email)
+}
+
+// requireReadyAccountBeforeLogout checks that status --json lists email as a
+// ready account with its configured drive.
+func requireReadyAccountBeforeLogout(t *testing.T, cfgPath string, env map[string]string, email string) {
+	t.Helper()
+
 	stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
-		t, cfgPath, env, "", transientGraphRetryTimeout, "status", "--json",
+		t, cfgPath, env, "", "status", "--json",
 	)
 
 	var beforeLogout w7LiveStatusOutput
@@ -100,44 +145,15 @@ func TestE2E_Logout_PreservesOfflineAccountCatalog(t *testing.T) {
 	}
 	require.NotNil(t, configuredBeforeLogout, "pre-logout status should still include the configured ready account")
 	assert.NotEmpty(t, configuredBeforeLogout.Drives, "pre-logout status should list the configured drive")
+}
 
-	stdout, stderr, err := runCLICore(t, cfgPath, env, "", "logout")
-	require.NoErrorf(t, err, "logout should succeed\nstdout: %s\nstderr: %s", stdout, stderr)
-	combinedLogout := stdout + stderr
-	assert.Contains(t, combinedLogout, "Token removed")
-	assert.Contains(t, combinedLogout, "State databases kept")
-	assert.Contains(t, combinedLogout, "Sync directories untouched")
+// assertDriveListRequiresLoginAfterLogout checks that drive list --json keeps
+// the logged-out account, with no configured drives, under
+// accounts_requiring_auth.
+func assertDriveListRequiresLoginAfterLogout(t *testing.T, cfgPath string, env map[string]string, email string) {
+	t.Helper()
 
-	_, tokenErr := os.Stat(tokenPath)
-	assert.True(t, os.IsNotExist(tokenErr), "logout should remove the token file")
-
-	_, catalogErr := os.Stat(catalogPath)
-	require.NoError(t, catalogErr, "logout should preserve the managed catalog")
-
-	cfgBytes, readErr := os.ReadFile(cfgPath)
-	require.NoError(t, readErr)
-	assert.NotContains(t, string(cfgBytes), drive, "logout should remove the drive config section")
-
-	stdout, stderr, err = runCLICore(t, cfgPath, env, "", "status", "--json")
-	require.NoErrorf(t, err, "offline status should still succeed after logout\nstdout: %s\nstderr: %s", stdout, stderr)
-
-	var statusAfterLogout w7LiveStatusOutput
-	require.NoError(t, json.Unmarshal([]byte(stdout), &statusAfterLogout))
-	var loggedOutAccountFound bool
-	for i := range statusAfterLogout.Accounts {
-		account := statusAfterLogout.Accounts[i]
-		if account.Email != email {
-			continue
-		}
-
-		loggedOutAccountFound = true
-		require.NotNil(t, account.SignInRequired)
-		assert.Contains(t, account.SignInRequired.Action, "login")
-		assert.Empty(t, account.Drives)
-	}
-	assert.True(t, loggedOutAccountFound, "status should retain the logged-out account in the offline catalog view")
-
-	stdout, stderr, err = runCLICore(t, cfgPath, env, "", "drive", "list", "--json")
+	stdout, stderr, err := runCLICore(t, cfgPath, env, "", "drive", "list", "--json")
 	require.NoErrorf(t, err, "drive list should still succeed after logout\nstdout: %s\nstderr: %s", stdout, stderr)
 
 	var driveListAfterLogout w7LiveDriveListOutput
@@ -170,7 +186,6 @@ func TestE2E_Shared_JSON_RecipientListingUsesLiveAccountCatalog(t *testing.T) {
 		cfgPath,
 		env,
 		"",
-		transientGraphRetryTimeout,
 		"--account",
 		fixture.RecipientEmail,
 		"shared",

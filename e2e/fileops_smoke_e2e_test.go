@@ -47,8 +47,7 @@ func TestE2E_FileOpsSmokeCRUD(t *testing.T) {
 	_, stderr = runCLIWithConfig(t, cfgPath, nil, "get", remotePath, localPath)
 	assert.Contains(t, stderr, "Downloaded")
 
-	downloaded, err := os.ReadFile(localPath)
-	require.NoError(t, err)
+	downloaded := mustReadFile(t, localPath)
 	assert.Equal(t, content, downloaded)
 
 	_, stderr = runCLIWithConfig(t, cfgPath, nil, "rm", remotePath)
