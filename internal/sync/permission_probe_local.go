@@ -49,7 +49,7 @@ func (ph *permissionHandler) handleLocalPermission(
 	if absErr != nil {
 		ph.logger.Debug("handleLocalPermission: failed to resolve sync-tree path",
 			slog.String("path", r.Path),
-			slog.String("error", absErr.Error()),
+			slog.Any("error", absErr),
 		)
 
 		return ph.localFilePermissionEvidence(
@@ -75,7 +75,7 @@ func (ph *permissionHandler) handleLocalPermission(
 	if relErr != nil {
 		ph.logger.Debug("handleLocalPermission: failed to relativize boundary path",
 			slog.String("boundary", boundary),
-			slog.String("error", relErr.Error()),
+			slog.Any("error", relErr),
 		)
 
 		return ph.localFilePermissionEvidence(

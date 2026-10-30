@@ -114,14 +114,14 @@ func deviceLoginError(err error, logger *slog.Logger) error {
 	if errors.As(err, &retrieveErr) {
 		switch retrieveErr.ErrorCode {
 		case oauthErrExpiredToken:
-			logger.Debug("device code expired before authorization", slog.String("error", err.Error()))
+			logger.Debug("device code expired before authorization", slog.Any("error", err))
 			return ErrLoginCodeExpired
 		case oauthErrAccessDenied, oauthErrAuthorizationDeclined:
-			logger.Debug("device code authorization declined", slog.String("error", err.Error()))
+			logger.Debug("device code authorization declined", slog.Any("error", err))
 			return ErrLoginDeclined
 		}
 		if plain := aadOutcomeError(retrieveErr.ErrorCode, retrieveErr.ErrorDescription); plain != nil {
-			logger.Debug("device code authorization refused", slog.String("error", err.Error()))
+			logger.Debug("device code authorization refused", slog.Any("error", err))
 			return plain
 		}
 	}

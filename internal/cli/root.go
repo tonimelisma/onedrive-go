@@ -20,6 +20,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/graphtransport"
 	"github.com/tonimelisma/onedrive-go/internal/logfile"
+	"github.com/tonimelisma/onedrive-go/internal/loglevel"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
@@ -230,7 +231,7 @@ func (cc *CLIContext) useLoggingConfig(logging config.LoggingConfig) error {
 func (cc *CLIContext) attachConfiguredLogging() error {
 	rawCfg, _, err := config.LoadOrDefaultLenient(cc.CfgPath, slog.New(slog.DiscardHandler))
 	if err != nil {
-		cc.Logger.Debug("log file not attached: config unreadable", slog.String("error", err.Error()))
+		cc.Logger.Debug("log file not attached: config unreadable", slog.Any("error", err))
 
 		return nil
 	}
@@ -790,11 +791,13 @@ func buildLoggerWithStatusWriter(cfg *config.ResolvedDrive, flags CLIFlags, stat
 // console and the log file have separate levels by design (R-6.6.2, R-6.6.3):
 // INFO records are operational history -- performance summaries (R-6.6.14),
 // plan counts, runner lifecycle -- that the log file keeps at its default
-// level, while the default console starts at WARN and shows them only with
-// --verbose/--debug. What a person must see at default verbosity (activity,
-// summaries, startup lines) is written by the command itself, not logged.
+// level, while the default console starts at NOTICE and shows them only with
+// --verbose/--debug. NOTICE is the all-clear after a warning (R-6.6.30), so a
+// console that showed the warning also shows its recovery. What a person must
+// see at default verbosity (activity, summaries, startup lines) is written by
+// the command itself, not logged.
 func resolveConsoleLogLevel(flags CLIFlags) slog.Level {
-	level := slog.LevelWarn
+	level := loglevel.Notice
 
 	if flags.Verbose {
 		level = slog.LevelInfo
@@ -847,9 +850,9 @@ func buildHandlerWithStatusWriter(
 
 	switch format {
 	case logFormatJSON:
-		return slog.NewJSONHandler(w, opts)
+		return slog.NewJSONHandler(w, withLevelNames(opts))
 	case logFormatText:
-		return slog.NewTextHandler(w, opts)
+		return slog.NewTextHandler(w, withLevelNames(opts))
 	case logFormatAuto:
 		return autoConsoleHandler(w, opts)
 	default:
@@ -874,17 +877,31 @@ func autoConsoleHandler(w io.Writer, opts *slog.HandlerOptions) slog.Handler {
 		return journal
 	}
 
-	if opts.Level != nil && opts.Level.Level() >= slog.LevelWarn {
+	if opts.Level != nil && opts.Level.Level() >= loglevel.Notice {
 		return newConsoleLogHandler(w, opts.Level, consoleLogHuman)
 	}
 
-	return slog.NewTextHandler(w, opts)
+	return slog.NewTextHandler(w, withLevelNames(opts))
+}
+
+// withLevelNames returns opts with NOTICE printed by name instead of slog's
+// "INFO+2". The caller's options are not modified.
+func withLevelNames(opts *slog.HandlerOptions) *slog.HandlerOptions {
+	named := slog.HandlerOptions{ReplaceAttr: loglevel.ReplaceLevelName}
+	if opts != nil {
+		named = *opts
+		if named.ReplaceAttr == nil {
+			named.ReplaceAttr = loglevel.ReplaceLevelName
+		}
+	}
+
+	return &named
 }
 
 // journalShowsInternalFields reports whether journal lines at consoleLevel
 // keep the sync log schema fields: only --verbose/--debug (below WARN) do.
 func journalShowsInternalFields(consoleLevel slog.Level) bool {
-	return consoleLevel < slog.LevelWarn
+	return consoleLevel < loglevel.Notice
 }
 
 // isWriterJournal reports whether w is a file that systemd connected to the
@@ -970,6 +987,18 @@ func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 }
 
 // WithGroup returns a new multiHandler where each inner handler has the group.
+func (m *multiHandler) withTimestamps(now func() time.Time) slog.Handler {
+	handlers := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		handlers[i] = h
+		if stamper, ok := h.(consoleTimestamper); ok {
+			handlers[i] = stamper.withTimestamps(now)
+		}
+	}
+
+	return &multiHandler{handlers: handlers}
+}
+
 func (m *multiHandler) WithGroup(name string) slog.Handler {
 	handlers := make([]slog.Handler, len(m.handlers))
 	for i, h := range m.handlers {
@@ -1012,7 +1041,7 @@ func buildLoggerDualWithStatusWriter(
 
 	// File handler: config-driven level, always JSON for machine parsing.
 	fileLevel := resolveFileLogLevelWithStatusWriter(cfg, statusWriter)
-	fileHandler := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: fileLevel})
+	fileHandler := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: fileLevel, ReplaceAttr: loglevel.ReplaceLevelName})
 
 	return slog.New(&multiHandler{handlers: []slog.Handler{consoleHandler, fileHandler}}), f
 }

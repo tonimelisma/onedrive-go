@@ -24,7 +24,7 @@ func (ph *permissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) 
 	blocks, err := ph.store.ListBlockScopes(ctx)
 	if err != nil {
 		ph.logger.Debug("ActiveRemoteBlockedBoundaries: failed to list block scopes",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 
 		return nil
@@ -157,7 +157,7 @@ func (ph *permissionHandler) handlePermissionCheckError(
 
 	ph.logger.Debug("handle403: permission check failed, not suppressing",
 		slog.String("path", failedPath),
-		slog.String("error", err.Error()),
+		slog.Any("error", err),
 	)
 
 	return permissionEvidence{}

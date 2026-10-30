@@ -567,7 +567,7 @@ func (s *SyncStore) updateBaselineCache(ctx context.Context, o *BaselineMutation
 		s.logger.Debug("baseline cache classification failed, reloading cache from database",
 			slog.String("path", o.Path),
 			slog.String("action", o.Action.String()),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 
 		if reloadErr := s.reloadBaselineCache(ctx); reloadErr != nil {

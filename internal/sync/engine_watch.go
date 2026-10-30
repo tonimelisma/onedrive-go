@@ -466,12 +466,12 @@ func (rt *watchRuntime) watchLocalWithFallback(ctx context.Context, localObs *lo
 				" instead of at once; watching will be retried. To fix: "+watchUnavailableFix(cause),
 				slog.Duration("scan_interval", interval),
 				slog.Duration("retry_after", retryDelay),
-				slog.String("error", watchErr.Error()),
+				slog.Any("error", watchErr),
 			)
 		} else {
 			rt.deps.logger.Debug("watching the sync folder is still unavailable",
 				slog.Duration("retry_after", retryDelay),
-				slog.String("error", watchErr.Error()),
+				slog.Any("error", watchErr),
 			)
 		}
 
@@ -538,7 +538,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 			// Info: watch keeps polling on its interval regardless.
 			rt.deps.logger.Info("Instant change notifications from OneDrive stopped; still checking on the poll interval",
 				slog.String("drive_id", rt.engine.driveID.String()),
-				slog.String("error", err.Error()),
+				slog.Any("error", err),
 			)
 		}
 	}()
@@ -652,7 +652,7 @@ func (rt *watchRuntime) runFallbackScan(
 		}
 		*scanFailing = true
 		rt.deps.logger.Log(ctx, level, "Could not rescan the sync folder; will retry",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 		obs.TrySendLocalTruthSuspect(ctx, localTruthRecoveryFullScanFailed)
 

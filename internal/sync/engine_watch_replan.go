@@ -80,7 +80,7 @@ func (rt *watchRuntime) finishSteadyStateReplanStep(
 	if isWatchShutdownError(ctx, err) {
 		rt.deps.logger.Debug("steady-state replan stopped by shutdown",
 			slog.String("step", step),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 		return nil
 	}
@@ -104,7 +104,7 @@ func (rt *watchRuntime) handleSteadyStateLocalRefreshError(
 		// Warn, not Error: watch keeps running and retries on the next
 		// change signal.
 		rt.deps.logger.Warn("Could not scan the sync folder for changes; will retry",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 		return false, nil
 	}

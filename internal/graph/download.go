@@ -266,7 +266,7 @@ func (c *Client) downloadFromURLWithRange(
 		// Returned, not logged above Debug: the caller reports the failure
 		// once, and a canceled context here is an ordinary shutdown.
 		c.logger.Debug("streaming range download content failed",
-			slog.String("error", copyErr.Error()),
+			slog.Any("error", copyErr),
 			slog.Int64("bytes_before_error", n),
 		)
 
@@ -383,7 +383,7 @@ func (c *Client) downloadFromURL(ctx context.Context, item *Item, w io.Writer) (
 		// Returned, not logged above Debug: the caller reports the failure
 		// once, and a canceled context here is an ordinary shutdown.
 		c.logger.Debug("streaming download content failed",
-			slog.String("error", copyErr.Error()),
+			slog.Any("error", copyErr),
 			slog.Int64("bytes_before_error", n),
 		)
 

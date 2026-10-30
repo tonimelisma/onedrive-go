@@ -76,7 +76,7 @@ func replaceDestination(
 	if err := session.DeleteResolvedPath(ctx, asidePath, dest.existingID); err != nil && !errors.Is(err, graph.ErrNotFound) {
 		cc.Logger.Warn("replaced "+destPath+", but the previous version is left on OneDrive as "+asidePath+
 			"; delete it when you no longer need it",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	}
 
@@ -105,7 +105,7 @@ func hintAboutLeftoverAside(ctx context.Context, cc *CLIContext, session *driveo
 
 	children, err := session.ListChildren(ctx, folder)
 	if err != nil {
-		cc.Logger.Debug("list destination folder for leftover --force copies", slog.String("error", err.Error()))
+		cc.Logger.Debug("list destination folder for leftover --force copies", slog.Any("error", err))
 		return
 	}
 

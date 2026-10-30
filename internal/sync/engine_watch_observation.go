@@ -37,7 +37,7 @@ func (flow *engineFlow) knownObservationIssues(ctx context.Context) map[observat
 	rows, err := eng.baseline.ListObservationIssues(ctx)
 	if err != nil {
 		eng.logger.Debug("list observation issues before skipped-file report",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 
 		return nil

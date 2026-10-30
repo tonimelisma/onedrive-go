@@ -222,7 +222,7 @@ func (o *localObserver) handleWatcherError(
 		msg = "too many local changes at once for the system to report; rescanning the sync folder"
 	}
 	o.logger.Log(ctx, watcherErrLevel, msg,
-		slog.String("error", watchErr.Error()),
+		slog.Any("error", watchErr),
 		slog.Duration("backoff", delay),
 	)
 	o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryWatcherError)
@@ -261,7 +261,7 @@ func (o *localObserver) HandleFsEvent(
 	relPath, err := tree.Rel(fsEvent.Name)
 	if err != nil {
 		o.logger.Debug("failed to compute relative path",
-			slog.String("path", fsEvent.Name), slog.String("error", err.Error()))
+			slog.String("path", fsEvent.Name), slog.Any("error", err))
 
 		return
 	}
@@ -333,7 +333,7 @@ func (o *localObserver) handleCreate(
 	if err != nil {
 		// File may have been removed immediately after creation.
 		o.logger.Debug("stat failed for created path",
-			slog.String("path", dbRelPath), slog.String("error", err.Error()))
+			slog.String("path", dbRelPath), slog.Any("error", err))
 
 		return
 	}
@@ -534,7 +534,7 @@ func (o *localObserver) stableHashOrEmpty(fsPath, dbRelPath string) string {
 			// Debug: an unreadable file fails its upload, which the
 			// console reports; this would repeat on every write.
 			o.logger.Debug("hash failed, emitting event with empty hash",
-				slog.String("path", dbRelPath), slog.String("error", err.Error()))
+				slog.String("path", dbRelPath), slog.Any("error", err))
 		}
 
 		return ""
@@ -553,7 +553,7 @@ func (o *localObserver) scanNewDirectory(
 	entries, err := localpath.ReadDir(dirPath)
 	if err != nil {
 		o.logger.Debug("scan new directory failed",
-			slog.String("path", dirRelPath), slog.String("error", err.Error()))
+			slog.String("path", dirRelPath), slog.Any("error", err))
 
 		return
 	}
@@ -648,7 +648,7 @@ func (o *localObserver) scanNewDirectoryEntryInfo(
 		info, isSymlink, err := statObservedPath(entryFsPath)
 		if err != nil {
 			o.logger.Debug("stat failed during directory scan",
-				slog.String("path", entryRelPath), slog.String("error", err.Error()))
+				slog.String("path", entryRelPath), slog.Any("error", err))
 			return nil, observedKindUnknown, false
 		}
 
@@ -669,7 +669,7 @@ func (o *localObserver) scanNewDirectoryEntryInfo(
 	info, err := entry.Info()
 	if err != nil {
 		o.logger.Debug("stat failed during directory scan",
-			slog.String("path", entryRelPath), slog.String("error", err.Error()))
+			slog.String("path", entryRelPath), slog.Any("error", err))
 		return nil, observedKindUnknown, false
 	}
 	if isSpecialFile(info) {
@@ -735,7 +735,7 @@ func (o *localObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath, name st
 	info, isSymlink, err := statObservedPath(fsPath)
 	if err != nil {
 		o.logger.Debug("stat failed for modified path",
-			slog.String("path", dbRelPath), slog.String("error", err.Error()))
+			slog.String("path", dbRelPath), slog.Any("error", err))
 
 		return
 	}
@@ -958,7 +958,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	info, isSymlink, err := statObservedPath(req.FsPath)
 	if err != nil {
 		o.logger.Debug("stat failed for deferred hash",
-			slog.String("path", req.DbRelPath), slog.String("error", err.Error()))
+			slog.String("path", req.DbRelPath), slog.Any("error", err))
 
 		return
 	}
@@ -1017,7 +1017,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		}
 
 		o.logger.Debug("hash failed for deferred write, emitting with empty hash",
-			slog.String("path", req.DbRelPath), slog.String("error", err.Error()))
+			slog.String("path", req.DbRelPath), slog.Any("error", err))
 	} else {
 		// Check baseline — if hash matches, the write was a no-op.
 		if existing, ok := o.baseline.GetByPath(req.DbRelPath); ok && existing.LocalHash == hash {
@@ -1281,7 +1281,7 @@ func (o *localObserver) removeWatch(watcher fsWatcher, fsPath, dbRelPath string)
 		o.logger.Debug("watch removal for deleted directory",
 			slog.String("path", dbRelPath),
 			slog.String("watch", fsPath),
-			slog.String("error", rmErr.Error()),
+			slog.Any("error", rmErr),
 		)
 	}
 
@@ -1296,7 +1296,7 @@ func (o *localObserver) removeWatch(watcher fsWatcher, fsPath, dbRelPath string)
 func (o *localObserver) reportWatchAddFailure(msg, dbRelPath string, addErr error) {
 	cause, ok := classifyWatchAddError(addErr)
 	if !ok {
-		o.logger.Debug(msg, slog.String("path", dbRelPath), slog.String("error", addErr.Error()))
+		o.logger.Debug(msg, slog.String("path", dbRelPath), slog.Any("error", addErr))
 		return
 	}
 
@@ -1342,12 +1342,12 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 		switch {
 		case ctx.Err() != nil:
 			// Shutdown interrupted the scan: not a failure.
-			o.logger.Debug("safety scan canceled", slog.String("error", err.Error()))
+			o.logger.Debug("safety scan canceled", slog.Any("error", err))
 		case o.safetyScanFailing:
-			o.logger.Debug("safety scan failed again", slog.String("error", err.Error()))
+			o.logger.Debug("safety scan failed again", slog.Any("error", err))
 		default:
 			o.safetyScanFailing = true
-			o.logger.Warn("Could not rescan the sync folder; will retry", slog.String("error", err.Error()))
+			o.logger.Warn("Could not rescan the sync folder; will retry", slog.Any("error", err))
 		}
 		o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryFullScanFailed)
 		return

@@ -105,7 +105,7 @@ func oauthConfig(tokenPath string, logger *slog.Logger) *oauth2.Config {
 			if err := tokenfile.Save(tokenPath, tok); err != nil {
 				logger.Warn("couldn't save the refreshed sign-in; the next run may ask you to sign in again. Check the permissions on this file",
 					slog.String("path", tokenPath),
-					slog.String("error", err.Error()),
+					slog.Any("error", err),
 				)
 
 				return
@@ -236,14 +236,14 @@ func (b *tokenBridge) tokenError(err error) error {
 			// carries ErrLoginExpired and ErrUnauthorized, and status reports
 			// the saved login as no longer accepted rather than "rejected
 			// with a still-valid login".
-			b.logger.Debug("token refresh needs a new sign-in", slog.String("error", err.Error()))
+			b.logger.Debug("token refresh needs a new sign-in", slog.Any("error", err))
 			return fmt.Errorf("refreshing access token: %w: %w: %w: %w", plain, ErrLoginExpired, ErrUnauthorized, err)
 		}
 	}
 	if errors.As(err, &retrieveErr) && retrieveErr.ErrorCode == "invalid_grant" {
 		// The caller reports this as "sign-in required"; logging it as a
 		// warning as well would only repeat the same fact less clearly.
-		b.logger.Debug("saved login rejected", slog.String("error", err.Error()))
+		b.logger.Debug("saved login rejected", slog.Any("error", err))
 		return fmt.Errorf("refreshing access token: %w: %w: %w", ErrLoginExpired, ErrUnauthorized, err)
 	}
 
@@ -251,6 +251,6 @@ func (b *tokenBridge) tokenError(err error) error {
 	// reports it once (as a network or sign-in problem). Sync workers call
 	// Token() per request, so a Warn here repeated on every request while
 	// offline with an expired access token.
-	b.logger.Debug("token acquisition failed", slog.String("error", err.Error()))
+	b.logger.Debug("token acquisition failed", slog.Any("error", err))
 	return fmt.Errorf("refreshing access token: %w", err)
 }

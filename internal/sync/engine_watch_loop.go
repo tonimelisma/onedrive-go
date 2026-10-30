@@ -485,7 +485,7 @@ func (rt *watchRuntime) logObserverError(obsErr error) {
 
 	rt.resources.lastObserverErr = obsErr
 	if rt.isDraining() {
-		rt.deps.logger.Debug("observer error during shutdown", slog.String("error", obsErr.Error()))
+		rt.deps.logger.Debug("observer error during shutdown", slog.Any("error", obsErr))
 		return
 	}
 

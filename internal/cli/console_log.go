@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/loglevel"
 )
 
 // consoleLogStyle chooses how log records look on the console. The log file is
@@ -33,6 +36,10 @@ type consoleLogHandler struct {
 	style  consoleLogStyle
 	attrs  []slog.Attr
 	groups []string
+	// now, when set, prefixes human lines with the time of day the way the
+	// watch console stamps its own lines (withTimestamps), so a warning in a
+	// long-running watch says when it happened.
+	now func() time.Time
 	// showInternalFields keeps the sync log schema fields (isInternalLogField)
 	// on the line. Only --verbose/--debug set it: at default verbosity those
 	// identifiers are noise to a person, and the log file keeps them.
@@ -45,11 +52,13 @@ type consoleLogHandler struct {
 // stays, because it names the file the line is about. condition_total is not a
 // schema field but belongs here too: the watch condition summary spells the
 // counts out in its message, so the console would only repeat them.
+// consecutive_errors is retry bookkeeping: an outage is warned once, so the
+// count on that line is always 1.
 func isInternalLogField(key string) bool {
 	switch key {
 	case "run_id", "action_id", "action_type", "condition_key", "condition_total", "failure_class",
 		"log_owner", "scope_key", "trial_scope_key", "drive_id", "http_status",
-		"supersede_streak", "error_detail":
+		"supersede_streak", "error_detail", "consecutive_errors":
 		return true
 	default:
 		return false
@@ -80,6 +89,9 @@ func (h *consoleLogHandler) Handle(_ context.Context, r slog.Record) error {
 		b.WriteString(">")
 		b.WriteString(r.Message)
 	case consoleLogHuman:
+		if h.now != nil {
+			b.WriteString("[" + h.now().Format(consoleClockFormat) + "] ")
+		}
 		b.WriteString(humanLevelPrefix(r.Level))
 		b.WriteString(r.Message)
 	}
@@ -142,6 +154,41 @@ func (h *consoleLogHandler) WithGroup(name string) slog.Handler {
 	return &next
 }
 
+// consoleClockFormat is the time-of-day stamp shared with the watch console's
+// own lines (syncConsole.linePrefix).
+const consoleClockFormat = "15:04:05"
+
+// consoleTimestamper is a handler that can stamp its human console lines with
+// the time of day. Journal and verbose handlers either get timestamps from
+// journald or print their own, so they do not implement it.
+type consoleTimestamper interface {
+	withTimestamps(now func() time.Time) slog.Handler
+}
+
+func (h *consoleLogHandler) withTimestamps(now func() time.Time) slog.Handler {
+	if h.style != consoleLogHuman {
+		return h
+	}
+	next := *h
+	next.now = now
+
+	return &next
+}
+
+// withConsoleTimestamps stamps the human console lines of logger's handler,
+// leaving every other handler (the log file, journal output) as it is.
+func withConsoleTimestamps(logger *slog.Logger, now func() time.Time) *slog.Logger {
+	if logger == nil || now == nil {
+		return logger
+	}
+	stamper, ok := logger.Handler().(consoleTimestamper)
+	if !ok {
+		return logger
+	}
+
+	return slog.New(stamper.withTimestamps(now))
+}
+
 func humanLevelPrefix(level slog.Level) string {
 	switch {
 	case level >= slog.LevelError:
@@ -159,6 +206,8 @@ func journalPriorityFor(level slog.Level) int {
 		return journalPriorityErr
 	case level >= slog.LevelWarn:
 		return journalPriorityWarning
+	case level >= loglevel.Notice:
+		return journalPriorityNotice
 	case level >= slog.LevelInfo:
 		return journalPriorityInfo
 	default:

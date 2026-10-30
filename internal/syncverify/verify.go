@@ -139,7 +139,7 @@ func verifyEntry(
 
 		// The result is the report of this file; a per-file WARN on top of it
 		// would print every unreadable file twice.
-		logger.Debug("verify: stat failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
+		logger.Debug("verify: stat failed", slog.String("path", entry.Path), slog.Any("error", err))
 
 		return unreadableResult(entry, err)
 	}
@@ -164,14 +164,14 @@ func verifyEntry(
 
 	absPath, err := tree.Abs(local)
 	if err != nil {
-		logger.Debug("verify: rooted path failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
+		logger.Debug("verify: rooted path failed", slog.String("path", entry.Path), slog.Any("error", err))
 
 		return unreadableResult(entry, err)
 	}
 
 	hash, err := computeHash(absPath)
 	if err != nil {
-		logger.Debug("verify: hash failed", slog.String("path", entry.Path), slog.String("error", err.Error()))
+		logger.Debug("verify: hash failed", slog.String("path", entry.Path), slog.Any("error", err))
 
 		return unreadableResult(entry, err)
 	}

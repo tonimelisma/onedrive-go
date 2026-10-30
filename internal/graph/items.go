@@ -335,7 +335,7 @@ func parseTimestamp(raw, field, itemID string, logger *slog.Logger) time.Time {
 			slog.String("field", field),
 			slog.String("item_id", itemID),
 			slog.String("raw", raw),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 
 		return time.Time{}
