@@ -756,7 +756,7 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 	// The watch-ordering step is intentionally absent: it targeted
 	// TestWatchOrderingStress_, which no test in the repo has ever defined, so
 	// it reported success while running nothing.
-	require.Len(t, runner.runCommands, 1)
+	require.Len(t, runner.runCommands, 2)
 	require.Len(t, runner.combinedCommands, 1)
 
 	assert.Equal(t, "go", runner.runCommands[0].name)
@@ -764,17 +764,30 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 		"test",
 		"-race",
 		"-count=50",
+		"-shuffle=on",
 		"-timeout=20m",
 		"./internal/multisync",
 	}, runner.runCommands[0].args)
+
+	assert.Equal(t, "go", runner.runCommands[1].name)
+	assert.Equal(t, []string{
+		"test",
+		"-race",
+		"-count=50",
+		"-shuffle=on",
+		"-timeout=40m",
+		"-run", stressSyncConcurrencyPattern,
+		"./internal/sync",
+	}, runner.runCommands[1].args)
 
 	assert.Equal(t, "go", runner.combinedCommands[0].name)
 	assert.Equal(t, []string{
 		"test",
 		"-json",
 		"-race",
-		"-count=50",
-		"-timeout=30m",
+		"-count=3",
+		"-shuffle=on",
+		"-timeout=40m",
 		"./internal/sync",
 	}, runner.combinedCommands[0].args)
 }
@@ -786,7 +799,7 @@ func TestRunVerifyStressWritesSlowTestSummaryToStdoutAndJSON(t *testing.T) {
 	summaryPath := filepath.Join(t.TempDir(), "stress-verify-summary.json")
 	runner := &fakeRunner{
 		combinedOutputs: map[string][]byte{
-			"go test -json -race -count=50 -timeout=30m ./internal/sync": []byte(strings.Join([]string{
+			"go test -json -race -count=3 -shuffle=on -timeout=40m ./internal/sync": []byte(strings.Join([]string{
 				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestFast","Elapsed":0.125}`,
 				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestSlow","Elapsed":1.5}`,
 				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestSlow","Elapsed":1.0}`,
@@ -807,11 +820,11 @@ func TestRunVerifyStressWritesSlowTestSummaryToStdoutAndJSON(t *testing.T) {
 
 	assert.Contains(t, stdout.String(), "slowest completed sync race tests")
 	assert.Contains(t, stdout.String(), "TestSlow runs=2 total=2.5s max=1.5s")
-	assert.Contains(t, stdout.String(), "sync race x50: pass")
+	assert.Contains(t, stdout.String(), "sync race x3: pass")
 
 	var summary VerifySummary
 	readVerifySummaryFile(t, summaryPath, &summary)
-	step := requireVerifySummaryStep(t, summary, "sync race x50")
+	step := requireVerifySummaryStep(t, summary, "sync race x3")
 	require.Len(t, step.SlowTests, 3)
 	assert.Equal(t, "TestSlow", step.SlowTests[0].Test)
 	assert.Equal(t, 2, step.SlowTests[0].Runs)

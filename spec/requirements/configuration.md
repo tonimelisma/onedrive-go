@@ -24,7 +24,7 @@ The system shall resolve settings with a four-layer override chain: defaults →
 
 - R-4.4.1: When running `sync --watch`, the system shall reload config on control-socket reload request. [verified]
 - R-4.4.2: Drives added, removed, or paused while running shall take effect immediately. [verified]
-- R-4.4.3: A running `sync --watch` shall also reload when the config file changes on disk (checked every few seconds) and on SIGHUP, so hand edits such as new filters or `websocket = true` apply without a restart. A file that disappears briefly, as during an editor's save, triggers a reload only once it is back. [verified]
+- R-4.4.3: A running `sync --watch` shall also reload when the config file changes on disk (checked every few seconds) and on SIGHUP, so hand edits such as new filters or `websocket = true` apply without a restart. A file that disappears briefly, as during an editor's save, triggers a reload only once it is back, and a new version reloads only once two consecutive checks read it the same, so an in-place save is never reloaded half-written. [verified]
 
 ## R-4.5 Interactive Setup [future]
 

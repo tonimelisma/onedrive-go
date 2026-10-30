@@ -238,12 +238,12 @@ func TestE2E_Status_JSON_IssueDetails(t *testing.T) {
 
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "desktop.ini"), []byte("reserved"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "CON.txt"), []byte("reserved"), 0o600))
 
 	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
-	require.Len(t, status.Issues, 1, "status should surface one invalid-filename issue for the reserved name")
+	require.Len(t, status.Issues, 1, "status should surface one invalid-filename issue for the Windows device name")
 	assert.Equal(t, 1, status.IssueCount)
 
 	issue := status.Issues[0]
@@ -251,7 +251,7 @@ func TestE2E_Status_JSON_IssueDetails(t *testing.T) {
 	assert.Equal(t, 1, issue.Count)
 	assert.NotEmpty(t, issue.Reason)
 	assert.NotEmpty(t, issue.Action)
-	assert.Contains(t, strings.Join(issue.Paths, "\n"), filepath.ToSlash(filepath.Join(testFolder, "desktop.ini")))
+	assert.Contains(t, strings.Join(issue.Paths, "\n"), filepath.ToSlash(filepath.Join(testFolder, "CON.txt")))
 }
 
 // Validates: R-2.3.12

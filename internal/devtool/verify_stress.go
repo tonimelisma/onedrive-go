@@ -11,6 +11,12 @@ import (
 
 const millisecondsPerSecond = 1000
 
+// stressSyncConcurrencyPattern selects the internal/sync tests that exercise
+// goroutines, timers, cancellation and shutdown: the watch runtime and
+// observers, the one-shot result loop, the worker pool and the concurrent
+// store and graph tests.
+const stressSyncConcurrencyPattern = "TestRunWatch|TestWatch|TestOneShot|TestWorkerPool|Shutdown|Drain|Concurren|Cancel"
+
 type stressCommandSpec struct {
 	stepName         string
 	statusLine       string
@@ -41,32 +47,56 @@ func runStress(
 	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
 ) error {
+	// Repetition goes where the concurrency is. One race iteration of all of
+	// internal/sync takes about six minutes on a CI runner, so fifty no longer
+	// fit any budget; its watch, runtime, shutdown and worker tests (where the
+	// 1-in-50 flakes have come from) take well under a minute and still run
+	// fifty times. Every step shuffles test order, so each repetition also
+	// varies what runs beside what.
 	stressCommands := []stressCommandSpec{
 		{
 			stepName: "multisync race x50",
 			statusLine: fmt.Sprintf(
-				"==> go test -race -count=50 -timeout=%s ./internal/multisync\n",
+				"==> go test -race -count=50 -shuffle=on -timeout=%s ./internal/multisync\n",
 				stressMultisyncTimeout,
 			),
 			args: []string{
 				"test",
 				"-race",
 				"-count=50",
+				"-shuffle=on",
 				"-timeout=" + stressMultisyncTimeout,
 				"./internal/multisync",
 			},
 		},
 		{
-			stepName: "sync race x50",
+			stepName: "sync concurrency race x50",
 			statusLine: fmt.Sprintf(
-				"==> go test -json -race -count=50 -timeout=%s ./internal/sync\n",
+				"==> go test -race -count=50 -shuffle=on -timeout=%s -run %s ./internal/sync\n",
+				stressSyncConcurrencyTimeout, stressSyncConcurrencyPattern,
+			),
+			args: []string{
+				"test",
+				"-race",
+				"-count=50",
+				"-shuffle=on",
+				"-timeout=" + stressSyncConcurrencyTimeout,
+				"-run", stressSyncConcurrencyPattern,
+				"./internal/sync",
+			},
+		},
+		{
+			stepName: "sync race x3",
+			statusLine: fmt.Sprintf(
+				"==> go test -json -race -count=3 -shuffle=on -timeout=%s ./internal/sync\n",
 				stressSyncTimeout,
 			),
 			args: []string{
 				"test",
 				"-json",
 				"-race",
-				"-count=50",
+				"-count=3",
+				"-shuffle=on",
 				"-timeout=" + stressSyncTimeout,
 				"./internal/sync",
 			},
