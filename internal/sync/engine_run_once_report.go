@@ -56,3 +56,37 @@ func (e *Engine) logRunOnceCompletion(report *Report) {
 		slog.Int("deferred_remote_deletes", report.DeferredByMode.RemoteDeletes),
 	)
 }
+
+// withPass folds one more pass of a one-shot sync into the run's report and
+// returns it; a nil run report starts from the pass. Work done adds up across
+// passes. What is still held back (by the mode or the delete-safety hold) is
+// a state, not work: the last pass reports it, so a deferral every pass sees
+// is not counted once per pass. The caller sets Duration from the run's start.
+func (r *Report) withPass(pass *Report) *Report {
+	if pass == nil {
+		return r
+	}
+	if r == nil {
+		run := *pass
+		run.Errors = append([]error(nil), pass.Errors...)
+		return &run
+	}
+
+	r.FolderCreates += pass.FolderCreates
+	r.Moves += pass.Moves
+	r.Downloads += pass.Downloads
+	r.Uploads += pass.Uploads
+	r.LocalDeletes += pass.LocalDeletes
+	r.RemoteDeletes += pass.RemoteDeletes
+	r.ConflictCopies += pass.ConflictCopies
+	r.BaselineUpdates += pass.BaselineUpdates
+	r.Cleanups += pass.Cleanups
+	r.Succeeded += pass.Succeeded
+	r.Failed += pass.Failed
+	r.Errors = append(r.Errors, pass.Errors...)
+	r.DeferredByMode = pass.DeferredByMode
+	r.HeldLocalDeletes = pass.HeldLocalDeletes
+	r.HeldRemoteDeletes = pass.HeldRemoteDeletes
+
+	return r
+}
