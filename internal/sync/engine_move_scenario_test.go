@@ -457,9 +457,7 @@ func TestRunOnce_RemoteFolderReplacedByFileWithLocalChildEditsKeepsBoth(t *testi
 	remote.deleteRemotely("item-dir")
 	remote.addFile(t, "item-shape-file", "root", "shape", "now a file\n")
 
-	for range 3 {
-		runScenarioPass(t, eng)
-	}
+	runScenarioPass(t, eng)
 
 	tree := remote.tree()
 	assert.Equal(t, "now a file\n", tree["shape"])
@@ -493,9 +491,7 @@ func TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth(t *testin
 	writeLocalFile(t, syncRoot, "shape", "now a local file\n")
 	remote.setContent(t, "item-child", "edited online\n")
 
-	for range 3 {
-		runScenarioPass(t, eng)
-	}
+	runScenarioPass(t, eng)
 
 	tree := remote.tree()
 	assert.Equal(t, "edited online\n", tree["shape/child.txt"], "the remote edit is never deleted")
@@ -520,9 +516,7 @@ func TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth(t *testing.T) {
 	writeLocalFile(t, syncRoot, filepath.Join("thing", "local.txt"), "local child\n")
 	remote.addFile(t, "item-thing", "root", "thing", "remote file\n")
 
-	for range 3 {
-		runScenarioPass(t, eng)
-	}
+	runScenarioPass(t, eng)
 
 	tree := remote.tree()
 	assert.Equal(t, "remote file\n", tree["thing"])
@@ -545,9 +539,7 @@ func TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth(t *testing.T) {
 	remote.addFolder("item-thing", "root", "thing")
 	remote.addFile(t, "item-child", "item-thing", "child.txt", "remote child\n")
 
-	for range 3 {
-		runScenarioPass(t, eng)
-	}
+	runScenarioPass(t, eng)
 
 	tree := remote.tree()
 	assert.Equal(t, "/", tree["thing"])
@@ -620,7 +612,6 @@ func TestRunOnce_RemoteMoveChainIntoVacatedPathConverges(t *testing.T) {
 	remote.move("item-inside", "root", "b.txt")
 	h.beginRound(t)
 	runScenarioPass(t, eng)
-	runScenarioPass(t, eng)
 
 	assert.Equal(t, map[string]string{
 		"b.txt": "inside\n", "c": "/", "c/renamed-b.txt": "b\n", "keep.txt": "keep\n",
@@ -640,16 +631,16 @@ func requireScenarioLocalFile(t *testing.T, syncRoot, rel, want string) {
 	assert.Equal(t, want, string(data), rel)
 }
 
-// Validates: R-2.17.1
+// Validates: R-2.17.1, R-2.1.7
 //
 // Two synced files swapped names on one side (through a temporary name, as a
 // user does). Online, each local move waited for the other to vacate its
 // destination, so neither was ever planned and the swap never reached the
 // local side (model test, remote swap operation). One item now parks at a
 // temporary name beside its source, the other moves into the freed path, and
-// the parked one follows on the next pass. A local swap is not paired as moves
-// (a destination that is a synced path never pairs) and converges as two
-// content uploads instead.
+// the parked one follows on the next pass, which the same sync runs. A local
+// swap is not paired as moves (a destination that is a synced path never
+// pairs) and converges as two content uploads instead.
 func TestRunOnce_SwapOfTwoNamesConverges(t *testing.T) {
 	t.Parallel()
 
@@ -675,7 +666,6 @@ func TestRunOnce_SwapOfTwoNamesConverges(t *testing.T) {
 				remote.moveAt(t, "swap.txt", "b.txt")
 			}
 			runScenarioPass(t, h.eng)
-			runScenarioPass(t, h.eng)
 
 			requireScenarioLocalFile(t, h.syncRoot, "a.txt", "B\n")
 			requireScenarioLocalFile(t, h.syncRoot, "b.txt", "A\n")
@@ -683,6 +673,7 @@ func TestRunOnce_SwapOfTwoNamesConverges(t *testing.T) {
 				assert.Zero(t, remote.uploads, "a swap online moves names locally, it transfers nothing")
 			}
 			assertSyncInvariants(t, h)
+			requireScenarioQuietPlan(t, h.eng)
 		})
 	}
 }
@@ -709,7 +700,6 @@ func TestRunOnce_LocalDeleteInsideFolderRenamedOnlineIsNotUndone(t *testing.T) {
 	h.beginRound(t)
 	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, "f", "x.txt")))
 	remote.moveAt(t, "f", "g")
-	runScenarioPass(t, h.eng)
 	runScenarioPass(t, h.eng)
 
 	assert.NoFileExists(t, filepath.Join(h.syncRoot, "g", "x.txt"), "the local delete is not undone")
@@ -742,7 +732,6 @@ func TestRunOnce_RemoteRenameInsideLocallyRecreatedFolderConverges(t *testing.T)
 	writeLocalFile(t, h.syncRoot, filepath.Join("docs", "c.md"), "C\n")
 	remote.moveAt(t, "docs/c.md", "docs/d.md")
 	runScenarioPass(t, h.eng)
-	runScenarioPass(t, h.eng)
 
 	requireScenarioLocalFile(t, h.syncRoot, "docs/d.md", "C\n")
 	assert.NoFileExists(t, filepath.Join(docs, "c.md"))
@@ -772,9 +761,7 @@ func TestRunOnce_FolderReplacedByFilesOnBothSidesKeepsBoth(t *testing.T) {
 	writeLocalFile(t, h.syncRoot, "docs", "local file\n")
 	remote.deleteAt(t, "docs")
 	remote.putFileAt(t, "docs", "remote file\n")
-	for range 3 {
-		runScenarioPass(t, h.eng)
-	}
+	runScenarioPass(t, h.eng)
 
 	contents := modelContents(harnessLocalTree(t, h.syncRoot))
 	assert.Contains(t, contents, "local file\n")
@@ -801,9 +788,7 @@ func TestRunOnce_FileReplacedByFoldersOnBothSidesMergesThem(t *testing.T) {
 	remote.deleteAt(t, "docs")
 	remote.mkdirAt(t, "docs")
 	remote.putFileAt(t, "docs/remote.txt", "remote\n")
-	for range 3 {
-		runScenarioPass(t, h.eng)
-	}
+	runScenarioPass(t, h.eng)
 
 	requireScenarioLocalFile(t, h.syncRoot, "docs/local.txt", "local\n")
 	requireScenarioLocalFile(t, h.syncRoot, "docs/remote.txt", "remote\n")
@@ -834,9 +819,7 @@ func TestRunOnce_RemoteReplaceOfALocallyRecreatedFolderConverges(t *testing.T) {
 	require.NoError(t, os.Mkdir(docs, 0o750))
 	remote.deleteAt(t, "docs")
 	remote.putFileAt(t, "docs", "remote file\n")
-	for range 3 {
-		runScenarioPass(t, h.eng)
-	}
+	runScenarioPass(t, h.eng)
 
 	requireScenarioLocalFile(t, h.syncRoot, "docs", "remote file\n")
 	assertSyncInvariants(t, h)
@@ -867,9 +850,7 @@ func TestRunOnce_RemoteMoveOfAFileTheUserReplacedLocallyKeepsBoth(t *testing.T) 
 	writeLocalFile(t, h.syncRoot, filepath.Join("f", "x.new"), "a new local file\n")
 	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "f", "x.new"), filepath.Join(h.syncRoot, "f", "x.txt")))
 	remote.moveAt(t, "f/x.txt", "x.txt")
-	for range 3 {
-		runScenarioPass(t, h.eng)
-	}
+	runScenarioPass(t, h.eng)
 
 	requireScenarioLocalFile(t, h.syncRoot, "x.txt", "synced\n")
 	requireScenarioLocalFile(t, h.syncRoot, "f/x.txt", "a new local file\n")
@@ -901,9 +882,7 @@ func TestRunOnce_LocalRenameWhileOneDriveSwapsItConverges(t *testing.T) {
 	remote.moveAt(t, "p.txt", "swap.txt")
 	remote.moveAt(t, "q.txt", "p.txt")
 	remote.moveAt(t, "swap.txt", "q.txt")
-	for range 3 {
-		runScenarioPass(t, h.eng)
-	}
+	runScenarioPass(t, h.eng)
 
 	requireScenarioLocalFile(t, h.syncRoot, "q.txt", "P\n")
 	requireScenarioLocalFile(t, h.syncRoot, "p.txt", "Q\n")
@@ -933,9 +912,7 @@ func TestRunOnce_RemoteDeleteInsideFolderRenamedLocallyIsNotUndone(t *testing.T)
 	h.beginRound(t)
 	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "d"), filepath.Join(h.syncRoot, "e")))
 	remote.deleteAt(t, "d/x.txt")
-	for range 3 {
-		runScenarioPass(t, h.eng)
-	}
+	runScenarioPass(t, h.eng)
 
 	assert.NoFileExists(t, filepath.Join(h.syncRoot, "e", "x.txt"), "OneDrive's delete is not undone")
 	assert.NotContains(t, remote.tree(), "e/x.txt", "the file is not uploaded again")
@@ -967,9 +944,7 @@ func TestRunOnce_RemoteReplaceInsideFolderRenamedLocallyConverges(t *testing.T) 
 	remote.deleteAt(t, "f/x.txt")
 	remote.mkdirAt(t, "f/x.txt")
 	remote.putFileAt(t, "f/x.txt/inside.txt", "inside\n")
-	for range 4 {
-		runScenarioPass(t, h.eng)
-	}
+	runScenarioPass(t, h.eng)
 
 	requireScenarioLocalFile(t, h.syncRoot, "f/x.txt/inside.txt", "inside\n")
 	assertSyncInvariants(t, h)
@@ -998,9 +973,7 @@ func TestRunOnce_RemoteDeleteOfALocallyRecreatedEmptyFolderIsApplied(t *testing.
 	require.NoError(t, os.Remove(x))
 	require.NoError(t, os.Mkdir(x, 0o750))
 	remote.deleteAt(t, "q/x")
-	for range 3 {
-		runScenarioPass(t, h.eng)
-	}
+	runScenarioPass(t, h.eng)
 
 	assert.NoDirExists(t, x)
 	assert.NotContains(t, remote.tree(), "q/x", "the deleted folder is not re-created online")
@@ -1032,9 +1005,7 @@ func TestRunOnce_RemoteFolderDeleteAcceptsAContentIdenticalLocalRestore(t *testi
 	require.NoError(t, os.Mkdir(filepath.Join(h.syncRoot, "X"), 0o750))
 	writeLocalFile(t, h.syncRoot, filepath.Join("X", "a.txt"), "A\n")
 	remote.deleteAt(t, "X")
-	for range 3 {
-		runScenarioPass(t, h.eng)
-	}
+	runScenarioPass(t, h.eng)
 
 	assert.NoDirExists(t, filepath.Join(h.syncRoot, "X"), "OneDrive's delete is accepted")
 	assert.NotContains(t, remote.tree(), "X", "the folder is not re-created online")
@@ -1066,9 +1037,7 @@ func TestRunOnce_RemoteFolderDeleteAfterDeviceRenumberingIsApplied(t *testing.T)
 
 	h.beginRound(t)
 	remote.deleteAt(t, "d")
-	for range 3 {
-		runScenarioPass(t, h.eng)
-	}
+	runScenarioPass(t, h.eng)
 
 	assert.NoDirExists(t, filepath.Join(h.syncRoot, "d"))
 	assert.NotContains(t, remote.tree(), "d", "the deleted folder is not re-created online")
@@ -1078,8 +1047,8 @@ func TestRunOnce_RemoteFolderDeleteAfterDeviceRenumberingIsApplied(t *testing.T)
 // Validates: R-2.17.1, R-2.17.2
 //
 // The same rename on both sides while OneDrive also edited the file: one
-// pass rekeys the baseline to the shared new name, the next downloads the
-// edit. A model loop that read a baseline-update-only pass as quiet stopped
+// pass rekeys the baseline to the shared new name, the next (in the same
+// sync) downloads the edit. A model loop that read a baseline-update-only pass as quiet stopped
 // between the two (chaos Graph layer, D-092, seed 35).
 func TestRunOnce_SameRenameOnBothSidesStillAppliesTheRemoteEdit(t *testing.T) {
 	t.Parallel()
@@ -1094,9 +1063,7 @@ func TestRunOnce_SameRenameOnBothSidesStillAppliesTheRemoteEdit(t *testing.T) {
 	remote.putFileAt(t, "q/a.txt", "edited online\n")
 	remote.moveAt(t, "q/a.txt", "a.txt")
 	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "q", "a.txt"), filepath.Join(h.syncRoot, "a.txt")))
-	for range 2 {
-		runScenarioPass(t, h.eng)
-	}
+	runScenarioPass(t, h.eng)
 
 	requireScenarioLocalFile(t, h.syncRoot, "a.txt", "edited online\n")
 	assertSyncInvariants(t, h)
@@ -1135,9 +1102,7 @@ func TestRunOnce_LostMoveAnswerAfterARemoteEditStillAppliesTheEdit(t *testing.T)
 	require.NoError(t, err)
 	require.True(t, lost, "the move ran and lost its answer")
 	require.Equal(t, 1, report.Failed)
-	for range 2 {
-		runScenarioPass(t, h.eng)
-	}
+	runScenarioPass(t, h.eng)
 
 	requireScenarioLocalFile(t, h.syncRoot, "a.txt", "edited online\n")
 	assertSyncInvariants(t, h)

@@ -287,6 +287,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode SyncMode, pipe *
 		return cursorCommitErr
 	}
 	// Dispatch through the watch runtime (same frontier path steady-state uses).
+	rt.noteInstalledPlan(runtime.Plan)
 	initialOutbox, _, err := rt.startRuntimeStage(ctx, runtime, pipe.bl)
 	if err != nil {
 		return fmt.Errorf("starting transfers: %w", err)
@@ -319,6 +320,7 @@ func (rt *watchRuntime) finishBootstrapAfterActions(
 	ctx context.Context,
 ) error {
 	rt.deps.emit(engineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
+	rt.scheduleFollowUpIfSettled()
 	rt.postSyncHousekeeping(ctx)
 	if err := rt.armFullRefreshTimer(ctx); err != nil {
 		return fmt.Errorf("sync: arming full remote refresh timer: %w", err)
