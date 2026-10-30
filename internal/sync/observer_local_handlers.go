@@ -396,6 +396,7 @@ func (o *localObserver) handleCreate(
 	if identity, ok := synctree.IdentityFromFileInfo(info); ok {
 		ev.LocalDevice = identity.Device
 		ev.LocalInode = identity.Inode
+		ev.LocalBirthTime = identity.BirthTime
 		ev.LocalHasIdentity = true
 	}
 	ev.LocalCtime = fileChangeTime(info)
@@ -632,6 +633,7 @@ func (o *localObserver) scanNewDirectoryEntry(
 	if identity, ok := synctree.IdentityFromFileInfo(info); ok {
 		fileEv.LocalDevice = identity.Device
 		fileEv.LocalInode = identity.Inode
+		fileEv.LocalBirthTime = identity.BirthTime
 		fileEv.LocalHasIdentity = true
 	}
 	fileEv.LocalCtime = fileChangeTime(info)
@@ -676,7 +678,9 @@ func (o *localObserver) scanNewDirectoryEntryInfo(
 		return nil, observedKindUnknown, false
 	}
 
-	return info, dirEntryKind(entry), true
+	// The listing is by absolute path (localpath), so the birth time that
+	// completes the entry's identity is read here, as statObservedPath does.
+	return synctree.AttachBirthTime(info, entryFsPath), dirEntryKind(entry), true
 }
 
 func (o *localObserver) scanNewDirectoryChildDir(
@@ -711,6 +715,7 @@ func (o *localObserver) scanNewDirectoryChildDir(
 		if identity, ok := synctree.IdentityFromFileInfo(info); ok {
 			dirEv.LocalDevice = identity.Device
 			dirEv.LocalInode = identity.Inode
+			dirEv.LocalBirthTime = identity.BirthTime
 			dirEv.LocalHasIdentity = true
 		}
 	}
@@ -1038,6 +1043,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	if identity, ok := synctree.IdentityFromFileInfo(info); ok {
 		ev.LocalDevice = identity.Device
 		ev.LocalInode = identity.Inode
+		ev.LocalBirthTime = identity.BirthTime
 		ev.LocalHasIdentity = true
 	}
 	ev.LocalCtime = fileChangeTime(info)
@@ -1272,7 +1278,7 @@ func (o *localObserver) isRegisteredSameDirectory(fsPath string, info os.FileInf
 	}
 	identity, ok := synctree.IdentityFromFileInfo(info)
 
-	return ok && identity == registered.identity
+	return ok && synctree.SameIdentity(identity, registered.identity)
 }
 
 func (o *localObserver) removeWatch(watcher fsWatcher, fsPath, dbRelPath string) {

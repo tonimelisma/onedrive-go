@@ -75,6 +75,7 @@ intent; multisync receives only that child work intent.
 | The comparison facts are defined once (one shared CTE) for the comparison and reconciliation queries. Filesystem identity never signals a content change: a folder or a same-hash file with a new identity is a baseline update, and a folder is never an upload or download (R-2.2.6). A missing remote hash is unknown, not changed, and two empty files are equal (R-2.2.7). A locally deleted folder that OneDrive replaced with a new item is re-created locally, not deleted (R-2.10.49). | `TestQueryReconciliationState_IdentityChangeAtSamePathIsNotAnEdit`, `TestRunOnce_RenumberedDeviceTransfersNothing`, `TestRunOnce_FolderDeletedAndRestoredLocallyTransfersNothing`, `TestBuildActionsForReconciliation_RefusesFolderTransfers`, `TestQueryReconciliationState_MissingRemoteHashIsUnknownNotChanged`, `TestPlanCurrentState_HashlessZeroByteBothSidesIsEqual`, `TestPlanCurrentState_HashlessNonEmptyCreateIsStillAConflict`, `TestQueryReconciliationState_LocallyDeletedFolderReplacedOnlineIsRecreatedLocally` |
 | Conflict reconciliation rows expand into concrete actions for edit/edit, create/create, and edit/delete cases. | `TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_ExpandsCreateCreateConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID` |
 | Folder-delete descendants are reconciled by SQLite after planner-visible pruning, with parent availability preserved only when descendant work requires it. A file deleted locally that OneDrive only carried along with a renamed ancestor is neither a new remote file nor gone from both sides: both paths wait (`followed_ancestor_deletes`) until the ancestor's local move re-paths the baseline, and the delete then reaches OneDrive. The mirror case waits the same way (`followed_local_ancestor_deletes`): an item OneDrive deleted whose local copy only followed a folder the user renamed is not uploaded again, and what OneDrive created at its place waits too. | `TestRunOnce_LocalDeleteInsideFolderRenamedOnlineIsNotUndone`, `TestRunOnce_RemoteDeleteInsideFolderRenamedLocallyIsNotUndone`, `TestRunOnce_RemoteReplaceInsideFolderRenamedLocallyConverges`, `TestReplacePlannerVisibleStateTx_PrunesRemoteDescendantsWhenBaselineFolderMissingRemotely`, `TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMissingLocally`, `TestPlannerPlanCurrentState_RemoteParentDeletePlansDescendantLocalDeleteThroughSQLite`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_LocalParentDeleteCreatesParentForChangedRemoteChild`, `TestPlannerPlanCurrentState_BothParentSidesDeletedCleansUpDescendantsThroughSQLite` |
+| Filesystem identity includes the entry's birth time where the filesystem records one: a deleted synced folder or file and an unrelated new entry holding its reused inode number (another birth time) are a delete plus a create, with the old item in the recycle bin, while a rename keeps its birth time and moves; a side without a birth time pairs on (device, inode); worker-start freshness rejects a move destination born again since planning (R-2.17.1). | `TestRunOnce_DeletedFolderAndNewFolderWithReusedInodeAreNotAMove`, `TestRunOnce_DeletedFileAndNewFileWithReusedInodeAreNotAMove`, `TestRunOnce_RenameWithMatchingBirthTimeIsStillAMove`, `TestRunOnce_WithoutBirthTimeIdentityIsDeviceAndInode`, `TestQueryReconciliationState_LocalMovePairingComparesBirthTimes`, `TestQueryReconciliationState_BirthTimeAtTheSamePath`, `TestActionFreshness_LocalOriginMoveRejectsADestinationBornAgain`, `TestSameIdentity_BirthTimeDecidesWhenBothSidesKnowIt`, `TestSQLSameLocalEntry_EveryAliasFollowsThePattern` |
 | A file move needs content corroboration beyond inode identity; identity without it is delete + create, and unhashed moves carry the destination's observed truth. | `TestQueryReconciliationState_LocalFileMoveRequiresContentCorroboration`, `TestQueryReconciliationState_LocalFileMoveIdentityWithoutContentIsNotAMove`, `TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate`, `TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads`, `TestActionFreshness_LocalOriginMoveRejectsChangedDestination` |
 | Locally deleted or unpaired moved folders are deleted on OneDrive after their descendants, never re-created locally; identity-paired folder moves are one remote move. | `TestQueryReconciliationState_FolderDecisionMatrix`, `TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes`, `TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildMoves`, `TestRunOnce_LocalFolderDeleteDeletesRemoteFolder`, `TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource` |
 | A plan counts the work it leaves for the next pass (R-2.1.7): a converged plan leaves none, a folder renamed online over a local edit counts its move, a swap counts the parked item as deferred; conflict copies count as renames (the keep-both scenarios finish in one sync). | `TestPlanFollowUp_CountsWorkLeftForTheNextPass`, `TestRunOnce_OneShotUploadsLocalEditInsideFolderRenamedOnline`, `TestRunOnce_SwapOfTwoNamesConverges`, `TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth` |
@@ -297,23 +298,48 @@ content drift or expanded into conflict/download actions.
 
 Local or remote moves that stay within one Graph drive become move actions.
 Local move detection first matches unique filesystem identity
-(`local_device`, `local_inode`, `local_has_identity`) between `baseline` and
-`local_state` for both files and directories. File-hash matching is a fallback
-only for files without identity.
+(`local_device`, `local_inode`, `local_birth_time`, `local_has_identity`)
+between `baseline` and `local_state` for both files and directories. File-hash
+matching is a fallback only for files without identity.
+
+Identity is (device, inode, birth time where the filesystem records one), and
+two identities match only when device and inode agree and, if both sides know
+a birth time, the birth times agree too (R-2.17.1). The birth time is what
+makes identity name one entry over time: ext4, tmpfs and most Linux
+filesystems hand a just-freed inode number to the next entry created, so a
+deleted synced folder and an unrelated folder the user creates elsewhere could
+share (device, inode). Paired, the old OneDrive folder was renamed into the new
+one, and the unrelated folder inherited its sharing links, permissions and
+version history; content corroboration cannot catch it for a folder (no
+content) or for a file that happens to hold the same bytes. A rename keeps the
+birth time and a new entry gets its own, so a mismatch is a delete plus a
+create. Where the filesystem records none (ext2/3, FAT, NFS, SMB, most FUSE
+filesystems, a kernel without `statx`) identity falls back to (device, inode)
+and inode reuse stays indistinguishable from a rename. The rule is written
+once per language: `synctree.SameIdentity` in Go and one SQL expression
+pattern in the comparison queries (the `sqlSameLocalEntry*` constants, one per
+local-row alias, held to the pattern by
+`TestSQLSameLocalEntry_EveryAliasFollowsThePattern`), and every identity
+comparison goes through one of them.
+Identity stays a pairing hint, never a change signal (D-057): a new birth time
+at the same path changes nothing by itself, and the baseline learns it through
+`metadata_drift`.
 
 Identity is necessary but not sufficient for a file (R-2.17.1). After a delete
 and a create in one batch, ext4 and other filesystems may give the new file the
 freed inode, and pairing on inode alone once moved `vim.swp`'s OneDrive content
 onto an unrelated unreadable `secret.txt`. A rename preserves size, mtime and
-content; inode reuse preserves none of them. So an identity pair is a file move
+content; inode reuse preserves none of them (and, where the filesystem records
+one, not the birth time either, see above). So an identity pair is a file move
 only when sizes are equal and either both hashes are known and equal, or a hash
 is unknown and the mtimes are equal. Everything else (different size, different
 known hash, unknown hash with a different mtime) is delete + create. The cost is
 that a rename followed by an edit inside one observation window also becomes
 delete + create: the content is uploaded fresh and the old item goes to the
 recycle bin, which is safe. Directories pair on identity alone: a directory has
-no content of its own, its descendants pair independently, and a wrong pairing
-after rmdir + mkdir reuse still converges to the same tree. The pairing rule
+no content of its own and its descendants pair independently. A wrong pairing
+after rmdir + mkdir reuse converges to the same tree but hands the new folder
+the old OneDrive item, which the birth time prevents wherever it is recorded. The pairing rule
 lives once, in `sqlLocalAndRemoteMoveCTEs`, shared by the comparison and
 reconciliation queries.
 

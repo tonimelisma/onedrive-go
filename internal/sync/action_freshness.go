@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 type actionFreshnessInputs struct {
@@ -451,9 +452,11 @@ func localRowMatchesPlanned(row *localStateRow, planned *localState) bool {
 	if row.ItemType != planned.ItemType {
 		return false
 	}
-	if planned.LocalHasIdentity && row.LocalHasIdentity &&
-		(row.LocalDevice != planned.LocalDevice || row.LocalInode != planned.LocalInode) {
-		return false
+	if rowIdentity, rowKnown := row.fileIdentity(); rowKnown {
+		if plannedIdentity, plannedKnown := planned.fileIdentity(); plannedKnown &&
+			!synctree.SameIdentity(rowIdentity, plannedIdentity) {
+			return false
+		}
 	}
 	if planned.ItemType == ItemTypeFolder {
 		return true

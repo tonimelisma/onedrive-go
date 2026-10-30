@@ -90,7 +90,7 @@ func seedComparisonBench(b *testing.B, store *SyncStore, items int, shape compar
 			}
 		}
 		_, err := insertBaseline.ExecContext(ctx, itemID, path, parentID, itemType, nullString(hash), nullString(hash),
-			size, size, mtime, mtime, mtime, 1, inode, 1, "etag-"+itemID)
+			size, size, mtime, mtime, mtime, 1, inode, 0, 1, "etag-"+itemID)
 		require.NoError(b, err)
 		_, err = insertLocal.ExecContext(ctx, localPath, itemType, nullString(hash), size, mtime, mtime, inode)
 		require.NoError(b, err)

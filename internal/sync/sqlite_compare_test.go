@@ -531,3 +531,152 @@ func TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated(t *tes
 	assert.Equal(t, "upload", got["hard-link.txt"])
 	assert.Equal(t, "upload", got["copy.txt"])
 }
+
+// Validates: R-2.17.1
+//
+// Move pairing compares birth times whenever both sides know one
+// (sqlSameLocalEntry): the same (device, inode) with another birth time is a
+// reused inode, a delete plus a create, for a folder and for a file whose
+// content corroborates the pairing. A side without a birth time pairs on
+// (device, inode) as before.
+func TestQueryReconciliationState_LocalMovePairingComparesBirthTimes(t *testing.T) {
+	t.Parallel()
+
+	const (
+		born   = int64(1_700_000_000_000_000_001)
+		reborn = int64(1_700_000_000_000_000_002)
+	)
+	for _, itemType := range []string{strFolder, strFile} {
+		for _, tc := range []struct {
+			name          string
+			baselineBirth int64
+			localBirth    int64
+			wantMove      bool
+		}{
+			{name: "same birth time", baselineBirth: born, localBirth: born, wantMove: true},
+			{name: "reused inode", baselineBirth: born, localBirth: reborn},
+			{name: "no birth time recorded", baselineBirth: 0, localBirth: reborn, wantMove: true},
+			{name: "no birth time observed", baselineBirth: born, localBirth: 0, wantMove: true},
+		} {
+			t.Run(itemType+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				store := newTestStore(t)
+				ctx := t.Context()
+				var hash any
+				if itemType == strFile {
+					hash = "same-hash"
+				}
+				_, err := store.rawDB().ExecContext(ctx, `
+					INSERT INTO baseline (
+						item_id, path, item_type, local_hash, remote_hash,
+						local_size, remote_size, local_mtime, remote_mtime,
+						local_device, local_inode, local_birth_time, local_has_identity
+					)
+					VALUES ('item-old', 'old', ?, ?, ?, 4, 4, 1, 1, 5, 6, ?, 1)`,
+					itemType, hash, hash, tc.baselineBirth)
+				require.NoError(t, err)
+				_, err = store.rawDB().ExecContext(ctx, `
+					INSERT INTO local_state (
+						path, item_type, hash, size, mtime, local_device, local_inode, local_birth_time, local_has_identity
+					)
+					VALUES ('new', ?, ?, 4, 1, 5, 6, ?, 1)`,
+					itemType, hash, tc.localBirth)
+				require.NoError(t, err)
+				_, err = store.rawDB().ExecContext(ctx, `
+					INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+					VALUES ('item-old', 'old', ?, ?, 4, 1)`,
+					itemType, hash)
+				require.NoError(t, err)
+
+				reconciliationRows, err := store.QueryReconciliationState(ctx)
+				require.NoError(t, err)
+				got := reconciliationKindsByPath(reconciliationRows)
+				if tc.wantMove {
+					assert.Equal(t, "local_move", got["old"])
+					assert.Equal(t, "local_move", got["new"])
+					return
+				}
+				assert.Equal(t, "remote_delete", got["old"])
+				if itemType == strFolder {
+					assert.Equal(t, "folder_create_remote", got["new"])
+				} else {
+					assert.Equal(t, "upload", got["new"])
+				}
+			})
+		}
+	}
+}
+
+// Validates: R-2.17.1, R-2.2.6
+//
+// At the synced path, a reused inode with another birth time is a new entry
+// (local_item_replaced), while a birth time the baseline was written without
+// is learned through metadata drift with nothing transferred.
+func TestQueryReconciliationState_BirthTimeAtTheSamePath(t *testing.T) {
+	t.Parallel()
+
+	const (
+		born   = int64(1_700_000_000_000_000_001)
+		reborn = int64(1_700_000_000_000_000_002)
+	)
+	for _, tc := range []struct {
+		name          string
+		baselineBirth int64
+		localBirth    int64
+		want          string
+	}{
+		{name: "same birth time", baselineBirth: born, localBirth: born, want: "noop"},
+		{name: "birth time learned", baselineBirth: 0, localBirth: born, want: "baseline_update"},
+		{name: "birth time not observed", baselineBirth: born, localBirth: 0, want: "noop"},
+		// The same content in an entry born later: nothing to transfer, and
+		// the baseline learns the new identity (D-057).
+		{name: "reused inode with the synced content", baselineBirth: born, localBirth: reborn, want: "baseline_update"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newTestStore(t)
+			ctx := t.Context()
+			_, err := store.rawDB().ExecContext(ctx, `
+				INSERT INTO baseline (
+					item_id, path, item_type, local_hash, remote_hash,
+					local_size, remote_size, local_mtime, remote_mtime,
+					local_device, local_inode, local_birth_time, local_has_identity
+				)
+				VALUES ('item-a', 'a.txt', 'file', 'h', 'h', 4, 4, 1, 1, 5, 6, ?, 1)`, tc.baselineBirth)
+			require.NoError(t, err)
+			_, err = store.rawDB().ExecContext(ctx, `
+				INSERT INTO local_state (
+					path, item_type, hash, size, mtime, local_device, local_inode, local_birth_time, local_has_identity
+				)
+				VALUES ('a.txt', 'file', 'h', 4, 1, 5, 6, ?, 1)`, tc.localBirth)
+			require.NoError(t, err)
+			_, err = store.rawDB().ExecContext(ctx, `
+				INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+				VALUES ('item-a', 'a.txt', 'file', 'h', 4, 1)`)
+			require.NoError(t, err)
+
+			reconciliationRows, err := store.QueryReconciliationState(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, reconciliationKindsByPath(reconciliationRows)["a.txt"])
+		})
+	}
+}
+
+// Validates: R-2.17.1
+//
+// The identity expressions of the comparison SQL are one pattern written out
+// per local-row alias; this keeps them from drifting apart.
+func TestSQLSameLocalEntry_EveryAliasFollowsThePattern(t *testing.T) {
+	t.Parallel()
+
+	pattern := func(local string) string {
+		return "(" + local + ".local_device = b.local_device AND " + local + ".local_inode = b.local_inode" +
+			" AND (" + local + ".local_birth_time = 0 OR b.local_birth_time = 0 OR " +
+			local + ".local_birth_time = b.local_birth_time))"
+	}
+	assert.Equal(t, sqlSameLocalEntryL, pattern("l"))
+	assert.Equal(t, sqlSameLocalEntryLs, pattern("ls"))
+	assert.Equal(t, sqlSameLocalEntrySrc, pattern("src"))
+}

@@ -58,7 +58,7 @@ func TestCaseInsensitive_VariantNamesAreTheStoredEntry(t *testing.T) {
 	require.NoError(t, err, "a case variant finds the entry")
 	stored, err := tree.Lstat("Docs/Readme.txt")
 	require.NoError(t, err)
-	assert.True(t, os.SameFile(upper, stored), "a variant is the same inode, as a hard link to it would be")
+	assert.True(t, synctree.SameFile(upper, stored), "a variant is the same inode, as a hard link to it would be")
 
 	writeTreeFile(t, tree, "docs/README.txt", "second")
 	assert.Equal(t, []string{"Docs"}, storedNames(t, dir))
@@ -137,4 +137,67 @@ func TestErrnoShim_FailsMatchingOperationsUntilHealed(t *testing.T) {
 	created, err := tree.OpenFile("full/new", os.O_CREATE|os.O_WRONLY, 0o600)
 	require.NoError(t, err, "no rules heals the filesystem")
 	require.NoError(t, created.Close())
+}
+
+// Validates: R-2.17.1
+//
+// The identity shim reports a rule's inode and birth time through every read
+// of the entry (Lstat, Stat, a listing, a walk) and leaves other entries as
+// the filesystem reports them.
+func TestIdentityShim_ReportsTheRuledIdentityEverywhere(t *testing.T) {
+	t.Parallel()
+
+	const (
+		reportedInode = 4242
+		reportedBirth = int64(1_700_000_000_000_000_001)
+	)
+	shim := NewIdentityShim(IdentityRule{Path: "dir/new.txt", Inode: reportedInode, BirthTime: reportedBirth})
+	tree, dir := shimmedTree(t, shim.Wrap)
+	require.NoError(t, tree.MkdirAll("dir", 0o700))
+	writeTreeFile(t, tree, "dir/new.txt", "new")
+	writeTreeFile(t, tree, "dir/other.txt", "other")
+
+	want := func(t *testing.T, info fs.FileInfo, read string) {
+		t.Helper()
+		identity, ok := synctree.IdentityFromFileInfo(info)
+		require.True(t, ok, read)
+		assert.Equal(t, uint64(reportedInode), identity.Inode, read)
+		assert.Equal(t, reportedBirth, identity.BirthTime, read)
+	}
+
+	lstat, err := tree.Lstat("dir/new.txt")
+	require.NoError(t, err)
+	want(t, lstat, "Lstat")
+	stat, err := tree.Stat("dir/new.txt")
+	require.NoError(t, err)
+	want(t, stat, "Stat")
+
+	entries, err := tree.ReadDir("dir")
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	listed, err := entries[0].Info()
+	require.NoError(t, err)
+	want(t, listed, "ReadDir")
+
+	walked := 0
+	require.NoError(t, tree.WalkDir(func(path string, d fs.DirEntry, walkErr error) error {
+		require.NoError(t, walkErr)
+		if path == filepath.Join(dir, "dir", "new.txt") {
+			info, infoErr := d.Info()
+			require.NoError(t, infoErr)
+			want(t, info, "WalkDir")
+			walked++
+		}
+		return nil
+	}))
+	assert.Equal(t, 1, walked)
+
+	other, err := tree.Lstat("dir/other.txt")
+	require.NoError(t, err)
+	onDisk, err := os.Lstat(filepath.Join(dir, "dir", "other.txt"))
+	require.NoError(t, err)
+	assert.True(t, synctree.SameFile(other, onDisk), "an entry without a rule keeps its real identity")
+	onDiskIdentity, ok := synctree.IdentityFromFileInfo(onDisk)
+	require.True(t, ok)
+	assert.NotEqual(t, uint64(reportedInode), onDiskIdentity.Inode)
 }

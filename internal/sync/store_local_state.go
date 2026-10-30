@@ -11,14 +11,14 @@ import (
 
 const (
 	sqlInsertLocalState = `INSERT OR REPLACE INTO local_state
-		(path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_has_identity)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		(path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_birth_time, local_has_identity)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	sqlListLocalState = `SELECT
-		path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_has_identity
+		path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_birth_time, local_has_identity
 		FROM local_state
 		ORDER BY path`
 	sqlSelectLocalStateByPath = `SELECT
-		path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_has_identity
+		path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_birth_time, local_has_identity
 		FROM local_state
 		WHERE path = ?`
 
@@ -31,6 +31,7 @@ const (
 	sqlBackfillBaselineIdentity = `UPDATE baseline
 		SET local_device = l.local_device,
 			local_inode = l.local_inode,
+			local_birth_time = l.local_birth_time,
 			local_has_identity = 1
 		FROM local_state l
 		WHERE l.path = baseline.path
@@ -333,6 +334,7 @@ func upsertLocalStateRowTx(ctx context.Context, tx sqlTxRunner, row localStateRo
 		row.Ctime,
 		int64(row.LocalDevice),
 		int64(row.LocalInode),
+		row.LocalBirthTime,
 		boolInt(row.LocalHasIdentity),
 	); err != nil {
 		return fmt.Errorf("sync: inserting local_state row for %s: %w", row.Path, err)
@@ -416,6 +418,7 @@ func listLocalStateRowsWithQuery(ctx context.Context, runner sqlTxRunner, query 
 			&row.Ctime,
 			&localDevice,
 			&localInode,
+			&row.LocalBirthTime,
 			&localHasIdentity,
 		); err != nil {
 			return nil, fmt.Errorf("sync: scanning local_state row: %w", err)
@@ -463,6 +466,7 @@ func scanLocalStateRow(
 		&row.Ctime,
 		&localDevice,
 		&localInode,
+		&row.LocalBirthTime,
 		&localHasIdentity,
 	)
 	if err != nil {

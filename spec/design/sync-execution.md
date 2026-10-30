@@ -281,7 +281,9 @@ and the partial remains available for ordinary transfer recovery.
 For local deletes and moves, the executor rejects missing or changed planned
 sources instead of treating them as successful mutation. File sources validate
 planned content facts when available; folder sources validate stable local
-identity when the sync tree supplied device/inode facts. Local moves also reject
+identity when the sync tree supplied device/inode facts (and the birth time,
+where both the plan and the live entry know one: a folder born again under the
+planned inode number is not the planned source, R-2.17.1). Local moves also reject
 an unexpectedly occupied destination before `Rename`.
 
 For remote deletes, moves, downloads, overwrite uploads, and remote folder/file

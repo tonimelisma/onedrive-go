@@ -77,7 +77,7 @@ func protectedRootIdentityReservation(
 	for _, protectedRoot := range protectedRoots {
 		if !protectedRoot.HasIdentity ||
 			!synctree.SameIdentity(
-				synctree.FileIdentity{Device: protectedRoot.Device, Inode: protectedRoot.Inode},
+				protectedRoot.fileIdentity(),
 				identity,
 			) {
 			continue

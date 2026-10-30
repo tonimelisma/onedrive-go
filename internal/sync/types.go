@@ -23,6 +23,7 @@ type BaselineMutation struct {
 	LocalCtime            int64
 	LocalDevice           uint64
 	LocalInode            uint64
+	LocalBirthTime        int64 // entry birth time (Unix nanoseconds); zero means unknown
 	LocalHasIdentity      bool
 	LocalIdentityObserved bool
 	RemoteSize            int64

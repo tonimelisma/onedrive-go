@@ -1,7 +1,10 @@
 package sync
 
 import (
+	"io/fs"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // ObservationIssue is a durable current-truth problem discovered by
@@ -87,6 +90,7 @@ type localStateRow struct {
 	Ctime            int64 // inode change time (Unix nanoseconds); zero means unknown
 	LocalDevice      uint64
 	LocalInode       uint64
+	LocalBirthTime   int64 // entry birth time (Unix nanoseconds); zero means unknown
 	LocalHasIdentity bool
 }
 
@@ -124,9 +128,48 @@ func localRowHoldsBaselineContent(row *localStateRow, baseline *BaselineEntry) b
 }
 
 func localRowIdentityMatchesBaseline(row *localStateRow, baseline *BaselineEntry) bool {
-	if !baseline.LocalHasIdentity || !row.LocalHasIdentity {
+	rowIdentity, rowKnown := row.fileIdentity()
+	baselineIdentity, baselineKnown := baseline.fileIdentity()
+	if !rowKnown || !baselineKnown {
 		return true
 	}
 
-	return row.LocalDevice == baseline.LocalDevice && row.LocalInode == baseline.LocalInode
+	return synctree.SameIdentity(rowIdentity, baselineIdentity)
+}
+
+// fileIdentity is the row's filesystem identity, compared only through
+// synctree.SameIdentity so the birth-time rule applies everywhere (R-2.17.1).
+func (r *localStateRow) fileIdentity() (synctree.FileIdentity, bool) {
+	return localFileIdentity(r.LocalDevice, r.LocalInode, r.LocalBirthTime, r.LocalHasIdentity)
+}
+
+// recordIdentity sets the row's filesystem identity from info, when the
+// platform reports one.
+func (r *localStateRow) recordIdentity(info fs.FileInfo) {
+	identity, ok := synctree.IdentityFromFileInfo(info)
+	if !ok {
+		return
+	}
+	r.LocalDevice = identity.Device
+	r.LocalInode = identity.Inode
+	r.LocalBirthTime = identity.BirthTime
+	r.LocalHasIdentity = true
+}
+
+// fileIdentity is the identity the baseline recorded for the synced item.
+func (b *BaselineEntry) fileIdentity() (synctree.FileIdentity, bool) {
+	return localFileIdentity(b.LocalDevice, b.LocalInode, b.LocalBirthTime, b.LocalHasIdentity)
+}
+
+// fileIdentity is the identity the planner saw for the local entry.
+func (l *localState) fileIdentity() (synctree.FileIdentity, bool) {
+	return localFileIdentity(l.LocalDevice, l.LocalInode, l.LocalBirthTime, l.LocalHasIdentity)
+}
+
+func localFileIdentity(device, inode uint64, birthTime int64, known bool) (synctree.FileIdentity, bool) {
+	if !known {
+		return synctree.FileIdentity{}, false
+	}
+
+	return synctree.FileIdentity{Device: device, Inode: inode, BirthTime: birthTime}, true
 }
