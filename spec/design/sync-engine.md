@@ -4,7 +4,7 @@ GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/
 
 LAYER: 4
 
-Implements: R-2.1 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified]
+Implements: R-2.1 [verified], R-2.1.7 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified]
 
 ## Overview
 
@@ -65,7 +65,8 @@ assemble overlapping observation-managed batch shapes ad hoc.
 
 | Behavior | Evidence |
 | --- | --- |
-| One-shot sync remains a bounded observe-plan-execute pass without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
+| A one-shot sync runs further passes while the previous pass's plan left work for the next (moves, re-keys, conflict copies, deferred or dropped work), up to four, never in dry-run and never after a pass that made no progress or failed an action; its report adds up every pass. Watch replans by itself once such a plan settles (R-2.1.7). | `TestRunOnce_OneShotUploadsLocalEditInsideFolderRenamedOnline`, `TestRunOnce_OneShotDryRunPlansOnePass`, `TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads`, `TestRunOnce_SwapOfTwoNamesConverges`, `TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending`, `TestRunWatch_FinishesWorkTheBootstrapMovesLeaveForTheNextPass`, `TestRunWatch_FinishesTheRemoteEditBehindARekey`, `TestReport_WithPassAddsWorkAndKeepsTheLastHeldState`, `TestOneShotFollowUp_StopsWithoutProgressOnFailureAndAtTheBound` |
+| One-shot sync remains a bounded observe-plan-execute run without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
 | Dry-run one-shot sync builds a preview without executor, durable cursor commits, durable observation-findings writes, or shortcut child publication, while normal engine startup/store/close housekeeping still runs. | `TestRunOnce_DryRun_NoExecution`, `TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly`, `TestLoadDryRunCurrentInputs_LocalObservationFindingsStayScratchOnly`, `TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 | Superseded action completions retire exact stale work without success, ordinary retry, blocker mutation, or old-plan dependent admission. | `TestClassifyResult_LocalPersistenceAndScopeRouting`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess`, `TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEmptyScope`, `TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOrRetry` |
@@ -268,7 +269,10 @@ needed.
 
 One-shot and watch differ in exactly one way those decisions can observe:
 whether there is a future. A one-shot pass returns when its work settles, so
-nothing armed during it could fire and no replan mark has a reader. Watch keeps
+nothing armed during it could fire and no replan mark has a reader. (A one-shot
+run's follow-up passes are decided by the plan's `FollowUp`, not by replan
+marks: a superseded action means truth changed under the run, which the next
+sync observes.) Watch keeps
 the runtime alive across timer ticks and observation batches, so all five mean
 something.
 
@@ -287,9 +291,9 @@ apart stops a debug-only read from re-introducing the production coupling.
 
 ## One-Shot Sync
 
-`RunOnce()` keeps one-shot behavior intentionally simple:
+`RunOnce()` keeps one-shot behavior intentionally simple. Each pass:
 
-1. shared startup prep and durable startup checks
+1. shared startup prep and durable startup checks (first pass only)
 2. observe and commit current remote/local truth once
 3. load planner inputs once from that committed truth
 4. compute SQL structural diff and reconciliation once
@@ -300,10 +304,51 @@ apart stops a debug-only read from re-introducing the production coupling.
    drain publication-only dependents before worker dispatch
 8. execute remaining concrete work once using the same blocker/trial admission
    model watch mode uses
-9. persist outcomes and return a report
+9. persist outcomes
 
 There is no mid-pass mailbox for user intent. New external DB writes during a
 one-shot run are durable state for a later run.
+
+### A One-Shot Sync Finishes Its Own Follow-Up Work
+
+Planning moves is conservative by design (sync-planning.md, Follow-Up Work):
+a plan that moves, re-keys or conflict-copies items, or defers or drops work
+until those have happened, leaves ready work for the pass after it, and says
+so in `actionPlan.FollowUp`. Watch mode always has a next pass; a one-shot
+sync used to stop after the first and report success with that work left
+(a local edit inside a folder renamed online stayed unuploaded until the next
+`sync`). `RunOnce` therefore runs passes until one leaves nothing for the
+next (R-2.1.7):
+
+- after a live pass whose plan has `FollowUp.pending()`, another full pass
+  runs: a fresh runner, the baseline loaded again, remote and local truth
+  observed again, planned and executed exactly like the first. The planner
+  says when; the engine never guesses from counts;
+- it stops at the first pass whose plan leaves nothing, that made no progress
+  (`Succeeded == 0`), that failed an action (failures wait in retry backoff and
+  the summary already says they will be retried), when the context is done,
+  or after `oneShotMaxPasses` (4) passes, after which the next sync finishes;
+- a dry run is always one pass: it executes nothing, so a second pass would
+  plan from the same truth;
+- a follow-up pass decides the full refresh again without the caller's
+  request (the first pass did it) and never carries `ConfirmDeletes`: the
+  first pass released the confirmed deletes, and any held since are judged
+  by the hold again;
+- each pass commits its own delta cursor and observation progress, publishes
+  its own shortcut child snapshot and logs its own `sync pass starting` /
+  `sync pass complete` lines; a Debug line names why a follow-up runs.
+  Post-sync housekeeping runs once, after the last pass, when any pass
+  executed;
+- the returned `Report` covers the run (`Report.withPass`): action counts,
+  `Succeeded`, `Failed` and `Errors` add up across passes, `Duration` runs from
+  the first pass's start, and what is still held back (`DeferredByMode`, held
+  deletes) is the last pass's, because a deferral every pass sees is a state,
+  not work done again. The CLI's `Done in ...` line therefore covers every
+  pass.
+
+This is not a settle loop for delta lag (R-2.16.3): a follow-up pass runs only
+when the run's own plan left work, and it observes OneDrive exactly like any
+pass.
 
 The current-plan pipeline is the handoff boundary between planning and runtime
 startup. Observation remains entrypoint-specific, but once an entrypoint has
@@ -579,6 +624,19 @@ directly and local observation fails before a replacement runtime is installed.
 The idle watch-step owner still receives debounced coarse dirty hints directly;
 an empty outbox does not mean steady-state replans can be deferred until some
 other watch event arrives.
+
+Watch replans on observed changes, but the work a plan leaves for the next
+pass (`actionPlan.FollowUp`) often follows from the engine's own commits, which
+nothing observes: a baseline re-key whose OneDrive edit is downloaded next
+pass, a move made on OneDrive, a bootstrap rename made before the observers
+started. The loop therefore records the installed plan's follow-up
+(`watchLoopState.followUp`, set before the runtime starts so publication-only
+successes count) and, once that plan's actions have settled (empty outbox,
+nothing running: checked after each completion, after a replan installs, and
+when bootstrap quiesces), marks the dirty buffer itself when the plan made
+progress and failed nothing (R-2.1.7). Consecutive self-scheduled replans are
+bounded by the same `oneShotMaxPasses`; a replan from an observed change
+starts a new streak.
 
 The watch runtime records perf counters at the same single-owner boundaries:
 admission counts actions superseded before worker dispatch, pending replan

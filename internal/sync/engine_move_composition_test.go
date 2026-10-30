@@ -46,11 +46,12 @@ func TestRunOnce_BothSidesRenamedIdenticallyConverges(t *testing.T) {
 	requireScenarioQuietPlan(t, eng)
 }
 
-// Validates: R-2.17.6
+// Validates: R-2.17.6, R-2.1.7
 //
 // Both sides renamed the file to the same name, and OneDrive also edited it.
 // Re-keying the baseline must publish only the path: the remote edit stays
-// pending and is downloaded, not recorded as already synced.
+// pending and is downloaded, not recorded as already synced. The download is
+// planned by the pass after the re-key, which the same sync runs.
 func TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending(t *testing.T) {
 	t.Parallel()
 
@@ -65,7 +66,6 @@ func TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending(t *testing
 	remote.move("item-file", "root", "b.txt")
 	remote.setContent(t, "item-file", "edited online\n")
 
-	runScenarioPass(t, eng)
 	runScenarioPass(t, eng)
 
 	data, err := os.ReadFile(filepath.Join(syncRoot, "b.txt")) //nolint:gosec // test reads its own temp tree
@@ -171,7 +171,7 @@ func TestRunOnce_RenameAndRecreateMovesThenCreates(t *testing.T) {
 // the local copy is renamed to c, nothing is uploaded or deleted, and the next
 // plan is quiet. Before, the plan moved the remote item from a, where it no
 // longer was, and was superseded on every pass.
-func TestRunOnce_DivergentRenameConvergesInTwoPasses(t *testing.T) {
+func TestRunOnce_DivergentRenameConvergesInOneSync(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(engineTestDriveID)
@@ -185,7 +185,6 @@ func TestRunOnce_DivergentRenameConvergesInTwoPasses(t *testing.T) {
 	remote.move("item-a", "root", "c.txt")
 
 	runScenarioPass(t, eng)
-	runScenarioPass(t, eng)
 
 	assert.NoFileExists(t, filepath.Join(syncRoot, "b.txt"))
 	assert.FileExists(t, filepath.Join(syncRoot, "c.txt"))
@@ -196,11 +195,12 @@ func TestRunOnce_DivergentRenameConvergesInTwoPasses(t *testing.T) {
 	requireScenarioQuietPlan(t, eng)
 }
 
-// Validates: R-2.17.7
+// Validates: R-2.17.7, R-2.1.7
 //
 // OneDrive moved a file the user had edited locally (D-053). The local copy
 // follows the move with its edit, and the edit is uploaded at the new name as
-// a new version of the same item, never stranded at the old name.
+// a new version of the same item, never stranded at the old name. The upload
+// is planned by the pass after the move, which the same sync runs.
 func TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads(t *testing.T) {
 	t.Parallel()
 
@@ -215,7 +215,6 @@ func TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads(t *testing.T) {
 	writeLocalFile(t, syncRoot, "a.txt", "edited locally\n")
 	remote.move("item-a", "item-dir", "moved.txt")
 
-	runScenarioPass(t, eng)
 	runScenarioPass(t, eng)
 
 	assert.NoFileExists(t, filepath.Join(syncRoot, "a.txt"))
@@ -250,7 +249,6 @@ func TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting(t *testing.T) {
 	require.NoError(t, os.Rename(filepath.Join(syncRoot, "A"), filepath.Join(syncRoot, "B", "A")))
 	remote.move("item-B", "item-A", "B")
 
-	runScenarioPass(t, eng)
 	runScenarioPass(t, eng)
 
 	want := map[string]string{
@@ -397,7 +395,6 @@ func TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit(t *testing.T) {
 	remote.setContent(t, "item-a", "edited online\n")
 
 	runScenarioPass(t, eng)
-	runScenarioPass(t, eng)
 
 	data, err := os.ReadFile(filepath.Join(syncRoot, "b.txt")) //nolint:gosec // test reads its own temp tree
 	require.NoError(t, err)
@@ -429,7 +426,6 @@ func TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting(t *testin
 	remote.move("item-a", "root", "b.txt")
 
 	runScenarioPass(t, eng)
-	runScenarioPass(t, eng)
 
 	assert.Equal(t, map[string]string{"b.txt": "alpha\n", "keep.txt": "keep\n"}, remote.tree())
 	assert.NoFileExists(t, filepath.Join(syncRoot, "a.txt"))
@@ -460,9 +456,7 @@ func TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit(t *testing.T) {
 	remote.deleteRemotely("item-b")
 	remote.move("item-a", "root", "b.txt")
 
-	for range 3 {
-		runScenarioPass(t, eng)
-	}
+	runScenarioPass(t, eng)
 
 	tree := remote.tree()
 	var contents []string
@@ -499,6 +493,9 @@ func TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass(t *testing.T) {
 	remote.deleteRemotely("item-b")
 	remote.move("item-a", "root", "b.txt")
 
+	// The move pass alone: a follow-up pass would refresh the baseline from
+	// the disk and hide what the move published.
+	eng.oneShotPassLimit = 1
 	report := runScenarioPass(t, eng)
 	assert.Equal(t, 1, report.Moves)
 	assert.Zero(t, report.BaselineUpdates, "no competing publication for the destination")

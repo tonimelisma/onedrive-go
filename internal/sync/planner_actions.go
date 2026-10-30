@@ -78,17 +78,25 @@ func (p *planner) PlanCurrentState(
 	allActions = dropReconciliationOfComposedMoves(allActions, &composition)
 	allActions = append(allActions, buildComposedMoveActions(&composition, &moveInputs, views, baseline)...)
 
-	normalizedActions := normalizeCurrentPlanActions(allActions, remoteToLocalFolderPrefixes(moveInputs.nodes), mode)
+	normalizedActions, trimmed := normalizeCurrentPlanActions(allActions, remoteToLocalFolderPrefixes(moveInputs.nodes), mode)
+	beforeDrop := len(normalizedActions)
 	normalizedActions = dropCreatesOntoComposedItems(normalizedActions, &moveInputs, &composition)
+	droppedCreates := beforeDrop - len(normalizedActions)
 	admitted, deferred := partitionCurrentActionsForMode(normalizedActions, mode)
 	bindMountContext(admitted, mount)
 
+	beforeCycles := len(admitted)
 	admitted, deps := isolateDependencyCycles(admitted, p.logger)
 
 	plan := &actionPlan{
 		Actions:        admitted,
 		Deps:           deps,
 		DeferredByMode: deferred,
+		FollowUp: planFollowUp{
+			Renames:  countRenames(admitted),
+			Deferred: len(composition.deferred),
+			Dropped:  trimmed + droppedCreates + beforeCycles - len(admitted),
+		},
 	}
 
 	logActionPlanSummary(p.logger, "sqlite actionable-set plan complete", plan)
@@ -103,11 +111,31 @@ func (p *planner) PlanCurrentState(
 // Parent preservation runs first: it matches descendants by the paths SQLite
 // reconciled them at, which are consistent with each other; the rebases then
 // move whole subtrees, preserved parents included, to where they execute.
-func normalizeCurrentPlanActions(actions []Action, remoteToLocal []graphFolderMoveBoundary, mode SyncMode) []Action {
+//
+// It also reports how many actions the keep-both trim left for the next pass.
+func normalizeCurrentPlanActions(actions []Action, remoteToLocal []graphFolderMoveBoundary, mode SyncMode) ([]Action, int) {
+	before := len(actions)
 	actions = trimKeepBothDescendants(actions)
+	trimmed := before - len(actions)
 	actions = preserveParentFoldersForRunnableDescendants(actions, mode)
 	actions = rebaseLocalWritesToLocalFolderPositions(actions, remoteToLocal)
-	return rebaseRemoteCreatesThroughLocalFolderMoves(actions)
+	return rebaseRemoteCreatesThroughLocalFolderMoves(actions), trimmed
+}
+
+// countRenames counts the actions that put an item at a new path (moves,
+// baseline re-keys, conflict copies), whose follow-up the next pass plans.
+func countRenames(actions []Action) int {
+	n := 0
+	for i := range actions {
+		switch {
+		case isMoveAction(&actions[i]), actions[i].Type == ActionConflictCopy:
+			n++
+		case actions[i].Type == ActionBaselineUpdate && actions[i].OldPath != "":
+			n++
+		}
+	}
+
+	return n
 }
 
 // rebaseRemoteCreatesThroughLocalFolderMoves moves new local content under a

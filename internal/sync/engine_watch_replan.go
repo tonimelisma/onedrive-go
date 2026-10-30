@@ -57,6 +57,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	rt.emitRuntimeDebugEvent(engineDebugEventPlanningFinished, "", 0, planStart)
 
 	installStart := rt.deps.now()
+	rt.noteInstalledPlan(runtime.Plan)
 	dispatch, _, err := rt.startRuntimeStage(ctx, runtime, p.bl)
 	rt.recordReplanWorkerIdle(perf.ReplanIdlePhaseRuntimeInstall, installStart, rt.totalWorkers())
 	if err != nil {
@@ -64,6 +65,8 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	}
 	rt.replaceOutbox(dispatch)
 	rt.loop.postReplanOutbox = len(dispatch) > 0
+	// A plan of publication-only work has already settled.
+	rt.scheduleFollowUpIfSettled()
 	rt.emitRuntimeDebugEvent(engineDebugEventNewPlanInstalled, "", len(dispatch), replanStart)
 
 	return true, nil

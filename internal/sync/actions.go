@@ -105,6 +105,38 @@ type actionPlan struct {
 	// HeldDeletes are deletes the delete-safety hold kept out of Actions
 	// until the user confirms them (planner_delete_safety.go).
 	HeldDeletes []heldDelete
+	// FollowUp is the work this plan deliberately leaves for the next pass:
+	// that pass has more to do even when every action here succeeds.
+	FollowUp planFollowUp
+}
+
+// planFollowUp counts what a plan leaves for the pass after it (R-2.1.7).
+// Planning a move is deliberately conservative: anything that cannot be
+// ordered in this plan, or that depends on where a move puts an item, is
+// planned by the next pass, which observes the moves this one made. A pass
+// whose plan has a follow-up is therefore not the end of a one-shot sync.
+type planFollowUp struct {
+	// Renames are the actions that put an item at a new path: moves,
+	// baseline re-keys and conflict copies. A move's outcome publishes the
+	// item's new path and keeps the content facts the baseline had, and
+	// SQLite reconciles what lies below a moved folder against the paths the
+	// move changes, so content work on a moved item (a local edit, an edit
+	// OneDrive made with the move) is planned only by the next pass. A
+	// conflict copy is new local content the plan never saw: the next pass
+	// uploads it.
+	Renames int
+	// Deferred are relocations composition held back to a later pass,
+	// including an item parked at a temporary name to break a swap.
+	Deferred int
+	// Dropped are actions removed until the next pass: a create onto a path
+	// a composed item still holds, work below a keep-both path, and actions
+	// caught in a dependency cycle.
+	Dropped int
+}
+
+// pending reports whether the plan leaves work for the next pass.
+func (f planFollowUp) pending() bool {
+	return f.Renames+f.Deferred+f.Dropped > 0
 }
 
 // actionOutcome is the result of executing a single action. Self-contained —

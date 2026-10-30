@@ -80,6 +80,10 @@ type Engine struct {
 	// serializeWorkers runs one worker instead of the pool, so with a
 	// dispatch order execution is deterministic. Test-only.
 	serializeWorkers bool
+	// oneShotPassLimit, when positive, lowers the passes one RunOnce makes
+	// below oneShotMaxPasses. Test-only: a test that inspects what a single
+	// pass committed sets it to 1.
+	oneShotPassLimit int
 
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate

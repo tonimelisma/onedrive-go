@@ -2,6 +2,7 @@ package sync
 
 import (
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -30,6 +31,30 @@ type watchLoopState struct {
 	// lastBootstrapWait is the in-flight/running/held counts last logged
 	// while bootstrap waited; an unchanged tick goes to Debug.
 	lastBootstrapWait string
+
+	// followUp tracks the work the installed plan left for the next pass
+	// (planFollowUp). Watch replans on observed changes, and nothing is
+	// observed when that work follows from the engine's own commits (a
+	// re-key, a move made on OneDrive), so the loop replans by itself once
+	// the plan's actions settle (R-2.1.7).
+	followUp watchFollowUpState
+}
+
+// watchFollowUpState is the loop's record of a plan's follow-up work.
+type watchFollowUpState struct {
+	// pending: the installed plan left work for the next pass and its
+	// actions have not all settled yet.
+	pending bool
+	// succeededAt and failedAt are the runtime's result counters when the
+	// plan was installed. A plan that made no progress, or failed actions
+	// (they wait in retry backoff), gets no follow-up replan.
+	succeededAt int
+	failedAt    int
+	// queued: the loop marked the dirty buffer for a follow-up, so the next
+	// replan is one; streak counts consecutive follow-up replans, bounded
+	// like the passes of a one-shot sync.
+	queued bool
+	streak int
 }
 
 type watchTimerState struct {
@@ -437,4 +462,44 @@ func (rt *watchRuntime) markReplanNeeded() {
 // hasActiveRefresh satisfies watchInspector.
 func (rt *watchRuntime) hasActiveRefresh() bool {
 	return rt.resources.refreshActive
+}
+
+// noteInstalledPlan records whether a newly installed plan leaves work for
+// the next pass. A replan the loop queued itself extends the follow-up
+// streak; any other replan starts a new one.
+func (rt *watchRuntime) noteInstalledPlan(plan *actionPlan) {
+	f := &rt.loop.followUp
+	if f.queued {
+		f.streak++
+	} else {
+		f.streak = 0
+	}
+	f.queued = false
+	f.pending = plan != nil && len(plan.Actions) > 0 && plan.FollowUp.pending()
+	f.succeededAt = rt.results.succeeded
+	f.failedAt = rt.results.failed
+}
+
+// scheduleFollowUpIfSettled replans once the installed plan's actions have
+// all settled, when that plan left work for the next pass, made progress and
+// failed nothing.
+func (rt *watchRuntime) scheduleFollowUpIfSettled() {
+	f := &rt.loop.followUp
+	if !f.pending || len(rt.currentOutbox()) > 0 || rt.sched.runningCount > 0 || rt.resources.dirtyBuf == nil {
+		return
+	}
+	f.pending = false
+	if rt.results.succeeded == f.succeededAt || rt.results.failed != f.failedAt {
+		return
+	}
+	if f.streak+1 >= oneShotMaxPasses {
+		rt.deps.logger.Debug("follow-up replan limit reached; the next observed change replans the remaining work",
+			slog.Int("follow_up_replans", f.streak),
+		)
+		return
+	}
+
+	rt.deps.logger.Debug("replanning for work the previous plan left for the next pass")
+	f.queued = true
+	rt.resources.dirtyBuf.MarkDirty()
 }

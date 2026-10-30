@@ -7,7 +7,16 @@ import (
 	"time"
 )
 
-// RunOnce executes a single sync pass:
+// oneShotMaxPasses bounds the passes one RunOnce makes, and the follow-up
+// replans watch schedules by itself in a row. A plan that moves items leaves
+// work for the pass after it (planFollowUp), and that work normally finishes
+// in the second pass: an edit inside a renamed folder is uploaded, a parked
+// swap item reaches its name. The bound only stops a planner that never
+// settles from looping; whatever is left is the next sync's work.
+const oneShotMaxPasses = 4
+
+// RunOnce executes a one-shot sync: a pass, and further passes while the
+// previous one left work for the next (R-2.1.7). Each pass:
 //  1. Load baseline
 //  2. Refresh remote truth
 //  3. Refresh local truth
@@ -16,6 +25,9 @@ import (
 //  6. Return early if dry-run
 //  7. Build DepGraph, start worker pool
 //  8. Wait for completion, commit delta token
+//
+// A dry run is always one pass: it executes nothing, so a second pass would
+// see the same truth. The returned report covers every pass.
 func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*Report, error) {
 	start := e.nowFunc()
 	runner := newOneShotRunner(e)
@@ -40,17 +52,113 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 		return e.runOnceDryRun(ctx, runner, bl, mode, opts, start)
 	}
 
+	var total *Report
+	executed := false
+	for pass := 1; ; pass++ {
+		result, err := e.runOneShotLivePass(ctx, runner, bl, mode, opts)
+		total = total.withPass(result.report)
+		if total != nil {
+			total.Duration = e.since(start)
+		}
+		if err != nil {
+			return total, err
+		}
+		executed = executed || result.executed
+
+		reason, again := e.oneShotFollowUp(ctx, pass, result)
+		if !again {
+			break
+		}
+		e.logger.Debug("running a follow-up sync pass for work the previous pass left",
+			slog.Int("pass", pass+1),
+			slog.String("reason", reason),
+		)
+
+		// A follow-up pass is an ordinary pass over freshly observed truth.
+		// It decides the full refresh again (the first pass's request is
+		// done) and never releases held deletes: those were confirmed by
+		// the first pass, and any held since are judged by the hold again.
+		runner = newOneShotRunner(e)
+		if bl, err = e.baseline.Load(ctx); err != nil {
+			return total, fmt.Errorf("sync: loading baseline for follow-up pass: %w", err)
+		}
+		if opts.FullReconcile, err = e.shouldRunFullRemoteRefresh(ctx, false); err != nil {
+			return total, err
+		}
+		opts.ConfirmDeletes = false
+		e.logger.Info("sync pass starting",
+			slog.String("mode", mode.String()),
+			slog.Bool("dry_run", false),
+		)
+	}
+
+	if executed {
+		runner.postSyncHousekeeping(ctx)
+	}
+
+	return total, nil
+}
+
+// oneShotPass is what one live pass of RunOnce did.
+type oneShotPass struct {
+	report   *Report
+	followUp planFollowUp
+	executed bool
+}
+
+// oneShotFollowUp decides whether RunOnce runs another pass after this one,
+// and says why. Only the planner knows that work was left on purpose; the
+// engine adds the conditions under which another pass cannot finish it: a
+// pass that made no progress, failed actions (they wait in retry backoff, and
+// the summary already says they will be retried), a canceled run, or the pass
+// bound.
+func (e *Engine) oneShotFollowUp(ctx context.Context, pass int, result oneShotPass) (string, bool) {
+	f := result.followUp
+	switch {
+	case !f.pending() || result.report == nil:
+		return "", false
+	case result.report.Succeeded == 0 || result.report.Failed > 0 || ctx.Err() != nil:
+		return "", false
+	case pass >= e.oneShotPasses():
+		e.logger.Debug("sync pass limit reached; the next sync finishes the remaining work",
+			slog.Int("passes", pass),
+		)
+		return "", false
+	}
+
+	return fmt.Sprintf("renames=%d deferred=%d dropped=%d", f.Renames, f.Deferred, f.Dropped), true
+}
+
+// oneShotPasses is the most passes one RunOnce makes.
+func (e *Engine) oneShotPasses() int {
+	if e.oneShotPassLimit > 0 {
+		return min(e.oneShotPassLimit, oneShotMaxPasses)
+	}
+
+	return oneShotMaxPasses
+}
+
+// runOneShotLivePass observes both sides, plans and executes one pass.
+func (e *Engine) runOneShotLivePass(
+	ctx context.Context,
+	runner *oneShotRunner,
+	bl *Baseline,
+	mode SyncMode,
+	opts RunOptions,
+) (oneShotPass, error) {
+	passStart := e.nowFunc()
+
 	runtime, err := runner.runLiveCurrentPlan(ctx, bl, mode, opts)
 	if err != nil {
-		return nil, err
+		return oneShotPass{}, err
 	}
 	if err := e.publishShortcutChildWorkSnapshot(ctx, runtime.ChildPublication); err != nil {
-		return nil, err
+		return oneShotPass{}, err
 	}
 
 	// SQLite-derived plan approved — commit the deferred observation progress now.
 	if _, err := runner.commitPendingRemoteObservation(ctx, runtime.PendingRemoteObservation); err != nil {
-		return nil, err
+		return oneShotPass{}, err
 	}
 
 	plan := runtime.Plan
@@ -58,29 +166,26 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 
 	if len(plan.Actions) == 0 {
 		if report.DeferredByMode.Total() > 0 || report.HeldLocalDeletes+report.HeldRemoteDeletes > 0 {
-			report.Duration = e.since(start)
+			report.Duration = e.since(passStart)
 			e.logRunOnceCompletion(report)
-			return report, nil
+			return oneShotPass{report: report}, nil
 		}
-		return e.completeRunOnceWithoutChanges(start, mode, opts), nil
+		return oneShotPass{report: e.completeRunOnceWithoutChanges(passStart, mode, opts)}, nil
 	}
 
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
 	executeStart := e.nowFunc()
 	if err := runner.executePreparedPlan(ctx, runtime, bl); err != nil {
-		report.Duration = e.since(start)
+		report.Duration = e.since(passStart)
 		e.collector().RecordExecute(len(plan.Actions), report.Succeeded, report.Failed, e.since(executeStart))
-		return report, err
+		return oneShotPass{report: report}, err
 	}
 	e.collector().RecordExecute(len(plan.Actions), report.Succeeded, report.Failed, e.since(executeStart))
 
-	report.Duration = e.since(start)
-
+	report.Duration = e.since(passStart)
 	e.logRunOnceCompletion(report)
 
-	runner.postSyncHousekeeping(ctx)
-
-	return report, nil
+	return oneShotPass{report: report, followUp: plan.FollowUp, executed: true}, nil
 }
 
 func (e *Engine) runOnceDryRun(

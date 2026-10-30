@@ -566,8 +566,12 @@ func (rt *watchRuntime) handleWatchActionCompletion(
 		rt.completeOutboxAsShutdown(ready)
 		return err
 	}
+	if err := rt.appendReadyFrontier(ready); err != nil {
+		return err
+	}
+	rt.scheduleFollowUpIfSettled()
 
-	return rt.appendReadyFrontier(ready)
+	return nil
 }
 
 func (rt *watchRuntime) handleWatchCompletionsClosed(
