@@ -107,7 +107,7 @@ func (tm *TransferManager) loadUsableSessionRecord(ctx context.Context, up *pers
 		// and the upload proceeds with a fresh session.
 		tm.logger.Debug("failed to load upload session",
 			slog.String("path", up.localPath),
-			slog.String("error", loadErr.Error()),
+			slog.Any("error", loadErr),
 		)
 	}
 
@@ -195,7 +195,7 @@ func (tm *TransferManager) persistedSessionUploadOnce(ctx context.Context, up *p
 	}); saveErr != nil {
 		tm.logger.Warn("failed to save upload session — resume after crash will not work for this file",
 			slog.String("path", up.localPath),
-			slog.String("error", saveErr.Error()),
+			slog.Any("error", saveErr),
 		)
 	}
 
@@ -373,7 +373,7 @@ func (tm *TransferManager) removePlaceholder(ctx context.Context, driveID drivei
 	if err := remover.DeleteItemIfMatch(removeCtx, driveID, itemID, createdETag); err != nil {
 		tm.logger.Debug("couldn't remove the empty file a failed upload created",
 			slog.String("item_id", itemID),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	}
 }
@@ -392,7 +392,7 @@ func (tm *TransferManager) dropSession(ctx context.Context, driveID, key string,
 	if err := canceler.CancelUploadSession(cancelCtx, &graph.UploadSession{UploadURL: uploadURL}); err != nil {
 		// Debug only: the session expires on its own; the user cannot act.
 		tm.logger.Debug("couldn't cancel a dropped upload session",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	}
 }

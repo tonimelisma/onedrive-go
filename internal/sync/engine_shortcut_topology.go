@@ -142,7 +142,7 @@ func (e *Engine) confirmShortcutOmission(ctx context.Context, topology *shortcut
 		return
 	case err != nil:
 		e.logger.Debug("could not confirm an omitted shortcut is gone; keeping its files",
-			slog.String("path", root.RelativeLocalPath), slog.String("error", err.Error()))
+			slog.String("path", root.RelativeLocalPath), slog.Any("error", err))
 		topology.Unavailable = append(topology.Unavailable, shortcutBindingUnavailable{
 			BindingItemID:     root.BindingItemID,
 			RelativeLocalPath: root.RelativeLocalPath,

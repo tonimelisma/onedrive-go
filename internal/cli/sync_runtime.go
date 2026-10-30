@@ -206,7 +206,7 @@ func runSyncDaemonWithFactory(
 				}
 
 				logger.Warn("debug event sink close failed",
-					slog.String("error", closeErr.Error()),
+					slog.Any("error", closeErr),
 				)
 			}
 		}()

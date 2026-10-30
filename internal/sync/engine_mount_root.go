@@ -88,7 +88,7 @@ func (flow *engineFlow) observeMountRootRemote(
 		fallbackAttrs := []any{
 			slog.String("drive_id", eng.driveID.String()),
 			slog.String("remote_root_item_id", eng.remoteRootItemID),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		}
 		if eng.mountRootDeltaFallbackReported.CompareAndSwap(false, true) {
 			eng.logger.Info("Shared folder change tracking is unavailable; listing the whole folder on each check",
@@ -238,7 +238,7 @@ func (e *Engine) confirmEnumerationOrphans(
 		case err != nil:
 			undecided = true
 			e.logger.Debug("could not confirm an item missing from a listing is gone; keeping it",
-				slog.String("path", orphan.Path), slog.String("error", err.Error()))
+				slog.String("path", orphan.Path), slog.Any("error", err))
 		case live == nil:
 			continue
 		case live.IsDeleted:
@@ -328,7 +328,7 @@ func (rt *watchRuntime) watchMountRootRemote(
 			}
 			continue
 		}
-		outage.recovered(rt.deps.logger, "Checking the shared folder for changes works again")
+		outage.recovered(ctx, rt.deps.logger, "Checking the shared folder for changes works again")
 		if err := rt.handleMountRootObservationResult(ctx, batches, interval, bo, &observationBatch); err != nil {
 			if mountRootWatchStopped(ctx, err) {
 				return nil

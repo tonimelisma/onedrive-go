@@ -492,7 +492,7 @@ func (flow *engineFlow) loadCurrentInputs(
 	defer func() {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
 			flow.deps.logger.Debug("current action planner read transaction rollback failed",
-				slog.String("error", rollbackErr.Error()),
+				slog.Any("error", rollbackErr),
 			)
 		}
 	}()

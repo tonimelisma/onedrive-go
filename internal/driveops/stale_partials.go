@@ -53,7 +53,7 @@ func CleanStalePartialsWithOptions(
 			// Warn here repeated the same condition on every run.
 			logger.Debug("couldn't check path for leftover download files",
 				slog.String("path", path),
-				slog.String("error", walkErr.Error()),
+				slog.Any("error", walkErr),
 			)
 
 			return nil
@@ -77,7 +77,7 @@ func CleanStalePartialsWithOptions(
 		if relErr != nil {
 			logger.Debug("failed to relativize partial file for cleanup",
 				slog.String("path", path),
-				slog.String("error", relErr.Error()),
+				slog.Any("error", relErr),
 			)
 
 			return nil
@@ -89,7 +89,7 @@ func CleanStalePartialsWithOptions(
 		if removeErr := tree.Remove(relPath); removeErr != nil && !os.IsNotExist(removeErr) {
 			logger.Warn("couldn't remove a leftover download file",
 				slog.String("path", relPath),
-				slog.String("error", removeErr.Error()),
+				slog.Any("error", removeErr),
 			)
 
 			return nil
@@ -148,7 +148,7 @@ func shouldSkipPartialCleanupDir(
 	if err != nil {
 		logger.Debug("failed to relativize directory for partial cleanup",
 			slog.String("path", dirPath),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 
 		return false

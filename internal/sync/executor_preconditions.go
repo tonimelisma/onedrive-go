@@ -628,7 +628,7 @@ func (e *executor) preserveReplacedDownloadTarget(action *Action, target string,
 	if err := e.syncTree.PreserveRegularFile(target, verify, placement.ItemPath); err != nil {
 		if abandonErr := placement.Abandon(); abandonErr != nil {
 			e.logger.Debug("could not remove unused trash entry",
-				slog.String("path", action.Path), slog.String("error", abandonErr.Error()))
+				slog.String("path", action.Path), slog.Any("error", abandonErr))
 		}
 		if errors.Is(err, synctree.ErrDetachRaced) {
 			return stalePreconditionError("download target %s changed while it was checked", action.Path)

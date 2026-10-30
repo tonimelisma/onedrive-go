@@ -130,7 +130,7 @@ func startControlSocketServer(
 		if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			logger.Warn("The control channel stopped; status, pause and resume can't reach this sync until it restarts",
 				slog.String("path", path),
-				slog.String("error", serveErr.Error()),
+				slog.Any("error", serveErr),
 			)
 		}
 	}()
@@ -144,7 +144,7 @@ func startControlSocketServer(
 			// replaced by the next sync, so this is not worth a warning.
 			logger.Debug("close control socket after context cancellation",
 				slog.String("path", path),
-				slog.String("error", closeErr.Error()),
+				slog.Any("error", closeErr),
 			)
 		}
 	}()
@@ -266,7 +266,7 @@ func (s *controlSocketServer) Close(ctx context.Context) error {
 	if dirErr := removeEmptyRuntimeSocketDir(s.path); dirErr != nil && s.logger != nil {
 		s.logger.Debug("remove empty control socket runtime directory",
 			slog.String("path", filepath.Dir(s.path)),
-			slog.String("error", dirErr.Error()),
+			slog.Any("error", dirErr),
 		)
 	}
 

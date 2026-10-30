@@ -260,7 +260,7 @@ func closeEngineSyncStoreOnStartupFailure(
 		}
 		if closeErr := store.Close(context.WithoutCancel(ctx)); closeErr != nil && logger != nil {
 			logger.Debug("could not close sync store after engine startup failure",
-				slog.String("error", closeErr.Error()),
+				slog.Any("error", closeErr),
 			)
 		}
 	}
@@ -361,7 +361,7 @@ func (e *Engine) commitLocalSnapshot(ctx context.Context, rows []localStateRow, 
 		bind.Token = token
 	case errors.Is(err, synctree.ErrRootMarkUnsupported):
 		e.logger.Debug("sync folder cannot carry a bind token; binding on inode and filesystem id",
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 	default:
 		return fmt.Errorf("sync: binding sync folder: %w", err)
 	}
@@ -405,7 +405,7 @@ func (e *Engine) Close(ctx context.Context) error {
 	if e.sessionStore != nil {
 		if n, err := e.sessionStore.CleanStale(driveops.StaleSessionAge); err != nil {
 			e.logger.Debug("failed to clean stale sessions on close",
-				slog.String("error", err.Error()),
+				slog.Any("error", err),
 			)
 		} else if n > 0 {
 			e.logger.Info("cleaned stale upload sessions on close",
@@ -418,7 +418,7 @@ func (e *Engine) Close(ctx context.Context) error {
 	// owner never starts against a store this engine is still writing.
 	defer func() {
 		if releaseErr := e.rootLock.release(); releaseErr != nil {
-			e.logger.Debug("release sync folder lock", slog.String("error", releaseErr.Error()))
+			e.logger.Debug("release sync folder lock", slog.Any("error", releaseErr))
 		}
 	}()
 

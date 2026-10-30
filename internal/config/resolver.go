@@ -182,7 +182,7 @@ func ClearExpiredPauses(cfgPath string, cfg *Config, now time.Time, logger *slog
 			// still says paused, so name the drive and the file to fix.
 			logger.Warn("could not remove an expired pause from "+cfgPath+"; the drive syncs again, "+
 				"but the file still lists it as paused",
-				slog.String("drive", cid.String()), slog.String("error", err.Error()))
+				slog.String("drive", cid.String()), slog.Any("error", err))
 		}
 
 		d.Paused = nil

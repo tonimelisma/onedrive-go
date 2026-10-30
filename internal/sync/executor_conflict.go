@@ -151,7 +151,7 @@ func (e *executor) reserveUniqueConflictCopyPath(absPath string) (string, string
 func (e *executor) releaseConflictCopyReservation(rel string) {
 	if err := e.syncTree.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
 		e.logger.Warn("Could not remove the empty placeholder file "+rel+"; you can delete it",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	}
 }

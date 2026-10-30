@@ -26,7 +26,7 @@ func openSyncNotifier(getenv func(string) string, logger *slog.Logger) *sdnotify
 	notifier, err := sdnotify.Open(getenv, os.Getpid())
 	if err != nil {
 		logger.Warn("Couldn't connect to systemd's notify socket; the service manager won't see readiness or status",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 		return nil
 	}
@@ -103,7 +103,7 @@ func (s *syncNotifier) runWatchdog(ctx context.Context, ticks <-chan time.Time) 
 			return
 		case <-ticks:
 			if err := s.notifier.Watchdog(); err != nil {
-				s.logger.Debug("systemd watchdog keepalive failed", slog.String("error", err.Error()))
+				s.logger.Debug("systemd watchdog keepalive failed", slog.Any("error", err))
 			}
 		}
 	}
@@ -111,7 +111,7 @@ func (s *syncNotifier) runWatchdog(ctx context.Context, ticks <-chan time.Time) 
 
 func (s *syncNotifier) report(err error) {
 	if err != nil {
-		s.logger.Warn("Couldn't send a status update to systemd", slog.String("error", err.Error()))
+		s.logger.Warn("Couldn't send a status update to systemd", slog.Any("error", err))
 	}
 }
 

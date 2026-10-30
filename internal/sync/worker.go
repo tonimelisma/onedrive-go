@@ -192,7 +192,7 @@ func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 		// Debug: the error is returned as this action's failure and
 		// reported once by the engine and console.
 		wp.logger.Debug("worker: baseline load failed",
-			slog.String("error", loadErr.Error()),
+			slog.Any("error", loadErr),
 		)
 		wp.sendResult(ctx, ta, nil, loadErr)
 		return
@@ -216,7 +216,7 @@ func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 				// cancellation is not a failure the user needs to see).
 				wp.logger.Debug("worker: commit outcome failed",
 					slog.Int64("id", ta.ID),
-					slog.String("error", commitErr.Error()),
+					slog.Any("error", commitErr),
 				)
 				wp.sendResult(ctx, ta, nil, commitErr)
 				return

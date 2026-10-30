@@ -197,7 +197,7 @@ func (c *itemConverter) enrichSparseParentRefs(ctx context.Context, items []grap
 				c.Logger.Debug("sparse remote item parent enrich failed",
 					slog.String("item_id", item.ID),
 					slog.String("drive_id", itemDriveID.String()),
-					slog.String("error", err.Error()),
+					slog.Any("error", err),
 				)
 			}
 			if c.sparseEnrichFailed == nil {

@@ -200,7 +200,7 @@ func (tm *TransferManager) uploadedItemOrError(localPath string, item *graph.Ite
 	if errors.As(err, &mtimeErr) && mtimeErr.Item != nil {
 		tm.logger.Warn("uploaded the file, but OneDrive didn't accept its modified time",
 			slog.String("path", localPath),
-			slog.String("error", mtimeErr.Err.Error()),
+			slog.Any("error", mtimeErr.Err),
 		)
 
 		return mtimeErr.Item, nil
@@ -454,7 +454,7 @@ func (tm *TransferManager) deleteSession(driveID, localPath string) {
 	if err := tm.sessionStore.Delete(driveID, localPath); err != nil {
 		tm.logger.Warn("failed to delete session file",
 			slog.String("path", localPath),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	}
 }

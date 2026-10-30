@@ -185,7 +185,7 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 			slog.String("method", req.Method),
 			slog.String("url", logTarget),
 			slog.Int("attempts", attempt+1),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 
 		return false, err
@@ -202,7 +202,7 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 		slog.Int("attempt", attempt+1),
 		slog.Int("max_attempts", rt.Policy.MaxAttempts),
 		slog.Duration("retry_in", backoff.Round(retryLogPrecision)),
-		slog.String("error", err.Error()),
+		slog.Any("error", err),
 	)
 
 	// A single blip retries silently (R-6.6.8). Once a second consecutive
@@ -214,7 +214,7 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 			slog.String("retry_in", HumanDuration(backoff)),
 			slog.Int("attempt", attempt+1),
 			slog.Int("max_attempts", rt.Policy.MaxAttempts),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	}
 
@@ -273,7 +273,7 @@ func (rt *RetryTransport) handleResponse(
 			slog.String("method", req.Method),
 			slog.String("url", logTarget),
 			slog.Int("status", resp.StatusCode),
-			slog.String("error", drainErr.Error()),
+			slog.Any("error", drainErr),
 		)
 	}
 

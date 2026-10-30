@@ -79,3 +79,34 @@ func writeOutputBoundaryFixture(t *testing.T, repoRoot string, rel string, conte
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 }
+
+// Regression: flattened with err.Error(), an "error" attribute was shown on
+// the default console as its whole wrap chain (the remote observer's outage
+// warning printed the delta URL with its cursor). Logged as an error value it
+// renders as a plain reason.
+func TestFindOutputBoundaryViolationsRejectsFlattenedErrorAttrs(t *testing.T) {
+	repoRoot := t.TempDir()
+	writeOutputBoundaryFixture(t, repoRoot, "internal/sync/bad.go", `package sync
+
+import (
+	"errors"
+	"log/slog"
+)
+
+func attrs(logger *slog.Logger, err error, storedMessage string) {
+	logger.Warn("flattened", slog.String("error", err.Error()))
+	logger.Warn("value", slog.Any("error", err))
+	logger.Warn("other key", slog.String("reason", err.Error()))
+	logger.Warn("stored message", slog.String("error", storedMessage))
+	_ = errors.New("x")
+}
+`)
+
+	violations, err := findOutputBoundaryViolations(repoRoot)
+	require.NoError(t, err)
+
+	require.Len(t, violations, 1)
+	assert.Equal(t, "internal/sync/bad.go", violations[0].Path)
+	assert.Equal(t, 9, violations[0].Line)
+	assert.Contains(t, violations[0].Message, `slog.Any("error", err)`)
+}

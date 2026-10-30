@@ -83,7 +83,7 @@ func applySourceMtime(
 
 	if _, err := session.Meta.UpdateFileSystemInfo(ctx, session.DriveID, copyID, source.ModifiedAt); err != nil {
 		cc.Logger.Warn("the copy keeps the time it was made, not the source's modification time",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	}
 }

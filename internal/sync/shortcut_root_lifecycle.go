@@ -58,7 +58,7 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 		if !step.changed {
 			e.logger.Debug("shortcut root release cleanup still blocked",
 				slog.String("path", records[i].RelativeLocalPath),
-				slog.String("error", step.releaseCleanupErr.Error()),
+				slog.Any("error", step.releaseCleanupErr),
 			)
 			continue
 		}
@@ -80,7 +80,7 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 		e.logger.Warn("Could not remove the local copy of removed shared folder "+
 			newlyBlocked[i].relativeLocalPath+
 			"; move or delete what is in the way and the next sync finishes the cleanup",
-			slog.String("error", newlyBlocked[i].err.Error()),
+			slog.Any("error", newlyBlocked[i].err),
 		)
 	}
 	return true, nil

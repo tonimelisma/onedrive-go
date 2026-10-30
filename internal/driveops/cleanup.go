@@ -35,14 +35,14 @@ func CleanTransferArtifactsWithOptions(
 	opts TransferArtifactCleanupOptions,
 ) {
 	if n, err := CleanStalePartialsWithOptions(tree, logger, StalePartialCleanupOptions(opts)); err != nil {
-		logger.Warn("partial file cleanup failed", slog.String("error", err.Error()))
+		logger.Warn("partial file cleanup failed", slog.Any("error", err))
 	} else if n > 0 {
 		logger.Info("cleaned stale partial files", slog.Int("count", n))
 	}
 
 	if sessionStore != nil {
 		if n, err := sessionStore.CleanStale(StaleSessionAge); err != nil {
-			logger.Warn("stale session cleanup failed", slog.String("error", err.Error()))
+			logger.Warn("stale session cleanup failed", slog.Any("error", err))
 		} else if n > 0 {
 			logger.Info("cleaned stale upload sessions", slog.Int("count", n))
 		}

@@ -206,7 +206,7 @@ func (e *executor) DeleteLocalFile(action *Action, local string) actionOutcome {
 			// and the engine replans; nothing is asked of the user.
 			e.logger.Debug("local delete: file changed, keeping it and requiring replan",
 				slog.String("path", action.Path),
-				slog.String("error", err.Error()),
+				slog.Any("error", err),
 			)
 			if !errors.Is(err, errActionPreconditionChanged) {
 				err = fmt.Errorf("%w: %w", errActionPreconditionChanged, err)
@@ -298,7 +298,7 @@ func (e *executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFun
 	if err := e.syncTree.DetachRegularFile(rel, verify, placement.ItemPath); err != nil {
 		if abandonErr := placement.Abandon(); abandonErr != nil {
 			e.logger.Debug("could not remove unused trash entry",
-				slog.String("path", rel), slog.String("error", abandonErr.Error()))
+				slog.String("path", rel), slog.Any("error", abandonErr))
 		}
 		return fmt.Errorf("moving to the trash: %w", err)
 	}
@@ -316,7 +316,7 @@ func (e *executor) commitTrashPlacement(rel string, placement *localtrash.Placem
 		e.logger.Warn("could not finish recording a trashed file; it stays listed as interrupted and can be restored",
 			slog.String("path", rel),
 			slog.String("trash_path", placement.ItemPath),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	}
 }
@@ -402,7 +402,7 @@ func (e *executor) removeDisposableChildren(relPath string, entries []os.DirEntr
 			rmErr = normalizeSyncTreePathError(rmErr)
 			e.logger.Warn("Could not remove junk file from a deleted folder",
 				slog.String("path", entryPath),
-				slog.String("error", rmErr.Error()),
+				slog.Any("error", rmErr),
 			)
 			errs = append(errs, fmt.Errorf("removing %s: %w", entryPath, rmErr))
 		}

@@ -233,7 +233,7 @@ func (s *socketIOWakeSource) runIteration(
 		// Debug: closing an already broken connection; nothing to do.
 		s.logger.Debug("socket.io close failed",
 			slog.String("drive_id", s.driveID.String()),
-			slog.String("error", closeErr.Error()),
+			slog.Any("error", closeErr),
 		)
 	}
 
@@ -322,7 +322,7 @@ func (s *socketIOWakeSource) logRetry(message string, err error, delay time.Dura
 	// The first retry of an outage is one Info line; repeats are Debug.
 	fields := []any{
 		slog.String("drive_id", s.driveID.String()),
-		slog.String("error", err.Error()),
+		slog.Any("error", err),
 		slog.Duration("retry_in", delay),
 	}
 	if s.retryReported {

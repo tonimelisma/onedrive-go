@@ -21,7 +21,7 @@ func (c *Client) buildError(method, path string, resp *http.Response) *GraphErro
 		c.logger.Debug("failed to close error response body",
 			slog.String("method", method),
 			slog.String("path", path),
-			slog.String("error", closeErr.Error()),
+			slog.Any("error", closeErr),
 		)
 	}
 
@@ -98,7 +98,7 @@ func (c *Client) doPreAuth(
 	if closeErr := resp.Body.Close(); closeErr != nil {
 		c.logger.Debug("failed to close pre-auth error response body",
 			slog.String("desc", desc),
-			slog.String("error", closeErr.Error()),
+			slog.Any("error", closeErr),
 		)
 	}
 

@@ -123,7 +123,7 @@ func acquireSyncRootLock(
 				"this folder at the same time; make sure only one sync runs here",
 				slog.String("path", root),
 				slog.String("lock", path),
-				slog.String("error", lockErr.Error()),
+				slog.Any("error", lockErr),
 			)
 		}
 		return &syncRootLock{file: file}, nil
@@ -143,7 +143,7 @@ func releaseSyncRootLockOnStartupFailure(logger *slog.Logger, lock *syncRootLock
 		return
 	}
 	if err := lock.release(); err != nil && logger != nil {
-		logger.Debug("release sync folder lock after startup failure", slog.String("error", err.Error()))
+		logger.Debug("release sync folder lock after startup failure", slog.Any("error", err))
 	}
 }
 

@@ -47,7 +47,7 @@ func (flow *engineFlow) logSuppressedShutdownCompletionError(
 	fields := []any{
 		slog.String("path", completion.Path),
 		slog.String("action_type", completion.ActionType.String()),
-		slog.String("error", err.Error()),
+		slog.Any("error", err),
 	}
 
 	// Cancellation is what a clean Ctrl-C does to in-flight bookkeeping, and

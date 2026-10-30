@@ -507,7 +507,7 @@ func (c *syncConsole) displayPath(p string) string {
 
 func (c *syncConsole) linePrefix() string {
 	if c.stamp {
-		return "[" + c.now().Format("15:04:05") + "] "
+		return "[" + c.now().Format(consoleClockFormat) + "] "
 	}
 
 	return ""

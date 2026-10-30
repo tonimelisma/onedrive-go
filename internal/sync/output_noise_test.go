@@ -119,14 +119,14 @@ func TestPollOutageLog_WarnsOncePerOutage(t *testing.T) {
 	for range 5 {
 		outage.failed(logger, "Can't check OneDrive for changes; retrying", errors.New("dial tcp: no route"), 0)
 	}
-	outage.recovered(logger, "Checking OneDrive for changes works again")
-	outage.recovered(logger, "Checking OneDrive for changes works again")
+	outage.recovered(t.Context(), logger, "Checking OneDrive for changes works again")
+	outage.recovered(t.Context(), logger, "Checking OneDrive for changes works again")
 	outage.failed(logger, "Can't check OneDrive for changes; retrying", errors.New("dial tcp: no route"), 0)
 
 	output := logs.String()
 	assert.Equal(t, 2, countLevel(output, "WARN"), "one warning per outage, not per attempt")
 	assert.Equal(t, 4, countLevel(output, "DEBUG"), "repeats inside one outage stay at debug")
-	assert.Equal(t, 1, countLevel(output, "INFO"), "recovery is reported once, only after an outage")
+	assert.Equal(t, 1, countLevel(output, "INFO+2"), "recovery is reported once, at NOTICE, only after an outage")
 }
 
 // Regression: every watch safety scan re-reports every persistent skipped

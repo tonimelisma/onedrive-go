@@ -1,6 +1,6 @@
 # CLI
 
-GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go, internal/sdnotify/sdnotify.go
+GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go, internal/loglevel/loglevel.go, internal/sdnotify/sdnotify.go
 
 Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.33 [verified], R-6.8.16 [verified]
 
@@ -42,7 +42,7 @@ are inserted, updated, pruned, and validated.
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
 | Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestDryRunFlagSurfaceOnlySyncCommand`, `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_DryRunOpensLogFileAndWarnsOnFailure`, `TestRunSyncCommand_DryRunFailsWhenControlSocketPathCannotBeDerived`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_PassesMissingSyncDirToRunOnce`, `TestRunSyncCommand_DryRunPassesMissingSyncDirWithoutCreatingIt`, `TestRunSyncCommand_PassesPausedInvalidDriveToRunnerAsPaused`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestSyncConsole_MultiDriveNamesEachDrive` |
-| `sync` names every finished file, summarizes in human units, prints errors once, and renders console logs as human or journal text. | `TestSyncConsole_NamesEveryCompletedFile`, `TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose`, `TestSyncConsole_SummaryInHumanUnits`, `TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError`, `TestSyncConsole_WatchLinesAreTimestampedAndAnnounceStartAndStop`, `TestConsoleLogHandler_JournalLinesCarryPriorityAndNoTimestamp`, `TestCommandLogger_PerfSummaryInLogFileNotDefaultConsole`, `TestCommandLogger_SyncSchemaFieldsOnlyInLogFileAndVerboseConsole`, `TestMainWithWriters_SkipConfigCommandLogsPerfSummaryToLogFile`, `TestMainWithWriters_BootstrapRecordsFollowTheCommandLogger`, `TestCommandErrorText_NetworkFailureIsOnePlainLine`, `TestUnauthorizedAuthReason_DistinguishesExpiredLogin` |
+| `sync` names every finished file, summarizes in human units, prints errors once, and renders console logs as human or journal text. | `TestSyncConsole_NamesEveryCompletedFile`, `TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose`, `TestSyncConsole_SummaryInHumanUnits`, `TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError`, `TestSyncConsole_WatchLinesAreTimestampedAndAnnounceStartAndStop`, `TestConsoleLogHandler_JournalLinesCarryPriorityAndNoTimestamp`, `TestConsoleLogHandler_DefaultConsoleShowsOutageAndItsRecoveryPlainly`, `TestConsoleLogHandler_JournalFilesNoticeAtNoticePriority`, `TestWithConsoleTimestamps_StampsHumanLinesOnly`, `TestNotice_SitsBetweenInfoAndWarn`, `TestReplaceLevelName_PrintsNoticeInStructuredOutput`, `TestCommandLogger_PerfSummaryInLogFileNotDefaultConsole`, `TestCommandLogger_SyncSchemaFieldsOnlyInLogFileAndVerboseConsole`, `TestMainWithWriters_SkipConfigCommandLogsPerfSummaryToLogFile`, `TestMainWithWriters_BootstrapRecordsFollowTheCommandLogger`, `TestCommandErrorText_NetworkFailureIsOnePlainLine`, `TestUnauthorizedAuthReason_DistinguishesExpiredLogin` |
 | Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusMount_RendersLifecycleState`, `TestBuildChildStatusMount_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
 | Command failures map into the shared error classes, and the exit status is chosen from typed errors: 77 sign-in required, 78 invalid config, 2 usage, 130 user stop, 1 everything else. | `TestClassifyCommandError`, `TestCommandExitCode`, `TestCommandExitCode_EveryFailureClassHasAStatus`, `TestMainWithWriters_ConfigErrorExits78`, `TestMainWithWriters_SignInRequiredExits77`, `TestFormatWatchStartupError_ExitStatusFollowsSharedCause`, `TestConfigFailuresAreTaggedInvalidConfig` |
 | `sync --watch` reports READY/STATUS/RELOADING/STOPPING/WATCHDOG to systemd through `internal/sdnotify`, and nothing outside systemd. | `TestRunSyncDaemon_NotifiesSystemdOfLifecycle`, `TestRunSyncDaemon_SignInFailureSetsStatusAndExitCode`, `TestRunSyncDaemon_NoDrivesIsAConfigFailure`, `TestSyncNotifierWatchingStatus`, `TestOpenSyncNotifier_BadSocketWarnsAndContinues`, `TestNotifier_SendsProtocolMessages`, `TestOpen_AbstractSocket`, `TestOpen_WatchdogInterval`, `TestRunWatch_ReportsLifecycleTransitions` |
@@ -198,12 +198,20 @@ Console logging (R-6.6.21): with `log_format = "auto"` the console is never
 JSON. Default verbosity uses `consoleLogHandler` ("Warning: msg (k=v)"),
 `--verbose`/`--debug` use timestamped key=value, and when stderr is the
 journal (`stderrIsJournal`, `$JOURNAL_STREAM` matched against stderr's
-device:inode) each line carries a `<N>` priority prefix and no timestamp.
+device:inode) each line carries a `<N>` priority prefix and no timestamp. A
+`sync --watch` on a terminal stamps its own lines with `[HH:MM:SS]`, and
+`withConsoleTimestamps` gives the human log handler the same stamp (the log
+file and the journal keep their own timestamps), so a warning in a
+long-running watch says when it happened.
 
 The command logger is one console handler and, when `log_file` is set, one
 JSON file handler, each with its own level (R-6.6.2, R-6.6.3). The console
-level comes only from the flags: WARN by default, INFO with `--verbose`, DEBUG
-with `--debug`, ERROR with `--quiet`. The file level comes only from
+level comes only from the flags: NOTICE by default, INFO with `--verbose`,
+DEBUG with `--debug`, ERROR with `--quiet`. NOTICE (`internal/loglevel`, between
+INFO and WARN, journald priority 5, printed as `NOTICE` in the log file) is the
+all-clear after a warning, such as "Checking OneDrive for changes works again"
+(R-6.6.30): logged at INFO, a recovery never reached the default console, so a
+watched outage looked permanent. The file level comes only from
 `log_level` (INFO by default). INFO records are operational history -- the
 performance summaries (R-6.6.14, which `devtool bench` reads back from the log
 file), plan counts, runner lifecycle -- so they reach the log file always and
@@ -214,15 +222,20 @@ default verbosity `consoleLogHandler` also drops the R-6.6.13 schema
 identifiers other than `path` (`run_id`, `action_id`, `action_type`,
 `condition_key`, `failure_class`, `log_owner`, `scope_key`,
 `trial_scope_key`, `drive_id`, `http_status`), plus the diagnostic
-`supersede_streak` and `error_detail` (a raw error chain with item IDs, kept
-for the log file while the line itself carries a plain `reason`); the log file and
+`supersede_streak`, `consecutive_errors` and `error_detail` (a raw error chain
+with item IDs, kept for the log file while the line itself carries a plain
+`reason`); the log file and
 `--verbose`/`--debug` keep them, and so does the journal under
 `--verbose`/`--debug`.
-An `error` attribute logged as an error value (`slog.Any`, as multisync's
-"Stopped syncing <drive>; retrying in ..." warning does) renders at default
-verbosity as `plainErrorReason` (the network or sign-in wording, else the
-innermost cause); the log file and `--verbose`/`--debug` keep the full chain.
-Text-valued `error` attributes are shown as given.
+An `error` attribute logged as an error value renders at default verbosity as
+`plainErrorReason` (the network or sign-in wording, else the innermost cause);
+the log file and `--verbose`/`--debug` keep the full chain. Every `error`
+attribute in production code is logged that way (`slog.Any("error", err)`):
+flattened with `err.Error()` it was shown as given, so the remote observer's
+outage warning printed the whole chain, delta URL and cursor included. The
+`devtool verify` output-boundary check rejects `slog.String("error",
+x.Error())` in production code; a stored message with no error value left
+(a result's `ErrMsg`) may still be logged as text.
 
 `initializeCLIContext` attaches the configured log file before any command
 work, for every command (`attachConfiguredLogging`, a lenient best-effort read

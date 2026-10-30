@@ -195,7 +195,7 @@ func (c *Client) doRawUpload(
 		c.logger.Debug("raw upload request failed",
 			slog.String("method", method),
 			slog.String("path", path),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 
 		return nil, fmt.Errorf("graph: raw upload request failed: %w", err)
@@ -207,7 +207,7 @@ func (c *Client) doRawUpload(
 			if closeErr := resp.Body.Close(); closeErr != nil {
 				c.logger.Debug("failed to close upload error response body after read failure",
 					slog.String("path", path),
-					slog.String("error", closeErr.Error()),
+					slog.Any("error", closeErr),
 				)
 			}
 			return nil, fmt.Errorf("graph: reading upload error body: %w", readErr)
@@ -216,7 +216,7 @@ func (c *Client) doRawUpload(
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			c.logger.Debug("failed to close upload error response body",
 				slog.String("path", path),
-				slog.String("error", closeErr.Error()),
+				slog.Any("error", closeErr),
 			)
 		}
 
@@ -334,7 +334,7 @@ func (c *Client) chunkedUploadToExistingItem(
 			// Best-effort cleanup the user cannot act on; the upload error
 			// returned below is the report.
 			c.logger.Debug("failed to cancel upload session after error",
-				slog.String("error", cancelErr.Error()),
+				slog.Any("error", cancelErr),
 			)
 		}
 

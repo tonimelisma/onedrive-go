@@ -972,7 +972,7 @@ func (o *localObserver) adaptToRootFilesystem(syncRoot string) {
 	info, err := o.filesystemKind(syncRoot)
 	if err != nil {
 		o.logger.Debug("could not identify the sync folder's filesystem",
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		return
 	}
 	if !info.remote {
@@ -1031,7 +1031,7 @@ func (o *localObserver) rollbackAddedWatches(watcher fsWatcher, session *watchAd
 			// being discarded either way.
 			o.logger.Debug("watch setup rollback: failed to remove watch",
 				slog.String("path", path),
-				slog.String("error", err.Error()))
+				slog.Any("error", err))
 		}
 
 		o.watchedDirs.remove(path)

@@ -291,7 +291,7 @@ func (tm *TransferManager) publishPartial(target TargetFS, partialPath, targetPa
 		if err := target.Chtimes(partialPath, mtime, mtime); err != nil {
 			tm.logger.Warn("couldn't set the modification time of the downloaded file",
 				slog.String("path", targetPath),
-				slog.String("error", err.Error()),
+				slog.Any("error", err),
 			)
 		}
 	}
@@ -325,7 +325,7 @@ func (tm *TransferManager) publishPartial(target TargetFS, partialPath, targetPa
 		// so this is best effort there.
 		tm.logger.Debug("the folder could not be synced; the filesystem does not support it",
 			slog.String("path", targetPath),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	}
 
@@ -395,7 +395,7 @@ func (tm *TransferManager) downloadToVerifiedPartial(
 			tm.logger.Debug("download returned an error document, retrying",
 				slog.String("target", targetPath),
 				slog.Int("attempt", attempt+1),
-				slog.String("error", err.Error()),
+				slog.Any("error", err),
 			)
 
 			continue
@@ -473,7 +473,7 @@ func (tm *TransferManager) removePartial(target TargetFS, partialPath string) {
 	if err := target.Remove(partialPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		tm.logger.Warn("couldn't remove a leftover download file",
 			slog.String("path", partialPath),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 	}
 }
 
@@ -572,14 +572,14 @@ func (tm *TransferManager) downloadToPartial(
 				if closeErr := f.Close(); closeErr != nil {
 					tm.logger.Warn("failed to close partial file before fresh download",
 						slog.String("path", partialPath),
-						slog.String("error", closeErr.Error()))
+						slog.Any("error", closeErr))
 				}
 			} else {
 				return tm.resumeDownloadFromFile(ctx, driveID, itemID, rd, f, partialPath, info.Size(), opts)
 			}
 		} else if !errors.Is(openErr, os.ErrNotExist) {
 			tm.logger.Warn("cannot open partial file for resume, starting fresh",
-				slog.String("path", partialPath), slog.String("error", openErr.Error()))
+				slog.String("path", partialPath), slog.Any("error", openErr))
 		}
 	}
 
@@ -594,7 +594,7 @@ func (tm *TransferManager) removePartialIfNotCanceled(ctx context.Context, targe
 		if removeErr := target.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			tm.logger.Warn("couldn't remove a leftover download file",
 				slog.String("path", path),
-				slog.String("error", removeErr.Error()),
+				slog.Any("error", removeErr),
 			)
 		}
 	}
@@ -622,7 +622,7 @@ func (tm *TransferManager) freshDownload(
 	if err != nil {
 		if closeErr := f.Close(); closeErr != nil {
 			tm.logger.Warn("failed to close partial file after download error",
-				slog.String("path", partialPath), slog.String("error", closeErr.Error()))
+				slog.String("path", partialPath), slog.Any("error", closeErr))
 		}
 
 		// Preserve the partial on cancellation, and on a stalled transfer,
@@ -666,7 +666,7 @@ func (tm *TransferManager) resumeDownloadFromFile(
 
 	if closeErr := f.Close(); closeErr != nil {
 		tm.logger.Warn("failed to close partial file after range download",
-			slog.String("path", partialPath), slog.String("error", closeErr.Error()))
+			slog.String("path", partialPath), slog.Any("error", closeErr))
 
 		tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
 
@@ -686,7 +686,7 @@ func (tm *TransferManager) resumeDownloadFromFile(
 		// Debug only: a handled fallback. If the fresh download fails too,
 		// its error is the report.
 		tm.logger.Debug("range download refused, falling back to fresh download",
-			slog.String("path", partialPath), slog.String("error", err.Error()))
+			slog.String("path", partialPath), slog.Any("error", err))
 
 		tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
 
@@ -753,7 +753,7 @@ func (tm *TransferManager) checkDiskSpace(ctx context.Context, target TargetFS, 
 		}
 		tm.logger.Log(ctx, level, "couldn't check free disk space, downloading anyway",
 			slog.String("path", checkPath),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 
 		return nil

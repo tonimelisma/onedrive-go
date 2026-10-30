@@ -65,7 +65,7 @@ func (p *planner) PlanCurrentState(
 			p.logger.Error("planner dropped an impossible folder transfer",
 				slog.String("path", rec.Path),
 				slog.String("reconciliation", rec.ReconciliationKind),
-				slog.String("error", err.Error()),
+				slog.Any("error", err),
 			)
 			continue
 		}

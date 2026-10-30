@@ -209,7 +209,7 @@ func (c *Client) removeCreatedPlaceholder(ctx context.Context, driveID driveid.I
 	if err := c.DeleteItemIfMatch(cleanupCtx, driveID, created.ID, created.ETag); err != nil {
 		c.logger.Debug("failed to remove the empty file a failed upload created",
 			slog.String("item_id", created.ID),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	}
 }

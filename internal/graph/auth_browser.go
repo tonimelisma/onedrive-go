@@ -184,7 +184,7 @@ func shutdownCallbackServer(ctx context.Context, srv *http.Server, logger *slog.
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		// Best-effort shutdown — log but don't propagate since we're in a defer.
-		logger.Debug("callback server shutdown error", slog.String("error", err.Error()))
+		logger.Debug("callback server shutdown error", slog.Any("error", err))
 	}
 }
 
@@ -197,7 +197,7 @@ func launchBrowser(ctx context.Context, authURL string, openURL func(context.Con
 		// Debug only: the openURL callback already told the user to open
 		// the URL by hand, which is the report that matters.
 		logger.Debug("failed to open browser",
-			slog.String("error", openErr.Error()),
+			slog.Any("error", openErr),
 		)
 	}
 }
@@ -230,7 +230,7 @@ func exchangeAndSave(
 		var retrieveErr *oauth2.RetrieveError
 		if errors.As(err, &retrieveErr) {
 			if plain := aadOutcomeError(retrieveErr.ErrorCode, retrieveErr.ErrorDescription); plain != nil {
-				logger.Debug("token exchange refused", slog.String("error", err.Error()))
+				logger.Debug("token exchange refused", slog.Any("error", err))
 				return nil, plain
 			}
 		}

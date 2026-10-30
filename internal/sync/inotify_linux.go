@@ -54,7 +54,7 @@ func checkInotifyCapacity(estimatedDirs int, logger *slog.Logger) {
 	limit, err := readInotifyLimit()
 	if err != nil {
 		logger.Debug("failed to read inotify watch limit",
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 
 		return
 	}

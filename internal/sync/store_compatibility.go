@@ -88,12 +88,12 @@ func openEngineSyncStore(ctx context.Context, dbPath string, logger *slog.Logger
 		}
 		if closeErr := store.Close(ctx); closeErr != nil {
 			logger.Warn("close sync store after a failed integrity check",
-				slog.String("db_path", dbPath), slog.String("error", closeErr.Error()))
+				slog.String("db_path", dbPath), slog.Any("error", closeErr))
 		}
 		failure := integrityCheckFailure(checkErr)
 		if IsStateStoreIncompatible(failure) {
 			logger.Error("sync state DB failed its integrity check",
-				slog.String("db_path", dbPath), slog.String("error", checkErr.Error()))
+				slog.String("db_path", dbPath), slog.Any("error", checkErr))
 		}
 
 		return nil, failure
