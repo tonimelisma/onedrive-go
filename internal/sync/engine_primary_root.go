@@ -19,6 +19,7 @@ func (batch *remoteObservationBatch) deferredProgress() *remoteObservationBatch 
 		(batch.cursorToken == "" &&
 			!batch.markFullRemoteRefresh &&
 			!batch.fullRefreshDueSoon &&
+			!batch.orphansUndecided &&
 			batch.observationMode != remoteObservationModeEnumerate) {
 		return nil
 	}
@@ -191,7 +192,7 @@ func (flow *engineFlow) executeDriveRootFullObservation(
 	bl *Baseline,
 	kind resyncKind,
 ) (remoteObservationBatch, error) {
-	events, token, topology, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl, kind)
+	full, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl, kind)
 	if err != nil && isObservationRemoteReadDenied(err) {
 		return buildRemoteObservationBatch(
 			flow.engine,
@@ -206,12 +207,13 @@ func (flow *engineFlow) executeDriveRootFullObservation(
 	batch := buildRemoteObservationBatch(
 		flow.engine,
 		remoteObservationModeDelta,
-		events,
-		token,
+		full.events,
+		full.token,
 		true,
 		newRemoteObservationFindingsBatch(),
 	)
-	batch.shortcutTopology = topology
+	batch.shortcutTopology = full.topology
+	batch.orphansUndecided = full.orphansUndecided
 	return batch, err
 }
 
@@ -220,11 +222,11 @@ func (flow *engineFlow) executeMountRootObservation(
 	bl *Baseline,
 	fullReconcile bool,
 ) (remoteObservationBatch, error) {
-	events, token, mode, err := flow.observeMountRootRemote(ctx, bl, fullReconcile)
+	observed, err := flow.observeMountRootRemote(ctx, bl, fullReconcile)
 	if err != nil && isObservationRemoteReadDenied(err) {
 		return buildRemoteObservationBatch(
 			flow.engine,
-			mode,
+			observed.mode,
 			nil,
 			"",
 			false,
@@ -232,12 +234,20 @@ func (flow *engineFlow) executeMountRootObservation(
 		), nil
 	}
 
-	return buildRemoteObservationBatch(
+	// A complete folder delta (requested, or after an expired token) is a
+	// full refresh like the drive root's: it restarts the cadence, and an
+	// orphan it could not confirm, which the saved position never reports
+	// again, brings the next one forward on the undecided-refresh backoff.
+	completeDelta := observed.mode == remoteObservationModeDelta && observed.complete
+	batch := buildRemoteObservationBatch(
 		flow.engine,
-		mode,
-		events,
-		token,
-		fullReconcile,
+		observed.mode,
+		observed.events,
+		observed.token,
+		fullReconcile || completeDelta,
 		newRemoteObservationFindingsBatch(),
-	), err
+	)
+	batch.orphansUndecided = completeDelta && observed.orphansUndecided
+
+	return batch, err
 }

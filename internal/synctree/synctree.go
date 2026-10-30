@@ -14,15 +14,19 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
-// rootHandle is the contained filesystem surface every sync-tree operation
-// runs through. Every method resolves names against an open root descriptor,
-// so a name whose components leave the root fails instead of following the
+// Handle is the contained filesystem surface every sync-tree operation runs
+// through. Every method resolves names against an open root descriptor, so a
+// name whose components leave the root fails instead of following the
 // escape. Mutating operations are part of this interface precisely because
 // they are the ones that destroy data when containment is skipped.
-type rootHandle interface {
+//
+// It is exported for one purpose: Root.Interpose, the seam tests use to put
+// an emulated filesystem under the sync tree (D-094).
+type Handle interface {
 	Open(name string) (*os.File, error)
 	OpenFile(name string, flag int, perm os.FileMode) (*os.File, error)
 	Stat(name string) (os.FileInfo, error)
@@ -36,6 +40,9 @@ type rootHandle interface {
 	FS() fs.FS
 	Close() error
 }
+
+// rootHandle is the package's name for Handle.
+type rootHandle = Handle
 
 type osRootHandle struct {
 	root *os.Root
@@ -170,6 +177,27 @@ func defaultRootOps() rootOps {
 type Root struct {
 	dir string
 	ops rootOps
+}
+
+// Interpose returns a Root over the same folder whose every rooted operation
+// runs through wrap(h), h being the handle it would otherwise use. Tests use
+// it to emulate other filesystems beneath the sync tree: a case-insensitive
+// volume, injected errno (internal/synctest). Operations that reach the
+// filesystem by descriptor after opening a parent through the handle (rmdir,
+// detach) see the wrapper only for that open.
+func (r *Root) Interpose(wrap func(Handle) Handle) *Root {
+	ops := r.ops
+	open := ops.openRoot
+	ops.openRoot = func(dir string) (rootHandle, error) {
+		handle, err := open(dir)
+		if err != nil {
+			return nil, err
+		}
+
+		return wrap(handle), nil
+	}
+
+	return &Root{dir: r.dir, ops: ops}
 }
 
 // ErrUnsafePath classifies a path the sync folder must not touch: outside the
@@ -1087,11 +1115,25 @@ func (r *Root) normalizeNotExist(path string, original error) error {
 		}
 	}
 
+	// An errno that says why the operation failed outlives the target's
+	// absence: a create always targets a missing name, and a full disk
+	// (ENOSPC), a read-only mount (EROFS) or a denied directory (EACCES)
+	// reported as "does not exist" is invisible to the handling each needs.
+	if errno, ok := errors.AsType[syscall.Errno](original); ok && !missingPathErrno(errno) {
+		return original
+	}
+
 	if _, statErr := r.ops.lstatAbs(path); errors.Is(statErr, os.ErrNotExist) {
 		return os.ErrNotExist
 	}
 
 	return original
+}
+
+// missingPathErrno reports whether errno only says the path, or a component
+// of it, is not there as named.
+func missingPathErrno(errno syscall.Errno) bool {
+	return errno == syscall.ENOENT || errno == syscall.ENOTDIR
 }
 
 func (r *Root) validateRootDirectoryNoFollow() error {

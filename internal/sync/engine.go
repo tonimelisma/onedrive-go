@@ -297,6 +297,9 @@ func openBoundSyncTree(ctx context.Context, store *SyncStore, cfg *engineInputs)
 	if err != nil {
 		return nil, resolvedSyncRoot{}, fmt.Errorf("sync: opening sync tree: %w", err)
 	}
+	if cfg.interposeSyncTree != nil {
+		syncTree = syncTree.Interpose(cfg.interposeSyncTree)
+	}
 	warnAboutForeignSyncClients(cfg.SyncRoot, cfg.Logger)
 	binding, err := resolveExpectedSyncRoot(ctx, store, syncTree, cfg.ExpectedSyncRootIdentity)
 	if err != nil {

@@ -240,14 +240,11 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 	decision *resultDecision,
 	r *actionCompletion,
 ) error {
-	persisted, err := flow.persistAndHoldFailure(ctx, current, decision, r)
+	persisted, persistedAs, err := flow.persistFailureWithScopeEffects(ctx, current, decision, r)
 	if err != nil {
 		return err
 	}
-	if err := flow.applyPersistedFailureScopeEffects(ctx, decision, r, persisted); err != nil {
-		return err
-	}
-	flow.armFailureTimers(decision, persisted)
+	flow.armFailureTimers(persistedAs, persisted)
 
 	flow.recordError(decision, r)
 	return nil
@@ -272,27 +269,80 @@ func (flow *engineFlow) persistAndHoldFailure(
 	return true, nil
 }
 
-func (flow *engineFlow) applyPersistedFailureScopeEffects(
+// persistFailureWithScopeEffects persists a failure's retry_work, holds its
+// action, and activates the block scope the failure's evidence calls for. It
+// returns whether it persisted, and the decision the work was persisted as.
+//
+// Scope detection runs before the failure is persisted: when this failure is
+// the one that activates a scope (a 429, a 503 with Retry-After, or the
+// failure that crosses a sliding window), it is that scope's first blocked
+// work, recorded blocked under it and held for the scope's trial. Recorded as
+// ordinary retry work first, it left the new scope with no blocked work at
+// all, which the persisted invariants forbid (found by the chaos Graph layer,
+// D-092): a scope with nothing to trial is dead state.
+func (flow *engineFlow) persistFailureWithScopeEffects(
 	ctx context.Context,
+	current *trackedAction,
 	decision *resultDecision,
 	r *actionCompletion,
-	persisted bool,
-) error {
-	if !persisted {
-		return nil
-	}
-	if decision.RunScopeDetection {
-		return flow.feedScopeDetection(ctx, r)
-	}
-	if decision.Class != errclass.ClassScopeBlockingTransient || decision.ScopeKey.IsZero() {
-		return nil
+) (bool, *resultDecision, error) {
+	detected := flow.detectFailureScope(decision, r)
+	persistAs := decision
+	if detected.Block {
+		persistAs = decisionBlockedUnder(decision, detected.ScopeKey)
 	}
 
-	return flow.applyBlockScope(ctx, scopeUpdateResult{
-		Block:         true,
-		ScopeKey:      decision.ScopeKey,
-		ConditionType: decision.ScopeKey.ConditionType(),
-	})
+	persisted, err := flow.persistAndHoldFailure(ctx, current, persistAs, r)
+	if err != nil || !persisted {
+		return persisted, persistAs, err
+	}
+
+	switch {
+	case detected.Block:
+		err = flow.applyBlockScope(ctx, detected)
+	case !decision.RunScopeDetection &&
+		decision.Class == errclass.ClassScopeBlockingTransient && !decision.ScopeKey.IsZero():
+		err = flow.applyBlockScope(ctx, scopeUpdateResult{
+			Block:         true,
+			ScopeKey:      decision.ScopeKey,
+			ConditionType: decision.ScopeKey.ConditionType(),
+		})
+	}
+
+	return true, persistAs, err
+}
+
+// retryWorkScope is the scope a failure's retry row records. Blocked work is
+// recorded under the scope its decision blocks (ScopeKey), the scope that is
+// activated, so the two can never name different scopes; other work records
+// its evidence, which a later activation of that scope may block.
+func (decision *resultDecision) retryWorkScope() ScopeKey {
+	if decision.Class == errclass.ClassScopeBlockingTransient && !decision.ScopeKey.IsZero() {
+		return decision.ScopeKey
+	}
+
+	return decision.ScopeEvidence
+}
+
+// decisionBlockedUnder is decision as work blocked under scopeKey: the
+// failure that activates a scope is that scope's first blocked work.
+func decisionBlockedUnder(decision *resultDecision, scopeKey ScopeKey) *resultDecision {
+	blocked := *decision
+	blocked.Class = errclass.ClassScopeBlockingTransient
+	blocked.ScopeKey = scopeKey
+	blocked.ScopeEvidence = scopeKey
+
+	return &blocked
+}
+
+// detectFailureScope feeds a failure that will be persisted as retry work
+// into scope detection and returns the verdict.
+func (flow *engineFlow) detectFailureScope(decision *resultDecision, r *actionCompletion) scopeUpdateResult {
+	if decision.Persistence != persistRetryWork || !decision.RunScopeDetection {
+		return scopeUpdateResult{}
+	}
+
+	return flow.detectScope(r)
 }
 
 func (flow *engineFlow) armFailureTimers(
@@ -490,7 +540,7 @@ func (flow *engineFlow) recordRetryWork(
 	r *actionCompletion,
 	delayFn func(int) time.Duration,
 ) error {
-	scopeKey := decision.ScopeEvidence
+	scopeKey := decision.retryWorkScope()
 	blocked := flow.retryWorkShouldBeBlocked(decision.Class, scopeKey)
 
 	if decision.Class == errclass.ClassActionable {
@@ -504,12 +554,18 @@ func (flow *engineFlow) recordRetryWork(
 		)
 	}
 
-	row, recErr := flow.deps.store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Work:     retryWorkKeyForCompletion(r),
-		ScopeKey: scopeKey,
-	}, delayFn)
+	// One failure is one attempt: blocked work is recorded blocked, never
+	// first as timed retry work and then again as blocked, which counted
+	// every throttled failure twice.
+	var row *RetryWorkRow
+	var recErr error
 	if blocked {
 		row, recErr = flow.deps.store.RecordBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), scopeKey)
+	} else {
+		row, recErr = flow.deps.store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+			Work:     retryWorkKeyForCompletion(r),
+			ScopeKey: scopeKey,
+		}, delayFn)
 	}
 	if recErr != nil {
 		return fmt.Errorf("record retry_work for %s: %w", r.Path, recErr)

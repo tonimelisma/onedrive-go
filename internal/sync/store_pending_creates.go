@@ -105,6 +105,40 @@ func scanPendingCreate(row *sql.Row) (PendingCreate, bool, error) {
 	return pending, true, nil
 }
 
+// freeBaselinePathForPlaceholderTx reports whether our placeholder can take
+// path in the baseline. A baseline row there whose item OneDrive still holds
+// at that path keeps it. One whose item OneDrive deleted or moved away (often
+// in this very window: a folder replaced by a file, or a file renamed online
+// while edited here, then the new file's create) is synced agreement about a
+// name OneDrive had already freed, or the create could not have succeeded:
+// that row is dropped so the placeholder is adopted. The item itself, if it
+// still exists elsewhere, reads as a new remote item and is downloaded, so
+// nothing is lost. Kept, the row turned our own empty item into a create
+// conflict: the user's file renamed to a conflict copy and the empty item
+// downloaded in its place (found by the chaos Graph layer, D-092).
+func freeBaselinePathForPlaceholderTx(ctx context.Context, tx sqlTxRunner, path string) (bool, error) {
+	var (
+		occupantID string
+		stillThere int
+	)
+	switch err := tx.QueryRowContext(ctx, `SELECT b.item_id,
+			(SELECT count(*) FROM remote_state r WHERE r.item_id = b.item_id AND r.path = b.path)
+		FROM baseline b WHERE b.path = ?`, path).Scan(&occupantID, &stillThere); {
+	case errors.Is(err, sql.ErrNoRows):
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("sync: checking baseline at %s: %w", path, err)
+	case stillThere > 0:
+		return false, nil
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM baseline WHERE item_id = ?`, occupantID); err != nil {
+		return false, fmt.Errorf("sync: dropping the baseline of %s, which OneDrive no longer has at %s: %w", occupantID, path, err)
+	}
+
+	return true, nil
+}
+
 // placeholderDecision is what observation does with an observed item that has
 // a pending-create record.
 type placeholderDecision int
@@ -153,12 +187,8 @@ func adoptPlaceholderTx(
 		// Moved or renamed meanwhile: not the create this record describes.
 		return deletePendingCreateTx(ctx, tx, item.ItemID)
 	}
-	var taken int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM baseline WHERE path = ?`, item.Path).Scan(&taken); err != nil {
-		return fmt.Errorf("sync: checking baseline at %s: %w", item.Path, err)
-	}
-	if taken > 0 {
-		return nil
+	if free, err := freeBaselinePathForPlaceholderTx(ctx, tx, item.Path); err != nil || !free {
+		return err
 	}
 
 	entry := &BaselineEntry{

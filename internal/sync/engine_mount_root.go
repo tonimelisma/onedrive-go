@@ -20,14 +20,28 @@ func (e *Engine) mountRootDeltaSupported() bool {
 	return e != nil && e.remoteRootDeltaCapable && e.folderDelta != nil
 }
 
+// mountRootObservation is what one mount-root observation saw.
+type mountRootObservation struct {
+	events []changeEvent
+	token  string
+	mode   remoteObservationMode
+	// complete marks a whole-folder enumeration (a delta without a token,
+	// after a requested refresh or an expired token).
+	complete bool
+	// orphansUndecided marks a complete enumeration that kept an orphan it
+	// could not confirm.
+	orphansUndecided bool
+}
+
 func (flow *engineFlow) observeMountRootRemote(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-) ([]changeEvent, string, remoteObservationMode, error) {
+) (mountRootObservation, error) {
 	eng := flow.engine
 	if !eng.hasRemoteMountRoot() {
-		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: mount-root observation requires a remote root item ID")
+		return mountRootObservation{mode: remoteObservationModeEnumerate},
+			fmt.Errorf("sync: mount-root observation requires a remote root item ID")
 	}
 
 	if eng.preferredMountRootObservationMode() == remoteObservationModeDelta {
@@ -35,7 +49,7 @@ func (flow *engineFlow) observeMountRootRemote(
 		if !fullReconcile {
 			state, err := eng.baseline.ReadObservationState(ctx)
 			if err != nil {
-				return nil, "", remoteObservationModeDelta, fmt.Errorf("sync: reading observation state: %w", err)
+				return mountRootObservation{mode: remoteObservationModeDelta}, fmt.Errorf("sync: reading observation state: %w", err)
 			}
 
 			token = state.Cursor
@@ -57,13 +71,16 @@ func (flow *engineFlow) observeMountRootRemote(
 		}
 		if err == nil {
 			eng.mountRootDeltaFallbackReported.Store(false)
-			events := eng.mountRootEvents(ctx, items, bl, fullReconcile, orphanKind)
+			events, undecided := eng.mountRootEvents(ctx, items, bl, fullReconcile, orphanKind)
 
-			return events, newToken, remoteObservationModeDelta, nil
+			return mountRootObservation{
+				events: events, token: newToken, mode: remoteObservationModeDelta,
+				complete: fullReconcile, orphansUndecided: undecided,
+			}, nil
 		}
 
 		if eng.recursiveLister == nil || !shouldFallbackMountRootDelta(err) {
-			return nil, "", remoteObservationModeDelta, fmt.Errorf("sync: mount-root delta: %w", err)
+			return mountRootObservation{mode: remoteObservationModeDelta}, fmt.Errorf("sync: mount-root delta: %w", err)
 		}
 
 		// The fallback is retried on every poll, but the condition does not
@@ -83,20 +100,23 @@ func (flow *engineFlow) observeMountRootRemote(
 	}
 
 	if eng.recursiveLister == nil {
-		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: recursive lister not available for mount root %s", eng.remoteRootItemID)
+		return mountRootObservation{mode: remoteObservationModeEnumerate},
+			fmt.Errorf("sync: recursive lister not available for mount root %s", eng.remoteRootItemID)
 	}
 
 	items, err := eng.recursiveLister.ListChildrenRecursive(ctx, eng.driveID, eng.remoteRootItemID)
 	if err != nil {
-		return nil, "", remoteObservationModeEnumerate, fmt.Errorf("sync: mount-root recursive listing: %w", err)
+		return mountRootObservation{mode: remoteObservationModeEnumerate}, fmt.Errorf("sync: mount-root recursive listing: %w", err)
 	}
 	if err := validateMountRootListingParents(items, eng.remoteRootItemID); err != nil {
-		return nil, "", remoteObservationModeEnumerate, err
+		return mountRootObservation{mode: remoteObservationModeEnumerate}, err
 	}
 
-	events := eng.mountRootEvents(ctx, items, bl, true, resyncKindApplyDifferences)
+	// A listing keeps no position: an undecided orphan is judged again by
+	// the next listing, every pass, so it needs no refresh pulled forward.
+	events, _ := eng.mountRootEvents(ctx, items, bl, true, resyncKindApplyDifferences)
 
-	return events, "", remoteObservationModeEnumerate, nil
+	return mountRootObservation{events: events, mode: remoteObservationModeEnumerate, complete: true}, nil
 }
 
 // mountRootEvents converts a mount-root enumeration, adding confirmed orphan
@@ -105,16 +125,17 @@ func (flow *engineFlow) observeMountRootRemote(
 // are re-uploads, not deletes (R-2.15.3).
 func (e *Engine) mountRootEvents(
 	ctx context.Context, items []graph.Item, bl *Baseline, complete bool, kind resyncKind,
-) []changeEvent {
+) ([]changeEvent, bool) {
 	events := convertMountRootItems(ctx, items, e.remoteRootItemID, e.driveID, bl, e.logger, e.itemsClient)
-	if complete {
-		orphans := e.confirmMountRootOrphans(ctx, items, detectMountRootOrphans(items, e.driveID, bl))
-		if !kind.orphansAreDeletes() {
-			markOrphansForReupload(orphans)
-		}
-		events = append(events, orphans...)
+	if !complete {
+		return events, false
 	}
-	return events
+	orphans, undecided := e.confirmMountRootOrphans(ctx, items, detectMountRootOrphans(items, e.driveID, bl))
+	if !kind.orphansAreDeletes() {
+		markOrphansForReupload(orphans)
+	}
+
+	return append(events, orphans...), undecided
 }
 
 func convertMountRootItems(
@@ -178,7 +199,9 @@ func validateMountRootListingParents(items []graph.Item, remoteRootItemID string
 // 404 or a deleted facet, or when its ancestors provably lead outside the
 // mount; an item still inside, one whose parent cannot be resolved, or a
 // lookup that failed is left for the next listing.
-func (e *Engine) confirmMountRootOrphans(ctx context.Context, listed []graph.Item, orphans []changeEvent) []changeEvent {
+func (e *Engine) confirmMountRootOrphans(
+	ctx context.Context, listed []graph.Item, orphans []changeEvent,
+) (confirmed []changeEvent, undecided bool) {
 	inside := make(map[string]struct{}, len(listed)+1)
 	inside[e.remoteRootItemID] = struct{}{}
 	for i := range listed {
@@ -193,17 +216,19 @@ func (e *Engine) confirmMountRootOrphans(ctx context.Context, listed []graph.Ite
 // drive-root enumeration, where any live item is still in scope; for a mount
 // root it holds the mount root and every item the listing returned. An
 // unconfirmed orphan produces no event, so its local copy stays and the next
-// complete enumeration judges it again.
+// complete enumeration judges it again. undecided reports an orphan whose
+// lookup failed: unlike one found live, it still needs that judgement, and
+// soon (observeRemoteFullWithShortcutTopology).
 func (e *Engine) confirmEnumerationOrphans(
 	ctx context.Context,
 	orphans []changeEvent,
 	inside map[string]struct{},
-) []changeEvent {
+) (confirmed []changeEvent, undecided bool) {
 	if len(orphans) == 0 || e.itemsClient == nil {
-		return orphans
+		return orphans, false
 	}
 
-	confirmed := make([]changeEvent, 0, len(orphans))
+	confirmed = make([]changeEvent, 0, len(orphans))
 	for i := range orphans {
 		orphan := orphans[i]
 		live, err := e.itemsClient.GetItem(ctx, e.driveID, orphan.ItemID)
@@ -211,6 +236,7 @@ func (e *Engine) confirmEnumerationOrphans(
 		case errors.Is(err, graph.ErrNotFound):
 			confirmed = append(confirmed, orphan)
 		case err != nil:
+			undecided = true
 			e.logger.Debug("could not confirm an item missing from a listing is gone; keeping it",
 				slog.String("path", orphan.Path), slog.String("error", err.Error()))
 		case live == nil:
@@ -230,7 +256,7 @@ func (e *Engine) confirmEnumerationOrphans(
 		}
 	}
 
-	return confirmed
+	return confirmed, undecided
 }
 
 // mountAncestorLookupLimit bounds the parent walk that proves an item left

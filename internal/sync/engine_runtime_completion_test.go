@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -123,6 +124,106 @@ func TestEngineFlow_ProcessNormalDecision_RetryableTransientScopeEvidenceStaysUn
 	assert.Equal(t, SKService(), retryRows[0].ScopeKey)
 	assert.False(t, retryRows[0].Blocked)
 	assert.NotZero(t, retryRows[0].NextRetryAt)
+}
+
+// Validates: R-2.10.3, R-2.10.5
+//
+// A 503 with Retry-After blocks the service scope at once, and the failure
+// that said so is that scope's first blocked work. Recorded unblocked before
+// the scope existed, it left a block scope with no blocked work, an invariant
+// violation found by the chaos Graph layer (D-092).
+func TestEngineFlow_ProcessNormalDecision_ServiceRetryAfterBlocksTheTriggeringWork(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+
+	completion := &actionCompletion{
+		Path:       "outage.txt",
+		ActionType: ActionUpload,
+		HTTPStatus: http.StatusServiceUnavailable,
+		RetryAfter: 30 * time.Second,
+		ErrMsg:     "service unavailable",
+	}
+	decision := classifyResult(completion)
+	require.Equal(t, errclass.ClassRetryableTransient, decision.Class)
+
+	ready, err := flow.applyNormalCompletionDecision(t.Context(), &decision, nil, completion, nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, ready)
+	assert.True(t, rt.scopes.hasActiveScope(SKService()))
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, SKService(), retryRows[0].ScopeKey)
+	assert.True(t, retryRows[0].Blocked, "the work that activated the scope waits for its trial")
+	assert.Equal(t, 1, retryRows[0].AttemptCount, "one failure is one attempt")
+	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
+}
+
+// Validates: R-2.10.5
+//
+// A scope-blocking decision names its scope twice, as the scope it blocks
+// (ScopeKey) and as the evidence the retry row records (ScopeEvidence).
+// Classification sets them equal; if a decision ever carried two different
+// keys, the row was blocked under the evidence while the scope activated was
+// the other one, a block scope with no blocked work. The row now follows the
+// scope that is activated.
+func TestEngineFlow_ProcessNormalDecision_BlockedRowFollowsTheActivatedScope(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+
+	_, err := flow.applyNormalCompletionDecision(t.Context(), &resultDecision{
+		Class:         errclass.ClassScopeBlockingTransient,
+		ScopeKey:      SKDiskLocal(),
+		ScopeEvidence: SKService(),
+		Persistence:   persistRetryWork,
+		TrialHint:     trialHintExtendOnMatchingScope,
+		ConditionType: issueDiskFull,
+	}, nil, &actionCompletion{Path: "full.bin", ActionType: ActionDownload, ErrMsg: "no space"}, nil)
+	require.NoError(t, err)
+
+	assert.True(t, rt.scopes.hasActiveScope(SKDiskLocal()))
+	rows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, rows, 1)
+	assert.Equal(t, SKDiskLocal(), rows[0].ScopeKey)
+	assert.True(t, rows[0].Blocked)
+	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
+}
+
+// Validates: R-2.10.28, R-2.10.29
+//
+// The outage failure that crosses the service window's threshold activates
+// the scope with itself blocked under it, as the Retry-After case does.
+func TestEngineFlow_ProcessNormalDecision_ServiceWindowBlocksTheCrossingWork(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+
+	for i := range serviceWindowThreshold {
+		completion := &actionCompletion{
+			Path:       fmt.Sprintf("outage-%d.txt", i),
+			ActionType: ActionUpload,
+			HTTPStatus: http.StatusBadGateway,
+			ErrMsg:     "bad gateway",
+		}
+		decision := classifyResult(completion)
+		_, err := flow.applyNormalCompletionDecision(t.Context(), &decision, nil, completion, nil)
+		require.NoError(t, err)
+	}
+
+	assert.True(t, rt.scopes.hasActiveScope(SKService()))
+	blocked, err := eng.baseline.ListBlockedRetryWork(t.Context())
+	require.NoError(t, err)
+	require.NotEmpty(t, blocked)
+	assert.Equal(t, fmt.Sprintf("outage-%d.txt", serviceWindowThreshold-1), blocked[len(blocked)-1].Path)
+	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
 }
 
 // Validates: R-2.10.5, R-2.10.33
@@ -591,6 +692,57 @@ func TestEngineFlow_ProcessTrialDecision_FallbackActivatesReclassifiedBlockedSco
 	require.Len(t, retryRows, 1)
 	assert.Equal(t, throttleScopeKey, retryRows[0].ScopeKey)
 	assert.True(t, retryRows[0].Blocked)
+}
+
+// Validates: R-2.10.3, R-2.10.5
+//
+// A throttle trial answered by a 503 with Retry-After moves its work to the
+// service scope it activates and discards the throttle scope it was the only
+// blocked work of, in one step: activated first, the service scope's
+// invariant check met an empty throttle scope (found by the chaos Graph
+// layer, D-092).
+func TestEngineFlow_ProcessTrialDecision_ServiceRetryAfterMovesTheTrialsOnlyWork(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+	trialScopeKey := SKThrottleDrive(eng.driveID)
+
+	setTestBlockScope(t, eng, &BlockScope{Key: trialScopeKey, NextTrialAt: eng.nowFunc()})
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+		Path:         "file.txt",
+		ActionType:   ActionDownload,
+		ScopeKey:     trialScopeKey,
+		Blocked:      true,
+		AttemptCount: 1,
+	}))
+	current := rt.sched.graph.Add(&Action{Type: ActionDownload, Path: "file.txt", DriveID: eng.driveID}, 1, nil)
+	require.NotNil(t, current)
+
+	completion := &actionCompletion{
+		ActionID:      current.ID,
+		Path:          "file.txt",
+		ActionType:    ActionDownload,
+		DriveID:       eng.driveID,
+		HTTPStatus:    http.StatusServiceUnavailable,
+		RetryAfter:    time.Minute,
+		ErrMsg:        "service unavailable",
+		IsTrial:       true,
+		TrialScopeKey: trialScopeKey,
+	}
+	decision := classifyResult(completion)
+	ready, err := flow.applyTrialCompletionDecision(t.Context(), trialScopeKey, &decision, current, completion, nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, ready)
+	assert.True(t, rt.scopes.hasActiveScope(SKService()))
+	assert.False(t, rt.scopes.hasActiveScope(trialScopeKey), "the throttle scope's only work moved away")
+	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, SKService(), retryRows[0].ScopeKey)
+	assert.True(t, retryRows[0].Blocked)
+	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
 }
 
 // Validates: R-2.10.5

@@ -32,7 +32,8 @@ import (
 //   - Names are unique per folder under OneDrive's equivalence (namekey).
 //     A create (upload of a new file, folder create) or move onto a taken
 //     name fails with 409, as the client's create by body with
-//     conflictBehavior=fail does; an overwrite by ID honors If-Match.
+//     conflictBehavior=fail does; an overwrite, move or delete by ID honors
+//     If-Match, and a move into the item's own subtree is refused.
 //   - Deleting a folder deletes its subtree, and a deleted file's content
 //     goes to the recycle bin; an overwrite keeps the replaced content as a
 //     version. Together they are the no-loss oracle (assertSyncInvariants).
@@ -357,6 +358,14 @@ func (r *moveScenarioRemote) moveAt(t *testing.T, fromPath, toPath string) {
 	r.moveLocked(item.ID, parent.ID, path.Base(toPath))
 }
 
+// fullDeltaCount is how many full enumerations delta has served.
+func (r *moveScenarioRemote) fullDeltaCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return len(r.fullDeltaAt)
+}
+
 // shuffleDelta makes every later delta page a seeded permutation.
 func (r *moveScenarioRemote) shuffleDelta(seed uint64) {
 	r.mu.Lock()
@@ -481,13 +490,13 @@ func (r *moveScenarioRemote) client(t *testing.T) *engineMockClient {
 		moveItemOptsFn: func(
 			_ context.Context, _ driveid.ID, itemID, newParentID, newName string, opts graph.MoveOptions,
 		) (*graph.Item, error) {
-			return r.moveItem(itemID, newParentID, newName, opts.KeepModified)
+			return r.moveItem(itemID, newParentID, newName, opts)
 		},
 		createFolderFn: func(_ context.Context, _ driveid.ID, parentID, name string) (*graph.Item, error) {
 			return r.createFolder(parentID, name)
 		},
-		deleteItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, _ string) error {
-			return r.deleteItem(itemID)
+		deleteItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, ifMatch string) error {
+			return r.deleteItem(itemID, ifMatch)
 		},
 		uploadFn: func(
 			_ context.Context, _ driveid.ID, parentID, name string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc,
@@ -558,22 +567,35 @@ func scenarioNameConflict() error {
 	return &graph.GraphError{StatusCode: 409, Message: "Name already exists", Err: graph.ErrConflict}
 }
 
+// scenarioPreconditionFailed is Graph's answer to an If-Match that no longer
+// matches the item's eTag (live probe L-02).
+func scenarioPreconditionFailed() error {
+	return &graph.GraphError{StatusCode: 412, Code: "resourceModified", Err: graph.ErrPreconditionFailed}
+}
+
 // scenarioRenameTime is the "now" a rename without a modification time to
 // keep stamps on the item, as OneDrive does (L-09).
 func scenarioRenameTime() time.Time {
 	return time.Date(2026, 10, 25, 20, 55, 50, 0, time.UTC)
 }
 
-func (r *moveScenarioRemote) moveItem(itemID, newParentID, newName string, keepModified time.Time) (*graph.Item, error) {
+func (r *moveScenarioRemote) moveItem(itemID, newParentID, newName string, opts graph.MoveOptions) (*graph.Item, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	item, ok := r.items[itemID]
 	if !ok {
 		return nil, graph.ErrNotFound
 	}
+	if opts.IfMatch != "" && item.ETag != opts.IfMatch {
+		return nil, scenarioPreconditionFailed()
+	}
 	if newParentID == "" {
 		newParentID = item.ParentID
 	}
+	if r.isSelfOrDescendant(newParentID, itemID) {
+		return nil, &graph.GraphError{StatusCode: 400, Code: "invalidRequest", Message: "Cannot move an item into itself", Err: graph.ErrBadRequest}
+	}
+	keepModified := opts.KeepModified
 	if newName == "" {
 		newName = item.Name
 	}
@@ -592,6 +614,23 @@ func (r *moveScenarioRemote) moveItem(itemID, newParentID, newName string, keepM
 	return &copied, nil
 }
 
+// isSelfOrDescendant reports whether id is ancestor or lies beneath it:
+// OneDrive refuses to move a folder into its own subtree.
+func (r *moveScenarioRemote) isSelfOrDescendant(id, ancestor string) bool {
+	for current := id; current != ""; {
+		if current == ancestor {
+			return true
+		}
+		item, ok := r.items[current]
+		if !ok {
+			return false
+		}
+		current = item.ParentID
+	}
+
+	return false
+}
+
 func (r *moveScenarioRemote) createFolder(parentID, name string) (*graph.Item, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -605,11 +644,15 @@ func (r *moveScenarioRemote) createFolder(parentID, name string) (*graph.Item, e
 	return &copied, nil
 }
 
-func (r *moveScenarioRemote) deleteItem(itemID string) error {
+func (r *moveScenarioRemote) deleteItem(itemID, ifMatch string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.items[itemID]; !ok {
+	item, ok := r.items[itemID]
+	if !ok {
 		return graph.ErrNotFound
+	}
+	if ifMatch != "" && item.ETag != ifMatch {
+		return scenarioPreconditionFailed()
 	}
 	r.remove(itemID)
 	r.deletes = append(r.deletes, itemID)
@@ -694,7 +737,7 @@ func (r *moveScenarioRemote) uploadToItem(t *testing.T, itemID, ifMatch string, 
 		return nil, graph.ErrNotFound
 	}
 	if ifMatch != "" && item.ETag != ifMatch {
-		return nil, &graph.GraphError{StatusCode: 412, Code: "resourceModified", Err: graph.ErrPreconditionFailed}
+		return nil, scenarioPreconditionFailed()
 	}
 	r.uploads++
 	r.setContent(t, itemID, data)

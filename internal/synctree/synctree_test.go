@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -844,4 +845,54 @@ func TestRootRefusals_KeepSentinelAndShowTheDetailAsInnermostError(t *testing.T)
 	require.ErrorIs(t, refusal, ErrUnsupportedTreeEntry)
 	assert.Equal(t, "a/link is a symbolic link", refusal.Error())
 	assert.NoError(t, errors.Unwrap(refusal), "a refusal must not unwrap to its sentinel")
+}
+
+// failingCreateHandle fails every write-open and mkdir with errno, as a full
+// or read-only filesystem does for a name that does not exist yet.
+type failingCreateHandle struct {
+	Handle
+	errno syscall.Errno
+}
+
+func (h failingCreateHandle) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	if flag&(os.O_CREATE|os.O_WRONLY|os.O_RDWR) != 0 {
+		return nil, &os.PathError{Op: "openat", Path: name, Err: h.errno}
+	}
+
+	return h.Handle.OpenFile(name, flag, perm) //nolint:wrapcheck // stands in for the filesystem
+}
+
+func (h failingCreateHandle) MkdirAll(name string, _ os.FileMode) error {
+	return &os.PathError{Op: "mkdirat", Path: name, Err: h.errno}
+}
+
+// Validates: R-2.10.60, R-2.10.61
+//
+// A create fails on a name that does not exist yet, so "the target is
+// missing" says nothing about why. Reporting every such failure as not-exist
+// turned a full disk (ENOSPC), a read-only mount (EROFS) or a permission
+// change (EACCES) under a new file or folder into "file does not exist",
+// which no disk, read-only or permission handling recognizes (found by the
+// errno shim, D-094).
+func TestRoot_CreateFailureKeepsItsErrno(t *testing.T) {
+	t.Parallel()
+
+	for _, errno := range []syscall.Errno{syscall.ENOSPC, syscall.EROFS, syscall.EACCES, syscall.EIO, syscall.ENAMETOOLONG} {
+		t.Run(errno.Error(), func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			root, err := Open(dir)
+			require.NoError(t, err)
+			root = root.Interpose(func(h Handle) Handle { return failingCreateHandle{Handle: h, errno: errno} })
+
+			_, err = root.OpenFile("new.partial", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+			require.ErrorIs(t, err, errno)
+			require.NotErrorIs(t, err, os.ErrNotExist)
+
+			err = root.MkdirAll("new-folder", 0o700)
+			require.ErrorIs(t, err, errno)
+			require.NotErrorIs(t, err, os.ErrNotExist)
+		})
+	}
 }
