@@ -28,6 +28,11 @@ warning per file. Evidence: `TestVerifyBaseline_ClassifiesStatErrorsAsUnreadable
 `TestVerifyBaseline_ClassifiesRootedPathErrorsAsUnreadable`,
 `TestVerifyBaseline_ClassifiesHashComputationErrorsAsUnreadable`.
 
+Baseline paths are NFC, so each file is stat'ed and hashed by its spelling on
+disk (`synctree.Root.Spelling`, R-2.13.2): on a byte-exact filesystem an
+NFD-named file was reported `missing`. Evidence:
+`TestVerifyBaseline_FindsAnNFDNamedFile`.
+
 ## Overview
 
 `SyncStore` is the sole durable owner of per-mount sync state. In the target
