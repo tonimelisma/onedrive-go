@@ -188,25 +188,31 @@ func (r *modelRun) localMoveThenRecreate(tree map[string]string) []modelEdit {
 }
 
 // localRecreateFolder deletes a folder and builds the same tree again: same
-// names and content, new inodes.
+// names and content, new inodes. The copy is built beside the sync root
+// while the original still exists and then swapped in: deleting first let
+// the filesystem hand the freed inode numbers straight back, so on some
+// runners the "rebuilt" folder kept its identity and one seed planned a
+// move where another run of it planned a delete and a create.
 func (r *modelRun) localRecreateFolder(tree map[string]string) []modelEdit {
 	folder := r.pick(modelEntriesOf(tree, true))
 	if folder == "" {
 		return nil
 	}
-	require.NoError(r.t, os.RemoveAll(r.localAbs(folder)))
-	require.NoError(r.t, os.MkdirAll(r.localAbs(folder), 0o750))
+	rebuilt, err := os.MkdirTemp(filepath.Dir(r.syncRoot), "model-rebuild-")
+	require.NoError(r.t, err)
 	for _, p := range modelPaths(tree) {
-		rel := strings.TrimSuffix(p, "/")
-		if !strings.HasPrefix(rel, folder+"/") {
+		rel, inside := strings.CutPrefix(strings.TrimSuffix(p, "/"), folder+"/")
+		if !inside {
 			continue
 		}
 		if strings.HasSuffix(p, "/") {
-			require.NoError(r.t, os.MkdirAll(r.localAbs(rel), 0o750))
+			require.NoError(r.t, os.MkdirAll(filepath.Join(rebuilt, filepath.FromSlash(rel)), 0o750))
 			continue
 		}
-		writeLocalFile(r.t, r.syncRoot, filepath.FromSlash(rel), tree[rel])
+		writeLocalFile(r.t, rebuilt, filepath.FromSlash(rel), tree[folder+"/"+rel])
 	}
+	require.NoError(r.t, os.RemoveAll(r.localAbs(folder)))
+	require.NoError(r.t, os.Rename(rebuilt, r.localAbs(folder)))
 	r.logf("local recreate folder %s", folder)
 
 	return []modelEdit{{side: modelLocalSide, kind: modelOpRecreateFolder, path: folder}}

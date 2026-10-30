@@ -65,3 +65,30 @@ func TestWatchConfigReloadTriggers_FileEditsAndSIGHUP(t *testing.T) {
 	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGHUP))
 	requireTrigger(t, triggers, "SIGHUP")
 }
+
+// Regression: a poll landing between an in-place write's truncate and its
+// write reloaded the empty file, warned that it did not parse, and reloaded
+// again once the write finished (stress-run flake of the test above).
+//
+// Validates: R-4.4.3
+func TestConfigFilePoll_ReloadsOnlySettledVersions(t *testing.T) {
+	t.Parallel()
+
+	v1 := configFileStamp{exists: true, size: 5, mtime: time.Unix(1, 0), inode: 7}
+	truncated := configFileStamp{exists: true, size: 0, mtime: time.Unix(2, 0), inode: 7}
+	v2 := configFileStamp{exists: true, size: 13, mtime: time.Unix(2, 0), inode: 7}
+
+	poll := configFilePoll{last: v1}
+	assert.False(t, poll.observe(v1), "an unchanged file never reloads")
+	assert.False(t, poll.observe(truncated), "a first sighting waits one poll")
+	assert.False(t, poll.observe(v2), "a version that changed again waits one more poll")
+	assert.True(t, poll.observe(v2), "a version seen on two polls reloads")
+	assert.False(t, poll.observe(v2), "a reloaded version does not reload again")
+
+	assert.False(t, poll.observe(configFileStamp{}), "a missing file never reloads")
+	assert.False(t, poll.observe(v2), "the same version back after a disappearance changed nothing")
+
+	poll.reset(v1)
+	assert.False(t, poll.observe(v2))
+	assert.True(t, poll.observe(v2), "after SIGHUP reloaded v1, v2 is new again")
+}

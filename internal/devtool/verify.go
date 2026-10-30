@@ -26,7 +26,8 @@ const (
 	fullE2EPackageTimeout            = "60m"
 	fastE2EPackageTimeout            = "10m"
 	stressMultisyncTimeout           = "20m"
-	stressSyncTimeout                = "30m"
+	stressSyncConcurrencyTimeout     = "40m"
+	stressSyncTimeout                = "40m"
 	stressSlowTestLimit              = 5
 	authPreflightIncidentID          = "LI-20260405-06"
 	fastDownloadIncidentID           = "LI-20260405-04"

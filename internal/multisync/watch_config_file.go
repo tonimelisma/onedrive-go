@@ -40,7 +40,8 @@ func readConfigFileStamp(path string) configFileStamp {
 }
 
 // watchConfigReloadTriggers delivers one value whenever config.toml changes
-// on disk or the process receives SIGHUP (systemd's ExecReload). Before this,
+// on disk and the change has settled (configFilePoll), or the process
+// receives SIGHUP (systemd's ExecReload). Before this,
 // only control-socket requests (pause, resume, drive add) reloaded the config:
 // a hand edit such as new ignored_dirs or websocket = true was silently
 // ignored until the watch restarted.
@@ -56,26 +57,20 @@ func watchConfigReloadTriggers(ctx context.Context, path string, interval time.D
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
-		last := readConfigFileStamp(path)
+		poll := configFilePoll{last: readConfigFileStamp(path)}
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-hup:
-				last = readConfigFileStamp(path)
+				poll.reset(readConfigFileStamp(path))
 				sendLatest(triggers, "SIGHUP")
 			case <-ticker.C:
 				if path == "" {
 					continue
 				}
-				current := readConfigFileStamp(path)
-				// A missing file is a write in progress or a mistake; reload
-				// once it is back rather than on the disappearance.
-				if current.exists && current != last {
+				if poll.observe(readConfigFileStamp(path)) {
 					sendLatest(triggers, "config file changed")
-				}
-				if current.exists {
-					last = current
 				}
 			}
 		}
@@ -86,6 +81,40 @@ func watchConfigReloadTriggers(ctx context.Context, path string, interval time.D
 		cancel()
 		<-done
 	}
+}
+
+// configFilePoll decides, one poll at a time, when an edit is complete. An
+// editor or os.WriteFile truncates and then writes in place, so a poll can
+// land between the two; reloading there parsed an empty or half-written file,
+// warned, and reloaded again on the next poll. A new version must therefore
+// read the same on two consecutive polls before it counts.
+type configFilePoll struct {
+	last    configFileStamp
+	pending configFileStamp
+}
+
+// observe records one poll and reports whether to reload.
+func (p *configFilePoll) observe(current configFileStamp) bool {
+	// A missing file is a write in progress or a mistake; reload once it is
+	// back rather than on the disappearance.
+	if !current.exists || current == p.last {
+		p.pending = configFileStamp{}
+		return false
+	}
+	if current != p.pending {
+		p.pending = current
+		return false
+	}
+
+	p.reset(current)
+
+	return true
+}
+
+// reset makes current the loaded version, as after a reload.
+func (p *configFilePoll) reset(current configFileStamp) {
+	p.last = current
+	p.pending = configFileStamp{}
 }
 
 // sendLatest coalesces triggers: one pending reload covers every change
