@@ -3,6 +3,11 @@ version: "2"
 run:
   timeout: 5m
   modules-download-mode: readonly
+  # Live-test code is build-tagged; without these tags lint never sees it.
+  build-tags:
+    - e2e
+    - e2e_full
+    - integration
 
 formatters:
   enable:

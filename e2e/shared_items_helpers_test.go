@@ -40,6 +40,12 @@ type sharedItemE2E struct {
 	RemoteItemID  string `json:"remote_item_id"`
 }
 
+// Item types in shared --json output.
+const (
+	sharedItemTypeFile   = "file"
+	sharedItemTypeFolder = "folder"
+)
+
 type sharedListE2EOutput struct {
 	Items            []sharedItemE2E `json:"items"`
 	AccountsDegraded []struct {
@@ -122,10 +128,10 @@ func TestIsSharedFolderNameDiscoveryOmission(t *testing.T) {
 	assert.False(t, isSharedFolderNameDiscoveryOmission(`no shared folders matching "Project" found`))
 }
 
-func sharedFolderFixtureVisibleInListing(listing sharedListE2EOutput, fixture resolvedSharedFolderFixture) bool {
+func sharedFolderFixtureVisibleInListing(listing sharedListE2EOutput, fixture *resolvedSharedFolderFixture) bool {
 	for i := range listing.Items {
 		item := listing.Items[i]
-		if item.Type != "folder" {
+		if item.Type != sharedItemTypeFolder {
 			continue
 		}
 		if item.Name != fixture.FolderItem.Name {
@@ -147,7 +153,7 @@ func sharedFolderFixtureVisibleInListing(listing sharedListE2EOutput, fixture re
 func TestSharedFolderFixtureVisibleInListingRequiresNameAndRemoteIdentity(t *testing.T) {
 	t.Parallel()
 
-	fixture := resolvedSharedFolderFixture{
+	fixture := &resolvedSharedFolderFixture{
 		FolderItem: sharedItemE2E{
 			Name:          "Project",
 			RemoteDriveID: "drive",
@@ -157,7 +163,7 @@ func TestSharedFolderFixtureVisibleInListingRequiresNameAndRemoteIdentity(t *tes
 
 	assert.True(t, sharedFolderFixtureVisibleInListing(sharedListE2EOutput{
 		Items: []sharedItemE2E{{
-			Type:          "folder",
+			Type:          sharedItemTypeFolder,
 			Name:          "Project",
 			RemoteDriveID: "drive",
 			RemoteItemID:  "item",
@@ -165,7 +171,7 @@ func TestSharedFolderFixtureVisibleInListingRequiresNameAndRemoteIdentity(t *tes
 	}, fixture))
 	assert.False(t, sharedFolderFixtureVisibleInListing(sharedListE2EOutput{
 		Items: []sharedItemE2E{{
-			Type:          "folder",
+			Type:          sharedItemTypeFolder,
 			Name:          "Other",
 			RemoteDriveID: "drive",
 			RemoteItemID:  "item",
@@ -173,7 +179,7 @@ func TestSharedFolderFixtureVisibleInListingRequiresNameAndRemoteIdentity(t *tes
 	}, fixture))
 	assert.False(t, sharedFolderFixtureVisibleInListing(sharedListE2EOutput{
 		Items: []sharedItemE2E{{
-			Type:          "folder",
+			Type:          sharedItemTypeFolder,
 			Name:          "Project",
 			RemoteDriveID: "other-drive",
 			RemoteItemID:  "item",
@@ -181,7 +187,7 @@ func TestSharedFolderFixtureVisibleInListingRequiresNameAndRemoteIdentity(t *tes
 	}, fixture))
 	assert.False(t, sharedFolderFixtureVisibleInListing(sharedListE2EOutput{
 		Items: []sharedItemE2E{{
-			Type:          "folder",
+			Type:          sharedItemTypeFolder,
 			Name:          "Project",
 			RemoteDriveID: "drive",
 			RemoteItemID:  "other-item",
@@ -189,7 +195,7 @@ func TestSharedFolderFixtureVisibleInListingRequiresNameAndRemoteIdentity(t *tes
 	}, fixture))
 	assert.False(t, sharedFolderFixtureVisibleInListing(sharedListE2EOutput{
 		Items: []sharedItemE2E{{
-			Type:          "file",
+			Type:          sharedItemTypeFile,
 			Name:          "Project",
 			RemoteDriveID: "drive",
 			RemoteItemID:  "item",
@@ -262,6 +268,10 @@ type sharedFileCandidate struct {
 	listingMatched bool
 }
 
+// Suite-wide caches of resolved live fixtures: discovery costs several live
+// Graph round trips, and every test that uses a fixture needs the same answer.
+//
+//nolint:gochecknoglobals // a cache shared by every test in the suite run has no narrower owner than the package.
 var (
 	sharedFileFixtureCache   sync.Map
 	sharedFolderFixtureCache sync.Map
@@ -277,13 +287,13 @@ func requireSharedFileLink(t *testing.T) string {
 	return rawLink
 }
 
-func requireShortcutFixture(t *testing.T, kind shortcutFixtureKind) resolvedShortcutFixture {
+func requireShortcutFixture(t *testing.T, kind shortcutFixtureKind) *resolvedShortcutFixture {
 	t.Helper()
 
 	return requireShortcutFixtureWithSharedDiscovery(t, kind, false)
 }
 
-func requireShortcutFixtureWithCatalog(t *testing.T, kind shortcutFixtureKind) resolvedShortcutFixture {
+func requireShortcutFixtureWithCatalog(t *testing.T, kind shortcutFixtureKind) *resolvedShortcutFixture {
 	t.Helper()
 
 	return requireShortcutFixtureWithSharedDiscovery(t, kind, true)
@@ -293,11 +303,11 @@ func requireShortcutFixtureWithSharedDiscovery(
 	t *testing.T,
 	kind shortcutFixtureKind,
 	requireSharedCatalog bool,
-) resolvedShortcutFixture {
+) *resolvedShortcutFixture {
 	t.Helper()
 
 	fixtures := liveConfig.Fixtures
-	fixture := resolvedShortcutFixture{Kind: kind}
+	fixture := &resolvedShortcutFixture{Kind: kind}
 	switch kind {
 	case shortcutFixtureWritable:
 		fixture.ParentDrive = fixtures.WritableShortcutParentDrive
@@ -346,9 +356,9 @@ func shortcutFixtureEnvStem(kind shortcutFixtureKind) string {
 
 func discoverShortcutFixture(
 	t *testing.T,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 	requireSharedCatalog bool,
-) resolvedShortcutFixture {
+) *resolvedShortcutFixture {
 	t.Helper()
 
 	cfgPath, env, cleanup, err := writeFixtureConfigForDriveID(fixture.ParentDrive)
@@ -369,7 +379,7 @@ func waitForShortcutSharedItem(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 	required bool,
 ) (sharedItemE2E, bool) {
 	t.Helper()
@@ -384,7 +394,7 @@ func waitForShortcutSharedItem(
 			lastListing = listing
 			for i := range listing.Items {
 				item := listing.Items[i]
-				if item.Name != fixture.ShortcutName || item.Type != "folder" {
+				if item.Name != fixture.ShortcutName || item.Type != sharedItemTypeFolder {
 					continue
 				}
 				if fixture.SharerEmail != "" && !strings.EqualFold(item.SharedByEmail, fixture.SharerEmail) {
@@ -423,7 +433,7 @@ func requireShortcutRootEntry(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 ) {
 	t.Helper()
 
@@ -434,7 +444,7 @@ func requireShortcutSentinelVisible(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 ) {
 	t.Helper()
 
@@ -445,7 +455,7 @@ func shortcutSentinelReachable(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 ) error {
 	t.Helper()
 
@@ -470,7 +480,7 @@ func shortcutSentinelReachable(
 func requireActiveShortcutChild(
 	t *testing.T,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 ) shortcutChildE2ERecord {
 	t.Helper()
 
@@ -493,7 +503,7 @@ func requireActiveShortcutChild(
 func requireActiveShortcutChildAtPath(
 	t *testing.T,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 	relativeLocalPath string,
 ) shortcutChildE2ERecord {
 	t.Helper()
@@ -518,7 +528,7 @@ func requireActiveShortcutChildAtPath(
 func findActiveShortcutChild(
 	t *testing.T,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 	relativeLocalPath string,
 ) (shortcutChildE2ERecord, bool) {
 	t.Helper()
@@ -539,7 +549,7 @@ func findActiveShortcutChild(
 func shortcutChildRecords(
 	t *testing.T,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 ) []shortcutChildE2ERecord {
 	t.Helper()
 
@@ -578,7 +588,7 @@ func requireSharedListContainsShortcutFixture(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 ) {
 	t.Helper()
 
@@ -589,7 +599,7 @@ func requireRootPlaceholderContainsShortcutFixture(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 ) {
 	t.Helper()
 
@@ -600,7 +610,7 @@ func waitForShortcutRootPlaceholder(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 	failureTitle string,
 ) {
 	t.Helper()
@@ -682,14 +692,14 @@ type shortcutRootPlaceholderPollState struct {
 
 func canSkipMissingShortcutRootPlaceholder(
 	state shortcutRootPlaceholderPollState,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 ) bool {
 	return classifyShortcutRootPlaceholderProviderSkip(state, fixture).Skippable
 }
 
 func classifyShortcutRootPlaceholderProviderSkip(
 	state shortcutRootPlaceholderPollState,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 ) liveProviderSkipDecision {
 	if !state.RootListingDecoded || state.LastErr != nil || fixture.SharedItem.Selector == "" {
 		return liveProviderSkipDecision{Reason: liveProviderSkipNone}
@@ -701,7 +711,7 @@ func skipShortcutRootPlaceholderOmission(
 	t *testing.T,
 	failureTitle string,
 	pollState shortcutRootPlaceholderPollState,
-	fixture resolvedShortcutFixture,
+	fixture *resolvedShortcutFixture,
 	elapsed time.Duration,
 ) {
 	t.Helper()
@@ -723,7 +733,7 @@ func skipShortcutRootPlaceholderOmission(
 func TestCanSkipMissingShortcutRootPlaceholderRequiresDecodedListingAndSharedTarget(t *testing.T) {
 	t.Parallel()
 
-	fixture := resolvedShortcutFixture{
+	fixture := &resolvedShortcutFixture{
 		SharedItem: sharedItemE2E{
 			Selector: "shared:user@example.com:drive:item",
 		},
@@ -746,7 +756,7 @@ func TestCanSkipMissingShortcutRootPlaceholderRequiresDecodedListingAndSharedTar
 	))
 	assert.False(t, canSkipMissingShortcutRootPlaceholder(
 		shortcutRootPlaceholderPollState{RootListingDecoded: true},
-		resolvedShortcutFixture{},
+		&resolvedShortcutFixture{},
 	))
 }
 
@@ -786,7 +796,8 @@ func resolveSharedFileFixture(t *testing.T, rawLink string) resolvedSharedFileFi
 	t.Helper()
 
 	entryValue, _ := sharedFileFixtureCache.LoadOrStore(rawLink, &sharedFileFixtureCacheEntry{})
-	entry := entryValue.(*sharedFileFixtureCacheEntry)
+	entry, ok := entryValue.(*sharedFileFixtureCacheEntry)
+	require.True(t, ok, "shared-file fixture cache holds %T", entryValue)
 	entry.once.Do(func() {
 		entry.fixture, entry.err = discoverSharedFileFixture(t, rawLink)
 	})
@@ -804,81 +815,94 @@ func discoverSharedFileFixture(_ *testing.T, rawLink string) (resolvedSharedFile
 
 	var candidates []sharedFileCandidate
 	for _, candidateDriveID := range candidateDriveIDs {
-		cfgPath, env, cleanup, err := writeFixtureConfigForDriveID(candidateDriveID)
+		candidate, ok, err := probeSharedFileCandidate(candidateDriveID, rawLink)
 		if err != nil {
 			return resolvedSharedFileFixture{}, err
 		}
-		defer cleanup()
-
-		recipientEmail, err := recipientEmailFromCanonicalDriveID(candidateDriveID)
-		if err != nil {
-			return resolvedSharedFileFixture{}, err
+		if ok {
+			candidates = append(candidates, candidate)
 		}
-
-		_, stdout, stderr, err := execCLI(
-			cfgPath,
-			env,
-			"",
-			"stat",
-			"--json",
-			"--account",
-			recipientEmail,
-			rawLink,
-		)
-		if err != nil {
-			_ = stderr
-			continue
-		}
-
-		var rawStat sharedStatE2EOutput
-		if err := json.Unmarshal([]byte(stdout), &rawStat); err != nil {
-			return resolvedSharedFileFixture{}, fmt.Errorf(
-				"parse raw shared-link stat output for candidate %s: %w",
-				candidateDriveID,
-				err,
-			)
-		}
-		if rawStat.AccountEmail != "" && rawStat.AccountEmail != recipientEmail {
-			continue
-		}
-
-		fileItem := sharedItemE2E{
-			Selector:      rawStat.SharedSelector,
-			Type:          "file",
-			Name:          rawStat.Name,
-			AccountEmail:  recipientEmail,
-			RemoteDriveID: rawStat.RemoteDriveID,
-			RemoteItemID:  rawStat.RemoteItemID,
-		}
-		listingMatched := false
-
-		listing, err := sharedListForRecipientRaw(cfgPath, env, recipientEmail)
-		if err == nil {
-			for i := range listing.Items {
-				if listing.Items[i].RemoteDriveID != rawStat.RemoteDriveID ||
-					listing.Items[i].RemoteItemID != rawStat.RemoteItemID ||
-					listing.Items[i].Type != "file" {
-					continue
-				}
-
-				fileItem = listing.Items[i]
-				listingMatched = true
-				break
-			}
-		}
-
-		candidates = append(candidates, sharedFileCandidate{
-			fixture: resolvedSharedFileFixture{
-				RecipientDriveID: candidateDriveID,
-				RecipientEmail:   recipientEmail,
-				RawStat:          rawStat,
-				FileItem:         fileItem,
-			},
-			listingMatched: listingMatched,
-		})
 	}
 
 	return selectSharedFileFixture(candidates)
+}
+
+// probeSharedFileCandidate checks whether one configured drive's account can
+// see the shared-file link. ok is false when the account cannot stat the link
+// or the link resolves to a different account.
+func probeSharedFileCandidate(candidateDriveID, rawLink string) (sharedFileCandidate, bool, error) {
+	cfgPath, env, cleanup, err := writeFixtureConfigForDriveID(candidateDriveID)
+	if err != nil {
+		return sharedFileCandidate{}, false, err
+	}
+	defer cleanup()
+
+	recipientEmail, err := recipientEmailFromCanonicalDriveID(candidateDriveID)
+	if err != nil {
+		return sharedFileCandidate{}, false, err
+	}
+
+	_, stdout, _, err := execCLI(
+		cfgPath,
+		env,
+		"",
+		"stat",
+		"--json",
+		"--account",
+		recipientEmail,
+		rawLink,
+	)
+	if err != nil {
+		// An account that cannot stat the link is simply not a candidate.
+		return sharedFileCandidate{}, false, nil
+	}
+
+	var rawStat sharedStatE2EOutput
+	if decodeErr := json.Unmarshal([]byte(stdout), &rawStat); decodeErr != nil {
+		return sharedFileCandidate{}, false, fmt.Errorf(
+			"parse raw shared-link stat output for candidate %s: %w",
+			candidateDriveID,
+			decodeErr,
+		)
+	}
+	if rawStat.AccountEmail != "" && rawStat.AccountEmail != recipientEmail {
+		return sharedFileCandidate{}, false, nil
+	}
+
+	fileItem := sharedItemE2E{
+		Selector:      rawStat.SharedSelector,
+		Type:          sharedItemTypeFile,
+		Name:          rawStat.Name,
+		AccountEmail:  recipientEmail,
+		RemoteDriveID: rawStat.RemoteDriveID,
+		RemoteItemID:  rawStat.RemoteItemID,
+	}
+	listingMatched := false
+
+	listing, err := sharedListForRecipientRaw(cfgPath, env, recipientEmail)
+	if err == nil {
+		for i := range listing.Items {
+			if listing.Items[i].RemoteDriveID != rawStat.RemoteDriveID ||
+				listing.Items[i].RemoteItemID != rawStat.RemoteItemID ||
+				listing.Items[i].Type != sharedItemTypeFile {
+				continue
+			}
+
+			fileItem = listing.Items[i]
+			listingMatched = true
+			break
+		}
+	}
+
+	return sharedFileCandidate{
+		fixture: resolvedSharedFileFixture{
+			RecipientDriveID: candidateDriveID,
+			RecipientEmail:   recipientEmail,
+			RawStat:          rawStat,
+			FileItem:         fileItem,
+		},
+		listingMatched: listingMatched,
+	}, true, nil
 }
 
 func selectSharedFileFixture(candidates []sharedFileCandidate) (resolvedSharedFileFixture, error) {
@@ -945,7 +969,8 @@ func resolveSharedFolderFixture(t *testing.T, selector string) resolvedSharedFol
 		"shared-folder fixture missing: store the selector in exported env, root .env, or .testdata/fixtures.env")
 
 	entryValue, _ := sharedFolderFixtureCache.LoadOrStore(selector, &sharedFolderFixtureCacheEntry{})
-	entry := entryValue.(*sharedFolderFixtureCacheEntry)
+	entry, ok := entryValue.(*sharedFolderFixtureCacheEntry)
+	require.True(t, ok, "shared-folder fixture cache holds %T", entryValue)
 	entry.once.Do(func() {
 		entry.fixture, entry.err = discoverSharedFolderFixture(t, selector)
 	})
@@ -978,7 +1003,7 @@ func discoverSharedFolderFixture(_ *testing.T, selector string) (resolvedSharedF
 
 	item := sharedItemE2E{
 		Selector:      selector,
-		Type:          "folder",
+		Type:          sharedItemTypeFolder,
 		AccountEmail:  ref.AccountEmail,
 		RemoteDriveID: ref.RemoteDriveID,
 		RemoteItemID:  ref.RemoteItemID,
@@ -989,7 +1014,7 @@ func discoverSharedFolderFixture(_ *testing.T, selector string) (resolvedSharedF
 		for i := range listing.Items {
 			if listing.Items[i].RemoteDriveID == ref.RemoteDriveID &&
 				listing.Items[i].RemoteItemID == ref.RemoteItemID &&
-				listing.Items[i].Type == "folder" {
+				listing.Items[i].Type == sharedItemTypeFolder {
 				item = listing.Items[i]
 				break
 			}
@@ -1015,21 +1040,18 @@ func writeFixtureConfigForDriveID(driveID string) (string, map[string]string, fu
 
 	perTestHome, err := os.MkdirTemp("", "onedrive-shared-fixture-home-*")
 	if err != nil {
-		_ = os.RemoveAll(perTestData)
+		removeFixtureDirs(perTestData)
 		return "", nil, nil, fmt.Errorf("create fixture HOME dir: %w", err)
 	}
 
 	cfgDir, err := os.MkdirTemp("", "onedrive-shared-fixture-config-*")
 	if err != nil {
-		_ = os.RemoveAll(perTestData)
-		_ = os.RemoveAll(perTestHome)
+		removeFixtureDirs(perTestData, perTestHome)
 		return "", nil, nil, fmt.Errorf("create fixture config dir: %w", err)
 	}
 
 	cleanup := func() {
-		_ = os.RemoveAll(perTestData)
-		_ = os.RemoveAll(perTestHome)
-		_ = os.RemoveAll(cfgDir)
+		removeFixtureDirs(perTestData, perTestHome, cfgDir)
 	}
 
 	perTestDataDir := filepath.Join(perTestData, "onedrive-go")
@@ -1070,6 +1092,17 @@ sync_dir = %q
 	return cfgPath, env, cleanup, nil
 }
 
+// removeFixtureDirs removes fixture temp dirs. It has no *testing.T because
+// fixture discovery is cached across tests, so it reports a failure on
+// stderr, where CI keeps it, instead of failing whichever test came first.
+func removeFixtureDirs(dirs ...string) {
+	for _, dir := range dirs {
+		if err := os.RemoveAll(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: removing fixture dir %s: %v\n", dir, err)
+		}
+	}
+}
+
 func copyFixtureMetadataFiles(srcDir, dstDir string) error {
 	if err := copyFixtureFile(
 		filepath.Join(srcDir, "catalog.json"),
@@ -1083,15 +1116,16 @@ func copyFixtureMetadataFiles(srcDir, dstDir string) error {
 }
 
 func copyFixtureFile(src, dst string, perm os.FileMode) error {
-	data, err := os.ReadFile(src)
+	data, err := os.ReadFile(src) //nolint:gosec // fixture metadata from the suite's own isolated data dir
 	if err != nil {
 		return fmt.Errorf("read fixture file %s: %w", src, err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return fmt.Errorf("mkdir fixture destination for %s: %w", dst, err)
 	}
 
+	//nolint:gosec // destination is inside a temp dir this helper created
 	if err := os.WriteFile(dst, data, perm); err != nil {
 		return fmt.Errorf("write fixture file %s: %w", dst, err)
 	}
@@ -1159,10 +1193,9 @@ func waitForDriveListSharedSelectorVisible(
 		}
 
 		if time.Now().After(deadline) {
-			decision := liveProviderSkipDecision{Skippable: true, Reason: liveProviderSkipDriveListSharedOmitted}
 			t.Skipf(
 				"provider_skip=%s live drive list shared discovery did not expose selector %q within %v; Graph search omitted the known fixture on this run\nlast stdout: %s\nlast stderr: %s",
-				decision.Reason,
+				liveProviderSkipDriveListSharedOmitted,
 				selector,
 				pollTimeout,
 				lastStdout,
@@ -1178,7 +1211,7 @@ func waitForSharedFolderNameDriveAdd(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	fixture resolvedSharedFolderFixture,
+	fixture *resolvedSharedFolderFixture,
 ) {
 	t.Helper()
 
@@ -1238,53 +1271,76 @@ func waitForSharedFolderNameDriveAdd(
 		}
 
 		if time.Now().After(deadline) {
-			if decision := classifySharedFolderNameProviderSkip(lastStderr, lastSharedVisible, lastSharedErr, lastSharedStderr); decision.Skippable {
-				t.Skipf(
-					"provider_skip=%s live shared discovery omitted folder name %q for account %s within %v; independent shared --json did not confirm the known fixture on this run\nlast stdout: %s\nlast stderr: %s\nlast shared err: %v\nlast shared stdout: %s\nlast shared stderr: %s",
-					decision.Reason,
-					fixture.FolderItem.Name,
-					fixture.RecipientEmail,
-					pollTimeout,
-					lastStdout,
-					lastStderr,
-					lastSharedErr,
-					lastSharedStdout,
-					lastSharedStderr,
-				)
-			}
-			if isRetryableGraphGatewayFailure(lastStderr) {
-				t.Skipf(
-					"live shared discovery could not add folder name %q for account %s within %v because Graph kept returning retryable gateway failures\nlast stdout: %s\nlast stderr: %s",
-					fixture.FolderItem.Name,
-					fixture.RecipientEmail,
-					pollTimeout,
-					lastStdout,
-					lastStderr,
-				)
-			}
-
-			require.NoErrorf(t, err,
-				"drive add <shared-folder-name> should not time out without a provider-only omission signal\nlast stdout: %s\nlast stderr: %s\nlast shared err: %v\nlast shared stdout: %s\nlast shared stderr: %s",
-				lastStdout,
-				lastStderr,
-				lastSharedErr,
-				lastSharedStdout,
-				lastSharedStderr,
-			)
-			t.FailNow()
+			endSharedFolderNameDriveAddWait(t, fixture, err, sharedFolderNameDriveAddAttempt{
+				stdout:        lastStdout,
+				stderr:        lastStderr,
+				sharedVisible: lastSharedVisible,
+				sharedStdout:  lastSharedStdout,
+				sharedStderr:  lastSharedStderr,
+				sharedErr:     lastSharedErr,
+			})
 		}
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
 
-func sharedFolderNameProviderOmittedFixture(
-	driveAddStderr string,
-	sharedVisible bool,
-	sharedErr error,
-	sharedStderr string,
-) bool {
-	return classifySharedFolderNameProviderSkip(driveAddStderr, sharedVisible, sharedErr, sharedStderr).Skippable
+// sharedFolderNameDriveAddAttempt is the last observed state of the
+// drive add <shared-folder-name> poll, kept for the timeout verdict.
+type sharedFolderNameDriveAddAttempt struct {
+	stdout        string
+	stderr        string
+	sharedVisible bool
+	sharedStdout  string
+	sharedStderr  string
+	sharedErr     error
+}
+
+// endSharedFolderNameDriveAddWait ends a timed-out drive add poll: it skips
+// on a provider-only omission or persistent gateway failures, and otherwise
+// fails the test. It never returns.
+func endSharedFolderNameDriveAddWait(
+	t *testing.T,
+	fixture *resolvedSharedFolderFixture,
+	err error,
+	last sharedFolderNameDriveAddAttempt,
+) {
+	t.Helper()
+
+	if decision := classifySharedFolderNameProviderSkip(last.stderr, last.sharedVisible, last.sharedErr, last.sharedStderr); decision.Skippable {
+		t.Skipf(
+			"provider_skip=%s live shared discovery omitted folder name %q for account %s within %v; independent shared --json did not confirm the known fixture on this run\nlast stdout: %s\nlast stderr: %s\nlast shared err: %v\nlast shared stdout: %s\nlast shared stderr: %s",
+			decision.Reason,
+			fixture.FolderItem.Name,
+			fixture.RecipientEmail,
+			pollTimeout,
+			last.stdout,
+			last.stderr,
+			last.sharedErr,
+			last.sharedStdout,
+			last.sharedStderr,
+		)
+	}
+	if isRetryableGraphGatewayFailure(last.stderr) {
+		t.Skipf(
+			"live shared discovery could not add folder name %q for account %s within %v because Graph kept returning retryable gateway failures\nlast stdout: %s\nlast stderr: %s",
+			fixture.FolderItem.Name,
+			fixture.RecipientEmail,
+			pollTimeout,
+			last.stdout,
+			last.stderr,
+		)
+	}
+
+	require.NoErrorf(t, err,
+		"drive add <shared-folder-name> should not time out without a provider-only omission signal\nlast stdout: %s\nlast stderr: %s\nlast shared err: %v\nlast shared stdout: %s\nlast shared stderr: %s",
+		last.stdout,
+		last.stderr,
+		last.sharedErr,
+		last.sharedStdout,
+		last.sharedStderr,
+	)
+	t.FailNow()
 }
 
 func classifySharedFolderNameProviderSkip(
@@ -1313,7 +1369,7 @@ func sharedFolderNameFixtureVisible(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	fixture resolvedSharedFolderFixture,
+	fixture *resolvedSharedFolderFixture,
 ) (bool, string, string, error) {
 	t.Helper()
 
@@ -1339,17 +1395,6 @@ func sharedFolderNameFixtureVisible(
 	return sharedFolderFixtureVisibleInListing(listing, fixture), stdout, stderr, nil
 }
 
-func sharedListForRecipient(t *testing.T, cfgPath string, env map[string]string, recipientEmail string) sharedListE2EOutput {
-	t.Helper()
-
-	stdout, _ := runCLIWithoutDrive(t, cfgPath, env, "--account", recipientEmail, "shared", "--json")
-
-	var parsed sharedListE2EOutput
-	require.NoError(t, json.Unmarshal([]byte(stdout), &parsed))
-
-	return parsed
-}
-
 func statSharedTargetJSON(t *testing.T, cfgPath string, env map[string]string, args ...string) sharedStatE2EOutput {
 	t.Helper()
 
@@ -1370,7 +1415,7 @@ func getSharedTargetContent(t *testing.T, cfgPath string, env map[string]string,
 	fullArgs = append(fullArgs, localPath)
 	runCLIWithoutDrive(t, cfgPath, env, fullArgs...)
 
-	data, err := os.ReadFile(localPath)
+	data, err := os.ReadFile(localPath) //nolint:gosec // the file the CLI just downloaded into the test's own temp dir
 	require.NoError(t, err)
 
 	return string(data)
@@ -1404,24 +1449,11 @@ func eventuallySharedContentEquals(
 			return false
 		}
 
-		data, readErr := os.ReadFile(localPath)
+		data, readErr := os.ReadFile(localPath) //nolint:gosec // the file the CLI just downloaded into the test's own temp dir
 		if readErr != nil {
 			return false
 		}
 
 		return string(data) == expected
 	}, pollTimeout, 2*time.Second)
-}
-
-func findSharedItemByRemoteIDs(t *testing.T, items []sharedItemE2E, driveID, itemID, itemType string) sharedItemE2E {
-	t.Helper()
-
-	for i := range items {
-		if items[i].RemoteDriveID == driveID && items[i].RemoteItemID == itemID && items[i].Type == itemType {
-			return items[i]
-		}
-	}
-
-	require.Failf(t, "shared item not found", "drive=%s item=%s type=%s", driveID, itemID, itemType)
-	return sharedItemE2E{}
 }

@@ -49,12 +49,12 @@ func TestE2E_Orchestrator_SimultaneousSync(t *testing.T) {
 	localDir1 := filepath.Join(syncDir1, testFolder1)
 	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir1, "drive1-file.txt"), []byte("from drive1\n"), 0o644))
+		filepath.Join(localDir1, "drive1-file.txt"), []byte("from drive1\n"), 0o600))
 
 	localDir2 := filepath.Join(syncDir2, testFolder2)
 	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir2, "drive2-file.txt"), []byte("from drive2\n"), 0o644))
+		filepath.Join(localDir2, "drive2-file.txt"), []byte("from drive2\n"), 0o600))
 
 	// Cleanup remote folders after test.
 	t.Cleanup(func() {
@@ -122,7 +122,7 @@ func TestE2E_Orchestrator_DriveIsolation(t *testing.T) {
 	// File should appear in drive1's sync dir.
 	localPath1 := filepath.Join(syncDir1, testFolder, "isolated.txt")
 	_, err := os.Stat(localPath1)
-	assert.NoError(t, err, "file should exist in drive1 sync dir")
+	require.NoError(t, err, "file should exist in drive1 sync dir")
 
 	// File should NOT appear in drive2's sync dir.
 	localPath2 := filepath.Join(syncDir2, testFolder, "isolated.txt")
@@ -166,7 +166,7 @@ func TestE2E_Orchestrator_OneDriveFails(t *testing.T) {
 	localDir := filepath.Join(syncDir1, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir, "survive.txt"), []byte("should survive\n"), 0o644))
+		filepath.Join(localDir, "survive.txt"), []byte("should survive\n"), 0o600))
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
@@ -174,7 +174,7 @@ func TestE2E_Orchestrator_OneDriveFails(t *testing.T) {
 	stdout, stderr, err := runCLIWithConfigAllDrivesAllowError(t, cfgPath, env, "sync", "--upload-only")
 
 	// Overall should fail (one drive failed).
-	assert.Error(t, err, "sync should exit non-zero when one drive fails")
+	require.Error(t, err, "sync should exit non-zero when one drive fails")
 
 	// drive2's error should be mentioned.
 	combined := stdout + stderr
@@ -214,12 +214,12 @@ func TestE2E_Orchestrator_SelectiveDrive(t *testing.T) {
 	localDir1 := filepath.Join(syncDir1, testFolder1)
 	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir1, "selected.txt"), []byte("selected drive\n"), 0o644))
+		filepath.Join(localDir1, "selected.txt"), []byte("selected drive\n"), 0o600))
 
 	localDir2 := filepath.Join(syncDir2, testFolder2)
 	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir2, "not-selected.txt"), []byte("not selected\n"), 0o644))
+		filepath.Join(localDir2, "not-selected.txt"), []byte("not selected\n"), 0o600))
 
 	t.Cleanup(func() {
 		cleanupRemoteFolder(t, testFolder1)
@@ -281,26 +281,23 @@ func TestE2E_Orchestrator_WatchSimultaneous(t *testing.T) {
 	require.NoError(t, cmd.Start(), "failed to start multi-drive daemon")
 
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
-		}
+		stopDaemon(t, cmd)
 
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
-	waitForDaemonReady(t, eventsPath, 30*time.Second)
+	waitForDaemonReady(t, eventsPath)
 
 	// Create files in each sync dir.
 	localDir1 := filepath.Join(syncDir1, testFolder1)
 	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir1, "watch-d1.txt"), []byte("watch drive1"), 0o644))
+		filepath.Join(localDir1, "watch-d1.txt"), []byte("watch drive1"), 0o600))
 
 	localDir2 := filepath.Join(syncDir2, testFolder2)
 	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir2, "watch-d2.txt"), []byte("watch drive2"), 0o644))
+		filepath.Join(localDir2, "watch-d2.txt"), []byte("watch drive2"), 0o600))
 
 	// Poll both remotes until files appear.
 	remotePath1 := "/" + testFolder1 + "/watch-d1.txt"
@@ -311,7 +308,7 @@ func TestE2E_Orchestrator_WatchSimultaneous(t *testing.T) {
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	waitForDaemonExit(t, cmd)
 }
 
 // TestE2E_Orchestrator_WatchDriveIsolation starts a 2-drive daemon, creates
@@ -344,21 +341,18 @@ func TestE2E_Orchestrator_WatchDriveIsolation(t *testing.T) {
 	require.NoError(t, cmd.Start(), "failed to start daemon")
 
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
-		}
+		stopDaemon(t, cmd)
 
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
-	waitForDaemonReady(t, eventsPath, 30*time.Second)
+	waitForDaemonReady(t, eventsPath)
 
 	// Create file only in drive1's sync dir.
 	localDir1 := filepath.Join(syncDir1, testFolder)
 	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir1, "isolated.txt"), []byte("drive1 only"), 0o644))
+		filepath.Join(localDir1, "isolated.txt"), []byte("drive1 only"), 0o600))
 
 	// Wait for drive1's file to appear remotely.
 	remotePath := "/" + testFolder + "/isolated.txt"
@@ -368,11 +362,11 @@ func TestE2E_Orchestrator_WatchDriveIsolation(t *testing.T) {
 	d2Args := []string{"--config", cfgPath, "--drive", drive2, "--debug", "stat", "/" + testFolder + "/isolated.txt"}
 	d2Cmd := makeCmd(d2Args, env)
 	d2Err := d2Cmd.Run()
-	assert.Error(t, d2Err, "file should NOT exist on drive2")
+	require.Error(t, d2Err, "file should NOT exist on drive2")
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	waitForDaemonExit(t, cmd)
 }
 
 // TestE2E_Orchestrator_WatchPausedDrive starts a 2-drive daemon with drive2
@@ -431,26 +425,23 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 	require.NoError(t, cmd.Start(), "failed to start daemon")
 
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
-		}
+		stopDaemon(t, cmd)
 
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
-	waitForDaemonReady(t, eventsPath, 30*time.Second)
+	waitForDaemonReady(t, eventsPath)
 
 	// Create files in both sync dirs.
 	localDir1 := filepath.Join(syncDir1, testFolder1)
 	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir1, "active.txt"), []byte("active drive"), 0o644))
+		filepath.Join(localDir1, "active.txt"), []byte("active drive"), 0o600))
 
 	localDir2 := filepath.Join(syncDir2, testFolder2)
 	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir2, "paused.txt"), []byte("paused drive"), 0o644))
+		filepath.Join(localDir2, "paused.txt"), []byte("paused drive"), 0o600))
 
 	// Verify drive1 syncs.
 	remotePath1 := "/" + testFolder1 + "/active.txt"
@@ -472,9 +463,9 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 	d2Args := []string{"--config", cfgPath, "--drive", drive2, "--debug", "stat", "/" + testFolder2 + "/paused.txt"}
 	d2Cmd := makeCmd(d2Args, env)
 	d2Err := d2Cmd.Run()
-	assert.Error(t, d2Err, "paused drive2's file should NOT be uploaded")
+	require.Error(t, d2Err, "paused drive2's file should NOT be uploaded")
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	waitForDaemonExit(t, cmd)
 }

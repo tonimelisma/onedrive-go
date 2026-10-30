@@ -3,12 +3,15 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -17,6 +20,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
+// Suite state set once by TestMain and read by every test.
+//
+//nolint:gochecknoglobals // TestMain can hand suite setup to tests only through package variables.
 var (
 	binaryPath          string
 	drive               string
@@ -26,11 +32,6 @@ var (
 	suiteTimingRecorder *e2eTimingRecorder
 	suiteQuirkRecorder  *e2eQuirkRecorder
 )
-
-var e2eArtifactPrefixes = []string{
-	"e2e-",
-	"onedrive-go-e2e",
-}
 
 func TestMain(m *testing.M) {
 	// Load live-test env files and validate safety guards before anything else.
@@ -64,8 +65,46 @@ func TestMain(m *testing.M) {
 	}
 
 	binaryPath = filepath.Join(tmpDir, "onedrive-go")
+	buildSuiteBinary(binaryPath)
 
-	cmd := exec.Command("go", "build", "-o", binaryPath, ".")
+	// Set up debug log directory for E2E visibility.
+	logDir = resolveSuiteLogDir()
+
+	fmt.Fprintf(os.Stderr, "E2E debug logs: %s\n", logDir)
+	suiteTimingRecorder, err = newE2ETimingRecorder(logDir)
+	if err != nil {
+		abortSuitef(cleanupIsolation, tmpDir, "creating E2E timing recorder: %v", err)
+	}
+	suiteQuirkRecorder, err = newE2EQuirkRecorder(logDir)
+	if err != nil {
+		abortSuitef(cleanupIsolation, tmpDir, "creating E2E quirk recorder: %v", err)
+	}
+
+	suiteCfgPath := filepath.Join(tmpDir, "e2e-suite-config.toml")
+	if err := writeSuiteConfig(suiteCfgPath, drive, drive2); err != nil {
+		abortSuitef(cleanupIsolation, tmpDir, "writing E2E suite config: %v", err)
+	}
+	if os.Getenv(e2eSkipSuiteScrubEnvVar) == "1" {
+		fmt.Fprintf(os.Stderr, "E2E preflight scrub skipped via %s\n", e2eSkipSuiteScrubEnvVar)
+	} else {
+		if err := scrubRemoteSuiteArtifacts(suiteCfgPath, drive, drive2); err != nil {
+			abortSuitef(cleanupIsolation, tmpDir, "scrubbing E2E remote artifacts: %v", err)
+		}
+	}
+
+	// Run tests, then clean up explicitly. os.Exit does not run defers,
+	// so we must call cleanup before exiting to preserve rotated tokens.
+	code := m.Run()
+	cleanupIsolation()
+	removeSuiteTempDir(tmpDir)
+	os.Exit(code)
+}
+
+// buildSuiteBinary builds the CLI under test into path, exiting the process
+// on failure.
+func buildSuiteBinary(path string) {
+	//nolint:gosec // a fixed `go build` of this module into the suite's own temp dir
+	cmd := exec.CommandContext(context.Background(), "go", "build", "-o", path, ".")
 	cmd.Dir = findModuleRoot()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -74,65 +113,46 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "building binary: %v\n", err)
 		os.Exit(1)
 	}
+}
 
-	// Set up debug log directory for E2E visibility.
+// abortSuitef reports a TestMain setup failure, undoes the isolation and temp
+// dir set up so far, and exits. It never returns.
+func abortSuitef(cleanupIsolation func(), tmpDir, format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	cleanupIsolation()
+	removeSuiteTempDir(tmpDir)
+	os.Exit(1)
+}
+
+// resolveSuiteLogDir returns the E2E debug log directory: E2E_LOG_DIR when
+// set, otherwise a fresh temp dir. It exits the process on failure because it
+// runs from TestMain, before any test can report an error.
+func resolveSuiteLogDir() string {
 	if dir := os.Getenv("E2E_LOG_DIR"); dir != "" {
+		//nolint:gosec // E2E_LOG_DIR is set by the CI workflow or the developer running the suite
 		if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
 			fmt.Fprintf(os.Stderr, "creating E2E log dir: %v\n", mkErr)
 			os.Exit(1)
 		}
 
-		logDir = dir
-	} else {
-		dir, mkErr := os.MkdirTemp("", "onedrive-e2e-logs-*")
-		if mkErr != nil {
-			fmt.Fprintf(os.Stderr, "creating E2E log temp dir: %v\n", mkErr)
-			os.Exit(1)
-		}
-
-		logDir = dir
+		return dir
 	}
 
-	fmt.Fprintf(os.Stderr, "E2E debug logs: %s\n", logDir)
-	suiteTimingRecorder, err = newE2ETimingRecorder(logDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "creating E2E timing recorder: %v\n", err)
-		cleanupIsolation()
-		os.RemoveAll(tmpDir)
-		os.Exit(1)
-	}
-	suiteQuirkRecorder, err = newE2EQuirkRecorder(logDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "creating E2E quirk recorder: %v\n", err)
-		cleanupIsolation()
-		os.RemoveAll(tmpDir)
+	dir, mkErr := os.MkdirTemp("", "onedrive-e2e-logs-*")
+	if mkErr != nil {
+		fmt.Fprintf(os.Stderr, "creating E2E log temp dir: %v\n", mkErr)
 		os.Exit(1)
 	}
 
-	suiteCfgPath := filepath.Join(tmpDir, "e2e-suite-config.toml")
-	if err := writeSuiteConfig(suiteCfgPath, drive, drive2); err != nil {
-		fmt.Fprintf(os.Stderr, "writing E2E suite config: %v\n", err)
-		cleanupIsolation()
-		os.RemoveAll(tmpDir)
-		os.Exit(1)
-	}
-	if os.Getenv(e2eSkipSuiteScrubEnvVar) == "1" {
-		fmt.Fprintf(os.Stderr, "E2E preflight scrub skipped via %s\n", e2eSkipSuiteScrubEnvVar)
-	} else {
-		if err := scrubRemoteSuiteArtifacts(suiteCfgPath, drive, drive2); err != nil {
-			fmt.Fprintf(os.Stderr, "scrubbing E2E remote artifacts: %v\n", err)
-			cleanupIsolation()
-			os.RemoveAll(tmpDir)
-			os.Exit(1)
-		}
-	}
+	return dir
+}
 
-	// Run tests, then clean up explicitly. os.Exit does not run defers,
-	// so we must call cleanup before exiting to preserve rotated tokens.
-	code := m.Run()
-	cleanupIsolation()
-	os.RemoveAll(tmpDir)
-	os.Exit(code)
+// removeSuiteTempDir removes the suite's build temp dir, reporting (but not
+// failing on) a removal error so a leaked dir is visible in the CI log.
+func removeSuiteTempDir(dir string) {
+	if err := os.RemoveAll(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: removing E2E temp dir %s: %v\n", dir, err)
+	}
 }
 
 type remoteListJSONItem struct {
@@ -152,10 +172,14 @@ func writeSuiteConfig(path string, drives ...string) error {
 			continue
 		}
 
-		builder.WriteString(fmt.Sprintf("[%q]\n", driveID))
+		fmt.Fprintf(&builder, "[%q]\n", driveID)
 	}
 
-	return os.WriteFile(path, []byte(builder.String()), 0o600)
+	if err := os.WriteFile(path, []byte(builder.String()), 0o600); err != nil {
+		return fmt.Errorf("writing suite config %s: %w", path, err)
+	}
+
+	return nil
 }
 
 func scrubRemoteSuiteArtifacts(cfgPath string, drives ...string) error {
@@ -201,7 +225,7 @@ func scrubRemoteDriveArtifacts(cfgPath string, driveID string) error {
 }
 
 func isE2EArtifactName(name string) bool {
-	for _, prefix := range e2eArtifactPrefixes {
+	for _, prefix := range [...]string{"e2e-", "onedrive-go-e2e"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
 		}
@@ -263,7 +287,7 @@ func registerLogDump(t *testing.T) {
 
 	t.Cleanup(func() {
 		if t.Failed() {
-			data, err := os.ReadFile(logPath)
+			data, err := os.ReadFile(logPath) //nolint:gosec // the per-test debug log under the suite's own log dir
 			if err != nil {
 				return
 			}
@@ -280,9 +304,9 @@ func debugLogPath(testName string) string {
 }
 
 func appendDebugLogChunk(path string, content string) (err error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // the per-test debug log under the suite's own log dir
 	if err != nil {
-		return err
+		return fmt.Errorf("opening debug log %s: %w", path, err)
 	}
 	defer func() {
 		closeErr := f.Close()
@@ -291,8 +315,11 @@ func appendDebugLogChunk(path string, content string) (err error) {
 		}
 	}()
 
-	_, err = f.WriteString(content)
-	return err
+	if _, err = f.WriteString(content); err != nil {
+		return fmt.Errorf("writing debug log %s: %w", path, err)
+	}
+
+	return nil
 }
 
 // writeMinimalConfig writes a config file with drive but no sync_dir (uses defaults).
@@ -324,7 +351,8 @@ func skipIfPersonalDrive(t *testing.T) {
 // ensuring child processes have deterministic environments regardless of
 // any concurrent env mutations. When nil, the process env is inherited as-is.
 func makeCmd(args []string, envOverrides map[string]string) *exec.Cmd {
-	cmd := exec.Command(binaryPath, args...)
+	//nolint:gosec // runs the suite-built CLI binary; args come from the test itself
+	cmd := exec.CommandContext(context.Background(), binaryPath, args...)
 	if len(envOverrides) > 0 {
 		env := os.Environ()
 		for k, v := range envOverrides {
@@ -344,6 +372,34 @@ func makeCmd(args []string, envOverrides map[string]string) *exec.Cmd {
 		cmd.Env = env
 	}
 	return cmd
+}
+
+// stopDaemon sends SIGTERM to a daemon the test started and reaps it, unless
+// the test body already did. It is meant for t.Cleanup, so it logs rather
+// than fails: the test's own assertions have already run.
+func stopDaemon(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+
+	if cmd.Process == nil || cmd.ProcessState != nil {
+		return
+	}
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		t.Logf("signaling daemon: %v", err)
+	}
+
+	waitForDaemonExit(t, cmd)
+}
+
+// waitForDaemonExit reaps a daemon after the test has signaled it. The exit
+// status is logged, not asserted: these tests verify the daemon's effects, and
+// a SIGTERM'd process may legitimately report a signal exit.
+func waitForDaemonExit(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+
+	if err := cmd.Wait(); err != nil {
+		t.Logf("daemon exited with: %v", err)
+	}
 }
 
 // pollTimeout is the default timeout for polling helpers waiting on Graph API
@@ -385,9 +441,9 @@ func pollBackoff(attempt int) time.Duration {
 	base := 500 * time.Millisecond
 	d := base << uint(attempt)
 
-	cap := 4 * time.Second
-	if d > cap {
-		return cap
+	maxBackoff := 4 * time.Second
+	if d > maxBackoff {
+		return maxBackoff
 	}
 
 	return d
@@ -403,10 +459,11 @@ func isRetryableGraphGatewayFailure(stderr string) bool {
 // read fails due to an upstream Graph gateway error. Real command regressions
 // still fail immediately instead of being retried until timeout.
 func pollCLIWithConfigRetryingTransientGraphFailures(
-	t *testing.T, cfgPath string, env map[string]string, driveID string, timeout time.Duration, args ...string,
+	t *testing.T, cfgPath string, env map[string]string, driveID string, args ...string,
 ) (string, string) {
 	t.Helper()
 
+	timeout := transientGraphRetryTimeout
 	deadline := time.Now().Add(timeout)
 
 	for attempt := 0; ; attempt++ {

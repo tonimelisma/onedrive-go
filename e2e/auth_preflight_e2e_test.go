@@ -31,7 +31,6 @@ func TestE2E_AuthPreflight_Fast(t *testing.T) {
 	requireVerifierOwnedPreflightEnv(t, e2eRunAuthPreflightEnvVar)
 
 	for _, driveID := range liveConfig.CandidateDriveIDs() {
-		driveID := driveID
 		t.Run(sanitizeTestName(driveID), func(t *testing.T) {
 			assertLiveAuthPreflight(t, driveID)
 		})
@@ -108,7 +107,7 @@ func waitForAuthPreflightEndpoint(
 		}
 
 		if err := retry.TimeSleep(ctx, pollBackoff(attempt)); err != nil {
-			return attempts, err
+			return attempts, fmt.Errorf("waiting to retry auth preflight endpoint %s: %w", path, err)
 		}
 	}
 }
@@ -124,7 +123,7 @@ func runAuthPreflightAttempt(
 		return authPreflightAttempt{Err: fmt.Sprintf("load token: %v", err)}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, graph.DefaultBaseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, graph.DefaultBaseURL+path, http.NoBody)
 	if err != nil {
 		return authPreflightAttempt{Err: fmt.Sprintf("build request: %v", err)}
 	}

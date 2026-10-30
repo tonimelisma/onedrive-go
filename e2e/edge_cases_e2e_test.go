@@ -81,8 +81,7 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 	downloadPath := filepath.Join(t.TempDir(), unicodeName)
 	runCLIWithConfig(t, opsCfgPath, nil, "get", "/"+testFolder+"/"+unicodeName, downloadPath)
 
-	data, err := os.ReadFile(downloadPath)
-	require.NoError(t, err)
+	data := mustReadFile(t, downloadPath)
 	assert.Equal(t, content, string(data), "unicode file content should roundtrip")
 }
 

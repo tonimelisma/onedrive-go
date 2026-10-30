@@ -18,12 +18,12 @@ func TestE2E_SyncWatch_WebsocketStartupSmoke(t *testing.T) {
 	cfgPath, env := writeSyncConfigWithOptions(t, syncDir, "poll_interval = \"5m\"\nwebsocket = true\n")
 	env, eventsPath := withSocketIODebugEvents(t, env)
 
-	h, _ := startFastDaemon(t, cfgPath, env,
+	h := startFastDaemon(t, cfgPath, env,
 		"--drive", drive, "sync", "--download-only", "--watch")
 
 	waitForObserverStarted(t, eventsPath, "remote", 3*time.Minute)
 	waitForSocketIOConnected(t, eventsPath, 45*time.Second)
 
 	require.NoError(t, h.Process.Signal(syscall.SIGTERM))
-	_ = h.Wait()
+	waitForDaemonExit(t, h)
 }

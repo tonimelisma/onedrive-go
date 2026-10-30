@@ -81,16 +81,13 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 
 	// Always kill the daemon on test exit.
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
-		}
+		stopDaemon(t, cmd)
 
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
 	// Wait for daemon to initialize (watch setup complete).
-	waitForDaemonReady(t, eventsPath, 30*time.Second)
+	waitForDaemonReady(t, eventsPath)
 
 	// Create a local file inside the sync dir.
 	localDir := filepath.Join(syncDir, testFolder)
@@ -98,7 +95,7 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "watch-test.txt"),
 		[]byte("created during watch mode\n"),
-		0o644,
+		0o600,
 	))
 
 	// Poll until the file appears remotely.
@@ -146,15 +143,12 @@ func TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners(t *testing.T) {
 
 	require.NoError(t, cmd.Start(), "failed to start daemon")
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
-		}
+		stopDaemon(t, cmd)
 
 		logCLIExecution(t, daemonArgs, daemonStdout.String(), daemonStderr.String())
 	})
 
-	waitForDaemonReady(t, eventsPath, 30*time.Second)
+	waitForDaemonReady(t, eventsPath)
 
 	assertCompetingOwnerFails := func(name string, args ...string) {
 		t.Helper()
@@ -168,7 +162,7 @@ func TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners(t *testing.T) {
 		}
 		fullArgs = append(fullArgs, args...)
 
-		competingCmd := exec.CommandContext(ctx, binaryPath, fullArgs...)
+		competingCmd := exec.CommandContext(ctx, binaryPath, fullArgs...) //nolint:gosec // runs the suite-built CLI binary; args come from the test itself
 		if len(env) > 0 {
 			competingCmd.Env = makeCmd(nil, env).Env
 		}
@@ -225,16 +219,13 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 	require.NoError(t, cmd.Start(), "failed to start daemon")
 
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
-		}
+		stopDaemon(t, cmd)
 
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
 	// Wait for daemon to initialize.
-	waitForDaemonReady(t, eventsPath, 30*time.Second)
+	waitForDaemonReady(t, eventsPath)
 
 	// Pause notifies the daemon through the control socket. Reloading again
 	// ourselves is idempotent and its synchronous answer proves the daemon
@@ -248,7 +239,7 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "paused-file.txt"),
 		[]byte("created while paused\n"),
-		0o644,
+		0o600,
 	))
 
 	// Bounded negative check: poll a few times over 10s, assert file still absent.
@@ -271,7 +262,7 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 
 	// Send SIGTERM for graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	waitForDaemonExit(t, cmd)
 
 	// Verify file content.
 	remoteContent := getRemoteFile(t, opsCfgPath, nil, remotePath)
@@ -335,16 +326,13 @@ func TestE2E_SyncWatch_ControlSocketReload(t *testing.T) {
 	require.NoError(t, cmd.Start(), "failed to start daemon")
 
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
-		}
+		stopDaemon(t, cmd)
 
 		logCLIExecution(t, daemonArgs, stdout.String(), stderr.String())
 	})
 
 	// Wait for daemon to initialize (drive1 watch setup).
-	waitForDaemonReady(t, eventsPath, 30*time.Second)
+	waitForDaemonReady(t, eventsPath)
 
 	// Create a file in drive1's sync dir to verify it works.
 	localDir1 := filepath.Join(syncDir1, testFolder1)
@@ -352,7 +340,7 @@ func TestE2E_SyncWatch_ControlSocketReload(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir1, "before-reload.txt"),
 		[]byte("before reload\n"),
-		0o644,
+		0o600,
 	))
 
 	// Poll until drive1's file appears remotely.
@@ -375,7 +363,7 @@ func TestE2E_SyncWatch_ControlSocketReload(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir2, "after-reload.txt"),
 		[]byte("after reload\n"),
-		0o644,
+		0o600,
 	))
 
 	// Poll until drive2's file appears remotely.
@@ -384,7 +372,7 @@ func TestE2E_SyncWatch_ControlSocketReload(t *testing.T) {
 
 	// Send SIGTERM for graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	_ = cmd.Wait()
+	waitForDaemonExit(t, cmd)
 
 	// Verify file contents.
 	remoteContent1 := getRemoteFile(t, opsCfgPath, nil, remotePath1)

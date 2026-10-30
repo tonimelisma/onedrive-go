@@ -209,7 +209,7 @@ func verifyBaselineReport(t *testing.T, cfgPath string, env map[string]string) (
 	dbPath := stateDBPathForEnv(canonicalID, env)
 	store, err := syncengine.NewSyncStore(t.Context(), dbPath, logger)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open sync store: %w", err)
 	}
 	defer func() {
 		require.NoError(t, store.Close(t.Context()))
@@ -278,9 +278,9 @@ func snapshotLocalTree(t *testing.T, root string) map[string]string {
 			return walkErr
 		}
 
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return fmt.Errorf("relativize %s: %w", path, relErr)
 		}
 
 		key := filepath.ToSlash(rel)
@@ -289,14 +289,14 @@ func snapshotLocalTree(t *testing.T, root string) map[string]string {
 			return nil
 		}
 
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
+		data, readErr := os.ReadFile(path) //nolint:gosec // walking the test-owned local tree
+		if readErr != nil {
+			return fmt.Errorf("read %s: %w", path, readErr)
 		}
 
-		info, err := d.Info()
-		if err != nil {
-			return err
+		info, infoErr := d.Info()
+		if infoErr != nil {
+			return fmt.Errorf("stat %s: %w", path, infoErr)
 		}
 
 		sum := sha256.Sum256(data)
@@ -317,7 +317,7 @@ func snapshotLocalTree(t *testing.T, root string) map[string]string {
 func mustReadFile(t *testing.T, path string) []byte {
 	t.Helper()
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // callers pass paths inside their own sync dir or temp dir
 	require.NoError(t, err)
 	return data
 }
@@ -692,7 +692,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 				return false
 			}
 
-			data, readErr := os.ReadFile(localPath)
+			data, readErr := os.ReadFile(localPath) //nolint:gosec // a file inside the test's own sync dir
 			if readErr != nil {
 				return false
 			}
@@ -711,41 +711,12 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 func copyTokenFile(t *testing.T, srcDir, dstDir string) {
 	t.Helper()
 
-	name := testutil.TokenFileName(drive)
-	srcPath := filepath.Join(srcDir, name)
-
-	data, err := os.ReadFile(srcPath)
-	require.NoErrorf(t, err, "cannot read token file %s", srcPath)
-
-	require.NoError(t, os.WriteFile(filepath.Join(dstDir, name), data, 0o600))
-
-	// Copy the managed inventory catalog.
-	testutil.CopyCatalogFile(srcDir, dstDir)
+	copyTokenFileForDrive(t, srcDir, dstDir, drive)
 }
 
 // ---------------------------------------------------------------------------
 // Polling helpers for daemon watch tests
 // ---------------------------------------------------------------------------
-
-// pollLocalFileExists polls until the file at path exists on disk or timeout.
-func pollLocalFileExists(t *testing.T, path string, timeout time.Duration) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-
-	for attempt := 0; ; attempt++ {
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-
-		if time.Now().After(deadline) {
-			require.Failf(t, "pollLocalFileExists: timed out",
-				"after %v waiting for %s to exist", timeout, path)
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
-}
 
 // pollLocalFileContent polls until the file at path has the expected content.
 func pollLocalFileContent(t *testing.T, path, expected string, timeout time.Duration) {
@@ -754,7 +725,7 @@ func pollLocalFileContent(t *testing.T, path, expected string, timeout time.Dura
 	deadline := time.Now().Add(timeout)
 
 	for attempt := 0; ; attempt++ {
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // a file inside the test's own sync dir
 		if err == nil && string(data) == expected {
 			return
 		}
@@ -770,26 +741,6 @@ func pollLocalFileContent(t *testing.T, path, expected string, timeout time.Dura
 			require.Failf(t, "pollLocalFileContent: timed out",
 				"after %v waiting for %s to contain %q\nlast: %s",
 				timeout, path, expected, last)
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
-}
-
-// pollLocalDirGone polls until the directory at path no longer exists.
-func pollLocalDirGone(t *testing.T, path string, timeout time.Duration) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-
-	for attempt := 0; ; attempt++ {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return
-		}
-
-		if time.Now().After(deadline) {
-			require.Failf(t, "pollLocalDirGone: timed out",
-				"after %v waiting for %s to be removed", timeout, path)
 		}
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))
@@ -887,9 +838,10 @@ func copyTokenFileForDrive(t *testing.T, srcDir, dstDir, driveID string) {
 	name := testutil.TokenFileName(driveID)
 	srcPath := filepath.Join(srcDir, name)
 
-	data, err := os.ReadFile(srcPath)
+	data, err := os.ReadFile(srcPath) //nolint:gosec // token file in the suite's isolated data dir
 	require.NoErrorf(t, err, "cannot read token file %s", srcPath)
 
+	//nolint:gosec // destination is the test's own per-test data dir
 	require.NoError(t, os.WriteFile(filepath.Join(dstDir, name), data, 0o600))
 
 	// Copy the managed inventory catalog.

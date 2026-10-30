@@ -304,11 +304,16 @@ func TestIntegration_CreateAndDeleteFolder(t *testing.T) {
 			return
 		}
 
-		cleanCtx, cleanCancel := context.WithTimeout(t.Context(), integrationTimeout)
+		// t.Context() is already canceled when cleanups run, so detach from
+		// its cancellation or the delete never reaches Graph.
+		cleanCtx, cleanCancel := context.WithTimeout(context.WithoutCancel(t.Context()), integrationTimeout)
 		defer cleanCancel()
 
 		// Best-effort cleanup -- don't fail the test if cleanup fails.
-		_ = client.DeleteItem(cleanCtx, driveID, createdID)
+		if err := client.DeleteItem(cleanCtx, driveID, createdID); err != nil {
+			t.Logf("cleanup: deleting test folder %s: %v", createdID, err)
+			return
+		}
 
 		t.Logf("cleanup: deleted test folder %s", createdID)
 	})
