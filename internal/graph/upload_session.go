@@ -152,7 +152,7 @@ func (c *Client) QueryUploadSession(
 	if parseErr != nil {
 		c.logger.Debug("invalid session status expiration, using zero time",
 			slog.String("raw", ssr.ExpirationDateTime),
-			slog.String("error", parseErr.Error()),
+			slog.Any("error", parseErr),
 		)
 	}
 
@@ -251,7 +251,7 @@ func (c *Client) parseUploadSessionResponse(resp *http.Response) (*UploadSession
 	if parseErr != nil {
 		c.logger.Debug("invalid upload session expiration, using zero time",
 			slog.String("raw", usr.ExpirationDateTime),
-			slog.String("error", parseErr.Error()),
+			slog.Any("error", parseErr),
 		)
 	}
 

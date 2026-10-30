@@ -49,7 +49,7 @@ func (e *Engine) purgeExpiredTrash(force bool) {
 	removed, err := e.trash.Purge()
 	if err != nil {
 		e.logger.Debug("could not purge expired trash entries",
-			slog.String("trash", e.trash.Dir()), slog.String("error", err.Error()))
+			slog.String("trash", e.trash.Dir()), slog.Any("error", err))
 	}
 	if removed > 0 {
 		e.logger.Info("removed expired files from the sync trash",

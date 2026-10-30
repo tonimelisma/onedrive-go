@@ -163,11 +163,11 @@ func (o *Orchestrator) warnOnChange(key string, message string, err error) {
 	text := err.Error()
 
 	if reports.changeWarnings[key] == text {
-		o.logger.Debug(message+" (unchanged; already reported)", slog.String("error", text))
+		o.logger.Debug(message+" (unchanged; already reported)", slog.Any("error", err))
 		return
 	}
 	reports.changeWarnings[key] = text
-	o.logger.Warn(message, slog.String("error", text))
+	o.logger.Warn(message, slog.Any("error", err))
 }
 
 func (o *Orchestrator) clearWarnOnChange(key string) {

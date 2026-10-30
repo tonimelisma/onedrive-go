@@ -67,7 +67,7 @@ func rootObservedDirStack(syncRoot string, logger *slog.Logger) map[string]struc
 		if logger != nil {
 			logger.Debug("could not resolve sync root while building symlink guard",
 				slog.String("sync_root", syncRoot),
-				slog.String("error", err.Error()))
+				slog.Any("error", err))
 		}
 
 		stack[filepath.Clean(syncRoot)] = struct{}{}
@@ -201,7 +201,7 @@ func (o *localObserver) walkFollowedDirectory(
 	if err != nil {
 		o.logger.Debug("skipping symlinked directory with unresolved target",
 			slog.String("path", dbRelPath),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		recordUnreadableObservedBoundary(skipped, dbRelPath, err, unreadableSymlinkTargetDetail)
 		return nil
 	}
@@ -246,7 +246,7 @@ func (o *localObserver) walkObservedDirectory(
 	if err != nil {
 		o.logger.Debug("resolve observed directory failed",
 			slog.String("path", dbRelPath),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		recordUnreadableObservedBoundary(skipped, dbRelPath, err, unreadableDirectoryDetail)
 		return nil
 	}
@@ -283,7 +283,7 @@ func (o *localObserver) walkObservedEntries(
 	if err != nil {
 		o.logger.Debug("read dir failed "+stage,
 			slog.String("path", dbRelPath),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		recordUnreadableObservedBoundary(skipped, dbRelPath, err, unreadableDirectoryDetail)
 		return nil
 	}
@@ -374,7 +374,7 @@ func (o *localObserver) walkObservedEntry(
 	if err != nil {
 		o.logger.Debug("stat failed "+stage,
 			slog.String("path", entryRelPath),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		recordUnreadableObservedBoundary(skipped, entryRelPath, err, unreadableDirectoryDetail)
 		return nil
 	}
@@ -456,7 +456,7 @@ func (o *localObserver) addObservedDirWatches(
 	if err != nil {
 		o.logger.Debug("stat failed during watch setup",
 			slog.String("path", fsPath),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		return nil
 	}
 
@@ -493,7 +493,7 @@ func (o *localObserver) addObservedDirWatches(
 	if err != nil {
 		o.logger.Debug("failed to resolve watched directory",
 			slog.String("path", fsPath),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		return nil
 	}
 
@@ -530,7 +530,7 @@ func (o *localObserver) addObservedWatch(
 		o.logger.Debug("watch resource limit reached during setup",
 			slog.String("path", fsPath),
 			slog.Int("watches_added", counts.watched),
-			slog.String("error", addErr.Error()),
+			slog.Any("error", addErr),
 		)
 
 		return &localWatchUnavailableError{cause: cause, err: addErr}
@@ -539,7 +539,7 @@ func (o *localObserver) addObservedWatch(
 	counts.failed++
 	o.logger.Debug("failed to add watch",
 		slog.String("path", fsPath),
-		slog.String("error", addErr.Error()))
+		slog.Any("error", addErr))
 	return nil
 }
 
@@ -556,7 +556,7 @@ func (o *localObserver) addObservedDirChildrenWatches(
 	if err != nil {
 		o.logger.Debug("read dir failed during watch setup",
 			slog.String("path", fsPath),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		return nil
 	}
 
@@ -655,7 +655,7 @@ func (o *localObserver) processSymlinkPath(
 	if err != nil {
 		o.logger.Debug("skipping symlink with unreadable target",
 			slog.String("path", dbRelPath),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		if isSymlink {
 			recordUnreadableObservedBoundary(skipped, dbRelPath, err, unreadableSymlinkTargetDetail)
 		} else {

@@ -134,7 +134,7 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, er
 		if rmErr := root.Remove(name); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			s.logger.Warn("failed to remove expired session file",
 				slog.String("path", path),
-				slog.String("error", rmErr.Error()),
+				slog.Any("error", rmErr),
 			)
 		}
 
@@ -157,18 +157,18 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, er
 		// nothing to do, and the caller logs ErrCorruptSession at Debug only.
 		s.logger.Info("corrupt upload session file, deleting",
 			slog.String("path", path),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 
 		if root, openErr := fsroot.Open(s.dir); openErr != nil {
 			s.logger.Warn("failed to open session root for corrupt-file cleanup",
 				slog.String("path", path),
-				slog.String("error", openErr.Error()),
+				slog.Any("error", openErr),
 			)
 		} else if rmErr := root.Remove(filepath.Base(path)); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			s.logger.Warn("failed to remove corrupt session file",
 				slog.String("path", path),
-				slog.String("error", rmErr.Error()),
+				slog.Any("error", rmErr),
 			)
 		}
 
@@ -338,7 +338,7 @@ func (s *SessionStore) CleanStale(maxAge time.Duration) (int, error) {
 			if err := root.Remove(e.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
 				s.logger.Warn("failed to clean stale session",
 					slog.String("file", e.Name()),
-					slog.String("error", err.Error()),
+					slog.Any("error", err),
 				)
 
 				continue

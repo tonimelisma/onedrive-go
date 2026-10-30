@@ -50,7 +50,7 @@ func (s *debugEventFileSink) Hook(event DebugEvent) {
 
 	if err := json.NewEncoder(s.file).Encode(event); err != nil {
 		s.logger.Debug("debug event sink write failed",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	}
 }

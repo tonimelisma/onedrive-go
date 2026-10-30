@@ -42,7 +42,7 @@ func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
 		rt.deps.logger.Log(ctx, level, "Could not schedule a rescan of the sync folder after missed changes; will retry",
 			slog.Int64("dropped_events", droppedEvents),
 			slog.Int64("dropped_hash_requests", droppedRetries),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 		return
 	}
@@ -152,7 +152,7 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 		if ctx.Err() == nil {
 			// Warn, not Error: the refresh is retried when watch is idle.
 			rt.deps.logger.Warn("Full check of OneDrive for changes failed; will retry",
-				slog.String("error", err.Error()),
+				slog.Any("error", err),
 			)
 		}
 		result.markFullRefreshIfIdle = true

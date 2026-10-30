@@ -12,6 +12,7 @@ import (
 const (
 	journalPriorityErr     = 3
 	journalPriorityWarning = 4
+	journalPriorityNotice  = 5
 	journalPriorityInfo    = 6
 	journalPriorityDebug   = 7
 )

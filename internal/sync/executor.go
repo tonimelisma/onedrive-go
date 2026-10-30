@@ -170,7 +170,7 @@ func (e *executor) confirmRemotePathVisible(ctx context.Context, action *Action)
 	e.logger.Debug(message,
 		slog.String("path", action.Path),
 		slog.String("target_path", remotePath),
-		slog.String("error", err.Error()),
+		slog.Any("error", err),
 	)
 }
 
@@ -301,7 +301,7 @@ func (e *executor) createLocalFolder(action *Action) actionOutcome {
 		if err := e.syncTree.Chtimes(folder, mtime, mtime); err != nil {
 			// Debug: the folder exists; some filesystems (SMB, FUSE) refuse
 			// directory times, which would otherwise warn once per folder.
-			e.logger.Debug("failed to set folder mtime", slog.String("path", action.Path), slog.String("error", err.Error()))
+			e.logger.Debug("failed to set folder mtime", slog.String("path", action.Path), slog.Any("error", err))
 		}
 	}
 
@@ -752,7 +752,7 @@ func (e *executor) failedOutcome(action *Action, actionType actionType, err erro
 	e.logger.Debug("action failed",
 		slog.String("action", actionType.String()),
 		slog.String("path", action.Path),
-		slog.String("error", err.Error()),
+		slog.Any("error", err),
 	)
 
 	return actionOutcome{
@@ -834,7 +834,7 @@ func (e *executor) observeLocalIdentity(o *actionOutcome, local string) {
 	if err != nil {
 		e.logger.Debug("local identity unavailable after materializing entry",
 			slog.String("path", o.Path),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 		return
 	}

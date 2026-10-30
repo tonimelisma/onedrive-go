@@ -81,7 +81,7 @@ func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, actio
 		}
 		flow.deps.logger.Debug("failed to clear retry_work on success",
 			slog.String("path", path),
-			slog.String("error", clearErr.Error()),
+			slog.Any("error", clearErr),
 		)
 	}
 }

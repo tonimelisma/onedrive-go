@@ -410,7 +410,7 @@ func (flow *engineFlow) applyFatalAuthEffects(
 			fields := append([]any{}, logFields...)
 			fields = append(fields,
 				slog.String("account", flow.engine.permHandler.accountEmail),
-				slog.String("error", err.Error()),
+				slog.Any("error", err),
 			)
 			flow.deps.logger.Warn("Could not record that sign-in is required; status may not show it until the next sync",
 				fields...)

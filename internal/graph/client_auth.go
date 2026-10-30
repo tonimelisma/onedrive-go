@@ -141,7 +141,7 @@ func (c *Client) doOnce(
 		c.logger.Debug("HTTP request failed",
 			slog.String("method", method),
 			slog.String("url", url),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 
 		// doRequest adds the method and path; *url.Error already names the

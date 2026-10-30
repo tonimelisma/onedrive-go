@@ -132,6 +132,11 @@ func runSyncWatch(
 		return cc.seams.syncWatch(ctx, holder, selectors, mode, opts, logger, statusWriter, controlSocketPath)
 	}
 	console := newSyncConsole(cc, true)
+	if console != nil && console.stamp {
+		// Warnings in a long-running watch say when they happened, like the
+		// watch's own lines.
+		logger = withConsoleTimestamps(logger, console.now)
+	}
 
 	getenv := os.Getenv
 	if cc != nil && cc.seams.notifyGetenv != nil {
@@ -140,7 +145,7 @@ func runSyncWatch(
 	notifier := openSyncNotifier(getenv, logger)
 	defer func() {
 		if closeErr := notifier.Close(); closeErr != nil {
-			logger.Debug("close systemd notify socket", slog.String("error", closeErr.Error()))
+			logger.Debug("close systemd notify socket", slog.Any("error", closeErr))
 		}
 	}()
 

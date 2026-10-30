@@ -48,7 +48,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	state, tokenErr := rt.deps.store.ReadObservationState(ctx)
 	if tokenErr != nil {
 		rt.deps.logger.Info("Could not read the saved OneDrive sync position; rescanning OneDrive",
-			slog.String("error", tokenErr.Error()),
+			slog.Any("error", tokenErr),
 		)
 	}
 	savedToken := ""

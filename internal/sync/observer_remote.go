@@ -16,6 +16,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/loglevel"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -336,7 +337,7 @@ func (o *remoteObserver) Watch(
 		if stuck.observe(o.clock.Now(), token, err) {
 			o.logger.Warn("OneDrive has failed every check of the saved change-list position for hours; rescanning the whole drive",
 				slog.Duration("failing_for", cursorServerErrorResetAfter),
-				slog.String("error", err.Error()))
+				slog.Any("error", err))
 			err = newCursorUnusableError("OneDrive kept failing the saved position", err)
 		}
 		if err != nil && errors.Is(err, errDeltaExpired) && o.recoverExpiredDelta != nil {
@@ -361,7 +362,7 @@ func (o *remoteObserver) Watch(
 
 			continue
 		}
-		outage.recovered(o.logger, "Checking OneDrive for changes works again")
+		outage.recovered(ctx, o.logger, "Checking OneDrive for changes works again")
 
 		result := o.handleWatchBatch(
 			ctx, batches, polledEvents, windowItems, newToken, topology, interval, bo, wakeCh, handleBatch,
@@ -730,14 +731,14 @@ func (o *remoteObserver) fetchPageRetryingRejection(
 	}
 
 	o.logger.Debug("OneDrive refused the change-list token; retrying it once",
-		slog.Int("page", page), slog.String("error", err.Error()))
+		slog.Int("page", page), slog.Any("error", err))
 	events, items, next, done, err = o.fetchPage(ctx, token, page, inflight, enumerated)
 	if err == nil || !isCursorRejection(err) {
 		return events, items, next, done, err
 	}
 
 	o.logger.Warn("OneDrive keeps refusing the saved change-list position; rescanning the whole drive",
-		slog.String("error", err.Error()))
+		slog.Any("error", err))
 
 	return nil, 0, "", false, newCursorUnusableError("OneDrive refused the saved position twice", err)
 }
@@ -885,8 +886,10 @@ func waitText(d time.Duration) string {
 // pollOutageLog reports a polling loop's failures once per outage instead of
 // once per attempt. The first failure after a success is a Warn with the plain
 // reason and the retry delay; later attempts in the same outage are Debug; the
-// first success after an outage is one Info. A loop owns its pollOutageLog and
-// only that loop's goroutine touches it, so it needs no lock.
+// first success after an outage is one Notice, which the default console shows
+// like the warning, so a terminal that saw the outage also sees it end. A loop
+// owns its pollOutageLog and only that loop's goroutine touches it, so it needs
+// no lock.
 type pollOutageLog struct {
 	failing bool
 }
@@ -897,7 +900,7 @@ func (l *pollOutageLog) failed(logger *slog.Logger, msg string, err error, delay
 	}
 
 	fields := append([]any{
-		slog.String("error", err.Error()),
+		slog.Any("error", err),
 		slog.String("retry_in", waitText(delay)),
 	}, attrs...)
 	if l.failing {
@@ -909,14 +912,14 @@ func (l *pollOutageLog) failed(logger *slog.Logger, msg string, err error, delay
 	logger.Warn(msg, fields...)
 }
 
-func (l *pollOutageLog) recovered(logger *slog.Logger, msg string) {
+func (l *pollOutageLog) recovered(ctx context.Context, logger *slog.Logger, msg string) {
 	if !l.failing {
 		return
 	}
 
 	l.failing = false
 	if logger != nil {
-		logger.Info(msg)
+		logger.Log(ctx, loglevel.Notice, msg)
 	}
 }
 

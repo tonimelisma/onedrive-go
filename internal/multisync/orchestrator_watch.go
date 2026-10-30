@@ -94,7 +94,7 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 			if err := o.reload(ctx, mode, opts, runners, runnerEvents, childWork); err != nil {
 				// reload already warned and kept the previous settings;
 				// with no client waiting there is nobody else to tell.
-				o.logger.Debug("config reload after file change failed", slog.String("error", err.Error()))
+				o.logger.Debug("config reload after file change failed", slog.Any("error", err))
 			}
 		case event := <-runnerEvents:
 			o.handleWatchRunnerEvent(ctx, event, mode, opts, runners, runnerEvents, childWork)
@@ -225,7 +225,7 @@ func (o *Orchestrator) startInitialWatchRunners(
 			// (a StartWarning, or the returned WatchStartupError).
 			o.logger.Debug("watch runner did not start",
 				slog.String("mount_id", mount.id().String()),
-				slog.String("error", err.Error()),
+				slog.Any("error", err),
 			)
 			startResults = append(startResults, mountStartupResultForMount(mount, err))
 
@@ -264,7 +264,7 @@ func (o *Orchestrator) closeControlSocket(ctx context.Context, control *controlS
 	defer cancel()
 	if closeErr := control.Close(closeCtx); closeErr != nil {
 		o.logger.Debug("close control socket",
-			slog.String("error", closeErr.Error()),
+			slog.Any("error", closeErr),
 		)
 	}
 }
@@ -283,12 +283,12 @@ func (o *Orchestrator) closeEngine(ctx context.Context, mount *mountSpec, engine
 	if errors.Is(closeErr, context.Canceled) || errors.Is(closeErr, context.DeadlineExceeded) {
 		o.logger.Debug("close sync engine during shutdown",
 			slog.String("mount_id", mount.id().String()),
-			slog.String("error", closeErr.Error()),
+			slog.Any("error", closeErr),
 		)
 		return
 	}
 	o.logger.Warn(fmt.Sprintf("Couldn't close the sync state for %s cleanly", mount.label()),
-		slog.String("error", closeErr.Error()),
+		slog.Any("error", closeErr),
 	)
 }
 
@@ -345,7 +345,7 @@ func (o *Orchestrator) startWatchRunner(
 			if drainErr != nil && mountCtx.Err() != nil {
 				o.logger.Debug("final-drain runner stopped",
 					slog.String("mount_id", mount.id().String()),
-					slog.String("error", drainErr.Error()),
+					slog.Any("error", drainErr),
 				)
 				return
 			}
@@ -363,7 +363,7 @@ func (o *Orchestrator) startWatchRunner(
 				// Reported once, in user words, by handleWatchRunnerEvent.
 				o.logger.Debug("watch runner exited",
 					slog.String("mount_id", mount.id().String()),
-					slog.String("error", watchErr.Error()),
+					slog.Any("error", watchErr),
 				)
 				if runnerEvents != nil {
 					select {
@@ -415,7 +415,7 @@ func (o *Orchestrator) reload(
 	newCfg, newSelection, err := o.loadReloadSelection(ctx)
 	if err != nil {
 		o.logger.Warn("Couldn't reload the config; keeping the previous settings",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 		o.emitWatchLifecycle(WatchReloaded, nil, nil, err)
 
@@ -437,7 +437,7 @@ func (o *Orchestrator) reload(
 		o.cfg.InitialStartupResults = oldStartup
 		o.cfg.Runtime.FlushTokenCache()
 		o.logger.Warn("Couldn't reload the config; keeping the previous settings",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 		o.emitWatchLifecycle(WatchReloaded, nil, nil, err)
 		return err
@@ -591,7 +591,7 @@ func (o *Orchestrator) reportWatchRunnerExit(wr *watchRunner, err error) {
 		o.logger.Debug("drive stopped again with the same error",
 			slog.String("mount_id", wr.mount.id().String()),
 			slog.String("retry_in", delay.String()),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 	}
 }
@@ -622,7 +622,7 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 	decisions, err := o.buildRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults, childWork)
 	if err != nil {
 		o.logger.Warn(fmt.Sprintf("Couldn't finish removing shortcut %s; will retry", wr.mount.label()),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 		return
 	}
@@ -642,7 +642,7 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 	)
 	if err != nil {
 		o.logger.Warn(fmt.Sprintf("Couldn't finish removing shortcut %s; will retry", wr.mount.label()),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 		)
 		return
 	}
@@ -1082,7 +1082,7 @@ func (o *Orchestrator) startReloadWatchRunners(
 			// failure, by emitStartWarning.
 			o.logger.Debug("watch runner did not start",
 				slog.String("mount_id", id.String()),
-				slog.String("error", err.Error()),
+				slog.Any("error", err),
 			)
 			startResults = append(startResults, mountStartupResultForMount(mount, err))
 			continue

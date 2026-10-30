@@ -205,7 +205,7 @@ func (rt *watchRuntime) handleRemoteObservationBatchApplyFailure(
 		// Warn, and a Ctrl-C landing during its commit is not reported.
 		if ctx.Err() == nil {
 			rt.deps.logger.Warn("Could not save the result of the full OneDrive check; will retry",
-				slog.String("error", err.Error()),
+				slog.Any("error", err),
 			)
 		}
 		if rt.resources.dirtyBuf != nil {
