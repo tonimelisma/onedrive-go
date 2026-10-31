@@ -2,6 +2,7 @@ package sync
 
 import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // Protected roots are the parent-local alias paths a shortcut root reserves.
@@ -21,6 +22,7 @@ type ProtectedRoot struct {
 	RemoteIsFolder bool
 	Device         uint64
 	Inode          uint64
+	BirthTime      int64 // zero means unknown; see synctree.FileIdentity
 	HasIdentity    bool
 }
 
@@ -45,3 +47,9 @@ type protectedRootEvent struct {
 }
 
 type protectedRootEventSink func(protectedRootEvent)
+
+// fileIdentity is the identity the shortcut root recorded for the reserved
+// directory; meaningful only when HasIdentity.
+func (r ProtectedRoot) fileIdentity() synctree.FileIdentity {
+	return synctree.FileIdentity{Device: r.Device, Inode: r.Inode, BirthTime: r.BirthTime}
+}

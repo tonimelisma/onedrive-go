@@ -20,6 +20,7 @@ const (
 		ctime      INTEGER NOT NULL DEFAULT 0,
 		local_device INTEGER NOT NULL DEFAULT 0,
 		local_inode  INTEGER NOT NULL DEFAULT 0,
+		local_birth_time INTEGER NOT NULL DEFAULT 0,
 		local_has_identity INTEGER NOT NULL DEFAULT 0
 	)`
 	sqlCreatePlannerVisibleRemoteState = `CREATE TEMP TABLE IF NOT EXISTS planner_visible_remote_state (
@@ -35,13 +36,13 @@ const (
 	sqlDeletePlannerVisibleLocalState  = `DELETE FROM planner_visible_local_state`
 	sqlDeletePlannerVisibleRemoteState = `DELETE FROM planner_visible_remote_state`
 	sqlInsertPlannerVisibleLocalState  = `INSERT INTO planner_visible_local_state
-		(path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_has_identity)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		(path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_birth_time, local_has_identity)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	sqlInsertPlannerVisibleRemoteState = `INSERT INTO planner_visible_remote_state
 		(drive_id, item_id, path, item_type, hash, size, mtime, etag)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	sqlListPlannerVisibleLocalState = `SELECT
-		path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_has_identity
+		path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_birth_time, local_has_identity
 		FROM planner_visible_local_state
 		ORDER BY path`
 	sqlListPlannerVisibleRemoteState = `SELECT ` + sqlSelectRemoteStateCols + `
@@ -145,6 +146,7 @@ func replacePlannerVisibleStateTx(
 			row.Ctime,
 			int64(row.LocalDevice),
 			int64(row.LocalInode),
+			row.LocalBirthTime,
 			boolInt(row.LocalHasIdentity),
 		); err != nil {
 			return plannerVisibleRows{}, fmt.Errorf("sync: inserting planner-visible local_state row for %s: %w", row.Path, err)

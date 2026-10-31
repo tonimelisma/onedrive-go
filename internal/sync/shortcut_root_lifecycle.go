@@ -314,13 +314,13 @@ func shortcutRootIdentityCandidatesFromLocalState(
 	candidates := make([]string, 0)
 	for i := range localRows {
 		row := localRows[i]
-		if row.ItemType != ItemTypeFolder || !row.LocalHasIdentity {
+		if row.ItemType != ItemTypeFolder {
 			continue
 		}
 		if row.Path == normalizedCurrent {
 			continue
 		}
-		if row.LocalDevice != identity.Device || row.LocalInode != identity.Inode {
+		if rowIdentity, known := row.fileIdentity(); !known || !synctree.SameIdentity(rowIdentity, identity) {
 			continue
 		}
 		candidates = append(candidates, row.Path)

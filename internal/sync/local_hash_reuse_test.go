@@ -72,15 +72,20 @@ func TestCanReuseBaselineHash_SubsecondMtimeDifferenceRequiresHash(t *testing.T)
 func TestCanReuseBaselineHash_CtimeOrIdentityMismatchRequiresHash(t *testing.T) {
 	t.Parallel()
 
+	const born = int64(1_700_000_000_000_000_001)
 	tests := []struct {
 		name   string
 		mutate func(*BaselineEntry)
+		// observedBirthTime, when set, is the birth time the file reports.
+		observedBirthTime int64
 	}{
 		{name: "ctime_changed", mutate: func(e *BaselineEntry) { e.LocalCtime-- }},
 		{name: "ctime_unknown", mutate: func(e *BaselineEntry) { e.LocalCtime = 0 }},
 		{name: "inode_changed", mutate: func(e *BaselineEntry) { e.LocalInode++ }},
 		{name: "device_changed", mutate: func(e *BaselineEntry) { e.LocalDevice++ }},
 		{name: "identity_unknown", mutate: func(e *BaselineEntry) { e.LocalHasIdentity = false }},
+		// A reused inode number: another file holds it now (R-2.17.1).
+		{name: "birth_time_changed", mutate: func(e *BaselineEntry) { e.LocalBirthTime = born }, observedBirthTime: born + 1},
 	}
 
 	for _, tt := range tests {
@@ -89,9 +94,23 @@ func TestCanReuseBaselineHash_CtimeOrIdentityMismatchRequiresHash(t *testing.T) 
 
 			info, entry, latest := hashReuseFixture(t, "doc.txt")
 			tt.mutate(entry)
+			if tt.observedBirthTime != 0 {
+				info = reportedBirthTimeInfo{FileInfo: info, birthTime: tt.observedBirthTime}
+			}
 			assert.False(t, canReuseBaselineHash(info, entry, latest+nanosPerSecond+1))
 		})
 	}
+}
+
+// reportedBirthTimeInfo is a FileInfo stating a birth time
+// (synctree.BirthTimeReporter), as a filesystem that records one does.
+type reportedBirthTimeInfo struct {
+	os.FileInfo
+	birthTime int64
+}
+
+func (i reportedBirthTimeInfo) BirthTime() (int64, bool) {
+	return i.birthTime, i.birthTime != 0
 }
 
 func TestCanReuseBaselineHash_MetadataMismatchRequiresHash(t *testing.T) {

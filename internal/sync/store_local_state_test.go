@@ -70,6 +70,7 @@ func TestReplaceLocalState_PersistsFilesystemIdentity(t *testing.T) {
 			Mtime:            34,
 			LocalDevice:      303,
 			LocalInode:       404,
+			LocalBirthTime:   505,
 			LocalHasIdentity: true,
 		},
 	}))
@@ -92,6 +93,7 @@ func TestReplaceLocalState_PersistsFilesystemIdentity(t *testing.T) {
 		Mtime:            34,
 		LocalDevice:      303,
 		LocalInode:       404,
+		LocalBirthTime:   505,
 		LocalHasIdentity: true,
 	}, rows[1])
 }

@@ -78,6 +78,7 @@ func protectedRootsForShortcutRoots(records []ShortcutRootRecord, namespaceID st
 			if record.LocalRootIdentity != nil {
 				protectedRoot.Device = record.LocalRootIdentity.Device
 				protectedRoot.Inode = record.LocalRootIdentity.Inode
+				protectedRoot.BirthTime = record.LocalRootIdentity.BirthTime
 				protectedRoot.HasIdentity = true
 			}
 			protectedRoots = append(protectedRoots, protectedRoot)
