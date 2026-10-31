@@ -817,6 +817,10 @@ type sessionUploadRecorder struct {
 	simplePuts    int
 	patches       int
 	other         []string
+	// currentETag and currentSize are what a read-back of the created item
+	// answers: the creation eTag and empty unless a test moves them.
+	currentETag string
+	currentSize int
 }
 
 func newSessionUploadServer(t *testing.T, rec *sessionUploadRecorder, sessionStatus int) *httptest.Server {
@@ -842,6 +846,13 @@ func newSessionUploadServer(t *testing.T, rec *sessionUploadRecorder, sessionSta
 		case r.Method == http.MethodDelete:
 			rec.deleteIfMatch = append(rec.deleteIfMatch, r.Header.Get("If-Match"))
 			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/items/small-item"):
+			etag := rec.currentETag
+			if etag == "" {
+				etag = createdFileETag
+			}
+			w.WriteHeader(http.StatusOK)
+			writeTestResponsef(t, w, `{"id":"small-item","name":"small.txt","eTag":%q,"size":%d,"file":{}}`, etag, rec.currentSize)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "createUploadSession"):
 			rec.sessionURLs = append(rec.sessionURLs, r.URL.Path)
 			rec.sessionMatch = append(rec.sessionMatch, r.Header.Get("If-Match"))

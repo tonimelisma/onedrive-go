@@ -194,19 +194,34 @@ func (c *Client) CreateUploadSession(
 
 // removeCreatedPlaceholder deletes the empty item a failed upload created,
 // unless the failure was on the final fragment (the content may have
-// landed; the caller looks before deciding). The delete is conditional on
-// the creation eTag, so it can only remove the untouched empty item, and is
-// best-effort: a leftover placeholder is an ordinary remote file the next
-// pass sees.
+// landed; the caller looks before deciding). It reads the item again and
+// deletes it only while it is still empty, conditional on the eTag just
+// read: an upload session opened on the empty item moves its eTag although
+// no content landed (live, e2e TestE2E_SyncWatch_FileModification), so a
+// delete conditional on the creation eTag failed with 412 and left the
+// placeholder. Best-effort: a leftover placeholder is an ordinary remote file
+// the next pass sees.
 func (c *Client) removeCreatedPlaceholder(ctx context.Context, driveID driveid.ID, created *Item, cause error) {
-	if IsFinalFragmentUncertain(cause) || created.ETag == "" {
+	if IsFinalFragmentUncertain(cause) || created == nil || created.ID == "" {
 		return
 	}
 
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 
-	if err := c.DeleteItemIfMatch(cleanupCtx, driveID, created.ID, created.ETag); err != nil {
+	current, err := c.GetItem(cleanupCtx, driveID, created.ID)
+	if err != nil {
+		c.logger.Debug("failed to read the empty file a failed upload created",
+			slog.String("item_id", created.ID),
+			slog.Any("error", err),
+		)
+		return
+	}
+	if current.Size != 0 || current.ETag == "" {
+		return
+	}
+
+	if err := c.DeleteItemIfMatch(cleanupCtx, driveID, created.ID, current.ETag); err != nil {
 		c.logger.Debug("failed to remove the empty file a failed upload created",
 			slog.String("item_id", created.ID),
 			slog.Any("error", err),

@@ -503,9 +503,10 @@ func (e *executor) recordPendingCreate(
 // name is taken (409; a create never replaces, R-5.6.14).
 //
 //   - Our own placeholder from an interrupted earlier attempt (a pending
-//     create at this path whose item is still empty with its creation eTag):
-//     upload the content into it by ID, conditionally. Going stale instead
-//     replanned the same create every pass.
+//     create at this path whose item is still empty): upload the content
+//     into it by ID, conditional on the eTag just read (not the creation
+//     eTag, which a canceled upload session moves; store_pending_creates.go).
+//     Going stale instead replanned the same create every pass.
 //   - A sibling OneDrive treats as the same name but spelled differently
 //     (STRASSE.txt next to straße.txt, a.txt next to a😀.txt): a durable
 //     name collision naming both, not a retry every pass.
@@ -520,10 +521,9 @@ func (e *executor) resolveCreateConflict(
 			return nil, errors.Join(conflictErr, err)
 		}
 		if found {
-			if item, getErr := e.items.GetItem(ctx, driveID, pending.ItemID); getErr == nil &&
-				item.Size == 0 && item.ETag == pending.CreatedETag {
+			if item, getErr := e.items.GetItem(ctx, driveID, pending.ItemID); getErr == nil && item.Size == 0 {
 				opts := e.uploadOpts(action, source)
-				opts.IfMatch = pending.CreatedETag
+				opts.IfMatch = item.ETag
 				return e.transferMgr.UploadFileToItem(ctx, driveID, pending.ItemID, localPath, opts) //nolint:wrapcheck // driveops names the file
 			}
 		}

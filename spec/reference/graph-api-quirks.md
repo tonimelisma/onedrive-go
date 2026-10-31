@@ -1118,6 +1118,10 @@ OneDrive refuses a second sibling whose name it considers equal (409 `nameAlread
 
 `internal/namekey` encodes this as explicit tables, and its tests replay every probed pair (`internal/namekey/testdata/probe-m1-personal.tsv`). Because the sync store keys paths in NFC, siblings that are different on OneDrive but NFC-equal (U+FB2A next to U+05E9 U+05C1) are "remote twins" for this client (R-2.12.6). Business is unprobed.
 
+### An Upload Session Moves An Empty Item's eTag
+
+Observed live on Personal on 2026-10-30 (e2e `TestE2E_SyncWatch_FileModification`): after a create by body made an empty item, opening an upload session on it by ID (with `If-Match` on the creation eTag, accepted) and then canceling that session before any fragment committed left the item empty but with a new eTag. A `DELETE` with `If-Match` on the creation eTag answered 412. So the creation eTag only identifies a placeholder until a session touches it; sync identifies its placeholder by item ID and emptiness, and every conditional write or delete that finishes it uses the eTag just read (R-5.6.14, R-5.6.15).
+
 ### Path-Routed Upload Sessions Create A Visible Placeholder (L-34, L-35)
 
 A path-routed `createUploadSession` on Personal makes a visible 0-byte item at once, with the empty-content QuickXor (`AAAA…`) and eTag `",1"`; the commit keeps the same item ID and moves the eTag to `",2"`. Another writer's create of a case variant during the session gets 409, and a session for an existing name with `conflictBehavior=fail` answers 409 `nameAlreadyExists` at creation. So any interrupted session upload, not only the create-by-body path, can leave an empty item behind: sync records a pending create before the content step and treats such a placeholder as its own (R-5.6.15). Path-routed sessions also fail with 400 for names of 300 characters or more (250 works), which is one more reason new files are created by body.

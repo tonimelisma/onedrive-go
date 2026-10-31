@@ -141,9 +141,14 @@ func TestUploadChunk_RetryAfterLongerThanStallTimeoutIsNotAStall(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	// The retried fragment is a whole upload chunk sent over loopback, so a
+	// stall timeout as short as testStallTimeout fired on a loaded 2-core
+	// machine whenever the copy was descheduled for 150 ms (4 runs in 10). The
+	// property needs only a wait longer than the stall timeout, not a short one.
+	const stallTimeout = time.Second
 	sleepLongerThanStall := func(ctx context.Context, _ time.Duration) error {
 		select {
-		case <-time.After(3 * testStallTimeout):
+		case <-time.After(3 * stallTimeout):
 			return nil
 		case <-ctx.Done():
 			return context.Cause(ctx)
@@ -154,7 +159,7 @@ func TestUploadChunk_RetryAfterLongerThanStallTimeoutIsNotAStall(t *testing.T) {
 	}}
 	client := MustNewClient(normalizeTestBaseURL(srv.URL), httpClient, staticToken("t"), slog.Default(), "test-agent")
 	client.validators.uploadURL = allowTestUploadURL
-	client.transferStallTimeout = testStallTimeout
+	client.transferStallTimeout = stallTimeout
 
 	chunk := bytes.Repeat([]byte("u"), ChunkedUploadChunkSize)
 	item, complete, err := client.UploadChunk(t.Context(), &UploadSession{UploadURL: UploadURL(srv.URL + "/s")},

@@ -269,8 +269,11 @@ name a variant spelling could also match. A retry of an interrupted create
 with a session record opens its fresh session on the created item instead of
 creating the file again (`TestSessionUpload_RetryOfAnInterruptedCreateReusesItsItem`).
 When a final fragment's lookup shows the content did not land, the empty item
-is deleted at once with If-Match on its creation eTag
-(`TestUploadFile_UncertainFinalFragmentThatDidNotLandRemovesThePlaceholder`).
+is deleted at once while still empty, with If-Match on the eTag that lookup
+read; the creation eTag no longer matches by then, because opening and
+canceling the session moved it
+(`TestUploadFile_UncertainFinalFragmentThatDidNotLandRemovesThePlaceholder`,
+`TestUploadFile_UncertainFinalFragmentRemovesThePlaceholderByItsCurrentETag`).
 CLI `put` onto an existing name overwrites that file by ID with If-Match on
 the eTag just listed, and refuses an existing folder (R-1.3.8,
 `TestPutFile_ExistingFileIsOverwrittenByIDConditionally`).

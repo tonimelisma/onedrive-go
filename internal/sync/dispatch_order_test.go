@@ -189,6 +189,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_InPlaceEditWithRestoredMtimeConflictsWithRemoteEdit,
 		TestRunOnce_InPlaceEditWithRestoredMtimeUploads,
 		TestRunOnce_InterruptedCreateFinishesIntoItsOwnPlaceholder,
+		TestRunOnce_UploadOnlyCreateFinishesIntoItsPlaceholderAfterItsETagMoved,
 		TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally,
 		TestRunOnce_LocalDeleteInsideFolderRenamedOnlineIsNotUndone,
 		TestRunOnce_LegacyFolderBaselineGainsIdentityAndMovesAsOne,

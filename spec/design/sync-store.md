@@ -336,15 +336,20 @@ to a conflict copy and the empty file downloaded. `pending_creates`
 (generation 18, `store_pending_creates.go`) is that memory: the executor
 records item ID, path and creation eTag before the first content byte is
 sent. The observation commit then classifies an observed item with a record:
-still empty with its creation eTag and not synced, it is adopted as a baseline
-row whose local side is the empty content, so the planner uploads by ID with
-If-Match, or deletes the placeholder with If-Match when the local file is
-gone; still empty with its creation eTag after the upload committed (a delta
-page captured mid-upload), it is stale and not recorded as a remote change;
-anything else drops the record (R-5.6.15,
+still empty and not synced, it is adopted as a baseline row whose local side
+is the empty content, so the planner uploads by ID with If-Match, or deletes
+the placeholder with If-Match when the local file is gone; still empty after
+the upload committed (a delta page captured mid-upload), it is stale and not
+recorded as a remote change; content or a delete drops the record (R-5.6.15,
 `TestCommitObservation_OwnPlaceholderIsAdoptedAsEmptySyncedContent`,
+`TestCommitObservation_PlaceholderWhoseETagMovedWithoutContentIsStillAdopted`,
 `TestCommitObservation_PlaceholderStateSeenAfterTheCommitIsNotARemoteChange`,
-`TestRunOnce_InterruptedCreateFinishesIntoItsOwnPlaceholder`). Adopted rows
+`TestRunOnce_InterruptedCreateFinishesIntoItsOwnPlaceholder`). The item ID
+and its emptiness identify the placeholder, not the creation eTag: opening
+and canceling an upload session on the empty item moves its eTag without
+content (live, e2e `TestE2E_SyncWatch_FileModification`), and matching on it
+dropped the record, so every retry of the create got 409 and upload-only
+mode never delivered the file. Adopted rows
 are put into the in-memory baseline after the commit. A baseline row at the
 placeholder's path whose item OneDrive no longer holds there (deleted, or
 moved away, often in the same window: a folder replaced by a file, a file
