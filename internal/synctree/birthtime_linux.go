@@ -16,6 +16,16 @@ func statBirthTime(*syscall.Stat_t) int64 {
 	return 0
 }
 
+// birthTimeInfo is a FileInfo carrying the birth time statx reported.
+type birthTimeInfo struct {
+	fs.FileInfo
+	birthTime int64
+}
+
+func (i birthTimeInfo) BirthTime() (int64, bool) {
+	return i.birthTime, i.birthTime != 0
+}
+
 // withBirthTime returns info carrying the entry's birth time, read with
 // statx(2) STATX_BTIME at absPath. It is used where the sync tree stats an
 // entry for its identity (rooted Stat and Lstat, directory walks and

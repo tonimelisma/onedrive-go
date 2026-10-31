@@ -33,16 +33,6 @@ type BirthTimeReporter interface {
 	BirthTime() (nanos int64, known bool)
 }
 
-// birthTimeInfo is a FileInfo carrying the birth time statx reported.
-type birthTimeInfo struct {
-	fs.FileInfo
-	birthTime int64
-}
-
-func (i birthTimeInfo) BirthTime() (int64, bool) {
-	return i.birthTime, i.birthTime != 0
-}
-
 func IdentityFromFileInfo(info fs.FileInfo) (FileIdentity, bool) {
 	if info == nil {
 		return FileIdentity{}, false
