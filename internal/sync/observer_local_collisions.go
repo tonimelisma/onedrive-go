@@ -5,6 +5,7 @@
 //   - HasCaseCollisionCached: cached per-directory collision check
 //   - dirNameCache maintenance (update/remove)
 //   - buildPeerRelPath: collision peer path construction
+//   - onDiskSiblingName: a stored name's spelling on disk, for re-emission
 //
 // Related files:
 //   - observer_local_handlers.go: event handlers that call these methods
@@ -51,6 +52,41 @@ func (o *localObserver) buildPeerRelPath(dbRelPath, collidingName string) string
 	}
 
 	return dir + "/" + collidingName
+}
+
+// onDiskSiblingName returns the name under which the entry stored as name
+// (NFC) sits in dirPath on disk, which differs on a byte-exact filesystem
+// holding an NFD name. It reads the directory name cache, listing the
+// directory on a miss, and returns name itself when no single entry matches:
+// the caller's stat then finds nothing, or finds the entry spelled as given.
+func (o *localObserver) onDiskSiblingName(tree *synctree.Root, dirPath, name string) string {
+	cache, ok := o.DirNameCache[dirPath]
+	if !ok {
+		entries, err := readDirForCollisionCheck(tree, dirPath)
+		if err != nil {
+			return name
+		}
+		o.populateDirNameCache(dirPath, entries)
+		cache = o.DirNameCache[dirPath]
+	}
+
+	match := ""
+	for _, existing := range cache[namekey.Key(name)] {
+		if existing == name {
+			return name
+		}
+		if nfcNormalize(existing) == name {
+			if match != "" {
+				return name
+			}
+			match = existing
+		}
+	}
+	if match == "" {
+		return name
+	}
+
+	return match
 }
 
 // HasCaseCollisionCached checks if name collides with an existing sibling

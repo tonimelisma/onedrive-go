@@ -83,7 +83,7 @@ except that the type had once been public.
 | A delta cursor that loops, is refused twice with a non-transient 4xx, or fails with 5xx for hours in watch mode is recovered through the full refresh; a single refusal is retried, empty pages with a nextLink continue, and a transient failure keeps the token (R-2.15.2). | `TestFullDelta_RepeatedNextLinkIsCursorUnusable`, `TestFullDelta_RepeatedPageItemsIsCursorUnusable`, `TestFullDelta_EmptyPageWithNextLinkContinues`, `TestFullDelta_SavedTokenRejectedTwiceIsCursorUnusable`, `TestFullDelta_OneRejectionOfASavedTokenIsRetried`, `TestWatch_TransientErrorRetriesAndKeepsToken`, `TestWatch_SustainedServerErrorsOnTheCursorResetIt`, `TestRunOnce_SavedTokenOneDriveKeepsRefusingIsReenumerated` |
 | Items delta reports without a type facet keep their baseline kind or are re-read once and otherwise skipped; bundles and their children are skipped; a negative size is unknown (R-2.4.16). | `TestFullDelta_FacetlessUpdateOfABaselineFolderKeepsItsType`, `TestFullDelta_FacetlessNewItemIsReadOnceOrSkipped`, `TestFullDelta_BundleAndItsChildrenAreSkipped`, `TestFullDelta_NegativeSizeIsUnknown`, `TestToItem_BundleAndMissingTypeFacet` |
 | Child-before-parent windows resolve from the window itself without reads, and a window needing more ancestor reads than one budget completes on replay without re-reading (R-2.15.4). | `TestFullDelta_CrossPageChildBeforeParentResolvesWithoutFetch`, `TestFullDelta_ManyOrphansCompleteAcrossReplaysWithoutRefetching` |
-| Watch re-checks address an NFD-named entry by its spelling on disk on byte-exact filesystems: a delete event for a file that still exists is not a delete, an identity match is not a move while the synced file is still there, and a full scan re-adds the watch of an NFD-named folder on its own spelling (R-2.13.2). | `TestWatchRechecks_FindTheNFDNamedLocalFile`, `TestRewatchUnwatchedDirectories_WatchesTheNFDNamedFolder` |
+| Watch re-checks address an NFD-named entry by its spelling on disk on byte-exact filesystems: a delete event for a file that still exists is not a delete, an identity match is not a move while the synced file is still there, a full scan re-adds the watch of an NFD-named folder on its own spelling, and a case-collision peer is tracked and re-emitted under its stored path (R-2.13.2). | `TestWatchRechecks_FindTheNFDNamedLocalFile`, `TestRewatchUnwatchedDirectories_WatchesTheNFDNamedFolder`, `TestHandleDelete_ReemitsCollisionPeerUnderItsStoredPath`, `TestHandleDelete_DeletingTheNFDNamedPeerReemitsTheOther` |
 | Local watch prefiltering keeps unknown-kind include-root and include-ancestor events observable until stat/type-aware observation can decide the exact item kind. | `TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths` |
 
 ## Remote Observation
@@ -336,6 +336,16 @@ looks up the event's own path instead of the stored one. On a byte-exact
 filesystem the stored NFC spelling of an NFD-named entry does not exist, so
 those checks used to fail the watch add, read an unchanged file as moved
 away, and read an atomic save as a delete.
+
+Watch mode's case-collision peers follow the same rule. A held-back create
+records the colliding sibling under its stored (NFC) path, the path that
+sibling's own events carry, and when the collision is resolved by a delete
+the survivor is re-emitted with its stored path and name and stated at its
+spelling on disk (`onDiskSiblingName`). The peer used to be recorded under the
+name the directory listing returned, which is NFD for a file copied from a
+Mac: its re-emitted create named an item neither the baseline nor OneDrive
+knows, and its own delete event, carrying the NFC path, never found the peers
+waiting on it.
 
 Watch-mode local observation also maintains `local_state` incrementally from
 re-observed scopes. File create/modify handlers stat and hash the exact file and
