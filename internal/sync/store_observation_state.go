@@ -21,6 +21,7 @@ const (
 				sync_root_device,
 				sync_root_inode,
 				sync_root_fsid,
+				sync_root_birth_time,
 				sync_root_token,
 				sync_root_rebind,
 				undecided_refresh_streak
@@ -143,6 +144,7 @@ func (s *SyncStore) ReadObservationState(ctx context.Context) (*observationState
 		rootDevice     int64
 		rootInode      int64
 		rootFSID       int64
+		rootBirthTime  int64
 		rootToken      string
 		rootRebind     int
 	)
@@ -157,6 +159,7 @@ func (s *SyncStore) ReadObservationState(ctx context.Context) (*observationState
 		&rootDevice,
 		&rootInode,
 		&rootFSID,
+		&rootBirthTime,
 		&rootToken,
 		&rootRebind,
 		&state.UndecidedRefreshStreak,
@@ -164,7 +167,7 @@ func (s *SyncStore) ReadObservationState(ctx context.Context) (*observationState
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
 	state.LocalTruthComplete = localComplete != 0
-	state.SyncRootIdentity = syncRootIdentityFromColumns(rootBound, rootDevice, rootInode, rootFSID, rootToken)
+	state.SyncRootIdentity = syncRootIdentityFromColumns(rootBound, rootDevice, rootInode, rootFSID, rootBirthTime, rootToken)
 	state.SyncRootRebind = rootRebind != 0
 
 	if contentDriveID != "" {
@@ -390,6 +393,7 @@ func readObservationStateFromTx(
 		rootDevice     int64
 		rootInode      int64
 		rootFSID       int64
+		rootBirthTime  int64
 		rootToken      string
 		rootRebind     int
 	)
@@ -404,6 +408,7 @@ func readObservationStateFromTx(
 		&rootDevice,
 		&rootInode,
 		&rootFSID,
+		&rootBirthTime,
 		&rootToken,
 		&rootRebind,
 		&state.UndecidedRefreshStreak,
@@ -411,7 +416,7 @@ func readObservationStateFromTx(
 		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
 	}
 	state.LocalTruthComplete = localComplete != 0
-	state.SyncRootIdentity = syncRootIdentityFromColumns(rootBound, rootDevice, rootInode, rootFSID, rootToken)
+	state.SyncRootIdentity = syncRootIdentityFromColumns(rootBound, rootDevice, rootInode, rootFSID, rootBirthTime, rootToken)
 	state.SyncRootRebind = rootRebind != 0
 
 	if contentDriveID != "" {
@@ -480,9 +485,9 @@ func writeObservationStateToTx(
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO observation_state
 			(content_drive_id, cursor, next_full_remote_refresh_at, local_truth_complete, local_truth_recovery_reason,
-			 sync_root_bound, sync_root_device, sync_root_inode, sync_root_fsid, sync_root_token, sync_root_rebind,
-			 undecided_refresh_streak)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 sync_root_bound, sync_root_device, sync_root_inode, sync_root_fsid, sync_root_birth_time,
+			 sync_root_token, sync_root_rebind, undecided_refresh_streak)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		state.ContentDriveID.String(),
 		state.Cursor,
 		state.NextFullRemoteRefreshAt,
@@ -492,6 +497,7 @@ func writeObservationStateToTx(
 		int64(rootIdentity.Device),
 		int64(rootIdentity.Inode),
 		int64(rootIdentity.FileSystemID),
+		rootIdentity.BirthTime,
 		rootIdentity.Token,
 		boolInt(state.SyncRootRebind),
 		state.UndecidedRefreshStreak,
@@ -502,7 +508,7 @@ func writeObservationStateToTx(
 	return nil
 }
 
-func syncRootIdentityFromColumns(bound int, device, inode, fsid int64, token string) *synctree.RootIdentity {
+func syncRootIdentityFromColumns(bound int, device, inode, fsid, birthTime int64, token string) *synctree.RootIdentity {
 	if bound == 0 {
 		return nil
 	}
@@ -511,6 +517,7 @@ func syncRootIdentityFromColumns(bound int, device, inode, fsid int64, token str
 		Device:       uint64(device),
 		Inode:        uint64(inode),
 		FileSystemID: uint64(fsid),
+		BirthTime:    birthTime,
 		Token:        token,
 	}
 }
