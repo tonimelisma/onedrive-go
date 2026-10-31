@@ -268,6 +268,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_RemoteMoveMovesTheNFDNamedLocalFile,
 		TestRunOnce_NFDNamedLocalFolderReceivesAdditionsAndIsDeleted,
 		TestRunOnce_ConflictingEditsOfAnNFDNamedFileKeepBoth,
+		TestRunOnce_AppliedMoveLeavesTheBaselineCurrent,
 	}
 }
 
