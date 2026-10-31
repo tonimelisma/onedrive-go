@@ -253,6 +253,14 @@ baseline in the same read transaction as the comparison rows
 (`currentInputs.baseline`), so a commit landing between the cache and the
 snapshot cannot make the two disagree.
 
+Every baseline row is written through one helper, `upsertBaselineRowTx`, whose
+`baselineRowArgs` is the single mapping from a `BaselineEntry` to the columns of
+`sqlUpsertBaseline`. Outcome commits, local refreshes and placeholder adoption
+all pass an entry rather than positional values, so adding a baseline column
+changes the statement and that one mapping
+(`TestSQLUpsertBaseline_WritesEveryBaselineColumn`,
+`TestUpsertBaselineRowTx_RoundTripsEveryColumn`).
+
 That same store boundary also owns publication-only planner actions:
 
 - `ActionBaselineUpdate` publishes an upsert for converged current truth

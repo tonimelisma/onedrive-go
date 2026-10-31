@@ -179,15 +179,15 @@ func (s *pmState) plan() *actionPlan {
 				parentID = synced.id
 			}
 		}
-		_, err := store.rawDB().ExecContext(ctx, sqlUpsertBaseline,
-			row.id, p, parentID, pmType(row.folder).String(),
-			nullString(s.hash(row.folder, row.localContent)), nullString(s.hash(row.folder, row.remoteContent)),
-			int64(len(row.localContent)), int64(len(row.remoteContent)),
-			pmMtime(row.localContent), pmMtime(row.remoteContent),
-			pmMtime(row.localContent), plannerModelLocalDevice, int64(row.inode), 0, 1,
-			"etag-"+strconv.Itoa(row.etag),
-		)
-		require.NoError(t, err)
+		require.NoError(t, upsertBaselineRowTx(ctx, store.rawDB(), &BaselineEntry{
+			Path: p, ItemID: row.id, ParentID: parentID, ItemType: pmType(row.folder),
+			LocalHash: s.hash(row.folder, row.localContent), RemoteHash: s.hash(row.folder, row.remoteContent),
+			LocalSize: int64(len(row.localContent)), LocalSizeKnown: true,
+			RemoteSize: int64(len(row.remoteContent)), RemoteSizeKnown: true,
+			LocalMtime: pmMtime(row.localContent), RemoteMtime: pmMtime(row.remoteContent),
+			LocalCtime: pmMtime(row.localContent), LocalDevice: plannerModelLocalDevice, LocalInode: row.inode,
+			LocalHasIdentity: true, ETag: "etag-" + strconv.Itoa(row.etag),
+		}))
 	}
 
 	var local []localStateRow
