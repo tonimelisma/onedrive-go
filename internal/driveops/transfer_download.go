@@ -12,12 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
@@ -55,14 +55,48 @@ func resolveMaxRetries(configured int) int {
 	return configured
 }
 
-// isKnownHEICServedSmaller reports whether a just-downloaded file shows the
-// documented OneDrive/iOS HEIC quirk: the API metadata describes the original
-// upload, but OneDrive serves a post-processed, different-size file. Hash
-// retries cannot help there (the server serves the same bytes every time),
-// so the retry loop accepts the first download instead of fetching it again.
-// A same-size mismatch is not this quirk and keeps the normal retries.
-func isKnownHEICServedSmaller(targetPath string, remoteSize, localSize int64) bool {
-	return strings.EqualFold(filepath.Ext(targetPath), ".heic") && remoteSize > 0 && remoteSize != localSize
+// isHEICServedSmaller reports the shape of the documented OneDrive/iOS HEIC
+// quirk: the API metadata describes the original upload, but OneDrive serves
+// a post-processed, smaller file. Hash retries cannot help there (the server
+// serves the same bytes every time), so the retry loop accepts the first
+// download instead of fetching it again. The shape alone does not identify
+// the quirk: an error page served with HTTP 200, or an empty or truncated
+// body, is smaller too, and accepting it put the page on disk as the photo
+// and recorded it as synced. The served bytes must also be a HEIF file
+// (hasISOBMFFSignature). A same-size or larger mismatch is not this quirk
+// and keeps the normal retries.
+func isHEICServedSmaller(targetPath string, remoteSize, localSize int64) bool {
+	return strings.EqualFold(filepath.Ext(targetPath), ".heic") && remoteSize > 0 && localSize > 0 && localSize < remoteSize
+}
+
+// An ISO BMFF file (HEIF, HEIC, MP4) starts with a box whose 4-byte size is
+// followed by its 4-byte type; the first box is "ftyp".
+const (
+	isoBMFFBoxTypeOffset = 4
+	isoBMFFBoxTypeLen    = 4
+	isoBMFFFileTypeBox   = "ftyp"
+)
+
+// hasISOBMFFSignature reports whether the file at name starts like a HEIF
+// container. A body too short to hold the signature is not one; only a read
+// failure is an error.
+func hasISOBMFFSignature(target TargetFS, name string) (bool, error) {
+	f, err := target.Open(name)
+	if err != nil {
+		return false, fmt.Errorf("opening %s to inspect it: %w", name, err)
+	}
+	defer f.Close() //nolint:errcheck // read-only; nothing buffered to flush
+
+	var header [isoBMFFBoxTypeOffset + isoBMFFBoxTypeLen]byte
+	if _, err := io.ReadFull(f, header[:]); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("reading the start of %s: %w", name, err)
+	}
+
+	return string(header[isoBMFFBoxTypeOffset:]) == isoBMFFFileTypeBox, nil
 }
 
 // ErrDownloadIntegrity reports a download whose bytes could not be shown to
@@ -139,14 +173,17 @@ const (
 
 // classifyDownload judges one attempt. With a hash, only the hash proves the
 // content (it covers the length). Without one the size is the only evidence,
-// so a size mismatch (an empty or short body included) is a mismatch.
-func classifyDownload(opts DownloadOpts, targetPath, localHash string, size int64) downloadVerdict {
+// so a size mismatch (an empty or short body included) is a mismatch. The
+// HEIC quirk needs all of: a .heic served smaller than reported and served
+// bytes that are a HEIF file (servedHEIF, read from the partial by the
+// caller); an error document never reaches this judgement.
+func classifyDownload(opts DownloadOpts, targetPath, localHash string, size int64, servedHEIF bool) downloadVerdict {
 	sizeDiffers := opts.remoteSizeKnown() && size != opts.RemoteSize
 
 	switch {
 	case opts.RemoteHash != "" && localHash == opts.RemoteHash:
 		return downloadVerified
-	case sizeDiffers && isKnownHEICServedSmaller(targetPath, opts.RemoteSize, size):
+	case sizeDiffers && servedHEIF && isHEICServedSmaller(targetPath, opts.RemoteSize, size):
 		return downloadKnownQuirk
 	case opts.RemoteHash == "" && !sizeDiffers:
 		return downloadUnverifiable
@@ -316,7 +353,7 @@ func (tm *TransferManager) publishPartial(target TargetFS, partialPath, targetPa
 	// (D-042). The bytes are already on disk, so a failure here is reported
 	// rather than undone.
 	if err := target.SyncDir(parentDir); err != nil {
-		if !dirSyncUnsupported(err) {
+		if !localpath.IsDirSyncUnsupported(err) {
 			return fmt.Errorf("syncing the folder of %s: %w", targetPath, err)
 		}
 
@@ -330,12 +367,6 @@ func (tm *TransferManager) publishPartial(target TargetFS, partialPath, targetPa
 	}
 
 	return nil
-}
-
-// dirSyncUnsupported reports the errnos a filesystem that cannot fsync a
-// directory answers with.
-func dirSyncUnsupported(err error) bool {
-	return errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP)
 }
 
 // finalizePartial gives the verified partial its final mode and makes its
@@ -403,7 +434,17 @@ func (tm *TransferManager) downloadToVerifiedPartial(
 
 		result := &DownloadResult{LocalHash: localHash, Size: size, EffectiveRemoteHash: opts.RemoteHash}
 
-		switch classifyDownload(opts, targetPath, localHash, size) {
+		// Only a candidate for the HEIC quirk is inspected: the signature
+		// read costs an open per attempt, and nothing else needs it.
+		servedHEIF := false
+		if isHEICServedSmaller(targetPath, opts.RemoteSize, size) {
+			servedHEIF, err = hasISOBMFFSignature(opts.target(), partialPath)
+			if err != nil {
+				return nil, fmt.Errorf("inspecting the download of %s: %w", targetPath, err)
+			}
+		}
+
+		switch classifyDownload(opts, targetPath, localHash, size, servedHEIF) {
 		case downloadVerified:
 			result.HashVerified = true
 			return result, nil
@@ -441,8 +482,15 @@ func (tm *TransferManager) downloadToVerifiedPartial(
 			// Same bytes every time at the reported size: this is what
 			// OneDrive serves for the version (an AIP-protected or
 			// server-rewritten file). The baseline records the remote
-			// hash OneDrive reports, so the next pass is quiet.
-			tm.logger.Info("OneDrive serves this file with a different checksum than it reports; keeping the download",
+			// hash OneDrive reports, so the next pass is quiet. Business
+			// and SharePoint rewrite uploads routinely, so there this is
+			// INFO; nothing legitimately rewrites bytes on a personal
+			// drive, so there the user is warned, once per file.
+			level := slog.LevelWarn
+			if isBusinessLikeDriveID(driveID) {
+				level = slog.LevelInfo
+			}
+			tm.logger.Log(ctx, level, "OneDrive serves this file with a different checksum than it reports; keeping the download",
 				slog.String("path", targetPath),
 			)
 			result.AcceptedMismatch = true

@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // ErrDetachRaced reports that the entry at a path stopped being the file that
@@ -111,7 +113,7 @@ func (r *Root) DetachRegularFile(rel string, verify VerifyFunc, dest string) err
 		return err
 	}
 
-	if err := moveDetachedOut(parent, tempName, file, stamp, dest); err != nil {
+	if err := moveDetachedOut(parent, tempName, file, stamp, dest, r.ops.syncDir); err != nil {
 		if restoreErr := linkBackNoReplace(parent, tempName, name); restoreErr != nil {
 			return fmt.Errorf("%w; putting %s back: %w", err, rel, restoreErr)
 		}
@@ -173,7 +175,7 @@ func (r *Root) PreserveRegularFile(rel string, verify VerifyFunc, dest string) e
 		}
 		return fmt.Errorf("preserving %s: %w", rel, ErrDetachRaced)
 	case errors.Is(linkErr, unix.EXDEV), errors.Is(linkErr, unix.EPERM), errors.Is(linkErr, unix.EMLINK):
-		return copyVerified(file, stamp, dest)
+		return copyVerified(file, stamp, dest, r.ops.syncDir)
 	default:
 		return fmt.Errorf("preserving %s: %w", rel, linkErr)
 	}
@@ -358,7 +360,14 @@ func linkatOut(dir *os.File, name string, dest string) error {
 	})
 }
 
-func moveDetachedOut(parent *os.File, tempName string, file *os.File, stamp fileStamp, dest string) error {
+// moveDetachedOut moves the set-aside file to dest, copying when dest is on
+// another filesystem. The source is unlinked only once the copy is durable
+// (its bytes and the directory entry that names them): unlinking before that
+// left, after a power cut, a trash entry with only a `.copy-*` file and no
+// original anywhere.
+func moveDetachedOut(
+	parent *os.File, tempName string, file *os.File, stamp fileStamp, dest string, syncDir func(path string) error,
+) error {
 	err := withFd(parent, func(fd int) error {
 		return unix.Renameat(fd, tempName, unix.AT_FDCWD, dest)
 	})
@@ -369,7 +378,7 @@ func moveDetachedOut(parent *os.File, tempName string, file *os.File, stamp file
 		return fmt.Errorf("moving out of the sync folder: %w", err)
 	}
 
-	if err := copyVerified(file, stamp, dest); err != nil {
+	if err := copyVerified(file, stamp, dest, syncDir); err != nil {
 		return err
 	}
 	return withFd(parent, func(fd int) error {
@@ -383,8 +392,8 @@ func moveDetachedOut(parent *os.File, tempName string, file *os.File, stamp file
 // copyVerified copies through the verified descriptor and then re-checks it:
 // a write that landed while the copy ran means the copy may be torn, so it is
 // discarded and the move reported as raced.
-func copyVerified(file *os.File, stamp fileStamp, dest string) error {
-	if err := copyThroughDescriptor(file, dest); err != nil {
+func copyVerified(file *os.File, stamp fileStamp, dest string, syncDir func(path string) error) error {
+	if err := copyThroughDescriptor(file, dest, syncDir); err != nil {
 		return err
 	}
 	if err := unchangedSince(file, stamp); err != nil {
@@ -397,8 +406,13 @@ func copyVerified(file *os.File, stamp fileStamp, dest string) error {
 }
 
 // copyThroughDescriptor writes the content of the verified descriptor to
-// dest atomically: a temporary sibling, fsync, rename.
-func copyThroughDescriptor(file *os.File, dest string) (err error) {
+// dest atomically and durably: a temporary sibling, fsync, rename, and an
+// fsync of dest's directory, because the rename is a directory update that
+// is not durable until the directory is. A directory sync the filesystem
+// does not support (FUSE, SMB) is tolerated; any other failure removes the
+// copy and is reported, so the caller never unlinks the source over a copy
+// that may not survive a crash.
+func copyThroughDescriptor(file *os.File, dest string, syncDir func(path string) error) (err error) {
 	if _, err = file.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewinding file to copy it: %w", err)
 	}
@@ -432,6 +446,12 @@ func copyThroughDescriptor(file *os.File, dest string) (err error) {
 	}
 	if err = os.Rename(tmpName, dest); err != nil {
 		return fmt.Errorf("placing copy: %w", err)
+	}
+	if err = syncDir(filepath.Dir(dest)); err != nil && !localpath.IsDirSyncUnsupported(err) {
+		if removeErr := os.Remove(dest); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return fmt.Errorf("making the copy durable: %w; discarding it: %w", err, removeErr)
+		}
+		return fmt.Errorf("making the copy durable: %w", err)
 	}
 	return nil
 }

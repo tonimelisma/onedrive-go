@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 func putEntry(t *testing.T, trash *Trash, syncRoot, rel, content string) Entry {
@@ -183,6 +185,77 @@ func TestTrash_RestoreAcrossFilesystemsCopies(t *testing.T) {
 	leftovers, err := filepath.Glob(filepath.Join(syncRoot, "Docs", copyTempGlob))
 	require.NoError(t, err)
 	assert.Empty(t, leftovers)
+}
+
+// Validates: R-6.4.9, R-6.5.4
+//
+// A restore that copies across filesystems is only durable once the target's
+// folder is: the rename that gives the copy its name is a directory update,
+// and the trashed original is removed right after it.
+func TestTrash_CrossFilesystemRestoreSyncsTheTargetFolder(t *testing.T) {
+	t.Parallel()
+
+	trash := Open(t.TempDir(), nil)
+	trash.renameNoReplace = func(src, dst string) error {
+		return &os.LinkError{Op: "rename", Old: src, New: dst, Err: syscall.EXDEV}
+	}
+	var synced []string
+	trash.syncDir = func(dir string) error {
+		synced = append(synced, dir)
+		return localpath.SyncDir(dir)
+	}
+	syncRoot := t.TempDir()
+	entry := putEntry(t, trash, syncRoot, "Docs/a.txt", "content\n")
+
+	target, err := trash.Restore(entry.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{filepath.Join(syncRoot, "Docs")}, synced, "the folder the copy was renamed into is synced once")
+	assert.FileExists(t, target)
+}
+
+// Validates: R-6.4.9
+//
+// A cross-filesystem placement that a crash interrupted leaves the entry with
+// a `.copy-*` file and no `item`. That is the only copy the trash has, so the
+// entry holds a file: it is listed, never purged as an empty reservation,
+// never expired, and not restored as if it were the complete file.
+func TestTrash_IncompleteCrossFilesystemCopyIsNeverPurged(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	trash := Open(t.TempDir(), func() time.Time { return now })
+	syncRoot := t.TempDir()
+
+	placement, err := trash.Reserve(syncRoot, "Docs/a.txt", ReasonDeleted)
+	require.NoError(t, err)
+	entryDir := filepath.Dir(placement.ItemPath)
+	debris := filepath.Join(entryDir, ".copy-abc")
+	require.NoError(t, os.WriteFile(debris, []byte("copied before the power went\n"), 0o600))
+	require.Error(t, placement.Abandon(), "an entry holding a file is not removed as unused")
+
+	now = now.Add(2 * incompletePlacementGrace)
+	removed, err := trash.Purge()
+	require.NoError(t, err)
+	assert.Zero(t, removed, "not an empty reservation")
+	assert.DirExists(t, entryDir)
+
+	now = now.Add(Retention + 24*time.Hour)
+	removed, err = trash.Purge()
+	require.NoError(t, err)
+	assert.Zero(t, removed, "a pending entry never expires")
+	assert.FileExists(t, debris)
+
+	entries, err := trash.List()
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, StatePending, entries[0].State)
+	assert.Equal(t, "Docs/a.txt", entries[0].Path)
+	assert.Equal(t, debris, entries[0].ItemPath, "the user is told where the bytes are")
+
+	_, err = trash.Restore(entries[0].ID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), debris)
+	assert.FileExists(t, debris, "a refused restore leaves the copy where it was")
 }
 
 // Validates: R-6.4.9
