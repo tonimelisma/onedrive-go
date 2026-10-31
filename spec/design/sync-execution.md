@@ -159,7 +159,9 @@ than stranded, and a row that later hashes cleanly deletes normally.
 A create upload records the new item as a pending create through
 `UploadOpts.OnCreated` before any content is sent (R-5.6.15). A 409 on the
 create is resolved, not retried as is: into our own placeholder from an
-interrupted attempt (upload by ID with If-Match on its creation eTag), as a
+interrupted attempt (upload by ID with If-Match on the eTag just read while it
+is still empty; the creation eTag does not work, since a canceled upload
+session moves it, `TestRunOnce_UploadOnlyCreateFinishesIntoItsPlaceholderAfterItsETagMoved`), as a
 durable name collision when OneDrive holds a differently spelled sibling of
 the same name (`remoteNameTakenError`, classified as `case_collision` with
 backoff, naming both names;

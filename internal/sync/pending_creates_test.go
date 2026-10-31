@@ -259,6 +259,72 @@ func TestRunOnce_InterruptedCreateFinishesIntoItsOwnPlaceholder(t *testing.T) {
 }
 
 // Validates: R-5.6.15
+//
+// Opening and then canceling an upload session on the empty item moves its
+// eTag although no content landed (live, e2e
+// TestE2E_SyncWatch_FileModification). Matching on the creation eTag, sync
+// stopped recognizing its own placeholder: observation dropped the record
+// and the item read as someone else's file.
+func TestCommitObservation_PlaceholderWhoseETagMovedWithoutContentIsStillAdopted(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	driveID := driveid.New(testDriveID)
+	require.NoError(t, mgr.RecordPendingCreate(t.Context(), &PendingCreate{
+		ItemID: "placeholder", DriveID: driveID, Path: "doc.txt", ParentID: "root", CreatedETag: `"p,1"`,
+		LocalSize: 7, LocalHash: "local-hash",
+	}))
+
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+		DriveID: driveID, ItemID: "placeholder", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
+		Hash: emptyQuickXor, Size: 0, ETag: `"p,2"`,
+	}}, "t1", driveID))
+
+	path, localSize, found := readBaselineRow(t, mgr, "placeholder")
+	require.True(t, found, "still our empty placeholder: adopted")
+	assert.Equal(t, "doc.txt", path)
+	assert.Zero(t, localSize)
+}
+
+// Validates: R-5.6.15
+//
+// The live failure end to end, in upload-only mode: the create stopped after
+// the empty item, whose eTag then moved without content. Every retry got 409
+// "name already exists" and the next plan deferred the item as a download
+// that upload-only cannot do, so the user's file never reached OneDrive.
+func TestRunOnce_UploadOnlyCreateFinishesIntoItsPlaceholderAfterItsETagMoved(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "doc.txt"), []byte("version 2\n"), 0o600))
+	remote.mu.Lock()
+	remote.interruptCreates = true
+	remote.churnInterruptedCreates = true
+	remote.mu.Unlock()
+	_, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"doc.txt": ""}, remote.tree())
+	placeholder, ok := remote.itemAt("doc.txt")
+	require.True(t, ok)
+
+	remote.mu.Lock()
+	remote.interruptCreates = false
+	remote.mu.Unlock()
+	expireRetryWork(t, eng)
+	_, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	require.NoError(t, err)
+
+	assert.Equal(t, map[string]string{"doc.txt": "version 2\n"}, remote.tree())
+	finished, ok := remote.itemAt("doc.txt")
+	require.True(t, ok)
+	assert.Equal(t, placeholder.ID, finished.ID, "the content went into our own placeholder")
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-5.6.15
 func TestRunOnce_PlaceholderOfACreateWhoseFileWasDeletedIsRemoved(t *testing.T) {
 	t.Parallel()
 

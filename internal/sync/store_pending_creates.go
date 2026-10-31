@@ -20,14 +20,23 @@ import (
 // first content byte is sent; observation then recognizes the empty item as
 // this client's own placeholder:
 //
-//   - still empty with its creation eTag and not yet synced: it is adopted as
-//     a baseline row whose local side is the empty content, so the planner
-//     sees "the local file changed" and uploads by ID with If-Match, or, when
-//     the local file is gone, deletes the placeholder with If-Match;
-//   - still empty with its creation eTag after the upload committed (a delta
-//     page captured mid-upload): stale, and not recorded as a remote change;
-//   - anything else (new content, another eTag, a delete): no longer a
-//     placeholder, and the record is dropped.
+//   - still empty and not yet synced: it is adopted as a baseline row whose
+//     local side is the empty content, so the planner sees "the local file
+//     changed" and uploads by ID with If-Match, or, when the local file is
+//     gone, deletes the placeholder with If-Match;
+//   - still empty after the upload committed (a delta page captured
+//     mid-upload): stale, and not recorded as a remote change;
+//   - anything else (content, a delete): no longer a placeholder, and the
+//     record is dropped.
+//
+// The item ID and its emptiness identify the placeholder, not its creation
+// eTag: opening and then canceling an upload session on the empty item moves
+// its eTag although no content landed (live, e2e
+// TestE2E_SyncWatch_FileModification). Requiring the creation eTag dropped
+// the record there; the item read as someone else's file, every retry of the
+// create got 409, and upload-only mode could never deliver the user's file.
+// Any content written by anyone makes the item non-empty, and the writes that
+// finish a placeholder are conditional on the eTag just read.
 
 // PendingCreate is one recorded, not yet confirmed create.
 type PendingCreate struct {
@@ -157,7 +166,7 @@ func classifyObservedPlaceholderTx(ctx context.Context, tx sqlTxRunner, item *ob
 	if err != nil || !found {
 		return nil, placeholderNotPending, err
 	}
-	if item.IsDeleted || item.Size != 0 || item.ETag != pending.CreatedETag {
+	if item.IsDeleted || item.Size != 0 {
 		return &pending, placeholderResolved, nil
 	}
 

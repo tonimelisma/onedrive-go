@@ -78,9 +78,13 @@ type moveScenarioRemote struct {
 	uploads int
 	// interruptCreates stops every create after its empty item exists.
 	interruptCreates bool
-	folderCreates    []string
-	deletes          []string
-	moves            []string
+	// churnInterruptedCreates also moves an interrupted create's eTag without
+	// touching its content, as opening and then canceling an upload session
+	// on the empty item does live (e2e TestE2E_SyncWatch_FileModification).
+	churnInterruptedCreates bool
+	folderCreates           []string
+	deletes                 []string
+	moves                   []string
 }
 
 type deletedScenarioItem struct {
@@ -703,6 +707,7 @@ func (r *moveScenarioRemote) uploadCreating(
 	r.addFile(t, id, parentID, name, "")
 	created := *r.items[id]
 	interrupt := r.interruptCreates
+	churn := r.churnInterruptedCreates
 	r.mu.Unlock()
 
 	if onCreated != nil {
@@ -711,6 +716,12 @@ func (r *moveScenarioRemote) uploadCreating(
 		}
 	}
 	if interrupt {
+		if churn {
+			r.mu.Lock()
+			r.items[id].ETag = r.nextETag()
+			r.touch(id)
+			r.mu.Unlock()
+		}
 		return nil, &graph.CreatedItemError{Item: &created, Err: errors.New("connection reset by peer")}
 	}
 

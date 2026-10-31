@@ -157,7 +157,7 @@ func (tm *TransferManager) openSessionForUpload(ctx context.Context, up *persist
 	if up.onCreated != nil {
 		if hookErr := up.onCreated(session.ItemID, session.CreatedETag); hookErr != nil {
 			tm.dropSession(ctx, driveStr, up.key, session.UploadURL)
-			tm.removePlaceholder(ctx, up.target.driveID, session.ItemID, session.CreatedETag)
+			tm.removePlaceholder(ctx, up.target.driveID, session.ItemID)
 			return nil, fmt.Errorf("recording the new file %s: %w", up.localPath, hookErr)
 		}
 	}
@@ -354,30 +354,57 @@ func committedByThisUpload(sent uploadedContent, item *graph.Item) bool {
 	return item.ModifiedAt.Unix() == wire.Unix()
 }
 
-// dropSession cancels a server session best-effort, on a context detached
-// from the caller's (the upload may be failing because that was canceled),
-// and deletes its record.
-// removePlaceholder deletes the empty item a create made, conditional on its
-// creation eTag, so it can only remove the untouched empty item. Best effort:
-// a leftover is an ordinary remote file that sync's pending-create record
-// still identifies (R-5.6.15).
-func (tm *TransferManager) removePlaceholder(ctx context.Context, driveID driveid.ID, itemID, createdETag string) {
+// removePlaceholder deletes the empty item a create made once its upload
+// failed: it reads the item again and deletes it only while it is still
+// empty, conditional on the eTag just read (removeEmptyPlaceholder). Best
+// effort: a leftover is an ordinary remote file that sync's pending-create
+// record still identifies (R-5.6.15).
+func (tm *TransferManager) removePlaceholder(ctx context.Context, driveID driveid.ID, itemID string) {
+	if itemID == "" {
+		return
+	}
+
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cancelSessionTimeout)
+	defer cancel()
+
+	item, err := tm.lookupUploadTarget(readCtx, uploadTarget{driveID: driveID, itemID: itemID})
+	if err != nil {
+		tm.logger.Debug("couldn't read the empty file a failed upload created",
+			slog.String("item_id", itemID),
+			slog.Any("error", err),
+		)
+		return
+	}
+
+	tm.removeEmptyPlaceholder(ctx, driveID, item)
+}
+
+// removeEmptyPlaceholder deletes item, as just read, if it is still the empty
+// placeholder, conditional on its current eTag. The creation eTag does not
+// work for this: opening and canceling an upload session on the empty item
+// moves its eTag although no content landed (live, e2e
+// TestE2E_SyncWatch_FileModification), so that delete always failed with 412
+// and left the placeholder behind.
+func (tm *TransferManager) removeEmptyPlaceholder(ctx context.Context, driveID driveid.ID, item *graph.Item) {
 	remover, ok := tm.uploads.(PlaceholderRemover)
-	if !ok || itemID == "" || createdETag == "" {
+	if !ok || item == nil || item.ID == "" || item.Size != 0 || item.ETag == "" {
 		return
 	}
 
 	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cancelSessionTimeout)
 	defer cancel()
 
-	if err := remover.DeleteItemIfMatch(removeCtx, driveID, itemID, createdETag); err != nil {
+	if err := remover.DeleteItemIfMatch(removeCtx, driveID, item.ID, item.ETag); err != nil {
 		tm.logger.Debug("couldn't remove the empty file a failed upload created",
-			slog.String("item_id", itemID),
+			slog.String("item_id", item.ID),
 			slog.Any("error", err),
 		)
 	}
 }
 
+// dropSession cancels a server session best-effort, on a context detached
+// from the caller's (the upload may be failing because that was canceled),
+// and deletes its record.
 func (tm *TransferManager) dropSession(ctx context.Context, driveID, key string, uploadURL graph.UploadURL) {
 	tm.deleteSession(driveID, key)
 
