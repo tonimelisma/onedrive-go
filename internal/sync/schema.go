@@ -45,7 +45,12 @@ const (
 	// re-created at the sync path can get the old inode back, and on a
 	// filesystem without the bind token's extended attribute that new, empty
 	// folder passed as the bound one (D-001).
-	currentSyncStoreGeneration = 23
+	//
+	// Generation 24 adds kept_local_folders: folders deleted on OneDrive that
+	// stay locally only because they hold content sync ignores (D-012). The
+	// next pass used to read such a folder as new local content and re-create
+	// it, empty, online (R-2.17.2).
+	currentSyncStoreGeneration = 24
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -105,6 +110,13 @@ CREATE INDEX IF NOT EXISTS idx_pending_creates_path ON pending_creates(path);
 
 CREATE TABLE IF NOT EXISTS mount_boundaries (
     path       TEXT    NOT NULL PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS kept_local_folders (
+    path             TEXT    NOT NULL PRIMARY KEY,
+    local_device     INTEGER NOT NULL DEFAULT 0,
+    local_inode      INTEGER NOT NULL DEFAULT 0,
+    local_birth_time INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS held_deletes (
@@ -232,6 +244,9 @@ func canonicalSyncStoreColumns() map[string][]string {
 		},
 		"mount_boundaries": {
 			"path",
+		},
+		"kept_local_folders": {
+			"path", "local_device", "local_inode", "local_birth_time",
 		},
 		"held_deletes": {
 			"path", "side", "reason", "item_type", "item_id",

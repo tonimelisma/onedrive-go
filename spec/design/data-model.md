@@ -59,6 +59,7 @@ rebuildable runtime facts:
 | `observation_state` | Content drive owner, primary cursor, and remote refresh cadence | zero-or-one row |
 | `held_deletes` | Deletes the delete-safety hold keeps for confirmation (status projection) | zero or more rows |
 | `mount_boundaries` | Folders crossed into another filesystem under `cross_filesystems` | `path` |
+| `kept_local_folders` | Folders deleted on OneDrive and kept locally only for content sync ignores | `path` |
 
 ## `baseline`
 
@@ -286,6 +287,19 @@ filesystem under `cross_filesystems`. It is written in the local-snapshot
 transaction and pruned of paths that are neither in the baseline nor in
 `local_state`; a flag outlives an unmount on purpose, because it is how the
 next scan recognises the empty folder as a disk that is not mounted.
+
+## `kept_local_folders`
+
+`kept_local_folders` lists folders deleted on OneDrive whose local delete kept
+them because they hold only content sync ignores (D-012): `path` and the
+folder's `local_device`, `local_inode` and `local_birth_time`. The row is
+written in the transaction that drops the folder's baseline row. While
+`local_state` shows the same folder (`sqlSameLocalEntryL`) at that path with
+nothing below it, the comparison classifies it `kept_local_folder` and plans
+nothing, instead of a `local_only_create` that re-created the folder, empty,
+online (R-2.17.2). A visible entry inside it makes it ordinary local content
+again. The row goes when a baseline row is written at the path, and a full
+local snapshot prunes rows whose folder is gone, moved or replaced.
 
 ## `held_deletes`
 

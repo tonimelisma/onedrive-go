@@ -31,4 +31,6 @@ type BaselineMutation struct {
 	LocalMtime            int64
 	RemoteMtime           int64
 	ETag                  string
+	// KeptLocally: see actionOutcome.KeptLocally.
+	KeptLocally bool
 }

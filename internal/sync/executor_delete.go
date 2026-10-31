@@ -158,13 +158,18 @@ func (e *executor) DeleteLocalFolder(action *Action, absPath string) actionOutco
 				// (an ignored dir, a dotfile under ignore_dotfiles). Failing
 				// here retried forever (D-012). The folder's synced identity
 				// is gone on OneDrive, so drop it from the baseline and keep
-				// the folder with what it still holds; the next pass sees a
-				// local-only folder and re-creates it, empty, online.
+				// the folder with what it still holds. The outcome names the
+				// kept folder, so the planner does not read it as new local
+				// content and re-create it online (R-2.17.2) while it stays
+				// the same folder and holds nothing sync sees.
 				e.logger.Debug("local delete: folder holds only ignored content, keeping it and forgetting the synced folder",
 					slog.String("path", action.Path),
 					slog.Int("ignored_entries", len(blockers)),
 				)
-				return e.DeleteOutcome(action, ActionLocalDelete)
+				outcome := e.DeleteOutcome(action, ActionLocalDelete)
+				outcome.KeptLocally = true
+				e.observeLocalIdentity(&outcome, relPath)
+				return outcome
 			}
 			return e.failedOutcome(action, ActionLocalDelete, folderNotEmptyError(blockers))
 		}

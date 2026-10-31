@@ -269,6 +269,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_NFDNamedLocalFolderReceivesAdditionsAndIsDeleted,
 		TestRunOnce_ConflictingEditsOfAnNFDNamedFileKeepBoth,
 		TestRunOnce_AppliedMoveLeavesTheBaselineCurrent,
+		TestRunOnce_FolderRecreatedWhereAKeptFolderWasIsCreatedOnline,
 	}
 }
 
