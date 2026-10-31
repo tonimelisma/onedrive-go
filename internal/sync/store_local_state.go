@@ -103,6 +103,9 @@ func (s *SyncStore) replaceLocalState(
 	if err != nil {
 		return false, nil, err
 	}
+	if pruneErr := pruneKeptLocalFoldersTx(ctx, tx); pruneErr != nil {
+		return false, nil, pruneErr
+	}
 	backfilled, backfillErr := backfillBaselineIdentityTx(ctx, tx)
 	if backfillErr != nil {
 		return false, nil, backfillErr
@@ -524,4 +527,21 @@ func (s *SyncStore) listMountBoundaries(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("sync: iterating mount boundaries: %w", err)
 	}
 	return paths, nil
+}
+
+// pruneKeptLocalFoldersTx forgets kept folders (recordKeptLocalFolderTx) that
+// a full snapshot no longer shows as the same folder at the same path: one
+// the user deleted, moved or replaced. The kept row is aliased b so the one
+// SQL identity rule, sqlSameLocalEntryL, decides "the same folder".
+func pruneKeptLocalFoldersTx(ctx context.Context, tx sqlTxRunner) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM kept_local_folders AS b
+		WHERE NOT EXISTS (
+			SELECT 1 FROM local_state l
+			WHERE l.path = b.path AND l.item_type = 'folder' AND l.local_has_identity = 1
+				AND `+sqlSameLocalEntryL+`
+		)`); err != nil {
+		return fmt.Errorf("sync: pruning kept local folders: %w", err)
+	}
+
+	return nil
 }

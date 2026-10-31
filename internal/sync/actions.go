@@ -168,6 +168,12 @@ type actionOutcome struct {
 	LocalMtime            int64 // local mtime at sync time
 	RemoteMtime           int64 // remote mtime at sync time; zero means unknown
 	ETag                  string
+	// KeptLocally marks a local folder delete that removed the synced
+	// folder from the baseline but left the folder on disk because it holds
+	// only content sync ignores (D-012). The local identity fields describe
+	// that folder, so the store can tell it from a new folder later created
+	// at the path.
+	KeptLocally bool
 }
 
 // actionViewPath is the path an action's view describes, else its own path.

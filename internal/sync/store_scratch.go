@@ -13,23 +13,35 @@ import (
 )
 
 const (
-	sqlInsertScratchBaseline = `INSERT INTO baseline
-		(item_id, path, parent_id, item_type, local_hash, remote_hash,
-		 local_size, remote_size, local_mtime, remote_mtime,
-		 local_ctime, local_device, local_inode, local_birth_time, local_has_identity, etag)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	sqlListScratchRemoteState = `SELECT ` + sqlSelectRemoteStateCols + `
 		FROM remote_state
 		ORDER BY path`
 	sqlInsertScratchRemoteState = `INSERT INTO remote_state
 		(drive_id, item_id, path, item_type, hash, size, mtime, etag)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	sqlCopyScratchKeptLocalFolders = `SELECT path, local_device, local_inode, local_birth_time
+		FROM kept_local_folders
+		ORDER BY path`
+	sqlInsertScratchKeptLocalFolder = `INSERT INTO kept_local_folders
+		(path, local_device, local_inode, local_birth_time)
+		VALUES (?, ?, ?, ?)`
 )
 
 type scratchPlanningSeed struct {
 	observationState *observationState
 	baselineEntries  []BaselineEntry
 	remoteRows       []remoteStateRow
+	// keptFolders are planner input too: a dry run that left them out
+	// planned the online re-creation of every kept folder (D-012).
+	keptFolders []keptLocalFolderRow
+}
+
+// keptLocalFolderRow is one kept_local_folders row, copied as stored.
+type keptLocalFolderRow struct {
+	path      string
+	device    int64
+	inode     int64
+	birthTime int64
 }
 
 // createScratchPlanningStore opens a temporary SyncStore and seeds it with the
@@ -117,10 +129,16 @@ func (s *SyncStore) readScratchPlanningSeed(
 		return scratchPlanningSeed{}, err
 	}
 
+	keptFolders, err := listScratchKeptLocalFolders(ctx, tx)
+	if err != nil {
+		return scratchPlanningSeed{}, err
+	}
+
 	return scratchPlanningSeed{
 		observationState: observationState,
 		baselineEntries:  cloneBaselineEntries(baseline),
 		remoteRows:       remoteRows,
+		keptFolders:      keptFolders,
 	}, nil
 }
 
@@ -143,6 +161,14 @@ func (s *SyncStore) applyScratchPlanningSeed(ctx context.Context, seed scratchPl
 
 	if err := insertScratchRemoteStateRows(ctx, tx, seed.remoteRows); err != nil {
 		return err
+	}
+
+	for _, kept := range seed.keptFolders {
+		if _, err := tx.ExecContext(ctx, sqlInsertScratchKeptLocalFolder,
+			kept.path, kept.device, kept.inode, kept.birthTime,
+		); err != nil {
+			return fmt.Errorf("sync: inserting scratch kept local folder %s: %w", kept.path, err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -174,26 +200,8 @@ func insertScratchBaselineEntries(
 	entries []BaselineEntry,
 ) error {
 	for i := range entries {
-		entry := entries[i]
-		if _, err := tx.ExecContext(ctx, sqlInsertScratchBaseline,
-			entry.ItemID,
-			entry.Path,
-			nullString(entry.ParentID),
-			entry.ItemType,
-			nullString(entry.LocalHash),
-			nullString(entry.RemoteHash),
-			nullKnownInt64(entry.LocalSize, entry.LocalSizeKnown),
-			nullKnownInt64(entry.RemoteSize, entry.RemoteSizeKnown),
-			nullOptionalInt64(entry.LocalMtime),
-			nullOptionalInt64(entry.RemoteMtime),
-			entry.LocalCtime,
-			int64(entry.LocalDevice),
-			int64(entry.LocalInode),
-			entry.LocalBirthTime,
-			boolInt(entry.LocalHasIdentity),
-			nullString(entry.ETag),
-		); err != nil {
-			return fmt.Errorf("sync: inserting scratch baseline row for %s: %w", entry.Path, err)
+		if err := upsertBaselineRowTx(ctx, tx, &entries[i]); err != nil {
+			return fmt.Errorf("sync: inserting scratch baseline row for %s: %w", entries[i].Path, err)
 		}
 	}
 
@@ -273,4 +281,26 @@ func insertScratchRemoteStateRows(
 	}
 
 	return nil
+}
+
+func listScratchKeptLocalFolders(ctx context.Context, runner sqlTxRunner) ([]keptLocalFolderRow, error) {
+	rows, err := runner.QueryContext(ctx, sqlCopyScratchKeptLocalFolders)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying scratch kept local folders: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+
+	var result []keptLocalFolderRow
+	for rows.Next() {
+		var row keptLocalFolderRow
+		if err := rows.Scan(&row.path, &row.device, &row.inode, &row.birthTime); err != nil {
+			return nil, fmt.Errorf("sync: scanning scratch kept local folder: %w", err)
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating scratch kept local folders: %w", err)
+	}
+
+	return result, nil
 }

@@ -24,6 +24,7 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 		"baseline",
 		"block_scopes",
 		"held_deletes",
+		"kept_local_folders",
 		"local_state",
 		"mount_boundaries",
 		"observation_issues",
