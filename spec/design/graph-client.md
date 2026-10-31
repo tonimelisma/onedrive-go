@@ -206,10 +206,12 @@ GetItem, ListChildren, CreateFolder, CreateFile, MoveItem, CopyItem, DeleteItem.
 
 `CreateFolder` also owns one narrow ambiguous-success recovery path. If Graph
 returns a success status for `POST .../children` but the body is empty, the
-client does not retry the non-idempotent create. Instead it confirms the new
-folder by re-listing the parent collection under the same bounded
-post-mutation visibility budget, because a replayed create could turn a
-committed success into a false `nameAlreadyExists` conflict.
+client does not resend the create. Instead it confirms the new folder by
+re-listing the parent collection under the same bounded post-mutation
+visibility budget, because a replay after a success it already has would turn
+that success into a `nameAlreadyExists` conflict. (A transient failure is
+different: there the outcome is unknown, and the retrying transport resends
+the create, whose 409 the caller resolves by looking the name up; R-6.8.21.)
 
 Timestamp normalization is intentionally lossy in only one direction: valid Graph timestamps become UTC `time.Time` values, while empty, `null`, invalid, or out-of-range timestamps remain the zero value to mean "unknown". The graph boundary never substitutes `time.Now()` for malformed wire data, because downstream sync logic can safely persist and reason about unknown timestamps as `NULL`/unset state.
 
@@ -478,7 +480,7 @@ escalation next to the request ID (`TestGraphError_KeepsAgsDiagnosticHeader`,
 
 Implements: R-6.8.8 [verified]
 
-Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The transport only replays methods that are safe at that generic boundary (`GET`, `HEAD`, `OPTIONS`, `TRACE`, `PUT`, `DELETE`); unsafe `POST` and `PATCH` calls return their first transient response to the graph operation that owns the mutation semantics. The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives`, transient 404 on root-child listing, transient 404 on item-by-ID download metadata fetch before a pre-authenticated download begins, transient 404 or 502/503/504 on the immediate post-simple-upload `UpdateFileSystemInfo` PATCH, transient 404 on create-upload-session requests against freshly created parents, and the documented simple-upload fallback path. All other retry, backoff, Retry-After parsing, and shared 429 coordination live below `graph` in the retry/HTTP-profile layer.
+Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The transport only replays methods that are safe at that generic boundary (`GET`, `HEAD`, `OPTIONS`, `TRACE`, `PUT`, `DELETE`); unsafe `POST` and `PATCH` calls return their first transient response to the graph operation that owns the mutation semantics. The one exception is an operation that marks its request `retry.WithReplaySafe`: `CreateFile` and `CreateFolder`, whose `conflictBehavior=fail` makes a replay of a committed create answer 409 without creating anything (R-6.8.21, `TestCreate_TransientFailureIsResentByARetryingTransport`). Before that, one 503 on a create failed `put` outright (e2e `TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges`). The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives`, transient 404 on root-child listing, transient 404 on item-by-ID download metadata fetch before a pre-authenticated download begins, transient 404 or 502/503/504 on the immediate post-simple-upload `UpdateFileSystemInfo` PATCH, transient 404 on create-upload-session requests against freshly created parents, and the documented simple-upload fallback path. All other retry, backoff, Retry-After parsing, and shared 429 coordination live below `graph` in the retry/HTTP-profile layer.
 
 `NewClient` accepts an `*http.Client` and returns `(*Client, error)` after validating the base URL and token source. `MustNewClient` is reserved for static/test setup where panic-on-bad-construction is intentional. `driveops.SessionRuntime` is the normal production runtime owner for those clients, and it composes the stateless `internal/graphtransport` builders into the concrete profiles the app needs:
 

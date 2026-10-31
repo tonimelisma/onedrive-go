@@ -159,6 +159,7 @@ Constraints derived from the OneDrive API that the system must satisfy for corre
 - R-6.8.18: Every request to Graph, upload and download hosts shall carry one User-Agent in Microsoft's decorated form, `ISV|onedrive-go|onedrive-go/<version>`, built in one place (`graph.UserAgent`) for every command and the sync engine. [verified]
 - R-6.8.19: A request the transport retries shall resend its complete body with an exact `Content-Length`. A request whose body cannot be replayed shall be returned to the caller after one attempt, never resent with the bytes the first attempt consumed. [verified]
 - R-6.8.20: A transfer body (download response or upload fragment) that moves no bytes for 2 minutes shall be abandoned with a retryable stalled-transfer error, keeping a download's partial for resume; transfer connections shall ping idle HTTP/2 connections and close one whose ping goes unanswered. [verified]
+- R-6.8.21: A retrying (CLI) transport shall resend a file or folder create after a transient failure, because the create uses `conflictBehavior=fail`: a replay of a create that committed answers 409 and creates nothing, and every caller takes a 409 on create as "look at what holds the name". Other `POST` and `PATCH` requests shall stay unretried at the transport. [verified]
 
 ## R-6.9 Packaging [future]
 
