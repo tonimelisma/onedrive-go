@@ -77,7 +77,7 @@ func seedComparisonBench(b *testing.B, store *SyncStore, items int, shape compar
 
 	const mtime = int64(1_700_000_000_000_000_000)
 	inode := int64(0)
-	add := func(path, parentID, itemID, itemType, hash string, size int64) {
+	add := func(path, parentID, itemID string, itemType ItemType, hash string, size int64) {
 		inode++
 		localPath, remotePath := path, path
 		if len(path) >= len("moved") && path[:len("moved")] == "moved" {
@@ -89,26 +89,30 @@ func seedComparisonBench(b *testing.B, store *SyncStore, items int, shape compar
 			case benchShapeSteady:
 			}
 		}
-		_, err := insertBaseline.ExecContext(ctx, itemID, path, parentID, itemType, nullString(hash), nullString(hash),
-			size, size, mtime, mtime, mtime, 1, inode, 0, 1, "etag-"+itemID)
+		_, err := insertBaseline.ExecContext(ctx, baselineRowArgs(&BaselineEntry{
+			Path: path, ItemID: itemID, ParentID: parentID, ItemType: itemType, LocalHash: hash, RemoteHash: hash,
+			LocalSize: size, LocalSizeKnown: true, RemoteSize: size, RemoteSizeKnown: true,
+			LocalMtime: mtime, RemoteMtime: mtime, LocalCtime: mtime, LocalDevice: 1, LocalInode: uint64(inode),
+			LocalHasIdentity: true, ETag: "etag-" + itemID,
+		})...)
 		require.NoError(b, err)
-		_, err = insertLocal.ExecContext(ctx, localPath, itemType, nullString(hash), size, mtime, mtime, inode)
+		_, err = insertLocal.ExecContext(ctx, localPath, itemType.String(), nullString(hash), size, mtime, mtime, inode)
 		require.NoError(b, err)
-		_, err = insertRemote.ExecContext(ctx, engineTestDriveID, itemID, remotePath, itemType, nullString(hash), size, mtime, "etag-"+itemID)
+		_, err = insertRemote.ExecContext(ctx, engineTestDriveID, itemID, remotePath, itemType.String(), nullString(hash), size, mtime, "etag-"+itemID)
 		require.NoError(b, err)
 	}
 
 	folders := items / benchFilesPerFolder
 	for top, topName := range []string{"moved", "still"} {
 		topID := "top-" + strconv.Itoa(top)
-		add(topName, strRoot, topID, ItemTypeFolder.String(), "", 0)
+		add(topName, strRoot, topID, ItemTypeFolder, "", 0)
 		for f := range folders / 2 {
 			folderPath := fmt.Sprintf("%s/folder-%05d", topName, f)
 			folderID := fmt.Sprintf("%s-%d", topID, f)
-			add(folderPath, topID, folderID, ItemTypeFolder.String(), "", 0)
+			add(folderPath, topID, folderID, ItemTypeFolder, "", 0)
 			for i := range benchFilesPerFolder {
 				id := fmt.Sprintf("%s-%d", folderID, i)
-				add(fmt.Sprintf("%s/file-%03d.txt", folderPath, i), folderID, id, ItemTypeFile.String(), "hash-"+id, int64(100+i))
+				add(fmt.Sprintf("%s/file-%03d.txt", folderPath, i), folderID, id, ItemTypeFile, "hash-"+id, int64(100+i))
 			}
 		}
 	}
