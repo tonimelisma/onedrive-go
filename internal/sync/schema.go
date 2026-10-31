@@ -39,7 +39,13 @@ const (
 	// shortcut_roots.local_root_birth_time): a reused inode number is not the
 	// deleted entry it once named, and pairing on it renamed an unrelated new
 	// entry into the old OneDrive item (R-2.17.1).
-	currentSyncStoreGeneration = 22
+	//
+	// Generation 23 adds the sync folder's own birth time to its recorded
+	// identity (observation_state.sync_root_birth_time): a folder removed and
+	// re-created at the sync path can get the old inode back, and on a
+	// filesystem without the bind token's extended attribute that new, empty
+	// folder passed as the bound one (D-001).
+	currentSyncStoreGeneration = 23
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -79,6 +85,7 @@ CREATE TABLE IF NOT EXISTS observation_state (
     sync_root_device            INTEGER NOT NULL DEFAULT 0,
     sync_root_inode             INTEGER NOT NULL DEFAULT 0,
     sync_root_fsid              INTEGER NOT NULL DEFAULT 0,
+    sync_root_birth_time        INTEGER NOT NULL DEFAULT 0,
     sync_root_token             TEXT    NOT NULL DEFAULT '',
     sync_root_rebind            INTEGER NOT NULL DEFAULT 0 CHECK(sync_root_rebind IN (0, 1)),
     undecided_refresh_streak    INTEGER NOT NULL DEFAULT 0
@@ -215,7 +222,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"content_drive_id", "cursor", "next_full_remote_refresh_at",
 			"local_truth_complete", "local_truth_recovery_reason",
 			"sync_root_bound", "sync_root_device", "sync_root_inode", "sync_root_fsid",
-			"sync_root_token", "sync_root_rebind", "undecided_refresh_streak",
+			"sync_root_birth_time", "sync_root_token", "sync_root_rebind", "undecided_refresh_streak",
 		},
 		"remote_state": {
 			"drive_id", "item_id", "path", "item_type", "hash", "size", "mtime", "etag",

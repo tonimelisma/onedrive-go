@@ -4,6 +4,7 @@ package synctree
 
 import (
 	"io/fs"
+	"os"
 	"syscall"
 	"time"
 
@@ -58,6 +59,32 @@ func withBirthTime(info fs.FileInfo, absPath string) fs.FileInfo {
 	if err := unix.Statx(unix.AT_FDCWD, absPath, flags, unix.STATX_INO|unix.STATX_BTIME, &stx); err != nil {
 		return info
 	}
+
+	return birthTimeFromStatx(info, stat, &stx)
+}
+
+// withDescriptorBirthTime is withBirthTime for an entry the caller holds open:
+// statx(2) reads the descriptor itself (AT_EMPTY_PATH), so the birth time is
+// the open directory's even if its path now names another one. The same
+// fallback applies: no birth time, info unchanged.
+func withDescriptorBirthTime(info fs.FileInfo, file *os.File) fs.FileInfo {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat == nil {
+		return info
+	}
+	var stx unix.Statx_t
+	err := unix.Statx(int(file.Fd()), "", unix.AT_EMPTY_PATH|unix.AT_STATX_DONT_SYNC,
+		unix.STATX_INO|unix.STATX_BTIME, &stx)
+	if err != nil {
+		return info
+	}
+
+	return birthTimeFromStatx(info, stat, &stx)
+}
+
+// birthTimeFromStatx attaches stx's birth time to info when statx reported
+// one for the same device and inode info describes.
+func birthTimeFromStatx(info fs.FileInfo, stat *syscall.Stat_t, stx *unix.Statx_t) fs.FileInfo {
 	if stx.Mask&unix.STATX_BTIME == 0 || stx.Mask&unix.STATX_INO == 0 {
 		return info
 	}

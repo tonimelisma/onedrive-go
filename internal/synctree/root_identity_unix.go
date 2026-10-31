@@ -31,10 +31,18 @@ import (
 // the inode back. The token is the folder's own name for itself, so when the
 // recorded identity has one it alone decides (D-001). Filesystems without
 // user extended attributes leave it empty and fall back to inode and fsid.
+//
+// BirthTime is the folder's creation time in Unix nanoseconds, or zero when
+// the filesystem or platform records none. Like a file's (FileIdentity), it
+// tells a folder removed and re-created at the sync path from the bound one
+// even when the new folder got the old inode number back, which is the
+// common case on ext4 and tmpfs; without a token it is the only evidence
+// that does.
 type RootIdentity struct {
 	Device       uint64
 	Inode        uint64
 	FileSystemID uint64
+	BirthTime    int64
 	Token        string
 }
 
@@ -49,9 +57,11 @@ const btrfsSubvolumeRootInode = 256
 
 // SameRoot reports whether two root fingerprints name the same directory.
 //
-// The inode must always match. The filesystem is matched by fsid when both
-// sides carry one, because the device number of the same disk can change
-// between boots; otherwise by device number. A false mismatch is safe (the
+// The inode must always match, and so must the birth time whenever both sides
+// know one (a rename or a remount keeps it; a re-created folder does not).
+// The filesystem is matched by fsid when both sides carry one, because the
+// device number of the same disk can change between boots; otherwise by
+// device number. A false mismatch is safe (the
 // engine refuses to sync until the user rebinds), a false match is not, so
 // nothing here is looser than the old (device, inode) rule except the one
 // reshuffle case fsid exists to cover.
@@ -67,6 +77,9 @@ func SameRoot(a RootIdentity, b RootIdentity) bool {
 	if a.Inode != b.Inode {
 		return false
 	}
+	if a.BirthTime != 0 && b.BirthTime != 0 && a.BirthTime != b.BirthTime {
+		return false
+	}
 	if a.FileSystemID != 0 && b.FileSystemID != 0 {
 		if a.FileSystemID != b.FileSystemID {
 			return false
@@ -80,11 +93,11 @@ func SameRoot(a RootIdentity, b RootIdentity) bool {
 	return a.Device == b.Device
 }
 
-// RootIdentityFromFileIdentity widens a (device, inode) identity, such as the
-// parent-issued identity of a shortcut child root, into a root fingerprint
-// that compares by device number.
+// RootIdentityFromFileIdentity widens a (device, inode, birth time) identity,
+// such as the parent-issued identity of a shortcut child root, into a root
+// fingerprint that compares by device number.
 func RootIdentityFromFileIdentity(identity FileIdentity) RootIdentity {
-	return RootIdentity{Device: identity.Device, Inode: identity.Inode}
+	return RootIdentity{Device: identity.Device, Inode: identity.Inode, BirthTime: identity.BirthTime}
 }
 
 // ErrNoStableRootIdentity reports a filesystem that exposes no inode identity
@@ -105,7 +118,9 @@ func (r *Root) RootIdentity() (RootIdentity, error) {
 	if err != nil {
 		return RootIdentity{}, fmt.Errorf("stating sync folder %s: %w", r.dir, err)
 	}
-	identity, ok := IdentityFromFileInfo(info)
+	// The descriptor's own birth time, read through the descriptor so it
+	// names the directory the inode came from even if the path is re-pointed.
+	identity, ok := IdentityFromFileInfo(withDescriptorBirthTime(info, dir))
 	if !ok {
 		return RootIdentity{}, fmt.Errorf("fingerprinting sync folder %s: %w", r.dir, ErrNoStableRootIdentity)
 	}
@@ -119,6 +134,7 @@ func (r *Root) RootIdentity() (RootIdentity, error) {
 		Device:       identity.Device,
 		Inode:        identity.Inode,
 		FileSystemID: fileSystemIDFromStatfs(&fsStat),
+		BirthTime:    identity.BirthTime,
 		Token:        r.readRootMark(dir),
 	}, nil
 }

@@ -35,3 +35,27 @@ func TestIdentityFromFileInfo_LinuxBirthTimeIsStatxBtime(t *testing.T) {
 	}
 	assert.Equal(t, stx.Btime.Sec*int64(1e9)+int64(stx.Btime.Nsec), identity.BirthTime)
 }
+
+// Validates: R-6.2.12
+//
+// The sync folder's own fingerprint carries its birth time, read through the
+// open descriptor, wherever the filesystem records one.
+func TestRootIdentity_LinuxBirthTimeIsStatxBtime(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "sync")
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	tree, err := Open(dir)
+	require.NoError(t, err)
+
+	identity, err := tree.RootIdentity()
+	require.NoError(t, err)
+
+	var stx unix.Statx_t
+	require.NoError(t, unix.Statx(unix.AT_FDCWD, dir, 0, unix.STATX_BTIME, &stx))
+	if stx.Mask&unix.STATX_BTIME == 0 {
+		assert.Zero(t, identity.BirthTime, "a filesystem without birth times records none")
+		t.Skip("the test filesystem reports no birth time")
+	}
+	assert.Equal(t, stx.Btime.Sec*int64(1e9)+int64(stx.Btime.Nsec), identity.BirthTime)
+}

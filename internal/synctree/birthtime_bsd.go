@@ -4,6 +4,7 @@ package synctree
 
 import (
 	"io/fs"
+	"os"
 	"syscall"
 )
 
@@ -22,5 +23,11 @@ func statBirthTime(stat *syscall.Stat_t) int64 {
 // withBirthTime returns info unchanged: the stat these platforms return
 // already carries the birth time IdentityFromFileInfo reads.
 func withBirthTime(info fs.FileInfo, _ string) fs.FileInfo {
+	return info
+}
+
+// withDescriptorBirthTime returns info unchanged: the stat of an open file
+// already carries its birth time on these platforms.
+func withDescriptorBirthTime(info fs.FileInfo, _ *os.File) fs.FileInfo {
 	return info
 }

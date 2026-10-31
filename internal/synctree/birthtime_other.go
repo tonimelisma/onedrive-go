@@ -4,6 +4,7 @@ package synctree
 
 import (
 	"io/fs"
+	"os"
 	"syscall"
 )
 
@@ -15,5 +16,11 @@ func statBirthTime(*syscall.Stat_t) int64 {
 
 // withBirthTime returns info unchanged on platforms without a birth time.
 func withBirthTime(info fs.FileInfo, _ string) fs.FileInfo {
+	return info
+}
+
+// withDescriptorBirthTime returns info unchanged on platforms without a birth
+// time.
+func withDescriptorBirthTime(info fs.FileInfo, _ *os.File) fs.FileInfo {
 	return info
 }

@@ -278,6 +278,60 @@ func TestNewEngine_RootRecreatedAtSamePathIsRefusedEvenIfInodeIsReused(t *testin
 	assert.Empty(t, remote.deletes)
 }
 
+// rewriteRecordedSyncRoot edits the sync folder identity the drive's state
+// recorded, standing in for a binding made on a filesystem the test host does
+// not have.
+func rewriteRecordedSyncRoot(t *testing.T, paths rootSafetyPaths, edit func(*synctree.RootIdentity)) {
+	t.Helper()
+
+	store, err := openSyncStore(t.Context(), paths.dbPath, testLogger(t), false)
+	require.NoError(t, err)
+	require.NoError(t, store.updateObservationState(t.Context(), func(state *observationState) {
+		require.NotNil(t, state.SyncRootIdentity)
+		edit(state.SyncRootIdentity)
+	}))
+	require.NoError(t, store.Close(context.WithoutCancel(t.Context())))
+}
+
+// On a filesystem without user extended attributes the binding has no token,
+// and rm -rf plus mkdir of the sync folder can hand the new, empty folder the
+// old inode number. The birth time is what still tells them apart.
+//
+// Validates: R-6.2.12
+func TestNewEngine_RootWithoutTokenIsRefusedWhenBirthTimeDiffers(t *testing.T) {
+	t.Parallel()
+
+	paths := newRootSafetyPaths(t)
+	remote := seedRootSafetyRemote(t)
+	eng, err := openRootSafetyEngine(t, paths, remote.client(t))
+	require.NoError(t, err)
+	runScenarioPass(t, eng)
+	closeRootSafetyEngine(t, eng)
+
+	live, err := mustOpenSyncTree(t, paths.syncRoot).RootIdentity()
+	require.NoError(t, err)
+	if live.BirthTime == 0 {
+		t.Skip("the test filesystem reports no birth time")
+	}
+
+	// A token-less binding of this very folder: same inode, same birth time.
+	rewriteRecordedSyncRoot(t, paths, func(recorded *synctree.RootIdentity) {
+		recorded.Token = ""
+	})
+	reopened, err := openRootSafetyEngine(t, paths, remote.client(t))
+	require.NoError(t, err, "the bound folder itself still matches")
+	closeRootSafetyEngine(t, reopened)
+
+	// The same inode number on the same filesystem, born at another time: a
+	// re-created folder that got the old inode back.
+	rewriteRecordedSyncRoot(t, paths, func(recorded *synctree.RootIdentity) {
+		recorded.BirthTime = live.BirthTime - 1
+	})
+	_, err = openRootSafetyEngine(t, paths, remote.client(t))
+	require.ErrorIs(t, err, ErrMountRootUnavailable)
+	assert.Empty(t, remote.deletes)
+}
+
 // Validates: R-6.2.12
 func TestNewEngine_RootTokenDecidesOverInode(t *testing.T) {
 	t.Parallel()

@@ -47,6 +47,7 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 		"sync_root_device",
 		"sync_root_inode",
 		"sync_root_fsid",
+		"sync_root_birth_time",
 		"sync_root_token",
 		"sync_root_rebind",
 		"undecided_refresh_streak",
