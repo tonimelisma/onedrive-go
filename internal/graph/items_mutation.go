@@ -18,6 +18,10 @@ import (
 
 // CreateFolder creates a new folder under the given parent.
 // Uses conflictBehavior "fail" — returns ErrConflict (409) on name collision.
+// That makes the create safe for a retrying transport to resend after a
+// transient failure (retry.WithReplaySafe, R-6.8.21): if the first attempt
+// did commit, the replay answers 409 and creates nothing, and callers that
+// get a 409 look the name up (driveops.Session.EnsureFolder).
 func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
 	c.logger.Debug("creating folder",
 		slog.String("drive_id", driveID.String()),
@@ -38,7 +42,7 @@ func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID,
 		return nil, fmt.Errorf("graph: marshaling create folder request: %w", err)
 	}
 
-	resp, err := c.do(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes))
+	resp, err := c.do(retry.WithReplaySafe(ctx), http.MethodPost, path, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}

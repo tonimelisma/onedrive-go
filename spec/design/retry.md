@@ -81,6 +81,10 @@ Features:
   `TestRetryTransport_NonReplayableBodyIsNotRetried`). The simple-upload PUT
   once went out that way, and a retry after a 503 replaced the file online
   with zero bytes
+- `POST` and `PATCH` are not resent, except a request whose context is marked
+  `WithReplaySafe`: the file and folder creates, whose `conflictBehavior=fail`
+  makes a replay of a committed create a harmless 409 (R-6.8.21,
+  `TestRetryTransport_ReplaySafePostIsRetriedWithItsBody`)
 - `X-Retry-Count` header annotation on retried requests
 - request-scoped log target override via `WithLogTarget(ctx, target)`
 - retryable status codes: 408, 429, 500, 502, 503, 504, 509

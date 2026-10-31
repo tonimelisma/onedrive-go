@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -264,6 +265,60 @@ func TestRetryTransport_UnsafeMethodsDoNotRetryGenericNetworkError(t *testing.T)
 	closeTestResponse(t, resp)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	assert.Equal(t, int32(1), attempts.Load())
+}
+
+// Validates: R-6.8.21
+func TestRetryTransport_ReplaySafePostIsRetriedWithItsBody(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		respond func() (*http.Response, error)
+	}{
+		{name: "transient status", respond: func() (*http.Response, error) {
+			return makeResponse(http.StatusServiceUnavailable, nil), nil
+		}},
+		{name: "network error", respond: func() (*http.Response, error) {
+			return nil, io.ErrUnexpectedEOF
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var attempts atomic.Int32
+			var bodies []string
+			inner := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				body, err := io.ReadAll(req.Body)
+				require.NoError(t, err)
+				bodies = append(bodies, string(body))
+				if attempts.Add(1) == 1 {
+					return tt.respond()
+				}
+
+				return makeResponse(http.StatusCreated, nil), nil
+			})
+			rt := &retry.RetryTransport{
+				Inner:  inner,
+				Policy: testPolicy(),
+				Logger: slog.Default(),
+				Sleep:  noopSleep,
+			}
+
+			req, err := http.NewRequestWithContext(
+				retry.WithReplaySafe(t.Context()), http.MethodPost, "http://example.com/children", strings.NewReader(`{"name":"a"}`),
+			)
+			require.NoError(t, err)
+
+			resp, err := rt.RoundTrip(req)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusCreated, resp.StatusCode)
+			assert.Equal(t, int32(2), attempts.Load())
+			assert.Equal(t, []string{`{"name":"a"}`, `{"name":"a"}`}, bodies)
+			require.NoError(t, resp.Body.Close())
+		})
+	}
 }
 
 // Validates: R-6.8.8

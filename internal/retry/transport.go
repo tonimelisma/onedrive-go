@@ -61,6 +61,21 @@ type logTargetKey struct{}
 
 type backoffObserverKey struct{}
 
+type replaySafeKey struct{}
+
+// WithReplaySafe returns a context whose requests the transport may resend
+// although their method is not safe to replay in general (POST, PATCH). Only
+// an operation whose second application cannot change what the first did
+// may use it: a create with conflictBehavior=fail is one, because a replay
+// after a first attempt that did commit answers 409 and changes nothing, and
+// its callers take that 409 as "the name is taken" and look (R-6.8.21). A
+// 503 does not say whether the create committed, so without the marker a
+// single transient answer failed the command (live, e2e
+// TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges).
+func WithReplaySafe(ctx context.Context) context.Context {
+	return context.WithValue(ctx, replaySafeKey{}, true)
+}
+
 // WithBackoffObserver returns a context whose requests call observe before
 // every retry or throttle wait. A transfer's stall watchdog uses it to stop
 // counting while the transport deliberately waits: a Retry-After longer than
@@ -172,7 +187,7 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 		// transfer is not a shutdown).
 		return false, fmt.Errorf("request canceled: %w", context.Cause(req.Context()))
 	}
-	if !retryableRequestMethod(req.Method) || !requestBodyReplayable(req) {
+	if !retryableRequest(req) || !requestBodyReplayable(req) {
 		return false, err
 	}
 
@@ -241,7 +256,7 @@ func (rt *RetryTransport) handleResponse(
 	if !isRetryable(resp.StatusCode) {
 		return true, resp, nil
 	}
-	if !retryableRequestMethod(req.Method) || !requestBodyReplayable(req) {
+	if !retryableRequest(req) || !requestBodyReplayable(req) {
 		return true, resp, nil
 	}
 
@@ -304,6 +319,16 @@ func backoffInterrupted(req *http.Request, sleepErr error) error {
 	}
 
 	return fmt.Errorf("request canceled during backoff: %w", sleepErr)
+}
+
+// retryableRequest reports whether the transport may resend req: its method
+// is safe to replay, or its context says the operation is (WithReplaySafe).
+func retryableRequest(req *http.Request) bool {
+	if replaySafe, ok := req.Context().Value(replaySafeKey{}).(bool); ok && replaySafe {
+		return true
+	}
+
+	return retryableRequestMethod(req.Method)
 }
 
 func retryableRequestMethod(method string) bool {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // Creating a file is two requests: create the empty item with its name in a
@@ -28,6 +29,14 @@ import (
 // (`STRASSE.txt` over `straße.txt`, `a.txt` over `a😀.txt`) or another
 // device's new file. A name that exists answers 409 nameAlreadyExists
 // (L-01), which callers turn into a replan.
+//
+// fail is also what makes the create safe to resend after a transient
+// failure that does not say whether it committed (a 503, a dropped
+// connection): a replay of a create that landed answers 409 and creates
+// nothing, and every caller already takes a 409 as "look at what holds the
+// name". CreateFile therefore marks its request retry.WithReplaySafe, and a
+// retrying (CLI) transport resends it; sync's transport retries nothing
+// (R-6.8.8), so there a transient answer still goes to the engine.
 //
 // L-01 measured the cost: the POST makes an empty item that already carries
 // the empty-content quickXorHash, and an upload session on that item with
@@ -66,7 +75,7 @@ func (c *Client) CreateFile(ctx context.Context, driveID driveid.ID, parentID, n
 		policy: c.policies.uploadSessionCreate,
 		match:  isTransientUploadSessionCreateError,
 	}, func() (*http.Response, error) {
-		return c.do(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes))
+		return c.do(retry.WithReplaySafe(ctx), http.MethodPost, path, bytes.NewReader(bodyBytes))
 	})
 	if err != nil {
 		return nil, fmt.Errorf("graph: creating file %q: %w", name, err)

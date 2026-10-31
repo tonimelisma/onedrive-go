@@ -50,6 +50,58 @@ func TestCreateFile_NameTravelsInTheBodyWithFail(t *testing.T) {
 	}
 }
 
+// Validates: R-6.8.21
+func TestCreate_TransientFailureIsResentByARetryingTransport(t *testing.T) {
+	// Live, e2e TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges: one 503 on
+	// the file create failed `put` outright. A create with
+	// conflictBehavior=fail is safe to resend, so a retrying transport does;
+	// without one (sync) the 503 comes back after one attempt.
+	tests := []struct {
+		name   string
+		create func(c *Client) (*Item, error)
+	}{
+		{name: "file", create: func(c *Client) (*Item, error) {
+			return c.CreateFile(t.Context(), driveid.New("d"), "parent", "a.txt")
+		}},
+		{name: "folder", create: func(c *Client) (*Item, error) {
+			return c.CreateFolder(t.Context(), driveid.New("d"), "parent", "a")
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var posts atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					w.WriteHeader(http.StatusTeapot)
+					return
+				}
+				body, err := io.ReadAll(r.Body)
+				assert.NoError(t, err)
+				assert.Contains(t, string(body), `"@microsoft.graph.conflictBehavior":"fail"`)
+				if posts.Add(1) == 1 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+				writeTestResponse(t, w, `{"id":"new-id","name":"a","eTag":"e1"}`)
+			}))
+			defer srv.Close()
+
+			item, err := tt.create(newTestClient(t, srv.URL))
+			require.NoError(t, err)
+			assert.Equal(t, "new-id", item.ID)
+			assert.Equal(t, int32(2), posts.Load())
+
+			posts.Store(0)
+			_, err = tt.create(newNoRetryTestClient(t, srv.URL))
+			require.ErrorIs(t, err, ErrServerError)
+			assert.Equal(t, int32(1), posts.Load(), "a transport that retries nothing sends the create once")
+		})
+	}
+}
+
 // Validates: R-5.6.14
 func TestUpload_ExistingNameIsNeverReplaced(t *testing.T) {
 	// A name OneDrive already holds (or holds as an equivalent spelling such
