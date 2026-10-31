@@ -520,7 +520,46 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 
 	e.logger.Debug("local move complete", slog.String("from", action.OldPath), slog.String("to", action.Path))
 
-	return e.moveOutcome(action)
+	o := e.moveOutcome(action)
+	e.observeMovedLocalChangeTime(&o, dest)
+
+	return o
+}
+
+// observeMovedLocalChangeTime records the change time a local rename gave the
+// moved file. rename(2) keeps the inode, birth time, content and mtime the
+// outcome carries over from the source baseline, but updates the inode change
+// time on Linux filesystems; left at the source baseline's, the next scan saw
+// metadata drift and published a second, metadata-only baseline update for
+// every applied remote file move.
+//
+// The new ctime is taken only from the entry that kept the moved file's
+// identity. An entry swapped in at dest after the rename keeps the old
+// recorded facts, which the next scan re-reads instead of trusting. dest is
+// the destination's rooted spelling on disk.
+func (e *executor) observeMovedLocalChangeTime(o *actionOutcome, dest string) {
+	if o.ItemType != ItemTypeFile || !o.LocalHasIdentity {
+		return
+	}
+	info, err := e.syncTree.Lstat(dest)
+	if err != nil {
+		e.logger.Debug("moved file change time unavailable",
+			slog.String("path", o.Path),
+			slog.Any("error", err),
+		)
+		return
+	}
+	identity, ok := synctree.IdentityFromFileInfo(info)
+	if !ok {
+		return
+	}
+	recorded := synctree.FileIdentity{Device: o.LocalDevice, Inode: o.LocalInode, BirthTime: o.LocalBirthTime}
+	if !synctree.SameIdentity(recorded, identity) {
+		return
+	}
+	if ctime := fileChangeTime(info); ctime != 0 {
+		o.LocalCtime = ctime
+	}
 }
 
 // renameLocal renames within the sync tree, between rooted paths spelled as
