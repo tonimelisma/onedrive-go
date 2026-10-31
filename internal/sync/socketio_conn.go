@@ -85,15 +85,14 @@ func (s *socketIOWakeSource) runConnection(
 	readResults := make(chan socketIOReadResult, 1)
 	go s.readPackets(readCtx, conn.conn, readResults)
 
-	var refreshTimer <-chan time.Time
-	var refresh *time.Timer
+	// The refresh deadline was computed on s.clock, so the timer runs on it
+	// too: the endpoint is refreshed before it expires on the same clock that
+	// read its expiry.
+	var refreshDue chan struct{}
 	if !refreshAt.IsZero() {
-		delay := time.Until(refreshAt)
-		if delay < 0 {
-			delay = 0
-		}
-		refresh = time.NewTimer(delay)
-		refreshTimer = refresh.C
+		delay := max(refreshAt.Sub(s.clock.Now()), 0)
+		refreshDue = make(chan struct{})
+		refresh := s.clock.AfterFunc(delay, func() { close(refreshDue) })
 		defer refresh.Stop()
 	}
 
@@ -101,7 +100,7 @@ func (s *socketIOWakeSource) runConnection(
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-refreshTimer:
+		case <-refreshDue:
 			return errSocketIORefreshRequired
 		case result := <-readResults:
 			if result.err != nil {

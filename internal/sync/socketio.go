@@ -51,10 +51,13 @@ type socketIOLifecycleEvent struct {
 }
 
 type socketIOWakeSourceOptions struct {
-	Logger           *slog.Logger
-	DialFunc         func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
-	SleepFunc        func(context.Context, time.Duration) error
-	NowFunc          func() time.Time
+	Logger   *slog.Logger
+	DialFunc func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
+	// Clock paces the source: the endpoint refresh deadline and timer and
+	// the reconnect backoff sleeps. Nil means wall time. One clock rather
+	// than separate now and sleep hooks, so a test cannot advance one while
+	// the refresh timer keeps running on the other.
+	Clock            syncClock
 	LifecycleHook    func(socketIOLifecycleEvent)
 	HandshakeTimeout time.Duration
 	RefreshLeadTime  time.Duration
@@ -74,8 +77,7 @@ type socketIOWakeSource struct {
 	driveID          driveid.ID
 	logger           *slog.Logger
 	dialFunc         func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
-	sleepFunc        func(context.Context, time.Duration) error
-	nowFunc          func() time.Time
+	clock            syncClock
 	lifecycleHook    func(socketIOLifecycleEvent)
 	handshakeTimeout time.Duration
 	refreshLeadTime  time.Duration
@@ -104,14 +106,9 @@ func newSocketIOWakeSourceWithOptions(
 		dialFunc = websocket.Dial
 	}
 
-	sleepFunc := opts.SleepFunc
-	if sleepFunc == nil {
-		sleepFunc = timeSleep
-	}
-
-	nowFunc := opts.NowFunc
-	if nowFunc == nil {
-		nowFunc = time.Now
+	clock := opts.Clock
+	if clock == nil {
+		clock = realClock{}
 	}
 
 	handshakeTimeout := opts.HandshakeTimeout
@@ -139,8 +136,7 @@ func newSocketIOWakeSourceWithOptions(
 		driveID:          driveID,
 		logger:           logger,
 		dialFunc:         dialFunc,
-		sleepFunc:        sleepFunc,
-		nowFunc:          nowFunc,
+		clock:            clock,
 		lifecycleHook:    opts.LifecycleHook,
 		handshakeTimeout: handshakeTimeout,
 		refreshLeadTime:  refreshLeadTime,
@@ -285,7 +281,7 @@ func (s *socketIOWakeSource) retryAfterError(
 }
 
 func (s *socketIOWakeSource) refreshDeadline(endpoint *graph.SocketIOEndpoint) time.Time {
-	now := s.nowFunc()
+	now := s.clock.Now()
 	if endpoint != nil && !endpoint.ExpirationTime.IsZero() {
 		refreshAt := endpoint.ExpirationTime.Add(-s.refreshLeadTime)
 		if refreshAt.Before(now) {
@@ -299,7 +295,7 @@ func (s *socketIOWakeSource) refreshDeadline(endpoint *graph.SocketIOEndpoint) t
 }
 
 func (s *socketIOWakeSource) sleepUntilRetry(ctx context.Context, delay time.Duration, action string) (bool, error) {
-	sleepErr := s.sleepFunc(ctx, delay)
+	sleepErr := s.clock.Sleep(ctx, delay)
 	if sleepErr == nil {
 		return false, nil
 	}

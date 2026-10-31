@@ -62,6 +62,43 @@ const (
 	sqlDeleteBaseline = `DELETE FROM baseline WHERE path = ?`
 )
 
+// baselineRowArgs is the one mapping from a baseline entry to the bound
+// values of sqlUpsertBaseline, in its column order. Every writer of a
+// baseline row goes through it (upsertBaselineRowTx, or a prepared
+// sqlUpsertBaseline in bulk test seeding), so a new column is added here and
+// in the statement, never at each call site: positional arguments spread over
+// callers broke silently whenever a column was added. DriveID is not a
+// column; the store's content drive owns it.
+func baselineRowArgs(e *BaselineEntry) []any {
+	return []any{
+		e.ItemID,
+		e.Path,
+		nullString(e.ParentID),
+		e.ItemType,
+		nullString(e.LocalHash),
+		nullString(e.RemoteHash),
+		nullKnownInt64(e.LocalSize, e.LocalSizeKnown),
+		nullKnownInt64(e.RemoteSize, e.RemoteSizeKnown),
+		nullOptionalInt64(e.LocalMtime),
+		nullOptionalInt64(e.RemoteMtime),
+		e.LocalCtime,
+		int64(e.LocalDevice),
+		int64(e.LocalInode),
+		e.LocalBirthTime,
+		boolInt(e.LocalHasIdentity),
+		nullString(e.ETag),
+	}
+}
+
+// upsertBaselineRowTx inserts e as the baseline row of its item, or replaces
+// every column of the row the item already has. Callers wrap the error with
+// what they were recording.
+func upsertBaselineRowTx(ctx context.Context, tx sqlTxRunner, e *BaselineEntry) error {
+	_, err := tx.ExecContext(ctx, sqlUpsertBaseline, baselineRowArgs(e)...)
+
+	return err //nolint:wrapcheck // every caller names the path it was recording
+}
+
 // localBaselineRefresh is the explicit input for refreshing local baseline
 // identity after convergence paths such as keep-both conflict handling.
 type localBaselineRefresh struct {
@@ -469,25 +506,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 		entry.DriveID = state.ContentDriveID
 	}
 
-	_, err = tx.ExecContext(ctx, sqlUpsertBaseline,
-		entry.ItemID,
-		entry.Path,
-		nullString(entry.ParentID),
-		entry.ItemType,
-		nullString(entry.LocalHash),
-		nullString(entry.RemoteHash),
-		nullKnownInt64(entry.LocalSize, entry.LocalSizeKnown),
-		nullKnownInt64(entry.RemoteSize, entry.RemoteSizeKnown),
-		nullOptionalInt64(entry.LocalMtime),
-		nullOptionalInt64(entry.RemoteMtime),
-		entry.LocalCtime,
-		int64(entry.LocalDevice),
-		int64(entry.LocalInode),
-		entry.LocalBirthTime,
-		boolInt(entry.LocalHasIdentity),
-		nullString(entry.ETag),
-	)
-	if err != nil {
+	if err = upsertBaselineRowTx(ctx, tx, entry); err != nil {
 		return fmt.Errorf("sync: refreshing baseline for %s: %w", refresh.Path, err)
 	}
 
@@ -732,24 +751,7 @@ func commitUpsert(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) erro
 		return fmt.Errorf("sync: clearing stale baseline for %s: %w", o.Path, err)
 	}
 
-	_, err := tx.ExecContext(ctx, sqlUpsertBaseline,
-		o.ItemID, o.Path,
-		nullString(o.ParentID),
-		o.ItemType.String(),
-		nullString(o.LocalHash),
-		nullString(o.RemoteHash),
-		nullKnownInt64(o.LocalSize, o.LocalSizeKnown),
-		nullKnownInt64(o.RemoteSize, o.RemoteSizeKnown),
-		nullOptionalInt64(o.LocalMtime),
-		nullOptionalInt64(o.RemoteMtime),
-		o.LocalCtime,
-		int64(o.LocalDevice),
-		int64(o.LocalInode),
-		o.LocalBirthTime,
-		boolInt(o.LocalHasIdentity),
-		nullString(o.ETag),
-	)
-	if err != nil {
+	if err := upsertBaselineRowTx(ctx, tx, mutationToEntry(o)); err != nil {
 		return fmt.Errorf("sync: upserting baseline for %s: %w", o.Path, err)
 	}
 

@@ -258,14 +258,14 @@ func TestSocketIOWakeSource_RetriesNeverWarn(t *testing.T) {
 	sleeps := 0
 	source := newSocketIOWakeSourceWithOptions(&mockSocketIOEndpointFetcher{}, driveid.New(synctest.TestDriveID), socketIOWakeSourceOptions{
 		Logger: logger,
-		SleepFunc: func(context.Context, time.Duration) error {
+		Clock: &scriptedSleepClock{syncClock: realClock{}, sleep: func(context.Context, time.Duration) error {
 			sleeps++
 			if sleeps >= 5 {
 				cancel()
 				return context.Canceled
 			}
 			return nil
-		},
+		}},
 	})
 
 	require.NoError(t, source.Run(ctx, make(chan struct{}, 1)))

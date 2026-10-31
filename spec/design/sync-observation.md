@@ -41,7 +41,13 @@ The observation stack has four main pieces:
 ## Observer Time Is Engine Clock Time
 
 `localObserver` and `remoteObserver` hold the engine's `syncClock` rather than
-separate sleep, tick, and timer function fields. Observer fields are also
+separate sleep, tick, and timer function fields. So does the Socket.IO wake
+source: its endpoint refresh deadline, the refresh timer, and its reconnect
+backoff sleeps all read one clock (`socketIOWakeSourceOptions.Clock`). It once
+took separate now and sleep hooks while the refresh timer ran on wall time, so
+the refresh test waited on a real 400 ms timer and failed on a loaded host
+(`TestSocketIOWakeSource_RefreshesEndpointBeforeExpiry` now advances a manual
+clock). Observer fields are also
 unexported: the type is unexported, so exported fields on it conveyed nothing
 except that the type had once been public.
 

@@ -517,6 +517,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 		rt.engine.driveID,
 		socketIOWakeSourceOptions{
 			Logger:        rt.deps.logger,
+			Clock:         rt.deps.clock,
 			LifecycleHook: rt.emitSocketIOLifecycleEvent,
 		},
 	)

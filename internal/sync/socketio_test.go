@@ -272,68 +272,53 @@ func TestSocketIOWakeSource_ReconnectsAfterDisconnect(t *testing.T) {
 	assert.GreaterOrEqual(t, fetcher.CallCount(), 2, "disconnect should force endpoint refetch and reconnect")
 }
 
+// The refresh runs on the source's clock, so the test drives it by advancing
+// a manual clock: nothing refreshes a nanosecond before the deadline, and the
+// refresh happens exactly at it, however slowly the host runs. It used to wait
+// for a 400 ms wall-clock timer, which a loaded host could miss.
+//
 // Validates: R-2.8.5
 func TestSocketIOWakeSource_RefreshesEndpointBeforeExpiry(t *testing.T) {
 	t.Parallel()
 
 	const (
-		refreshLeadTime   = 100 * time.Millisecond
-		firstEndpointTTL  = 500 * time.Millisecond
-		testWaitTimeout   = 5 * time.Second
+		refreshLeadTime   = 2 * time.Minute
+		firstEndpointTTL  = 10 * time.Minute
+		testWaitTimeout   = 30 * time.Second
 		longLivedEndpoint = time.Hour
 	)
 
 	firstReleased := make(chan struct{})
-	firstServer := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) error {
-		if err := writeSocketIOText(r.Context(), conn, `0{"sid":"sid-1","pingInterval":25000,"pingTimeout":60000}`); err != nil {
-			return err
-		}
-		if err := expectSocketIOText(r.Context(), conn, "40"); err != nil {
-			return err
-		}
-		if err := expectSocketIOText(r.Context(), conn, "40/notifications"); err != nil {
-			return err
-		}
-		<-firstReleased
-		return nil
-	})
-
+	firstServer := newSocketIOSessionServer(t, "sid-1", "", firstReleased)
 	holdSecond := make(chan struct{})
-	secondServer := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) error {
-		if err := writeSocketIOText(r.Context(), conn, `0{"sid":"sid-2","pingInterval":25000,"pingTimeout":60000}`); err != nil {
-			return err
-		}
-		if err := expectSocketIOText(r.Context(), conn, "40"); err != nil {
-			return err
-		}
-		if err := expectSocketIOText(r.Context(), conn, "40/notifications"); err != nil {
-			return err
-		}
-		if err := writeSocketIOText(r.Context(), conn, `42["notification",{"sequence":3}]`); err != nil {
-			return err
-		}
-		<-holdSecond
-		return nil
-	})
+	secondServer := newSocketIOSessionServer(t, "sid-2", `42["notification",{"sequence":3}]`, holdSecond)
 
-	now := time.Now()
+	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	clock := newManualClock(start)
+	refreshArmed := make(chan time.Duration, 4)
+	observed := &observingClock{
+		syncClock:   clock,
+		onAfterFunc: func(delay time.Duration) { refreshArmed <- delay },
+	}
+
 	fetcher := &mockSocketIOEndpointFetcher{
 		endpoints: []*graph.SocketIOEndpoint{
 			{
 				ID:              "endpoint-1",
 				NotificationURL: graph.SocketIONotificationURL(firstServer.URL + "/callback?snthgk=first"),
-				ExpirationTime:  now.Add(firstEndpointTTL),
+				ExpirationTime:  start.Add(firstEndpointTTL),
 			},
 			{
 				ID:              "endpoint-2",
 				NotificationURL: graph.SocketIONotificationURL(secondServer.URL + "/callback?snthgk=second"),
-				ExpirationTime:  now.Add(longLivedEndpoint),
+				ExpirationTime:  start.Add(longLivedEndpoint),
 			},
 		},
 	}
 
 	source := newSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), socketIOWakeSourceOptions{
 		Logger:          synctest.TestLogger(t),
+		Clock:           observed,
 		RefreshLeadTime: refreshLeadTime,
 		BackoffMax:      10 * time.Millisecond,
 	})
@@ -348,16 +333,28 @@ func TestSocketIOWakeSource_RefreshesEndpointBeforeExpiry(t *testing.T) {
 	}()
 
 	select {
+	case delay := <-refreshArmed:
+		assert.Equal(t, firstEndpointTTL-refreshLeadTime, delay,
+			"the refresh is due the lead time before the endpoint expires")
+	case <-ctx.Done():
+		require.FailNow(t, "the first connection never armed its refresh")
+	}
+
+	clock.Advance(firstEndpointTTL - refreshLeadTime - time.Nanosecond)
+	assert.Equal(t, 1, fetcher.CallCount(), "nothing refreshes before the deadline")
+
+	clock.Advance(time.Nanosecond)
+	select {
 	case <-wakes:
-	case <-time.After(testWaitTimeout):
-		require.FailNow(t, "expected wake after endpoint refresh")
+	case <-ctx.Done():
+		require.FailNow(t, "expected wake from the refreshed endpoint")
 	}
 
 	cancel()
 	close(firstReleased)
 	close(holdSecond)
 	require.NoError(t, <-done)
-	assert.GreaterOrEqual(t, fetcher.CallCount(), 2, "expiry should trigger endpoint refresh")
+	assert.Equal(t, 2, fetcher.CallCount(), "the deadline refreshes the endpoint once")
 }
 
 func TestSocketIOWakeSource_EndpointFetchFailureEmitsLifecycleEvent(t *testing.T) {
@@ -369,10 +366,10 @@ func TestSocketIOWakeSource_EndpointFetchFailureEmitsLifecycleEvent(t *testing.T
 	var events []socketIOLifecycleEvent
 	source := newSocketIOWakeSourceWithOptions(&mockSocketIOEndpointFetcher{}, driveid.New(synctest.TestDriveID), socketIOWakeSourceOptions{
 		Logger: synctest.TestLogger(t),
-		SleepFunc: func(_ context.Context, _ time.Duration) error {
+		Clock: &scriptedSleepClock{syncClock: realClock{}, sleep: func(context.Context, time.Duration) error {
 			cancel()
 			return context.Canceled
-		},
+		}},
 		LifecycleHook: func(event socketIOLifecycleEvent) {
 			events = append(events, event)
 		},
@@ -403,10 +400,10 @@ func TestSocketIOWakeSource_ConnectFailureEmitsLifecycleEvent(t *testing.T) {
 		DialFunc: func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error) {
 			return nil, nil, errors.New("dial failed")
 		},
-		SleepFunc: func(_ context.Context, _ time.Duration) error {
+		Clock: &scriptedSleepClock{syncClock: realClock{}, sleep: func(context.Context, time.Duration) error {
 			cancel()
 			return context.Canceled
-		},
+		}},
 		LifecycleHook: func(event socketIOLifecycleEvent) {
 			events = append(events, event)
 		},
@@ -481,4 +478,42 @@ func containsLifecycleEvent(events []socketIOLifecycleEvent, target socketIOLife
 	}
 
 	return false
+}
+
+// scriptedSleepClock is wall time whose Sleep runs a test script instead of
+// waiting, for tests that end or count the source's backoff sleeps.
+type scriptedSleepClock struct {
+	syncClock
+	sleep func(context.Context, time.Duration) error
+}
+
+func (c *scriptedSleepClock) Sleep(ctx context.Context, delay time.Duration) error {
+	return c.sleep(ctx, delay)
+}
+
+// newSocketIOSessionServer accepts one Socket.IO session with the given sid,
+// sends notification (when not empty) once the client joined the
+// notifications namespace, and holds the connection open until hold closes.
+func newSocketIOSessionServer(t *testing.T, sid, notification string, hold <-chan struct{}) *httptest.Server {
+	t.Helper()
+
+	return newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) error {
+		open := `0{"sid":"` + sid + `","pingInterval":25000,"pingTimeout":60000}`
+		if err := writeSocketIOText(r.Context(), conn, open); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40"); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40/notifications"); err != nil {
+			return err
+		}
+		if notification != "" {
+			if err := writeSocketIOText(r.Context(), conn, notification); err != nil {
+				return err
+			}
+		}
+		<-hold
+		return nil
+	})
 }
