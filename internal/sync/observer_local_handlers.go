@@ -374,8 +374,11 @@ func (o *localObserver) handleCreate(
 	// The authoritative check is FullScan's post-walk DetectCaseCollisions;
 	// this rejects obvious collisions between safety scans.
 	if collidingName, hasCollision := o.HasCaseCollisionCached(tree, filepath.Dir(fsPath), name, filepath.Dir(dbRelPath)); hasCollision {
-		// Track peer for re-emission when the collider is deleted.
-		peerRelPath := o.buildPeerRelPath(dbRelPath, collidingName)
+		// Track peer for re-emission when the collider is deleted. The
+		// colliding name is the peer's spelling on disk; the peer is
+		// tracked under its stored (NFC) path, the one its own events
+		// carry (R-2.13.1).
+		peerRelPath := o.buildPeerRelPath(dbRelPath, nfcNormalize(collidingName))
 		o.AddCollisionPeer(dbRelPath, peerRelPath)
 
 		o.logger.Debug("case collision detected in watch mode, skipping event",
@@ -1126,8 +1129,11 @@ func (o *localObserver) HandleDelete(
 	// among the surviving peers, they are re-recorded and stay blocked.
 	if peers := o.removeCollisionPeersFor(dbRelPath); len(peers) > 0 {
 		for peerPath := range peers {
-			peerFsPath := filepath.Join(filepath.Dir(fsPath), filepath.Base(peerPath))
+			// The peer is re-emitted under its stored path and name, and
+			// stated at its spelling on disk, exactly as an fsnotify event
+			// for it would be (R-2.13.2).
 			peerName := filepath.Base(peerPath)
+			peerFsPath := filepath.Join(filepath.Dir(fsPath), o.onDiskSiblingName(tree, filepath.Dir(fsPath), peerName))
 			o.handleCreate(ctx, tree, peerFsPath, peerPath, peerName, watcher, events)
 		}
 	}

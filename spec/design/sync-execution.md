@@ -467,6 +467,17 @@ keep the stored path. The resolution is `synctree.Root.Spelling` (see
   listed for it, so a large initial download does not read its folder once
   per file.
 
+The parent engine's shortcut-alias lifecycle (`shortcut_root_lifecycle.go`)
+resolves the same way (`shortcutRootOnDisk`): observing the alias folder,
+materializing it inside existing parents, listing its parent for rename
+candidates (which are named by their stored NFC path, so the alias listed
+under its own NFD name is not a rename of itself), moving it after a remote
+rename, and removing it after the shortcut is removed. It used the stored
+spelling, so an NFD-named alias read as missing: the lifecycle renamed the
+shortcut online to the NFD name, or deleted it, and a removed shortcut's
+folder stayed behind (`TestEngine_ShortcutAliasWithNFDNameOnDiskIsNotARename`,
+`TestEngine_RemovedShortcutReleaseRemovesTheNFDNamedAliasFolder`).
+
 Absolute paths for transfers and hashing (`driveops` opens upload sources and
 hashes through `localpath` by absolute path) come from `Abs` of the resolved
 path, so they bypass nothing. The local permission probe stats the resolved
