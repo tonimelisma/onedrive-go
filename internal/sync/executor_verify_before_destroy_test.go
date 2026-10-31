@@ -165,6 +165,11 @@ func TestDeleteLocalFolder_OnlyIgnoredChildrenConverges(t *testing.T) {
 
 	requireOutcomeSuccess(t, &outcome)
 	assert.FileExists(t, filepath.Join(syncRoot, "X", ".env"), "ignored content is never deleted")
+	assert.True(t, outcome.KeptLocally, "the outcome names the folder it kept")
+	kept, err := mustOpenSyncTree(t, syncRoot).IdentityNoFollow("X")
+	require.NoError(t, err)
+	assert.True(t, outcome.LocalHasIdentity)
+	assert.Equal(t, kept.Inode, outcome.LocalInode, "the kept folder's identity tells it from a later folder at the path")
 }
 
 // Validates: R-6.7.20
@@ -247,7 +252,55 @@ func TestRunOnce_RemoteFolderDeleteWithIgnoredLocalFileConverges(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(syncRoot, "X", "a.txt"))
 
 	runScenarioPass(t, eng)
-	assert.Equal(t, "/", remote.tree()["X"], "the kept folder is re-created, empty, on OneDrive")
+	assert.NotContains(t, remote.tree(), "X", "the folder deleted online stays deleted online")
+	assert.Empty(t, remote.folderCreates)
+	requireScenarioQuietPlan(t, eng)
+
+	// Once it holds something sync sees, the kept folder is local content
+	// again: it and the new file are created online.
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "X", "new.txt"), []byte("new\n"), 0o600))
+	runScenarioPass(t, eng)
+	assert.Equal(t, "new\n", remote.tree()["X/new.txt"])
+	assert.NotContains(t, remote.tree(), "X/.env", "ignored content is never uploaded")
+	requireScenarioQuietPlan(t, eng)
+}
+
+// The folder kept after its online deletion is remembered as that folder, not
+// as its path: removed and created again by the user, the new folder is
+// ordinary local content and is created online.
+//
+// Validates: R-2.17.2
+func TestRunOnce_FolderRecreatedWhereAKeptFolderWasIsCreatedOnline(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	remote.addFolder("item-x", "root", "X")
+	remote.addFile(t, "item-a", "item-x", "a.txt", "a\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	filter := ContentFilterConfig{IgnoreDotfiles: true}
+	eng.contentFilter = filter
+	eng.execCfg.SetContentFilter(filter)
+	runScenarioPass(t, eng)
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "X", ".env"), []byte("local only\n"), 0o600))
+	remote.deleteRemotely("item-x")
+	runScenarioPass(t, eng)
+	require.NoFileExists(t, filepath.Join(syncRoot, "X", "a.txt"))
+	require.NotContains(t, remote.tree(), "X", "the kept folder stays deleted online")
+
+	kept, err := mustOpenSyncTree(t, syncRoot).IdentityNoFollow("X")
+	require.NoError(t, err)
+	require.NoError(t, os.RemoveAll(filepath.Join(syncRoot, "X")))
+	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "X"), 0o700))
+	recreated, err := mustOpenSyncTree(t, syncRoot).IdentityNoFollow("X")
+	require.NoError(t, err)
+	if kept.BirthTime == 0 || recreated.BirthTime == 0 {
+		t.Skip("the test filesystem reports no birth time, so a reused inode cannot be told apart")
+	}
+
+	runScenarioPass(t, eng)
+	assert.Equal(t, "/", remote.tree()["X"], "a new folder at the path is created online")
 	requireScenarioQuietPlan(t, eng)
 }
 

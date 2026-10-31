@@ -572,6 +572,9 @@ func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutatio
 		err = commitUpsert(ctx, tx, o)
 	case baselineMutationDelete:
 		err = commitDelete(ctx, tx, o.Path)
+		if err == nil && o.KeptLocally {
+			err = recordKeptLocalFolderTx(ctx, tx, o)
+		}
 	case baselineMutationMove:
 		err = commitMove(ctx, tx, o)
 	}
@@ -720,6 +723,7 @@ func mutationFromActionOutcome(o *actionOutcome) *BaselineMutation {
 		LocalHasIdentity:      o.LocalHasIdentity,
 		LocalIdentityObserved: o.LocalIdentityObserved,
 		ETag:                  o.ETag,
+		KeptLocally:           o.KeptLocally,
 	}
 }
 
@@ -753,6 +757,35 @@ func commitUpsert(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) erro
 
 	if err := upsertBaselineRowTx(ctx, tx, mutationToEntry(o)); err != nil {
 		return fmt.Errorf("sync: upserting baseline for %s: %w", o.Path, err)
+	}
+	// A synced item at the path supersedes a folder kept there after its
+	// online deletion.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM kept_local_folders WHERE path = ?`, o.Path); err != nil {
+		return fmt.Errorf("sync: clearing kept local folder %s: %w", o.Path, err)
+	}
+
+	return nil
+}
+
+// recordKeptLocalFolderTx remembers a folder deleted on OneDrive that the
+// local delete kept because it holds only content sync ignores (D-012). The
+// planner does not create a kept folder online again while it is the same
+// folder and holds nothing sync sees (R-2.17.2). A folder without filesystem
+// identity cannot be told from a new one at the path, so it is not kept.
+func recordKeptLocalFolderTx(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
+	if !o.LocalHasIdentity {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO kept_local_folders (path, local_device, local_inode, local_birth_time)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(path) DO UPDATE SET
+			local_device = excluded.local_device,
+			local_inode = excluded.local_inode,
+			local_birth_time = excluded.local_birth_time`,
+		o.Path, int64(o.LocalDevice), int64(o.LocalInode), o.LocalBirthTime,
+	); err != nil {
+		return fmt.Errorf("sync: recording kept local folder %s: %w", o.Path, err)
 	}
 
 	return nil

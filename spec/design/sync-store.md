@@ -176,7 +176,9 @@ added `local_birth_time` to `baseline` and `local_state` and
 `local_root_birth_time` to `shortcut_roots`, so a store from generation 21
 refuses to open and asks for `drive reset-sync-state`; generation 23 added
 the sync folder's own birth time, `observation_state.sync_root_birth_time`,
-R-6.2.12). The same
+R-6.2.12; generation 24 added `kept_local_folders`, see data-model). The same
+transaction prunes `kept_local_folders` rows whose folder the snapshot no
+longer shows at its path with the recorded identity. The same
 transaction backfills that identity onto baseline rows that lack one (rows
 written before baselines recorded identity): a folder needs the same path and
 type, a file must also still match the baseline's hash, size and mtime. Without

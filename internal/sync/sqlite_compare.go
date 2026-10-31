@@ -352,6 +352,25 @@ comparison_flags AS (
 			) THEN 1
 			ELSE 0
 		END AS local_subtree_changed,
+		-- A folder deleted on OneDrive that the local delete kept because it
+		-- holds only content sync ignores (kept_local_folders, D-012). While
+		-- it is that same folder and nothing sync sees is inside it, it is
+		-- not new local content to create online (R-2.17.2). The kept row
+		-- is aliased b inside the subquery so the one identity rule,
+		-- sqlSameLocalEntryL, decides "the same folder".
+		CASE
+			WHEN b.path IS NOT NULL OR r.path IS NOT NULL OR l.path IS NULL
+				OR COALESCE(l.item_type, '') <> 'folder' OR COALESCE(l.local_has_identity, 0) = 0 THEN 0
+			WHEN NOT EXISTS (
+				SELECT 1 FROM kept_local_folders b
+				WHERE b.path = l.path AND ` + sqlSameLocalEntryL + `
+			) THEN 0
+			WHEN EXISTS (
+				SELECT 1 FROM local_state ld
+				WHERE ld.path > l.path || '/' AND ld.path < l.path || '0'
+			) THEN 0
+			ELSE 1
+		END AS kept_local_folder,
 		CASE
 			WHEN b.path IS NULL OR COALESCE(b.item_type, '') <> 'folder'
 				OR COALESCE(r.item_type, '') <> 'folder'
@@ -482,6 +501,7 @@ comparison_state AS (
 		local_subtree_changed,
 		remote_subtree_changed,
 		metadata_drift,
+		kept_local_folder,
 		CASE
 			-- The synced item moved; a new entry at its old path (rename and
 			-- recreate) is planned as a create by move composition.
@@ -495,6 +515,8 @@ comparison_state AS (
 			WHEN remote_present = 1 AND baseline_present = 0 AND remote_move_source <> '' THEN 'remote_move_dest'
 			WHEN baseline_present = 0 AND local_present = 1 AND remote_present = 0
 				AND local_copy_awaits_ancestor_move = 1 THEN 'delete_awaits_ancestor_move'
+			WHEN baseline_present = 0 AND local_present = 1 AND remote_present = 0
+				AND kept_local_folder = 1 THEN 'kept_local_folder'
 			WHEN baseline_present = 0 AND local_present = 1 AND remote_present = 0 THEN 'local_only_create'
 			WHEN baseline_present = 0 AND local_present = 0 AND remote_present = 1 AND remote_move_shadowed = 1 THEN 'remote_move_shadowed'
 			WHEN baseline_present = 0 AND local_present = 0 AND remote_present = 1
@@ -591,6 +613,7 @@ reconciliation_state AS (
 			-- The local side moved this item too; its local move wins and
 			-- carries the item, so the remote copy is not a new download.
 			WHEN comparison_kind = 'remote_move_shadowed' THEN 'noop'
+			WHEN comparison_kind = 'kept_local_folder' THEN 'noop'
 			-- Planned as a remote delete next pass, once the ancestor's local
 			-- move has re-pathed the baseline (followed_ancestor_deletes,
 			-- followed_local_ancestor_deletes).
