@@ -190,11 +190,12 @@ func (e *Engine) observeShortcutRootLocalState(record *ShortcutRootRecord) short
 	if !ok {
 		return observation
 	}
-	if err := e.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
+	onDisk := e.shortcutRootOnDisk(relativePath)
+	if err := e.syncTree.ValidateNoSymlinkAncestors(onDisk); err != nil {
 		observation.SymlinkErr = err
 		return observation
 	}
-	state, err := e.syncTree.PathStateNoFollow(relativePath)
+	state, err := e.syncTree.PathStateNoFollow(onDisk)
 	if err != nil {
 		observation.PathErr = err
 		return observation
@@ -203,7 +204,7 @@ func (e *Engine) observeShortcutRootLocalState(record *ShortcutRootRecord) short
 	if !state.Exists || !state.IsDir {
 		return observation
 	}
-	identity, identityErr := e.syncTree.IdentityNoFollow(relativePath)
+	identity, identityErr := e.syncTree.IdentityNoFollow(onDisk)
 	if identityErr != nil {
 		observation.IdentityErr = identityErr
 		return observation
@@ -219,12 +220,15 @@ func (e *Engine) materializeShortcutRoot(
 	if record == nil {
 		return ShortcutRootRecord{}, false, false, nil
 	}
-	createErr := e.syncTree.MkdirAllNoFollow(relativePath, shortcutRootDirPerm)
+	// Existing parents are addressed as spelled on disk; the folder itself,
+	// new, gets the stored name.
+	onDisk := e.shortcutRootOnDisk(relativePath)
+	createErr := e.syncTree.MkdirAllNoFollow(onDisk, shortcutRootDirPerm)
 	if createErr != nil {
 		plan := planShortcutRootMaterializeResult(record, shortcutRootMaterializeResult{CreateErr: createErr})
 		return shortcutRootLocalPlanResult(&plan)
 	}
-	identity, identityErr := e.syncTree.IdentityNoFollow(relativePath)
+	identity, identityErr := e.syncTree.IdentityNoFollow(onDisk)
 	if identityErr != nil {
 		plan := planShortcutRootMaterializeResult(record, shortcutRootMaterializeResult{IdentityErr: identityErr})
 		return shortcutRootLocalPlanResult(&plan)
@@ -274,7 +278,7 @@ func (e *Engine) executeMissingMaterializedShortcutRootPlan(
 			MutationErr: e.applyShortcutAliasMutation(ctx, plan.Mutation),
 		}
 		if result.MutationErr == nil {
-			identity, identityErr := e.syncTree.IdentityNoFollow(filepath.FromSlash(plan.CandidatePath))
+			identity, identityErr := e.syncTree.IdentityNoFollow(e.shortcutRootOnDisk(plan.CandidatePath))
 			result.Identity = &identity
 			result.IdentityErr = identityErr
 		}
@@ -341,7 +345,11 @@ func (e *Engine) shortcutRootIdentityCandidatesFromFilesystem(
 	if parent == "." {
 		parent = ""
 	}
-	entries, err := e.syncTree.ReadDir(parent)
+	parentOnDisk := ""
+	if parent != "" {
+		parentOnDisk = e.shortcutRootOnDisk(parent)
+	}
+	entries, err := e.syncTree.ReadDir(parentOnDisk)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -352,6 +360,7 @@ func (e *Engine) shortcutRootIdentityCandidatesFromFilesystem(
 	for _, entry := range entries {
 		candidate, found, err := e.shortcutRootIdentityCandidateFromFilesystemEntry(
 			parent,
+			parentOnDisk,
 			normalizedCurrent,
 			entry.Name(),
 			identity,
@@ -366,20 +375,30 @@ func (e *Engine) shortcutRootIdentityCandidatesFromFilesystem(
 	return uniqueSortedShortcutRootCandidates(candidates), nil
 }
 
+// shortcutRootIdentityCandidateFromFilesystemEntry checks one entry of the
+// alias's parent, listed at parentOnDisk. A candidate is returned as a stored
+// path (NFC, under parent), the form records and the alias's own path use:
+// the alias itself, listed under an NFD name, is not a rename of itself
+// (R-2.13.2).
 func (e *Engine) shortcutRootIdentityCandidateFromFilesystemEntry(
 	parent string,
+	parentOnDisk string,
 	normalizedCurrent string,
 	entryName string,
 	identity synctree.FileIdentity,
 ) (string, bool, error) {
-	candidate := entryName
+	candidate := nfcNormalize(entryName)
 	if parent != "" {
 		candidate = path.Join(parent, candidate)
 	}
 	if candidate == normalizedCurrent {
 		return "", false, nil
 	}
-	state, err := e.syncTree.PathStateNoFollow(candidate)
+	onDisk := entryName
+	if parentOnDisk != "" {
+		onDisk = filepath.Join(parentOnDisk, entryName)
+	}
+	state, err := e.syncTree.PathStateNoFollow(onDisk)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", false, nil
@@ -389,7 +408,7 @@ func (e *Engine) shortcutRootIdentityCandidateFromFilesystemEntry(
 	if !state.Exists || !state.IsDir {
 		return "", false, nil
 	}
-	candidateIdentity, err := e.syncTree.IdentityNoFollow(candidate)
+	candidateIdentity, err := e.syncTree.IdentityNoFollow(onDisk)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", false, nil
@@ -457,7 +476,7 @@ func (e *Engine) moveRemoteRenamedShortcutProjection(
 		plan := planShortcutProjectionMoveResult(record, shortcutRootProjectionMoveResult{MoveErr: moveErr})
 		return shortcutRootLocalPlanResult(&plan)
 	}
-	identity, identityErr := e.syncTree.IdentityNoFollow(toRelativePath)
+	identity, identityErr := e.syncTree.IdentityNoFollow(e.shortcutRootOnDisk(toRelativePath))
 	if identityErr != nil {
 		plan := planShortcutProjectionMoveResult(record, shortcutRootProjectionMoveResult{IdentityErr: identityErr})
 		return shortcutRootLocalPlanResult(&plan)
@@ -484,6 +503,10 @@ func (e *Engine) moveShortcutRootProjection(fromRelativePath string, toRelativeP
 	if fromRelativePath == "" || toRelativePath == "" || fromRelativePath == toRelativePath {
 		return nil
 	}
+	// Both endpoints as spelled on disk: the source, and the destination's
+	// existing parents (and an existing destination, a case-only rename).
+	fromRelativePath = e.shortcutRootOnDisk(fromRelativePath)
+	toRelativePath = e.shortcutRootOnDisk(toRelativePath)
 	if err := e.validateShortcutRootProjectionMove(fromRelativePath, toRelativePath); err != nil {
 		return err
 	}
@@ -547,6 +570,16 @@ func (e *Engine) validateShortcutRootProjectionMove(fromRelativePath string, toR
 		return fmt.Errorf("%w: previous shortcut alias projection is not a directory", synctree.ErrUnsafePath)
 	}
 	return nil
+}
+
+// shortcutRootOnDisk returns a stored (NFC) shortcut-root path as the
+// filesystem spells it, for every operation on an entry that may already
+// exist (R-2.13.2): on a byte-exact filesystem an alias folder or a parent
+// with an NFD name on disk is missing under its stored spelling, and reading
+// it as missing deleted the alias online or materialized an empty duplicate
+// beside it.
+func (e *Engine) shortcutRootOnDisk(storedPath string) string {
+	return e.syncTree.Spelling(filepath.FromSlash(storedPath))
 }
 
 func cleanShortcutRootRelativePath(relativeLocalPath string) (string, bool) {
@@ -665,6 +698,7 @@ func (e *Engine) removeShortcutRootProjection(relativeLocalPath string) error {
 	if !ok {
 		return fmt.Errorf("%w: the shared folder's local path leaves the sync folder", synctree.ErrUnsafePath)
 	}
+	relativePath = e.shortcutRootOnDisk(relativePath)
 	if err := e.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
 		return fmt.Errorf("checking the removed shared folder's local folder: %w", err)
 	}
