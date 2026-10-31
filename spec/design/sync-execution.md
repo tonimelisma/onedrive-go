@@ -124,7 +124,13 @@ Move outcomes publish only what was observed or proven (R-2.17.3).
 inheriting the source baseline's. `ActionLocalMove` (a remote move applied
 locally) takes its local half from the source baseline its view carries: the
 precondition proved the source still matched it and a rename preserves content,
-size, mtime and identity. If the remote item's content changed as well as its
+size, mtime and identity. The one fact a rename changes is a file's inode
+change time (Linux filesystems update it), so the executor re-reads it at the
+destination when that entry still has the moved file's identity
+(`observeMovedLocalChangeTime`); kept at the source's, the next scan saw
+metadata drift and every applied remote file move was followed by a second,
+metadata-only baseline update (`TestRunOnce_AppliedMoveLeavesTheBaselineCurrent`).
+If the remote item's content changed as well as its
 path, the outcome keeps the baseline's remote content facts so the next pass
 downloads the edit instead of recording an agreement that does not exist.
 
