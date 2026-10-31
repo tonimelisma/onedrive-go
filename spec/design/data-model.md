@@ -212,8 +212,9 @@ identity and cadence:
 - `cursor`
 - `next_full_remote_refresh_at`
 - `sync_root_bound`, `sync_root_device`, `sync_root_inode`, `sync_root_fsid`,
-  `sync_root_token`: the fingerprint of the local sync folder this state was
-  built from
+  `sync_root_birth_time`, `sync_root_token`: the fingerprint of the local sync
+  folder this state was built from (the birth time is zero where the
+  filesystem records none; generation 23)
 - `sync_root_rebind`: an explicit `drive rebind-root` is pending
 
 The cursor is committed atomically with the corresponding remote observation

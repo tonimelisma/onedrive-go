@@ -117,3 +117,28 @@ func TestMarkRoot_TokenThatDoesNotReadBackIsUnsupported(t *testing.T) {
 	_, err = root.MarkRoot()
 	require.ErrorIs(t, err, ErrRootMarkUnsupported, "a write that keeps nothing must not be bound as a token")
 }
+
+// Validates: R-6.2.12
+func TestSameRoot_BirthTimeMustMatchWhenBothSidesKnowOne(t *testing.T) {
+	t.Parallel()
+
+	recorded := RootIdentity{Device: 7, Inode: 42, FileSystemID: 0xabc, BirthTime: 1000}
+
+	assert.False(t, SameRoot(recorded, RootIdentity{Device: 7, Inode: 42, FileSystemID: 0xabc, BirthTime: 2000}),
+		"rm -rf and mkdir can reuse the inode; without a token the new birth time tells the folders apart")
+	assert.True(t, SameRoot(recorded, RootIdentity{Device: 7, Inode: 42, FileSystemID: 0xabc, BirthTime: 1000}))
+	assert.True(t, SameRoot(recorded, RootIdentity{Device: 7, Inode: 42, FileSystemID: 0xabc}),
+		"a side without a birth time falls back to inode and filesystem")
+	assert.True(t, SameRoot(RootIdentity{Device: 7, Inode: 42, FileSystemID: 0xabc}, recorded))
+	assert.True(t, SameRoot(RootIdentity{Token: "t1", BirthTime: 1000}, RootIdentity{Token: "t1", BirthTime: 2000}),
+		"a recorded token still decides alone")
+}
+
+// Validates: R-6.2.12
+func TestRootIdentityFromFileIdentity_CarriesBirthTime(t *testing.T) {
+	t.Parallel()
+
+	identity := RootIdentityFromFileIdentity(FileIdentity{Device: 7, Inode: 42, BirthTime: 1000})
+
+	assert.Equal(t, RootIdentity{Device: 7, Inode: 42, BirthTime: 1000}, identity)
+}

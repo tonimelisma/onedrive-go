@@ -174,7 +174,9 @@ files and directories when the platform provides a device/inode pair (with the
 entry's birth time where the filesystem records one, R-2.17.1; generation 22
 added `local_birth_time` to `baseline` and `local_state` and
 `local_root_birth_time` to `shortcut_roots`, so a store from generation 21
-refuses to open and asks for `drive reset-sync-state`). The same
+refuses to open and asks for `drive reset-sync-state`; generation 23 added
+the sync folder's own birth time, `observation_state.sync_root_birth_time`,
+R-6.2.12). The same
 transaction backfills that identity onto baseline rows that lack one (rows
 written before baselines recorded identity): a folder needs the same path and
 type, a file must also still match the baseline's hash, size and mtime. Without
