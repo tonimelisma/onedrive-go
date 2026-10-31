@@ -35,10 +35,11 @@ type scanAvailability struct {
 	// dirDevices maps a scanned folder's relative path ("" for the root) to
 	// its device, so a child folder on a different device is a mount point.
 	dirDevices map[string]uint64
-	// baselineByIdentity indexes baseline rows by filesystem identity, built
-	// on first use, so a skipped entry can be matched to the synced item it
-	// used to be.
-	baselineByIdentity map[synctree.FileIdentity]*BaselineEntry
+	// baselineByIdentity indexes baseline rows by (device, inode), built on
+	// first use, so a skipped entry can be matched to the synced item it used
+	// to be. The key leaves the birth time out so a side without one still
+	// finds its row; the match is then confirmed with SameIdentity.
+	baselineByIdentity map[deviceInode]*BaselineEntry
 	// crossedMounts lists mount points crossed under cross_filesystems;
 	// the engine records them with the snapshot (mount_boundaries).
 	crossedMounts []string
@@ -61,19 +62,34 @@ func rootDeviceForScan(tree *synctree.Root) (uint64, error) {
 	return identity.Device, nil
 }
 
+// deviceInode is the lookup key of an identity index; see baselineByIdentity.
+type deviceInode struct {
+	device uint64
+	inode  uint64
+}
+
 func (a *scanAvailability) baselineEntryWithIdentity(baseline *Baseline, identity synctree.FileIdentity) *BaselineEntry {
 	if a.baselineByIdentity == nil {
-		a.baselineByIdentity = make(map[synctree.FileIdentity]*BaselineEntry)
+		a.baselineByIdentity = make(map[deviceInode]*BaselineEntry)
 		if baseline != nil {
 			baseline.ForEachPath(func(_ string, entry *BaselineEntry) {
 				if entry == nil || !entry.LocalHasIdentity {
 					return
 				}
-				a.baselineByIdentity[synctree.FileIdentity{Device: entry.LocalDevice, Inode: entry.LocalInode}] = entry
+				a.baselineByIdentity[deviceInode{device: entry.LocalDevice, inode: entry.LocalInode}] = entry
 			})
 		}
 	}
-	return a.baselineByIdentity[identity]
+	entry := a.baselineByIdentity[deviceInode{device: identity.Device, inode: identity.Inode}]
+	if entry == nil {
+		return nil
+	}
+	if entryIdentity, _ := entry.fileIdentity(); !synctree.SameIdentity(entryIdentity, identity) {
+		// The inode number was reused by another entry.
+		return nil
+	}
+
+	return entry
 }
 
 // recordSyncedPathReplaced keeps a synced path that now holds an entry sync

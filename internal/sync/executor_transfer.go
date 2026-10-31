@@ -417,6 +417,7 @@ func (e *executor) uploadOutcome(
 		outcome.LocalCtime = action.View.Local.LocalCtime
 		outcome.LocalDevice = action.View.Local.LocalDevice
 		outcome.LocalInode = action.View.Local.LocalInode
+		outcome.LocalBirthTime = action.View.Local.LocalBirthTime
 		outcome.LocalHasIdentity = action.View.Local.LocalHasIdentity
 		outcome.LocalIdentityObserved = true
 	}

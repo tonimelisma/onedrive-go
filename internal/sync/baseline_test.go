@@ -1844,6 +1844,7 @@ func TestCommitMutation_PersistsLocalFilesystemIdentity(t *testing.T) {
 		RemoteMtime:      456,
 		LocalDevice:      700,
 		LocalInode:       900,
+		LocalBirthTime:   1100,
 		LocalHasIdentity: true,
 	}))
 
@@ -1853,6 +1854,7 @@ func TestCommitMutation_PersistsLocalFilesystemIdentity(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, uint64(700), entry.LocalDevice)
 	assert.Equal(t, uint64(900), entry.LocalInode)
+	assert.Equal(t, int64(1100), entry.LocalBirthTime)
 	assert.True(t, entry.LocalHasIdentity)
 }
 

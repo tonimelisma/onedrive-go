@@ -42,7 +42,8 @@ rebuildable runtime facts:
   durable remote cadence fact is `observation_state.next_full_remote_refresh_at`.
 - duplicate local content-identity tables. Local move matching uses
   `local_state` and `baseline` filesystem identity (`local_device`,
-  `local_inode`, `local_has_identity`) for both files and directories, with
+  `local_inode`, `local_birth_time`, `local_has_identity`) for both files and
+  directories, with
   file-hash fallback only when identity is unavailable.
 
 ## Core Tables
@@ -69,7 +70,8 @@ converged state for one item:
   `local_ctime` (the inode change time; the hash fast path requires it
   unchanged, R-2.2.4; `0` means unknown and forces a re-read)
 - last-synced local filesystem identity: `local_device`, `local_inode`,
-  `local_has_identity`
+  `local_birth_time` (the entry's creation time in Unix nanoseconds, `0` when
+  the filesystem records none), `local_has_identity`
 - remote comparison facts: `remote_hash`, `remote_size`, `remote_mtime`,
   `etag`
 
@@ -79,7 +81,10 @@ compares the last-synced local filesystem identity in `baseline` with the
 current identity in `local_state`; directory identity matches produce one
 remote folder move instead of subtree delete/create churn. A file identity match
 additionally needs size and content (or, without a hash, mtime) corroboration,
-because inode numbers are reused (see `sync-planning.md`).
+because inode numbers are reused (see `sync-planning.md`). Identities match
+only when their birth times also agree wherever both are known, so a reused
+inode number never pairs a deleted item with an unrelated new entry on a
+filesystem that records birth times (R-2.17.1).
 
 ## `remote_state`
 
@@ -116,7 +121,7 @@ rescan.
 - local facts: `hash`, `size`, `mtime`, `ctime` (regular files only; `0` for
   folders and when unknown)
 - current filesystem identity: `local_device`, `local_inode`,
-  `local_has_identity`
+  `local_birth_time`, `local_has_identity`
 
 Ignored content does not enter `local_state`. Full local observation replaces
 the table with the latest visible/admissible local truth. Planner loading still

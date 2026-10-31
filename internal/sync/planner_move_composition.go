@@ -1147,6 +1147,7 @@ func localEntryIsBaselineItem(local *localState, baseline *BaselineEntry) bool {
 		Size:             local.Size,
 		LocalDevice:      local.LocalDevice,
 		LocalInode:       local.LocalInode,
+		LocalBirthTime:   local.LocalBirthTime,
 		LocalHasIdentity: local.LocalHasIdentity,
 	}, baseline)
 }

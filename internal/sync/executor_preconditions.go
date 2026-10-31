@@ -383,8 +383,9 @@ func (e *executor) validateUploadSourcePrecondition(action *Action, source strin
 	if planned.LocalHasIdentity {
 		identity, identityOK := synctree.IdentityFromFileInfo(info)
 		if identityOK && !synctree.SameIdentity(identity, synctree.FileIdentity{
-			Device: planned.LocalDevice,
-			Inode:  planned.LocalInode,
+			Device:    planned.LocalDevice,
+			Inode:     planned.LocalInode,
+			BirthTime: planned.LocalBirthTime,
 		}) {
 			return stalePreconditionError("upload source %s changed identity", action.Path)
 		}
@@ -718,8 +719,9 @@ func (e *executor) validateLocalFolderIdentityAgainstPlan(op, source string, pla
 	}
 	identity, err := e.syncTree.IdentityNoFollow(source)
 	if err == nil && !synctree.SameIdentity(identity, synctree.FileIdentity{
-		Device: planned.LocalDevice,
-		Inode:  planned.LocalInode,
+		Device:    planned.LocalDevice,
+		Inode:     planned.LocalInode,
+		BirthTime: planned.LocalBirthTime,
 	}) {
 		return stalePreconditionError("%s source %s changed identity since planning", op, source)
 	}
@@ -744,7 +746,7 @@ func localMoveSourcePath(action *Action) string {
 func (e *executor) validateLocalMoveDestinationAbsent(action *Action, dest string, sourceInfo os.FileInfo) error {
 	destInfo, destErr := e.syncTree.Lstat(dest)
 	if destErr == nil {
-		if isLocalSpellingOnlyMove(localMoveSourcePath(action), action.Path) && os.SameFile(sourceInfo, destInfo) {
+		if isLocalSpellingOnlyMove(localMoveSourcePath(action), action.Path) && synctree.SameFile(sourceInfo, destInfo) {
 			return nil
 		}
 		if action.ReplaceLocalTarget {
@@ -846,8 +848,9 @@ func (e *executor) validateLocalSourceIdentity(op string, source string, baselin
 	}
 	identity, err := e.syncTree.IdentityNoFollow(source)
 	if err == nil && !synctree.SameIdentity(identity, synctree.FileIdentity{
-		Device: baseline.LocalDevice,
-		Inode:  baseline.LocalInode,
+		Device:    baseline.LocalDevice,
+		Inode:     baseline.LocalInode,
+		BirthTime: baseline.LocalBirthTime,
 	}) {
 		return stalePreconditionError("%s source %s changed identity", op, source)
 	}

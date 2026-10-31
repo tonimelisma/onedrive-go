@@ -53,6 +53,7 @@ func localStateRowFromEvent(event *changeEvent) localStateRow {
 		Ctime:            event.LocalCtime,
 		LocalDevice:      event.LocalDevice,
 		LocalInode:       event.LocalInode,
+		LocalBirthTime:   event.LocalBirthTime,
 		LocalHasIdentity: event.LocalHasIdentity,
 	}
 }

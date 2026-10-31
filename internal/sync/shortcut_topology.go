@@ -223,10 +223,16 @@ func (r ShortcutChildAckRef) IsZero() bool {
 type ShortcutRootIdentity struct {
 	Device uint64
 	Inode  uint64
+	// BirthTime is the directory's creation time in Unix nanoseconds; zero
+	// means unknown (synctree.FileIdentity).
+	BirthTime int64
 }
 
 func sameShortcutRootIdentity(a ShortcutRootIdentity, b ShortcutRootIdentity) bool {
-	return a.Device == b.Device && a.Inode == b.Inode
+	return synctree.SameIdentity(
+		synctree.FileIdentity{Device: a.Device, Inode: a.Inode, BirthTime: a.BirthTime},
+		synctree.FileIdentity{Device: b.Device, Inode: b.Inode, BirthTime: b.BirthTime},
+	)
 }
 
 func shortcutRootIdentityFromFileIdentity(identity *synctree.FileIdentity) *ShortcutRootIdentity {
@@ -234,8 +240,9 @@ func shortcutRootIdentityFromFileIdentity(identity *synctree.FileIdentity) *Shor
 		return nil
 	}
 	return &ShortcutRootIdentity{
-		Device: identity.Device,
-		Inode:  identity.Inode,
+		Device:    identity.Device,
+		Inode:     identity.Inode,
+		BirthTime: identity.BirthTime,
 	}
 }
 
@@ -244,8 +251,9 @@ func shortcutRootIdentityToFileIdentity(identity *ShortcutRootIdentity) *synctre
 		return nil
 	}
 	return &synctree.FileIdentity{
-		Device: identity.Device,
-		Inode:  identity.Inode,
+		Device:    identity.Device,
+		Inode:     identity.Inode,
+		BirthTime: identity.BirthTime,
 	}
 }
 

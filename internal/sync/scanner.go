@@ -86,6 +86,7 @@ type hashJob struct {
 	ctime            int64
 	localDevice      uint64
 	localInode       uint64
+	localBirthTime   int64
 	localHasIdentity bool
 	isNew            bool // true for creates, false for modifies
 }
@@ -338,6 +339,7 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 						Ctime:            job.ctime,
 						LocalDevice:      job.localDevice,
 						LocalInode:       job.localInode,
+						LocalBirthTime:   job.localBirthTime,
 						LocalHasIdentity: job.localHasIdentity,
 					})
 					mu.Unlock()
@@ -373,6 +375,7 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 				Ctime:            job.ctime,
 				LocalDevice:      job.localDevice,
 				LocalInode:       job.localInode,
+				LocalBirthTime:   job.localBirthTime,
 				LocalHasIdentity: job.localHasIdentity,
 			})
 			mu.Unlock()
@@ -569,7 +572,7 @@ func (o *localObserver) processObservedInfo(
 			BindingID:    protectedRoot.BindingID,
 		})
 		if kind == observedKindDir {
-			identity := synctree.FileIdentity{Device: protectedRoot.Device, Inode: protectedRoot.Inode}
+			identity := protectedRoot.fileIdentity()
 			if currentIdentity, hasIdentity := synctree.IdentityFromFileInfo(info); hasIdentity {
 				identity = currentIdentity
 			}
@@ -581,6 +584,7 @@ func (o *localObserver) processObservedInfo(
 				Mtime:            info.ModTime().UnixNano(),
 				LocalDevice:      identity.Device,
 				LocalInode:       identity.Inode,
+				LocalBirthTime:   identity.BirthTime,
 				LocalHasIdentity: true,
 			}
 		}
@@ -636,11 +640,7 @@ func (o *localObserver) processObservedInfo(
 		Path:  dbRelPath,
 		Mtime: info.ModTime().UnixNano(),
 	}
-	if identity, ok := synctree.IdentityFromFileInfo(info); ok {
-		row.LocalDevice = identity.Device
-		row.LocalInode = identity.Inode
-		row.LocalHasIdentity = true
-	}
+	row.recordIdentity(info)
 	switch kind {
 	case observedKindDir:
 		row.ItemType = ItemTypeFolder
@@ -701,6 +701,7 @@ func (o *localObserver) classifyObservedInfo(
 				ctime:            observedRow.Ctime,
 				localDevice:      observedRow.LocalDevice,
 				localInode:       observedRow.LocalInode,
+				localBirthTime:   observedRow.LocalBirthTime,
 				localHasIdentity: observedRow.LocalHasIdentity,
 				isNew:            true,
 			})
@@ -746,6 +747,7 @@ func (o *localObserver) detectFileContentChange(
 			Ctime:            observedRow.Ctime,
 			LocalDevice:      observedRow.LocalDevice,
 			LocalInode:       observedRow.LocalInode,
+			LocalBirthTime:   observedRow.LocalBirthTime,
 			LocalHasIdentity: observedRow.LocalHasIdentity,
 		}
 
@@ -767,6 +769,7 @@ func (o *localObserver) detectFileContentChange(
 		ctime:            observedRow.Ctime,
 		localDevice:      observedRow.LocalDevice,
 		localInode:       observedRow.LocalInode,
+		localBirthTime:   observedRow.LocalBirthTime,
 		localHasIdentity: observedRow.LocalHasIdentity,
 		isNew:            false,
 	})

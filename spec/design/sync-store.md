@@ -170,7 +170,11 @@ and execution read the repaired durable truth.
 
 Local observation writes belong to `local_state`. Full scans replace the entire
 `local_state` snapshot in one transaction, including filesystem identity for
-files and directories when the platform provides a device/inode pair. The same
+files and directories when the platform provides a device/inode pair (with the
+entry's birth time where the filesystem records one, R-2.17.1; generation 22
+added `local_birth_time` to `baseline` and `local_state` and
+`local_root_birth_time` to `shortcut_roots`, so a store from generation 21
+refuses to open and asks for `drive reset-sync-state`). The same
 transaction backfills that identity onto baseline rows that lack one (rows
 written before baselines recorded identity): a folder needs the same path and
 type, a file must also still match the baseline's hash, size and mtime. Without

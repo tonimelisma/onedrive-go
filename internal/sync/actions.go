@@ -160,6 +160,7 @@ type actionOutcome struct {
 	LocalCtime            int64 // local inode change time; recorded with identity
 	LocalDevice           uint64
 	LocalInode            uint64
+	LocalBirthTime        int64 // entry birth time (Unix nanoseconds); zero means unknown
 	LocalHasIdentity      bool
 	LocalIdentityObserved bool
 	RemoteSize            int64

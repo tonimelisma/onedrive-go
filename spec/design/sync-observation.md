@@ -69,7 +69,7 @@ except that the type had once been public.
 | Known-missed local changes (kernel queue overflow, watcher errors, dropped batches or hash requests) arm one coalesced recovery rescan instead of waiting for the periodic safety scan. | `TestWatch_EventOverflowRunsRecoveryScan`, `TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan`, `TestRecoveryScanDelay_ScalesWithScanDurationAndBacksOffUnderStorm`, `TestCancelRecoveryScan_StaleTimerFiringIsIgnored`, `TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan`, `TestRewatchUnwatchedDirectories_FailedAddIsRetriedAtNextScan`, `TestTrySendLocalObservationBatch_DropRequestsRecoveryScan` |
 | A deleted or renamed-away directory drops the watches of its whole subtree, deepest first, so the re-added tree reports its new paths. | `TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst`, `TestWatch_RenamedDirectoryDescendantEventsUseNewPath`, `TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches`, `TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree`, `TestWatchRegistry_SubtreeLookupFollowsTheIndexAndUnlinksEmptyBranches` |
 | The destination half of a rename is observed without waiting on a content read: an identity match reuses the synced hash when size and mtime are unchanged, otherwise the row goes out with an unknown hash and the hash follows; a created directory's row precedes its contents. | `TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing`, `TestHandleCreate_RenamedUnchangedFileReusesSyncedHash`, `TestHandleCreate_RenameThatMovedCtimeDefersTheHash`, `TestHandleCreate_ReusedInodeWhileSyncedPathExistsIsHashed`, `TestHandleCreate_DirectoryRowPrecedesItsContents` |
-| The hash fast path trusts the baseline hash only when size, full-precision mtime, ctime and (device, inode) all match and the file is outside the racily-clean window; an in-place edit with a restored mtime and a different file renamed over the synced one are re-read, and transfers record ctime and identity so the fast path applies after them (R-2.2.4). | `TestFullScan_ContentChangedWithRestoredMtimeIsDetected`, `TestFullScan_IdentityChangeForcesRehash`, `TestFullScan_SubsecondMtimeDifferenceForcesRehash`, `TestFullScan_UnchangedFileWithMatchingIdentityAndCtimeSkipsHash`, `TestCanReuseBaselineHash_CtimeOrIdentityMismatchRequiresHash`, `TestCanReuseBaselineHash_SubsecondMtimeDifferenceRequiresHash`, `TestRunOnce_InPlaceEditWithRestoredMtimeUploads`, `TestRunOnce_InPlaceEditWithRestoredMtimeConflictsWithRemoteEdit`, `TestRunOnce_TransfersRecordLocalCtimeAndIdentity` |
+| The hash fast path trusts the baseline hash only when size, full-precision mtime, ctime and identity (device, inode, birth time) all match and the file is outside the racily-clean window; an in-place edit with a restored mtime and a different file renamed over the synced one are re-read, and transfers record ctime and identity so the fast path applies after them (R-2.2.4). | `TestFullScan_ContentChangedWithRestoredMtimeIsDetected`, `TestFullScan_IdentityChangeForcesRehash`, `TestFullScan_SubsecondMtimeDifferenceForcesRehash`, `TestFullScan_UnchangedFileWithMatchingIdentityAndCtimeSkipsHash`, `TestCanReuseBaselineHash_CtimeOrIdentityMismatchRequiresHash`, `TestCanReuseBaselineHash_SubsecondMtimeDifferenceRequiresHash`, `TestRunOnce_InPlaceEditWithRestoredMtimeUploads`, `TestRunOnce_InPlaceEditWithRestoredMtimeConflictsWithRemoteEdit`, `TestRunOnce_TransfersRecordLocalCtimeAndIdentity` |
 | Write coalescing hashes a continuously written file within a bounded wait, and backs off exponentially for a file that never settles. | `TestScheduleWriteHash_ContinuousWritesHashWithinMaxWait`, `TestWatch_ContinuouslyWrittenFileBacksOff`, `TestHashAndEmit_StillChangingAtRetryCapStaysPendingWithoutEmptyHash`, `TestPruneWriteChurn_DropsSettledPaths` |
 | On kqueue platforms watch setup projects its descriptor use (watched directories plus their entries) and falls back to periodic scans above half the open-file limit. | `TestAddWatchesRecursive_OverDescriptorBudgetFallsBackBeforeExhaustingFiles`, `TestAddWatchesRecursive_WithinDescriptorBudgetWatches`, `TestAddWatchesRecursive_DescriptorProjectionCountsSubdirectoriesOnce` |
 | A network or FUSE sync root is identified with statfs, warned about once, and rescanned every two minutes. | `TestWatch_NetworkRootShortensSafetyScanInterval`, `TestAdaptToRootFilesystem_LocalRootKeepsInterval`, `TestAdaptToRootFilesystem_NonDefaultIntervalIsNeverOverridden`, `TestMountFilesystemType_DistinguishesFuseblkFromNetworkFuse`, `TestLocalFilesystemKind_ReadsTheRealFilesystem` |
@@ -491,10 +491,21 @@ own observer state internally. Parent shortcut filters are translated into
 child-root-relative `contentFilter` values when the parent publishes child work
 commands.
 
-Full local scans persist `local_device`, `local_inode`, and
+Full local scans persist `local_device`, `local_inode`, `local_birth_time` and
 `local_has_identity` for files and directories on platforms that expose stable
 device/inode identity. Unsupported platforms persist `local_has_identity=false`
 and keep hash-based file move fallback behavior for files only.
+
+`local_birth_time` is the entry's creation time in Unix nanoseconds, zero when
+unknown (R-2.17.1). On Linux the standard stat carries none, so the sync tree's
+handle reads `statx(2)` `STATX_BTIME` for every rooted `Stat`/`Lstat` and for
+the `Info` of every walked or listed entry (`synctree.withBirthTime`), and
+keeps it only when the mask bit is set and statx names the same device and
+inode; ext4, xfs, btrfs, f2fs and tmpfs on current kernels report it. macOS
+and the BSDs read `st_birthtimespec` from the stat itself. Watch mode stats by
+absolute path (`statObservedPath`, the listing of a new directory) and attaches
+the birth time there with `synctree.AttachBirthTime`, so a watch event records
+the identity a full scan would.
 
 Built-in local observation policy remains:
 

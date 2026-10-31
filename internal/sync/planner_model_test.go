@@ -184,7 +184,7 @@ func (s *pmState) plan() *actionPlan {
 			nullString(s.hash(row.folder, row.localContent)), nullString(s.hash(row.folder, row.remoteContent)),
 			int64(len(row.localContent)), int64(len(row.remoteContent)),
 			pmMtime(row.localContent), pmMtime(row.remoteContent),
-			pmMtime(row.localContent), plannerModelLocalDevice, int64(row.inode), 1,
+			pmMtime(row.localContent), plannerModelLocalDevice, int64(row.inode), 0, 1,
 			"etag-"+strconv.Itoa(row.etag),
 		)
 		require.NoError(t, err)

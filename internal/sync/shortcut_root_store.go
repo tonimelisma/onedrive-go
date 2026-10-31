@@ -102,7 +102,7 @@ func queryShortcutRootRecords(
 		SELECT namespace_id, binding_item_id, relative_local_path, local_alias,
 		       remote_drive_id, remote_item_id, remote_is_folder, state,
 		       protected_paths_json, blocked_detail, local_root_device,
-		       local_root_inode, local_root_has_identity, waiting_binding_item_id,
+		       local_root_inode, local_root_birth_time, local_root_has_identity, waiting_binding_item_id,
 		       waiting_relative_local_path, waiting_local_alias,
 		       waiting_remote_drive_id, waiting_remote_item_id,
 		       waiting_remote_is_folder
@@ -145,11 +145,11 @@ func (s *SyncStore) replaceShortcutRoots(ctx context.Context, records []Shortcut
 			namespace_id, binding_item_id, relative_local_path, local_alias,
 			remote_drive_id, remote_item_id, remote_is_folder, state,
 			protected_paths_json, blocked_detail, local_root_device,
-			local_root_inode, local_root_has_identity, waiting_binding_item_id,
+			local_root_inode, local_root_birth_time, local_root_has_identity, waiting_binding_item_id,
 			waiting_relative_local_path, waiting_local_alias,
 			waiting_remote_drive_id, waiting_remote_item_id,
 			waiting_remote_is_folder
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("sync: preparing shortcut_roots upsert: %w", err)
 	}
@@ -161,7 +161,7 @@ func (s *SyncStore) replaceShortcutRoots(ctx context.Context, records []Shortcut
 		if marshalErr != nil {
 			return fmt.Errorf("sync: encoding protected paths for shortcut root %s: %w", record.BindingItemID, marshalErr)
 		}
-		device, inode, hasIdentity := shortcutRootIdentitySQL(record.LocalRootIdentity)
+		identity, hasIdentity := shortcutRootIdentitySQL(record.LocalRootIdentity)
 		waiting := record.Waiting
 		if waiting == nil {
 			waiting = &ShortcutRootReplacement{}
@@ -177,8 +177,9 @@ func (s *SyncStore) replaceShortcutRoots(ctx context.Context, records []Shortcut
 			string(record.State),
 			string(protectedPaths),
 			record.BlockedDetail,
-			device,
-			inode,
+			identity.Device,
+			identity.Inode,
+			identity.BirthTime,
 			boolInt(hasIdentity),
 			waiting.BindingItemID,
 			waiting.RelativeLocalPath,
@@ -206,6 +207,7 @@ func scanShortcutRootRecord(row shortcutRootScanner) (ShortcutRootRecord, error)
 		protectedPathsJSON    string
 		localRootDevice       uint64
 		localRootInode        uint64
+		localRootBirthTime    int64
 		localRootHasIdentity  int
 		waitingRemoteIsFolder int
 		state                 string
@@ -225,6 +227,7 @@ func scanShortcutRootRecord(row shortcutRootScanner) (ShortcutRootRecord, error)
 		&record.BlockedDetail,
 		&localRootDevice,
 		&localRootInode,
+		&localRootBirthTime,
 		&localRootHasIdentity,
 		&waiting.BindingItemID,
 		&waiting.RelativeLocalPath,
@@ -241,7 +244,11 @@ func scanShortcutRootRecord(row shortcutRootScanner) (ShortcutRootRecord, error)
 	record.RemoteIsFolder = remoteIsFolder != 0
 	record.State = ShortcutRootState(state)
 	if localRootHasIdentity != 0 {
-		record.LocalRootIdentity = &synctree.FileIdentity{Device: localRootDevice, Inode: localRootInode}
+		record.LocalRootIdentity = &synctree.FileIdentity{
+			Device:    localRootDevice,
+			Inode:     localRootInode,
+			BirthTime: localRootBirthTime,
+		}
 	}
 	waiting.RemoteIsFolder = waitingRemoteIsFolder != 0
 	if waiting.BindingItemID != "" {
@@ -250,9 +257,9 @@ func scanShortcutRootRecord(row shortcutRootScanner) (ShortcutRootRecord, error)
 	return normalizeShortcutRootRecord(&record), nil
 }
 
-func shortcutRootIdentitySQL(identity *synctree.FileIdentity) (uint64, uint64, bool) {
+func shortcutRootIdentitySQL(identity *synctree.FileIdentity) (synctree.FileIdentity, bool) {
 	if identity == nil {
-		return 0, 0, false
+		return synctree.FileIdentity{}, false
 	}
-	return identity.Device, identity.Inode, true
+	return *identity, true
 }

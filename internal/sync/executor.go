@@ -429,6 +429,7 @@ func (e *executor) createRemoteFolder(ctx context.Context, action *Action) actio
 		o.LocalCtime = action.View.Local.LocalCtime
 		o.LocalDevice = action.View.Local.LocalDevice
 		o.LocalInode = action.View.Local.LocalInode
+		o.LocalBirthTime = action.View.Local.LocalBirthTime
 		o.LocalHasIdentity = action.View.Local.LocalHasIdentity
 		o.LocalIdentityObserved = true
 	}
@@ -845,6 +846,7 @@ func (e *executor) observeLocalIdentity(o *actionOutcome, local string) {
 	}
 	o.LocalDevice = identity.Device
 	o.LocalInode = identity.Inode
+	o.LocalBirthTime = identity.BirthTime
 	o.LocalHasIdentity = true
 }
 
@@ -916,6 +918,7 @@ func (e *executor) moveOutcome(action *Action) actionOutcome {
 		o.LocalCtime = local.LocalCtime
 		o.LocalDevice = local.LocalDevice
 		o.LocalInode = local.LocalInode
+		o.LocalBirthTime = local.LocalBirthTime
 		o.LocalHasIdentity = local.LocalHasIdentity
 		o.LocalIdentityObserved = true
 		fillRemoteOutcomeFromBaseline(&o, baseline)
@@ -957,6 +960,7 @@ func fillOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {
 		o.LocalCtime = baseline.LocalCtime
 		o.LocalDevice = baseline.LocalDevice
 		o.LocalInode = baseline.LocalInode
+		o.LocalBirthTime = baseline.LocalBirthTime
 		o.LocalHasIdentity = baseline.LocalHasIdentity
 	}
 	fillRemoteOutcomeFromBaseline(o, baseline)

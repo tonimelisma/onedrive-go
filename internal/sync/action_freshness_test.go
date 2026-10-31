@@ -568,3 +568,44 @@ func TestActionFreshness_LocalOriginMoveRejectsChangedDestination(t *testing.T) 
 	})
 	assert.False(t, stale.Fresh, "a destination that changed since planning must not be moved onto")
 }
+
+// Validates: R-2.17.1
+//
+// A move's destination whose birth time changed since planning is another
+// entry holding the planned inode number: the move is stale. A side without
+// a birth time compares (device, inode) only.
+func TestActionFreshness_LocalOriginMoveRejectsADestinationBornAgain(t *testing.T) {
+	t.Parallel()
+
+	const born = int64(1_700_000_000_000_000_001)
+	action := &Action{
+		Type:    ActionRemoteMove,
+		Path:    "new",
+		OldPath: "old",
+		ItemID:  "item-old",
+		View:    &pathView{Path: "old"},
+		MovedLocal: &localState{
+			ItemType: ItemTypeFolder, LocalDevice: 7, LocalInode: 8, LocalBirthTime: born, LocalHasIdentity: true,
+		},
+	}
+	for _, tc := range []struct {
+		name      string
+		birthTime int64
+		fresh     bool
+	}{
+		{name: "same entry", birthTime: born, fresh: true},
+		{name: "born again", birthTime: born + 1},
+		{name: "no birth time observed", fresh: true},
+	} {
+		destination := &localStateRow{
+			Path: "new", ItemType: ItemTypeFolder,
+			LocalDevice: 7, LocalInode: 8, LocalBirthTime: tc.birthTime, LocalHasIdentity: true,
+		}
+		got := evaluateMoveEndpointFreshness(action, actionFreshnessInputs{
+			LocalTruthComplete:   true,
+			LocalAtMovePeer:      destination,
+			LocalAtMovePeerFound: true,
+		})
+		assert.Equal(t, tc.fresh, got.Fresh, tc.name)
+	}
+}

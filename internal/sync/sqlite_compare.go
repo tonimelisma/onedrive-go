@@ -7,6 +7,31 @@ import (
 	"strings"
 )
 
+// sqlSameLocalEntry* are the one SQL definition of "the same filesystem
+// entry" for a local row and a baseline row b that both carry local identity
+// (local_has_identity = 1). Each is the same pattern for one local alias L:
+//
+//	(L.local_device = b.local_device AND L.local_inode = b.local_inode
+//	 AND (L.local_birth_time = 0 OR b.local_birth_time = 0
+//	      OR L.local_birth_time = b.local_birth_time))
+//
+// that is, the same device and inode, and the same birth time unless either
+// row lacks one (zero): synctree.SameIdentity in SQL. They are written out
+// per alias because the queries are constants;
+// TestSQLSameLocalEntry_EveryAliasFollowsThePattern holds them to the
+// pattern. Every identity test in the comparison queries uses one. A reused
+// inode number keeps device and inode but not the birth time, so where the
+// filesystem records birth times a deleted entry and an unrelated new one
+// never pair (R-2.17.1).
+const (
+	sqlSameLocalEntryL = `(l.local_device = b.local_device AND l.local_inode = b.local_inode` +
+		` AND (l.local_birth_time = 0 OR b.local_birth_time = 0 OR l.local_birth_time = b.local_birth_time))`
+	sqlSameLocalEntryLs = `(ls.local_device = b.local_device AND ls.local_inode = b.local_inode` +
+		` AND (ls.local_birth_time = 0 OR b.local_birth_time = 0 OR ls.local_birth_time = b.local_birth_time))`
+	sqlSameLocalEntrySrc = `(src.local_device = b.local_device AND src.local_inode = b.local_inode` +
+		` AND (src.local_birth_time = 0 OR b.local_birth_time = 0 OR src.local_birth_time = b.local_birth_time))`
+)
+
 const (
 	// sqlLocalAndRemoteMoveCTEs is the shared head of the comparison and
 	// reconciliation queries: the path universe plus local and remote move
@@ -14,13 +39,15 @@ const (
 	// rules live here once.
 	//
 	// Local move pairing: a baseline row and an unbaselined local_state row
-	// pair on filesystem identity (device + inode, same item type). For files
+	// pair on filesystem identity (sqlSameLocalEntry*: device, inode and,
+	// where both know it, birth time; same item type). For files
 	// identity is necessary but not sufficient, see the corroboration clause.
 	// Directories pair on identity alone: a directory has no content of its
 	// own, its descendants are paired independently, and a wrong pairing after
-	// rmdir + mkdir reuse still converges to the same tree (only the remote
-	// folder's item identity differs). Baseline files without identity fall
-	// back to unique content-hash pairing.
+	// rmdir + mkdir reuse converges to the same tree, but would give the new
+	// folder the old OneDrive item (its sharing, permissions and history),
+	// which is why the birth time is part of identity. Baseline files
+	// without identity fall back to unique content-hash pairing.
 	sqlLocalAndRemoteMoveCTEs = `
 WITH
 all_paths AS (
@@ -40,8 +67,7 @@ local_move_candidates AS (
 		AND COALESCE(l.item_type, '') = COALESCE(b.item_type, '')
 		AND l.local_has_identity = 1
 		AND b.local_has_identity = 1
-		AND l.local_device = b.local_device
-		AND l.local_inode = b.local_inode
+		AND ` + sqlSameLocalEntryL + `
 		AND (
 			COALESCE(b.item_type, '') = 'folder'
 			OR (
@@ -73,8 +99,7 @@ local_move_candidates AS (
 			SELECT 1 FROM local_state src
 			WHERE src.path = b.path
 				AND src.local_has_identity = 1
-				AND src.local_device = b.local_device
-				AND src.local_inode = b.local_inode
+				AND ` + sqlSameLocalEntrySrc + `
 		)
 	UNION ALL
 	SELECT
@@ -139,7 +164,7 @@ remote_move_sources AS (
 				AND (
 					COALESCE(b.local_has_identity, 0) = 0
 					OR COALESCE(ls.local_has_identity, 0) = 0
-					OR (ls.local_device = b.local_device AND ls.local_inode = b.local_inode)
+					OR ` + sqlSameLocalEntryLs + `
 					OR (
 						COALESCE(ls.item_type, '') = 'file'
 						AND COALESCE(ls.hash, '') <> '' AND ls.hash = b.local_hash
@@ -262,10 +287,7 @@ comparison_flags AS (
 			WHEN COALESCE(b.item_type, '') <> COALESCE(l.item_type, '') THEN 1
 			WHEN COALESCE(b.item_type, '') = 'folder' THEN 0
 			WHEN COALESCE(b.local_has_identity, 0) = 1 AND COALESCE(l.local_has_identity, 0) = 1
-				AND (
-					COALESCE(b.local_device, 0) <> COALESCE(l.local_device, 0)
-					OR COALESCE(b.local_inode, 0) <> COALESCE(l.local_inode, 0)
-				) THEN
+				AND NOT ` + sqlSameLocalEntryL + ` THEN
 				CASE
 					WHEN COALESCE(b.local_hash, '') <> '' AND COALESCE(l.hash, '') <> ''
 						AND b.local_hash = l.hash
@@ -307,10 +329,7 @@ comparison_flags AS (
 		CASE
 			WHEN b.path IS NULL OR l.path IS NULL THEN 0
 			WHEN COALESCE(b.local_has_identity, 0) = 1 AND COALESCE(l.local_has_identity, 0) = 1
-				AND (
-					COALESCE(b.local_device, 0) <> COALESCE(l.local_device, 0)
-					OR COALESCE(b.local_inode, 0) <> COALESCE(l.local_inode, 0)
-				) THEN 1
+				AND NOT ` + sqlSameLocalEntryL + ` THEN 1
 			ELSE 0
 		END AS local_item_replaced,
 		-- A folder has no content of its own, so whether it "changed" on a
@@ -403,12 +422,12 @@ comparison_flags AS (
 				AND COALESCE(b.item_id, '') <> COALESCE(r.item_id, '') THEN 1
 			-- A new filesystem identity over unchanged content (D-057): the
 			-- baseline must learn it, or the scanner's fast path never trusts
-			-- the recorded hash again and a later rename cannot pair.
+			-- the recorded hash again and a later rename cannot pair. So must
+			-- a birth time the baseline was written without.
 			WHEN COALESCE(b.local_has_identity, 0) = 1 AND COALESCE(l.local_has_identity, 0) = 1
-				AND (
-					COALESCE(b.local_device, 0) <> COALESCE(l.local_device, 0)
-					OR COALESCE(b.local_inode, 0) <> COALESCE(l.local_inode, 0)
-				) THEN 1
+				AND NOT ` + sqlSameLocalEntryL + ` THEN 1
+			WHEN COALESCE(b.local_has_identity, 0) = 1 AND COALESCE(l.local_has_identity, 0) = 1
+				AND b.local_birth_time = 0 AND l.local_birth_time <> 0 THEN 1
 			WHEN COALESCE(b.item_type, '') <> 'file' THEN 0
 			WHEN COALESCE(b.local_mtime, 0) <> COALESCE(l.mtime, 0)
 				OR COALESCE(b.local_ctime, 0) <> COALESCE(l.ctime, 0)

@@ -27,6 +27,7 @@ func seedShortcutLocalStateIdentityForTest(t *testing.T, eng *Engine, relativePa
 		ItemType:         ItemTypeFolder,
 		LocalDevice:      identity.Device,
 		LocalInode:       identity.Inode,
+		LocalBirthTime:   identity.BirthTime,
 		LocalHasIdentity: true,
 	}}))
 }
@@ -121,7 +122,7 @@ func TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot(t *testing.T) {
 		RemoteIsFolder:    true,
 		State:             ShortcutRootStateRemovedFinalDrain,
 		ProtectedPaths:    []string{"Shared/Docs"},
-		LocalRootIdentity: &synctree.FileIdentity{Device: 7, Inode: 9},
+		LocalRootIdentity: &synctree.FileIdentity{Device: 7, Inode: 9, BirthTime: 11},
 	}}))
 
 	changed, err := store.applyShortcutTopology(t.Context(), shortcutTopologyBatch{
@@ -150,7 +151,8 @@ func TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot(t *testing.T) {
 	assert.Equal(t, "Shared/Docs", roots[0].Waiting.RelativeLocalPath)
 	assert.True(t, roots[0].Waiting.RemoteDriveID.Equal(driveid.New("new-drive")))
 	assert.Equal(t, []string{"Shared/Docs"}, roots[0].ProtectedPaths)
-	assert.Equal(t, &synctree.FileIdentity{Device: 7, Inode: 9}, roots[0].LocalRootIdentity)
+	assert.Equal(t, &synctree.FileIdentity{Device: 7, Inode: 9, BirthTime: 11}, roots[0].LocalRootIdentity,
+		"the root's identity keeps its birth time")
 }
 
 // Validates: R-2.4.3, R-2.4.8

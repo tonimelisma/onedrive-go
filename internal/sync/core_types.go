@@ -57,6 +57,7 @@ type changeEvent struct {
 	LocalCtime       int64 // local inode change time, files only; zero means unknown
 	LocalDevice      uint64
 	LocalInode       uint64
+	LocalBirthTime   int64 // entry birth time (Unix nanoseconds); zero means unknown
 	LocalHasIdentity bool
 	ETag             string // remote only
 	CTag             string // remote only
@@ -90,6 +91,7 @@ type BaselineEntry struct {
 	LocalCtime       int64
 	LocalDevice      uint64
 	LocalInode       uint64
+	LocalBirthTime   int64 // entry birth time (Unix nanoseconds); zero means unknown
 	LocalHasIdentity bool
 	ETag             string
 }
@@ -364,6 +366,7 @@ type localState struct {
 	LocalCtime       int64 // inode change time (files only); zero means unknown
 	LocalDevice      uint64
 	LocalInode       uint64
+	LocalBirthTime   int64 // entry birth time (Unix nanoseconds); zero means unknown
 	LocalHasIdentity bool
 }
 

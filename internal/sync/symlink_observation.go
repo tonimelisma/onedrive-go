@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // statObservedPath returns the followed target info for fsPath while also
@@ -21,9 +22,11 @@ func statObservedPath(fsPath string) (os.FileInfo, bool, error) {
 		return nil, false, fmt.Errorf("lstat observed path %s: %w", fsPath, err)
 	}
 
+	// The birth time completes the filesystem identity, so a watch event
+	// records the same identity a full scan reads through the sync tree.
 	isSymlink := linkInfo.Mode()&os.ModeSymlink != 0
 	if !isSymlink {
-		return linkInfo, false, nil
+		return synctree.AttachBirthTime(linkInfo, fsPath), false, nil
 	}
 
 	info, err := localpath.Stat(fsPath)
@@ -31,7 +34,7 @@ func statObservedPath(fsPath string) (os.FileInfo, bool, error) {
 		return nil, true, fmt.Errorf("stat observed symlink target %s: %w", fsPath, err)
 	}
 
-	return info, true, nil
+	return synctree.AttachBirthTime(info, fsPath), true, nil
 }
 
 func observedKindFromInfo(info os.FileInfo) observedKind {

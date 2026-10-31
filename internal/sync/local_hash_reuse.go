@@ -57,11 +57,12 @@ func canReuseBaselineHash(info fs.FileInfo, base *BaselineEntry, observeStartNan
 // recorded. A baseline without identity proves nothing.
 func sameBaselineIdentity(info fs.FileInfo, base *BaselineEntry) bool {
 	identity, hasIdentity := synctree.IdentityFromFileInfo(info)
-	if !hasIdentity || !base.LocalHasIdentity {
+	baseIdentity, baseHasIdentity := base.fileIdentity()
+	if !hasIdentity || !baseHasIdentity {
 		return false
 	}
 
-	return synctree.SameIdentity(identity, synctree.FileIdentity{Device: base.LocalDevice, Inode: base.LocalInode})
+	return synctree.SameIdentity(identity, baseIdentity)
 }
 
 // fileChangeTime returns the ctime a local_state row records for info: the

@@ -34,14 +34,14 @@ import (
 const (
 	sqlLoadBaseline = `SELECT item_id, path, parent_id, item_type,
 		local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime,
-		local_ctime, local_device, local_inode, local_has_identity, etag
+		local_ctime, local_device, local_inode, local_birth_time, local_has_identity, etag
 		FROM baseline`
 
 	sqlUpsertBaseline = `INSERT INTO baseline
 		(item_id, path, parent_id, item_type, local_hash, remote_hash,
 		 local_size, remote_size, local_mtime, remote_mtime,
-		 local_ctime, local_device, local_inode, local_has_identity, etag)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 local_ctime, local_device, local_inode, local_birth_time, local_has_identity, etag)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(item_id) DO UPDATE SET
 		 path = excluded.path,
 		 parent_id = excluded.parent_id,
@@ -55,6 +55,7 @@ const (
 		 local_ctime = excluded.local_ctime,
 		 local_device = excluded.local_device,
 		 local_inode = excluded.local_inode,
+		 local_birth_time = excluded.local_birth_time,
 		 local_has_identity = excluded.local_has_identity,
 		 etag = excluded.etag`
 
@@ -75,6 +76,7 @@ type localBaselineRefresh struct {
 	LocalCtime       int64
 	LocalDevice      uint64
 	LocalInode       uint64
+	LocalBirthTime   int64 // entry birth time (Unix nanoseconds); zero means unknown
 	LocalHasIdentity bool
 }
 
@@ -175,7 +177,7 @@ func scanBaselineRow(rows *sql.Rows, contentDriveID driveid.ID) (*BaselineEntry,
 	err := rows.Scan(
 		&e.ItemID, &e.Path, &parentID, &e.ItemType,
 		&localHash, &remoteHash, &localSize, &remoteSize, &localMtime, &remoteMtime,
-		&e.LocalCtime, &localDevice, &localInode, &localHasIdentity, &etag,
+		&e.LocalCtime, &localDevice, &localInode, &e.LocalBirthTime, &localHasIdentity, &etag,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sync: scanning baseline row: %w", err)
@@ -274,6 +276,7 @@ func fillMutationFromBaselineDefaults(mutation *BaselineMutation, baseline *Base
 		mutation.LocalCtime = baseline.LocalCtime
 		mutation.LocalDevice = baseline.LocalDevice
 		mutation.LocalInode = baseline.LocalInode
+		mutation.LocalBirthTime = baseline.LocalBirthTime
 		mutation.LocalHasIdentity = baseline.LocalHasIdentity
 	}
 	if mutation.RemoteHash == "" {
@@ -331,6 +334,7 @@ func publicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*
 			mutation.LocalCtime = action.View.Local.LocalCtime
 			mutation.LocalDevice = action.View.Local.LocalDevice
 			mutation.LocalInode = action.View.Local.LocalInode
+			mutation.LocalBirthTime = action.View.Local.LocalBirthTime
 			mutation.LocalHasIdentity = action.View.Local.LocalHasIdentity
 			mutation.LocalIdentityObserved = true
 		}
@@ -433,6 +437,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 		LocalCtime:       refresh.LocalCtime,
 		LocalDevice:      refresh.LocalDevice,
 		LocalInode:       refresh.LocalInode,
+		LocalBirthTime:   refresh.LocalBirthTime,
 		LocalHasIdentity: refresh.LocalHasIdentity,
 	}
 
@@ -478,6 +483,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 		entry.LocalCtime,
 		int64(entry.LocalDevice),
 		int64(entry.LocalInode),
+		entry.LocalBirthTime,
 		boolInt(entry.LocalHasIdentity),
 		nullString(entry.ETag),
 	)
@@ -657,6 +663,7 @@ func mutationToEntry(o *BaselineMutation) *BaselineEntry {
 		LocalCtime:       o.LocalCtime,
 		LocalDevice:      o.LocalDevice,
 		LocalInode:       o.LocalInode,
+		LocalBirthTime:   o.LocalBirthTime,
 		LocalHasIdentity: o.LocalHasIdentity,
 		ETag:             o.ETag,
 	}
@@ -690,6 +697,7 @@ func mutationFromActionOutcome(o *actionOutcome) *BaselineMutation {
 		LocalCtime:            o.LocalCtime,
 		LocalDevice:           o.LocalDevice,
 		LocalInode:            o.LocalInode,
+		LocalBirthTime:        o.LocalBirthTime,
 		LocalHasIdentity:      o.LocalHasIdentity,
 		LocalIdentityObserved: o.LocalIdentityObserved,
 		ETag:                  o.ETag,
@@ -737,6 +745,7 @@ func commitUpsert(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) erro
 		o.LocalCtime,
 		int64(o.LocalDevice),
 		int64(o.LocalInode),
+		o.LocalBirthTime,
 		boolInt(o.LocalHasIdentity),
 		nullString(o.ETag),
 	)
@@ -998,6 +1007,7 @@ func baselineEntriesEqual(a, b *BaselineEntry) bool {
 		a.LocalCtime == b.LocalCtime &&
 		a.LocalDevice == b.LocalDevice &&
 		a.LocalInode == b.LocalInode &&
+		a.LocalBirthTime == b.LocalBirthTime &&
 		a.LocalHasIdentity == b.LocalHasIdentity &&
 		a.ItemID == b.ItemID
 }

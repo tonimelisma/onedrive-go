@@ -191,8 +191,11 @@ func (r *modelRun) localMoveThenRecreate(tree map[string]string) []modelEdit {
 // names and content, new inodes. The copy is built beside the sync root
 // while the original still exists and then swapped in: deleting first let
 // the filesystem hand the freed inode numbers straight back, so on some
-// runners the "rebuilt" folder kept its identity and one seed planned a
-// move where another run of it planned a delete and a create.
+// runners the "rebuilt" folder kept its (device, inode) and one seed planned
+// a move where another run of it planned a delete and a create. Identity now
+// includes the birth time, which tells such a rebuild apart wherever the
+// filesystem records one (R-2.17.1); building aside keeps the replay
+// deterministic on filesystems that record none.
 func (r *modelRun) localRecreateFolder(tree map[string]string) []modelEdit {
 	folder := r.pick(modelEntriesOf(tree, true))
 	if folder == "" {

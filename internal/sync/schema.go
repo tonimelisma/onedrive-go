@@ -33,7 +33,13 @@ const (
 	// Generation 21 counts consecutive full refreshes that left an orphan
 	// undecided (observation_state.undecided_refresh_streak), so the refresh
 	// it pulls forward backs off instead of re-enumerating every 15 minutes.
-	currentSyncStoreGeneration = 21
+	//
+	// Generation 22 adds the entry's birth time to local filesystem identity
+	// (baseline.local_birth_time, local_state.local_birth_time,
+	// shortcut_roots.local_root_birth_time): a reused inode number is not the
+	// deleted entry it once named, and pairing on it renamed an unrelated new
+	// entry into the old OneDrive item (R-2.17.1).
+	currentSyncStoreGeneration = 22
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -56,6 +62,7 @@ CREATE TABLE IF NOT EXISTS baseline (
     local_ctime     INTEGER NOT NULL DEFAULT 0,
     local_device    INTEGER NOT NULL DEFAULT 0,
     local_inode     INTEGER NOT NULL DEFAULT 0,
+    local_birth_time INTEGER NOT NULL DEFAULT 0,
     local_has_identity INTEGER NOT NULL DEFAULT 0 CHECK(local_has_identity IN (0, 1)),
     etag            TEXT
 );
@@ -124,6 +131,7 @@ CREATE TABLE IF NOT EXISTS local_state (
     ctime      INTEGER NOT NULL DEFAULT 0,
     local_device INTEGER NOT NULL DEFAULT 0,
     local_inode  INTEGER NOT NULL DEFAULT 0,
+    local_birth_time INTEGER NOT NULL DEFAULT 0,
     local_has_identity INTEGER NOT NULL DEFAULT 0 CHECK(local_has_identity IN (0, 1))
 );
 
@@ -173,6 +181,7 @@ CREATE TABLE IF NOT EXISTS shortcut_roots (
     blocked_detail                   TEXT    NOT NULL DEFAULT '',
     local_root_device                INTEGER NOT NULL DEFAULT 0,
     local_root_inode                 INTEGER NOT NULL DEFAULT 0,
+    local_root_birth_time            INTEGER NOT NULL DEFAULT 0,
     local_root_has_identity          INTEGER NOT NULL DEFAULT 0 CHECK(local_root_has_identity IN (0, 1)),
     waiting_binding_item_id          TEXT    NOT NULL DEFAULT '',
     waiting_relative_local_path      TEXT    NOT NULL DEFAULT '',
@@ -200,7 +209,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 		"baseline": {
 			"item_id", "path", "parent_id", "item_type", "local_hash", "remote_hash",
 			"local_size", "remote_size", "local_mtime", "remote_mtime", "local_ctime",
-			"local_device", "local_inode", "local_has_identity", "etag",
+			"local_device", "local_inode", "local_birth_time", "local_has_identity", "etag",
 		},
 		"observation_state": {
 			"content_drive_id", "cursor", "next_full_remote_refresh_at",
@@ -222,7 +231,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 		},
 		"local_state": {
 			"path", "item_type", "hash", "size", "mtime", "ctime",
-			"local_device", "local_inode", "local_has_identity",
+			"local_device", "local_inode", "local_birth_time", "local_has_identity",
 		},
 		"retry_work": {
 			"path", "old_path", "action_type", "scope_key", "blocked", "attempt_count", "next_retry_at",
@@ -237,7 +246,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"binding_item_id", "namespace_id", "relative_local_path", "local_alias",
 			"remote_drive_id", "remote_item_id", "remote_is_folder", "state",
 			"protected_paths_json", "blocked_detail", "local_root_device", "local_root_inode",
-			"local_root_has_identity", "waiting_binding_item_id", "waiting_relative_local_path",
+			"local_root_birth_time", "local_root_has_identity", "waiting_binding_item_id", "waiting_relative_local_path",
 			"waiting_local_alias", "waiting_remote_drive_id", "waiting_remote_item_id",
 			"waiting_remote_is_folder",
 		},

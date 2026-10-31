@@ -46,6 +46,9 @@ type rootHandle = Handle
 
 type osRootHandle struct {
 	root *os.Root
+	// dir is the folder root was opened on: the birth time is read by path
+	// (withBirthTime), which os.Root does not offer.
+	dir string
 }
 
 func (h *osRootHandle) Open(name string) (*os.File, error) {
@@ -59,13 +62,23 @@ func (h *osRootHandle) OpenFile(name string, flag int, perm os.FileMode) (*os.Fi
 }
 
 func (h *osRootHandle) Stat(name string) (os.FileInfo, error) {
-	//nolint:wrapcheck // caller adds rooted path context after containment checks.
-	return h.root.Stat(name)
+	info, err := h.root.Stat(name)
+	if err != nil {
+		//nolint:wrapcheck // caller adds rooted path context after containment checks.
+		return nil, err
+	}
+
+	return withBirthTime(info, filepath.Join(h.dir, name)), nil
 }
 
 func (h *osRootHandle) Lstat(name string) (os.FileInfo, error) {
-	//nolint:wrapcheck // caller adds rooted path context after containment checks.
-	return h.root.Lstat(name)
+	info, err := h.root.Lstat(name)
+	if err != nil {
+		//nolint:wrapcheck // caller adds rooted path context after containment checks.
+		return nil, err
+	}
+
+	return withBirthTime(info, filepath.Join(h.dir, name)), nil
 }
 
 func (h *osRootHandle) Mkdir(name string, perm os.FileMode) error {
@@ -103,7 +116,7 @@ func (h *osRootHandle) Chtimes(name string, atime time.Time, mtime time.Time) er
 }
 
 func (h *osRootHandle) FS() fs.FS {
-	return h.root.FS()
+	return birthTimeFS{fsys: h.root.FS(), dir: h.dir}
 }
 
 func (h *osRootHandle) Close() error {
@@ -145,7 +158,7 @@ func defaultRootOps() rootOps {
 				return nil, err
 			}
 
-			return &osRootHandle{root: root}, nil
+			return &osRootHandle{root: root, dir: dir}, nil
 		},
 		mkdirAll: func(root rootHandle, name string, perm os.FileMode) error {
 			return root.MkdirAll(name, perm)
@@ -1000,7 +1013,7 @@ func (r *Root) SameFile(srcRel, dstRel string) (bool, error) {
 		return false, err
 	}
 
-	return os.SameFile(srcInfo, dstInfo), nil
+	return SameFile(srcInfo, dstInfo), nil
 }
 
 func (r *Root) RenameWithTemporarySibling(srcRel, dstRel, tempStem string, attempts int) error {
