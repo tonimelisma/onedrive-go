@@ -22,7 +22,7 @@ Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.
 
 ## Package Structure
 
-Implements: R-6.1.4 [verified], R-6.1.5 [verified], R-6.9.1 [verified]
+Implements: R-6.1.4 [target], R-6.1.5 [target], R-6.9.1 [verified]
 
 ```
 .                             Root package (thin process entrypoint)
@@ -445,7 +445,7 @@ Static verification is a first-class architectural constraint, not a best-effort
 
   Every slice is bidirectionally coupled, so none is a leaf and none can be extracted as a file move. The inbound direction is usually a legitimate interface — what the rest needs from `planner*`, for example, is `planner`, `newPlanner`, `plannerMountContext`, and the `plannerVisible*` helpers, which is exactly the surface a planner package would export. The outbound direction is the problem: each slice consumes a large shared vocabulary (`Action`, `ScopeKey`, `ItemType`, `BaselineEntry`, `pathView`, the `*Row` types) that lives at the centre of the package.
 
-  So the prerequisite for **any** split is extracting that vocabulary into its own package, giving `syncdomain` <- `syncstore`/`syncplanner`/... <- `sync`. That is a design decision rather than a refactor, and it has a real cost: a vocabulary package risks being the "fake intermediate boundary" this doc warns against. It is defensible only if the domain types keep their invariant-preserving behavior and the package owns the sync domain model rather than acting as a DTO bag. Two further constraints: 14 test files reach into store internals (`rawDB()`, direct `m.db`) from `package sync` and must be re-homed, and cross-package tests will need explicit seams, which pushes back against the export-surface reduction already done.
+  So the prerequisite for **any** split is extracting that vocabulary into its own package, giving a hypothetical `syncdomain` <- `syncstore`/`syncplanner`/... <- `sync` (names used for illustration only; no such packages exist, and the earlier packages of similar names were collapsed into `internal/sync`). That is a design decision rather than a refactor, and it has a real cost: a vocabulary package risks being the "fake intermediate boundary" this doc warns against. It is defensible only if the domain types keep their invariant-preserving behavior and the package owns the sync domain model rather than acting as a DTO bag. Two further constraints: 14 test files reach into store internals (`rawDB()`, direct `m.db`) from `package sync` and must be re-homed, and cross-package tests will need explicit seams, which pushes back against the export-surface reduction already done.
 
   Concretely: `store_types.go` declares row types the rest of the package references 133 times, while the store's own method signatures need ten domain types back. That specific pair is a hard import cycle today.
 

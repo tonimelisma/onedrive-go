@@ -35,7 +35,7 @@ rely on transport-level retry loops for action execution.
 | Behavior | Evidence |
 | --- | --- |
 | Retry policy curves and backoff timing remain package-owned value logic. | `internal/retry/backoff_test.go`, `internal/retry/policy_test.go`, `internal/retry/named_test.go` |
-| Shared `Retry-After` coordination stays optional and caller-injected. | `internal/retry/throttle_gate_test.go`, `internal/retry/transport_test.go` |
+| Shared `Retry-After` coordination stays optional and caller-injected. | `internal/retry/transport_test.go` (`TestRetryTransport_ThrottleCoordination`, `TestRetryTransport_SharedThrottleGateAcrossTransports`, `TestRetryTransport_429SetsThrottleDeadline`) |
 | An outage is announced once per process across concurrent requests and transports, and re-arms after OneDrive answers. | `TestRetryTransport_OutageIsAnnouncedOncePerProcessAcrossConcurrentRequests`, `TestRetryTransport_OutageNoticeRearmsAfterAResponse`, `TestSessionRuntime_RetryingClientsShareOneRetryNotices` |
 | Long rate-limit waits are announced once; short ones stay quiet; exhaustion is not logged above Debug. | `TestRetryTransport_LongRateLimitWaitIsAnnouncedOnce`, `TestRetryTransport_NetworkError_ExhaustionAnnouncesOnceAndDoesNotRepeatTheError`, `TestRetryTransport_HTTPError_ExhaustionDoesNotWarn` |
 | CLI/control-plane callers use retry without reinterpreting retryable versus fatal conditions themselves. | `internal/cli/control_client_additional_test.go`, `internal/multisync/orchestrator_test.go`, `internal/graph/client_test.go` |

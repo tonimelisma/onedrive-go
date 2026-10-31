@@ -97,13 +97,14 @@ is bytes. **Durations** use Go syntax: `"90s"`, `"5m"`, `"1h30m"`.
 
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
-| `sync_dir` | path | chosen at `login` or `drive add` (see below) | The local folder this drive syncs with. Must be an absolute path or start with `~/`. If it exists it must be a directory. `sync` does not create a missing folder; it reports the drive as unavailable. |
+| `sync_dir` | path | chosen at `login` or `drive add` (see below) | The local folder this drive syncs with. Must be an absolute path or start with `~/`. If it exists it must be a directory. `sync` does not create a missing folder; it reports the drive as unavailable. The folder must be the one the drive's sync state was built from; after moving or restoring it, see `drive rebind-root` in [safety](safety.md#previewing-and-starting-over). |
 | `included_dirs` | list of folders | empty (whole drive) | Sync only these folders (and what is inside them). |
 | `ignored_dirs` | list of folders | empty | Never sync these folders or anything inside them. |
 | `ignored_paths` | list of patterns | empty | Never sync files or folders matching these patterns. A matching folder excludes everything inside it. |
 | `ignore_dotfiles` | boolean | `false` | Skip every file or folder whose name starts with `.`, and everything inside such a folder. |
-| `ignore_junk_files` | boolean | `false` | Skip common junk: `.DS_Store`, `Thumbs.db`, `__MACOSX`, names ending in `.tmp`, `.swp`, `.partial` or `.crdownload`, and names starting with `~`, `.~` or `._` (but not Office's `~$` lock files). |
+| `ignore_junk_files` | boolean | `true` | Skip OS, editor and browser junk on both sides: `.DS_Store`, `Thumbs.db`, `__MACOSX`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.TemporaryItems`, `.Trash-*`, `$RECYCLE.BIN`, `Icon\r`, names starting with `._`, `.~`, `~` (including Office `~$` owner files), `#...#` or `.#`, names ending in `~`, `.tmp`, `.swp`, `.swo`, `.swx`, `.partial`, `.crdownload`, `___jb_tmp___` or `___jb_old___`, the Vim probe file `4913`, and the `-wal`, `-shm` and `-journal` sidecars of a SQLite database whose name has an extension. The `~...`, `...~` and `4913` rules apply to files only, so a folder named `~Projects` syncs. Set to `false` to sync everything. |
 | `follow_symlinks` | boolean | `false` | By default symbolic links in the sync folder are skipped. When true, the content a link points to is synced at the link's path, with protection against loops. |
+| `cross_filesystems` | boolean | `false` | By default a folder inside the sync folder that is the mount point of another disk or filesystem is not entered; `status` reports it as a local read boundary and nothing under it is synced or deleted on either side. When true, such folders are synced, and onedrive-go remembers them so that a disk that is later not mounted reads as unavailable rather than as every file in it deleted. |
 | `display_name` | string | derived from the drive | The name `status` and `drive list` show, and that `--drive` can match. |
 | `owner` | string | empty | For shared folders, the owner shown in `status`. Written by `drive add`. |
 | `paused` | boolean | not paused | Written by `pause` and `resume`. |

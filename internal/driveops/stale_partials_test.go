@@ -68,7 +68,7 @@ func TestCleanStalePartials_NestedDir(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "nested partial should have been deleted")
 }
 
-// Validates: R-2.4.10
+// Validates: R-2.4.10, R-6.2.7
 func TestCleanStalePartialsWithOptions_SkipsConfiguredDirs(t *testing.T) {
 	t.Parallel()
 

@@ -1892,7 +1892,7 @@ func TestExecutor_Upload_SymlinkAliasSourceUsesFollowedTargetPrecondition(t *tes
 // Local delete tests
 // ---------------------------------------------------------------------------
 
-// Validates: R-6.2.4
+// Validates: R-6.2.4, R-6.4.1
 func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 	t.Parallel()
 
@@ -1920,7 +1920,7 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "file should have been deleted")
 }
 
-// Validates: R-6.2.4, R-2.8.10
+// Validates: R-6.2.4, R-6.4.1, R-2.8.10
 func TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition(t *testing.T) {
 	t.Parallel()
 
@@ -1968,7 +1968,7 @@ func TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition(t *testing.T
 	assert.False(t, uploadCalled, "executor should not invent upload intent for stale local delete")
 }
 
-// Validates: R-6.2.4
+// Validates: R-6.2.4, R-6.4.1
 func TestExecutor_LocalDelete_HashMismatch_DoesNotCreateConflictCopy(t *testing.T) {
 	t.Parallel()
 

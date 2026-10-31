@@ -120,6 +120,7 @@ func TestContentFilter_FileOnlyJunkRulesKeepFolders(t *testing.T) {
 	}
 }
 
+// Validates: R-6.2.7
 func TestContentFilter_JunkFilesDefaultVisible(t *testing.T) {
 	filter := newContentFilter(ContentFilterConfig{})
 

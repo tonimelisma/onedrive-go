@@ -14,10 +14,12 @@ func newSyncCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Synchronize files with OneDrive",
-		Long: `Run a one-shot sync run between the local directory and OneDrive.
+		Long: `Sync the local folder with OneDrive once, or continuously with --watch.
 
-By default, sync is bidirectional. Use --download-only or --upload-only for
-one-way sync. Use --dry-run to preview what would happen without making changes.`,
+By default sync is bidirectional; --download-only and --upload-only make it
+one-way. --dry-run previews without changing anything. --full lists everything
+on OneDrive instead of using the change feed. --confirm-deletes applies deletes
+an earlier run held for confirmation (one-shot only).`,
 		// sync handles its own config resolution via ResolveDrives (multi-drive).
 		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runSync,

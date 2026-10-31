@@ -39,7 +39,7 @@ const (
 	verifyDefaultCommandCount = cmdE2ESuite + 1
 )
 
-// Validates: R-6.2.1, R-6.2.2
+// Validates: R-6.10.1
 func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	t.Parallel()
 
@@ -142,7 +142,7 @@ func TestRunE2EFullCompileCheck_UsesUniqueArtifactPath(t *testing.T) {
 	assert.Contains(t, filepath.Base(args[5]), strings.TrimSuffix(fullE2ECompileArtifactName, ".test"))
 }
 
-// Validates: R-6.2.1, R-6.2.2
+// Validates: R-6.10.1
 func TestRunVerifyPublicRunsExpectedSteps(t *testing.T) {
 	t.Parallel()
 

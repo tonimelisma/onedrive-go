@@ -22,7 +22,7 @@ The system shall support all four drive types:
 - R-3.2.3: SharePoint Document Libraries (via `drive add`). [verified]
 - R-3.2.4: Shared Folders (folders shared by other users, synced as separate drives). [verified]
 
-## R-3.3 Drive Management Commands [implemented]
+## R-3.3 Drive Management Commands [verified]
 
 - R-3.3.1: When the user runs `login`, the system shall auto-add the account's
   primary drive to the configuration: `personal:<email>` for consumer Microsoft
