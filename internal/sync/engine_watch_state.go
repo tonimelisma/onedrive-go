@@ -157,6 +157,7 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 	// future that completion and scope decisions are asking about.
 	rt.signals = rt
 	rt.inspect = rt
+	rt.admitted = rt
 
 	return rt
 }
@@ -281,6 +282,20 @@ func (rt *watchRuntime) retireOutboxForPendingReplan() {
 	if rt.sched.runningCount > 0 {
 		rt.emitRuntimeDebugEvent(engineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
 	}
+}
+
+// takeAdmittedWorkBlockedBy satisfies admittedWorkOwner: a scope that
+// activates takes the admitted work it blocks back out of the outbox before
+// a worker reaches it (R-6.8.24). Loop goroutine only, like every other
+// outbox mutation.
+func (rt *watchRuntime) takeAdmittedWorkBlockedBy(key ScopeKey) []*trackedAction {
+	taken, kept := takeOutboxBlockedBy(rt.currentOutbox(), key)
+	if len(taken) == 0 {
+		return nil
+	}
+	rt.replaceOutbox(kept)
+
+	return taken
 }
 
 func (rt *watchRuntime) retireReadyFrontierForPendingReplan(ready []*trackedAction) {

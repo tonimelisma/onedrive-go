@@ -11,6 +11,10 @@ type BlockScope struct {
 	Key           ScopeKey
 	TrialInterval time.Duration // current interval between trial actions
 	NextTrialAt   time.Time     // when to dispatch the next trial
+	// SlowStartThreshold is the release ramp's memory of the last 429
+	// (activeScope.SlowStartThreshold), persisted because one-shot passes
+	// and restarts rebuild the runtime from this row (R-6.8.24).
+	SlowStartThreshold int
 }
 
 // activeScope is the watch-runtime working-set shape. It keeps only the
@@ -20,6 +24,27 @@ type activeScope struct {
 	Key           ScopeKey
 	TrialInterval time.Duration
 	NextTrialAt   time.Time
+
+	// ReleaseAllowance is the ramp position of a scope on probation: zero
+	// while the scope blocks, the size of the batch last released after a
+	// successful trial once it does not (R-6.8.24). Runtime-only; a restart
+	// starts a fresh trial.
+	ReleaseAllowance int
+	// BatchOutstanding is how many members of the last released batch have
+	// not finished yet. The batch's last member to finish releases the next,
+	// doubled batch; a due trial resets it, since a trial only fires when
+	// the ramp stalled.
+	BatchOutstanding int
+	// SlowStartThreshold is the ramp's memory of the last 429: half the
+	// batch size that drew it (at least the first batch). The next ramp
+	// doubles only up to it and grows by one batch member per batch from
+	// there (TCP slow start to ssthresh, then additive increase). Zero until
+	// a 429 has interrupted a ramp.
+	SlowStartThreshold int
+	// Generation counts the block activations of this scope in this run. A
+	// trial or probation member carries the generation it was released
+	// under, so an outcome from before a re-block is recognized as stale.
+	Generation uint64
 }
 
 func activeScopeFromBlockScopeRow(row *BlockScope) activeScope {
@@ -28,9 +53,10 @@ func activeScopeFromBlockScopeRow(row *BlockScope) activeScope {
 	}
 
 	return activeScope{
-		Key:           row.Key,
-		TrialInterval: row.TrialInterval,
-		NextTrialAt:   row.NextTrialAt,
+		Key:                row.Key,
+		TrialInterval:      row.TrialInterval,
+		NextTrialAt:        row.NextTrialAt,
+		SlowStartThreshold: row.SlowStartThreshold,
 	}
 }
 
@@ -43,9 +69,10 @@ func blockScopeRowFromActiveScope(scope activeScope) (*BlockScope, error) {
 	}
 
 	return &BlockScope{
-		Key:           scope.Key,
-		TrialInterval: scope.TrialInterval,
-		NextTrialAt:   scope.NextTrialAt,
+		Key:                scope.Key,
+		TrialInterval:      scope.TrialInterval,
+		NextTrialAt:        scope.NextTrialAt,
+		SlowStartThreshold: scope.SlowStartThreshold,
 	}, nil
 }
 

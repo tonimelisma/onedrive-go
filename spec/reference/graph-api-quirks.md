@@ -768,6 +768,22 @@ limits are drive-local. The service may still enforce broader quotas. The
 client simply avoids proactively suppressing unrelated work when the response
 does not identify a broader bucket with enough confidence.
 
+Throttled requests are not free. Microsoft's guidance for sync engines says
+that while waiting out a 429 or 503 a client must "pause all further requests
+… especially important in multi-threaded scenarios", that requests made
+while throttled still "accrue against your usage limits" and "will extend the
+time it takes for your app to become unthrottled", and that persistent
+offenders "will be blocked due to abusive calling patterns". `Retry-After`
+is always present on OneDrive/SharePoint 429 and 503 answers, in integer
+seconds (values from a few seconds to about an hour have been observed on
+personal drives); only OneNote resources omit it. The one published files
+figure is the per-user limit for business drives, 3,000 requests per 5
+minutes (about 10 a second); personal limits are unpublished. The sync engine
+therefore takes admitted work back when a throttle activates, sends nothing
+to the drive before the deadline, probes once, and ramps re-admission
+(`spec/design/sync-engine.md`, "Release ramps", R-6.8.24; checked
+2026-11-01).
+
 Do not rely on `RateLimit-*` headers. Microsoft's current SharePoint Online
 throttling guidance states that SharePoint "does not return or support IETF
 RateLimit headers" and that clients should honor `Retry-After` instead

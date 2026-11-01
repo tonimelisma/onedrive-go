@@ -243,8 +243,12 @@ func TestFinalizeInspectorRead_JoinsReadAndCloseErrors(t *testing.T) {
 	require.ErrorIs(t, err, closeErr)
 }
 
-// Validates: R-2.5.2, R-2.10.8
-func TestSyncStore_ReleaseScope_MakesBlockedRetryWorkReadyAndPreservesObservationIssues(t *testing.T) {
+// Validates: R-2.5.2, R-2.10.8, R-6.8.24
+//
+// A batch release makes exactly the named rows ready and keeps the scope row
+// while blocked rows remain; the batch that releases the last one deletes the
+// scope row in the same transaction. observation_issues are untouched.
+func TestSyncStore_ReleaseScopeWork_RemovesTheScopeWithItsLastBlockedRows(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -255,33 +259,78 @@ func TestSyncStore_ReleaseScope_MakesBlockedRetryWorkReadyAndPreservesObservatio
 	require.NoError(t, store.UpsertBlockScope(ctx, testBlockScope(scopeKey, 5*time.Second, now)))
 	seedObservationIssueForTest(t, store, "Shared/Docs/bad.txt", IssueRemoteWriteDenied, scopeKey)
 	seedObservationIssueForTest(t, store, "other/problem.txt", IssueInvalidFilename, ScopeKey{})
-	_, err := store.RecordBlockedRetryWork(ctx, testRetryWorkKey("Shared/Docs/file.txt", "", ActionUpload), scopeKey)
-	require.NoError(t, err)
+	work := []RetryWorkKey{
+		testRetryWorkKey("Shared/Docs/a.txt", "", ActionUpload),
+		testRetryWorkKey("Shared/Docs/b.txt", "", ActionUpload),
+		testRetryWorkKey("Shared/Docs/c.txt", "", ActionUpload),
+	}
+	for _, key := range work {
+		_, err := store.RecordBlockedRetryWork(ctx, key, scopeKey)
+		require.NoError(t, err)
+	}
 
-	require.NoError(t, store.ReleaseScope(ctx, scopeKey, now))
+	removed, err := store.ReleaseScopeWork(ctx, scopeKey, work[:2], now)
+	require.NoError(t, err)
+	assert.False(t, removed, "a blocked row remains, so the scope stays")
 
 	blocks, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+
+	retryRows, err := store.ListRetryWork(ctx)
+	require.NoError(t, err)
+	require.Len(t, retryRows, 3)
+	for _, row := range retryRows {
+		if row.Path == "Shared/Docs/c.txt" {
+			assert.True(t, row.Blocked)
+			assert.Zero(t, row.NextRetryAt)
+			continue
+		}
+		assert.False(t, row.Blocked, "%s was named", row.Path)
+		assert.Equal(t, now.UnixNano(), row.NextRetryAt)
+	}
+
+	later := now.Add(time.Minute)
+	removed, err = store.ReleaseScopeWork(ctx, scopeKey, work[2:], later)
+	require.NoError(t, err)
+	assert.True(t, removed, "the last blocked row released removes the scope")
+
+	blocks, err = store.ListBlockScopes(ctx)
+	require.NoError(t, err)
 	assert.Empty(t, blocks)
+
+	retryRows, err = store.ListRetryWork(ctx)
+	require.NoError(t, err)
+	require.Len(t, retryRows, 3)
+	for _, row := range retryRows {
+		assert.False(t, row.Blocked)
+	}
 
 	rows, err := store.ListObservationIssues(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	assert.ElementsMatch(t, []string{"Shared/Docs/bad.txt", "other/problem.txt"}, []string{rows[0].Path, rows[1].Path})
+}
 
-	retryRows, err := store.ListRetryWork(ctx)
-	require.NoError(t, err)
-	require.Len(t, retryRows, 1)
-	assert.Equal(t, "Shared/Docs/file.txt", retryRows[0].Path)
-	assert.False(t, retryRows[0].Blocked)
-	assert.Equal(t, now.UnixNano(), retryRows[0].NextRetryAt)
+// Validates: R-6.8.24
+//
+// A release that names nothing still removes a scope with no blocked work:
+// the scope row never outlives its blocked rows.
+func TestSyncStore_ReleaseScopeWork_EmptyBatchRemovesAScopeWithoutBlockedWork(t *testing.T) {
+	t.Parallel()
 
-	allRetryRows, err := store.ListRetryWork(ctx)
+	store := newTestStore(t)
+	ctx := t.Context()
+	now := time.Date(2026, 4, 19, 9, 30, 0, 0, time.UTC)
+	require.NoError(t, store.UpsertBlockScope(ctx, testBlockScope(SKService(), 5*time.Second, now)))
+
+	removed, err := store.ReleaseScopeWork(ctx, SKService(), nil, now)
 	require.NoError(t, err)
-	require.Len(t, allRetryRows, 1)
-	assert.Equal(t, "Shared/Docs/file.txt", allRetryRows[0].Path)
-	assert.False(t, allRetryRows[0].Blocked)
-	assert.Equal(t, now.UnixNano(), allRetryRows[0].NextRetryAt)
+	assert.True(t, removed)
+
+	blocks, err := store.ListBlockScopes(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, blocks)
 }
 
 // Validates: R-2.10.33

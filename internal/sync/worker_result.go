@@ -41,6 +41,10 @@ type actionCompletion struct {
 	// TrialScopeKey identifies the scope being tested by this trial.
 	TrialScopeKey ScopeKey
 
+	// TrialScopeGeneration is the scope generation the trial was released
+	// under (trackedAction.TrialScopeGeneration).
+	TrialScopeGeneration uint64
+
 	// ActionID is the TrackedAction.ID for the engine to call Complete on
 	// the DepGraph.
 	ActionID int64
@@ -84,18 +88,19 @@ func actionCompletionFromTrackedAction(
 	}
 
 	r := actionCompletion{
-		Path:          ta.Action.Path,
-		OldPath:       ta.Action.OldPath,
-		ItemID:        ta.Action.ItemID,
-		DriveID:       driveID,
-		ActionType:    ta.Action.Type,
-		Err:           actionErr,
-		ErrMsg:        "",
-		HTTPStatus:    extractHTTPStatus(actionErr),
-		RetryAfter:    extractRetryAfter(actionErr),
-		IsTrial:       ta.IsTrial,
-		TrialScopeKey: ta.TrialScopeKey,
-		ActionID:      ta.ID,
+		Path:                 ta.Action.Path,
+		OldPath:              ta.Action.OldPath,
+		ItemID:               ta.Action.ItemID,
+		DriveID:              driveID,
+		ActionType:           ta.Action.Type,
+		Err:                  actionErr,
+		ErrMsg:               "",
+		HTTPStatus:           extractHTTPStatus(actionErr),
+		RetryAfter:           extractRetryAfter(actionErr),
+		IsTrial:              ta.IsTrial,
+		TrialScopeKey:        ta.TrialScopeKey,
+		TrialScopeGeneration: ta.TrialScopeGeneration,
+		ActionID:             ta.ID,
 	}
 
 	if outcome != nil {

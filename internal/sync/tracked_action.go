@@ -19,4 +19,9 @@ type trackedAction struct {
 	// DispatchTrial, propagated through ActionCompletion so the engine knows
 	// which scope to release on trial success.
 	TrialScopeKey ScopeKey
+
+	// TrialScopeGeneration is the scope's Generation when this trial was
+	// released. A success from an earlier generation (the scope re-blocked
+	// while it ran) is an ordinary success and releases nothing.
+	TrialScopeGeneration uint64
 }

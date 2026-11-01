@@ -198,6 +198,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_LocalFolderDeleteKeepsRemoteChildAddedAfterObservation,
 		TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource,
 		TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn,
+		TestRunOnce_ThrottledBacklogRampsInsteadOfFlooding,
 		TestRunOnce_LocalFolderRenameWithChildRenameConvergesInOnePass,
 		TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth,
 		TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges,

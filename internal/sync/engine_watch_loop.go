@@ -211,6 +211,17 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 	default:
 	}
 
+	// A finished outcome may change what the next dispatch is allowed to be
+	// (a 429 activates a scope that takes the outbox back, R-6.8.24), so
+	// outcomes already in hand are applied before more work reaches the
+	// workers; otherwise an episode's 429s scale with the select's luck
+	// rather than with the transfers in flight.
+	select {
+	case completion, ok := <-p.completions:
+		return rt.handleWatchCompletionSignal(ctx, p, &completion, ok)
+	default:
+	}
+
 	dispatchCh, nextAction := rt.dispatchChannelForOutbox()
 
 	select {

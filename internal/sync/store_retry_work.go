@@ -80,22 +80,39 @@ func deleteRetryWorkByScopeTx(ctx context.Context, runner sqlTxRunner, scopeKey 
 	return nil
 }
 
-func markRetryWorkScopeReadyTx(
+// markRetryWorkReadyTx makes the named rows, blocked under scopeKey, ready
+// at nowNano: one ramp batch of a scope release (R-6.8.24). A key that is not
+// blocked under the scope any more is left alone.
+func markRetryWorkReadyTx(
 	ctx context.Context,
 	runner sqlTxRunner,
 	scopeKey string,
+	work []RetryWorkKey,
 	nowNano int64,
 ) error {
-	if _, err := runner.ExecContext(ctx,
-		`UPDATE retry_work
-		SET blocked = 0, next_retry_at = ?
-		WHERE scope_key = ? AND blocked = 1`,
-		nowNano, scopeKey,
-	); err != nil {
-		return fmt.Errorf("sync: setting retry_work scope ready for %s: %w", scopeKey, err)
+	for i := range work {
+		if _, err := runner.ExecContext(ctx,
+			`UPDATE retry_work
+			SET blocked = 0, next_retry_at = ?
+			WHERE path = ? AND old_path = ? AND action_type = ? AND scope_key = ? AND blocked = 1`,
+			nowNano, work[i].Path, work[i].OldPath, work[i].ActionType.String(), scopeKey,
+		); err != nil {
+			return fmt.Errorf("sync: setting retry_work ready for %s under %s: %w", work[i].Path, scopeKey, err)
+		}
 	}
 
 	return nil
+}
+
+func countBlockedRetryWorkForScopeTx(ctx context.Context, runner sqlTxRunner, scopeKey string) (int, error) {
+	var count int
+	if err := runner.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM retry_work WHERE scope_key = ? AND blocked = 1`, scopeKey,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("sync: counting blocked retry_work for %s: %w", scopeKey, err)
+	}
+
+	return count, nil
 }
 
 func (s *SyncStore) DeleteRetryWorkByWork(ctx context.Context, work RetryWorkKey) error {

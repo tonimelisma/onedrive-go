@@ -75,6 +75,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | One-shot sync remains a bounded observe-plan-execute run without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
 | Dry-run one-shot sync builds a preview without executor, durable cursor commits, durable observation-findings writes, or shortcut child publication, while normal engine startup/store/close housekeeping still runs. | `TestRunOnce_DryRun_NoExecution`, `TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly`, `TestLoadDryRunCurrentInputs_LocalObservationFindingsStayScratchOnly`, `TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
+| After a throttle, re-admission ramps from a bounded batch released in held order, a further 429 re-blocks and restarts the ramp, admitted work a scope activation blocks is taken back from the watch and one-shot outboxes, the scope row is deleted with its last blocked rows, and the 429s an episode costs stay bounded by the transfers in flight (R-6.8.24). | `TestRunOnce_ThrottledBacklogRampsInsteadOfFlooding`, `TestNextReleaseAllowance_RampsFromTheWorkerCountAndDoubles`, `TestEngineFlow_TrialSuccess_ReleasesOneBatchAndKeepsTheScopeOnProbation`, `TestEngineFlow_ThrottledMemberDuringProbation_ReblocksRetiresTheOutboxAndResetsTheRamp`, `TestWatchRuntime_ScopeActivationRetiresAdmittedWorkItBlocks`, `TestOneShotRunner_ScopeActivationRetiresPendingOutbox`, `TestSyncStore_ReleaseScopeWork_RemovesTheScopeWithItsLastBlockedRows`, `TestSyncStore_ReleaseScopeWork_EmptyBatchRemovesAScopeWithoutBlockedWork`, `TestSlowStartThresholdAfterThrottle_RemembersHalfTheBatchThatDrewThe429`, `TestSyncStore_BlockScope_Roundtrip`, `TestEngineFlow_ReleaseScopeBatch_ReportsThroughRuntimeSignals` |
 | Superseded action completions retire exact stale work without success, ordinary retry, blocker mutation, or old-plan dependent admission. | `TestClassifyResult_LocalPersistenceAndScopeRouting`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess`, `TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEmptyScope`, `TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOrRetry` |
 | Admission validates ready actions against committed current truth before worker dispatch. Remote mismatches retire old-plan work as superseded, do not persist ordinary retry work, do not release dependents, and dirty watch mode for replacement planning. | `TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependents` |
 | Canceled worker/admission freshness checks fail closed without store reads or side effects, while shutdown completion may bypass canceled-context freshness only to collapse newly-ready graph frontier without dispatch. | `TestActionFreshness_CanceledContextFailsClosedWithoutStoreRead`, `TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReadyAsShutdown` |
@@ -1126,6 +1127,76 @@ discarded only after its prior `scope_key` no longer owns any blocked
 `retry_work`. If blocked work remains under the old scope, the engine rearms that
 retained scope's next trial interval in the same transition so it does not stay
 immediately due after the just-finished trial.
+
+### Release ramps and activation retires admitted work
+
+Measured on a live account on 2026-11-01 (R-6.8.24): with 10,000 small
+uploads planned against a rate-limited drive, a successful trial released the
+whole backlog at once, the workers drained it through one 429 after another,
+each failure re-held its action and re-activated the scope, and the next trial
+repeated the flood. The client made 22-28 requests a second, of which 3,167
+and then 5,416 per five-minute window were 429s, while about ten files were
+uploaded, and `throttle:target:drive:<id>` was "released" 191 times in 15
+minutes against one announced activation. Two rules fix both halves:
+
+- **Release ramps.** A successful trial puts the scope on probation instead of
+  removing it: `releaseScopeBatch` releases the first `nextReleaseAllowance`
+  held entries of the scope in held order (the transfer worker count, at
+  least `releaseRampMinimumBatch`), the store marks exactly those rows ready
+  (`ReleaseScopeWork`), and the scope stays in the ledger with that allowance
+  (`activeScope.ReleaseAllowance`) and a trial re-armed one interval out, so
+  a probation that stalls (every member superseded, a replan rebuilt the
+  runtime) recovers by an ordinary trial. The batch's members are dispatched
+  as trials of the scope, which is what lets admission pass them while the
+  scope still blocks everything else, and what routes their outcomes back:
+  the batch's last member to finish (`BatchOutstanding` reaches zero)
+  doubles the allowance and releases the next batch. The ramp advances per
+  batch, not per success: releasing a doubled batch on every member success
+  cascaded 4+8+16+32+64 admissions off five successes, so the whole backlog
+  was "released" (and the scope removed) long before it had run, and the
+  next 429 began a new announced episode on every pass. A batch whose last
+  member failed releases nothing; the trial that is due one interval later
+  resets the count and its success continues the ramp. The scope is
+  removed, the `scope_released` event emitted and "Resumed syncing" said
+  once, by the batch that releases the last blocked row (the store deletes
+  the row in that transaction). A 429 by a member re-blocks:
+  `extendScopeTrial` takes the new `Retry-After`, resets the allowance, and
+  the next trial starts from the first batch again. The 429 also leaves the
+  ramp a memory, `SlowStartThreshold` (`slowStartThresholdAfterThrottle`):
+  half the batch that drew it, at least the first batch. The next ramp
+  doubles only up to that threshold and then grows by one per batch
+  (`nextReleaseAllowance`; TCP's slow start to ssthresh, then additive
+  increase, RFC 5681 §3.1), because pure doubling overshoots the limit by up
+  to 2x on every cycle and each overshoot costs a full `Retry-After` plus
+  Microsoft's penalty for requests made while throttled. The threshold is
+  persisted in `block_scopes.slow_start_threshold`: a one-shot pass builds a
+  fresh runtime from the store, and a watch restart does too, so a memory
+  kept only in the ledger would be lost exactly when it is needed. The
+  allowance and the outstanding count stay runtime-only; a restart starts a
+  fresh trial, and since persisted scopes are loaded before any admission, a
+  run started inside the `Retry-After` holds everything the scope blocks and
+  sends nothing to the drive before `next_trial_at`.
+- **Activation retires admitted work.** Each block activation
+  (`applyBlockScope`, `extendScopeTrial`,
+  `transitionTrialScopeToPersistedBlock`) bumps the scope's `Generation` and
+  then asks the runtime for the admitted, not yet dispatched work the scope
+  blocks (`admittedWorkOwner.takeAdmittedWorkBlockedBy`: the watch loop's
+  outbox, or the one-shot results loop's); the flow holds it under the scope
+  and persists it blocked through the ordinary `admissionHoldScope` path.
+  Work a worker already took finishes and is classified normally. A member's
+  completion carries the generation it was released under
+  (`TrialScopeGeneration`): a success from before a re-block is an ordinary
+  success and releases nothing, and a member whose scope was removed while
+  it ran is handled as an ordinary completion (its 429 starts a new episode).
+  One-shot's dispatch channel is unbuffered like watch's, so admitted work
+  stays engine-owned until a worker takes it; with a plan-sized buffer there
+  was nothing to take back. Both loops apply finished outcomes before handing
+  out the next action, so a 429 is seen before more work reaches the workers
+  and an episode costs at most the transfers already in flight.
+
+The announcement rules (R-6.6.30) are unchanged: one Info per throttling
+episode, repeats and batch releases at Debug, "Resumed syncing" once when the
+scope is actually removed.
 
 A successful completion clears the action's `retry_work` row
 (`clearRetryWorkOnSuccess`). A store failure there is returned like any other

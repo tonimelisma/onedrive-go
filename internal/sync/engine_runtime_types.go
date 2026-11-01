@@ -21,6 +21,12 @@ type engineFlow struct {
 	// pass, which production leaves disabled.
 	inspect watchInspector
 
+	// admitted is the runtime holding admitted, not yet dispatched work. A
+	// block scope that activates takes back what it blocks through it
+	// (R-6.8.24). Watch and one-shot each supply their own outbox; a bare
+	// flow has none.
+	admitted admittedWorkOwner
+
 	// The four owners below split this run's mutable state by authority; see
 	// engine_runtime_owners.go. One goroutine still owns all four.
 	sched   actionScheduler
@@ -40,13 +46,14 @@ type engineFlow struct {
 
 func newEngineFlow(engine *Engine) *engineFlow {
 	flow := &engineFlow{
-		engine:  engine,
-		deps:    newRuntimeDeps(engine),
-		signals: noRuntimeSignals{},
-		inspect: noWatchInspector{},
-		runID:   engine.nextRuntimeRunID(),
-		sched:   newActionScheduler(),
-		retries: newRetryLedger(),
+		engine:   engine,
+		deps:     newRuntimeDeps(engine),
+		signals:  noRuntimeSignals{},
+		inspect:  noWatchInspector{},
+		admitted: noAdmittedWork{},
+		runID:    engine.nextRuntimeRunID(),
+		sched:    newActionScheduler(),
+		retries:  newRetryLedger(),
 
 		supersedeStreaks: make(map[string]int),
 	}
@@ -55,10 +62,30 @@ func newEngineFlow(engine *Engine) *engineFlow {
 
 type oneShotRunner struct {
 	*engineFlow
+
+	// outbox is the admitted work the results loop has not handed to a
+	// worker yet. Owned by the results loop goroutine; a scope activation
+	// applied by that goroutine takes blocked work back out of it.
+	outbox []*trackedAction
 }
 
 func newOneShotRunner(engine *Engine) *oneShotRunner {
-	return &oneShotRunner{
+	runner := &oneShotRunner{
 		engineFlow: newEngineFlow(engine),
 	}
+	runner.admitted = runner
+
+	return runner
+}
+
+// takeAdmittedWorkBlockedBy satisfies admittedWorkOwner for the one-shot
+// results loop.
+func (r *oneShotRunner) takeAdmittedWorkBlockedBy(key ScopeKey) []*trackedAction {
+	taken, kept := takeOutboxBlockedBy(r.outbox, key)
+	if len(taken) == 0 {
+		return nil
+	}
+	r.outbox = kept
+
+	return taken
 }

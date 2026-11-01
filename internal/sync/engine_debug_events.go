@@ -10,6 +10,8 @@ const (
 	engineDebugEventScopeActivated                      engineDebugEventType = "scope_activated"
 	engineDebugEventScopeReleased                       engineDebugEventType = "scope_released"
 	engineDebugEventScopeDiscarded                      engineDebugEventType = "scope_discarded"
+	engineDebugEventScopeBatchReleased                  engineDebugEventType = "scope_batch_released"
+	engineDebugEventAdmittedWorkRetired                 engineDebugEventType = "admitted_work_retired"
 	engineDebugEventRetryKicked                         engineDebugEventType = "retry_kicked"
 	engineDebugEventStartupScopeNormalized              engineDebugEventType = "startup_scope_normalized"
 	engineDebugEventBootstrapQuiesced                   engineDebugEventType = "bootstrap_quiesced"

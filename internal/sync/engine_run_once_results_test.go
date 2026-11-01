@@ -137,9 +137,8 @@ func TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOr
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
-	outbox, err := runner.handleOneShotCompletion(
+	err := runner.handleOneShotCompletion(
 		t.Context(),
-		nil,
 		nil,
 		nil,
 		nil,
@@ -153,7 +152,7 @@ func TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOr
 	)
 
 	require.NoError(t, err)
-	assert.Empty(t, outbox)
+	assert.Empty(t, runner.outbox)
 	assert.Equal(t, 0, runner.sched.graph.InFlightCount())
 	assert.Equal(t, 0, runner.sched.runningCount)
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
@@ -240,9 +239,8 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterFatalCompletesReleasedReadyA
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
-	outbox, err := runner.handleOneShotCompletion(
+	err := runner.handleOneShotCompletion(
 		t.Context(),
-		nil,
 		nil,
 		nil,
 		assert.AnError,
@@ -255,7 +253,7 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterFatalCompletesReleasedReadyA
 	)
 
 	require.ErrorIs(t, err, assert.AnError)
-	assert.Empty(t, outbox, "shutdown completion should consume newly-ready dependents immediately")
+	assert.Empty(t, runner.outbox, "shutdown completion should consume newly-ready dependents immediately")
 	assert.Equal(t, 0, runner.sched.graph.InFlightCount(), "released dependents should complete as shutdown work, not remain dispatchable")
 }
 
@@ -283,9 +281,8 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReady
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	outbox, err := runner.handleOneShotCompletion(
+	err := runner.handleOneShotCompletion(
 		ctx,
-		nil,
 		nil,
 		nil,
 		nil,
@@ -298,7 +295,7 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReady
 	)
 
 	require.NoError(t, err)
-	assert.Empty(t, outbox, "canceled shutdown completion should consume newly-ready dependents immediately")
+	assert.Empty(t, runner.outbox, "canceled shutdown completion should consume newly-ready dependents immediately")
 	assert.Equal(t, 0, runner.sched.graph.InFlightCount(), "released dependents should complete as shutdown work after cancellation too")
 }
 
@@ -379,10 +376,10 @@ func TestOneShotRunner_ReleaseIdleDueHeldWork_ClearsShutdownCompletedOutboxOnRed
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
-	outbox, err, handled := runner.releaseIdleDueHeldWork(t.Context(), &Baseline{})
+	err, handled := runner.releaseIdleDueHeldWork(t.Context(), &Baseline{})
 	require.True(t, handled)
 	require.ErrorContains(t, err, "reading observation state for action freshness")
-	assert.Empty(t, outbox, "shutdown-completed releases must not be returned for a second completion pass")
+	assert.Empty(t, runner.outbox, "shutdown-completed releases must not be queued for a second completion pass")
 	assert.Equal(t, 1, runner.sched.graph.InFlightCount(), "only the failing publication action should remain unresolved")
 
 	_, concretePresent := runner.sched.graph.Get(1)

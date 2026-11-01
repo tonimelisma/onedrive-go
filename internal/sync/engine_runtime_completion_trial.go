@@ -7,18 +7,29 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
 
+// applyTrialReleaseDecision is a successful trial: it releases the next ramp
+// batch of the scope's blocked work (R-6.8.24) and then applies the success
+// itself. Dependents the success admits are blocked by the still-probationary
+// scope and join a later batch. On an error the batch already admitted is
+// returned with it, so the caller completes it as shutdown rather than
+// leaving it queued.
 func (flow *engineFlow) applyTrialReleaseDecision(
 	ctx context.Context,
 	current *trackedAction,
 	r *actionCompletion,
 	trialScopeKey ScopeKey,
 ) ([]*trackedAction, error) {
-	if err := flow.releaseScope(ctx, trialScopeKey); err != nil {
-		return nil, err
+	batch, err := flow.releaseScopeBatch(ctx, trialScopeKey, r.TrialScopeGeneration)
+	if err != nil {
+		return batch, err
 	}
-	flow.releaseHeldScope(trialScopeKey)
 
-	return flow.applyCompletionSuccess(ctx, current, r)
+	dependents, err := flow.applyCompletionSuccess(ctx, current, r)
+	if err != nil {
+		return batch, err
+	}
+
+	return append(batch, dependents...), nil
 }
 
 func (flow *engineFlow) applyTrialExtendDecision(

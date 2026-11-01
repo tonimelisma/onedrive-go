@@ -6,42 +6,51 @@ import (
 	"time"
 )
 
-// ReleaseScope atomically applies the semantic "this scope condition has
-// resolved; blocked work may run again" transition.
-//
-// In one transaction it deletes the persisted block scope and marks blocked
-// retry work ready immediately. observation_issues remain observation-owned.
-func (s *SyncStore) ReleaseScope(
+// ReleaseScopeWork applies one ramp batch of a scope release (R-6.8.24): the
+// named rows, blocked under scopeKey, become ready at now, and when no
+// blocked row remains under the scope afterwards the block scope row is
+// deleted in the same transaction, so a persisted scope never outlives its
+// blocked work. The engine names the rows in its held order; the store has
+// nothing to order blocked rows by (they all carry next_retry_at = 0).
+// observation_issues remain observation-owned. It reports whether the scope
+// row was removed.
+func (s *SyncStore) ReleaseScopeWork(
 	ctx context.Context,
 	scopeKey ScopeKey,
+	work []RetryWorkKey,
 	now time.Time,
-) (err error) {
+) (scopeRemoved bool, err error) {
 	wire := scopeKey.String()
 	nowNano := now.UnixNano()
 
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: begin release-scope tx for %s: %w", wire, err)
+		return false, fmt.Errorf("sync: begin release-scope tx for %s: %w", wire, err)
 	}
 	defer func() {
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback release-scope tx for %s", wire))
 	}()
 
-	if _, execErr := tx.ExecContext(ctx,
-		`DELETE FROM block_scopes WHERE scope_key = ?`, wire,
-	); execErr != nil {
-		return fmt.Errorf("sync: deleting block scope %s: %w", wire, execErr)
+	if retryErr := markRetryWorkReadyTx(ctx, tx, wire, work, nowNano); retryErr != nil {
+		return false, retryErr
 	}
-
-	if retryErr := markRetryWorkScopeReadyTx(ctx, tx, wire, nowNano); retryErr != nil {
-		return retryErr
+	remaining, countErr := countBlockedRetryWorkForScopeTx(ctx, tx, wire)
+	if countErr != nil {
+		return false, countErr
+	}
+	if remaining == 0 {
+		if _, execErr := tx.ExecContext(ctx,
+			`DELETE FROM block_scopes WHERE scope_key = ?`, wire,
+		); execErr != nil {
+			return false, fmt.Errorf("sync: deleting block scope %s: %w", wire, execErr)
+		}
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing release-scope for %s: %w", wire, err)
+		return false, fmt.Errorf("sync: committing release-scope for %s: %w", wire, err)
 	}
 
-	return nil
+	return remaining == 0, nil
 }
 
 // DiscardScope atomically applies the semantic "this scope and the work under
