@@ -35,7 +35,7 @@ func TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	synced := "hello"
+	synced := "rescan keeps the synced content"
 	syncedHash := hashContentQuickXor(t, synced)
 	seedBaseline(t, eng.baseline, ctx, []actionOutcome{{
 		Action:          ActionDownload,
