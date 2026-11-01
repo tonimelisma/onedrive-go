@@ -228,17 +228,23 @@ func isPreAuthDownloadUnauthorized(err error) bool {
 }
 
 // downloadFromURLWithRange streams content from a pre-authenticated URL with
-// a Range header. The URL is pre-authenticated, so no Authorization header is
-// sent. Only a 206 whose Content-Range starts at offset and spans the item's
-// size is appended.
+// a Range header. The URL is validated against the content host allow-list
+// first and, being pre-authenticated, is sent without an Authorization
+// header. Only a 206 whose Content-Range starts at offset and spans the
+// item's size is appended.
 func (c *Client) downloadFromURLWithRange(
 	ctx context.Context, item *Item, w io.Writer, offset int64,
 ) (int64, error) {
+	target, err := c.validatedDownloadURL(item.DownloadURL)
+	if err != nil {
+		return 0, err
+	}
+
 	ctx, watchdog := c.watchTransfer(ctx)
 	defer watchdog.stop()
 
 	resp, err := c.doPreAuth(ctx, "range download", func() (*http.Request, error) {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, string(item.DownloadURL), http.NoBody)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating range download request: %w", reqErr)
 		}
@@ -349,18 +355,24 @@ func mediaTypeOrUnknown(contentType string) string {
 }
 
 // downloadFromURL streams content from a pre-authenticated URL directly to the writer.
-// The URL is pre-authenticated by the Graph API, so no Authorization header is needed.
+// The URL is validated against the content host allow-list first and, being
+// pre-authenticated by the Graph API, is sent without an Authorization header.
 // The URL itself is never logged because it contains embedded auth tokens (architecture.md section 9.2).
 // Only the HTTP request/response cycle is retried; streaming (io.Copy) happens after
 // doPreAuthRetry returns, so partial-stream failures are handled by the caller.
 func (c *Client) downloadFromURL(ctx context.Context, item *Item, w io.Writer) (int64, error) {
 	const offset = 0
 
+	target, err := c.validatedDownloadURL(item.DownloadURL)
+	if err != nil {
+		return 0, err
+	}
+
 	ctx, watchdog := c.watchTransfer(ctx)
 	defer watchdog.stop()
 
 	resp, err := c.doPreAuth(ctx, "download", func() (*http.Request, error) {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, string(item.DownloadURL), http.NoBody)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
 		if reqErr != nil {
 			return nil, fmt.Errorf("graph: creating download request: %w", reqErr)
 		}

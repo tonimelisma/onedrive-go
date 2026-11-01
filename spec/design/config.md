@@ -37,6 +37,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 
 | Behavior | Evidence |
 | --- | --- |
+| The config file is written owner-only, because its section keys name the signed-in accounts (R-6.8.23). | `TestAtomicWriteFile_SetsPermissions` |
 | Drive resolution applies pause semantics consistently, including expired timed pauses. | `TestResolveDrives_ExcludesPausedByDefault`, `TestResolveDrives_IncludePausedWhenRequested`, `TestClearExpiredPauses_ClearsExpired` |
 | `buildResolvedDrive` owns defaulting and per-drive override materialization for sync callers. | `TestBuildResolvedDrive_GlobalDefaults`, `TestBuildResolvedDrive_NoPerDriveOverridesBeyondDriveFields`, `TestBuildResolvedDrive_TimedPauseExpired` |
 | Standalone shared-folder drives always preserve the canonical remote root item even when the backing drive ID comes from the catalog. | `TestBuildResolvedDrive_SharedCanonicalSetsRootItem`, `TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem` |
@@ -239,7 +240,10 @@ runtime uses, so commented-out defaults stay aligned with the real schema.
 
 All authoritative config/account/drive-metadata writes go through
 `fsroot.Root.AtomicWrite`. The config package does not leave temp-file and
-rename choreography to callers.
+rename choreography to callers. The file is written `0600`
+(`configFilePermissions`): its `[personal:<email>]` section keys name the
+signed-in accounts, and the threat model counts other local users reading
+managed files as an actor.
 
 Section-header rewrites are also config-owned. `RenameDriveSections()` edits
 only the quoted section name, leaving comments, key order, and section body

@@ -81,6 +81,9 @@ This keeps domain-specific logic close to its tests without reopening the public
 | Auth flows, token persistence, and browser/device login remain Graph-boundary responsibilities. | `internal/graph/auth_test.go` (`TestDoLogin_Success`, `TestDoLogin_DeviceAuthError`, `TestSaveLoadToken_RoundTrip`), `internal/graph/auth_browser_callback_test.go` (`TestHandleOAuthCallback_RepeatedCallbackDoesNotBlock`), `internal/graph/client_auth_refresh_test.go` (`TestDeviceLoginError_AADOutcomesArePlain`) |
 | Graph request normalization and error translation stay inside the Graph boundary. | `internal/graph/client_test.go` (`TestDo_ErrorClassification`, `TestDo_ParsesStructuredGraphErrors`), `internal/graph/errors_classification_test.go` (`TestIsQuotaExhaustedAndIsNotSupported`), `internal/graph/normalize_test.go` |
 | Drive, shared-item, and upload-session quirks are handled at the Graph edge rather than in CLI or sync. | `internal/graph/drives_test.go`, `internal/graph/shares_test.go` (`TestResolveShareURL_PreservesRemoteItemIdentity`), `internal/graph/items_test.go` (`TestToItem_SharedOwner_FallbackChain`), `internal/graph/quirks_test.go` (`TestQueryUploadSession_ReturnsNextExpectedRanges`), `internal/graph/upload_test.go` |
+| `@microsoft.graph.downloadUrl` is validated against the content host allow-list before either download route sends a request, the refusal never echoes the URL, and only a loopback base URL (a test fixture) admits loopback pre-auth URLs (R-6.8.22). | `TestDownload_RejectsUntrustedDownloadURL`, `TestValidateDownloadURL`, `TestParseAndValidatePreAuthURL`, `TestNewClient_LoopbackBaseURLAcceptsLoopbackPreAuthURLs` |
+| The Socket.IO notification URL is sensitive in both spellings (`/callback` and the `/socket.io` websocket form, or any `snthgk` query), and `*url.Error` redaction runs before wrapping (R-6.8.17). | `TestIsSensitiveURL_SocketIONotificationURLs`, `TestRedactURLError_ScrubsSocketIOWebsocketURL`, `TestRedactURLError_MustRunBeforeWrapping` |
+| Item permissions and site search follow `@odata.nextLink` through `stripBaseURL`, bounded by the shared page cap; site search stops at the caller's limit (R-6.7.32). | `TestListItemPermissions_FollowsNextLinkAcrossPages`, `TestListItemPermissions_NextLinkOutsideBaseURLIsRefused`, `TestSearchSites_FollowsNextLinkAcrossPages`, `TestSearchSites_StopsFollowingAtTheLimit` |
 
 ## Authentication (`auth.go`)
 
@@ -196,7 +199,7 @@ the next step:
 - `NotificationURL`: sensitive outbound Socket.IO callback URL, wrapped in a redacted log type
 - `ExpirationTime`: parsed RFC3339 expiry when Graph supplies one
 
-The graph boundary validates the returned notification URL before exposing it to callers. Accepted production endpoints must be HTTPS on Microsoft `*.svc.ms` hosts. The client also redacts `notificationUrl` values from structured Graph errors and plain-text URL scrubbing, so websocket callback URLs never appear in logs or surfaced error text.
+The graph boundary validates the returned notification URL before exposing it to callers. Accepted production endpoints must be HTTPS on Microsoft `*.svc.ms` hosts. The client also redacts `notificationUrl` values from structured Graph errors and plain-text URL scrubbing. `isSensitiveURL` recognizes the URL in both spellings — the `/callback` form Graph returns and the `wss://…/socket.io/?…&snthgk=…` form observation dials — and `snthgk`, the query parameter that carries its credential, is on the sensitive-key list, so the URL is scrubbed wherever it appears in error text (`TestIsSensitiveURL_SocketIONotificationURLs`). The dial itself happens in observation, which drops the URL from a failed dial before logging it (see [sync-observation.md](sync-observation.md)), because `redactURLError` cannot reach a `*url.Error` once `fmt.Errorf` has wrapped it (`TestRedactURLError_MustRunBeforeWrapping`).
 
 The Graph client does not own websocket runtime state. It performs one synchronous endpoint fetch and returns validated data; connection lifecycle, Engine.IO / Socket.IO framing, ping/pong, reconnect, and renewal are observation-layer responsibilities. The returned `notificationUrl` is the raw Graph callback URL, not the final RFC6455 websocket URL — observation is responsible for the `/socket.io/?EIO=4&transport=websocket` transform described in the reference layer.
 
@@ -250,7 +253,7 @@ instead of a raw "any write/owner role means writable" heuristic:
 
 ## Transfers
 
-- `download.go`: streaming download with content URL. A ranged read is bound to a `DownloadVersion` and accepted only as a 206 whose Content-Range starts at the offset and spans the item (`validateContentRange`, `ErrRangeResumeRejected`); for a hashless item, an HTML or JSON answer of another type whose length is not the item's is `ErrUnexpectedDownloadBody` (`checkDownloadBodyType`); hashed items are never gated by type, since the hash decides
+- `download.go`: streaming download with content URL. `@microsoft.graph.downloadUrl` is server-supplied, so both routes pass it through `validatedDownloadURL` — HTTPS, no IP literal, a host on the content allow-list shared with upload sessions (`preAuthContentHosts`) — before building the request, and the refusal never echoes the URL (R-6.8.22, `TestDownload_RejectsUntrustedDownloadURL`). A ranged read is bound to a `DownloadVersion` and accepted only as a 206 whose Content-Range starts at the offset and spans the item (`validateContentRange`, `ErrRangeResumeRejected`); for a hashless item, an HTML or JSON answer of another type whose length is not the item's is `ErrUnexpectedDownloadBody` (`checkDownloadBodyType`); hashed items are never gated by type, since the hash decides
 - `item_create.go`: new files. `CreateFile` posts the name in a JSON body with `conflictBehavior=fail`; `Upload` and `CreateUploadSession` then send the content by item ID through a session conditional on the created eTag, and a zero-byte file is the created item alone (R-5.6.14, L-01). No name ever goes into a URL: a path route turned `v1.0` into folder `_api` holding `v2.0` (probe 4)
 - `upload.go`: upload sessions for every non-empty file (320 KiB-aligned chunks) and the zero-byte simple PUT overwrite
 - `shares.go`: raw share-link resolution into underlying shared item identity
@@ -340,7 +343,11 @@ loop is bounded.
 
 Both halves were incomplete. `/me/drives` and `/sites/{id}/drives` decoded a
 single page and stopped -- and the response type did not even declare the
-continuation field, so dropping it was undetectable. That failure is silent in
+continuation field, so dropping it was undetectable. `ListItemPermissions`
+and `SearchSites` had the same shape until later: a write grant on a second
+permissions page went unseen, and a site past the first search page vanished
+(`TestListItemPermissions_FollowsNextLinkAcrossPages`,
+`TestSearchSites_FollowsNextLinkAcrossPages`). That failure is silent in
 the worst way: the caller receives a short list that looks complete, and a
 drive simply does not exist as far as the rest of the program is concerned.
 
@@ -349,8 +356,14 @@ than a fixed number of pages because a circular continuation would otherwise
 loop until the process died; the plain listings had no such guard. They share
 one now.
 
-Not every listing is paged. `SearchSites` takes a caller-supplied limit and
-passes it as `$top`, so its truncation is requested rather than accidental.
+Every continuation goes through `stripBaseURL`, which refuses a link off the
+client's base URL, so a hostile `@odata.nextLink` cannot redirect the bearer
+elsewhere (`TestListItemPermissions_NextLinkOutsideBaseURLIsRefused`).
+
+`SearchSites` takes a caller-supplied limit. Graph treats the `$top` it is
+sent as a page size, not a result cap, so the walk follows `@odata.nextLink`
+until that many sites are in hand or the pages run out, and never returns
+more than the limit (`TestSearchSites_StopsFollowingAtTheLimit`).
 
 ## Response Body Bounds
 
@@ -595,10 +608,10 @@ The graph package intentionally keeps runtime ownership narrow:
 - Search API calls URL-escape query parameters to prevent special characters from breaking URL construction.
 - `internal/tokenfile` is intentionally pure OAuth token I/O. It persists only the wrapped `oauth2.Token`, rejects unknown JSON fields, and never writes repo-specific metadata alongside the token.
 - Token file reads and writes use `internal/fsroot` after config-driven token resolution, so open/read/temp-file creation/chmod/fsync/rename all stay inside one managed-state root capability.
-- `client_preauth.go` is the sole raw `http.Client.Do` production boundary. Graph base URLs and pre-auth URLs are validated before a request reaches that call; the remaining inline `gosec` suppression there is intentional because the linter cannot prove the validation flow.
+- `client_preauth.go` is the sole raw `http.Client.Do` production boundary. Graph base URLs and pre-auth URLs are validated before a request reaches that call; the remaining inline `gosec` suppression there is intentional because the linter cannot prove the validation flow. The validators are one `urlValidators` set built by `newURLValidators`: `uploadURL`, `downloadURL`, `contentRedirect` (all the content host allow-list), `copyMonitor` and `socketIO`. A loopback base URL — admitted by `validateGraphBaseURL` only for test fixtures, and not settable by users — wraps each in `loopbackTolerant`, so a fixture's loopback pre-auth URLs are accepted while every other host still faces the production list (`TestNewClient_LoopbackBaseURLAcceptsLoopbackPreAuthURLs`). Production clients never get the wrapper.
 - Graph/API quirk handling requires either captured payload evidence in CI/tests/logs or a reproducible documented observation with enough detail to classify safely. One-off incidents without recoverable payload evidence stay documented as reference notes only and do not become permanent runtime normalization rules.
 - Broader throttle coordination beyond the proved remote target is deferred until ordinary file traffic provides reliable bucket identity or equally strong evidence for widening. Today the client intentionally blocks only the narrowest known drive/shared boundary. [planned]
-- Upload and async-copy pre-auth URL validation: verify HTTPS scheme and trusted Microsoft hosts on upload session and copy monitor URLs before use. Both copy monitor and upload-session validation explicitly allow Personal-account URLs on `microsoftpersonalcontent.com` after live `e2e_full` coverage captured upload-session URLs on that host family. [verified]
+- Upload, download and async-copy pre-auth URL validation: verify HTTPS scheme and trusted Microsoft hosts on upload session, `@microsoft.graph.downloadUrl` and copy monitor URLs before use. Both copy monitor and upload-session validation explicitly allow Personal-account URLs on `microsoftpersonalcontent.com` after live `e2e_full` coverage captured upload-session URLs on that host family. [verified]
 - Audit all `slog.*` calls for potential secret leakage (tokens, pre-auth URLs). [verified]
 - Audit all error message strings for embedded secrets — `GraphError.Message` and `RawBody` are redacted before exposure. [verified]
 - Test that captures log output and verifies no tokens or pre-auth URLs appear. [verified]

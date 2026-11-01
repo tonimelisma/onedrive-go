@@ -86,6 +86,7 @@ except that the type had once been public.
 | Child-before-parent windows resolve from the window itself without reads, and a window needing more ancestor reads than one budget completes on replay without re-reading (R-2.15.4). | `TestFullDelta_CrossPageChildBeforeParentResolvesWithoutFetch`, `TestFullDelta_ManyOrphansCompleteAcrossReplaysWithoutRefetching` |
 | Watch re-checks address an NFD-named entry by its spelling on disk on byte-exact filesystems: a delete event for a file that still exists is not a delete, an identity match is not a move while the synced file is still there, a full scan re-adds the watch of an NFD-named folder on its own spelling, and a case-collision peer is tracked and re-emitted under its stored path (R-2.13.2). | `TestWatchRechecks_FindTheNFDNamedLocalFile`, `TestRewatchUnwatchedDirectories_WatchesTheNFDNamedFolder`, `TestHandleDelete_ReemitsCollisionPeerUnderItsStoredPath`, `TestHandleDelete_DeletingTheNFDNamedPeerReemitsTheOther` |
 | Local watch prefiltering keeps unknown-kind include-root and include-ancestor events observable until stat/type-aware observation can decide the exact item kind. | `TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths` |
+| A failed websocket dial is reported without the URL that was dialed: `net/http` embeds it in `*url.Error` and it carries the notification URL's `snthgk` credential, so `connect` strips it to host, operation and cause before the retry log line and the lifecycle event see it (R-6.8.17). | `TestSocketIOWakeSource_DialFailureNeverLogsTheNotificationURL` |
 
 ## Remote Observation
 
@@ -93,7 +94,7 @@ except that the type had once been public.
 
 - one-shot `FullDelta`
 - watch-mode polling
-- optional Socket.IO wakeups that tell the observer to poll sooner
+- optional Socket.IO wakeups that tell the observer to poll sooner. The wake source dials the notification URL Graph returned, rewritten to `wss://…/socket.io/?EIO=4&transport=websocket` with its `snthgk` credential kept in the query. A dial that fails comes back from `coder/websocket` wrapping the HTTP client's `*url.Error`, whose text is the whole URL; `socketIODialError` rebuilds the failure from host, operation and cause so the credential never reaches the first-retry Info line or the lifecycle event (`TestSocketIOWakeSource_DialFailureNeverLogsTheNotificationURL`)
 
 Important properties:
 

@@ -745,3 +745,70 @@ func TestDownload_ErrorDocumentWithStatus200IsRejected(t *testing.T) {
 		})
 	}
 }
+
+// Validates: R-6.8.22
+//
+// @microsoft.graph.downloadUrl is server-supplied. The client used to dispatch
+// it as given, so a spoofed or hostile metadata answer could point the
+// unauthenticated download request anywhere. The default validator holds it
+// to HTTPS on the Microsoft content hosts, the refusal happens before any
+// request is sent, and its text never echoes the URL, whose query carries
+// the credential.
+func TestDownload_RejectsUntrustedDownloadURL(t *testing.T) {
+	var contentRequests atomic.Int32
+	contentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		contentRequests.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer contentSrv.Close()
+
+	contentHost := strings.TrimPrefix(contentSrv.URL, "http://")
+
+	tests := []struct {
+		name        string
+		downloadURL string
+		wantReason  string
+	}{
+		{name: "http scheme", downloadURL: "http://" + contentHost + "/dl?tempauth=SECRETTOKEN", wantReason: "must use https"},
+		{name: "IP literal", downloadURL: "https://" + contentHost + "/dl?tempauth=SECRETTOKEN", wantReason: "IP literal"},
+		{name: "non-Microsoft host", downloadURL: "https://evil.example.com/dl?tempauth=SECRETTOKEN", wantReason: "is not allowed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				writeTestResponsef(t, w, `{
+					"id": "item-1", "name": "a.txt", "size": 2, "eTag": "v1",
+					"createdDateTime": "2024-01-01T00:00:00Z",
+					"lastModifiedDateTime": "2024-01-01T00:00:00Z",
+					"parentReference": {"id": "p", "driveId": "d"},
+					"file": {"mimeType": "text/plain"},
+					"@microsoft.graph.downloadUrl": %q
+				}`, tt.downloadURL)
+			}))
+			defer graphSrv.Close()
+
+			// The production validator, not the loopback-tolerant one a
+			// loopback base URL installs: this test is about the default.
+			client := newTestClient(t, graphSrv.URL)
+			client.validators.downloadURL = validateDownloadURL
+
+			var buf bytes.Buffer
+			_, err := client.Download(t.Context(), driveid.New("d"), "item-1", &buf)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantReason)
+			assert.NotContains(t, err.Error(), "SECRETTOKEN")
+			assert.NotContains(t, err.Error(), tt.downloadURL)
+
+			_, err = client.DownloadRange(t.Context(), driveid.New("d"), "item-1", &buf, 1, DownloadVersion{ETag: "v1"})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantReason)
+			assert.NotContains(t, err.Error(), "SECRETTOKEN")
+			assert.NotContains(t, err.Error(), tt.downloadURL)
+
+			assert.Zero(t, contentRequests.Load(), "a refused download URL must never be requested")
+			assert.Empty(t, buf.Bytes())
+		})
+	}
+}

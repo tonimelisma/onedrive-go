@@ -997,6 +997,11 @@ func TestAtomicWriteFile_CreatesParentDirectory(t *testing.T) {
 	assert.Equal(t, "hello", string(data))
 }
 
+// Validates: R-6.8.23
+//
+// The config file names accounts in its `personal:<email>` section keys, so
+// it is owner-only. The literal mode is asserted, not the constant, so a
+// loosened constant fails here.
 func TestAtomicWriteFile_SetsPermissions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
@@ -1006,7 +1011,7 @@ func TestAtomicWriteFile_SetsPermissions(t *testing.T) {
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(configFilePermissions), info.Mode().Perm())
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
 func TestAtomicWriteFile_InvalidDirectory(t *testing.T) {

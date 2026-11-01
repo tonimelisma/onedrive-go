@@ -40,6 +40,10 @@ Examples of problems we want to hear about:
   created with mode `0600` in the data directory (or, when that path is too
   long for a Unix socket, in a short hash-named directory under the system
   temporary directory).
+- The config file (`config.toml`) names the signed-in accounts in its section
+  headers and is written with mode `0600`.
+- The `log_file` is created with mode `0600`, and any directory onedrive-go
+  creates for it with mode `0700`.
 
 Logs written with `--debug` or `log_file` contain file names and account
 details. Review them before sharing.

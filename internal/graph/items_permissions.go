@@ -39,7 +39,8 @@ type permissionIdentitySet struct {
 }
 
 type listPermissionsResponse struct {
-	Value []Permission `json:"value"`
+	Value    []Permission `json:"value"`
+	NextLink string       `json:"@odata.nextLink"`
 }
 
 // PermissionWriteAccess reports what the permissions payload proves about the
@@ -248,6 +249,36 @@ func (c *Client) ListItemPermissions(ctx context.Context, driveID driveid.ID, it
 
 	apiPath := fmt.Sprintf("/drives/%s/items/%s/permissions", driveID, itemID)
 
+	var permissions []Permission
+
+	for page := 1; apiPath != ""; page++ {
+		if page > defaultMaxListPages {
+			return nil, fmt.Errorf("graph: listing item permissions exceeded %d pages", defaultMaxListPages)
+		}
+
+		lpr, err := c.fetchPermissionsPage(ctx, apiPath)
+		if err != nil {
+			return nil, err
+		}
+
+		permissions = append(permissions, lpr.Value...)
+
+		apiPath = ""
+		if lpr.NextLink != "" {
+			// Graph returns @odata.nextLink as an absolute URL, while c.do
+			// prepends the base URL, so the link must be made relative first;
+			// stripBaseURL also refuses a continuation off the Graph host.
+			apiPath, err = c.stripBaseURL(lpr.NextLink)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return permissions, nil
+}
+
+func (c *Client) fetchPermissionsPage(ctx context.Context, apiPath string) (*listPermissionsResponse, error) {
 	resp, err := c.do(ctx, http.MethodGet, apiPath, nil)
 	if err != nil {
 		return nil, err
@@ -259,7 +290,7 @@ func (c *Client) ListItemPermissions(ctx context.Context, driveID driveid.ID, it
 		return nil, fmt.Errorf("graph: decoding permissions response: %w", err)
 	}
 
-	return lpr.Value, nil
+	return &lpr, nil
 }
 
 // ListRecycleBinItems returns all items in the drive's recycle bin.

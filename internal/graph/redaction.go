@@ -14,6 +14,18 @@ var (
 	urlPattern         = regexp.MustCompile(`https://[^\s"'<>]+`)
 )
 
+const (
+	// websocketSecureScheme is the scheme the Socket.IO notification URL
+	// carries once observation has rewritten it for the websocket dial.
+	websocketSecureScheme = "wss"
+	// socketIONotificationTokenQueryKey names the query parameter that holds
+	// the Socket.IO notification URL's credential.
+	socketIONotificationTokenQueryKey = "snthgk"
+	// socketIONotificationWebsocketPath is the path observation gives the
+	// notification URL when dialing it.
+	socketIONotificationWebsocketPath = "/socket.io"
+)
+
 func sanitizeGraphErrorText(raw string) string {
 	if raw == "" {
 		return ""
@@ -110,7 +122,8 @@ func isSensitiveURL(raw string) bool {
 		return false
 	}
 
-	if parsed.Scheme != httpsScheme {
+	// wss is the websocket spelling of the same Socket.IO notification URL.
+	if parsed.Scheme != httpsScheme && parsed.Scheme != websocketSecureScheme {
 		return false
 	}
 
@@ -132,7 +145,7 @@ func isSensitiveURL(raw string) bool {
 		"svc.ms",
 		"storage.live.com",
 	) {
-		if matchesAllowedHost(hostname, "svc.ms") && !strings.Contains(strings.ToLower(parsed.Path), "/callback") {
+		if matchesAllowedHost(hostname, "svc.ms") && !isSocketIONotificationURL(parsed) {
 			return false
 		}
 
@@ -153,6 +166,7 @@ func isSensitiveURL(raw string) bool {
 		"access_token",
 		"authkey",
 		"sig",
+		socketIONotificationTokenQueryKey,
 		"tempauth",
 		"token",
 	}
@@ -166,9 +180,27 @@ func isSensitiveURL(raw string) bool {
 	return false
 }
 
+// isSocketIONotificationURL recognizes the Socket.IO notification URL on an
+// svc.ms host in both of its spellings: the /callback URL Graph returns and
+// the /socket.io websocket URL the dial rewrites it to. Either carries the
+// credential in its snthgk query parameter, so a bare snthgk counts too.
+func isSocketIONotificationURL(parsed *url.URL) bool {
+	path := strings.ToLower(parsed.Path)
+	if strings.Contains(path, "/callback") || strings.Contains(path, socketIONotificationWebsocketPath) {
+		return true
+	}
+
+	return parsed.Query().Has(socketIONotificationTokenQueryKey)
+}
+
 // redactURLError scrubs the request URL that net/http embeds in a *url.Error
 // when that URL carries a credential. Only the scheme and host survive, which
 // is enough to tell a user which service failed.
+//
+// It edits the *url.Error in place, so it must run on the error as the HTTP
+// client returned it, before anything wraps it: fmt.Errorf captures the
+// wrapped text at wrap time, and a later scrub no longer reaches it
+// (TestRedactURLError_MustRunBeforeWrapping).
 func redactURLError(err error) error {
 	var urlErr *url.Error
 	if !errors.As(err, &urlErr) || !isSensitiveURL(urlErr.URL) {

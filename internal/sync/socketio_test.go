@@ -1,11 +1,14 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -516,4 +519,64 @@ func newSocketIOSessionServer(t *testing.T, sid, notification string, hold <-cha
 		<-hold
 		return nil
 	})
+}
+
+// Validates: R-6.8.17
+//
+// net/http embeds the request URL in *url.Error, and the websocket URL keeps
+// the notification URL's snthgk credential. A dial failure is logged on the
+// first retry and copied into the lifecycle event, so neither may carry the
+// URL; the host and the cause survive so the failing service is nameable.
+func TestSocketIOWakeSource_DialFailureNeverLogsTheNotificationURL(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	const secret = "SECRETTOKEN"
+	fetcher := &mockSocketIOEndpointFetcher{
+		endpoints: []*graph.SocketIOEndpoint{{
+			ID:              "endpoint-1",
+			NotificationURL: graph.SocketIONotificationURL("https://x.svc.ms/callback?snthgk=" + secret),
+		}},
+	}
+
+	// Run is synchronous and the dial never succeeds, so no other goroutine
+	// logs: a plain buffer is safe here.
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	var events []socketIOLifecycleEvent
+	source := newSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), socketIOWakeSourceOptions{
+		Logger: logger,
+		DialFunc: func(_ context.Context, wsURL string, _ *websocket.DialOptions) (*websocket.Conn, *http.Response, error) {
+			require.Contains(t, wsURL, secret, "the dial URL carries the credential this test guards")
+			return nil, nil, fmt.Errorf("dial: %w", &url.Error{Op: "Get", URL: wsURL, Err: errors.New("connection refused")})
+		},
+		Clock: &scriptedSleepClock{syncClock: realClock{}, sleep: func(context.Context, time.Duration) error {
+			cancel()
+			return context.Canceled
+		}},
+		LifecycleHook: func(event socketIOLifecycleEvent) {
+			events = append(events, event)
+		},
+	})
+
+	require.NoError(t, source.Run(ctx, make(chan struct{}, 1)))
+
+	var connectFail *socketIOLifecycleEvent
+	for i := range events {
+		assert.NotContains(t, events[i].Error, secret, "lifecycle event %s", events[i].Type)
+		if events[i].Type == socketIOLifecycleEventConnectFail {
+			connectFail = &events[i]
+		}
+	}
+	require.NotNil(t, connectFail, "the dial failure must still be reported")
+	assert.Contains(t, connectFail.Error, "connection refused", "the cause must survive")
+	assert.Contains(t, connectFail.Error, "x.svc.ms", "the host must survive")
+
+	logged := logs.String()
+	assert.Contains(t, logged, "connection refused", "the first retry is logged")
+	assert.NotContains(t, logged, secret)
+	assert.NotContains(t, logged, "snthgk")
 }

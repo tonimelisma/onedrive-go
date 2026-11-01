@@ -2,6 +2,7 @@ package graph
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"testing"
@@ -110,4 +111,63 @@ func TestDispatchRequest_KeepsGraphAPIURLInTransportError(t *testing.T) {
 	}
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "https://graph.microsoft.com/v1.0/me/drive/root")
+}
+
+// Validates: R-6.8.17
+//
+// The Socket.IO notification URL carries its credential in the snthgk query
+// parameter, and the websocket dial rewrites it to /socket.io on the same
+// svc.ms host. Both spellings are sensitive, not only the /callback path.
+func TestIsSensitiveURL_SocketIONotificationURLs(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]bool{
+		"https://pushchannel.svc.ms/callback?snthgk=SECRET":                   true,
+		"https://x.svc.ms/socket.io/?EIO=4&snthgk=SECRET&transport=websocket": true,
+		"https://x.svc.ms/socket.io/?EIO=4&transport=websocket":               true,
+		"wss://x.svc.ms/socket.io/?EIO=4&snthgk=SECRET&transport=websocket":   true,
+		"https://x.svc.ms/anything?snthgk=SECRET":                             true,
+		"https://example.com/?snthgk=SECRET":                                  true,
+		"https://x.svc.ms/health":                                             false,
+	}
+
+	for rawURL, want := range tests {
+		assert.Equal(t, want, isSensitiveURL(rawURL), rawURL)
+	}
+}
+
+// Validates: R-6.8.17
+func TestRedactURLError_ScrubsSocketIOWebsocketURL(t *testing.T) {
+	t.Parallel()
+
+	err := redactURLError(&url.Error{
+		Op:  "Get",
+		URL: "https://x.svc.ms/socket.io/?EIO=4&snthgk=SECRETTOKEN&transport=websocket",
+		Err: errors.New("connection refused"),
+	})
+
+	assert.NotContains(t, err.Error(), "SECRETTOKEN")
+	assert.Contains(t, err.Error(), "https://x.svc.ms/[REDACTED]")
+	assert.Contains(t, err.Error(), "connection refused", "the cause must survive redaction")
+}
+
+// Validates: R-6.8.17
+//
+// fmt.Errorf captures the wrapped error's text when it wraps, so scrubbing
+// the *url.Error afterwards leaves the outer message intact. The transport
+// boundary therefore redacts before wrapping; this pins the limitation so
+// nobody moves the call later in the chain.
+func TestRedactURLError_MustRunBeforeWrapping(t *testing.T) {
+	t.Parallel()
+
+	wrapped := fmt.Errorf("dial: %w", &url.Error{
+		Op:  "Get",
+		URL: "https://x.svc.ms/socket.io/?snthgk=SECRETTOKEN",
+		Err: errors.New("connection refused"),
+	})
+
+	assert.Contains(t, redactURLError(wrapped).Error(), "SECRETTOKEN",
+		"an already wrapped message cannot be scrubbed in place")
+	assert.NotContains(t, fmt.Errorf("dial: %w", redactURLError(errors.Unwrap(wrapped))).Error(), "SECRETTOKEN",
+		"redacting first, then wrapping, is the working order")
 }

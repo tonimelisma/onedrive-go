@@ -158,7 +158,6 @@ func TestUploadChunk_RetryAfterLongerThanStallTimeoutIsNotAStall(t *testing.T) {
 		Inner: http.DefaultTransport, Policy: testRetryPolicy(), Logger: slog.Default(), Sleep: sleepLongerThanStall,
 	}}
 	client := MustNewClient(normalizeTestBaseURL(srv.URL), httpClient, staticToken("t"), slog.Default(), "test-agent")
-	client.validators.uploadURL = allowTestUploadURL
 	client.transferStallTimeout = stallTimeout
 
 	chunk := bytes.Repeat([]byte("u"), ChunkedUploadChunkSize)

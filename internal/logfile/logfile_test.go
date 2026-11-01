@@ -25,6 +25,7 @@ func TestOpen_CreatesFile(t *testing.T) {
 	assert.NoError(t, statErr, "log file should exist")
 }
 
+// Validates: R-6.8.23
 func TestOpen_CreatesParentDirs(t *testing.T) {
 	t.Parallel()
 
@@ -34,7 +35,12 @@ func TestOpen_CreatesParentDirs(t *testing.T) {
 	defer f.Close()
 
 	_, statErr := os.Stat(path)
-	assert.NoError(t, statErr, "log file should exist after creating parent dirs")
+	require.NoError(t, statErr, "log file should exist after creating parent dirs")
+
+	dirInfo, dirStatErr := os.Stat(filepath.Dir(path))
+	require.NoError(t, dirStatErr)
+	assert.Equal(t, os.FileMode(0o700), dirInfo.Mode().Perm(),
+		"a log directory this program creates is owner-only: logs carry item names and account details")
 }
 
 func TestOpen_AppendsToExisting(t *testing.T) {
@@ -55,6 +61,10 @@ func TestOpen_AppendsToExisting(t *testing.T) {
 	assert.Equal(t, "existing content\nnew content\n", string(data))
 }
 
+// Validates: R-6.8.23
+//
+// Logs carry item names and account details, and the threat model counts
+// other local users reading them as an actor, so the file is owner-only.
 func TestOpen_Permissions(t *testing.T) {
 	t.Parallel()
 
@@ -65,7 +75,7 @@ func TestOpen_Permissions(t *testing.T) {
 
 	info, statErr := os.Stat(path)
 	require.NoError(t, statErr)
-	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
 // Validates: R-4.7.3

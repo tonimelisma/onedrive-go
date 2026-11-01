@@ -94,7 +94,8 @@ type siteResponse struct {
 
 // sitesListResponse wraps the value array from GET /sites?search=.
 type sitesListResponse struct {
-	Value []siteResponse `json:"value"`
+	Value    []siteResponse `json:"value"`
+	NextLink string         `json:"@odata.nextLink"`
 }
 
 // toSite normalizes a Graph API site response into our Site type.

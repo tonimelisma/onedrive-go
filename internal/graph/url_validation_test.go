@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"log/slog"
+	"net/http"
 	"net/url"
 	"testing"
 
@@ -153,20 +155,25 @@ func TestValidateCopyMonitorURL(t *testing.T) {
 	assert.Contains(t, err.Error(), "is not allowed")
 }
 
-func TestParseAndValidateUploadURL(t *testing.T) {
+func TestParseAndValidatePreAuthURL(t *testing.T) {
 	t.Parallel()
 
-	validated, err := parseAndValidateUploadURL("https://contoso.sharepoint.com/upload", validateUploadURL)
+	validated, err := parseAndValidatePreAuthURL("https://contoso.sharepoint.com/upload", "upload", validateUploadURL)
 	require.NoError(t, err)
 	assert.Equal(t, "https://contoso.sharepoint.com/upload", validated)
 
-	_, err = parseAndValidateUploadURL("://bad url?tempauth=secret-token", validateUploadURL)
+	_, err = parseAndValidatePreAuthURL("://bad url?tempauth=secret-token", "upload", validateUploadURL)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing upload URL")
 	assert.NotContains(t, err.Error(), "secret-token",
 		"a malformed pre-authenticated URL must not leak its credential into the error text")
 
-	_, err = parseAndValidateUploadURL("https://example.com/upload", validateUploadURL)
+	_, err = parseAndValidatePreAuthURL("://bad url?tempauth=secret-token", "download", validateDownloadURL)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing download URL")
+	assert.NotContains(t, err.Error(), "secret-token")
+
+	_, err = parseAndValidatePreAuthURL("https://example.com/upload", "upload", validateUploadURL)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is not allowed")
 }
@@ -186,4 +193,85 @@ func TestIsLoopbackHostname(t *testing.T) {
 	assert.True(t, isLoopbackHostname("127.0.0.1"))
 	assert.True(t, isLoopbackHostname("::1"))
 	assert.False(t, isLoopbackHostname("10.0.0.1"))
+}
+
+// Validates: R-6.8.22
+func TestValidateDownloadURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		rawURL  string
+		wantErr string
+	}{
+		{name: "allows personal content host", rawURL: "https://my.microsoftpersonalcontent.com/personal/download?tempauth=t"},
+		{name: "allows sharepoint host", rawURL: "https://contoso-my.sharepoint.com/personal/u/_layouts/15/download.aspx?tempauth=t"},
+		{name: "allows 1drv host", rawURL: "https://public.dm.files.1drv.com/y4m/file.txt"},
+		{name: "rejects http", rawURL: "http://my.microsoftpersonalcontent.com/download", wantErr: "must use https"},
+		{name: "rejects IP literal", rawURL: "https://127.0.0.1/download", wantErr: "IP literal"},
+		{name: "rejects non-Microsoft host", rawURL: "https://example.com/download", wantErr: "is not allowed"},
+		{name: "rejects userinfo", rawURL: "https://someone@my.microsoftpersonalcontent.com/download", wantErr: "userinfo"},
+		{name: "rejects graph host", rawURL: "https://graph.microsoft.com/v1.0/drives/d/items/i/content", wantErr: "is not allowed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			parsed, err := url.Parse(tt.rawURL)
+			require.NoError(t, err)
+
+			err = validateDownloadURL(parsed)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Contains(t, err.Error(), "download URL")
+		})
+	}
+}
+
+// Validates: R-6.8.22
+//
+// A loopback Graph base URL exists only for test fixtures; the fixture's
+// pre-authenticated URLs point back at the same loopback server, so the
+// client built against it accepts loopback http/https pre-auth URLs and
+// nothing else beyond the production allow-lists.
+func TestNewClient_LoopbackBaseURLAcceptsLoopbackPreAuthURLs(t *testing.T) {
+	t.Parallel()
+
+	loopbackClient := MustNewClient("http://127.0.0.1:8080", http.DefaultClient, staticToken("t"), slog.Default(), "test-agent")
+	productionClient := MustNewClient(DefaultBaseURL, http.DefaultClient, staticToken("t"), slog.Default(), "test-agent")
+
+	loopback, err := url.Parse("http://127.0.0.1:8080/download")
+	require.NoError(t, err)
+	public, err := url.Parse("https://example.com/download")
+	require.NoError(t, err)
+	trusted, err := url.Parse("https://my.microsoftpersonalcontent.com/download")
+	require.NoError(t, err)
+
+	for name, validate := range map[string]func(*url.URL) error{
+		"download":         loopbackClient.validators.downloadURL,
+		"upload":           loopbackClient.validators.uploadURL,
+		"copy monitor":     loopbackClient.validators.copyMonitor,
+		"content redirect": loopbackClient.validators.contentRedirect,
+	} {
+		require.NotNil(t, validate, name)
+		require.NoError(t, validate(loopback), "%s: loopback fixture URL", name)
+		require.NoError(t, validate(trusted), "%s: production host still allowed", name)
+		require.Error(t, validate(public), "%s: a loopback base URL must not admit arbitrary hosts", name)
+	}
+
+	for name, validate := range map[string]func(*url.URL) error{
+		"download":         productionClient.validators.downloadURL,
+		"upload":           productionClient.validators.uploadURL,
+		"copy monitor":     productionClient.validators.copyMonitor,
+		"content redirect": productionClient.validators.contentRedirect,
+	} {
+		require.NotNil(t, validate, name)
+		require.Error(t, validate(loopback), "%s: a production client never trusts loopback", name)
+	}
 }

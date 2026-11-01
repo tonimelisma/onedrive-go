@@ -159,9 +159,27 @@ func (c *Client) validatedUploadURL(raw UploadURL) (string, error) {
 		validate = validateUploadURL
 	}
 
-	parsedURL, err := parseAndValidateUploadURL(raw, validate)
+	parsedURL, err := parseAndValidatePreAuthURL(string(raw), "upload", validate)
 	if err != nil {
 		return "", fmt.Errorf("graph: validating upload URL: %w", err)
+	}
+
+	return parsedURL, nil
+}
+
+// validatedDownloadURL is the one gate between a server-supplied
+// `@microsoft.graph.downloadUrl` and the request built from it. The returned
+// string is what the download routes dispatch; the error never carries the
+// URL.
+func (c *Client) validatedDownloadURL(raw DownloadURL) (string, error) {
+	validate := c.validators.downloadURL
+	if validate == nil {
+		validate = validateDownloadURL
+	}
+
+	parsedURL, err := parseAndValidatePreAuthURL(string(raw), "download", validate)
+	if err != nil {
+		return "", fmt.Errorf("graph: validating download URL: %w", err)
 	}
 
 	return parsedURL, nil
@@ -173,7 +191,7 @@ func (c *Client) validatedCopyMonitorURL(raw string) (string, error) {
 		validate = validateCopyMonitorURL
 	}
 
-	parsedURL, err := parseAndValidateUploadURL(UploadURL(raw), validate)
+	parsedURL, err := parseAndValidatePreAuthURL(raw, "copy monitor", validate)
 	if err != nil {
 		return "", fmt.Errorf("graph: validating copy monitor URL: %w", err)
 	}
