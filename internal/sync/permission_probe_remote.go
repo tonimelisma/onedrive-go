@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -15,19 +16,17 @@ import (
 
 // The handle403 probes below log at Debug only: each runs once per failing
 // remote write, alongside the console's own failure line, and a boundary
-// they record is reported once as a block scope when it starts.
+// they record is reported once as a block scope when it starts. That covers
+// the Graph probes; a failure to read the persisted block scopes is a store
+// error and is returned, never read as "no blocked boundaries".
 //
 // ActiveRemoteBlockedBoundaries returns all persisted remote permission
 // boundaries currently blocking write admission under read-only subtrees.
 // Runtime blocking derives directly from persisted block_scopes.
-func (ph *permissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) []string {
+func (ph *permissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) ([]string, error) {
 	blocks, err := ph.store.ListBlockScopes(ctx)
 	if err != nil {
-		ph.logger.Debug("ActiveRemoteBlockedBoundaries: failed to list block scopes",
-			slog.Any("error", err),
-		)
-
-		return nil
+		return nil, fmt.Errorf("list remote block scopes: %w", err)
 	}
 
 	seen := make(map[string]bool, len(blocks))
@@ -49,23 +48,29 @@ func (ph *permissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) 
 
 	sort.Strings(prefixes)
 
-	return prefixes
+	return prefixes, nil
 }
 
 // handle403 is called when a worker reports an HTTP 403 on a remote write.
 // It probes Graph permissions to distinguish real write denial from a
-// transient 403 and returns a decision for the engine-owned apply layer.
+// transient 403 and returns a decision for the engine-owned apply layer. The
+// error is a store failure reading the persisted boundaries; Graph probe
+// failures are evidence (none), not errors.
 func (ph *permissionHandler) handle403(
 	ctx context.Context,
 	bl *Baseline,
 	failedPath string,
 	actionType actionType,
-) permissionEvidence {
+) (permissionEvidence, error) {
 	if ph.permChecker == nil {
-		return permissionEvidence{}
+		return permissionEvidence{}, nil
 	}
 
-	if boundary, ok := ph.activeRemoteBoundary(ctx, failedPath); ok {
+	boundary, known, err := ph.activeRemoteBoundary(ctx, failedPath)
+	if err != nil {
+		return permissionEvidence{}, err
+	}
+	if known {
 		ph.logger.Debug("handle403: path already under known remote read-only boundary",
 			slog.String("path", failedPath),
 			slog.String("boundary", boundary),
@@ -76,11 +81,11 @@ func (ph *permissionHandler) handle403(
 			BoundaryPath: boundary,
 			TriggerPath:  failedPath,
 			IssueType:    IssueRemoteWriteDenied,
-		}
+		}, nil
 	}
 
 	if ph.remoteRootItemID == "" {
-		return permissionEvidence{}
+		return permissionEvidence{}, nil
 	}
 
 	remoteDriveID := ph.driveID
@@ -93,7 +98,7 @@ func (ph *permissionHandler) handle403(
 
 	perms, err := ph.permChecker.ListItemPermissions(ctx, remoteDriveID, parentItemID)
 	if err != nil {
-		return ph.handlePermissionCheckError(err, failedPath, parentFolder, actionType)
+		return ph.handlePermissionCheckError(err, failedPath, parentFolder, actionType), nil
 	}
 
 	access := graph.EvaluateWriteAccess(perms, ph.accountEmail)
@@ -110,17 +115,17 @@ func (ph *permissionHandler) handle403(
 			slog.String("path", failedPath),
 		)
 
-		return permissionEvidence{}
+		return permissionEvidence{}, nil
 	case graph.PermissionWriteAccessInconclusive:
 		ph.logger.Debug("handle403: permission evidence inconclusive, not suppressing",
 			slog.String("path", failedPath),
 		)
 
-		return permissionEvidence{}
+		return permissionEvidence{}, nil
 	case graph.PermissionWriteAccessReadOnly:
 	}
 
-	boundary := ph.walkPermissionBoundary(ctx, bl, parentFolder, ph.remoteRootItemID, remoteDriveID)
+	boundary = ph.walkPermissionBoundary(ctx, bl, parentFolder, ph.remoteRootItemID, remoteDriveID)
 
 	return ph.remoteBoundaryEvidence(
 		boundary,
@@ -128,7 +133,7 @@ func (ph *permissionHandler) handle403(
 		http.StatusForbidden,
 		failedPath,
 		actionType,
-	)
+	), nil
 }
 
 // handlePermissionCheckError handles errors from ListItemPermissions during
@@ -163,14 +168,18 @@ func (ph *permissionHandler) handlePermissionCheckError(
 	return permissionEvidence{}
 }
 
-func (ph *permissionHandler) activeRemoteBoundary(ctx context.Context, failedPath string) (string, bool) {
-	for _, boundary := range ph.ActiveRemoteBlockedBoundaries(ctx) {
+func (ph *permissionHandler) activeRemoteBoundary(ctx context.Context, failedPath string) (string, bool, error) {
+	boundaries, err := ph.ActiveRemoteBlockedBoundaries(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	for _, boundary := range boundaries {
 		if remoteBoundaryContainsPath(failedPath, boundary) {
-			return boundary, true
+			return boundary, true, nil
 		}
 	}
 
-	return "", false
+	return "", false, nil
 }
 
 func (ph *permissionHandler) remoteBoundaryEvidence(

@@ -254,6 +254,14 @@ L-02), and sync turns it into a stale precondition. Evidence:
 `TestUploadFromSession_RecoveredOffsetPastEndIsRefused`,
 `TestUploadTransferError_InvalidatedSessionIsAStalePlan`.
 
+A session record that cannot be loaded does not stop the upload: it starts
+over from a fresh session. `SessionStore.Load` itself reports (and deletes) a
+corrupt record, so that case is Debug in the caller; a stat or read failure
+comes back unreported and `loadUsableSessionRecord` warns once per upload
+attempt, naming the file, since for a multi-GB file "did not resume" is
+otherwise invisible
+(`TestTransferManager_SessionUpload_UnreadableRecordWarnsAndStartsOver`).
+
 Not yet done: `drive reset-sync-state` and managed-child cleanup delete
 session records without cancelling their server sessions (they hold no
 Graph client), the session's `expirationDateTime` is not watched while

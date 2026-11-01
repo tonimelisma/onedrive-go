@@ -49,22 +49,28 @@ const (
 // Account names arrive from the config file and the catalog, both of which the
 // user can edit, so a name that cannot form a canonical ID is bad input rather
 // than a programmer error. It yields the zero value, which every caller
-// already treats as "no login for this account".
-func findTokenFallback(account string, logger *slog.Logger) driveid.CanonicalID {
+// already treats as "no login for this account". A token file that cannot be
+// checked (an unreadable data directory) is an error, not "no token": the
+// caller decides what an unknown login means for its command.
+func findTokenFallback(account string, logger *slog.Logger) (driveid.CanonicalID, error) {
 	personalID, err := driveid.Construct(driveid.DriveTypePersonal, account)
 	if err != nil {
 		logger.Debug("token fallback: account has no valid canonical ID",
 			"account", account, "error", err)
 
-		return driveid.CanonicalID{}
+		return driveid.CanonicalID{}, nil
 	}
 
 	personalPath := config.DriveTokenPath(personalID)
 	if personalPath != "" {
-		if managedPathExists(personalPath) {
+		exists, checkErr := managedPathExists(personalPath)
+		if checkErr != nil {
+			return driveid.CanonicalID{}, fmt.Errorf("token fallback: %w", checkErr)
+		}
+		if exists {
 			logger.Debug("token fallback: found personal token", "path", personalPath)
 
-			return personalID
+			return personalID, nil
 		}
 	}
 
@@ -73,22 +79,26 @@ func findTokenFallback(account string, logger *slog.Logger) driveid.CanonicalID 
 		logger.Debug("token fallback: account has no valid business canonical ID",
 			"account", account, "error", err)
 
-		return driveid.CanonicalID{}
+		return driveid.CanonicalID{}, nil
 	}
 
 	businessPath := config.DriveTokenPath(businessID)
 	if businessPath != "" {
-		if managedPathExists(businessPath) {
+		exists, checkErr := managedPathExists(businessPath)
+		if checkErr != nil {
+			return driveid.CanonicalID{}, fmt.Errorf("token fallback: %w", checkErr)
+		}
+		if exists {
 			logger.Debug("token fallback: found business token", "path", businessPath)
 
-			return businessID
+			return businessID, nil
 		}
 	}
 
 	// Default to personal if neither exists (best guess for most users).
 	logger.Debug("token fallback: no token found, defaulting to personal", "account", account)
 
-	return personalID
+	return personalID, nil
 }
 
 // pendingTokenPath returns the path for the temporary token file used during

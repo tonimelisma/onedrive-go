@@ -2,6 +2,9 @@ package config
 
 import (
 	"cmp"
+	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"path/filepath"
 	"slices"
@@ -16,22 +19,20 @@ const cidFileSuffix = ".json"
 
 // discoverCIDFiles scans dir for token files matching
 // "token_{type}_{email}.json" and returns the canonical IDs extracted from
-// filenames.
-func discoverCIDFiles(dir string, logger *slog.Logger) []driveid.CanonicalID {
+// filenames. A data directory that does not exist holds no files; one that
+// cannot be listed is an error, never "no files".
+func discoverCIDFiles(dir string, logger *slog.Logger) ([]driveid.CanonicalID, error) {
 	return discoverCIDFilesWithIO(dir, logger, defaultConfigIO())
 }
 
-func discoverCIDFilesWithIO(dir string, logger *slog.Logger, io configIO) []driveid.CanonicalID {
+func discoverCIDFilesWithIO(dir string, logger *slog.Logger, io configIO) ([]driveid.CanonicalID, error) {
 	if dir == "" {
-		return nil
+		return nil, nil
 	}
 
-	entries, err := io.readManagedDir(dir)
-	if err != nil {
-		logger.Debug("cannot read data directory for file discovery",
-			"dir", dir, "kind", "token", "error", err)
-
-		return nil
+	entries, err := readDataDirForDiscovery(dir, logger, io, "token")
+	if err != nil || entries == nil {
+		return nil, err
 	}
 
 	var ids []driveid.CanonicalID
@@ -74,14 +75,39 @@ func discoverCIDFilesWithIO(dir string, logger *slog.Logger, io configIO) []driv
 	})
 	logger.Debug("file discovery complete", "dir", dir, "count", len(ids))
 
-	return ids
+	return ids, nil
+}
+
+// readDataDirForDiscovery lists the data directory for one discovery kind. A
+// missing directory is the ordinary first-run state and yields no entries. Any
+// other failure (permission denied, I/O error, a file where the directory
+// should be) is reported once here, at Warn, and returned, so the callers
+// that used to read it as "no accounts" or "no state databases" can say that
+// the data directory could not be read instead.
+func readDataDirForDiscovery(dir string, logger *slog.Logger, io configIO, kind string) ([]fs.DirEntry, error) {
+	entries, err := io.readManagedDir(dir)
+	if err == nil {
+		return entries, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		logger.Debug("data directory does not exist yet; nothing to discover",
+			"dir", dir, "kind", kind)
+
+		return nil, nil
+	}
+
+	logger.Warn("cannot read the data directory",
+		"dir", dir, "kind", kind, "error", err)
+
+	return nil, fmt.Errorf("cannot read the data directory %s: %w", dir, err)
 }
 
 // discoverFilesForEmail scans dir for files matching "{prefix}*{suffix}" that
 // contain the given email at an underscore boundary. Returns full file paths.
 // This is the shared implementation behind DiscoverStateDBsForEmail and
-// other email-scoped managed-file discovery.
-func discoverFilesForEmail(dir, prefix, suffix, email string, logger *slog.Logger) []string {
+// other email-scoped managed-file discovery. An unreadable data directory is
+// an error, not an empty result (see readDataDirForDiscovery).
+func discoverFilesForEmail(dir, prefix, suffix, email string, logger *slog.Logger) ([]string, error) {
 	return discoverFilesForEmailWithIO(dir, prefix, suffix, email, logger, defaultConfigIO())
 }
 
@@ -89,17 +115,14 @@ func discoverFilesForEmailWithIO(
 	dir, prefix, suffix, email string,
 	logger *slog.Logger,
 	io configIO,
-) []string {
+) ([]string, error) {
 	if dir == "" || email == "" {
-		return nil
+		return nil, nil
 	}
 
-	entries, err := io.readManagedDir(dir)
-	if err != nil {
-		logger.Debug("cannot read data directory for email-based file discovery",
-			"dir", dir, "prefix", prefix, "error", err)
-
-		return nil
+	entries, err := readDataDirForDiscovery(dir, logger, io, prefix+"*"+suffix)
+	if err != nil || entries == nil {
+		return nil, err
 	}
 
 	needle := "_" + email
@@ -123,7 +146,7 @@ func discoverFilesForEmailWithIO(
 		paths = append(paths, filepath.Join(dir, name))
 	}
 
-	return paths
+	return paths, nil
 }
 
 // containsEmailBoundary checks if name contains needle ("_email") at an

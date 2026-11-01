@@ -63,6 +63,35 @@ func TestExecutor_Download_RefusesToReplaceDatabaseWithLiveWAL(t *testing.T) {
 }
 
 // Validates: R-2.4.15
+//
+// A sidecar that cannot be checked (here fs.ErrPermission on its directory)
+// used to count as "no sidecar", so a download could replace a database it
+// could not prove closed. It refuses the replacement, naming the sidecar, and
+// is not errDatabaseInUse: nothing proved the database open either.
+func TestExecutor_Download_UncheckableSidecarRefusesReplacement(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root checks files regardless of directory mode")
+	}
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	locked := filepath.Join(syncRoot, "locked")
+	require.NoError(t, os.MkdirAll(locked, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(locked, "app.db"), []byte("old"), 0o600))
+	require.NoError(t, os.Chmod(locked, 0o000))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(locked, 0o700)) }) //nolint:gosec // restores the test directory
+
+	err := newExecution(cfg, emptyBaseline()).refuseLiveDatabaseTarget("locked/app.db")
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.NotErrorIs(t, err, errDatabaseInUse)
+	assert.Contains(t, err.Error(), "locked/app.db-wal")
+
+	require.NoError(t, os.Chmod(locked, 0o700)) //nolint:gosec // a private test directory
+	require.NoError(t, newExecution(cfg, emptyBaseline()).refuseLiveDatabaseTarget("locked/app.db"),
+		"a sidecar that is absent is still no sidecar")
+}
+
+// Validates: R-2.4.15
 func TestExecutor_Download_DatabaseOpenedDuringDownloadIsNotReplaced(t *testing.T) {
 	t.Parallel()
 

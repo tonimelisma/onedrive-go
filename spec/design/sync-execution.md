@@ -368,10 +368,14 @@ A download never replaces a SQLite database an application has open:
 non-empty `-wal` or `-journal` sibling, whether or not the target itself exists yet, both before the transfer and again in
 `ValidateTargetBeforeRename`. It is the retryable per-file condition
 `local_database_open`, not a superseded action, because superseding would
-replan the same download at once (R-2.4.15,
-`TestExecutor_Download_RefusesToReplaceDatabaseWithLiveWAL`,
+replan the same download at once. Only a sidecar that does not exist is "no
+sidecar": one that cannot be checked (permission denied, I/O error) refuses the
+replacement too, as an ordinary precondition failure naming the sidecar rather
+than `errDatabaseInUse`, because the download cannot prove the database closed
+(R-2.4.15, `TestExecutor_Download_RefusesToReplaceDatabaseWithLiveWAL`,
 `TestExecutor_Download_DatabaseOpenedDuringDownloadIsNotReplaced`,
-`TestExecutor_Download_RefusesNewDatabaseBesideALiveWAL`).
+`TestExecutor_Download_RefusesNewDatabaseBesideALiveWAL`,
+`TestExecutor_Download_UncheckableSidecarRefusesReplacement`).
 
 ## Publication-Only Actions
 

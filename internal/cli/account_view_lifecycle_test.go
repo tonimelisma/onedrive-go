@@ -50,7 +50,8 @@ func TestBuildAccountViews_AccountLifecycleMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, stored := tc.setup(t)
 
-			views := buildAccountViews(t.Context(), cfg, stored, testDriveLogger(t))
+			views, err := buildAccountViews(t.Context(), cfg, stored, testDriveLogger(t))
+			require.NoError(t, err)
 			view, found := accountViewByEmail(views, tc.email)
 			require.True(t, found, "email=%s", tc.email)
 

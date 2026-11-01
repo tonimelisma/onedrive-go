@@ -33,7 +33,9 @@ func TestFindTokenFallback_MalformedAccountDoesNotPanic(t *testing.T) {
 			var got driveid.CanonicalID
 
 			require.NotPanics(t, func() {
-				got = findTokenFallback(tt.account, slog.Default())
+				var err error
+				got, err = findTokenFallback(tt.account, slog.Default())
+				require.NoError(t, err)
 			})
 
 			assert.True(t, got.IsZero(),
@@ -47,7 +49,8 @@ func TestFindTokenFallback_MalformedAccountDoesNotPanic(t *testing.T) {
 // The ordinary case must be unaffected: a well-formed account with no token on
 // disk still falls back to personal.
 func TestFindTokenFallback_WellFormedAccountStillDefaultsToPersonal(t *testing.T) {
-	got := findTokenFallback("nobody-at-all@example.com", slog.Default())
+	got, err := findTokenFallback("nobody-at-all@example.com", slog.Default())
+	require.NoError(t, err)
 
 	assert.Equal(t, driveid.MustCanonicalID("personal:nobody-at-all@example.com"), got)
 }

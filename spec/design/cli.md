@@ -36,7 +36,7 @@ are inserted, updated, pruned, and validated.
 | Behavior | Evidence |
 | --- | --- |
 | Status JSON identifies each mount with a stable opaque `mount_ref` and still withholds canonical, mount, namespace, and remote drive IDs. | `TestStatusJSON_MountRefIsOpaqueAndDoesNotLeakIdentifiers`, `TestStatusJSON_MountRefDistinguishesSiblingChildren`, `TestMountRef_MatchesStateFileDigest`, `TestMountRef_IsStableUniqueAndOpaque`, `TestMountRef_EmptyForBlankMountID`, `TestStatusOutputGoldenJSON` |
-| `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestStatusCommand_NoAccountsDoesNotMutateManagedState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors`, `TestBuildChildStatusMount_FinalDrainGuidesAccessRestore`, `TestPrintMountStatus_RendersGuidedShortcutRecovery`, `TestStatusRuntime_SummaryJSONWithActiveOwner`, `TestStatusRuntimeOverlayApplyAndSummary`, `TestPrintMountStatus_ShowsRuntimeState`, `TestE2E_Status_NoLegacyHistorySurface`, `TestE2E_RoundTrip` |
+| `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreIsReportedAsUnavailable`, `TestStatusCommand_UncheckableStateDatabaseIsReportedAsUnavailable`, `TestStatusCommand_PermissionDeniedStateDatabaseIsReportedAsUnavailable`, `TestStatusCommand_UnreadableDataDirIsReported`, `TestManagedPathExists_DistinguishesAbsentFromUnreadable`, `TestInspectSavedLogin_UnreadableTokenIsNotMissingLogin`, `TestStatusCommand_NoAccountsDoesNotMutateManagedState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors`, `TestBuildChildStatusMount_FinalDrainGuidesAccessRestore`, `TestPrintMountStatus_RendersGuidedShortcutRecovery`, `TestStatusRuntime_SummaryJSONWithActiveOwner`, `TestStatusRuntimeOverlayApplyAndSummary`, `TestPrintMountStatus_ShowsRuntimeState`, `TestE2E_Status_NoLegacyHistorySurface`, `TestE2E_RoundTrip` |
 | `trash list/restore/empty` read and change one configured drive's local trash offline; restore never overwrites and empty needs `--confirm`. | `TestTrashCommands_ListRestoreAndEmpty`, `TestTrashRestore_NeverOverwrites` |
 | `drive rebind-root` shows the remembered and present file counts, needs `--yes` or a typed REBIND, clears only the recorded sync-folder fingerprint, keeps the rest of the state, needs `--drive`, and refuses while a sync owner holds the drive. | `TestRunDriveRebindRoot_RequiresDrive`, `TestRunDriveRebindRoot_KeepsStateAndReportsRebind`, `TestRunDriveRebindRoot_RequiresConfirmationWithoutYes`, `TestRunDriveRebindRoot_RefusesLiveSyncOwner` |
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner` |
@@ -461,6 +461,13 @@ condition keys remain private implementation details.
 - shared folder shortcuts discovered by a parent engine render as nested
   `Shared folders` under that configured parent drive
 - sync-state snapshots come from store-owned raw authority reads
+- a state database that cannot be checked or read renders the drive as
+  `unavailable` with `state_reason` `sync_state_unreadable`, the plain reason
+  and action, and `sync_state.read_error`; it is never "up to date" with zero
+  files, and never "not synced yet" (see Absent Versus Cannot Check below)
+- an account whose token file cannot be checked carries the auth reason
+  `saved_login_unreadable`, whose action points at the data directory, not at
+  `login`: signing in again would write to the same unreadable place
 - the CLI translates sync-owned stored condition groups into public `Issues:`
   sections and JSON `issues`, with user-facing titles, reasons, actions,
   scope labels, ordering, and path sampling
@@ -617,9 +624,31 @@ The CLI owns the only destructive operator surface for per-drive sync state:
 - the command deletes only the selected drive's state DB family and recreates a
   fresh canonical DB immediately
 
-`status` remains read-only. Missing or unreadable DBs collapse to an empty sync
-snapshot for that drive; status does not mutate state and does not become a DB
-health control surface.
+`status` remains read-only. A missing DB is an empty sync snapshot for that
+drive (it has never synced here: "not synced yet"); a DB that exists but
+cannot be checked or read is `unavailable` with `sync_state_unreadable`, one
+Warn naming the path, and the raw error under `--verbose`/`--debug`. Status
+does not mutate state and does not become a DB health control surface.
+
+### Absent Versus Cannot Check
+
+Every "is this managed file there" question in the CLI goes through
+`managedPathExists` (`cleanup.go`), which answers `(exists, error)`. Only a
+missing file or a missing parent (including a parent that is not a directory)
+is absent. Permission denied, an I/O error or a symlink loop is an error that
+each caller handles as "cannot check", never as absent, because reading those
+as absent made an unreadable data directory look like one with no login
+("Run 'onedrive-go login'"), no state database ("Not synced yet") and nothing
+to add (`drive add`: "no token file"). The callers: status renders the drive
+unavailable; `inspectSavedLogin` reports `saved_login_unreadable`;
+`findTokenFallback`, `drive add`, `drive list` (`annotateStateDB`) and
+`logout --purge` return the error. Token and state-database discovery in
+`config` follows the same rule for the directory listing itself: a data
+directory that does not exist yet has nothing in it, one that cannot be read is
+a Warn and an error naming the directory, so a command says "cannot read the
+data directory" instead of "No accounts configured". In practice the catalog
+load reports an unreadable data directory first, since every managed read
+opens the directory through `fsroot`; the discovery error is the backstop.
 
 `sync` and `sync --watch` never auto-delete an existing DB. When startup sees
 an unreadable, incompatible, or unsupported existing DB, the CLI renders the

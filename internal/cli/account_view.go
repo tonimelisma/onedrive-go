@@ -3,6 +3,7 @@ package cli
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"log/slog"
 	"slices"
 
@@ -28,12 +29,16 @@ type accountView struct {
 	AuthHealth            accountAuthHealth
 }
 
+// buildAccountViews projects config and catalog into per-account views. It
+// fails when the data directory cannot be listed: the state-database counts
+// and saved-login checks below would otherwise describe a directory nobody
+// read as one with nothing in it.
 func buildAccountViews(
 	ctx context.Context,
 	cfg *config.Config,
 	stored *config.Catalog,
 	logger *slog.Logger,
-) []accountView {
+) ([]accountView, error) {
 	grouped, order := groupDrivesByAccount(cfg)
 	byEmail := make(map[string]*accountView)
 
@@ -62,14 +67,18 @@ func buildAccountViews(
 		if view.DisplayName == "" && view.OrgName == "" {
 			view.DisplayName, view.OrgName = accountViewNames(view, logger)
 		}
-		view.StateDBCount = len(config.DiscoverStateDBsForEmail(view.Email, logger))
+		statePaths, err := config.DiscoverStateDBsForEmail(view.Email, logger)
+		if err != nil {
+			return nil, fmt.Errorf("discover state databases for %s: %w", view.Email, err)
+		}
+		view.StateDBCount = len(statePaths)
 		view.SavedLoginReason = inspectSavedLogin(ctx, view.Email, accountViewAllDriveIDs(view), logger)
 		view.AuthHealth = evaluateAccountViewAuth(view.SavedLoginReason, view.AuthRequirementReason)
 
 		result = append(result, *view)
 	}
 
-	return result
+	return result, nil
 }
 
 func ensureAccountView(byEmail map[string]*accountView, email string) *accountView {

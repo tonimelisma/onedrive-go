@@ -57,33 +57,32 @@ func (rt *watchRuntime) releaseDueHeldRetriesNow(
 
 // clearRetryWorkOnSuccess removes the retry_work row for a successfully
 // completed action. The engine owns retry_work and observation-issue lifecycle;
-// CommitMutation handles only baseline and remote_state updates.
-func (flow *engineFlow) clearRetryWorkOnSuccess(ctx context.Context, r *actionCompletion) {
+// CommitMutation handles only baseline and remote_state updates. A store
+// failure is returned like any other store write failure in the completion
+// path: left behind, the row keeps `status` listing a file that just synced
+// as retrying and schedules a redundant retry.
+func (flow *engineFlow) clearRetryWorkOnSuccess(ctx context.Context, r *actionCompletion) error {
 	if r == nil {
-		return
+		return nil
 	}
-	flow.clearRetryWorkOnActionSuccess(ctx, &Action{
+
+	return flow.clearRetryWorkOnActionSuccess(ctx, &Action{
 		Path:    r.Path,
 		OldPath: r.OldPath,
 		Type:    r.ActionType,
 	})
 }
 
-func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, action *Action) {
-	if clearErr := flow.resolveRetryWorkAndLogResolution(
+func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, action *Action) error {
+	if err := flow.resolveRetryWorkAndLogResolution(
 		ctx,
 		retryWorkKeyForAction(action),
 		retryResolutionSourceActionSuccess,
-	); clearErr != nil {
-		path := ""
-		if action != nil {
-			path = action.Path
-		}
-		flow.deps.logger.Debug("failed to clear retry_work on success",
-			slog.String("path", path),
-			slog.Any("error", clearErr),
-		)
+	); err != nil {
+		return fmt.Errorf("clear retry work after success: %w", err)
 	}
+
+	return nil
 }
 
 func (flow *engineFlow) clearRetryWorkOnSuperseded(ctx context.Context, r *actionCompletion, current *trackedAction) error {

@@ -10,27 +10,34 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
+// readDriveStatusSnapshot reads one drive's status snapshot. A drive with no
+// state database has an empty snapshot: it has never synced here. A state
+// database that cannot be checked or read is returned as an error, after one
+// Warn, so the caller renders the drive as unreadable rather than as a drive
+// with zero files and no issues.
 func readDriveStatusSnapshot(
 	ctx context.Context,
 	statePath string,
 	logger *slog.Logger,
-) syncengine.DriveStatusSnapshot {
-	if !managedPathExists(statePath) {
-		return syncengine.DriveStatusSnapshot{}
+) (syncengine.DriveStatusSnapshot, error) {
+	exists, err := managedPathExists(statePath)
+	if err == nil && !exists {
+		return syncengine.DriveStatusSnapshot{}, nil
 	}
 
-	snapshot, err := syncengine.ReadDriveStatusSnapshot(ctx, statePath, logger)
+	var snapshot syncengine.DriveStatusSnapshot
+	if err == nil {
+		snapshot, err = syncengine.ReadDriveStatusSnapshot(ctx, statePath, logger)
+	}
 	if err != nil {
-		// Without this, an unreadable state database looked like a drive
-		// with nothing to report: zero files and no issues.
 		if logger != nil {
-			logger.Warn("cannot read the sync state for this drive; its status may be incomplete",
+			logger.Warn("cannot read the sync state for this drive; its status is unavailable",
 				slog.String("path", statePath), slog.Any("error", err))
 		}
-		return syncengine.DriveStatusSnapshot{}
+		return syncengine.DriveStatusSnapshot{}, fmt.Errorf("read sync state %s: %w", statePath, err)
 	}
 
-	return snapshot
+	return snapshot, nil
 }
 
 func loadShortcutRootStatusSnapshots(
@@ -44,7 +51,19 @@ func loadShortcutRootStatusSnapshots(
 	}
 	for cid := range cfg.Drives {
 		statePath := config.DriveStatePath(cid)
-		if !managedPathExists(statePath) {
+		exists, err := managedPathExists(statePath)
+		if err != nil {
+			// Debug: the drive's own row reports the unreadable state
+			// database (readDriveStatusSnapshot warns once for it).
+			if logger != nil {
+				logger.Debug("skip shortcut root status snapshot: cannot check the state database",
+					"drive", cid.String(),
+					"error", err,
+				)
+			}
+			continue
+		}
+		if !exists {
 			continue
 		}
 		records, err := syncengine.ReadShortcutRootStatusSnapshot(ctx, statePath, cid.String(), cfg.Drives[cid].SyncDir, logger)

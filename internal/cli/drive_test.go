@@ -781,7 +781,9 @@ func loadDefaultAccountViews(t *testing.T) []accountView {
 
 	stored, err := config.LoadCatalog()
 	require.NoError(t, err)
-	return buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	views, err := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	require.NoError(t, err)
+	return views
 }
 
 // --- driveSearchResult ---
@@ -2368,7 +2370,7 @@ func TestAnnotateStateDB_DetectsExistingDB(t *testing.T) {
 		{CanonicalID: cid.String(), parsedCID: cid, State: "available", Source: "available"},
 	}
 
-	annotateStateDB(entries)
+	require.NoError(t, annotateStateDB(entries))
 	assert.True(t, entries[0].HasStateDB, "should detect existing state DB")
 }
 
@@ -2384,7 +2386,7 @@ func TestAnnotateStateDB_NoDBFile(t *testing.T) {
 		{CanonicalID: cid.String(), parsedCID: cid, State: "available", Source: "available"},
 	}
 
-	annotateStateDB(entries)
+	require.NoError(t, annotateStateDB(entries))
 	assert.False(t, entries[0].HasStateDB, "should not detect state DB when file doesn't exist")
 }
 
@@ -2406,7 +2408,7 @@ func TestAnnotateStateDB_MixedEntries(t *testing.T) {
 		{CanonicalID: cidWithoutDB.String(), parsedCID: cidWithoutDB, State: "available", Source: "available"},
 	}
 
-	annotateStateDB(entries)
+	require.NoError(t, annotateStateDB(entries))
 	assert.True(t, entries[0].HasStateDB, "first entry should have state DB")
 	assert.False(t, entries[1].HasStateDB, "second entry should not have state DB")
 }

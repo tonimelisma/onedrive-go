@@ -40,7 +40,8 @@ func TestPermHandler_Handle403_NilChecker(t *testing.T) {
 
 	ph, _ := newTestPermHandler(t, nil)
 
-	result := ph.handle403(t.Context(), &Baseline{}, "some/path.txt", ActionUpload)
+	result, err := ph.handle403(t.Context(), &Baseline{}, "some/path.txt", ActionUpload)
+	require.NoError(t, err)
 	assert.Equal(t, permissionEvidenceNone, result.Kind)
 }
 
@@ -51,7 +52,30 @@ func TestPermHandler_Handle403_NoPermissionRoot(t *testing.T) {
 	checker := &mockPermChecker{perms: map[string][]graph.Permission{}}
 	ph, _ := newTestPermHandler(t, checker)
 
-	result := ph.handle403(t.Context(), &Baseline{}, "unmatched/path.txt", ActionUpload)
+	result, err := ph.handle403(t.Context(), &Baseline{}, "unmatched/path.txt", ActionUpload)
+	require.NoError(t, err)
+	assert.Equal(t, permissionEvidenceNone, result.Kind)
+}
+
+// Validates: R-2.14.1, R-6.6.28
+//
+// A failure to read the persisted block scopes used to be Debug-logged and
+// answered as "no blocked boundaries", which re-admitted writes under a
+// read-only remote subtree. It is a store error and is returned.
+func TestPermHandler_Handle403_BlockScopeReadFailureIsReturned(t *testing.T) {
+	t.Parallel()
+
+	checker := &mockPermChecker{perms: map[string][]graph.Permission{}}
+	ph, _ := newTestPermHandler(t, checker)
+	ph.store = closedTestStore(t)
+
+	boundaries, err := ph.ActiveRemoteBlockedBoundaries(t.Context())
+	require.Error(t, err)
+	assert.Nil(t, boundaries)
+	assert.Contains(t, err.Error(), "list remote block scopes")
+
+	result, err := ph.handle403(t.Context(), &Baseline{}, "some/path.txt", ActionUpload)
+	require.Error(t, err, "handle403 surfaces the store failure instead of probing as if nothing were blocked")
 	assert.Equal(t, permissionEvidenceNone, result.Kind)
 }
 

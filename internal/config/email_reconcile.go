@@ -232,7 +232,9 @@ func buildEmailReconcilePlan(
 	}
 
 	for _, oldEmail := range oldEmails {
-		collectStateRenames(plan, oldEmail, currentEmail, ownedOldAccounts, logger)
+		if err := collectStateRenames(plan, oldEmail, currentEmail, ownedOldAccounts, logger); err != nil {
+			return nil, err
+		}
 	}
 
 	return plan, nil
@@ -319,8 +321,11 @@ func collectStateRenames(
 	currentEmail string,
 	ownedOldAccounts map[string]driveid.CanonicalID,
 	logger *slog.Logger,
-) {
-	paths := DiscoverStateDBsForEmail(oldEmail, logger)
+) error {
+	paths, err := DiscoverStateDBsForEmail(oldEmail, logger)
+	if err != nil {
+		return fmt.Errorf("planning state database renames for %s: %w", oldEmail, err)
+	}
 	for _, path := range paths {
 		if pathRenameExists(plan.pathRenames, path) {
 			continue
@@ -350,6 +355,8 @@ func collectStateRenames(
 			}
 		}
 	}
+
+	return nil
 }
 
 func reconcileCatalogEmail(accountRenames map[driveid.CanonicalID]driveid.CanonicalID, currentEmail string) error {
