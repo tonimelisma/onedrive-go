@@ -119,6 +119,13 @@ func (c *gatedUploadClient) releaseAll() {
 	}
 }
 
+// gatedArrivalTimeout bounds a wait for an upload to reach the gate. The
+// first arrival follows a whole observe-plan-start of the pass, which under
+// the race detector with other engines running on a small host takes
+// seconds, so the bound is generous; it only turns a wedged pass into a
+// failure instead of a hang.
+const gatedArrivalTimeout = time.Minute
+
 // waitArrivals blocks until n uploads have arrived in total.
 func (c *gatedUploadClient) waitArrivals(t *testing.T, n int) {
 	t.Helper()
@@ -126,7 +133,7 @@ func (c *gatedUploadClient) waitArrivals(t *testing.T, n int) {
 	for c.arrivalCount() < n {
 		select {
 		case <-c.arrived:
-		case <-time.After(debugEventTimeout):
+		case <-time.After(gatedArrivalTimeout):
 			require.Failf(t, "uploads did not arrive", "waited for %d arrivals, have %d", n, c.arrivalCount())
 		}
 	}
@@ -148,14 +155,15 @@ func (c *gatedUploadClient) arrivalsSnapshot() []int {
 
 // coldStartTrace records the slow-start debug events of a run, per pass.
 type coldStartTrace struct {
-	mu     stdsync.Mutex // guards the fields below
-	pass   int
-	events [][]string
-	raised chan int
+	mu         stdsync.Mutex // guards the fields below
+	pass       int
+	events     [][]string
+	raised     chan int
+	handedOver chan struct{}
 }
 
 func newColdStartTrace() *coldStartTrace {
-	return &coldStartTrace{raised: make(chan int, 64)}
+	return &coldStartTrace{raised: make(chan int, 64), handedOver: make(chan struct{}, 64)}
 }
 
 //nolint:gocritic // Value semantics match SetDebugEventHook, so the hook cannot mutate engine-owned events.
@@ -170,6 +178,10 @@ func (tr *coldStartTrace) record(event DebugEvent) {
 	}
 	if event.Type == engineDebugEventColdStartHandedOver {
 		line = "handed-over"
+		select {
+		case tr.handedOver <- struct{}{}:
+		default:
+		}
 	}
 	if line == "" {
 		return
@@ -194,6 +206,16 @@ func (tr *coldStartTrace) passEvents() [][]string {
 	defer tr.mu.Unlock()
 
 	return append([][]string(nil), tr.events...)
+}
+
+func (tr *coldStartTrace) waitHandedOver(t *testing.T) {
+	t.Helper()
+
+	select {
+	case <-tr.handedOver:
+	case <-time.After(debugEventTimeout):
+		require.Fail(t, "the slow start was not handed over to a scope")
+	}
 }
 
 func (tr *coldStartTrace) waitRaised(t *testing.T, want int) {
@@ -353,6 +375,13 @@ func TestColdStart_OneShotRampsInFlightFromTwo(t *testing.T) {
 // owns re-admission from there (its ramp, not the slow start, paces the next
 // pass, which starts under the persisted scope), and a later fresh plan
 // with no scope starts the slow start over.
+//
+// The first pass is driven request by request through a gate, because the
+// order in which a batch's completions reach the loop is the scheduler's: a
+// success applied before the 429 admits one replacement, so a free-running
+// pass sends six or seven requests depending on the host. Gated, the pass
+// is the same on every host, and the property under test is exact: once
+// the 429 is applied, nothing more is sent.
 func TestColdStart_OneShotHandsOverToTheThrottleScopeAndResetsPerPlan(t *testing.T) {
 	t.Parallel()
 
@@ -367,7 +396,8 @@ func TestColdStart_OneShotHandsOverToTheThrottleScopeAndResetsPerPlan(t *testing
 	remote := newMoveScenarioRemote(driveID)
 	clock := newManualClock(time.Date(2026, 11, 1, 9, 7, 0, 0, time.UTC))
 	limiter := newThrottleWindowClient(clock.Now, windowBudget, window)
-	eng, syncRoot := newTestEngine(t, limiter.wrap(remote.client(t)))
+	gate := newGatedUploadClient()
+	eng, syncRoot := newTestEngine(t, gate.wrap(limiter.wrap(remote.client(t))))
 	eng.transferWorkers = workers
 	installManualClockForTestEngine(eng, clock)
 	scopeKey := SKThrottleDrive(driveID)
@@ -379,14 +409,43 @@ func TestColdStart_OneShotHandsOverToTheThrottleScopeAndResetsPerPlan(t *testing
 	}
 	h.beginRound(t)
 
-	// Pass 1: two succeed, the allowance doubles, and the four that follow
-	// find the window spent: 429s, bounded by the allowance of four.
+	// Pass 1: two succeed and the allowance doubles to four; the third
+	// success admits one replacement; the fourth request draws the 429,
+	// which activates the scope and takes the outbox back. The three
+	// uploads parked at that moment were already with workers (four in
+	// flight, the 429 among them): they are the bounded cost of the
+	// episode, and nothing follows them.
 	trace.beginPass()
-	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
-	require.NoError(t, err)
-	requests, throttled, _ := limiter.counts()
-	assert.Equal(t, 6, requests, "two, then four: nothing more is sent after the 429")
-	assert.Equal(t, 3, throttled)
+	runErr := make(chan error, 1)
+	go func() {
+		_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		runErr <- err
+	}()
+	gate.waitArrivals(t, 2)
+	gate.release(0)
+	gate.waitArrivals(t, 3)
+	gate.release(1)
+	trace.waitRaised(t, 4)
+	gate.waitArrivals(t, 6)
+	gate.release(2)
+	gate.waitArrivals(t, 7)
+	gate.release(3)
+	trace.waitHandedOver(t)
+	sentWhenThrottled := gate.arrivalCount()
+	assert.Equal(t, 7, sentWhenThrottled,
+		"two to start, one more after the first success, three more when the allowance doubled, one after the third success")
+	gate.releaseAll()
+	select {
+	case err := <-runErr:
+		require.NoError(t, err)
+	case <-time.After(debugEventTimeout):
+		require.Fail(t, "the first pass did not finish")
+	}
+	assert.Equal(t, sentWhenThrottled, gate.arrivalCount(), "nothing more is sent after the 429 is applied")
+	requests, throttled, penalized := limiter.counts()
+	assert.Equal(t, sentWhenThrottled, requests)
+	assert.Equal(t, 4, throttled, "the 429 and the three others in flight with it")
+	assert.Equal(t, 3, penalized, "only the uploads already in flight reach the drive inside the Retry-After")
 	block, ok := getTestBlockScope(eng, scopeKey)
 	require.True(t, ok, "the 429 activated the throttle scope")
 
@@ -395,7 +454,7 @@ func TestColdStart_OneShotHandsOverToTheThrottleScopeAndResetsPerPlan(t *testing
 	limiter.setBudget(1000)
 	clock.Advance(block.NextTrialAt.Sub(clock.Now()))
 	trace.beginPass()
-	_, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, files, remote.uploads)
 	_, ok = getTestBlockScope(eng, scopeKey)
