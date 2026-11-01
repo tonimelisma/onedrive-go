@@ -59,7 +59,18 @@ for the same reason every other table writer is: it issues the `INSERT` and
 is the only file outside this family that consumed the store's SQL encoding
 helpers (`boolInt`, `nullString`, `nullKnownInt64`, `nullOptionalInt64`,
 `sqlTxRunner`). Deciding *what* is visible remains planning policy through the
-compiled `contentFilter`; writing the rows is store work.
+compiled `contentFilter`; writing the rows is store work. The rows go in as
+200-row `INSERT ... VALUES` statements (`plannerVisibleInsertChunkRows`): one
+statement per row cost a compile per row, three times a prepared statement and
+ten times a chunk. The prune that removes the rows below folders the baseline
+knows but a side no longer has computes the missing folders once, in a
+`MATERIALIZED` CTE over `baseline` with a primary-key probe each, and deletes
+each one's subtree by the primary-key range `path >= p || '/' AND path < p ||
+'0'`; the correlated `EXISTS` with a `substr()` prefix test it replaced scanned
+`baseline` once per visible row, 10 minutes per watch replan at 11k rows
+(`TestReplacePlannerVisibleStateTx_PruneMatchesCorrelatedScan`,
+`TestReplacePlannerVisibleStateTx_PruneUsesAPathRangePerMissingFolder`,
+`BenchmarkReplacePlannerVisibleState`).
 
 `shortcut_alias_mutation.go` is no longer claimed here. It declares `*Engine`
 methods that perform Graph mutations and persist the resulting shortcut-root
