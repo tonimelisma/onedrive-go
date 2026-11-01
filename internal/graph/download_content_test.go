@@ -106,7 +106,10 @@ func TestDownloadRange_ContentEndpointResumes(t *testing.T) {
 func TestDownload_ContentRedirectToUntrustedHostRefused(t *testing.T) {
 	graphSrv, contentAuth := contentFallbackServers(t, "abcdefgh")
 	client := newTestClient(t, graphSrv.URL)
-	// The default validator: an http loopback IP is not a Microsoft content host.
+	// The production validator: an http loopback IP is not a Microsoft
+	// content host. A loopback base URL relaxes the default for fixtures,
+	// so the production rule is installed explicitly here.
+	client.validators.contentRedirect = validateUploadURL
 
 	_, err := client.Download(t.Context(), driveid.New("d"), "item-1", &bytes.Buffer{})
 	require.Error(t, err)
