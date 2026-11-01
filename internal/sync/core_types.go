@@ -157,12 +157,20 @@ func (b *Baseline) GetByID(itemID string) (*BaselineEntry, bool) {
 // ignored emoji). Used by detectCaseCollisions to find
 // collisions between new files and already-synced baseline entries.
 // The caller must filter out exact path matches (same casing = not a collision).
-// Thread-safe: holds a read lock during access.
+// Thread-safe: holds a read lock during access and returns a copy of the
+// index slice. The watch observer iterates the result on its own goroutine
+// while workers commit outcomes through Put, which overwrites elements of the
+// shared slice in place; handing out the slice itself was a data race.
 func (b *Baseline) GetCaseVariants(dir, name string) []*BaselineEntry {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	return b.ByDirNameKey[DirNameKey{Dir: dir, NameKey: namekey.Key(name)}]
+	variants := b.ByDirNameKey[DirNameKey{Dir: dir, NameKey: namekey.Key(name)}]
+	if len(variants) == 0 {
+		return nil
+	}
+
+	return append([]*BaselineEntry(nil), variants...)
 }
 
 // Put inserts or updates a baseline entry in both maps. If the path already

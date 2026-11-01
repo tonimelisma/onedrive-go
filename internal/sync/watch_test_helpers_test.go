@@ -16,7 +16,7 @@ type watchObserverTestOptions struct {
 	CollisionPeers        map[string]map[string]struct{}
 	DirNameCache          map[string]map[string][]string
 	RecentLocalDeletes    map[string]struct{}
-	HashFunc              func(path string) (string, error)
+	HashFunc              func(ctx context.Context, path string) (string, error)
 	AfterFunc             func(time.Duration, func()) syncTimer
 	AfterSafetyScan       func()
 	TickCh                <-chan time.Time

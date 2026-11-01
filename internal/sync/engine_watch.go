@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	stdsync "sync"
 	"time"
 
@@ -361,7 +362,7 @@ func (rt *watchRuntime) startObservers(
 
 	localObs := newLocalObserver(bl, rt.deps.logger, rt.engine.checkWorkers)
 	localObs.SetFilterConfig(rt.engine.contentFilter)
-	localObs.SetProtectedRoots(rt.engine.protectedRoots)
+	localObs.SetProtectedRoots(rt.engine.currentProtectedRoots())
 	localObs.SetObservationRules(rt.engine.localRules)
 	localObs.SetSyncRootIdentity(rt.engine.syncRootIdentity)
 	mountFlags, err := rt.engine.baseline.listMountBoundaries(ctx)
@@ -535,7 +536,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 			}
 		}()
 
-		if err := wakeSource.Run(wakeCtx, wakeCh); err != nil {
+		if err := rt.runSocketIOWakeSource(wakeCtx, wakeSource, wakeCh); err != nil {
 			// Info: watch keeps polling on its interval regardless.
 			rt.deps.logger.Info("Instant change notifications from OneDrive stopped; still checking on the poll interval",
 				slog.String("drive_id", rt.engine.driveID.String()),
@@ -545,6 +546,34 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 	}()
 
 	return wakeCh
+}
+
+// runSocketIOWakeSource runs the wake source and is the panic boundary of its
+// goroutine. A panic becomes the error the goroutine's ordinary failure path
+// already handles: the wake source is an accelerator, so losing it leaves
+// watch polling on its interval and nothing else changes. The panic itself is
+// still logged at Error with its stack, because it is a bug. Before this
+// recover it took the process down with every mount.
+func (rt *watchRuntime) runSocketIOWakeSource(
+	ctx context.Context,
+	wakeSource socketIOWakeSourceRunner,
+	wakeCh chan<- struct{},
+) (err error) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		rt.deps.logger.Error("panic in socket.io wake source",
+			slog.String("drive_id", rt.engine.driveID.String()),
+			slog.Any("panic", r),
+			slog.String("stack", string(debug.Stack())),
+		)
+		err = fmt.Errorf("sync: panic in socket.io wake source: %v", r)
+	}()
+
+	//nolint:wrapcheck // The wake source's error is only logged by the caller, with its own context.
+	return wakeSource.Run(ctx, wakeCh)
 }
 
 func (rt *watchRuntime) emitSocketIOLifecycleEvent(event socketIOLifecycleEvent) {

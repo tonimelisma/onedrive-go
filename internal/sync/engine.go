@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	stdsync "sync"
 	"sync/atomic"
 
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
@@ -54,11 +55,18 @@ type Engine struct {
 	trash                  *localtrash.Trash      // local deletes and replaced files (P-4)
 	// trashPurgedAt is when housekeeping last purged expired trash entries;
 	// watch maintenance purges at most once per trashPurgeInterval.
-	trashPurgedAt         atomic.Int64
-	transferWorkers       int // goroutine count for the worker pool
-	checkWorkers          int // goroutine limit for parallel file hashing
-	contentFilter         ContentFilterConfig
-	protectedRoots        []ProtectedRoot
+	trashPurgedAt   atomic.Int64
+	transferWorkers int // goroutine count for the worker pool
+	checkWorkers    int // goroutine limit for parallel file hashing
+	contentFilter   ContentFilterConfig
+	// protectedRootsMu guards protectedRoots. The loop goroutine reads them
+	// each time it builds an observer; refreshProtectedRootsFromStore rewrites
+	// them from the full-refresh goroutine and from the remote observer's
+	// expired-delta recovery, which run beside the loop. Read through
+	// currentProtectedRoots, write through setProtectedRoots (R-6.3.4).
+	protectedRootsMu stdsync.Mutex
+	protectedRoots   []ProtectedRoot
+
 	localRules            LocalObservationRules
 	shortcutNamespaceID   string
 	shortcutChildWorkSink ShortcutChildWorkSink

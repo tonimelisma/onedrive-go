@@ -103,7 +103,7 @@ func TestMountRunner_Run_PanicWithError(t *testing.T) {
 // to the log below WARN so default and --quiet consoles are not flooded.
 //
 // Validates: R-6.8
-func TestMountRunner_Run_PanicStackStaysOffDefaultConsole(t *testing.T) {
+func TestMountRunner_Run_PanicIsLoggedAtErrorWithStack(t *testing.T) {
 	capture, logger := newLogCapture()
 	dr := &MountRunner{
 		identity:    testStandaloneMountIdentity(testCanonicalID(t, "personal:panic-log@example.com")),
@@ -116,11 +116,14 @@ func TestMountRunner_Run_PanicStackStaysOffDefaultConsole(t *testing.T) {
 	})
 
 	require.Error(t, result.Err)
-	assert.Empty(t, capture.atLeast(slog.LevelWarn), "a panic must not also be logged at WARN/ERROR")
-	logged := capture.atLeast(slog.LevelInfo)
-	require.Len(t, logged, 1)
-	assert.Contains(t, logged[0].attrs["stack"], "goroutine")
+	assert.Contains(t, result.Err.Error(), "boom")
+	logged := capture.atLeast(slog.LevelError)
+	require.Len(t, logged, 1, "a recovered panic is logged once, at Error")
+	assert.Contains(t, logged[0].attrs["stack"], "goroutine", "the stack travels with the record")
+	assert.Contains(t, logged[0].attrs["stack"], "TestMountRunner_Run_PanicIsLoggedAtErrorWithStack",
+		"the stack is the panicking goroutine's, captured before it unwinds")
 	assert.Equal(t, "Panic Log Drive", logged[0].attrs["drive"])
+	assert.Equal(t, "boom", logged[0].attrs["panic"])
 }
 
 // Validates: R-2.4

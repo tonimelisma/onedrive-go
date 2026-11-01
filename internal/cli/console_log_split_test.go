@@ -299,3 +299,28 @@ func TestCommandLogger_ErrorValueIsPlainOnDefaultConsoleAndFullElsewhere(t *test
 	verboseLogger.Warn("Stopped syncing Personal; retrying in 5 s", slog.Any("error", err))
 	assert.Contains(t, verboseConsole.String(), "sync drive: observe remote: GET /delta")
 }
+
+// Validates: R-6.6.13, R-6.7.1
+//
+// A recovered panic is logged at Error with its stack. The stack is for the
+// bug report, so the log file and the --verbose console keep it and the
+// default console prints the one line a person can act on.
+func TestCommandLogger_PanicStackOnlyInLogFileAndVerboseConsole(t *testing.T) {
+	t.Parallel()
+
+	logger, console, logPath := dualLoggerForTest(t, CLIFlags{})
+	logger.Error("Internal error while syncing Work; this is a bug, please report it",
+		slog.String("drive", "Work"), slog.Any("panic", "boom"), slog.String("stack", "goroutine 1 [running]:\nmain.main()"))
+
+	assert.Equal(t,
+		"Error: Internal error while syncing Work; this is a bug, please report it (drive=Work, panic=boom)\n",
+		console.String(), "the default console keeps the drive and the panic value and drops the stack")
+
+	record := logFileRecord(t, readLogFile(t, logPath), "Internal error while syncing Work; this is a bug, please report it")
+	assert.Equal(t, "goroutine 1 [running]:\nmain.main()", record["stack"], "the log file keeps the stack")
+
+	verboseLogger, verboseConsole, _ := dualLoggerForTest(t, CLIFlags{Verbose: true})
+	verboseLogger.Error("Internal error while syncing Work; this is a bug, please report it",
+		slog.String("stack", "goroutine 1 [running]:\nmain.main()"))
+	assert.Contains(t, verboseConsole.String(), "goroutine 1 [running]", "--verbose shows the stack")
+}

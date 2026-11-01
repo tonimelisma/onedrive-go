@@ -2,8 +2,10 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	stdsync "sync"
 	"testing"
 	"time"
 
@@ -128,11 +130,11 @@ func TestNewMountEngine_LoadsPersistedShortcutProtectedRoots(t *testing.T) {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	require.Len(t, eng.protectedRoots, 2)
-	assert.Equal(t, "Shared/Docs", eng.protectedRoots[0].Path)
-	assert.Equal(t, "binding-1", eng.protectedRoots[0].BindingID)
-	assert.True(t, eng.protectedRoots[0].HasIdentity)
-	assert.Equal(t, "Shared/Old Docs", eng.protectedRoots[1].Path)
+	require.Len(t, eng.currentProtectedRoots(), 2)
+	assert.Equal(t, "Shared/Docs", eng.currentProtectedRoots()[0].Path)
+	assert.Equal(t, "binding-1", eng.currentProtectedRoots()[0].BindingID)
+	assert.True(t, eng.currentProtectedRoots()[0].HasIdentity)
+	assert.Equal(t, "Shared/Old Docs", eng.currentProtectedRoots()[1].Path)
 }
 
 // Validates: R-2.4.8
@@ -166,7 +168,7 @@ func TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot(t *testing.T) {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	assert.Empty(t, eng.protectedRoots)
+	assert.Empty(t, eng.currentProtectedRoots())
 }
 
 func TestNewMountEngine_PropagatesRootedMountConfig(t *testing.T) {
@@ -329,4 +331,73 @@ func TestEngine_StoreAndExecutorTellTheEngineClocksTime(t *testing.T) {
 
 	assert.Equal(t, clock.Now(), eng.baseline.nowFunc(), "store")
 	assert.Equal(t, clock.Now(), eng.execCfg.nowFunc(), "executor")
+}
+
+// Validates: R-6.3.4
+//
+// The full-refresh goroutine and the remote observer's expired-delta recovery
+// rederive the protected roots while the loop goroutine reads them to build
+// observers. Run under -race: before the lock the write in
+// refreshProtectedRootsFromStore raced every reader of the field.
+func TestRefreshProtectedRootsFromStore_ConcurrentReadersAreRaceFree(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	logger := testLogger(t)
+	syncDir := filepath.Join(t.TempDir(), "sync")
+	require.NoError(t, os.MkdirAll(syncDir, 0o700))
+
+	mountCfg := testEngineMountConfig(syncDir)
+	mountCfg.ShortcutNamespaceID = shortcutNamespaceTestID
+
+	store, err := openEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
+	require.NoError(t, err)
+	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+		NamespaceID:       shortcutNamespaceTestID,
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		LocalAlias:        "Docs",
+		RemoteDriveID:     driveid.New("drive-1"),
+		RemoteItemID:      "target-1",
+		RemoteIsFolder:    true,
+		State:             ShortcutRootStateRemovedFinalDrain,
+		ProtectedPaths:    []string{"Shared/Docs"},
+	}}))
+	require.NoError(t, store.Close(t.Context()))
+
+	eng, err := NewMountEngine(t.Context(), testEngineSession(), mountCfg, logger, nil, false)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, eng.Close(t.Context()))
+	})
+
+	const rounds = 50
+	var wg stdsync.WaitGroup
+	start := make(chan struct{})
+	refreshErrs := make(chan error, rounds)
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for range rounds {
+			refreshErrs <- eng.refreshProtectedRootsFromStore(t.Context())
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for range rounds {
+			roots := eng.currentProtectedRoots()
+			if len(roots) != 1 || roots[0].Path != "Shared/Docs" {
+				refreshErrs <- fmt.Errorf("reader saw protected roots %+v", roots)
+			}
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+	close(refreshErrs)
+	for refreshErr := range refreshErrs {
+		assert.NoError(t, refreshErr)
+	}
 }
