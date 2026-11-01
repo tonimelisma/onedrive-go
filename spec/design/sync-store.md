@@ -277,7 +277,10 @@ The target store API persists three durable control authorities:
 
 - `observation_issues` for durable current-truth/content problems
 - `retry_work` for exact delayed work
-- `block_scopes` for shared blockers and trial timing
+- `block_scopes` for shared blockers and trial timing, plus
+  `slow_start_threshold`, the release ramp's memory of where the last 429
+  stopped it (sync-engine.md "Release ramps", R-6.8.24): a one-shot pass and
+  a restart rebuild the runtime from this row, so the memory lives here
 
 Supporting outcome mutations should stay separate by owner:
 
@@ -289,7 +292,13 @@ Supporting outcome mutations should stay separate by owner:
 - retry-work rearm helpers that reschedule exact held work without inventing
   new planning or observation authority
 - scope release/discard/extend helpers that mutate `block_scopes` and linked
-  blocked `retry_work` in one transaction
+  blocked `retry_work` in one transaction. Release is by explicit rows
+  (`ReleaseScopeWork`): the engine names the blocked rows of one ramp batch
+  in its held order (the store has no held-order column, and blocked rows all
+  carry `next_retry_at = 0`, so there is nothing store-side to order by);
+  the store marks exactly those rows ready now and deletes the scope row in
+  the same transaction when no blocked row remains under it, so a
+  probationary scope is never persisted without blocked work (R-6.8.24)
 - retry-resolution helpers that delete exact `retry_work` and return the
   resolved `retry_work` row for engine-owned cleanup decisions
 

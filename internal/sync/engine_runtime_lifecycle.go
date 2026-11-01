@@ -75,17 +75,10 @@ func (flow *engineFlow) activateScope(ctx context.Context, block *activeScope) e
 	if block == nil {
 		return fmt.Errorf("sync: activating scope: missing block")
 	}
-
-	persisted, err := blockScopeRowFromActiveScope(*block)
-	if err != nil {
+	if err := flow.persistActiveScope(ctx, block); err != nil {
 		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
 	}
 
-	if err := flow.deps.store.UpsertBlockScope(ctx, persisted); err != nil {
-		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
-	}
-
-	flow.scopes.upsertActiveScope(block)
 	flow.deps.emit(engineDebugEvent{
 		Type:     engineDebugEventScopeActivated,
 		ScopeKey: block.Key,
@@ -94,6 +87,40 @@ func (flow *engineFlow) activateScope(ctx context.Context, block *activeScope) e
 	flow.mustAssertInvariants(ctx, "activate scope")
 
 	return nil
+}
+
+// persistActiveScope writes a scope's timing to both authorities, the store
+// row and the ledger, without announcing an activation.
+func (flow *engineFlow) persistActiveScope(ctx context.Context, block *activeScope) error {
+	persisted, err := blockScopeRowFromActiveScope(*block)
+	if err != nil {
+		return err
+	}
+	if err := flow.deps.store.UpsertBlockScope(ctx, persisted); err != nil {
+		return err
+	}
+	flow.scopes.upsertActiveScope(block)
+
+	return nil
+}
+
+// newBlockActivation is the ledger shape of a (re)activation of key: one
+// generation past the active scope's, with the ramp's memory of where the
+// activating 429 stopped it, or the first generation of a new scope.
+func (flow *engineFlow) newBlockActivation(key ScopeKey, interval time.Duration, now time.Time) *activeScope {
+	block := &activeScope{
+		Key:           key,
+		TrialInterval: interval,
+		NextTrialAt:   now.Add(interval),
+		Generation:    1,
+	}
+	if current, ok := flow.scopes.lookupActiveScope(key); ok {
+		block.Generation = current.Generation + 1
+		block.SlowStartThreshold = slowStartThresholdAfterThrottle(
+			flow.engine.transferWorkers, current.ReleaseAllowance, current.SlowStartThreshold)
+	}
+
+	return block
 }
 
 func (flow *engineFlow) extendScopeTrial(
@@ -115,9 +142,20 @@ func (flow *engineFlow) extendScopeTrial(
 		slog.Duration("retry_after", retryAfter),
 	)
 
+	// A 429 from a trial or a probation member is a re-block: the ramp
+	// starts over, remembering where it was stopped, and the admitted work
+	// the scope blocks is taken back.
 	block.NextTrialAt = nextAt
 	block.TrialInterval = newInterval
+	block.SlowStartThreshold = slowStartThresholdAfterThrottle(
+		flow.engine.transferWorkers, block.ReleaseAllowance, block.SlowStartThreshold)
+	block.ReleaseAllowance = 0
+	block.BatchOutstanding = 0
+	block.Generation++
 	if err := flow.activateScope(ctx, &block); err != nil {
+		return fmt.Errorf("extend trial interval for %s: %w", scopeKey.String(), err)
+	}
+	if err := flow.retireAdmittedWorkBlockedBy(ctx, scopeKey); err != nil {
 		return fmt.Errorf("extend trial interval for %s: %w", scopeKey.String(), err)
 	}
 
@@ -203,14 +241,13 @@ func (flow *engineFlow) applyBlockScope(ctx context.Context, sr scopeUpdateResul
 	now := flow.deps.now()
 	interval := computeTrialInterval(sr.RetryAfter)
 
-	block := &activeScope{
-		Key:           sr.ScopeKey,
-		TrialInterval: interval,
-		NextTrialAt:   now.Add(interval),
-	}
+	block := flow.newBlockActivation(sr.ScopeKey, interval, now)
 	wasActive := flow.scopes.hasActiveScope(sr.ScopeKey)
 	if err := flow.activateScope(ctx, block); err != nil {
 		// activateScope already names the operation and the scope.
+		return err
+	}
+	if err := flow.retireAdmittedWorkBlockedBy(ctx, sr.ScopeKey); err != nil {
 		return err
 	}
 
@@ -234,25 +271,18 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 
 	now := flow.deps.now()
 	interval := computeTrialInterval(retryAfter)
-	block := &activeScope{
-		Key:           to,
-		TrialInterval: interval,
-		NextTrialAt:   now.Add(interval),
-	}
+	block := flow.newBlockActivation(to, interval, now)
 	wasActive := flow.scopes.hasActiveScope(to)
-	persisted, err := blockScopeRowFromActiveScope(*block)
-	if err != nil {
+	if err := flow.persistActiveScope(ctx, block); err != nil {
 		return fmt.Errorf("transition blocked scope %s -> %s: %w", from.String(), to.String(), err)
 	}
-	if err := flow.deps.store.UpsertBlockScope(ctx, persisted); err != nil {
-		return fmt.Errorf("transition blocked scope %s -> %s: %w", from.String(), to.String(), err)
-	}
-
-	flow.scopes.upsertActiveScope(block)
 	flow.deps.emit(engineDebugEvent{
 		Type:     engineDebugEventScopeActivated,
 		ScopeKey: to,
 	})
+	if err := flow.retireAdmittedWorkBlockedBy(ctx, to); err != nil {
+		return fmt.Errorf("transition blocked scope %s -> %s: %w", from.String(), to.String(), err)
+	}
 
 	if from != to && !from.IsZero() {
 		hasBlockedWork, err := flow.scopeHasBlockedRetryWork(ctx, from)
@@ -328,31 +358,6 @@ func (flow *engineFlow) logBlockScopeActivated(
 		flow.deps.logger.Warn("Paused syncing "+key.Humanize()+" ("+strings.ReplaceAll(conditionType, "_", " ")+
 			"); checking again in "+retryIn, fields...)
 	}
-}
-
-// releaseScope atomically removes the block scope and makes blocked retry work
-// under that scope eligible to run again.
-func (flow *engineFlow) releaseScope(ctx context.Context, key ScopeKey) error {
-	if err := flow.deps.store.ReleaseScope(ctx, key, flow.deps.now()); err != nil {
-		return fmt.Errorf("sync: releasing scope %s: %w", key.String(), err)
-	}
-
-	flow.scopes.removeActiveScope(key)
-	flow.deps.emit(engineDebugEvent{
-		Type:     engineDebugEventScopeReleased,
-		ScopeKey: key,
-	})
-	flow.signals.kickDueHeldRelease()
-	flow.signals.armTrialTimer()
-
-	flow.deps.logger.Info("Resumed syncing: "+key.Humanize(),
-		slog.String("scope_key", key.String()),
-	)
-
-	flow.mustAssertReleasedScope(ctx, key, "release scope")
-	flow.mustAssertInvariants(ctx, "release scope")
-
-	return nil
 }
 
 // discardScope atomically removes the block scope and deletes blocked retry
@@ -487,6 +492,7 @@ func (flow *engineFlow) drainDueHeldWorkNow(
 		if ta := flow.retries.releaseHeldAction(key); ta != nil {
 			ta.IsTrial = false
 			ta.TrialScopeKey = ScopeKey{}
+			ta.TrialScopeGeneration = 0
 			ready = append(ready, ta)
 		}
 	}
@@ -500,6 +506,16 @@ func (flow *engineFlow) drainDueHeldWorkNow(
 		ta := flow.retries.releaseHeldAction(key)
 		if ta == nil {
 			continue
+		}
+		// A due trial means the ramp stalled (or never started): whatever
+		// batch was outstanding is not coming back, so the trial's success
+		// releases the next batch outright.
+		if scope, ok := flow.scopes.lookupActiveScope(held.ScopeKey); ok {
+			if scope.BatchOutstanding != 0 {
+				scope.BatchOutstanding = 0
+				flow.scopes.upsertActiveScope(&scope)
+			}
+			ta.TrialScopeGeneration = scope.Generation
 		}
 		ta.IsTrial = true
 		ta.TrialScopeKey = held.ScopeKey

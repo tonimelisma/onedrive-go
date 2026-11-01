@@ -58,11 +58,12 @@ func upsertBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, block *
 
 	_, err := runner.ExecContext(ctx,
 		`INSERT OR REPLACE INTO block_scopes
-			(scope_key, trial_interval, next_trial_at)
-		VALUES (?, ?, ?)`,
+			(scope_key, trial_interval, next_trial_at, slow_start_threshold)
+		VALUES (?, ?, ?, ?)`,
 		block.Key.String(),
 		int64(block.TrialInterval),
 		nextTrialAtNano,
+		block.SlowStartThreshold,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: upserting block scope %s: %w", block.Key.String(), err)

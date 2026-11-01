@@ -182,9 +182,10 @@ CREATE INDEX IF NOT EXISTS idx_observation_issues_scope_key
     ON observation_issues(scope_key);
 
 CREATE TABLE IF NOT EXISTS block_scopes (
-    scope_key      TEXT PRIMARY KEY,
-    trial_interval INTEGER NOT NULL,
-    next_trial_at  INTEGER NOT NULL
+    scope_key            TEXT PRIMARY KEY,
+    trial_interval       INTEGER NOT NULL,
+    next_trial_at        INTEGER NOT NULL,
+    slow_start_threshold INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS shortcut_roots (
@@ -262,7 +263,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"path", "issue_type", "scope_key",
 		},
 		"block_scopes": {
-			"scope_key", "trial_interval", "next_trial_at",
+			"scope_key", "trial_interval", "next_trial_at", "slow_start_threshold",
 		},
 		"shortcut_roots": {
 			"binding_item_id", "namespace_id", "relative_local_path", "local_alias",

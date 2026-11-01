@@ -245,7 +245,11 @@ func (r *oneShotRunner) executePreparedPlan(
 
 	// Reset engine counters for this pass.
 	r.resetResultStats()
-	r.sched.dispatchCh = make(chan *trackedAction, len(plan.Actions))
+	// Unbuffered like watch's: admitted work stays engine-owned, in the
+	// results loop's outbox, until a worker actually takes it, so a scope
+	// that activates can still take it back (R-6.8.24). A plan-sized buffer
+	// moved the whole outbox into the channel at once.
+	r.sched.dispatchCh = make(chan *trackedAction)
 	initialOutbox, done, err := r.dispatchInitialReadyActions(ctx, bl, runtime, report)
 	if err != nil {
 		return err
