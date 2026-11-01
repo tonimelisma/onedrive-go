@@ -219,22 +219,23 @@ func TestApplyShortcutRootCompleteOmission_ConfirmedLiveBindingStaysActive(t *te
 func TestFullRefresh_OrphanStillLiveOnOneDriveIsNotDeleted(t *testing.T) {
 	t.Parallel()
 
+	const fileID = "item-a"
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
-	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
+	remote.addFile(t, fileID, "root", "a.txt", "alpha\n")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
 
 	// A complete enumeration that transiently omits a.txt, which GetItem
 	// still returns.
 	remote.mu.Lock()
-	omitted := remote.items["item-a"]
-	delete(remote.items, "item-a")
+	omitted := remote.items[fileID]
+	delete(remote.items, fileID)
 	remote.mu.Unlock()
 	client := remote.client(t)
 	baseGetItem := client.getItemFn
 	client.getItemFn = func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
-		if itemID == "item-a" {
+		if itemID == fileID {
 			copied := *omitted
 			return &copied, nil
 		}

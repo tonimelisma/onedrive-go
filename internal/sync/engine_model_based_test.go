@@ -361,10 +361,7 @@ func (r *modelRun) adoptEngine(eng *testEngine) {
 // armCrash installs a capture at a crash point the seed picks, half the time
 // with power loss (everything since a checkpoint taken now is lost).
 func (r *modelRun) armCrash(rng *rand.Rand) *crashCapture {
-	points := []string{
-		crashPointRemoteMoveDone, crashPointLocalMoveDone, crashPointUploadRemoteDone,
-		crashPointDownloadRenamed, crashPointCommitObservation, crashPointCommitOutcome,
-	}
+	points := allCrashPoints()
 	capture := &crashCapture{
 		point:     points[rng.IntN(len(points))],
 		powerLoss: rng.IntN(2) == 0,
