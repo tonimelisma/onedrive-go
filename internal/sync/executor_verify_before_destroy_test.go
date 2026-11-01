@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -382,22 +383,21 @@ func syncedFolderScenario(t *testing.T, client *engineMockClient, remote *moveSc
 	return eng, syncRoot
 }
 
-// Validates: R-2.8.10
-func TestRunOnce_RemoteFolderDeleteOverListingCapIsADurableIssueNotRelistedEveryPass(t *testing.T) {
-	t.Parallel()
+// overListedFolderClient is remote's client with X answering its listing
+// with more live children than the cap allows, and a count of those
+// listings. Each child is a synced, unchanged item, so nothing but their
+// number stops the delete; the cap is counted before any child is looked at.
+func overListedFolderClient(t *testing.T, remote *moveScenarioRemote) (*engineMockClient, *int) {
+	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
 	client := remote.client(t)
 	baseList := client.listChildrenFn
-	folderListings := 0
+	folderListings := new(int)
 	client.listChildrenFn = func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {
 		if parentID != syncedFolderItemID {
 			return baseList(ctx, driveID, parentID)
 		}
-		folderListings++
-		// X answers with more live children than the cap allows. Each is a
-		// synced, unchanged item, so nothing but their number stops the
-		// delete; the cap is counted before any child is looked at.
+		*folderListings++
 		keep, err := remote.getItem("item-keep")
 		require.NoError(t, err)
 		children := make([]graph.Item, 0, remoteFolderDeleteListLimit+1)
@@ -406,7 +406,22 @@ func TestRunOnce_RemoteFolderDeleteOverListingCapIsADurableIssueNotRelistedEvery
 		}
 		return children, nil
 	}
+
+	return client, folderListings
+}
+
+// Validates: R-2.8.10
+func TestRunOnce_RemoteFolderDeleteOverListingCapIsADurableIssueNotRelistedEveryPass(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	client, folderListings := overListedFolderClient(t, remote)
 	eng, syncRoot := syncedFolderScenario(t, client, remote)
+	// The retry row's due time and the passes read one clock the test
+	// advances, so whether the second pass finds the row due is decided
+	// here, not by how long a pass takes on the host.
+	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
+	installManualClockForTestEngine(eng, clock)
 
 	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
@@ -414,25 +429,45 @@ func TestRunOnce_RemoteFolderDeleteOverListingCapIsADurableIssueNotRelistedEvery
 	require.Equal(t, 1, report.Failed, "errors: %v", report.Errors)
 	require.Len(t, report.Errors, 1)
 	require.ErrorIs(t, report.Errors[0], errRemoteFolderTooLargeToVerify)
-	assert.NotContains(t, remote.deletes, "item-x", "the folder is not deleted recursively")
+	assert.NotContains(t, remote.deletes, syncedFolderItemID, "the folder is not deleted recursively")
 	assert.Contains(t, remote.tree(), "X")
-	assert.Equal(t, 1, folderListings)
+	assert.Equal(t, 1, *folderListings)
 	retryRows, err := eng.baseline.ListRetryWork(t.Context())
 	require.NoError(t, err)
 	require.Len(t, retryRows, 1, "the refused delete is recorded as a durable issue")
 	assert.Equal(t, "X", retryRows[0].Path)
 	assert.Equal(t, ActionRemoteDelete, retryRows[0].ActionType)
 	assert.False(t, retryRows[0].Blocked)
-	assert.Positive(t, retryRows[0].NextRetryAt, "the issue backs off instead of relisting the folder on every pass")
+	assert.Equal(t, 1, retryRows[0].AttemptCount)
+	assert.Greater(t, retryRows[0].NextRetryAt, clock.Now().UnixNano(), "the issue backs off before it is tried again")
 
-	// The next pass neither relists nor deletes the folder.
+	// A pass before the row is due neither relists nor deletes the folder.
 	report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Zero(t, report.Failed, "errors: %v", report.Errors)
-	assert.Equal(t, 1, folderListings, "a folder too large to verify is not relisted on the next pass")
-	assert.NotContains(t, remote.deletes, "item-x")
+	assert.Equal(t, 1, *folderListings, "a folder too large to verify is not relisted while its retry backs off")
+	assert.NotContains(t, remote.deletes, syncedFolderItemID)
 	assert.NoDirExists(t, filepath.Join(syncRoot, "X"), "the local delete stands; nothing is downloaded back")
+
+	// Once due, the retry lists the folder once more, is refused again and
+	// backs off further; the folder is still not deleted.
+	clock.Advance(retryBackoffCeilingForTest)
+	report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Failed, "errors: %v", report.Errors)
+	assert.Equal(t, 2, *folderListings, "a due retry lists the folder once")
+	assert.NotContains(t, remote.deletes, syncedFolderItemID)
+	retryRows, err = eng.baseline.ListRetryWork(t.Context())
+	require.NoError(t, err)
+	require.Len(t, retryRows, 1)
+	assert.Equal(t, 2, retryRows[0].AttemptCount)
+	assert.Greater(t, retryRows[0].NextRetryAt, clock.Now().UnixNano())
 }
+
+// retryBackoffCeilingForTest is longer than any retry backoff (the reconcile
+// curve tops out at an hour), so advancing the clock by it makes every
+// retry row due.
+const retryBackoffCeilingForTest = 2 * time.Hour
 
 // The child's own delete is what sees the edit first: its preflight
 // supersedes it, and the folder delete, which depends on it, is never
