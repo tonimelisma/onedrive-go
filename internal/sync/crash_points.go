@@ -20,6 +20,13 @@ const (
 	// crashPointDownloadRenamed: the download is renamed into place; the
 	// outcome is not committed.
 	crashPointDownloadRenamed = "download.renamed"
+	// crashPointLocalDeleteTrashed: the file left the sync folder for the
+	// local trash, whose entry is still pending; neither the trash entry nor
+	// the outcome is committed.
+	crashPointLocalDeleteTrashed = "delete.local_trashed"
+	// crashPointRemoteDeleteDone: OneDrive deleted the item; the outcome is
+	// not committed.
+	crashPointRemoteDeleteDone = "delete.remote_done"
 	// crashPointCommitObservation: an observation window is written but its
 	// transaction is not committed.
 	crashPointCommitObservation = "store.commit_observation"
