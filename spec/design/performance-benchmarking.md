@@ -676,3 +676,79 @@ is cast back to TEXT, prefix joins are `path > p || '/' AND path < p || '0'`
 ranges, and the followed-ancestor sets are materialized once instead of
 re-evaluated per path. A rename now costs about a quiet pass; the quiet pass
 itself (about 11 s per query at 100k items) is the next target.
+
+## Planner Micro-Benchmarks
+
+Two more stages of every plan were quadratic and are pinned by benchmarks
+beside the comparison queries. Both were found by profiling a first sync of
+a 140k-file tree and a watch replan over an 11k-row baseline on the same
+2-core host (purkki, Ubuntu, Go 1.27, modernc SQLite, 2026-11-01). The host
+ran a live client and other test suites during these runs (load average 10
+to 15 on 2 cores), so wall times are upper bounds; the CPU seconds, from a
+CPU profile of the same runs divided by the iterations, are the comparable
+figures.
+
+`BenchmarkBuildDependencies` (`internal/sync/planner_dependencies_bench_test.go`)
+times `buildDependencies` over the action lists of a first upload (a remote
+folder create per folder of 10 files, an upload per file) and a mixed plan
+(every tenth folder renamed on one side with work under its source and
+destination, every tenth deleted with its children, a case-only rename per
+folder). `BenchmarkBuildDependenciesScanningOracle` is the implementation it
+replaced, kept in the test file as the equivalence oracle, at 10k only:
+
+| Actions | Upload, before | Upload, after | Mixed, before | Mixed, after |
+| --- | --- | --- | --- | --- |
+| 10k | 7.4 s | 0.07 s | 43 s | 0.14 s |
+| 100k | about 15 min (profiled: 148 s at 44k, 1,877 s at 154k) | 0.54 s | not run | 1.08 s |
+
+Before: `addMoveDeps` and `addRemoteCaseVariantDeps` compared every action
+with every other action (the latter through `namekey.EqualPath`, which is why
+the mixed shape was six times slower still), and `addChildDeleteDeps` and
+`addMoveOutOfDeletedFolderDeps` did the same per folder delete; the exponent
+was 2.0 to 2.3 and the stage was 91 % of a 34-minute first plan at 154k
+actions. After: `dependencyIndex` maps actions by path, moves by source and
+destination, and name-freeing remote deletes and moves by the name key of
+their path, and lists the work below each folder delete and move source by
+walking the folders above every path once; each rule then applies the same
+pair predicate as before to a handful of candidates. The build is linear in
+the actions times their depth (10k to 100k is 8x), and the equivalence test
+`TestBuildDependencies_MatchesScanningOracle` holds the new builder to the
+oracle's edges, duplicates included, over random plans of every shape.
+
+`BenchmarkReplacePlannerVisibleState` (`internal/sync/store_planner_visible_bench_test.go`)
+times `replacePlannerVisibleStateTx`, the TEMP-table build inside every
+plan's read transaction, over 9,910 rows a side against a baseline of the
+same tree (ten top folders of 90 folders of 10 files): a quiet tree, and one
+whose first top folder is gone from both sides while its 991 descendants are
+still listed. `BenchmarkReplacePlannerVisibleStateCorrelatedPrune` builds the
+same tables and prunes them with the statements this replaced:
+
+| Shape | Before (wall / CPU) | After (wall / CPU) |
+| --- | --- | --- |
+| 9,910 rows, quiet | 471 s / 77 s | 2.4 s / 0.5 s |
+| 9,910 rows, missing top folder | not run (same scan) | 2.6 s |
+
+Before: each prune was a `DELETE ... WHERE EXISTS (SELECT 1 FROM baseline
+parent ... WHERE substr(visible.path, 1, length(parent.path) + 1) =
+parent.path || '/')`, a correlated scan of `baseline` per visible row (rows x
+baseline rows, with a further cliff once `baseline` outgrows the 2 MB page
+cache), measured live at 10 s, 65 s and 619 s per replan of the same 11.4k
+rows as the baseline filled to 0, 4.4k and 11.3k rows. After: the missing
+folders are computed once in a `MATERIALIZED` CTE (one pass over `baseline`
+with a primary-key probe each) and each one deletes its subtree by the
+primary-key range `path >= p || '/' AND path < p || '0'`, the idiom the
+comparison CTEs use; `TestReplacePlannerVisibleStateTx_PruneUsesAPathRangePerMissingFolder`
+asserts that query plan. The row inserts went from one compiled statement per
+row (170 µs a row under this load; 48 µs prepared once per transaction) to
+200-row `INSERT ... VALUES` statements (16 µs a row), the rest of the after
+figure being the two `ORDER BY path` reads of the pruned tables.
+
+What this does and does not say about R-6.1.3 (a first sync of 10K files in
+under 10 minutes, still a `target`): the planning stages of a 10k first sync
+now total a few seconds in-process, so planning no longer stands in the way,
+but the target is about the whole sync, which is dominated by hashing the
+tree and by Graph upload latency and throughput. Promoting it needs a
+representative-benchmark run of the startup-plus-first-sync scenario
+(Increment 5 above) against a live test drive with 10k files, recording wall
+time, CPU and peak RSS per R-6.1.8, not a planner micro-benchmark.
+
