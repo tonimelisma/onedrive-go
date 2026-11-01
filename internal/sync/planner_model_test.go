@@ -667,6 +667,7 @@ func plannerModelSeeds(t *testing.T) []uint64 {
 
 // Validates: R-2.3.1, R-2.17.1, R-2.17.2
 func TestPlannerModel_RandomTriplesConverge(t *testing.T) {
+	skipInShort(t)
 	t.Parallel()
 
 	for _, seed := range plannerModelSeeds(t) {

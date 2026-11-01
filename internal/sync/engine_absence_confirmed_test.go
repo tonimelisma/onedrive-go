@@ -304,6 +304,7 @@ func TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward(t *testing.T) {
 // while the orphan stays undecided (doubling from 15 minutes towards the
 // daily cadence), and once a refresh decides it the normal cadence returns.
 func TestFullRefresh_PermanentlyUndecidedOrphanBacksOff(t *testing.T) {
+	skipInShort(t)
 	t.Parallel()
 
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))

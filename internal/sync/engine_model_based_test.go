@@ -91,6 +91,7 @@ const (
 
 // Validates: R-2.3.1, R-2.17.1, R-2.17.2, R-2.17.3, R-2.17.6, R-2.17.7, R-2.17.8
 func TestRunOnce_RandomizedBidirectionalEditsConverge(t *testing.T) {
+	skipInShort(t)
 	t.Parallel()
 
 	for _, seed := range modelSeeds(t) {
@@ -106,6 +107,7 @@ func TestRunOnce_RandomizedBidirectionalEditsConverge(t *testing.T) {
 // The same seed twice gives the same actions in the same order and the same
 // trees (D-090): a failing seed is a reproducible bug, not a flake.
 func TestModel_SameSeedReplaysIdentically(t *testing.T) {
+	skipInShort(t)
 	t.Parallel()
 
 	seeds := []uint64{3, 28}
@@ -138,6 +140,7 @@ func TestModel_SameSeedReplaysIdentically(t *testing.T) {
 // (D-091), sometimes losing the WAL too, and sync must converge from what the
 // crash left with every model check and invariant holding.
 func TestModel_CrashAtSeededPointsRecovers(t *testing.T) {
+	skipInShort(t)
 	t.Parallel()
 
 	for _, seed := range modelCrashSeeds(t) {

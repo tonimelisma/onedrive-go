@@ -474,6 +474,7 @@ func (r *modelRun) takeConcurrentEdits() []modelEdit {
 // holding. ONEDRIVE_GO_CHAOS_SEEDS widens the search (or name one seed with
 // ONEDRIVE_GO_MODEL_SEED).
 func TestModel_ChaosGraphConverges(t *testing.T) {
+	skipInShort(t)
 	t.Parallel()
 
 	for _, seed := range chaosSeeds(t) {

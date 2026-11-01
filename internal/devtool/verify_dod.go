@@ -1304,18 +1304,13 @@ func waitForPostMergePushCI(
 	if mergeCommit == "" {
 		return fmt.Errorf("dod post-merge: missing merge commit")
 	}
-	subjectOut, err := runner.Output(ctx, mainRoot, os.Environ(), "git", "show", "-s", "--format=%s", mergeCommit)
-	if err != nil {
-		return fmt.Errorf("dod post-merge commit subject: %w", err)
-	}
-	commitSubject := strings.TrimSpace(string(subjectOut))
 	deadline := time.Now().Add(timeout)
 	for {
 		runs, err := loadMainRunsForCommit(ctx, runner, mainRoot, mergeCommit)
 		if err != nil {
 			return err
 		}
-		status, reason := classifyPostMergeRuns(runs, commitSubject, mergeCommit)
+		status, reason := classifyPostMergeRuns(runs, mergeCommit)
 		switch status {
 		case prCheckStatePass:
 			return nil
@@ -1363,7 +1358,12 @@ func loadMainRunsForCommit(ctx context.Context, runner commandRunner, repoRoot s
 	return runs, nil
 }
 
-func classifyPostMergeRuns(runs []githubRun, commitSubject string, commit string) (prCheckState, string) {
+// classifyPostMergeRuns reads the CI run of the merge commit on main. Every
+// push to main runs the quick lane (branch protection no longer requires a PR
+// branch to be up to date, so a stale-branch merge can break main and the
+// push run is what catches it), so a skipped run is a failure, not the old
+// squash-merge skip rule.
+func classifyPostMergeRuns(runs []githubRun, commit string) (prCheckState, string) {
 	if len(runs) == 0 {
 		return prCheckStatePending, "no main push CI run found for " + commit
 	}
@@ -1381,10 +1381,7 @@ func classifyPostMergeRuns(runs []githubRun, commitSubject string, commit string
 		case checkConclusionSuccess:
 			return prCheckStatePass, run.Name + " succeeded"
 		case checkConclusionSkipped:
-			if run.Event == "push" && strings.Contains(commitSubject, "(#") {
-				return prCheckStatePass, run.Name + " skipped by squash-merge push rule"
-			}
-			return prCheckStateFail, run.Name + " skipped without squash-merge subject"
+			return prCheckStateFail, run.Name + " skipped; every push to main must run the quick lane"
 		default:
 			return prCheckStateFail, run.Name + " concluded " + conclusion
 		}

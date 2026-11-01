@@ -50,6 +50,19 @@ test accounts; see "E2E & Integration Tests" in [CLAUDE.md](CLAUDE.md).
 Contributors without test accounts can run `go run ./cmd/devtool verify public`,
 which is the same without the live suite.
 
+CI is tiered. Every pull request and every push to `main` runs the quick lane
+in parallel jobs: `verify lint`, and `verify quick` (format, the repo rules,
+the builds and `go test -short`, split into shards with `--shard k/n`) on
+Linux plus `verify platform` (host build and the same short tier) on macOS. `-short` skips the tests marked exhaustive (randomized
+model runs, replays, the reverse-dispatch re-run of every scenario, the
+reconcile matrix); the race detector and the coverage gate do not run there.
+The full tier (`verify public` on both platforms, `stress` and the full live
+suite) runs nightly and on manual dispatch, so a data race or a coverage
+drop can reach `main` and be caught by the next nightly run; run
+`verify default` locally before a PR, since it still runs everything. For a
+fast local check: `go run ./cmd/devtool verify quick` and
+`go run ./cmd/devtool verify lint`.
+
 ## How a change is made
 
 Work is done in PR-backed increments from isolated worktrees. Fetch first,
@@ -98,8 +111,8 @@ skipped), posts the manifest's templated replies, resolves handled review
 threads, and requires zero unresolved review threads. `post-merge` performs the
 squash merge, handles already-completed multi-worktree merge and cleanup
 cases, fast-forwards root `main`, removes the increment worktree and branch,
-validates the configured post-merge CI-skip rule when applicable, and runs
-`cleanup-audit`.
+waits for the push-to-`main` CI run of the merge commit to succeed (every push
+to `main` runs the quick lane), and runs `cleanup-audit`.
 
 ## Release readiness
 

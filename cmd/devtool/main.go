@@ -53,6 +53,7 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 	var (
 		coverageThreshold  float64
 		coverageFile       string
+		shard              string
 		e2eLogDir          string
 		summaryJSONPath    string
 		classifyLiveQuirks bool
@@ -68,7 +69,7 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "verify [default|public|e2e|e2e-full|integration|stress|failed-test]",
+		Use:   "verify [default|public|quick|lint|platform|e2e|e2e-full|integration|stress|failed-test]",
 		Short: "Run repository verification profiles",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -87,6 +88,7 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 				Profile:            profile,
 				CoverageThreshold:  coverageThreshold,
 				CoverageFile:       coverageFile,
+				Shard:              shard,
 				E2ELogDir:          e2eLogDir,
 				SummaryJSONPath:    summaryJSONPath,
 				ClassifyLiveQuirks: classifyLiveQuirks,
@@ -112,6 +114,12 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 		"minimum total coverage percentage; negative reports coverage without gating",
 	)
 	cmd.Flags().StringVar(&coverageFile, "coverage-file", "", "coverage profile path")
+	cmd.Flags().StringVar(
+		&shard,
+		"shard",
+		"",
+		"run one slice of the quick or platform profile's short unit tier, as index/count (for example 1/2)",
+	)
 	cmd.Flags().StringVar(&e2eLogDir, "e2e-log-dir", "", "directory for full E2E debug logs")
 	cmd.Flags().StringVar(&summaryJSONPath, "summary-json", "", "write verify summary JSON to this path")
 	cmd.Flags().BoolVar(&dod, "dod", false, "run Definition of Done automation instead of the selected verification profile")
