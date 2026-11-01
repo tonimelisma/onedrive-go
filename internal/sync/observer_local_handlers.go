@@ -94,7 +94,7 @@ func (o *localObserver) watchLoop(
 			}
 
 		case <-tickCh:
-			if err := o.rescanUnlessRootGone(ctx, tree, events); err != nil {
+			if _, err := o.rescanUnlessRootGone(ctx, tree, events); err != nil {
 				return err
 			}
 			errBackoff.Reset()
@@ -175,31 +175,37 @@ func (o *localObserver) runDueRecoveryScan(
 	}
 
 	o.logger.Debug("running recovery scan after missed local changes")
-	if err := o.rescanUnlessRootGone(ctx, tree, events); err != nil {
+	scanned, err := o.rescanUnlessRootGone(ctx, tree, events)
+	if err != nil {
 		return err
 	}
-	o.finishRecoveryScan()
+	if scanned {
+		// A deferred scan is not a recovery scan that ended: it must not
+		// feed the storm pacing, which doubles the next delay.
+		o.finishRecoveryScan()
+	}
 
 	return nil
 }
 
 // rescanUnlessRootGone runs a full rescan, or reports the sync root gone
-// (B-113): a deleted root means the watcher is watching nothing.
-func (o *localObserver) rescanUnlessRootGone(ctx context.Context, tree *synctree.Root, events chan<- changeEvent) error {
+// (B-113): a deleted root means the watcher is watching nothing. It reports
+// whether a scan ran.
+func (o *localObserver) rescanUnlessRootGone(ctx context.Context, tree *synctree.Root, events chan<- changeEvent) (bool, error) {
 	if !syncRootExists(tree.Path()) {
 		// Debug: the returned error is reported once by the watch runtime.
 		o.logger.Debug("sync root deleted, stopping watch",
 			slog.String("sync_root", tree.Path()))
 
-		return fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
+		return false, fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
 	}
 
-	o.runSafetyScan(ctx, tree, events)
+	scanned := o.runSafetyScan(ctx, tree, events)
 	if o.watchUnavailable != nil {
-		return o.watchUnavailable
+		return scanned, o.watchUnavailable
 	}
 
-	return nil
+	return scanned, nil
 }
 
 // handleWatcherError marks local truth suspect, arms a recovery rescan and
@@ -1339,8 +1345,23 @@ func (o *localObserver) reportWatchAddFailure(msg, dbRelPath string, addErr erro
 // runSafetyScan performs a full filesystem scan as a safety net, sending any
 // detected changes to the events channel. This catches events that fsnotify
 // may have missed. Skipped items are logged at DEBUG — the engine's primary
-// scan handles observation-issue persistence.
-func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, events chan<- changeEvent) {
+// scan handles observation-issue persistence. It reports whether the scan
+// ran.
+//
+// While the runtime has not taken the observations already sent (its loop
+// is inside a long replan), the scan's snapshot would only be dropped, and
+// the drop would ask for yet another recovery scan: a runtime blocked for
+// ten minutes cost six full scans of 11,000 entries that delivered nothing
+// (R-2.8.21). So the scan is deferred instead: one recovery request keeps a
+// paced timer armed until the channel has room, and the first scan after
+// that covers everything the deferred ones would have.
+func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, events chan<- changeEvent) bool {
+	if o.localBatchChannelFull() {
+		o.logger.Debug("deferring full scan: the sync runtime has not taken the previous observations yet")
+		o.requestRecoveryScan()
+		return false
+	}
+
 	o.logger.Debug("running safety scan")
 
 	// This scan reads the whole tree, so it covers anything a pending
@@ -1364,7 +1385,7 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 			o.logger.Warn("Could not rescan the sync folder; will retry", slog.Any("error", err))
 		}
 		o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryFullScanFailed)
-		return
+		return true
 	}
 	o.safetyScanFailing = false
 
@@ -1375,7 +1396,7 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 		o.TrySendChangeEventOnly(ctx, events, &result.Events[i])
 
 		if ctx.Err() != nil {
-			return
+			return true
 		}
 	}
 
@@ -1412,6 +1433,8 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 		slog.Int("skipped", len(result.Skipped)),
 		slog.Int("baseline_entries", o.baseline.Len()),
 	)
+
+	return true
 }
 
 // infoKind classifies a stat result for the observation filter.

@@ -370,7 +370,7 @@ func TestReconcileSkippedObservationFindings_ReturnsErrorOnFailure(t *testing.T)
 	ctx := t.Context()
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	err := rt.reconcileSkippedObservationFindings(ctx, []skippedItem{{
+	_, err := rt.reconcileSkippedObservationFindings(ctx, []skippedItem{{
 		Path:   "blocked.txt",
 		Reason: IssueInvalidFilename,
 		Detail: "invalid",

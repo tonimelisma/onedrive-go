@@ -171,6 +171,7 @@ func (ss *syncStateInfo) hasPersistentSummaryData() bool {
 		ss.ConditionCount > 0 ||
 		len(ss.Conditions) > 0 ||
 		ss.RemoteDrift > 0 ||
+		ss.LocalDrift > 0 ||
 		ss.Retrying > 0
 }
 

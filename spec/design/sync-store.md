@@ -4,7 +4,7 @@ GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/
 
 LAYER: 1
 
-Implements: R-2.5 [designed], R-2.5.7 [verified], R-2.5.8 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.12.7 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.10.49 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
+Implements: R-2.5 [designed], R-2.5.7 [verified], R-2.5.8 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.12.7 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.10.50 [verified], R-2.10.49 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
 ## Verification Counts Only What It Compared
 
@@ -532,6 +532,24 @@ content test as the planner's `remote_changed` in `sqlite_compare.go`: folders
 differ only by path or type, and a file's hash decides whenever either side has
 one. Baseline stores no folder mtime, so comparing folder times counted every
 remote folder as drift on a converged drive (R-2.10.48).
+
+`DriveStatusSnapshot.LocalDriftItems` (status "Local changes") is the local
+half, mirroring the planner's `local_changed`: a `local_state` row without a
+baseline row, a baseline row without a `local_state` row, a type change, or a
+file whose hash differs (size and mtime decide only when neither side has a
+hash); folders differ by presence or type alone and the root row is not an
+item. In watch mode `local_state` is live truth, so an edit counts from the
+moment the observer commits it until its upload lands, and the drive is
+`syncing` or `pending` rather than `up_to_date` while the engine still owes a
+plan or a transfer for it (R-2.10.50). Before this, 300 committed edits whose
+plan a livelocked watch loop never dispatched read as "Up to date" for an hour
+(`TestReadDriveStatusSnapshot_LocalDriftUsesPlannerContentTest`).
+
+`ReconcileObservationFindingsReportingChange` reports whether a findings batch
+left a different persisted issue set (a finding appeared, cleared, or changed
+type or scope); the watch loop replans on that report and not on the
+re-report every full scan makes of a persistent finding (R-2.8.21,
+`TestBuildObservationReconcilePlan_ReportsChangeOnlyWhenTheIssueSetDiffers`).
 
 A folder's item ID is the one folder fact that is not content but must still
 reach the baseline: `metadata_drift` is 1 for a folder present on all three

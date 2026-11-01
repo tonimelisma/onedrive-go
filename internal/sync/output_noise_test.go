@@ -142,16 +142,16 @@ func TestEngineFlow_SkippedFindings_WarnOnlyWhenNew(t *testing.T) {
 	flow := testEngineFlow(t, eng)
 
 	bad := skippedItem{Path: "docs/bad:name.txt", Reason: IssueInvalidFilename, Detail: "name contains ':'"}
-	require.NoError(t, flow.reconcileSkippedObservationFindings(t.Context(), []skippedItem{bad}))
-	require.NoError(t, flow.reconcileSkippedObservationFindings(t.Context(), []skippedItem{bad}))
-	require.NoError(t, flow.reconcileSkippedObservationFindings(t.Context(), []skippedItem{bad}))
+	requireReconcileSkipped(t, flow, []skippedItem{bad})
+	requireReconcileSkipped(t, flow, []skippedItem{bad})
+	requireReconcileSkipped(t, flow, []skippedItem{bad})
 
 	output := logs.String()
 	assert.Equal(t, 1, countLevel(output, "WARN"), "an unchanged skipped file warns once, not on every scan")
 	assert.Contains(t, output, "Not syncing docs/bad:name.txt: name contains ':'")
 
 	other := skippedItem{Path: "docs/other?.txt", Reason: IssueInvalidFilename, Detail: "name contains '?'"}
-	require.NoError(t, flow.reconcileSkippedObservationFindings(t.Context(), []skippedItem{bad, other}))
+	requireReconcileSkipped(t, flow, []skippedItem{bad, other})
 	output = logs.String()
 	assert.Equal(t, 2, countLevel(output, "WARN"), "a newly skipped file still warns")
 	assert.Contains(t, output, "Not syncing docs/other?.txt")
@@ -179,8 +179,8 @@ func TestEngineFlow_SkippedFindings_GroupedWarningNamesTheWholeGroup(t *testing.
 		mixed = append(mixed, skippedItem{Path: fmt.Sprintf("mixed/%02d", i), Reason: IssueInvalidFilename, Detail: detail})
 		same = append(same, skippedItem{Path: fmt.Sprintf("same/%02d", i), Reason: IssueInvalidFilename, Detail: "the name ends with a period"})
 	}
-	require.NoError(t, flow.reconcileSkippedObservationFindings(t.Context(), mixed))
-	require.NoError(t, flow.reconcileSkippedObservationFindings(t.Context(), same))
+	requireReconcileSkipped(t, flow, mixed)
+	requireReconcileSkipped(t, flow, same)
 
 	output := logs.String()
 	assert.Contains(t, output, "Not syncing 11 files with names OneDrive does not allow, such as mixed/00, mixed/01, mixed/02")
@@ -392,4 +392,13 @@ func TestFolderNotEmptyError_NamesAFewBlockersAndTheAction(t *testing.T) {
 	assert.Equal(t,
 		"folder still contains files that are not on OneDrive (a.txt); move or delete them to finish",
 		folderNotEmptyError([]string{"a.txt"}).Error())
+}
+
+// requireReconcileSkipped persists skipped findings, failing the test on
+// error; the change report is not what these tests observe.
+func requireReconcileSkipped(t *testing.T, flow *engineFlow, skipped []skippedItem) {
+	t.Helper()
+
+	_, err := flow.reconcileSkippedObservationFindings(t.Context(), skipped)
+	require.NoError(t, err)
 }

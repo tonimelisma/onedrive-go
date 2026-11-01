@@ -9,6 +9,11 @@ type observationReconcileStoreState struct {
 type observationReconcilePlan struct {
 	issueUpserts []ObservationIssue
 	issueDeletes []managedObservationIssueKey
+	// changesIssues is true when applying the plan leaves a different
+	// persisted issue set: a finding appears, disappears, or changes type or
+	// scope. Every full scan re-reports every persistent finding, and such
+	// a re-report is not news the planner needs to hear (R-2.8.21).
+	changesIssues bool
 }
 
 type managedObservationIssueKey struct {
@@ -22,11 +27,36 @@ func buildObservationReconcilePlan(
 ) observationReconcilePlan {
 	desiredManagedIssues := desiredManagedObservationIssues(batch)
 	currentManagedIssues := currentManagedObservationIssues(batch, state.issues)
+	upserts := observationIssueUpserts(batch)
+	deletes := observationIssueDeletesNotInDesired(currentManagedIssues, desiredManagedIssues)
 
 	return observationReconcilePlan{
-		issueUpserts: observationIssueUpserts(batch),
-		issueDeletes: observationIssueDeletesNotInDesired(currentManagedIssues, desiredManagedIssues),
+		issueUpserts:  upserts,
+		issueDeletes:  deletes,
+		changesIssues: len(deletes) > 0 || observationIssueUpsertsChangeRows(upserts, state.issues),
 	}
+}
+
+// observationIssueUpsertsChangeRows reports whether any upsert differs from
+// the row persisted for its path. The table keys issues by path, so a new
+// type or scope at a known path counts, and a path with no row counts.
+func observationIssueUpsertsChangeRows(upserts []ObservationIssue, currentIssues []ObservationIssueRow) bool {
+	if len(upserts) == 0 {
+		return false
+	}
+
+	byPath := make(map[string]ObservationIssueRow, len(currentIssues))
+	for i := range currentIssues {
+		byPath[currentIssues[i].Path] = currentIssues[i]
+	}
+	for i := range upserts {
+		current, ok := byPath[upserts[i].Path]
+		if !ok || current.IssueType != upserts[i].IssueType || current.ScopeKey != upserts[i].ScopeKey {
+			return true
+		}
+	}
+
+	return false
 }
 
 func observationIssueUpserts(batch *ObservationFindingsBatch) []ObservationIssue {

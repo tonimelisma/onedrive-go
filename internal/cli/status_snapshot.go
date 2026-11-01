@@ -140,6 +140,7 @@ type syncStateInfo struct {
 	FileCount             int                   `json:"file_count"`
 	ConditionCount        int                   `json:"issue_count,omitempty"`
 	RemoteDrift           int                   `json:"remote_changes,omitempty"`
+	LocalDrift            int                   `json:"local_changes,omitempty"`
 	Retrying              int                   `json:"retrying"`
 	RetryingPaths         []string              `json:"retrying_paths,omitempty"`
 	Conditions            []statusConditionJSON `json:"issues,omitempty"`
@@ -163,6 +164,7 @@ type statusSummary struct {
 	AccountsRequiringAuth int    `json:"accounts_requiring_sign_in,omitempty"`
 	TotalConditions       int    `json:"total_issues,omitempty"`
 	TotalRemoteDrift      int    `json:"total_remote_changes,omitempty"`
+	TotalLocalDrift       int    `json:"total_local_changes,omitempty"`
 	TotalRetrying         int    `json:"total_retrying,omitempty"`
 	RuntimeOwner          string `json:"runtime_owner,omitempty"`
 	RuntimeActiveDrives   int    `json:"runtime_active_drives,omitempty"`
@@ -669,11 +671,15 @@ func finalizeStatusDriveState(drive *statusDrive) {
 		drive.State = driveStateIssues
 		return
 	}
-	if drive.RuntimeState == statusRuntimeStateActive && (drive.SyncState.RemoteDrift > 0 || drive.SyncState.Retrying > 0) {
+	// Local drift is work the engine still owes (a plan, an upload, a local
+	// delete): a drive is not up to date while local_state and baseline
+	// disagree (R-2.10.50).
+	converging := drive.SyncState.RemoteDrift > 0 || drive.SyncState.LocalDrift > 0 || drive.SyncState.Retrying > 0
+	if drive.RuntimeState == statusRuntimeStateActive && converging {
 		drive.State = driveStateSyncing
 		return
 	}
-	if drive.SyncState.RemoteDrift > 0 || drive.SyncState.Retrying > 0 {
+	if converging {
 		drive.State = driveStatePending
 	}
 }

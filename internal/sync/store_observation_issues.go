@@ -14,15 +14,28 @@ const sqlSelectObservationIssueCols = `path, issue_type, scope_key`
 func (s *SyncStore) ReconcileObservationFindings(
 	ctx context.Context,
 	batch *ObservationFindingsBatch,
+	now time.Time,
+) error {
+	_, err := s.ReconcileObservationFindingsReportingChange(ctx, batch, now)
+	return err
+}
+
+// ReconcileObservationFindingsReportingChange reconciles the batch and reports
+// whether the persisted issue set is different afterwards, so a watch replan
+// is scheduled for a finding that appeared or cleared and not for the
+// re-report every full scan makes of a persistent one (R-2.8.21).
+func (s *SyncStore) ReconcileObservationFindingsReportingChange(
+	ctx context.Context,
+	batch *ObservationFindingsBatch,
 	_ time.Time,
-) (err error) {
+) (changed bool, err error) {
 	if batch == nil {
-		return nil
+		return false, nil
 	}
 
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: begin observation findings reconcile: %w", err)
+		return false, fmt.Errorf("sync: begin observation findings reconcile: %w", err)
 	}
 	defer func() {
 		err = finalizeTxRollback(err, tx, "sync: rollback observation findings reconcile")
@@ -30,19 +43,19 @@ func (s *SyncStore) ReconcileObservationFindings(
 
 	state, err := loadObservationReconcileStoreStateTx(ctx, tx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	plan := buildObservationReconcilePlan(batch, state)
 
 	if applyErr := s.applyObservationFindingsReconcilePlanTx(ctx, tx, plan); applyErr != nil {
-		return applyErr
+		return false, applyErr
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: commit observation findings reconcile: %w", err)
+		return false, fmt.Errorf("sync: commit observation findings reconcile: %w", err)
 	}
 
-	return nil
+	return plan.changesIssues, nil
 }
 
 func (s *SyncStore) applyObservationFindingsReconcilePlanTx(
