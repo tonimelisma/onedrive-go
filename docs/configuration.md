@@ -85,7 +85,7 @@ You do not need to write these by hand: `login`, `drive add` and
 | `websocket` | boolean | `false` | | In `sync --watch`, also listen for OneDrive change notifications so remote changes are noticed sooner. Polling continues as a fallback. |
 | `dry_run` | boolean | `false` | | Make one-shot `sync` preview-only by default. `sync --watch` refuses to start while this is on. |
 | `log_level` | string | `"info"` | `debug`, `info`, `warn`, `error` | How much goes into the log file. The console is controlled by `--verbose`, `--debug` and `--quiet`. |
-| `log_file` | path | `""` (no log file) | a path | Also write structured JSON logs to this file. |
+| `log_file` | path | `""` (no log file) | a path | Also write structured JSON logs to this file. The file is created readable by you only (`0600`). |
 | `log_format` | string | `"auto"` | `auto`, `text`, `json` | Console log format. `auto` is plain text for people, with journal priorities under systemd; `text` forces key=value lines and `json` forces JSON. |
 | `log_retention_days` | integer | `30` | 1 or more | Rotated log files older than this are deleted. |
 

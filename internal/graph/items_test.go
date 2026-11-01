@@ -2746,3 +2746,58 @@ func TestToItem_PrefersFileSystemInfoModifiedTime(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(`{"id":"i","lastModifiedDateTime":"2026-10-25T12:00:00Z","file":{}}`), &bare))
 	assert.Equal(t, time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC), bare.toItem(slog.Default()).ModifiedAt.UTC())
 }
+
+// Validates: R-6.7.32
+//
+// The permissions listing used to decode one page and stop. A write grant on
+// a later page then went unseen, and the caller read the item as read-only.
+func TestListItemPermissions_FollowsNextLinkAcrossPages(t *testing.T) {
+	const secondPagePath = "/drives/drive-1/items/item-1/permissions-page-2"
+
+	var requestedPaths []string
+
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == secondPagePath {
+			writeTestResponse(t, w, `{"value": [{"id": "perm-2", "roles": ["write"]}]}`)
+			return
+		}
+
+		writeTestResponsef(t, w, `{"value": [{"id": "perm-1", "roles": ["read"]}], "@odata.nextLink": %q}`,
+			srv.URL+secondPagePath)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	perms, err := client.ListItemPermissions(t.Context(), driveid.New("drive-1"), "item-1")
+	require.NoError(t, err)
+
+	require.Len(t, perms, 2)
+	assert.Equal(t, "perm-1", perms[0].ID)
+	assert.Equal(t, "perm-2", perms[1].ID)
+	assert.True(t, HasWriteAccess(perms), "the write grant on the second page must be seen")
+	firstPagePath := "/drives/" + driveid.New("drive-1").String() + "/items/item-1/permissions"
+	assert.Equal(t, []string{firstPagePath, secondPagePath}, requestedPaths,
+		"the absolute nextLink must be followed at its own path, not appended to the base URL")
+}
+
+// Validates: R-6.7.32
+func TestListItemPermissions_NextLinkOutsideBaseURLIsRefused(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponse(t, w, `{"value": [{"id": "perm-1", "roles": ["read"]}],
+			"@odata.nextLink": "https://evil.example.com/drives/drive-1/items/item-1/permissions?page=2"}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.ListItemPermissions(t.Context(), driveid.New("drive-1"), "item-1")
+	require.Error(t, err, "a continuation off the Graph base URL must not be followed")
+	assert.Contains(t, err.Error(), "does not match base URL")
+	assert.Equal(t, int32(1), requests.Load())
+}

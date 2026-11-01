@@ -35,6 +35,7 @@ are inserted, updated, pruned, and validated.
 
 | Behavior | Evidence |
 | --- | --- |
+| A log file and any directory `logfile` creates for it are owner-only, because logs carry item names and account details (R-6.8.23). | `TestOpen_Permissions`, `TestOpen_CreatesParentDirs` |
 | Status JSON identifies each mount with a stable opaque `mount_ref` and still withholds canonical, mount, namespace, and remote drive IDs. | `TestStatusJSON_MountRefIsOpaqueAndDoesNotLeakIdentifiers`, `TestStatusJSON_MountRefDistinguishesSiblingChildren`, `TestMountRef_MatchesStateFileDigest`, `TestMountRef_IsStableUniqueAndOpaque`, `TestMountRef_EmptyForBlankMountID`, `TestStatusOutputGoldenJSON` |
 | `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState`, `TestStatusCommand_NoAccountsDoesNotMutateManagedState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors`, `TestBuildChildStatusMount_FinalDrainGuidesAccessRestore`, `TestPrintMountStatus_RendersGuidedShortcutRecovery`, `TestStatusRuntime_SummaryJSONWithActiveOwner`, `TestStatusRuntimeOverlayApplyAndSummary`, `TestPrintMountStatus_ShowsRuntimeState`, `TestE2E_Status_NoLegacyHistorySurface`, `TestE2E_RoundTrip` |
 | `trash list/restore/empty` read and change one configured drive's local trash offline; restore never overwrites and empty needs `--confirm`. | `TestTrashCommands_ListRestoreAndEmpty`, `TestTrashRestore_NeverOverwrites` |
@@ -51,6 +52,14 @@ are inserted, updated, pruned, and validated.
 | User-facing output agrees across commands: `drive list` and `status` derive a configured drive's state through one function (`configuredDriveState`); `stat` prints local times like `ls`; `ls` on a file lists that file; every transport failure, before or while reading the response, and every sign-in outcome is one plain line; health checks do not log a token load. | `TestBuildConfiguredDriveEntries_StateMatchesStatus`, `TestFormatExactTime_IsLocalWithZone`, `TestLs_OnAFileListsThatFile`, `TestCommandErrorText_EveryTransportFailureIsPlain`, `TestCommandErrorText_SignInOutcomesSayRunLoginAgain`, `TestInspectSavedLogin_DoesNotLogATokenLoad` |
 | Every runnable command honors `--json` (one document on stdout, or JSON lines for `sync`) or refuses it as a usage error; the mutating commands report their result as JSON. | `TestCommandTree_EveryLeafHonorsJSON`, `TestDriveAdd_JSONWithoutSelectorIsAUsageError`, `TestPauseCommand_JSONReportsDriveAndEndTime`, `TestResumeCommand_JSONReportsEveryDriveOutcome`, `TestDriveRemove_JSONReportsWhatWasRemoved`, `TestDriveAdd_JSONReportsAddedThenAlreadyConfigured`, `TestLogoutCommand_JSONNamesAccountAndDrives`, `TestRecycleBinEmpty_JSONListsDeletedAndFailedAndStillFails` |
 | Command-level side-effect contracts are tested at the CLI boundary: read-only commands do not mutate managed state, and mutating commands fail selector/path validation before remote mutation. | `TestRunLs_DoesNotMutateManagedState`, `TestRunRm_RequiresExplicitPathBeforeGraphMutation` |
+
+## Log Files Are Owner-Only
+
+`logfile.Open` creates the log file `0600` and any missing parent directory
+`0700`, and re-applies the file mode on an existing file. Logs name the files
+being synced and the accounts they belong to, and the threat model counts
+other local users reading them as an actor; `0644` logs handed that to every
+account on the machine. A directory the user already owns keeps its mode.
 
 ## Log Retention Deletes Only Its Own Logs
 
