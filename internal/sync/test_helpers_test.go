@@ -346,3 +346,17 @@ func (c *observerTestClock) AfterFunc(delay time.Duration, fn func()) syncTimer 
 
 	return c.syncClock.AfterFunc(delay, fn)
 }
+
+// skipInShort marks an exhaustive test: a breadth, replay, randomized or
+// many-pass variant of behavior that targeted tests in this package already
+// cover. `go test -short` (the `verify quick` and `verify platform` profiles,
+// which are the per-PR CI lane) skips it; the full profiles (`verify default`
+// and `verify public`, the local gate and nightly CI) run it. Call it before
+// t.Parallel so the skip costs nothing.
+func skipInShort(tb testing.TB) {
+	tb.Helper()
+
+	if testing.Short() {
+		tb.Skip("exhaustive: runs in the full verify profiles and nightly CI")
+	}
+}

@@ -347,7 +347,7 @@ func TestDODPRCIClassification(t *testing.T) {
 }
 
 // Validates: R-6.10.16
-func TestDODPostMergeCIClassificationAcceptsSquashSkip(t *testing.T) {
+func TestDODPostMergeCIClassificationRejectsSkippedPushRun(t *testing.T) {
 	t.Parallel()
 
 	status, reason := classifyPostMergeRuns([]githubRun{{
@@ -356,20 +356,20 @@ func TestDODPostMergeCIClassificationAcceptsSquashSkip(t *testing.T) {
 		Status:     checkStatusCompleted,
 		Conclusion: checkConclusionSkipped,
 		HeadSHA:    "merge-sha",
-	}}, "fix(sync): address stale PR review threads (#682)", "merge-sha")
+	}}, "merge-sha")
 
-	assert.Equal(t, prCheckStatePass, status)
-	assert.Contains(t, reason, "skipped by squash-merge push rule")
+	assert.Equal(t, prCheckStateFail, status)
+	assert.Contains(t, reason, "every push to main must run the quick lane")
 
 	status, reason = classifyPostMergeRuns([]githubRun{{
 		Name:       "CI",
 		Event:      "push",
 		Status:     checkStatusCompleted,
-		Conclusion: checkConclusionSkipped,
+		Conclusion: checkConclusionSuccess,
 		HeadSHA:    "merge-sha",
-	}}, "manual push", "merge-sha")
-	assert.Equal(t, prCheckStateFail, status)
-	assert.Contains(t, reason, "without squash-merge subject")
+	}}, "merge-sha")
+	assert.Equal(t, prCheckStatePass, status)
+	assert.Contains(t, reason, "succeeded")
 }
 
 // Validates: R-6.10.16

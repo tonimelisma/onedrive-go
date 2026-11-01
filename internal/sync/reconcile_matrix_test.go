@@ -129,6 +129,7 @@ func renderMatrixPlan(plan *actionPlan) string {
 // ONEDRIVE_GO_RECONCILE_CONVERGE=1 each is instead run to convergence and must
 // end at exactly the reference's content (requireReferenceConvergence).
 func TestReconcileMatrix_Golden(t *testing.T) {
+	skipInShort(t)
 	t.Parallel()
 
 	// Each plan compiles the comparison SQL (about 0.1 s here), so running

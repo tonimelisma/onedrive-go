@@ -278,6 +278,7 @@ func runOnceScenarios() []func(*testing.T) {
 
 // Validates: R-2.17.1, R-6.8.9
 func TestReverseDispatch_RunOnceScenariosPass(t *testing.T) {
+	skipInShort(t)
 	t.Parallel()
 
 	for _, scenario := range runOnceScenarios() {
