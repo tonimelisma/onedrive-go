@@ -42,7 +42,7 @@ are inserted, updated, pruned, and validated.
 | `drive rebind-root` shows the remembered and present file counts, needs `--yes` or a typed REBIND, clears only the recorded sync-folder fingerprint, keeps the rest of the state, needs `--drive`, and refuses while a sync owner holds the drive. | `TestRunDriveRebindRoot_RequiresDrive`, `TestRunDriveRebindRoot_KeepsStateAndReportsRebind`, `TestRunDriveRebindRoot_RequiresConfirmationWithoutYes`, `TestRunDriveRebindRoot_RefusesLiveSyncOwner` |
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
-| Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestDryRunFlagSurfaceOnlySyncCommand`, `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_DryRunOpensLogFileAndWarnsOnFailure`, `TestRunSyncCommand_DryRunFailsWhenControlSocketPathCannotBeDerived`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_PassesMissingSyncDirToRunOnce`, `TestRunSyncCommand_DryRunPassesMissingSyncDirWithoutCreatingIt`, `TestRunSyncCommand_PassesPausedInvalidDriveToRunnerAsPaused`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestSyncConsole_MultiDriveNamesEachDrive` |
+| Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestDryRunFlagSurfaceOnlySyncCommand`, `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_DryRunOpensLogFileAndWarnsOnFailure`, `TestRunSyncCommand_DryRunFailsWhenControlSocketPathCannotBeDerived`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_PassesMissingSyncDirToRunOnce`, `TestRunSyncCommand_DryRunPassesMissingSyncDirWithoutCreatingIt`, `TestRunSyncCommand_PassesPausedInvalidDriveToRunnerAsPaused`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestSyncConsole_MultiDriveNamesEachDrive`, `TestSyncConsole_WatchingEveryDrivePausedSaysWhatItWaitsFor` |
 | `sync` names every finished file, summarizes in human units, prints errors once, and renders console logs as human or journal text. | `TestSyncConsole_NamesEveryCompletedFile`, `TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose`, `TestSyncConsole_SummaryInHumanUnits`, `TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError`, `TestSyncConsole_WatchLinesAreTimestampedAndAnnounceStartAndStop`, `TestConsoleLogHandler_JournalLinesCarryPriorityAndNoTimestamp`, `TestConsoleLogHandler_DefaultConsoleShowsOutageAndItsRecoveryPlainly`, `TestConsoleLogHandler_JournalFilesNoticeAtNoticePriority`, `TestWithConsoleTimestamps_StampsHumanLinesOnly`, `TestNotice_SitsBetweenInfoAndWarn`, `TestReplaceLevelName_PrintsNoticeInStructuredOutput`, `TestCommandLogger_PerfSummaryInLogFileNotDefaultConsole`, `TestCommandLogger_SyncSchemaFieldsOnlyInLogFileAndVerboseConsole`, `TestMainWithWriters_SkipConfigCommandLogsPerfSummaryToLogFile`, `TestMainWithWriters_BootstrapRecordsFollowTheCommandLogger`, `TestCommandErrorText_NetworkFailureIsOnePlainLine`, `TestUnauthorizedAuthReason_DistinguishesExpiredLogin` |
 | Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusMount_RendersLifecycleState`, `TestBuildChildStatusMount_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
 | The first SIGINT/SIGTERM cancels the command context cooperatively, the second forces exit, and the stop function releases the signal goroutine and its registration whether or not a first signal arrived (R-6.3.6). | `TestShutdownContext_FirstSignalCancels`, `TestShutdownContext_SecondSignalForcesExit`, `TestShutdownContext_ParentCancelStopsGoroutine`, `TestShutdownContext_CancelReleasesSignalGoroutine`, `TestShutdownContext_StopAfterFirstSignalReleasesSignalGoroutine`, `TestRunSyncWatch_FirstSignalCancelsWatchRunner`, `TestRunSyncWatch_FirstSignalCancelsDaemonOrchestrator` |
@@ -128,7 +128,7 @@ scripts and service managers:
 
 | Status | Meaning | Chosen by |
 | --- | --- | --- |
-| 0 | success (also `sync --watch` stopped by a signal: the watch finishes cleanly) | `err == nil` |
+| 0 | success (also `sync --watch` stopped by a signal: the watch finishes cleanly, including one that idled because every drive was paused) | `err == nil` |
 | 1 | any other failure, transient or not | default |
 | 2 | command-line mistake | `*usageError` |
 | 77 (EX_NOPERM) | sign-in required | `graph.ErrNotLoggedIn` or `graph.ErrUnauthorized` (`ErrLoginExpired` travels with it) |
@@ -670,7 +670,16 @@ same guidance in one-shot and watch flows: pause that drive first, rerun with
 ...`. One-shot renders startup-ineligible drives through the shared startup
 message path, reports completed runs separately, and exits non-zero after
 reporting any affected drives. Watch mode warns immediately about each skipped
-drive and continues healthy mounts unless none can start.
+drive and continues healthy mounts unless none can start. Paused drives are
+not skipped drives: `sync --watch` with every selected drive paused starts,
+prints each drive as `(paused)` and "All drives are paused; waiting until one
+is resumed", reports READY with the status "All drives are paused; run
+'onedrive-go resume' to continue", and idles until the config reload (a
+`resume`, an expired timed pause, a config edit) starts a drive or it is
+stopped (R-3.4.2). It used to exit 1, which made a `Restart=on-failure` unit
+restart it every interval until the resume. One-shot `sync` with every
+selected drive paused still refuses: there is nothing to do once, and the
+message names `resume`.
 
 That standalone-drive guidance is never rendered for managed child mounts. A
 child startup or state-store warning names the child `mount_id`, may include the

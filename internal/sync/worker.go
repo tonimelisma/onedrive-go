@@ -20,6 +20,17 @@ var (
 // minWorkers is the floor for total worker count.
 const minWorkers = 4
 
+// poolWorkerCount is how many workers a pool runs for a requested count: the
+// floor applies unless the pool is serialized to one worker (D-090). The
+// engine's slow start doubles toward this same number (R-6.8.25).
+func poolWorkerCount(requested int, serialize bool) int {
+	if serialize {
+		return 1
+	}
+
+	return max(requested, minWorkers)
+}
+
 // outcomeCommitTimeout bounds the shutdown-detached commit of a completed
 // action's outcome. One baseline transaction is milliseconds; the bound only
 // exists so a wedged store cannot block shutdown forever.
@@ -87,12 +98,7 @@ func newWorkerPool(
 // channel. total is the desired concurrency (typically cfg.TransferWorkers).
 // Minimum 4 workers.
 func (wp *workerPool) Start(ctx context.Context, total int) {
-	if total < minWorkers {
-		total = minWorkers
-	}
-	if wp.serialize {
-		total = 1
-	}
+	total = poolWorkerCount(total, wp.serialize)
 
 	ctx, wp.cancel = context.WithCancel(ctx)
 

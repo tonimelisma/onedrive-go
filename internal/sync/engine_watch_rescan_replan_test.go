@@ -96,9 +96,9 @@ func TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan(t *testing.T) {
 
 	assert.False(t, rt.hasPendingReplan(), "a rescan that changed no committed truth schedules no replan")
 	dispatchCh, next := rt.dispatchChannelForOutbox()
-	require.NotNil(t, next, "the admitted upload is still dispatchable")
+	require.GreaterOrEqual(t, next, 0, "the admitted upload is still dispatchable")
 	assert.NotNil(t, dispatchCh)
-	assert.Equal(t, "edited.txt", next.Action.Path)
+	assert.Equal(t, "edited.txt", rt.currentOutbox()[next].Action.Path)
 	assert.Equal(t, 0, eng.collector().Snapshot().SupersededPendingReplanRetirementCount)
 }
 

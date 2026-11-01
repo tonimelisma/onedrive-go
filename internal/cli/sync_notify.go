@@ -115,9 +115,14 @@ func (s *syncNotifier) report(err error) {
 	}
 }
 
+// watchingStatus is the one STATUS= line of a ready watch. A watch whose
+// drives are all paused is ready and idle (R-3.4.2); the line says what
+// brings it back.
 func (s *syncNotifier) watchingStatus(event multisync.WatchLifecycleEvent) string {
 	var status string
 	switch roots := event.SyncRoots; {
+	case len(roots) == 0 && len(event.Paused) > 0 && len(event.Skipped) == 0:
+		return "All drives are paused; run 'onedrive-go resume' to continue"
 	case len(roots) == 0:
 		status = "Watching no drives"
 	case len(roots) > watchStatusMaxRoots:
@@ -148,6 +153,12 @@ func (s *syncNotifier) watchingStatus(event multisync.WatchLifecycleEvent) strin
 		status += "; 1 drive could not start"
 	case otherSkipped > 1:
 		status += fmt.Sprintf("; %d drives could not start", otherSkipped)
+	}
+	switch paused := len(event.Paused); {
+	case paused == 1:
+		status += "; 1 drive paused"
+	case paused > 1:
+		status += fmt.Sprintf("; %d drives paused", paused)
 	}
 
 	return status

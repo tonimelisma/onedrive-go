@@ -86,6 +86,23 @@ func (c *throttleWindowClient) throttledError(retryAfter time.Duration) error {
 	}
 }
 
+// setBudget changes the per-window budget from the next window on.
+func (c *throttleWindowClient) setBudget(budget int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.budget = budget
+}
+
+// penaltyEnd is when the drive's open Retry-After, as extended by every
+// request made inside it, runs out; zero when none is open.
+func (c *throttleWindowClient) penaltyEnd() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.penaltyUntil
+}
+
 func (c *throttleWindowClient) counts() (requests, throttled, penalized int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

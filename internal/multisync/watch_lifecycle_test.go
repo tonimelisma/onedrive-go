@@ -96,8 +96,13 @@ func TestRunWatch_ReportsLifecycleTransitions(t *testing.T) {
 
 // Validates: R-6.6.32
 func TestRunWatch_StartupFailureIsNotReady(t *testing.T) {
+	// A real startup failure, not a paused drive: a selection in which every
+	// drive is paused starts and idles as ready (R-3.4.2,
+	// TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed),
+	// which this fixture once relied on to never be ready. The deadline
+	// turns a watch that idles instead of failing into a test failure
+	// rather than a hang.
 	rd := testStandaloneMount(t, "personal:neverready@example.com", "NeverReady")
-	rd.Paused = true
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
@@ -106,7 +111,17 @@ func TestRunWatch_StartupFailureIsNotReady(t *testing.T) {
 	var phases []WatchLifecyclePhase
 	cfg.WatchLifecycle = func(event WatchLifecycleEvent) { phases = append(phases, event.Phase) }
 
-	err := NewOrchestrator(cfg).RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	orch := NewOrchestrator(cfg)
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+		return nil, &syncengine.StateStoreIncompatibleError{Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema}
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	err := orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	require.NoError(t, ctx.Err(), "a watch whose only drive failed to start must return, not idle")
 	require.Error(t, err)
+	var startupErr *WatchStartupError
+	require.ErrorAs(t, err, &startupErr)
 	assert.Empty(t, phases, "a watch that never started reports neither ready nor stopping")
 }

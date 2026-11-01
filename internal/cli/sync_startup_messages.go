@@ -103,9 +103,6 @@ func formatWatchStartupError(err error) error {
 	if startupErr.Summary.SelectedCount() == 0 {
 		return err
 	}
-	if startupErr.Summary.AllPaused() {
-		return fmt.Errorf("all selected mounts are paused — run 'onedrive-go resume' to unpause")
-	}
 
 	failures := startupErr.Summary.SkippedResults()
 	if len(failures) == 1 {

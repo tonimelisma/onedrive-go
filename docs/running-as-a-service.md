@@ -85,7 +85,11 @@ onedrive-go resume --drive personal:user@example.com
 
 Under the journal every line carries a priority, so `-p warning` filters
 reliably. `pause` and `resume` take effect in the running service
-immediately; you do not need to restart it.
+immediately; you do not need to restart it. Pausing every drive does not stop
+the service: it stays up, `systemctl status` shows "All drives are paused;
+run 'onedrive-go resume' to continue", and syncing starts again at `resume`
+(or when a timed pause expires). The same goes for starting the service
+while every drive is paused.
 
 `onedrive-go sync --confirm-deletes --drive <drive>` applies deletes the
 running sync held for confirmation (the journal and `status` report them).

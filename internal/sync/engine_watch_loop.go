@@ -222,11 +222,11 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 	default:
 	}
 
-	dispatchCh, nextAction := rt.dispatchChannelForOutbox()
+	dispatchCh, next := rt.dispatchChannelForOutbox()
 
 	select {
-	case dispatchCh <- nextAction:
-		rt.handleWatchDispatch(nextAction)
+	case dispatchCh <- rt.outboxEntry(next):
+		rt.handleWatchDispatch(next)
 		return false, nil
 	case batch, ok := <-p.replanReady:
 		if rt.beginWatchDrainIfContextCanceled(ctx, p) {
@@ -257,6 +257,9 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 		return false, rt.handleWatchHeldReleaseSignal(ctx, p, true)
 	case <-rt.retryTimerChan():
 		return false, rt.handleWatchHeldReleaseSignal(ctx, p, false)
+	case <-rt.admitTimerChan():
+		// A parked outbox entry is due; the next step dispatches it.
+		return false, nil
 	case <-logC:
 		rt.logBootstrapWait(ctx)
 		return false, nil
@@ -266,11 +269,10 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 	}
 }
 
-func (rt *watchRuntime) handleWatchDispatch(nextAction *trackedAction) {
+func (rt *watchRuntime) handleWatchDispatch(next int) {
 	postReplanDispatch := rt.loop.postReplanOutbox
 	rt.loop.postReplanOutbox = false
-	rt.sched.markRunning(nextAction)
-	rt.consumeOutboxHead()
+	rt.loop.outbox = rt.markDispatched(rt.loop.outbox, next)
 	if postReplanDispatch {
 		rt.emitRuntimeDebugEvent(engineDebugEventFirstPostReplanDispatch, "", 0, time.Time{})
 	}
@@ -526,30 +528,34 @@ func observerExitError(observerName string, err error) error {
 	return fmt.Errorf("checking OneDrive for changes: %w", err)
 }
 
-func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *trackedAction, *trackedAction) {
+// dispatchChannelForOutbox returns the channel to hand the next outbox entry
+// to a worker on and that entry's index, or a nil channel and -1 when nothing
+// may be dispatched now: an empty outbox, a draining or replanning runtime,
+// every entry's target full under the slow start (R-6.8.25; a completion
+// wakes the loop), or every due entry parked on its admission instant
+// (R-6.8.24; the admit timer wakes the loop).
+func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *trackedAction, int) {
 	outbox := rt.currentOutbox()
-	nextAction := firstOutbox(outbox)
-	if nextAction == nil {
-		return nil, nil
+	if len(outbox) == 0 {
+		rt.stopAdmitTimer()
+		return nil, -1
 	}
 
 	if rt.isDraining() {
 		rt.mustAssertDispatchAdmissionSealed(outbox, "dispatch channel for outbox")
-		return nil, nil
+		return nil, -1
 	}
 	if rt.hasPendingReplan() {
-		return nil, nil
+		return nil, -1
 	}
 
-	return rt.sched.dispatchCh, nextAction
-}
-
-func firstOutbox(outbox []*trackedAction) *trackedAction {
-	if len(outbox) == 0 {
-		return nil
+	next, admitAt := rt.nextDispatchable(outbox, rt.deps.now())
+	rt.armAdmitTimer(admitAt)
+	if next < 0 {
+		return nil, -1
 	}
 
-	return outbox[0]
+	return rt.sched.dispatchCh, next
 }
 
 func (rt *watchRuntime) handleWatchReplanReady(

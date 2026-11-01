@@ -106,7 +106,9 @@ func (flow *engineFlow) persistActiveScope(ctx context.Context, block *activeSco
 
 // newBlockActivation is the ledger shape of a (re)activation of key: one
 // generation past the active scope's, with the ramp's memory of where the
-// activating 429 stopped it, or the first generation of a new scope.
+// activating 429 stopped it, or the first generation of a new scope. The
+// trial never moves earlier than a deadline the scope already holds
+// (latestTrialDeadline).
 func (flow *engineFlow) newBlockActivation(key ScopeKey, interval time.Duration, now time.Time) *activeScope {
 	block := &activeScope{
 		Key:           key,
@@ -116,11 +118,31 @@ func (flow *engineFlow) newBlockActivation(key ScopeKey, interval time.Duration,
 	}
 	if current, ok := flow.scopes.lookupActiveScope(key); ok {
 		block.Generation = current.Generation + 1
+		block.NextTrialAt = latestTrialDeadline(&current, block.NextTrialAt)
 		block.SlowStartThreshold = slowStartThresholdAfterThrottle(
 			flow.engine.transferWorkers, current.ReleaseAllowance, current.SlowStartThreshold)
 	}
 
 	return block
+}
+
+// latestTrialDeadline is the trial deadline a new 429 leaves a scope with:
+// the later of the one it holds and the one the 429 asks for, while the
+// scope is blocking. The transfers in flight when a throttle hits each
+// bring their own Retry-After, and Microsoft extends the penalty for every
+// request made inside it, so the answers that arrive later carry the later
+// deadlines; but their completions reach the loop in scheduler order, and a
+// shorter Retry-After applied after a longer one would pull the trial inside
+// the penalty the drive still holds, where it costs a 429 and another
+// extension (R-6.8.24). A scope on probation holds no server deadline: its
+// trial is the stall-recovery re-arm one interval out, and the 429 that
+// ends the probation sets the deadline outright.
+func latestTrialDeadline(current *activeScope, requested time.Time) time.Time {
+	if current.ReleaseAllowance == 0 && current.NextTrialAt.After(requested) {
+		return current.NextTrialAt
+	}
+
+	return requested
 }
 
 func (flow *engineFlow) extendScopeTrial(
@@ -145,7 +167,7 @@ func (flow *engineFlow) extendScopeTrial(
 	// A 429 from a trial or a probation member is a re-block: the ramp
 	// starts over, remembering where it was stopped, and the admitted work
 	// the scope blocks is taken back.
-	block.NextTrialAt = nextAt
+	block.NextTrialAt = latestTrialDeadline(&block, nextAt)
 	block.TrialInterval = newInterval
 	block.SlowStartThreshold = slowStartThresholdAfterThrottle(
 		flow.engine.transferWorkers, block.ReleaseAllowance, block.SlowStartThreshold)
@@ -155,6 +177,7 @@ func (flow *engineFlow) extendScopeTrial(
 	if err := flow.activateScope(ctx, &block); err != nil {
 		return fmt.Errorf("extend trial interval for %s: %w", scopeKey.String(), err)
 	}
+	flow.handOverColdStart(scopeKey)
 	if err := flow.retireAdmittedWorkBlockedBy(ctx, scopeKey); err != nil {
 		return fmt.Errorf("extend trial interval for %s: %w", scopeKey.String(), err)
 	}
@@ -247,6 +270,7 @@ func (flow *engineFlow) applyBlockScope(ctx context.Context, sr scopeUpdateResul
 		// activateScope already names the operation and the scope.
 		return err
 	}
+	flow.handOverColdStart(sr.ScopeKey)
 	if err := flow.retireAdmittedWorkBlockedBy(ctx, sr.ScopeKey); err != nil {
 		return err
 	}
@@ -280,6 +304,7 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 		Type:     engineDebugEventScopeActivated,
 		ScopeKey: to,
 	})
+	flow.handOverColdStart(to)
 	if err := flow.retireAdmittedWorkBlockedBy(ctx, to); err != nil {
 		return fmt.Errorf("transition blocked scope %s -> %s: %w", from.String(), to.String(), err)
 	}
@@ -489,12 +514,15 @@ func (flow *engineFlow) drainDueHeldWorkNow(
 	var ready []*trackedAction
 
 	for _, key := range flow.dueRetryKeys(now) {
-		if ta := flow.retries.releaseHeldAction(key); ta != nil {
-			ta.IsTrial = false
-			ta.TrialScopeKey = ScopeKey{}
-			ta.TrialScopeGeneration = 0
-			ready = append(ready, ta)
+		ta := flow.retries.releaseHeldAction(key)
+		if ta == nil {
+			continue
 		}
+		ta.IsTrial = false
+		ta.TrialScopeKey = ScopeKey{}
+		ta.TrialScopeGeneration = 0
+		ta.AdmitAt = time.Time{}
+		ready = append(ready, ta)
 	}
 
 	for _, key := range flow.dueTrialKeys(now) {
@@ -519,6 +547,9 @@ func (flow *engineFlow) drainDueHeldWorkNow(
 		}
 		ta.IsTrial = true
 		ta.TrialScopeKey = held.ScopeKey
+		// The trial is the one request the server-given Retry-After allows
+		// when it is up; it is not jittered.
+		ta.AdmitAt = time.Time{}
 		ready = append(ready, ta)
 	}
 

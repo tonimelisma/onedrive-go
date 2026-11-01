@@ -114,13 +114,21 @@ func (c *syncConsole) Watching(mounts []multisync.StandaloneMountConfig, mode sy
 		return
 	}
 
+	allPaused := len(mounts) > 0
 	for i := range mounts {
 		m := &mounts[i]
 		state := ""
 		if m.Paused {
 			state = " (paused)"
+		} else {
+			allPaused = false
 		}
 		c.printOut("", fmt.Sprintf("Watching %s for %s%s%s.", c.displayPath(m.SyncRoot), m.AccountEmail, modeSuffix(mode), state))
+	}
+	if allPaused {
+		// The watch idles rather than exits (R-3.4.2), so say what it is
+		// waiting for.
+		c.printOut("", "All drives are paused; waiting until one is resumed ('onedrive-go resume').")
 	}
 	if !c.journal {
 		c.printOut("", "Press Ctrl-C to stop.")

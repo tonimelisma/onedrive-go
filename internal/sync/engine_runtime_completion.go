@@ -214,7 +214,9 @@ func (flow *engineFlow) applyTrackedActionSuccess(
 	r *actionCompletion,
 	depGraphReason string,
 ) ([]*trackedAction, error) {
-	flow.sched.markFinished(current)
+	if flow.sched.markFinished(current) {
+		flow.noteColdStartSuccess(current)
+	}
 	flow.results.succeeded++
 	flow.clearSupersedeStreak(r)
 	var clearErr error

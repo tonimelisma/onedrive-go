@@ -24,6 +24,14 @@ type actionScheduler struct {
 	queuedByID   map[int64]struct{}
 	runningByID  map[int64]struct{}
 	runningCount int
+
+	// The slow start of the current plan (R-6.8.25, engine_runtime_cold_start.go):
+	// one ramp per throttle target, the worker pool size they double toward
+	// (zero until a plan is installed, which disables gating), and whether
+	// a service-wide scope took every target over.
+	coldStart                  map[string]*coldStartRamp
+	coldStartCeiling           int
+	coldStartServiceHandedOver bool
 }
 
 func newActionScheduler() actionScheduler {
@@ -116,24 +124,38 @@ func (s *actionScheduler) markRunning(ta *trackedAction) {
 		return
 	}
 	delete(s.queuedByID, ta.ID)
+	ta.AdmitAt = time.Time{}
 	if _, ok := s.runningByID[ta.ID]; ok {
 		return
 	}
 	s.runningByID[ta.ID] = struct{}{}
 	s.runningCount++
+	if target := coldStartTarget(ta); target != "" && s.coldStartCeiling > 0 {
+		s.coldStartRampFor(target).inFlight++
+	}
 }
 
-func (s *actionScheduler) markFinished(ta *trackedAction) {
+// markFinished takes the action out of the queued and running sets and
+// reports whether a worker had it: only a worker-run action counts toward
+// the slow start (its success is a request the drive accepted), and its
+// in-flight slot is given back here whatever became of it.
+func (s *actionScheduler) markFinished(ta *trackedAction) bool {
 	if ta == nil {
-		return
+		return false
 	}
-	if _, ok := s.runningByID[ta.ID]; ok {
+	_, wasRunning := s.runningByID[ta.ID]
+	if wasRunning {
 		delete(s.runningByID, ta.ID)
 		if s.runningCount > 0 {
 			s.runningCount--
 		}
+		if ramp, ok := s.coldStart[coldStartTarget(ta)]; ok && ramp.inFlight > 0 {
+			ramp.inFlight--
+		}
 	}
 	delete(s.queuedByID, ta.ID)
+
+	return wasRunning
 }
 
 func (s *actionScheduler) allocatePlanActionIDs(count int) []int64 {

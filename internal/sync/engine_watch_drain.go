@@ -26,6 +26,7 @@ func (rt *watchRuntime) beginWatchDrain(
 func (rt *watchRuntime) stopDrainTimers() {
 	rt.stopRetryTimer()
 	rt.stopTrialTimer()
+	rt.stopAdmitTimer()
 }
 
 func (rt *watchRuntime) completeDrainOutbox() {

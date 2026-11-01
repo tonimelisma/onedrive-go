@@ -797,6 +797,12 @@ type manualClock struct {
 	mu     sync.Mutex
 	now    time.Time
 	jitter time.Duration
+	// jitterFn, when set, answers Jitter instead of the fixed jitter: a
+	// test that wants distinct jittered instants supplies a sequence.
+	jitterFn func(maxDelay time.Duration) time.Duration
+	// armed, when set, is told the instant of every timer armed, so a test
+	// can drive the clock to it (autoAdvanceTimers).
+	armed  chan<- time.Time
 	timers []*manualSyncTimer
 	ticks  []*manualSyncTicker
 }
@@ -859,6 +865,57 @@ func (c *manualClock) SetJitter(delay time.Duration) {
 	c.jitter = delay
 }
 
+// SetJitterFunc makes Jitter answer from fn, called under the clock's lock.
+func (c *manualClock) SetJitterFunc(fn func(maxDelay time.Duration) time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.jitterFn = fn
+}
+
+// autoAdvanceTimers moves the clock to every timer armed from now on, as it
+// is armed, until the test ends: for a run that waits on its own timers in
+// virtual time (a one-shot pass parking jittered batch members) with nobody
+// else to advance the clock. The clock only ever moves forward.
+func (c *manualClock) autoAdvanceTimers(t *testing.T) {
+	t.Helper()
+
+	armed := make(chan time.Time, 1024)
+	c.mu.Lock()
+	c.armed = armed
+	c.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case at := <-armed:
+				c.AdvanceTo(at)
+			case <-t.Context().Done():
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		c.mu.Lock()
+		c.armed = nil
+		c.mu.Unlock()
+		<-done
+	})
+}
+
+// AdvanceTo moves the clock forward to at; an instant already passed moves
+// nothing.
+func (c *manualClock) AdvanceTo(at time.Time) {
+	c.mu.Lock()
+	delay := at.Sub(c.now)
+	c.mu.Unlock()
+	if delay > 0 {
+		c.Advance(delay)
+	}
+}
+
 func (c *manualClock) AfterFunc(delay time.Duration, fn func()) syncTimer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -869,6 +926,12 @@ func (c *manualClock) AfterFunc(delay time.Duration, fn func()) syncTimer {
 		fn:    fn,
 	}
 	c.timers = append(c.timers, timer)
+	if c.armed != nil {
+		select {
+		case c.armed <- timer.at:
+		default:
+		}
+	}
 
 	return timer
 }
@@ -913,6 +976,9 @@ func (c *manualClock) Jitter(maxDelay time.Duration) time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.jitterFn != nil {
+		return min(max(c.jitterFn(maxDelay), 0), maxDelay)
+	}
 	if c.jitter <= 0 {
 		return 0
 	}
