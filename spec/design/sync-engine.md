@@ -4,7 +4,7 @@ GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/
 
 LAYER: 4
 
-Implements: R-2.1 [verified], R-2.1.7 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified]
+Implements: R-2.1 [verified], R-2.1.7 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified]
 
 ## Overview
 
@@ -96,6 +96,7 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
 | Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child work snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestShortcutRootTransitionMatrixEnumeratesEveryStateAndEvent`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroReturnsExplicitErrors` |
 | Console reporting states each fact once: sign-in and observer-exit failures are returned, not logged; persistent conditions (skipped files, block scopes, poll outages, socket.io retries, condition summaries, blocked shortcut cleanup) are reported when they start; shutdown bookkeeping stays below WARN. | `TestEngineFlow_FatalAuth_ReturnedOnceNotLogged`, `TestEngineFlow_SuppressedShutdownCompletionError_QuietForCancellationAndRepeatFatal`, `TestPollOutageLog_WarnsOncePerOutage`, `TestEngineFlow_SkippedFindings_WarnOnlyWhenNew`, `TestEngineFlow_BlockScope_ReportedOnceWhenItStarts`, `TestSocketIOWakeSource_RetriesNeverWarn`, `TestWatchRuntime_ObserverExit_ReturnedOnceWithCause`, `TestWatchConditionSummary_WarnsOnlyForNewActionableKinds`, `TestEngineFlow_LogFailureSummary_AggregatesRetryWorkBelowWarn`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedWithoutError`, `TestEngine_ReconcileShortcutRootLocalStateRepeatedCleanupBlockedIsQuiet`, `TestWatchRuntime_DroppedObservationRescanFailureWarnsOnce`, `TestWatchRuntime_BootstrapWaitLogsOnlyWhenCountsChange`, `TestWorkerPool_CommitsCompletedOutcomeAfterPoolCancellation`, `TestFullScan_UnreadableFileIsSkippedItemNotWarning` |
+| A rescan that changes no committed truth schedules no replan and leaves the admitted plan dispatchable. | `TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan`, `TestWatchRuntime_SkippedFindingsReplanOnlyWhenTheyChange` |
 | Pending watch replans retire old-runtime work that has not started yet, including dependents released by already-running old actions, and leave replacement work to a fresh plan from current truth. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal` |
 
 ## The Engine Clock Is One Capability
@@ -640,7 +641,15 @@ the engine removes them from queued state, does not mark them successful, does
 not admit their dependents, and does not create ordinary retry rows for them. A
 replan signal that is already ready is consumed before the watch loop enables
 old-outbox dispatch for that step, so ready replacement pressure wins over
-handing more old work to idle workers.
+handing more old work to idle workers. That pressure exists only when committed
+truth changed: a safety or recovery scan whose snapshot changes no
+`local_state` row and whose findings change nothing persisted marks nothing
+dirty, so the admitted plan keeps dispatching (R-2.8.21). The scan's events are
+counted against the baseline, so during a backlog it re-reports every change
+the plan already covers; treating that as dirty retired every plan at every
+safety scan, and once a replan took longer than the safety interval (ten
+minutes on 11,000 entries, 2026-11-01) nothing was ever dispatched while
+`status` read up to date.
 Already-running or already-submitted worker actions are not automatically
 invalidated by the old plan becoming replaceable; they continue through normal
 completion and executor-side precondition policy. If such a completion releases

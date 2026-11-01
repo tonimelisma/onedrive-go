@@ -4,7 +4,7 @@ GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/
 
 LAYER: 2
 
-Implements: R-2.1.2 [verified], R-2.2.4 [verified], R-2.15.2 [verified], R-2.15.4 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.4.16 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.8.20 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-2.13.2 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
+Implements: R-2.1.2 [verified], R-2.2.4 [verified], R-2.15.2 [verified], R-2.15.4 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.4.16 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.21 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.8.20 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-2.13.2 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified]
 
 ## Overview
 
@@ -73,6 +73,7 @@ except that the type had once been public.
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 | A watcher that cannot be created or extended because of an operating-system limit (inotify watches or instances, open files, kernel memory) degrades to periodic full scans with one warning naming the limit and its fix; a descriptor-limit failure after startup stops watching so the watcher's descriptors are released. | `TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable`, `TestClassifyWatcherCreateError_ResourceLimits`, `TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable`, `TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan`, `TestWatch_NewDirectoryEMFILEStopsWatchingForFallback`, `TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval`, `TestRunWatch_WatchFallbackRetriesTheWatcher` |
 | Known-missed local changes (kernel queue overflow, watcher errors, dropped batches or hash requests) arm one coalesced recovery rescan instead of waiting for the periodic safety scan. | `TestWatch_EventOverflowRunsRecoveryScan`, `TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan`, `TestRecoveryScanDelay_ScalesWithScanDurationAndBacksOffUnderStorm`, `TestCancelRecoveryScan_StaleTimerFiringIsIgnored`, `TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan`, `TestRewatchUnwatchedDirectories_FailedAddIsRetriedAtNextScan`, `TestTrySendLocalObservationBatch_DropRequestsRecoveryScan` |
+| A full scan schedules a replan only when it changes committed truth, and a due scan whose snapshot the runtime cannot take yet is deferred, with one recovery scan armed at the base pace until there is room. | `TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan`, `TestWatchRuntime_SkippedFindingsReplanOnlyWhenTheyChange`, `TestBuildObservationReconcilePlan_ReportsChangeOnlyWhenTheIssueSetDiffers`, `TestWatch_RecoveryScanDefersWhileRuntimeHasNotTakenObservations`, `TestWatch_SafetyTickDefersWhileRuntimeHasNotTakenObservations`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch` |
 | A deleted or renamed-away directory drops the watches of its whole subtree, deepest first, so the re-added tree reports its new paths. | `TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst`, `TestWatch_RenamedDirectoryDescendantEventsUseNewPath`, `TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches`, `TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree`, `TestWatchRegistry_SubtreeLookupFollowsTheIndexAndUnlinksEmptyBranches` |
 | The destination half of a rename is observed without waiting on a content read: an identity match reuses the synced hash when size and mtime are unchanged, otherwise the row goes out with an unknown hash and the hash follows; a created directory's row precedes its contents. | `TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing`, `TestHandleCreate_RenamedUnchangedFileReusesSyncedHash`, `TestHandleCreate_RenameThatMovedCtimeDefersTheHash`, `TestHandleCreate_ReusedInodeWhileSyncedPathExistsIsHashed`, `TestHandleCreate_DirectoryRowPrecedesItsContents` |
 | The hash fast path trusts the baseline hash only when size, full-precision mtime, ctime and identity (device, inode, birth time) all match and the file is outside the racily-clean window; an in-place edit with a restored mtime and a different file renamed over the synced one are re-read, and transfers record ctime and identity so the fast path applies after them (R-2.2.4). | `TestFullScan_ContentChangedWithRestoredMtimeIsDetected`, `TestFullScan_IdentityChangeForcesRehash`, `TestFullScan_SubsecondMtimeDifferenceForcesRehash`, `TestFullScan_UnchangedFileWithMatchingIdentityAndCtimeSkipsHash`, `TestCanReuseBaselineHash_CtimeOrIdentityMismatchRequiresHash`, `TestCanReuseBaselineHash_SubsecondMtimeDifferenceRequiresHash`, `TestRunOnce_InPlaceEditWithRestoredMtimeUploads`, `TestRunOnce_InPlaceEditWithRestoredMtimeConflictsWithRemoteEdit`, `TestRunOnce_TransfersRecordLocalCtimeAndIdentity` |
@@ -361,7 +362,16 @@ Directory create handlers add watches, scan the new subtree, and emit rows for
 the observed directory tree. Directory delete/rename-away handlers emit a prefix
 delete for the removed directory. Safety scans emit a full local snapshot
 replacement and clear any suspect-local-truth marker after the engine commits
-the replacement.
+the replacement. The snapshot carries no dirty hint of its own: the runtime
+replans when the snapshot changes committed truth (a row, or the truth-complete
+marker, R-2.8.17) and when the scan's skipped findings change the persisted
+issue set, which the engine reconciles from the separate skipped-items stream
+and reports as changed or not. A scan's events are counted against the
+baseline, so during a backlog every safety scan re-reports every change the
+installed plan already covers; marking the runtime dirty for them retired the
+admitted plan at every safety scan, and with a replan slower than the safety
+interval starved dispatch entirely (R-2.8.21, the 2026-11-01 livelock on
+11,000 entries).
 
 Watch registration is bookkept per directory in `watchedDirs`, a
 `watchRegistry` that records each directory's identity (device and inode) at
@@ -493,6 +503,15 @@ while requests keep arriving before the previous delay has passed since the
 last recovery scan ended, and is capped at the safety-scan interval, so a
 sustained event storm on a large tree cannot keep the observer rescanning back
 to back, and missed changes are still observed well before the safety scan.
+A due scan, safety or recovery, whose snapshot could not be handed over because
+the runtime has not taken the observations already sent (the batch channel is
+full: its loop is inside a long replan) is deferred, not run: it requests a
+recovery scan, which stays armed at the base delay (a deferral is not a scan
+that ended, so it does not double the pace) until the channel has room, and
+the first scan after that covers everything the deferred ones would have.
+Before this each deferred scan ran, dropped its snapshot, and re-armed the
+next at twice the delay: six full scans in ten minutes that delivered nothing
+(R-2.8.21).
 Every full scan in a running watch then re-adds watches for scanned
 directories missing from `watchedDirs`, parents first and at most
 `maxRewatchPerScan` per scan: event-driven registration misses directories

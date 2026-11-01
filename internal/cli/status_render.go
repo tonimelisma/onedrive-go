@@ -58,6 +58,7 @@ func addDriveToSummary(s *statusSummary, drive *statusDrive, sharedFolder bool) 
 	if drive.SyncState != nil {
 		s.TotalConditions += drive.SyncState.ConditionCount
 		s.TotalRemoteDrift += drive.SyncState.RemoteDrift
+		s.TotalLocalDrift += drive.SyncState.LocalDrift
 		s.TotalRetrying += drive.SyncState.Retrying
 	}
 	if drive.RuntimeOwner != "" && s.RuntimeOwner == "" {
@@ -485,6 +486,7 @@ func printSyncStateSummaryLines(w io.Writer, indent string, ss *syncStateInfo) e
 		format string
 	}{
 		{count: ss.FileCount, format: indent + "Files: %d\n"},
+		{count: ss.LocalDrift, format: indent + "Local changes: %d %s\n"},
 		{count: ss.RemoteDrift, format: indent + "Remote changes: %d %s\n"},
 		{count: ss.Retrying, format: indent + "Retrying: %d %s\n"},
 	}

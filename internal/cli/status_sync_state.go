@@ -97,6 +97,7 @@ func buildSyncStateInfo(
 	info := syncStateInfo{
 		FileCount:     snapshot.BaselineFileCount,
 		RemoteDrift:   snapshot.RemoteDriftItems,
+		LocalDrift:    snapshot.LocalDriftItems,
 		Retrying:      snapshot.RetryingItems,
 		Conditions:    buildStatusConditionJSON(snapshot, verbose, examplesLimit),
 		ExamplesLimit: examplesLimit,

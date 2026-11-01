@@ -742,12 +742,26 @@ func (o *localObserver) TrySendLocalTruthSuspect(ctx context.Context, reason str
 	})
 }
 
+// TrySendFullLocalSnapshot hands a full scan's rows to the runtime. The batch
+// carries no dirty hint of its own: the runtime replans when the snapshot
+// changes committed local truth (R-2.8.17), and the scan's skipped findings
+// reach it separately and replan when they change the persisted issue set.
+// The scan's events are relative to the baseline, not to local_state, so
+// they count every change already committed and planned. Treating them as a
+// dirty hint retired the admitted plan at every safety scan during a backlog
+// (R-2.8.21) and, with a replan slower than the safety interval, starved
+// dispatch entirely.
 func (o *localObserver) TrySendFullLocalSnapshot(ctx context.Context, result scanResult) {
 	o.TrySendLocalObservationBatch(ctx, localObservationBatch{
 		fullSnapshot: true,
 		rows:         buildLocalStateRows(result),
-		dirty:        len(result.Events) > 0 || len(result.Skipped) > 0,
 	})
+}
+
+// localBatchChannelFull reports whether the runtime has not taken the
+// observations already sent: a full snapshot sent now would be dropped.
+func (o *localObserver) localBatchChannelFull() bool {
+	return o.localBatchCh != nil && len(o.localBatchCh) == cap(o.localBatchCh)
 }
 
 // requestRecoveryScan asks the watch loop for an early full rescan. Safe from

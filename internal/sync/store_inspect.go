@@ -53,12 +53,48 @@ SELECT COUNT(*) FROM (
 	WHERE rs.item_id IS NULL
 ) remote_drift`
 
+// sqlCountLocalDriftItems counts observed local-side differences that are not
+// yet reflected in baseline: the local half of "not fully converged yet". In
+// watch mode local_state is live truth, so an edit counts from the moment the
+// observer commits it until its upload lands, and `status` cannot say
+// "Up to date" while the engine still owes a plan or a transfer for it
+// (R-2.10.50). The content test mirrors the planner's local_changed
+// (sqlite_compare.go): folders differ only by presence or type, and a file's
+// hash decides when either side has one. The root row is not an item.
+const sqlCountLocalDriftItems = `
+SELECT COUNT(*) FROM (
+	SELECT ls.path
+	FROM local_state ls
+	LEFT JOIN baseline b
+	  ON b.path = ls.path
+	WHERE ls.path <> '' AND ls.item_type <> 'root' AND (
+		b.path IS NULL OR
+		b.item_type <> ls.item_type OR
+		(ls.item_type <> 'folder' AND (
+			CASE
+				WHEN COALESCE(b.local_hash, '') <> '' OR COALESCE(ls.hash, '') <> '' THEN
+					COALESCE(b.local_hash, '') <> COALESCE(ls.hash, '')
+				ELSE
+					COALESCE(b.local_size, 0) <> COALESCE(ls.size, 0) OR
+					COALESCE(b.local_mtime, 0) <> COALESCE(ls.mtime, 0)
+			END
+		))
+	  )
+	UNION
+	SELECT b.path
+	FROM baseline b
+	LEFT JOIN local_state ls
+	  ON ls.path = b.path
+	WHERE b.path <> '' AND b.item_type <> 'root' AND ls.path IS NULL
+) local_drift`
+
 // DriveStatusSnapshot is the raw per-mount authority snapshot consumed by the
 // product-facing status command. The store owns the read-only database access,
 // but the CLI owns grouping and presentation policy.
 type DriveStatusSnapshot struct {
 	BaselineFileCount int
 	RemoteDriftItems  int
+	LocalDriftItems   int
 	RetryingItems     int
 	RetryingWork      []RetryWorkRow
 	ObservationIssues []ObservationIssueRow
@@ -220,6 +256,13 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 	)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status remote drift count: %w", err)
+	}
+	snapshot.LocalDriftItems, err = i.readCount(
+		ctx,
+		sqlCountLocalDriftItems,
+	)
+	if err != nil {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status local drift count: %w", err)
 	}
 	snapshot.RetryingItems, err = i.readCount(
 		ctx,

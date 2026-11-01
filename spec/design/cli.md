@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go, internal/loglevel/loglevel.go, internal/sdnotify/sdnotify.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.33 [verified], R-6.8.16 [verified]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.33 [verified], R-6.8.16 [verified], R-2.10.50 [verified]
 
 ## Overview
 
@@ -516,7 +516,11 @@ Drive rows expose `kind`, `name`, `folder`, `state`, optional `storage`,
 optional lifecycle fields, optional `sync_state`, and optional
 `shared_folders`. User-facing states are `up_to_date`, `syncing`, `pending`,
 `paused`, `issues`, and `unavailable`. Text output uses `Folder`, `Storage`,
-`Files`, `Remote changes`, `Retrying`, and `Issues` labels. It never prints an
+`Files`, `Local changes`, `Remote changes`, `Retrying`, and `Issues` labels
+(`local_changes` and `remote_changes` in JSON; either count makes a drive
+`syncing` while a sync owner runs and `pending` otherwise, R-2.10.48,
+R-2.10.50; `TestFinalizeStatusDriveState_LocalDriftIsNotUpToDate`,
+`TestBuildSyncStateInfo_CarriesLocalDriftAndRendersIt`). It never prints an
 empty healthy issue section, never prints "No active conditions", and never
 prints a healthy `Auth: ready` line.
 

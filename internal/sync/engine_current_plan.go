@@ -216,7 +216,7 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 			return nil, nil, err
 		}
 	}
-	if err := flow.applyObservationFindingsBatch(
+	if _, err := flow.applyObservationFindingsBatch(
 		ctx,
 		&observationBatch.findings,
 		recordSkippedOneDriveItems,
@@ -292,7 +292,7 @@ func (flow *engineFlow) refreshLocalCurrentState(
 		return scanResult{}, err
 	}
 
-	if err := flow.reconcileSkippedObservationFindings(ctx, localResult.Skipped); err != nil {
+	if _, err := flow.reconcileSkippedObservationFindings(ctx, localResult.Skipped); err != nil {
 		return scanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepFindingsReconcile, err)
 	}
 
