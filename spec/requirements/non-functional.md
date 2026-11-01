@@ -7,15 +7,15 @@ Performance targets, data integrity, process model, safety, observability, and p
 - R-6.1.1: Memory usage shall stay below 100 MB for 100K synced files. [target]
 - R-6.1.2: CPU usage in idle watch mode shall stay below 1%. [target]
 - R-6.1.3: Initial sync of 10K files shall complete in under 10 minutes. [target]
-- R-6.1.4: Startup time shall be under 1 second. [verified]
-- R-6.1.5: Binary size shall be under 20 MB (single static binary, no runtime dependencies). [verified]
+- R-6.1.4: Startup time shall be under 1 second. [target]
+- R-6.1.5: Binary size shall be under 20 MB (single static binary, no runtime dependencies). [target]
 - R-6.1.6: When operating in production, the system shall meet CPU, memory, and I/O performance targets validated via repo-owned profiling and benchmark scenarios. [planned]
 - R-6.1.7: The repository shall define stable named representative benchmark scenarios, starting with a harness-validation startup scenario and one canonical live bidirectional catch-up workload before broadening coverage. [planned]
 - R-6.1.8: Representative benchmark runs shall record both external process metrics (for proof) and repo-owned internal perf/timing metrics (for explanation) in machine-readable artifacts. [planned]
 - R-6.1.9: Publicly reported representative performance numbers shall be generated from repo-owned benchmark artifacts and accompanied by machine/date/methodology and subject-under-test context. [planned]
 - R-6.1.10: Cross-app comparison results shall use documented fixtures and methodology, and shall not be mixed into required per-PR verification claims. [planned]
 
-## R-6.2 Data Integrity [implemented]
+## R-6.2 Data Integrity [verified]
 
 The system shall never silently lose or corrupt user data. This umbrella principle is enforced by the following specific safety invariants:
 
@@ -44,7 +44,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.3.6: Every command, not only `sync`, shall treat the first SIGINT/SIGTERM as a cooperative shutdown that cancels the command context so in-flight work unwinds through its own cleanup, and shall treat a second signal as an immediate exit. The signal handler shall be released when the command completes. [verified]
 - R-6.3.7: `sync` (one-shot and `--watch`) shall refuse to run with effective UID 0 unless `--allow-root` is given (P-9), as a usage error (exit 2) before reading config or touching any folder, because a root sync leaves root-owned files the user cannot change. With `--allow-root` it runs and warns once. [verified]
 
-## R-6.4 Safety [implemented]
+## R-6.4 Safety [verified]
 
 - R-6.4.1: Local deletions triggered by remote absence shall verify the on-disk file hash against baseline before deleting. On mismatch, the system shall preserve the newer local content and let the next plan recreate the remote item instead of silently deleting it. [verified]
 - R-6.4.2: Deletion safety shall be both per-item (each delete verified against the synced baseline) and batch-level (the delete-safety hold of R-6.2.5). A held delete shall be released only by an explicit user confirmation, never by a timer or retry. [verified]

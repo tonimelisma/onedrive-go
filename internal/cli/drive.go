@@ -9,8 +9,8 @@ import (
 func newDriveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:         "drive",
-		Short:       "Manage drives (list, add, remove, search)",
-		Long:        "List, add, remove, or search drives in the configuration.",
+		Short:       "Manage drives (list, add, remove, search, rebind-root, reset-sync-state)",
+		Long:        "List, add, remove, or search drives in the configuration; rebind a moved sync folder or reset a drive's sync state.",
 		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 	}
 

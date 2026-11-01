@@ -35,11 +35,20 @@ them on later passes, and `sync --watch` keeps trying in the background.
 | Invalid filename | The name contains a character OneDrive forbids (`" * : < > ? / \ \|`), is reserved (such as `CON`, `NUL`, `desktop.ini` on work drives), contains `_vti_`, or starts or ends with a space or ends with a period. | Rename the file. |
 | Path too long | The full path is longer than OneDrive allows: 400 characters, in practice a few dozen fewer. | Shorten folder or file names. |
 | File too large | The file is larger than OneDrive accepts (250 GB). | Move it out of the sync folder, or filter it out. |
-| Case collision | Two local names differ only in letter case, which OneDrive cannot tell apart. Neither is uploaded. | Rename one of them. |
+| Case collision | Two local names that OneDrive treats as the same (letter case, accent composition or emoji). Neither is uploaded. | Rename one of them. |
+| Two OneDrive items, one name here | OneDrive has two items this computer would store under one name. Neither syncs. | Rename one of them on OneDrive. |
 | Disk full | Free local space is below `min_free_space` (1 GB by default). Downloads are paused. | Free up space, or lower `min_free_space`. |
 | File too large for available space | This file would not fit in the free space. | Free up space. |
 | Name too long for this computer | A OneDrive name is longer than your filesystem allows (255 bytes per name; fewer characters for accented or non-Latin names). | Rename the item on OneDrive. |
 | Hash error | Hashing a local file failed unexpectedly. | Check the file and the disk; it is retried. |
+| Deletes held for confirmation | More was deleted on one side than looks intended (an empty side, or over 50 items and 30 % of the drive). Nothing is deleted; everything else keeps syncing. | Check the folder. If the deletes are right, `onedrive-go sync --confirm-deletes`; if not, restore the files and the hold clears. |
+| Another filesystem inside the sync folder | A folder inside the sync folder is a mount point for another filesystem. Sync does not enter it unless `cross_filesystems = true`, so a disk that is not mounted never looks like deleted files. | Move the mount outside the sync folder, or set `cross_filesystems`. |
+| Synced item can no longer sync | A synced path now holds a symbolic link, FIFO or device, or a name OneDrive rejects or a filter excludes. Its OneDrive copy is kept. | Rename or move it back; if you meant to remove it, delete it on OneDrive. |
+| Database open locally | A download would replace a SQLite database whose `-wal` or `-journal` file is in use. | Close the application; the download is retried. |
+| Blocked as malware | OneDrive's scan flagged the file and will not let it be downloaded. | Check it on the OneDrive website; delete it there if it is unwanted. |
+| Interrupted removal | A `.onedrive-go.<id>.detach` file was left in the sync folder by a delete or replace that was interrupted. It is your content; sync never deletes it on its own. | Check the file. Rename it back to keep it, or delete it yourself. |
+| Folder too large to delete safely | You deleted a folder here, but on OneDrive it holds more items than sync checks before a recursive delete, so it is not deleted there. | Delete the folder on the OneDrive website, or restore it here. |
+| Download doesn't match OneDrive / Upload not stored as sent | A transfer did not match OneDrive's hash or size after retries; your file is untouched. | Nothing at first; it is retried. If it keeps failing, check the file on the OneDrive website or upload it again with `put`. |
 | Sync issue | Something unexpected. | Check the logs (below), and run `status` again after the next sync. |
 
 ## Sign-in required (exit 77)
@@ -82,11 +91,28 @@ reported as unavailable and the other drives continue. Create the folder (or
 mount the disk), or point `sync_dir` at the right place. `login` and
 `drive add` create the folder when they set a drive up.
 
+## The sync folder is not the one that was synced
+
+Sync records which folder its state belongs to (a marker in the folder's
+extended attributes, with its inode, filesystem and creation time as fallback)
+and refuses to run when a different folder is at `sync_dir`: an unmounted
+disk's empty mount point, a wiped or restored folder, a re-pointed symbolic
+link. The error says whether the folder lacks the `user.onedrive-go.root`
+marker or carries a different one. If you moved or restored the folder on
+purpose, run `onedrive-go drive rebind-root --drive <drive>`: it shows how
+many files the state remembers and how many the folder holds now, and asks
+you to type `REBIND` (or pass `--yes`). The sync state is kept; if files are
+missing from the folder, the next sync holds their deletes for confirmation
+instead of deleting them on OneDrive.
+
 ## "another onedrive-go sync is already running"
 
 Only one `sync` or `sync --watch` runs per configuration. Stop the other one
 (for example `systemctl --user stop onedrive-go`) or wait for it to finish.
 Commands such as `status`, `ls` and `pause` work alongside a running sync.
+Each sync folder is also locked per data directory, so a second onedrive-go
+sharing the data directory cannot sync the same folder even under a different
+path or symbolic link.
 
 ## The sync state database cannot be used
 
@@ -113,8 +139,12 @@ files are recognized; differing ones become conflict copies).
 ## "Too many folders to watch" (Linux)
 
 Watch mode uses inotify, which has a per-user limit on watched folders. When a
-tree comes close to it, onedrive-go warns; when it is reached, new folders are
-noticed only by the periodic rescan (every 5 minutes). Raise the limit:
+tree comes close to it, onedrive-go warns. If the limit is already reached
+when watching starts (or the inotify instance or open-file limit is), watch
+mode keeps syncing by scanning the whole folder every 5 minutes instead, warns
+once with the setting to raise, and tries to watch again after 10 minutes,
+doubling up to an hour. If the limit is reached for a new folder later, that
+folder is picked up by the periodic rescan. Raise the limit:
 
 ```bash
 sudo sysctl -w fs.inotify.max_user_watches=524288
@@ -123,7 +153,8 @@ echo fs.inotify.max_user_watches=524288 | sudo tee /etc/sysctl.d/90-onedrive-go.
 ```
 
 On macOS, watching uses kqueue, which keeps one open file per watched file
-and folder; very large trees can run into the open-files limit (`ulimit -n`).
+and folder; when a tree would need more than half of the open-files limit
+(`ulimit -n`), watch mode falls back to the periodic rescan in the same way.
 
 ## Network problems and proxies
 

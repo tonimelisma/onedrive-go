@@ -4,9 +4,12 @@
 
 Yes, as long as they do not sync the **same local folder**. Two sync clients
 on one folder see each other's changes as user edits and can undo or
-duplicate each other's work; onedrive-go does not detect this. Using several
-clients on the same OneDrive account, each with its own folder (or on
-different computers), is fine.
+duplicate each other's work. onedrive-go refuses to start a second sync of
+the same folder from the same data directory and warns when it finds another
+client's marker (Dropbox, Syncthing, Nextcloud, ownCloud) or a folder under
+`~/Library/CloudStorage`, but it cannot detect every other client, so keep
+the folders separate. Using several clients on the same OneDrive account,
+each with its own folder (or on different computers), is fine.
 
 ### Will the first sync delete anything?
 
@@ -27,18 +30,23 @@ before the first sync.
 
 ### How do I move my sync folder after it has synced?
 
-Do not just point `sync_dir` at a new, empty folder: onedrive-go would see
-every synced file as deleted and delete it on OneDrive (see
-[known gaps](safety.md#known-gaps)). Instead:
-
 1. Stop syncing (`systemctl --user stop onedrive-go`, or Ctrl-C).
 2. Move the folder with `mv`.
 3. Change `sync_dir` in the config file.
-4. Run `onedrive-go drive reset-sync-state --drive <drive>` and then
-   `onedrive-go sync --dry-run` to check, and `onedrive-go sync`.
+4. Start syncing again. onedrive-go recognizes the folder by a marker it
+   keeps on it, so a move within one filesystem needs nothing more. If the
+   folder was copied to another filesystem or restored from a backup without
+   extended attributes, sync refuses to start and names the fix: run
+   `onedrive-go drive rebind-root --drive <drive>`, check that the file
+   counts it shows match, and type `REBIND`. Your sync state is kept, so
+   files whose content is unchanged are not transferred again.
 
-After the reset the next sync merges both sides like a first sync, so nothing
-is deleted.
+Pointing `sync_dir` at a new, empty folder by mistake is safe: the folder is
+refused as not the one that was synced, and even if it were accepted,
+deleting everything on one side is held for confirmation (see
+[how it keeps files safe](safety.md#deletes)). Use `drive reset-sync-state`
+only when you want to discard the sync state; it makes the next sync merge
+both sides like a first sync.
 
 ### How do I sync only some folders?
 
@@ -86,7 +94,8 @@ and a web address, and you can sign in from any other device. Then run
 ### How quickly are changes synced?
 
 Local changes are noticed as they happen in `sync --watch` (with a full
-rescan every 5 minutes as a safety net). Remote changes are fetched every
+rescan every 5 minutes as a safety net, every 2 minutes when the sync folder
+is on a network or FUSE filesystem). Remote changes are fetched every
 `poll_interval`, 5 minutes by default; `websocket = true` makes OneDrive
 notify onedrive-go sooner.
 

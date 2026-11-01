@@ -30,7 +30,7 @@ func conflictCopyNames(t *testing.T, syncRoot string) []string {
 	return names
 }
 
-// Validates: R-6.2.4
+// Validates: R-2.3.5
 //
 // Choosing the destination by stat and then renaming onto it is a
 // check-then-act. Rename silently replaces whatever sits at the destination,
@@ -59,7 +59,7 @@ func TestExecutor_ConflictCopy_ReservationGivesEachCopyItsOwnDestination(t *test
 	assert.NotEqual(t, firstRel, secondRel)
 }
 
-// Validates: R-6.2.4
+// Validates: R-2.3.5
 //
 // A claim that goes unused must not be left behind: the placeholder is empty,
 // so it would read as a truncated conflict copy.
@@ -79,7 +79,7 @@ func TestExecutor_ConflictCopy_ReleasedReservationLeavesNoPlaceholder(t *testing
 	assert.Empty(t, conflictCopyNames(t, syncRoot))
 }
 
-// Validates: R-6.2.4
+// Validates: R-2.3.5
 //
 // The reservation is an implementation detail of choosing a name: a completed
 // conflict copy still leaves exactly one file, holding the original content.

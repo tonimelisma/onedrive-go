@@ -21,8 +21,9 @@ command-line mistake (exit 2); none ignores it.
 - A command whose run partly failed (for example a folder `get` where some
   files failed) still prints its document, and exits non-zero.
 - Mutating commands print their result too: `login`, `logout`, `pause`,
-  `resume`, `drive add`, `drive remove`, `drive reset-sync-state` and
-  `recycle-bin empty`.
+  `resume`, `drive add`, `drive remove`, `drive reset-sync-state`,
+  `drive rebind-root`, `recycle-bin empty`, `trash restore` and
+  `trash empty` (`trash list` prints the entries).
 - `sync` is the exception to "one document": it **streams JSON lines**, one
   object per event (below).
 
@@ -75,6 +76,8 @@ Each line is one JSON object with an `event` field:
 - `status` on an `activity` is `done`, `planned` (dry run), `will_retry` or
   `failed`; on a `summary` it is `done` or `failed`.
 - `counts` maps the same `action` names to how many were done.
+- Held deletes are not part of the `summary` object; read `status --json` and
+  look for an issue with `type` `deletes_held`.
 
 ```bash
 onedrive-go sync --json | jq -c 'select(.event == "activity" and .status == "failed")'
@@ -92,7 +95,8 @@ onedrive-go sync --json | jq -c 'select(.event == "activity" and .status == "fai
 | 130 | A command other than `sync --watch` stopped with Ctrl-C or SIGTERM | |
 
 The code is chosen from the kind of error, never from its message text, so it
-is safe to branch on. One-shot `sync` exits non-zero when a selected drive
+is safe to branch on. `sync` run as root without `--allow-root` is a
+command-line mistake (2). One-shot `sync` exits non-zero when a selected drive
 could not sync at all; problems with individual files are printed, kept, and
 reported by `status` rather than failing every run. `sync --watch` exits 77 or
 78 only when every drive that could not start failed for that same reason.

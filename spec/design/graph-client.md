@@ -78,9 +78,9 @@ This keeps domain-specific logic close to its tests without reopening the public
 
 | Behavior | Evidence |
 | --- | --- |
-| Auth flows, token persistence, and browser/device login remain Graph-boundary responsibilities. | `internal/graph/auth_test.go`, `internal/graph/auth_browser_test.go`, `internal/graph/auth_device_test.go` |
-| Graph request normalization and error translation stay inside the Graph boundary. | `internal/graph/client_test.go`, `internal/graph/errors_test.go`, `internal/graph/normalize_test.go` |
-| Drive, shared-item, and upload-session quirks are handled at the Graph edge rather than in CLI or sync. | `internal/graph/drives_test.go`, `internal/graph/drives_shared_test.go`, `internal/graph/upload_session_test.go`, `internal/graph/upload_test.go` |
+| Auth flows, token persistence, and browser/device login remain Graph-boundary responsibilities. | `internal/graph/auth_test.go` (`TestDoLogin_Success`, `TestDoLogin_DeviceAuthError`, `TestSaveLoadToken_RoundTrip`), `internal/graph/auth_browser_callback_test.go` (`TestHandleOAuthCallback_RepeatedCallbackDoesNotBlock`), `internal/graph/client_auth_refresh_test.go` (`TestDeviceLoginError_AADOutcomesArePlain`) |
+| Graph request normalization and error translation stay inside the Graph boundary. | `internal/graph/client_test.go` (`TestDo_ErrorClassification`, `TestDo_ParsesStructuredGraphErrors`), `internal/graph/errors_classification_test.go` (`TestIsQuotaExhaustedAndIsNotSupported`), `internal/graph/normalize_test.go` |
+| Drive, shared-item, and upload-session quirks are handled at the Graph edge rather than in CLI or sync. | `internal/graph/drives_test.go`, `internal/graph/shares_test.go` (`TestResolveShareURL_PreservesRemoteItemIdentity`), `internal/graph/items_test.go` (`TestToItem_SharedOwner_FallbackChain`), `internal/graph/quirks_test.go` (`TestQueryUploadSession_ReturnsNextExpectedRanges`), `internal/graph/upload_test.go` |
 
 ## Authentication (`auth.go`)
 

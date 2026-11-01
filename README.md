@@ -10,8 +10,10 @@ A OneDrive command-line client and two-way sync client for Linux and macOS.
 
 > [!WARNING]
 > **Pre-release.** There are no releases yet: you build it from source, and it
-> has not been used outside its own testing. Data-safety hardening is in
-> progress (see [known gaps](docs/safety.md#known-gaps)). Try it first with
+> has not been used outside its own testing. The data-safety model (delete
+> hold, local trash, sync-folder identity, verified transfers) is implemented
+> and tested, with the remaining limits listed in
+> [docs/safety.md](docs/safety.md#known-gaps). Try it first with
 > `sync --dry-run` or a test account, and keep a backup of anything you cannot
 > lose. onedrive-go is not affiliated with Microsoft.
 
@@ -131,8 +133,10 @@ on either side on the first sync just because it is missing from the other.
 - **Deletes are only propagated for files that were synced before.** A file
   missing on one side is deleted on the other only if onedrive-go recorded it
   as synced; otherwise it is copied over.
-- **Deletes on OneDrive go to the OneDrive recycle bin.** Deletes on your
-  computer are real deletes, so the recycle bin is where a mistake is undone.
+- **Deletes go to a recycle bin on both sides.** Deletes on OneDrive go to the
+  OneDrive recycle bin; files sync deletes or replaces on your computer go to
+  onedrive-go's own per-drive trash for 30 days (`trash list`,
+  `trash restore`).
 - **Local deletes are checked first.** Before deleting a local file because it
   was deleted on OneDrive, onedrive-go checks that it is still what it last
   synced. If you changed it, your version is kept and uploaded again.
@@ -144,26 +148,34 @@ on either side on the first sync just because it is missing from the other.
   when free space would fall below `min_free_space` (1 GB by default).
 - **Personal Vault and OneNote notebooks are skipped.**
 - **One sync at a time** per configuration; other commands can run alongside.
+- **Mass deletes are held for confirmation.** If one side is suddenly empty,
+  or more than 50 files and 30 % of what is synced would be deleted, nothing
+  is deleted until you run `sync --confirm-deletes`.
+- **A replaced or unmounted sync folder is refused, not synced.** The sync
+  state is bound to the folder it was built from; if a different folder (or
+  an empty mount point) is at the path, sync stops and names
+  `drive rebind-root` as the way to accept it.
 
-There is no limit on how many deletes one sync propagates, and an unmounted
-or emptied sync folder is not yet detected. Read
-[docs/safety.md](docs/safety.md) for the full model and its known gaps.
+Read [docs/safety.md](docs/safety.md) for the full model and its remaining
+limits.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `login` / `logout` | Sign in (adds your main drive) / sign out (`--purge` also removes sync state) |
-| `sync` | Sync once; `--watch`, `--download-only`, `--upload-only`, `--dry-run`, `--full` |
-| `status` | Accounts, drives, shared folders, and anything that needs you |
+| `sync` | Sync once; `--watch`, `--download-only`, `--upload-only`, `--dry-run`, `--full`, `--confirm-deletes` (apply deletes held for confirmation), `--allow-root` |
+| `status` | Accounts, drives, shared folders, and anything that needs you (`--perf` adds live performance data from a running sync) |
 | `pause [duration]` / `resume` | Pause syncing a drive (for example `2h`, `1d`) / resume it |
 | `ls`, `stat` | List a OneDrive folder / show an item's details |
 | `get`, `put` | Download / upload a file or folder |
-| `mkdir`, `mv`, `cp`, `rm` | Create, move, copy (server-side) and delete (`rm` uses the recycle bin; `--permanent` skips it) |
+| `mkdir`, `mv`, `cp`, `rm` | Create, move, copy (server-side) and delete (`rm -r` for folders; `rm` uses the recycle bin, `--permanent` skips it) |
 | `shared` | List files and folders shared with you |
-| `drive list`, `add`, `remove`, `search` | Choose which drives are configured; find SharePoint libraries |
-| `drive reset-sync-state` | Start a drive's sync state over (your files are not touched) |
+| `drive list`, `add`, `remove`, `search` | Choose which drives are configured; find SharePoint libraries (`drive list --all` lifts the SharePoint site cap) |
+| `drive reset-sync-state`, `drive rebind-root` | Start a drive's sync state over (your files are not touched) / accept a moved or restored sync folder, keeping the state |
+| `trash list`, `restore`, `empty` | Files sync deleted or replaced on this computer, kept for 30 days per drive |
 | `recycle-bin list`, `restore`, `empty` | Work or school and SharePoint drives only |
+| `perf capture` | Save CPU, heap and goroutine profiles from a running sync |
 
 Every command has `--help`. Global flags: `--drive`, `--account`, `--config`,
 `--json`, `-v`/`--verbose`, `--debug`, `-q`/`--quiet`.

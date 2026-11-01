@@ -67,6 +67,10 @@ WatchdogSec=2min
 There is no `network-online.target` dependency: user units cannot order
 against it, and onedrive-go waits out an offline network by itself.
 
+`sync` refuses to run as root unless `--allow-root` is given (it would leave
+root-owned files in your folder), and exits with status 2. Run it as a user
+unit, or set `User=` in a system unit.
+
 ### Day-to-day commands
 
 ```bash
@@ -82,6 +86,11 @@ onedrive-go resume --drive personal:user@example.com
 Under the journal every line carries a priority, so `-p warning` filters
 reliably. `pause` and `resume` take effect in the running service
 immediately; you do not need to restart it.
+
+`onedrive-go sync --confirm-deletes --drive <drive>` applies deletes the
+running sync held for confirmation (the journal and `status` report them).
+Stop the service first, since only one sync may run, and `--confirm-deletes`
+is one-shot only; then start it again.
 
 ### Stopping
 

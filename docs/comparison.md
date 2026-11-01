@@ -13,7 +13,8 @@ makes no performance claims: none of the three has been benchmarked here.
 - rclone: `docs/content/onedrive.md`, `docs/content/bisync.md` and
   `docs/content/commands/rclone_mount.md` at commit `81e7372f6`
   (2026-10-19), also published at [rclone.org](https://rclone.org/).
-- onedrive-go: this repository's `main` branch.
+- onedrive-go: this repository's `main` branch (its column re-checked on
+  2026-10-31).
 
 Projects change; check their documentation for the current state. Corrections
 are welcome as issues or pull requests.
@@ -42,8 +43,8 @@ are welcome as issues or pull requests.
 | Continuous sync | `sync --watch` (inotify on Linux, kqueue on macOS; remote polling, optional websocket) | Monitor mode (inotify; websocket, or webhooks) | No watch mode; run `bisync` repeatedly, for example from cron |
 | First sync with data on both sides | Merges: copies one-sided files, keeps both versions of differing files | Not compared here; see its usage guide | Requires an explicit `--resync` run, with `--resync-mode` choices |
 | Conflicts | Both kept; local copy renamed `name.conflict-<timestamp>.ext` | "Safe conflict handling" by keeping local backups | `--conflict-resolve` and `--conflict-loser` options; by default no winner is picked and both are kept, auto-numbered |
-| Mass-delete protection | None yet (see [safety](safety.md#known-gaps)) | `classify_as_big_delete` (default 1000 items) | `--max-delete` (default 50%), plus optional `--check-access` sentinel files |
-| Local deletes caused by remote deletes | Deleted outright, after checking the file is unchanged | Can use the FreeDesktop.org trash | Deleted, unless `--backup-dir1`/`--backup-dir2` is set |
+| Mass-delete protection | Deletes are held for confirmation when one side is empty or more than max(50, 30 % of synced items) would be deleted; `sync --confirm-deletes` applies them (fixed policy, not configurable) | `classify_as_big_delete` (default 1000 items) | `--max-delete` (default 50%), plus optional `--check-access` sentinel files |
+| Local deletes caused by remote deletes | Checked against the last synced version, then kept in onedrive-go's per-drive trash for 30 days (`trash list` / `trash restore`) | Can use the FreeDesktop.org trash | Deleted, unless `--backup-dir1`/`--backup-dir2` is set |
 | Filtering | Per drive: included and ignored folders, glob patterns, dotfiles, junk files | Rules-based, with `*` and `**` wildcards; changing filters requires `--resync` | rclone filter rules |
 | On-demand files | No | No | `rclone mount` gives on-demand access through a virtual filesystem (a different model from two-way sync) |
 
@@ -61,14 +62,14 @@ are welcome as issues or pull requests.
 ## Choosing
 
 - **abraunegg/onedrive** is the established Linux sync client: released,
-  packaged, widely used, with national-cloud support, a local trash for
-  remote-caused deletes and a big-delete safeguard.
+  packaged, widely used, with national-cloud support, bandwidth limits and
+  desktop integration.
 - **rclone** fits when OneDrive is one of several storage services, when you
   want on-demand access through `rclone mount`, or when one-way copies and
   file commands matter more than a continuously running two-way sync.
 - **onedrive-go** offers two-way sync plus direct file commands in one tool,
   on Linux and macOS, with systemd and scripting integration. It is
-  pre-release: read [how it keeps files safe](safety.md), including the known
-  gaps, before trusting it with data you cannot restore.
+  pre-release: read [how it keeps files safe](safety.md), including its
+  remaining limits, before trusting it with data you cannot restore.
 
 Whichever you choose, do not point two sync clients at the same folder.

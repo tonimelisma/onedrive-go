@@ -33,6 +33,9 @@ Examples of problems we want to hear about:
   `~/Library/Application Support/onedrive-go/` on macOS) with mode `0600`.
 - onedrive-go asks Microsoft for the `Files.ReadWrite.All`, `User.Read` and
   `offline_access` permissions.
+- Files sync deleted or replaced on this computer are kept for 30 days in a
+  per-drive trash under the same data directory (`onedrive-go trash list`),
+  with the data directory's owner-only permissions.
 - The local control socket used by `status`, `pause` and config reloads is
   created with mode `0600` in the data directory (or, when that path is too
   long for a Unix socket, in a short hash-named directory under the system

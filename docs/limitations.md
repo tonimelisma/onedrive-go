@@ -1,7 +1,7 @@
 # Limitations and known issues
 
-What onedrive-go does not do, and OneDrive behavior you may notice. Data-safety
-gaps that are being fixed are listed separately in
+What onedrive-go does not do, and OneDrive behavior you may notice. The limits
+of its data-safety protections are listed separately in
 [safety.md](safety.md#known-gaps).
 
 ## Not supported
@@ -25,8 +25,11 @@ gaps that are being fixed are listed separately in
 - Migrating configuration from other clients. Their sign-in tokens cannot be
   reused in any case, so you sign in again with `onedrive-go login`.
 - Bandwidth limits.
-- Performance measurements. Performance has not been benchmarked, so no speed
-  or memory claims are made.
+- Performance measurements. Performance has not been benchmarked end to end,
+  so no speed or memory claims are made. The one repo benchmark so far
+  measures sync planning cost: a quiet pass over 100,000 synced files spends
+  about 23 s in planning queries on a 2-core machine
+  (`spec/design/performance-benchmarking.md`).
 
 ## Command limits
 
@@ -34,9 +37,10 @@ gaps that are being fixed are listed separately in
   work or school and SharePoint drives only. Microsoft's API does not offer
   the recycle bin for personal accounts; use the OneDrive website there.
 - **`cp` is a server-side copy** within OneDrive.
-- **Local deletes do not use a trash folder.** When a file is deleted on
-  OneDrive, the local copy is deleted outright (after checking it is
-  unchanged). Restore from the OneDrive recycle bin if needed.
+- **Local deletes use onedrive-go's own trash, not the desktop trash.** Files
+  sync deletes or replaces on your computer are kept for 30 days under
+  onedrive-go's data directory, not in the FreeDesktop or Finder trash; use
+  `onedrive-go trash list` and `trash restore <id>`.
 - **Hard links, ACLs and extended attributes** are not preserved; OneDrive
   has no equivalent. Each hard-linked name is synced as a separate file.
 
@@ -63,8 +67,9 @@ gaps that are being fixed are listed separately in
   1900-01-01 as its OneDrive date (with a warning); its local date is kept.
 - **Emoji in names:** when OneDrive compares names it ignores emoji and other
   characters outside Unicode's Basic Multilingual Plane, so `notes😀.txt` and
-  `notes.txt` are the same name there. Keep such files in different folders
-  (see [safety](safety.md#known-gaps)).
+  `notes.txt` are the same name there. onedrive-go treats such pairs as a
+  name collision: neither is uploaded until one is renamed (see
+  [safety](safety.md#what-is-skipped)).
 - **Personal Vault** is never synced.
 
 ## OneDrive behavior you may notice
@@ -72,11 +77,11 @@ gaps that are being fixed are listed separately in
 - **Delayed remote changes.** OneDrive's change feed can lag a direct look at
   a file by seconds to minutes, so a change made on the web may need a second
   sync to arrive. `sync --full` lists everything instead.
-- **A rename resets the modification time on OneDrive.** Renaming a file,
-  on the web or through onedrive-go, sets its OneDrive modification time to
-  the time of the rename; the content is unchanged. onedrive-go does not yet
-  preserve the original time when it renames, so after a rename the file's
-  time on OneDrive differs from the local one.
+- **A rename on the OneDrive website resets the modification time there.**
+  OneDrive sets a renamed file's modification time to the time of the rename
+  unless the rename carries the old time, which onedrive-go's `mv` and sync
+  moves do. After a rename made on the web, onedrive-go records the new time
+  without transferring the file again.
 - **Watch mode notices remote changes every 5 minutes by default**
   (`poll_interval`). `websocket = true` makes it react sooner.
 - **Extra versions.** Uploading a file and then setting its modification time

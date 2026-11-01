@@ -18,7 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// Validates: R-4.8.4, R-6.2.4
+// Validates: R-4.8.4, R-6.2.8
 func TestStatusCommand_NoAccountsDoesNotMutateManagedState(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -34,7 +34,7 @@ func TestStatusCommand_NoAccountsDoesNotMutateManagedState(t *testing.T) {
 	assert.Equal(t, before, snapshotSideEffectRoots(t, append(cliManagedStateRoots(), cfgDir)))
 }
 
-// Validates: R-1.1, R-6.2.4
+// Validates: R-1.1, R-6.2.8
 func TestRunLs_DoesNotMutateManagedState(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -60,7 +60,7 @@ func TestRunLs_DoesNotMutateManagedState(t *testing.T) {
 	assert.Equal(t, before, snapshotSideEffectRoots(t, cliManagedStateRoots()))
 }
 
-// Validates: R-1.3, R-6.2.4
+// Validates: R-1.3, R-6.2.8
 func TestRunRm_RequiresExplicitPathBeforeGraphMutation(t *testing.T) {
 	var graphCalls atomic.Int32
 	var stdout bytes.Buffer
