@@ -15,11 +15,15 @@ import (
 // .partial files, range-based resume, hash verification with retry, session
 // persistence for uploads, disk space pre-checks, and atomic rename.
 type TransferManager struct {
-	downloads        Downloader
-	uploads          Uploader
-	sessionStore     *SessionStore // nil = no session persistence for uploads
-	logger           *slog.Logger
-	hashFunc         func(string) (string, error)
+	downloads    Downloader
+	uploads      Uploader
+	sessionStore *SessionStore // nil = no session persistence for uploads
+	logger       *slog.Logger
+	hashFunc     func(string) (string, error)
+	// syncFile flushes a finalized download to disk before it is renamed
+	// into place. It is (*os.File).Sync in production; a seam only because
+	// TargetFS hands out real files, so nothing else can observe the fsync.
+	syncFile         func(*os.File) error
 	sessionMountID   string
 	sessionLocalRoot string
 
@@ -77,6 +81,7 @@ func NewTransferManager(
 		sessionStore: store,
 		logger:       logger,
 		hashFunc:     ComputeQuickXorHash,
+		syncFile:     (*os.File).Sync,
 	}
 
 	for _, opt := range opts {

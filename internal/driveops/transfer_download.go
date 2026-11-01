@@ -390,7 +390,7 @@ func (tm *TransferManager) finalizePartial(target TargetFS, partialPath, targetP
 		return errors.Join(fmt.Errorf("setting the mode of the download of %s: %w", targetPath, err), f.Close())
 	}
 
-	if err := f.Sync(); err != nil {
+	if err := tm.syncFile(f); err != nil {
 		return errors.Join(fmt.Errorf("flushing the download of %s to disk: %w", targetPath, err), f.Close())
 	}
 

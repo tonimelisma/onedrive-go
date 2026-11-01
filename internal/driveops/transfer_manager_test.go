@@ -2167,7 +2167,7 @@ type recordingTarget struct {
 func (r *recordingTarget) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
 	step := "open-partial"
 	if flag == os.O_WRONLY {
-		step = "finalize(chmod,fsync)"
+		step = "reopen-partial"
 	}
 	r.steps = append(r.steps, step)
 
@@ -2197,8 +2197,16 @@ func TestDownloadToFile_FsyncsBeforeRenameAndSyncsDirAfter(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "folder")
 	require.NoError(t, os.Mkdir(dir, 0o700))
 	target := &recordingTarget{TargetFS: LocalTarget()}
+	tm := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil)
+	// TargetFS hands out real files, so the fsync itself is recorded through
+	// the manager's seam: a mutation that drops f.Sync() left the old
+	// step-order assertion green.
+	tm.syncFile = func(f *os.File) error {
+		target.steps = append(target.steps, "fsync:"+filepath.Base(f.Name()))
+		return f.Sync()
+	}
 
-	_, err := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil).DownloadToFile(
+	_, err := tm.DownloadToFile(
 		t.Context(), driveid.New("d1"), "item1", filepath.Join(dir, "f.txt"),
 		DownloadOpts{RemoteHash: tmHashBytes(content), RemoteMtime: time.Now().UnixNano(), Target: target})
 	require.NoError(t, err)
@@ -2207,7 +2215,27 @@ func TestDownloadToFile_FsyncsBeforeRenameAndSyncsDirAfter(t *testing.T) {
 	// entry must be on disk first: a power cut used to leave an empty file
 	// the next pass trusted or uploaded over the good remote copy.
 	// The mtime is set before the fsync so the flush makes it durable too.
-	assert.Equal(t, []string{"open-partial", "chtimes", "finalize(chmod,fsync)", "rename", "syncdir:folder"}, target.steps)
+	partial := downloadPartialName("f.txt", partialVersionTag(DownloadOpts{RemoteHash: tmHashBytes(content)}))
+	assert.Equal(t, []string{"open-partial", "chtimes", "reopen-partial", "fsync:" + partial, "rename", "syncdir:folder"}, target.steps)
+}
+
+// Validates: R-5.10.1
+func TestDownloadToFile_FsyncFailureKeepsTheTargetAbsent(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("durable")
+	targetPath := filepath.Join(t.TempDir(), "f.txt")
+	tm := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil)
+	tm.syncFile = func(*os.File) error { return syscall.EIO }
+
+	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath,
+		DownloadOpts{RemoteHash: tmHashBytes(content), Target: LocalTarget()})
+
+	// A download whose bytes may not be on disk is never published: the
+	// next pass would trust the baseline for a file a power cut can empty.
+	require.ErrorIs(t, err, syscall.EIO)
+	assert.Contains(t, err.Error(), "flushing the download")
+	assert.NoFileExists(t, targetPath)
 }
 
 // refusingParentTarget is a TargetFS whose parent check fails, as sync's
