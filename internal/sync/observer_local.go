@@ -526,9 +526,11 @@ type localObserver struct {
 
 	safetyScanInterval time.Duration // 0 → default (5 minutes); configurable (B-099)
 
-	// hashFunc computes the QuickXorHash of a file. Injectable for testing
-	// (e.g., to simulate panics in the hash phase).
-	hashFunc func(path string) (string, error)
+	// hashFunc computes the QuickXorHash of a file. It takes the observer's
+	// run context because the watch event loop hashes synchronously: a
+	// shutdown must not wait out a whole-file read (R-6.3.6). Injectable for
+	// testing (e.g., to simulate panics in the hash phase).
+	hashFunc func(ctx context.Context, path string) (string, error)
 
 	// clock is the observer's time capability: safety-scan ticks, retry
 	// sleeps, and write-coalesce timers all read the same clock, so a test
@@ -565,7 +567,7 @@ func newLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int)
 		baseline:         baseline,
 		logger:           logger,
 		checkWorkers:     checkWorkers,
-		hashFunc:         driveops.ComputeQuickXorHash,
+		hashFunc:         driveops.ComputeQuickXorHashContext,
 		clock:            realClock{},
 		localWatchState:  newLocalWatchState(),
 		descriptorBudget: watchDescriptorBudget(),

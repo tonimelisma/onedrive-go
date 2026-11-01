@@ -26,6 +26,7 @@ Unified download/upload manager shared by both CLI file operations and the sync 
 | The iOS HEIC quirk is accepted only as a smaller HEIF-signed body; an error page, an empty or truncated body, or a larger or unsigned body is an integrity failure that never reaches the target, and an accepted server transform warns on a personal drive only. | `TestTransferManager_HEICMetadataMismatch_AcceptsFirstDownloadQuietly`, `TestTransferManager_HEICQuirkRequiresASmallerHEIFBody`, `TestTransferManager_HEICSameSizeHashMismatch_StillRetries`, `TestTransferManager_AcceptedTransformWarnsOnlyOnPersonalDrives` |
 | Sync-owned live preconditions can be injected without making `driveops` import sync policy. | `TestDownloadToFile_TargetPreconditionBeforeRenamePreservesPartial`, `TestUploadFile_SourcePreconditionRunsBeforeUpload`, `TestUploadFile_SourcePreconditionRunsDuringSessionRead` |
 | Sync execution reuses the same transfer boundary instead of inventing a second transfer path. | `internal/sync/executor_test.go` (`TestExecutor_Download_Success`, `TestExecutor_Download_PartialFileCleanedOnMidStreamError`) |
+| Content hashing honors cancellation between 1 MiB chunks, so a canceled upload stops at the pre-upload hash and stopping the sync worker pool does not wait on a whole-file read (R-6.3.6). | `TestComputeQuickXorHashFromReaderContext_StopsAtCancel`, `TestComputeQuickXorHashContext_CanceledContextDoesNotHashTheFile`, `TestComputeQuickXorHashContext_ChunkedReadMatchesSinglePass`, `TestTransferManager_UploadFile_CanceledContextStopsAtTheHash`, `TestWorkerPool_StopReturnsWhileWorkerHashesBeforeUpload` |
 
 ### Download
 
@@ -304,7 +305,25 @@ starts:
 
 ## Hash Utilities
 
-QuickXorHash computation for local files (`hash.go`). The `pkg/quickxorhash/` package implements the algorithm (vendored from rclone, BSD-0 license). `SelectHash` returns only an item's QuickXorHash: SHA-256 and SHA-1 can never equal a local QuickXor digest, so the old fallback made such items fail every verification and never compare equal (D-041). An item with SHA digests only is hashless, and its size is the evidence (`TestSelectHash_ReturnsOnlyQuickXor`).
+QuickXorHash computation for local files (`hash.go`). The `pkg/quickxorhash/` package implements the algorithm (vendored from rclone, BSD-0 license).
+
+Hashing is cancellable. `ComputeQuickXorHashContext` and
+`ComputeQuickXorHashFromReaderContext` read in `hashReadChunkSize` (1 MiB)
+chunks and check the context before each one, so a canceled upload or a
+shutdown stops a hash within one chunk instead of at the end of the file
+(R-6.3.6). `TransferManager.hashFunc`, the pre-upload hash every upload runs
+on a sync worker, takes the upload's context; `WithContentHasher` replaces it,
+which the sync engine's tests use to prove that stopping the worker pool does
+not wait on a whole-file read. The sync package's local observer and scanner
+use the Context form too. `ComputeQuickXorHash` and
+`ComputeQuickXorHashFromReader` remain, as `context.Background()` wrappers,
+only for the callers whose own signatures carry no context: the executor's
+live precondition checks and syncverify's hasher seam. Evidence:
+`TestComputeQuickXorHashFromReaderContext_StopsAtCancel`,
+`TestComputeQuickXorHashContext_CanceledContextDoesNotHashTheFile`,
+`TestComputeQuickXorHashContext_ChunkedReadMatchesSinglePass`,
+`TestTransferManager_UploadFile_CanceledContextStopsAtTheHash`,
+`TestWorkerPool_StopReturnsWhileWorkerHashesBeforeUpload`. `SelectHash` returns only an item's QuickXorHash: SHA-256 and SHA-1 can never equal a local QuickXor digest, so the old fallback made such items fail every verification and never compare equal (D-041). An item with SHA digests only is hashless, and its size is the evidence (`TestSelectHash_ReturnsOnlyQuickXor`).
 
 ## Download Verification
 

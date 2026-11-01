@@ -342,3 +342,33 @@ func TestShutdownContext_CancelReleasesSignalGoroutine(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond,
 		"signal goroutines should unwind after cancel")
 }
+
+// Validates: R-6.3.6
+//
+// After a first signal the goroutine waits for a second one. The command
+// context is already canceled by then and the parent is context.Background()
+// at the real entry point, so only the stop call can release it; before this
+// test, a command interrupted once left its goroutine and its signal
+// registration behind for the rest of the process.
+func TestShutdownContext_StopAfterFirstSignalReleasesSignalGoroutine(t *testing.T) {
+	// Not parallel: sends a real SIGINT to the process.
+
+	logger := slog.New(slog.DiscardHandler)
+	before := runtime.NumGoroutine()
+
+	ctx, stop := shutdownContext(context.Background(), logger)
+
+	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGINT), "failed to send SIGINT")
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "context not canceled within 2 seconds of SIGINT")
+	}
+
+	stop()
+
+	require.Eventually(t, func() bool {
+		return runtime.NumGoroutine() <= before+2
+	}, 5*time.Second, 10*time.Millisecond,
+		"the signal goroutine must unwind once stop is called after a first signal")
+}

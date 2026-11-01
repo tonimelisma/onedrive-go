@@ -1,6 +1,7 @@
 package driveops
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"math"
@@ -19,7 +20,10 @@ type TransferManager struct {
 	uploads      Uploader
 	sessionStore *SessionStore // nil = no session persistence for uploads
 	logger       *slog.Logger
-	hashFunc     func(string) (string, error)
+	// hashFunc hashes a local file before an upload. It takes the upload's
+	// context so a canceled upload or a shutdown does not wait out a
+	// whole-file read (R-6.3.6).
+	hashFunc func(ctx context.Context, fsPath string) (string, error)
 	// syncFile flushes a finalized download to disk before it is renamed
 	// into place. It is (*os.File).Sync in production; a seam only because
 	// TargetFS hands out real files, so nothing else can observe the fsync.
@@ -69,6 +73,15 @@ func WithSessionScope(mountID, localRoot string) Option {
 	}
 }
 
+// WithContentHasher replaces the pre-upload content hasher. The sync engine's
+// tests inject a hasher that blocks until its context is canceled to prove
+// that stopping the worker pool does not wait on a whole-file read.
+func WithContentHasher(fn func(ctx context.Context, fsPath string) (string, error)) Option {
+	return func(tm *TransferManager) {
+		tm.hashFunc = fn
+	}
+}
+
 // NewTransferManager creates a TransferManager. sessionStore may be nil if
 // upload session persistence is not needed (e.g., small-file-only workflows).
 // Options configure optional behaviors like disk space checking.
@@ -80,7 +93,7 @@ func NewTransferManager(
 		uploads:      ul,
 		sessionStore: store,
 		logger:       logger,
-		hashFunc:     ComputeQuickXorHash,
+		hashFunc:     ComputeQuickXorHashContext,
 		syncFile:     (*os.File).Sync,
 	}
 

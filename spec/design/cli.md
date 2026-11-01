@@ -44,6 +44,8 @@ are inserted, updated, pruned, and validated.
 | Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestDryRunFlagSurfaceOnlySyncCommand`, `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_DryRunOpensLogFileAndWarnsOnFailure`, `TestRunSyncCommand_DryRunFailsWhenControlSocketPathCannotBeDerived`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_PassesMissingSyncDirToRunOnce`, `TestRunSyncCommand_DryRunPassesMissingSyncDirWithoutCreatingIt`, `TestRunSyncCommand_PassesPausedInvalidDriveToRunnerAsPaused`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestSyncConsole_MultiDriveNamesEachDrive` |
 | `sync` names every finished file, summarizes in human units, prints errors once, and renders console logs as human or journal text. | `TestSyncConsole_NamesEveryCompletedFile`, `TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose`, `TestSyncConsole_SummaryInHumanUnits`, `TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError`, `TestSyncConsole_WatchLinesAreTimestampedAndAnnounceStartAndStop`, `TestConsoleLogHandler_JournalLinesCarryPriorityAndNoTimestamp`, `TestConsoleLogHandler_DefaultConsoleShowsOutageAndItsRecoveryPlainly`, `TestConsoleLogHandler_JournalFilesNoticeAtNoticePriority`, `TestWithConsoleTimestamps_StampsHumanLinesOnly`, `TestNotice_SitsBetweenInfoAndWarn`, `TestReplaceLevelName_PrintsNoticeInStructuredOutput`, `TestCommandLogger_PerfSummaryInLogFileNotDefaultConsole`, `TestCommandLogger_SyncSchemaFieldsOnlyInLogFileAndVerboseConsole`, `TestMainWithWriters_SkipConfigCommandLogsPerfSummaryToLogFile`, `TestMainWithWriters_BootstrapRecordsFollowTheCommandLogger`, `TestCommandErrorText_NetworkFailureIsOnePlainLine`, `TestUnauthorizedAuthReason_DistinguishesExpiredLogin` |
 | Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusMount_RendersLifecycleState`, `TestBuildChildStatusMount_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
+| The first SIGINT/SIGTERM cancels the command context cooperatively, the second forces exit, and the stop function releases the signal goroutine and its registration whether or not a first signal arrived (R-6.3.6). | `TestShutdownContext_FirstSignalCancels`, `TestShutdownContext_SecondSignalForcesExit`, `TestShutdownContext_ParentCancelStopsGoroutine`, `TestShutdownContext_CancelReleasesSignalGoroutine`, `TestShutdownContext_StopAfterFirstSignalReleasesSignalGoroutine`, `TestRunSyncWatch_FirstSignalCancelsWatchRunner`, `TestRunSyncWatch_FirstSignalCancelsDaemonOrchestrator` |
+| A recovered panic's `stack` attribute stays in the log file and the `--verbose` console; the default console prints the Error line without it. | `TestCommandLogger_PanicStackOnlyInLogFileAndVerboseConsole` |
 | Command failures map into the shared error classes, and the exit status is chosen from typed errors: 77 sign-in required, 78 invalid config, 2 usage, 130 user stop, 1 everything else. | `TestClassifyCommandError`, `TestCommandExitCode`, `TestCommandExitCode_EveryFailureClassHasAStatus`, `TestMainWithWriters_ConfigErrorExits78`, `TestMainWithWriters_SignInRequiredExits77`, `TestFormatWatchStartupError_ExitStatusFollowsSharedCause`, `TestConfigFailuresAreTaggedInvalidConfig` |
 | `sync --watch` reports READY/STATUS/RELOADING/STOPPING/WATCHDOG to systemd through `internal/sdnotify`, and nothing outside systemd. | `TestRunSyncDaemon_NotifiesSystemdOfLifecycle`, `TestRunSyncDaemon_SignInFailureSetsStatusAndExitCode`, `TestRunSyncDaemon_NoDrivesIsAConfigFailure`, `TestSyncNotifierWatchingStatus`, `TestOpenSyncNotifier_BadSocketWarnsAndContinues`, `TestNotifier_SendsProtocolMessages`, `TestOpen_AbstractSocket`, `TestOpen_WatchdogInterval`, `TestRunWatch_ReportsLifecycleTransitions` |
 | User-facing output agrees across commands: `drive list` and `status` derive a configured drive's state through one function (`configuredDriveState`); `stat` prints local times like `ls`; `ls` on a file lists that file; every transport failure, before or while reading the response, and every sign-in outcome is one plain line; health checks do not log a token load. | `TestBuildConfiguredDriveEntries_StateMatchesStatus`, `TestFormatExactTime_IsLocalWithZone`, `TestLs_OnAFileListsThatFile`, `TestCommandErrorText_EveryTransportFailureIsPlain`, `TestCommandErrorText_SignInOutcomesSayRunLoginAgain`, `TestInspectSavedLogin_DoesNotLogATokenLoad` |
@@ -89,10 +91,19 @@ command killed the process outright and nothing deferred ran. Interrupting a
 transfer left its temporary state on disk with no opportunity to clean up, and
 recovery depended entirely on the next run noticing.
 
-The handler is per invocation, not per process, so the context's cancel must be
-called when the command finishes: it stops the signal goroutine and unregisters
-the handler. A test binary that runs the CLI repeatedly is the case that makes
-this matter.
+The handler is per invocation, not per process, so the returned stop function
+must be called when the command finishes: it cancels the context, stops the
+signal goroutine and unregisters the handler. A test binary that runs the CLI
+repeatedly is the case that makes this matter.
+
+The stop function releases the goroutine in both of its states. Before any
+signal it is waiting on the context, which stop cancels. After a first signal
+it is waiting for the second one, and nothing else it could watch fires when
+the command completes: the context is already canceled, and the parent is
+`context.Background()` at the real entry point. So stop also closes a release
+channel that second wait selects on. Before that, a command interrupted once
+left its goroutine and its `signal.Notify` registration behind for the rest
+of the process (R-6.3.6).
 
 The signal logger writes to the status stream because the configured command
 logger does not exist yet when the handler is installed -- log configuration is

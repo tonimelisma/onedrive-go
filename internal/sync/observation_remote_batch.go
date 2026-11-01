@@ -31,4 +31,8 @@ type remoteObservationBatch struct {
 	armFullRefreshTimer   bool
 	markFullRefreshIfIdle bool
 	applyAck              chan error
+	// fatalErr carries a panic recovered in the full-refresh goroutine. The
+	// loop returns it instead of applying the batch, so the mount fails the
+	// way an observer panic fails it (recoverObserverPanic).
+	fatalErr error
 }

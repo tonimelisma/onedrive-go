@@ -330,7 +330,7 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 	if refreshErr := eng.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
 		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
 	}
-	obs.SetShortcutTopology(eng.shortcutNamespaceID, eng.protectedRoots)
+	obs.SetShortcutTopology(eng.shortcutNamespaceID, eng.currentProtectedRoots())
 
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, savedToken)
 	if err != nil {
@@ -361,7 +361,7 @@ func (flow *engineFlow) observeLocal(
 
 	obs := newLocalObserver(bl, eng.logger, eng.checkWorkers)
 	obs.SetFilterConfig(eng.contentFilter)
-	obs.SetProtectedRoots(eng.protectedRoots)
+	obs.SetProtectedRoots(eng.currentProtectedRoots())
 	obs.SetObservationRules(eng.localRules)
 	obs.SetSyncRootIdentity(eng.syncRootIdentity)
 	mountFlags, err := eng.baseline.listMountBoundaries(ctx)

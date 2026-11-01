@@ -53,12 +53,14 @@ type consoleLogHandler struct {
 // schema field but belongs here too: the watch condition summary spells the
 // counts out in its message, so the console would only repeat them.
 // consecutive_errors is retry bookkeeping: an outage is warned once, so the
-// count on that line is always 1.
+// count on that line is always 1. stack is the goroutine dump a recovered
+// panic logs at Error: the bug report needs it from the log file, but on a
+// console it is kilobytes nobody reads.
 func isInternalLogField(key string) bool {
 	switch key {
 	case "run_id", "action_id", "action_type", "condition_key", "condition_total", "failure_class",
 		"log_owner", "scope_key", "trial_scope_key", "drive_id", "http_status",
-		"supersede_streak", "error_detail", "consecutive_errors":
+		"supersede_streak", "error_detail", "consecutive_errors", "stack":
 		return true
 	default:
 		return false

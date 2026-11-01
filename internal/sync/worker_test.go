@@ -1010,3 +1010,59 @@ func TestWorkerPool_CommitsCompletedOutcomeAfterPoolCancellation(t *testing.T) {
 	require.True(t, ok, "completed remote create must be committed despite pool cancellation")
 	assert.Equal(t, "created-Projects", entry.ItemID)
 }
+
+// Validates: R-6.3.6
+//
+// The pre-upload content hash runs on a worker. Stop cancels the pool context
+// and waits for the workers, so a hash that ignored that context held Stop,
+// and the shutdown behind it, for as long as the file took to read. The
+// hasher here blocks until its context is canceled: Stop returns only if the
+// upload's context reaches the hash.
+func TestWorkerPool_StopReturnsWhileWorkerHashesBeforeUpload(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
+
+	hashing := make(chan struct{})
+	var hashingOnce sync.Once
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t),
+		driveops.WithContentHasher(func(ctx context.Context, _ string) (string, error) {
+			hashingOnce.Do(func() { close(hashing) })
+			<-ctx.Done()
+			return "", ctx.Err()
+		}),
+	))
+
+	absPath := filepath.Join(syncRoot, "slow.bin")
+	require.NoError(t, os.WriteFile(absPath, []byte("upload content"), 0o600))
+
+	actions := []Action{{
+		Type:    ActionUpload,
+		Path:    "slow.bin",
+		DriveID: driveid.New("0000000000000001"),
+		View:    &pathView{Path: "slow.bin"},
+	}}
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+
+	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool.Start(t.Context(), 1)
+
+	select {
+	case <-hashing:
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "the worker never reached the pre-upload hash")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		pool.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "Stop must not wait on a hash that honors the pool context")
+	}
+}
