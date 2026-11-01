@@ -17,6 +17,7 @@ Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.
 | Dependency vulnerabilities are caught by tooling rather than by review, including in the forked oauth2 credential path. | `.github/workflows/ci.yml` (govulncheck step), `.github/dependabot.yml` |
 | Every platform claimed in README.md compiles on every verify run, and the darwin runtime is exercised by its own CI leg. | `TestRunVerifyDefaultRunsExpectedSteps`, `TestRunVerifyPublicRunsExpectedSteps`, `.github/workflows/ci.yml` |
 | Test assertion style and sleep discipline are enforced by repo verification, not only by contributor convention. | `internal/devtool/verify_test_conventions_test.go` |
+| `localpath.AtomicWrite` fsyncs the directory the rename landed in, reports a sync failure, and tolerates only a filesystem that cannot sync a directory (R-6.5.4). | `TestAtomicWrite_SyncsTargetDirectory`, `TestAtomicWrite_ReportsDirectorySyncFailure`, `TestAtomicWrite_ToleratesUnsupportedDirectorySync` |
 | `synctree.Root.Spelling` finds an entry by its spelling on disk when a stored NFC path differs from it in Unicode form only: the exact path first, then one listing per missing component; an ambiguous match, a missing parent and an unusable path resolve nothing, and `SpellingOfParent` never looks up the new entry's own name (R-2.13.2). | `TestRoot_SpellingFindsTheNameOnDisk`, `TestRoot_SpellingReturnsUnusablePathsAsGiven`, `TestRoot_SpellingOfParentResolvesOnlyTheParents`, `TestRoot_SpellingAddressesTheEntryForRootedOperations` |
 | Sync-tree mutation cannot escape the configured sync root through a symlinked ancestor, and a containment failure is never reported as absence. | `TestRoot_Rename_ThroughSymlinkedAncestorFailsAndPreservesTarget`, `TestRoot_MkdirAll_ThroughSymlinkedAncestorFails`, `TestRoot_RemoveAll_ThroughSymlinkedAncestorFails`, `TestRoot_Remove_ThroughSymlinkedAncestorFails`, `TestRoot_Chtimes_ThroughSymlinkedAncestorFails`, `TestRoot_Lstat_ThroughSymlinkedAncestorIsNotReportedAsNotExist`, `TestRoot_Stat_ThroughSymlinkedAncestorIsNotReportedAsNotExist`, `TestRoot_OpenFile_ThroughSymlinkedAncestorFails`, `TestRoot_NormalizeNotExist_DepthOnePathTerminates`, `TestRoot_MutationsWithinRootStillSucceed`, `TestRoot_MutationsThroughInRootSymlinkSucceed`, `TestRoot_ValidateNoSymlinkAncestors_NamesLinkAndNonFolderSeparately` |
 
@@ -355,7 +356,20 @@ Static verification is a first-class architectural constraint, not a best-effort
   disk -- the exact outcome the write-temp-then-rename pattern exists to rule
   out. A directory sync that fails is reported rather than swallowed: the
   contents are already visible, but success would claim a guarantee the
-  filesystem refused, and rewriting the same bytes is safe to retry.
+  filesystem refused, and rewriting the same bytes is safe to retry. This
+  holds for both atomic writers: `fsroot.Root.AtomicWrite` for managed state
+  and `localpath.AtomicWrite` for arbitrary paths (trash records, config,
+  tokens). `localpath` tolerates the one case where the sync cannot happen,
+  a filesystem that answers `EINVAL`/`ENOTSUP`/`EOPNOTSUPP` to an fsync on a
+  directory (FUSE, SMB), through `localpath.IsDirSyncUnsupported`, which is
+  the single definition of that errno set for every caller that syncs a
+  directory after a rename (`driveops.publishPartial`, the trash's
+  cross-filesystem copy and restore, `localpath.AtomicWrite`). The seam is
+  the unexported `atomicWrite` with an injected directory sync, because an
+  fsync has no observable effect to test
+  (`TestAtomicWrite_SyncsTargetDirectory`,
+  `TestAtomicWrite_ReportsDirectorySyncFailure`,
+  `TestAtomicWrite_ToleratesUnsupportedDirectorySync`).
 - The lint version is checked, not just pinned. CI installs a pinned
   golangci-lint, but nothing compared that pin against the version a developer
   runs locally, and a different version is a different lint policy rather than
@@ -419,7 +433,7 @@ Static verification is a first-class architectural constraint, not a best-effort
 - `synctree.FileIdentity` is (device, inode, birth time), and `synctree.SameIdentity` is the one Go definition of "the same entry": equal device and inode, and equal birth times whenever both are known (R-2.17.1). The birth time comes from `statx(2)` `STATX_BTIME` on Linux, read by path after each rooted stat and for each walked or listed entry and kept only when the mask bit is set and statx names the same device and inode (`withBirthTime`), and from `st_birthtimespec` on macOS, FreeBSD and NetBSD; elsewhere it is unknown. A FileInfo may state its own birth time (`BirthTimeReporter`), which the shims use. Because Linux FileInfo values are wrapped to carry it, `synctree.SameFile` replaces `os.SameFile` for anything the sync tree returned (`TestSameIdentity_BirthTimeDecidesWhenBothSidesKnowIt`, `TestIdentityFromFileInfo_EveryReadReportsTheSameBirthTime`, `TestIdentityFromFileInfo_LinuxBirthTimeIsStatxBtime`). Reads outside the seam see the real filesystem: upload sources, content hashing and followed symlinks go through `localpath` by absolute path (R-2.4.6), and the read-only probe reads `statfs` directly, so a shim cannot make a folder read-only.
 - Arbitrary local file paths outside those rooted domains use `internal/localpath` as the explicit trust boundary. `localpath.AtomicWrite` is the default arbitrary-path writer when replace-in-place semantics matter. `localpath.WriteDisposableFile` is reserved for disposable operational artifacts such as perf capture manifests; durable config, token, state, or sync-tree content writers must not use it.
 - Append-only log file creation in `internal/logfile` is the single documented exception to atomic replace-style writes. It is allowed because the log is an append-only operational artifact, not an authoritative config/state file.
-- `fsroot.Root` and `synctree.Root` carry unexported injectable ops so managed-state and sync-runtime I/O failure paths can be tested deterministically without package-level test hooks.
+- `fsroot.Root` and `synctree.Root` carry unexported injectable ops so managed-state and sync-runtime I/O failure paths can be tested deterministically without package-level test hooks. `synctree`'s `rootOps.syncDir` is the directory sync a detached file's cross-filesystem copy performs on the trash entry it lands in (`spec/design/sync-execution.md` → local trash); `localtrash.Trash` carries the same kind of seam (`syncDir`, `renameNoReplace`) for its restore path.
 
 - Family layering inside `internal/sync` is machine-checked. Each sync design doc declares a `LAYER:` rank beside its `GOVERNS:` line, and `devtool verify` fails when a file owned by a ranked doc reads a package-scope symbol owned by a higher-ranked doc. The compiler cannot help here -- every sync family compiles into one package, so a reference from the store up into the engine is as legal to it as any other -- but the families are real, each doc already declares which files it owns, and the direction between them is a design decision worth keeping true.
 

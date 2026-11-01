@@ -120,6 +120,9 @@ type Trash struct {
 	// renameNoReplace moves a file without replacing anything at the
 	// destination; a seam so tests can model a cross-filesystem restore.
 	renameNoReplace func(src, dst string) error
+	// syncDir flushes the folder a cross-filesystem restore renamed its
+	// copy into; a seam because an fsync has no observable effect to test.
+	syncDir func(dir string) error
 }
 
 // IsRestoreArtifactName reports whether name is a temporary copy a restore
@@ -146,7 +149,7 @@ func Open(dir string, now func() time.Time) *Trash {
 	if now == nil {
 		now = time.Now
 	}
-	return &Trash{dir: dir, now: now, renameNoReplace: localpath.RenameNoReplace}
+	return &Trash{dir: dir, now: now, renameNoReplace: localpath.RenameNoReplace, syncDir: localpath.SyncDir}
 }
 
 // Dir returns the trash directory.
@@ -234,8 +237,8 @@ func (p *Placement) Commit() (Entry, error) {
 // Abandon removes a reserved entry whose file never arrived. It refuses to
 // remove an entry that holds a file.
 func (p *Placement) Abandon() error {
-	if _, err := localpath.Lstat(p.ItemPath); err == nil {
-		return fmt.Errorf("not removing trash entry %s: it holds a file", p.entry.ID)
+	if held := heldFileIn(p.entryDir); held != nil {
+		return fmt.Errorf("not removing trash entry %s: it holds a file at %s", p.entry.ID, held.path)
 	}
 	if err := localpath.RemoveAll(p.entryDir); err != nil {
 		return fmt.Errorf("removing unused trash entry: %w", err)
@@ -243,12 +246,45 @@ func (p *Placement) Abandon() error {
 	return nil
 }
 
+// heldFile is the file an entry directory holds.
+type heldFile struct {
+	path string
+	// incomplete marks a file that is not the item: a `.copy-*` a
+	// cross-filesystem placement was writing when the run died. It may be
+	// torn, so it is kept and listed but never restored as the file.
+	incomplete bool
+}
+
+// heldFileIn returns the file an entry directory holds: the item, or, when
+// there is none, any other regular file but the record. nil means definitely
+// none. Only a definite "nothing there" is nothing: an entry whose contents
+// cannot be checked is reported as holding its item, so it is never purged
+// as empty.
+func heldFileIn(entryDir string) *heldFile {
+	itemPath := filepath.Join(entryDir, itemName)
+	if _, err := localpath.Lstat(itemPath); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return &heldFile{path: itemPath}
+	}
+	dirEntries, err := localpath.ReadDir(entryDir)
+	if err != nil {
+		return &heldFile{path: itemPath}
+	}
+	for _, dirEntry := range dirEntries {
+		if dirEntry.Name() != entryFileName && dirEntry.Type().IsRegular() {
+			return &heldFile{path: filepath.Join(entryDir, dirEntry.Name()), incomplete: true}
+		}
+	}
+	return nil
+}
+
 // scannedEntry is one entry directory as found on disk.
 type scannedEntry struct {
-	entry      Entry
-	hasRecord  bool
-	hasItem    bool
-	reservedAt time.Time
+	entry     Entry
+	hasRecord bool
+	hasItem   bool
+	// itemIncomplete: the file held is an interrupted copy, not the item.
+	itemIncomplete bool
+	reservedAt     time.Time
 }
 
 func (t *Trash) scan() ([]scannedEntry, error) {
@@ -274,10 +310,10 @@ func (t *Trash) scanEntry(dirEntry os.DirEntry) scannedEntry {
 	id := dirEntry.Name()
 	itemPath := filepath.Join(t.dir, id, itemName)
 	found := scannedEntry{reservedAt: reservedAt(dirEntry)}
-	// Only a definite "not there" is no item: an entry whose file cannot be
-	// checked is never purged as empty.
-	if _, err := localpath.Lstat(itemPath); err == nil || !errors.Is(err, os.ErrNotExist) {
+	if held := heldFileIn(filepath.Join(t.dir, id)); held != nil {
 		found.hasItem = true
+		found.itemIncomplete = held.incomplete
+		itemPath = held.path
 	}
 	entry, ok := t.readRecord(id)
 	if ok {
@@ -348,6 +384,10 @@ func (t *Trash) Restore(id string) (string, error) {
 		return "", fmt.Errorf("trash entry %s has no record of where it came from; the file is at %s",
 			id, found.entry.ItemPath)
 	}
+	if found.itemIncomplete {
+		return "", fmt.Errorf("trash entry %s holds only a copy an interrupted run was still writing, at %s; "+
+			"the original was left set aside in the sync folder", id, found.entry.ItemPath)
+	}
 
 	target, err := restoreTarget(&found.entry)
 	if err != nil {
@@ -415,16 +455,26 @@ func (t *Trash) moveNoReplace(itemPath, target string) error {
 		if errors.Is(err, localpath.ErrSourceNotRemoved) {
 			// In place; the temporary copy is a leftover, removed best effort.
 			_ = localpath.Remove(temp) //nolint:errcheck // the restore succeeded; a leftover copy is harmless
-			if removeErr := localpath.Remove(itemPath); removeErr != nil {
-				return fmt.Errorf("removing the trashed copy after restoring %s: %w", target, removeErr)
-			}
-			return nil
+			return t.finishCopiedRestore(itemPath, target)
 		}
 		removeErr := localpath.Remove(temp)
 		if errors.Is(err, localpath.ErrTargetExists) {
 			return errors.Join(fmt.Errorf("%w: %s", ErrRestoreTargetExists, target), removeErr)
 		}
 		return errors.Join(fmt.Errorf("restoring %s: %w", target, err), removeErr)
+	}
+	return t.finishCopiedRestore(itemPath, target)
+}
+
+// finishCopiedRestore makes a copied restore durable before the trashed
+// original goes: the rename that named the copy is a directory update, not
+// durable until the folder is synced, and removing the original first left a
+// power cut with neither. A folder the filesystem cannot sync is tolerated;
+// any other failure is reported with the file in place and the original
+// kept, so the restore can be repeated.
+func (t *Trash) finishCopiedRestore(itemPath, target string) error {
+	if err := t.syncDir(filepath.Dir(target)); err != nil && !localpath.IsDirSyncUnsupported(err) {
+		return fmt.Errorf("restored %s but could not make it durable: %w", target, err)
 	}
 	if err := localpath.Remove(itemPath); err != nil {
 		return fmt.Errorf("removing the trashed copy after restoring %s: %w", target, err)

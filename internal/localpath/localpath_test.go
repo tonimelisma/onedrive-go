@@ -1,6 +1,7 @@
 package localpath
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -193,6 +194,75 @@ func TestAtomicWrite_CleansTempOnRenameFailure(t *testing.T) {
 	}
 
 	assert.Equal(t, []string{"config.toml"}, names, "rename failure should not leave temp files behind")
+}
+
+// Validates: R-6.5.4
+//
+// The rename that gives the temp file its final name is a directory update,
+// and that update is not durable until the directory itself is synced.
+func TestAtomicWrite_SyncsTargetDirectory(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	targetDir := filepath.Join(base, "nested")
+	target := filepath.Join(targetDir, "config.toml")
+
+	var synced []string
+	recordingSync := func(dir string) error {
+		synced = append(synced, dir)
+		// The sync must come after the rename: it is the rename it makes
+		// durable.
+		data, err := os.ReadFile(target) //nolint:gosec // the test reads a file it wrote
+		require.NoError(t, err)
+		assert.Equal(t, "hello = true\n", string(data))
+
+		return SyncDir(dir)
+	}
+
+	require.NoError(t, atomicWrite(target, []byte("hello = true\n"), 0o600, 0o700, ".localpath-*.tmp", recordingSync))
+	assert.Equal(t, []string{targetDir}, synced, "the directory the rename landed in is synced once")
+}
+
+// Validates: R-6.5.4
+//
+// A write whose durability cannot be established says so: the bytes are in
+// place, but success would claim a guarantee the filesystem refused.
+func TestAtomicWrite_ReportsDirectorySyncFailure(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	target := filepath.Join(base, "nested", "config.toml")
+	failingSync := func(string) error { return fmt.Errorf("syncing directory: %w", syscall.EIO) }
+
+	err := atomicWrite(target, []byte("hello = true\n"), 0o600, 0o700, ".localpath-*.tmp", failingSync)
+	require.ErrorIs(t, err, syscall.EIO)
+	assert.Contains(t, err.Error(), "making "+target+" durable")
+
+	data, readErr := ReadFile(target)
+	require.NoError(t, readErr)
+	assert.Equal(t, "hello = true\n", string(data))
+
+	entries, readDirErr := os.ReadDir(filepath.Dir(target))
+	require.NoError(t, readDirErr)
+	require.Len(t, entries, 1, "no temp file is left behind")
+	assert.Equal(t, "config.toml", entries[0].Name())
+}
+
+// Validates: R-6.5.4
+//
+// A filesystem that cannot fsync a directory (FUSE, SMB) answers EINVAL or
+// ENOTSUP; the file is in place and its bytes synced, so the write succeeds.
+func TestAtomicWrite_ToleratesUnsupportedDirectorySync(t *testing.T) {
+	t.Parallel()
+
+	for _, errno := range []syscall.Errno{syscall.EINVAL, syscall.ENOTSUP, syscall.EOPNOTSUPP} {
+		target := filepath.Join(t.TempDir(), "config.toml")
+		unsupportedSync := func(string) error { return fmt.Errorf("syncing directory: %w", errno) }
+
+		require.NoError(t, atomicWrite(target, []byte("ok\n"), 0o600, 0o700, ".localpath-*.tmp", unsupportedSync), errno.Error())
+		assert.True(t, IsDirSyncUnsupported(errno))
+	}
+	assert.False(t, IsDirSyncUnsupported(syscall.EIO))
 }
 
 func TestOpenAndReadDirMissingPath(t *testing.T) {
