@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"time"
 
 	"github.com/coder/websocket"
@@ -37,7 +38,7 @@ func (s *socketIOWakeSource) connect(
 		defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 	}
 	if err != nil {
-		return nil, time.Time{}, "", err
+		return nil, time.Time{}, "", socketIODialError(err)
 	}
 	conn.SetReadLimit(socketIOReadLimit)
 
@@ -52,6 +53,26 @@ func (s *socketIOWakeSource) connect(
 
 	refreshAt := s.refreshDeadline(endpoint)
 	return &socketIOConn{conn: conn}, refreshAt, sid, nil
+}
+
+// socketIODialError returns a websocket dial failure without the URL that
+// was dialed. net/http embeds the request URL in *url.Error, and the
+// websocket URL keeps the notification URL's snthgk credential; the failure
+// is logged on the first retry and copied into the lifecycle event, so the
+// URL is dropped here, before either. The host and the cause survive, which
+// is enough to tell which service failed.
+func socketIODialError(err error) error {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		return fmt.Errorf("socket.io dialing websocket: %w", err)
+	}
+
+	host := "[REDACTED_URL]"
+	if parsed, parseErr := url.Parse(urlErr.URL); parseErr == nil && parsed.Host != "" {
+		host = parsed.Host
+	}
+
+	return fmt.Errorf("socket.io dialing websocket %s: %s: %w", host, urlErr.Op, urlErr.Err)
 }
 
 func (s *socketIOWakeSource) completeHandshake(ctx context.Context, conn *websocket.Conn) (string, error) {

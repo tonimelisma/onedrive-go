@@ -1,7 +1,6 @@
 package graph
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -53,10 +52,14 @@ func validateGraphBaseURL(raw string) error {
 	return nil
 }
 
-func validateUploadURL(parsed *url.URL) error {
-	return validateTrustedPreAuthURL(
-		parsed,
-		"upload",
+// preAuthContentHosts are the Microsoft hosts that serve pre-authenticated
+// content traffic: upload sessions, `@microsoft.graph.downloadUrl` and the
+// `/content` redirect target all land on this family. One list, so a host
+// learned for one direction (Personal accounts on
+// `microsoftpersonalcontent.com`, found by live upload coverage) is trusted
+// for the other too.
+func preAuthContentHosts() []string {
+	return []string{
 		"1drv.com",
 		"microsoftpersonalcontent.com",
 		"onedrive.com",
@@ -65,7 +68,18 @@ func validateUploadURL(parsed *url.URL) error {
 		"sharepoint.us",
 		"sharepoint-df.us",
 		"storage.live.com",
-	)
+	}
+}
+
+func validateUploadURL(parsed *url.URL) error {
+	return validateTrustedPreAuthURL(parsed, "upload", preAuthContentHosts()...)
+}
+
+// validateDownloadURL guards `@microsoft.graph.downloadUrl` before the
+// unauthenticated download request is built. The URL is server-supplied, so
+// without this a spoofed metadata answer could send the request anywhere.
+func validateDownloadURL(parsed *url.URL) error {
+	return validateTrustedPreAuthURL(parsed, "download", preAuthContentHosts()...)
 }
 
 func validateCopyMonitorURL(parsed *url.URL) error {
@@ -124,12 +138,15 @@ func validateTrustedPreAuthURL(parsed *url.URL, kind string, allowedHosts ...str
 	return nil
 }
 
-func parseAndValidateUploadURL(raw UploadURL, validate func(*url.URL) error) (string, error) {
-	parsed, err := url.Parse(string(raw))
+// parseAndValidatePreAuthURL parses a server-supplied pre-authenticated URL
+// and runs validate on it. kind names the URL in error text ("upload",
+// "download", "copy monitor"); the raw URL itself never appears there.
+func parseAndValidatePreAuthURL(raw string, kind string, validate func(*url.URL) error) (string, error) {
+	parsed, err := url.Parse(raw)
 	if err != nil {
 		// Not wrapped: *url.Error embeds the raw pre-authenticated URL, which
 		// carries its credential, in its message.
-		return "", errors.New("graph: parsing upload URL: OneDrive returned a malformed upload URL")
+		return "", fmt.Errorf("graph: parsing %s URL: OneDrive returned a malformed %s URL", kind, kind)
 	}
 
 	if err := validate(parsed); err != nil {
@@ -148,6 +165,30 @@ func matchesAllowedHost(host string, allowed ...string) bool {
 	}
 
 	return false
+}
+
+// loopbackTolerant accepts loopback http/https URLs ahead of validate. A
+// client whose base URL is loopback is a test fixture (validateGraphBaseURL
+// admits loopback for that reason alone), and the fixture's pre-authenticated
+// URLs point back at the same loopback server. Production clients, whose
+// base URL is a Graph host, never get this wrapper, so their allow-lists stay
+// exactly validate's.
+func loopbackTolerant(validate func(*url.URL) error) func(*url.URL) error {
+	return func(parsed *url.URL) error {
+		if parsed != nil && isLoopbackHostname(parsed.Hostname()) &&
+			(parsed.Scheme == deltaHTTPPrefix || parsed.Scheme == httpsScheme) {
+			return nil
+		}
+
+		return validate(parsed)
+	}
+}
+
+// isLoopbackBaseURL reports whether an already validated base URL points at
+// loopback, the only non-Graph host validateGraphBaseURL admits.
+func isLoopbackBaseURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && isLoopbackHostname(parsed.Hostname())
 }
 
 func isLoopbackHostname(host string) bool {

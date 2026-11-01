@@ -108,9 +108,6 @@ func newTestClient(t *testing.T, url string) *Client {
 	client.policies.simpleUploadMtime = testRetryPolicy()
 	client.policies.uploadSessionCreate = testRetryPolicy()
 	client.policies.copyDestination = testRetryPolicy()
-	client.validators.uploadURL = allowTestUploadURL
-	client.validators.copyMonitor = allowTestCopyMonitorURL
-	client.validators.socketIO = allowTestSocketIONotificationURL
 
 	return client
 }
@@ -120,9 +117,6 @@ func newNoRetryTestClient(t *testing.T, url string) *Client {
 	t.Helper()
 
 	client := MustNewClient(normalizeTestBaseURL(url), http.DefaultClient, staticToken("test-token"), slog.Default(), "test-agent")
-	client.validators.uploadURL = allowTestUploadURL
-	client.validators.copyMonitor = allowTestCopyMonitorURL
-	client.validators.socketIO = allowTestSocketIONotificationURL
 
 	return client
 }
@@ -133,42 +127,6 @@ func normalizeTestBaseURL(raw string) string {
 	}
 
 	return raw
-}
-
-func allowTestUploadURL(parsed *url.URL) error {
-	if parsed == nil {
-		return fmt.Errorf("graph: upload URL is nil")
-	}
-
-	if isLoopbackHostname(parsed.Hostname()) && (parsed.Scheme == deltaHTTPPrefix || parsed.Scheme == httpsScheme) {
-		return nil
-	}
-
-	return validateUploadURL(parsed)
-}
-
-func allowTestCopyMonitorURL(parsed *url.URL) error {
-	if parsed == nil {
-		return fmt.Errorf("graph: copy monitor URL is nil")
-	}
-
-	if isLoopbackHostname(parsed.Hostname()) && (parsed.Scheme == deltaHTTPPrefix || parsed.Scheme == httpsScheme) {
-		return nil
-	}
-
-	return validateCopyMonitorURL(parsed)
-}
-
-func allowTestSocketIONotificationURL(parsed *url.URL) error {
-	if parsed == nil {
-		return fmt.Errorf("graph: socket.io notification URL is nil")
-	}
-
-	if isLoopbackHostname(parsed.Hostname()) && (parsed.Scheme == deltaHTTPPrefix || parsed.Scheme == httpsScheme) {
-		return nil
-	}
-
-	return validateSocketIONotificationURL(parsed)
 }
 
 func writeClientTestBody(t *testing.T, w http.ResponseWriter, body string) {

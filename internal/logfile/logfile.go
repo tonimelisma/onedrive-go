@@ -11,10 +11,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 )
 
-// File permission constants.
+// Logs carry item names and account details, and other local users reading
+// them is an actor in the threat model, so the file and any directory this
+// package creates for it are owner-only.
 const (
-	dirPerm  = 0o755
-	filePerm = 0o644
+	dirPerm  = 0o700
+	filePerm = 0o600
 
 	// logExt is the suffix a rotated log keeps.
 	logExt = ".log"

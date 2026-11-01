@@ -16,9 +16,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
-// configFilePermissions is the standard permission mode for config files.
-// Owner read/write, group and others read-only.
-const configFilePermissions = 0o644
+// configFilePermissions is the mode for config files: owner read/write only.
+// The config names accounts in its `personal:<email>` section keys, and other
+// local users reading it is an actor in the threat model.
+const configFilePermissions = 0o600
 
 // configDirPermissions is the standard permission mode for config directories.
 const configDirPermissions = 0o755
@@ -807,7 +808,7 @@ func withConfigMutationLock(path string, createDir bool, fn func() error) (err e
 // atomicWriteFile writes data to a temporary file in the same directory as
 // path, then renames it to the target path. This prevents partial writes
 // from corrupting the config file on crash. Parent directories are created
-// as needed. Files are created with configFilePermissions (0644).
+// as needed. Files are created with configFilePermissions (0600).
 func atomicWriteFile(path string, data []byte) (err error) {
 	root, name, err := fsroot.OpenPath(path)
 	if err != nil {

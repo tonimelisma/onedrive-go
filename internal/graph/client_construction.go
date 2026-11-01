@@ -56,12 +56,34 @@ func NewClient(
 			uploadSessionCreate:  retry.UploadSessionCreatePolicy(),
 			copyDestination:      retry.CopyDestinationPolicy(),
 		},
-		validators: urlValidators{
-			uploadURL:   validateUploadURL,
-			copyMonitor: validateCopyMonitorURL,
-			socketIO:    validateSocketIONotificationURL,
-		},
+		validators: newURLValidators(baseURL),
 	}, nil
+}
+
+// newURLValidators returns the production allow-lists for every
+// server-supplied URL the client follows. A loopback base URL is a test
+// fixture, and its pre-authenticated URLs point back at the same loopback
+// server, so that one case also admits loopback http/https targets; the
+// production lists are otherwise unchanged.
+func newURLValidators(baseURL string) urlValidators {
+	validators := urlValidators{
+		uploadURL:       validateUploadURL,
+		copyMonitor:     validateCopyMonitorURL,
+		socketIO:        validateSocketIONotificationURL,
+		downloadURL:     validateDownloadURL,
+		contentRedirect: validateUploadURL,
+	}
+	if !isLoopbackBaseURL(baseURL) {
+		return validators
+	}
+
+	return urlValidators{
+		uploadURL:       loopbackTolerant(validators.uploadURL),
+		copyMonitor:     loopbackTolerant(validators.copyMonitor),
+		socketIO:        loopbackTolerant(validators.socketIO),
+		downloadURL:     loopbackTolerant(validators.downloadURL),
+		contentRedirect: loopbackTolerant(validators.contentRedirect),
+	}
 }
 
 // MustNewClient is for test/setup call sites that intentionally want a panic
