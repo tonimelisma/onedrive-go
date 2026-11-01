@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -35,12 +36,17 @@ const (
 	)`
 	sqlDeletePlannerVisibleLocalState  = `DELETE FROM planner_visible_local_state`
 	sqlDeletePlannerVisibleRemoteState = `DELETE FROM planner_visible_remote_state`
-	sqlInsertPlannerVisibleLocalState  = `INSERT INTO planner_visible_local_state
+	// The row inserts go in chunks of plannerVisibleInsertChunkRows rows per
+	// INSERT ... VALUES (multiRowInsertSQL appends the row tuples): one
+	// statement per row cost 170 µs compiled each time and 48 µs prepared
+	// once, a 200-row statement 16 µs a row (BenchmarkReplacePlannerVisibleState,
+	// spec/design/performance-benchmarking.md).
+	sqlInsertPlannerVisibleLocalStatePrefix = `INSERT INTO planner_visible_local_state
 		(path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_birth_time, local_has_identity)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	sqlInsertPlannerVisibleRemoteState = `INSERT INTO planner_visible_remote_state
+		VALUES `
+	sqlInsertPlannerVisibleRemoteStatePrefix = `INSERT INTO planner_visible_remote_state
 		(drive_id, item_id, path, item_type, hash, size, mtime, etag)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		VALUES `
 	sqlListPlannerVisibleLocalState = `SELECT
 		path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_birth_time, local_has_identity
 		FROM planner_visible_local_state
@@ -48,26 +54,54 @@ const (
 	sqlListPlannerVisibleRemoteState = `SELECT ` + sqlSelectRemoteStateCols + `
 		FROM planner_visible_remote_state
 		ORDER BY path`
-	sqlPrunePlannerVisibleLocalDescendants = `DELETE FROM planner_visible_local_state
-		WHERE EXISTS (
-			SELECT 1
+	// The prunes remove the rows below folders the baseline knows but the
+	// side no longer has. The missing folders are computed once (one pass
+	// over baseline with a primary-key probe each) and each one removes its
+	// subtree by a primary-key range on the TEMP table: every path below p
+	// sorts between p || '/' and p || '0' under BINARY collation, the idiom
+	// the comparison CTEs use. A correlated EXISTS over baseline with a
+	// substr() prefix test scanned baseline once per visible row instead
+	// (rows x baseline rows, 10 minutes per replan at 11k rows).
+	sqlPrunePlannerVisibleLocalDescendants = `WITH missing AS MATERIALIZED (
+			SELECT parent.path AS path
 			FROM baseline parent
 			LEFT JOIN planner_visible_local_state parent_local ON parent_local.path = parent.path
 			WHERE parent.item_type = 'folder'
 				AND parent.path <> ''
 				AND parent_local.path IS NULL
-				AND substr(planner_visible_local_state.path, 1, length(parent.path) + 1) = parent.path || '/'
+		)
+		DELETE FROM planner_visible_local_state
+		WHERE path IN (
+			SELECT below.path
+			FROM missing
+			JOIN planner_visible_local_state below
+				ON below.path >= missing.path || '/' AND below.path < missing.path || '0'
 		)`
-	sqlPrunePlannerVisibleRemoteDescendants = `DELETE FROM planner_visible_remote_state
-		WHERE EXISTS (
-			SELECT 1
+	sqlPrunePlannerVisibleRemoteDescendants = `WITH missing AS MATERIALIZED (
+			SELECT parent.path AS path
 			FROM baseline parent
 			LEFT JOIN planner_visible_remote_state parent_remote ON parent_remote.path = parent.path
 			WHERE parent.item_type = 'folder'
 				AND parent.path <> ''
 				AND parent_remote.path IS NULL
-				AND substr(planner_visible_remote_state.path, 1, length(parent.path) + 1) = parent.path || '/'
+		)
+		DELETE FROM planner_visible_remote_state
+		WHERE path IN (
+			SELECT below.path
+			FROM missing
+			JOIN planner_visible_remote_state below
+				ON below.path >= missing.path || '/' AND below.path < missing.path || '0'
 		)`
+)
+
+// plannerVisibleInsertChunkRows is the number of rows one INSERT carries.
+// Ten columns a row keeps a chunk far below SQLite's 32,766 bound variables,
+// and chunks of 1,000 measured no faster than 200.
+const plannerVisibleInsertChunkRows = 200
+
+const (
+	plannerVisibleLocalStateColumns  = 10
+	plannerVisibleRemoteStateColumns = 8
 )
 
 type plannerVisibleRows struct {
@@ -135,38 +169,11 @@ func replacePlannerVisibleStateTx(
 		}
 	}
 
-	for i := range localRows {
-		row := localRows[i]
-		if _, err := tx.ExecContext(ctx, sqlInsertPlannerVisibleLocalState,
-			row.Path,
-			row.ItemType,
-			nullString(row.Hash),
-			nullKnownInt64(row.Size, true),
-			nullOptionalInt64(row.Mtime),
-			row.Ctime,
-			int64(row.LocalDevice),
-			int64(row.LocalInode),
-			row.LocalBirthTime,
-			boolInt(row.LocalHasIdentity),
-		); err != nil {
-			return plannerVisibleRows{}, fmt.Errorf("sync: inserting planner-visible local_state row for %s: %w", row.Path, err)
-		}
+	if err := insertPlannerVisibleLocalRowsTx(ctx, tx, localRows); err != nil {
+		return plannerVisibleRows{}, err
 	}
-
-	for i := range remoteRows {
-		row := remoteRows[i]
-		if _, err := tx.ExecContext(ctx, sqlInsertPlannerVisibleRemoteState,
-			row.DriveID.String(),
-			row.ItemID,
-			row.Path,
-			row.ItemType,
-			nullString(row.Hash),
-			nullKnownInt64(row.Size, true),
-			nullOptionalInt64(row.Mtime),
-			nullString(row.ETag),
-		); err != nil {
-			return plannerVisibleRows{}, fmt.Errorf("sync: inserting planner-visible remote_state row for %s: %w", row.Path, err)
-		}
+	if err := insertPlannerVisibleRemoteRowsTx(ctx, tx, remoteRows); err != nil {
+		return plannerVisibleRows{}, err
 	}
 
 	for _, query := range []string{
@@ -191,4 +198,77 @@ func replacePlannerVisibleStateTx(
 		Local:  prunedLocalRows,
 		Remote: prunedRemoteRows,
 	}, nil
+}
+
+// insertPlannerVisibleLocalRowsTx inserts the rows in multi-row statements
+// of plannerVisibleInsertChunkRows rows each.
+func insertPlannerVisibleLocalRowsTx(ctx context.Context, tx sqlTxRunner, rows []localStateRow) error {
+	for start := 0; start < len(rows); start += plannerVisibleInsertChunkRows {
+		chunk := rows[start:min(start+plannerVisibleInsertChunkRows, len(rows))]
+		args := make([]any, 0, len(chunk)*plannerVisibleLocalStateColumns)
+		for i := range chunk {
+			row := &chunk[i]
+			args = append(args,
+				row.Path,
+				row.ItemType,
+				nullString(row.Hash),
+				nullKnownInt64(row.Size, true),
+				nullOptionalInt64(row.Mtime),
+				row.Ctime,
+				int64(row.LocalDevice),
+				int64(row.LocalInode),
+				row.LocalBirthTime,
+				boolInt(row.LocalHasIdentity),
+			)
+		}
+		query := multiRowInsertSQL(sqlInsertPlannerVisibleLocalStatePrefix, plannerVisibleLocalStateColumns, len(chunk))
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("sync: inserting planner-visible local_state rows from %s: %w", chunk[0].Path, err)
+		}
+	}
+
+	return nil
+}
+
+func insertPlannerVisibleRemoteRowsTx(ctx context.Context, tx sqlTxRunner, rows []remoteStateRow) error {
+	for start := 0; start < len(rows); start += plannerVisibleInsertChunkRows {
+		chunk := rows[start:min(start+plannerVisibleInsertChunkRows, len(rows))]
+		args := make([]any, 0, len(chunk)*plannerVisibleRemoteStateColumns)
+		for i := range chunk {
+			row := &chunk[i]
+			args = append(args,
+				row.DriveID.String(),
+				row.ItemID,
+				row.Path,
+				row.ItemType,
+				nullString(row.Hash),
+				nullKnownInt64(row.Size, true),
+				nullOptionalInt64(row.Mtime),
+				nullString(row.ETag),
+			)
+		}
+		query := multiRowInsertSQL(sqlInsertPlannerVisibleRemoteStatePrefix, plannerVisibleRemoteStateColumns, len(chunk))
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("sync: inserting planner-visible remote_state rows from %s: %w", chunk[0].Path, err)
+		}
+	}
+
+	return nil
+}
+
+// multiRowInsertSQL appends rowCount tuples of columnCount placeholders to an
+// INSERT ... VALUES prefix.
+func multiRowInsertSQL(prefix string, columnCount, rowCount int) string {
+	tuple := "(?" + strings.Repeat(", ?", columnCount-1) + ")"
+	var query strings.Builder
+	query.Grow(len(prefix) + rowCount*(len(tuple)+2))
+	query.WriteString(prefix)
+	for row := range rowCount {
+		if row > 0 {
+			query.WriteString(", ")
+		}
+		query.WriteString(tuple)
+	}
+
+	return query.String()
 }
