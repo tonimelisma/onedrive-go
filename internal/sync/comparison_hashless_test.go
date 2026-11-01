@@ -46,7 +46,7 @@ func seedHashlessDivergence(t *testing.T, store *SyncStore, localHash, remoteHas
 	}}, "token-2", driveID))
 }
 
-// Validates: R-2.3.1, R-6.2
+// Validates: R-2.3.1, R-6.2.11
 //
 // Equality between local and remote must be proven, never assumed. When
 // neither side has a content hash, matching sizes say nothing about content,
@@ -68,7 +68,7 @@ func TestPlanCurrentState_HashlessSameSizeIsNotTreatedAsEqual(t *testing.T) {
 		"unprovable equality must produce reconciliation work, not silence")
 }
 
-// Validates: R-2.3.1, R-6.2
+// Validates: R-2.3.1, R-6.2.11
 //
 // A hash on only one side is still no proof of equality.
 func TestPlanCurrentState_HashOnOneSideOnlyIsNotTreatedAsEqual(t *testing.T) {
@@ -97,7 +97,7 @@ func TestPlanCurrentState_MatchingHashesStillCompareEqual(t *testing.T) {
 		"proven-equal copies should converge to a baseline update")
 }
 
-// Validates: R-2.2.7
+// Validates: R-2.2.7, R-6.2.11
 //
 // Zero-byte files carry no hash on OneDrive Business (D-059b). An empty file
 // present on both sides with no baseline used to become a create/create
@@ -125,7 +125,7 @@ func TestPlanCurrentState_HashlessZeroByteBothSidesIsEqual(t *testing.T) {
 		"two empty files agree: no conflict copy, no transfer")
 }
 
-// Validates: R-2.2.7
+// Validates: R-2.2.7, R-6.2.11
 //
 // The zero-byte rule is about known sizes, not missing ones: a hashless
 // non-empty remote file still cannot prove equality with a local one.

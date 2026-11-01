@@ -2,7 +2,7 @@
 
 Structural changes that would make whole defect classes impossible to write,
 not just easier to catch. Written 2026-10-25 from the hardening research and
-updated 2026-10-28 after PRs #799-#808. Each entry says what it would change,
+updated 2026-10-31 after PRs #799-#825. Each entry says what it would change,
 the evidence, how far the hardening PRs already went, and how to research it
 before committing to it. Nothing here is decided; each needs an ADR first.
 
@@ -55,7 +55,11 @@ file).
 
 **Landed:** #808 applies each delta window as a set, keyed by item ID, and
 rebinds a folder recreated online at the same path (D-060, D-061), which
-removes the path-ordering wedges on the remote side.
+removes the path-ordering wedges on the remote side. #810 composes moves per
+item by (parent item, name) with SQLite keeping only structural pairing;
+#819 and #822 add the entry's birth time to local identity, the generation
+guard this item asks for; the model test converges 80/80 seeds (#810) and
+the planner-level model 500/500 (#812).
 
 **Proposal:** reconcile three trees whose nodes are keyed by stable identity:
 the remote item ID, the local (device, inode) with a generation guard, and
@@ -84,8 +88,9 @@ is its own collation (L-33, M-1), it ignores characters outside the BMP
 replays every probed pair, and routed every name comparison through it.
 
 **Still open:** names are still plain strings, so a new comparison site can
-bypass the key. D-025 (NFD names on byte-exact Linux filesystems) and D-023
-(cross-side grouping in `sqlite_compare.go`) remain.
+bypass the key. D-023 (cross-side grouping in `sqlite_compare.go`) remains;
+D-025 (NFD names on byte-exact Linux filesystems) was closed by #815
+(`synctree.Root.Spelling`) and #823.
 
 **Proposal:** one `Name` value type holding on-disk bytes, the remote
 spelling and the key, with a lint that forbids `EqualFold`, `ToLower` and
@@ -105,7 +110,11 @@ emptied-side deletes are held, local deletes go to a trash, and orphans from
 a full rescan are confirmed with a lookup by ID before they become deletes.
 #808 routes every expired or unusable delta cursor through that confirmed
 full refresh, and reads the 410's resync flavour so an "upload differences"
-resync re-uploads local copies instead of deleting them.
+resync re-uploads local copies instead of deleting them. #811 makes a synced
+folder's tombstone pull the full refresh forward; #812 backs off undecided
+orphans and applies orphan confirmation to shared-folder mounts; #822 binds
+the root's birth time; #825 records a folder kept for ignored content so it
+is not re-created online.
 
 **Still open:** the evidence is checked at each site, not carried. Moving a
 synced item into an excluded folder still deletes it online.
@@ -140,7 +149,9 @@ enters a URL; a request-shape golden test fails on any other.
 modification time and nothing checked the reply).
 
 **Landed:** #803's transfer verification, #804's pending-create record, and
-#807's modification time carried on moves.
+#807's modification time carried on moves. #818 recognises the client's
+placeholder by item ID and emptiness rather than its creation eTag; #824
+records the destination's change time after an applied move.
 
 **Still open:** the move reply's echo is not checked, and each action still
 writes the baseline from its own ad-hoc checks.
@@ -159,7 +170,11 @@ an action; each is where a receipt would replace ad-hoc checks.
 **Evidence:** D-036, D-037, D-050, D-091, and the "re-upload forever after a
 lost final fragment" class.
 
-**Landed:** the pending-create record (#804) is a first durable intent.
+**Landed:** the pending-create record (#804) is a first durable intent, and
+#811 added the crash-point harness (`internal/sync/crash_points.go`, D-091):
+six named commit boundaries with a test hook that kills the run at each, and
+recovery must converge. The env-var injector proposed below exists as an
+in-process hook.
 
 **Proposal:** a durable intent before every remote mutation; on start,
 resolve open intents (did it land?) before planning; an
@@ -173,8 +188,12 @@ converge.
 ### 7. Deterministic simulation as the primary test
 
 **Evidence:** the model test found more real bugs in a day than the
-scenario suite had. Its limits are non-deterministic dispatch (D-090) and no
-virtual clock (D-095).
+scenario suite had. #811 added the engine-owned dispatch order and
+serialized worker (D-090) and the `testing/synctest` virtual clock (D-095);
+#812 the chaos Graph layer (D-092), filesystem shims (D-094) and the
+planner-level model (D-093). Remaining: uploads, hashing and
+followed-symlink reads bypass the filesystem seam via `localpath`
+(system.md), and `time.Now`/`os.*` sites outside the seams.
 
 **Proposal:** one seeded scheduler owns worker dispatch, watcher events and
 timers; a fake clock; the fake Graph with chaos (429, 5xx, timeouts,
@@ -204,7 +223,8 @@ graph-api-quirks.md is checked against its results.
 edits), hashless Business items.
 
 **Landed:** #808 trusts a cached local hash only when size, nanosecond mtime,
-ctime and file identity all match (D-066).
+ctime and file identity all match (D-066). #810: identity is never a content
+signal (D-057) and a hash known on one side only is not an edit (D-059b).
 
 **Proposal:** observations carry independent content facts (a hash, or size
 and mtime with a confidence) and metadata facts (name, parent, mtime).
@@ -228,7 +248,8 @@ debugging tool for the model and live tests.
   echo, one verifier) is the next cheap step.
 - Item 3 builds on the hold and confirmations from #805.
 - Item 2 builds on `internal/namekey` from #804.
-- Item 7 starts with WS9's dispatch seam.
+- Item 7's harness landed in WS9; what remains is routing the last direct
+  I/O through the seams.
 - Item 1 is the big one: do it last, in shadow mode, measured by the model
   test.
 - Items 6, 8, 9 and 10 are independent and medium-sized.

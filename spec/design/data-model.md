@@ -276,9 +276,10 @@ remembered and present file counts and asks for confirmation) clears the
 fingerprint and sets `sync_root_rebind`, so the next start binds the folder now
 there (R-6.2.12).
 
-Remaining gap: on a filesystem without extended attributes, a folder recreated
-at the same path that happens to get the same inode on the same filesystem is
-accepted; the delete-safety hold (R-6.2.5) is then the guard.
+Remaining gap: on a filesystem without extended attributes and without
+recorded birth times, a folder recreated at the same path that happens to get
+the same inode on the same filesystem is accepted; the delete-safety hold
+(R-6.2.5) is then the guard.
 
 ## `mount_boundaries`
 
