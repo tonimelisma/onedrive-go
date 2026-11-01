@@ -7,10 +7,12 @@ import (
 	"strings"
 )
 
+// reconcileSkippedObservationFindings persists a full scan's skipped-file
+// findings and reports whether the persisted issue set changed.
 func (flow *engineFlow) reconcileSkippedObservationFindings(
 	ctx context.Context,
 	skipped []skippedItem,
-) error {
+) (bool, error) {
 	flow.logSkippedObservationFindings(skipped, flow.knownObservationIssues(ctx))
 	batch := localObservationFindingsBatchFromSkippedItems(flow.engine.driveID, skipped)
 	return flow.applyObservationFindingsBatch(
@@ -139,24 +141,27 @@ func skippedItemReasonText(item *skippedItem) string {
 	return strings.ReplaceAll(item.Reason, "_", " ")
 }
 
+// applyObservationFindingsBatch persists one findings batch and reports
+// whether the persisted issue set changed.
 func (flow *engineFlow) applyObservationFindingsBatch(
 	ctx context.Context,
 	batch *ObservationFindingsBatch,
 	failureMessage string,
 	reconcileNote string,
-) error {
+) (bool, error) {
 	eng := flow.engine
 	if batch == nil {
-		return nil
+		return false, nil
 	}
 
 	eng.emitDebugEvent(engineDebugEvent{
 		Type: engineDebugEventObservationFindingsReconcileStarted,
 		Note: reconcileNote,
 	})
-	if err := eng.baseline.ReconcileObservationFindings(ctx, batch, eng.nowFunc()); err != nil {
-		return fmt.Errorf("%s: %w", failureMessage, err)
+	changed, err := eng.baseline.ReconcileObservationFindingsReportingChange(ctx, batch, eng.nowFunc())
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", failureMessage, err)
 	}
 
-	return nil
+	return changed, nil
 }

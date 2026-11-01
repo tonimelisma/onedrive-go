@@ -94,7 +94,7 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 	}
 
 	findings := batch.findings
-	if err := rt.applyObservationFindingsBatch(
+	if _, err := rt.applyObservationFindingsBatch(
 		ctx,
 		&findings,
 		batchObservationFailureMessage(batch.source),

@@ -385,12 +385,21 @@ func (rt *watchRuntime) handleWatchSkippedSignal(
 		reconcileCtx = context.WithoutCancel(ctx)
 	}
 
-	err := rt.reconcileSkippedObservationFindings(reconcileCtx, skipped)
+	changed, err := rt.reconcileSkippedObservationFindings(reconcileCtx, skipped)
 	if err != nil && isWatchShutdownError(ctx, err) {
 		return false, nil
 	}
+	if err != nil {
+		return false, err
+	}
+	// Findings are planner input: a file that became unsyncable, or
+	// syncable again, replans like a changed row. A persistent finding every
+	// safety scan re-reports does not (R-2.8.21).
+	if changed && rt.resources.dirtyBuf != nil {
+		rt.resources.dirtyBuf.MarkDirty()
+	}
 
-	return false, err
+	return false, nil
 }
 
 func (rt *watchRuntime) handleWatchRefreshResultSignal(

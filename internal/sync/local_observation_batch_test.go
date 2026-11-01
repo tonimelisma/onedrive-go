@@ -78,5 +78,7 @@ func TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch(t *testing.T) {
 	require.Len(t, batch.rows, 1)
 	assert.Equal(t, "fresh.txt", batch.rows[0].Path)
 	assert.Equal(t, ItemTypeFile, batch.rows[0].ItemType)
-	assert.True(t, batch.dirty)
+	// The runtime replans when the snapshot changes committed truth, not on
+	// the scan's baseline-relative event count (R-2.8.21).
+	assert.False(t, batch.dirty)
 }
