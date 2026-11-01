@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -87,6 +88,49 @@ func TestFullDelta_FacetlessNewItemIsReadOnceOrSkipped(t *testing.T) {
 	assert.Equal(t, ItemTypeFolder, resolved.ItemType)
 	assert.Nil(t, kindTestEvent(t, events, "unknown"), "an item of unknown kind is never guessed to be a file")
 	assert.Equal(t, map[string]int{"resolved": 1, "unknown": 1}, reads, "one re-read each")
+}
+
+// Validates: R-2.4.16
+//
+// A new facetless item whose one re-read fails for a passing reason used to
+// be skipped for good: the window completed and the delta token was saved
+// past it. Like a parentless item whose re-read fails, it now marks the
+// observation incomplete so the window is replayed and the cursor stays.
+func TestFullDelta_FacetlessNewItemReReadFailureReplaysWindow(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	obs := kindTestObserver(t, emptyBaseline(), []graph.Item{
+		{ID: "flaky", Name: "Mystery", ParentID: "root", DriveID: driveID, TypeFacetMissing: true},
+	}, func(string) (*graph.Item, error) {
+		return nil, errors.New("503 service unavailable")
+	})
+
+	events, token, err := obs.FullDelta(t.Context(), "saved")
+	require.ErrorIs(t, err, errRemoteObservationIncomplete)
+	assert.Empty(t, token, "the cursor does not advance past a window that could not be classified")
+	assert.Nil(t, kindTestEvent(t, events, "flaky"))
+}
+
+// Validates: R-2.4.16
+//
+// A re-read that finds no item is not a passing failure: the item is gone and
+// its deletion arrives in a later window, so replaying this one would never
+// change the answer. It keeps the skip.
+func TestFullDelta_FacetlessNewItemGoneOnReReadIsSkipped(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(engineTestDriveID)
+	obs := kindTestObserver(t, emptyBaseline(), []graph.Item{
+		{ID: "gone", Name: "Mystery", ParentID: "root", DriveID: driveID, TypeFacetMissing: true},
+		{ID: "plain", Name: "b.jpg", ParentID: "root", DriveID: driveID, QuickXorHash: "h2", Size: 1},
+	}, nil)
+
+	events, token, err := obs.FullDelta(t.Context(), "saved")
+	require.NoError(t, err)
+	assert.Equal(t, "next-token", token)
+	assert.Nil(t, kindTestEvent(t, events, "gone"))
+	assert.NotNil(t, kindTestEvent(t, events, "plain"))
 }
 
 // Validates: R-2.4.16

@@ -82,7 +82,7 @@ except that the type had once been public.
 | A network or FUSE sync root is identified with statfs, warned about once, and rescanned every two minutes. | `TestWatch_NetworkRootShortensSafetyScanInterval`, `TestAdaptToRootFilesystem_LocalRootKeepsInterval`, `TestAdaptToRootFilesystem_NonDefaultIntervalIsNeverOverridden`, `TestMountFilesystemType_DistinguishesFuseblkFromNetworkFuse`, `TestLocalFilesystemKind_ReadsTheRealFilesystem` |
 | The replan debounce is bounded by a max wait that later observations do not push back. | `TestDirtyBuffer_FlushDebounced_ContinuousSignalsFlushAtMaxWait`, `TestDirtyMaxWait_ScalesWithLongDebounce` |
 | A delta cursor that loops, is refused twice with a non-transient 4xx, or fails with 5xx for hours in watch mode is recovered through the full refresh; a single refusal is retried, empty pages with a nextLink continue, and a transient failure keeps the token (R-2.15.2). | `TestFullDelta_RepeatedNextLinkIsCursorUnusable`, `TestFullDelta_RepeatedPageItemsIsCursorUnusable`, `TestFullDelta_EmptyPageWithNextLinkContinues`, `TestFullDelta_SavedTokenRejectedTwiceIsCursorUnusable`, `TestFullDelta_OneRejectionOfASavedTokenIsRetried`, `TestWatch_TransientErrorRetriesAndKeepsToken`, `TestWatch_SustainedServerErrorsOnTheCursorResetIt`, `TestRunOnce_SavedTokenOneDriveKeepsRefusingIsReenumerated` |
-| Items delta reports without a type facet keep their baseline kind or are re-read once and otherwise skipped; bundles and their children are skipped; a negative size is unknown (R-2.4.16). | `TestFullDelta_FacetlessUpdateOfABaselineFolderKeepsItsType`, `TestFullDelta_FacetlessNewItemIsReadOnceOrSkipped`, `TestFullDelta_BundleAndItsChildrenAreSkipped`, `TestFullDelta_NegativeSizeIsUnknown`, `TestToItem_BundleAndMissingTypeFacet` |
+| Items delta reports without a type facet keep their baseline kind or are re-read once and otherwise skipped; a re-read that fails for any reason but "not found" marks the window incomplete so it is replayed rather than the item skipped behind a saved cursor; bundles and their children are skipped; a negative size is unknown (R-2.4.16). | `TestFullDelta_FacetlessUpdateOfABaselineFolderKeepsItsType`, `TestFullDelta_FacetlessNewItemIsReadOnceOrSkipped`, `TestFullDelta_FacetlessNewItemReReadFailureReplaysWindow`, `TestFullDelta_FacetlessNewItemGoneOnReReadIsSkipped`, `TestFullDelta_BundleAndItsChildrenAreSkipped`, `TestFullDelta_NegativeSizeIsUnknown`, `TestToItem_BundleAndMissingTypeFacet` |
 | Child-before-parent windows resolve from the window itself without reads, and a window needing more ancestor reads than one budget completes on replay without re-reading (R-2.15.4). | `TestFullDelta_CrossPageChildBeforeParentResolvesWithoutFetch`, `TestFullDelta_ManyOrphansCompleteAcrossReplaysWithoutRefetching` |
 | Watch re-checks address an NFD-named entry by its spelling on disk on byte-exact filesystems: a delete event for a file that still exists is not a delete, an identity match is not a move while the synced file is still there, a full scan re-adds the watch of an NFD-named folder on its own spelling, and a case-collision peer is tracked and re-emitted under its stored path (R-2.13.2). | `TestWatchRechecks_FindTheNFDNamedLocalFile`, `TestRewatchUnwatchedDirectories_WatchesTheNFDNamedFolder`, `TestHandleDelete_ReemitsCollisionPeerUnderItsStoredPath`, `TestHandleDelete_DeletingTheNFDNamedPeerReemitsTheOther` |
 | Local watch prefiltering keeps unknown-kind include-root and include-ancestor events observable until stat/type-aware observation can decide the exact item kind. | `TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths` |
@@ -236,9 +236,14 @@ It owns:
   (`graph.Item.TypeFacetMissing`) keeps its baseline kind, and for a file its
   baseline content facts, since a facetless update carries no hashes; without
   a baseline it gets one `GetItem` re-read through the sparse-item enrich and
-  is skipped if that still does not say. Read as a file by default, a sparse
-  update of a synced folder planned a folder-to-file type change that deleted
-  the local folder
+  is skipped if that still does not say, or if Graph answers not found (the
+  item is gone; its deletion arrives in a later window). A re-read that fails
+  for any other reason marks the observation incomplete
+  (`errRemoteObservationIncomplete`), so the window is replayed and the delta
+  cursor is not saved past an item that was never classified: the same rule
+  as a parentless item whose re-read fails (`sparseEnrichFailed` records the
+  error per item). Read as a file by default, a sparse update of a synced
+  folder planned a folder-to-file type change that deleted the local folder
 - a negative size is stored as unknown (`SizeUnknown`, a NULL
   `remote_state.size`), never as a size
 - sync-only suppression of Personal Vault content

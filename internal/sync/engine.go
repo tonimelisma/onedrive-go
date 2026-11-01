@@ -118,6 +118,14 @@ type Engine struct {
 	// succeeds again, so a later fallback is reported once more. Atomic
 	// because one-shot and watch observation can run on different goroutines.
 	mountRootDeltaFallbackReported atomic.Bool
+
+	// protectedRootRefreshFailing and trashPurgeFailing keep two housekeeping
+	// failures to one Warn per failure streak (R-6.6.30): a protected-root
+	// refresh that keeps failing, and a trash purge that keeps failing. Each
+	// clears when its operation succeeds again, so the next streak is
+	// reported once more. Atomic for the same reason as the flag above.
+	protectedRootRefreshFailing atomic.Bool
+	trashPurgeFailing           atomic.Bool
 }
 
 // newEngine creates an Engine and opens the per-mount SyncStore. Existing

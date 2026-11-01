@@ -43,11 +43,16 @@ func loadAccountViewSnapshot(ctx context.Context, cc *CLIContext) (accountViewSn
 		config.LogWarnings(cc.CfgPath, warnings, logger)
 	}
 
+	accounts, err := buildAccountViews(ctx, validated.Config, validated.Catalog, logger)
+	if err != nil {
+		return accountViewSnapshot{}, fmt.Errorf("loading accounts: %w", err)
+	}
+
 	return accountViewSnapshot{
 		Config:        validated.Config,
 		Stored:        validated.Catalog,
 		ShortcutRoots: loadShortcutRootStatusSnapshots(ctx, validated.Config, logger),
-		Accounts:      buildAccountViews(ctx, validated.Config, validated.Catalog, logger),
+		Accounts:      accounts,
 	}, nil
 }
 
@@ -144,7 +149,9 @@ func loadDriveListSnapshot(
 	slices.SortFunc(available, func(a, b driveListEntry) int {
 		return cmp.Compare(a.CanonicalID, b.CanonicalID)
 	})
-	annotateStateDB(available)
+	if err := annotateStateDB(available); err != nil {
+		return driveListSnapshot{}, err
+	}
 
 	authRequired := mergeAuthRequirements(
 		authRequirements(viewSnapshot, func(accountView) bool {

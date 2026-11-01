@@ -34,7 +34,10 @@ func accountLifecycle(entry *accountView) accountLifecycleView {
 		view.State = accountLifecycleAbsent
 	case entry.SavedLoginReason == authReasonMissingLogin:
 		view.State = accountLifecycleAuthRequiredMissingLogin
-	case entry.SavedLoginReason == authReasonInvalidSavedLogin:
+	case entry.SavedLoginReason == authReasonInvalidSavedLogin,
+		entry.SavedLoginReason == authReasonSavedLoginUnreadable:
+		// An unreadable token is handled like an invalid one for logout and
+		// purge selection: neither has a login this client can use.
 		view.State = accountLifecycleAuthRequiredInvalidLogin
 	case entry.AuthRequirementReason == authReasonSyncAuthRejected:
 		view.State = accountLifecycleAuthRequiredSyncRejected

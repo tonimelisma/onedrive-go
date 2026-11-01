@@ -50,7 +50,8 @@ func TestBuildAccountViews_ConfiguredAccountWithUsableSavedLoginIsReady(t *testi
 	stored, err := config.LoadCatalog()
 	require.NoError(t, err)
 
-	views := buildAccountViews(t.Context(), cfg, stored, testDriveLogger(t))
+	views, err := buildAccountViews(t.Context(), cfg, stored, testDriveLogger(t))
+	require.NoError(t, err)
 	entry := requireAccountViewByEmail(t, views, "ready@example.com")
 
 	assert.True(t, entry.Configured)
@@ -73,7 +74,8 @@ func TestBuildAccountViews_OrphanedProfileWithoutTokenRequiresAuthentication(t *
 	stored, err := config.LoadCatalog()
 	require.NoError(t, err)
 
-	views := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	views, err := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	require.NoError(t, err)
 	entry := requireAccountViewByEmail(t, views, "orphan@example.com")
 
 	assert.False(t, entry.Configured)
@@ -92,7 +94,8 @@ func TestBuildAccountViews_TokenBackedCatalogAccountIsIncluded(t *testing.T) {
 	stored, err := config.LoadCatalog()
 	require.NoError(t, err)
 
-	views := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	views, err := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	require.NoError(t, err)
 	entry := requireAccountViewByEmail(t, views, "discovered@contoso.com")
 
 	assert.False(t, entry.Configured)
@@ -110,7 +113,8 @@ func TestBuildAccountViews_StateDBWithoutCatalogIsExcluded(t *testing.T) {
 	stored, err := config.LoadCatalog()
 	require.NoError(t, err)
 
-	views := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	views, err := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	require.NoError(t, err)
 	assert.Empty(t, views)
 }
 
@@ -130,7 +134,8 @@ func TestBuildAccountViews_PersistedAuthScopeWinsOnlyWhenSavedLoginIsOtherwiseUs
 	stored, err := config.LoadCatalog()
 	require.NoError(t, err)
 
-	views := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	views, err := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	require.NoError(t, err)
 
 	usable := requireAccountViewByEmail(t, views, "usable@example.com")
 	assert.Empty(t, usable.SavedLoginReason)

@@ -2889,3 +2889,58 @@ func TestTransferManager_UploadFile_CanceledContextStopsAtTheHash(t *testing.T) 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, uploadCalled, "a canceled upload must stop at the hash, before any transfer")
 }
+
+// Validates: R-5.6.13, R-6.6.30
+//
+// A session record that cannot be read (here a directory where the record
+// should be; a permission problem behaves the same) used to be logged at
+// Debug with a comment claiming the store had already reported it. The store
+// reports only corrupt records. The upload still starts over from a fresh
+// session, but the user is now told why a multi-GB upload did not resume.
+func TestTransferManager_SessionUpload_UnreadableRecordWarnsAndStartsOver(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	store := NewSessionStore(dir, logger)
+
+	localPath := filepath.Join(dir, "unreadable.bin")
+	largeData := make([]byte, persistedSessionMinSize+1)
+	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
+
+	driveStr := driveid.New("d1").String()
+	// A directory where the record should be: Stat succeeds, the read fails.
+	require.NoError(t, os.MkdirAll(store.filePath(driveStr, localPath), 0o700))
+
+	var resumeCalled, createCalled bool
+	ul := &tmMockUploader{
+		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			resumeCalled = true
+
+			return nil, fmt.Errorf("unexpected resume")
+		},
+		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+			createCalled = true
+
+			return &graph.UploadSession{UploadURL: "https://upload.example.com/fresh"}, nil
+		},
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, content io.ReaderAt, size int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return tmUploadedItem(t, "fresh-item", content, size), nil
+		},
+	}
+
+	tm := NewTransferManager(&tmSimpleDownloader{}, ul, store, logger)
+
+	result, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "unreadable.bin", localPath, UploadOpts{})
+	require.NoError(t, err, "UploadFile")
+
+	assert.False(t, resumeCalled)
+	assert.True(t, createCalled, "the upload starts over from a fresh session")
+	assert.Equal(t, "fresh-item", result.Item.ID)
+
+	logs := logBuf.String()
+	assert.Equal(t, 1, strings.Count(logs, "Could not read the saved upload session"), "one Warn per attempt")
+	assert.Contains(t, logs, "level=WARN")
+	assert.Contains(t, logs, localPath, "the Warn names the file")
+}

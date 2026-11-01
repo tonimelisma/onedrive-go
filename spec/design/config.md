@@ -46,6 +46,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | Token-owner resolution stays config-owned for shared and business-derived drives. | `TestDriveTokenPath_Shared_WithCatalogDrive`, `TestTokenAccountCID_Shared`, `TestTokenAccountCID_SharePoint` |
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 | Child mount state DB path derivation is stable, collision-resistant, and bounded by common basename limits. | `TestMountStatePath_UsesManagedMountPrefix`, `TestMountStatePath_EncodesManagedMountIDWithoutCollisions`, `TestMountStatePath_LongIDUsesBoundedFilename` |
+| Token and state-database discovery treats a missing data directory as empty and an unreadable one as a Warn plus an error naming the directory, never as "nothing found". | `TestDiscoverCIDFiles_ReadDirError`, `TestDiscoverCIDFiles_MissingDataDirIsNotAnError`, `TestDiscoverTokensIn_NonexistentDir` |
 | Config writes are locked across processes and rollback deletes only the exact drive shape written by the current mutation. | `TestAppendDriveSection_CrossProcessCreatesPreserveAllSections`, `TestRestoreDriveAddConfigMutation_AddedSectionSkipsConcurrentEdits`, `TestRollbackSharedDriveAdd_PreservesCatalogWhenConfigChangedConcurrently` |
 
 Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
@@ -122,7 +123,7 @@ CLI account surfaces derive one lifecycle state from the durable facts above:
 | `logged_in_with_configured_drives` | usable saved login + at least one configured drive |
 | `logged_in_without_configured_drives` | usable saved login + zero configured drives |
 | `auth_required_missing_login` | known account metadata/state remains but no usable saved login exists |
-| `auth_required_invalid_saved_login` | token file exists but the saved login is invalid or unreadable |
+| `auth_required_invalid_saved_login` | token file exists but the saved login is invalid or unreadable, or the token file cannot be checked at all (auth reason `saved_login_unreadable`, whose action names the data directory rather than `login`) |
 | `auth_required_sync_rejected` | usable saved login plus a persisted catalog auth requirement |
 | `absent` | no durable account facts remain |
 
@@ -150,7 +151,7 @@ account currently has a usable saved login.
 | `logout` | delete saved login and all configured drive sections for the selected account |
 | `logout --purge` | `logout` durable mutations plus delete retained state DBs and purge the selected account/drives from the catalog, using best-effort recovery when validated state cannot load |
 | external token deletion | removes saved login only; catalog/state may still keep the account known |
-| invalid/unreadable token file | keeps the saved-login file path but moves the derived account state to `auth_required_invalid_saved_login` |
+| invalid/unreadable token file | keeps the saved-login file path but moves the derived account state to `auth_required_invalid_saved_login`; a token file that cannot be checked (unreadable data directory) lands in the same state with reason `saved_login_unreadable` |
 | persisted catalog auth requirement creation | keeps other durable facts intact but moves the derived account state to `auth_required_sync_rejected` |
 | successful authenticated proof | clears the persisted catalog auth requirement and returns the derived account state to the matching logged-in state |
 
@@ -450,6 +451,15 @@ Removing a drive or logging out an account deletes the relevant drive sections
 through `DeleteDriveSection()`, but it does not delete `config.toml` itself.
 
 When no config file exists, `DiscoverTokens()` scans the data dir for `token_*.json` files and extracts canonical IDs from filenames. One token → auto-select. Multiple → prompt with list.
+
+Discovery (`discovery.go`: `DiscoverTokens`, `DiscoverStateDBsForEmail`)
+distinguishes a data directory that does not exist yet, which has nothing in
+it, from one that cannot be listed, which is reported once at Warn and
+returned as an error naming the directory. Callers never read that error as
+"no accounts" or "no state databases": `MatchDrive` with no configured drives
+says the data directory cannot be read instead of sending the user to
+`login`, the CLI account snapshot fails with the same message, and email
+reconciliation refuses to plan renames it could not enumerate.
 
 ### Rationale
 
