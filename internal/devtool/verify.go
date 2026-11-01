@@ -54,6 +54,9 @@ const (
 
 	VerifyDefault     VerifyProfile = "default"
 	VerifyPublic      VerifyProfile = "public"
+	VerifyQuick       VerifyProfile = "quick"
+	VerifyLint        VerifyProfile = "lint"
+	VerifyPlatform    VerifyProfile = "platform"
 	VerifyE2E         VerifyProfile = "e2e"
 	VerifyE2EFull     VerifyProfile = "e2e-full"
 	VerifyIntegration VerifyProfile = "integration"
@@ -66,6 +69,7 @@ type VerifyOptions struct {
 	Profile            VerifyProfile
 	CoverageThreshold  float64
 	CoverageFile       string
+	Shard              string
 	E2ELogDir          string
 	SummaryJSONPath    string
 	ClassifyLiveQuirks bool
@@ -152,12 +156,15 @@ type fullE2EBucketSpec struct {
 }
 
 type verifyPlan struct {
-	runPublicChecks bool
-	runE2E          bool
-	runE2EFull      bool
-	runIntegration  bool
-	runStress       bool
-	runFailedTest   bool
+	runPublicChecks   bool
+	runQuickChecks    bool
+	runLint           bool
+	runPlatformChecks bool
+	runE2E            bool
+	runE2EFull        bool
+	runIntegration    bool
+	runStress         bool
+	runFailedTest     bool
 }
 
 func RunVerify(ctx context.Context, runner commandRunner, opts *VerifyOptions) (runErr error) {
@@ -178,6 +185,10 @@ func runVerifyProfile(ctx context.Context, runner commandRunner, opts *VerifyOpt
 	}
 
 	plan, err := resolveVerifyPlan(opts.Profile)
+	if err != nil {
+		return err
+	}
+	shard, err := resolveVerifyShard(plan, opts.Shard)
 	if err != nil {
 		return err
 	}
@@ -224,6 +235,9 @@ func runVerifyProfile(ctx context.Context, runner commandRunner, opts *VerifyOpt
 	); err != nil {
 		return err
 	}
+	if err := runPRLaneVerification(ctx, runner, opts.RepoRoot, env, collector, stdout, stderr, plan, shard); err != nil {
+		return err
+	}
 
 	runErr = runOptionalVerification(ctx, runner, opts, env, collector, stdout, stderr, plan)
 
@@ -240,6 +254,18 @@ func resolveVerifyPlan(profile VerifyProfile) (verifyPlan, error) {
 	case VerifyPublic:
 		return verifyPlan{
 			runPublicChecks: true,
+		}, nil
+	case VerifyQuick:
+		return verifyPlan{
+			runQuickChecks: true,
+		}, nil
+	case VerifyLint:
+		return verifyPlan{
+			runLint: true,
+		}, nil
+	case VerifyPlatform:
+		return verifyPlan{
+			runPlatformChecks: true,
 		}, nil
 	case VerifyE2E:
 		return verifyPlan{
@@ -263,7 +289,7 @@ func resolveVerifyPlan(profile VerifyProfile) (verifyPlan, error) {
 			runFailedTest: true,
 		}, nil
 	default:
-		return verifyPlan{}, fmt.Errorf("usage: devtool verify [default|public|e2e|e2e-full|integration|stress|failed-test]")
+		return verifyPlan{}, fmt.Errorf("usage: devtool verify [%s]", verifyProfileUsage)
 	}
 }
 
@@ -320,38 +346,11 @@ func runPublicVerification(
 		return nil
 	}
 
-	publicSteps := []func(context.Context, commandRunner, string, []string, io.Writer, io.Writer) error{
-		runFormat,
-		runLint,
-		runOutputBoundaries,
-		runTestConventions,
-		runReadmeStatus,
-		runSpecGoverns,
-		runLayering,
-		runRetiredBacklogIDs,
-		runMutexDocs,
-		runRequirementTraceability,
-		runBuild,
-	}
-	publicStepNames := []string{
-		"format",
-		"lint",
-		"output boundaries",
-		"test conventions",
-		"README status",
-		"spec governs",
-		"layering",
-		"retired backlog ids",
-		"mutex ownership docs",
-		"requirement traceability",
-		"build",
-	}
-	for i, step := range publicSteps {
-		if err := collector.runStep(publicStepNames[i], func() error {
-			return step(ctx, runner, repoRoot, env, stdout, stderr)
-		}); err != nil {
-			return err
-		}
+	publicSteps := []verifyStep{{"format", runFormat}, {"lint", runLint}}
+	publicSteps = append(publicSteps, repoRuleSteps()...)
+	publicSteps = append(publicSteps, verifyStep{"build", runBuild})
+	if err := runVerifySteps(ctx, runner, repoRoot, env, collector, stdout, stderr, publicSteps); err != nil {
+		return err
 	}
 
 	if err := collector.runStep("unit tests", func() error {
@@ -565,8 +564,53 @@ func runUnitTests(
 	return nil
 }
 
-// unitTestTimeout is go test's per-package deadline in the verify profiles.
+// unitTestTimeout is go test's per-package deadline in the full verify
+// profiles (race detector on, every exhaustive test running).
 const unitTestTimeout = "20m"
+
+// verifyStep is one named step of a verify profile, recorded in the summary
+// under its name.
+type verifyStep struct {
+	name string
+	run  func(context.Context, commandRunner, string, []string, io.Writer, io.Writer) error
+}
+
+// repoRuleSteps are the repository's static rules: the output-boundary,
+// test-convention, README, spec-ownership, layering, backlog-id, mutex-doc
+// and traceability checks. They take seconds, so every profile that builds
+// the tree runs them.
+func repoRuleSteps() []verifyStep {
+	return []verifyStep{
+		{"output boundaries", runOutputBoundaries},
+		{"test conventions", runTestConventions},
+		{"README status", runReadmeStatus},
+		{"spec governs", runSpecGoverns},
+		{"layering", runLayering},
+		{"retired backlog ids", runRetiredBacklogIDs},
+		{"mutex ownership docs", runMutexDocs},
+		{"requirement traceability", runRequirementTraceability},
+	}
+}
+
+func runVerifySteps(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	collector *verifySummaryCollector,
+	stdout, stderr io.Writer,
+	steps []verifyStep,
+) error {
+	for _, step := range steps {
+		if err := collector.runStep(step.name, func() error {
+			return step.run(ctx, runner, repoRoot, env, stdout, stderr)
+		}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
 
 func runCoverageGate(
 	ctx context.Context,

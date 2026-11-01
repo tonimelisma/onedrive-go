@@ -190,6 +190,7 @@ func TestWatch_VirtualTime_SafetyScanFindsAMissedFileAtItsInterval(t *testing.T)
 // moved into a deleted folder (model test seed 28) is still resolved, by the
 // deferred refresh.
 func TestRunOnce_VirtualTime_FolderDeletesSpaceFullRefreshes(t *testing.T) {
+	skipInShort(t)
 	t.Parallel()
 
 	inVirtualTime(t, func(t *testing.T) { //nolint:thelper // a test body run in a synctest bubble, like a t.Run subtest
