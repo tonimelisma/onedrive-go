@@ -1176,7 +1176,18 @@ minutes against one announced activation. Two rules fix both halves:
   the row in that transaction). A 429 by a member re-blocks:
   `extendScopeTrial` takes the new `Retry-After`, resets the allowance, and
   the next trial starts from the first batch again. The 429 also leaves the
-  ramp a memory, `SlowStartThreshold` (`slowStartThresholdAfterThrottle`):
+  ramp a memory, `SlowStartThreshold` (`slowStartThresholdAfterThrottle`).
+  Whatever re-blocks a blocking scope keeps the later of its current
+  deadline and the new one (`latestTrialDeadline`; a scope on probation
+  holds only its stall-recovery re-arm, so the 429 that ends a probation
+  sets the deadline outright): the transfers in flight when a
+  throttle hits each answer with their own `Retry-After`, later ones longer
+  because Microsoft extends the penalty for every request made inside it,
+  and their completions reach the loop in scheduler order; a shorter one
+  applied last would put the trial inside the penalty, where it costs a
+  429 and another extension
+  (`TestEngineFlow_LaterShorterRetryAfterNeverPullsTheTrialEarlier`). The
+  threshold is
   half the batch that drew it, at least the first batch. The next ramp
   doubles only up to that threshold and then grows by one per batch
   (`nextReleaseAllowance`; TCP's slow start to ssthresh, then additive

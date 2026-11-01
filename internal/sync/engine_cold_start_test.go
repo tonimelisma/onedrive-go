@@ -369,56 +369,65 @@ func TestColdStart_OneShotRampsInFlightFromTwo(t *testing.T) {
 	assert.Equal(t, [][]string{{"raised(4)", "raised(8)"}}, trace.passEvents())
 }
 
-// Validates: R-6.8.25, R-6.8.24
-//
-// A 429 during the slow start hands the drive to the throttle scope, which
-// owns re-admission from there (its ramp, not the slow start, paces the next
-// pass, which starts under the persisted scope), and a later fresh plan
-// with no scope starts the slow start over.
-//
-// The first pass is driven request by request through a gate, because the
-// order in which a batch's completions reach the loop is the scheduler's: a
-// success applied before the 429 admits one replacement, so a free-running
-// pass sends six or seven requests depending on the host. Gated, the pass
-// is the same on every host, and the property under test is exact: once
-// the 429 is applied, nothing more is sent.
-func TestColdStart_OneShotHandsOverToTheThrottleScopeAndResetsPerPlan(t *testing.T) {
-	t.Parallel()
+// coldStartHandOverRun is the engine, fakes and trace of
+// TestColdStart_OneShotHandsOverToTheThrottleScopeAndResetsPerPlan, shared
+// by its three passes.
+type coldStartHandOverRun struct {
+	h        *syncHarness
+	limiter  *throttleWindowClient
+	gate     *gatedUploadClient
+	clock    *manualClock
+	trace    *coldStartTrace
+	scopeKey ScopeKey
+}
 
-	const (
-		files        = 40
-		workers      = 8
-		windowBudget = 3
-		window       = time.Second
-	)
+const (
+	coldStartHandOverFiles     = 40
+	coldStartHandOverMoreFiles = 12
+	coldStartHandOverWorkers   = 8
+	coldStartHandOverBudget    = 3
+	coldStartHandOverWindow    = time.Second
+)
+
+func newColdStartHandOverRun(t *testing.T) *coldStartHandOverRun {
+	t.Helper()
 
 	driveID := driveid.New(engineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	clock := newManualClock(time.Date(2026, 11, 1, 9, 7, 0, 0, time.UTC))
-	limiter := newThrottleWindowClient(clock.Now, windowBudget, window)
+	limiter := newThrottleWindowClient(clock.Now, coldStartHandOverBudget, coldStartHandOverWindow)
 	gate := newGatedUploadClient()
 	eng, syncRoot := newTestEngine(t, gate.wrap(limiter.wrap(remote.client(t))))
-	eng.transferWorkers = workers
+	eng.transferWorkers = coldStartHandOverWorkers
 	installManualClockForTestEngine(eng, clock)
-	scopeKey := SKThrottleDrive(driveID)
 	trace := newColdStartTrace()
 	eng.SetDebugEventHook(trace.record)
 	h := &syncHarness{eng: eng, remote: remote, syncRoot: syncRoot}
-	for i := range files {
+	for i := range coldStartHandOverFiles {
 		writeLocalFile(t, syncRoot, fmt.Sprintf("file-%02d.txt", i), fmt.Sprintf("content %d\n", i))
 	}
 	h.beginRound(t)
 
-	// Pass 1: two succeed and the allowance doubles to four; the third
-	// success admits one replacement; the fourth request draws the 429,
-	// which activates the scope and takes the outbox back. The three
-	// uploads parked at that moment were already with workers (four in
-	// flight, the 429 among them): they are the bounded cost of the
-	// episode, and nothing follows them.
+	return &coldStartHandOverRun{
+		h: h, limiter: limiter, gate: gate, clock: clock, trace: trace, scopeKey: SKThrottleDrive(driveID),
+	}
+}
+
+// runThrottledFirstPass drives pass 1 request by request: two succeed and
+// the allowance doubles to four; the third success admits one replacement;
+// the fourth request draws the 429, which activates the scope and takes the
+// outbox back. The three uploads parked at that moment were already with
+// workers (four in flight, the 429 among them): they are the bounded cost
+// of the episode, and nothing follows them. It returns the scope as
+// persisted after the pass.
+func (run *coldStartHandOverRun) runThrottledFirstPass(t *testing.T) BlockScope {
+	t.Helper()
+
+	gate, trace := run.gate, run.trace
 	trace.beginPass()
 	runErr := make(chan error, 1)
 	go func() {
-		_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		_, err := run.h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 		runErr <- err
 	}()
 	gate.waitArrivals(t, 2)
@@ -442,43 +451,85 @@ func TestColdStart_OneShotHandsOverToTheThrottleScopeAndResetsPerPlan(t *testing
 		require.Fail(t, "the first pass did not finish")
 	}
 	assert.Equal(t, sentWhenThrottled, gate.arrivalCount(), "nothing more is sent after the 429 is applied")
-	requests, throttled, penalized := limiter.counts()
+	requests, throttled, penalized := run.limiter.counts()
 	assert.Equal(t, sentWhenThrottled, requests)
 	assert.Equal(t, 4, throttled, "the 429 and the three others in flight with it")
 	assert.Equal(t, 3, penalized, "only the uploads already in flight reach the drive inside the Retry-After")
-	block, ok := getTestBlockScope(eng, scopeKey)
+
+	block, ok := getTestBlockScope(run.h.eng, run.scopeKey)
 	require.True(t, ok, "the 429 activated the throttle scope")
+	// The three penalized answers each carry a later Retry-After than the
+	// 429 before them and reach the loop in scheduler order; whichever is
+	// applied last, the trial must honor the latest deadline the drive
+	// gave, or the trial itself is penalized and pass 2 sends nothing.
+	assert.False(t, block.NextTrialAt.Before(run.limiter.penaltyEnd()),
+		"trial at %s is inside the drive's Retry-After, which runs to %s", block.NextTrialAt, run.limiter.penaltyEnd())
 
-	// Pass 2 starts under the persisted scope: the scope's ramp paces it,
-	// the slow start does not, and the backlog completes.
-	limiter.setBudget(1000)
-	clock.Advance(block.NextTrialAt.Sub(clock.Now()))
-	trace.beginPass()
-	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	return block
+}
+
+// runProbationPass is pass 2, started at the trial deadline under the
+// persisted scope: the scope's ramp paces it, the slow start does not, and
+// the backlog completes.
+func (run *coldStartHandOverRun) runProbationPass(t *testing.T, block BlockScope) {
+	t.Helper()
+
+	run.limiter.setBudget(1000)
+	run.clock.Advance(block.NextTrialAt.Sub(run.clock.Now()))
+	run.trace.beginPass()
+	_, err := run.h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
-	assert.Equal(t, files, remote.uploads)
-	_, ok = getTestBlockScope(eng, scopeKey)
+	assert.Equal(t, coldStartHandOverFiles, run.h.remote.uploads)
+	_, ok := getTestBlockScope(run.h.eng, run.scopeKey)
 	assert.False(t, ok, "the scope is released with its last batch")
+}
 
-	// Pass 3 is a fresh plan with no scope: the slow start begins again.
-	for i := range 12 {
-		writeLocalFile(t, syncRoot, fmt.Sprintf("more-%02d.txt", i), fmt.Sprintf("more %d\n", i))
+// runFreshPass is pass 3, a fresh plan with no scope: the slow start begins
+// again.
+func (run *coldStartHandOverRun) runFreshPass(t *testing.T) {
+	t.Helper()
+
+	for i := range coldStartHandOverMoreFiles {
+		writeLocalFile(t, run.h.syncRoot, fmt.Sprintf("more-%02d.txt", i), fmt.Sprintf("more %d\n", i))
 	}
-	h.beginRound(t)
-	clock.Advance(window)
-	trace.beginPass()
-	_, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	run.h.beginRound(t)
+	run.clock.Advance(coldStartHandOverWindow)
+	run.trace.beginPass()
+	_, err := run.h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
-	assert.Equal(t, files+12, remote.uploads)
+	assert.Equal(t, coldStartHandOverFiles+coldStartHandOverMoreFiles, run.h.remote.uploads)
+}
+
+// Validates: R-6.8.25, R-6.8.24
+//
+// A 429 during the slow start hands the drive to the throttle scope, which
+// owns re-admission from there (its ramp, not the slow start, paces the next
+// pass, which starts under the persisted scope), and a later fresh plan
+// with no scope starts the slow start over.
+//
+// The first pass is driven request by request through a gate, because the
+// order in which a batch's completions reach the loop is the scheduler's: a
+// success applied before the 429 admits one replacement, so a free-running
+// pass sends six or seven requests depending on the host. Gated, the pass
+// is the same on every host, and the property under test is exact: once
+// the 429 is applied, nothing more is sent. Every instant is the engine's
+// manual clock, advanced explicitly between passes.
+func TestColdStart_OneShotHandsOverToTheThrottleScopeAndResetsPerPlan(t *testing.T) {
+	t.Parallel()
+
+	run := newColdStartHandOverRun(t)
+	block := run.runThrottledFirstPass(t)
+	run.runProbationPass(t, block)
+	run.runFreshPass(t)
 
 	assert.Equal(t, [][]string{
 		{"raised(4)", "handed-over"},
 		{"handed-over"},
 		{"raised(4)", "raised(8)"},
-	}, trace.passEvents())
+	}, run.trace.passEvents())
 
-	clock.Advance(window)
-	assertSyncInvariants(t, h)
+	run.clock.Advance(coldStartHandOverWindow)
+	assertSyncInvariants(t, run.h)
 }
 
 // Validates: R-6.8.25

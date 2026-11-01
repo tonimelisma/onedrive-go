@@ -106,7 +106,9 @@ func (flow *engineFlow) persistActiveScope(ctx context.Context, block *activeSco
 
 // newBlockActivation is the ledger shape of a (re)activation of key: one
 // generation past the active scope's, with the ramp's memory of where the
-// activating 429 stopped it, or the first generation of a new scope.
+// activating 429 stopped it, or the first generation of a new scope. The
+// trial never moves earlier than a deadline the scope already holds
+// (latestTrialDeadline).
 func (flow *engineFlow) newBlockActivation(key ScopeKey, interval time.Duration, now time.Time) *activeScope {
 	block := &activeScope{
 		Key:           key,
@@ -116,11 +118,31 @@ func (flow *engineFlow) newBlockActivation(key ScopeKey, interval time.Duration,
 	}
 	if current, ok := flow.scopes.lookupActiveScope(key); ok {
 		block.Generation = current.Generation + 1
+		block.NextTrialAt = latestTrialDeadline(&current, block.NextTrialAt)
 		block.SlowStartThreshold = slowStartThresholdAfterThrottle(
 			flow.engine.transferWorkers, current.ReleaseAllowance, current.SlowStartThreshold)
 	}
 
 	return block
+}
+
+// latestTrialDeadline is the trial deadline a new 429 leaves a scope with:
+// the later of the one it holds and the one the 429 asks for, while the
+// scope is blocking. The transfers in flight when a throttle hits each
+// bring their own Retry-After, and Microsoft extends the penalty for every
+// request made inside it, so the answers that arrive later carry the later
+// deadlines; but their completions reach the loop in scheduler order, and a
+// shorter Retry-After applied after a longer one would pull the trial inside
+// the penalty the drive still holds, where it costs a 429 and another
+// extension (R-6.8.24). A scope on probation holds no server deadline: its
+// trial is the stall-recovery re-arm one interval out, and the 429 that
+// ends the probation sets the deadline outright.
+func latestTrialDeadline(current *activeScope, requested time.Time) time.Time {
+	if current.ReleaseAllowance == 0 && current.NextTrialAt.After(requested) {
+		return current.NextTrialAt
+	}
+
+	return requested
 }
 
 func (flow *engineFlow) extendScopeTrial(
@@ -145,7 +167,7 @@ func (flow *engineFlow) extendScopeTrial(
 	// A 429 from a trial or a probation member is a re-block: the ramp
 	// starts over, remembering where it was stopped, and the admitted work
 	// the scope blocks is taken back.
-	block.NextTrialAt = nextAt
+	block.NextTrialAt = latestTrialDeadline(&block, nextAt)
 	block.TrialInterval = newInterval
 	block.SlowStartThreshold = slowStartThresholdAfterThrottle(
 		flow.engine.transferWorkers, block.ReleaseAllowance, block.SlowStartThreshold)

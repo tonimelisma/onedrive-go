@@ -433,3 +433,53 @@ func TestEngineFlow_ReleaseScopeBatch_ReportsThroughRuntimeSignals(t *testing.T)
 	assert.False(t, flow.scopes.hasActiveScope(key))
 	assert.False(t, isTestBlockScopeed(eng, key))
 }
+
+// Validates: R-6.8.24
+//
+// The transfers in flight when a throttle hits each bring their own
+// Retry-After, later ones longer (every request inside the penalty extends
+// it), and their completions reach the loop in scheduler order. A shorter
+// Retry-After applied after a longer one must not pull the trial inside the
+// penalty the drive still holds.
+func TestEngineFlow_LaterShorterRetryAfterNeverPullsTheTrialEarlier(t *testing.T) {
+	t.Parallel()
+
+	eng, rt, _, clock := rampTestEngine(t, 4)
+	ctx := t.Context()
+	key := SKThrottleDrive(eng.driveID)
+	holdBlockedUploadsForTest(t, eng, rt, key, 1, 3)
+	now := clock.Now()
+
+	require.NoError(t, rt.applyBlockScope(ctx, scopeUpdateResult{
+		Block: true, ScopeKey: key, ConditionType: issueRateLimited, RetryAfter: 40 * time.Second,
+	}))
+	require.NoError(t, rt.applyBlockScope(ctx, scopeUpdateResult{
+		Block: true, ScopeKey: key, ConditionType: issueRateLimited, RetryAfter: 10 * time.Second,
+	}))
+	scope, active := rt.scopes.lookupActiveScope(key)
+	require.True(t, active)
+	assert.Equal(t, now.Add(40*time.Second), scope.NextTrialAt, "a re-activation keeps the later deadline")
+	assert.Equal(t, uint64(2), scope.Generation, "and is still a new activation")
+
+	require.NoError(t, rt.extendScopeTrial(ctx, key, 20*time.Second))
+	scope, _ = rt.scopes.lookupActiveScope(key)
+	assert.Equal(t, now.Add(40*time.Second), scope.NextTrialAt, "an extension keeps the later deadline too")
+
+	require.NoError(t, rt.extendScopeTrial(ctx, key, 60*time.Second))
+	scope, _ = rt.scopes.lookupActiveScope(key)
+	assert.Equal(t, now.Add(60*time.Second), scope.NextTrialAt, "a later deadline moves the trial out")
+
+	persisted, ok := getTestBlockScope(eng, key)
+	require.True(t, ok)
+	assert.Equal(t, scope.NextTrialAt, persisted.NextTrialAt, "the store holds the same deadline")
+
+	// A scope on probation holds the stall-recovery re-arm, not a server
+	// deadline: the 429 that ends the probation sets the deadline outright.
+	scope.ReleaseAllowance = 4
+	scope.NextTrialAt = now.Add(5 * time.Minute)
+	rt.scopes.upsertActiveScope(&scope)
+	require.NoError(t, rt.extendScopeTrial(ctx, key, 30*time.Second))
+	scope, _ = rt.scopes.lookupActiveScope(key)
+	assert.Equal(t, now.Add(30*time.Second), scope.NextTrialAt, "a 429 during probation is the deadline")
+	assert.Zero(t, scope.ReleaseAllowance)
+}
