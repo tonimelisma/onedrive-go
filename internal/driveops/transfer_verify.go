@@ -128,7 +128,14 @@ func isBusinessLikeDrive(item *graph.Item) bool {
 			strings.EqualFold(item.ParentDriveType, driveTypeDocumentLibrary)
 	}
 
-	return strings.HasPrefix(item.DriveID.String(), businessDriveIDPrefix)
+	return isBusinessLikeDriveID(item.DriveID)
+}
+
+// isBusinessLikeDriveID tells a Business or SharePoint drive from a personal
+// one by its ID alone, for callers that have no item to read the drive type
+// from.
+func isBusinessLikeDriveID(driveID driveid.ID) bool {
+	return strings.HasPrefix(driveID.String(), businessDriveIDPrefix)
 }
 
 // settleUncertainFinalFragment handles an upload whose last fragment may

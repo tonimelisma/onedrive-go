@@ -147,6 +147,10 @@ type rootOps struct {
 	// without extended attributes.
 	getRootMark func(dir *os.File) (string, error)
 	setRootMark func(dir *os.File, token string) error
+	// syncDir flushes a directory outside the root, the trash entry a
+	// detached file is copied into (detach_unix.go); a seam because an fsync
+	// has no observable effect to test.
+	syncDir func(path string) error
 }
 
 func defaultRootOps() rootOps {
@@ -183,7 +187,28 @@ func defaultRootOps() rootOps {
 		lstatAbs:    os.Lstat,
 		getRootMark: getRootMarkXattr,
 		setRootMark: setRootMarkXattr,
+		syncDir:     syncDirectory,
 	}
+}
+
+// syncDirectory flushes a directory's entries to stable storage, so a rename
+// into it survives a power cut. It takes an absolute path because the trash
+// lies outside the sync root.
+func syncDirectory(path string) error {
+	dir, err := os.Open(path) //nolint:gosec // the trash entry directory this package just created
+	if err != nil {
+		return fmt.Errorf("opening %s to sync it: %w", path, err)
+	}
+
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	if syncErr != nil {
+		return fmt.Errorf("syncing %s: %w", path, syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("closing %s after syncing it: %w", path, closeErr)
+	}
+	return nil
 }
 
 // Root is a rooted capability for sync-runtime filesystem operations.

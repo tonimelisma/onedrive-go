@@ -750,7 +750,7 @@ func TestTransferManager_HEICMetadataMismatch_AcceptsFirstDownloadQuietly(t *tes
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	content := []byte("heic-bytes-after-download")
+	content := heifSignedBody("heic-bytes-after-download")
 
 	var downloadCount int
 	dl := &tmSimpleDownloader{
@@ -811,33 +811,144 @@ func TestTransferManager_HEICSameSizeHashMismatch_StillRetries(t *testing.T) {
 	assert.Equal(t, 3, downloadCount)
 }
 
-// Validates: R-5.8.2
-func TestTransferManager_AcceptedTransformDoesNotWarn(t *testing.T) {
+// heifSignedBody is what OneDrive serves for an iOS photo: an ISO BMFF file
+// whose first box is "ftyp" (bytes 4..8), followed by payload.
+func heifSignedBody(payload string) []byte {
+	body := []byte{0, 0, 0, 0x18}
+	body = append(body, "ftypheic"...)
+
+	return append(body, payload...)
+}
+
+// Validates: R-5.8.1, R-5.8.2
+//
+// The HEIC quirk is a smaller HEIF file, nothing else. An error page served
+// with HTTP 200, an empty or truncated body, or a body that is not an ISO
+// BMFF file used to be accepted as the photo on the first attempt and
+// recorded in the baseline as synced, never to be fetched again.
+func TestTransferManager_HEICQuirkRequiresASmallerHEIFBody(t *testing.T) {
 	t.Parallel()
 
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	content := []byte("always-the-same-bytes")
+	const reportedSize = 4096
+	htmlPage := []byte("<!DOCTYPE html><html><body>Something went wrong</body></html>")
 
-	dl := &tmSimpleDownloader{
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			n, err := w.Write(content)
-			return int64(n), err
+	tests := []struct {
+		name     string
+		fileName string
+		body     []byte
+		reason   string
+	}{
+		{
+			name:     "HTML error page for a hashed .HEIC",
+			fileName: "IMG_0001.HEIC",
+			body:     htmlPage,
+			reason:   "received",
+		},
+		{
+			name:     "empty body for a hashed .heic",
+			fileName: "IMG_0002.heic",
+			body:     nil,
+			reason:   "received 0 B",
+		},
+		{
+			name:     "HEIF body larger than reported",
+			fileName: "IMG_0003.heic",
+			body:     heifSignedBody(strings.Repeat("x", reportedSize)),
+			reason:   "received",
+		},
+		{
+			name:     "smaller body without the ftyp box",
+			fileName: "IMG_0004.heic",
+			body:     []byte("not an ISO BMFF file at all"),
+			reason:   "received",
 		},
 	}
 
-	tm := NewTransferManager(dl, &tmMockUploader{}, nil, logger)
-	targetPath := filepath.Join(t.TempDir(), "file.txt")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
-		RemoteHash:     "definitely-wrong-hash",
-		RemoteSize:     int64(len(content)),
-		MaxHashRetries: 2,
-	})
-	require.NoError(t, err)
-	assert.NotContains(t, buf.String(), "level=WARN", buf.String())
-	assert.Equal(t, 1, strings.Count(buf.String(), "level=INFO"), buf.String())
-	assert.NotContains(t, buf.String(), "definitely-wrong-hash")
+			var attempts int
+			dl := &tmSimpleDownloader{
+				downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+					attempts++
+					n, err := w.Write(tt.body)
+					return int64(n), err
+				},
+			}
+
+			dir := t.TempDir()
+			targetPath := filepath.Join(dir, tt.fileName)
+			_, err := newTestTM(dl, &tmMockUploader{}, nil).DownloadToFile(
+				t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{
+					RemoteHash:     "reported-hash",
+					RemoteSize:     reportedSize,
+					MaxHashRetries: 2,
+				})
+			require.ErrorIs(t, err, ErrDownloadIntegrity)
+			assert.Contains(t, err.Error(), tt.reason)
+			assert.Equal(t, 3, attempts, "not the quirk: every attempt is made before giving up")
+			assert.NoFileExists(t, targetPath)
+			entries, readErr := os.ReadDir(dir)
+			require.NoError(t, readErr)
+			assert.Empty(t, entries, "no partial is left behind")
+		})
+	}
+}
+
+// Validates: R-5.8.2
+//
+// A deterministic server transform is accepted either way, but how it is
+// reported depends on the drive: Business and SharePoint rewrite uploads
+// (property promotion, media metadata), so there it is routine and logged at
+// INFO; nothing legitimately rewrites bytes on a personal drive, so there the
+// user is warned, with the path.
+func TestTransferManager_AcceptedTransformWarnsOnlyOnPersonalDrives(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		driveID   string
+		wantLevel string
+	}{
+		{name: "business drive logs at INFO", driveID: "b!business-drive", wantLevel: "level=INFO"},
+		{name: "personal drive warns", driveID: "0123456789abcdef", wantLevel: "level=WARN"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			content := []byte("always-the-same-bytes")
+
+			dl := &tmSimpleDownloader{
+				downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+					n, err := w.Write(content)
+					return int64(n), err
+				},
+			}
+
+			tm := NewTransferManager(dl, &tmMockUploader{}, nil, logger)
+			targetPath := filepath.Join(t.TempDir(), "file.txt")
+
+			result, err := tm.DownloadToFile(t.Context(), driveid.New(tt.driveID), "item1", targetPath, DownloadOpts{
+				RemoteHash:     "definitely-wrong-hash",
+				RemoteSize:     int64(len(content)),
+				MaxHashRetries: 2,
+			})
+			require.NoError(t, err)
+			assert.True(t, result.AcceptedMismatch)
+
+			logged := buf.String()
+			assert.Equal(t, 1, strings.Count(logged, "level="), logged)
+			assert.Contains(t, logged, tt.wantLevel)
+			assert.Contains(t, logged, "different checksum than it reports")
+			assert.Contains(t, logged, targetPath)
+			assert.NotContains(t, logged, "definitely-wrong-hash")
+		})
+	}
 }
 
 // Validates: R-5.5.1
@@ -2056,7 +2167,7 @@ type recordingTarget struct {
 func (r *recordingTarget) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
 	step := "open-partial"
 	if flag == os.O_WRONLY {
-		step = "finalize(chmod,fsync)"
+		step = "reopen-partial"
 	}
 	r.steps = append(r.steps, step)
 
@@ -2086,8 +2197,16 @@ func TestDownloadToFile_FsyncsBeforeRenameAndSyncsDirAfter(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "folder")
 	require.NoError(t, os.Mkdir(dir, 0o700))
 	target := &recordingTarget{TargetFS: LocalTarget()}
+	tm := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil)
+	// TargetFS hands out real files, so the fsync itself is recorded through
+	// the manager's seam: a mutation that drops f.Sync() left the old
+	// step-order assertion green.
+	tm.syncFile = func(f *os.File) error {
+		target.steps = append(target.steps, "fsync:"+filepath.Base(f.Name()))
+		return f.Sync()
+	}
 
-	_, err := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil).DownloadToFile(
+	_, err := tm.DownloadToFile(
 		t.Context(), driveid.New("d1"), "item1", filepath.Join(dir, "f.txt"),
 		DownloadOpts{RemoteHash: tmHashBytes(content), RemoteMtime: time.Now().UnixNano(), Target: target})
 	require.NoError(t, err)
@@ -2096,7 +2215,27 @@ func TestDownloadToFile_FsyncsBeforeRenameAndSyncsDirAfter(t *testing.T) {
 	// entry must be on disk first: a power cut used to leave an empty file
 	// the next pass trusted or uploaded over the good remote copy.
 	// The mtime is set before the fsync so the flush makes it durable too.
-	assert.Equal(t, []string{"open-partial", "chtimes", "finalize(chmod,fsync)", "rename", "syncdir:folder"}, target.steps)
+	partial := downloadPartialName("f.txt", partialVersionTag(DownloadOpts{RemoteHash: tmHashBytes(content)}))
+	assert.Equal(t, []string{"open-partial", "chtimes", "reopen-partial", "fsync:" + partial, "rename", "syncdir:folder"}, target.steps)
+}
+
+// Validates: R-5.10.1
+func TestDownloadToFile_FsyncFailureKeepsTheTargetAbsent(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("durable")
+	targetPath := filepath.Join(t.TempDir(), "f.txt")
+	tm := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil)
+	tm.syncFile = func(*os.File) error { return syscall.EIO }
+
+	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath,
+		DownloadOpts{RemoteHash: tmHashBytes(content), Target: LocalTarget()})
+
+	// A download whose bytes may not be on disk is never published: the
+	// next pass would trust the baseline for a file a power cut can empty.
+	require.ErrorIs(t, err, syscall.EIO)
+	assert.Contains(t, err.Error(), "flushing the download")
+	assert.NoFileExists(t, targetPath)
 }
 
 // refusingParentTarget is a TargetFS whose parent check fails, as sync's

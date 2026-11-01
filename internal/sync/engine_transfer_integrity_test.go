@@ -29,8 +29,9 @@ func TestRunOnce_AcceptedServerTransformIsNotDownloadedAgain(t *testing.T) {
 		served   string // the bytes it actually serves
 	}{
 		// iOS HEIC: metadata describes the original, OneDrive serves a
-		// smaller post-processed file.
-		{name: "HEIC served smaller", fileName: "IMG_0001.HEIC", reported: "original heic bytes, larger", served: "processed"},
+		// smaller post-processed file that is still a HEIF container
+		// (an ISO BMFF `ftyp` box); anything else is an integrity failure.
+		{name: "HEIC served smaller", fileName: "IMG_0001.HEIC", reported: "original heic bytes, much larger than the served file", served: "\x00\x00\x00\x18ftypheicprocessed"},
 		// Deterministic same-size transform (AIP-protected Office files).
 		{name: "same bytes at the reported size", fileName: "plan.docx", reported: "unprotected", served: "protected!!"},
 	}

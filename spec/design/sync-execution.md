@@ -46,6 +46,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Local mutation is refused beneath a symlinked ancestor, at every mutating action, with the target content outside the sync root left byte-identical. | `TestExecutor_Download_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorSourceIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorDestinationIsBlocked`, `TestExecutor_ConflictCopy_SymlinkedAncestorIsBlocked`, `TestExecutor_CreateLocalFolder_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition`, `TestExecutor_LocalDelete_AliasItselfStillRemovesOnlyTheSymlink`, `TestExecutor_LocalMove_WithoutSymlinkBoundarySucceeds` |
 | Uploads read through a followed alias: a file beneath a directory symlink whose target is outside the sync root uploads with the target content, its followed facts are still checked against the plan, the same path still refuses a download, and a path that lexically leaves the root is refused. | `TestRunOnce_FollowSymlinks_UploadsFileInsideDirectoryAliasOutsideRoot`, `TestExecutor_Upload_UnderFollowedDirectoryAliasSucceeds`, `TestExecutor_Upload_UnderFollowedDirectoryAliasDetectsChangedTarget`, `TestExecutor_UnderFollowedDirectoryAlias_UploadReadsButDownloadStaysRefused`, `TestExecutor_Upload_PathLeavingSyncRootIsRefused`, `TestExecutor_Upload_SymlinkAliasSourceUsesFollowedTargetPrecondition` |
 | Local deletes and download overwrites act only on the inode they verified, keep a file replaced mid-check, and put what they remove or replace in the drive's local trash. | `TestDeleteLocalFile_MovesTheFileToTheTrash`, `TestDeleteLocalFile_FileReplacedMidHashSurvives`, `TestDetachRegularFile_FileReplacedDuringVerifyIsKept`, `TestRunOnce_RemoteDeleteMovesLocalFileToTrash`, `TestRunOnce_DownloadOverwriteKeepsPreviousVersionInTrash`, `TestDetachRegularFile_InPlaceWriteAfterVerifyIsKept`, `TestCopyVerified_WriteDuringCopyDiscardsTheCopy`, `TestTrash_CrashBetweenMoveAndCommitIsRecoverable`, `TestTrash_FailedCommitLeavesARecoverablePendingEntry`, `TestTrash_OrphanItemIsListedAndKept`, `TestTrash_RestoreAcrossFilesystemsCopies`, `TestTrash_RestoreRefusesSymlinkedAncestor`, `TestFullScan_LeftoverSetAsideFileIsReportedNotDeleted`, `TestTrash_CrossFilesystemRestoreKeepsModeAndTime`, `TestTrash_UncheckableItemIsNeverPurged`, `TestLinkOrCopyNoReplace_FilesystemWithoutHardLinksCopies`, `TestLinkOrCopyNoReplace_SourceThatCannotBeRemovedIsReportedAfterSuccess` |
+| A cross-filesystem trash placement or restore is durable before the source goes: the destination folder is fsynced after the rename, a sync failure discards the copy, and an entry left with only an interrupted `.copy-*` file is listed, never purged, and not restored as the file. | `TestCopyVerified_SyncsTheDestinationFolder`, `TestCopyVerified_DirectorySyncFailureLeavesNothingAtTheDestination`, `TestCopyVerified_ToleratesUnsupportedDirectorySync`, `TestTrash_CrossFilesystemRestoreSyncsTheTargetFolder`, `TestTrash_IncompleteCrossFilesystemCopyIsNeverPurged` |
 | A recursive remote folder delete refuses to take descendants sync never saw or that changed online; a remote delete re-checks local absence and the sync folder identity; a local folder delete over only ignored children converges and the folder stays deleted online until it holds something sync sees. | `TestExecuteRemoteDelete_FolderWithUnobservedChildIsStale`, `TestExecuteRemoteDelete_FolderWithOnlySyncedUnchangedChildrenRuns`, `TestExecuteRemoteDelete_FolderChildChangedOnlyInETagOrSizeIsStale`, `TestExecuteRemoteDelete_FolderOverListingCapIsDurableIssueNotStale`, `TestRunOnce_LocalFolderDeleteKeepsRemoteChildAddedAfterObservation`, `TestExecuteRemoteDelete_LocalPathReappearedIsSuperseded`, `TestDeleteLocalFolder_OnlyIgnoredChildrenConverges`, `TestRunOnce_RemoteFolderDeleteWithIgnoredLocalFileConverges`, `TestRunOnce_FolderRecreatedWhereAKeptFolderWasIsCreatedOnline` |
 | Executor live preconditions reject stale work at the side-effect boundary without mutating local or remote state. | `TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure`, `TestExecutor_RemoteDelete_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_RemoteDelete_WrongDrivePreflightReturnsStalePrecondition`, `TestExecutor_RemoteDelete_StalePathPreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_StaleSourcePreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_CreateRemoteFolder_MissingParentPreflightReturnsStalePrecondition`, `TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition`, `TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition`, `TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStalePrecondition`, `TestExecutor_Download_MountRootAllowsGraphDriveRootPath`, `TestExecutor_LocalMove_MissingDestinationParentIsStale`, `TestExecutor_LocalMove_LocallyEditedSourceStillMovesAndKeepsTheEditPending`, `TestExecutor_LocalMove_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition` |
 | On a byte-exact filesystem every local operation addresses an existing entry by its spelling on disk: an NFD-named file uploads in one pass, a remote edit replaces it in place, a remote delete, rename or move removes or moves it, a conflict copy preserves it, an NFD-named folder receives remote additions inside itself and is deleted, a remote delete is superseded when the NFD-named file is back, and the permission probe reports the stored boundary (R-2.13.2). | `TestRunOnce_LocalNFDNamedFileUploadsInOnePass`, `TestRunOnce_RemoteEditReplacesTheNFDNamedLocalFile`, `TestRunOnce_RemoteDeleteRemovesTheNFDNamedLocalFile`, `TestRunOnce_RemoteMoveMovesTheNFDNamedLocalFile`, `TestRunOnce_ConflictingEditsOfAnNFDNamedFileKeepBoth`, `TestRunOnce_NFDNamedLocalFolderReceivesAdditionsAndIsDeleted`, `TestExecuteRemoteDelete_NFDNamedLocalFileBackIsSuperseded`, `TestPermHandler_HandleLocalPermission_ProbesTheNFDNamedFolder` |
@@ -507,7 +508,16 @@ rename itself changes ctime), and only then moves it out. A file replaced or
 written in place while it was being checked is put back with a no-replace link
 and the delete is superseded, so the new content survives. A cross-filesystem
 move copies through the verified descriptor and re-checks the stamp after the
-copy, discarding a copy a concurrent write may have torn. The in-place check
+copy, discarding a copy a concurrent write may have torn. That copy is made
+durable before the set-aside original is unlinked: the temporary sibling is
+fsynced, renamed to `item`, and the entry directory is fsynced too
+(`copyThroughDescriptor`, through the `rootOps.syncDir` seam), because the
+rename is a directory update that is not durable until the directory is;
+unlinking the original first left a power cut with a trash entry holding only
+a `.copy-*` file and no original anywhere. A directory sync the filesystem
+cannot do (`localpath.IsDirSyncUnsupported`) is tolerated; any other failure
+discards the copy and is reported, and the original is linked back. The
+in-place check
 after the set-aside rests on size and mtime alone (the rename changes ctime):
 a writer that keeps both, such as `rsync --inplace -t` or a write through an
 mmap that does not update mtime, can still slip a change past it.
@@ -517,16 +527,24 @@ The file does not vanish: it moves into the drive's local trash
 named after the state DB. Each entry is recorded as pending before anything is
 moved and as committed after, so a crash in between leaves a pending entry
 that `trash list` shows and `trash restore` puts back; an entry holding a file
-but no readable record is listed as an orphan with the file's location. Purge
-expires committed entries after 30 days and only removes reservations whose
-file never arrived; it never deletes an uncommitted file. Restore never
+but no readable record is listed as an orphan with the file's location. An
+entry directory holds a file when it has `item` or, failing that, any regular
+file other than `entry.json` (`heldFileIn`): a `.copy-*` left by a
+cross-filesystem placement an earlier build or a crash interrupted is listed
+at its own path, is never purged or expired, blocks `Placement.Abandon`, and
+is refused by `trash restore`, because it may be torn and the original was
+left set aside in the sync folder. Purge expires committed entries after 30
+days and only removes reservations whose directory holds no file at all; it
+never deletes an uncommitted file. Restore never
 overwrites (renameat2 `RENAME_NOREPLACE` on Linux, `renamex_np RENAME_EXCL` on
 macOS, link and unlink elsewhere, and on filesystems without hard links an
 `O_EXCL` create plus copy, which is not atomic but never replaces), refuses a
 symbolic link between the sync folder and the target, and copies, keeping mode
 and mtime, through a `.onedrive-go-restore-*` sibling when the trash is on
-another filesystem; observation never sees such a sibling. A file that cannot
-be checked in the trash is never purged as empty. A
+another filesystem, and fsyncs the target's folder after the final rename
+before the trashed original is removed (`finishCopiedRestore`, through the
+trash's `syncDir` seam); observation never sees such a sibling. A file that
+cannot be checked in the trash is never purged as empty. A
 `.detach` sibling left by an interrupted run is never cleaned up: every full
 scan reports it as `local_interrupted_removal`.
 

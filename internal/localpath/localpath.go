@@ -369,9 +369,32 @@ func WriteDisposableFile(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+// IsDirSyncUnsupported reports the errnos a filesystem that cannot fsync a
+// directory answers with (FUSE, SMB and some network mounts). A caller that
+// has already renamed a file into place treats these as best effort: the
+// bytes are on disk and the rename is visible, only the durability of the
+// directory entry could not be established. Any other failure is reported.
+func IsDirSyncUnsupported(err error) bool {
+	return errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP)
+}
+
 // AtomicWrite writes data to path via a temp file created in the target
-// directory, then fsyncs, closes, and renames it into place.
-func AtomicWrite(path string, data []byte, filePerm, dirPerm os.FileMode, pattern string) (err error) {
+// directory, then fsyncs, closes, renames it into place and fsyncs the
+// directory (R-6.5.4): the rename is a directory update, and without the
+// second sync a crash can lose it after every byte reached the disk. A
+// directory sync the filesystem does not support is tolerated; any other
+// failure is reported, because success would claim a durability the
+// filesystem refused.
+func AtomicWrite(path string, data []byte, filePerm, dirPerm os.FileMode, pattern string) error {
+	return atomicWrite(path, data, filePerm, dirPerm, pattern, SyncDir)
+}
+
+// atomicWrite is AtomicWrite with the directory sync injectable: an fsync has
+// no observable effect, so tests prove it happened and that its failure is
+// reported through the seam.
+func atomicWrite(
+	path string, data []byte, filePerm, dirPerm os.FileMode, pattern string, syncDir func(dir string) error,
+) (err error) {
 	abs, err := absolutePath(path)
 	if err != nil {
 		return err
@@ -416,6 +439,14 @@ func AtomicWrite(path string, data []byte, filePerm, dirPerm os.FileMode, patter
 	// #nosec G703 -- tempPath is created in targetDir and abs is normalized by absolutePath.
 	if renameErr := os.Rename(tempPath, abs); renameErr != nil {
 		return fmt.Errorf("renaming temp file into %s: %w", path, renameErr)
+	}
+
+	// The rename has happened, so the new contents are visible; this makes
+	// that visibility survive a crash. The temp file is gone, so the deferred
+	// cleanup has nothing to remove, and rewriting the same bytes is safe to
+	// retry.
+	if syncErr := syncDir(targetDir); syncErr != nil && !IsDirSyncUnsupported(syncErr) {
+		return fmt.Errorf("making %s durable: %w", path, syncErr)
 	}
 
 	return nil

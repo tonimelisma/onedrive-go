@@ -23,6 +23,7 @@ Unified download/upload manager shared by both CLI file operations and the sync 
 | --- | --- |
 | Downloads use partial-file resume plus hash verification before the final atomic rename. | `internal/driveops/transfer_manager_test.go` (`TestTransferManager_ResumeDownload_CorruptPartial_RetriesFresh`, `TestTransferManager_StalePartialFromOldVersionIsNotResumed`), `internal/graph/download_test.go`, `internal/driveops/hash_test.go`, `internal/localpath/localpath_test.go` (`TestAtomicWrite`) |
 | Uploads keep simple-upload and upload-session mechanics inside the transfer boundary, and persisted sessions carry mount scope so lifecycle owners can purge child-owned sessions and resume after restart. | `internal/driveops/transfer_manager_test.go` (`TestTransferManager_Upload_Success`), `internal/driveops/transfer_create_test.go` (`TestUploadFile_RecordsTheCreatedItemBeforeAnyContent`), `internal/graph/upload_test.go`, `internal/graph/item_create_test.go` (`TestCreateUploadSessionForItem_PreconditionFailureIsNeverRetriedUnconditionally`), `TestSessionStore_DeleteForScope_RemovesMatchingMountOrRoot`, `TestSessionStore_ReopenPreservesUploadSession` |
+| The iOS HEIC quirk is accepted only as a smaller HEIF-signed body; an error page, an empty or truncated body, or a larger or unsigned body is an integrity failure that never reaches the target, and an accepted server transform warns on a personal drive only. | `TestTransferManager_HEICMetadataMismatch_AcceptsFirstDownloadQuietly`, `TestTransferManager_HEICQuirkRequiresASmallerHEIFBody`, `TestTransferManager_HEICSameSizeHashMismatch_StillRetries`, `TestTransferManager_AcceptedTransformWarnsOnlyOnPersonalDrives` |
 | Sync-owned live preconditions can be injected without making `driveops` import sync policy. | `TestDownloadToFile_TargetPreconditionBeforeRenamePreservesPartial`, `TestUploadFile_SourcePreconditionRunsBeforeUpload`, `TestUploadFile_SourcePreconditionRunsDuringSessionRead` |
 | Sync execution reuses the same transfer boundary instead of inventing a second transfer path. | `internal/sync/executor_test.go` (`TestExecutor_Download_Success`, `TestExecutor_Download_PartialFileCleanedOnMidStreamError`) |
 
@@ -309,23 +310,41 @@ QuickXorHash computation for local files (`hash.go`). The `pkg/quickxorhash/` pa
 
 `downloadToVerifiedPartial` judges every attempt with `classifyDownload`:
 verified (QuickXor match), unverifiable but size-consistent (no hash),
-the known HEIC quirk (served smaller than the metadata, accepted on the
-first attempt and logged at Debug), or a mismatch. A mismatch, an empty or
-short body, or an HTML/JSON error document (`graph.ErrUnexpectedDownloadBody`)
-discards the partial and downloads again. After the last attempt only a
-deterministic server transform is accepted (`acceptsServerTransform`: the
-same bytes at the reported size every time, with a hash to differ from);
-anything else fails with `ErrDownloadIntegrity`, which sync reports as
-`download_integrity`, and the existing local file is never replaced (D-038,
-D-039, R-5.5.1, R-5.8.2). An accepted transform sets
-`DownloadResult.AcceptedMismatch` and keeps OneDrive's reported hash as
-`EffectiveRemoteHash`: recording the local hash there made every later pass
-see a remote change and download the file again. Evidence:
+the known HEIC quirk (accepted on the first attempt and logged at Debug), or
+a mismatch. A mismatch, an empty or short body, or an HTML/JSON error
+document (`graph.ErrUnexpectedDownloadBody`) discards the partial and
+downloads again. After the last attempt only a deterministic server
+transform is accepted (`acceptsServerTransform`: the same bytes at the
+reported size every time, with a hash to differ from); anything else fails
+with `ErrDownloadIntegrity`, which sync reports as `download_integrity`, and
+the existing local file is never replaced (D-038, D-039, R-5.5.1, R-5.8.2).
+An accepted transform sets `DownloadResult.AcceptedMismatch` and keeps
+OneDrive's reported hash as `EffectiveRemoteHash`: recording the local hash
+there made every later pass see a remote change and download the file again.
+It is reported once per file, at INFO on a Business or SharePoint drive
+(`isBusinessLikeDriveID`: those rewrite uploads routinely) and at WARN with
+the path on a personal drive, where nothing legitimately rewrites bytes.
+
+The HEIC quirk (R-5.8.1, P-10) is a smaller post-processed HEIF file, and
+only that shape is accepted: a `.heic` whose served size is non-zero and
+below the reported size (`isHEICServedSmaller`) **and** whose partial starts
+with an ISO BMFF `ftyp` box (`hasISOBMFFSignature`, read through the target
+filesystem before the verdict); an error document never reaches the
+verdict. The signature matters because an HTML or JSON error page served
+with HTTP 200, or an empty or truncated body, is smaller too: accepting any
+size difference put the page on disk as the photo and recorded it in the
+baseline as synced (local hash of the page, remote hash the real one), never
+to be fetched again. Anything else about a `.heic` is an ordinary mismatch
+and goes through the retries and `ErrDownloadIntegrity`. The graph
+boundary's HTML/JSON gate (`checkDownloadBodyType`) still applies to hashless
+items only; for a hashed item the hash, and for the quirk the signature,
+decide. Evidence:
 `TestTransferManager_IntegrityFailureKeepsCanonicalFile`,
 `TestTransferManager_DeterministicMismatchAtReportedSize_AcceptedOnce`,
 `TestTransferManager_HEICMetadataMismatch_AcceptsFirstDownloadQuietly`,
+`TestTransferManager_HEICQuirkRequiresASmallerHEIFBody`,
 `TestTransferManager_HEICSameSizeHashMismatch_StillRetries`,
-`TestTransferManager_AcceptedTransformDoesNotWarn`,
+`TestTransferManager_AcceptedTransformWarnsOnlyOnPersonalDrives`,
 `TestRunOnce_AcceptedServerTransformIsNotDownloadedAgain`.
 
 A partial file's name carries the remote version (`~v` plus 12 hex digits
