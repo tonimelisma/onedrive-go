@@ -17,6 +17,7 @@ func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
 	flow.sched.queuedByID = make(map[int64]struct{})
 	flow.sched.runningByID = make(map[int64]struct{})
 	flow.sched.runningCount = 0
+	flow.sched.resetColdStart(flow.engine.workerPoolSize())
 	flow.retries.nextHeldOrder = 0
 
 	activeScopes := make([]activeScope, 0, len(runtime.BlockScopes))
@@ -27,6 +28,12 @@ func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
 		activeScopes = append(activeScopes, activeScopeFromBlockScopeRow(runtime.BlockScopes[i]))
 	}
 	flow.scopes.replaceActiveScopes(activeScopes)
+	// A target already under a throttle (or service) scope when the plan
+	// starts is the scope's to ramp (R-6.8.24); the slow start is for a
+	// target nothing is known about (R-6.8.25).
+	for i := range activeScopes {
+		flow.handOverColdStart(activeScopes[i].Key)
+	}
 	if flow.scopes.state == nil {
 		flow.scopes.state = newScopeState(flow.engine.nowFunc, flow.deps.logger)
 	}
@@ -38,6 +45,7 @@ func (flow *engineFlow) holdAction(ta *trackedAction, reason heldReason, scopeKe
 	}
 
 	flow.sched.markFinished(ta)
+	ta.AdmitAt = time.Time{}
 	key := retryWorkKeyForAction(&ta.Action)
 	flow.retries.nextHeldOrder++
 	held := &heldAction{

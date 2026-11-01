@@ -102,7 +102,9 @@ notify onedrive-go sooner.
 ### Can I sync more than one account?
 
 Yes. Run `onedrive-go login` once per account. `sync` then syncs every
-configured drive that is not paused; use `--drive` to pick one.
+configured drive that is not paused; use `--drive` to pick one. With every
+drive paused, a one-shot `sync` refuses (there is nothing to do), while
+`sync --watch` stays running and picks the drives up again at `resume`.
 
 ### Does it work behind a proxy?
 

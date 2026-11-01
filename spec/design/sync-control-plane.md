@@ -63,7 +63,7 @@ runtime package that implements it.
 | Behavior | Evidence |
 | --- | --- |
 | `RunWatch` reports ready, reload and stop transitions through `WatchLifecycle`, and a watch that never started reports none. | `TestRunWatch_ReportsLifecycleTransitions`, `TestRunWatch_StartupFailureIsNotReady` |
-| `RunWatch` starts the runnable runtime mount set, skips incompatible-store mounts with immediate warnings, and rejects all-paused startup through the same startup-summary model. | `TestOrchestrator_RunWatch_SingleMount`, `TestOrchestrator_RunWatch_MultiMount`, `TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts`, `TestOrchestrator_RunWatch_ReturnsErrorWhenAllMountsPaused` |
+| `RunWatch` starts the runnable runtime mount set, skips incompatible-store mounts with immediate warnings, refuses a start in which no drive could start, and with every drive paused starts, reports ready with the paused drives and idles until a reload resumes one (R-3.4.2). | `TestOrchestrator_RunWatch_SingleMount`, `TestOrchestrator_RunWatch_MultiMount`, `TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts`, `TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoMountStarts`, `TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed` |
 | The Unix control socket is the single owner lock for one-shot and watch sync, is acquired before parent engines start, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. Dry-run one-shot sync uses the same owner lock as live one-shot sync. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestRunOnce_BindsControlSocketBeforeEngineStartup`, `TestRunOnce_DryRunBindsControlSocketBeforeEngineStartup`, `TestRunWatch_BindsControlSocketBeforeEngineStartup`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Socket files are permissioned private, ownership is a `flock` on `<socket>.lock` held for the owner's lifetime, stale sockets are replaced only under that lock, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
@@ -366,7 +366,13 @@ orchestration, rendering, and bookkeeping.
 ### RunWatch
 
 `RunWatch` starts one watch-mode engine per runnable non-paused mount and then
-owns the long-running control loop. It listens for:
+owns the long-running control loop. A selection in which every mount is
+paused starts the loop with no engine (`validateInitialWatchStart`): the
+watch is ready, `WatchLifecycleEvent.Paused` carries the paused drives for
+the service status, and the ordinary reload and reconcile passes start a
+drive once it is resumed or its timed pause expires (R-3.4.2). Exiting
+instead made a `Restart=on-failure` unit restart the service every interval
+until the resume. It listens for:
 
 - `ctx.Done()` for shutdown
 - JSON-over-HTTP requests on the Unix control socket
@@ -381,8 +387,9 @@ per-mount startup outcomes. CLI conversion failures use the same startup-result
 path, including on reload, so one bad selected mount does not prevent healthy
 mounts from running. Watch startup warns about those mounts immediately, keeps
 healthy mounts running, and exits non-zero only when no runnable mount starts.
-A paused-only or all-failed selection is a structured startup refusal, not a
-special string-only path.
+An all-failed selection is a structured startup refusal
+(`WatchStartupError`), not a special string-only path; a paused-only
+selection is not a refusal at all.
 
 Every reconcile tick, reload, and runner event re-runs the start logic, and
 the carried-over CLI conversion failures ride along on each pass. The watch

@@ -73,17 +73,24 @@ func TestErrnoShim_DownloadFailuresAreClassifiedThenHeal(t *testing.T) {
 			report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 			require.NoError(t, err)
 			require.Positive(t, shim.Hits(), "the downloads met the filesystem")
-			assert.Equal(t, fsShimFileCount, report.Failed, "errors: %v", report.Errors)
 
 			rows := listRetryWorkForTest(t, eng.baseline, t.Context())
-			require.Len(t, rows, fsShimFileCount)
+			require.Len(t, rows, fsShimFileCount, "every download is retry work, failed or held")
 			scopes := blockScopesByKeyForTest(t, eng)
 			if tc.scope.IsZero() {
+				assert.Equal(t, fsShimFileCount, report.Failed, "every download runs and fails on its own; errors: %v", report.Errors)
 				assert.Empty(t, scopes, "a per-item condition blocks nothing else")
 				for _, row := range rows {
 					assert.False(t, row.Blocked, "%s", row.Path)
 				}
 			} else {
+				// A fresh plan slow-starts with coldStartInitialAllowance
+				// downloads in flight (R-6.8.25); those meet the full disk,
+				// the scope activates and takes the rest back before a
+				// worker reaches it, so fewer than fsShimFileCount fail.
+				assert.Positive(t, report.Failed, "errors: %v", report.Errors)
+				assert.LessOrEqual(t, report.Failed, coldStartInitialAllowance,
+					"only the downloads in flight when the disk was found full fail; errors: %v", report.Errors)
 				assert.Contains(t, scopes, tc.scope)
 				assert.Len(t, scopes, 1, "one scope, not one per file")
 				for _, row := range rows {

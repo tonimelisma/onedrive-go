@@ -85,7 +85,7 @@ The system shall support all four drive types:
 ## R-3.4 Multi-Account [verified]
 
 - R-3.4.1: A single config file shall hold multiple drive sections. [verified]
-- R-3.4.2: A single `sync --watch` process shall sync all non-paused drives simultaneously. [verified]
+- R-3.4.2: A single `sync --watch` process shall sync all non-paused drives simultaneously. With every selected drive paused it shall start, report the paused state (console and service status) and idle until a drive is resumed, a timed pause expires or it is stopped, rather than exit; a one-shot `sync` with every selected drive paused refuses with a message naming `resume`. [verified]
 - R-3.4.3: SharePoint drives shall share the business account's OAuth token. [verified]
 
 ## R-3.5 Drive Selection [verified]

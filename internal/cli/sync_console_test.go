@@ -232,6 +232,20 @@ func TestSyncConsole_JournalMarksFailuresWithErrorPriority(t *testing.T) {
 	assert.Equal(t, "<3>Failed to download a.txt: permission denied\n", errOut.String())
 }
 
+// Validates: R-3.4.2, R-6.6.19
+func TestSyncConsole_WatchingEveryDrivePausedSaysWhatItWaitsFor(t *testing.T) {
+	t.Parallel()
+
+	c, out, _ := testSyncConsole()
+	c.Watching([]multisync.StandaloneMountConfig{
+		{SyncRoot: "/home/user/OneDrive", AccountEmail: "user@example.com", Paused: true},
+	}, syncengine.SyncBidirectional)
+
+	assert.Equal(t, "Watching ~/OneDrive for user@example.com (paused).\n"+
+		"All drives are paused; waiting until one is resumed ('onedrive-go resume').\n"+
+		"Press Ctrl-C to stop.\n", out.String())
+}
+
 // Validates: R-6.6.19
 func TestSyncConsole_StartingNamesFolderAndAccount(t *testing.T) {
 	t.Parallel()

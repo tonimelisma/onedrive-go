@@ -157,8 +157,10 @@ through trial actions:
   batch that completes without a further 429 doubles the next up to the
   scope's slow-start threshold (half the batch that last drew a 429) and
   grows by one from there, and the batch's members run as trials of the
-  scope so their outcomes drive the ramp (R-6.8.24, sync-engine.md "Release
-  ramps")
+  scope so their outcomes drive the ramp; each member is admitted at its own
+  instant within a one-second window of the release, while the trial at the
+  server-given `Retry-After` is not jittered (R-6.8.24, sync-engine.md
+  "Release ramps" and "Cold start and batch jitter")
 - matching-scope persistence evidence extends the scope, resets the ramp,
   and takes back the admitted work the scope blocks before a worker reaches it
 - inconclusive outcomes re-arm the current interval without inventing a new

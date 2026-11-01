@@ -71,6 +71,14 @@ type watchTimerState struct {
 	// Retry timer — the watch loop releases due held retries on each tick.
 	retryTimer   syncTimer
 	retryTimerCh chan struct{} // persistent, buffered(1)
+
+	// Admit timer — wakes the loop when the earliest parked outbox entry
+	// (trackedAction.AdmitAt, a jittered ramp batch member) becomes due.
+	// admitTimerAt is the instant the armed timer fires at, so a step that
+	// finds the same parked head does not re-arm it.
+	admitTimer   syncTimer
+	admitTimerAt time.Time
+	admitCh      chan struct{} // persistent, buffered(1)
 }
 
 type watchResources struct {
@@ -146,6 +154,7 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 		timers: watchTimerState{
 			trialCh:      make(chan struct{}, 1),
 			retryTimerCh: make(chan struct{}, 1),
+			admitCh:      make(chan struct{}, 1),
 		},
 		resources: watchResources{
 			refreshCh:      make(chan time.Time, 1),
@@ -253,12 +262,14 @@ func (rt *watchRuntime) pendingReplanStartedAt() time.Time {
 	return rt.loop.pendingReplanAt
 }
 
-func (rt *watchRuntime) consumeOutboxHead() {
-	if len(rt.loop.outbox) == 0 {
-		return
+// outboxEntry returns outbox entry i, or nil for the "nothing to dispatch"
+// index.
+func (rt *watchRuntime) outboxEntry(i int) *trackedAction {
+	if i < 0 || i >= len(rt.loop.outbox) {
+		return nil
 	}
 
-	rt.loop.outbox = rt.loop.outbox[1:]
+	return rt.loop.outbox[i]
 }
 
 func (rt *watchRuntime) retireOutboxForPendingReplan() {
@@ -444,6 +455,49 @@ func (rt *watchRuntime) hasRetryTimer() bool {
 	defer rt.timers.timerMu.RUnlock()
 
 	return rt.timers.retryTimer != nil
+}
+
+// armAdmitTimer wakes the loop at `at`, when the earliest parked outbox
+// entry becomes due; the zero time stops the timer. A timer already armed
+// for that instant is kept.
+func (rt *watchRuntime) armAdmitTimer(at time.Time) {
+	rt.timers.timerMu.Lock()
+	defer rt.timers.timerMu.Unlock()
+
+	if rt.timers.admitTimer != nil && rt.timers.admitTimerAt.Equal(at) {
+		return
+	}
+	if rt.timers.admitTimer != nil {
+		rt.timers.admitTimer.Stop()
+		rt.timers.admitTimer = nil
+	}
+	rt.timers.admitTimerAt = at
+	if at.IsZero() {
+		return
+	}
+	rt.timers.admitTimer = rt.deps.clock.AfterFunc(at.Sub(rt.deps.now()), func() {
+		select {
+		case rt.timers.admitCh <- struct{}{}:
+		default:
+		}
+	})
+}
+
+func (rt *watchRuntime) stopAdmitTimer() {
+	rt.armAdmitTimer(time.Time{})
+}
+
+func (rt *watchRuntime) hasAdmitTimer() bool {
+	rt.timers.timerMu.RLock()
+	defer rt.timers.timerMu.RUnlock()
+
+	return rt.timers.admitTimer != nil
+}
+
+// admitTimerChan is the loop's wake-up for a parked outbox entry that has
+// become due; the step that follows re-evaluates dispatch.
+func (rt *watchRuntime) admitTimerChan() <-chan struct{} {
+	return rt.timers.admitCh
 }
 
 func (rt *watchRuntime) resetRefreshTimer(next syncTimer) {

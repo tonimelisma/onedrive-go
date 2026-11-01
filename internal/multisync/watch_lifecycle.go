@@ -28,6 +28,10 @@ type WatchLifecycleEvent struct {
 	// Skipped are the selected drives that could not start, after Ready or
 	// a successful Reloaded.
 	Skipped []MountStartupResult
+	// Paused are the selected drives that are paused, after Ready or a
+	// successful Reloaded. A watch whose drives are all paused is Ready
+	// with no SyncRoots and every drive here.
+	Paused []MountStartupResult
 	// Err is set on a Reloaded that kept the previous settings; SyncRoots
 	// and Skipped are then empty because nothing changed.
 	Err error
@@ -53,7 +57,9 @@ func (o *Orchestrator) emitWatchLifecycle(
 			}
 		}
 		sort.Strings(event.SyncRoots)
-		event.Skipped = summarizeStartupResults(startResults).SkippedResults()
+		summary := summarizeStartupResults(startResults)
+		event.Skipped = summary.SkippedResults()
+		event.Paused = summary.PausedResults()
 	}
 
 	o.cfg.WatchLifecycle(event)

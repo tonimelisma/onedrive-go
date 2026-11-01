@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 )
 
 // Re-admission after a timed block scope ramps instead of flooding
@@ -22,6 +23,14 @@ const (
 	// releaseRampMaxBatch caps the doubling. In practice a batch this size
 	// is the whole backlog; the cap only keeps the arithmetic bounded.
 	releaseRampMaxBatch = 1 << 16
+
+	// releaseBatchAdmissionWindow is how far a released batch's members are
+	// spread: each is admitted at a uniformly random instant within this
+	// window of the release, through the engine clock, so a batch of 32
+	// does not reach the drive as one spike (R-6.8.24; Google SRE's
+	// randomized retries, Brooker's jitter). The server-given Retry-After
+	// gets no jitter: the trial that honors it is one request.
+	releaseBatchAdmissionWindow = time.Second
 )
 
 // nextReleaseAllowance is the ramp policy: the size of the next batch a scope
@@ -219,6 +228,7 @@ func (flow *engineFlow) releaseScopeBatch(
 		ta.IsTrial = true
 		ta.TrialScopeKey = key
 		ta.TrialScopeGeneration = scope.Generation
+		ta.AdmitAt = now.Add(flow.deps.clock.Jitter(releaseBatchAdmissionWindow))
 		batch = append(batch, ta)
 	}
 

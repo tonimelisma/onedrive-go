@@ -241,6 +241,7 @@ func (rt *watchRuntime) initWatchInfra(
 
 		rt.stopRetryTimer()
 		rt.stopTrialTimer()
+		rt.stopAdmitTimer()
 		pool.Stop() // closes completions channel after workers exit
 		rt.resources.observerErrs = nil
 		rt.resources.localBatches = nil

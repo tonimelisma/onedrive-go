@@ -1,6 +1,9 @@
 package sync
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // runResultsLoopWithInitialOutbox drives one pass's workers from the
 // runner-owned outbox until the runtime settles. The outbox is a field, not a
@@ -146,10 +149,39 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 	default:
 	}
 
+	now := r.deps.now()
+	next, admitAt := r.nextDispatchable(r.outbox, now)
+	var (
+		dispatchCh chan<- *trackedAction
+		nextAction *trackedAction
+		admitDue   <-chan struct{}
+	)
+	switch {
+	case next >= 0:
+		dispatchCh, nextAction = r.sched.dispatchCh, r.outbox[next]
+	case !admitAt.IsZero():
+		// Members of a released ramp batch wait for their admission instant
+		// inside the loop (R-6.8.24): a one-shot pass has no runtime
+		// signals, and ending the pass with them parked would leave them
+		// for the next sync. The wait is bounded by
+		// releaseBatchAdmissionWindow, and a completion still interrupts it.
+		due := make(chan struct{})
+		timer := r.deps.clock.AfterFunc(admitAt.Sub(now), func() { close(due) })
+		defer timer.Stop()
+		admitDue = due
+	case r.sched.runningCount == 0:
+		// Every queued action is held back by the slow start, yet nothing
+		// is in flight to finish and make room: the in-flight accounting is
+		// broken. Said loudly rather than waited on forever.
+		return fmt.Errorf("sync: dispatch stalled: %d queued actions, none admissible, nothing in flight",
+			len(r.outbox)), false
+	}
+
 	select {
-	case r.sched.dispatchCh <- r.outbox[0]:
-		r.sched.markRunning(r.outbox[0])
-		r.outbox = r.outbox[1:]
+	case dispatchCh <- nextAction:
+		r.outbox = r.markDispatched(r.outbox, next)
+		return fatalErr, false
+	case <-admitDue:
 		return fatalErr, false
 	case completion, ok := <-completions:
 		if !ok {
