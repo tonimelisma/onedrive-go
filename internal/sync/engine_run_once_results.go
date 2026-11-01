@@ -2,6 +2,11 @@ package sync
 
 import "context"
 
+// runResultsLoopWithInitialOutbox drives one pass's workers from the
+// runner-owned outbox until the runtime settles. The outbox is a field, not a
+// value threaded through the loop, because a completion applied inside the
+// loop can take admitted work back out of it: a scope that activates retires
+// what it blocks before a worker reaches it (R-6.8.24).
 func (r *oneShotRunner) runResultsLoopWithInitialOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -9,27 +14,25 @@ func (r *oneShotRunner) runResultsLoopWithInitialOutbox(
 	completions <-chan actionCompletion,
 	initialOutbox []*trackedAction,
 ) error {
-	outbox := append([]*trackedAction(nil), initialOutbox...)
+	r.outbox = append([]*trackedAction(nil), initialOutbox...)
 	var fatalErr error
 
 	for {
-		if fatalErr != nil && len(outbox) > 0 {
-			r.completeOutboxAsShutdown(outbox)
-			outbox = nil
+		if fatalErr != nil && len(r.outbox) > 0 {
+			r.completeOutboxAsShutdown(r.outbox)
+			r.outbox = nil
 			continue
 		}
-		if nextOutbox, nextFatal, handled := r.pollImmediateCompletion(ctx, cancel, bl, completions, outbox, fatalErr); handled {
-			outbox = nextOutbox
+		if nextFatal, handled := r.pollImmediateCompletion(ctx, cancel, bl, completions, fatalErr); handled {
 			fatalErr = nextFatal
 			continue
 		}
-		if done, err := r.finishResultsLoopIfSettled(outbox, fatalErr); done {
+		if done, err := r.finishResultsLoopIfSettled(fatalErr); done {
 			return err
 		}
 
-		if len(outbox) == 0 {
-			nextOutbox, nextFatal, done := r.runResultsLoopIdle(ctx, cancel, bl, completions, fatalErr)
-			outbox = nextOutbox
+		if len(r.outbox) == 0 {
+			nextFatal, done := r.runResultsLoopIdle(ctx, cancel, bl, completions, fatalErr)
 			fatalErr = nextFatal
 			if done {
 				return fatalErr
@@ -37,8 +40,7 @@ func (r *oneShotRunner) runResultsLoopWithInitialOutbox(
 			continue
 		}
 
-		nextOutbox, nextFatal, done := r.runResultsLoopWithOutbox(ctx, cancel, bl, completions, outbox, fatalErr)
-		outbox = nextOutbox
+		nextFatal, done := r.runResultsLoopWithOutbox(ctx, cancel, bl, completions, fatalErr)
 		fatalErr = nextFatal
 		if done {
 			return fatalErr
@@ -51,30 +53,28 @@ func (r *oneShotRunner) pollImmediateCompletion(
 	cancel context.CancelFunc,
 	bl *Baseline,
 	completions <-chan actionCompletion,
-	outbox []*trackedAction,
 	fatalErr error,
-) ([]*trackedAction, error, bool) {
-	if len(outbox) != 0 || r.sched.runningCount != 0 {
-		return nil, fatalErr, false
+) (error, bool) {
+	if len(r.outbox) != 0 || r.sched.runningCount != 0 {
+		return fatalErr, false
 	}
 
 	select {
 	case completion, ok := <-completions:
 		if !ok {
-			return nil, fatalErr, false
+			return fatalErr, false
 		}
-		nextOutbox, nextFatal := r.handleOneShotCompletion(ctx, cancel, bl, nil, fatalErr, &completion)
-		return nextOutbox, nextFatal, true
+		return r.handleOneShotCompletion(ctx, cancel, bl, fatalErr, &completion), true
 	default:
-		return nil, fatalErr, false
+		return fatalErr, false
 	}
 }
 
-func (r *oneShotRunner) finishResultsLoopIfSettled(outbox []*trackedAction, fatalErr error) (bool, error) {
+func (r *oneShotRunner) finishResultsLoopIfSettled(fatalErr error) (bool, error) {
 	switch {
-	case fatalErr == nil && len(outbox) == 0 && r.sched.runningCount == 0 && !r.hasDueHeldWork(r.deps.now()):
+	case fatalErr == nil && len(r.outbox) == 0 && r.sched.runningCount == 0 && !r.hasDueHeldWork(r.deps.now()):
 		return true, nil
-	case fatalErr != nil && len(outbox) == 0 && r.sched.runningCount == 0:
+	case fatalErr != nil && len(r.outbox) == 0 && r.sched.runningCount == 0:
 		return true, fatalErr
 	default:
 		return false, nil
@@ -87,38 +87,42 @@ func (r *oneShotRunner) runResultsLoopIdle(
 	bl *Baseline,
 	completions <-chan actionCompletion,
 	fatalErr error,
-) ([]*trackedAction, error, bool) {
-	if nextOutbox, nextFatal, handled := r.releaseIdleDueHeldWork(ctx, bl); handled {
-		return nextOutbox, nextFatal, false
+) (error, bool) {
+	if nextFatal, handled := r.releaseIdleDueHeldWork(ctx, bl); handled {
+		return nextFatal, false
 	}
 
 	select {
 	case completion, ok := <-completions:
 		if !ok {
-			return nil, fatalErr, true
+			return fatalErr, true
 		}
-		nextOutbox, nextFatal := r.handleOneShotCompletion(ctx, cancel, bl, nil, fatalErr, &completion)
-		return nextOutbox, nextFatal, false
+		return r.handleOneShotCompletion(ctx, cancel, bl, fatalErr, &completion), false
 	case <-resultsLoopCtxDone(ctx, fatalErr):
-		return nil, fatalErr, r.sched.runningCount == 0
+		return fatalErr, r.sched.runningCount == 0
 	}
 }
 
+// releaseIdleDueHeldWork moves due held work into the outbox while the
+// runtime is otherwise idle. It reports whether it did anything; on a
+// reduction failure the released work has already been completed as shutdown
+// and the error is returned.
 func (r *oneShotRunner) releaseIdleDueHeldWork(
 	ctx context.Context,
 	bl *Baseline,
-) ([]*trackedAction, error, bool) {
+) (error, bool) {
 	if r.sched.runningCount != 0 || !r.hasDueHeldWork(r.deps.now()) {
-		return nil, nil, false
+		return nil, false
 	}
 
-	outbox, err := r.reduceReadyFrontierStage(ctx, bl, nil)
+	released, err := r.reduceReadyFrontierStage(ctx, bl, nil)
 	if err != nil {
-		r.completeOutboxAsShutdown(outbox)
-		return nil, err, true
+		r.completeOutboxAsShutdown(released)
+		return err, true
 	}
+	r.outbox = append(r.outbox, released...)
 
-	return outbox, err, true
+	return nil, true
 }
 
 func (r *oneShotRunner) runResultsLoopWithOutbox(
@@ -126,57 +130,71 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 	cancel context.CancelFunc,
 	bl *Baseline,
 	completions <-chan actionCompletion,
-	outbox []*trackedAction,
 	fatalErr error,
-) ([]*trackedAction, error, bool) {
+) (error, bool) {
+	// A finished outcome may change what the next dispatch is allowed to be
+	// (a 429 activates a scope that takes the outbox back, R-6.8.24), so
+	// outcomes already in hand are applied before more work reaches the
+	// workers; otherwise an episode's 429s scale with the select's luck
+	// rather than with the transfers in flight.
 	select {
-	case r.sched.dispatchCh <- outbox[0]:
-		r.sched.markRunning(outbox[0])
-		return outbox[1:], fatalErr, false
 	case completion, ok := <-completions:
 		if !ok {
-			return outbox, fatalErr, true
+			return fatalErr, true
 		}
-		nextOutbox, nextFatal := r.handleOneShotCompletion(ctx, cancel, bl, outbox, fatalErr, &completion)
-		return nextOutbox, nextFatal, false
+		return r.handleOneShotCompletion(ctx, cancel, bl, fatalErr, &completion), false
+	default:
+	}
+
+	select {
+	case r.sched.dispatchCh <- r.outbox[0]:
+		r.sched.markRunning(r.outbox[0])
+		r.outbox = r.outbox[1:]
+		return fatalErr, false
+	case completion, ok := <-completions:
+		if !ok {
+			return fatalErr, true
+		}
+		return r.handleOneShotCompletion(ctx, cancel, bl, fatalErr, &completion), false
 	case <-resultsLoopCtxDone(ctx, fatalErr):
-		return outbox, fatalErr, false
+		return fatalErr, false
 	}
 }
 
+// handleOneShotCompletion applies one completion to the runtime and appends
+// the work it admitted to the outbox. It returns the pass's fatal error: the
+// one it was given, or the one this completion produced, after which the
+// outbox is completed as shutdown.
 func (r *oneShotRunner) handleOneShotCompletion(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	outbox []*trackedAction,
 	fatalErr error,
 	completion *actionCompletion,
-) ([]*trackedAction, error) {
+) error {
 	if fatalErr != nil || ctx.Err() != nil {
 		if err := r.processShutdownCompletion(ctx, completion, bl); err != nil {
 			r.logSuppressedShutdownCompletionError(completion, err)
 		}
-		return outbox, fatalErr
+		return fatalErr
 	}
 
 	ready, completionErr := r.applyRuntimeCompletionStage(ctx, completion, bl)
+	r.outbox = append(r.outbox, ready...)
 	if completionErr == nil {
-		return append(outbox, ready...), nil
-	} else {
-		outbox = append(outbox, ready...)
-		fatalErr = completionErr
+		return nil
 	}
 
 	if cancel != nil {
 		cancel()
 	}
-	if len(outbox) > 0 {
-		r.completeOutboxAsShutdown(outbox)
-		outbox = nil
+	if len(r.outbox) > 0 {
+		r.completeOutboxAsShutdown(r.outbox)
+		r.outbox = nil
 	}
 	r.completeQueuedDispatchAsShutdown()
 
-	return outbox, fatalErr
+	return completionErr
 }
 
 func (r *oneShotRunner) completeQueuedDispatchAsShutdown() {

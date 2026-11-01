@@ -2,7 +2,6 @@ package sync
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,32 +60,6 @@ func TestWatchRuntime_IsItsOwnSignalSinkAndInspector(t *testing.T) {
 
 	require.Same(t, rt, rt.signals, "watch supplies its own runtime signals")
 	require.Same(t, rt, rt.inspect, "watch supplies its own inspector")
-}
-
-// Scope release must report through the signal seam rather than reaching for a
-// concrete watch runtime, so one-shot and watch travel the same code path.
-//
-// Validates: R-2.8.5
-func TestEngineFlow_ReleaseScope_ReportsThroughRuntimeSignals(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	flow := testEngineFlow(t, eng)
-
-	rec := &recordingSignals{}
-	flow.signals = rec
-
-	key := SKDiskLocal()
-	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:           key,
-		TrialInterval: time.Minute,
-		NextTrialAt:   eng.nowFunc().Add(time.Minute),
-	}))
-	require.NoError(t, flow.releaseScope(t.Context(), key))
-
-	assert.Equal(t, 1, rec.kick, "release must ask the runtime to release due held work")
-	assert.Equal(t, 1, rec.trial, "release must ask the runtime to rearm the trial timer")
-	assert.False(t, flow.scopes.hasActiveScope(key))
 }
 
 // markReplanNeeded must tolerate a watch runtime whose dirty buffer has not

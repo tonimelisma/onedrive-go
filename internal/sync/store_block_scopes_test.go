@@ -219,6 +219,7 @@ func TestSyncStore_BlockScope_Roundtrip(t *testing.T) {
 		2*time.Minute+500*time.Millisecond,
 		time.Date(2025, 3, 14, 9, 28, 53, 987654321, time.UTC),
 	)
+	original.SlowStartThreshold = 16
 
 	require.NoError(t, store.UpsertBlockScope(ctx, original))
 
@@ -228,4 +229,5 @@ func TestSyncStore_BlockScope_Roundtrip(t *testing.T) {
 	assert.Equal(t, original.Key, got[0].Key)
 	assert.Equal(t, original.TrialInterval, got[0].TrialInterval)
 	assert.Equal(t, original.NextTrialAt, got[0].NextTrialAt)
+	assert.Equal(t, 16, got[0].SlowStartThreshold, "the release ramp's memory survives a restart (R-6.8.24)")
 }

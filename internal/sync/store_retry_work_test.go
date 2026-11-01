@@ -114,15 +114,23 @@ func TestRetryWorkScopeReadyAndDeleteHelpers(t *testing.T) {
 		Path:       "delete-me.txt",
 		ActionType: ActionUpload,
 	}))
-	require.NoError(t, markRetryWorkScopeReadyTx(ctx, store.db, SKService().String(), now))
+	require.NoError(t, markRetryWorkReadyTx(ctx, store.db, SKService().String(), []RetryWorkKey{
+		{Path: "blocked-a.txt", ActionType: ActionRemoteDelete},
+		{Path: "not-blocked.txt", ActionType: ActionUpload},
+	}, now))
 
 	rows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	for _, row := range rows {
 		assert.Equal(t, SKService(), row.ScopeKey)
-		assert.False(t, row.Blocked)
-		assert.Equal(t, now, row.NextRetryAt)
+		if row.Path == "blocked-a.txt" {
+			assert.False(t, row.Blocked, "a named row under the scope becomes ready")
+			assert.Equal(t, now, row.NextRetryAt)
+			continue
+		}
+		assert.True(t, row.Blocked, "a row not named stays blocked")
+		assert.Zero(t, row.NextRetryAt)
 	}
 
 	require.NoError(t, deleteRetryWorkByScopeTx(ctx, store.db, SKService().String()))

@@ -152,14 +152,22 @@ through trial actions:
 - the engine-owned held trial release picks one deterministic held blocked
   candidate for each due scope and dispatches it as a trial without rebuilding
   plan structure
-- success releases the scope
-- matching-scope persistence evidence extends the scope
+- success releases a bounded batch of the scope's held work, not the whole
+  backlog: the first batch is the transfer worker count (at least 4), each
+  batch that completes without a further 429 doubles the next up to the
+  scope's slow-start threshold (half the batch that last drew a 429) and
+  grows by one from there, and the batch's members run as trials of the
+  scope so their outcomes drive the ramp (R-6.8.24, sync-engine.md "Release
+  ramps")
+- matching-scope persistence evidence extends the scope, resets the ramp,
+  and takes back the admitted work the scope blocks before a worker reaches it
 - inconclusive outcomes re-arm the current interval without inventing a new
   blocker row, but only while blocked `retry_work` still exists for the scope
-- scope release makes blocked retry rows ready in store and immediately flips
-  the corresponding held runtime entries into due exact retry work
+- a batch release makes exactly those blocked retry rows ready in store and
+  admits the matching held runtime entries in one step
 - once a scope has no blocked `retry_work`, the engine discards the empty
-  `block_scopes` row immediately instead of preserving timing with no work
+  `block_scopes` row immediately instead of preserving timing with no work;
+  the release of the last blocked rows deletes the row in the same transaction
 
 Blocked retry rows use one engine-owned durable shape no matter which runtime
 path persisted them: `blocked=true`, the exact `scope_key`, and the retry/trial

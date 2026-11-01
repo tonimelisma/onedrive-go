@@ -43,7 +43,10 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 		dispatched []*trackedAction
 		err        error
 	)
-	if r.IsTrial && !r.TrialScopeKey.IsZero() {
+	// A trial whose scope is gone (the ramp's last batch released it while
+	// this member ran) is an ordinary action again: a success is just a
+	// success, and a 429 starts a new episode through scope detection.
+	if r.IsTrial && !r.TrialScopeKey.IsZero() && flow.scopes.hasActiveScope(r.TrialScopeKey) {
 		dispatched, err = flow.applyTrialCompletionDecision(ctx, r.TrialScopeKey, &decision, current, r, bl)
 	} else {
 		dispatched, err = flow.applyNormalCompletionDecision(ctx, &decision, current, r, bl)
@@ -110,6 +113,7 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 	bl *Baseline,
 ) ([]*trackedAction, error) {
 	if decision.Class == errclass.ClassSuperseded {
+		flow.noteProbationMemberFinished(trialScopeKey, r.TrialScopeGeneration)
 		if err := flow.applySupersededCompletion(ctx, current, r, "trial superseded action completion"); err != nil {
 			return nil, flow.failAfterControlStateError(current, err)
 		}
@@ -119,11 +123,16 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 		return nil, nil
 	}
 
-	switch evaluateScopeTrialOutcome(trialScopeKey, decision) {
+	outcome := evaluateScopeTrialOutcome(trialScopeKey, decision)
+	if outcome == scopeTrialOutcomeRearmOrDiscard {
+		flow.noteProbationMemberFinished(trialScopeKey, r.TrialScopeGeneration)
+	}
+
+	switch outcome {
 	case scopeTrialOutcomeRelease:
 		dispatched, err := flow.applyTrialReleaseDecision(ctx, current, r, trialScopeKey)
 		if err != nil {
-			return nil, flow.failAfterControlStateError(current, err)
+			return dispatched, flow.failAfterControlStateError(current, err)
 		}
 		return dispatched, nil
 	case scopeTrialOutcomeShutdown:
