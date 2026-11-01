@@ -307,6 +307,11 @@ func (e *executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFun
 		}
 		return fmt.Errorf("moving to the trash: %w", err)
 	}
+	// The file is in the trash under a pending entry: a crash here must
+	// leave it listed and restorable (crash_points.go).
+	if err := e.reachCrashPoint(crashPointLocalDeleteTrashed); err != nil {
+		return err
+	}
 	e.commitTrashPlacement(rel, placement)
 
 	return nil
@@ -377,6 +382,10 @@ func (e *executor) ExecuteRemoteDelete(ctx context.Context, action *Action) acti
 			action.Path,
 			inferFailureCapabilityFromError(err, permissionCapabilityUnknown, permissionCapabilityRemoteWrite),
 		)
+	}
+
+	if crashErr := e.reachCrashPoint(crashPointRemoteDeleteDone); crashErr != nil {
+		return e.failedOutcomeWithFailure(action, ActionRemoteDelete, crashErr, action.Path, permissionCapabilityUnknown)
 	}
 
 	e.logger.Debug("deleted remote item", slog.String("path", action.Path), slog.String("item_id", action.ItemID))
