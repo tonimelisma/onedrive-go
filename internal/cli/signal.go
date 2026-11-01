@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 )
 
@@ -15,14 +16,27 @@ import (
 // through their own cleanup. The second signal remains the escape hatch for a
 // stuck process.
 //
-// The returned cancel must be called when the caller is done. It stops the
-// signal goroutine and unregisters the handler, which matters because this is
-// installed once per command invocation rather than once per process.
+// The returned stop function must be called when the caller is done. It
+// cancels the context, stops the signal goroutine and unregisters the handler,
+// which matters because this is installed once per command invocation rather
+// than once per process (R-6.3.6).
 func shutdownContext(parent context.Context, logger *slog.Logger) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// released is what lets the goroutine go after a first signal. By then
+	// ctx is already canceled, so it says nothing about the command
+	// finishing, and parent is context.Background() at the real entry point,
+	// so it never fires. Only the caller's stop call ends the wait for a
+	// second signal.
+	released := make(chan struct{})
+	var releaseOnce sync.Once
+	stop := func() {
+		releaseOnce.Do(func() { close(released) })
+		cancel()
+	}
 
 	go func() {
 		defer signal.Stop(sigCh)
@@ -40,10 +54,10 @@ func shutdownContext(parent context.Context, logger *slog.Logger) (context.Conte
 		case <-sigCh:
 			logger.Warn("Forcing exit")
 			os.Exit(1)
-		case <-parent.Done():
+		case <-released:
 			return
 		}
 	}()
 
-	return ctx, cancel
+	return ctx, stop
 }

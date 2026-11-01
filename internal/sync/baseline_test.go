@@ -1877,3 +1877,34 @@ func TestSyncStore_CheckpointReportsFailure(t *testing.T) {
 	require.Error(t, err, "checkpointing a closed store must not report success")
 	assert.Contains(t, err.Error(), "checkpoint sync store WAL")
 }
+
+// Validates: R-6.3.4
+func TestBaseline_GetCaseVariantsCopyIsSafeAgainstConcurrentPut(t *testing.T) {
+	t.Parallel()
+
+	baseline := emptyBaseline()
+	baseline.Put(&BaselineEntry{Path: "Docs/Report.txt", ItemID: "id-upper", ItemType: ItemTypeFile})
+
+	// A watch observer reads the variants on its own goroutine while a worker
+	// commits an outcome that replaces the same index element in place. The
+	// race detector fails this test when the index slice itself is returned.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 200 {
+			baseline.Put(&BaselineEntry{Path: "Docs/Report.txt", ItemID: fmt.Sprintf("id-%d", i), ItemType: ItemTypeFile})
+		}
+	}()
+
+	for range 200 {
+		for _, v := range baseline.GetCaseVariants("Docs", "report.txt") {
+			assert.Equal(t, "Docs/Report.txt", v.Path)
+		}
+	}
+	<-done
+
+	variants := baseline.GetCaseVariants("Docs", "report.txt")
+	require.Len(t, variants, 1)
+	assert.Equal(t, "id-199", variants[0].ItemID)
+	assert.Nil(t, baseline.GetCaseVariants("Docs", "missing.txt"))
+}

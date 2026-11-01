@@ -378,9 +378,9 @@ func TestFullScan_SubsecondMtimeDifferenceForcesRehash(t *testing.T) {
 
 	var hashCalls atomic.Int32
 	obs := newLocalObserver(baselineWith(entry), synctest.TestLogger(t), 0)
-	obs.hashFunc = func(path string) (string, error) {
+	obs.hashFunc = func(ctx context.Context, path string) (string, error) {
 		hashCalls.Add(1)
-		return driveops.ComputeQuickXorHash(path)
+		return driveops.ComputeQuickXorHashContext(ctx, path)
 	}
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
@@ -476,7 +476,7 @@ func TestFullScan_UnchangedFileWithMatchingIdentityAndCtimeSkipsHash(t *testing.
 	// ctime cannot be set into the past, so the scan clock moves past the
 	// racily-clean window instead.
 	obs.clock = newManualClock(time.Now().Add(2 * time.Second))
-	obs.hashFunc = func(string) (string, error) {
+	obs.hashFunc = func(context.Context, string) (string, error) {
 		return "", errors.New("hash function must not run for an untouched file")
 	}
 
@@ -1889,7 +1889,7 @@ func TestHashPhase_PanicRecovery(t *testing.T) {
 
 			obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 1)
 			// Inject a hash function that panics for the target path.
-			obs.hashFunc = func(path string) (string, error) {
+			obs.hashFunc = func(_ context.Context, path string) (string, error) {
 				if filepath.Base(path) == tt.panicPath {
 					panic("simulated hash panic for " + tt.panicPath)
 				}
@@ -1934,7 +1934,7 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 	writeTestFile(t, dir, badFileName, "bad content")
 
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.hashFunc = func(path string) (string, error) {
+	obs.hashFunc = func(_ context.Context, path string) (string, error) {
 		if filepath.Base(path) == badFileName {
 			panic("corrupted file")
 		}

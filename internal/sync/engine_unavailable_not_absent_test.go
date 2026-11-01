@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -156,7 +157,7 @@ func TestFullScan_HashEIOProducesNoUploadAndNoDelete(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, "a.txt", "content")
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.hashFunc = func(string) (string, error) {
+	obs.hashFunc = func(context.Context, string) (string, error) {
 		return "", &fs.PathError{Op: "read", Path: "a.txt", Err: syscall.EIO}
 	}
 

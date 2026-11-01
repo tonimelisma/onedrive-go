@@ -255,7 +255,7 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 
 	hashFn := o.hashFunc
 	if hashFn == nil {
-		hashFn = driveops.ComputeQuickXorHash
+		hashFn = driveops.ComputeQuickXorHashContext
 	}
 
 	// mu guards the three result slices below. The walk fans out to workers
@@ -295,7 +295,7 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 				return gCtx.Err()
 			}
 
-			hash, err := hashFn(job.fsPath)
+			hash, err := hashFn(gCtx, job.fsPath)
 			if err != nil {
 				// Debug: this repeats on every safety scan for a file that
 				// stats but cannot be opened. An unreadable file is recorded
@@ -1173,17 +1173,21 @@ func observedKindFromItemType(itemType ItemType) observedKind {
 // post-stat detects changes that occurred during hashing. The caller's earlier
 // stat cannot substitute because time may pass between the caller's stat and
 // the hash operation.
-func computeStableHashWith(fsPath string, hashFunc func(string) (string, error)) (string, error) {
+func computeStableHashWith(
+	ctx context.Context,
+	fsPath string,
+	hashFunc func(ctx context.Context, path string) (string, error),
+) (string, error) {
 	pre, err := trustedStat(fsPath)
 	if err != nil {
 		return "", fmt.Errorf("stat before hashing: %w", err)
 	}
 
 	if hashFunc == nil {
-		hashFunc = driveops.ComputeQuickXorHash
+		hashFunc = driveops.ComputeQuickXorHashContext
 	}
 
-	hash, err := hashFunc(fsPath)
+	hash, err := hashFunc(ctx, fsPath)
 	if err != nil {
 		return "", fmt.Errorf("compute quickxor hash: %w", err)
 	}

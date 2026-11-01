@@ -1,7 +1,9 @@
 package driveops
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 
@@ -9,6 +11,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
+
+// hashReadChunkSize is how much a hash reads between two cancellation checks.
+// One check per MiB costs nothing next to the read itself, and a canceled hash
+// of a multi-gigabyte file stops within one chunk instead of at the end of the
+// file (R-6.3.6).
+const hashReadChunkSize = 1 << 20
 
 // HasHash reports whether the item has a content hash the client can compare.
 // Items without one (some SharePoint files, SHA-only items) cannot be
@@ -30,16 +38,20 @@ func SelectHash(item *graph.Item) string {
 	return item.QuickXorHash
 }
 
-// ComputeQuickXorHash computes the QuickXorHash of a file and returns the
-// base64-encoded digest. Uses streaming I/O (constant memory).
-func ComputeQuickXorHash(fsPath string) (string, error) {
+// ComputeQuickXorHashContext computes the QuickXorHash of a file and returns
+// the base64-encoded digest. It streams in constant memory and returns
+// ctx.Err() once ctx is canceled, checked between chunks, so a shutdown or a
+// canceled upload does not wait for a whole-file read to finish. Every caller
+// that hashes on a worker, on the watch event loop or in a scan uses this
+// form.
+func ComputeQuickXorHashContext(ctx context.Context, fsPath string) (string, error) {
 	f, err := localpath.OpenRegular(fsPath)
 	if err != nil {
 		return "", fmt.Errorf("opening %s for hashing: %w", fsPath, err)
 	}
 	defer f.Close() //nolint:errcheck // the file is opened read-only for hashing; there is nothing buffered to flush
 
-	hash, err := ComputeQuickXorHashFromReader(f)
+	hash, err := ComputeQuickXorHashFromReaderContext(ctx, f)
 	if err != nil {
 		return "", fmt.Errorf("hashing %s: %w", fsPath, err)
 	}
@@ -47,14 +59,39 @@ func ComputeQuickXorHash(fsPath string) (string, error) {
 	return hash, nil
 }
 
-// ComputeQuickXorHashFromReader hashes everything r yields. Callers that must
-// act on exactly the bytes they verified hash an open descriptor with it
-// instead of re-opening a path.
-func ComputeQuickXorHashFromReader(r io.Reader) (string, error) {
+// ComputeQuickXorHash is ComputeQuickXorHashContext without cancellation. It
+// remains for the callers whose own signatures carry no context: the
+// executor's live precondition checks (internal/sync/executor_preconditions.go)
+// and syncverify's hasher seam. Code that has a context uses the Context form.
+func ComputeQuickXorHash(fsPath string) (string, error) {
+	return ComputeQuickXorHashContext(context.Background(), fsPath)
+}
+
+// ComputeQuickXorHashFromReaderContext hashes everything r yields, checking
+// ctx before each chunk of hashReadChunkSize. Callers that must act on
+// exactly the bytes they verified hash an open descriptor with it instead of
+// re-opening a path.
+func ComputeQuickXorHashFromReaderContext(ctx context.Context, r io.Reader) (string, error) {
 	h := quickxorhash.New()
-	if _, err := io.Copy(h, r); err != nil {
-		return "", fmt.Errorf("reading content to hash: %w", err)
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("reading content to hash: %w", err)
+		}
+		if _, err := io.CopyN(h, r, hashReadChunkSize); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			return "", fmt.Errorf("reading content to hash: %w", err)
+		}
 	}
 
 	return base64.StdEncoding.EncodeToString(h.Sum(nil)), nil
+}
+
+// ComputeQuickXorHashFromReader is ComputeQuickXorHashFromReaderContext
+// without cancellation, for the executor's descriptor-hashing seam, whose
+// destructive-action checks carry no context.
+func ComputeQuickXorHashFromReader(r io.Reader) (string, error) {
+	return ComputeQuickXorHashFromReaderContext(context.Background(), r)
 }

@@ -415,7 +415,7 @@ func (o *localObserver) handleCreate(
 	}
 
 	ev.ItemType = ItemTypeFile
-	ev.Hash = o.watchCreateHash(tree, fsPath, dbRelPath, name, info)
+	ev.Hash = o.watchCreateHash(ctx, tree, fsPath, dbRelPath, name, info)
 
 	o.TrySend(ctx, events, &ev)
 
@@ -489,7 +489,9 @@ func (o *localObserver) handleDirectoryCreate(
 //
 // Every other create is hashed synchronously, as before: an unknown hash
 // there could only make a replan plan an upload or a conflict copy early.
-func (o *localObserver) watchCreateHash(tree *synctree.Root, fsPath, dbRelPath, name string, info os.FileInfo) string {
+func (o *localObserver) watchCreateHash(
+	ctx context.Context, tree *synctree.Root, fsPath, dbRelPath, name string, info os.FileInfo,
+) string {
 	if identity, ok := synctree.IdentityFromFileInfo(info); ok && !hasOtherHardLinks(info) {
 		entry := o.watchIdentityIndex().baselineEntryWithIdentity(o.baseline, identity)
 		// An identity match is only a move when the synced path is gone.
@@ -508,7 +510,7 @@ func (o *localObserver) watchCreateHash(tree *synctree.Root, fsPath, dbRelPath, 
 		}
 	}
 
-	return o.stableHashOrEmpty(fsPath, dbRelPath)
+	return o.stableHashOrEmpty(ctx, fsPath, dbRelPath)
 }
 
 // syncedPathGone reports whether the synced path is confirmed absent now,
@@ -528,8 +530,8 @@ func syncedPathGone(tree *synctree.Root, dbRelPath string) bool {
 // handling in handleCreate and scanNewDirectory. Both callers emit events
 // with empty hashes on failure because Create events and directory scans
 // have no guaranteed follow-up event (B-203).
-func (o *localObserver) stableHashOrEmpty(fsPath, dbRelPath string) string {
-	hash, err := computeStableHashWith(fsPath, o.hashFunc)
+func (o *localObserver) stableHashOrEmpty(ctx context.Context, fsPath, dbRelPath string) string {
+	hash, err := computeStableHashWith(ctx, fsPath, o.hashFunc)
 	if err != nil {
 		if errors.Is(err, errFileChangedDuringHash) {
 			o.logger.Debug("file metadata still settling, emitting with empty hash",
@@ -630,7 +632,7 @@ func (o *localObserver) scanNewDirectoryEntry(
 		Name:     entryName,
 		ItemType: ItemTypeFile,
 		Size:     info.Size(),
-		Hash:     o.watchCreateHash(tree, entryFsPath, entryRelPath, entryName, info),
+		Hash:     o.watchCreateHash(ctx, tree, entryFsPath, entryRelPath, entryName, info),
 		Mtime:    info.ModTime().UnixNano(),
 	}
 	if identity, ok := synctree.IdentityFromFileInfo(info); ok {
@@ -1004,7 +1006,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		return
 	}
 
-	hash, err := computeStableHashWith(req.FsPath, o.hashFunc)
+	hash, err := computeStableHashWith(ctx, req.FsPath, o.hashFunc)
 	if err != nil {
 		if o.retryDeferredHashOnChange(req, err) {
 			return

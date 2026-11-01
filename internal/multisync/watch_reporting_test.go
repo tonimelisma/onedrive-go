@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -490,4 +491,132 @@ func TestWarnOnChange_RepeatsOfTheSameFailureStayBelowWarn(t *testing.T) {
 	orch.clearWarnOnChange("k")
 	orch.warnOnChange("k", "Couldn't update shortcuts", errors.New("other reason"))
 	assert.Len(t, capture.atLeast(slog.LevelWarn), 3, "a failure that cleared and came back is reported again")
+}
+
+// A panic in one mount's watch loop is that mount's failure: it is reported
+// through the runner event path, backed off and restarted like any other
+// runner error, and its siblings never notice. Before the runner goroutine
+// had a recover, the panic unwound the process and every other mount with it.
+//
+// Validates: R-6.7.1
+func TestRunWatch_RunnerPanicFailsOnlyThatMountAndRestartsIt(t *testing.T) {
+	panicky := testStandaloneMount(t, "personal:panicky@example.com", "Panicky")
+	sibling := testStandaloneMount(t, "personal:sibling@example.com", "Sibling")
+	cfgPath := writeTestConfig(t, panicky.CanonicalID, sibling.CanonicalID)
+	capture, logger := newLogCapture()
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, panicky, sibling)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	cfg.Logger = logger
+	orch := NewOrchestrator(cfg)
+	clock := newTestClock()
+	orch.now = clock.now
+	orch.reconcileTicks = func(time.Duration) (<-chan time.Time, func()) { return nil, func() {} }
+
+	fire := make(chan time.Time, 1)
+	armed := make(chan time.Duration, 4)
+	orch.restartTimer = func(delay time.Duration) (<-chan time.Time, func()) {
+		armed <- delay
+		return fire, func() {}
+	}
+
+	engines := newPanicIsolationEngines(sibling.CanonicalID)
+	orch.engineFactory = engines.factory
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	}()
+
+	select {
+	case <-engines.siblingStarted:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "sibling mount did not start")
+	}
+
+	// The panic reaches the loop as a runner failure: a restart is armed with
+	// the first backoff delay, and the drive is reported stopped once.
+	select {
+	case delay := <-armed:
+		assert.Equal(t, runnerRestartBaseDelay, delay)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "the panicking mount's restart was never armed")
+	}
+	require.Len(t, warningsContaining(capture, "Stopped syncing Panicky"), 1)
+
+	errorsLogged := capture.atLeast(slog.LevelError)
+	require.Len(t, errorsLogged, 1, "the panic is logged once, at Error")
+	assert.Equal(t, "Panicky", errorsLogged[0].attrs["drive"])
+	assert.Equal(t, "watch loop exploded", errorsLogged[0].attrs["panic"])
+	assert.Contains(t, errorsLogged[0].attrs["stack"], "goroutine")
+
+	select {
+	case <-engines.siblingStopped:
+		require.FailNow(t, "a panic in one mount must not stop its sibling")
+	case err := <-errCh:
+		require.FailNow(t, "RunWatch must survive a mount panic", "returned %v", err)
+	default:
+	}
+
+	clock.advance(runnerRestartBaseDelay)
+	fire <- clock.now()
+	select {
+	case <-engines.panickyRestarted:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "the panicking mount was not restarted when its backoff fired")
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "RunWatch did not stop in time")
+	}
+	assert.Equal(t, int32(2), engines.panickyStarts.Load())
+}
+
+// panicIsolationEngines builds the two engines of the panic-isolation test:
+// one whose first watch run panics and whose second run blocks, and a sibling
+// that blocks until canceled and reports when it starts and stops.
+type panicIsolationEngines struct {
+	siblingCanonicalID driveid.CanonicalID
+	panickyStarts      atomic.Int32
+	panickyRestarted   chan struct{}
+	siblingStarted     chan struct{}
+	siblingStopped     chan struct{}
+}
+
+func newPanicIsolationEngines(siblingCanonicalID driveid.CanonicalID) *panicIsolationEngines {
+	return &panicIsolationEngines{
+		siblingCanonicalID: siblingCanonicalID,
+		panickyRestarted:   make(chan struct{}),
+		siblingStarted:     make(chan struct{}),
+		siblingStopped:     make(chan struct{}),
+	}
+}
+
+func (e *panicIsolationEngines) factory(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+	if req.Mount.parentCanonicalID() == e.siblingCanonicalID {
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+				close(e.siblingStarted)
+				<-ctx.Done()
+				close(e.siblingStopped)
+				return ctx.Err()
+			},
+		}, nil
+	}
+	start := e.panickyStarts.Add(1)
+	return &mockEngine{
+		runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+			if start == 1 {
+				panic("watch loop exploded")
+			}
+			close(e.panickyRestarted)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}, nil
 }

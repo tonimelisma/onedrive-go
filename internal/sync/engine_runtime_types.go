@@ -1,8 +1,10 @@
 package sync
 
 // engineFlow holds mutable per-run execution state shared by one-shot and
-// watch coordinators. The Engine itself remains an immutable dependency
-// container; run-scoped state lives here instead.
+// watch coordinators. The Engine itself remains a dependency container whose
+// fields are fixed after construction, apart from the few it guards itself
+// (protectedRoots under protectedRootsMu, the atomic counters); run-scoped
+// state lives here instead.
 type engineFlow struct {
 	engine *Engine
 

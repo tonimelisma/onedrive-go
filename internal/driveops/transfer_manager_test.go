@@ -1244,7 +1244,7 @@ func TestTransferManager_Upload_RejectsOversizedFileBeforeHashOrTransfer(t *test
 	}
 
 	tm := newTestTM(&tmSimpleDownloader{}, ul, nil)
-	tm.hashFunc = func(string) (string, error) {
+	tm.hashFunc = func(context.Context, string) (string, error) {
 		hashCalled = true
 		return "unexpected", nil
 	}
@@ -2860,4 +2860,32 @@ func TestUploadFileToItem_PassesTheCallersIfMatchToTheSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{`"live"`}, ul.ifMatches,
 		"an overwrite must be conditional on the eTag the caller's preflight saw")
+}
+
+// Validates: R-6.3.6
+//
+// The pre-upload hash runs on a sync worker with the upload's context. A
+// canceled context stops it before the transfer starts, so a shutdown is
+// not held by a whole-file read.
+func TestTransferManager_UploadFile_CanceledContextStopsAtTheHash(t *testing.T) {
+	t.Parallel()
+
+	localPath := filepath.Join(t.TempDir(), "doc.txt")
+	require.NoError(t, os.WriteFile(localPath, []byte("content"), 0o600))
+
+	uploadCalled := false
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			uploadCalled = true
+			return &graph.Item{ID: "unexpected"}, nil
+		},
+	}
+	tm := newTestTM(&tmSimpleDownloader{}, ul, nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err := tm.UploadFile(ctx, driveid.New("d1"), "parent1", "doc.txt", localPath, UploadOpts{})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, uploadCalled, "a canceled upload must stop at the hash, before any transfer")
 }

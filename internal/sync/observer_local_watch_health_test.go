@@ -291,7 +291,7 @@ func TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree(t *testing.T)
 
 	var hashCalls atomic.Int64
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.hashFunc = func(string) (string, error) {
+	obs.hashFunc = func(context.Context, string) (string, error) {
 		hashCalls.Add(1)
 		return "h", nil
 	}

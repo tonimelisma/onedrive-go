@@ -256,7 +256,7 @@ func (tm *TransferManager) UploadFile(
 	// then re-opened below for the actual upload. This double-open is
 	// intentional: hashing consumes an io.Reader sequentially, while upload
 	// requires io.ReaderAt for random-access (session-based resume).
-	localHash, err := tm.hashFunc(localPath)
+	localHash, err := tm.hashFunc(ctx, localPath)
 	if err != nil {
 		return nil, err
 	}
@@ -347,7 +347,7 @@ func (tm *TransferManager) UploadFileToItem(
 		return nil, fileTooLargeForOneDriveError(localPath, size)
 	}
 
-	localHash, err := tm.hashFunc(localPath)
+	localHash, err := tm.hashFunc(ctx, localPath)
 	if err != nil {
 		return nil, err
 	}

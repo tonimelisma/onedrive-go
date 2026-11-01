@@ -22,7 +22,7 @@ func (flow *engineFlow) postSyncHousekeeping(ctx context.Context) {
 		flow.engine.sessionStore,
 		flow.deps.logger,
 		driveops.TransferArtifactCleanupOptions{
-			SkipDirs:            transferArtifactCleanupSkipDirs(flow.engine.contentFilter, flow.engine.protectedRoots),
+			SkipDirs:            transferArtifactCleanupSkipDirs(flow.engine.contentFilter, flow.engine.currentProtectedRoots()),
 			IncludedDirs:        flow.engine.contentFilter.IncludedDirs,
 			IncludeJunkPartials: flow.engine.contentFilter.IgnoreJunkFiles,
 		},

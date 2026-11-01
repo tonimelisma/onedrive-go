@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"time"
 )
 
@@ -128,9 +129,37 @@ func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl *Basel
 	rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshStarted})
 
 	go func() {
+		defer rt.recoverFullRemoteRefreshPanic(ctx)
+
 		result := rt.performFullRemoteRefresh(ctx, bl)
 		rt.finishFullRemoteRefresh(ctx, &result)
 	}()
+}
+
+// recoverFullRemoteRefreshPanic is the panic boundary of the refresh
+// goroutine. It hands the panic to the loop as a refresh result carrying
+// fatalErr, through the same channel a finished refresh uses, so the loop
+// learns of it in order and fails the mount. The reasoning is the observer
+// panic's (recoverObserverPanic): a panic is a bug, not a transient refresh
+// failure, and the ordinary retry-when-idle path would repeat it at every
+// refresh interval while the mount's status read healthy. Before this defer
+// the panic took the process down with every other mount.
+func (rt *watchRuntime) recoverFullRemoteRefreshPanic(ctx context.Context) {
+	r := recover()
+	if r == nil {
+		return
+	}
+
+	rt.deps.logger.Error("panic in full remote refresh",
+		slog.Any("panic", r),
+		slog.String("stack", string(debug.Stack())),
+	)
+
+	result := remoteObservationBatch{
+		source:   remoteObservationBatchFullRefresh,
+		fatalErr: fmt.Errorf("sync: panic in full remote refresh: %v", r),
+	}
+	rt.finishFullRemoteRefresh(ctx, &result)
 }
 
 func (rt *watchRuntime) performFullRemoteRefresh(
@@ -193,6 +222,11 @@ func (rt *watchRuntime) applyRemoteRefreshResult(
 	ctx context.Context,
 	result *remoteObservationBatch,
 ) error {
+	if result.fatalErr != nil {
+		rt.resources.refreshActive = false
+		return result.fatalErr
+	}
+
 	return rt.handleRemoteObservationBatch(ctx, result)
 }
 

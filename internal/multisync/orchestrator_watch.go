@@ -336,40 +336,39 @@ func (o *Orchestrator) startWatchRunner(
 		defer mountCancel()
 		defer o.removeMountPerfCollector(mount.id().String())
 
+		report, runErr := o.runWatchRunnerEngine(mountCtx, mount, engine, mode, opts)
+
 		if mount.isFinalDrainChild() {
-			report, drainErr := engine.RunOnce(mountCtx, syncengine.SyncBidirectional, syncengine.RunOptions{FullReconcile: true})
 			// The main loop reports a failed drain once; this goroutine only
 			// hands it over. When the orchestrator canceled the drain itself
 			// (reload, parent snapshot change, shutdown), the error is just
 			// that cancellation and nobody needs to hear about it.
-			if drainErr != nil && mountCtx.Err() != nil {
+			if runErr != nil && mountCtx.Err() != nil {
 				o.logger.Debug("final-drain runner stopped",
 					slog.String("mount_id", mount.id().String()),
-					slog.Any("error", drainErr),
+					slog.Any("error", runErr),
 				)
 				return
 			}
 			if runnerEvents != nil {
 				select {
-				case runnerEvents <- watchRunnerEvent{mountID: mount.id(), report: report, err: drainErr}:
+				case runnerEvents <- watchRunnerEvent{mountID: mount.id(), report: report, err: runErr}:
 				case <-ctx.Done():
 				}
 			}
 			return
 		}
 
-		if watchErr := engine.RunWatch(mountCtx, mode, opts); watchErr != nil {
-			if mountCtx.Err() == nil {
-				// Reported once, in user words, by handleWatchRunnerEvent.
-				o.logger.Debug("watch runner exited",
-					slog.String("mount_id", mount.id().String()),
-					slog.Any("error", watchErr),
-				)
-				if runnerEvents != nil {
-					select {
-					case runnerEvents <- watchRunnerEvent{mountID: mount.id(), err: watchErr}:
-					case <-ctx.Done():
-					}
+		if runErr != nil && mountCtx.Err() == nil {
+			// Reported once, in user words, by handleWatchRunnerEvent.
+			o.logger.Debug("watch runner exited",
+				slog.String("mount_id", mount.id().String()),
+				slog.Any("error", runErr),
+			)
+			if runnerEvents != nil {
+				select {
+				case runnerEvents <- watchRunnerEvent{mountID: mount.id(), err: runErr}:
+				case <-ctx.Done():
 				}
 			}
 		}
@@ -381,6 +380,39 @@ func (o *Orchestrator) startWatchRunner(
 	)
 
 	return wr, nil
+}
+
+// runWatchRunnerEngine runs the mount's engine -- the final drain for a
+// removed shortcut child, watch mode for everything else -- and is the panic
+// boundary of the runner goroutine. A panic becomes this mount's error, so
+// handleWatchRunnerEvent restarts the one mount with the usual backoff and
+// its siblings keep running; without the recover it unwound the whole process
+// past every other mount and the drain the design promises.
+func (o *Orchestrator) runWatchRunnerEngine(
+	ctx context.Context,
+	mount *mountSpec,
+	engine engineRunner,
+	mode syncengine.SyncMode,
+	opts syncengine.WatchOptions,
+) (report *syncengine.Report, err error) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		report = nil
+		err = recoveredSyncPanic(o.logger, mount.label(), mount.id().String(), r)
+	}()
+
+	// The engine's errors already name what it was doing; see the
+	// engineRunnerAdapter comment for why this layer adds no prefix.
+	if mount.isFinalDrainChild() {
+		//nolint:wrapcheck // The engine error carries its own context; this layer only reports it.
+		return engine.RunOnce(ctx, syncengine.SyncBidirectional, syncengine.RunOptions{FullReconcile: true})
+	}
+
+	//nolint:wrapcheck // The engine error carries its own context; this layer only reports it.
+	return nil, engine.RunWatch(ctx, mode, opts)
 }
 
 func (o *Orchestrator) registerMountPerfCollector(mountID string) *perf.Collector {

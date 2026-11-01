@@ -231,7 +231,7 @@ func TestFullScan_UnreadableFileIsSkippedItemNotWarning(t *testing.T) {
 
 	logger, logs := newCapturedLogger()
 	obs := newLocalObserver(emptyBaseline(), logger, 0)
-	obs.hashFunc = func(string) (string, error) {
+	obs.hashFunc = func(context.Context, string) (string, error) {
 		return "", fmt.Errorf("open locked.txt: %w", os.ErrPermission)
 	}
 

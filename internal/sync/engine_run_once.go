@@ -440,7 +440,7 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
 		return fullRemoteObservation{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
-	obs.SetShortcutTopology(eng.shortcutNamespaceID, eng.protectedRoots)
+	obs.SetShortcutTopology(eng.shortcutNamespaceID, eng.currentProtectedRoots())
 
 	// Full enumeration: empty token returns ALL items as create/modify
 	// events, plus the raw ID of every live item Graph returned. The seen set

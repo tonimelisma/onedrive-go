@@ -70,6 +70,7 @@ runtime package that implements it.
 | Watch mode announces each drive start failure once and again only when its reason changes or the drive has started in between, including the carried-over CLI config failures; repeats of the same shortcut-refresh or cleanup failure stay at DEBUG. | `TestReconcileWatchRunners_AnnouncesEachStartFailureOnceUntilItChanges`, `TestWarnOnChange_RepeatsOfTheSameFailureStayBelowWarn` |
 | A removed shared folder whose final sync did not finish cleanly keeps its local copy, and multisync says so in one plain Info line naming the folder (not its mount ID), repeated only when the reason changes; unchanged repeats from watch passes go to Debug. The memory is mutex-guarded because one-shot parents finalize their children concurrently. | `TestReportKeptFinalDrains_NoticesOnceUntilReasonChanges` |
 | A watch runner that exits with an error is restarted after exponential backoff from the RunWatch loop's own wake-up timer, warned about once per distinct error with the retry delay, and starts over after a healthy run; stale events from runners the orchestrator already stopped, and canceled final drains, produce no warning. | `TestHandleWatchRunnerEvent_BacksOffAndWarnsOncePerDistinctRunnerFailure`, `TestHandleWatchRunnerEvent_HealthyRunResetsBackoff`, `TestRunWatch_RestartsFailedRunnerWhenBackoffTimerFires`, `TestRunnerRestartDelay_DoublesUpToTheCap`, `TestHandleWatchRunnerEvent_IgnoresEventFromAlreadyStoppedRunner`, `TestStartWatchRunner_CanceledFinalDrainSendsNoEvent`, `TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot` |
+| A panic in one mount's runner goroutine (watch loop or final drain) is recovered, logged once at Error with its stack, and becomes that runner's error, so the mount is backed off and restarted while its siblings keep running; one-shot `MountRunner` panics take the same path. | `TestRunWatch_RunnerPanicFailsOnlyThatMountAndRestartsIt`, `TestMountRunner_Run_PanicIsLoggedAtErrorWithStack`, `TestMountRunner_Run_Panic`, `TestMountRunner_Run_PanicWithError` |
 | A reload the watch owner cannot apply is answered with `reload_failed` instead of `reloaded`, and the running drives keep their previous settings. Another sync owning the socket is one process-level startup failure, not one per drive, and its message names the way out rather than the socket path. | `TestOrchestrator_Reload_InvalidConfig`, `TestRunOnce_ControlSocketInUseIsReportedOnceForAllDrives` |
 | Control-socket reload applies add/remove/pause/expired-pause/filter diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry`, `TestOrchestrator_Reload_ContentFilterChangeRestartsOnlyAffectedMount` |
 | Parent engines own shortcut-root state, alias mutation, protected-root derivation, and durable cleanup retry state before multisync sees child work. | `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_SamePathUpsertDoesNotDowngradeActiveProtectedOwner`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedWithoutError`, `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain` |
@@ -406,6 +407,14 @@ announced). An event from a runner the orchestrator already stopped is
 ignored, and a final drain the orchestrator canceled sends no event, so
 reloads and parent changes never surface "context canceled".
 
+The runner goroutine is a panic boundary. `runWatchRunnerEngine` recovers a
+panic from the engine's `RunWatch` (or a final-drain child's `RunOnce`) and
+converts it into that runner's error through `recoveredSyncPanic`, so it
+travels the same runner-event path as any other exit: the mount is reported
+stopped, backed off and restarted, and its siblings never notice. Without the
+recover a bug reachable from one account's data unwound the whole process
+past every other mount and the drain this design promises.
+
 ### Control Socket
 
 `RunOnce` and `RunWatch` both bind the configured Unix control socket before
@@ -541,13 +550,21 @@ error isolation. One mount panicking must become one isolated mount outcome,
 not
 a process-wide crash or a cross-mount failure cascade.
 
-The report error ("internal error while syncing <drive>: <panic>. This is a
-bug; please report it") is the one user-facing account of the panic. The
-stack is logged at INFO, so the log file and `--verbose` keep it for a bug
-report while default and `--quiet` consoles do not get a multi-kilobyte
-attribute. This deliberately departs from the "log recovered panics at Error"
-convention, which would print the same failure twice and put the stack in
-front of `--quiet` users. Evidence: `TestMountRunner_Run_PanicStackStaysOffDefaultConsole`.
+Both recoveries -- `MountRunner.run` for one-shot and the watch runner
+goroutine's `runWatchRunnerEngine` -- go through `recoveredSyncPanic`, so a
+panic reads the same in either mode. It logs once at Error with the `drive`,
+`panic` and `stack` attributes, as every recovered panic in this codebase is
+logged, and returns the report error ("internal error while syncing <drive>:
+<panic>. This is a bug; please report it") that is the user-facing account:
+the CLI prints it for a one-shot sync, and the watch loop reports it as the
+reason the drive stopped before restarting it. The stack is captured on the
+panicking goroutine because the recovered value names what failed but not
+where. It reaches the log file and the `--verbose` console only: the CLI's
+console handler drops `stack` at default verbosity (`isInternalLogField`), so
+a panic does not put kilobytes in front of a person or a `--quiet` console.
+Evidence: `TestMountRunner_Run_PanicIsLoggedAtErrorWithStack`,
+`TestRunWatch_RunnerPanicFailsOnlyThatMountAndRestartsIt`,
+`TestCommandLogger_PanicStackOnlyInLogFileAndVerboseConsole`.
 
 User-facing labels use the drive or shortcut display name (`mountSpec.label`);
 the mount ID (`<parent canonical ID>|binding:<item ID>` for shortcuts) appears
