@@ -2916,31 +2916,85 @@ func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoMountStarts(t *testing
 	assert.Equal(t, MountStartupIncompatibleStore, startupErr.Summary.Results[0].Status)
 }
 
-func TestOrchestrator_RunWatch_ReturnsErrorWhenAllMountsPaused(t *testing.T) {
+// Validates: R-3.4.2, R-4.4.2
+//
+// `sync --watch` with every drive paused exited with status 1, so a service
+// wrapper restarted it every interval until a resume. It must start, report
+// the paused state as ready, idle, and start the drive when a reload finds
+// it resumed.
+func TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:paused@example.com", "Paused")
 	rd.Paused = true
+	// XDG isolation so the reload's mount compilation finds the catalog
+	// drive identity.
+	setupXDGIsolation(t, rd.CanonicalID)
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	cfg.ControlSocketPath = shortControlSocketPath(t)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	lifecycle := make(chan WatchLifecycleEvent, 16)
+	cfg.WatchLifecycle = func(event WatchLifecycleEvent) { lifecycle <- event }
+	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
 
 	orch := NewOrchestrator(cfg)
+	var started atomic.Int32
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+				started.Add(1)
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}, nil
+	}
 
-	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	require.Error(t, err)
-	var startupErr *WatchStartupError
-	require.ErrorAs(t, err, &startupErr)
-	assert.True(t, startupErr.Summary.AllPaused())
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	}()
+
+	select {
+	case event := <-lifecycle:
+		assert.Equal(t, WatchReady, event.Phase, "an all-paused watch is ready, not failed")
+		assert.Empty(t, event.SyncRoots)
+		assert.Empty(t, event.Skipped)
+		require.Len(t, event.Paused, 1)
+		assert.Equal(t, testStandaloneMountIdentity(rd.CanonicalID), event.Paused[0].Identity)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not report ready")
+	}
+	assert.Zero(t, started.Load(), "a paused drive is not started")
+
+	// A resume reaches the running watch through the ordinary reload.
+	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "false"))
+	postControlReload(t, cfg.ControlSocketPath)
+	require.Eventually(t, func() bool {
+		return started.Load() >= 1
+	}, 5*time.Second, 10*time.Millisecond, "the resumed drive starts syncing")
+
+	cancel()
+	select {
+	case err := <-errCh:
+		require.NoError(t, err, "a watch stopped while idle exits cleanly")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not stop in time")
+	}
 }
 
 // Validates: R-2.9.1
 func TestOrchestrator_RunWatch_ClosesControlSocketWhenStartupValidationFails(t *testing.T) {
-	rd := testStandaloneMount(t, "personal:paused-close@example.com", "PausedClose")
-	rd.Paused = true
+	rd := testStandaloneMount(t, "personal:reset-close@example.com", "ResetClose")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 
 	orch := NewOrchestrator(cfg)
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+		return nil, &syncengine.StateStoreIncompatibleError{Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema}
+	}
 
 	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	require.Error(t, err)

@@ -230,8 +230,7 @@ func TestEngineFlow_ThrottledMemberDuringProbation_ReblocksRetiresTheOutboxAndRe
 
 	// The loop appends the batch to its outbox and a worker takes the head.
 	require.NoError(t, rt.appendReadyFrontier(batch))
-	rt.sched.markRunning(batch[0])
-	rt.consumeOutboxHead()
+	rt.handleWatchDispatch(0)
 	require.Len(t, rt.currentOutbox(), 3)
 
 	throttled := trialSuccessForTest(batch[0])

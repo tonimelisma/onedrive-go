@@ -4,7 +4,7 @@ GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/
 
 LAYER: 4
 
-Implements: R-2.1 [verified], R-2.1.7 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified]
+Implements: R-2.1 [verified], R-2.1.7 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified], R-6.8.24 [verified], R-6.8.25 [verified]
 
 ## Overview
 
@@ -76,6 +76,8 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Dry-run one-shot sync builds a preview without executor, durable cursor commits, durable observation-findings writes, or shortcut child publication, while normal engine startup/store/close housekeeping still runs. | `TestRunOnce_DryRun_NoExecution`, `TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly`, `TestLoadDryRunCurrentInputs_LocalObservationFindingsStayScratchOnly`, `TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 | After a throttle, re-admission ramps from a bounded batch released in held order, a further 429 re-blocks and restarts the ramp, admitted work a scope activation blocks is taken back from the watch and one-shot outboxes, the scope row is deleted with its last blocked rows, and the 429s an episode costs stay bounded by the transfers in flight (R-6.8.24). | `TestRunOnce_ThrottledBacklogRampsInsteadOfFlooding`, `TestNextReleaseAllowance_RampsFromTheWorkerCountAndDoubles`, `TestEngineFlow_TrialSuccess_ReleasesOneBatchAndKeepsTheScopeOnProbation`, `TestEngineFlow_ThrottledMemberDuringProbation_ReblocksRetiresTheOutboxAndResetsTheRamp`, `TestWatchRuntime_ScopeActivationRetiresAdmittedWorkItBlocks`, `TestOneShotRunner_ScopeActivationRetiresPendingOutbox`, `TestSyncStore_ReleaseScopeWork_RemovesTheScopeWithItsLastBlockedRows`, `TestSyncStore_ReleaseScopeWork_EmptyBatchRemovesAScopeWithoutBlockedWork`, `TestSlowStartThresholdAfterThrottle_RemembersHalfTheBatchThatDrewThe429`, `TestSyncStore_BlockScope_Roundtrip`, `TestEngineFlow_ReleaseScopeBatch_ReportsThroughRuntimeSignals` |
+| A released ramp batch's members are admitted at distinct instants spread over a one-second window on the engine clock, the trial at the Retry-After deadline is not jittered, the watch loop wakes for a parked member by its admit timer and a one-shot pass waits for its parked members in-loop and still completes (R-6.8.24). | `TestReleaseJitter_OneShotBatchIsAdmittedOverAWindow`, `TestReleaseJitter_OneShotBatchUnderReverseDispatch`, `TestWatchRuntime_ParkedBatchMembersWaitForTheirAdmitInstant` |
+| A fresh plan opens into its backlog with two of a drive's actions in flight, doubling per round of successful completions up to the worker pool size; a 429 during the slow start hands the drive to the throttle scope, a plan that starts under a persisted scope is the scope's from the start, and the next fresh plan starts over (R-6.8.25). | `TestColdStart_OneShotRampsInFlightFromTwo`, `TestColdStart_OneShotHandsOverToTheThrottleScopeAndResetsPerPlan`, `TestWatchRuntime_DispatchIsGatedByTheColdStartAllowance`, `TestColdStart_AllowanceDoublesPerRoundToThePoolSize`, `TestColdStart_HandOverOpensTheTargetToTheScope` |
 | Superseded action completions retire exact stale work without success, ordinary retry, blocker mutation, or old-plan dependent admission. | `TestClassifyResult_LocalPersistenceAndScopeRouting`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess`, `TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEmptyScope`, `TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOrRetry` |
 | Admission validates ready actions against committed current truth before worker dispatch. Remote mismatches retire old-plan work as superseded, do not persist ordinary retry work, do not release dependents, and dirty watch mode for replacement planning. | `TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependents` |
 | Canceled worker/admission freshness checks fail closed without store reads or side effects, while shutdown completion may bypass canceled-context freshness only to collapse newly-ready graph frontier without dispatch. | `TestActionFreshness_CanceledContextFailsClosedWithoutStoreRead`, `TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReadyAsShutdown` |
@@ -994,6 +996,9 @@ admission after dependency readiness:
 - build the graph from current actions
 - ask the graph for ready work
 - gate that ready work against active scopes
+- pace the dispatch of admitted work: the slow start of a fresh plan and
+  the admission instants of a released ramp batch (see "Cold start and
+  batch jitter" below)
 - dispatch allowed work
 - keep exact failed/blocked roots represented durably in `retry_work`
 
@@ -1206,6 +1211,56 @@ minutes against one announced activation. Two rules fix both halves:
 The announcement rules (R-6.6.30) are unchanged: one Info per throttling
 episode, repeats and batch releases at Debug, "Resumed syncing" once when the
 scope is actually removed.
+
+### Cold start and batch jitter
+
+Two follow-ups measured on the same live account after the ramp landed.
+
+- **A fresh plan slow-starts** (R-6.8.25, `engine_runtime_cold_start.go`).
+  The ramp above paces re-admission once a scope exists; a plan with no
+  scope opened at full `transfer_workers` concurrency, and eight workers of
+  small uploads on a personal drive made 19 requests a second and drew the
+  first 429 within a minute. The scheduler, the single owner of dispatch
+  state, keeps one `coldStartRamp` per throttle target
+  (`Action.ThrottleTargetKey`, the drive Microsoft meters and a throttle
+  scope blocks): an in-flight allowance that starts at
+  `coldStartInitialAllowance` (2) and doubles after each round of that many
+  successful worker-run completions, up to the worker pool size
+  (`workerPoolSize`, the pool's floor included). `markRunning` and
+  `markFinished` keep the per-target in-flight count, so an action whose
+  dependents are waiting counts as one in flight and nothing more, and
+  dependency order is never starved: the dispatch picker takes the first
+  admissible outbox entry, not necessarily the head. A block activation
+  (`applyBlockScope`, `extendScopeTrial`,
+  `transitionTrialScopeToPersistedBlock`) hands the target over
+  (`handOverColdStart`): a throttle scope takes its drive, a service scope
+  every target, and from then on the scope's ramp paces admission and the
+  allowance no longer gates. A plan that starts under a persisted throttle
+  scope (a run inside the `Retry-After`, a restart on probation) is handed
+  over in `initializeRuntimeState`, so the two ramps never stack. The
+  allowance is runtime state of one plan: `initializeRuntimeState` resets it
+  on every one-shot pass, the watch bootstrap and each replan, which is also
+  when a changed worker count takes effect. Publication-only actions never
+  reach a worker and do not count. Both loops and the reverse-dispatch test
+  order go through the same picker.
+- **A released batch is spread over a window** (R-6.8.24). `releaseScopeBatch`
+  gives each member an admission instant, `trackedAction.AdmitAt`, uniformly
+  within `releaseBatchAdmissionWindow` (1 s) of the release through the
+  engine clock's `Jitter`, so a batch of 32 does not reach the drive as one
+  spike and tests stay deterministic on the manual clock. The trial itself,
+  released by `drainDueHeldWorkNow` at the server-given `Retry-After`, has no
+  jitter: it is the one request that deadline allows. The watch loop's
+  picker arms an admit timer for the earliest parked member and wakes on
+  it; a one-shot pass has no runtime signals by design, so its results loop
+  waits in-loop on the same clock, bounded by the window and interrupted by
+  any completion, rather than ending the pass with members parked. A
+  queued action held back with nothing in flight to make room is a broken
+  invariant and ends the pass with an error rather than a hang.
+
+The shared picker is `nextDispatchable`: the first outbox entry, in order,
+that is due and whose target has room; -1 and the earliest admission instant
+when none is. `markDispatched` is the one place an action leaves the outbox
+for a worker, and it emits `action_dispatched` for diagnostics.
 
 A successful completion clears the action's `retry_work` row
 (`clearRetryWorkOnSuccess`). A store failure there is returned like any other

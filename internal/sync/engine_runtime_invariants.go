@@ -121,6 +121,9 @@ func (flow *engineFlow) assertWatchRuntimeInvariants() error {
 		if flow.inspect.hasTrialTimer() {
 			return fmt.Errorf("draining runtime still has trial timer armed")
 		}
+		if flow.inspect.hasAdmitTimer() {
+			return fmt.Errorf("draining runtime still has admit timer armed")
+		}
 	}
 
 	return nil

@@ -50,6 +50,7 @@ type watchInspector interface {
 	isDraining() bool
 	hasRetryTimer() bool
 	hasTrialTimer() bool
+	hasAdmitTimer() bool
 	hasActiveRefresh() bool
 }
 
@@ -61,4 +62,5 @@ func (noWatchInspector) phase() watchRuntimePhase { return watchRuntimePhaseRunn
 func (noWatchInspector) isDraining() bool         { return false }
 func (noWatchInspector) hasRetryTimer() bool      { return false }
 func (noWatchInspector) hasTrialTimer() bool      { return false }
+func (noWatchInspector) hasAdmitTimer() bool      { return false }
 func (noWatchInspector) hasActiveRefresh() bool   { return false }

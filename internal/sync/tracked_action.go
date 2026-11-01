@@ -1,6 +1,9 @@
 package sync
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // trackedAction pairs an Action with an ID and a per-action cancel function.
 // Workers pull TrackedActions from the ready channel. The ID is a sequential
@@ -24,4 +27,11 @@ type trackedAction struct {
 	// released. A success from an earlier generation (the scope re-blocked
 	// while it ran) is an ordinary success and releases nothing.
 	TrialScopeGeneration uint64
+
+	// AdmitAt is the engine-clock instant before which the dispatch loops
+	// keep this admitted action in the outbox: a member of a released ramp
+	// batch is spread over releaseBatchAdmissionWindow rather than sent in
+	// the instant of the release (R-6.8.24). Zero means now. Cleared when
+	// the action is dispatched or held.
+	AdmitAt time.Time
 }

@@ -86,6 +86,14 @@ func (c *throttleWindowClient) throttledError(retryAfter time.Duration) error {
 	}
 }
 
+// setBudget changes the per-window budget from the next window on.
+func (c *throttleWindowClient) setBudget(budget int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.budget = budget
+}
+
 func (c *throttleWindowClient) counts() (requests, throttled, penalized int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

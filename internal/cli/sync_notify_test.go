@@ -214,6 +214,7 @@ func TestSyncNotifierWatchingStatus(t *testing.T) {
 		Err:         fmt.Errorf("token: %w", graph.ErrUnauthorized),
 	}
 	other := multisync.MountStartupResult{DisplayName: "Old", Status: multisync.MountStartupFatal, Err: errors.New("boom")}
+	paused := multisync.MountStartupResult{DisplayName: "Home", Status: multisync.MountStartupPaused}
 
 	tests := []struct {
 		name  string
@@ -247,6 +248,27 @@ func TestSyncNotifierWatchingStatus(t *testing.T) {
 			name:  "nothing running",
 			event: multisync.WatchLifecycleEvent{Skipped: []multisync.MountStartupResult{other, other}},
 			want:  "Watching no drives; 2 drives could not start",
+		},
+		{
+			name:  "every drive paused idles rather than fails",
+			event: multisync.WatchLifecycleEvent{Paused: []multisync.MountStartupResult{paused, paused}},
+			want:  "All drives are paused; run 'onedrive-go resume' to continue",
+		},
+		{
+			name: "a paused drive beside a running one",
+			event: multisync.WatchLifecycleEvent{
+				SyncRoots: []string{"/home/user/OneDrive"},
+				Paused:    []multisync.MountStartupResult{paused},
+			},
+			want: "Watching ~/OneDrive; 1 drive paused",
+		},
+		{
+			name: "paused and failed drives with nothing running",
+			event: multisync.WatchLifecycleEvent{
+				Skipped: []multisync.MountStartupResult{other},
+				Paused:  []multisync.MountStartupResult{paused},
+			},
+			want: "Watching no drives; 1 drive could not start; 1 drive paused",
 		},
 	}
 

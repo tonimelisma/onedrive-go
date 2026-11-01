@@ -184,6 +184,11 @@ func (o *Orchestrator) startWatchRuntime(
 	if err := validateInitialWatchStart(runners, startSummary); err != nil {
 		return nil, control, err
 	}
+	if len(runners) == 0 {
+		o.logger.Info("All selected drives are paused; waiting until one is resumed",
+			slog.Int("paused", startSummary.PausedCount()),
+		)
+	}
 	o.emitStartWarning(startResults, startAnnounceFull)
 	o.emitWatchLifecycle(WatchReady, runners, startResults, nil)
 
@@ -245,11 +250,18 @@ func (o *Orchestrator) startInitialWatchRunners(
 	return runners, startResults
 }
 
+// validateInitialWatchStart decides whether a watch with no running drive
+// starts at all. Every selected drive paused is not a failure: the watch
+// starts, says so, and idles until the config reload (which notices a
+// resume or an expired timed pause) or a stop; a service manager that
+// restarted it on exit would restart it every interval until the resume
+// (R-3.4.2). Drives that failed to start are a startup refusal, so the
+// restart can try them again.
 func validateInitialWatchStart(
 	runners map[mountID]*watchRunner,
 	startSummary StartupSelectionSummary,
 ) error {
-	if len(runners) > 0 {
+	if len(runners) > 0 || startSummary.AllPaused() {
 		return nil
 	}
 

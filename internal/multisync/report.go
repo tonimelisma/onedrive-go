@@ -107,6 +107,19 @@ func (s StartupSelectionSummary) AllPaused() bool {
 	return len(s.Results) > 0 && s.PausedCount() == len(s.Results)
 }
 
+// PausedResults are the selected drives that are paused: not running, not
+// failed, waiting for a resume.
+func (s StartupSelectionSummary) PausedResults() []MountStartupResult {
+	paused := make([]MountStartupResult, 0, len(s.Results))
+	for i := range s.Results {
+		if s.Results[i].Status == MountStartupPaused {
+			paused = append(paused, s.Results[i])
+		}
+	}
+
+	return paused
+}
+
 func (s StartupSelectionSummary) SkippedResults() []MountStartupResult {
 	skipped := make([]MountStartupResult, 0, len(s.Results))
 	for i := range s.Results {
@@ -145,9 +158,6 @@ type WatchStartupError struct {
 func (e *WatchStartupError) Error() string {
 	if e == nil || e.Summary.SelectedCount() == 0 {
 		return "no drives could start syncing; run 'onedrive-go status' for details"
-	}
-	if e.Summary.AllPaused() {
-		return "all selected drives are paused; run 'onedrive-go resume' to unpause"
 	}
 	failures := e.Summary.SkippedResults()
 	if len(failures) == 1 {

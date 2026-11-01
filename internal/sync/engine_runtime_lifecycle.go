@@ -155,6 +155,7 @@ func (flow *engineFlow) extendScopeTrial(
 	if err := flow.activateScope(ctx, &block); err != nil {
 		return fmt.Errorf("extend trial interval for %s: %w", scopeKey.String(), err)
 	}
+	flow.handOverColdStart(scopeKey)
 	if err := flow.retireAdmittedWorkBlockedBy(ctx, scopeKey); err != nil {
 		return fmt.Errorf("extend trial interval for %s: %w", scopeKey.String(), err)
 	}
@@ -247,6 +248,7 @@ func (flow *engineFlow) applyBlockScope(ctx context.Context, sr scopeUpdateResul
 		// activateScope already names the operation and the scope.
 		return err
 	}
+	flow.handOverColdStart(sr.ScopeKey)
 	if err := flow.retireAdmittedWorkBlockedBy(ctx, sr.ScopeKey); err != nil {
 		return err
 	}
@@ -280,6 +282,7 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 		Type:     engineDebugEventScopeActivated,
 		ScopeKey: to,
 	})
+	flow.handOverColdStart(to)
 	if err := flow.retireAdmittedWorkBlockedBy(ctx, to); err != nil {
 		return fmt.Errorf("transition blocked scope %s -> %s: %w", from.String(), to.String(), err)
 	}
@@ -489,12 +492,15 @@ func (flow *engineFlow) drainDueHeldWorkNow(
 	var ready []*trackedAction
 
 	for _, key := range flow.dueRetryKeys(now) {
-		if ta := flow.retries.releaseHeldAction(key); ta != nil {
-			ta.IsTrial = false
-			ta.TrialScopeKey = ScopeKey{}
-			ta.TrialScopeGeneration = 0
-			ready = append(ready, ta)
+		ta := flow.retries.releaseHeldAction(key)
+		if ta == nil {
+			continue
 		}
+		ta.IsTrial = false
+		ta.TrialScopeKey = ScopeKey{}
+		ta.TrialScopeGeneration = 0
+		ta.AdmitAt = time.Time{}
+		ready = append(ready, ta)
 	}
 
 	for _, key := range flow.dueTrialKeys(now) {
@@ -519,6 +525,9 @@ func (flow *engineFlow) drainDueHeldWorkNow(
 		}
 		ta.IsTrial = true
 		ta.TrialScopeKey = held.ScopeKey
+		// The trial is the one request the server-given Retry-After allows
+		// when it is up; it is not jittered.
+		ta.AdmitAt = time.Time{}
 		ready = append(ready, ta)
 	}
 
