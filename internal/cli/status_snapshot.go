@@ -25,6 +25,14 @@ const (
 	driveStateUnavailable = "unavailable"
 	driveStateNotSynced   = "not_synced"
 
+	// syncStateUnreadableReason is the state_reason of a configured drive
+	// whose state database exists but cannot be checked or read; the drive
+	// is "unavailable", not "up to date" with zero files.
+	syncStateUnreadableReason = "sync_state_unreadable"
+	syncStateUnreadableDetail = "Cannot read the sync state for this drive."
+	syncStateUnreadableAction = "Check that the data directory and its state database are readable, " +
+		"then run 'onedrive-go status' again."
+
 	// driveStateLabelSyncing is the display word for an active sync, shared by
 	// status and the sync console.
 	driveStateLabelSyncing = "Syncing"
@@ -126,6 +134,9 @@ type statusDrive struct {
 
 // syncStateInfo holds the per-drive sync status payload rendered by `status`.
 type syncStateInfo struct {
+	// ReadError is set when the drive's state database could not be checked
+	// or read; the counts below are then unknown, not zero.
+	ReadError             string                `json:"read_error,omitempty"`
 	FileCount             int                   `json:"file_count"`
 	ConditionCount        int                   `json:"issue_count,omitempty"`
 	RemoteDrift           int                   `json:"remote_changes,omitempty"`
@@ -538,7 +549,14 @@ func buildSingleAccountStatusWith(
 func readAccountMeta(account string, driveIDs []driveid.CanonicalID, logger *slog.Logger) (displayName, orgName string) {
 	tokenID := canonicalIDForToken(account, driveIDs)
 	if tokenID.IsZero() {
-		tokenID = findTokenFallback(account, logger)
+		fallbackID, err := findTokenFallback(account, logger)
+		if err != nil {
+			// Names are decoration: the account's auth row reports the
+			// unreadable token (inspectSavedLogin), so this only falls
+			// back to the catalog's default naming.
+			logger.Debug("account names: cannot check for a token file", "account", account, "error", err)
+		}
+		tokenID = fallbackID
 	}
 
 	orgName, displayName = config.ResolveAccountNames(tokenID, logger)
@@ -643,6 +661,10 @@ func finalizeStatusDriveState(drive *statusDrive) {
 	if drive.SyncState == nil {
 		return
 	}
+	if drive.SyncState.ReadError != "" {
+		markStatusDriveSyncStateUnreadable(drive, drive.SyncState.ReadError)
+		return
+	}
 	if drive.SyncState.ConditionCount > 0 {
 		drive.State = driveStateIssues
 		return
@@ -654,6 +676,17 @@ func finalizeStatusDriveState(drive *statusDrive) {
 	if drive.SyncState.RemoteDrift > 0 || drive.SyncState.Retrying > 0 {
 		drive.State = driveStatePending
 	}
+}
+
+// markStatusDriveSyncStateUnreadable renders a drive whose sync state could
+// not be read as unavailable, with the plain reason and the raw error as the
+// debug detail, so an unreadable data directory never reads as "up to date".
+func markStatusDriveSyncStateUnreadable(drive *statusDrive, readError string) {
+	drive.State = driveStateUnavailable
+	drive.StateReason = syncStateUnreadableReason
+	drive.StateDetail = syncStateUnreadableDetail
+	drive.StateDebugDetail = readError
+	drive.RecoveryAction = syncStateUnreadableAction
 }
 
 func groupChildMountsByParent(
@@ -713,6 +746,9 @@ func buildConfiguredStatusDrive(
 		DisplayName:    statusConfiguredDriveName(cid, drive, acct),
 		SyncDir:        drive.SyncDir,
 	}
+	if syncState != nil && syncState.ReadError != "" {
+		markStatusDriveSyncStateUnreadable(&status, syncState.ReadError)
+	}
 
 	return status
 }
@@ -729,9 +765,24 @@ func configuredDriveState(
 	drive *config.Drive,
 	syncQ syncStateQuerier,
 ) (string, *syncStateInfo) {
-	probe := statusDrive{State: configuredDriveListState(cid, drive.IsPaused(time.Now()))}
+	state, checkErr := configuredDriveListState(cid, drive.IsPaused(time.Now()))
+	if checkErr != nil {
+		// The state database cannot be checked: the drive is unavailable
+		// (finalizeStatusDriveState, from the sync state's ReadError), and
+		// the querier reports the same failure once at Warn.
+		state = driveStateNotSynced
+	}
+	probe := statusDrive{State: state}
 	if syncQ != nil {
 		probe.SyncState = syncQ.QuerySyncState(ctx, config.DriveStatePath(cid))
+	}
+	if checkErr != nil {
+		if probe.SyncState == nil {
+			probe.SyncState = &syncStateInfo{}
+		}
+		if probe.SyncState.ReadError == "" {
+			probe.SyncState.ReadError = checkErr.Error()
+		}
 	}
 	finalizeStatusDriveState(&probe)
 
@@ -816,7 +867,10 @@ func querySyncStateWithOptions(
 	examplesLimit int,
 ) *syncStateInfo {
 	_ = history
-	snapshot := readDriveStatusSnapshot(ctx, statePath, logger)
+	snapshot, err := readDriveStatusSnapshot(ctx, statePath, logger)
 	info := buildSyncStateInfo(&snapshot, verbose, examplesLimit)
+	if err != nil {
+		info.ReadError = err.Error()
+	}
 	return &info
 }

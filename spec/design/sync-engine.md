@@ -78,6 +78,8 @@ assemble overlapping observation-managed batch shapes ad hoc.
 | Superseded action completions retire exact stale work without success, ordinary retry, blocker mutation, or old-plan dependent admission. | `TestClassifyResult_LocalPersistenceAndScopeRouting`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess`, `TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEmptyScope`, `TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOrRetry` |
 | Admission validates ready actions against committed current truth before worker dispatch. Remote mismatches retire old-plan work as superseded, do not persist ordinary retry work, do not release dependents, and dirty watch mode for replacement planning. | `TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependents` |
 | Canceled worker/admission freshness checks fail closed without store reads or side effects, while shutdown completion may bypass canceled-context freshness only to collapse newly-ready graph frontier without dispatch. | `TestActionFreshness_CanceledContextFailsClosedWithoutStoreRead`, `TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReadyAsShutdown` |
+| Post-sync housekeeping skips the transfer-artifact cleanup for a pass whose protected-root refresh failed, warns once per failure streak and resumes when the store reads again; a failing trash purge is one Warn naming the trash directory per streak, Debug on repeats, Info on recovery (R-6.6.30). | `TestPostSyncHousekeeping_SkipsTransferCleanupWhenProtectedRootsCannotBeRead`, `TestPurgeExpiredTrash_WarnsOncePerFailureStreak`, `TestPostSyncHousekeeping_SkipsProtectedShortcutRoots`, `TestPostSyncHousekeeping_SkipsConfiguredChildRoots`, `TestPostSyncHousekeeping_RespectsIncludedDirs` |
+| A store failure while clearing `retry_work` after a successful action is returned from the completion path, and a store failure reading the persisted remote block scopes is returned from the 403 probe instead of answering "no blocked boundaries". | `TestClearRetryWorkOnSuccess_StoreFailureIsReturned`, `TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow`, `TestPermHandler_Handle403_BlockScopeReadFailureIsReturned` |
 | Repeated supersedes of one action are visible: Debug on each, one Warn per streak, reset on success. From the streak threshold the action is parked in retry_work with exponential backoff (30 s doubling to 1 h), so a wedge is a slow retry visible in status instead of a hot replan loop in watch mode (R-2.8.11, D-059d). Only consecutive supersedes count: any other completion of the action, or a plan without it, resets the streak. | `TestRecordSupersede_WarnsOnceWhenTheSameActionKeepsGoingStale`, `TestPruneSupersedeStreaks_ForgetsActionsTheNewPlanLacks`, `TestApplySupersededCompletion_ParksTheSameActionAfterAStreak`, `TestSupersedeParkDelay_DoublesToACap`, `TestRunOnce_RandomizedBidirectionalEditsConverge` |
 | Every ready frontier leaves through one engine-owned dispatch order (`dispatchOrder`, nil in production), and a test can serialize the worker pool to one worker (`serializeWorkers`), so a test pins the execution order forward, reversed or seeded-shuffled (D-090). Every TestRunOnce_ scenario also passes with the frontier reversed, and one model-test seed replays the same actions and trees. `ONEDRIVE_GO_DISPATCH_ORDER=forward|reverse|shuffle:<seed>` runs the package's test engines under one order. | `TestReverseDispatch_RunOnceScenariosPass`, `TestReverseDispatchTable_ListsEveryRunOnceScenario`, `TestModel_SameSeedReplaysIdentically` |
 | Timing-dependent watch behavior is tested on a virtual clock (`inVirtualTime`, a `testing/synctest` bubble): the real timers run and the tests state exact durations -- one quiet period after the last signal, the max wait under sustained churn, one write-coalescing hash one cooldown after the last write, the safety scan at its interval -- without real waiting (D-095). | `TestDirtyBuffer_VirtualTime_FlushesOneQuietPeriodAfterTheLastSignal`, `TestDirtyBuffer_VirtualTime_ContinuousSignalsFlushAtExactlyTheMaxWait`, `TestHandleWrite_VirtualTime_RapidWritesCoalesceIntoOneHash`, `TestWatch_VirtualTime_SafetyScanFindsAMissedFileAtItsInterval` |
@@ -345,7 +347,7 @@ next (R-2.1.7):
   its own shortcut child snapshot and logs its own `sync pass starting` /
   `sync pass complete` lines; a Debug line names why a follow-up runs.
   Post-sync housekeeping runs once, after the last pass, when any pass
-  executed;
+  executed (see Post-Sync Housekeeping below);
 - the returned `Report` covers the run (`Report.withPass`): action counts,
   `Succeeded`, `Failed` and `Errors` add up across passes, `Duration` runs from
   the first pass's start, and what is still held back (`DeferredByMode`, held
@@ -444,6 +446,27 @@ That cadence is capability-driven, not websocket-driven:
 
 Websocket wakeups are additive only. They wake delta polling sooner, but they
 do not replace delta polling and they do not change the full-refresh cadence.
+
+### Post-Sync Housekeeping
+
+`postSyncHousekeeping` (`engine_housekeeping.go`) runs after the last pass:
+the transfer-artifact cleanup (`driveops.CleanTransferArtifactsWithOptions`,
+owned partials and expired upload sessions) and the local-trash purge. Both
+are best effort, and both report a persistent failure once per streak
+(R-6.6.30):
+
+- the artifact cleanup removes every owned partial outside the protected
+  roots with no age check, so it runs only when
+  `refreshProtectedRootsFromStore` succeeded for this pass. A refresh failure
+  skips the cleanup for the pass instead of walking with a stale list, which
+  could delete a child mount's in-flight partials; it is one Warn when the
+  streak starts, Debug on repeats, Info once when the list reads again
+  (`Engine.protectedRootRefreshFailing`)
+- `purgeExpiredTrash` is one Warn naming the trash directory when a purge
+  starts failing, Debug while it keeps failing, Info once when it works again
+  (`Engine.trashPurgeFailing`); the trash would otherwise grow without bound
+  with nothing saying so. Watch maintenance purges at most once per
+  `trashPurgeInterval`
 
 ### Absence Must Be Confirmed
 
@@ -1020,7 +1043,11 @@ facts directly when current truth proves the blocker or its recovery. Probe and
 execution may create or clear persisted write scopes when write access is
 affirmatively denied or restored. A raw `403` or `os.ErrPermission` is only a
 trigger to probe; the probe returns evidence only, and only the engine-owned
-permission handlers may activate or release a write-side scope.
+permission handlers may activate or release a write-side scope. The probe's
+Graph failures are evidence (none) and Debug; a failure to read the persisted
+block scopes (`ActiveRemoteBlockedBoundaries`) is a store error that
+`handle403` returns, never "no blocked boundaries", which would re-admit
+writes under a read-only subtree.
 
 Ownership splits by access kind:
 
@@ -1099,6 +1126,12 @@ discarded only after its prior `scope_key` no longer owns any blocked
 `retry_work`. If blocked work remains under the old scope, the engine rearms that
 retained scope's next trial interval in the same transition so it does not stay
 immediately due after the just-finished trial.
+
+A successful completion clears the action's `retry_work` row
+(`clearRetryWorkOnSuccess`). A store failure there is returned like any other
+store write failure in the completion path, not logged and dropped: the row
+left behind keeps `status` listing a file that just synced as retrying and
+schedules a redundant retry.
 
 Fatal authentication failures are not retry-owned. A `401` action completion
 marks the account auth requirement and stops the runtime; it must not create

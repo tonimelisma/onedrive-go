@@ -16,12 +16,13 @@ import (
 )
 
 const (
-	authStateReady                = authstate.StateReady
-	authStateAuthenticationNeeded = authstate.StateAuthenticationRequired
-	authReasonMissingLogin        = authstate.ReasonMissingLogin
-	authReasonInvalidSavedLogin   = authstate.ReasonInvalidSavedLogin
-	authReasonSyncAuthRejected    = authstate.ReasonSyncAuthRejected
-	authReasonSavedLoginExpired   = authstate.ReasonSavedLoginExpired
+	authStateReady                 = authstate.StateReady
+	authStateAuthenticationNeeded  = authstate.StateAuthenticationRequired
+	authReasonMissingLogin         = authstate.ReasonMissingLogin
+	authReasonInvalidSavedLogin    = authstate.ReasonInvalidSavedLogin
+	authReasonSavedLoginUnreadable = authstate.ReasonSavedLoginUnreadable
+	authReasonSyncAuthRejected     = authstate.ReasonSyncAuthRejected
+	authReasonSavedLoginExpired    = authstate.ReasonSavedLoginExpired
 )
 
 type accountAuthHealth = authstate.Health
@@ -131,18 +132,37 @@ func inspectSavedLogin(
 			tokenID = accountCID
 		}
 		if tokenID.IsZero() {
-			tokenID = findTokenFallback(account, logger)
+			fallbackID, err := findTokenFallback(account, logger)
+			if err != nil {
+				logger.Warn("cannot check whether this account has a saved login",
+					"account", account, "error", err)
+
+				return authReasonSavedLoginUnreadable
+			}
+			tokenID = fallbackID
 		}
 	}
 
 	tokenPath := config.DriveTokenPath(tokenID)
-	if tokenPath == "" || !managedPathExists(tokenPath) {
+	if tokenPath == "" {
+		return authReasonMissingLogin
+	}
+	exists, err := managedPathExists(tokenPath)
+	if err != nil {
+		// Not "missing login": a sign-in would write to the same unreadable
+		// place, so the user is told to look at the directory instead.
+		logger.Warn("cannot check whether this account has a saved login",
+			"account", account, "path", tokenPath, "error", err)
+
+		return authReasonSavedLoginUnreadable
+	}
+	if !exists {
 		return authReasonMissingLogin
 	}
 
 	// Only check the file: the command loads the token for real later, and
 	// that load is the one that logs "loaded saved token".
-	err := graph.CheckSavedLogin(tokenPath)
+	err = graph.CheckSavedLogin(tokenPath)
 	if err == nil {
 		return ""
 	}

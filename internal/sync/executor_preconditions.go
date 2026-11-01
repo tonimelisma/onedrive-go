@@ -977,12 +977,20 @@ func sqliteLiveSidecarSuffixes() []string {
 
 // refuseLiveDatabaseTarget returns errDatabaseInUse when path has a
 // non-empty SQLite sidecar beside it. It runs before the download and again
-// just before the rename (ValidateTargetBeforeRename).
+// just before the rename (ValidateTargetBeforeRename). Only a sidecar that
+// does not exist is "no sidecar": a sidecar that cannot be checked (EACCES,
+// EIO, a name too long) refuses the replacement too, because the download
+// cannot prove the database is closed.
 func (e *executor) refuseLiveDatabaseTarget(path string) error {
 	for _, suffix := range sqliteLiveSidecarSuffixes() {
 		info, err := e.syncTree.Lstat(path + suffix)
 		if err != nil {
-			continue
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+
+			return fmt.Errorf("won't replace %s: cannot check %s%s for an open database: %w",
+				path, path, suffix, normalizeSyncTreePathError(err))
 		}
 		if info.Mode().IsRegular() && info.Size() > 0 {
 			return fmt.Errorf("%w: %s%s", errDatabaseInUse, path, suffix)

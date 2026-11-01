@@ -165,7 +165,11 @@ func addNewDriveWithOps(
 		return driveAddResult{}, fmt.Errorf("cannot determine data directory for %s", cid.Email())
 	}
 
-	if !managedPathExists(tokenPath) {
+	tokenExists, err := managedPathExists(tokenPath)
+	if err != nil {
+		return driveAddResult{}, fmt.Errorf("checking for the token file of %s: %w", cid.Email(), err)
+	}
+	if !tokenExists {
 		return driveAddResult{}, fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
 	}
 
@@ -388,7 +392,11 @@ func addSharedDriveWithOps(
 		return driveAddResult{}, fmt.Errorf("cannot determine data directory for %s", cid.Email())
 	}
 
-	if !managedPathExists(tokenPath) {
+	tokenExists, err := managedPathExists(tokenPath)
+	if err != nil {
+		return driveAddResult{}, fmt.Errorf("checking for the token file of %s: %w", cid.Email(), err)
+	}
+	if !tokenExists {
 		return driveAddResult{}, fmt.Errorf("no token file for %s — run 'onedrive-go login' first", cid.Email())
 	}
 

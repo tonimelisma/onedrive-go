@@ -69,8 +69,13 @@ func MatchDrive(cfg *Config, selector string, logger *slog.Logger) (driveid.Cano
 // Always returns an error with context-aware guidance based on whether
 // tokens exist on disk (suggests "drive add") or not (suggests "login").
 func matchNoDrives(logger *slog.Logger) error {
-	// Check for tokens on disk to provide a more helpful error message.
-	tokens := DiscoverTokens(logger)
+	// Check for tokens on disk to provide a more helpful error message. When
+	// the data directory cannot be read, that is the problem to report:
+	// "no accounts configured" would send the user to sign in again.
+	tokens, err := DiscoverTokens(logger)
+	if err != nil {
+		return fmt.Errorf("checking for saved logins: %w", err)
+	}
 	if len(tokens) > 0 {
 		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
@@ -414,14 +419,15 @@ func expandTilde(path string) string {
 // DiscoverTokens lists token files in the default data directory and returns
 // canonical drive IDs extracted from filenames. Token files follow the naming
 // convention: token_{type}_{email}.json (e.g., token_personal_user@example.com.json).
-// Used for smart error messages and drive list.
-func DiscoverTokens(logger *slog.Logger) []driveid.CanonicalID {
+// Used for smart error messages and drive list. A missing data directory
+// has no tokens; a data directory that cannot be listed is an error.
+func DiscoverTokens(logger *slog.Logger) ([]driveid.CanonicalID, error) {
 	return discoverTokensIn(DefaultDataDir(), logger)
 }
 
 // discoverTokensIn scans dir for token files and extracts canonical IDs.
 // Files that don't match the token naming convention are silently skipped.
-func discoverTokensIn(dir string, logger *slog.Logger) []driveid.CanonicalID {
+func discoverTokensIn(dir string, logger *slog.Logger) ([]driveid.CanonicalID, error) {
 	return discoverCIDFiles(dir, logger)
 }
 
@@ -445,13 +451,14 @@ func DriveStatePath(canonicalID driveid.CanonicalID) string {
 // DiscoverStateDBsForEmail scans the data directory for state database files
 // belonging to the given email address. Returns full file paths. The email
 // match uses an underscore boundary ("_email") to prevent substring collisions
-// (e.g. "a@b.com" won't match "ba@b.com").
-func DiscoverStateDBsForEmail(email string, logger *slog.Logger) []string {
+// (e.g. "a@b.com" won't match "ba@b.com"). A data directory that cannot be
+// listed is an error, not "no state databases".
+func DiscoverStateDBsForEmail(email string, logger *slog.Logger) ([]string, error) {
 	return discoverStateDBsForEmailIn(DefaultDataDir(), email, logger)
 }
 
 // discoverStateDBsForEmailIn scans dir for state DB files belonging to email.
-func discoverStateDBsForEmailIn(dir, email string, logger *slog.Logger) []string {
+func discoverStateDBsForEmailIn(dir, email string, logger *slog.Logger) ([]string, error) {
 	return discoverFilesForEmail(dir, "state_", ".db", email, logger)
 }
 

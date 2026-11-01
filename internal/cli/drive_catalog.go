@@ -119,7 +119,7 @@ func buildConfiguredAuthRequirements(
 			email,
 			readAccountDisplayName(email, driveIDs, logger),
 			accountDriveType(driveIDs),
-			len(config.DiscoverStateDBsForEmail(email, logger)),
+			stateDBCountForEmail(email, logger),
 			health,
 		))
 	}
@@ -378,7 +378,7 @@ func tokenAuthRequirement(
 		tokenCID.Email(),
 		readAccountDisplayName(tokenCID.Email(), []driveid.CanonicalID{tokenCID}, logger),
 		tokenCID.DriveType(),
-		len(config.DiscoverStateDBsForEmail(tokenCID.Email(), logger)),
+		stateDBCountForEmail(tokenCID.Email(), logger),
 		accountAuthHealth{
 			State:  authStateAuthenticationNeeded,
 			Reason: reason,
@@ -465,25 +465,36 @@ func sharedFoldersToEntries(folders []sharedFolderInfo) []driveListEntry {
 // configuredDriveListState is what drive list can say without contacting
 // OneDrive. A drive with no state database has never completed a sync here,
 // so calling it up to date would be false.
-func configuredDriveListState(cid driveid.CanonicalID, paused bool) string {
+// It returns an error when the state database cannot be checked, which is
+// neither "not synced" nor "ready".
+func configuredDriveListState(cid driveid.CanonicalID, paused bool) (string, error) {
 	if paused {
-		return driveStatePaused
+		return driveStatePaused, nil
 	}
 
 	path := config.DriveStatePath(cid)
-	if path == "" || !managedPathExists(path) {
-		return driveStateNotSynced
+	if path == "" {
+		return driveStateNotSynced, nil
+	}
+	exists, err := managedPathExists(path)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return driveStateNotSynced, nil
 	}
 
-	return driveStateReady
+	return driveStateReady, nil
 }
 
 // annotateStateDB sets HasStateDB on available drive entries that have a state
 // database on disk from a previous configuration. This is a post-processing
 // step separate from network discovery — keeping filesystem I/O out of the
 // discovery functions preserves their single responsibility. Uses the
-// pre-parsed parsedCID field to avoid string→CanonicalID re-parsing.
-func annotateStateDB(entries []driveListEntry) {
+// pre-parsed parsedCID field to avoid string→CanonicalID re-parsing. A state
+// database that cannot be checked is an error: "no state database" would
+// present a drive with retained state as a clean add.
+func annotateStateDB(entries []driveListEntry) error {
 	for i := range entries {
 		if entries[i].parsedCID.IsZero() {
 			continue
@@ -494,10 +505,31 @@ func annotateStateDB(entries []driveListEntry) {
 			continue
 		}
 
-		if managedPathExists(path) {
+		exists, err := managedPathExists(path)
+		if err != nil {
+			return fmt.Errorf("checking for the state database of %s: %w", entries[i].CanonicalID, err)
+		}
+		if exists {
 			entries[i].HasStateDB = true
 		}
 	}
+
+	return nil
+}
+
+// stateDBCountForEmail is the advisory "N state databases" count in a sign-in
+// notice. The discovery itself warns when the data directory cannot be read,
+// and the account snapshot built before this notice already failed on that
+// same directory, so a failure here is logged at Debug and counted as none
+// rather than failing the notice.
+func stateDBCountForEmail(email string, logger *slog.Logger) int {
+	paths, err := config.DiscoverStateDBsForEmail(email, logger)
+	if err != nil {
+		logger.Debug("state database count unavailable for sign-in notice", "account", email, "error", err)
+		return 0
+	}
+
+	return len(paths)
 }
 
 // resolveExactDriveSelector resolves --drive for commands that delete state

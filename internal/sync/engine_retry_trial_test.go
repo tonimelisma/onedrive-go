@@ -157,10 +157,34 @@ func TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow(t *testing.T) {
 		NextRetryAt:  now,
 	}))
 
-	flow.clearRetryWorkOnSuccess(t.Context(), &actionCompletion{
+	require.NoError(t, flow.clearRetryWorkOnSuccess(t.Context(), &actionCompletion{
+		Path:       "done.txt",
+		ActionType: ActionUpload,
+	}))
+
+	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+}
+
+// Validates: R-2.10.33, R-6.6.28
+//
+// A store failure while clearing the row used to be Debug-only: the row stayed,
+// `status` kept listing a file that had just synced as retrying, and it was
+// retried again. It is returned like any store write failure in the
+// completion path.
+func TestClearRetryWorkOnSuccess_StoreFailureIsReturned(t *testing.T) {
+	t.Parallel()
+
+	flow := &engineFlow{
+		deps: runtimeDeps{store: closedTestStore(t), logger: testLogger(t)},
+	}
+
+	err := flow.clearRetryWorkOnSuccess(t.Context(), &actionCompletion{
 		Path:       "done.txt",
 		ActionType: ActionUpload,
 	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "clear retry work after success")
 
-	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+	err = flow.clearRetryWorkOnActionSuccess(t.Context(), &Action{Path: "done.txt", Type: ActionUpload})
+	require.Error(t, err)
 }

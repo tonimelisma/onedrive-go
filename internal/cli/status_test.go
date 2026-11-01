@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -64,6 +65,12 @@ func (m *mockSavedLoginChecker) CheckAccountAuth(_ context.Context, _ string, _ 
 			State:  authStateAuthenticationNeeded,
 			Reason: authReasonSavedLoginExpired,
 			Action: authAction(authReasonSavedLoginExpired),
+		}
+	case authReasonSavedLoginUnreadable:
+		return accountAuthHealth{
+			State:  authStateAuthenticationNeeded,
+			Reason: authReasonSavedLoginUnreadable,
+			Action: authAction(authReasonSavedLoginUnreadable),
 		}
 	default:
 		return accountAuthHealth{State: authStateReady}
@@ -1946,7 +1953,11 @@ func findStatusMountRecursive(mount *statusMount, identity string) (statusMount,
 	return statusMount{}, false
 }
 
-func TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState(t *testing.T) {
+// seedDamagedStatusDrive configures one drive whose state database the test
+// then damages; it returns the drive's canonical ID and the config path.
+func seedDamagedStatusDrive(t *testing.T) (driveid.CanonicalID, string) {
+	t.Helper()
+
 	setTestDriveHome(t)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -1959,10 +1970,19 @@ func TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState(t *testing.
 		drive.RemoteDriveID = "drive-damaged"
 	})
 	require.NoError(t, os.MkdirAll(filepath.Dir(config.DriveStatePath(cid)), 0o700))
-	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("not a sqlite database"), 0o600))
+
+	return cid, cfgPath
+}
+
+// runStatusJSONForDrive runs `status --json --drive <cid>` and returns the
+// one drive it rendered.
+func runStatusJSONForDrive(t *testing.T, cfgPath string, cid driveid.CanonicalID) (statusMount, *syncStateInfo, string) {
+	t.Helper()
 
 	var out bytes.Buffer
+	var logBuf bytes.Buffer
 	cc := newCommandContext(&out, cfgPath)
+	cc.Logger = slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	cc.Flags.Drive = []string{cid.String()}
 	cc.Flags.JSON = true
 
@@ -1970,9 +1990,125 @@ func TestStatusCommand_UnreadableStateStoreFallsBackToEmptySyncState(t *testing.
 
 	var decoded statusOutput
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
-	_, syncState := requireSingleStatusDriveJSON(t, &decoded, cid.String())
+	drive, syncState := requireSingleStatusDriveJSON(t, &decoded, cid.String())
+
+	return drive, syncState, logBuf.String()
+}
+
+func assertStatusDriveSyncStateUnreadable(t *testing.T, drive *statusMount, syncState *syncStateInfo, logs string) {
+	t.Helper()
+
+	assert.Equal(t, driveStateUnavailable, drive.State, "an unreadable state database is not 'up to date'")
+	assert.Equal(t, syncStateUnreadableReason, drive.StateReason)
+	assert.Equal(t, syncStateUnreadableDetail, drive.StateDetail)
+	assert.Equal(t, syncStateUnreadableAction, drive.RecoveryAction)
 	require.NotNil(t, syncState)
+	assert.NotEmpty(t, syncState.ReadError, "the sync state says why it could not be read")
 	assert.Zero(t, syncState.FileCount)
+	assert.Equal(t, 1, strings.Count(logs, "cannot read the sync state for this drive"), "one Warn per drive")
+	assert.Contains(t, logs, "level=WARN")
+}
+
+// Validates: R-6.6.25, R-6.6.28
+//
+// A state database that exists but is not SQLite used to collapse to an empty
+// sync snapshot: "Up to date", zero files, no issues. It is unavailable.
+func TestStatusCommand_UnreadableStateStoreIsReportedAsUnavailable(t *testing.T) {
+	cid, cfgPath := seedDamagedStatusDrive(t)
+	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("not a sqlite database"), 0o600))
+
+	drive, syncState, logs := runStatusJSONForDrive(t, cfgPath, cid)
+	assertStatusDriveSyncStateUnreadable(t, &drive, syncState, logs)
+}
+
+// Validates: R-6.6.25, R-6.6.28
+//
+// The existence check itself failing (here a symlink loop; a permission
+// problem on the data directory behaves the same) used to read as "no state
+// database": a drive that had synced for months showed "Not synced yet".
+func TestStatusCommand_UncheckableStateDatabaseIsReportedAsUnavailable(t *testing.T) {
+	cid, cfgPath := seedDamagedStatusDrive(t)
+	statePath := config.DriveStatePath(cid)
+	require.NoError(t, os.Symlink(filepath.Base(statePath), statePath))
+
+	drive, syncState, logs := runStatusJSONForDrive(t, cfgPath, cid)
+	assertStatusDriveSyncStateUnreadable(t, &drive, syncState, logs)
+	assert.NotEqual(t, driveStateNotSynced, drive.State)
+}
+
+// Validates: R-6.6.25, R-6.6.28
+//
+// A state database this user may not read (fs.ErrPermission) is unavailable,
+// not a drive with nothing to report.
+func TestStatusCommand_PermissionDeniedStateDatabaseIsReportedAsUnavailable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads files regardless of their mode")
+	}
+
+	cid, cfgPath := seedDamagedStatusDrive(t)
+	statePath := config.DriveStatePath(cid)
+	createTestStateDB(t, statePath)
+	require.NoError(t, os.Chmod(statePath, 0o000))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(statePath, 0o600)) })
+
+	drive, syncState, logs := runStatusJSONForDrive(t, cfgPath, cid)
+	assertStatusDriveSyncStateUnreadable(t, &drive, syncState, logs)
+	assert.Contains(t, syncState.ReadError, statePath)
+}
+
+// Validates: R-6.6.28
+//
+// A data directory this user may not read is reported as that, naming the
+// directory: status fails instead of printing "No accounts configured" or a
+// drive that is "Not synced yet". Every managed read opens the directory
+// through fsroot, so the catalog load is what reports it first; discovery's
+// own read error (TestDiscoverCIDFiles_ReadDirError) is the backstop behind
+// it.
+func TestStatusCommand_UnreadableDataDirIsReported(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads directories regardless of their mode")
+	}
+
+	cid, cfgPath := seedDamagedStatusDrive(t)
+	dataDir := config.DefaultDataDir()
+	require.NoError(t, os.Chmod(dataDir, 0o311))                      //nolint:gosec // execute-only on purpose: the test needs an unlistable directory
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(dataDir, 0o700)) }) //nolint:gosec // restores the private test directory
+
+	var out bytes.Buffer
+	cc := newCommandContext(&out, cfgPath)
+	cc.Flags.Drive = []string{cid.String()}
+
+	err := runStatusCommand(t.Context(), cc, false)
+	require.ErrorIs(t, err, fs.ErrPermission)
+	assert.Contains(t, err.Error(), dataDir)
+	assert.NotContains(t, out.String(), "No accounts configured")
+	assert.NotContains(t, out.String(), "Not synced yet")
+}
+
+// Validates: R-6.6.28
+//
+// A token file that cannot be checked is not a missing login: signing in again
+// would write to the same unreadable place, so the reason tells the user to
+// look at the data directory instead.
+func TestInspectSavedLogin_UnreadableTokenIsNotMissingLogin(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cid := driveid.MustCanonicalID("personal:alice@example.com")
+	tokenPath := config.DriveTokenPath(cid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(tokenPath), 0o700))
+	require.NoError(t, os.Symlink(filepath.Base(tokenPath), tokenPath))
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	state := inspectSavedLogin(t.Context(), "alice@example.com", []driveid.CanonicalID{cid}, logger)
+	assert.Equal(t, authReasonSavedLoginUnreadable, state)
+	assert.Contains(t, logBuf.String(), "level=WARN")
+
+	health := evaluateAccountViewAuth(state, "")
+	assert.Equal(t, authStateAuthenticationNeeded, health.State)
+	assert.NotEqual(t, authAction(authReasonMissingLogin), health.Action)
+	assert.Contains(t, health.Action, "data directory")
 }
 
 func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {

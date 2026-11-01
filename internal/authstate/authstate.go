@@ -14,6 +14,10 @@ const (
 	ReasonInvalidSavedLogin Reason = "invalid_saved_login"
 	ReasonSyncAuthRejected  Reason = "sync_auth_rejected"
 	ReasonSavedLoginExpired Reason = "saved_login_expired"
+	// ReasonSavedLoginUnreadable means the token file could not be checked
+	// or read (permission denied, I/O error): distinct from a missing login,
+	// because signing in again would write to the same unreadable place.
+	ReasonSavedLoginUnreadable Reason = "saved_login_unreadable"
 )
 
 type Presentation struct {
@@ -64,6 +68,12 @@ func PresentationForReason(reason Reason) Presentation {
 			Title:  "Authentication required",
 			Reason: "Microsoft no longer accepts the saved login (it expired after a long time unused, or was revoked).",
 			Action: "Run 'onedrive-go login' to sign in again.",
+		}
+	case ReasonSavedLoginUnreadable:
+		return Presentation{
+			Title:  "Saved login cannot be read",
+			Reason: "The saved login for this account could not be read from the data directory.",
+			Action: "Check that the data directory is readable, then run 'onedrive-go status' again.",
 		}
 	case ReasonSyncAuthRejected:
 		return Presentation{

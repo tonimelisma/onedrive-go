@@ -338,7 +338,8 @@ func TestDriveRemove_PurgePreservesCatalogAccount(t *testing.T) {
 
 	stored, err := config.LoadCatalog()
 	require.NoError(t, err)
-	views := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	views, err := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	require.NoError(t, err)
 	entry := requireAccountViewByEmail(t, views, "alice@contoso.com")
 	assert.False(t, entry.Configured)
 	assert.Equal(t, "Alice Smith", entry.DisplayName)

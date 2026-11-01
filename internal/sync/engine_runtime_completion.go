@@ -208,10 +208,14 @@ func (flow *engineFlow) applyTrackedActionSuccess(
 	flow.sched.markFinished(current)
 	flow.results.succeeded++
 	flow.clearSupersedeStreak(r)
+	var clearErr error
 	if current != nil {
-		flow.clearRetryWorkOnActionSuccess(ctx, &current.Action)
+		clearErr = flow.clearRetryWorkOnActionSuccess(ctx, &current.Action)
 	} else {
-		flow.clearRetryWorkOnSuccess(ctx, r)
+		clearErr = flow.clearRetryWorkOnSuccess(ctx, r)
+	}
+	if clearErr != nil {
+		return nil, clearErr
 	}
 	if flow.scopes.state != nil && r != nil {
 		flow.scopes.state.RecordSuccess()

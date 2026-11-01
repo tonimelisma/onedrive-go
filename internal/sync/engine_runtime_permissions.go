@@ -57,7 +57,10 @@ func (flow *engineFlow) handleRemote403PermissionFailure(
 		return false, nil
 	}
 
-	evidence := flow.engine.permHandler.handle403(ctx, bl, r.Path, r.ActionType)
+	evidence, err := flow.engine.permHandler.handle403(ctx, bl, r.Path, r.ActionType)
+	if err != nil {
+		return false, err
+	}
 	if evidence.Kind == permissionEvidenceNone {
 		return false, nil
 	}
@@ -149,7 +152,10 @@ func (flow *engineFlow) applyTrialPermissionReclassification(
 	r *actionCompletion,
 	bl *Baseline,
 ) (bool, error) {
-	evidence, handled := flow.permissionEvidenceForCompletion(ctx, r, bl)
+	evidence, handled, err := flow.permissionEvidenceForCompletion(ctx, r, bl)
+	if err != nil {
+		return false, err
+	}
 	if !handled {
 		return false, nil
 	}
@@ -174,17 +180,21 @@ func (flow *engineFlow) permissionEvidenceForCompletion(
 	ctx context.Context,
 	r *actionCompletion,
 	bl *Baseline,
-) (permissionEvidence, bool) {
+) (permissionEvidence, bool, error) {
 	switch {
 	case shouldHandleRemote403Permission(r):
 		if bl == nil || flow.engine.permHandler.permChecker == nil {
-			return permissionEvidence{}, false
+			return permissionEvidence{}, false, nil
 		}
-		return flow.engine.permHandler.handle403(ctx, bl, r.Path, r.ActionType), true
+		evidence, err := flow.engine.permHandler.handle403(ctx, bl, r.Path, r.ActionType)
+		if err != nil {
+			return permissionEvidence{}, true, err
+		}
+		return evidence, true, nil
 	case shouldHandleLocalPermission(r):
-		return flow.engine.permHandler.handleLocalPermission(ctx, r), true
+		return flow.engine.permHandler.handleLocalPermission(ctx, r), true, nil
 	default:
-		return permissionEvidence{}, false
+		return permissionEvidence{}, false, nil
 	}
 }
 

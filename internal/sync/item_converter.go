@@ -78,11 +78,14 @@ type itemConverter struct {
 	// in the current window, bounded by maxAncestorFetchesPerWindow.
 	ancestorFetches int
 
-	// sparseEnrichFailed holds IDs of items that arrived without a parent
-	// reference and whose GetItem enrichment failed in this window. Such an
-	// item is unplaceable for now, and the window is replayed; one whose
-	// enrichment succeeded and still has no parent is skipped for good.
-	sparseEnrichFailed map[string]struct{}
+	// sparseEnrichFailed holds, by item ID, the error of each GetItem
+	// enrichment that failed in this window: for an item that arrived
+	// without a parent reference, and for a new item that arrived without a
+	// type facet (R-2.4.16). Such an item cannot be placed or classified
+	// for now, and the window is replayed; one whose enrichment succeeded
+	// and still lacks the fact is skipped for good, as is a facetless item
+	// Graph answers as not found, since a replay cannot change either.
+	sparseEnrichFailed map[string]error
 
 	// carriedAncestors are the ancestors resolveAncestorChain read by ID in
 	// windows that did not complete. A replay of the same window reuses them
@@ -201,9 +204,9 @@ func (c *itemConverter) enrichSparseParentRefs(ctx context.Context, items []grap
 				)
 			}
 			if c.sparseEnrichFailed == nil {
-				c.sparseEnrichFailed = make(map[string]struct{})
+				c.sparseEnrichFailed = make(map[string]error)
 			}
-			c.sparseEnrichFailed[item.ID] = struct{}{}
+			c.sparseEnrichFailed[item.ID] = err
 
 			continue
 		}
@@ -803,10 +806,23 @@ func (c *itemConverter) normalizeRemoteFacts(ev *changeEvent, item *graph.Item, 
 // synced folder planned a folder-to-file type change that deleted the local
 // folder. The baseline's kind is kept, and for a file so are its content
 // facts, because an update without a file facet carries no hashes: it is not
-// evidence the content changed. Without a baseline (and after the one re-read
-// enrichSparseParentRefs makes) the kind is unknown and the item is skipped.
+// evidence the content changed. Without a baseline the one re-read
+// enrichSparseParentRefs makes decides: a re-read that failed for any reason
+// but "not found" marks the observation incomplete, so the window is replayed
+// instead of the item being skipped for good behind a persisted cursor (the
+// same rule as a parentless item, materializePathPreferringIDChain); a
+// re-read that answered and still names no kind, or found no item, skips it.
 func (c *itemConverter) applyBaselineKind(ev *changeEvent, item *graph.Item, existing *BaselineEntry) bool {
 	if existing == nil {
+		if enrichErr, failed := c.sparseEnrichFailed[item.ID]; failed && !errors.Is(enrichErr, graph.ErrNotFound) {
+			c.Logger.Debug("remote item kind unknown and its re-read failed; the change window will be replayed",
+				slog.String("item_id", item.ID),
+				slog.String("name", item.Name),
+				slog.Any("error", enrichErr),
+			)
+			c.markIncompleteObservation()
+			return false
+		}
 		c.Logger.Debug("skipping remote item that does not say whether it is a file or a folder",
 			slog.String("item_id", item.ID),
 			slog.String("name", item.Name),

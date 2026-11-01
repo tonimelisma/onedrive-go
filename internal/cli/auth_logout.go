@@ -37,7 +37,10 @@ func resolveLogoutAccountWithCatalog(
 		return accountFlag, nil
 	}
 
-	views := buildAccountViews(ctx, cfg, stored, logger)
+	views, err := buildAccountViews(ctx, cfg, stored, logger)
+	if err != nil {
+		return "", err
+	}
 	known := knownAccountViews(views)
 	if len(known) == 0 {
 		return "", fmt.Errorf("no accounts configured — nothing to log out")
@@ -213,7 +216,11 @@ func purgeOrphanedFiles(w io.Writer, email string, logger *slog.Logger) error {
 	var errs []error
 
 	// Remove orphaned state databases.
-	for _, path := range config.DiscoverStateDBsForEmail(email, logger) {
+	paths, err := config.DiscoverStateDBsForEmail(email, logger)
+	if err != nil {
+		return fmt.Errorf("finding state databases to purge: %w", err)
+	}
+	for _, path := range paths {
 		if err := removeOrphanedPath(
 			path,
 			logger,

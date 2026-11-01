@@ -179,7 +179,8 @@ func TestFindTokenFallback(t *testing.T) {
 	// that it returns the correct prefix based on which file exists.
 
 	// With no token files on disk, should default to personal.
-	got := findTokenFallback("nobody@example.com", slog.Default())
+	got, err := findTokenFallback("nobody@example.com", slog.Default())
+	require.NoError(t, err)
 	assert.Equal(t, driveid.MustCanonicalID("personal:nobody@example.com"), got)
 }
 
@@ -218,7 +219,8 @@ func TestFindTokenFallback_ExistingToken(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			writeTokenFallbackFixture(t, tt.tokenID)
 
-			got := findTokenFallback(tt.account, slog.Default())
+			got, err := findTokenFallback(tt.account, slog.Default())
+			require.NoError(t, err)
 			assert.Equal(t, tt.tokenID, got)
 		})
 	}
@@ -540,7 +542,9 @@ func TestCatalogAuthRequirements_FindsOfflineAuthRequiredAccounts(t *testing.T) 
 	stored, err := config.LoadCatalog()
 	require.NoError(t, err)
 
-	authRequired := accountViewAuthRequirements(buildAccountViews(t.Context(), cfg, stored, logger), func(accountView) bool {
+	views, err := buildAccountViews(t.Context(), cfg, stored, logger)
+	require.NoError(t, err)
+	authRequired := accountViewAuthRequirements(views, func(accountView) bool {
 		return true
 	})
 	require.Len(t, authRequired, 1)

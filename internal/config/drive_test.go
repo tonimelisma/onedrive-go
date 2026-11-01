@@ -524,17 +524,20 @@ display_name = "work"
 
 func TestDiscoverTokensIn_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
-	ids := discoverTokensIn(dir, testLogger(t))
+	ids, err := discoverTokensIn(dir, testLogger(t))
+	require.NoError(t, err)
 	assert.Empty(t, ids)
 }
 
 func TestDiscoverTokensIn_EmptyPath(t *testing.T) {
-	ids := discoverTokensIn("", testLogger(t))
+	ids, err := discoverTokensIn("", testLogger(t))
+	require.NoError(t, err)
 	assert.Nil(t, ids)
 }
 
 func TestDiscoverTokensIn_NonexistentDir(t *testing.T) {
-	ids := discoverTokensIn("/nonexistent/path", testLogger(t))
+	ids, err := discoverTokensIn("/nonexistent/path", testLogger(t))
+	require.NoError(t, err)
 	assert.Nil(t, ids)
 }
 
@@ -542,7 +545,8 @@ func TestDiscoverTokensIn_OneToken(t *testing.T) {
 	dir := t.TempDir()
 	writeTokenFile(t, dir, "token_personal_user@example.com.json")
 
-	ids := discoverTokensIn(dir, testLogger(t))
+	ids, err := discoverTokensIn(dir, testLogger(t))
+	require.NoError(t, err)
 	require.Len(t, ids, 1)
 	assert.Equal(t, driveid.MustCanonicalID("personal:user@example.com"), ids[0])
 }
@@ -552,7 +556,8 @@ func TestDiscoverTokensIn_TwoTokens_Sorted(t *testing.T) {
 	writeTokenFile(t, dir, "token_personal_zack@example.com.json")
 	writeTokenFile(t, dir, "token_business_alice@contoso.com.json")
 
-	ids := discoverTokensIn(dir, testLogger(t))
+	ids, err := discoverTokensIn(dir, testLogger(t))
+	require.NoError(t, err)
 	require.Len(t, ids, 2)
 	// Should be sorted alphabetically.
 	assert.Equal(t, driveid.MustCanonicalID("business:alice@contoso.com"), ids[0])
@@ -566,7 +571,8 @@ func TestDiscoverTokensIn_IgnoresNonTokenFiles(t *testing.T) {
 	writeTokenFile(t, dir, "config.toml")
 	writeTokenFile(t, dir, "random.json")
 
-	ids := discoverTokensIn(dir, testLogger(t))
+	ids, err := discoverTokensIn(dir, testLogger(t))
+	require.NoError(t, err)
 	require.Len(t, ids, 1)
 	assert.Equal(t, driveid.MustCanonicalID("personal:user@example.com"), ids[0])
 }
@@ -577,7 +583,8 @@ func TestDiscoverTokensIn_SkipsMalformed(t *testing.T) {
 	writeTokenFile(t, dir, "token_.json")                          // empty inner
 	writeTokenFile(t, dir, "token_nounderscore.json")              // no type/email separator
 
-	ids := discoverTokensIn(dir, testLogger(t))
+	ids, err := discoverTokensIn(dir, testLogger(t))
+	require.NoError(t, err)
 	require.Len(t, ids, 1)
 	assert.Equal(t, driveid.MustCanonicalID("personal:user@example.com"), ids[0])
 }
@@ -589,7 +596,8 @@ func TestDiscoverTokensIn_IgnoresDirectories(t *testing.T) {
 	// Create a subdirectory that matches the token naming pattern.
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "token_personal_dir@example.com.json"), 0o700))
 
-	ids := discoverTokensIn(dir, testLogger(t))
+	ids, err := discoverTokensIn(dir, testLogger(t))
+	require.NoError(t, err)
 	require.Len(t, ids, 1)
 	assert.Equal(t, driveid.MustCanonicalID("personal:user@example.com"), ids[0])
 }
@@ -742,7 +750,8 @@ func TestCollectOtherSyncDirs_NoFallback(t *testing.T) {
 // Validates: R-3.1.4
 func TestDiscoverStateDBsForEmailIn_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
-	paths := discoverStateDBsForEmailIn(dir, "alice@outlook.com", slog.Default())
+	paths, err := discoverStateDBsForEmailIn(dir, "alice@outlook.com", slog.Default())
+	require.NoError(t, err)
 	assert.Nil(t, paths)
 }
 
@@ -756,7 +765,8 @@ func TestDiscoverStateDBsForEmailIn_MatchesEmail(t *testing.T) {
 	// Different account — should NOT match.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "state_personal_bob@outlook.com.db"), []byte{}, 0o600))
 
-	paths := discoverStateDBsForEmailIn(dir, "alice@outlook.com", slog.Default())
+	paths, err := discoverStateDBsForEmailIn(dir, "alice@outlook.com", slog.Default())
+	require.NoError(t, err)
 	require.Len(t, paths, 2)
 	assert.Contains(t, paths, filepath.Join(dir, "state_personal_alice@outlook.com.db"))
 	assert.Contains(t, paths, filepath.Join(dir, "state_sharepoint_alice@outlook.com_marketing_Docs.db"))
@@ -770,7 +780,8 @@ func TestDiscoverStateDBsForEmailIn_NoSubstringCollision(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "state_personal_ba@b.com.db"), []byte{}, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "state_personal_a@b.com.db"), []byte{}, 0o600))
 
-	paths := discoverStateDBsForEmailIn(dir, "a@b.com", slog.Default())
+	paths, err := discoverStateDBsForEmailIn(dir, "a@b.com", slog.Default())
+	require.NoError(t, err)
 	require.Len(t, paths, 1)
 	assert.Contains(t, paths, filepath.Join(dir, "state_personal_a@b.com.db"))
 }
