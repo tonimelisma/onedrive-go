@@ -134,7 +134,7 @@ func TestDeleteLocalFolder_JunkFileWhenIgnoreJunkDisabled_Fails(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte{0}, 0o600))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.DeleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(t.Context(), action, dir)
 
 	requireOutcomeFailure(t, &outcome)
 	assert.Contains(t, outcome.Error.Error(), ".DS_Store")
@@ -152,7 +152,7 @@ func TestDeleteLocalFolder_DSStoreOnly_Succeeds(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte{0}, 0o600))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.DeleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(t.Context(), action, dir)
 
 	requireOutcomeSuccess(t, &outcome)
 
@@ -388,7 +388,7 @@ func TestDeleteLocalFolder_TmpFilesOnly_Succeeds(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "edit.swp"), []byte("swp"), 0o600))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.DeleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(t.Context(), action, dir)
 
 	requireOutcomeSuccess(t, &outcome)
 
@@ -407,7 +407,7 @@ func TestDeleteLocalFolder_UnknownFile_Fails(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "important.txt"), []byte("data"), 0o600))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.DeleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(t.Context(), action, dir)
 
 	requireOutcomeFailure(t, &outcome)
 	assert.Contains(t, outcome.Error.Error(), "important.txt")
@@ -424,7 +424,7 @@ func TestDeleteLocalFolder_MixedDisposableAndUnknown_Fails(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "realfile.doc"), []byte("content"), 0o600))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.DeleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(t.Context(), action, dir)
 
 	requireOutcomeFailure(t, &outcome)
 	assert.Contains(t, outcome.Error.Error(), "realfile.doc")
@@ -445,7 +445,7 @@ func TestDeleteLocalFolder_AppleDoubleFiles_Succeeds(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".DS_Store"), []byte{0}, 0o600))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.DeleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(t.Context(), action, dir)
 
 	requireOutcomeSuccess(t, &outcome)
 
@@ -467,7 +467,7 @@ func TestDeleteLocalFolder_DisposableDirWithNonDisposableChildIsKept(t *testing.
 	require.NoError(t, os.WriteFile(filepath.Join(macDir, "important.txt"), []byte("data"), 0o600))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.DeleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(t.Context(), action, dir)
 
 	requireOutcomeSuccess(t, &outcome)
 	assert.FileExists(t, filepath.Join(macDir, "important.txt"), "content inside an ignored folder is never deleted")
@@ -484,7 +484,7 @@ func TestDeleteLocalFolder_VisibleChildBlocksDelete(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "important.txt"), []byte("data"), 0o600))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.DeleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(t.Context(), action, dir)
 
 	requireOutcomeFailure(t, &outcome)
 	assert.Contains(t, outcome.Error.Error(), "important.txt")
@@ -503,7 +503,7 @@ func TestDeleteLocalFolder_DisposableDirAllDisposableChildren_Succeeds(t *testin
 	require.NoError(t, os.WriteFile(filepath.Join(macDir, ".DS_Store"), []byte{0}, 0o600))
 
 	action := &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}
-	outcome := e.DeleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(t.Context(), action, dir)
 
 	requireOutcomeSuccess(t, &outcome)
 
@@ -537,7 +537,7 @@ func TestDeleteLocalFolder_EmptyDir_Succeeds(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 
 	action := &Action{Type: ActionLocalDelete, Path: "empty", ItemID: "id1"}
-	outcome := e.DeleteLocalFolder(action, dir)
+	outcome := e.DeleteLocalFolder(t.Context(), action, dir)
 
 	requireOutcomeSuccess(t, &outcome)
 
@@ -560,7 +560,7 @@ func TestDeleteLocalFolder_JunkRemovalFailureIsNamedInTheError(t *testing.T) {
 	require.NoError(t, os.Chmod(macDir, 0o500))                      //nolint:gosec // a read-only folder makes junk removal fail
 	t.Cleanup(func() { assert.NoError(t, os.Chmod(macDir, 0o700)) }) //nolint:gosec // restores the folder's permissions
 
-	outcome := e.DeleteLocalFolder(&Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}, dir)
+	outcome := e.DeleteLocalFolder(t.Context(), &Action{Type: ActionLocalDelete, Path: "folder", ItemID: "id1"}, dir)
 
 	requireOutcomeFailure(t, &outcome)
 	assert.Contains(t, outcome.Error.Error(), "after failing to remove junk inside it")

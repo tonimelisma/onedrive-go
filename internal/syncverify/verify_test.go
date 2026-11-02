@@ -278,7 +278,7 @@ func TestVerifyBaseline_SortsMismatchesByPath(t *testing.T) {
 				return nil, os.ErrNotExist
 			},
 		},
-		func(string) (string, error) {
+		func(context.Context, string) (string, error) {
 			return "", nil
 		},
 		newTestLogger(),
@@ -312,7 +312,7 @@ func TestVerifyBaseline_CanceledContextReturnsWrappedCancellation(t *testing.T) 
 				return fakeFileInfo{name: "alpha.txt", size: 1}, nil
 			},
 		},
-		func(string) (string, error) {
+		func(context.Context, string) (string, error) {
 			return "", nil
 		},
 		newTestLogger(),
@@ -346,7 +346,7 @@ func TestVerifyBaseline_EmptyLocalHashIsReportedUnverifiable(t *testing.T) {
 				return fakeFileInfo{name: "sharepoint.docx", size: 42}, nil
 			},
 		},
-		func(string) (string, error) {
+		func(context.Context, string) (string, error) {
 			hashCalled = true
 			return "", nil
 		},
@@ -376,7 +376,7 @@ func TestVerifyBaseline_ClassifiesStatErrorsAsUnreadable(t *testing.T) {
 				return nil, errors.New("disk I/O failed")
 			},
 		},
-		func(string) (string, error) {
+		func(context.Context, string) (string, error) {
 			return "", nil
 		},
 		newTestLogger(),
@@ -407,7 +407,7 @@ func TestVerifyBaseline_ClassifiesRootedPathErrorsAsUnreadable(t *testing.T) {
 				return "", errors.New("root join failed")
 			},
 		},
-		func(string) (string, error) {
+		func(context.Context, string) (string, error) {
 			return "", nil
 		},
 		newTestLogger(),
@@ -438,7 +438,7 @@ func TestVerifyBaseline_ClassifiesHashComputationErrorsAsUnreadable(t *testing.T
 				return "/sync/problem.txt", nil
 			},
 		},
-		func(string) (string, error) {
+		func(context.Context, string) (string, error) {
 			return "", errors.New("hash reader failed")
 		},
 		newTestLogger(),
