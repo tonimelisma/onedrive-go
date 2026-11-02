@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	stdsync "sync"
@@ -97,7 +98,7 @@ type faultDriver struct{ inner driver.Driver }
 func (d *faultDriver) Open(name string) (driver.Conn, error) {
 	conn, err := d.inner.Open(name)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fault driver: open: %w", err)
 	}
 	return &faultConn{Conn: conn, fault: faultForPath(faultPathFromDSN(name))}, nil
 }
@@ -118,7 +119,11 @@ func (c *faultConn) ExecContext(ctx context.Context, query string, args []driver
 	if !ok {
 		return nil, driver.ErrSkip
 	}
-	return execer.ExecContext(ctx, query, args)
+	result, err := execer.ExecContext(ctx, query, args)
+	if err != nil {
+		return nil, fmt.Errorf("fault driver: exec: %w", err)
+	}
+	return result, nil
 }
 
 func (c *faultConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
@@ -129,17 +134,30 @@ func (c *faultConn) QueryContext(ctx context.Context, query string, args []drive
 	if !ok {
 		return nil, driver.ErrSkip
 	}
-	return queryer.QueryContext(ctx, query, args)
+	rows, err := queryer.QueryContext(ctx, query, args)
+	if err != nil {
+		return nil, fmt.Errorf("fault driver: query: %w", err)
+	}
+	return rows, nil
 }
 
 func (c *faultConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
 	if err := c.fault.take(query); err != nil {
 		return nil, err
 	}
+	var (
+		stmt driver.Stmt
+		err  error
+	)
 	if preparer, ok := c.Conn.(driver.ConnPrepareContext); ok {
-		return preparer.PrepareContext(ctx, query)
+		stmt, err = preparer.PrepareContext(ctx, query)
+	} else {
+		stmt, err = c.Prepare(query)
 	}
-	return c.Conn.Prepare(query)
+	if err != nil {
+		return nil, fmt.Errorf("fault driver: prepare: %w", err)
+	}
+	return stmt, nil
 }
 
 func (c *faultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
@@ -150,17 +168,19 @@ func (c *faultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.
 	if beginner, ok := c.Conn.(driver.ConnBeginTx); ok {
 		tx, err = beginner.BeginTx(ctx, opts)
 	} else {
-		tx, err = c.Conn.Begin() //nolint:staticcheck // the fallback the interface documents
+		tx, err = c.Begin() //nolint:staticcheck // the fallback the interface documents
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fault driver: begin: %w", err)
 	}
 	return &faultTx{Tx: tx, fault: c.fault}, nil
 }
 
 func (c *faultConn) Ping(ctx context.Context) error {
 	if pinger, ok := c.Conn.(driver.Pinger); ok {
-		return pinger.Ping(ctx)
+		if err := pinger.Ping(ctx); err != nil {
+			return fmt.Errorf("fault driver: ping: %w", err)
+		}
 	}
 	return nil
 }
@@ -174,10 +194,15 @@ func (t *faultTx) Commit() error {
 	if err := t.fault.take(faultCommit); err != nil {
 		// The statements ran; the commit is what failed. Roll back so the
 		// connection is reusable, as SQLite would after a failed commit.
-		_ = t.Tx.Rollback()
+		if rbErr := t.Tx.Rollback(); rbErr != nil {
+			return errors.Join(err, rbErr)
+		}
 		return err
 	}
-	return t.Tx.Commit()
+	if err := t.Tx.Commit(); err != nil {
+		return fmt.Errorf("fault driver: commit: %w", err)
+	}
+	return nil
 }
 
 // newFaultStore opens a fresh store through the fault driver and returns the
