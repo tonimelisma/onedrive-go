@@ -442,6 +442,11 @@ func TestRunOnce_RemoteFolderDeleteOverListingCapIsADurableIssueNotRelistedEvery
 	assert.Greater(t, retryRows[0].NextRetryAt, clock.Now().UnixNano(), "the issue backs off before it is tried again")
 
 	// A pass before the row is due neither relists nor deletes the folder.
+	// The issue does not clear by itself, so it waits on the durable curve
+	// (30 s doubling to an hour): a pass fifteen seconds later, which the
+	// transient curve's one-second first step would have retried, still
+	// does not relist the 10,000 items.
+	clock.Advance(durableRecheckDelay / 2)
 	report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Zero(t, report.Failed, "errors: %v", report.Errors)
