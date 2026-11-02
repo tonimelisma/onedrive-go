@@ -154,6 +154,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_BothSidesRenamedIdenticallyConverges,
 		TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending,
 		TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked,
+		TestRunOnce_ReportCountsTheWorkAThrottleLeftForTheNextSync,
 		TestRunOnce_EmptyItemACrashLeftUnrecordedIsFinishedNotConflicted,
 		TestRunOnce_SlowDeletionAcrossPassesIsHeldWithinTheWindow,
 		TestRunOnce_DeletesOlderThanTheWindowStopCounting,

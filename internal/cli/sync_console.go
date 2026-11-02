@@ -292,6 +292,10 @@ func (c *syncConsole) reportSummary(mountID string, r *syncengine.Report) string
 	tally := c.tallyFor(mountID, r)
 	parts := tally.parts()
 	failed := max(tally.failed, r.Failed-tally.willRetry)
+	// Work the pass left for the next run: retryable failures, plus the
+	// actions a throttle took back and still holds when the pass ended,
+	// which produced no activity of their own.
+	willRetry := tally.willRetry + r.LeftForNextSync
 
 	if r.DryRun {
 		if len(parts) == 0 {
@@ -300,7 +304,7 @@ func (c *syncConsole) reportSummary(mountID string, r *syncengine.Report) string
 		return "Dry run, nothing was changed. Would " + strings.Join(dryRunParts(tally), ", ") + "."
 	}
 
-	if len(parts) == 0 && failed == 0 && tally.willRetry == 0 {
+	if len(parts) == 0 && failed == 0 && willRetry == 0 {
 		return fmt.Sprintf("Up to date (%s).", humanDuration(r.Duration))
 	}
 
@@ -311,8 +315,8 @@ func (c *syncConsole) reportSummary(mountID string, r *syncengine.Report) string
 	if failed > 0 {
 		line += fmt.Sprintf("; %d failed", failed)
 	}
-	if tally.willRetry > 0 {
-		line += fmt.Sprintf("; %d will be retried on the next sync", tally.willRetry)
+	if willRetry > 0 {
+		line += fmt.Sprintf("; %d will be retried on the next sync", willRetry)
 	}
 
 	return line + "."
