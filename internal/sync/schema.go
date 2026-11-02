@@ -60,7 +60,12 @@ const (
 	// for files the baseline did not know, with the metadata that must still
 	// match for one to be trusted, so a first scan interrupted before its
 	// pass commits does not re-read the files it already hashed (R-2.2.8).
-	currentSyncStoreGeneration = 26
+	//
+	// Generation 27 keys pending_creates by path and adds intended_at: the
+	// intent to create is recorded before the request that creates the item,
+	// so a placeholder whose creating request was in flight when the process
+	// died is still recognized as ours (R-5.6.15).
+	currentSyncStoreGeneration = 27
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -107,16 +112,17 @@ CREATE TABLE IF NOT EXISTS observation_state (
 );
 
 CREATE TABLE IF NOT EXISTS pending_creates (
-    item_id       TEXT    NOT NULL PRIMARY KEY,
+    path          TEXT    NOT NULL PRIMARY KEY,
+    item_id       TEXT    NOT NULL DEFAULT '',
     drive_id      TEXT    NOT NULL DEFAULT '',
-    path          TEXT    NOT NULL,
     parent_id     TEXT    NOT NULL DEFAULT '',
     created_etag  TEXT    NOT NULL DEFAULT '',
     local_size    INTEGER NOT NULL DEFAULT 0,
-    local_hash    TEXT    NOT NULL DEFAULT ''
+    local_hash    TEXT    NOT NULL DEFAULT '',
+    intended_at   INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS idx_pending_creates_path ON pending_creates(path);
+CREATE INDEX IF NOT EXISTS idx_pending_creates_item_id ON pending_creates(item_id);
 
 CREATE TABLE IF NOT EXISTS mount_boundaries (
     path       TEXT    NOT NULL PRIMARY KEY
@@ -271,7 +277,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"drive_id", "item_id", "path", "item_type", "hash", "size", "mtime", "etag",
 		},
 		"pending_creates": {
-			"item_id", "drive_id", "path", "parent_id", "created_etag", "local_size", "local_hash",
+			"path", "item_id", "drive_id", "parent_id", "created_etag", "local_size", "local_hash", "intended_at",
 		},
 		"mount_boundaries": {
 			"path",

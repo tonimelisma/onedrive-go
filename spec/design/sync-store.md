@@ -370,9 +370,21 @@ the content commits, that empty item is a real OneDrive file (and a
 path-routed upload session makes one too, L-34). Seen by the next pass without
 memory of who made it, it was a create_conflict: the user's file was renamed
 to a conflict copy and the empty file downloaded. `pending_creates`
-(generation 18, `store_pending_creates.go`) is that memory: the executor
-records item ID, path and creation eTag before the first content byte is
-sent. The observation commit then classifies an observed item with a record:
+(generation 18, keyed by path since generation 27, `store_pending_creates.go`)
+is that memory: the executor records the intent at the path before the
+request that creates the item, and item ID, path and creation eTag before the
+first content byte is sent. The intent is what survives a process dying with
+the creating request in flight (live, 2026-11-01: OneDrive created the empty
+item two seconds after the kill, so no hook recorded it): an empty file
+observed at the intended path within `pendingCreateIntentTTL` (72 h) is
+claimed as the placeholder, `claimIntendedPlaceholderTx`, and adopted like a
+recorded one; content at the path or an expired intent drops the intent, and
+an attempt that created nothing clears it
+(`TestCommitObservation_IntentClaimsTheEmptyFileACrashLeftUnrecorded`,
+`TestCommitObservation_IntentDoesNotClaimContentOrOutliveItsTTL`,
+`TestPendingCreateIntent_ClearedWhenNothingWasCreatedAndKeepsAKnownItem`,
+`TestRunOnce_EmptyItemACrashLeftUnrecordedIsFinishedNotConflicted`, and the
+`upload.created_unrecorded` crash point). The observation commit then classifies an observed item with a record:
 still empty and not synced, it is adopted as a baseline row whose local side
 is the empty content, so the planner uploads by ID with If-Match, or deletes
 the placeholder with If-Match when the local file is gone; still empty after
