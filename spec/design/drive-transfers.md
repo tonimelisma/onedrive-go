@@ -228,10 +228,15 @@ shape, so sync engine construction receives mount-root scope from
 for create and overwrite alike. A record for other content is canceled on
 the server before it is dropped, and so is one whose resume fails for any
 reason but shutdown (D-037, R-5.6.13); records carry the session's
-`ExpiresAt`. A failed final fragment (`graph.FinalFragmentError`) or a resume
-whose session is gone looks the item up first and adopts it only when it is
-provably the upload's own commit, so a commit that outlasted its response is
-never uploaded again (D-036, R-5.6.12). A matching QuickXor proves it. A
+`ExpiresAt`. A failed final fragment (`graph.FinalFragmentError`), a resume
+whose session is gone, or a resume whose session status lists no range left
+to upload (`graph.ErrUploadSessionComplete`: every byte arrived and the item
+is committed or committing) looks the item up first and adopts it only when
+it is provably the upload's own commit, so a commit that outlasted its
+response is never uploaded again (D-036, R-5.6.12). The empty status used to
+parse as an error and drop the session, so a multi-GB file whose final
+fragment outlasted its response and was looked up before the server had
+committed was uploaded a second time. A matching QuickXor proves it. A
 hashless item, or a Business item whose bytes enrichment rewrote, is adopted
 only on positive evidence: it carries the modification time the upload sent
 (to the second) and an eTag other than the one the upload was planned
@@ -247,6 +252,9 @@ expiry while the item holds other bytes, or a fragment answered 404, is
 L-02), and sync turns it into a stale precondition. Evidence:
 `TestSessionUpload_FinalFragmentFailureAdoptsCommittedItem`,
 `TestSessionUpload_GoneSessionWithLandedItemIsAdopted`,
+`TestSessionUpload_CompletedSessionWithLandedItemIsAdopted`,
+`TestSessionUpload_CompletedSessionWithoutLandedItemStartsFresh`,
+`TestResumeUpload_StatusWithNoRangesLeftIsComplete`,
 `TestSessionUpload_GoneSessionBeforeExpiryIsInvalidation`,
 `TestSessionUpload_DroppedSessionsAreCancelled`,
 `TestUploadFile_SmallFileFinalFragmentFailureAdoptsCommittedItem`,

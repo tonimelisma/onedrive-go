@@ -265,10 +265,13 @@ func (tm *TransferManager) resumePersistedSession(
 	}
 
 	switch {
-	case graph.IsFinalFragmentUncertain(resumeErr) || errors.Is(resumeErr, graph.ErrUploadSessionExpired):
+	case graph.IsFinalFragmentUncertain(resumeErr),
+		errors.Is(resumeErr, graph.ErrUploadSessionExpired),
+		errors.Is(resumeErr, graph.ErrUploadSessionComplete):
 		// The session finished or is gone: it completed (a crash after
-		// the final fragment), expired, or was invalidated by a concurrent
-		// change. Look before deciding.
+		// the final fragment, or a status with no range left to upload),
+		// expired, or was invalidated by a concurrent change. Look before
+		// deciding.
 	case errors.Is(resumeErr, graph.ErrNotFound):
 		// A fragment answered 404 mid-upload: invalidated (L-02).
 		tm.deleteSession(driveStr, up.key)
@@ -293,9 +296,11 @@ func (tm *TransferManager) resumePersistedSession(
 		return landed, true, nil
 	}
 
-	if graph.IsFinalFragmentUncertain(resumeErr) && !errors.Is(resumeErr, graph.ErrNotFound) {
-		// The final fragment failed for another reason and the item is not
-		// ours: drop the session (canceled on the server) and start over.
+	if errors.Is(resumeErr, graph.ErrUploadSessionComplete) ||
+		(graph.IsFinalFragmentUncertain(resumeErr) && !errors.Is(resumeErr, graph.ErrNotFound)) {
+		// The session has nothing left to upload, or the final fragment
+		// failed for another reason, and the item is not ours: drop the
+		// session (canceled on the server) and start over.
 		tm.dropSession(ctx, driveStr, up.key, session.UploadURL)
 		return nil, false, nil
 	}
