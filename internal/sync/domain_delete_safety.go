@@ -1,5 +1,7 @@
 package sync
 
+import "time"
+
 // Delete-safety vocabulary shared by the planner, which decides the hold
 // (planner_delete_safety.go), the store, which records it for status, and the
 // engine report. The policy itself lives with the planner.
@@ -21,6 +23,14 @@ const (
 	// deleteSafetyReasonTooMany: the proportional threshold was exceeded.
 	deleteSafetyReasonTooMany deleteSafetyReason = "too_many"
 )
+
+// deleteSafetyWindow is how long an executed, unconfirmed delete keeps
+// counting toward the proportional rule. The hold used to judge each plan
+// alone, so a process removing files below the threshold per pass (a failing
+// disk, a misbehaving app, a cron job) emptied a drive one small batch at a
+// time and was never held. Deletes the user confirmed with
+// `sync --confirm-deletes` are not counted: the confirmation reviewed them.
+const deleteSafetyWindow = 24 * time.Hour
 
 // heldDelete is one delete the hold kept out of the executable plan.
 type heldDelete struct {
@@ -51,4 +61,23 @@ func countHeldDeletesBySide(held []heldDelete) (local int, remote int) {
 		remote++
 	}
 	return local, remote
+}
+
+// heldDeleteSides lists the distinct sides of held, in order of first
+// appearance.
+func heldDeleteSides(held []heldDelete) []deleteSafetySide {
+	var sides []deleteSafetySide
+	for i := range held {
+		seen := false
+		for _, side := range sides {
+			if side == held[i].Side {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			sides = append(sides, held[i].Side)
+		}
+	}
+	return sides
 }

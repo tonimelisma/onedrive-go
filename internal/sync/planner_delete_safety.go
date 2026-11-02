@@ -22,7 +22,10 @@ import (
 //     vanished, and every delete toward the other side is held;
 //   - proportional: more deletes (files and folders) toward one side than
 //     max(deleteSafetyMinFiles, deleteSafetyBaselinePercent of baseline items)
-//     are held.
+//     are held. The unconfirmed deletes sync already ran toward that side
+//     within deleteSafetyWindow count too, against the baseline as it stood
+//     before them, so a deletion spread over many small passes is judged as
+//     the one deletion it is.
 //
 // Moves never count: a reorganization is not data loss. Everything else in
 // the plan continues. A held delete, and any action that depends on one, is
@@ -47,6 +50,10 @@ type deleteSafetyInput struct {
 	// is judged by the rules again, so confirming one batch never waves
 	// through the next.
 	Approved []heldDelete
+	// RecentDeletes counts, per side, the unconfirmed deletes sync ran
+	// toward that side within deleteSafetyWindow before this plan (the
+	// store's delete ledger). They count toward the proportional rule.
+	RecentDeletes map[deleteSafetySide]int
 }
 
 // applyDeleteSafetyHold removes held deletes, and every action that depends
@@ -63,14 +70,19 @@ func applyDeleteSafetyHold(plan *actionPlan, input *deleteSafetyInput) error {
 	}
 
 	approved := approvedDeleteIndexes(plan.Actions, input.Approved)
+	for i := range approved {
+		plan.Actions[i].DeleteConfirmed = true
+	}
 	reasons := map[actionType]deleteSafetyReason{}
 	if reason, held := deleteSafetyVerdict(
-		plan.Actions, approved, ActionRemoteDelete, baselineItems, localSideIsEmpty(input.LocalRows),
+		plan.Actions, approved, ActionRemoteDelete, baselineItems,
+		input.RecentDeletes[deleteSafetySideRemote], localSideIsEmpty(input.LocalRows),
 	); held {
 		reasons[ActionRemoteDelete] = reason
 	}
 	if reason, held := deleteSafetyVerdict(
-		plan.Actions, approved, ActionLocalDelete, baselineItems, remoteSideIsEmpty(input.RemoteRows),
+		plan.Actions, approved, ActionLocalDelete, baselineItems,
+		input.RecentDeletes[deleteSafetySideLocal], remoteSideIsEmpty(input.RemoteRows),
 	); held {
 		reasons[ActionLocalDelete] = reason
 	}
@@ -152,14 +164,17 @@ func approvedDeleteIndexes(actions []Action, approved []heldDelete) map[int]stru
 
 // deleteSafetyVerdict decides whether the unapproved deletes of deleteType
 // are held. Folder deletes count like file deletes: deleting a tree of
-// folders is as much a deletion as deleting the files in them.
-// oppositeSideEmpty is whether the side whose absence produced them has no
-// entries at all.
+// folders is as much a deletion as deleting the files in them. recentDeletes
+// are the unconfirmed deletes already run toward the same side within the
+// window; they count with this plan's, against the baseline as it stood
+// before them. oppositeSideEmpty is whether the side whose absence produced
+// them has no entries at all.
 func deleteSafetyVerdict(
 	actions []Action,
 	approved map[int]struct{},
 	deleteType actionType,
 	baselineItems int,
+	recentDeletes int,
 	oppositeSideEmpty bool,
 ) (deleteSafetyReason, bool) {
 	deletes := 0
@@ -178,7 +193,7 @@ func deleteSafetyVerdict(
 	if oppositeSideEmpty {
 		return deleteSafetyReasonSideVanished, true
 	}
-	if deletes > deleteSafetyThreshold(baselineItems) {
+	if deletes+recentDeletes > deleteSafetyThreshold(baselineItems+recentDeletes) {
 		return deleteSafetyReasonTooMany, true
 	}
 

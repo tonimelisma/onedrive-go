@@ -154,3 +154,61 @@ func TestDeleteSafetyHold_HeldRowWithoutItemIDDoesNotApproveAKnownItem(t *testin
 	require.Len(t, plan.HeldDeletes, 60)
 	assert.Equal(t, "id-f000.txt", plan.HeldDeletes[0].ItemID, "held rows record the item ID")
 }
+
+// Validates: R-6.2.5
+//
+// The hold used to judge each plan alone: 40 deletes against 200 items ran,
+// then 40 more ran, and so on until the drive was empty. The unconfirmed
+// deletes already run within the window count with this plan's, against the
+// baseline as it stood before them.
+func TestDeleteSafetyHold_RecentUnconfirmedDeletesCountTowardTheThreshold(t *testing.T) {
+	t.Parallel()
+
+	var actions []Action
+	for i := range 40 {
+		actions = append(actions, remoteDeleteAction(fmt.Sprintf("f%03d.txt", i), ItemTypeFile))
+	}
+	local := []localStateRow{{Path: "keep.txt", ItemType: ItemTypeFile}}
+
+	alone := planOf(actions...)
+	require.NoError(t, applyDeleteSafetyHold(alone, &deleteSafetyInput{
+		Baseline: baselineWithItems(t, 160, 0), LocalRows: local,
+	}))
+	assert.Len(t, alone.Actions, 40, "40 of 160 is below max(50, 48): runs")
+	assert.Empty(t, alone.HeldDeletes)
+
+	afterForty := planOf(actions...)
+	require.NoError(t, applyDeleteSafetyHold(afterForty, &deleteSafetyInput{
+		Baseline: baselineWithItems(t, 160, 0), LocalRows: local,
+		RecentDeletes: map[deleteSafetySide]int{deleteSafetySideRemote: 40},
+	}))
+	assert.Empty(t, afterForty.Actions, "40 now plus 40 within the window is 80 of the 200 there were: held")
+	assert.Len(t, afterForty.HeldDeletes, 40)
+	assert.Equal(t, deleteSafetyReasonTooMany, afterForty.HeldDeletes[0].Reason)
+
+	otherSide := planOf(actions...)
+	require.NoError(t, applyDeleteSafetyHold(otherSide, &deleteSafetyInput{
+		Baseline: baselineWithItems(t, 160, 0), LocalRows: local,
+		RecentDeletes: map[deleteSafetySide]int{deleteSafetySideLocal: 40},
+	}))
+	assert.Len(t, otherSide.Actions, 40, "deletes toward the other side do not count")
+}
+
+// Validates: R-6.2.5
+func TestDeleteSafetyHold_ConfirmedDeletesAreMarkedForTheLedger(t *testing.T) {
+	t.Parallel()
+
+	plan := planOf(
+		remoteDeleteAction("f000.txt", ItemTypeFile),
+		remoteDeleteAction("f001.txt", ItemTypeFile),
+	)
+	require.NoError(t, applyDeleteSafetyHold(plan, &deleteSafetyInput{
+		Baseline:  baselineWithItems(t, 2, 0),
+		LocalRows: []localStateRow{{Path: "keep.txt", ItemType: ItemTypeFile}},
+		Approved:  []heldDelete{{Path: "f000.txt", Side: deleteSafetySideRemote, ItemID: "id-f000.txt"}},
+	}))
+
+	require.Len(t, plan.Actions, 2)
+	assert.True(t, plan.Actions[0].DeleteConfirmed, "the approved delete is confirmed")
+	assert.False(t, plan.Actions[1].DeleteConfirmed, "the other one counts toward the next hold")
+}

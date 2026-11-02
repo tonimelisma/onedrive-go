@@ -79,6 +79,10 @@ type Action struct {
 	// longer has, which the move verifies against that plan, keeps in the
 	// trash, and then replaces (D-058).
 	ReplaceLocalTarget bool
+	// DeleteConfirmed marks a delete the user approved with
+	// `sync --confirm-deletes`. The store leaves it out of the delete ledger
+	// the proportional hold counts, since the confirmation reviewed it.
+	DeleteConfirmed bool
 }
 
 // ThrottleTargetKey returns the narrowest remote boundary that can be blocked
@@ -168,6 +172,8 @@ type actionOutcome struct {
 	LocalMtime            int64 // local mtime at sync time
 	RemoteMtime           int64 // remote mtime at sync time; zero means unknown
 	ETag                  string
+	// DeleteConfirmed: see Action.DeleteConfirmed.
+	DeleteConfirmed bool
 	// KeptLocally marks a local folder delete that removed the synced
 	// folder from the baseline but left the folder on disk because it holds
 	// only content sync ignores (D-012). The local identity fields describe
