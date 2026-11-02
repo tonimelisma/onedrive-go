@@ -87,6 +87,7 @@ func (r *Report) withPass(pass *Report) *Report {
 	r.DeferredByMode = pass.DeferredByMode
 	r.HeldLocalDeletes = pass.HeldLocalDeletes
 	r.HeldRemoteDeletes = pass.HeldRemoteDeletes
+	r.LeftForNextSync = pass.LeftForNextSync
 
 	return r
 }

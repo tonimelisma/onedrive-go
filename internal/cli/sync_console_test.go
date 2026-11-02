@@ -157,6 +157,30 @@ func TestSyncConsole_SummaryExplainsHeldBackWork(t *testing.T) {
 	assert.Contains(t, out.String(), "Held back by --download-only: 3 uploads.")
 }
 
+// Validates: R-6.6.19
+//
+// Live, 2026-11-02: a one-shot confirm of 6,000 deletes met a 429 after
+// 5,557; the scope took the remaining 442 back and the pass ended with
+// "1 will be retried", counting only the failed one. The work a throttle
+// leaves for the next run is counted too.
+func TestSyncConsole_SummaryCountsWorkAThrottleLeftForTheNextSync(t *testing.T) {
+	t.Parallel()
+
+	c, out, _ := testSyncConsole()
+	c.Summary(singleMountResult(&syncengine.Report{
+		Mode:            syncengine.SyncBidirectional,
+		Duration:        16 * time.Minute,
+		RemoteDeletes:   5557,
+		Succeeded:       5557,
+		Failed:          1,
+		LeftForNextSync: 442,
+	}))
+
+	// Without an activity feed the one failure is reported as failed; the
+	// 442 the scope took back are counted as retried either way.
+	assert.Contains(t, out.String(), "deleted 5557 files on OneDrive; 1 failed; 442 will be retried on the next sync.")
+}
+
 // Validates: R-6.6.22
 func TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError(t *testing.T) {
 	t.Parallel()

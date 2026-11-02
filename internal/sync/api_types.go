@@ -43,6 +43,11 @@ type (
 		// remove content from.
 		HeldLocalDeletes  int
 		HeldRemoteDeletes int
+		// LeftForNextSync is the planned work the pass neither completed
+		// nor failed: actions a throttle scope took back and holds for a
+		// trial after the pass ended, or parked retry work. The summary
+		// counts it with the retryable failures as "will be retried".
+		LeftForNextSync int
 
 		Succeeded int
 		Failed    int
