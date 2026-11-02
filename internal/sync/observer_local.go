@@ -467,8 +467,13 @@ func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 // comparing each entry against the in-memory baseline. Stateless — syncRoot
 // is a parameter of FullScan, allowing reuse across passes.
 type localObserver struct {
-	baseline         *Baseline
-	logger           *slog.Logger
+	baseline *Baseline
+	logger   *slog.Logger
+	// hashCache, when set, is the durable record of hashes a full scan
+	// computed for files the baseline did not know (R-2.2.8): consulted
+	// before a new file is hashed, fed as the hash phase goes. Nil (a dry
+	// run, or a test) means every new file is hashed and nothing is kept.
+	hashCache        localHashCache
 	checkWorkers     int // parallel hash goroutine limit for FullScan (0 → defaultCheckWorkers)
 	filterConfig     ContentFilterConfig
 	protectedRoots   []ProtectedRoot
@@ -625,6 +630,12 @@ func (o *localObserver) SetProtectedRootEventSink(sink protectedRootEventSink) {
 // get conflated with local exclusions.
 func (o *localObserver) SetObservationRules(rules LocalObservationRules) {
 	o.observationRules = rules
+}
+
+// SetLocalHashCache installs the durable hash cache a full scan consults and
+// feeds (R-2.2.8).
+func (o *localObserver) SetLocalHashCache(cache localHashCache) {
+	o.hashCache = cache
 }
 
 // SetMountBoundaryFlags installs the folders previously recorded as crossed

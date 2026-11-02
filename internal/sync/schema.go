@@ -55,7 +55,12 @@ const (
 	// user's confirmation, by side and commit time, so the proportional
 	// delete-safety rule counts a deletion spread over many small passes
 	// within its 24-hour window (R-6.2.5).
-	currentSyncStoreGeneration = 25
+	//
+	// Generation 26 adds local_hash_cache: the hashes a full scan computed
+	// for files the baseline did not know, with the metadata that must still
+	// match for one to be trusted, so a first scan interrupted before its
+	// pass commits does not re-read the files it already hashed (R-2.2.8).
+	currentSyncStoreGeneration = 26
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -141,6 +146,17 @@ CREATE TABLE IF NOT EXISTS delete_ledger (
     PRIMARY KEY (side, path, committed_at)
 );
 CREATE INDEX IF NOT EXISTS idx_delete_ledger_committed_at ON delete_ledger(committed_at);
+
+CREATE TABLE IF NOT EXISTS local_hash_cache (
+    path             TEXT    NOT NULL PRIMARY KEY,
+    hash             TEXT    NOT NULL,
+    size             INTEGER NOT NULL,
+    mtime            INTEGER NOT NULL,
+    ctime            INTEGER NOT NULL,
+    local_device     INTEGER NOT NULL,
+    local_inode      INTEGER NOT NULL,
+    local_birth_time INTEGER NOT NULL DEFAULT 0
+);
 
 CREATE TABLE IF NOT EXISTS remote_state (
     drive_id      TEXT    NOT NULL DEFAULT '',
@@ -268,6 +284,9 @@ func canonicalSyncStoreColumns() map[string][]string {
 		},
 		"delete_ledger": {
 			"side", "path", "item_id", "committed_at",
+		},
+		"local_hash_cache": {
+			"path", "hash", "size", "mtime", "ctime", "local_device", "local_inode", "local_birth_time",
 		},
 		"local_state": {
 			"path", "item_type", "hash", "size", "mtime", "ctime",
