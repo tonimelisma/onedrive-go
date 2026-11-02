@@ -66,6 +66,7 @@ func (f *sqlFault) fired() int {
 	return f.hits
 }
 
+//nolint:gochecknoglobals // database/sql registers a driver once per process, and its connections find their fault by database path.
 var (
 	faultDriverOnce stdsync.Once
 	faultsMu        stdsync.Mutex
