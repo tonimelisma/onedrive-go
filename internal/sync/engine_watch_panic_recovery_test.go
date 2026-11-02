@@ -13,7 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
-// Validates: R-6.7.1
+// Validates: R-6.3.8
 //
 // A watch observer runs for the life of a mount. Without recovery at the
 // goroutine boundary, a panic in one mount's observer terminates the process
@@ -39,7 +39,7 @@ func TestRecoverObserverPanic_DeliversPanicAsObserverError(t *testing.T) {
 	assert.Contains(t, err.Error(), "local")
 }
 
-// Validates: R-6.7.1
+// Validates: R-6.3.8
 func TestRecoverObserverPanic_CleanExitReportsNothing(t *testing.T) {
 	t.Parallel()
 
@@ -56,7 +56,7 @@ func TestRecoverObserverPanic_CleanExitReportsNothing(t *testing.T) {
 	assert.Empty(t, errs, "a clean observer exit must not synthesize an error")
 }
 
-// Validates: R-6.7.1
+// Validates: R-6.3.8
 //
 // The report must never block the panicking goroutine: a full channel means
 // the runtime is already failing, and hanging here would strand the mount.
@@ -78,7 +78,7 @@ func TestRecoverObserverPanic_FullChannelDoesNotBlock(t *testing.T) {
 	<-done
 }
 
-// Validates: R-6.7.1
+// Validates: R-6.3.8
 //
 // End-to-end proof of the wiring: a panic raised inside the real local
 // observer goroutine must surface as a watch-mode error rather than killing
@@ -108,7 +108,7 @@ func TestRunWatch_LocalObserverPanicFailsMountInsteadOfCrashing(t *testing.T) {
 	}
 }
 
-// Validates: R-6.7.1
+// Validates: R-6.3.8
 //
 // The full remote refresh runs in its own goroutine. A panic there used to
 // unwind the process; now it reaches the loop as a refresh result whose
@@ -149,7 +149,7 @@ func TestRunFullRemoteRefreshAsync_PanicFailsMountInsteadOfCrashing(t *testing.T
 	assert.False(t, rt.resources.refreshActive, "a panicked refresh is finished, not still running")
 }
 
-// Validates: R-6.7.1
+// Validates: R-6.3.8
 //
 // The socket.io wake source only accelerates polling, so a panic in it takes
 // the ordinary wake-source failure path: logged, and watch keeps polling on
