@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Validates: R-2.11, R-6.7.1
+// Validates: R-6.3.8
 //
 // Losing every observer outside shutdown means watch mode has no source of
 // fresh truth left. Continuing would silently look healthy while observing
@@ -25,7 +25,7 @@ func TestHandleObserverExit_LastObserverOutsideShutdownReturnsError(t *testing.T
 	assert.Equal(t, 0, rt.resources.activeObservers)
 }
 
-// Validates: R-2.11, R-6.7.1
+// Validates: R-6.3.8
 func TestHandleObserverExit_RemainingObserverKeepsWatchAlive(t *testing.T) {
 	t.Parallel()
 
@@ -37,7 +37,7 @@ func TestHandleObserverExit_RemainingObserverKeepsWatchAlive(t *testing.T) {
 	assert.Equal(t, 1, rt.resources.activeObservers)
 }
 
-// Validates: R-2.11, R-6.7.1
+// Validates: R-6.3.8
 //
 // During shutdown the same condition is the expected end state, not a failure.
 func TestHandleObserverExit_LastObserverDuringShutdownIsNotAnError(t *testing.T) {
@@ -51,7 +51,7 @@ func TestHandleObserverExit_LastObserverDuringShutdownIsNotAnError(t *testing.T)
 	assert.Equal(t, 0, rt.resources.activeObservers)
 }
 
-// Validates: R-2.11, R-6.7.1
+// Validates: R-6.3.8
 //
 // A draining runtime reaching zero observers outside shutdown is an invariant
 // violation, not an ordinary error path.

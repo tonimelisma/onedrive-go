@@ -498,7 +498,7 @@ func TestWarnOnChange_RepeatsOfTheSameFailureStayBelowWarn(t *testing.T) {
 // runner error, and its siblings never notice. Before the runner goroutine
 // had a recover, the panic unwound the process and every other mount with it.
 //
-// Validates: R-6.7.1
+// Validates: R-6.3.8
 func TestRunWatch_RunnerPanicFailsOnlyThatMountAndRestartsIt(t *testing.T) {
 	panicky := testStandaloneMount(t, "personal:panicky@example.com", "Panicky")
 	sibling := testStandaloneMount(t, "personal:sibling@example.com", "Sibling")
