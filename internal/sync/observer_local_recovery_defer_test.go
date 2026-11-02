@@ -65,7 +65,9 @@ func TestWatch_RecoveryScanDefersWhileRuntimeHasNotTakenObservations(t *testing.
 	snapshot := receiveBatch(t, batches, "recovery full snapshot once the runtime has room")
 	require.True(t, snapshot.fullSnapshot)
 	assert.True(t, containsLocalRow(snapshot.rows, "missed.txt"))
-	assert.Equal(t, int32(1), scans.Load())
+	// The after-scan hook runs once the snapshot is handed over, on the
+	// observer's goroutine; the receive above does not wait for it.
+	assert.Eventually(t, func() bool { return scans.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
 }
 
 // The periodic safety scan is deferred the same way, and leaves a recovery
@@ -113,7 +115,8 @@ func TestWatch_SafetyTickDefersWhileRuntimeHasNotTakenObservations(t *testing.T)
 	snapshot := receiveBatch(t, batches, "full snapshot once the runtime has room")
 	require.True(t, snapshot.fullSnapshot)
 	assert.True(t, containsLocalRow(snapshot.rows, "missed.txt"))
-	assert.Equal(t, int32(1), scans.Load())
+	assert.Eventually(t, func() bool { return scans.Load() == 1 }, 5*time.Second, 10*time.Millisecond,
+		"the after-scan hook runs once the snapshot is handed over")
 }
 
 func waitForCapturedTimer(t *testing.T, timers <-chan capturedTimer, what string) capturedTimer {
