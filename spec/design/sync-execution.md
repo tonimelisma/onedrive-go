@@ -165,8 +165,10 @@ evidence is not evidence of sameness, and a destructive action may not run on
 it. Each refusal is a superseded precondition, so the path is replanned rather
 than stranded, and a row that later hashes cleanly deletes normally.
 
-A create upload records the new item as a pending create through
-`UploadOpts.OnCreated` before any content is sent (R-5.6.15). A 409 on the
+A create upload records its intent at the path before the request, and the
+new item as a pending create through `UploadOpts.OnCreated` before any
+content is sent (R-5.6.15); an attempt whose hook never ran clears the
+intent. A 409 on the
 create is resolved, not retried as is: into our own placeholder from an
 interrupted attempt (upload by ID with If-Match on the eTag just read while it
 is still empty; the creation eTag does not work, since a canceled upload
