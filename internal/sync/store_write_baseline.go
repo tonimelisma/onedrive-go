@@ -430,6 +430,9 @@ func (s *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 	if applyErr := applySingleMutation(ctx, tx, outcome); applyErr != nil {
 		return applyErr
 	}
+	if ledgerErr := s.recordDeleteLedgerTx(ctx, tx, outcome); ledgerErr != nil {
+		return ledgerErr
+	}
 	if crashErr := s.reachCrashPoint(crashPointCommitOutcome); crashErr != nil {
 		err = crashErr
 		return err
@@ -724,6 +727,7 @@ func mutationFromActionOutcome(o *actionOutcome) *BaselineMutation {
 		LocalIdentityObserved: o.LocalIdentityObserved,
 		ETag:                  o.ETag,
 		KeptLocally:           o.KeptLocally,
+		DeleteConfirmed:       o.DeleteConfirmed,
 	}
 }
 

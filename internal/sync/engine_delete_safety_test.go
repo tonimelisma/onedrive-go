@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -268,4 +269,76 @@ func TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked(t *tes
 	held := readHeldDeletes(t, eng)
 	require.Len(t, held, 70)
 	assert.Equal(t, "Docs/f071.txt", held[0].Path)
+}
+
+// Validates: R-6.2.5
+//
+// A process removing files below the threshold per pass (a failing disk, a
+// misbehaving app, a cron job) used to empty the drive one small batch at a
+// time: every plan judged only its own deletes against a baseline the
+// previous passes had already shrunk. The unconfirmed deletes run within the
+// window now count with the next plan's.
+func TestRunOnce_SlowDeletionAcrossPassesIsHeldWithinTheWindow(t *testing.T) {
+	t.Parallel()
+
+	remote := seedDeleteSafetyRemote(t, 200)
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	clock := newManualClock(time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC))
+	installManualClockForTestEngine(eng, clock)
+	runScenarioPass(t, eng)
+
+	for i := range 40 {
+		require.NoError(t, os.Remove(deleteSafetyFilePath(syncRoot, i)))
+	}
+	report := runScenarioPass(t, eng)
+	assert.Zero(t, report.HeldRemoteDeletes, "40 of 203 is below max(50, 61): runs")
+	require.Len(t, remote.deletes, 40)
+
+	clock.Advance(time.Hour)
+	for i := 40; i < 80; i++ {
+		require.NoError(t, os.Remove(deleteSafetyFilePath(syncRoot, i)))
+	}
+	report = runScenarioPass(t, eng)
+	assert.Equal(t, 40, report.HeldRemoteDeletes, "40 now plus 40 an hour ago is 80 of the 203 there were: held")
+	assert.Len(t, remote.deletes, 40, "nothing more is deleted on OneDrive")
+
+	// The confirmation reviews what went before it: the approved set runs
+	// and the ledger for that side is cleared, so a few more deletes after
+	// it are an ordinary small deletion again.
+	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: true})
+	require.NoError(t, err)
+	assert.Zero(t, report.HeldRemoteDeletes)
+	assert.Len(t, remote.deletes, 80)
+
+	for i := 80; i < 90; i++ {
+		require.NoError(t, os.Remove(deleteSafetyFilePath(syncRoot, i)))
+	}
+	report = runScenarioPass(t, eng)
+	assert.Zero(t, report.HeldRemoteDeletes, "10 after a confirmation counts from zero")
+	assert.Len(t, remote.deletes, 90)
+}
+
+// Validates: R-6.2.5
+func TestRunOnce_DeletesOlderThanTheWindowStopCounting(t *testing.T) {
+	t.Parallel()
+
+	remote := seedDeleteSafetyRemote(t, 200)
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	clock := newManualClock(time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC))
+	installManualClockForTestEngine(eng, clock)
+	runScenarioPass(t, eng)
+
+	for i := range 40 {
+		require.NoError(t, os.Remove(deleteSafetyFilePath(syncRoot, i)))
+	}
+	runScenarioPass(t, eng)
+	require.Len(t, remote.deletes, 40)
+
+	clock.Advance(deleteSafetyWindow + time.Minute)
+	for i := 40; i < 80; i++ {
+		require.NoError(t, os.Remove(deleteSafetyFilePath(syncRoot, i)))
+	}
+	report := runScenarioPass(t, eng)
+	assert.Zero(t, report.HeldRemoteDeletes, "a day later the first 40 no longer count: 40 of 163 is below max(50, 49)")
+	assert.Len(t, remote.deletes, 80)
 }

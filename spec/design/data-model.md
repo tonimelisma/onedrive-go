@@ -58,6 +58,7 @@ rebuildable runtime facts:
 | `block_scopes` | Shared blocker timing and lifecycle | `scope_key` |
 | `observation_state` | Content drive owner, primary cursor, and remote refresh cadence | zero-or-one row |
 | `held_deletes` | Deletes the delete-safety hold keeps for confirmation (status projection) | zero or more rows |
+| `delete_ledger` | Deletes sync ran without confirmation, by side and commit time, for the proportional hold's 24-hour window | zero or more rows |
 | `mount_boundaries` | Folders crossed into another filesystem under `cross_filesystems` | `path` |
 | `kept_local_folders` | Folders deleted on OneDrive and kept locally only for content sync ignores | `path` |
 
@@ -310,6 +311,17 @@ remove content), `reason` (`side_vanished` or `too_many`), `item_type` and
 `item_id`. `sync --confirm-deletes` releases exactly these rows.
 It is replaced on every live plan; the planner re-derives the hold from
 current truth and reads the table only as the set a confirmation approves.
+
+## `delete_ledger`
+
+`delete_ledger` records every local or remote delete sync ran without the
+user's confirmation: `side`, `path`, `item_id` and `committed_at` (Unix
+nanoseconds, the store's clock at commit). `CommitMutation` appends the row in
+the outcome's own transaction. At plan time the engine prunes rows older than
+the 24-hour window and counts the rest per side; the proportional
+delete-safety rule adds them to the plan's deletes and to the baseline it
+measures against. A confirmed delete (`BaselineMutation.DeleteConfirmed`) is
+never recorded, and `sync --confirm-deletes` clears the sides it approved.
 
 ## Schema Discipline
 

@@ -396,12 +396,13 @@ func (e *executor) ExecuteRemoteDelete(ctx context.Context, action *Action) acti
 // DeleteOutcome builds a successful ActionOutcome for a delete action.
 func (e *executor) DeleteOutcome(action *Action, actionType actionType) actionOutcome {
 	return actionOutcome{
-		Action:   actionType,
-		Success:  true,
-		Path:     action.Path,
-		DriveID:  e.resolveDriveID(action),
-		ItemID:   action.ItemID,
-		ItemType: actionItemType(action),
+		Action:          actionType,
+		Success:         true,
+		Path:            action.Path,
+		DriveID:         e.resolveDriveID(action),
+		ItemID:          action.ItemID,
+		ItemType:        actionItemType(action),
+		DeleteConfirmed: action.DeleteConfirmed,
 	}
 }
 
