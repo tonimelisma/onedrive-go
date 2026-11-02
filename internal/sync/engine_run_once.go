@@ -272,6 +272,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	pool.Stop()
 	if drainErr != nil {
 		report.Succeeded, report.Failed, report.Errors = r.resultStats()
+		report.LeftForNextSync = max(0, len(plan.Actions)-report.Succeeded-report.Failed)
 		report.Errors = append(report.Errors, drainErr)
 		return drainErr
 	}
@@ -281,6 +282,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	r.logFailureSummary()
 
 	report.Succeeded, report.Failed, report.Errors = r.resultStats()
+	report.LeftForNextSync = max(0, len(plan.Actions)-report.Succeeded-report.Failed)
 	return nil
 }
 
