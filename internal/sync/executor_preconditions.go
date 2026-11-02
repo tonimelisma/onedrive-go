@@ -453,7 +453,7 @@ func expectedUploadHash(action *Action) string {
 
 // validateDownloadTargetPrecondition requires target, the rooted path the
 // download writes (downloadTargetSpelling), to still hold what the plan saw.
-func (e *executor) validateDownloadTargetPrecondition(action *Action, target string) error {
+func (e *executor) validateDownloadTargetPrecondition(ctx context.Context, action *Action, target string) error {
 	if action == nil {
 		return nil
 	}
@@ -488,7 +488,7 @@ func (e *executor) validateDownloadTargetPrecondition(action *Action, target str
 		return stalePreconditionError("download target %s appeared", action.Path)
 	}
 
-	return e.validateExistingDownloadTarget(action, target, info, planned)
+	return e.validateExistingDownloadTarget(ctx, action, target, info, planned)
 }
 
 func actionClearsLocalBeforeDownload(action *Action) bool {
@@ -503,7 +503,7 @@ func plannedLocalState(action *Action) *localState {
 	return action.View.Local
 }
 
-func (e *executor) validateExistingDownloadTarget(action *Action, target string, info os.FileInfo, planned *localState) error {
+func (e *executor) validateExistingDownloadTarget(ctx context.Context, action *Action, target string, info os.FileInfo, planned *localState) error {
 	if err := validateDownloadTargetMetadata(action, info, planned); err != nil {
 		return err
 	}
@@ -512,7 +512,7 @@ func (e *executor) validateExistingDownloadTarget(action *Action, target string,
 		if absErr != nil {
 			return normalizeSyncTreePathError(absErr)
 		}
-		currentHash, hashErr := e.hashFunc(absPath)
+		currentHash, hashErr := e.hashFunc(ctx, absPath)
 		if hashErr != nil {
 			return fmt.Errorf("hashing download target %s: %w", action.Path, hashErr)
 		}
@@ -578,13 +578,13 @@ func plannedCtimeChanged(planned *localState, info os.FileInfo) bool {
 // through the descriptor of the inode that is then preserved in the trash, so
 // the version kept is exactly the version checked (D-010, P-4); the rename
 // that follows can no longer lose the content it replaces.
-func (e *executor) validateDownloadTargetBeforeReplace(action *Action, target string) error {
+func (e *executor) validateDownloadTargetBeforeReplace(ctx context.Context, action *Action, target string) error {
 	if e.trash == nil {
-		return e.validateDownloadTargetPrecondition(action, target)
+		return e.validateDownloadTargetPrecondition(ctx, action, target)
 	}
 	info, err := e.syncTree.Lstat(target)
 	if err != nil || !info.Mode().IsRegular() || actionClearsLocalBeforeDownload(action) {
-		return e.validateDownloadTargetPrecondition(action, target)
+		return e.validateDownloadTargetPrecondition(ctx, action, target)
 	}
 	if dbErr := e.refuseLiveDatabaseTarget(target); dbErr != nil {
 		return dbErr
@@ -643,7 +643,7 @@ func (e *executor) preserveReplacedDownloadTarget(action *Action, target string,
 
 // validateLocalMovePrecondition checks a local move between source and dest,
 // the rooted spellings on disk of action.OldPath and action.Path.
-func (e *executor) validateLocalMovePrecondition(action *Action, source, dest string) error {
+func (e *executor) validateLocalMovePrecondition(ctx context.Context, action *Action, source, dest string) error {
 	if action == nil {
 		return nil
 	}
@@ -662,7 +662,7 @@ func (e *executor) validateLocalMovePrecondition(action *Action, source, dest st
 		return nil
 	}
 
-	return e.validateLocalMoveSourceAgainstBaseline(source, info, action.View.Baseline)
+	return e.validateLocalMoveSourceAgainstBaseline(ctx, source, info, action.View.Baseline)
 }
 
 // validateLocalMoveParentExists requires the parent directory of dest (rooted,
@@ -686,7 +686,7 @@ func (e *executor) validateLocalMoveParentExists(dest string) error {
 	return nil
 }
 
-func (e *executor) validateLocalDeleteFolderPrecondition(action *Action, relPath string) error {
+func (e *executor) validateLocalDeleteFolderPrecondition(ctx context.Context, action *Action, relPath string) error {
 	if action == nil || action.View == nil || action.View.Baseline == nil {
 		return nil
 	}
@@ -700,7 +700,7 @@ func (e *executor) validateLocalDeleteFolderPrecondition(action *Action, relPath
 	}
 
 	if !info.IsDir() || action.View.Baseline.ItemType != ItemTypeFolder || action.View.Local == nil {
-		return e.validateLocalSourceAgainstBaseline("local delete", relPath, info, action.View.Baseline)
+		return e.validateLocalSourceAgainstBaseline(ctx, "local delete", relPath, info, action.View.Baseline)
 	}
 
 	// A folder is checked against the folder the plan saw, not the
@@ -773,7 +773,7 @@ func (e *executor) validateLocalMoveDestinationAbsent(action *Action, dest strin
 // superseded the remote move on every pass and stranded the edit.
 // clearLocalMoveDestination makes way for a replacing local move immediately
 // before its rename, after the source and the parent were validated.
-func (e *executor) clearLocalMoveDestination(action *Action, dest string) error {
+func (e *executor) clearLocalMoveDestination(ctx context.Context, action *Action, dest string) error {
 	if !action.ReplaceLocalTarget {
 		return nil
 	}
@@ -785,7 +785,7 @@ func (e *executor) clearLocalMoveDestination(action *Action, dest string) error 
 		return normalizeSyncTreePathError(err)
 	}
 
-	return e.clearReplacedLocalMoveTarget(action, dest, destInfo)
+	return e.clearReplacedLocalMoveTarget(ctx, action, dest, destInfo)
 }
 
 // clearReplacedLocalMoveTarget makes way for a move that replaces the file at
@@ -793,7 +793,7 @@ func (e *executor) clearLocalMoveDestination(action *Action, dest string) error 
 // saw (a regular file with its observed hash, metadata and ctime), and is kept
 // in the trash when one is configured, verified through the descriptor that is
 // preserved. Without a trash the verified file is replaced by the rename.
-func (e *executor) clearReplacedLocalMoveTarget(action *Action, dest string, destInfo os.FileInfo) error {
+func (e *executor) clearReplacedLocalMoveTarget(ctx context.Context, action *Action, dest string, destInfo os.FileInfo) error {
 	planned := plannedLocalState(action)
 	if !destInfo.Mode().IsRegular() || planned == nil || planned.Hash == "" {
 		return stalePreconditionError("local move destination %s already exists", action.Path)
@@ -802,13 +802,14 @@ func (e *executor) clearReplacedLocalMoveTarget(action *Action, dest string, des
 		return err
 	}
 	if e.trash == nil {
-		return e.validateExistingDownloadTarget(action, dest, destInfo, planned)
+		return e.validateExistingDownloadTarget(ctx, action, dest, destInfo, planned)
 	}
 
 	return e.preserveReplacedDownloadTarget(action, dest, e.downloadTargetVerifier(action, planned))
 }
 
 func (e *executor) validateLocalMoveSourceAgainstBaseline(
+	ctx context.Context,
 	source string,
 	info os.FileInfo,
 	baseline *BaselineEntry,
@@ -817,7 +818,7 @@ func (e *executor) validateLocalMoveSourceAgainstBaseline(
 		return stalePreconditionError("local move source %s changed type", source)
 	}
 	identityErr := e.validateLocalSourceIdentity("local move", source, baseline)
-	if identityErr == nil || info.IsDir() || !e.localFileHoldsBaselineContent(source, info, baseline) {
+	if identityErr == nil || info.IsDir() || !e.localFileHoldsBaselineContent(ctx, source, info, baseline) {
 		return identityErr
 	}
 
@@ -829,7 +830,7 @@ func (e *executor) validateLocalMoveSourceAgainstBaseline(
 
 // localFileHoldsBaselineContent reports whether the file at source provably
 // holds the synced content: the baseline's size and local hash.
-func (e *executor) localFileHoldsBaselineContent(source string, info os.FileInfo, baseline *BaselineEntry) bool {
+func (e *executor) localFileHoldsBaselineContent(ctx context.Context, source string, info os.FileInfo, baseline *BaselineEntry) bool {
 	if baseline.LocalHash == "" || (baseline.LocalSizeKnown && info.Size() != baseline.LocalSize) {
 		return false
 	}
@@ -837,7 +838,7 @@ func (e *executor) localFileHoldsBaselineContent(source string, info os.FileInfo
 	if err != nil {
 		return false
 	}
-	currentHash, err := e.hashFunc(absPath)
+	currentHash, err := e.hashFunc(ctx, absPath)
 
 	return err == nil && currentHash == baseline.LocalHash
 }
@@ -859,6 +860,7 @@ func (e *executor) validateLocalSourceIdentity(op string, source string, baselin
 }
 
 func (e *executor) validateLocalSourceAgainstBaseline(
+	ctx context.Context,
 	op string,
 	source string,
 	info os.FileInfo,
@@ -883,7 +885,7 @@ func (e *executor) validateLocalSourceAgainstBaseline(
 			if absErr != nil {
 				return normalizeSyncTreePathError(absErr)
 			}
-			currentHash, hashErr := e.hashFunc(absPath)
+			currentHash, hashErr := e.hashFunc(ctx, absPath)
 			if hashErr != nil {
 				return fmt.Errorf("hashing %s source %s: %w", op, source, hashErr)
 			}

@@ -1301,7 +1301,7 @@ func TestTransferManager_SessionUpload_Resume(t *testing.T) {
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
 	// Pre-compute hash to match the session record.
-	fileHash, hashErr := ComputeQuickXorHash(localPath)
+	fileHash, hashErr := ComputeQuickXorHashContext(t.Context(), localPath)
 	require.NoError(t, hashErr, "ComputeQuickXorHash")
 
 	// Pre-save a session record.
@@ -1348,7 +1348,7 @@ func TestTransferManager_SessionUpload_ExpiredFallback(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
-	fileHash, hashErr := ComputeQuickXorHash(localPath)
+	fileHash, hashErr := ComputeQuickXorHashContext(t.Context(), localPath)
 	require.NoError(t, hashErr, "ComputeQuickXorHash")
 
 	driveStr := driveid.New("d1").String()
@@ -1435,7 +1435,7 @@ func TestSessionUpload_NonExpiredResumeError_DeletesSession(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
-	fileHash, hashErr := ComputeQuickXorHash(localPath)
+	fileHash, hashErr := ComputeQuickXorHashContext(t.Context(), localPath)
 	require.NoError(t, hashErr, "ComputeQuickXorHash")
 
 	driveStr := driveid.New("d1").String()
@@ -1477,7 +1477,7 @@ func TestSessionUpload_NonExpiredResumeError_FreshOnRetry(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
 
-	fileHash, hashErr := ComputeQuickXorHash(localPath)
+	fileHash, hashErr := ComputeQuickXorHashContext(t.Context(), localPath)
 	require.NoError(t, hashErr, "ComputeQuickXorHash")
 
 	driveStr := driveid.New("d1").String()

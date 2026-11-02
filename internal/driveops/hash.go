@@ -59,14 +59,6 @@ func ComputeQuickXorHashContext(ctx context.Context, fsPath string) (string, err
 	return hash, nil
 }
 
-// ComputeQuickXorHash is ComputeQuickXorHashContext without cancellation. It
-// remains for the callers whose own signatures carry no context: the
-// executor's live precondition checks (internal/sync/executor_preconditions.go)
-// and syncverify's hasher seam. Code that has a context uses the Context form.
-func ComputeQuickXorHash(fsPath string) (string, error) {
-	return ComputeQuickXorHashContext(context.Background(), fsPath)
-}
-
 // ComputeQuickXorHashFromReaderContext hashes everything r yields, checking
 // ctx before each chunk of hashReadChunkSize. Callers that must act on
 // exactly the bytes they verified hash an open descriptor with it instead of

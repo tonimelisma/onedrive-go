@@ -58,7 +58,7 @@ type executorConfig struct {
 
 	// Injectable for testing.
 	nowFunc  func() time.Time
-	hashFunc func(filePath string) (string, error)
+	hashFunc func(ctx context.Context, filePath string) (string, error)
 	// hashReader hashes an open descriptor; destructive actions verify the
 	// exact inode they then remove or replace through it (D-010).
 	hashReader      func(r io.Reader) (string, error)
@@ -105,7 +105,7 @@ func newExecutorConfig(
 		driveID:         driveID,
 		logger:          logger,
 		nowFunc:         time.Now,
-		hashFunc:        driveops.ComputeQuickXorHash,
+		hashFunc:        driveops.ComputeQuickXorHashContext,
 		hashReader:      driveops.ComputeQuickXorHashFromReader,
 		pathConvergence: pathConvergence,
 	}
@@ -440,14 +440,14 @@ func (e *executor) createRemoteFolder(ctx context.Context, action *Action) actio
 // ExecuteMove dispatches to local or remote move.
 func (e *executor) ExecuteMove(ctx context.Context, action *Action) actionOutcome {
 	if action.Type == ActionLocalMove {
-		return e.ExecuteLocalMove(action)
+		return e.ExecuteLocalMove(ctx, action)
 	}
 
 	return e.ExecuteRemoteMove(ctx, action)
 }
 
 // ExecuteLocalMove renames a local file/folder.
-func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
+func (e *executor) ExecuteLocalMove(ctx context.Context, action *Action) actionOutcome {
 	// Both endpoints are addressed by their spelling on disk (R-2.13.2): the
 	// source and the destination's existing parents, and an existing
 	// destination the move replaces. A destination that does not exist yet
@@ -470,7 +470,7 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 		}
 	}
 
-	if err := e.validateLocalMovePrecondition(action, source, dest); err != nil {
+	if err := e.validateLocalMovePrecondition(ctx, action, source, dest); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionLocalMove,
@@ -494,7 +494,7 @@ func (e *executor) ExecuteLocalMove(action *Action) actionOutcome {
 		)
 	}
 
-	if err := e.clearLocalMoveDestination(action, dest); err != nil {
+	if err := e.clearLocalMoveDestination(ctx, action, dest); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionLocalMove,

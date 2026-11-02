@@ -39,7 +39,7 @@ func TestComputeQuickXorHash(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
-	hash, err := ComputeQuickXorHash(path)
+	hash, err := ComputeQuickXorHashContext(t.Context(), path)
 	require.NoError(t, err, "ComputeQuickXorHash")
 
 	want := hashContent(t, content)
@@ -54,7 +54,7 @@ func TestComputeQuickXorHash_EmptyFile(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(path, []byte(""), 0o600))
 
-	hash, err := ComputeQuickXorHash(path)
+	hash, err := ComputeQuickXorHashContext(t.Context(), path)
 	require.NoError(t, err, "ComputeQuickXorHash")
 
 	want := hashContent(t, "")
@@ -65,7 +65,7 @@ func TestComputeQuickXorHash_EmptyFile(t *testing.T) {
 func TestComputeQuickXorHash_NonexistentFile(t *testing.T) {
 	t.Parallel()
 
-	_, err := ComputeQuickXorHash("/nonexistent/path/file.txt")
+	_, err := ComputeQuickXorHashContext(t.Context(), "/nonexistent/path/file.txt")
 	require.Error(t, err)
 }
 
@@ -189,7 +189,7 @@ func TestComputeQuickXorHashContext_ChunkedReadMatchesSinglePass(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, hashContent(t, content), hash)
 
-	legacy, err := ComputeQuickXorHash(path)
+	legacy, err := ComputeQuickXorHashContext(t.Context(), path)
 	require.NoError(t, err)
 	assert.Equal(t, hash, legacy)
 }
