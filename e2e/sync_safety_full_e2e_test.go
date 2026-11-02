@@ -92,7 +92,9 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 	for _, issue := range driveStatus.SyncState.Issues {
 		if issue.Type == "deletes_held" {
 			heldIssue = true
-			assert.Equal(t, safetyFileCount, issue.Count, "status counts the held deletes")
+			// The folder's own delete is held with its files (folder deletes
+			// count like file deletes, R-6.2.5).
+			assert.Equal(t, safetyFileCount+1, issue.Count, "status counts the held deletes, the folder included")
 		}
 	}
 	assert.True(t, heldIssue, "status lists the held deletes: %+v", driveStatus.SyncState.Issues)
