@@ -491,7 +491,7 @@ func TestExecutor_LocalMove_SpellingOnlyRenameOntoSameInodeIsAllowed(t *testing.
 		View:    &pathView{Path: "EDIT.txt"},
 	}
 
-	require.NoError(t, e.validateLocalMovePrecondition(action, action.OldPath, action.Path))
+	require.NoError(t, e.validateLocalMovePrecondition(t.Context(), action, action.OldPath, action.Path))
 }
 
 // Validates: R-2.12.4
@@ -512,7 +512,7 @@ func TestExecutor_LocalMove_SpellingOnlyRenameOntoDifferentFileIsStale(t *testin
 		View:    &pathView{Path: "EDIT.txt"},
 	}
 
-	require.ErrorIs(t, e.validateLocalMovePrecondition(action, action.OldPath, action.Path), errActionPreconditionChanged)
+	require.ErrorIs(t, e.validateLocalMovePrecondition(t.Context(), action, action.OldPath, action.Path), errActionPreconditionChanged)
 }
 
 // Validates: R-2.12.4
@@ -1901,7 +1901,7 @@ func TestExecutor_LocalDelete_HashMatch(t *testing.T) {
 
 	absPath := writeExecTestFile(t, syncRoot, "exec-delete-me.txt", "content")
 
-	hash, err := driveops.ComputeQuickXorHash(absPath)
+	hash, err := driveops.ComputeQuickXorHashContext(t.Context(), absPath)
 	require.NoError(t, err)
 
 	action := &Action{
@@ -3363,7 +3363,7 @@ func moveTestFileBaseline(t *testing.T, e *executor, syncRoot, relPath string) *
 
 	info, err := os.Stat(filepath.Join(syncRoot, relPath))
 	require.NoError(t, err)
-	hash, err := e.hashFunc(filepath.Join(syncRoot, relPath))
+	hash, err := e.hashFunc(t.Context(), filepath.Join(syncRoot, relPath))
 	require.NoError(t, err)
 	identity, err := e.syncTree.IdentityNoFollow(relPath)
 	require.NoError(t, err)
@@ -3710,7 +3710,7 @@ func TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination(t *testing.T) {
 			e := newExecution(cfg, emptyBaseline())
 			writeExecTestFile(t, syncRoot, "a.txt", "alpha\n")
 			writeExecTestFile(t, syncRoot, "b.txt", "bravo\n")
-			plannedHash, err := e.hashFunc(filepath.Join(syncRoot, "b.txt"))
+			plannedHash, err := e.hashFunc(t.Context(), filepath.Join(syncRoot, "b.txt"))
 			require.NoError(t, err)
 			info, err := os.Stat(filepath.Join(syncRoot, "b.txt"))
 			require.NoError(t, err)

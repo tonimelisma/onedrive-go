@@ -956,7 +956,7 @@ func TestExtractRetryAfter_Wrapped(t *testing.T) {
 func syncedBaselineFor(t *testing.T, absPath string) *BaselineEntry {
 	t.Helper()
 
-	hash, err := driveops.ComputeQuickXorHash(absPath)
+	hash, err := driveops.ComputeQuickXorHashContext(t.Context(), absPath)
 	require.NoError(t, err)
 
 	info, err := os.Stat(absPath)

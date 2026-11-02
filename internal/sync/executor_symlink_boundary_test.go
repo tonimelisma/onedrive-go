@@ -104,7 +104,7 @@ func TestExecutor_LocalMove_SymlinkedAncestorSourceIsBlocked(t *testing.T) {
 		View:    &pathView{},
 	}
 
-	o := f.exec.ExecuteLocalMove(action)
+	o := f.exec.ExecuteLocalMove(t.Context(), action)
 	requireOutcomeFailure(t, &o)
 	assert.Contains(t, o.Error.Error(), "alias is a symbolic link")
 	f.requireTargetIntact(t, "src.txt")
@@ -126,7 +126,7 @@ func TestExecutor_LocalMove_SymlinkedAncestorDestinationIsBlocked(t *testing.T) 
 		View:    &pathView{},
 	}
 
-	o := f.exec.ExecuteLocalMove(action)
+	o := f.exec.ExecuteLocalMove(t.Context(), action)
 	requireOutcomeFailure(t, &o)
 	assert.Contains(t, o.Error.Error(), "alias is a symbolic link")
 	f.requireTargetIntact(t, "victim.txt")
@@ -212,7 +212,7 @@ func TestExecutor_LocalMove_WithoutSymlinkBoundarySucceeds(t *testing.T) {
 		View:    &pathView{},
 	}
 
-	o := f.exec.ExecuteLocalMove(action)
+	o := f.exec.ExecuteLocalMove(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 	assert.FileExists(t, filepath.Join(f.syncRoot, "plain", "dst.txt"))
 }

@@ -224,7 +224,7 @@ func TestExecutor_LocalMove_StaleSourceLeavesTheReplacedDestinationInPlace(t *te
 	e := newExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "a.txt", "alpha\n")
 	writeExecTestFile(t, syncRoot, "b.txt", "bravo\n")
-	plannedHash, err := e.hashFunc(filepath.Join(syncRoot, "b.txt"))
+	plannedHash, err := e.hashFunc(t.Context(), filepath.Join(syncRoot, "b.txt"))
 	require.NoError(t, err)
 	info, err := os.Stat(filepath.Join(syncRoot, "b.txt"))
 	require.NoError(t, err)

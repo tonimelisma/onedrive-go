@@ -53,7 +53,7 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 			permissionCapabilityRemoteRead,
 		)
 	}
-	targetPreconditionErr := e.validateDownloadTargetPrecondition(action, target)
+	targetPreconditionErr := e.validateDownloadTargetPrecondition(ctx, action, target)
 	if targetPreconditionErr != nil {
 		return e.failedOutcomeWithFailure(
 			action,
@@ -72,9 +72,9 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 		Target:         syncDownloadTarget{tree: e.syncTree},
 		ValidateTargetBeforeRename: func() error {
 			if preserved {
-				return e.validateDownloadTargetPrecondition(action, target)
+				return e.validateDownloadTargetPrecondition(ctx, action, target)
 			}
-			if err := e.validateDownloadTargetBeforeReplace(action, target); err != nil {
+			if err := e.validateDownloadTargetBeforeReplace(ctx, action, target); err != nil {
 				return err
 			}
 			preserved = true

@@ -24,7 +24,7 @@ type verifyRoot interface {
 	Abs(rel string) (string, error)
 }
 
-type hashComputer func(absPath string) (string, error)
+type hashComputer func(ctx context.Context, absPath string) (string, error)
 
 // Verify status constants (used in VerifyResult.Status).
 const (
@@ -53,7 +53,7 @@ func VerifyBaseline(
 	tree *synctree.Root,
 	logger *slog.Logger,
 ) (*Report, error) {
-	return verifyBaselineWithHasher(ctx, bl, tree, driveops.ComputeQuickXorHash, logger)
+	return verifyBaselineWithHasher(ctx, bl, tree, driveops.ComputeQuickXorHashContext, logger)
 }
 
 func verifyBaselineWithHasher(
@@ -82,7 +82,7 @@ func verifyBaselineWithHasher(
 			return
 		}
 
-		result := verifyEntry(tree, relPath, entry, computeHash, logger)
+		result := verifyEntry(ctx, tree, relPath, entry, computeHash, logger)
 		switch result.Status {
 		case VerifyOK:
 			report.Verified++
@@ -118,6 +118,7 @@ func unreadableResult(entry *syncengine.BaselineEntry, err error) Result {
 
 // verifyEntry checks a single baseline entry against the local filesystem.
 func verifyEntry(
+	ctx context.Context,
 	tree verifyRoot,
 	relPath string,
 	entry *syncengine.BaselineEntry,
@@ -169,7 +170,7 @@ func verifyEntry(
 		return unreadableResult(entry, err)
 	}
 
-	hash, err := computeHash(absPath)
+	hash, err := computeHash(ctx, absPath)
 	if err != nil {
 		logger.Debug("verify: hash failed", slog.String("path", entry.Path), slog.Any("error", err))
 

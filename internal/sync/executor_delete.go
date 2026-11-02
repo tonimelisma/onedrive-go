@@ -96,7 +96,7 @@ func (e *executor) ExecuteLocalDelete(ctx context.Context, action *Action) actio
 	}
 
 	if info.IsDir() {
-		return e.DeleteLocalFolder(action, absPath)
+		return e.DeleteLocalFolder(ctx, action, absPath)
 	}
 
 	return e.DeleteLocalFile(action, local)
@@ -120,13 +120,13 @@ func (e *executor) DeleteLocalSymlink(action *Action, relPath string) actionOutc
 // planner-facing blocker check: the final rooted RemoveEmptyDirNoFollow call
 // rechecks emptiness, and the underlying rmdir fails closed if a child appears
 // after that recheck.
-func (e *executor) DeleteLocalFolder(action *Action, absPath string) actionOutcome {
+func (e *executor) DeleteLocalFolder(ctx context.Context, action *Action, absPath string) actionOutcome {
 	relPath, err := e.syncTree.Rel(absPath)
 	if err != nil {
 		return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(err))
 	}
 
-	preconditionErr := e.validateLocalDeleteFolderPrecondition(action, relPath)
+	preconditionErr := e.validateLocalDeleteFolderPrecondition(ctx, action, relPath)
 	if preconditionErr != nil {
 		return e.failedOutcomeWithFailure(action, ActionLocalDelete, preconditionErr, action.Path, permissionCapabilityLocalWrite)
 	}
