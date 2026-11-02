@@ -431,3 +431,103 @@ func TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurab
 	assert.Len(t, remote.folderCreates, creates, "held with backoff, not retried as is on the next pass")
 	assert.Zero(t, report.Failed+report.Succeeded, "nothing ran while the collision stands: %+v", report)
 }
+
+// Validates: R-5.6.15
+//
+// The creating request was in flight when the process died: OneDrive made
+// the empty item after the client was gone, so no hook recorded it (live,
+// 2026-11-01). Only the intent, written before the request, knows the empty
+// file at that path is ours; observation claims it and adopts it.
+func TestCommitObservation_IntentClaimsTheEmptyFileACrashLeftUnrecorded(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	driveID := driveid.New(testDriveID)
+	require.NoError(t, mgr.RecordPendingCreateIntent(t.Context(), &PendingCreate{
+		DriveID: driveID, Path: "doc.txt", ParentID: "root", LocalSize: 7, LocalHash: "local-hash",
+	}))
+
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+		DriveID: driveID, ItemID: "orphan", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
+		Hash: emptyQuickXor, Size: 0, ETag: `"o,1"`,
+	}}, "t1", driveID))
+
+	path, localSize, found := readBaselineRow(t, mgr, "orphan")
+	require.True(t, found, "the unrecorded placeholder is adopted as synced empty content")
+	assert.Equal(t, "doc.txt", path)
+	assert.Zero(t, localSize)
+	pending, found, err := mgr.PendingCreateAt(t.Context(), "doc.txt")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "orphan", pending.ItemID, "the record now names the item")
+	assert.Equal(t, `"o,1"`, pending.CreatedETag)
+}
+
+// Validates: R-5.6.15
+//
+// An intent claims only an empty file, and only while fresh: a file with
+// content at the path is someone's real file, and an intent older than the
+// TTL could meet a stranger's empty file long after the attempt. Both drop
+// the intent.
+func TestCommitObservation_IntentDoesNotClaimContentOrOutliveItsTTL(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(testDriveID)
+
+	withContent := newTestStore(t)
+	require.NoError(t, withContent.RecordPendingCreateIntent(t.Context(), &PendingCreate{DriveID: driveID, Path: "doc.txt", ParentID: "root"}))
+	require.NoError(t, withContent.CommitObservation(t.Context(), []observedItem{{
+		DriveID: driveID, ItemID: "theirs", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
+		Hash: "their-hash", Size: 9, ETag: `"t,1"`,
+	}}, "t1", driveID))
+	_, _, found := readBaselineRow(t, withContent, "theirs")
+	assert.False(t, found, "a file with content is not adopted")
+	_, found, err := withContent.PendingCreateAt(t.Context(), "doc.txt")
+	require.NoError(t, err)
+	assert.False(t, found, "the intent is dropped: the path holds real content")
+
+	expired := newTestStore(t)
+	base := time.Date(2026, 11, 1, 23, 0, 0, 0, time.UTC)
+	expired.setNowFunc(func() time.Time { return base })
+	require.NoError(t, expired.RecordPendingCreateIntent(t.Context(), &PendingCreate{DriveID: driveID, Path: "doc.txt", ParentID: "root"}))
+	expired.setNowFunc(func() time.Time { return base.Add(pendingCreateIntentTTL + time.Minute) })
+	require.NoError(t, expired.CommitObservation(t.Context(), []observedItem{{
+		DriveID: driveID, ItemID: "late", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
+		Hash: emptyQuickXor, Size: 0, ETag: `"l,1"`,
+	}}, "t1", driveID))
+	_, _, found = readBaselineRow(t, expired, "late")
+	assert.False(t, found, "an expired intent claims nothing")
+	_, found, err = expired.PendingCreateAt(t.Context(), "doc.txt")
+	require.NoError(t, err)
+	assert.False(t, found, "and is dropped")
+}
+
+// Validates: R-5.6.15
+//
+// An attempt that ends without creating anything (the create itself failed)
+// clears its intent, and an intent at the path of a placeholder already
+// recorded keeps the placeholder's ID.
+func TestPendingCreateIntent_ClearedWhenNothingWasCreatedAndKeepsAKnownItem(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	driveID := driveid.New(testDriveID)
+	require.NoError(t, mgr.RecordPendingCreateIntent(t.Context(), &PendingCreate{DriveID: driveID, Path: "a.txt", ParentID: "root"}))
+	require.NoError(t, mgr.ClearPendingCreateIntent(t.Context(), "a.txt"))
+	_, found, err := mgr.PendingCreateAt(t.Context(), "a.txt")
+	require.NoError(t, err)
+	assert.False(t, found)
+
+	require.NoError(t, mgr.RecordPendingCreate(t.Context(), &PendingCreate{
+		ItemID: "placeholder", DriveID: driveID, Path: "b.txt", ParentID: "root", CreatedETag: `"p,1"`,
+	}))
+	require.NoError(t, mgr.RecordPendingCreateIntent(t.Context(), &PendingCreate{DriveID: driveID, Path: "b.txt", ParentID: "root"}))
+	pending, found, err := mgr.PendingCreateAt(t.Context(), "b.txt")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "placeholder", pending.ItemID, "a retry's intent does not forget the placeholder it will upload into")
+	require.NoError(t, mgr.ClearPendingCreateIntent(t.Context(), "b.txt"))
+	_, found, err = mgr.PendingCreateAt(t.Context(), "b.txt")
+	require.NoError(t, err)
+	assert.True(t, found, "clearing an intent never drops a recorded item")
+}

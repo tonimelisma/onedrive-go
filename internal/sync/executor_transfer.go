@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -250,10 +251,17 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 
 		name := filepath.Base(action.Path)
 		opts := e.uploadOpts(action, source)
-		opts.OnCreated = e.recordPendingCreate(ctx, action, driveID, parentID)
+		created := false
+		opts.OnCreated = e.recordPendingCreate(ctx, action, driveID, parentID, &created)
+		if intentErr := e.recordPendingCreateIntent(ctx, action, driveID, parentID); intentErr != nil {
+			return e.failedOutcomeWithFailure(action, ActionUpload, intentErr, action.Path, permissionCapabilityUnknown)
+		}
 		result, err = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, opts)
 		if errors.Is(err, graph.ErrConflict) {
 			result, err = e.resolveCreateConflict(ctx, action, driveID, parentID, source, localPath, err)
+		}
+		if !created {
+			e.clearPendingCreateIntent(ctx, action)
 		}
 		err = uploadTransferError(err)
 		if err != nil {
@@ -474,29 +482,65 @@ func shouldOverwriteKnownRemoteItem(action *Action) bool {
 // pendingCreateStore is the executor's narrow view of the sync store's
 // pending-create records (store_pending_creates.go).
 type pendingCreateStore interface {
+	RecordPendingCreateIntent(ctx context.Context, pending *PendingCreate) error
 	RecordPendingCreate(ctx context.Context, pending *PendingCreate) error
+	ClearPendingCreateIntent(ctx context.Context, path string) error
 	PendingCreateAt(ctx context.Context, path string) (PendingCreate, bool, error)
 }
 
+// pendingCreateOf describes the create of action for the pending-create
+// records.
+func pendingCreateOf(action *Action, driveID driveid.ID, parentID string) *PendingCreate {
+	pending := &PendingCreate{DriveID: driveID, Path: action.Path, ParentID: parentID}
+	if action.View != nil && action.View.Local != nil {
+		pending.LocalSize = action.View.Local.Size
+		pending.LocalHash = action.View.Local.Hash
+	}
+
+	return pending
+}
+
+// recordPendingCreateIntent records that a create at action.Path is about to
+// be requested (R-5.6.15): the one record that survives a process dying with
+// the creating request in flight.
+func (e *executor) recordPendingCreateIntent(ctx context.Context, action *Action, driveID driveid.ID, parentID string) error {
+	if e.pendingCreates == nil {
+		return nil
+	}
+
+	return e.pendingCreates.RecordPendingCreateIntent(ctx, pendingCreateOf(action, driveID, parentID))
+}
+
 // recordPendingCreate returns the hook that records a create's empty item
-// durably before its content is sent, or nil without a store (tests).
+// durably before its content is sent, or nil without a store (tests). It
+// sets *created when it runs, so the caller knows an item exists.
 func (e *executor) recordPendingCreate(
-	ctx context.Context, action *Action, driveID driveid.ID, parentID string,
+	ctx context.Context, action *Action, driveID driveid.ID, parentID string, created *bool,
 ) func(itemID, createdETag string) error {
 	if e.pendingCreates == nil {
 		return nil
 	}
 
 	return func(itemID, createdETag string) error {
-		pending := &PendingCreate{
-			ItemID: itemID, DriveID: driveID, Path: action.Path, ParentID: parentID, CreatedETag: createdETag,
+		*created = true
+		if crashErr := e.reachCrashPoint(crashPointUploadCreatedUnrecorded); crashErr != nil {
+			return crashErr
 		}
-		if action.View != nil && action.View.Local != nil {
-			pending.LocalSize = action.View.Local.Size
-			pending.LocalHash = action.View.Local.Hash
-		}
+		pending := pendingCreateOf(action, driveID, parentID)
+		pending.ItemID, pending.CreatedETag = itemID, createdETag
 
 		return e.pendingCreates.RecordPendingCreate(ctx, pending)
+	}
+}
+
+// clearPendingCreateIntent forgets the intent of an attempt that created
+// nothing. Best effort: a failure here leaves an intent that expires.
+func (e *executor) clearPendingCreateIntent(ctx context.Context, action *Action) {
+	if e.pendingCreates == nil {
+		return
+	}
+	if err := e.pendingCreates.ClearPendingCreateIntent(ctx, action.Path); err != nil {
+		e.logger.Warn("Could not clear a pending create intent", slog.String("path", action.Path), slog.Any("error", err))
 	}
 }
 
@@ -521,7 +565,7 @@ func (e *executor) resolveCreateConflict(
 		if err != nil {
 			return nil, errors.Join(conflictErr, err)
 		}
-		if found {
+		if found && pending.ItemID != "" {
 			if item, getErr := e.items.GetItem(ctx, driveID, pending.ItemID); getErr == nil && item.Size == 0 {
 				opts := e.uploadOpts(action, source)
 				opts.IfMatch = item.ETag

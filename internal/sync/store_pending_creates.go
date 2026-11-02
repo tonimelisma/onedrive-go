@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
@@ -16,9 +17,11 @@ import (
 // made it, it was a create_conflict: the user's file was renamed to a
 // conflict copy and the empty file downloaded in its place.
 //
-// pending_creates is that memory. The executor records the item before the
-// first content byte is sent; observation then recognizes the empty item as
-// this client's own placeholder:
+// pending_creates is that memory. The executor records the intent to create
+// at the path before the request that creates the item, and the item itself
+// (ID and creation eTag) as soon as it exists, before the first content byte
+// is sent; observation then recognizes the empty item as this client's own
+// placeholder:
 //
 //   - still empty and not yet synced: it is adopted as a baseline row whose
 //     local side is the empty content, so the planner sees "the local file
@@ -38,7 +41,23 @@ import (
 // Any content written by anyone makes the item non-empty, and the writes that
 // finish a placeholder are conditional on the eTag just read.
 
-// PendingCreate is one recorded, not yet confirmed create.
+// A process can die while the creating request is in flight: OneDrive then
+// makes the empty item after the client is gone, and no response ever reaches
+// the hook that records it (seen live on 2026-11-01: the item was created two
+// seconds after a kill, and the next pass made a conflict copy of the user's
+// file). The intent row closes that window: it names the path before the
+// request, and an empty file observed at that path within
+// pendingCreateIntentTTL of the intent is the placeholder, whose ID is then
+// recorded. The intent is cleared when the attempt ends without having
+// created anything, and expires so a stale one cannot claim a stranger's
+// empty file long after.
+
+// pendingCreateIntentTTL is how long an intent without an item ID can claim
+// an empty file observed at its path.
+const pendingCreateIntentTTL = 72 * time.Hour
+
+// PendingCreate is one recorded, not yet confirmed create. ItemID is empty
+// while only the intent is recorded.
 type PendingCreate struct {
 	ItemID      string
 	DriveID     driveid.ID
@@ -47,6 +66,32 @@ type PendingCreate struct {
 	CreatedETag string
 	LocalSize   int64
 	LocalHash   string
+	IntendedAt  int64 // Unix nanoseconds; when the create was decided
+}
+
+// RecordPendingCreateIntent durably records that a create at pending.Path is
+// about to be requested. A row already naming the item at that path keeps
+// its item ID and eTag: a retry after a 409 must not forget the placeholder
+// it is about to upload into.
+func (s *SyncStore) RecordPendingCreateIntent(ctx context.Context, pending *PendingCreate) error {
+	if pending == nil || pending.Path == "" {
+		return fmt.Errorf("sync: recording a pending create intent: missing path")
+	}
+
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO pending_creates
+		(path, item_id, drive_id, parent_id, created_etag, local_size, local_hash, intended_at)
+		VALUES (?, '', ?, ?, '', ?, ?, ?)
+		ON CONFLICT(path) DO UPDATE SET
+			drive_id = excluded.drive_id, parent_id = excluded.parent_id,
+			local_size = excluded.local_size, local_hash = excluded.local_hash,
+			intended_at = excluded.intended_at`,
+		pending.Path, pending.DriveID.String(), pending.ParentID,
+		pending.LocalSize, pending.LocalHash, s.nowFunc().UnixNano(),
+	); err != nil {
+		return fmt.Errorf("sync: recording pending create intent at %s: %w", pending.Path, err)
+	}
+
+	return nil
 }
 
 // RecordPendingCreate durably records a create whose empty item exists.
@@ -56,13 +101,14 @@ func (s *SyncStore) RecordPendingCreate(ctx context.Context, pending *PendingCre
 	}
 
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO pending_creates
-		(item_id, drive_id, path, parent_id, created_etag, local_size, local_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(item_id) DO UPDATE SET
-			drive_id = excluded.drive_id, path = excluded.path, parent_id = excluded.parent_id,
-			created_etag = excluded.created_etag, local_size = excluded.local_size, local_hash = excluded.local_hash`,
-		pending.ItemID, pending.DriveID.String(), pending.Path, pending.ParentID,
-		pending.CreatedETag, pending.LocalSize, pending.LocalHash,
+		(path, item_id, drive_id, parent_id, created_etag, local_size, local_hash, intended_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(path) DO UPDATE SET
+			item_id = excluded.item_id, drive_id = excluded.drive_id, parent_id = excluded.parent_id,
+			created_etag = excluded.created_etag, local_size = excluded.local_size, local_hash = excluded.local_hash,
+			intended_at = CASE WHEN pending_creates.intended_at > 0 THEN pending_creates.intended_at ELSE excluded.intended_at END`,
+		pending.Path, pending.ItemID, pending.DriveID.String(), pending.ParentID,
+		pending.CreatedETag, pending.LocalSize, pending.LocalHash, s.nowFunc().UnixNano(),
 	); err != nil {
 		return fmt.Errorf("sync: recording pending create of %s (item %s): %w", pending.Path, pending.ItemID, err)
 	}
@@ -75,13 +121,25 @@ func (s *SyncStore) ClearPendingCreate(ctx context.Context, itemID string) error
 	return deletePendingCreateTx(ctx, s.db, itemID)
 }
 
+// ClearPendingCreateIntent drops an intent at path that never became an
+// item: the attempt ended, by success or failure, without the create hook
+// firing, so nothing on OneDrive is ours to recognize there. A row that
+// already names an item is kept.
+func (s *SyncStore) ClearPendingCreateIntent(ctx context.Context, path string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? AND item_id = ''`, path); err != nil {
+		return fmt.Errorf("sync: clearing pending create intent at %s: %w", path, err)
+	}
+
+	return nil
+}
+
 // PendingCreateAt returns the recorded create at path; found is false when
 // there is none.
 func (s *SyncStore) PendingCreateAt(ctx context.Context, path string) (pending PendingCreate, found bool, err error) {
 	return scanPendingCreate(s.db.QueryRowContext(ctx, sqlSelectPendingCreate+` WHERE path = ?`, path))
 }
 
-const sqlSelectPendingCreate = `SELECT item_id, drive_id, path, parent_id, created_etag, local_size, local_hash
+const sqlSelectPendingCreate = `SELECT item_id, drive_id, path, parent_id, created_etag, local_size, local_hash, intended_at
 	FROM pending_creates`
 
 type pendingCreateExecer interface {
@@ -102,7 +160,7 @@ func scanPendingCreate(row *sql.Row) (PendingCreate, bool, error) {
 		driveID string
 	)
 	err := row.Scan(&pending.ItemID, &driveID, &pending.Path, &pending.ParentID,
-		&pending.CreatedETag, &pending.LocalSize, &pending.LocalHash)
+		&pending.CreatedETag, &pending.LocalSize, &pending.LocalHash, &pending.IntendedAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return PendingCreate{}, false, nil
@@ -161,10 +219,20 @@ const (
 
 // classifyObservedPlaceholderTx decides how observation treats item when it
 // has a pending-create record.
-func classifyObservedPlaceholderTx(ctx context.Context, tx sqlTxRunner, item *observedItem) (*PendingCreate, placeholderDecision, error) {
+// now decides whether an intent without an item ID is still fresh enough to
+// claim an empty file observed at its path.
+func classifyObservedPlaceholderTx(
+	ctx context.Context, tx sqlTxRunner, item *observedItem, now time.Time,
+) (*PendingCreate, placeholderDecision, error) {
 	pending, found, err := scanPendingCreate(tx.QueryRowContext(ctx, sqlSelectPendingCreate+` WHERE item_id = ?`, item.ItemID))
-	if err != nil || !found {
+	if err != nil {
 		return nil, placeholderNotPending, err
+	}
+	if !found {
+		pending, found, err = claimIntendedPlaceholderTx(ctx, tx, item, now)
+		if err != nil || !found {
+			return nil, placeholderNotPending, err
+		}
 	}
 	if item.IsDeleted || item.Size != 0 {
 		return &pending, placeholderResolved, nil
@@ -212,4 +280,37 @@ func adoptPlaceholderTx(
 	*adopted = append(*adopted, entry)
 
 	return nil
+}
+
+// claimIntendedPlaceholderTx matches an observed item against an intent at
+// its path that has no item ID yet. An empty, live file observed there
+// within pendingCreateIntentTTL of the intent is the placeholder the dying
+// process created: the row takes its ID and eTag. Anything else at the path
+// (content, a folder, a deletion) or an expired intent means no placeholder
+// of ours is there, and the intent is dropped.
+func claimIntendedPlaceholderTx(
+	ctx context.Context, tx sqlTxRunner, item *observedItem, now time.Time,
+) (PendingCreate, bool, error) {
+	pending, found, err := scanPendingCreate(tx.QueryRowContext(ctx,
+		sqlSelectPendingCreate+` WHERE path = ? AND item_id = ''`, item.Path))
+	if err != nil || !found {
+		return PendingCreate{}, false, err
+	}
+	fresh := pending.IntendedAt > 0 && now.Sub(time.Unix(0, pending.IntendedAt)) <= pendingCreateIntentTTL
+	isEmptyFile := !item.IsDeleted && item.ItemType == ItemTypeFile && !item.SizeUnknown && item.Size == 0
+	if !fresh || !isEmptyFile {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? AND item_id = ''`, item.Path); err != nil {
+			return PendingCreate{}, false, fmt.Errorf("sync: dropping pending create intent at %s: %w", item.Path, err)
+		}
+		return PendingCreate{}, false, nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE pending_creates SET item_id = ?, created_etag = ? WHERE path = ? AND item_id = ''`,
+		item.ItemID, item.ETag, item.Path); err != nil {
+		return PendingCreate{}, false, fmt.Errorf("sync: claiming placeholder %s for the intent at %s: %w", item.ItemID, item.Path, err)
+	}
+	pending.ItemID = item.ItemID
+	pending.CreatedETag = item.ETag
+
+	return pending, true, nil
 }

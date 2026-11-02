@@ -14,6 +14,11 @@ const (
 	// crashPointLocalMoveDone: the local rename happened; the outcome is not
 	// committed.
 	crashPointLocalMoveDone = "exec.local_move_done"
+	// crashPointUploadCreatedUnrecorded: OneDrive holds the new file's empty
+	// item; the pending-create record naming it is not written (the creating
+	// request was in flight when the process died). Only the intent row,
+	// written before the request, knows the empty item is ours.
+	crashPointUploadCreatedUnrecorded = "upload.created_unrecorded"
 	// crashPointUploadRemoteDone: OneDrive holds the uploaded content; the
 	// outcome is not committed.
 	crashPointUploadRemoteDone = "upload.remote_done"

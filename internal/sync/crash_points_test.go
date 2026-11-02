@@ -319,6 +319,7 @@ func allCrashPoints() []string {
 	return []string{
 		crashPointRemoteMoveDone,
 		crashPointLocalMoveDone,
+		crashPointUploadCreatedUnrecorded,
 		crashPointUploadRemoteDone,
 		crashPointDownloadRenamed,
 		crashPointLocalDeleteTrashed,

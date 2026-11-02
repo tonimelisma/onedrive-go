@@ -334,7 +334,7 @@ func requireNoParkedRemoteRowsTx(ctx context.Context, tx sqlTxRunner) error {
 func (s *SyncStore) processObservedItemWithPlaceholders(
 	ctx context.Context, tx sqlTxRunner, item *observedItem, adopted *[]*BaselineEntry,
 ) error {
-	pending, decision, err := classifyObservedPlaceholderTx(ctx, tx, item)
+	pending, decision, err := classifyObservedPlaceholderTx(ctx, tx, item, s.nowFunc())
 	if err != nil {
 		return err
 	}
