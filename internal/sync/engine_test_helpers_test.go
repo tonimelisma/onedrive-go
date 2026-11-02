@@ -842,6 +842,7 @@ func installManualClock(eng *Engine, clock *manualClock) {
 // refreshes the deps of the runtime and flow the harness already built.
 func installManualClockForTestEngine(eng *testEngine, clock *manualClock) {
 	installManualClock(eng.Engine, clock)
+	eng.baseline.setNowFunc(clock.Now)
 
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
 		rt.deps = newRuntimeDeps(eng.Engine)

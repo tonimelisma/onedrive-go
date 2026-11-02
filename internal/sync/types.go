@@ -33,4 +33,6 @@ type BaselineMutation struct {
 	ETag                  string
 	// KeptLocally: see actionOutcome.KeptLocally.
 	KeptLocally bool
+	// DeleteConfirmed: see Action.DeleteConfirmed.
+	DeleteConfirmed bool
 }

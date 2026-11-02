@@ -50,7 +50,12 @@ const (
 	// stay locally only because they hold content sync ignores (D-012). The
 	// next pass used to read such a folder as new local content and re-create
 	// it, empty, online (R-2.17.2).
-	currentSyncStoreGeneration = 24
+	//
+	// Generation 25 adds delete_ledger: the deletes sync ran without the
+	// user's confirmation, by side and commit time, so the proportional
+	// delete-safety rule counts a deletion spread over many small passes
+	// within its 24-hour window (R-6.2.5).
+	currentSyncStoreGeneration = 25
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -127,6 +132,15 @@ CREATE TABLE IF NOT EXISTS held_deletes (
     item_id    TEXT    NOT NULL DEFAULT '',
     PRIMARY KEY (path, side)
 );
+
+CREATE TABLE IF NOT EXISTS delete_ledger (
+    side         TEXT    NOT NULL CHECK(side IN ('local', 'remote')),
+    path         TEXT    NOT NULL,
+    item_id      TEXT    NOT NULL DEFAULT '',
+    committed_at INTEGER NOT NULL,
+    PRIMARY KEY (side, path, committed_at)
+);
+CREATE INDEX IF NOT EXISTS idx_delete_ledger_committed_at ON delete_ledger(committed_at);
 
 CREATE TABLE IF NOT EXISTS remote_state (
     drive_id      TEXT    NOT NULL DEFAULT '',
@@ -251,6 +265,9 @@ func canonicalSyncStoreColumns() map[string][]string {
 		},
 		"held_deletes": {
 			"path", "side", "reason", "item_type", "item_id",
+		},
+		"delete_ledger": {
+			"side", "path", "item_id", "committed_at",
 		},
 		"local_state": {
 			"path", "item_type", "hash", "size", "mtime", "ctime",

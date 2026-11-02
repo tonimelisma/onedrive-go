@@ -98,7 +98,10 @@ still kept as two files rather than resolved in the direction of the mode.
 - **Many deletes at once are held for your confirmation.** If one side has no
   files at all while the last sync recorded some, or if more than 50 files and
   folders, and more than 30 % of what is synced, would be deleted toward one
-  side, those deletes (and anything that depends on them) are held. Everything
+  side, those deletes (and anything that depends on them) are held. Deletes
+  that already went through in the last 24 hours count too, so a slow trickle
+  of deletions (a failing disk, a misbehaving app, a scheduled cleanup) is
+  held once it adds up, not only a single large batch. Everything
   else keeps syncing. `status` lists them as "Deletes held for confirmation",
   the sync summary says "Held N deletes for confirmation", and
   `onedrive-go sync --confirm-deletes` applies exactly that set after you have
@@ -219,7 +222,7 @@ limits of the protection **today**.
 | Today | What to do meanwhile |
 | --- | --- |
 | **A folder re-created at the sync path can pass the identity check on a few filesystems.** onedrive-go marks the sync folder with an extended attribute and, where the filesystem has none, falls back to its inode, filesystem ID and creation time. On a filesystem that records neither user extended attributes nor creation times, a folder deleted and re-created at the same path that happens to get the same inode is accepted; the delete hold is then the only guard. | Keep `sync_dir` on a local disk filesystem, or `pause` the drive (or stop the service) before unmounting or restoring it. |
-| **Fewer than 50 deletes (or under 30 % of your files) are not held.** The delete hold is for mass loss, not for individual mistakes. | Local deletes can be undone from `trash list` / `trash restore` for 30 days; OneDrive deletes from the recycle bin. |
+| **Fewer than 50 deletes (or under 30 % of your files) within a day are not held.** The delete hold is for mass loss, not for individual mistakes. | Local deletes can be undone from `trash list` / `trash restore` for 30 days; OneDrive deletes from the recycle bin. |
 | **Moving a synced file into a folder you excluded with a filter deletes it on OneDrive** (to the recycle bin). The file is kept on your computer. | Move the file out of the excluded folder, or restore it from the recycle bin. |
 | **An edit that keeps a file's size, modification time *and* change time is not seen.** Normal tools cannot do this (even `cp -p` and `touch -r` move the change time); it needs root or a changed clock. | Rare in practice. |
 | **A second sync client on the same folder is only partly detected.** A second onedrive-go using the same data directory is refused, and the markers of Dropbox, Syncthing, Nextcloud and ownCloud (or a folder under `~/Library/CloudStorage`) trigger a warning; a second onedrive-go under another user or data directory, or a tool without a marker (rclone, abraunegg/onedrive), is not detected. | Do not point two sync clients at the same folder. |

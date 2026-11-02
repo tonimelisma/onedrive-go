@@ -599,13 +599,25 @@ func (flow *engineFlow) buildCurrentPlanStage(
 			return nil, fmt.Errorf("sync: reading the held deletes to confirm: %w", err)
 		}
 	}
+	recentDeletes, err := flow.engine.baseline.recentUnconfirmedDeletes(ctx, flow.deps.now().Add(-deleteSafetyWindow))
+	if err != nil {
+		return nil, fmt.Errorf("sync: reading the recent deletes the hold counts: %w", err)
+	}
 	if err := applyDeleteSafetyHold(plan, &deleteSafetyInput{
-		Baseline:   planningBaseline(&observation.inputs, bl),
-		LocalRows:  observation.inputs.localRows,
-		RemoteRows: observation.inputs.remoteRows,
-		Approved:   approved,
+		Baseline:      planningBaseline(&observation.inputs, bl),
+		LocalRows:     observation.inputs.localRows,
+		RemoteRows:    observation.inputs.remoteRows,
+		Approved:      approved,
+		RecentDeletes: recentDeletes,
 	}); err != nil {
 		return nil, fmt.Errorf("sync: holding unconfirmed deletes: %w", err)
+	}
+	if len(approved) > 0 {
+		// The confirmation reviewed the deletes that went before it on
+		// those sides: they stop counting toward the next hold.
+		if err := flow.engine.baseline.clearDeleteLedger(ctx, heldDeleteSides(approved)); err != nil {
+			return nil, fmt.Errorf("sync: clearing the confirmed sides of the delete ledger: %w", err)
+		}
 	}
 	logDeleteSafetyHold(flow.deps.logger, plan.HeldDeletes)
 	flow.engine.collector().RecordPlan(len(plan.Actions), flow.deps.since(planStart))
