@@ -43,6 +43,7 @@ The system shall never silently lose or corrupt user data. This umbrella princip
 - R-6.3.5: Runtime-critical mutexes shall document the fields they guard, and any intentional nested lock ordering shall be called out in code comments or the governing design doc. [verified]
 - R-6.3.6: Every command, not only `sync`, shall treat the first SIGINT/SIGTERM as a cooperative shutdown that cancels the command context so in-flight work unwinds through its own cleanup, and shall treat a second signal as an immediate exit. The signal handler shall be released when the command completes. [verified]
 - R-6.3.7: `sync` (one-shot and `--watch`) shall refuse to run with effective UID 0 unless `--allow-root` is given (P-9), as a usage error (exit 2) before reading config or touching any folder, because a root sync leaves root-owned files the user cannot change. With `--allow-root` it runs and warns once. [verified]
+- R-6.3.8: A watch mount shall fail rather than run blind. A panic in any goroutine the mount's watch runtime owns (a local or remote observer, the full remote refresh, the socket.io wake source, or the per-mount runner itself) shall fail that mount only: the panic and its stack shall be logged, every other mount and the process shall continue, and the mount shall restart with the usual backoff. Losing the mount's last observer outside shutdown shall fail the mount too, since a watch that observes nothing would read healthy while syncing nothing. [verified]
 
 ## R-6.4 Safety [verified]
 
