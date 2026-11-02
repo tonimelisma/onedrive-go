@@ -77,8 +77,9 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 
 	require.NoError(t, os.RemoveAll(filepath.Join(syncDir, folder)))
 
-	stdout, stderr, _ := runCLIWithConfigAllowError(t, cfgPath, env, "sync")
+	stdout, stderr, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync")
 	combined := stdout + stderr
+	t.Logf("sync with the files removed: err=%v", syncErr)
 	assert.Contains(t, combined, "deletes for confirmation", "the deletes are held: %s", combined)
 	assert.Contains(t, combined, "sync --confirm-deletes", "the summary names the command: %s", combined)
 	assert.ElementsMatch(t, keysOf(contents), remoteFileNames(t, cfgPath, env, "/"+folder),
@@ -98,7 +99,8 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 
 	// A second ordinary pass holds them again: the hold is derived from
 	// current truth, not from a one-shot flag.
-	stdout, stderr, _ = runCLIWithConfigAllowError(t, cfgPath, env, "sync")
+	stdout, stderr, syncErr = runCLIWithConfigAllowError(t, cfgPath, env, "sync")
+	t.Logf("second sync: err=%v", syncErr)
 	assert.Contains(t, stdout+stderr, "deletes for confirmation")
 	assert.Len(t, remoteFileNames(t, cfgPath, env, "/"+folder), safetyFileCount)
 
@@ -151,9 +153,8 @@ func TestE2E_SyncFull_RemoteDeleteGoesToLocalTrashAndRestores(t *testing.T) {
 	assert.Equal(t, "deleted", entry.Reason)
 
 	runCLIWithConfig(t, cfgPath, env, "trash", "restore", entry.ID)
-	restored, err := os.ReadFile(localVictim)
-	require.NoError(t, err, "the file is back where sync removed it")
-	assert.Equal(t, contents[victim], string(restored), "byte for byte")
+	require.FileExists(t, localVictim, "the file is back where sync removed it")
+	assert.Equal(t, contents[victim], string(mustReadFile(t, localVictim)), "byte for byte")
 
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "trash", "list", "--json")
 	require.NoError(t, json.Unmarshal([]byte(stdout), &listing))
@@ -190,7 +191,8 @@ func TestE2E_SyncFull_ReplacedSyncFolderIsRefusedUntilRebound(t *testing.T) {
 	stdout, stderr := runCLIWithConfig(t, cfgPath, env, "drive", "rebind-root", "--yes")
 	t.Logf("rebind-root: %s%s", stdout, stderr)
 
-	stdout, stderr, _ = runCLIWithConfigAllowError(t, cfgPath, env, "sync")
+	stdout, stderr, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync")
+	t.Logf("sync after rebind: err=%v", syncErr)
 	assert.Contains(t, stdout+stderr, "deletes for confirmation",
 		"the rebound empty folder holds the deletes it implies: %s", stdout+stderr)
 	assert.ElementsMatch(t, keysOf(contents), remoteFileNames(t, cfgPath, env, "/"+folder),
