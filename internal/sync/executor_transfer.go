@@ -496,7 +496,7 @@ func (e *executor) uploadNewFile(
 		e.clearPendingCreateIntent(ctx, action)
 	}
 
-	return result, err //nolint:wrapcheck // the transfer manager names the file
+	return result, err
 }
 
 // pendingCreateOf describes the create of action for the pending-create
