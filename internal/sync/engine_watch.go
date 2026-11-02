@@ -362,6 +362,11 @@ func (rt *watchRuntime) startObservers(
 	skippedCh := make(chan []skippedItem, 2)
 
 	localObs := newLocalObserver(bl, rt.deps.logger, rt.engine.checkWorkers)
+	hashCache, err := rt.engine.baseline.newLocalHashCache(ctx)
+	if err != nil {
+		return err
+	}
+	localObs.SetLocalHashCache(hashCache)
 	localObs.SetFilterConfig(rt.engine.contentFilter)
 	localObs.SetProtectedRoots(rt.engine.currentProtectedRoots())
 	localObs.SetObservationRules(rt.engine.localRules)
