@@ -3,7 +3,6 @@ package sync
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,7 +38,7 @@ func TestRunOnce_EmptyItemACrashLeftUnrecordedIsFinishedNotConflicted(t *testing
 	entries, err := os.ReadDir(syncRoot)
 	require.NoError(t, err)
 	for _, entry := range entries {
-		assert.False(t, strings.Contains(entry.Name(), ".conflict-"), "no conflict copy: %s", entry.Name())
+		assert.NotContains(t, entry.Name(), ".conflict-", "no conflict copy")
 	}
 	assertSyncInvariants(t, &syncHarness{eng: eng, remote: remote, syncRoot: syncRoot})
 }

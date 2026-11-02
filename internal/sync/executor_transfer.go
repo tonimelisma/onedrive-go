@@ -249,20 +249,7 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 			return e.failedOutcomeWithFailure(action, ActionUpload, waitErr, action.Path, permissionCapabilityUnknown)
 		}
 
-		name := filepath.Base(action.Path)
-		opts := e.uploadOpts(action, source)
-		created := false
-		opts.OnCreated = e.recordPendingCreate(ctx, action, driveID, parentID, &created)
-		if intentErr := e.recordPendingCreateIntent(ctx, action, driveID, parentID); intentErr != nil {
-			return e.failedOutcomeWithFailure(action, ActionUpload, intentErr, action.Path, permissionCapabilityUnknown)
-		}
-		result, err = e.transferMgr.UploadFile(ctx, driveID, parentID, name, localPath, opts)
-		if errors.Is(err, graph.ErrConflict) {
-			result, err = e.resolveCreateConflict(ctx, action, driveID, parentID, source, localPath, err)
-		}
-		if !created {
-			e.clearPendingCreateIntent(ctx, action)
-		}
+		result, err = e.uploadNewFile(ctx, action, driveID, parentID, source, localPath)
 		err = uploadTransferError(err)
 		if err != nil {
 			return e.failedOutcomeWithFailure(
@@ -488,6 +475,30 @@ type pendingCreateStore interface {
 	PendingCreateAt(ctx context.Context, path string) (PendingCreate, bool, error)
 }
 
+// uploadNewFile creates action's file on OneDrive, with the pending-create
+// records around the request (R-5.6.15): the intent before it, the item
+// once the create hook has seen it, and the intent cleared again when the
+// attempt created nothing. A 409 is resolved rather than retried as is.
+func (e *executor) uploadNewFile(
+	ctx context.Context, action *Action, driveID driveid.ID, parentID, source, localPath string,
+) (*driveops.UploadResult, error) {
+	opts := e.uploadOpts(action, source)
+	created := false
+	opts.OnCreated = e.recordPendingCreate(ctx, action, driveID, parentID, &created)
+	if err := e.recordPendingCreateIntent(ctx, action, driveID, parentID); err != nil {
+		return nil, err
+	}
+	result, err := e.transferMgr.UploadFile(ctx, driveID, parentID, filepath.Base(action.Path), localPath, opts)
+	if errors.Is(err, graph.ErrConflict) {
+		result, err = e.resolveCreateConflict(ctx, action, driveID, parentID, source, localPath, err)
+	}
+	if !created {
+		e.clearPendingCreateIntent(ctx, action)
+	}
+
+	return result, err //nolint:wrapcheck // the transfer manager names the file
+}
+
 // pendingCreateOf describes the create of action for the pending-create
 // records.
 func pendingCreateOf(action *Action, driveID driveid.ID, parentID string) *PendingCreate {
@@ -508,7 +519,11 @@ func (e *executor) recordPendingCreateIntent(ctx context.Context, action *Action
 		return nil
 	}
 
-	return e.pendingCreates.RecordPendingCreateIntent(ctx, pendingCreateOf(action, driveID, parentID))
+	if err := e.pendingCreates.RecordPendingCreateIntent(ctx, pendingCreateOf(action, driveID, parentID)); err != nil {
+		return fmt.Errorf("recording the intent to create %s: %w", action.Path, err)
+	}
+
+	return nil
 }
 
 // recordPendingCreate returns the hook that records a create's empty item
