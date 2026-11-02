@@ -51,6 +51,8 @@ func (o *localObserver) cachedHashForNewFile(
 type hashCacheRecorder struct {
 	cache  localHashCache
 	logger *slog.Logger
+	// mu guards batch and failed: hash workers add concurrently, and the
+	// first failed write is the one logged.
 	mu     stdsync.Mutex
 	batch  []localHashCacheEntry
 	failed bool
@@ -58,6 +60,19 @@ type hashCacheRecorder struct {
 
 func newHashCacheRecorder(cache localHashCache, logger *slog.Logger) *hashCacheRecorder {
 	return &hashCacheRecorder{cache: cache, logger: logger}
+}
+
+// addJob records a hash the phase computed for a file the baseline did not
+// know; a modify of a known file, or a read that produced no hash, is not
+// cache material.
+func (r *hashCacheRecorder) addJob(ctx context.Context, job *hashJob, hash string) {
+	if r.cache == nil || !job.isNew || hash == "" {
+		return
+	}
+	r.add(ctx, localHashCacheEntry{
+		Path: job.dbRelPath, Hash: hash, Size: job.size, Mtime: job.mtime, Ctime: job.ctime,
+		Device: job.localDevice, Inode: job.localInode, BirthTime: job.localBirthTime,
+	})
 }
 
 func (r *hashCacheRecorder) add(ctx context.Context, entry localHashCacheEntry) {

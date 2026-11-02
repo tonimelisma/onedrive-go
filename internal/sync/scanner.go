@@ -349,12 +349,7 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 				}
 			}
 
-			if job.isNew && hash != "" {
-				recorder.add(gCtx, localHashCacheEntry{
-					Path: job.dbRelPath, Hash: hash, Size: job.size, Mtime: job.mtime, Ctime: job.ctime,
-					Device: job.localDevice, Inode: job.localInode, BirthTime: job.localBirthTime,
-				})
-			}
+			recorder.addJob(gCtx, &job, hash)
 
 			changeType := changeCreate
 			itemType := ItemTypeFile
