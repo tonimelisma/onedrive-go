@@ -59,6 +59,7 @@ rebuildable runtime facts:
 | `observation_state` | Content drive owner, primary cursor, and remote refresh cadence | zero-or-one row |
 | `held_deletes` | Deletes the delete-safety hold keeps for confirmation (status projection) | zero or more rows |
 | `delete_ledger` | Deletes sync ran without confirmation, by side and commit time, for the proportional hold's 24-hour window | zero or more rows |
+| `local_hash_cache` | Hashes a full scan computed for files the baseline does not know, with the metadata that must still match (R-2.2.8) | zero or more rows |
 | `mount_boundaries` | Folders crossed into another filesystem under `cross_filesystems` | `path` |
 | `kept_local_folders` | Folders deleted on OneDrive and kept locally only for content sync ignores | `path` |
 
@@ -323,6 +324,17 @@ per side (a read, so a dry run plans the same hold without writing); the proport
 delete-safety rule adds them to the plan's deletes and to the baseline it
 measures against. A confirmed delete (`BaselineMutation.DeleteConfirmed`) is
 never recorded, and `sync --confirm-deletes` clears the sides it approved.
+
+## `local_hash_cache`
+
+`local_hash_cache` keeps a full scan's hashing durable before the pass that
+would commit it: `path`, `hash`, and the facts the fast path requires to
+still match, `size`, `mtime`, `ctime`, `local_device`, `local_inode` and
+`local_birth_time`. The scan's hash phase writes it in batches of 256 as it
+goes and the next scan reads it once at start. A committed local snapshot
+prunes rows the baseline now owns and rows of files the snapshot no longer
+has, so the table empties once the first pass has committed. A dry run
+neither reads nor writes it.
 
 ## Schema Discipline
 

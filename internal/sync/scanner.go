@@ -267,6 +267,8 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(workers)
+	recorder := newHashCacheRecorder(o.hashCache, o.logger)
+	defer recorder.flush(ctx)
 
 	for _, job := range jobs {
 		g.Go(func() (retErr error) {
@@ -346,6 +348,8 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 					return nil
 				}
 			}
+
+			recorder.addJob(gCtx, &job, hash)
 
 			changeType := changeCreate
 			itemType := ItemTypeFile
@@ -690,6 +694,31 @@ func (o *localObserver) classifyObservedInfo(
 				Size:     info.Size(),
 				Mtime:    info.ModTime().UnixNano(),
 			})
+		} else if hash, ok := o.cachedHashForNewFile(dbRelPath, info, &observedRow, scanStartNano); ok {
+			// A scan before this one hashed the file and recorded it; the
+			// file has not changed since by every fact the fast path checks.
+			*events = append(*events, changeEvent{
+				Source:   SourceLocal,
+				Type:     changeCreate,
+				Path:     dbRelPath,
+				Name:     name,
+				ItemType: ItemTypeFile,
+				Size:     info.Size(),
+				Hash:     hash,
+				Mtime:    info.ModTime().UnixNano(),
+			})
+			currentRows[dbRelPath] = localStateRow{
+				Path:             dbRelPath,
+				ItemType:         ItemTypeFile,
+				Hash:             hash,
+				Size:             info.Size(),
+				Mtime:            info.ModTime().UnixNano(),
+				Ctime:            observedRow.Ctime,
+				LocalDevice:      observedRow.LocalDevice,
+				LocalInode:       observedRow.LocalInode,
+				LocalBirthTime:   observedRow.LocalBirthTime,
+				LocalHasIdentity: observedRow.LocalHasIdentity,
+			}
 		} else {
 			// New file — needs hashing in phase 2.
 			*jobs = append(*jobs, hashJob{

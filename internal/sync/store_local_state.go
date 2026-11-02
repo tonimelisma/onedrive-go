@@ -106,6 +106,9 @@ func (s *SyncStore) replaceLocalState(
 	if pruneErr := pruneKeptLocalFoldersTx(ctx, tx); pruneErr != nil {
 		return false, nil, pruneErr
 	}
+	if pruneErr := pruneLocalHashCacheTx(ctx, tx); pruneErr != nil {
+		return false, nil, pruneErr
+	}
 	backfilled, backfillErr := backfillBaselineIdentityTx(ctx, tx)
 	if backfillErr != nil {
 		return false, nil, backfillErr

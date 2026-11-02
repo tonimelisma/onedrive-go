@@ -26,6 +26,7 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 		"delete_ledger",
 		"held_deletes",
 		"kept_local_folders",
+		"local_hash_cache",
 		"local_state",
 		"mount_boundaries",
 		"observation_issues",

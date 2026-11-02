@@ -274,8 +274,9 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 func (flow *engineFlow) observeLocalCurrentState(
 	ctx context.Context,
 	bl *Baseline,
+	recordHashes bool,
 ) (scanResult, error) {
-	localResult, err := flow.observeLocal(ctx, bl)
+	localResult, err := flow.observeLocal(ctx, bl, recordHashes)
 	if err != nil {
 		return scanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepObservation, err)
 	}
@@ -287,7 +288,7 @@ func (flow *engineFlow) refreshLocalCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 ) (scanResult, error) {
-	localResult, err := flow.observeLocalCurrentState(ctx, bl)
+	localResult, err := flow.observeLocalCurrentState(ctx, bl, true)
 	if err != nil {
 		return scanResult{}, err
 	}
@@ -350,9 +351,13 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 // The observer also receives platform-derived naming rules from the engine so
 // SharePoint-specific validation stays aligned across one-shot, watch, and
 // retry/trial observation paths.
+//
+// recordHashes installs the durable hash cache (R-2.2.8); a dry run passes
+// false, since it must leave the store as it found it.
 func (flow *engineFlow) observeLocal(
 	ctx context.Context,
 	bl *Baseline,
+	recordHashes bool,
 ) (scanResult, error) {
 	eng := flow.engine
 	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
@@ -360,6 +365,13 @@ func (flow *engineFlow) observeLocal(
 	}
 
 	obs := newLocalObserver(bl, eng.logger, eng.checkWorkers)
+	if recordHashes {
+		cache, cacheErr := eng.baseline.newLocalHashCache(ctx)
+		if cacheErr != nil {
+			return scanResult{}, cacheErr
+		}
+		obs.SetLocalHashCache(cache)
+	}
 	obs.SetFilterConfig(eng.contentFilter)
 	obs.SetProtectedRoots(eng.currentProtectedRoots())
 	obs.SetObservationRules(eng.localRules)
@@ -395,7 +407,7 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 		return nil, err
 	}
 
-	localResult, err := flow.observeLocalCurrentState(ctx, bl)
+	localResult, err := flow.observeLocalCurrentState(ctx, bl, false)
 	if err != nil {
 		return nil, err
 	}
