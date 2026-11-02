@@ -634,29 +634,37 @@ func (flow *engineFlow) applyResultPersistence(
 	}
 }
 
-// durableCollisionRecheckDelay is the first wait before a create refused by
-// a name collision is tried again (retryDelayForCondition).
-const durableCollisionRecheckDelay = 30 * time.Second
+// durableRecheckDelay is the first wait before an action refused by a
+// condition that does not clear by itself is tried again
+// (retryDelayForCondition).
+const durableRecheckDelay = 30 * time.Second
 
 // retryDelayForCondition is the backoff curve for retry work of a condition.
 // A transient failure follows the reconcile curve, which starts at one
-// second. A name collision does not clear by itself: the user renames one of
-// the two names, or the other one goes away online. On the one-second curve
-// it was "held" only while the next pass began within a second of the
-// failure, so a slower pass (over a second under -race) or a watch replan
-// retried the refused create again and again. It waits from
-// durableCollisionRecheckDelay, doubling to an hour; a rename plans new work
-// that this row does not hold.
+// second. Two conditions do not clear by themselves and wait from
+// durableRecheckDelay, doubling to an hour:
+//   - a name collision clears when the user renames one of the two names or
+//     the other one goes away online. On the one-second curve it was "held"
+//     only while the next pass began within a second of the failure, so a
+//     slower pass (over a second under -race) or a watch replan retried the
+//     refused create again and again; a rename plans new work that this row
+//     does not hold;
+//   - a folder too large to verify before its recursive delete on OneDrive
+//     clears when the user deletes it online or it shrinks. Every retry
+//     relists up to remoteFolderDeleteListLimit items before it fails again,
+//     so on the one-second curve a watch session relisted 10,000 items on
+//     every pass.
 func retryDelayForCondition(condition string) func(int) time.Duration {
-	if condition == issueCaseCollision {
-		return durableCollisionRetryDelay
+	switch condition {
+	case issueCaseCollision, issueRemoteFolderUnverifiable:
+		return durableRecheckRetryDelay
 	}
 
 	return retry.ReconcilePolicy().Delay
 }
 
-func durableCollisionRetryDelay(attempt int) time.Duration {
-	delay := durableCollisionRecheckDelay
+func durableRecheckRetryDelay(attempt int) time.Duration {
+	delay := durableRecheckDelay
 	for range attempt {
 		delay *= 2
 		if delay >= time.Hour {

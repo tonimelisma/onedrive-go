@@ -378,7 +378,7 @@ func TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableColl
 		"the failure names both the local and the remote name: %s", joined)
 
 	uploads := remote.uploads
-	clock.Advance(durableCollisionRecheckDelay / 2)
+	clock.Advance(durableRecheckDelay / 2)
 	report, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, uploads, remote.uploads, "held with backoff, not retried as is on the next pass")
@@ -425,7 +425,7 @@ func TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurab
 	// A pass a few seconds later, however long the first one took (over a
 	// second under -race, which outlasted the transient retry curve's first
 	// step and retried the collision).
-	clock.Advance(durableCollisionRecheckDelay / 2)
+	clock.Advance(durableRecheckDelay / 2)
 	report, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Len(t, remote.folderCreates, creates, "held with backoff, not retried as is on the next pass")
