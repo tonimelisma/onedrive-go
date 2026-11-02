@@ -173,6 +173,13 @@ func (c *Client) QueryUploadSession(
 // (Graph API returned 404). The caller should fall back to a fresh upload.
 var ErrUploadSessionExpired = errors.New("graph: upload session expired")
 
+// ErrUploadSessionComplete reports a session whose status lists no range
+// left to upload: every byte arrived and the server committed, or is
+// committing, the item (a crash after the final fragment, or a final fragment
+// whose response outlasted its timeout). The caller looks the item up and
+// adopts it; nothing is left to send.
+var ErrUploadSessionComplete = errors.New("graph: upload session has no ranges left to upload")
+
 // ResumeUpload resumes an interrupted chunked upload from where it left off.
 // It queries the session to find the next expected byte offset, then uploads
 // the remaining chunks. Returns ErrUploadSessionExpired if the session is no
@@ -193,6 +200,9 @@ func (c *Client) ResumeUpload(
 		return nil, fmt.Errorf("graph: querying session for resume: %w", err)
 	}
 
+	if len(status.NextExpectedRanges) == 0 {
+		return nil, ErrUploadSessionComplete
+	}
 	resumeOffset, err := parseNextExpectedRangeStart(status.NextExpectedRanges)
 	if err != nil {
 		return nil, fmt.Errorf("graph: parsing resume offset from session status: %w", err)

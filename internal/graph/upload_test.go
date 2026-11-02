@@ -1507,6 +1507,29 @@ func TestResumeUpload_SessionExpired(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUploadSessionExpired)
 }
 
+// Validates: R-5.6.12
+//
+// A session whose status lists no range left has received every byte: the
+// item is committed or committing. That is not a malformed status; the
+// caller looks the item up instead of starting the upload over.
+func TestResumeUpload_StatusWithNoRangesLeftIsComplete(t *testing.T) {
+	var puts atomic.Int32
+	sessionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			puts.Add(1)
+		}
+		writeTestResponse(t, w, `{"expirationDateTime":"2030-01-01T00:00:00Z","nextExpectedRanges":[]}`)
+	}))
+	defer sessionSrv.Close()
+
+	client := newTestClient(t, "http://unused")
+	session := &UploadSession{UploadURL: UploadURL(sessionSrv.URL + "/done")}
+
+	_, err := client.ResumeUpload(t.Context(), session, bytes.NewReader(make([]byte, 1024)), 1024, nil)
+	require.ErrorIs(t, err, ErrUploadSessionComplete)
+	assert.Zero(t, puts.Load(), "nothing is sent to a finished session")
+}
+
 // Validates: R-5.6.1
 func TestUploadFromSession_RecoversFrom416UsingSessionStatus(t *testing.T) {
 	totalSize := int64(ChunkedUploadChunkSize + 1024)

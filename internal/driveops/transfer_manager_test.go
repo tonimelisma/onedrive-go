@@ -2350,6 +2350,88 @@ func TestSessionUpload_GoneSessionWithLandedItemIsAdopted(t *testing.T) {
 }
 
 // Validates: R-5.6.12
+//
+// A final fragment whose response outlasted its timeout, looked up before the
+// server had committed, left the session record for the next attempt. That
+// resume's status answered 200 with no range left to upload, which parsed as
+// an error and dropped the session: the multi-GB file was uploaded again.
+func TestSessionUpload_CompletedSessionWithLandedItemIsAdopted(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	localPath, data, hash := sessionTestFile(t, dir)
+	require.NoError(t, store.Save(driveid.New("d1").String(), localPath, &SessionRecord{
+		SessionURL: "https://upload.example.com/old", FileHash: hash, FileSize: int64(len(data)),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}))
+
+	var creates int
+	ul := &tmMockUploader{
+		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, graph.ErrUploadSessionComplete
+		},
+		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+			creates++
+			return &graph.UploadSession{UploadURL: "https://upload.example.com/new"}, nil
+		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+			return []graph.Item{{ID: "landed", Name: "big.bin", Size: int64(len(data)), QuickXorHash: hash}}, nil
+		},
+	}
+
+	result, err := newTestTM(&tmSimpleDownloader{}, ul, store).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "big.bin", localPath, UploadOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, "landed", result.Item.ID)
+	assert.Zero(t, creates, "a committed upload is never sent again")
+	_, found, loadErr := store.Load(driveid.New("d1").String(), localPath)
+	require.NoError(t, loadErr)
+	assert.False(t, found, "the finished session's record is gone")
+}
+
+// Validates: R-5.6.12
+//
+// A completed session whose item is not at the target with the upload's
+// content is not ours to adopt: the session is dropped and a fresh one sends
+// the current content.
+func TestSessionUpload_CompletedSessionWithoutLandedItemStartsFresh(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	localPath, data, hash := sessionTestFile(t, dir)
+	require.NoError(t, store.Save(driveid.New("d1").String(), localPath, &SessionRecord{
+		SessionURL: "https://upload.example.com/old", FileHash: hash, FileSize: int64(len(data)),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}))
+
+	var creates int
+	ul := &tmMockUploader{
+		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, graph.ErrUploadSessionComplete
+		},
+		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+			creates++
+			return &graph.UploadSession{UploadURL: "https://upload.example.com/new", ExpirationTime: time.Now().Add(time.Hour)}, nil
+		},
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{ID: "fresh", Name: "big.bin", Size: int64(len(data)), QuickXorHash: hash}, nil
+		},
+		listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+			return nil, nil
+		},
+	}
+
+	result, err := newTestTM(&tmSimpleDownloader{}, ul, store).UploadFile(
+		t.Context(), driveid.New("d1"), "parent1", "big.bin", localPath, UploadOpts{})
+	require.NoError(t, err)
+	assert.Equal(t, "fresh", result.Item.ID)
+	assert.Equal(t, 1, creates, "one fresh session")
+	assert.Equal(t, []graph.UploadURL{"https://upload.example.com/old"}, ul.canceledSessions, "the finished session is dropped on the server")
+}
+
+// Validates: R-5.6.12
 func TestSessionUpload_GoneSessionBeforeExpiryIsInvalidation(t *testing.T) {
 	t.Parallel()
 
