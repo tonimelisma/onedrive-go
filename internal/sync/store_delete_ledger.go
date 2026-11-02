@@ -28,31 +28,30 @@ func (s *SyncStore) recordDeleteLedgerTx(ctx context.Context, tx sqlTxRunner, o 
 	default:
 		return nil
 	}
+	now := s.nowFunc()
 	if _, err := tx.ExecContext(ctx,
 		`INSERT OR REPLACE INTO delete_ledger (side, path, item_id, committed_at) VALUES (?, ?, ?, ?)`,
-		string(side), o.Path, o.ItemID, s.nowFunc().UnixNano(),
+		string(side), o.Path, o.ItemID, now.UnixNano(),
 	); err != nil {
 		return fmt.Errorf("sync: recording delete of %s in the delete ledger: %w", o.Path, err)
+	}
+	// Rows older than the window no longer count; pruning here, on a write
+	// the store makes anyway, keeps the planner's read read-only (a dry run
+	// plans too).
+	if _, err := tx.ExecContext(ctx, `DELETE FROM delete_ledger WHERE committed_at < ?`,
+		now.Add(-deleteSafetyWindow).UnixNano()); err != nil {
+		return fmt.Errorf("sync: pruning the delete ledger: %w", err)
 	}
 
 	return nil
 }
 
 // recentUnconfirmedDeletes counts the ledger's deletes toward each side
-// committed at or after since, pruning the older rows first.
-func (s *SyncStore) recentUnconfirmedDeletes(ctx context.Context, since time.Time) (_ map[deleteSafetySide]int, err error) {
-	tx, err := beginPerfTx(ctx, s.db)
-	if err != nil {
-		return nil, fmt.Errorf("sync: begin delete ledger transaction: %w", err)
-	}
-	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback delete ledger transaction")
-	}()
-
-	if _, err = tx.ExecContext(ctx, `DELETE FROM delete_ledger WHERE committed_at < ?`, since.UnixNano()); err != nil {
-		return nil, fmt.Errorf("sync: pruning the delete ledger: %w", err)
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT side, COUNT(*) FROM delete_ledger GROUP BY side`)
+// committed at or after since. Read-only: the planner calls it on every
+// plan, dry runs included.
+func (s *SyncStore) recentUnconfirmedDeletes(ctx context.Context, since time.Time) (map[deleteSafetySide]int, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT side, COUNT(*) FROM delete_ledger WHERE committed_at >= ? GROUP BY side`, since.UnixNano())
 	if err != nil {
 		return nil, fmt.Errorf("sync: counting recent deletes: %w", err)
 	}
@@ -64,16 +63,13 @@ func (s *SyncStore) recentUnconfirmedDeletes(ctx context.Context, since time.Tim
 			side  string
 			count int
 		)
-		if err = rows.Scan(&side, &count); err != nil {
+		if err := rows.Scan(&side, &count); err != nil {
 			return nil, fmt.Errorf("sync: scanning recent deletes: %w", err)
 		}
 		counts[deleteSafetySide(side)] = count
 	}
-	if err = rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("sync: iterating recent deletes: %w", err)
-	}
-	if err = tx.Commit(); err != nil {
-		return nil, fmt.Errorf("sync: commit delete ledger transaction: %w", err)
 	}
 
 	return counts, nil

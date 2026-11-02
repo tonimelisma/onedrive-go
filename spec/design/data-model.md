@@ -317,8 +317,9 @@ current truth and reads the table only as the set a confirmation approves.
 `delete_ledger` records every local or remote delete sync ran without the
 user's confirmation: `side`, `path`, `item_id` and `committed_at` (Unix
 nanoseconds, the store's clock at commit). `CommitMutation` appends the row in
-the outcome's own transaction. At plan time the engine prunes rows older than
-the 24-hour window and counts the rest per side; the proportional
+the outcome's own transaction and prunes rows older than the 24-hour window
+in the same write. At plan time the engine counts the rows inside the window
+per side (a read, so a dry run plans the same hold without writing); the proportional
 delete-safety rule adds them to the plan's deletes and to the baseline it
 measures against. A confirmed delete (`BaselineMutation.DeleteConfirmed`) is
 never recorded, and `sync --confirm-deletes` clears the sides it approved.

@@ -573,8 +573,8 @@ enumeration). So, per direction (product decision P-1):
   files and folders alike, go toward one side, all deletes toward that side
   are held. The unconfirmed deletes sync already ran toward that side within
   the last 24 hours (`deleteSafetyWindow`) count with the plan's, against the
-  baseline as it stood before them (`delete_ledger`, written by
-  `CommitMutation` in the outcome's own transaction, read and pruned by
+  baseline as it stood before them (`delete_ledger`, written and
+  pruned by `CommitMutation` in the outcome's own transaction, read by
   `recentUnconfirmedDeletes` at plan time). Each plan used to be judged alone,
   so a process removing files below the threshold per pass (a failing disk, a
   misbehaving app, a cron job) emptied the drive one small batch at a time and
