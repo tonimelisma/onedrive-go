@@ -20,7 +20,7 @@ func (s *SyncStore) recordDeleteLedgerTx(ctx context.Context, tx sqlTxRunner, o 
 		return nil
 	}
 	var side deleteSafetySide
-	switch o.Action {
+	switch o.Action { //nolint:exhaustive // only deletes are ledgered; every other action falls through to the default
 	case ActionLocalDelete:
 		side = deleteSafetySideLocal
 	case ActionRemoteDelete:
