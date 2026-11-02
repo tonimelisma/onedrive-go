@@ -85,7 +85,18 @@ func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*Syn
 	return openSyncStore(ctx, dbPath, logger, true)
 }
 
+// sqliteDriverName is the database/sql driver the store opens its database
+// with. Tests open through a fault-injecting wrapper of the same driver
+// (openSyncStoreWithDriver) to reach the store's failure branches.
+const sqliteDriverName = "sqlite"
+
 func openSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool) (*SyncStore, error) {
+	return openSyncStoreWithDriver(ctx, dbPath, logger, ensureSchema, sqliteDriverName)
+}
+
+func openSyncStoreWithDriver(
+	ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool, driverName string,
+) (*SyncStore, error) {
 	root, _, err := fsroot.OpenPath(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("prepare sync store path: %w", err)
@@ -102,7 +113,7 @@ func openSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, ensu
 		dbPath,
 	)
 
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("sync: opening database %s: %w", dbPath, err)
 	}
