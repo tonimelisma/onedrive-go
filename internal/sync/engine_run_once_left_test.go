@@ -25,7 +25,8 @@ func TestRunOnce_ReportCountsTheWorkAThrottleLeftForTheNextSync(t *testing.T) {
 	driveID := driveid.New(engineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	clock := newManualClock(time.Date(2026, 11, 2, 4, 0, 0, 0, time.UTC))
-	limiter := newThrottleWindowClient(clock.Now, 10, time.Second)
+	const window = 2 * time.Second
+	limiter := newThrottleWindowClient(clock.Now, 10, window)
 	eng, syncRoot := newTestEngine(t, limiter.wrap(remote.client(t)))
 	eng.transferWorkers = 4
 	installManualClockForTestEngine(eng, clock)
@@ -37,12 +38,12 @@ func TestRunOnce_ReportCountsTheWorkAThrottleLeftForTheNextSync(t *testing.T) {
 	require.NoError(t, err)
 	planned := report.FolderCreates + report.Uploads
 	require.Less(t, report.Succeeded, planned, "the window of 10 requests cannot carry the whole plan")
-	assert.Greater(t, report.LeftForNextSync, 0, "the 429 took work back for a trial after the pass")
+	assert.Positive(t, report.LeftForNextSync, "the 429 took work back for a trial after the pass")
 	assert.Equal(t, planned-report.Succeeded-report.Failed, report.LeftForNextSync,
 		"everything planned is completed, failed or left for the next sync")
 
 	for i := 0; i < 40 && report.LeftForNextSync+report.Failed > 0; i++ {
-		clock.Advance(time.Second)
+		clock.Advance(window)
 		report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 	}
