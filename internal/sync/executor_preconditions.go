@@ -503,7 +503,9 @@ func plannedLocalState(action *Action) *localState {
 	return action.View.Local
 }
 
-func (e *executor) validateExistingDownloadTarget(ctx context.Context, action *Action, target string, info os.FileInfo, planned *localState) error {
+func (e *executor) validateExistingDownloadTarget(
+	ctx context.Context, action *Action, target string, info os.FileInfo, planned *localState,
+) error {
 	if err := validateDownloadTargetMetadata(action, info, planned); err != nil {
 		return err
 	}
