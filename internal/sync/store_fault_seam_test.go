@@ -168,7 +168,7 @@ func (c *faultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.
 	if beginner, ok := c.Conn.(driver.ConnBeginTx); ok {
 		tx, err = beginner.BeginTx(ctx, opts)
 	} else {
-		tx, err = c.Begin() //nolint:staticcheck // the fallback the interface documents
+		tx, err = c.Begin()
 	}
 	if err != nil {
 		return nil, fmt.Errorf("fault driver: begin: %w", err)
@@ -194,7 +194,7 @@ func (t *faultTx) Commit() error {
 	if err := t.fault.take(faultCommit); err != nil {
 		// The statements ran; the commit is what failed. Roll back so the
 		// connection is reusable, as SQLite would after a failed commit.
-		if rbErr := t.Tx.Rollback(); rbErr != nil {
+		if rbErr := t.Rollback(); rbErr != nil {
 			return errors.Join(err, rbErr)
 		}
 		return err
