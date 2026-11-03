@@ -1,6 +1,6 @@
 # Sync Execution
 
-GOVERNS: internal/sync/action_freshness.go, internal/sync/active_scopes.go, internal/sync/dep_graph.go, internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_preconditions.go, internal/sync/executor_transfer.go, internal/sync/scope.go, internal/sync/worker.go
+GOVERNS: internal/sync/action_freshness.go, internal/sync/active_scopes.go, internal/sync/dep_graph.go, internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_parent_checks.go, internal/sync/executor_preconditions.go, internal/sync/executor_transfer.go, internal/sync/scope.go, internal/sync/worker.go
 
 LAYER: 3
 
@@ -304,7 +304,21 @@ already-planned parent path to become visible through the convergence boundary,
 then run the stale parent preflight so transient post-create Graph visibility
 lag is absorbed before stale proof is evaluated. If the visibility wait times
 out because the parent is actually gone, the stale parent preflight result takes
-precedence over the visibility timeout. A live `itemNotFound` result, changed item identity,
+precedence over the visibility timeout. Both parent reads are made once per
+parent per plan (`remoteParentChecks`, cleared when the engine registers a
+plan): the first create into a folder waits for its path and reads the item,
+its siblings skip both, and a create into a parent gone since then is answered
+404 by Graph, which `remoteCreateParentGone` reports as the same parent-gone
+fact, so the engine forgets the item and replans as it would after the live
+read. A folder's own post-create visibility probe primes the memo for its
+children. A file upload does not probe its own path afterwards: the upload's
+response carries the item, and sync reads no file by path. Each of those three
+reads cost one request per new file, half of the traffic of a 6,000-file
+upload in the soak of 2026-11-02
+(`TestExecutor_Upload_SiblingCreatesReadTheirParentOncePerPlan`,
+`TestExecutor_Upload_CreateIntoAParentGoneMidPlanIsAParentGoneFact`,
+`TestExecutor_CreateRemoteFolder_IntoAParentGoneMidPlanIsAParentGoneFact`,
+`TestExecutor_Upload_DoesNotProbeItsOwnPathAfterTheUpload`). A live `itemNotFound` result, changed item identity,
 drive, item type, eTag, hash, size, or same-coordinate path where Graph supplies
 that fact is a stale precondition and maps to `errActionPreconditionChanged`.
 Folder eTags are the exception: OneDrive changes a folder's eTag whenever

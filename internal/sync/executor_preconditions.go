@@ -245,6 +245,11 @@ func (e *executor) validateRemoteParentPrecondition(
 	if parentID == graphRootID {
 		return nil
 	}
+	if e.parentChecks.folderRead(driveID, parentID) {
+		// Read live as a folder earlier in this plan; a create into it
+		// that answers 404 is reported as the same parent-gone fact.
+		return nil
+	}
 	item, err := e.items.GetItem(ctx, driveID, parentID)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotFound) {
@@ -255,8 +260,25 @@ func (e *executor) validateRemoteParentPrecondition(
 	if !item.IsFolder && !item.IsRoot {
 		return stalePreconditionError("%s remote parent %s is not a folder", op, parentID)
 	}
+	e.parentChecks.markFolderRead(driveID, parentID)
 
 	return nil
+}
+
+// remoteCreateParentGone turns a create's own not-found answer into the
+// parent-gone fact the live parent read would have returned: the create
+// addresses the parent by ID, so a 404 that is not about an item the create
+// already made names that parent. Nil for every other error.
+func remoteCreateParentGone(err error, op, parentID string) error {
+	if err == nil || parentID == "" || !errors.Is(err, graph.ErrNotFound) {
+		return nil
+	}
+	var created *graph.CreatedItemError
+	if errors.As(err, &created) {
+		return nil
+	}
+
+	return &remoteItemGoneError{op: op, itemID: parentID, role: "parent"}
 }
 
 func remoteStateRowFromGraphItem(item *graph.Item) *remoteStateRow {
