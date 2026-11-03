@@ -86,6 +86,11 @@ func (flow *engineFlow) registerPlanActions(plan *actionPlan) []*trackedAction {
 	if flow.sched.graph == nil || plan == nil || len(plan.Actions) == 0 {
 		return nil
 	}
+	if flow.engine != nil {
+		// A new plan reads every parent live again before its first
+		// create into it; the memo is per plan.
+		flow.engine.execCfg.resetRemoteParentChecks()
+	}
 
 	actionIDs := flow.sched.allocatePlanActionIDs(len(plan.Actions))
 	initialReady := make([]*trackedAction, 0, len(plan.Actions))
