@@ -65,7 +65,11 @@ const (
 	// intent to create is recorded before the request that creates the item,
 	// so a placeholder whose creating request was in flight when the process
 	// died is still recognized as ours (R-5.6.15).
-	currentSyncStoreGeneration = 27
+	// Generation 28 adds condition_type to retry_work: an action refused by a
+	// condition only the user can clear keeps the condition with the row, so
+	// status lists it under that condition instead of as anonymous retrying
+	// work (R-2.10.71).
+	currentSyncStoreGeneration = 28
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -198,6 +202,7 @@ CREATE TABLE IF NOT EXISTS retry_work (
     blocked         INTEGER NOT NULL DEFAULT 0 CHECK(blocked IN (0, 1)),
     attempt_count   INTEGER NOT NULL DEFAULT 0,
     next_retry_at   INTEGER NOT NULL DEFAULT 0,
+    condition_type  TEXT    NOT NULL DEFAULT '',
     PRIMARY KEY (path, old_path, action_type)
 );
 
@@ -299,7 +304,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 			"local_device", "local_inode", "local_birth_time", "local_has_identity",
 		},
 		"retry_work": {
-			"path", "old_path", "action_type", "scope_key", "blocked", "attempt_count", "next_retry_at",
+			"path", "old_path", "action_type", "scope_key", "blocked", "attempt_count", "next_retry_at", "condition_type",
 		},
 		"observation_issues": {
 			"path", "issue_type", "scope_key",
