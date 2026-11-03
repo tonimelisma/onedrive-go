@@ -49,6 +49,26 @@ func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []storedConditi
 		}
 	}
 
+	// Work the executor could not do because of a condition only the user
+	// can clear (OneDrive refused the path as too long, a folder is not
+	// writable) belongs with the scanner's findings of the same condition,
+	// not under an anonymous "Retrying" count (R-2.10.71).
+	for i := range snapshot.ActionableRetryWork {
+		row := snapshot.ActionableRetryWork[i]
+		group := ensureStoredConditionGroup(
+			&groups,
+			groupIndex,
+			conditionKeyForStoredCondition(row.ConditionType, ScopeKey{}),
+			row.ConditionType,
+			ScopeKey{},
+		)
+		if group == nil {
+			continue
+		}
+		group.Count++
+		group.Paths = append(group.Paths, row.Path)
+	}
+
 	for i := range snapshot.BlockScopes {
 		block := snapshot.BlockScopes[i]
 		if block == nil {
