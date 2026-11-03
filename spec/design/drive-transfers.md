@@ -286,6 +286,20 @@ create's persisted session, whose `SessionRecord` keeps `ItemID` and
 name a variant spelling could also match. A retry of an interrupted create
 with a session record opens its fresh session on the created item instead of
 creating the file again (`TestSessionUpload_RetryOfAnInterruptedCreateReusesItsItem`).
+After a crash the retry is no longer a create: the next pass adopts the
+placeholder as a known item (R-5.6.15) and plans an overwrite by ID, whose
+session key names the item (`item::<id>::<path>`) while the create recorded
+its session under the local path alone. `loadCreateRecordForOverwrite` looks
+under the create's key when the overwrite's own is empty and takes the record
+only when its `ItemID` is the overwrite's target and its hash is the content
+in hand; it re-keys the record under the overwrite's key, without the
+creation eTag, so a failed overwrite leaves the item rather than removing it
+as its own placeholder (R-5.2.4,
+`TestUploadFileToItem_ResumesTheSessionACrashedCreateLeft`,
+`TestUploadFileToItem_LeavesAnotherItemsCreateRecordAlone`,
+`TestUploadFileToItem_DropsACreateRecordForOtherContent`). The soak of
+2026-11-02 found this: a 2 GiB create killed at 1.2 GiB was sent again from
+byte 0 after the restart, with the create's record left beside the new one.
 When a final fragment's lookup shows the content did not land, the empty item
 is deleted at once while still empty, with If-Match on the eTag that lookup
 read; the creation eTag no longer matches by then, because opening and

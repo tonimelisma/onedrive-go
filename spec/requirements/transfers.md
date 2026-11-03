@@ -12,7 +12,7 @@ Download and upload transfer infrastructure shared by file operations and sync.
 - R-5.2.1: When a file exceeds 4 MiB, the system shall use a resumable upload session. [verified]
 - R-5.2.2: When a download is interrupted, the system shall resume via `.partial` files and HTTP Range requests on retry. A partial is bound to the remote version it holds (its QuickXorHash, or its eTag for a hashless item, in the partial's name) and is resumed only while the item is still that version and only from a 206 whose Content-Range starts at the partial's length and spans the item's size; anything else discards the partial and downloads from the start. A partial with no version to bind to is never resumed. [verified]
 - R-5.2.3: Upload session state shall be persisted to disk and survive process restart. [verified]
-- R-5.2.4: Interrupted transfers shall resume automatically on next sync. [verified]
+- R-5.2.4: Interrupted transfers shall resume automatically on next sync. This includes an upload that was creating a new file when the process died: the next sync adopts the empty item the create left (R-5.6.15) and uploads to it by ID, and that overwrite shall resume the create's persisted session rather than send the content again. [verified]
 - R-5.2.5: Names the system derives from a user's file name (download partials, conflict copies) shall stay within the 255-byte local name limit, staying deterministic for partials so a download still resumes. A name that is valid locally shall never become undownloadable because of the name the client gives its partial file. [verified]
 
 ## R-5.3 Upload Chunking [verified]

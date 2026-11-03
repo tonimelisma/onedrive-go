@@ -120,6 +120,10 @@ func (tm *TransferManager) loadUsableSessionRecord(ctx context.Context, up *pers
 		}
 	}
 
+	if !found && loadErr == nil {
+		rec, found = tm.loadCreateRecordForOverwrite(ctx, up, driveStr)
+	}
+
 	if found && rec.FileHash != up.localHash {
 		tm.dropSession(ctx, driveStr, up.key, graph.UploadURL(rec.SessionURL))
 		return nil, false
@@ -132,6 +136,52 @@ func (tm *TransferManager) loadUsableSessionRecord(ctx context.Context, up *pers
 	}
 
 	return rec, found
+}
+
+// loadCreateRecordForOverwrite finds the session a crashed create left for an
+// overwrite of the very item that create made. A create records its session
+// under the local path; after a crash the next pass adopts the empty item the
+// create left (R-5.6.15) and uploads to it by ID, whose record key names the
+// item, so the create's record was never found and every byte it had sent
+// went again (R-5.2.4). The record is taken only when it names this item and
+// this content, and it is re-keyed so the overwrite's own delete and drop
+// paths find it. The creation eTag is not carried over: an overwrite that
+// fails must leave the item, not remove it as its own placeholder.
+func (tm *TransferManager) loadCreateRecordForOverwrite(
+	ctx context.Context, up *persistedUpload, driveStr string,
+) (*SessionRecord, bool) {
+	if up.target.itemID == "" || up.key == up.localPath {
+		return nil, false
+	}
+
+	rec, found, err := tm.sessionStore.Load(driveStr, up.localPath)
+	if err != nil || !found || rec.ItemID != up.target.itemID {
+		return nil, false
+	}
+	if rec.FileHash != up.localHash {
+		tm.dropSession(ctx, driveStr, up.localPath, graph.UploadURL(rec.SessionURL))
+		return nil, false
+	}
+
+	adopted := *rec
+	adopted.CreatedETag = ""
+	if saveErr := tm.sessionStore.Save(driveStr, up.key, &adopted); saveErr != nil {
+		// The resume still works this attempt; the record just stays under
+		// the create's key until the stale-session cleanup removes it.
+		tm.logger.Debug("could not re-key the saved upload session of an adopted create",
+			slog.String("path", up.localPath),
+			slog.Any("error", saveErr),
+		)
+	} else {
+		tm.deleteSession(driveStr, up.localPath)
+	}
+
+	tm.logger.Debug("resuming the upload session a crashed create left",
+		slog.String("path", up.localPath),
+		slog.String("item_id", up.target.itemID),
+	)
+
+	return &adopted, true
 }
 
 // openSessionForUpload opens the session a fresh attempt uploads through and,
