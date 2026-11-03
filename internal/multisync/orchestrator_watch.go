@@ -93,19 +93,11 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 				return nil
 			}
 		case reason := <-reloadTriggers:
-			o.logger.Info("Reloading the config (" + reason + ")")
-			if err := o.reload(ctx, mode, opts, runners, runnerEvents, childWork); err != nil {
-				// reload already warned and kept the previous settings;
-				// with no client waiting there is nobody else to tell.
-				o.logger.Debug("config reload after file change failed", slog.Any("error", err))
-			}
+			o.reloadForReason(ctx, reason, mode, opts, runners, runnerEvents, childWork)
 		case <-pauseExpiry.ch:
 			// The reload clears the expired pause from the config and
 			// starts the drive, exactly as a `resume` would.
-			o.logger.Info("Reloading the config (timed pause expired)")
-			if err := o.reload(ctx, mode, opts, runners, runnerEvents, childWork); err != nil {
-				o.logger.Debug("config reload after a timed pause expired failed", slog.Any("error", err))
-			}
+			o.reloadForReason(ctx, "timed pause expired", mode, opts, runners, runnerEvents, childWork)
 		case event := <-runnerEvents:
 			o.handleWatchRunnerEvent(ctx, event, mode, opts, runners, runnerEvents, childWork)
 		case <-reconcileTickCh:
@@ -115,6 +107,20 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 		case <-ctx.Done():
 			return nil
 		}
+	}
+}
+
+// reloadForReason runs the config reload the loop owes to a trigger it did
+// not ask a client about: a changed file or an expired timed pause. The
+// reload already warned and kept the previous settings when it fails; with
+// no client waiting there is nobody else to tell.
+func (o *Orchestrator) reloadForReason(
+	ctx context.Context, reason string, mode syncengine.SyncMode, opts syncengine.WatchOptions,
+	runners map[mountID]*watchRunner, runnerEvents chan<- watchRunnerEvent, childWork *parentChildWorkSnapshots,
+) {
+	o.logger.Info("Reloading the config (" + reason + ")")
+	if err := o.reload(ctx, mode, opts, runners, runnerEvents, childWork); err != nil {
+		o.logger.Debug("config reload failed ("+reason+")", slog.Any("error", err))
 	}
 }
 
@@ -197,7 +203,8 @@ func (o *Orchestrator) nextPauseExpiryDelay() (time.Duration, bool) {
 	now := o.clockNow()
 	var next time.Duration
 	found := false
-	for _, drive := range cfg.Drives {
+	for cid := range cfg.Drives {
+		drive := cfg.Drives[cid]
 		until, ok := drive.PauseExpiry()
 		if !ok || !now.Before(until) {
 			continue

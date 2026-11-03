@@ -23,14 +23,79 @@ import (
 // for the earliest timed pause; the reload it triggers clears the expired
 // pause from the config and starts the drive.
 func TestRunWatch_TimedPauseExpiresWithoutAReload(t *testing.T) {
+	w := newTimedPauseWatch(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- w.orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	}()
+
+	require.Eventually(t, func() bool {
+		return len(w.armedDelays()) > 0
+	}, 5*time.Second, 5*time.Millisecond, "the pause-expiry wake-up was not armed")
+	assert.Equal(t, w.wait, w.armedDelays()[0], "armed for the pause's end")
+	select {
+	case <-w.started:
+		require.FailNow(t, "the drive must not run while its pause holds")
+	default:
+	}
+
+	w.clock.advance(w.wait)
+	w.fire <- w.clock.now()
+
+	select {
+	case <-w.started:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "the drive did not start when its timed pause expired")
+	}
+
+	loaded, err := config.LoadOrDefault(w.cfgPath, w.logger)
+	require.NoError(t, err)
+	drive := loaded.Drives[w.mount.CanonicalID]
+	assert.Nil(t, drive.Paused, "the expired pause is cleared from the config")
+	assert.Nil(t, drive.PausedUntil)
+	assert.True(t, w.logged("Reloading the config (timed pause expired)"),
+		"the expiry is reported as the reason for the reload")
+
+	cancel()
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "RunWatch did not stop in time")
+	}
+}
+
+// timedPauseWatch is an orchestrator whose one drive is paused until an hour
+// from now on the wall clock, running on a test clock the test moves past
+// that end, with the restart timer and the engine factory stubbed.
+type timedPauseWatch struct {
+	orch    *Orchestrator
+	mount   StandaloneMountConfig
+	cfgPath string
+	clock   *testClock
+	wait    time.Duration
+	fire    chan time.Time
+	started chan struct{}
+	logger  *slog.Logger
+	capture *logCapture
+	// armedMu guards armed: the loop arms the timer from its own goroutine.
+	armedMu gosync.Mutex
+	armed   []time.Duration
+}
+
+func newTimedPauseWatch(t *testing.T) *timedPauseWatch {
+	t.Helper()
+
 	rd := testStandaloneMount(t, "personal:timed-pause@example.com", "TimedPause")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	// The pause ends in the wall clock's future (config loading reads an
 	// already-past paused_until as expired), while the orchestrator runs on
-	// the test clock, which the test moves past that end.
+	// the test clock.
 	clock := newTestClock()
 	until := time.Now().Add(time.Hour).Truncate(time.Second)
-	wait := until.Sub(clock.now()) + pauseExpirySlack
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused_until", until.Format(time.RFC3339)))
 
@@ -48,89 +113,58 @@ func TestRunWatch_TimedPauseExpiresWithoutAReload(t *testing.T) {
 
 		return StandaloneMountSelection{Mounts: []StandaloneMountConfig{mount}}, nil
 	}
-	orch := NewOrchestrator(cfg)
+
+	w := &timedPauseWatch{
+		orch:    NewOrchestrator(cfg),
+		mount:   rd,
+		cfgPath: cfgPath,
+		clock:   clock,
+		wait:    until.Sub(clock.now()) + pauseExpirySlack,
+		fire:    make(chan time.Time, 1),
+		started: make(chan struct{}),
+		logger:  logger,
+		capture: capture,
+	}
 	// The production holder carries the loaded file; the test helper's holds
 	// defaults, so give it the file with the pause in it.
-	reloadTestOrchestratorConfig(t, orch, cfgPath)
-	orch.now = clock.now
-	orch.reconcileTicks = func(time.Duration) (<-chan time.Time, func()) { return nil, func() {} }
-
-	fire := make(chan time.Time, 1)
-	var armedMu gosync.Mutex
-	var armed []time.Duration
-	orch.restartTimer = func(delay time.Duration) (<-chan time.Time, func()) {
-		armedMu.Lock()
-		armed = append(armed, delay)
-		armedMu.Unlock()
-		return fire, func() {}
+	reloadTestOrchestratorConfig(t, w.orch, cfgPath)
+	w.orch.now = clock.now
+	w.orch.reconcileTicks = func(time.Duration) (<-chan time.Time, func()) { return nil, func() {} }
+	w.orch.restartTimer = func(delay time.Duration) (<-chan time.Time, func()) {
+		w.armedMu.Lock()
+		w.armed = append(w.armed, delay)
+		w.armedMu.Unlock()
+		return w.fire, func() {}
 	}
-
-	started := make(chan struct{})
 	var startOnce gosync.Once
-	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
+	w.orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
-				startOnce.Do(func() { close(started) })
+				startOnce.Do(func() { close(w.started) })
 				<-ctx.Done()
 				return ctx.Err()
 			},
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	return w
+}
 
-	require.Eventually(t, func() bool {
-		armedMu.Lock()
-		defer armedMu.Unlock()
-		return len(armed) > 0
-	}, 5*time.Second, 5*time.Millisecond, "the pause-expiry wake-up was not armed")
-	armedMu.Lock()
-	assert.Equal(t, wait, armed[0], "armed for the pause's end")
-	armedMu.Unlock()
-	select {
-	case <-started:
-		require.FailNow(t, "the drive must not run while its pause holds")
-	default:
-	}
+func (w *timedPauseWatch) armedDelays() []time.Duration {
+	w.armedMu.Lock()
+	defer w.armedMu.Unlock()
 
-	clock.advance(wait)
-	fire <- clock.now()
+	return append([]time.Duration(nil), w.armed...)
+}
 
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		for _, record := range capture.atLeast(slog.LevelDebug) {
-			t.Logf("log: %s %v", record.message, record.attrs)
-		}
-		require.FailNow(t, "the drive did not start when its timed pause expired")
-	}
-
-	loaded, err := config.LoadOrDefault(cfgPath, logger)
-	require.NoError(t, err)
-	drive := loaded.Drives[rd.CanonicalID]
-	assert.Nil(t, drive.Paused, "the expired pause is cleared from the config")
-	assert.Nil(t, drive.PausedUntil)
-
-	reloaded := false
-	for _, record := range capture.atLeast(slog.LevelInfo) {
-		if record.message == "Reloading the config (timed pause expired)" {
-			reloaded = true
+func (w *timedPauseWatch) logged(message string) bool {
+	for _, record := range w.capture.atLeast(slog.LevelInfo) {
+		if record.message == message {
+			return true
 		}
 	}
-	assert.True(t, reloaded, "the expiry is reported as the reason for the reload")
 
-	cancel()
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "RunWatch did not stop in time")
-	}
+	return false
 }
 
 // Validates: R-2.8.12

@@ -62,15 +62,7 @@ func TestRunOnce_FolderOneDriveRefusesAsTooLongIsAConditionNotAnonymousRetryWork
 	assert.GreaterOrEqual(t, rows[0].NextRetryAt-clock.Now().UnixNano(), int64(durableRecheckDelay),
 		"a condition the user must clear waits on the durable curve")
 
-	snapshot, err := eng.baseline.ReadDriveStatusSnapshot(t.Context())
-	require.NoError(t, err)
-	require.Len(t, snapshot.ActionableRetryWork, 1, "status reads the row as a condition")
-	assert.Equal(t, issuePathTooLong, snapshot.ActionableRetryWork[0].ConditionType)
-	assert.Zero(t, snapshot.RetryingItems, "not counted as retrying")
-	groups := ProjectStoredConditionGroups(&snapshot)
-	require.Len(t, groups, 1)
-	assert.Equal(t, ConditionPathTooLong, groups[0].ConditionKey)
-	assert.Equal(t, []string{"deep"}, groups[0].Paths)
+	assertStatusListsRefusalUnderItsCondition(t, eng)
 
 	warned := strings.Count(logBuf.String(), "Not syncing deep:")
 	assert.Equal(t, 1, warned, "said once when first refused: %s", logBuf.String())
@@ -94,4 +86,21 @@ func TestRunOnce_FolderOneDriveRefusesAsTooLongIsAConditionNotAnonymousRetryWork
 	assert.Equal(t, 2, rows[0].AttemptCount)
 	assert.Equal(t, issuePathTooLong, rows[0].ConditionType)
 	assert.Equal(t, 1, strings.Count(logBuf.String(), "Not syncing deep:"), "a retry of the same refusal is not re-announced")
+}
+
+// assertStatusListsRefusalUnderItsCondition reads the status snapshot the
+// way `status` does and checks the refused folder is a "Path too long"
+// condition, not retrying work.
+func assertStatusListsRefusalUnderItsCondition(t *testing.T, eng *testEngine) {
+	t.Helper()
+
+	snapshot, err := eng.baseline.ReadDriveStatusSnapshot(t.Context())
+	require.NoError(t, err)
+	require.Len(t, snapshot.ActionableRetryWork, 1, "status reads the row as a condition")
+	assert.Equal(t, issuePathTooLong, snapshot.ActionableRetryWork[0].ConditionType)
+	assert.Zero(t, snapshot.RetryingItems, "not counted as retrying")
+	groups := ProjectStoredConditionGroups(&snapshot)
+	require.Len(t, groups, 1)
+	assert.Equal(t, ConditionPathTooLong, groups[0].ConditionKey)
+	assert.Equal(t, []string{"deep"}, groups[0].Paths)
 }
