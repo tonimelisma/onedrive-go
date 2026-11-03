@@ -71,6 +71,10 @@ type executorConfig struct {
 	// pendingCreates records new files whose empty item exists before their
 	// content is sent (R-5.6.15). Nil in executor-only tests.
 	pendingCreates pendingCreateStore
+
+	// parentChecks remembers the remote parents already read live for the
+	// plan being executed, so sibling creates do not read them again.
+	parentChecks *remoteParentChecks
 }
 
 // SetTrash wires the drive's local trash.
@@ -108,6 +112,7 @@ func newExecutorConfig(
 		hashFunc:        driveops.ComputeQuickXorHashContext,
 		hashReader:      driveops.ComputeQuickXorHashFromReader,
 		pathConvergence: pathConvergence,
+		parentChecks:    newRemoteParentChecks(),
 	}
 
 	return cfg
@@ -156,6 +161,9 @@ func (e *executor) confirmRemotePathVisible(ctx context.Context, action *Action)
 
 	_, err := pathConvergence.WaitPathVisible(ctx, remotePath)
 	if err == nil {
+		// A folder just created or moved here is now a parent its
+		// children's creates need not probe again this plan.
+		e.parentChecks.markPathVisible(remotePath)
 		return
 	}
 
@@ -213,10 +221,16 @@ func (e *executor) waitRemoteParentVisible(ctx context.Context, action *Action) 
 	if !ok || remotePath == "" {
 		return nil
 	}
+	if e.parentChecks.pathVisible(remotePath) {
+		// A sibling's create, or the folder's own create, already waited
+		// for this parent in this plan.
+		return nil
+	}
 
 	if _, err := pathConvergence.WaitPathVisible(ctx, remotePath); err != nil {
 		return fmt.Errorf("confirm parent folder %s is on OneDrive: %w", parentPath, err)
 	}
+	e.parentChecks.markPathVisible(remotePath)
 
 	return nil
 }
@@ -394,6 +408,9 @@ func (e *executor) createRemoteFolder(ctx context.Context, action *Action) actio
 	item, err := e.items.CreateFolder(ctx, driveID, parentID, name)
 	if errors.Is(err, graph.ErrConflict) {
 		item, err = e.adoptExistingRemoteFolder(ctx, driveID, parentID, name, err)
+	}
+	if gone := remoteCreateParentGone(err, "folder create", parentID); gone != nil {
+		return e.failedOutcomeWithFailure(action, ActionFolderCreate, gone, action.Path, permissionCapabilityRemoteRead)
 	}
 	if err != nil {
 		return e.failedOutcomeWithFailure(

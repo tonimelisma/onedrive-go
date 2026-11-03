@@ -1416,20 +1416,25 @@ func TestExecutor_Upload_UsesPathConvergence(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
-	e := newExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, baselineWith(&BaselineEntry{
+		Path:     "folder",
+		ItemID:   "parent-id",
+		DriveID:  driveid.New(synctest.TestDriveID),
+		ItemType: ItemTypeFolder,
+	}))
 
-	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
+	writeExecTestFile(t, syncRoot, "folder/exec-small.txt", "hello")
 
 	action := &Action{
 		Type:    ActionUpload,
-		Path:    "exec-small.txt",
+		Path:    "folder/exec-small.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &pathView{Path: "exec-small.txt"},
+		View:    &pathView{Path: "folder/exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
-	require.Equal(t, []string{"exec-small.txt"}, pathConvergence.waitCalls)
+	require.Equal(t, []string{"folder"}, pathConvergence.waitCalls, "the parent path goes through the convergence boundary")
 }
 
 func TestExecutor_Upload_CreateByParentWaitsForParentVisibilityBeforeUpload(t *testing.T) {
@@ -1464,7 +1469,7 @@ func TestExecutor_Upload_CreateByParentWaitsForParentVisibilityBeforeUpload(t *t
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
-	require.Equal(t, []string{"folder", "folder/exec-small.txt"}, pathConvergence.waitCalls)
+	require.Equal(t, []string{"folder"}, pathConvergence.waitCalls)
 }
 
 // Validates: R-2.8.10, R-2.16.2
@@ -1520,7 +1525,7 @@ func TestExecutor_Upload_CreateByParentWaitsBeforeParentPrecondition(t *testing.
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, 1, getItemCalls)
-	assert.Equal(t, []string{"folder", "folder/exec-small.txt"}, pathConvergence.waitCalls)
+	assert.Equal(t, []string{"folder"}, pathConvergence.waitCalls, "the parent is probed; the uploaded file is not")
 }
 
 // Validates: R-2.8.7, R-2.8.10
@@ -1566,7 +1571,13 @@ func TestExecutor_Upload_CreateByParentMissingAfterVisibilityWaitReturnsStalePre
 	assert.Equal(t, []string{"folder"}, pathConvergence.waitCalls)
 }
 
-func TestExecutor_Upload_PathConvergenceProbeFailureIsNonFatal(t *testing.T) {
+// Validates: R-2.8.10
+//
+// An upload's response carries its item, and sync reads no file by path
+// afterwards, so the uploaded path is not probed for visibility: a probe
+// that fails must not be able to touch the outcome, and the request is not
+// spent.
+func TestExecutor_Upload_DoesNotProbeItsOwnPathAfterTheUpload(t *testing.T) {
 	t.Parallel()
 
 	ul := &executorMockUploader{
@@ -1590,7 +1601,7 @@ func TestExecutor_Upload_PathConvergenceProbeFailureIsNonFatal(t *testing.T) {
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
-	require.Equal(t, []string{"exec-small.txt"}, pathConvergence.waitCalls)
+	assert.Empty(t, pathConvergence.waitCalls, "a top-level upload makes no visibility probe at all")
 }
 
 func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *testing.T) {
@@ -1603,7 +1614,7 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 	ul := &executorMockUploader{
 		uploadFn: func(_ context.Context, driveID driveid.ID, parentID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			capturedDriveID = driveID
-			assert.Equal(t, sharedParent, parentID)
+			assert.Equal(t, "parent-id", parentID)
 			return &graph.Item{ID: "uploaded1", ETag: "etag1", QuickXorHash: "abc"}, nil
 		},
 	}
@@ -1611,21 +1622,26 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
 	cfg.SetRemoteRootItemID(sharedParent)
-	e := newExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, baselineWith(&BaselineEntry{
+		Path:     "folder",
+		ItemID:   "parent-id",
+		DriveID:  driveid.New("00000000000000ff"),
+		ItemType: ItemTypeFolder,
+	}))
 
-	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
+	writeExecTestFile(t, syncRoot, "folder/exec-small.txt", "hello")
 
 	action := &Action{
 		Type:    ActionUpload,
-		Path:    "exec-small.txt",
+		Path:    "folder/exec-small.txt",
 		DriveID: driveid.New("00000000000000ff"),
-		View:    &pathView{Path: "exec-small.txt"},
+		View:    &pathView{Path: "folder/exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, driveid.New("00000000000000ff"), capturedDriveID)
-	assert.Equal(t, []string{"exec-small.txt"}, pathConvergence.waitCalls)
+	assert.Equal(t, []string{"folder"}, pathConvergence.waitCalls, "the parent is probed by its mount-relative path")
 }
 
 func TestExecutor_Upload_MountRootUsesMountLocalPathConvergence(t *testing.T) {
@@ -1635,7 +1651,7 @@ func TestExecutor_Upload_MountRootUsesMountLocalPathConvergence(t *testing.T) {
 
 	ul := &executorMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, parentID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			assert.Equal(t, sharedParent, parentID)
+			assert.Equal(t, "parent-id", parentID)
 			return &graph.Item{ID: "uploaded1", ETag: "etag1", QuickXorHash: "abc"}, nil
 		},
 	}
@@ -1643,20 +1659,25 @@ func TestExecutor_Upload_MountRootUsesMountLocalPathConvergence(t *testing.T) {
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &executorMockItemClient{}, &executorMockDownloader{}, ul, pathConvergence)
 	cfg.SetRemoteRootItemID(sharedParent)
-	e := newExecution(cfg, emptyBaseline())
+	e := newExecution(cfg, baselineWith(&BaselineEntry{
+		Path:     "folder",
+		ItemID:   "parent-id",
+		DriveID:  driveid.New("00000000000000ff"),
+		ItemType: ItemTypeFolder,
+	}))
 
-	writeExecTestFile(t, syncRoot, "exec-small.txt", "hello")
+	writeExecTestFile(t, syncRoot, "folder/exec-small.txt", "hello")
 
 	action := &Action{
 		Type:    ActionUpload,
-		Path:    "exec-small.txt",
+		Path:    "folder/exec-small.txt",
 		DriveID: driveid.New("00000000000000ff"),
-		View:    &pathView{Path: "exec-small.txt"},
+		View:    &pathView{Path: "folder/exec-small.txt"},
 	}
 
 	o := e.ExecuteUpload(t.Context(), action)
 	requireOutcomeSuccess(t, &o)
-	assert.Equal(t, []string{"exec-small.txt"}, pathConvergence.waitCalls)
+	assert.Equal(t, []string{"folder"}, pathConvergence.waitCalls, "the parent is probed by its mount-local path")
 }
 
 func TestExecutor_Upload_ParentFromBaseline(t *testing.T) {

@@ -250,6 +250,9 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 		}
 
 		result, err = e.uploadNewFile(ctx, action, driveID, parentID, source, localPath)
+		if gone := remoteCreateParentGone(err, "upload create", parentID); gone != nil {
+			return e.failedOutcomeWithFailure(action, ActionUpload, gone, action.Path, permissionCapabilityRemoteRead)
+		}
 		err = uploadTransferError(err)
 		if err != nil {
 			return e.failedOutcomeWithFailure(
@@ -266,8 +269,10 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 		return e.failedOutcomeWithFailure(action, ActionUpload, crashErr, action.Path, permissionCapabilityUnknown)
 	}
 
-	e.confirmRemotePathVisible(ctx, action)
-
+	// No visibility probe of the uploaded path: the upload's own response
+	// carries the item, and nothing in sync reads a file by path afterwards.
+	// Folder creates and moves still probe, because children and later
+	// path-addressed work depend on the path having converged.
 	outcome := e.uploadOutcome(action, driveID, parentID, result)
 	return outcome
 }
