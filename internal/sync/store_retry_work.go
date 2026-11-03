@@ -10,15 +10,16 @@ import (
 
 const (
 	sqlUpsertRetryWork = `INSERT INTO retry_work
-		(path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		(path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, condition_type)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path, old_path, action_type) DO UPDATE SET
 			scope_key = excluded.scope_key,
 			blocked = excluded.blocked,
 			attempt_count = excluded.attempt_count,
-			next_retry_at = excluded.next_retry_at`
+			next_retry_at = excluded.next_retry_at,
+			condition_type = excluded.condition_type`
 	sqlDeleteRetryWorkByPathType = `DELETE FROM retry_work WHERE path = ? AND old_path = ? AND action_type = ?`
-	sqlSelectRetryWorkCols       = `path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at`
+	sqlSelectRetryWorkCols       = `path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, condition_type`
 	sqlListRetryWork             = `SELECT ` + sqlSelectRetryWorkCols + `
 		FROM retry_work
 		ORDER BY path, old_path, action_type`
@@ -26,11 +27,20 @@ const (
 		FROM retry_work
 		WHERE blocked = 1
 		ORDER BY scope_key, path, old_path, action_type`
-	// sqlListRetryWorkRetrying matches the "Retrying" count in status.
+	// sqlListRetryWorkRetrying matches the "Retrying" count in status: timed
+	// retries of transient failures. Work a user-clearable condition refused
+	// is listed under that condition instead (sqlListRetryWorkActionable).
 	sqlListRetryWorkRetrying = `SELECT ` + sqlSelectRetryWorkCols + `
 		FROM retry_work
-		WHERE blocked = 0 AND attempt_count >= 3
+		WHERE blocked = 0 AND attempt_count >= 3 AND condition_type = ''
 		ORDER BY path, old_path, action_type`
+	// sqlListRetryWorkActionable lists the work a condition only the user can
+	// clear refused, from its first attempt: status shows it under that
+	// condition's issue the way it shows the scanner's own findings.
+	sqlListRetryWorkActionable = `SELECT ` + sqlSelectRetryWorkCols + `
+		FROM retry_work
+		WHERE blocked = 0 AND condition_type <> ''
+		ORDER BY condition_type, path, old_path, action_type`
 )
 
 func (s *SyncStore) UpsertRetryWork(ctx context.Context, row *RetryWorkRow) error {
@@ -50,6 +60,7 @@ func upsertRetryWorkTx(ctx context.Context, runner sqlTxRunner, row *RetryWorkRo
 		row.Blocked,
 		row.AttemptCount,
 		row.NextRetryAt,
+		row.ConditionType,
 	)
 	if err != nil {
 		return fmt.Errorf("sync: upserting retry_work for %s: %w", row.Path, err)
@@ -151,11 +162,12 @@ func (s *SyncStore) RecordRetryWorkFailure(
 	}
 
 	row = &RetryWorkRow{
-		Path:         failure.Work.Path,
-		OldPath:      failure.Work.OldPath,
-		ActionType:   failure.Work.ActionType,
-		ScopeKey:     failure.ScopeKey,
-		AttemptCount: 1,
+		Path:          failure.Work.Path,
+		OldPath:       failure.Work.OldPath,
+		ActionType:    failure.Work.ActionType,
+		ScopeKey:      failure.ScopeKey,
+		AttemptCount:  1,
+		ConditionType: failure.ConditionType,
 	}
 	if found && existing != nil {
 		row.AttemptCount = existing.AttemptCount + 1
@@ -326,6 +338,21 @@ func queryBlockedRetryWorkRowsWithRunner(
 	return scanRetryWorkRows(rows)
 }
 
+// queryActionableRetryWorkRowsWithRunner lists the work a condition only the
+// user can clear refused (R-2.10.71), for status to show under that condition.
+func queryActionableRetryWorkRowsWithRunner(
+	ctx context.Context,
+	runner sqlTxRunner,
+) ([]RetryWorkRow, error) {
+	rows, err := runner.QueryContext(ctx, sqlListRetryWorkActionable)
+	if err != nil {
+		return nil, fmt.Errorf("query actionable retry_work rows: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+
+	return scanRetryWorkRows(rows)
+}
+
 func queryRetryingRetryWorkRowsWithRunner(
 	ctx context.Context,
 	runner sqlTxRunner,
@@ -352,7 +379,7 @@ func (s *SyncStore) ListBlockedRetryWork(ctx context.Context) ([]RetryWorkRow, e
 func (s *SyncStore) CountRetryingWork(ctx context.Context) (int, error) {
 	var count int
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM retry_work WHERE blocked = 0 AND attempt_count >= 3`,
+		`SELECT COUNT(*) FROM retry_work WHERE blocked = 0 AND attempt_count >= 3 AND condition_type = ''`,
 	).Scan(&count); err != nil {
 		return 0, fmt.Errorf("sync: counting retry_work rows: %w", err)
 	}
@@ -405,6 +432,7 @@ func scanRetryWorkRow(scanner retryWorkScanner, row *RetryWorkRow) error {
 		&row.Blocked,
 		&row.AttemptCount,
 		&row.NextRetryAt,
+		&row.ConditionType,
 	); err != nil {
 		return fmt.Errorf("sync: scanning retry_work row: %w", err)
 	}

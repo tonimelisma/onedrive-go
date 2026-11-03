@@ -159,6 +159,19 @@ turn have at least one blocked retry row. These invariants are asserted by the
 engine debug invariant pass so malformed durable state is caught at the store
 ownership boundary instead of becoming silent runtime debt.
 
+A delayed row carries `condition_type` when a condition only the user can
+clear refused the action at execution (R-2.10.71): OneDrive answered that the
+path is too long, a local folder cannot be written, the file is too large. The
+engine records it from the actionable result decision, waits on the durable
+curve for every such row, and warns once, "Not syncing <path>: <reason>", when
+the row is first written. Status reads these rows apart from the transient
+"Retrying" ones (`ActionableRetryWork` in the snapshot) and projects them into
+the same condition groups as `observation_issues`, so a folder OneDrive refused
+shows under "Path too long" next to the folders the scanner refused. Before
+generation 28 such a row was indistinguishable from a transient retry: the
+soak of 2026-11-02 showed a refused folder as "Retrying (21 attempts)" for
+nine hours with no issue and no log line.
+
 ### Observation writes
 
 `CommitObservation()` is the remote-observation boundary. It atomically:

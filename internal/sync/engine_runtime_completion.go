@@ -572,18 +572,31 @@ func (flow *engineFlow) recordRetryWork(
 	// One failure is one attempt: blocked work is recorded blocked, never
 	// first as timed retry work and then again as blocked, which counted
 	// every throttled failure twice.
+	actionable := decision.Class == errclass.ClassActionable && decision.ConditionType != ""
 	var row *RetryWorkRow
 	var recErr error
 	if blocked {
 		row, recErr = flow.deps.store.RecordBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), scopeKey)
 	} else {
-		row, recErr = flow.deps.store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		failure := &RetryWorkFailure{
 			Work:     retryWorkKeyForCompletion(r),
 			ScopeKey: scopeKey,
-		}, delayFn)
+		}
+		if actionable {
+			failure.ConditionType = decision.ConditionType
+		}
+		row, recErr = flow.deps.store.RecordRetryWorkFailure(ctx, failure, delayFn)
 	}
 	if recErr != nil {
 		return fmt.Errorf("record retry_work for %s: %w", r.Path, recErr)
+	}
+	if actionable && !blocked && row != nil && row.AttemptCount == 1 {
+		// Said once, when the condition starts (R-6.6.30): the retries that
+		// follow are on the durable curve and change nothing the user can
+		// see. Status keeps listing the path under the condition meanwhile.
+		flow.deps.logger.Warn("Not syncing "+r.Path+": "+r.ErrMsg,
+			slog.String("condition_type", decision.ConditionType),
+		)
 	}
 
 	fields := append(flow.resultLogFields(decision, r),
@@ -628,7 +641,7 @@ func (flow *engineFlow) applyResultPersistence(
 	case persistNone:
 		return nil
 	case persistRetryWork:
-		return flow.recordRetryWork(ctx, decision, r, retryDelayForCondition(decision.ConditionType))
+		return flow.recordRetryWork(ctx, decision, r, retryDelayForDecision(decision))
 	default:
 		panic(fmt.Sprintf("unknown failure persistence mode %d", decision.Persistence))
 	}
@@ -638,6 +651,24 @@ func (flow *engineFlow) applyResultPersistence(
 // condition that does not clear by itself is tried again
 // (retryDelayForCondition).
 const durableRecheckDelay = 30 * time.Second
+
+// retryDelayForDecision is the backoff curve for the retry work a decision
+// records. Work refused by a condition only the user can clear
+// (ClassActionable: OneDrive refused the name or path, a local folder is not
+// writable, the file is too large) does not succeed by being tried sooner,
+// so it waits on the durable curve whatever the condition; before, only the
+// two conditions named below did, and a folder OneDrive refused as too long
+// was retried every few seconds (soak of 2026-11-02).
+func retryDelayForDecision(decision *resultDecision) func(int) time.Duration {
+	if decision == nil {
+		return retry.ReconcilePolicy().Delay
+	}
+	if decision.Class == errclass.ClassActionable {
+		return durableRecheckRetryDelay
+	}
+
+	return retryDelayForCondition(decision.ConditionType)
+}
 
 // retryDelayForCondition is the backoff curve for retry work of a condition.
 // A transient failure follows the reconcile curve, which starts at one

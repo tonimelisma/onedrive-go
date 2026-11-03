@@ -43,6 +43,9 @@ type ObservationIssueRow struct {
 type RetryWorkFailure struct {
 	Work     RetryWorkKey
 	ScopeKey ScopeKey
+	// ConditionType is set when a condition only the user can clear refused
+	// the work; the row then shows under that condition in status.
+	ConditionType string
 }
 
 // observedItem represents a single item from a delta API response, ready
@@ -103,6 +106,10 @@ type RetryWorkRow struct {
 	Blocked      bool
 	AttemptCount int
 	NextRetryAt  int64
+	// ConditionType names the condition only the user can clear that refused
+	// this work (an invalid name on OneDrive, a path too long, a local write
+	// denied); empty for a transient failure. Status lists the row under it.
+	ConditionType string
 }
 
 // A file with a new identity whose content is provably the synced content is

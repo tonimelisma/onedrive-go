@@ -49,6 +49,8 @@ func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []storedConditi
 		}
 	}
 
+	projectActionableRetryWork(&groups, groupIndex, snapshot.ActionableRetryWork)
+
 	for i := range snapshot.BlockScopes {
 		block := snapshot.BlockScopes[i]
 		if block == nil {
@@ -107,6 +109,32 @@ func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []storedConditi
 
 	finalizeStoredConditionGroups(groups)
 	return groups
+}
+
+// projectActionableRetryWork adds the work the executor could not do because
+// of a condition only the user can clear (OneDrive refused the path as too
+// long, a folder is not writable) to the scanner's findings of the same
+// condition, instead of an anonymous "Retrying" count (R-2.10.71).
+func projectActionableRetryWork(
+	groups *[]storedConditionGroup,
+	groupIndex map[storedConditionGroupKey]int,
+	rows []RetryWorkRow,
+) {
+	for i := range rows {
+		row := rows[i]
+		group := ensureStoredConditionGroup(
+			groups,
+			groupIndex,
+			conditionKeyForStoredCondition(row.ConditionType, ScopeKey{}),
+			row.ConditionType,
+			ScopeKey{},
+		)
+		if group == nil {
+			continue
+		}
+		group.Count++
+		group.Paths = append(group.Paths, row.Path)
+	}
 }
 
 func ensureStoredConditionGroup(

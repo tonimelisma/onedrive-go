@@ -130,6 +130,23 @@ func (d *Drive) IsPaused(now time.Time) bool {
 	return now.Before(until)
 }
 
+// PauseExpiry returns when this drive's timed pause runs out. ok is false for
+// a drive that is not paused, is paused indefinitely, or carries an
+// unparseable paused_until (which IsPaused treats as indefinite). The watch
+// arms its wake-up from this, so an expired pause lifts without a reload.
+func (d *Drive) PauseExpiry() (until time.Time, ok bool) {
+	if d.Paused == nil || !*d.Paused || d.PausedUntil == nil {
+		return time.Time{}, false
+	}
+
+	until, err := time.Parse(time.RFC3339, *d.PausedUntil)
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	return until, true
+}
+
 // CLIOverrides holds values from CLI flags that override config file and
 // environment settings. Pointer fields distinguish "not specified" (nil)
 // from "explicitly set to zero value" — this matters because --dry-run=false

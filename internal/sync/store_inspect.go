@@ -97,9 +97,13 @@ type DriveStatusSnapshot struct {
 	LocalDriftItems   int
 	RetryingItems     int
 	RetryingWork      []RetryWorkRow
-	ObservationIssues []ObservationIssueRow
-	BlockScopes       []*BlockScope
-	BlockedRetryWork  []RetryWorkRow
+	// ActionableRetryWork is the work a condition only the user can clear
+	// refused at execution (R-2.10.71); status lists it under that condition
+	// next to the scanner's own findings.
+	ActionableRetryWork []RetryWorkRow
+	ObservationIssues   []ObservationIssueRow
+	BlockScopes         []*BlockScope
+	BlockedRetryWork    []RetryWorkRow
 	// HeldDeletes are the deletes the delete-safety hold keeps until the
 	// user runs `sync --confirm-deletes`.
 	HeldDeletes []HeldDeleteRow
@@ -266,7 +270,7 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 	}
 	snapshot.RetryingItems, err = i.readCount(
 		ctx,
-		"SELECT COUNT(*) FROM retry_work WHERE blocked = 0 AND attempt_count >= 3",
+		"SELECT COUNT(*) FROM retry_work WHERE blocked = 0 AND attempt_count >= 3 AND condition_type = ''",
 	)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status retrying count: %w", err)
@@ -293,6 +297,10 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 	snapshot.RetryingWork, err = queryRetryingRetryWorkRowsWithRunner(ctx, i.db)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status retrying retry_work: %w", err)
+	}
+	snapshot.ActionableRetryWork, err = queryActionableRetryWorkRowsWithRunner(ctx, i.db)
+	if err != nil {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status actionable retry_work: %w", err)
 	}
 
 	return snapshot, nil

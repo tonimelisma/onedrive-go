@@ -183,6 +183,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_FolderDeletedAndRestoredLocallyTransfersNothing,
 		TestRunOnce_FolderReplacedByFilesOnBothSidesKeepsBoth,
 		TestRunOnce_FileReplacedByFoldersOnBothSidesMergesThem,
+		TestRunOnce_FolderOneDriveRefusesAsTooLongIsAConditionNotAnonymousRetryWork,
 		TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem,
 		TestRunOnce_FollowSymlinks_UploadsFileInsideDirectoryAliasOutsideRoot,
 		TestRunOnce_FullCaseFoldingVariantNeverOverwritesTheSyncedFile,

@@ -78,24 +78,26 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 
 	restarts := watchRestartWake{orchestrator: o}
 	defer restarts.stop()
+	pauseExpiry := watchPauseExpiryWake{orchestrator: o}
+	defer pauseExpiry.stop()
 
 	reloadTriggers, stopReloadTriggers := watchConfigReloadTriggers(ctx, o.configPath(), configFilePollInterval)
 	defer stopReloadTriggers()
 
 	for {
 		restarts.arm()
+		pauseExpiry.arm()
 		select {
 		case cmd := <-commands:
 			if o.handleControlCommand(ctx, &cmd, mode, opts, runners, runnerEvents, childWork) {
 				return nil
 			}
 		case reason := <-reloadTriggers:
-			o.logger.Info("Reloading the config (" + reason + ")")
-			if err := o.reload(ctx, mode, opts, runners, runnerEvents, childWork); err != nil {
-				// reload already warned and kept the previous settings;
-				// with no client waiting there is nobody else to tell.
-				o.logger.Debug("config reload after file change failed", slog.Any("error", err))
-			}
+			o.reloadForReason(ctx, reason, mode, opts, runners, runnerEvents, childWork)
+		case <-pauseExpiry.ch:
+			// The reload clears the expired pause from the config and
+			// starts the drive, exactly as a `resume` would.
+			o.reloadForReason(ctx, "timed pause expired", mode, opts, runners, runnerEvents, childWork)
 		case event := <-runnerEvents:
 			o.handleWatchRunnerEvent(ctx, event, mode, opts, runners, runnerEvents, childWork)
 		case <-reconcileTickCh:
@@ -105,6 +107,20 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 		case <-ctx.Done():
 			return nil
 		}
+	}
+}
+
+// reloadForReason runs the config reload the loop owes to a trigger it did
+// not ask a client about: a changed file or an expired timed pause. The
+// reload already warned and kept the previous settings when it fails; with
+// no client waiting there is nobody else to tell.
+func (o *Orchestrator) reloadForReason(
+	ctx context.Context, reason string, mode syncengine.SyncMode, opts syncengine.WatchOptions,
+	runners map[mountID]*watchRunner, runnerEvents chan<- watchRunnerEvent, childWork *parentChildWorkSnapshots,
+) {
+	o.logger.Info("Reloading the config (" + reason + ")")
+	if err := o.reload(ctx, mode, opts, runners, runnerEvents, childWork); err != nil {
+		o.logger.Debug("config reload failed ("+reason+")", slog.Any("error", err))
 	}
 }
 
@@ -136,6 +152,71 @@ func (w *watchRestartWake) stop() {
 		w.cancel()
 	}
 	w.ch, w.cancel = nil, nil
+}
+
+// watchPauseExpiryWake is the RunWatch loop's timer for the earliest timed
+// pause to run out. `pause 1h` records paused_until in the config, and the
+// expired pause used to be noticed only by the next config reload, which
+// nothing scheduled: without a `resume` or an unrelated config change the
+// drive stayed paused for good (R-2.8.12). Re-armed before every select from
+// the absolute paused_until times, like watchRestartWake.
+type watchPauseExpiryWake struct {
+	orchestrator *Orchestrator
+	ch           <-chan time.Time
+	cancel       func()
+}
+
+func (w *watchPauseExpiryWake) arm() {
+	w.stop()
+	delay, ok := w.orchestrator.nextPauseExpiryDelay()
+	if !ok {
+		return
+	}
+	timer := w.orchestrator.restartTimer
+	if timer == nil {
+		timer = newRestartTimer
+	}
+	w.ch, w.cancel = timer(delay)
+}
+
+func (w *watchPauseExpiryWake) stop() {
+	if w.cancel != nil {
+		w.cancel()
+	}
+	w.ch, w.cancel = nil, nil
+}
+
+// pauseExpirySlack is added to the wait so the reload reads the pause as
+// expired even when the config's second-precision timestamp rounds up.
+const pauseExpirySlack = time.Second
+
+// nextPauseExpiryDelay returns how long until the earliest timed pause among
+// the configured drives runs out, or false when no timed pause is active.
+func (o *Orchestrator) nextPauseExpiryDelay() (time.Duration, bool) {
+	if o.cfg == nil || o.cfg.Holder == nil {
+		return 0, false
+	}
+	cfg := o.cfg.Holder.Config()
+	if cfg == nil {
+		return 0, false
+	}
+	now := o.clockNow()
+	var next time.Duration
+	found := false
+	for cid := range cfg.Drives {
+		drive := cfg.Drives[cid]
+		until, ok := drive.PauseExpiry()
+		if !ok || !now.Before(until) {
+			continue
+		}
+		wait := until.Sub(now) + pauseExpirySlack
+		if !found || wait < next {
+			next = wait
+			found = true
+		}
+	}
+
+	return next, found
 }
 
 func (o *Orchestrator) startWatchRuntime(
@@ -740,7 +821,7 @@ func (o *Orchestrator) loadReloadSelection(
 		return nil, StandaloneMountSelection{}, fmt.Errorf("loading config for reload: %w", err)
 	}
 
-	config.ClearExpiredPauses(o.cfg.Holder.Path(), newCfg, time.Now(), o.logger)
+	config.ClearExpiredPauses(o.cfg.Holder.Path(), newCfg, o.clockNow(), o.logger)
 
 	if o.cfg.ReloadStandaloneMounts == nil {
 		return nil, StandaloneMountSelection{}, fmt.Errorf("standalone mount reload compiler is required")
