@@ -2908,3 +2908,39 @@ func TestFullDelta_ParentReferencePathFallbackChecksEverySegment(t *testing.T) {
 	require.Len(t, events, 1)
 	assert.Equal(t, "a%20b/x.txt", events[0].Path)
 }
+
+// A tombstone with neither name nor parent for an item the baseline does not
+// hold is placed by the path the client's own remote_state row stores, so the
+// row is retired instead of lingering (R-2.4.17).
+//
+// Validates: R-2.4.17
+func TestFullDelta_PlacesNamelessUntrackedDeleteByItsRemoteStatePath(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &mockDeltaFetcher{
+		pages: []mockDeltaPage{{
+			page: &graph.DeltaPage{
+				Items: []graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(synctest.TestDriveID)},
+					{ID: "deleted-child", DriveID: driveid.New(synctest.TestDriveID), IsDeleted: true},
+				},
+				DeltaLink: "delta-link",
+			},
+		}},
+	}
+
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs.SetRemotePathLookup(func(itemID string) (string, bool) {
+		if itemID == "deleted-child" {
+			return "Projects/old.txt", true
+		}
+		return "", false
+	})
+	events, _, err := obs.FullDelta(t.Context(), "saved-token")
+	require.NoError(t, err, "FullDelta")
+
+	require.Len(t, events, 1)
+	assert.Equal(t, ChangeDelete, events[0].Type)
+	assert.Equal(t, "Projects/old.txt", events[0].Path)
+	assert.Equal(t, "old.txt", events[0].Name)
+}
