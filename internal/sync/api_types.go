@@ -48,6 +48,11 @@ type (
 		// trial after the pass ended, or parked retry work. The summary
 		// counts it with the retryable failures as "will be retried".
 		LeftForNextSync int
+		// Superseded counts actions the pass gave up on because the truth
+		// they were planned against changed under them (an ETag refused by
+		// a 412, an item gone from where the plan put it); each is replanned
+		// by the next pass, which a one-shot run makes itself (R-2.1.7).
+		Superseded int
 
 		Succeeded int
 		Failed    int

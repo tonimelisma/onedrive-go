@@ -239,6 +239,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_RenameWithMatchingBirthTimeIsStillAMove,
 		TestRunOnce_ThreeQuotaRefusalsActivateTheScopeAndBlockTheRows,
 		TestRunOnce_WaitsOutAShortPauseBeforeTheNextPass,
+		TestRunOnce_ReplansASupersededMoveInTheSameRun,
 		TestRunOnce_WithoutBirthTimeIdentityIsDeviceAndInode,
 		TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift,
 		TestRunOnce_RemoteFolderDeleteWithIgnoredLocalFileConverges,

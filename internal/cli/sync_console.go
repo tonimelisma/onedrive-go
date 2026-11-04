@@ -31,8 +31,12 @@ type syncConsole struct {
 	stamp bool
 	// journal marks stderr lines with the journald error priority.
 	journal bool
-	now     func() time.Time
-	home    string
+	// hooked is set once ActivityHook handed the feed to the orchestrator:
+	// from then on a mount with no tally had no activity, and its summary
+	// must not fall back to the planner's counts.
+	hooked bool
+	now    func() time.Time
+	home   string
 
 	// mu guards multi and tallies, which engine completion goroutines update
 	// concurrently, and serializes writes so lines from several mounts never
@@ -43,10 +47,20 @@ type syncConsole struct {
 }
 
 type activityTally struct {
-	counts    map[syncengine.ActivityKind]int
-	bytes     map[syncengine.ActivityKind]int64
-	failed    int
-	willRetry int
+	counts map[syncengine.ActivityKind]int
+	bytes  map[syncengine.ActivityKind]int64
+	failed int
+	// retried counts every failure the engine kept as retry work; the
+	// report's Failed counts those too, so the summary's "failed" is the
+	// rest. retrying holds the paths among them not finished since: a pass
+	// that waits out a throttle and then uploads the file (R-2.1.7) removes
+	// it, so the summary does not promise a retry of work the run completed.
+	retried  int
+	retrying map[string]struct{}
+}
+
+func (t *activityTally) willRetry() int {
+	return len(t.retrying)
 }
 
 func newSyncConsole(cc *CLIContext, watch bool) *syncConsole {
@@ -153,8 +167,17 @@ func (c *syncConsole) ActivityHook() func(multisync.MountActivity) {
 	if c == nil {
 		return nil
 	}
+	c.hooked = true
 
 	return c.Activity
+}
+
+func newActivityTally() *activityTally {
+	return &activityTally{
+		counts:   make(map[syncengine.ActivityKind]int),
+		bytes:    make(map[syncengine.ActivityKind]int64),
+		retrying: make(map[string]struct{}),
+	}
 }
 
 // Activity prints one finished (or, for a dry run, planned) file action.
@@ -242,10 +265,7 @@ func (c *syncConsole) record(mountID string, a *syncengine.Activity) {
 
 	tally := c.tallies[mountID]
 	if tally == nil {
-		tally = &activityTally{
-			counts: make(map[syncengine.ActivityKind]int),
-			bytes:  make(map[syncengine.ActivityKind]int64),
-		}
+		tally = newActivityTally()
 		c.tallies[mountID] = tally
 	}
 
@@ -255,8 +275,10 @@ func (c *syncConsole) record(mountID string, a *syncengine.Activity) {
 		if a.SizeKnown {
 			tally.bytes[a.Kind] += a.Size
 		}
+		delete(tally.retrying, a.Path)
 	case a.WillRetry:
-		tally.willRetry++
+		tally.retried++
+		tally.retrying[a.Path] = struct{}{}
 	default:
 		tally.failed++
 	}
@@ -269,6 +291,13 @@ func (c *syncConsole) tallyFor(mountID string, r *syncengine.Report) *activityTa
 
 	if tally != nil && !r.DryRun {
 		return tally
+	}
+	if c.hooked && !r.DryRun {
+		// The feed was wired and reported nothing: nothing happened. A pass
+		// whose only planned action was held as retry work used to fall
+		// through to the planner's counts and say "uploaded 1 file" (fault
+		// round of 2026-11-03).
+		return newActivityTally()
 	}
 
 	// Dry runs, and callers without an activity feed, summarize from the
@@ -291,11 +320,11 @@ func (c *syncConsole) tallyFor(mountID string, r *syncengine.Report) *activityTa
 func (c *syncConsole) reportSummary(mountID string, r *syncengine.Report) string {
 	tally := c.tallyFor(mountID, r)
 	parts := tally.parts()
-	failed := max(tally.failed, r.Failed-tally.willRetry)
+	failed := max(tally.failed, r.Failed-tally.retried)
 	// Work the pass left for the next run: retryable failures, plus the
 	// actions a throttle took back and still holds when the pass ended,
 	// which produced no activity of their own.
-	willRetry := tally.willRetry + r.LeftForNextSync
+	willRetry := tally.willRetry() + r.LeftForNextSync
 
 	if r.DryRun {
 		if len(parts) == 0 {

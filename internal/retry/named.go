@@ -6,6 +6,9 @@ import "time"
 // fully shaped Policy values rather than piecing them together themselves.
 const (
 	transportAttempts            = 6
+	deltaPageAttempts            = 4
+	deltaPageBaseDelay           = 2 * time.Second
+	deltaPageMaxDelay            = 8 * time.Second
 	driveDiscoveryAttempts       = 5
 	rootChildrenAttempts         = 3
 	downloadMetadataAttempts     = 6
@@ -39,6 +42,20 @@ const (
 // TransportPolicy is the HTTP transport retry policy used by RetryTransport.
 // 6 total attempts (the first plus 5 retries), 1s base, 60s max, 2x
 // multiplier, ±25% jitter.
+// DeltaPagePolicy is the bounded retry for one page of the change list when
+// OneDrive answers it with a 5xx, a 429 or a dropped connection: four
+// attempts over about fourteen seconds, so a transient server fault does
+// not fail a one-shot run or restart a multi-page enumeration (R-2.15.5).
+func DeltaPagePolicy() Policy {
+	return Policy{
+		MaxAttempts: deltaPageAttempts,
+		Base:        deltaPageBaseDelay,
+		Max:         deltaPageMaxDelay,
+		Multiplier:  standardMultiplier,
+		Jitter:      noJitter,
+	}
+}
+
 func TransportPolicy() Policy {
 	return Policy{
 		MaxAttempts: transportAttempts,

@@ -131,13 +131,19 @@ func TestFullDelta_SavedTokenRejectedTwiceIsCursorUnusable(t *testing.T) {
 				return nil, tt.rejected
 			}}
 			obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+			obs.clock = &observerTestClock{syncClock: realClock{}, sleep: noopSleep}
 
 			_, _, err := obs.FullDelta(t.Context(), "saved-token")
 
 			require.Error(t, err)
 			if !tt.unusable {
 				require.NotErrorIs(t, err, errDeltaExpired)
-				assert.Len(t, fetcher.seen(), 1, "not retried as a cursor problem")
+				// A 429 or 5xx is tried again as a transient page fault
+				// (R-2.15.5), always with the saved token: never as a
+				// cursor problem that re-enumerates the drive.
+				for _, token := range fetcher.seen() {
+					assert.Equal(t, "saved-token", token, "not retried as a cursor problem")
+				}
 				return
 			}
 			require.ErrorIs(t, err, errDeltaExpired, "a token OneDrive keeps refusing is re-enumerated")

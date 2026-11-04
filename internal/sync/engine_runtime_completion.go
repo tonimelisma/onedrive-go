@@ -169,6 +169,7 @@ func (flow *engineFlow) applySupersededCompletion(
 	if err := flow.forgetRemoteItemProvenGone(ctx, r); err != nil {
 		return err
 	}
+	flow.results.superseded++
 	if streak := flow.recordSupersede(r); streak >= supersedeParkThreshold {
 		if err := flow.parkWedgedAction(ctx, r, current); err != nil {
 			return err

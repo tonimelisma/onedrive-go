@@ -83,14 +83,7 @@ func standaloneMountConfigFromResolvedDrive(
 		TransferWorkers:        rd.TransferWorkers,
 		CheckWorkers:           rd.CheckWorkers,
 		MinFreeSpaceBytes:      minFreeSpace,
-		ContentFilter: syncengine.ContentFilterConfig{
-			IgnoredDirs:     append([]string(nil), rd.IgnoredDirs...),
-			IncludedDirs:    append([]string(nil), rd.IncludedDirs...),
-			IgnoredPaths:    append([]string(nil), rd.IgnoredPaths...),
-			IgnoreDotfiles:  rd.IgnoreDotfiles,
-			IgnoreJunkFiles: rd.JunkFilesIgnored(),
-			FollowSymlinks:  rd.FollowSymlinks,
-		},
+		ContentFilter:          contentFilterConfigFor(&rd.DriveFilterConfig),
 	}, nil
 }
 
