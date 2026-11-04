@@ -105,7 +105,7 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 		DryRun:         effectiveDryRun,
 		FullReconcile:  opts.FullReconcile,
 		ConfirmDeletes: opts.ConfirmDeletes,
-	}, logger, controlSocketPath, console.Activity)
+	}, logger, controlSocketPath, console.ActivityHook())
 
 	console.Summary(result)
 
