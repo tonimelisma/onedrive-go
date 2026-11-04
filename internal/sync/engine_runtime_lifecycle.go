@@ -49,9 +49,23 @@ func (flow *engineFlow) normalizePersistedScopes(
 		return fmt.Errorf("sync: listing blocked retry_work rows: %w", err)
 	}
 	for _, step := range planPersistedScopeNormalization(blocks, blockedRetries) {
-		if err := flow.dropStartupScopeRow(ctx, step.Key, step.Note); err != nil {
-			return err
+		if dropErr := flow.dropStartupScopeRow(ctx, step.Key, step.Note); dropErr != nil {
+			return dropErr
 		}
+	}
+
+	// The converse of the discard above: a blocked row whose scope is not
+	// persisted has nothing that will ever trial or release it (R-2.10.33).
+	// Earlier builds wrote such rows for a 507 below the quota window; a
+	// store that still holds them gets the work back as due retry work.
+	released, err := flow.deps.store.ReleaseOrphanBlockedRetryWork(ctx, flow.deps.now())
+	if err != nil {
+		return fmt.Errorf("sync: releasing blocked retry_work without a scope: %w", err)
+	}
+	if released > 0 {
+		flow.deps.logger.Info("Released work that was blocked under a pause that no longer exists; it is retried now",
+			slog.Int("items", released),
+		)
 	}
 
 	flow.mustAssertInvariants(ctx, "normalize persisted scopes")

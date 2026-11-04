@@ -159,6 +159,15 @@ turn have at least one blocked retry row. These invariants are asserted by the
 engine debug invariant pass so malformed durable state is caught at the store
 ownership boundary instead of becoming silent runtime debt.
 
+A blocked row exists only under an active scope: a failure whose scope
+detection has not crossed its window is written as a delayed row with the
+scope as evidence, and `ReleaseOrphanBlockedRetryWork` makes any blocked row
+whose scope has no `block_scopes` row due again at startup. The status
+snapshot read in the same pass carries `NeverSynced`, a store with no delta
+cursor and an empty baseline, which status shows as not synced yet
+(`TestReadDriveStatusSnapshot_AFreshStoreIsNeverSynced`,
+`TestDriveStatusSnapshot_NeverSyncedClearsAfterTheFirstPass`).
+
 A delayed row carries `condition_type` when a condition only the user can
 clear refused the action at execution (R-2.10.71): OneDrive answered that the
 path is too long, a local folder cannot be written, the file is too large. The

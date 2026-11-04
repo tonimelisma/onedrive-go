@@ -228,11 +228,17 @@ func runSyncDaemonWithFactory(
 		ActivityHook:   console.ActivityHook(),
 		WatchLifecycle: serviceNotifier.lifecycle,
 		PerfParent:     perf.FromContext(ctx),
+		ApplyLogLevel:  applyLogLevelFunc(ctx),
 	})
 
 	console.Watching(standaloneSelection.Mounts, mode)
 
 	if err := orch.RunWatch(ctx, mode, opts); err != nil {
+		// The terminal gets the message through main; the log file gets it
+		// here, so a watch that refuses to start (its sync folder missing,
+		// another sync owning the socket) leaves a trace where the rest of
+		// its history is (R-6.6.33).
+		logger.Error("sync --watch stopped with an error", slog.Any("error", err))
 		// The orchestrator's error already says what failed; a "run watch
 		// sync:" prefix only lengthened the line main prints.
 		return formatWatchStartupError(err)

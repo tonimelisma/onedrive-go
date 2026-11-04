@@ -62,6 +62,21 @@ func (ph *permissionHandler) handleLocalPermission(
 	parentDir := filepath.Dir(absPath)
 
 	if isDirAccessible(ph.syncTree, parentDir) {
+		if issueType == issueLocalWriteDenied && !isDirWritable(parentDir) {
+			// Listable but not writable: every write into this directory
+			// fails, so it is one boundary with a timed write trial, not a
+			// per-file denial that only the file's own retry revisits
+			// (R-2.10.13; live on 2026-11-03 with a chmod 555 folder).
+			if relParent, relErr := ph.syncTree.Rel(parentDir); relErr == nil {
+				return ph.localDirectoryPermissionEvidence(
+					storedPathOf(relParent),
+					r.Path,
+					r.ActionType,
+					issueType,
+				)
+			}
+		}
+
 		return ph.localFilePermissionEvidence(
 			r.Path,
 			r.ActionType,

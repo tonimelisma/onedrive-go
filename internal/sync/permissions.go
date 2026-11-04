@@ -50,6 +50,15 @@ func isDirAccessible(tree *synctree.Root, dir string) bool {
 	return true
 }
 
+// isDirWritable reports whether the process may create entries in absDir.
+// A directory can be listable and still refuse writes (mode 0555, or an
+// ACL): a download into it fails with EACCES on the partial file, and every
+// file bound for it fails the same way, which makes the directory the
+// boundary rather than each file (R-2.10.13).
+func isDirWritable(absDir string) bool {
+	return unix.Access(absDir, unix.W_OK) == nil
+}
+
 // isOnReadOnlyFilesystem reports whether absDir sits on a read-only mount.
 // The mount flags from statfs (ST_RDONLY on Linux, MNT_RDONLY on macOS) are
 // the authority: they cover a read-only bind mount of a writable filesystem.
