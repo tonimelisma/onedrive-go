@@ -577,7 +577,12 @@ blocked descendants from those boundary facts.
 content test as the planner's `remote_changed` in `sqlite_compare.go`: folders
 differ only by path or type, and a file's hash decides whenever either side has
 one. Baseline stores no folder mtime, so comparing folder times counted every
-remote folder as drift on a converged drive (R-2.10.48).
+remote folder as drift on a converged drive (R-2.10.48). The rows are read,
+not counted, and `ReadDriveStatusSnapshotWithFilter` keeps those the drive's
+`ContentFilterConfig` makes `Visible`, the test `store_planner_visible.go`
+applies to the planner's rows: a drive limited by `included_dirs` observes the
+whole account's change list, and counting it all reported thousands of pending
+remote changes forever (`TestReadDriveStatusSnapshot_RemoteDriftCountsOnlyTheSyncScope`).
 
 `DriveStatusSnapshot.LocalDriftItems` (status "Local changes") is the local
 half, mirroring the planner's `local_changed`: a `local_state` row without a

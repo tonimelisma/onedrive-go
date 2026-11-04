@@ -19,6 +19,7 @@ func readDriveStatusSnapshot(
 	ctx context.Context,
 	statePath string,
 	logger *slog.Logger,
+	filter syncengine.ContentFilterConfig,
 ) (syncengine.DriveStatusSnapshot, error) {
 	exists, err := managedPathExists(statePath)
 	if err == nil && !exists {
@@ -27,7 +28,7 @@ func readDriveStatusSnapshot(
 
 	var snapshot syncengine.DriveStatusSnapshot
 	if err == nil {
-		snapshot, err = syncengine.ReadDriveStatusSnapshot(ctx, statePath, logger)
+		snapshot, err = syncengine.ReadDriveStatusSnapshotWithFilter(ctx, statePath, logger, filter)
 	}
 	if err != nil {
 		if logger != nil {

@@ -83,6 +83,7 @@ func (r *Report) withPass(pass *Report) *Report {
 	r.Cleanups += pass.Cleanups
 	r.Succeeded += pass.Succeeded
 	r.Failed += pass.Failed
+	r.Superseded += pass.Superseded
 	r.Errors = append(r.Errors, pass.Errors...)
 	r.DeferredByMode = pass.DeferredByMode
 	r.HeldLocalDeletes = pass.HeldLocalDeletes

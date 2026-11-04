@@ -82,7 +82,7 @@ type mockSyncStateQuerier struct {
 	state *syncStateInfo
 }
 
-func (m *mockSyncStateQuerier) QuerySyncState(_ context.Context, _ string) *syncStateInfo {
+func (m *mockSyncStateQuerier) QuerySyncState(_ context.Context, _ string, _ syncengine.ContentFilterConfig) *syncStateInfo {
 	return m.state
 }
 

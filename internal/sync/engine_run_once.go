@@ -116,11 +116,15 @@ type oneShotPass struct {
 // the summary already says they will be retried), a canceled run, or the pass
 // bound.
 func (e *Engine) oneShotFollowUp(ctx context.Context, pass int, result oneShotPass) (string, bool) {
-	f := result.followUp
-	switch {
-	case !f.pending() || result.report == nil:
+	if result.report == nil || ctx.Err() != nil {
 		return "", false
-	case result.report.Succeeded == 0 || result.report.Failed > 0 || ctx.Err() != nil:
+	}
+	f := result.followUp
+	superseded := result.report.Superseded
+	switch {
+	case !f.pending() && superseded == 0:
+		return "", false
+	case superseded == 0 && (result.report.Succeeded == 0 || result.report.Failed > 0):
 		return "", false
 	case pass >= e.oneShotPasses():
 		e.logger.Debug("sync pass limit reached; the next sync finishes the remaining work",
@@ -129,7 +133,12 @@ func (e *Engine) oneShotFollowUp(ctx context.Context, pass int, result oneShotPa
 		return "", false
 	}
 
-	return fmt.Sprintf("renames=%d deferred=%d dropped=%d", f.Renames, f.Deferred, f.Dropped), true
+	// A superseded action is work the pass gave up on because the truth it
+	// was planned against changed (a 412 on a move while a file inside the
+	// folder changed online, fault round of 2026-11-03): the next pass plans
+	// it against the fresh truth, so a one-shot run makes that pass itself
+	// instead of answering "will be retried on the next sync".
+	return fmt.Sprintf("renames=%d deferred=%d dropped=%d superseded=%d", f.Renames, f.Deferred, f.Dropped, superseded), true
 }
 
 // oneShotScopeWaitLimit is the longest a one-shot sync waits for a paused
@@ -356,6 +365,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	pool.Stop()
 	if drainErr != nil {
 		report.Succeeded, report.Failed, report.Errors = r.resultStats()
+		report.Superseded = r.supersededCount()
 		report.LeftForNextSync = max(0, len(plan.Actions)-report.Succeeded-report.Failed)
 		report.Errors = append(report.Errors, drainErr)
 		return drainErr
@@ -366,6 +376,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	r.logFailureSummary()
 
 	report.Succeeded, report.Failed, report.Errors = r.resultStats()
+	report.Superseded = r.supersededCount()
 	report.LeftForNextSync = max(0, len(plan.Actions)-report.Succeeded-report.Failed)
 	return nil
 }
@@ -379,6 +390,7 @@ func (r *oneShotRunner) dispatchInitialReadyActions(
 	initialOutbox, dispatched, err := r.startRuntimeStage(ctx, runtime, bl)
 	if err != nil {
 		report.Succeeded, report.Failed, report.Errors = r.resultStats()
+		report.Superseded = r.supersededCount()
 		report.Errors = append(report.Errors, err)
 		return nil, true, err
 	}
@@ -386,6 +398,7 @@ func (r *oneShotRunner) dispatchInitialReadyActions(
 	if !dispatched {
 		r.logFailureSummary()
 		report.Succeeded, report.Failed, report.Errors = r.resultStats()
+		report.Superseded = r.supersededCount()
 		return nil, true, nil
 	}
 

@@ -209,10 +209,16 @@ func (f *engineFlow) resultStats() (succeeded, failed int, errs []error) {
 	return f.results.succeeded, f.results.failed, errs
 }
 
+// supersededCount is how many actions this pass gave up on as superseded.
+func (f *engineFlow) supersededCount() int {
+	return f.results.superseded
+}
+
 // resetResultStats resets the engine-owned counters for a new pass.
 func (f *engineFlow) resetResultStats() {
 	f.results.succeeded = 0
 	f.results.failed = 0
+	f.results.superseded = 0
 	f.results.errors = nil
 	f.results.summaries = nil
 }

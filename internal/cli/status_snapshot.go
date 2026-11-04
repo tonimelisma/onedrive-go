@@ -381,7 +381,9 @@ type accountNameReader interface {
 // syncStateQuerier abstracts querying per-mount sync state from state DBs.
 // Enables testing without real SQLite databases on disk.
 type syncStateQuerier interface {
-	QuerySyncState(ctx context.Context, statePath string) *syncStateInfo
+	// QuerySyncState reads the drive's sync state; filter is the drive's
+	// sync scope, so remote changes outside it are not counted (R-2.10.48).
+	QuerySyncState(ctx context.Context, statePath string, filter syncengine.ContentFilterConfig) *syncStateInfo
 }
 
 // liveSyncStateQuerier queries per-mount sync state from real state DBs.
@@ -392,8 +394,10 @@ type liveSyncStateQuerier struct {
 	examplesLimit int
 }
 
-func (q *liveSyncStateQuerier) QuerySyncState(ctx context.Context, statePath string) *syncStateInfo {
-	return querySyncStateWithOptions(ctx, statePath, q.logger, q.history, q.verbose, q.examplesLimit)
+func (q *liveSyncStateQuerier) QuerySyncState(
+	ctx context.Context, statePath string, filter syncengine.ContentFilterConfig,
+) *syncStateInfo {
+	return querySyncStateWithOptions(ctx, statePath, q.logger, filter, q.history, q.verbose, q.examplesLimit)
 }
 
 // buildStatusAccountsWith is the testable core of buildStatusAccounts.
@@ -794,7 +798,7 @@ func configuredDriveState(
 	}
 	probe := statusDrive{State: state}
 	if syncQ != nil {
-		probe.SyncState = syncQ.QuerySyncState(ctx, config.DriveStatePath(cid))
+		probe.SyncState = syncQ.QuerySyncState(ctx, config.DriveStatePath(cid), contentFilterConfigFor(&drive.DriveFilterConfig))
 	}
 	if checkErr != nil {
 		if probe.SyncState == nil {
@@ -855,7 +859,9 @@ func buildChildStatusDrive(
 		status.AutoRetry = &autoRetry
 	}
 	if syncQ != nil {
-		status.SyncState = syncQ.QuerySyncState(ctx, config.MountStatePath(root.MountID))
+		// A shortcut root's store holds only its own subtree, so its whole
+		// store is in scope.
+		status.SyncState = syncQ.QuerySyncState(ctx, config.MountStatePath(root.MountID), syncengine.ContentFilterConfig{})
 	}
 	finalizeStatusDriveState(&status)
 
@@ -875,19 +881,20 @@ func querySyncState(
 	statePath string,
 	logger *slog.Logger,
 ) *syncStateInfo {
-	return querySyncStateWithOptions(ctx, statePath, logger, false, false, defaultVisiblePaths)
+	return querySyncStateWithOptions(ctx, statePath, logger, syncengine.ContentFilterConfig{}, false, false, defaultVisiblePaths)
 }
 
 func querySyncStateWithOptions(
 	ctx context.Context,
 	statePath string,
 	logger *slog.Logger,
+	filter syncengine.ContentFilterConfig,
 	history bool,
 	verbose bool,
 	examplesLimit int,
 ) *syncStateInfo {
 	_ = history
-	snapshot, err := readDriveStatusSnapshot(ctx, statePath, logger)
+	snapshot, err := readDriveStatusSnapshot(ctx, statePath, logger, filter)
 	info := buildSyncStateInfo(&snapshot, verbose, examplesLimit)
 	if err != nil {
 		info.ReadError = err.Error()
