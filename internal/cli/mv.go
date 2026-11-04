@@ -120,6 +120,14 @@ func resolveDest(
 	return destInfo{parentID: parentItem.ID, newName: destName}, nil
 }
 
+// movesFolderIntoItself reports whether the move would put a folder inside
+// its own subtree. A destination that resolved to the folder itself is a
+// rename in place, which the name-equivalent path check would otherwise
+// mistake for a move into itself (R-1.7.5).
+func movesFolderIntoItself(sourceItem *graph.Item, sourcePath, destPath string, dest destInfo) bool {
+	return sourceItem.IsFolder && !dest.sameItem && isWithinRemotePath(moveTargetPath(destPath, dest), sourcePath)
+}
+
 // isSelfReference returns true when --force resolved to the source item itself.
 func isSelfReference(sourceID string, dest destInfo) bool {
 	return dest.existingID != "" && dest.existingID == sourceID
@@ -184,7 +192,7 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 	// A folder cannot move into itself or its own subtree. Graph rejects it
 	// with a bare 400, and with --force the replacement below would first set aside an
 	// existing destination inside the source, so refuse before anything runs.
-	if sourceItem.IsFolder && !dest.sameItem && isWithinRemotePath(moveTargetPath(destPath, dest), sourcePath) {
+	if movesFolderIntoItself(sourceItem, sourcePath, destPath, dest) {
 		return fmt.Errorf("cannot move %s into itself", sourcePath)
 	}
 
