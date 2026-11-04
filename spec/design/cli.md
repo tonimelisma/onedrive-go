@@ -201,7 +201,9 @@ Rules: [cli-output-guidelines.md](../reference/cli-output-guidelines.md).
 - one summary line per drive in human units, plus a "Held back by
   --download-only" line for work a one-way mode skipped (R-6.6.19). The line
   is built from the activity feed's tally (`activityTally`): once
-  `ActivityHook` has wired the feed (`syncConsole.hooked`), a mount without
+  `ActivityHook` has wired the feed (`syncConsole.hooked`; the one-shot flow
+  and the watch runtime both hand the orchestrator `console.ActivityHook()`,
+  never the `Activity` method itself), a mount without
   activity summarizes as nothing done rather than from the planner's counts,
   and a retry is promised only for paths (`retrying`) the run did not finish
   afterwards, while `retried` keeps the report's `Failed` honest
