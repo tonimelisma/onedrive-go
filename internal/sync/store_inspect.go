@@ -107,6 +107,11 @@ type DriveStatusSnapshot struct {
 	// HeldDeletes are the deletes the delete-safety hold keeps until the
 	// user runs `sync --confirm-deletes`.
 	HeldDeletes []HeldDeleteRow
+	// NeverSynced is a store that has not completed a sync: no delta cursor
+	// committed and an empty baseline, as right after `drive
+	// reset-sync-state`. Zero drift in such a store means nothing is known,
+	// not that everything is up to date (R-6.6.25).
+	NeverSynced bool
 }
 
 // ReadDriveStatusSnapshot opens a read-only inspector for one per-mount status
@@ -254,6 +259,15 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status baseline count: %w", err)
 	}
+	baselineItems, err := i.readCount(ctx, "SELECT COUNT(*) FROM baseline WHERE item_type <> 'root'")
+	if err != nil {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status baseline items: %w", err)
+	}
+	cursors, err := i.readCount(ctx, "SELECT COUNT(*) FROM observation_state WHERE cursor <> ''")
+	if err != nil {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status observation cursor: %w", err)
+	}
+	snapshot.NeverSynced = baselineItems == 0 && cursors == 0
 	snapshot.RemoteDriftItems, err = i.readCount(
 		ctx,
 		sqlCountRemoteDriftItems,

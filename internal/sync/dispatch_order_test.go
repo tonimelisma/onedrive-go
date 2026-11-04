@@ -147,6 +147,8 @@ func parentTestName(name string) string {
 //nolint:funlen // one scenario per line
 func runOnceScenarios() []func(*testing.T) {
 	return []func(*testing.T){
+		TestRunOnce_ABlockedRowWhoseScopeIsGoneIsReleasedAtStartup,
+		TestRunOnce_AQuotaRefusalBelowTheWindowIsTimedRetryWorkNotABlock,
 		TestRunOnce_AcceptedServerTransformIsNotDownloadedAgain,
 		TestRunOnce_ActivityHookNamesEachCompletedFile,
 		TestRunOnce_BaselineUpdatedAfterRun,
@@ -197,6 +199,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_UploadOnlyCreateFinishesIntoItsPlaceholderAfterItsETagMoved,
 		TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally,
 		TestRunOnce_LocalDeleteInsideFolderRenamedOnlineIsNotUndone,
+		TestRunOnce_LeavesWorkBehindAPauseLongerThanTenMinutes,
 		TestRunOnce_LegacyFolderBaselineGainsIdentityAndMovesAsOne,
 		TestRunOnce_LocalFileReplacedByFolderConverges,
 		TestRunOnce_LocalFolderDeleteDeletesRemoteFolder,
@@ -234,6 +237,8 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_DeletedFolderAndNewFolderWithReusedInodeAreNotAMove,
 		TestRunOnce_DeletedFileAndNewFileWithReusedInodeAreNotAMove,
 		TestRunOnce_RenameWithMatchingBirthTimeIsStillAMove,
+		TestRunOnce_ThreeQuotaRefusalsActivateTheScopeAndBlockTheRows,
+		TestRunOnce_WaitsOutAShortPauseBeforeTheNextPass,
 		TestRunOnce_WithoutBirthTimeIdentityIsDeviceAndInode,
 		TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift,
 		TestRunOnce_RemoteFolderDeleteWithIgnoredLocalFileConverges,

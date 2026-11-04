@@ -102,6 +102,7 @@ func buildSyncStateInfo(
 		Conditions:    buildStatusConditionJSON(snapshot, verbose, examplesLimit),
 		ExamplesLimit: examplesLimit,
 		Verbose:       verbose,
+		NeverSynced:   snapshot.NeverSynced,
 	}
 
 	info.RetryingPaths = retryingPaths(snapshot.RetryingWork, verbose, examplesLimit)

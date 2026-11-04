@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	stdsync "sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -92,6 +93,10 @@ type Engine struct {
 	// below oneShotMaxPasses. Test-only: a test that inspects what a single
 	// pass committed sets it to 1.
 	oneShotPassLimit int
+	// waitFn is how a one-shot sync waits out a scope's pause before its
+	// next pass (oneShotScopeWait); nil waits on a real timer. Test-only: a
+	// test advances its manual clock instead.
+	waitFn func(ctx context.Context, d time.Duration) error
 
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate

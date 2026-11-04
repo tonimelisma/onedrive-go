@@ -9,7 +9,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // shouldHandleRemote403Permission selects completions the remote permission
@@ -112,7 +111,7 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 		}
 		return nil
 	case permissionEvidenceFileDenied:
-		if err := flow.recordPermissionRetryWork(ctx, work, ScopeKey{}, evidence.IssueType); err != nil {
+		if err := flow.recordPermissionRetryWork(ctx, work, ScopeKey{}, evidence.IssueType, r.ErrMsg); err != nil {
 			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 		}
 	case permissionEvidenceBoundaryDenied:
@@ -216,7 +215,7 @@ func (flow *engineFlow) applyTrialPermissionEvidence(
 			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 		}
 	case permissionEvidenceFileDenied:
-		if err := flow.recordPermissionRetryWork(ctx, work, ScopeKey{}, evidence.IssueType); err != nil {
+		if err := flow.recordPermissionRetryWork(ctx, work, ScopeKey{}, evidence.IssueType, evidence.LastError); err != nil {
 			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 		}
 	case permissionEvidenceBoundaryDenied:
@@ -287,16 +286,21 @@ func (flow *engineFlow) logLocalPermissionBoundary(
 	flow.deps.logger.Info("local permission denied: directory blocked", fields...)
 }
 
+// recordPermissionRetryWork records a per-file permission denial the way the
+// executor's other user-clearable refusals are recorded (R-2.10.71): with
+// its condition, on the durable curve, said once when it starts.
 func (flow *engineFlow) recordPermissionRetryWork(
 	ctx context.Context,
 	work RetryWorkKey,
 	scopeKey ScopeKey,
 	conditionType string,
+	errMsg string,
 ) error {
 	row, err := flow.deps.store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
-		Work:     work,
-		ScopeKey: scopeKey,
-	}, retry.ReconcilePolicy().Delay)
+		Work:          work,
+		ScopeKey:      scopeKey,
+		ConditionType: conditionType,
+	}, durableRecheckRetryDelay)
 	if err != nil {
 		return err
 	}
@@ -304,6 +308,11 @@ func (flow *engineFlow) recordPermissionRetryWork(
 		return errors.New("sync store returned no retry_work row")
 	}
 	flow.retries.rowsByKey[row.WorkKey()] = *row
+	if row.AttemptCount == 1 {
+		flow.deps.logger.Warn("Not syncing "+work.Path+": "+errMsg,
+			slog.String("condition_type", conditionType),
+		)
+	}
 	fields := append(flow.summaryLogFields(
 		errclass.ClassActionable,
 		conditionKeyForStoredCondition(conditionType, scopeKey),

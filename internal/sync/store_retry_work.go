@@ -115,6 +115,29 @@ func markRetryWorkReadyTx(
 	return nil
 }
 
+// ReleaseOrphanBlockedRetryWork makes every blocked row whose scope has no
+// block_scopes row ready at now, and returns how many it released. Such a
+// row has nothing that will trial or release it (R-2.10.33); the startup
+// normalization calls this after it has discarded empty scopes.
+func (s *SyncStore) ReleaseOrphanBlockedRetryWork(ctx context.Context, now time.Time) (int, error) {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE retry_work
+		SET blocked = 0, next_retry_at = ?
+		WHERE blocked = 1
+		  AND scope_key NOT IN (SELECT scope_key FROM block_scopes)`,
+		now.UnixNano(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("sync: releasing blocked retry_work without a scope: %w", err)
+	}
+	released, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("sync: counting released retry_work: %w", err)
+	}
+
+	return int(released), nil
+}
+
 func countBlockedRetryWorkForScopeTx(ctx context.Context, runner sqlTxRunner, scopeKey string) (int, error) {
 	var count int
 	if err := runner.QueryRowContext(ctx,

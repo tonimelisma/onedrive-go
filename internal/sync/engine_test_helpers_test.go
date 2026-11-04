@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -838,11 +839,23 @@ func installManualClock(eng *Engine, clock *manualClock) {
 	eng.clock = clock
 }
 
+// errManualClockSkipsScopeWait is what the manual-clock harness answers a
+// one-shot scope wait with: no wait, no extra pass, as before the wait existed.
+var errManualClockSkipsScopeWait = errors.New("manual clock: scope wait skipped")
+
 // installManualClockForTestEngine is the testEngine-aware form: it also
 // refreshes the deps of the runtime and flow the harness already built.
 func installManualClockForTestEngine(eng *testEngine, clock *manualClock) {
 	installManualClock(eng.Engine, clock)
 	eng.baseline.setNowFunc(clock.Now)
+	// A one-shot scope wait is wall-clock time; on a manual clock it would
+	// pass without making the trial due. A test that wants the wait sets a
+	// waitFn of its own that advances its clock.
+	if eng.waitFn == nil {
+		eng.waitFn = func(context.Context, time.Duration) error {
+			return errManualClockSkipsScopeWait
+		}
+	}
 
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
 		rt.deps = newRuntimeDeps(eng.Engine)

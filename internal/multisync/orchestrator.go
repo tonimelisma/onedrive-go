@@ -97,6 +97,10 @@ type OrchestratorConfig struct {
 	// (see WatchLifecycleEvent). It runs on the watch loop and must not block.
 	WatchLifecycle func(WatchLifecycleEvent)
 	PerfParent     *perf.Collector
+	// ApplyLogLevel receives the config's log_level after every reload, so a
+	// changed level reaches the log file without a restart (R-2.8.1). Nil
+	// when the caller's logger has no adjustable file level.
+	ApplyLogLevel func(level string)
 }
 
 // Orchestrator manages per-mount sync runners. It is always used, even for a

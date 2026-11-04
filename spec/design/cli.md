@@ -277,7 +277,11 @@ run next. A refresh token rejected with `invalid_grant` is `ErrLoginExpired`
 everywhere (R-6.6.23). A canceled or declined sign-in and an expired sign-in
 code are one line that says to run `login` again. `drive list` and `status`
 take a configured drive's state from the same `configuredDriveState`: paused,
-"not synced yet" without a state database, then issues or pending changes as
+"not synced yet" without a state database, or with one that has not completed
+a sync (`DriveStatusSnapshot.NeverSynced`: no delta cursor and an empty
+baseline, as right after a reset; "syncing" when a watch is bootstrapping it,
+`TestFinalizeStatusDriveState_NeverSyncedStoreIsNotSyncedYetOrSyncingUnderAWatch`),
+then issues or pending changes as
 the state database records them (R-6.6.25). The auth health check behind both
 only checks the token file (`graph.CheckSavedLogin`); the command's real load
 is the one that logs "loaded saved token".

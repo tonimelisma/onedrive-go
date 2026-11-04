@@ -159,6 +159,7 @@ type CLIContext struct {
 	PerfSession      *perf.Session            // command-scoped performance collector/logging session
 	seams            cliSeams                 // test injection points; see cliSeams
 	logCloser        io.Closer                // log file closer; nil when no log file is configured
+	fileLogLevel     *slog.LevelVar           // the log file's level; nil when no log file is configured
 	logging          config.LoggingConfig     // logging settings the command logger was last built from
 	hasLogging       bool                     // logging holds settings from a config file (not just the bootstrap flags)
 	statusMu         sync.Mutex               // guards statusErr and progressShown for concurrent progress callbacks
@@ -166,6 +167,7 @@ type CLIContext struct {
 	progressShown    bool       // a redrawn progress line is on screen and must be cleared before other output
 	reconcileMu      sync.Mutex // guards reconcileNotices and selector mutation
 	reconcileNotices map[string]struct{}
+	lastBadLogLevel  string // the unknown log_level last warned about on a reload
 }
 
 func (cc *CLIContext) replaceCommandLogger(logger *slog.Logger, closer io.Closer) error {
@@ -215,10 +217,57 @@ func (cc *CLIContext) useLoggingConfig(logging config.LoggingConfig) error {
 		return err
 	}
 
+	cc.fileLogLevel = nil
+	if handle, ok := closer.(*logFileHandle); ok {
+		cc.fileLogLevel = handle.level
+	}
 	cc.logging = logging
 	cc.hasLogging = true
 
 	return nil
+}
+
+// applyFileLogLevel moves the log file's level to the config's log_level,
+// which a running `sync --watch` reads again on every config reload
+// (R-2.8.1). An unknown value keeps the current level and is reported once
+// per value, the way the startup warning reports it.
+func (cc *CLIContext) applyFileLogLevel(level string) {
+	if cc == nil || cc.fileLogLevel == nil {
+		return
+	}
+	if level == "" {
+		cc.fileLogLevel.Set(slog.LevelInfo)
+		return
+	}
+	mapped, ok := parseLogLevel(level)
+	if !ok {
+		if cc.Logger != nil && cc.lastBadLogLevel != level {
+			cc.lastBadLogLevel = level
+			cc.Logger.Warn("unknown log_level in the config; keeping the log file's current level",
+				slog.String("log_level", level),
+			)
+		}
+		return
+	}
+	cc.fileLogLevel.Set(mapped)
+}
+
+// applyLogLevelFunc returns the command's log-level setter for the watch
+// orchestrator to call after a reload, or nil outside a CLI context.
+func applyLogLevelFunc(ctx context.Context) func(string) {
+	cc := cliContextFrom(ctx)
+	if cc == nil {
+		return nil
+	}
+
+	return cc.applyFileLogLevel
+}
+
+// logFileHandle is the log file plus the level variable its handler reads,
+// so a reload can move the level without reopening the file.
+type logFileHandle struct {
+	io.Closer
+	level *slog.LevelVar
 }
 
 // attachConfiguredLogging gives the command the log file the config asks for
@@ -1040,10 +1089,12 @@ func buildLoggerDualWithStatusWriter(
 	)
 
 	// File handler: config-driven level, always JSON for machine parsing.
-	fileLevel := resolveFileLogLevelWithStatusWriter(cfg, statusWriter)
+	// The level is a variable so a config reload can move it (R-2.8.1).
+	fileLevel := new(slog.LevelVar)
+	fileLevel.Set(resolveFileLogLevelWithStatusWriter(cfg, statusWriter))
 	fileHandler := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: fileLevel, ReplaceAttr: loglevel.ReplaceLevelName})
 
-	return slog.New(&multiHandler{handlers: []slog.Handler{consoleHandler, fileHandler}}), f
+	return slog.New(&multiHandler{handlers: []slog.Handler{consoleHandler, fileHandler}}), &logFileHandle{Closer: f, level: fileLevel}
 }
 
 // commandWantsErrorDetails reports whether --verbose or --debug asked for the
