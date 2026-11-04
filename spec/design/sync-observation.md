@@ -151,7 +151,16 @@ Important properties:
 - sparse delta items recover omitted name/parent data from baseline when
   possible, and missing parent IDs trigger one best-effort item-by-ID enrich
   before baseline fallback
-- deleted-item names may also be recovered from baseline context
+- deleted-item names may also be recovered from baseline context, and a
+  deleted item the baseline does not hold is placed by the path its
+  `remote_state` row stores (`itemConverter.RemotePathByID`, wired by the
+  engine from `GetRemoteStateByID`; R-2.4.17). The watch's observer baseline
+  is loaded at start and does not learn items observed later, and an item
+  outside the configured scope is never baselined, while `remote_state` holds
+  both. OneDrive Personal reported such an item's deletion to a watch resumed
+  after an hour as a tombstone with neither name nor parent; before, the row
+  stayed and a folder created under the same name became a shadowed remote
+  twin (2026-11-04). `TestFullDelta_PlacesNamelessUntrackedDeleteByItsRemoteStatePath`
 - deleted delta items that are absent from baseline require a surviving item
   name plus enough path or parent-chain context before observation may emit a
   delete; missing-name untracked deletes are skipped even when the parent is

@@ -328,6 +328,7 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 
 	obs := newRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 	obs.SetItemClient(eng.itemsClient)
+	obs.SetRemotePathLookup(eng.remotePathLookup(ctx))
 	if refreshErr := eng.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
 		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
 	}

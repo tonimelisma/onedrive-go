@@ -137,6 +137,15 @@ func (o *remoteObserver) SetItemClient(items itemClient) {
 	o.Converter.Items = items
 }
 
+// SetRemotePathLookup lets the converter place a deleted item the baseline
+// does not hold by the path its remote_state row stores (R-2.4.17).
+func (o *remoteObserver) SetRemotePathLookup(lookup func(itemID string) (string, bool)) {
+	if o == nil || o.Converter == nil {
+		return
+	}
+	o.Converter.RemotePathByID = lookup
+}
+
 func (o *remoteObserver) SetShortcutTopology(
 	namespaceID string,
 	protectedRoots []ProtectedRoot,
