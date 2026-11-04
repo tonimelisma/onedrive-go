@@ -438,6 +438,11 @@ the user's later syncs and editors cannot change. The refusal is a usage
 error raised before config is read (`refuseSyncAsRoot`,
 `TestSync_RefusesRootWithoutAllowRoot`).
 
+A `mv` destination that resolves to the source item itself (OneDrive matches
+names without regard to case or Unicode form) is a rename in place to the
+requested spelling and needs no `--force` (R-1.7.5); `resolveDest` checks the
+resolved item's ID against the source before anything else.
+
 `cp --force` and `mv --force` replace an existing destination file through
 `replaceDestination` (`replace_destination.go`): the existing file is renamed
 aside to `.onedrive-go-replacing-<unix-ns>-<name>` (trimmed to 255 bytes on a

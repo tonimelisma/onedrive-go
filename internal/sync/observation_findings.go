@@ -15,6 +15,14 @@ func localObservationManagedIssueTypes() []string {
 		issueCaseCollision,
 		issueLocalReadDenied,
 		issueHashPanic,
+		// A boundary the scan proved last time (a synced path now holding a
+		// symlink or FIFO, a mount point of another filesystem) is managed
+		// too: when a later full scan finds the path representable again, the
+		// condition clears and the path syncs again. A crossed mount point
+		// that is not mounted is re-reported by every scan, so it stays
+		// (R-6.2.14, R-6.2.15).
+		issueLocalUnsyncableReplacement,
+		issueLocalMountBoundary,
 	}
 }
 

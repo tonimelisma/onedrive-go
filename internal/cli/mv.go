@@ -46,6 +46,9 @@ type destInfo struct {
 	newName    string
 	existingID string // non-empty when force=true and dest is an existing file
 	destIsDir  bool   // true when dest resolved to an existing folder
+	// sameItem is true when the destination resolved to the source itself: a
+	// rename that changes only letter case or Unicode form (R-1.7.5).
+	sameItem bool
 
 	// existingModified is the existing file's modification time, kept when it
 	// is renamed aside and back.
@@ -62,12 +65,25 @@ type destInfo struct {
 func resolveDest(
 	ctx context.Context,
 	session *driveops.MountSession,
-	destPath, sourceName string,
+	destPath, sourceID, sourceName string,
 	force bool,
 ) (info destInfo, err error) {
 	// Attempt 1: does the dest path already exist?
 	item, resolveErr := session.ResolveItem(ctx, destPath)
 	if resolveErr == nil {
+		// OneDrive resolves names without regard to letter case or Unicode
+		// form, so `mv Report.txt report.txt` finds the source itself at the
+		// destination. That is a rename in place to the requested spelling,
+		// not a collision, and needs no --force (R-1.7.5).
+		if item.ID == sourceID {
+			_, destName := driveops.SplitParentAndName(destPath)
+			if destName == "" {
+				destName = sourceName
+			}
+
+			return destInfo{parentID: item.ParentID, newName: destName, sameItem: true}, nil
+		}
+
 		if item.IsFolder {
 			return destInfo{parentID: item.ID, newName: sourceName, destIsDir: true}, nil
 		}
@@ -102,6 +118,14 @@ func resolveDest(
 	}
 
 	return destInfo{parentID: parentItem.ID, newName: destName}, nil
+}
+
+// movesFolderIntoItself reports whether the move would put a folder inside
+// its own subtree. A destination that resolved to the folder itself is a
+// rename in place, which the name-equivalent path check would otherwise
+// mistake for a move into itself (R-1.7.5).
+func movesFolderIntoItself(sourceItem *graph.Item, sourcePath, destPath string, dest destInfo) bool {
+	return sourceItem.IsFolder && !dest.sameItem && isWithinRemotePath(moveTargetPath(destPath, dest), sourcePath)
 }
 
 // isSelfReference returns true when --force resolved to the source item itself.
@@ -160,7 +184,7 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 		return newRemoteOpError("resolving source", sourcePath, err)
 	}
 
-	dest, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
+	dest, err := resolveDest(ctx, session, destPath, sourceItem.ID, sourceItem.Name, force)
 	if err != nil {
 		return err
 	}
@@ -168,7 +192,7 @@ func runMv(cmd *cobra.Command, args []string, force bool) error {
 	// A folder cannot move into itself or its own subtree. Graph rejects it
 	// with a bare 400, and with --force the replacement below would first set aside an
 	// existing destination inside the source, so refuse before anything runs.
-	if sourceItem.IsFolder && isWithinRemotePath(moveTargetPath(destPath, dest), sourcePath) {
+	if movesFolderIntoItself(sourceItem, sourcePath, destPath, dest) {
 		return fmt.Errorf("cannot move %s into itself", sourcePath)
 	}
 
