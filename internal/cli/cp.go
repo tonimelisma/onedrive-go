@@ -115,7 +115,9 @@ func runCp(cmd *cobra.Command, args []string, force bool) error {
 		return newRemoteOpError("resolving source", sourcePath, err)
 	}
 
-	dest, err := resolveDest(ctx, session, destPath, sourceItem.Name, force)
+	// A copy never renames its source, so no source ID is passed: a
+	// destination that resolves to the source itself is an existing file here.
+	dest, err := resolveDest(ctx, session, destPath, "", sourceItem.Name, force)
 	if err != nil {
 		return err
 	}

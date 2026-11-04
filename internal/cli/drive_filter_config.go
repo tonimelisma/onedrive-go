@@ -12,11 +12,12 @@ import (
 // the store family owns, does not reference the engine family.
 func contentFilterConfigFor(f *config.DriveFilterConfig) syncengine.ContentFilterConfig {
 	return syncengine.ContentFilterConfig{
-		IgnoredDirs:     append([]string(nil), f.IgnoredDirs...),
-		IncludedDirs:    append([]string(nil), f.IncludedDirs...),
-		IgnoredPaths:    append([]string(nil), f.IgnoredPaths...),
-		IgnoreDotfiles:  f.IgnoreDotfiles,
-		IgnoreJunkFiles: f.JunkFilesIgnored(),
-		FollowSymlinks:  f.FollowSymlinks,
+		IgnoredDirs:      append([]string(nil), f.IgnoredDirs...),
+		IncludedDirs:     append([]string(nil), f.IncludedDirs...),
+		IgnoredPaths:     append([]string(nil), f.IgnoredPaths...),
+		IgnoreDotfiles:   f.IgnoreDotfiles,
+		IgnoreJunkFiles:  f.JunkFilesIgnored(),
+		FollowSymlinks:   f.FollowSymlinks,
+		CrossFilesystems: f.CrossFilesystems,
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -322,4 +323,68 @@ func TestCountSyncFolderFiles_MissingFolderHoldsNoFiles(t *testing.T) {
 	count, err := CountSyncFolderFiles(filepath.Join(t.TempDir(), "missing"))
 	require.NoError(t, err)
 	assert.Zero(t, count)
+}
+
+func requireNoIssueOfType(t *testing.T, eng *testEngine, path, issueType string) {
+	t.Helper()
+
+	issues, err := eng.baseline.ListObservationIssues(t.Context())
+	require.NoError(t, err)
+	for i := range issues {
+		require.False(t, issues[i].Path == path && issues[i].IssueType == issueType,
+			"stale %s issue at %s: %+v", issueType, path, issues)
+	}
+}
+
+// A synced file replaced by a symlink is unavailable truth and reported; once
+// an ordinary file is back at the path, the report clears and the file syncs
+// again. Found live on 2026-11-04: the stale report blocked the restored
+// file's uploads for good.
+//
+// Validates: R-6.2.14
+func TestRunOnce_ReplacedSyncedFileSyncsAgainOnceRestored(t *testing.T) {
+	t.Parallel()
+
+	remote := seedUnavailableRemote(t)
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	target := filepath.Join(syncRoot, "a.txt")
+	require.NoError(t, os.Remove(target))
+	require.NoError(t, os.Symlink(filepath.Join(syncRoot, "keep.txt"), target))
+	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+	requireUnavailableIssue(t, eng, "a.txt")
+
+	require.NoError(t, os.Remove(target))
+	require.NoError(t, os.WriteFile(target, []byte("alpha, edited\n"), 0o600))
+	runScenarioPass(t, eng)
+
+	item, ok := remote.itemAt("a.txt")
+	require.True(t, ok)
+	assert.Equal(t, "alpha, edited\n", remote.contents[item.ID], "the restored file's edit is uploaded")
+	requireNoIssueOfType(t, eng, "a.txt", issueLocalUnsyncableReplacement)
+}
+
+// A folder a scan found to be the mount point of another filesystem is a read
+// boundary while it is one. When the next scan finds it an ordinary folder on
+// the sync folder's filesystem again, the boundary clears and changes under
+// it sync.
+//
+// Validates: R-6.2.15
+func TestRunOnce_MountBoundaryClearsWhenTheFolderIsPlainAgain(t *testing.T) {
+	t.Parallel()
+
+	remote := seedUnavailableRemote(t)
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	batch := localObservationFindingsBatchFromSkippedItems(eng.driveID, []skippedItem{mountBoundarySkippedItem("Dir")})
+	require.NoError(t, eng.baseline.ReconcileObservationFindings(t.Context(), &batch, time.Now()))
+
+	require.NoError(t, os.Remove(filepath.Join(syncRoot, "Dir", "two.txt")))
+	report := runScenarioPass(t, eng)
+
+	assert.Equal(t, 1, report.RemoteDeletes, "a delete in a folder that is no longer a mount point is an ordinary delete")
+	requireNoIssueOfType(t, eng, "Dir", issueLocalMountBoundary)
 }

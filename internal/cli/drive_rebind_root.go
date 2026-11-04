@@ -52,7 +52,9 @@ func runDriveRebindRootWithInput(ctx context.Context, cc *CLIContext, stdin io.R
 	}
 
 	drive := cfg.Drives[cid]
-	syncDir := config.EffectiveSyncDir(cfg, cid, drive.SyncDir, cc.Logger)
+	// A configured "~/..." path is expanded before the folder is counted;
+	// unexpanded, the count read 0 for a full folder (live, 2026-11-04).
+	syncDir := config.ExpandTilde(config.EffectiveSyncDir(cfg, cid, drive.SyncDir, cc.Logger))
 	// An unreadable state is exactly when a rebind may be needed, so it is
 	// not a reason to refuse; the count is shown as unknown.
 	synced, err := syncengine.SyncedFileCount(ctx, dbPath, cc.Logger)

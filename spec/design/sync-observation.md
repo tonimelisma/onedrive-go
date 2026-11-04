@@ -668,6 +668,15 @@ subtree:
   still on its own device is the mounted disk, so emptying it is an ordinary
   delete. `drive rebind-root` forgets recorded mount points. Watch safety scans use the flags but
   only one-shot and bootstrap scans record new ones.
+- `local_unsyncable_replacement` and `local_mount_boundary` are managed issue
+  types of the local findings batch like the scanner's other findings
+  (`localObservationManagedIssueTypes`): a full scan that no longer reports
+  the path clears the durable issue and its read-boundary scope, so a restored
+  file or a folder that stopped being a mount point syncs again. A crossed
+  mount point that is not mounted is re-reported by every scan and so stays.
+  Before this (2026-11-04) both were written once and never cleared: a
+  symlink put back as a file, or a folder unmounted again, stayed unavailable
+  truth for good and its edits never uploaded.
 
 A synced item moved *into* an excluded folder is still invisible: the walk
 does not descend excluded folders, so its identity is never seen. That case

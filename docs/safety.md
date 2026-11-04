@@ -56,8 +56,9 @@ computer, go to the local trash (see Deletes below).
 A rename or move on one side is applied as a move on the other side when
 onedrive-go can prove it is the same item; otherwise it is handled as a delete
 plus a new file. When an item changes from a file to a folder (or back) on one
-side, it is replaced on the other side; if both sides changed, your local
-version wins and the replaced OneDrive item goes to the recycle bin.
+side, it is replaced on the other side. If both sides changed, both are kept:
+your version becomes a conflict copy (a folder's whole content included) and
+OneDrive's item takes the name; nothing is deleted on either side.
 
 ## Conflicts
 
@@ -130,11 +131,14 @@ still kept as two files rather than resolved in the direction of the mode.
 - **A synced file replaced by something sync cannot handle.** A synced path
   now holding a symbolic link, FIFO or device, a file renamed to a name
   OneDrive rejects or to an excluded name, or an entry that cannot be read or
-  hashed, is reported in `status` and left alone on OneDrive.
+  hashed, is reported in `status` and left alone on OneDrive. Once the path
+  holds an ordinary file or folder again, the next sync clears the report and
+  syncs it as usual.
 - **A disk mounted inside the sync folder.** A folder that is the mount point
   of another filesystem is not entered (unless `cross_filesystems = true`),
   and a disk that was synced and is later not mounted reads as unavailable,
-  not as deleted.
+  not as deleted. A folder that stops being a mount point syncs again on the
+  next sync, as does a disk that is mounted again.
 - **An item missing from a full listing.** Before an item that a full listing
   did not return is deleted locally, OneDrive is asked for it by ID; only a
   definite "gone" answer deletes it.
@@ -181,7 +185,9 @@ still kept as two files rather than resolved in the direction of the mode.
 - **Name collisions.** Two local names that OneDrive treats as one (differing
   only in letter case, in how accents are composed, in emoji, or by characters
   OneDrive ignores) cannot both exist there, so neither is uploaded until one
-  is renamed; `status` names both. A new file is never created over an
+  is renamed; `status` names them (a pair that differs only in how an accent
+  is composed is listed once, under the composed spelling). A new file is
+  never created over an
   existing OneDrive item of the same name. Two OneDrive items that this
   computer would store under one name are likewise left alone and reported.
 

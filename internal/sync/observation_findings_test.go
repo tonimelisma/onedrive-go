@@ -31,6 +31,8 @@ func TestLocalObservationFindingsBatchFromSkippedItems_UnreadableDirectoryCreate
 		issueCaseCollision,
 		issueLocalReadDenied,
 		issueHashPanic,
+		issueLocalUnsyncableReplacement,
+		issueLocalMountBoundary,
 	}, batch.ManagedIssueTypes)
 }
 
