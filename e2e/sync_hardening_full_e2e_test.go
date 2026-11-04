@@ -321,7 +321,7 @@ func TestE2E_Sync_LargeFileBetweenClients(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dirA, "large.bin"), data, 0o600))
 	runCLIWithConfig(t, cfgA, envA, "sync", "--upload-only")
-	waitForRemoteStatSize(t, cfgA, envA, "", "/large.bin", int64(len(data)), hardeningSyncTimeout)
+	waitForRemoteStatSize(t, cfgA, envA, "/large.bin", int64(len(data)), hardeningSyncTimeout)
 
 	dirB := t.TempDir()
 	cfgB, envB, _ := writeIsolatedSharedRootWriterConfig(t, dirB, "", root)

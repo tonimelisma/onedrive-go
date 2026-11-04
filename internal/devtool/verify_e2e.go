@@ -153,6 +153,8 @@ func fullE2ESerialSyncTestNames() []string {
 		"TestE2E_Sync_TypeChangesBothWays",
 		"TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta",
 		"TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed",
+		"TestE2E_Sync_KillMidUploadResumesSession",
+		"TestE2E_Sync_KillMidDownloadResumesPartial",
 		"TestE2E_SyncFull_RemoteDeleteGoesToLocalTrashAndRestores",
 		"TestE2E_SyncFull_ReplacedSyncFolderIsRefusedUntilRebound",
 	}

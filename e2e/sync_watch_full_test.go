@@ -417,7 +417,7 @@ func TestE2E_SyncWatch_LargeFile(t *testing.T) {
 
 	// Poll until the file appears remotely with correct size.
 	remotePath := "/" + testFolder + "/large-watch.bin"
-	waitForRemoteStatSize(t, cfgPath, env, "", remotePath, int64(fileSize), daemonPollTimeout)
+	waitForRemoteStatSize(t, cfgPath, env, remotePath, int64(fileSize), daemonPollTimeout)
 
 	// Download and verify byte-for-byte integrity.
 	downloadDir := t.TempDir()
