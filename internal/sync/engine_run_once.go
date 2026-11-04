@@ -540,6 +540,7 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	eng := flow.engine
 	obs := newRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
 	obs.SetItemClient(eng.itemsClient)
+	obs.SetRemotePathLookup(eng.remotePathLookup(ctx))
 	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
 		return fullRemoteObservation{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}

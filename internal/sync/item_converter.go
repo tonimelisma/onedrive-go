@@ -53,6 +53,15 @@ type itemConverter struct {
 	// local subpath.
 	PathPrefix string
 
+	// RemotePathByID returns the path this client's own remote snapshot
+	// (remote_state) stores for an item ID, for a deleted item the baseline
+	// does not hold: one observed but never synced, such as an item outside
+	// the configured scope. Without it a nameless tombstone for such an item
+	// could not be placed, its row stayed, and a later item of the same name
+	// was stored as a false remote twin (live, 2026-11-04; R-2.4.17). Nil
+	// when the converter has no store behind it.
+	RemotePathByID func(itemID string) (string, bool)
+
 	// RemoteRootItemID is the mounted remote root item for mount-root observation.
 	// Items with this ID are the root itself and should be skipped because the
 	// sync root owns that directory already. Empty for full-drive observation.
@@ -729,20 +738,7 @@ func (c *itemConverter) classifyAndConvert(
 	switch {
 	case item.IsDeleted:
 		ev.Type = ChangeDelete
-		// Business API: deleted items may lack Name — recover from baseline.
-		if ev.Name == "" && existing != nil {
-			ev.Name = path.Base(existing.Path)
-		}
-
-		if existing != nil {
-			ev.Path = existing.Path
-		}
-		if ev.Path == "" {
-			// When the item is absent from the baseline but the delta payload still
-			// carries enough name/parent-chain context, materialize the delete path
-			// from the current item instead of emitting an empty-path event.
-			ev.Path = c.materializePathForUntrackedDelete(item, inflight, itemDriveID)
-		}
+		c.placeDeletedItem(&ev, item, inflight, itemDriveID, existing)
 		if ev.Path == "" {
 			// A delete of an item this client never synced: there is nothing
 			// local to remove, so this is expected and needs no user action.
@@ -1179,4 +1175,36 @@ func unmaterializableRemoteNameReason(name string) string {
 	default:
 		return ""
 	}
+}
+
+// placeDeletedItem gives a delete event its path and name: from the
+// baseline, else from the remote snapshot row stored for the ID (an item the
+// observer's baseline does not hold but the store has observed, R-2.4.17),
+// else from the tombstone's own name and parent chain. Business deletes may
+// lack a name; Personal has delivered tombstones with neither name nor parent.
+func (c *itemConverter) placeDeletedItem(
+	ev *changeEvent, item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID, existing *BaselineEntry,
+) {
+	if existing != nil {
+		ev.Path = existing.Path
+		if ev.Name == "" {
+			ev.Name = path.Base(existing.Path)
+		}
+
+		return
+	}
+	if c.RemotePathByID != nil {
+		if stored, ok := c.RemotePathByID(item.ID); ok && stored != "" {
+			ev.Path = stored
+			if ev.Name == "" {
+				ev.Name = path.Base(stored)
+			}
+
+			return
+		}
+	}
+	// When the item is absent from the baseline but the delta payload still
+	// carries enough name/parent-chain context, materialize the delete path
+	// from the current item instead of emitting an empty-path event.
+	ev.Path = c.materializePathForUntrackedDelete(item, inflight, itemDriveID)
 }
