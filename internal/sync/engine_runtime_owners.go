@@ -73,8 +73,11 @@ type scopeLedger struct {
 type runResults struct {
 	succeeded int
 	failed    int
-	errors    []error
-	summaries []failureSummaryEntry
+	// superseded counts the actions the run gave up on because the truth
+	// they were planned against changed; the next pass replans them.
+	superseded int
+	errors     []error
+	summaries  []failureSummaryEntry
 
 	// fatalAuthRecorded is set once this run has recorded that sign-in is
 	// required. Every in-flight transfer that also gets a 401 reaches the

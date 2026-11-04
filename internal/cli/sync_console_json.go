@@ -148,8 +148,8 @@ func (c *syncConsole) jsonSummary(result multisync.RunOnceResult) {
 		r := report.Report
 		tally := c.tallyFor(report.Identity.MountID, r)
 		durationMS := r.Duration.Milliseconds()
-		failed := max(tally.failed, r.Failed-tally.willRetry)
-		willRetry := tally.willRetry
+		failed := max(tally.failed, r.Failed-tally.retried)
+		willRetry := tally.willRetry()
 		event.Status = syncJSONStatusDone
 		event.DryRun = r.DryRun
 		event.DurationMS = &durationMS

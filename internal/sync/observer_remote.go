@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -820,7 +822,7 @@ func (o *remoteObserver) fetchPage(
 	ctx context.Context, token string, page int, inflight map[string]inflightParent,
 	enumerated map[string]struct{},
 ) (raw []graph.Item, items int, next string, done bool, err error) {
-	dp, err := o.fetcher.Delta(ctx, o.driveID, token)
+	dp, err := o.fetchDeltaPageWithRetry(ctx, token, page)
 	if err != nil {
 		if errors.Is(err, graph.ErrGone) {
 			return nil, 0, "", false, newDeltaExpiredError(err)
@@ -953,4 +955,74 @@ func toUnixNano(t time.Time) int64 {
 // each name segment individually, not to joined paths.
 func nfcNormalize(s string) string {
 	return norm.NFC.String(s)
+}
+
+// deltaPageRetryAfterLimit bounds the Retry-After a page fetch waits out in
+// place. A longer pause is the caller's: the watch loop backs off its poll,
+// a one-shot run ends and reports that OneDrive is limiting requests.
+const deltaPageRetryAfterLimit = 2 * time.Minute
+
+// fetchDeltaPageWithRetry fetches one delta page, retrying a transient server
+// answer (5xx, a 429 with a short Retry-After, a dropped connection) a few
+// times before the error surfaces. The sync client set dispatches once by
+// design, since the engine owns retries for actions; a page of the change
+// list is observation, not an action, and one 504 on page 2 of 32 used to
+// fail a whole one-shot run (fault round of 2026-11-03) (R-2.15.5).
+func (o *remoteObserver) fetchDeltaPageWithRetry(ctx context.Context, token string, page int) (*graph.DeltaPage, error) {
+	policy := retry.DeltaPagePolicy()
+	for attempt := 0; ; attempt++ {
+		dp, err := o.fetcher.Delta(ctx, o.driveID, token)
+		if err == nil {
+			return dp, nil
+		}
+		wait, retryable := deltaPageRetryDelay(err, policy, attempt)
+		if !retryable || ctx.Err() != nil {
+			return nil, err
+		}
+		o.logger.Info("OneDrive did not answer a page of the change list; retrying",
+			slog.Int("page", page),
+			slog.Int("attempt", attempt+1),
+			slog.Int("max_attempts", policy.MaxAttempts),
+			slog.Duration("wait", wait.Round(time.Second)),
+			slog.Any("error", err),
+		)
+		if sleepErr := o.clock.Sleep(ctx, wait); sleepErr != nil {
+			return nil, err
+		}
+	}
+}
+
+// deltaPageRetryDelay says whether a page fetch error is worth another try
+// and how long to wait first: a 429 waits its Retry-After when that is within
+// deltaPageRetryAfterLimit, a 5xx or a transport failure waits the policy's
+// backoff. A 4xx other than 429, an expired cursor and a canceled context are
+// not retried.
+func deltaPageRetryDelay(err error, policy retry.Policy, attempt int) (time.Duration, bool) {
+	if attempt+1 >= policy.MaxAttempts || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return 0, false
+	}
+	var graphErr *graph.GraphError
+	if errors.As(err, &graphErr) {
+		switch {
+		case errors.Is(err, graph.ErrThrottled):
+			if graphErr.RetryAfter > deltaPageRetryAfterLimit {
+				return 0, false
+			}
+			if graphErr.RetryAfter > 0 {
+				return graphErr.RetryAfter, true
+			}
+
+			return policy.Delay(attempt), true
+		case errors.Is(err, graph.ErrServerError):
+			return policy.Delay(attempt), true
+		default:
+			return 0, false
+		}
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return policy.Delay(attempt), true
+	}
+
+	return 0, false
 }

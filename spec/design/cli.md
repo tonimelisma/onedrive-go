@@ -199,7 +199,14 @@ Rules: [cli-output-guidelines.md](../reference/cli-output-guidelines.md).
   need the user go to stderr; failures the engine keeps as retry work appear
   only with `--verbose`
 - one summary line per drive in human units, plus a "Held back by
-  --download-only" line for work a one-way mode skipped (R-6.6.19)
+  --download-only" line for work a one-way mode skipped (R-6.6.19). The line
+  is built from the activity feed's tally (`activityTally`): once
+  `ActivityHook` has wired the feed (`syncConsole.hooked`), a mount without
+  activity summarizes as nothing done rather than from the planner's counts,
+  and a retry is promised only for paths (`retrying`) the run did not finish
+  afterwards, while `retried` keeps the report's `Failed` honest
+  (`TestSyncConsole_SummaryDoesNotPromiseARetryOfWorkTheRunFinished`,
+  `TestSyncConsole_SummaryWithAWiredFeedAndNoActivityDoesNotUsePlannerCounts`)
 - watch mode: a startup line per folder and account, the Ctrl-C hint on a
   terminal, time-of-day prefixes off the journal, and "Stopped." (R-6.6.20)
 - `--quiet` keeps only failures
@@ -523,7 +530,10 @@ optional lifecycle fields, optional `sync_state`, and optional
 `Files`, `Local changes`, `Remote changes`, `Retrying`, and `Issues` labels
 (`local_changes` and `remote_changes` in JSON; either count makes a drive
 `syncing` while a sync owner runs and `pending` otherwise, R-2.10.48,
-R-2.10.50; `TestFinalizeStatusDriveState_LocalDriftIsNotUpToDate`,
+R-2.10.50; the remote count is read under the drive's content filter,
+`syncStateQuerier.QuerySyncState` taking `contentFilterConfigFor(&drive.DriveFilterConfig)`,
+the same construction the engine gets, so a drive limited by `included_dirs`
+is not `pending` for the rest of the account, R-2.10.48; `TestFinalizeStatusDriveState_LocalDriftIsNotUpToDate`,
 `TestBuildSyncStateInfo_CarriesLocalDriftAndRendersIt`). It never prints an
 empty healthy issue section, never prints "No active conditions", and never
 prints a healthy `Auth: ready` line.

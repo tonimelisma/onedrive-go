@@ -24,9 +24,9 @@ type storeInspector struct {
 // folders change only by path or type, and a file's hash decides when either
 // side has one. Comparing folder mtimes, which baseline never records, made
 // every remote folder count as drift on a fully synced drive.
-const sqlCountRemoteDriftItems = `
-SELECT COUNT(*) FROM (
-	SELECT rs.item_id
+const sqlListRemoteDriftItems = `
+SELECT path, item_type FROM (
+	SELECT rs.item_id, rs.path, rs.item_type
 	FROM remote_state rs
 	LEFT JOIN baseline b
 	  ON b.item_id = rs.item_id
@@ -46,7 +46,7 @@ SELECT COUNT(*) FROM (
 		))
 	  )
 	UNION
-	SELECT b.item_id
+	SELECT b.item_id, b.path, b.item_type
 	FROM baseline b
 	LEFT JOIN remote_state rs
 	  ON rs.item_id = b.item_id
@@ -122,9 +122,51 @@ func ReadDriveStatusSnapshot(
 	dbPath string,
 	logger *slog.Logger,
 ) (DriveStatusSnapshot, error) {
+	return ReadDriveStatusSnapshotWithFilter(ctx, dbPath, logger, ContentFilterConfig{})
+}
+
+// ReadDriveStatusSnapshotWithFilter is ReadDriveStatusSnapshot for a drive
+// synced under a content filter (included_dirs, ignores): the remote-changes
+// count skips items outside the scope, which the planner never acts on and
+// which a drive limited to one folder would otherwise report forever as
+// pending (R-2.10.48).
+func ReadDriveStatusSnapshotWithFilter(
+	ctx context.Context,
+	dbPath string,
+	logger *slog.Logger,
+	filter ContentFilterConfig,
+) (DriveStatusSnapshot, error) {
 	return readWithInspector(dbPath, logger, func(inspector *storeInspector) (DriveStatusSnapshot, error) {
-		return inspector.ReadDriveStatusSnapshot(ctx)
+		return inspector.ReadDriveStatusSnapshotWithFilter(ctx, filter)
 	})
+}
+
+// countVisibleRemoteDrift counts the remote drift rows the filter lets the
+// planner see (store_planner_visible.go applies the same test to its rows).
+func (i *storeInspector) countVisibleRemoteDrift(ctx context.Context, filter ContentFilterConfig) (int, error) {
+	rows, err := i.db.QueryContext(ctx, sqlListRemoteDriftItems)
+	if err != nil {
+		return 0, fmt.Errorf("query remote drift rows: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+
+	visibility := newContentFilter(filter)
+	count := 0
+	for rows.Next() {
+		var path string
+		var itemType ItemType
+		if err := rows.Scan(&path, &itemType); err != nil {
+			return 0, fmt.Errorf("scan remote drift row: %w", err)
+		}
+		if visibility.Visible(path, itemType) {
+			count++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate remote drift rows: %w", err)
+	}
+
+	return count, nil
 }
 
 // readPathTruthStatus opens a read-only inspector, derives current truth
@@ -252,6 +294,14 @@ func (i *storeInspector) Close() error {
 // ReadDriveStatusSnapshot returns the per-mount raw authority snapshot used by
 // the product-facing status command.
 func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSnapshot, error) {
+	return i.ReadDriveStatusSnapshotWithFilter(ctx, ContentFilterConfig{})
+}
+
+// ReadDriveStatusSnapshotWithFilter reads the snapshot for a drive whose sync
+// scope is filter: remote drift counts only items the planner would see.
+func (i *storeInspector) ReadDriveStatusSnapshotWithFilter(
+	ctx context.Context, filter ContentFilterConfig,
+) (DriveStatusSnapshot, error) {
 	snapshot := DriveStatusSnapshot{}
 
 	var err error
@@ -268,10 +318,7 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status observation cursor: %w", err)
 	}
 	snapshot.NeverSynced = baselineItems == 0 && cursors == 0
-	snapshot.RemoteDriftItems, err = i.readCount(
-		ctx,
-		sqlCountRemoteDriftItems,
-	)
+	snapshot.RemoteDriftItems, err = i.countVisibleRemoteDrift(ctx, filter)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status remote drift count: %w", err)
 	}

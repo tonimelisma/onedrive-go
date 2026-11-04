@@ -337,3 +337,50 @@ func TestSyncConsole_JSONWritesOnlyJSONLines(t *testing.T) {
 	assert.Equal(t, 1, events[3].Counts["download"])
 	assert.Empty(t, errOut.String(), "under --json, file failures are data on stdout")
 }
+
+// Validates: R-6.6.19
+//
+// A pass that waits out a throttle and then uploads the file (R-2.1.7) used
+// to end "uploaded 1 file; 1 will be retried on the next sync": the retry
+// was counted when it was recorded and never taken back (fault round of
+// 2026-11-03).
+func TestSyncConsole_SummaryDoesNotPromiseARetryOfWorkTheRunFinished(t *testing.T) {
+	t.Parallel()
+
+	c, out, _ := testSyncConsole()
+	c.ActivityHook()
+	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "beta/rl-1.txt", WillRetry: true}))
+	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "beta/rl-1.txt", Size: 22, SizeKnown: true, Success: true}))
+	c.Summary(singleMountResult(&syncengine.Report{
+		Mode:      syncengine.SyncBidirectional,
+		Duration:  136 * time.Second,
+		Uploads:   1,
+		Succeeded: 1,
+		Failed:    1,
+	}))
+
+	assert.Contains(t, out.String(), "Done in 2 min 16 s: uploaded 1 file (22 B).")
+	assert.NotContains(t, out.String(), "will be retried")
+	assert.NotContains(t, out.String(), "failed")
+}
+
+// Validates: R-6.6.19
+//
+// With the feed wired, a pass whose only planned action was held as retry
+// work did nothing; it used to fall through to the planner's counts and say
+// "uploaded 1 file" (fault round of 2026-11-03).
+func TestSyncConsole_SummaryWithAWiredFeedAndNoActivityDoesNotUsePlannerCounts(t *testing.T) {
+	t.Parallel()
+
+	c, out, _ := testSyncConsole()
+	c.ActivityHook()
+	c.Summary(singleMountResult(&syncengine.Report{
+		Mode:            syncengine.SyncBidirectional,
+		Duration:        1900 * time.Millisecond,
+		Uploads:         1,
+		LeftForNextSync: 1,
+	}))
+
+	assert.Contains(t, out.String(), "Done in 1.9 s; 1 will be retried on the next sync.")
+	assert.NotContains(t, out.String(), "uploaded")
+}
