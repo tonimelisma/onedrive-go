@@ -977,7 +977,7 @@ func (o *remoteObserver) fetchDeltaPageWithRetry(ctx context.Context, token stri
 		}
 		wait, retryable := deltaPageRetryDelay(err, policy, attempt)
 		if !retryable || ctx.Err() != nil {
-			return nil, err
+			return nil, fmt.Errorf("delta page %d: %w", page, err)
 		}
 		o.logger.Info("OneDrive did not answer a page of the change list; retrying",
 			slog.Int("page", page),
@@ -987,7 +987,7 @@ func (o *remoteObserver) fetchDeltaPageWithRetry(ctx context.Context, token stri
 			slog.Any("error", err),
 		)
 		if sleepErr := o.clock.Sleep(ctx, wait); sleepErr != nil {
-			return nil, err
+			return nil, fmt.Errorf("delta page %d (wait interrupted: %w): %w", page, sleepErr, err)
 		}
 	}
 }

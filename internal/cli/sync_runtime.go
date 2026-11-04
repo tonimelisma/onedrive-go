@@ -87,20 +87,6 @@ func standaloneMountConfigFromResolvedDrive(
 	}, nil
 }
 
-// contentFilterConfigFor is the engine's view of a drive's filter settings.
-// status reads the same scope, so its remote-changes count matches what the
-// planner would act on (R-2.10.48).
-func contentFilterConfigFor(f *config.DriveFilterConfig) syncengine.ContentFilterConfig {
-	return syncengine.ContentFilterConfig{
-		IgnoredDirs:     append([]string(nil), f.IgnoredDirs...),
-		IncludedDirs:    append([]string(nil), f.IncludedDirs...),
-		IgnoredPaths:    append([]string(nil), f.IgnoredPaths...),
-		IgnoreDotfiles:  f.IgnoreDotfiles,
-		IgnoreJunkFiles: f.JunkFilesIgnored(),
-		FollowSymlinks:  f.FollowSymlinks,
-	}
-}
-
 func standaloneMountStartupFailure(
 	selectionIndex int,
 	rd *config.ResolvedDrive,

@@ -14,6 +14,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
+const pageRetrySecondPage = "page-2"
+
 // pageRetryFixture is a three-page change list whose second page answers
 // with pageErr until it has done so failures times.
 func pageRetryFixture(t *testing.T, pageErr error, failures int) (*remoteObserver, *scriptedDeltaFetcher, *[]time.Duration) {
@@ -23,11 +25,11 @@ func pageRetryFixture(t *testing.T, pageErr error, failures int) (*remoteObserve
 	fetcher := &scriptedDeltaFetcher{answer: func(call int, token string) (*graph.DeltaPage, error) {
 		switch {
 		case call == 1:
-			return &graph.DeltaPage{Items: []graph.Item{cursorTestItem("one")}, NextLink: "page-2"}, nil
-		case token == "page-2" && failed < failures:
+			return &graph.DeltaPage{Items: []graph.Item{cursorTestItem("one")}, NextLink: pageRetrySecondPage}, nil
+		case token == pageRetrySecondPage && failed < failures:
 			failed++
 			return nil, pageErr
-		case token == "page-2":
+		case token == pageRetrySecondPage:
 			return &graph.DeltaPage{Items: []graph.Item{cursorTestItem("two")}, NextLink: "page-3"}, nil
 		default:
 			return &graph.DeltaPage{Items: []graph.Item{cursorTestItem("three")}, DeltaLink: "done"}, nil
@@ -57,7 +59,7 @@ func TestFullDelta_RetriesAServerErrorOnAPage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "done", token)
 	assert.Len(t, events, 3, "every page's items arrive")
-	assert.Equal(t, []string{"saved-token", "page-2", "page-2", "page-3"}, fetcher.seen(), "page 2 is fetched again, not the whole list")
+	assert.Equal(t, []string{"saved-token", pageRetrySecondPage, pageRetrySecondPage, "page-3"}, fetcher.seen(), "page 2 is fetched again, not the whole list")
 	assert.Equal(t, []time.Duration{2 * time.Second}, *slept)
 }
 
@@ -73,7 +75,7 @@ func TestFullDelta_WaitsAShortRetryAfterOnAPage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "done", token)
 	assert.Len(t, fetcher.seen(), 4)
-	assert.Equal(t, []time.Duration{5 * time.Second}, *slept, "the Retry-After is honoured as given")
+	assert.Equal(t, []time.Duration{5 * time.Second}, *slept, "the Retry-After is honored as given")
 }
 
 // Validates: R-2.15.5
