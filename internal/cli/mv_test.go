@@ -46,7 +46,7 @@ func TestResolveDest_ForceReturnsExistingID(t *testing.T) {
 		writeTestResponsef(t, w, `{"id":"existing-file-id","name":"dest.txt","parentReference":{"id":"parent-folder-id"}}`)
 	}))
 
-	dest, err := resolveDest(t.Context(), session, "dest.txt", "source.txt", true)
+	dest, err := resolveDest(t.Context(), session, "dest.txt", "source-id", "source.txt", true)
 	require.NoError(t, err)
 	assert.Equal(t, "parent-folder-id", dest.parentID)
 	assert.Equal(t, "dest.txt", dest.newName)
@@ -61,7 +61,7 @@ func TestResolveDest_ForceEmptyParentID(t *testing.T) {
 		writeTestResponsef(t, w, `{"id":"file-id","name":"dest.txt"}`)
 	}))
 
-	dest, err := resolveDest(t.Context(), session, "dest.txt", "source.txt", true)
+	dest, err := resolveDest(t.Context(), session, "dest.txt", "source-id", "source.txt", true)
 	require.Error(t, err)
 	assert.Empty(t, dest.parentID)
 	assert.Contains(t, err.Error(), "parent")
@@ -74,7 +74,7 @@ func TestResolveDest_NoForceFileExists(t *testing.T) {
 		writeTestResponsef(t, w, `{"id":"file-id","name":"dest.txt","parentReference":{"id":"p1"}}`)
 	}))
 
-	dest, err := resolveDest(t.Context(), session, "dest.txt", "source.txt", false)
+	dest, err := resolveDest(t.Context(), session, "dest.txt", "source-id", "source.txt", false)
 	require.Error(t, err)
 	assert.Empty(t, dest.parentID)
 	assert.Contains(t, err.Error(), "--force")
@@ -87,7 +87,7 @@ func TestResolveDest_FolderDest(t *testing.T) {
 		writeTestResponsef(t, w, `{"id":"folder-id","name":"destdir","folder":{}}`)
 	}))
 
-	dest, err := resolveDest(t.Context(), session, "destdir", "source.txt", false)
+	dest, err := resolveDest(t.Context(), session, "destdir", "source-id", "source.txt", false)
 	require.NoError(t, err)
 	assert.Equal(t, "folder-id", dest.parentID)
 	assert.Equal(t, "source.txt", dest.newName)
@@ -112,7 +112,7 @@ func TestResolveDest_NotFound(t *testing.T) {
 		writeTestResponsef(t, w, `{"id":"parent-id","name":"parentdir","folder":{}}`)
 	}))
 
-	dest, err := resolveDest(t.Context(), session, "parentdir/newname.txt", "source.txt", false)
+	dest, err := resolveDest(t.Context(), session, "parentdir/newname.txt", "source-id", "source.txt", false)
 	require.NoError(t, err)
 	assert.Equal(t, "parent-id", dest.parentID)
 	assert.Equal(t, "newname.txt", dest.newName)
@@ -128,7 +128,7 @@ func TestResolveDest_SelfReferenceDetected(t *testing.T) {
 		writeTestResponsef(t, w, `{"id":"item-1","name":"file.txt","parentReference":{"id":"parent-1"}}`)
 	}))
 
-	dest, err := resolveDest(t.Context(), session, "file.txt", "file.txt", true)
+	dest, err := resolveDest(t.Context(), session, "file.txt", "source-id", "file.txt", true)
 	require.NoError(t, err)
 	assert.True(t, isSelfReference("item-1", dest), "should detect self-reference")
 	assert.Equal(t, "item-1", dest.existingID)
@@ -247,4 +247,46 @@ func TestPrintMvJSON(t *testing.T) {
 	assert.Equal(t, "/docs/report.pdf", decoded.Source)
 	assert.Equal(t, "/archive/report.pdf", decoded.Destination)
 	assert.Equal(t, "item-456", decoded.ID)
+}
+
+// `mv Report.txt report.txt`: OneDrive resolves the destination to the source
+// itself, which is a rename in place, not a collision with an existing file.
+//
+// Validates: R-1.7.5
+func TestResolveDest_DestinationIsTheSourceRenamesInPlace(t *testing.T) {
+	t.Parallel()
+
+	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeTestResponsef(t, w, `{"id":"item-1","name":"Report.txt","parentReference":{"id":"parent-1"}}`)
+	}))
+
+	dest, err := resolveDest(t.Context(), session, "Docs/report.txt", "item-1", "Report.txt", false)
+	require.NoError(t, err)
+	assert.Equal(t, "parent-1", dest.parentID)
+	assert.Equal(t, "report.txt", dest.newName)
+	assert.Empty(t, dest.existingID)
+	assert.False(t, dest.destIsDir)
+	assert.False(t, isNoOpMove(dest, "parent-1", "Report.txt"), "the spelling changes, so the rename is sent")
+	assert.True(t, dest.sameItem)
+}
+
+// `mv Docs docs` resolves to the source folder itself: a rename in place, not
+// a move of the folder into itself.
+//
+// Validates: R-1.7.5
+func TestResolveDest_FolderDestinationIsTheSourceRenamesInPlace(t *testing.T) {
+	t.Parallel()
+
+	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeTestResponsef(t, w, `{"id":"dir-1","name":"Docs","parentReference":{"id":"root"},"folder":{}}`)
+	}))
+
+	dest, err := resolveDest(t.Context(), session, "docs", "dir-1", "Docs", false)
+	require.NoError(t, err)
+	assert.Equal(t, "root", dest.parentID)
+	assert.Equal(t, "docs", dest.newName)
+	assert.False(t, dest.destIsDir, "the folder is renamed, not moved into")
+	assert.True(t, dest.sameItem)
+	assert.True(t, isWithinRemotePath(moveTargetPath("docs", dest), "Docs"),
+		"the self-move guard alone would refuse the rename; sameItem bypasses it")
 }

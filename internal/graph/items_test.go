@@ -2801,3 +2801,21 @@ func TestListItemPermissions_NextLinkOutsideBaseURLIsRefused(t *testing.T) {
 	assert.Contains(t, err.Error(), "does not match base URL")
 	assert.Equal(t, int32(1), requests.Load())
 }
+
+// A timestamp from 1900 on is what OneDrive stores and what the client itself
+// sends for old files, so it must read back as a date, not as unknown.
+//
+// Validates: R-2.10.64
+func TestParseTimestamp_AcceptsDatesFrom1900(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.DiscardHandler)
+	const field = "fileSystemInfo.lastModifiedDateTime"
+
+	got := parseTimestamp("1901-12-13T20:45:52Z", field, "item", logger)
+	assert.Equal(t, time.Date(1901, time.December, 13, 20, 45, 52, 0, time.UTC), got)
+
+	assert.True(t, parseTimestamp("1899-12-31T23:59:59Z", field, "item", logger).IsZero(),
+		"before 1900 is outside what OneDrive stores")
+	assert.True(t, parseTimestamp("2101-01-01T00:00:00Z", field, "item", logger).IsZero())
+}

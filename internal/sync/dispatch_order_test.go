@@ -267,6 +267,8 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_SavedTokenOneDriveKeepsRefusingIsReenumerated,
 		TestRunOnce_SharePointRootFormsRecordsActionableFailure,
 		TestRunOnce_SyncedItemsMadeUnrepresentableAreNotDeletedOnline,
+		TestRunOnce_ReplacedSyncedFileSyncsAgainOnceRestored,
+		TestRunOnce_MountBoundaryClearsWhenTheFolderIsPlainAgain,
 		TestRunOnce_SwapOfTwoNamesConverges,
 		TestRunOnce_SyncRootReplacedWhileEngineRunsIsRefused,
 		TestRunOnce_TimestampOnlyLocalChangeRefreshesBaselineWithoutTransfer,

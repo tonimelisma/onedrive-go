@@ -17,9 +17,12 @@ const listChildrenPageSize = 200
 
 // Timestamp validation bounds — timestamps outside this range are treated as
 // unknown and logged. Unknown is represented as the zero time so downstream
-// sync code can persist NULL/0 instead of fabricating "now".
+// sync code can persist NULL/0 instead of fabricating "now". The lower bound
+// is the earliest time OneDrive stores (EarliestFileSystemTime, R-2.10.64):
+// a 1901 file the client itself uploaded must read back with its date, not
+// as unknown.
 const (
-	minValidYear = 1970
+	minValidYear = 1900
 	maxValidYear = 2100
 )
 

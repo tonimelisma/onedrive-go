@@ -125,3 +125,39 @@ func TestRunDriveRebindRoot_UnreadableStateStillRebindsWithYes(t *testing.T) {
 		assert.NotContains(t, err.Error(), "read sync state", "an unreadable count must not block the rebind")
 	}
 }
+
+// A sync_dir written as "~/..." (the form `login` writes) is expanded before
+// the folder is counted; unexpanded it read as an absent, empty folder.
+//
+// Validates: R-6.2.12
+func TestRunDriveRebindRoot_CountsFilesInATildeSyncDir(t *testing.T) {
+	setTestDriveHome(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:tilde@example.com")
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "sync", "sub"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "sync", "a.txt"), []byte("a"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "sync", "sub", "b.txt"), []byte("b"), 0o600))
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/sync"))
+
+	statePath := config.DriveStatePath(cid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
+	store, err := syncengine.NewSyncStore(t.Context(), statePath, testDriveLogger(t))
+	require.NoError(t, err)
+	require.NoError(t, store.Close(t.Context()))
+
+	var out bytes.Buffer
+	cc := &CLIContext{
+		Flags:        CLIFlags{Drive: []string{cid.String()}},
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &out,
+		CfgPath:      cfgPath,
+	}
+
+	require.NoError(t, runDriveRebindRootWithInput(t.Context(), cc, bytes.NewBufferString(""), true))
+	assert.Contains(t, out.String(), "holds 2 files now")
+	assert.Contains(t, out.String(), filepath.Join(home, "sync")+" holds", "the expanded path is shown")
+}
