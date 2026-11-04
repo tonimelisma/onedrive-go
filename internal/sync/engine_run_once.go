@@ -67,6 +67,9 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 
 		reason, again := e.oneShotFollowUp(ctx, pass, result)
 		if !again {
+			reason, again = e.oneShotScopeWait(ctx, runner, pass, result)
+		}
+		if !again {
 			break
 		}
 		e.logger.Debug("running a follow-up sync pass for work the previous pass left",
@@ -127,6 +130,87 @@ func (e *Engine) oneShotFollowUp(ctx context.Context, pass int, result oneShotPa
 	}
 
 	return fmt.Sprintf("renames=%d deferred=%d dropped=%d", f.Renames, f.Deferred, f.Dropped), true
+}
+
+// oneShotScopeWaitLimit is the longest a one-shot sync waits for a paused
+// scope's next trial before it leaves the work to the next sync. A 429's
+// Retry-After is usually seconds; a pause of hours is the next sync's.
+const oneShotScopeWaitLimit = 10 * time.Minute
+
+// oneShotScopeWait decides whether RunOnce waits out a scope's pause and runs
+// another pass. A 429 or a 503 with Retry-After pauses the drive and, by
+// design, ends the pass with the remaining work taken back; a one-shot sync
+// used to report that work as left for the next sync even when the pause was
+// 44 seconds (soak of 2026-11-02). When a pause scope still blocks work, its
+// trial is within oneShotScopeWaitLimit and the pass bound allows another
+// pass, the run waits for that trial and passes again (R-2.1.7).
+func (e *Engine) oneShotScopeWait(ctx context.Context, runner *oneShotRunner, pass int, result oneShotPass) (string, bool) {
+	if result.report == nil || ctx.Err() != nil || runner == nil || pass >= e.oneShotPasses() {
+		return "", false
+	}
+	trialAt, ok := runner.scopes.earliestPauseTrialAt()
+	if !ok {
+		return "", false
+	}
+	left := result.report.LeftForNextSync + runner.countWorkBlockedUnderPause(ctx)
+	if left == 0 {
+		return "", false
+	}
+	wait := trialAt.Sub(e.nowFunc())
+	if wait > oneShotScopeWaitLimit {
+		e.logger.Info("OneDrive paused this drive for longer than a sync waits; the remaining work is the next sync's",
+			slog.Duration("pause", wait.Round(time.Second)),
+			slog.Int("left", left),
+		)
+		return "", false
+	}
+	if wait > 0 {
+		e.logger.Info("OneDrive asked for a pause; waiting before the next pass",
+			slog.Duration("pause", wait.Round(time.Second)),
+			slog.Int("left", left),
+		)
+		if err := e.waitFor(ctx, wait); err != nil {
+			return "", false
+		}
+	}
+
+	return fmt.Sprintf("pause over, left=%d", left), true
+}
+
+// countWorkBlockedUnderPause is how many retry rows a pause scope holds: the
+// requests the pause refused, which the report counts as failed, plus any
+// the pass never dispatched. A store error counts as nothing held: the next
+// sync picks the rows up as before the wait existed.
+func (r *oneShotRunner) countWorkBlockedUnderPause(ctx context.Context) int {
+	rows, err := r.deps.store.ListBlockedRetryWork(ctx)
+	if err != nil {
+		r.deps.logger.Debug("listing blocked retry work for the one-shot pause wait", slog.Any("error", err))
+		return 0
+	}
+	count := 0
+	for i := range rows {
+		if isPauseScope(rows[i].ScopeKey) {
+			count++
+		}
+	}
+
+	return count
+}
+
+// waitFor blocks for d or until ctx ends, through the engine's wait seam so
+// tests advance their clock instead of sleeping.
+func (e *Engine) waitFor(ctx context.Context, d time.Duration) error {
+	if e.waitFn != nil {
+		return e.waitFn(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("sync: one-shot pause wait: %w", ctx.Err())
+	}
 }
 
 // oneShotPasses is the most passes one RunOnce makes.

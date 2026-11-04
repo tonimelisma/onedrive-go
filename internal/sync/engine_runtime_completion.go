@@ -303,8 +303,21 @@ func (flow *engineFlow) persistFailureWithScopeEffects(
 ) (bool, *resultDecision, error) {
 	detected := flow.detectFailureScope(decision, r)
 	persistAs := decision
-	if detected.Block {
+	switch {
+	case detected.Block:
 		persistAs = decisionBlockedUnder(decision, detected.ScopeKey)
+	case decision.RunScopeDetection &&
+		decision.Class == errclass.ClassScopeBlockingTransient &&
+		!flow.scopes.hasActiveScope(decision.ScopeKey):
+		// The failure names a scope, but detection has not crossed its
+		// window yet (a 507 needs three paths in ten seconds) and no scope
+		// is active: there is nothing to block under. Recorded blocked, the
+		// row referenced a scope that did not exist, which nothing ever
+		// trialed or released (R-2.10.33; live on 2026-11-03, where two
+		// quota rows sat blocked across a restart with no scope). It is
+		// timed retry work carrying the scope as evidence; the activation a
+		// later failure brings blocks it then.
+		persistAs = decisionAsScopeEvidence(decision)
 	}
 
 	persisted, err := flow.persistAndHoldFailure(ctx, current, persistAs, r)
@@ -348,6 +361,19 @@ func decisionBlockedUnder(decision *resultDecision, scopeKey ScopeKey) *resultDe
 	blocked.ScopeEvidence = scopeKey
 
 	return &blocked
+}
+
+// decisionAsScopeEvidence is decision as timed retry work that records the
+// scope it would have blocked under as evidence only: the scope is not
+// active, so the row waits on the ordinary retry curve and is blocked when,
+// and if, the scope activates.
+func decisionAsScopeEvidence(decision *resultDecision) *resultDecision {
+	evidence := *decision
+	evidence.Class = errclass.ClassRetryableTransient
+	evidence.ScopeEvidence = decision.ScopeKey
+	evidence.ScopeKey = ScopeKey{}
+
+	return &evidence
 }
 
 // detectFailureScope feeds a failure that will be persisted as retry work

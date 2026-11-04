@@ -276,6 +276,36 @@ func (l *scopeLedger) hasActiveScope(key ScopeKey) bool {
 	return hasScope(l.active, key)
 }
 
+// earliestPauseTrialAt is the soonest next trial among the active scopes
+// that are a server pause still blocking work: a target throttle (429) or
+// the service scope (503), with no release allowance yet. Permission and
+// quota scopes are not pauses: waiting does not clear them.
+func (l *scopeLedger) earliestPauseTrialAt() (time.Time, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	var earliest time.Time
+	found := false
+	for i := range l.active {
+		scope := &l.active[i]
+		if !isPauseScope(scope.Key) || scope.ReleaseAllowance > 0 {
+			continue
+		}
+		if !found || scope.NextTrialAt.Before(earliest) {
+			earliest = scope.NextTrialAt
+			found = true
+		}
+	}
+
+	return earliest, found
+}
+
+// isPauseScope reports whether a scope is one OneDrive asked for with a
+// Retry-After: the drive's throttle or the service outage scope.
+func isPauseScope(key ScopeKey) bool {
+	return key.IsThrottleTarget() || key.IsGlobal()
+}
+
 func (l *scopeLedger) findBlockingScope(ta *trackedAction) ScopeKey {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

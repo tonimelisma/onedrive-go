@@ -554,6 +554,9 @@ func (o *Orchestrator) reload(
 	o.cfg.StandaloneMounts = newSelection.Mounts
 	o.cfg.InitialStartupResults = newSelection.StartupResults
 	o.cfg.Runtime.FlushTokenCache()
+	if o.cfg.ApplyLogLevel != nil {
+		o.cfg.ApplyLogLevel(newCfg.LogLevel)
+	}
 
 	newMounts, err := o.buildRuntimeWorkSet(ctx, newSelection.Mounts, newSelection.StartupResults, childWork)
 	if err != nil {

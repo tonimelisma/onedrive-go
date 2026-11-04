@@ -136,18 +136,21 @@ type statusDrive struct {
 type syncStateInfo struct {
 	// ReadError is set when the drive's state database could not be checked
 	// or read; the counts below are then unknown, not zero.
-	ReadError             string                `json:"read_error,omitempty"`
-	FileCount             int                   `json:"file_count"`
-	ConditionCount        int                   `json:"issue_count,omitempty"`
-	RemoteDrift           int                   `json:"remote_changes,omitempty"`
-	LocalDrift            int                   `json:"local_changes,omitempty"`
-	Retrying              int                   `json:"retrying"`
-	RetryingPaths         []string              `json:"retrying_paths,omitempty"`
-	Conditions            []statusConditionJSON `json:"issues,omitempty"`
-	ExamplesLimit         int                   `json:"examples_limit,omitempty"`
-	Verbose               bool                  `json:"verbose,omitempty"`
-	Perf                  *perf.Snapshot        `json:"perf,omitempty"`
-	PerfUnavailableReason string                `json:"perf_unavailable_reason,omitempty"`
+	ReadError      string                `json:"read_error,omitempty"`
+	FileCount      int                   `json:"file_count"`
+	ConditionCount int                   `json:"issue_count,omitempty"`
+	RemoteDrift    int                   `json:"remote_changes,omitempty"`
+	LocalDrift     int                   `json:"local_changes,omitempty"`
+	Retrying       int                   `json:"retrying"`
+	RetryingPaths  []string              `json:"retrying_paths,omitempty"`
+	Conditions     []statusConditionJSON `json:"issues,omitempty"`
+	ExamplesLimit  int                   `json:"examples_limit,omitempty"`
+	Verbose        bool                  `json:"verbose,omitempty"`
+	// NeverSynced is a state database that has not completed a sync yet
+	// (no delta cursor, empty baseline): its zero counts mean "unknown".
+	NeverSynced           bool           `json:"never_synced,omitempty"`
+	Perf                  *perf.Snapshot `json:"perf,omitempty"`
+	PerfUnavailableReason string         `json:"perf_unavailable_reason,omitempty"`
 }
 
 // statusSummary aggregates health info across displayed drives and shared folders.
@@ -665,6 +668,17 @@ func finalizeStatusDriveState(drive *statusDrive) {
 	}
 	if drive.SyncState.ReadError != "" {
 		markStatusDriveSyncStateUnreadable(drive, drive.SyncState.ReadError)
+		return
+	}
+	if drive.SyncState.NeverSynced {
+		// A store with no committed observation and an empty baseline (right
+		// after a reset) knows nothing yet: zero drift is not "up to date".
+		// A running watch is bootstrapping it; otherwise a sync is due.
+		if drive.RuntimeState == statusRuntimeStateActive {
+			drive.State = driveStateSyncing
+		} else {
+			drive.State = driveStateNotSynced
+		}
 		return
 	}
 	if drive.SyncState.ConditionCount > 0 {
