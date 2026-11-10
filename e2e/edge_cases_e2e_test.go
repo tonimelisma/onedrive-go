@@ -38,7 +38,7 @@ func TestE2E_ZeroByteFileSync(t *testing.T) {
 
 	// Create a zero-byte file locally and upload.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "empty.txt"), []byte{}, 0o600))
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Verify it exists remotely (poll for eventual consistency).
 	waitForRemoteReadContains(t, opsCfgPath, nil, "", "empty.txt", pollTimeout, "ls", "/"+testFolder)
@@ -72,7 +72,7 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 	unicodeName := "café résumé.txt"
 	content := "Unicode content: àéîõü"
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, unicodeName), []byte(content), 0o600))
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Verify it exists remotely via ls (poll for eventual consistency).
 	waitForRemoteReadContains(t, opsCfgPath, nil, "", "caf", pollTimeout, "ls", "/"+testFolder)
@@ -107,7 +107,7 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "CON"), []byte("invalid"), 0o600))
 
 	// Upload.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	stderr := runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// The debug stderr should mention skipping the invalid entry.
 	assert.Contains(t, stderr, "skipping invalid entry",
@@ -147,7 +147,7 @@ func TestE2E_RapidFileChurn(t *testing.T) {
 	require.NoError(t, os.WriteFile(filePath, []byte(finalContent), 0o600))
 
 	// Upload.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Verify final content remotely (poll for eventual consistency).
 	waitForRemoteReadContains(t, opsCfgPath, nil, "", "churn.txt", pollTimeout, "ls", "/"+testFolder)

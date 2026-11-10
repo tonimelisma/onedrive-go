@@ -320,7 +320,7 @@ func TestNewRootCmd(t *testing.T) {
 	cmd := newRootCmd()
 	require.NotNil(t, cmd)
 	assert.Equal(t, "devtool", cmd.Use)
-	assert.Len(t, cmd.Commands(), 4)
+	assert.Len(t, cmd.Commands(), 5)
 }
 
 // Validates: R-6.10.1
@@ -631,4 +631,42 @@ func TestDevtoolBinary_CleanupAuditClassifiesRepoState(t *testing.T) {
 	assert.Contains(t, stdout, "keep_unmerged: refactor/topic (branch has commits not reachable from main)")
 	assert.Contains(t, stdout, "safe_remove: origin/refactor/merged (remote branch tip is reachable from main)")
 	assert.Contains(t, stdout, "keep_unmerged: origin/refactor/topic (remote branch has commits not reachable from main)")
+}
+
+// Validates: R-6.10.23
+func TestNewNightlyCmdPassesFlagsThrough(t *testing.T) {
+	t.Parallel()
+
+	var got []devtool.NightlyOptions
+	newCmd := func() *cobra.Command {
+		cmd := newNightlyCmd(
+			func() (string, error) { return testRepoRoot, nil },
+			func(_ context.Context, opts devtool.NightlyOptions) error {
+				got = append(got, opts)
+				return nil
+			},
+		)
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
+		return cmd
+	}
+
+	check := newCmd()
+	check.SetArgs([]string{"check", "--branch", "fix/x"})
+	require.NoError(t, check.Execute())
+
+	release := newCmd()
+	release.SetArgs([]string{"release", "--branch", "fix/x", "--key", "TestY"})
+	require.NoError(t, release.Execute())
+
+	missingKey := newCmd()
+	missingKey.SetArgs([]string{"release", "--branch", "fix/x"})
+	require.Error(t, missingKey.Execute())
+
+	require.Len(t, got, 2)
+	assert.Equal(t, devtool.NightlyActionCheck, got[0].Action)
+	assert.Equal(t, "fix/x", got[0].Branch)
+	assert.Equal(t, testRepoRoot, got[0].RepoRoot)
+	assert.Equal(t, devtool.NightlyActionRelease, got[1].Action)
+	assert.Equal(t, "TestY", got[1].Key)
 }
