@@ -177,7 +177,25 @@ func runDODStart(ctx context.Context, runner commandRunner, opts *VerifyOptions,
 	if validateErr != nil {
 		return validateErr
 	}
-	return writeStatus(stdout, fmt.Sprintf("dod start: manifest ready at %s\n", manifestPath))
+	if err := writeStatus(stdout, fmt.Sprintf("dod start: manifest ready at %s\n", manifestPath)); err != nil {
+		return err
+	}
+	return runDODStartNightly(ctx, runner, opts, stdout)
+}
+
+// runDODStartNightly makes the latest nightly run part of every increment:
+// each open failure is either claimed for this increment, or already held by
+// another one. The stage fails when a failure would be left without an owner.
+func runDODStartNightly(ctx context.Context, runner commandRunner, opts *VerifyOptions, stdout io.Writer) error {
+	owner := opts.DODBranch
+	if owner == "" {
+		branch, err := currentIncrementBranch(ctx, runner, opts.RepoRoot)
+		if err != nil {
+			return err
+		}
+		owner = branch
+	}
+	return checkNightly(ctx, runner, opts.RepoRoot, owner, time.Now, stdout)
 }
 
 func runDODPrePR(ctx context.Context, runner commandRunner, opts *VerifyOptions, stdout io.Writer) error {
@@ -202,6 +220,9 @@ func runDODPrePR(ctx context.Context, runner commandRunner, opts *VerifyOptions,
 func runDODPreMerge(ctx context.Context, runner commandRunner, opts *VerifyOptions, stdout io.Writer) error {
 	if opts.DODPR == 0 {
 		return fmt.Errorf("dod pre-merge: --pr is required")
+	}
+	if err := requireNightlyClaimsInPR(ctx, runner, opts.RepoRoot, opts.DODPR); err != nil {
+		return err
 	}
 	if err := waitForPRCI(ctx, runner, opts.RepoRoot, opts.DODPR, dodCITimeout(opts)); err != nil {
 		return err
@@ -234,6 +255,9 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, opts *VerifyOpti
 	}
 	mainRoot, err := mainWorktreePath(ctx, runner, opts.RepoRoot)
 	if err != nil {
+		return err
+	}
+	if err := markNightlyClaimsFixed(ctx, runner, mainRoot, opts.DODBranch, prState.MergeCommit.OID, time.Now()); err != nil {
 		return err
 	}
 	if err := cleanupMergedIncrement(ctx, runner, mainRoot, opts.DODWorktree, opts.DODBranch, stderr); err != nil {

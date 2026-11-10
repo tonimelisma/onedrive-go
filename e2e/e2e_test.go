@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -546,5 +547,64 @@ func requireSyncEventuallyConverges(
 		}
 
 		sleepForLiveTestPropagation(5 * time.Second)
+	}
+}
+
+// syncLeftWorkPattern matches the one-shot summary of a pass that ended with
+// work unfinished: an action failed, or was left for the next sync.
+var syncLeftWorkPattern = regexp.MustCompile(`\d+ failed|will be retried on the next sync`)
+
+// syncRecordedRetryWork reports whether a sync's debug log recorded an action
+// as retry work, which the client leaves for the next sync by design
+// (R-6.6.28, R-6.8.15) and still exits zero.
+func syncRecordedRetryWork(stderr string) bool {
+	return strings.Contains(stderr, `msg="sync retry work"`)
+}
+
+// runSyncThroughTransientFailures runs a one-shot sync that must succeed, and
+// runs it again while the run left work behind after recording retry work (a
+// dropped connection or a 5xx on one transfer). One live sync is not a proof
+// that every action ran: a test that asserts the remote result of a single
+// pass fails on the network's bad minute rather than on the client. A first
+// pass that records no retry work is returned as it is. The returned debug
+// log is that of every pass, in order.
+func runSyncThroughTransientFailures(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	args ...string,
+) string {
+	t.Helper()
+
+	var stderrAll strings.Builder
+	syncArgs := append([]string{"sync"}, args...)
+	startedAt := time.Now()
+	deadline := startedAt.Add(transientGraphRetryTimeout)
+	driveID := resolveDriveSelection(env, "")
+	description := "sync completes its work through transient failures"
+
+	for attempt := 0; ; attempt++ {
+		stdout, stderr := runCLIWithConfig(t, cfgPath, env, syncArgs...)
+		stderrAll.WriteString(stderr)
+
+		if attempt == 0 && !syncRecordedRetryWork(stderr) {
+			return stderr
+		}
+
+		if !syncLeftWorkPattern.MatchString(stdout) {
+			recordTimingEvent(t, timingKindSyncConvergence, description, driveID, syncArgs,
+				transientGraphRetryTimeout, time.Since(startedAt), attempt+1, timingOutcomeSuccess)
+			return stderrAll.String()
+		}
+
+		if time.Now().After(deadline) {
+			recordTimingEvent(t, timingKindSyncConvergence, description, driveID, syncArgs,
+				transientGraphRetryTimeout, time.Since(startedAt), attempt+1, timingOutcomeTimeout)
+			require.Failf(t, "runSyncThroughTransientFailures: timed out",
+				"%v still left work after %v and %d passes\nlast stdout: %s\nlast stderr: %s",
+				syncArgs, transientGraphRetryTimeout, attempt+1, stdout, stderr)
+		}
+
+		sleepForLiveTestPropagation(pollBackoff(attempt))
 	}
 }
