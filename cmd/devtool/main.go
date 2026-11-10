@@ -22,6 +22,8 @@ type benchFunc func(context.Context, devtool.BenchOptions) error
 
 type cleanupAuditFunc func(context.Context, devtool.CleanupAuditOptions) error
 
+type nightlyFunc func(context.Context, devtool.NightlyOptions) error
+
 type worktreeAddFunc func(context.Context, string, string, string) error
 
 type worktreeBootstrapFunc func(string, string) error
@@ -44,7 +46,66 @@ func newRootCmd() *cobra.Command {
 		newBenchCmd(defaultCWD, defaultBench),
 		newCleanupAuditCmd(defaultCWD, defaultCleanupAudit),
 		newWorktreeCmd(defaultCWD, defaultAddWorktree, defaultBootstrapWorktree),
+		newNightlyCmd(defaultCWD, defaultNightly),
 	)
+
+	return cmd
+}
+
+func newNightlyCmd(getwd cwdLookup, runNightly nightlyFunc) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "nightly",
+		Short: "Check the nightly CI run and own its failures through claim refs",
+	}
+
+	var checkBranch string
+	check := &cobra.Command{
+		Use:   "check",
+		Short: "Claim every failure of the latest nightly run that no other increment holds",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			repoRoot, err := getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+
+			return runNightly(cmd.Context(), devtool.NightlyOptions{
+				RepoRoot: repoRoot,
+				Action:   devtool.NightlyActionCheck,
+				Branch:   checkBranch,
+				Stdout:   cmd.OutOrStdout(),
+			})
+		},
+	}
+	check.Flags().StringVar(&checkBranch, "branch", "", "increment branch that owns new claims (defaults to the current branch)")
+
+	var (
+		releaseBranch string
+		releaseKey    string
+	)
+	release := &cobra.Command{
+		Use:   "release",
+		Short: "Give up a claim so another increment picks the failure up",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			repoRoot, err := getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+
+			return runNightly(cmd.Context(), devtool.NightlyOptions{
+				RepoRoot: repoRoot,
+				Action:   devtool.NightlyActionRelease,
+				Branch:   releaseBranch,
+				Key:      releaseKey,
+				Stdout:   cmd.OutOrStdout(),
+			})
+		},
+	}
+	release.Flags().StringVar(&releaseBranch, "branch", "", "increment branch that holds the claim")
+	release.Flags().StringVar(&releaseKey, "key", "", "claim key, as the check prints it")
+	requireFlag(release, "branch")
+	requireFlag(release, "key")
+
+	cmd.AddCommand(check, release)
 
 	return cmd
 }
@@ -128,7 +189,7 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 	cmd.Flags().IntVar(&dodRecentMerged, "recent-merged", devtool.DefaultDODRecentMerged, "merged PR count for DoD review-thread audits")
 	cmd.Flags().StringVar(&dodCommentManifest, "comment-manifest", "", "DoD PR review-thread manifest path")
 	cmd.Flags().StringVar(&dodWorktree, "worktree", "", "increment worktree path for DoD post-merge cleanup")
-	cmd.Flags().StringVar(&dodBranch, "branch", "", "increment branch name for DoD post-merge cleanup")
+	cmd.Flags().StringVar(&dodBranch, "branch", "", "increment branch name: owns nightly claims at DoD start, cleaned up at post-merge")
 	cmd.Flags().DurationVar(&dodCITimeout, "ci-timeout", devtool.DefaultDODCITimeout, "maximum time to wait for DoD CI checks")
 	cmd.Flags().StringVar(&failedTestLog, "failed-log", "", "CI go-test log to parse for verify failed-test")
 	cmd.Flags().BoolVar(
@@ -345,6 +406,14 @@ func defaultAddWorktree(ctx context.Context, repoRoot, path, branch string) erro
 func defaultBootstrapWorktree(repoRoot, targetPath string) error {
 	if err := devtool.BootstrapWorktree(repoRoot, targetPath); err != nil {
 		return fmt.Errorf("bootstrap worktree: %w", err)
+	}
+
+	return nil
+}
+
+func defaultNightly(ctx context.Context, opts devtool.NightlyOptions) error {
+	if err := devtool.RunNightly(ctx, devtool.ExecRunner{}, opts); err != nil {
+		return fmt.Errorf("run nightly: %w", err)
 	}
 
 	return nil

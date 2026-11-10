@@ -56,7 +56,7 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260422-02 | Shared-root full-sync commands widened or destabilized the configured subtree after nightly harness repair | fixed | product bug | 2026-04-22 | no |
 | LI-20260422-03 | Shared-drive sync startup still aborted when `sync_dir` did not exist yet | fixed | product bug | 2026-04-22 | no |
 | LI-20260422-04 | Shared-folder `drive list` exact-selector check assumed one-pass search visibility | fixed | test harness | 2026-04-30 | yes |
-| LI-20260422-05 | Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work | fixed | test harness | 2026-04-22 | yes |
+| LI-20260422-05 | Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work | fixed | test harness | 2026-11-09 | yes |
 | LI-20260417-01 | Nightly `e2e_full` preflight duplicated `TestE2E_Status_ConfigTolerance` and stopped before live full-suite coverage | fixed | test bug | 2026-04-22 | yes |
 | LI-20260420-01 | Fast E2E smoke `get` exhausted the documented download-metadata `404` quirk budget | mitigated | graph quirk | 2026-04-28 | yes |
 | LI-20260416-01 | Fast E2E suite preflight assumed local `.testdata` always carried `drive_*.json` | fixed | test harness | 2026-04-16 | no |
@@ -941,7 +941,7 @@ Promoted docs: [system.md](../design/system.md), [graph-api-quirks.md](graph-api
 ## LI-20260422-05: Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work
 
 First seen: 2026-04-22
-Last seen: 2026-04-22
+Last seen: 2026-11-09
 Area: nightly/manual `e2e_full`, concurrent upload coverage, retry-work contract
 Suite / test: `go run ./cmd/devtool verify e2e-full --classify-live-quirks`;
 `full-parallel-misc`; `TestE2E_Sync_TransferWorkersConfig`
@@ -979,6 +979,25 @@ of all five files across bounded later `--upload-only` passes. That keeps the
 test focused on non-default worker-count behavior while honoring the engine's
 existing retry-work contract for live 5xx outages instead of demanding
 single-pass perfection from the provider.
+
+Recurrence 2026-11-09 (nightly run 42692556240 on `59f1ee6f`): the same
+assumption in two other tests. `TestE2E_RapidFileChurn` and
+`TestE2E_InvalidFilenameRejection` each ran one `sync --upload-only` and then
+polled `ls` for 30 s. In both, the upload's chunk PUT to
+`my.microsoftpersonalcontent.com` failed with `net/http: TLS handshake
+timeout` within one second of each other; the client logged `action failed`,
+`retry_work recorded` and `sync retry work condition_type=transient_failure`,
+printed `created 1 folder; 1 failed.` and exited zero, which is the contract
+(R-6.6.28, R-6.8.15). The file was never uploaded, so the poll timed out.
+`TestE2E_Sync_FolderMovesBothWays` had failed the same way earlier.
+Resolution: `runSyncThroughTransientFailures` (`e2e/e2e_test.go`) runs a
+must-succeed sync again, bounded by `transientGraphRetryTimeout`, while the
+first pass recorded retry work and the summary still reports failed or
+left-over work. Every setup or single-pass sync in
+`e2e/edge_cases_e2e_test.go` and `e2e/sync_hardening_full_e2e_test.go` now
+goes through it. Other `e2e_full` files still hold single-pass `sync` calls
+followed by a remote assertion; convert each to this helper when it is
+touched or when it fails this way, instead of re-investigating.
 Promoted docs: [system.md](../design/system.md)
 
 ## LI-20260416-01: Fast E2E suite preflight assumed local `.testdata` always carried `drive_*.json`

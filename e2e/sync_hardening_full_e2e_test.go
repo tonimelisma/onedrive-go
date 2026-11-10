@@ -123,14 +123,14 @@ func TestE2E_Sync_FolderMovesBothWays(t *testing.T) {
 	cfgPath, env := writeIsolatedSharedRootSyncConfig(t, syncDir)
 	writeLocal(t, syncDir, "proj/a.txt", "file a")
 	writeLocal(t, syncDir, "proj/sub/b.txt", "file b")
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 	waitForRemoteReadContains(t, cfgPath, env, "", "b.txt", pollTimeout, "ls", "/proj/sub")
 	folderID := remoteItemID(t, cfgPath, env, "/proj")
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	runSyncThroughTransientFailures(t, cfgPath, env)
 
 	// Local rename: OneDrive moves the item rather than re-creating it.
 	require.NoError(t, os.Rename(filepath.Join(syncDir, "proj"), filepath.Join(syncDir, "proj-local")))
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	runSyncThroughTransientFailures(t, cfgPath, env)
 	waitForRemoteReadContains(t, cfgPath, env, "", "b.txt", pollTimeout, "ls", "/proj-local/sub")
 	assert.Equal(t, folderID, remoteItemID(t, cfgPath, env, "/proj-local"), "a local folder rename is a remote move of the same item")
 	assert.NotContains(t, remoteNames(t, cfgPath, env, "/"), "proj")
@@ -162,9 +162,9 @@ func TestE2E_Sync_CrossMoves(t *testing.T) {
 	cfgPath, env := writeIsolatedSharedRootSyncConfig(t, syncDir)
 	writeLocal(t, syncDir, "top.txt", "top")
 	writeLocal(t, syncDir, "box/inner.txt", "inner")
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 	waitForRemoteReadContains(t, cfgPath, env, "", "inner.txt", pollTimeout, "ls", "/box")
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	runSyncThroughTransientFailures(t, cfgPath, env)
 
 	require.NoError(t, os.Rename(filepath.Join(syncDir, "top.txt"), filepath.Join(syncDir, "box", "top.txt")))
 	runCLIWithConfig(t, cfgPath, env, "mv", "/box/inner.txt", "/inner.txt")
@@ -351,14 +351,14 @@ func TestE2E_Sync_TypeChangesBothWays(t *testing.T) {
 	cfgPath, env := writeIsolatedSharedRootSyncConfig(t, syncDir)
 	writeLocal(t, syncDir, "was-file", "plain file")
 	writeLocal(t, syncDir, "was-folder/child.txt", "child")
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 	waitForRemoteReadContains(t, cfgPath, env, "", "child.txt", pollTimeout, "ls", "/was-folder")
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	runSyncThroughTransientFailures(t, cfgPath, env)
 
 	// Local: file -> folder.
 	require.NoError(t, os.Remove(filepath.Join(syncDir, "was-file")))
 	writeLocal(t, syncDir, "was-file/inside.txt", "now a folder")
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	runSyncThroughTransientFailures(t, cfgPath, env)
 	waitForRemoteReadContains(t, cfgPath, env, "", "inside.txt", pollTimeout, "ls", "/was-file")
 
 	// OneDrive: folder -> file.
