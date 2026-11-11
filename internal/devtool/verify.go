@@ -1,6 +1,7 @@
 package devtool
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -17,15 +19,11 @@ const (
 	defaultCoveragePattern           = "onedrive-go-cover.*"
 	fullE2ECompileStepName           = "e2e-full compile"
 	fullE2ECompileArtifactName       = "onedrive-go-e2e-full.test"
-	authE2EPreflightPattern          = "^TestE2E_AuthPreflight_Fast$"
+	authPreflightTestName            = "TestE2E_AuthPreflight_Fast"
+	authE2EPreflightPattern          = "^" + authPreflightTestName + "$"
 	fastE2EPreflightPattern          = "^TestE2E_FixturePreflight_Fast$"
 	fullE2EPreflightPattern          = "^TestE2E_FixturePreflight_Full$"
 	fullE2EFixturePreflight          = "TestE2E_FixturePreflight_Full"
-	fullE2EPackageTimeout            = "60m"
-	fastE2EPackageTimeout            = "10m"
-	stressMultisyncTimeout           = "20m"
-	stressSyncConcurrencyTimeout     = "40m"
-	stressSyncTimeout                = "40m"
 	stressSlowTestLimit              = 5
 	authPreflightIncidentID          = "LI-20260405-06"
 	fastDownloadIncidentID           = "LI-20260405-04"
@@ -49,6 +47,12 @@ const (
 
 	verifySummaryStatusPass = "pass"
 	verifySummaryStatusFail = "fail"
+	// verifySummaryStatusNotRun is a step or bucket the profile did not start
+	// because an earlier failure or a cancellation made it pointless.
+	verifySummaryStatusNotRun = "not-run"
+	// verifySummaryStatusSkipped is a step that ran and whose tests skipped,
+	// so it verified nothing.
+	verifySummaryStatusSkipped = "skipped"
 
 	VerifyDefault     VerifyProfile = "default"
 	VerifyPublic      VerifyProfile = "public"
@@ -61,6 +65,30 @@ const (
 	VerifyIntegration VerifyProfile = "integration"
 	VerifyStress      VerifyProfile = "stress"
 	VerifyFailedTest  VerifyProfile = "failed-test"
+)
+
+// Go test deadlines of the live and stress profiles. Every go test those
+// profiles start names its own, and the deadlines one CI job's profile can
+// start, classified reruns included, sum with the job's setup to no more than
+// that job's timeout-minutes (TestCIJobTimeoutsCoverEveryGoTestDeadline). A
+// hung test then ends at go test's deadline, with a goroutine dump that names
+// it and a verify summary, not at the job's, which leaves neither.
+const (
+	// e2ePreflightTimeout bounds each preflight. The auth preflight's own
+	// budget is 90 seconds per endpoint per drive.
+	e2ePreflightTimeout   = "10m"
+	fastE2EPackageTimeout = "10m"
+	// The bucket deadlines sit well above the recorded nightly durations
+	// (about 2, 15 and 16 minutes in November 2026), so a slow night passes
+	// and a hang fails at its own deadline.
+	fullE2EParallelMiscTimeout      = "15m"
+	fullE2ESerialSyncTimeout        = "40m"
+	fullE2ESerialWatchSharedTimeout = "40m"
+	// classifiedRerunTimeout bounds the one-test rerun of a known live quirk.
+	classifiedRerunTimeout       = "10m"
+	stressMultisyncTimeout       = "20m"
+	stressSyncConcurrencyTimeout = "40m"
+	stressSyncTimeout            = "40m"
 )
 
 type VerifyOptions struct {
@@ -91,8 +119,11 @@ type VerifyOptions struct {
 	// jobs of the head commit's run. Zero reruns nothing.
 	DODCIMaxReruns int
 	FailedTestLog  string
-	Stdout         io.Writer
-	Stderr         io.Writer
+	// CheckFormat makes the format step list the files the formatters would
+	// change and fail when there are any, instead of rewriting them.
+	CheckFormat bool
+	Stdout      io.Writer
+	Stderr      io.Writer
 }
 
 type VerifySummary struct {
@@ -111,6 +142,8 @@ type VerifyStepSummary struct {
 	DurationMS int64                   `json:"duration_ms"`
 	Error      string                  `json:"error,omitempty"`
 	SlowTests  []StressSlowTestSummary `json:"slow_tests,omitempty"`
+	// FailedTests names the top-level tests of a failed step.
+	FailedTests []string `json:"failed_tests,omitempty"`
 }
 
 type ClassifiedRerunSummary struct {
@@ -130,7 +163,10 @@ type E2EBucketSummary struct {
 	Timeout    string `json:"timeout"`
 	Status     string `json:"status"`
 	DurationMS int64  `json:"duration_ms"`
-	Error      string `json:"error,omitempty"`
+	// Error is the failure of a failed bucket, or why a bucket did not run.
+	Error string `json:"error,omitempty"`
+	// FailedTests names the top-level tests of a failed bucket.
+	FailedTests []string `json:"failed_tests,omitempty"`
 }
 
 type StressSlowTestSummary struct {
@@ -175,6 +211,19 @@ type verifyPlan struct {
 	runIntegration    bool
 	runStress         bool
 	runFailedTest     bool
+	// checkFormat makes the format step list instead of rewrite (--check-format).
+	checkFormat bool
+}
+
+// setCheckFormat applies --check-format, which only a plan with a format step
+// takes.
+func (p *verifyPlan) setCheckFormat(checkFormat bool) error {
+	if checkFormat && !p.runPublicChecks && !p.runQuickChecks {
+		return fmt.Errorf("--check-format applies to the profiles with a format step: default, public, pr and quick")
+	}
+	p.checkFormat = checkFormat
+
+	return nil
 }
 
 func RunVerify(ctx context.Context, runner commandRunner, opts *VerifyOptions) (runErr error) {
@@ -213,6 +262,10 @@ func runVerifyProfileWithEnv(
 		return err
 	}
 	shard, err := resolveVerifyShard(plan, opts.Shard)
+	if err != nil {
+		return err
+	}
+	err = plan.setCheckFormat(opts.CheckFormat)
 	if err != nil {
 		return err
 	}
@@ -381,30 +434,32 @@ func runPublicVerification(
 		return nil
 	}
 
-	publicSteps := []verifyStep{{"format", runFormat}, {"lint", runLint}}
+	// The full tier runs every step and reports every failure. A lint or rule
+	// failure says nothing about the tests, and on the nightly, the one run of
+	// this tier, stopping there would hide the tests' state for a day.
+	publicSteps := []verifyStep{{"format", formatStep(plan.checkFormat)}, {"lint", runLint}}
 	publicSteps = append(publicSteps, repoRuleSteps()...)
 	publicSteps = append(publicSteps, verifyStep{"build", runBuild})
-	if err := runVerifySteps(ctx, runner, repoRoot, env, collector, stdout, stderr, publicSteps); err != nil {
-		return err
-	}
+	stepsErr := runEveryVerifyStep(ctx, runner, repoRoot, env, collector, stdout, stderr, publicSteps)
 
-	if err := collector.runStep("unit tests", func() error {
+	unitErr := collector.runStep("unit tests", func() error {
 		return runUnitTests(ctx, runner, repoRoot, env, coverageFile, unitTimeout, stdout, stderr)
-	}); err != nil {
-		return err
+	})
+	var coverageErr error
+	if unitErr == nil {
+		coverageErr = collector.runStep("coverage", func() error {
+			return runCoverageGate(ctx, runner, repoRoot, env, coverageFile, coverageThreshold, stdout)
+		})
+	} else {
+		// A failed run leaves a partial coverage profile, and gating it would
+		// add a second failure that is only the first one's shadow.
+		collector.recordStepNotRun("coverage", "unit tests failed")
 	}
-	if err := collector.runStep("coverage", func() error {
-		return runCoverageGate(ctx, runner, repoRoot, env, coverageFile, coverageThreshold, stdout)
-	}); err != nil {
-		return err
-	}
-	if err := collector.runStep(fullE2ECompileStepName, func() error {
+	compileErr := collector.runStep(fullE2ECompileStepName, func() error {
 		return runE2EFullCompileCheck(ctx, runner, repoRoot, env, stdout, stderr)
-	}); err != nil {
-		return err
-	}
+	})
 
-	return nil
+	return errors.Join(stepsErr, unitErr, coverageErr, compileErr)
 }
 
 func runOptionalVerification(
@@ -426,26 +481,8 @@ func runOptionalVerification(
 		}
 	}
 
-	if plan.runE2E {
-		if err := runE2E(ctx, runner, opts.RepoRoot, e2eEnv, collector, stdout, stderr, opts.ClassifyLiveQuirks); err != nil {
-			return err
-		}
-	}
-
-	if plan.runE2EFull {
-		if err := runE2EFull(
-			ctx,
-			runner,
-			opts.RepoRoot,
-			e2eEnv,
-			effectiveE2ELogDir,
-			collector,
-			stdout,
-			stderr,
-			opts.ClassifyLiveQuirks,
-		); err != nil {
-			return err
-		}
+	if err := runLiveVerification(ctx, runner, opts, e2eEnv, effectiveE2ELogDir, collector, stdout, stderr, plan); err != nil {
+		return err
 	}
 
 	if plan.runIntegration {
@@ -467,6 +504,41 @@ func runOptionalVerification(
 	return nil
 }
 
+// runLiveVerification runs the fast live suite and, under e2e-full, the full
+// buckets. A fast-suite test failure does not stop e2e-full: it says nothing
+// about the buckets, and the night's record has to show every failure. A
+// preflight failure does, because the account or the fixtures are unusable;
+// the buckets are then recorded as not run.
+func runLiveVerification(
+	ctx context.Context,
+	runner commandRunner,
+	opts *VerifyOptions,
+	e2eEnv []string,
+	e2eLogDir string,
+	collector *verifySummaryCollector,
+	stdout, stderr io.Writer,
+	plan verifyPlan,
+) error {
+	var fastErr error
+	if plan.runE2E {
+		fastErr = runE2E(ctx, runner, opts.RepoRoot, e2eEnv, collector, stdout, stderr, opts.ClassifyLiveQuirks)
+		if fastErr != nil && (!plan.runE2EFull || errors.Is(fastErr, errE2EPreflight)) {
+			if plan.runE2EFull {
+				collector.recordBucketsNotRun(fullE2EBuckets(), "fast e2e preflight failed")
+			}
+
+			return fastErr
+		}
+	}
+	if !plan.runE2EFull {
+		return nil
+	}
+
+	fullErr := runE2EFull(ctx, runner, opts.RepoRoot, e2eEnv, e2eLogDir, collector, stdout, stderr, opts.ClassifyLiveQuirks)
+
+	return errors.Join(fastErr, fullErr)
+}
+
 func resolvedE2ELogDir(explicit string, plan verifyPlan) string {
 	if explicit != "" {
 		return explicit
@@ -478,33 +550,76 @@ func resolvedE2ELogDir(explicit string, plan verifyPlan) string {
 	return ""
 }
 
-func runFormat(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
-	if err := writeStatus(stdout, "==> gofumpt\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
+// formatterCommand is one formatter the format step runs over the tree.
+type formatterCommand struct {
+	name string
+	// args come before the mode flag (-w rewrites, -l lists) and the tree.
+	args []string
+}
+
+func formatterCommands() []formatterCommand {
+	return []formatterCommand{
+		{name: "gofumpt"},
+		{name: "goimports", args: []string{"-local", repoModulePath}},
 	}
-	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "gofumpt", "-w", "."); err != nil {
-		return fmt.Errorf("format gofumpt: %w", err)
+}
+
+func (f formatterCommand) argsWithMode(mode string) []string {
+	return append(append([]string{}, f.args...), mode, ".")
+}
+
+// formatStep is the format step of a profile: rewrite the tree, or, with
+// --check-format, only check it.
+func formatStep(checkOnly bool) func(context.Context, commandRunner, string, []string, io.Writer, io.Writer) error {
+	if checkOnly {
+		return checkFormat
 	}
 
-	if err := writeStatus(stdout, "==> goimports\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-	if err := runner.Run(
-		ctx,
-		repoRoot,
-		env,
-		stdout,
-		stderr,
-		"goimports",
-		"-local",
-		"github.com/tonimelisma/onedrive-go",
-		"-w",
-		".",
-	); err != nil {
-		return fmt.Errorf("format goimports: %w", err)
+	return runFormat
+}
+
+func runFormat(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
+	for _, formatter := range formatterCommands() {
+		if err := writeStatus(stdout, "==> "+formatter.name+"\n"); err != nil {
+			return fmt.Errorf("write status: %w", err)
+		}
+		if err := runner.Run(ctx, repoRoot, env, stdout, stderr, formatter.name, formatter.argsWithMode("-w")...); err != nil {
+			return fmt.Errorf("format %s: %w", formatter.name, err)
+		}
 	}
 
 	return nil
+}
+
+// checkFormat lists the files each formatter would change, changes none, and
+// fails when there are any. A step that rewrites the checkout and returns nil
+// can never fail, so CI passes --check-format.
+func checkFormat(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
+	var unformatted []string
+	for _, formatter := range formatterCommands() {
+		if err := writeStatus(stdout, "==> "+formatter.name+" -l\n"); err != nil {
+			return fmt.Errorf("write status: %w", err)
+		}
+
+		var listed bytes.Buffer
+		err := runner.Run(ctx, repoRoot, env, io.MultiWriter(stdout, &listed), stderr, formatter.name, formatter.argsWithMode("-l")...)
+		if err != nil {
+			return fmt.Errorf("check format %s: %w", formatter.name, err)
+		}
+		for _, file := range strings.Split(listed.String(), "\n") {
+			if file = strings.TrimSpace(file); file != "" {
+				unformatted = append(unformatted, formatter.name+" "+file)
+			}
+		}
+	}
+	if len(unformatted) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"check format: the formatters would change %s (verify without --check-format rewrites them)",
+		strings.Join(unformatted, ", "),
+	)
 }
 
 func runLint(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
@@ -689,6 +804,37 @@ func runVerifySteps(
 	}
 
 	return nil
+}
+
+// runEveryVerifyStep runs every step whatever an earlier one returned, and
+// joins their failures. After a cancellation the remaining steps are recorded
+// as not run instead of being started against a dead context.
+func runEveryVerifyStep(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	collector *verifySummaryCollector,
+	stdout, stderr io.Writer,
+	steps []verifyStep,
+) error {
+	var stepErrs []error
+	for _, step := range steps {
+		if ctx.Err() != nil {
+			collector.recordStepNotRun(step.name, "run canceled")
+			continue
+		}
+		if err := collector.runStep(step.name, func() error {
+			return step.run(ctx, runner, repoRoot, env, stdout, stderr)
+		}); err != nil {
+			stepErrs = append(stepErrs, err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		stepErrs = append(stepErrs, fmt.Errorf("verify steps: %w", err))
+	}
+
+	return errors.Join(stepErrs...)
 }
 
 func runIntegration(

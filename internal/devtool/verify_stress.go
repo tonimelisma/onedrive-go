@@ -3,6 +3,7 @@ package devtool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -121,25 +122,28 @@ func runStress(
 		},
 	}
 
+	// Every step runs whatever an earlier one returned: a multisync flake says
+	// nothing about the sync tree, and the nightly is the only run of this
+	// lane, so stopping would hide the other steps' state for a day.
+	var stepErrs []error
 	for _, command := range stressCommands {
-		if !command.collectSlowTests {
-			if err := collector.runStep(command.stepName, func() error {
+		var err error
+		if command.collectSlowTests {
+			err = collector.runStepWithOutcome(command.stepName, func() (stepOutcome, error) {
+				slowTests, runErr := runStressCommandWithSlowTests(ctx, runner, repoRoot, env, stdout, command)
+				return stepOutcome{slowTests: slowTests}, runErr
+			})
+		} else {
+			err = collector.runStep(command.stepName, func() error {
 				return runStressCommand(ctx, runner, repoRoot, env, stdout, stderr, command)
-			}); err != nil {
-				return err
-			}
-
-			continue
+			})
 		}
-
-		if err := collector.runStepWithSlowTests(command.stepName, func() ([]StressSlowTestSummary, error) {
-			return runStressCommandWithSlowTests(ctx, runner, repoRoot, env, stdout, command)
-		}); err != nil {
-			return err
+		if err != nil {
+			stepErrs = append(stepErrs, err)
 		}
 	}
 
-	return nil
+	return errors.Join(stepErrs...)
 }
 
 func runStressCommand(
