@@ -25,6 +25,7 @@ const (
 	prCIPollInterval          = 10 * time.Second
 	postMergeRunListLimit     = "10"
 	checkStatusCompleted      = "completed"
+	checkStatusInProgress     = "in_progress"
 	checkConclusionSuccess    = "success"
 	checkConclusionSkipped    = "skipped"
 )
@@ -114,6 +115,10 @@ type mergeCommit struct {
 	OID string
 }
 
+// githubRun is one workflow run as `gh run list --json` and `gh run view
+// --json` print it; each command fills the fields it was asked for. Like the
+// other gh response structs it is untagged: encoding/json matches gh's
+// camelCase keys case-insensitively.
 type githubRun struct {
 	DatabaseID int64
 	Name       string
@@ -121,8 +126,18 @@ type githubRun struct {
 	Status     string
 	Conclusion string
 	HeadSHA    string
+	CreatedAt  string
 	UpdatedAt  string
 	URL        string
+	// Jobs are the jobs of the run's latest attempt (`gh run view` only).
+	Jobs []githubJob
+}
+
+// githubJob is one job of a workflow run.
+type githubJob struct {
+	DatabaseID int64
+	Name       string
+	Conclusion string
 }
 
 type dodReviewThreadApplySummary struct {
@@ -144,27 +159,28 @@ func RunVerifyDOD(ctx context.Context, runner commandRunner, opts *VerifyOptions
 	if stage == "" {
 		return fmt.Errorf("dod verify: --stage is required")
 	}
+	gh := newGHClient(runner, nil)
 
 	switch stage {
 	case DODStageStart:
-		return runDODStart(ctx, runner, opts, stdout)
+		return runDODStart(ctx, runner, gh, opts, stdout)
 	case DODStagePrePR:
 		return runDODPrePR(ctx, runner, opts, stdout)
 	case DODStagePreMerge:
-		return runDODPreMerge(ctx, runner, opts, stdout)
+		return runDODPreMerge(ctx, runner, gh, opts, stdout)
 	case DODStagePostMerge:
-		return runDODPostMerge(ctx, runner, opts, stdout, stderr)
+		return runDODPostMerge(ctx, runner, gh, opts, stdout, stderr)
 	default:
 		return fmt.Errorf("dod verify: unknown stage %q", stage)
 	}
 }
 
-func runDODStart(ctx context.Context, runner commandRunner, opts *VerifyOptions, stdout io.Writer) error {
-	repo, err := loadGitHubRepo(ctx, runner, opts.RepoRoot)
+func runDODStart(ctx context.Context, runner commandRunner, gh ghClient, opts *VerifyOptions, stdout io.Writer) error {
+	repo, err := loadGitHubRepo(ctx, gh, opts.RepoRoot)
 	if err != nil {
 		return err
 	}
-	threads, err := fetchRecentMergedReviewThreads(ctx, runner, opts.RepoRoot, repo, dodRecentMerged(opts))
+	threads, err := fetchRecentMergedReviewThreads(ctx, gh, opts.RepoRoot, repo, dodRecentMerged(opts))
 	if err != nil {
 		return err
 	}
@@ -185,13 +201,13 @@ func runDODStart(ctx context.Context, runner commandRunner, opts *VerifyOptions,
 	if err := writeStatus(stdout, fmt.Sprintf("dod start: manifest ready at %s\n", manifestPath)); err != nil {
 		return err
 	}
-	return runDODStartNightly(ctx, runner, opts, stdout)
+	return runDODStartNightly(ctx, runner, gh, opts, stdout)
 }
 
 // runDODStartNightly makes the latest nightly run part of every increment:
 // each open failure is either claimed for this increment, or already held by
 // another one. The stage fails when a failure would be left without an owner.
-func runDODStartNightly(ctx context.Context, runner commandRunner, opts *VerifyOptions, stdout io.Writer) error {
+func runDODStartNightly(ctx context.Context, runner commandRunner, gh ghClient, opts *VerifyOptions, stdout io.Writer) error {
 	owner := opts.DODBranch
 	if owner == "" {
 		branch, err := currentIncrementBranch(ctx, runner, opts.RepoRoot)
@@ -200,7 +216,7 @@ func runDODStartNightly(ctx context.Context, runner commandRunner, opts *VerifyO
 		}
 		owner = branch
 	}
-	return checkNightly(ctx, runner, opts.RepoRoot, owner, time.Now, stdout)
+	return checkNightly(ctx, runner, gh, opts.RepoRoot, owner, time.Now, stdout)
 }
 
 // runDODPrePR is the last local gate before a pull request. With no profile
@@ -230,15 +246,15 @@ func runDODPrePR(ctx context.Context, runner commandRunner, opts *VerifyOptions,
 	return writeStatus(stdout, "dod pre-pr: local verifier, rebase, and PR-comment manifest gates passed\n")
 }
 
-func runDODPreMerge(ctx context.Context, runner commandRunner, opts *VerifyOptions, stdout io.Writer) error {
+func runDODPreMerge(ctx context.Context, runner commandRunner, gh ghClient, opts *VerifyOptions, stdout io.Writer) error {
 	if opts.DODPR == 0 {
 		return fmt.Errorf("dod pre-merge: --pr is required")
 	}
-	ciWait, err := newCIWaitConfig(opts, opts.RepoRoot, stdout)
+	ciWait, err := newCIWaitConfig(opts, opts.RepoRoot, ciEventPullRequest, stdout)
 	if err != nil {
 		return err
 	}
-	err = requireNightlyClaimsInPR(ctx, runner, opts.RepoRoot, opts.DODPR)
+	err = requireNightlyClaimsInPR(ctx, runner, gh, opts.RepoRoot, opts.DODPR)
 	if err != nil {
 		return err
 	}
@@ -246,18 +262,18 @@ func runDODPreMerge(ctx context.Context, runner commandRunner, opts *VerifyOptio
 	if err != nil {
 		return err
 	}
-	applySummary, err := applyManifestReviewThreads(ctx, runner, opts, stdout)
+	applySummary, err := applyManifestReviewThreads(ctx, runner, gh, opts, stdout)
 	if err != nil {
 		return err
 	}
-	gateSummary, err := requireNoUnresolvedPRThreads(ctx, runner, opts.RepoRoot, opts.DODPR, dodRecentMerged(opts))
+	gateSummary, err := requireNoUnresolvedPRThreads(ctx, gh, opts.RepoRoot, opts.DODPR, dodRecentMerged(opts))
 	if err != nil {
 		return err
 	}
 	return writeStatus(stdout, formatDODPreMergeSummary(applySummary, gateSummary))
 }
 
-func runDODPostMerge(ctx context.Context, runner commandRunner, opts *VerifyOptions, stdout, stderr io.Writer) error {
+func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opts *VerifyOptions, stdout, stderr io.Writer) error {
 	if opts.DODPR == 0 {
 		return fmt.Errorf("dod post-merge: --pr is required")
 	}
@@ -269,12 +285,12 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, opts *VerifyOpti
 	}
 	// The wait's policy is read before the merge, so a missing workflow fails
 	// the stage while nothing has happened yet.
-	ciWait, err := newCIWaitConfig(opts, opts.RepoRoot, stdout)
+	ciWait, err := newCIWaitConfig(opts, opts.RepoRoot, ciEventPush, stdout)
 	if err != nil {
 		return err
 	}
 
-	prState, err := mergePR(ctx, runner, opts.RepoRoot, opts.DODPR)
+	prState, err := mergePR(ctx, runner, gh, opts.RepoRoot, opts.DODPR)
 	if err != nil {
 		return err
 	}
@@ -431,10 +447,10 @@ func nonEmptyStrings(values []string) []string {
 	return kept
 }
 
-func loadGitHubRepo(ctx context.Context, runner commandRunner, repoRoot string) (githubRepo, error) {
-	out, err := runner.Output(ctx, repoRoot, os.Environ(), githubCLI, "repo", "view", "--json", "nameWithOwner")
+func loadGitHubRepo(ctx context.Context, gh ghClient, repoRoot string) (githubRepo, error) {
+	out, err := gh.output(ctx, repoRoot, "dod github repo view", "repo", "view", "--json", "nameWithOwner")
 	if err != nil {
-		return githubRepo{}, fmt.Errorf("dod github repo view: %w", err)
+		return githubRepo{}, err
 	}
 	var response struct {
 		NameWithOwner string
@@ -494,19 +510,19 @@ query($owner:String!, $repo:String!, $number:Int!, $after:String) {
 
 func fetchRecentMergedReviewThreads(
 	ctx context.Context,
-	runner commandRunner,
+	gh ghClient,
 	repoRoot string,
 	repo githubRepo,
 	recent int,
 ) ([]DODReviewThread, error) {
-	prNumbers, err := fetchRecentMergedPullRequestNumbers(ctx, runner, repoRoot, repo, recent)
+	prNumbers, err := fetchRecentMergedPullRequestNumbers(ctx, gh, repoRoot, repo, recent)
 	if err != nil {
 		return nil, err
 	}
 
 	threads := []DODReviewThread{}
 	for _, prNumber := range prNumbers {
-		prThreads, err := fetchPullRequestReviewThreads(ctx, runner, repoRoot, repo, prNumber)
+		prThreads, err := fetchPullRequestReviewThreads(ctx, gh, repoRoot, repo, prNumber)
 		if err != nil {
 			return nil, err
 		}
@@ -517,16 +533,15 @@ func fetchRecentMergedReviewThreads(
 
 func fetchRecentMergedPullRequestNumbers(
 	ctx context.Context,
-	runner commandRunner,
+	gh ghClient,
 	repoRoot string,
 	repo githubRepo,
 	recent int,
 ) ([]int, error) {
-	out, err := runner.Output(
+	out, err := gh.output(
 		ctx,
 		repoRoot,
-		os.Environ(),
-		githubCLI,
+		"dod fetch recent merged PRs",
 		"api",
 		"graphql",
 		"-f",
@@ -539,7 +554,7 @@ func fetchRecentMergedPullRequestNumbers(
 		"recent="+strconv.Itoa(recent),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("dod fetch recent merged PRs: %w", err)
+		return nil, err
 	}
 
 	var response mergedPRListResponse
@@ -557,12 +572,12 @@ func fetchRecentMergedPullRequestNumbers(
 
 func fetchPullRequestReviewThreads(
 	ctx context.Context,
-	runner commandRunner,
+	gh ghClient,
 	repoRoot string,
 	repo githubRepo,
 	prNumber int,
 ) ([]DODReviewThread, error) {
-	pr, err := fetchPullRequestReviewThreadPages(ctx, runner, repoRoot, repo, prNumber)
+	pr, err := fetchPullRequestReviewThreadPages(ctx, gh, repoRoot, repo, prNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -571,7 +586,7 @@ func fetchPullRequestReviewThreads(
 
 func fetchPullRequestReviewThreadPages(
 	ctx context.Context,
-	runner commandRunner,
+	gh ghClient,
 	repoRoot string,
 	repo githubRepo,
 	prNumber int,
@@ -579,7 +594,7 @@ func fetchPullRequestReviewThreadPages(
 	var merged graphqlPullRequest
 	cursor := ""
 	for {
-		page, err := fetchPullRequestReviewThreadPage(ctx, runner, repoRoot, repo, prNumber, cursor)
+		page, err := fetchPullRequestReviewThreadPage(ctx, gh, repoRoot, repo, prNumber, cursor)
 		if err != nil {
 			return graphqlPullRequest{}, err
 		}
@@ -602,7 +617,7 @@ func fetchPullRequestReviewThreadPages(
 
 func fetchPullRequestReviewThreadPage(
 	ctx context.Context,
-	runner commandRunner,
+	gh ghClient,
 	repoRoot string,
 	repo githubRepo,
 	prNumber int,
@@ -623,15 +638,9 @@ func fetchPullRequestReviewThreadPage(
 	if cursor != "" {
 		args = append(args, "-f", "after="+cursor)
 	}
-	out, err := runner.Output(
-		ctx,
-		repoRoot,
-		os.Environ(),
-		githubCLI,
-		args...,
-	)
+	out, err := gh.output(ctx, repoRoot, fmt.Sprintf("dod fetch PR #%d review threads", prNumber), args...)
 	if err != nil {
-		return graphqlPullRequest{}, fmt.Errorf("dod fetch PR review threads: %w", err)
+		return graphqlPullRequest{}, err
 	}
 
 	var response singlePRThreadsResponse
@@ -750,12 +759,11 @@ func verifyBranchRebased(ctx context.Context, runner commandRunner, repoRoot str
 	return nil
 }
 
-func loadPullRequestState(ctx context.Context, runner commandRunner, repoRoot string, prNumber int) (pullRequestState, error) {
-	out, err := runner.Output(
+func loadPullRequestState(ctx context.Context, gh ghClient, repoRoot string, prNumber int) (pullRequestState, error) {
+	out, err := gh.output(
 		ctx,
 		repoRoot,
-		os.Environ(),
-		githubCLI,
+		fmt.Sprintf("dod gh pr view %d", prNumber),
 		"pr",
 		"view",
 		strconv.Itoa(prNumber),
@@ -763,7 +771,7 @@ func loadPullRequestState(ctx context.Context, runner commandRunner, repoRoot st
 		"state,mergedAt,mergeCommit,statusCheckRollup,url",
 	)
 	if err != nil {
-		return pullRequestState{}, fmt.Errorf("dod gh pr view %d: %w", prNumber, err)
+		return pullRequestState{}, err
 	}
 	var state pullRequestState
 	if err := json.Unmarshal(out, &state); err != nil {
@@ -775,14 +783,15 @@ func loadPullRequestState(ctx context.Context, runner commandRunner, repoRoot st
 func applyManifestReviewThreads(
 	ctx context.Context,
 	runner commandRunner,
+	gh ghClient,
 	opts *VerifyOptions,
 	stdout io.Writer,
 ) (dodReviewThreadApplySummary, error) {
-	repo, err := loadGitHubRepo(ctx, runner, opts.RepoRoot)
+	repo, err := loadGitHubRepo(ctx, gh, opts.RepoRoot)
 	if err != nil {
 		return dodReviewThreadApplySummary{}, err
 	}
-	currentPRThreads, err := fetchPullRequestReviewThreads(ctx, runner, opts.RepoRoot, repo, opts.DODPR)
+	currentPRThreads, err := fetchPullRequestReviewThreads(ctx, gh, opts.RepoRoot, repo, opts.DODPR)
 	if err != nil {
 		return dodReviewThreadApplySummary{}, err
 	}
@@ -807,7 +816,7 @@ func applyManifestReviewThreads(
 	if err != nil {
 		return dodReviewThreadApplySummary{}, err
 	}
-	summary, changed, replyErr := replyToManifestThreads(ctx, runner, opts.RepoRoot, manifest.Threads, opts.DODPR, commit, stdout)
+	summary, changed, replyErr := replyToManifestThreads(ctx, gh, opts.RepoRoot, manifest.Threads, opts.DODPR, commit, stdout)
 	if changed {
 		// Record what is now resolved even when a later reply failed, so a
 		// rerun never answers the same thread twice.
@@ -830,7 +839,7 @@ func applyManifestReviewThreads(
 // reports whether any is_resolved flag moved so the caller can persist it.
 func replyToManifestThreads(
 	ctx context.Context,
-	runner commandRunner,
+	gh ghClient,
 	repoRoot string,
 	threads []DODReviewThread,
 	prNumber int,
@@ -845,7 +854,7 @@ func replyToManifestThreads(
 			summary.AlreadyResolved++
 			continue
 		}
-		resolved, err := reviewThreadIsResolved(ctx, runner, repoRoot, thread.ThreadID)
+		resolved, err := reviewThreadIsResolved(ctx, gh, repoRoot, thread.ThreadID)
 		if err != nil {
 			return summary, changed, err
 		}
@@ -856,10 +865,10 @@ func replyToManifestThreads(
 			continue
 		}
 		body := renderDODThreadReply(thread, prNumber, commit)
-		if _, err := postReviewThreadReply(ctx, runner, repoRoot, thread.ThreadID, body); err != nil {
+		if _, err := postReviewThreadReply(ctx, gh, repoRoot, thread.ThreadID, body); err != nil {
 			return summary, changed, err
 		}
-		if err := resolveReviewThread(ctx, runner, repoRoot, thread.ThreadID); err != nil {
+		if err := resolveReviewThread(ctx, gh, repoRoot, thread.ThreadID); err != nil {
 			return summary, changed, err
 		}
 		thread.IsResolved = true
@@ -873,11 +882,10 @@ func replyToManifestThreads(
 }
 
 // reviewThreadIsResolved reads one review thread's live resolution state.
-func reviewThreadIsResolved(ctx context.Context, runner commandRunner, repoRoot string, threadID string) (bool, error) {
-	name, args := buildThreadResolvedQueryArgs(threadID)
-	out, err := runner.Output(ctx, repoRoot, os.Environ(), name, args...)
+func reviewThreadIsResolved(ctx context.Context, gh ghClient, repoRoot string, threadID string) (bool, error) {
+	out, err := gh.output(ctx, repoRoot, "dod read review thread "+threadID, buildThreadResolvedQueryArgs(threadID)...)
 	if err != nil {
-		return false, fmt.Errorf("dod read review thread %s: %w", threadID, err)
+		return false, err
 	}
 	// Untagged like the other gh response structs: encoding/json matches
 	// GitHub's camelCase keys case-insensitively.
@@ -967,11 +975,12 @@ func renderDODFixedThreadReply(body *bytes.Buffer, thread *DODReviewThread, fixP
 	}
 }
 
-func postReviewThreadReply(ctx context.Context, runner commandRunner, repoRoot string, threadID string, body string) (string, error) {
-	name, args := buildAddThreadReplyArgs(threadID, body)
-	out, err := runner.Output(ctx, repoRoot, os.Environ(), name, args...)
+// postReviewThreadReply posts one reply, once: GitHub can answer a 5xx after
+// it posted, and a repeat would post the reply twice.
+func postReviewThreadReply(ctx context.Context, gh ghClient, repoRoot string, threadID string, body string) (string, error) {
+	out, err := gh.outputOnce(ctx, repoRoot, "dod reply to review thread "+threadID, buildAddThreadReplyArgs(threadID, body)...)
 	if err != nil {
-		return "", fmt.Errorf("dod reply to review thread %s: %w", threadID, err)
+		return "", err
 	}
 	var response struct {
 		Data struct {
@@ -988,16 +997,17 @@ func postReviewThreadReply(ctx context.Context, runner commandRunner, repoRoot s
 	return response.Data.AddPullRequestReviewThreadReply.Comment.URL, nil
 }
 
-func resolveReviewThread(ctx context.Context, runner commandRunner, repoRoot string, threadID string) error {
-	name, args := buildResolveThreadArgs(threadID)
-	if _, err := runner.Output(ctx, repoRoot, os.Environ(), name, args...); err != nil {
-		return fmt.Errorf("dod resolve review thread %s: %w", threadID, err)
+// resolveReviewThread resolves one thread. Resolving a resolved thread
+// changes nothing, so a failed attempt is repeated.
+func resolveReviewThread(ctx context.Context, gh ghClient, repoRoot string, threadID string) error {
+	if _, err := gh.output(ctx, repoRoot, "dod resolve review thread "+threadID, buildResolveThreadArgs(threadID)...); err != nil {
+		return err
 	}
 	return nil
 }
 
-func buildAddThreadReplyArgs(threadID string, body string) (string, []string) {
-	return githubCLI, []string{
+func buildAddThreadReplyArgs(threadID string, body string) []string {
+	return []string{
 		"api",
 		"graphql",
 		"-f",
@@ -1009,8 +1019,8 @@ func buildAddThreadReplyArgs(threadID string, body string) (string, []string) {
 	}
 }
 
-func buildThreadResolvedQueryArgs(threadID string) (string, []string) {
-	return githubCLI, []string{
+func buildThreadResolvedQueryArgs(threadID string) []string {
+	return []string{
 		"api",
 		"graphql",
 		"-f",
@@ -1020,8 +1030,8 @@ func buildThreadResolvedQueryArgs(threadID string) (string, []string) {
 	}
 }
 
-func buildResolveThreadArgs(threadID string) (string, []string) {
-	return githubCLI, []string{
+func buildResolveThreadArgs(threadID string) []string {
+	return []string{
 		"api",
 		"graphql",
 		"-f",
@@ -1033,16 +1043,16 @@ func buildResolveThreadArgs(threadID string) (string, []string) {
 
 func requireNoUnresolvedPRThreads(
 	ctx context.Context,
-	runner commandRunner,
+	gh ghClient,
 	repoRoot string,
 	prNumber int,
 	recentMerged int,
 ) (dodReviewThreadGateSummary, error) {
-	repo, err := loadGitHubRepo(ctx, runner, repoRoot)
+	repo, err := loadGitHubRepo(ctx, gh, repoRoot)
 	if err != nil {
 		return dodReviewThreadGateSummary{}, err
 	}
-	threads, err := fetchPullRequestReviewThreads(ctx, runner, repoRoot, repo, prNumber)
+	threads, err := fetchPullRequestReviewThreads(ctx, gh, repoRoot, repo, prNumber)
 	if err != nil {
 		return dodReviewThreadGateSummary{}, err
 	}
@@ -1055,7 +1065,7 @@ func requireNoUnresolvedPRThreads(
 			strings.Join(unresolved, ", "),
 		)
 	}
-	recent, err := fetchRecentMergedReviewThreads(ctx, runner, repoRoot, repo, recentMerged)
+	recent, err := fetchRecentMergedReviewThreads(ctx, gh, repoRoot, repo, recentMerged)
 	if err != nil {
 		return dodReviewThreadGateSummary{}, err
 	}
@@ -1080,7 +1090,9 @@ func unresolvedThreadIDs(threads []DODReviewThread) []string {
 	return unresolved
 }
 
-func mergePR(ctx context.Context, runner commandRunner, repoRoot string, prNumber int) (pullRequestState, error) {
+// mergePR merges the pull request once. A failed merge is not repeated: the
+// server's merge state, read next, decides whether it happened.
+func mergePR(ctx context.Context, runner commandRunner, gh ghClient, repoRoot string, prNumber int) (pullRequestState, error) {
 	output, err := runner.CombinedOutput(
 		ctx,
 		repoRoot,
@@ -1093,9 +1105,9 @@ func mergePR(ctx context.Context, runner commandRunner, repoRoot string, prNumbe
 		"--delete-branch",
 	)
 	if err == nil {
-		return requirePRMerged(ctx, runner, repoRoot, prNumber)
+		return requirePRMerged(ctx, gh, repoRoot, prNumber)
 	}
-	state, stateErr := requirePRMerged(ctx, runner, repoRoot, prNumber)
+	state, stateErr := requirePRMerged(ctx, gh, repoRoot, prNumber)
 	if stateErr == nil {
 		return state, nil
 	}
@@ -1125,8 +1137,8 @@ func isAlreadyMergedPRMergeOutput(output string, err error) bool {
 	return strings.Contains(text, "already merged")
 }
 
-func requirePRMerged(ctx context.Context, runner commandRunner, repoRoot string, prNumber int) (pullRequestState, error) {
-	state, err := loadPullRequestState(ctx, runner, repoRoot, prNumber)
+func requirePRMerged(ctx context.Context, gh ghClient, repoRoot string, prNumber int) (pullRequestState, error) {
+	state, err := loadPullRequestState(ctx, gh, repoRoot, prNumber)
 	if err != nil {
 		return pullRequestState{}, err
 	}

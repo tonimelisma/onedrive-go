@@ -120,7 +120,7 @@ func TestDODFetchPullRequestReviewThreadsPaginates(t *testing.T) {
 
 	threads, err := fetchPullRequestReviewThreads(
 		context.Background(),
-		runner,
+		newGHClient(runner, nil),
 		testCleanupRepoRoot,
 		githubRepo{Owner: "tonimelisma", Name: "onedrive-go"},
 		683,
@@ -220,8 +220,6 @@ func TestDODThreadReplyTemplateIncludesNonActionableReason(t *testing.T) {
 func TestDODReviewThreadMutationCommands(t *testing.T) {
 	t.Parallel()
 
-	name, args := buildAddThreadReplyArgs("thread-1", "body text")
-	assert.Equal(t, githubCLI, name)
 	assert.Equal(t, []string{
 		"api",
 		"graphql",
@@ -231,10 +229,8 @@ func TestDODReviewThreadMutationCommands(t *testing.T) {
 		"threadId=thread-1",
 		"-F",
 		"body=body text",
-	}, args)
+	}, buildAddThreadReplyArgs("thread-1", "body text"))
 
-	name, args = buildResolveThreadArgs("thread-1")
-	assert.Equal(t, githubCLI, name)
 	assert.Equal(t, []string{
 		"api",
 		"graphql",
@@ -242,7 +238,7 @@ func TestDODReviewThreadMutationCommands(t *testing.T) {
 		"query=mutation($threadId:ID!){resolveReviewThread(input:{threadId:$threadId}){thread{id isResolved}}}",
 		"-F",
 		"threadId=thread-1",
-	}, args)
+	}, buildResolveThreadArgs("thread-1"))
 }
 
 // Regression: a manifest left in the root checkout still said a May thread
@@ -280,7 +276,7 @@ func TestReplyToManifestThreads_SkipsThreadsAlreadyResolvedOnGitHub(t *testing.T
 	}
 
 	var stdout bytes.Buffer
-	summary, changed, err := replyToManifestThreads(t.Context(), runner, "/repo", threads, 790, "abc123", &stdout)
+	summary, changed, err := replyToManifestThreads(t.Context(), newGHClient(runner, nil), "/repo", threads, 790, "abc123", &stdout)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"reply:thread-open", "resolve:thread-open"}, mutations,
@@ -294,7 +290,7 @@ func TestReplyToManifestThreads_SkipsThreadsAlreadyResolvedOnGitHub(t *testing.T
 
 	// A second run with the updated manifest touches nothing.
 	mutations = nil
-	_, changed, err = replyToManifestThreads(t.Context(), runner, "/repo", threads, 791, "def456", &stdout)
+	_, changed, err = replyToManifestThreads(t.Context(), newGHClient(runner, nil), "/repo", threads, 791, "def456", &stdout)
 	require.NoError(t, err)
 	assert.Empty(t, mutations)
 	assert.False(t, changed)
@@ -474,7 +470,7 @@ func requireMergedPRAfterMergeError(t *testing.T, mergeOutput string) {
 		},
 	}
 
-	state, err := mergePR(context.Background(), runner, testCleanupRepoRoot, 682)
+	state, err := mergePR(context.Background(), runner, newGHClient(runner, nil), testCleanupRepoRoot, 682)
 	require.NoError(t, err)
 	assert.Equal(t, "MERGED", state.State)
 	assert.Equal(t, "merge-sha", state.MergeCommit.OID)
@@ -496,7 +492,7 @@ func TestDODMergeWrapperFailsWhenServerSideMergeDidNotComplete(t *testing.T) {
 		},
 	}
 
-	_, err := mergePR(context.Background(), runner, testCleanupRepoRoot, 682)
+	_, err := mergePR(context.Background(), runner, newGHClient(runner, nil), testCleanupRepoRoot, 682)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "server state is not merged")
 }

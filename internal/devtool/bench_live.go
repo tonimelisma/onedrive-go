@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
 const (
@@ -549,23 +551,15 @@ func (s *benchLiveScenarioState) newSampleRuntime() (benchLiveCommandRuntime, er
 	)
 }
 
+// validateBenchAllowlist refuses a live benchmark drive the test-account
+// allowlist does not name, through the one allowlist reader the live suites
+// use.
 func validateBenchAllowlist(driveID string) error {
-	allowlist := strings.TrimSpace(os.Getenv("ONEDRIVE_ALLOWED_TEST_ACCOUNTS"))
-	if allowlist == "" {
-		return fmt.Errorf("live benchmark requires ONEDRIVE_ALLOWED_TEST_ACCOUNTS to include %q", driveID)
+	if err := testutil.CheckDriveAllowed(benchPrimaryDriveEnvVar, driveID); err != nil {
+		return fmt.Errorf("live benchmark: %w", err)
 	}
 
-	for _, entry := range strings.Split(allowlist, ",") {
-		if strings.TrimSpace(entry) == driveID {
-			return nil
-		}
-	}
-
-	return fmt.Errorf(
-		"live benchmark drive %q is not in ONEDRIVE_ALLOWED_TEST_ACCOUNTS=%q",
-		driveID,
-		allowlist,
-	)
+	return nil
 }
 
 func locateBenchCredentialDir(repoRoot string) (string, error) {

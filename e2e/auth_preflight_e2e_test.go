@@ -31,8 +31,10 @@ func TestE2E_AuthPreflight_Fast(t *testing.T) {
 	registerLogDump(t)
 	requireVerifierOwnedPreflightEnv(t, e2eRunAuthPreflightEnvVar)
 
+	// Each subtest is named by its drive's role: a test name reaches the CI
+	// log, the debug log's file name and the quirk summary.
 	for _, driveID := range liveConfig.CandidateDriveIDs() {
-		t.Run(sanitizeTestName(driveID), func(t *testing.T) {
+		t.Run(suiteDriveRoles.Role(driveID), func(t *testing.T) {
 			assertLiveAuthPreflight(t, driveID)
 		})
 	}
@@ -43,20 +45,21 @@ func assertLiveAuthPreflight(t *testing.T, driveID string) {
 
 	tokenPath := filepath.Join(testDataDir, testutil.TokenFileName(driveID))
 	ts, err := graph.TokenSourceFromPath(t.Context(), tokenPath, graphtransport.AuthClient(), slog.New(slog.DiscardHandler))
-	require.NoError(t, err, "load token source for %s", driveID)
+	require.NoError(t, err, "load token source for %s", suiteDriveRoles.Role(driveID))
 
 	httpClient := &http.Client{}
 
 	started := time.Now()
 	meAttempts, err := waitForAuthPreflightEndpoint(t.Context(), httpClient, ts, "/me")
 	recordAuthPreflightDecisionEvent(t, driveID, "/me", meAttempts, err)
-	require.NoErrorf(t, err, "%s", formatAuthPreflightFailure(driveID, "/me", time.Since(started), meAttempts))
+	require.NoErrorf(t, err, "%s", formatAuthPreflightFailure(suiteDriveRoles.Role(driveID), "/me", time.Since(started), meAttempts))
 
 	started = time.Now()
 	drivesAttempts, err := waitForAuthPreflightEndpoint(t.Context(), httpClient, ts, "/me/drives")
 	recordAuthPreflightDecisionEvent(t, driveID, "/me/drives", drivesAttempts, err)
 	skipOnProviderReadOnly(t, driveID, "/me/drives", drivesAttempts)
-	require.NoErrorf(t, err, "%s", formatAuthPreflightFailure(driveID, "/me/drives", time.Since(started), drivesAttempts))
+	require.NoErrorf(t, err, "%s", formatAuthPreflightFailure(
+		suiteDriveRoles.Role(driveID), "/me/drives", time.Since(started), drivesAttempts))
 }
 
 // skipOnProviderReadOnly stops the live lane when Microsoft reports a backend
@@ -79,7 +82,7 @@ func skipOnProviderReadOnly(t *testing.T, driveID string, path string, attempts 
 			"provider read-only window: %s returned %s for %s (request-id %s). "+
 				"Authentication and the drive itself are unaffected; this is a Microsoft-side "+
 				"read-only state that no client retry clears. See LI-20260823-01.",
-			path, attempts[i].Code, driveID, attempts[i].RequestID,
+			path, attempts[i].Code, suiteDriveRoles.Role(driveID), attempts[i].RequestID,
 		)
 	}
 }

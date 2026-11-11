@@ -105,14 +105,25 @@ func newGHScript(outputs map[string][]string) *ghScript {
 func (s *ghScript) output(_ string, _ []string, name string, args ...string) ([]byte, error) {
 	key := name + " " + strings.Join(args, " ")
 	steps := s.outputs[key]
+	if len(steps) == 0 && strings.HasPrefix(key, ghRerunPrefix) {
+		// GitHub accepts every rerun request; the test reads which were sent.
+		return nil, nil
+	}
 	if len(steps) == 0 {
 		return nil, fmt.Errorf("unscripted command %q", key)
 	}
 	index := min(s.calls[key], len(steps)-1)
 	s.calls[key]++
+	if stderr, failed := strings.CutPrefix(steps[index], ghScriptFailure); failed {
+		return nil, ghFailure(stderr)
+	}
 
 	return []byte(steps[index]), nil
 }
+
+// ghScriptFailure starts a scripted answer that is a failure of the command,
+// with the rest as gh's stderr.
+const ghScriptFailure = "FAIL: "
 
 func scriptedRunner(outputs map[string][]string) (*fakeRunner, *ghScript) {
 	script := newGHScript(outputs)
@@ -120,9 +131,26 @@ func scriptedRunner(outputs map[string][]string) (*fakeRunner, *ghScript) {
 	return &fakeRunner{outputFunc: script.output}, script
 }
 
-func recordedRunKeys(runner *fakeRunner) []string {
-	keys := make([]string, 0, len(runner.runCommands))
-	for _, command := range runner.runCommands {
+// ghRerunPrefix starts every rerun request the wait sends.
+const ghRerunPrefix = "gh run rerun "
+
+// recordedReruns lists the rerun requests the wait sent, in order.
+func recordedReruns(runner *fakeRunner) []recordedCommand {
+	reruns := []recordedCommand{}
+	for _, command := range runner.outputCommands {
+		if strings.HasPrefix(command.name+" "+strings.Join(command.args, " "), ghRerunPrefix) {
+			reruns = append(reruns, command)
+		}
+	}
+
+	return reruns
+}
+
+// recordedRerunKeys lists the command lines of the rerun requests the wait
+// sent.
+func recordedRerunKeys(runner *fakeRunner) []string {
+	keys := []string{}
+	for _, command := range recordedReruns(runner) {
 		keys = append(keys, command.name+" "+strings.Join(command.args, " "))
 	}
 
@@ -339,7 +367,7 @@ func TestWaitForPRCI_ProgressExtendsTheWait(t *testing.T) {
 
 	assert.Equal(t, 4*ciWaitTestPoll, clock.elapsed(), "the wait outlived one stall window because a check changed state")
 	assert.Greater(t, clock.elapsed(), ciWaitTestStall)
-	assert.Empty(t, runner.runCommands, "nothing was canceled, so nothing is rerun")
+	assert.Empty(t, recordedReruns(runner), "nothing was canceled, so nothing is rerun")
 }
 
 // Validates: R-6.10.16
@@ -422,12 +450,33 @@ func TestWaitForPRCI_CancelledShardIsRerunOnceAndTheWaitThenSucceeds(t *testing.
 	err := waitForPRCI(context.Background(), runner, testCleanupRepoRoot, ciWaitPR, testCIWaitConfig(clock, stdout))
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{ciWaitRerunCommand}, recordedRunKeys(runner))
-	assert.Equal(t, testCleanupRepoRoot, runner.runCommands[0].cwd)
+	assert.Equal(t, []string{ciWaitRerunCommand}, recordedRerunKeys(runner))
+	assert.Equal(t, testCleanupRepoRoot, recordedReruns(runner)[0].cwd)
 	assert.Equal(t, 1, script.calls[ciWaitPRHeadCommand], "the head commit is looked up only when a rerun is considered")
 	assert.Contains(t, stdout.String(), ciWaitShard)
 	assert.Contains(t, stdout.String(), "rerun 1 of 2")
 	assert.Equal(t, 3*ciWaitTestPoll, clock.elapsed())
+}
+
+// Validates: R-6.10.16
+//
+// A 5xx from GitHub says nothing about the pull request, and one used to end
+// the whole pre-merge stage. The poll is repeated after a backoff, which the
+// wait's own clock waits out.
+func TestWaitForPRCI_RepeatsAPollGitHubFailed(t *testing.T) {
+	t.Parallel()
+
+	passed := prViewJSON(t, checkPassed("verify"), checkPassed("integration"), checkPassed("e2e"))
+	runner, script := scriptedRunner(map[string][]string{
+		ciWaitPRViewCommand: {ghScriptFailure + "HTTP 502: Bad Gateway (https://api.github.com/graphql)", passed},
+	})
+	clock := newFakeCIClock()
+
+	err := waitForPRCI(context.Background(), runner, testCleanupRepoRoot, ciWaitPR, testCIWaitConfig(clock, io.Discard))
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, script.calls[ciWaitPRViewCommand])
+	assert.Equal(t, githubFirstBackoff, clock.elapsed())
 }
 
 // Validates: R-6.10.16
@@ -454,7 +503,7 @@ func TestWaitForPRCI_ThirdCancellationFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "dod pre-merge PR CI failed")
 	assert.Contains(t, err.Error(), ciWaitShard+" canceled")
 	assert.Contains(t, err.Error(), "reruns used: 2 of 2 (--ci-max-reruns)")
-	assert.Equal(t, []string{ciWaitRerunCommand, ciWaitRerunCommand}, recordedRunKeys(runner))
+	assert.Equal(t, []string{ciWaitRerunCommand, ciWaitRerunCommand}, recordedRerunKeys(runner))
 	assert.Equal(t, 2*ciWaitTestPoll, clock.elapsed())
 }
 
@@ -475,7 +524,7 @@ func TestWaitForPRCI_NoRerunsAllowedFailsOnTheFirstCancellation(t *testing.T) {
 	require.Error(t, err)
 
 	assert.Contains(t, err.Error(), "reruns used: 0 of 0 (--ci-max-reruns)")
-	assert.Empty(t, runner.runCommands)
+	assert.Empty(t, recordedReruns(runner))
 }
 
 // Validates: R-6.10.16
@@ -502,7 +551,7 @@ func TestWaitForPRCI_CancelledRunOfAnOlderCommitIsNotRerun(t *testing.T) {
 	err := waitForPRCI(context.Background(), runner, testCleanupRepoRoot, ciWaitPR, testCIWaitConfig(clock, io.Discard))
 	require.NoError(t, err)
 
-	assert.Empty(t, runner.runCommands, "a run of an older commit is never rerun")
+	assert.Empty(t, recordedReruns(runner), "a run of an older commit is never rerun")
 	assert.Equal(t, 1, script.calls[ciWaitRunViewCommand])
 	assert.Equal(t, ciWaitTestPoll, clock.elapsed())
 }
@@ -526,7 +575,7 @@ func TestWaitForPRCI_SupersededRunStillStalls(t *testing.T) {
 
 	assert.Contains(t, err.Error(), "stalled")
 	assert.Contains(t, err.Error(), "still pending: verify")
-	assert.Empty(t, runner.runCommands)
+	assert.Empty(t, recordedReruns(runner))
 }
 
 // Validates: R-6.10.16
@@ -556,7 +605,7 @@ func TestWaitForPRCI_RealJobFailureIsNotRerun(t *testing.T) {
 
 	assert.Contains(t, err.Error(), "dod pre-merge PR CI failed")
 	assert.Contains(t, err.Error(), failedShard)
-	assert.Empty(t, runner.runCommands)
+	assert.Empty(t, recordedReruns(runner))
 	assert.Zero(t, script.calls[ciWaitPRHeadCommand])
 	assert.Zero(t, clock.elapsed(), "a real failure ends the wait on the poll that sees it")
 }
@@ -589,7 +638,7 @@ func TestWaitForPRCI_CancelledRequiredCheckIsRerun(t *testing.T) {
 	err := waitForPRCI(context.Background(), runner, testCleanupRepoRoot, ciWaitPR, testCIWaitConfig(clock, io.Discard))
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{ciWaitRerunCommand}, recordedRunKeys(runner))
+	assert.Equal(t, []string{ciWaitRerunCommand}, recordedRerunKeys(runner))
 	assert.Equal(t, ciWaitTestPoll, clock.elapsed())
 }
 
@@ -618,7 +667,7 @@ func TestWaitForPRCI_FailureWithoutACancelledJobIsNotRerun(t *testing.T) {
 
 	assert.Contains(t, err.Error(), "dod pre-merge PR CI failed: verify concluded failure")
 	assert.Contains(t, err.Error(), "no failed or canceled job")
-	assert.Empty(t, runner.runCommands)
+	assert.Empty(t, recordedReruns(runner))
 	assert.Zero(t, script.calls[ciWaitPRHeadCommand])
 }
 
@@ -686,7 +735,7 @@ func TestWaitForPRCI_WaitsForTheRunToFinishBeforeRerunning(t *testing.T) {
 	err := waitForPRCI(context.Background(), runner, testCleanupRepoRoot, ciWaitPR, testCIWaitConfig(clock, io.Discard))
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{ciWaitRerunCommand}, recordedRunKeys(runner))
+	assert.Equal(t, []string{ciWaitRerunCommand}, recordedRerunKeys(runner))
 	assert.Equal(t, 2*ciWaitTestPoll, clock.elapsed())
 }
 
@@ -753,7 +802,7 @@ func TestWaitForPostMergePushCI_CancelledPushRunIsRerunOnce(t *testing.T) {
 	err := waitForPostMergePushCI(context.Background(), runner, testCleanupRepoRoot, ciWaitMergeSHA, testCIWaitConfig(clock, stdout))
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{ciWaitPushRerunCommand}, recordedRunKeys(runner))
+	assert.Equal(t, []string{ciWaitPushRerunCommand}, recordedRerunKeys(runner))
 	assert.Equal(t, 1, script.calls[ciWaitPushRunViewCommand])
 	assert.Contains(t, stdout.String(), "dod post-merge CI")
 	assert.Contains(t, stdout.String(), "rerun 1 of 2")
@@ -775,7 +824,7 @@ func TestWaitForPostMergePushCI_SkippedRunFailsWithoutLookingForCancelledJobs(t 
 
 	assert.Contains(t, err.Error(), "dod post-merge CI is not clean")
 	assert.Contains(t, err.Error(), "every push to main must run the quick lane")
-	assert.Empty(t, runner.runCommands)
+	assert.Empty(t, recordedReruns(runner))
 }
 
 // Validates: R-6.10.16
@@ -926,24 +975,24 @@ const stallWorkflowFixture = `jobs:
 func TestCIStallWindow_IsTheLongestJobTimeoutPlusAMargin(t *testing.T) {
 	t.Parallel()
 
-	window, err := ciStallWindow(writeWorkflowFixture(t, stallWorkflowFixture))
+	cfg, err := newCIWaitConfig(&VerifyOptions{}, writeWorkflowFixture(t, stallWorkflowFixture), ciEventPullRequest, io.Discard)
 	require.NoError(t, err)
-	assert.Equal(t, 100*time.Minute, window)
+	assert.Equal(t, 100*time.Minute, cfg.stallWindow)
 
-	window, err = ciStallWindow(repoRootForTest(t))
+	cfg, err = newCIWaitConfig(&VerifyOptions{}, repoRootForTest(t), ciEventPullRequest, io.Discard)
 	require.NoError(t, err)
-	assert.Greater(t, window, ciStallMargin)
+	assert.Greater(t, cfg.stallWindow, ciStallMargin)
 }
 
 // Validates: R-6.10.16
 func TestCIStallWindow_FailsWithoutAWorkflowTimeout(t *testing.T) {
 	t.Parallel()
 
-	_, err := ciStallWindow(t.TempDir())
+	_, err := newCIWaitConfig(&VerifyOptions{}, t.TempDir(), ciEventPush, io.Discard)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), ciWorkflowPath)
 
-	_, err = ciStallWindow(writeWorkflowFixture(t, "jobs:\n  verify:\n    steps: []\n"))
+	_, err = newCIWaitConfig(&VerifyOptions{}, writeWorkflowFixture(t, "jobs:\n  verify:\n    steps: []\n"), ciEventPush, io.Discard)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "timeout-minutes")
 }
@@ -954,7 +1003,7 @@ func TestNewCIWaitConfig(t *testing.T) {
 
 	root := writeWorkflowFixture(t, stallWorkflowFixture)
 
-	cfg, err := newCIWaitConfig(&VerifyOptions{DODCIMaxReruns: DefaultDODCIMaxReruns}, root, io.Discard)
+	cfg, err := newCIWaitConfig(&VerifyOptions{DODCIMaxReruns: DefaultDODCIMaxReruns}, root, ciEventPullRequest, io.Discard)
 	require.NoError(t, err)
 	assert.Equal(t, 100*time.Minute, cfg.stallWindow)
 	assert.Equal(t, 300*time.Minute, cfg.hardCap, "one stall window for the first attempt and one per rerun")
@@ -963,16 +1012,16 @@ func TestNewCIWaitConfig(t *testing.T) {
 	require.NotNil(t, cfg.now)
 	require.NotNil(t, cfg.sleep)
 
-	cfg, err = newCIWaitConfig(&VerifyOptions{DODCITimeout: 45 * time.Minute}, root, io.Discard)
+	cfg, err = newCIWaitConfig(&VerifyOptions{DODCITimeout: 45 * time.Minute}, root, ciEventPullRequest, io.Discard)
 	require.NoError(t, err)
 	assert.Equal(t, 45*time.Minute, cfg.hardCap, "--ci-timeout is the hard cap when given")
 	assert.Zero(t, cfg.maxReruns)
 
-	cfg, err = newCIWaitConfig(&VerifyOptions{}, root, io.Discard)
+	cfg, err = newCIWaitConfig(&VerifyOptions{}, root, ciEventPush, io.Discard)
 	require.NoError(t, err)
 	assert.Equal(t, 100*time.Minute, cfg.hardCap)
 
-	_, err = newCIWaitConfig(&VerifyOptions{DODCIMaxReruns: -1}, root, io.Discard)
+	_, err = newCIWaitConfig(&VerifyOptions{DODCIMaxReruns: -1}, root, ciEventPush, io.Discard)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--ci-max-reruns")
 }
@@ -986,4 +1035,127 @@ func TestSleepContext(t *testing.T) {
 	require.ErrorIs(t, sleepContext(ctx, time.Hour), context.Canceled)
 
 	require.NoError(t, sleepContext(context.Background(), time.Nanosecond))
+}
+
+// Validates: R-6.10.16
+//
+// GitHub can start a rerun and still answer the request with a 502. The
+// repeat is refused because the run is already running, which means the
+// first request worked: the wait re-reads the run, finds it going, and waits
+// for it instead of failing on the refusal or asking a third time.
+func TestWaitForPRCI_RerunGitHubStartedDespiteA5xxIsWaitedFor(t *testing.T) {
+	t.Parallel()
+
+	rerunStarted := prViewJSON(t,
+		checkCancelled(ciWaitShard),
+		checkRunning(ciWaitShard).startedLater(),
+		verifyCheckFailed(),
+		checkPassed("integration"),
+		checkPassed("e2e"),
+	)
+	rerunPassed := prViewJSON(t,
+		checkCancelled(ciWaitShard),
+		checkPassed(ciWaitShard).startedLater(),
+		verifyCheckFailed(),
+		checkPassed("verify").startedLater(),
+		checkPassed("integration"),
+		checkPassed("e2e"),
+	)
+	running := runViewJSON(t, runFixture{
+		id: ciWaitRunID, headSHA: ciWaitHeadSHA, status: runInProgress, updatedAt: "2026-11-11T10:41:00Z",
+		jobs: []jobFixture{{name: ciWaitShard, status: runInProgress}},
+	})
+	runner, script := scriptedRunner(map[string][]string{
+		ciWaitPRViewCommand:  {canceledShardRollup(t), rerunStarted, rerunPassed},
+		ciWaitPRHeadCommand:  {prHeadJSON()},
+		ciWaitRunViewCommand: {canceledShardRun(t, ciWaitHeadSHA, "2026-11-11T10:20:00Z"), running},
+		ciWaitRerunCommand: {
+			ghScriptFailure + "HTTP 502: Bad Gateway (https://api.github.com/repos/o/r/actions/runs/111/rerun-failed-jobs)",
+			ghScriptFailure + "HTTP 403: This workflow is already running (https://api.github.com/repos/o/r/actions/runs/111/rerun-failed-jobs)",
+		},
+	})
+	clock := newFakeCIClock()
+	stdout := &bytes.Buffer{}
+
+	err := waitForPRCI(context.Background(), runner, testCleanupRepoRoot, ciWaitPR, testCIWaitConfig(clock, stdout))
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, script.calls[ciWaitRerunCommand], "the refused repeat is not followed by a third request")
+	assert.Equal(t, 3, script.calls[ciWaitRunViewCommand], "examined, read again after the refusal, examined on the next poll")
+	assert.Contains(t, stdout.String(), "rerun 1 of 2")
+}
+
+// Validates: R-6.10.16
+//
+// A rerun refusal after a 5xx counts only when the run is in fact running
+// again. A run that still reads finished was not started by this wait.
+func TestWaitForPRCI_RefusedRerunOfAFinishedRunFails(t *testing.T) {
+	t.Parallel()
+
+	finished := canceledShardRun(t, ciWaitHeadSHA, "2026-11-11T10:20:00Z")
+	runner, _ := scriptedRunner(map[string][]string{
+		ciWaitPRViewCommand:  {canceledShardRollup(t)},
+		ciWaitPRHeadCommand:  {prHeadJSON()},
+		ciWaitRunViewCommand: {finished},
+		ciWaitRerunCommand: {
+			ghScriptFailure + "HTTP 502: Bad Gateway (https://api.github.com/repos/o/r/actions/runs/111/rerun-failed-jobs)",
+			ghScriptFailure + "HTTP 403: This workflow is already running (https://api.github.com/repos/o/r/actions/runs/111/rerun-failed-jobs)",
+		},
+	})
+
+	err := waitForPRCI(context.Background(), runner, testCleanupRepoRoot, ciWaitPR, testCIWaitConfig(newFakeCIClock(), io.Discard))
+	require.ErrorContains(t, err, "already running")
+	assert.Contains(t, err.Error(), "reads completed")
+}
+
+// ciWaitQueuedWindow is the window of a check whose job waits in a
+// concurrency group: one whole run of the group's longest job, plus the
+// margin.
+const ciWaitQueuedWindow = 190 * time.Minute
+
+// queuedCheckWaitConfig is a pull request wait whose e2e job sits in a
+// concurrency group, polled every minute.
+func queuedCheckWaitConfig(clock *fakeCIClock) ciWaitConfig {
+	cfg := testCIWaitConfig(clock, io.Discard)
+	cfg.stallWindow = 50 * time.Minute
+	cfg.notStartedWindows = map[string]time.Duration{prCheckE2E: ciWaitQueuedWindow}
+	cfg.pollInterval = time.Minute
+
+	return cfg
+}
+
+// Validates: R-6.10.16
+//
+// A pull request's e2e job that waits in its concurrency group behind a
+// nightly run changes no state for as long as that run takes. It is not
+// stalled after the pull request's own window; the wait gives up only after
+// the group's longest run.
+func TestWaitForPRCI_CheckQueuedInItsGroupWaitsOneRunOfTheGroup(t *testing.T) {
+	t.Parallel()
+
+	runner, _ := scriptedRunner(map[string][]string{
+		ciWaitPRViewCommand: {prViewJSON(t, checkPassed("verify"), checkPassed("integration"), checkQueued("e2e"))},
+	})
+	clock := newFakeCIClock()
+
+	err := waitForPRCI(context.Background(), runner, testCleanupRepoRoot, ciWaitPR, queuedCheckWaitConfig(clock))
+	require.ErrorContains(t, err, "stalled")
+	assert.Contains(t, err.Error(), "e2e")
+	assert.Equal(t, ciWaitQueuedWindow, clock.elapsed(), "not stalled at 56 minutes: the check had not started")
+}
+
+// Validates: R-6.10.16
+//
+// Once the queued job runs, its own event's window applies again.
+func TestWaitForPRCI_RunningCheckStallsAtTheEventsWindow(t *testing.T) {
+	t.Parallel()
+
+	runner, _ := scriptedRunner(map[string][]string{
+		ciWaitPRViewCommand: {prViewJSON(t, checkPassed("verify"), checkPassed("integration"), checkRunning("e2e"))},
+	})
+	clock := newFakeCIClock()
+
+	err := waitForPRCI(context.Background(), runner, testCleanupRepoRoot, ciWaitPR, queuedCheckWaitConfig(clock))
+	require.ErrorContains(t, err, "stalled")
+	assert.Equal(t, 50*time.Minute, clock.elapsed())
 }

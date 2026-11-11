@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,9 +28,11 @@ const classifiedQuirkCount = 3
 //
 // When a job's timeout-minutes ends a run before go test's own deadline does,
 // the log has no goroutine dump naming the hung test and devtool never writes
-// its summary. So every go test deadline a job's profile can start, in the
-// worst case, plus the job's setup, must fit inside the job's timeout. The
-// e2e-full run here takes every classified rerun the profile knows.
+// its summary. So every go test deadline a job's profile can start for an
+// event, in the worst case, plus the job's setup, must fit inside the job's
+// timeout for that event. The e2e job runs the fast tier on a pull request
+// and e2e-full, every classified rerun taken, on the schedule; its timeout is
+// one value for each.
 func TestCIJobTimeoutsCoverEveryGoTestDeadline(t *testing.T) {
 	t.Parallel()
 
@@ -40,18 +41,38 @@ func TestCIJobTimeoutsCoverEveryGoTestDeadline(t *testing.T) {
 
 	cases := []struct {
 		job       string
+		event     string
 		deadlines time.Duration
 	}{
-		{job: "verify-unit", deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyQuick, false)},
-		{job: "verify-full", deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyPublic, false)},
-		{job: "stress", deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyStress, false)},
-		{job: "e2e", deadlines: profileGoTestDeadlines(t, worstCaseE2EFullRunner(), VerifyE2EFull, true)},
+		{job: "verify-unit", event: ciEventPullRequest, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyQuick, false)},
+		{job: "verify-full", event: ciEventSchedule, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyPublic, false)},
+		{job: "stress", event: ciEventSchedule, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyStress, false)},
+		{job: "integration", event: ciEventPullRequest, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyIntegration, false)},
+		{job: "e2e", event: ciEventPullRequest, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyE2E, false)},
+		{job: "e2e", event: ciEventSchedule, deadlines: profileGoTestDeadlines(t, worstCaseE2EFullRunner(), VerifyE2EFull, true)},
 	}
 	for _, tc := range cases {
-		timeout := ciJobTimeout(t, string(workflow), tc.job)
+		timeout := ciJobTimeout(t, string(workflow), tc.job, tc.event)
 		assert.LessOrEqualf(t, tc.deadlines+ciJobSetupAllowance, timeout,
-			"job %s: go test deadlines %s plus %s of setup exceed its timeout-minutes %s",
-			tc.job, tc.deadlines, ciJobSetupAllowance, timeout)
+			"job %s on %s: go test deadlines %s plus %s of setup exceed its timeout-minutes %s",
+			tc.job, tc.event, tc.deadlines, ciJobSetupAllowance, timeout)
+	}
+}
+
+// Validates: R-6.10.16, R-6.10.26
+//
+// The live jobs' pull request timeouts are what their profiles need and no
+// more: they set the pull request's stall window, which a looser number
+// would stretch for every wait.
+func TestCILiveJobsPullRequestTimeoutsAreTheirNeed(t *testing.T) {
+	t.Parallel()
+
+	workflow, err := os.ReadFile(filepath.Join(repoRootFromDevtoolPackage(t), ciWorkflowPath))
+	require.NoError(t, err)
+
+	for job, profile := range map[string]VerifyProfile{"e2e": VerifyE2E, "integration": VerifyIntegration} {
+		need := profileGoTestDeadlines(t, &fakeRunner{}, profile, false) + ciJobSetupAllowance
+		assert.Equal(t, need.Round(time.Minute), ciJobTimeout(t, string(workflow), job, ciEventPullRequest), "job %s", job)
 	}
 }
 
@@ -154,40 +175,22 @@ func goTestDeadline(t *testing.T, args []string) time.Duration {
 	return 0
 }
 
-// ciJobTimeout reads one job's timeout-minutes from the workflow. A job is a
-// key indented by exactly two spaces under `jobs:`.
-func ciJobTimeout(t *testing.T, workflow string, job string) time.Duration {
+// ciJobTimeout reads one job's timeout-minutes for an event through the
+// reader the DoD stall window uses.
+func ciJobTimeout(t *testing.T, workflow string, job string, event string) time.Duration {
 	t.Helper()
 
-	inJobs := false
-	inJob := false
-	for _, line := range strings.Split(workflow, "\n") {
-		if line == "jobs:" {
-			inJobs = true
+	for _, candidate := range ciWorkflowJobs(workflow) {
+		if candidate.name != job {
 			continue
 		}
-		if !inJobs {
-			continue
-		}
-		if key, ok := strings.CutPrefix(line, "  "); ok && key != "" && key[0] != ' ' && key[0] != '#' {
-			inJob = strings.TrimSpace(key) == job+":"
-			continue
-		}
-		if !inJob {
-			continue
-		}
-
-		m := workflowTimeoutPattern.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		minutes, err := strconv.Atoi(m[1])
+		timeout, err := candidate.timeoutOn(event)
 		require.NoError(t, err)
 
-		return time.Duration(minutes) * time.Minute
+		return timeout
 	}
 
-	require.Failf(t, "job has no timeout-minutes", "job %s in %s", job, ciWorkflowPath)
+	require.Failf(t, "job not found", "job %s in %s", job, ciWorkflowPath)
 
 	return 0
 }

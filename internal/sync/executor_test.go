@@ -947,7 +947,7 @@ func TestExecutor_Download_MountRootAllowsGraphDriveRootPath(t *testing.T) {
 				ID:              "item1",
 				DriveID:         driveID,
 				Name:            "shortcut-sentinel.txt",
-				ParentPath:      "Kikkeli Shared Test Folder",
+				ParentPath:      "Writable Shared Folder",
 				ParentPathKnown: true,
 				Size:            int64(len(execHelloWorldContent)),
 			}, nil
