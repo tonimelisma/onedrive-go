@@ -188,7 +188,8 @@ func (tm *TransferManager) loadCreateRecordForOverwrite(
 
 // openSessionForUpload opens the session a fresh attempt uploads through and,
 // for a create, records the created item through onCreated before any
-// content is sent.
+// content is sent. A session request that failed after the create made its
+// item records that item too (recordItemOfFailedSession).
 func (tm *TransferManager) openSessionForUpload(ctx context.Context, up *persistedUpload, driveStr string) (*graph.UploadSession, error) {
 	create := up.create
 	if up.createdItem != nil && up.createForCreated != nil {
@@ -207,6 +208,7 @@ func (tm *TransferManager) openSessionForUpload(ctx context.Context, up *persist
 
 	session, err := create()
 	if err != nil {
+		tm.recordItemOfFailedSession(up, err)
 		return nil, fmt.Errorf("creating upload session for %s: %w", up.localPath, err)
 	}
 	if session.CreatedETag == "" || session.ItemID == "" {
@@ -224,6 +226,33 @@ func (tm *TransferManager) openSessionForUpload(ctx context.Context, up *persist
 	}
 
 	return session, nil
+}
+
+// recordItemOfFailedSession runs onCreated for the item a create made before
+// its session request failed: graph.CreateUploadSession is one call for both
+// steps and names that item in a *graph.CreatedItemError. Graph has already
+// tried to remove the empty item, but only best effort (its bounded read-back
+// and conditional delete can fail or give up), and an empty file nobody
+// recorded reads on the next pass as someone else's (R-5.6.15). Before this,
+// the hook ran only once a session was open, and sync cleared the intent of
+// an attempt whose hook never ran. The item is not adopted as up.createdItem:
+// it may be gone, and a retry by its ID would then meet 404 instead of
+// creating the file again. A hook failure is Debug; the session's error is
+// what the caller sees.
+func (tm *TransferManager) recordItemOfFailedSession(up *persistedUpload, err error) {
+	var createdErr *graph.CreatedItemError
+	if up.onCreated == nil || up.createdItem != nil || !errors.As(err, &createdErr) ||
+		createdErr.Item == nil || createdErr.Item.ID == "" {
+		return
+	}
+
+	if hookErr := up.onCreated(createdErr.Item.ID, createdErr.Item.ETag); hookErr != nil {
+		tm.logger.Debug("couldn't record the file a failed upload session created",
+			slog.String("path", up.localPath),
+			slog.String("item_id", createdErr.Item.ID),
+			slog.Any("error", hookErr),
+		)
+	}
 }
 
 func (tm *TransferManager) persistedSessionUploadOnce(ctx context.Context, up *persistedUpload) (*graph.Item, error) {

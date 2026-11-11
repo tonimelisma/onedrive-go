@@ -293,8 +293,9 @@ snapshot cannot make the two disagree.
 
 Every baseline row is written through one helper, `upsertBaselineRowTx`, whose
 `baselineRowArgs` is the single mapping from a `BaselineEntry` to the columns of
-`sqlUpsertBaseline`. Outcome commits, local refreshes and placeholder adoption
-all pass an entry rather than positional values, so adding a baseline column
+`sqlUpsertBaseline`. Outcome commits, local refreshes, placeholder adoption and
+the following of an adopted placeholder (pending creates, below) all pass an
+entry rather than positional values, so adding a baseline column
 changes the statement and that one mapping
 (`TestSQLUpsertBaseline_WritesEveryBaselineColumn`,
 `TestUpsertBaselineRowTx_RoundTripsEveryColumn`).
@@ -401,7 +402,8 @@ item two seconds after the kill, so no hook recorded it): an empty file
 observed at the intended path within `pendingCreateIntentTTL` (72 h) is
 claimed as the placeholder, `claimIntendedPlaceholderTx`, and adopted like a
 recorded one; content at the path or an expired intent drops the intent, and
-an attempt that created nothing clears it
+an attempt that created nothing clears it unless it was canceled (its create
+may still land, so the intent is kept and expires)
 (`TestCommitObservation_IntentClaimsTheEmptyFileACrashLeftUnrecorded`,
 `TestCommitObservation_IntentDoesNotClaimContentOrOutliveItsTTL`,
 `TestPendingCreateIntent_ClearedWhenNothingWasCreatedAndKeepsAKnownItem`,
@@ -420,8 +422,21 @@ and its emptiness identify the placeholder, not the creation eTag: opening
 and canceling an upload session on the empty item moves its eTag without
 content (live, e2e `TestE2E_SyncWatch_FileModification`), and matching on it
 dropped the record, so every retry of the create got 409 and upload-only
-mode never delivered the file. Adopted rows
-are put into the in-memory baseline after the commit. A baseline row at the
+mode never delivered the file. For the same reason an already adopted
+placeholder that is still empty at its path is observed with
+`followAdoptedPlaceholderTx`: its baseline row takes the observed eTag and
+modification time and keeps its "synced empty content" facts. Where neither
+side has a hash (zero-byte files on Business) those two are all the remote
+comparison has, and a moved eTag with the local file changed read as an
+edit on both sides, a conflict copy of the user's file plus a download of
+the empty one
+(`TestCommitObservation_AdoptedHashlessPlaceholderWithMovedETagIsNotAConflict`).
+An observation whose size Graph did not report (R-2.4.16) is not followed:
+the item may hold content, and the upload into it is conditional on the
+row's eTag
+(`TestCommitObservation_AdoptedPlaceholderOfUnknownSizeIsNotFollowed`).
+Adopted and followed rows are put into the in-memory baseline after the
+commit. A baseline row at the
 placeholder's path whose item OneDrive no longer holds there (deleted, or
 moved away, often in the same window: a folder replaced by a file, a file
 renamed online while edited here) does not block adoption: the create could

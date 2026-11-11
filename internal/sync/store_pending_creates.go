@@ -27,6 +27,9 @@ import (
 //     local side is the empty content, so the planner sees "the local file
 //     changed" and uploads by ID with If-Match, or, when the local file is
 //     gone, deletes the placeholder with If-Match;
+//   - still empty and already adopted: the row follows the item's eTag and
+//     modification time, which move without content, so a drive that gives
+//     empty files no hash never reads them as a remote edit;
 //   - still empty after the upload committed (a delta page captured
 //     mid-upload): stale, and not recorded as a remote change;
 //   - anything else (content, a delete): no longer a placeholder, and the
@@ -49,8 +52,9 @@ import (
 // request, and an empty file observed at that path within
 // pendingCreateIntentTTL of the intent is the placeholder, whose ID is then
 // recorded. The intent is cleared when the attempt ends without having
-// created anything, and expires so a stale one cannot claim a stranger's
-// empty file long after.
+// created anything, unless the attempt was canceled (its create may still
+// land), and expires so a stale one cannot claim a stranger's empty file long
+// after.
 
 // pendingCreateIntentTTL is how long an intent without an item ID can claim
 // an empty file observed at its path.
@@ -123,8 +127,9 @@ func (s *SyncStore) ClearPendingCreate(ctx context.Context, itemID string) error
 
 // ClearPendingCreateIntent drops an intent at path that never became an
 // item: the attempt ended, by success or failure, without the create hook
-// firing, so nothing on OneDrive is ours to recognize there. A row that
-// already names an item is kept.
+// firing (it fires for a failure that names a created item too) and without
+// being canceled, so nothing on OneDrive is ours to recognize there. A row
+// that already names an item is kept.
 func (s *SyncStore) ClearPendingCreateIntent(ctx context.Context, path string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? AND item_id = ''`, path); err != nil {
 		return fmt.Errorf("sync: clearing pending create intent at %s: %w", path, err)
@@ -213,6 +218,7 @@ type placeholderDecision int
 const (
 	placeholderNotPending placeholderDecision = iota // no record: observe normally
 	placeholderAdopt                                 // our untouched placeholder, not yet synced
+	placeholderAdopted                               // our placeholder, adopted and still empty
 	placeholderStale                                 // our placeholder state, after the upload committed
 	placeholderResolved                              // no longer a placeholder: drop the record
 )
@@ -249,8 +255,74 @@ func classifyObservedPlaceholderTx(
 		return &pending, placeholderStale, nil
 	default:
 		// Already adopted: the baseline holds the placeholder itself.
-		return &pending, placeholderNotPending, nil
+		return &pending, placeholderAdopted, nil
 	}
+}
+
+// followAdoptedPlaceholderTx keeps the baseline row of an adopted placeholder
+// in step with the item while it stays empty at its path. Its eTag moves
+// without content (an upload session opened and canceled on the empty item
+// does that, live, e2e TestE2E_SyncWatch_FileModification), and its
+// modification time may move with it. Where neither side carries a hash (a
+// zero-byte file on Business), the comparison reads those as a remote edit,
+// and with the local file changed that was an edit-edit conflict: the user's
+// file renamed to a conflict copy and the empty file downloaded in its place.
+// Only the row's eTag and remote modification time follow; its content facts
+// stay "synced empty content", so the planner still uploads into the item by
+// ID. The updated row is appended to adopted for the in-memory baseline.
+//
+// An observation whose size Graph did not report (R-2.4.16) is not followed:
+// the item may hold content by now, and a row that took its eTag would let
+// the next upload by ID overwrite it.
+func followAdoptedPlaceholderTx(
+	ctx context.Context, tx sqlTxRunner, item *observedItem, pending *PendingCreate, adopted *[]*BaselineEntry,
+) error {
+	if item.Path != pending.Path || item.SizeUnknown {
+		// Moved or renamed meanwhile, or not known to be empty: observed like
+		// any item.
+		return nil
+	}
+
+	entry, found, err := baselineEntryByItemIDTx(ctx, tx, item.ItemID, item.DriveID)
+	if err != nil || !found {
+		return err
+	}
+	if entry.Path != item.Path || !entry.RemoteSizeKnown || entry.RemoteSize != 0 ||
+		(entry.ETag == item.ETag && entry.RemoteMtime == item.Mtime) {
+		return nil
+	}
+
+	entry.ETag, entry.RemoteMtime = item.ETag, item.Mtime
+	if upsertErr := upsertBaselineRowTx(ctx, tx, entry); upsertErr != nil {
+		return fmt.Errorf("sync: following placeholder %s at %s: %w", item.ItemID, item.Path, upsertErr)
+	}
+	*adopted = append(*adopted, entry)
+
+	return nil
+}
+
+// baselineEntryByItemIDTx reads the baseline row of itemID; found is false
+// when it has none.
+func baselineEntryByItemIDTx(
+	ctx context.Context, tx sqlTxRunner, itemID string, driveID driveid.ID,
+) (entry *BaselineEntry, found bool, err error) {
+	rows, err := tx.QueryContext(ctx, sqlLoadBaseline+` WHERE item_id = ?`, itemID)
+	if err != nil {
+		return nil, false, fmt.Errorf("sync: reading baseline of %s: %w", itemID, err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+
+	for rows.Next() {
+		entry, err = scanBaselineRow(rows, driveID)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	if iterErr := rows.Err(); iterErr != nil {
+		return nil, false, fmt.Errorf("sync: reading baseline of %s: %w", itemID, iterErr)
+	}
+
+	return entry, entry != nil, nil
 }
 
 // adoptPlaceholderTx records our placeholder as synced empty content, so the
