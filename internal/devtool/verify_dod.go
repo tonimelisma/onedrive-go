@@ -16,7 +16,6 @@ import (
 
 const (
 	DefaultDODRecentMerged = 20
-	DefaultDODCITimeout    = 30 * time.Minute
 
 	defaultDODCommentManifest = ".dod-pr-comments.json"
 	dodManifestVersion        = 1
@@ -92,11 +91,15 @@ const (
 	prCheckStateFail    prCheckState = "fail"
 )
 
+// prCheckRun is one entry of a pull request's statusCheckRollup. A rerun adds
+// an entry beside the old one: StartedAt and WorkflowName tell them apart.
 type prCheckRun struct {
-	Name       string
-	Status     string
-	Conclusion string
-	DetailsURL string
+	Name         string
+	Status       string
+	Conclusion   string
+	DetailsURL   string
+	StartedAt    string
+	WorkflowName string
 }
 
 type pullRequestState struct {
@@ -112,11 +115,13 @@ type mergeCommit struct {
 }
 
 type githubRun struct {
+	DatabaseID int64
 	Name       string
 	Event      string
 	Status     string
 	Conclusion string
 	HeadSHA    string
+	UpdatedAt  string
 	URL        string
 }
 
@@ -198,9 +203,17 @@ func runDODStartNightly(ctx context.Context, runner commandRunner, opts *VerifyO
 	return checkNightly(ctx, runner, opts.RepoRoot, owner, time.Now, stdout)
 }
 
+// runDODPrePR is the last local gate before a pull request. With no profile
+// named it runs `pr`, what the required PR check runs on Linux: the full race
+// tier does not fit its deadline on a small host, and the nightly run owns the
+// race, coverage and exhaustive failures that reach main (R-6.10.22). Naming
+// `default` keeps the full tier as this stage's gate.
 func runDODPrePR(ctx context.Context, runner commandRunner, opts *VerifyOptions, stdout io.Writer) error {
 	profileOpts := *opts
 	profileOpts.DOD = false
+	if profileOpts.Profile == "" {
+		profileOpts.Profile = VerifyPR
+	}
 	if err := runVerifyProfile(ctx, runner, &profileOpts); err != nil {
 		return err
 	}
@@ -221,10 +234,16 @@ func runDODPreMerge(ctx context.Context, runner commandRunner, opts *VerifyOptio
 	if opts.DODPR == 0 {
 		return fmt.Errorf("dod pre-merge: --pr is required")
 	}
-	if err := requireNightlyClaimsInPR(ctx, runner, opts.RepoRoot, opts.DODPR); err != nil {
+	ciWait, err := newCIWaitConfig(opts, opts.RepoRoot, stdout)
+	if err != nil {
 		return err
 	}
-	if err := waitForPRCI(ctx, runner, opts.RepoRoot, opts.DODPR, dodCITimeout(opts)); err != nil {
+	err = requireNightlyClaimsInPR(ctx, runner, opts.RepoRoot, opts.DODPR)
+	if err != nil {
+		return err
+	}
+	err = waitForPRCI(ctx, runner, opts.RepoRoot, opts.DODPR, ciWait)
+	if err != nil {
 		return err
 	}
 	applySummary, err := applyManifestReviewThreads(ctx, runner, opts, stdout)
@@ -248,6 +267,12 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, opts *VerifyOpti
 	if opts.DODBranch == "" {
 		return fmt.Errorf("dod post-merge: --branch is required")
 	}
+	// The wait's policy is read before the merge, so a missing workflow fails
+	// the stage while nothing has happened yet.
+	ciWait, err := newCIWaitConfig(opts, opts.RepoRoot, stdout)
+	if err != nil {
+		return err
+	}
 
 	prState, err := mergePR(ctx, runner, opts.RepoRoot, opts.DODPR)
 	if err != nil {
@@ -263,13 +288,7 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, opts *VerifyOpti
 	if err := cleanupMergedIncrement(ctx, runner, mainRoot, opts.DODWorktree, opts.DODBranch, stderr); err != nil {
 		return err
 	}
-	if err := waitForPostMergePushCI(
-		ctx,
-		runner,
-		mainRoot,
-		prState.MergeCommit.OID,
-		dodCITimeout(opts),
-	); err != nil {
+	if err := waitForPostMergePushCI(ctx, runner, mainRoot, prState.MergeCommit.OID, ciWait); err != nil {
 		return err
 	}
 	if err := RunCleanupAudit(ctx, runner, CleanupAuditOptions{
@@ -287,13 +306,6 @@ func dodRecentMerged(opts *VerifyOptions) int {
 		return opts.DODRecentMerged
 	}
 	return DefaultDODRecentMerged
-}
-
-func dodCITimeout(opts *VerifyOptions) time.Duration {
-	if opts.DODCITimeout > 0 {
-		return opts.DODCITimeout
-	}
-	return DefaultDODCITimeout
 }
 
 func dodManifestPath(opts *VerifyOptions) string {
@@ -736,74 +748,6 @@ func verifyBranchRebased(ctx context.Context, runner commandRunner, repoRoot str
 		return fmt.Errorf("dod pre-pr branch is not rebased on %s: %w", originMainRef, err)
 	}
 	return nil
-}
-
-func waitForPRCI(ctx context.Context, runner commandRunner, repoRoot string, prNumber int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		state, err := loadPullRequestState(ctx, runner, repoRoot, prNumber)
-		if err != nil {
-			return err
-		}
-		status, reason := classifyPRChecks(state.StatusCheckRollup)
-		switch status {
-		case prCheckStatePass:
-			return nil
-		case prCheckStateFail:
-			return fmt.Errorf("dod pre-merge PR CI failed: %s", reason)
-		case prCheckStatePending:
-			if time.Now().After(deadline) {
-				return fmt.Errorf("dod pre-merge PR CI timed out after %s: %s", timeout, reason)
-			}
-			timer := time.NewTimer(prCIPollInterval)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return fmt.Errorf("dod pre-merge PR CI wait: %w", ctx.Err())
-			case <-timer.C:
-			}
-		}
-	}
-}
-
-func classifyPRChecks(checks []prCheckRun) (prCheckState, string) {
-	required := map[string]bool{
-		"verify":      false,
-		"integration": false,
-		"e2e":         false,
-	}
-	for i := range checks {
-		check := checks[i]
-		name := strings.ToLower(check.Name)
-		status := strings.ToLower(check.Status)
-		conclusion := strings.ToLower(check.Conclusion)
-		if _, ok := required[name]; ok {
-			if status != checkStatusCompleted {
-				return prCheckStatePending, check.Name + " is " + status
-			}
-			if conclusion != checkConclusionSuccess {
-				return prCheckStateFail, check.Name + " concluded " + conclusion
-			}
-			required[name] = true
-			continue
-		}
-		if name == "stress" &&
-			status == checkStatusCompleted &&
-			conclusion != checkConclusionSuccess &&
-			conclusion != checkConclusionSkipped {
-			return prCheckStateFail, check.Name + " concluded " + conclusion
-		}
-	}
-	missing := []string{}
-	for name, seen := range required {
-		if !seen {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) > 0 {
-		return prCheckStatePending, "missing required checks: " + strings.Join(missing, ", ")
-	}
-	return prCheckStatePass, "required PR checks passed"
 }
 
 func loadPullRequestState(ctx context.Context, runner commandRunner, repoRoot string, prNumber int) (pullRequestState, error) {
@@ -1254,8 +1198,11 @@ func removeDODWorktree(
 	} else if err != nil {
 		return fmt.Errorf("dod cleanup stat worktree: %w", err)
 	}
-	if err := os.Remove(filepath.Join(worktreePath, ".testdata")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("dod cleanup remove worktree .testdata: %w", err)
+	// git refuses a worktree that holds untracked files, and the bootstrap
+	// symlink is one. Only what bootstrap put there goes; anything else is left
+	// for git to refuse, so a worktree holding real work is never forced away.
+	if err := removeBootstrapEntries(defaultWorktreeFS(), mainRoot, worktreePath); err != nil {
+		return fmt.Errorf("dod cleanup remove bootstrap entries: %w", err)
 	}
 	if err := runDODCleanupGit(ctx, runner, mainRoot, stderr, "worktree", "remove", worktreePath); err != nil {
 		return fmt.Errorf("dod cleanup remove worktree: %w", err)
@@ -1316,99 +1263,4 @@ func isMissingRemoteBranchText(output string, err error) bool {
 	text := strings.ToLower(output + " " + err.Error())
 	return strings.Contains(text, "remote ref does not exist") ||
 		strings.Contains(text, "remote ref not found")
-}
-
-func waitForPostMergePushCI(
-	ctx context.Context,
-	runner commandRunner,
-	mainRoot string,
-	mergeCommit string,
-	timeout time.Duration,
-) error {
-	if mergeCommit == "" {
-		return fmt.Errorf("dod post-merge: missing merge commit")
-	}
-	deadline := time.Now().Add(timeout)
-	for {
-		runs, err := loadMainRunsForCommit(ctx, runner, mainRoot, mergeCommit)
-		if err != nil {
-			return err
-		}
-		status, reason := classifyPostMergeRuns(runs, mergeCommit)
-		switch status {
-		case prCheckStatePass:
-			return nil
-		case prCheckStateFail:
-			return fmt.Errorf("dod post-merge CI is not clean: %s", reason)
-		case prCheckStatePending:
-			if time.Now().After(deadline) {
-				return fmt.Errorf("dod post-merge CI timed out after %s: %s", timeout, reason)
-			}
-			timer := time.NewTimer(prCIPollInterval)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return fmt.Errorf("dod post-merge CI wait: %w", ctx.Err())
-			case <-timer.C:
-			}
-		}
-	}
-}
-
-func loadMainRunsForCommit(ctx context.Context, runner commandRunner, repoRoot string, commit string) ([]githubRun, error) {
-	out, err := runner.Output(
-		ctx,
-		repoRoot,
-		os.Environ(),
-		githubCLI,
-		"run",
-		"list",
-		"--branch",
-		mainBranchName,
-		"--commit",
-		commit,
-		"--json",
-		"databaseId,name,event,status,conclusion,headSha,createdAt,updatedAt,url",
-		"--limit",
-		postMergeRunListLimit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("dod post-merge run list: %w", err)
-	}
-	var runs []githubRun
-	if err := json.Unmarshal(out, &runs); err != nil {
-		return nil, fmt.Errorf("decode post-merge run list: %w", err)
-	}
-	return runs, nil
-}
-
-// classifyPostMergeRuns reads the CI run of the merge commit on main. Every
-// push to main runs the quick lane (branch protection no longer requires a PR
-// branch to be up to date, so a stale-branch merge can break main and the
-// push run is what catches it), so a skipped run is a failure, not the old
-// squash-merge skip rule.
-func classifyPostMergeRuns(runs []githubRun, commit string) (prCheckState, string) {
-	if len(runs) == 0 {
-		return prCheckStatePending, "no main push CI run found for " + commit
-	}
-	for i := range runs {
-		run := runs[i]
-		if run.HeadSHA != commit {
-			continue
-		}
-		status := strings.ToLower(run.Status)
-		conclusion := strings.ToLower(run.Conclusion)
-		if status != checkStatusCompleted {
-			return prCheckStatePending, run.Name + " is " + status
-		}
-		switch conclusion {
-		case checkConclusionSuccess:
-			return prCheckStatePass, run.Name + " succeeded"
-		case checkConclusionSkipped:
-			return prCheckStateFail, run.Name + " skipped; every push to main must run the quick lane"
-		default:
-			return prCheckStateFail, run.Name + " concluded " + conclusion
-		}
-	}
-	return prCheckStatePending, "no run matched merge commit " + commit
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,6 +61,7 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 		Profile:           VerifyDefault,
 		CoverageThreshold: 76.0,
 		CoverageFile:      filepath.Join(repoRoot, "cover.out"),
+		UnitTimeout:       25 * time.Minute,
 		Stdout:            stdout,
 		Stderr:            stderr,
 	})
@@ -79,8 +81,9 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 		assertCommandHasEnvVar(t, command, "GOOS="+goos)
 	}
 
+	// --unit-timeout reaches go test as given, whatever the host's core count.
 	assert.Equal(t,
-		[]string{"test", "-race", "-timeout=" + unitTestTimeout, "-coverprofile=" + filepath.Join(repoRoot, "cover.out"), "./..."},
+		[]string{"test", "-race", "-timeout=25m0s", "-coverprofile=" + filepath.Join(repoRoot, "cover.out"), "./..."},
 		runner.runCommands[cmdUnitTests].args,
 	)
 	assert.Equal(t, "test", runner.runCommands[cmdE2EFullCompile].args[0])
@@ -116,6 +119,41 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	assertCommandLacksEnvVar(t, runner.runCommands[cmdE2ESuite], e2eRunFastFixturePreflightEnvVar+"=1")
 	require.Len(t, runner.outputCommands, 1)
 	assert.Contains(t, stdout.String(), "==> coverage")
+}
+
+// Validates: R-6.10.22
+//
+// The 20-minute deadline of the full race tier was set on the 3-core macOS CI
+// runner. On fewer cores the same tests take proportionally longer, and a
+// deadline that fires on a healthy run makes the tier unusable there. On as
+// many cores or more it stays, so neither CI runner's deadline moves past its
+// job timeout.
+func TestUnitTestTimeoutForCoresScalesBelowTheReference(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		cores int
+		want  time.Duration
+	}{
+		{cores: 0, want: 60 * time.Minute},
+		{cores: 1, want: 60 * time.Minute},
+		{cores: 2, want: 40 * time.Minute},
+		{cores: 3, want: 20 * time.Minute},
+		{cores: 4, want: 20 * time.Minute},
+		{cores: 8, want: 20 * time.Minute},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, unitTestTimeoutForCores(tc.cores), "cores %d", tc.cores)
+	}
+}
+
+// Validates: R-6.10.22
+func TestResolveUnitTestTimeoutPrefersTheExplicitValue(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 90*time.Minute, resolveUnitTestTimeout(90*time.Minute, 2))
+	assert.Equal(t, 40*time.Minute, resolveUnitTestTimeout(0, 2))
+	assert.Equal(t, 20*time.Minute, resolveUnitTestTimeout(0, 8))
 }
 
 func TestRunE2EFullCompileCheck_UsesUniqueArtifactPath(t *testing.T) {

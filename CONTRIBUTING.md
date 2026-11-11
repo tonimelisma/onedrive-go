@@ -58,18 +58,20 @@ model runs, replays, the reverse-dispatch re-run of every scenario, the
 reconcile matrix); the race detector and the coverage gate do not run there.
 The full tier (`verify public` on both platforms, `stress` and the full live
 suite) runs nightly and on manual dispatch, so a data race or a coverage
-drop can reach `main` and be caught by the next nightly run; run
-`verify default` locally before a PR, since it still runs everything. For a
-fast local check: `go run ./cmd/devtool verify quick` and
-`go run ./cmd/devtool verify lint`.
+drop can reach `main` and be caught by the next nightly run. Before a PR,
+`go run ./cmd/devtool verify pr` (lint, then quick) is the local gate, and it
+is what the `pre-pr` stage below runs; `verify default` still runs
+everything, on a host that can finish it (its race-tier deadline grows on
+hosts with fewer than 3 cores, and `--unit-timeout` overrides it). devtool
+runs every command with the Go toolchain `go.mod` pins, so a newer system Go
+does not change what is built or linted.
 
 ## How a change is made
 
-Work is done in PR-backed increments from isolated worktrees. Fetch first,
-then start from current `origin/main`:
+Work is done in PR-backed increments from isolated worktrees, each started
+from current `origin/main` (the command fetches it first):
 
 ```bash
-git fetch origin
 go run ./cmd/devtool worktree add --path <path> --branch <type>/<task-name>
 ```
 
@@ -104,15 +106,19 @@ pass. `fixed` and `already_fixed` require `what_changed`, `how_fixed`, and
 evidence entries; `non_actionable` requires a reason. There is no passing
 deferred state.
 
-`pre-pr` runs the local verification profile, checks the branch is based on
-latest `origin/main`, and rejects undecided PR-comment carryover. `pre-merge`
-waits for PR CI (`verify`, `integration`, and `e2e`; PR `stress` may be
-skipped), posts the manifest's templated replies, resolves handled review
-threads, and requires zero unresolved review threads. `post-merge` performs the
-squash merge, handles already-completed multi-worktree merge and cleanup
-cases, fast-forwards root `main`, removes the increment worktree and branch,
-waits for the push-to-`main` CI run of the merge commit to succeed (every push
-to `main` runs the quick lane), and runs `cleanup-audit`.
+`pre-pr` runs the `pr` profile (or the profile named before `--dod`), checks
+the branch is based on latest `origin/main`, and rejects undecided PR-comment
+carryover. `pre-merge` waits for PR CI (`verify`, `integration`, and `e2e`; PR
+`stress` may be skipped), posts the manifest's templated replies, resolves
+handled review threads, and requires zero unresolved review threads.
+`post-merge` performs the squash merge, handles already-completed
+multi-worktree merge and cleanup cases, fast-forwards root `main`, removes the
+`.worktreeinclude` entries and then the increment worktree and branch, waits
+for the push-to-`main` CI run of the merge commit to succeed (every push to
+`main` runs the quick lane), and runs `cleanup-audit`. Both CI waits go on
+while any check changes state and fail after the longest job timeout plus 10
+minutes without a change; a job the runner cancelled in the run of the commit
+they wait for is rerun, at most twice (`--ci-max-reruns`).
 
 ## Release readiness
 
