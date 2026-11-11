@@ -500,31 +500,6 @@ func requireActiveShortcutChild(
 	return shortcutChildE2ERecord{}
 }
 
-func requireActiveShortcutChildAtPath(
-	t *testing.T,
-	env map[string]string,
-	fixture *resolvedShortcutFixture,
-	relativeLocalPath string,
-) shortcutChildE2ERecord {
-	t.Helper()
-
-	record, ok := findActiveShortcutChild(t, env, fixture, relativeLocalPath)
-	if ok {
-		return record
-	}
-
-	require.Failf(t,
-		"active shortcut child mount missing at projection path",
-		"parent=%s shortcut=%q relative_path=%q remote=%s/%s",
-		fixture.ParentDrive,
-		fixture.ShortcutName,
-		relativeLocalPath,
-		fixture.SharedItem.RemoteDriveID,
-		fixture.SharedItem.RemoteItemID,
-	)
-	return shortcutChildE2ERecord{}
-}
-
 func findActiveShortcutChild(
 	t *testing.T,
 	env map[string]string,
@@ -544,6 +519,56 @@ func findActiveShortcutChild(
 	}
 
 	return shortcutChildE2ERecord{}, false
+}
+
+// syncShortcutDownloadUntilProjected runs `sync --download-only` on the
+// shortcut fixture's parent drive until the shortcut's child mount is active
+// at relativeLocalPath and the shared target's sentinel file is on disk under
+// it: the placeholder, and a rename or move of it, reach the parent drive
+// through delta only eventually. It returns the child mount record and the
+// pass that converged.
+func syncShortcutDownloadUntilProjected(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	fixture *resolvedShortcutFixture,
+	syncDir string,
+	relativeLocalPath string,
+) (shortcutChildE2ERecord, syncAttemptResult) {
+	t.Helper()
+
+	sentinelPath := filepath.Join(syncDir, filepath.FromSlash(relativeLocalPath), filepath.FromSlash(fixture.SentinelPath))
+	var record shortcutChildE2ERecord
+	attempt := requireSyncEventuallyConvergesForDrive(
+		t,
+		cfgPath,
+		env,
+		fixture.ParentDrive,
+		remoteScopeTransitionTimeout,
+		fmt.Sprintf("shortcut child mount and sentinel should be projected at %q", relativeLocalPath),
+		func(result syncAttemptResult) bool {
+			if result.Err != nil {
+				return false
+			}
+
+			found, ok := findActiveShortcutChild(t, env, fixture, relativeLocalPath)
+			if !ok {
+				t.Logf("waiting for an active shortcut child mount at %q", relativeLocalPath)
+				return false
+			}
+
+			if _, err := os.Stat(sentinelPath); err != nil {
+				t.Logf("shortcut child mount is active at %q but its sentinel is not projected yet", relativeLocalPath)
+				return false
+			}
+
+			record = found
+			return true
+		},
+		"--download-only",
+	)
+
+	return record, attempt
 }
 
 func shortcutChildRecords(

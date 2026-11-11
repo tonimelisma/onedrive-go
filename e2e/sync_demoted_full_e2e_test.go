@@ -24,6 +24,7 @@ func TestE2E_Sync_DryRun(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "dryrun.txt"), []byte("dry run test\n"), 0o600))
 
+	// Single pass by design: a dry run changes nothing, so its own plan is what the test reads.
 	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--dry-run")
 	assert.Contains(t, out, "Dry run, nothing was changed.")
 	assert.Contains(t, out, "Would upload "+testFolder+"/dryrun.txt", "a dry run names each planned action")
@@ -43,7 +44,7 @@ func TestE2E_Sync_InternalBaselineVerification(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "verify-me.txt"), []byte("verify test\n"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	report, err := verifyBaselineReport(t, cfgPath, env)
 	require.NoError(t, err)
@@ -65,11 +66,12 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 	conflictFile := filepath.Join(localDir, "conflict.txt")
 	require.NoError(t, os.WriteFile(conflictFile, []byte("original"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 	waitForRemoteFixtureSeedVisible(t, cfgPath, env, drive, "/"+testFolder+"/conflict.txt")
 
 	require.NoError(t, os.WriteFile(conflictFile, []byte("local edit"), 0o600))
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/conflict.txt", "remote edit")
+	// Single pass by design: this pass's own summary must report the conflict it resolved.
 	out, _ := runCLIWithConfig(t, cfgPath, env, "sync")
 	assert.Contains(t, out, "Conflict, kept both versions of")
 
@@ -77,6 +79,7 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 	assert.Equal(t, "remote edit", string(content))
 	assert.Equal(t, "remote edit", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/conflict.txt"))
 	assertConflictCopyContains(t, localDir, "conflict", "local edit")
+	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync")
 }
 
@@ -118,7 +121,7 @@ sync_dir = %q
 		filepath.Join(localDir, "file1.txt"), []byte("first file\n"), 0o600))
 
 	cfgPath := writeConfig(t)
-	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	out, _ := runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 	assert.Contains(t, out, "(upload only)")
 
 	firstRelPath := filepath.ToSlash(filepath.Join(testFolder, "file1.txt"))
@@ -132,7 +135,7 @@ sync_dir = %q
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "file2.txt"), []byte("second file\n"), 0o600))
 
-	out, _ = runCLIWithConfig(t, cfgPath2, env, "sync", "--upload-only")
+	out, _ = runSyncThroughTransientFailures(t, cfgPath2, env, "--upload-only")
 	assert.Contains(t, out, "(upload only)")
 
 	secondRelPath := filepath.ToSlash(filepath.Join(testFolder, "file2.txt"))

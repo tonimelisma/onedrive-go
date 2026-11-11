@@ -492,6 +492,51 @@ func pollCLIWithConfigRetryingTransientGraphFailures(
 	}
 }
 
+// syncConvergePollInterval is the pause between two passes of
+// requireSyncEventuallyConverges: long enough for delta to move on.
+const syncConvergePollInterval = 5 * time.Second
+
+// syncRunner is the drive selection the converge helpers run their one-shot
+// sync passes against: the suite's default drive, one named drive, or every
+// configured drive at once. It hands back a pass's exit error instead of
+// failing the test, so each helper decides what a failed pass means.
+//
+// A one-shot sync in a live test either goes through one of the helpers built
+// on a runner, or stays a single call with a "Single pass by design:" comment
+// saying what that one pass proves (an "Uploaded ..." or "Up to date" line, a
+// conflict, a dry run, an idempotence check). A converge loop would hide a
+// regression where a pass that should finish in one go needs two, so a site
+// whose proof is the pass itself never moves into one.
+type syncRunner struct {
+	cfgPath string
+	env     map[string]string
+	// driveID is the resolved --drive value; empty runs every configured
+	// drive (no --drive flag).
+	driveID string
+}
+
+// syncRunnerForDrive runs against one drive; an empty driveID is the suite's
+// default drive, as in runCLIWithConfig.
+func syncRunnerForDrive(cfgPath string, env map[string]string, driveID string) syncRunner {
+	return syncRunner{cfgPath: cfgPath, env: env, driveID: resolveDriveSelection(env, driveID)}
+}
+
+// syncRunnerAllDrives runs every configured drive in one pass, as
+// runCLIWithConfigAllDrives does.
+func syncRunnerAllDrives(cfgPath string, env map[string]string) syncRunner {
+	return syncRunner{cfgPath: cfgPath, env: env}
+}
+
+func (r syncRunner) run(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
+
+	return runCLICore(t, r.cfgPath, r.env, r.driveID, args...)
+}
+
+// requireSyncEventuallyConverges runs `sync args...` on the default drive
+// until ready holds for a pass, for state that reaches the client only
+// eventually (a remote change not yet in delta). A pass's non-zero exit is
+// handed to ready, which decides.
 func requireSyncEventuallyConverges(
 	t *testing.T,
 	cfgPath string,
@@ -503,41 +548,68 @@ func requireSyncEventuallyConverges(
 ) syncAttemptResult {
 	t.Helper()
 
+	return requireSyncEventuallyConvergesWith(t, syncRunnerForDrive(cfgPath, env, ""), timeout, description, ready, args...)
+}
+
+// requireSyncEventuallyConvergesForDrive is requireSyncEventuallyConverges
+// against one named drive.
+func requireSyncEventuallyConvergesForDrive(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	timeout time.Duration,
+	description string,
+	ready func(syncAttemptResult) bool,
+	args ...string,
+) syncAttemptResult {
+	t.Helper()
+
+	return requireSyncEventuallyConvergesWith(t, syncRunnerForDrive(cfgPath, env, driveID), timeout, description, ready, args...)
+}
+
+// requireSyncEventuallyConvergesAllDrives is requireSyncEventuallyConverges
+// with every configured drive in each pass.
+func requireSyncEventuallyConvergesAllDrives(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	timeout time.Duration,
+	description string,
+	ready func(syncAttemptResult) bool,
+	args ...string,
+) syncAttemptResult {
+	t.Helper()
+
+	return requireSyncEventuallyConvergesWith(t, syncRunnerAllDrives(cfgPath, env), timeout, description, ready, args...)
+}
+
+func requireSyncEventuallyConvergesWith(
+	t *testing.T,
+	runner syncRunner,
+	timeout time.Duration,
+	description string,
+	ready func(syncAttemptResult) bool,
+	args ...string,
+) syncAttemptResult {
+	t.Helper()
+
 	var last syncAttemptResult
 	syncArgs := append([]string{"sync"}, args...)
 	startedAt := time.Now()
 	deadline := time.Now().Add(timeout)
-	driveID := resolveDriveSelection(env, "")
 
 	for attempt := 0; ; attempt++ {
-		last.Stdout, last.Stderr, last.Err = runCLIWithConfigAllowError(t, cfgPath, env, syncArgs...)
+		last.Stdout, last.Stderr, last.Err = runner.run(t, syncArgs...)
 		if ready(last) {
-			recordTimingEvent(
-				t,
-				timingKindSyncConvergence,
-				description,
-				driveID,
-				syncArgs,
-				timeout,
-				time.Since(startedAt),
-				attempt+1,
-				timingOutcomeSuccess,
-			)
+			recordTimingEvent(t, timingKindSyncConvergence, description, runner.driveID, syncArgs,
+				timeout, time.Since(startedAt), attempt+1, timingOutcomeSuccess)
 			return last
 		}
 
 		if time.Now().After(deadline) {
-			recordTimingEvent(
-				t,
-				timingKindSyncConvergence,
-				description,
-				driveID,
-				syncArgs,
-				timeout,
-				time.Since(startedAt),
-				attempt+1,
-				timingOutcomeTimeout,
-			)
+			recordTimingEvent(t, timingKindSyncConvergence, description, runner.driveID, syncArgs,
+				timeout, time.Since(startedAt), attempt+1, timingOutcomeTimeout)
 			require.Failf(
 				t,
 				"requireSyncEventuallyConverges: timed out",
@@ -550,7 +622,7 @@ func requireSyncEventuallyConverges(
 			)
 		}
 
-		sleepForLiveTestPropagation(5 * time.Second)
+		sleepForLiveTestPropagation(syncConvergePollInterval)
 	}
 }
 
@@ -565,44 +637,89 @@ func syncRecordedRetryWork(stderr string) bool {
 	return strings.Contains(stderr, `msg="sync retry work"`)
 }
 
-// runSyncThroughTransientFailures runs a one-shot sync that must succeed, and
-// runs it again while the run left work behind after recording retry work (a
-// dropped connection or a 5xx on one transfer). One live sync is not a proof
-// that every action ran: a test that asserts the remote result of a single
-// pass fails on the network's bad minute rather than on the client. A first
-// pass that records no retry work is returned as it is. The returned debug
-// log is that of every pass, in order.
+// syncPassFinishedWork reports whether a pass exited zero and left no work
+// for the next sync. A requireSyncEventuallyConverges predicate that waits
+// for remote state and then reads what the same pass uploaded checks it, so
+// the loop also runs through a transient failure on another action.
+func syncPassFinishedWork(result syncAttemptResult) bool {
+	return result.Err == nil && !syncLeftWorkPattern.MatchString(result.Stdout)
+}
+
+// runSyncThroughTransientFailures runs a one-shot sync on the default drive
+// that must succeed, and runs it again while the run left work behind after
+// recording retry work (a dropped connection or a 5xx on one transfer). One
+// live sync is not a proof that every action ran: a test that asserts the
+// remote result of a single pass fails on the network's bad minute rather
+// than on the client. A first pass that records no retry work is returned as
+// it is. It returns the last pass's summary (stdout) and the debug log
+// (stderr) of every pass, in order. It does nothing for delta lag: a remote
+// change not yet in delta needs requireSyncEventuallyConverges.
 func runSyncThroughTransientFailures(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
 	args ...string,
-) string {
+) (string, string) {
+	t.Helper()
+
+	return runSyncThroughTransientFailuresWith(t, syncRunnerForDrive(cfgPath, env, ""), args...)
+}
+
+// runSyncThroughTransientFailuresForDrive is runSyncThroughTransientFailures
+// against one named drive.
+func runSyncThroughTransientFailuresForDrive(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	args ...string,
+) (string, string) {
+	t.Helper()
+
+	return runSyncThroughTransientFailuresWith(t, syncRunnerForDrive(cfgPath, env, driveID), args...)
+}
+
+// runSyncThroughTransientFailuresAllDrives is runSyncThroughTransientFailures
+// with every configured drive in each pass; one drive's left work repeats
+// the pass for all of them.
+func runSyncThroughTransientFailuresAllDrives(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	args ...string,
+) (string, string) {
+	t.Helper()
+
+	return runSyncThroughTransientFailuresWith(t, syncRunnerAllDrives(cfgPath, env), args...)
+}
+
+func runSyncThroughTransientFailuresWith(t *testing.T, runner syncRunner, args ...string) (string, string) {
 	t.Helper()
 
 	var stderrAll strings.Builder
 	syncArgs := append([]string{"sync"}, args...)
 	startedAt := time.Now()
 	deadline := startedAt.Add(transientGraphRetryTimeout)
-	driveID := resolveDriveSelection(env, "")
 	description := "sync completes its work through transient failures"
 
 	for attempt := 0; ; attempt++ {
-		stdout, stderr := runCLIWithConfig(t, cfgPath, env, syncArgs...)
+		stdout, stderr, err := runner.run(t, syncArgs...)
+		require.NoErrorf(t, err, "CLI command %v (drive=%q) failed\nstdout: %s\nstderr: %s",
+			syncArgs, runner.driveID, stdout, stderr)
 		stderrAll.WriteString(stderr)
 
 		if attempt == 0 && !syncRecordedRetryWork(stderr) {
-			return stderr
+			return stdout, stderr
 		}
 
 		if !syncLeftWorkPattern.MatchString(stdout) {
-			recordTimingEvent(t, timingKindSyncConvergence, description, driveID, syncArgs,
+			recordTimingEvent(t, timingKindSyncConvergence, description, runner.driveID, syncArgs,
 				transientGraphRetryTimeout, time.Since(startedAt), attempt+1, timingOutcomeSuccess)
-			return stderrAll.String()
+			return stdout, stderrAll.String()
 		}
 
 		if time.Now().After(deadline) {
-			recordTimingEvent(t, timingKindSyncConvergence, description, driveID, syncArgs,
+			recordTimingEvent(t, timingKindSyncConvergence, description, runner.driveID, syncArgs,
 				transientGraphRetryTimeout, time.Since(startedAt), attempt+1, timingOutcomeTimeout)
 			require.Failf(t, "runSyncThroughTransientFailures: timed out",
 				"%v still left work after %v and %d passes\nlast stdout: %s\nlast stderr: %s",

@@ -31,7 +31,7 @@ func TestE2E_Sync_EmptyDirectory(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
 	// Sync upload — folder creation.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Verify folder exists remotely.
 	waitForRemoteReadContains(t, cfgPath, env, "", "emptyFolder", pollTimeout, "ls", "/"+testFolder)
@@ -39,7 +39,7 @@ func TestE2E_Sync_EmptyDirectory(t *testing.T) {
 	// Advance the delta token past the creation by running a no-op sync.
 	// The subsequent deletion must occur AFTER the saved delta token for
 	// incremental delta to report it (ci_issues.md §17).
-	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--download-only")
 
 	// Delete folder remotely.
 	runCLIWithConfig(t, cfgPath, env, "rm", "-r", "/"+testFolder+"/emptyFolder")
@@ -109,7 +109,7 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 	waitForRemoteReadContains(t, cfgPath, env, "", "deep.txt", pollTimeout, "ls", "/"+testFolder+"/a/b/c")
 
 	// Advance delta token past the creation (ci_issues.md §17).
-	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--download-only")
 
 	// Delete entire tree remotely.
 	runCLIWithConfig(t, cfgPath, env, "rm", "-r", "/"+testFolder+"/a")
@@ -168,7 +168,7 @@ func TestE2E_Sync_MtimeOnlyChange(t *testing.T) {
 	filePath := filepath.Join(localDir, "mtime-only.txt")
 	require.NoError(t, os.WriteFile(filePath, []byte("stable content"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Change only mtime (content stays the same).
 	newTime := time.Now().Add(-24 * time.Hour)
@@ -177,6 +177,7 @@ func TestE2E_Sync_MtimeOnlyChange(t *testing.T) {
 	// Re-sync — should not schedule uploads for the owned subtree when only
 	// mtime changed and content/hash stayed the same. Shared-drive delta churn
 	// elsewhere can still make the global run report unrelated deferred work.
+	// Single pass by design: the one pass after the mtime change must upload nothing.
 	out := assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--upload-only")
 	assert.NotContains(t, out, "Uploaded "+testFolder+"/",
 		"mtime-only change should not trigger upload when hash matches baseline")
@@ -204,10 +205,11 @@ func TestE2E_Sync_IdempotentReSync(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(subDir, "nested.txt"), []byte("nested content"), 0o600))
 
 	// Sync bidirectional.
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	runSyncThroughTransientFailures(t, cfgPath, env)
 
 	// Re-sync — the owned subtree should stay stable even if unrelated tests
 	// churn elsewhere on the shared live drive.
+	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync")
 
 	// The test-owned remote subtree should still contain the same files.

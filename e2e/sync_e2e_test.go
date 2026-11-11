@@ -639,6 +639,7 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Run sync --upload-only.
+	// Single pass by design: this one pass must name each file it uploads.
 	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
 	assert.Contains(t, out, "(upload only)")
 	assert.Contains(t, out, "Uploaded "+testFolder+"/upload-test.txt", "each uploaded file is named")

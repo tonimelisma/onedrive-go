@@ -48,11 +48,12 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 		))
 	}
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Re-sync should not schedule fresh uploads for the unchanged local tree
 	// even if unrelated remote churn elsewhere on the shared live drive makes
 	// the global delta feed non-idle.
+	// Single pass by design: the one pass after the baseline must re-upload nothing.
 	out := assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--upload-only")
 	assert.NotContains(t, out, "Uploaded "+testFolder+"/",
 		"incremental upload-only sync should not re-upload unchanged files once the delta token is established")
@@ -118,7 +119,7 @@ func TestE2E_Sync_CrashRecoveryIdempotent(t *testing.T) {
 		))
 	}
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Verify all 5 exist remotely.
 	waitForRemoteReadContains(t, opsCfgPath, nil, "", "crash-5.txt", pollTimeout, "ls", "/"+testFolder)
@@ -134,10 +135,24 @@ func TestE2E_Sync_CrashRecoveryIdempotent(t *testing.T) {
 		0o600,
 	))
 
-	// Bidirectional sync — applies deletes + upload.
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	// Bidirectional sync — applies deletes + upload, repeated until delta
+	// carries both remote deletes and no action is left for the next sync.
+	// The deletes are not waited for above, so the first pass can miss them.
+	requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		remoteDeletePropagationTimeout,
+		"bidirectional sync should apply both remote deletes and the local create",
+		func(result syncAttemptResult) bool {
+			_, firstErr := os.Stat(filepath.Join(localDir, "crash-1.txt"))
+			_, secondErr := os.Stat(filepath.Join(localDir, "crash-2.txt"))
+			return syncPassFinishedWork(result) && os.IsNotExist(firstErr) && os.IsNotExist(secondErr)
+		},
+	)
 
 	// Re-sync immediately — should show no changes (idempotent).
+	// Single pass by design: the one pass after convergence must find nothing to do.
 	out, _ := runCLIWithConfig(t, cfgPath, env, "sync")
 	assert.Contains(t, out, "Up to date",
 		"immediate re-sync after mixed changes should be idempotent")
@@ -165,12 +180,12 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 	require.NoError(t, os.WriteFile(remoteEditPath, []byte("original remote edit"), 0o600))
 	require.NoError(t, os.WriteFile(remoteDeletePath, []byte("original remote delete"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 	waitForRemoteReadContains(t, opsCfgPath, nil, "", "remote-delete.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Establish a real delta token plus remote mirror rows for this live drive
 	// before creating fresh remote drift.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--download-only")
 
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/remote-edit.txt", "updated from remote")
 	runCLIWithConfig(t, opsCfgPath, nil, "rm", "/"+testFolder+"/remote-delete.txt")
@@ -237,6 +252,7 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 	require.ErrorIs(t, err, os.ErrNotExist)
 
 	snapshot := snapshotLocalTree(t, localDir)
+	// Single pass by design: the one pass after settlement must be idle and change nothing.
 	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 	assert.Contains(t, out, "Up to date",
 		"immediate rerun after durable mirror settlement should be idle")
@@ -263,7 +279,7 @@ func TestE2E_Sync_DriveRemovePurgeResetsState(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "purge-a.txt"), []byte("purge a"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "purge-b.txt"), []byte("purge b"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Verify files exist remotely.
 	waitForRemoteReadContains(t, opsCfgPath, nil, "", "purge-a.txt", pollTimeout, "ls", "/"+testFolder)
@@ -281,6 +297,7 @@ func TestE2E_Sync_DriveRemovePurgeResetsState(t *testing.T) {
 	require.NoError(t, os.RemoveAll(localDir))
 
 	// Sync download-only — should do full re-enumeration and re-download.
+	// Single pass by design: the first pass on an empty state must enumerate and download in one go.
 	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
 	assert.Contains(t, out, "Done in",
 		"sync after purge should report applied work for at least one mount")

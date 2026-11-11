@@ -134,6 +134,7 @@ func TestE2E_Sync_FolderMovesBothWays(t *testing.T) {
 	waitForRemoteReadContains(t, cfgPath, env, "", "b.txt", pollTimeout, "ls", "/proj-local/sub")
 	assert.Equal(t, folderID, remoteItemID(t, cfgPath, env, "/proj-local"), "a local folder rename is a remote move of the same item")
 	assert.NotContains(t, remoteNames(t, cfgPath, env, "/"), "proj")
+	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, syncDir, "sync")
 
 	// OneDrive rename of the populated folder: the local tree moves too.
@@ -147,6 +148,7 @@ func TestE2E_Sync_FolderMovesBothWays(t *testing.T) {
 		"proj-online": "/", "proj-online/a.txt": "file a", "proj-online/sub": "/", "proj-online/sub/b.txt": "file b",
 	}, contentTree(t, syncDir))
 	assert.Equal(t, folderID, remoteItemID(t, cfgPath, env, "/proj-online"))
+	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, syncDir, "sync")
 }
 
@@ -174,6 +176,7 @@ func TestE2E_Sync_CrossMoves(t *testing.T) {
 	})
 	waitForRemoteReadContains(t, cfgPath, env, "", "top.txt", pollTimeout, "ls", "/box")
 	assert.NotContains(t, remoteNames(t, cfgPath, env, "/"), "top.txt")
+	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, syncDir, "sync")
 }
 
@@ -244,7 +247,9 @@ func TestE2E_Sync_NamingCorpusRoundtrip(t *testing.T) {
 		assert.True(t, found, "%q arrives under its own name", name)
 	}
 
+	// Single pass by design: the next pass on each client must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, filepath.Join(syncDir, "corpus"), "sync")
+	// Single pass by design: the next pass on each client must change nothing.
 	assertSyncLeavesLocalTreeStable(t, otherCfg, otherEnv, filepath.Join(otherDir, "corpus"), "sync")
 }
 
@@ -264,7 +269,7 @@ func TestE2E_Sync_TwoWriters(t *testing.T) {
 
 	writeLocal(t, dirA, "shared.txt", "from A")
 	writeLocal(t, dirA, "doc/plan.txt", "plan v1")
-	runCLIWithConfig(t, cfgA, envA, "sync")
+	runSyncThroughTransientFailures(t, cfgA, envA)
 	syncUntil(t, cfgB, envB, "B sees A's files", func() bool {
 		return contentTree(t, dirB)["doc/plan.txt"] == "plan v1"
 	})
@@ -273,7 +278,7 @@ func TestE2E_Sync_TwoWriters(t *testing.T) {
 	// own: both versions must survive.
 	writeLocal(t, dirA, "shared.txt", "edited by A")
 	writeLocal(t, dirB, "shared.txt", "edited by B")
-	runCLIWithConfig(t, cfgA, envA, "sync")
+	runSyncThroughTransientFailures(t, cfgA, envA)
 	syncUntil(t, cfgB, envB, "B reconciles the concurrent edit", func() bool {
 		return hasContent(contentTree(t, dirB), "edited by A") && hasContent(contentTree(t, dirB), "edited by B")
 	})
@@ -281,7 +286,7 @@ func TestE2E_Sync_TwoWriters(t *testing.T) {
 	// A renames the folder while B edits a file inside it.
 	require.NoError(t, os.Rename(filepath.Join(dirA, "doc"), filepath.Join(dirA, "docs-renamed")))
 	writeLocal(t, dirB, "doc/plan.txt", "plan v2 by B")
-	runCLIWithConfig(t, cfgA, envA, "sync")
+	runSyncThroughTransientFailures(t, cfgA, envA)
 	syncUntil(t, cfgB, envB, "B applies A's rename and uploads its edit", func() bool {
 		return contentTree(t, dirB)["docs-renamed/plan.txt"] == "plan v2 by B"
 	})
@@ -292,7 +297,9 @@ func TestE2E_Sync_TwoWriters(t *testing.T) {
 	for _, content := range []string{"edited by A", "edited by B", "plan v2 by B"} {
 		assert.True(t, hasContent(contentTree(t, dirA), content), "%q survives", content)
 	}
+	// Single pass by design: the next pass on each client must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgA, envA, dirA, "sync")
+	// Single pass by design: the next pass on each client must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgB, envB, dirB, "sync")
 }
 
@@ -320,19 +327,24 @@ func TestE2E_Sync_LargeFileBetweenClients(t *testing.T) {
 	_, err := rand.Read(data)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dirA, "large.bin"), data, 0o600))
-	runCLIWithConfig(t, cfgA, envA, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgA, envA, "--upload-only")
 	waitForRemoteStatSize(t, cfgA, envA, "/large.bin", int64(len(data)), hardeningSyncTimeout)
 
 	dirB := t.TempDir()
 	cfgB, envB, _ := writeIsolatedSharedRootWriterConfig(t, dirB, "", root)
-	runCLIWithConfig(t, cfgB, envB, "sync", "--download-only")
-	got := mustReadFile(t, filepath.Join(dirB, "large.bin"))
+	largeOnB := filepath.Join(dirB, "large.bin")
+	requireSyncEventuallyConverges(t, cfgB, envB, hardeningSyncTimeout, "B downloads A's large file",
+		func(result syncAttemptResult) bool {
+			got, readErr := os.ReadFile(largeOnB) //nolint:gosec // a file inside the test's own sync dir
+			return result.Err == nil && readErr == nil && bytes.Equal(got, data)
+		}, "--download-only")
+	got := mustReadFile(t, largeOnB)
 	assert.Equal(t, sha256.Sum256(data), sha256.Sum256(got), "the downloaded copy is byte-identical")
 
 	edited := bytes.Clone(data)
 	copy(edited[len(edited)/2:], "edited in the middle by B")
-	require.NoError(t, os.WriteFile(filepath.Join(dirB, "large.bin"), edited, 0o600))
-	runCLIWithConfig(t, cfgB, envB, "sync")
+	require.NoError(t, os.WriteFile(largeOnB, edited, 0o600))
+	runSyncThroughTransientFailures(t, cfgB, envB)
 	syncUntil(t, cfgA, envA, "A downloads B's edit", func() bool {
 		back, readErr := os.ReadFile(filepath.Join(dirA, "large.bin")) //nolint:gosec // a file inside the test's own sync dir
 		return readErr == nil && bytes.Equal(back, edited)
@@ -372,5 +384,6 @@ func TestE2E_Sync_TypeChangesBothWays(t *testing.T) {
 	assert.Equal(t, map[string]string{
 		"was-file": "/", "was-file/inside.txt": "now a folder", "was-folder": "now a file",
 	}, contentTree(t, syncDir))
+	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, syncDir, "sync")
 }

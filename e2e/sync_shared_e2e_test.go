@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -75,15 +74,13 @@ func TestE2E_SharedFolder_RemoteMutationSyncsToRecipient(t *testing.T) {
 
 	runCLIWithConfigForDrive(t, cfgPath, env, fixture.FolderItem.Selector, "put", contentFile, remotePath)
 
-	require.Eventually(t, func() bool {
-		out, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.FolderItem.Selector, "sync", "--download-only")
-		if !strings.Contains(out, "(download only)") {
-			return false
-		}
-
-		data, err := os.ReadFile(localPath) //nolint:gosec // a file inside the test's own sync dir
-		return err == nil && string(data) == expectedContent
-	}, pollTimeout, 2*time.Second)
+	attempt := requireSyncEventuallyConvergesForDrive(t, cfgPath, env, fixture.FolderItem.Selector,
+		remoteWritePropagationTimeout, "the remote put reaches the recipient's sync dir",
+		func(result syncAttemptResult) bool {
+			data, err := os.ReadFile(localPath) //nolint:gosec // a file inside the test's own sync dir
+			return result.Err == nil && err == nil && string(data) == expectedContent
+		}, "--download-only")
+	assert.Contains(t, attempt.Stdout, "(download only)")
 }
 
 func TestE2E_SharedFolder_RecipientSyncTwice_Idempotent(t *testing.T) {
@@ -107,12 +104,14 @@ func TestE2E_SharedFolder_RecipientSyncTwice_Idempotent(t *testing.T) {
 
 	runCLIWithConfigForDrive(t, cfgPath, env, fixture.FolderItem.Selector, "put", contentFile, remotePath)
 
-	require.Eventually(t, func() bool {
-		_, _ = runCLIWithConfigForDrive(t, cfgPath, env, fixture.FolderItem.Selector, "sync", "--download-only")
-		data, err := os.ReadFile(localPath) //nolint:gosec // a file inside the test's own sync dir
-		return err == nil && string(data) == expectedContent
-	}, pollTimeout, 2*time.Second)
+	requireSyncEventuallyConvergesForDrive(t, cfgPath, env, fixture.FolderItem.Selector,
+		remoteWritePropagationTimeout, "the remote put reaches the recipient's sync dir",
+		func(result syncAttemptResult) bool {
+			data, err := os.ReadFile(localPath) //nolint:gosec // a file inside the test's own sync dir
+			return result.Err == nil && err == nil && string(data) == expectedContent
+		}, "--download-only")
 
+	// Single pass by design: the next pass after convergence must change nothing.
 	out := assertSyncLeavesLocalTreeStableForDrive(
 		t,
 		cfgPath,
