@@ -212,7 +212,12 @@ func runStatusCommand(ctx context.Context, cc *CLIContext, history bool, showPer
 		liveOverlayLoader = loadStatusLiveOverlay
 	}
 	applyStatusLiveOverlay(accounts, liveOverlayLoader(ctx, cc, filteredSnapshot))
-	applyStatusRuntimeOverlay(accounts, loadStatusRuntimeOverlay(ctx))
+	runtimeOverlay := loadStatusRuntimeOverlay(ctx)
+	applyStatusRuntimeOverlay(accounts, runtimeOverlay)
+	if runtimeOverlay.unavailableNote != "" {
+		// stderr, so --json output stays one document.
+		cc.Statusf("%s", runtimeOverlay.unavailableNote)
+	}
 	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(ctx, perfEnabled))
 	if !cc.Flags.Verbose && !cc.Flags.Debug {
 		dropStatusDebugDetail(accounts)

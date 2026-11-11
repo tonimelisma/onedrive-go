@@ -63,7 +63,7 @@ func loadStatusPerfOverlay(ctx context.Context, showPerf bool) statusPerfOverlay
 			enabled:           true,
 			unavailableReason: statusPerfUnavailableNoOwner,
 		}
-	case controlOwnerStatePathUnavailable, controlOwnerStateProbeFailed:
+	case controlOwnerStatePathUnavailable, controlOwnerStateProbeFailed, controlOwnerStateUnresponsive:
 		return statusPerfOverlay{
 			enabled:           true,
 			unavailableReason: statusPerfUnavailableGeneric,

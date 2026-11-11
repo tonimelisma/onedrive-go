@@ -363,11 +363,9 @@ func TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval(t *test
 
 	server, err := startControlSocketServer(
 		t.Context(),
-		socketPath,
-		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		testControlServerConfig(t, socketPath, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeWatch})
-		}),
-		slog.Default(),
+		})),
 	)
 	require.NoError(t, err)
 
@@ -3058,6 +3056,63 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	}
 }
 
+// Validates: R-2.9.7
+//
+// A watch whose control server stopped kept syncing with no way to pause,
+// reload or query it, and said so in one warning (D15). Now the watch ends
+// with the error, so the CLI exits 1 and a service manager restarts it.
+func TestRunWatch_ControlServerExitEndsTheWatch(t *testing.T) {
+	rd := testStandaloneMount(t, "personal:control-exit@example.com", "ControlExit")
+	cfgPath := writeTestConfig(t, rd.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	cfg.ControlSocketPath = shortControlSocketPath(t)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+
+	orch := NewOrchestrator(cfg)
+	listeners := make(chan net.Listener, 1)
+	orch.controlListen = func(ctx context.Context, path string) (net.Listener, error) {
+		listener, err := listenControlSocket(ctx, path)
+		if err == nil {
+			listeners <- listener
+		}
+		return listener, err
+	}
+
+	watchStarted := make(chan struct{})
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+				close(watchStarted)
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}, nil
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	}()
+
+	select {
+	case <-watchStarted:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch did not start in time")
+	}
+
+	// Closing the listener under the server is an end nobody asked for.
+	require.NoError(t, (<-listeners).Close())
+
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, net.ErrClosed)
+		require.ErrorContains(t, err, "control channel stopped")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "RunWatch kept running without its control channel")
+	}
+	assert.NoFileExists(t, cfg.ControlSocketPath)
+}
+
 // Validates: R-2.9.1
 func TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:oneshot@example.com", "OneShot")
@@ -3065,7 +3120,7 @@ func TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus(t *testing.
 	cfg.ControlSocketPath = shortControlSocketPath(t)
 	orch := NewOrchestrator(cfg)
 
-	control, err := orch.startControlServer(t.Context(), synccontrol.OwnerModeOneShot, nil)
+	control, err := orch.startControlServer(t.Context(), synccontrol.OwnerModeOneShot, nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, control.Close(context.Background()))

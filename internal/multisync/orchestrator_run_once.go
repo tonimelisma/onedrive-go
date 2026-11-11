@@ -40,7 +40,10 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 		}
 		return RunOnceResult{}
 	}
-	control, err := o.startControlServer(ctx, synccontrol.OwnerModeOneShot, nil)
+	// No fatal channel: a one-shot pass that loses its control channel keeps
+	// its owner lock (the flock, not the socket) and finishes; the end is
+	// logged.
+	control, err := o.startControlServer(ctx, synccontrol.OwnerModeOneShot, nil, nil)
 	if err != nil {
 		return processFailureRunOnceResult(err)
 	}

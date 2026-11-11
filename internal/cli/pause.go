@@ -49,6 +49,16 @@ func notifyDaemonIfRunning(ctx context.Context, cc *CLIContext) {
 	notifyDaemonWithOptions(ctx, cc, false)
 }
 
+// daemonBusyNote is the outcome when a running watch did not answer in time.
+// It is true because the change is already saved and a running watch rereads
+// its config file on its own (watch_config_file.go): it applies the change
+// once its loop is free, whether or not this command waited for it.
+const daemonBusyNote = "The running 'sync --watch' is busy; it will pick up the change when it is free.\n"
+
+// notifyDaemonWithOptions tells the user, after a config change is saved, what
+// the running sync did with it. Each outcome has its own sentence, and "the
+// change applies when sync next starts" is said only when no running watch
+// will apply it.
 func notifyDaemonWithOptions(ctx context.Context, cc *CLIContext, reportNoDaemon bool) {
 	probe, err := probeControlOwner(ctx)
 	switch probe.state {
@@ -66,27 +76,41 @@ func notifyDaemonWithOptions(ctx context.Context, cc *CLIContext, reportNoDaemon
 	case controlOwnerStateOneShotOwner:
 		cc.Statusf("Note: a one-time sync is running; the change applies the next time sync runs.\n")
 		return
+	case controlOwnerStateUnresponsive:
+		cc.Statusf(daemonBusyNote)
+		return
 	case controlOwnerStateProbeFailed:
-		cc.Statusf("Note: could not check for a running 'sync --watch' (%v); the change applies when sync next starts.\n", err)
+		cc.Statusf("Note: could not check for a running 'sync --watch' (%v); one that is running picks the change up "+
+			"from the config file, otherwise the change applies when sync next starts.\n", err)
 		return
 	}
 
-	if err := probe.client.reload(ctx); err != nil {
-		var daemonErr *controlDaemonError
-		if errors.As(err, &daemonErr) && daemonErr.code == synccontrol.ErrorReloadFailed {
-			// The change is saved, but the running sync rejected it and kept
-			// its old settings: that needs the user's attention.
-			writeWarningf(cc.Status(), "Warning: %s\n", daemonErr.message)
-			return
-		}
-		if isControlSocketGone(err) {
-			cc.Statusf("Note: the running 'sync --watch' stopped before it could be told; the change applies when sync next starts.\n")
-			return
-		}
+	reloadStatus, err := probe.client.reload(ctx)
+	if err != nil {
+		reportDaemonReloadError(cc, err)
+		return
+	}
+	if reloadStatus == synccontrol.StatusReloadInProgress {
+		cc.Statusf("The running 'sync --watch' is applying the change.\n")
+		return
+	}
+	cc.Statusf("The running 'sync --watch' picked up the change.\n")
+}
 
-		cc.Statusf("Note: could not tell the running 'sync --watch' about the change (%v); it applies when sync next starts.\n", err)
-	} else {
-		cc.Statusf("The running 'sync --watch' picked up the change.\n")
+func reportDaemonReloadError(cc *CLIContext, err error) {
+	var daemonErr *controlDaemonError
+	switch {
+	case errors.As(err, &daemonErr) && daemonErr.code == synccontrol.ErrorReloadFailed:
+		// The change is saved, but the running sync rejected it and kept
+		// its old settings: that needs the user's attention.
+		writeWarningf(cc.Status(), "Warning: %s\n", daemonErr.message)
+	case controlOwnerDidNotAnswer(err):
+		cc.Statusf(daemonBusyNote)
+	case isControlSocketGone(err):
+		cc.Statusf("Note: the running 'sync --watch' stopped before it could be told; the change applies when sync next starts.\n")
+	default:
+		cc.Statusf("Note: could not tell the running 'sync --watch' about the change (%v); it rereads its config file "+
+			"on its own and picks the change up.\n", err)
 	}
 }
 

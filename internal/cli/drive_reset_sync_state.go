@@ -132,7 +132,9 @@ type driveResetSyncStateJSONOutput struct {
 // while a sync owner holds the drive: the owner's next commit would race it.
 func ensureNoLiveSyncOwner(ctx context.Context, canonicalID driveid.CanonicalID, action string) error {
 	probe, err := probeControlOwner(ctx)
-	if err != nil && probe.state == controlOwnerStateProbeFailed {
+	// An owner that did not answer is still an owner: refuse, as for a probe
+	// that could not tell.
+	if err != nil && (probe.state == controlOwnerStateProbeFailed || probe.state == controlOwnerStateUnresponsive) {
 		return fmt.Errorf("probe control owner: %w", err)
 	}
 	if probe.state != controlOwnerStateWatchOwner && probe.state != controlOwnerStateOneShotOwner {
