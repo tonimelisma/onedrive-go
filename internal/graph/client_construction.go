@@ -11,8 +11,9 @@ import (
 // NewClient creates a Graph API client.
 // baseURL is typically "https://graph.microsoft.com/v1.0".
 // userAgent is sent in every request; defaults to UserAgent("dev") if empty.
-// Retry is handled by the httpClient's Transport (wrap with retry.RetryTransport
-// for automatic retry, or use http.DefaultTransport for single-attempt dispatch).
+// httpClient is required: its transport owns the stall deadlines and any
+// retry (the internal/graphtransport profiles). A nil one is an error, never
+// http.DefaultClient, which would wait on a stalled server forever.
 func NewClient(
 	baseURL string, httpClient *http.Client, token TokenSource,
 	logger *slog.Logger, userAgent string,
@@ -21,12 +22,12 @@ func NewClient(
 		return nil, fmt.Errorf("graph.NewClient: token source must not be nil")
 	}
 
-	if logger == nil {
-		logger = slog.Default()
+	if httpClient == nil {
+		return nil, fmt.Errorf("graph.NewClient: HTTP client must not be nil")
 	}
 
-	if httpClient == nil {
-		httpClient = http.DefaultClient
+	if logger == nil {
+		logger = slog.Default()
 	}
 
 	if userAgent == "" {

@@ -2,7 +2,7 @@
 
 GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/item_create.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/response_body.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/transfer_watchdog.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
 
-Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.6.2 [verified], R-1.7 [verified], R-1.8 [verified], R-1.2.5 [verified], R-1.3.5 [verified], R-3.6.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [verified], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [verified], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.8.17 [verified]
+Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.6.2 [verified], R-1.7 [verified], R-1.8 [verified], R-1.2.5 [verified], R-1.3.5 [verified], R-3.6.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [verified], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [verified], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.8.17 [verified], R-6.8.27 [verified]
 
 ## Overview
 
@@ -10,7 +10,7 @@ All Microsoft Graph API communication flows through `graph.Client`, but Graph-fa
 
 - `graph.Client` is a pure API mapper plus a narrow Graph-quirk normalizer: authentication, endpoint-local quirk retries, and error construction.
 - `graphtransport` is the stateless home for Graph-facing `http.Transport` / `http.Client` profile construction.
-- `driveops.SessionRuntime` is the single runtime owner of long-lived client reuse, token-source caching, and optional shared throttle coordination for retrying metadata clients.
+- `driveops.SessionRuntime` is the single runtime owner of long-lived client reuse, token-source caching (one source per sign-in file for every client it builds, drive sessions and account-level bootstrap clients alike, R-6.8.27), and optional shared throttle coordination for retrying metadata clients.
 - `retry.RetryTransport` stays generic. It owns transport retry mechanics, not Graph semantics or caller profile selection.
 
 Callers receive clean, consistent data via `graph.Item` and never deal with API inconsistencies. Callers also choose the right HTTP profile without teaching `graph` about CLI-vs-sync policy.
@@ -23,6 +23,7 @@ Callers receive clean, consistent data via `graph.Item` and never deal with API 
 - `InteractiveMetadataClient(logger, gate)`: retrying metadata client for one interactive target, with caller-owned shared 429 coordination
 - `InteractiveTransferClient(logger)`: retrying transfer client for upload/download/copy-monitor flows
 - `SyncClientSet()`: non-retrying metadata/transfer clients for sync classification and sync uploads/downloads
+- `AuthClient()`: the sign-in service's client (token refresh, device code, code exchange), not Graph-facing; see Authentication below
 
 `driveops.SessionRuntime` composes those stateless builders into the three runtime shapes the app actually uses:
 
@@ -36,7 +37,7 @@ throttle domain, so login/account discovery/share-URL resolution use
 the bootstrap metadata client and only switch to target-scoped interactive profiles once
 the target is known.
 
-`driveops.SessionRuntime` owns the runtime rule that all Graph-facing clients use `Timeout = 0`. Stall detection lives in the transport:
+`driveops.SessionRuntime` owns the runtime rule that all Graph-facing clients use `Timeout = 0`. (The auth client is not Graph-facing and is the one exception; see Authentication below.) Stall detection lives in the transport:
 
 - metadata and transfer transports clone `http.DefaultTransport`
 - `ResponseHeaderTimeout` detects servers that accept the connection but stall before sending headers
@@ -85,6 +86,8 @@ This keeps domain-specific logic close to its tests without reopening the public
 | The 401 refresh-and-retry resends the whole request body, or fails with an error naming the body when it cannot be rewound; it never sends a second request with a consumed body (R-6.8.14). | `TestDo_401WithNonSeekableBodyFailsLoudly`, `TestDoOnce_401_RefreshSucceedsWithBodyAndQueryPreserved`, `TestDoOnce_401_RefreshSucceeds` |
 | The Socket.IO notification URL is sensitive in both spellings (`/callback` and the `/socket.io` websocket form, or any `snthgk` query), and `*url.Error` redaction runs before wrapping (R-6.8.17). | `TestIsSensitiveURL_SocketIONotificationURLs`, `TestRedactURLError_ScrubsSocketIOWebsocketURL`, `TestRedactURLError_MustRunBeforeWrapping` |
 | Item permissions and site search follow `@odata.nextLink` through `stripBaseURL`, bounded by the shared page cap; site search stops at the caller's limit (R-6.7.32). | `TestListItemPermissions_FollowsNextLinkAcrossPages`, `TestListItemPermissions_NextLinkOutsideBaseURLIsRefused`, `TestSearchSites_FollowsNextLinkAcrossPages`, `TestSearchSites_StopsFollowingAtTheLimit` |
+| Every sign-in request (silent refresh, device code and its polls, code exchange) goes through the injected auth client, whose deadlines (30 s headers, 60 s request) release every caller of a stalled token endpoint; a nil auth client and a nil Graph HTTP client are errors, never `http.DefaultClient` (R-6.8.27). | `TestAuthClient_BoundsEveryRequest`, `TestTokenSourceFromPath_RefreshUsesTheInjectedClient`, `TestTokenSourceFromPath_StalledTokenEndpointTimesOut`, `TestTokenSourceFromPath_NilAuthClientIsAnError`, `TestLoginFlows_NilAuthClientIsAnError`, `TestLogin_UsesTheInjectedAuthClient`, `TestLoginWithBrowser_UsesTheInjectedAuthClient`, `TestNewClient_NilHTTPClientIsAnError` |
+| One sign-in file has one token source per session runtime: account-level bootstrap clients and drive sessions share it, and the CLI builds no token source of its own (R-6.8.27). | `TestSessionRuntime_BootstrapClientReusesOneTokenSourcePerPath`, `TestSessionRuntime_BootstrapClientKeepsNotLoggedIn`, `TestSessionRuntime_DefaultTokenSourceHasTheAuthClient`, `TestCLIContextSession_ProbeAndSessionShareOneTokenSource`, `TestCLIBootstrapClientsUseTheSessionRuntime` |
 
 ## Authentication (`auth.go`)
 
@@ -102,6 +105,24 @@ The device-code boundary intentionally stays narrow: production calls
 can inject those two calls independently to cover cancel/save/error behavior
 without waiting on real polling intervals. One smoke test still runs through
 the real oauth polling integration.
+
+**The sign-in HTTP client is injected, never defaulted (R-6.8.27).**
+`TokenSourceFromPath`, `Login` and `LoginWithBrowser` take an `*http.Client`
+and put it into the context as `oauth2.HTTPClient` before using the oauth2
+config, so the device-code request and its polls, the code exchange and every
+later silent refresh of the returned source go through it. Without it oauth2
+used `http.DefaultClient`, which has no timeout: a token endpoint that
+accepted the connection and never answered held the refresh, and, because
+the reuse source holds its lock across the refresh and `tokenBridge.Token`
+takes no context, every Graph request of the account, until the process
+stopped. Production passes `graphtransport.AuthClient()`: 30 s for response
+headers and 60 s for the whole request. Unlike the Graph profiles it sets
+`http.Client.Timeout`, because a sign-in answer is a small JSON body (oauth2
+caps it at 1 MiB) and nothing about it legitimately takes a minute; each
+device-code poll is one such request, so the deadline never cuts the polling
+loop short. A nil client is an error. The client has no retry wrapper; the
+token source's caller decides what a failed refresh means
+(`TestTokenSourceFromPath_StalledTokenEndpointTimesOut`).
 
 ## Quirk Normalization (`normalize.go`)
 
@@ -511,7 +532,7 @@ Implements: R-6.8.8 [verified]
 
 Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The transport only replays methods that are safe at that generic boundary (`GET`, `HEAD`, `OPTIONS`, `TRACE`, `PUT`, `DELETE`); unsafe `POST` and `PATCH` calls return their first transient response to the graph operation that owns the mutation semantics. The one exception is an operation that marks its request `retry.WithReplaySafe`: `CreateFile` and `CreateFolder`, whose `conflictBehavior=fail` makes a replay of a committed create answer 409 without creating anything (R-6.8.21, `TestCreate_TransientFailureIsResentByARetryingTransport`). Before that, one 503 on a create failed `put` outright (e2e `TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges`). The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives`, transient 404 on root-child listing, transient 404 on item-by-ID download metadata fetch before a pre-authenticated download begins, transient 404 or 502/503/504 on the immediate post-simple-upload `UpdateFileSystemInfo` PATCH, transient 404 on create-upload-session requests against freshly created parents, and the documented simple-upload fallback path. All other retry, backoff, Retry-After parsing, and shared 429 coordination live below `graph` in the retry/HTTP-profile layer.
 
-`NewClient` accepts an `*http.Client` and returns `(*Client, error)` after validating the base URL and token source. `MustNewClient` is reserved for static/test setup where panic-on-bad-construction is intentional. `driveops.SessionRuntime` is the normal production runtime owner for those clients, and it composes the stateless `internal/graphtransport` builders into the concrete profiles the app needs:
+`NewClient` accepts an `*http.Client` and returns `(*Client, error)` after validating the base URL, the token source and the HTTP client; a nil HTTP client is an error, not `http.DefaultClient`, whose missing deadlines would undo the transport profiles (R-6.8.27). `MustNewClient` is reserved for static/test setup where panic-on-bad-construction is intentional. `driveops.SessionRuntime` is the normal production runtime owner for those clients, and it composes the stateless `internal/graphtransport` builders into the concrete profiles the app needs:
 
 - interactive bootstrap/CLI metadata clients compose `RetryTransport{Policy: retry.TransportPolicy()}`
 - interactive target-scoped metadata clients inject a shared `retry.ThrottleGate` so later requests against the same drive or shared target respect server `Retry-After`
@@ -617,7 +638,8 @@ The graph package intentionally keeps runtime ownership narrow:
 - Browser auth owns one callback server goroutine plus one result channel per login attempt. `doAuthCodeLogin` starts them, waits for the callback, and shuts them down before returning.
 - Token refresh state is delegated to the token source implementation. `graph` consumes it synchronously; it does not run a background refresh coordinator.
 - The sole raw `http.Client.Do` production boundary is `client_preauth.go`, where validated pre-authenticated URLs are dispatched.
-- `driveops.SessionRuntime` owns the long-lived HTTP clients and any caller-scoped shared throttle gates. It has no background goroutines and no package-level mutable state; the runtime instance is the owner.
+- `driveops.SessionRuntime` owns the long-lived HTTP clients, the auth client its default token sources refresh through, one token source per sign-in file, and any caller-scoped shared throttle gates. It has no background goroutines and no package-level mutable state; the runtime instance is the owner.
+- Account-level calls made before or without a drive session (identity probes, drive and shared-item discovery, SharePoint search, shared-drive naming, share-URL resolution) get their client from `SessionRuntime.BootstrapClient(ctx, tokenPath)`: the bootstrap metadata profile, the runtime's base URL and the runtime's token source for that file, the one the drive sessions use. The CLI builds no token source of its own; a source scan in `internal/cli` keeps it so (R-6.8.27, `TestCLIBootstrapClientsUseTheSessionRuntime`). The one direct construction is login, which holds the source the sign-in just produced. A cached source keeps the context of the call that created it, so callers pass the command's or daemon's context, never a per-request one.
 
 ## Design Constraints
 
@@ -629,7 +651,7 @@ The graph package intentionally keeps runtime ownership narrow:
   - The fork is credential-handling code that will not receive upstream security advisories automatically, so `govulncheck` running on every CI verify is the compensating control, not an optional extra. Re-evaluate the fork whenever the upstream proposal moves.
 - Pre-authenticated URLs (`@microsoft.graph.downloadUrl`, upload session URLs) bypass the Graph API — use `httpClient.Do(req)` directly, no base URL prefix, no auth headers. Never log these URLs.
 - The authenticated-success hook is only a proof signal. It must remain optional, per-client, and side-effect free from the graph package's perspective. Graph owns when the hook fires; callers own any resulting state repair.
-- `graphtransport` is the single home for Graph-facing HTTP transport profile construction. Metadata and transfer clients use transport-level deadlines with `Timeout = 0`; no Graph-facing client uses `http.Client.Timeout`.
+- `graphtransport` is the single home for Graph-facing HTTP transport profile construction. Metadata and transfer clients use transport-level deadlines with `Timeout = 0`; no Graph-facing client uses `http.Client.Timeout`. The auth client (`AuthClient`) is not Graph-facing: it talks to the identity platform, whose answers are small, so it sets a 60 s `http.Client.Timeout` on top of a 30 s response-header deadline (R-6.8.27).
 - Interactive metadata clients may share 429 `Retry-After` coordination through an injected `retry.ThrottleGate`. The coordination scope is the narrowest CLI-known remote boundary: configured drive-root mounts use `(account email, driveID)`, configured mount roots use `(account email, driveID, remoteRootItemID)`, and direct shared-item commands use `(account email, remoteDriveID, remoteItemID)`. Broader account-wide or tenant-wide coordination is intentionally not inferred from ordinary file traffic.
 - `driveops.SessionRuntime` selects bootstrap, target-scoped interactive, or sync profiles directly. The CLI and control plane no longer build one cache owner merely to inject it into another.
 - Upload URLs are sensitive credentials. The `UploadURL` type implements `slog.LogValuer` with redaction, matching the `DownloadURL` pattern.

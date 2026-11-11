@@ -12,6 +12,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/graphtransport"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
@@ -280,8 +281,12 @@ func authenticateLogin(
 	useBrowser bool,
 	tempPath string,
 ) (graph.TokenSource, error) {
+	// The sign-in requests get the bounded auth client (R-6.8.27); so does
+	// every later refresh of the token source the login returns.
+	authHTTP := graphtransport.AuthClient()
+
 	if useBrowser {
-		ts, err := graph.LoginWithBrowser(ctx, tempPath, func(openCtx context.Context, authURL string) error {
+		ts, err := graph.LoginWithBrowser(ctx, tempPath, authHTTP, func(openCtx context.Context, authURL string) error {
 			openErr := openBrowser(openCtx, authURL)
 			if openErr != nil {
 				writeWarningf(cc.Status(), "Open this URL in your browser:\n%s\n", authURL)
@@ -296,7 +301,7 @@ func authenticateLogin(
 		return ts, nil
 	}
 
-	ts, err := graph.Login(ctx, tempPath, func(da graph.DeviceAuth) {
+	ts, err := graph.Login(ctx, tempPath, authHTTP, func(da graph.DeviceAuth) {
 		writeWarningf(cc.Status(), "%s", deviceLoginInstructions(da, cc.Flags.Account, time.Now()))
 	}, cc.Logger)
 	if err != nil {

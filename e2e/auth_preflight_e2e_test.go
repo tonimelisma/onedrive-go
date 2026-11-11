@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/graphtransport"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
@@ -41,7 +42,7 @@ func assertLiveAuthPreflight(t *testing.T, driveID string) {
 	t.Helper()
 
 	tokenPath := filepath.Join(testDataDir, testutil.TokenFileName(driveID))
-	ts, err := graph.TokenSourceFromPath(t.Context(), tokenPath, slog.New(slog.DiscardHandler))
+	ts, err := graph.TokenSourceFromPath(t.Context(), tokenPath, graphtransport.AuthClient(), slog.New(slog.DiscardHandler))
 	require.NoError(t, err, "load token source for %s", driveID)
 
 	httpClient := &http.Client{}

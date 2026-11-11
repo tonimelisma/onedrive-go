@@ -133,28 +133,13 @@ func discoverSharedTargetsForAccount(
 			continue
 		}
 
-		ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
+		client, err := cc.runtime().BootstrapClient(ctx, tokenPath)
 		if err != nil {
 			logger.Debug("shared discovery token load failed",
 				"account", tokenCID.String(),
 				"error", err,
 			)
 			authRequired = append(authRequired, tokenDiscoveryAuthRequirement(tokenCID, err, logger))
-			continue
-		}
-
-		client, err := newGraphClientWithHTTP(
-			cc.graphBaseURL(),
-			cc.runtime().BootstrapMeta(),
-			ts,
-			logger,
-		)
-		if err != nil {
-			logger.Warn("degrading shared discovery after client bootstrap failure",
-				"account", tokenCID.String(),
-				"error", err,
-			)
-			degraded = true
 			continue
 		}
 		attachAccountAuthProof(client, newAuthProofRecorder(logger), tokenCID.Email(), "shared-discovery")

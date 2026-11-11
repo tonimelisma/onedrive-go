@@ -154,14 +154,11 @@ func (cc *CLIContext) sharedBootstrapMetaClient(
 		return nil, "", fmt.Errorf("cannot determine token path for account %q", accountCID)
 	}
 
-	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, cc.Logger)
+	// The same runtime token source the identity probe above used, unless the
+	// probe moved the sign-in file to a renamed account's path.
+	client, err := cc.runtime().BootstrapClient(ctx, tokenPath)
 	if err != nil {
-		return nil, "", fmt.Errorf("load token source: %w", err)
-	}
-
-	client, err := newGraphClientWithHTTP(cc.graphBaseURL(), cc.runtime().BootstrapMeta(), ts, cc.Logger)
-	if err != nil {
-		return nil, "", fmt.Errorf("create bootstrap graph client: %w", err)
+		return nil, "", fmt.Errorf("load sign-in for shared target: %w", err)
 	}
 
 	recorder := newAuthProofRecorder(cc.Logger)
@@ -181,9 +178,6 @@ func (cc *CLIContext) sharedTargetClients(ctx context.Context, ref sharedref.Ref
 	}
 
 	accountCID = remapCanonicalIDWithResult(accountCID, &result)
-	if cc.GraphBaseURL != "" {
-		cc.runtime().GraphBaseURL = cc.GraphBaseURL
-	}
 
 	clients, err := cc.runtime().SharedTargetClients(ctx, accountCID, ref.RemoteDriveID, ref.RemoteItemID)
 	if err != nil {

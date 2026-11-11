@@ -658,11 +658,25 @@ func TestClassifyStatus(t *testing.T) {
 }
 
 func TestNewClient_Defaults(t *testing.T) {
-	// Nil logger and httpClient should use defaults, not panic.
-	c, err := NewClient("http://localhost", nil, staticToken("tok"), nil, "")
+	// A nil logger and an empty user agent get defaults, not a panic.
+	httpClient := &http.Client{}
+	c, err := NewClient("http://localhost", httpClient, staticToken("tok"), nil, "")
 	require.NoError(t, err)
-	assert.NotNil(t, c.httpClient)
+	assert.Same(t, httpClient, c.httpClient)
 	assert.NotNil(t, c.logger)
+	assert.Equal(t, UserAgent(""), c.userAgent)
+}
+
+// Validates: R-6.8.27
+//
+// A missing HTTP client used to become http.DefaultClient, which has no
+// timeout at all; every caller owns a tuned client, so a nil one is a bug to
+// report, not a default to fill in.
+func TestNewClient_NilHTTPClientIsAnError(t *testing.T) {
+	c, err := NewClient(DefaultBaseURL, nil, staticToken("tok"), nil, "")
+	require.Error(t, err)
+	assert.Nil(t, c)
+	assert.Contains(t, err.Error(), "HTTP client must not be nil")
 }
 
 func TestNewClient_NilTokenSourceReturnsError(t *testing.T) {
