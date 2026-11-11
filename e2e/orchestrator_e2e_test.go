@@ -289,22 +289,27 @@ func TestE2E_Orchestrator_WatchSimultaneous(t *testing.T) {
 	waitForDaemonReady(t, eventsPath)
 
 	// Create files in each sync dir.
+	const (
+		drive1Content = "watch drive1"
+		drive2Content = "watch drive2"
+	)
 	localDir1 := filepath.Join(syncDir1, testFolder1)
 	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir1, "watch-d1.txt"), []byte("watch drive1"), 0o600))
+		filepath.Join(localDir1, "watch-d1.txt"), []byte(drive1Content), 0o600))
 
 	localDir2 := filepath.Join(syncDir2, testFolder2)
 	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir2, "watch-d2.txt"), []byte("watch drive2"), 0o600))
+		filepath.Join(localDir2, "watch-d2.txt"), []byte(drive2Content), 0o600))
 
-	// Poll both remotes until files appear.
+	// Poll both remotes until the files have their full size, not only their
+	// names: an upload creates its file empty first (LI-20261110-01).
 	remotePath1 := "/" + testFolder1 + "/watch-d1.txt"
-	waitForRemoteReadContains(t, opsCfgPath, nil, "", "watch-d1.txt", 3*time.Minute, "stat", remotePath1)
+	waitForRemoteStatSize(t, opsCfgPath, nil, remotePath1, int64(len(drive1Content)), 3*time.Minute)
 
 	remotePath2 := "/" + testFolder2 + "/watch-d2.txt"
-	pollForDrive2File(t, cfgPath, env, drive2, "watch-d2.txt", 3*time.Minute, "stat", remotePath2)
+	waitForRemoteStatSizeForDrive(t, cfgPath, env, drive2, remotePath2, int64(len(drive2Content)), 3*time.Minute)
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -349,14 +354,15 @@ func TestE2E_Orchestrator_WatchDriveIsolation(t *testing.T) {
 	waitForDaemonReady(t, eventsPath)
 
 	// Create file only in drive1's sync dir.
+	const isolatedContent = "drive1 only"
 	localDir1 := filepath.Join(syncDir1, testFolder)
 	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir1, "isolated.txt"), []byte("drive1 only"), 0o600))
+		filepath.Join(localDir1, "isolated.txt"), []byte(isolatedContent), 0o600))
 
-	// Wait for drive1's file to appear remotely.
+	// Wait for drive1's file to have its full size remotely, not only its name.
 	remotePath := "/" + testFolder + "/isolated.txt"
-	waitForRemoteReadContains(t, opsCfgPath, nil, "", "isolated.txt", 3*time.Minute, "stat", remotePath)
+	waitForRemoteStatSize(t, opsCfgPath, nil, remotePath, int64(len(isolatedContent)), 3*time.Minute)
 
 	// Verify file does NOT appear on drive2.
 	d2Args := []string{"--config", cfgPath, "--drive", drive2, "--debug", "stat", "/" + testFolder + "/isolated.txt"}
@@ -433,26 +439,27 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 	waitForDaemonReady(t, eventsPath)
 
 	// Create files in both sync dirs.
+	const activeContent = "active drive"
 	localDir1 := filepath.Join(syncDir1, testFolder1)
 	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(localDir1, "active.txt"), []byte("active drive"), 0o600))
+		filepath.Join(localDir1, "active.txt"), []byte(activeContent), 0o600))
 
 	localDir2 := filepath.Join(syncDir2, testFolder2)
 	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir2, "paused.txt"), []byte("paused drive"), 0o600))
 
-	// Verify drive1 syncs.
+	// Verify drive1 syncs: the file has its full size remotely, not only its
+	// name.
 	remotePath1 := "/" + testFolder1 + "/active.txt"
-	waitForRemoteReadContains(t, opsCfgPath, nil, "", "active.txt", 3*time.Minute, "stat", remotePath1)
+	waitForRemoteStatSize(t, opsCfgPath, nil, remotePath1, int64(len(activeContent)), 3*time.Minute)
 
 	// Bounded negative check: poll a few times over 10s to confirm file not on drive2.
 	negDeadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(negDeadline) {
 		d2Args := []string{"--config", cfgPath, "--drive", drive2, "--debug", "stat", "/" + testFolder2 + "/paused.txt"}
-		d2Cmd := makeCmd(d2Args, env)
-		d2Err := d2Cmd.Run()
+		d2Err := makeCmd(d2Args, env).Run()
 		if d2Err == nil {
 			t.Log("warning: paused drive2 file appeared remotely (pause may not be effective)")
 			break
@@ -461,8 +468,7 @@ func TestE2E_Orchestrator_WatchPausedDrive(t *testing.T) {
 	}
 	// Final check.
 	d2Args := []string{"--config", cfgPath, "--drive", drive2, "--debug", "stat", "/" + testFolder2 + "/paused.txt"}
-	d2Cmd := makeCmd(d2Args, env)
-	d2Err := d2Cmd.Run()
+	d2Err := makeCmd(d2Args, env).Run()
 	require.Error(t, d2Err, "paused drive2's file should NOT be uploaded")
 
 	// Graceful shutdown.

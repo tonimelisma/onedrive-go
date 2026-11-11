@@ -79,10 +79,6 @@ func startDaemonWithStderr(
 	return &daemonHandle{Cmd: cmd, Stderr: stderr, EventsPath: eventsPath}
 }
 
-// daemonPollTimeout is the default timeout for polling in daemon tests.
-// Daemon operations may take longer than one-shot sync due to poll intervals.
-const daemonPollTimeout = 3 * time.Minute
-
 // TestE2E_SyncWatch_RemoteToLocal starts a download-only daemon, creates a
 // file remotely, and verifies it appears locally.
 func TestE2E_SyncWatch_RemoteToLocal(t *testing.T) {
@@ -129,17 +125,19 @@ func TestE2E_SyncWatch_Bidirectional(t *testing.T) {
 		"--drive", resolveDriveSelection(env, ""), "sync", "--watch")
 
 	// Phase 1: local → remote.
+	const localContent = "from local"
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "local-to-remote.txt"),
-		[]byte("from local"),
+		[]byte(localContent),
 		0o600,
 	))
 
-	// Poll until file appears remotely.
+	// Poll until the file has its full size remotely, not only its name: the
+	// upload creates the file empty first (LI-20261110-01).
 	remotePath := "/" + testFolder + "/local-to-remote.txt"
-	waitForRemoteReadContains(t, cfgPath, env, "", "local-to-remote.txt", daemonPollTimeout, "stat", remotePath)
+	waitForRemoteStatSize(t, cfgPath, env, remotePath, int64(len(localContent)), daemonPollTimeout)
 
 	// Phase 2: remote → local.
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/remote-to-local.txt", "from remote")
@@ -175,14 +173,17 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	waitForObserverStarted(t, h.EventsPath, "local", 30*time.Second)
 
 	// Create file and wait for it to sync.
+	const baselineContent = "baseline"
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	filePath := filepath.Join(localDir, "conflict-watch.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("baseline"), 0o600))
+	require.NoError(t, os.WriteFile(filePath, []byte(baselineContent), 0o600))
 
-	// Wait for upload.
+	// Wait for the upload to finish, not only for the name: the remote edit
+	// below must replace the uploaded baseline, not the empty item the
+	// upload creates first.
 	remotePath := "/" + testFolder + "/conflict-watch.txt"
-	waitForRemoteReadContains(t, cfgPath, env, "", "conflict-watch.txt", daemonPollTimeout, "stat", remotePath)
+	waitForRemoteStatSize(t, cfgPath, env, remotePath, int64(len(baselineContent)), daemonPollTimeout)
 
 	// Modify remote FIRST: put a new version and confirm it propagated via
 	// stat. This ensures the delta feed has the remote change before we
@@ -244,33 +245,26 @@ func TestE2E_SyncWatch_FileModification(t *testing.T) {
 	waitForObserverStarted(t, h.EventsPath, "local", 30*time.Second)
 
 	// Create file.
+	const (
+		firstVersion  = "version 1"
+		secondVersion = "version 2 modified"
+	)
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	filePath := filepath.Join(localDir, "modifiable.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("version 1"), 0o600))
+	require.NoError(t, os.WriteFile(filePath, []byte(firstVersion), 0o600))
 
-	// Wait for initial upload.
+	// Wait for the initial upload to finish, not only for the name, so the
+	// change below modifies an uploaded file rather than one still being
+	// created.
 	remotePath := "/" + testFolder + "/modifiable.txt"
-	waitForRemoteReadContains(t, cfgPath, env, "", "modifiable.txt", daemonPollTimeout, "stat", remotePath)
+	waitForRemoteStatSize(t, cfgPath, env, remotePath, int64(len(firstVersion)), daemonPollTimeout)
 
 	// Modify the file.
-	require.NoError(t, os.WriteFile(filePath, []byte("version 2 modified"), 0o600))
+	require.NoError(t, os.WriteFile(filePath, []byte(secondVersion), 0o600))
 
 	// Poll remote until it has the new content.
-	deadline := time.Now().Add(daemonPollTimeout)
-	for attempt := 0; ; attempt++ {
-		content := getRemoteFile(t, cfgPath, env, remotePath)
-		if content == "version 2 modified" {
-			break
-		}
-
-		if time.Now().After(deadline) {
-			require.Failf(t, "file modification not synced",
-				"remote content never became 'version 2 modified' within %v", daemonPollTimeout)
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
+	waitForRemoteFileContent(t, cfgPath, env, remotePath, secondVersion)
 
 	// Graceful shutdown.
 	require.NoError(t, h.Cmd.Process.Signal(syscall.SIGTERM))
@@ -300,14 +294,17 @@ func TestE2E_SyncWatch_FileDeletion(t *testing.T) {
 	waitForObserverStarted(t, h.EventsPath, "local", 30*time.Second)
 
 	// Create file.
+	const deletedContent = "will be deleted"
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	filePath := filepath.Join(localDir, "deleteme.txt")
-	require.NoError(t, os.WriteFile(filePath, []byte("will be deleted"), 0o600))
+	require.NoError(t, os.WriteFile(filePath, []byte(deletedContent), 0o600))
 
-	// Wait for upload.
+	// Wait for the upload to finish, not only for the name, so the delete
+	// below removes an uploaded file rather than the source of an upload in
+	// flight.
 	remotePath := "/" + testFolder + "/deleteme.txt"
-	waitForRemoteReadContains(t, cfgPath, env, "", "deleteme.txt", daemonPollTimeout, "stat", remotePath)
+	waitForRemoteStatSize(t, cfgPath, env, remotePath, int64(len(deletedContent)), daemonPollTimeout)
 
 	// Delete local file.
 	require.NoError(t, os.Remove(filePath))
@@ -335,16 +332,17 @@ func TestE2E_SyncWatch_FolderCreation(t *testing.T) {
 		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 
 	// Create deeply nested structure.
+	const deepContent = "deeply nested content"
 	localDir := filepath.Join(syncDir, testFolder, "a", "b", "c")
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "deep.txt"),
-		[]byte("deeply nested content"),
+		[]byte(deepContent),
 		0o600,
 	))
 
-	// Poll until the deep file appears remotely.
-	waitForRemoteReadContains(t, cfgPath, env, "", "deep.txt", daemonPollTimeout, "ls", "/"+testFolder+"/a/b/c")
+	// Poll until the deep file has its full size remotely, not only its name.
+	waitForRemoteStatSize(t, cfgPath, env, "/"+testFolder+"/a/b/c/deep.txt", int64(len(deepContent)), daemonPollTimeout)
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -369,19 +367,25 @@ func TestE2E_SyncWatch_MultipleFiles(t *testing.T) {
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
+	const (
+		nameFormat    = "multi-%d.txt"
+		contentFormat = "multi content %d"
+	)
+
 	for i := 1; i <= 5; i++ {
-		name := fmt.Sprintf("multi-%d.txt", i)
 		require.NoError(t, os.WriteFile(
-			filepath.Join(localDir, name),
-			[]byte(fmt.Sprintf("multi content %d", i)),
+			filepath.Join(localDir, fmt.Sprintf(nameFormat, i)),
+			[]byte(fmt.Sprintf(contentFormat, i)),
 			0o600,
 		))
 	}
 
-	// Poll until all 5 files appear remotely.
+	// Poll until all 5 files have their full size remotely, not only their
+	// names.
 	for i := 1; i <= 5; i++ {
-		name := fmt.Sprintf("multi-%d.txt", i)
-		waitForRemoteReadContains(t, cfgPath, env, "", name, daemonPollTimeout, "ls", "/"+testFolder)
+		remotePath := "/" + testFolder + "/" + fmt.Sprintf(nameFormat, i)
+		size := int64(len(fmt.Sprintf(contentFormat, i)))
+		waitForRemoteStatSize(t, cfgPath, env, remotePath, size, daemonPollTimeout)
 	}
 
 	// Graceful shutdown.
@@ -453,27 +457,15 @@ func TestE2E_SyncWatch_RapidChurn(t *testing.T) {
 	require.NoError(t, os.WriteFile(filePath, []byte("v1"), 0o600))
 	require.NoError(t, os.WriteFile(filePath, []byte("v2"), 0o600))
 	require.NoError(t, os.WriteFile(filePath, []byte("v3"), 0o600))
-	require.NoError(t, os.WriteFile(filePath, []byte("final version"), 0o600))
+	const finalVersion = "final version"
+	require.NoError(t, os.WriteFile(filePath, []byte(finalVersion), 0o600))
 
 	// Wait for file to appear remotely.
 	remotePath := "/" + testFolder + "/churn-watch.txt"
 	waitForRemoteReadContains(t, cfgPath, env, "", "churn-watch.txt", daemonPollTimeout, "stat", remotePath)
 
 	// Poll remote until content matches final version.
-	deadline := time.Now().Add(daemonPollTimeout)
-	for attempt := 0; ; attempt++ {
-		content := getRemoteFile(t, cfgPath, env, remotePath)
-		if content == "final version" {
-			break
-		}
-
-		if time.Now().After(deadline) {
-			require.Failf(t, "final version not synced",
-				"remote content never became 'final version' within %v", daemonPollTimeout)
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
+	waitForRemoteFileContent(t, cfgPath, env, remotePath, finalVersion)
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -496,16 +488,20 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 
 	// Create first file and wait for daemon to sync it.
+	const daemonContent = "synced by daemon"
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "before-shutdown.txt"),
-		[]byte("synced by daemon"),
+		[]byte(daemonContent),
 		0o600,
 	))
 
+	// Wait for the upload to finish, not only for the name: a daemon stopped
+	// between the create and the content leaves the file for the one-shot
+	// sync below to upload again.
 	remotePath := "/" + testFolder + "/before-shutdown.txt"
-	waitForRemoteReadContains(t, cfgPath, env, "", "before-shutdown.txt", daemonPollTimeout, "stat", remotePath)
+	waitForRemoteStatSize(t, cfgPath, env, remotePath, int64(len(daemonContent)), daemonPollTimeout)
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -554,11 +550,12 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	reloadDaemonConfig(t, env)
 
 	// Create local file while paused.
+	const pausedContent = "created during pause"
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "paused-file.txt"),
-		[]byte("created during pause"),
+		[]byte(pausedContent),
 		0o600,
 	))
 
@@ -579,8 +576,9 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	sleepForLiveTestPropagation(4 * time.Second)
 	reloadDaemonConfig(t, env)
 
-	// Poll until file appears remotely (daemon should now be unpaused).
-	waitForRemoteReadContains(t, cfgPath, env, "", "paused-file.txt", daemonPollTimeout, "stat", remotePath)
+	// Poll until the file has its full size remotely, not only its name
+	// (daemon should now be unpaused).
+	waitForRemoteStatSize(t, cfgPath, env, remotePath, int64(len(pausedContent)), daemonPollTimeout)
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
