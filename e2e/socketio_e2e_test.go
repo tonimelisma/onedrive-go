@@ -73,15 +73,19 @@ func TestE2E_SyncWatch_WebsocketDisabledLongPollRegression(t *testing.T) {
 	daemon := startFastDaemon(t, cfgPath, env,
 		"--drive", drive, "sync", "--watch", "--upload-only")
 
+	const uploadContent = "websocket disabled regression\n"
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "upload.txt"),
-		[]byte("websocket disabled regression\n"),
+		[]byte(uploadContent),
 		0o600,
 	))
 
-	waitForRemoteReadContains(t, opsCfgPath, nil, "", "upload.txt", 3*time.Minute, "stat", "/"+testFolder+"/upload.txt")
+	// Wait for the full size, not only the name: the upload creates the file
+	// empty first, and stopping the daemon in between leaves it empty
+	// (LI-20261110-01).
+	waitForRemoteStatSize(t, opsCfgPath, nil, "/"+testFolder+"/upload.txt", int64(len(uploadContent)), 3*time.Minute)
 
 	require.NoError(t, daemon.Process.Signal(syscall.SIGTERM))
 	waitForDaemonExit(t, daemon)

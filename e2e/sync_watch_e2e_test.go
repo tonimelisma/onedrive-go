@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -51,8 +50,8 @@ func (sb *syncBuffer) String() string {
 // ---------------------------------------------------------------------------
 
 // TestE2E_SyncWatch_BasicRoundTrip starts `sync --watch`, creates a local
-// file, waits for it to appear remotely, then sends SIGTERM for graceful
-// shutdown.
+// file, waits for its content to reach OneDrive, then sends SIGTERM for
+// graceful shutdown.
 func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 	registerLogDump(t)
 
@@ -90,17 +89,19 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 	waitForDaemonReady(t, eventsPath)
 
 	// Create a local file inside the sync dir.
+	const watchContent = "created during watch mode\n"
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "watch-test.txt"),
-		[]byte("created during watch mode\n"),
+		[]byte(watchContent),
 		0o600,
 	))
 
-	// Poll until the file appears remotely.
+	// Poll until the file's content is remote, not only its name: the upload
+	// creates the file empty first (LI-20261110-01).
 	remotePath := "/" + testFolder + "/watch-test.txt"
-	waitForRemoteReadContains(t, opsCfgPath, nil, "", "watch-test.txt", 3*time.Minute, "stat", remotePath)
+	waitForRemoteFileContent(t, opsCfgPath, nil, remotePath, watchContent)
 
 	// Send SIGTERM for graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -116,9 +117,9 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 		t.Logf("daemon stderr: %s", stderr.String())
 	}
 
-	// Verify the file content remotely.
+	// Verify the shutdown left the file's content in place.
 	remoteContent := getRemoteFile(t, opsCfgPath, nil, remotePath)
-	assert.Equal(t, "created during watch mode\n", remoteContent)
+	assert.Equal(t, watchContent, remoteContent)
 }
 
 // Validates: R-2.9.1
@@ -261,7 +262,7 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 	// Poll until the file's content is remote after resume, not only its
 	// name: the upload creates the file empty first, and a daemon stopped
 	// between that and the content leaves 0 bytes behind (LI-20261110-01).
-	waitForRemoteFileContent(t, opsCfgPath, nil, "", remotePath, pausedContent, 3*time.Minute)
+	waitForRemoteFileContent(t, opsCfgPath, nil, remotePath, pausedContent)
 
 	// Send SIGTERM for graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -338,17 +339,18 @@ func TestE2E_SyncWatch_ControlSocketReload(t *testing.T) {
 	waitForDaemonReady(t, eventsPath)
 
 	// Create a file in drive1's sync dir to verify it works.
+	const beforeReloadContent = "before reload\n"
 	localDir1 := filepath.Join(syncDir1, testFolder1)
 	require.NoError(t, os.MkdirAll(localDir1, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir1, "before-reload.txt"),
-		[]byte("before reload\n"),
+		[]byte(beforeReloadContent),
 		0o600,
 	))
 
-	// Poll until drive1's file appears remotely.
+	// Poll until drive1's file content is remote, not only its name.
 	remotePath1 := "/" + testFolder1 + "/before-reload.txt"
-	waitForRemoteReadContains(t, opsCfgPath, nil, "", "before-reload.txt", 3*time.Minute, "stat", remotePath1)
+	waitForRemoteFileContent(t, opsCfgPath, nil, remotePath1, beforeReloadContent)
 
 	// Rewrite config to add drive2.
 	updatedCfg := fmt.Sprintf("[%q]\nsync_dir = %q\n\n[%q]\nsync_dir = %q\n",
@@ -361,17 +363,18 @@ func TestE2E_SyncWatch_ControlSocketReload(t *testing.T) {
 	waitForControlSocketMount(t, env, drive2, 30*time.Second)
 
 	// Create a file in drive2's sync dir.
+	const afterReloadContent = "after reload\n"
 	localDir2 := filepath.Join(syncDir2, testFolder2)
 	require.NoError(t, os.MkdirAll(localDir2, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir2, "after-reload.txt"),
-		[]byte("after reload\n"),
+		[]byte(afterReloadContent),
 		0o600,
 	))
 
-	// Poll until drive2's file appears remotely.
+	// Poll until drive2's file has its full size remotely, not only its name.
 	remotePath2 := "/" + testFolder2 + "/after-reload.txt"
-	pollForDrive2File(t, cfgPath, env, drive2, "after-reload.txt", 3*time.Minute, "stat", remotePath2)
+	waitForRemoteStatSizeForDrive(t, cfgPath, env, drive2, remotePath2, int64(len(afterReloadContent)), 3*time.Minute)
 
 	// Send SIGTERM for graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -379,31 +382,5 @@ func TestE2E_SyncWatch_ControlSocketReload(t *testing.T) {
 
 	// Verify file contents.
 	remoteContent1 := getRemoteFile(t, opsCfgPath, nil, remotePath1)
-	assert.Equal(t, "before reload\n", remoteContent1)
-}
-
-// pollForDrive2File retries a CLI command with a specific drive until stdout
-// contains the expected string or timeout is reached.
-func pollForDrive2File(
-	t *testing.T, cfgPath string, env map[string]string, driveID, expected string,
-	timeout time.Duration, args ...string,
-) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-
-	for attempt := 0; ; attempt++ {
-		stdout, _, err := runCLICore(t, cfgPath, env, driveID, args...)
-		if err == nil && strings.Contains(stdout, expected) {
-			return
-		}
-
-		if time.Now().After(deadline) {
-			require.Failf(t, "pollForDrive2File: timed out",
-				"after %v waiting for %q in drive %s output of %v\nlast stdout: %s",
-				timeout, expected, driveID, args, stdout)
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
+	assert.Equal(t, beforeReloadContent, remoteContent1)
 }

@@ -162,7 +162,17 @@ abandoning the session request on purpose. In nine live rounds on 2026-11-11
 Graph refused the first delete with 412 four times and the second attempt
 removed the item every time. Canonical policy: `spec/design/graph-client.md` (Transfers) and
 `spec/design/drive-transfers.md` (New files and their placeholder).
-Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [transfers.md](../requirements/transfers.md)
+The test bug had seventeen siblings: every other e2e wait that stopped,
+edited or acted on a live daemon's upload once the file's name was visible,
+in the watch, orchestrator, websocket and shortcut tests. One is
+`TestE2E_SyncWatch_FileModification`, whose 2026-10-30 run changed the file
+while its first upload was still in flight. They now wait for the size
+(`waitForRemoteStatSize`, `waitForRemoteStatSizeForDrive`) or the content
+(`waitForRemoteFileContent`), and `pollForDrive2File`, a name-only wait on a
+second drive, is gone. Current test policy:
+[live-recurring-families.md](live-recurring-families.md#name-only-wait-stops-the-daemon-mid-create-and-leaves-an-empty-placeholder)
+and `spec/design/system.md` (Verification Policy).
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [transfers.md](../requirements/transfers.md), [system.md](../design/system.md)
 
 ## LI-20261029-01: NFD-named local file was never uploaded on Linux while sync reported success
 
