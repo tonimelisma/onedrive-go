@@ -39,6 +39,14 @@ import (
 // retrying (CLI) transport resends it; sync's transport retries nothing
 // (R-6.8.8), so there a transient answer still goes to the engine.
 //
+// That engine has to know which failures may have left a file behind. A
+// CreateFile failure that does not say whether the create landed carries
+// ErrCreateOutcomeUnknown: no answer at all (a dropped connection, a canceled
+// or expired context), a 5xx, a 408, and any failure after a 2xx answer that
+// did not yield the item. A definite refusal (409, 429, any other 4xx) does
+// not. Sync keeps its record of the intended create through the first kind
+// (R-5.6.15), so the empty file such a create left is recognized as its own.
+//
 // L-01 measured the cost: the POST makes an empty item that already carries
 // the empty-content quickXorHash, and an upload session on that item with
 // fileSystemInfo commits one version in total. A zero-byte file needs no
@@ -56,7 +64,9 @@ type createFileRequest struct {
 // CreateFile creates an empty file named name under parentID. It never
 // replaces: an existing item with that name, or with a name OneDrive treats
 // as the same, fails with ErrConflict. A transient 404 for a just-created
-// parent is retried like the upload-session create it replaces.
+// parent is retried like the upload-session create it replaces. A failure
+// that leaves open whether the file was created wraps
+// ErrCreateOutcomeUnknown.
 func (c *Client) CreateFile(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
 	c.logger.Debug("creating file",
 		slog.String("drive_id", driveID.String()),
@@ -79,13 +89,19 @@ func (c *Client) CreateFile(ctx context.Context, driveID driveid.ID, parentID, n
 		return c.do(retry.WithReplaySafe(ctx), http.MethodPost, path, bytes.NewReader(bodyBytes))
 	})
 	if err != nil {
+		if createOutcomeUnknown(err) {
+			return nil, fmt.Errorf("graph: creating file %q: %w: %w", name, ErrCreateOutcomeUnknown, err)
+		}
+
 		return nil, fmt.Errorf("graph: creating file %q: %w", name, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 
+	// From here on OneDrive has answered 2xx: the file exists, and a failure
+	// to learn its item leaves the caller without the ID of a file it made.
 	item, hasItem, err := c.decodeItemBody(resp.Body, "create file")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("graph: reading the answer to creating file %q: %w: %w", name, ErrCreateOutcomeUnknown, err)
 	}
 	if hasItem {
 		return item, nil
@@ -94,11 +110,31 @@ func (c *Client) CreateFile(ctx context.Context, driveID driveid.ID, parentID, n
 	return c.readCreatedFileByName(ctx, driveID, parentID, name)
 }
 
+// createOutcomeUnknown reports whether err, the failure of the request that
+// creates a file, leaves open whether the file was created. Any answer short
+// of a definite refusal does: no answer at all (a transport failure, a
+// canceled or expired context: nothing that is a *GraphError), a 5xx, or a
+// 408. A 4xx other than 408 is a refusal: nothing was created.
+func createOutcomeUnknown(err error) bool {
+	var graphErr *GraphError
+	if !errors.As(err, &graphErr) {
+		return true
+	}
+
+	return graphErr.StatusCode >= http.StatusInternalServerError || graphErr.StatusCode == http.StatusRequestTimeout
+}
+
 // readCreatedFileByName finds a file the create answered without an item.
+// The create itself succeeded, so every failure here wraps
+// ErrCreateOutcomeUnknown: the file exists and the caller has no ID for it.
+// A file the folder does not list yet is that failure too, and never
+// ErrUploadCompletedWithoutItem: no content was sent, and the transfer layer
+// answers that error by looking the name up and checking the file against the
+// content, which fails an empty file as a bad upload and loses the mark.
 func (c *Client) readCreatedFileByName(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
 	children, err := c.ListChildren(ctx, driveID, parentID)
 	if err != nil {
-		return nil, fmt.Errorf("graph: reading back created file %q: %w", name, err)
+		return nil, fmt.Errorf("graph: reading back created file %q: %w: %w", name, ErrCreateOutcomeUnknown, err)
 	}
 
 	for i := range children {
@@ -107,7 +143,7 @@ func (c *Client) readCreatedFileByName(ctx context.Context, driveID driveid.ID, 
 		}
 	}
 
-	return nil, fmt.Errorf("graph: created file %q is not in its folder: %w", name, ErrUploadCompletedWithoutItem)
+	return nil, fmt.Errorf("graph: created file %q is not in its folder: %w", name, ErrCreateOutcomeUnknown)
 }
 
 // CreatedFunc is called after a new file's empty item exists and before any
