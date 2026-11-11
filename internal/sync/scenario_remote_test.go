@@ -86,9 +86,23 @@ type moveScenarioRemote struct {
 	// item exists, the hook never runs, and the caller gets the error
 	// graph.CreateFile returns for a create whose outcome it cannot know.
 	loseCreateAnswers bool
-	folderCreates     []string
-	deletes           []string
-	moves             []string
+	// refuseCreate, when set, answers every create (a new file, a folder)
+	// before anything is made; a non-nil error refuses it, as the 400
+	// invalidRequest for a path OneDrive counts as too long did (live,
+	// 2026-11-02). It runs without the remote's lock.
+	refuseCreate func(parentID, name string) error
+	// invisibleFor hides the item at a root-relative path from path reads
+	// and child listings for that many such reads, as Graph's path and
+	// children routes lag behind a create (LI-20260405-07, LI-20260405-09).
+	// Delta and reads by ID see it at once.
+	invisibleFor map[string]int
+	// sessions are the open upload sessions by URL
+	// (scenario_remote_session_test.go).
+	sessions      map[graph.UploadURL]scenarioSession
+	sessionSeq    int
+	folderCreates []string
+	deletes       []string
+	moves         []string
 }
 
 type deletedScenarioItem struct {
@@ -529,10 +543,43 @@ func (r *moveScenarioRemote) listChildren(parentID string) []graph.Item {
 	defer r.mu.Unlock()
 	var children []graph.Item
 	for _, id := range r.childIDs(parentID) {
+		if r.hiddenLocked(r.pathOf(id)) {
+			continue
+		}
 		children = append(children, *r.items[id])
 	}
 
 	return children
+}
+
+// hiddenLocked reports whether the item at remotePath is still invisible to
+// a path read or a listing (invisibleFor), and counts this read against its
+// lag. The caller holds the lock.
+func (r *moveScenarioRemote) hiddenLocked(remotePath string) bool {
+	left := r.invisibleFor[remotePath]
+	if left <= 0 {
+		return false
+	}
+	if left == 1 {
+		delete(r.invisibleFor, remotePath)
+	} else {
+		r.invisibleFor[remotePath] = left - 1
+	}
+
+	return true
+}
+
+// refusal is refuseCreate's answer to a create of name under parentID, or
+// nil. The caller does not hold the lock.
+func (r *moveScenarioRemote) refusal(parentID, name string) error {
+	r.mu.Lock()
+	refuse := r.refuseCreate
+	r.mu.Unlock()
+	if refuse == nil {
+		return nil
+	}
+
+	return refuse(parentID, name)
 }
 
 func (r *moveScenarioRemote) getItem(itemID string) (*graph.Item, error) {
@@ -550,7 +597,7 @@ func (r *moveScenarioRemote) getItemByPath(remotePath string) (*graph.Item, erro
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	item, ok := r.itemAt(strings.Trim(remotePath, "/"))
-	if !ok {
+	if !ok || r.hiddenLocked(r.pathOf(item.ID)) {
 		return nil, graph.ErrNotFound
 	}
 	copied := *item
@@ -650,6 +697,9 @@ func (r *moveScenarioRemote) isSelfOrDescendant(id, ancestor string) bool {
 }
 
 func (r *moveScenarioRemote) createFolder(parentID, name string) (*graph.Item, error) {
+	if refusal := r.refusal(parentID, name); refusal != nil {
+		return nil, refusal
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.childNamed(parentID, name); exists {
@@ -686,6 +736,9 @@ func (r *moveScenarioRemote) upload(t *testing.T, parentID, name string, content
 	if err != nil {
 		return nil, err
 	}
+	if refusal := r.refusal(parentID, name); refusal != nil {
+		return nil, refusal
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.uploads++
@@ -703,6 +756,7 @@ func (r *moveScenarioRemote) upload(t *testing.T, parentID, name string, content
 // interruptCreates set it stops after the hook, as a process killed mid-upload
 // would, leaving the empty item behind. With loseCreateAnswers set it stops
 // before the hook: the empty item exists and the client never learned its ID.
+// refuseCreate refuses it before anything is made.
 func (r *moveScenarioRemote) uploadCreating(
 	t *testing.T, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
 ) (*graph.Item, error) {
@@ -710,6 +764,9 @@ func (r *moveScenarioRemote) uploadCreating(
 	data, err := readScenarioUpload(content, size)
 	if err != nil {
 		return nil, err
+	}
+	if refusal := r.refusal(parentID, name); refusal != nil {
+		return nil, refusal
 	}
 
 	r.mu.Lock()
@@ -736,10 +793,7 @@ func (r *moveScenarioRemote) uploadCreating(
 	}
 	if interrupt {
 		if churn {
-			r.mu.Lock()
-			r.items[id].ETag = r.nextETag()
-			r.touch(id)
-			r.mu.Unlock()
+			r.churnETag(id)
 		}
 		return nil, &graph.CreatedItemError{Item: &created, Err: errors.New(scenarioConnectionReset)}
 	}
@@ -751,6 +805,24 @@ func (r *moveScenarioRemote) uploadCreating(
 	}
 	copied := *r.items[id]
 	return &copied, nil
+}
+
+// churnETag moves id's eTag without touching its content, as opening and then
+// canceling an upload session on an empty item does live (e2e
+// TestE2E_SyncWatch_FileModification). An item already gone is left alone.
+func (r *moveScenarioRemote) churnETag(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.churnETagLocked(id)
+}
+
+func (r *moveScenarioRemote) churnETagLocked(id string) {
+	item, ok := r.items[id]
+	if !ok {
+		return
+	}
+	item.ETag = r.nextETag()
+	r.touch(id)
 }
 
 // uploadToItem honors If-Match like Graph does (live probe L-02).
@@ -785,8 +857,9 @@ func readScenarioUpload(content io.ReaderAt, size int64) (string, error) {
 }
 
 // clone is an independent copy of the drive as it is now, recycle bin,
-// versions and change log included: the OneDrive a crashed client meets when
-// it starts again (crash_points_test.go).
+// versions, change log and open upload sessions included: the OneDrive a
+// crashed client meets when it starts again (crash_points_test.go). The
+// fault knobs are the test's, not OneDrive's, and are not copied.
 func (r *moveScenarioRemote) clone() *moveScenarioRemote {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -803,6 +876,11 @@ func (r *moveScenarioRemote) clone() *moveScenarioRemote {
 		tombstones:          make(map[string]deletedScenarioItem, len(r.tombstones)),
 		recycled:            append([]string(nil), r.recycled...),
 		versions:            append([]string(nil), r.versions...),
+		sessions:            make(map[graph.UploadURL]scenarioSession, len(r.sessions)),
+		sessionSeq:          r.sessionSeq,
+	}
+	for url, session := range r.sessions {
+		c.sessions[url] = session
 	}
 	for id, item := range r.items {
 		copied := *item

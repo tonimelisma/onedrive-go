@@ -129,6 +129,41 @@ func TestUpload_ExistingNameIsNeverReplaced(t *testing.T) {
 	assert.Zero(t, other.Load(), "nothing may follow a refused create")
 }
 
+// Validates: R-5.6.14, R-5.6.15
+//
+// Live, 2026-11-02: OneDrive refused the create of a path it counts as too
+// long with 400 invalidRequest. A refused create made nothing: the record
+// hook does not run, no session or content follows, nothing is read back or
+// deleted, and the failure is a definite refusal rather than an unknown
+// outcome, so sync does not keep an intent for it.
+func TestUpload_RefusedCreateSendsNoContentAndDeletesNothing(t *testing.T) {
+	rec := &sessionUploadRecorder{createStatus: http.StatusBadRequest}
+	srv := newSessionUploadServer(t, rec, http.StatusOK)
+	defer srv.Close()
+
+	content := []byte("my words")
+	hookRan := false
+	_, err := newTestClient(t, srv.URL).UploadCreating(t.Context(), driveid.New("d"), "parent", "doc.txt",
+		bytes.NewReader(content), int64(len(content)), time.Time{}, nil,
+		func(*Item) error {
+			hookRan = true
+			return nil
+		})
+
+	require.ErrorIs(t, err, ErrBadRequest)
+	require.NotErrorIs(t, err, ErrCreateOutcomeUnknown, "a refusal says the create did not happen")
+	var created *CreatedItemError
+	require.NotErrorAs(t, err, &created, "no item exists to name")
+	assert.False(t, hookRan, "nothing to record")
+	assert.Len(t, rec.createBodies, 1, "a refusal is not resent")
+	assert.Empty(t, rec.sessionURLs)
+	assert.Empty(t, rec.chunkBodies)
+	assert.Zero(t, rec.simplePuts)
+	assert.Zero(t, rec.reads)
+	assert.Empty(t, rec.deleteIfMatch)
+	assert.Empty(t, rec.other)
+}
+
 // Validates: R-5.6.14, R-5.6.2
 func TestUpload_NewFileContentGoesByIDConditionalOnTheCreatedETag(t *testing.T) {
 	rec := &sessionUploadRecorder{}
@@ -277,6 +312,39 @@ func TestUpload_FailedContentStepStopsWhenItsEmptyItemIsAlreadyGone(t *testing.T
 
 	assert.Equal(t, []string{`"read-1"`}, rec.deleteIfMatch)
 	assert.Equal(t, 2, rec.reads)
+}
+
+// Validates: R-5.6.14
+//
+// The sequence of 2026-11-10 (LI-20261110-01) through the HTTP fake, on sync's
+// transport, which resends nothing: the session request reaches OneDrive and
+// opens the session, which moves the empty item's eTag, and its answer is
+// lost. The cleanup's first read still shows the creation eTag (the session
+// landed after it), so that delete is refused with 412; the second read shows
+// the moved eTag, and its delete removes the empty item.
+func TestUpload_SessionRequestThatLandsWithoutAnAnswerStillRemovesTheEmptyItem(t *testing.T) {
+	rec := &sessionUploadRecorder{
+		sessionLandsThenDrops: true,
+		readBacks:             []createdItemReadBack{{etag: createdFileETag}},
+		deleteStatuses:        []int{http.StatusPreconditionFailed},
+	}
+	srv := newSessionUploadServer(t, rec, http.StatusOK)
+	defer srv.Close()
+
+	content := []byte("my words")
+	_, err := newNoRetryTestClient(t, srv.URL).Upload(t.Context(), driveid.New("d"), "parent", "doc.txt",
+		bytes.NewReader(content), int64(len(content)), time.Time{}, nil)
+
+	var created *CreatedItemError
+	require.ErrorAs(t, err, &created, "the failure names the item the create made")
+	assert.Equal(t, "small-item", created.Item.ID)
+	assert.False(t, IsFinalFragmentUncertain(err), "no content was sent")
+	assert.Len(t, rec.sessionURLs, 1, "the session request is sent once")
+	assert.Empty(t, rec.chunkBodies, "no content without a session answer")
+	assert.Equal(t, []string{createdFileETag, sessionLandedETag}, rec.deleteIfMatch,
+		"each delete is conditional on the eTag its own attempt read")
+	assert.Equal(t, 2, rec.reads)
+	assert.Empty(t, rec.other)
 }
 
 // Validates: R-5.6.14
