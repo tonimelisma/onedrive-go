@@ -124,9 +124,15 @@ Evidence:
   `createUploadSession` still reached the server and opened a session after
   the read: opening a session on an empty item moves its eTag
   ([graph-api-quirks.md](graph-api-quirks.md), "An Upload Session Moves An
-  Empty Item's eTag"). This is inferred from the order of the requests. No
-  probe has confirmed it, and the client cannot cancel such a session,
-  because it never received its upload URL.
+  Empty Item's eTag"). The client cannot cancel such a session, because it
+  never received its upload URL.
+- A live probe on Personal on 2026-11-11 confirmed that order. It created an
+  empty item, canceled `createUploadSession` at a set delay after the request
+  was written, and read the item every 0.1 s. Canceled 40, 80 and 160 ms
+  after the write (four rounds), the request failed with `context canceled`
+  and the item's eTag still moved from `,1` to `,2`, 0.24 s to 0.65 s after
+  the client had given up, with the item still 0 bytes. Canceled at once (two
+  rounds), the eTag never moved.
 - Canceling the upload on the first signal is the specified behavior
   (R-6.3.6). The cleanup runs on a context detached from the canceled one:
   both of its requests were answered after the cancel.
@@ -150,7 +156,11 @@ that reads back with content or without an eTag, and a 404 counts as removed.
 The Graph client's own cleanup and the transfer manager's (`PlaceholderRemover`)
 both go through it. `TestE2E_SyncWatch_PauseResume` now waits for the remote
 content (`waitForRemoteFileContent`), not the name, before it stops the
-daemon. Canonical policy: `spec/design/graph-client.md` (Transfers) and
+daemon, so it no longer provokes the cleanup; the integration test
+`TestIntegration_RemoveEmptyItem_AfterAbandonedUploadSession` does, by
+abandoning the session request on purpose. In nine live rounds on 2026-11-11
+Graph refused the first delete with 412 four times and the second attempt
+removed the item every time. Canonical policy: `spec/design/graph-client.md` (Transfers) and
 `spec/design/drive-transfers.md` (New files and their placeholder).
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [transfers.md](../requirements/transfers.md)
 

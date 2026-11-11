@@ -320,8 +320,8 @@ empty item moves its eTag although no content landed
 (`TestUpload_FailedContentStepRemovesItsEmptyItemConditionally`,
 `TestUpload_FailedContentStepRemovesItsEmptyItemByItsCurrentETag`). One read
 and one delete are not enough: a delete answered 412 means the eTag moved
-again after the read (LI-20261110-01, where a session request the client had
-canceled appears to have still landed), so the read and the delete are
+again after the read (LI-20261110-01: a session request the client has
+canceled still lands, up to 0.65 s later in a live probe), so the read and the delete are
 repeated, `placeholderCleanupAttempts` (3) attempts in all, on a context
 detached from the upload's and bounded as a whole by
 `placeholderCleanupTimeout` (10 s). An item that reads back with content or
@@ -331,7 +331,8 @@ next pass (R-5.6.14, `TestUpload_FailedContentStepReadsAgainWhenItsDeleteIsRefus
 `TestUpload_FailedContentStepLeavesAnItemThatGainedContentBetweenAttempts`,
 `TestUpload_FailedContentStepStopsAfterThreeRefusedDeletes`,
 `TestUpload_FailedContentStepStopsWhenItsEmptyItemIsAlreadyGone`,
-`TestRemoveEmptyItem`).
+`TestRemoveEmptyItem`; live, in the integration tier,
+`TestIntegration_RemoveEmptyItem_AfterAbandonedUploadSession`).
 
 Overwrites by item ID take the caller's preflight eTag as `If-Match` on both
 routes (R-5.6.2, D-022, `TestUploadToItem_OverwriteIsConditionalOnBothRoutes`);

@@ -224,7 +224,7 @@ func TestUpload_FailedContentStepReadsAgainWhenItsDeleteIsRefused(t *testing.T) 
 		deleteStatuses: []int{http.StatusPreconditionFailed},
 	}
 
-	failUploadAfterCreate(t, rec)
+	require.Error(t, failUploadAfterCreate(t, rec))
 
 	assert.Equal(t, []string{`"read-1"`, `"read-2"`}, rec.deleteIfMatch,
 		"each delete is conditional on the eTag its own attempt read")
@@ -240,7 +240,7 @@ func TestUpload_FailedContentStepLeavesAnItemThatGainedContentBetweenAttempts(t 
 		deleteStatuses: []int{http.StatusPreconditionFailed},
 	}
 
-	failUploadAfterCreate(t, rec)
+	require.Error(t, failUploadAfterCreate(t, rec))
 
 	assert.Equal(t, []string{`"read-1"`}, rec.deleteIfMatch)
 	assert.Equal(t, 2, rec.reads)
@@ -272,7 +272,7 @@ func TestUpload_FailedContentStepStopsWhenItsEmptyItemIsAlreadyGone(t *testing.T
 		deleteStatuses: []int{http.StatusPreconditionFailed},
 	}
 
-	failUploadAfterCreate(t, rec)
+	require.Error(t, failUploadAfterCreate(t, rec))
 
 	assert.Equal(t, []string{`"read-1"`}, rec.deleteIfMatch)
 	assert.Equal(t, 2, rec.reads)
@@ -368,7 +368,7 @@ func TestRemoveEmptyItem(t *testing.T) {
 
 			if tc.wantErr != nil {
 				require.ErrorIs(t, err, tc.wantErr)
-				assert.ErrorContains(t, err, "small-item")
+				require.ErrorContains(t, err, "small-item")
 			} else {
 				require.NoError(t, err)
 			}

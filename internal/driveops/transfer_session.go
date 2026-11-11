@@ -71,7 +71,9 @@ func existingItemSessionKey(localPath, itemID string) string {
 	return "item::" + itemID + "::" + localPath
 }
 
-// cancelSessionTimeout bounds the best-effort cancel of a dropped session.
+// cancelSessionTimeout bounds each best-effort cleanup after a failed upload:
+// the cancel of a dropped session, and the removal of the empty item a create
+// left (removePlaceholder).
 const cancelSessionTimeout = 10 * time.Second
 
 // persistedSessionUpload uploads through a recorded, resumable session.

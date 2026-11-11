@@ -838,6 +838,46 @@ type createdItemReadBack struct {
 	size   int
 }
 
+// serveDelete records a delete of the created item and answers it from
+// deleteStatuses, or 204 past the end of that script. The caller holds mu.
+func (rec *sessionUploadRecorder) serveDelete(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+
+	rec.deleteIfMatch = append(rec.deleteIfMatch, r.Header.Get("If-Match"))
+	status := http.StatusNoContent
+	if n := len(rec.deleteIfMatch); n <= len(rec.deleteStatuses) {
+		status = rec.deleteStatuses[n-1]
+	}
+	w.WriteHeader(status)
+	if status != http.StatusNoContent {
+		writeTestResponse(t, w, `{"error":{"code":"scriptedDeleteAnswer"}}`)
+	}
+}
+
+// serveReadBack answers a read-back of the created item from readBacks, or
+// with currentETag and currentSize past the end of that script. The caller
+// holds mu.
+func (rec *sessionUploadRecorder) serveReadBack(t *testing.T, w http.ResponseWriter) {
+	t.Helper()
+
+	read := createdItemReadBack{etag: rec.currentETag, size: rec.currentSize}
+	if read.etag == "" {
+		read.etag = createdFileETag
+	}
+	if rec.reads < len(rec.readBacks) {
+		read = rec.readBacks[rec.reads]
+	}
+	rec.reads++
+	if read.status != 0 {
+		w.WriteHeader(read.status)
+		writeTestResponse(t, w, `{"error":{"code":"scriptedReadAnswer"}}`)
+
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	writeTestResponsef(t, w, `{"id":"small-item","name":"small.txt","eTag":%q,"size":%d,"file":{}}`, read.etag, read.size)
+}
+
 func newSessionUploadServer(t *testing.T, rec *sessionUploadRecorder, sessionStatus int) *httptest.Server {
 	t.Helper()
 
@@ -859,32 +899,9 @@ func newSessionUploadServer(t *testing.T, rec *sessionUploadRecorder, sessionSta
 			rec.createURLs = append(rec.createURLs, r.URL.RawPath+"|"+r.URL.Path)
 			serveCreateFile(t, w, r, "small-item")
 		case r.Method == http.MethodDelete:
-			rec.deleteIfMatch = append(rec.deleteIfMatch, r.Header.Get("If-Match"))
-			status := http.StatusNoContent
-			if n := len(rec.deleteIfMatch); n <= len(rec.deleteStatuses) {
-				status = rec.deleteStatuses[n-1]
-			}
-			w.WriteHeader(status)
-			if status != http.StatusNoContent {
-				writeTestResponse(t, w, `{"error":{"code":"scriptedDeleteAnswer"}}`)
-			}
+			rec.serveDelete(t, w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/items/small-item"):
-			read := createdItemReadBack{etag: rec.currentETag, size: rec.currentSize}
-			if read.etag == "" {
-				read.etag = createdFileETag
-			}
-			if rec.reads < len(rec.readBacks) {
-				read = rec.readBacks[rec.reads]
-			}
-			rec.reads++
-			if read.status != 0 {
-				w.WriteHeader(read.status)
-				writeTestResponse(t, w, `{"error":{"code":"scriptedReadAnswer"}}`)
-
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			writeTestResponsef(t, w, `{"id":"small-item","name":"small.txt","eTag":%q,"size":%d,"file":{}}`, read.etag, read.size)
+			rec.serveReadBack(t, w)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "createUploadSession"):
 			rec.sessionURLs = append(rec.sessionURLs, r.URL.Path)
 			rec.sessionMatch = append(rec.sessionMatch, r.Header.Get("If-Match"))
