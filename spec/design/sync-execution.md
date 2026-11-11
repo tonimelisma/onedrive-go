@@ -213,13 +213,30 @@ A 409 on the create is resolved, not retried as is (`resolveCreateConflict`):
   nothing (`TestUploadNewFile_ConflictNeverClaimsAFileThatIsNotItsOwnEmptyCreate`).
   When nothing of that name is listed yet, a prior intent is kept for the
   next retry (`TestUploadNewFile_ConflictOnAFileNotListedYetKeepsThePriorIntent`).
+  The stale precondition keeps the 409 in its error chain, and the engine
+  supersedes it all the same and replans in the same run, which finds a name
+  the listing did not show yet
+  (`TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt`).
+
+A read that fails while resolving the 409 (the pending-create row, the folder
+listing, the record of a claim) is that read's failure, classified by its own
+answer: a throttled or failing listing proves nothing about the plan. Joined
+to the 409, it read as a stale precondition under the 409's status
+(`TestExecutor_Upload_ListingFailureAfterACreateConflictIsClassifiedByItsOwnAnswer`).
+The same holds for the lookup of an upload whose final fragment may have
+committed: driveops reports its failure as an unknown outcome carrying the
+lookup's error only, so a final fragment's 409 or 412 before it does not make
+`uploadTransferError` read it as stale
+(`TestUploadTransferError_AFailedOutcomeLookupIsNotAStalePrecondition`).
 
 A remote folder create resolves its 409 the same way: an
 existing folder of the same spelling is adopted, a differently spelled
 sibling is the same durable collision (as a stale precondition it was
 replanned and refused on every pass;
 `TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurableCollision`,
-`TestExecutor_CreateRemoteFolder_ConflictWithAnotherSpellingIsADurableCollision`).
+`TestExecutor_CreateRemoteFolder_ConflictWithAnotherSpellingIsADurableCollision`),
+and a listing that fails is the listing's failure, not recorded under the 409
+(`TestExecutor_CreateRemoteFolder_ListingFailureAfterAConflictIsClassifiedByItsOwnAnswer`).
 
 A spelling-only local move (the old and new names are one OneDrive name:
 case or Unicode form) accepts a destination that is the source's own inode,
@@ -369,7 +386,14 @@ move unsafe; a folder delete keeps the condition, so a child appearing after
 the preflight still stops the delete. If Graph returns 412 after the
 explicit preflight, the executor treats that as a post-preflight stale
 precondition with remote-write capability and does not report ordinary retry
-work for that exact old action.
+work for that exact old action. An overwrite upload is conditional on the
+preflight eTag the same way (R-5.6.2): its 412, a create's 409 resolved as
+stale and an invalidated upload session are stale preconditions with
+remote-write capability (`uploadTransferError`; a changed upload source stays
+local-read). Their error keeps the Graph answer for the log, and the engine
+classifies a stale precondition before any status it carries, so the action is
+superseded and replanned in the same run
+(`TestRunOnce_OverwriteRefusedWithA412IsReplannedInTheSameRun`).
 
 A folder delete on OneDrive is recursive, so after the preflight it lists the
 folder's live descendants (`validateRemoteFolderDeleteChildren`). The plan's

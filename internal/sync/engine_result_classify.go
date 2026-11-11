@@ -20,8 +20,8 @@ const (
 	resultFatal      = errclass.ClassFatal
 )
 
-// classifyResult is a pure function that maps a ActionCompletion to a
-// single ResultDecision. No side effects — classification is separate from
+// classifyResult is a pure function that maps an actionCompletion to a
+// single resultDecision. No side effects — classification is separate from
 // routing.
 func classifyResult(r *actionCompletion) resultDecision {
 	if r.Success {
@@ -61,6 +61,20 @@ func classifyResult(r *actionCompletion) resultDecision {
 		return withRuntimeSummary(&resultDecision{
 			Class:     resultShutdown,
 			TrialHint: trialHintShutdown,
+		})
+	}
+
+	// Before any server answer: a stale precondition is the executor's verdict
+	// that the plan no longer holds, and the Graph error it may wrap (a
+	// create's 409, a conditional overwrite's 412) is the evidence it read,
+	// not a failure to retry. Classified by that status first, a stale 409 was
+	// held as actionable retry work and a stale 412 as transient_conflict,
+	// instead of being replanned at once.
+	if errors.Is(r.Err, errActionPreconditionChanged) {
+		return withRuntimeSummary(&resultDecision{
+			Class:       resultSuperseded,
+			Persistence: persistNone,
+			TrialHint:   trialHintReclassify,
 		})
 	}
 
@@ -130,14 +144,6 @@ func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {
 
 func classifyLocalResult(r *actionCompletion) resultDecision {
 	conditionType := issueTypeForResult(r)
-
-	if errors.Is(r.Err, errActionPreconditionChanged) {
-		return withRuntimeSummary(&resultDecision{
-			Class:       resultSuperseded,
-			Persistence: persistNone,
-			TrialHint:   trialHintReclassify,
-		})
-	}
 
 	switch driveops.ClassifyLocalError(r.Err) {
 	case driveops.LocalErrorNoSpace:

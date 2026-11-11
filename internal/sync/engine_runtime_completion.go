@@ -92,7 +92,7 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 		return nil, nil
 	case errclass.ClassFatal:
 		flow.applyCompletedSubtree(current, r.ActionID, "fatal action completion")
-		flow.applyFatalAuthEffects(ctx, r, decision.ConditionKey)
+		flow.applyFatalAuthEffects(r, decision.ConditionKey)
 		flow.recordError(decision, r)
 		return nil, fatalResultError(r)
 	case errclass.ClassRetryableTransient, errclass.ClassScopeBlockingTransient, errclass.ClassActionable:
@@ -152,7 +152,7 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 		return nil, nil
 	case scopeTrialOutcomeFatal:
 		flow.applyCompletedSubtree(current, r.ActionID, "trial fatal action completion")
-		flow.applyFatalAuthEffects(ctx, r, decision.ConditionKey)
+		flow.applyFatalAuthEffects(r, decision.ConditionKey)
 		flow.recordError(decision, r)
 		return nil, fatalResultError(r)
 	}
@@ -424,8 +424,10 @@ func fatalResultError(r *actionCompletion) error {
 	return &fatalCompletionError{path: r.Path, err: r.Err}
 }
 
+// applyFatalAuthEffects marks the account as needing a sign-in for the first
+// fatal 401 of a run. The mark is a catalog update under the config lock,
+// whose wait the config package bounds, so it takes no context.
 func (flow *engineFlow) applyFatalAuthEffects(
-	ctx context.Context,
 	r *actionCompletion,
 	conditionKey ConditionKey,
 ) {
@@ -464,8 +466,6 @@ func (flow *engineFlow) applyFatalAuthEffects(
 	flow.deps.logger.Debug("authentication required: sync stopping",
 		logFields...,
 	)
-
-	_ = ctx
 }
 
 func isPublicationOnlyActionType(actionType actionType) bool {

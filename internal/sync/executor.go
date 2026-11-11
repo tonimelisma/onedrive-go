@@ -324,6 +324,11 @@ func (e *executor) createLocalFolder(action *Action) actionOutcome {
 	return e.folderOutcome(action, folder)
 }
 
+// resolvedParentIDForOutcome is the parent ID a successful outcome records:
+// the one Graph returned with the item, else the one the path resolves to,
+// else the baseline's. A resolver failure is dropped on purpose: the mutation
+// already succeeded, the next fallback still names a parent, and observation
+// corrects a wrong one from remote truth.
 func (e *executor) resolvedParentIDForOutcome(action *Action, item *graph.Item) string {
 	if item != nil && item.ParentID != "" {
 		return item.ParentID
@@ -344,16 +349,21 @@ func (e *executor) resolvedParentIDForOutcome(action *Action, item *graph.Item) 
 // adoptExistingRemoteFolder handles a 409 on a folder create. A folder with
 // exactly this name already being there is the outcome the create wanted (a
 // lost response to our own earlier create, or another device creating the
-// same folder): adopt it, as observing it would have. Anything else under the
-// name, a file or a differently spelled folder OneDrive treats as the same
-// name, is a stale precondition for the planner to resolve; the 409 used to
-// be retried as is, forever.
+// same folder): adopt it, as observing it would have. A sibling spelled
+// differently that OneDrive treats as the same name is a durable name
+// collision; anything else under the name (a file, or nothing listed yet) is
+// a stale precondition for the planner to resolve. The 409 used to be retried
+// as is, forever.
+//
+// A listing that fails is the listing's failure, classified by its own
+// answer: it proves nothing about the name. Joined to the 409, an outage or a
+// throttle was recorded under the 409's status as a per-item refusal.
 func (e *executor) adoptExistingRemoteFolder(
 	ctx context.Context, driveID driveid.ID, parentID, name string, conflictErr error,
 ) (*graph.Item, error) {
 	children, err := e.items.ListChildren(ctx, driveID, parentID)
 	if err != nil {
-		return nil, fmt.Errorf("listing parent after folder create conflict: %w", errors.Join(conflictErr, err))
+		return nil, fmt.Errorf("resolving the refused create of folder %s: listing its parent: %w", name, err)
 	}
 
 	for i := range children {
