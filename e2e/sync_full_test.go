@@ -275,7 +275,7 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(docsDir, "notes.txt"), []byte("notes content"), 0o600))
 
 	// Step 2: Upload-only sync to establish baseline.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Step 3: Assert files exist remotely (poll for eventual consistency).
 	stdout, _ := waitForRemoteReadContains(t, cfgPath, env, "", "readme.txt", pollTimeout, "ls", "/"+testFolder+"/docs")
@@ -290,8 +290,20 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	mkdirRemoteFolder(t, cfgPath, env, "/"+testFolder+"/data")
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/data/info.txt", "remote info data")
 
-	// Step 6: Bidirectional sync.
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	// Step 6: Bidirectional sync, repeated until delta carries the remote
+	// create and no action is left for the next sync.
+	infoPath := filepath.Join(syncDir, testFolder, "data", "info.txt")
+	requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		remoteWritePropagationTimeout,
+		"bidirectional sync should download the remote create and finish the local upload",
+		func(result syncAttemptResult) bool {
+			data, err := os.ReadFile(infoPath) //nolint:gosec // a file inside the test's own sync dir
+			return syncPassFinishedWork(result) && err == nil && string(data) == "remote info data"
+		},
+	)
 
 	// Step 7: Assert merge results.
 	// stuff.txt uploaded remotely.
@@ -299,7 +311,7 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 	assert.Contains(t, stdout, "stuff.txt")
 
 	// info.txt downloaded locally.
-	infoData := mustReadFile(t, filepath.Join(syncDir, testFolder, "data", "info.txt"))
+	infoData := mustReadFile(t, infoPath)
 	assert.Equal(t, "remote info data", string(infoData))
 
 	// readme.txt unchanged.
@@ -313,6 +325,7 @@ func TestE2E_Sync_BidirectionalMerge(t *testing.T) {
 
 	// Step 9: Re-sync should leave the test-owned subtree unchanged even if
 	// unrelated live-drive activity produces delta events elsewhere.
+	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, filepath.Join(syncDir, testFolder), "sync")
 }
 
@@ -333,11 +346,11 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	require.NoError(t, os.WriteFile(fragileFile, []byte("precious data"), 0o600))
 
 	// Step 2: Upload baseline.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Advance delta token past the upload so the subsequent deletion is
 	// visible via incremental delta (ci_issues.md §17).
-	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--download-only")
 
 	// Step 3: Modify local.
 	require.NoError(t, os.WriteFile(fragileFile, []byte(preciousLocalContent), 0o600))
@@ -405,11 +418,11 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(subDir, "nested.txt"), []byte("nested content"), 0o600))
 
 	// Step 2: Upload baseline.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Advance delta token past the upload so subsequent deletions are
 	// visible via incremental delta (ci_issues.md §17).
-	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--download-only")
 
 	// Verify all files exist remotely (poll for eventual consistency).
 	stdout, _ := waitForRemoteReadContains(t, cfgPath, env, "", "keep.txt", pollTimeout, "ls", "/"+testFolder)
@@ -484,6 +497,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 
 	// Step 6: Re-sync should not mutate the converged test subtree, even if
 	// other full-suite tests changed unrelated paths on the shared drive.
+	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync")
 }
 
@@ -546,7 +560,7 @@ func TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "remote-owned.txt"), []byte("initial remote-owned"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "local-deferred.txt"), []byte("initial local-deferred"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 	waitForRemoteReadContains(t, cfgPath, env, "", "remote-owned.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Step 2: Diverge one file remotely and a different file locally.
@@ -588,7 +602,7 @@ func TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges(t *testing.T) {
 	assert.Equal(t, "initial local-deferred", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/local-deferred.txt"))
 
 	// Step 5: A later upload-only pass should publish the deferred local-only changes.
-	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	out, _ := runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 	assert.Contains(t, out, "(upload only)")
 	waitForRemoteReadContains(t, cfgPath, env, "", "local-new.txt", pollTimeout, "ls", "/"+testFolder)
 	assert.Equal(t, "local deferred modification", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/local-deferred.txt"))
@@ -612,7 +626,7 @@ func TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "local-owned.txt"), []byte("initial local-owned"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "remote-deferred.txt"), []byte("initial remote-deferred"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 	waitForRemoteReadContains(t, cfgPath, env, "", "remote-deferred.txt", pollTimeout, "ls", "/"+testFolder)
 
 	// Step 2: Diverge one file locally and a different file remotely.
@@ -696,12 +710,13 @@ func TestE2E_Sync_DirectionalModes_PreserveEditEditConflict(t *testing.T) {
 			conflictFile := filepath.Join(localDir, "shared.txt")
 			require.NoError(t, os.WriteFile(conflictFile, []byte("original v1"), 0o600))
 
-			runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+			runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 			waitForRemoteReadContains(t, cfgPath, env, "", "shared.txt", pollTimeout, "ls", "/"+testFolder)
 
 			require.NoError(t, os.WriteFile(conflictFile, []byte("local edit v2"), 0o600))
 			putRemoteFile(t, cfgPath, env, "/"+testFolder+"/shared.txt", "remote edit v2")
 
+			// Single pass by design: this pass's own summary must report the conflict or the held-back download.
 			out, _ := runSyncWithMode(t, cfgPath, env, mode)
 			assert.Contains(t, out, mode.outputMode)
 			if mode.flag == flagUploadOnly {
@@ -748,8 +763,8 @@ func TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict(t *testing.T) {
 			fragileFile := filepath.Join(localDir, "fragile.txt")
 			require.NoError(t, os.WriteFile(fragileFile, []byte("precious data"), 0o600))
 
-			runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
-			runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+			runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
+			runSyncThroughTransientFailures(t, cfgPath, env, "--download-only")
 			waitForRemoteReadContains(t, cfgPath, env, "", "fragile.txt", pollTimeout, "ls", "/"+testFolder)
 
 			require.NoError(t, os.WriteFile(fragileFile, []byte(preciousLocalContent), 0o600))
@@ -833,6 +848,7 @@ func TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict(t *testing.T) {
 			mkdirRemoteFolder(t, cfgPath, env, "/"+testFolder)
 			putRemoteFile(t, cfgPath, env, "/"+testFolder+"/collision.txt", "remote version")
 
+			// Single pass by design: this pass's own summary must report the conflict or the held-back download.
 			out, _ := runSyncWithMode(t, cfgPath, env, mode)
 			assert.Contains(t, out, mode.outputMode)
 			if mode.flag == flagUploadOnly {
@@ -882,7 +898,7 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "x", "y", "another.txt"), []byte("another content"), 0o600))
 
 	// Step 2: Upload baseline.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Verify deep files exist remotely (poll for eventual consistency).
 	waitForRemoteReadContains(t, cfgPath, env, "", "deep.txt", pollTimeout, "ls", "/"+testFolder+"/a/b/c")
@@ -902,12 +918,24 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	// Modify local file.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "x", "y", "another.txt"), []byte("modified another"), 0o600))
 
-	// Step 4: Bidirectional sync.
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	// Step 4: Bidirectional sync, repeated until delta carries the remote
+	// create and no action is left for the next sync.
+	deeperPath := filepath.Join(localDir, "a", "b", "c", "d", "deeper.txt")
+	requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		remoteWritePropagationTimeout,
+		"bidirectional sync should download the deeper remote create and finish the local changes",
+		func(result syncAttemptResult) bool {
+			data, err := os.ReadFile(deeperPath) //nolint:gosec // a file inside the test's own sync dir
+			return syncPassFinishedWork(result) && err == nil && string(data) == "deeper content"
+		},
+	)
 
 	// Step 5: Assert results.
 	// Remote deeper.txt downloaded locally.
-	deeperData := mustReadFile(t, filepath.Join(localDir, "a", "b", "c", "d", "deeper.txt"))
+	deeperData := mustReadFile(t, deeperPath)
 	assert.Equal(t, "deeper content", string(deeperData))
 
 	// sibling.txt removed remotely.
@@ -929,6 +957,7 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 
 	// Step 7: Re-sync should leave the deep hierarchy unchanged even if the
 	// shared live drive saw unrelated activity elsewhere.
+	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync")
 }
 
@@ -946,7 +975,7 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "existing.txt"), []byte("existing content"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Step 2: Set up pending changes.
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "pending-upload.txt"), []byte("to upload"), 0o600))
@@ -954,6 +983,7 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 	require.NoError(t, os.Remove(filepath.Join(localDir, "existing.txt")))
 
 	// Step 3: Dry-run sync.
+	// Single pass by design: a dry run changes nothing, so its own plan is what the test reads.
 	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--dry-run")
 	assert.Contains(t, out, "Dry run, nothing was changed.")
 	assert.Contains(t, out, "Would upload "+testFolder+"/pending-upload.txt")
@@ -971,15 +1001,27 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 	// existing.txt still present remotely (not deleted).
 	assert.Contains(t, lsOut, "existing.txt", "dry-run should not delete remotely")
 
-	// Step 5: Real sync.
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	// Step 5: Real sync, repeated until delta carries the remote create and
+	// no action is left for the next sync.
+	pendingDownloadPath := filepath.Join(localDir, "pending-download.txt")
+	requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		remoteWritePropagationTimeout,
+		"real sync after the dry run should apply every pending change",
+		func(result syncAttemptResult) bool {
+			data, readErr := os.ReadFile(pendingDownloadPath) //nolint:gosec // a file inside the test's own sync dir
+			return syncPassFinishedWork(result) && readErr == nil && string(data) == "to download"
+		},
+	)
 
 	// Step 6: All changes applied (poll for eventual consistency).
 	lsOut, _ = waitForRemoteReadContains(t, cfgPath, env, "", "pending-upload.txt", pollTimeout, "ls", "/"+testFolder)
 	waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "existing.txt", "ls", "/"+testFolder)
 	assert.Contains(t, lsOut, "pending-upload.txt")
 
-	dlData := mustReadFile(t, filepath.Join(localDir, "pending-download.txt"))
+	dlData := mustReadFile(t, pendingDownloadPath)
 	assert.Equal(t, "to download", string(dlData))
 
 	// Step 7: Internal baseline verification stays clean.
@@ -1004,11 +1046,11 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "converge-edit.txt"), []byte("original"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Advance delta token past the upload so the subsequent bidirectional
 	// sync uses incremental delta, not full enumeration (ci_issues.md §17).
-	runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--download-only")
 
 	// Step 2: Modify both sides to the same content.
 	newContent := "convergent new content"
@@ -1021,6 +1063,7 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/converge-create.txt", freshContent)
 
 	// Step 4: Bidirectional sync — convergent detection.
+	// Single pass by design: equal content on both sides must need no transfer in this one pass.
 	out, _ := runCLIWithConfig(t, cfgPath, env, "sync")
 
 	// Convergent updates need no transfer: nothing user-visible happened, so
@@ -1037,6 +1080,7 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	assert.Equal(t, newContent, getRemoteFile(t, cfgPath, env, "/"+testFolder+"/converge-edit.txt"))
 	assert.Equal(t, freshContent, getRemoteFile(t, cfgPath, env, "/"+testFolder+"/converge-create.txt"))
 
+	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync")
 
 	// Step 5: Internal baseline verification stays clean.
@@ -1062,7 +1106,7 @@ func TestE2E_Sync_InternalBaselineVerificationDetectsTampering(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "tampered.txt"), []byte("original content"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "missing.txt"), []byte("will be removed"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Step 2: Internal baseline verification is clean initially.
 	report, err := verifyBaselineReport(t, cfgPath, env)

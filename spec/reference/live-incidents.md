@@ -1084,9 +1084,25 @@ must-succeed sync again, bounded by `transientGraphRetryTimeout`, while the
 first pass recorded retry work and the summary still reports failed or
 left-over work. Every setup or single-pass sync in
 `e2e/edge_cases_e2e_test.go` and `e2e/sync_hardening_full_e2e_test.go` now
-goes through it. Other `e2e_full` files still hold single-pass `sync` calls
-followed by a remote assertion; convert each to this helper when it is
-touched or when it fails this way, instead of re-investigating.
+goes through it.
+Recurrence 2026-11-11 (nightly run 43070648626 on `472e50ba`): a test the first
+conversion had not reached. `TestE2E_Sync_IdempotentReSync` ran one
+bidirectional `sync` and then listed the folder. Graph answered the create of
+the `sub` folder with HTTP 400 `Invalid request` while three sibling file
+creates in the same new parent were in flight; the request was the usual one,
+and the same create succeeds on a later pass. The client recorded `retry_work`
+for the folder, printed `1 failed; 1 will be retried on the next sync.` and
+exited zero. The listing had the three files and no `sub`.
+Follow-up 2026-11-11: the rest of the suite was swept, this test included. Both converge helpers
+now take a `syncRunner` with per-drive and all-drives variants, so the
+per-drive and all-drives one-shot syncs (shortcut child mounts, explicit shared
+folders, the multi-drive orchestrator) converge too. Every one-shot sync whose
+test reads only the end state goes through `runSyncThroughTransientFailures*`
+or, where a remote change must first reach delta,
+`requireSyncEventuallyConverges*`; the three `require.Eventually` loops around
+a must-succeed sync and the shortcut projection loop use the helper. Each sync
+left single-pass carries a `Single pass by design:` comment naming what that
+one pass proves (system.md, Verification Policy).
 Promoted docs: [system.md](../design/system.md)
 
 ## LI-20260416-01: Fast E2E suite preflight assumed local `.testdata` always carried `drive_*.json`

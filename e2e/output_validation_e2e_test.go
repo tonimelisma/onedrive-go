@@ -37,7 +37,7 @@ func TestE2E_Status_JSONShape(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "good.txt"), []byte("good"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	status := readStatus(t, cfgPath, env)
 	assert.Equal(t, countStatusDrives(status), status.Summary.TotalDrives)
@@ -105,6 +105,7 @@ func TestE2E_Sync_QuietMode(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "quiet.txt"), []byte("quiet test"), 0o600))
 
 	// Sync with --quiet.
+	// Single pass by design: the test reads this one pass's log for lines quiet mode must drop.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--quiet", "--upload-only")
 
 	// Quiet mode should suppress DEBUG and INFO level log lines.
@@ -152,6 +153,7 @@ func TestE2E_Sync_MultiDriveReport(t *testing.T) {
 	})
 
 	// Sync all drives.
+	// Single pass by design: the test reads this one pass's per-drive summary lines.
 	out, _ := runCLIWithConfigAllDrives(t, cfgPath, env, "sync", "--upload-only")
 
 	// Multi-drive output names the drive on each summary line.

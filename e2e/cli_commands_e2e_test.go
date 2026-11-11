@@ -39,7 +39,7 @@ func TestE2E_Status_AfterSync(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "status-test.txt"), []byte("status test"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// Check status output.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status")
@@ -188,7 +188,7 @@ func TestE2E_Status_PerDrive_NoIssuesOrRetries(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "clean.txt"), []byte("clean file"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
 	assert.Empty(t, status.Issues)
@@ -213,7 +213,7 @@ func TestE2E_Status_NoLegacyHistorySurface(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "clean.txt"), []byte("clean file"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	current := readStatusSyncState(t, cfgPath, env)
 	assert.Zero(t, current.IssueCount, "clean status should show no durable issues")
@@ -240,7 +240,7 @@ func TestE2E_Status_JSON_IssueDetails(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "CON.txt"), []byte("reserved"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
 	require.Len(t, status.Issues, 1, "status should surface one invalid-filename issue for the Windows device name")
@@ -272,7 +272,7 @@ func TestE2E_CLI_NoResolveCommand(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "dummy.txt"), []byte("dummy"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	output := runCLIWithConfigExpectError(t, cfgPath, env, "resolve", "local", "nonexistent-id")
 	assert.Contains(t, output, "unknown command \"resolve\"", "sync decisions should stay inside the engine path")
@@ -297,7 +297,7 @@ func TestE2E_InternalBaselineVerification_AfterSync(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "v2.txt"), []byte("verify 2"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "v3.txt"), []byte("verify 3"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	report, err := verifyBaselineReport(t, cfgPath, env)
 	require.NoError(t, err)
@@ -742,7 +742,7 @@ func TestE2E_Status_IssueLifecycle(t *testing.T) {
 	_, _ = buildDeepPath(t, syncDir, testFolder)
 
 	// Sync to trigger pre-upload validation failure.
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
 	require.Len(t, status.Issues, 1)
@@ -755,7 +755,7 @@ func TestE2E_Status_IssueLifecycle(t *testing.T) {
 	require.NoError(t, os.RemoveAll(filepath.Join(syncDir, testFolder, longDirName)))
 	require.NoError(t, os.WriteFile(filepath.Join(syncDir, testFolder, "fixed.txt"), []byte("fixed"), 0o600))
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	status = readStatusSyncState(t, cfgPath, env)
 	assert.Empty(t, status.Issues, "status should be clean after the next sync")

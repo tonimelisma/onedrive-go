@@ -27,9 +27,7 @@ func TestE2E_Shortcut_ReadOnlyDownloadOnlyProjectsChildMount(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, syncDir)
 
-	runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
-
-	record := requireActiveShortcutChild(t, env, fixture)
+	record, _ := syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, fixture.ShortcutName)
 	assert.DirExists(t, filepath.Join(syncDir, fixture.ShortcutName))
 	assert.FileExists(t, filepath.Join(syncDir, fixture.ShortcutName, filepath.FromSlash(fixture.SentinelPath)))
 
@@ -69,8 +67,8 @@ func TestE2E_Shortcut_RestartIdempotentKeepsChildMountVisible(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, syncDir)
 
-	runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
-	firstRecord := requireActiveShortcutChild(t, env, fixture)
+	firstRecord, _ := syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, fixture.ShortcutName)
+	// Single pass by design: one restart pass must keep the same child mount without a re-projection.
 	runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
 	secondRecord := requireActiveShortcutChild(t, env, fixture)
 
@@ -88,8 +86,7 @@ func TestE2E_Shortcut_RenameReusesChildMountState(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, syncDir)
 
-	runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
-	firstRecord := requireActiveShortcutChild(t, env, fixture)
+	firstRecord, _ := syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, fixture.ShortcutName)
 	firstStatePath := e2eMountStatePath(env, firstRecord.MountID)
 	assert.FileExists(t, firstStatePath)
 
@@ -104,7 +101,7 @@ func TestE2E_Shortcut_RenameReusesChildMountState(t *testing.T) {
 	runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "mv", originalRemotePath, newRemotePath)
 	currentRemotePath = newRemotePath
 
-	secondRecord := syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, newName)
+	secondRecord, _ := syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, newName)
 
 	assert.Equal(t, firstRecord.MountID, secondRecord.MountID)
 	assert.Equal(t, firstStatePath, e2eMountStatePath(env, secondRecord.MountID))
@@ -127,8 +124,7 @@ func TestE2E_Shortcut_MoveReusesChildMountState(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, syncDir)
 
-	runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
-	firstRecord := requireActiveShortcutChild(t, env, fixture)
+	firstRecord, _ := syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, fixture.ShortcutName)
 	firstStatePath := e2eMountStatePath(env, firstRecord.MountID)
 	assert.FileExists(t, firstStatePath)
 
@@ -147,7 +143,7 @@ func TestE2E_Shortcut_MoveReusesChildMountState(t *testing.T) {
 	runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "mv", originalRemotePath, containerRemotePath)
 	currentRemotePath = movedRemotePath
 
-	secondRecord := syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, movedRelativePath)
+	secondRecord, _ := syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, movedRelativePath)
 
 	assert.Equal(t, firstRecord.MountID, secondRecord.MountID)
 	assert.Equal(t, firstStatePath, e2eMountStatePath(env, secondRecord.MountID))
@@ -170,8 +166,7 @@ func TestE2E_Shortcut_WritableUploadSyncsToSharedTarget(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, syncDir)
 
-	runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
-	requireActiveShortcutChild(t, env, fixture)
+	syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, fixture.ShortcutName)
 
 	remoteName := fmt.Sprintf("shortcut-upload-%d.txt", time.Now().UnixNano())
 	remotePath := "/" + remoteName
@@ -184,7 +179,7 @@ func TestE2E_Shortcut_WritableUploadSyncsToSharedTarget(t *testing.T) {
 		runCLIBestEffort(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, "rm", remotePath)
 	})
 
-	out, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
+	out, _ := runSyncThroughTransientFailuresForDrive(t, cfgPath, env, fixture.ParentDrive, "--upload-only")
 	assert.Contains(t, out, "(upload only)")
 
 	waitForRemoteReadContains(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, remoteName, pollTimeout, "stat", remotePath)
@@ -198,13 +193,13 @@ func TestE2E_Shortcut_ReadOnlyBlockedUploadStatus(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, syncDir)
 
-	runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
-	requireActiveShortcutChild(t, env, fixture)
+	syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, fixture.ShortcutName)
 
 	blockedName := fmt.Sprintf("blocked-shortcut-%d.txt", time.Now().UnixNano())
 	blockedLocalPath := filepath.Join(syncDir, fixture.ShortcutName, blockedName)
 	require.NoError(t, os.WriteFile(blockedLocalPath, []byte("recipient write attempt\n"), 0o600))
 
+	// Single pass by design: this one pass must record the denied write that status shows next.
 	out, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
 	assert.Contains(t, out, "(upload only)")
 
@@ -252,8 +247,7 @@ func TestE2E_Shortcut_WatchLocalUploadSyncsToSharedTarget(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, syncDir)
 
-	runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
-	requireActiveShortcutChild(t, env, fixture)
+	syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, fixture.ShortcutName)
 
 	opsCfgPath, opsEnv := writeShortcutSharedDriveConfig(t, fixture)
 	remoteName := fmt.Sprintf("shortcut-watch-local-%d.txt", time.Now().UnixNano())
@@ -284,8 +278,7 @@ func TestE2E_Shortcut_WatchRemoteWakeUpdatesChildRoot(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, syncDir)
 
-	runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
-	requireActiveShortcutChild(t, env, fixture)
+	syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, fixture.ShortcutName)
 
 	opsCfgPath, opsEnv := writeShortcutSharedDriveConfig(t, fixture)
 	remoteName := fmt.Sprintf("shortcut-watch-remote-%d.txt", time.Now().UnixNano())
@@ -306,48 +299,6 @@ func TestE2E_Shortcut_WatchRemoteWakeUpdatesChildRoot(t *testing.T) {
 		data, err := os.ReadFile(localPath) //nolint:gosec // a file inside the test's own sync dir
 		return err == nil && string(data) == expectedContent
 	}, 3*time.Minute, 2*time.Second)
-}
-
-func syncShortcutDownloadUntilProjected(
-	t *testing.T,
-	cfgPath string,
-	env map[string]string,
-	fixture *resolvedShortcutFixture,
-	syncDir string,
-	relativeLocalPath string,
-) shortcutChildE2ERecord {
-	t.Helper()
-
-	deadline := time.Now().Add(remoteScopeTransitionTimeout)
-	var lastStdout, lastStderr string
-	var lastErr error
-	for attempt := 0; ; attempt++ {
-		lastStdout, lastStderr, lastErr = runCLICore(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
-		if lastErr == nil {
-			record, ok := findActiveShortcutChild(t, env, fixture, relativeLocalPath)
-			if ok {
-				sentinelPath := filepath.Join(syncDir, filepath.FromSlash(relativeLocalPath), filepath.FromSlash(fixture.SentinelPath))
-				if _, err := os.Stat(sentinelPath); err == nil {
-					return record
-				}
-			}
-		}
-
-		if time.Now().After(deadline) {
-			require.NoErrorf(t, lastErr,
-				"shortcut projection did not converge for %q\nstdout: %s\nstderr: %s",
-				relativeLocalPath,
-				lastStdout,
-				lastStderr,
-			)
-			record := requireActiveShortcutChildAtPath(t, env, fixture, relativeLocalPath)
-			sentinelPath := filepath.Join(syncDir, filepath.FromSlash(relativeLocalPath), filepath.FromSlash(fixture.SentinelPath))
-			require.FileExists(t, sentinelPath, "shortcut projection state exists but sentinel was not projected")
-			return record
-		}
-
-		sleepForLiveTestPropagation(pollBackoff(attempt))
-	}
 }
 
 func writeShortcutSharedDriveConfig(t *testing.T, fixture *resolvedShortcutFixture) (string, map[string]string) {

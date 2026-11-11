@@ -107,7 +107,7 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "CON"), []byte("invalid"), 0o600))
 
 	// Upload.
-	stderr := runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
+	_, stderr := runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	// The debug stderr should mention skipping the invalid entry.
 	assert.Contains(t, stderr, "skipping invalid entry",

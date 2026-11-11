@@ -63,16 +63,16 @@ func TestE2E_Orchestrator_SimultaneousSync(t *testing.T) {
 	})
 
 	// Run sync --upload-only without --drive (all drives).
-	runCLIWithConfigAllDrives(t, cfgPath, env, "sync", "--upload-only")
+	runSyncThroughTransientFailuresAllDrives(t, cfgPath, env, "--upload-only")
 
 	// Verify drive1's file exists remotely.
 	remotePath1 := "/" + testFolder1 + "/drive1-file.txt"
 	waitForRemoteReadContains(t, cfgPath, env, "", "drive1-file.txt", pollTimeout, "stat", remotePath1)
 
-	// Verify drive2's file exists remotely (using drive2's --drive flag).
+	// Verify drive2's file exists remotely (using drive2's --drive flag),
+	// polled like drive1's: a read straight after the upload can lag it.
 	remotePath2 := "/" + testFolder2 + "/drive2-file.txt"
-	stdout2, _ := runCLIWithConfigForDrive(t, cfgPath, env, drive2, "stat", remotePath2)
-	assert.Contains(t, stdout2, "drive2-file.txt")
+	waitForRemoteReadContains(t, cfgPath, env, drive2, "drive2-file.txt", pollTimeout, "stat", remotePath2)
 }
 
 // TestE2E_Orchestrator_Status verifies that the status command shows both
@@ -116,11 +116,16 @@ func TestE2E_Orchestrator_DriveIsolation(t *testing.T) {
 
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
-	// Run download-only sync for all drives.
-	runCLIWithConfigAllDrives(t, cfgPath, env, "sync", "--download-only")
+	// Run download-only sync for all drives until delta carries the put.
+	localPath1 := filepath.Join(syncDir1, testFolder, "isolated.txt")
+	requireSyncEventuallyConvergesAllDrives(t, cfgPath, env, remoteWritePropagationTimeout,
+		"the file put on drive1 reaches drive1's sync dir",
+		func(result syncAttemptResult) bool {
+			data, readErr := os.ReadFile(localPath1) //nolint:gosec // a file inside the test's own sync dir
+			return result.Err == nil && readErr == nil && string(data) == "drive1 only\n"
+		}, "--download-only")
 
 	// File should appear in drive1's sync dir.
-	localPath1 := filepath.Join(syncDir1, testFolder, "isolated.txt")
 	_, err := os.Stat(localPath1)
 	require.NoError(t, err, "file should exist in drive1 sync dir")
 
@@ -227,7 +232,7 @@ func TestE2E_Orchestrator_SelectiveDrive(t *testing.T) {
 	})
 
 	// Run sync --upload-only --drive <drive1> (selective).
-	runCLIWithConfigForDrive(t, cfgPath, env, drive, "sync", "--upload-only")
+	runSyncThroughTransientFailuresForDrive(t, cfgPath, env, drive, "--upload-only")
 
 	// drive1's file should be uploaded.
 	remotePath1 := "/" + testFolder1 + "/selected.txt"
