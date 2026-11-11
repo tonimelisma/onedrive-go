@@ -11,13 +11,17 @@ import (
 
 // errFolderTransferPlanned reports a reconciliation row that maps a folder to
 // a content transfer. Folders are created, moved or deleted, never uploaded
-// or downloaded (D-057); a row that says otherwise is a comparison bug.
+// or downloaded (D-057); a row that says otherwise is a comparison bug, and
+// it fails the plan like a row outside the decision table (R-6.2.16):
+// dropped, the path would silently stop syncing.
 var errFolderTransferPlanned = errors.New("sync: folder planned as a content transfer")
 
 // PlanCurrentState builds the current actionable set from SQLite-owned
 // comparison and reconciliation rows plus the current durable snapshots. SQLite
 // owns structural diff authority; Go maps those rows to runtime actions and
-// applies action-level normalization for execution semantics.
+// applies action-level normalization for execution semantics. A row the
+// decision table did not classify fails the whole plan before any row is
+// planned (validatePlannerKinds).
 func (p *planner) PlanCurrentState(
 	comparisons []sQLiteComparisonRow,
 	reconciliations []sQLiteReconciliationRow,
@@ -35,6 +39,10 @@ func (p *planner) PlanCurrentState(
 		slog.Int("observation_issues", len(observationIssues)),
 		slog.String("mode", mode.String()),
 	)
+
+	if err := validatePlannerKinds(comparisons, reconciliations); err != nil {
+		return nil, err
+	}
 
 	truthPaths := comparisonPaths(comparisons)
 	truthIndex := newTruthAvailabilityIndex(observationIssues)
@@ -58,17 +66,6 @@ func (p *planner) PlanCurrentState(
 		}
 
 		actions, err := buildActionsForReconciliation(&rec, cmp, views)
-		if errors.Is(err, errFolderTransferPlanned) {
-			// A comparison bug, not a user state: transferring a directory
-			// as file content can only fail and be replanned forever. The
-			// rest of the plan stays runnable.
-			p.logger.Error("planner dropped an impossible folder transfer",
-				slog.String("path", rec.Path),
-				slog.String("reconciliation", rec.ReconciliationKind),
-				slog.Any("error", err),
-			)
-			continue
-		}
 		if err != nil {
 			return nil, err
 		}
@@ -383,40 +380,44 @@ func buildActionsForReconciliation(
 	}
 
 	switch rec.ReconciliationKind {
-	case "noop":
+	case reconcileUnclassified:
+		// PlanCurrentState refuses these rows before planning any
+		// (validatePlannerKinds); a direct caller gets the same refusal.
+		return nil, unclassifiedRowError(rec)
+	case reconcileNoop:
 		return nil, nil
-	case "baseline_remove":
+	case reconcileBaselineRemove:
 		return []Action{makeAction(ActionCleanup, view)}, nil
-	case "folder_create_local":
+	case reconcileFolderCreateLocal:
 		return []Action{makeFolderCreate(view, createLocal)}, nil
-	case "folder_create_remote":
+	case reconcileFolderCreateRemote:
 		return []Action{makeFolderCreate(view, CreateRemote)}, nil
-	case "upload":
+	case reconcileUpload:
 		if view.Local != nil && view.Local.ItemType == ItemTypeFolder {
 			return nil, fmt.Errorf("%w: upload of local folder %s", errFolderTransferPlanned, rec.Path)
 		}
 		return []Action{makeAction(ActionUpload, view)}, nil
-	case "download":
+	case reconcileDownload:
 		if view.Remote != nil && view.Remote.ItemType == ItemTypeFolder {
 			return nil, fmt.Errorf("%w: download of remote folder %s", errFolderTransferPlanned, rec.Path)
 		}
 		return []Action{makeAction(ActionDownload, view)}, nil
-	case strLocalDelete:
+	case reconcileLocalDelete:
 		return []Action{makeAction(ActionLocalDelete, view)}, nil
-	case strRemoteDelete:
+	case reconcileRemoteDelete:
 		return []Action{makeAction(ActionRemoteDelete, view)}, nil
-	case strBaselineUpdate:
+	case reconcileBaselineUpdate:
 		return []Action{makeAction(ActionBaselineUpdate, view)}, nil
-	case "conflict_edit_edit":
+	case reconcileConflictEditEdit:
 		return []Action{
 			makeConflictCopyAction(view),
 			makeDownloadAfterConflictCopyAction(view),
 		}, nil
-	case "conflict_edit_delete":
+	case reconcileConflictEditDelete:
 		return []Action{
 			makeCreateUploadAction(view),
 		}, nil
-	case "conflict_create_create":
+	case reconcileConflictCreateCreate:
 		if view.Local != nil && view.Remote != nil && view.Local.ItemType != view.Remote.ItemType {
 			return buildKeepBothActions(view), nil
 		}
@@ -424,17 +425,17 @@ func buildActionsForReconciliation(
 			makeConflictCopyAction(view),
 			makeDownloadAfterConflictCopyAction(view),
 		}, nil
-	case "conflict_keep_both":
+	case reconcileConflictKeepBoth:
 		return buildKeepBothActions(view), nil
-	case "replace_remote":
+	case reconcileReplaceRemote:
 		return buildReplaceRemoteActions(view), nil
-	case "replace_local":
+	case reconcileReplaceLocal:
 		return buildReplaceLocalActions(view), nil
-	case strLocalMove, strRemoteMove:
+	case reconcileLocalMove, reconcileRemoteMove:
 		// Moves are composed per item (planner_move_composition.go).
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("sync: unsupported reconciliation kind %q for %s", rec.ReconciliationKind, rec.Path)
+		return nil, fmt.Errorf("sync: unsupported reconciliation kind %s for %s", rec.ReconciliationKind, rec.Path)
 	}
 }
 

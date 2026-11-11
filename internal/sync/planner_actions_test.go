@@ -703,12 +703,12 @@ func TestPlannerPlanCurrentState_UsesRemoteRowDriveOwnershipForDownloadActions(t
 		[]sQLiteComparisonRow{{
 			Path:           "Shared/report.txt",
 			RemotePresent:  true,
-			ComparisonKind: "remote_only_create",
+			ComparisonKind: comparisonRemoteOnlyCreate,
 		}},
 		[]sQLiteReconciliationRow{{
 			Path:               "Shared/report.txt",
-			ComparisonKind:     "remote_only_create",
-			ReconciliationKind: strDownload,
+			ComparisonKind:     comparisonRemoteOnlyCreate,
+			ReconciliationKind: reconcileDownload,
 		}},
 		nil,
 		[]remoteStateRow{{
@@ -1058,12 +1058,12 @@ func planForUnavailableLocalMoveSource(t *testing.T) *actionPlan {
 			RemotePresent:   true,
 			LocalChanged:    true,
 			RemoteChanged:   false,
-			ComparisonKind:  "local_move_source",
+			ComparisonKind:  comparisonLocalMoveSource,
 		}},
 		[]sQLiteReconciliationRow{{
 			Path:               "docs/source.txt",
-			ComparisonKind:     "local_move_source",
-			ReconciliationKind: strLocalMove,
+			ComparisonKind:     comparisonLocalMoveSource,
+			ReconciliationKind: reconcileLocalMove,
 			LocalMoveTarget:    "docs/dest.txt",
 		}},
 		[]localStateRow{{
@@ -1101,12 +1101,12 @@ func planForUnavailableRemoteMoveDestination(t *testing.T) *actionPlan {
 			RemotePresent:   true,
 			LocalChanged:    false,
 			RemoteChanged:   true,
-			ComparisonKind:  "remote_move_dest",
+			ComparisonKind:  comparisonRemoteMoveDest,
 		}},
 		[]sQLiteReconciliationRow{{
 			Path:               "Shared/dest.txt",
-			ComparisonKind:     "remote_move_dest",
-			ReconciliationKind: strRemoteMove,
+			ComparisonKind:     comparisonRemoteMoveDest,
+			ReconciliationKind: reconcileRemoteMove,
 			RemoteMoveSource:   "Shared/source.txt",
 		}},
 		[]localStateRow{{
@@ -1767,4 +1767,22 @@ func TestBuildDependencies_CaseVariantMovesDoNotWaitOnEachOther(t *testing.T) {
 	assert.Empty(t, deps[0])
 	assert.Empty(t, deps[1])
 	assert.Equal(t, []int{3}, deps[2], "a create waits for a move that vacates its case-variant name")
+}
+
+// Validates: R-2.1.3, R-2.1.4
+//
+// Mode admission lists every action it allows; an action type or folder
+// create side no case lists is never admitted, in any mode.
+func TestActionAllowedInMode_AnUnlistedActionIsNeverAdmitted(t *testing.T) {
+	t.Parallel()
+
+	const (
+		unlistedAction = ActionCleanup + 1
+		unlistedSide   = CreateRemote + 1
+	)
+	for _, mode := range []SyncMode{SyncBidirectional, SyncDownloadOnly, SyncUploadOnly} {
+		assert.False(t, actionAllowedInMode(&Action{Type: unlistedAction}, mode), mode.String())
+		assert.False(t, actionAllowedInMode(&Action{Type: ActionFolderCreate, CreateSide: unlistedSide}, mode), mode.String())
+		assert.True(t, actionAllowedInMode(&Action{Type: ActionBaselineUpdate}, mode), mode.String())
+	}
 }

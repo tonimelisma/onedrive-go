@@ -23,6 +23,10 @@ func newPlanner(logger *slog.Logger) *planner {
 	return &planner{logger: logger}
 }
 
+// actionAllowedInMode lists every action a mode admits. An action type or
+// folder create side no case lists is never admitted, in any mode: an
+// unlisted value is a bug, and admitting it would run work no mode rule
+// approved.
 func actionAllowedInMode(action *Action, mode SyncMode) bool {
 	switch action.Type {
 	case ActionDownload:
@@ -38,13 +42,14 @@ func actionAllowedInMode(action *Action, mode SyncMode) bool {
 	case ActionRemoteMove:
 		return mode != SyncDownloadOnly
 	case ActionFolderCreate:
-		if action.CreateSide == createLocal {
+		switch action.CreateSide {
+		case createLocal:
 			return mode != SyncUploadOnly
-		}
-		if action.CreateSide == CreateRemote {
+		case CreateRemote:
 			return mode != SyncDownloadOnly
+		default:
+			return false
 		}
-		return true
 	case ActionConflictCopy:
 		// Conflict-copy is only safe when the paired remote-winner download
 		// can also run. In upload-only mode that download is deferred, so keeping
@@ -53,7 +58,7 @@ func actionAllowedInMode(action *Action, mode SyncMode) bool {
 	case ActionBaselineUpdate, ActionCleanup:
 		return true
 	default:
-		return true
+		return false
 	}
 }
 

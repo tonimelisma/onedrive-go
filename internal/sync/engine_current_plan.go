@@ -546,23 +546,9 @@ func (flow *engineFlow) loadCurrentInputsTx(
 	if err != nil {
 		return currentInputs{}, err
 	}
-	comparisons, err := queryComparisonStateWithRunnerForTables(
-		ctx,
-		tx,
-		plannerVisibleLocalStateTable,
-		plannerVisibleRemoteStateTable,
-	)
+	comparisons, reconciliations, err := flow.queryPlannerRowsTx(ctx, tx)
 	if err != nil {
-		return currentInputs{}, fmt.Errorf("sync: querying comparison state: %w", err)
-	}
-	reconciliations, err := queryReconciliationStateWithRunnerForTables(
-		ctx,
-		tx,
-		plannerVisibleLocalStateTable,
-		plannerVisibleRemoteStateTable,
-	)
-	if err != nil {
-		return currentInputs{}, fmt.Errorf("sync: querying reconciliation state: %w", err)
+		return currentInputs{}, err
 	}
 	observationIssues, err := queryObservationIssueRowsWithRunner(ctx, tx)
 	if err != nil {
@@ -581,6 +567,55 @@ func (flow *engineFlow) loadCurrentInputsTx(
 		remoteRows:        plannerVisibleRows.Remote,
 		observationIssues: observationIssues,
 	}, nil
+}
+
+// queryPlannerRowsTx reads the comparison and reconciliation rows over the
+// planner-visible tables. When a row came back unclassified, it also reads
+// that row's decision-table inputs in the same transaction, the only place
+// they can be read (the planner-visible tables are transaction-local), so the
+// plan error PlanCurrentState returns names them (R-6.2.16). A plan whose
+// rows are all classified pays nothing for it.
+func (flow *engineFlow) queryPlannerRowsTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+) ([]sQLiteComparisonRow, []sQLiteReconciliationRow, error) {
+	comparisons, err := queryComparisonStateWithRunnerForTables(
+		ctx,
+		tx,
+		plannerVisibleLocalStateTable,
+		plannerVisibleRemoteStateTable,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sync: querying comparison state: %w", err)
+	}
+	reconciliationQuery := sqlQueryReconciliationState
+	if flow.engine.reconciliationQueryOverride != "" {
+		reconciliationQuery = flow.engine.reconciliationQueryOverride
+	}
+	reconciliations, err := queryReconciliationRows(ctx, tx, sqlQueryForStateTables(
+		reconciliationQuery,
+		plannerVisibleLocalStateTable,
+		plannerVisibleRemoteStateTable,
+	))
+	if err != nil {
+		return nil, nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
+	}
+	first := firstUnclassifiedRow(reconciliations)
+	if first < 0 {
+		return comparisons, reconciliations, nil
+	}
+	reconciliations[first].DecisionInputs, err = queryPlannerDecisionInputs(
+		ctx,
+		tx,
+		reconciliations[first].Path,
+		plannerVisibleLocalStateTable,
+		plannerVisibleRemoteStateTable,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sync: reading the decision inputs of unclassified %q: %w", reconciliations[first].Path, err)
+	}
+
+	return comparisons, reconciliations, nil
 }
 
 // buildCurrentPlanStage is the shared planning stage after an entrypoint has

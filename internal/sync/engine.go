@@ -97,6 +97,11 @@ type Engine struct {
 	// next pass (oneShotScopeWait); nil waits on a real timer. Test-only: a
 	// test advances its manual clock instead.
 	waitFn func(ctx context.Context, d time.Duration) error
+	// reconciliationQueryOverride, when set, replaces
+	// sqlQueryReconciliationState in planning. Test-only: no reachable state
+	// is outside the decision table, so a test removes one rule from it to
+	// prove the pass fails closed on the row that rule classified (R-6.2.16).
+	reconciliationQueryOverride string
 
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
