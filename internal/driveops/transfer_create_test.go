@@ -3,6 +3,7 @@ package driveops
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -27,6 +28,11 @@ type tmCreatingUploader struct {
 	contentResult *graph.Item
 	events        []string
 	removedEmpty  []string
+	// removeResults scripts the answers to the removal requests in order: an
+	// error is a removal that failed and left the item, as one whose deletes
+	// were all refused with 412 does (LI-20261110-01). Past the end of the
+	// script, and for a nil entry, the item is removed.
+	removeResults []error
 }
 
 func (m *tmCreatingUploader) UploadCreating(
@@ -47,10 +53,15 @@ func (m *tmCreatingUploader) UploadCreating(
 	return m.contentResult, nil
 }
 
-// RemoveEmptyItem records the request only: the read and the conditional
-// delete behind it belong to the Graph client and are tested there.
+// RemoveEmptyItem records the request and answers it from removeResults: the
+// read and the conditional delete behind it belong to the Graph client and
+// are tested there.
 func (m *tmCreatingUploader) RemoveEmptyItem(_ context.Context, _ driveid.ID, itemID string) (bool, error) {
 	m.removedEmpty = append(m.removedEmpty, itemID)
+	if n := len(m.removedEmpty); n <= len(m.removeResults) && m.removeResults[n-1] != nil {
+		return false, m.removeResults[n-1]
+	}
+
 	return true, nil
 }
 
@@ -160,6 +171,38 @@ func TestUploadFile_UncertainFinalFragmentRemovesThePlaceholderByItsCurrentETag(
 			assert.Equal(t, tc.removed, ul.removedEmpty)
 		})
 	}
+}
+
+// Validates: R-5.6.15
+//
+// The removal is best effort. When it fails and leaves the empty item, as one
+// whose conditional deletes were all refused with 412 did (LI-20261110-01),
+// the caller gets the upload's own failure, never the cleanup's, and the
+// transfer manager asks once: the bound on attempts is the Graph client's.
+func TestUploadFile_FailedPlaceholderRemovalKeepsTheUploadsOwnError(t *testing.T) {
+	t.Parallel()
+
+	contentLost := errors.New("connection reset")
+	removalRefused := fmt.Errorf("graph: removing empty item new-item: %w", graph.ErrPreconditionFailed)
+	ul := &tmCreatingUploader{
+		created:       &graph.Item{ID: "new-item", ETag: `"c,1"`},
+		contentErr:    &graph.FinalFragmentError{Err: contentLost},
+		removeResults: []error{removalRefused},
+		tmMockUploader: tmMockUploader{
+			getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+				// Still empty: the content did not land, so the item is removed.
+				return &graph.Item{ID: itemID, ETag: `"c,3"`, QuickXorHash: tmHashBytes(nil)}, nil
+			},
+		},
+	}
+	tm := newTestTM(&tmSimpleDownloader{}, ul, nil)
+
+	_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent", "new.txt", writeCreateTestFile(t, []byte("content")),
+		UploadOpts{OnCreated: func(string, string) error { return nil }})
+
+	require.ErrorIs(t, err, contentLost, "the upload's own failure")
+	require.NotErrorIs(t, err, graph.ErrPreconditionFailed, "never the cleanup's")
+	assert.Equal(t, []string{"new-item"}, ul.removedEmpty)
 }
 
 // Validates: R-5.6.15

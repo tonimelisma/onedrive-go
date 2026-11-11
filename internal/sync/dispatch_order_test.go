@@ -290,6 +290,9 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_FolderRecreatedWhereAKeptFolderWasIsCreatedOnline,
 		TestRunOnce_StoreTransactionsCountOnTheRunContextCollector,
 		TestRunOnce_UnclassifiedRowFailsThePassNamingThePath,
+		TestRunOnce_RefusedCreateWaitsOnTheDurableCurveAndClearsItsIntent,
+		TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt,
+		TestRunOnce_LargeFileWhoseSessionRequestFailedFinishesIntoItsPlaceholder,
 	}
 }
 

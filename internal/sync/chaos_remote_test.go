@@ -31,8 +31,10 @@ import (
 //     502, 504, 408 and a connection reset;
 //   - after it took effect ("succeeded but the response was lost"): the
 //     mutation happened, the client sees a 504 or a reset;
-//   - an upload session that times out after its empty item exists, and a
-//     download that delivers part of the bytes and then drops;
+//   - an upload session that times out after its empty item exists, some of
+//     them after moving that item's eTag without content, as opening and
+//     canceling a session does live (churnPlaceholder); and a download that
+//     delivers part of the bytes and then drops;
 //   - a create whose own answer is lost: the empty item exists, the client
 //     never learned its ID, and the failure says only that the outcome is
 //     unknown (graph.ErrCreateOutcomeUnknown), as does a create that failed
@@ -76,6 +78,13 @@ type chaosGraph struct {
 	// layer runs it before a call now and then during a storm, with that
 	// call's stream to choose what to write.
 	concurrentWrite func(rng *rand.Rand)
+	// churnPlaceholder, when set, moves an item's eTag on OneDrive without
+	// touching its content (moveScenarioRemote.churnETag). The layer runs it
+	// for some of the creates whose session times out after the empty item
+	// exists, so the eTag that moved without content (e2e
+	// TestE2E_SyncWatch_FileModification), reachable before only through the
+	// hand-set churnInterruptedCreates, is in the seeded storm.
+	churnPlaceholder func(itemID string)
 	// faults counts injected faults by kind, for the test to show the storm
 	// really happened.
 	faults map[string]int
@@ -316,9 +325,10 @@ type chaosCreateFunc func(context.Context, string, string, io.ReaderAt, int64, g
 // uploadCreating may fail after the create took effect, in the two ways a
 // create does. The session may time out after the client learned of the empty
 // item, as a connection lost mid-session does: the item exists, the content
-// does not. Or the creating request's own answer is lost (createResponseLost).
-// A create that fails before it reaches OneDrive reads as graph.CreateFile
-// reports it (chaosCreateFailure).
+// does not, and for some of them its eTag moved meanwhile
+// (chaosPlaceholderChurned). Or the creating request's own answer is lost
+// (createResponseLost). A create that fails before it reaches OneDrive reads
+// as graph.CreateFile reports it (chaosCreateFailure).
 func (c *chaosGraph) uploadCreating(
 	ctx context.Context, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
 	inner chaosCreateFunc,
@@ -334,8 +344,9 @@ func (c *chaosGraph) uploadCreating(
 		return c.createResponseLost(ctx, cc, parentID, name, content, size, inner)
 	}
 
-	c.count("upload-session:timeout-after-create")
+	c.count(chaosSessionTimedOut)
 	timeout := &graph.GraphError{StatusCode: http.StatusGatewayTimeout, Err: graph.ErrServerError}
+	churn := c.churnPlaceholder != nil && cc.intN(2) == 0
 
 	return inner(ctx, parentID, name, content, size, func(created *graph.Item) error {
 		if onCreated != nil {
@@ -343,9 +354,21 @@ func (c *chaosGraph) uploadCreating(
 				return err
 			}
 		}
+		if churn {
+			c.count(chaosPlaceholderChurned)
+			c.churnPlaceholder(created.ID)
+		}
 		return timeout
 	})
 }
+
+// The fault kinds of a session that timed out after its empty item existed:
+// every one of them, and those whose item's eTag moved without content before
+// the client gave up.
+const (
+	chaosSessionTimedOut    = "upload-session:timeout-after-create"
+	chaosPlaceholderChurned = chaosSessionTimedOut + ":etag-moved"
+)
 
 // createResponseLost runs the create and loses its answer: the empty item
 // exists on OneDrive, the client's create hook never runs (the client never
@@ -606,6 +629,56 @@ func TestChaosGraph_LostCreateAnswerLeavesTheFileAndNeverRunsTheHook(t *testing.
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	assert.Equal(t, lost, c.faults["create:response-lost"])
+}
+
+// Validates: R-5.6.15
+//
+// The churn variant of the timed-out session is the fault it models: the
+// empty item exists, the client's hook ran with its creation eTag, and
+// OneDrive now holds it empty under another eTag. The other timed-out
+// sessions leave the creation eTag, so the storm has both.
+func TestChaosGraph_TimeoutAfterCreateCanMoveThePlaceholderETag(t *testing.T) {
+	t.Parallel()
+
+	const (
+		attempts = 200
+		content  = "my words\n"
+	)
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	c := newChaosGraph(1)
+	c.churnPlaceholder = remote.churnETag
+	c.setStorm(true)
+	client := c.wrap(remote.client(t))
+
+	moved, kept := 0, 0
+	for i := range attempts {
+		name := fmt.Sprintf("doc-%d.txt", i)
+		var recorded *graph.Item
+		_, err := client.uploadCreatingFn(t.Context(), graphRootID, name, strings.NewReader(content), int64(len(content)),
+			func(created *graph.Item) error {
+				recorded = created
+				return nil
+			})
+		if err == nil || recorded == nil {
+			continue // succeeded, or failed before the client learned of an item
+		}
+		require.ErrorIs(t, err, graph.ErrServerError, "%s: the session timed out", name)
+		live, ok := remote.itemAt(name)
+		require.True(t, ok, "%s: the empty item exists", name)
+		assert.Zero(t, live.Size, "%s: no content landed", name)
+		if live.ETag == recorded.ETag {
+			kept++
+		} else {
+			moved++
+		}
+	}
+
+	require.Positive(t, moved, "no placeholder's eTag moved in %d attempts", attempts)
+	require.Positive(t, kept, "every timed-out placeholder's eTag moved in %d attempts", attempts)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	assert.Equal(t, moved, c.faults[chaosPlaceholderChurned])
+	assert.Equal(t, moved+kept, c.faults[chaosSessionTimedOut])
 }
 
 // Validates: R-2.15.2
