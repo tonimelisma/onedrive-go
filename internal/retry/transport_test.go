@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -717,13 +718,14 @@ func TestRetryTransport_RetryableStatusCodes(t *testing.T) {
 	}
 }
 
-// Validates: R-6.8.8
+// Validates: R-6.8.8, R-6.8.6
 func TestRetryTransport_RetryAfterParsing(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name        string
 		header      string
+		date        string // the response's Date field; empty leaves it out
 		expectDelay time.Duration
 	}{
 		{name: "valid integer", header: "5", expectDelay: 5 * time.Second},
@@ -731,6 +733,11 @@ func TestRetryTransport_RetryAfterParsing(t *testing.T) {
 		{name: "negative", header: "-1", expectDelay: 0},
 		{name: "non-numeric", header: "abc", expectDelay: 0},
 		{name: "empty", header: "", expectDelay: 0},
+		{name: "surrounding spaces", header: " 5 ", expectDelay: 5 * time.Second},
+		// The date form is measured against the response's Date, so the wait
+		// does not depend on this host's clock.
+		{name: "HTTP-date", header: ninetySecondsIMF, date: serverDate, expectDelay: 90 * time.Second},
+		{name: "seconds beyond a duration saturate", header: beyondInt64Seconds, expectDelay: time.Duration(math.MaxInt64)},
 	}
 
 	for _, tc := range tests {
@@ -745,7 +752,10 @@ func TestRetryTransport_RetryAfterParsing(t *testing.T) {
 				if callNum == 1 {
 					hdrs := map[string]string{}
 					if tc.header != "" {
-						hdrs["Retry-After"] = tc.header
+						hdrs[retryAfterField] = tc.header
+					}
+					if tc.date != "" {
+						hdrs[dateField] = tc.date
 					}
 
 					return makeResponse(429, hdrs), nil

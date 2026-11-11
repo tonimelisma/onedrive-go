@@ -11,6 +11,9 @@
 //   - [Backoff] wraps a Policy with mutable state for long-running loops (observer
 //     watch loops) that need to track consecutive errors across iterations.
 //
+//   - [ResponseRetryAfter] is the one reader of a response's Retry-After field,
+//     shared by [RetryTransport] and the graph client.
+//
 // # Named Policies
 //
 // Named policies preserve exact behavior from their original implementations:

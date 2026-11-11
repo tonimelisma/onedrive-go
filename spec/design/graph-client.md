@@ -502,7 +502,7 @@ attributing traffic (MS-190). Every CLI and sync construction site uses it
 escalation next to the request ID (`TestGraphError_KeepsAgsDiagnosticHeader`,
 `TestBuildQuirkRetryAttempt_CarriesAgsDiagnostic`).
 
-**RetryAfter Header** — `RetryAfter time.Duration` field on `GraphError`. Parsed from `Retry-After` header for 429 and 503 responses. Implements: R-6.8.6 [verified]
+**RetryAfter Header** — `RetryAfter time.Duration` field on `GraphError`, filled for 429 and 503 responses on every error path (Graph requests, pre-authenticated requests, raw uploads) by `retry.ResponseRetryAfter`, the one `Retry-After` reader (see [retry.md](retry.md), "Reading `Retry-After`"): delay-seconds or an HTTP-date measured against the response's `Date`, saturating rather than wrapping, never capped (`TestTerminalError_RetryAfter`). Implements: R-6.8.6 [verified]
 
 ## Transport-Layer Retry
 

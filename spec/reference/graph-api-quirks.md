@@ -791,8 +791,9 @@ RateLimit headers" and that clients should honor `Retry-After` instead
 checked 2026-10-25). An earlier version of this entry said the headers exist
 but only cover per-app 1-minute resource units; that is superseded. The client
 reads no `RateLimit-*` header: `Retry-After` is the only throttling header it
-honours (`internal/retry/transport.go` `parseRetryAfterHeader`,
-`internal/graph/client_preauth.go` `parseRetryAfter`).
+honours, through the one reader `retry.ResponseRetryAfter`
+(`internal/retry/retry_after.go`), which also accepts the HTTP-date form RFC
+9110 allows although OneDrive has only been seen sending seconds.
 
 ## Shared Folder Issues
 
