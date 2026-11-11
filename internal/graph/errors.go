@@ -169,8 +169,9 @@ type GraphError struct {
 	RawBody    string
 	Err        error // sentinel, for errors.Is()
 	// RetryAfter is the server-mandated wait duration from the Retry-After
-	// header on 429/503 responses. Zero when absent or unparseable. The engine
-	// uses this for scope-based backoff instead of computing its own delay.
+	// header on 429/503 responses, read by retry.ResponseRetryAfter (seconds
+	// or HTTP-date). Zero when absent or unusable. The engine uses this for
+	// scope-based backoff instead of computing its own delay.
 	RetryAfter time.Duration
 	// AgsDiagnostic is the X-Ms-Ags-Diagnostic response header: the Graph
 	// gateway's routing record (server, data center). Microsoft support asks

@@ -400,10 +400,11 @@ func (rt *RetryTransport) waitForThrottle(req *http.Request, sleepFn SleepFunc) 
 // For 429 (throttled), the Retry-After header takes precedence over computed
 // backoff — ignoring it risks extended throttling by the Graph API.
 func (rt *RetryTransport) retryBackoff(resp *http.Response, attempt int, _ SleepFunc) time.Duration {
-	if ra := parseRetryAfterHeader(resp); ra > 0 {
+	now := time.Now()
+	if ra := ResponseRetryAfter(resp, now); ra > 0 {
 		// 429: set the throttle deadline so later matching requests wait.
 		if resp.StatusCode == http.StatusTooManyRequests {
-			deadline := time.Now().Add(ra)
+			deadline := now.Add(ra)
 			if rt.ThrottleGate != nil {
 				rt.ThrottleGate.SetDeadline(deadline)
 			} else {
@@ -428,27 +429,6 @@ func requestLogTarget(req *http.Request) string {
 	}
 
 	return req.URL.String()
-}
-
-// parseRetryAfterHeader extracts the Retry-After header from 429 and 503
-// responses and returns it as a time.Duration. Returns 0 when absent,
-// unparseable, or the status code is not 429/503.
-func parseRetryAfterHeader(resp *http.Response) time.Duration {
-	if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusServiceUnavailable {
-		return 0
-	}
-
-	ra := resp.Header.Get("Retry-After")
-	if ra == "" {
-		return 0
-	}
-
-	seconds, err := strconv.Atoi(ra)
-	if err != nil || seconds <= 0 {
-		return 0
-	}
-
-	return time.Duration(seconds) * time.Second
 }
 
 // errBodyNotReplayable reports a retry that would have resent a request

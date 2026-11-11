@@ -1,8 +1,8 @@
 # Retry
 
-GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/notices.go, internal/retry/policy.go, internal/retry/throttle_gate.go, internal/retry/transport.go
+GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/notices.go, internal/retry/policy.go, internal/retry/retry_after.go, internal/retry/throttle_gate.go, internal/retry/transport.go
 
-Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.7 [designed], R-6.8.8 [verified], R-6.8.19 [verified], R-6.8.10 [designed], R-6.8.11 [designed], R-6.6.8 [verified], R-2.10.3 [designed], R-2.10.5 [designed], R-2.10.6 [designed], R-2.10.7 [designed], R-2.10.8 [designed], R-2.10.14 [designed], R-6.8.16 [designed], R-6.10.6 [verified]
+Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.6 [verified], R-6.8.7 [designed], R-6.8.8 [verified], R-6.8.19 [verified], R-6.8.10 [designed], R-6.8.11 [designed], R-6.6.8 [verified], R-2.10.3 [designed], R-2.10.5 [designed], R-2.10.6 [designed], R-2.10.7 [designed], R-2.10.8 [designed], R-2.10.14 [designed], R-6.8.16 [designed], R-6.10.6 [verified]
 
 ## Overview
 
@@ -35,6 +35,7 @@ rely on transport-level retry loops for action execution.
 | Behavior | Evidence |
 | --- | --- |
 | Retry policy curves and backoff timing remain package-owned value logic. | `internal/retry/backoff_test.go`, `internal/retry/policy_test.go`, `internal/retry/named_test.go` |
+| One parser reads `Retry-After` for every HTTP caller: delay-seconds or an HTTP-date measured against the response's `Date`, trimmed, saturating instead of wrapping, uncapped. | `TestResponseRetryAfter`, `TestRetryTransport_RetryAfterParsing`, `TestTerminalError_RetryAfter` |
 | Shared `Retry-After` coordination stays optional and caller-injected. | `internal/retry/transport_test.go` (`TestRetryTransport_ThrottleCoordination`, `TestRetryTransport_SharedThrottleGateAcrossTransports`, `TestRetryTransport_429SetsThrottleDeadline`) |
 | An outage is announced once per process across concurrent requests and transports, and re-arms after OneDrive answers. | `TestRetryTransport_OutageIsAnnouncedOncePerProcessAcrossConcurrentRequests`, `TestRetryTransport_OutageNoticeRearmsAfterAResponse`, `TestSessionRuntime_RetryingClientsShareOneRetryNotices` |
 | Long rate-limit waits are announced once; short ones stay quiet; exhaustion is not logged above Debug. | `TestRetryTransport_LongRateLimitWaitIsAnnouncedOnce`, `TestRetryTransport_NetworkError_ExhaustionAnnouncesOnceAndDoesNotRepeatTheError`, `TestRetryTransport_HTTPError_ExhaustionDoesNotWarn` |
@@ -73,7 +74,8 @@ automatic transport retry.
 Features:
 
 - exponential backoff with jitter per `Policy`
-- `Retry-After` parsing for 429/503 responses
+- `Retry-After` on 429/503 responses through `ResponseRetryAfter` (below),
+  which takes precedence over the policy's backoff
 - optional caller-injected shared 429 deadline coordination via `ThrottleGate`
 - request-body rewinding between attempts through `GetBody` or `Seek`; a
   request whose body can be neither is returned after one attempt rather
@@ -91,6 +93,28 @@ Features:
 
 Sync action execution does not use `RetryTransport`. Workers issue one request,
 return the result immediately, and let the engine classify it.
+
+### Reading `Retry-After` (`retry_after.go`)
+
+`ResponseRetryAfter(resp, now)` is the only reader of the `Retry-After` field:
+`RetryTransport` uses it for its backoff and throttle deadline, and the graph
+client uses it to fill `GraphError.RetryAfter` on every error path (Graph
+requests, pre-authenticated requests, raw uploads), which is what sync's scope
+timing reads. It returns 0, meaning "no Retry-After", for any status other
+than 429 and 503 and for an unusable value; each caller then applies the
+fallback it uses when the field is absent.
+
+- both forms of RFC 9110 section 10.2.3 are read: delay-seconds, and an
+  HTTP-date in any of the three formats `http.ParseTime` accepts
+- an HTTP-date is measured against the response's own `Date` field, so a
+  skew between the server's clock and this host's does not change the wait;
+  the caller's `now` is used only when `Date` is missing or unparsable
+- surrounding whitespace is ignored; zero, negative, garbage and a date not
+  after `Date` mean "no Retry-After"
+- a value too long for a `time.Duration` (about 292 years) saturates at the
+  longest duration instead of wrapping to a negative or tiny wait. This is a
+  representation limit, not a cap: no ceiling is applied and the server's
+  wait is honored as given (R-2.10.7, R-2.10.14)
 
 ### What the transport says (R-6.6.8)
 
@@ -183,7 +207,7 @@ text stay in runtime classification and logs rather than durable retry rows.
 Trial timing is scope-aware:
 
 - `throttle:target:*` and `service` honor server `Retry-After` exactly when
-  present
+  present, in either form `ResponseRetryAfter` reads
 - all locally timed scopes use a fixed 60-second interval when server timing
   is absent
 

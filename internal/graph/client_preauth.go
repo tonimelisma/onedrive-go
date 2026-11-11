@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/retry"
@@ -30,7 +29,7 @@ func (c *Client) buildError(method, path string, resp *http.Response) *GraphErro
 	}
 
 	reqID := resp.Header.Get("request-id")
-	retryAfter := parseRetryAfter(resp)
+	retryAfter := retry.ResponseRetryAfter(resp, time.Now())
 	graphErr := buildGraphError(resp.StatusCode, reqID, retryAfter, errBody)
 	graphErr.AgsDiagnostic = resp.Header.Get(headerAgsDiagnostic)
 
@@ -107,7 +106,7 @@ func (c *Client) doPreAuth(
 	}
 
 	reqID := resp.Header.Get("request-id")
-	retryAfter := parseRetryAfter(resp)
+	retryAfter := retry.ResponseRetryAfter(resp, time.Now())
 
 	c.logger.Debug("pre-auth request failed",
 		slog.String("desc", desc),
@@ -197,27 +196,6 @@ func (c *Client) validatedCopyMonitorURL(raw string) (string, error) {
 	}
 
 	return parsedURL, nil
-}
-
-// parseRetryAfter extracts the Retry-After header from 429 and 503 responses
-// and returns it as a time.Duration. Returns 0 when the header is absent,
-// unparseable, or the status code is not 429/503.
-func parseRetryAfter(resp *http.Response) time.Duration {
-	if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusServiceUnavailable {
-		return 0
-	}
-
-	ra := resp.Header.Get("Retry-After")
-	if ra == "" {
-		return 0
-	}
-
-	seconds, err := strconv.Atoi(ra)
-	if err != nil || seconds <= 0 {
-		return 0
-	}
-
-	return time.Duration(seconds) * time.Second
 }
 
 // headerAgsDiagnostic is the Graph gateway's diagnostic header, kept on

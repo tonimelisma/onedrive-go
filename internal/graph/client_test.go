@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -997,9 +998,29 @@ func TestTerminalError_RetryAfter(t *testing.T) {
 		path           string
 		status         int
 		retryAfter     string
+		date           string // the response's Date field; empty lets the server set it
 		body           string
 		wantRetryAfter time.Duration
 	}{
+		{
+			// The date form is measured against the response's own Date, not
+			// this host's clock.
+			name:           "429 with an HTTP-date Retry-After is measured against Date",
+			path:           "/throttle-date",
+			status:         http.StatusTooManyRequests,
+			retryAfter:     "Wed, 11 Nov 2026 10:01:30 GMT",
+			date:           "Wed, 11 Nov 2026 10:00:00 GMT",
+			body:           `{"error":"throttled"}`,
+			wantRetryAfter: 90 * time.Second,
+		},
+		{
+			name:           "503 with seconds beyond a duration saturates instead of wrapping",
+			path:           "/unavail-huge",
+			status:         http.StatusServiceUnavailable,
+			retryAfter:     "9223372037",
+			body:           `{"error":"service unavailable"}`,
+			wantRetryAfter: time.Duration(math.MaxInt64),
+		},
 		{
 			name:           "429 with Retry-After populates RetryAfter",
 			path:           "/throttle",
@@ -1032,6 +1053,9 @@ func TestTerminalError_RetryAfter(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				if tt.retryAfter != "" {
 					w.Header().Set("Retry-After", tt.retryAfter)
+				}
+				if tt.date != "" {
+					w.Header().Set("Date", tt.date)
 				}
 				w.WriteHeader(tt.status)
 				writeClientTestBody(t, w, tt.body)
