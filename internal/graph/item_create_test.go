@@ -193,6 +193,193 @@ func TestUpload_FailedContentStepRemovesItsEmptyItemByItsCurrentETag(t *testing.
 	}
 }
 
+// failUploadAfterCreate runs an upload whose session request is refused, so
+// the client is left with the empty item it created, and returns the
+// upload's error.
+func failUploadAfterCreate(t *testing.T, rec *sessionUploadRecorder) error {
+	t.Helper()
+
+	srv := newSessionUploadServer(t, rec, http.StatusForbidden)
+	defer srv.Close()
+
+	content := []byte("blocked")
+	_, err := newTestClient(t, srv.URL).Upload(t.Context(), driveid.New("d"), "parent", "blocked.txt",
+		bytes.NewReader(content), int64(len(content)), time.Time{}, nil)
+	require.ErrorIs(t, err, ErrForbidden)
+
+	return err
+}
+
+// Validates: R-5.6.14
+//
+// Nightly run 42865435904, e2e TestE2E_SyncWatch_PauseResume: the cleanup's
+// one delete, conditional on the eTag it had just read, answered 412 and the
+// empty file stayed on OneDrive. The session request the client had given up
+// on most likely still reached the server and moved the eTag after that read
+// (inferred from the order of the requests). A 412 is answered by reading
+// the item again.
+func TestUpload_FailedContentStepReadsAgainWhenItsDeleteIsRefused(t *testing.T) {
+	rec := &sessionUploadRecorder{
+		readBacks:      []createdItemReadBack{{etag: `"read-1"`}, {etag: `"read-2"`}},
+		deleteStatuses: []int{http.StatusPreconditionFailed},
+	}
+
+	failUploadAfterCreate(t, rec)
+
+	assert.Equal(t, []string{`"read-1"`, `"read-2"`}, rec.deleteIfMatch,
+		"each delete is conditional on the eTag its own attempt read")
+	assert.Equal(t, 2, rec.reads)
+}
+
+// Validates: R-5.6.14
+func TestUpload_FailedContentStepLeavesAnItemThatGainedContentBetweenAttempts(t *testing.T) {
+	// The refused delete may mean another writer filled the item. The second
+	// read shows content, so nothing more is deleted.
+	rec := &sessionUploadRecorder{
+		readBacks:      []createdItemReadBack{{etag: `"read-1"`}, {etag: `"read-2"`, size: 7}},
+		deleteStatuses: []int{http.StatusPreconditionFailed},
+	}
+
+	failUploadAfterCreate(t, rec)
+
+	assert.Equal(t, []string{`"read-1"`}, rec.deleteIfMatch)
+	assert.Equal(t, 2, rec.reads)
+}
+
+// Validates: R-5.6.14
+func TestUpload_FailedContentStepStopsAfterThreeRefusedDeletes(t *testing.T) {
+	// One more scripted refusal than the limit: a fourth attempt would show.
+	refused := http.StatusPreconditionFailed
+	rec := &sessionUploadRecorder{deleteStatuses: []int{refused, refused, refused, refused}}
+
+	err := failUploadAfterCreate(t, rec)
+
+	assert.Len(t, rec.deleteIfMatch, 3)
+	assert.Equal(t, 3, rec.reads)
+
+	// The upload's own failure is what the caller gets, with the item that
+	// was left, never the cleanup's.
+	var created *CreatedItemError
+	require.ErrorAs(t, err, &created)
+	assert.Equal(t, "small-item", created.Item.ID)
+	assert.NotErrorIs(t, err, ErrPreconditionFailed)
+}
+
+// Validates: R-5.6.14
+func TestUpload_FailedContentStepStopsWhenItsEmptyItemIsAlreadyGone(t *testing.T) {
+	rec := &sessionUploadRecorder{
+		readBacks:      []createdItemReadBack{{etag: `"read-1"`}, {status: http.StatusNotFound}},
+		deleteStatuses: []int{http.StatusPreconditionFailed},
+	}
+
+	failUploadAfterCreate(t, rec)
+
+	assert.Equal(t, []string{`"read-1"`}, rec.deleteIfMatch)
+	assert.Equal(t, 2, rec.reads)
+}
+
+// Validates: R-5.6.14
+func TestRemoveEmptyItem(t *testing.T) {
+	refused := http.StatusPreconditionFailed
+
+	for _, tc := range []struct {
+		name        string
+		rec         *sessionUploadRecorder
+		wantRemoved bool
+		wantErr     error
+		wantDeletes []string
+		wantReads   int
+	}{
+		{
+			name:        "empty item is deleted by the eTag just read",
+			rec:         &sessionUploadRecorder{currentETag: `"moved-etag"`},
+			wantRemoved: true,
+			wantDeletes: []string{`"moved-etag"`},
+			wantReads:   1,
+		},
+		{
+			name:        "already gone",
+			rec:         &sessionUploadRecorder{readBacks: []createdItemReadBack{{status: http.StatusNotFound}}},
+			wantRemoved: true,
+			wantReads:   1,
+		},
+		{
+			name:        "gone between the read and the delete",
+			rec:         &sessionUploadRecorder{deleteStatuses: []int{http.StatusNotFound}},
+			wantRemoved: true,
+			wantDeletes: []string{createdFileETag},
+			wantReads:   1,
+		},
+		{
+			name:      "an item with content is never deleted",
+			rec:       &sessionUploadRecorder{currentSize: 7},
+			wantReads: 1,
+		},
+		{
+			name:      "an item without an eTag is never deleted",
+			rec:       &sessionUploadRecorder{readBacks: []createdItemReadBack{{}}},
+			wantReads: 1,
+		},
+		{
+			name: "a refused delete is answered by reading again",
+			rec: &sessionUploadRecorder{
+				readBacks:      []createdItemReadBack{{etag: `"read-1"`}, {etag: `"read-2"`}},
+				deleteStatuses: []int{refused},
+			},
+			wantRemoved: true,
+			wantDeletes: []string{`"read-1"`, `"read-2"`},
+			wantReads:   2,
+		},
+		{
+			name: "content that landed after a refused delete stays",
+			rec: &sessionUploadRecorder{
+				readBacks:      []createdItemReadBack{{etag: `"read-1"`}, {etag: `"read-2"`, size: 7}},
+				deleteStatuses: []int{refused},
+			},
+			wantDeletes: []string{`"read-1"`},
+			wantReads:   2,
+		},
+		{
+			name:        "gives up after three refused deletes",
+			rec:         &sessionUploadRecorder{deleteStatuses: []int{refused, refused, refused, refused}},
+			wantErr:     ErrPreconditionFailed,
+			wantDeletes: []string{createdFileETag, createdFileETag, createdFileETag},
+			wantReads:   3,
+		},
+		{
+			name:      "a failed read is reported, nothing is deleted",
+			rec:       &sessionUploadRecorder{readBacks: []createdItemReadBack{{status: http.StatusForbidden}}},
+			wantErr:   ErrForbidden,
+			wantReads: 1,
+		},
+		{
+			name:        "a delete refused for another reason is not tried again",
+			rec:         &sessionUploadRecorder{deleteStatuses: []int{http.StatusForbidden}},
+			wantErr:     ErrForbidden,
+			wantDeletes: []string{createdFileETag},
+			wantReads:   1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newSessionUploadServer(t, tc.rec, http.StatusOK)
+			defer srv.Close()
+
+			removed, err := newTestClient(t, srv.URL).RemoveEmptyItem(t.Context(), driveid.New("d"), "small-item")
+
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				assert.ErrorContains(t, err, "small-item")
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.wantRemoved, removed)
+			assert.Equal(t, tc.wantDeletes, tc.rec.deleteIfMatch)
+			assert.Equal(t, tc.wantReads, tc.rec.reads)
+			assert.Empty(t, tc.rec.other)
+		})
+	}
+}
+
 // Validates: R-5.6.2
 func TestUploadToItem_OverwriteIsConditionalOnBothRoutes(t *testing.T) {
 	tests := []struct {

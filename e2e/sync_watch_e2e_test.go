@@ -234,11 +234,12 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 	reloadDaemonConfig(t, env)
 
 	// Create a local file while paused.
+	const pausedContent = "created while paused\n"
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "paused-file.txt"),
-		[]byte("created while paused\n"),
+		[]byte(pausedContent),
 		0o600,
 	))
 
@@ -257,16 +258,18 @@ func TestE2E_SyncWatch_PauseResume(t *testing.T) {
 	// Resume the drive.
 	runCLIWithConfig(t, cfgPath, env, "resume")
 
-	// Poll until the file appears remotely after resume.
-	waitForRemoteReadContains(t, opsCfgPath, nil, "", "paused-file.txt", 3*time.Minute, "stat", remotePath)
+	// Poll until the file's content is remote after resume, not only its
+	// name: the upload creates the file empty first, and a daemon stopped
+	// between that and the content leaves 0 bytes behind (LI-20261110-01).
+	waitForRemoteFileContent(t, opsCfgPath, nil, "", remotePath, pausedContent, 3*time.Minute)
 
 	// Send SIGTERM for graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
 	waitForDaemonExit(t, cmd)
 
-	// Verify file content.
+	// Verify the shutdown left the file's content in place.
 	remoteContent := getRemoteFile(t, opsCfgPath, nil, remotePath)
-	assert.Equal(t, "created while paused\n", remoteContent)
+	assert.Equal(t, pausedContent, remoteContent)
 }
 
 // TestE2E_SyncWatch_ControlSocketReload starts a daemon with only drive1, then

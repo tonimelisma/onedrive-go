@@ -140,12 +140,12 @@ func isBusinessLikeDriveID(driveID driveid.ID) bool {
 
 // settleUncertainFinalFragment handles an upload whose last fragment may
 // have committed: the encapsulated small-file session canceled itself, but
-// the item is adopted if it is provably ours (D-036). When it is not, and the
-// create made it, the content provably did not land: the empty item is
-// removed now, conditional on the eTag the lookup just read while it was
-// still empty. The creation eTag no longer matches by then: opening and
-// canceling the session moved it, so that delete always failed with 412 and
-// left the placeholder behind.
+// the item is adopted if it is provably ours (D-036). When it is not, the
+// create made it and the lookup shows it still empty, the content provably
+// did not land: the empty item is removed now, by its ID (removePlaceholder).
+// The removal reads the eTag it is conditional on itself. The creation eTag
+// no longer matches by then: opening and canceling the session moved it, so
+// that delete always failed with 412 and left the placeholder behind.
 func (tm *TransferManager) settleUncertainFinalFragment(
 	ctx context.Context, target uploadTarget, sent uploadedContent, created *graph.CreatedItemError, uploadErr error,
 ) (*graph.Item, error) {
@@ -156,8 +156,8 @@ func (tm *TransferManager) settleUncertainFinalFragment(
 	if adopted {
 		return landed, nil
 	}
-	if created != nil && created.Item != nil && landed != nil && landed.ID == created.Item.ID {
-		tm.removeEmptyPlaceholder(ctx, target.driveID, landed)
+	if created != nil && created.Item != nil && landed != nil && landed.ID == created.Item.ID && landed.Size == 0 {
+		tm.removePlaceholder(ctx, target.driveID, landed.ID)
 	}
 
 	return nil, uploadErr

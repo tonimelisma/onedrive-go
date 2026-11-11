@@ -313,11 +313,25 @@ fresh-parent `404 itemNotFound` with `UploadSessionCreatePolicy()`; a
 read-only shared folder answers it with the correct `403`, which is not
 retried. A create never replaces: 409 `nameAlreadyExists` is `ErrConflict`
 (`TestUpload_ExistingNameIsNeverReplaced`). When the content step fails
-before its final fragment the created empty item is read back and deleted
-again while still empty, with `If-Match` on the eTag just read: an upload
-session opened on the empty item moves its eTag although no content landed
+before its final fragment the created empty item is removed again by
+`RemoveEmptyItem`: it is read back and deleted while still empty, with
+`If-Match` on the eTag just read, because an upload session opened on the
+empty item moves its eTag although no content landed
 (`TestUpload_FailedContentStepRemovesItsEmptyItemConditionally`,
-`TestUpload_FailedContentStepRemovesItsEmptyItemByItsCurrentETag`).
+`TestUpload_FailedContentStepRemovesItsEmptyItemByItsCurrentETag`). One read
+and one delete are not enough: a delete answered 412 means the eTag moved
+again after the read (LI-20261110-01, where a session request the client had
+canceled appears to have still landed), so the read and the delete are
+repeated, `placeholderCleanupAttempts` (3) attempts in all, on a context
+detached from the upload's and bounded as a whole by
+`placeholderCleanupTimeout` (10 s). An item that reads back with content or
+without an eTag is never deleted; a 404 on either request counts as removed;
+any other failure ends the removal. Whatever remains is left in place for the
+next pass (R-5.6.14, `TestUpload_FailedContentStepReadsAgainWhenItsDeleteIsRefused`,
+`TestUpload_FailedContentStepLeavesAnItemThatGainedContentBetweenAttempts`,
+`TestUpload_FailedContentStepStopsAfterThreeRefusedDeletes`,
+`TestUpload_FailedContentStepStopsWhenItsEmptyItemIsAlreadyGone`,
+`TestRemoveEmptyItem`).
 
 Overwrites by item ID take the caller's preflight eTag as `If-Match` on both
 routes (R-5.6.2, D-022, `TestUploadToItem_OverwriteIsConditionalOnBothRoutes`);

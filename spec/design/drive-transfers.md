@@ -300,12 +300,22 @@ as its own placeholder (R-5.2.4,
 `TestUploadFileToItem_DropsACreateRecordForOtherContent`). The soak of
 2026-11-02 found this: a 2 GiB create killed at 1.2 GiB was sent again from
 byte 0 after the restart, with the create's record left beside the new one.
-When a final fragment's lookup shows the content did not land, the empty item
-is deleted at once while still empty, with If-Match on the eTag that lookup
-read; the creation eTag no longer matches by then, because opening and
-canceling the session moved it
+The transfer manager never deletes a placeholder itself. It hands the item's
+ID to `PlaceholderRemover.RemoveEmptyItem`, the Graph client's bounded
+read-back and conditional delete ([graph-client.md](graph-client.md),
+R-5.6.14), on a context detached from the upload's and bounded by
+`cancelSessionTimeout`; a failure, or an item left in place, is logged at
+Debug and the upload's own error is what the caller sees.
+There are two such places. When a final fragment's lookup shows the content
+did not land and the created item still empty, the item is removed at once;
+the creation eTag no longer matches by then, because opening and canceling
+the session moved it, which is why the removal reads the eTag it deletes by
 (`TestUploadFile_UncertainFinalFragmentThatDidNotLandRemovesThePlaceholder`,
 `TestUploadFile_UncertainFinalFragmentRemovesThePlaceholderByItsCurrentETag`).
+When recording the item a persisted session created fails (`OnCreated`
+returns an error), the session is canceled and the item removed the same way,
+before any content is sent
+(`TestSessionUpload_FailedCreatedHookRemovesTheEmptyItem`).
 CLI `put` onto an existing name overwrites that file by ID with If-Match on
 the eTag just listed, and refuses an existing folder (R-1.3.8,
 `TestPutFile_ExistingFileIsOverwrittenByIDConditionally`).
