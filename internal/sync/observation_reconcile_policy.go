@@ -18,7 +18,7 @@ type observationReconcilePlan struct {
 
 type managedObservationIssueKey struct {
 	path      string
-	issueType string
+	issueType IssueType
 }
 
 func buildObservationReconcilePlan(
@@ -156,12 +156,20 @@ func desiredManagedObservationIssues(
 	return desired
 }
 
-func managedObservationTypeSet(batch *ObservationFindingsBatch) map[string]struct{} {
-	if batch == nil {
+func managedObservationTypeSet(batch *ObservationFindingsBatch) map[IssueType]struct{} {
+	if batch == nil || len(batch.ManagedIssueTypes) == 0 {
 		return nil
 	}
 
-	return stringSet(batch.ManagedIssueTypes)
+	managed := make(map[IssueType]struct{}, len(batch.ManagedIssueTypes))
+	for _, issueType := range batch.ManagedIssueTypes {
+		if issueType == "" {
+			continue
+		}
+		managed[issueType] = struct{}{}
+	}
+
+	return managed
 }
 
 func managedObservationPathSet(batch *ObservationFindingsBatch) map[string]struct{} {
@@ -184,20 +192,4 @@ func managedObservationPathSet(batch *ObservationFindingsBatch) map[string]struc
 	}
 
 	return paths
-}
-
-func stringSet(values []string) map[string]struct{} {
-	if len(values) == 0 {
-		return nil
-	}
-
-	normalized := make(map[string]struct{}, len(values))
-	for i := range values {
-		if values[i] == "" {
-			continue
-		}
-		normalized[values[i]] = struct{}{}
-	}
-
-	return normalized
 }

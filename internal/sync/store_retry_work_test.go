@@ -355,3 +355,54 @@ func TestResolveRetryWork_DeletesRetryWorkWithoutIssueRow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, rows)
 }
+
+// An empty condition_type is a transient failure and reads as no condition;
+// a member reads back as itself; any other stored value fails the read
+// naming the row, so status and admission never act on a condition no
+// member names.
+// Validates: R-2.5.6
+func TestScanRetryWorkRow_ConditionTypeMustBeEmptyOrAMember(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	actionable := testDelayedRetryWorkRow("refused.txt", "", ActionUpload, 1, 0)
+	actionable.ConditionType = issuePathTooLong
+	require.NoError(t, store.UpsertRetryWork(ctx, actionable))
+	require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow("transient.txt", "", ActionDownload, 1, 0)))
+
+	rows, err := store.ListRetryWork(ctx)
+	require.NoError(t, err)
+	byPath := make(map[string]IssueType, len(rows))
+	for i := range rows {
+		byPath[rows[i].Path] = rows[i].ConditionType
+	}
+	assert.Equal(t, map[string]IssueType{"refused.txt": issuePathTooLong, "transient.txt": ""}, byPath)
+
+	_, err = store.rawDB().ExecContext(ctx,
+		`UPDATE retry_work SET condition_type = ? WHERE path = ?`, "path_too_long_v2", "refused.txt")
+	require.NoError(t, err)
+
+	_, err = store.ListRetryWork(ctx)
+	require.ErrorContains(t, err, `unknown issue type "path_too_long_v2"`)
+	require.ErrorContains(t, err, "refused.txt")
+}
+
+// The write refuses a condition type the read would refuse, so a bad value
+// never reaches the table.
+// Validates: R-2.5.6
+func TestUpsertRetryWork_RefusesAConditionTypeNoMemberHas(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+
+	row := testDelayedRetryWorkRow("refused.txt", "", ActionUpload, 1, 0)
+	row.ConditionType = IssueType("path_too_long_v2")
+	require.ErrorContains(t, store.UpsertRetryWork(ctx, row), `unknown condition type "path_too_long_v2"`)
+
+	rows, err := store.ListRetryWork(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+}

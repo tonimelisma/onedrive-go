@@ -61,7 +61,7 @@ func TestConditionKeyForIssueType_RepresentativeMappings(t *testing.T) {
 	assert.Empty(t, key)
 }
 
-func mustConditionKeyForIssueType(t *testing.T, issueType string) ConditionKey {
+func mustConditionKeyForIssueType(t *testing.T, issueType IssueType) ConditionKey {
 	t.Helper()
 
 	key, ok := conditionKeyForIssueType(issueType)

@@ -94,7 +94,9 @@ func (f *engineFlow) recordError(decision *resultDecision, r *actionCompletion) 
 		return
 	}
 
-	conditionType := decision.ConditionType
+	// The summary groups log lines by condition, so it keeps the condition as
+	// the log key it becomes, with a key of its own for a failure that has none.
+	conditionType := string(decision.ConditionType)
 	if conditionType == "" {
 		conditionType = fallbackFailureSummaryIssueType
 	}

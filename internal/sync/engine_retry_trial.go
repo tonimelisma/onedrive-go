@@ -126,7 +126,7 @@ func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 
 	flow.deps.logger.Debug("retry_work resolved",
 		slog.String("path", row.Path),
-		slog.String("condition_type", retryConditionTypeForRow(row)),
+		slog.String("condition_type", string(retryConditionTypeForRow(row))),
 		slog.String("action_type", row.ActionType.String()),
 		slog.Int("attempt_count", row.AttemptCount),
 		slog.String("resolution_source", resolutionSource),

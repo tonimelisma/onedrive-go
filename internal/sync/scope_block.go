@@ -84,6 +84,6 @@ func blockScopeRowFromActiveScope(scope activeScope) (*BlockScope, error) {
 type scopeUpdateResult struct {
 	Block         bool          // true if threshold crossed → create block
 	ScopeKey      ScopeKey      // scope key for the block
-	ConditionType string        // "rate_limited", IssueQuotaExceeded, IssueServiceOutage
+	ConditionType IssueType     // issueRateLimited, IssueQuotaExceeded, issueServiceOutage
 	RetryAfter    time.Duration // server-provided Retry-After (0 if absent)
 }

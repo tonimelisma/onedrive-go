@@ -39,5 +39,5 @@ type resultDecision struct {
 	RunScopeDetection bool
 	RecordSuccess     bool
 	TrialHint         trialHint
-	ConditionType     string
+	ConditionType     IssueType
 }

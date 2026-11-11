@@ -54,7 +54,7 @@ func TestRunOnce_EmojiOnlyVariantIsACollisionNotAnEndlessConflict(t *testing.T) 
 	requireScenarioIssue(t, eng, "a.txt", issueCaseCollision)
 }
 
-func requireScenarioIssue(t *testing.T, eng *testEngine, path, issueType string) {
+func requireScenarioIssue(t *testing.T, eng *testEngine, path string, issueType IssueType) {
 	t.Helper()
 
 	issues, err := eng.baseline.ListObservationIssues(t.Context())

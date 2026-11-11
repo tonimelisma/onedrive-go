@@ -112,7 +112,7 @@ func (ph *permissionHandler) handleLocalPermission(
 func (ph *permissionHandler) localFilePermissionEvidence(
 	path string,
 	actionType actionType,
-	issueType string,
+	issueType IssueType,
 	errMsg string,
 ) permissionEvidence {
 	_ = actionType
@@ -129,7 +129,7 @@ func (ph *permissionHandler) localDirectoryPermissionEvidence(
 	boundaryPath string,
 	triggerPath string,
 	actionType actionType,
-	issueType string,
+	issueType IssueType,
 ) permissionEvidence {
 	_ = actionType
 
@@ -156,7 +156,7 @@ func (ph *permissionHandler) deepestDeniedBoundary(parentDir string) string {
 	}
 }
 
-func localPermissionIssueType(r *actionCompletion) string {
+func localPermissionIssueType(r *actionCompletion) IssueType {
 	if r == nil {
 		return issueLocalReadDenied
 	}

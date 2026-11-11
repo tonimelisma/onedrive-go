@@ -31,6 +31,21 @@ the planner, and the runtime. `actionType` answers `Direction()` and `Value()`.
 `permissionCapability` answers `IsLocal()`. Moving these apart from their data
 is what would produce an anemic model.
 
+`IssueType` (`issue_types.go`) names every sync condition: the issue type of
+an observation issue, the condition type of a retry_work row, a scope's
+default condition, and the condition of a runtime result decision, including
+the transient ones (`request_timeout`, `transient_conflict`, ...) that no
+store keeps. A member's value is the persisted string. `isMember()` is the
+membership list. The exhaustive linter holds it and
+`observationIssueBlocksLocalTruth` (sync-store.md) to every member, so a new
+member does not pass lint until it has a verdict on local truth; the three
+switches that pick out a few members on purpose (the retry curve, the
+block-scope wording, the permission boundary scope) say so in an explained
+`//nolint:exhaustive`. The stores
+convert to and from the stored string at their own boundary and refuse a
+value that is not a member (sync-store.md); elsewhere a value becomes a plain
+string only as a log attribute or in CLI output.
+
 ## Ownership Contract
 
 - Owns: the sync domain vocabulary and the invariants those values enforce.
@@ -64,6 +79,7 @@ and makes the family order a strict downward chain, which is what
 | --- | --- |
 | Scope keys own their own blocking, path-coverage, and rendering policy rather than exporting raw fields for callers to interpret. | `TestScopeKey_BlocksAction`, `TestScopeKey_CoveredPath`, `TestScopeKey_CoveredPathMatchesFamilyAccessors`, `TestScopeKey_Humanize`, `TestScopeKey_IsGlobal`, `TestDescribeScopeKey_Service` |
 | Action types answer their own direction; an action type no case lists has none (the zero direction), never a guessed one. | `TestActionTypeDirection` |
+| Every declared `IssueType` constant is a member and parses back to itself, with no two sharing a value; any other stored string, the empty one included, does not parse. | `TestIssueType_EveryDeclaredConstantIsAMemberAndParses`, `TestParseIssueType_RefusesAValueNoMemberHas` |
 | `Baseline.GetCaseVariants` returns a copy of its sibling index under the read lock, so the watch observer can iterate it while workers commit outcomes through `Put` (R-6.3.4). | `TestBaseline_GetCaseVariantsCopyIsSafeAgainstConcurrentPut` |
 | The bundled junk list (`isBundledJunkName`, on by default through config, R-2.4.14) covers OS metadata, editor/IDE temporaries, Office `~$` owner files and SQLite `-wal`/`-shm`/`-journal` sidecars of databases whose name has an extension, so ordinary names such as `travel-journal` keep syncing. The `4913`, `~*` and `*~` rules match only a file leaf (`isBundledJunkFileName`), never a folder or a path component. | `TestContentFilter_ExtendedJunkList`, `TestContentFilter_FileOnlyJunkRulesKeepFolders` |
 | The runtime arms its timers through the engine clock, so a test clock controls retry, trial, and refresh timing coherently. | `TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionArmsRetryTimerInWatchMode`, `TestHandleRemoteObservationBatch_MountRootEnumerateClampRearmsRefreshTimerImmediately`, `TestCancelPendingTimers` |

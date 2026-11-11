@@ -167,10 +167,14 @@ func (s *SyncStore) upsertObservationIssuesTx(
 		if issue.Path == "" {
 			return fmt.Errorf("sync: upsert observation issue: missing path")
 		}
+		// Never write what scanObservationIssueRow would refuse to read.
+		if !issue.IssueType.isMember() {
+			return fmt.Errorf("sync: upsert observation issue for %s: unknown issue type %q", issue.Path, issue.IssueType)
+		}
 
 		if _, execErr := stmt.ExecContext(ctx,
 			issue.Path,
-			issue.IssueType,
+			string(issue.IssueType),
 			issue.ScopeKey.String(),
 		); execErr != nil {
 			return fmt.Errorf("sync: upsert observation issue for %s: %w", issue.Path, execErr)
@@ -198,7 +202,7 @@ func deleteObservationIssuesTx(
 
 	for i := range deletes {
 		deletePlan := deletes[i]
-		if _, execErr := stmt.ExecContext(ctx, deletePlan.path, deletePlan.issueType); execErr != nil {
+		if _, execErr := stmt.ExecContext(ctx, deletePlan.path, string(deletePlan.issueType)); execErr != nil {
 			return fmt.Errorf("sync: deleting observation issue %s (%s): %w", deletePlan.path, deletePlan.issueType, execErr)
 		}
 	}
@@ -215,15 +219,23 @@ func scanObservationIssueRow(
 		return fmt.Errorf("sync: scanning observation issue row: nil destination")
 	}
 
-	var scopeKey string
+	var issueType, scopeKey string
 	if err := scanner.Scan(
 		&row.Path,
-		&row.IssueType,
+		&issueType,
 		&scopeKey,
 	); err != nil {
 		return fmt.Errorf("sync: scanning observation issue row: %w", err)
 	}
 
+	// An unknown issue type fails the read rather than reaching truth
+	// availability, where no verdict for it exists (parseIssueType).
+	parsed, err := parseIssueType(issueType)
+	if err != nil {
+		return fmt.Errorf("sync: scanning observation issue row %s: %w", row.Path, err)
+	}
+
+	row.IssueType = parsed
 	row.DriveID = contentDriveID
 	row.ScopeKey = parseScopeKey(scopeKey)
 	return nil

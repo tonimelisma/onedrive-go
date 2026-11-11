@@ -51,6 +51,10 @@ func upsertRetryWorkTx(ctx context.Context, runner sqlTxRunner, row *RetryWorkRo
 	if row == nil {
 		return fmt.Errorf("sync: upserting retry_work: nil row")
 	}
+	// Never write what scanRetryWorkRow would refuse to read.
+	if row.ConditionType != "" && !row.ConditionType.isMember() {
+		return fmt.Errorf("sync: upserting retry_work for %s: unknown condition type %q", row.Path, row.ConditionType)
+	}
 
 	_, err := runner.ExecContext(ctx, sqlUpsertRetryWork,
 		row.Path,
@@ -60,7 +64,7 @@ func upsertRetryWorkTx(ctx context.Context, runner sqlTxRunner, row *RetryWorkRo
 		row.Blocked,
 		row.AttemptCount,
 		row.NextRetryAt,
-		row.ConditionType,
+		string(row.ConditionType),
 	)
 	if err != nil {
 		return fmt.Errorf("sync: upserting retry_work for %s: %w", row.Path, err)
@@ -446,7 +450,7 @@ func scanRetryWorkRow(scanner retryWorkScanner, row *RetryWorkRow) error {
 		return fmt.Errorf("sync: scanning retry_work row: nil destination")
 	}
 
-	var scopeKey string
+	var scopeKey, conditionType string
 	if err := scanner.Scan(
 		&row.Path,
 		&row.OldPath,
@@ -455,12 +459,22 @@ func scanRetryWorkRow(scanner retryWorkScanner, row *RetryWorkRow) error {
 		&row.Blocked,
 		&row.AttemptCount,
 		&row.NextRetryAt,
-		&row.ConditionType,
+		&conditionType,
 	); err != nil {
 		return fmt.Errorf("sync: scanning retry_work row: %w", err)
 	}
 
 	row.ScopeKey = parseScopeKey(scopeKey)
+	// An empty condition_type is a transient failure; any other value must be
+	// a member (parseIssueType).
+	if conditionType != "" {
+		parsed, err := parseIssueType(conditionType)
+		if err != nil {
+			return fmt.Errorf("sync: scanning retry_work row %s: %w", row.Path, err)
+		}
+		row.ConditionType = parsed
+	}
+
 	return nil
 }
 
@@ -480,7 +494,7 @@ func scanRetryWorkRows(rows *sql.Rows) ([]RetryWorkRow, error) {
 	return result, nil
 }
 
-func retryConditionTypeForRow(row *RetryWorkRow) string {
+func retryConditionTypeForRow(row *RetryWorkRow) IssueType {
 	if row == nil || row.ScopeKey.IsZero() {
 		return ""
 	}

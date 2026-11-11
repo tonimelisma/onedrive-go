@@ -71,3 +71,86 @@ func TestTruthAvailabilityIndex_StatusForPath_UsesObservationEvidence(t *testing
 	assert.Equal(t, sKPermRemoteRead("Shared"), remoteStatus.Remote.ScopeKey)
 	assert.True(t, remoteStatus.Local.IsAvailable())
 }
+
+// The verdict of every issue type on the truth of the path its observation
+// issue names. The table must name every declared member, so a new member
+// gets a deliberate verdict here as well as in the exhaustive switch.
+// Validates: R-6.2.14, R-6.2.15
+func TestObservationIssueBlocksTruth_VerdictForEveryIssueType(t *testing.T) {
+	t.Parallel()
+
+	type verdict struct{ local, remote bool }
+	verdicts := map[IssueType]verdict{
+		// The scan found the path but cannot represent it: unknown, not absent.
+		IssueInvalidFilename:            {local: true},
+		issuePathTooLong:                {local: true},
+		issueFileTooLarge:               {local: true},
+		issueCaseCollision:              {local: true},
+		issueHashPanic:                  {local: true},
+		issueLocalReadDenied:            {local: true},
+		issueLocalUnsyncableReplacement: {local: true},
+		issueLocalMountBoundary:         {local: true},
+		// OneDrive's side of the path is the unknown one.
+		issueRemoteReadDenied: {remote: true},
+		issueRemoteNameTwin:   {remote: true},
+		// An internal name the content filter hides from planning on both
+		// sides: no synced path reads as deleted through it.
+		issueLocalInterruptedRemoval: {},
+		// Runtime conditions that retry_work or a block scope carries;
+		// observation never stores them.
+		IssueUnauthorized:             {},
+		IssueRemoteWriteDenied:        {},
+		IssueQuotaExceeded:            {},
+		issueRateLimited:              {},
+		issueLocalWriteDenied:         {},
+		issueDiskFull:                 {},
+		issueServiceOutage:            {},
+		issueFileTooLargeForSpace:     {},
+		issueLocalNameTooLong:         {},
+		issueLocalReadOnly:            {},
+		issueDeletesHeld:              {},
+		issueRemoteFolderUnverifiable: {},
+		issueLocalFileTooLarge:        {},
+		issueLocalBusy:                {},
+		issueLocalCrossDevice:         {},
+		issueUnsupportedOperation:     {},
+		issueMalwareDetected:          {},
+		issueLocalDatabaseOpen:        {},
+		issueUploadVerification:       {},
+		issueDownloadIntegrity:        {},
+		issueRequestTimeout:           {},
+		issueTransientConflict:        {},
+		issueTransientNotFound:        {},
+		issueResourceLocked:           {},
+		issueTransferURLRejected:      {},
+	}
+
+	members := issueTypeConstantsInSource(t)
+	require.Len(t, verdicts, len(members), "the table must give every IssueType member a verdict")
+	for _, member := range members {
+		want, ok := verdicts[member]
+		require.True(t, ok, "no verdict for %q", member)
+		assert.Equal(t, want.local, observationIssueBlocksLocalTruth(member), "local truth under %q", member)
+		assert.Equal(t, want.remote, observationIssueBlocksRemoteTruth(member), "remote truth under %q", member)
+	}
+}
+
+// A value outside the enum (the store refuses one, so only a programming
+// error makes it) leaves the path's local truth unavailable rather than
+// readable as absent. Before the type, the switch's default said "not
+// blocking" for any string it did not list.
+// Validates: R-6.2.14
+func TestObservationIssueBlocksLocalTruth_ValueOutsideTheEnumIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	const outsideTheEnum IssueType = "not_an_issue_type"
+	require.False(t, outsideTheEnum.isMember())
+	assert.True(t, observationIssueBlocksLocalTruth(outsideTheEnum))
+
+	status := newTruthAvailabilityIndex([]ObservationIssueRow{
+		{Path: "docs/report.txt", IssueType: outsideTheEnum},
+	}).StatusForPath("docs/report.txt")
+	assert.Equal(t, truthAvailabilityBlockedObservationIssue, status.Local.Availability)
+	assert.Equal(t, outsideTheEnum, status.Local.IssueType)
+	assert.True(t, status.Remote.IsAvailable())
+}

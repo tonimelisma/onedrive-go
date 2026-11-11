@@ -18,7 +18,7 @@ import (
 func TestRetryDelayForCondition_ConditionsThatDoNotClearByThemselvesWaitOnTheDurableCurve(t *testing.T) {
 	t.Parallel()
 
-	for _, condition := range []string{issueCaseCollision, issueRemoteFolderUnverifiable} {
+	for _, condition := range []IssueType{issueCaseCollision, issueRemoteFolderUnverifiable} {
 		delay := retryDelayForCondition(condition)
 		assert.Equal(t, durableRecheckDelay, delay(0), condition)
 		assert.Equal(t, 2*durableRecheckDelay, delay(1), condition)

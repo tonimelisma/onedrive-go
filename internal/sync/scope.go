@@ -130,7 +130,7 @@ func (ss *scopeState) RecordSuccess() {
 // ScopeUpdateResult indicating whether the threshold was crossed.
 func (ss *scopeState) checkWindow(
 	sk ScopeKey, path string, threshold int, window time.Duration,
-	conditionType string,
+	conditionType IssueType,
 ) scopeUpdateResult {
 	now := ss.nowFunc()
 
