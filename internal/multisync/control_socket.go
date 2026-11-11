@@ -31,10 +31,56 @@ const (
 	controlDialTimeout         = 200 * time.Millisecond
 	controlCloseTimeout        = time.Second
 	controlHeaderTimeout       = 5 * time.Second
+	// controlReadTimeout bounds reading one whole request, body included.
+	controlReadTimeout = 10 * time.Second
+	// controlIdleTimeout closes a keep-alive connection that sends nothing.
+	controlIdleTimeout = 30 * time.Second
+	// maxControlHeaderBytes bounds a request's header block; the control
+	// protocol's headers are a few hundred bytes.
+	maxControlHeaderBytes = 16 * 1024
+	// maxPerfCaptureDuration bounds a perf capture, which holds a handler, a
+	// connection and the profilers for its whole duration.
+	maxPerfCaptureDuration = 5 * time.Minute
 
 	// maxControlRequestBytes bounds a control request body.
 	maxControlRequestBytes = 64 * 1024
 )
+
+// controlTimeouts are the control server's deadlines. Production uses
+// defaultControlTimeouts; tests shorten them so a deadline is reached in
+// milliseconds instead of seconds.
+type controlTimeouts struct {
+	header time.Duration // reading a request's headers
+	read   time.Duration // reading a whole request, body included
+	idle   time.Duration // a keep-alive connection with no request
+	accept time.Duration // the watch loop taking a command
+	reload time.Duration // a reload the loop took finishing
+	write  time.Duration // writing one answer
+}
+
+func defaultControlTimeouts() controlTimeouts {
+	return controlTimeouts{
+		header: controlHeaderTimeout,
+		read:   controlReadTimeout,
+		idle:   controlIdleTimeout,
+		accept: synccontrol.LoopAcceptTimeout,
+		reload: synccontrol.ReloadAnswerTimeout,
+		write:  synccontrol.ReplyWriteTimeout,
+	}
+}
+
+// controlServerConfig is what startControlSocketServer serves.
+type controlServerConfig struct {
+	path     string
+	handler  http.Handler
+	logger   *slog.Logger
+	timeouts controlTimeouts
+	// fatal receives an end of Serve nobody asked for. Nil means the owner
+	// carries on without its control channel and the end is only logged.
+	fatal chan<- error
+	// listen binds the socket; nil means listenControlSocket.
+	listen func(ctx context.Context, path string) (net.Listener, error)
+}
 
 type controlCommandKind int
 
@@ -77,12 +123,8 @@ type controlSocketServer struct {
 	lock *ownerLock
 }
 
-func startControlSocketServer(
-	ctx context.Context,
-	path string,
-	handler http.Handler,
-	logger *slog.Logger,
-) (*controlSocketServer, error) {
+func startControlSocketServer(ctx context.Context, cfg *controlServerConfig) (*controlSocketServer, error) {
+	path, handler, logger := cfg.path, cfg.handler, cfg.logger
 	if path == "" {
 		return nil, fmt.Errorf("control socket path is empty")
 	}
@@ -99,7 +141,11 @@ func startControlSocketServer(
 		return nil, err
 	}
 
-	listener, err := listenControlSocket(ctx, path)
+	listen := cfg.listen
+	if listen == nil {
+		listen = listenControlSocket
+	}
+	listener, err := listen(ctx, path)
 	if err != nil {
 		return nil, errors.Join(err, lock.release())
 	}
@@ -112,10 +158,7 @@ func startControlSocketServer(
 		)
 	}
 
-	server := &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: controlHeaderTimeout,
-	}
+	server := newControlHTTPServer(handler, cfg.timeouts)
 	control := &controlSocketServer{
 		path:     path,
 		server:   server,
@@ -128,10 +171,7 @@ func startControlSocketServer(
 	go func() {
 		defer close(control.done)
 		if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			logger.Warn("The control channel stopped; status, pause and resume can't reach this sync until it restarts",
-				slog.String("path", path),
-				slog.Any("error", serveErr),
-			)
+			reportControlServeEnd(logger, path, cfg.fatal, serveErr)
 		}
 	}()
 
@@ -150,6 +190,69 @@ func startControlSocketServer(
 	}()
 
 	return control, nil
+}
+
+// newControlHTTPServer bounds every connection: reading the headers, reading
+// the whole request, an idle keep-alive connection, and the header size. The
+// write timeout is the default for an answer that is ready at once; a handler
+// that waits (for the watch loop, for a capture) moves its own write deadline
+// through extendControlWriteDeadline, because a server-wide budget long
+// enough for a five-minute capture would bound nothing else.
+func newControlHTTPServer(handler http.Handler, timeouts controlTimeouts) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: timeouts.header,
+		ReadTimeout:       timeouts.read,
+		WriteTimeout:      timeouts.write,
+		IdleTimeout:       timeouts.idle,
+		MaxHeaderBytes:    maxControlHeaderBytes,
+	}
+}
+
+// reportControlServeEnd handles a Serve that returned although nobody closed
+// the server. A watch owner without its control channel cannot be paused,
+// reloaded or queried, so the end goes to the watch loop's fatal channel and
+// the watch stops with it instead of syncing on out of reach. A one-shot
+// owner (no fatal channel) keeps its owner lock, finishes its pass and only
+// logs.
+func reportControlServeEnd(logger *slog.Logger, path string, fatal chan<- error, serveErr error) {
+	err := fmt.Errorf("the control channel stopped, so status, pause and resume could no longer reach this sync: %w", serveErr)
+	if fatal == nil {
+		logger.Warn("The control channel stopped; status, pause and resume can't reach this sync until it restarts",
+			slog.String("path", path),
+			slog.Any("error", serveErr),
+		)
+
+		return
+	}
+
+	select {
+	case fatal <- err:
+	default:
+		// Another fatal error is already pending and the watch is ending for
+		// it; this one is still worth a line in the log.
+		logger.Error("The control channel stopped while the sync was already stopping",
+			slog.String("path", path),
+			slog.Any("error", serveErr),
+		)
+	}
+}
+
+// extendControlWriteDeadline gives a handler that waits longer than the
+// server's write timeout its own budget, measured from now. Only the write
+// deadline needs moving: the read timeout bounds reading the request, and
+// net/http clears the read deadline when the handler starts (its background
+// read for a closed connection runs without one), so a long wait is never
+// cut short by it. Setting a read deadline here would bring that cut back.
+//
+// A failure is logged and otherwise ignored on purpose: the server-wide write
+// timeout stays in force and still bounds the connection, so the handler
+// risks being cut short, never hanging. On a Unix socket connection it does
+// not fail.
+func extendControlWriteDeadline(w http.ResponseWriter, budget time.Duration, logger *slog.Logger) {
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(budget)); err != nil {
+		logger.Debug("control request keeps the server's write deadline", slog.Any("error", err))
+	}
 }
 
 // assertControlSocketDirSafe refuses to serve from a directory another user
@@ -293,6 +396,7 @@ func (o *Orchestrator) startControlServer(
 	ctx context.Context,
 	mode synccontrol.OwnerMode,
 	commands chan<- controlCommand,
+	fatal chan<- error,
 ) (*controlSocketServer, error) {
 	if o.cfg.ControlSocketPath == "" {
 		return &controlSocketServer{}, nil
@@ -302,7 +406,14 @@ func (o *Orchestrator) startControlServer(
 		o.handleControlRequest(w, r, mode, commands)
 	})
 
-	return startControlSocketServer(ctx, o.cfg.ControlSocketPath, handler, o.logger)
+	return startControlSocketServer(ctx, &controlServerConfig{
+		path:     o.cfg.ControlSocketPath,
+		handler:  handler,
+		logger:   o.logger,
+		timeouts: o.controlTimeouts,
+		fatal:    fatal,
+		listen:   o.controlListen,
+	})
 }
 
 func (o *Orchestrator) handleControlRequest(
@@ -330,19 +441,70 @@ func (o *Orchestrator) handleControlRequest(
 		return
 	}
 
+	timeouts := o.controlTimeouts
+	answerWait := controlAnswerWait(cmd.kind, timeouts)
+	extendControlWriteDeadline(w, timeouts.accept+answerWait+timeouts.write, o.logger)
+
+	// Two bounded waits with different answers: a command the loop never took
+	// changed nothing (busy); a command it took is carried out whether or not
+	// anyone is still waiting, so the answer past that deadline must not read
+	// as a failure. The response channel is buffered, so a loop answering
+	// after the handler left never blocks.
 	cmd.response = make(chan controlResponse, 1)
+	acceptTimer := time.NewTimer(timeouts.accept)
+	defer acceptTimer.Stop()
 	select {
 	case commands <- cmd:
+	case <-acceptTimer.C:
+		writeControlResponse(w, controlBusyResponse())
+		return
 	case <-r.Context().Done():
 		return
 	}
 
+	answerTimer := time.NewTimer(answerWait)
+	defer answerTimer.Stop()
 	select {
 	case response := <-cmd.response:
 		writeControlResponse(w, response)
+	case <-answerTimer.C:
+		writeControlResponse(w, controlUnansweredResponse(cmd.kind))
 	case <-r.Context().Done():
 		return
 	}
+}
+
+// controlAnswerWait is how long a handler waits for the loop's answer to a
+// command the loop took. Status and stop are answered the moment the loop
+// takes them, so their wait only guards against a loop stuck mid-command.
+func controlAnswerWait(kind controlCommandKind, timeouts controlTimeouts) time.Duration {
+	if kind == controlCommandReload {
+		return timeouts.reload
+	}
+
+	return timeouts.accept
+}
+
+func controlBusyResponse() controlResponse {
+	return controlResponse{
+		StatusCode: http.StatusServiceUnavailable,
+		Code:       synccontrol.ErrorBusy,
+		Err:        fmt.Errorf("the running sync is busy and did not take the request; nothing was changed"),
+	}
+}
+
+// controlUnansweredResponse answers a command the loop took but had not
+// finished when its answer was due. A reload carries on and applies the
+// change, so it is "in progress", not an error.
+func controlUnansweredResponse(kind controlCommandKind) controlResponse {
+	if kind == controlCommandReload {
+		return controlResponse{
+			StatusCode: http.StatusAccepted,
+			Body:       synccontrol.MutationResponse{Status: synccontrol.StatusReloadInProgress},
+		}
+	}
+
+	return controlBusyResponse()
 }
 
 func (o *Orchestrator) handleOneShotControlRequest(w http.ResponseWriter, r *http.Request) {
@@ -403,6 +565,10 @@ func (o *Orchestrator) handlePerfCaptureRequest(
 		return
 	}
 
+	// The answer's budget is the capture's duration, known only once the
+	// body is read; until then the server-wide timeouts hold, so a client
+	// that never finishes its body is cut off by the read timeout.
+	extendControlWriteDeadline(w, opts.Duration+o.controlTimeouts.write, o.logger)
 	result, err := o.capturePerf(r.Context(), opts)
 	if err != nil {
 		statusCode, code := perfCaptureErrorStatus(err)
@@ -521,10 +687,15 @@ func perfCaptureOptionsFromRequest(
 		return perf.CaptureOptions{}, fmt.Errorf("missing perf capture request")
 	}
 
-	duration := time.Duration(request.DurationMS) * time.Millisecond
-	if duration <= 0 {
+	if request.DurationMS <= 0 {
 		return perf.CaptureOptions{}, fmt.Errorf("perf capture duration must be greater than zero")
 	}
+	// Compared in milliseconds, before the conversion, so a huge request
+	// cannot overflow into a small duration that passes.
+	if request.DurationMS > maxPerfCaptureDuration.Milliseconds() {
+		return perf.CaptureOptions{}, fmt.Errorf("perf capture duration must be at most %s", maxPerfCaptureDuration)
+	}
+	duration := time.Duration(request.DurationMS) * time.Millisecond
 	// The owner runs in its own working directory, so a relative path would
 	// not mean what the requester typed. Clients send absolute paths (see
 	// synccontrol.PerfCaptureRequest.MarshalJSON).

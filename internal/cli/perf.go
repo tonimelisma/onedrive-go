@@ -80,7 +80,7 @@ func runPerfCapture(cmd *cobra.Command, _ []string) error {
 	switch probe.state {
 	case controlOwnerStateNoSocket:
 		return fmt.Errorf("no active sync owner; check logs for historical performance summaries")
-	case controlOwnerStatePathUnavailable, controlOwnerStateProbeFailed:
+	case controlOwnerStatePathUnavailable, controlOwnerStateProbeFailed, controlOwnerStateUnresponsive:
 		return fmt.Errorf("live perf capture unavailable; check logs")
 	case controlOwnerStateWatchOwner, controlOwnerStateOneShotOwner:
 	default:

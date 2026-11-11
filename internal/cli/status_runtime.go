@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
@@ -9,19 +10,21 @@ import (
 const (
 	statusRuntimeStateActive   = "active"
 	statusRuntimeStateInactive = "inactive"
+
+	statusRuntimeUnansweredNote = "Note: the running sync did not answer in time, so its live state is not shown.\n"
 )
 
 type statusRuntimeOverlay struct {
 	ownerMode    synccontrol.OwnerMode
 	activeMounts map[string]struct{}
+	// unavailableNote says why a sync that holds the control socket
+	// contributed no live state; empty when there is nothing to say. Without
+	// it a drive the watch is syncing reads as pending with no reason given.
+	unavailableNote string
 }
 
 func loadStatusRuntimeOverlay(ctx context.Context) statusRuntimeOverlay {
 	probe, err := probeControlOwner(ctx)
-	if err != nil {
-		return statusRuntimeOverlay{}
-	}
-
 	switch probe.state {
 	case controlOwnerStateWatchOwner, controlOwnerStateOneShotOwner:
 		overlay := statusRuntimeOverlay{
@@ -32,9 +35,13 @@ func loadStatusRuntimeOverlay(ctx context.Context) statusRuntimeOverlay {
 			overlay.activeMounts[mountID] = struct{}{}
 		}
 		return overlay
-	case controlOwnerStateNoSocket,
-		controlOwnerStatePathUnavailable,
-		controlOwnerStateProbeFailed:
+	case controlOwnerStateUnresponsive:
+		return statusRuntimeOverlay{unavailableNote: statusRuntimeUnansweredNote}
+	case controlOwnerStateProbeFailed:
+		return statusRuntimeOverlay{
+			unavailableNote: fmt.Sprintf("Note: could not read the running sync's live state (%v), so it is not shown.\n", err),
+		}
+	case controlOwnerStateNoSocket, controlOwnerStatePathUnavailable:
 		return statusRuntimeOverlay{}
 	}
 

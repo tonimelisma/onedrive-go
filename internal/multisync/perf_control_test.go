@@ -217,7 +217,7 @@ func TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture(t *testing.T) {
 	driveCollector.RecordTransfer(perf.TransferKindUpload, 256, 20*time.Millisecond)
 	driveCollector.RecordPlan(2, 5*time.Millisecond)
 
-	control, err := orch.startControlServer(t.Context(), synccontrol.OwnerModeOneShot, nil)
+	control, err := orch.startControlServer(t.Context(), synccontrol.OwnerModeOneShot, nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, control.Close(context.Background()))
@@ -288,7 +288,7 @@ func TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration(t *
 	cfg.ControlSocketPath = shortControlSocketPath(t)
 	orch := NewOrchestrator(cfg)
 
-	control, err := orch.startControlServer(t.Context(), synccontrol.OwnerModeOneShot, nil)
+	control, err := orch.startControlServer(t.Context(), synccontrol.OwnerModeOneShot, nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, control.Close(context.Background()))
@@ -318,6 +318,26 @@ func TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration(t *
 	assert.Equal(t, synccontrol.StatusError, decoded.Status)
 	assert.Equal(t, synccontrol.ErrorInvalidRequest, decoded.Code)
 	assert.Contains(t, decoded.Message, "greater than zero")
+}
+
+// The capture holds a handler, a connection and the profilers for its whole
+// duration, so the owner bounds it rather than waiting for whatever it is
+// asked: five minutes is accepted, anything longer is an invalid request.
+//
+// Validates: R-6.6.16, R-2.9.7
+func TestPerfCaptureOptions_RejectsTooLongDuration(t *testing.T) {
+	t.Parallel()
+
+	_, err := perfCaptureOptionsFromRequest(synccontrol.OwnerModeWatch, &synccontrol.PerfCaptureRequest{
+		DurationMS: (maxPerfCaptureDuration + time.Millisecond).Milliseconds(),
+	})
+	require.ErrorContains(t, err, "at most "+maxPerfCaptureDuration.String())
+
+	opts, err := perfCaptureOptionsFromRequest(synccontrol.OwnerModeWatch, &synccontrol.PerfCaptureRequest{
+		DurationMS: maxPerfCaptureDuration.Milliseconds(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, maxPerfCaptureDuration, opts.Duration)
 }
 
 // The owner resolves nothing against its own working directory: a relative

@@ -3,6 +3,7 @@ package multisync
 import (
 	"context"
 	"log/slog"
+	"net"
 	gosync "sync"
 	"time"
 
@@ -122,7 +123,12 @@ type Orchestrator struct {
 	// watch runner restart. Injectable so tests control time.
 	restartTimer func(time.Duration) (<-chan time.Time, func())
 	// now is the clock for restart backoff; nil means time.Now.
-	now             func() time.Time
+	now func() time.Time
+	// controlTimeouts are the control server's deadlines; tests shorten them.
+	controlTimeouts controlTimeouts
+	// controlListen binds the control socket; nil means listenControlSocket.
+	// Injectable so a test can take the listener away from a running server.
+	controlListen   func(ctx context.Context, path string) (net.Listener, error)
 	artifactCleanup shortcutChildArtifactCleanupExecutor
 	// watchReportMemory is owned by the RunWatch select loop; see
 	// watchReportState. It is reset at the start of each RunWatch.
@@ -168,6 +174,7 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 		},
 		logger:          cfg.Logger,
 		perfRuntime:     perf.NewRuntime(cfg.PerfParent),
+		controlTimeouts: defaultControlTimeouts(),
 		artifactCleanup: newShortcutChildArtifactCleanupExecutor(cfg.Logger, cfg.DataDir),
 		reconcileTicks: func(interval time.Duration) (<-chan time.Time, func()) {
 			if interval <= 0 {

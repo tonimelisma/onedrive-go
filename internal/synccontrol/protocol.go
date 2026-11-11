@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
@@ -28,13 +29,34 @@ const (
 	OwnerModeWatch   OwnerMode = "watch"
 )
 
+// The owner's bounded waits. They are part of the protocol because a client
+// derives its own timeout from them: a client that gave up first would never
+// hear the owner's answer (ErrorBusy, StatusReloadInProgress) and would have
+// to guess what happened.
+const (
+	// LoopAcceptTimeout is how long the watch owner waits for its control
+	// loop to take a command. A command the loop does not take in time is
+	// answered ErrorBusy (HTTP 503) and changed nothing.
+	LoopAcceptTimeout = 5 * time.Second
+	// ReloadAnswerTimeout is how long the watch owner waits for a reload its
+	// loop took to finish. Past it the answer is StatusReloadInProgress (HTTP
+	// 202): the reload carries on and applies the change.
+	ReloadAnswerTimeout = 60 * time.Second
+	// ReplyWriteTimeout bounds writing one answer once it is ready.
+	ReplyWriteTimeout = 5 * time.Second
+)
+
 type Status string
 
 const (
 	StatusOK       Status = "ok"
 	StatusError    Status = "error"
 	StatusReloaded Status = "reloaded"
-	StatusStopping Status = "stopping"
+	// StatusReloadInProgress means the watch owner took the reload but had
+	// not finished applying it when its answer was due (HTTP 202). The reload
+	// still runs to the end; a failure is logged by the owner.
+	StatusReloadInProgress Status = "reload_in_progress"
+	StatusStopping         Status = "stopping"
 )
 
 type ErrorCode string
@@ -48,6 +70,9 @@ const (
 	// ErrorReloadFailed means the watch owner could not apply the config on
 	// disk and kept running with its previous settings.
 	ErrorReloadFailed ErrorCode = "reload_failed"
+	// ErrorBusy means the watch owner's control loop did not take the
+	// command within LoopAcceptTimeout (HTTP 503). Nothing was changed.
+	ErrorBusy ErrorCode = "busy"
 )
 
 type StatusResponse struct {

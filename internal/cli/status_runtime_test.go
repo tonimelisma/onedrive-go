@@ -53,6 +53,40 @@ func TestStatusRuntime_SummaryJSONWithActiveOwner(t *testing.T) {
 	assert.Equal(t, 1, decoded.Summary.RuntimeActiveDrives)
 }
 
+// Validates: R-2.3.3, R-2.9.3
+//
+// A sync owns the socket but did not answer: status used to drop the live
+// state without a word, so a drive the watch was syncing read as pending
+// with nothing to say why.
+func TestRunStatusCommand_SaysWhenTheRunningSyncDidNotAnswer(t *testing.T) {
+	setTestDriveHome(t)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cid := driveid.MustCanonicalID("personal:busy-runtime@example.com")
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = "Busy Runtime User"
+	})
+	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = "drive-busy-runtime"
+	})
+
+	startCLIControlSocketWithStatusHandler(t, answerControlBusy(t), refuseControlMutation(t))
+
+	var out, status bytes.Buffer
+	cc := newCommandContext(&out, cfgPath)
+	cc.StatusWriter = &status
+	cc.Flags.JSON = true
+
+	require.NoError(t, runStatusCommand(t.Context(), cc, false))
+
+	var decoded statusOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded), "the note goes to stderr, so stdout stays one JSON document")
+	assert.Empty(t, decoded.Summary.RuntimeOwner)
+	assert.Equal(t, "Note: the running sync did not answer in time, so its live state is not shown.\n", status.String())
+}
+
 // Validates: R-2.3.3
 func TestStatusRuntimeOverlayApplyAndSummary(t *testing.T) {
 	t.Parallel()

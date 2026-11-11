@@ -18,13 +18,18 @@ const (
 // RunWatch runs all configured runnable mounts in watch mode. On control-socket
 // reload, it re-reads the config file, rebuilds runtime mount specs, and diffs
 // the active mount set: stopped mounts are removed, new mounts are started.
-// Returns nil on clean context cancel.
+// Returns nil on clean context cancel or a stop request, and an error when
+// the control server stops on its own: a watch nobody can pause, reload or
+// query must not keep running.
 func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error {
 	o.watchReportMemory = newWatchReportState()
 	commands := make(chan controlCommand)
+	// fatal carries the end of a helper the watch cannot run without (the
+	// control server). Buffered so the reporter never waits on the loop.
+	fatal := make(chan error, 1)
 	runnerEvents := make(chan watchRunnerEvent, watchRunnerEventBuffer)
 	childWork := newParentChildWorkSnapshots()
-	runners, control, err := o.startWatchRuntime(ctx, mode, opts, commands, runnerEvents, childWork)
+	runners, control, err := o.startWatchRuntime(ctx, mode, opts, commands, fatal, runnerEvents, childWork)
 	if err != nil {
 		if control != nil {
 			o.closeControlSocket(ctx, control)
@@ -79,6 +84,11 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 			o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
 		case <-restarts.ch:
 			o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
+		case fatalErr := <-fatal:
+			// The deferred drain still stops the runners and closes the
+			// socket; the caller exits non-zero, so a service manager
+			// restarts a watch it can reach again.
+			return fatalErr
 		case <-ctx.Done():
 			return nil
 		}
@@ -104,6 +114,7 @@ func (o *Orchestrator) startWatchRuntime(
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	commands chan controlCommand,
+	fatal chan<- error,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
 ) (map[mountID]*watchRunner, *controlSocketServer, error) {
@@ -116,7 +127,7 @@ func (o *Orchestrator) startWatchRuntime(
 		return nil, nil, fmt.Errorf("no drives selected for sync")
 	}
 
-	control, err := o.startControlServer(ctx, synccontrol.OwnerModeWatch, commands)
+	control, err := o.startControlServer(ctx, synccontrol.OwnerModeWatch, commands, fatal)
 	if err != nil {
 		return nil, nil, err
 	}

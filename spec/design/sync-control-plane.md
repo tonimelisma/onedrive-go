@@ -2,7 +2,7 @@
 
 GOVERNS: internal/cli/sync.go, internal/multisync/*.go, internal/synccontrol/*.go
 
-Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.8.11 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.6.32 [verified], R-6.10.6 [verified], R-6.10.13 [verified], R-6.3.8 [verified]
+Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.8.11 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-2.9.7 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.6.32 [verified], R-6.10.6 [verified], R-6.10.13 [verified], R-6.3.8 [verified]
 
 ## Control Socket Exposure
 
@@ -68,6 +68,8 @@ runtime package that implements it.
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
 | Each mount's perf collector is carried in that mount's run context, for a watch runner and for a one-shot pass, so what the work records through its context (HTTP requests and retries, store transactions, transfers) shows in that mount's live snapshot and is counted once each in the owner aggregate and the command collector (R-6.6.15). | `TestOrchestrator_MountPerfIncludesContextRecordedMetrics`, `TestOrchestrator_OneShotMountPerfIncludesContextRecordedMetrics`, `internal/sync/engine_perf_context_test.go` (`TestRunOnce_StoreTransactionsCountOnTheRunContextCollector`) |
 | Socket files are permissioned private, ownership is a `flock` on `<socket>.lock` held for the owner's lifetime, stale sockets are replaced only under that lock, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
+| Every control-socket wait has a deadline (R-2.9.7): headers, the whole request (a client that never finishes its body is cut off), idle connections and the header block are bounded server-wide; a command the watch loop does not take in time is answered `busy` (503) and changed nothing; a reload it took but had not finished when its answer was due is answered `reload_in_progress` (202); a handler that waits moves its own write deadline, so it still answers after the server-wide timeouts; a perf capture is at most 5 minutes. | `TestControlSocketServer_SetsReadIdleAndHeaderLimits`, `TestControlSocket_SlowBodyIsCutOff`, `TestHandleControlRequest_LoopNotAcceptingAnswersBusy`, `TestHandleControlRequest_SlowReloadAnswersInProgress`, `TestHandleControlRequest_LongWaitOutlivesTheServerTimeouts`, `TestPerfCaptureOptions_RejectsTooLongDuration` |
+| A control server that stops on its own reports on `RunWatch`'s fatal channel, and the watch ends with that error (exit 1) instead of syncing on with no way to pause, reload or query it (R-2.9.7). | `TestStartControlSocketServer_UnexpectedServeEndIsFatal`, `TestRunWatch_ControlServerExitEndsTheWatch` |
 | Watch mode announces each drive start failure once and again only when its reason changes or the drive has started in between, including the carried-over CLI config failures; repeats of the same shortcut-refresh or cleanup failure stay at DEBUG. | `TestReconcileWatchRunners_AnnouncesEachStartFailureOnceUntilItChanges`, `TestWarnOnChange_RepeatsOfTheSameFailureStayBelowWarn` |
 | A removed shared folder whose final sync did not finish cleanly keeps its local copy, and multisync says so in one plain Info line naming the folder (not its mount ID), repeated only when the reason changes; unchanged repeats from watch passes go to Debug. The memory is mutex-guarded because one-shot parents finalize their children concurrently. | `TestReportKeptFinalDrains_NoticesOnceUntilReasonChanges` |
 | A watch runner that exits with an error is restarted after exponential backoff from the RunWatch loop's own wake-up timer, warned about once per distinct error with the retry delay, and starts over after a healthy run; stale events from runners the orchestrator already stopped, and canceled final drains, produce no warning. | `TestHandleWatchRunnerEvent_BacksOffAndWarnsOncePerDistinctRunnerFailure`, `TestHandleWatchRunnerEvent_HealthyRunResetsBackoff`, `TestRunWatch_RestartsFailedRunnerWhenBackoffTimerFires`, `TestRunnerRestartDelay_DoublesUpToTheCap`, `TestHandleWatchRunnerEvent_IgnoresEventFromAlreadyStoppedRunner`, `TestStartWatchRunner_CanceledFinalDrainSendsNoEvent`, `TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot` |
@@ -379,6 +381,10 @@ until the resume. It listens for:
 
 - `ctx.Done()` for shutdown
 - JSON-over-HTTP requests on the Unix control socket
+- its `fatal` channel (buffered 1), on which a helper the watch cannot run
+  without reports its end; today that is the control server (see Control
+  Socket). `RunWatch` returns the error, so the watch exits 1 through the
+  same drain as any other return
 
 Pause semantics come from `config.Drive.IsPaused()` and
 `config.ClearExpiredPauses()` for configured parents. Managed child mounts
@@ -467,7 +473,7 @@ The socket speaks JSON over HTTP:
 
 - `GET /v1/status` returns the owner mode (`oneshot` or `watch`) and managed mounts. CLI `status` treats those mount IDs as a transient runtime overlay: matching rows are active, displayed configured rows that are absent from the owner response are inactive, and the durable config/store read model remains unchanged.
 - `GET /v1/perf` returns the owner mode plus the live aggregate and per-mount perf snapshots currently owned by the active sync runtime. This includes path-free stale-work, local-observation, and replan-idle aggregates. The surface is live-only and returns whatever the owner has collected so far; it does not materialize historical perf state from SQLite.
-- `POST /v1/perf/capture` triggers an explicit local capture bundle from the active owner. The request carries bounded duration plus optional output-dir, trace, and full-detail toggles; the response returns the local artifact paths for the completed bundle.
+- `POST /v1/perf/capture` triggers an explicit local capture bundle from the active owner. The request carries a duration of at most 5 minutes (`maxPerfCaptureDuration`; longer is `invalid_request`, compared in milliseconds so a huge value cannot overflow into a short one) plus optional output-dir, trace, and full-detail toggles; the response returns the local artifact paths for the completed bundle.
 - `POST /v1/reload` reloads config in the watch owner.
 - `POST /v1/stop` asks the watch owner to stop cleanly.
 
@@ -480,7 +486,62 @@ mutation path for sync decisions anymore.
 
 Error responses have the shape `{status, code, message}`. Stable codes are
 `invalid_request`, `foreground_sync_running`, `capture_unavailable`,
-`capture_in_progress`, `reload_failed`, and `internal_error`.
+`capture_in_progress`, `reload_failed`, `busy`, and `internal_error`. One
+answer is not an error: `{"status": "reload_in_progress"}` with HTTP 202.
+
+#### Deadlines
+
+Every wait on the socket is bounded (R-2.9.7). A stuck client could hold a
+handler and a connection for as long as it liked, and a handler waited for
+the watch loop with no deadline of its own.
+
+| Bound | Value | Where |
+| --- | --- | --- |
+| Request headers | 5 s | `http.Server.ReadHeaderTimeout` (`controlHeaderTimeout`) |
+| Whole request, body included | 10 s | `ReadTimeout` (`controlReadTimeout`) |
+| Idle keep-alive connection | 30 s | `IdleTimeout` (`controlIdleTimeout`) |
+| Header block | 16 KiB | `MaxHeaderBytes` (`maxControlHeaderBytes`) |
+| Watch loop taking a command | 5 s | `synccontrol.LoopAcceptTimeout`; past it HTTP 503 `busy`, nothing changed |
+| Answer to a reload the loop took | 60 s | `synccontrol.ReloadAnswerTimeout`; past it HTTP 202 `reload_in_progress` |
+| Answer to status or stop the loop took | 5 s | the loop answers these the moment it takes them; past it `busy` |
+| Writing an answer | 5 s | `WriteTimeout` = `synccontrol.ReplyWriteTimeout` |
+| Perf capture | 5 min | `maxPerfCaptureDuration` |
+
+The two waits for the loop have different answers on purpose. A command the
+loop never took changed nothing, so `busy` is exact. A reload the loop took
+runs to the end whether or not anyone is still waiting (a failure is logged
+by the reload itself), so the answer past its deadline is "in progress",
+never a silence the client would read as a failure. The handler's response
+channel is buffered, so a loop that answers after the handler left never
+blocks. `ReloadAnswerTimeout` only shapes the answer; the reload itself is
+not bounded here.
+
+The server-wide `WriteTimeout` is the budget of an answer that is ready at
+once (perf status, one-shot status, a refusal). A handler that waits moves
+its own write deadline through `http.ResponseController`
+(`extendControlWriteDeadline`): accept + answer wait + write for loop
+commands, the capture's duration + write for a capture, set only once the
+capture request is decoded. A server-wide budget long enough for a
+five-minute capture would bound nothing else. The read deadline needs no
+move: `ReadTimeout` bounds reading the request, and net/http clears the read
+deadline when the handler starts; a handler that set one shorter than its
+wait would have its request context canceled under it.
+
+The wire deadlines live in `internal/synccontrol` because the client derives
+its own timeouts from them: a client that gave up first would never hear
+`busy` or `reload_in_progress`. Tests shorten the server's through the
+orchestrator's `controlTimeouts`.
+
+#### A control server that stops ends the watch
+
+`Serve` returning without `Close` (the listener failed under it) would leave
+a watch running with no way to pause, reload, query or stop it over the
+socket. So `reportControlServeEnd` sends the error on the watch's `fatal`
+channel and `RunWatch` returns it: the process exits 1 and a service manager
+restarts a watch it can reach again. The send is
+non-blocking; if another fatal error is already pending, this one is logged
+at Error. A one-shot owner has no fatal channel: it keeps its owner lock (the
+`flock`, not the socket), finishes its pass, and only logs the warning.
 
 A capture request's `output_dir` must be absolute: the owner runs in its own
 working directory, so it refuses a relative path instead of resolving it

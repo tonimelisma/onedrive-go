@@ -10,8 +10,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // shortSocketDir keeps the socket path under the Unix socket length limit.
@@ -47,7 +45,7 @@ func TestStartControlSocketServer_RacingOwnersYieldExactlyOne(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start
-				servers[i], errs[i] = startControlSocketServer(t.Context(), socketPath, http.NewServeMux(), synctest.TestLogger(t))
+				servers[i], errs[i] = startControlSocketServer(t.Context(), testControlServerConfig(t, socketPath, http.NewServeMux()))
 			}()
 		}
 		close(start)
@@ -82,10 +80,10 @@ func TestStartControlSocketServer_LockReleasedOnCloseAndOnlyThen(t *testing.T) {
 	t.Parallel()
 
 	socketPath := filepath.Join(shortSocketDir(t), "control.sock")
-	first, err := startControlSocketServer(t.Context(), socketPath, http.NewServeMux(), synctest.TestLogger(t))
+	first, err := startControlSocketServer(t.Context(), testControlServerConfig(t, socketPath, http.NewServeMux()))
 	require.NoError(t, err)
 
-	_, err = startControlSocketServer(t.Context(), socketPath, http.NewServeMux(), synctest.TestLogger(t))
+	_, err = startControlSocketServer(t.Context(), testControlServerConfig(t, socketPath, http.NewServeMux()))
 	var inUse *ControlSocketInUseError
 	require.ErrorAs(t, err, &inUse)
 	assert.FileExists(t, socketPath, "a refused contender must not touch the owner's socket")
@@ -93,7 +91,7 @@ func TestStartControlSocketServer_LockReleasedOnCloseAndOnlyThen(t *testing.T) {
 	require.NoError(t, first.Close(t.Context()))
 	assert.NoFileExists(t, socketPath+controlLockSuffix)
 
-	second, err := startControlSocketServer(t.Context(), socketPath, http.NewServeMux(), synctest.TestLogger(t))
+	second, err := startControlSocketServer(t.Context(), testControlServerConfig(t, socketPath, http.NewServeMux()))
 	require.NoError(t, err)
 	require.NoError(t, second.Close(t.Context()))
 }
