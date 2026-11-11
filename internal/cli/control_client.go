@@ -21,6 +21,14 @@ import (
 const (
 	controlClientTimeout        = 2 * time.Second
 	controlCaptureTimeoutBuffer = 10 * time.Second
+	// controlReloadClientMargin covers connecting and scheduling on top of
+	// the owner's own waits.
+	controlReloadClientMargin = 2 * time.Second
+	// controlReloadClientTimeout outlasts every wait the watch owner may
+	// spend before it answers a reload, so the client hears busy or
+	// reload_in_progress instead of giving up first and guessing.
+	controlReloadClientTimeout = synccontrol.LoopAcceptTimeout + synccontrol.ReloadAnswerTimeout +
+		synccontrol.ReplyWriteTimeout + controlReloadClientMargin
 )
 
 type controlOwnerState string
@@ -31,7 +39,24 @@ const (
 	controlOwnerStateNoSocket        controlOwnerState = "no_socket"
 	controlOwnerStatePathUnavailable controlOwnerState = "path_unavailable"
 	controlOwnerStateProbeFailed     controlOwnerState = "probe_failed"
+	// controlOwnerStateUnresponsive is an owner that holds the socket but did
+	// not answer the status probe in time: it said busy, or the client's
+	// deadline passed. Only a watch owner routes status through a loop that
+	// can be busy; a one-shot owner answers status in the handler at once.
+	controlOwnerStateUnresponsive controlOwnerState = "unresponsive"
 )
+
+// controlOwnerDidNotAnswer reports whether err means a live owner did not
+// answer in time: it answered busy, or a deadline passed while it was
+// working. Neither means the owner is gone.
+func controlOwnerDidNotAnswer(err error) bool {
+	var daemonErr *controlDaemonError
+	if errors.As(err, &daemonErr) && daemonErr.code == synccontrol.ErrorBusy {
+		return true
+	}
+
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded)
+}
 
 type controlSocketClient struct {
 	transport *http.Transport
@@ -82,20 +107,20 @@ func probeControlOwner(ctx context.Context) (controlOwnerProbe, error) {
 			return controlOwnerProbe{state: controlOwnerStateNoSocket}, nil
 		}
 
-		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, fmt.Errorf("send control status request: %w", err)
+		return controlOwnerProbe{state: probeFailureState(err)}, fmt.Errorf("send control status request: %w", err)
 	}
-	statusCode := resp.StatusCode
+	if resp.StatusCode != http.StatusOK {
+		answerErr := readControlErrorResponse(resp)
+		return controlOwnerProbe{state: probeFailureState(answerErr)},
+			fmt.Errorf("unexpected control status response (%s): %w", resp.Status, answerErr)
+	}
 	var decoded synccontrol.StatusResponse
 	decodeErr := json.NewDecoder(resp.Body).Decode(&decoded)
-	closeErr := resp.Body.Close()
-	if closeErr != nil {
-		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, fmt.Errorf("close control status response: %w", closeErr)
-	}
-	if statusCode != http.StatusOK {
-		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, fmt.Errorf("unexpected control status response: %s", resp.Status)
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		return controlOwnerProbe{state: probeFailureState(closeErr)}, fmt.Errorf("close control status response: %w", closeErr)
 	}
 	if decodeErr != nil {
-		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, fmt.Errorf("decode control status response: %w", decodeErr)
+		return controlOwnerProbe{state: probeFailureState(decodeErr)}, fmt.Errorf("decode control status response: %w", decodeErr)
 	}
 	if decoded.OwnerMode == "" {
 		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, fmt.Errorf("decode control status response: missing owner mode")
@@ -119,6 +144,17 @@ func probeControlOwner(ctx context.Context) (controlOwnerProbe, error) {
 			decoded.OwnerMode,
 		)
 	}
+}
+
+// probeFailureState classifies a status probe that reached a socket but got
+// no usable answer: a live owner that did not answer in time, or a failure
+// the probe cannot read further into.
+func probeFailureState(err error) controlOwnerState {
+	if controlOwnerDidNotAnswer(err) {
+		return controlOwnerStateUnresponsive
+	}
+
+	return controlOwnerStateProbeFailed
 }
 
 func newControlSocketTransport(socketPath string) *http.Transport {
@@ -173,32 +209,18 @@ func (c *controlSocketClient) capturePerf(
 	return response, nil
 }
 
-func (c *controlSocketClient) reload(ctx context.Context) error {
-	if c.ownerMode() != synccontrol.OwnerModeWatch {
-		return nil
+// reload asks a watch owner to apply the config on disk and returns how far
+// it got: synccontrol.StatusReloaded when the change is applied, or
+// synccontrol.StatusReloadInProgress when the owner took the reload but was
+// still applying it when its answer was due. A busy owner and a reload the
+// owner could not apply are errors (controlDaemonError).
+func (c *controlSocketClient) reload(ctx context.Context) (synccontrol.Status, error) {
+	var response synccontrol.MutationResponse
+	if err := c.postJSONInto(ctx, synccontrol.PathReload, nil, controlReloadClientTimeout, &response); err != nil {
+		return "", err
 	}
 
-	response, err := c.postJSON(ctx, synccontrol.PathReload, nil)
-	if err != nil {
-		return err
-	}
-	if response.Message != "" && response.Status == synccontrol.StatusError {
-		return &controlDaemonError{
-			statusCode: http.StatusInternalServerError,
-			code:       response.Code,
-			message:    response.Message,
-		}
-	}
-	return nil
-}
-
-func (c *controlSocketClient) postJSON(ctx context.Context, path string, body any) (synccontrol.MutationResponse, error) {
-	var decoded synccontrol.MutationResponse
-	if err := c.postJSONInto(ctx, path, body, controlClientTimeout, &decoded); err != nil {
-		return synccontrol.MutationResponse{}, err
-	}
-
-	return decoded, nil
+	return response.Status, nil
 }
 
 func (c *controlSocketClient) getJSON(ctx context.Context, path string, timeout time.Duration, target any) error {
@@ -251,36 +273,44 @@ func (c *controlSocketClient) postJSONInto(
 	return decodeControlJSONResponse(resp, target)
 }
 
-func decodeControlJSONResponse(resp *http.Response, target any) error {
-	if resp.StatusCode >= http.StatusBadRequest {
-		var decoded synccontrol.MutationResponse
-		if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-			closeErr := resp.Body.Close()
-			message := fmt.Sprintf("decode control response: %v", err)
-			if closeErr != nil {
-				message = fmt.Sprintf("%s (close: %v)", message, closeErr)
-			}
-			return &controlDaemonError{
-				statusCode: resp.StatusCode,
-				code:       synccontrol.ErrorInternal,
-				message:    message,
-			}
-		}
-		if decoded.Message == "" {
-			decoded.Message = resp.Status
-		}
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			return &controlDaemonError{
-				statusCode: resp.StatusCode,
-				code:       synccontrol.ErrorInternal,
-				message:    fmt.Sprintf("close control response: %v", closeErr),
-			}
+// readControlErrorResponse reads an owner's `{status, code, message}` error
+// answer, closes the body, and returns it as a controlDaemonError. An answer
+// that is not that shape is an internal_error carrying what went wrong.
+func readControlErrorResponse(resp *http.Response) error {
+	var decoded synccontrol.MutationResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		closeErr := resp.Body.Close()
+		message := fmt.Sprintf("decode control response: %v", err)
+		if closeErr != nil {
+			message = fmt.Sprintf("%s (close: %v)", message, closeErr)
 		}
 		return &controlDaemonError{
 			statusCode: resp.StatusCode,
-			code:       decoded.Code,
-			message:    decoded.Message,
+			code:       synccontrol.ErrorInternal,
+			message:    message,
 		}
+	}
+	if decoded.Message == "" {
+		decoded.Message = resp.Status
+	}
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		return &controlDaemonError{
+			statusCode: resp.StatusCode,
+			code:       synccontrol.ErrorInternal,
+			message:    fmt.Sprintf("close control response: %v", closeErr),
+		}
+	}
+
+	return &controlDaemonError{
+		statusCode: resp.StatusCode,
+		code:       decoded.Code,
+		message:    decoded.Message,
+	}
+}
+
+func decodeControlJSONResponse(resp *http.Response, target any) error {
+	if resp.StatusCode >= http.StatusBadRequest {
+		return readControlErrorResponse(resp)
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
