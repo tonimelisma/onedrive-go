@@ -97,7 +97,7 @@ func seedObservationIssueForStatusTest(
 		t.Context(),
 		&syncengine.ObservationFindingsBatch{
 			Issues:            []syncengine.ObservationIssue{*issue},
-			ManagedIssueTypes: []string{issue.IssueType},
+			ManagedIssueTypes: []syncengine.IssueType{issue.IssueType},
 			ManagedPaths:      []string{issue.Path},
 		},
 		time.Now().UTC(),

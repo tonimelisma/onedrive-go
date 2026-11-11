@@ -145,6 +145,7 @@ and every other significant type in the tree already matched its own name
 | Local watch observation can update durable local truth with scoped upsert/delete/prefix-delete patches, full snapshot replacement clears suspect local truth, and prefix deletion treats SQL wildcards as literal path bytes while preserving path case. | `TestScopedLocalStateMutation_UpsertReadAndDeleteExactPath`, `TestDeleteLocalStatePrefix_DeletesDirectoryAndDescendantsOnly`, `TestDeleteLocalStatePrefix_EscapesSQLWildcards`, `TestReplaceLocalState_MarksLocalTruthComplete` |
 | Parent shortcut-root lifecycle state is stored in the parent sync store, rebuilt into parent-owned observation protection, and applied before the parent publishes child work and cleanup work to multisync. Empty complete remote shortcut observation batches are persisted and retire old roots; child final-drain acknowledgement first persists `removed_release_pending`; release cleanup later moves old roots to `removed_child_cleanup_pending` or promotes waiting replacements; cleanup-blocked release failures are durable state, never pass errors: the transition into `removed_cleanup_blocked` (or a change of its reason) is persisted and reported once as a plain warning, an unchanged blocked cleanup is retried every pass at Debug, and neither returns an error (that would fail every one-shot run and end the watch remote observer); child artifact cleanup acknowledgement deletes cleanup-pending rows; duplicate automatic shortcut targets are parent-owned blocked roots. Cleanup requests are derived from these rows with explicit child mount ID and local-root scope, not reconstructed by multisync. | `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_acknowledgeShortcutChildArtifactsPurgedRemovesCleanupPendingRoot`, `TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedWithoutError`, `TestEngine_ReconcileShortcutRootLocalStateRepeatedCleanupBlockedIsQuiet`, `TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterReleasePending`, `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler` |
 | Shortcut alias mutation is a parent-engine-internal operation by binding item ID and updates parent shortcut-root state. | `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain` |
+| An issue type or condition type that no `IssueType` member names is refused at the store boundary on read and on write (R-2.5.6); every member has a stated verdict on local and remote truth, and a value outside the enum leaves local truth unavailable. | `TestSyncStore_ListObservationIssues_RefusesUnknownStoredIssueType`, `TestSyncStore_ReconcileObservationFindings_RefusesToWriteAnUnknownIssueType`, `TestScanRetryWorkRow_ConditionTypeMustBeEmptyOrAMember`, `TestUpsertRetryWork_RefusesAConditionTypeNoMemberHas`, `TestObservationIssueBlocksTruth_VerdictForEveryIssueType`, `TestObservationIssueBlocksLocalTruth_ValueOutsideTheEnumIsUnavailable` |
 | Debug invariant checks reject malformed retry/block durable state before runtime handoff. | `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutPath`, `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutTiming`, `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutAttempts`, `TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkWithTiming`, `TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockScope` |
 
 ## Write Responsibilities
@@ -378,6 +379,19 @@ Derived truth inspection stays read-only and authority-based. Observation-owned
 boundary issues tagged with read-scope keys suppress descendant truth through
 `readPathTruthStatus`; timed `block_scopes` for write blockers do not change
 truth availability on their own.
+
+`observation_issues.issue_type` and `retry_work.condition_type` hold an
+`IssueType` (sync-domain.md), and the store is where it meets its stored
+string. A read parses the stored value (`parseIssueType`): a value no member
+has, an empty `issue_type` included, fails the read naming the row, because
+truth availability has no verdict for it and guessing one could read a path
+as absent; an empty `condition_type` is a transient failure and reads as no
+condition. A write refuses the same values, so a row the read would refuse is
+never written. Whether an issue blocks local truth is the exhaustive switch
+in `observationIssueBlocksLocalTruth` (`truth_status.go`): every member has a
+stated verdict, and a value outside the enum, which only a programming error
+can produce once the store has refused it, is unavailable truth rather than
+"not blocking".
 
 ### Admin writes
 

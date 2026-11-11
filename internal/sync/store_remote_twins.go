@@ -159,7 +159,7 @@ func (s *SyncStore) reconcileRemoteTwinIssuesTx(ctx context.Context, tx sqlTxRun
 	}
 
 	issueRows, err := queryRemoteStatePairsTx(ctx, tx,
-		`SELECT path, '' FROM observation_issues WHERE issue_type = ?`, issueRemoteNameTwin)
+		`SELECT path, '' FROM observation_issues WHERE issue_type = ?`, string(issueRemoteNameTwin))
 	if err != nil {
 		return fmt.Errorf("sync: listing remote twin issues: %w", err)
 	}

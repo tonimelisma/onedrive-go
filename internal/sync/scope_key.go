@@ -248,7 +248,7 @@ func (sk ScopeKey) ThrottleTargetKey() string {
 
 // ConditionType returns the condition_type constant for this scope key's kind.
 // Used to derive a stable default condition type from a scope key.
-func (sk ScopeKey) ConditionType() string {
+func (sk ScopeKey) ConditionType() IssueType {
 	return describeScopeKey(sk).DefaultConditionType
 }
 

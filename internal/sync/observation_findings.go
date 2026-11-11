@@ -7,8 +7,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-func localObservationManagedIssueTypes() []string {
-	return []string{
+func localObservationManagedIssueTypes() []IssueType {
+	return []IssueType{
 		IssueInvalidFilename,
 		issuePathTooLong,
 		issueFileTooLarge,
@@ -34,7 +34,7 @@ func newLocalObservationFindingsBatch() ObservationFindingsBatch {
 
 func newRemoteObservationFindingsBatch() ObservationFindingsBatch {
 	return ObservationFindingsBatch{
-		ManagedIssueTypes: []string{issueRemoteReadDenied},
+		ManagedIssueTypes: []IssueType{issueRemoteReadDenied},
 	}
 }
 
