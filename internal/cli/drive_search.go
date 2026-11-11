@@ -53,7 +53,6 @@ func runDriveSearchWithContext(ctx context.Context, cc *CLIContext, query string
 			query,
 			logger,
 			recorder,
-			cc.GraphBaseURL,
 			cc.runtime(),
 		)
 		if searchErr != nil {
@@ -100,7 +99,6 @@ func searchAccountSharePoint(
 	query string,
 	logger *slog.Logger,
 	recorder *authProofRecorder,
-	baseURL string,
 	runtime *driveops.SessionRuntime,
 ) ([]driveSearchResult, []accountAuthRequirement, error) {
 	tokenPath := config.DriveTokenPath(tokenCID)
@@ -108,23 +106,11 @@ func searchAccountSharePoint(
 		return nil, nil, nil
 	}
 
-	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
+	client, err := runtime.BootstrapClient(ctx, tokenPath)
 	if err != nil {
 		logger.Debug("skipping token for search", "token", tokenCID.String(), "error", err)
 
 		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}, nil
-	}
-
-	client, err := newGraphClientWithHTTP(
-		baseURL,
-		runtime.BootstrapMeta(),
-		ts,
-		logger,
-	)
-	if err != nil {
-		logger.Debug("skipping token for search", "token", tokenCID.String(), "error", err)
-
-		return nil, nil, nil
 	}
 	attachAccountAuthProof(client, recorder, tokenCID.Email(), "drive-search")
 

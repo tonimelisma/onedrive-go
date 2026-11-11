@@ -42,6 +42,34 @@ func TestBootstrapMetadataClient(t *testing.T) {
 	assert.Nil(t, rt.ThrottleGate, "bootstrap metadata should not share throttle state")
 }
 
+// Validates: R-6.8.27
+//
+// The sign-in service's answers are small, so the auth client bounds the
+// whole request as well as the wait for headers: a token endpoint that
+// accepts the connection and never answers fails the request instead of
+// holding every Graph request of the account behind the token source.
+func TestAuthClient_BoundsEveryRequest(t *testing.T) {
+	t.Parallel()
+
+	// The deadlines the requirement names, spelled out so a change to the
+	// production constants has to change the requirement too.
+	const (
+		requiredRequestTimeout = 60 * time.Second
+		requiredHeaderTimeout  = 30 * time.Second
+	)
+
+	client := AuthClient()
+
+	require.NotNil(t, client)
+	assert.Equal(t, requiredRequestTimeout, client.Timeout)
+
+	transport, ok := client.Transport.(*http.Transport)
+	require.True(t, ok, "the auth client talks to the sign-in service directly, without retry or perf wrappers")
+	assert.Equal(t, requiredHeaderTimeout, transport.ResponseHeaderTimeout)
+	assert.Equal(t, tlsHandshakeTimeout, transport.TLSHandshakeTimeout)
+	assert.NotSame(t, AuthClient().Transport, client.Transport, "each auth client owns its transport")
+}
+
 // Validates: R-6.2.10
 func TestSyncClientSet_NoRetryTransport(t *testing.T) {
 	t.Parallel()

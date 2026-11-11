@@ -30,19 +30,9 @@ func (cc *CLIContext) probeAccountIdentity(
 		return zero, fmt.Errorf("cannot determine token path for account %q", accountCID)
 	}
 
-	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, cc.Logger)
+	client, err := cc.runtime().BootstrapClient(ctx, tokenPath)
 	if err != nil {
-		return zero, fmt.Errorf("load token source for %s: %w", accountCID, err)
-	}
-
-	client, err := newGraphClientWithHTTP(
-		cc.graphBaseURL(),
-		cc.runtime().BootstrapMeta(),
-		ts,
-		cc.Logger,
-	)
-	if err != nil {
-		return zero, fmt.Errorf("create graph client for %s: %w", accountCID, err)
+		return zero, fmt.Errorf("load sign-in for %s: %w", accountCID, err)
 	}
 
 	attachAccountAuthProof(client, newAuthProofRecorder(cc.Logger), accountCID.Email(), scope)
@@ -151,22 +141,6 @@ func (cc *CLIContext) reloadResolvedDriveFromFlags() error {
 	}
 
 	return nil
-}
-
-func (cc *CLIContext) graphBaseURL() string {
-	if cc == nil {
-		return ""
-	}
-
-	if cc.GraphBaseURL != "" {
-		return cc.GraphBaseURL
-	}
-
-	if cc.Runtime != nil && cc.Runtime.GraphBaseURL != "" {
-		return cc.Runtime.GraphBaseURL
-	}
-
-	return ""
 }
 
 func remapCanonicalIDWithResult(

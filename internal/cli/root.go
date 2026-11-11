@@ -18,7 +18,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/graphtransport"
 	"github.com/tonimelisma/onedrive-go/internal/logfile"
 	"github.com/tonimelisma/onedrive-go/internal/loglevel"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
@@ -302,6 +301,12 @@ func (cc *CLIContext) closeCommandLogger() error {
 	return nil
 }
 
+// runtime returns the command's session runtime, the one owner of its Graph
+// clients and of one token source per sign-in file (R-6.8.27). It is also
+// the one place that points the runtime at a test's Graph server
+// (GraphBaseURL), so every client the command builds uses the same base URL.
+// Call it from the command goroutine: it builds the runtime lazily, and
+// goroutines that fan out (drive discovery) receive the runtime it returned.
 func (cc *CLIContext) runtime() *driveops.SessionRuntime {
 	if cc == nil {
 		return driveops.NewSessionRuntime(nil, graph.UserAgent(version), slog.Default())
@@ -309,6 +314,10 @@ func (cc *CLIContext) runtime() *driveops.SessionRuntime {
 
 	if cc.Runtime == nil {
 		cc.Runtime = driveops.NewSessionRuntime(nil, graph.UserAgent(version), cc.Logger)
+	}
+
+	if cc.GraphBaseURL != "" && cc.Runtime.GraphBaseURL != cc.GraphBaseURL {
+		cc.Runtime.GraphBaseURL = cc.GraphBaseURL
 	}
 
 	return cc.Runtime
@@ -348,9 +357,6 @@ func mustCLIContext(ctx context.Context) *CLIContext {
 // Eliminates 7 identical boilerplate blocks across file operation commands.
 func (cc *CLIContext) Session(ctx context.Context) (*driveops.MountSession, error) {
 	runtime := cc.runtime()
-	if cc.GraphBaseURL != "" {
-		runtime.GraphBaseURL = cc.GraphBaseURL
-	}
 
 	accountCID, err := config.TokenAccountCanonicalID(cc.Cfg.CanonicalID)
 	if err != nil {
@@ -410,12 +416,11 @@ func interactiveMountSessionConfigFromResolvedDrive(rd *config.ResolvedDrive) (*
 	}, nil
 }
 
-// newGraphClient creates a graph.Client with the standard HTTP client,
-// user-agent, and base URL. Eliminates boilerplate repeated across commands.
-func newGraphClient(ts graph.TokenSource, logger *slog.Logger) (*graph.Client, error) {
-	return newGraphClientWithHTTP("", graphtransport.BootstrapMetadataClient(logger, nil), ts, logger)
-}
-
+// newGraphClientWithHTTP builds a Graph client over a token source the caller
+// already holds. Only login uses it, for the source the sign-in just
+// produced; every other command client comes from the session runtime
+// (SessionRuntime.BootstrapClient or a drive session), which owns one token
+// source per sign-in file.
 func newGraphClientWithHTTP(
 	baseURL string,
 	httpClient *http.Client,

@@ -23,6 +23,12 @@ const (
 	// is pinged, and one whose ping goes unanswered is closed (D-045).
 	http2SendPingTimeout = 30 * time.Second
 	http2PingTimeout     = 15 * time.Second
+
+	// The sign-in service (token refresh, device code, code exchange) answers
+	// with a small JSON body, so its client bounds the whole request too:
+	// nothing about a sign-in request legitimately takes a minute (D6).
+	authResponseHeaderTimeout = 30 * time.Second
+	authRequestTimeout        = 60 * time.Second
 )
 
 // ClientSet is the paired Graph HTTP client set used to construct graph.Client
@@ -59,6 +65,21 @@ func InteractiveTransferClient(logger *slog.Logger, notices *retry.Notices) *htt
 			Logger:  normalizeLogger(logger),
 			Notices: notices,
 		},
+	}
+}
+
+// AuthClient builds the HTTP client for the Microsoft identity platform's
+// token and device-code endpoints: silent refresh, device-code sign-in and the
+// browser sign-in's code exchange (R-6.8.27). It is not Graph-facing, and it
+// is the one profile with an http.Client.Timeout: a token endpoint that
+// accepts the connection and never answers would otherwise hold the refresh,
+// and every Graph request queued behind the token source's lock, until the
+// process stopped. It has no retry wrapper; the token source's caller owns
+// what a failed refresh means.
+func AuthClient() *http.Client {
+	return &http.Client{
+		Timeout:   authRequestTimeout,
+		Transport: buildTransport(authResponseHeaderTimeout),
 	}
 }
 

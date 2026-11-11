@@ -151,7 +151,6 @@ func discoverAvailableDrives(
 	spSiteLimit int,
 	logger *slog.Logger,
 	recorder *authProofRecorder,
-	baseURL string,
 	runtime *driveops.SessionRuntime,
 ) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice) {
 	tokens := accountViewTokenIDs(accounts)
@@ -181,7 +180,6 @@ func discoverAvailableDrives(
 				spSiteLimit,
 				logger,
 				recorder,
-				baseURL,
 				runtime,
 			)
 			mu.Lock()
@@ -210,7 +208,6 @@ func discoverDrivesForToken(
 	spSiteLimit int,
 	logger *slog.Logger,
 	recorder *authProofRecorder,
-	baseURL string,
 	runtime *driveops.SessionRuntime,
 ) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice) {
 	tokenPath := config.DriveTokenPath(tokenCID)
@@ -218,23 +215,11 @@ func discoverDrivesForToken(
 		return nil, nil, nil
 	}
 
-	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
+	client, err := runtime.BootstrapClient(ctx, tokenPath)
 	if err != nil {
 		logger.Debug("skipping token for drive discovery", "token", tokenCID.String(), "error", err)
 
 		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}, nil
-	}
-
-	client, clientErr := newGraphClientWithHTTP(
-		baseURL,
-		runtime.BootstrapMeta(),
-		ts,
-		logger,
-	)
-	if clientErr != nil {
-		logger.Debug("skipping token for drive discovery", "token", tokenCID.String(), "error", clientErr)
-
-		return nil, nil, nil
 	}
 	attachAccountAuthProof(client, recorder, tokenCID.Email(), "drive-list")
 

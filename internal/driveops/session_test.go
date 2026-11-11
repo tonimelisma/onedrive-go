@@ -6,17 +6,21 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 // stubTokenSource implements graph.TokenSource for tests.
@@ -435,6 +439,139 @@ func TestSessionRuntime_TokenSourceError(t *testing.T) {
 	_, err = p.InteractiveSession(t.Context(), mount)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "disk read failed")
+}
+
+// --- BootstrapClient ---
+
+// Validates: R-6.8.27
+//
+// Account-level calls (identity probes, discovery, search) and drive sessions
+// for one sign-in file share the runtime's one token source, however many
+// callers ask and from however many goroutines, so a refresh by one is the
+// token every other one uses.
+func TestSessionRuntime_BootstrapClientReusesOneTokenSourcePerPath(t *testing.T) {
+	runtime := NewSessionRuntime(config.NewHolder(config.DefaultConfig(), ""), "test/1.0", discardLogger())
+
+	var sourcesBuilt atomic.Int32
+	runtime.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+		sourcesBuilt.Add(1)
+		return &stubTokenSource{}, nil
+	}
+
+	cid := driveid.MustCanonicalID("personal:bootstrap@example.com")
+	tokenPath := config.DriveTokenPath(cid)
+
+	const concurrentCallers = 8
+	clients := make([]*graph.Client, concurrentCallers)
+	errs := make([]error, concurrentCallers)
+
+	var wg sync.WaitGroup
+	for i := range concurrentCallers {
+		wg.Go(func() {
+			clients[i], errs[i] = runtime.BootstrapClient(t.Context(), tokenPath)
+		})
+	}
+	wg.Wait()
+
+	for i := range concurrentCallers {
+		require.NoError(t, errs[i], "caller %d", i)
+		assert.NotNil(t, clients[i], "caller %d", i)
+	}
+
+	_, err := runtime.InteractiveSession(t.Context(), &MountSessionConfig{
+		TokenOwnerCanonical: cid,
+		DriveID:             driveid.New("d-bootstrap"),
+		AccountEmail:        cid.Email(),
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, int32(1), sourcesBuilt.Load(), "one sign-in file must have one token source in the runtime")
+}
+
+// Validates: R-6.8.27
+func TestSessionRuntime_BootstrapClientKeepsNotLoggedIn(t *testing.T) {
+	runtime := NewSessionRuntime(config.NewHolder(config.DefaultConfig(), ""), "test/1.0", discardLogger())
+
+	var sourcesTried int
+	runtime.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+		sourcesTried++
+		return nil, graph.ErrNotLoggedIn
+	}
+
+	tokenPath := config.DriveTokenPath(driveid.MustCanonicalID("personal:signed-out@example.com"))
+
+	client, err := runtime.BootstrapClient(t.Context(), tokenPath)
+	require.ErrorIs(t, err, graph.ErrNotLoggedIn, "callers classify a missing sign-in from the error")
+	assert.Nil(t, client)
+
+	_, err = runtime.BootstrapClient(t.Context(), tokenPath)
+	require.ErrorIs(t, err, graph.ErrNotLoggedIn)
+	assert.Equal(t, 2, sourcesTried, "a failed load is not cached: a later login in the same process is picked up")
+}
+
+// Validates: R-6.8.27
+func TestSessionRuntime_BootstrapClientNeedsATokenPath(t *testing.T) {
+	runtime := NewSessionRuntime(config.NewHolder(config.DefaultConfig(), ""), "test/1.0", discardLogger())
+	runtime.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+		assert.Fail(t, "no token source may be built for an empty path")
+		return &stubTokenSource{}, nil
+	}
+
+	client, err := runtime.BootstrapClient(t.Context(), "")
+	require.Error(t, err)
+	assert.Nil(t, client)
+	assert.Contains(t, err.Error(), "token path")
+}
+
+// Validates: R-6.8.27
+func TestSessionRuntime_BootstrapClientUsesTheRuntimeBaseURL(t *testing.T) {
+	var meCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/me", r.URL.Path)
+		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		meCalls.Add(1)
+		writeTestResponsef(t, w, `{"id":"user-1","displayName":"Bootstrap User","mail":"bootstrap@example.com"}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	runtime := NewSessionRuntime(config.NewHolder(config.DefaultConfig(), ""), "test/1.0", discardLogger())
+	runtime.GraphBaseURL = srv.URL
+	runtime.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+		return &stubTokenSource{}, nil
+	}
+
+	client, err := runtime.BootstrapClient(t.Context(), config.DriveTokenPath(driveid.MustCanonicalID("personal:bootstrap@example.com")))
+	require.NoError(t, err)
+
+	user, err := client.Me(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "user-1", user.ID)
+	assert.Equal(t, int32(1), meCalls.Load())
+}
+
+// Validates: R-6.8.27
+//
+// The default token source gets the runtime's auth client: a nil one would
+// make every token load fail.
+func TestSessionRuntime_DefaultTokenSourceHasTheAuthClient(t *testing.T) {
+	runtime := NewSessionRuntime(config.NewHolder(config.DefaultConfig(), ""), "test/1.0", discardLogger())
+	require.NotNil(t, runtime.authHTTP)
+	assert.Positive(t, runtime.authHTTP.Timeout, "sign-in requests must have a deadline")
+
+	tokenPath := filepath.Join(t.TempDir(), "tokens", "valid.json")
+	require.NoError(t, tokenfile.Save(tokenPath, &oauth2.Token{
+		AccessToken:  "saved-access-token",
+		TokenType:    "Bearer",
+		RefreshToken: "saved-refresh-token",
+		Expiry:       time.Now().Add(time.Hour),
+	}))
+
+	ts, err := runtime.TokenSourceFn(t.Context(), tokenPath, discardLogger())
+	require.NoError(t, err)
+
+	token, err := ts.Token()
+	require.NoError(t, err)
+	assert.Equal(t, "saved-access-token", token)
 }
 
 // --- ResolveItem ---

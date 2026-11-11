@@ -233,6 +233,68 @@ func TestCLIContextSession_ConfiguredRootItemReachesInteractiveSession(t *testin
 	assert.Equal(t, "user@example.com", session.AccountEmail())
 }
 
+// Validates: R-6.8.27
+//
+// A file command probes the account's identity and then opens the drive
+// session. Both used to load the sign-in file separately, so a refresh the
+// probe made was not the token the session used; now the runtime builds one
+// token source and both use it.
+func TestCLIContextSession_ProbeAndSessionShareOneTokenSource(t *testing.T) {
+	setTestDriveHome(t)
+
+	cid := driveid.MustCanonicalID("business:user@example.com")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, config.AppendDriveSection(configPath, cid, "~/Business"))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.UserID = snapshotTestUserID123
+		account.PrimaryDriveID = rootTestDrive123
+		account.PrimaryDriveCanonical = cid.String()
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/me", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponse(t, w, `{
+			"id":"user-123",
+			"displayName":"Business User",
+			"mail":"user@example.com",
+			"userPrincipalName":"user@example.com"
+		}`)
+	}))
+	defer srv.Close()
+
+	provider := driveops.NewSessionRuntime(nil, "test-agent", slog.New(slog.DiscardHandler))
+
+	var tokenPaths []string
+	provider.TokenSourceFn = func(_ context.Context, path string, _ *slog.Logger) (graph.TokenSource, error) {
+		tokenPaths = append(tokenPaths, path)
+		return staticTokenSource{}, nil
+	}
+
+	cc := &CLIContext{
+		Flags:        CLIFlags{ConfigPath: configPath, Drive: []string{cid.String()}},
+		Logger:       slog.New(slog.DiscardHandler),
+		StatusWriter: io.Discard,
+		CfgPath:      configPath,
+		Env:          config.EnvOverrides{},
+		GraphBaseURL: srv.URL,
+		Cfg: &config.ResolvedDrive{
+			CanonicalID: cid,
+			DriveID:     driveid.New(rootTestDrive123),
+			SyncDir:     "~/Business",
+		},
+		Runtime: provider,
+	}
+
+	session, err := cc.Session(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, session)
+
+	assert.Equal(t, []string{config.DriveTokenPath(cid)}, tokenPaths,
+		"the identity probe and the drive session must share the runtime's one token source")
+	assert.Equal(t, srv.URL, provider.GraphBaseURL, "the command's Graph base URL reaches the runtime")
+}
+
 func TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -300,8 +362,10 @@ func TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive(t *testing.T) {
 
 	assert.Equal(t, newCID, cc.Cfg.CanonicalID)
 	assert.Equal(t, []string{newCID.String()}, cc.Flags.Drive)
-	require.Len(t, tokenPaths, 1)
-	assert.Equal(t, config.DriveTokenPath(newCID), tokenPaths[0])
+	// The identity probe takes its token source from the runtime too
+	// (R-6.8.27); the rename moves the sign-in file and flushes the cache, so
+	// the drive session loads the renamed file once.
+	assert.Equal(t, []string{config.DriveTokenPath(oldCID), config.DriveTokenPath(newCID)}, tokenPaths)
 	assert.Contains(t, status.String(), "Account email changed from user@example.com to renamed@example.com")
 	_, oldTokenErr := os.Stat(config.DriveTokenPath(oldCID))
 	require.ErrorIs(t, oldTokenErr, os.ErrNotExist)
@@ -388,8 +452,9 @@ func TestCloseRootCommandLogger_ClosesActiveLoggerAfterCommandError(t *testing.T
 	assert.Equal(t, 1, activeCloser.callCount, "top-level cleanup should remain idempotent")
 }
 
-func TestNewGraphClient_ReturnsConstructionError(t *testing.T) {
-	client, err := newGraphClient(nil, slog.New(slog.DiscardHandler))
+func TestNewGraphClientWithHTTP_ReturnsConstructionError(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	client, err := newGraphClientWithHTTP("", driveops.NewSessionRuntime(nil, "test-agent", logger).BootstrapMeta(), nil, logger)
 	require.Error(t, err)
 	assert.Nil(t, client)
 	assert.Contains(t, err.Error(), "creating graph client")

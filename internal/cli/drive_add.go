@@ -10,7 +10,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 )
 
@@ -404,7 +403,7 @@ func addSharedDriveWithOps(
 	if displayName == "" {
 		var resolveErr error
 
-		displayName, resolveErr = resolveSharedDisplayName(ctx, cid, tokenPath, cfg, logger, runtime)
+		displayName, resolveErr = resolveSharedDisplayName(ctx, cid, tokenPath, cfg, runtime)
 		if resolveErr != nil {
 			displayName = config.DefaultDisplayName(cid)
 			logger.Warn("could not derive shared drive display name, using fallback",
@@ -501,17 +500,11 @@ func resolveSharedDisplayName(
 	cid driveid.CanonicalID,
 	tokenPath string,
 	cfg *config.Config,
-	logger *slog.Logger,
 	runtime *driveops.SessionRuntime,
 ) (string, error) {
-	ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
+	client, err := runtime.BootstrapClient(ctx, tokenPath)
 	if err != nil {
-		return "", fmt.Errorf("load token source: %w", err)
-	}
-
-	client, err := newGraphClientWithHTTP("", runtime.BootstrapMeta(), ts, logger)
-	if err != nil {
-		return "", err
+		return "", fmt.Errorf("load sign-in for shared drive name: %w", err)
 	}
 	existingNames := collectExistingDisplayNames(cfg)
 

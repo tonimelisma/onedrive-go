@@ -634,7 +634,14 @@ to the control-plane boundary.
 - Each mount gets its own engine instance and state DB.
 - Session creation goes through `driveops.SessionRuntime` with
   `driveops.MountSessionConfig`, keeping token-source caching owned in one
-  place and keeping `ResolvedDrive` out of runtime construction.
+  place and keeping `ResolvedDrive` out of runtime construction. The same
+  holds for account-level clients: the CLI's identity probes and discovery
+  calls take theirs from `SessionRuntime.BootstrapClient`, so within one
+  runtime one sign-in file has one token source (R-6.8.27). The `sync`
+  command still has two runtimes: its sync-bootstrap identity probe runs on
+  the command's runtime before `runSyncOnce`/`runSyncDaemon` build the
+  engine's, which loads the sign-in file after the probe has saved any
+  refresh. Giving the command one runtime for both is [planned].
 - Reload updates config through one shared `config.Holder` and uses the
   CLI-supplied standalone-mount selection compiler, so both the control plane
   and session runtime see the same config snapshot without giving multisync

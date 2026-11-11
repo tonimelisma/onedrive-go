@@ -2,8 +2,12 @@ package graph
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
+
+	"golang.org/x/oauth2"
 )
 
 // Azure AD application registered for onedrive-go (public client, multi-tenant + personal).
@@ -15,6 +19,20 @@ func defaultScopes() []string {
 		"Files.ReadWrite.All",
 		"User.Read",
 	}
+}
+
+// withAuthClient returns ctx carrying authHTTP as the client oauth2 uses for
+// every request to the sign-in service: the device-code request and its
+// polls, the code exchange, and each silent refresh of a token source built
+// from the returned context. Without it oauth2 falls back to
+// http.DefaultClient, which has no timeout (R-6.8.27). A nil authHTTP is a
+// caller bug, so it is an error rather than that fallback.
+func withAuthClient(ctx context.Context, authHTTP *http.Client) (context.Context, error) {
+	if authHTTP == nil {
+		return nil, fmt.Errorf("graph: sign-in HTTP client must not be nil")
+	}
+
+	return context.WithValue(ctx, oauth2.HTTPClient, authHTTP), nil
 }
 
 // DeviceAuth holds the device code response fields that the CLI displays to the user.
@@ -36,17 +54,26 @@ type DeviceAuth struct {
 // ctx must outlive the TokenSource — if ctx is canceled, silent token refresh
 // will fail. Callers should pass context.Background() for long-lived sessions.
 //
+// authHTTP sends every request to the sign-in service, the polls and the
+// returned source's refreshes included; callers pass graphtransport.AuthClient.
+//
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
 func Login(
 	ctx context.Context,
 	tokenPath string,
+	authHTTP *http.Client,
 	display func(DeviceAuth),
 	logger *slog.Logger,
 ) (TokenSource, error) {
+	authCtx, err := withAuthClient(ctx, authHTTP)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := oauthConfig(tokenPath, logger)
 
-	return doLogin(ctx, tokenPath, cfg, display, logger)
+	return doLogin(authCtx, tokenPath, cfg, display, logger)
 }
 
 // stateTokenBytes is the number of random bytes for the OAuth2 state parameter.
@@ -77,15 +104,24 @@ type callbackResult struct {
 // openURL is called with the authorization URL; the CLI uses it to launch the
 // default browser and owns any user-facing fallback output if opening fails.
 //
+// authHTTP sends the code exchange and the returned source's refreshes; the
+// browser, not authHTTP, follows the authorization URL.
+//
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
 func LoginWithBrowser(
 	ctx context.Context,
 	tokenPath string,
+	authHTTP *http.Client,
 	openURL func(context.Context, string) error,
 	logger *slog.Logger,
 ) (TokenSource, error) {
+	authCtx, err := withAuthClient(ctx, authHTTP)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := oauthConfig(tokenPath, logger)
 
-	return doAuthCodeLogin(ctx, tokenPath, cfg, openURL, logger)
+	return doAuthCodeLogin(authCtx, tokenPath, cfg, openURL, logger)
 }

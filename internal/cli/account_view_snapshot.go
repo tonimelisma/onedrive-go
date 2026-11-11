@@ -141,7 +141,6 @@ func loadDriveListSnapshot(
 		siteLimit,
 		logger,
 		recorder,
-		cc.GraphBaseURL,
 		cc.runtime(),
 	)
 	sharedDiscovery := discoverSharedTargets(ctx, cc, viewSnapshot.Accounts)

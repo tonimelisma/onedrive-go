@@ -97,7 +97,8 @@ func (s *Session) SetAuthenticatedSuccessHooks(hook func(context.Context)) {
 
 // SessionRuntime owns authenticated Graph session construction plus the
 // cached HTTP client profiles and token sources that back those sessions.
-// Multiple drives sharing a token path share one TokenSource, preventing
+// Every client it builds for one token path, drive sessions and account-level
+// bootstrap clients alike, shares one TokenSource (R-6.8.27), preventing
 // OAuth2 refresh token rotation races (two independent refreshes can
 // invalidate each other's refresh tokens).
 type SessionRuntime struct {
@@ -107,8 +108,13 @@ type SessionRuntime struct {
 	GraphBaseURL string
 
 	// TokenSourceFn creates a TokenSource from a token file path. Exported
-	// for test injection; defaults to graph.TokenSourceFromPath.
+	// for test injection; defaults to graph.TokenSourceFromPath with authHTTP.
 	TokenSourceFn func(ctx context.Context, tokenPath string, logger *slog.Logger) (graph.TokenSource, error)
+
+	// authHTTP sends every sign-in request of the default token sources
+	// (graphtransport.AuthClient). Built at construction and never replaced,
+	// so TokenSourceFn can read it while mu is held.
+	authHTTP *http.Client
 
 	// retryNotices is shared by every retrying client this runtime builds,
 	// so one outage or long rate-limit wait is announced once per process
@@ -133,15 +139,31 @@ func NewSessionRuntime(holder *config.Holder, userAgent string, logger *slog.Log
 		logger = slog.Default()
 	}
 
-	return &SessionRuntime{
+	runtime := &SessionRuntime{
 		holder:          holder,
 		userAgent:       userAgent,
 		logger:          logger,
-		TokenSourceFn:   graph.TokenSourceFromPath,
+		authHTTP:        graphtransport.AuthClient(),
 		retryNotices:    &retry.Notices{},
 		tokenCache:      make(map[string]graph.TokenSource),
 		interactiveMeta: make(map[string]*http.Client),
 	}
+	runtime.TokenSourceFn = runtime.tokenSourceFromPath
+
+	return runtime
+}
+
+// tokenSourceFromPath is the default TokenSourceFn: the saved sign-in at
+// tokenPath, refreshed through the runtime's auth client.
+func (r *SessionRuntime) tokenSourceFromPath(
+	ctx context.Context,
+	tokenPath string,
+	logger *slog.Logger,
+) (graph.TokenSource, error) {
+	// The graph error already says what failed, and every caller of the
+	// runtime adds its own context ("not logged in — run ..."), so the
+	// runtime passes it through as it always has for TokenSourceFn errors.
+	return graph.TokenSourceFromPath(ctx, tokenPath, r.authHTTP, logger) //nolint:wrapcheck // callers add the context, see above
 }
 
 // InteractiveSession creates or retrieves an authenticated interactive Session
@@ -250,6 +272,36 @@ func (r *SessionRuntime) SharedTargetClients(
 	}, nil
 }
 
+// BootstrapClient returns a Graph client for account-level calls made before
+// a drive session exists, or without one: identity probes, drive and
+// shared-item discovery, SharePoint search, shared-item naming. It uses the
+// bootstrap metadata profile, the runtime's Graph base URL and the runtime's
+// one token source for tokenPath, the same source the drive sessions for that
+// sign-in file use (R-6.8.27). Token-source errors keep their chain, so
+// callers can still tell graph.ErrNotLoggedIn from a damaged sign-in.
+//
+// A cached token source keeps the context of the call that created it and
+// refreshes with it. Pass the command's (or daemon's) context, never one
+// derived for a single request: once that context ends, every later silent
+// refresh for the sign-in file fails until FlushTokenCache.
+func (r *SessionRuntime) BootstrapClient(ctx context.Context, tokenPath string) (*graph.Client, error) {
+	if tokenPath == "" {
+		return nil, fmt.Errorf("bootstrap graph client: token path is required")
+	}
+
+	ts, err := r.getOrCreateTokenSource(ctx, tokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := graph.NewClient(r.graphBaseURL(), r.BootstrapMeta(), ts, r.logger, r.userAgent)
+	if err != nil {
+		return nil, fmt.Errorf("create bootstrap graph client: %w", err)
+	}
+
+	return client, nil
+}
+
 // getOrCreateTokenSource returns a cached TokenSource for the given token
 // path, creating one on cache miss. Thread-safe via mutex.
 func (r *SessionRuntime) getOrCreateTokenSource(ctx context.Context, tokenPath string) (graph.TokenSource, error) {
@@ -280,10 +332,7 @@ func (r *SessionRuntime) clientsForTokenPath(
 		return nil, nil, err
 	}
 
-	baseURL := graph.DefaultBaseURL
-	if r.GraphBaseURL != "" {
-		baseURL = r.GraphBaseURL
-	}
+	baseURL := r.graphBaseURL()
 
 	meta, err := graph.NewClient(baseURL, httpClients.Meta, ts, r.logger, r.userAgent)
 	if err != nil {
@@ -296,6 +345,16 @@ func (r *SessionRuntime) clientsForTokenPath(
 	}
 
 	return meta, transfer, nil
+}
+
+// graphBaseURL is the Graph root every client of the runtime uses: the
+// default, or GraphBaseURL when a test points the runtime at a local server.
+func (r *SessionRuntime) graphBaseURL() string {
+	if r.GraphBaseURL != "" {
+		return r.GraphBaseURL
+	}
+
+	return graph.DefaultBaseURL
 }
 
 // FlushTokenCache clears the cached TokenSources, forcing the next Session()
