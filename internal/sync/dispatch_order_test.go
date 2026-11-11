@@ -288,6 +288,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_AppliedMoveLeavesTheBaselineCurrent,
 		TestRunOnce_FolderRecreatedWhereAKeptFolderWasIsCreatedOnline,
 		TestRunOnce_StoreTransactionsCountOnTheRunContextCollector,
+		TestRunOnce_UnclassifiedRowFailsThePassNamingThePath,
 	}
 }
 

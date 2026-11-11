@@ -115,7 +115,7 @@ func TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate(
 	rows, err := mgr.QueryReconciliationState(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, "baseline_update", rows[0].ReconciliationKind)
+	assert.Equal(t, reconcileBaselineUpdate, rows[0].ReconciliationKind)
 }
 
 // Validates: R-2.10.49

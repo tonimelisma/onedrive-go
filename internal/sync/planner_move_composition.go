@@ -1058,7 +1058,7 @@ func moveCompositionInputs(
 		if moveNodeTouchesUnavailableTruth(&node, views) {
 			frozen[node.key] = true
 		}
-		if cmp.ComparisonKind == comparisonKindLocalMoveSource && cmp.LocalPresent && cmp.LocalMoveTarget != "" {
+		if cmp.ComparisonKind == comparisonLocalMoveSource && cmp.LocalPresent && cmp.LocalMoveTarget != "" {
 			recreated[node.key] = cmp.Path
 		}
 		nodes = append(nodes, node)
@@ -1066,10 +1066,6 @@ func moveCompositionInputs(
 
 	return moveInputs{nodes: nodes, occupancy: occupancy, frozen: frozen, recreated: recreated}
 }
-
-// comparisonKindLocalMoveSource is SQLite's comparison kind for a baseline path
-// whose item was renamed away locally.
-const comparisonKindLocalMoveSource = "local_move_source"
 
 func indexMoveSnapshot(remoteRows []remoteStateRow, localRows []localStateRow) (map[string]*remoteStateRow, moveOccupancy) {
 	remoteByID := make(map[string]*remoteStateRow, len(remoteRows))
@@ -1125,7 +1121,7 @@ func composedDisplacement(node *moveNode, entry *BaselineEntry, view *pathView, 
 }
 
 func composedLocalPosition(cmp *sQLiteComparisonRow, view *pathView) string {
-	if cmp.ComparisonKind == comparisonKindLocalMoveSource && cmp.LocalMoveTarget != "" {
+	if cmp.ComparisonKind == comparisonLocalMoveSource && cmp.LocalMoveTarget != "" {
 		return cmp.LocalMoveTarget
 	}
 	if view.Local != nil && localEntryIsBaselineItem(view.Local, view.Baseline) {
@@ -1171,15 +1167,15 @@ func composedRemotePosition(
 		return ""
 	}
 	switch {
-	case at.ComparisonKind == "remote_move_shadowed":
+	case at.ComparisonKind == comparisonRemoteMoveShadowed:
 		return row.Path
 	// The path is another synced item's, which OneDrive moved away (a swap
 	// or a chain): the item ID proves this item now sits there, and the
 	// path's own item is composed too. Without it a local rename of an item
 	// OneDrive swapped had no remote position and was copied, not moved.
-	case at.ComparisonKind == "remote_move_source" && at.RemoteItemID == entry.ItemID:
+	case at.ComparisonKind == comparisonRemoteMoveSource && at.RemoteItemID == entry.ItemID:
 		return row.Path
-	case at.ComparisonKind == "local_move_dest" && row.Path == localPosition:
+	case at.ComparisonKind == comparisonLocalMoveDest && row.Path == localPosition:
 		return row.Path
 	default:
 		return ""

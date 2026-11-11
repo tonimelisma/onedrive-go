@@ -502,7 +502,19 @@ comparison_state AS (
 		remote_subtree_changed,
 		metadata_drift,
 		kept_local_folder,
-		CASE
+		` + sqlComparisonKindCase + ` AS comparison_kind
+	FROM comparison_flags
+)
+`
+
+	// sqlComparisonKindCase is the first stage of the decision table: the
+	// comparison kind (comparisonKind) of one comparison_flags row. ELSE is
+	// 'unclassified', reached only by a row no side holds, which cannot occur
+	// (the row set is the union of the three tables' paths); any other row
+	// reaching it is a gap in the table, and planning fails on it (R-6.2.16).
+	// TestComparisonKindCase_ClassifiesEveryReachableState evaluates it over
+	// every combination of its inputs.
+	sqlComparisonKindCase = `CASE
 			-- The synced item moved; a new entry at its old path (rename and
 			-- recreate) is planned as a create by move composition.
 			WHEN baseline_present = 1 AND local_move_candidate_count = 1 AND local_move_target <> ''
@@ -528,12 +540,11 @@ comparison_state AS (
 			WHEN baseline_present = 1 AND local_present = 1 AND remote_present = 1 AND current_equal = 1 AND remote_changed = 1 THEN 'equal_again'
 			WHEN baseline_present = 1 AND local_present = 0 AND remote_present = 1 THEN 'local_missing'
 			WHEN baseline_present = 1 AND local_present = 1 AND remote_present = 0 THEN 'remote_missing'
+			-- Only rows that changed on some side and are not equal after a
+			-- remote change get here; sqlReconciliationKindCase relies on it.
 			WHEN baseline_present = 1 AND local_present = 1 AND remote_present = 1 THEN 'diverged'
-			ELSE 'unknown'
-		END AS comparison_kind
-	FROM comparison_flags
-)
-`
+			ELSE 'unclassified'
+		END`
 
 	sqlQueryComparisonState = sqlComparisonStateCTEs + `
 SELECT
@@ -566,7 +577,33 @@ reconciliation_state AS (
 		local_move_source,
 		remote_move_target,
 		remote_move_source,
-		CASE
+		` + sqlReconciliationKindCase + ` AS reconciliation_kind
+	FROM comparison_state
+)
+SELECT
+	path,
+	item_type,
+	comparison_kind,
+	reconciliation_kind,
+	local_move_target,
+	local_move_source,
+	remote_move_target,
+	remote_move_source
+FROM reconciliation_state
+ORDER BY path`
+
+	// sqlReconciliationKindCase is the second stage of the decision table:
+	// the decision (reconciliationKind) for one comparison_state row. Every
+	// genuine "nothing to do" is an explicit 'noop'; ELSE is 'unclassified',
+	// a row no rule covers (an unclassified comparison, a comparison kind
+	// added without a rule, a flag outside 0 and 1), and planning fails on it
+	// (R-6.2.16) instead of leaving the path unsynced. Rules that the
+	// comparison stage makes unreachable are not written: a diverged row with
+	// equal content and a remote change (including a type change, which is
+	// one) is equal_again.
+	// TestReconciliationKindCase_ReconcilesEveryClassifiedComparison evaluates
+	// it over every combination of its inputs.
+	sqlReconciliationKindCase = `CASE
 			-- A type change (file <-> folder) replaces the item: the old one is
 			-- deleted and the new one created, never "uploaded" or
 			-- "downloaded" as the baseline's type. When the other side also
@@ -588,9 +625,8 @@ reconciliation_state AS (
 			-- creates at one path, not a type change one side wins. Planned
 			-- as a local win it deleted the OneDrive item, a delete that
 			-- refuses while the path exists locally, and was superseded on
-			-- every pass.
-			WHEN comparison_kind = 'diverged' AND local_type_changed = 1 AND remote_type_changed = 1
-				AND local_item_type = remote_item_type AND current_equal = 1 THEN 'baseline_update'
+			-- every pass. Equal content (or two folders) is equal_again, a
+			-- baseline update; a diverged row here holds different files.
 			WHEN comparison_kind = 'diverged' AND local_type_changed = 1 AND remote_type_changed = 1
 				AND local_item_type = remote_item_type THEN 'conflict_create_create'
 			WHEN comparison_kind = 'diverged' AND local_changed = 1
@@ -640,25 +676,51 @@ reconciliation_state AS (
 			-- or changed below it is kept by the descendants' own rows.
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 0 THEN 'local_delete'
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 1 THEN 'conflict_edit_delete'
+			-- A local edit uploads. When the edit made the file equal to
+			-- OneDrive's unchanged content (the baseline recorded other local
+			-- bytes, as an accepted server transform does), the upload is
+			-- redundant, not lossy.
 			WHEN comparison_kind = 'diverged' AND local_changed = 1 AND remote_changed = 0 THEN 'upload'
 			WHEN comparison_kind = 'diverged' AND local_changed = 0 AND remote_changed = 1 THEN 'download'
-			WHEN comparison_kind = 'diverged' AND local_changed = 1 AND remote_changed = 1 AND current_equal = 1 THEN 'baseline_update'
 			WHEN comparison_kind = 'diverged' AND local_changed = 1 AND remote_changed = 1 THEN 'conflict_edit_edit'
-			ELSE 'noop'
-		END AS reconciliation_kind
-	FROM comparison_state
-)
+			ELSE 'unclassified'
+		END`
+
+	// sqlQueryPlannerDecisionInputs reads every input of the two decision
+	// CASE expressions for one path. The engine runs it only when a row came
+	// back unclassified, inside the planning transaction, so the plan error
+	// can say which inputs no rule matched; a plan that classifies every row
+	// never pays for it.
+	sqlQueryPlannerDecisionInputs = sqlComparisonStateCTEs + `
 SELECT
-	path,
-	item_type,
-	comparison_kind,
-	reconciliation_kind,
+	baseline_present,
+	local_present,
+	remote_present,
+	local_move_candidate_count,
 	local_move_target,
 	local_move_source,
 	remote_move_target,
-	remote_move_source
-FROM reconciliation_state
-ORDER BY path`
+	remote_move_source,
+	local_item_replaced,
+	delete_awaits_ancestor_move,
+	local_copy_awaits_ancestor_move,
+	remote_create_awaits_ancestor_move,
+	kept_local_folder,
+	remote_move_shadowed,
+	current_equal,
+	local_changed,
+	remote_changed,
+	item_type,
+	local_item_type,
+	remote_item_type,
+	local_type_changed,
+	remote_type_changed,
+	remote_item_replaced,
+	local_subtree_changed,
+	remote_subtree_changed,
+	metadata_drift
+FROM comparison_state
+WHERE path = ?`
 )
 
 type sQLiteComparisonRow struct {
@@ -677,18 +739,22 @@ type sQLiteComparisonRow struct {
 	LocalMoveCandidateCount int
 	RemoteMoveTarget        string
 	RemoteMoveSource        string
-	ComparisonKind          string
+	ComparisonKind          comparisonKind
 }
 
 type sQLiteReconciliationRow struct {
 	Path               string
 	ItemType           ItemType
-	ComparisonKind     string
-	ReconciliationKind string
+	ComparisonKind     comparisonKind
+	ReconciliationKind reconciliationKind
 	LocalMoveTarget    string
 	LocalMoveSource    string
 	RemoteMoveTarget   string
 	RemoteMoveSource   string
+	// DecisionInputs are the decision-table inputs of an unclassified row,
+	// read by the engine for the plan error (queryPlannerDecisionInputs);
+	// nil for every classified row.
+	DecisionInputs []plannerDecisionInput
 }
 
 func (s *SyncStore) QueryComparisonState(ctx context.Context) ([]sQLiteComparisonRow, error) {
@@ -708,61 +774,94 @@ func queryComparisonStateWithRunnerForTables(
 	localStateTable string,
 	remoteStateTable string,
 ) ([]sQLiteComparisonRow, error) {
-	rows, err := runner.QueryContext(ctx, sqlQueryForStateTables(sqlQueryComparisonState, localStateTable, remoteStateTable))
+	return queryComparisonRows(ctx, runner, sqlQueryForStateTables(sqlQueryComparisonState, localStateTable, remoteStateTable))
+}
+
+// queryComparisonRows runs a query shaped like sqlQueryComparisonState and
+// scans its rows. A comparison kind the enum does not know fails the scan,
+// naming the path.
+func queryComparisonRows(ctx context.Context, runner sqlTxRunner, query string) ([]sQLiteComparisonRow, error) {
+	return queryStateRows(ctx, runner, query, "comparison state", scanComparisonRow)
+}
+
+// queryStateRows runs one decision-table query and scans every row with scan;
+// what names the rows in the query and iteration errors.
+func queryStateRows[T any](
+	ctx context.Context,
+	runner sqlTxRunner,
+	query string,
+	what string,
+	scan func(*sql.Rows) (T, error),
+) ([]T, error) {
+	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
+		return nil, fmt.Errorf("sync: querying %s: %w", what, err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
-	var results []sQLiteComparisonRow
+	var results []T
 	for rows.Next() {
-		var (
-			row                                        sQLiteComparisonRow
-			itemType                                   sql.NullString
-			baselinePresent, localPresent              int
-			remotePresent, localChanged, remoteChanged int
-			currentEqual                               int
-		)
-		if err := rows.Scan(
-			&row.Path,
-			&row.BaselineItemID,
-			&row.RemoteItemID,
-			&itemType,
-			&baselinePresent,
-			&localPresent,
-			&remotePresent,
-			&localChanged,
-			&remoteChanged,
-			&currentEqual,
-			&row.LocalMoveTarget,
-			&row.LocalMoveSource,
-			&row.LocalMoveCandidateCount,
-			&row.RemoteMoveTarget,
-			&row.RemoteMoveSource,
-			&row.ComparisonKind,
-		); err != nil {
-			return nil, fmt.Errorf("sync: scanning comparison state row: %w", err)
+		row, scanErr := scan(rows)
+		if scanErr != nil {
+			return nil, scanErr
 		}
-		if itemType.Valid {
-			parsed, err := parseItemType(itemType.String)
-			if err != nil {
-				return nil, fmt.Errorf("sync: parsing comparison state item type %q: %w", itemType.String, err)
-			}
-			row.ItemType = parsed
-		}
-		row.BaselinePresent = baselinePresent != 0
-		row.LocalPresent = localPresent != 0
-		row.RemotePresent = remotePresent != 0
-		row.LocalChanged = localChanged != 0
-		row.RemoteChanged = remoteChanged != 0
-		row.CurrentEqual = currentEqual != 0
 		results = append(results, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating comparison state rows: %w", err)
+		return nil, fmt.Errorf("sync: iterating %s rows: %w", what, err)
 	}
 
 	return results, nil
+}
+
+func scanComparisonRow(rows *sql.Rows) (sQLiteComparisonRow, error) {
+	var (
+		row                                        sQLiteComparisonRow
+		itemType                                   sql.NullString
+		comparison                                 string
+		baselinePresent, localPresent              int
+		remotePresent, localChanged, remoteChanged int
+		currentEqual                               int
+	)
+	err := rows.Scan(
+		&row.Path,
+		&row.BaselineItemID,
+		&row.RemoteItemID,
+		&itemType,
+		&baselinePresent,
+		&localPresent,
+		&remotePresent,
+		&localChanged,
+		&remoteChanged,
+		&currentEqual,
+		&row.LocalMoveTarget,
+		&row.LocalMoveSource,
+		&row.LocalMoveCandidateCount,
+		&row.RemoteMoveTarget,
+		&row.RemoteMoveSource,
+		&comparison,
+	)
+	if err != nil {
+		return sQLiteComparisonRow{}, fmt.Errorf("sync: scanning comparison state row: %w", err)
+	}
+	if itemType.Valid {
+		row.ItemType, err = parseItemType(itemType.String)
+		if err != nil {
+			return sQLiteComparisonRow{}, fmt.Errorf("sync: parsing comparison state item type %q: %w", itemType.String, err)
+		}
+	}
+	row.ComparisonKind, err = parseComparisonKind(comparison)
+	if err != nil {
+		return sQLiteComparisonRow{}, fmt.Errorf("sync: reading the comparison kind of %q: %w", row.Path, err)
+	}
+	row.BaselinePresent = baselinePresent != 0
+	row.LocalPresent = localPresent != 0
+	row.RemotePresent = remotePresent != 0
+	row.LocalChanged = localChanged != 0
+	row.RemoteChanged = remoteChanged != 0
+	row.CurrentEqual = currentEqual != 0
+
+	return row, nil
 }
 
 func (s *SyncStore) QueryReconciliationState(ctx context.Context) ([]sQLiteReconciliationRow, error) {
@@ -782,44 +881,100 @@ func queryReconciliationStateWithRunnerForTables(
 	localStateTable string,
 	remoteStateTable string,
 ) ([]sQLiteReconciliationRow, error) {
-	rows, err := runner.QueryContext(ctx, sqlQueryForStateTables(sqlQueryReconciliationState, localStateTable, remoteStateTable))
+	return queryReconciliationRows(ctx, runner, sqlQueryForStateTables(sqlQueryReconciliationState, localStateTable, remoteStateTable))
+}
+
+// queryReconciliationRows runs a query shaped like sqlQueryReconciliationState
+// and scans its rows. A kind the enums do not know fails the scan, naming the
+// path; an 'unclassified' kind parses, and planning refuses the row.
+func queryReconciliationRows(ctx context.Context, runner sqlTxRunner, query string) ([]sQLiteReconciliationRow, error) {
+	return queryStateRows(ctx, runner, query, "reconciliation state", scanReconciliationRow)
+}
+
+func scanReconciliationRow(rows *sql.Rows) (sQLiteReconciliationRow, error) {
+	var (
+		row                        sQLiteReconciliationRow
+		itemType                   sql.NullString
+		comparison, reconciliation string
+	)
+	err := rows.Scan(
+		&row.Path,
+		&itemType,
+		&comparison,
+		&reconciliation,
+		&row.LocalMoveTarget,
+		&row.LocalMoveSource,
+		&row.RemoteMoveTarget,
+		&row.RemoteMoveSource,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
+		return sQLiteReconciliationRow{}, fmt.Errorf("sync: scanning reconciliation state row: %w", err)
+	}
+	if itemType.Valid {
+		row.ItemType, err = parseItemType(itemType.String)
+		if err != nil {
+			return sQLiteReconciliationRow{}, fmt.Errorf("sync: parsing reconciliation state item type %q: %w", itemType.String, err)
+		}
+	}
+	row.ComparisonKind, err = parseComparisonKind(comparison)
+	if err != nil {
+		return sQLiteReconciliationRow{}, fmt.Errorf("sync: reading the comparison kind of %q: %w", row.Path, err)
+	}
+	row.ReconciliationKind, err = parseReconciliationKind(reconciliation)
+	if err != nil {
+		return sQLiteReconciliationRow{}, fmt.Errorf("sync: reading the reconciliation kind of %q: %w", row.Path, err)
+	}
+
+	return row, nil
+}
+
+// queryPlannerDecisionInputs reads the decision-table inputs of one path over
+// the given current-state tables (sqlQueryPlannerDecisionInputs), each value
+// as text and a NULL as "NULL", in the query's column order.
+func queryPlannerDecisionInputs(
+	ctx context.Context,
+	runner sqlTxRunner,
+	path string,
+	localStateTable string,
+	remoteStateTable string,
+) ([]plannerDecisionInput, error) {
+	rows, err := runner.QueryContext(ctx,
+		sqlQueryForStateTables(sqlQueryPlannerDecisionInputs, localStateTable, remoteStateTable), path)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying planner decision inputs: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
-	var results []sQLiteReconciliationRow
-	for rows.Next() {
-		var (
-			row      sQLiteReconciliationRow
-			itemType sql.NullString
-		)
-		if err := rows.Scan(
-			&row.Path,
-			&itemType,
-			&row.ComparisonKind,
-			&row.ReconciliationKind,
-			&row.LocalMoveTarget,
-			&row.LocalMoveSource,
-			&row.RemoteMoveTarget,
-			&row.RemoteMoveSource,
-		); err != nil {
-			return nil, fmt.Errorf("sync: scanning reconciliation state row: %w", err)
-		}
-		if itemType.Valid {
-			parsed, err := parseItemType(itemType.String)
-			if err != nil {
-				return nil, fmt.Errorf("sync: parsing reconciliation state item type %q: %w", itemType.String, err)
-			}
-			row.ItemType = parsed
-		}
-		results = append(results, row)
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("sync: reading planner decision input columns: %w", err)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating reconciliation state rows: %w", err)
+	var inputs []plannerDecisionInput
+	if rows.Next() {
+		values := make([]sql.NullString, len(columns))
+		targets := make([]any, len(columns))
+		for i := range values {
+			targets[i] = &values[i]
+		}
+		err = rows.Scan(targets...)
+		if err != nil {
+			return nil, fmt.Errorf("sync: scanning planner decision inputs: %w", err)
+		}
+		inputs = make([]plannerDecisionInput, 0, len(columns))
+		for i, column := range columns {
+			value := "NULL"
+			if values[i].Valid {
+				value = values[i].String
+			}
+			inputs = append(inputs, plannerDecisionInput{Column: column, Value: value})
+		}
+	}
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("sync: iterating planner decision inputs: %w", err)
 	}
 
-	return results, nil
+	return inputs, nil
 }
 
 func sqlQueryForStateTables(query string, localStateTable string, remoteStateTable string) string {

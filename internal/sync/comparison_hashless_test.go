@@ -174,14 +174,14 @@ func TestBuildActionsForReconciliation_RefusesFolderTransfers(t *testing.T) {
 	}
 
 	_, err := buildActionsForReconciliation(
-		&sQLiteReconciliationRow{Path: "local-dir", ReconciliationKind: "upload"},
+		&sQLiteReconciliationRow{Path: "local-dir", ReconciliationKind: reconcileUpload},
 		&sQLiteComparisonRow{Path: "local-dir"},
 		views,
 	)
 	require.ErrorIs(t, err, errFolderTransferPlanned)
 
 	_, err = buildActionsForReconciliation(
-		&sQLiteReconciliationRow{Path: "remote-dir", ReconciliationKind: "download"},
+		&sQLiteReconciliationRow{Path: "remote-dir", ReconciliationKind: reconcileDownload},
 		&sQLiteComparisonRow{Path: "remote-dir"},
 		views,
 	)

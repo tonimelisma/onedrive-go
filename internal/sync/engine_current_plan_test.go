@@ -2,6 +2,9 @@ package sync
 
 import (
 	"context"
+	"errors"
+	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -491,4 +494,87 @@ func TestKeepCurrentPlanBuild_LeavesDurableRuntimeStateUntouched(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, blockScopes, 1)
 	assert.Equal(t, SKService(), blockScopes[0].Key)
+}
+
+// reconciliationQueryWithoutLocalUploadRule is the reconciliation query with
+// one rule of the decision table removed: a new local file no longer has a
+// reconciliation. It stands in for the gap the next change to the table could
+// leave, since no reachable state is unclassified today.
+func reconciliationQueryWithoutLocalUploadRule(t *testing.T) string {
+	t.Helper()
+
+	const rule = "WHEN comparison_kind = 'local_only_create' THEN 'upload'"
+	require.Contains(t, sqlQueryReconciliationState, rule)
+
+	return strings.Replace(sqlQueryReconciliationState, rule, "", 1)
+}
+
+func newUnclassifiedPlanTestEngine(t *testing.T) (*testEngine, string, *atomic.Int32) {
+	t.Helper()
+
+	driveID := driveid.New(engineTestDriveID)
+	var uploads atomic.Int32
+	mock := &engineMockClient{
+		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return deltaPageWithItems([]graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}}, "token-1"), nil
+		},
+		uploadFn: func(
+			_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc,
+		) (*graph.Item, error) {
+			uploads.Add(1)
+			return nil, errors.New("an unclassified row must not be uploaded")
+		},
+	}
+	eng, syncRoot := newTestEngine(t, mock)
+	eng.reconciliationQueryOverride = reconciliationQueryWithoutLocalUploadRule(t)
+
+	return eng, syncRoot, &uploads
+}
+
+// unclassifiedNewFileError is how the planner reports new.txt under the
+// decision table without its upload rule: the path, both kinds, and the
+// inputs the diagnostic read found (abridged here to the presence bits).
+const unclassifiedNewFileError = `sync: planning actions: sync: planner state is outside the decision table: "new.txt" ` +
+	`(comparison local_only_create, reconciliation unclassified; baseline_present=0 local_present=1 remote_present=0 `
+
+// Validates: R-6.2.16
+//
+// A one-shot pass that meets a row the decision table does not classify fails
+// with the path and the inputs no rule matched, and runs none of the plan;
+// before, the row was planned as nothing to do and the file never synced.
+func TestRunOnce_UnclassifiedRowFailsThePassNamingThePath(t *testing.T) {
+	t.Parallel()
+
+	eng, syncRoot, uploads := newUnclassifiedPlanTestEngine(t)
+	writeLocalFile(t, syncRoot, "new.txt", "local content")
+
+	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.ErrorIs(t, err, errUnclassifiedPlan)
+	require.ErrorContains(t, err, unclassifiedNewFileError)
+	require.ErrorContains(t, err, " metadata_drift=0)")
+	assert.Zero(t, uploads.Load())
+}
+
+// Validates: R-6.2.16, R-2.8.11
+//
+// In watch mode the same row ends the steady-state replan with the error,
+// which ends the drive's runner; multisync restarts it after its backoff
+// (R-2.8.11). Nothing is installed for dispatch.
+func TestRunSteadyStateReplan_UnclassifiedRowEndsTheReplanNamingThePath(t *testing.T) {
+	t.Parallel()
+
+	eng, syncRoot, uploads := newUnclassifiedPlanTestEngine(t)
+	ctx := t.Context()
+	setupWatchEngine(t, eng)
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+	writeLocalFile(t, syncRoot, "new.txt", "local content")
+
+	rt := testWatchRuntime(t, eng)
+	applied, err := rt.runSteadyStateReplan(ctx, &watchPipeline{bl: bl, mode: SyncBidirectional}, dirtyBatch{})
+	require.ErrorIs(t, err, errUnclassifiedPlan)
+	require.ErrorContains(t, err, "sync: watch replan build_current_plan: "+unclassifiedNewFileError)
+	assert.False(t, applied)
+	assert.Empty(t, rt.currentOutbox())
+	assert.Zero(t, uploads.Load())
 }

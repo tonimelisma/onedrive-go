@@ -97,6 +97,9 @@ func TestEnumStrings_NonEmpty(t *testing.T) {
 func TestActionTypeDirection(t *testing.T) {
 	t.Parallel()
 
+	// An action type no case lists has no direction, never a guessed one.
+	const unlistedAction = ActionCleanup + 1
+
 	tests := []struct {
 		action actionType
 		want   direction
@@ -111,6 +114,7 @@ func TestActionTypeDirection(t *testing.T) {
 		{action: ActionConflictCopy, want: directionDownload},
 		{action: ActionBaselineUpdate, want: directionDownload},
 		{action: ActionCleanup, want: directionDownload},
+		{action: unlistedAction, want: ""},
 	}
 
 	for _, tt := range tests {
