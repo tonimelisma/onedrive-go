@@ -17,15 +17,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-// tmCreatingUploader adds UploadCreating and DeleteItemIfMatch to
-// tmMockUploader, recording what a create did.
+// tmCreatingUploader adds UploadCreating and RemoveEmptyItem to
+// tmMockUploader, recording what a create did and which items the transfer
+// manager asked to have removed while empty.
 type tmCreatingUploader struct {
 	tmMockUploader
-	created        *graph.Item
-	contentErr     error
-	contentResult  *graph.Item
-	events         []string
-	deletedIfMatch []string
+	created       *graph.Item
+	contentErr    error
+	contentResult *graph.Item
+	events        []string
+	removedEmpty  []string
 }
 
 func (m *tmCreatingUploader) UploadCreating(
@@ -46,10 +47,14 @@ func (m *tmCreatingUploader) UploadCreating(
 	return m.contentResult, nil
 }
 
-func (m *tmCreatingUploader) DeleteItemIfMatch(_ context.Context, _ driveid.ID, itemID, ifMatch string) error {
-	m.deletedIfMatch = append(m.deletedIfMatch, itemID+"@"+ifMatch)
-	return nil
+// RemoveEmptyItem records the request only: the read and the conditional
+// delete behind it belong to the Graph client and are tested there.
+func (m *tmCreatingUploader) RemoveEmptyItem(_ context.Context, _ driveid.ID, itemID string) (bool, error) {
+	m.removedEmpty = append(m.removedEmpty, itemID)
+	return true, nil
 }
+
+var _ PlaceholderRemover = (*tmCreatingUploader)(nil)
 
 func writeCreateTestFile(t *testing.T, data []byte) string {
 	t.Helper()
@@ -106,27 +111,29 @@ func TestUploadFile_UncertainFinalFragmentThatDidNotLandRemovesThePlaceholder(t 
 	})
 	require.Error(t, err)
 	assert.Equal(t, []string{"new-item"}, lookedUp)
-	assert.Equal(t, []string{`new-item@"c,1"`}, ul.deletedIfMatch)
+	assert.Equal(t, []string{"new-item"}, ul.removedEmpty)
 }
 
 // Validates: R-5.6.15
 //
 // Opening and canceling the session moves the empty item's eTag (live, e2e
 // TestE2E_SyncWatch_FileModification). The delete conditional on the
-// creation eTag then always failed with 412 and left the placeholder; it is
-// conditional on the eTag the lookup just read, and only while still empty.
+// creation eTag then always failed with 412 and left the placeholder. The
+// removal is asked for by item ID, so the eTag it is conditional on is read
+// when it deletes, and it is asked for only while the lookup shows the item
+// still empty.
 func TestUploadFile_UncertainFinalFragmentRemovesThePlaceholderByItsCurrentETag(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
 		name    string
 		current *graph.Item
-		deleted []string
+		removed []string
 	}{
 		{
 			name:    "still empty under a moved eTag",
 			current: &graph.Item{ID: "new-item", ETag: `"c,3"`, QuickXorHash: tmHashBytes(nil)},
-			deleted: []string{`new-item@"c,3"`},
+			removed: []string{"new-item"},
 		},
 		{
 			name:    "someone else's content landed",
@@ -150,9 +157,45 @@ func TestUploadFile_UncertainFinalFragmentRemovesThePlaceholderByItsCurrentETag(
 			_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent", "new.txt",
 				writeCreateTestFile(t, []byte("content")), UploadOpts{OnCreated: func(string, string) error { return nil }})
 			require.Error(t, err)
-			assert.Equal(t, tc.deleted, ul.deletedIfMatch)
+			assert.Equal(t, tc.removed, ul.removedEmpty)
 		})
 	}
+}
+
+// Validates: R-5.6.15
+//
+// A large new file goes through a recorded session, which creates the empty
+// item itself. When recording that item fails, nothing may be sent: the
+// session is canceled and the item is handed to the bounded removal by its
+// ID, which reads its current eTag itself.
+func TestSessionUpload_FailedCreatedHookRemovesTheEmptyItem(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	localPath, _, _ := sessionTestFile(t, dir)
+
+	const sessionURL = graph.UploadURL("https://upload.example.com/new")
+	errRecord := errors.New("state database is read-only")
+	ul := &tmCreatingUploader{tmMockUploader: tmMockUploader{
+		createUploadSessionFn: func(context.Context, driveid.ID, string, string, int64, time.Time) (*graph.UploadSession, error) {
+			return &graph.UploadSession{UploadURL: sessionURL, ItemID: "new-item", CreatedETag: `"c,1"`}, nil
+		},
+		uploadFromSessionFn: func(context.Context, *graph.UploadSession, io.ReaderAt, int64, graph.ProgressFunc) (*graph.Item, error) {
+			return nil, errors.New("no content may be sent for an item that was not recorded")
+		},
+		getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+			return nil, errors.New("the removal reads the item itself, the transfer manager does not")
+		},
+	}}
+	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
+
+	_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent", filepath.Base(localPath), localPath, UploadOpts{
+		OnCreated: func(string, string) error { return errRecord },
+	})
+	require.ErrorIs(t, err, errRecord)
+	assert.Equal(t, []string{"new-item"}, ul.removedEmpty)
+	assert.Equal(t, []graph.UploadURL{sessionURL}, ul.canceledSessions)
 }
 
 // Validates: R-5.6.15

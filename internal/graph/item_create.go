@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -142,7 +143,7 @@ func (c *Client) Upload(
 // was created with, so a writer that replaced it in between gets a 412
 // instead of being overwritten. onCreated (may be nil) runs between the two
 // steps. When the content step fails before its final fragment the empty
-// item is removed again (conditionally), so a retry does not meet its own
+// item is removed again (RemoveEmptyItem), so a retry does not meet its own
 // placeholder as a conflicting file; failures after the create are
 // *CreatedItemError. content must be an io.ReaderAt so that retries can
 // re-read from arbitrary offsets. progress may be nil.
@@ -201,39 +202,85 @@ func (c *Client) CreateUploadSession(
 	return session, nil
 }
 
+// placeholderCleanupTimeout bounds the whole removal of the empty item a
+// failed upload created: every read and delete of RemoveEmptyItem together,
+// on a context detached from the upload's.
+const placeholderCleanupTimeout = 10 * time.Second
+
+// placeholderCleanupAttempts is how many times RemoveEmptyItem reads the item
+// and tries its conditional delete before it leaves the item in place.
+const placeholderCleanupAttempts = 3
+
 // removeCreatedPlaceholder deletes the empty item a failed upload created,
 // unless the failure was on the final fragment (the content may have
-// landed; the caller looks before deciding). It reads the item again and
-// deletes it only while it is still empty, conditional on the eTag just
-// read: an upload session opened on the empty item moves its eTag although
-// no content landed (live, e2e TestE2E_SyncWatch_FileModification), so a
-// delete conditional on the creation eTag failed with 412 and left the
-// placeholder. Best-effort: a leftover placeholder is an ordinary remote file
-// the next pass sees.
+// landed; the caller looks before deciding). The removal itself is
+// RemoveEmptyItem, on a context detached from the upload's (the upload may be
+// failing because that was canceled) and bounded by
+// placeholderCleanupTimeout. Best-effort: a leftover placeholder is an
+// ordinary remote file the next pass sees.
 func (c *Client) removeCreatedPlaceholder(ctx context.Context, driveID driveid.ID, created *Item, cause error) {
 	if IsFinalFragmentUncertain(cause) || created == nil || created.ID == "" {
 		return
 	}
 
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), placeholderCleanupTimeout)
 	defer cancel()
 
-	current, err := c.GetItem(cleanupCtx, driveID, created.ID)
+	removed, err := c.RemoveEmptyItem(cleanupCtx, driveID, created.ID)
 	if err != nil {
-		c.logger.Debug("failed to read the empty file a failed upload created",
-			slog.String("item_id", created.ID),
-			slog.Any("error", err),
-		)
-		return
-	}
-	if current.Size != 0 || current.ETag == "" {
-		return
-	}
-
-	if err := c.DeleteItemIfMatch(cleanupCtx, driveID, created.ID, current.ETag); err != nil {
 		c.logger.Debug("failed to remove the empty file a failed upload created",
 			slog.String("item_id", created.ID),
 			slog.Any("error", err),
 		)
+		return
 	}
+	if !removed {
+		c.logger.Debug("left the file a failed upload created in place: it holds content, or has no eTag to delete it by",
+			slog.String("item_id", created.ID),
+		)
+	}
+}
+
+// RemoveEmptyItem deletes itemID while it is still an empty file. Each attempt
+// reads the item and deletes it conditional on the eTag just read; a 412 is
+// answered by reading again, at most placeholderCleanupAttempts times.
+// removed is true when the item is gone (deleted here, or already 404). An
+// item that holds content, or that reads back without an eTag, is never
+// deleted: removed is false and err is nil.
+//
+// One read and one delete are not enough. An upload session opened on the
+// empty item moves its eTag although no content landed (live, e2e
+// TestE2E_SyncWatch_FileModification), so the creation eTag never matches;
+// and the eTag can still move after the read, which the delete then answers
+// with 412 and which left the empty file behind (live, e2e
+// TestE2E_SyncWatch_PauseResume). The caller bounds the whole call through
+// ctx.
+func (c *Client) RemoveEmptyItem(ctx context.Context, driveID driveid.ID, itemID string) (removed bool, err error) {
+	var refused error
+
+	for range placeholderCleanupAttempts {
+		current, readErr := c.GetItem(ctx, driveID, itemID)
+		if errors.Is(readErr, ErrNotFound) {
+			return true, nil
+		}
+		if readErr != nil {
+			return false, fmt.Errorf("graph: reading empty item %s: %w", itemID, readErr)
+		}
+		if current.Size != 0 || current.ETag == "" {
+			return false, nil
+		}
+
+		deleteErr := c.DeleteItemIfMatch(ctx, driveID, itemID, current.ETag)
+		if deleteErr == nil || errors.Is(deleteErr, ErrNotFound) {
+			return true, nil
+		}
+		if !errors.Is(deleteErr, ErrPreconditionFailed) {
+			return false, fmt.Errorf("graph: deleting empty item %s: %w", itemID, deleteErr)
+		}
+
+		// The eTag moved between the read and the delete: read again.
+		refused = deleteErr
+	}
+
+	return false, fmt.Errorf("graph: removing empty item %s: %w", itemID, refused)
 }
