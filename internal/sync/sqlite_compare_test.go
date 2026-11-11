@@ -10,7 +10,7 @@ import (
 func comparisonKindsByPath(rows []sQLiteComparisonRow) map[string]string {
 	out := make(map[string]string, len(rows))
 	for i := range rows {
-		out[rows[i].Path] = rows[i].ComparisonKind
+		out[rows[i].Path] = rows[i].ComparisonKind.String()
 	}
 
 	return out
@@ -19,7 +19,7 @@ func comparisonKindsByPath(rows []sQLiteComparisonRow) map[string]string {
 func reconciliationKindsByPath(rows []sQLiteReconciliationRow) map[string]string {
 	out := make(map[string]string, len(rows))
 	for i := range rows {
-		out[rows[i].Path] = rows[i].ReconciliationKind
+		out[rows[i].Path] = rows[i].ReconciliationKind.String()
 	}
 
 	return out
@@ -679,4 +679,43 @@ func TestSQLSameLocalEntry_EveryAliasFollowsThePattern(t *testing.T) {
 	assert.Equal(t, sqlSameLocalEntryL, pattern("l"))
 	assert.Equal(t, sqlSameLocalEntryLs, pattern("ls"))
 	assert.Equal(t, sqlSameLocalEntrySrc, pattern("src"))
+}
+
+// Validates: R-2.2.1
+//
+// The diverged cell with a local change, no remote change and equal content:
+// the baseline recorded different local and remote hashes (an accepted server
+// transform keeps the served bytes locally and OneDrive's reported hash
+// remotely), and the local file now holds the content OneDrive reports. Local
+// changed against the baseline, OneDrive did not, so the row is an upload of
+// bytes OneDrive already holds: redundant, never a loss. Pinned as it is.
+func TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsAnUpload(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	_, err := store.rawDB().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
+		VALUES ('item-a', 'a.txt', 'file', 'served', 'reported', 4, 8, 1, 1, 'etag-a')`)
+	require.NoError(t, err)
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO local_state (path, item_type, hash, size, mtime)
+		VALUES ('a.txt', 'file', 'reported', 8, 2)`)
+	require.NoError(t, err)
+	_, err = store.rawDB().ExecContext(ctx, `
+		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
+		VALUES ('item-a', 'a.txt', 'file', 'reported', 8, 1, 'etag-a')`)
+	require.NoError(t, err)
+
+	comparisonRows, err := store.QueryComparisonState(ctx)
+	require.NoError(t, err)
+	require.Len(t, comparisonRows, 1)
+	assert.Equal(t, comparisonDiverged, comparisonRows[0].ComparisonKind)
+	assert.True(t, comparisonRows[0].LocalChanged)
+	assert.False(t, comparisonRows[0].RemoteChanged)
+	assert.True(t, comparisonRows[0].CurrentEqual)
+
+	reconciliationRows, err := store.QueryReconciliationState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "upload", reconciliationKindsByPath(reconciliationRows)["a.txt"])
 }

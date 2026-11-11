@@ -215,10 +215,9 @@ func (a actionType) String() string {
 	}
 }
 
-// Direction returns the coarse sync direction that owns this action type for
-// persistence and display. Retry/trial rebuild logic must branch on ActionType
-// directly, but retry_work still keeps Direction for coarse summaries and
-// query filtering.
+// Direction returns the coarse sync direction of an action type. Logic that
+// decides anything must branch on the action type itself. An action type no
+// case lists has no direction (the zero value), never a guessed one.
 func (a actionType) Direction() direction {
 	switch a {
 	case ActionUpload:
@@ -229,7 +228,7 @@ func (a actionType) Direction() direction {
 		ActionLocalMove, ActionRemoteMove, ActionBaselineUpdate, ActionCleanup:
 		return directionDownload
 	default:
-		return directionDownload
+		return ""
 	}
 }
 

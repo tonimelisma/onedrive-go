@@ -1,10 +1,10 @@
 # Sync Planning
 
-GOVERNS: internal/sync/planner.go, internal/sync/planner_dependencies.go, internal/sync/planner_actions.go, internal/sync/planner_move_composition.go, internal/sync/planner_delete_safety.go, internal/sync/planner_truth_overlay.go
+GOVERNS: internal/sync/planner.go, internal/sync/planner_dependencies.go, internal/sync/planner_actions.go, internal/sync/planner_kinds.go, internal/sync/planner_move_composition.go, internal/sync/planner_delete_safety.go, internal/sync/planner_truth_overlay.go
 
 LAYER: 2
 
-Implements: R-2.1.3 [verified], R-2.1.7 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.4.2 [verified]
+Implements: R-2.1.3 [verified], R-2.1.7 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.2.16 [verified], R-6.4.2 [verified]
 
 ## Overview
 
@@ -65,7 +65,7 @@ intent; multisync receives only that child work intent.
   SQLite reconciliation rows, plus engine-owned sync mode and runtime policy.
 - Allowed Side Effects: none
 - Mutable Runtime Owner: None. Planning is deterministic value transformation over one input set and owns no long-lived mutable runtime state.
-- Error Boundary: planner errors stop at invalid or unsupported planning states. Transport, filesystem, store, and execution failures stay outside the planner boundary.
+- Error Boundary: planner errors stop at invalid or unsupported planning states (a row outside the decision table, a folder planned as a content transfer), and each fails the whole plan rather than dropping its path. Transport, filesystem, store, and execution failures stay outside the planner boundary.
 
 ## Verified By
 
@@ -90,6 +90,7 @@ intent; multisync receives only that child work intent.
 | A dependency cycle drops only its members and their dependents; the rest of the plan runs (R-2.8.11). | `TestIsolateDependencyCycles_KeepsUnrelatedWork` |
 | Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/planner_actions_test.go`, `internal/sync/planner_move_composition_test.go` (`TestBuildDependencies_NestedMoveEdges`, `TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove`), `internal/sync/planner_delete_safety_test.go` (`TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`) |
 | Every single-path combination of baseline, local and remote state (absent, file A/B/C, folder), and the move combinations of one synced file, has its plan checked in as `testdata/reconcile/matrix.golden` (refresh with `-update`); with `ONEDRIVE_GO_RECONCILE_CONVERGE=1` each cell is also run to convergence on a pure model and must end at the reference planner's content set. A planner-level model test applies random edits to both sides of a pure model, plans it through the real comparison SQL and planner, applies the plan without an executor (items addressed by ID, a create onto a taken name failing as a 409), and must converge with every written content kept (D-093). | `TestReconcileMatrix_Golden`, `TestPlannerModel_RandomTriplesConverge` |
+| The decision table's kinds are typed enums whose names the SQL literals match exactly, and a name the enum lacks fails the row scan naming the path. Every reachable state is classified (stage 1 over all 131,072 comparison inputs, stage 2 over 442,368 reconciliation inputs); a row outside the table, or a folder planned as a content transfer, fails the plan before the unavailable-truth suppression can plan it as nothing, naming the path; mode admission admits no unlisted action (R-6.2.16). A local edit equal to OneDrive's unchanged content is an upload. | `TestPlannerKindCases_LiteralsAreExactlyTheKinds`, `TestPlannerKinds_ParseRoundTripsEveryMemberAndRefusesOthers`, `TestQueryPlannerRows_UnknownKindFailsTheScanNamingThePath`, `TestComparisonKindCase_ClassifiesEveryReachableState`, `TestReconciliationKindCase_ReconcilesEveryClassifiedComparison`, `TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable`, `TestPlanCurrentState_UnclassifiedComparisonRowFailsThePlan`, `TestPlanCurrentState_FolderTransferFailsThePlan`, `TestActionAllowedInMode_AnUnlistedActionIsNeverAdmitted`, `TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsAnUpload`, `TestRunOnce_UnclassifiedRowFailsThePassNamingThePath` |
 | Planner decisions stay row-driven and action-shaped across conflict and folder-parent preservation cases. | `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_DownloadOnlyKeepsParentDeleteWhenEditedChildUploadDeferred`, `internal/sync/store_planner_visible_test.go` |
 
 ## Inputs
@@ -266,6 +267,71 @@ ID. A folder deleted locally while OneDrive replaced it is re-created locally
 (`folder_create_local`) rather than deleted online: the new item is not the
 folder the user deleted, and a delete would remove it with its content.
 
+## Decision Table Kinds
+
+The SQL decision table has two stages, one `CASE` expression each in
+`sqlite_compare.go`: `sqlComparisonKindCase` gives every path a comparison kind
+(which of baseline, local and remote hold it, and how the sides relate to the
+baseline), and `sqlReconciliationKindCase` turns that kind and the path's flags
+into a reconciliation kind, the decision `buildActionsForReconciliation` maps
+to actions. Both vocabularies are Go enums in `sqlite_compare_kinds.go`
+(`comparisonKind`, `reconciliationKind`), the source of truth. They sit in the
+store layer, next to the SQL that carries their names, because the row scans
+parse them; `planner_kinds.go` holds the planner's check of them and its error.
+The SQL carries the names as literals, and
+`TestPlannerKindCases_LiteralsAreExactlyTheKinds` holds literals and enums to
+the same set. The row scans parse each kind and
+fail on a name the enum lacks, naming the path: the SQL and the enum drifted
+apart. Every `switch` over a kind lists every member (the `exhaustive` linter),
+so Go cannot forget a new kind. The reconciliation enum owns its names; some
+equal action-type names, which are a persisted wire format
+(`retry_work.action_type`), by choice rather than by definition.
+
+Every genuine "nothing to do" is an explicit `noop` rule, and both `ELSE`
+branches return `unclassified`, the zero value of both enums: a row no rule
+covers. No reachable state gets there today.
+`TestComparisonKindCase_ClassifiesEveryReachableState` evaluates the comparison
+stage over all 131,072 combinations of its 17 inputs: only the combination with
+no side present is unclassified, and no path can have it (the rows are the
+union of the three tables' paths).
+`TestReconciliationKindCase_ReconcilesEveryClassifiedComparison` evaluates the
+reconciliation stage over 442,368 combinations of its inputs (18 comparison
+kinds, 3 item types, 4 local and 4 remote item types, 9 flags): every
+classified comparison is reconciled except a diverged row that changed on
+neither side, which the comparison stage never produces. Both stages are
+exhaustive tests (`skipInShort`: seconds without the race detector, minutes
+with it), run by the full profiles and nightly CI. The guard is for the
+next change to the table, a comparison kind added without a reconciliation
+rule or a flag expression that yields NULL; the old fallback planned such a
+row as `noop`, so its path silently stopped syncing. Two rules the comparison
+stage made unreachable are gone: a diverged row with equal content after a
+remote change, a type change included, is `equal_again`. One reachable cell is
+worth knowing: a local edit that makes a file equal to OneDrive's unchanged
+content (the baseline recorded other local bytes, as after an accepted server
+transform) is an upload of bytes OneDrive already holds, redundant but never a
+loss (`TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsAnUpload`).
+
+An unclassified row fails the plan (R-6.2.16). `PlanCurrentState` checks every row
+before it plans any (`validatePlannerKinds`), ahead of the unavailable-truth
+suppression that would otherwise return early for the path, and returns
+`unclassifiedPlanError` (`errUnclassifiedPlan`): the first unclassified path,
+its two kinds, and how many other rows are unclassified. When the engine loads
+the rows (`queryPlannerRowsTx`, `sync-engine.md`) and one is unclassified, it
+reads that row's decision inputs in the same read transaction
+(`sqlQueryPlannerDecisionInputs`: the comparison stage's 17 inputs, the
+reconciliation stage's three item types and six further flags, a NULL shown as
+`NULL`), so the error says which inputs no rule matched; a classified plan
+never runs that query. A folder planned as a content transfer
+(`errFolderTransferPlanned`) fails the plan the same way. Either error stops
+that drive's sync pass before anything executes: one-shot `sync` returns it,
+and in watch mode the replan ends with it, which ends the drive's runner; the
+control plane reports it once and restarts the runner after its backoff
+(R-2.8.11). The drive stays stopped until the state or the table changes.
+Skipping the path and syncing the rest was the alternative, rejected: it hides
+the bug behind a path that never syncs, while the error carries what a fix to
+the table needs. Mode admission (`actionAllowedInMode`) likewise admits no
+action type or folder create side it does not list.
+
 ## Folder And Move Semantics
 
 Folder decisions are symmetric with file decisions. When Graph delta reports a
@@ -360,8 +426,10 @@ cannot be proven equal (no hash on one side) is an ordinary edit. Before, every
 identity change set `local_changed`: a folder removed and restored planned an
 upload of a directory that failed every pass, and a device renumbered after a
 reboot re-uploaded every file. `buildActionsForReconciliation` refuses a folder
-upload or download as a comparison bug (logged, row dropped) so one bad row
-cannot wedge the plan.
+upload or download as a comparison bug (`errFolderTransferPlanned`), which
+fails the plan like a row outside the decision table (see Decision Table
+Kinds); it used to be logged and the row dropped, a path that silently stopped
+syncing.
 
 A type change (file <-> folder) at one path is a replacement (R-2.17.4):
 `replace_remote` emits `ActionRemoteDelete` of the old item and then a remote
