@@ -4,30 +4,32 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 const sqlSelectObservationIssueCols = `path, issue_type, scope_key`
 
+// ReconcileObservationFindings makes the stored issues of the batch's managed
+// types match the batch, in one transaction (see
+// ReconcileObservationFindingsReportingChange).
 func (s *SyncStore) ReconcileObservationFindings(
 	ctx context.Context,
 	batch *ObservationFindingsBatch,
-	now time.Time,
 ) error {
-	_, err := s.ReconcileObservationFindingsReportingChange(ctx, batch, now)
+	_, err := s.ReconcileObservationFindingsReportingChange(ctx, batch)
 	return err
 }
 
 // ReconcileObservationFindingsReportingChange reconciles the batch and reports
 // whether the persisted issue set is different afterwards, so a watch replan
 // is scheduled for a finding that appeared or cleared and not for the
-// re-report every full scan makes of a persistent one (R-2.8.21).
+// re-report every full scan makes of a persistent one (R-2.8.21). A batch
+// that reports an issue of a type it does not manage is refused before
+// anything is written (buildObservationReconcilePlan).
 func (s *SyncStore) ReconcileObservationFindingsReportingChange(
 	ctx context.Context,
 	batch *ObservationFindingsBatch,
-	_ time.Time,
 ) (changed bool, err error) {
 	if batch == nil {
 		return false, nil
@@ -45,7 +47,10 @@ func (s *SyncStore) ReconcileObservationFindingsReportingChange(
 	if err != nil {
 		return false, err
 	}
-	plan := buildObservationReconcilePlan(batch, state)
+	plan, err := buildObservationReconcilePlan(batch, state)
+	if err != nil {
+		return false, err
+	}
 
 	if applyErr := s.applyObservationFindingsReconcilePlanTx(ctx, tx, plan); applyErr != nil {
 		return false, applyErr

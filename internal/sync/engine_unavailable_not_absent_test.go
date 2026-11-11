@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -366,6 +365,35 @@ func TestRunOnce_ReplacedSyncedFileSyncsAgainOnceRestored(t *testing.T) {
 	requireNoIssueOfType(t, eng, "a.txt", issueLocalUnsyncableReplacement)
 }
 
+// A file sync set aside while removing it, left in the sync folder because the
+// run was interrupted, is reported by every sync that finds it. Once the user
+// deals with it (renames it back or deletes it), the next sync's full scan no
+// longer finds it and the report clears.
+//
+// Validates: R-6.4.9
+func TestRunOnce_InterruptedRemovalReportClearsOnceTheLeftoverIsGone(t *testing.T) {
+	t.Parallel()
+
+	const leftoverPath = "Dir/.onedrive-go.0123456789abcdef.detach"
+	remote := seedUnavailableRemote(t)
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+	leftover := filepath.Join(syncRoot, filepath.FromSlash(leftoverPath))
+	require.NoError(t, os.WriteFile(leftover, []byte("half-removed\n"), 0o600))
+
+	runScenarioPass(t, eng)
+	assert.Equal(t, []string{leftoverPath}, interruptedRemovalStatusPaths(t, eng.baseline))
+	runScenarioPass(t, eng)
+	assert.Equal(t, []string{leftoverPath}, interruptedRemovalStatusPaths(t, eng.baseline),
+		"a sync that still finds the leftover keeps reporting it")
+
+	require.NoError(t, os.Remove(leftover))
+	runScenarioPass(t, eng)
+
+	requireNoIssueOfType(t, eng, leftoverPath, issueLocalInterruptedRemoval)
+	assert.Empty(t, interruptedRemovalStatusPaths(t, eng.baseline), "status no longer lists it")
+}
+
 // A folder a scan found to be the mount point of another filesystem is a read
 // boundary while it is one. When the next scan finds it an ordinary folder on
 // the sync folder's filesystem again, the boundary clears and changes under
@@ -380,7 +408,7 @@ func TestRunOnce_MountBoundaryClearsWhenTheFolderIsPlainAgain(t *testing.T) {
 	runScenarioPass(t, eng)
 
 	batch := localObservationFindingsBatchFromSkippedItems(eng.driveID, []skippedItem{mountBoundarySkippedItem("Dir")})
-	require.NoError(t, eng.baseline.ReconcileObservationFindings(t.Context(), &batch, time.Now()))
+	require.NoError(t, eng.baseline.ReconcileObservationFindings(t.Context(), &batch))
 
 	require.NoError(t, os.Remove(filepath.Join(syncRoot, "Dir", "two.txt")))
 	report := runScenarioPass(t, eng)

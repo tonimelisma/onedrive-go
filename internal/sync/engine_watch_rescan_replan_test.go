@@ -2,6 +2,8 @@ package sync
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -129,4 +131,39 @@ func TestWatchRuntime_SkippedFindingsReplanOnlyWhenTheyChange(t *testing.T) {
 	_, err = rt.handleWatchSkippedSignal(ctx, nil, true)
 	require.NoError(t, err)
 	assert.NotNil(t, rt.resources.dirtyBuf.FlushImmediate(), "a finding that cleared replans")
+}
+
+// While watching is unavailable, the periodic full scan stands in for both
+// the watcher and the safety scan, so it hands the engine its finding set the
+// way a safety scan does, the empty set included. It used to log the set
+// only: a finding that appeared then was never recorded, and one that went
+// away was never cleared.
+//
+// Validates: R-2.8.22, R-6.4.9
+func TestWatchRuntime_FallbackScanRecordsAndClearsFindings(t *testing.T) {
+	t.Parallel()
+
+	const leftoverName = ".onedrive-go.0123456789abcdef.detach"
+	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	ctx := t.Context()
+	obs := newLocalObserver(NewBaselineForTest(nil), eng.logger, 1)
+	findings := make(chan []skippedItem, 1)
+	obs.SetSkippedChannel(findings)
+	tree := mustOpenSyncTree(t, syncRoot)
+	leftover := filepath.Join(syncRoot, leftoverName)
+	require.NoError(t, os.WriteFile(leftover, []byte("half-removed\n"), 0o600))
+	scanFailing := false
+
+	require.True(t, rt.runFallbackScan(ctx, obs, tree, nil, &scanFailing))
+	_, err := rt.handleWatchSkippedSignal(ctx, forwardedFindings(t, findings), true)
+	require.NoError(t, err)
+	assert.Equal(t, []string{leftoverName}, interruptedRemovalStatusPaths(t, eng.baseline))
+
+	require.NoError(t, os.Remove(leftover))
+	require.True(t, rt.runFallbackScan(ctx, obs, tree, nil, &scanFailing))
+	_, err = rt.handleWatchSkippedSignal(ctx, forwardedFindings(t, findings), true)
+	require.NoError(t, err)
+	assert.Empty(t, interruptedRemovalStatusPaths(t, eng.baseline), "the scan that no longer finds it clears it")
 }

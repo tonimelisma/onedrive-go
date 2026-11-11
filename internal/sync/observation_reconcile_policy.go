@@ -1,6 +1,9 @@
 package sync
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 type observationReconcileStoreState struct {
 	issues []ObservationIssueRow
@@ -21,10 +24,18 @@ type managedObservationIssueKey struct {
 	issueType IssueType
 }
 
+// buildObservationReconcilePlan computes the exact upserts and deletes that
+// make the stored issues of the batch's managed types match the batch. It
+// refuses a batch that reports an issue of a type it does not manage (see
+// requireManagedIssueTypes).
 func buildObservationReconcilePlan(
 	batch *ObservationFindingsBatch,
 	state observationReconcileStoreState,
-) observationReconcilePlan {
+) (observationReconcilePlan, error) {
+	if err := requireManagedIssueTypes(batch); err != nil {
+		return observationReconcilePlan{}, err
+	}
+
 	desiredManagedIssues := desiredManagedObservationIssues(batch)
 	currentManagedIssues := currentManagedObservationIssues(batch, state.issues)
 	upserts := observationIssueUpserts(batch)
@@ -34,7 +45,31 @@ func buildObservationReconcilePlan(
 		issueUpserts:  upserts,
 		issueDeletes:  deletes,
 		changesIssues: len(deletes) > 0 || observationIssueUpsertsChangeRows(upserts, state.issues),
+	}, nil
+}
+
+// requireManagedIssueTypes refuses a batch that reports an issue of a type it
+// does not manage. A batch deletes only stored rows of its managed types, so
+// such a row would outlive every later batch of the same kind that stops
+// reporting it: the local scan once reported the leftover of an interrupted
+// removal without managing its type, and the report outlived the file for
+// good. The error names the issue's type and path, so the batch constructor
+// at fault is found from the message.
+func requireManagedIssueTypes(batch *ObservationFindingsBatch) error {
+	if batch == nil || len(batch.Issues) == 0 {
+		return nil
 	}
+
+	managed := managedObservationTypeSet(batch)
+	for i := range batch.Issues {
+		issue := &batch.Issues[i]
+		if _, ok := managed[issue.IssueType]; !ok {
+			return fmt.Errorf("sync: observation findings batch reports issue type %q at %s without managing that type",
+				issue.IssueType, issue.Path)
+		}
+	}
+
+	return nil
 }
 
 // observationIssueUpsertsChangeRows reports whether any upsert differs from
@@ -96,8 +131,8 @@ func observationIssueDeletesNotInDesired(
 	return deletes
 }
 
-// currentManagedObservationIssues filters raw durable rows down to the exact
-// managed issue set this batch is allowed to replace.
+// currentManagedObservationIssues filters raw durable rows down to the stored
+// issues of the batch's managed types: the set this batch replaces.
 func currentManagedObservationIssues(
 	batch *ObservationFindingsBatch,
 	currentIssues []ObservationIssueRow,
@@ -106,22 +141,13 @@ func currentManagedObservationIssues(
 		return nil
 	}
 
-	managedPathSet := managedObservationPathSet(batch)
 	managedIssueTypes := managedObservationTypeSet(batch)
 
 	currentManagedIssues := make(map[managedObservationIssueKey]ObservationIssueRow)
 	for i := range currentIssues {
 		current := currentIssues[i]
-		if current.IssueType == "" {
-			continue
-		}
 		if _, ok := managedIssueTypes[current.IssueType]; !ok {
 			continue
-		}
-		if len(managedPathSet) > 0 {
-			if _, ok := managedPathSet[current.Path]; !ok {
-				continue
-			}
 		}
 		currentManagedIssues[managedObservationIssueKey{
 			path:      current.Path,
@@ -133,7 +159,9 @@ func currentManagedObservationIssues(
 }
 
 // desiredManagedObservationIssues is the exact managed set the batch proved
-// should still exist after reconciliation.
+// should still exist after reconciliation. Every issue is of a managed type
+// (requireManagedIssueTypes ran first); one without a path is refused when
+// the store writes it, which fails the whole reconcile.
 func desiredManagedObservationIssues(
 	batch *ObservationFindingsBatch,
 ) map[managedObservationIssueKey]ObservationIssue {
@@ -144,7 +172,7 @@ func desiredManagedObservationIssues(
 	desired := make(map[managedObservationIssueKey]ObservationIssue, len(batch.Issues))
 	for i := range batch.Issues {
 		issue := batch.Issues[i]
-		if issue.Path == "" || issue.IssueType == "" {
+		if issue.Path == "" {
 			continue
 		}
 		desired[managedObservationIssueKey{
@@ -170,26 +198,4 @@ func managedObservationTypeSet(batch *ObservationFindingsBatch) map[IssueType]st
 	}
 
 	return managed
-}
-
-func managedObservationPathSet(batch *ObservationFindingsBatch) map[string]struct{} {
-	if batch == nil || len(batch.ManagedPaths) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]struct{}, len(batch.ManagedPaths))
-	paths := make(map[string]struct{}, len(batch.ManagedPaths))
-	for i := range batch.ManagedPaths {
-		path := batch.ManagedPaths[i]
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		paths[path] = struct{}{}
-	}
-
-	return paths
 }

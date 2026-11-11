@@ -1344,9 +1344,9 @@ func (o *localObserver) reportWatchAddFailure(msg, dbRelPath string, addErr erro
 
 // runSafetyScan performs a full filesystem scan as a safety net, sending any
 // detected changes to the events channel. This catches events that fsnotify
-// may have missed. Skipped items are logged at DEBUG — the engine's primary
-// scan handles observation-issue persistence. It reports whether the scan
-// ran.
+// may have missed. Its finding set goes to the engine (TrySendScanFindings),
+// which records new findings and clears the ones this scan no longer
+// reports. It reports whether the scan ran.
 //
 // While the runtime has not taken the observations already sent (its loop
 // is inside a long replan), the scan's snapshot would only be dropped, and
@@ -1400,20 +1400,10 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 		}
 	}
 
-	if len(result.Skipped) > 0 {
-		if o.skippedCh != nil {
-			// Forward SkippedItems to the engine for observation-issue persistence.
-			select {
-			case o.skippedCh <- result.Skipped:
-			default:
-				o.logger.Debug("skipped items channel full, will catch on next scan",
-					slog.Int("count", len(result.Skipped)))
-			}
-		} else {
-			o.logger.Debug("safety scan: skipped items",
-				slog.Int("count", len(result.Skipped)))
-		}
-	}
+	// The empty set too: forwarding only a non-empty set kept the last
+	// finding (a leftover the user deleted, a name since fixed) until the
+	// next restart.
+	o.TrySendScanFindings(result.Skipped)
 
 	// Clear directory name cache, collision peers, and recent deletes —
 	// safety scan rebuilds state from scratch, so any cached state may be stale.

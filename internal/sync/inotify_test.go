@@ -32,7 +32,7 @@ func TestCheckInotifyCapacity_NoPanic(t *testing.T) {
 	checkInotifyCapacity(100, slog.Default())
 }
 
-// Validates: R-2.8.12
+// Validates: R-2.8.22
 func TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -63,7 +63,7 @@ func TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable(t *testing.T) {
 	}
 }
 
-// Validates: R-2.8.12
+// Validates: R-2.8.22
 func TestClassifyWatcherCreateError_ResourceLimits(t *testing.T) {
 	t.Parallel()
 
