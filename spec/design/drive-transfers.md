@@ -316,6 +316,18 @@ When recording the item a persisted session created fails (`OnCreated`
 returns an error), the session is canceled and the item removed the same way,
 before any content is sent
 (`TestSessionUpload_FailedCreatedHookRemovesTheEmptyItem`).
+A large create makes its item and opens its session in one Graph call
+(`CreateUploadSession`). When the session request fails after the item
+exists, Graph names the item in a `graph.CreatedItemError` and has already
+tried to remove it; `recordItemOfFailedSession` still runs `OnCreated` for
+that item, once, because the removal is best effort and an empty file nobody
+recorded reads on the next pass as someone else's (R-5.6.15). Before, the
+hook ran only once a session was open, so the caller cleared its intent and a
+failed removal left a stranger's empty file (live, e2e
+`TestE2E_SyncWatch_PauseResume`). The item is not adopted for a retry by ID,
+since it may be gone; a hook failure there is Debug, and the session's error
+is what the caller sees
+(`TestSessionUpload_FailedSessionRecordsTheItemTheCreateMade`).
 CLI `put` onto an existing name overwrites that file by ID with If-Match on
 the eTag just listed, and refuses an existing folder (R-1.3.8,
 `TestPutFile_ExistingFileIsOverwrittenByIDConditionally`).

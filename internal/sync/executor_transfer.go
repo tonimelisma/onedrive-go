@@ -482,8 +482,9 @@ type pendingCreateStore interface {
 
 // uploadNewFile creates action's file on OneDrive, with the pending-create
 // records around the request (R-5.6.15): the intent before it, the item
-// once the create hook has seen it, and the intent cleared again when the
-// attempt created nothing. A 409 is resolved rather than retried as is.
+// once the create hook has seen it (whether the attempt then succeeded or
+// failed), and the intent cleared again when an attempt that was not
+// canceled created nothing. A 409 is resolved rather than retried as is.
 func (e *executor) uploadNewFile(
 	ctx context.Context, action *Action, driveID driveid.ID, parentID, source, localPath string,
 ) (*driveops.UploadResult, error) {
@@ -534,6 +535,14 @@ func (e *executor) recordPendingCreateIntent(ctx context.Context, action *Action
 // recordPendingCreate returns the hook that records a create's empty item
 // durably before its content is sent, or nil without a store (tests). It
 // sets *created when it runs, so the caller knows an item exists.
+//
+// The item exists on OneDrive from the moment the create answers, whatever
+// happens to the action after, so the record is written on a context that
+// keeps the action's values but not its cancellation, bounded by
+// outcomeCommitTimeout like a finished action's outcome commit. On the
+// action's own context a shutdown landing right after the create failed the
+// write, and only the intent was left (live, e2e
+// TestE2E_SyncWatch_PauseResume).
 func (e *executor) recordPendingCreate(
 	ctx context.Context, action *Action, driveID driveid.ID, parentID string, created *bool,
 ) func(itemID, createdETag string) error {
@@ -549,14 +558,28 @@ func (e *executor) recordPendingCreate(
 		pending := pendingCreateOf(action, driveID, parentID)
 		pending.ItemID, pending.CreatedETag = itemID, createdETag
 
-		return e.pendingCreates.RecordPendingCreate(ctx, pending)
+		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), outcomeCommitTimeout)
+		defer cancel()
+
+		return e.pendingCreates.RecordPendingCreate(recordCtx, pending)
 	}
 }
 
 // clearPendingCreateIntent forgets the intent of an attempt that created
 // nothing. Best effort: a failure here leaves an intent that expires.
+//
+// A canceled attempt keeps its intent, quietly. The create may have been in
+// flight when the context was canceled, and OneDrive can still make the item
+// after the client stopped waiting: that is the window the intent covers. The
+// write would also fail on the canceled context and warn at a clean shutdown
+// (R-6.6.21).
 func (e *executor) clearPendingCreateIntent(ctx context.Context, action *Action) {
 	if e.pendingCreates == nil {
+		return
+	}
+	if ctx.Err() != nil {
+		e.logger.Debug("kept the pending create intent of a canceled attempt",
+			slog.String("path", action.Path), slog.Any("error", ctx.Err()))
 		return
 	}
 	if err := e.pendingCreates.ClearPendingCreateIntent(ctx, action.Path); err != nil {

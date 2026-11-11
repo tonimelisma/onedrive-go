@@ -1,6 +1,10 @@
 package sync
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // emptyQuickXor is the hash OneDrive gives an empty file (L-17, L-01).
@@ -530,4 +537,183 @@ func TestPendingCreateIntent_ClearedWhenNothingWasCreatedAndKeepsAKnownItem(t *t
 	_, found, err = mgr.PendingCreateAt(t.Context(), "b.txt")
 	require.NoError(t, err)
 	assert.True(t, found, "clearing an intent never drops a recorded item")
+}
+
+// creatingTestUploader models graph.Client's two-step create for executor
+// tests: create runs where the empty item is made, with the record hook the
+// client calls between the item and its content.
+type creatingTestUploader struct {
+	executorMockUploader
+	create func(ctx context.Context, onCreated graph.CreatedFunc) (*graph.Item, error)
+}
+
+func (u *creatingTestUploader) UploadCreating(
+	ctx context.Context, _ driveid.ID, _, _ string,
+	_ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc, onCreated graph.CreatedFunc,
+) (*graph.Item, error) {
+	return u.create(ctx, onCreated)
+}
+
+// newPendingCreateTestExecutor returns an executor that uploads through ul and
+// records its pending creates in a real store, plus that store and the sync
+// root.
+func newPendingCreateTestExecutor(t *testing.T, ul driveops.Uploader, logger *slog.Logger) (*executor, *SyncStore, string) {
+	t.Helper()
+
+	syncRoot := t.TempDir()
+	syncTree, err := synctree.Open(syncRoot)
+	require.NoError(t, err)
+	dl := &executorMockDownloader{}
+	cfg := newExecutorConfig(&executorMockItemClient{}, dl, ul, syncTree, driveid.New(testDriveID), logger, nil)
+	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
+	store := newTestStore(t)
+	cfg.SetPendingCreates(store)
+
+	return newExecution(cfg, emptyBaseline()), store, syncRoot
+}
+
+// Validates: R-5.6.15
+//
+// The item exists on OneDrive from the moment the create answers, whatever
+// happens to the action after. A shutdown landing between the answer and the
+// record (live, 2026-11-10, e2e TestE2E_SyncWatch_PauseResume) failed the
+// write on the canceled action context, so only the intent was left.
+func TestUploadNewFile_CreatedItemIsRecordedWhenTheActionIsCanceled(t *testing.T) {
+	t.Parallel()
+
+	actionCtx, cancelAction := context.WithCancel(t.Context())
+	defer cancelAction()
+	created := &graph.Item{ID: "new-item", ETag: `"c,1"`}
+	ul := &creatingTestUploader{create: func(uploadCtx context.Context, onCreated graph.CreatedFunc) (*graph.Item, error) {
+		cancelAction() // the shutdown, right after the create answered
+		if hookErr := onCreated(created); hookErr != nil {
+			return nil, &graph.CreatedItemError{Item: created, Err: hookErr}
+		}
+		return nil, &graph.CreatedItemError{Item: created, Err: uploadCtx.Err()}
+	}}
+	_, logger := newDebugLogBuffer()
+	e, store, syncRoot := newPendingCreateTestExecutor(t, ul, logger)
+	local := writeExecTestFile(t, syncRoot, "doc.txt", "my words\n")
+
+	_, uploadErr := e.uploadNewFile(actionCtx, &Action{Type: ActionUpload, Path: "doc.txt"},
+		driveid.New(testDriveID), graphRootID, "doc.txt", local)
+	require.ErrorIs(t, uploadErr, context.Canceled)
+
+	pending, found, err := store.PendingCreateAt(t.Context(), "doc.txt")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "new-item", pending.ItemID, "the item is recorded, not only the intent")
+	assert.Equal(t, `"c,1"`, pending.CreatedETag)
+}
+
+// Validates: R-5.6.15, R-6.6.21
+//
+// A create that a shutdown canceled before it answered can still land on
+// OneDrive after the client is gone, which is what the intent is for.
+// Clearing it on the canceled context failed and warned at a clean stop; the
+// intent is kept instead, quietly, and expires on its own.
+func TestUploadNewFile_CanceledCreateKeepsItsIntentQuietly(t *testing.T) {
+	t.Parallel()
+
+	actionCtx, cancelAction := context.WithCancel(t.Context())
+	defer cancelAction()
+	ul := &creatingTestUploader{create: func(uploadCtx context.Context, _ graph.CreatedFunc) (*graph.Item, error) {
+		cancelAction() // the shutdown, while the create is in flight
+		return nil, fmt.Errorf("graph: creating file: %w", uploadCtx.Err())
+	}}
+	logs, logger := newDebugLogBuffer()
+	e, store, syncRoot := newPendingCreateTestExecutor(t, ul, logger)
+	local := writeExecTestFile(t, syncRoot, "doc.txt", "my words\n")
+
+	_, uploadErr := e.uploadNewFile(actionCtx, &Action{Type: ActionUpload, Path: "doc.txt"},
+		driveid.New(testDriveID), graphRootID, "doc.txt", local)
+	require.ErrorIs(t, uploadErr, context.Canceled)
+	assert.NotContains(t, logs.String(), "level=WARN", "a clean shutdown warns about nothing")
+
+	pending, found, err := store.PendingCreateAt(t.Context(), "doc.txt")
+	require.NoError(t, err)
+	require.True(t, found, "the intent stays for a create that may still land")
+	assert.Empty(t, pending.ItemID)
+}
+
+// Validates: R-5.6.15
+//
+// On a drive that gives empty files no hash (zero-byte files on Business),
+// the eTag and modification time are all the comparison has for an adopted
+// placeholder. Both move without content when an upload session is opened
+// and canceled on the item, and with the local file changed that read as an
+// edit on both sides: the user's file renamed to a conflict copy and the
+// empty file downloaded in its place. The adopted row follows them while the
+// item stays empty, so the plan is still the upload into it by ID.
+func TestCommitObservation_AdoptedHashlessPlaceholderWithMovedETagIsNotAConflict(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	driveID := driveid.New(testDriveID)
+	require.NoError(t, mgr.RecordPendingCreate(t.Context(), &PendingCreate{
+		ItemID: "placeholder", DriveID: driveID, Path: "doc.txt", ParentID: "root", CreatedETag: `"p,1"`,
+		LocalSize: 7, LocalHash: "local-hash",
+	}))
+	createdAt := time.Date(2026, 11, 10, 18, 0, 48, 0, time.UTC)
+	placeholder := observedItem{
+		DriveID: driveID, ItemID: "placeholder", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
+		Size: 0, ETag: `"p,1"`, Mtime: createdAt.UnixNano(),
+	}
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{placeholder}, "t1", driveID))
+	_, err := mgr.rawDB().ExecContext(t.Context(), `INSERT INTO local_state (path, item_type, hash, size, mtime)
+		VALUES ('doc.txt', 'file', 'local-hash', 7, 7)`)
+	require.NoError(t, err)
+	// Cached now, so the check at the end reads the in-memory copy.
+	_, err = mgr.Load(t.Context())
+	require.NoError(t, err)
+
+	moved := placeholder
+	moved.ETag = `"p,2"`
+	touched := moved
+	touched.ETag, touched.Mtime = `"p,3"`, createdAt.Add(time.Second).UnixNano()
+	for i, observed := range []observedItem{moved, touched} {
+		require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{observed}, fmt.Sprintf("t%d", i+2), driveID))
+		rows, queryErr := mgr.QueryReconciliationState(t.Context())
+		require.NoError(t, queryErr)
+		assert.Equal(t, "upload", reconciliationKindsByPath(rows)["doc.txt"], "observation %d is no remote edit", i)
+	}
+
+	bl, err := mgr.Load(t.Context())
+	require.NoError(t, err)
+	entry, ok := bl.GetByID("placeholder")
+	require.True(t, ok)
+	assert.Equal(t, `"p,3"`, entry.ETag, "the in-memory baseline follows the row")
+	assert.Zero(t, entry.RemoteSize)
+}
+
+// Validates: R-5.6.15, R-2.4.16
+//
+// Following an adopted placeholder's eTag says "still empty at this eTag",
+// and the next upload into it is conditional on exactly that eTag. An
+// observation whose size Graph did not report cannot say that: the item may
+// hold someone's content by now, so its row keeps the eTag it was adopted
+// with and the moved eTag stays visible as a remote change.
+func TestCommitObservation_AdoptedPlaceholderOfUnknownSizeIsNotFollowed(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	driveID := driveid.New(testDriveID)
+	require.NoError(t, mgr.RecordPendingCreate(t.Context(), &PendingCreate{
+		ItemID: "placeholder", DriveID: driveID, Path: "doc.txt", ParentID: "root", CreatedETag: `"p,1"`,
+	}))
+	placeholder := observedItem{
+		DriveID: driveID, ItemID: "placeholder", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
+		Size: 0, ETag: `"p,1"`,
+	}
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{placeholder}, "t1", driveID))
+
+	sizeless := placeholder
+	sizeless.ETag, sizeless.SizeUnknown = `"p,moved"`, true
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{sizeless}, "t2", driveID))
+
+	bl, err := mgr.Load(t.Context())
+	require.NoError(t, err)
+	entry, ok := bl.GetByID("placeholder")
+	require.True(t, ok)
+	assert.Equal(t, `"p,1"`, entry.ETag, "an item not known to be empty keeps the eTag it was adopted with")
 }

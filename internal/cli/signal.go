@@ -10,11 +10,13 @@ import (
 )
 
 // shutdownContext returns a context that cancels on the first SIGINT/SIGTERM
-// and force-exits on the second. The first signal is cooperative: work in
-// flight follows its normal shutdown path -- the watch engine seals new
-// admission and exits when the runtime settles, and shorter commands unwind
-// through their own cleanup. The second signal remains the escape hatch for a
-// stuck process.
+// and force-exits on the second. The first signal is cooperative: canceling
+// the context cancels the work in flight, which unwinds through its own
+// cleanup -- the watch engine seals new admission, waits for its canceled
+// actions to stop (still committing the outcome of any whose transfer had
+// finished), and exits when the runtime settles; shorter commands unwind the
+// same way. Work in flight is not waited for to complete. The second signal
+// remains the escape hatch for a stuck process.
 //
 // The returned stop function must be called when the caller is done. It
 // cancels the context, stops the signal goroutine and unregisters the handler,

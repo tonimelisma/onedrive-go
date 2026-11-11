@@ -233,3 +233,42 @@ func TestSessionUpload_RetryOfAnInterruptedCreateReusesItsItem(t *testing.T) {
 	assert.Equal(t, "placeholder", item.Item.ID)
 	assert.Equal(t, []string{`"p,1"`}, ul.ifMatches, "the fresh session goes to the existing item, conditionally")
 }
+
+// Validates: R-5.6.15
+//
+// A large new file is created and given its session in one Graph call. When
+// the session request fails after the empty item exists (a shutdown cancels
+// it: live, e2e TestE2E_SyncWatch_PauseResume), Graph names the item in a
+// CreatedItemError and tries to remove it. The record hook ran only once a
+// session was open, so the item went unrecorded and sync cleared its intent:
+// when the removal failed too, the empty file read on the next pass as
+// someone else's. The hook now runs for the item the error names, once, and
+// the upload still fails with the session's error.
+func TestSessionUpload_FailedSessionRecordsTheItemTheCreateMade(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, slog.Default())
+	localPath, _, _ := sessionTestFile(t, dir)
+
+	ul := &tmCreatingUploader{tmMockUploader: tmMockUploader{
+		createUploadSessionFn: func(context.Context, driveid.ID, string, string, int64, time.Time) (*graph.UploadSession, error) {
+			return nil, &graph.CreatedItemError{Item: &graph.Item{ID: "new-item", ETag: `"c,1"`}, Err: context.Canceled}
+		},
+		uploadFromSessionFn: func(context.Context, *graph.UploadSession, io.ReaderAt, int64, graph.ProgressFunc) (*graph.Item, error) {
+			return nil, errors.New("there is no session to send content through")
+		},
+	}}
+	tm := newTestTM(&tmSimpleDownloader{}, ul, store)
+
+	var recorded []string
+	_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent", filepath.Base(localPath), localPath, UploadOpts{
+		OnCreated: func(itemID, createdETag string) error {
+			recorded = append(recorded, itemID+" "+createdETag)
+			return nil
+		},
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, []string{`new-item "c,1"`}, recorded)
+	assert.Empty(t, ul.removedEmpty, "Graph already tried to remove the item; the transfer manager does not ask again")
+}

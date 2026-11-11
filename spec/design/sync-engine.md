@@ -564,7 +564,9 @@ mode from the config-resolved capability surface:
 - action completion drain
 - retry and trial timer scheduling
 - periodic maintenance ticks and full remote refresh
-- graceful drain on shutdown
+- graceful shutdown: in-flight actions are canceled, not waited for to
+  complete, and the drain phase consumes their completions until every worker
+  has stopped
 
 `RunWatch` starts with the same shared startup boundary one-shot uses.
 That startup boundary owns persisted-scope normalization, account-auth
@@ -1318,10 +1320,16 @@ reports each fact once (R-6.6.21, R-6.6.22, R-6.6.30):
   remaining changes" line repeats only when its counts move.
 - A worker commits a finished action's outcome on a context detached from
   shutdown (bounded by `outcomeCommitTimeout`), so Ctrl-C between the
-  transfer and its commit cannot drop the record of work already done.
+  transfer and its commit cannot drop the record of work already done. The
+  record of a new file's created item is written the same way (R-5.6.15,
+  `TestUploadNewFile_CreatedItemIsRecordedWhenTheActionIsCanceled`).
 - Shutdown is quiet: cancellation and repeat-fatal errors in shutdown
-  bookkeeping, a canceled safety scan or full-refresh commit, and the final
-  dirty-buffer drain are Debug.
+  bookkeeping, a canceled safety scan or full-refresh commit, the final
+  dirty-buffer drain, the post-sync housekeeping of a pass whose context was
+  canceled (it skips the transfer-leftover cleanup without starting a failure
+  streak, `TestPostSyncHousekeeping_CanceledContextIsQuiet`), and a canceled
+  create attempt, which keeps its pending-create intent instead of failing to
+  clear it (`TestUploadNewFile_CanceledCreateKeepsItsIntentQuietly`), are Debug.
 
 ## Activity Hook
 
