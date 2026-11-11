@@ -33,6 +33,10 @@ import (
 //     mutation happened, the client sees a 504 or a reset;
 //   - an upload session that times out after its empty item exists, and a
 //     download that delivers part of the bytes and then drops;
+//   - a create whose own answer is lost: the empty item exists, the client
+//     never learned its ID, and the failure says only that the outcome is
+//     unknown (graph.ErrCreateOutcomeUnknown), as does a create that failed
+//     before it reached OneDrive without a definite refusal;
 //   - delta: a throttled or failing page (the first or a later one), 410 on a
 //     saved token, a window split over several pages with items repeated on
 //     an earlier page than their last occurrence, as Graph documents ("the
@@ -306,18 +310,28 @@ func chaosMutation(c *chaosGraph, op, key string, call func() (*graph.Item, erro
 	return item, err
 }
 
-// uploadCreating may time out after the session created the empty item, as
-// a connection lost mid-session does: the item exists, the content does not.
+// chaosCreateFunc is the scenario fake's two-step create.
+type chaosCreateFunc func(context.Context, string, string, io.ReaderAt, int64, graph.CreatedFunc) (*graph.Item, error)
+
+// uploadCreating may fail after the create took effect, in the two ways a
+// create does. The session may time out after the client learned of the empty
+// item, as a connection lost mid-session does: the item exists, the content
+// does not. Or the creating request's own answer is lost (createResponseLost).
+// A create that fails before it reaches OneDrive reads as graph.CreateFile
+// reports it (chaosCreateFailure).
 func (c *chaosGraph) uploadCreating(
 	ctx context.Context, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
-	inner func(context.Context, string, string, io.ReaderAt, int64, graph.CreatedFunc) (*graph.Item, error),
+	inner chaosCreateFunc,
 ) (*graph.Item, error) {
 	cc := c.call("upload-session", parentID+"/"+name)
 	if err := c.before(cc, "upload-session"); err != nil {
-		return nil, err
+		return nil, chaosCreateFailure(name, err)
 	}
 	if !cc.roll(chaosFaultOdds) {
 		return inner(ctx, parentID, name, content, size, onCreated)
+	}
+	if cc.intN(2) == 0 {
+		return c.createResponseLost(ctx, cc, parentID, name, content, size, inner)
 	}
 
 	c.count("upload-session:timeout-after-create")
@@ -331,6 +345,40 @@ func (c *chaosGraph) uploadCreating(
 		}
 		return timeout
 	})
+}
+
+// createResponseLost runs the create and loses its answer: the empty item
+// exists on OneDrive, the client's create hook never runs (the client never
+// learned the item's ID), and what comes back is the failure of a request
+// whose outcome is unknown. A create that made nothing (the name was taken)
+// keeps its own answer.
+func (c *chaosGraph) createResponseLost(
+	ctx context.Context, cc *chaosCall, parentID, name string, content io.ReaderAt, size int64, inner chaosCreateFunc,
+) (*graph.Item, error) {
+	created := false
+	item, err := inner(ctx, parentID, name, content, size, func(*graph.Item) error {
+		created = true
+		return errors.New("chaos: stopped after the create, before the client learned of it")
+	})
+	if !created {
+		return item, err
+	}
+
+	return nil, chaosCreateFailure(name, c.lostResponseError(cc, "create"))
+}
+
+// chaosCreateFailure is a failed create as graph.CreateFile reports it: an
+// answer that does not say whether the file was made (none at all, a 5xx, a
+// 408) carries graph.ErrCreateOutcomeUnknown, whether or not the request
+// reached OneDrive, because the client cannot tell those apart.
+func chaosCreateFailure(name string, err error) error {
+	var graphErr *graph.GraphError
+	if errors.As(err, &graphErr) &&
+		graphErr.StatusCode < http.StatusInternalServerError && graphErr.StatusCode != http.StatusRequestTimeout {
+		return err
+	}
+
+	return fmt.Errorf("graph: creating file %q: %w: %w", name, graph.ErrCreateOutcomeUnknown, err)
 }
 
 // download may deliver part of the bytes before the connection drops.
@@ -514,6 +562,50 @@ func chaosSeeds(t *testing.T) []uint64 {
 	}
 
 	return seeds
+}
+
+// Validates: R-5.6.15
+//
+// The chaos layer's lost create answer is the loss it models: the file exists
+// on OneDrive, empty; the client's create hook never ran; and the failure
+// carries graph.ErrCreateOutcomeUnknown. A create that failed before it
+// reached OneDrive carries the same mark and leaves nothing behind.
+func TestChaosGraph_LostCreateAnswerLeavesTheFileAndNeverRunsTheHook(t *testing.T) {
+	t.Parallel()
+
+	const (
+		attempts = 200
+		content  = "my words\n"
+	)
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	c := newChaosGraph(1)
+	c.setStorm(true)
+	client := c.wrap(remote.client(t))
+
+	lost := 0
+	for i := range attempts {
+		name := fmt.Sprintf("doc-%d.txt", i)
+		hookRan := false
+		_, err := client.uploadCreatingFn(t.Context(), graphRootID, name, strings.NewReader(content), int64(len(content)),
+			func(*graph.Item) error {
+				hookRan = true
+				return nil
+			})
+		if !errors.Is(err, graph.ErrCreateOutcomeUnknown) {
+			continue
+		}
+		assert.False(t, hookRan, "%s: the client learned of a create whose outcome is unknown", name)
+		if _, landed := remote.itemAt(name); !landed {
+			continue // failed before it reached OneDrive
+		}
+		lost++
+		assert.Empty(t, remote.tree()[name], "%s: a create alone carries no content", name)
+	}
+
+	require.Positive(t, lost, "no create lost its answer in %d attempts", attempts)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	assert.Equal(t, lost, c.faults["create:response-lost"])
 }
 
 // Validates: R-2.15.2

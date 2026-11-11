@@ -48,13 +48,28 @@ import (
 // makes the empty item after the client is gone, and no response ever reaches
 // the hook that records it (seen live on 2026-11-01: the item was created two
 // seconds after a kill, and the next pass made a conflict copy of the user's
-// file). The intent row closes that window: it names the path before the
-// request, and an empty file observed at that path within
+// file). A process that lives can lose the response as well: the request
+// reaches OneDrive and its answer is lost on the way back (live, 2026-11-11,
+// during a network outage). The intent row closes that window: it names the
+// path before the request, and an empty file observed at that path within
 // pendingCreateIntentTTL of the intent is the placeholder, whose ID is then
-// recorded. The intent is cleared when the attempt ends without having
-// created anything, unless the attempt was canceled (its create may still
-// land), and expires so a stale one cannot claim a stranger's empty file long
-// after.
+// recorded.
+//
+// The intent is cleared when the attempt ends with nothing left to recognize:
+// OneDrive refused the create, the attempt failed before it asked, or the
+// file was complete as created (a zero-byte file, whose create hook never
+// runs). It is kept when the attempt was canceled, and when its create ended
+// without an answer (graph.ErrCreateOutcomeUnknown: no response, a 5xx, a
+// 408): the create may have landed, or may still land. It expires so a stale
+// one cannot claim a stranger's empty file long after.
+//
+// Observation is one of two places that claim the file of a kept intent. The
+// executor is the other: a retry of the create gets 409 from the file the
+// first attempt made, and, given an intent that was there before the retry,
+// it records that empty file as the pending create and uploads into it by ID
+// with If-Match (resolveCreateConflict in executor_transfer.go). Both ask the
+// same of the file: at the intent's path, live, a file, empty, within the
+// TTL. A 409 without such an intent never claims anything.
 
 // pendingCreateIntentTTL is how long an intent without an item ID can claim
 // an empty file observed at its path.
@@ -126,10 +141,11 @@ func (s *SyncStore) ClearPendingCreate(ctx context.Context, itemID string) error
 }
 
 // ClearPendingCreateIntent drops an intent at path that never became an
-// item: the attempt ended, by success or failure, without the create hook
-// firing (it fires for a failure that names a created item too) and without
-// being canceled, so nothing on OneDrive is ours to recognize there. A row
-// that already names an item is kept.
+// item: the attempt ended, by success or by a failure that says nothing was
+// created, without the create hook firing (it fires for a failure that names
+// a created item too), without being canceled and without leaving the outcome
+// of its create unknown, so nothing on OneDrive is ours to recognize there. A
+// row that already names an item is kept.
 func (s *SyncStore) ClearPendingCreateIntent(ctx context.Context, path string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? AND item_id = ''`, path); err != nil {
 		return fmt.Errorf("sync: clearing pending create intent at %s: %w", path, err)

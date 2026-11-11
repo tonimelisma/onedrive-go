@@ -483,26 +483,70 @@ type pendingCreateStore interface {
 // uploadNewFile creates action's file on OneDrive, with the pending-create
 // records around the request (R-5.6.15): the intent before it, the item
 // once the create hook has seen it (whether the attempt then succeeded or
-// failed), and the intent cleared again when an attempt that was not
-// canceled created nothing. A 409 is resolved rather than retried as is.
+// failed), and the intent cleared again when the attempt is known to have
+// created nothing. A 409 is resolved rather than retried as is.
+//
+// An attempt whose create ended without an answer (a dropped connection, a
+// 5xx, a timeout: graph.ErrCreateOutcomeUnknown) is not known to have created
+// nothing, and its intent stays. The empty file such a create left is then
+// this client's own: observation adopts it, and a retry that gets 409 on it
+// finishes the upload into it (resolveCreateConflict). The intent was cleared
+// here once, and the file read as someone else's: a create conflict, the
+// user's file renamed to a conflict copy and the empty one downloaded in its
+// place (live, 2026-11-11, during a network outage).
 func (e *executor) uploadNewFile(
 	ctx context.Context, action *Action, driveID driveid.ID, parentID, source, localPath string,
 ) (*driveops.UploadResult, error) {
+	// Read before this attempt records its own intent, which would otherwise
+	// pass for an earlier one.
+	priorIntent, err := e.priorCreateIntent(ctx, action)
+	if err != nil {
+		return nil, err
+	}
 	opts := e.uploadOpts(action, source)
 	created := false
 	opts.OnCreated = e.recordPendingCreate(ctx, action, driveID, parentID, &created)
-	if err := e.recordPendingCreateIntent(ctx, action, driveID, parentID); err != nil {
-		return nil, err
+	if intentErr := e.recordPendingCreateIntent(ctx, action, driveID, parentID); intentErr != nil {
+		return nil, intentErr
 	}
 	result, err := e.transferMgr.UploadFile(ctx, driveID, parentID, filepath.Base(action.Path), localPath, opts)
-	if errors.Is(err, graph.ErrConflict) {
-		result, err = e.resolveCreateConflict(ctx, action, driveID, parentID, source, localPath, err)
+	keepIntent := false
+	switch {
+	case errors.Is(err, graph.ErrCreateOutcomeUnknown):
+		// Before the conflict case: a create that was answered 2xx and whose
+		// item could then not be read is unknown whatever status the read got.
+		keepIntent = true
+		e.logger.Debug("kept the pending create intent of a create whose outcome is unknown",
+			slog.String("path", action.Path), slog.Any("error", err))
+	case errors.Is(err, graph.ErrConflict):
+		result, keepIntent, err = e.resolveCreateConflict(ctx, action, driveID, parentID, source, localPath, err, priorIntent)
 	}
-	if !created {
+	if !created && !keepIntent {
 		e.clearPendingCreateIntent(ctx, action)
 	}
 
 	return result, err
+}
+
+// priorCreateIntent reports whether an earlier attempt left an intent to
+// create action's file that never learned an item ID and is still within
+// pendingCreateIntentTTL: the one state in which an empty file at the path
+// can be that attempt's own (resolveCreateConflict). The store stamps intents
+// with the engine's clock, which is the executor's too.
+func (e *executor) priorCreateIntent(ctx context.Context, action *Action) (bool, error) {
+	if e.pendingCreates == nil {
+		return false, nil
+	}
+
+	pending, found, err := e.pendingCreates.PendingCreateAt(ctx, action.Path)
+	if err != nil {
+		return false, fmt.Errorf("reading the pending create at %s: %w", action.Path, err)
+	}
+	if !found || pending.ItemID != "" || pending.IntendedAt <= 0 {
+		return false, nil
+	}
+
+	return e.nowFunc().Sub(time.Unix(0, pending.IntendedAt)) <= pendingCreateIntentTTL, nil
 }
 
 // pendingCreateOf describes the create of action for the pending-create
@@ -565,8 +609,10 @@ func (e *executor) recordPendingCreate(
 	}
 }
 
-// clearPendingCreateIntent forgets the intent of an attempt that created
-// nothing. Best effort: a failure here leaves an intent that expires.
+// clearPendingCreateIntent forgets the intent of an attempt that is known to
+// have created nothing (uploadNewFile keeps the intent of one whose create
+// ended without an answer). Best effort: a failure here leaves an intent that
+// expires.
 //
 // A canceled attempt keeps its intent, quietly. The create may have been in
 // flight when the context was canceled, and OneDrive can still make the item
@@ -595,45 +641,119 @@ func (e *executor) clearPendingCreateIntent(ctx context.Context, action *Action)
 //     into it by ID, conditional on the eTag just read (not the creation
 //     eTag, which a canceled upload session moves; store_pending_creates.go).
 //     Going stale instead replanned the same create every pass.
+//   - The empty file of an earlier attempt whose create ended without an
+//     answer (priorIntent: this path had an intent without an item ID, within
+//     its TTL, before this attempt): the same spelling, live, a file, empty.
+//     It is recorded as the pending create and finished the same way. A
+//     prior intent is the whole license: without one, an empty file at the
+//     path is someone else's and is never written to.
 //   - A sibling OneDrive treats as the same name but spelled differently
 //     (STRASSE.txt next to straße.txt, a.txt next to a😀.txt): a durable
 //     name collision naming both, not a retry every pass.
-//   - The same spelling (another device created it meanwhile), or nothing
-//     visible yet: stale, so the replan sees the remote item and keeps both.
+//   - The same spelling otherwise (another device created it meanwhile):
+//     stale, so the replan sees the remote item and keeps both.
+//   - Nothing visible yet: stale as well. With a prior intent the name may be
+//     taken by that attempt's file, not listed yet, so the intent stays for
+//     the attempt or the observation that sees it.
+//
+// keepIntent tells the caller to leave the intent of this path in place.
 func (e *executor) resolveCreateConflict(
-	ctx context.Context, action *Action, driveID driveid.ID, parentID, source, localPath string, conflictErr error,
-) (*driveops.UploadResult, error) {
+	ctx context.Context, action *Action, driveID driveid.ID, parentID, source, localPath string,
+	conflictErr error, priorIntent bool,
+) (result *driveops.UploadResult, keepIntent bool, err error) {
 	if e.pendingCreates != nil {
-		pending, found, err := e.pendingCreates.PendingCreateAt(ctx, action.Path)
-		if err != nil {
-			return nil, errors.Join(conflictErr, err)
+		pending, found, readErr := e.pendingCreates.PendingCreateAt(ctx, action.Path)
+		if readErr != nil {
+			return nil, priorIntent, errors.Join(conflictErr, readErr)
 		}
 		if found && pending.ItemID != "" {
-			if item, getErr := e.items.GetItem(ctx, driveID, pending.ItemID); getErr == nil && item.Size == 0 {
-				opts := e.uploadOpts(action, source)
-				opts.IfMatch = item.ETag
-				return e.transferMgr.UploadFileToItem(ctx, driveID, pending.ItemID, localPath, opts) //nolint:wrapcheck // driveops names the file
+			uploaded, finished, uploadErr := e.finishIntoPlaceholder(ctx, action, driveID, pending.ItemID, source, localPath)
+			if finished {
+				return uploaded, false, uploadErr
 			}
 		}
 	}
 
 	name := filepath.Base(action.Path)
-	children, err := e.items.ListChildren(ctx, driveID, parentID)
-	if err != nil {
-		return nil, errors.Join(conflictErr, err)
+	children, listErr := e.items.ListChildren(ctx, driveID, parentID)
+	if listErr != nil {
+		return nil, priorIntent, errors.Join(conflictErr, listErr)
 	}
 	for i := range children {
-		if children[i].ID == "" || !namekey.Equal(children[i].Name, name) {
+		child := &children[i]
+		if child.ID == "" || !namekey.Equal(child.Name, name) {
 			continue
 		}
-		if nfcNormalize(children[i].Name) == nfcNormalize(name) {
-			break
+		if nfcNormalize(child.Name) != nfcNormalize(name) {
+			return nil, false, &remoteNameTakenError{localName: name, remoteName: child.Name, err: conflictErr}
+		}
+		if priorIntent && isEmptyLiveFile(child) {
+			return e.claimLostCreate(ctx, action, driveID, parentID, source, localPath, child, conflictErr)
 		}
 
-		return nil, &remoteNameTakenError{localName: name, remoteName: children[i].Name, err: conflictErr}
+		return nil, false, conflictErr
 	}
 
-	return nil, conflictErr
+	return nil, priorIntent, conflictErr
+}
+
+// finishIntoPlaceholder uploads action's content into the empty item itemID,
+// conditional on the eTag it reads now (not the creation eTag, which a
+// canceled upload session moves). finished is false, and nothing was sent,
+// when the item cannot be read or is no longer empty.
+func (e *executor) finishIntoPlaceholder(
+	ctx context.Context, action *Action, driveID driveid.ID, itemID, source, localPath string,
+) (result *driveops.UploadResult, finished bool, err error) {
+	if item, getErr := e.items.GetItem(ctx, driveID, itemID); getErr == nil && item.Size == 0 {
+		opts := e.uploadOpts(action, source)
+		opts.IfMatch = item.ETag
+		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, itemID, localPath, opts)
+
+		return result, true, err //nolint:wrapcheck // driveops names the file
+	}
+
+	return nil, false, nil
+}
+
+// claimLostCreate finishes the create that an earlier attempt asked for and
+// never heard back about: child is the empty file it left at action's path.
+// The claim is recorded before anything is written, so observation knows the
+// file as this client's own whatever becomes of this attempt, and the content
+// then goes into it by ID, conditional on the eTag read at that moment. An
+// empty local file goes the same way: a conditional write of no bytes, then
+// the modification time, which the lost create never got to set.
+//
+// The test is the one observation applies when it claims an intent's file
+// (claimIntendedPlaceholderTx): an empty file at the path within the intent's
+// TTL. An empty file someone else created under that name in that window is
+// taken for the lost one; it held nothing, and content written to it since it
+// was read changes its eTag and refuses the upload.
+func (e *executor) claimLostCreate(
+	ctx context.Context, action *Action, driveID driveid.ID, parentID, source, localPath string,
+	child *graph.Item, conflictErr error,
+) (result *driveops.UploadResult, keepIntent bool, err error) {
+	pending := pendingCreateOf(action, driveID, parentID)
+	pending.ItemID, pending.CreatedETag = child.ID, child.ETag
+	if recordErr := e.pendingCreates.RecordPendingCreate(ctx, pending); recordErr != nil {
+		return nil, true, errors.Join(conflictErr, recordErr)
+	}
+	e.logger.Debug("claimed the empty file of a create whose answer was lost",
+		slog.String("path", action.Path), slog.String("item_id", child.ID))
+
+	uploaded, finished, uploadErr := e.finishIntoPlaceholder(ctx, action, driveID, child.ID, source, localPath)
+	if finished {
+		return uploaded, false, uploadErr
+	}
+
+	return nil, false, conflictErr
+}
+
+// isEmptyLiveFile reports whether item, as listed, is a plain file holding no
+// bytes: the only thing a create whose answer was lost can have left. The
+// negative size Graph sometimes reports (R-2.4.16) is unknown, not empty.
+func isEmptyLiveFile(item *graph.Item) bool {
+	return item.ID != "" && !item.IsDeleted && !item.IsFolder && !item.IsRoot &&
+		!item.IsPackage && !item.IsBundle && !item.TypeFacetMissing && item.Size == 0
 }
 
 // remoteNameTakenError is a create refused because OneDrive already holds a

@@ -90,6 +90,14 @@ var (
 	// identity may not do that" and is a stable answer; a read-only window is a
 	// temporary property of the service that no client action changes.
 	ErrProviderReadOnly = errors.New("graph: provider is in a read-only window")
+
+	// ErrCreateOutcomeUnknown marks a file create that ended without an answer
+	// naming its item: no response, a 5xx or 408, a canceled or expired
+	// context, or a success whose item could not be read. The empty file may
+	// exist on OneDrive, or may still appear there. A definite refusal (any
+	// other 4xx, 409 and 429 included) never carries it. Sync keeps its create
+	// intent on it, so the empty file is recognized as its own (R-5.6.15).
+	ErrCreateOutcomeUnknown = errors.New("graph: create outcome unknown")
 )
 
 // aadOutcomeError maps an Azure AD / OAuth outcome (the OAuth error code and

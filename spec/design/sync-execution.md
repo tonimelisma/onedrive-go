@@ -173,20 +173,48 @@ content is sent (R-5.6.15). The hook also runs for an item a failure names
 on a context detached from the action's, bounded by `outcomeCommitTimeout`,
 so a shutdown right after the create cannot drop the record
 (`TestUploadNewFile_CreatedItemIsRecordedWhenTheActionIsCanceled`). An
-attempt that created nothing clears the intent, unless it was canceled: its
-create may still land after the client stopped waiting, which is the window
-the intent covers, so it is kept and expires on its own
-(`TestUploadNewFile_CanceledCreateKeepsItsIntentQuietly`). A 409 on the
-create is resolved, not retried as is: into our own placeholder from an
-interrupted attempt (upload by ID with If-Match on the eTag just read while it
-is still empty; the creation eTag does not work, since a canceled upload
-session moves it, `TestRunOnce_UploadOnlyCreateFinishesIntoItsPlaceholderAfterItsETagMoved`), as a
-durable name collision when OneDrive holds a differently spelled sibling of
-the same name (`remoteNameTakenError`, classified as `case_collision` with
-backoff, naming both names;
-`TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableCollision`),
-or as a stale precondition when the same spelling exists or nothing is
-visible yet. A remote folder create resolves its 409 the same way: an
+attempt known to have created nothing clears the intent. Two kinds of attempt
+are not known to: one that was canceled, whose create may still land after
+the client stopped waiting
+(`TestUploadNewFile_CanceledCreateKeepsItsIntentQuietly`), and one whose
+create ended without an answer that says whether it landed
+(`graph.ErrCreateOutcomeUnknown`: no response, a 5xx, a 408, a success whose
+item could not be read). That is the window the intent covers, so it is kept
+and expires on its own. Before, the unanswered create cleared its intent, and
+when it had in fact landed the next pass read the empty file as someone
+else's: the user's file was renamed aside as a conflict copy and the empty
+one downloaded (live, 2026-11-11, during a network outage;
+`TestRunOnce_CreateWhoseAnswerWasLostFinishesIntoItsOwnEmptyFile`).
+`uploadNewFile` checks the unknown outcome before the conflict, and reads the
+path's row before it records the attempt's own intent, so it knows whether an
+earlier attempt left one (`priorCreateIntent`: no item ID, within
+`pendingCreateIntentTTL`).
+
+A 409 on the create is resolved, not retried as is (`resolveCreateConflict`):
+
+- into our own placeholder from an interrupted attempt: upload by ID with
+  If-Match on the eTag just read while it is still empty. The creation eTag
+  does not work, since a canceled upload session moves it
+  (`TestRunOnce_UploadOnlyCreateFinishesIntoItsPlaceholderAfterItsETagMoved`);
+- into the file of a create whose answer was lost: only with a prior intent,
+  and only when the folder lists a file of exactly this spelling, live and
+  empty. Its ID and eTag are recorded as the pending create
+  (`claimLostCreate`), then it is finished the same way, an empty local file
+  included (`TestUploadNewFile_CreateWhoseAnswerWasLostIsFinishedByTheRetry`).
+  Content written between the listing and the upload is never overwritten:
+  the read by ID sees it, or the If-Match refuses it
+  (`TestUploadNewFile_ClaimNeverOverwritesContentWrittenMeanwhile`);
+- as a durable name collision when OneDrive holds a differently spelled
+  sibling of the same name (`remoteNameTakenError`, classified as
+  `case_collision` with backoff, naming both names;
+  `TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableCollision`);
+- as a stale precondition otherwise. A 409 without a prior intent, or on a
+  file with content, a folder or another spelling, claims nothing and writes
+  nothing (`TestUploadNewFile_ConflictNeverClaimsAFileThatIsNotItsOwnEmptyCreate`).
+  When nothing of that name is listed yet, a prior intent is kept for the
+  next retry (`TestUploadNewFile_ConflictOnAFileNotListedYetKeepsThePriorIntent`).
+
+A remote folder create resolves its 409 the same way: an
 existing folder of the same spelling is adopted, a differently spelled
 sibling is the same durable collision (as a stale precondition it was
 replanned and refused on every pass;

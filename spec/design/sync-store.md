@@ -402,13 +402,24 @@ item two seconds after the kill, so no hook recorded it): an empty file
 observed at the intended path within `pendingCreateIntentTTL` (72 h) is
 claimed as the placeholder, `claimIntendedPlaceholderTx`, and adopted like a
 recorded one; content at the path or an expired intent drops the intent, and
-an attempt that created nothing clears it unless it was canceled (its create
-may still land, so the intent is kept and expires)
+an attempt known to have created nothing clears it. An attempt that was
+canceled, or whose create ended without an answer
+(`graph.ErrCreateOutcomeUnknown`), is not known to: its create may have
+landed or may still land, so the intent is kept and expires
 (`TestCommitObservation_IntentClaimsTheEmptyFileACrashLeftUnrecorded`,
 `TestCommitObservation_IntentDoesNotClaimContentOrOutliveItsTTL`,
 `TestPendingCreateIntent_ClearedWhenNothingWasCreatedAndKeepsAKnownItem`,
-`TestRunOnce_EmptyItemACrashLeftUnrecordedIsFinishedNotConflicted`, and the
-`upload.created_unrecorded` crash point). The observation commit then classifies an observed item with a record:
+`TestRunOnce_EmptyItemACrashLeftUnrecordedIsFinishedNotConflicted`,
+`TestRunOnce_CreateWhoseAnswerWasLostFinishesIntoItsOwnEmptyFile`, and the
+`upload.created_unrecorded` crash point). The executor is the second place
+that claims on an intent, with the same test and no schema of its own: a
+retry of the create that gets 409, at a path that held an intent without an
+item before the retry and within the same 72 h, records the file of exactly
+that name, live and empty, with `RecordPendingCreate` and uploads into it by
+ID with If-Match ([sync-execution.md](sync-execution.md),
+`TestUploadNewFile_CreateWhoseAnswerWasLostIsFinishedByTheRetry`). A 409
+without such an intent claims nothing
+(`TestUploadNewFile_ConflictNeverClaimsAFileThatIsNotItsOwnEmptyCreate`). The observation commit then classifies an observed item with a record:
 still empty and not synced, it is adopted as a baseline row whose local side
 is the empty content, so the planner uploads by ID with If-Match, or deletes
 the placeholder with If-Match when the local file is gone; still empty after

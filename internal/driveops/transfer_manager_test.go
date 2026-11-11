@@ -1177,6 +1177,54 @@ func TestTransferManager_Upload_CompletionWithoutItemIsLookedUp(t *testing.T) {
 	assert.Equal(t, "found", result.Item.ID, "an item without identity is never recorded")
 }
 
+// Validates: R-5.6.15
+//
+// Sync keeps its create intent on graph.ErrCreateOutcomeUnknown, which it
+// reads through UploadFile. The mark has to arrive from both upload paths, and
+// the transfer layer must not answer it by looking the name up: the file a
+// lost create left is empty, and checked against the content it reads as a
+// failed upload.
+func TestTransferManager_Upload_CreateOutcomeUnknownKeepsItsMark(t *testing.T) {
+	t.Parallel()
+
+	createErr := fmt.Errorf("graph: creating file %q: %w", "new.bin", graph.ErrCreateOutcomeUnknown)
+
+	tests := []struct {
+		name string
+		size int
+	}{
+		{name: "simple upload", size: len("data")},
+		{name: "session upload", size: persistedSessionMinSize + 1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			ul := &tmMockUploader{
+				uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+					return nil, createErr
+				},
+				createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
+					return nil, createErr
+				},
+				listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+					assert.Fail(t, "a create that sent no content is not looked up by name")
+					return nil, nil
+				},
+			}
+
+			localPath := filepath.Join(dir, "new.bin")
+			require.NoError(t, os.WriteFile(localPath, make([]byte, tc.size), 0o600))
+
+			_, err := newTestTM(&tmSimpleDownloader{}, ul, NewSessionStore(dir, slog.Default())).UploadFile(
+				t.Context(), driveid.New("d1"), "parent1", "new.bin", localPath, UploadOpts{})
+			require.ErrorIs(t, err, graph.ErrCreateOutcomeUnknown)
+		})
+	}
+}
+
 // Validates: R-5.5.2
 func TestTransferManager_Upload_NilItem(t *testing.T) {
 	t.Parallel()

@@ -82,9 +82,13 @@ type moveScenarioRemote struct {
 	// touching its content, as opening and then canceling an upload session
 	// on the empty item does live (e2e TestE2E_SyncWatch_FileModification).
 	churnInterruptedCreates bool
-	folderCreates           []string
-	deletes                 []string
-	moves                   []string
+	// loseCreateAnswers makes every create land without its answer: the empty
+	// item exists, the hook never runs, and the caller gets the error
+	// graph.CreateFile returns for a create whose outcome it cannot know.
+	loseCreateAnswers bool
+	folderCreates     []string
+	deletes           []string
+	moves             []string
 }
 
 type deletedScenarioItem struct {
@@ -571,6 +575,16 @@ func scenarioNameConflict() error {
 	return &graph.GraphError{StatusCode: 409, Message: "Name already exists", Err: graph.ErrConflict}
 }
 
+// scenarioConnectionReset is how a connection that dropped mid-request reads.
+const scenarioConnectionReset = "connection reset by peer"
+
+// scenarioCreateAnswerLost is what graph.CreateFile returns when the create
+// left and no answer came back: the cause, marked as an unknown outcome
+// (R-5.6.15).
+func scenarioCreateAnswerLost(name string) error {
+	return fmt.Errorf("graph: creating file %q: %w: %w", name, graph.ErrCreateOutcomeUnknown, errors.New(scenarioConnectionReset))
+}
+
 // scenarioPreconditionFailed is Graph's answer to an If-Match that no longer
 // matches the item's eTag (live probe L-02).
 func scenarioPreconditionFailed() error {
@@ -687,7 +701,8 @@ func (r *moveScenarioRemote) upload(t *testing.T, parentID, name string, content
 // uploadCreating follows the client's two-step create (R-5.6.14): an empty
 // item with conflictBehavior=fail, the hook, then the content by ID. With
 // interruptCreates set it stops after the hook, as a process killed mid-upload
-// would, leaving the empty item behind.
+// would, leaving the empty item behind. With loseCreateAnswers set it stops
+// before the hook: the empty item exists and the client never learned its ID.
 func (r *moveScenarioRemote) uploadCreating(
 	t *testing.T, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
 ) (*graph.Item, error) {
@@ -708,8 +723,12 @@ func (r *moveScenarioRemote) uploadCreating(
 	created := *r.items[id]
 	interrupt := r.interruptCreates
 	churn := r.churnInterruptedCreates
+	loseAnswer := r.loseCreateAnswers
 	r.mu.Unlock()
 
+	if loseAnswer {
+		return nil, scenarioCreateAnswerLost(name)
+	}
 	if onCreated != nil {
 		if hookErr := onCreated(&created); hookErr != nil {
 			return nil, &graph.CreatedItemError{Item: &created, Err: hookErr}
@@ -722,7 +741,7 @@ func (r *moveScenarioRemote) uploadCreating(
 			r.touch(id)
 			r.mu.Unlock()
 		}
-		return nil, &graph.CreatedItemError{Item: &created, Err: errors.New("connection reset by peer")}
+		return nil, &graph.CreatedItemError{Item: &created, Err: errors.New(scenarioConnectionReset)}
 	}
 
 	r.mu.Lock()
