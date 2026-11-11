@@ -234,7 +234,7 @@ func (rt *watchRuntime) initWatchInfra(
 
 		inFlight := depGraph.InFlightCount()
 		if inFlight > 0 {
-			rt.deps.logger.Info("graceful shutdown: draining in-flight actions",
+			rt.deps.logger.Info("graceful shutdown: canceling in-flight actions and waiting for them to stop",
 				slog.Int("in_flight", inFlight),
 			)
 		}

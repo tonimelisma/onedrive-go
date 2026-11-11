@@ -2,6 +2,7 @@ package sync
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -188,6 +189,44 @@ func TestPostSyncHousekeeping_SkipsTransferCleanupWhenProtectedRootsCannotBeRead
 	flow.deps = newRuntimeDeps(flow.engine)
 	flow.postSyncHousekeeping(t.Context())
 	assert.Equal(t, 2, countLogLines(logBuf.String(), warnLine))
+}
+
+// Validates: R-6.6.21, R-6.6.30
+//
+// A shutdown cancels the context before the watch bootstrap's housekeeping
+// runs (live, 2026-11-10): the protected-root read failed on the canceled
+// context and warned "Could not refresh the shared-folder list" at a clean
+// stop. A canceled context is no read failure. The cleanup is skipped at
+// Debug and no failure streak starts, so the next pass cleans up without
+// announcing a recovery.
+func TestPostSyncHousekeeping_CanceledContextIsQuiet(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	rootPartial := filepath.Join(syncRoot, testOwnedPartialName("root.txt"))
+	require.NoError(t, os.WriteFile(rootPartial, []byte("root"), 0o600))
+
+	logBuf, logger := newDebugLogBuffer()
+	flow := &engineFlow{
+		engine: &Engine{
+			syncTree:            mustOpenSyncTree(t, syncRoot),
+			logger:              logger,
+			baseline:            newTestStore(t),
+			shortcutNamespaceID: shortcutNamespaceTestID,
+			contentFilter:       ContentFilterConfig{},
+		},
+	}
+	flow.deps = newRuntimeDeps(flow.engine)
+
+	shuttingDown, cancel := context.WithCancel(t.Context())
+	cancel()
+	flow.postSyncHousekeeping(shuttingDown)
+	assert.NotContains(t, logBuf.String(), "level=WARN", "a clean shutdown warns about nothing")
+	assert.FileExists(t, rootPartial, "no cleanup walk with a protected-root list that was not read")
+
+	flow.postSyncHousekeeping(t.Context())
+	assert.NoFileExists(t, rootPartial, "the next pass cleans up")
+	assert.NotContains(t, logBuf.String(), "transfer cleanup resumes", "a shutdown is no failure streak to recover from")
 }
 
 // Validates: R-6.6.30

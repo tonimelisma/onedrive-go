@@ -36,6 +36,11 @@ func (flow *engineFlow) postSyncHousekeeping(ctx context.Context) {
 // reports whether housekeeping may walk the tree. A failure is one Warn per
 // streak (R-6.6.30), Debug on repeats, and the streak ends when a refresh
 // succeeds; the cleanup it guards is skipped for the pass, not run stale.
+//
+// A refresh that failed because ctx is done is a shutdown, not a failure: a
+// watch bootstrap whose actions were canceled still reaches housekeeping, and
+// a clean stop warns about nothing (R-6.6.21). It skips the cleanup at Debug
+// and leaves the streak as it was, so a real failure later still warns once.
 func (e *Engine) refreshProtectedRootsForHousekeeping(ctx context.Context) bool {
 	err := e.refreshProtectedRootsFromStore(ctx)
 	if err == nil {
@@ -44,6 +49,11 @@ func (e *Engine) refreshProtectedRootsForHousekeeping(ctx context.Context) bool 
 		}
 
 		return true
+	}
+
+	if ctx.Err() != nil {
+		e.logger.Debug("skipping transfer cleanup: shutting down", slog.Any("error", err))
+		return false
 	}
 
 	if e.protectedRootRefreshFailing.Swap(true) {

@@ -167,8 +167,16 @@ than stranded, and a row that later hashes cleanly deletes normally.
 
 A create upload records its intent at the path before the request, and the
 new item as a pending create through `UploadOpts.OnCreated` before any
-content is sent (R-5.6.15); an attempt whose hook never ran clears the
-intent. A 409 on the
+content is sent (R-5.6.15). The hook also runs for an item a failure names
+(a large file's session request that failed after its create,
+`TestSessionUpload_FailedSessionRecordsTheItemTheCreateMade`), and it writes
+on a context detached from the action's, bounded by `outcomeCommitTimeout`,
+so a shutdown right after the create cannot drop the record
+(`TestUploadNewFile_CreatedItemIsRecordedWhenTheActionIsCanceled`). An
+attempt that created nothing clears the intent, unless it was canceled: its
+create may still land after the client stopped waiting, which is the window
+the intent covers, so it is kept and expires on its own
+(`TestUploadNewFile_CanceledCreateKeepsItsIntentQuietly`). A 409 on the
 create is resolved, not retried as is: into our own placeholder from an
 interrupted attempt (upload by ID with If-Match on the eTag just read while it
 is still empty; the creation eTag does not work, since a canceled upload

@@ -348,17 +348,22 @@ func (s *SyncStore) processObservedItemWithPlaceholders(
 		if err := deletePendingCreateTx(ctx, tx, item.ItemID); err != nil {
 			return err
 		}
-	case placeholderNotPending, placeholderAdopt:
+	case placeholderNotPending, placeholderAdopt, placeholderAdopted:
 	}
 
 	if err := s.processObservedItem(ctx, tx, item); err != nil {
 		return err
 	}
-	if decision != placeholderAdopt {
-		return nil
+
+	switch decision {
+	case placeholderAdopt:
+		return adoptPlaceholderTx(ctx, tx, item, pending, adopted)
+	case placeholderAdopted:
+		return followAdoptedPlaceholderTx(ctx, tx, item, pending, adopted)
+	case placeholderNotPending, placeholderStale, placeholderResolved:
 	}
 
-	return adoptPlaceholderTx(ctx, tx, item, pending, adopted)
+	return nil
 }
 
 // cacheAdoptedPlaceholders puts placeholders adopted by an observation commit
